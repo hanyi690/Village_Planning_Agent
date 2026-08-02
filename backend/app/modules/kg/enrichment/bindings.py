@@ -5,10 +5,11 @@ L2/L3 级（wave2/3）：功能分区/项目实体语义注解（表格提取）
 """
 
 from __future__ import annotations
+import asyncio
 
 import json
 import re
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from app.utils.logger import get_logger
 
@@ -58,24 +59,14 @@ def _extract_village_mentions(reports: Dict[str, str]) -> List[Dict[str, str]]:
     return mentions
 
 
-async def _bind_village_to_cluster(
-    mention: Dict[str, str],
-    gazetteer: Any,
-    kg: Any,
-    llm: Any,
-    round_num: int,
-) -> Optional[str]:
-    """村名 → gazetteer → 聚类绑定；Flash 双确认（LLM ∧ 空间校验）。
+_BATCH_CONFIRM_SIZE = 15  # 批量判定小批大小（单次 prompt 可读性优先，避免 104 对全量一次）
+_BATCH_CONFIRM_TIMEOUT = 30
 
-    村名无 gazetteer 条目时（KG 聚类名是"居民点N"，无村名）：
-      候选生成 — 按村名特征 hints 与各聚类地块 dlbm 构成的空间校验匹配；
-      候选>1 时 Flash 确认；绑定后 upsert gazetteer 条目（source=l1_enrichment）。
-    """
-    from app.modules.kg import EntityAnnotation
-    from app.modules.kg.gazetteer import confirm_with_llm, spatial_score
+
+def _build_bsm_to_dlbm(kg: Any) -> Dict[str, str]:
+    """预构建 bsm→dlbm 映射（一次全图扫描，逐 mention 共享）。"""
     from app.modules.kg.ontology import PLN
 
-    # 预构建 bsm→dlbm 映射（一次全图扫描，避免逐候选重复扫）
     bsm_to_dlbm: Dict[str, str] = {}
     try:
         for s, _, o in kg.g.triples((None, PLN.bsm, None)):
@@ -85,59 +76,102 @@ async def _bind_village_to_cluster(
                 break
     except Exception:
         pass
+    return bsm_to_dlbm
 
-    def _cluster_dlbms(entry) -> List[str]:
-        return [bsm_to_dlbm[b] for b in (entry.bsms or []) if b in bsm_to_dlbm]
+
+def _cluster_dlbms(entry: Any, bsm_to_dlbm: Dict[str, str]) -> List[str]:
+    return [bsm_to_dlbm[b] for b in (entry.bsms or []) if b in bsm_to_dlbm]
+
+
+def _gather_candidates(mention: Dict[str, str], gazetteer: Any, bsm_to_dlbm: Dict[str, str]) -> List[Any]:
+    """候选生成：gazetteer 命中 → 单候选；否则按村名特征 hints 与聚类 dlbm 构成的空间校验。"""
+    from app.modules.kg.gazetteer import spatial_score
 
     entry = gazetteer.resolve(mention["name"])
-    candidates: List[Any] = []
     if entry is not None and entry.entity_uri:
-        candidates = [entry]
-    else:
-        # 候选生成：特征 hints 与聚类 dlbm 构成的空间校验
-        for e in gazetteer.entries:
-            if not e.entity_uri:
-                continue
-            if spatial_score(mention["hints"], _cluster_dlbms(e)) > 0:
-                candidates.append(e)
+        return [entry]
+    return [
+        e for e in gazetteer.entries
+        if e.entity_uri
+        and spatial_score(mention["hints"], _cluster_dlbms(e, bsm_to_dlbm)) > 0
+    ]
 
-    if not candidates:
-        return None
 
-    # Flash 双确认：候选>1 时 LLM 判定；无 LLM 时确定性打分裁决（唯一最高分才绑定）
-    chosen = None
-    if len(candidates) == 1:
-        chosen = candidates[0]
-    elif llm is not None:
-        for e in candidates:
-            ok = await confirm_with_llm(llm, mention["name"], e.name, e.description or e.name)
-            if ok:
-                chosen = e
-                break
-    else:
-        scored = sorted(
-            ((spatial_score(mention["hints"], _cluster_dlbms(e)), e) for e in candidates),
-            key=lambda x: -x[0],
+def _deterministic_pick(mention: Dict[str, str], candidates: List[Any], bsm_to_dlbm: Dict[str, str]) -> Optional[Any]:
+    """无 LLM / LLM 不可用时的确定性打分裁决：唯一最高分才绑定。"""
+    from app.modules.kg.gazetteer import spatial_score
+
+    scored = sorted(
+        ((spatial_score(mention["hints"], _cluster_dlbms(e, bsm_to_dlbm)), e) for e in candidates),
+        key=lambda x: -x[0],
+    )
+    if scored and scored[0][0] > 0:
+        top_score = scored[0][0]
+        top = [e for s, e in scored if s == top_score]
+        if len(top) == 1:
+            return top[0]
+    return None
+
+
+async def confirm_batch_with_llm(
+    llm: Any,
+    pairs: List[Tuple[str, str, str]],
+) -> Dict[Tuple[str, str], bool]:
+    """小批量 LLM 判定（村名, 居民点, 描述）对 → {(村名, 聚类名): bool}。
+
+    LLM 一次性逐项返回全部 match 判定，避免逐候选 N 次往返；
+    单批 ≤ _BATCH_CONFIRM_SIZE 对，控制 prompt 长度与注意力质量。
+    """
+    if not pairs or llm is None:
+        return {}
+    results: Dict[Tuple[str, str], bool] = {}
+    for start in range(0, len(pairs), _BATCH_CONFIRM_SIZE):
+        chunk = pairs[start:start + _BATCH_CONFIRM_SIZE]
+        lines = "\n".join(
+            f"{i}. 村名：{m} | 居民点：{c}" + (f"（{d}）" if d else "")
+            for i, (m, c, d) in enumerate(chunk, 1)
         )
-        if scored and scored[0][0] > 0:
-            top_score = scored[0][0]
-            top = [e for s, e in scored if s == top_score]
-            if len(top) == 1:
-                chosen = top[0]
-    if chosen is None:
-        logger.info("[Enrich:L1] %s -> %d candidates unresolved", mention["name"], len(candidates))
+        prompt = (
+            "你是村庄地名匹配助手。逐项判断每组「村名」与「居民点」是否为同一自然村"
+            f"（语义一致即 match:true）。\n{lines}\n"
+            '只输出 JSON：{"results": [{"index": 1, "match": true}, ...]}（index 对应上面编号）'
+        )
+        try:
+            resp = await asyncio.wait_for(llm.ainvoke(prompt), timeout=_BATCH_CONFIRM_TIMEOUT)
+            content = getattr(resp, "content", "") or ""
+        except Exception as e:
+            logger.warning("[Enrich] LLM batch confirm failed: %s", e)
+            continue
+        stripped = content.strip().strip("`")
+        if stripped.lower().startswith("json"):
+            stripped = stripped[4:].strip()
+        try:
+            data = json.loads(stripped)
+            for item in data.get("results", []) or []:
+                idx = int(item.get("index", 0))
+                if 1 <= idx <= len(chunk):
+                    m, c, _ = chunk[idx - 1]
+                    results[(m, c)] = bool(item.get("match"))
+        except Exception as e:
+            logger.warning("[Enrich] LLM batch confirm parse failed: %s", e)
+            continue
+    return results
+
+
+def _commit_village_binding(
+    mention: Dict[str, str],
+    chosen: Any,
+    gazetteer: Any,
+    bsm_to_dlbm: Dict[str, str],
+    round_num: int,
+) -> Optional[str]:
+    """绑定落库：空间校验终审 → gazetteer upsert（l1_enrichment）→ EntityAnnotation。"""
+    from app.modules.kg import EntityAnnotation
+    from app.modules.kg.gazetteer import GazetteerEntry, save_gazetteer, spatial_check
+
+    if not spatial_check(mention["hints"], _cluster_dlbms(chosen, bsm_to_dlbm)):
+        logger.info("[Enrich:L1] %s -> %s rejected (space)", mention["name"], chosen.name)
         return None
-
-    # 空间校验终审（候选生成的已过；直接命中条目的补校验）
-    if entry is not None:
-        ok_space = spatial_check(mention["hints"], _cluster_dlbms(chosen))
-        if not ok_space:
-            logger.info("[Enrich:L1] %s -> %s rejected (space)", mention["name"], chosen.name)
-            return None
-
-    # upsert gazetteer 条目（村名 → 聚类，供 Binder/渲染解析）
-    from app.modules.kg.gazetteer import GazetteerEntry, save_gazetteer
-    from app.modules.kg.gazetteer.gazetteer import gazetteer_path
 
     new_entry = GazetteerEntry(
         name=mention["name"],
@@ -196,10 +230,53 @@ async def extract_bindings(
 
     bound_clusters = 0
     if wave in (1, 3):
-        for mention in _extract_village_mentions(reports):
-            uri = await _bind_village_to_cluster(mention, gazetteer, kg, llm, wave)
+        bsm_to_dlbm = _build_bsm_to_dlbm(kg)
+        mentions = _extract_village_mentions(reports)
+        direct_picks = []          # 候选==1（gazetteer 命中）直接绑定
+        ambiguous = []             # 候选>1 → 批量 LLM 判定
+        unresolved_amb = []
+        for mention in mentions:
+            candidates = _gather_candidates(mention, gazetteer, bsm_to_dlbm)
+            if not candidates:
+                continue
+            if len(candidates) == 1:
+                direct_picks.append((mention, candidates[0]))
+            else:
+                ambiguous.append((mention, candidates))
+
+        # 批量 Flash 判定（一次调用 N 对；失败/否决降级确定性裁决）
+        pairs = [
+            (m["name"], e.name, e.description or e.name)
+            for _, cands in ambiguous
+            for e in cands
+        ]
+        batch_results = await confirm_batch_with_llm(llm, pairs)
+
+        for mention, candidates in ambiguous:
+            chosen = None
+            for e in candidates:
+                if batch_results.get((mention["name"], e.name)):
+                    chosen = e
+                    break
+            if chosen is None:
+                chosen = _deterministic_pick(mention, candidates, bsm_to_dlbm)
+            if chosen is None:
+                logger.info(
+                    "[Enrich:L1] %s -> %d candidates unresolved",
+                    mention["name"], len(candidates),
+                )
+                unresolved_amb.append(mention["name"])
+                continue
+            uri = _commit_village_binding(mention, chosen, gazetteer, bsm_to_dlbm, wave)
             if uri:
                 bound_clusters += 1
+
+        for mention, chosen in direct_picks:
+            uri = _commit_village_binding(mention, chosen, gazetteer, bsm_to_dlbm, wave)
+            if uri:
+                bound_clusters += 1
+        if unresolved_amb:
+            logger.info("[Enrich:L1] unresolved mentions: %s", unresolved_amb)
 
     # L2/L3：分区/项目实体语义注解（复用表格提取）
     from app.modules.parsing.tables import _extract_project_tables as _ept, _extract_zone_tables as _ezt
@@ -276,6 +353,7 @@ async def run_wave(session_id: str, wave: int, reports: Dict[str, str], bundle: 
             temperature=GIS_EXPLORE_TEMPERATURE,
             max_tokens=GIS_EXPLORE_MAX_TOKENS,
             streaming=False,
+            max_retries=0,  # confirm 失败立即降级确定性裁决，避免重试泥潭拖死 wave
         )
     return await extract_bindings(session_id, wave, reports, llm=llm, bundle=bundle)
 
