@@ -96,15 +96,22 @@ class FacilityPlacer:
                 fac_type = fac.get("facility_type", "")
                 location_hint = fac.get("location_hint", "")
                 status = fac.get("status", "现状保留")
+                candidate_bsms = fac.get("candidate_bsms", [])
             else:
                 fac_id = fac.facility_id
                 fac_type = fac.facility_type
                 location_hint = fac.location_hint
                 status = fac.status
+                candidate_bsms = getattr(fac, "candidate_bsms", [])
 
             point = None
 
-            if status in ("现状保留", "existing"):
+            # P8: 空间锚定优先 — INSTRUCTION/表格位置（自然村→gazetteer BSM 集）
+            # 已解析的 candidate_bsms → 以其地块质心均值作为落位点
+            if candidate_bsms:
+                point = self._place_at_bsm_centroid(candidate_bsms, landuse_geojson)
+
+            if point is None and status in ("现状保留", "existing"):
                 point = self._place_existing(fac_type, existing_pois, parcel_centroids)
             elif status in ("规划新建", "planned"):
                 # Strategy 1: match location_hint to KG facility (precise coordinates)
@@ -244,6 +251,42 @@ class FacilityPlacer:
         deg_lon = offset_m / (111_000.0 * cos_lat) if cos_lat > 0 else offset_m / 111_000.0
         return [round(lon + deg_lon, 6), round(lat, 6)]
 
+    def _place_at_bsm_centroid(
+        self,
+        candidate_bsms: List[str],
+        landuse_geojson: Optional[Dict[str, Any]],
+    ) -> Optional[List[float]]:
+        """P8: candidate_bsms（自然村→gazetteer 解析的地块集）→ 质心均值落位。
+
+        返回 (lon, lat)；无匹配地块返回 None（回退后续策略）。
+        """
+        if not candidate_bsms or not landuse_geojson:
+            return None
+        bsm_set = set(str(b) for b in candidate_bsms)
+        xs, ys = [], []
+        for ft in landuse_geojson.get("features", []):
+            props = ft.get("properties", {}) or {}
+            bsm = str(props.get("BSM", "") or props.get("bsm", ""))
+            if bsm not in bsm_set:
+                continue
+            g = ft.get("geometry", {})
+            if not g or not g.get("coordinates"):
+                continue
+            try:
+                from shapely.geometry import shape as _shape
+
+                geom = _shape(g)
+                if geom.is_empty:
+                    continue
+                c = geom.centroid
+                xs.append(c.x)
+                ys.append(c.y)
+            except Exception:
+                continue
+        if not xs:
+            return None
+        return [sum(xs) / len(xs), sum(ys) / len(ys)]
+
     def _place_new(
         self,
         fac_type: str,
@@ -346,7 +389,10 @@ class FacilityPlacer:
                         geom = shapely.geometry.shape(g)
                         if not geom.is_empty:
                             geoms.append(geom)
-                            dlbms.append(str(ft.get("properties", {}).get("DLBM", "")).strip())
+                            dlbms.append(str(
+                                ft.get("properties", {}).get("DLBM", "")
+                                or ft.get("properties", {}).get("dlbm", "")
+                            ).strip())
                     except Exception:
                         continue
 

@@ -254,6 +254,7 @@ def _generate_facilities(
                 "location_hint": getattr(ft, 'location_hint', ''),
                 "anchor_village": getattr(ft, 'anchor_village', ''),
                 "service_radius": getattr(ft, 'service_radius', None),
+                "candidate_bsms": list(getattr(ft, 'candidate_bsms', None) or []),
             })
     elif isinstance(intent, dict) and intent.get("facilities"):
         facilities_raw = intent["facilities"]

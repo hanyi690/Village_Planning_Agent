@@ -27,14 +27,7 @@ from app.modules.schema import (
     PLANNING_ZONE_COLORS,
     FACILITY_STATUS_COLORS,
 )
-from app.modules.gis.layout.zone_generator import ZoneGenerator
-from app.modules.gis.layout.facility_placer import FacilityPlacer
-from app.modules.gis.layout.axis_builder import AxisBuilder
-from app.modules.gis.layout.map_renderer import MapRenderer
 from app.modules.kg import PlanningKG
-from app.modules.schema.contracts.layout_contracts import (
-    UnifiedSpatialIntent, ZoneIntent, Direction, Density,
-)
 from app.database.engine import get_db_path
 
 # ── Color tables ──────────────────────────────────────────────
