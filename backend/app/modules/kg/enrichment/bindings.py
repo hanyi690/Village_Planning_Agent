@@ -246,8 +246,8 @@ async def extract_bindings(
 
         # 批量 Flash 判定（一次调用 N 对；失败/否决降级确定性裁决）
         pairs = [
-            (m["name"], e.name, e.description or e.name)
-            for _, cands in ambiguous
+            (mention["name"], e.name, e.description or e.name)
+            for mention, cands in ambiguous
             for e in cands
         ]
         batch_results = await confirm_batch_with_llm(llm, pairs)

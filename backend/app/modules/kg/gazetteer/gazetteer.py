@@ -26,7 +26,7 @@ from app.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
-_GAZETTEER_DIR = Path(__file__).resolve().parents[4] / "data" / "gazetteer"
+_GAZETTEER_DIR = Path(__file__).resolve().parents[5] / "data" / "gazetteer"
 
 _FUZZY_THRESHOLD = 0.6
 
