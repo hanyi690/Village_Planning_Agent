@@ -387,21 +387,39 @@ async def main(session_id: str, skip_render: bool) -> None:
     layers = result.get("layout_configs", [])
     print("\n" + "=" * 60)
     print(f"[Pipeline] layout layers: {[c.get('layerType') for c in layers]}")
-    custom = [c for c in layers if c.get("layerType") == "custom_functional_zone"]
-    if custom:
-        out = OUT_DIR / "custom_functional_zone.geojson"
-        out.write_text(json.dumps(custom[0]["data"], ensure_ascii=False, indent=2), encoding="utf-8")
-        print(f"[Pipeline] custom_functional_zone: {len(custom[0]['data']['features'])} features -> {out}")
-    else:
-        print("[Pipeline] WARNING: no custom_functional_zone layer produced")
 
-    # 落盘全部图层（每层独立 geojson，供渲染分开图层使用）
-    saved_layers = []
+    def _layer_score(data: Dict[str, Any]) -> Tuple[int, int]:
+        """同 layerType 多候选时选最优：含地块(bsm)数优先，其次 feature 数。"""
+        feats = data.get("features", []) or []
+        bsms = sum(
+            len(f.get("properties", {}).get("source_bsms", []) or [])
+            + len(f.get("properties", {}).get("target_bsms", []) or [])
+            for f in feats
+        )
+        return (bsms, len(feats))
+
+    best_by_type: Dict[str, Dict[str, Any]] = {}
     for c in layers:
         lt = c.get("layerType")
         data = c.get("data")
         if not lt or not data or not data.get("features"):
             continue
+        prev = best_by_type.get(lt)
+        if prev is None or _layer_score(data) > _layer_score(prev["data"]):
+            best_by_type[lt] = c
+
+    custom = best_by_type.get("custom_functional_zone")
+    if custom:
+        out = OUT_DIR / "custom_functional_zone.geojson"
+        out.write_text(json.dumps(custom["data"], ensure_ascii=False, indent=2), encoding="utf-8")
+        print(f"[Pipeline] custom_functional_zone: {len(custom['data']['features'])} features -> {out}")
+    else:
+        print("[Pipeline] WARNING: no custom_functional_zone layer produced")
+
+    # 落盘全部图层（每层独立 geojson，供渲染分开图层使用）
+    saved_layers = []
+    for lt, c in best_by_type.items():
+        data = c["data"]
         path = OUT_DIR / f"{lt}.geojson"
         path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
         saved_layers.append(f"{lt}:{len(data['features'])}")
