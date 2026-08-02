@@ -393,9 +393,9 @@ def add_annotations(kg, annotations: list):
     from app.modules.schema.types.spatial_types import CurrentFacility
     fc, vc = 0, 0
     for ann in annotations:
-        cat = ann.category
+        cat = getattr(ann, "category", "") or ""
         if cat == "村名":
-            text = ann.text
+            text = getattr(ann, "text", "") or ""
             bsm = str(ann.bsm).strip()
             ysdm = str(ann.ysdm).strip()
             if text and hasattr(ann, "geometry"):
@@ -653,11 +653,12 @@ _FACILITY_TEXT_MAP = {
 def add_facilities_from_annotations(kg, annotations) -> None:
     count = 0
     for i, ann in enumerate(annotations):
-        cat = ann.category or ""
+        # annotation 来自多数据源（本地 geojson / Tianditu WFS），属性集不齐 —
+        # category/text 用防御式访问（Pydantic extra 未存该字段时避免 AttributeError）
+        cat = getattr(ann, "category", "") or ""
         if cat != "现状设施点":
             continue
-
-        text = ann.text or ""
+        text = getattr(ann, "text", "") or ""
         geom = ann.geometry
         if not geom or not isinstance(geom, dict):
             continue
