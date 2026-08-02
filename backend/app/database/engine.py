@@ -222,29 +222,41 @@ async def _run_migrations(engine) -> None:
     """Run schema migrations for existing tables (idempotent)."""
     from sqlalchemy import text
 
-    migrations = [
-        ("village_name", "ALTER TABLE planning_sessions ADD COLUMN village_name TEXT DEFAULT ''"),
-        ("province", "ALTER TABLE planning_sessions ADD COLUMN province TEXT DEFAULT ''"),
-        ("city", "ALTER TABLE planning_sessions ADD COLUMN city TEXT DEFAULT ''"),
-        ("county", "ALTER TABLE planning_sessions ADD COLUMN county TEXT DEFAULT ''"),
-        ("township", "ALTER TABLE planning_sessions ADD COLUMN township TEXT DEFAULT ''"),
-        ("planning_period", "ALTER TABLE planning_sessions ADD COLUMN planning_period TEXT DEFAULT '2022-2035年'"),
-    ]
+    table_migrations = {
+        "planning_sessions": [
+            ("village_name", "ALTER TABLE planning_sessions ADD COLUMN village_name TEXT DEFAULT ''"),
+            ("province", "ALTER TABLE planning_sessions ADD COLUMN province TEXT DEFAULT ''"),
+            ("city", "ALTER TABLE planning_sessions ADD COLUMN city TEXT DEFAULT ''"),
+            ("county", "ALTER TABLE planning_sessions ADD COLUMN county TEXT DEFAULT ''"),
+            ("township", "ALTER TABLE planning_sessions ADD COLUMN township TEXT DEFAULT ''"),
+            ("planning_period", "ALTER TABLE planning_sessions ADD COLUMN planning_period TEXT DEFAULT '2022-2035年'"),
+        ],
+        "dimension_reports": [
+            # P8: INSTRUCTION 结构化段独立列（剥离存储，不参与展示）
+            ("instruction", "ALTER TABLE dimension_reports ADD COLUMN instruction TEXT"),
+        ],
+    }
 
     async with engine.begin() as conn:
-        # Get existing columns
-        result = await conn.run_sync(
-            lambda sync_conn: sync_conn.execute(text("PRAGMA table_info(planning_sessions)"))
-        )
-        existing = {row[1] for row in result.fetchall()}
+        for table, migrations in table_migrations.items():
+            try:
+                result = await conn.run_sync(
+                    lambda sync_conn, t=table: sync_conn.execute(
+                        text(f"PRAGMA table_info({t})")
+                    )
+                )
+                existing = {row[1] for row in result.fetchall()}
+            except Exception as e:
+                logger.warning(f"[Migration] PRAGMA failed for {table}: {e}")
+                continue
 
-        for col_name, sql in migrations:
-            if col_name not in existing:
-                try:
-                    await conn.execute(text(sql))
-                    logger.info(f"[Migration] Added column: {col_name}")
-                except Exception as e:
-                    logger.warning(f"[Migration] Column {col_name} may already exist: {e}")
+            for col_name, sql in migrations:
+                if col_name not in existing:
+                    try:
+                        await conn.execute(text(sql))
+                        logger.info(f"[Migration] Added column: {col_name}")
+                    except Exception as e:
+                        logger.warning(f"[Migration] Column {col_name} may already exist: {e}")
 
 
 # ==========================================

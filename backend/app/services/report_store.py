@@ -23,6 +23,27 @@ from ..utils.logger import get_logger
 
 logger = get_logger(__name__)
 
+_INSTRUCTION_MARKER = "【INSTRUCTION】"
+
+
+def split_instruction(content: str) -> tuple:
+    """Split report content into (display_content, instruction_section).
+
+    P8: L1/L3 报告文末携带【INSTRUCTION】固定列 markdown 表格段（LLM 生成，
+    供 PARSE 结构化消费）。展示文本与指令段分离存储：
+      - display_content: 标记行之前的所有内容（含标记行前导空行清理）
+      - instruction_section: 标记行起的全部（含标记行，PARSE 据此定位）
+    无标记时原样返回 (content, "")。
+    """
+    if not content:
+        return (content or "", "")
+    idx = content.find(_INSTRUCTION_MARKER)
+    if idx < 0:
+        return (content, "")
+    display = content[:idx].rstrip()
+    instruction = content[idx:].strip()
+    return (display, instruction)
+
 
 # ==========================================
 # TypedDict Definitions
@@ -92,7 +113,9 @@ class ReportStore:
             report_id: UUID for retrieving the report
         """
         report_id = str(uuid.uuid4())
-        summary = await self._generate_summary(content, dim_key, layer)
+        # P8: 文末 INSTRUCTION 段剥离存储（content 保持展示文本）
+        display_content, instruction = split_instruction(content)
+        summary = await self._generate_summary(display_content, dim_key, layer)
 
         db_report = DimensionReport(
             session_id=session_id,
@@ -100,7 +123,8 @@ class ReportStore:
             layer=layer,
             version=version,
             report_id=report_id,
-            content=content,
+            content=display_content,
+            instruction=instruction or None,
             summary=summary,
             revision_trigger=metadata.get("revision_reason") if metadata else None,
             knowledge_sources=knowledge_sources,
@@ -144,6 +168,12 @@ class ReportStore:
         if not reports:
             return []
 
+        # P8: 文末 INSTRUCTION 段剥离存储（content 保持展示文本）
+        for report_data in reports:
+            display_content, instruction = split_instruction(report_data["content"])
+            report_data["content"] = display_content
+            report_data["instruction"] = instruction or None
+
         async with get_async_session() as db:
             for report_data in reports:
                 # Check if report_id already exists
@@ -161,6 +191,7 @@ class ReportStore:
                     existing_report.layer = report_data["layer"]
                     existing_report.version = report_data["version"]
                     existing_report.content = report_data["content"]
+                    existing_report.instruction = report_data.get("instruction")
                     existing_report.summary = report_data.get("summary", report_data["content"][:500])
                     existing_report.revision_trigger = report_data.get("revision_trigger")
                     existing_report.knowledge_sources = report_data.get("knowledge_sources")
@@ -175,6 +206,7 @@ class ReportStore:
                         version=report_data["version"],
                         report_id=report_data["report_id"],
                         content=report_data["content"],
+                        instruction=report_data.get("instruction"),
                         summary=report_data.get("summary", report_data["content"][:500]),
                         revision_trigger=report_data.get("revision_trigger"),
                         knowledge_sources=report_data.get("knowledge_sources"),
@@ -583,6 +615,7 @@ class ReportStore:
                 if r.dimension_key not in seen_dims:
                     result_dict[r.dimension_key] = {
                         "content": r.content,
+                        "instruction": r.instruction,
                         "knowledge_sources": r.knowledge_sources or [],
                     }
                     seen_dims.add(r.dimension_key)

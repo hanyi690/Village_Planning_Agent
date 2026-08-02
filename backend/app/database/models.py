@@ -153,6 +153,10 @@ class DimensionReport(SQLModel, table=True):
     # Content
     content: str = Field(sa_column=Text())
     summary: str = Field(sa_column=Text())  # Structured JSON summary
+    instruction: Optional[str] = Field(
+        default=None,
+        sa_column=Column(Text)
+    )  # P8: INSTRUCTION 结构化段（剥离存储，不参与展示）
 
     # Metadata
     revision_trigger: Optional[str] = None
