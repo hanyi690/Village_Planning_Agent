@@ -367,8 +367,8 @@ def render_composite(
 
     LAYER_ORDER = [
         "boundary", "sensitivity_zone", "function_zone",
-        "planning_zone", "development_axis", "infrastructure",
-        "facility_point",
+        "planning_zone", "custom_functional_zone", "development_axis",
+        "infrastructure", "planned_road", "facility_point",
     ]
 
     fig, ax = plt.subplots(1, 1, figsize=(16, 12))
@@ -427,6 +427,26 @@ def render_composite(
                     if label:
                         ax.annotate(label, (geom.x, geom.y), fontsize=7,
                                     xytext=(5, 5), textcoords="offset points")
+
+            elif layer_type == "custom_functional_zone":
+                name = props.get("category_name_zh", "") or props.get("category_code", "")
+                cfill = props.get("color", "#CCCCCC")
+                _draw_polygons(ax, geom, cfill, "#333333", alpha=0.45, linewidth=1.2,
+                               hatch="..")
+                if name and geom.geom_type in ("Polygon", "MultiPolygon"):
+                    c = geom.centroid
+                    ax.annotate(name, (c.x, c.y), fontsize=7, ha="center",
+                                color="#222222")
+
+            elif layer_type == "planned_road":
+                op = props.get("operation", "new")
+                r_color = {"upgrade": "#FF8800", "new": "#CC0000",
+                           "preserve": "#888888"}.get(op, "#CC0000")
+                if geom.geom_type == "LineString":
+                    _draw_linestring(ax, geom, r_color, linewidth=2.2)
+                elif geom.geom_type == "MultiLineString":
+                    for part in geom.geoms:
+                        _draw_linestring(ax, part, r_color, linewidth=2.2)
 
             elif layer_type == "facility_point":
                 status = props.get("status", "existing")

@@ -83,13 +83,35 @@ async def _execute_layout_node(state: ExecuteAgentState) -> dict:
             allocated = _apply_operations(allocated, state.operation_sequence)
 
         total_area_ha = sum(
-            float(f.get("properties", {}).get("area_ha", 0) or 0)
+            float(f.get("properties", {}).get("area_sqm", 0) or 0) / 10000.0
             for f in landuse.get("features", [])
         )
 
         # Direct ZoneTarget extraction
         zone_targets = list(state.intent.zone_targets) if hasattr(state.intent, 'zone_targets') and state.intent.zone_targets else []
         target_map = {zt.land_use: round(zt.area_ratio * total_area_ha, 2) for zt in zone_targets if zt.land_use}
+
+        # B2: zone_targets 为空（外部 intent 未提供分区目标）→ 用现状规划分区
+        # 分布兜底（dlbm_to_planning_zone 现状码→分区），使 MIP 正常分配并产出
+        # assigned_zone（否则 n_zones=0 → early return → planning_zone 层全村兜底单类）
+        if not target_map:
+            from collections import Counter
+
+            from app.modules.schema.encodings.code_sets import dlbm_to_planning_zone
+
+            zone_areas: Counter = Counter()
+            for _f in landuse.get("features", []):
+                _props = _f.get("properties", {}) or {}
+                _z = dlbm_to_planning_zone(
+                    str(_props.get("DLBM", "") or _props.get("dlbm", ""))
+                )
+                if _z:
+                    zone_areas[_z] += float(_props.get("area_sqm", 0) or 0) / 10000.0
+            target_map = {z: round(a, 2) for z, a in zone_areas.items()}
+            logger.info(
+                "[EXECUTE:layout] zone_targets empty; MIP targets from current "
+                "planning-zone distribution: %s", target_map,
+            )
         density_hints = {zt.land_use: zt.density for zt in zone_targets if zt.land_use and zt.density}
         adjacency_rules = {}
         for zt in zone_targets:
