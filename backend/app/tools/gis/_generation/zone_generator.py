@@ -238,9 +238,29 @@ class ZoneGenerator:
         # parcel_zones already includes extended DLBM mapping
         # land_use 是 PARSE 的规划中文名（如"一般农业区"），与标准分类 key
         # （如"农业用地"）不一定一致 → 逐级匹配（直接→别名→子串→dlbm 映射）
-        parcel_indices = parcel_zones.get(land_use, []) or self._match_parcel_indices(
-            land_use, parcel_zones, zone_intent
-        )
+        # P8: 空间定位优先 — INSTRUCTION/表格提取的位置（自然村→gazetteer BSM 集）
+        # 已填入 zone_intent.candidate_bsms → 用 BSM 限定分配池；无匹配地块时回退地类匹配
+        if zone_intent.candidate_bsms:
+            bsm_set = set(zone_intent.candidate_bsms)
+            bsm_to_idx = {
+                str(row.get("BSM", "") or row.get("bsm", "")): idx
+                for idx, row in landuse_gdf.iterrows()
+            }
+            located = [bsm_to_idx[b] for b in zone_intent.candidate_bsms if b in bsm_to_idx]
+            if located:
+                parcel_indices = located
+                logger.info(
+                    f"[ZoneGenerator] {zone_intent.zone_id} ({land_use}): "
+                    f"spatial-anchored to {len(located)} parcels"
+                )
+            else:
+                parcel_indices = parcel_zones.get(land_use, []) or self._match_parcel_indices(
+                    land_use, parcel_zones, zone_intent
+                )
+        else:
+            parcel_indices = parcel_zones.get(land_use, []) or self._match_parcel_indices(
+                land_use, parcel_zones, zone_intent
+            )
 
         if not parcel_indices:
             logger.info(
