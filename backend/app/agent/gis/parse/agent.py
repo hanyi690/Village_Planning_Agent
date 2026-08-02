@@ -18,11 +18,12 @@ from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
 from app.modules.schema.contracts.parse_contracts import (
-    SpatialPlanningIntent,
-    ZoneTarget,
-    FacilityTarget,
     AxisTarget,
+    FacilityTarget,
     RoadTarget,
+    SpatialPlanningIntent,
+    SpatialPreference,
+    ZoneTarget,
 )
 from app.modules.schema.contracts.semantic_fields import SemanticMetadata
 from app.utils.logger import get_logger
@@ -49,6 +50,122 @@ class ParseResult:
             self.constraint_set = []
         if self.validation_errors is None:
             self.validation_errors = []
+
+
+# ── P8: INSTRUCTION 段结构化提取 ────────────────────────────────────
+
+_INSTRUCTION_MARKER = "【INSTRUCTION】"
+
+# 类型闭集：L3 = 项目/功能分区/设施/轴线；L1 = 现状设施/现状项目/现状分区
+_INSTRUCTION_TYPE_MAP = {
+    "项目": "project",
+    "功能分区": "zone",
+    "分区": "zone",
+    "设施": "facility",
+    "轴线": "axis",
+    "现状设施": "facility",
+    "现状项目": "project",
+    "现状分区": "zone",
+}
+
+_INSTRUCTION_LOCATION_HEADER_RE = re.compile(r"(位置|选址|所在位置|方位|位于)")
+_INSTRUCTION_NAME_HEADER_RE = re.compile(r"(名称|项目|工程)")
+
+
+def _extract_instruction_section(text: str) -> str:
+    """取【INSTRUCTION】标记起的结构化段（含标记行）。无标记返回空。"""
+    if not text:
+        return ""
+    idx = text.find(_INSTRUCTION_MARKER)
+    if idx < 0:
+        return ""
+    return text[idx:]
+
+
+def _extract_instruction_tables(text: str) -> Dict[str, List[Any]]:
+    """从【INSTRUCTION】段解析固定列 markdown 表格 → 空间目标列表。
+
+    行级容错：坏行 / 未知类型 / 空名称 丢弃，不影响其余行。
+    返回 {"zones": [ZoneTarget], "facilities": [FacilityTarget], "axes": [AxisTarget]}
+    """
+    from app.modules.parsing.tables import _iter_tables
+
+    section = _extract_instruction_section(text)
+    if not section:
+        return {"zones": [], "facilities": [], "axes": []}
+
+    zones: List[ZoneTarget] = []
+    facilities: List[FacilityTarget] = []
+    axes: List[AxisTarget] = []
+    seen = {"zones": set(), "facilities": set(), "axes": set()}
+    kind_to_seen = {"project": "facilities", "zone": "zones", "facility": "facilities", "axis": "axes"}
+
+    for header, rows in _iter_tables(section):
+        type_idx = 0 if any("类型" in h for h in header) else None
+        name_idx = next(
+            (i for i, h in enumerate(header) if _INSTRUCTION_NAME_HEADER_RE.search(h)),
+            None,
+        )
+        loc_idx = next(
+            (i for i, h in enumerate(header) if _INSTRUCTION_LOCATION_HEADER_RE.search(h)),
+            None,
+        )
+        desc_idx = next(
+            (i for i, h in enumerate(header) if "描述" in h or "内容" in h),
+            None,
+        )
+        scale_idx = next(
+            (i for i, h in enumerate(header) if "规模" in h),
+            None,
+        )
+        if type_idx is None or name_idx is None:
+            continue
+
+        for row in rows:
+            if type_idx >= len(row) or name_idx >= len(row):
+                continue
+            kind = _INSTRUCTION_TYPE_MAP.get(str(row[type_idx]).strip())
+            name = row[name_idx].strip()
+            seen_key = kind_to_seen.get(kind) if kind else None
+            if seen_key is None or not name or len(name) < 2 or name in seen[seen_key]:
+                continue
+            location = (row[loc_idx].strip() if loc_idx is not None and loc_idx < len(row) else "") or ""
+            description = (row[desc_idx].strip() if desc_idx is not None and desc_idx < len(row) else "") or ""
+            scale = (row[scale_idx].strip() if scale_idx is not None and scale_idx < len(row) else "") or ""
+
+            semantic = SemanticMetadata(
+                natural_language_description=f"{name}：{description}" if description else name,
+                spatial_hint=location or "",
+            )
+            if kind == "zone":
+                seen["zones"].add(name)
+                zones.append(ZoneTarget(
+                    land_use=name,
+                    semantic=semantic,
+                    spatial_preference=SpatialPreference(direction="", reference=location or None) if location else None,
+                ))
+            elif kind == "facility":
+                seen["facilities"].add(name)
+                facilities.append(FacilityTarget(
+                    type=name,
+                    status="planned_new",
+                    location_hint=location,
+                    anchor_village=location,
+                    semantic=semantic,
+                ))
+            elif kind == "axis":
+                seen["axes"].add(name)
+                axes.append(AxisTarget(
+                    label=name,
+                    reference_feature=location or "",
+                    semantic=semantic,
+                ))
+
+    logger.info(
+        "[PARSE] INSTRUCTION: %d zones, %d facilities, %d axes",
+        len(zones), len(facilities), len(axes),
+    )
+    return {"zones": zones, "facilities": facilities, "axes": axes}
 
 
 # ── Extraction patterns ──────────────────────────────────────────────
@@ -188,6 +305,33 @@ def parse(
 
     zone_targets += _ezt(planning_text)
     facilities += _ept(planning_text)
+
+    # P8: INSTRUCTION 段（文末固定列表格，L1/L3 报告生成端产出）→ 结构化空间目标
+    # 与上述提取合并：按名称去重，INSTRUCTION 优先（位置信息更完整）
+    instruction = _extract_instruction_tables(planning_text)
+    zone_names = {zt.land_use for zt in zone_targets if zt.land_use}
+    facility_names = {ft.type for ft in facilities if ft.type}
+    axis_names = {ax.label or ax.reference_feature for ax in axes}
+    for izt in instruction["zones"]:
+        if izt.land_use and izt.land_use not in zone_names:
+            zone_targets.append(izt)
+            zone_names.add(izt.land_use)
+    for ift in instruction["facilities"]:
+        if ift.type and ift.type not in facility_names:
+            facilities.append(ift)
+            facility_names.add(ift.type)
+    for iax in instruction["axes"]:
+        key = iax.label or iax.reference_feature
+        if key and key not in axis_names:
+            axes.append(iax)
+            axis_names.add(key)
+
+    # 过滤表格残片：既有正则会把正文 markdown 表格行误提取为设施
+    # （类型/位置含 "|" 的行无实体意义，丢弃避免稀释下游定位）
+    facilities = [
+        ft for ft in facilities
+        if "|" not in ft.type and "|" not in ft.location_hint
+    ]
 
     intent = SpatialPlanningIntent(
         village_name=village_name,
@@ -495,6 +639,91 @@ async def extract_bindings(
         kg=kg,
         bundle=bundle,
     )
+
+
+# ── P8: 自然村/位置名 → BSM（gazetteer 解析，intent 原地填充）────────
+
+_LOCATION_SEP_RE = re.compile(r"[、，,；;/\s]+|至|和|与")
+_LOCATION_STRIP = ("自然村", "村", "组", "段", "沿", "线", "附近", "周边", "区域", "一带")
+
+
+def _extract_location_tokens(location: str) -> List[str]:
+    """位置文本 → 候选 token：'肩丰、田坑' / '肩丰至炉池段' / '园寨自然村'。"""
+    tokens = []
+    for part in _LOCATION_SEP_RE.split(location or ""):
+        part = part.strip()
+        for suffix in _LOCATION_STRIP:
+            part = part.rstrip(suffix)
+        part = part.strip()
+        if part and not any(ch.isdigit() for ch in part):
+            tokens.append(part)
+    return list(dict.fromkeys(tokens))
+
+
+def _resolve_gazetteer_bsms(token: str, gazetteer: Any) -> List[str]:
+    """token → gazetteer 解析 → BSM 列表（精确 → 村后缀 → fuzzy）。"""
+    if gazetteer is None:
+        return []
+    for candidate in (token, f"{token}村", f"{token}自然村", f"{token}组"):
+        entry = gazetteer.resolve(candidate, fuzzy=False)
+        if entry is not None and entry.bsms:
+            return list(entry.bsms)
+    entry = gazetteer.resolve(token, fuzzy=True)
+    if entry is not None and entry.bsms:
+        return list(entry.bsms)
+    return []
+
+
+def resolve_spatial_anchors(intent: Any, village_name: str = "") -> int:
+    """将 intent 中位置文本（INSTRUCTION/表格提取）解析为具体 BSM 集。
+
+    - ZoneTarget: 位置 → candidate_bsms（MIP canvas / ZoneGenerator 空间过滤）
+    - FacilityTarget: 位置 → candidate_bsms（FacilityPlacer 候选池）
+    - AxisTarget: 位置 → corridor_bsms（AxisBuilder 走廊）
+    仅读取 gazetteer（不落盘）；无匹配保留原文 spatial_hint 供语义使用。
+    返回成功解析的实体数。
+    """
+    if not village_name:
+        return 0
+    try:
+        from app.modules.kg.gazetteer import load_gazetteer
+
+        gazetteer = load_gazetteer(village_name)
+        if not gazetteer.entries:
+            return 0
+    except Exception:
+        return 0
+
+    resolved = 0
+    for zt in (intent.zone_targets if hasattr(intent, "zone_targets") else []):
+        location = ""
+        if zt.spatial_preference is not None:
+            location = zt.spatial_preference.reference or ""
+        if not location and zt.semantic is not None:
+            location = zt.semantic.spatial_hint or ""
+        for token in _extract_location_tokens(location):
+            bsms = _resolve_gazetteer_bsms(token, gazetteer)
+            if bsms and not any(b in zt.candidate_bsms for b in bsms):
+                zt.candidate_bsms.extend(bsms)
+                resolved += 1
+    for ft in (intent.facilities if hasattr(intent, "facilities") else []):
+        location = ft.location_hint or ft.anchor_village or ""
+        for token in _extract_location_tokens(location):
+            bsms = _resolve_gazetteer_bsms(token, gazetteer)
+            if bsms and not any(b in ft.candidate_bsms for b in bsms):
+                ft.candidate_bsms.extend(bsms)
+                resolved += 1
+    for ax in (intent.development_axes if hasattr(intent, "development_axes") else []):
+        location = ax.reference_feature or (ax.semantic.spatial_hint if ax.semantic else "") or ""
+        for token in _extract_location_tokens(location):
+            bsms = _resolve_gazetteer_bsms(token, gazetteer)
+            if bsms and not any(b in ax.corridor_bsms for b in bsms):
+                ax.corridor_bsms.extend(bsms)
+                resolved += 1
+
+    if resolved:
+        logger.info("[PARSE] spatial anchors resolved: %d entities via gazetteer(%s)", resolved, village_name)
+    return resolved
 
 
 __all__ = ["parse", "parse_async", "ParseResult", "PendingBinding", "extract_bindings"]

@@ -21,12 +21,19 @@ from __future__ import annotations
 import re
 from typing import List, Optional, Tuple
 
-from app.modules.schema.contracts.parse_contracts import FacilityTarget, ZoneTarget
+from app.modules.schema.contracts.parse_contracts import (
+    FacilityTarget,
+    SpatialPreference,
+    ZoneTarget,
+)
 from app.modules.schema.contracts.semantic_fields import SemanticMetadata
 
 _AREA_UNIT_RE = re.compile(r"(公顷|ha|hm|亩|㎡|m²)")
 _RATIO_RE = re.compile(r"%")
 _NUMBER_RE = re.compile(r"\d+(?:\.\d+)?")
+# P8: 位置列识别（表头含位置/选址/所在位置/方位/位于）
+_LOCATION_HEADER_RE = re.compile(r"(位置|选址|所在位置|方位|位于|布局)")
+_PROJECT_NAME_HEADER_RE = re.compile(r"(项目名称|工程名称|设施名称|项目名)")
 
 
 def _split_row(line: str) -> List[str]:
@@ -61,14 +68,17 @@ def _iter_tables(text: str) -> List[Tuple[List[str], List[List[str]]]]:
 
 
 def _classify_columns(header: List[str], rows: List[List[str]]) -> dict:
-    """单位级列分类：name / area / ratio / 其余 text 列。"""
-    cols = {"name": None, "area": None, "ratio": None, "text": []}
+    """单位级列分类：name / area / ratio / location / 其余 text 列。"""
+    cols = {"name": None, "area": None, "ratio": None, "location": None, "text": []}
     for idx, cell in enumerate(header):
         joined = "".join(row[idx] for row in rows if idx < len(row))
         if _AREA_UNIT_RE.search(cell):
             cols["area"] = idx
         elif _RATIO_RE.search(cell):
             cols["ratio"] = idx
+        elif _LOCATION_HEADER_RE.search(cell) and not _NUMBER_RE.search(joined):
+            # P8: 位置列（如 位置/选址位置/所在位置），数据无数字才判为位置列
+            cols["location"] = idx
         elif _NUMBER_RE.search(cell) and not any(_NUMBER_RE.findall(joined)):
             # 表头带数字（如"隐患点数量"）但数据无数字 → 名称类
             cols["text"].append(idx)
@@ -114,6 +124,10 @@ def _extract_zone_tables(text: str) -> List[ZoneTarget]:
                     area_ha = float(m2.group())
             if area_ratio <= 0.0 and area_ha is None:
                 continue
+            # P8: 位置列 → spatial_hint（如"位于园寨自然村"）
+            location = ""
+            if cols["location"] is not None and cols["location"] < len(row):
+                location = row[cols["location"]]
             seen.add(name)
             targets.append(
                 ZoneTarget(
@@ -125,6 +139,10 @@ def _extract_zone_tables(text: str) -> List[ZoneTarget]:
                         + (f"，面积{area_ha}公顷" if area_ha is not None else ""),
                         spatial_hint=f"AREA:{area_ha}" if area_ha is not None else "",
                     ),
+                    spatial_preference=SpatialPreference(
+                        direction="",
+                        reference=location or None,
+                    ) if location else None,
                 )
             )
     return targets
@@ -133,32 +151,48 @@ def _extract_zone_tables(text: str) -> List[ZoneTarget]:
 def _extract_project_tables(text: str) -> List[FacilityTarget]:
     """建设项目库表 → FacilityTarget(type=项目名, location_hint=选址).
 
-    最小配置：表头含"项目名称"（真实报告【建设项目库】标准化格式）。
-    位置列 = 数据行中首个含地理后缀的文本列。
+    P8 放宽：表头名称列含"项目名称/工程名称/设施名称"任一即可（真实报告
+    【建设项目库】【产业项目清单】标准格式）；位置列 = 表头位置列，无则取
+    数据行中首个含地理后缀的文本列。
     """
     targets = []
     seen = set()
     for header, rows in _iter_tables(text):
-        if not rows or "项目名称" not in "".join(header):
+        if not rows:
             continue
-        name_idx = header.index("项目名称") if "项目名称" in header else 0
+        # 名称列判定：表头含项目/工程/设施名称字样的列
+        name_idx = next(
+            (i for i, h in enumerate(header) if _PROJECT_NAME_HEADER_RE.search(h)),
+            None,
+        )
+        if name_idx is None:
+            continue
+        # P8: 位置列优先（表头含 位置/选址），无则回退地理后缀文本列
+        location_idx = next(
+            (i for i, h in enumerate(header) if _LOCATION_HEADER_RE.search(h)),
+            None,
+        )
         for row in rows:
             if name_idx >= len(row):
                 continue
             name = row[name_idx]
-            if not name or len(name) < 4 or "项目名称" in name or "合计" in name or name in seen:
+            if not name or len(name) < 4 or "名称" in name or "合计" in name or name in seen:
                 continue
             location = ""
-            for cell in row[name_idx + 1:]:
-                if any(kw in cell for kw in ("村", "园", "基地", "段", "路", "区", "中心", "坑", "塘")):
-                    location = cell
-                    break
+            if location_idx is not None and location_idx < len(row):
+                location = row[location_idx]
+            if not location:
+                for cell in row[name_idx + 1:]:
+                    if any(kw in cell for kw in ("村", "园", "基地", "段", "路", "区", "中心", "坑", "塘")):
+                        location = cell
+                        break
             seen.add(name)
             targets.append(
                 FacilityTarget(
                     type=name,
                     status="planned_new",
                     location_hint=location,
+                    anchor_village=location,
                     semantic=SemanticMetadata(
                         natural_language_description=f"规划项目{name}",
                         spatial_hint=location,

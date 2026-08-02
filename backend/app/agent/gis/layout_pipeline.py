@@ -174,10 +174,12 @@ async def _parse_intent_node(state: GISPipelineState) -> dict:
 
     # Extract planning text from reports
     planning_text = ""
+    instruction_text = ""
     if reports:
         for key, val in reports.items():
             if isinstance(val, dict):
                 planning_text += val.get("content", val.get("text", ""))
+                instruction_text += val.get("instruction", "") + "\n"
             elif isinstance(val, str):
                 planning_text += val
     if not planning_text:
@@ -188,12 +190,23 @@ async def _parse_intent_node(state: GISPipelineState) -> dict:
         return {}
 
     try:
+        # P8: INSTRUCTION 段（文末结构化定位表格）优先保留 — 正文截断后补回
+        if instruction_text:
+            planning_text = planning_text[:9000] + "\n\n" + instruction_text[:4000]
         result: ParseResult = await parse_async(
-            planning_text=planning_text[:12000],
+            planning_text=planning_text[:13000],
             village_name=village_name,
             planning_period=state.config.get("planning_period", "2022-2035年"),
         )
         intent = result.intent
+
+        # P8: 自然村/位置名 → gazetteer → candidate_bsms（intent 原地填充）
+        try:
+            from app.agent.gis.parse.agent import resolve_spatial_anchors
+
+            resolve_spatial_anchors(intent, village_name=village_name)
+        except Exception as e:
+            logger.warning("[Pipeline:parse] spatial anchor resolution failed: %s", e)
 
         # Extract PARSE outputs - all typed
         zone_count = len(intent.zone_targets) if hasattr(intent, 'zone_targets') else 0
