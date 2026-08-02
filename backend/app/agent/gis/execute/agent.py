@@ -327,38 +327,43 @@ async def _execute_road_node(state: ExecuteAgentState) -> dict:
     """
     from app.modules.spatial_ops.road_planner import plan_roads
 
-    intent = state.intent
-    if not intent:
-        logger.info("[EXECUTE:road] no intent, skipping")
+    try:
+        intent = state.intent
+        if not intent:
+            logger.info("[EXECUTE:road] no intent, skipping")
+            return {}
+
+        # Extract road targets
+        road_targets = []
+        if hasattr(intent, "road_targets"):
+            road_targets = intent.road_targets
+        elif isinstance(intent, dict):
+            road_targets = intent.get("road_targets", [])
+
+        if not road_targets:
+            logger.info("[EXECUTE:road] no road targets in intent, skipping")
+            return {}
+
+        # Get current roads from bundle
+        bundle = state.gis_bundle
+        current_roads = []
+        if bundle is not None:
+            roads = bundle.lines.get("roads_current") if bundle.lines is not None else None
+            if roads is not None:
+                current_roads = list(roads)
+            # Also try legacy attribute
+            if not current_roads:
+                current_roads = getattr(bundle, "roads", [])
+
+        # Generate planned roads
+        planned_roads = plan_roads(
+            road_targets=road_targets,
+            current_roads=current_roads,
+        )
+    except Exception as e:
+        # road 层失败降级：不阻塞主图层（layout_configs 保持已有内容）
+        logger.warning("[EXECUTE:road] failed (degraded): %s", e)
         return {}
-
-    # Extract road targets
-    road_targets = []
-    if hasattr(intent, "road_targets"):
-        road_targets = intent.road_targets
-    elif isinstance(intent, dict):
-        road_targets = intent.get("road_targets", [])
-
-    if not road_targets:
-        logger.info("[EXECUTE:road] no road targets in intent, skipping")
-        return {}
-
-    # Get current roads from bundle
-    bundle = state.gis_bundle
-    current_roads = []
-    if bundle is not None:
-        roads = bundle.lines.get("roads_current") if bundle.lines is not None else None
-        if roads is not None:
-            current_roads = list(roads)
-        # Also try legacy attribute
-        if not current_roads:
-            current_roads = getattr(bundle, "roads", [])
-
-    # Generate planned roads
-    planned_roads = plan_roads(
-        road_targets=road_targets,
-        current_roads=current_roads,
-    )
 
     if not planned_roads:
         logger.info("[EXECUTE:road] no roads generated")
