@@ -142,8 +142,30 @@ DLBM_TO_PLANNING_ZONE: Dict[str, str] = _mapping_default_to_dict(_dlbm_to_planni
 # ── DLBM -> Primary zone (v3.0: from mapping) ──
 DLBM_TO_PRIMARY_ZONE: Dict[str, str] = _mapping_default_to_dict(_dlbm_to_primary_zones)
 
+# ── DLBM -> Zone type（附录5 现状码，地块 dlbm_system=appendix5）──
+# 数据全部来自 mappings/gbt21010_to_zone_types_current.yaml（DictionaryCenter 注册）。
+# 旧附录5 字典（gbt21010_to_zone_types_appendix5）source 为 dlbm_ref 码（01-12），
+# 与地块现状码（1100/1340/2121/3100…）数字冲突（dlbm_ref 1100=水域 vs 现状 1100=耕地），
+# 因此现状码字典优先；未命中再回退旧字典。
+_dlbm_to_zone_types_current = get_center().get_mapping("gbt21010_to_zone_types_current")
+DLBM_TO_ZONE_TYPE_CURRENT: Dict[str, str] = _mapping_default_to_dict(_dlbm_to_zone_types_current)
+
+
+def _zone_type_for_dlbm_with_fallback(dlbm: str) -> str:
+    code = str(dlbm).strip()
+    zt = DLBM_TO_ZONE_TYPE_CURRENT.get(code)
+    if zt:
+        return zt
+    zt = DLBM_TO_ZONE_TYPE_CURRENT.get(code[:2])
+    if zt:
+        return zt
+    return DLBM_TO_ZONE_TYPE.get(code, "农业用地")
+
+
 ZONE_TYPE_TO_DLBMS: Dict[str, List[str]] = {}
 for _code, _zt in DLBM_TO_ZONE_TYPE.items():
+    ZONE_TYPE_TO_DLBMS.setdefault(_zt, []).append(_code)
+for _code, _zt in DLBM_TO_ZONE_TYPE_CURRENT.items():
     ZONE_TYPE_TO_DLBMS.setdefault(_zt, []).append(_code)
 
 # ── Zone hierarchy (v3.0: from encoding dicts, not derived from mappings) ──
@@ -306,7 +328,7 @@ def is_general_agriculture(dlbm: str) -> bool:
     return str(dlbm).strip() in GENERAL_AGRICULTURE_CODES
 
 def get_zone_type_for_dlbm(dlbm: str) -> str:
-    return DLBM_TO_ZONE_TYPE.get(dlbm, "农业用地")
+    return _zone_type_for_dlbm_with_fallback(dlbm)
 
 @functools.lru_cache(maxsize=256)
 def resolve_zone_type_for_dlbm(dlbm: str) -> str:

@@ -28,20 +28,17 @@ from app.modules.schema import (
 
 logger = get_logger(__name__)
 
-# PARSE 规划中文名 → 标准 zone type（DLBM_TO_ZONE_TYPE 的 7 类）
-_ZONE_NAME_ALIASES: Dict[str, str] = {
-    "基本农田保护区": "农业用地", "基本农田": "农业用地", "一般农业区": "农业用地",
-    "农田保护区": "农业用地", "耕地保护区": "农业用地", "农业区": "农业用地",
-    "农用地": "农业用地", "耕地": "农业用地",
-    "生态保护区": "生态绿地", "林业发展区": "生态绿地", "生态用地": "生态绿地",
-    "生态区": "生态绿地", "林地保护区": "生态绿地", "林地": "生态绿地",
-    "村庄建设区": "居住用地", "村庄建设用地": "居住用地", "农村居民点": "居住用地",
-    "居民点用地": "居住用地", "居住区": "居住用地",
-    "产业园区": "产业用地", "产业园": "产业用地", "产业区": "产业用地",
-    "工业用地": "产业用地", "工业区": "产业用地",
-    "公共服务区": "公共服务用地", "公共服务设施用地": "公共服务用地",
-    "水域保护区": "水域", "水域": "水域", "水系": "水域", "水面": "水域",
-}
+
+def _zone_name_aliases() -> Dict[str, str]:
+    """PARSE 规划中文名 → 标准 zone_type（数据在 schema 层 mappings/zone_type_name_aliases.yaml）。"""
+    from app.modules.schema.encodings.dicts.loader import get_center
+
+    table = get_center().get_mapping("zone_type_name_aliases")
+    return {
+        str(e.get("source", "")): str(e.get("default", ""))
+        for e in (table.raw.get("mappings", []) if table else [])
+        if e.get("source") and e.get("default")
+    }
 
 try:
     import geopandas as gpd
@@ -213,7 +210,7 @@ class ZoneGenerator:
         """
         if not land_use:
             return []
-        standard = _ZONE_NAME_ALIASES.get(land_use)
+        standard = _zone_name_aliases().get(land_use)
         if standard and standard in parcel_zones:
             return parcel_zones[standard]
         for candidate, indices in parcel_zones.items():

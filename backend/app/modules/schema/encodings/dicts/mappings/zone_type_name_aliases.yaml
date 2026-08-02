@@ -1,0 +1,140 @@
+# PARSE 规划中文名 → 标准 zone_type 别名
+# 消费方: ZoneGenerator._match_parcel_indices（tools 层零数据硬编码，
+#   别名知识统一在 schema 数据层，DictionaryCenter 自动注册）
+version: "2026_GUANGDONG_V1"
+standard: "村庄规划文本常用分区名 → 附录5 标准 zone_type"
+source_system: planning_text_names
+target_system: zone_types_appendix5
+
+mappings:
+  # ── 农业用地 ──
+  - source: "基本农田保护区"
+    default: "农业用地"
+    decision: auto
+    targets: [{code: "农业用地", when: null, confidence: exact}]
+  - source: "基本农田"
+    default: "农业用地"
+    decision: auto
+    targets: [{code: "农业用地", when: null, confidence: exact}]
+  - source: "一般农业区"
+    default: "农业用地"
+    decision: auto
+    targets: [{code: "农业用地", when: null, confidence: exact}]
+  - source: "农田保护区"
+    default: "农业用地"
+    decision: auto
+    targets: [{code: "农业用地", when: null, confidence: exact}]
+  - source: "耕地保护区"
+    default: "农业用地"
+    decision: auto
+    targets: [{code: "农业用地", when: null, confidence: exact}]
+  - source: "农业区"
+    default: "农业用地"
+    decision: auto
+    targets: [{code: "农业用地", when: null, confidence: exact}]
+  - source: "农用地"
+    default: "农业用地"
+    decision: auto
+    targets: [{code: "农业用地", when: null, confidence: exact}]
+  - source: "耕地"
+    default: "农业用地"
+    decision: auto
+    targets: [{code: "农业用地", when: null, confidence: exact}]
+
+  # ── 生态绿地 ──
+  - source: "生态保护区"
+    default: "生态绿地"
+    decision: auto
+    targets: [{code: "生态绿地", when: null, confidence: exact}]
+  - source: "林业发展区"
+    default: "生态绿地"
+    decision: auto
+    targets: [{code: "生态绿地", when: null, confidence: exact}]
+  - source: "生态用地"
+    default: "生态绿地"
+    decision: auto
+    targets: [{code: "生态绿地", when: null, confidence: exact}]
+  - source: "生态区"
+    default: "生态绿地"
+    decision: auto
+    targets: [{code: "生态绿地", when: null, confidence: exact}]
+  - source: "林地保护区"
+    default: "生态绿地"
+    decision: auto
+    targets: [{code: "生态绿地", when: null, confidence: exact}]
+  - source: "林地"
+    default: "生态绿地"
+    decision: auto
+    targets: [{code: "生态绿地", when: null, confidence: exact}]
+
+  # ── 居住用地 ──
+  - source: "村庄建设区"
+    default: "居住用地"
+    decision: auto
+    targets: [{code: "居住用地", when: null, confidence: exact}]
+  - source: "村庄建设用地"
+    default: "居住用地"
+    decision: auto
+    targets: [{code: "居住用地", when: null, confidence: exact}]
+  - source: "农村居民点"
+    default: "居住用地"
+    decision: auto
+    targets: [{code: "居住用地", when: null, confidence: exact}]
+  - source: "居民点用地"
+    default: "居住用地"
+    decision: auto
+    targets: [{code: "居住用地", when: null, confidence: exact}]
+  - source: "居住区"
+    default: "居住用地"
+    decision: auto
+    targets: [{code: "居住用地", when: null, confidence: exact}]
+
+  # ── 产业用地 ──
+  - source: "产业园区"
+    default: "产业用地"
+    decision: auto
+    targets: [{code: "产业用地", when: null, confidence: exact}]
+  - source: "产业园"
+    default: "产业用地"
+    decision: auto
+    targets: [{code: "产业用地", when: null, confidence: exact}]
+  - source: "产业区"
+    default: "产业用地"
+    decision: auto
+    targets: [{code: "产业用地", when: null, confidence: exact}]
+  - source: "工业用地"
+    default: "产业用地"
+    decision: auto
+    targets: [{code: "产业用地", when: null, confidence: exact}]
+  - source: "工业区"
+    default: "产业用地"
+    decision: auto
+    targets: [{code: "产业用地", when: null, confidence: exact}]
+
+  # ── 公共服务用地 ──
+  - source: "公共服务区"
+    default: "公共服务用地"
+    decision: auto
+    targets: [{code: "公共服务用地", when: null, confidence: exact}]
+  - source: "公共服务设施用地"
+    default: "公共服务用地"
+    decision: auto
+    targets: [{code: "公共服务用地", when: null, confidence: exact}]
+
+  # ── 水域 ──
+  - source: "水域保护区"
+    default: "水域"
+    decision: auto
+    targets: [{code: "水域", when: null, confidence: exact}]
+  - source: "水域"
+    default: "水域"
+    decision: auto
+    targets: [{code: "水域", when: null, confidence: exact}]
+  - source: "水系"
+    default: "水域"
+    decision: auto
+    targets: [{code: "水域", when: null, confidence: exact}]
+  - source: "水面"
+    default: "水域"
+    decision: auto
+    targets: [{code: "水域", when: null, confidence: exact}]

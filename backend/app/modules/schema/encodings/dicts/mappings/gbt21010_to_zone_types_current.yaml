@@ -1,0 +1,173 @@
+# GB/T 21010 现状码（附录5 地块 DLBM，dlbm_system=appendix5）→ zone_type
+# 来源: 广东省村庄规划编制基本技术指南附录5（与 gbt21010_to_zone_types_appendix5.yaml
+#   注释中的现状码意图一致；该旧文件 source 为 dlbm_ref 码 01-12，与现状码数字冲突，
+#   故另立此文件，code_sets 查序时本字典优先）
+#   1100 耕地 → 农业用地
+#   1200 园地 → 农业用地
+#   1340 商品林 → 农业用地, 1350 生态林 → 生态绿地
+#   1400 草地 → 生态绿地
+#   1510 设施农用地 → 农业用地
+#   2100 城镇用地 → 居住用地, 2121 宅基地 → 居住用地
+#   2122 公共服务设施用地 → 公共服务用地
+#   2123 基础设施用地 → 交通用地, 2126 村内交通用地 → 交通用地
+#   2124 经营性建设用地 → 产业用地, 2130 采矿用地 → 产业用地
+#   2270 水利设施用地 → 农业用地
+#   2310 风景名胜设施用地 → 公共服务用地, 2320 特殊用地 → 公共服务用地
+#   3100 水域 → 水域
+#   3200 自然保留地 → 农业用地
+#
+# decision: prefix 条目为前缀兜底（未列出的变体码近似归类；精确条目优先）
+version: "2026_GUANGDONG_V1"
+standard: "广东省村庄规划编制基本技术指南附录5 现状码 + GB/T 21010-2017"
+source_system: gbt21010_current
+target_system: zone_types_appendix5
+
+mappings:
+  # ── 耕地 → 农业用地 ──
+  - source: "1100"
+    default: "农业用地"
+    decision: auto
+    basis: "附录5 1100 耕地 → 农业用地"
+    targets: [{code: "农业用地", when: null, confidence: exact}]
+
+  # ── 园地 → 农业用地 ──
+  - source: "1200"
+    default: "农业用地"
+    decision: auto
+    basis: "附录5 1200 园地 → 农业用地"
+    targets: [{code: "农业用地", when: null, confidence: exact}]
+
+  # ── 林地 ──
+  - source: "1340"
+    default: "农业用地"
+    decision: auto
+    basis: "附录5 1340 商品林 → 农业用地"
+    targets: [{code: "农业用地", when: null, confidence: exact}]
+  - source: "1350"
+    default: "生态绿地"
+    decision: auto
+    basis: "附录5 1350 生态林 → 生态绿地"
+    targets: [{code: "生态绿地", when: null, confidence: exact}]
+  - source: "13"
+    default: "生态绿地"
+    decision: prefix
+    basis: "附录5 13 林地（未列变体）→ 生态绿地"
+    targets: [{code: "生态绿地", when: null, confidence: approximate}]
+
+  # ── 草地 → 生态绿地 ──
+  - source: "1400"
+    default: "生态绿地"
+    decision: auto
+    basis: "附录5 1400 草地 → 生态绿地"
+    targets: [{code: "生态绿地", when: null, confidence: exact}]
+  - source: "14"
+    default: "生态绿地"
+    decision: prefix
+    basis: "附录5 14 草地（未列变体）→ 生态绿地"
+    targets: [{code: "生态绿地", when: null, confidence: approximate}]
+
+  # ── 其他农用地 → 农业用地 ──
+  - source: "1510"
+    default: "农业用地"
+    decision: auto
+    basis: "附录5 1510 设施农用地 → 农业用地"
+    targets: [{code: "农业用地", when: null, confidence: exact}]
+  - source: "15"
+    default: "农业用地"
+    decision: prefix
+    basis: "附录5 15 其他农用地（未列变体）→ 农业用地"
+    targets: [{code: "农业用地", when: null, confidence: approximate}]
+
+  # ── 居住用地 ──
+  - source: "2100"
+    default: "居住用地"
+    decision: auto
+    basis: "附录5 2100 城镇用地 → 居住用地"
+    targets: [{code: "居住用地", when: null, confidence: exact}]
+  - source: "2121"
+    default: "居住用地"
+    decision: auto
+    basis: "附录5 2121 宅基地 → 居住用地"
+    targets: [{code: "居住用地", when: null, confidence: exact}]
+  - source: "21"
+    default: "居住用地"
+    decision: prefix
+    basis: "附录5 21 建设用地（未列变体）→ 居住用地"
+    targets: [{code: "居住用地", when: null, confidence: approximate}]
+
+  # ── 公共服务用地 ──
+  - source: "2122"
+    default: "公共服务用地"
+    decision: auto
+    basis: "附录5 2122 公共服务设施用地 → 公共服务用地"
+    targets: [{code: "公共服务用地", when: null, confidence: exact}]
+  - source: "2310"
+    default: "公共服务用地"
+    decision: auto
+    basis: "附录5 2310 风景名胜设施用地 → 公共服务用地"
+    targets: [{code: "公共服务用地", when: null, confidence: exact}]
+  - source: "2320"
+    default: "公共服务用地"
+    decision: auto
+    basis: "附录5 2320 特殊用地 → 公共服务用地"
+    targets: [{code: "公共服务用地", when: null, confidence: exact}]
+
+  # ── 交通用地 ──
+  - source: "2123"
+    default: "交通用地"
+    decision: auto
+    basis: "附录5 2123 基础设施用地 → 交通用地"
+    targets: [{code: "交通用地", when: null, confidence: exact}]
+  - source: "2126"
+    default: "交通用地"
+    decision: auto
+    basis: "附录5 2126 村内交通用地 → 交通用地"
+    targets: [{code: "交通用地", when: null, confidence: exact}]
+
+  # ── 产业用地 ──
+  - source: "2124"
+    default: "产业用地"
+    decision: auto
+    basis: "附录5 2124 经营性建设用地 → 产业用地"
+    targets: [{code: "产业用地", when: null, confidence: exact}]
+  - source: "2130"
+    default: "产业用地"
+    decision: auto
+    basis: "附录5 2130 采矿用地 → 产业用地"
+    targets: [{code: "产业用地", when: null, confidence: exact}]
+
+  # ── 水利设施 → 农业用地 ──
+  - source: "2270"
+    default: "农业用地"
+    decision: auto
+    basis: "附录5 2270 水利设施用地 → 农业用地"
+    targets: [{code: "农业用地", when: null, confidence: exact}]
+  - source: "22"
+    default: "农业用地"
+    decision: prefix
+    basis: "附录5 22 水利设施用地（未列变体）→ 农业用地"
+    targets: [{code: "农业用地", when: null, confidence: approximate}]
+
+  # ── 水域 ──
+  - source: "3100"
+    default: "水域"
+    decision: auto
+    basis: "附录5 3100 水域 → 水域"
+    targets: [{code: "水域", when: null, confidence: exact}]
+  - source: "31"
+    default: "水域"
+    decision: prefix
+    basis: "附录5 31 水域（未列变体）→ 水域"
+    targets: [{code: "水域", when: null, confidence: approximate}]
+
+  # ── 自然保留地 → 农业用地 ──
+  - source: "3200"
+    default: "农业用地"
+    decision: auto
+    basis: "附录5 3200 自然保留地 → 农业用地"
+    targets: [{code: "农业用地", when: null, confidence: exact}]
+  - source: "32"
+    default: "农业用地"
+    decision: prefix
+    basis: "附录5 32 自然保留地（未列变体）→ 农业用地"
+    targets: [{code: "农业用地", when: null, confidence: approximate}]
