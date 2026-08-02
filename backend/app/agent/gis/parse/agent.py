@@ -120,6 +120,8 @@ def _extract_instruction_tables(text: str) -> Dict[str, List[Any]]:
     axes: List[AxisTarget] = []
     seen = {"zones": set(), "facilities": set(), "axes": set()}
     kind_to_seen = {"project": "facilities", "zone": "zones", "facility": "facilities", "axis": "axes"}
+    bad_rows = 0
+    no_location = 0
 
     for header, rows in _iter_tables(section):
         type_idx = 0 if any("类型" in h for h in header) else None
@@ -144,13 +146,17 @@ def _extract_instruction_tables(text: str) -> Dict[str, List[Any]]:
 
         for row in rows:
             if type_idx >= len(row) or name_idx >= len(row):
+                bad_rows += 1
                 continue
             kind = _INSTRUCTION_TYPE_MAP.get(str(row[type_idx]).strip())
             name = row[name_idx].strip()
             seen_key = kind_to_seen.get(kind) if kind else None
             if seen_key is None or not name or len(name) < 2 or name in seen[seen_key]:
+                bad_rows += 1
                 continue
             location = (row[loc_idx].strip() if loc_idx is not None and loc_idx < len(row) else "") or ""
+            if not location:
+                no_location += 1
             description = (row[desc_idx].strip() if desc_idx is not None and desc_idx < len(row) else "") or ""
             scale = (row[scale_idx].strip() if scale_idx is not None and scale_idx < len(row) else "") or ""
 
@@ -185,9 +191,12 @@ def _extract_instruction_tables(text: str) -> Dict[str, List[Any]]:
                     semantic=semantic,
                 ))
 
+    total = len(zones) + len(facilities) + len(axes)
     logger.info(
-        "[PARSE] INSTRUCTION: %d zones, %d facilities, %d axes",
+        "[PARSE] INSTRUCTION: %d zones, %d facilities, %d axes "
+        "(bad_rows=%d no_location=%d)",
         len(zones), len(facilities), len(axes),
+        bad_rows, no_location,
     )
     return {"zones": zones, "facilities": facilities, "axes": axes}
 
@@ -195,7 +204,7 @@ def _extract_instruction_tables(text: str) -> Dict[str, List[Any]]:
 # ── Extraction patterns ──────────────────────────────────────────────
 
 _ZONE_TARGET_RE = re.compile(
-    r"(?:分区|用地|目标|规划)\s*[:：]\s*([^\n]{2,30})?\s*"
+    r"(?:分区|用地|目标|规划)\s*[:：]\s*([^\n，,：]{2,30}?)\s*"
     r"(?:面积|比例|占比)?\s*[:：]?\s*(\d+(?:\.\d+)?)\s*%?|"
     r"(\d+(?:\.\d+)?)\s*%\s*(?:用于|分配给|作为)\s*([^\n，,]+)",
     re.MULTILINE,

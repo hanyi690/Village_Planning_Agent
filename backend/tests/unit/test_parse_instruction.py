@@ -98,6 +98,31 @@ def test_location_tokens_splitting():
     assert _extract_location_tokens("园寨自然村") == ["园寨"]
 
 
+def test_zone_regex_does_not_match_prose_with_trailing_numbers():
+    """P3-6: 正文长句（逗号分隔 + 尾部数字）不得误提取为分区目标。"""
+    from app.agent.gis.parse.agent import _extract_zone_targets
+
+    text = """【产业发展定位】
+核心目标：至规划期末实现农业总产值翻番，旅游年接待游客突破5万人次。
+【土地利用规划】
+| 分区名称 | 面积(公顷) | 占比(%) |
+| :--- | :--- | :--- |
+| 村庄建设区 | 30.50 | 1.30 |
+"""
+    zones = _extract_zone_targets(text)
+    assert not any("至规划期末" in (z.land_use or "") for z in zones)
+
+
+def test_direction_from_location():
+    from app.agent.gis.parse.agent import _direction_from_location
+
+    assert _direction_from_location("村中部") == "center"
+    assert _direction_from_location("村东北部与西南部") == "northeast"
+    assert _direction_from_location("金田村西部") == "west"
+    assert _direction_from_location("沿金田河") == ""
+    assert _direction_from_location("园寨") == ""
+
+
 def test_resolve_spatial_anchors_fills_candidate_bsms():
     entry = MagicMock()
     entry.bsms = ["BSM001", "BSM002"]
