@@ -24,6 +24,11 @@ def render_stage_report_markdown(
         step = r.get("step_name", "")
         lines.append(f"## {stage} / {step}")
         lines.append(f"- timestamp: {r.get('timestamp', '')}")
+        inputs = r.get("inputs") or {}
+        if inputs:
+            lines.append("### 输入")
+            for k, v in sorted(inputs.items()):
+                lines.append(f"- **{k}**: {_fmt(v)}")
         outputs = r.get("outputs") or {}
         if outputs:
             lines.append("### 产出")
