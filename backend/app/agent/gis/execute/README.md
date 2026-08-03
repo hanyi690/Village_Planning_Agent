@@ -1,141 +1,134 @@
 # EXECUTE Agent 子包
 
-> 空间意图 → 空间成果。消费 PARSE 产出的 `SpatialPlanningIntent` + KG 上下文，产出分配用地 / 设施 / 轴线 / 道路等空间布局层。
+> 空间执行层：消费 PARSE intent + KG 上下文，产出空间布局结果（分区、设施、轴线、道路），Worker-Evaluator 重试循环 + L4 写回 KG。
+> **Updated: 2026-08-02**
 
 ---
 
 ## 一、定位
 
-EXECUTE 是 GIS Agent 的 **DELIVER 阶段执行核**，与 `parse/`（PLAN 阶段）平级。它把类型化空间意图转化为可导出的空间图层，核心解决"意图 → 空间实体"的落地鸿沟。
+EXECUTE 是 GIS Agent 的 **DELIVER 阶段执行核**，与 `parse/`（PLAN 阶段）平级，由顶层 `layout_pipeline.py` 在 PARSE 完成后调用。它把 PARSE 产出的 `SpatialPlanningIntent` + 上层的 KG 上下文，转化为可导出的空间图层（GeoJSON FeatureCollection），并校验合规性后写回 KG（L4 规划实体）。
 
-**与 PARSE 的关系**：通过 LangGraph state 注入通信，不直接调用。PARSE 产出写入 `GISPipelineState`，EXECUTE 从中读取。
-
-**与 KG/Data 的关系**：EXECUTE 从 `ProjectDataView`（`VillageBundle`）读取类型化地块/设施/道路，经 `ConstraintCompiler` 从 `ProjectKG` 获取 MIP 约束矩阵；产出写回 `village.planned_landuse` + `project.tables`（`ConstructionProjectTable`/`ControlRuleTable`，一表一规则汇交）。
-
-**与 LAYOUT 的关系**：LAYOUT 是 EXECUTE 内的一个子任务（用地布局），与 facility / axis / road 平级。当前 `layout_pipeline.py` 的 `allocate_and_generate` 节点把所有生成逻辑压在一个 ReAct 子图里，EXECUTE 子包的目标是将其拆分为独立子任务。
+> ✅ **状态：P1 已全部接通**。早期文档称"P0 skeleton / 节点为 pass-through placeholder / 未接入顶层管线"，**已过时**——当前 7 节点全部调用真实生成器（MIP 分配器、FacilityPlacer、轴线生成器、道路 Stage 0-6 生成器、LayoutValidator），并经 `write_l4` 写回 KG。P1 实现直接调用 `tools/gis` 私有生成器（`_generate_*` / `MIPZoneAllocator` / `LayoutValidator`），绕过 `@tool` 包装与 `InjectedState`；**P2 目标**是将其提升为公开生成 API 再迁移。
 
 ---
 
-## 二、图架构（agent.py）
+## 二、目录结构
 
 ```
-START
-  → route_tasks        # 根据 intent 决定执行哪些子任务
-  → execute_layout     # 用地分配 + 功能分区生成
-  → execute_facility   # 设施点布局
-  → execute_axis       # 发展轴线生成
-  → execute_road       # 规划道路网络（placeholder）
-  → validate           # Evaluator 闸门
-      ├─ pass  → END
-      └─ retry → execute_layout（最多 3 轮）
+execute/
+├── __init__.py            # 导出 ExecuteAgentState / build_execute_agent_graph
+├── agent.py               # ★ 图构建 + 7 个节点实现（633 行）
+├── state.py               # ExecuteAgentState（Pydantic，字段镜像 GISPipelineState）
+├── road/
+│   ├── __init__.py        # 导出 execute_road_planning_from_agent_state
+│   └── generator.py       # 道路 Stage 0-6 生成器（远程/门控 + 本地 plan_roads 回退）
+├── layout/                # 分区分配（MIP）+ 功能区 + 规划区层（逻辑内联于 _execute_layout_node）
+├── facility/              # 设施点布设（逻辑内联于 _execute_facility_node）
+└── axis/                  # 发展轴 + 空间管制区 + 用地分区层（逻辑内联于 _execute_axis_node）
 ```
 
-- **状态**：`ExecuteAgentState`（Pydantic BaseModel）
-- **Worker-Evaluator 模式**：`validate` 节点为闸门，失败时带 violations 反馈回到 `execute_layout` 重试
-- **顺序骨架**：子任务有依赖（设施需分区、轴线需用地），暂为顺序执行；P2 可改为 Send 并行 fan-out
-
-### 节点说明
-
-| 节点 | 职责 | 消费 | 产出 | 状态 |
-|------|------|------|------|------|
-| `route_tasks` | 决定子任务集 | `intent` | `tasks_to_run` | ✅ 已实现 |
-| `execute_layout` | 用地分配 + 功能分区 | `intent.zone_targets`, `kg_constraints`, `kg_adjacency_map` | `allocated_geojson`, 功能分区层 | ⚠️ placeholder |
-| `execute_facility` | 设施点布局 | `intent.facilities`, `facility_anchors`, `allocated_geojson` | 设施层 | ⚠️ placeholder |
-| `execute_axis` | 发展轴线 | `intent.development_axes`, `allocated_geojson` | 轴线层 | ⚠️ placeholder |
-| `execute_road` | 规划道路网络 | `intent`, 现状道路(KG), `allocated_geojson` | 道路层 | ⚠️ placeholder（无生成器） |
-| `validate` | 校验布局结果 | `allocated_geojson`, `layout_configs`, `kg_constraints` | `validation_result`, `validation_round` | ⚠️ placeholder |
+> `layout/ facility/ axis/` 三个子目录目前仅含 `__init__.py`（占位），**实际逻辑直接写在 `agent.py` 的节点函数内**。
 
 ---
 
-## 三、子任务目录
-
-| 子目录 | 职责 | 包装的工具（P1） |
-|--------|------|-----------------|
-| `layout/` | 用地分配 + 功能分区生成 | `tools/gis/allocate.allocate_zones` + `_generation/zone_generator` |
-| `facility/` | 公共服务设施点布局 | `tools/gis/_generation/facility_placer` |
-| `axis/` | 发展轴线生成 | `tools/gis/_generation/axis_builder` |
-| `road/` | 规划道路网络 | 无（`PlannedRoad` schema 已定义，生成器待实现） |
-
----
-
-## 四、状态（state.py）
-
-### ExecuteAgentState
-
-`GISPipelineState` 的执行层子集，聚焦空间成果生产：
-
-| 字段组 | 字段 | 说明 |
-|--------|------|------|
-| 身份 | `session_id`, `village_name` | 会话/村庄标识 |
-| 上游输入 | `gis_data`, `intent`, `operation_sequence`, `constraint_set` | 来自 PARSE + 数据层 |
-| KG 上下文 | `kg_turtle`, `kg_constraints`, `kg_adjacency_map`, `kg_session_ref`, `kg_three_lines` | 来自 KGManager（只读视图） |
-| 执行产出 | `allocated_geojson`, `allocation_summary`, `layout_configs` | 分配结果 + 图层列表 |
-| 校验 | `validation_result`, `validation_round` | Worker-Evaluator 状态 |
-| 路由 | `tasks_to_run` | 子任务集 |
-| 消息 | `messages` | LangGraph 累积消息 |
-
-字段类型刻意镜像 `GISPipelineState`，便于顶层流水线通过子集构造 `ExecuteAgentState(**pipeline_state_subset)`。
-
----
-
-## 五、当前状态（P1: 道路生成器已实现）
-
-- ✅ 图编译通过：6 节点 + 条件边
-- ✅ 端到端可运行：smoke test 通过
-- ✅ **`_execute_road_node` 已接入 `spatial_ops.road_planner`** — 替代旧的 placeholder
-- ⚠️ `execute_layout` / `execute_facility` / `execute_axis` / `validate` 仍为 pass-through，未调用真实工具
-- ⚠️ **未接入生产**：`layout_pipeline.py` 仍跑内联的 `_allocate_generate_react_node` + `_validate_layout_node`
-
----
-
-## 六、迁移路线
-
-### P0：骨架（已完成）
-
-搭建 `execute/` 子包目录 + 可编译 StateGraph + placeholder 节点。不破坏现有生产管线。
-
-### P1：接入生产（进行中）
-
-1. `execute_layout` 节点接入 `allocate_zones` + `_generate_function_zones`
-2. `execute_facility` / `execute_axis` 节点接入 `facility_placer` / `axis_builder`
-3. `validate` 节点接入 `validate_layout`
-4. `layout_pipeline.py` 的 `_allocate_generate_react_node` + `_validate_layout_node` 替换为调用 `build_execute_agent_graph()`
-5. 消除 `tools/gis/_generation/pipeline.py` 命令式 `run_layout_pipeline()` 与 StateGraph 版的重复
-6. `execute_layout` 经 `ConstraintCompiler` 从 `ProjectKG` 获取 `MIPModel`（替代直接读 state flat dict，见 `modules/kg/README.md` §七）
-7. `execute_facility` 接入 v4.3 设施子类型（`WaterSupply`/`Drainage`/`Waste`/`Sanitary`/`Fire`/`EvacuationShelter`/`Energy`/`Lighting` Facility，见 `schema/README.md` §2.1）
-8. 表格产出：`ConstructionProjectTable`/`ControlRuleTable`/`PlanningIndicatorTable` 写入 `project.tables`（一表一规则汇交，见 `schema/types/table_types.py`）
-
-### P2：子任务分解 + 并行化（待规划）
-
-1. 拆 `generate_layout` 工具为子任务专用生成器（layout/facility/axis 各自独立）
-2. `layout_pipeline.py` 改名 `pipeline.py`（名不副实，实为顶层编排器）
-3. 子任务改 Send 并行 fan-out（无依赖时）
-
----
-
-## 七、接入点
-
-生产接入在 `app/agent/graph.py` 的 `gis_agent_node`：
+## 三、公开 API
 
 ```python
-# 当前（P0）：
-from .gis.layout_pipeline import build_layout_pipeline
-pipeline = build_layout_pipeline()
+from app.agent.gis.execute import ExecuteAgentState, build_execute_agent_graph
 
-# 目标（P1）：
-from .gis.execute import build_execute_agent_graph
-execute = build_execute_agent_graph()  # 替换 allocate_and_generate + validate
+graph = build_execute_agent_graph()          # 编译好的 StateGraph
+result = await graph.ainvoke(ExecuteAgentState(**state_subset))
 ```
+
+**状态边界**：`ExecuteAgentState` 字段刻意镜像 `GISPipelineState`（`gis_data` / `gis_bundle` / `intent` / `operation_sequence` / `constraint_set` / `facility_anchors` / `kg_*` 只读视图），顶层管线用 `ExecuteAgentState(**pipeline_state_subset)` 构造子状态，并在子图边界做状态映射。
+
+---
+
+## 四、图结构（7 节点 + 1 条件边）
+
+```
+START → route_tasks → execute_layout → execute_facility → execute_axis → execute_road → validate
+                                                                            │
+        validate ──pass──→ write_l4 → END                    (retry) ──→ execute_layout
+             （Worker-Evaluator 重试，max 3 轮）
+```
+
+### 节点明细
+
+| 节点 | 实现 | 职责 |
+|---|---|---|
+| `route_tasks` | `_route_tasks_node` | 依据 intent 决定子任务：`layout` 恒跑；`facility`/`axis` 仅当 intent 带对应 target；`road` 恒排队 |
+| `execute_layout` | `_execute_layout_node` | ★ 核心：`_apply_operations` → **MIPZoneAllocator.solve**（B1 候选画布 / KG 约束 + parse 约束 / 密度提示 / 邻接规则 / 设施锚点 / 三线 / VNE）→ `_generate_function_zones` + `_make_planning_zone_layer` → **P7 CustomZoningGenerator**（自定义功能区 L4，词汇表 + 语义规则 + 三线拦截，`build_parcel_contexts` 多因子上下文） |
+| `execute_facility` | `_execute_facility_node` | `_generate_facilities`（查 KG 既有设施坐标 → FacilityPlacer 布设新设施），追加 facility 层 |
+| `execute_axis` | `_execute_axis_node` | `_generate_axes` + `_generate_space_control_zone`（三线传入）+ `_generate_land_use_zone`，最多追加 3 层 |
+| `execute_road` | `_execute_road_node` | 优先 **`road/generator.py::execute_road_planning_from_agent_state`**（Stage 0-6 门控生成）；失败降级 `modules/spatial_ops/road_planner.plan_roads`（upgrade/create/preserve） |
+| `validate` | `_validate_node` | `LayoutValidator.validate`（protected parcels / VNE 详情），产出 `constraint_adjustments` 供重试（adjustments 反馈回 `execute_layout` 修正分配目标） |
+| `write_l4` | `_write_l4_node` | 把规划实体（PlannedParcel / PlannedZone / PlannedFacility / PlannedAxis / PlannedRoad）写入 session KG（`EntityAnnotation`，`l4_provenance` 维度，`derived_from="execute_computed"`），成功后 `bump_version` |
+
+### 重试与退出
+- `_route_after_validate`：`passed` → `write_l4`；`validation_round >= 3` → 用当前最佳结果 `write_l4`（不无限循环）。
+- 各生成节点均 try/except 防御：失败只记日志返回 `{}`，**road 永不阻塞主图层**（`layout_configs` 保持已有内容）。
+
+---
+
+## 五、布局节点细节（execute_layout）
+
+1. **数据准备**：从 `gis_bundle`（优先）或 `gis_data` 取 `landuse_current_geojson`；无数据则跳过。
+2. **操作应用**：若上游带 `operation_sequence` 且已有 `allocated_geojson`，先 `_apply_operations`。
+3. **目标解析**：`intent.zone_targets` → `target_map`（`land_use → area_ratio × 总面积`）+ `density_hints` + `adjacency_rules`。
+4. **重试修正**：`constraint_adjustments`（zone + delta_ha + reason）叠加进 `target_map`。
+5. **约束合并**：`state.kg_constraints` + `_spatial_constraint_to_mip(constraint_set)`。
+6. **B1 候选画布**：`custom_zone_targets[].target_bsms`（binder/gazetteer 产出）注入 `zone_targets.candidate_bsms`，限定 MIP 分配池（空间定位生效）。
+7. **MIP 求解**：`MIPZoneAllocator().solve(...)`，trace 含 `mode`（mip/intent-only）。
+8. **图层生成**：function zone + planning zone 层（`landuse_current_geojson` 注入 `gis_data` 避免 intent-only fallback）。
+9. **P7 自定义功能区**：`CustomZoningGenerator(parcels, intent_dict, three_lines)` → `generate_with_validation()`，产出 `custom_functional_zone` 层（含 `entity_type` / `category_code` / `category_name_zh` / `target_bsms` / `decided_by` / `confidence` / `vocabulary_name`）。
+
+---
+
+## 六、道路子任务（road/generator.py）
+
+`execute_road_planning_from_agent_state(state) -> Dict`（`{ran, reason, road_target_count, layout_layers, stage_*_report, ...}`）：
+
+- **Stage 2 准备**：`_road_targets_to_stage2` 把 `RoadTarget` → demand points / road projects / road constraints（写 `stage2_from_parse/`）。
+- **Stage 1**：`build_road_network`（当前路网 → nodes/edges）。
+- **Stage 2.6**：`build_planning_nodes_with_kg_retry_adapter` → KG retry adapter → `build_planning_nodes`（规划节点构建 + 质量闸门 + 人工确认模板 + 迭代记录）。
+- **Stage 3**：`bind_road_spatial_requirements` → `planning_gate`（`automatic_route_generation_allowed`）。
+- **Stage 4**：门控通过且 `landuse_path` 存在 → `run_stage4_road_planning`（自动路径生成 → `planned_road_candidates`）。
+- 产物图层：`road_spatial_candidates`（隐藏）、`road_planning_entities`（隐藏）、`road_planning_nodes`（可见）、`planned_road_candidates`（隐藏）。
+- 失败/门控未开 → 返回 `ran=False`，由 `_execute_road_node` 降级到 `road_planner.plan_roads`。
+
+---
+
+## 七、输入输出契约
+
+```
+输入:  ExecuteAgentState
+         gis_data / gis_bundle   # GIS 数据容器（landuse_current 等）
+         intent                  # SpatialPlanningIntent（typed）或 dict（legacy）
+         operation_sequence / constraint_set
+         facility_anchors
+         kg_* 只读视图（turtle / constraints / adjacency_map / three_lines / protected_parcels_detail / vne_summary / session_ref）
+
+输出:  layout_configs: List[Dict]     # 各层 {layer_type/layerType, data 或 features, ...}
+         function_zone / planning_zone / custom_functional_zone
+         facility / axis / space_control_zone / land_use_zone
+         planned_road（road 层）+ road_planning_nodes 等
+       allocated_geojson: FeatureCollection  # MIP 分配结果
+       allocation_summary: {mode, allocated_count, density_hints?, adjacency_rules?}
+       validation_result: {passed, status, violations[]}
+       constraint_adjustments: List[{zone, action, delta_ha, reason, priority}]
+       → write_l4 把规划实体写回 session KG（版本号自增）
+```
+
+顶层 `layout_pipeline.py` 消费 `layout_configs`，与 KG / `gis_bundle` 打包为最终响应（`parse` + `execute` 两阶段产物）。
 
 ---
 
 ## 八、相关文档
 
 - `../README.md` — GIS Agent 包总览
-- `../parse/README.md` — PARSE Agent（上游生产者）
-- `app/modules/kg/README.md` — KG 桥接层（提供约束/邻接查询）
-- `app/modules/spatial_ops/README.md` — 空间计算层（约束编译/地块操作/道路规划/用地平衡表）
-- `app/modules/schema/README.md` - Schema 类型契约（含 v5.0 受控词表/交付门槛契约）
-- `app/modules/data/README.md` - ProjectDataView/VillageBundle
-- `docs/gis/02_EXECUTION_PLAN.md` — 统一执行方案（模块化分解 + 分波次计划）
-- `docs/gis/00_SYSTEM_DESIGN.md` §五 - EXECUTE 执行层设计
+- `../parse/README.md` — PARSE Agent（上游 intent 生产者）
+- `app/tools/gis/` — 被直接调用的生成器（`generate` / `allocate` / `_generation` / `_validation`）
+- `app/modules/spatial_ops/README.md` — `road_planner.plan_roads` 降级路径
+- `app/modules/kg/README.md` — KG（gazetteer / memory L4 写回）

@@ -1,385 +1,166 @@
 # PARSE Agent 子包
 
-> 规划文本 -> 空间意图。消费 L3 报告 + ContextBlock 列表，产出类型化 `SpatialPlanningIntent` / `SpatialOperation` / `SpatialConstraint`。
+> 规划文本 -> 空间意图。**基于规则的确定性解析器**（非 ReAct 图）：regex 提取 + 表格提取 + 【INSTRUCTION】段 + gazetteer 空间锚定，产出类型化 `SpatialPlanningIntent`。
+> **Updated: 2026-08-02**
 
 ---
 
 ## 一、定位
 
-PARSE 是 GIS Agent 的 **PLAN 阶段执行核**，与 `execute/`（DELIVER 阶段）平级。它把自然语言规划报告转化为下游可执行的空间意图，核心解决"文本 -> 结构化空间目标"的语义鸿沟。
+PARSE 是 GIS Agent 的 **PLAN 阶段执行核**，与 `execute/`（DELIVER 阶段）平级。它把自然语言规划报告转化为下游可执行的 `SpatialPlanningIntent`（分区/设施/轴线/道路目标）。
 
-### PARSE = LLM as Formalizer + Spatial Grounder
-
-PARSE 不是"信息提取器"，而是**从自然语言到形式化约束的编译器**（ACL 2025 综述 *LLMs as Planning Formalizers* 范式）。它的产出不是"待解释的柔性意图"，而是"可直接使用的约束包"。
-
-| 阶段 | 学术对应 | PARSE 实现 |
-|---|---|---|
-| `explore_*` (Think) | Constraint Decomposition | LLM 自由推理 + 调用 KG 工具查询空间上下文 |
-| `format_*` (Format) | Formal Encoding | LLM 将草稿格式化为严格 Pydantic 输出 |
-| post-format | Spatial Grounding | 调用 `spatial_ops.grounding` 填充空间锚定 |
-
-**关键特征**：
-- **空间感知**：通过 `ContextBlock` 列表注入空间关系与锚点，不直接接触原始 GeoJSON 几何
-- **Think-Then-Format**：探索阶段自由推理 + 工具调用，格式化阶段强制 Pydantic 输出
-- **Schema 强制**：输出为严格 Pydantic 模型，保证 PARSE -> EXECUTE 交接可靠
-- **空间锚定义**务：每个空间描述必须解析为 `candidate_bsms` + `bbox`，而非文本标签
+> ⚠️ **架构现状**：本子包曾按 **ReAct StateGraph**（`classify_sections → explore_* → format_* → validate_and_merge`）设计并文档化。**该设计已废弃**——当前实现是合并了旧 `parse_v2` 的**单一确定性函数** `parse()`，无 StateGraph、无 explore/format 节点。LLM 增强可在未来通过 `GIS_PARSE_LLM_ENABLED` 门控接入而不改公开 API。
 
 ---
 
-## 二、图架构（agent.py:1405）
+## 二、目录结构
 
 ```
-START
-  -> classify_sections                       # 文档分节分类
-      │  (route_by_section, Send fan-out)
-      ├──-> explore_projects -> format_projects ──-> validate_and_merge
-      ├──-> explore_targets  -> format_targets  ──-> validate_and_merge
-      ├──-> extract_regulations ─────────────────-> validate_and_merge
-      └── extract_tables ────────────────────────-> validate_and_merge
-                                                    │  (should_retry)
-                                                    ├── retry -> classify_sections
-                                                    └── end  -> END
+parse/
+├── __init__.py          # 导出 parse / parse_async / ParseResult + schema 类（SpatialPlanningIntent 等）
+├── agent.py             # ★ 规则解析器（762 行）：parse() + 提取器 + 空间锚定 + KG 绑定
+└── state.py             # ParseAgentState（Pydantic，向后兼容保留）+ SectionInfo 等类型
 ```
-
-### Think-Then-Format 模式
-
-| 阶段 | thinking | json_schema | tools | 职责 |
-|------|----------|-------------|-------|------|
-| `explore_*` | ON | OFF | ON | LLM 自由推理 + 调用 lookup_code/resolve_place/query_village_kg，产出自然语言草稿 + 编码/地名映射 |
-| `format_*` | OFF | ON | OFF | LLM 将草稿格式化为严格 Pydantic 输出（ guaranteed compatible） |
-
-### 节点说明
-
-| 节点 | 输入 | 输出 | 说明 |
-|------|------|------|------|
-| `classify_sections` | planning_text | `section_map` + `parse_strategy` | 文档分节，决定解析策略（full/incremental/section_only） |
-| `explore_projects` | 项目章节 | `draft_operations` + `code_mappings_projects` | ReAct 探索项目类内容 |
-| `format_projects` | 探索草稿 | `raw_operations`（增量） | 格式化为 `SpatialOperation` |
-| `explore_targets` | 目标章节 | `draft_targets` + `code/place_mappings_targets` | ReAct 探索用地目标 |
-| `format_targets` | 探索草稿 | `raw_targets`（`SpatialPlanningIntent`） | 格式化分区/设施/轴线目标 |
-| `extract_regulations` | 规制章节 | `raw_constraints` | regex(70%) + LLM(30%) 混合提取约束 |
-| `extract_tables` | 表格章节 | `raw_tables` | schema 推断提取指标/分区/设施表 |
-| `validate_and_merge` | 全部 raw_* | `operation_sequence` / `constraint_set` / `planning_intent` | 汇聚 + 校验 + 重试决策 |
 
 ---
 
-## 三、工具
+## 三、公开 API
 
-PARSE Agent 在 `explore_*` 阶段可用三个工具（`agent.py`）：
+```python
+from app.agent.gis.parse import parse, parse_async, ParseResult
 
-| 工具 | 用途 |
-|------|------|
-| `lookup_code` | 查询用地名称 -> GHYTBM 编码（附录5规划用途编码） |
-| `resolve_place` | 查询地名 -> GIS 空间锚点（NaturalVillageAnchor / FacilityAnchor） |
-| `query_village_kg` | 查询 KG 空间上下文（村锚点 / 设施 / 道路 / 保护地块 / 三区三线 / VNE 汇总） |
+result = parse(planning_text, village_name="金田村委会", planning_period="2022-2035年")
+# -> ParseResult
+#      .intent: SpatialPlanningIntent   # zone_targets / facilities / development_axes / road_targets / raw_text
+#      .operation_sequence: List[SpatialOperation]  # 恒为 []（当前不产出操作序列）
+#      .constraint_set: List[SpatialConstraint]     # 恒为 []（当前不产出约束集）
+#      .validation_errors: List[str]
 
-工具执行通过 `_get_current_parse_kg()`（`agent.py:139`）从 `KGManager.get_any_kg()` 获取 KG 实例。
+result_async = await parse_async(...)   # asyncio.to_thread 包装
+```
+
+**`ParseAgentState`**（`state.py`）保留 ReAct 时代的字段（`section_map` / `raw_operations` / `draft_targets` / `place_mappings_*` 等）仅供向后兼容，**新解析路径不使用它**——`parse()` 是纯函数，无中间状态。类型契约（`SpatialPlanningIntent` / `ZoneTarget` / `FacilityTarget` / `AxisTarget` / `RoadTarget` / `SpatialPreference` / `SemanticMetadata`）统一来自 `app.modules.schema.contracts.parse_contracts`。
 
 ---
 
-## 四、状态与输出（state.py）
+## 四、解析管线（实际实现）
 
-### ParseAgentState
+```
+parse(planning_text, ...)
+  │
+  ├─ 1. regex 提取（agent.py 内联模式）
+  │     _ZONE_TARGET_RE    "分区:商业 30%" / "30%用于商业" → List[ZoneTarget]
+  │     _FACILITY_RE       "设施/服务中心/卫生室/学校/广场/停车场/公园 …" → List[FacilityTarget]
+  │     _AXIS_RE           "发展轴/景观轴/生态廊道/道路轴线 …" → List[AxisTarget]
+  │     _ROAD_RE           "道路/公路/村道/乡道 …宽度:8m" → List[RoadTarget]
+  │
+  ├─ 2. markdown 表格提取（app.modules.parsing.tables，单位级检测）
+  │     _extract_zone_tables(text)     → List[ZoneTarget]    （名称列 + 面积/比例列 + ≥60% 名称含"区"）
+  │     _extract_project_tables(text)  → List[FacilityTarget]（表头含 项目/工程/设施名称）
+  │
+  ├─ 3. 【INSTRUCTION】段提取（P8）
+  │     _extract_instruction_section: 从 _INSTRUCTION_MARKER 起取结构化段
+  │     _extract_instruction_tables: 解析固定列表格（类型闭集：项目/功能分区/分区/设施/轴线/
+  │         现状设施/现状项目/现状分区）→ {zones, facilities, axes}
+  │     按名称去重合并（INSTRUCTION 优先，位置信息更完整）
+  │
+  ├─ 4. 表格残片过滤
+  │     丢弃类型/位置含 "|" 的设施（regex 会把 markdown 表格行误提取为设施）
+  │
+  ├─ 5. 组装 SpatialPlanningIntent（raw_text 截断 2000 字符）
+  │
+  └─ 6. 空间锚定（可选，外部调用）
+       resolve_spatial_anchors(intent, village_name)  # 见 §五
+```
 
-内部状态，独立于 LAYOUT Pipeline：
+**方向提取**：`_direction_from_location` 用 `_DIRECTION_RULES` 元组（方位词 → direction 枚举，取首个命中），如"村东北部与西南部" → `northeast`。
 
-| 字段组 | 字段 | 说明 |
-|--------|------|------|
-| 输入 | `planning_text`, `village_name`, `context_blocks` | 文本 + ContextBlock 空间上下文 |
-| 分类 | `section_map`, `parse_strategy` | 分节结果 + 策略 |
-| 中间 | `raw_operations`, `raw_constraints`, `raw_targets`, `raw_tables` | 类型化中间结果 |
-| 校验 | `validation_errors`, `parse_round`, `is_valid` | 校验状态 |
-| 输出 | `operation_sequence`, `constraint_set`, `planning_intent` | 最终产出 |
-| 草稿 | `draft_operations`, `draft_targets` | Phase A 探索产出 |
-| 映射 | `code_mappings_*`, `place_mappings_*` | 编码/地名映射（projects/targets 分键避免并发冲突） |
-
-### 核心输出模型
-
-- **`SpatialPlanningIntent`**（`parse_contracts.py`）：分区目标 `zone_targets` + 设施 `facilities` + 轴线 `development_axes` + 道路 `road_targets` + 面积约束 + 指标表 + 三区三线
-- **`SpatialOperation`**（`state.py:116`）：原子空间操作（create/split/merge/modify/reclassify），带 `SpatialAnchor` 双阶段定位
-- **`SpatialConstraint`**：空间约束规则
-- **`SpatialAnchor`**（`state.py:79`）：PARSE 预解析 + LAYOUT 确认的双阶段定位
-
-### 面向各子任务的输出
-
-| 子任务 | PARSE 产出字段 | 消费方 |
-|---|---|---|
-| **layout** | `zone_targets[i].land_use/area_ratio/density/adjacency_rules/vne_code` | `_intent_to_targets()` -> MIP |
-| **facility** | `facilities[i].type/status/direction/location_hint/anchor_village/candidate_bsms/anchor_point` | `FacilityPlacer.place()` |
-| **axis** | `development_axes[i].direction/axis_type/label/connects/start_anchor/end_anchor` | `AxisBuilder.build()` |
-| **road** | `road_targets[i].road_level/width_m/connects/start_anchor/end_anchor` | （待实现 road generator） |
-| **operations** | `operation_sequence[i].action/target_parcels/spatial_anchor.candidate_parcels` | `_apply_operations()` |
+**去重合并逻辑**：先 regex+表格提取，再合并 INSTRUCTION 段；已存在的名称（`zone_names` / `facility_names` / `axis_names`）不重复追加。
 
 ---
 
-## 五、空间接地（Spatial Grounding）
+## 五、空间锚定（resolve_spatial_anchors）
 
-PARSE 不直接读 GeoJSON，而是通过 `ContextBlock` 列表（`app/modules/spatial_ops/context.py:compute_context_blocks(bundle)`）获取模块化空间上下文卡片。v4.3 起替换单体 `SpatialContext`，每个 `ContextBlock` 编码一个空间认知维度：
+```python
+resolve_spatial_anchors(intent, village_name="") -> int   # 返回成功解析的实体数
+```
 
-- `VILLAGE_META`：村庄基础统计（地块数、总面积、建设边界面积、村中心坐标）
-- `LANDUSE_DIST`：地类分布（按 dlbm 分组统计，含地块数和面积）
-- `RESIDENTIAL_CLUSTERS`：居民点锚点（聚类自居住地块 + 注记命名合并）
-- `FACILITIES`：设施精确锚点（来自 typed 设施/注记要素）
-- `SPATIAL_RELATIONS`：村组间语义关系（east_of / adjacent_to / contains / near）
-- `CONSTRAINTS`：保护边界摘要（永久基本农田 / 生态红线 / 历史文化等）
-- `ZONE_ADJACENCY`：分区邻接矩阵
-- `TERRAIN`：地形剖面（P2 预留，无 DEM 数据时返回 None）
+- 加载 `app.modules.kg.gazetteer.load_gazetteer(village_name)`（`data/gazetteer/{village}.json`，只读不落盘）
+- 对每个空间实体的位置文本提取 token（`_extract_location_tokens`：按 `、，,；;/ 至 和 与` 切分，去 自然村/村/组/段/沿/线/附近/周边/区域/一带 后缀）
+- token → `_resolve_gazetteer_bsms`（精确 → 村后缀 → fuzzy，`Gazetteer.resolve(fuzzy=)`）
+- 填充：
+  - `ZoneTarget.candidate_bsms`（MIP canvas / ZoneGenerator 空间过滤）
+  - `FacilityTarget.candidate_bsms`（FacilityPlacer 候选池）
+  - `AxisTarget.corridor_bsms`（AxisBuilder 走廊）
+- 无匹配保留原文 `spatial_hint` 供语义使用
 
-### 空间锚定义务（v5.0 设计目标）
-
-PARSE 作为 Formalizer，其"形式化"必须包括**空间形式化**。仅输出 `ZoneTarget(spatial_preference="村北")` 是不够的--EXECUTE 无法从"村北"字符串推导空间决策。
-
-**所有空间计算由 `spatial_ops.grounding` 完成**，PARSE Agent 只调用，不内联计算：
-
-| 用户描述 | PARSE 调用 spatial_ops | 产出的空间锚定 |
-|---|---|---|
-| "村北" | `resolve_directional_bbox(center, "北")` -> `query_parcels_in_bbox` | `candidate_bsms + bbox` |
-| "靠近刘村" | `query_parcels_near_entity(center, 500)` | `candidate_bsms + proximity_weights` |
-| "避开基本农田" | `query_excluded_parcels(blocks, "farmland_protection")` | `excluded_bsms` |
-| "沿河" | `query_parcels_near_entity(river_center, 200)` | `candidate_bsms` |
-
-`SpatialAnchor` 的双阶段定位：
-1. **PARSE 预解析**：`location_desc` 匹配 `RESIDENTIAL_CLUSTERS` / `FACILITIES` 块 -> 候选地块 + 置信度
-2. **LAYOUT 确认**：`resolve_place` 工具确认或修正锚点
+> **旧设计对照**：`spatial_ops.grounding.ground_zone_spatial_preference` 仍存在且导出（见 `modules/spatial_ops/README.md` §六），但**当前 PARSE 路径不调用它**——空间锚定走 `kg.gazetteer`。grounding 保留为独立可用的空间接地库。
 
 ---
 
-## 六、输入输出契约
+## 六、KG 绑定（extract_bindings — 已废弃转发器）
 
-```
-输入: ParseAgentState(planning_text, village_name, context_blocks)
-输出: {
-  operation_sequence: List[SpatialOperation],   # 空间操作序列
-  constraint_set:     List[SpatialConstraint],   # 空间约束集
-  planning_intent:    SpatialPlanningIntent,     # 分区/设施/轴线目标
-  validation_errors:  List[str],                 # 校验错误
-}
+```python
+async def extract_bindings(session_id, wave, reports, llm=None, kg=None, bundle=None) -> Dict
 ```
 
-下游 `layout_pipeline.py:_parse_intent_node` 消费这些输出，注入 `GISPipelineState` 供 EXECUTE 使用。同时 PARSE 通过 `add_intent`/`add_operations`/`add_constraints`/`add_spatial_relations` 将结果写入 `ProjectKG` Layer 3（项目级，见 `modules/kg/README.md` §六），供 EXECUTE 经 `ConstraintCompiler` 读取。
+**已废弃**：多层级 KG 富化已迁至 `app.modules.kg.enrichment`，此函数仅作转发器（PARSE 保持 intent-only）。
+
+模块内保留的内部工具（`agent.py`，供 enrichment 复用）：
+- `_extract_bindings_deterministic(reports)` — 规则回退：`XX村` 提及 + 120 字符内 BSM
+- `_extract_bindings_llm(llm, reports, candidate_bsms)` — Flash LLM JSON 约束提取
+- `_validate_binding(binding, kg, bundle)` — **KG 写入闸门**：confidence≥0.6 + BSM 在 KG + 村内/村外规则
+  - 有注记点（村名分类）：必须通过村界包含（村外毗邻行政村 → 拒绝）+ 点在候选地块内
+  - 无注记点（村内自然村）：地块中心点必须在村界内
+- `_extract_entity_semantics(reports)` — P4：功能分区/项目实体语义提取（纯注解，无空间绑定）
+- `_queue_review(session_id, wave, skipped)` — 跳过项写入 `{memory_dir}/_review/{session_id}_wave_{wave}.json`
 
 ---
 
-## 七、KG 集成（v5.0 设计目标）
-
-### 7.1 流水线顺序修正
-
-当前流水线顺序存在倒置问题：
+## 七、输入输出契约
 
 ```
-当前（错误）:  parse_intent -> fetch_gis_data -> build_kg -> execute
-               ↑ PARSE 在 KG 构建前运行，query_village_kg 获取陈旧 KG
-
-目标（正确）:  fetch_gis_data -> build_kg_l1l2 -> parse_intent -> write_kg_l3 -> execute
-               ↑ KG L1+L2 先构建    ↑ PARSE 查询当前 KG    ↑ 写入 L3
+输入:  planning_text (str) + village_name + planning_period
+输出:  ParseResult
+         .intent: SpatialPlanningIntent
+             zone_targets:    List[ZoneTarget]       # land_use / area_ratio / spatial_preference / semantic
+             facilities:      List[FacilityTarget]   # type / status / location_hint / anchor_village / semantic
+             development_axes: List[AxisTarget]      # label / reference_feature / direction / semantic
+             road_targets:    List[RoadTarget]       # road_level / width_m / semantic
+             raw_text: str                           # 截断 2000 字符
+         .operation_sequence: List[SpatialOperation]  # []（当前不产出）
+         .constraint_set:     List[SpatialConstraint] # []（当前不产出）
 ```
 
-### 7.2 统一 Intent -- 无需转换器
+下游 `layout_pipeline.py:_parse_intent_node` 消费 `intent`，注入 `GISPipelineState` 供 EXECUTE 使用。EXECUTE 经 `format_bound_intent.py` / `vocab_extractor.py` 把 `ZoneTarget/FacilityTarget/AxisTarget` 转换为各子任务的内部意图类型。
 
-PARSE 产出 `SpatialPlanningIntent`（Pydantic），KG 直接消费此类型，**不需要转换为 `PlanIntent`（dataclass）**。
+---
 
-**根本原则：类型应该反映语义，而非格式。** Pydantic 和 dataclass 的差异是技术细节，不应该影响领域模型。`SpatialPlanningIntent` 既是 PARSE 的运行时表示，也是 KG 的存储表示。KG 的 `_add_structured_intent` 直接接受 `SpatialPlanningIntent`，将其字段序列化为 RDF 三元组。
+## 八、与 parsing 模块的分工
 
-| 旧设计（两套 Intent） | 新设计（统一 Intent） |
+| 提取能力 | 实现位置 |
 |---|---|
-| `parse_contracts.SpatialPlanningIntent` (Pydantic) + `context_contracts.PlanIntent` (dataclass) | 只有 `parse_contracts.SpatialPlanningIntent` |
-| 需要 `intent_converter.py` 做格式转换 | 不需要转换器 |
-| 两处字段同步维护 | 一处维护 |
-| 文本描述在转换时丢弃 | 文本描述作为一等公民保留 |
-
-`context_contracts.py` 中的 `PlanIntent` / `ZoneTarget` / `FacilityTarget` / `RoadTarget`（SpatialIntentUnit 子类）废弃。`PlanBlock`（L4）和 `ContextBlock`（L1）保留不变。
-
-### 7.3 文本描述作为一等公民
-
-KG 不仅仅是"数值约束存储"，它还必须保留**人类可读的语义锚点**。文本描述不是"噪声"，而是：
-
-1. **溯源证据**：证明规划意图的来源
-2. **查询接口**：用户后续修改"把村北的商业改到村南"时，需要知道"村北"对应哪个意图
-3. **可视化标签**：地图上显示"商业（村北）"而非"ZoneTarget #3"
-
-PARSE 在 `explore_*` 阶段通过查询 KG 将"村北"转化为 `candidate_bsms`，但**"村北"这个原始文本必须保留在 KG 中**。
-
-### 7.4 空间锚定 + 文本描述存储
-
-KG Layer 3 同时存储空间锚定和文本描述：
-
-| PARSE 产出 | KG 三元组 |
-|---|---|
-| `candidate_bsms: ["P001", ...]` | `pln:ZoneTarget -> pln:candidate_bsm -> pln:parcel_P001` |
-| `candidate_bbox: (x1, y1, x2, y2)` | `pln:ZoneTarget -> pln:candidate_bbox -> "x1,y1,x2,y2"` |
-| `excluded_bsms: ["P100", ...]` | `pln:ZoneTarget -> pln:excluded_bsm -> pln:parcel_P100` |
-| `spatial_hint: "村北"` | `pln:ZoneTarget -> pln:spatial_hint -> "村北"` |
-| `description: "村北新增15%商业用地"` | `pln:ZoneTarget -> pln:description -> "村北新增15%商业用地"` |
-| `raw_text: "..."` | `pln:SpatialPlanningIntent -> pln:raw_text -> "..."` |
+| regex 目标/设施/轴线/道路 | `agent.py` 内联（`_ZONE_TARGET_RE` 等） |
+| 单元级表格提取（zone/project 表） | `app.modules.parsing.tables` |
+| 【INSTRUCTION】固定列表格 | `agent.py::_extract_instruction_tables`（内部用 `parsing.tables._iter_tables`） |
+| 行政区划 / 地名地理编码 | `app.modules.parsing.admin_code_loader` / `gazetteer` |
 
 ---
 
-## 八、类型契约变更计划（v5.0）
+## 九、测试
 
-### 8.1 统一 Intent -- 废弃 PlanIntent
-
-`context_contracts.py` 中的 L3 类型废弃，统一使用 `parse_contracts.py` 的 Pydantic 类型：
-
-| context_contracts（废弃） | parse_contracts（统一） | 说明 |
-|---|---|---|
-| `PlanIntent` | `SpatialPlanningIntent` | KG 直接消费 Pydantic 类型 |
-| `ZoneTarget` (SpatialIntentUnit) | `ZoneTarget` (BaseModel) | 统一为 Pydantic |
-| `FacilityTarget` (SpatialIntentUnit) | `FacilityTarget` (BaseModel) | 统一为 Pydantic |
-| `RoadTarget` (SpatialIntentUnit) | `AxisTarget` (BaseModel) | 统一为 Pydantic |
-| `PlanningConstraint` | `SpatialConstraint` (BaseModel) | 统一为 Pydantic |
-| `SpatialIntentUnit` | 废弃 | 不再需要 dataclass 层级 |
-
-**保留不变**的 context_contracts 类型：`PlanBlock` / `ParcelChange` / `FacilityChange` / `RoadChange` / `SettlementChange`（L4 增量变更集）、`ContextBlock` / `SpatialCognitiveUnit` / 各 Anchor（L1 现状实体）。
-
-### 8.2 已实现：SpatialPlanningIntent 增强（parse_contracts.py）
-
-每个有空间维度的类型包含**三层字段**：形式化约束 + 空间锚定 + 语义锚点。
-
-**`FacilityTarget` 新增字段**（`direction` 驱动 FacilityPlacer 的 `_place_new` 方向决策）：
-
-```python
-class FacilityTarget(BaseModel):
-    type: str = ""
-    status: Literal["existing_preserve", "planned_new", ...] = "existing_preserve"
-    location_hint: str = ""
-    service_radius: Optional[int] = None
-    anchor_village: Optional[str] = None
-    # === 空间锚定 ===
-    direction: str = "center"         # "north"/"south"/"east"/"west"/...
-    candidate_bsms: List[str] = Field(default_factory=list)
-    anchor_point: Optional[Tuple[float, float]] = None  # 精确坐标 (lon, lat)
-    # Semantic anchors
-    semantic: SemanticMetadata = Field(default_factory=SemanticMetadata)
-```
-
-**`AxisTarget` 新增字段**（`axis_type`/`label` 驱动 AxisBuilder 的轴线类型判断）：
-
-```python
-class AxisTarget(BaseModel):
-    direction: str = ""
-    reference_feature: str = ""
-    connects: List[str] = Field(default_factory=list)
-    # === 轴线类型 ===
-    axis_type: str = "primary"        # "primary" / "secondary" / "spatial_control"
-    label: str = ""                   # "南北发展轴"
-    # === 空间锚定 ===
-    start_anchor: Optional[Tuple[float, float]] = None
-    end_anchor: Optional[Tuple[float, float]] = None
-    corridor_bsms: List[str] = Field(default_factory=list)
-    # Semantic anchors
-    semantic: SemanticMetadata = Field(default_factory=SemanticMetadata)
-```
-
-**新增 `RoadTarget`**（road 子任务不再为空）：
-
-```python
-class RoadTarget(BaseModel):
-    road_level: str = ""               # "主干道"/"次干道"/"支路"/"村道"
-    width_m: float = 0.0
-    connects: List[str] = Field(default_factory=list)  # ["村北", "村南"]
-    # === 空间锚定 ===
-    start_anchor: Optional[Tuple[float, float]] = None
-    end_anchor: Optional[Tuple[float, float]] = None
-    path_bsms: List[str] = Field(default_factory=list)
-    semantic: SemanticMetadata = Field(default_factory=SemanticMetadata)
-```
-
-**`SpatialPlanningIntent` 新增 `road_targets`**：
-
-```python
-class SpatialPlanningIntent(BaseModel):
-    zone_targets: List[ZoneTarget] = Field(default_factory=list)
-    facilities: List[FacilityTarget] = Field(default_factory=list)
-    development_axes: List[AxisTarget] = Field(default_factory=list)
-    road_targets: List[RoadTarget] = Field(default_factory=list)  # NEW
-    # ... 面积约束 / 指标表 / 三区三线 ...
-    # Semantic anchors
-    raw_text: str = ""
-    reasoning_trace: str = ""
-```
-
-### 8.3 post-format 确定性锚定（agent.py 已实现）
-
-`format_targets_node` 后，LLM 产出 Pydantic 类型后执行三个确定性锚定函数：
-
-```python
-# agent.py -- 在 format_targets_node 中，LLM 输出后调用
-result.facilities = _auto_fill_facility_anchor(
-    result.facilities, dict(state.place_mappings_targets))
-result.development_axes = _auto_fill_axis_anchor(
-    result.development_axes, dict(state.place_mappings_targets))
-result.road_targets = _auto_fill_road_anchor(
-    result.road_targets, dict(state.place_mappings_targets))
-```
-
-各函数从 `resolve_place` 工具结果（`place_mappings`）中匹配地名，填充 `candidate_bsms`/`anchor_point`/`start_anchor`/`end_anchor`。**零 LLM 调用，零空间计算**（空间计算由 `spatial_ops.grounding` 后续完成）。
-
-### 8.4 桥接器更新（generate.py 已实现）
-
-`_intent_from_typed()` 将新字段传递到 `FacilityIntent`/`AxisIntent`：
-
-```python
-# 设施方向
-facilities.append(FacilityIntent(
-    ..., direction=ft.direction if hasattr(ft, 'direction') else "center"))
-# 轴线类型+标签
-axes.append(AxisIntent(
-    ..., axis_type=at.axis_type if hasattr(at, 'axis_type') else "primary",
-    label=at.label if hasattr(at, 'label') else ""))
-```
-
-### 8.5 KG `_add_structured_intent` 直接消费 Pydantic
-
-```python
-# KG layer3.py -- 直接接受 SpatialPlanningIntent，无需转换
-def _add_structured_intent(self, intent: SpatialPlanningIntent) -> None:
-    for zt in intent.zone_targets:
-        z_uri = PLN[f"zone_target_{zt.land_use}"]
-        self.g.add((z_uri, RDF.type, EntityTypes.ZoneTarget))
-        # 形式化约束
-        self.g.add((z_uri, PLN.land_use, Literal(zt.land_use)))
-        self.g.add((z_uri, PLN.target_area_ha, Literal(zt.target_area_ha)))
-        # 空间锚定
-        for bsm in zt.candidate_bsms:
-            self.g.add((z_uri, PLN.candidate_bsm, PLN[f"parcel_{bsm}"]))
-        # 语义锚点（文本描述）
-        if zt.spatial_hint:
-            self.g.add((z_uri, PLN.spatial_hint, Literal(zt.spatial_hint)))
-        if zt.description:
-            self.g.add((z_uri, PLN.description, Literal(zt.description)))
-    # raw_text
-    if intent.raw_text:
-        self.g.add((PLN.village, PLN.raw_planning_text, Literal(intent.raw_text)))
-```
-
-**没有转换器，没有中间类型，没有格式映射。** Pydantic 模型的字段直接序列化为 RDF 三元组。
-
----
-
-## 九、实施计划
-
-| 阶段 | 任务 | 状态 |
-|---|---|---|
-| 1 | `spatial_ops/grounding.py` 创建 + API 实现 | TODO（别人负责） |
-| 2 | `parse_contracts.py` 增加空间锚定 + 语义锚点字段 | ✅ 已完成 |
-| 3 | 废弃 `context_contracts.py` 中 L3 类型（PlanIntent 等） | TODO（别人负责） |
-| 4 | KG `layer3.py` 改为直接消费 `SpatialPlanningIntent` | TODO（别人负责） |
-| 5 | PARSE Agent `format_targets` 后调用 `spatial_ops.grounding` | 部分完成（auto-fill 已实现，grounding 待接） |
-| 6 | 流水线重排：fetch -> build_kg -> parse -> write_kg_l3 -> execute | TODO |
-| 7 | 修复 PARSE Agent `state.spatial_context` bug | TODO |
-| 8 | 修复 `tools/gis/kg.py` 死方法调用 | TODO |
-| 9 | 测试：grounding 正确性 + KG 直存验证 + 现有回归 | TODO |
+无 `parse/` 独立测试，覆盖：
+- `tests/unit/test_parse_table_extraction.py` — `parse()` 端到端表格提取（zone ratios / facility locations / dedup merge）
+- `tests/unit/test_parse_instruction.py` — 【INSTRUCTION】表格解析
+- `tests/unit/test_parse_agent.py` — 含 `_compute_centroid` 等内部工具
+- 集成：`test_parse_agent_llm.py`（用 `jintian_planning_text` fixture 走完整管线）、`test_kg_jintian_e2e.py`
 
 ---
 
 ## 十、相关文档
 
-- `../README.md` - GIS Agent 包总览
-- `../execute/README.md` - EXECUTE Agent（下游消费者）
-- `app/modules/spatial_ops/README.md` - 空间计算唯一层（grounding 实现）
-- `app/modules/parsing/README.md` - parsing 工具层（PARSE 调用提取工具）
-- `app/modules/kg/README.md` - ProjectKG 桥接层（PARSE 写入 Layer 3）
-- `app/modules/schema/contracts/parse_contracts.py` - 最终契约类型
-- `docs/gis/00_SYSTEM_DESIGN.md` §四 - PARSE 理解层设计
-- `docs/gis/diagnostics/01_PARSE_AGENT_STATUS.md` - PARSE Agent 状态诊断
-- `docs/gis/proposals/01_PARSE_SPATIAL_ENHANCEMENT.md` - 空间增强提案
+- `../README.md` — GIS Agent 包总览
+- `../execute/README.md` — EXECUTE Agent（下游消费者）
+- `app/modules/parsing/README.md` — parsing 工具层（PARSE 调用提取工具）
+- `app/modules/kg/README.md` — KG 模块（gazetteer / enrichment）
+- `app/modules/schema/contracts/parse_contracts.py` — 最终契约类型
