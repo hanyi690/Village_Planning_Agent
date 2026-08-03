@@ -100,6 +100,7 @@ phases:
         name: "资源禀赋分析"
         tools: []
         rag_query: ""
+        kg_query: "analysis+shared"
         depends_on: []
         layer_depends_on:
           - "natural_environment"
@@ -113,6 +114,7 @@ phases:
         name: "规划定位分析"
         tools: []
         rag_query: ""
+        kg_query: "analysis+shared"
         depends_on: ["resource_endowment"]
         layer_depends_on:
           - "location"
@@ -123,6 +125,7 @@ phases:
         name: "发展目标分析"
         tools: []
         rag_query: ""
+        kg_query: "analysis+shared"
         depends_on: ["resource_endowment", "planning_positioning"]
         layer_depends_on:
           - "socio_economic"
@@ -132,6 +135,7 @@ phases:
         name: "规划策略分析"
         tools: ["population_prediction"]
         rag_query: ""
+        kg_query: "analysis+shared"
         depends_on: ["resource_endowment", "planning_positioning", "development_goals"]
         layer_depends_on:
           - "socio_economic"
@@ -164,6 +168,7 @@ phases:
         name: "空间结构规划"
         tools: []
         rag_query: "村庄空间结构规划 空间布局模式 一核多点布局"
+        kg_query: "execute+shared"
         prefer_doc_types: [standard, case]
         depends_on: []
         layer_depends_on:
@@ -177,6 +182,7 @@ phases:
         name: "土地利用规划"
         tools: []
         rag_query: "村庄土地利用规划 用地布局方案 建设用地边界划定"
+        kg_query: "execute+shared"
         prefer_doc_types: [policy, standard]
         depends_on: []
         layer_depends_on:
@@ -190,6 +196,7 @@ phases:
         name: "居民点规划"
         tools: []
         rag_query: "村庄居民点布局 农村居民点规划 自然村整治方案"
+        kg_query: "execute+shared"
         prefer_doc_types: [standard, case]
         depends_on: []
         layer_depends_on:
@@ -202,6 +209,7 @@ phases:
         name: "道路交通规划"
         tools: []
         rag_query: "村庄道路规划技术 道路红线宽度 村内道路等级"
+        kg_query: "execute+shared"
         prefer_doc_types: [standard]
         depends_on: []
         layer_depends_on:
@@ -213,6 +221,7 @@ phases:
         name: "公共服务设施规划"
         tools: []
         rag_query: "村庄公共服务设施配置 公共设施用地指标 村级服务中心"
+        kg_query: "execute+shared"
         prefer_doc_types: [standard]
         depends_on: []
         layer_depends_on:
@@ -236,6 +245,7 @@ phases:
         name: "生态绿地规划"
         tools: []
         rag_query: "村庄绿地规划 生态保护用地 公园绿地设计"
+        kg_query: "execute+shared"
         prefer_doc_types: [standard, guide]
         depends_on: []
         layer_depends_on:

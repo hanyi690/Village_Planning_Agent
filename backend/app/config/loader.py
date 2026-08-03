@@ -21,6 +21,9 @@ class DimensionConfig(BaseModel):
     depends_on: List[str] = Field(default_factory=list)
     layer_depends_on: List[str] = Field(default_factory=list)
     phase_depends_on: List[str] = Field(default_factory=list)
+    # P1: KG 查询命名空间分派（"analysis" | "shared" | "execute" | 组合）
+    #   L1 默认 analysis；L2 用 analysis+shared；L3 用 execute+shared。
+    kg_query: str = ""
 
 
 class PhaseConfig(BaseModel):

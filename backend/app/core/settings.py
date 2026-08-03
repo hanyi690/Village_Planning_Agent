@@ -227,6 +227,59 @@ AMAP_RATE_LIMIT: float = float(os.getenv("AMAP_RATE_LIMIT", "30.0"))
 AMAP_MAX_RETRIES: int = int(os.getenv("AMAP_MAX_RETRIES", "3"))
 
 # ==========================================
+# 百度地图地理服务配置
+# ==========================================
+
+# 百度地图 API Key
+BAIDU_API_KEY: str = os.getenv("BAIDU_API_KEY", "")
+
+# 百度地图速率限制（每秒请求数，默认 10）
+BAIDU_RATE_LIMIT: float = float(os.getenv("BAIDU_RATE_LIMIT", "10.0"))
+
+# 百度地图最大重试次数
+BAIDU_MAX_RETRIES: int = int(os.getenv("BAIDU_MAX_RETRIES", "3"))
+
+# ==========================================
+# 腾讯地图地理服务配置
+# ==========================================
+
+# 腾讯地图 API Key
+TECENT_MAP_API_KEY: str = os.getenv("TECENT_MAP_API_KEY", "")
+
+# 腾讯地图速率限制（每秒请求数，默认 5）
+TECENT_MAP_RATE_LIMIT: float = float(os.getenv("TECENT_MAP_RATE_LIMIT", "5.0"))
+
+# 腾讯地图最大重试次数
+TECENT_MAP_MAX_RETRIES: int = int(os.getenv("TECENT_MAP_MAX_RETRIES", "3"))
+
+# ==========================================
+# External Anchor Enrichment Switches
+# ==========================================
+
+# 是否启用 AMap 外源 POI 注入（村委会/设施/道路名/水库）
+AMAP_EXTERNAL_ANCHOR_ENABLED: bool = os.getenv(
+    "AMAP_EXTERNAL_ANCHOR_ENABLED", "true"
+).lower() in ("1", "true", "yes")
+
+# 是否启用百度外源 POI 注入
+BAIDU_EXTERNAL_ANCHOR_ENABLED: bool = os.getenv(
+    "BAIDU_EXTERNAL_ANCHOR_ENABLED", "true"
+).lower() in ("1", "true", "yes")
+
+# 是否启用腾讯地图外源 POI 注入
+TECENT_MAP_EXTERNAL_ANCHOR_ENABLED: bool = os.getenv(
+    "TECENT_MAP_EXTERNAL_ANCHOR_ENABLED", "true"
+).lower() in ("1", "true", "yes")
+
+# 是否启用天地图 WFS 矢量数据注入
+TIANDITU_WFS_ANCHOR_ENABLED: bool = os.getenv(
+    "TIANDITU_WFS_ANCHOR_ENABLED", "true"
+).lower() in ("1", "true", "yes")
+
+# WFS 单 layer 最多 features（防大查询）
+TIANDITU_WFS_MAX_FEATURES: int = int(os.getenv("TIANDITU_WFS_MAX_FEATURES", "500"))
+
+# ==========================================
 # Knowledge Base Constants
 # ==========================================
 

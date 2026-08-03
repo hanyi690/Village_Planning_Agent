@@ -352,6 +352,51 @@ class PlanningBundle(SQLModel, table=True):
     )
 
 
+# ==========================================
+# Step Report Models (P2: 每步 Report 落库)
+# ==========================================
+
+class StepReportModel(SQLModel, table=True):
+    """
+    Step report table — 全链步骤 Report（L1/L3/EXPLORE/PARSE/EXECUTE/KG_PREBUILD）。
+
+    每条记录对应一个执行步骤的输入/输出/诊断，供 positioning-trace 面板
+    按 session + stage + dimension_key 下钻定位。
+    """
+    __tablename__ = "step_reports"
+
+    # Primary key (auto-increment)
+    id: Optional[int] = Field(default=None, primary_key=True)
+
+    # Session + stage identification (cascade delete)
+    session_id: str = Field(
+        sa_column=Column(
+            String,
+            ForeignKey("planning_sessions.session_id", ondelete="CASCADE"),
+            index=True,
+        )
+    )
+    stage: str = Field(index=True)          # KG_PREBUILD / L1 / L3 / EXPLORE / PARSE / EXECUTE
+    step_name: str = Field(default="")      # "analyze_dimension:location"
+    dimension_key: str = Field(default="", index=True)
+    layer: int = Field(default=0, index=True)
+
+    # Inputs / outputs / diagnostics (JSON)
+    inputs: Optional[Dict[str, Any]] = Field(default=None, sa_column=Column(JSON))
+    outputs: Optional[Dict[str, Any]] = Field(default=None, sa_column=Column(JSON))
+    artifacts: Optional[List[Dict[str, Any]]] = Field(default=None, sa_column=Column(JSON))
+    diagnostics: Optional[Dict[str, Any]] = Field(default=None, sa_column=Column(JSON))
+
+    # Timestamp
+    timestamp: datetime = Field(default_factory=datetime.now)
+
+    # Table options
+    __table_args__ = (
+        Index("idx_step_session_stage", "session_id", "stage"),
+        Index("idx_step_session_dim", "session_id", "dimension_key"),
+    )
+
+
 __all__ = [
     "PlanningSession",
     "UISession",
@@ -359,4 +404,5 @@ __all__ = [
     "UploadedFile",
     "PlanningTextDocument",
     "PlanningBundle",
+    "StepReportModel",
 ]

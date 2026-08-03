@@ -191,6 +191,7 @@ async def init_async_db() -> bool:
             UploadedFile,
             PlanningTextDocument,
             PlanningBundle,
+            StepReportModel,
         )
 
         # Create all tables (except checkpoints, which is managed by LangGraph)
