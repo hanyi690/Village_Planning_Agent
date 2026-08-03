@@ -355,7 +355,11 @@ async def _execute_layout_node(state: ExecuteAgentState) -> dict:
             mip_c = _spatial_constraint_to_mip(c)
             if mip_c:
                 mip_parse_constraints.append(mip_c)
-        all_constraints = list(state.kg_constraints or []) + mip_parse_constraints
+        from app.agent.gis.execute.constraints import merge_sourced_constraints
+
+        all_constraints = merge_sourced_constraints(
+            list(state.kg_constraints or []), mip_parse_constraints
+        )
 
         zone_candidate_bsms = {
             zt.land_use: list(dict.fromkeys(zt.candidate_bsms))
