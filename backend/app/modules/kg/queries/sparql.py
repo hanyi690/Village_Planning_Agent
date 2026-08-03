@@ -261,13 +261,78 @@ QUERY_TEMPLATES = {
     """,
 
     "get_village_anchors": PREFIX + """
-        SELECT ?name ?lon ?lat
+        SELECT ?name ?wkt ?kind
         WHERE {
-            { ?v a pln:Village ; pln:name ?name ; pln:lon ?lon ; pln:lat ?lat . }
+            {
+                ?v a pln:Village ; pln:name ?name ; geo:hasCentroid ?cg .
+                ?cg geo:asWKT ?wkt . BIND("village" AS ?kind)
+            }
             UNION
-            { ?v a pln:AdministrativeVillage ; pln:name ?name ; pln:lon ?lon ; pln:lat ?lat . }
+            {
+                ?v a pln:AdministrativeVillage ; pln:name ?name ; geo:hasCentroid ?cg .
+                ?cg geo:asWKT ?wkt . BIND("admin_village" AS ?kind)
+            }
             UNION
-            { ?v a pln:ResidentialCluster ; pln:name ?name ; pln:lon ?lon ; pln:lat ?lat . }
+            {
+                ?v a pln:ResidentialCluster ; pln:name ?name ; geo:hasCentroid ?cg .
+                ?cg geo:asWKT ?wkt . BIND("cluster" AS ?kind)
+            }
+        }
+    """,
+
+    # ── P1: KG 拓扑查询模板（grounding 空间描述解析用）──
+    # 基于已验证的 parcel-parcel sfTouches / parcel-road sfIntersects /
+    # parcel-water sfTouches 关系（P0 接线后已构建）。
+
+    "get_parcels_touching_bsm": PREFIX + """
+        SELECT DISTINCT ?bsm ?dlbm ?zone_type
+        WHERE {
+            ?neighbor a pln:Parcel ;
+                      pln:bsm ?bsm ;
+                      geo:sfTouches ?parcel .
+            ?parcel pln:bsm ?bsm_val .
+            OPTIONAL { ?neighbor pln:dlbm ?dlbm . }
+            OPTIONAL { ?neighbor pln:zone_type ?zone_type . }
+        }
+    """,
+
+    "get_parcels_intersecting_road": PREFIX + """
+        SELECT DISTINCT ?bsm ?dlbm ?zone_type ?road_name
+        WHERE {
+            ?parcel a pln:Parcel ;
+                    pln:bsm ?bsm ;
+                    geo:sfIntersects ?road .
+            ?road a pln:Road .
+            OPTIONAL { ?parcel pln:dlbm ?dlbm . }
+            OPTIONAL { ?parcel pln:zone_type ?zone_type . }
+            OPTIONAL { ?road pln:name ?road_name . }
+        }
+    """,
+
+    "get_parcels_touching_water": PREFIX + """
+        SELECT DISTINCT ?bsm ?dlbm ?zone_type ?water_name
+        WHERE {
+            ?parcel a pln:Parcel ;
+                    pln:bsm ?bsm ;
+                    geo:sfTouches ?water .
+            ?water a pln:WaterBody .
+            OPTIONAL { ?parcel pln:dlbm ?dlbm . }
+            OPTIONAL { ?parcel pln:zone_type ?zone_type . }
+            OPTIONAL { ?water pln:name ?water_name . }
+        }
+    """,
+
+    "get_parcels_touching_constraint": PREFIX + """
+        SELECT DISTINCT ?bsm ?dlbm ?zone_type ?constraint_name ?constraint_type
+        WHERE {
+            ?parcel a pln:Parcel ;
+                    pln:bsm ?bsm ;
+                    geo:sfTouches ?constraint .
+            ?constraint a ?constraint_type .
+            OPTIONAL { ?parcel pln:dlbm ?dlbm . }
+            OPTIONAL { ?parcel pln:zone_type ?zone_type . }
+            OPTIONAL { ?constraint pln:name ?constraint_name . }
+            FILTER(?constraint_type != pln:Parcel)
         }
     """,
 
@@ -320,6 +385,11 @@ BINDING_MAP = {
     "facility_type": "facility_type_val",
     "slope_class": "slope_class_val",
     "aspect_class": "aspect_class_val",
+    "bsm": "bsm_val",
+    "cluster_name": "cluster_name_val",
+    "road_name": "road_name_val",
+    "water_name": "water_name_val",
+    "constraint_type": "constraint_type_val",
 }
 
 

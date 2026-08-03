@@ -194,6 +194,42 @@ def _cluster_entries_from_kg(kg: Any, bundle: Any) -> List[GazetteerEntry]:
     return entries
 
 
+def _external_anchors_from_bundle(bundle: Any) -> List[GazetteerEntry]:
+    """从 bundle 多源 API 注入的自然村注记构建权威坐标条目。
+
+    消费 DataCatalog Step 5 注入的 ``annotations_current`` 中
+    ``layer_type == "external_natural_village"`` 的注记（source: tencent/amap/baidu），
+    作为自然村名的权威坐标（gazetteer 金标准），解决"多村名绑同 cluster"。
+    """
+    if bundle is None:
+        return []
+    entries: List[GazetteerEntry] = []
+    for f in (bundle.points.get("annotations_current") or []):
+        layer_type = str(f.layer_type or "")
+        if layer_type != "external_natural_village":
+            continue
+        raw = getattr(f, "_raw", {}) or {}
+        name_norm = str(raw.get("name_norm", "") or "").strip()
+        anchor_source = str(raw.get("anchor_source", "") or "").strip()
+        if not name_norm:
+            continue
+        geom = f.geometry or {}
+        coords = geom.get("coordinates") or []
+        if len(coords) != 2:
+            continue
+        entries.append(GazetteerEntry(
+            name=name_norm,
+            aliases=[],
+            entity_uri=f"pln:external_{anchor_source}_{name_norm}",
+            bsms=[],
+            centroid=[float(coords[0]), float(coords[1])],
+            source=anchor_source or "external_anchors",
+            confidence=0.9,
+            description=f"{name_norm}（多源 API {anchor_source} 坐标）",
+        ))
+    return entries
+
+
 def _annotation_entries_from_memory(memory: Any, bundle: Any) -> List[GazetteerEntry]:
     """SemanticMemoryStore 注解（L1 回流产物：村名→BSM）→ 条目候选。"""
     from app.modules.spatial_ops.geometry import _compute_centroid
@@ -244,6 +280,12 @@ def build_gazetteer(kg: Any, bundle: Any, memory: Any = None) -> Gazetteer:
             gazetteer.upsert(e)
     except Exception as e:
         logger.warning("[Gazetteer] cluster build failed: %s", e)
+    # 多源 API 自然村权威坐标（进入 bundle 前 enrichment 注入）— 金标准村名条目
+    try:
+        for e in _external_anchors_from_bundle(bundle):
+            gazetteer.upsert(e)
+    except Exception as e:
+        logger.warning("[Gazetteer] external anchors build failed: %s", e)
     if memory is not None:
         try:
             for e in _annotation_entries_from_memory(memory, bundle):
@@ -337,4 +379,5 @@ __all__ = [
     "save_gazetteer",
     "confirm_with_llm",
     "spatial_check",
+    "_external_anchors_from_bundle",
 ]

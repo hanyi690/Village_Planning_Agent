@@ -237,7 +237,36 @@ execute_queries = {
         "description": "村庄锚点查询（设施/轴线放置用）",
         "returns": "List[Dict]",
         "writes_kg": False,
-        "status": "exists_not_wired",
+        "status": "available",
+    },
+    # P1: KG 拓扑查询模板（grounding 空间描述解析用）
+    "get_parcels_touching_bsm": {
+        "func": lambda kg, **kw: query_kg(kg, "get_parcels_touching_bsm", **kw),
+        "description": "返回与给定 BSM 地块 sfTouches 邻接的地块（'靠近X'拓扑）",
+        "returns": "List[Dict]",
+        "writes_kg": False,
+        "status": "available",
+    },
+    "get_parcels_intersecting_road": {
+        "func": lambda kg, **kw: query_kg(kg, "get_parcels_intersecting_road", **kw),
+        "description": "返回与道路 sfIntersects 的地块（'沿路'线性描述）",
+        "returns": "List[Dict]",
+        "writes_kg": False,
+        "status": "available",
+    },
+    "get_parcels_touching_water": {
+        "func": lambda kg, **kw: query_kg(kg, "get_parcels_touching_water", **kw),
+        "description": "返回与水体 sfTouches 的地块（'沿河'线性描述）",
+        "returns": "List[Dict]",
+        "writes_kg": False,
+        "status": "available",
+    },
+    "get_parcels_touching_constraint": {
+        "func": lambda kg, **kw: query_kg(kg, "get_parcels_touching_constraint", **kw),
+        "description": "返回与约束面（三线/保护区）邻接的地块（'生态边缘'描述）",
+        "returns": "List[Dict]",
+        "writes_kg": False,
+        "status": "available",
     },
 }
 

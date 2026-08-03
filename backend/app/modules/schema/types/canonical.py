@@ -249,6 +249,7 @@ class VillageMetadata(BaseModel):
     city: str = ""
     county: str = ""
     township: str = ""
+    adcode_12: str = ""  # 12 位 township/village adcode (用于外部 API)
     bundle_version: str = "1.0"
     built_at: Optional[str] = None
 
