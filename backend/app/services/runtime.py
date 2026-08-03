@@ -642,6 +642,22 @@ class PlanningRuntimeService:
         if not subscriber_ready:
             logger.debug(f"[PlanningRuntimeService] [{session_id}] No SSE subscriber (script mode), proceeding immediately")
 
+        # 0. Pre-build session KG BEFORE L1 dimension analysis (idempotent).
+        #    KG is built from the session bundle with parcel topology relations,
+        #    so L1/L2/L3 dimension analysis receives real KG spatial cognition.
+        #    Non-fatal: any failure logs a warning and the pipeline continues.
+        if initial_state:
+            try:
+                from app.services.session_kg import ensure_session_kg
+
+                vname = str((initial_state.get("config") or {}).get("village_name", ""))
+                await ensure_session_kg(session_id, village_name=vname)
+            except Exception as e:  # noqa: BLE001 — non-fatal
+                logger.warning(
+                    "[PlanningRuntimeService] [%s] Session KG pre-build failed: %s",
+                    session_id, e,
+                )
+
         # 1. For initial_state, write all state + optional synthetic message
         #    in a single aupdate_state call with as_node="__start__".
         #    Per LangGraph docs: "Explicitly specify as_node when setting up state

@@ -661,6 +661,24 @@ async def resume_from_checkpoint(session_id: str, checkpoint_id: str):
     return {"status": "resumed", "checkpoint_id": checkpoint_id, "layer": layer, "kind": kind}
 
 
+@router.get("/api/sessions/{session_id}/positioning-trace")
+async def get_positioning_trace(session_id: str):
+    """获取全链定位追踪（L1/L3/EXPLORE/PARSE/EXECUTE 每步 Report）。
+
+    按 session 聚合 StepReport，按 dimension_key + stage 索引，
+    供前端下钻定位"文本与几何不一致"的断点。
+    """
+    from app.services.step_report import build_positioning_trace
+
+    trace = await build_positioning_trace(session_id)
+    if not trace["reports"]:
+        # 会话不存在或尚无 step report（可能 L3 未完成）
+        state = await PlanningRuntimeService.aget_state_values(session_id)
+        if not state:
+            raise HTTPException(status_code=404, detail=f"Session not found: {session_id}")
+    return trace
+
+
 @router.get("/api/sessions/{session_id}/reports/{dim_key}")
 async def get_dimension_report(session_id: str, dim_key: str, version: Optional[int] = None):
     """获取维度报告全文，支持历史版本查询（?version=N）"""
