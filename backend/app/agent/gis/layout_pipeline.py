@@ -392,6 +392,17 @@ async def _parse_intent_node(state: GISPipelineState) -> dict:
                         logger.info("[Pipeline:parse] PARSE fallback merged %d missing targets", added)
                 except Exception as e:
                     logger.warning("[Pipeline:parse] PARSE fallback failed: %s", e)
+                # P8: 合并的 PARSE 项目/设施/分区位置名 → gazetteer → candidate_bsms
+                try:
+                    from app.agent.gis.parse.agent import resolve_spatial_anchors
+
+                    resolve_spatial_anchors(
+                        intent,
+                        village_name=village_name,
+                        village_anchors=state.kg_village_anchors,
+                    )
+                except Exception as e:
+                    logger.warning("[Pipeline:parse] fallback spatial anchor resolution failed: %s", e)
             return {
                 "intent": intent,
                 "intent_json": intent,

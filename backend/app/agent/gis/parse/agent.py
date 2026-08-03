@@ -874,6 +874,22 @@ def resolve_spatial_anchors(
             if bsms and not any(b in ax.corridor_bsms for b in bsms):
                 ax.corridor_bsms.extend(bsms)
                 resolved += 1
+    for prj in (intent.project_targets if hasattr(intent, "project_targets") else []):
+        location = prj.location_hint or (prj.semantic.spatial_hint if prj.semantic else "") or ""
+        for token in _extract_location_tokens(location):
+            bsms = _resolve_gazetteer_bsms(token, gazetteer)
+            if bsms and not any(b in prj.candidate_bsms for b in bsms):
+                prj.candidate_bsms.extend(bsms)
+                resolved += 1
+        if not prj.candidate_bsms and kg_anchors:
+            text = f"{prj.name} {location}"
+            matched = next(
+                (a for a in kg_anchors if a["name"] and a["name"] in text),
+                None,
+            )
+            if matched:
+                prj.semantic.reasoning_trace = "KG village anchor matched by project location hint"
+                resolved += 1
 
     for rt in (intent.road_targets if hasattr(intent, "road_targets") else []):
         if not kg_anchors:
