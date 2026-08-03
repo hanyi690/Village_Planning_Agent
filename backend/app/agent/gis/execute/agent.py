@@ -967,6 +967,15 @@ async def _validate_node(state: ExecuteAgentState) -> dict:
             for c in report.checks if c.violations
         ]
         consistency = _build_l3_l4_consistency_report(state)
+        try:
+            from app.agent.explore.verification import save_explore_verification
+
+            verification = await save_explore_verification(
+                state.session_id, state.intent, state.layout_configs or []
+            )
+            consistency["l3_l4_verification"] = verification
+        except Exception as e:
+            logger.debug("[EXECUTE:validate] explore verification failed: %s", e)
         passed = report.status != "fail" and (
             custom_validation is None or custom_validation["passed"]
         ) and consistency["passed"]
