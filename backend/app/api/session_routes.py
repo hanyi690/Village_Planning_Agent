@@ -27,7 +27,7 @@ from urllib.parse import quote
 from uuid import uuid4
 
 from fastapi import APIRouter, BackgroundTasks, File, Form, HTTPException, UploadFile
-from fastapi.responses import StreamingResponse
+from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel, Field
 
 from app.api.schemas import TaskStatus, ImageData, UploadedFileMeta
@@ -216,8 +216,12 @@ async def _process_uploaded_file_db(
 
     # Parse file in memory
     parse_result = await _parse_file_in_memory(file, content)
-    if parse_result["gis_data"] and not parse_result["gis_data_type"]:
-        parse_result["gis_data_type"] = _infer_data_type_from_filename(filename)
+    dtype = parse_result["gis_data_type"]
+    if dtype in {"upload", "auto", "unknown"}:
+        dtype = None
+    if parse_result["gis_data"] and not dtype:
+        dtype = _infer_data_type_from_filename(filename)
+    parse_result["gis_data_type"] = dtype
 
     # Store to database
     file_id = await create_uploaded_file_async(
@@ -716,6 +720,22 @@ async def get_backend_run_report(session_id: str):
         if not state:
             raise HTTPException(status_code=404, detail=f"Session not found: {session_id}")
     return report
+
+
+@router.get("/api/sessions/{session_id}/stage-report.md")
+async def get_stage_report_markdown(session_id: str):
+    """Return the full pipeline stage report as readable Markdown."""
+    from app.services.stage_report import build_stage_report_markdown
+
+    markdown = await build_stage_report_markdown(session_id)
+    if not markdown:
+        state = await PlanningRuntimeService.aget_state_values(session_id)
+        if not state:
+            raise HTTPException(status_code=404, detail=f"Session not found: {session_id}")
+    return Response(
+        content=markdown or "# 无阶段报告\n\n该会话尚未产生任何 StepReport。\n",
+        media_type="text/markdown; charset=utf-8",
+    )
 
 
 @router.get("/api/sessions/{session_id}/reports/{dim_key}")
@@ -1461,6 +1481,8 @@ async def upload_gis_data(
 
     # Determine data type: user hint > auto-inferred from properties > from filename
     final_data_type = data_type or parsed.get("gis_data_type")
+    if final_data_type in {"upload", "auto", "unknown"}:
+        final_data_type = None
     if not final_data_type and file.filename:
         final_data_type = _infer_data_type_from_filename(file.filename)
 

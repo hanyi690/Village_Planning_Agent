@@ -332,7 +332,7 @@ async def build_backend_run_report(session_id: str) -> Dict[str, Any]:
             "code": "mixed_demo_sources",
             "message": "Session GIS uploads were mixed with Jintian demo sources.",
         })
-    return {
+    report = {
         "session_id": session_id,
         "feasible": not issues,
         "layers": layers,
@@ -357,6 +357,13 @@ async def build_backend_run_report(session_id: str) -> Dict[str, Any]:
         ],
         "issues": issues,
     }
+    try:
+        from app.services.stage_report import render_stage_report_markdown
+        report_md = render_stage_report_markdown(trace["reports"], report)
+    except Exception:  # noqa: BLE001
+        report_md = ""
+    report["markdown"] = report_md
+    return report
 
 
 __all__ = [
