@@ -110,10 +110,10 @@ class DataCatalog:
     """Data catalog - manages all configured data sources.
 
     Lifecycle:
-        1. Load YAML configuration (sources + connections)
-        2. Register connections (Phase 2)
-        3. Instantiate drivers via DriverRegistry
-        4. Query sources by name or layer_type
+      1. Load YAML configuration (sources + connections)
+      2. Register connections (Phase 2)
+      3. Instantiate drivers via DriverRegistry
+      4. Query sources by name or layer_type
     """
 
     def __init__(self, config_path: Optional[str] = None):
@@ -121,9 +121,43 @@ class DataCatalog:
         self._connections: Dict[str, Dict[str, Any]] = {}
         self._sources_cfg: Dict[str, Dict[str, Any]] = {}
         self._sources: Dict[str, DataSourceDriver] = {}
+        # village_name → admin_meta (province/city/county/town/adcode) 预设
+        # 用于同步路径下让 pipeline 拿到正确的 region 限定
+        self._admin_meta_overrides: Dict[str, Dict[str, str]] = {}
         self._load_config()
         self._init_connections()
         self._init_sources()
+
+    def set_admin_meta(
+        self,
+        village_name: str,
+        province: str = "",
+        city: str = "",
+        county: str = "",
+        township: str = "",
+        adcode_12: str = "",
+    ) -> None:
+        """预设 village 的行政元数据 (同步路径使用).
+
+        调用示例:
+            catalog.set_admin_meta("金田", county="平远县", township="泗水镇",
+                                   adcode_12="441426110000")
+
+        若不预设, _auto_fill_admin_meta 会通过本地 12 位 adcode CSV 自动查询.
+        """
+        self._admin_meta_overrides[village_name] = {
+            "province": province,
+            "city": city,
+            "county": county,
+            "township": township,
+            "adcode_12": adcode_12,
+        }
+        logger.debug("[DataCatalog] set admin meta for '%s': %s",
+                      village_name, self._admin_meta_overrides[village_name])
+
+    def get_admin_meta(self, village_name: str) -> Dict[str, str]:
+        """获取 village 的预设 admin meta (无则返回空 dict)."""
+        return self._admin_meta_overrides.get(village_name, {})
 
     # ── configuration loading ──
 
@@ -444,6 +478,40 @@ class DataCatalog:
         if bbox:
             bundle.metadata.bbox_wgs84 = bbox
 
+        # Step 5: External Anchor Enrichment (v9.8 pipeline)
+        #   - 自动从 AdminCodeService 填充 12 位 adcode + 行政层级 (同步路径)
+        #   - 5 阶段: collect → normalize (gcj02/bd09→wgs84) → cross-source dedup → local dedup → inject
+        #   - 注入策略: 直接注入现有 sub-key (annotations_current 等), 不引入 _external
+        #   - 通过 _raw["anchor_source"] 字段记录来源
+        try:
+            self._auto_fill_admin_meta(bundle, village_name)
+            from .external_anchors import ExternalAnchorPipeline
+            from app.modules.spatial_ops.geometry import village_boundary_geometry
+
+            cfg = {
+                "province": bundle.metadata.province or "",
+                "city": bundle.metadata.city or "",
+                "county": bundle.metadata.county or "",
+                "town": bundle.metadata.township or "",
+                "village": village_name,
+                "adcode": bundle.metadata.adcode_12 or "",
+                "natural_village_names": self._load_village_anchors(village_name),
+            }
+            # 取 village admin boundary (用于 strict point-in-polygon filter)
+            boundary = village_boundary_geometry(bundle)
+            pipeline = ExternalAnchorPipeline()
+            injected = pipeline.run(bundle, bbox, cfg,
+                                     village_boundary=boundary)
+            if injected:
+                logger.info(
+                    "[DataCatalog] external anchors injected: %s (boundary=%s)",
+                    sum(injected.values()), boundary is not None,
+                )
+        except Exception as e:
+            logger.warning(
+                "[DataCatalog] external anchor pipeline failed: %s", e,
+            )
+
         logger.info(
             "[DataCatalog] load_village_bundle('%s'): %d parcels, %d roads, %d annotations",
             village_name,
@@ -452,6 +520,235 @@ class DataCatalog:
             len(bundle.points.get("annotations_current")) + len(bundle.points.get("annotations_planned")),
         )
         return bundle
+
+    def _load_village_yaml_meta(self, village_name: str) -> Dict[str, str]:
+        """从 data/gis/{village}/villages.yaml 读取村庄行政区划（现状事实）。
+
+        优先于 CSV 重名猜测：金田村在 villages.yaml 明确为
+        "广东省 梅州市 平远县 泗水镇"，避免误判为安徽同名村导致多源
+        enrichment 用错 region 搜索。
+        """
+        try:
+            from pathlib import Path
+            import yaml
+
+            cfg_path = Path("data/gis") / str(village_name).strip() / "villages.yaml"
+            if not cfg_path.exists():
+                cfg_path = Path("data/gis/jintian/villages.yaml")
+            if not cfg_path.exists():
+                return {}
+            data = yaml.safe_load(cfg_path.read_text(encoding="utf-8")) or {}
+            v = data.get("village", {}) or {}
+            if not isinstance(v, dict):
+                return {}
+            out = {}
+            for k in ("province", "city", "county", "township", "code"):
+                val = str(v.get(k) or "").strip()
+                if val:
+                    out[k] = val
+            return out
+        except Exception as e:  # noqa: BLE001 — 配置缺失非致命
+            logger.debug("[DataCatalog] village yaml meta failed: %s", e)
+            return {}
+
+    def _load_village_anchors(self, village_name: str) -> List[str]:
+        """从 data/gis/{village}/villages.yaml 加载自然村名 + 村名组合设施锚点。
+
+        Data 层配置（现状行政事实，非规划决策），用于多源 anchor enrichment
+        的自然村搜索关键词。文件缺失时回退到空列表（不阻断管线）。
+        """
+        try:
+            from pathlib import Path
+            import yaml
+
+            cfg_path = Path("data/gis") / str(village_name).strip() / "villages.yaml"
+            if not cfg_path.exists():
+                # 兜底：按村庄名猜测（如"金田村委会" → jintian）
+                cfg_path = Path("data/gis/jintian/villages.yaml")
+                if not cfg_path.exists():
+                    return []
+            data = yaml.safe_load(cfg_path.read_text(encoding="utf-8")) or {}
+            names = [str(n).strip() for n in (data.get("natural_villages", []) or []) if str(n).strip()]
+            anchors = []
+            for a in (data.get("village_anchors", []) or []):
+                n = str(a.get("name", "") or "").strip()
+                if n:
+                    anchors.append(n)
+            for lm in (data.get("landmarks", []) or []):
+                n = str(lm.get("name", "") or "").strip()
+                if n:
+                    anchors.append(n)
+            combined = names + anchors
+            # 去重保序
+            seen = set()
+            result = []
+            for n in combined:
+                if n not in seen:
+                    seen.add(n)
+                    result.append(n)
+            return result
+        except Exception as e:  # noqa: BLE001 — 配置缺失非致命
+            logger.warning("[DataCatalog] village anchors load failed for %s: %s", village_name, e)
+            return []
+
+    def _auto_fill_admin_meta(
+        self,
+        bundle: VillageBundle,
+        village_name: str,
+    ) -> None:
+        """通过 AdminCodeService 自动填充 bundle.metadata.
+
+        同步路径下 metadata.province/city/county 为空 — 用本地 12 位 adcode
+        CSV 查询填上. 优先 12 位 township code 用于外部 API.
+
+        处理重名:
+          "金田" 在多个省都有同名地点. 策略:
+          0. 若调用方预设了 admin_meta_overrides, 优先用 override 的 county/town
+          1. 若已知 county, 强制按 county 过滤
+          2. 否则警告 + 取第一个 (但记录风险)
+        """
+        # 已有完整 5 级则跳过
+        if (bundle.metadata.province and bundle.metadata.county
+                and bundle.metadata.adcode_12):
+            return
+
+        # 0a. 优先用 data/gis/{village}/villages.yaml 的行政区划（现状事实，防重名误判）
+        try:
+            yaml_meta = self._load_village_yaml_meta(village_name)
+            if yaml_meta:
+                if not bundle.metadata.province and yaml_meta.get("province"):
+                    bundle.metadata.province = yaml_meta["province"]
+                if not bundle.metadata.city and yaml_meta.get("city"):
+                    bundle.metadata.city = yaml_meta["city"]
+                if not bundle.metadata.county and yaml_meta.get("county"):
+                    bundle.metadata.county = yaml_meta["county"]
+                if not bundle.metadata.township and yaml_meta.get("township"):
+                    bundle.metadata.township = yaml_meta["township"]
+                if not bundle.metadata.adcode_12 and yaml_meta.get("code"):
+                    bundle.metadata.adcode_12 = yaml_meta["code"]
+                # YAML 提供完整行政区划则直接返回（跳过 CSV 重名猜测）
+                if (bundle.metadata.province and bundle.metadata.county
+                        and bundle.metadata.adcode_12):
+                    return
+        except Exception as e:
+            logger.debug("[DataCatalog] villages.yaml admin meta failed: %s", e)
+
+        # 0. 优先用预设 override (测试时通常会预设)
+        override = self._admin_meta_overrides.get(village_name, {})
+        if override:
+            if not bundle.metadata.province and override.get("province"):
+                bundle.metadata.province = override["province"]
+            if not bundle.metadata.city and override.get("city"):
+                bundle.metadata.city = override["city"]
+            if not bundle.metadata.county and override.get("county"):
+                bundle.metadata.county = override["county"]
+            if not bundle.metadata.township and override.get("township"):
+                bundle.metadata.township = override["township"]
+            if not bundle.metadata.adcode_12 and override.get("adcode_12"):
+                bundle.metadata.adcode_12 = override["adcode_12"]
+            # 预设充分则提前返回
+            if (bundle.metadata.county and bundle.metadata.adcode_12):
+                return
+
+        try:
+            from app.modules.parsing.admin_code_loader import (
+                get_admin_code_service,
+            )
+            svc = get_admin_code_service()
+
+            known_county = bundle.metadata.county or ""
+            known_province = bundle.metadata.province or ""
+
+            # 1. 找 village (5 级), 在多个同名中选 county/province 匹配的
+            village_code = ""
+            search_results = svc.search(village_name, level=5, limit=50)
+
+            if search_results:
+                candidates = []
+                for v in search_results:
+                    chain = svc.get_parent_chain_with_names(v.code)
+                    county_name = next(
+                        (n for c, n, l in chain if l == 3), ""
+                    )
+                    province_name = next(
+                        (n for c, n, l in chain if l == 1), ""
+                    )
+                    candidates.append({
+                        "code": v.code, "name": v.name,
+                        "county": county_name, "province": province_name,
+                    })
+
+                # 优先级匹配: known_county > known_province > 默认第一个
+                matched = []
+                if known_county:
+                    matched = [c for c in candidates if c["county"] == known_county]
+                elif known_province:
+                    matched = [c for c in candidates if c["province"] == known_province]
+                else:
+                    # 都未知 — 取 name 完全匹配的第一个
+                    name_matches = [c for c in candidates if c["name"] == village_name]
+                    if name_matches:
+                        matched = name_matches
+
+                if matched:
+                    # 选 name 完全匹配的优先, 否则第一个
+                    for c in matched:
+                        if c["name"] == village_name:
+                            village_code = c["code"]
+                            break
+                    if not village_code:
+                        village_code = matched[0]["code"]
+                elif candidates:
+                    # 兜底: 取第一个但警告
+                    village_code = candidates[0]["code"]
+                    logger.warning(
+                        "[DataCatalog] '%s' has %d ambiguous matches, "
+                        "using first: %s (county=%s, province=%s). "
+                        "Set bundle.metadata.county to disambiguate.",
+                        village_name, len(candidates),
+                        candidates[0]["code"], candidates[0]["county"],
+                        candidates[0]["province"],
+                    )
+
+            if not village_code:
+                logger.debug("[DataCatalog] no adcode found for village '%s'", village_name)
+                return
+
+            # 2. 用 village_code 拿 5 级 parent chain
+            chain = svc.get_parent_chain_with_names(village_code)
+            for code, name, level in chain:
+                if level == 1:
+                    if not bundle.metadata.province:
+                        bundle.metadata.province = name
+                elif level == 2:
+                    if not bundle.metadata.city:
+                        bundle.metadata.city = name
+                elif level == 3:
+                    if not bundle.metadata.county:
+                        bundle.metadata.county = name
+                elif level == 4:
+                    if not bundle.metadata.township:
+                        bundle.metadata.township = name
+                elif level == 5:
+                    pass
+
+            # 3. 12 位 township code (优先) 或 village code
+            if not bundle.metadata.adcode_12:
+                town_code = ""
+                county_code = ""
+                for code, name, level in chain:
+                    if level == 4:
+                        town_code = code
+                    elif level == 3:
+                        county_code = code
+                if len(town_code) == 12:
+                    bundle.metadata.adcode_12 = town_code
+                elif len(village_code) == 12:
+                    bundle.metadata.adcode_12 = village_code
+                elif len(county_code) == 12:
+                    bundle.metadata.adcode_12 = county_code
+        except Exception as e:
+            logger.debug("[DataCatalog] auto fill admin meta failed: %s", e)
 
     async def load_village_bundle_async(
         self,
