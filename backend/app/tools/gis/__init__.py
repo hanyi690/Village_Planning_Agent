@@ -1,33 +1,42 @@
-"""GIS pipeline tools for the ReAct Agent.
+"""Lazy GIS tool registry for the planning agent."""
 
-Pipeline: PARSE → KG → CONFLICT → ALLOCATE → GENERATE → VALIDATE → EXPORT → RENDER
+from __future__ import annotations
 
-Data-acquisition tools moved to tools/gis_data/ (Phase C refactor).
-"""
+from typing import Any, List
 
-from .parse import parse_planning_text
-from .extract import extract_structured_text
-from .lookup import lookup_land_use_code
-from .kg import build_knowledge_graph, query_knowledge_graph
-from .conflict import detect_conflicts
-from .allocate import allocate_zones
-from .generate import generate_layout
-from .validate import validate_layout
-from .export import export_gdb
-from .render import render_map
 
-GIS_PIPELINE_TOOLS = [
-    parse_planning_text,
-    extract_structured_text,
-    lookup_land_use_code,
-    build_knowledge_graph,
-    query_knowledge_graph,
-    detect_conflicts,
-    allocate_zones,
-    generate_layout,
-    validate_layout,
-    export_gdb,
-    render_map,
-]
+def get_gis_pipeline_tools() -> List[Any]:
+    """Load the LangChain tool set only when the agent requests it."""
+    from .allocate import allocate_zones
+    from .conflict import detect_conflicts
+    from .export import export_gdb
+    from .extract import extract_structured_text
+    from .generate import generate_layout
+    from .kg import build_knowledge_graph, query_knowledge_graph
+    from .lookup import lookup_land_use_code
+    from .parse import parse_planning_text
+    from .render import render_map
+    from .validate import validate_layout
 
-__all__ = ["GIS_PIPELINE_TOOLS"]
+    return [
+        parse_planning_text,
+        extract_structured_text,
+        lookup_land_use_code,
+        build_knowledge_graph,
+        query_knowledge_graph,
+        detect_conflicts,
+        allocate_zones,
+        generate_layout,
+        validate_layout,
+        export_gdb,
+        render_map,
+    ]
+
+
+def __getattr__(name: str) -> Any:
+    if name == "GIS_PIPELINE_TOOLS":
+        return get_gis_pipeline_tools()
+    raise AttributeError(name)
+
+
+__all__ = ["GIS_PIPELINE_TOOLS", "get_gis_pipeline_tools"]

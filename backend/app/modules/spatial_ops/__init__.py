@@ -15,6 +15,8 @@ compute_context_blocks(VillageBundle) is the sole public entry point.
 [v5.0] Added parcel_ops.py (Responsibility E: parcel geometry operations).
 [v5.0] Added road_planner.py (Responsibility F: planned road network generation).
 [v5.0] Added land_balance.py (Responsibility G: land balance table + delivery gate).
+[v5.1] Added map_layers.py (pure frontend layer contract conversion).
+[v5.1] Added export_package.py (validated session output packaging).
 """
 
 from .bridge import (

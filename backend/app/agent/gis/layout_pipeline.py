@@ -135,6 +135,23 @@ async def _fetch_gis_data_node(state: GISPipelineState) -> dict:
     if state.gis_bundle is not None:
         raw = state.gis_bundle.to_geojson_dict()
         raw.update(existing_data)
+        try:
+            from app.modules.spatial_ops.geometry import compute_parcel_relations
+
+            parcels = state.gis_bundle.polygons.get("landuse_current") or []
+            roads = state.gis_bundle.lines.get("roads_current") or []
+            water = state.gis_bundle.polygons.get("water_bodies") or []
+            if parcels:
+                raw["_parcel_relations"] = compute_parcel_relations(
+                    parcels,
+                    roads,
+                    water,
+                )
+        except Exception as relation_error:
+            logger.warning(
+                "[Pipeline:fetch] caller bundle relation compute failed: %s",
+                relation_error,
+            )
         logger.info("[Pipeline:fetch] Reusing caller-provided GIS bundle")
         return {"gis_bundle": state.gis_bundle, "gis_data": raw}
 
@@ -144,7 +161,13 @@ async def _fetch_gis_data_node(state: GISPipelineState) -> dict:
 
     try:
         catalog = DataCatalog()
-        bundle = catalog.load_village_bundle(village_name)
+        if state.session_id:
+            bundle = await catalog.load_village_bundle_async(
+                village_name,
+                session_id=state.session_id,
+            )
+        else:
+            bundle = catalog.load_village_bundle(village_name)
         raw = bundle.to_geojson_dict()
         raw.update(existing_data)
         logger.info(
@@ -188,16 +211,16 @@ async def _build_kg_node(state: GISPipelineState) -> dict:
     Pre-computes adjacency map, zone restrictions, parcel counts, and
     protected parcels for downstream tools.
     """
-    from app.tools.gis.kg import build_knowledge_graph
+    from app.modules.kg.service import build_knowledge_graph_data
 
     try:
-        # @tool 包装带 InjectedToolCallId — 直接调 .func（同步）并显式传 state 参数
-        result = build_knowledge_graph.func(
+        result = build_knowledge_graph_data(
             reports=state.reports,
             gis_data=state.gis_data,
             village_name=state.village_name,
             session_id=state.session_id,
             intent=state.intent,
+            bundle=state.gis_bundle,
         )
         if not isinstance(result, dict):
             return {}
@@ -218,6 +241,7 @@ async def _build_kg_node(state: GISPipelineState) -> dict:
         kg_village_anchors = result.get("kg_village_anchors", [])
         kg_vne_summary = result.get("kg_vne_summary", [])
         kg_count_by_planning_zone = result.get("kg_count_by_planning_zone", [])
+        kg_build_metrics = result.get("kg_build_metrics", {})
 
         logger.info(
             "[Pipeline:kg] KG built: %d triples, %d constraints, %d adjacency, "
@@ -231,6 +255,36 @@ async def _build_kg_node(state: GISPipelineState) -> dict:
             len(kg_village_anchors),
             len(kg_vne_summary),
         )
+        try:
+            from app.services.step_report import save_step_report
+
+            await save_step_report(
+                state.session_id,
+                "KG",
+                step_name="build_static_layers",
+                inputs={
+                    "reports_count": len(state.reports or {}),
+                    "provider_sources": list(
+                        getattr(
+                            getattr(state.gis_bundle, "metadata", None),
+                            "provider_sources",
+                            [],
+                        )
+                    ),
+                },
+                outputs={
+                    "triple_count": kg_build_metrics.get("triple_count", 0),
+                    "constraints": len(kg_constraints),
+                    "adjacency_nodes": len(kg_adjacency_map),
+                    "protected_parcels": len(kg_protected_parcels_detail),
+                },
+                diagnostics={
+                    "cache_hit": kg_build_metrics.get("cache_hit", False),
+                    "session_ref": kg_session_ref,
+                },
+            )
+        except Exception as report_error:
+            logger.debug("[Pipeline:kg] step report failed: %s", report_error)
         return {
             "kg_turtle": kg_turtle,
             "kg_constraints": kg_constraints,
@@ -322,7 +376,14 @@ async def _parse_intent_node(state: GISPipelineState) -> dict:
         result: ParseResult = await parse_async(
             planning_text=planning_text[:13000],
             village_name=village_name,
-            planning_period=state.config.get("planning_period", "2022-2035年"),
+            planning_period=(
+                getattr(
+                    getattr(state.gis_bundle, "metadata", None),
+                    "planning_period",
+                    "",
+                )
+                or "2022-2035年"
+            ),
         )
         intent = result.intent
 
@@ -422,6 +483,25 @@ async def _write_kg_l3_node(state: GISPipelineState) -> dict:
         manager.bump_version(session_id)
 
         logger.info("[Pipeline:write_kg_l3] L3 written: %d triples", len(kg_turtle.split("\n")) if kg_turtle else 0)
+        try:
+            from app.services.step_report import save_step_report
+
+            await save_step_report(
+                session_id,
+                "KG",
+                step_name="write_intent_layer",
+                inputs={
+                    "zone_targets": len(getattr(intent, "zone_targets", None) or []),
+                    "facility_targets": len(getattr(intent, "facilities", None) or []),
+                    "road_targets": len(getattr(intent, "road_targets", None) or []),
+                },
+                outputs={
+                    "triple_count": kg.get_triple_count(),
+                    "kg_version": kg_version,
+                },
+            )
+        except Exception as report_error:
+            logger.debug("[Pipeline:write_kg_l3] step report failed: %s", report_error)
         return {"kg_turtle": kg_turtle, "kg_version": kg_version}
     except Exception as e:
         logger.error("[Pipeline:write_kg_l3] Failed: %s", e)
@@ -430,36 +510,87 @@ async def _write_kg_l3_node(state: GISPipelineState) -> dict:
 
 async def _detect_conflicts_node(state: GISPipelineState) -> dict:
     """Detect cross-dimension conflicts."""
-    from app.tools.gis.conflict import detect_conflicts
+    from app.tools.gis.conflict import ConflictDetector
 
     try:
-        result = await detect_conflicts.func(summaries={})
-        conflict_count = 0
-        if isinstance(result, dict):
-            report = result.get("report", result)
-            conflict_count = report.get("total_count", 0) if isinstance(report, dict) else 0
-
+        report = ConflictDetector().detect_all(state.dimension_summaries or {})
+        conflict_count = report.total_count
+        conflict_result = {
+            "has_conflicts": report.has_conflicts,
+            "total_count": conflict_count,
+            "metric_conflicts": [
+                conflict.description for conflict in report.metric_conflicts
+            ],
+            "constraint_violations": [
+                conflict.description for conflict in report.constraint_violations
+            ],
+            "spatial_conflicts": [
+                (
+                    f"{conflict.dimension_a}: {conflict.structure_a}; "
+                    f"{conflict.dimension_b}: {conflict.structure_b}"
+                )
+                for conflict in report.spatial_conflicts
+            ],
+        }
         logger.info("[Pipeline:conflicts] %d conflicts detected", conflict_count)
-        return {}
+        try:
+            from app.services.step_report import save_step_report
+
+            await save_step_report(
+                state.session_id,
+                "CONFLICT",
+                step_name="cross_dimension_conflicts",
+                inputs={"summary_count": len(state.dimension_summaries or {})},
+                outputs=conflict_result,
+            )
+        except Exception as report_error:
+            logger.debug("[Pipeline:conflicts] step report failed: %s", report_error)
+
+        result = {"conflict_result": conflict_result}
+        if report.has_conflicts:
+            result["execution_errors"] = list(state.execution_errors or []) + [{
+                "stage": "conflict",
+                "code": "unresolved_report_conflicts",
+                "message": f"{conflict_count} cross-dimension conflicts require resolution.",
+                "details": conflict_result,
+            }]
+        return result
     except Exception as e:
         logger.warning("[Pipeline:conflicts] Detection failed: %s", e)
-        return {}
+        return {
+            "execution_errors": list(state.execution_errors or []) + [{
+                "stage": "conflict",
+                "code": "conflict_detection_failed",
+                "message": str(e),
+            }]
+        }
 
 
 async def _export_gdb_node(state: GISPipelineState) -> dict:
-    """Export 12-layer GeoPackage + land balance table."""
-    from app.tools.gis.export import export_gdb_package
+    """Export the validated GeoJSON planning package and run manifest."""
+    from app.modules.spatial_ops.export_package import export_gdb_package
 
     if not (state.validation_result or {}).get("passed", False):
         logger.error("[Pipeline:export] Blocked because layout validation did not pass")
-        return {
-            "export_result": {
-                "status": "blocked",
-                "reason": "validation_failed",
-                "exported_files": [],
-                "file_count": 0,
-            }
+        result = {
+            "status": "blocked",
+            "reason": "validation_failed",
+            "exported_files": [],
+            "file_count": 0,
         }
+        try:
+            from app.services.step_report import save_step_report
+
+            await save_step_report(
+                state.session_id,
+                "OUTPUT",
+                step_name="export_package",
+                outputs=result,
+                diagnostics={"validation": state.validation_result},
+            )
+        except Exception as report_error:
+            logger.debug("[Pipeline:export] step report failed: %s", report_error)
+        return {"export_result": result}
 
     try:
         result = export_gdb_package(
@@ -471,6 +602,28 @@ async def _export_gdb_node(state: GISPipelineState) -> dict:
             validation_result=state.validation_result,
         )
         logger.info("[Pipeline:export] Export complete")
+        try:
+            from app.services.step_report import save_step_report
+
+            await save_step_report(
+                state.session_id,
+                "OUTPUT",
+                step_name="export_package",
+                outputs={
+                    "status": result.get("status"),
+                    "file_count": result.get("file_count", 0),
+                    "output_dir": result.get("output_dir", ""),
+                },
+                artifacts=[
+                    {
+                        "kind": "run_manifest",
+                        "path": str(result.get("output_dir", "")) + "/run_manifest.json",
+                    }
+                ],
+                diagnostics={"validation": state.validation_result},
+            )
+        except Exception as report_error:
+            logger.debug("[Pipeline:export] step report failed: %s", report_error)
         return {"export_result": result if isinstance(result, dict) else {}}
     except Exception as e:
         logger.error("[Pipeline:export] Export failed: %s", e)
@@ -483,7 +636,7 @@ async def _render_map_node(state: GISPipelineState) -> dict:
     P2: 三图合一 — 规划分区图层（layout_configs）+ 现状居民点锚点图层
     + 定位校核图层，单次产出供前端切换。
     """
-    from app.tools.gis.render import build_map_layers
+    from app.modules.spatial_ops.map_layers import build_map_layers
 
     try:
         layout_configs = list(state.layout_configs or [])
@@ -506,15 +659,72 @@ async def _render_map_node(state: GISPipelineState) -> dict:
             layout_configs=layout_configs,
             gis_data=state.gis_data,
         )
+        preview = {
+            "status": "blocked",
+            "reason": "validated_export_required",
+            "path": "",
+        }
+        output_dir = (state.export_result or {}).get("output_dir", "")
+        if (
+            (state.validation_result or {}).get("passed", False)
+            and (state.export_result or {}).get("status") == "completed"
+            and output_dir
+        ):
+            from app.tools.gis.static_render import render_map_preview
+
+            preview = render_map_preview(
+                layers=result,
+                output_dir=output_dir,
+                village_name=state.village_name,
+            )
         logger.info("[Pipeline:render] Render complete (%d layers)", len(layout_configs))
+        try:
+            from app.services.step_report import save_step_report
+
+            await save_step_report(
+                state.session_id,
+                "RENDER",
+                step_name="build_map_layers",
+                inputs={"layout_layers": len(layout_configs)},
+                outputs={
+                    "render_layers": len(result),
+                    "layer_types": [
+                        layer.get("layerType") or layer.get("layer_type")
+                        for layer in result
+                    ],
+                    "preview_status": preview.get("status"),
+                    "preview_path": preview.get("path", ""),
+                },
+                artifacts=[
+                    {
+                        "kind": "planning_preview",
+                        "path": preview.get("path", ""),
+                    }
+                ] if preview.get("path") else [],
+                diagnostics={
+                    "validation_passed": bool(
+                        (state.validation_result or {}).get("passed", False)
+                    ),
+                },
+            )
+        except Exception as report_error:
+            logger.debug("[Pipeline:render] step report failed: %s", report_error)
         return {
             "render_result": result,
+            "render_artifact": preview,
             "validation_passed": bool((state.validation_result or {}).get("passed", False)),
             "completed_at": datetime.now(timezone.utc),
         }
     except Exception as e:
         logger.error("[Pipeline:render] Render failed: %s", e)
-        return {"render_result": []}
+        return {
+            "render_result": [],
+            "render_artifact": {
+                "status": "failed",
+                "reason": str(e),
+                "path": "",
+            },
+        }
 
 
 def _build_anchor_layer(state: GISPipelineState) -> Optional[Dict[str, Any]]:
@@ -525,7 +735,9 @@ def _build_anchor_layer(state: GISPipelineState) -> Optional[Dict[str, Any]]:
     try:
         from app.modules.kg.gazetteer import load_gazetteer
 
-        gaz = load_gazetteer(state.village_name or "jintian")
+        if not state.village_name:
+            return None
+        gaz = load_gazetteer(state.village_name)
         if not getattr(gaz, "entries", None):
             return None
         features = []
@@ -637,6 +849,7 @@ async def _execute_node(state: GISPipelineState) -> dict:
             validation_result=state.validation_result,
             validation_round=state.validation_round,
             constraint_adjustments=state.constraint_adjustments,
+            execution_errors=state.execution_errors,
             messages=list(state.messages),
         )
 
@@ -659,7 +872,10 @@ async def _execute_node(state: GISPipelineState) -> dict:
         try:
             from app.services.step_report import save_step_report
 
-            layer_types = [c.get("layerType", "unknown") for c in result.get("layout_configs", [])]
+            layer_types = [
+                c.get("layerType") or c.get("layer_type") or "unknown"
+                for c in result.get("layout_configs", [])
+            ]
             await save_step_report(
                 state.session_id, "EXECUTE",
                 step_name="execute_layout",
@@ -674,6 +890,7 @@ async def _execute_node(state: GISPipelineState) -> dict:
                     "allocation_mode": (result.get("allocation_summary", {}) or {}).get("mode", ""),
                     "validation_passed": (result.get("validation_result", {}) or {}).get("passed"),
                     "validation_round": result.get("validation_round", 0),
+                    "execution_errors": result.get("execution_errors", []),
                 },
             )
         except Exception as e:
@@ -686,6 +903,7 @@ async def _execute_node(state: GISPipelineState) -> dict:
             "validation_result": result.get("validation_result", {}),
             "validation_round": result.get("validation_round", 0),
             "constraint_adjustments": result.get("constraint_adjustments", []),
+            "execution_errors": result.get("execution_errors", []),
         }
     except Exception as e:
         logger.error("[Pipeline:execute] failed: %s", e, exc_info=True)

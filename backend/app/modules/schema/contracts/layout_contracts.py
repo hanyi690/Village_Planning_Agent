@@ -169,7 +169,7 @@ class AllocationResult(BaseModel):
 
 
 class ExportResult(BaseModel):
-    """Output of export_gdb — 12-layer GeoPackage + land balance."""
+    """Output of export_gdb — registry-based GeoJSON package + land balance."""
 
     layers_exported: List[str] = Field(default_factory=list)
     output_dir: str = ""

@@ -36,6 +36,7 @@ from app.services.report_store import ReportStore
 from app.database.models import DimensionReport
 from app.database.operations import (
     create_planning_session_async,
+    update_planning_session_async,
     list_planning_sessions_async,
     list_projects_async,
     list_project_sessions_async,
@@ -119,6 +120,8 @@ def _infer_data_type_from_filename(filename: str) -> Optional[str]:
         return "landuse_current"
     if "road" in lower or "道路" in lower:
         return "road"
+    if "annotation" in lower or "注记" in lower:
+        return "current_annotation"
     if "water" in lower or "水" in lower or "河流" in lower:
         return "water"
     if "residential" in lower or "住宅" in lower or "居民" in lower:
@@ -213,6 +216,8 @@ async def _process_uploaded_file_db(
 
     # Parse file in memory
     parse_result = await _parse_file_in_memory(file, content)
+    if parse_result["gis_data"] and not parse_result["gis_data_type"]:
+        parse_result["gis_data_type"] = _infer_data_type_from_filename(filename)
 
     # Store to database
     file_id = await create_uploaded_file_async(
@@ -310,6 +315,22 @@ async def create_session(
     parsed_content = village_data
     user_uploaded_gis_data: Dict[str, Any] = {}
 
+    # Persist the parent row before uploaded_files because uploads carry an
+    # enforced foreign key to planning_sessions.
+    await create_planning_session_async({
+        "session_id": session_id,
+        "project_name": project_name,
+        "village_name": village_name,
+        "province": province,
+        "city": city,
+        "county": county,
+        "township": township,
+        "planning_period": planning_period,
+        "village_data": parsed_content,
+        "task_description": task_description,
+        "constraints": constraints,
+    })
+
     # Process uploaded files and store to database
     file_groups = [
         (village_data_files, "village_data"),
@@ -361,6 +382,15 @@ async def create_session(
     if len(parsed_content.strip()) < 10:
         raise HTTPException(status_code=400, detail="村庄数据不能为空或过短")
 
+    await update_planning_session_async(
+        session_id,
+        {
+            "village_data": parsed_content,
+            "task_description": task_description,
+            "constraints": constraints,
+        },
+    )
+
     initial_state = PlanningRuntimeService.build_initial_state(
         project_name=project_name,
         village_data=parsed_content,
@@ -387,20 +417,6 @@ async def create_session(
         "created_at": datetime.now().isoformat(),
     })
     sse_manager.set_execution_active(session_id, True)
-
-    await create_planning_session_async({
-        "session_id": session_id,
-        "project_name": project_name,
-        "village_name": village_name,
-        "province": province,
-        "city": city,
-        "county": county,
-        "township": township,
-        "planning_period": planning_period,
-        "village_data": parsed_content,
-        "task_description": task_description,
-        "constraints": constraints,
-    })
 
     await PlanningRuntimeService.ensure_initialized()
 
@@ -677,6 +693,19 @@ async def get_positioning_trace(session_id: str):
         if not state:
             raise HTTPException(status_code=404, detail=f"Session not found: {session_id}")
     return trace
+
+
+@router.get("/api/sessions/{session_id}/backend-run-report")
+async def get_backend_run_report(session_id: str):
+    """Return L1/L2/L3, KG, GIS output and render feasibility evidence."""
+    from app.services.step_report import build_backend_run_report
+
+    report = await build_backend_run_report(session_id)
+    if not any(layer["available"] for layer in report["layers"].values()):
+        state = await PlanningRuntimeService.aget_state_values(session_id)
+        if not state:
+            raise HTTPException(status_code=404, detail=f"Session not found: {session_id}")
+    return report
 
 
 @router.get("/api/sessions/{session_id}/reports/{dim_key}")

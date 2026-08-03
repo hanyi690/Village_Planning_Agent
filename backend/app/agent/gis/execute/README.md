@@ -58,7 +58,7 @@ START → route_tasks → execute_layout → execute_facility → execute_axis �
 
 | 节点 | 实现 | 职责 |
 |---|---|---|
-| `route_tasks` | `_route_tasks_node` | 依据 intent 决定子任务：`layout` 恒跑；`facility`/`axis` 仅当 intent 带对应 target；`road` 恒排队 |
+| `route_tasks` | `_route_tasks_node` | 依据 typed/legacy intent 决定子任务：`layout` 为核心任务；`facility`/`axis`/`road` 仅当 intent 带对应 target |
 | `execute_layout` | `_execute_layout_node` | ★ 核心：`_apply_operations` → **MIPZoneAllocator.solve**（B1 候选画布 / KG 约束 + parse 约束 / 密度提示 / 邻接规则 / 设施锚点 / 三线 / VNE）→ `_generate_function_zones` + `_make_planning_zone_layer` → **P7 CustomZoningGenerator**（自定义功能区 L4，词汇表 + 语义规则 + 三线拦截，`build_parcel_contexts` 多因子上下文） |
 | `execute_facility` | `_execute_facility_node` | `_generate_facilities`（查 KG 既有设施坐标 → FacilityPlacer 布设新设施），追加 facility 层 |
 | `execute_axis` | `_execute_axis_node` | `_generate_axes` + `_generate_space_control_zone`（三线传入）+ `_generate_land_use_zone`，最多追加 3 层 |
@@ -67,16 +67,16 @@ START → route_tasks → execute_layout → execute_facility → execute_axis �
 | `write_l4` | `_write_l4_node` | 把规划实体（PlannedParcel / PlannedZone / PlannedFacility / PlannedAxis / PlannedRoad）写入 session KG（`EntityAnnotation`，`l4_provenance` 维度，`derived_from="execute_computed"`），成功后 `bump_version` |
 
 ### 重试与退出
-- `_route_after_validate`：`passed` → `write_l4`；`validation_round >= 3` → 用当前最佳结果 `write_l4`（不无限循环）。
-- 各生成节点均 try/except 防御：失败只记日志返回 `{}`，**road 永不阻塞主图层**（`layout_configs` 保持已有内容）。
+- `_route_after_validate`：`passed` → `write_l4`；`validation_round >= 3` → 结束重试，但失败结果不会写入 L4。
+- 缺现状地类、缺分区目标或声明了 facility/axis/road target 却未生成对应成果时，写入 `execution_errors` 并由 validator 阻断正式成果。
 
 ---
 
 ## 五、布局节点细节（execute_layout）
 
-1. **数据准备**：从 `gis_bundle`（优先）或 `gis_data` 取 `landuse_current_geojson`；无数据则跳过。
+1. **数据准备**：从 `gis_bundle`（优先）或 `gis_data` 取 `landuse_current_geojson`；无数据则记录执行错误并阻断正式输出。
 2. **操作应用**：若上游带 `operation_sequence` 且已有 `allocated_geojson`，先 `_apply_operations`。
-3. **目标解析**：`intent.zone_targets` → `target_map`（`land_use → area_ratio × 总面积`）+ `density_hints` + `adjacency_rules`。
+3. **目标解析**：`intent.zone_targets` → `target_map`（绝对 `area_ha` 优先，否则 `area_ratio × 总面积`）+ `density_hints` + `adjacency_rules`；无明确目标不再复制现状分布兜底。
 4. **重试修正**：`constraint_adjustments`（zone + delta_ha + reason）叠加进 `target_map`。
 5. **约束合并**：`state.kg_constraints` + `_spatial_constraint_to_mip(constraint_set)`。
 6. **B1 候选画布**：`custom_zone_targets[].target_bsms`（binder/gazetteer 产出）注入 `zone_targets.candidate_bsms`，限定 MIP 分配池（空间定位生效）。

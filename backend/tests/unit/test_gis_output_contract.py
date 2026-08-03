@@ -18,7 +18,7 @@ def _feature(bsm: str, coordinates=None):
 
 
 def test_render_builder_returns_frontend_layers():
-    from app.tools.gis.render import build_map_layers
+    from app.modules.spatial_ops.map_layers import build_map_layers
 
     layers = build_map_layers(
         [{"layerType": "planning_zone", "data": {"type": "FeatureCollection", "features": []}}],
@@ -26,6 +26,26 @@ def test_render_builder_returns_frontend_layers():
     )
 
     assert [layer["layerType"] for layer in layers] == ["planning_zone", "boundary"]
+
+
+def test_render_builder_accepts_execute_road_shape():
+    from app.modules.spatial_ops.map_layers import build_map_layers
+
+    road = {
+        "type": "Feature",
+        "properties": {},
+        "geometry": {
+            "type": "LineString",
+            "coordinates": [[116.0, 24.8], [116.1, 24.9]],
+        },
+    }
+    layers = build_map_layers(
+        [{"layer_type": "planned_road", "features": [road]}],
+        {},
+    )
+
+    assert layers[0]["layerType"] == "planned_road"
+    assert layers[0]["geojson"]["features"] == [road]
 
 
 def test_fetch_reuses_caller_bundle_and_preserves_overrides():
@@ -44,7 +64,49 @@ def test_fetch_reuses_caller_bundle_and_preserves_overrides():
     result = asyncio.run(_fetch_gis_data_node(state))
 
     assert result["gis_bundle"] is bundle
-    assert result["gis_data"]["landuse_current_geojson"] is override
+    assert result["gis_data"]["landuse_current_geojson"] == override
+
+
+def test_pipeline_state_accepts_typed_derived_relations():
+    from app.agent.gis.state import GISPipelineState
+
+    relations = SimpleNamespace(touches=[], nearby=[], connected=[])
+    state = GISPipelineState(gis_data={"_parcel_relations": relations})
+
+    assert state.gis_data["_parcel_relations"] is relations
+
+
+def test_fetch_session_fallback_never_uses_configured_sources(monkeypatch):
+    from app.agent.gis.layout_pipeline import _fetch_gis_data_node
+    from app.agent.gis.state import GISPipelineState
+    from app.modules.data.catalog.catalog import DataCatalog
+
+    bundle = SimpleNamespace(
+        to_geojson_dict=lambda: {},
+        parcel_count=0,
+        lines={"roads_current": [], "roads_planned": []},
+        points={"annotations_current": [], "annotations_planned": []},
+        polygons={},
+    )
+
+    async def load_session(self, village_name, session_id):
+        assert village_name == "test"
+        assert session_id == "session-1"
+        return bundle
+
+    def reject_configured(self, village_name):
+        raise AssertionError("configured source fallback must not run for sessions")
+
+    monkeypatch.setattr(DataCatalog, "load_village_bundle_async", load_session)
+    monkeypatch.setattr(DataCatalog, "load_village_bundle", reject_configured)
+
+    result = asyncio.run(
+        _fetch_gis_data_node(
+            GISPipelineState(session_id="session-1", village_name="test")
+        )
+    )
+
+    assert result["gis_bundle"] is bundle
 
 
 def test_trace_layer_uses_real_parcel_geometry_only():
@@ -86,6 +148,99 @@ def test_empty_layout_fails_validation_closed():
     assert result["validation_result"]["reason"] == "no_layout"
 
 
+def test_legacy_intent_routes_declared_execute_children():
+    from app.agent.gis.execute.agent import _route_tasks_node
+    from app.agent.gis.execute.state import ExecuteAgentState
+
+    state = ExecuteAgentState(
+        intent={
+            "facilities": [{"name": "clinic"}],
+            "development_axes": [{"name": "main axis"}],
+            "road_targets": [{"name": "village road"}],
+        },
+    )
+
+    result = asyncio.run(_route_tasks_node(state))
+
+    assert result["tasks_to_run"] == ["layout", "facility", "axis", "road"]
+
+
+def test_missing_zone_targets_are_not_replaced_with_current_landuse():
+    from app.agent.gis.execute.agent import _execute_layout_node
+    from app.agent.gis.execute.state import ExecuteAgentState
+
+    state = ExecuteAgentState(
+        intent=SimpleNamespace(zone_targets=[]),
+        gis_data={
+            "landuse_current_geojson": {
+                "type": "FeatureCollection",
+                "features": [_feature("P001")],
+            }
+        },
+    )
+
+    result = asyncio.run(_execute_layout_node(state))
+
+    assert result["execution_errors"][0]["code"] == "missing_zone_targets"
+    assert "layout_configs" not in result
+
+
+def test_execution_errors_fail_validation_closed():
+    from app.agent.gis.execute.agent import _validate_node
+    from app.agent.gis.execute.state import ExecuteAgentState
+
+    state = ExecuteAgentState(
+        layout_configs=[{"layerType": "facility_point", "data": {}}],
+        execution_errors=[
+            {
+                "stage": "layout",
+                "code": "missing_zone_targets",
+                "message": "missing",
+            }
+        ],
+    )
+
+    result = asyncio.run(_validate_node(state))
+
+    assert result["validation_result"]["passed"] is False
+    assert result["validation_result"]["reason"] == "execution_errors"
+
+
+def test_zone_table_preserves_absolute_area_target():
+    from app.modules.parsing.tables import _extract_zone_tables
+
+    targets = _extract_zone_tables(
+        """
+| 分区名称 | 面积（公顷） |
+| --- | ---: |
+| 村庄建设区 | 12.5 |
+| 一般农业区 | 30.0 |
+"""
+    )
+
+    assert [target.area_ha for target in targets] == [12.5, 30.0]
+
+
+def test_parse_prefers_authoritative_zone_table_over_regex_noise():
+    from app.agent.gis.parse import parse
+
+    result = parse(
+        """
+规划期限至2035年，目标比例35%。
+
+| 分区名称 | 面积（公顷） | 占比 |
+| --- | ---: | ---: |
+| 村庄建设区 | 12.5 | 25% |
+| 一般农业区 | 30.0 | 75% |
+"""
+    )
+
+    assert [target.land_use for target in result.intent.zone_targets] == [
+        "村庄建设区",
+        "一般农业区",
+    ]
+
+
 def test_export_is_blocked_when_validation_failed(tmp_path, monkeypatch):
     from app.agent.gis.layout_pipeline import _export_gdb_node
     from app.agent.gis.state import GISPipelineState
@@ -103,7 +258,7 @@ def test_export_is_blocked_when_validation_failed(tmp_path, monkeypatch):
 
 
 def test_export_package_includes_road_and_manifest(tmp_path):
-    from app.tools.gis.export import export_gdb_package
+    from app.modules.spatial_ops.export_package import export_gdb_package
 
     road = {
         "type": "FeatureCollection",
@@ -133,3 +288,78 @@ def test_export_package_includes_road_and_manifest(tmp_path):
     manifest = json.loads((tmp_path / "run_manifest.json").read_text(encoding="utf-8"))
     assert manifest["session_id"] == "session-1"
     assert manifest["validation"]["passed"] is True
+
+
+def test_export_uses_allocated_landuse_for_balance_without_current_gis(tmp_path):
+    from app.modules.spatial_ops.export_package import export_gdb_package
+
+    allocated = {
+        "type": "FeatureCollection",
+        "features": [
+            {
+                **_feature("P001"),
+                "properties": {
+                    "BSM": "P001",
+                    "DLBM": "0101",
+                    "DLMJ": 10000,
+                },
+            }
+        ],
+    }
+
+    export_gdb_package(
+        layout_configs=[],
+        allocated_geojson=allocated,
+        gis_data={},
+        village_name="test",
+        output_dir=str(tmp_path),
+    )
+
+    assert (tmp_path / "tables" / "land_balance.json").exists()
+
+
+def test_uploaded_landuse_uses_canonical_bundle_layer():
+    from app.modules.data.catalog.catalog import _merge_geojson_into_bundle
+    from app.modules.schema.types.canonical import VillageBundle, VillageMetadata
+
+    feature = _feature("P001")
+    feature["properties"].update({"DLBM": "0101", "area_sqm": 10000})
+    bundle = VillageBundle(
+        village_name="test",
+        metadata=VillageMetadata(village_name="test"),
+    )
+
+    count = _merge_geojson_into_bundle(
+        bundle,
+        "landuse_current",
+        {"type": "FeatureCollection", "features": [feature]},
+    )
+
+    assert count == 1
+    assert len(bundle.polygons.get("landuse_current")) == 1
+    assert not bundle.polygons.get("upload_landuse_current")
+    assert bundle.metadata.provider_sources == ["upload:landuse_current"]
+
+
+def test_static_preview_uses_actual_extent(tmp_path):
+    from PIL import Image
+
+    from app.tools.gis.static_render import render_map_preview
+
+    layer = {
+        "geojson": {
+            "type": "FeatureCollection",
+            "features": [_feature("P001")],
+        },
+        "layerType": "planning_zone",
+        "layerName": "规划分区",
+        "color": "#54A24B",
+    }
+
+    artifact = render_map_preview([layer], str(tmp_path), "测试村")
+
+    assert artifact["status"] == "completed"
+    preview = tmp_path / "planning_preview.png"
+    assert preview.exists()
+    with Image.open(preview) as image:
+        assert image.size == (1800, 1300)

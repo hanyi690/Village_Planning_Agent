@@ -902,7 +902,7 @@ class TestIntentInjectionIsolated:
             "PREFIX pln: <http://village-planning.org/ontology#> "
             "SELECT ?z ?code ?area WHERE { "
             "?z a pln:ZoneTarget ; pln:land_use_code ?code ; "
-            "pln:target_area_ha ?area . }")
+            "pln:target_area_ratio ?area . }")
         assert len(zt) == 1
         assert zt[0]["code"] == "商业用地"
 

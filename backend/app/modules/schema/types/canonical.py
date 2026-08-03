@@ -298,6 +298,9 @@ class VillageBundle(BaseModel):
 
     def _resolve_village_code(self, feature: Any) -> str:
         """从要素属性中提取 12 位行政村行政区划码。"""
+        metadata_code = str(self.metadata.adcode_12 or "").strip()
+        if len(metadata_code) == 12 and metadata_code.isdigit():
+            return metadata_code
         if self._bsm_counter:
             return next(iter(self._bsm_counter))
         props = getattr(feature, "properties", {}) or {}
@@ -307,7 +310,7 @@ class VillageBundle(BaseModel):
         bsm = str(getattr(feature, "bsm", "") or "").strip()  # getattr intentional — feature is Any
         if len(bsm) == 20 and bsm.isdigit():
             return bsm[:12]
-        return "441426110202"
+        return "000000000000"
 
     def _assign_bsm(self, feature: Any) -> None:
         """为要素分配 20 位标准 BSM（12 位村码 + 8 位顺序号），始终覆写以保证唯一性。"""

@@ -7,7 +7,7 @@ Sub-tasks (sequential skeleton, parallel fan-out reserved for Phase 2):
   layout/   - zone allocation (MIP) + function zone + planning zone layers
   facility/ - facility point placement
   axis/     - development axis + space control zone + land use zone layers
-  road/     - planned road network (placeholder)
+  road/     - planned road network (Stage 0-6 + local deterministic fallback)
 
 Worker-Evaluator loop:
   route -> layout -> facility -> axis -> road -> validate
@@ -31,24 +31,48 @@ from app.utils.logger import get_logger
 logger = get_logger(__name__)
 
 
+def _execution_error(
+    state: ExecuteAgentState,
+    stage: str,
+    code: str,
+    message: str,
+) -> dict:
+    issue = {"stage": stage, "code": code, "message": message}
+    existing = list(state.execution_errors or [])
+    if not any(
+        item.get("stage") == stage and item.get("code") == code
+        for item in existing
+    ):
+        existing.append(issue)
+    return {"execution_errors": existing}
+
+
 # ── Node implementations ─────────────────────────────────────────────
 
 
 async def _route_tasks_node(state: ExecuteAgentState) -> dict:
     """Determine which execution sub-tasks to run based on intent.
 
-    layout always runs (core zone allocation). facility/axis run only when
-    intent carries corresponding targets. road is always queued but currently
-    a placeholder.
+    Layout is the core allocation task. Facility, axis, and road tasks are
+    routed only when the typed or legacy intent declares corresponding targets.
     """
     tasks = ["layout"]
     intent = state.intent
     if intent is not None:
-        if hasattr(intent, "facilities") and intent.facilities:
+        if isinstance(intent, dict):
+            facilities = intent.get("facilities")
+            development_axes = intent.get("development_axes")
+            road_targets = intent.get("road_targets")
+        else:
+            facilities = getattr(intent, "facilities", None)
+            development_axes = getattr(intent, "development_axes", None)
+            road_targets = getattr(intent, "road_targets", None)
+        if facilities:
             tasks.append("facility")
-        if hasattr(intent, "development_axes") and intent.development_axes:
+        if development_axes:
             tasks.append("axis")
-    tasks.append("road")
+        if road_targets:
+            tasks.append("road")
     logger.info("[EXECUTE] tasks routed: %s", tasks)
     return {"tasks_to_run": tasks}
 
@@ -75,7 +99,12 @@ async def _execute_layout_node(state: ExecuteAgentState) -> dict:
         landuse = gis_data.get("landuse_current_geojson")
     if not landuse or not landuse.get("features"):
         logger.warning("[EXECUTE:layout] no landuse data - skipping")
-        return {}
+        return _execution_error(
+            state,
+            "layout",
+            "missing_landuse",
+            "Current land-use polygons are required for layout execution.",
+        )
 
     try:
         allocated = state.allocated_geojson or {}
@@ -89,28 +118,26 @@ async def _execute_layout_node(state: ExecuteAgentState) -> dict:
 
         # Direct ZoneTarget extraction
         zone_targets = list(state.intent.zone_targets) if hasattr(state.intent, 'zone_targets') and state.intent.zone_targets else []
-        target_map = {zt.land_use: round(zt.area_ratio * total_area_ha, 2) for zt in zone_targets if zt.land_use}
-
-        # B2: zone_targets 为空（外部 intent 未提供分区目标）→ 用现状规划分区
-        # 分布兜底（dlbm_to_planning_zone 现状码→分区），使 MIP 正常分配并产出
-        # assigned_zone（否则 n_zones=0 → early return → planning_zone 层全村兜底单类）
-        if not target_map:
-            from collections import Counter
-
-            from app.modules.schema.encodings.code_sets import dlbm_to_planning_zone
-
-            zone_areas: Counter = Counter()
-            for _f in landuse.get("features", []):
-                _props = _f.get("properties", {}) or {}
-                _z = dlbm_to_planning_zone(
-                    str(_props.get("DLBM", "") or _props.get("dlbm", ""))
+        target_map = {}
+        for zone_target in zone_targets:
+            if not zone_target.land_use:
+                continue
+            if getattr(zone_target, "area_ha", None):
+                target_map[zone_target.land_use] = round(zone_target.area_ha, 2)
+            elif zone_target.area_ratio > 0:
+                target_map[zone_target.land_use] = round(
+                    zone_target.area_ratio * total_area_ha,
+                    2,
                 )
-                if _z:
-                    zone_areas[_z] += float(_props.get("area_sqm", 0) or 0) / 10000.0
-            target_map = {z: round(a, 2) for z, a in zone_areas.items()}
-            logger.info(
-                "[EXECUTE:layout] zone_targets empty; MIP targets from current "
-                "planning-zone distribution: %s", target_map,
+
+        if not target_map:
+            message = "No explicit planning zone targets were derived from the reports."
+            logger.error("[EXECUTE:layout] %s", message)
+            return _execution_error(
+                state,
+                "layout",
+                "missing_zone_targets",
+                message,
             )
         density_hints = {zt.land_use: zt.density for zt in zone_targets if zt.land_use and zt.density}
         adjacency_rules = {}
@@ -283,7 +310,7 @@ async def _execute_layout_node(state: ExecuteAgentState) -> dict:
         }
     except Exception as e:
         logger.error("[EXECUTE:layout] failed: %s", e, exc_info=True)
-        return {}
+        return _execution_error(state, "layout", "layout_failed", str(e))
 
 
 async def _execute_facility_node(state: ExecuteAgentState) -> dict:
@@ -294,13 +321,21 @@ async def _execute_facility_node(state: ExecuteAgentState) -> dict:
     """
     from app.tools.gis.generate import _generate_facilities
 
+    if "facility" not in state.tasks_to_run:
+        return {}
+
     try:
         fac_layer = _generate_facilities(
             state.intent, state.gis_data or {},
             kg_session_ref=state.kg_session_ref or "",
         )
         if not fac_layer:
-            return {}
+            return _execution_error(
+                state,
+                "facility",
+                "facility_output_empty",
+                "Facility targets exist but no facility layer was produced.",
+            )
 
         layers = list(state.layout_configs)
         layers.append(fac_layer)
@@ -308,7 +343,7 @@ async def _execute_facility_node(state: ExecuteAgentState) -> dict:
         return {"layout_configs": layers}
     except Exception as e:
         logger.error("[EXECUTE:facility] failed: %s", e, exc_info=True)
-        return {}
+        return _execution_error(state, "facility", "facility_failed", str(e))
 
 
 async def _execute_axis_node(state: ExecuteAgentState) -> dict:
@@ -320,6 +355,9 @@ async def _execute_axis_node(state: ExecuteAgentState) -> dict:
         _generate_axes, _generate_space_control_zone, _generate_land_use_zone,
     )
 
+    if "axis" not in state.tasks_to_run:
+        return {}
+
     try:
         layers = list(state.layout_configs)
         gis_data = state.gis_data or {}
@@ -328,6 +366,13 @@ async def _execute_axis_node(state: ExecuteAgentState) -> dict:
         axis_layer = _generate_axes(state.intent, gis_data)
         if axis_layer:
             layers.append(axis_layer)
+        else:
+            return _execution_error(
+                state,
+                "axis",
+                "axis_output_empty",
+                "Axis targets exist but no development-axis layer was produced.",
+            )
 
         space_ctrl_layer = _generate_space_control_zone(
             gis_data, allocated, state.intent, state.kg_three_lines or None,
@@ -345,7 +390,7 @@ async def _execute_axis_node(state: ExecuteAgentState) -> dict:
         return {"layout_configs": layers}
     except Exception as e:
         logger.error("[EXECUTE:axis] failed: %s", e, exc_info=True)
-        return {}
+        return _execution_error(state, "axis", "axis_failed", str(e))
 
 
 async def _execute_road_node(state: ExecuteAgentState) -> dict:
@@ -353,9 +398,18 @@ async def _execute_road_node(state: ExecuteAgentState) -> dict:
 
     Primary path: remote Stage 0-6 generator (confirmation gates 2.6/3/4,
     ported from origin/agent/kg-schema-gis-handoff-20260730). Falls back to
-    the lightweight local plan_roads on any failure so layout_configs stay
-    intact (road never blocks the main layers).
+    the lightweight local plan_roads when the staged generator cannot produce
+    a layer. If declared road targets still produce no geometry, execution
+    records an error and formal output is blocked by validation.
     """
+    if "road" not in state.tasks_to_run:
+        return {}
+
+    intent = state.intent
+    road_targets = list(getattr(intent, "road_targets", None) or [])
+    if isinstance(intent, dict):
+        road_targets = list(intent.get("road_targets") or [])
+
     try:
         from app.agent.gis.execute.road.generator import (
             execute_road_planning_from_agent_state,
@@ -375,7 +429,6 @@ async def _execute_road_node(state: ExecuteAgentState) -> dict:
                 "[EXECUTE:road] stage generator ran but no layers: %s",
                 result.get("reason"),
             )
-            return {}
         logger.info("[EXECUTE:road] stage generator skipped: %s", result.get("reason"))
     except Exception as e:
         logger.warning(
@@ -385,18 +438,11 @@ async def _execute_road_node(state: ExecuteAgentState) -> dict:
     from app.modules.spatial_ops.road_planner import plan_roads
 
     try:
-        intent = state.intent
         if not intent:
             logger.info("[EXECUTE:road] no intent, skipping")
             return {}
 
         # Extract road targets
-        road_targets = []
-        if hasattr(intent, "road_targets"):
-            road_targets = intent.road_targets
-        elif isinstance(intent, dict):
-            road_targets = intent.get("road_targets", [])
-
         if not road_targets:
             logger.info("[EXECUTE:road] no road targets in intent, skipping")
             return {}
@@ -418,13 +464,17 @@ async def _execute_road_node(state: ExecuteAgentState) -> dict:
             current_roads=current_roads,
         )
     except Exception as e:
-        # road 层失败降级：不阻塞主图层（layout_configs 保持已有内容）
-        logger.warning("[EXECUTE:road] failed (degraded): %s", e)
-        return {}
+        logger.warning("[EXECUTE:road] failed: %s", e)
+        return _execution_error(state, "road", "road_failed", str(e))
 
     if not planned_roads:
         logger.info("[EXECUTE:road] no roads generated")
-        return {}
+        return _execution_error(
+            state,
+            "road",
+            "road_output_empty",
+            "Road targets exist but no planned road was produced.",
+        )
 
     # Build layer config for export/render
     road_layer = {
@@ -455,6 +505,23 @@ async def _validate_node(state: ExecuteAgentState) -> dict:
     _execute_layout_node which applies them to allocation targets).
     """
     from app.tools.gis._validation.layout_validator import LayoutValidator
+
+    if state.execution_errors:
+        return {
+            "validation_round": state.validation_round + 1,
+            "validation_result": {
+                "passed": False,
+                "status": "fail",
+                "violations": [
+                    {
+                        "check": issue.get("code", "execution_error"),
+                        "message": issue.get("message", "Execution failed"),
+                    }
+                    for issue in state.execution_errors
+                ],
+                "reason": "execution_errors",
+            },
+        }
 
     if not state.layout_configs:
         return {

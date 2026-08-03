@@ -33,7 +33,14 @@ class GISPipelineInput(BaseModel):
     village_name: str = ""
     planning_text: str = ""           # markdown planning report text (gen path)
     l3_reports: Dict[str, Any] = Field(default_factory=dict)  # L3 report data (plan path)
+    reports: Dict[str, Dict[str, Any]] = Field(default_factory=dict)
+    gis_data: Dict[str, Any] = Field(default_factory=dict)
+    gis_bundle: Optional[Any] = None
     intent: Any = None                # v4: EXPLORE->Binder->format external intent
+    intent_json: Any = None
+    explore_instructions: Dict[str, Any] = Field(default_factory=dict)
+    report_summary_index: Dict[str, Any] = Field(default_factory=dict)
+    dimension_summaries: Dict[str, Dict[str, Any]] = Field(default_factory=dict)
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 
@@ -48,8 +55,12 @@ class GISPipelineOutput(BaseModel):
     layout_configs: List[Dict[str, Any]] = Field(default_factory=list)
     export_result: Dict[str, Any] = Field(default_factory=dict)
     render_result: List[Dict[str, Any]] = Field(default_factory=list)
+    render_artifact: Dict[str, Any] = Field(default_factory=dict)
+    validation_result: Dict[str, Any] = Field(default_factory=dict)
     validation_passed: bool = False
     validation_round: int = 0
+    execution_errors: List[Dict[str, Any]] = Field(default_factory=list)
+    conflict_result: Dict[str, Any] = Field(default_factory=dict)
     completed_at: Optional[datetime] = None
 
 
@@ -69,7 +80,7 @@ class GISPipelineState(BaseModel):
 
     # ── Input data ──
     reports: Dict[str, Dict[str, Any]] = Field(default_factory=dict)
-    gis_data: Dict[str, Optional[Dict[str, Any]]] = Field(default_factory=dict)
+    gis_data: Dict[str, Any] = Field(default_factory=dict)
     gis_bundle: Optional[Any] = None  # GISDataBundle — typed data container
 
     # ── Intent + PARSE Agent output ──
@@ -85,6 +96,7 @@ class GISPipelineState(BaseModel):
     # P2: EXPLORE 桥接产出（grounding 空间定位指令 + 概要索引）
     explore_instructions: Dict[str, Any] = Field(default_factory=dict)
     report_summary_index: Dict[str, Any] = Field(default_factory=dict)
+    dimension_summaries: Dict[str, Dict[str, Any]] = Field(default_factory=dict)
     spatial_context: Dict[str, Any] = Field(default_factory=dict)  # DEPRECATED — use context_blocks
     context_blocks: List[Dict[str, Any]] = Field(default_factory=list)
     facility_anchors: Optional[List[Dict[str, Any]]] = None  # Precise facility locations from annotations
@@ -115,6 +127,8 @@ class GISPipelineState(BaseModel):
 
     # ── Layout generation ──
     layout_configs: List[Dict[str, Any]] = Field(default_factory=list)
+    execution_errors: List[Dict[str, Any]] = Field(default_factory=list)
+    conflict_result: Dict[str, Any] = Field(default_factory=dict)
 
     # ── Validation ──
     validation_result: Dict[str, Any] = Field(default_factory=dict)
@@ -126,6 +140,7 @@ class GISPipelineState(BaseModel):
 
     # ── Render ──
     render_result: List[Dict[str, Any]] = Field(default_factory=list)
+    render_artifact: Dict[str, Any] = Field(default_factory=dict)
 
     # ── Messages (LangGraph accumulated) ──
     messages: List[Any] = Field(default_factory=list)

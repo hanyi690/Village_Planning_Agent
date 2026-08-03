@@ -290,7 +290,7 @@ def ingest_landuse(
         geom = feat.get("geometry", {})
 
         # ── 解析并校验每个编码字段 ──
-        dlbm, dlbm_sys, dlbm_prov = _resolve_code(props.get("DLBM", ""), "DLBM", layer_type, warnings, i)
+        dlbm, dlbm_sys, dlbm_prov = _resolve_code(props.get("DLBM", props.get("dlbm", "")), "DLBM", layer_type, warnings, i)
         sddlbm, sddlbm_sys, sddlbm_prov = _resolve_code(props.get("SDDLBM", ""), "SDDLBM", layer_type, warnings, i)
         qmdlbm, qmdlbm_sys, qmdlbm_prov = _resolve_code(props.get("QMDLBM", ""), "QMDLBM", layer_type, warnings, i)
         ghytbm, ghytbm_sys, ghytbm_prov = _resolve_code(props.get("GHYTBM", ""), "GHYTBM", layer_type, warnings, i)
@@ -301,12 +301,20 @@ def ingest_landuse(
         ghytmc = str(props.get("GHYTMC", props.get("ghytmc", ""))).strip()
 
         # ── 面积 ──
-        area = props.get("DLMJ", props.get("Shape_Area", props.get("SHAPE_Area", 0)))
+        area = props.get(
+            "DLMJ",
+            props.get(
+                "Shape_Area",
+                props.get("SHAPE_Area", props.get("area_sqm", 0)),
+            ),
+        )
         area_sqm = float(area) if area else 0.0
+        if not area_sqm and props.get("area_ha"):
+            area_sqm = float(props["area_ha"]) * 10000.0
 
         # ── BSM/YSDM ──
-        bsm = str(props.get("BSM", "")).strip()
-        ysdm = str(props.get("YSDM", "")).strip()
+        bsm = str(props.get("BSM", props.get("bsm", ""))).strip()
+        ysdm = str(props.get("YSDM", props.get("ysdm", ""))).strip()
 
         # ── 名称 ──
         name = (
@@ -350,7 +358,14 @@ def ingest_landuse(
             mapping_provenance=mapping_provenance,
         )
 
-        extra_props = {k: v for k, v in props.items() if k.upper() not in ('BSM', 'YSDM', 'DLBM', 'DLMC', 'DLMJ', 'SHAPE_AREA', 'SHAPE_LENGTH') and k.lower() not in ('geometry',)}
+        extra_props = {
+            k: v
+            for k, v in props.items()
+            if k.upper() not in (
+                'BSM', 'YSDM', 'DLBM', 'DLMC', 'DLMJ', 'SHAPE_AREA', 'SHAPE_LENGTH',
+            )
+            and k.lower() not in ('geometry', 'area_sqm', 'area_ha')
+        }
 
         if is_current:
             parcels.append(CurrentLandUseParcel(

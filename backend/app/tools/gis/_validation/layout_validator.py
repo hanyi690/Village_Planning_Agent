@@ -73,7 +73,8 @@ class ValidationReport:
 
     def to_dict(self) -> Dict[str, Any]:
         return {
-            "passed": self.status == "pass",
+            "passed": self.status != "fail",
+            "strict_pass": self.status == "pass",
             "status": self.status,
             "total_violations": self.total_violations,
             "violations": [

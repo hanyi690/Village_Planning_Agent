@@ -128,6 +128,7 @@ def test_infer_geojson_data_type_empty_features():
         ("现状用地.geojson", "landuse_current"),
         ("landuse.geojson", "landuse_current"),
         ("道路.geojson", "road"),
+        ("annotation.geojson", "current_annotation"),
         ("water.geojson", "water"),
         ("居民点.geojson", "residential"),
         ("地块.geojson", None),
@@ -266,6 +267,27 @@ async def test_process_uploaded_file_db_geojson(monkeypatch):
     assert captured["gis_data_type"] == "boundary"
     assert captured["parse_status"] == "success"
     assert captured["file_size"] == len(file._content)
+
+
+@pytest.mark.asyncio
+async def test_process_uploaded_file_db_uses_filename_type_fallback(monkeypatch):
+    from app.api import session_routes
+    from app.api.session_routes import _process_uploaded_file_db
+
+    captured = {}
+
+    async def fake_create(**kwargs):
+        captured.update(kwargs)
+        return 43
+
+    monkeypatch.setattr(session_routes, "create_uploaded_file_async", fake_create)
+    data = _geojson([{"name": "地块A"}])
+    file = _FakeUploadFile("landuse.geojson", json.dumps(data, ensure_ascii=False))
+
+    result = await _process_uploaded_file_db(file, "sess-upload", "village_data")
+
+    assert result["gis_data_type"] == "landuse_current"
+    assert captured["gis_data_type"] == "landuse_current"
 
 
 @pytest.mark.asyncio

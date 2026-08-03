@@ -44,8 +44,17 @@ backend/app/agent/gis/
     ├── layout/          # 用地布局子任务（占位，逻辑内联在 execute/agent.py）
     ├── facility/        # 设施布局子任务（占位，逻辑内联）
     ├── axis/            # 发展轴线子任务（占位，逻辑内联）
-    └── road/            # 道路规划子任务（含 generator.py 的 Stage 0-6 生成器）
+    └── road/            # 道路任务编排适配器（Stage 0-6 生成器）
 ```
+
+> 道路在应用编排上属于 EXECUTE 子任务。现阶段确定性道路算法仍位于
+> `app/services/modules/gis/road/`，这是待迁移的目录债务；该目录不是新的
+> 顶层 Agent，也不应直接被 API 调用。
+>
+> KG 构建、图层转换和成果打包已分别收口到
+> `modules/kg/service.py`、`modules/spatial_ops/map_layers.py` 和
+> `modules/spatial_ops/export_package.py`；`tools/gis/` 只保留 LangChain
+> 薄适配器，正式流水线直接调用上述服务。
 
 ---
 
@@ -61,8 +70,8 @@ START
   → write_kg_l3       # intent 实体（ZoneTarget/FacilityTarget 等）写入 KG Layer3
   → detect_conflicts  # 跨维度冲突检测
   → execute           # EXECUTE 子图：route_tasks → 各生成器 → validate（内部最多 3 轮重试）
-  → export_gdb        # 12 层 GeoPackage + 用地平衡表
-  → render_map        # MapLibre 前端图层
+  → export_gdb        # 会话级 GeoJSON 成果包 + 用地平衡表 + run_manifest
+  → render_map        # MapLibre 前端图层 + planning_preview.png
   → END
 ```
 
@@ -111,12 +120,24 @@ GISPipelineState  ── 内部全状态（identity / input / intent / KG / allo
 GISPipelineOutput ── API 输出（layout_configs, export_result, render_result, validation_passed, validation_round）
 ```
 
-- KG 侧预计算查询结果（`kg_three_zones` / `kg_three_lines` / `kg_protected_parcels_detail` / `kg_vne_summary` 等）在 `build_kg` 节点一次性算好，下游节点零 SPARQL 消费
+- KG 侧常用查询结果（`kg_three_zones` / `kg_three_lines` / `kg_protected_parcels_detail` / `kg_vne_summary` 等）在 `build_kg` 节点预计算；道路位置确认仍可通过受限 KG adapter 做按 BSM/名称的补充查询
 - legacy TypedDict 别名（`GISAgentState` / `ParseAgentState` / `LayoutAgentState` / `LayoutPipelineState`）仅向后兼容，新代码一律用 `GISPipelineState`
+
+## 六、正式运行契约
+
+- 会话存在上传 GIS 时，只构建上传数据 bundle，不加载金田村样例源。
+- `landuse_current`、`road` 等上传层必须先经过注册表 adapter，进入规范
+  bundle key，KG 与 EXECUTE 消费同一份结构化数据。
+- 缺现状地类、缺明确分区目标、模块执行异常、跨层冲突或布局校验失败时，
+  一律阻断正式导出和 L4 写回；生成的图层只可用于诊断。
+- `run_manifest.json`、MapLibre 图层和 `planning_preview.png` 均按 session
+  写入 `output/gis/<session_id>/`。PNG 是人工预览，不作为合规判定输入。
+- `/api/sessions/{session_id}/backend-run-report` 聚合 L1/L2/L3 是否落库、
+  KG/PARSE/CONFLICT/EXECUTE/OUTPUT/RENDER 交互记录及最终可行性。
 
 ---
 
-## 六、周边能力（v4 / P6 / P8）
+## 七、周边能力（v4 / P6 / P8）
 
 | 模块 | 职责 | 说明 |
 |------|------|------|
@@ -127,7 +148,7 @@ GISPipelineOutput ── API 输出（layout_configs, export_result, render_resu
 
 ---
 
-## 七、相关文档
+## 八、相关文档
 
 - `parse/README.md` — PARSE Agent 架构（规则解析管线）
 - `execute/README.md` — EXECUTE Agent 架构（7 节点图 + 迁移路线 P1 已完成）

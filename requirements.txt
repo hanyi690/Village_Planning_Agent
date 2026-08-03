@@ -25,6 +25,7 @@ langgraph-checkpoint>=4.1.1
 langgraph-checkpoint-sqlite>=3.1.0
 langgraph-prebuilt>=1.1.0
 langgraph-sdk>=0.4.2
+packaging>=24.0
 
 # ============================================
 # LLM Providers
@@ -69,8 +70,7 @@ func-timeout>=4.3.5  # 超时保护，防止大文件处理卡死
 PyPDF2>=3.0.0       # 简单 PDF 文本提取
 pymupdf>=1.24.0     # 复杂字体/布局容错，扫描版 PDF 检测
 pdfplumber>=0.11.0  # 表格/结构化内容提取
-# 图片处理
-Pillow>=10.0.0
+# 图片处理（Pillow 在 GIS 依赖段统一声明）
 # Docling - 高级文档解析（MinerU fallback）
 docling>=2.15.0
 
@@ -101,6 +101,7 @@ shapely>=2.0.0
 pyproj>=3.6.0
 networkx>=3.0
 matplotlib>=3.8.0
+Pillow>=10.0.0
 # RDF 知识图谱 (PlanningKG)
 rdflib>=7.0.0
 # OpenStreetMap 数据获取（补充村级道路）

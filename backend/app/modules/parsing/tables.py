@@ -28,7 +28,7 @@ from app.modules.schema.contracts.parse_contracts import (
 )
 from app.modules.schema.contracts.semantic_fields import SemanticMetadata
 
-from app.agent.gis.parse.agent import _direction_from_location
+from app.modules.parsing.spatial_language import direction_from_location
 
 _AREA_UNIT_RE = re.compile(r"(公顷|ha|hm|亩|㎡|m²)")
 _RATIO_RE = re.compile(r"%")
@@ -135,6 +135,7 @@ def _extract_zone_tables(text: str) -> List[ZoneTarget]:
                 ZoneTarget(
                     land_use=name,
                     area_ratio=area_ratio,
+                    area_ha=area_ha,
                     semantic=SemanticMetadata(
                         natural_language_description=f"功能分区{name}"
                         + (f"占比{area_ratio*100:.0f}%" if area_ratio > 0.0 else "")
@@ -142,7 +143,7 @@ def _extract_zone_tables(text: str) -> List[ZoneTarget]:
                         spatial_hint=f"AREA:{area_ha}" if area_ha is not None else "",
                     ),
                     spatial_preference=SpatialPreference(
-                        direction=_direction_from_location(location),
+                        direction=direction_from_location(location),
                         reference=location or None,
                     ) if location else None,
                 )

@@ -117,12 +117,15 @@ async def create_planning_session_async(state: Dict[str, Any]) -> str:
         db_session = PlanningSession(
             session_id=clean_state["session_id"],
             project_name=clean_state.get("project_name", ""),
-            village_name=config.get("village_name", ""),
-            province=config.get("province", ""),
-            city=config.get("city", ""),
-            county=config.get("county", ""),
-            township=config.get("township", ""),
-            planning_period=config.get("planning_period", "2022-2035年"),
+            village_name=config.get("village_name") or clean_state.get("village_name", ""),
+            province=config.get("province") or clean_state.get("province", ""),
+            city=config.get("city") or clean_state.get("city", ""),
+            county=config.get("county") or clean_state.get("county", ""),
+            township=config.get("township") or clean_state.get("township", ""),
+            planning_period=(
+                config.get("planning_period")
+                or clean_state.get("planning_period", "2022-2035年")
+            ),
             village_data=clean_state.get("village_data") or "",
             task_description=task_desc,
             constraints=constraints,
@@ -1066,21 +1069,21 @@ async def get_session_reports_async(
             result = await session.execute(query)
             reports = result.scalars().all()
 
-        by_layer: Dict[int, Dict[str, Dict[str, Any]]] = {}
-        seen: set = set()
-        for r in reports:
-            key = (r.layer, r.dimension_key)
-            if key in seen:
-                continue
-            seen.add(key)
-            by_layer.setdefault(r.layer, {})[r.dimension_key] = {
-                "report_id": r.report_id,
-                "content": r.content,
-                "summary": r.summary,
-                "version": r.version,
-                "generated_at": r.generated_at.isoformat() if r.generated_at else None,
-            }
-        return by_layer
+            by_layer: Dict[int, Dict[str, Dict[str, Any]]] = {}
+            seen: set = set()
+            for r in reports:
+                key = (r.layer, r.dimension_key)
+                if key in seen:
+                    continue
+                seen.add(key)
+                by_layer.setdefault(r.layer, {})[r.dimension_key] = {
+                    "report_id": r.report_id,
+                    "content": r.content,
+                    "summary": r.summary,
+                    "version": r.version,
+                    "generated_at": r.generated_at.isoformat() if r.generated_at else None,
+                }
+            return by_layer
     except Exception as e:
         logger.error(f"[Async DB] Failed to get session reports: {e}", exc_info=True)
         return {}

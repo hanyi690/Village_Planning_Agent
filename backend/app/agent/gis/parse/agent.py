@@ -26,6 +26,7 @@ from app.modules.schema.contracts.parse_contracts import (
     ZoneTarget,
 )
 from app.modules.schema.contracts.semantic_fields import SemanticMetadata
+from app.modules.parsing.spatial_language import direction_from_location
 from app.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -71,26 +72,7 @@ _INSTRUCTION_TYPE_MAP = {
 _INSTRUCTION_LOCATION_HEADER_RE = re.compile(r"(位置|选址|所在位置|方位|位于)")
 _INSTRUCTION_NAME_HEADER_RE = re.compile(r"(名称|项目|工程)")
 
-# 方位词 → direction 枚举（center/north/south/east/west/northeast/northwest/southeast/southwest）
-_DIRECTION_RULES = (
-    ("东北", "northeast"), ("西北", "northwest"),
-    ("东南", "southeast"), ("西南", "southwest"),
-    ("东部", "east"), ("东侧", "east"), ("东边", "east"), ("东", "east"),
-    ("西部", "west"), ("西侧", "west"), ("西边", "west"), ("西", "west"),
-    ("北部", "north"), ("北侧", "north"), ("北边", "north"), ("北", "north"),
-    ("南部", "south"), ("南侧", "south"), ("南边", "south"), ("南", "south"),
-    ("中部", "center"), ("中心", "center"), ("中", "center"),
-)
-
-
-def _direction_from_location(location: str) -> str:
-    """位置文本 → 方位枚举（'村东北部与西南部' → northeast，取首个命中）。"""
-    if not location:
-        return ""
-    for keyword, direction in _DIRECTION_RULES:
-        if keyword in location:
-            return direction
-    return ""
+_direction_from_location = direction_from_location
 
 
 def _extract_instruction_section(text: str) -> str:
@@ -328,7 +310,7 @@ def parse(
     Returns:
         ParseResult with extracted intent.
     """
-    zone_targets = _extract_zone_targets(planning_text)
+    regex_zone_targets = _extract_zone_targets(planning_text)
     facilities = _extract_facilities(planning_text)
     axes = _extract_axes(planning_text)
     roads = _extract_roads(planning_text)
@@ -336,7 +318,8 @@ def parse(
     # P3: 结构化表格（单位级检测，见 app.modules.parsing.tables）
     from app.modules.parsing.tables import _extract_project_tables as _ept, _extract_zone_tables as _ezt
 
-    zone_targets += _ezt(planning_text)
+    table_zone_targets = _ezt(planning_text)
+    zone_targets = table_zone_targets or regex_zone_targets
     facilities += _ept(planning_text)
 
     # P8: INSTRUCTION 段（文末固定列表格，L1/L3 报告生成端产出）→ 结构化空间目标

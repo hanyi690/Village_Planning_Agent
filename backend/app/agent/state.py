@@ -193,6 +193,12 @@ class AgentState(TypedDict, total=False):
     pending_reports: Annotated[List[Dict[str, Any]], _replace_or_merge_lists]  # Buffer for batch DB writes
     layer_char_counts: Annotated[Dict[int, int], _merge_layer_char_counts]  # Cached char counts per layer
     gis_layout_configs: Annotated[List[Dict[str, Any]], _replace_or_merge_lists]  # GIS Agent输出的图层配置
+    gis_export_result: Dict[str, Any]
+    gis_render_result: List[Dict[str, Any]]
+    gis_render_artifact: Dict[str, Any]
+    gis_validation_result: Dict[str, Any]
+    gis_execution_errors: List[Dict[str, Any]]
+    gis_conflict_result: Dict[str, Any]
     user_uploaded_data: Annotated[Dict[str, Dict[str, Any]], _merge_dict_of_dicts]  # 用户上传的GIS数据
     # P0: L1/L2/L3 数据流闭环字段（详见 docs/superpowers/specs/2026-07-02-gis-review-exploration.md）
     _landuse_metrics: Annotated[Dict[str, float], _merge_dict_of_dicts]  # L1 注入的现状用地指标
@@ -326,6 +332,12 @@ def create_initial_state(
         "pending_reports": [],  # Buffer for batch DB writes
         "layer_char_counts": {},  # Cached char counts per layer
         "gis_layout_configs": [],  # GIS Agent输出的图层配置
+        "gis_export_result": {},
+        "gis_render_result": [],
+        "gis_render_artifact": {},
+        "gis_validation_result": {},
+        "gis_execution_errors": [],
+        "gis_conflict_result": {},
         "user_uploaded_data": {},  # 用户上传的GIS数据
         "_landuse_metrics": {},  # P0: L1 注入的现状用地指标
         "intent_targets": {},  # P0: L2 持久化的规划目标面积

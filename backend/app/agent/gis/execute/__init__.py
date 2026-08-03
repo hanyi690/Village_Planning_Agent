@@ -7,16 +7,15 @@ Sub-tasks (each a sub-directory under execute/):
   layout/   - zone allocation + function zone generation
   facility/ - facility point placement
   axis/     - development axis generation
-  road/     - planned road network (placeholder)
+  road/     - staged road planning with deterministic fallback
 
 Architecture:
   route_tasks -> layout -> facility -> axis -> road -> validate
   Worker-Evaluator retry loop on validation failure (max 3 rounds)
 
-Current status (P0): skeleton compiles, nodes are pass-through placeholders.
-Not yet wired into the top-level pipeline (layout_pipeline.py still runs the
-production allocate_and_generate + validate nodes). See agent.py docstring
-for the P0 -> P1 -> P2 migration path.
+Current status: all seven nodes are wired into the top-level GIS pipeline.
+Declared sub-task failures are collected in execution_errors and the
+validation gate blocks export and L4 writes.
 """
 
 from .state import ExecuteAgentState

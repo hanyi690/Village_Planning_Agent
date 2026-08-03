@@ -645,13 +645,13 @@ async def analyze_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
     except Exception as e:
         logger.warning(f"[analyze_dimension] {dim_key}: Immediate DB save failed (will retry in completion): {e}")
 
-    # P2: L1/L3 维度步骤 Report（供 positioning-trace 面板定位）
-    if dim_layer in (1, 3):
+    # P2: L1/L2/L3 维度步骤 Report（供 positioning-trace 面板定位）
+    if dim_layer in (1, 2, 3):
         try:
             from app.services.report_store import split_instruction
             from app.services.step_report import save_step_report
 
-            stage = "L1" if dim_layer == 1 else "L3"
+            stage = f"L{dim_layer}"
             _, instr = split_instruction(llm_response)
             await save_step_report(
                 state.get("session_id", ""), stage,
@@ -849,7 +849,7 @@ async def _generate_summary(dim_key: str, dim_layer: int, content: str, rag_log)
     """Generate structured JSON summary for a dimension report."""
     from ...modules.parsing.summary_generator import generate_structured_summary
     try:
-        return await generate_structured_summary(dim_key, dim_layer, content, rag_log)
+        return await generate_structured_summary(dim_key, dim_layer, content)
     except Exception as e:
         logger.warning(f"[analyze_dimension] {dim_key}: Summary generation failed: {e}")
         from ...modules.parsing.schemas import BaseDimensionSummary

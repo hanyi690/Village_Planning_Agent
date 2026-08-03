@@ -78,6 +78,7 @@ class ZoneTarget(BaseModel):
     raw_term: str = ""                           # 文档原词，留审计
     planning_zone: Optional[str] = None # PARSE 判断，非派生。LLM 决定此地块应属哪个规划分区
     area_ratio: float = 0.0
+    area_ha: Optional[float] = None
     dlbm: Optional[str] = None
     vne_code: Optional[str] = None               # e.g. "V11", "V21", "E1"
     spatial_preference: Optional[SpatialPreference] = None

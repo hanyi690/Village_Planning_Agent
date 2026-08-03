@@ -1,6 +1,6 @@
 """StepReport 服务 — 全链步骤 Report 落库与查询。
 
-每步执行（KG_PREBUILD / L1 / L3 / EXPLORE / PARSE / EXECUTE）产出一条
+每步执行（L1 / L2 / L3 / KG / EXPLORE / PARSE / EXECUTE / OUTPUT / RENDER）产出一条
 StepReport，记录输入摘要 / 输出摘要 / 产物引用 / 诊断指标，供
 positioning-trace 面板按 session + stage + dimension_key 下钻，
 定位"文本说 X 但几何算出 Y"的断点。
@@ -23,13 +23,25 @@ from app.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
-VALID_STAGES = {"KG_PREBUILD", "L1", "L3", "EXPLORE", "PARSE", "EXECUTE"}
+VALID_STAGES = {
+    "KG_PREBUILD",
+    "L1",
+    "L2",
+    "L3",
+    "KG",
+    "CONFLICT",
+    "EXPLORE",
+    "PARSE",
+    "EXECUTE",
+    "OUTPUT",
+    "RENDER",
+}
 
 
 class StepReport(BaseModel):
     """全链步骤 Report 契约。"""
 
-    stage: str                                     # KG_PREBUILD / L1 / L3 / EXPLORE / PARSE / EXECUTE
+    stage: str
     step_name: str = ""                            # "analyze_dimension:location"
     session_id: str = ""
     dimension_key: str = ""
@@ -168,11 +180,157 @@ async def build_positioning_trace(session_id: str) -> Dict[str, Any]:
         dk = r.get("dimension_key") or "__global__"
         by_dim.setdefault(dk, []).append(r)
     stages = list(dict.fromkeys(r.get("stage", "") for r in reports if r.get("stage")))
+    required_stages = [
+        "L1", "L2", "L3", "KG", "EXPLORE", "PARSE", "CONFLICT",
+        "EXECUTE", "OUTPUT", "RENDER",
+    ]
+    stage_coverage = {
+        stage: any(r.get("stage") == stage for r in reports)
+        for stage in required_stages
+    }
     return {
         "session_id": session_id,
         "stages": stages,
+        "stage_coverage": stage_coverage,
+        "complete": all(stage_coverage.values()),
         "by_dimension": by_dim,
         "reports": reports,
+    }
+
+
+async def build_backend_run_report(session_id: str) -> Dict[str, Any]:
+    """Build an auditable feasibility report for one backend planning run."""
+    from app.services.report_store import ReportStore
+
+    trace = await build_positioning_trace(session_id)
+    store = ReportStore.get_instance()
+    layers: Dict[str, Any] = {}
+    issues: List[Dict[str, Any]] = []
+
+    for layer in (1, 2, 3):
+        reports = await store.get_layer_reports_with_sources(session_id, layer)
+        dimensions = sorted(reports)
+        char_count = sum(len((item or {}).get("content", "")) for item in reports.values())
+        source_count = sum(
+            len((item or {}).get("knowledge_sources", []) or [])
+            for item in reports.values()
+        )
+        layers[f"L{layer}"] = {
+            "report_count": len(reports),
+            "dimensions": dimensions,
+            "char_count": char_count,
+            "knowledge_source_count": source_count,
+            "available": bool(reports) and char_count > 0,
+        }
+        if not reports or char_count <= 0:
+            issues.append({
+                "code": f"missing_l{layer}_reports",
+                "message": f"No L{layer} reports were persisted.",
+            })
+
+    latest_by_stage: Dict[str, Dict[str, Any]] = {}
+    for report in trace["reports"]:
+        latest_by_stage[report.get("stage", "")] = report
+
+    execute = latest_by_stage.get("EXECUTE", {})
+    output = latest_by_stage.get("OUTPUT", {})
+    render = latest_by_stage.get("RENDER", {})
+    validation_passed = bool(
+        (execute.get("diagnostics") or {}).get("validation_passed", False)
+    )
+    output_status = (output.get("outputs") or {}).get("status", "")
+    render_layer_count = int(
+        (render.get("outputs") or {}).get("render_layers", 0) or 0
+    )
+    preview_status = (render.get("outputs") or {}).get("preview_status", "")
+
+    for stage, present in trace["stage_coverage"].items():
+        if not present:
+            issues.append({
+                "code": f"missing_stage_{stage.lower()}",
+                "message": f"No interaction report was recorded for {stage}.",
+            })
+    if not validation_passed:
+        issues.append({
+            "code": "validation_not_passed",
+            "message": "GIS validation did not pass.",
+        })
+    if output_status != "completed":
+        issues.append({
+            "code": "output_not_completed",
+            "message": f"Output package status is '{output_status or 'missing'}'.",
+        })
+    if render_layer_count <= 0:
+        issues.append({
+            "code": "render_empty",
+            "message": "No renderable map layers were produced.",
+        })
+    if preview_status != "completed":
+        issues.append({
+            "code": "preview_not_completed",
+            "message": f"Static preview status is '{preview_status or 'missing'}'.",
+        })
+
+    kg_steps = [
+        {
+            "step_name": report.get("step_name", ""),
+            "inputs": report.get("inputs") or {},
+            "outputs": report.get("outputs") or {},
+            "diagnostics": report.get("diagnostics") or {},
+        }
+        for report in trace["reports"]
+        if report.get("stage") == "KG"
+    ]
+    kg_build = next(
+        (
+            step
+            for step in kg_steps
+            if step.get("step_name") == "build_static_layers"
+        ),
+        {},
+    )
+    if int((kg_build.get("outputs") or {}).get("triple_count", 0) or 0) <= 0:
+        issues.append({
+            "code": "kg_empty",
+            "message": "The static knowledge graph has no triples.",
+        })
+    providers = list((kg_build.get("inputs") or {}).get("provider_sources", []) or [])
+    has_upload = any(str(source).startswith("upload:") for source in providers)
+    has_demo = any("jintian" in str(source).lower() for source in providers)
+    if not providers:
+        issues.append({
+            "code": "gis_sources_missing",
+            "message": "No GIS provider sources were recorded.",
+        })
+    if has_upload and has_demo:
+        issues.append({
+            "code": "mixed_demo_sources",
+            "message": "Session GIS uploads were mixed with Jintian demo sources.",
+        })
+    return {
+        "session_id": session_id,
+        "feasible": not issues,
+        "layers": layers,
+        "interaction_trace": {
+            "complete": trace["complete"],
+            "stage_coverage": trace["stage_coverage"],
+            "report_count": len(trace["reports"]),
+        },
+        "kg": {
+            "steps": kg_steps,
+        },
+        "execution": {
+            "validation_passed": validation_passed,
+            "diagnostics": execute.get("diagnostics") or {},
+        },
+        "output": output.get("outputs") or {},
+        "render": render.get("outputs") or {},
+        "artifacts": [
+            artifact
+            for report in trace["reports"]
+            for artifact in (report.get("artifacts") or [])
+        ],
+        "issues": issues,
     }
 
 
@@ -182,4 +340,5 @@ __all__ = [
     "save_step_report",
     "get_session_step_reports",
     "build_positioning_trace",
+    "build_backend_run_report",
 ]

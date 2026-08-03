@@ -13,6 +13,7 @@
 
 from typing import Dict, Any, List, Literal, Optional
 from langgraph.graph import StateGraph, END, START
+from langgraph.errors import NodeError
 from langgraph.types import Command
 from langchain_core.messages import AIMessage
 
@@ -35,12 +36,12 @@ except ImportError:
     _HAS_RETRY_POLICY = False
 
 
-def _gis_error_handler(state: Dict[str, Any], error: Exception) -> Command:
+def _gis_error_handler(state: Dict[str, Any], error: NodeError) -> Command:
     """GIS Agent error handler — return error message to conversation instead of crashing."""
-    logger.error("[gis_agent] Node failed: %s", error)
+    logger.error("[gis_agent] Node %s failed: %s", error.node, error.error)
     return Command(
-        update={"messages": [AIMessage(content=f"GIS 分析出错: {error}")]},
-        goto="conversation",
+        update={"messages": [AIMessage(content=f"GIS 分析出错: {error.error}")]},
+        goto=END,
     )
 
 
@@ -64,38 +65,34 @@ async def gis_agent_node(state: Dict[str, Any]) -> Dict[str, Any]:
             generates spatial layout with guaranteed step ordering and validation retry.
     """
     from .gis.layout_pipeline import build_layout_pipeline
-    from app.modules.data.catalog.catalog import DataCatalog
+    from app.services.session_bundle import build_session_bundle
 
     session_id = state.get("session_id", "")
     village_name = state.get("config", {}).get("village_name", "")
 
     # ── Load GIS data via DataCatalog (schema-driven, single path) ──
-    catalog = DataCatalog()
-    gis_bundle = catalog.load_village_bundle(village_name)
-    gis_data = gis_bundle.to_geojson_dict()
-
-    # Merge user uploads
+    gis_bundle = await build_session_bundle(session_id, village_name)
     user_uploaded = state.get("user_uploaded_data", {})
-    if user_uploaded:
-        _merge_user_uploads_into_bundle(gis_bundle, user_uploaded)
-        gis_data.update(user_uploaded)
+    has_uploaded_sources = any(
+        source.startswith("upload:")
+        for source in gis_bundle.metadata.provider_sources
+    )
+    if user_uploaded and not has_uploaded_sources:
+        from app.modules.data.catalog.catalog import _merge_geojson_into_bundle
+        from app.modules.schema.types.canonical import VillageBundle
 
-    # Preload uploaded GIS data from DB if context has none
-    if not user_uploaded and session_id:
-        try:
-            from app.database.operations import get_uploaded_files_by_session_async
-            uploads = await get_uploaded_files_by_session_async(
-                session_id=session_id, file_category="gis_data",
-            )
-            for item in uploads:
-                dtype = item.get("gis_data_type") or "unknown"
-                geojson = item.get("gis_data")
-                if geojson and geojson.get("features"):
-                    gis_data[f"{dtype}_geojson"] = geojson
-            if uploads:
-                logger.info("[gis_agent_node] Preloaded %d uploaded files from DB", len(uploads))
-        except Exception as e:
-            logger.warning("[gis_agent_node] DB preload failed: %s", e)
+        metadata = gis_bundle.metadata.model_copy(
+            update={"provider_sources": []},
+            deep=True,
+        )
+        gis_bundle = VillageBundle(
+            village_name=village_name,
+            metadata=metadata,
+        )
+
+        for layer_key, geojson in user_uploaded.items():
+            _merge_geojson_into_bundle(gis_bundle, layer_key, geojson)
+    gis_data = gis_bundle.to_geojson_dict()
 
     reports, summaries = await _get_reports_and_summaries(state)
 
@@ -130,6 +127,7 @@ async def gis_agent_node(state: Dict[str, Any]) -> Dict[str, Any]:
         "intent_json": {},
         "explore_instructions": explore_instructions,
         "report_summary_index": report_summary_index,
+        "dimension_summaries": summaries,
         "kg_turtle": "",
         "kg_constraints": [],
         "layout_configs": [],
@@ -139,6 +137,9 @@ async def gis_agent_node(state: Dict[str, Any]) -> Dict[str, Any]:
         "validation_round": 0,
         "export_result": {},
         "render_result": [],
+        "render_artifact": {},
+        "execution_errors": [],
+        "conflict_result": {},
         "messages": [],
     })
 
@@ -148,7 +149,10 @@ async def gis_agent_node(state: Dict[str, Any]) -> Dict[str, Any]:
     if layout_configs and session_id:
         try:
             from app.utils.sse_publisher import SSEPublisher
-            layer_types = [c.get("layerType", "unknown") for c in layout_configs]
+            layer_types = [
+                c.get("layerType") or c.get("layer_type") or "unknown"
+                for c in layout_configs
+            ]
             SSEPublisher.send_gis_result(
                 session_id=session_id,
                 dimension_key="spatial_layout",
@@ -163,6 +167,12 @@ async def gis_agent_node(state: Dict[str, Any]) -> Dict[str, Any]:
     return {
         "messages": [AIMessage(content=_format_gis_result(layout_result, layout_configs))],
         "gis_layout_configs": layout_configs,
+        "gis_export_result": layout_result.get("export_result", {}),
+        "gis_render_result": layout_result.get("render_result", []),
+        "gis_render_artifact": layout_result.get("render_artifact", {}),
+        "gis_validation_result": layout_result.get("validation_result", {}),
+        "gis_execution_errors": layout_result.get("execution_errors", []),
+        "gis_conflict_result": layout_result.get("conflict_result", {}),
     }
 
 
@@ -206,26 +216,35 @@ __all__ = [
 async def _get_reports_and_summaries(
     state: Dict[str, Any],
 ) -> tuple[Dict[str, Dict[str, Any]], Dict[str, Dict[str, Any]]]:
-    """从 DB 加载 L3 summaries，返回 (reports, summaries)。
+    """从 DB 加载 L3 GIS 输入报告和 L1/L2/L3 冲突检测摘要。
 
     reports: 嵌套格式 {dk: {"summary": {"metrics": ...}, "content": ...}}
     summaries: 扁平格式 {dk: {dimension_key, layer, metrics, key_points, text_summary}}
     """
     session_id = state.get("session_id", "")
     flat_summaries: Dict[str, Dict[str, Any]] = {}
+    l3_summaries: Dict[str, Dict[str, Any]] = {}
 
     if session_id:
         try:
             from app.services.report_store import ReportStore
-            flat_summaries = await ReportStore().get_layer_summaries(session_id, layer=3) or {}
+            store = ReportStore()
+            for layer in (1, 2, 3):
+                layer_summaries = await store.get_layer_summaries(
+                    session_id,
+                    layer=layer,
+                ) or {}
+                flat_summaries.update(layer_summaries)
+                if layer == 3:
+                    l3_summaries = layer_summaries
         except Exception:
             pass
 
-    if not flat_summaries:
+    if not l3_summaries:
         return _get_reports_fallback(state), {}
 
     reports = {}
-    for dk, parsed in flat_summaries.items():
+    for dk, parsed in l3_summaries.items():
         reports[dk] = {
             "summary": {
                 "metrics": parsed.get("metrics", {}),
@@ -249,40 +268,15 @@ def _get_reports_fallback(state: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
 
 def _format_gis_result(result: Dict[str, Any], layout_configs: List[Dict[str, Any]]) -> str:
     """格式化 GIS Agent 结果为对话消息"""
-    layer_types = [c.get("layerType", "unknown") for c in layout_configs]
+    validation = result.get("validation_result", {}) or {}
+    if not validation.get("passed", False):
+        reasons = result.get("execution_errors", []) or validation.get("violations", [])
+        return (
+            f"GIS 布局生成失败：校验未通过，正式成果未导出。"
+            f"已生成 {len(layout_configs)} 个诊断图层；原因：{reasons}"
+        )
+    layer_types = [
+        c.get("layerType") or c.get("layer_type") or "unknown"
+        for c in layout_configs
+    ]
     return f"GIS 布局生成完成：{len(layout_configs)} 个图层 ({', '.join(layer_types)})"
-
-
-def _merge_user_uploads_into_bundle(
-    bundle: Any, user_uploaded: Dict[str, Any]
-) -> None:
-    """Merge user-uploaded GeoJSON data into a VillageBundle.
-
-    User uploads are raw GeoJSON dicts keyed by data type.
-    Features are routed to the appropriate morphology group based on geometry type.
-    """
-    from app.modules.schema.types.base import PointFeature, LineFeature, PolygonFeature
-
-    for key, val in user_uploaded.items():
-        if not isinstance(val, dict) or val.get("type") != "FeatureCollection":
-            continue
-        features = val.get("features", [])
-        if not features:
-            continue
-
-        for f in features:
-            geom = f.get("geometry", {})
-            props = f.get("properties", {})
-
-            if "boundary" in key:
-                feat = PolygonFeature(geometry=geom, _raw=props)
-                bundle.add(feat)
-            elif "road" in key:
-                feat = LineFeature(geometry=geom, _raw=props)
-                bundle.add(feat)
-            elif "annotation" in key:
-                feat = PointFeature(geometry=geom, _raw=props)
-                bundle.add(feat)
-            elif "water" in key:
-                feat = PolygonFeature(geometry=geom, _raw=props)
-                bundle.add(feat)

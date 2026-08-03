@@ -59,7 +59,10 @@ def build_intent_layer(kg, intent: Any) -> None:
         kg.g.add((z_uri, RDF.type, EntityTypes.ZoneTarget))
         kg.g.add((z_uri, PLN.target_id, Literal(target_id)))
         kg.g.add((z_uri, PLN.land_use_code, Literal(zt.land_use)))
-        kg.g.add((z_uri, PLN.target_area_ha, Literal(zt.area_ratio, datatype=XSD.double)))
+        if zt.area_ha is not None:
+            kg.g.add((z_uri, PLN.target_area_ha, Literal(zt.area_ha, datatype=XSD.double)))
+        if zt.area_ratio > 0:
+            kg.g.add((z_uri, PLN.target_area_ratio, Literal(zt.area_ratio, datatype=XSD.double)))
         if zt.planning_zone:
             kg.g.add((z_uri, PLN.planning_zone, Literal(zt.planning_zone)))
         if zt.dlbm:
@@ -83,7 +86,10 @@ def build_intent_layer(kg, intent: Any) -> None:
         if desc:
             kg.g.add((z_uri, PLN.description, Literal(desc)))
         # Semantic memory annotation
-        mem_desc = f"规划目标: 将 {zt.area_ratio*100:.0f}% 的土地用于 {zt.land_use}"
+        if zt.area_ha is not None:
+            mem_desc = f"规划目标: 将 {zt.area_ha:.2f} 公顷土地用于 {zt.land_use}"
+        else:
+            mem_desc = f"规划目标: 将 {zt.area_ratio*100:.0f}% 的土地用于 {zt.land_use}"
         if zt.dlbm:
             mem_desc += f" (地类编码: {zt.dlbm})"
         kg.memory.add_entity_annotation(EntityAnnotation(

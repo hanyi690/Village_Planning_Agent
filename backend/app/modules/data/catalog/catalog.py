@@ -41,42 +41,49 @@ def _merge_geojson_into_bundle(
 ) -> int:
     """Merge a user-uploaded GeoJSON FeatureCollection into a VillageBundle.
 
-    Features are routed into the bundle's point/line/polygon groups by geometry
-    type and stored under ``upload_{layer_key}``. Original properties are kept
-    as ``_raw`` on each feature so nothing is lost on snapshot.
+    Features are validated through the registry adapter for ``layer_key`` and
+    routed to its canonical bundle target (for example ``landuse_current``).
     """
-    from app.modules.schema.types.base import LineFeature, PointFeature, PolygonFeature
-
     features = geojson.get("features", [])
     if not features:
         return 0
 
-    target_key = f"upload_{layer_key}"
-    merged = 0
-    for f in features:
-        geometry = f.get("geometry") or {}
-        props = f.get("properties") or {}
-        geom_type = geometry.get("type", "")
-        bsm = props.get("BSM") or props.get("bsm") or ""
-        try:
-            if geom_type in ("Point", "MultiPoint"):
-                feat = PointFeature(geometry=geometry, bsm=bsm, layer_type=target_key, _raw=props)
-                bundle.points._layers.setdefault(target_key, []).append(feat)
-            elif geom_type in ("LineString", "MultiLineString"):
-                feat = LineFeature(geometry=geometry, bsm=bsm, layer_type=target_key, _raw=props)
-                bundle.lines._layers.setdefault(target_key, []).append(feat)
-            else:
-                feat = PolygonFeature(geometry=geometry, bsm=bsm, layer_type=target_key, _raw=props)
-                bundle.polygons._layers.setdefault(target_key, []).append(feat)
-        except Exception as e:
-            logger.debug("[DataCatalog] Skipping uploaded feature in %s: %s", target_key, e)
-            continue
-        merged += 1
+    aliases = {
+        "road": "current_road",
+        "residential": "current_building",
+    }
+    gis_type_ref = aliases.get(layer_key, layer_key)
+
+    from app.modules.data.adapters import ADAPTERS
+    from app.modules.schema.types.layer_registry import GIS_LAYER_REGISTRY
+
+    entry = GIS_LAYER_REGISTRY.get(gis_type_ref)
+    if entry is None or entry.ingest is None:
+        logger.warning("[DataCatalog] Unknown uploaded GIS layer type: %s", layer_key)
+        return 0
+    adapter = ADAPTERS.get(entry.ingest.adapter)
+    if adapter is None:
+        logger.warning(
+            "[DataCatalog] No adapter '%s' for uploaded layer %s",
+            entry.ingest.adapter,
+            gis_type_ref,
+        )
+        return 0
+
+    result = adapter.load(geojson, entry)
+    for feature in result.features:
+        bundle.add(feature)
+    merged = len(result.features)
+    if result.warnings:
+        bundle.metadata.crs_warnings.extend(result.warnings[:5])
 
     if merged:
+        source_name = f"upload:{gis_type_ref}"
+        if source_name not in bundle.metadata.provider_sources:
+            bundle.metadata.provider_sources.append(source_name)
         logger.info(
-            "[DataCatalog] Merged %d uploaded features into bundle (key=%s)",
-            merged, target_key,
+            "[DataCatalog] Merged %d uploaded features into bundle (type=%s)",
+            merged, gis_type_ref,
         )
     return merged
 
@@ -384,7 +391,10 @@ class DataCatalog:
 
         # Step 1: Load boundary first (no bbox needed for file_vector)
         bbox = None
-        bundle = VillageBundle(village_name=village_name)
+        bundle = VillageBundle(
+            village_name=village_name,
+            metadata=VillageMetadata(village_name=village_name),
+        )
 
         boundary_result = self._load_boundary(village_name)
         if boundary_result and boundary_result.success:
@@ -768,15 +778,66 @@ class DataCatalog:
 
         Returns a session-scoped ``VillageBundle``.
         """
-        bundle = self.load_village_bundle(village_name, layer_types=layer_types)
+        uploaded_gis = []
         if session_id:
-            await self._populate_session_context(bundle, session_id)
+            try:
+                from app.database.operations import get_uploaded_files_by_session_async
+
+                uploaded = await get_uploaded_files_by_session_async(session_id)
+                uploaded_gis = [
+                    item for item in uploaded
+                    if isinstance(item.get("gis_data"), dict)
+                ]
+            except Exception as e:
+                logger.warning(
+                    "[DataCatalog] Uploaded GIS probe failed for %s: %s",
+                    session_id,
+                    e,
+                )
+
+        has_session_gis = any(
+            isinstance(item.get("gis_data"), dict)
+            and item["gis_data"].get("type") == "FeatureCollection"
+            and item["gis_data"].get("features")
+            for item in uploaded_gis
+        )
+        demo_village = str(village_name or "").strip().lower() in {
+            "金田",
+            "金田村",
+            "jintian",
+        }
+        if has_session_gis or (session_id and not demo_village):
+            bundle = VillageBundle(
+                village_name=village_name,
+                metadata=VillageMetadata(village_name=village_name),
+            )
+            if has_session_gis:
+                logger.info(
+                    "[DataCatalog] Using session GIS uploads only for %s; "
+                    "configured demo sources are excluded",
+                    session_id,
+                )
+            else:
+                logger.warning(
+                    "[DataCatalog] No session GIS uploads for %s; returning an "
+                    "empty bundle instead of loading demo-village sources",
+                    session_id,
+                )
+        else:
+            bundle = self.load_village_bundle(village_name, layer_types=layer_types)
+        if session_id:
+            await self._populate_session_context(
+                bundle,
+                session_id,
+                uploaded_gis=uploaded_gis,
+            )
         return bundle
 
     async def _populate_session_context(
         self,
         bundle: VillageBundle,
         session_id: str,
+        uploaded_gis: Optional[List[Dict[str, Any]]] = None,
     ) -> None:
         """Fill session-level context onto a VillageBundle (async DB reads)."""
         from datetime import datetime
@@ -823,13 +884,14 @@ class DataCatalog:
 
         # Merge uploaded GIS data (spatial) into the bundle groups so the
         # snapshot carries user uploads as features, not just parsed text.
-        try:
-            uploaded_gis = await get_uploaded_files_by_session_async(
-                session_id, file_category="gis_data",
-            )
-        except Exception as e:
-            logger.warning("[DataCatalog] Uploaded GIS load failed for %s: %s", session_id, e)
-            uploaded_gis = []
+        if uploaded_gis is None:
+            try:
+                uploaded_gis = await get_uploaded_files_by_session_async(
+                    session_id, file_category="gis_data",
+                )
+            except Exception as e:
+                logger.warning("[DataCatalog] Uploaded GIS load failed for %s: %s", session_id, e)
+                uploaded_gis = []
         for item in uploaded_gis:
             geojson = item.get("gis_data") or {}
             if not isinstance(geojson, dict) or geojson.get("type") != "FeatureCollection":
