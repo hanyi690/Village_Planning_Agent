@@ -80,6 +80,26 @@ def format_bound_spatial_intent(
             reasoning_trace=f"binder={props.get('binding_status')}; source_instruction_ids={props.get('source_instruction_ids')}",
         )
         if domain == "road":
+            existing = next(
+                (
+                    item for item in existing_roads
+                    if item.source_instruction_id == instruction_id
+                ),
+                None,
+            )
+            if existing is not None:
+                existing.path_bsms = list(dict.fromkeys([
+                    *existing.path_bsms,
+                    *(bsms if confirmed else []),
+                ]))
+                existing.candidate_bsms = list(dict.fromkeys([
+                    *existing.candidate_bsms,
+                    *([] if confirmed else bsms),
+                ]))
+                existing.source_report_key = (
+                    existing.source_report_key or source_report_key
+                )
+                continue
             # Explicitly no coordinates: only confirmed BSM becomes path input.
             existing_roads.append(RoadTarget(
                 road_level="village_road",
@@ -92,6 +112,22 @@ def format_bound_spatial_intent(
                 semantic=semantic,
             ))
         elif domain == "facility":
+            existing = next(
+                (
+                    item for item in intent.facilities
+                    if item.source_instruction_id == instruction_id
+                ),
+                None,
+            )
+            if existing is not None:
+                existing.candidate_bsms = list(dict.fromkeys([
+                    *existing.candidate_bsms,
+                    *bsms,
+                ]))
+                existing.source_report_key = (
+                    existing.source_report_key or source_report_key
+                )
+                continue
             intent.facilities.append(FacilityTarget(
                 type=str(props.get("name") or "planned_facility"),
                 status="planned_new",
@@ -112,8 +148,26 @@ def format_bound_spatial_intent(
                 semantic=semantic,
             ))
         elif domain in {"landuse", "zone"}:
+            zone_name = str(props.get("planning_zone") or props.get("name") or "")
+            existing = next(
+                (
+                    item for item in intent.zone_targets
+                    if item.source_instruction_id == instruction_id
+                    or (zone_name and item.land_use == zone_name)
+                ),
+                None,
+            )
+            if existing is not None:
+                existing.candidate_bsms = list(dict.fromkeys([
+                    *existing.candidate_bsms,
+                    *bsms,
+                ]))
+                existing.source_report_key = (
+                    existing.source_report_key or source_report_key
+                )
+                continue
             target = ZoneTarget(
-                land_use=str(props.get("planning_zone") or props.get("name") or ""),
+                land_use=zone_name,
                 candidate_bsms=bsms,
                 source_instruction_id=instruction_id,
                 source_report_key=source_report_key,
@@ -126,16 +180,33 @@ def format_bound_spatial_intent(
         elif domain == "project":
             name = str(props.get("name") or props.get("entity_id") or "").strip()
             project_id = str(props.get("entity_id") or instruction_id or name)
-            intent.project_targets.append(ProjectTarget(
-                project_id=project_id,
-                name=name,
-                category=_project_category(name, evidence),
-                location_hint=evidence,
-                candidate_bsms=bsms,
-                source_instruction_id=instruction_id,
-                source_report_key=source_report_key,
-                semantic=semantic,
-            ))
+            existing_project = next(
+                (
+                    item for item in intent.project_targets
+                    if item.source_instruction_id == instruction_id
+                ),
+                None,
+            )
+            if existing_project is not None:
+                existing_project.candidate_bsms = list(dict.fromkeys([
+                    *existing_project.candidate_bsms,
+                    *bsms,
+                ]))
+                existing_project.source_report_key = (
+                    existing_project.source_report_key or source_report_key
+                )
+                name = existing_project.name
+            else:
+                intent.project_targets.append(ProjectTarget(
+                    project_id=project_id,
+                    name=name,
+                    category=_project_category(name, evidence),
+                    location_hint=evidence,
+                    candidate_bsms=bsms,
+                    source_instruction_id=instruction_id,
+                    source_report_key=source_report_key,
+                    semantic=semantic,
+                ))
             # Project-driven custom zoning remains an optional derived target.
             category_code = _match_category_code(name, vocabulary_name)
             if category_code:
@@ -154,7 +225,19 @@ def format_bound_spatial_intent(
     if vocabulary_name and intent.zone_targets:
         for zt in intent.zone_targets:
             code = _match_category_code(str(zt.land_use or ""), vocabulary_name)
-            if code and not any(c.category_code == code for c in intent.custom_zone_targets):
+            existing = next(
+                (
+                    item for item in intent.custom_zone_targets
+                    if item.category_code == code
+                ),
+                None,
+            )
+            if code and existing is not None:
+                existing.target_bsms = list(dict.fromkeys([
+                    *existing.target_bsms,
+                    *zt.candidate_bsms,
+                ]))
+            elif code:
                 area_ha = None
                 hint = getattr(zt.semantic, "spatial_hint", "") if zt.semantic else ""
                 if hint.startswith("AREA:"):
@@ -165,7 +248,7 @@ def format_bound_spatial_intent(
                 intent.custom_zone_targets.append(CustomZoneTarget(
                     vocabulary_name=vocabulary_name,
                     category_code=code,
-                    target_bsms=[],
+                    target_bsms=list(zt.candidate_bsms),
                     area_target_ha=area_ha,
                     decided_by="rule",
                     confidence=0.7,

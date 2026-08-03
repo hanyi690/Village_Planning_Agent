@@ -60,6 +60,53 @@ def test_format_project_domain_to_custom_zone_target():
     assert any(zt.land_use == "农田保护区" and abs(zt.area_ratio - 0.0335) < 1e-6 for zt in intent.zone_targets)
 
 
+def test_format_dedupes_zone_targets_by_land_use():
+    """同 land_use 的 zone 域实体应合并候选 BSM，不产生重复 ZoneTarget（KG URI 冲突根因）。"""
+    from app.agent.gis.parse.state import SpatialPlanningIntent
+    from app.modules.schema.contracts.parse_contracts import ZoneTarget
+
+    fallback = SpatialPlanningIntent(
+        zone_targets=[
+            ZoneTarget(land_use="生态保护区", source_instruction_id=""),
+        ]
+    )
+    bound = {
+        "type": "FeatureCollection",
+        "features": [
+            {
+                "type": "Feature",
+                "properties": {
+                    "domain": "zone",
+                    "planning_zone": "生态保护区",
+                    "evidence_text": "生态保护区 330 公顷",
+                    "source_bsm_list": ["44142611020200000563"],
+                    "binding_status": "candidate",
+                },
+            },
+            {
+                "type": "Feature",
+                "properties": {
+                    "domain": "zone",
+                    "planning_zone": "农田保护区",
+                    "evidence_text": "农田保护区 85 公顷",
+                    "source_bsm_list": [],
+                    "binding_status": "unresolved",
+                },
+            },
+        ],
+    }
+    intent = format_bound_spatial_intent(
+        village_name="金田村",
+        bound_entities=bound,
+        fallback_intent=fallback,
+    )
+    names = [zt.land_use for zt in intent.zone_targets]
+    assert len(names) == len(set(names)), f"duplicate zone land_use: {names}"
+    assert names.count("生态保护区") == 1
+    eco = next(zt for zt in intent.zone_targets if zt.land_use == "生态保护区")
+    assert "44142611020200000563" in eco.candidate_bsms
+
+
 def test_custom_zoning_generator_selects_by_rules_without_bsm():
     from shapely.geometry import box
 
