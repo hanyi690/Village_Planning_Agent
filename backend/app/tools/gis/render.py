@@ -24,32 +24,23 @@ from app.utils.sse_events import GISLayerConfig
 from app.tools.helpers import make_result, to_tool_message
 
 
-@tool
-def render_map(
-    layout_configs: Annotated[Optional[List[Dict[str, Any]]], InjectedState("layout_configs")],
-    gis_data: Annotated[Dict[str, Optional[Dict[str, Any]]], InjectedState("gis_data")],
-    tool_call_id: Annotated[str, InjectedToolCallId] = "",
-) -> Command:
-    """Render layout layers to GISLayerConfig format for frontend MapLibre display.
-
-    Converts internal GeoJSON layers to the frontend GISLayerConfig spec
-    with proper layer_type, colors, and styling. Data auto-injected from state.
-    """
+def build_map_layers(
+    layout_configs: Optional[List[Dict[str, Any]]],
+    gis_data: Dict[str, Optional[Dict[str, Any]]],
+) -> List[Dict[str, Any]]:
+    """Build frontend MapLibre layers without LangChain tool wrapping."""
     layers: List[Dict[str, Any]] = []
 
-    # Parse layout configs into GISLayerConfig format
-    if layout_configs:
-        for cfg in layout_configs:
-            if isinstance(cfg, dict) and cfg.get("data"):
-                layers.append({
-                    "geojson": cfg["data"],
-                    "layer_type": cfg.get("layerType", "function_zone"),
-                    "layer_name": cfg.get("layerType", "layer"),
-                    "color": cfg.get("color"),
-                    "style": cfg.get("style"),
-                })
+    for cfg in layout_configs or []:
+        if isinstance(cfg, dict) and cfg.get("data"):
+            layers.append({
+                "geojson": cfg["data"],
+                "layer_type": cfg.get("layerType", "function_zone"),
+                "layer_name": cfg.get("layer_name") or cfg.get("layerType", "layer"),
+                "color": cfg.get("color"),
+                "style": cfg.get("style"),
+            })
 
-    # Add base layers from GIS data
     if gis_data.get("boundary_geojson"):
         layers.append({
             "geojson": gis_data["boundary_geojson"],
@@ -66,8 +57,24 @@ def render_map(
             "color": None,
         })
 
+    return [GISLayerConfig(**layer).model_dump(by_alias=True) for layer in layers]
+
+
+@tool
+def render_map(
+    layout_configs: Annotated[Optional[List[Dict[str, Any]]], InjectedState("layout_configs")],
+    gis_data: Annotated[Dict[str, Optional[Dict[str, Any]]], InjectedState("gis_data")],
+    tool_call_id: Annotated[str, InjectedToolCallId] = "",
+) -> Command:
+    """Render layout layers to GISLayerConfig format for frontend MapLibre display.
+
+    Converts internal GeoJSON layers to the frontend GISLayerConfig spec
+    with proper layer_type, colors, and styling. Data auto-injected from state.
+    """
+    layers = build_map_layers(layout_configs, gis_data)
+
     result = make_result(True, data={
-        "layers": [GISLayerConfig(**l).model_dump(by_alias=True) for l in layers],
+        "layers": layers,
         "layer_count": len(layers),
     })
 

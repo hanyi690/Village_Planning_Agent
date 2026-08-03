@@ -459,7 +459,12 @@ async def _validate_node(state: ExecuteAgentState) -> dict:
     if not state.layout_configs:
         return {
             "validation_round": state.validation_round + 1,
-            "validation_result": {"passed": True, "violations": [], "reason": "no layout"},
+            "validation_result": {
+                "passed": False,
+                "status": "fail",
+                "violations": [{"check": "layout_presence", "message": "No layout layers were produced"}],
+                "reason": "no_layout",
+            },
         }
 
     try:
@@ -500,7 +505,12 @@ async def _validate_node(state: ExecuteAgentState) -> dict:
         logger.error("[EXECUTE:validate] failed: %s", e, exc_info=True)
         return {
             "validation_round": state.validation_round + 1,
-            "validation_result": {"passed": True, "violations": [], "error": str(e)},
+            "validation_result": {
+                "passed": False,
+                "status": "error",
+                "violations": [{"check": "validator_runtime", "message": str(e)}],
+                "error": str(e),
+            },
         }
 
 
@@ -514,7 +524,7 @@ def _route_after_validate(state: ExecuteAgentState) -> Literal["pass", "retry"]:
         return "pass"
     if state.validation_round >= 3:
         logger.warning(
-            "[EXECUTE] validation exceeded %d rounds - using best result",
+            "[EXECUTE] validation exceeded %d rounds - returning failed terminal result",
             state.validation_round,
         )
         return "pass"
@@ -529,6 +539,10 @@ async def _write_l4_node(state: ExecuteAgentState) -> dict:
 
     Called after execute completes to persist the planned layout back to KG.
     """
+    if not (state.validation_result or {}).get("passed", False):
+        logger.error("[EXECUTE:l4_write] Skipped because validation did not pass")
+        return {}
+
     from rdflib import Literal, RDF
     from app.modules.kg.memory import EntityAnnotation
 

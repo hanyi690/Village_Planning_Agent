@@ -7,6 +7,8 @@ from __future__ import annotations
 
 import json
 import os
+import re
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Annotated
 
@@ -21,6 +23,11 @@ logger = get_logger(__name__)
 
 
 from app.tools.helpers import make_result, to_tool_message
+
+
+def _safe_run_key(value: str) -> str:
+    key = re.sub(r"[^0-9A-Za-z_.\-\u4e00-\u9fff]+", "_", value.strip())
+    return key.strip("._") or "unnamed"
 
 
 def _normalize_fields(geojson: Dict, layer_key: str) -> Dict:
@@ -41,16 +48,16 @@ def _normalize_fields(geojson: Dict, layer_key: str) -> Dict:
     return geojson
 
 
-@tool
-def export_gdb(
-    layout_configs: Annotated[Optional[List[Dict[str, Any]]], InjectedState("layout_configs")],
-    allocated_geojson: Annotated[Optional[Dict[str, Any]], InjectedState("allocated_geojson")],
-    gis_data: Annotated[Dict[str, Optional[Dict[str, Any]]], InjectedState("gis_data")],
-    village_name: Annotated[str, InjectedState("village_name")],
-    tool_call_id: Annotated[str, InjectedToolCallId] = "",
+def export_gdb_package(
+    layout_configs: Optional[List[Dict[str, Any]]],
+    allocated_geojson: Optional[Dict[str, Any]],
+    gis_data: Dict[str, Optional[Dict[str, Any]]],
+    village_name: str,
     output_dir: Optional[str] = None,
-) -> Command:
-    """Export complete 12-layer GeoJSON package matching GDB standard.
+    session_id: str = "",
+    validation_result: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """Export a complete GeoJSON package without LangChain tool wrapping.
 
     Layers:
       current/ — boundary, landuse, road, annotation
@@ -59,7 +66,9 @@ def export_gdb(
       tables/ — land_balance.json
     """
     if not output_dir:
-        base = Path(__file__).resolve().parents[6] / "output" / village_name
+        project_root = Path(__file__).resolve().parents[4]
+        run_key = _safe_run_key(session_id or village_name)
+        base = project_root / "output" / "gis" / run_key
         output_dir = str(base)
 
     os.makedirs(output_dir, exist_ok=True)
@@ -71,7 +80,7 @@ def export_gdb(
         "admin_boundary_line": None,
         "current_landuse": "landuse_current_geojson",
         "current_road": "road_geojson",
-        "current_annotation": None,
+        "current_annotation": "annotation_geojson",
         "planned_landuse": None,
         "ecological_redline": "ecological_protection_geojson",
         "farmland_protection": "farmland_protection_geojson",
@@ -82,6 +91,10 @@ def export_gdb(
         "hazard_points": "hazard_points_geojson",
         "planned_annotation": None,
         "planned_road": None,
+    }
+    layout_candidates = {
+        "planned_annotation": ("facility_point",),
+        "planned_road": ("planned_road_candidates", "planned_road"),
     }
 
     exported = []
@@ -98,6 +111,15 @@ def export_gdb(
             geojson = _find_layer_in_configs(layout_configs, "space_control_zone")
         elif layer_key == "land_use_zone":
             geojson = _find_layer_in_configs(layout_configs, "land_use_zone")
+        elif layer_key in layout_candidates:
+            geojson = next(
+                (
+                    layer
+                    for candidate in layout_candidates[layer_key]
+                    if (layer := _find_layer_in_configs(layout_configs, candidate))
+                ),
+                None,
+            )
         elif gis_key and gis_data:
             geojson = gis_data.get(gis_key)
         else:
@@ -128,11 +150,58 @@ def export_gdb(
             json.dump(layout_configs, f, ensure_ascii=False, indent=2)
         exported.append("layout.json")
 
-    result = make_result(True, data={
+    manifest = {
+        "schema_version": "1.0",
+        "session_id": session_id,
+        "village_name": village_name,
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "producer": "app.agent.gis.layout_pipeline",
+        "validation": validation_result or {},
+        "layout_layers": [
+            {
+                "layer_type": cfg.get("layerType") or cfg.get("layer_type") or "unknown",
+                "feature_count": len(
+                    (cfg.get("data") or {}).get("features", [])
+                    or cfg.get("features", [])
+                ),
+            }
+            for cfg in layout_configs or []
+        ],
+        "exported_files": list(exported),
+    }
+    manifest_path = os.path.join(output_dir, "run_manifest.json")
+    with open(manifest_path, "w", encoding="utf-8") as f:
+        json.dump(manifest, f, ensure_ascii=False, indent=2)
+    exported.append("run_manifest.json")
+
+    return {
+        "status": "completed",
         "output_dir": output_dir,
         "exported_files": exported,
         "file_count": len(exported),
-    })
+    }
+
+
+@tool
+def export_gdb(
+    layout_configs: Annotated[Optional[List[Dict[str, Any]]], InjectedState("layout_configs")],
+    allocated_geojson: Annotated[Optional[Dict[str, Any]], InjectedState("allocated_geojson")],
+    gis_data: Annotated[Dict[str, Optional[Dict[str, Any]]], InjectedState("gis_data")],
+    village_name: Annotated[str, InjectedState("village_name")],
+    session_id: Annotated[str, InjectedState("session_id")] = "",
+    tool_call_id: Annotated[str, InjectedToolCallId] = "",
+    output_dir: Optional[str] = None,
+) -> Command:
+    """Export complete GeoJSON package matching the GDB layer registry."""
+    data = export_gdb_package(
+        layout_configs=layout_configs,
+        allocated_geojson=allocated_geojson,
+        gis_data=gis_data,
+        village_name=village_name,
+        output_dir=output_dir,
+        session_id=session_id,
+    )
+    result = make_result(True, data=data)
 
     return Command(update={
         "messages": [to_tool_message(result, tool_call_id)],
@@ -147,8 +216,12 @@ def _find_layer_in_configs(
     if not layout_configs:
         return None
     for cfg in layout_configs:
-        if cfg.get("layerType") == layer_type:
-            return cfg.get("data") or cfg.get("geojson")
+        if (cfg.get("layerType") or cfg.get("layer_type")) == layer_type:
+            data = cfg.get("data") or cfg.get("geojson")
+            if data:
+                return data
+            if cfg.get("features") is not None:
+                return {"type": "FeatureCollection", "features": cfg["features"]}
     return None
 
 

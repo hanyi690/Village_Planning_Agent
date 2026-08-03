@@ -14,6 +14,7 @@ References:
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from typing import Literal, Optional
 
 from langgraph.graph import StateGraph, END, START
@@ -129,15 +130,23 @@ async def _fetch_gis_data_node(state: GISPipelineState) -> dict:
     from app.modules.data.catalog.catalog import DataCatalog
 
     village_name = state.village_name
+    existing_data = dict(state.gis_data or {})
+
+    if state.gis_bundle is not None:
+        raw = state.gis_bundle.to_geojson_dict()
+        raw.update(existing_data)
+        logger.info("[Pipeline:fetch] Reusing caller-provided GIS bundle")
+        return {"gis_bundle": state.gis_bundle, "gis_data": raw}
 
     if not village_name:
-        logger.info("[Pipeline:fetch] No village name — skipping data fetch")
-        return {}
+        logger.info("[Pipeline:fetch] No village name — using caller-provided GIS data")
+        return {"gis_data": existing_data}
 
     try:
         catalog = DataCatalog()
         bundle = catalog.load_village_bundle(village_name)
         raw = bundle.to_geojson_dict()
+        raw.update(existing_data)
         logger.info(
             "[Pipeline:fetch] %d parcels, %d roads, %d annotations",
             bundle.parcel_count,
@@ -439,14 +448,27 @@ async def _detect_conflicts_node(state: GISPipelineState) -> dict:
 
 async def _export_gdb_node(state: GISPipelineState) -> dict:
     """Export 12-layer GeoPackage + land balance table."""
-    from app.tools.gis.export import export_gdb
+    from app.tools.gis.export import export_gdb_package
+
+    if not (state.validation_result or {}).get("passed", False):
+        logger.error("[Pipeline:export] Blocked because layout validation did not pass")
+        return {
+            "export_result": {
+                "status": "blocked",
+                "reason": "validation_failed",
+                "exported_files": [],
+                "file_count": 0,
+            }
+        }
 
     try:
-        result = await export_gdb.func(
+        result = export_gdb_package(
             layout_configs=state.layout_configs,
             allocated_geojson=state.allocated_geojson,
             gis_data=state.gis_data,
             village_name=state.village_name,
+            session_id=state.session_id,
+            validation_result=state.validation_result,
         )
         logger.info("[Pipeline:export] Export complete")
         return {"export_result": result if isinstance(result, dict) else {}}
@@ -461,7 +483,7 @@ async def _render_map_node(state: GISPipelineState) -> dict:
     P2: 三图合一 — 规划分区图层（layout_configs）+ 现状居民点锚点图层
     + 定位校核图层，单次产出供前端切换。
     """
-    from app.tools.gis.render import render_map
+    from app.tools.gis.render import build_map_layers
 
     try:
         layout_configs = list(state.layout_configs or [])
@@ -480,12 +502,16 @@ async def _render_map_node(state: GISPipelineState) -> dict:
         except Exception as e:
             logger.warning("[Pipeline:render] trace layer failed: %s", e)
 
-        result = render_map.func(
+        result = build_map_layers(
             layout_configs=layout_configs,
             gis_data=state.gis_data,
         )
         logger.info("[Pipeline:render] Render complete (%d layers)", len(layout_configs))
-        return {"render_result": result if isinstance(result, list) else []}
+        return {
+            "render_result": result,
+            "validation_passed": bool((state.validation_result or {}).get("passed", False)),
+            "completed_at": datetime.now(timezone.utc),
+        }
     except Exception as e:
         logger.error("[Pipeline:render] Render failed: %s", e)
         return {"render_result": []}
@@ -536,12 +562,25 @@ def _build_trace_layer(state: GISPipelineState) -> Optional[Dict[str, Any]]:
     instructions = explore.get("instructions") or []
     if not instructions:
         return None
+
+    parcel_index: Dict[str, Dict[str, Any]] = {}
+    landuse = (state.gis_data or {}).get("landuse_current_geojson") or {}
+    for feature in landuse.get("features", []):
+        props = feature.get("properties") or {}
+        bsm = str(props.get("BSM") or props.get("bsm") or "")
+        geometry = feature.get("geometry")
+        if bsm and geometry:
+            parcel_index[bsm] = geometry
+
     features = []
     for instr in instructions:
         bsms = instr.get("candidate_bsms") or []
         if not bsms:
             continue
         for bsm in bsms:
+            geometry = parcel_index.get(str(bsm))
+            if geometry is None:
+                continue
             features.append({
                 "type": "Feature",
                 "properties": {
@@ -550,7 +589,7 @@ def _build_trace_layer(state: GISPipelineState) -> Optional[Dict[str, Any]]:
                     "evidence": (instr.get("evidence_text") or "")[:30],
                     "query_path": instr.get("query_path", ""),
                 },
-                "geometry": {"type": "Point", "coordinates": [0, 0]},
+                "geometry": geometry,
             })
     if not features:
         return None
