@@ -98,10 +98,16 @@ def resolve_directional_bbox(
 
 
 def _parcel_centroid(parcel) -> Optional[Tuple[float, float]]:
-    """Extract centroid from parcel geometry (GeoJSON)."""
+    """Extract centroid from parcel geometry (GeoJSON geometry dict)."""
+    geom = parcel.geometry
+    if not geom or not isinstance(geom, dict):
+        return None
     from app.modules.spatial_ops.geometry import _compute_centroid
     try:
-        return _compute_centroid(parcel.geometry)
+        fc = {"type": "FeatureCollection", "features": [
+            {"type": "Feature", "properties": {}, "geometry": geom}
+        ]}
+        return _compute_centroid(fc)
     except Exception:
         return None
 
@@ -516,4 +522,333 @@ __all__ = [
     "ground_zone_spatial_preference",
     "ground_facility_spatial_preference",
     "ground_linear_spatial_preference",
+    "ResolvedSpatialDescription",
+    "resolve_spatial_description",
+    "classify_spatial_description",
 ]
+
+
+# ============================================================
+# P1: KG 拓扑优先空间描述分派器
+# ============================================================
+
+
+@dataclass
+class ResolvedSpatialDescription:
+    """空间描述 → 空间锚定的统一结果（KG 拓扑优先，几何兜底）。
+
+    Fields:
+        candidate_bsms: 候选地块 BSM 列表
+        candidate_bbox: 解析出的 BBox（如适用）
+        evidence_text: 原始空间描述文本
+        query_path: 解析路径（如 "gazetteer" / "kg:touching_bsm" / "geometry:bbox"）
+        confidence: 解析置信度 0.0-1.0
+        unresolved_reason: 解析失败原因（为空表示成功）
+    """
+    candidate_bsms: List[str] = field(default_factory=list)
+    candidate_bbox: Optional[Tuple[float, float, float, float]] = None
+    evidence_text: str = ""
+    query_path: str = ""
+    confidence: float = 0.0
+    unresolved_reason: str = ""
+
+
+_DIRECTION_KEYWORDS = {
+    "北": "north", "南": "south", "东": "east", "西": "west",
+    "东北": "northeast", "东南": "southeast", "西北": "northwest", "西南": "southwest",
+    "中部": "center", "中心": "center",
+}
+_LINEAR_HINTS = {
+    "沿": "along", "顺": "along",
+}
+_WATER_KEYWORDS = {"河", "溪", "江", "水", "塘", "湖", "渠"}
+_ROAD_KEYWORDS = {"道", "路", "公路", "乡道", "村道"}
+_CONSTRAINT_KEYWORDS = {
+    "生态边缘": "ecological_edge", "生态红线": "ecological_redline",
+    "基本农田": "farmland", "农田边": "farmland", "保护区": "protected",
+    "红线外": "constraint_edge", "边缘区": "constraint_edge",
+}
+# 地名后缀（toponym 判定）
+_TOPONYM_SUFFIXES = ("村", "组", "寨", "湾", "坑", "塘", "坝")
+
+
+def classify_spatial_description(desc: str) -> str:
+    """对空间描述分类（toponym/directional/linear/topology/constraint/compound）。
+
+    Args:
+        desc: 空间描述文本（如"村北靠近园寨"、"沿金田河"、"生态边缘区"）。
+
+    Returns:
+        描述类型标识。
+    """
+    if not desc:
+        return "empty"
+    # 约束边缘（最高优先级）
+    for kw in _CONSTRAINT_KEYWORDS:
+        if kw in desc:
+            return "constraint"
+    # 线性描述（沿X河 / 沿X路 / 顺X路）
+    for kw in _LINEAR_HINTS:
+        if kw in desc:
+            rest = desc.split(kw)[-1] or ""
+            if any(w in rest for w in _WATER_KEYWORDS):
+                return "linear_water"
+            if any(w in rest for w in _ROAD_KEYWORDS):
+                return "linear_road"
+            return "linear"
+    # 复合：方向 + 具体地名（如"村北靠近园寨"、"园寨北部"）
+    dirs_present = [kw for kw in _DIRECTION_KEYWORDS if kw in desc]
+    if dirs_present:
+        # 中心类方位（村中部/村中心/村域中部）→ directional，不触发地名判定
+        if any(kw in desc for kw in ("中部", "中心")):
+            return "directional"
+        # 提取方向词外的地名部分
+        stripped = desc
+        for kw in dirs_present:
+            stripped = stripped.replace(kw, "")
+        # 纯"村北/村南"（村泛指）→ directional；"园寨北部"→ compound
+        if stripped.strip() in ("", "村", "沿", "靠", "靠近"):
+            return "directional"
+        if any(suf in stripped for suf in _TOPONYM_SUFFIXES):
+            return "compound"
+        return "directional"
+    # 纯地名
+    return "toponym"
+
+
+def resolve_spatial_description(
+    desc: str,
+    bundle: Any,
+    kg: Any = None,
+    gazetteer: Any = None,
+    constraint_index: Any = None,
+    kg_query_fn: Any = None,
+) -> ResolvedSpatialDescription:
+    """KG 拓扑优先的空间描述分派器 — 方位/描述 → 候选 BSM。
+
+    处理 7 类描述：
+      toponym "园寨"         → gazetteer.resolve → entry.bsms（P0 多源坐标+组合名）
+      directional "村北"     → resolve_directional_bbox + query_parcels_in_bbox（几何兜底）
+      topology_adjacent "靠近园寨" → gazetteer.resolve → entry.bsms → KG sfTouches 邻居
+      linear_road "沿122乡道" → kg_query_fn("get_parcels_intersecting_road")（sfIntersects）
+      linear_water "沿金田河" → kg_query_fn("get_parcels_touching_water")（sfTouches）
+      constraint_edge "生态边缘" → ConstraintIndex 约束重叠地块（几何）
+      compound "村北靠近园寨"  → directional BBox ∩ topology_adjacent
+
+    Args:
+        desc: 空间描述文本。
+        bundle: VillageBundle（提供 landuse_current 地块）。
+        kg: 预留（调用方若想直接传 KG 实例；实际查询走 kg_query_fn）。
+        gazetteer: 村庄地名册（P0 增强后含多源坐标+组合名）；为 None 时从
+            load_gazetteer(bundle.village_name) 加载。
+        constraint_index: ConstraintIndex（约束重叠检查）；为 None 时跳过约束过滤。
+        kg_query_fn: KG 查询回调 callable(template_name, **params) -> list[dict]。
+            由调用方（EXPLORE/agent 层）注入，spatial_ops 不直接 import kg。
+
+    Returns:
+        ResolvedSpatialDescription。
+    """
+    if not desc or bundle is None:
+        return ResolvedSpatialDescription(evidence_text=desc,
+                                          unresolved_reason="empty desc or bundle")
+
+    parcels = bundle.polygons.get("landuse_current") or []
+    if not parcels:
+        return ResolvedSpatialDescription(evidence_text=desc,
+                                          unresolved_reason="no parcels")
+
+    if gazetteer is None:
+        gazetteer = _default_gazetteer(bundle)
+    dtype = classify_spatial_description(desc)
+    logger.info("[grounding:resolve] desc='%s' type=%s", desc, dtype)
+
+    if dtype == "toponym":
+        return _resolve_toponym(desc, gazetteer, parcels)
+    if dtype == "directional":
+        return _resolve_directional(desc, parcels)
+    if dtype in ("linear_road", "linear_water"):
+        return _resolve_linear(desc, dtype, kg_query_fn, parcels)
+    if dtype == "constraint":
+        return _resolve_constraint(desc, constraint_index, parcels, bundle)
+    if dtype == "compound":
+        return _resolve_compound(desc, gazetteer, kg_query_fn, parcels, constraint_index)
+    return ResolvedSpatialDescription(evidence_text=desc,
+                                      unresolved_reason=f"unsupported type {dtype}")
+
+
+def _default_gazetteer(bundle: Any):
+    """gazetteer 加载由调用方注入（spatial_ops 不直接依赖 kg）。
+
+    未注入时返回 None，toponym 解析退化几何路径。
+    """
+    return None
+
+
+def _resolve_toponym(
+    desc: str, gazetteer: Any, parcels: list,
+) -> ResolvedSpatialDescription:
+    """地名 → gazetteer entry → entry.bsms（P0 多源坐标 + 组合名条目）。"""
+    if gazetteer is None:
+        return ResolvedSpatialDescription(evidence_text=desc,
+                                          unresolved_reason="no gazetteer")
+    entry = gazetteer.resolve(desc, fuzzy=True)
+    if entry is None or not getattr(entry, "bsms", None):
+        # 退化为村庄整体中心邻近
+        center = _village_center(parcels)
+        if center is None:
+            return ResolvedSpatialDescription(evidence_text=desc,
+                                              unresolved_reason="gazetteer miss")
+        bsms = query_parcels_near_entity(parcels, center, max_distance_m=500)
+        return ResolvedSpatialDescription(
+            candidate_bsms=bsms, evidence_text=desc,
+            query_path="geometry:village_center", confidence=0.4,
+        )
+    return ResolvedSpatialDescription(
+        candidate_bsms=list(entry.bsms), evidence_text=desc,
+        query_path="gazetteer:bsms", confidence=0.9,
+    )
+
+
+def _resolve_directional(desc: str, parcels: list) -> ResolvedSpatialDescription:
+    """方位 → 村庄中心 BBox（几何兜底，方向无 KG 拓扑可查）。"""
+    center = _village_center(parcels)
+    if center is None:
+        return ResolvedSpatialDescription(evidence_text=desc,
+                                          unresolved_reason="no village center")
+    direction = ""
+    for kw, eng in _DIRECTION_KEYWORDS.items():
+        if kw in desc:
+            direction = eng
+            break
+    if direction in ("center",):
+        # 村中部 → 全村范围（无方向偏移）
+        bsms = [p.bsm for p in parcels if p.bsm]
+        return ResolvedSpatialDescription(
+            candidate_bsms=bsms, evidence_text=desc,
+            query_path="geometry:center", confidence=0.5,
+        )
+    bbox = resolve_directional_bbox(center, direction)
+    if bbox is None:
+        return ResolvedSpatialDescription(evidence_text=desc,
+                                          unresolved_reason=f"unknown dir {direction}")
+    bsms = query_parcels_in_bbox(parcels, bbox)
+    return ResolvedSpatialDescription(
+        candidate_bsms=bsms, candidate_bbox=bbox, evidence_text=desc,
+        query_path="geometry:directional_bbox", confidence=0.6,
+    )
+
+
+def _resolve_linear(
+    desc: str, dtype: str, kg_query_fn: Any, parcels: list,
+) -> ResolvedSpatialDescription:
+    """线性描述 → KG 拓扑（road sfIntersects / water sfTouches）。
+
+    优先用注入的 kg_query_fn（调用方提供 KG 查询）；不可用或空时退化几何 buffer。
+    """
+    if kg_query_fn is not None:
+        try:
+            if dtype == "linear_road":
+                rows = kg_query_fn("get_parcels_intersecting_road")
+                bsms = [r["bsm"] for r in rows if r.get("bsm")]
+                path = "kg:road_intersects"
+            else:
+                rows = kg_query_fn("get_parcels_touching_water")
+                bsms = [r["bsm"] for r in rows if r.get("bsm")]
+                path = "kg:water_touches"
+            if bsms:
+                return ResolvedSpatialDescription(
+                    candidate_bsms=bsms, evidence_text=desc,
+                    query_path=path, confidence=0.7,
+                )
+        except Exception as e:
+            logger.debug("[grounding:linear] KG query failed: %s", e)
+
+    # 几何兜底：沿 village 整体中心 buffer
+    center = _village_center(parcels)
+    if center is None:
+        return ResolvedSpatialDescription(evidence_text=desc,
+                                          unresolved_reason="no center")
+    bsms = query_parcels_near_entity(parcels, center, max_distance_m=400)
+    return ResolvedSpatialDescription(
+        candidate_bsms=bsms, evidence_text=desc,
+        query_path="geometry:center_buffer", confidence=0.4,
+    )
+
+
+def _resolve_constraint(
+    desc: str, constraint_index: Any, parcels: list, bundle: Any,
+) -> ResolvedSpatialDescription:
+    """约束边缘 → ConstraintIndex 重叠地块（RDF 无此拓扑，几何层判断）。"""
+    if constraint_index is None:
+        # 尝试从 bundle 构建
+        try:
+            from app.modules.spatial_ops.bridge import build_constraint_index
+
+            constraint_index = build_constraint_index(bundle)
+        except Exception:
+            constraint_index = None
+    if constraint_index is None:
+        return ResolvedSpatialDescription(evidence_text=desc,
+                                          unresolved_reason="no constraint index")
+    zone_type = ""
+    for kw, zt in _CONSTRAINT_KEYWORDS.items():
+        if kw in desc:
+            zone_type = zt
+            break
+    excluded = query_excluded_parcels(constraint_index, parcels, zone_type="")
+    return ResolvedSpatialDescription(
+        candidate_bsms=excluded, evidence_text=desc,
+        query_path="geometry:constraint_overlap", confidence=0.5,
+    )
+
+
+def _resolve_compound(
+    desc: str, gazetteer: Any, kg_query_fn: Any, parcels: list, constraint_index: Any,
+) -> ResolvedSpatialDescription:
+    """复合描述（方向+地名）→ 方向 BBox ∩ 地名拓扑邻居。"""
+    dir_result = _resolve_directional(desc, parcels)
+    if dir_result.unresolved_reason or not dir_result.candidate_bsms:
+        # 方向解析失败，退回地名
+        for kw in _DIRECTION_KEYWORDS:
+            desc = desc.replace(kw, "靠近")
+        return _resolve_toponym(desc, gazetteer, parcels)
+    # 地名部分：取包含的村名
+    village_name = _extract_toponym(desc)
+    if village_name and gazetteer is not None:
+        entry = gazetteer.resolve(village_name, fuzzy=True)
+        if entry is not None and getattr(entry, "bsms", None):
+            # 村内地块 ∪ 方向 BBox
+            union = list(dict.fromkeys(list(entry.bsms) + dir_result.candidate_bsms))
+            return ResolvedSpatialDescription(
+                candidate_bsms=union,
+                candidate_bbox=dir_result.candidate_bbox,
+                evidence_text=desc,
+                query_path="kg:compound_direction_toponym", confidence=0.7,
+            )
+    return dir_result
+
+
+def _extract_toponym(desc: str) -> str:
+    """从描述提取地名（含'村'/'组'/'寨'的词）。"""
+    for kw in ("村", "组", "寨"):
+        idx = desc.find(kw)
+        if idx > 0:
+            start = max(0, idx - 2)
+            return desc[start: idx + 1]
+    return ""
+
+
+def _village_center(parcels: list) -> Optional[Tuple[float, float]]:
+    """村庄整体质心（几何兜底参考点）。"""
+    try:
+        from app.modules.spatial_ops.geometry import _compute_centroid
+        from app.utils.geo_utils import safe_unary_union
+        from shapely.geometry import shape
+
+        geoms = [shape(p.geometry) for p in parcels if hasattr(p, "geometry") and p.geometry]
+        if not geoms:
+            return None
+        union_geom = safe_unary_union(geoms)
+        return (union_geom.centroid.x, union_geom.centroid.y)
+    except Exception:
+        return None

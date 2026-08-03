@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 """
 Integrated single-page planning map — comparable to CAD output.
 
@@ -22,7 +22,25 @@ import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
 from matplotlib.patches import FancyBboxPatch, FancyArrowPatch
 import matplotlib.font_manager as fm
+# 显式注册中文字体（只用单文件 .ttf：SimHei/Noto/Deng 可靠渲染。
+# 先移除 fontManager 中的 .ttc（Microsoft YaHei/SimSun 等）——matplotlib Agg
+# 渲染 TTC 集合时 face 索引错位，中文字会渲染成豆腐块（方框）。
+# bold 文本会 fallback 到 SimHei regular，仍真实渲染，仅有一条无害警告。）
+try:
+    fm.fontManager.ttflist = [
+        f for f in fm.fontManager.ttflist if not f.fname.lower().endswith('.ttc')
+    ]
+except Exception:
+    pass
+for _f in ("C:/Windows/Fonts/simhei.ttf", "C:/Windows/Fonts/NotoSansSC-VF.ttf",
+           "C:/Windows/Fonts/Deng.ttf"):
+    if os.path.exists(_f):
+        try:
+            fm.fontManager.addfont(_f)
+        except Exception:
+            pass
 plt.rcParams['font.family'] = 'SimHei'
+plt.rcParams['font.sans-serif'] = ['SimHei', 'Noto Sans SC', 'DengXian', 'sans-serif']
 plt.rcParams['axes.unicode_minus'] = False
 
 import geopandas as gpd
@@ -274,6 +292,44 @@ def main():
     road_p = road.to_crs('EPSG:3857') if road is not None else None
     hazard_p = hazard.to_crs('EPSG:3857') if hazard is not None else None
 
+    # ---- 坐标归一化（修复 matplotlib 大坐标 CJK 文本渲染豆腐块 bug）----
+    # matplotlib 在 Axes 数据坐标值很大时（如 EPSG:3857 的 ~1.3e7）无法正确渲染
+    # 中文字符。把投影坐标整体平移 offset 并缩放到 0-1 单位范围，使数据值落在
+    # 极小范围（~0-1），Axes 文本（ax.text/annotate/legend）即可正常渲染中文。
+    _bbox_3857 = boundary_p.geometry.union_all().bounds
+    _X_OFF = (_bbox_3857[0] + _bbox_3857[2]) / 2.0
+    _Y_OFF = (_bbox_3857[1] + _bbox_3857[3]) / 2.0
+    _SPAN = max(_bbox_3857[2] - _bbox_3857[0], _bbox_3857[3] - _bbox_3857[1]) or 1.0
+    print(f"  coord offset: ({_X_OFF:.0f}, {_Y_OFF:.0f}), span={_SPAN:.0f}")
+
+    def _norm(x, y):
+        """真实 3857 坐标 → 归一化 0-1 坐标。"""
+        return (x - _X_OFF) / _SPAN, (y - _Y_OFF) / _SPAN
+
+    def _shift(gdf):
+        """平移 + 缩放到 0-1 单位坐标（原地）。"""
+        if gdf is None or len(gdf) == 0:
+            return gdf
+        from shapely.affinity import affine_transform
+
+        gdf['geometry'] = gdf.geometry.apply(
+            lambda g: affine_transform(
+                g, [1.0 / _SPAN, 0, 0, 1.0 / _SPAN, -_X_OFF / _SPAN, -_Y_OFF / _SPAN]
+            )
+        )
+        return gdf
+
+    boundary_p = _shift(boundary_p)
+    lu_curr_p = _shift(lu_curr_p)
+    if farmland_p is not None:
+        farmland_p = _shift(farmland_p)
+    if eco_p is not None:
+        eco_p = _shift(eco_p)
+    if road_p is not None:
+        road_p = _shift(road_p)
+    if hazard_p is not None:
+        hazard_p = _shift(hazard_p)
+
     from app.modules.schema import dlbm_to_planning_zone
     lu_curr_p['zone_type'] = lu_curr_p['DLBM'].apply(
         lambda x: dlbm_to_planning_zone(str(x).strip()))
@@ -326,7 +382,7 @@ def main():
     planning_zone_legend = []
     planning_zone_p = load_gdf('planning_zone.geojson', OUT_DIR)
     if planning_zone_p is not None and len(planning_zone_p) > 0:
-        planning_zone_p = planning_zone_p.to_crs('EPSG:3857')
+        planning_zone_p = _shift(planning_zone_p.to_crs('EPSG:3857'))
         for _, row in planning_zone_p.iterrows():
             color = str(row.get('color') or '#CCCCCC')
             zt = str(row.get('zone_type') or row.get('assigned_zone') or '分区')
@@ -341,7 +397,7 @@ def main():
     # ---- 空间结构标注（structure_overlay.geojson，管线解析 L3 spatial_structure 报告产出） ----
     structure_overlay = load_gdf('structure_overlay.geojson', OUT_DIR)
     if structure_overlay is not None and len(structure_overlay) > 0:
-        structure_overlay_p = structure_overlay.to_crs('EPSG:3857')
+        structure_overlay_p = _shift(structure_overlay.to_crs('EPSG:3857'))
         for _, row in structure_overlay_p.iterrows():
             kind = str(row.get('kind') or 'label')
             label = str(row.get('label') or '')
@@ -377,7 +433,7 @@ def main():
     # ---- Custom functional zones (P7 L4 FunctionalZone, vocabulary colors) ----
     custom_legend_items = []
     if custom_zones is not None and len(custom_zones) > 0:
-        custom_zones_p = custom_zones.to_crs('EPSG:3857')
+        custom_zones_p = _shift(custom_zones.to_crs('EPSG:3857'))
         for _, row in custom_zones_p.iterrows():
             color = str(row.get('color') or '#CCCCCC')
             name = str(row.get('category_name_zh') or row.get('category_code') or '功能区')
@@ -410,9 +466,9 @@ def main():
             unlocated_projects.append(proj)
             continue
         lon, lat = proj['lon'], proj['lat']
-        # 4326 → 3857 for plotting
+        # 4326 → 3857 for plotting, then normalize to 0-1
         pt = gpd.GeoSeries([Point(lon, lat)], crs='EPSG:4326').to_crs('EPSG:3857')[0]
-        x, y = pt.x, pt.y
+        x, y = _norm(pt.x, pt.y)
         cat = proj.get('category', '其他')
         marker, color, symbol = cat_icons.get(cat, cat_icons['其他'])
 
@@ -475,10 +531,24 @@ def main():
                 bbox=dict(boxstyle='round,pad=0.4', fc='white', alpha=0.9,
                           ec='#999999', lw=0.8))
 
-    # Title
-    ax.set_title('金田村 产业空间布局规划图\n'
-                 'Functional Zones · 三线管控 · 空间结构',
-                 fontsize=18, fontweight='bold', pad=20)
+    # Title — 用 fig.text（figure 分数坐标）而非 ax.set_title，规避
+    # matplotlib 大坐标 Axes 文本 CJK 渲染豆腐块 bug
+    try:
+        from matplotlib.font_manager import FontProperties
+        _TITLE_FP = FontProperties(fname='C:/Windows/Fonts/simhei.ttf')
+        _TITLE_FP.set_weight('bold')
+    except Exception:
+        _TITLE_FP = None
+    if _TITLE_FP is not None:
+        fig.text(0.5, 0.975, '金田村 产业空间布局规划图',
+                 fontsize=22, ha='center', va='top', fontproperties=_TITLE_FP)
+        fig.text(0.5, 0.935, 'Functional Zones · 三线管控 · 空间结构',
+                 fontsize=13, ha='center', va='top', color='#444444',
+                 fontproperties=_TITLE_FP)
+    else:
+        ax.set_title('金田村 产业空间布局规划图\n'
+                     'Functional Zones · 三线管控 · 空间结构',
+                     fontsize=18, fontweight='bold', pad=20)
 
     # Legend
     legend_items = [
@@ -513,8 +583,8 @@ def main():
 
     ax.legend(handles=custom_lines, loc='upper left', fontsize=8,
               ncol=2, framealpha=0.9, title='图例',
-              title_fontproperties={'size': 10, 'weight': 'bold'})
-
+              prop=_TITLE_FP,
+              title_fontproperties=_TITLE_FP)
     ax.axis('off')
 
     # Footer
@@ -525,6 +595,13 @@ def main():
 
     # ---- Save ----
     print("\n[5/5] Saving...")
+    try:
+        from matplotlib.font_manager import findfont, FontProperties
+        _fp = findfont(FontProperties(family='SimHei', weight='bold'))
+        print(f"  [diag] resolved bold font: {os.path.basename(_fp)}")
+        print(f"  [diag] ax patches: {len(ax.patches)}, ax texts: {len(ax.texts)}, ax collections: {len(ax.collections)}")
+    except Exception as _e:
+        print(f"  [diag] font resolve failed: {_e}")
     outpath = os.path.join(OUT_DIR, 'integrated_planning_map.png')
     plt.savefig(outpath, dpi=200, bbox_inches='tight', facecolor='white')
     plt.close()

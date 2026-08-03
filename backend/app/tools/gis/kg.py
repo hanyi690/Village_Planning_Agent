@@ -6,6 +6,7 @@ No global _kg_instance — KG instances managed via KGManager side-channel.
 
 from __future__ import annotations
 
+import re
 from typing import Any, Dict, List, Optional, Annotated
 
 from langchain_core.tools import tool, InjectedToolCallId
@@ -134,6 +135,14 @@ def build_knowledge_graph(
         pass
     try:
         kg_village_anchors = query_kg(kg, "get_village_anchors")
+        # v5.0 谓词迁移：geo:hasCentroid + geo:asWKT "POINT(lon lat)"，
+        # 解析 WKT 附加 lon/lat 供下游消费。
+        for _a in kg_village_anchors:
+            _wkt = _a.get("wkt") or ""
+            _m = re.findall(r"[-+]?\d*\.?\d+", _wkt)
+            if len(_m) >= 2:
+                _a["lon"] = _m[0]
+                _a["lat"] = _m[1]
     except Exception:
         pass
     try:
