@@ -870,7 +870,7 @@ def _extract_natural_villages(text: str) -> str:
     数据源 = L1 socio_economic 报告（"完整名单：田坑、黄竹、园寨…"）。
     """
     try:
-        from app.modules.kg.enrichment.bindings import _KNOWN_NATURAL_VILLAGES
+        from app.modules.kg.enrichment.report_entity_enrichment import _KNOWN_NATURAL_VILLAGES
     except Exception:
         _KNOWN_NATURAL_VILLAGES = set()
     found: List[str] = []

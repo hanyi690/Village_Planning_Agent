@@ -42,6 +42,7 @@ def build_map_layers(
         )
         display_type = "planned_landuse_parcel" if layer_type == "land_use_zone" else layer_type
         semantics = {
+            "custom_planning_zone": ("规划主分区", True, "空间分区生成"),
             "planning_zone": ("规划主分区", True, "L3分区目标"),
             "custom_functional_zone": ("规划主分区", True, "L3自定义分区"),
             "function_zone": ("功能分析", False, "规则聚合"),
@@ -82,6 +83,23 @@ def build_map_layers(
             "semantic_group": "现状底图",
             "default_visible": True,
         })
+
+    for key, name, color in (
+        ("ecological_protection_geojson", "生态保护限制区", "#15803d"),
+        ("farmland_protection_geojson", "永久基本农田", "#ca8a04"),
+        ("historical_protection_geojson", "历史文化保护范围", "#7c3aed"),
+        ("construction_boundary_geojson", "建设边界", "#dc2626"),
+    ):
+        if gis_data.get(key):
+            layers.append({
+                "geojson": gis_data[key],
+                "layer_type": "input_constraint",
+                "layer_name": name,
+                "color": color,
+                "semantic_group": "输入管制层",
+                "default_visible": False,
+                "source_label": "上传 GIS 限制区",
+            })
 
     if gis_data.get("boundary_geojson"):
         layers.append({

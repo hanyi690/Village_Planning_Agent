@@ -102,6 +102,14 @@ class FacilityPlacer:
                 status = fac.get("status", "现状保留")
                 candidate_bsms = fac.get("candidate_bsms", [])
                 anchor_point = fac.get("anchor_point")
+                provenance = {
+                    key: fac.get(key, "")
+                    for key in (
+                        "source_project_id",
+                        "source_instruction_id",
+                        "source_report_key",
+                    )
+                }
             else:
                 fac_id = fac.facility_id
                 fac_type = fac.facility_type
@@ -109,6 +117,14 @@ class FacilityPlacer:
                 status = fac.status
                 candidate_bsms = getattr(fac, "candidate_bsms", [])
                 anchor_point = getattr(fac, "anchor_point", None)
+                provenance = {
+                    key: getattr(fac, key, "")
+                    for key in (
+                        "source_project_id",
+                        "source_instruction_id",
+                        "source_report_key",
+                    )
+                }
 
             point = None
 
@@ -170,6 +186,7 @@ class FacilityPlacer:
                         "color": color,
                         "service_radius": service_radius,
                         "coverage_count": coverage_count,
+                        **provenance,
                     },
                     "geometry": {
                         "type": "Point",
@@ -281,20 +298,23 @@ class FacilityPlacer:
         candidate_bsms: List[str],
         landuse_geojson: Optional[Dict[str, Any]],
     ) -> Optional[List[float]]:
-        """P8: candidate_bsms（自然村→gazetteer 解析的地块集）→ 质心均值落位。
+        """Resolve to one real candidate parcel, never the mean of a candidate set.
 
         返回 (lon, lat)；无匹配地块返回 None（回退后续策略）。
         """
         if not candidate_bsms or not landuse_geojson:
             return None
-        bsm_set = set(str(b) for b in candidate_bsms)
-        xs, ys = [], []
+        feature_by_bsm = {}
         for ft in landuse_geojson.get("features", []):
             props = ft.get("properties", {}) or {}
             bsm = str(props.get("BSM", "") or props.get("bsm", ""))
-            if bsm not in bsm_set:
+            if bsm:
+                feature_by_bsm[bsm] = ft
+        for candidate_bsm in candidate_bsms:
+            ft = feature_by_bsm.get(str(candidate_bsm))
+            if not ft:
                 continue
-            g = ft.get("geometry", {})
+            g = ft.get("geometry") or {}
             if not g or not g.get("coordinates"):
                 continue
             try:
@@ -303,14 +323,11 @@ class FacilityPlacer:
                 geom = _shape(g)
                 if geom.is_empty:
                     continue
-                c = geom.centroid
-                xs.append(c.x)
-                ys.append(c.y)
+                point = geom.representative_point()
+                return [point.x, point.y]
             except Exception:
                 continue
-        if not xs:
-            return None
-        return [sum(xs) / len(xs), sum(ys) / len(ys)]
+        return None
 
     def _place_new(
         self,

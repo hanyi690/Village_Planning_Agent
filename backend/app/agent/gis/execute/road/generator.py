@@ -163,7 +163,11 @@ def _road_targets_to_stage2(
         return demand_id
 
     for index, target in enumerate(road_targets, start=1):
-        project_id = f"RP-PARSE-{index:04d}"
+        project_id = str(
+            target.get("source_project_id")
+            or target.get("source_instruction_id")
+            or f"RP-PARSE-{index:04d}"
+        )
         connects = [str(item) for item in target.get("connects") or [] if str(item or "").strip()]
         path_bsms = [str(item) for item in target.get("path_bsms") or [] if str(item or "").strip()]
         candidate_bsms = [str(item) for item in target.get("candidate_bsms") or [] if str(item or "").strip()]
@@ -197,6 +201,9 @@ def _road_targets_to_stage2(
                 "priority": "high",
                 "requires_human_confirmation": bool(target.get("requires_human_confirmation")) or not (start_geometry and end_geometry),
                 "planning_status": "parsed_from_agent_road_target",
+                "source_project_id": target.get("source_project_id") or "",
+                "source_instruction_id": target.get("source_instruction_id") or "",
+                "source_report_key": target.get("source_report_key") or "",
                 "evidence": {
                     "source_kind": "parse_agent_road_target",
                     "source_text": evidence,

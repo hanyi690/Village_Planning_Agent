@@ -5,6 +5,8 @@
 > **不依赖**: Agent / KG / Tools / Parsing（反向依赖禁止）
 > **状态**: 全部职责已实现 | **Updated: 2026-08-02**
 
+`bundle_binder.py` 提供确定性语义实体到 session GIS Bundle 的绑定：仅在 BSM 唯一命中时确认几何，歧义候选保持待确认状态。它与 `grounding.py` 的方向/邻近接地能力配合使用，不承担报告解析或 KG 写入。
+
 ---
 
 ## 一、核心原则

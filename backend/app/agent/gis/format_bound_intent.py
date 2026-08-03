@@ -16,6 +16,7 @@ from app.modules.schema.contracts.custom_zone_contracts import CustomZoneTarget
 from app.modules.schema.contracts.parse_contracts import (
     AxisTarget,
     FacilityTarget,
+    ProjectTarget,
     RoadTarget,
     SpatialPlanningIntent,
     ZoneTarget,
@@ -62,6 +63,16 @@ def format_bound_spatial_intent(
         evidence = str(props.get("evidence_text") or "")
         bsms = [str(v) for v in props.get("source_bsm_list") or []]
         confirmed = props.get("binding_status") == "confirmed"
+        instruction_ids = [
+            str(value) for value in props.get("source_instruction_ids") or []
+        ]
+        instruction_id = instruction_ids[0] if instruction_ids else str(
+            props.get("entity_id") or ""
+        )
+        chunk_ids = [str(value) for value in props.get("source_chunk_ids") or []]
+        source_report_key = (
+            chunk_ids[0].split(":", 1)[0] if chunk_ids else ""
+        )
         semantic = SemanticMetadata(
             raw_text=evidence,
             natural_language_description=evidence,
@@ -76,17 +87,36 @@ def format_bound_spatial_intent(
                 candidate_bsms=[] if confirmed else bsms,
                 candidate_bbox=props.get("candidate_bbox"),
                 requires_human_confirmation=bool(props.get("requires_human_confirmation")),
+                source_instruction_id=instruction_id,
+                source_report_key=source_report_key,
                 semantic=semantic,
             ))
         elif domain == "facility":
             intent.facilities.append(FacilityTarget(
-                type="planned_facility", candidate_bsms=bsms if confirmed else [], semantic=semantic
+                type=str(props.get("name") or "planned_facility"),
+                status="planned_new",
+                candidate_bsms=bsms,
+                source_instruction_id=instruction_id,
+                source_report_key=source_report_key,
+                semantic=semantic,
             ))
         elif domain == "axis":
-            intent.development_axes.append(AxisTarget(corridor_bsms=bsms if confirmed else [], semantic=semantic))
+            intent.development_axes.append(AxisTarget(
+                label=str(props.get("name") or ""),
+                corridor_bsms=bsms,
+                source_instruction_id=instruction_id,
+                source_report_key=source_report_key,
+                requires_human_confirmation=bool(
+                    props.get("requires_human_confirmation")
+                ),
+                semantic=semantic,
+            ))
         elif domain in {"landuse", "zone"}:
             target = ZoneTarget(
                 land_use=str(props.get("planning_zone") or props.get("name") or ""),
+                candidate_bsms=bsms,
+                source_instruction_id=instruction_id,
+                source_report_key=source_report_key,
                 semantic=semantic,
             )
             ratio = _extract_area_ratio(evidence)
@@ -94,8 +124,19 @@ def format_bound_spatial_intent(
                 target.area_ratio = ratio
             intent.zone_targets.append(target)
         elif domain == "project":
-            # P6: project domain → CustomZoneTarget matched to session vocabulary
             name = str(props.get("name") or props.get("entity_id") or "").strip()
+            project_id = str(props.get("entity_id") or instruction_id or name)
+            intent.project_targets.append(ProjectTarget(
+                project_id=project_id,
+                name=name,
+                category=_project_category(name, evidence),
+                location_hint=evidence,
+                candidate_bsms=bsms,
+                source_instruction_id=instruction_id,
+                source_report_key=source_report_key,
+                semantic=semantic,
+            ))
+            # Project-driven custom zoning remains an optional derived target.
             category_code = _match_category_code(name, vocabulary_name)
             if category_code:
                 intent.custom_zone_targets.append(CustomZoneTarget(
@@ -130,6 +171,19 @@ def format_bound_spatial_intent(
                     confidence=0.7,
                 ))
     return intent
+
+
+def _project_category(name: str, evidence: str) -> str:
+    text = f"{name} {evidence}"
+    if any(word in text for word in ("道路", "村道", "公路", "桥", "路网")):
+        return "road"
+    if any(word in text for word in ("服务中心", "卫生", "学校", "广场", "停车", "公园")):
+        return "facility"
+    if any(word in text for word in ("污水", "供水", "排水", "电力", "通信", "环卫")):
+        return "infrastructure"
+    if any(word in text for word in ("产业", "基地", "园区", "旅游", "民宿")):
+        return "industry"
+    return "other"
 
 
 def _match_category_code(name: str, vocabulary_name: str) -> str:

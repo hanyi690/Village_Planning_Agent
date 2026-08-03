@@ -215,8 +215,8 @@ def build_parcel_index(
 
     for ft in features:
         props = ft.get("properties", {})
-        bsm = str(props.get("BSM", "")).strip()
-        dlbm = str(props.get("DLBM", "")).strip()
+        bsm = str(props.get("BSM") or props.get("bsm") or "").strip()
+        dlbm = str(props.get("DLBM") or props.get("dlbm") or "").strip()
         if not bsm:
             continue
         shape_area = props.get("SHAPE_Area", 0) or 0

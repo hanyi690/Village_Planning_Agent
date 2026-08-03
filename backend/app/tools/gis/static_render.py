@@ -188,6 +188,7 @@ def render_map_preview(
             feature_label = (
                 properties.get("zone_type")
                 or properties.get("assigned_zone")
+                or properties.get("zone_name")
                 or properties.get("category_name_zh")
                 or properties.get("DLMC")
             )

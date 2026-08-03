@@ -25,6 +25,7 @@ from .bridge import (
 )
 from .constraint_compiler import ConstraintCompiler
 from .context import compute_context_blocks
+from .bundle_binder import DeterministicBundleBinder, bind_exploration_to_bundle
 
 # Backward compat alias: compute_spatial_context → compute_context_blocks
 compute_spatial_context = compute_context_blocks
@@ -60,6 +61,8 @@ __all__ = [
     "ConstraintOverlap",
     "build_constraint_index",
     "ConstraintCompiler",
+    "DeterministicBundleBinder",
+    "bind_exploration_to_bundle",
     # grounding.py exports
     "ZoneSpatialAnchor",
     "resolve_directional_bbox",

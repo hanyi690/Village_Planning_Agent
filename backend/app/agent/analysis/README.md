@@ -56,7 +56,7 @@ analysis/
 - **P0-1 数据流闭环**：L1 完成后 `_extract_landuse_metrics` 提取现状用地指标（land_use 优先 → superior_planning 约束下限 → ecological）注入 `_landuse_metrics`；L3 Prompt 消费（`GIS_TOOL_GUIDE`）。
 - **L2 纯粹化（v4）**：L2 只产规划定位，不再注入 `intent_targets` 面积意向（L3 自洽）。
 - **修订**：级联修订时注入「级联修订指令」前缀（独立参数）；完成后回写 `revision_completed_dims` + `revision_impact_tree`（fan-in 保留）。
-- **P8 自然村名单**：`_extract_natural_villages` 从 L1 socio_economic 报告提取已知 12 村闭集（`kg.enrichment.bindings._KNOWN_NATURAL_VILLAGES`），注入 L3 INSTRUCTION 位置列引导。
+- **P8 自然村名单**：`_extract_natural_villages` 从 L1 socio_economic 报告提取已知 12 村闭集（`kg.enrichment.report_entity_enrichment._KNOWN_NATURAL_VILLAGES`），注入 L3 INSTRUCTION 位置列引导。
 - **Prompt 选择**：`prompts.analysis`（L1）/ `prompts.concept`（L2）/ `prompts.detailed`（L3）。
 - **数据安全**：LLM 失败/超时返回错误消息 + SSE，不崩溃图。
 

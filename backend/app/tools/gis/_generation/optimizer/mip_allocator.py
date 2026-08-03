@@ -100,6 +100,7 @@ class MIPZoneAllocator:
         three_line_targets: Optional[List[Dict[str, Any]]] = None,
         vne_summary: Optional[List[Dict[str, Any]]] = None,
         zone_targets: Optional[List[Any]] = None,
+        zone_candidate_bsms: Optional[Dict[str, List[str]]] = None,
     ) -> Tuple[Dict[str, Any], Any]:
         """Run MIP allocation.
 
@@ -140,15 +141,13 @@ class MIPZoneAllocator:
 
         planning_zones = list(targets.keys())
 
-        # ── Pre-filter parcels by ZoneTarget spatial anchors ────────
-        # Build candidate_bsms (union across all ZoneTargets) and excluded_bsms
-        candidate_bsms: set = set()
+        # Keep the full parcel canvas. Per-zone anchors are applied below when
+        # variables are created; a union pre-filter would make distinct target
+        # pools indistinguishable.
         excluded_bsms: set = set()
         proximity_weights: Dict[str, Dict[str, float]] = {}
         if zone_targets:
             for zt in zone_targets:
-                if hasattr(zt, 'candidate_bsms') and zt.candidate_bsms:
-                    candidate_bsms.update(zt.candidate_bsms)
                 if hasattr(zt, 'excluded_bsms') and zt.excluded_bsms:
                     excluded_bsms.update(zt.excluded_bsms)
                 if hasattr(zt, 'proximity_weights') and zt.proximity_weights:
@@ -156,9 +155,6 @@ class MIPZoneAllocator:
                     for bsm, w in zt.proximity_weights.items():
                         proximity_weights.setdefault(zone_key, {})[bsm] = float(w)
 
-        if candidate_bsms:
-            before = len(parcels)
-            parcels = [p for p in parcels if p.get("bsm_bare", "") in candidate_bsms]
         if excluded_bsms:
             before_ex = len(parcels)
             parcels = [p for p in parcels if p.get("bsm_bare", "") not in excluded_bsms]
@@ -186,6 +182,11 @@ class MIPZoneAllocator:
                 if bsm:
                     protected_bsms.add(bsm)
 
+        candidate_sets = {
+            str(zone): {str(bsm) for bsm in bsms}
+            for zone, bsms in (zone_candidate_bsms or {}).items()
+            if bsms
+        }
         x = {}
         kg_excluded_count = 0
         for i, p in enumerate(parcels):
@@ -194,6 +195,9 @@ class MIPZoneAllocator:
             parcel_bsm = p.get("bsm_bare", "")
             is_kg_protected = parcel_bsm in protected_bsms
             for j, zt in enumerate(planning_zones):
+                allowed_bsms = candidate_sets.get(str(zt))
+                if allowed_bsms is not None and parcel_bsm not in allowed_bsms:
+                    continue
                 if is_kg_protected and zt in PLANNING_CONSTRUCTION_ZONES:
                     kg_excluded_count += 1
                     continue

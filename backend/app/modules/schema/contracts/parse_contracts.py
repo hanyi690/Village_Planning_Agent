@@ -85,6 +85,8 @@ class ZoneTarget(BaseModel):
     adjacency_rules: Optional[AdjacencyRules] = None
     density: Literal["high", "medium", "low"] = "medium"
     zone_id: str = ""                             # from ZoneIntent (EXECUTE identifier)
+    source_instruction_id: str = ""
+    source_report_key: str = ""
     preserve_existing: bool = True                # from ZoneIntent
     # === 空间锚定（spatial_ops.grounding 填充）===
     candidate_bsms: List[str] = Field(default_factory=list)
@@ -119,6 +121,9 @@ class FacilityTarget(BaseModel):
     location_hint: str = ""
     service_radius: Optional[int] = None
     anchor_village: Optional[str] = None
+    source_project_id: str = ""
+    source_instruction_id: str = ""
+    source_report_key: str = ""
     # === 空间方向（FacilityPlacer 用）===
     direction: str = "center"                # "north"/"south"/"east"/"west"/"center"
     # === 空间锚定（spatial_ops.grounding 填充，具体集合而非文本）===
@@ -143,10 +148,14 @@ class AxisTarget(BaseModel):
     direction: str = ""                      # "north-south"/"east-west"/"radial"
     axis_type: str = "primary"              # "primary"/"secondary"/"spatial_control"
     label: str = ""                          # e.g. "南北发展轴"
+    source_project_id: str = ""
+    source_instruction_id: str = ""
+    source_report_key: str = ""
     # === 空间锚定（spatial_ops.grounding 填充）===
     start_anchor: Optional[Tuple[float, float]] = None
     end_anchor: Optional[Tuple[float, float]] = None
     corridor_bsms: List[str] = Field(default_factory=list)
+    requires_human_confirmation: bool = False
     # Semantic anchors (human-readable, not stored as RDF)
     semantic: SemanticMetadata = Field(default_factory=SemanticMetadata)
 
@@ -162,11 +171,46 @@ class RoadTarget(BaseModel):
     road_level: str = ""                         # "主干道"/"次干道"/"支路"/"村道"
     width_m: float = 0.0
     connects: List[str] = Field(default_factory=list)  # ["村北", "村南"]
+    source_project_id: str = ""
+    source_instruction_id: str = ""
+    source_report_key: str = ""
     # === 空间锚定 ===
     start_anchor: Optional[Tuple[float, float]] = None
     end_anchor: Optional[Tuple[float, float]] = None
     path_bsms: List[str] = Field(default_factory=list)
+    candidate_bsms: List[str] = Field(default_factory=list)
+    candidate_bbox: Optional[Tuple[float, float, float, float]] = None
+    requires_human_confirmation: bool = False
     # Semantic anchors (human-readable, not stored as RDF)
+    semantic: SemanticMetadata = Field(default_factory=SemanticMetadata)
+
+
+class ProjectTarget(BaseModel):
+    """L3 project-bank item preserved as the parent planning intent."""
+
+    project_id: str
+    name: str
+    category: str = "other"
+    action: Literal[
+        "preserve",
+        "new",
+        "expand",
+        "relocate",
+        "upgrade",
+        "repair",
+        "demolish",
+    ] = "new"
+    scale_text: str = ""
+    area_ha: Optional[float] = None
+    location_hint: str = ""
+    candidate_bsms: List[str] = Field(default_factory=list)
+    excluded_bsms: List[str] = Field(default_factory=list)
+    related_facility_types: List[str] = Field(default_factory=list)
+    related_road_targets: List[str] = Field(default_factory=list)
+    source_instruction_id: str = ""
+    source_report_key: str = ""
+    source_section: str = "INSTRUCTION"
+    source_row: Optional[int] = None
     semantic: SemanticMetadata = Field(default_factory=SemanticMetadata)
 
 
@@ -408,6 +452,9 @@ class SpatialPlanningIntent(BaseModel):
     # Road targets (new — fills road sub-task gap)
     road_targets: List[RoadTarget] = Field(default_factory=list)
 
+    # L3 project-bank parents. Facilities/roads/zones may derive from these.
+    project_targets: List[ProjectTarget] = Field(default_factory=list)
+
     # Custom functional zone targets (P6 — from Explore/Binder project domain)
     custom_zone_targets: List["CustomZoneTarget"] = Field(default_factory=list)
 
@@ -456,6 +503,7 @@ __all__ = [
     "FacilityTarget",
     "AxisTarget",
     "RoadTarget",
+    "ProjectTarget",
     "SemanticMetadata",
     "PlanningIndicatorItem",
     "PlanningIndicatorTable",

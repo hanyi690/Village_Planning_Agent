@@ -9,3 +9,4 @@ Tools for the Router Agent to query GIS spatial context:
   - add_construction_project: 建设项目 → 操作队列
 
 See: docs/gis/proposals/02_GIS_PLANNING_INTEGRATION.md
+"""

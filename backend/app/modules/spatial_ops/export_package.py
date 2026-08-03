@@ -125,6 +125,14 @@ def export_gdb_package(
                 json.dump(geojson, f, ensure_ascii=False)
             exported.append(source)
 
+    custom_planning_zone = _find_layer_in_configs(layout_configs, "custom_planning_zone")
+    if custom_planning_zone:
+        custom_path = os.path.join(output_dir, "planned", "custom_planning_zone.geojson")
+        os.makedirs(os.path.dirname(custom_path), exist_ok=True)
+        with open(custom_path, "w", encoding="utf-8") as f:
+            json.dump(custom_planning_zone, f, ensure_ascii=False)
+        exported.append("planned/custom_planning_zone.geojson")
+
     # ── Land balance table ─────────────────────────────────────
     balance_geojson = allocated_geojson or (gis_data or {}).get(
         "landuse_current_geojson"

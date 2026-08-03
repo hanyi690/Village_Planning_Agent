@@ -83,36 +83,200 @@ async def _route_tasks_node(state: ExecuteAgentState) -> dict:
     Layout is the core allocation task. Facility, axis, and road tasks are
     routed only when the typed or legacy intent declares corresponding targets.
     """
+    import os
+
     tasks = ["layout"]
+    defer_road = os.getenv("GIS_DEFER_ROAD", "").strip().lower() in {"1", "true", "yes"}
     intent = state.intent
     if intent is not None:
         if isinstance(intent, dict):
+            projects = intent.get("project_targets")
             facilities = intent.get("facilities")
             development_axes = intent.get("development_axes")
             road_targets = intent.get("road_targets")
         else:
+            projects = getattr(intent, "project_targets", None)
             facilities = getattr(intent, "facilities", None)
             development_axes = getattr(intent, "development_axes", None)
             road_targets = getattr(intent, "road_targets", None)
+        if projects:
+            tasks.append("project")
         if facilities:
             tasks.append("facility")
         if development_axes:
             tasks.append("axis")
-        if road_targets:
+        if road_targets and not defer_road:
             tasks.append("road")
+        elif road_targets and defer_road:
+            logger.warning("[EXECUTE] road task deferred by GIS_DEFER_ROAD")
     logger.info("[EXECUTE] tasks routed: %s", tasks)
-    return {"tasks_to_run": tasks}
+    result = {"tasks_to_run": tasks}
+    session_id = getattr(state, "session_id", "")
+    if session_id and intent is not None:
+        try:
+            from rdflib import RDF
+            from app.modules.kg.manager import get_kg_manager
+            from app.modules.kg.ontology import EntityTypes
+
+            kg = get_kg_manager().get_session_kg(session_id)
+            if kg is None:
+                return _execution_error(
+                    state,
+                    "route",
+                    "missing_session_kg",
+                    "Session KG is required before EXECUTE.",
+                ) | result
+            expected = {
+                EntityTypes.ProjectTarget: len(getattr(intent, "project_targets", None) or []),
+                EntityTypes.ZoneTarget: len(getattr(intent, "zone_targets", None) or []),
+                EntityTypes.FacilityTarget: len(getattr(intent, "facilities", None) or []),
+                EntityTypes.AxisTarget: len(getattr(intent, "development_axes", None) or []),
+                EntityTypes.RoadTarget: len(getattr(intent, "road_targets", None) or []),
+            }
+            mismatches = []
+            for entity_type, expected_count in expected.items():
+                actual_count = len(set(kg.g.subjects(RDF.type, entity_type)))
+                if actual_count != expected_count:
+                    mismatches.append(
+                        f"{entity_type.split('/')[-1]} state={expected_count} kg={actual_count}"
+                    )
+            if mismatches:
+                return _execution_error(
+                    state,
+                    "route",
+                    "kg_l3_intent_mismatch",
+                    "L3 intent mismatch: " + "; ".join(mismatches),
+                ) | result
+        except Exception as e:
+            return _execution_error(
+                state,
+                "route",
+                "kg_l3_validation_failed",
+                str(e),
+            ) | result
+    return result
+
+
+async def _execute_project_node(state: ExecuteAgentState) -> dict:
+    """Place each L3 project on one independently bound, constraint-safe parcel."""
+    if "project" not in state.tasks_to_run:
+        return {}
+
+    from shapely.geometry import Point, shape
+    from app.modules.spatial_ops import build_constraint_index
+
+    projects = list(getattr(state.intent, "project_targets", None) or [])
+    landuse = (state.gis_data or {}).get("landuse_current_geojson") or {}
+    by_bsm = {
+        str((feature.get("properties") or {}).get("BSM")
+            or (feature.get("properties") or {}).get("bsm")
+            or ""): feature
+        for feature in landuse.get("features") or []
+    }
+    constraint_index = build_constraint_index(state.gis_bundle) if state.gis_bundle else None
+    hazard_data = (
+        (state.gis_data or {}).get("geological_hazard_geojson")
+        or (state.gis_data or {}).get("geological_hazard_points_geojson")
+        or {}
+    )
+    hazards = [
+        shape(feature["geometry"])
+        for feature in hazard_data.get("features") or []
+        if feature.get("geometry")
+    ]
+    occupied = []
+    features = []
+    prohibited = {
+        "farmland_protection",
+        "ecological_redline",
+        "historical_protection",
+        "cultivated_land_target",
+        "hazard_control_line",
+        "flood_control_line",
+    }
+
+    for project in projects:
+        selected = None
+        rejected = []
+        for bsm in project.candidate_bsms:
+            feature = by_bsm.get(str(bsm))
+            if not feature or not feature.get("geometry"):
+                continue
+            overlaps = (
+                constraint_index.geometry_in_constraint(feature["geometry"])
+                if constraint_index else []
+            )
+            blocked = sorted({
+                item.constraint_type for item in overlaps
+                if item.constraint_type in prohibited
+            })
+            if blocked:
+                rejected.append({"bsm": str(bsm), "constraints": blocked})
+                continue
+            point = shape(feature["geometry"]).representative_point()
+            if any(point.distance(hazard) < 0.001 for hazard in hazards):
+                rejected.append({"bsm": str(bsm), "constraints": ["geological_hazard_point"]})
+                continue
+            if any(point.distance(other) < 0.00025 for other in occupied):
+                continue
+            selected = (str(bsm), point)
+            break
+        if selected is None:
+            logger.warning(
+                "[EXECUTE:project] unresolved project=%s candidates=%d rejected=%s",
+                project.project_id,
+                len(project.candidate_bsms),
+                rejected,
+            )
+            continue
+        bsm, point = selected
+        occupied.append(point)
+        features.append({
+            "type": "Feature",
+            "properties": {
+                "project_id": project.project_id,
+                "project_name": project.name,
+                "project_category": project.category,
+                "action": project.action,
+                "scale_text": project.scale_text,
+                "source_bsm": bsm,
+                "source_instruction_id": project.source_instruction_id,
+                "source_report_key": project.source_report_key,
+                "candidate_bsms": list(project.candidate_bsms),
+                "constraint_check": "passed",
+            },
+            "geometry": {
+                "type": "Point",
+                "coordinates": [point.x, point.y],
+            },
+        })
+
+    if not features:
+        return _execution_error(
+            state,
+            "project",
+            "project_output_empty",
+            "Project targets exist but none could be placed on a constraint-safe candidate parcel.",
+        )
+    layers = list(state.layout_configs)
+    layers.append({
+        "layerType": "planned_project",
+        "layerName": "规划项目",
+        "data": {"type": "FeatureCollection", "features": features},
+    })
+    return {"layout_configs": layers}
 
 
 async def _execute_layout_node(state: ExecuteAgentState) -> dict:
-    """Layout sub-task: apply PARSE operations + MIP allocation + function/planning zone layers.
+    """Layout sub-task: allocate land use and build canonical custom planning zones.
 
     Replaces the deprecated allocate_and_generate ReAct node with a deterministic
-    pipeline: operations -> allocation -> function zone -> planning zone.
+    pipeline: operations -> allocation -> custom candidate selection -> global
+    custom-zone allocation -> canonical planning-zone output.
     constraint_adjustments from validate feedback are applied to targets on retry.
     """
     from app.tools.gis.generate import (
-        _apply_operations, _generate_function_zones, _make_planning_zone_layer,
+        _apply_operations, _generate_function_zones,
     )
     from app.tools.gis.allocate import _spatial_constraint_to_mip
     from app.tools.gis._generation.optimizer.mip_allocator import MIPZoneAllocator
@@ -193,15 +357,11 @@ async def _execute_layout_node(state: ExecuteAgentState) -> dict:
                 mip_parse_constraints.append(mip_c)
         all_constraints = list(state.kg_constraints or []) + mip_parse_constraints
 
-        # B1: MIP 候选画布 — binder/gazetteer 产出的 BSM（custom_zone_targets.target_bsms）
-        # 注入 zone_targets.candidate_bsms，限定 MIP 分配池（空间定位生效）
-        canvas_bsms = set()
-        for czt in (getattr(state.intent, "custom_zone_targets", None) or []):
-            canvas_bsms.update(czt.target_bsms or [])
-        if canvas_bsms:
-            for zt in zone_targets:
-                zt.candidate_bsms = sorted(set(zt.candidate_bsms or []) | canvas_bsms)
-            logger.info("[EXECUTE:layout] MIP canvas: %d candidate BSMs from binder/gazetteer", len(canvas_bsms))
+        zone_candidate_bsms = {
+            zt.land_use: list(dict.fromkeys(zt.candidate_bsms))
+            for zt in zone_targets
+            if zt.land_use and zt.candidate_bsms
+        }
 
         allocator = MIPZoneAllocator()
         allocated_geojson, alloc_trace = allocator.solve(
@@ -216,6 +376,7 @@ async def _execute_layout_node(state: ExecuteAgentState) -> dict:
             protected_parcels_detail=state.kg_protected_parcels_detail or None,
             three_line_targets=state.kg_three_lines or None,
             vne_summary=state.kg_vne_summary or None,
+            zone_candidate_bsms=zone_candidate_bsms or None,
         )
 
         summary = {
@@ -236,11 +397,7 @@ async def _execute_layout_node(state: ExecuteAgentState) -> dict:
         func_layer = _generate_function_zones(state.intent, gis_data_for_zones)
         if func_layer:
             layers.append(func_layer)
-        plan_layer = _make_planning_zone_layer(allocated_geojson, gis_data)
-        if plan_layer:
-            layers.append(plan_layer)
-
-        # P7: 自定义功能区层（L4 FunctionalZone，session 词汇表 + 语义规则选择 + 三线拦截）
+        # 自定义主分区：先用既有词汇/规则筛选候选，再由 MIP 解决跨区冲突。
         custom_targets = getattr(state.intent, "custom_zone_targets", None)
         if custom_targets is None and isinstance(state.intent, dict):
             custom_targets = state.intent.get("custom_zone_targets")
@@ -249,7 +406,11 @@ async def _execute_layout_node(state: ExecuteAgentState) -> dict:
         if custom_targets:
             try:
                 from app.tools.gis._generation.custom_zone_generator import CustomZoningGenerator
-                from shapely.geometry import mapping, shape
+                from shapely.geometry import shape
+                from app.modules.spatial_ops.custom_planning import (
+                    build_custom_planning_zone_layer,
+                    build_custom_zone_allocation_inputs,
+                )
 
                 parcels = [
                     {
@@ -283,6 +444,20 @@ async def _execute_layout_node(state: ExecuteAgentState) -> dict:
                         three_lines[subtype] = [
                             {"geometry": shape(g)} for g in geoms if g
                         ]
+                # 上传的限制区也是正式输入。Bundle 不可用或不含该层时，直接
+                # 使用本 session 的 GeoJSON，不能把保护约束降级为渲染附件。
+                for gis_key, subtype in (
+                    ("ecological_protection_geojson", "ecological_redline"),
+                    ("farmland_protection_geojson", "farmland_redline"),
+                ):
+                    if three_lines.get(subtype):
+                        continue
+                    source = (state.gis_data or {}).get(gis_key) or {}
+                    three_lines[subtype] = [
+                        {"geometry": shape(feature["geometry"])}
+                        for feature in source.get("features") or []
+                        if feature.get("geometry")
+                    ]
 
                 intent_dict = (
                     state.intent.model_dump(exclude_none=True)
@@ -298,29 +473,32 @@ async def _execute_layout_node(state: ExecuteAgentState) -> dict:
                 gen = CustomZoningGenerator(parcels, intent_dict, three_lines=three_lines)
                 zones, _audit = gen.generate_with_validation()
                 if zones:
-                    features = []
-                    for z in zones:
-                        geom = mapping(z["pln:geometry"]) if hasattr(z["pln:geometry"], "__geo_interface__") else z["pln:geometry"]
-                        features.append({
-                            "type": "Feature",
-                            "geometry": geom,
-                            "properties": {
-                                "entity_type": z["entity_type"],
-                                "category_code": z["pln:category_code"],
-                                "category_name_zh": z["pln:category_name_zh"],
-                                "color": z["pln:color"],
-                                "target_bsms": z["pln:target_bsms"],
-                                "area_target_ha": z.get("pln:area_target_ha"),
-                                "decided_by": z["pln:decided_by"],
-                                "confidence": z["pln:confidence"],
-                                "vocabulary_name": z["pln:vocabulary_name"],
-                            },
+                    custom_targets, candidate_bsms, metadata = build_custom_zone_allocation_inputs(
+                        landuse, zones,
+                    )
+                    custom_allocated, custom_trace = allocator.solve(
+                        landuse_geojson=landuse,
+                        targets=custom_targets,
+                        constraints=all_constraints,
+                        protected_parcels_detail=state.kg_protected_parcels_detail or None,
+                        three_line_targets=state.kg_three_lines or None,
+                        vne_summary=state.kg_vne_summary or None,
+                        zone_candidate_bsms=candidate_bsms,
+                    )
+                    custom_layer = build_custom_planning_zone_layer(custom_allocated, metadata)
+                    if custom_layer.get("features"):
+                        layers.append({
+                            "layerType": "custom_planning_zone",
+                            "layerName": "自定义规划分区",
+                            "data": custom_layer,
+                            "allocation_trace": custom_trace,
                         })
-                    layers.append({
-                        "layerType": "custom_functional_zone",
-                        "data": {"type": "FeatureCollection", "features": features},
-                    })
-                    logger.info("[EXECUTE:layout] custom_functional_zone: %d features", len(features))
+                        summary["custom_zone_count"] = len(custom_layer["features"])
+                        summary["custom_zone_mode"] = custom_trace.get("mode", "mip")
+                        logger.info(
+                            "[EXECUTE:layout] custom_planning_zone: %d features",
+                            len(custom_layer["features"]),
+                        )
             except Exception as e:
                 logger.error("[EXECUTE:layout] custom zoning failed: %s", e, exc_info=True)
 
@@ -362,6 +540,49 @@ async def _execute_facility_node(state: ExecuteAgentState) -> dict:
                 "facility",
                 "facility_output_empty",
                 "Facility targets exist but no facility layer was produced.",
+            )
+        from shapely.geometry import shape
+        from app.modules.spatial_ops import build_constraint_index
+
+        constraint_index = build_constraint_index(state.gis_bundle) if state.gis_bundle else None
+        prohibited = {
+            "farmland_protection",
+            "ecological_redline",
+            "historical_protection",
+            "cultivated_land_target",
+            "hazard_control_line",
+            "flood_control_line",
+        }
+        features = (fac_layer.get("data") or {}).get("features") or []
+        safe_features = []
+        for feature in features:
+            props = feature.get("properties") or {}
+            if props.get("status") == "现状":
+                safe_features.append(feature)
+                continue
+            overlaps = (
+                constraint_index.geometry_in_constraint(feature.get("geometry"))
+                if constraint_index and feature.get("geometry") else []
+            )
+            blocked = sorted({
+                item.constraint_type for item in overlaps
+                if item.constraint_type in prohibited
+            })
+            if blocked:
+                logger.warning(
+                    "[EXECUTE:facility] rejected %s by %s",
+                    props.get("facility_id"),
+                    blocked,
+                )
+                continue
+            safe_features.append(feature)
+        fac_layer["data"]["features"] = safe_features
+        if not safe_features:
+            return _execution_error(
+                state,
+                "facility",
+                "facility_constraint_rejected",
+                "All planned facility points intersect authoritative constraints.",
             )
 
         layers = list(state.layout_configs)
@@ -547,6 +768,98 @@ async def _execute_road_node(state: ExecuteAgentState) -> dict:
     return {"layout_configs": updated}
 
 
+def _build_l3_l4_consistency_report(state: ExecuteAgentState) -> dict:
+    """Compare structured L3 targets with generated L4-ready geometries."""
+    intent = state.intent
+    expected_projects = {
+        target.project_id
+        for target in (getattr(intent, "project_targets", None) or [])
+    }
+    expected_roads = list(getattr(intent, "road_targets", None) or [])
+    expected_zones = list(getattr(intent, "zone_targets", None) or [])
+    placed_projects = set()
+    planned_road_count = 0
+    zone_area_by_name = {}
+
+    for config in state.layout_configs or []:
+        layer_type = config.get("layerType") or config.get("layer_type") or ""
+        data = config.get("data") or config.get("geojson") or {}
+        features = data.get("features") if isinstance(data, dict) else None
+        features = features or config.get("features") or []
+        if layer_type == "planned_project":
+            placed_projects.update(
+                str((feature.get("properties") or {}).get("project_id") or "")
+                for feature in features
+            )
+        if layer_type in {"planned_road", "road", "road_network"}:
+            planned_road_count += sum(
+                1 for feature in features
+                if (feature.get("geometry") or {}).get("type")
+                in {"LineString", "MultiLineString"}
+            )
+        if layer_type in {
+            "custom_planning_zone",
+            "planning_zone",
+            "function_zone",
+            "land_use_zone",
+        }:
+            for feature in features:
+                props = feature.get("properties") or {}
+                name = str(
+                    props.get("target_use")
+                    or props.get("planning_zone")
+                    or props.get("zone_type")
+                    or props.get("land_use")
+                    or ""
+                )
+                zone_area_by_name[name] = zone_area_by_name.get(name, 0.0) + float(
+                    props.get("area_ha") or props.get("allocated_area_ha") or 0
+                )
+
+    placed_projects.discard("")
+    missing_projects = sorted(expected_projects - placed_projects)
+    differences = []
+    suggestions = []
+    if missing_projects:
+        differences.append({
+            "check": "project_placement",
+            "expected": len(expected_projects),
+            "actual": len(placed_projects),
+            "missing_ids": missing_projects,
+        })
+        suggestions.append("重新绑定缺失项目的独立候选 BSM，并检查限制区冲突。")
+    if expected_roads and planned_road_count < len(expected_roads):
+        differences.append({
+            "check": "road_connectivity",
+            "expected": len(expected_roads),
+            "actual": planned_road_count,
+        })
+        suggestions.append("补齐道路目标端点，使用项目点和现状道路节点重新寻路。")
+
+    area_checks = []
+    for target in expected_zones:
+        if target.area_ha is None:
+            continue
+        actual = zone_area_by_name.get(target.land_use, 0.0)
+        delta = round(actual - float(target.area_ha), 4)
+        area_checks.append({
+            "target": target.land_use,
+            "expected_ha": float(target.area_ha),
+            "actual_ha": actual,
+            "delta_ha": delta,
+        })
+    return {
+        "passed": not differences,
+        "consistent_items": {
+            "placed_project_ids": sorted(expected_projects & placed_projects),
+            "zone_area_checks": area_checks,
+            "planned_road_count": planned_road_count,
+        },
+        "differences": differences,
+        "revision_suggestions": suggestions,
+    }
+
+
 async def _validate_node(state: ExecuteAgentState) -> dict:
     """Evaluator gate: validate layout via LayoutValidator, surface adjustments.
 
@@ -554,6 +867,33 @@ async def _validate_node(state: ExecuteAgentState) -> dict:
     _execute_layout_node which applies them to allocation targets).
     """
     from app.tools.gis._validation.layout_validator import LayoutValidator
+
+    custom_layer_present = any(
+        (config.get("layerType") or config.get("layer_type")) == "custom_planning_zone"
+        and ((config.get("data") or config.get("geojson") or {}).get("features") or config.get("features"))
+        for config in (state.layout_configs or [])
+    )
+    deferred_codes = {
+        "road_output_empty", "road_failed", "planned_roads_unresolved", "road_deferred",
+        "project_output_empty", "planned_facilities_unresolved",
+    }
+    if custom_layer_present and state.execution_errors:
+        codes = {item.get("code") for item in state.execution_errors}
+        if codes and codes.issubset(deferred_codes):
+            return {
+                "validation_round": state.validation_round + 1,
+                "validation_result": {
+                    "passed": True,
+                    "status": "warning",
+                    "partial_usable": True,
+                    "violations": [
+                        {"check": item.get("code"), "message": item.get("message")}
+                        for item in state.execution_errors
+                    ],
+                    "reason": "custom_zone_ready_road_deferred",
+                },
+                "execution_errors": list(state.execution_errors or []),
+            }
 
     if state.execution_errors:
         return {
@@ -584,14 +924,48 @@ async def _validate_node(state: ExecuteAgentState) -> dict:
         }
 
     try:
+        from app.modules.spatial_ops.custom_planning import validate_custom_planning_zone_layer
+
         validator = LayoutValidator()
+        validator_configs = state.layout_configs
+        if custom_layer_present:
+            validator_configs = [
+                config for config in state.layout_configs
+                if (config.get("layerType") or config.get("layer_type"))
+                not in {"function_zone", "land_use_zone"}
+            ]
         report = validator.validate(
-            state.layout_configs,
+            validator_configs,
             protected_parcels_detail=state.kg_protected_parcels_detail or None,
             kg_vne_summary=state.kg_vne_summary or None,
         )
 
-        passed = report.status != "fail"
+        custom_geojson = next(
+            (
+                config.get("data") or config.get("geojson")
+                for config in state.layout_configs
+                if (config.get("layerType") or config.get("layer_type")) == "custom_planning_zone"
+            ),
+            None,
+        )
+        custom_validation = (
+            validate_custom_planning_zone_layer(custom_geojson)
+            if custom_geojson else None
+        )
+        custom_violations = []
+        if custom_validation and not custom_validation["passed"]:
+            custom_violations.append({
+                "check": "custom_planning_zone_overlap",
+                "message": "Custom planning zones overlap after global allocation.",
+            })
+        validator_violations = [
+            {"check": c.check_name, "message": c.violations[0].message}
+            for c in report.checks if c.violations
+        ]
+        consistency = _build_l3_l4_consistency_report(state)
+        passed = report.status != "fail" and (
+            custom_validation is None or custom_validation["passed"]
+        ) and consistency["passed"]
         adjustments = getattr(report, "adjustments", None) or []
         adj_dicts = [
             {"zone": a.zone, "action": a.action, "delta_ha": a.delta_ha,
@@ -609,11 +983,10 @@ async def _validate_node(state: ExecuteAgentState) -> dict:
             "validation_round": round_num,
             "validation_result": {
                 "passed": passed,
-                "status": report.status,
-                "violations": [
-                    {"check": c.check_name, "message": c.violations[0].message}
-                    for c in report.checks if c.violations
-                ] if not passed else [],
+                "status": report.status if passed else "fail",
+                "violations": validator_violations + custom_violations,
+                "custom_planning": custom_validation,
+                "l3_l4_consistency": consistency,
             },
             "constraint_adjustments": adj_dicts,
         }
@@ -650,17 +1023,180 @@ def _route_after_validate(state: ExecuteAgentState) -> Literal["pass", "retry"]:
 # ── L4 Write-back ────────────────────────────────────────────────────
 
 
+def _layout_configs_to_planned_state(state: ExecuteAgentState):
+    """Normalize generated layers into the authoritative L4 contract."""
+    from shapely.geometry import shape
+    from app.modules.kg.builder.layer4 import (
+        PlannedAxisEntry,
+        PlannedFacilityEntry,
+        PlannedParcelEntry,
+        PlannedRoadEntry,
+        PlannedState,
+        PlannedZoneEntry,
+    )
+    from app.modules.kg.ontology import EntityIdPolicy
+
+    intent = state.intent
+    zone_targets = {
+        target.land_use: str(
+            EntityIdPolicy.uri(
+                "zone_target",
+                target.zone_id or target.land_use,
+            )
+        )
+        for target in (getattr(intent, "zone_targets", None) or [])
+        if target.land_use
+    }
+    facility_targets = {
+        target.source_instruction_id or target.type: str(
+            EntityIdPolicy.uri(
+                "facility_target",
+                target.source_instruction_id or target.type,
+            )
+        )
+        for target in (getattr(intent, "facilities", None) or [])
+        if target.type
+    }
+    road_targets = {
+        target.source_instruction_id or target.source_project_id or target.road_level: str(
+            EntityIdPolicy.uri(
+                "road_target",
+                target.source_instruction_id
+                or target.source_project_id
+                or target.road_level,
+            )
+        )
+        for target in (getattr(intent, "road_targets", None) or [])
+    }
+    axis_targets = {
+        target.source_instruction_id or target.reference_feature: str(
+            EntityIdPolicy.uri(
+                "axis_target",
+                target.source_instruction_id or target.reference_feature,
+            )
+        )
+        for target in (getattr(intent, "development_axes", None) or [])
+    }
+    planned = PlannedState(
+        version=f"session-{state.session_id or 'current'}",
+        source="execute_layout_configs",
+    )
+
+    for config in state.layout_configs or []:
+        layer_type = config.get("layerType") or config.get("layer_type") or ""
+        data = config.get("data") or config.get("geojson") or {}
+        features = data.get("features") if isinstance(data, dict) else None
+        features = features or config.get("features") or []
+        for index, feature in enumerate(features, start=1):
+            props = feature.get("properties") or {}
+            geometry = feature.get("geometry")
+            geometry_type = (geometry or {}).get("type", "")
+            wkt = shape(geometry).wkt if geometry else ""
+            bsm = str(
+                props.get("BSM")
+                or props.get("bsm")
+                or props.get("source_bsm")
+                or ""
+            )
+            target_use = str(
+                props.get("target_use")
+                or props.get("planning_zone")
+                or props.get("zone_type")
+                or props.get("land_use")
+                or ""
+            )
+
+            if geometry_type in {"Polygon", "MultiPolygon"} and layer_type in {
+                "custom_planning_zone",
+                "planning_zone",
+                "function_zone",
+                "land_use_zone",
+            }:
+                area_ha = float(props.get("area_ha") or props.get("allocated_area_ha") or 0)
+                target_uri = zone_targets.get(target_use, "")
+                if bsm:
+                    planned.parcels.append(PlannedParcelEntry(
+                        bsm=bsm,
+                        planning_land_use=target_use,
+                        zone_type=target_use,
+                        area_ha=area_ha,
+                        geometry=wkt,
+                        derived_from_bsms=[bsm],
+                        derived_from_zone_target=target_uri,
+                        source_spec=str(props.get("source_instruction_id") or ""),
+                        decided_by="rule",
+                        operation=str(props.get("operation") or "reclassify"),
+                    ))
+                else:
+                    planned.zones.append(PlannedZoneEntry(
+                        zone_type=target_use or layer_type,
+                        area_ha=area_ha,
+                        name=str(props.get("name") or target_use),
+                        geometry=wkt,
+                        derived_from_zone_target=target_uri,
+                    ))
+                continue
+
+            if geometry_type == "Point" and layer_type in {
+                "facility_point",
+                "planned_project",
+                "project_point",
+            }:
+                coordinates = geometry.get("coordinates") or [0, 0]
+                source_key = str(
+                    props.get("source_instruction_id")
+                    or props.get("facility_type")
+                    or ""
+                )
+                target_uri = facility_targets.get(source_key, "")
+                if layer_type in {"planned_project", "project_point"}:
+                    project_id = str(props.get("project_id") or "")
+                    target_uri = str(EntityIdPolicy.uri("project_target", project_id)) if project_id else ""
+                planned.facilities.append(PlannedFacilityEntry(
+                    name=str(props.get("name") or props.get("facility_type") or props.get("project_name") or f"point-{index}"),
+                    facility_type=str(props.get("facility_type") or props.get("project_category") or "project"),
+                    lon=float(coordinates[0]),
+                    lat=float(coordinates[1]),
+                    service_radius=int(props.get("service_radius") or 0),
+                    derived_from_target=target_uri,
+                ))
+                continue
+
+            if geometry_type in {"LineString", "MultiLineString"}:
+                source_key = str(
+                    props.get("source_instruction_id")
+                    or props.get("source_project_id")
+                    or props.get("project_id")
+                    or ""
+                )
+                if layer_type in {"planned_road", "road", "road_network"}:
+                    planned.roads.append(PlannedRoadEntry(
+                        name=str(props.get("name") or props.get("road_name") or f"road-{index}"),
+                        road_level=str(props.get("road_level") or props.get("road_class") or ""),
+                        width_m=float(props.get("width_m") or props.get("recommended_width_m") or 0),
+                        derived_from_target=road_targets.get(source_key, ""),
+                    ))
+                elif layer_type in {"axis", "development_axis", "infrastructure"}:
+                    planned.axes.append(PlannedAxisEntry(
+                        name=str(props.get("name") or props.get("label") or f"axis-{index}"),
+                        reference_feature=str(props.get("reference_feature") or ""),
+                        direction=str(props.get("direction") or ""),
+                        derived_from_target=axis_targets.get(source_key, ""),
+                    ))
+    return planned
+
+
 async def _write_l4_node(state: ExecuteAgentState) -> dict:
     """Write L4 planned entities (PlannedParcel, PlannedZone, PlannedFacility, etc.) to KG.
 
     Called after execute completes to persist the planned layout back to KG.
     """
+    if (state.validation_result or {}).get("partial_usable"):
+        logger.warning("[EXECUTE:l4_write] Skipped for partial result; road stage is deferred")
+        return {}
     if not (state.validation_result or {}).get("passed", False):
         logger.error("[EXECUTE:l4_write] Skipped because validation did not pass")
         return {}
-
-    from rdflib import Literal, RDF
-    from app.modules.kg.memory import EntityAnnotation
 
     session_id = getattr(state, "session_id", "")
     if not session_id:
@@ -678,64 +1214,21 @@ async def _write_l4_node(state: ExecuteAgentState) -> dict:
         logger.warning("[EXECUTE:l4_write] KG access failed: %s", e)
         return {}
 
-    layout_configs = state.layout_configs or []
-    written = 0
+    from app.modules.kg.builder.layer4 import apply_planned_state
 
-    for config in layout_configs:
-        layer_type = config.get("layer_type", "")
-        features = config.get("features", [])
-        op_type = config.get("operation", "preserve")
-
-        if op_type == "preserve":
-            continue
-
-        for feat in features:
-            props = feat.get("properties", {})
-            bsm = props.get("bsm", "")
-            target_use = props.get("target_use", props.get("planning_zone", ""))
-
-            if not bsm or not target_use:
-                continue
-
-            if layer_type == "function_zone" or layer_type == "planning_zone":
-                entity_uri = f"pln:PlannedZone_{bsm}"
-                entity_type = "PlannedZone"
-            elif layer_type == "facility":
-                entity_uri = f"pln:PlannedFacility_{bsm}"
-                entity_type = "PlannedFacility"
-            elif layer_type == "axis":
-                entity_uri = f"pln:PlannedAxis_{bsm}"
-                entity_type = "PlannedAxis"
-            elif layer_type == "road":
-                entity_uri = f"pln:PlannedRoad_{bsm}"
-                entity_type = "PlannedRoad"
-            else:
-                entity_uri = f"pln:PlannedParcel_{bsm}"
-                entity_type = "PlannedParcel"
-
-            try:
-                kg.g.add((RDF.Uri(entity_uri), RDF.type, Literal(entity_type)))
-                kg.g.add((RDF.Uri(entity_uri), Literal(target_use), Literal("target_use")))
-                if bsm:
-                    kg.g.add((RDF.Uri(entity_uri), Literal(bsm), Literal("bsm")))
-
-                annotation = EntityAnnotation(
-                    entity_uri=entity_uri,
-                    entity_type=entity_type,
-                    description=f"规划{target_use}",
-                    source_text_refs=[f"operation:{op_type}"],
-                )
-                await kg.memory.add_entity_annotation_async(
-                    annotation,
-                    dimension_key="l4_provenance",
-                    fact_type="planned_entity",
-                    derived_from="execute_computed",
-                )
-                written += 1
-            except Exception as e:
-                logger.warning("[EXECUTE:l4_write] Failed to write %s: %s", entity_uri, e)
-
-    if written > 0:
+    planned_state = _layout_configs_to_planned_state(state)
+    written = sum(
+        len(items)
+        for items in (
+            planned_state.parcels,
+            planned_state.zones,
+            planned_state.facilities,
+            planned_state.roads,
+            planned_state.axes,
+        )
+    )
+    if written:
+        apply_planned_state(kg, planned_state)
         manager.bump_version(session_id)
         logger.info("[EXECUTE:l4_write] Wrote %d L4 entities to KG", written)
 
@@ -759,6 +1252,7 @@ def build_execute_agent_graph():
 
     graph.add_node("route_tasks", _checkpoint_safe_node(_route_tasks_node))
     graph.add_node("execute_layout", _checkpoint_safe_node(_execute_layout_node))
+    graph.add_node("execute_project", _checkpoint_safe_node(_execute_project_node))
     graph.add_node("execute_facility", _checkpoint_safe_node(_execute_facility_node))
     graph.add_node("execute_axis", _checkpoint_safe_node(_execute_axis_node))
     graph.add_node("execute_road", _checkpoint_safe_node(_execute_road_node))
@@ -767,7 +1261,8 @@ def build_execute_agent_graph():
 
     graph.add_edge(START, "route_tasks")
     graph.add_edge("route_tasks", "execute_layout")
-    graph.add_edge("execute_layout", "execute_facility")
+    graph.add_edge("execute_layout", "execute_project")
+    graph.add_edge("execute_project", "execute_facility")
     graph.add_edge("execute_facility", "execute_axis")
     graph.add_edge("execute_axis", "execute_road")
     graph.add_edge("execute_road", "validate")
@@ -781,7 +1276,7 @@ def build_execute_agent_graph():
     graph.add_edge("write_l4", END)
 
     compiled = graph.compile()
-    logger.info("[EXECUTE] Agent graph compiled: 7 nodes (incl. L4 write-back), 1 conditional edge")
+    logger.info("[EXECUTE] Agent graph compiled: 8 nodes (incl. L4 write-back), 1 conditional edge")
     return compiled
 
 

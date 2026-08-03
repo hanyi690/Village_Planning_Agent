@@ -59,7 +59,7 @@ START → route_tasks → execute_layout → execute_facility → execute_axis �
 | 节点 | 实现 | 职责 |
 |---|---|---|
 | `route_tasks` | `_route_tasks_node` | 依据 typed/legacy intent 决定子任务：`layout` 为核心任务；`facility`/`axis`/`road` 仅当 intent 带对应 target |
-| `execute_layout` | `_execute_layout_node` | ★ 核心：`_apply_operations` → **MIPZoneAllocator.solve**（B1 候选画布 / KG 约束 + parse 约束 / 密度提示 / 邻接规则 / 设施锚点 / 三线 / VNE）→ `_generate_function_zones` + `_make_planning_zone_layer` → **P7 CustomZoningGenerator**（自定义功能区 L4，词汇表 + 语义规则 + 三线拦截，`build_parcel_contexts` 多因子上下文） |
+| `execute_layout` | `_execute_layout_node` | ★ 核心：`_apply_operations` → 用地 **MIPZoneAllocator.solve** → **CustomZoningGenerator** 候选筛选（词汇表/规则/三线）→ 第二次 MIP 解决自定义分区候选冲突 → `custom_planning_zone` 主分区层 |
 | `execute_facility` | `_execute_facility_node` | `_generate_facilities`（查 KG 既有设施坐标 → FacilityPlacer 布设新设施），追加 facility 层 |
 | `execute_axis` | `_execute_axis_node` | `_generate_axes` + `_generate_space_control_zone`（三线传入）+ `_generate_land_use_zone`，最多追加 3 层 |
 | `execute_road` | `_execute_road_node` | 优先 **`road/generator.py::execute_road_planning_from_agent_state`**（Stage 0-6 门控生成）；失败降级 `modules/spatial_ops/road_planner.plan_roads`（upgrade/create/preserve） |
@@ -81,8 +81,8 @@ START → route_tasks → execute_layout → execute_facility → execute_axis �
 5. **约束合并**：`state.kg_constraints` + `_spatial_constraint_to_mip(constraint_set)`。
 6. **B1 候选画布**：`custom_zone_targets[].target_bsms`（binder/gazetteer 产出）注入 `zone_targets.candidate_bsms`，限定 MIP 分配池（空间定位生效）。
 7. **MIP 求解**：`MIPZoneAllocator().solve(...)`，trace 含 `mode`（mip/intent-only）。
-8. **图层生成**：function zone + planning zone 层（`landuse_current_geojson` 注入 `gis_data` 避免 intent-only fallback）。
-9. **P7 自定义功能区**：`CustomZoningGenerator(parcels, intent_dict, three_lines)` → `generate_with_validation()`，产出 `custom_functional_zone` 层（含 `entity_type` / `category_code` / `category_name_zh` / `target_bsms` / `decided_by` / `confidence` / `vocabulary_name`）。
+8. **图层生成**：`function_zone` 仅作隐藏分析层；不再输出 `planning_zone` 为规划主成果。
+9. **P7 自定义主分区**：`CustomZoningGenerator(parcels, intent_dict, three_lines)` 生成候选地块；第二次 `MIPZoneAllocator` 以每区候选 BSM 作为硬边界，解决跨区冲突；`custom_planning.py` 合并地块、补足显式“待确认分区”，输出唯一 `custom_planning_zone` 主分区层。
 
 ---
 
@@ -111,7 +111,7 @@ START → route_tasks → execute_layout → execute_facility → execute_axis �
          kg_* 只读视图（turtle / constraints / adjacency_map / three_lines / protected_parcels_detail / vne_summary / session_ref）
 
 输出:  layout_configs: List[Dict]     # 各层 {layer_type/layerType, data 或 features, ...}
-         function_zone / planning_zone / custom_functional_zone
+         function_zone（分析）/ custom_planning_zone（唯一主分区）
          facility / axis / space_control_zone / land_use_zone
          planned_road（road 层）+ road_planning_nodes 等
        allocated_geojson: FeatureCollection  # MIP 分配结果

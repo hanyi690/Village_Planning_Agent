@@ -115,6 +115,73 @@ async def gis_agent_node(state: Dict[str, Any]) -> Dict[str, Any]:
     except Exception as e:
         logger.warning("[gis_agent_node] L1/L3 report read failed: %s", e)
 
+    # ── EXPLORE -> deterministic Bundle Binder -> typed PARSE intent ──
+    external_intent = None
+    try:
+        from app.agent.explore.contracts import ExplorationInstructionCollection
+        from app.agent.gis.format_bound_intent import format_bound_spatial_intent
+        from app.agent.gis.parse import parse
+        from app.modules.spatial_ops.bundle_binder import bind_exploration_to_bundle
+
+        planning_text = "\n\n".join(
+            str(record.get("content") or "")
+            for record in reports.values()
+            if isinstance(record, dict) and record.get("content")
+        )
+        fallback_intent = parse(
+            planning_text=planning_text,
+            village_name=village_name,
+        ).intent if planning_text else None
+
+        vocabulary_name = ""
+        if planning_text:
+            from app.agent.gis.vocab_extractor import (
+                extract_vocabulary_deterministic,
+            )
+            from app.modules.schema.encodings.dicts.vocabularies.loader import (
+                register_vocabulary,
+            )
+
+            vocabulary = extract_vocabulary_deterministic({
+                key: str(value.get("content") or "")
+                for key, value in reports.items()
+                if isinstance(value, dict)
+            })
+            if vocabulary.categories:
+                register_vocabulary(vocabulary.name, vocabulary)
+                vocabulary_name = vocabulary.name
+
+        collection = ExplorationInstructionCollection.model_validate(
+            {
+                key: value
+                for key, value in explore_instructions.items()
+                if key in {
+                    "schema_version",
+                    "session_id",
+                    "village_name",
+                    "instructions",
+                    "kg_session_ref",
+                }
+            }
+        )
+        bound_entities = bind_exploration_to_bundle(collection, gis_bundle)
+        external_intent = format_bound_spatial_intent(
+            village_name=village_name,
+            bound_entities=bound_entities,
+            fallback_intent=fallback_intent,
+            vocabulary_name=vocabulary_name,
+        )
+        external_intent.vocabulary_name = vocabulary_name
+        logger.info(
+            "[gis_agent_node] bound intent: projects=%d zones=%d facilities=%d roads=%d",
+            len(external_intent.project_targets),
+            len(external_intent.zone_targets),
+            len(external_intent.facilities),
+            len(external_intent.road_targets),
+        )
+    except Exception as e:
+        logger.warning("[gis_agent_node] Explore/Bundle binding failed: %s", e)
+
     # ── Step 2: LAYOUT Pipeline (hybrid: deterministic skeleton + ReAct subgraph) ──
     pipeline = build_layout_pipeline()
     layout_result = await pipeline.ainvoke({
@@ -123,7 +190,7 @@ async def gis_agent_node(state: Dict[str, Any]) -> Dict[str, Any]:
         "gis_data": gis_data,
         "gis_bundle": gis_bundle,
         "reports": reports,
-        "intent": None,
+        "intent": external_intent,
         "intent_json": {},
         "explore_instructions": explore_instructions,
         "report_summary_index": report_summary_index,

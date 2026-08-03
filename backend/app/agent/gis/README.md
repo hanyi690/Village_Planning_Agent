@@ -28,7 +28,7 @@ backend/app/agent/gis/
 ├── prompts.py           # PARSE / LAYOUT 系统 prompt（legacy，新图不依赖）
 ├── layout_pipeline.py   # 顶层流水线 StateGraph（9 节点）
 ├── format_bound_intent.py   # Explore/Binder 产物 → 规划 intent（严格无工具，v4/P6）
-├── spatial_entity_binder.py # Explore 候选 → bundle 不可变几何的确定性绑定
+├── spatial_entity_binder.py # 兼容导入；实现位于 spatial_ops/bundle_binder.py
 ├── vocab_extractor.py       # L3 报告 → session 功能区词汇表（确定性）
 ├── vocab/               # 词汇表规则 DSL（TypingRule ↔ expr_eval.Condition）
 │   ├── rules.py         #   rule_to_condition 统一求值
@@ -141,7 +141,7 @@ GISPipelineOutput ── API 输出（layout_configs, export_result, render_resu
 
 | 模块 | 职责 | 说明 |
 |------|------|------|
-| `spatial_entity_binder.py` | Explore 候选 → bundle 几何绑定 | 确定性 BSM 优先；`DeterministicBundleBinder` 只读不 mutate bundle，拒绝歧义候选 |
+| `spatial_ops/bundle_binder.py` | Explore 候选 → bundle 几何绑定 | 确定性 BSM 优先；`DeterministicBundleBinder` 只读 bundle，拒绝歧义候选 |
 | `format_bound_intent.py` | Binder 产物 → 规划 intent | 严格无工具；project 域 → `CustomZoneTarget`；zone/landuse 目标从 evidence 提取 `area_ratio`（如 "生态保护区 15.39%"） |
 | `vocab_extractor.py` | L3 报告 → session 词汇表 | LLM 只产类别定义（名称/颜色/地类线索/依据），不产几何不产 BSM；确定性 fallback + `_DLBM_HINTS` |
 | `vocab/rules.py` | 词汇表规则 DSL | `TypingRule → expr_eval.Condition` 统一求值，消除 generator 双实现 |

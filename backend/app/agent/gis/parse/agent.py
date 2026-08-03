@@ -13,6 +13,7 @@ Public API:
 from __future__ import annotations
 
 import json
+import hashlib
 import re
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
@@ -20,6 +21,7 @@ from typing import Any, Dict, List, Optional
 from app.modules.schema.contracts.parse_contracts import (
     AxisTarget,
     FacilityTarget,
+    ProjectTarget,
     RoadTarget,
     SpatialPlanningIntent,
     SpatialPreference,
@@ -63,6 +65,7 @@ _INSTRUCTION_TYPE_MAP = {
     "功能分区": "zone",
     "分区": "zone",
     "设施": "facility",
+    "道路": "road",
     "轴线": "axis",
     "现状设施": "facility",
     "现状项目": "project",
@@ -89,7 +92,7 @@ def _extract_instruction_tables(text: str) -> Dict[str, List[Any]]:
     """从【INSTRUCTION】段解析固定列 markdown 表格 → 空间目标列表。
 
     行级容错：坏行 / 未知类型 / 空名称 丢弃，不影响其余行。
-    返回 {"zones": [ZoneTarget], "facilities": [FacilityTarget], "axes": [AxisTarget]}
+    返回项目主对象，并按项目类别派生设施/道路/分区执行目标。
     """
     from app.modules.parsing.tables import _iter_tables
 
@@ -97,11 +100,19 @@ def _extract_instruction_tables(text: str) -> Dict[str, List[Any]]:
     if not section:
         return {"zones": [], "facilities": [], "axes": []}
 
+    projects: List[ProjectTarget] = []
     zones: List[ZoneTarget] = []
     facilities: List[FacilityTarget] = []
     axes: List[AxisTarget] = []
-    seen = {"zones": set(), "facilities": set(), "axes": set()}
-    kind_to_seen = {"project": "facilities", "zone": "zones", "facility": "facilities", "axis": "axes"}
+    roads: List[RoadTarget] = []
+    seen = {"projects": set(), "zones": set(), "facilities": set(), "axes": set(), "roads": set()}
+    kind_to_seen = {
+        "project": "projects",
+        "zone": "zones",
+        "facility": "facilities",
+        "axis": "axes",
+        "road": "roads",
+    }
     bad_rows = 0
     no_location = 0
 
@@ -145,11 +156,50 @@ def _extract_instruction_tables(text: str) -> Dict[str, List[Any]]:
             semantic = SemanticMetadata(
                 natural_language_description=f"{name}：{description}" if description else name,
                 spatial_hint=location or "",
+                raw_text=" | ".join(str(cell) for cell in row),
             )
-            if kind == "zone":
+            instruction_seed = f"{name}|{location}|{description}|{scale}"
+            instruction_id = "INS-" + hashlib.sha1(
+                instruction_seed.encode("utf-8")
+            ).hexdigest()[:12]
+            if kind == "project":
+                seen["projects"].add(name)
+                project_id = "PRJ-" + hashlib.sha1(name.encode("utf-8")).hexdigest()[:10]
+                category = _classify_project_category(name, description)
+                project = ProjectTarget(
+                    project_id=project_id,
+                    name=name,
+                    category=category,
+                    scale_text=scale,
+                    location_hint=location,
+                    source_instruction_id=instruction_id,
+                    source_row=len(projects) + 1,
+                    semantic=semantic,
+                )
+                projects.append(project)
+                if category == "road":
+                    roads.append(RoadTarget(
+                        road_level=name,
+                        connects=[location] if location else [],
+                        source_project_id=project_id,
+                        source_instruction_id=instruction_id,
+                        semantic=semantic,
+                    ))
+                elif category in {"facility", "infrastructure"}:
+                    facilities.append(FacilityTarget(
+                        type=name,
+                        status="planned_new",
+                        location_hint=location,
+                        anchor_village=location,
+                        source_project_id=project_id,
+                        source_instruction_id=instruction_id,
+                        semantic=semantic,
+                    ))
+            elif kind == "zone":
                 seen["zones"].add(name)
                 zones.append(ZoneTarget(
                     land_use=name,
+                    source_instruction_id=instruction_id,
                     semantic=semantic,
                     spatial_preference=SpatialPreference(
                         direction=_direction_from_location(location),
@@ -163,6 +213,7 @@ def _extract_instruction_tables(text: str) -> Dict[str, List[Any]]:
                     status="planned_new",
                     location_hint=location,
                     anchor_village=location,
+                    source_instruction_id=instruction_id,
                     semantic=semantic,
                 ))
             elif kind == "axis":
@@ -170,17 +221,47 @@ def _extract_instruction_tables(text: str) -> Dict[str, List[Any]]:
                 axes.append(AxisTarget(
                     label=name,
                     reference_feature=location or "",
+                    source_instruction_id=instruction_id,
+                    semantic=semantic,
+                ))
+            elif kind == "road":
+                seen["roads"].add(name)
+                roads.append(RoadTarget(
+                    road_level=name,
+                    connects=[location] if location else [],
+                    source_instruction_id=instruction_id,
                     semantic=semantic,
                 ))
 
-    total = len(zones) + len(facilities) + len(axes)
+    total = len(projects) + len(zones) + len(facilities) + len(axes) + len(roads)
     logger.info(
         "[PARSE] INSTRUCTION: %d zones, %d facilities, %d axes "
         "(bad_rows=%d no_location=%d)",
         len(zones), len(facilities), len(axes),
         bad_rows, no_location,
     )
-    return {"zones": zones, "facilities": facilities, "axes": axes}
+    return {
+        "projects": projects,
+        "zones": zones,
+        "facilities": facilities,
+        "axes": axes,
+        "roads": roads,
+    }
+
+
+def _classify_project_category(name: str, description: str = "") -> str:
+    text = f"{name} {description}"
+    if any(word in text for word in ("道路", "村道", "公路", "桥", "路网")):
+        return "road"
+    if any(word in text for word in ("服务中心", "卫生", "学校", "广场", "停车", "公园", "设施")):
+        return "facility"
+    if any(word in text for word in ("污水", "供水", "排水", "电力", "通信", "环卫")):
+        return "infrastructure"
+    if any(word in text for word in ("整治", "修复", "复垦")):
+        return "land_consolidation"
+    if any(word in text for word in ("产业", "基地", "园区", "旅游", "民宿")):
+        return "industry"
+    return "other"
 
 
 # ── Extraction patterns ──────────────────────────────────────────────
@@ -361,6 +442,11 @@ def parse(
         if key and key not in axis_names:
             axes.append(iax)
             axis_names.add(key)
+    road_names = {road.road_level for road in roads if road.road_level}
+    for road in instruction["roads"]:
+        if road.road_level and road.road_level not in road_names:
+            roads.append(road)
+            road_names.add(road.road_level)
 
     # 过滤表格残片：既有正则会把正文 markdown 表格行误提取为设施
     # （类型/位置含 "|" 的行无实体意义，丢弃避免稀释下游定位）
@@ -384,6 +470,7 @@ def parse(
         facilities=facilities,
         development_axes=axes,
         road_targets=roads,
+        project_targets=instruction["projects"],
         raw_text=planning_text[:2000],
     )
 

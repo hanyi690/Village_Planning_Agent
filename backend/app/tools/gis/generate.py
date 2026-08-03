@@ -257,6 +257,9 @@ def _generate_facilities(
                 "direction": getattr(ft, 'direction', 'center'),
                 "service_radius": getattr(ft, 'service_radius', None),
                 "candidate_bsms": list(getattr(ft, 'candidate_bsms', None) or []),
+                "source_project_id": getattr(ft, 'source_project_id', ''),
+                "source_instruction_id": getattr(ft, 'source_instruction_id', ''),
+                "source_report_key": getattr(ft, 'source_report_key', ''),
             })
     elif isinstance(intent, dict) and intent.get("facilities"):
         facilities_raw = intent["facilities"]

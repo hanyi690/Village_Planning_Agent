@@ -334,6 +334,7 @@ async def _parse_intent_node(state: GISPipelineState) -> dict:
             (getattr(existing, "zone_targets", None) and len(existing.zone_targets) > 0)
             or (getattr(existing, "custom_zone_targets", None) and len(existing.custom_zone_targets) > 0)
             or (getattr(existing, "facilities", None) and len(existing.facilities) > 0)
+            or (getattr(existing, "project_targets", None) and len(existing.project_targets) > 0)
         )
         if has_structured:
             logger.info(
@@ -422,12 +423,6 @@ async def _parse_intent_node(state: GISPipelineState) -> dict:
             _attach_custom_zone_targets(intent, reports, village_name)
         except Exception as e:
             logger.warning("[Pipeline:parse] custom zone target attach failed: %s", e)
-
-        # P2: 合并 EXPLORE grounding 指令的候选 BSM 到 intent targets
-        try:
-            _merge_explore_bsms(intent, state.explore_instructions or {})
-        except Exception as e:
-            logger.warning("[Pipeline:parse] explore bsms merge failed: %s", e)
 
         # Extract PARSE outputs - all typed
         zone_count = len(intent.zone_targets) if hasattr(intent, 'zone_targets') else 0
@@ -592,7 +587,11 @@ async def _export_gdb_node(state: GISPipelineState) -> dict:
     """Export the validated GeoJSON planning package and run manifest."""
     from app.modules.spatial_ops.export_package import export_gdb_package
 
-    if not (state.validation_result or {}).get("passed", False):
+    partial_zone_ready = bool((state.validation_result or {}).get("partial_usable")) and any(
+        (config.get("layerType") or config.get("layer_type")) == "custom_planning_zone"
+        for config in (state.layout_configs or [])
+    )
+    if not (state.validation_result or {}).get("passed", False) and not partial_zone_ready:
         logger.error("[Pipeline:export] Blocked because layout validation did not pass")
         result = {
             "status": "blocked",
@@ -615,14 +614,21 @@ async def _export_gdb_node(state: GISPipelineState) -> dict:
         return {"export_result": result}
 
     try:
+        export_validation = dict(state.validation_result or {})
+        if partial_zone_ready:
+            export_validation["status"] = "warning"
+            export_validation["partial_usable"] = True
         result = export_gdb_package(
             layout_configs=state.layout_configs,
             allocated_geojson=state.allocated_geojson,
             gis_data=state.gis_data,
             village_name=state.village_name,
             session_id=state.session_id,
-            validation_result=state.validation_result,
+            validation_result=export_validation,
         )
+        if partial_zone_ready:
+            result["status"] = "completed_with_warnings"
+            result["warning"] = "主分区已生成；道路规划尚未完成。"
         logger.info("[Pipeline:export] Export complete")
         try:
             from app.services.step_report import save_step_report
@@ -763,9 +769,10 @@ async def _render_map_node(state: GISPipelineState) -> dict:
                 "message": "道路目标已解析，但尚未生成正式规划道路几何。",
             })
         output_dir = (state.export_result or {}).get("output_dir", "")
+        export_status = (state.export_result or {}).get("status")
         if (
             (state.validation_result or {}).get("passed", False)
-            and (state.export_result or {}).get("status") == "completed"
+            and export_status in {"completed", "completed_with_warnings"}
             and output_dir
         ):
             from app.tools.gis.static_render import render_map_preview

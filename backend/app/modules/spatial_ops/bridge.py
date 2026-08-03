@@ -240,6 +240,10 @@ _CONSTRAINT_META = {
     "cultivated_land_target": {"label": "耕地保护目标", "rule": "限制占用"},
     "urban_dev_boundary": {"label": "城镇开发边界", "rule": "控制开发"},
     "village_dev_boundary": {"label": "村庄建设边界", "rule": "控制建设"},
+    "conditional_construction_zone": {"label": "有条件建设区", "rule": "条件准入"},
+    "construction_ctrl_zone": {"label": "建设管制区", "rule": "控制建设"},
+    "hazard_control_line": {"label": "灾害防治控制线", "rule": "禁止建设"},
+    "flood_control_line": {"label": "防洪控制线", "rule": "限制建设"},
 }
 
 
@@ -401,6 +405,10 @@ def build_constraint_index(bundle) -> Optional[ConstraintIndex]:
         ("cultivated_land_target", polygons.get("cultivated_land_target")),
         ("urban_dev_boundary", polygons.get("urban_dev_boundary")),
         ("village_dev_boundary", polygons.get("village_dev_boundary")),
+        ("conditional_construction_zone", polygons.get("conditional_construction_zone")),
+        ("construction_ctrl_zone", polygons.get("construction_ctrl_zone")),
+        ("hazard_control_line", polygons.get("hazard_control_line")),
+        ("flood_control_line", polygons.get("flood_control_line")),
     ]
 
     for ctype, items in constraint_groups:

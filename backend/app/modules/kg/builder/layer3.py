@@ -22,7 +22,7 @@ logger = get_logger(__name__)
 # L3 entity types for clear_intent_layer
 _L3_TYPES = {
     EntityTypes.ZoneTarget, EntityTypes.FacilityTarget,
-    EntityTypes.AxisTarget, EntityTypes.RoadTarget,
+    EntityTypes.AxisTarget, EntityTypes.RoadTarget, EntityTypes.ProjectTarget,
 }
 
 
@@ -36,6 +36,19 @@ def _serialize_bbox(bbox) -> str:
         return ""
 
 
+def _source_refs(target, intent) -> list[str]:
+    return [
+        value
+        for value in (
+            getattr(target, "source_report_key", ""),
+            getattr(target, "source_instruction_id", ""),
+            getattr(getattr(target, "semantic", None), "raw_text", ""),
+            intent.raw_text,
+        )
+        if value
+    ]
+
+
 def build_intent_layer(kg, intent: Any) -> None:
     """Build L3 intent virtual entities from SpatialPlanningIntent.
 
@@ -45,12 +58,52 @@ def build_intent_layer(kg, intent: Any) -> None:
     """
     from app.modules.schema.contracts.parse_contracts import (
         SpatialPlanningIntent, ZoneTarget, FacilityTarget, AxisTarget, RoadTarget,
+        ProjectTarget,
     )
     if not isinstance(intent, SpatialPlanningIntent):
         logger.warning("build_intent_layer requires SpatialPlanningIntent, got %s", type(intent).__name__)
         return
 
-    zc = fc = ac = rc = 0
+    zc = fc = ac = rc = pc = 0
+
+    # ── Project targets (parents of facility/road/zone execution targets) ──
+    project_uris = {}
+    for project in intent.project_targets:
+        p_uri = EntityIdPolicy.uri("project_target", project.project_id)
+        project_uris[project.project_id] = p_uri
+        kg.g.add((p_uri, RDF.type, EntityTypes.ProjectTarget))
+        kg.g.add((p_uri, PLN.target_id, Literal(project.project_id)))
+        kg.g.add((p_uri, PLN.name, Literal(project.name)))
+        kg.g.add((p_uri, PLN.project_category, Literal(project.category)))
+        kg.g.add((p_uri, PLN.operation, Literal(project.action)))
+        if project.location_hint:
+            kg.g.add((p_uri, PLN.location_hint, Literal(project.location_hint)))
+        if project.scale_text:
+            kg.g.add((p_uri, PLN.scale_text, Literal(project.scale_text)))
+        if project.area_ha is not None:
+            kg.g.add((p_uri, PLN.target_area_ha, Literal(project.area_ha, datatype=XSD.double)))
+        if project.source_instruction_id:
+            kg.g.add((p_uri, PLN.source_instruction_id, Literal(project.source_instruction_id)))
+        if project.source_report_key:
+            kg.g.add((p_uri, PLN.source_report_key, Literal(project.source_report_key)))
+        for bsm in project.candidate_bsms:
+            kg.g.add((p_uri, PLN.candidate_bsm, PLN[f"parcel_{bsm}"]))
+        for bsm in project.excluded_bsms:
+            kg.g.add((p_uri, PLN.excluded_bsm, PLN[f"parcel_{bsm}"]))
+        kg.g.add((PLN.village, PLN.has_project, p_uri))
+        kg.memory.add_entity_annotation(EntityAnnotation(
+            entity_uri=str(p_uri),
+            entity_type="ProjectTarget",
+            description=f"规划项目: {project.name} ({project.category})",
+            source_text_refs=[
+                value for value in (
+                    project.source_report_key,
+                    project.semantic.raw_text,
+                ) if value
+            ],
+            intent_refs=[project.source_instruction_id] if project.source_instruction_id else [],
+        ))
+        pc += 1
 
     # ── Zone targets ──
     for zt in intent.zone_targets:
@@ -71,6 +124,10 @@ def build_intent_layer(kg, intent: Any) -> None:
             kg.g.add((z_uri, PLN.vne_code, Literal(zt.vne_code)))
         kg.g.add((z_uri, PLN.density, Literal(zt.density)))
         kg.g.add((PLN.village, PLN.has_zone, z_uri))
+        if zt.source_instruction_id:
+            kg.g.add((z_uri, PLN.source_instruction_id, Literal(zt.source_instruction_id)))
+        if zt.source_report_key:
+            kg.g.add((z_uri, PLN.source_report_key, Literal(zt.source_report_key)))
         # Spatial anchoring triples
         for bsm in zt.candidate_bsms:
             kg.g.add((z_uri, PLN.candidate_bsm, PLN[f"parcel_{bsm}"]))
@@ -96,13 +153,14 @@ def build_intent_layer(kg, intent: Any) -> None:
             entity_uri=str(z_uri),
             entity_type="ZoneTarget",
             description=mem_desc,
-            source_text_refs=[intent.raw_text] if intent.raw_text else [],
+            source_text_refs=_source_refs(zt, intent),
+            intent_refs=[zt.source_instruction_id] if zt.source_instruction_id else [],
         ))
         zc += 1
 
     # ── Facility targets ──
     for ft in intent.facilities:
-        target_id = ft.type or f"idx{fc}"
+        target_id = ft.source_instruction_id or ft.type or f"idx{fc}"
         f_uri = EntityIdPolicy.uri("facility_target", target_id)
         kg.g.add((f_uri, RDF.type, EntityTypes.FacilityTarget))
         kg.g.add((f_uri, PLN.target_id, Literal(target_id)))
@@ -123,6 +181,12 @@ def build_intent_layer(kg, intent: Any) -> None:
         if hint:
             kg.g.add((f_uri, PLN.spatial_hint, Literal(hint)))
         kg.g.add((PLN.village, PLN.has_facility, f_uri))
+        if ft.source_project_id in project_uris:
+            kg.g.add((project_uris[ft.source_project_id], PLN.has_facility, f_uri))
+        if ft.source_instruction_id:
+            kg.g.add((f_uri, PLN.source_instruction_id, Literal(ft.source_instruction_id)))
+        if ft.source_report_key:
+            kg.g.add((f_uri, PLN.source_report_key, Literal(ft.source_report_key)))
         # Semantic memory annotation
         svc = f"服务半径{ft.service_radius}m" if ft.service_radius else ""
         loc = f"位于{ft.location_hint}" if ft.location_hint else ""
@@ -130,13 +194,14 @@ def build_intent_layer(kg, intent: Any) -> None:
             entity_uri=str(f_uri),
             entity_type="FacilityTarget",
             description=f"规划设施: {ft.type} ({ft.status}) {svc} {loc}".strip(),
-            source_text_refs=[intent.raw_text] if intent.raw_text else [],
+            source_text_refs=_source_refs(ft, intent),
+            intent_refs=[ft.source_instruction_id] if ft.source_instruction_id else [],
         ))
         fc += 1
 
     # ── Development axes ──
     for ax in intent.development_axes:
-        target_id = ax.reference_feature or f"idx{ac}"
+        target_id = ax.source_instruction_id or ax.reference_feature or f"idx{ac}"
         a_uri = EntityIdPolicy.uri("axis_target", target_id)
         kg.g.add((a_uri, RDF.type, EntityTypes.AxisTarget))
         kg.g.add((a_uri, PLN.target_id, Literal(target_id)))
@@ -156,18 +221,25 @@ def build_intent_layer(kg, intent: Any) -> None:
         for bsm in ax.corridor_bsms:
             kg.g.add((a_uri, PLN.candidate_bsm, PLN[f"parcel_{bsm}"]))
         kg.g.add((PLN.village, PLN.has_axis, a_uri))
+        if ax.source_project_id in project_uris:
+            kg.g.add((project_uris[ax.source_project_id], PLN.has_axis, a_uri))
+        if ax.source_instruction_id:
+            kg.g.add((a_uri, PLN.source_instruction_id, Literal(ax.source_instruction_id)))
+        if ax.source_report_key:
+            kg.g.add((a_uri, PLN.source_report_key, Literal(ax.source_report_key)))
         # Semantic memory annotation
         kg.memory.add_entity_annotation(EntityAnnotation(
             entity_uri=str(a_uri),
             entity_type="AxisTarget",
             description=f"发展轴线: 沿{ax.reference_feature}方向",
-            source_text_refs=[intent.raw_text] if intent.raw_text else [],
+            source_text_refs=_source_refs(ax, intent),
+            intent_refs=[ax.source_instruction_id] if ax.source_instruction_id else [],
         ))
         ac += 1
 
     # ── Road targets (NEW — fills road sub-task gap) ──
     for rt in intent.road_targets:
-        target_id = rt.road_level or f"idx{rc}"
+        target_id = rt.source_instruction_id or rt.source_project_id or rt.road_level or f"idx{rc}"
         r_uri = EntityIdPolicy.uri("road_target", target_id)
         kg.g.add((r_uri, RDF.type, EntityTypes.RoadTarget))
         kg.g.add((r_uri, PLN.target_id, Literal(target_id)))
@@ -188,12 +260,19 @@ def build_intent_layer(kg, intent: Any) -> None:
         if hint:
             kg.g.add((r_uri, PLN.spatial_hint, Literal(hint)))
         kg.g.add((PLN.village, PLN.has_road, r_uri))
+        if rt.source_project_id in project_uris:
+            kg.g.add((project_uris[rt.source_project_id], PLN.has_road, r_uri))
+        if rt.source_instruction_id:
+            kg.g.add((r_uri, PLN.source_instruction_id, Literal(rt.source_instruction_id)))
+        if rt.source_report_key:
+            kg.g.add((r_uri, PLN.source_report_key, Literal(rt.source_report_key)))
         # Semantic memory annotation
         kg.memory.add_entity_annotation(EntityAnnotation(
             entity_uri=str(r_uri),
             entity_type="RoadTarget",
             description=f"规划道路: {rt.road_level} 宽{rt.width_m}m",
-            source_text_refs=[intent.raw_text] if intent.raw_text else [],
+            source_text_refs=_source_refs(rt, intent),
+            intent_refs=[rt.source_instruction_id] if rt.source_instruction_id else [],
         ))
         rc += 1
 
@@ -202,8 +281,8 @@ def build_intent_layer(kg, intent: Any) -> None:
         kg.g.add((PLN.village, PLN.raw_planning_text, Literal(intent.raw_text)))
 
     logger.info(
-        "build_intent_layer: %d zones, %d facilities, %d axes, %d roads",
-        zc, fc, ac, rc,
+        "build_intent_layer: %d projects, %d zones, %d facilities, %d axes, %d roads",
+        pc, zc, fc, ac, rc,
     )
 
 

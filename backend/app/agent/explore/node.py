@@ -15,6 +15,10 @@ from __future__ import annotations
 import json
 from typing import Any, Dict, List
 
+from app.agent.explore.contracts import (
+    ExplorationInstruction,
+    ExplorationInstructionCollection,
+)
 from app.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -51,8 +55,34 @@ async def explore_node(state: Dict[str, Any]) -> Dict[str, Any]:
 
     entries = index_data.get("entries") or {}
 
-    # 2. 对空间相关维度的 hints 做 grounding（KG 拓扑优先）
-    instructions: List[Dict[str, Any]] = []
+    # 2. L3 INSTRUCTION → formal ExplorationInstruction records.
+    formal_instructions: List[ExplorationInstruction] = []
+    try:
+        from app.agent.explore.agent import ExploreFlashAgent
+        from app.services.report_store import ReportStore
+
+        store = ReportStore.get_instance()
+        l3_reports = await store.get_layer_reports_with_sources(session_id, 3)
+        explorer = ExploreFlashAgent(
+            session_id=session_id,
+            village_name=index_data.get("village_name", ""),
+        )
+        for dim_key, record in (l3_reports or {}).items():
+            source_text = (
+                (record or {}).get("instruction")
+                or (record or {}).get("content")
+                or ""
+            )
+            if not source_text:
+                continue
+            collection = explorer.explore(source_text)
+            for item in collection.instructions:
+                item.source_chunk_id = f"{dim_key}:{item.source_chunk_id}"
+                formal_instructions.append(item)
+    except Exception as e:
+        logger.warning("[explore_node] L3 instruction exploration failed: %s", e)
+
+    # 3. Resolve every instruction independently (KG topology first).
     grounding_stats: Dict[str, Any] = {"total": 0, "resolved": 0, "unresolved": 0}
     try:
         from app.modules.spatial_ops.grounding import resolve_spatial_description
@@ -80,49 +110,77 @@ async def explore_node(state: Dict[str, Any]) -> Dict[str, Any]:
                 kg_query_fn = None
         if bundle is None:
             bundle = type("B", (), {"polygons": {"get": lambda *a, **k: []}})()
-        for dim_key, entry in entries.items():
-            if dim_key not in _SPATIAL_DIMS:
+        if not formal_instructions:
+            for dim_key, entry in entries.items():
+                if dim_key not in _SPATIAL_DIMS:
+                    continue
+                hints = entry.get("spatial_hints") or entry.get("key_spatial_findings") or []
+                for hint in hints[: _MAX_HINTS_PER_DIM]:
+                    if not hint or len(str(hint)) < 2:
+                        continue
+                    formal_instructions.append(ExplorationInstruction(
+                        instruction_id=f"EXP-{len(formal_instructions) + 1:04d}",
+                        source_chunk_id=f"{dim_key}:summary",
+                        section_title=entry.get("dimension_name", dim_key),
+                        evidence_text=str(hint),
+                        domain="project",
+                        entity_mentions=list(entry.get("mentioned_entities") or []),
+                        confidence=0.5,
+                        requires_human_confirmation=True,
+                    ))
+
+        for instruction in formal_instructions:
+            grounding_stats["total"] += 1
+            description = " ".join(
+                [instruction.evidence_text, *instruction.entity_mentions]
+            ).strip()
+            try:
+                resolved = resolve_spatial_description(
+                    description,
+                    bundle,
+                    kg=kg,
+                    gazetteer=gazetteer,
+                    kg_query_fn=kg_query_fn,
+                )
+            except Exception as e:
+                logger.debug(
+                    "[explore_node] grounding %s failed: %s",
+                    instruction.instruction_id,
+                    e,
+                )
+                grounding_stats["unresolved"] += 1
                 continue
-            hints = entry.get("spatial_hints") or entry.get("key_spatial_findings") or []
-            for hint in hints[: _MAX_HINTS_PER_DIM]:
-                if not hint or len(str(hint)) < 2:
-                    continue
-                grounding_stats["total"] += 1
-                try:
-                    resolved = resolve_spatial_description(
-                        str(hint), bundle, kg=kg,
-                        gazetteer=gazetteer,
-                        kg_query_fn=kg_query_fn,
-                    )
-                except Exception as e:
-                    logger.debug("[explore_node] grounding %s failed: %s", hint, e)
-                    continue
-                if resolved.candidate_bsms:
-                    grounding_stats["resolved"] += 1
-                    instructions.append({
-                        "instruction_id": f"EXP-{len(instructions) + 1:04d}",
-                        "dimension_key": dim_key,
-                        "evidence_text": str(hint),
-                        "query_path": resolved.query_path,
-                        "confidence": resolved.confidence,
-                        "candidate_bsms": resolved.candidate_bsms[:50],
-                        "candidate_bbox": list(resolved.candidate_bbox) if resolved.candidate_bbox else None,
-                    })
-                else:
-                    grounding_stats["unresolved"] += 1
+            if resolved.candidate_bsms:
+                grounding_stats["resolved"] += 1
+                instruction.candidate_bsm_list = list(dict.fromkeys(
+                    [*instruction.candidate_bsm_list, *resolved.candidate_bsms]
+                ))[:50]
+                if resolved.candidate_bbox:
+                    instruction.candidate_bbox = list(resolved.candidate_bbox)
+                instruction.confidence = max(
+                    instruction.confidence,
+                    resolved.confidence,
+                )
+                instruction.requires_human_confirmation = (
+                    len(instruction.candidate_bsm_list) != 1
+                )
+            else:
+                grounding_stats["unresolved"] += 1
     except Exception as e:
         logger.warning("[explore_node] grounding pass failed: %s", e)
 
-    # 3. 组装产出
-    explore_output = {
-        "session_id": session_id,
-        "village_name": index_data.get("village_name", ""),
-        "instructions": instructions,
-        "grounding_stats": grounding_stats,
-        "spatial_relevant_count": index_data.get("spatial_relevant_count", 0),
-    }
+    # 4. Persist the canonical Explore contract in AgentState.
+    collection = ExplorationInstructionCollection(
+        session_id=session_id,
+        village_name=index_data.get("village_name", ""),
+        instructions=formal_instructions,
+        kg_session_ref=session_id,
+    )
+    explore_output = collection.model_dump()
+    explore_output["grounding_stats"] = grounding_stats
+    explore_output["spatial_relevant_count"] = index_data.get("spatial_relevant_count", 0)
 
-    # 4. StepReport
+    # 5. StepReport
     try:
         from app.services.step_report import save_step_report
 
@@ -130,7 +188,7 @@ async def explore_node(state: Dict[str, Any]) -> Dict[str, Any]:
             session_id, "EXPLORE",
             step_name="explore_bridge",
             outputs={
-                "instructions": len(instructions),
+                "instructions": len(formal_instructions),
                 "spatial_relevant_count": index_data.get("spatial_relevant_count", 0),
                 "entries": len(entries),
             },
@@ -144,7 +202,7 @@ async def explore_node(state: Dict[str, Any]) -> Dict[str, Any]:
 
     logger.info(
         "[explore_node] %d instructions, %s",
-        len(instructions), grounding_stats,
+        len(formal_instructions), grounding_stats,
     )
     return {
         "explore_instructions": explore_output,

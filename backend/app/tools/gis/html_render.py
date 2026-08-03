@@ -171,6 +171,7 @@ def _display_properties(properties: Dict[str, Any]) -> str:
     selected: Dict[str, Any] = {}
     preferred = (
         "name",
+        "zone_name",
         "注记",
         "分类",
         "zone_type",
@@ -223,16 +224,20 @@ def render_interactive_map(
             properties = feature.get("properties") or {}
             color = _feature_color(properties, fallback)
             zone_name = (
-                properties.get("zone_type")
-                or properties.get("land_use")
-                or properties.get("assigned_zone")
+                properties.get("zone_name")
                 or properties.get("category_name_zh")
+                or properties.get("planning_zone")
+                or properties.get("assigned_zone")
+                or properties.get("zone_type")
+                or properties.get("land_use")
             )
             if zone_name and layer_type in {
                 "function_zone",
                 "planning_zone",
+                "custom_planning_zone",
                 "custom_functional_zone",
                 "space_control_zone",
+                "input_constraint",
             }:
                 zone_legend[str(zone_name)] = color
             attrs = (
@@ -253,8 +258,10 @@ def render_interactive_map(
                 if zone_name and layer_type in {
                     "function_zone",
                     "planning_zone",
+                    "custom_planning_zone",
                     "custom_functional_zone",
                     "space_control_zone",
+                    "input_constraint",
                 }:
                     points = list(_coordinates(feature.get("geometry") or {}))
                     visible_points = [point for point in points if visible(point)]

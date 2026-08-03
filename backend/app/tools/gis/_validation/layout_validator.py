@@ -210,6 +210,20 @@ class LayoutValidator:
         violations = []
         zone_types = set()
 
+        # ``custom_planning_zone`` is the canonical village-scale partition;
+        # its thematic names intentionally do not have to match the legacy
+        # six-zone planning registry.
+        if any(
+            (config.get("layerType") or config.get("layer_type")) == "custom_planning_zone"
+            for config in layout_configs
+        ):
+            return CheckResult(
+                check_name="zone_completeness",
+                passed=True,
+                violation_count=0,
+                violations=[],
+            )
+
         for config in layout_configs:
             if config.get("layerType") != "planning_zone":
                 continue
