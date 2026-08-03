@@ -135,6 +135,19 @@ def _preserve_impact_tree(a: Optional[Dict[int, List[str]]], b: Optional[Dict[in
     return a
 
 
+def _merge_explore_outputs(
+    a: Dict[str, Any], b: Dict[str, Any]
+) -> Dict[str, Any]:
+    """EXPLORE 产出的 state 字段合并（保留有值方，防 Send fan-in 覆盖）。"""
+    if not b:
+        return a
+    result = {**a}
+    for k, v in b.items():
+        if v is not None and v != [] and v != {}:
+            result[k] = v
+    return result
+
+
 class AgentState(TypedDict, total=False):
     """
     核心状态 - 精简版
@@ -184,6 +197,10 @@ class AgentState(TypedDict, total=False):
     # P0: L1/L2/L3 数据流闭环字段（详见 docs/superpowers/specs/2026-07-02-gis-review-exploration.md）
     _landuse_metrics: Annotated[Dict[str, float], _merge_dict_of_dicts]  # L1 注入的现状用地指标
     intent_targets: Annotated[Dict[str, float], _merge_dict_of_dicts]  # L2 持久化的规划目标面积
+    # P2: EXPLORE 桥接产出（L3 完成后注入，供 gis_agent 消费）
+    explore_instructions: Annotated[Dict[str, Any], _merge_explore_outputs]  # ExplorationInstructionCollection
+    report_summary_index: Annotated[Dict[str, Any], _merge_explore_outputs]  # ReportSummaryIndex
+    explore_done: Annotated[bool, operator.or_]  # EXPLORE 桥接已执行标记（防重复触发）
 
 
 # ==========================================
@@ -312,6 +329,8 @@ def create_initial_state(
         "user_uploaded_data": {},  # 用户上传的GIS数据
         "_landuse_metrics": {},  # P0: L1 注入的现状用地指标
         "intent_targets": {},  # P0: L2 持久化的规划目标面积
+        "explore_instructions": {},  # P2: EXPLORE 桥接产出
+        "report_summary_index": {},  # P2: EXPLORE 概要索引
     }
 
 

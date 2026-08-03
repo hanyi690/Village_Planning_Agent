@@ -82,6 +82,9 @@ class GISPipelineState(BaseModel):
     operation_sequence: List[Any] = Field(default_factory=list)
     constraint_set: List[Any] = Field(default_factory=list)
     planning_intent: Any = None
+    # P2: EXPLORE 桥接产出（grounding 空间定位指令 + 概要索引）
+    explore_instructions: Dict[str, Any] = Field(default_factory=dict)
+    report_summary_index: Dict[str, Any] = Field(default_factory=dict)
     spatial_context: Dict[str, Any] = Field(default_factory=dict)  # DEPRECATED — use context_blocks
     context_blocks: List[Dict[str, Any]] = Field(default_factory=list)
     facility_anchors: Optional[List[Dict[str, Any]]] = None  # Precise facility locations from annotations

@@ -191,11 +191,61 @@ def _format_prompt_section(payload: Dict[str, Any]) -> str:
     if constraint:
         sections.append(f"**约束覆盖**: {constraint}\n")
 
+    # P1: L2/L3 拓扑结构认知（KG 拓扑查询，按 dim_layer 分派）
+    topology = _build_topology_section(payload.get("_kg"), payload.get("dimension_key"),
+                                        payload.get("layer", 1))
+    if topology:
+        sections.append(topology)
+
     findings = payload.get("spatial_findings") or []
     if findings:
         sections.append("**空间线索**: " + "; ".join(findings[:5]) + "\n")
 
     return "\n".join(sections)
+
+
+def _build_topology_section(kg: Any, dim_key: str, dim_layer: int) -> str:
+    """L2/L3 维度注入 KG 现状结构/拓扑认知（替代静态 DIM_KG_MAP 的 execute 查询）。
+
+    - L3 空间结构类维度：道路连通、水体邻接、聚类分布（现状结构）
+    - L2 定位类维度：三区三线覆盖、村庄分类校核
+    KG 不可用或查询失败时返回 ""（非致命）。
+    """
+    if kg is None or dim_layer < 2:
+        return ""
+    try:
+        from app.modules.kg.queries.sparql import query_kg
+
+        lines: List[str] = []
+        # 道路连通（沿路线性描述素材）
+        if dim_layer == 3:
+            try:
+                roads = query_kg(kg, "get_road_network")
+                if roads:
+                    names = [str(r.get("name") or "") for r in roads if r.get("name")]
+                    lines.append(f"**现状道路**: {'、'.join(names[:8])}（{len(roads)}条）")
+            except Exception:
+                pass
+            try:
+                waters = query_kg(kg, "get_water_bodies")
+                if waters:
+                    wnames = [str(w.get("name") or "") for w in waters if w.get("name")]
+                    lines.append(f"**现状水系**: {'、'.join(wnames[:6])}（{len(waters)}处）")
+            except Exception:
+                pass
+            try:
+                clusters = query_kg(kg, "get_village_anchors")
+                if clusters:
+                    cluster_names = [str(c.get("name") or "") for c in clusters
+                                     if str(c.get("kind") or "") == "cluster" and c.get("name")]
+                    lines.append(f"**居民点聚类**: {'、'.join(cluster_names[:10])}（{len(cluster_names)}个）")
+            except Exception:
+                pass
+        if lines:
+            return "## KG 现状结构（EXPLORE 拓扑认知）\n" + "\n".join(lines) + "\n"
+    except Exception as e:
+        logger.debug("[ExploreSummaries] topology section failed: %s", e)
+    return ""
 
 
 async def build_spatial_cognition(
@@ -216,9 +266,11 @@ async def build_spatial_cognition(
         "spatial_groups": group_stats(bundle),
         "spatial_findings": [],
         "entity_mentions": [],
+        "_kg": None,
     }
 
     kg = session_kg(session_id)
+    payload["_kg"] = kg
     if kg is not None:
         try:
             from app.modules.kg.queries.cognition import get_village_cognition

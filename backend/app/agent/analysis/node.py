@@ -645,6 +645,34 @@ async def analyze_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
     except Exception as e:
         logger.warning(f"[analyze_dimension] {dim_key}: Immediate DB save failed (will retry in completion): {e}")
 
+    # P2: L1/L3 维度步骤 Report（供 positioning-trace 面板定位）
+    if dim_layer in (1, 3):
+        try:
+            from app.services.report_store import split_instruction
+            from app.services.step_report import save_step_report
+
+            stage = "L1" if dim_layer == 1 else "L3"
+            _, instr = split_instruction(llm_response)
+            await save_step_report(
+                state.get("session_id", ""), stage,
+                step_name=f"analyze_dimension:{dim_key}",
+                dimension_key=dim_key,
+                layer=dim_layer,
+                inputs={"is_revision": state.get("is_revision", False)},
+                outputs={
+                    "report_id": report_id,
+                    "word_count": len(llm_response),
+                    "instruction_len": len(instr),
+                    "has_instruction": bool(instr),
+                },
+                diagnostics={
+                    "rag_sources": len(rag_log.sources) if rag_log and rag_log.rag_enabled else 0,
+                    "kg_cognition": bool(kg_semantic_section),
+                },
+            )
+        except Exception as e:
+            logger.debug(f"[analyze_dimension] {dim_key}: step report failed: {e}")
+
     # 级联修订：记录本维度完成的波次
     if state.get("is_revision"):
         rev_completed = _build_revision_completed(state, dim_key)

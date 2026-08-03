@@ -50,6 +50,18 @@ async def _maybe_extract_bindings(session_id: str, layer: int) -> None:
         if not reports:
             logger.info("[layer_completion_check] No reports for L%d, skip extraction", layer)
             return
+        # P0: 读取同层报告的 INSTRUCTION 剥离段（L1 的'设施+位置'表格），
+        #     传给 KG enrichment 消费（组合名地点条目落地 gazetteer）。
+        instruction_texts: Dict[str, str] = {}
+        try:
+            reports_with_sources = await store.get_layer_reports_with_sources(session_id, layer)
+            for dk, rec in reports_with_sources.items():
+                instr = (rec or {}).get("instruction") or ""
+                if instr:
+                    instruction_texts[dk] = instr
+        except Exception as e:
+            logger.warning("[layer_completion_check] instruction read failed: %s", e)
+
         # KG 多级增强（enrichment）：L1 村名绑定 / L2/L3 实体注解 + 关系注记
         from app.modules.kg.enrichment import run_wave
         from app.tools.access.shared import resolve_bundle
@@ -59,7 +71,10 @@ async def _maybe_extract_bindings(session_id: str, layer: int) -> None:
             _bundle = await resolve_bundle(session_id)
         except Exception:
             pass
-        stats = await run_wave(session_id, wave=layer, reports=reports, bundle=_bundle)
+        stats = await run_wave(
+            session_id, wave=layer, reports=reports, bundle=_bundle,
+            instruction_texts=instruction_texts,
+        )
         logger.info("[layer_completion_check] KG enrichment layer=%d stats=%s", layer, stats)
     except Exception as e:
         logger.warning("[layer_completion_check] KG enrichment failed for %s L%d: %s", session_id, layer, e)

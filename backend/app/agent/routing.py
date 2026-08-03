@@ -237,6 +237,12 @@ def after_analysis(
 
     phase = state.get("phase", "layer1")
     if phase == "completed":
+        # P2: L3 完成后自动触发 EXPLORE 桥接（仅一次，非 step_mode）
+        # explore_done 标记防重复；explore 节点完成后 phase 仍 completed，
+        # 经 explore -> gis_agent -> conversation 后 END。
+        if not state.get("step_mode", False) and not state.get("explore_done", False):
+            logger.info("[after_analysis] L3 completed -> EXPLORE bridge")
+            return "explore"
         return END
 
     layer = _phase_to_layer(phase)

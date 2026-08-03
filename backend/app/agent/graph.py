@@ -49,14 +49,20 @@ async def analyze_dimension_node(state: Dict[str, Any]) -> Dict[str, Any]:
     return await analyze_dimension(state)
 
 
-async def gis_agent_node(state: Dict[str, Any]) -> Dict[str, Any]:
-    """GIS Agent node — PARSE ReAct + LAYOUT hybrid pipeline.
+async def explore_node(state: Dict[str, Any]) -> Dict[str, Any]:
+    """EXPLORE 桥接节点 — L3 完成后读 L1/L2/L3 + KG 认知，产出空间定位指令."""
+    from .explore.node import explore_node as _explore_node
 
-    Step 1: PARSE Agent (ReAct) extracts structured intent from planning reports.
+    return await _explore_node(state)
+
+
+async def gis_agent_node(state: Dict[str, Any]) -> Dict[str, Any]:
+    """GIS Agent node — LAYOUT hybrid pipeline.
+
+    Step 1: 收集 L1+L3 report instruction 段 + EXPLORE 产出。
     Step 2: LAYOUT Pipeline (deterministic skeleton + ReAct subgraph + Evaluator Gate)
             generates spatial layout with guaranteed step ordering and validation retry.
     """
-    from .gis import create_parse_agent_graph
     from .gis.layout_pipeline import build_layout_pipeline
     from app.modules.data.catalog.catalog import DataCatalog
 
@@ -93,24 +99,24 @@ async def gis_agent_node(state: Dict[str, Any]) -> Dict[str, Any]:
 
     reports, summaries = await _get_reports_and_summaries(state)
 
-    # ── Step 1: PARSE Agent (ReAct — text understanding needs LLM creativity) ──
-    parse_graph = create_parse_agent_graph()
-    parse_result = await parse_graph.ainvoke({
-        "session_id": session_id,
-        "village_name": village_name,
-        "reports": reports,
-        "summaries": summaries,
-        "gis_data": gis_data,
-        "messages": [],
-    })
+    # ── Step 1: 收集 L1+L3 instruction 段（P8 结构化定位表）─ EXPLORE 产出 ──
+    # 消除双重 parse：不再独立调用 create_parse_agent_graph，统一由
+    # layout_pipeline._parse_intent_node 消费 reports + explore_instructions。
+    explore_instructions = state.get("explore_instructions", {}) or {}
+    report_summary_index = state.get("report_summary_index", {}) or {}
+    try:
+        from app.services.report_store import ReportStore
 
-    intent_json = parse_result.get("intent_json", {})
-    if not intent_json:
-        logger.error("[gis_agent_node] PARSE Agent failed: no intent extracted")
-        return {
-            "messages": [AIMessage(content="规划意图解析失败，请检查规划报告是否包含明确的用地分区信息")],
-            "gis_layout_configs": [],
-        }
+        store = ReportStore.get_instance()
+        for layer in (1, 3):
+            layer_reports = await store.get_layer_reports_with_sources(session_id, layer)
+            if layer_reports:
+                for dk, rec in layer_reports.items():
+                    content = (rec or {}).get("content") or ""
+                    if content:
+                        reports.setdefault(dk, {})["content"] = content
+    except Exception as e:
+        logger.warning("[gis_agent_node] L1/L3 report read failed: %s", e)
 
     # ── Step 2: LAYOUT Pipeline (hybrid: deterministic skeleton + ReAct subgraph) ──
     pipeline = build_layout_pipeline()
@@ -119,7 +125,11 @@ async def gis_agent_node(state: Dict[str, Any]) -> Dict[str, Any]:
         "village_name": village_name,
         "gis_data": gis_data,
         "gis_bundle": gis_bundle,
-        "intent": intent_json,
+        "reports": reports,
+        "intent": None,
+        "intent_json": {},
+        "explore_instructions": explore_instructions,
+        "report_summary_index": report_summary_index,
         "kg_turtle": "",
         "kg_constraints": [],
         "layout_configs": [],
@@ -157,17 +167,18 @@ async def gis_agent_node(state: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def create_unified_planning_graph(checkpointer=None) -> StateGraph:
-    """创建统一规划图（5 节点）— 纯函数，每次返回新图。
+    """创建统一规划图（6 节点）— 纯函数，每次返回新图。
 
     缓存责任由调用方承担（`PlanningRuntimeService._graph` 单例）。
     """
-    logger.info("[图构建] 构建 5 节点图")
+    logger.info("[图构建] 构建 6 节点图")
     builder = StateGraph(AgentState)
 
     builder.add_node("conversation", conversation_node)
     builder.add_node("execute_tools", execute_tools_node)
     builder.add_node("analyze_dimension", analyze_dimension_node)
     builder.add_node("layer_completion_check", layer_completion_check)
+    builder.add_node("explore", explore_node)
     builder.add_node("gis_agent", gis_agent_node, error_handler=_gis_error_handler)
 
     builder.add_edge(START, "conversation")
@@ -177,8 +188,10 @@ def create_unified_planning_graph(checkpointer=None) -> StateGraph:
     builder.add_edge("execute_tools", "conversation")
     builder.add_edge("gis_agent", "conversation")
     builder.add_edge("analyze_dimension", "layer_completion_check")
+    builder.add_edge("explore", "gis_agent")
     builder.add_conditional_edges("layer_completion_check", after_analysis,
-        {"analyze_dimension": "analyze_dimension", "conversation": "conversation", END: END})
+        {"analyze_dimension": "analyze_dimension", "explore": "explore",
+         "conversation": "conversation", END: END})
 
     return builder.compile(checkpointer=checkpointer)
 

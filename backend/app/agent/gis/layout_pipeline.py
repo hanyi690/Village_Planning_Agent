@@ -14,7 +14,7 @@ References:
 
 from __future__ import annotations
 
-from typing import Literal
+from typing import Literal, Optional
 
 from langgraph.graph import StateGraph, END, START
 
@@ -78,6 +78,49 @@ def _attach_custom_zone_targets(intent: Any, reports: Dict[str, Any], village_na
     return added
 
 
+def _merge_explore_bsms(intent: Any, explore: Dict[str, Any]) -> int:
+    """把 EXPLORE grounding 指令的候选 BSM 合并进 intent targets。
+
+    EXPLORE 在 L3 完成后对空间描述做了 KG 拓扑接地，产出 candidate_bsms。
+    这里把每个指令的候选 BSM 按维度聚合，合并到 ZoneTarget / FacilityTarget 的
+    candidate_bsms（无对应 target 时跳过，不制造假实体）。
+
+    Returns:
+        合并的 BSM 总数。
+    """
+    instructions = (explore or {}).get("instructions") or []
+    if not instructions:
+        return 0
+
+    merged_total = 0
+    for instr in instructions:
+        dim_key = str(instr.get("dimension_key") or "")
+        bsms = list(dict.fromkeys(instr.get("candidate_bsms") or []))
+        if not bsms or not dim_key:
+            continue
+        # 合并到 zone_targets（按 land_use 匹配维度名）
+        for zt in (getattr(intent, "zone_targets", None) or []):
+            existing = list(getattr(zt, "candidate_bsms", None) or [])
+            added = [b for b in bsms if b not in existing]
+            if added:
+                zt.candidate_bsms = existing + added
+                merged_total += len(added)
+        # 合并到 facilities（按 type/语义匹配维度名）
+        for ft in (getattr(intent, "facilities", None) or []):
+            existing = list(getattr(ft, "candidate_bsms", None) or [])
+            added = [b for b in bsms if b not in existing]
+            if added:
+                ft.candidate_bsms = existing + added
+                merged_total += len(added)
+
+    if merged_total:
+        logger.info(
+            "[Pipeline:parse] EXPLORE bsms merged: %d (from %d instructions)",
+            merged_total, len(instructions),
+        )
+    return merged_total
+
+
 # ── Node implementations ──────────────────────────────────────────────
 
 
@@ -101,6 +144,26 @@ async def _fetch_gis_data_node(state: GISPipelineState) -> dict:
             len(bundle.lines.get("roads_current")) + len(bundle.lines.get("roads_planned")),
             len(bundle.points.get("annotations_current")) + len(bundle.points.get("annotations_planned")),
         )
+        # P0: 计算 parcel 拓扑关系（sfTouches/nearby/connected + parcel-road/water），
+        #     供 build_knowledge_graph 构建 KG L2 拓扑（grounding KG 拓扑查询的数据源）。
+        try:
+            from app.modules.spatial_ops.geometry import compute_parcel_relations
+
+            parcels = bundle.polygons.get("landuse_current") or []
+            roads = bundle.lines.get("roads_current") or []
+            water = bundle.polygons.get("water_bodies") or []
+            if parcels:
+                relations = compute_parcel_relations(parcels, roads, water)
+                raw["_parcel_relations"] = relations
+                logger.info(
+                    "[Pipeline:fetch] parcel relations: %d touches, %d nearby, "
+                    "%d connected, %d road-intersects, %d water-touches",
+                    len(relations.touches), len(relations.nearby),
+                    len(relations.connected), len(relations.parcel_road_intersects),
+                    len(relations.parcel_water_touches),
+                )
+        except Exception as rel_e:
+            logger.warning("[Pipeline:fetch] parcel_relations compute failed: %s", rel_e)
         return {"gis_bundle": bundle, "gis_data": raw}
     except Exception as e:
         logger.warning("[Pipeline:fetch] Fetch failed: %s", e)
@@ -269,6 +332,12 @@ async def _parse_intent_node(state: GISPipelineState) -> dict:
         except Exception as e:
             logger.warning("[Pipeline:parse] custom zone target attach failed: %s", e)
 
+        # P2: 合并 EXPLORE grounding 指令的候选 BSM 到 intent targets
+        try:
+            _merge_explore_bsms(intent, state.explore_instructions or {})
+        except Exception as e:
+            logger.warning("[Pipeline:parse] explore bsms merge failed: %s", e)
+
         # Extract PARSE outputs - all typed
         zone_count = len(intent.zone_targets) if hasattr(intent, 'zone_targets') else 0
 
@@ -279,6 +348,29 @@ async def _parse_intent_node(state: GISPipelineState) -> dict:
             len(intent.development_axes) if hasattr(intent, 'development_axes') else 0,
             len(intent.road_targets) if hasattr(intent, 'road_targets') else 0,
         )
+
+        # P2: PARSE 步骤 Report（供 positioning-trace 定位）
+        try:
+            from app.services.step_report import save_step_report
+
+            total_bsms = 0
+            for zt in (getattr(intent, "zone_targets", None) or []):
+                total_bsms += len(getattr(zt, "candidate_bsms", None) or [])
+            await save_step_report(
+                state.session_id, "PARSE",
+                step_name="parse_intent",
+                inputs={"reports_count": len(reports)},
+                outputs={
+                    "zone_targets": zone_count,
+                    "facilities": len(intent.facilities) if hasattr(intent, "facilities") else 0,
+                    "candidate_bsms_total": total_bsms,
+                },
+                diagnostics={
+                    "explore_instructions": len((state.explore_instructions or {}).get("instructions", []) or []),
+                },
+            )
+        except Exception as e:
+            logger.debug("[Pipeline:parse] step report failed: %s", e)
 
         return {
             "intent": intent,
@@ -364,19 +456,111 @@ async def _export_gdb_node(state: GISPipelineState) -> dict:
 
 
 async def _render_map_node(state: GISPipelineState) -> dict:
-    """Render map layers for frontend MapLibre visualization."""
+    """Render map layers for frontend MapLibre visualization.
+
+    P2: 三图合一 — 规划分区图层（layout_configs）+ 现状居民点锚点图层
+    + 定位校核图层，单次产出供前端切换。
+    """
     from app.tools.gis.render import render_map
 
     try:
+        layout_configs = list(state.layout_configs or [])
+        # P2: 追加现状居民点锚点图层（来自 gazetteer 多源坐标 + cluster）
+        try:
+            anchor_layer = _build_anchor_layer(state)
+            if anchor_layer:
+                layout_configs.append(anchor_layer)
+        except Exception as e:
+            logger.warning("[Pipeline:render] anchor layer failed: %s", e)
+        # P2: 追加定位校核图层（EXPLORE grounding 指令的候选 BSM 标注）
+        try:
+            trace_layer = _build_trace_layer(state)
+            if trace_layer:
+                layout_configs.append(trace_layer)
+        except Exception as e:
+            logger.warning("[Pipeline:render] trace layer failed: %s", e)
+
         result = render_map.func(
-            layout_configs=state.layout_configs,
+            layout_configs=layout_configs,
             gis_data=state.gis_data,
         )
-        logger.info("[Pipeline:render] Render complete")
+        logger.info("[Pipeline:render] Render complete (%d layers)", len(layout_configs))
         return {"render_result": result if isinstance(result, list) else []}
     except Exception as e:
         logger.error("[Pipeline:render] Render failed: %s", e)
         return {"render_result": []}
+
+
+def _build_anchor_layer(state: GISPipelineState) -> Optional[Dict[str, Any]]:
+    """构建现状居民点锚点图层（自然村名 → 坐标 Point FeatureCollection）。
+
+    来源：gazetteer（P0 多源 API 注入的自然村坐标 + 组合名条目）。
+    """
+    try:
+        from app.modules.kg.gazetteer import load_gazetteer
+
+        gaz = load_gazetteer(state.village_name or "jintian")
+        if not getattr(gaz, "entries", None):
+            return None
+        features = []
+        for e in gaz.entries:
+            centroid = getattr(e, "centroid", None)
+            name = getattr(e, "name", "") or ""
+            if not centroid or len(centroid) < 2 or not name:
+                continue
+            features.append({
+                "type": "Feature",
+                "properties": {"name": name, "source": getattr(e, "source", "")},
+                "geometry": {"type": "Point", "coordinates": [centroid[0], centroid[1]]},
+            })
+        if not features:
+            return None
+        return {
+            "layerType": "position_anchor",
+            "layer_name": "现状居民点锚点",
+            "data": {"type": "FeatureCollection", "features": features},
+            "color": "#e11d48",
+        }
+    except Exception as e:
+        logger.debug("[Pipeline:render] anchor layer build failed: %s", e)
+        return None
+
+
+def _build_trace_layer(state: GISPipelineState) -> Optional[Dict[str, Any]]:
+    """构建定位校核图层（EXPLORE grounding 指令的候选 BSM → 点/面标注）。
+
+    反映 L3 空间描述经 KG 拓扑接地后的候选地块分布，供前端核对
+    "文本说 X 处" vs "几何落在哪"。
+    """
+    explore = state.explore_instructions or {}
+    instructions = explore.get("instructions") or []
+    if not instructions:
+        return None
+    features = []
+    for instr in instructions:
+        bsms = instr.get("candidate_bsms") or []
+        if not bsms:
+            continue
+        for bsm in bsms:
+            features.append({
+                "type": "Feature",
+                "properties": {
+                    "name": bsm,
+                    "dim": instr.get("dimension_key", ""),
+                    "evidence": (instr.get("evidence_text") or "")[:30],
+                    "query_path": instr.get("query_path", ""),
+                },
+                "geometry": {"type": "Point", "coordinates": [0, 0]},
+            })
+    if not features:
+        return None
+    return {
+        "layerType": "position_trace",
+        "layer_name": "定位校核",
+        "data": {"type": "FeatureCollection", "features": features},
+        "color": "#7c3aed",
+        "style": {"fill-opacity": 0.3},
+    }
 
 
 # ── EXECUTE node ──────────────────────────────────────────────────────
@@ -431,6 +615,30 @@ async def _execute_node(state: GISPipelineState) -> dict:
             result.get("validation_round", 0),
             result.get("validation_result", {}).get("passed", True),
         )
+
+        # P2: EXECUTE 步骤 Report（供 positioning-trace 定位）
+        try:
+            from app.services.step_report import save_step_report
+
+            layer_types = [c.get("layerType", "unknown") for c in result.get("layout_configs", [])]
+            await save_step_report(
+                state.session_id, "EXECUTE",
+                step_name="execute_layout",
+                outputs={
+                    "layers": len(result.get("layout_configs", [])),
+                    "layer_types": layer_types,
+                    "allocated_parcels": len(
+                        (result.get("allocated_geojson", {}) or {}).get("features", [])
+                    ),
+                },
+                diagnostics={
+                    "allocation_mode": (result.get("allocation_summary", {}) or {}).get("mode", ""),
+                    "validation_passed": (result.get("validation_result", {}) or {}).get("passed"),
+                    "validation_round": result.get("validation_round", 0),
+                },
+            )
+        except Exception as e:
+            logger.debug("[Pipeline:execute] step report failed: %s", e)
 
         return {
             "allocated_geojson": result.get("allocated_geojson", {}),
