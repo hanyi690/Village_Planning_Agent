@@ -685,6 +685,11 @@ async def _execute_road_node(state: ExecuteAgentState) -> dict:
                 result.get("ran"), result.get("road_target_count", 0), len(layers),
             )
             if formal_road_layers:
+                for layer in formal_road_layers:
+                    data = layer.get("data")
+                    if isinstance(data, dict):
+                        data.pop("crs", None)
+                    layer.pop("crs", None)
                 return {"layout_configs": layers + existing}
             logger.info(
                 "[EXECUTE:road] stage generator produced diagnostics without formal geometry; "
@@ -938,6 +943,13 @@ async def _validate_node(state: ExecuteAgentState) -> dict:
                 if (config.get("layerType") or config.get("layer_type"))
                 not in {"function_zone", "land_use_zone"}
             ]
+        # 道路诊断层（候选/实体/节点）是 EXECUTE 中间产物，不作为正式规划道路校验，
+        # 只保留正式 planned_road / planned_road_candidates 参与校验。
+        validator_configs = [
+            config for config in validator_configs
+            if (config.get("layerType") or config.get("layer_type"))
+            not in {"road_spatial_candidates", "road_planning_entities", "road_planning_nodes"}
+        ]
         report = validator.validate(
             validator_configs,
             protected_parcels_detail=state.kg_protected_parcels_detail or None,
