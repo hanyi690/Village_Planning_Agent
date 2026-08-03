@@ -15,6 +15,7 @@ import { parseTimestamp } from '@/features/planning/utils';
 import MarkdownRenderer from '@/features/planning/components/ui/MarkdownRenderer';
 import { MapView, ValidationPanel } from '../gis';
 import { TracePanel } from '../gis';
+import StageReportPanel from '../gis/StageReportPanel';
 import { useGisLayers } from '../../hooks';
 import { usePlanningStore } from '../../store';
 import { gisTestApi, type LayoutValidationResult } from '@/features/gis-test/api/gis-test-api';
@@ -37,6 +38,7 @@ function GisResultCard({ message }: GisResultCardProps) {
 
   // Pipeline trace from store
   const pipelineTrace = usePlanningStore((s) => s.pipelineTrace);
+  const sessionId = usePlanningStore((s) => s.sessionId);
 
   // Prefer message.layers (final result), fall back to store incremental layers
   const allLayers: GISLayerConfig[] = message.layers && message.layers.length > 0
@@ -160,6 +162,8 @@ function GisResultCard({ message }: GisResultCardProps) {
             <TracePanel trace={pipelineTrace} />
           </div>
         )}
+
+        <StageReportPanel sessionId={sessionId} />
 
         {/* Recommendations */}
         {message.analysisData?.recommendations &&
