@@ -55,6 +55,9 @@ def _attach_custom_zone_targets(intent: Any, reports: Dict[str, Any], village_na
     for zt in (getattr(intent, "zone_targets", None) or []):
         if zt.land_use:
             entity_bsms[zt.land_use] = list(zt.candidate_bsms or [])
+    for project in (getattr(intent, "project_targets", None) or []):
+        if project.name:
+            entity_bsms[project.name] = list(project.candidate_bsms or [])
 
     existing_codes = {c.category_code for c in (getattr(intent, "custom_zone_targets", None) or [])}
     added = 0
@@ -307,6 +310,42 @@ async def _build_kg_node(state: GISPipelineState) -> dict:
         return {}
 
 
+def _build_planning_text(state: GISPipelineState) -> str:
+    """Build combined planning text from reports, appending INSTRUCTION section."""
+    reports = state.reports or {}
+    planning_parts = []
+    instruction_text = ""
+    if reports:
+        priority = (
+            "land_use_planning",
+            "spatial_structure",
+            "traffic_planning",
+            "public_service",
+            "infrastructure_planning",
+            "ecological",
+            "disaster_prevention",
+            "project_bank",
+        )
+        ordered_keys = list(priority) + [
+            key for key in reports if key not in priority
+        ]
+        for key in ordered_keys:
+            if key not in reports:
+                continue
+            val = reports[key]
+            if isinstance(val, dict):
+                planning_parts.append(val.get("content", val.get("text", "")))
+                instruction_text += val.get("instruction", "") + "\n"
+            elif isinstance(val, str):
+                planning_parts.append(val)
+    planning_text = "\n\n".join(part for part in planning_parts if part)
+    if not planning_text:
+        planning_text = state.intent_json.get("planning_text", "")
+    if instruction_text:
+        planning_text = planning_text[:9000] + "\n\n" + instruction_text[:4000]
+    return planning_text
+
+
 async def _parse_intent_node(state: GISPipelineState) -> dict:
     """Parse planning text via PARSE Agent subgraph.
 
@@ -337,60 +376,39 @@ async def _parse_intent_node(state: GISPipelineState) -> dict:
             or (getattr(existing, "project_targets", None) and len(existing.project_targets) > 0)
         )
         if has_structured:
-            logger.info(
-                "[Pipeline:parse] External intent preserved (%d zones, %d custom, %d facilities)",
-                len(existing.zone_targets or []),
-                len(existing.custom_zone_targets or []),
-                len(existing.facilities or []),
-            )
+            intent = existing
+            from app.agent.gis.parse_fallback import merge_fallback_targets
+            from app.agent.gis.parse import parse_async as _fallback_parse
+
+            planning_text = _build_planning_text(state)
+            if planning_text:
+                try:
+                    result = await _fallback_parse(
+                        planning_text=planning_text[:13000],
+                        village_name=village_name,
+                    )
+                    added = merge_fallback_targets(intent, result.intent)
+                    if added:
+                        logger.info("[Pipeline:parse] PARSE fallback merged %d missing targets", added)
+                except Exception as e:
+                    logger.warning("[Pipeline:parse] PARSE fallback failed: %s", e)
             return {
-                "intent": existing,
-                "intent_json": existing,
-                "planning_intent": existing,
+                "intent": intent,
+                "intent_json": intent,
+                "planning_intent": intent,
             }
 
     if not reports and not village_name:
         logger.info("[Pipeline:parse] No reports or village name — skipping parse")
         return {}
 
-    # Extract planning text from reports
-    planning_parts = []
-    instruction_text = ""
-    if reports:
-        priority = (
-            "land_use_planning",
-            "spatial_structure",
-            "traffic_planning",
-            "public_service",
-            "infrastructure_planning",
-            "ecological",
-            "disaster_prevention",
-            "project_bank",
-        )
-        ordered_keys = list(priority) + [
-            key for key in reports if key not in priority
-        ]
-        for key in ordered_keys:
-            if key not in reports:
-                continue
-            val = reports[key]
-            if isinstance(val, dict):
-                planning_parts.append(val.get("content", val.get("text", "")))
-                instruction_text += val.get("instruction", "") + "\n"
-            elif isinstance(val, str):
-                planning_parts.append(val)
-    planning_text = "\n\n".join(part for part in planning_parts if part)
-    if not planning_text:
-        planning_text = state.intent_json.get("planning_text", "")
+    planning_text = _build_planning_text(state)
 
     if not planning_text:
         logger.info("[Pipeline:parse] No planning text found — skipping parse")
         return {}
 
     try:
-        # P8: INSTRUCTION 段（文末结构化定位表格）优先保留 — 正文截断后补回
-        if instruction_text:
-            planning_text = planning_text[:9000] + "\n\n" + instruction_text[:4000]
         result: ParseResult = await parse_async(
             planning_text=planning_text[:13000],
             village_name=village_name,
