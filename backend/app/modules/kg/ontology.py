@@ -47,6 +47,8 @@ Relations: 8 total (v4.9 GeoSPARQL aligned)
 
 from __future__ import annotations
 
+from urllib.parse import quote
+
 from rdflib import Literal, Namespace, URIRef
 
 PLN = Namespace("http://village-planning.org/ontology#")
@@ -94,6 +96,9 @@ class EntityIdPolicy:
 
     @staticmethod
     def uri(entity_type: str, bsm: str, version: str = "") -> URIRef:
+        entity_type = quote(str(entity_type), safe="-._~")
+        bsm = quote(str(bsm), safe="-._~")
+        version = quote(str(version), safe="-._~")
         if version:
             return PLN[f"{entity_type}_{bsm}_{version}"]
         return PLN[f"{entity_type}_{bsm}"]

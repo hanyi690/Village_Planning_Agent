@@ -42,6 +42,9 @@ FACILITY_COLORS = {
     "停车场": "#696969",
 }
 
+# Current land-use classes that must not receive new facilities.
+RESTRICTED_DLBMS = {"0101", "0102", "0103", "1100", "1110", "1120", "1130", "1200", "0300"}
+
 # Direction → offset in meters (converted to degrees at runtime with cos(lat) correction)
 DIRECTION_OFFSET_M = {
     "center": (0.0, 0.0),
@@ -88,6 +91,7 @@ class FacilityPlacer:
         parcel_centroids = self._compute_parcel_centroids(landuse_geojson)
         boundary_center = self._compute_boundary_center(boundary_geojson)
         residential_points = self._compute_residential_points(landuse_geojson)
+        occupied_points: List[Tuple[float, float]] = []
 
         for fac in facilities:
             # Convert dict to expected format if needed
@@ -97,23 +101,42 @@ class FacilityPlacer:
                 location_hint = fac.get("location_hint", "")
                 status = fac.get("status", "现状保留")
                 candidate_bsms = fac.get("candidate_bsms", [])
+                anchor_point = fac.get("anchor_point")
             else:
                 fac_id = fac.facility_id
                 fac_type = fac.facility_type
                 location_hint = fac.location_hint
                 status = fac.status
                 candidate_bsms = getattr(fac, "candidate_bsms", [])
+                anchor_point = getattr(fac, "anchor_point", None)
 
             point = None
 
+            if anchor_point and len(anchor_point) >= 2:
+                try:
+                    point = [float(anchor_point[0]), float(anchor_point[1])]
+                except (TypeError, ValueError):
+                    point = None
+
             # P8: 空间锚定优先 — INSTRUCTION/表格位置（自然村→gazetteer BSM 集）
             # 已解析的 candidate_bsms → 以其地块质心均值作为落位点
-            if candidate_bsms:
+            if point is None and candidate_bsms:
                 point = self._place_at_bsm_centroid(candidate_bsms, landuse_geojson)
 
-            if point is None and status in ("现状保留", "existing"):
+            normalized_status = {
+                "planned_new": "planned",
+                "planned_expand": "upgraded",
+                "planned_relocate": "relocated",
+                "existing_preserve": "existing",
+                "规划新建": "planned",
+                "规划改扩建": "upgraded",
+                "规划迁建": "relocated",
+                "现状保留": "existing",
+            }.get(str(status), str(status))
+
+            if point is None and normalized_status in ("现状保留", "existing"):
                 point = self._place_existing(fac_type, existing_pois, parcel_centroids)
-            elif status in ("规划新建", "planned"):
+            elif point is None and normalized_status in ("规划新建", "planned"):
                 # Strategy 1: match location_hint to KG facility (precise coordinates)
                 matched_kg = None
                 if kg_facilities and (location_hint or fac_type):
@@ -122,12 +145,14 @@ class FacilityPlacer:
                     point = self._place_near_existing(matched_kg, offset_m=100)
                 if point is None:
                     point = self._place_new(fac_type, "center", parcel_centroids, boundary_center, residential_points)
-            elif status in ("规划改扩建", "upgraded"):
+            elif point is None and normalized_status in ("规划改扩建", "upgraded"):
                 point = self._place_upgraded(fac_type, existing_pois, parcel_centroids, boundary_center)
-            elif status in ("规划迁建", "relocated"):
+            elif point is None and normalized_status in ("规划迁建", "relocated"):
                 point = self._place_relocated(fac_type, parcel_centroids, boundary_center, residential_points)
 
             if point:
+                point = self._separate_from_occupied(point, occupied_points)
+                occupied_points.append((point[0], point[1]))
                 color = FACILITY_COLORS.get(fac_type, "#666666")
                 service_radius = self._get_service_radius(fac_type, status)
                 coverage_count = 0
@@ -330,6 +355,38 @@ class FacilityPlacer:
         deg_lat = offset_m[1] / 111_000.0
         return [centroid[0] + deg_lon, centroid[1] + deg_lat]
 
+    @staticmethod
+    def _separate_from_occupied(
+        point: List[float], occupied: List[Tuple[float, float]], min_distance_m: float = 35.0
+    ) -> List[float]:
+        """Avoid stacking multiple intents on one parcel/anchor.
+
+        Keep the first facility at its grounded location, then place later
+        facilities on a deterministic metre-scale ring around that location.
+        This preserves the grounding provenance while making overlaps visible.
+        """
+        if not occupied:
+            return point
+        lat = float(point[1])
+        cos_lat = max(math.cos(math.radians(lat)), 0.2)
+        lon_m = 111_000.0 * cos_lat
+        for ring in range(1, 8):
+            radius = min_distance_m * ring
+            for step in range(8):
+                angle = 2.0 * math.pi * step / 8.0
+                candidate = [
+                    point[0] + radius * math.cos(angle) / lon_m,
+                    point[1] + radius * math.sin(angle) / 111_000.0,
+                ]
+                if all(
+                    ((candidate[0] - ox) * lon_m) ** 2
+                    + ((candidate[1] - oy) * 111_000.0) ** 2
+                    >= min_distance_m**2
+                    for ox, oy in occupied
+                ):
+                    return [round(candidate[0], 7), round(candidate[1], 7)]
+        return point
+
     def _place_upgraded(
         self,
         fac_type: str,
@@ -415,6 +472,12 @@ class FacilityPlacer:
                     center_m = safe_geo_series_union(group.geometry).convex_hull.centroid
                 center_4326 = project_to_wgs84(gpd.GeoSeries([center_m], crs=gdf_m.crs)).iloc[0]
                 centroids[dlbm] = (center_4326.x, center_4326.y)
+                # Preserve individual parcel candidates; grouped DLBM centers
+                # caused every facility of a type to collapse to one point.
+                for idx, geom in group.geometry.items():
+                    c = geom.centroid
+                    c4326 = project_to_wgs84(gpd.GeoSeries([c], crs=gdf_m.crs)).iloc[0]
+                    centroids[f"{dlbm}::{idx}"] = (c4326.x, c4326.y)
 
         except ImportError:
             # Fallback: simple average of feature coordinates
@@ -470,8 +533,11 @@ class FacilityPlacer:
         """Get all available centroids for the given DLBM codes."""
         result = []
         for dlbm in dlbms:
+            if dlbm in RESTRICTED_DLBMS:
+                continue
             if dlbm in centroids:
                 result.append(centroids[dlbm])
+            result.extend(value for key, value in centroids.items() if key.startswith(f"{dlbm}::"))
         return result
 
     @staticmethod

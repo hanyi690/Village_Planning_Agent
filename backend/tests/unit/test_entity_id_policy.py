@@ -39,6 +39,11 @@ class TestEntityIdPolicy:
         uri = EntityIdPolicy.uri("road", "R001")
         assert "_v" not in str(uri)
 
+    def test_uri_encodes_unsafe_label_characters(self):
+        uri = EntityIdPolicy.uri("axis_target", "沿金田河 | 生态轴")
+        assert " " not in str(uri)
+        assert "|" not in str(uri)
+
     def test_fallback_uri_with_ysdm(self):
         uri = EntityIdPolicy.fallback_uri("facility", "2001", 3)
         assert str(uri) == str(PLN["facility_2001_3"])

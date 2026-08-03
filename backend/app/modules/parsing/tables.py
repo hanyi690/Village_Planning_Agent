@@ -23,6 +23,7 @@ from typing import List, Optional, Tuple
 
 from app.modules.schema.contracts.parse_contracts import (
     FacilityTarget,
+    RoadTarget,
     SpatialPreference,
     ZoneTarget,
 )
@@ -95,7 +96,6 @@ def _classify_columns(header: List[str], rows: List[List[str]]) -> dict:
 def _extract_zone_tables(text: str) -> List[ZoneTarget]:
     """功能分区表 → ZoneTarget(land_use=分区名, area_ratio, area_ha in hint)."""
     targets = []
-    seen = set()
     for header, rows in _iter_tables(text):
         if not rows:
             continue
@@ -107,6 +107,8 @@ def _extract_zone_tables(text: str) -> List[ZoneTarget]:
         names = [n for n in names if n and not _NUMBER_RE.search(n)]
         if not names or sum("区" in n for n in names) / len(names) < 0.6:
             continue
+        table_targets = []
+        seen = set()
         for row in rows:
             if cols["name"] >= len(row):
                 continue
@@ -131,7 +133,7 @@ def _extract_zone_tables(text: str) -> List[ZoneTarget]:
             if cols["location"] is not None and cols["location"] < len(row):
                 location = row[cols["location"]]
             seen.add(name)
-            targets.append(
+            table_targets.append(
                 ZoneTarget(
                     land_use=name,
                     area_ratio=area_ratio,
@@ -148,6 +150,8 @@ def _extract_zone_tables(text: str) -> List[ZoneTarget]:
                     ) if location else None,
                 )
             )
+        if table_targets:
+            return table_targets
     return targets
 
 
@@ -205,4 +209,66 @@ def _extract_project_tables(text: str) -> List[FacilityTarget]:
     return targets
 
 
-__all__ = ["_extract_zone_tables", "_extract_project_tables"]
+def _extract_road_tables(text: str) -> List[RoadTarget]:
+    """Road hierarchy tables -> typed road targets."""
+    targets = []
+    seen = set()
+    for header, rows in _iter_tables(text):
+        name_idx = next(
+            (i for i, cell in enumerate(header) if "道路名称" in cell),
+            None,
+        )
+        width_idx = next(
+            (i for i, cell in enumerate(header) if "宽度" in cell),
+            None,
+        )
+        if name_idx is None or width_idx is None:
+            continue
+        type_idx = next(
+            (i for i, cell in enumerate(header) if "道路类型" in cell),
+            None,
+        )
+        connects_idx = next(
+            (i for i, cell in enumerate(header) if "连接" in cell),
+            None,
+        )
+        for row in rows:
+            if name_idx >= len(row) or width_idx >= len(row):
+                continue
+            name = row[name_idx].strip()
+            width_match = _NUMBER_RE.search(row[width_idx])
+            if not name or not width_match or name in seen:
+                continue
+            road_type = (
+                row[type_idx].strip()
+                if type_idx is not None and type_idx < len(row)
+                else ""
+            )
+            connects = (
+                [row[connects_idx].strip()]
+                if connects_idx is not None
+                and connects_idx < len(row)
+                and row[connects_idx].strip()
+                else []
+            )
+            seen.add(name)
+            targets.append(
+                RoadTarget(
+                    road_level=name,
+                    width_m=float(width_match.group()),
+                    connects=connects,
+                    semantic=SemanticMetadata(
+                        natural_language_description=(
+                            f"{road_type}{name}，规划宽度{width_match.group()}米"
+                        ),
+                    ),
+                )
+            )
+    return targets
+
+
+__all__ = [
+    "_extract_zone_tables",
+    "_extract_project_tables",
+    "_extract_road_tables",
+]

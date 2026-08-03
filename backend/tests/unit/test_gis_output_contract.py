@@ -48,6 +48,32 @@ def test_render_builder_accepts_execute_road_shape():
     assert layers[0]["geojson"]["features"] == [road]
 
 
+def test_render_builder_includes_current_roads_and_annotations():
+    from app.modules.spatial_ops.map_layers import build_map_layers
+
+    road = {
+        "type": "FeatureCollection",
+        "features": [],
+    }
+    annotation = {
+        "type": "FeatureCollection",
+        "features": [],
+    }
+
+    layers = build_map_layers(
+        [],
+        {
+            "road_geojson": road,
+            "annotation_geojson": annotation,
+        },
+    )
+
+    assert [layer["layerType"] for layer in layers] == [
+        "current_road",
+        "current_annotation",
+    ]
+
+
 def test_fetch_reuses_caller_bundle_and_preserves_overrides():
     from app.agent.gis.layout_pipeline import _fetch_gis_data_node
     from app.agent.gis.state import GISPipelineState
@@ -165,6 +191,46 @@ def test_legacy_intent_routes_declared_execute_children():
     assert result["tasks_to_run"] == ["layout", "facility", "axis", "road"]
 
 
+def test_facility_placer_accepts_parse_planned_new_status():
+    from app.tools.gis._generation.facility_placer import FacilityPlacer
+
+    landuse = {
+        "type": "FeatureCollection",
+        "features": [_feature("P001")],
+    }
+    boundary = {
+        "type": "FeatureCollection",
+        "features": [_feature("B0")],
+    }
+    result = FacilityPlacer().place(
+        [{"facility_id": "F01", "facility_type": "观景亭", "status": "planned_new"}],
+        landuse_geojson=landuse,
+        boundary_geojson=boundary,
+    )
+
+    assert len(result["features"]) == 1
+    assert result["features"][0]["properties"]["facility_id"] == "F01"
+
+
+def test_road_grounding_infers_endpoints_from_kg_village_anchors():
+    from app.agent.gis.parse.agent import resolve_spatial_anchors
+    from app.modules.schema.contracts.parse_contracts import RoadTarget, SpatialPlanningIntent
+
+    road = RoadTarget(road_level="南北向通村道路", width_m=6.0)
+    intent = SpatialPlanningIntent(road_targets=[road])
+    resolved = resolve_spatial_anchors(
+        intent,
+        village_anchors=[
+            {"name": "南村", "lon": 116.01, "lat": 24.81},
+            {"name": "北村", "lon": 116.02, "lat": 24.85},
+        ],
+    )
+
+    assert resolved == 1
+    assert road.start_anchor == (116.01, 24.81)
+    assert road.end_anchor == (116.02, 24.85)
+
+
 def test_missing_zone_targets_are_not_replaced_with_current_landuse():
     from app.agent.gis.execute.agent import _execute_layout_node
     from app.agent.gis.execute.state import ExecuteAgentState
@@ -238,6 +304,37 @@ def test_parse_prefers_authoritative_zone_table_over_regex_noise():
     assert [target.land_use for target in result.intent.zone_targets] == [
         "村庄建设区",
         "一般农业区",
+    ]
+
+
+def test_execute_checkpoint_output_converts_numpy_scalars():
+    import numpy as np
+
+    from app.agent.gis.execute.agent import _checkpoint_safe
+
+    result = _checkpoint_safe(
+        {"score": np.float64(1.25), "coords": [np.int64(2)]}
+    )
+
+    assert result == {"score": 1.25, "coords": [2]}
+    assert type(result["score"]) is float
+
+
+def test_parse_extracts_structured_road_table():
+    from app.agent.gis.parse import parse
+
+    result = parse(
+        """
+| 道路类型 | 道路名称 | 宽度(m) | 连接功能 |
+| :--- | :--- | :--- | :--- |
+| 对外交通干道 | Y122乡道 | 7.0 | 衔接X038县道 |
+| 村内主干道 | 南北向通村道路 | 6.0 | 串联自然村 |
+"""
+    )
+
+    assert [(road.road_level, road.width_m) for road in result.intent.road_targets] == [
+        ("Y122乡道", 7.0),
+        ("南北向通村道路", 6.0),
     ]
 
 
@@ -318,6 +415,46 @@ def test_export_uses_allocated_landuse_for_balance_without_current_gis(tmp_path)
     assert (tmp_path / "tables" / "land_balance.json").exists()
 
 
+def test_export_land_balance_treats_missing_area_as_zero(tmp_path):
+    from app.modules.spatial_ops.export_package import export_gdb_package
+
+    allocated = {
+        "type": "FeatureCollection",
+        "features": [
+            {
+                **_feature("P001"),
+                "properties": {
+                    "BSM": "P001",
+                    "DLBM": "0101",
+                    "DLMJ": None,
+                    "area_sqm": 10000,
+                },
+            },
+            {
+                **_feature("P002"),
+                "properties": {
+                    "BSM": "P002",
+                    "DLBM": "0701",
+                    "DLMJ": None,
+                },
+            },
+        ],
+    }
+
+    export_gdb_package(
+        layout_configs=[],
+        allocated_geojson=allocated,
+        gis_data={},
+        village_name="test",
+        output_dir=str(tmp_path),
+    )
+
+    balance = json.loads(
+        (tmp_path / "tables" / "land_balance.json").read_text(encoding="utf-8")
+    )
+    assert balance["total_area_ha"] == 1.0
+
+
 def test_uploaded_landuse_uses_canonical_bundle_layer():
     from app.modules.data.catalog.catalog import _merge_geojson_into_bundle
     from app.modules.schema.types.canonical import VillageBundle, VillageMetadata
@@ -356,10 +493,71 @@ def test_static_preview_uses_actual_extent(tmp_path):
         "color": "#54A24B",
     }
 
-    artifact = render_map_preview([layer], str(tmp_path), "测试村")
+    invalid_axis = {
+        "geojson": {
+            "type": "FeatureCollection",
+            "features": [
+                {
+                    "type": "Feature",
+                    "properties": {},
+                    "geometry": {"type": "Point", "coordinates": [0, 0]},
+                }
+            ],
+        },
+        "layerType": "infrastructure",
+        "layerName": "invalid_axis",
+    }
+    boundary = {
+        **layer,
+        "layerType": "boundary",
+        "layerName": "boundary",
+    }
+
+    artifact = render_map_preview(
+        [layer, invalid_axis, boundary],
+        str(tmp_path),
+        "测试村",
+    )
 
     assert artifact["status"] == "completed"
+    assert artifact["extent"][0] == 116.0
+    assert artifact["layer_count"] == 2
     preview = tmp_path / "planning_preview.png"
     assert preview.exists()
     with Image.open(preview) as image:
         assert image.size == (1800, 1300)
+
+
+def test_interactive_html_map_is_self_contained(tmp_path):
+    from app.tools.gis.html_render import render_interactive_map
+
+    layer = {
+        "geojson": {
+            "type": "FeatureCollection",
+            "features": [_feature("P001")],
+        },
+        "layerType": "boundary",
+        "layerName": "boundary",
+        "color": "#3388ff",
+    }
+
+    artifact = render_interactive_map(
+        [layer],
+        str(tmp_path),
+        "测试村",
+        issues=[{"code": "planned_roads_unresolved", "message": "道路未落位"}],
+        project_summary={
+            "roads": [{"name": "村内主干道", "status": "未落位", "detail": "等待空间锚点"}]
+        },
+    )
+
+    html_path = tmp_path / "planning_map.html"
+    content = html_path.read_text(encoding="utf-8")
+    assert artifact["status"] == "completed"
+    assert artifact["self_contained"] is True
+    assert "https://" not in content
+    assert "planned_roads_unresolved" in content
+    assert "村内主干道" in content
+    assert 'data-target="layer-0"' in content
+    assert "mouseenter" in content
+    assert "map-tooltip" in content

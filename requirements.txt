@@ -100,6 +100,7 @@ geopandas>=0.14.0
 shapely>=2.0.0
 pyproj>=3.6.0
 networkx>=3.0
+ortools>=9.8
 matplotlib>=3.8.0
 Pillow>=10.0.0
 # RDF 知识图谱 (PlanningKG)

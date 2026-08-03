@@ -206,11 +206,21 @@ def _compute_land_balance(geojson: Dict) -> Dict[str, Any]:
     zone_areas: Dict[str, float] = defaultdict(float)
     func_areas: Dict[str, float] = defaultdict(float)
     total_area = 0.0
+    has_sqm_area = False
 
     for feat in features:
         props = feat.get("properties", {})
         dlbm = str(props.get("DLBM", ""))
-        area = float(props.get("DLMJ", props.get("area", 0)))
+        has_sqm_area = has_sqm_area or any(
+            props.get(key) is not None
+            for key in ("DLMJ", "area_sqm")
+        )
+        area = float(
+            props.get("DLMJ")
+            or props.get("area_sqm")
+            or props.get("area")
+            or 0
+        )
 
         pz = props.get("assigned_zone", dlbm_to_planning_zone(dlbm))
         zt = props.get("zone_type", get_zone_type_for_dlbm(dlbm))
@@ -220,7 +230,7 @@ def _compute_land_balance(geojson: Dict) -> Dict[str, Any]:
         total_area += area
 
     # Convert to hectares if values are in m² (DLMJ is in m²)
-    is_sqm = total_area > 10000
+    is_sqm = has_sqm_area or total_area > 10000
     factor = 10000 if is_sqm else 1
 
     return {

@@ -243,6 +243,10 @@ async def build_backend_run_report(session_id: str) -> Dict[str, Any]:
         (render.get("outputs") or {}).get("render_layers", 0) or 0
     )
     preview_status = (render.get("outputs") or {}).get("preview_status", "")
+    html_status = (render.get("outputs") or {}).get("html_status", "")
+    parse_outputs = (latest_by_stage.get("PARSE", {}).get("outputs") or {})
+    execute_outputs = execute.get("outputs") or {}
+    feature_counts = execute_outputs.get("valid_geometry_counts") or {}
 
     for stage, present in trace["stage_coverage"].items():
         if not present:
@@ -269,6 +273,27 @@ async def build_backend_run_report(session_id: str) -> Dict[str, Any]:
         issues.append({
             "code": "preview_not_completed",
             "message": f"Static preview status is '{preview_status or 'missing'}'.",
+        })
+    if html_status != "completed":
+        issues.append({
+            "code": "html_map_not_completed",
+            "message": f"Interactive HTML map status is '{html_status or 'missing'}'.",
+        })
+    if int(parse_outputs.get("facilities", 0) or 0) > 0 and int(
+        feature_counts.get("facility_point", 0) or 0
+    ) <= 0:
+        issues.append({
+            "code": "planned_facilities_unresolved",
+            "message": "Facility targets were parsed but no planned facility geometry was produced.",
+        })
+    formal_road_count = sum(
+        int(feature_counts.get(layer_type, 0) or 0)
+        for layer_type in ("planned_road", "planned_road_candidates")
+    )
+    if int(parse_outputs.get("road_targets", 0) or 0) > 0 and formal_road_count <= 0:
+        issues.append({
+            "code": "planned_roads_unresolved",
+            "message": "Road targets were parsed but no formal planned road geometry was produced.",
         })
 
     kg_steps = [

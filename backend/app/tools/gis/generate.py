@@ -253,6 +253,8 @@ def _generate_facilities(
                 "status": getattr(ft, 'status', 'existing_preserve'),
                 "location_hint": getattr(ft, 'location_hint', ''),
                 "anchor_village": getattr(ft, 'anchor_village', ''),
+                "anchor_point": getattr(ft, 'anchor_point', None),
+                "direction": getattr(ft, 'direction', 'center'),
                 "service_radius": getattr(ft, 'service_radius', None),
                 "candidate_bsms": list(getattr(ft, 'candidate_bsms', None) or []),
             })

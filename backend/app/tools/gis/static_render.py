@@ -47,6 +47,25 @@ def _layer_color(layer: Dict[str, Any], index: int) -> str:
     return palette[index % len(palette)]
 
 
+def _feature_color(properties: Dict[str, Any], fallback: str) -> str:
+    value = (
+        properties.get("zone_type")
+        or properties.get("assigned_zone")
+        or properties.get("name")
+        or ""
+    )
+    colors = {
+        "水域": "#7ec8e3",
+        "农业用地": "#eef3c5",
+        "居住用地": "#fdc86b",
+        "生态绿地": "#5aae61",
+        "交通用地": "#4b5563",
+        "公共服务用地": "#4c8ed9",
+        "产业用地": "#b79578",
+    }
+    return properties.get("color") or colors.get(str(value), fallback)
+
+
 def _load_font(size: int):
     from PIL import ImageFont
 
@@ -72,10 +91,21 @@ def render_map_preview(
     output_path = Path(output_dir) / "planning_preview.png"
 
     all_points: List[Tuple[float, float]] = []
+    boundary_points: List[Tuple[float, float]] = []
+    current_landuse_points: List[Tuple[float, float]] = []
     for layer in layers:
         geojson = layer.get("geojson") or {}
+        layer_points: List[Tuple[float, float]] = []
         for feature in geojson.get("features", []):
-            all_points.extend(_coordinates(feature.get("geometry") or {}))
+            layer_points.extend(_coordinates(feature.get("geometry") or {}))
+        all_points.extend(layer_points)
+        layer_type = layer.get("layerType") or layer.get("layer_type") or ""
+        layer_name = layer.get("layerName") or layer.get("layer_name") or ""
+        if layer_type == "boundary":
+            boundary_points.extend(layer_points)
+        if layer_name == "current_landuse":
+            current_landuse_points.extend(layer_points)
+    all_points = boundary_points or current_landuse_points or all_points
     if not all_points:
         return {
             "status": "failed",
@@ -100,6 +130,14 @@ def render_map_preview(
     min_y, max_y = min(ys), max(ys)
     span_x = max(max_x - min_x, 1e-9)
     span_y = max(max_y - min_y, 1e-9)
+    extent_padding_x = span_x * 0.05
+    extent_padding_y = span_y * 0.05
+
+    def is_visible(point: Tuple[float, float]) -> bool:
+        return (
+            min_x - extent_padding_x <= point[0] <= max_x + extent_padding_x
+            and min_y - extent_padding_y <= point[1] <= max_y + extent_padding_y
+        )
 
     available_width = width_px - margin * 2
     available_height = height_px - margin * 2
@@ -141,7 +179,7 @@ def render_map_preview(
 
         for feature in geojson.get("features", []):
             properties = feature.get("properties") or {}
-            feature_color = properties.get("color") or color
+            feature_color = _feature_color(properties, color)
             try:
                 rgb = ImageColor.getrgb(feature_color)
             except (TypeError, ValueError):
@@ -158,37 +196,59 @@ def render_map_preview(
             geometry = feature.get("geometry") or {}
             geometry_type = geometry.get("type", "")
             coordinates = geometry.get("coordinates") or []
+            polygon_fill = None if layer_type == "boundary" else (*rgb, 105)
+            polygon_width = 5 if layer_type == "boundary" else 2
             if geometry_type == "Polygon":
                 for ring in coordinates[:1]:
+                    if not any(is_visible((point[0], point[1])) for point in ring):
+                        continue
                     points = [project((point[0], point[1])) for point in ring]
                     if len(points) >= 3:
-                        draw.polygon(points, fill=(*rgb, 105), outline=(*rgb, 230), width=2)
+                        draw.polygon(
+                            points,
+                            fill=polygon_fill,
+                            outline=(*rgb, 230),
+                            width=polygon_width,
+                        )
                         layer_drawn = True
             elif geometry_type == "MultiPolygon":
                 for polygon in coordinates:
                     for ring in polygon[:1]:
+                        if not any(is_visible((point[0], point[1])) for point in ring):
+                            continue
                         points = [project((point[0], point[1])) for point in ring]
                         if len(points) >= 3:
-                            draw.polygon(points, fill=(*rgb, 105), outline=(*rgb, 230), width=2)
+                            draw.polygon(
+                                points,
+                                fill=polygon_fill,
+                                outline=(*rgb, 230),
+                                width=polygon_width,
+                            )
                             layer_drawn = True
             elif geometry_type == "LineString":
+                if not any(is_visible((point[0], point[1])) for point in coordinates):
+                    continue
                 points = [project((point[0], point[1])) for point in coordinates]
                 if len(points) >= 2:
                     draw.line(points, fill=(*rgb, 255), width=5, joint="curve")
                     layer_drawn = True
             elif geometry_type == "MultiLineString":
                 for line in coordinates:
+                    if not any(is_visible((point[0], point[1])) for point in line):
+                        continue
                     points = [project((point[0], point[1])) for point in line]
                     if len(points) >= 2:
                         draw.line(points, fill=(*rgb, 255), width=5, joint="curve")
                         layer_drawn = True
             elif geometry_type == "Point" and len(coordinates) >= 2:
+                if not is_visible((coordinates[0], coordinates[1])):
+                    continue
                 x, y = project((coordinates[0], coordinates[1]))
                 draw.ellipse((x - 6, y - 6, x + 6, y + 6), fill=(*rgb, 255), outline="white", width=2)
                 layer_drawn = True
             elif geometry_type == "MultiPoint":
                 for point in coordinates:
-                    if len(point) >= 2:
+                    if len(point) >= 2 and is_visible((point[0], point[1])):
                         x, y = project((point[0], point[1]))
                         draw.ellipse((x - 6, y - 6, x + 6, y + 6), fill=(*rgb, 255), outline="white", width=2)
                         layer_drawn = True
@@ -258,13 +318,19 @@ def render_map_preview(
         "width_px": width_px,
         "height_px": height_px,
         "cjk_font_available": has_cjk_font,
+        "extent": [min_x, min_y, max_x, max_y],
     }
 
     manifest_path = output_path.parent / "run_manifest.json"
     if manifest_path.exists():
         try:
             manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-            manifest.setdefault("artifacts", []).append({
+            manifest["artifacts"] = [
+                item
+                for item in manifest.get("artifacts", [])
+                if item.get("kind") != "planning_preview"
+            ]
+            manifest["artifacts"].append({
                 "kind": "planning_preview",
                 **artifact,
             })

@@ -371,9 +371,19 @@ async def create_session(
                     user_uploaded_gis_data[dtype] = r["gis_data"]
                 else:
                     fname = r.get("filename", "").lower()
-                    for target_type, keyword in [("boundary", "boundary"), ("landuse_current", "landuse"),
-                                                 ("road", "road"), ("water", "water"),
-                                                 ("construction_zone", "construction")]:
+                    for target_type, keyword in [
+                        ("boundary", "boundary"),
+                        ("admin_boundary_line", "admin_boundary"),
+                        ("landuse_current", "landuse"),
+                        ("road", "road"),
+                        ("annotation", "annotation"),
+                        ("water", "water"),
+                        ("construction_zone", "construction"),
+                        ("farmland_protection", "farmland"),
+                        ("ecological_protection", "ecological"),
+                        ("historical_protection", "historical"),
+                        ("geological_hazard_points", "geological_hazard"),
+                    ]:
                         if keyword in fname:
                             user_uploaded_gis_data[target_type] = r["gis_data"]
                             break

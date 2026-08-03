@@ -353,15 +353,32 @@ async def _parse_intent_node(state: GISPipelineState) -> dict:
         return {}
 
     # Extract planning text from reports
-    planning_text = ""
+    planning_parts = []
     instruction_text = ""
     if reports:
-        for key, val in reports.items():
+        priority = (
+            "land_use_planning",
+            "spatial_structure",
+            "traffic_planning",
+            "public_service",
+            "infrastructure_planning",
+            "ecological",
+            "disaster_prevention",
+            "project_bank",
+        )
+        ordered_keys = list(priority) + [
+            key for key in reports if key not in priority
+        ]
+        for key in ordered_keys:
+            if key not in reports:
+                continue
+            val = reports[key]
             if isinstance(val, dict):
-                planning_text += val.get("content", val.get("text", ""))
+                planning_parts.append(val.get("content", val.get("text", "")))
                 instruction_text += val.get("instruction", "") + "\n"
             elif isinstance(val, str):
-                planning_text += val
+                planning_parts.append(val)
+    planning_text = "\n\n".join(part for part in planning_parts if part)
     if not planning_text:
         planning_text = state.intent_json.get("planning_text", "")
 
@@ -391,7 +408,11 @@ async def _parse_intent_node(state: GISPipelineState) -> dict:
         try:
             from app.agent.gis.parse.agent import resolve_spatial_anchors
 
-            resolve_spatial_anchors(intent, village_name=village_name)
+            resolve_spatial_anchors(
+                intent,
+                village_name=village_name,
+                village_anchors=state.kg_village_anchors,
+            )
         except Exception as e:
             logger.warning("[Pipeline:parse] spatial anchor resolution failed: %s", e)
 
@@ -433,6 +454,7 @@ async def _parse_intent_node(state: GISPipelineState) -> dict:
                 outputs={
                     "zone_targets": zone_count,
                     "facilities": len(intent.facilities) if hasattr(intent, "facilities") else 0,
+                    "road_targets": len(intent.road_targets) if hasattr(intent, "road_targets") else 0,
                     "candidate_bsms_total": total_bsms,
                 },
                 diagnostics={
@@ -664,6 +686,82 @@ async def _render_map_node(state: GISPipelineState) -> dict:
             "reason": "validated_export_required",
             "path": "",
         }
+        interactive_map = dict(preview)
+        def _intent_items(field: str) -> List[Dict[str, Any]]:
+            raw = getattr(state.intent, field, None) if state.intent is not None else None
+            if isinstance(state.intent, dict):
+                raw = state.intent.get(field)
+            items: List[Dict[str, Any]] = []
+            for item in raw or []:
+                if hasattr(item, "model_dump"):
+                    item = item.model_dump()
+                elif not isinstance(item, dict):
+                    item = {
+                        key: getattr(item, key)
+                        for key in dir(item)
+                        if not key.startswith("_") and not callable(getattr(item, key))
+                    }
+                items.append(dict(item))
+            return items
+
+        realized_facilities = sum(
+            len((config.get("data") or {}).get("features", config.get("features", [])) or [])
+            for config in layout_configs
+            if (config.get("layerType") or config.get("layer_type")) == "facility_point"
+        )
+        realized_roads = sum(
+            len((config.get("data") or {}).get("features", config.get("features", [])) or [])
+            for config in layout_configs
+            if (config.get("layerType") or config.get("layer_type"))
+            in {"planned_road", "planned_road_candidates"}
+        )
+        intent_projects = {
+            "zones": [
+                {
+                    "name": item.get("land_use") or item.get("name") or "未命名分区",
+                    "status": "已生成候选分区",
+                    "detail": f"目标面积 {item.get('area_ha') or '未提供'} 公顷",
+                }
+                for item in _intent_items("zone_targets")
+            ],
+            "facilities": [
+                {
+                    "name": item.get("name") or item.get("facility_type") or "未命名设施",
+                    "status": "已生成规划点" if realized_facilities else "未落位",
+                    "detail": "已绑定 annotation/KG 锚点并生成设施几何"
+                    if realized_facilities
+                    else "已进入意图层，等待 annotation/KG 空间锚点",
+                }
+                for item in _intent_items("facilities")
+            ],
+            "roads": [
+                {
+                    "name": item.get("road_level") or item.get("name") or "未命名道路",
+                    "status": "已生成候选线" if realized_roads else "未落位",
+                    "detail": "已绑定 KG 村庄锚点并结合现状道路网络生成候选线"
+                    if realized_roads
+                    else "已进入道路子模块，端点尚未解析为可绘制几何",
+                }
+                for item in _intent_items("road_targets")
+            ],
+        }
+        narrative_sections = [
+            {
+                "title": "数据链路",
+                "text": "规划分区来自 L3 目标与 660 个现状地块；现状道路和设施标注作为底图及 KG 空间上下文参与计算。",
+            },
+        ]
+        realization_issues = list(state.execution_errors or [])
+        if _intent_items("facilities") and not realized_facilities:
+            realization_issues.append({
+                "code": "planned_facilities_unresolved",
+                "message": "设施目标已解析，但尚未生成规划设施几何。",
+            })
+        if _intent_items("road_targets") and not realized_roads:
+            realization_issues.append({
+                "code": "planned_roads_unresolved",
+                "message": "道路目标已解析，但尚未生成正式规划道路几何。",
+            })
         output_dir = (state.export_result or {}).get("output_dir", "")
         if (
             (state.validation_result or {}).get("passed", False)
@@ -677,6 +775,17 @@ async def _render_map_node(state: GISPipelineState) -> dict:
                 output_dir=output_dir,
                 village_name=state.village_name,
             )
+            from app.tools.gis.html_render import render_interactive_map
+
+            interactive_map = render_interactive_map(
+                layers=result,
+                output_dir=output_dir,
+                village_name=state.village_name,
+                issues=realization_issues,
+                project_summary=intent_projects,
+                narrative_sections=narrative_sections,
+            )
+        preview["interactive_html"] = interactive_map
         logger.info("[Pipeline:render] Render complete (%d layers)", len(layout_configs))
         try:
             from app.services.step_report import save_step_report
@@ -694,12 +803,18 @@ async def _render_map_node(state: GISPipelineState) -> dict:
                     ],
                     "preview_status": preview.get("status"),
                     "preview_path": preview.get("path", ""),
+                    "html_status": interactive_map.get("status"),
+                    "html_path": interactive_map.get("path", ""),
                 },
                 artifacts=[
                     {
                         "kind": "planning_preview",
                         "path": preview.get("path", ""),
-                    }
+                    },
+                    {
+                        "kind": "interactive_map",
+                        "path": interactive_map.get("path", ""),
+                    },
                 ] if preview.get("path") else [],
                 diagnostics={
                     "validation_passed": bool(
@@ -876,12 +991,35 @@ async def _execute_node(state: GISPipelineState) -> dict:
                 c.get("layerType") or c.get("layer_type") or "unknown"
                 for c in result.get("layout_configs", [])
             ]
+            layer_feature_counts: Dict[str, int] = {}
+            valid_geometry_counts: Dict[str, int] = {}
+            for config in result.get("layout_configs", []):
+                layer_type = (
+                    config.get("layerType")
+                    or config.get("layer_type")
+                    or "unknown"
+                )
+                data = config.get("data") or config.get("geojson") or {}
+                features = data.get("features", config.get("features", [])) or []
+                layer_feature_counts[layer_type] = (
+                    layer_feature_counts.get(layer_type, 0) + len(features)
+                )
+                valid_geometry_counts[layer_type] = (
+                    valid_geometry_counts.get(layer_type, 0)
+                    + sum(
+                        1
+                        for feature in features
+                        if (feature.get("geometry") or {}).get("coordinates")
+                    )
+                )
             await save_step_report(
                 state.session_id, "EXECUTE",
                 step_name="execute_layout",
                 outputs={
                     "layers": len(result.get("layout_configs", [])),
                     "layer_types": layer_types,
+                    "layer_feature_counts": layer_feature_counts,
+                    "valid_geometry_counts": valid_geometry_counts,
                     "allocated_parcels": len(
                         (result.get("allocated_geojson", {}) or {}).get("features", [])
                     ),

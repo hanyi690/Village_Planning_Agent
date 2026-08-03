@@ -146,19 +146,21 @@ async def gis_agent_node(state: Dict[str, Any]) -> Dict[str, Any]:
     # ── Step 3: SSE + return ──
     layout_configs = layout_result.get("layout_configs", [])
 
-    if layout_configs and session_id:
+    render_layers = layout_result.get("render_result", [])
+
+    if render_layers and session_id:
         try:
             from app.utils.sse_publisher import SSEPublisher
             layer_types = [
                 c.get("layerType") or c.get("layer_type") or "unknown"
-                for c in layout_configs
+                for c in render_layers
             ]
             SSEPublisher.send_gis_result(
                 session_id=session_id,
                 dimension_key="spatial_layout",
                 dimension_name="空间布局",
-                summary=f"生成 {len(layout_configs)} 个图层: {', '.join(layer_types)}",
-                layers=layout_configs,  # Full layers as fallback for missed gis_layer_update events
+                summary=f"生成 {len(render_layers)} 个图层: {', '.join(layer_types)}",
+                layers=render_layers,
                 pipeline_trace=state.get("pipeline_trace"),
             )
         except Exception as e:
@@ -196,7 +198,7 @@ def create_unified_planning_graph(checkpointer=None) -> StateGraph:
         {"execute_tools": "execute_tools", "analyze_dimension": "analyze_dimension",
          "gis_agent": "gis_agent", END: END})
     builder.add_edge("execute_tools", "conversation")
-    builder.add_edge("gis_agent", "conversation")
+    builder.add_edge("gis_agent", END)
     builder.add_edge("analyze_dimension", "layer_completion_check")
     builder.add_edge("explore", "gis_agent")
     builder.add_conditional_edges("layer_completion_check", after_analysis,

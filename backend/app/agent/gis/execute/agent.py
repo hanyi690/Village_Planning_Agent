@@ -21,7 +21,9 @@ to tools/gis private helpers; P2 should promote them to a public generation API.
 
 from __future__ import annotations
 
-from typing import Literal
+import json
+from functools import wraps
+from typing import Any, Awaitable, Callable, Literal
 
 from langgraph.graph import StateGraph, END, START
 
@@ -29,6 +31,31 @@ from .state import ExecuteAgentState
 from app.utils.logger import get_logger
 
 logger = get_logger(__name__)
+
+
+def _checkpoint_safe(value: Any) -> Any:
+    """Convert NumPy scalar containers to checkpoint-serializable primitives."""
+    module_name = type(value).__module__
+    if module_name == "numpy" or module_name.startswith("numpy."):
+        if hasattr(value, "item"):
+            return _checkpoint_safe(value.item())
+        if hasattr(value, "tolist"):
+            return _checkpoint_safe(value.tolist())
+    if isinstance(value, dict):
+        return {key: _checkpoint_safe(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple, set)):
+        return [_checkpoint_safe(item) for item in value]
+    return value
+
+
+def _checkpoint_safe_node(
+    node: Callable[[ExecuteAgentState], Awaitable[dict]],
+) -> Callable[[ExecuteAgentState], Awaitable[dict]]:
+    @wraps(node)
+    async def wrapped(state: ExecuteAgentState) -> dict:
+        return _checkpoint_safe(await node(state))
+
+    return wrapped
 
 
 def _execution_error(
@@ -410,6 +437,7 @@ async def _execute_road_node(state: ExecuteAgentState) -> dict:
     if isinstance(intent, dict):
         road_targets = list(intent.get("road_targets") or [])
 
+    diagnostic_layers: List[Dict[str, Any]] = []
     try:
         from app.agent.gis.execute.road.generator import (
             execute_road_planning_from_agent_state,
@@ -417,13 +445,26 @@ async def _execute_road_node(state: ExecuteAgentState) -> dict:
 
         result = execute_road_planning_from_agent_state(state)
         layers = result.get("layout_layers") or []
+        diagnostic_layers = list(layers)
         if layers:
+            formal_road_layers = [
+                layer
+                for layer in layers
+                if (layer.get("layerType") or layer.get("layer_type"))
+                in {"planned_road", "planned_road_candidates"}
+                and ((layer.get("data") or {}).get("features") or layer.get("features"))
+            ]
             existing = state.layout_configs or []
             logger.info(
                 "[EXECUTE:road] stage generator: ran=%s targets=%d layers=%d",
                 result.get("ran"), result.get("road_target_count", 0), len(layers),
             )
-            return {"layout_configs": layers + existing}
+            if formal_road_layers:
+                return {"layout_configs": layers + existing}
+            logger.info(
+                "[EXECUTE:road] stage generator produced diagnostics without formal geometry; "
+                "continuing to deterministic anchor planner"
+            )
         if result.get("ran"):
             logger.info(
                 "[EXECUTE:road] stage generator ran but no layers: %s",
@@ -476,6 +517,14 @@ async def _execute_road_node(state: ExecuteAgentState) -> dict:
             "Road targets exist but no planned road was produced.",
         )
 
+    for road in planned_roads:
+        geometry = road.get("geometry")
+        if isinstance(geometry, str):
+            try:
+                road["geometry"] = json.loads(geometry)
+            except json.JSONDecodeError:
+                road["geometry"] = None
+
     # Build layer config for export/render
     road_layer = {
         "layer_type": "planned_road",
@@ -485,7 +534,7 @@ async def _execute_road_node(state: ExecuteAgentState) -> dict:
 
     # Merge into existing layout_configs
     existing = state.layout_configs or []
-    updated = [road_layer] + existing
+    updated = [road_layer] + diagnostic_layers + existing
 
     logger.info(
         "[EXECUTE:road] generated %d planned roads (%d upgrade, %d new, %d preserved)",
@@ -708,13 +757,13 @@ def build_execute_agent_graph():
     """
     graph = StateGraph(ExecuteAgentState)
 
-    graph.add_node("route_tasks", _route_tasks_node)
-    graph.add_node("execute_layout", _execute_layout_node)
-    graph.add_node("execute_facility", _execute_facility_node)
-    graph.add_node("execute_axis", _execute_axis_node)
-    graph.add_node("execute_road", _execute_road_node)
-    graph.add_node("validate", _validate_node)
-    graph.add_node("write_l4", _write_l4_node)
+    graph.add_node("route_tasks", _checkpoint_safe_node(_route_tasks_node))
+    graph.add_node("execute_layout", _checkpoint_safe_node(_execute_layout_node))
+    graph.add_node("execute_facility", _checkpoint_safe_node(_execute_facility_node))
+    graph.add_node("execute_axis", _checkpoint_safe_node(_execute_axis_node))
+    graph.add_node("execute_road", _checkpoint_safe_node(_execute_road_node))
+    graph.add_node("validate", _checkpoint_safe_node(_validate_node))
+    graph.add_node("write_l4", _checkpoint_safe_node(_write_l4_node))
 
     graph.add_edge(START, "route_tasks")
     graph.add_edge("route_tasks", "execute_layout")
