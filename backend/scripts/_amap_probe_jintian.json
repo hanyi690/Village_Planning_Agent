@@ -1,0 +1,1107 @@
+{
+  "config": {
+    "province": "广东省",
+    "city": "梅州市",
+    "county": "平远县",
+    "township": "泗水镇",
+    "village": "金田",
+    "adcode": "441426",
+    "radius_m": 8000
+  },
+  "center": {
+    "lon": 116.0243943185861,
+    "lat": 24.752726629504636,
+    "level": "乡镇",
+    "formatted_address": "广东省梅州市平远县泗水镇",
+    "adcode": "441426"
+  },
+  "p1": {
+    "田坑": {
+      "hit": true,
+      "count": 1,
+      "all_names": [
+        "广东省梅州市大埔县田坑"
+      ],
+      "first": {
+        "id": "",
+        "name": "广东省梅州市大埔县田坑",
+        "lon": 116.4999020387714,
+        "lat": 24.42536999627549,
+        "lon_gcj02": 116.504486,
+        "lat_gcj02": 24.422536,
+        "address": "田坑",
+        "distance": 0,
+        "category": [],
+        "typecode": [],
+        "tel": []
+      },
+      "total": 0
+    },
+    "黄竹": {
+      "hit": true,
+      "count": 2,
+      "all_names": [
+        "热柘镇黄竹峰上谦子",
+        "黄竹峰上坑桥"
+      ],
+      "first": {
+        "id": "B0FFGXJS5E",
+        "name": "热柘镇黄竹峰上谦子",
+        "lon": 116.01069788860606,
+        "lat": 24.549546510065095,
+        "lon_gcj02": 116.015432,
+        "lat_gcj02": 24.546721,
+        "address": "平远县",
+        "distance": 0,
+        "category": "地名地址信息;普通地名;普通地名",
+        "typecode": "190100",
+        "tel": []
+      },
+      "total": 12
+    },
+    "园寨": {
+      "hit": true,
+      "count": 1,
+      "all_names": [
+        "泗水镇金田村退役军人服务站"
+      ],
+      "first": {
+        "id": "B0IUDAG4TY",
+        "name": "泗水镇金田村退役军人服务站",
+        "lon": 116.04098473713806,
+        "lat": 24.81688365671009,
+        "lon_gcj02": 116.045815,
+        "lat_gcj02": 24.814146,
+        "address": "122乡道园寨小组1号",
+        "distance": 0,
+        "category": "政府机构及社会团体;政府机关;乡镇以下级政府及事业单位",
+        "typecode": "130106",
+        "tel": "13727623219"
+      },
+      "total": 2
+    },
+    "社前": {
+      "hit": true,
+      "count": 1,
+      "all_names": [
+        "广东省梅州市梅江区社前"
+      ],
+      "first": {
+        "id": "",
+        "name": "广东省梅州市梅江区社前",
+        "lon": 116.0785246763199,
+        "lat": 24.397827868140062,
+        "lon_gcj02": 116.083379,
+        "lat_gcj02": 24.395173,
+        "address": "社前",
+        "distance": 0,
+        "category": [],
+        "typecode": [],
+        "tel": []
+      },
+      "total": 0
+    },
+    "分水": {
+      "hit": false,
+      "count": 0,
+      "all_names": [],
+      "first": null,
+      "total": 0
+    },
+    "清明": {
+      "hit": true,
+      "count": 1,
+      "all_names": [
+        "平远县五指石清明泉"
+      ],
+      "first": {
+        "id": "B0MAV655JC",
+        "name": "平远县五指石清明泉",
+        "lon": 115.94480959658252,
+        "lat": 24.904778966572888,
+        "lon_gcj02": 115.949402,
+        "lat_gcj02": 24.901792,
+        "address": "五指石景区内",
+        "distance": 0,
+        "category": "风景名胜;风景名胜相关;旅游景点|生活服务;生活服务场所;生活服务场所",
+        "typecode": "110000|070000",
+        "tel": []
+      },
+      "total": 2
+    },
+    "塘笃": {
+      "hit": true,
+      "count": 1,
+      "all_names": [
+        "广东省梅州市丰顺县塘肚"
+      ],
+      "first": {
+        "id": "",
+        "name": "广东省梅州市丰顺县塘肚",
+        "lon": 116.37780513281756,
+        "lat": 24.03276966445294,
+        "lon_gcj02": 116.382552,
+        "lat_gcj02": 24.030245,
+        "address": "塘肚",
+        "distance": 0,
+        "category": [],
+        "typecode": [],
+        "tel": []
+      },
+      "total": 0
+    },
+    "长塘": {
+      "hit": true,
+      "count": 1,
+      "all_names": [
+        "广东省梅州市梅江区长塘"
+      ],
+      "first": {
+        "id": "",
+        "name": "广东省梅州市梅江区长塘",
+        "lon": 116.22817727883668,
+        "lat": 24.269618950797128,
+        "lon_gcj02": 116.232789,
+        "lat_gcj02": 24.266835,
+        "address": "长塘",
+        "distance": 0,
+        "category": [],
+        "typecode": [],
+        "tel": []
+      },
+      "total": 0
+    },
+    "炉池": {
+      "hit": false,
+      "count": 0,
+      "all_names": [],
+      "first": null,
+      "total": 0
+    },
+    "肩丰": {
+      "hit": false,
+      "count": 0,
+      "all_names": [],
+      "first": null,
+      "total": 0
+    },
+    "营仔": {
+      "hit": true,
+      "count": 1,
+      "all_names": [
+        "英姿养生馆"
+      ],
+      "first": {
+        "id": "B0KK2DB5IS",
+        "name": "英姿养生馆",
+        "lon": 115.8886951271738,
+        "lat": 24.576272471260776,
+        "lon_gcj02": 115.893249,
+        "lat_gcj02": 24.57323,
+        "address": "平岗路与环城路交叉口西北140米",
+        "distance": 0,
+        "category": "生活服务;美容美发店;美容美发店",
+        "typecode": "071100",
+        "tel": []
+      },
+      "total": 1
+    },
+    "新山": {
+      "hit": true,
+      "count": 1,
+      "all_names": [
+        "广东省梅州市梅县区新山"
+      ],
+      "first": {
+        "id": "",
+        "name": "广东省梅州市梅县区新山",
+        "lon": 116.18978910799493,
+        "lat": 24.5077423067184,
+        "lon_gcj02": 116.194485,
+        "lat_gcj02": 24.504952,
+        "address": "新山",
+        "distance": 0,
+        "category": [],
+        "typecode": [],
+        "tel": []
+      },
+      "total": 0
+    }
+  },
+  "p2": {
+    "田坑": {
+      "hit": true,
+      "count": 1,
+      "all_names": [
+        "广东省梅州市大埔县田坑"
+      ],
+      "first": {
+        "id": "",
+        "name": "广东省梅州市大埔县田坑",
+        "lon": 116.4999020387714,
+        "lat": 24.42536999627549,
+        "lon_gcj02": 116.504486,
+        "lat_gcj02": 24.422536,
+        "address": "田坑",
+        "distance": 0,
+        "category": [],
+        "typecode": [],
+        "tel": []
+      },
+      "total": 0
+    },
+    "黄竹": {
+      "hit": true,
+      "count": 2,
+      "all_names": [
+        "热柘镇黄竹峰上谦子",
+        "黄竹峰上坑桥"
+      ],
+      "first": {
+        "id": "B0FFGXJS5E",
+        "name": "热柘镇黄竹峰上谦子",
+        "lon": 116.01069788860606,
+        "lat": 24.549546510065095,
+        "lon_gcj02": 116.015432,
+        "lat_gcj02": 24.546721,
+        "address": "平远县",
+        "distance": 0,
+        "category": "地名地址信息;普通地名;普通地名",
+        "typecode": "190100",
+        "tel": []
+      },
+      "total": 12
+    },
+    "园寨": {
+      "hit": true,
+      "count": 1,
+      "all_names": [
+        "泗水镇金田村退役军人服务站"
+      ],
+      "first": {
+        "id": "B0IUDAG4TY",
+        "name": "泗水镇金田村退役军人服务站",
+        "lon": 116.04098473713806,
+        "lat": 24.81688365671009,
+        "lon_gcj02": 116.045815,
+        "lat_gcj02": 24.814146,
+        "address": "122乡道园寨小组1号",
+        "distance": 0,
+        "category": "政府机构及社会团体;政府机关;乡镇以下级政府及事业单位",
+        "typecode": "130106",
+        "tel": "13727623219"
+      },
+      "total": 2
+    },
+    "社前": {
+      "hit": true,
+      "count": 1,
+      "all_names": [
+        "广东省梅州市梅江区社前"
+      ],
+      "first": {
+        "id": "",
+        "name": "广东省梅州市梅江区社前",
+        "lon": 116.0785246763199,
+        "lat": 24.397827868140062,
+        "lon_gcj02": 116.083379,
+        "lat_gcj02": 24.395173,
+        "address": "社前",
+        "distance": 0,
+        "category": [],
+        "typecode": [],
+        "tel": []
+      },
+      "total": 0
+    },
+    "分水": {
+      "hit": false,
+      "count": 0,
+      "all_names": [],
+      "first": null,
+      "total": 0
+    },
+    "清明": {
+      "hit": true,
+      "count": 1,
+      "all_names": [
+        "平远县五指石清明泉"
+      ],
+      "first": {
+        "id": "B0MAV655JC",
+        "name": "平远县五指石清明泉",
+        "lon": 115.94480959658252,
+        "lat": 24.904778966572888,
+        "lon_gcj02": 115.949402,
+        "lat_gcj02": 24.901792,
+        "address": "五指石景区内",
+        "distance": 0,
+        "category": "风景名胜;风景名胜相关;旅游景点|生活服务;生活服务场所;生活服务场所",
+        "typecode": "110000|070000",
+        "tel": []
+      },
+      "total": 2
+    },
+    "塘笃": {
+      "hit": true,
+      "count": 1,
+      "all_names": [
+        "广东省梅州市丰顺县塘肚"
+      ],
+      "first": {
+        "id": "",
+        "name": "广东省梅州市丰顺县塘肚",
+        "lon": 116.37780513281756,
+        "lat": 24.03276966445294,
+        "lon_gcj02": 116.382552,
+        "lat_gcj02": 24.030245,
+        "address": "塘肚",
+        "distance": 0,
+        "category": [],
+        "typecode": [],
+        "tel": []
+      },
+      "total": 0
+    },
+    "长塘": {
+      "hit": true,
+      "count": 1,
+      "all_names": [
+        "广东省梅州市梅江区长塘"
+      ],
+      "first": {
+        "id": "",
+        "name": "广东省梅州市梅江区长塘",
+        "lon": 116.22817727883668,
+        "lat": 24.269618950797128,
+        "lon_gcj02": 116.232789,
+        "lat_gcj02": 24.266835,
+        "address": "长塘",
+        "distance": 0,
+        "category": [],
+        "typecode": [],
+        "tel": []
+      },
+      "total": 0
+    },
+    "炉池": {
+      "hit": false,
+      "count": 0,
+      "all_names": [],
+      "first": null,
+      "total": 0
+    },
+    "肩丰": {
+      "hit": false,
+      "count": 0,
+      "all_names": [],
+      "first": null,
+      "total": 0
+    },
+    "营仔": {
+      "hit": true,
+      "count": 1,
+      "all_names": [
+        "英姿养生馆"
+      ],
+      "first": {
+        "id": "B0KK2DB5IS",
+        "name": "英姿养生馆",
+        "lon": 115.8886951271738,
+        "lat": 24.576272471260776,
+        "lon_gcj02": 115.893249,
+        "lat_gcj02": 24.57323,
+        "address": "平岗路与环城路交叉口西北140米",
+        "distance": 0,
+        "category": "生活服务;美容美发店;美容美发店",
+        "typecode": "071100",
+        "tel": []
+      },
+      "total": 1
+    },
+    "新山": {
+      "hit": true,
+      "count": 1,
+      "all_names": [
+        "广东省梅州市梅县区新山"
+      ],
+      "first": {
+        "id": "",
+        "name": "广东省梅州市梅县区新山",
+        "lon": 116.18978910799493,
+        "lat": 24.5077423067184,
+        "lon_gcj02": 116.194485,
+        "lat_gcj02": 24.504952,
+        "address": "新山",
+        "distance": 0,
+        "category": [],
+        "typecode": [],
+        "tel": []
+      },
+      "total": 0
+    }
+  },
+  "p3": {
+    "田坑": {
+      "hit": true,
+      "level": "乡镇",
+      "formatted_address": "广东省梅州市平远县泗水镇",
+      "lon": 116.0243943185861,
+      "lat": 24.752726629504636,
+      "adcode": "441426"
+    },
+    "黄竹": {
+      "hit": true,
+      "level": "乡镇",
+      "formatted_address": "广东省梅州市平远县泗水镇",
+      "lon": 116.0243943185861,
+      "lat": 24.752726629504636,
+      "adcode": "441426"
+    },
+    "园寨": {
+      "hit": true,
+      "level": "乡镇",
+      "formatted_address": "广东省梅州市平远县泗水镇",
+      "lon": 116.0243943185861,
+      "lat": 24.752726629504636,
+      "adcode": "441426"
+    },
+    "社前": {
+      "hit": true,
+      "level": "乡镇",
+      "formatted_address": "广东省梅州市平远县泗水镇",
+      "lon": 116.0243943185861,
+      "lat": 24.752726629504636,
+      "adcode": "441426"
+    },
+    "分水": {
+      "hit": true,
+      "level": "乡镇",
+      "formatted_address": "广东省梅州市平远县泗水镇",
+      "lon": 116.0243943185861,
+      "lat": 24.752726629504636,
+      "adcode": "441426"
+    },
+    "清明": {
+      "hit": true,
+      "level": "乡镇",
+      "formatted_address": "广东省梅州市平远县泗水镇",
+      "lon": 116.0243943185861,
+      "lat": 24.752726629504636,
+      "adcode": "441426"
+    },
+    "塘笃": {
+      "hit": true,
+      "level": "乡镇",
+      "formatted_address": "广东省梅州市平远县泗水镇",
+      "lon": 116.0243943185861,
+      "lat": 24.752726629504636,
+      "adcode": "441426"
+    },
+    "长塘": {
+      "hit": true,
+      "level": "乡镇",
+      "formatted_address": "广东省梅州市平远县泗水镇",
+      "lon": 116.0243943185861,
+      "lat": 24.752726629504636,
+      "adcode": "441426"
+    },
+    "炉池": {
+      "hit": true,
+      "level": "乡镇",
+      "formatted_address": "广东省梅州市平远县泗水镇",
+      "lon": 116.0243943185861,
+      "lat": 24.752726629504636,
+      "adcode": "441426"
+    },
+    "肩丰": {
+      "hit": true,
+      "level": "乡镇",
+      "formatted_address": "广东省梅州市平远县泗水镇",
+      "lon": 116.0243943185861,
+      "lat": 24.752726629504636,
+      "adcode": "441426"
+    },
+    "营仔": {
+      "hit": true,
+      "level": "乡镇",
+      "formatted_address": "广东省梅州市平远县泗水镇",
+      "lon": 116.0243943185861,
+      "lat": 24.752726629504636,
+      "adcode": "441426"
+    },
+    "新山": {
+      "hit": true,
+      "level": "乡镇",
+      "formatted_address": "广东省梅州市平远县泗水镇",
+      "lon": 116.0243943185861,
+      "lat": 24.752726629504636,
+      "adcode": "441426"
+    }
+  },
+  "p3b": {
+    "八社村": {
+      "hit": true,
+      "level": "村庄",
+      "formatted_address": "广东省梅州市平远县泗水镇八社村",
+      "lon": 116.02963543128953,
+      "lat": 24.84532707250207,
+      "adcode": "441426"
+    },
+    "上举村": {
+      "hit": true,
+      "level": "村庄",
+      "formatted_address": "广东省梅州市平远县泗水镇上举村",
+      "lon": 115.98672222162448,
+      "lat": 24.79054437027749,
+      "adcode": "441426"
+    },
+    "符坑村": {
+      "hit": true,
+      "level": "村庄",
+      "formatted_address": "广东省梅州市平远县泗水镇符坑村",
+      "lon": 116.01738121271087,
+      "lat": 24.796789783868117,
+      "adcode": "441426"
+    },
+    "文贵村": {
+      "hit": true,
+      "level": "村庄",
+      "formatted_address": "广东省梅州市平远县泗水镇文贵村",
+      "lon": 116.04915969356969,
+      "lat": 24.794738713269794,
+      "adcode": "441426"
+    }
+  },
+  "p4_typecodes": {
+    "190100": {
+      "count": 0,
+      "total": 0,
+      "all_names": [],
+      "typecodes_seen": [],
+      "first": null
+    },
+    "190106": {
+      "count": 0,
+      "total": 0,
+      "all_names": [],
+      "typecodes_seen": [],
+      "first": null
+    },
+    "180000": {
+      "count": 0,
+      "total": 0,
+      "all_names": [],
+      "typecodes_seen": [],
+      "first": null
+    },
+    "190000": {
+      "count": 25,
+      "total": 475,
+      "all_names": [
+        "038县道与123乡道交叉口",
+        "122乡道与123乡道交叉口",
+        "038县道与122乡道交叉口",
+        "102乡道与123乡道交叉口",
+        "石牙背",
+        "仰天塘",
+        "122乡道与124乡道交叉口",
+        "西山岌",
+        "排顶",
+        "122乡道",
+        "123乡道",
+        "牛角山",
+        "124乡道",
+        "芒头岌",
+        "南山寨",
+        "六斗尾",
+        "118乡道与122乡道交叉口",
+        "坝石岌",
+        "038县道",
+        "水寨下",
+        "102乡道",
+        "暗隔文言5号",
+        "泥禾顶",
+        "上举街与037县道交叉口",
+        "118乡道"
+      ],
+      "typecodes_seen": [
+        "190203",
+        "190301",
+        "190302",
+        "190402"
+      ],
+      "first": {
+        "id": "B0FFGGY339",
+        "name": "038县道与123乡道交叉口",
+        "lon": 116.02466560490511,
+        "lat": 24.7527358727301,
+        "lon_gcj02": 116.029452,
+        "lat_gcj02": 24.74995,
+        "address": "平远县",
+        "distance": 27,
+        "category": "地名地址信息;交通地名;路口名",
+        "typecode": "190302",
+        "tel": []
+      }
+    },
+    "141200": {
+      "count": 3,
+      "total": 3,
+      "all_names": [
+        "泗水镇中心幼儿园",
+        "上举中心小学",
+        "东石实验幼儿园"
+      ],
+      "typecodes_seen": [
+        "141203",
+        "141204"
+      ],
+      "first": {
+        "id": "B0MR966WGZ",
+        "name": "泗水镇中心幼儿园",
+        "lon": 116.02842880021583,
+        "lat": 24.753950451411885,
+        "lon_gcj02": 116.033225,
+        "lat_gcj02": 24.751175,
+        "address": "122乡道与123乡道交叉口东400米",
+        "distance": 431,
+        "category": "科教文化服务;学校;幼儿园",
+        "typecode": "141204",
+        "tel": []
+      }
+    },
+    "090100": {
+      "count": 2,
+      "total": 2,
+      "all_names": [
+        "平远县泗水卫生院",
+        "平远县上举卫生院"
+      ],
+      "typecodes_seen": [
+        "090102"
+      ],
+      "first": {
+        "id": "B02F103DG5",
+        "name": "平远县泗水卫生院",
+        "lon": 116.02599801112598,
+        "lat": 24.754402055970093,
+        "lon_gcj02": 116.030788,
+        "lat_gcj02": 24.75162,
+        "address": "泗水镇镇新街183号",
+        "distance": 247,
+        "category": "医疗保健服务;综合医院;卫生院",
+        "typecode": "090102",
+        "tel": "0753-8291194;0753-8291225"
+      }
+    },
+    "150700": {
+      "count": 4,
+      "total": 4,
+      "all_names": [
+        "泗水小学(公交站)",
+        "大畲坳(公交站)",
+        "白岭村(公交站)",
+        "店前(公交站)"
+      ],
+      "typecodes_seen": [
+        "150700"
+      ],
+      "first": {
+        "id": "BV11100077",
+        "name": "泗水小学(公交站)",
+        "lon": 116.0285135853342,
+        "lat": 24.753946222536836,
+        "lon_gcj02": 116.03331,
+        "lat_gcj02": 24.751171,
+        "address": "新车站-梅畲村",
+        "distance": 439,
+        "category": "交通设施服务;公交车站;公交车站相关",
+        "typecode": "150700",
+        "tel": []
+      }
+    },
+    "150900": {
+      "count": 0,
+      "total": 0,
+      "all_names": [],
+      "typecodes_seen": [],
+      "first": null
+    }
+  },
+  "p5a_village": {
+    "count": 12,
+    "total": 292,
+    "all_names": [
+      "泗水村委会",
+      "大畲村民委员会",
+      "梅畲村委会",
+      "木联村委会",
+      "符坑村村委会",
+      "文贵村委会",
+      "上举村委会",
+      "白岭村委会",
+      "成文村委会",
+      "金田村委会",
+      "大新村委会",
+      "灵水村委会"
+    ],
+    "typecodes_seen": [
+      "130106"
+    ],
+    "village_match": [],
+    "first_5": [
+      {
+        "name": "泗水村委会",
+        "address": "泗水镇",
+        "typecode": "130106",
+        "distance": 65
+      },
+      {
+        "name": "大畲村民委员会",
+        "address": "泗水镇",
+        "typecode": "130106",
+        "distance": 2760
+      },
+      {
+        "name": "梅畲村委会",
+        "address": "泗水镇",
+        "typecode": "130106",
+        "distance": 3498
+      },
+      {
+        "name": "木联村委会",
+        "address": "泗水镇",
+        "typecode": "130106",
+        "distance": 4533
+      },
+      {
+        "name": "符坑村村委会",
+        "address": "118乡道南200米",
+        "typecode": "130106",
+        "distance": 4841
+      }
+    ]
+  },
+  "p5b_road": {
+    "count": 5,
+    "total": 6,
+    "all_names": [
+      "上举街与037县道交叉口",
+      "上举街与037县道交叉口",
+      "上举街与037县道交叉口",
+      "上举街",
+      "上举街与037县道交叉口"
+    ],
+    "typecodes_seen": [
+      "190301",
+      "190302"
+    ],
+    "village_match": [],
+    "first_5": [
+      {
+        "name": "上举街与037县道交叉口",
+        "address": "平远县",
+        "typecode": "190302",
+        "distance": 5452
+      },
+      {
+        "name": "上举街与037县道交叉口",
+        "address": "平远县",
+        "typecode": "190302",
+        "distance": 5609
+      },
+      {
+        "name": "上举街与037县道交叉口",
+        "address": "平远县",
+        "typecode": "190302",
+        "distance": 5694
+      },
+      {
+        "name": "上举街",
+        "address": "平远县",
+        "typecode": "190301",
+        "distance": 5951
+      },
+      {
+        "name": "上举街与037县道交叉口",
+        "address": "平远县",
+        "typecode": "190302",
+        "distance": 5964
+      }
+    ]
+  },
+  "p5c_river": {
+    "count": 3,
+    "total": 6,
+    "all_names": [
+      "银隆径水库",
+      "刁坑水库",
+      "长潭水库"
+    ],
+    "typecodes_seen": [
+      "190204",
+      "190205"
+    ],
+    "village_match": [],
+    "first_5": [
+      {
+        "name": "银隆径水库",
+        "address": "平远县",
+        "typecode": "190205",
+        "distance": 6898
+      },
+      {
+        "name": "刁坑水库",
+        "address": "平远县",
+        "typecode": "190205",
+        "distance": 6910
+      },
+      {
+        "name": "长潭水库",
+        "address": "蕉岭县",
+        "typecode": "190204",
+        "distance": 7748
+      }
+    ]
+  },
+  "p5d_bridge": {
+    "count": 0,
+    "total": 0,
+    "all_names": [],
+    "typecodes_seen": [],
+    "village_match": [],
+    "first_5": []
+  },
+  "p6_reverse_geocode": {
+    "田坑": {
+      "towncode": "441426110000",
+      "street": [],
+      "number": [],
+      "formatted_address": "广东省梅州市平远县泗水镇泗水镇泗水镇人民政府",
+      "adcode": "441426",
+      "is_internal": false
+    },
+    "黄竹": {
+      "towncode": "441426110000",
+      "street": [],
+      "number": [],
+      "formatted_address": "广东省梅州市平远县泗水镇泗水镇泗水镇人民政府",
+      "adcode": "441426",
+      "is_internal": false
+    },
+    "园寨": {
+      "towncode": "441426110000",
+      "street": [],
+      "number": [],
+      "formatted_address": "广东省梅州市平远县泗水镇泗水镇泗水镇人民政府",
+      "adcode": "441426",
+      "is_internal": false
+    },
+    "社前": {
+      "towncode": "441426110000",
+      "street": [],
+      "number": [],
+      "formatted_address": "广东省梅州市平远县泗水镇泗水镇泗水镇人民政府",
+      "adcode": "441426",
+      "is_internal": false
+    },
+    "分水": {
+      "towncode": "441426110000",
+      "street": [],
+      "number": [],
+      "formatted_address": "广东省梅州市平远县泗水镇泗水镇泗水镇人民政府",
+      "adcode": "441426",
+      "is_internal": false
+    },
+    "清明": {
+      "towncode": "441426110000",
+      "street": [],
+      "number": [],
+      "formatted_address": "广东省梅州市平远县泗水镇泗水镇泗水镇人民政府",
+      "adcode": "441426",
+      "is_internal": false
+    },
+    "塘笃": {
+      "towncode": "441426110000",
+      "street": [],
+      "number": [],
+      "formatted_address": "广东省梅州市平远县泗水镇泗水镇泗水镇人民政府",
+      "adcode": "441426",
+      "is_internal": false
+    },
+    "长塘": {
+      "towncode": "441426110000",
+      "street": [],
+      "number": [],
+      "formatted_address": "广东省梅州市平远县泗水镇泗水镇泗水镇人民政府",
+      "adcode": "441426",
+      "is_internal": false
+    },
+    "炉池": {
+      "towncode": "441426110000",
+      "street": [],
+      "number": [],
+      "formatted_address": "广东省梅州市平远县泗水镇泗水镇泗水镇人民政府",
+      "adcode": "441426",
+      "is_internal": false
+    },
+    "肩丰": {
+      "towncode": "441426110000",
+      "street": [],
+      "number": [],
+      "formatted_address": "广东省梅州市平远县泗水镇泗水镇泗水镇人民政府",
+      "adcode": "441426",
+      "is_internal": false
+    },
+    "营仔": {
+      "towncode": "441426110000",
+      "street": [],
+      "number": [],
+      "formatted_address": "广东省梅州市平远县泗水镇泗水镇泗水镇人民政府",
+      "adcode": "441426",
+      "is_internal": false
+    },
+    "新山": {
+      "towncode": "441426110000",
+      "street": [],
+      "number": [],
+      "formatted_address": "广东省梅州市平远县泗水镇泗水镇泗水镇人民政府",
+      "adcode": "441426",
+      "is_internal": false
+    },
+    "八社村": {
+      "towncode": "441426109000",
+      "street": [],
+      "number": [],
+      "formatted_address": "广东省梅州市平远县上举镇黄竹坪",
+      "adcode": "441426",
+      "is_internal": false
+    },
+    "上举村": {
+      "towncode": "441426109000",
+      "street": "上举街",
+      "number": "103号",
+      "formatted_address": "广东省梅州市平远县上举镇上举村",
+      "adcode": "441426",
+      "is_internal": false
+    },
+    "符坑村": {
+      "towncode": "441426109000",
+      "street": [],
+      "number": [],
+      "formatted_address": "广东省梅州市平远县上举镇符坑村",
+      "adcode": "441426",
+      "is_internal": false
+    },
+    "文贵村": {
+      "towncode": "441426110000",
+      "street": [],
+      "number": [],
+      "formatted_address": "广东省梅州市平远县泗水镇文贵村",
+      "adcode": "441426",
+      "is_internal": false
+    }
+  },
+  "p7a_county_sub3": {
+    "label": "平远县-sub3",
+    "name": "平远县",
+    "adcode": "441426",
+    "level": "district",
+    "sub_count": 12,
+    "sub_names": [
+      "大柘镇",
+      "仁居镇",
+      "石正镇",
+      "中行镇",
+      "差干镇",
+      "八尺镇",
+      "长田镇",
+      "东石镇",
+      "河头镇",
+      "上举镇",
+      "泗水镇",
+      "热柘镇"
+    ],
+    "sub_levels": [
+      "street"
+    ]
+  },
+  "p7b_city_sub2": {
+    "label": "梅州市-sub2",
+    "name": "梅州市",
+    "adcode": "441400",
+    "level": "city",
+    "sub_count": 8,
+    "sub_names": [
+      "蕉岭县",
+      "兴宁市",
+      "五华县",
+      "大埔县",
+      "丰顺县",
+      "平远县",
+      "梅江区",
+      "梅县区"
+    ],
+    "sub_levels": [
+      "district"
+    ]
+  },
+  "p8_routing": [
+    {
+      "route_id": 0,
+      "distance_m": 19342,
+      "duration_s": 2474,
+      "coord_count": 648,
+      "first_coord": [
+        115.97529186239049,
+        24.709044150964885
+      ],
+      "last_coord": [
+        116.08064995749302,
+        24.796172490420528
+      ]
+    },
+    {
+      "route_id": 1,
+      "distance_m": 19538,
+      "duration_s": 2330,
+      "coord_count": 737,
+      "first_coord": [
+        115.97529186239049,
+        24.709044150964885
+      ],
+      "last_coord": [
+        115.96496626338092,
+        24.801687738483263
+      ]
+    },
+    {
+      "route_id": 2,
+      "distance_m": 36982,
+      "duration_s": 4195,
+      "coord_count": 1357,
+      "first_coord": [
+        116.07113549516559,
+        24.71054532220087
+      ],
+      "last_coord": [
+        115.96496626338092,
+        24.801687738483263
+      ]
+    }
+  ],
+  "p9_batched": {
+    "kw": "田坑|黄竹|园寨|社前|分水|清明|塘笃|长塘|炉池|肩丰|营仔|新山",
+    "count": 2,
+    "all_names": [
+      "黄竹峰上坑桥",
+      "热柘镇黄竹峰上谦子"
+    ],
+    "matched_known": [
+      "黄竹峰上坑桥",
+      "热柘镇黄竹峰上谦子"
+    ],
+    "conclusion": "batch 命中 (高德允许 pipe-separated)"
+  }
+}
