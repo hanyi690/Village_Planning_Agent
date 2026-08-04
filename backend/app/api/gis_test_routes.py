@@ -108,8 +108,9 @@ router = APIRouter(prefix="/api/dev/gis", tags=["GIS Dev"])
 
 # ── Color injection (shared by /analysis and /zones) ──────────────
 
+from app.modules.schema.advisory_crosswalks import get_zone_type_for_dlbm
 from app.modules.schema import (
-    get_zone_color, get_zone_type_for_dlbm, ZONE_TYPE_COLORS,
+    get_zone_color, ZONE_TYPE_COLORS,
     PLANNING_ZONE_COLORS, DEFAULT_ZONE_COLOR,
 )
 from app.modules.schema.output.colors import (

@@ -25,7 +25,7 @@ from typing import Any, Dict, List, Literal, Optional, Tuple
 
 from pydantic import BaseModel, Field, computed_field
 
-from ..encodings.code_sets import (
+from ..advisory_crosswalks import (
     get_planning_zone_from_landuse,
     normalize_landuse,
 )

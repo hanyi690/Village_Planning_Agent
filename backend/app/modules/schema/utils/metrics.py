@@ -15,8 +15,8 @@ from __future__ import annotations
 from collections import Counter
 from typing import Any, Dict, Set
 
+from ..advisory_crosswalks import get_zone_type_for_dlbm
 from ..encodings.code_sets import (
-    get_zone_type_for_dlbm,
     BASIC_FARMLAND_CODES,
     GENERAL_AGRICULTURE_CODES,
     ECOLOGICAL_CODES,

@@ -16,7 +16,7 @@ from ..schema.contracts.delivery_contracts import (
     LandBalanceRow,
     LandBalanceTable,
 )
-from ..schema.encodings.code_sets import (
+from ..schema.advisory_crosswalks import (
     get_planning_zone_from_landuse,
     normalize_landuse,
 )

@@ -270,14 +270,6 @@ def ingest_landuse(
     if layer_type not in _LAYER_META:
         raise ValueError(f"Unknown layer_type: {layer_type}. Expected one of {list(_LAYER_META.keys())}")
 
-    # Late imports to avoid triggering schema package __init__ cycles at import time
-    from app.modules.schema import (
-        get_zone_type_for_dlbm,
-        get_zone_type_for_ghytbm,
-        dlbm_to_planning_zone,
-        get_primary_zone,
-    )
-
     data = _read_geojson(filepath)
     is_current = (layer_type == "current_landuse")
     parcels: List[BaseLandUseParcel] = []
@@ -323,11 +315,18 @@ def ingest_landuse(
             or str(props.get("GHYTMC", "")).strip()
         )
 
-        # ── 计算 zone_type / planning_zone / primary_zone ──
-        # 优先用 GHYTBM 查 zone_type (appendix5 有 zone_type 映射)
-        zone_type = get_zone_type_for_ghytbm(ghytbm) if ghytbm else get_zone_type_for_dlbm(dlbm) if dlbm else ""
-        planning_zone = dlbm_to_planning_zone(dlbm) if dlbm else ""
-        primary_zone = get_primary_zone(dlbm) if dlbm else ""
+        # ── zone_type / planning_zone / primary_zone ──
+        # v5.2: 现状地类只提供分类代码与名称、几何、面积、权属，不再从 DLBM 派生
+        # planning_zone / primary_zone / zone_type。若地块已带用户提供的属性值则保留，
+        # 否则留空（现状层）或默认 "preserve"（规划层）。
+        if is_current:
+            zone_type = str(props.get("zone_type", "")).strip()
+            planning_zone = str(props.get("planning_zone", "")).strip()
+            primary_zone = str(props.get("primary_zone", "")).strip()
+        else:
+            zone_type = str(props.get("zone_type", "")).strip() or "preserve"
+            planning_zone = str(props.get("planning_zone", "")).strip() or "preserve"
+            primary_zone = str(props.get("primary_zone", "")).strip() or "preserve"
 
         # ── 编码决策 provenance ──
         mapping_provenance = {}
@@ -363,8 +362,9 @@ def ingest_landuse(
             for k, v in props.items()
             if k.upper() not in (
                 'BSM', 'YSDM', 'DLBM', 'DLMC', 'DLMJ', 'SHAPE_AREA', 'SHAPE_LENGTH',
+                'ZONE_TYPE', 'PLANNING_ZONE', 'PRIMARY_ZONE',
             )
-            and k.lower() not in ('geometry', 'area_sqm', 'area_ha')
+            and k.lower() not in ('geometry', 'area_sqm', 'area_ha', 'zone_type', 'planning_zone', 'primary_zone')
         }
 
         if is_current:
@@ -442,12 +442,6 @@ def provider_to_parcel(
     由于 Provider 数据没有图层上下文（无法区分现状/规划的 encoding 预设），
     默认按现状层处理（dlbm_system = appendix5），可由调用方覆盖。
     """
-    from app.modules.schema import (
-        get_zone_type_for_dlbm,
-        dlbm_to_planning_zone,
-        get_primary_zone,
-    )
-
     # 校验 DLBM 编码体系
     dlbm = pp.dlbm.strip()
     dlbm_sys = ""
@@ -455,10 +449,10 @@ def provider_to_parcel(
         dlbm_sys, _warning = _validator.resolve(dlbm, APPENDIX5 if layer_type == "current_landuse" else TUGUI)
         # Warning silently logged; Provider data often has non-standard codes.
 
-    # 计算分区
-    zone_type = get_zone_type_for_dlbm(dlbm) if dlbm else pp.zone_type
-    planning_zone = dlbm_to_planning_zone(dlbm) if dlbm else pp.planning_zone
-    primary_zone = get_primary_zone(dlbm) if dlbm else pp.primary_zone
+    # v5.2: 不再从 DLBM 派生规划分区；保留 Provider 提供的属性值（缺失时留空）。
+    zone_type = pp.zone_type
+    planning_zone = pp.planning_zone
+    primary_zone = pp.primary_zone
 
     # 提取 properties 中的 BSM/YSDM（如果有）
     props = pp.properties or {}

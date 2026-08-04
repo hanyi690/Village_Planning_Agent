@@ -17,6 +17,7 @@ from __future__ import annotations
 
 from typing import Dict, Optional
 
+from app.modules.schema.advisory_crosswalks import DLBM_TO_ZONE_TYPE
 from app.modules.schema.encodings import code_sets as cs
 
 
@@ -35,7 +36,7 @@ def _invert_unique(items: list) -> Dict[str, str]:
 
 def _ensure_5_tier_dict(cs_module) -> Dict[str, str]:
     """zone_types_appendix5 names dict (from DLBM_TO_ZONE_TYPE invert)."""
-    return _invert_unique(list(set(cs_module.DLBM_TO_ZONE_TYPE.values())))
+    return _invert_unique(list(set(DLBM_TO_ZONE_TYPE.values())))
 
 
 def _ensure_5_tier_dict_gbt(cs_module) -> Dict[str, str]:

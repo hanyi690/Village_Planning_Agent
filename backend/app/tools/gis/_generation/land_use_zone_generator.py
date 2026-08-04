@@ -148,7 +148,7 @@ def _build_dlbm_to_vne() -> Dict[str, str]:
     Derivation chain: DLBM → GHYTBM → VNE
     Falls back to zone_type → VNE heuristic when GHYTBM unavailable.
     """
-    from app.modules.schema import GHYTBM_TO_VNE, DLBM_TO_ZONE_TYPE, VNE_TO_ZONE_TYPE
+    from app.modules.schema.advisory_crosswalks import GHYTBM_TO_VNE, DLBM_TO_ZONE_TYPE, VNE_TO_ZONE_TYPE
 
     mapping: Dict[str, str] = {}
 
@@ -239,7 +239,7 @@ class LandUseZoneGenerator:
                 # Determine VNE code (for VNE_LEVEL/VNE_PARENT display fields)
                 vne_code = ""
                 if ghytbm:
-                    from app.modules.schema import GHYTBM_TO_VNE
+                    from app.modules.schema.advisory_crosswalks import GHYTBM_TO_VNE
                     vne_code = GHYTBM_TO_VNE.get(ghytbm, "")
                 if not vne_code:
                     vne_code = dlbm_to_vne.get(dlbm, "E23")
@@ -248,7 +248,7 @@ class LandUseZoneGenerator:
 
                 # Determine TDYTFQDM: 4-digit township planning code (NOT VNE)
                 # v2.0: Use GHFLBM -> TDYTFQDM mapping from ghflbm_to_tdytfqdm.yaml
-                from app.modules.schema import get_tdytfqdm_for_ghflbm, get_tdyt_name_for_ghflbm
+                from app.modules.schema.advisory_crosswalks import get_tdytfqdm_for_ghflbm, get_tdyt_name_for_ghflbm
                 ghflbm = str(props.get("GHFLBM", ""))
                 tdytfqdm = get_tdytfqdm_for_ghflbm(ghflbm) if ghflbm else ""
                 ytfqmc = get_tdyt_name_for_ghflbm(ghflbm) if ghflbm else ""

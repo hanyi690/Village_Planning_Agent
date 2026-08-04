@@ -186,94 +186,6 @@ def merge_parcels(
 # ── Split (geometry division) ──
 
 
-def split_parcel_by_ratio(
-    parcel: Any,
-    ratio: float = 0.5,
-) -> List[Dict[str, Any]]:
-    """Split a parcel into two parts by area ratio.
-
-    Uses a simple approach: divide the bounding box along the longer axis.
-
-    Args:
-        parcel: Parcel with geometry (dict with 'geometry' key or object)
-        ratio: Split ratio (0.0-1.0), default 0.5
-
-    Returns:
-        List of 2 PlannedParcel-compatible dicts, or empty list on failure
-    """
-    if ratio <= 0 or ratio >= 1:
-        logger.warning("split_parcel_by_ratio: ratio must be in (0,1), got %f", ratio)
-        return []
-
-    try:
-        from shapely.geometry import box, shape
-        from shapely.ops import split as shapely_split
-
-        geom = _get_attr(parcel, "geometry", None)
-        bsm = _get_attr(parcel, "bsm", "")
-        area_sqm = float(_get_attr(parcel, "area_sqm", 0) or _get_attr(parcel, "area_ha", 0) * 10000 or _get_attr(parcel, "area", 0) or 0)
-        area = area_sqm / 10000 if area_sqm > 10000 else area_sqm
-
-        if isinstance(geom, dict):
-            polygon = shape(geom)
-        else:
-            logger.warning("split_parcel_by_ratio: cannot parse geometry")
-            return []
-
-        if polygon.is_empty or polygon.area <= 0:
-            return []
-
-        minx, miny, maxx, maxy = polygon.bounds
-        width = maxx - minx
-        height = maxy - miny
-
-        # Split along longer axis
-        if width >= height:
-            split_x = minx + width * ratio
-            split_line = box(minx, miny, split_x, maxy)
-        else:
-            split_y = miny + height * ratio
-            split_line = box(minx, miny, maxx, split_y)
-
-        part_a = polygon.intersection(split_line)
-        part_b = polygon.difference(split_line)
-
-        parts = []
-        for i, part in enumerate([part_a, part_b]):
-            if part.is_empty or part.area <= 0:
-                continue
-            if not part.is_valid:
-                part = part.buffer(0)
-
-            import json
-            part_geom = json.loads(json.dumps(part.__geo_interface__))
-            part_area = part.area / 10000  # sq_m to ha
-
-            parts.append({
-                "bsm": f"{bsm}_split_{i}",
-                "planning_land_use": "",
-                "area_ha": round(part_area, 4),
-                "geometry": json.dumps(part_geom, ensure_ascii=False),
-                "derived_from_bsms": [bsm],
-                "derived_from_zone_target": "",
-                "operation": "split",
-                "split_ratio": ratio,
-            })
-
-        logger.info(
-            "split_parcel_by_ratio: %s → %d parts (ratio=%.2f, area=%.1fha)",
-            bsm, len(parts), ratio, float(area),
-        )
-        return parts
-
-    except ImportError as e:
-        logger.error("split_parcel_by_ratio: missing dependency (%s)", e)
-        return []
-    except Exception as e:
-        logger.error("split_parcel_by_ratio failed: %s", e)
-        return []
-
-
 def split_parcel_by_geometry(
     parcel: Any,
     split_geometry: Dict[str, Any],
@@ -422,7 +334,6 @@ __all__ = [
     "reclassify_parcel",
     "modify_parcel",
     "merge_parcels",
-    "split_parcel_by_ratio",
     "split_parcel_by_geometry",
     "create_parcel",
     "apply_operations",

@@ -695,14 +695,13 @@ def _zone_candidates_hint() -> str:
     """静态编码推荐提示（非 KG 查询，与维度无空间数据时的候选集标注共用）。"""
     try:
         from app.modules.schema.encodings.code_sets import (
-            PLANNING_ZONE_TO_PRIMARY_ZONE, PLANNING_ZONE_NAMES,
+            PLANNING_ZONE_NAMES,
         )
     except Exception:
         return ""
     return (
         "**规划分区候选集提示**（编码推荐值非固定映射）:\n"
         f"  分区体系: {' > '.join(PLANNING_ZONE_NAMES)}\n"
-        f"  分区->主空间: {PLANNING_ZONE_TO_PRIMARY_ZONE}\n"
         "  以上为编码推荐值，实际规划可因上位规划调整、地块位置等因素改变。\n"
     )
 

@@ -534,7 +534,8 @@ def get_parcels_by_planning_zone(kg, planning_zone: str) -> List[Dict[str, Any]]
         List of parcel summaries with BSM, DLBM, area, and relations.
     """
     try:
-        from app.modules.schema.encodings.code_sets import PLANNING_ZONE_NAMES, normalize_landuse
+        from app.modules.schema.advisory_crosswalks import normalize_landuse
+        from app.modules.schema.encodings.code_sets import PLANNING_ZONE_NAMES
 
         # Validate planning zone
         valid_zones = set(PLANNING_ZONE_NAMES)
@@ -1168,10 +1169,11 @@ def get_entity_semantics(kg, entity_label: str = "", entity_type: str = "", bsm:
 
             # Encoding bridges from code_sets
             try:
-                from app.modules.schema.encodings.code_sets import (
-                    DLBM_TO_DLMC, DLBM_TO_ZONE_TYPE, DLBM_TO_PLANNING_ZONE,
+                from app.modules.schema.advisory_crosswalks import (
+                    DLBM_TO_ZONE_TYPE, DLBM_TO_PLANNING_ZONE,
                     DLBM_TO_PRIMARY_ZONE, DLBM_TO_GHYTBM,
                 )
+                from app.modules.schema.encodings.code_sets import DLBM_TO_DLMC
                 # Find DLBM for this label
                 for dlbm, dlmc in DLBM_TO_DLMC.items():
                     if dlmc == entity_label:

@@ -208,7 +208,7 @@ def _compute_land_balance(geojson: Dict) -> Dict[str, Any]:
     Area units preserved from input (typically m² for DLMJ fields).
     """
     from collections import defaultdict
-    from app.modules.schema import dlbm_to_planning_zone, get_zone_type_for_dlbm
+    from app.modules.schema.advisory_crosswalks import dlbm_to_planning_zone, get_zone_type_for_dlbm
 
     features = geojson.get("features", [])
     zone_areas: Dict[str, float] = defaultdict(float)

@@ -835,7 +835,7 @@ class LayoutValidator:
         if not kg_vne_summary:
             return CheckResult(check_name="vne_compliance", passed=True)
 
-        from app.modules.schema import VNE_TO_ZONE_TYPE
+        from app.modules.schema.advisory_crosswalks import VNE_TO_ZONE_TYPE
 
         # Build VNE → planning_zone mapping (VNE → zone_type → planning_zone)
         vne_to_planning: Dict[str, str] = {}

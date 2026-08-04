@@ -29,7 +29,7 @@ def test_new_import_spatial_types():
 
 
 def test_new_import_code_sets():
-    from app.modules.schema.encodings.code_sets import get_zone_type_for_dlbm, dlbm_to_planning_zone
+    from app.modules.schema.advisory_crosswalks import get_zone_type_for_dlbm, dlbm_to_planning_zone
     assert get_zone_type_for_dlbm is not None
     assert dlbm_to_planning_zone is not None
 
@@ -41,7 +41,8 @@ def test_new_import_dicts():
 
 
 def test_new_barrel_import():
-    from app.modules.schema import BBox, ZoneIntent, get_zone_type_for_dlbm
+    from app.modules.schema import BBox, ZoneIntent
+    from app.modules.schema.advisory_crosswalks import get_zone_type_for_dlbm
     assert BBox is not None
     assert ZoneIntent is not None
     assert get_zone_type_for_dlbm is not None

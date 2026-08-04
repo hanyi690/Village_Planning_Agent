@@ -170,7 +170,7 @@ def add_parcels(kg, features, *, gtype_ref: str, entry, ctx: BuildContext) -> di
             if constraint:
                 kg.g.add((pu, legal_constraint, Literal(constraint)))
         try:
-            from app.modules.schema.encodings.code_sets import get_ghytbm_for_dlbm
+            from app.modules.schema.advisory_crosswalks import get_ghytbm_for_dlbm
             ghytbm = get_ghytbm_for_dlbm(dlbm)
         except Exception:
             ghytbm = ""

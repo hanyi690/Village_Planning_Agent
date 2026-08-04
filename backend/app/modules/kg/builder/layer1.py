@@ -52,7 +52,8 @@ def _derive_semantic_label(dlbm: str) -> str:
     if not dlbm:
         return ""
     try:
-        from app.modules.schema.encodings.code_sets import DLBM_TO_DLMC, resolve_zone_type_for_dlbm
+        from app.modules.schema.advisory_crosswalks import resolve_zone_type_for_dlbm
+        from app.modules.schema.encodings.code_sets import DLBM_TO_DLMC
         name = DLBM_TO_DLMC.get(str(dlbm).strip(), "")
         if name:
             return name
@@ -71,7 +72,7 @@ def _derive_taxonomic_parent(dlbm: str) -> str:
     if not dlbm:
         return ""
     try:
-        from app.modules.schema.encodings.code_sets import resolve_zone_type_for_dlbm
+        from app.modules.schema.advisory_crosswalks import resolve_zone_type_for_dlbm
         return resolve_zone_type_for_dlbm(dlbm)
     except Exception:
         return ""
@@ -86,7 +87,7 @@ def _derive_legal_constraint(planning_zone: str) -> str:
     if not planning_zone:
         return ""
     try:
-        from app.modules.schema.encodings.code_sets import PLANNING_ZONE_TO_CONTROL_CODE
+        from app.modules.schema.advisory_crosswalks import PLANNING_ZONE_TO_CONTROL_CODE
         code = PLANNING_ZONE_TO_CONTROL_CODE.get(str(planning_zone).strip(), "")
         return _CONTROL_CODE_TO_CONSTRAINT.get(code, "")
     except Exception:
@@ -228,7 +229,7 @@ def _entity_uri_by_bsm(self, entity_type, bsm: str):
 
 
 def _add_parcels(self, parcels) -> None:
-    from app.modules.schema.encodings.code_sets import resolve_zone_type_for_dlbm
+    from app.modules.schema.advisory_crosswalks import resolve_zone_type_for_dlbm
     bsm_seq: dict = {}  # Track sequence per BSM for duplicate disambiguation
     for p in parcels:
         bsm = str(p.bsm).strip()
@@ -291,7 +292,7 @@ def _add_parcels(self, parcels) -> None:
                 self.g.add((pu, legal_constraint, Literal(constraint)))
         # allowed_operations: from ghytbm (most specific) or planning_zone
         try:
-            from app.modules.schema.encodings.code_sets import get_ghytbm_for_dlbm
+            from app.modules.schema.advisory_crosswalks import get_ghytbm_for_dlbm
             ghytbm = get_ghytbm_for_dlbm(dlbm)
         except Exception:
             ghytbm = ""

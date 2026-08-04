@@ -1,5 +1,6 @@
 from typing import Iterable, Optional
 
+from app.modules.schema.advisory_crosswalks import DLBM_TO_GHYTBM, GHYTBM_TO_ZONE_TYPE
 from app.modules.schema.encodings import code_sets as cs
 from app.modules.schema.provenance import ProvenanceSource
 
@@ -28,7 +29,7 @@ def derive_zone_types(
         bsm = p[bsm_key]
         ghytbm = _resolve_ghytbm(p, dlbm_key, ghytbm_key, current_landuse_key)
         if ghytbm:
-            zone_type = cs.GHYTBM_TO_ZONE_TYPE.get(ghytbm)
+            zone_type = GHYTBM_TO_ZONE_TYPE.get(ghytbm)
             ghytmc = cs.GHYTBM_TO_GHYTMC.get(ghytbm, ghytbm)
             prov = _provenance_for(p, ghytbm, dlbm_key, current_landuse_key)
         else:
@@ -53,8 +54,8 @@ def _resolve_ghytbm(p: dict, dlbm_key: str, ghytbm_key: str, current_landuse_key
     if gh:
         return gh
     dlbm = p.get(dlbm_key)
-    if dlbm and dlbm in cs.DLBM_TO_GHYTBM:
-        return cs.DLBM_TO_GHYTBM[dlbm]
+    if dlbm and dlbm in DLBM_TO_GHYTBM:
+        return DLBM_TO_GHYTBM[dlbm]
     return None
 
 

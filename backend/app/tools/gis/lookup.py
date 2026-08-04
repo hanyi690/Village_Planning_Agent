@@ -192,6 +192,20 @@ def map_code(code_or_name: str) -> Dict[str, Any]:
         }
     """
     try:
+        from app.modules.schema.advisory_crosswalks import (
+            DLBM_TO_THREE_CATEGORIES,
+            DLBM_TO_ZONE_TYPE,
+            DLBM_TO_PLANNING_ZONE,
+            DLBM_TO_PRIMARY_ZONE,
+            DLBM_TO_GHYTBM,
+            GHYTBM_TO_ZONE_TYPE,
+            GHYTBM_TO_VNE,
+            GHYTBM_TO_PLANNING_ZONE,
+            VNE_TO_ZONE_TYPE,
+            PLANNING_ZONE_TO_PRIMARY_ZONE,
+            PLANNING_ZONE_TO_CONTROL_CODE,
+            GHFLBM_TO_ZONE_TYPE,
+        )
         from app.modules.schema.encodings import code_sets as cs
 
         # Step 1: identify input via decode_code
@@ -228,46 +242,46 @@ def map_code(code_or_name: str) -> Dict[str, Any]:
 
         # 2a: DLBM -> three_categories / zone_type / planning_zone / primary_zone / ghytbm
         if input_system == "gbt21010":
-            _add_mapping(mappings, "three_categories", cs.DLBM_TO_THREE_CATEGORIES.get(input_code, ""),
-                         "GB/T 21010-2017 附录A", cs.DLBM_TO_THREE_CATEGORIES.get(input_code, "") and "exact" or "")
-            _add_mapping(mappings, "zone_type_appendix5", cs.DLBM_TO_ZONE_TYPE.get(input_code, ""),
-                         "mappings/gbt21010_to_zone_types_appendix5.yaml", cs.DLBM_TO_ZONE_TYPE.get(input_code, "") and "high" or "")
-            _add_mapping(mappings, "planning_zone", cs.DLBM_TO_PLANNING_ZONE.get(input_code, ""),
-                         "mappings/gbt21010_to_planning_zones.yaml", cs.DLBM_TO_PLANNING_ZONE.get(input_code, "") and "high" or "")
-            _add_mapping(mappings, "primary_zone", cs.DLBM_TO_PRIMARY_ZONE.get(input_code, ""),
-                         "mappings/gbt21010_to_primary_zones.yaml", cs.DLBM_TO_PRIMARY_ZONE.get(input_code, "") and "high" or "")
-            _add_mapping(mappings, "appendix5", cs.DLBM_TO_GHYTBM.get(input_code, ""),
-                         "mappings/dlbm_to_ghytbm.yaml (forward)", cs.DLBM_TO_GHYTBM.get(input_code, "") and "exact" or "")
+            _add_mapping(mappings, "three_categories", DLBM_TO_THREE_CATEGORIES.get(input_code, ""),
+                         "GB/T 21010-2017 附录A", DLBM_TO_THREE_CATEGORIES.get(input_code, "") and "exact" or "")
+            _add_mapping(mappings, "zone_type_appendix5", DLBM_TO_ZONE_TYPE.get(input_code, ""),
+                         "mappings/gbt21010_to_zone_types_appendix5.yaml", DLBM_TO_ZONE_TYPE.get(input_code, "") and "high" or "")
+            _add_mapping(mappings, "planning_zone", DLBM_TO_PLANNING_ZONE.get(input_code, ""),
+                         "mappings/gbt21010_to_planning_zones.yaml", DLBM_TO_PLANNING_ZONE.get(input_code, "") and "high" or "")
+            _add_mapping(mappings, "primary_zone", DLBM_TO_PRIMARY_ZONE.get(input_code, ""),
+                         "mappings/gbt21010_to_primary_zones.yaml", DLBM_TO_PRIMARY_ZONE.get(input_code, "") and "high" or "")
+            _add_mapping(mappings, "appendix5", DLBM_TO_GHYTBM.get(input_code, ""),
+                         "mappings/dlbm_to_ghytbm.yaml (forward)", DLBM_TO_GHYTBM.get(input_code, "") and "exact" or "")
 
         # 2b: GHYTBM -> zone_type / vne / ydyhfldm / planning_zone
         elif input_system == "appendix5":
-            _add_mapping(mappings, "zone_type_appendix5", cs.GHYTBM_TO_ZONE_TYPE.get(input_code, ""),
-                         "mappings/appendix5_to_zone_types_appendix5.yaml", cs.GHYTBM_TO_ZONE_TYPE.get(input_code, "") and "exact" or "")
-            _add_mapping(mappings, "vne_code", cs.GHYTBM_TO_VNE.get(input_code, ""),
-                         "appendix5.yaml vne field", cs.GHYTBM_TO_VNE.get(input_code, "") and "exact" or "")
+            _add_mapping(mappings, "zone_type_appendix5", GHYTBM_TO_ZONE_TYPE.get(input_code, ""),
+                         "mappings/appendix5_to_zone_types_appendix5.yaml", GHYTBM_TO_ZONE_TYPE.get(input_code, "") and "exact" or "")
+            _add_mapping(mappings, "vne_code", GHYTBM_TO_VNE.get(input_code, ""),
+                         "appendix5.yaml vne field", GHYTBM_TO_VNE.get(input_code, "") and "exact" or "")
             _add_mapping(mappings, "ydyhfldm", cs.GHYTBM_TO_YDYHFLDM.get(input_code, ""),
                          "appendix5.yaml ydyhfldm field", cs.GHYTBM_TO_YDYHFLDM.get(input_code, "") and "exact" or "")
-            _add_mapping(mappings, "planning_zone", cs.GHYTBM_TO_PLANNING_ZONE.get(input_code, ""),
-                         "rules/ghytbm_to_planning_zone.yaml", cs.GHYTBM_TO_PLANNING_ZONE.get(input_code, "") and "high" or "")
+            _add_mapping(mappings, "planning_zone", GHYTBM_TO_PLANNING_ZONE.get(input_code, ""),
+                         "rules/ghytbm_to_planning_zone.yaml", GHYTBM_TO_PLANNING_ZONE.get(input_code, "") and "high" or "")
 
         # 2c: VNE -> three_categories / zone_type_appendix5
         elif input_system == "vne_code":
             _add_mapping(mappings, "three_categories", cs.VNE_TO_THREE_CATEGORIES.get(input_code, "") if hasattr(cs, "VNE_TO_THREE_CATEGORIES") else "",
                          "mappings/vne_to_three_categories.yaml", "exact")
-            _add_mapping(mappings, "zone_type_appendix5", cs.VNE_TO_ZONE_TYPE.get(input_code, ""),
-                         "mappings/vne_to_zone_types_appendix5.yaml", cs.VNE_TO_ZONE_TYPE.get(input_code, "") and "exact" or "")
+            _add_mapping(mappings, "zone_type_appendix5", VNE_TO_ZONE_TYPE.get(input_code, ""),
+                         "mappings/vne_to_zone_types_appendix5.yaml", VNE_TO_ZONE_TYPE.get(input_code, "") and "exact" or "")
 
         # 2d: planning_zone -> primary_zone / space_control
         elif input_system == "planning_zone":
-            _add_mapping(mappings, "primary_zone", cs.PLANNING_ZONE_TO_PRIMARY_ZONE.get(input_code, ""),
+            _add_mapping(mappings, "primary_zone", PLANNING_ZONE_TO_PRIMARY_ZONE.get(input_code, ""),
                          "mappings/planning_zones_to_primary_zones.yaml", "exact")
-            _add_mapping(mappings, "space_control", cs.PLANNING_ZONE_TO_CONTROL_CODE.get(input_code, ""),
+            _add_mapping(mappings, "space_control", PLANNING_ZONE_TO_CONTROL_CODE.get(input_code, ""),
                          "mappings/planning_zones_to_control_code.yaml", "exact")
 
         # 2e: GHFLBM -> zone_type_appendix5 / ghytbm
         elif input_system == "ghflbm":
-            _add_mapping(mappings, "zone_type_appendix5", cs.GHFLBM_TO_ZONE_TYPE.get(input_code, ""),
-                         "mappings/ghflbm_to_zone_types_appendix5.yaml", cs.GHFLBM_TO_ZONE_TYPE.get(input_code, "") and "exact" or "")
+            _add_mapping(mappings, "zone_type_appendix5", GHFLBM_TO_ZONE_TYPE.get(input_code, ""),
+                         "mappings/ghflbm_to_zone_types_appendix5.yaml", GHFLBM_TO_ZONE_TYPE.get(input_code, "") and "exact" or "")
             ghytbms = cs.GHFLBM_TO_GHYTBMS.get(input_code, [])
             for ghytbm in ghytbms:
                 ghytmc = cs.GHYTBM_TO_GHYTMC.get(ghytbm, "")
@@ -367,13 +381,15 @@ def lookup_land_use_code(land_use_name: str) -> Dict[str, Any]:
         dlbm_aliases, zone_type, candidates_ghytbm, candidates_dlbm.
     """
     try:
-        from app.modules.schema import (
-            GHYTBM_TO_GHYTMC,
+        from app.modules.schema.advisory_crosswalks import (
             GHYTBM_TO_ZONE_TYPE,
             GHYTBM_TO_VNE,
+            DLBM_TO_ZONE_TYPE,
+        )
+        from app.modules.schema import (
+            GHYTBM_TO_GHYTMC,
             GHFLBM_TO_GHYTBMS,
             DLBM_TO_DLMC,
-            DLBM_TO_ZONE_TYPE,
         )
 
         # Search in GHYTBM names (planning use codes) - typed matches

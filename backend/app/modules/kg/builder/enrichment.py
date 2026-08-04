@@ -27,7 +27,8 @@ def derive_semantic_label(dlbm: str) -> str:
     if not dlbm:
         return ""
     try:
-        from app.modules.schema.encodings.code_sets import DLBM_TO_DLMC, resolve_zone_type_for_dlbm
+        from app.modules.schema.advisory_crosswalks import resolve_zone_type_for_dlbm
+        from app.modules.schema.encodings.code_sets import DLBM_TO_DLMC
         name = DLBM_TO_DLMC.get(str(dlbm).strip(), "")
         if name:
             return name
@@ -40,7 +41,7 @@ def derive_taxonomic_parent(dlbm: str) -> str:
     if not dlbm:
         return ""
     try:
-        from app.modules.schema.encodings.code_sets import resolve_zone_type_for_dlbm
+        from app.modules.schema.advisory_crosswalks import resolve_zone_type_for_dlbm
         return resolve_zone_type_for_dlbm(dlbm)
     except Exception:
         return ""
@@ -50,7 +51,7 @@ def derive_legal_constraint(planning_zone: str) -> str:
     if not planning_zone:
         return ""
     try:
-        from app.modules.schema.encodings.code_sets import PLANNING_ZONE_TO_CONTROL_CODE
+        from app.modules.schema.advisory_crosswalks import PLANNING_ZONE_TO_CONTROL_CODE
         code = PLANNING_ZONE_TO_CONTROL_CODE.get(str(planning_zone).strip(), "")
         return CONTROL_CODE_TO_CONSTRAINT.get(code, "")
     except Exception:

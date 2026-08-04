@@ -205,7 +205,7 @@ class SpaceControlZoneGenerator:
         try:
             # Calculate current construction land area
             from app.modules.schema import CONSTRUCTION_USE_TYPES
-            from app.modules.schema import get_zone_type_for_dlbm
+            from app.modules.schema.advisory_crosswalks import get_zone_type_for_dlbm
 
             construction_area = 0.0
             construction_geoms = []

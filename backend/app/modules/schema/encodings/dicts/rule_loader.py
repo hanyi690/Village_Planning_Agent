@@ -37,6 +37,10 @@ logger = get_logger(__name__)
 
 _RULES_DIR = Path(__file__).parent / "rules"
 
+# planning_zone_rules.yaml moved to advisory_crosswalks/yaml.
+# rule_loader.py is at encodings/dicts/ so the advisory dir is at parent.parent.parent.
+_ADVISORY_DIR = Path(__file__).parent.parent.parent / "advisory_crosswalks" / "yaml"
+
 
 # ── Typed rule data classes ─────────────────────────────────────────
 
@@ -120,9 +124,12 @@ class PlanningRuleLoader:
         self._cache: Dict[str, Any] = {}
 
     def _load_yaml(self, name: str) -> Dict[str, Any]:
-        """Load a YAML file from rules/ directory."""
+        """Load a YAML file from rules/ or advisory_crosswalks/yaml/ directory."""
         if name not in self._cache:
             filepath = self._rules_dir / f"{name}.yaml"
+            if not filepath.exists():
+                # planning_zone_rules.yaml moved to advisory_crosswalks/yaml
+                filepath = _ADVISORY_DIR / f"{name}.yaml"
             if not filepath.exists():
                 logger.warning("[RuleLoader] %s not found at %s", name, filepath)
                 return {}
@@ -359,7 +366,8 @@ class PlanningRuleLoader:
         The LLM must auto-compute vne_code from the GHYTBM code.
         """
         try:
-            from ..code_sets import GHYTBM_TO_VNE, VNE_CODE_TO_NAME
+            from ..code_sets import VNE_CODE_TO_NAME
+            from ...advisory_crosswalks import GHYTBM_TO_VNE
         except Exception:
             return ""
         if not GHYTBM_TO_VNE:

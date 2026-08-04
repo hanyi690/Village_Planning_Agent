@@ -18,11 +18,13 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from app.utils.logger import get_logger
 from app.modules.schema.contracts.parse_contracts import ZoneTarget
-from app.modules.schema import (
-    get_zone_color,
+from app.modules.schema.advisory_crosswalks import (
     get_zone_type_for_dlbm,
     resolve_zone_type_for_dlbm,
     get_dlbms_for_zone_type,
+)
+from app.modules.schema import (
+    get_zone_color,
     ZONE_TYPE_COLORS,
 )
 

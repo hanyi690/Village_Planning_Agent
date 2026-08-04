@@ -22,18 +22,20 @@ from __future__ import annotations
 from collections import defaultdict
 from typing import Any, Dict, List, Optional
 
+from app.modules.schema.advisory_crosswalks import (
+    DLBM_TO_PLANNING_ZONE,
+    PLANNING_ZONE_TO_PRIMARY_ZONE,
+    get_primary_zone_for_planning_zone,
+)
 from app.modules.schema import (
     BASIC_FARMLAND_CODES,
     GENERAL_AGRICULTURE_CODES,
     CONSTRUCTION_USE_TYPES as _CONSTRUCTION_ZONE_TYPES,
-    DLBM_TO_PLANNING_ZONE,
     PLANNING_ZONE_RENDERING,
     FOREST_CODES,
     WATER_CODES,
-    PLANNING_ZONE_TO_PRIMARY_ZONE,
     PLANNING_ZONE_NAMES,
     PRIMARY_ZONE_NAMES,
-    get_primary_zone_for_planning_zone,
 )
 
 # 基本农田 DLBM（仅耕地 01 类，同步自 schema.BASIC_FARMLAND_CODES）
@@ -147,7 +149,7 @@ def _compute_ecological_ratios(
     Measures actual 生态绿地 vs 水域 area from parcels, falling back
     to the default 0.9 / 0.1 split if data is unavailable.
     """
-    from app.modules.schema import ZONE_TYPE_TO_DLBMS
+    from app.modules.schema.advisory_crosswalks import ZONE_TYPE_TO_DLBMS
     green_dlbms = set(ZONE_TYPE_TO_DLBMS.get("生态绿地", []))
     water_dlbms = set(ZONE_TYPE_TO_DLBMS.get("水域", []))
     eco_dlbms = green_dlbms | water_dlbms
@@ -175,7 +177,7 @@ def _compute_ecological_ratios(
 def _compute_construction_ratios(landuse_geojson: Dict[str, Any]) -> Dict[str, float]:
     """Compute construction sub-type ratios from current land use statistics."""
     from collections import defaultdict
-    from app.modules.schema import DLBM_TO_ZONE_TYPE
+    from app.modules.schema.advisory_crosswalks import DLBM_TO_ZONE_TYPE
 
     zone_areas: Dict[str, float] = defaultdict(float)
     for feat in landuse_geojson.get("features", []):

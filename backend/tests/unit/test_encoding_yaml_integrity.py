@@ -141,5 +141,5 @@ class TestPrimaryZoneCorrection:
         assert "建设空间" not in PRIMARY_ZONE_NAMES
 
     def test_planning_zone_to_primary_zone_village_construction(self):
-        from app.modules.schema.encodings.code_sets import PLANNING_ZONE_TO_PRIMARY_ZONE
+        from app.modules.schema.advisory_crosswalks import PLANNING_ZONE_TO_PRIMARY_ZONE
         assert PLANNING_ZONE_TO_PRIMARY_ZONE["村庄建设区"] == "城镇空间"

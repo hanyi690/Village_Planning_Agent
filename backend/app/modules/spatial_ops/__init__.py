@@ -47,7 +47,6 @@ from .parcel_ops import (
     modify_parcel,
     reclassify_parcel,
     split_parcel_by_geometry,
-    split_parcel_by_ratio,
 )
 from .road_planner import plan_roads
 
@@ -76,7 +75,6 @@ __all__ = [
     "reclassify_parcel",
     "modify_parcel",
     "merge_parcels",
-    "split_parcel_by_ratio",
     "split_parcel_by_geometry",
     "create_parcel",
     "apply_operations",

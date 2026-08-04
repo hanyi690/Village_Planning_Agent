@@ -176,8 +176,8 @@ def _make_planning_zone_layer(
     if not source or not source.get("features"):
         return None
 
-    from app.modules.schema import dlbm_to_planning_zone, PLANNING_ZONE_COLORS
-    from app.modules.schema.encodings.code_sets import GHYTMC_TO_PLANNING_ZONE
+    from app.modules.schema.advisory_crosswalks import dlbm_to_planning_zone, GHYTMC_TO_PLANNING_ZONE
+    from app.modules.schema import PLANNING_ZONE_COLORS
 
     features = []
     for feat in source["features"]:
@@ -595,7 +595,7 @@ def _apply_operations(
                     props = features[idx].setdefault("properties", {})
                     if new_code:
                         props["DLBM"] = new_code
-                    from app.modules.schema import dlbm_to_planning_zone
+                    from app.modules.schema.advisory_crosswalks import dlbm_to_planning_zone
                     props["assigned_zone"] = dlbm_to_planning_zone(new_code)
                     applied += 1
 

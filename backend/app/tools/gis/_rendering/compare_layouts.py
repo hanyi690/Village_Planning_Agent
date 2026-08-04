@@ -14,11 +14,13 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
 
 from app.utils.logger import get_logger
-from app.modules.schema import (
+from app.modules.schema.advisory_crosswalks import (
     get_zone_type_for_dlbm,
     dlbm_to_planning_zone,
     get_primary_zone,
     get_primary_zone_for_planning_zone,
+)
+from app.modules.schema import (
     PLANNING_ZONE_NAMES,
     PRIMARY_ZONE_NAMES,
 )

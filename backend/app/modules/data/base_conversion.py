@@ -16,7 +16,7 @@
 
 from typing import Dict, Optional, Tuple
 
-from app.modules.schema.encodings.code_sets import (
+from app.modules.schema.advisory_crosswalks import (
     get_ghytbm_for_dlbm,
     get_ghytbm_conversion_info,
 )

@@ -25,6 +25,10 @@ _RULES_DIR = "rules"
 _REFERENCES_DIR = "references"
 _MAPPINGS_DIR = "mappings"
 
+# Advisory cross-system mappings live outside encodings/dicts (encodings/../.. level).
+# loader.py is at encodings/dicts/ so advisory_crosswalks is at dicts.parent.parent.
+_ADVISORY_DIR = _DICTS_DIR.parent.parent / "advisory_crosswalks" / "yaml"
+
 
 # ============================================================
 # Data classes
@@ -174,6 +178,12 @@ class DictionaryCenter:
         self._scan_dir(base / _RULES_DIR, "rule")
         self._scan_dir(base / _REFERENCES_DIR, "reference")
         self._scan_mappings(base / _MAPPINGS_DIR)
+
+        # Advisory cross-system mappings (see _ADVISORY_DIR) — scanned for both
+        # rule dictionaries (get_center().get("ghytbm_to_planning_zone")) and
+        # cross-system mappings (get_mapping("gbt21010_to_planning_zones")).
+        self._scan_dir(_ADVISORY_DIR, "rule")
+        self._scan_mappings(_ADVISORY_DIR)
 
         self._loaded = True
         return self

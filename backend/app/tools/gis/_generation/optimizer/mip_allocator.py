@@ -30,7 +30,8 @@ logger = get_logger(__name__)
 # ---------------------------------------------------------------------------
 # DLBM → Planning Zone: import from single source (schema.py)
 # ---------------------------------------------------------------------------
-from app.modules.schema import DLBM_TO_PLANNING_ZONE, PROTECTED_DLBM_CODES, dlbm_to_planning_zone
+from app.modules.schema.advisory_crosswalks import DLBM_TO_PLANNING_ZONE, dlbm_to_planning_zone
+from app.modules.schema import PROTECTED_DLBM_CODES
 
 # Cross-zone preference cost matrix (symmetric-ish)
 # Same zone = 0, compatible zones = low cost, forbidden zones = high cost
@@ -615,8 +616,8 @@ class MIPZoneAllocator:
         from app.modules.schema import (
             ECOLOGICAL_CODES, FOREST_CODES, WATER_CODES,
             BASIC_FARMLAND_CODES, GENERAL_AGRICULTURE_CODES,
-            DLBM_TO_PLANNING_ZONE,
         )
+        from app.modules.schema.advisory_crosswalks import DLBM_TO_PLANNING_ZONE
 
         # Build construction DLBM set from DLBM_TO_PLANNING_ZONE mapping
         _construction_dlbms = {
@@ -717,8 +718,8 @@ class MIPZoneAllocator:
         from app.modules.schema import (
             ECOLOGICAL_CODES, FOREST_CODES, WATER_CODES,
             BASIC_FARMLAND_CODES, GENERAL_AGRICULTURE_CODES,
-            DLBM_TO_PLANNING_ZONE,
         )
+        from app.modules.schema.advisory_crosswalks import DLBM_TO_PLANNING_ZONE
 
         _construction_dlbms = {
             code for code, pz in DLBM_TO_PLANNING_ZONE.items()
@@ -854,7 +855,7 @@ class MIPZoneAllocator:
                 if isinstance(rule, dict) and rule.get("operation") == "no_overlap":
                     subject = rule.get("subject", "")
                     # Match subject against DLBM zone types
-                    from app.modules.schema import get_zone_type_for_dlbm
+                    from app.modules.schema.advisory_crosswalks import get_zone_type_for_dlbm
                     for i, p in enumerate(parcels):
                         zt = get_zone_type_for_dlbm(p["dlbm"])
                         if subject and subject in zt and (i, construction_idx) in x:

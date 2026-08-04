@@ -13,10 +13,7 @@ Validates that the encoding system is internally consistent after the v2.0 refac
 
 import pytest
 
-from app.modules.schema.encodings.code_sets import (
-    SPACE_CONTROL_ZONE_CODES,
-    SPACE_CONTROL_ZONE_COLORS,
-    SPACE_CONTROL_NAME_TO_CODE,
+from app.modules.schema.advisory_crosswalks import (
     PLANNING_ZONE_TO_CONTROL_CODE,
     PLANNING_ZONE_TO_PRIMARY_ZONE,
     GHFLBM_TO_TDYTFQDM,
@@ -24,8 +21,6 @@ from app.modules.schema.encodings.code_sets import (
     DLBM_TO_GHYTBM,
     DLBM_TO_GHYTBM_CONVERSIONS,
     GHYTBM_TO_ZONE_TYPE,
-    GHYTBM_TO_GHYTMC,
-    GHFLBM_TO_GHYTBMS,
     DLBM_TO_ZONE_TYPE,
     DLBM_TO_PLANNING_ZONE,
     get_tdytfqdm_for_ghflbm,
@@ -36,6 +31,13 @@ from app.modules.schema.encodings.code_sets import (
     get_ghytbm_conversion_info,
     dlbm_to_planning_zone,
     get_primary_zone,
+)
+from app.modules.schema.encodings.code_sets import (
+    SPACE_CONTROL_ZONE_CODES,
+    SPACE_CONTROL_ZONE_COLORS,
+    SPACE_CONTROL_NAME_TO_CODE,
+    GHYTBM_TO_GHYTMC,
+    GHFLBM_TO_GHYTBMS,
 )
 
 
@@ -154,7 +156,7 @@ class TestCrossFileConsistency:
 
     def test_v31_zone_type_is_industry(self):
         """GAP-31: V31 zone_type should be 产业用地 (matching appendix5 2124)."""
-        from app.modules.schema.encodings.code_sets import VNE_TO_ZONE_TYPE
+        from app.modules.schema.advisory_crosswalks import VNE_TO_ZONE_TYPE
         assert VNE_TO_ZONE_TYPE.get("V31") == "产业用地"
 
 
@@ -318,7 +320,7 @@ class Test0602DuplicateFixed:
 
     def test_0602_auto_default(self):
         """Default for 0602 is 2130."""
-        from app.modules.schema.encodings.code_sets import get_ghytbm_for_dlbm
+        from app.modules.schema.advisory_crosswalks import get_ghytbm_for_dlbm
         assert get_ghytbm_for_dlbm("0602") == "2130"
 
 
@@ -410,7 +412,7 @@ class TestGHYTBMToPlanningZoneYAML:
     """_GHYTBM_TO_PLANNING_ZONE moved from hardcoded to YAML."""
 
     def test_loaded_from_yaml(self):
-        from app.modules.schema.encodings.code_sets import GHYTBM_TO_PLANNING_ZONE
+        from app.modules.schema.advisory_crosswalks import GHYTBM_TO_PLANNING_ZONE
         assert len(GHYTBM_TO_PLANNING_ZONE) >= 20
         assert GHYTBM_TO_PLANNING_ZONE.get("1100") == "农田保护区"
         assert GHYTBM_TO_PLANNING_ZONE.get("2121") == "村庄建设区"
@@ -424,13 +426,13 @@ class TestGHYTBMToPlanningZoneYAML:
 
     def test_ghytmc_to_planning_zone_works(self):
         """GHYTMC_TO_PLANNING_ZONE derived from YAML."""
-        from app.modules.schema.encodings.code_sets import GHYTMC_TO_PLANNING_ZONE
+        from app.modules.schema.advisory_crosswalks import GHYTMC_TO_PLANNING_ZONE
         assert GHYTMC_TO_PLANNING_ZONE.get("耕地") == "农田保护区"
         assert GHYTMC_TO_PLANNING_ZONE.get("水域") == "生态保护区"
 
     def test_dlbm_to_planning_zone_fallback(self):
         """dlbm_to_planning_zone falls back to default for unknown codes."""
-        from app.modules.schema.encodings.code_sets import dlbm_to_planning_zone
+        from app.modules.schema.advisory_crosswalks import dlbm_to_planning_zone
         result = dlbm_to_planning_zone("XXXX")
         assert result == "一般农业区"  # Unknown code returns default fallback
 
@@ -479,9 +481,9 @@ class TestCodeSetsClean:
     """Old hardcoded fields removed from code_sets."""
 
     def test_ghytbm_to_planning_zone_exported(self):
-        """GHYTBM_TO_PLANNING_ZONE is exported."""
-        from app.modules.schema.encodings import code_sets
-        assert hasattr(code_sets, "GHYTBM_TO_PLANNING_ZONE")
+        """GHYTBM_TO_PLANNING_ZONE is exported from advisory_crosswalks."""
+        from app.modules.schema import advisory_crosswalks
+        assert hasattr(advisory_crosswalks, "GHYTBM_TO_PLANNING_ZONE")
 
     def test_no_proposaltable_import(self):
         """ProposalTable no longer imported from loader."""
@@ -518,13 +520,13 @@ class TestEncodingLookups:
 
     def test_resolve_zone_type_for_dlbm(self):
         """resolve_zone_type_for_dlbm works and strips whitespace."""
-        from app.modules.schema.encodings.code_sets import resolve_zone_type_for_dlbm
+        from app.modules.schema.advisory_crosswalks import resolve_zone_type_for_dlbm
         assert resolve_zone_type_for_dlbm("0101") == "农业用地"
         assert resolve_zone_type_for_dlbm(" 0101 ") == "农业用地"  # whitespace stripping
 
     def test_dlbm_to_planning_zone_real_codes(self):
         """dlbm_to_planning_zone works with real tugui codes."""
-        from app.modules.schema.encodings.code_sets import dlbm_to_planning_zone
+        from app.modules.schema.advisory_crosswalks import dlbm_to_planning_zone
         # "0210" is a real tugui code for 园地 -> 一般农业区
         assert dlbm_to_planning_zone("0210") == "一般农业区"
         # Unknown DLBM defaults to "一般农业区" (fallback)
@@ -532,7 +534,7 @@ class TestEncodingLookups:
 
     def test_lookup_functions_work_together(self):
         """All three lookup functions produce correct results from new location."""
-        from app.modules.schema import (
+        from app.modules.schema.advisory_crosswalks import (
             get_zone_type_for_dlbm,
             dlbm_to_planning_zone,
             resolve_zone_type_for_dlbm,
@@ -598,7 +600,8 @@ class TestEncodingValidation:
 
     def test_zone_type_coverage(self):
         """All GHYTBM codes should have zone_type mapping."""
-        from app.modules.schema import GHYTBM_TO_ZONE_TYPE, GHYTBM_TO_GHYTMC
+        from app.modules.schema.advisory_crosswalks import GHYTBM_TO_ZONE_TYPE
+        from app.modules.schema import GHYTBM_TO_GHYTMC
 
         for code in GHYTBM_TO_GHYTMC:
             zone = GHYTBM_TO_ZONE_TYPE.get(code, "")
@@ -606,7 +609,8 @@ class TestEncodingValidation:
 
     def test_vne_coverage(self):
         """All GHYTBM codes should have VNE mapping."""
-        from app.modules.schema import GHYTBM_TO_VNE, GHYTBM_TO_GHYTMC
+        from app.modules.schema.advisory_crosswalks import GHYTBM_TO_VNE
+        from app.modules.schema import GHYTBM_TO_GHYTMC
 
         for code in GHYTBM_TO_GHYTMC:
             vne = GHYTBM_TO_VNE.get(code, "")

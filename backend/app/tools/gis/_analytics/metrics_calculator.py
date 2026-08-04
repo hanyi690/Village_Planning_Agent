@@ -14,7 +14,7 @@ from collections import Counter
 from typing import Any, Dict, List, Optional, Set
 
 from app.utils.logger import get_logger
-from app.modules.schema import DLBM_TO_ZONE_TYPE, get_zone_type_for_dlbm
+from app.modules.schema.advisory_crosswalks import DLBM_TO_ZONE_TYPE, get_zone_type_for_dlbm
 from app.modules.schema import (
     BASIC_FARMLAND_CODES,
     GENERAL_AGRICULTURE_CODES,

@@ -33,7 +33,10 @@ _get_primary_zone_for_planning_zone = None
 def _ensure_funcs():
     global _dlbm_to_planning_zone, _get_primary_zone_for_planning_zone
     if _dlbm_to_planning_zone is None:
-        from app.modules.schema import dlbm_to_planning_zone as _dpz, get_primary_zone_for_planning_zone as _gppz
+        from app.modules.schema.advisory_crosswalks import (
+            dlbm_to_planning_zone as _dpz,
+            get_primary_zone_for_planning_zone as _gppz,
+        )
         _dlbm_to_planning_zone = _dpz
         _get_primary_zone_for_planning_zone = _gppz
 

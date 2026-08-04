@@ -201,12 +201,12 @@ class EncodingRegistry:
     @classmethod
     def from_center(cls) -> "EncodingRegistry":
         """Build the registry reusing pre-built module-level dicts from code_sets."""
-        from .code_sets import (
+        from ..advisory_crosswalks import (
             DLBM_TO_ZONE_TYPE,
             DLBM_TO_PLANNING_ZONE,
             DLBM_TO_PRIMARY_ZONE,
-            DLBM_TO_DLMC,
         )
+        from .code_sets import DLBM_TO_DLMC
 
         # v2.0: colors.py may not exist; use empty dict as fallback
         try:

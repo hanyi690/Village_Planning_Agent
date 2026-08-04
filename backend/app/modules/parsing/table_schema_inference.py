@@ -259,7 +259,7 @@ def _resolve_vne(ghytbm: str) -> Optional[str]:
     if not ghytbm:
         return None
     try:
-        from app.modules.schema.encodings.code_sets import GHYTBM_TO_VNE
+        from app.modules.schema.advisory_crosswalks import GHYTBM_TO_VNE
         return GHYTBM_TO_VNE.get(ghytbm.strip(), None)
     except Exception:
         return None
