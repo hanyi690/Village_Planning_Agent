@@ -159,22 +159,97 @@ async def _route_tasks_node(state: ExecuteAgentState) -> dict:
     return result
 
 
-async def _execute_project_node(state: ExecuteAgentState) -> dict:
-    """Place each L3 project on one independently bound, constraint-safe parcel."""
-    if "project" not in state.tasks_to_run:
-        return {}
+def _project_output(state: ExecuteAgentState, features: list, unresolved: list) -> dict:
+    """Build the standard planned_project layer output for _execute_project_node."""
+    if not features:
+        result = _execution_error(
+            state,
+            "project",
+            "project_output_empty",
+            "Project targets exist but none could be placed on a constraint-safe candidate parcel.",
+        )
+        result["unresolved_targets"] = list(state.unresolved_targets or []) + unresolved
+        return result
+    layers = list(state.layout_configs)
+    layers.append({
+        "layerType": "planned_project",
+        "layerName": "规划项目",
+        "data": {"type": "FeatureCollection", "features": features},
+    })
+    result = {"layout_configs": layers}
+    if unresolved:
+        result["unresolved_targets"] = list(state.unresolved_targets or []) + unresolved
+    return result
 
-    from shapely.geometry import Point, shape
-    from app.modules.spatial_ops import build_constraint_index
 
-    projects = list(getattr(state.intent, "project_targets", None) or [])
-    landuse = (state.gis_data or {}).get("landuse_current_geojson") or {}
-    by_bsm = {
-        str((feature.get("properties") or {}).get("BSM")
-            or (feature.get("properties") or {}).get("bsm")
-            or ""): feature
-        for feature in landuse.get("features") or []
+def _project_features_from_selection(
+    state: ExecuteAgentState,
+    projects: list,
+    by_bsm: dict,
+    selected: list,
+) -> tuple:
+    """Primary SELECT path: place projects on the SSD-selected parcels.
+
+    ``selected_combination`` is an ordered BSM list (one per placed project).
+    Pair each with the matching ``LandDesignBrief`` by index and tag the
+    feature with ``project_ref`` when a project matches.
+    """
+    from shapely.geometry import shape
+
+    projects_by_id = {
+        getattr(project, "project_id", ""): project for project in projects
     }
+    briefs = list(state.land_design_briefs or [])
+    features = []
+    for index, bsm in enumerate(selected):
+        feature = by_bsm.get(str(bsm))
+        if not feature or not feature.get("geometry"):
+            continue
+        point = shape(feature["geometry"]).representative_point()
+        project = None
+        brief = briefs[index] if index < len(briefs) else None
+        if brief is not None:
+            project = projects_by_id.get(getattr(brief, "project_ref", ""))
+        project_id = ""
+        if project is not None:
+            project_id = getattr(project, "project_id", "")
+        elif brief is not None:
+            project_id = getattr(brief, "project_ref", "")
+        props = {
+            "project_id": project_id,
+            "project_name": getattr(project, "name", ""),
+            "project_category": getattr(project, "category", "other"),
+            "action": getattr(project, "action", "new"),
+            "scale_text": getattr(project, "scale_text", ""),
+            "source_bsm": str(bsm),
+            "source_instruction_id": getattr(project, "source_instruction_id", ""),
+            "source_report_key": getattr(project, "source_report_key", ""),
+            "candidate_bsms": list(getattr(project, "candidate_bsms", None) or []),
+            "constraint_check": "passed",
+        }
+        if brief is not None:
+            props["project_ref"] = getattr(brief, "project_ref", "")
+        features.append({
+            "type": "Feature",
+            "properties": props,
+            "geometry": {
+                "type": "Point",
+                "coordinates": [point.x, point.y],
+            },
+        })
+    return features, []
+
+
+def _project_legacy_output(
+    state: ExecuteAgentState,
+    projects: list,
+    by_bsm: dict,
+) -> dict:
+    """Legacy fallback: first available constraint-safe candidate per project."""
+    from shapely.geometry import shape
+    from app.modules.spatial_ops import build_constraint_index
+    from app.modules.spatial_ops.selection import _PROHIBITED_CONSTRAINTS as prohibited
+
     constraint_index = build_constraint_index(state.gis_bundle) if state.gis_bundle else None
     hazard_data = (
         (state.gis_data or {}).get("geological_hazard_geojson")
@@ -189,7 +264,6 @@ async def _execute_project_node(state: ExecuteAgentState) -> dict:
     occupied = []
     features = []
     unresolved: List[Dict[str, Any]] = []
-    from app.modules.spatial_ops.selection import _PROHIBITED_CONSTRAINTS as prohibited
 
     for project in projects:
         selected = None
@@ -258,25 +332,46 @@ async def _execute_project_node(state: ExecuteAgentState) -> dict:
             },
         })
 
-    if not features:
-        result = _execution_error(
-            state,
-            "project",
-            "project_output_empty",
-            "Project targets exist but none could be placed on a constraint-safe candidate parcel.",
+    return _project_output(state, features, unresolved)
+
+
+async def _execute_project_node(state: ExecuteAgentState) -> dict:
+    """Place each L3 project on one independently bound, constraint-safe parcel.
+
+    Primary path: consume ``SiteSelectionDecision.selected_combination`` from
+    the SELECT subgraph (ordered BSM list), pairing with land design briefs.
+    Legacy fallback (SELECT not wired): first available candidate per project.
+    """
+    if "project" not in state.tasks_to_run:
+        return {}
+
+    projects = list(getattr(state.intent, "project_targets", None) or [])
+    landuse = (state.gis_data or {}).get("landuse_current_geojson") or {}
+    by_bsm = {
+        str((feature.get("properties") or {}).get("BSM")
+            or (feature.get("properties") or {}).get("bsm")
+            or ""): feature
+        for feature in landuse.get("features") or []
+    }
+    selected = []
+    if state.site_selection is not None:
+        selected = list(getattr(state.site_selection, "selected_combination", None) or [])
+    if selected:
+        features, unresolved = _project_features_from_selection(
+            state, projects, by_bsm, selected
         )
-        result["unresolved_targets"] = list(state.unresolved_targets or []) + unresolved
-        return result
-    layers = list(state.layout_configs)
-    layers.append({
-        "layerType": "planned_project",
-        "layerName": "规划项目",
-        "data": {"type": "FeatureCollection", "features": features},
-    })
-    result = {"layout_configs": layers}
-    if unresolved:
-        result["unresolved_targets"] = list(state.unresolved_targets or []) + unresolved
-    return result
+        if features:
+            return _project_output(state, features, unresolved)
+        logger.warning(
+            "[EXECUTE:project] SELECT selected_combination resolved no parcels; "
+            "falling back to legacy first-available-candidate path"
+        )
+    else:
+        logger.warning(
+            "[EXECUTE:project] SELECT not wired (state.site_selection missing); "
+            "using legacy first-available-candidate path"
+        )
+    return _project_legacy_output(state, projects, by_bsm)
 
 
 async def _execute_layout_node(state: ExecuteAgentState) -> dict:

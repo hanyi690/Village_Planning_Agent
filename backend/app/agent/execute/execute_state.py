@@ -38,6 +38,10 @@ class ExecuteAgentState(BaseModel):
     constraint_set: List[Any] = Field(default_factory=list)
     facility_anchors: Optional[List[Dict[str, Any]]] = None
 
+    # ── SELECT output (site selection + land design briefs) ──
+    site_selection: Optional[Any] = None  # SiteSelectionDecision (typed) — SELECT subgraph output
+    land_design_briefs: List[Any] = Field(default_factory=list)  # list[LandDesignBrief] — SELECT output
+
     # ── KG context (read-only view from KGManager) ──
     kg_turtle: str = ""
     kg_constraints: List[Dict[str, Any]] = Field(default_factory=list)
