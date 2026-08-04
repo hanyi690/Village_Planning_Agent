@@ -296,3 +296,42 @@ def test_select_honors_llm_ranker_top1():
         cluster_centroid=(0.0, 0.0), ranker=fake_ranker,
     )
     assert d.selected_bsm == "b"
+
+import json
+import pathlib
+
+import pytest
+from app.modules.spatial_ops.selection import (
+    CandidateParcel, SelectionTarget, compute_area_ha, select_parcel,
+)
+
+_REAL = pathlib.Path(__file__).resolve().parents[3] / "data" / "gis" / "jintian" / "current" / "landuse.geojson"
+
+
+def _real_candidates():
+    fc = json.loads(_REAL.read_text(encoding="utf-8"))
+    out = []
+    for f in fc.get("features", []):
+        props = f.get("properties") or {}
+        bsm = str(props.get("BSM") or props.get("bsm") or "")
+        geom = f.get("geometry")
+        if not bsm or not geom:
+            continue
+        out.append(CandidateParcel(
+            bsm=bsm, geometry=geom,
+            dlmc=str(props.get("DLMC") or props.get("dlmc") or ""),
+            area_ha=compute_area_ha(geom),
+        ))
+    return out
+
+
+@pytest.mark.skipif(not _REAL.exists(), reason="jintian landuse data missing")
+def test_select_on_real_jintian_parcels():
+    candidates = _real_candidates()
+    assert len(candidates) > 100
+    target = SelectionTarget(target_id="p1", name="村民文化广场", scale_text="0.15公顷")
+    decision = select_parcel(target, candidates=candidates, cluster_centroid=(116.040759, 24.816435))
+    assert decision.status == "placed"
+    chosen = next(c for c in candidates if c.bsm == decision.selected_bsm)
+    assert chosen.area_ha <= 2.0 or chosen.dlmc not in {"商品林", "生态林", "水域", "耕地"}
+    assert decision.anchor_point is not None
