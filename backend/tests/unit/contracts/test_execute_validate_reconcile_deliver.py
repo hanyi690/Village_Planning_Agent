@@ -64,6 +64,25 @@ def test_delivery_manifest_has_pending_items():
     assert dm.pending_human_items[0].blocking is True
 
 
+def test_delivery_manifest_statutory_complete_defaults():
+    dm = DeliveryManifest()
+    assert dm.statutory_complete is False
+    assert dm.statutory_complete_breakdown == {}
+
+
+def test_delivery_manifest_statutory_complete_round_trip():
+    dm = DeliveryManifest(
+        statutory_complete=True,
+        statutory_complete_breakdown={
+            "delivery_gate": True,
+            "no_blocking_items": True,
+            "classification_complete": True,
+        },
+    )
+    assert dm.statutory_complete is True
+    assert dm.statutory_complete_breakdown["classification_complete"] is True
+
+
 def test_delivery_gate_passed():
     dg = DeliveryGate(land_balance_closed=True, three_line_violations=0, protected_intrusions=0, changed_parcels_pct=0.1, changed_parcels_threshold=0.5, zones_complete=True)
     assert dg.passed is True

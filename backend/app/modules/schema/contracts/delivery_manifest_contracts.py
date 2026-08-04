@@ -103,6 +103,9 @@ class DeliveryManifest(ContractMeta):
     pending_human_items: list[HumanItem] = Field(default_factory=list)
     delivery_gate: DeliveryGate | None = None
     provenance: "Provenance | None" = None
+    # 法定成果完整性：缺规划分类等 blocking 问题时不输出"完整法定成果"（08_DELIVERABLES_COMPLIANCE.md §3）
+    statutory_complete: bool = False
+    statutory_complete_breakdown: dict[str, bool] = Field(default_factory=dict)
 
 __all__ = [
     "DeliveryGate",
