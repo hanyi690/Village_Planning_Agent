@@ -182,6 +182,44 @@ def _project_output(state: ExecuteAgentState, features: list, unresolved: list) 
     return result
 
 
+def _parcel_from_feature(feature: dict) -> Any:
+    """Adapt a landuse GeoJSON feature into the Land Design Worker parcel shape.
+
+    The worker reads .bsm/.geometry/.dlbm/.area_sqm from each parcel entry.
+    """
+    from types import SimpleNamespace
+
+    props = feature.get("properties") or {}
+    return SimpleNamespace(
+        bsm=str(props.get("BSM") or props.get("bsm") or ""),
+        geometry=feature.get("geometry"),
+        dlbm=str(props.get("DLBM") or props.get("dlbm") or ""),
+        area_sqm=float(props.get("area_sqm") or props.get("area") or 0),
+        area_ha=float(props.get("area_ha") or 0),
+    )
+
+
+def _polygon_footprint(change: Any, source_feature: dict) -> dict:
+    """Polygon footprint for a planned_project feature.
+
+    Prefer the change's after geometry (WKT -> GeoJSON); fall back to the
+    source parcel geometry when the WKT is empty or invalid.
+    """
+    from shapely import wkt
+    from shapely.geometry import mapping as geometry_mapping
+
+    after_wkt = getattr(change, "after_geometry_wkt", "") or ""
+    if after_wkt:
+        try:
+            geom = wkt.loads(after_wkt)
+            if not geom.is_empty:
+                return geometry_mapping(geom)
+        except Exception:
+            pass
+    source_geometry = (source_feature or {}).get("geometry")
+    return source_geometry or {}
+
+
 def _project_features_from_selection(
     state: ExecuteAgentState,
     projects: list,
@@ -191,25 +229,33 @@ def _project_features_from_selection(
     """Primary SELECT path: place projects on the SSD-selected parcels.
 
     ``selected_combination`` is an ordered BSM list (one per placed project).
-    Pair each with the matching ``LandDesignBrief`` by index and tag the
-    feature with ``project_ref`` when a project matches.
+    Each selected parcel is run through the Land Design Worker to produce a
+    ``ParcelChange`` (accumulated on ``state.parcel_changes``) and a Polygon
+    footprint feature for the planned_project layer.
     """
-    from shapely.geometry import shape
+    from app.agent.execute.land_design_worker import design_project_parcel
 
     projects_by_id = {
         getattr(project, "project_id", ""): project for project in projects
     }
     briefs = list(state.land_design_briefs or [])
+    parcel_by_bsm = {
+        bsm: _parcel_from_feature(feature) for bsm, feature in by_bsm.items()
+    }
     features = []
     for index, bsm in enumerate(selected):
         feature = by_bsm.get(str(bsm))
         if not feature or not feature.get("geometry"):
             continue
-        point = shape(feature["geometry"]).representative_point()
         project = None
         brief = briefs[index] if index < len(briefs) else None
         if brief is not None:
             project = projects_by_id.get(getattr(brief, "project_ref", ""))
+        worker_brief = brief if project is not None else None
+        change = design_project_parcel(project, worker_brief, str(bsm), parcel_by_bsm)
+        if change is None:
+            continue
+        state.parcel_changes.append(change)
         project_id = ""
         if project is not None:
             project_id = getattr(project, "project_id", "")
@@ -226,122 +272,29 @@ def _project_features_from_selection(
             "source_report_key": getattr(project, "source_report_key", ""),
             "candidate_bsms": list(getattr(project, "candidate_bsms", None) or []),
             "constraint_check": "passed",
+            "geometry_source": "land_design_worker",
+            "change_action": change.action,
         }
         if brief is not None:
             props["project_ref"] = getattr(brief, "project_ref", "")
         features.append({
             "type": "Feature",
             "properties": props,
-            "geometry": {
-                "type": "Point",
-                "coordinates": [point.x, point.y],
-            },
+            "geometry": _polygon_footprint(change, feature),
         })
     return features, []
 
 
-def _project_legacy_output(
-    state: ExecuteAgentState,
-    projects: list,
-    by_bsm: dict,
-) -> dict:
-    """Legacy fallback: first available constraint-safe candidate per project."""
-    from shapely.geometry import shape
-    from app.modules.spatial_ops import build_constraint_index
-    from app.modules.spatial_ops.selection import _PROHIBITED_CONSTRAINTS as prohibited
-
-    constraint_index = build_constraint_index(state.gis_bundle) if state.gis_bundle else None
-    hazard_data = (
-        (state.gis_data or {}).get("geological_hazard_geojson")
-        or (state.gis_data or {}).get("geological_hazard_points_geojson")
-        or {}
-    )
-    hazards = [
-        shape(feature["geometry"])
-        for feature in hazard_data.get("features") or []
-        if feature.get("geometry")
-    ]
-    occupied = []
-    features = []
-    unresolved: List[Dict[str, Any]] = []
-
-    for project in projects:
-        selected = None
-        rejected = []
-        for bsm in project.candidate_bsms:
-            feature = by_bsm.get(str(bsm))
-            if not feature or not feature.get("geometry"):
-                continue
-            overlaps = (
-                constraint_index.geometry_in_constraint(feature["geometry"])
-                if constraint_index else []
-            )
-            blocked = sorted({
-                item.constraint_type for item in overlaps
-                if item.constraint_type in prohibited
-            })
-            if blocked:
-                rejected.append({"bsm": str(bsm), "constraints": blocked})
-                continue
-            point = shape(feature["geometry"]).representative_point()
-            if any(point.distance(hazard) < 0.001 for hazard in hazards):
-                rejected.append({"bsm": str(bsm), "constraints": ["geological_hazard_point"]})
-                continue
-            if any(point.distance(other) < 0.00025 for other in occupied):
-                continue
-            selected = (str(bsm), point)
-            break
-        if selected is None:
-            logger.warning(
-                "[EXECUTE:project] unresolved project=%s candidates=%d rejected=%s",
-                project.project_id,
-                len(project.candidate_bsms),
-                rejected,
-            )
-            unresolved.append({
-                "target_id": project.project_id,
-                "kind": "project",
-                "name": getattr(project, "name", ""),
-                "stage": "execute",
-                "reason": "no_candidate" if not rejected else "all_candidates_rejected",
-                "detail": f"no constraint-safe parcel for {getattr(project, 'name', '')}".strip(),
-                "attempted_bsms": list(project.candidate_bsms),
-                "rejected_bsms": rejected,
-                "source_text": getattr(project, "scale_text", "") or "",
-            })
-            continue
-        bsm, point = selected
-        occupied.append(point)
-        features.append({
-            "type": "Feature",
-            "properties": {
-                "project_id": project.project_id,
-                "project_name": project.name,
-                "project_category": project.category,
-                "action": project.action,
-                "scale_text": project.scale_text,
-                "source_bsm": bsm,
-                "source_instruction_id": project.source_instruction_id,
-                "source_report_key": project.source_report_key,
-                "candidate_bsms": list(project.candidate_bsms),
-                "constraint_check": "passed",
-            },
-            "geometry": {
-                "type": "Point",
-                "coordinates": [point.x, point.y],
-            },
-        })
-
-    return _project_output(state, features, unresolved)
-
-
 async def _execute_project_node(state: ExecuteAgentState) -> dict:
-    """Place each L3 project on one independently bound, constraint-safe parcel.
+    """Place each L3 project on the SELECT-selected parcel via the Land Design Worker.
 
     Primary path: consume ``SiteSelectionDecision.selected_combination`` from
-    the SELECT subgraph (ordered BSM list), pairing with land design briefs.
-    Legacy fallback (SELECT not wired): first available candidate per project.
+    the SELECT subgraph (ordered BSM list), pairing with land design briefs,
+    and accumulate ``ParcelChange`` entries into ``state.parcel_changes``. The
+    planned_project layer features carry the parcel's Polygon footprint.
     """
+    from app.agent.execute.land_design_worker import build_parcel_change_set
+
     if "project" not in state.tasks_to_run:
         return {}
 
@@ -356,22 +309,16 @@ async def _execute_project_node(state: ExecuteAgentState) -> dict:
     selected = []
     if state.site_selection is not None:
         selected = list(getattr(state.site_selection, "selected_combination", None) or [])
-    if selected:
-        features, unresolved = _project_features_from_selection(
-            state, projects, by_bsm, selected
-        )
-        if features:
-            return _project_output(state, features, unresolved)
-        logger.warning(
-            "[EXECUTE:project] SELECT selected_combination resolved no parcels; "
-            "falling back to legacy first-available-candidate path"
-        )
-    else:
-        logger.warning(
-            "[EXECUTE:project] SELECT not wired (state.site_selection missing); "
-            "using legacy first-available-candidate path"
-        )
-    return _project_legacy_output(state, projects, by_bsm)
+    if not selected:
+        logger.warning("[EXECUTE:project] SELECT not wired; project node produces no output")
+        return {}
+
+    features, unresolved = _project_features_from_selection(
+        state, projects, by_bsm, selected
+    )
+    if state.parcel_changes:
+        state.parcel_changeset = build_parcel_change_set(list(state.parcel_changes))
+    return _project_output(state, features, unresolved)
 
 
 async def _execute_layout_node(state: ExecuteAgentState) -> dict:

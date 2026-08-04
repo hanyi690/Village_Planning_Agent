@@ -41,6 +41,8 @@ class ExecuteAgentState(BaseModel):
     # ── SELECT output (site selection + land design briefs) ──
     site_selection: Optional[Any] = None  # SiteSelectionDecision (typed) — SELECT subgraph output
     land_design_briefs: List[Any] = Field(default_factory=list)  # list[LandDesignBrief] — SELECT output
+    parcel_changes: List[Any] = Field(default_factory=list)  # list[ParcelChange] — accumulated by Land Design Worker nodes
+    parcel_changeset: Optional[Any] = None  # ParcelChangeSet — final aggregated changeset
 
     # ── KG context (read-only view from KGManager) ──
     kg_turtle: str = ""
