@@ -227,7 +227,7 @@ async def test_load_village_bundle_async_calls_sync_and_populate(monkeypatch):
         calls["sync"] += 1
         return VillageBundle(village_name=village_name)
 
-    async def fake_populate(bundle, session_id):
+    async def fake_populate(bundle, session_id, uploaded_gis=None):
         bundle.metadata.session_id = session_id
 
     monkeypatch.setattr(catalog, "load_village_bundle", fake_sync_load)
