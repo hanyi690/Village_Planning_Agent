@@ -15,6 +15,14 @@ class ExplorationRequest(BaseModel):
     context_refs: list[str] = []
     evidence_gaps_to_resolve: list[str] = []
 
+    # Wave C enrichment
+    stage: str = ""  # "L1" | "L2" | "L3"
+    dimension_key: str = ""
+    query_purpose: str = ""  # "context_injection" | "fact_check" | "gap_resolution"
+    questions: list[str] = []
+    required_facts: list[str] = []
+    entity_scope: list[str] = []  # ["parcels", "facilities", "roads", "waters", ...]
+
 
 class EvidenceSource(BaseModel):
     source_type: str  # "report" | "gis_layer" | "kg" | "external" | "api"
@@ -45,10 +53,31 @@ class EvidenceBundle(ContractMeta):
     unresolved: list[str] = []
     provenance: "Provenance | None" = None
 
+
+class SpatialCognitionEvidence(BaseModel):
+    """KG + bundle spatial cognition, separate from factual evidence."""
+
+    village_overview: str = ""
+    spatial_pattern: str = ""
+    constraint_coverage: str = ""
+    topology_facts: list[str] = []
+    entity_annotations: list[str] = []
+    kg_confidence: float = 0.0
+
+
+class ExplorationResult(BaseModel):
+    """retrieve_evidence return type - bundle + optional spatial cognition."""
+
+    evidence_bundle: "EvidenceBundle"
+    spatial_cognition: "SpatialCognitionEvidence | None" = None
+
+
 __all__ = [
     "ExplorationRequest",
     "EvidenceSource",
     "EvidenceFact",
     "EvidenceGapResolution",
     "EvidenceBundle",
+    "SpatialCognitionEvidence",
+    "ExplorationResult",
 ]
