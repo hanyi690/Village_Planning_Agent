@@ -126,7 +126,7 @@ class SpatialResolver:
         (replacing the village-center bbox fallback used by EXPLORE grounding).
         """
         from app.modules.kg.queries.spatial_ref import resolve_candidates
-        from app.modules.schema.contracts.spatial_ref_contracts import (
+        from app.modules.schema.contracts.spatial_reference_contracts import (
             CandidateSet,
             ResolvedSpatialRef,
         )

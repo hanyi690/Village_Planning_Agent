@@ -254,7 +254,7 @@ EXTRACT_PROJECTS_PROMPT = """你是村庄规划项目提取器，具备空间感
 
 **5种原子操作**:
 - create: 在空地新建（需 area_sqm, land_use_name, location）
-- split: 将一个图斑分割（需 source_bsm, split_ratio）
+- split: 将一个图斑分割（需 source_bsm；切割比例由项目轮廓与约束几何决定，不依赖 split_ratio）
 - merge: 合并相邻同用途图斑（需 source_bsms）
 - modify: 修改图斑属性不改几何（需 field_changes）
 - reclassify: 变更地类编码（需 new_qmdlbm）

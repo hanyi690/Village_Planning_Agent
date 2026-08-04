@@ -342,7 +342,6 @@ class SpatialOperation(BaseModel):
 
     # split parameters
     source_bsm: Optional[str] = None
-    split_ratio: Optional[float] = None
 
     # merge parameters
     source_bsms: Optional[List[str]] = None

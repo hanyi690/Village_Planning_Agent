@@ -71,7 +71,7 @@ def kg_main():
 
 class TestResolveCandidatesAttributive:
     def test_attributive_forest_returns_forest_bsms(self, kg_main):
-        from app.modules.schema.contracts.spatial_ref_contracts import SpatialReferenceSpec
+        from app.modules.schema.contracts.spatial_reference_contracts import SpatialReferenceSpec
         from app.modules.kg.queries.spatial_ref import resolve_candidates
         spec = SpatialReferenceSpec(
             type="attributive",
@@ -82,7 +82,7 @@ class TestResolveCandidatesAttributive:
         assert len(cs.bsms) > 0, "Expected forest parcels in jintian"
 
     def test_attributive_empty_filter_returns_all_parcels(self, kg_main):
-        from app.modules.schema.contracts.spatial_ref_contracts import SpatialReferenceSpec
+        from app.modules.schema.contracts.spatial_reference_contracts import SpatialReferenceSpec
         from app.modules.kg.queries.spatial_ref import resolve_candidates
         spec = SpatialReferenceSpec(type="attributive")
         cs = resolve_candidates(kg_main, spec)
@@ -91,7 +91,7 @@ class TestResolveCandidatesAttributive:
 
 class TestResolveCandidatesTopological:
     def test_topological_sfwithin_facility_returns_containing_parcels(self, kg_main):
-        from app.modules.schema.contracts.spatial_ref_contracts import (
+        from app.modules.schema.contracts.spatial_reference_contracts import (
             SpatialReferenceSpec, RefObject,
         )
         from app.modules.kg.queries.spatial_ref import resolve_candidates
@@ -107,7 +107,7 @@ class TestResolveCandidatesTopological:
 
 class TestResolveCandidatesEntityType:
     def test_entity_type_facility_by_label(self, kg_main):
-        from app.modules.schema.contracts.spatial_ref_contracts import (
+        from app.modules.schema.contracts.spatial_reference_contracts import (
             SpatialReferenceSpec, RefObject,
         )
         from app.modules.kg.queries.spatial_ref import resolve_candidates
@@ -121,7 +121,7 @@ class TestResolveCandidatesEntityType:
 
 class TestResolveCandidatesLayerGroup:
     def test_layer_group_protection_returns_zone_bsms(self, kg_main):
-        from app.modules.schema.contracts.spatial_ref_contracts import (
+        from app.modules.schema.contracts.spatial_reference_contracts import (
             SpatialReferenceSpec, RefObject,
         )
         from app.modules.kg.queries.spatial_ref import resolve_candidates

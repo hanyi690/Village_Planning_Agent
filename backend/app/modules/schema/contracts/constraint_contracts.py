@@ -13,6 +13,7 @@ Design: 02_EXECUTION_PLAN.md Module B
 
 from __future__ import annotations
 
+from enum import Enum
 from typing import Any, Dict, List, Literal, Optional
 
 from pydantic import BaseModel, Field
@@ -107,4 +108,54 @@ __all__ = [
     "CompilationReport",
     "ConflictRecord",
     "DroppedItem",
+    "ConstraintScope",
+    "ConstraintStrength",
+    "ConstraintSource",
+    "PlanningConstraint",
+    "ConstraintSet",
 ]
+
+
+# ── Unified planning constraint types (Task 4) ──────────────────────────
+
+
+class ConstraintScope(str, Enum):
+    VILLAGE = "village"
+    ZONE = "zone"
+    PARCEL = "parcel"
+    PROJECT = "project"
+    FACILITY = "facility"
+    ROAD = "road"
+
+
+class ConstraintStrength(str, Enum):
+    HARD = "hard"
+    SOFT = "soft"
+    ADVISORY = "advisory"
+
+
+class ConstraintSource(str, Enum):
+    LEGAL = "legal"
+    PLANNING_STANDARD = "planning_standard"
+    USER_INPUT = "user_input"
+    DERIVED = "derived"
+    FEEDBACK = "feedback"
+
+
+class PlanningConstraint(BaseModel):
+    constraint_id: str
+    scope: ConstraintScope = ConstraintScope.PARCEL
+    strength: ConstraintStrength = ConstraintStrength.HARD
+    source: ConstraintSource = ConstraintSource.USER_INPUT
+    zone: str = ""
+    parcel_bsms: list[str] = Field(default_factory=list)
+    field: str = ""
+    operator: str = ""
+    value: float | str | None = None
+    description: str = ""
+
+
+class ConstraintSet(BaseModel):
+    constraints: list[PlanningConstraint] = Field(default_factory=list)
+    conflicts: list[dict] = Field(default_factory=list)
+    compilation_report: dict | None = None

@@ -47,7 +47,7 @@ class SpatialReferenceSpec(BaseModel):
     topo: Optional[str] = Field(None, description="GeoSPARQL/pln relation: " + ", ".join(_VALID_TOPO))
     attr_filter: Optional[Dict[str, Any]] = None
     op: Optional[str] = Field(None, description="and | or | not (for composed type)")
-    children: Optional[List["SpatialReferenceSpec"]] = None
+    children: List["SpatialReferenceSpec"] = Field(default_factory=list)
 
     model_config = {"extra": "forbid"}
 
@@ -57,6 +57,13 @@ class SpatialReferenceSpec(BaseModel):
         if v is not None and v not in _VALID_TOPO:
             raise ValueError(f"topo must be one of {_VALID_TOPO}, got '{v}'")
         return v
+
+
+class GeometryRef(BaseModel):
+    """Explicit geometry reference — raw WKT/CRS/bbox grounding artifact."""
+    wkt: str = ""
+    crs: str = ""
+    bbox: tuple[float, float, float, float] | None = None
 
 
 @dataclass
@@ -77,4 +84,4 @@ class ResolvedSpatialRef:
     provenance: Dict[str, Any] = field(default_factory=dict)
 
 
-__all__ = ["RefObject", "SpatialReferenceSpec", "CandidateSet", "ResolvedSpatialRef"]
+__all__ = ["RefObject", "SpatialReferenceSpec", "GeometryRef", "CandidateSet", "ResolvedSpatialRef"]

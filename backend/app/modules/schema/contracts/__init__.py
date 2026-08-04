@@ -27,3 +27,8 @@ from .evidence_contracts import *  # noqa: F401,F403
 from .l1_contracts import *  # noqa: F401,F403
 from .l2_contracts import *  # noqa: F401,F403
 from .l3_contracts import *  # noqa: F401,F403
+from .constraint_contracts import *  # noqa: F401,F403
+from .spatial_reference_contracts import *  # noqa: F401,F403
+from .parse_result_contracts import *  # noqa: F401,F403
+from .grounding_contracts import *  # noqa: F401,F403
+from .selection_contracts import *  # noqa: F401,F403
