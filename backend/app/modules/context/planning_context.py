@@ -24,6 +24,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional
 
+from app.modules.ports.planning_ports import PlanningPorts
+
 
 @dataclass
 class PlanningContext:
@@ -44,10 +46,9 @@ class PlanningContext:
         report_summary_index: ``{dim_key: {summary, metrics, key_points, ...}}``.
         kg_query_fn: Callable ``(template_name, **params) -> list[dict]`` bound
             to the live session KG. Used by ``spatial_ops`` without importing KG.
-        artifact_store: Optional ``ArtifactStorePort`` implementation for
-            persisting pipeline artifacts under a run (may be None).
-        ports: Optional dict of injected port implementations
-            (semantic_query/spatial_query/gazetteer/nomenclature_registry).
+        ports: Typed ``PlanningPorts`` bundle of injected dependency-inversion
+            port implementations (artifact_store, semantic_query, spatial_query,
+            gazetteer, nomenclature_registry, context_provider). May be empty.
     """
 
     session_id: str = ""
@@ -63,8 +64,20 @@ class PlanningContext:
     reports: Dict[str, Dict[str, Any]] = field(default_factory=dict)
     report_summary_index: Dict[str, Dict[str, Any]] = field(default_factory=dict)
     kg_query_fn: Optional[Callable[..., List[Dict[str, Any]]]] = None
-    artifact_store: Any | None = field(default=None)
-    ports: Dict[str, Any] | None = field(default_factory=dict)
+    ports: PlanningPorts = field(default_factory=PlanningPorts)
+
+    @property
+    def has_bundle(self) -> bool:
+        return self.bundle is not None
+
+    @property
+    def has_kg(self) -> bool:
+        return self.kg is not None and self.kg_session_ref != ""
+
+    @property
+    def artifact_store(self) -> Any:
+        """Back-compat accessor for the injected artifact store (or None)."""
+        return self.ports.artifact_store if self.ports else None
 
     @property
     def has_bundle(self) -> bool:
