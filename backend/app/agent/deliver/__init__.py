@@ -15,6 +15,7 @@ from app.agent.deliver.checks import (
     check_traceability_complete,
 )
 from app.agent.deliver.gate import deliver_gate_route, evaluate_deliver_gate
+from app.agent.deliver.review import build_deliver_review_package
 
 __all__ = [
     "REQUIRED_STATUTORY_LAYERS",
@@ -27,4 +28,5 @@ __all__ = [
     "check_classification_for_statutory",
     "deliver_gate_route",
     "evaluate_deliver_gate",
+    "build_deliver_review_package",
 ]
