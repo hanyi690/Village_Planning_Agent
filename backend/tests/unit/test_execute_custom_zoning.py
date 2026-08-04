@@ -55,10 +55,16 @@ def test_execute_layout_adds_custom_functional_zone_layer():
     )
     result = asyncio.run(_execute_layout_node(state))
     layers = result.get("layout_configs", [])
-    custom = [c for c in layers if c.get("layerType") == "custom_functional_zone"]
-    assert custom, f"expected custom_functional_zone layer, got {[c.get('layerType') for c in layers]}"
+    custom = [c for c in layers if c.get("layerType") == "custom_planning_zone"]
+    assert custom, f"expected custom_planning_zone layer, got {[c.get('layerType') for c in layers]}"
     features = custom[0]["data"]["features"]
-    assert len(features) == 1
-    assert features[0]["properties"]["category_code"] == "FZ01"
-    assert features[0]["properties"]["target_bsms"] == ["P1"]  # 规则选择 0301 地块
-    assert features[0]["properties"]["color"] == "#2d6a4f"
+    generated = [f for f in features if f["properties"].get("status") == "generated"]
+    assert len(generated) == 1
+    props = generated[0]["properties"]
+    assert props["category_code"] == "FZ01"
+    assert props["evidence_bsms"] == ["P1"]  # 规则选择 0301 地块
+    assert props["parcel_ids"] == ["P1"]
+    assert props["color"] == "#2d6a4f"
+    pending = [f for f in features if f["properties"].get("status") == "pending"]
+    assert len(pending) == 1
+    assert pending[0]["properties"]["parcel_ids"] == ["P2"]

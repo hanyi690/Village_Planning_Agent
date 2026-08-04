@@ -13,7 +13,7 @@ Sub-tasks (sequential skeleton, parallel fan-out reserved for Phase 2):
 
 Worker-Evaluator loop:
   route -> layout -> facility -> axis -> road -> validate
-  validate --pass--> END | --retry--> layout (max 3 rounds)
+  validate --pass--> END | --retry--> layout (max 3 rounds) | --human--> END (review)
 
 P1 wiring: nodes call the underlying generation helpers directly
 (generate._generate_*, validate_aggregate)
@@ -1113,17 +1113,17 @@ async def _validate_node(state: ExecuteAgentState) -> dict:
 # ── Conditional routing ──────────────────────────────────────────────
 
 
-def _route_after_validate(state: ExecuteAgentState) -> Literal["pass", "retry"]:
-    """Route after validation: pass -> END, fail -> retry (max 3 rounds)."""
+def _route_after_validate(state: ExecuteAgentState) -> Literal["pass", "retry", "human"]:
+    """Route after validation: pass -> END, fail -> retry (max 3 rounds -> human review)."""
     result = state.validation_result or {}
     if result.get("passed", False):
         return "pass"
     if state.validation_round >= 3:
         logger.warning(
-            "[EXECUTE] validation exceeded %d rounds - returning failed terminal result",
+            "[EXECUTE] validation exceeded %d rounds - routing to human review",
             state.validation_round,
         )
-        return "pass"
+        return "human"
     return "retry"
 
 
@@ -1386,7 +1386,7 @@ def build_execute_agent_graph():
     graph.add_conditional_edges(
         "validate",
         _route_after_validate,
-        {"retry": "execute_layout", "pass": "write_l4"},
+        {"retry": "execute_layout", "pass": "write_l4", "human": END},
     )
 
     graph.add_edge("write_l4", END)
