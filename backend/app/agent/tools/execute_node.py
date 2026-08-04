@@ -3,6 +3,8 @@
 Filters out intent tools (advance_planning_intent / gis_analysis) routed
 elsewhere, then invokes the remaining BaseTools in parallel. SSE events
 are published around each invocation.
+
+Migrated to app.agent.tools per docs/architecture/agent-graph.md §5.
 """
 
 import asyncio
@@ -11,9 +13,9 @@ from typing import Dict, Any, Tuple
 from langchain_core.messages import ToolMessage
 
 from app.utils.logger import get_logger
-from ...utils.sse_publisher import SSEPublisher
-from ...tools.registry import ToolRegistry
-from ...tools.tools import TOOL_REGISTRY
+from app.utils.sse_publisher import SSEPublisher
+from app.tools.registry import ToolRegistry
+from app.tools.tools import TOOL_REGISTRY
 from app.tools.intent_tools import advance_planning_intent, gis_analysis
 
 logger = get_logger(__name__)
