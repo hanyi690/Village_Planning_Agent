@@ -10,10 +10,12 @@ from pydantic import BaseModel, Field
 class CompilationProfile(str, Enum):
     """Stage-specific compilation profile for the shared parse-compiler.
 
-    Wave B delivers L1_OBSERVATION. L3_PLANNING and REVISION are Wave F.
+    Wave B delivers L1_OBSERVATION. Wave D delivers L2_STRATEGY.
+    L3_PLANNING and REVISION are Wave F.
     """
 
     L1_OBSERVATION = "l1_observation"
+    L2_STRATEGY = "l2_strategy"
     L3_PLANNING = "l3_planning"
     REVISION = "revision"
 
