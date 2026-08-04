@@ -100,6 +100,7 @@ def apply_hard_filters(
     constraint_index: Any = None,
     hazards: Optional[List[Any]] = None,
     occupied: Optional[List[Tuple[float, float]]] = None,
+    min_area_ha: float = 0.0,
 ) -> Tuple[List[CandidateParcel], List[Rejection]]:
     from shapely.geometry import Point, shape
 
@@ -134,6 +135,8 @@ def apply_hard_filters(
                     if geom.distance(Point(other)) < _OCCUPIED_MIN_DIST:
                         detail.append("occupied_proximity")
                         break
+        if min_area_ha > 0 and cand.area_ha < min_area_ha:
+            detail.append(f"below_min_area:{min_area_ha}")
         if detail:
             rejected.append(Rejection(cand.bsm, "hard_filter", detail))
         else:

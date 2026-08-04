@@ -189,14 +189,7 @@ async def _execute_project_node(state: ExecuteAgentState) -> dict:
     occupied = []
     features = []
     unresolved: List[Dict[str, Any]] = []
-    prohibited = {
-        "farmland_protection",
-        "ecological_redline",
-        "historical_protection",
-        "cultivated_land_target",
-        "hazard_control_line",
-        "flood_control_line",
-    }
+    from app.modules.spatial_ops.selection import _PROHIBITED_CONSTRAINTS as prohibited
 
     for project in projects:
         selected = None
@@ -568,14 +561,7 @@ async def _execute_facility_node(state: ExecuteAgentState) -> dict:
         from app.modules.spatial_ops import build_constraint_index
 
         constraint_index = build_constraint_index(state.gis_bundle) if state.gis_bundle else None
-        prohibited = {
-            "farmland_protection",
-            "ecological_redline",
-            "historical_protection",
-            "cultivated_land_target",
-            "hazard_control_line",
-            "flood_control_line",
-        }
+        from app.modules.spatial_ops.selection import _PROHIBITED_CONSTRAINTS as prohibited
         features = (fac_layer.get("data") or {}).get("features") or []
         safe_features = []
         for feature in features:
