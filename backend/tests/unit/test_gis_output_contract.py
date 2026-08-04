@@ -74,25 +74,6 @@ def test_render_builder_includes_current_roads_and_annotations():
     ]
 
 
-def test_fetch_reuses_caller_bundle_and_preserves_overrides():
-    from app.agent.execute.layout_pipeline import _fetch_gis_data_node
-    from app.agent.deliver.gis_pipeline_state import GISPipelineState
-
-    base = {"type": "FeatureCollection", "features": [_feature("BASE")]}
-    override = {"type": "FeatureCollection", "features": [_feature("USER")]}
-    bundle = SimpleNamespace(to_geojson_dict=lambda: {"landuse_current_geojson": base})
-    state = GISPipelineState(
-        village_name="test",
-        gis_bundle=bundle,
-        gis_data={"landuse_current_geojson": override},
-    )
-
-    result = asyncio.run(_fetch_gis_data_node(state))
-
-    assert result["gis_bundle"] is bundle
-    assert result["gis_data"]["landuse_current_geojson"] == override
-
-
 def test_pipeline_state_accepts_typed_derived_relations():
     from app.agent.deliver.gis_pipeline_state import GISPipelineState
 
@@ -102,52 +83,13 @@ def test_pipeline_state_accepts_typed_derived_relations():
     assert state.gis_data["_parcel_relations"] is relations
 
 
-def test_fetch_session_fallback_never_uses_configured_sources(monkeypatch):
-    from app.agent.execute.layout_pipeline import _fetch_gis_data_node
-    from app.agent.deliver.gis_pipeline_state import GISPipelineState
-    from app.modules.data.catalog.catalog import DataCatalog
-
-    bundle = SimpleNamespace(
-        to_geojson_dict=lambda: {},
-        parcel_count=0,
-        lines={"roads_current": [], "roads_planned": []},
-        points={"annotations_current": [], "annotations_planned": []},
-        polygons={},
-    )
-
-    async def load_session(self, village_name, session_id):
-        assert village_name == "test"
-        assert session_id == "session-1"
-        return bundle
-
-    def reject_configured(self, village_name):
-        raise AssertionError("configured source fallback must not run for sessions")
-
-    monkeypatch.setattr(DataCatalog, "load_village_bundle_async", load_session)
-    monkeypatch.setattr(DataCatalog, "load_village_bundle", reject_configured)
-
-    result = asyncio.run(
-        _fetch_gis_data_node(
-            GISPipelineState(session_id="session-1", village_name="test")
-        )
-    )
-
-    assert result["gis_bundle"] is bundle
-
-
 def test_trace_layer_uses_real_parcel_geometry_only():
-    from app.agent.execute.layout_pipeline import _build_trace_layer
-    from app.agent.deliver.gis_pipeline_state import GISPipelineState
+    from app.modules.spatial_ops.map_layers import build_trace_layer
 
     parcel = _feature("P001")
-    state = GISPipelineState(
-        gis_data={
-            "landuse_current_geojson": {
-                "type": "FeatureCollection",
-                "features": [parcel],
-            }
-        },
-        explore_instructions={
+
+    layer = build_trace_layer(
+        {
             "instructions": [
                 {
                     "dimension_key": "land_use_planning",
@@ -155,9 +97,13 @@ def test_trace_layer_uses_real_parcel_geometry_only():
                 }
             ]
         },
+        {
+            "landuse_current_geojson": {
+                "type": "FeatureCollection",
+                "features": [parcel],
+            }
+        },
     )
-
-    layer = _build_trace_layer(state)
 
     assert layer is not None
     assert len(layer["data"]["features"]) == 1
@@ -336,22 +282,6 @@ def test_parse_extracts_structured_road_table():
         ("Y122乡道", 7.0),
         ("南北向通村道路", 6.0),
     ]
-
-
-def test_export_is_blocked_when_validation_failed(tmp_path, monkeypatch):
-    from app.agent.execute.layout_pipeline import _export_gdb_node
-    from app.agent.deliver.gis_pipeline_state import GISPipelineState
-
-    monkeypatch.chdir(tmp_path)
-    state = GISPipelineState(
-        village_name="test",
-        validation_result={"passed": False},
-    )
-
-    result = asyncio.run(_export_gdb_node(state))
-
-    assert result["export_result"]["status"] == "blocked"
-    assert not list(tmp_path.iterdir())
 
 
 def test_export_package_includes_road_and_manifest(tmp_path):

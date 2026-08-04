@@ -121,4 +121,58 @@ def build_map_layers(
     return result
 
 
-__all__ = ["build_map_layers"]
+def build_trace_layer(
+    explore_instructions: Optional[Dict[str, Any]],
+    gis_data: Dict[str, Optional[Dict[str, Any]]],
+) -> Optional[Dict[str, Any]]:
+    """构建定位校核图层（EXPLORE grounding 指令的候选 BSM → 点/面标注）。
+
+    反映 L3 空间描述经 KG 拓扑接地后的候选地块分布，供前端核对
+    "文本说 X 处" vs "几何落在哪"。Migrated from
+    app.agent.execute.layout_pipeline._build_trace_layer (Wave M1).
+    """
+    explore = explore_instructions or {}
+    instructions = explore.get("instructions") or []
+    if not instructions:
+        return None
+
+    parcel_index: Dict[str, Dict[str, Any]] = {}
+    landuse = (gis_data or {}).get("landuse_current_geojson") or {}
+    for feature in landuse.get("features", []):
+        props = feature.get("properties") or {}
+        bsm = str(props.get("BSM") or props.get("bsm") or "")
+        geometry = feature.get("geometry")
+        if bsm and geometry:
+            parcel_index[bsm] = geometry
+
+    features = []
+    for instr in instructions:
+        bsms = instr.get("candidate_bsms") or []
+        if not bsms:
+            continue
+        for bsm in bsms:
+            geometry = parcel_index.get(str(bsm))
+            if geometry is None:
+                continue
+            features.append({
+                "type": "Feature",
+                "properties": {
+                    "name": bsm,
+                    "dim": instr.get("dimension_key", ""),
+                    "evidence": (instr.get("evidence_text") or "")[:30],
+                    "query_path": instr.get("query_path", ""),
+                },
+                "geometry": geometry,
+            })
+    if not features:
+        return None
+    return {
+        "layerType": "position_trace",
+        "layer_name": "定位校核",
+        "data": {"type": "FeatureCollection", "features": features},
+        "color": "#7c3aed",
+        "style": {"fill-opacity": 0.3},
+    }
+
+
+__all__ = ["build_map_layers", "build_trace_layer"]
