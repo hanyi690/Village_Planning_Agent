@@ -19,6 +19,7 @@ from __future__ import annotations
 from typing import Any, Dict, Optional
 
 from app.modules.context.planning_context import PlanningContext
+from app.modules.ports.planning_ports import PlanningPorts
 from app.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -110,6 +111,25 @@ async def build_planning_context(
         except Exception as e:
             logger.warning("[PlanningContext] gazetteer load failed: %s", e)
 
+    # 3.5 Injected ports (kg adapters: gazetteer + spatial_query)
+    gazetteer_port = None
+    spatial_query_port = None
+    try:
+        if gazetteer is not None:
+            from app.modules.kg.adapters.gazetteer_adapter import KGGazetteerAdapter
+
+            gazetteer_port = KGGazetteerAdapter(gazetteer)
+    except Exception as e:
+        logger.warning("[PlanningContext] gazetteer adapter build failed: %s", e)
+    try:
+        if kg is not None:
+            from app.modules.kg.adapters.spatial_query_adapter import KGSpatialQueryAdapter
+
+            spatial_query_port = KGSpatialQueryAdapter(kg)
+    except Exception as e:
+        logger.warning("[PlanningContext] spatial_query adapter build failed: %s", e)
+    ports = PlanningPorts(gazetteer=gazetteer_port, spatial_query=spatial_query_port)
+
     # 4. Constraint index
     constraint_index = None
     if bundle is not None:
@@ -175,6 +195,7 @@ async def build_planning_context(
         reports=reports,
         report_summary_index=report_summary_index,
         kg_query_fn=kg_query_fn,
+        ports=ports,
     )
     _context_cache[session_id] = context
     logger.info(
