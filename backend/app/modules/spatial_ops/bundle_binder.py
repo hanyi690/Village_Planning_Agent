@@ -75,20 +75,8 @@ class DeterministicBundleBinder:
                 elif instruction.get("candidate_bbox"):
                     status, geometry_source = "candidate_bbox", "bbox_candidate"
 
-            # A2 语义绑定：无 BSM 时，实体提及村名 → KG gazetteer → 候选 BSM 集
+            # A2 语义绑定：无 BSM 时，实体提及村名 → gazetteer（调用方注入）→ 候选 BSM 集
             if status == "unresolved" and not source_bsms:
-                if gazetteer is None:
-                    # 调用方应通过 PlanningContext 注入 gazetteer（P0 多源坐标+组合名）。
-                    # 为兼容遗留调用，仍允许从 bundle 村名加载；禁止硬编码村名。
-                    village_name = ""
-                    try:
-                        village_name = str(getattr(self.bundle, "village_name", "") or "")
-                    except Exception:
-                        pass
-                    if village_name:
-                        from app.modules.kg.gazetteer import load_gazetteer
-
-                        gazetteer = load_gazetteer(village_name)
                 if gazetteer is not None and getattr(gazetteer, "entries", None):
                     for mention in (instruction.get("entity_mentions") or []):
                         entry = gazetteer.resolve(str(mention))

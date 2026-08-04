@@ -125,7 +125,6 @@ class SpatialResolver:
         applies a directional bbox refinement when the spec carries a direction
         (replacing the village-center bbox fallback used by EXPLORE grounding).
         """
-        from app.modules.kg.queries.spatial_ref import resolve_candidates
         from app.modules.schema.contracts.spatial_reference_contracts import (
             CandidateSet,
             ResolvedSpatialRef,
@@ -133,12 +132,30 @@ class SpatialResolver:
 
         provenance: Dict[str, Any] = {"path": "kg:resolve_candidates"}
         candidates: CandidateSet = CandidateSet()
-        if self.kg is not None:
-            try:
-                candidates = resolve_candidates(self.kg, spec)
-            except Exception as e:
-                logger.warning("[SpatialResolver] resolve_candidates failed: %s", e)
-                provenance["error"] = str(e)
+        port = getattr(self.context.ports, "spatial_query", None)
+        try:
+            if port is not None:
+                run_id = getattr(self.context, "session_id", "") or ""
+                result = port.resolve_candidates(run_id, spec)
+                if result is not None:
+                    candidates = result
+            elif self.kg_query_fn is not None:
+                result = self.kg_query_fn("resolve_candidates", spec=spec)
+                if isinstance(result, dict) and "bsms" in result:
+                    candidates = CandidateSet(
+                        bsms=[str(b) for b in (result.get("bsms") or [])],
+                        ref_bsms=[str(b) for b in (result.get("ref_bsms") or [])],
+                    )
+                elif isinstance(result, list):
+                    bsms = [
+                        str(r.get("bsm"))
+                        for r in result
+                        if isinstance(r, dict) and r.get("bsm")
+                    ]
+                    candidates = CandidateSet(bsms=bsms)
+        except Exception as e:
+            logger.warning("[SpatialResolver] resolve_candidates failed: %s", e)
+            provenance["error"] = str(e)
 
         bsms = list(dict.fromkeys([*candidates.bsms, *candidates.ref_bsms]))
         final_bsms = self._filter_to_bundle(bsms)
@@ -247,13 +264,6 @@ def resolve_intent_anchors(
     moved into spatial_ops so GROUND owns all gazetteer/KG anchor resolution.
     Only reads gazetteer + KG anchors; never writes. Returns resolved count.
     """
-    if gazetteer is None and village_name:
-        try:
-            from app.modules.kg.gazetteer import load_gazetteer
-
-            gazetteer = load_gazetteer(village_name)
-        except Exception:
-            gazetteer = None
     if gazetteer is None and not village_anchors:
         return 0
 

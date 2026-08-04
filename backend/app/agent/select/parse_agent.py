@@ -806,8 +806,18 @@ def resolve_spatial_anchors(
     """
     from app.modules.spatial_ops.resolver import resolve_intent_anchors as _resolve
 
+    gazetteer = None
+    if village_name:
+        try:
+            from app.modules.kg.gazetteer import load_gazetteer
+
+            gazetteer = load_gazetteer(village_name)
+        except Exception:
+            gazetteer = None
+
     return _resolve(
         intent,
+        gazetteer=gazetteer,
         village_name=village_name,
         village_anchors=village_anchors,
     )
