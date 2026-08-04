@@ -139,3 +139,17 @@ def apply_hard_filters(
         else:
             survivors.append(cand)
     return survivors, rejected
+
+
+def apply_scale_filter(
+    candidates: List[CandidateParcel],
+    *,
+    allow_large_block: bool = False,
+    max_area_ha: float = 2.0,
+) -> List[CandidateParcel]:
+    if allow_large_block:
+        return list(candidates)
+    return [
+        c for c in candidates
+        if not (c.area_ha > max_area_ha and c.dlmc in _NON_CONSTRUCTION_DLMC)
+    ]

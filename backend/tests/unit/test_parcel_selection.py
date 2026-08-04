@@ -85,3 +85,29 @@ def test_hard_filter_occupied_rejected():
     survivors, rejected = apply_hard_filters([_parcel("A", 0, 0)], occupied=[(0.00005, 0.00005)])
     assert survivors == []
     assert rejected[0].detail == ["occupied_proximity"]
+
+
+from app.modules.spatial_ops.selection import CandidateParcel, apply_scale_filter
+
+
+def _big(name: str, bsm: str = "B") -> CandidateParcel:
+    return CandidateParcel(bsm=bsm, geometry={}, dlmc=name, area_ha=50.0)
+
+
+def _small(name: str, bsm: str = "S") -> CandidateParcel:
+    return CandidateParcel(bsm=bsm, geometry={}, dlmc=name, area_ha=0.1)
+
+
+def test_scale_filter_excludes_big_non_construction():
+    out = apply_scale_filter([_big("商品林"), _small("空闲宅基地")])
+    assert [c.bsm for c in out] == ["S"]
+
+
+def test_scale_filter_allows_small_non_construction():
+    out = apply_scale_filter([_small("水域"), _small("空闲宅基地")])
+    assert len(out) == 2
+
+
+def test_scale_filter_large_block_bypasses():
+    out = apply_scale_filter([_big("商品林")], allow_large_block=True)
+    assert len(out) == 1
