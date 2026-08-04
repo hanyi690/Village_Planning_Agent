@@ -25,6 +25,7 @@ logger = get_logger(__name__)
 # Priority order for assigning parcels: DLBM directly matching zone type
 # Imported from colors.py ZONE_TYPE_TO_DLBMS (single source of truth)
 from app.modules.schema.advisory_crosswalks import ZONE_TYPE_TO_DLBMS as DLBM_PREFERENCE
+from app.modules.schema.advisory_crosswalks.legacy import require_legacy
 from app.modules.schema import PROTECTED_DLBM_CODES, CONSTRUCTION_USE_TYPES
 
 # Precomputed DLBM category sets (avoid rebuilding per _preference_cost call)
@@ -112,6 +113,7 @@ class ConstraintDrivenAllocator:
             When planning zone targets are used, assigned_zone is remapped to
             4-class planning zone names (农田保护区/村庄建设区/生态保护区/一般农业区).
         """
+        require_legacy("ConstraintDrivenAllocator.solve")
         if mode == "mip":
             from .mip_allocator import MIPZoneAllocator
             allocator = MIPZoneAllocator()

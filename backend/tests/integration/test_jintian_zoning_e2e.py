@@ -8,6 +8,7 @@ Exercises the 4 blocks of the zoning refactor:
 """
 from pathlib import Path
 
+import pytest
 from shapely.geometry import box, shape
 
 from app.modules.data.ingest import ingest_current_landuse
@@ -29,6 +30,14 @@ JINTIAN_CURRENT = (
 Path(__file__).resolve().parents[2].parent / "data" / "gis" / "jintian" / "current" / "landuse.geojson"
 )
 JINTIAN_BOUNDARY_BOX = box(115.5, 24.5, 116.5, 25.5)  # bounding box around jintian coordinates
+
+
+@pytest.fixture(autouse=True)
+def _legacy_switch(monkeypatch):
+    """This e2e derives zone types from current landuse DLBM — the legacy
+    mapping-style chain, fail-closed by default. Enable the explicit legacy
+    switch (comparison testing only); output is 非规划成果."""
+    monkeypatch.setenv("GIS_LEGACY_MAPPING", "1")
 
 
 def _to_dicts(parcels):

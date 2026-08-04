@@ -172,6 +172,9 @@ def _make_planning_zone_layer(
     After classifying parcels, merges adjacent same-type parcels via dissolve
     to reduce 600+ fragments to ~4-6 contiguous regions.
     """
+    from app.modules.schema.advisory_crosswalks.legacy import require_legacy
+
+    require_legacy("_make_planning_zone_layer")
     source = allocated or gis_data.get("landuse_current_geojson")
     if not source or not source.get("features"):
         return None
@@ -364,6 +367,9 @@ def _generate_space_control_zone(
     kg_three_lines: optional KG query results [{name, code, color, area_target_ha}].
     When available, validates generated zone areas against KG targets.
     """
+    from app.modules.schema.advisory_crosswalks.legacy import require_legacy
+
+    require_legacy("_generate_space_control_zone")
     boundary = gis_data.get("boundary_geojson")
     if not boundary:
         return None
@@ -452,6 +458,9 @@ def _generate_land_use_zone(
     Mapping chain: DLBM → GHYTBM → V/N/E code.
     Fallback: DLBM → zone_type → V/N/E heuristic.
     """
+    from app.modules.schema.advisory_crosswalks.legacy import require_legacy
+
+    require_legacy("_generate_land_use_zone")
     geojson = allocated_geojson
     if not geojson:
         geojson = gis_data.get("landuse_current_geojson") if gis_data else None
@@ -587,6 +596,9 @@ def _apply_operations(
 
         elif action == "reclassify":
             # Change DLBM + assigned_zone
+            from app.modules.schema.advisory_crosswalks.legacy import require_legacy
+
+            require_legacy("reclassify")
             target_parcels = op.get("target_parcels", [])
             new_code = op.get("land_use_code", "") or op.get("new_qmdlbm", "")
             for parcel_key in target_parcels[:1]:

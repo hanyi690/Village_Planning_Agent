@@ -34,6 +34,7 @@ from __future__ import annotations
 from typing import Any, Dict, List, Optional, Tuple
 
 from app.utils.logger import get_logger
+from app.modules.schema.advisory_crosswalks.legacy import require_legacy
 
 logger = get_logger(__name__)
 
@@ -190,6 +191,7 @@ _DLBM_TO_VNE: Optional[Dict[str, str]] = None
 
 
 def get_dlbm_to_vne() -> Dict[str, str]:
+    require_legacy("get_dlbm_to_vne")
     global _DLBM_TO_VNE
     if _DLBM_TO_VNE is None:
         _DLBM_TO_VNE = _build_dlbm_to_vne()
@@ -219,6 +221,7 @@ class LandUseZoneGenerator:
           - TDYTFQDM: land use zone code (V11, E23, N1, etc.)
           - YTFQMC: land use zone name (住宅用地, 其他农林用地, etc.)
         """
+        require_legacy("LandUseZoneGenerator.generate")
         geojson = allocated_geojson or current_landuse
         if not geojson or not geojson.get("features"):
             return {"type": "FeatureCollection", "features": []}

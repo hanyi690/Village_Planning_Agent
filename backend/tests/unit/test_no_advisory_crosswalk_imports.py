@@ -170,3 +170,53 @@ def test_active_chain_no_map_code_definition_exposure():
     src = lookup_path.read_text(encoding="utf-8")
     m = re.search(r"__all__\s*=\s*\[(.*?)\]", src, re.S)
     assert m and "map_code" not in m.group(1)
+
+
+# ── Legacy files must be fail-closed (gated) ──────────────────────────
+# Wave A.1: these files still import advisory_crosswalks — INTENTIONALLY.
+# They are the old mapping-style EXECUTE chain, fail-closed by default and
+# only reachable under the explicit legacy switch. Every crosswalk access
+# must be gated by require_legacy / legacy_enabled. They remain in
+# VIOLATION_BUDGET and are cleared in Wave I when rewritten.
+LEGACY_GATED_FILES = [
+    "app/tools/gis/_generation/optimizer/mip_allocator.py",
+    "app/tools/gis/_generation/optimizer/mip_solver.py",
+    "app/tools/gis/_generation/optimizer/planning_zone_mapper.py",
+    "app/tools/gis/_generation/zone_generator.py",
+    "app/tools/gis/_generation/land_use_zone_generator.py",
+    "app/tools/gis/_generation/space_control_generator.py",
+    "app/tools/gis/_generation/zone_type_deriver.py",
+    "app/tools/gis/generate.py",
+]
+
+
+def test_legacy_files_still_in_violation_budget():
+    """Every legacy file must remain in the violation budget (not removed)."""
+    for rel in LEGACY_GATED_FILES:
+        assert rel in VIOLATION_BUDGET, (
+            f"{rel} is legacy-gated and must stay in VIOLATION_BUDGET "
+            "(cleared in Wave I when rewritten)"
+        )
+
+
+def test_legacy_crosswalk_imports_are_gated():
+    """Every advisory_crosswalks import in a legacy file must be gated.
+
+    Each legacy file that imports advisory_crosswalks must also use
+    require_legacy / legacy_enabled so no ungated crosswalk access remains.
+    """
+    crosswalk_import = re.compile(r"(from app\.modules\.schema\.advisory_crosswalks|import app\.modules\.schema\.advisory_crosswalks)")
+    gate_usage = re.compile(r"require_legacy\s*\(|legacy_enabled\s*\(")
+    ungated = []
+    for rel in LEGACY_GATED_FILES:
+        p = BACKEND_ROOT / rel
+        src = p.read_text(encoding="utf-8")
+        if not crosswalk_import.search(src):
+            continue
+        if not gate_usage.search(src):
+            ungated.append(rel)
+    assert not ungated, (
+        "legacy files import advisory_crosswalks without a require_legacy/"
+        "legacy_enabled gate (must be fail-closed):\n" + "\n".join(ungated)
+    )
+

@@ -27,6 +27,7 @@ from app.modules.schema.advisory_crosswalks import (
     PLANNING_ZONE_TO_PRIMARY_ZONE,
     get_primary_zone_for_planning_zone,
 )
+from app.modules.schema.advisory_crosswalks.legacy import require_legacy
 from app.modules.schema import (
     BASIC_FARMLAND_CODES,
     GENERAL_AGRICULTURE_CODES,
@@ -98,6 +99,7 @@ def map_planning_zone_targets_to_zone_types(
     生态控制区目标 = 生态绿地（草地部分）
     林业发展区目标 = 生态绿地（商品林/生态林部分）
     """
+    require_legacy("map_planning_zone_targets_to_zone_types")
     zone_type_targets: Dict[str, float] = {}
     agri_total = 0.0
     eco_total = 0.0

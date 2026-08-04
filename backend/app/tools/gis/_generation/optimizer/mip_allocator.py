@@ -31,6 +31,7 @@ logger = get_logger(__name__)
 # DLBM → Planning Zone: import from single source (schema.py)
 # ---------------------------------------------------------------------------
 from app.modules.schema.advisory_crosswalks import DLBM_TO_PLANNING_ZONE, dlbm_to_planning_zone
+from app.modules.schema.advisory_crosswalks.legacy import require_legacy
 from app.modules.schema import PROTECTED_DLBM_CODES
 
 # Cross-zone preference cost matrix (symmetric-ish)
@@ -116,6 +117,7 @@ class MIPZoneAllocator:
         Returns:
             Tuple of (GeoJSON FeatureCollection, MIPTrace dict).
         """
+        require_legacy("MIPZoneAllocator.solve")
         from app.tools.gis._generation.trace import MIPTrace
         try:
             import pulp

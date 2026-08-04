@@ -1,6 +1,7 @@
 from typing import Iterable, Optional
 
 from app.modules.schema.advisory_crosswalks import DLBM_TO_GHYTBM, GHYTBM_TO_ZONE_TYPE
+from app.modules.schema.advisory_crosswalks.legacy import require_legacy
 from app.modules.schema.encodings import code_sets as cs
 from app.modules.schema.provenance import ProvenanceSource
 
@@ -24,6 +25,7 @@ def derive_zone_types(
     When no encoding can be resolved the parcel gets ``encoding_provenance='missing:upper_plan_transmission'``
     and ``zone_type=None``.
     """
+    require_legacy("derive_zone_types")
     out: dict[str, dict] = {}
     for p in parcels:
         bsm = p[bsm_key]

@@ -19,6 +19,7 @@ from __future__ import annotations
 from typing import Any, Dict, List, Optional, Tuple
 
 from app.utils.logger import get_logger
+from app.modules.schema.advisory_crosswalks.legacy import require_legacy
 
 logger = get_logger(__name__)
 
@@ -69,6 +70,7 @@ class SpaceControlZoneGenerator:
 
         Returns FeatureCollection with features labeled by TDKJGZFQDM (01-06).
         """
+        require_legacy("SpaceControlZoneGenerator.generate")
         if not boundary or not GEOPANDAS_AVAILABLE:
             return self._empty_result()
 

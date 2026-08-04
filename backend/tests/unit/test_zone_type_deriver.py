@@ -1,4 +1,13 @@
+import pytest
+
 from app.tools.gis._generation.zone_type_deriver import derive_zone_types
+
+
+@pytest.fixture(autouse=True)
+def _legacy_switch(monkeypatch):
+    """zone_type_deriver is fail-closed; these tests verify its pure logic
+    under the explicit legacy switch (comparison testing only)."""
+    monkeypatch.setenv("GIS_LEGACY_MAPPING", "1")
 
 
 def test_derive_from_appendix5_1340_yields_forest():

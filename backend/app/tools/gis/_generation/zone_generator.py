@@ -23,6 +23,7 @@ from app.modules.schema.advisory_crosswalks import (
     resolve_zone_type_for_dlbm,
     get_dlbms_for_zone_type,
 )
+from app.modules.schema.advisory_crosswalks.legacy import require_legacy
 from app.modules.schema import (
     get_zone_color,
     ZONE_TYPE_COLORS,
@@ -93,6 +94,7 @@ class ZoneGenerator:
         Returns:
             GeoJSON FeatureCollection with function_zone features
         """
+        require_legacy("ZoneGenerator.generate")
         if not zones:
             logger.warning("[ZoneGenerator] No zones in intent")
             return {"type": "FeatureCollection", "features": []}
