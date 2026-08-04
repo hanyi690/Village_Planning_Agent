@@ -7,6 +7,7 @@ from typing import Literal
 from pydantic import BaseModel
 
 from .contract_meta import ContractMeta
+from .provenance import Provenance
 
 
 class PlanningIntervention(BaseModel):
@@ -34,7 +35,7 @@ class PlanningProgram(ContractMeta):
     interventions: list[PlanningIntervention] = []
     dependencies: list[InterventionDependency] = []
     omissions: list[str] = []
-
+    provenance: "Provenance | None" = None
 
 __all__ = [
     "PlanningIntervention",

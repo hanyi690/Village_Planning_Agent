@@ -129,6 +129,7 @@ def compute_land_balance(
         construction_planned=round(construct_planned, 4),
         ecological_current=round(eco_current, 4),
         ecological_planned=round(eco_planned, 4),
+        closure_tolerance_pct=0.5,
     )
 
     # Trigger closure check

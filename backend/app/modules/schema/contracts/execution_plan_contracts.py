@@ -5,6 +5,7 @@ from enum import Enum
 from pydantic import BaseModel, Field
 
 from .contract_meta import ContractMeta
+from .provenance import Provenance
 
 
 class WorkerType(str, Enum):
@@ -34,3 +35,4 @@ class ExecutionPlan(ContractMeta):
     plan_id: str = ""
     worker_tasks: list[WorkerTask] = Field(default_factory=list)
     dependencies: list[dict] = Field(default_factory=list)
+    provenance: "Provenance | None" = None

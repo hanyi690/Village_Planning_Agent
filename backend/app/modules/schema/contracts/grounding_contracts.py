@@ -3,6 +3,7 @@ from __future__ import annotations
 from pydantic import BaseModel, Field
 
 from .contract_meta import ContractMeta, StageIssue
+from .provenance import Provenance
 
 
 class HardConstraintResult(BaseModel):
@@ -32,7 +33,7 @@ class GroundingResult(ContractMeta):
     candidates: list[CandidateSite] = Field(default_factory=list)
     unresolved: list[StageIssue] = Field(default_factory=list)
     spatial_query_evidence: list[SpatialQueryEvidence] = Field(default_factory=list)
-
+    provenance: "Provenance | None" = None
 
 __all__ = [
     "HardConstraintResult",

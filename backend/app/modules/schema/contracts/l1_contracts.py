@@ -6,6 +6,7 @@ from pydantic import BaseModel
 
 from .contract_meta import ContractMeta, StageIssue
 from .evidence_contracts import EvidenceSource
+from .provenance import Provenance
 
 
 class L1Snapshot(ContractMeta):
@@ -15,7 +16,7 @@ class L1Snapshot(ContractMeta):
     opportunities: list[str] = []
     evidence_gaps: list[str] = []
     sources: list[EvidenceSource] = []
-
+    provenance: "Provenance | None" = None
 
 __all__ = [
     "L1Snapshot",

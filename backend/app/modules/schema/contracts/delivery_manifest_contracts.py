@@ -14,6 +14,7 @@ from typing import List
 from pydantic import BaseModel, Field
 
 from .contract_meta import ContractMeta
+from .provenance import Provenance
 
 
 class DeliveryGate(BaseModel):
@@ -26,17 +27,22 @@ class DeliveryGate(BaseModel):
     land_balance_closed: bool = False    # 用地平衡表闭合 ±0.5%
     three_line_violations: int = 0       # 必须 == 0
     protected_intrusions: int = 0        # 必须 == 0
-    changed_parcels_pct: float = 0.0     # 变更比例 ≤ 阈值（默认15%）
-    changed_parcels_threshold: float = 15.0
+    changed_parcels_pct: float = 0.0     # 变更比例
+    # 变更比例阈值：由交付策略注入，schema 不固化为默认规则（未确认的规划策略）。
+    changed_parcels_threshold: float | None = None
     zones_complete: bool = False          # 必备分区齐全
 
     @property
     def passed(self) -> bool:
+        threshold_ok = (
+            self.changed_parcels_threshold is None
+            or self.changed_parcels_pct <= self.changed_parcels_threshold
+        )
         return (
             self.land_balance_closed
             and self.three_line_violations == 0
             and self.protected_intrusions == 0
-            and self.changed_parcels_pct <= self.changed_parcels_threshold
+            and threshold_ok
             and self.zones_complete
         )
 
@@ -49,8 +55,13 @@ class DeliveryGate(BaseModel):
             fails.append(f"三线冲突: {self.three_line_violations} 处")
         if self.protected_intrusions > 0:
             fails.append(f"保护侵入: {self.protected_intrusions} 处")
-        if self.changed_parcels_pct > self.changed_parcels_threshold:
-            fails.append(f"变更比例 {self.changed_parcels_pct:.1f}% > 阈值 {self.changed_parcels_threshold}%")
+        if (
+            self.changed_parcels_threshold is not None
+            and self.changed_parcels_pct > self.changed_parcels_threshold
+        ):
+            fails.append(
+                f"变更比例 {self.changed_parcels_pct:.1f}% > 阈值 {self.changed_parcels_threshold}%"
+            )
         if not self.zones_complete:
             fails.append("必备分区不齐全")
         return fails
@@ -91,7 +102,7 @@ class DeliveryManifest(ContractMeta):
     traceability: list[TraceabilityEntry] = Field(default_factory=list)
     pending_human_items: list[HumanItem] = Field(default_factory=list)
     delivery_gate: DeliveryGate | None = None
-
+    provenance: "Provenance | None" = None
 
 __all__ = [
     "DeliveryGate",

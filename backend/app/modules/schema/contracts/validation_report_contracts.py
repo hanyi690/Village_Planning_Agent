@@ -5,6 +5,7 @@ from typing import Literal
 from pydantic import BaseModel, Field
 
 from .contract_meta import ContractMeta, StageIssue
+from .provenance import Provenance
 
 
 class ConstraintAdjustment(BaseModel):
@@ -38,3 +39,4 @@ class ValidationReport(ContractMeta):
     overall_passed: bool = False
     issues_by_stage: dict[str, list[ValidationIssue]] = Field(default_factory=dict)
     adjustments: list[ConstraintAdjustment] = Field(default_factory=list)
+    provenance: "Provenance | None" = None

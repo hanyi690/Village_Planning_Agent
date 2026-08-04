@@ -43,8 +43,10 @@ class LandBalanceTable(BaseModel):
     total_current_area_ha: float = 0.0
     total_planned_area_ha: float = 0.0
     closure_deviation_pct: float = 0.0
+    # 闭合允许偏差（%）：由校验策略注入；None 表示未设置时保守判定不闭合。
+    closure_tolerance_pct: Optional[float] = None
 
-    # 大类汇总
+    # 大类汇总（由计算方填充，schema 不固化汇总规则）
     agriculture_current: float = 0.0
     agriculture_planned: float = 0.0
     construction_current: float = 0.0
@@ -54,15 +56,17 @@ class LandBalanceTable(BaseModel):
 
     @property
     def is_closed(self) -> bool:
-        """用地平衡表闭合：规划总面积与现状总面积偏差 ≤ 0.5%"""
+        """用地平衡表闭合：规划总面积与现状总面积偏差 ≤ 容差（未设置则不闭合）。"""
         if self.total_current_area_ha <= 0:
+            return False
+        if self.closure_tolerance_pct is None:
             return False
         self.closure_deviation_pct = abs(
             (self.total_planned_area_ha - self.total_current_area_ha)
             / self.total_current_area_ha
             * 100
         )
-        return self.closure_deviation_pct <= 0.5
+        return self.closure_deviation_pct <= self.closure_tolerance_pct
 
     def to_delivery_check(self) -> DeliveryGate:
         """Convert to a DeliveryGate check for the exit gate."""

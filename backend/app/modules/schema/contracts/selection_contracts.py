@@ -3,6 +3,7 @@ from __future__ import annotations
 from pydantic import BaseModel, Field
 
 from .contract_meta import ContractMeta
+from .provenance import Provenance
 
 
 class RankedCandidate(BaseModel):
@@ -24,7 +25,7 @@ class SiteSelectionDecision(ContractMeta):
     eliminated: list[EliminatedCandidate] = Field(default_factory=list)
     decision_factors: dict = Field(default_factory=dict)
     review_status: str = "pending_review"  # "auto" | "pending_review" | "human_approved"
-
+    provenance: "Provenance | None" = None
 
 class LandDesignBrief(BaseModel):
     project_ref: str

@@ -6,6 +6,7 @@ from pydantic import BaseModel, Field
 
 from .classification_ref import ClassificationRef
 from .contract_meta import ContractMeta
+from .provenance import Provenance
 
 
 class ParcelChange(BaseModel):
@@ -50,3 +51,4 @@ class ParcelChangeSet(ContractMeta):
     changes: list[ParcelChange] = Field(default_factory=list)
     area_conservation_verified: bool = False
     geometry_validity_verified: bool = False
+    provenance: "Provenance | None" = None

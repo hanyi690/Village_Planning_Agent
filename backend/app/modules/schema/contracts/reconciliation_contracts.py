@@ -3,6 +3,7 @@ from __future__ import annotations
 from pydantic import BaseModel, Field
 
 from .contract_meta import ContractMeta
+from .provenance import Provenance
 
 
 class CoverageMatrix(BaseModel):
@@ -20,3 +21,4 @@ class ReconciliationInconsistency(BaseModel):
 class ReconciliationReport(ContractMeta):
     coverage_matrix: CoverageMatrix = Field(default_factory=CoverageMatrix)
     inconsistencies: list[ReconciliationInconsistency] = Field(default_factory=list)
+    provenance: "Provenance | None" = None

@@ -5,6 +5,7 @@ from typing import Any
 from pydantic import BaseModel, Field
 
 from .contract_meta import ContractMeta
+from .provenance import Provenance
 
 
 class PlannedParcel(BaseModel):
@@ -53,8 +54,6 @@ class PlannedAxis(BaseModel):
 
 
 class PlannedState(ContractMeta):
-    context_version: str = ""
-    artifact_id: str = ""
     version: str = "v1"
     parcels: list[PlannedParcel] = Field(default_factory=list)
     zones: list[PlannedZone] = Field(default_factory=list)
@@ -62,3 +61,4 @@ class PlannedState(ContractMeta):
     roads: list[PlannedRoad] = Field(default_factory=list)
     axes: list[PlannedAxis] = Field(default_factory=list)
     source: str = ""
+    provenance: "Provenance | None" = None

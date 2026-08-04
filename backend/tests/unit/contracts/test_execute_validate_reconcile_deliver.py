@@ -69,9 +69,40 @@ def test_delivery_gate_passed():
     assert dg.passed is True
 
 
+def test_delivery_gate_threshold_is_injected_not_default():
+    """阈值未注入时不得阻断交付（schema 不固化默认规则）。"""
+    dg = DeliveryGate(land_balance_closed=True, three_line_violations=0, protected_intrusions=0, changed_parcels_pct=99.0, changed_parcels_threshold=None, zones_complete=True)
+    assert dg.passed is True
+    assert dg.failures == []
+
+
+def test_land_balance_tolerance_not_hardcoded():
+    """闭合容差未注入时不闭合（schema 不固化 0.5% 默认）。"""
+    row = LandBalanceRow(land_use_name="耕地", land_use_code="0101", planning_zone="农田保护区", current_area_ha=10.0, current_ratio=0.5, planned_area_ha=9.0, planned_ratio=0.45, change_ha=-1.0, change_pct=-10.0)
+    tbl = LandBalanceTable(rows=[row], total_current_area_ha=10.0, total_planned_area_ha=9.0, closure_deviation_pct=1.0)
+    assert tbl.is_closed is False
+    tbl2 = LandBalanceTable(rows=[row], total_current_area_ha=10.0, total_planned_area_ha=9.96, closure_tolerance_pct=0.5)
+    assert tbl2.is_closed is True
+
+
+def test_root_artifacts_carry_provenance():
+    """权威根 artifact 均有 provenance 字段。"""
+    from app.modules.schema.contracts.l1_contracts import L1Snapshot
+    from app.modules.schema.contracts.l2_contracts import L2Strategy
+    from app.modules.schema.contracts.l3_contracts import PlanningProgram
+    from app.modules.schema.contracts.planned_state_contracts import PlannedState
+    for obj in [L1Snapshot(), L2Strategy(), PlanningProgram(), PlannedState()]:
+        assert hasattr(obj, "provenance")
+        assert obj.provenance is None
+
+
 def test_review_package():
-    rp = ReviewPackage(run_id="r1", module="l1_observe", summary_md="# 审查", artifact_json={}, trace_json={})
+    from app.modules.schema.contracts.review_contracts import ArtifactRefLite
+    rp = ReviewPackage(run_id="r1", module="l1_observe", summary_md="# 审查",
+                       artifact_ref=ArtifactRefLite(artifact_id="l1-1", module="l1_observe", run_id="r1"),
+                       trace_json={})
     assert rp.status == ReviewStatus.AWAITING_REVIEW
+    assert rp.artifact_ref.artifact_id == "l1-1"
 
 
 def test_review_decision():

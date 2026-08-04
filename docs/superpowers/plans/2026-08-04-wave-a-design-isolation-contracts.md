@@ -6,7 +6,7 @@
 
 **Architecture:**
 - `schema/advisory_crosswalks/` 物理隔离跨体系映射（code↔name 保留在 code_sets）
-- `schema/contracts/` 中 22 个契约文件，全部继承 `ContractMeta`（schema_version/context_version/artifact_id/created_at）
+- `schema/contracts/` 中 22 个契约文件，权威**根 artifact 继承** `ContractMeta`（schema_version/context_version/artifact_id/created_at）；嵌套值对象为普通 BaseModel，不携带元数据
 - `modules/ports/` 中 6 个 Protocol 接口（不可序列化依赖反转接口与数据契约分离）
 - `services/` 中 FilesystemArtifactStore + review_package 实现
 
@@ -18,7 +18,7 @@
 - 不保留任何内部兼容 shim -- 旧导入路径更新后即删除
 - 跨体系映射移入 advisory_crosswalks 后，L2/L3/PARSE/GROUND/SELECT/EXECUTE 禁止导入，由静态扫描测试强制
 - 同体系 code↔name 映射（DLBM_TO_DLMC, GHYTBM_TO_GHYTMC, VNE_CODE_TO_NAME）保留在 code_sets.py
-- 所有契约继承 ContractMeta，不重复声明 schema_version/context_version/artifact_id/created_at
+- 根 artifact 继承 ContractMeta，不重复声明 schema_version/context_version/artifact_id/created_at
 - ports/ 只保存 Protocol 接口；contracts/ 只保存 Pydantic 数据模型
 - 审查包写入 `.run-tmp/{run_id}/{module}/`
 - 默认测试不依赖网络、外部服务或 gitignored 数据

@@ -5,6 +5,7 @@ from __future__ import annotations
 from pydantic import BaseModel
 
 from .contract_meta import ContractMeta
+from .provenance import Provenance
 
 
 class ExplorationRequest(BaseModel):
@@ -42,7 +43,7 @@ class EvidenceBundle(ContractMeta):
     sources: list[EvidenceSource] = []
     confidence: float = 0.0
     unresolved: list[str] = []
-
+    provenance: "Provenance | None" = None
 
 __all__ = [
     "ExplorationRequest",
