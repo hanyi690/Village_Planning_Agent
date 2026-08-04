@@ -20,6 +20,8 @@ from app.core.llm import create_llm
 from app.core.settings import LLM_MODEL, MAX_TOKENS, LLM_STREAM_TIMEOUT
 from app.core.events import SSEEventType
 from app.utils.logger import get_logger
+from app.agent.explore.service import retrieve_evidence, render_evidence_prompt_section
+from app.modules.schema.contracts.evidence_contracts import ExplorationRequest
 
 logger = get_logger(__name__)
 
@@ -468,29 +470,40 @@ async def analyze_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
     except Exception as e:
         logger.warning(f"[analyze_dimension] {dim_key}: DataPipeline failed: {e}")
 
-    # 5.5: EXPLORE 空间认知 - KG 语义 + 空间统计 + 候选集标注
-    kg_semantic_section = ""
+    # 5.5 + 5.6: EXPLORE evidence service (replaces _optimize_semantics + _build_explore_brief)
+    explore_section = ""
     try:
-        kg_semantic_section = await _optimize_semantics(dim_key, dim_layer, state, cfg)
-        if kg_semantic_section:
-            logger.info(f"[analyze_dimension] {dim_key}: KG semantic injected ({len(kg_semantic_section)} chars)")
+        explore_request = ExplorationRequest(
+            run_id=f"{session_id}:{dim_key}:L{dim_layer}",
+            request_type="spatial_lookup",
+            query=dim_name,
+            stage=f"L{dim_layer}",
+            dimension_key=dim_key,
+            query_purpose="context_injection",
+            entity_scope=["parcels", "facilities", "roads", "annotations"],
+        )
+        explore_result = await retrieve_evidence(
+            explore_request,
+            session_id=session_id,
+            village_name=state.get("config", {}).get("village_name", ""),
+        )
+        explore_section = render_evidence_prompt_section(
+            explore_result.evidence_bundle,
+            explore_result.spatial_cognition,
+        )
+        if explore_section:
+            logger.info(
+                "[analyze_dimension] %s: EXPLORE evidence injected (%d chars, %d facts)",
+                dim_key, len(explore_section), len(explore_result.evidence_bundle.facts),
+            )
     except Exception as e:
-        logger.warning(f"[analyze_dimension] {dim_key}: KG semantic optimization failed: {e}")
-
-    # 5.6: EXPLORE 空间认知 brief（纯自然语言，注入 reference 位置）
-    explore_brief_section = ""
-    try:
-        explore_brief_section = await _build_explore_brief(state)
-        if explore_brief_section:
-            logger.info(f"[analyze_dimension] {dim_key}: EXPLORE brief injected ({len(explore_brief_section)} chars)")
-    except Exception as e:
-        logger.warning(f"[analyze_dimension] {dim_key}: EXPLORE brief failed: {e}")
+        logger.warning("[analyze_dimension] %s: EXPLORE evidence failed: %s", dim_key, e)
 
     # 6. 组装 Prompt
     prompt = _build_prompt(
         cfg, state, rag_context, deps, same_layer_contexts,
-        professional_data_section=professional_data_section + kg_semantic_section,
-        explore_brief_section=explore_brief_section
+        professional_data_section=professional_data_section,
+        explore_section=explore_section,
     )
     logger.info(f"[analyze_dimension] {dim_key}: Prompt length = {len(prompt)} chars")
 
@@ -667,7 +680,7 @@ async def analyze_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
                 },
                 diagnostics={
                     "rag_sources": len(rag_log.sources) if rag_log and rag_log.rag_enabled else 0,
-                    "kg_cognition": bool(kg_semantic_section),
+                    "kg_cognition": bool(explore_section),
                 },
             )
         except Exception as e:
@@ -687,66 +700,6 @@ async def analyze_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
             result["revision_impact_tree"] = impact_tree
 
     return result
-
-
-
-
-def _zone_candidates_hint() -> str:
-    """静态编码推荐提示（非 KG 查询，与维度无空间数据时的候选集标注共用）。"""
-    try:
-        from app.modules.schema.encodings.code_sets import (
-            PLANNING_ZONE_NAMES,
-        )
-    except Exception:
-        return ""
-    return (
-        "**规划分区候选集提示**（编码推荐值非固定映射）:\n"
-        f"  分区体系: {' > '.join(PLANNING_ZONE_NAMES)}\n"
-        "  以上为编码推荐值，实际规划可因上位规划调整、地块位置等因素改变。\n"
-    )
-
-
-async def _optimize_semantics(dim_key: str, dim_layer: int, state, cfg) -> str:
-    """EXPLORE 空间认知注入：KG 语义 + 空间统计 + 候选集标注。
-
-    替代静态 DIM_KG_MAP 硬编码查询。对 L1/L2/L3 均可用（不再阻断 L2/L3）。
-    统一走 session KG（get_any_kg 兜底）。失败时返回空串（非致命）。
-    """
-    session_id = state.get("session_id", "") if isinstance(state, dict) else ""
-    if not session_id:
-        return ""
-
-    try:
-        from app.agent.explore.summaries import build_spatial_cognition
-
-        cognition = await build_spatial_cognition(session_id, dim_key, dim_layer)
-        section = cognition.get("prompt_section") or ""
-    except Exception as e:
-        logger.warning("[explore] spatial cognition failed for %s: %s", dim_key, e)
-        return ""
-
-    if dim_key in ("land_use", "superior_planning"):
-        section += _zone_candidates_hint()
-
-    return section
-
-
-async def _build_explore_brief(state) -> str:
-    """Build the EXPLORE spatial cognition brief section (L1 injection).
-
-    Non-fatal: returns "" when the session is unknown or the advisor fails.
-    """
-    session_id = state.get("session_id", "") if isinstance(state, dict) else ""
-    if not session_id:
-        return ""
-    from app.agent.explore.bridge_advisor import BridgeAdvisor, format_brief_section
-
-    advisor = BridgeAdvisor(session_id=session_id)
-    brief = await advisor.compose_dim_brief(
-        dim_key=state.get("dimension_key", ""),
-        dim_layer=1,
-    )
-    return format_brief_section(brief)
 
 
 def _extract_landuse_metrics(summary_obj: Any, dim_key: str) -> Dict[str, float]:
@@ -880,7 +833,7 @@ def _extract_natural_villages(text: str) -> str:
     return "、".join(found)
 
 
-def _build_prompt(cfg, state, rag_context, deps: str = "", same_layer_contexts: str = "", professional_data_section: str = "", explore_brief_section: str = "") -> str:
+def _build_prompt(cfg, state, rag_context, deps: str = "", same_layer_contexts: str = "", professional_data_section: str = "", explore_section: str = "", explore_brief_section: str = "") -> str:
     """组装 Prompt - 使用 prompts 模块模板
 
     Args:
@@ -934,11 +887,12 @@ def _build_prompt(cfg, state, rag_context, deps: str = "", same_layer_contexts: 
             revision_instruction=revision_instruction,
             has_images=bool(state.get("image_ids")),
         )
-        # D: EXPLORE brief 注入到 输出骨架 之前（不改 L1 模板）
-        if explore_brief_section:
+        # EXPLORE 证据注入到 输出骨架 之前（不改 L1 模板）
+        explore_section = explore_section or explore_brief_section
+        if explore_section:
             prompt = prompt.replace(
                 "**输出骨架**",
-                f"\n\n{explore_brief_section}\n\n**输出骨架**",
+                f"\n\n{explore_section}\n\n**输出骨架**",
                 1,
             )
         return prompt
@@ -951,7 +905,7 @@ def _build_prompt(cfg, state, rag_context, deps: str = "", same_layer_contexts: 
             knowledge_context=rag_context or "",
             revision_instruction=revision_instruction,
             layer2_contexts=same_layer_contexts,  # 传递同层依赖报告
-            professional_data=professional_data_section,  # 注入工具计算结果
+            professional_data=professional_data_section + explore_section,  # 注入工具计算结果 + EXPLORE 证据
         )
     elif layer == 3:
         # P0-1/P0-2: inject L1 _landuse_metrics + L2 intent_targets for GIS_TOOL_GUIDE
@@ -964,7 +918,7 @@ def _build_prompt(cfg, state, rag_context, deps: str = "", same_layer_contexts: 
             constraints=constraints,
             knowledge_context=rag_context or "",
             revision_instruction=revision_instruction,
-            professional_data_section=professional_data_section,
+            professional_data_section=professional_data_section + explore_section,
             _landuse_metrics=state.get("_landuse_metrics", {}),
             intent_targets=state.get("intent_targets", {}),
             natural_villages=_extract_natural_villages(deps),
