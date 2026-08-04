@@ -5,6 +5,11 @@ single authoritative view of a planning session: the VillageBundle, the
 session KG reference, the gazetteer, the constraint index and the report
 summaries that the downstream EXPLORE/PARSE/GROUND/SELECT pipeline reads.
 
+The context MAY additionally hold injected port implementations
+(``artifact_store``, ``ports``) so downstream modules can consume services
+without importing ``app.agent`` / ``app.services``, but it stays free of
+those imports itself.
+
 Versioning: ``version`` is bumped on every factory rebuild. Consumers that
 cache derived geometry / query results must key on this version so a stale
 context can never be mistaken for a fresh one.
@@ -39,6 +44,10 @@ class PlanningContext:
         report_summary_index: ``{dim_key: {summary, metrics, key_points, ...}}``.
         kg_query_fn: Callable ``(template_name, **params) -> list[dict]`` bound
             to the live session KG. Used by ``spatial_ops`` without importing KG.
+        artifact_store: Optional ``ArtifactStorePort`` implementation for
+            persisting pipeline artifacts under a run (may be None).
+        ports: Optional dict of injected port implementations
+            (semantic_query/spatial_query/gazetteer/nomenclature_registry).
     """
 
     session_id: str = ""
@@ -54,6 +63,8 @@ class PlanningContext:
     reports: Dict[str, Dict[str, Any]] = field(default_factory=dict)
     report_summary_index: Dict[str, Dict[str, Any]] = field(default_factory=dict)
     kg_query_fn: Optional[Callable[..., List[Dict[str, Any]]]] = None
+    artifact_store: Any | None = field(default=None)
+    ports: Dict[str, Any] | None = field(default_factory=dict)
 
     @property
     def has_bundle(self) -> bool:
