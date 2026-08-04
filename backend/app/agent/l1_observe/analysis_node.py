@@ -5,12 +5,11 @@
 """
 
 import asyncio
-import hashlib
 import time
 import uuid
 import json
 import re
-from dataclasses import dataclass, asdict
+from dataclasses import asdict
 from datetime import datetime
 from enum import Enum
 from typing import Dict, Any, List, Optional
@@ -22,45 +21,18 @@ from app.core.events import SSEEventType
 from app.utils.logger import get_logger
 from app.agent.explore.service import retrieve_evidence, render_evidence_prompt_section
 from app.modules.schema.contracts.evidence_contracts import ExplorationRequest
+from app.agent.common.dimension_runtime import (
+    generate_summary,
+    load_dependency_reports,
+    publish_dimension_complete,
+    publish_dimension_delta,
+    publish_dimension_start,
+    run_rag,
+    save_report_immediate,
+    save_step_report,
+)
 
 logger = get_logger(__name__)
-
-
-# ============================================
-# RAG Retrieval Logging
-# ============================================
-
-@dataclass
-class RetrievedChunk:
-    """单个检索到的切片"""
-    chunk_id: str
-    content_preview: str  # 切片内容
-    source: str
-    score: float
-    doc_type: str = ""
-    title: str = ""
-    category: str = ""
-    subcategory: str = ""
-
-
-@dataclass
-class RAGRetrievalLog:
-    """RAG检索日志"""
-    dimension_key: str
-    query: str
-    query_generation_method: str  # "llm" or "template"
-    retrieved_chunks: List[RetrievedChunk]
-    total_results: int
-    retrieval_latency_ms: float
-    context_length: int
-    context_truncated: bool
-    rag_enabled: bool
-    skip_reason: str  # 如果RAG被跳过，记录原因
-
-
-class DependencyError(Exception):
-    """依赖缺失异常"""
-    pass
 
 
 # Cached LLM instance — reused across all dimension analyses
@@ -128,7 +100,6 @@ async def analyze_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
     6. 保存版本
     7. 返回状态更新
     """
-    from ...services import RagService
     from ...services.sse import sse_manager
 
     # Debug: log revision_impact_tree at entry
@@ -163,263 +134,20 @@ async def analyze_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
     config = state.get("config", {})
 
     # Send dimension_start early so frontend shows progress during RAG
-    await sse_manager.publish(session_id, {
-        "type": SSEEventType.DIMENSION_START,
-        "dimension_key": dim_key,
-        "dimension_name": dim_name,
-        "layer": dim_layer,
-        "is_revision": is_revision,
-    })
+    await publish_dimension_start(session_id, dim_key, dim_name, dim_layer, is_revision)
     logger.info(
         "[analyze_dimension] START: dim=%s name=%s layer=%d revision=%s",
         dim_key, dim_name, dim_layer, is_revision,
     )
 
 
-    async def _run_rag():
-        # Re-read config from checkpoint (Send freezes state at dispatch time,
-        # so PATCH updates to rag_layer_config would be invisible otherwise)
-        from ...services.runtime import PlanningRuntimeService
-        _latest = await PlanningRuntimeService.aget_state_values(session_id)
-        live_config = _latest.get("config", {}) if _latest else config
-
-        rag_layer_config = live_config.get("rag_layer_config", {})
-        layer_rag_enabled = rag_layer_config.get(dim_layer, True)
-        global_rag_enabled = live_config.get("rag_enabled", True)
-        dim_rag_query = getattr(cfg, 'rag_query', '')
-        rag_enabled = layer_rag_enabled and global_rag_enabled
-
-        if not rag_enabled or not dim_rag_query:
-            return ("", None)
-
-        knowledge_cache = config.get("knowledge_cache", {})
-        if state.get("is_revision") and dim_key in knowledge_cache:
-            cached = knowledge_cache[dim_key]
-            ctx = cached.get("context", "")
-            logger.info(f"[analyze_dimension] {dim_key}: RAG cache hit ({len(ctx)} chars)")
-            rlog = RAGRetrievalLog(
-                dimension_key=dim_key, query=cached.get("query", ""),
-                query_generation_method="cached", retrieved_chunks=[],
-                total_results=cached.get("total_results", 0), retrieval_latency_ms=0,
-                context_length=len(ctx), context_truncated=False,
-                rag_enabled=True, skip_reason="",
-            )
-            await sse_manager.publish(session_id, {
-                "type": SSEEventType.RAG_RESULT, "dimension_key": dim_key, "layer": dim_layer,
-                "query": cached.get("query", ""),
-                "query_generation_method": "cached", "retrieval_latency_ms": 0,
-                "total_results": cached.get("total_results", 0),
-                "documents": cached.get("documents", []),
-            })
-            return (ctx, rlog)
-
-        start_time = time.time()
-        try:
-            queries = await RagService.get_instance().generate_queries(cfg, state)
-            query_method = "llm_multi"
-
-            # Notify frontend that RAG queries have been generated
-            await sse_manager.publish(session_id, {
-                "type": SSEEventType.RAG_QUERY,
-                "dimension_key": dim_key,
-                "layer": dim_layer,
-                "query": queries[0] if queries else "",
-            })
-
-            # Cross-dimension query result cache
-            _query_cache = config.setdefault("_query_result_cache", {})
-            uncached_queries = []
-            cached_results = []
-            for query in queries:
-                qhash = hashlib.md5(query.encode()).hexdigest()[:16]
-                if qhash in _query_cache:
-                    cached_results.extend(_query_cache[qhash])
-                else:
-                    uncached_queries.append((query, qhash))
-
-            search_tasks = [RagService.get_instance().search(q, top_k=5, prefer_doc_types=prefer_doc_types) for q, _ in uncached_queries]
-
-            fresh_results = await asyncio.gather(*search_tasks) if search_tasks else []
-
-            # Merge cached + fresh results
-            result_idx = 0
-            all_results_nested = []
-            for query in queries:
-                qhash = hashlib.md5(query.encode()).hexdigest()[:16]
-                if qhash in _query_cache:
-                    all_results_nested.append([{**r, "matched_query": query} for r in _query_cache[qhash]])
-                else:
-                    fresh = fresh_results[result_idx]
-                    result_idx += 1
-                    all_results_nested.append(fresh)
-                    _query_cache[qhash] = fresh
-            all_results = [
-                {**r, "matched_query": queries[query_idx]}
-                for query_idx, query_results in enumerate(all_results_nested)
-                for r in query_results
-            ]
-            seen_content = set()
-            unique_results = []
-            for r in sorted(all_results, key=lambda x: x.get("score", 999)):
-                content_key = r.get("content", "")[:100]
-                if content_key not in seen_content:
-                    seen_content.add(content_key)
-                    unique_results.append(r)
-            results = unique_results[:5]
-
-            # 过滤无效结果：只有标题标记且无实质内容的切片
-            valid_results = []
-            for r in results:
-                content = r.get("content", "").strip()
-                if len(content) < 50 and content.startswith("#"):
-                    logger.debug(f"[analyze_dimension] 过滤无效标题切片: {content[:50]}")
-                    continue
-                valid_results.append(r)
-            results = valid_results
-
-            latency_ms = (time.time() - start_time) * 1000
-
-            retrieved_chunks = []
-            for r in results:
-                chunk = RetrievedChunk(
-                    chunk_id=str(hash(r.get("content", "")[:100])),
-                    content_preview=r.get("content", ""),
-                    source=r.get("metadata", {}).get("source", "unknown"),
-                    score=r.get("score", 0.0),
-                    doc_type=r.get("metadata", {}).get("doc_type", ""),
-                    title=r.get("metadata", {}).get("title", ""),
-                    category=r.get("metadata", {}).get("category", ""),
-                    subcategory=r.get("metadata", {}).get("subcategory", ""),
-                )
-                retrieved_chunks.append(chunk)
-
-            ctx = RagService.format_for_prompt(results) if results else ""
-            rlog = RAGRetrievalLog(
-                dimension_key=dim_key, query=queries[0] if queries else "",
-                query_generation_method=query_method, retrieved_chunks=retrieved_chunks,
-                total_results=len(results), retrieval_latency_ms=latency_ms,
-                context_length=len(ctx), context_truncated=False,
-                rag_enabled=True, skip_reason="",
-            )
-            await sse_manager.publish(session_id, {
-                "type": SSEEventType.RAG_RESULT, "dimension_key": dim_key, "layer": dim_layer,
-                "query": queries[0] if queries else "",
-                "query_generation_method": query_method,
-                "retrieval_latency_ms": latency_ms,
-                "total_results": len(results),
-                "documents": [{
-                    "title": r.get("metadata", {}).get("title", "") or r.get("metadata", {}).get("source", "未知"),
-                    "snippet": (r.get("content", "") or "")[:300],
-                    "source": r.get("metadata", {}).get("source", "未知"),
-                    "matched_query": r.get("matched_query", ""),
-                    "ancestors": r.get("metadata", {}).get("ancestors", []),
-                    "section_title": r.get("metadata", {}).get("section_title", ""),
-                    "parent_section_title": r.get("metadata", {}).get("parent_section_title", ""),
-                    "score": r.get("score", 0),
-                } for r in results],
-            })
-            logger.info(
-                f"[analyze_dimension] {dim_key}: RAG retrieved {len(ctx)} chars, {len(results)} chunks, {latency_ms:.1f}ms"
-            )
-            return (ctx, rlog)
-        except Exception as e:
-            logger.error(f"[analyze_dimension] {dim_key}: RAG failed: {e}")
-            rlog = RAGRetrievalLog(
-                dimension_key=dim_key, query="", query_generation_method="failed",
-                retrieved_chunks=[], total_results=0, retrieval_latency_ms=0,
-                context_length=0, context_truncated=False, rag_enabled=False, skip_reason=str(e),
-            )
-            return ("", rlog)
-
-    rag_context, rag_log = await _run_rag()
+    rag_context, rag_log = await run_rag(dim_key, cfg, state)
 
     # 4. 从数据库加载依赖报告（按配置过滤）
     store = ReportStore.get_instance()
-    deps = ""
-    same_layer_contexts = ""
-
-    # 同层依赖加载 - 通过 DB 获取（并行节点无法通过状态快照看到彼此的 pending_reports）
-    same_layer_deps = getattr(cfg, 'depends_on', [])
-    if same_layer_deps:
-        contexts = []
-        missing_deps = []
-
-        max_wait_seconds = 30 if is_revision else 120
-        check_interval = 2
-
-        for dep_key in same_layer_deps:
-            report = None
-            waited = 0
-
-            # 轮询等待：从 DB 获取（上游节点完成后会立即写入 DB）
-            while waited < max_wait_seconds:
-                db_report = await store.get_latest(session_id, dep_key)
-                if db_report:
-                    report = db_report
-                    contexts.append(f"【{dep_key}】分析结果：\n{report}")
-                    logger.info(f"[analyze_dimension] {dim_key}: 从DB获取依赖 {dep_key}（等待 {waited}s）")
-                    break
-
-                await asyncio.sleep(check_interval)
-                waited += check_interval
-
-            if not report:
-                missing_deps.append(dep_key)
-
-        if missing_deps:
-            # Fallback: retry each missing dep individually
-            logger.warning(
-                f"[analyze_dimension] {dim_key}: DB 中依赖报告缺失 {missing_deps}，尝试回退获取"
-            )
-            recovered_deps = []
-            still_missing = []
-            for dep_key in missing_deps:
-                dep_report = await store.get_latest_report(session_id, dep_key)
-                if dep_report:
-                    contexts.append(f"【{dep_key}】分析结果：\n{dep_report['content']}")
-                    recovered_deps.append(dep_key)
-                    logger.info(f"[analyze_dimension] {dim_key}: 从回退获取依赖 {dep_key}")
-                else:
-                    still_missing.append(dep_key)
-
-            if still_missing:
-                logger.error(
-                    f"[analyze_dimension] {dim_key}: 依赖报告加载失败（DB + 回退均失败）: {still_missing}"
-                )
-                raise DependencyError(f"维度 {dim_key} 的依赖报告加载失败: {still_missing}")
-            else:
-                logger.info(f"[analyze_dimension] {dim_key}: 通过回退恢复依赖 {recovered_deps}")
-
-        same_layer_contexts = "\n\n".join(contexts)
-        logger.info(f"[analyze_dimension] {dim_key}: 加载同层依赖 {len(same_layer_deps)} 个")
-
-    # 跨层依赖加载（按配置过滤）
-    if dim_layer == 2:
-        # Layer 2 依赖 Layer 1 报告（按 layer_depends_on 配置）
-        layer1_deps = getattr(cfg, 'layer_depends_on', [])
-        layer1_reports = await store.get_layer_reports(session_id, 1)
-        if layer1_deps:
-            deps = "\n".join([f"【{k}】{layer1_reports.get(k, '')}" for k in layer1_deps if layer1_reports.get(k)])
-        else:
-            deps = "\n".join([f"【{k}】{v}" for k, v in layer1_reports.items() if v])
-        logger.info(f"[analyze_dimension] {dim_key}: 加载跨层依赖 {len(layer1_deps) if layer1_deps else len(layer1_reports)} 个")
-
-    elif dim_layer == 3:
-        # Layer 3 依赖 Layer 1 和 Layer 2（按配置过滤）
-        layer1_deps = getattr(cfg, 'layer_depends_on', [])
-        layer2_deps = getattr(cfg, 'phase_depends_on', [])
-        # 顺序调用避免 SQLite aiosqlite 连接管理问题
-        layer1_reports = await store.get_layer_reports(session_id, 1)
-        layer2_reports = await store.get_layer_reports(session_id, 2)
-        deps_parts = []
-        for k in layer1_deps:
-            if layer1_reports.get(k):
-                deps_parts.append(f"【{k}】{layer1_reports[k]}")
-        for k in layer2_deps:
-            if layer2_reports.get(k):
-                deps_parts.append(f"【{k}】{layer2_reports[k]}")
-        deps = "\n".join(deps_parts)
-        logger.info(f"[analyze_dimension] {dim_key}: 加载跨层依赖 L1={len(layer1_deps)} L2={len(layer2_deps)} 个")
+    deps, same_layer_contexts = await load_dependency_reports(
+        dim_key, cfg, dim_layer, session_id, is_revision,
+    )
 
     # 5. DataPipeline: execute tools and format professional data
     professional_data_section = ""
@@ -530,15 +258,10 @@ async def analyze_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
                     llm_response += chunk.content
                     now = time.time()
                     if now - _last_publish_time >= _PUBLISH_INTERVAL:
-                        await sse_manager.publish(session_id, {
-                            "type": SSEEventType.DIMENSION_DELTA,
-                            "dimension_key": dim_key,
-                            "dimension_name": dim_name,
-                            "layer": dim_layer,
-                            "delta": chunk.content,
-                            "accumulated": llm_response,
-                            "is_revision": is_revision,
-                        })
+                        await publish_dimension_delta(
+                            session_id, dim_key, dim_name, dim_layer, is_revision,
+                            chunk.content, llm_response,
+                        )
                         _last_publish_time = now
     except asyncio.TimeoutError:
         logger.error(f"[analyze_dimension] {dim_key}: LLM stream timeout after {LLM_STREAM_TIMEOUT}s")
@@ -563,15 +286,10 @@ async def analyze_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
 
     # Flush remaining delta (throttle may have skipped the last chunk)
     if llm_response and _last_publish_time > 0:
-        await sse_manager.publish(session_id, {
-            "type": SSEEventType.DIMENSION_DELTA,
-            "dimension_key": dim_key,
-            "dimension_name": dim_name,
-            "layer": dim_layer,
-            "delta": "",
-            "accumulated": llm_response,
-            "is_revision": is_revision,
-        })
+        await publish_dimension_delta(
+            session_id, dim_key, dim_name, dim_layer, is_revision,
+            "", llm_response,
+        )
 
     llm_elapsed = time.time() - llm_start_time
     logger.info(f"[analyze_dimension] {dim_key}: LLM completed in {llm_elapsed:.1f}s, output = {len(llm_response)} chars")
@@ -614,17 +332,10 @@ async def analyze_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
     except json.JSONDecodeError:
         structured_summary_obj = None
 
-    await sse_manager.publish(session_id, {
-        "type": SSEEventType.DIMENSION_COMPLETE,
-        "dimension_key": dim_key,
-        "dimension_name": dim_name,
-        "word_count": len(llm_response),
-        "structured_summary": structured_summary_obj,
-        "report_id": report_id,
-        "version": next_version,
-        "layer": dim_layer,
-        "is_revision": is_revision,
-    })
+    await publish_dimension_complete(
+        session_id, dim_key, dim_name, len(llm_response),
+        structured_summary_str, report_id, next_version, dim_layer, is_revision,
+    )
     logger.info(
         "[analyze_dimension] COMPLETE: dim=%s layer=%d words=%d version=%d revision=%s",
         dim_key, dim_layer, len(llm_response), next_version, is_revision,
@@ -652,26 +363,20 @@ async def analyze_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
             logger.warning(f"[analyze_dimension] {dim_key}: L1/L2 injection failed: {e}")
 
     # 立即写入 DB，使并行节点可通过 DB 回退路径获取依赖报告
-    try:
-        await store.bulk_save([pending_report])
-        logger.info(f"[analyze_dimension] {dim_key}: Report saved to DB immediately (v{next_version})")
-    except Exception as e:
-        logger.warning(f"[analyze_dimension] {dim_key}: Immediate DB save failed (will retry in completion): {e}")
+    await save_report_immediate(store, pending_report)
 
     # P2: L1/L2/L3 维度步骤 Report（供 positioning-trace 面板定位）
     if dim_layer in (1, 2, 3):
         try:
             from app.services.report_store import split_instruction
-            from app.services.step_report import save_step_report
 
-            stage = f"L{dim_layer}"
             _, instr = split_instruction(llm_response)
             await save_step_report(
-                state.get("session_id", ""), stage,
+                state.get("session_id", ""), f"L{dim_layer}",
                 step_name=f"analyze_dimension:{dim_key}",
                 dimension_key=dim_key,
                 layer=dim_layer,
-                inputs={"is_revision": state.get("is_revision", False)},
+                is_revision=state.get("is_revision", False),
                 outputs={
                     "report_id": report_id,
                     "word_count": len(llm_response),
@@ -797,19 +502,9 @@ def _extract_intent_targets(summary_obj: Any, dim_key: str) -> Dict[str, float]:
     return result
 
 
-async def _generate_summary(dim_key: str, dim_layer: int, content: str, rag_log) -> str:
-    """Generate structured JSON summary for a dimension report."""
-    from ...modules.parsing.summary_generator import generate_structured_summary
-    try:
-        return await generate_structured_summary(dim_key, dim_layer, content)
-    except Exception as e:
-        logger.warning(f"[analyze_dimension] {dim_key}: Summary generation failed: {e}")
-        from ...modules.parsing.schemas import BaseDimensionSummary
-        fallback = BaseDimensionSummary(
-            dimension_key=dim_key, layer=dim_layer,
-            word_count=len(content), text_summary=content[:200],
-        )
-        return fallback.model_dump_json(ensure_ascii=False)
+async def _generate_summary(dim_key: str, dim_layer: int, content: str, rag_log=None) -> str:
+    """Generate structured JSON summary for a dimension report (delegates to shared runtime)."""
+    return await generate_summary(dim_key, dim_layer, content)
 
 
 _NATURAL_VILLAGE_RE = re.compile(r"[\u4e00-\u9fff]{2}")
