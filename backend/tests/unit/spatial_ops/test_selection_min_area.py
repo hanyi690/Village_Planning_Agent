@@ -55,11 +55,11 @@ def test_min_area_combines_with_constraint():
     assert any(d.startswith("below_min_area:") for d in rejected[0].detail)
 
 
-def test_execute_agent_imports_prohibited():
+def test_execute_agent_no_prohibited_import():
     source = Path(__file__).resolve().parents[3] / "app" / "agent" / "execute" / "execute_agent.py"
     text = source.read_text(encoding="utf-8-sig")
     assert "prohibited = {" not in text
-    assert "_PROHIBITED_CONSTRAINTS as prohibited" in text
+    assert "_PROHIBITED_CONSTRAINTS as prohibited" not in text
 
 
 def test_apply_hard_filters_import_path():

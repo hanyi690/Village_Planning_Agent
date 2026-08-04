@@ -597,68 +597,82 @@ async def _execute_layout_node(state: ExecuteAgentState) -> dict:
 
 
 async def _execute_facility_node(state: ExecuteAgentState) -> dict:
-    """Facility sub-task: public service facility placement via FacilityPlacer.
+    """Facility sub-task: decision-driven facility footprint placement.
 
-    Queries KG for existing facility coordinates, then places new facilities.
-    Appends the facility layer to layout_configs.
+    Builds a Polygon footprint for each FacilityTarget anchor via the Land
+    Design Worker and accumulates ParcelChange entries onto state. No KG POI
+    lookup, no FacilityPlacer, no constraint-index filtering.
     """
-    from app.tools.gis.generate import _generate_facilities
-
     if "facility" not in state.tasks_to_run:
         return {}
 
     try:
-        fac_layer = _generate_facilities(
-            state.intent, state.gis_data or {},
-            kg_session_ref=state.kg_session_ref or "",
+        from shapely import wkt
+        from shapely.geometry import mapping as geometry_mapping
+
+        from app.agent.execute.land_design_worker import (
+            build_parcel_change_set,
+            design_facility_parcel,
         )
-        if not fac_layer:
+
+        facilities = list(getattr(state.intent, "facilities", None) or [])
+        if not facilities:
+            return _execution_error(
+                state,
+                "facility",
+                "facility_output_empty",
+                "No facility targets in intent.",
+            )
+
+        features = []
+        for facility in facilities:
+            change = design_facility_parcel(facility, None, None)
+            if change is None:
+                logger.warning(
+                    "[EXECUTE:facility] skipped %s (no anchor_point)",
+                    getattr(facility, "type", ""),
+                )
+                continue
+            state.parcel_changes.append(change)
+            geometry = {}
+            after_wkt = getattr(change, "after_geometry_wkt", "") or ""
+            if after_wkt:
+                try:
+                    geom = wkt.loads(after_wkt)
+                    if not geom.is_empty:
+                        geometry = geometry_mapping(geom)
+                except Exception:
+                    geometry = {}
+            features.append({
+                "type": "Feature",
+                "properties": {
+                    "facility_id": change.bsm,
+                    "facility_type": getattr(facility, "type", ""),
+                    "status": "planned_new",
+                    "source_bsm": change.bsm,
+                    "change_action": change.action,
+                },
+                "geometry": geometry,
+            })
+
+        if state.parcel_changes:
+            state.parcel_changeset = build_parcel_change_set(list(state.parcel_changes))
+
+        if not features:
             return _execution_error(
                 state,
                 "facility",
                 "facility_output_empty",
                 "Facility targets exist but no facility layer was produced.",
             )
-        from shapely.geometry import shape
-        from app.modules.spatial_ops import build_constraint_index
-
-        constraint_index = build_constraint_index(state.gis_bundle) if state.gis_bundle else None
-        from app.modules.spatial_ops.selection import _PROHIBITED_CONSTRAINTS as prohibited
-        features = (fac_layer.get("data") or {}).get("features") or []
-        safe_features = []
-        for feature in features:
-            props = feature.get("properties") or {}
-            if props.get("status") == "现状":
-                safe_features.append(feature)
-                continue
-            overlaps = (
-                constraint_index.geometry_in_constraint(feature.get("geometry"))
-                if constraint_index and feature.get("geometry") else []
-            )
-            blocked = sorted({
-                item.constraint_type for item in overlaps
-                if item.constraint_type in prohibited
-            })
-            if blocked:
-                logger.warning(
-                    "[EXECUTE:facility] rejected %s by %s",
-                    props.get("facility_id"),
-                    blocked,
-                )
-                continue
-            safe_features.append(feature)
-        fac_layer["data"]["features"] = safe_features
-        if not safe_features:
-            return _execution_error(
-                state,
-                "facility",
-                "facility_constraint_rejected",
-                "All planned facility points intersect authoritative constraints.",
-            )
 
         layers = list(state.layout_configs)
-        layers.append(fac_layer)
-        logger.info("[EXECUTE:facility] appended facility layer")
+        layers.append({
+            "layerType": "facility_point",
+            "layerName": "公共服务设施",
+            "data": {"type": "FeatureCollection", "features": features},
+        })
+        logger.info("[EXECUTE:facility] appended facility layer (%d features)", len(features))
         return {"layout_configs": layers}
     except Exception as e:
         logger.error("[EXECUTE:facility] failed: %s", e, exc_info=True)
