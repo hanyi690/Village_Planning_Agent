@@ -77,3 +77,65 @@ def is_large_block_target(target: SelectionTarget) -> bool:
         return True
     text = f"{target.name} {target.scale_text}"
     return any(kw in text for kw in _LARGE_BLOCK_KEYWORDS)
+
+
+_PROHIBITED_CONSTRAINTS = {
+    "farmland_protection", "ecological_redline", "historical_protection",
+    "cultivated_land_target", "hazard_control_line", "flood_control_line",
+}
+_HAZARD_MIN_DIST = 0.001
+_OCCUPIED_MIN_DIST = 0.00025
+
+
+@dataclass
+class Rejection:
+    bsm: str
+    reason: str
+    detail: List[str] = field(default_factory=list)
+
+
+def apply_hard_filters(
+    candidates: List[CandidateParcel],
+    *,
+    constraint_index: Any = None,
+    hazards: Optional[List[Any]] = None,
+    occupied: Optional[List[Tuple[float, float]]] = None,
+) -> Tuple[List[CandidateParcel], List[Rejection]]:
+    from shapely.geometry import Point, shape
+
+    survivors: List[CandidateParcel] = []
+    rejected: List[Rejection] = []
+    for cand in candidates:
+        try:
+            geom = shape(cand.geometry)
+        except Exception:
+            rejected.append(Rejection(cand.bsm, "invalid_geometry"))
+            continue
+        if geom.is_empty:
+            rejected.append(Rejection(cand.bsm, "empty_geometry"))
+            continue
+        detail: List[str] = []
+        if constraint_index is not None:
+            overlaps = constraint_index.geometry_in_constraint(cand.geometry) or []
+            blocked = sorted({
+                ov.constraint_type for ov in overlaps
+                if ov.constraint_type in _PROHIBITED_CONSTRAINTS
+            })
+            if blocked:
+                detail.append(f"constraint:{','.join(blocked)}")
+        if not detail:
+            point = geom.representative_point()
+            for hazard in hazards or []:
+                if point.distance(hazard) < _HAZARD_MIN_DIST:
+                    detail.append("hazard_proximity")
+                    break
+            if not detail:
+                for other in occupied or []:
+                    if geom.distance(Point(other)) < _OCCUPIED_MIN_DIST:
+                        detail.append("occupied_proximity")
+                        break
+        if detail:
+            rejected.append(Rejection(cand.bsm, "hard_filter", detail))
+        else:
+            survivors.append(cand)
+    return survivors, rejected

@@ -32,3 +32,56 @@ def test_is_large_block_target():
     assert is_large_block_target(SelectionTarget(target_id="p1", name="南药种植基地")) is True
     assert is_large_block_target(SelectionTarget(target_id="p2", scale_text="占地3亩")) is False
     assert is_large_block_target(SelectionTarget(target_id="p3", scale_text="0.15公顷")) is False
+
+
+from shapely.geometry import Point
+from app.modules.spatial_ops.selection import CandidateParcel, apply_hard_filters
+
+
+class _FakeConstraintIndex:
+    def __init__(self, block: bool = False, ctype: str = "farmland_protection"):
+        self._block = block
+        self._ctype = ctype
+
+    def geometry_in_constraint(self, geometry):
+        if self._block:
+            from app.modules.spatial_ops.bridge import ConstraintOverlap
+            return [ConstraintOverlap(bsm="", constraint_type=self._ctype)]
+        return []
+
+
+def _parcel(bsm: str, x: float, y: float) -> CandidateParcel:
+    return CandidateParcel(
+        bsm=bsm,
+        geometry={"type": "Polygon", "coordinates": [[[x, y], [x + 0.001, y], [x + 0.001, y + 0.001], [x, y + 0.001], [x, y]]]},
+        dlmc="空闲宅基地",
+        area_ha=0.1,
+    )
+
+
+def test_hard_filter_constraint_overlap_rejected():
+    survivors, rejected = apply_hard_filters(
+        [_parcel("A", 0, 0)], constraint_index=_FakeConstraintIndex(block=True)
+    )
+    assert survivors == []
+    assert rejected[0].bsm == "A"
+    assert "constraint" in rejected[0].detail[0]
+
+
+def test_hard_filter_clean_survives():
+    survivors, rejected = apply_hard_filters([_parcel("A", 0, 0)])
+    assert [s.bsm for s in survivors] == ["A"]
+    assert rejected == []
+
+
+def test_hard_filter_hazard_rejected():
+    hazard = Point(0.0001, 0.0001)
+    survivors, rejected = apply_hard_filters([_parcel("A", 0, 0)], hazards=[hazard])
+    assert survivors == []
+    assert rejected[0].detail == ["hazard_proximity"]
+
+
+def test_hard_filter_occupied_rejected():
+    survivors, rejected = apply_hard_filters([_parcel("A", 0, 0)], occupied=[(0.00005, 0.00005)])
+    assert survivors == []
+    assert rejected[0].detail == ["occupied_proximity"]
