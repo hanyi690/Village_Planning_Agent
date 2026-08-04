@@ -13,6 +13,7 @@ from .aggregate import (
     select_aggregate,
 )
 from .gate import evaluate_select_gate, select_gate_route
+from .review import build_preview_geojson, build_select_review_package
 
 __all__ = [
     "candidate_site_to_parcels",
@@ -22,4 +23,6 @@ __all__ = [
     "build_land_design_brief",
     "evaluate_select_gate",
     "select_gate_route",
+    "build_select_review_package",
+    "build_preview_geojson",
 ]
