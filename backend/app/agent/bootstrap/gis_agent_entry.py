@@ -20,19 +20,22 @@ def _gis_error_handler(state: Dict[str, Any], error: NodeError) -> Command:
 
 
 async def gis_agent_node(state: Dict[str, Any]) -> Dict[str, Any]:
-    """GIS Agent node — LAYOUT hybrid pipeline.
+    """GIS Agent node — post-L3 subgraph chain.
 
-    Step 1: 收集 L1+L3 report instruction 段 + EXPLORE 产出。
-    Step 2: LAYOUT Pipeline (deterministic skeleton + ReAct subgraph + Evaluator Gate)
-            generates spatial layout with guaranteed step ordering and validation retry.
+    Step 1: 构建 PlanningContext（bundle/KG/gazetteer/anchors/reports）。
+    Step 2: 从 L3 报告编译 PlanningProgram（复用 l3_aggregate 的确定性编译器）。
+    Step 3: 运行 post-L3 链（PARSE -> GROUND -> SELECT -> EXECUTE -> VALIDATE
+            -> RECONCILE -> DELIVER）。
+    Step 4: SSE + 回写 AgentState（conservative：保留遗留 gis_* 字段并新增
+            delivery_manifest）。
     """
-    from app.agent.execute.layout_pipeline import build_layout_pipeline
+    from app.agent.bootstrap.post_l3_chain import build_post_l3_chain
+    from app.agent.bootstrap.post_l3_state import PostL3ChainState
 
     session_id = state.get("session_id", "")
     village_name = state.get("config", {}).get("village_name", "")
 
     # ── 单一路径：SessionPlanningContext 组装 bundle/KG/gazetteer/anchors/reports ──
-    # 消除 gis_agent_node / ensure_session_kg / layout_pipeline._fetch/_build_kg 的重复构建。
     from app.services.context import build_planning_context
 
     context = await build_planning_context(
@@ -40,8 +43,6 @@ async def gis_agent_node(state: Dict[str, Any]) -> Dict[str, Any]:
     )
     village_name = context.village_name or village_name
     gis_bundle = context.bundle
-    gazetteer = context.gazetteer
-    kg_session_ref = context.kg_session_ref
 
     user_uploaded = state.get("user_uploaded_data", {})
     has_uploaded_sources = any(
@@ -49,7 +50,7 @@ async def gis_agent_node(state: Dict[str, Any]) -> Dict[str, Any]:
         for source in gis_bundle.metadata.provider_sources
     )
     if user_uploaded and not has_uploaded_sources:
-        from app.modules.data.catalog.catalog import _merge_geojson_into_bundle
+        from app.modules.data.bundle_assembly_adapter import DataBundleAssemblyAdapter
         from app.modules.schema.types.canonical import VillageBundle
 
         metadata = gis_bundle.metadata.model_copy(
@@ -60,138 +61,54 @@ async def gis_agent_node(state: Dict[str, Any]) -> Dict[str, Any]:
             village_name=village_name,
             metadata=metadata,
         )
-
+        merger = DataBundleAssemblyAdapter()
         for layer_key, geojson in user_uploaded.items():
-            _merge_geojson_into_bundle(gis_bundle, layer_key, geojson)
-    gis_data = gis_bundle.to_geojson_dict()
+            merger.merge_geojson_into_bundle(gis_bundle, layer_key, geojson)
 
-    reports, summaries = await _get_reports_and_summaries(state)
-    if context.reports:
-        reports.update(context.reports)
-    if context.report_summary_index:
-        summaries.update(context.report_summary_index)
-
-    # ── Step 1: 收集 L1+L3 instruction 段（P8 结构化定位表）─ EXPLORE 产出 ──
-    # 消除双重 parse：不再独立调用 create_parse_agent_graph，统一由
-    # layout_pipeline._parse_intent_node 消费 reports + explore_instructions。
-    explore_instructions = state.get("explore_instructions", {}) or {}
-    report_summary_index = state.get("report_summary_index", {}) or {}
+    # ── Step 2: 从 L3 报告编译 PlanningProgram（确定性编译器）──
+    planning_program = None
     try:
-        from app.services.report_store import ReportStore
+        from app.agent.l3_plan.aggregate import l3_aggregate
 
-        store = ReportStore.get_instance()
-        for layer in (1, 3):
-            layer_reports = await store.get_layer_reports_with_sources(session_id, layer)
-            if layer_reports:
-                for dk, rec in layer_reports.items():
-                    content = (rec or {}).get("content") or ""
-                    if content:
-                        reports.setdefault(dk, {})["content"] = content
+        l3_out = await l3_aggregate(
+            {"session_id": session_id, "run_id": session_id, "context_version": ""}
+        )
+        from app.modules.ports.artifact_store import ArtifactRef
+        from app.modules.schema.contracts.l3_contracts import PlanningProgram
+        from app.services.artifact_store import FilesystemArtifactStore
+
+        ref = ArtifactRef(**l3_out["l3_program_ref"])
+        payload = FilesystemArtifactStore().retrieve(ref)
+        planning_program = PlanningProgram(**payload)
     except Exception as e:
-        logger.warning("[gis_agent_node] L1/L3 report read failed: %s", e)
+        logger.warning("[gis_agent_node] L3 program compile failed: %s", e)
+        planning_program = None
 
-    # ── EXPLORE -> deterministic Bundle Binder -> typed PARSE intent ──
-    external_intent = None
-    try:
-        from app.agent.explore.contracts import ExplorationInstructionCollection
-        from app.agent.ground.format_bound_intent import format_bound_spatial_intent
-        from app.agent.select.parse_agent import parse
-        from app.modules.spatial_ops.bundle_binder import bind_exploration_to_bundle
+    # ── Step 3: 运行 post-L3 链 ──
+    chain_state = PostL3ChainState(
+        session_id=session_id,
+        village_name=village_name,
+        run_id=session_id,
+        context=context,
+        context_version=getattr(context, "context_version", "") or "",
+        planning_program=planning_program,
+        messages=list(state.get("messages", []) or []),
+    )
 
-        planning_text = "\n\n".join(
-            str(record.get("content") or "")
-            for record in reports.values()
-            if isinstance(record, dict) and record.get("content")
-        )
-        fallback_intent = parse(
-            planning_text=planning_text,
-            village_name=village_name,
-        ).intent if planning_text else None
+    chain = build_post_l3_chain()
+    chain_result = await chain.ainvoke(chain_state.model_dump())
 
-        vocabulary_name = ""
-        if planning_text:
-            from app.agent.execute.vocab_extractor import (
-                extract_vocabulary_deterministic,
-            )
-            from app.modules.schema.encodings.dicts.vocabularies.loader import (
-                register_vocabulary,
-            )
+    delivery_manifest = chain_result.get("delivery_manifest")
+    layout_configs = list(chain_result.get("layout_configs", []) or [])
+    validation_report = chain_result.get("validation_report")
+    reconciliation_report = chain_result.get("reconciliation_report")
+    export_result = chain_result.get("export_result") or {}
+    render_result = list(chain_result.get("render_result", []) or [])
+    render_artifact = chain_result.get("render_artifact") or {}
+    execution_errors = list(chain_result.get("execution_errors", []) or [])
 
-            vocabulary = extract_vocabulary_deterministic({
-                key: str(value.get("content") or "")
-                for key, value in reports.items()
-                if isinstance(value, dict)
-            })
-            if vocabulary.categories:
-                register_vocabulary(vocabulary.name, vocabulary)
-                vocabulary_name = vocabulary.name
-
-        collection = ExplorationInstructionCollection.model_validate(
-            {
-                key: value
-                for key, value in explore_instructions.items()
-                if key in {
-                    "schema_version",
-                    "session_id",
-                    "village_name",
-                    "instructions",
-                    "kg_session_ref",
-                }
-            }
-        )
-        bound_entities = bind_exploration_to_bundle(
-            collection, gis_bundle, gazetteer=gazetteer
-        )
-        external_intent = format_bound_spatial_intent(
-            village_name=village_name,
-            bound_entities=bound_entities,
-            fallback_intent=fallback_intent,
-            vocabulary_name=vocabulary_name,
-        )
-        external_intent.vocabulary_name = vocabulary_name
-        logger.info(
-            "[gis_agent_node] bound intent: projects=%d zones=%d facilities=%d roads=%d",
-            len(external_intent.project_targets),
-            len(external_intent.zone_targets),
-            len(external_intent.facilities),
-            len(external_intent.road_targets),
-        )
-    except Exception as e:
-        logger.warning("[gis_agent_node] Explore/Bundle binding failed: %s", e)
-
-    # ── Step 2: LAYOUT Pipeline (hybrid: deterministic skeleton + ReAct subgraph) ──
-    pipeline = build_layout_pipeline()
-    layout_result = await pipeline.ainvoke({
-        "session_id": session_id,
-        "village_name": village_name,
-        "gis_data": gis_data,
-        "gis_bundle": gis_bundle,
-        "reports": reports,
-        "intent": external_intent,
-        "intent_json": {},
-        "explore_instructions": explore_instructions,
-        "report_summary_index": report_summary_index,
-        "dimension_summaries": summaries,
-        "kg_turtle": "",
-        "kg_constraints": [],
-        "kg_session_ref": kg_session_ref or "",
-        "layout_configs": [],
-        "allocated_geojson": {},
-        "allocation_summary": {},
-        "validation_result": {},
-        "validation_round": 0,
-        "export_result": {},
-        "render_result": [],
-        "render_artifact": {},
-        "execution_errors": [],
-        "conflict_result": {},
-        "messages": [],
-    })
-
-    # ── Step 3: SSE + return ──
-    layout_configs = layout_result.get("layout_configs", [])
-
-    render_layers = layout_result.get("render_result", [])
+    # ── Step 4: SSE + return ──
+    render_layers = render_result
 
     if render_layers and session_id:
         try:
@@ -211,15 +128,30 @@ async def gis_agent_node(state: Dict[str, Any]) -> Dict[str, Any]:
         except Exception as e:
             logger.warning(f"[gis_agent_node] SSE publish failed: %s", e)
 
+    summary_payload = {
+        "layout_configs": layout_configs,
+        "export_result": export_result,
+        "render_result": render_result,
+        "validation_result": (
+            {"passed": validation_report.overall_passed}
+            if validation_report is not None
+            else {}
+        ),
+        "execution_errors": execution_errors,
+    }
     return {
-        "messages": [AIMessage(content=_format_gis_result(layout_result, layout_configs))],
+        "messages": [AIMessage(content=_format_gis_result(summary_payload, layout_configs))],
+        "delivery_manifest": delivery_manifest,
+        "reconciliation_report_ref": reconciliation_report,
+        "validation_report_ref": validation_report,
+        # ── DEPRECATED Wave M1: use delivery_manifest ──
         "gis_layout_configs": layout_configs,
-        "gis_export_result": layout_result.get("export_result", {}),
-        "gis_render_result": layout_result.get("render_result", []),
-        "gis_render_artifact": layout_result.get("render_artifact", {}),
-        "gis_validation_result": layout_result.get("validation_result", {}),
-        "gis_execution_errors": layout_result.get("execution_errors", []),
-        "gis_conflict_result": layout_result.get("conflict_result", {}),
+        "gis_export_result": export_result,
+        "gis_render_result": render_result,
+        "gis_render_artifact": render_artifact,
+        "gis_validation_result": summary_payload["validation_result"],
+        "gis_execution_errors": execution_errors,
+        "gis_conflict_result": {},
     }
 
 

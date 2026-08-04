@@ -32,7 +32,12 @@ VALID_STAGES = {
     "CONFLICT",
     "EXPLORE",
     "PARSE",
+    "GROUND",
+    "SELECT",
     "EXECUTE",
+    "VALIDATE",
+    "RECONCILE",
+    "DELIVER",
     "OUTPUT",
     "RENDER",
 }
