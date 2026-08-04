@@ -235,3 +235,49 @@ def rank_candidates(
         if c.bsm not in ordered:
             ordered.append(c.bsm)
     return ordered
+
+
+@dataclass
+class PlacementDecision:
+    target_id: str
+    selected_bsm: str = ""
+    anchor_point: Optional[Tuple[float, float]] = None
+    reason: str = ""
+    status: str = "unplaced"  # placed / unplaced / deferred
+    rejected: List[Rejection] = field(default_factory=list)
+
+
+def select_parcel(
+    target: SelectionTarget,
+    *,
+    candidates: List[CandidateParcel],
+    constraint_index: Any = None,
+    hazards: Optional[List[Any]] = None,
+    occupied: Optional[List[Tuple[float, float]]] = None,
+    cluster_centroid: Optional[Tuple[float, float]] = None,
+    ranker: Optional[Ranker] = None,
+) -> PlacementDecision:
+    target_ha = parse_scale_ha(target.scale_text)
+    survivors, rejected = apply_hard_filters(
+        candidates, constraint_index=constraint_index, hazards=hazards, occupied=occupied
+    )
+    survivors = apply_scale_filter(survivors, allow_large_block=is_large_block_target(target))
+    order = rank_candidates(
+        survivors, cluster_centroid=cluster_centroid, target_ha=target_ha, ranker=ranker,
+    )
+    by_bsm = {c.bsm: c for c in survivors}
+    for bsm in order:
+        cand = by_bsm[bsm]
+        point = place_anchor_point(cand.geometry, cluster_centroid)
+        if point is None:
+            rejected.append(Rejection(bsm, "no_anchor_point"))
+            continue
+        return PlacementDecision(
+            target_id=target.target_id,
+            selected_bsm=bsm,
+            anchor_point=point,
+            reason=f"rank_top:{bsm}",
+            status="placed",
+            rejected=rejected,
+        )
+    return PlacementDecision(target_id=target.target_id, status="unplaced", rejected=rejected)

@@ -222,3 +222,77 @@ def test_rank_llm_whitelisted_to_pool():
     )
     assert ordered[0] == "b"
     assert "not-in-pool" not in ordered
+
+
+from app.modules.spatial_ops.selection import (
+    CandidateParcel, PlacementDecision, SelectionTarget, select_parcel,
+)
+
+
+def _pt_parcel(bsm: str, dlmc: str, area_ha: float, x: float, y: float, size: float = 0.001) -> CandidateParcel:
+    return CandidateParcel(
+        bsm=bsm,
+        geometry={"type": "Polygon", "coordinates": [[[x, y], [x + size, y], [x + size, y + size], [x, y + size], [x, y]]]},
+        dlmc=dlmc, area_ha=area_ha,
+    )
+
+
+def test_select_places_top_candidate():
+    target = SelectionTarget(target_id="p1", name="文化广场", scale_text="0.15公顷")
+    d = select_parcel(
+        target,
+        candidates=[_pt_parcel("a", "空闲宅基地", 0.1, 0, 0), _pt_parcel("b", "空闲宅基地", 0.1, 5, 5)],
+        cluster_centroid=(0.0, 0.0),
+    )
+    assert d.status == "placed"
+    assert d.selected_bsm == "a"
+    assert d.anchor_point is not None
+
+
+def test_select_unplaced_when_all_blocked():
+    target = SelectionTarget(target_id="p1", scale_text="0.15公顷")
+    d = select_parcel(
+        target,
+        candidates=[_pt_parcel("a", "空闲宅基地", 0.1, 0, 0)],
+        constraint_index=_FakeConstraintIndex(block=True),
+    )
+    assert d.status == "unplaced"
+    assert d.rejected
+
+
+def test_select_point_target_avoids_big_forest():
+    target = SelectionTarget(target_id="p1", scale_text="0.15公顷")
+    d = select_parcel(
+        target,
+        candidates=[
+            _pt_parcel("forest", "商品林", 100.0, 0, 0, size=0.1),
+            _pt_parcel("bldg", "村庄建设用地", 0.1, 10, 10),
+        ],
+        cluster_centroid=(0.0, 0.0),
+    )
+    assert d.selected_bsm == "bldg"
+
+
+def test_select_large_block_target_allows_big_parcel():
+    target = SelectionTarget(target_id="p1", name="南药种植基地", scale_text="100公顷")
+    d = select_parcel(
+        target,
+        candidates=[_pt_parcel("forest", "商品林", 100.0, 0, 0, size=0.1)],
+        cluster_centroid=(10.0, 10.0),
+    )
+    assert d.status == "placed"
+    assert d.selected_bsm == "forest"
+
+
+def test_select_honors_llm_ranker_top1():
+    target = SelectionTarget(target_id="p1", scale_text="0.15公顷")
+
+    def fake_ranker(candidates, ctx):
+        return ["b", "a"]
+
+    d = select_parcel(
+        target,
+        candidates=[_pt_parcel("a", "空闲宅基地", 0.1, 0, 0), _pt_parcel("b", "空闲宅基地", 0.1, 5, 5)],
+        cluster_centroid=(0.0, 0.0), ranker=fake_ranker,
+    )
+    assert d.selected_bsm == "b"
