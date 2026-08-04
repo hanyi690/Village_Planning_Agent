@@ -2,6 +2,7 @@
 
 from app.agent.validate.aggregate import validate_aggregate
 from app.agent.validate.gate import evaluate_validate_gate, validate_gate_route
+from app.agent.validate.review import build_validate_review_package
 from app.agent.validate.checks import (
     check_accessibility,
     check_area_conservation,
@@ -17,6 +18,7 @@ __all__ = [
     "validate_aggregate",
     "evaluate_validate_gate",
     "validate_gate_route",
+    "build_validate_review_package",
     "check_hard_constraints",
     "check_area_conservation",
     "check_topology",
