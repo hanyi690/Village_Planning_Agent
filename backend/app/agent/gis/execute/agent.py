@@ -186,6 +186,7 @@ async def _execute_project_node(state: ExecuteAgentState) -> dict:
     ]
     occupied = []
     features = []
+    unresolved: List[Dict[str, Any]] = []
     prohibited = {
         "farmland_protection",
         "ecological_redline",
@@ -228,6 +229,17 @@ async def _execute_project_node(state: ExecuteAgentState) -> dict:
                 len(project.candidate_bsms),
                 rejected,
             )
+            unresolved.append({
+                "target_id": project.project_id,
+                "kind": "project",
+                "name": getattr(project, "name", ""),
+                "stage": "execute",
+                "reason": "no_candidate" if not rejected else "all_candidates_rejected",
+                "detail": f"no constraint-safe parcel for {getattr(project, 'name', '')}".strip(),
+                "attempted_bsms": list(project.candidate_bsms),
+                "rejected_bsms": rejected,
+                "source_text": getattr(project, "scale_text", "") or "",
+            })
             continue
         bsm, point = selected
         occupied.append(point)
@@ -252,19 +264,24 @@ async def _execute_project_node(state: ExecuteAgentState) -> dict:
         })
 
     if not features:
-        return _execution_error(
+        result = _execution_error(
             state,
             "project",
             "project_output_empty",
             "Project targets exist but none could be placed on a constraint-safe candidate parcel.",
         )
+        result["unresolved_targets"] = list(state.unresolved_targets or []) + unresolved
+        return result
     layers = list(state.layout_configs)
     layers.append({
         "layerType": "planned_project",
         "layerName": "规划项目",
         "data": {"type": "FeatureCollection", "features": features},
     })
-    return {"layout_configs": layers}
+    result = {"layout_configs": layers}
+    if unresolved:
+        result["unresolved_targets"] = list(state.unresolved_targets or []) + unresolved
+    return result
 
 
 async def _execute_layout_node(state: ExecuteAgentState) -> dict:
