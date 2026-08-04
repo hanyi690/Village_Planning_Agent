@@ -16,7 +16,7 @@ Worker-Evaluator loop:
   validate --pass--> END | --retry--> layout (max 3 rounds)
 
 P1 wiring: nodes call the underlying generation helpers directly
-(generate._generate_*, LayoutValidator.validate)
+(generate._generate_*, validate_aggregate)
 rather than the @tool wrappers, bypassing InjectedState. This couples execute/
 to tools/gis private helpers; P2 should promote them to a public generation API.
 """
@@ -957,13 +957,11 @@ def _build_l3_l4_consistency_report(state: ExecuteAgentState) -> dict:
 
 
 async def _validate_node(state: ExecuteAgentState) -> dict:
-    """Evaluator gate: validate layout via LayoutValidator, surface adjustments.
+    """Evaluator gate: validate layout via VALIDATE subgraph, surface adjustments.
 
     Produces constraint_adjustments for the retry loop (fed back to
     _execute_layout_node which applies them to allocation targets).
     """
-    from app.tools.gis._validation.layout_validator import LayoutValidator
-
     custom_layer_present = any(
         (config.get("layerType") or config.get("layer_type")) == "custom_planning_zone"
         and ((config.get("data") or config.get("geojson") or {}).get("features") or config.get("features"))
@@ -1020,28 +1018,25 @@ async def _validate_node(state: ExecuteAgentState) -> dict:
         }
 
     try:
-        from app.modules.spatial_ops.custom_planning import validate_custom_planning_zone_layer
+        from app.agent.execute.planned_state_builder import changeset_to_planned_state
+        from app.agent.validate.aggregate import validate_aggregate
+        from app.modules.spatial_ops import build_constraint_index
 
-        validator = LayoutValidator()
-        validator_configs = state.layout_configs
-        if custom_layer_present:
-            validator_configs = [
-                config for config in state.layout_configs
-                if (config.get("layerType") or config.get("layer_type"))
-                not in {"function_zone", "land_use_zone"}
-            ]
-        # 道路诊断层（候选/实体/节点）是 EXECUTE 中间产物，不作为正式规划道路校验，
-        # 只保留正式 planned_road / planned_road_candidates 参与校验。
-        validator_configs = [
-            config for config in validator_configs
-            if (config.get("layerType") or config.get("layer_type"))
-            not in {"road_spatial_candidates", "road_planning_entities", "road_planning_nodes"}
-        ]
-        report = validator.validate(
-            validator_configs,
-            protected_parcels_detail=state.kg_protected_parcels_detail or None,
-            kg_vne_summary=state.kg_vne_summary or None,
+        planned_state = (
+            changeset_to_planned_state(state.parcel_changeset, state.intent)
+            if state.parcel_changeset is not None else None
         )
+        constraint_index = build_constraint_index(state.gis_bundle) if state.gis_bundle else None
+        report = validate_aggregate(
+            planned_state,
+            state.parcel_changeset,
+            state.layout_configs,
+            state.intent,
+            constraint_index,
+            run_id=state.session_id,
+        )
+
+        from app.modules.spatial_ops.custom_planning import validate_custom_planning_zone_layer
 
         custom_geojson = next(
             (
@@ -1061,10 +1056,6 @@ async def _validate_node(state: ExecuteAgentState) -> dict:
                 "check": "custom_planning_zone_overlap",
                 "message": "Custom planning zones overlap after global allocation.",
             })
-        validator_violations = [
-            {"check": c.check_name, "message": c.violations[0].message}
-            for c in report.checks if c.violations
-        ]
         consistency = _build_l3_l4_consistency_report(state)
         try:
             from app.agent.explore.verification import save_explore_verification
@@ -1075,32 +1066,36 @@ async def _validate_node(state: ExecuteAgentState) -> dict:
             consistency["l3_l4_verification"] = verification
         except Exception as e:
             logger.debug("[EXECUTE:validate] explore verification failed: %s", e)
-        passed = report.status != "fail" and (
+        passed = report.overall_passed and (
             custom_validation is None or custom_validation["passed"]
         ) and consistency["passed"]
-        adjustments = getattr(report, "adjustments", None) or []
-        adj_dicts = [
-            {"zone": a.zone, "action": a.action, "delta_ha": a.delta_ha,
-             "reason": a.reason, "priority": a.priority}
-            for a in adjustments
+        violations = [
+            {"check": issue.code, "message": issue.message}
+            for stage_issues in report.issues_by_stage.values()
+            for issue in stage_issues
         ]
+        # validate_aggregate emits no adjustments yet; ConstraintAdjustment
+        # (constraint_id/adjustment_type) does not map to the legacy {zone,
+        # delta_ha, reason} retry-loop shape, so surface an empty list.
+        adj_dicts = []
 
         round_num = state.validation_round + 1
         logger.info(
-            "[EXECUTE:validate] round %d: %s (%d adjustments)",
-            round_num, "PASS" if passed else "FAIL", len(adj_dicts),
+            "[EXECUTE:validate] round %d: %s (%d issues)",
+            round_num, "PASS" if passed else "FAIL", len(violations),
         )
 
         return {
             "validation_round": round_num,
             "validation_result": {
                 "passed": passed,
-                "status": report.status if passed else "fail",
-                "violations": validator_violations + custom_violations,
+                "status": "pass" if passed else "fail",
+                "violations": violations + custom_violations,
                 "custom_planning": custom_validation,
                 "l3_l4_consistency": consistency,
             },
             "constraint_adjustments": adj_dicts,
+            "validation_report": report,
         }
     except Exception as e:
         logger.error("[EXECUTE:validate] failed: %s", e, exc_info=True)

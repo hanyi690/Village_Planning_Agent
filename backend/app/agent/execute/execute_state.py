@@ -63,6 +63,7 @@ class ExecuteAgentState(BaseModel):
 
     # ── Validation (Worker-Evaluator loop) ──
     validation_result: Dict[str, Any] = Field(default_factory=dict)
+    validation_report: Optional[Any] = None  # ValidationReport — typed VALIDATE output
     validation_round: int = 0
     constraint_adjustments: List[Dict[str, Any]] = Field(default_factory=list)
 
