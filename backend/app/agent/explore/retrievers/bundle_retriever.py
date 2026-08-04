@@ -42,20 +42,29 @@ async def retrieve_from_bundle(
     for scope in entity_scope:
         target_groups.update(_SCOPE_TO_GROUPS.get(scope, []))
 
-    for group_name, stat in (stats or {}).items():
-        if target_groups and group_name not in target_groups:
-            continue
-        count = stat.get("count", 0)
-        distribution = stat.get("distribution", "")
-        if count or distribution:
-            facts.append(EvidenceFact(
-                statement=f"{group_name}: {distribution}（{count}个要素）",
-                confidence=0.95,
-                source_refs=[f"bundle:{group_name}"],
-            ))
-            sources.append(EvidenceSource(
-                source_type="gis_layer",
-                reference=f"bundle:{group_name}",
-                confidence=0.95,
-            ))
+    # group_stats returns {geom_type: {group: {count, labels}}} nested by
+    # geometry type (points/lines/polygons); flatten over each geometry type.
+    for geom_type, groups in (stats or {}).items():
+        for group_name, stat in (groups or {}).items():
+            if target_groups and group_name not in target_groups:
+                continue
+            count = stat.get("count", 0)
+            labels = stat.get("labels", {}) or {}
+            label_summary = "、".join(
+                f"{label}×{n}" for label, n in list(labels.items())[:5]
+            )
+            if count or label_summary:
+                statement = f"{group_name}: {count}个要素"
+                if label_summary:
+                    statement += f"（{label_summary}）"
+                facts.append(EvidenceFact(
+                    statement=statement,
+                    confidence=0.95,
+                    source_refs=[f"bundle:{geom_type}:{group_name}"],
+                ))
+                sources.append(EvidenceSource(
+                    source_type="gis_layer",
+                    reference=f"bundle:{geom_type}:{group_name}",
+                    confidence=0.95,
+                ))
     return facts, sources

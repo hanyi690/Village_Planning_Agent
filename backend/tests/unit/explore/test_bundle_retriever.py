@@ -12,8 +12,11 @@ async def test_returns_facts_from_group_stats():
     fake_bundle = MagicMock()
     fake_bundle.village_name = "田坑村"
     fake_stats = {
-        "current_landuse": {"count": 50, "distribution": "耕地为主"},
-        "facility": {"count": 8, "distribution": "集中在村中心"},
+        "points": {"facility": {"count": 8, "labels": {"村委会": 1}}},
+        "lines": {},
+        "polygons": {
+            "current_landuse": {"count": 50, "labels": {"耕地": 30, "林地": 20}},
+        },
     }
     with patch(
         "app.agent.explore.retrievers.bundle_retriever.resolve_bundle",
