@@ -73,7 +73,7 @@ def is_large_block_target(target: SelectionTarget) -> bool:
     if target.category == "zone":
         return True
     scale_ha = parse_scale_ha(target.scale_text)
-    if scale_ha is not None and scale_ha >= 0.2:
+    if scale_ha is not None and scale_ha >= 2.0:
         return True
     text = f"{target.name} {target.scale_text}"
     return any(kw in text for kw in _LARGE_BLOCK_KEYWORDS)

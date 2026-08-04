@@ -30,5 +30,5 @@ from app.modules.spatial_ops.selection import SelectionTarget, is_large_block_ta
 def test_is_large_block_target():
     assert is_large_block_target(SelectionTarget(target_id="z1", category="zone")) is True
     assert is_large_block_target(SelectionTarget(target_id="p1", name="南药种植基地")) is True
-    assert is_large_block_target(SelectionTarget(target_id="p2", scale_text="占地3亩")) is True
+    assert is_large_block_target(SelectionTarget(target_id="p2", scale_text="占地3亩")) is False
     assert is_large_block_target(SelectionTarget(target_id="p3", scale_text="0.15公顷")) is False
