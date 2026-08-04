@@ -24,38 +24,30 @@ CONTROL_CODE_TO_CONSTRAINT: Dict[str, str] = {
 
 
 def derive_semantic_label(dlbm: str) -> str:
+    """Derive a Chinese semantic label from DLBM (same-system code→name only).
+
+    Wave A.1: cross-system zone_type fallback removed — BaseFacts only keep
+    same-system facts (DLBM code → DLMC name). Returns "" if unknown.
+    """
     if not dlbm:
         return ""
     try:
-        from app.modules.schema.advisory_crosswalks import resolve_zone_type_for_dlbm
         from app.modules.schema.encodings.code_sets import DLBM_TO_DLMC
-        name = DLBM_TO_DLMC.get(str(dlbm).strip(), "")
-        if name:
-            return name
-        return resolve_zone_type_for_dlbm(dlbm)
+        return DLBM_TO_DLMC.get(str(dlbm).strip(), "")
     except Exception:
         return ""
 
 
 def derive_taxonomic_parent(dlbm: str) -> str:
-    if not dlbm:
-        return ""
-    try:
-        from app.modules.schema.advisory_crosswalks import resolve_zone_type_for_dlbm
-        return resolve_zone_type_for_dlbm(dlbm)
-    except Exception:
-        return ""
+    """Wave A.1: removed. Cross-system DLBM→zone_type derivation is no longer
+    performed in BaseFacts (现状地类只提供分类代码与名称). Returns ""."""
+    return ""
 
 
 def derive_legal_constraint(planning_zone: str) -> str:
-    if not planning_zone:
-        return ""
-    try:
-        from app.modules.schema.advisory_crosswalks import PLANNING_ZONE_TO_CONTROL_CODE
-        code = PLANNING_ZONE_TO_CONTROL_CODE.get(str(planning_zone).strip(), "")
-        return CONTROL_CODE_TO_CONSTRAINT.get(code, "")
-    except Exception:
-        return ""
+    """Wave A.1: removed. Cross-system planning_zone→control_code derivation is
+    no longer performed in BaseFacts. Returns ""."""
+    return ""
 
 
 def get_allowed_operations(ghytbm: str = "", planning_zone: str = "", control_code: str = "") -> List[str]:

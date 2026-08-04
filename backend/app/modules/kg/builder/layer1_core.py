@@ -147,8 +147,6 @@ def add_parcels(kg, features, *, gtype_ref: str, entry, ctx: BuildContext) -> di
         if dlbm_system:
             kg.g.add((pu, PLN.dlbm_system, Literal(dlbm_system)))
 
-        zt = derive_taxonomic_parent(dlbm)
-
         pz = p.planning_zone or ""
         if pz:
             kg.g.add((pu, PLN.planning_zone, Literal(pz)))
@@ -163,20 +161,8 @@ def add_parcels(kg, features, *, gtype_ref: str, entry, ctx: BuildContext) -> di
         if label:
             kg.g.add((pu, has_semantic_label, Literal(label)))
 
-        if zt:
-            kg.g.add((pu, taxonomic_parent, Literal(zt)))
-        if pz:
-            constraint = derive_legal_constraint(pz)
-            if constraint:
-                kg.g.add((pu, legal_constraint, Literal(constraint)))
-        try:
-            from app.modules.schema.advisory_crosswalks import get_ghytbm_for_dlbm
-            ghytbm = get_ghytbm_for_dlbm(dlbm)
-        except Exception:
-            ghytbm = ""
-        ops = get_allowed_operations(ghytbm=ghytbm, planning_zone=pz)
-        for op in ops:
-            kg.g.add((pu, allowed_operations, Literal(op)))
+        # Wave A.1: taxonomic_parent / legal_constraint / allowed_operations are
+        # cross-system derivations no longer performed in BaseFacts.
 
         try:
             geo = p.geometry

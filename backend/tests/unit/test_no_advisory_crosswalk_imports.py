@@ -66,8 +66,6 @@ def _active_chain_roots() -> list[str]:
 # Current baseline (Wave A.1): 26 files / 26 imports reachable from the
 # active chain. Each subsequent wave removes entries until {}.
 VIOLATION_BUDGET: dict[str, int] = {
-    "app/modules/kg/builder/enrichment.py": 1,
-    "app/modules/kg/builder/layer1_core.py": 1,
     "app/modules/kg/queries/semantic.py": 1,
     "app/modules/schema/contracts/parse_contracts.py": 1,
     "app/modules/schema/encodings/classification.py": 1,

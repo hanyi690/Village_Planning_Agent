@@ -45,53 +45,28 @@ logger = get_logger(__name__)
 
 
 def _derive_semantic_label(dlbm: str) -> str:
-    """Derive a Chinese semantic label from DLBM (e.g. 0101 -> '水田').
+    """Derive a Chinese semantic label from DLBM (same-system code→name only).
 
-    Falls back to zone_type (e.g. '农业用地') if no specific name found.
+    Wave A.1: cross-system zone_type fallback removed.
     """
     if not dlbm:
         return ""
     try:
-        from app.modules.schema.advisory_crosswalks import resolve_zone_type_for_dlbm
         from app.modules.schema.encodings.code_sets import DLBM_TO_DLMC
-        name = DLBM_TO_DLMC.get(str(dlbm).strip(), "")
-        if name:
-            return name
-        return resolve_zone_type_for_dlbm(dlbm)
+        return DLBM_TO_DLMC.get(str(dlbm).strip(), "")
     except Exception:
         return ""
 
 
 def _derive_taxonomic_parent(dlbm: str) -> str:
-    """Derive the taxonomic parent (zone_type) from DLBM.
-
-    Hierarchy: DLBM -> zone_type (农业用地/生态绿地/居住用地/...) -> primary_zone
-    Returns the zone_type (one level up). For full chain, consumer queries
-    zone_type -> primary_zone via planning_zone_rules.
-    """
-    if not dlbm:
-        return ""
-    try:
-        from app.modules.schema.advisory_crosswalks import resolve_zone_type_for_dlbm
-        return resolve_zone_type_for_dlbm(dlbm)
-    except Exception:
-        return ""
+    """Wave A.1: removed — cross-system DLBM→zone_type no longer in BaseFacts."""
+    return ""
 
 
 def _derive_legal_constraint(planning_zone: str) -> str:
-    """Derive legal constraint from planning_zone via control code mapping.
-
-    Returns one of: 'allow_construction', 'conditional_construction',
-    'restrict_construction', 'forbid_construction', or '' if unknown.
-    """
-    if not planning_zone:
-        return ""
-    try:
-        from app.modules.schema.advisory_crosswalks import PLANNING_ZONE_TO_CONTROL_CODE
-        code = PLANNING_ZONE_TO_CONTROL_CODE.get(str(planning_zone).strip(), "")
-        return _CONTROL_CODE_TO_CONSTRAINT.get(code, "")
-    except Exception:
-        return ""
+    """Wave A.1: removed — cross-system planning_zone→control_code no longer
+    in BaseFacts."""
+    return ""
 
 
 _CONTROL_CODE_TO_CONSTRAINT: Dict[str, str] = {
@@ -229,7 +204,6 @@ def _entity_uri_by_bsm(self, entity_type, bsm: str):
 
 
 def _add_parcels(self, parcels) -> None:
-    from app.modules.schema.advisory_crosswalks import resolve_zone_type_for_dlbm
     bsm_seq: dict = {}  # Track sequence per BSM for duplicate disambiguation
     for p in parcels:
         bsm = str(p.bsm).strip()
@@ -261,11 +235,8 @@ def _add_parcels(self, parcels) -> None:
         if dlbm_system:
             self.g.add((pu, PLN.dlbm_system, Literal(dlbm_system)))
 
-        # zone_type — derived from DLBM via lookup (factual categorization)
-        zt = resolve_zone_type_for_dlbm(dlbm)
-        self.g.add((pu, PLN.zone_type, Literal(zt)))
-
-        # planning_zone / primary_zone — from Data layer ingest
+        # planning_zone / primary_zone — user-provided facts from Data layer
+        # (NOT derived from DLBM; Wave A.1 removed cross-system derivation)
         pz = p.planning_zone or ""
         if pz:
             self.g.add((pu, PLN.planning_zone, Literal(pz)))
@@ -281,24 +252,10 @@ def _add_parcels(self, parcels) -> None:
         if label:
             self.g.add((pu, has_semantic_label, Literal(label)))
 
-        # ── v4.8: semantic-layer triples (taxonomic_parent + legal_constraint + allowed_operations) ──
-        # taxonomic_parent: DLBM -> zone_type (one level up in hierarchy)
-        if zt:
-            self.g.add((pu, taxonomic_parent, Literal(zt)))
-        # legal_constraint: planning_zone -> control_code -> constraint
-        if pz:
-            constraint = _derive_legal_constraint(pz)
-            if constraint:
-                self.g.add((pu, legal_constraint, Literal(constraint)))
-        # allowed_operations: from ghytbm (most specific) or planning_zone
-        try:
-            from app.modules.schema.advisory_crosswalks import get_ghytbm_for_dlbm
-            ghytbm = get_ghytbm_for_dlbm(dlbm)
-        except Exception:
-            ghytbm = ""
-        ops = _get_allowed_operations(ghytbm=ghytbm, planning_zone=pz)
-        for op in ops:
-            self.g.add((pu, allowed_operations, Literal(op)))
+        # Wave A.1: taxonomic_parent / legal_constraint / allowed_operations are
+        # cross-system derivations (DLBM→zone_type, planning_zone→control_code,
+        # DLBM→GHYTBM). BaseFacts no longer derives them from current DLBM —
+        # they are produced by the later planning pipeline (PARSE/GROUND/etc).
 
         # Centroid
         try:

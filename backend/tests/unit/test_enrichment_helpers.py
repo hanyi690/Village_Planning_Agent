@@ -1,4 +1,8 @@
-"""Tests for derivation helpers moved to enrichment.py."""
+"""Tests for derivation helpers in enrichment.py (Wave A.1).
+
+BaseFacts only keep same-system facts (DLBM code → DLMC name). Cross-system
+derivations (DLBM→zone_type, planning_zone→control_code) are removed.
+"""
 from app.modules.kg.builder.enrichment import (
     derive_semantic_label, derive_taxonomic_parent,
     derive_legal_constraint, get_allowed_operations,
@@ -9,23 +13,28 @@ from app.modules.kg.builder.enrichment import (
 
 
 class TestDeriveSemanticLabel:
-    def test_known_dlbm(self):
+    def test_known_dlbm_returns_dlmc_name(self):
         result = derive_semantic_label("0101")
-        assert isinstance(result, str)
-        assert len(result) > 0
+        assert result == "水田"
 
     def test_empty_dlbm(self):
         assert derive_semantic_label("") == ""
 
-    def test_unknown_dlbm_falls_back(self):
-        result = derive_semantic_label("9999")
-        assert isinstance(result, str)
+    def test_unknown_dlbm_returns_empty(self):
+        # no cross-system zone_type fallback anymore
+        assert derive_semantic_label("9999") == ""
 
 
-class TestDeriveLegalConstraint:
-    def test_known_zone(self):
-        result = derive_legal_constraint("农田保护区")
-        assert result == "forbid_construction"
+class TestDeriveTaxonomicParentRemoved:
+    def test_returns_empty(self):
+        """Cross-system DLBM→zone_type derivation removed from BaseFacts."""
+        assert derive_taxonomic_parent("0101") == ""
+
+
+class TestDeriveLegalConstraintRemoved:
+    def test_returns_empty(self):
+        """Cross-system planning_zone→control_code derivation removed."""
+        assert derive_legal_constraint("农田保护区") == ""
 
     def test_empty_zone(self):
         assert derive_legal_constraint("") == ""
