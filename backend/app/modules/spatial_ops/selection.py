@@ -44,3 +44,36 @@ def parse_scale_ha(scale_text: str) -> Optional[float]:
     if unit == "亩":
         return value / 15.0
     return value / 10000.0
+
+
+_LARGE_BLOCK_KEYWORDS = ("基地", "产业园", "种植园", "养殖场", "示范区", "加工坊", "整理")
+_NON_CONSTRUCTION_DLMC = {"商品林", "生态林", "水域", "耕地"}
+
+
+@dataclass
+class SelectionTarget:
+    target_id: str
+    name: str = ""
+    category: str = "project"  # project / facility / zone
+    scale_text: str = ""
+
+
+@dataclass
+class CandidateParcel:
+    bsm: str
+    geometry: Dict[str, Any]
+    dlmc: str = ""
+    dlbm: str = ""
+    area_ha: float = 0.0
+    cluster: str = ""
+    distance_m: Optional[float] = None
+
+
+def is_large_block_target(target: SelectionTarget) -> bool:
+    if target.category == "zone":
+        return True
+    scale_ha = parse_scale_ha(target.scale_text)
+    if scale_ha is not None and scale_ha >= 0.2:
+        return True
+    text = f"{target.name} {target.scale_text}"
+    return any(kw in text for kw in _LARGE_BLOCK_KEYWORDS)

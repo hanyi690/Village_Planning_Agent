@@ -22,3 +22,13 @@ def test_parse_scale_ha():
     assert parse_scale_ha("占地十亩") == pytest.approx(10 / 15.0)
     assert parse_scale_ha("") is None
     assert parse_scale_ha("无规模信息") is None
+
+
+from app.modules.spatial_ops.selection import SelectionTarget, is_large_block_target
+
+
+def test_is_large_block_target():
+    assert is_large_block_target(SelectionTarget(target_id="z1", category="zone")) is True
+    assert is_large_block_target(SelectionTarget(target_id="p1", name="南药种植基地")) is True
+    assert is_large_block_target(SelectionTarget(target_id="p2", scale_text="占地3亩")) is True
+    assert is_large_block_target(SelectionTarget(target_id="p3", scale_text="0.15公顷")) is False
