@@ -40,7 +40,7 @@ from app.api.schemas import TaskStatus
 from app.services.sse import sse_manager
 from app.services.checkpoint import checkpoint_service, checkpoint_persistence_manager
 from app.core.settings import MAX_SESSION_EVENTS, GRAPH_MAX_CONCURRENCY
-from app.agent.graph import create_unified_planning_graph
+from app.agent.bootstrap.graph import create_unified_planning_graph
 from app.agent.plan_state.state import state_to_ui_status
 from app.agent.bootstrap.phase_machine import (
     get_layer_dimensions,

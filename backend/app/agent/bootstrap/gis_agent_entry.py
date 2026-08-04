@@ -1,39 +1,13 @@
-"""村庄规划主图（5节点 + GIS Agent 子图）
-
-节点：
-1. conversation: 中央路由（大脑）
-2. execute_tools: 工具执行
-3. analyze_dimension: 维度分析
-4. layer_completion_check: 层级完成检测 + interrupt 审批
-5. gis_agent: GIS 空间布局 ReAct Agent
-
-图构建以纯函数形式提供 — `create_unified_planning_graph` 每次返回新图，
-缓存由 `PlanningRuntimeService._graph` 单例负责。
-"""
+"""GIS agent entry. Migrated from agent/graph.py per docs/architecture/agent-graph.md §5."""
 
 from typing import Dict, Any, List, Literal, Optional
-from langgraph.graph import StateGraph, END, START
+from langgraph.graph import END
 from langgraph.errors import NodeError
 from langgraph.types import Command
 from langchain_core.messages import AIMessage
 
-from app.agent.plan_state.state import AgentState, create_initial_state
-from app.agent.bootstrap.phase_machine import PlanningPhase, get_layer_dimensions
-from app.agent.conversation_router import after_conversation, after_analysis, conversation_node
-from .tools import execute_tools_node
-from app.agent.l1_observe import analyze_dimension, DIMENSION_NAMES
-from app.agent.plan_state import layer_completion_check
-
-from ..utils.logger import get_logger
+from app.utils.logger import get_logger
 logger = get_logger(__name__)
-
-
-# TimeoutPolicy + error_handler for node-level fault tolerance (LangGraph v1.2)
-try:
-    from langgraph.types import RetryPolicy
-    _HAS_RETRY_POLICY = True
-except ImportError:
-    _HAS_RETRY_POLICY = False
 
 
 def _gis_error_handler(state: Dict[str, Any], error: NodeError) -> Command:
@@ -43,18 +17,6 @@ def _gis_error_handler(state: Dict[str, Any], error: NodeError) -> Command:
         update={"messages": [AIMessage(content=f"GIS 分析出错: {error.error}")]},
         goto=END,
     )
-
-
-async def analyze_dimension_node(state: Dict[str, Any]) -> Dict[str, Any]:
-    """维度分析节点"""
-    return await analyze_dimension(state)
-
-
-async def explore_node(state: Dict[str, Any]) -> Dict[str, Any]:
-    """EXPLORE 桥接节点 — L3 完成后读 L1/L2/L3 + KG 认知，产出空间定位指令."""
-    from .explore.node import explore_node as _explore_node
-
-    return await _explore_node(state)
 
 
 async def gis_agent_node(state: Dict[str, Any]) -> Dict[str, Any]:
@@ -261,43 +223,6 @@ async def gis_agent_node(state: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-def create_unified_planning_graph(checkpointer=None) -> StateGraph:
-    """创建统一规划图（6 节点）— 纯函数，每次返回新图。
-
-    缓存责任由调用方承担（`PlanningRuntimeService._graph` 单例）。
-    """
-    logger.info("[图构建] 构建 6 节点图")
-    builder = StateGraph(AgentState)
-
-    builder.add_node("conversation", conversation_node)
-    builder.add_node("execute_tools", execute_tools_node)
-    builder.add_node("analyze_dimension", analyze_dimension_node)
-    builder.add_node("layer_completion_check", layer_completion_check)
-    builder.add_node("explore", explore_node)
-    builder.add_node("gis_agent", gis_agent_node, error_handler=_gis_error_handler)
-
-    builder.add_edge(START, "conversation")
-    builder.add_conditional_edges("conversation", after_conversation,
-        {"execute_tools": "execute_tools", "analyze_dimension": "analyze_dimension",
-         "gis_agent": "gis_agent", END: END})
-    builder.add_edge("execute_tools", "conversation")
-    builder.add_edge("gis_agent", END)
-    builder.add_edge("analyze_dimension", "layer_completion_check")
-    builder.add_edge("explore", "gis_agent")
-    builder.add_conditional_edges("layer_completion_check", after_analysis,
-        {"analyze_dimension": "analyze_dimension", "explore": "explore",
-         "conversation": "conversation", END: END})
-
-    return builder.compile(checkpointer=checkpointer)
-
-
-__all__ = [
-    "AgentState", "PlanningPhase",
-    "create_unified_planning_graph",
-    "gis_agent_node",
-]
-
-
 async def _get_reports_and_summaries(
     state: Dict[str, Any],
 ) -> tuple[Dict[str, Dict[str, Any]], Dict[str, Dict[str, Any]]]:
@@ -365,3 +290,6 @@ def _format_gis_result(result: Dict[str, Any], layout_configs: List[Dict[str, An
         for c in layout_configs
     ]
     return f"GIS 布局生成完成：{len(layout_configs)} 个图层 ({', '.join(layer_types)})"
+
+
+__all__ = ["gis_agent_node"]
