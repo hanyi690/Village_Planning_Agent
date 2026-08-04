@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from app.modules.schema.contracts.l1_contracts import L1DimensionFragment
 from app.modules.schema.contracts.l2_contracts import L2StrategyFragment
+from app.modules.schema.contracts.l3_contracts import L3ProgramFragment
 from app.modules.schema.contracts.parsing_contracts import CompilationProfile
 
 from .diagnostics import collect_diagnostics
@@ -23,7 +24,7 @@ def compile_dimension_report(
     summary: str = "",
     report_id: str = "",
     run_id: str = "",
-) -> L1DimensionFragment | L2StrategyFragment | None:
+) -> L1DimensionFragment | L2StrategyFragment | L3ProgramFragment | None:
     """Compile one dimension report into a typed fragment via the profile.
 
     Returns None if the profile produces no output (unsupported profile in
@@ -52,7 +53,16 @@ def compile_dimension_report(
             run_id=run_id,
         )
     if profile == CompilationProfile.L3_PLANNING:
-        raise NotImplementedError("L3_PLANNING profile lands in Wave F (PARSE).")
+        from .profiles.l3_planning import compile_l3_planning
+
+        return compile_l3_planning(
+            dimension_key=dimension_key,
+            content=content,
+            instruction=instruction,
+            summary=summary,
+            report_id=report_id,
+            run_id=run_id,
+        )
     if profile == CompilationProfile.REVISION:
         raise NotImplementedError("REVISION profile lands in Wave F (PARSE).")
     raise ValueError(f"unknown profile: {profile!r}")
