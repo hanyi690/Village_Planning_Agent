@@ -54,7 +54,7 @@ class TestCodeOnlyOutput:
 
 
 class TestExpectedFieldsPresent:
-    """Code fields that should still be present."""
+    """Same-system code fields that should still be present."""
 
     def test_ghytbm_present(self):
         r = lookup_land_use_code.invoke({"land_use_name": "宅基地"})
@@ -64,15 +64,25 @@ class TestExpectedFieldsPresent:
         r = lookup_land_use_code.invoke({"land_use_name": "宅基地"})
         assert "dlbm_aliases" in r["data"]
 
-    def test_zone_type_present(self):
-        r = lookup_land_use_code.invoke({"land_use_name": "宅基地"})
-        assert "zone_type" in r["data"]
-
-    def test_vne_code_present(self):
-        r = lookup_land_use_code.invoke({"land_use_name": "宅基地"})
-        assert "vne_code" in r["data"]
-
     def test_candidates_present(self):
         r = lookup_land_use_code.invoke({"land_use_name": "宅基地"})
         assert "candidates_ghytbm" in r["data"]
         assert "candidates_dlbm" in r["data"]
+
+
+class TestNoCrossSystemDerivedFields:
+    """v4.0 (Wave A.1): cross-system derived fields must NOT be exposed."""
+
+    def test_no_zone_type(self):
+        r = lookup_land_use_code.invoke({"land_use_name": "宅基地"})
+        assert "zone_type" not in r["data"]
+
+    def test_no_vne_code(self):
+        r = lookup_land_use_code.invoke({"land_use_name": "宅基地"})
+        assert "vne_code" not in r["data"]
+
+    def test_no_cross_system_in_candidates(self):
+        r = lookup_land_use_code.invoke({"land_use_name": "宅基地"})
+        for cand in r["data"].get("candidates_ghytbm", []):
+            assert "zone_type" not in cand
+            assert "vne_code" not in cand

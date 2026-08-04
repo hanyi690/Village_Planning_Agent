@@ -90,7 +90,6 @@ VIOLATION_BUDGET: dict[str, int] = {
     "app/tools/gis/_rendering/compare_layouts.py": 1,
     "app/tools/gis/_validation/layout_validator.py": 1,
     "app/tools/gis/generate.py": 1,
-    "app/tools/gis/lookup.py": 1,
     "app/utils/code_lookup.py": 1,
 }
 
@@ -148,10 +147,6 @@ def test_no_direct_crosswalk_in_forbidden_agent_stages(_imports):
 
 
 # ── map_code must not be exposed to the LLM ───────────────────────────
-# These are expected-fail until Wave A.1 Task 5 removes map_code from
-# production exposure (offline/advisory only). Remove the xfail markers when
-# that task lands.
-@pytest.mark.xfail(reason="Wave A.1 Task 5: remove map_code from production exposure", strict=False)
 def test_map_code_not_in_llm_tool_bundle():
     """The LLM tool bundle must not include the cross-system map_code tool."""
     from app.tools.gis import get_gis_pipeline_tools
@@ -161,7 +156,6 @@ def test_map_code_not_in_llm_tool_bundle():
     assert "map_code" not in names, "map_code must not be registered/exposed to the LLM"
 
 
-@pytest.mark.xfail(reason="Wave A.1 Task 5: remove map_code from production exposure", strict=False)
 def test_map_code_not_exported_from_lookup_module():
     """map_code must not be exported from the lookup module (same-system only)."""
     lookup_path = APP_ROOT / "tools" / "gis" / "lookup.py"
@@ -172,7 +166,6 @@ def test_map_code_not_exported_from_lookup_module():
     assert m and "map_code" not in m.group(1), "map_code must not be in lookup module __all__"
 
 
-@pytest.mark.xfail(reason="Wave A.1 Task 5: remove map_code from production exposure", strict=False)
 def test_active_chain_no_map_code_definition_exposure():
     """No active-chain module may define an exported cross-system map_code tool."""
     lookup_path = APP_ROOT / "tools" / "gis" / "lookup.py"

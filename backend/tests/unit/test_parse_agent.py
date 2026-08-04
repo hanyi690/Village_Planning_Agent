@@ -225,15 +225,16 @@ class TestParseTools:
     """Test PARSE Agent tools."""
 
     def test_lookup_land_use_code_residential(self):
-        """lookup_land_use_code should find '宅基地' codes."""
+        """lookup_land_use_code should find '宅基地' codes (same-system only)."""
         from app.tools.gis.lookup import lookup_land_use_code
 
         result = lookup_land_use_code.invoke({"land_use_name": "宅基地"})
         assert result["success"] is True
         data = result["data"]
         assert data["ghytbm"] == "2121"
-        assert data["vne_code"] == "V11"
-        assert data["zone_type"] == "居住用地"
+        # v4.0 (Wave A.1): cross-system derived fields removed
+        assert "vne_code" not in data
+        assert "zone_type" not in data
 
     def test_lookup_land_use_code_construction(self):
         """lookup_land_use_code should find '经营性建设用地' codes."""
@@ -243,7 +244,7 @@ class TestParseTools:
         assert result["success"] is True
         data = result["data"]
         assert data["ghytbm"] != ""
-        assert data["zone_type"] != ""
+        assert "zone_type" not in data
 
     def test_lookup_land_use_code_not_found(self):
         """lookup_land_use_code should return failure for unknown names."""

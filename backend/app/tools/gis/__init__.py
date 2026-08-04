@@ -6,7 +6,12 @@ from typing import Any, List
 
 
 def get_gis_pipeline_tools() -> List[Any]:
-    """Load the LangChain tool set only when the agent requests it."""
+    """Load the LangChain tool set only when the agent requests it.
+
+    Note: ``parse_planning_text`` was removed when PARSE became an
+    independent top-level stage (Wave A.1); planning-text parsing no longer
+    runs through the GIS tool bundle.
+    """
     from .allocate import allocate_zones
     from .conflict import detect_conflicts
     from .export import export_gdb
@@ -14,12 +19,10 @@ def get_gis_pipeline_tools() -> List[Any]:
     from .generate import generate_layout
     from .kg import build_knowledge_graph, query_knowledge_graph
     from .lookup import lookup_land_use_code
-    from .parse import parse_planning_text
     from .render import render_map
     from .validate import validate_layout
 
     return [
-        parse_planning_text,
         extract_structured_text,
         lookup_land_use_code,
         build_knowledge_graph,
