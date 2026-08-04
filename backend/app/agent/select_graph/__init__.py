@@ -12,6 +12,7 @@ from .aggregate import (
     build_site_selection_decision,
     select_aggregate,
 )
+from .gate import evaluate_select_gate, select_gate_route
 
 __all__ = [
     "candidate_site_to_parcels",
@@ -19,4 +20,6 @@ __all__ = [
     "select_aggregate",
     "build_site_selection_decision",
     "build_land_design_brief",
+    "evaluate_select_gate",
+    "select_gate_route",
 ]
