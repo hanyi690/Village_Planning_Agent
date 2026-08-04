@@ -22,7 +22,7 @@ from app.agent.bootstrap.phase_machine import PlanningPhase, get_layer_dimension
 from app.agent.conversation_router import after_conversation, after_analysis, conversation_node
 from .tools import execute_tools_node
 from app.agent.l1_observe import analyze_dimension, DIMENSION_NAMES
-from .completion import layer_completion_check
+from app.agent.plan_state import layer_completion_check
 
 from ..utils.logger import get_logger
 logger = get_logger(__name__)

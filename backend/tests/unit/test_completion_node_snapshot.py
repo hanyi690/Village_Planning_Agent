@@ -61,7 +61,7 @@ def _layer_state(layer, dims, **overrides):
 @pytest.mark.asyncio
 async def test_auto_layer_complete_snapshots_layer(monkeypatch, _mock_snapshot, _mock_sse):
     from app.agent.bootstrap.phase_machine import get_layer_dimensions
-    from app.agent.completion.node import layer_completion_check
+    from app.agent.plan_state.completion_node import layer_completion_check
 
     state = _layer_state(1, get_layer_dimensions(1))
     result = await layer_completion_check(state)
@@ -73,7 +73,7 @@ async def test_auto_layer_complete_snapshots_layer(monkeypatch, _mock_snapshot, 
 @pytest.mark.asyncio
 async def test_auto_layer3_complete_snapshots_final(monkeypatch, _mock_snapshot, _mock_sse):
     from app.agent.bootstrap.phase_machine import get_layer_dimensions
-    from app.agent.completion.node import layer_completion_check
+    from app.agent.plan_state.completion_node import layer_completion_check
 
     state = _layer_state(3, get_layer_dimensions(3))
     result = await layer_completion_check(state)
@@ -84,7 +84,7 @@ async def test_auto_layer3_complete_snapshots_final(monkeypatch, _mock_snapshot,
 
 @pytest.mark.asyncio
 async def test_not_complete_no_snapshot(monkeypatch, _mock_snapshot, _mock_sse):
-    from app.agent.completion.node import layer_completion_check
+    from app.agent.plan_state.completion_node import layer_completion_check
 
     dims = ["location", "socio_economic", "villager_wishes"]
     state = _layer_state(1, dims)
@@ -97,12 +97,12 @@ async def test_not_complete_no_snapshot(monkeypatch, _mock_snapshot, _mock_sse):
 @pytest.mark.asyncio
 async def test_step_approve_snapshots_layer(monkeypatch, _mock_snapshot, _mock_sse):
     from app.agent.bootstrap.phase_machine import get_layer_dimensions
-    from app.agent.completion.node import layer_completion_check
+    from app.agent.plan_state.completion_node import layer_completion_check
 
     # Emulate resume data: interrupt() returns the passed payload in langgraph;
     # here we patch interrupt to return {"action": "approve"}.
     monkeypatch.setattr(
-        "app.agent.completion.node.interrupt",
+        "app.agent.plan_state.completion_node.interrupt",
         lambda payload: {"action": "approve"},
     )
 
@@ -116,10 +116,10 @@ async def test_step_approve_snapshots_layer(monkeypatch, _mock_snapshot, _mock_s
 @pytest.mark.asyncio
 async def test_step_reject_snapshots_layer(monkeypatch, _mock_snapshot, _mock_sse):
     from app.agent.bootstrap.phase_machine import get_layer_dimensions
-    from app.agent.completion.node import layer_completion_check
+    from app.agent.plan_state.completion_node import layer_completion_check
 
     monkeypatch.setattr(
-        "app.agent.completion.node.interrupt",
+        "app.agent.plan_state.completion_node.interrupt",
         lambda payload: {"action": "reject", "dimensions": ["location"], "feedback": ""},
     )
 
@@ -132,7 +132,7 @@ async def test_step_reject_snapshots_layer(monkeypatch, _mock_snapshot, _mock_ss
 
 @pytest.mark.asyncio
 async def test_revision_complete_snapshots_revision(monkeypatch, _mock_snapshot, _mock_sse):
-    from app.agent.completion.node import layer_completion_check
+    from app.agent.plan_state.completion_node import layer_completion_check
 
     state = _layer_state(
         1, ["location"],
@@ -152,7 +152,7 @@ async def test_revision_complete_snapshots_revision(monkeypatch, _mock_snapshot,
 @pytest.mark.asyncio
 async def test_no_session_id_no_snapshot(monkeypatch, _mock_snapshot, _mock_sse):
     from app.agent.bootstrap.phase_machine import get_layer_dimensions
-    from app.agent.completion.node import layer_completion_check
+    from app.agent.plan_state.completion_node import layer_completion_check
 
     state = _layer_state(1, get_layer_dimensions(1))
     state["session_id"] = ""

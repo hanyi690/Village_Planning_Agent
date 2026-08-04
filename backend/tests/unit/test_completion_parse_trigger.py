@@ -8,7 +8,7 @@ from app.agent.bootstrap.phase_machine import get_layer_dimensions
 
 
 def test_layer1_complete_triggers_extraction(monkeypatch):
-    import app.agent.completion.node as node_mod
+    import app.agent.plan_state.completion_node as node_mod
 
     calls = []
 
@@ -44,7 +44,7 @@ def test_layer1_complete_triggers_extraction(monkeypatch):
 
 def test_maybe_extract_bindings_is_non_fatal(monkeypatch):
     """无 session KG 时 helper 必须吞掉一切异常，不冒泡。"""
-    import app.agent.completion.node as node_mod
+    import app.agent.plan_state.completion_node as node_mod
     from app.modules.kg import get_kg_manager
 
     get_kg_manager().remove_session("sess-nokg")
