@@ -79,4 +79,4 @@ build_spatial_cognition(session_id, dim_key, dim_layer) → {prompt_section, ...
 - `../gis/parse/README.md` — PARSE（下游消费者）
 - `app/modules/kg/README.md` — KG（require_session_kg / query_session_template）
 - `app/tools/access/` — 共享访问工具层
-- `docs/road_planning/` — 道路规划 Stage 管线的探索/确认交互
+- `app/services/modules/gis/road/README.md` — 道路规划 Stage 管线（探索/确认交互）

@@ -95,4 +95,4 @@ Stage5(evaluator) ──> Stage6(comparison, held-out 专用)
 
 - `app/services/README.md` — services 层总览
 - `app/agent/gis/execute/README.md` — EXECUTE Agent（road 子任务节点）
-- `docs/gis/` — 道路规划流水线设计文档（Stage 定义与评测协议）
+- `docs/_archive/gis-archive/` — 历史 GIS 设计文档（Stage 定义与评测协议来源，已归档）

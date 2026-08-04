@@ -167,20 +167,17 @@ Restart. No further wiring — the registry handles discovery and dispatch.
 
 ## Worked example: adding a DEM raster layer
 
-This example traces the full path for the `dem` layer type, which already exists in the codebase. It references the clip script at `backend/scripts/clip_dem_to_aoi.py` and the `dem_local` source in `sources.yaml`.
+This example traces the full path for the `dem` layer type, which already exists in the codebase. It references the `dem_local` source in `sources.yaml`.
 
 ### Step 1 — Prepare the raster file
 
-Province-wide DEM rasters (e.g. NASA ASTGTM v3, 30m) are too large to load directly. Clip to the village AOI first:
+Province-wide DEM rasters (e.g. NASA ASTGTM v3, 30m) are too large to load directly. Clip to the village AOI first. The former helper `backend/scripts/clip_dem_to_aoi.py` was removed during dead-code cleanup; clip with `rasterio.mask` directly:
 
 ```bash
-python backend/scripts/clip_dem_to_aoi.py \
-    --input data/gis/广东DEM30M.zip \
-    --aoi data/gis/jintian/current/boundary.geojson \
-    --output data/gis/jintian/terrain/dem.tif
+python -c "import rasterio, json; from rasterio.mask import mask; from shapely.geometry import shape; b=json.load(open('data/gis/jintian/current/boundary.geojson')); geom=[shape(f['geometry']) for f in b['features']]; src=rasterio.open('data/gis/广东DEM30M.zip'); out, tr = mask(src, geom, crop=True); meta=src.meta.copy(); meta.update(height=out.shape[1], width=out.shape[2], transform=tr); rasterio.open('data/gis/jintian/terrain/dem.tif','w',**meta).write(out)"
 ```
 
-The script reads the AOI bbox from the boundary GeoJSON, selects the ASTGTM tiles overlapping the bbox, and either clips with `rasterio.mask` (if available) or copies a single tile verbatim. Output is an EPSG:4326 GeoTIFF.
+Output is an EPSG:4326 GeoTIFF.
 
 ### Step 2 — YAML registry entry
 

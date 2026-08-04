@@ -16,7 +16,7 @@
 | `table.py` | `TableAdapter` - CSV/Excel -> `TableDataset` subclasses |
 | `document.py` | `DocumentAdapter` - Markdown/JSON/TXT -> `Document` subclasses |
 
-## Built-in adapters (6)
+## Built-in adapters (5)
 
 | Name | Input | Output | Use case |
 | --- | --- | --- | --- |
@@ -25,7 +25,8 @@
 | `raster` | GeoTIFF path string | `List[RasterDataset subclass]` | DEM, DOM, slope, aspect rasters |
 | `table` | CSV/Excel path or dict | `List[TableDataset subclass]` | Population, industry, control rules |
 | `document` | Markdown/JSON path | `List[Document subclass]` | Planning text, L3 reports |
-| `wfs` | WFS GeoJSON response | `List[SpatialFeature subclass]` | WFS API sources (registered dynamically) |
+
+> WFS 源不注册 adapter——它由 `data/sources/api_vector.py`（协议 `wfs`）与 `data/providers/tianditu/wfs.py` 处理，直接产出 vector 数据。
 
 ## Protocol
 
@@ -67,7 +68,7 @@ DataCatalog.fetch()
    ```
 3. Reference `adapter: my_adapter` in `gis_layer_registry.yaml`
 
-See [`docs/gis/HOW_TO_ADD_LAYER.md`](../../../../../docs/gis/HOW_TO_ADD_LAYER.md) Pattern 3 for a full example.
+See [`docs/guides/how-to-add-layer.md`](../../../../../docs/guides/how-to-add-layer.md) Pattern 3 for a full example.
 
 ## Dependencies
 

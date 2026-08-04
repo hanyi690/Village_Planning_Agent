@@ -1,7 +1,8 @@
 # 模块实现映射 (Module Implementation Mapping)
 
 > 五大设计层 → 实际代码路径映射。每个模块给出位置、职责、关键文件、依赖、实现状态。
-> 所有事实均从代码验证。当前分支：`feature/flash-llm-explore-agent` (HEAD `f29cbe94`)。
+> 所有事实均从代码验证。当前分支：`feature/flash-llm-explore-agent`。
+> **Updated: 2026-08-03**（同步死代码清理）
 
 ---
 
@@ -217,7 +218,9 @@ def _add_parcels(kg, features, *, gtype_ref, entry, ctx): ...
 | **依赖** | → `schema.contracts`；不依赖 Data/KG 层；不做空间计算 |
 | **实现状态** | ✅ 实现完成 |
 
-关键文件：`markdown_parser.py`、`section_classifier.py`、`regulation_extractor.py`、`gazetteer.py`、`semantics.py`、`table_schema_inference.py`、`admin_code_loader.py`、`schemas.py`
+关键文件：`gazetteer.py`、`semantics.py`、`tables.py`、`table_schema_inference.py`、`admin_code_loader.py`、`summary_generator.py`、`summary_parser.py`、`schemas.py`
+
+> 2026-08-03：`markdown_parser.py` / `section_classifier.py` / `regulation_extractor.py` 已随死代码清理移除（无消费者，被 `tables.py` + PARSE 取代）。
 
 ### Planning Text（规划文本生成）
 
@@ -229,15 +232,17 @@ def _add_parcels(kg, features, *, gtype_ref, entry, ctx): ...
 
 关键文件：`generator.py`、`content_extractor.py`、`section_builder.py`、`llm_styler.py`、`rag_appender.py`、`json_exporter.py`、`layer_exporter.py`、`docx_styles.py`、`config.py`
 
-### Prompts/L1（L1 维度提示词）
+### Prompts（Prompt 模板库）
 
 | 项 | 内容 |
 |---|---|
-| **位置** | `backend/app/modules/prompts/l1/` |
-| **职责** | 12 个 L1 分析维度的提示词模板 |
-| **实现状态** | ⚠️ 新增未跟踪目录（`git status` 显示 `??`，尚未纳入版本控制） |
+| **位置** | `backend/app/modules/prompts/` |
+| **职责** | L1/L2/L3 分层 Prompt + PARSE 保留模板 |
+| **实现状态** | ✅ 活跃：`analysis.py` / `concept.py` / `detailed.py` 被分析 Agent 引用；`parse_prompts.py` 中仅 `EXTRACT_TABLES_PROMPT` 被引用 |
 
-12 维度（`_config.py` 定义）：`location`/`socio_economic`/`villager_wishes`/`superior_planning`/`natural_environment`/`land_use`/`traffic`/`public_services`/`infrastructure`/`ecological_green`/`architecture`/`historical_culture`
+> 2026-08-03：`prompts/l1/`（L1 聚合重构版）已移除——从未被分析 Agent 引用，`node.py` 一直使用 `prompts.analysis`。
+
+12 维度（`analysis.py` 定义）：`location`/`socio_economic`/`villager_wishes`/`superior_planning`/`natural_environment`/`land_use`/`traffic`/`public_services`/`infrastructure`/`ecological_green`/`architecture`/`historical_culture`
 
 ---
 
@@ -261,19 +266,19 @@ GIS Agent 位于 `backend/app/agent/gis/`，包含三个子模块，对应规划
 |---|---|
 | **位置** | `backend/app/agent/gis/execute/` |
 | **职责** | 空间意图 → 空间成果。消费 PARSE 产出的 intent + KG 上下文，产出分配用地/设施/轴线/道路等空间布局层。 |
-| **关键文件** | `agent.py`（`build_execute_agent_graph()`，7 节点 StateGraph）、`state.py`（`ExecuteAgentState`）、`layout/`、`facility/`、`axis/`、`road/`、`README.md` |
+| **关键文件** | `agent.py`（`build_execute_agent_graph()`，7 节点 StateGraph）、`state.py`（`ExecuteAgentState`）、`road/generator.py`、`README.md` |
 | **依赖** | → `schema`、`kg`（KGManager）、`spatial_ops`（road_planner/ConstraintCompiler）；与 PARSE 通过 LangGraph state 通信 |
 | **实现状态** | ✅ **[IMPLEMENTED]** — LAYOUT hybrid pipeline（MIP + 生成）+ `write_kg_l4` 节点（L4 写回 KG）。图架构：`route_tasks → execute_layout → execute_facility → execute_axis → execute_road → validate →(pass)→ write_l4 → END`，validate 失败重试最多 3 轮。`_write_l4_node` 写入 PlannedParcel/PlannedZone/PlannedFacility/PlannedRoad/PlannedAxis 并 `bump_version()`。 |
 
-### explore/ — EXPLORE Agent
+### explore/ — EXPLORE 认知引擎（主图第 6 节点）
 
 | 项 | 内容 |
 |---|---|
-| **位置** | `backend/app/agent/gis/explore/`（当前工作树中目录为空） |
-| **职责** | 独立探索代理，产出证据和候选实体引用，不产出最终规划几何。确定性 baseline + 可选 Flash 模型精炼。 |
-| **关键文件** | 源码位于 `25e24847` commit（`explore/agent.py`、`explore/contracts.py`、`explore/__init__.py`），含 `ExplorationInstruction`/`ExplorationInstructionCollection` 契约 |
-| **依赖** | → `app.utils`；独立有界，下游 Binder 边界 |
-| **实现状态** | 🔲 **[PLANNED]** — 源码存在于 `25e24847` commit（分支 `feature/flash-llm-explore-agent`），当前 HEAD 已移除。工作树仅残留 `.pyc` 陈旧产物（已清理），目录为空。 |
+| **位置** | `backend/app/agent/explore/`（顶层 Agent 子包，非 `gis/explore`） |
+| **职责** | 独立探索代理，解析规划文本产出空间认知与 EXPLORE 指令（`ExplorationInstructionCollection`），供 PARSE/GIS 消费。确定性概要索引（`summaries.py`）+ 可选 Flash 桥接 agent（`agent.py`）。 |
+| **关键文件** | `node.py`（`explore_node`，主图节点）、`agent.py`（`ExploreFlashAgent`/`explore_planning_text`）、`summaries.py`、`bridge_advisor.py`、`contracts.py` |
+| **依赖** | → `app.utils`、`app.modules.kg`（SessionKG）；工具经 `app.tools.access` 注册 |
+| **实现状态** | ✅ **[IMPLEMENTED]** — 主图 `phase=completed` 时触发一次（`explore_done` 防重复），产出 `explore_instructions` + `report_summary_index` 注入 state |
 
 ---
 

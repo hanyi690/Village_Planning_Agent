@@ -133,7 +133,7 @@ SpatialFeature
 > 2. **注记/设施分离**：设施是空间实体（有功能/服务半径/规模），注记是表达要素（文字标注）。旧版 `CurrentFacility.from_annotation_feature` 把设施从注记派生、且规划设施点混在 `PlannedAnnotation` 里--v4.2 拆出 `PlannedFacility`，设施统一为空间要素，注记降为表达层（`AnnotationFeature`，不入 KG，不参与空间分析）。`AnnotationFeature` 可继承 `PointFeature` 复用几何用于渲染，但 `geometry_kind="annotation"` 区分。
 > 3. **规范覆盖补全**：补 Group F 自然资源 5 类型（SoilType/SoilErosion/Watershed/NatureReserve/HydrogeologyZone）+ AdminArea 扩展字段（admin_level/parent_code），对齐 `01_DATA_ACQUISITION_PLAN.md` §4。栅格类 PopulationGrid/GDPGrid 见 raster_types.py。
 > 4. **三区三线管控抽象** [v4.2]：纠正 `01_DATA_ACQUISITION_PLAN` 把 ThreeZone/ThreeLine 标为"KG独有"的误导--三区三线是矢量图层（面，引用层，中央审批成果）。新增 `BaseControlZone` 管控区基类，统一三区+三线+管制区+用途分区的共同管控语义（protection_level/control_measure/引用条款）；新增 `ThreeZoneItem`（三区：生态/农业/建设空间）；三线由现有 `FarmlandProtection`/`EcologicalRedline`/`UrbanDevBoundary`（ControlLine 子类）体现。`ControlRule` 仍是表格（`ControlRuleTable`），非 spatial。
-> 5. **v4.3 待补类型** [v4.3]（基于 21 文档审计，见 `docs/gis/diagnostics/SCHEMA_COVERAGE_AUDIT_2026-07-25.md`）：设施 8 子类型（`WaterSupply`/`Drainage`/`Waste`/`Sanitary`/`Fire`/`EvacuationShelter`/`Energy`/`Lighting` Facility，继承 `BaseFacility`）、防灾（`SeismicFortificationCategory` 枚举/`SecondaryHazardSource`/`FloodSafetyFacility`）、自然环境（`ClimateRaster`/`EngineeringGeologyZone`）、权属（`LandRightConfirmation`）、表格（`PlotControlTable`）。字段扩展（QMDLTB 10 字段/ControlRuleTable 二元组/PlannedRoad 红线宽度等）与编码修正（sddlbm->GB/T21010, dlbm->tugui）见 `OPTIMIZATION_TASKS` S11。
+> 5. **v4.3 待补类型** [v4.3]（基于 21 文档审计，见 `docs/audits/schema-coverage-audit.md`）：设施 8 子类型（`WaterSupply`/`Drainage`/`Waste`/`Sanitary`/`Fire`/`EvacuationShelter`/`Energy`/`Lighting` Facility，继承 `BaseFacility`）、防灾（`SeismicFortificationCategory` 枚举/`SecondaryHazardSource`/`FloodSafetyFacility`）、自然环境（`ClimateRaster`/`EngineeringGeologyZone`）、权属（`LandRightConfirmation`）、表格（`PlotControlTable`）。字段扩展（QMDLTB 10 字段/ControlRuleTable 二元组/PlannedRoad 红线宽度等）与编码修正（sddlbm->GB/T21010, dlbm->tugui）见 `docs/_archive/gis-archive/OPTIMIZATION_TASKS.md` S11。
 
 ### 2.2 栅格分支
 
@@ -326,7 +326,7 @@ class ProjectDataView:
 
 ### 3.3 与 KG 的连锁
 
-数据视图上移项目级后，KG 同步上移为 `ProjectKG`（多村实体 + 跨村关系：村间邻接、共享水系、道路连通）。否则数据是项目级、KG 是村庄级，再造断层。见 `OPTIMIZATION_TASKS.md` K2。
+数据视图上移项目级后，KG 同步上移为 `ProjectKG`（多村实体 + 跨村关系：村间邻接、共享水系、道路连通）。否则数据是项目级、KG 是村庄级，再造断层。见 `docs/_archive/gis-archive/OPTIMIZATION_TASKS.md` K2。
 
 ---
 
@@ -394,7 +394,7 @@ layer_types:
 
 ### 5.2 添加新图层类型
 
-> **权威指南**：详见 [`docs/gis/HOW_TO_ADD_LAYER.md`](../../../../docs/gis/HOW_TO_ADD_LAYER.md)
+> **权威指南**：详见 [`docs/guides/how-to-add-layer.md`](../../../../docs/guides/how-to-add-layer.md)
 
 **标准图层（90% 场景，YAML 条目即可）**：
 

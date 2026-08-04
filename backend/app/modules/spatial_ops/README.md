@@ -332,7 +332,7 @@ check_delivery_gate(
 
 ## 十四、相关文档
 
-- `docs/gis/00_SYSTEM_DESIGN.md` - 系统总体设计（分层架构）
+- `docs/_archive/gis-archive/00_SYSTEM_DESIGN_v4.8.md` - 系统总体设计（分层架构，已归档）
 - `backend/app/agent/gis/parse/README.md` - PARSE Agent（grounding 的潜在消费者）
 - `backend/app/agent/gis/execute/README.md` - EXECUTE Agent（bridge/parcel_ops/road_planner 的消费者）
 - `backend/app/modules/kg/README.md` - KG 模块（消费 ParcelRelations / ContextBlock）

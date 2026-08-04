@@ -13,9 +13,15 @@ docs/
 ├── proposals/       # 重构提案（未落地）
 ├── guides/          # 操作指南（添加图层、KG 可视化等）
 ├── data/            # 数据文档
+├── explore/         # EXPLORE/KG 探索产物（JSON 快照）
 ├── reports/         # 非架构产出（周报、专利）
+├── weekly-reports/  # 周报（.docx）
+├── superpowers/     # 计划/提案（.md）
+├── 参考报告/        # 源村庄规划参考资料
 └── _archive/        # 历史归档
 ```
+
+> `references/`（复数）为 vendored 外部项目/规划资料库（chat2geo、DRL-urban-planning 等），非本项目文档；`RAG 知识库/` 为 RAG 向量库源文档。
 
 ## 权威链（Authority Chain）
 
@@ -40,6 +46,7 @@ README.md（根）                             ← 对外门面（只链接不�
 | 我想... | 去哪里 |
 |--------|--------|
 | 理解系统设计理念 | [design/00_SYSTEM_DESIGN.md](./design/00_SYSTEM_DESIGN.md) |
+| 看项目结构与实现总览 | [architecture/structure.md](./architecture/structure.md) |
 | 看主图怎么跑 | [architecture/agent-graph.md](./architecture/agent-graph.md) |
 | 查 API 端点 | [architecture/backend-api.md](./architecture/backend-api.md) |
 | 了解前端架构 | [architecture/frontend.md](./architecture/frontend.md) |
@@ -57,6 +64,7 @@ README.md（根）                             ← 对外门面（只链接不�
 | [01_LAYERED_ARCHITECTURE.md](./design/01_LAYERED_ARCHITECTURE.md) | 分层架构 |
 | [02_DATA_PERSISTENCE.md](./design/02_DATA_PERSISTENCE.md) | 数据持久化 |
 | [03_KG_SEMANTIC_BRIDGE.md](./design/03_KG_SEMANTIC_BRIDGE.md) | KG 语义桥接 |
+| [03-kg-spatial-cognition-supplement.md](./design/03-kg-spatial-cognition-supplement.md) | KG 空间认知补充 |
 | [04_PLANNING_PIPELINE.md](./design/04_PLANNING_PIPELINE.md) | 闭环规划管线 |
 | [05_EXPLORE_BRIDGE.md](./design/05_EXPLORE_BRIDGE.md) | EXPLORE 桥接层 |
 | [06_PARSE_EXECUTE.md](./design/06_PARSE_EXECUTE.md) | PARSE + EXECUTE |
@@ -64,13 +72,15 @@ README.md（根）                             ← 对外门面（只链接不�
 | [08_DELIVERABLES_COMPLIANCE.md](./design/08_DELIVERABLES_COMPLIANCE.md) | 成果合规 |
 | [09_INTEGRATION_BREAKPOINTS.md](./design/09_INTEGRATION_BREAKPOINTS.md) | 集成断点 |
 | [10_IMPLEMENTATION_STATUS.md](./design/10_IMPLEMENTATION_STATUS.md) | 实现状态 |
+| [11_EXPLORE_KG_ENRICHMENT.md](./design/11_EXPLORE_KG_ENRICHMENT.md) | EXPLORE KG 富化 |
 
 ## architecture/ 文档索引
 
 | 文档 | 内容 |
 |------|------|
 | [README.md](./architecture/README.md) | 架构文档导航 |
-| [agent-graph.md](./architecture/agent-graph.md) | 5 节点主图 |
+| [structure.md](./architecture/structure.md) | 项目结构与实现总览 |
+| [agent-graph.md](./architecture/agent-graph.md) | 6 节点主图 |
 | [backend-api.md](./architecture/backend-api.md) | 后端 API + SSE |
 | [frontend.md](./architecture/frontend.md) | 前端架构 |
 | [rag-system.md](./architecture/rag-system.md) | RAG 知识检索 |

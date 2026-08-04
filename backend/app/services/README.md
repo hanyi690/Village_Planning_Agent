@@ -13,7 +13,7 @@ HTTP (api/) ──> services/ ──> agent/ (LangGraph)
 ```
 
 - **单一职责**：`api/` 路由只做参数校验与响应组装，业务编排全部下沉到本层
-- **单例模式**：大多数服务以模块级单例导出（`sse_manager` / `session_service` / `checkpoint_service` / `planning_runtime_service` / `review_service`）
+- **单例模式**：大多数服务以模块级单例导出（`sse_manager` / `session_service` / `checkpoint_service` / `planning_runtime_service`）
 - **会话状态 SSOT**：内存态统一收归 `sse.py` 的 `SSEManager`，持久态在 `database/`，Checkpoint 态在 LangGraph `SqliteSaver`
 
 ---
@@ -26,11 +26,9 @@ HTTP (api/) ──> services/ ──> agent/ (LangGraph)
 | `runtime.py` | 统一规划运行时（LangGraph 图执行 + 会话管理） | `PlanningRuntimeService.start_session` / `resume_from_interrupt` |
 | `checkpoint.py` | Checkpoint 业务逻辑 + 持久化同步 | `CheckpointService.rebuild_events` / `get_layer_reports` |
 | `session.py` | 会话生命周期（创建/删除/层级报告） | `SessionService.create_session` / `delete_session` |
-| `review.py` | 人工审核（批准/驳回/回滚） | `ReviewService.approve` / `reject` / `rollback` |
 | `report_store.py` | 维度报告存储（版本化，SQLModel） | `ReportStore.save` / `bulk_save` / `get_layer_reports_with_sources` |
 | `bundle_store.py` | session 级 `VillageBundle` 快照持久化 | `BundleStore.save` / `load_bundle` |
 | `session_bundle.py` | bundle 构建编排 + 进程内缓存 | `build_session_bundle` / `snapshot_session_bundle` |
-| `explore_access.py` | EXPLORE 统一读路径门面（快照优先、语义优先） | `ExploreAccess.get_context_block` |
 | `modules/gis/road/` | 道路网络构建与道路规划服务（见子 README） | — |
 
 > `app/services/__init__.py` 仍为旧时代遗留：仅懒加载转发 `RagService`（实际实现在 `app/modules/rag/service.py`）。新代码不应依赖 `app.services.RagService`，请直接引用 `app.modules.rag`。
@@ -86,25 +84,13 @@ HTTP (api/) ──> services/ ──> agent/ (LangGraph)
 - `delete_session`：依次清理内存态 → 上传文件 → 维度报告 → UI 会话 → DB 记录（CASCADE）→ LangGraph checkpoint
 - `get_layer_reports`：转发到 `checkpoint_service`
 
-### 3.6 ReviewService（`review.py`）
-
-人工审核三种动作，全部基于 interrupt 恢复：
-
-- **approve**：`resume_from_interrupt({"action": "approve"})` → `layer_completion_check` 进入下一层；同步 WebReviewTool 决策
-- **reject**：`resume_from_interrupt({"action": "reject", "feedback", "dimensions", "images"})` → 触发修订；DB 状态置 `revising`
-- **rollback**：从 checkpoint 历史找到目标快照，构造回滚 state（裁剪 `reports`/`completed_dimensions` 到目标层），`aupdate_state` 到 `layer_completion_check`（不恢复执行，状态 paused）
-
-### 3.7 Bundle 体系（`session_bundle.py` + `bundle_store.py`）
+### 3.6 Bundle 体系（`session_bundle.py` + `bundle_store.py`）
 
 未来统一数据源的雏形：
 
 - `build_session_bundle`：`DataCatalog.load_village_bundle_async` 构建 session 级 bundle（原始输入文档 + 空间数据 + 内嵌 L1/L2/L3 报告），进程内缓存
 - `snapshot_session_bundle`：每层完成时由 `layer_completion_check` 调用，刷新 bundle 并持久化版本化快照到 `planning_bundles` 表（sha256 去重校验）
 - `BundleStore.get_layer_reports_from_bundle`：未来替代 `dimension_reports` 读路径的接口
-
-### 3.8 ExploreAccess（`explore_access.py`）
-
-EXPLORE 统一读路径门面：`get_context_block(session_id, kind, **params)` 返回 token 预算内的压缩上下文块。已注册 kinds：`overview` / `spatial_context` / `spatial_features` / `layer_reports` / `knowledge_graph` / `rag_search` / `report_summary_index` / `spatial_cognition`。任意 agent（analysis / explore / gis）均经此门面读会话数据，快照优先（内存 → bundle 快照 → 实时构建兜底）。
 
 ---
 
@@ -126,8 +112,8 @@ POST /api/planning/start
 
 ```
 layer_completion_check interrupt()
-  → ReviewService.approve/reject
-      → PlanningRuntimeService.resume_from_interrupt(Command(resume=...))
+  → session_routes.py /api/sessions/{id}/feedback (approve/reject)
+      → PlanningRuntimeService.resume_from_interrupt(Command(resume={"action": ...}))
       → 恢复节点 → 下一层或修订
   rollback → 目标 checkpoint state 覆盖（不恢复执行）
 ```

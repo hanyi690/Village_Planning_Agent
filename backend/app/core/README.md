@@ -1,6 +1,6 @@
 # Core 层
 
-> 全局基础设施：LLM 工厂、SSE 事件类型常量、LangSmith 追踪、Instructor 结构化提取客户端。被 `agent/`、`services/`、`tools/`、`utils/` 各层共享的横向能力，无业务逻辑。
+> 全局基础设施：LLM 工厂、SSE 事件类型常量、LangSmith 追踪。被 `agent/`、`services/`、`tools/`、`utils/` 各层共享的横向能力，无业务逻辑。
 
 ---
 
@@ -11,7 +11,6 @@
 | `llm.py` | 统一 LLM 工厂（OpenAI/DeepSeek + 智谱 GLM + DashScope Flash） | `create_llm` / `create_flash_llm` / `get_default_llm` |
 | `events.py` | SSE 事件类型常量（全系统唯一来源） | `SSEEventType` |
 | `tracing.py` | LangSmith 追踪管理（单例） | `get_langsmith_manager` / `create_run_metadata` |
-| `instructor_client.py` | Instructor 客户端工厂（Pydantic schema 结构化提取） | `get_instructor_client` / `get_flash_model` |
 | `settings.py` | 环境配置加载（.env → 模块级常量） | 全量配置常量（见 `app/config/README.md` 关联） |
 
 > `core/settings.py` 是配置源头（`.env` 经 `load_dotenv(override=True)` 加载）；`app/config/` 是**领域配置**（YAML 维度/阶段定义）。两者分工见 `app/config/README.md`。
@@ -65,15 +64,7 @@
 
 ---
 
-## 五、Instructor 客户端（`instructor_client.py`）
-
-- `get_instructor_client()`：以 DashScope 为 base 的 `instructor.from_openai(OpenAI(...))` 缓存单例，生成期强制 Pydantic schema + 校验失败自动重试
-- 用途：替换旧 `with_structured_output` 方案，用于结构化抽取（如 RAG 切片、表格解析等强 schema 场景）
-- 依赖 `DASHSCOPE_API_KEY` / `DASHSCOPE_API_BASE`；模型名取 `FLASH_MODEL_NAME`
-
----
-
-## 六、相关文档
+## 五、相关文档
 
 - `app/config/README.md` — 领域配置（YAML 维度/阶段定义）与 `settings.py` 分工
 - `app/services/README.md` — SSE 事件发布/缓存的实际消费方

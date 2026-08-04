@@ -23,8 +23,8 @@
 backend/app/agent/gis/
 ├── __init__.py          # 包导出
 ├── README.md            # 本文档
-├── agent.py             # Agent 构建器（parse/legacy + run_gis_pipeline）
-├── state.py             # GISPipelineInput / State / Output + legacy TypedDict 别名
+├── agent.py             # Agent 构建器（create_parse_agent_graph 兼容入口）
+├── state.py             # GISPipelineInput / State / Output（Pydantic 单一层级）
 ├── prompts.py           # PARSE / LAYOUT 系统 prompt（legacy，新图不依赖）
 ├── layout_pipeline.py   # 顶层流水线 StateGraph（9 节点）
 ├── format_bound_intent.py   # Explore/Binder 产物 → 规划 intent（严格无工具，v4/P6）
@@ -121,7 +121,7 @@ GISPipelineOutput ── API 输出（layout_configs, export_result, render_resu
 ```
 
 - KG 侧常用查询结果（`kg_three_zones` / `kg_three_lines` / `kg_protected_parcels_detail` / `kg_vne_summary` 等）在 `build_kg` 节点预计算；道路位置确认仍可通过受限 KG adapter 做按 BSM/名称的补充查询
-- legacy TypedDict 别名（`GISAgentState` / `ParseAgentState` / `LayoutAgentState` / `LayoutPipelineState`）仅向后兼容，新代码一律用 `GISPipelineState`
+- legacy TypedDict 别名（`GISAgentState` / `LayoutAgentState` / `LayoutPipelineState`）与旧单 ReAct Agent 构建器（`create_gis_agent_graph` / `create_layout_agent_graph` / `run_gis_pipeline`）已于 2026-08-03 随死代码清理移除，一律使用 `GISPipelineState` + `build_layout_pipeline()`
 
 ## 六、正式运行契约
 
@@ -153,5 +153,5 @@ GISPipelineOutput ── API 输出（layout_configs, export_result, render_resu
 - `parse/README.md` — PARSE Agent 架构（规则解析管线）
 - `execute/README.md` — EXECUTE Agent 架构（7 节点图 + 迁移路线 P1 已完成）
 - `app/modules/kg/README.md` — KG 桥接层（parse/execute 间的语义中间态）
-- `docs/gis/00_PLANNING_SYSTEM_VISION.md` — v6.0 北极星（ANALYZE/PLAN/DELIVER）
-- `docs/gis/proposals/03_TOOL_FIRST_ARCHITECTURE.md` — Tool-First 架构（execute 子包预留依据）
+- `docs/_archive/gis-archive/00_PLANNING_SYSTEM_VISION.md` — v6.0 北极星（ANALYZE/PLAN/DELIVER，已归档）
+- `docs/_archive/gis-archive/proposals/03_TOOL_FIRST_ARCHITECTURE.md` — Tool-First 架构（execute 子包预留依据，已归档）

@@ -4,7 +4,7 @@
 
 ## 核心特性
 
-- **5 节点主图**（目标 6 节点 +explore）：`conversation` → `analyze_dimension` / `execute_tools` / `gis_agent` → `layer_completion_check`
+- **6 节点主图**：`conversation` → `analyze_dimension` / `execute_tools` / `explore` / `gis_agent` → `layer_completion_check`
 - **三层递进规划**：现状分析(L1, 12 维) → 规划思路(L2, 4 维) → 详细规划(L3, 12 维)
 - **五层模块架构**：`Schema ← Data ← SpatialOps ← KG ← Agent`（单向依赖）
 - **RAG 知识检索**：Small-to-Big + 层级感知，法规条文与技术指标智能注入
@@ -20,7 +20,7 @@
 ├─────────────────────────────────────────────────────────────────────┤
 │                                                                     │
 │  ┌────────────┐    ┌───────────────┐    ┌────────────────────────┐  │
-│  │ Frontend   │───▶│  FastAPI API  │───▶│  LangGraph 主图 (5节点) │  │
+│  │ Frontend   │───▶│  FastAPI API  │───▶│  LangGraph 主图 (6节点) │  │
 │  │ Next.js 14 │SSE │  /api/sessions│    │  backend/app/agent/    │  │
 │  │ + MapLibre │    │  /* (7端点)   │    │  graph.py              │  │
 │  └────────────┘    └───────────────┘    └───────────┬────────────┘  │
@@ -44,7 +44,7 @@
 └─────────────────────────────────────────────────────────────────────┘
 ```
 
-### 5 节点主图
+### 6 节点主图
 
 ```
 START → conversation ──► analyze_dimension ──► layer_completion_check
@@ -52,6 +52,9 @@ START → conversation ──► analyze_dimension ──► layer_completion_ch
               ├─► execute_tools─┘                      │
               ├─► gis_agent ──────────────────────────┘
               └─► END (闲聊/问答)
+
+layer_completion_check (phase=completed, 非 step_mode)
+              └─► explore ──► gis_agent ──► END
 ```
 
 详见 [docs/architecture/agent-graph.md](docs/architecture/agent-graph.md)
@@ -159,12 +162,13 @@ Village_Planning_Agent/
 │       │   ├── gis_test_routes.py      # GIS 测试（开发）
 │       │   └── schemas.py              # 请求/响应模型
 │       ├── agent/                      # LangGraph Agent 核心
-│       │   ├── graph.py                # create_unified_planning_graph (5节点)
+│       │   ├── graph.py                # create_unified_planning_graph (6节点)
 │       │   ├── routing.py              # after_conversation + after_analysis
 │       │   ├── state.py                # AgentState, PlanningPhase
 │       │   ├── conversation/node.py    # 中央路由节点
 │       │   ├── tools/execute_node.py   # 工具执行节点
 │       │   ├── analysis/               # 维度分析（RAG + KG + DataPipeline）
+│       │   ├── explore/                # EXPLORE 认知引擎（桥接 + 概要索引）
 │       │   ├── completion/node.py      # 层级完成检测 + interrupt
 │       │   └── gis/                    # GIS Agent (PARSE + LAYOUT)
 │       ├── modules/                    # 五层业务模块
@@ -180,7 +184,7 @@ Village_Planning_Agent/
 │       │   ├── sse/                    # SSE 管理器
 │       │   ├── checkpoint.py           # 检查点服务
 │       │   └── report_store.py         # 报告存储
-│       ├── tools/                      # 工具系统
+│       ├── tools/                      # 工具系统（access/gis/intent）
 │       ├── database/                   # 数据持久层（SQLModel）
 │       ├── core/                       # 核心基础设施（llm, settings）
 │       └── config/                     # 配置层（YAML 驱动）

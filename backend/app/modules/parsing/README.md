@@ -1,26 +1,25 @@
 # Parsing 模块 — 确定性 + LLM 文本提取工具层
 
-> **定位**: 规划文本/表格/报告的结构化提取工具集，被 PARSE Agent、`report_store`、KG enrichment 与 `admin_code_routes` 消费
+> **定位**: 规划文本/表格/报告的结构化提取工具集，被 PARSE Agent、`report_store`、KG enrichment 与 `data/catalog` 消费
 > **依赖**: `parsing → schema.contracts`；`app.core.settings`；`app.utils.logger`；`app.modules.data.providers.tianditu`（gazetteer 惰性导入）；`app.modules.schema.encodings.code_sets`（table_schema_inference）
 > **空间计算禁令**: 本模块不做任何空间计算（BBox / 距离 / 面积 / 过滤），所有空间计算由 `spatial_ops/` 完成
-> **Updated: 2026-08-02**
+> **Updated: 2026-08-03**
 
 ---
 
 ## 一、模块定位
 
-parsing 是"文本 -> 结构化"的**工具层**，不含 Agent 编排逻辑。它提供三类提取能力：
+parsing 是"文本 -> 结构化"的**工具层**，不含 Agent 编排逻辑。它提供四类提取能力：
 
 | 能力类 | 技术 | 文件 | LLM 依赖 |
 |-------|------|------|---------|
-| **确定性解析** | markdown 表格 / 关键词分节 / regex 约束 | `markdown_parser` / `section_classifier` / `regulation_extractor` | zero LLM |
 | **结构化摘要** | 类型化 JSON 摘要生成/解析 | `summary_generator` / `summary_parser` | zero LLM（规则式） |
 | **表格语义提取** | 列语义推断 + schema 映射 | `tables` / `table_schema_inference` | zero LLM |
 | **地名/语义辅助** | 天地图地理编码 / 词典匹配 / 语义枚举 | `gazetteer` / `semantics` | zero LLM |
 | **管理数据** | 2024 全国 5 级行政区划加载 | `admin_code_loader` | zero LLM |
 | **输出 schema** | Pydantic 类型化输出模型 | `schemas` | - |
 
-**与 PARSE Agent 的关系**：PARSE Agent（`agent/gis/parse/agent.py`）直接调用 `tables._extract_zone_tables` / `_extract_project_tables`、`markdown_parser` 等确定性提取器，产出 `schema/contracts/parse_contracts.py` 的最终契约（`SpatialPlanningIntent` / `SpatialOperation` / `SpatialConstraint`）。
+**与 PARSE Agent 的关系**：PARSE Agent（`agent/gis/parse/agent.py`）直接调用 `tables._extract_zone_tables` / `_extract_project_tables` 等确定性提取器，产出 `schema/contracts/parse_contracts.py` 的最终契约（`SpatialPlanningIntent` / `SpatialOperation` / `SpatialConstraint`）。
 
 **与 ReportStore 的关系**：`report_store` 通过 `summary_generator.generate_structured_summary` 生成维度报告的 JSON 摘要，通过 `summary_parser.parse_summary` 反解析供 L2/L3 依赖加载与规划文本生成使用。
 
@@ -30,15 +29,10 @@ parsing 是"文本 -> 结构化"的**工具层**，不含 Agent 编排逻辑。�
 
 ```
 backend/app/modules/parsing/
-├── __init__.py                  # 公开 API（确定性解析器：parse_markdown_tables / split_by_headers /
-│                                #   detect_table / classify_section / SECTION_KEYWORDS /
-│                                #   extract_regulations_regex / REGULATION_PATTERNS）
+├── __init__.py                  # 公开 API（无再导出，仅模块说明）
 ├── schemas.py                   # Pydantic 输出 schemas: ZoneOutput/FacilityOutput/AxisOutput/
 │                                #   IntentOutput + BaseDimensionSummary + 28 维度 schemas
 ├── semantics.py                 # ValueSemantics 枚举 + SemanticField + 跨维度 MetricConcept 映射
-├── markdown_parser.py           # 确定性 markdown 表格解析
-├── section_classifier.py        # 关键词分节分类 + LLM fallback 判定
-├── regulation_extractor.py      # Regex 约束/管制规则提取（24 条命名模式）
 ├── tables.py                    # 单元级列语义表格提取（零领域关键词白名单）
 ├── table_schema_inference.py    # 表格 schema 推断 + 行→指标/分区/设施映射
 ├── admin_code_loader.py         # 2024 全国 5 级行政区划数据加载（AdminCodeService 单例）
@@ -48,7 +42,7 @@ backend/app/modules/parsing/
 └── README.md                    # 本文档
 ```
 
-> ⚠️ 修正历史遗留错误：`structured_output.py`（Instructor 提取入口）**不存在**于本目录，属已废弃设计；`summary_generator.py` / `summary_parser.py` **仍然存在且活跃**（被 `report_store` 使用），并非已删除。
+> ⚠️ 修正历史遗留错误：`structured_output.py`（Instructor 提取入口）**不存在**于本目录，属已废弃设计；`markdown_parser.py` / `section_classifier.py` / `regulation_extractor.py` 已于 2026-08-03 随死代码清理移除（无任何消费者，`detect_table`/`classify_section`/regex 约束提取已被 `tables.py` + PARSE Agent 取代）；`summary_generator.py` / `summary_parser.py` **仍然存在且活跃**（被 `report_store` 使用）。
 
 ---
 
@@ -89,40 +83,7 @@ infer_semantics_from_field_name(field_name) -> Optional[ValueSemantics]
 
 消费者：`tools/gis/_conflict/detector.py` / `resolver.py`（同名不同义指标冲突检测）。
 
-### 3.3 markdown_parser.py — 确定性 markdown 表格解析
-
-```python
-parse_markdown_tables(text) -> List[Dict]          # [{"headers": [...], "rows": [[...]]}]
-detect_table(text) -> bool
-split_by_headers(text) -> List[Dict[str, str]]      # 按 #{1,3} 分节 -> {title, content, level}
-# 分隔行识别：_is_separator_line 正则 ^:?-{2,}:?$
-```
-
-### 3.4 section_classifier.py — 关键词分节
-
-```python
-SECTION_KEYWORDS: dict[str, set[str]]   # 13 类：preamble/target/regulation/project_table/
-                                        #   land_use_table/indicator_table/heritage_table/
-                                        #   facility_table/ecological_table/spatial_layout/
-                                        #   protection/infrastructure/governance
-classify_section(title, content) -> tuple[str, int]   # 标题 + 前 500 字符打分
-needs_llm_fallback(section_type, score) -> bool       # score < 2 需 LLM 兜底
-build_fallback_prompt(sections) -> str
-```
-
-### 3.5 regulation_extractor.py — regex 约束提取
-
-```python
-REGULATION_PATTERNS: List[Dict]   # 24 条命名模式：area_min/max/equal、no_overlap_*、
-                                  #   buffer_exclusion、contained_by、building_height/floors/
-                                  #   density、population_target、setback/spacing_distance、
-                                  #   plot_ratio/green_ratio 等
-extract_regulations_regex(text) -> tuple[List[Dict], List[str]]
-#   -> (matched_constraints, unmatched_lines)；附加 source_text + article_ref（第X条）
-#   支持嵌套键 spatial_rule.subject；匹配不到的实质性长行（>15 字符含规划关键词）路由给 LLM
-```
-
-### 3.6 tables.py — 单元级列语义提取
+### 3.3 tables.py — 单元级列语义提取
 
 **零领域关键词白名单**：纯结构解析（表头 + `| :--- |` 分隔行），列语义按**单位**判定（`%` → ratio，公顷/ha/亩/㎡ → area，表头含位置关键词且无数值 → location）。
 
@@ -133,7 +94,7 @@ _extract_project_tables(text) -> List[FacilityTarget] # 表头含 项目/工程/
 
 > ⚠️ 依赖说明：`tables.py` 导入 `app.agent.gis.parse.agent._direction_from_location`——**存在 parsing → agent 的反向依赖边**，与"纯工具层"定位相悖，属已知技术债。
 
-### 3.7 table_schema_inference.py — 表格 schema 推断
+### 3.4 table_schema_inference.py — 表格 schema 推断
 
 ```python
 class TableSchemaType(Enum): INDICATOR_TABLE / LAND_USE_TABLE / FACILITY_TABLE / UNKNOWN
@@ -146,7 +107,7 @@ infer_and_map_table(headers, rows) -> Tuple[TableSchemaType, Any]               
 # _parse_number 处理单位/千分位/万；_resolve_vne 用 GHYTBM_TO_VNE
 ```
 
-### 3.8 admin_code_loader.py — 行政区划
+### 3.5 admin_code_loader.py — 行政区划
 
 ```python
 @dataclass AdminCodeRecord: code, name, level, pcode, category=0
@@ -160,9 +121,9 @@ get_admin_code_service() -> AdminCodeService
 # 数据源：data/gis/china_area-2024/area_code_2024.csv.gz（2024 国统局 5 级编码）
 ```
 
-消费者：`api/admin_code_routes.py`（`/api/admin-codes/*`）、`data/catalog/catalog.py`。
+消费者：`data/catalog/catalog.py`（行政区划代码兜底定位）。
 
-### 3.9 gazetteer.py — 地名解析
+### 3.6 gazetteer.py — 地名解析
 
 ```python
 PlaceNameResolver(residential_clusters)   # VillageAnchor = (name, lon, lat, parcel_ids)
@@ -174,9 +135,9 @@ resolve_batch(place_names) -> List[dict]
 # confidence = max(0.5, 0.9 - dist/50000)
 ```
 
-消费者：`tools/gis/parse.py`（`resolve_place` 工具）、`scripts/run_parse_pipeline.py`、`scripts/run_parse_then_layout.py`。
+消费者：`tools/gis/parse.py`（`resolve_place` 工具）。
 
-### 3.10 summary_generator.py / summary_parser.py
+### 3.7 summary_generator.py / summary_parser.py
 
 ```python
 # 规则式（无 LLM）：用维度 Pydantic schema 构建类型化摘要
@@ -214,11 +175,11 @@ parse_summary(summary, dimension_key="", layer=1) -> Dict[str, Any]
 | 方向 | 模块 | 关系 |
 |------|------|------|
 | 上游 | `schema/contracts/parse_contracts` | 提供最终契约类型（ZoneTarget/FacilityTarget 等） |
-| 下游 | `agent/gis/parse` | PARSE 规则解析器调用 `tables._extract_*` / `markdown_parser` 等 |
+| 下游 | `agent/gis/parse` | PARSE 规则解析器调用 `tables._extract_*` 等 |
 | 下游 | `services/report_store` | 经 `summary_generator` / `summary_parser` 生成/解析维度摘要 |
 | 下游 | `agent/gis/vocab_extractor` | 使用 `_extract_zone_tables` |
 | 下游 | `modules/kg/enrichment/bindings` | 使用 `_extract_project_tables` / `_extract_zone_tables` |
-| 下游 | `api/admin_code_routes` | 使用 `get_admin_code_service` |
+| 下游 | `data/catalog/catalog` | 使用 `get_admin_code_service` |
 | 语义 | `tools/gis/_conflict` | 使用 `semantics.MetricConcept` / `ValueSemantics` |
 
 ---
@@ -239,4 +200,3 @@ parse_summary(summary, dimension_key="", layer=1) -> Dict[str, Any]
 - `backend/app/agent/gis/parse/README.md` — PARSE Agent（parsing 的主要消费者）
 - `backend/app/modules/kg/README.md` — KG 模块（enrichment 消费 parsing 表格提取）
 - `backend/app/modules/schema/contracts/parse_contracts.py` — 最终契约类型
-- `backend/app/api/admin_code_routes.py` — 行政区划查询 API

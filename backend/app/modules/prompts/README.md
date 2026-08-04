@@ -10,7 +10,7 @@
 集中管理所有 Agent 使用的 LLM 提示词模板，按子图分层组织。不执行逻辑，仅提供"模板 + 组装函数"。消费方为 `app/agent/analysis/node.py::_build_prompt`（L1/L2/L3 按维度取模板）与 `app/tools/gis/extract.py`（PARSE 表格提取）。
 
 > ⚠️ **架构现状**：`parse_prompts.py` 的 6 个 Prompt 是按**旧 PARSE ReAct StateGraph**（classify → extract → validate_and_merge）设计的。当前 PARSE 已改为规则解析器（见 `agent/gis/parse/README.md`），这些 Prompt 中仅 `EXTRACT_TABLES_PROMPT` 仍被 `tools/gis/extract.py` 直接引用；其余为保留模板（LLM 增强路线可复用）。
-> `prompts/l1/` 是 L1 维度的**聚合重构版**（`DIMENSION_PROMPTS` 取代 `analysis.py::ANALYSIS_DIMENSIONS` 字典），目前**尚未被分析 Agent 引用**（`node.py` 仍用 `prompts.analysis`），属迁移中间态。
+> `prompts/l1/`（L1 聚合重构版）已于 2026-08-03 随死代码清理移除——`node.py` 始终使用 `prompts.analysis`，`l1/` 从未被引用。
 
 ---
 
@@ -22,19 +22,14 @@ prompts/
 ├── analysis.py             # ★ L1 现状分析：12 维 Prompt + ANALYSIS_RULES + P8 INSTRUCTION 段
 ├── concept.py              # L2 规划思路：4 维 Prompt + GLOBAL_CONCEPT_RULES
 ├── detailed.py             # ★ L3 详细规划：12 维 Prompt + WRITING_RULES + GIS_TOOL_GUIDE + P8 INSTRUCTION
-├── parse_prompts.py        # PARSE 结构化提取 6 Prompt + format_spatial_context_for_prompt
-└── l1/                     # L1 聚合重构版（同签名，尚未启用）
-    ├── __init__.py         # DIMENSION_PROMPTS / ANALYSIS_DIMENSIONS / get_dimension_prompt / list_dimensions
-    ├── _base.py            # ANALYSIS_RULES + ENTITY_TYPES + ENTITY_SPEC_HEADER
-    ├── _config.py          # DIMENSION_NAMES / DIMENSION_CONFIG
-    └── location.py ... historical_culture.py   # 12 个单维度模板文件
+└── parse_prompts.py        # PARSE 结构化提取 6 Prompt + format_spatial_context_for_prompt
 ```
 
 ---
 
 ## 三、三层 Prompt 体系
 
-### L1 现状分析（analysis.py / l1/）
+### L1 现状分析（analysis.py）
 - **12 维度**：`location`（区位与对外交通）、`socio_economic`（社会经济）、`villager_wishes`（村民意愿）、`superior_planning`（上位规划）、`natural_environment`（自然环境）、`land_use`（土地利用）、`traffic`（道路交通）、`public_services`（公共服务设施）、`infrastructure`（基础设施）、`ecological_green`（生态绿地）、`architecture`（建筑）、`historical_culture`（历史文化）。
 - `ANALYSIS_RULES`：写作规则（冒号格式、自然段落、禁止章节/条目编号、数值带单位、markdown 表格必须含分隔行、【主题】段落标记）。
 - **P8 INSTRUCTION 段**（`INSTRUCTION_OUTPUT_GUIDE`）：引导 LLM 在报告正文后输出固定列表格 `| 类型 | 名称 | 位置 | 描述 | 规模 |`，类型限 **现状设施 / 现状项目 / 现状分区**——供下游 PARSE 空间定位消费，保存时剥离。
@@ -89,4 +84,3 @@ prompts/
 - `app/agent/analysis/node.py` — 消费方（`_build_prompt` 按 layer 选模板）
 - `app/tools/gis/extract.py` — 消费方（`EXTRACT_TABLES_PROMPT`）
 - `app/agent/gis/parse/README.md` — PARSE 当前为规则解析器（Prompt 为保留模板）
-- `docs/superpowers/specs/2026-07-02-gis-review-exploration.md` — GIS_TOOL_GUIDE 设计依据

@@ -158,4 +158,4 @@ kg.memory.add_relation_annotation(RelationAnnotation(
 - **New spatial relation**: add to `layer2.py:add_parcel_relations` or `add_cross_type_relations`
 - **New L3/L4 function**: add to `layer3.py` / `layer4.py`, call via `KGBuilder.build_intent_layer()` / `KGBuilder.apply_planned_state()`
 - **New semantic predicate**: add to `ontology.py:SemanticPredicates`, write in `enrichment.py:add_semantic_enrichment()`
-- See `docs/gis/HOW_TO_ADD_LAYER.md` Pattern 4 for the full `@kg_builder` workflow
+- See `docs/guides/how-to-add-layer.md` Pattern 4 for the full `@kg_builder` workflow

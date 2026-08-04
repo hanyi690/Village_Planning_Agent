@@ -265,9 +265,9 @@ EXPLORE Agent (主图顶层节点)
 
 | 项目               | 状态                     | 证据                                     |
 | ------------------ | ------------------------ | ---------------------------------------- |
-| 主图 5 节点        | `[IMPLEMENTED]`        | graph.py:159-183                         |
+| 主图 6 节点        | `[IMPLEMENTED]`        | graph.py:256-273                         |
 | execute_tools      | `[DEPRECATED?]`        | 过渡态，仅承接闲聊检索                   |
-| EXPLORE 节点       | `[PLANNED]`            | 源码在25e24847分支待合入                 |
+| EXPLORE 节点       | `[IMPLEMENTED]`        | explore/node.py（phase=completed 触发）  |
 | L1 KG查询          | `[IMPLEMENTED]`        | node.py:670-680                          |
 | L2/L3 KG查询       | `[PLANNED]`            | node.py:667 仍 return ""                 |
 | write_kg_l4        | `[IMPLEMENTED]`        | execute/agent.py:374 + layer4.py         |

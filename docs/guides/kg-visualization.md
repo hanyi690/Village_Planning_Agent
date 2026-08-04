@@ -2,7 +2,7 @@
 
 > 生成时间: 2026-07-25
 > 数据源: `data/gis/jintian/` (金田村)
-> 生成脚本: `backend/scripts/visualize_kg.py`
+> 生成脚本: `backend/scripts/visualize_kg.py`（已随 dead-code 清理移除，本文档为历史快照）
 
 ---
 

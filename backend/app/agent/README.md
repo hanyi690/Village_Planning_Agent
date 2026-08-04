@@ -1,7 +1,7 @@
 # agent 包（村庄规划 Agent 编排层）
 
-> 顶层规划 Agent：5 节点 LangGraph 主图（对话路由 → 工具执行 → 维度分析 → 层级完成检测 → GIS 布局），驱动 L1/L2/L3 三层并行分析 + GIS 空间布局，产出最终规划文本。
-> **Updated: 2026-08-02**
+> 顶层规划 Agent：6 节点 LangGraph 主图（对话路由 → 工具执行 → 维度分析 → 层级完成检测 → EXPLORE 认知 → GIS 布局），驱动 L1/L2/L3 三层并行分析 + GIS 空间布局，产出最终规划文本。
+> **Updated: 2026-08-03**
 
 ---
 
@@ -18,7 +18,7 @@
 ```
 agent/
 ├── __init__.py
-├── graph.py              # ★ 主图构建 create_unified_planning_graph（5 节点）+ gis_agent_node
+├── graph.py              # ★ 主图构建 create_unified_planning_graph（6 节点）+ gis_agent_node
 ├── state.py              # AgentState (TypedDict) + PlanningPhase + 波次/层级常量 + reducers
 ├── routing.py            # after_conversation / after_analysis（Send 动态路由、级联修订）
 ├── message_builder.py    # 多模态消息构建（文本+图片）
@@ -33,12 +33,14 @@ agent/
 
 ---
 
-## 三、主图（graph.py：5 节点）
+## 三、主图（graph.py：6 节点）
 
 ```
 START → conversation ─┬─ execute_tools ──→ conversation
                       ├─ analyze_dimension ─→ layer_completion_check ─┬─ analyze_dimension（Send 并行分发）
-                      └─ gis_agent ──→ conversation                  └─ conversation / END
+                      │                                               ├─ explore → gis_agent → END
+                      │                                               └─ conversation / END
+                      └─ gis_agent ──→ END
 ```
 
 | 节点 | 模块 | 职责 |
@@ -47,11 +49,12 @@ START → conversation ─┬─ execute_tools ──→ conversation
 | `execute_tools` | `tools/execute_node.py` | 并行执行非路由工具（`asyncio.gather` + `BaseTool.ainvoke`），每个调用前后发 SSE；过滤意图类工具 |
 | `analyze_dimension` | `analysis/node.py` | 维度分析节点：`DataPipeline` 取专业数据 + `_build_prompt` 组 Prompt + LLM 生成报告 + 摘要 + KG 富化 |
 | `layer_completion_check` | `completion/node.py` | **层级完成检测**：reducer 合并并行结果后检测层完成；`step_mode` 走 `interrupt()` 审批暂停；层边界触发 bundle 快照 + **KG enrichment**（L1 村名绑定 / L2L3 实体注解） |
+| `explore` | `explore/node.py` | **EXPLORE 认知引擎**：桥接 agent（`ExploreFlashAgent`）+ 确定性概要索引（`summaries.py`）——解析规划文本生成空间认知与 EXPLORE 指令，供分析/GIS 消费 |
 | `gis_agent` | `graph.py::gis_agent_node` | GIS 空间布局：加载 DataCatalog bundle → 合并用户上传 → **PARSE**（intent）→ **LAYOUT pipeline**（图层）→ SSE 推送；错误经 `_gis_error_handler` 回 conversation |
 
 **路由**（`routing.py`）：
 - `after_conversation`：级联修订（计算影响树 → 分发 Wave 0）> 推进意图检测（`advance_planning_intent`→`_dispatch_current`；`gis_analysis`→`gis_agent`）> 未知工具→`execute_tools` > 普通对话→`END`。
-- `after_analysis`：修订分支（依赖检查分发 / 完成则 END）> 普通分支（同层依赖就绪分发 + **跨层提前分发** `cross_ready`，`step_mode` 除外）> 无就绪→END。
+- `after_analysis`：修订分支（依赖检查分发 / 完成则 END）> 普通分支（同层依赖就绪分发 + **跨层提前分发** `cross_ready`，`step_mode` 除外）> 无就绪→END；**phase=completed 且非 step_mode** 时触发一次 `explore`（EXPLORE 桥接）→ `gis_agent` → `conversation` → END（`explore_done` 标记防重复）。
 
 ---
 

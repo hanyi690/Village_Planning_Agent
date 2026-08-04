@@ -244,7 +244,7 @@ sources:
 
 ### 5.1 示例：添加 DEM 栅格图层
 
-DEM（数字高程模型）是村庄规划地形分析的基础输入。完整接入流程见 [`docs/gis/HOW_TO_ADD_LAYER.md`](../../../../docs/gis/HOW_TO_ADD_LAYER.md) 工作示例，此处给出关键步骤。
+DEM（数字高程模型）是村庄规划地形分析的基础输入。完整接入流程见 [`docs/guides/how-to-add-layer.md`](../../../../docs/guides/how-to-add-layer.md) 工作示例，此处给出关键步骤。
 
 **Step 1 - 裁剪省域 DEM 到村庄 AOI**
 

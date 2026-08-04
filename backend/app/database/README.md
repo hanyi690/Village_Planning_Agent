@@ -15,7 +15,7 @@
 
 - 技术栈：`SQLModel` + `sqlalchemy.ext.asyncio` + `aiosqlite`，驱动 `sqlite+aiosqlite:///`（`DATABASE_DIR/village_planning.db`）。
 - **状态不在业务表里**：会话运行状态（`status/is_executing/stream_state` 等冗余字段已被移除）统一由 LangGraph `AsyncSqliteSaver` 写入独立的 `checkpoints` 表管理，业务表只存元数据。`operations.py` 中的 `update_session_state_async` / `is_execution_active_async` / `get_stream_state_async` 等为历史遗留，新链路（`services/`）已不再依赖。
-- 消费方：`services/`（`runtime/session/report_store/bundle_store/explore_access`）、`api/session_routes.py`、各 `agent` 节点写库。
+- 消费方：`services/`（`runtime/session/report_store/bundle_store`）、`api/session_routes.py`、各 `agent` 节点写库。
 
 ## engine.py 核心机制
 

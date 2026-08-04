@@ -117,11 +117,11 @@
 |---|---|
 | **位置** | `backend/app/agent/` |
 | **依赖** | → Schema, Data, SpatialOps, KG |
-| **主图** | `graph.py` — 5-node main graph |
+| **主图** | `graph.py` — 6-node main graph |
 | **支撑** | `routing.py` · `state.py` |
-| **子模块** | `conversation/` · `analysis/` · `completion/` · `tools/` · `gis/`(parse+execute 子代理) |
+| **子模块** | `conversation/` · `analysis/` · `explore/` · `completion/` · `tools/` · `gis/`(parse+execute 子代理) |
 
-**职责**：5 节点主图编排、路由、状态管理。`gis/` 下含 PARSE 与 EXECUTE 两个子代理，分别向 KG 写入 L3 与 L4。
+**职责**：6 节点主图编排、路由、状态管理。`gis/` 下含 PARSE 与 EXECUTE 两个子代理，分别向 KG 写入 L3 与 L4。
 
 ---
 

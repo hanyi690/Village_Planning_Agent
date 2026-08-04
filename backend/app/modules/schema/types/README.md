@@ -66,7 +66,7 @@ from app.modules.schema.types import (
 
 ## How to extend
 
-See [`docs/gis/HOW_TO_ADD_LAYER.md`](../../../../../docs/gis/HOW_TO_ADD_LAYER.md) for the full guide. Short version:
+See [`docs/guides/how-to-add-layer.md`](../../../../../docs/guides/how-to-add-layer.md) for the full guide. Short version:
 
 1. **New layer type**: add YAML entry to `gis_layer_registry.yaml`
 2. **New Python class**: define Pydantic v2 subclass in `spatial_types.py` / `raster_types.py` / `table_types.py`, export from `__init__.py`, add mapping in `data/ingest.py::_infer_model_class()`

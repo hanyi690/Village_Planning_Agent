@@ -1,6 +1,6 @@
 # Config 层（领域配置）
 
-> 维度/阶段/依赖的 YAML 声明式配置 + 关键词标注规则。**与 `app/core/settings.py` 分工明确**：本层是"业务领域配置"（28 维度分几层、每层哪些维度、依赖与执行波次、RAG 查询词），`core/settings.py` 是"环境/运行参数配置"（API Key、限流、路径）。
+> 维度/阶段/依赖的 YAML 声明式配置。**与 `app/core/settings.py` 分工明确**：本层是"业务领域配置"（28 维度分几层、每层哪些维度、依赖与执行波次、RAG 查询词），`core/settings.py` 是"环境/运行参数配置"（API Key、限流、路径）。
 
 ---
 
@@ -22,7 +22,6 @@
 | `phases.yaml` | **28 维度的唯一来源**：三个 phase（layer1/2/3）+ 每维度的 `tools`/`rag_query`/`prefer_doc_types`/`depends_on`/`layer_depends_on`/`phase_depends_on` |
 | `loader.py` | YAML → `PlanningConfig`（Pydantic 校验），缓存单例 + 维度查询 API |
 | `dependency.py` | 依赖计算器：Wave 波次、下游依赖、影响树、修订执行序列 |
-| `document_types.py` | 维度/地形/文档类型关键词标注（`DimensionTagger`/`TerrainTagger`/`DocumentTypeTagger`）+ 行政区划正则提取 |
 
 ---
 
@@ -62,16 +61,6 @@
 - **就绪检查**：`check_detailed_dependencies_ready(dim, completed)` — L3 执行前校验跨层依赖完成
 
 > **两套依赖 API**：`*_compat`（修订/影响树路径）基于跨层 + 同层依赖合并遍历；非 compat 版（`calculate_waves`）基于同层 `depends_on`。L1 并行由 `execution: parallel` 声明。
-
----
-
-## 五、标注规则（`document_types.py`）
-
-- **维度标注**：`DIMENSIONS`（15 维关键词/定义表）→ `DimensionTagger.detect_dimensions(content, top_k=3)` 按关键词命中计数排序
-- **地形标注**：`TERRAIN_KEYWORDS`（mountain/plain/hill/coastal/riverside）→ `TerrainTagger.detect_terrain`
-- **文档类型**：`DOCUMENT_TYPE_KEYWORDS`（policy/standard/case/guide/report）→ `DocumentTypeTagger.detect_doc_type`（文件名优先）
-- **行政区划**：`extract_regions_from_text` 用正则提取 省/市/县/镇/村 名称
-- 消费方：RAG 文档入库的分类标注、`modules/rag` 检索偏好过滤等
 
 ---
 

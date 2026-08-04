@@ -23,7 +23,6 @@
 | `routes.py` | 统一聚合路由 + 健康检查 + 天地图瓦片代理 | ✅ `main.py` |
 | `session_routes.py` | 会话核心 API（创建/流/反馈/检查点/报告/规划文本/导出/GIS 上传） | ✅ 经 `routes.py` |
 | `gis_test_routes.py` | GIS 开发测试 API（8 端点，仅供前端测试页） | ✅ 经 `routes.py` |
-| `admin_code_routes.py` | 2024 行政区划代码查询（china_area-2024） | ⚠️ **未挂载**（无 include_router） |
 | `schemas.py` | 请求/响应 Pydantic 模型 + `TaskStatus` 枚举 | — |
 
 ---
@@ -37,7 +36,7 @@
 | POST | `/api/sessions` | 创建会话（multipart/form-data：文本 + 图片 + GIS/文档上传；`_process_uploaded_file_db` 解析入库） |
 | GET | `/api/sessions/{id}/stream` | SSE 事件流（`event_generator` 心跳 + 事件队列消费） |
 | GET | `/api/sessions/{id}/sync?from_seq=N` | 断线重连同步（从 seq 增量拉取 + checkpoint 重建事件） |
-| POST | `/api/sessions/{id}/feedback` | 用户反馈（触发修订，走 ReviewService） |
+| POST | `/api/sessions/{id}/feedback` | 用户反馈（approve/reject/rollback，触发修订或下一层；走 `resume_from_interrupt`） |
 | GET | `/api/sessions/{id}/status` | 状态快照（`state_to_ui_status` + 消息提取） |
 | DELETE | `/api/sessions/{id}` | 删除会话（级联清理，`SessionService.delete_session`） |
 

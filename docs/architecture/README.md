@@ -25,7 +25,8 @@ README.md（根）                             ← 对外门面（只链接不�
 
 | 文档 | 核心内容 |
 |------|----------|
-| [agent-graph.md](./agent-graph.md) | 5 节点主图（`graph.py` + `routing.py` + `state.py`），节点表、ASCII 图、路由逻辑 |
+| [structure.md](./structure.md) | 项目结构与实现总览（顶层布局、五层模块、主图、会话路径） |
+| [agent-graph.md](./agent-graph.md) | 6 节点主图（`graph.py` + `routing.py` + `state.py`），节点表、ASCII 图、路由逻辑 |
 | [backend-api.md](./backend-api.md) | `/api/sessions/*` 7 端点 + SSE 单通道 + 服务层 + 天地图瓦片代理 |
 | [frontend.md](./frontend.md) | Next.js 14 + Zustand 5 + MapLibre GL，目录结构、SSE 连接管理 |
 | [modules.md](./modules.md) | 五层模块实现映射（schema / data / spatial_ops / kg / rag） |
@@ -36,6 +37,7 @@ README.md（根）                             ← 对外门面（只链接不�
 
 | 想了解... | 请阅读 |
 |----------|--------|
+| 项目怎么组织 | [structure.md](./structure.md) |
 | 主图怎么跑 | [agent-graph.md](./agent-graph.md) |
 | API 端点有哪些 | [backend-api.md](./backend-api.md) |
 | 前端状态怎么管 | [frontend.md](./frontend.md) |
