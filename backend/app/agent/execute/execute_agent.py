@@ -1321,8 +1321,17 @@ async def _write_l4_node(state: ExecuteAgentState) -> dict:
         return {}
 
     from app.modules.kg.builder.layer4 import apply_planned_state
+    from app.agent.execute.planned_state_builder import changeset_to_planned_state
 
-    planned_state = _layout_configs_to_planned_state(state)
+    if getattr(state, "parcel_changeset", None) is not None:
+        planned_state = changeset_to_planned_state(state.parcel_changeset, state.intent)
+        logger.info(
+            "[EXECUTE:l4_write] building PlannedState from ParcelChangeSet (%d changes)",
+            len(state.parcel_changeset.changes),
+        )
+    else:
+        logger.warning("[EXECUTE:l4_write] no parcel_changeset; falling back to layout_configs path")
+        planned_state = _layout_configs_to_planned_state(state)
     written = sum(
         len(items)
         for items in (
