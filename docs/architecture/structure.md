@@ -38,14 +38,14 @@ EXPLORE 可由任一 Gate 通过 `ExplorationRequest` 调用，返回 `EvidenceB
 
 | 目标组件 | 当前主要入口 | 迁移说明 |
 |---|---|---|
-| WorkflowGraph | `agent/graph.py`, `routing.py` | 当前仍是 6 节点总图 |
+| WorkflowGraph | `agent/bootstrap/graph.py`, `conversation_router/edges.py` | 当前仍是 6 节点总图 |
 | ContextProvider | `services/session_bundle.py`, `session_kg.py` | 需合并 Bundle/KG 生命周期 |
-| L1/L2/L3 | `agent/analysis/`, `completion/` | 保留维度并行，改为层内子图 |
+| L1/L2/L3 | `agent/l1_observe/`, `l2_strategize/`, `l3_plan/`, `plan_state/completion_node.py` | L1 已独立，L2/L3 暂借 l1_observe，待拆层内子图 |
 | ExploreGraph | `agent/explore/` | 删除候选地块写入职责 |
-| IntentCompiler | `agent/gis/parse/` | 合并旧 `tools/gis/parse.py` |
+| IntentCompiler | `agent/select/parse_agent.py` | 旧 `tools/gis/parse.py` 已删除 |
 | GroundGraph | `modules/spatial_ops/grounding.py` | 拆出语义解析和几何精化 |
-| SelectGraph | `agent/gis/execute/agent.py` | 从 Execute 中提取选址决策 |
-| ExecuteGraph | `agent/gis/execute/`, `tools/gis/_generation/` | Worker 化并合并道路实现 |
+| SelectGraph | `agent/select/`, `agent/execute/execute_agent.py` | 从 Execute 中提取选址决策 |
+| ExecuteGraph | `agent/execute/`, `tools/gis/_generation/` | Worker 化并合并道路实现 |
 | Reconcile | `agent/explore/verification.py` | 扩展为 Intent ↔ PlannedState 对账 |
 
 ## 4. 一次会话的 artifact 流

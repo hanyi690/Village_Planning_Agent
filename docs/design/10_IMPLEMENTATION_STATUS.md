@@ -11,7 +11,7 @@
 | L2 Strategy snapshot | PARTIAL | 有阶段和波次，但 KG 认知与策略 Gate 不完整 |
 | L3 PlanningIntent | PARTIAL | 有 `SpatialPlanningIntent`，但仍混有旧 parse 路径 |
 | EXPLORE EvidenceBundle | PARTIAL | 当前 `ExplorationInstruction` 仍携带候选 BSM，需拆分 |
-| IntentCompiler | PARTIAL | `agent/gis/parse/agent.py` 是主要实现，旧 `tools/gis/parse.py` 待清理 |
+| IntentCompiler | PARTIAL | `agent/select/parse_agent.py` 是主要实现，旧 `tools/gis/parse.py` 已删除 |
 | GROUND 子图 | TARGET | 当前 grounding 分散在 Explore、Parse 和 spatial_ops |
 | SELECT 子图 | TARGET | 当前项目节点按候选顺序选第一个可用地块 |
 | EXECUTE Worker 子图 | PARTIAL | 有 layout/facility/road 等 Worker，但道路存在重复实现 |
@@ -24,11 +24,11 @@
 
 ## 当前实现的事实入口
 
-- 主图：`backend/app/agent/graph.py`
-- 层级路由：`backend/app/agent/routing.py`
-- GIS 管线：`backend/app/agent/gis/layout_pipeline.py`
+- 主图：`backend/app/agent/bootstrap/graph.py`
+- 层级路由：`backend/app/agent/conversation_router/edges.py`
+- GIS 管线：`backend/app/agent/execute/layout_pipeline.py`
 - 空间接地：`backend/app/modules/spatial_ops/grounding.py`
-- 项目执行：`backend/app/agent/gis/execute/agent.py`
+- 项目执行：`backend/app/agent/execute/execute_agent.py`
 - Session Bundle：`backend/app/services/session_bundle.py`
 
 这些入口是迁移对象，不是目标架构的永久边界。
