@@ -1,6 +1,7 @@
 """VALIDATE subgraph — public API."""
 
 from app.agent.validate.aggregate import validate_aggregate
+from app.agent.validate.gate import evaluate_validate_gate, validate_gate_route
 from app.agent.validate.checks import (
     check_accessibility,
     check_area_conservation,
@@ -14,6 +15,8 @@ from app.agent.validate.checks import (
 
 __all__ = [
     "validate_aggregate",
+    "evaluate_validate_gate",
+    "validate_gate_route",
     "check_hard_constraints",
     "check_area_conservation",
     "check_topology",
