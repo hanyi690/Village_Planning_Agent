@@ -16,7 +16,7 @@ from langchain_core.runnables import RunnableSerializable
 from app.core.settings import LLM_MODEL, MAX_TOKENS
 from ...core.llm import create_llm
 from app.utils.logger import get_logger
-from ..state import PlanningPhase, PHASE_DESCRIPTIONS
+from app.agent.bootstrap.phase_machine import PlanningPhase, PHASE_DESCRIPTIONS
 from app.tools.intent_tools import advance_planning_intent, gis_analysis
 from app.tools.tools import get_tools_for_llm
 

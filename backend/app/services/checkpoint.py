@@ -16,7 +16,7 @@ from datetime import datetime
 from typing import Dict, List, Any, Optional
 
 from app.core.settings import MAX_SESSION_EVENTS
-from app.agent.state import get_layer_dimensions, get_layer_name, _phase_to_layer
+from app.agent.bootstrap.phase_machine import get_layer_dimensions, get_layer_name, _phase_to_layer
 from app.utils.event_factory import create_layer_completed_event
 
 # Lazy import for DIMENSION_NAMES to avoid circular dependency

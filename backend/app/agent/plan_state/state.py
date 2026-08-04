@@ -1,24 +1,26 @@
-"""
-统一规划状态定义 - 简化版
+"""Run-time state: AgentState TypedDict, reducers, create_initial_state, state_to_ui_status.
 
-AgentState: 核心状态定义
-辅助函数: phase/layer转换、维度查询
+Migrated from agent/state.py per docs/architecture/agent-graph.md §5.
 """
 
 import math
 import operator
 from typing import TypedDict, List, Dict, Any, Optional, Annotated
-from enum import Enum
 from langchain_core.messages import BaseMessage
 from langgraph.graph.message import add_messages
+
+from app.agent.bootstrap.phase_machine import (
+    PlanningPhase,
+    get_layer_name,
+    _phase_to_layer,
+    _layer_to_phase,
+)
 
 # Use plain add_messages reducer.
 # DeltaChannel is NOT supported with SqliteSaver (requires per-channel blob table,
 # only InMemorySaver / PostgresSaver support delta chains).
 # See: langgraph PR #7547
 _messages_reducer = add_messages
-
-from ..config import get_layer_dimensions as _get_layer_dimensions, get_wave_config
 
 
 DEFAULT_RAG_LAYER_CONFIG = {1: True, 2: False, 3: True}
@@ -210,87 +212,8 @@ class AgentState(TypedDict, total=False):
 
 
 # ==========================================
-# 阶段枚举
-# ==========================================
-
-class PlanningPhase(Enum):
-    """规划阶段"""
-    INIT = "init"
-    LAYER1 = "layer1"
-    LAYER2 = "layer2"
-    LAYER3 = "layer3"
-    COMPLETED = "completed"
-
-
-# ==========================================
-# 维度配置常量
-# ==========================================
-
-LAYER_DIMENSIONS: Dict[int, List[str]] = {
-    1: _get_layer_dimensions(1),
-    2: _get_layer_dimensions(2),
-    3: _get_layer_dimensions(3),
-}
-
-
-def _build_wave_dimensions() -> Dict[int, Dict[int, List[str]]]:
-    """构建波次维度映射"""
-    waves: Dict[int, Dict[int, List[str]]] = {1: {1: []}, 2: {}, 3: {}}
-    waves[1][1] = LAYER_DIMENSIONS[1]
-
-    wave_config = get_wave_config()
-    for wave_num, cfg in wave_config.items():
-        for dim in cfg.get("dimensions", []):
-            if dim in LAYER_DIMENSIONS[2]:
-                layer = 2
-            elif dim in LAYER_DIMENSIONS[3]:
-                layer = 3
-            else:
-                continue
-            if wave_num not in waves[layer]:
-                waves[layer][wave_num] = []
-            waves[layer][wave_num].append(dim)
-    return waves
-
-
-WAVE_DIMENSIONS: Dict[int, Dict[int, List[str]]] = _build_wave_dimensions()
-
-TOTAL_WAVES: Dict[int, int] = {
-    layer: max(waves.keys()) if waves else 1
-    for layer, waves in WAVE_DIMENSIONS.items()
-}
-TOTAL_WAVES[1] = 1
-
-PHASE_ORDER: List[str] = [
-    PlanningPhase.INIT.value, PlanningPhase.LAYER1.value,
-    PlanningPhase.LAYER2.value, PlanningPhase.LAYER3.value,
-    PlanningPhase.COMPLETED.value
-]
-
-LAYER_NAMES: Dict[str, str] = {
-    "layer1": "现状分析", "layer2": "规划思路", "layer3": "详细规划",
-}
-
-LAYER_NAMES_BY_NUMBER: Dict[int, str] = {
-    1: "现状分析", 2: "规划思路", 3: "详细规划",
-}
-
-PHASE_DESCRIPTIONS: Dict[str, str] = {
-    PlanningPhase.INIT.value: "初始化阶段",
-    PlanningPhase.LAYER1.value: "现状分析阶段",
-    PlanningPhase.LAYER2.value: "规划思路阶段",
-    PlanningPhase.LAYER3.value: "详细规划阶段",
-    PlanningPhase.COMPLETED.value: "规划完成",
-}
-
-
-# ==========================================
 # 辅助函数
 # ==========================================
-
-def get_layer_name(layer: int) -> str:
-    return LAYER_NAMES_BY_NUMBER.get(layer, f"Layer {layer}")
-
 
 def create_initial_state(
     session_id: str,
@@ -344,56 +267,6 @@ def create_initial_state(
         "explore_instructions": {},  # P2: EXPLORE 桥接产出
         "report_summary_index": {},  # P2: EXPLORE 概要索引
     }
-
-
-def _phase_to_layer(phase: str) -> Optional[int]:
-    """phase 转 layer"""
-    simple_map = {
-        PlanningPhase.INIT.value: 0,
-        PlanningPhase.LAYER1.value: 1,
-        PlanningPhase.LAYER2.value: 2,
-        PlanningPhase.LAYER3.value: 3,
-    }
-    if phase in simple_map:
-        return simple_map[phase]
-    if phase.startswith("layer") and "_" in phase:
-        try:
-            num = int(phase.split("_")[0].replace("layer", ""))
-            if num in [1, 2, 3]:
-                return num
-        except (ValueError, IndexError):
-            pass
-    if phase == PlanningPhase.COMPLETED.value:
-        return None
-    return None
-
-
-def _layer_to_phase(layer: int) -> str:
-    """layer 转 phase"""
-    map_ = {1: PlanningPhase.LAYER1.value, 2: PlanningPhase.LAYER2.value, 3: PlanningPhase.LAYER3.value}
-    return map_.get(layer, PlanningPhase.INIT.value)
-
-
-def get_layer_dimensions(layer: int) -> List[str]:
-    return LAYER_DIMENSIONS.get(layer, [])
-
-
-def get_wave_dimensions(layer: int, wave: int) -> List[str]:
-    return WAVE_DIMENSIONS.get(layer, {}).get(wave, [])
-
-
-def get_total_waves(layer: int) -> int:
-    return TOTAL_WAVES.get(layer, 1)
-
-
-def get_next_phase(current_phase: str) -> Optional[str]:
-    try:
-        idx = PHASE_ORDER.index(current_phase)
-        if idx < len(PHASE_ORDER) - 1:
-            return PHASE_ORDER[idx + 1]
-    except ValueError:
-        pass
-    return None
 
 
 def _sanitize_json(obj):
@@ -495,13 +368,7 @@ def state_to_ui_status(state: Dict[str, Any], db_session: Optional[Dict] = None,
 
 __all__ = [
     "AgentState", "ReportVersion", "DimensionSummary",
-    "PlanningPhase",
     "create_initial_state",
-    "_phase_to_layer", "_layer_to_phase",
-    "get_layer_dimensions", "get_wave_dimensions", "get_total_waves",
-    "get_next_phase", "get_layer_name",
-    "LAYER_DIMENSIONS", "WAVE_DIMENSIONS", "TOTAL_WAVES",
-    "LAYER_NAMES", "LAYER_NAMES_BY_NUMBER", "PHASE_DESCRIPTIONS",
     "state_to_ui_status",
     "_merge_lists", "_merge_layer_char_counts",  # Performance optimization reducers
 ]

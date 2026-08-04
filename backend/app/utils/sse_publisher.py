@@ -483,7 +483,7 @@ class SSEPublisher:
 # 便捷函数
 def send_layer_event(session_id: str, layer: int, event_type: str, **kwargs) -> None:
     """发送层级相关事件"""
-    from app.agent.state import get_layer_name
+    from app.agent.bootstrap.phase_machine import get_layer_name
     kwargs.setdefault("layer_name", get_layer_name(layer))
     SSEPublisher.send_event(session_id, event_type, layer=layer, **kwargs)
 

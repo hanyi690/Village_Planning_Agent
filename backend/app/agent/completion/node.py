@@ -104,7 +104,7 @@ async def layer_completion_check(
         is_revision, pending_count,
     )
 
-    from app.agent.state import (
+    from app.agent.bootstrap.phase_machine import (
         _phase_to_layer, get_layer_dimensions, get_next_phase,
         get_layer_name,
     )

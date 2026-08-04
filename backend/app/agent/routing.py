@@ -14,7 +14,7 @@ from langgraph.graph import END
 from langgraph.types import Send
 from langchain_core.messages import AIMessage
 
-from .state import PlanningPhase, get_layer_dimensions, _phase_to_layer
+from app.agent.bootstrap.phase_machine import PlanningPhase, get_layer_dimensions, _phase_to_layer
 from ..config import get_dimension_layer
 from ..config.dependency import get_impact_tree_compat, get_next_revision_wave
 from ..tools.intent_tools import advance_planning_intent, gis_analysis

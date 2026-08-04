@@ -43,7 +43,8 @@ from app.database.operations import (
 )
 from app.services.sse import sse_manager
 from app.services.checkpoint import checkpoint_service
-from app.agent.state import get_layer_dimensions, get_layer_name, state_to_ui_status, get_next_phase, _phase_to_layer
+from app.agent.plan_state.state import state_to_ui_status
+from app.agent.bootstrap.phase_machine import get_layer_dimensions, get_layer_name, get_next_phase, _phase_to_layer
 from app.utils.sse_publisher import SSEPublisher
 from app.core.events import SSEEventType
 

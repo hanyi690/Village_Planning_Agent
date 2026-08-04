@@ -18,7 +18,7 @@ from docx.enum.text import WD_ALIGN_PARAGRAPH, WD_LINE_SPACING
 from docx.enum.table import WD_TABLE_ALIGNMENT
 
 from app.services.report_store import ReportStore
-from app.agent.state import LAYER_NAMES_BY_NUMBER
+from app.agent.bootstrap.phase_machine import LAYER_NAMES_BY_NUMBER
 from .docx_styles import (
     setup_document_styles,
     setup_page_margins,

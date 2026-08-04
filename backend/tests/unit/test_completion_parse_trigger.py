@@ -4,7 +4,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from app.agent.state import get_layer_dimensions
+from app.agent.bootstrap.phase_machine import get_layer_dimensions
 
 
 def test_layer1_complete_triggers_extraction(monkeypatch):
