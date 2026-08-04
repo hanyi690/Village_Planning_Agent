@@ -23,9 +23,12 @@ def test_advisory_crosswalks_exports_symbols():
 
 def test_code_sets_no_longer_exports_crosswalks():
     import app.modules.schema.encodings.code_sets as cs
+    # Planning-zone derivation stays out of code_sets (advisory-only).
     assert not hasattr(cs, "DLBM_TO_PLANNING_ZONE")
     assert not hasattr(cs, "dlbm_to_planning_zone")
-    assert not hasattr(cs, "get_zone_type_for_dlbm")
+    # Wave A.1 Task 8: the CURRENT functional classification of a DLBM code
+    # (DLBM→zone_type) is same-system and now lives in code_sets.
+    assert hasattr(cs, "get_zone_type_for_dlbm")
 
 
 def test_code_sets_keeps_same_system_mappings():

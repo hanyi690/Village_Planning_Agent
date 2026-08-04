@@ -16,10 +16,6 @@ from ..schema.contracts.land_balance_contracts import (
     LandBalanceTable,
 )
 from ..schema.contracts.delivery_manifest_contracts import DeliveryGate
-from ..schema.advisory_crosswalks import (
-    get_planning_zone_from_landuse,
-    normalize_landuse,
-)
 
 logger = logging.getLogger(__name__)
 
@@ -53,6 +49,7 @@ def compute_land_balance(
     # Aggregate L4 (planned) areas
     planned_by_code: Dict[str, float] = defaultdict(float)
     planned_by_zone: Dict[str, float] = defaultdict(float)
+    planned_zone_by_code: Dict[str, str] = {}
     planned_total = 0.0
     for p in planned_parcels:
         code = _get_attr(p, "planning_land_use", "") or _get_attr(p, "dlbm", "0000")
@@ -62,6 +59,7 @@ def compute_land_balance(
         planned_by_code[code] += area
         if zone:
             planned_by_zone[zone] += area
+            planned_zone_by_code.setdefault(code, zone)
         planned_total += area
 
     if total_area_ha <= 0:
@@ -79,14 +77,7 @@ def compute_land_balance(
 
         lu_name = _code_to_name(code)
 
-        # Determine planning zone: try to resolve from code via name
-        pz = None
-        try:
-            lu, _ = normalize_landuse(lu_name)
-            if lu:
-                pz = get_planning_zone_from_landuse(lu)
-        except Exception:
-            pass
+        pz = planned_zone_by_code.get(code, "")
 
         if cur_area > 0 or pla_area > 0:
             rows.append(LandBalanceRow(

@@ -26,7 +26,7 @@ v3.0 (2026-07-30) changes:
 
 from __future__ import annotations
 
-from typing import Dict, List, Set
+from typing import Dict, List, Optional, Set, Tuple
 
 from .dicts.loader import get_center
 
@@ -185,6 +185,131 @@ def parse_element_code(code: str) -> Dict[str, str]:
     return result
 
 
+# ============================================================
+# Current functional classification (DLBM → zone_type) — same-system
+# ============================================================
+# Wave A.1 Task 8: current-state descriptive classification of the DLBM
+# encoding ("this parcel is currently agriculture/residential/ecological")
+# is same-system and belongs here. Planning-zone derivation (DLBM→planning_zone,
+# planning_zone→control_code, VNE→zone_type used as planning) stays in
+# advisory_crosswalks and is legacy-gated.
+
+def _mapping_default_to_dict(m) -> Dict[str, str]:
+    """Extract {source: default} from a MappingTable.to_dict() result."""
+    raw = m.to_dict()
+    return {k: v[0] for k, v in raw.items()}
+
+
+_dlbm_to_zone_types_current = get_center().get_mapping("gbt21010_to_zone_types_current")
+_dlbm_to_zone_types_appendix5 = get_center().get_mapping("gbt21010_to_zone_types_appendix5")
+
+# Current functional classification map. Values match the legacy
+# advisory_crosswalks tables exactly: appendix5 (dlbm_ref) mapping is the base
+# DLBM→zone_type table; the current-state encoding is the preferred overlay.
+DLBM_TO_ZONE_TYPE: Dict[str, str] = _mapping_default_to_dict(_dlbm_to_zone_types_appendix5)
+DLBM_TO_ZONE_TYPE_CURRENT: Dict[str, str] = _mapping_default_to_dict(_dlbm_to_zone_types_current)
+
+ZONE_TYPE_TO_DLBMS: Dict[str, List[str]] = {}
+for _code, _zt in DLBM_TO_ZONE_TYPE.items():
+    ZONE_TYPE_TO_DLBMS.setdefault(_zt, []).append(_code)
+for _code, _zt in DLBM_TO_ZONE_TYPE_CURRENT.items():
+    ZONE_TYPE_TO_DLBMS.setdefault(_zt, []).append(_code)
+
+
+def _zone_type_for_dlbm_with_fallback(dlbm: str) -> str:
+    code = str(dlbm).strip()
+    zt = DLBM_TO_ZONE_TYPE_CURRENT.get(code)
+    if zt:
+        return zt
+    zt = DLBM_TO_ZONE_TYPE_CURRENT.get(code[:2])
+    if zt:
+        return zt
+    return DLBM_TO_ZONE_TYPE.get(code, "农业用地")
+
+
+def get_zone_type_for_dlbm(dlbm: str) -> str:
+    """Current functional classification of a DLBM code (e.g. '0101' -> '农业用地')."""
+    return _zone_type_for_dlbm_with_fallback(dlbm)
+
+
+def get_dlbms_for_zone_type(zone_type: str) -> List[str]:
+    """Reverse lookup: all DLBM codes whose current functional classification is zone_type."""
+    return ZONE_TYPE_TO_DLBMS.get(zone_type, [])
+
+
+# ============================================================
+# Land-use name normalization (same-system)
+# ============================================================
+# Wave A.1 Task 8: LLM free-text → canonical GHYTMC land-use name. Same-system
+# name normalization; no planning-zone derivation.
+
+_LANDUSE_ALIASES: Dict[str, str] = {
+    "水田": "耕地", "旱地": "耕地", "水浇地": "耕地", "菜地": "耕地",
+    "果园": "园地", "茶园": "园地", "橡胶园": "园地",
+    "乔木林地": "商品林", "竹林地": "商品林", "灌木林地": "商品林",
+    "有林地": "商品林", "其他林地": "商品林", "林地": "商品林",
+    "生态林地": "生态林",
+    "天然牧草地": "草地", "人工牧草地": "草地", "其他草地": "草地",
+    "农村宅基地": "宅基地", "村庄": "宅基地", "住宅": "宅基地",
+    "基础设施用地": "基础设施", "公用设施": "基础设施",
+    "道路用地": "村内交通", "农村道路": "村内交通", "村道": "村内交通",
+    "坑塘水面": "水域", "河流水面": "水域", "水库水面": "水域",
+    "养殖坑塘": "水域",
+    "沟渠": "水利设施用地", "水利设施": "水利设施用地",
+    "设施农用地": "设施农用地",
+    "工业用地": "经营性建设用地", "商业用地": "经营性建设用地",
+    "产业用地": "经营性建设用地", "经营性": "经营性建设用地",
+    "公共服务": "公共服务设施", "学校": "公共服务设施", "卫生所": "公共服务设施",
+    "采矿用地": "采矿用地",
+    "风景名胜": "风景名胜用地", "风景名胜用地": "风景名胜用地",
+    "特殊用地": "特殊用地",
+    "自然保留地": "自然保留地", "空闲地": "自然保留地",
+    "城镇": "城镇用地",
+    "对外交通": "对外交通",
+    "景观绿化": "景观与绿化", "绿地": "景观与绿化",
+    "商品林": "商品林", "生态林": "生态林",
+    "园地": "园地", "耕地": "耕地", "草地": "草地", "水域": "水域",
+}
+
+
+def normalize_landuse(raw: str) -> Tuple[Optional[str], str]:
+    """LLM 自由文本 → 规范化地类名称.
+
+    匹配策略（按优先级）:
+    1. 精确匹配 GHYTMC 规范名称
+    2. 别名表匹配
+    3. 字符串包含匹配
+    4. 失配 → (None, 说明)
+
+    Returns:
+        (规范化名称 | None, 匹配说明)
+    """
+    raw = raw.strip()
+    if not raw:
+        return None, "空字符串"
+
+    # 1. 精确匹配规范名称（GHYTMC 名称集合）
+    canonical_names = set(GHYTBM_TO_GHYTMC.values())
+    if raw in canonical_names:
+        return raw, f"精确匹配: {raw}"
+
+    # 2. 别名表匹配
+    if raw in _LANDUSE_ALIASES:
+        return _LANDUSE_ALIASES[raw], f"别名匹配: {raw} → {_LANDUSE_ALIASES[raw]}"
+
+    # 3. 字符串包含匹配
+    for alias, canonical in _LANDUSE_ALIASES.items():
+        if alias in raw or raw in alias:
+            return canonical, f"包含匹配: '{raw}' ⊂ '{alias}' → {canonical}"
+
+    # 4. 尝试 DLBM_TO_DLMC 匹配
+    for name in DLBM_TO_DLMC.values():
+        if raw == name or name in raw or raw in name:
+            return name, f"编码匹配: {raw} → {name}"
+
+    return None, f"失配: '{raw}' 未在任何词表中找到匹配"
+
+
 __all__ = [
     # Dicts
     "DLBM_TO_DLMC",
@@ -209,4 +334,8 @@ __all__ = [
     # Functions
     "is_basic_farmland", "is_general_agriculture",
     "parse_element_code",
+    # Current functional classification (same-system)
+    "DLBM_TO_ZONE_TYPE", "DLBM_TO_ZONE_TYPE_CURRENT", "ZONE_TYPE_TO_DLBMS",
+    "get_zone_type_for_dlbm", "get_dlbms_for_zone_type",
+    "normalize_landuse",
 ]

@@ -16,6 +16,7 @@ from __future__ import annotations
 from typing import Any, Dict, List, Optional, Tuple
 
 from app.utils.logger import get_logger
+from app.modules.schema.advisory_crosswalks.legacy import require_legacy
 
 logger = get_logger(__name__)
 
@@ -136,6 +137,7 @@ class DynamicZoningEngine:
           3. Geological hazard buffer → construction demoted to 生态控制区
           4. DLBM static mapping (default)
         """
+        require_legacy("DynamicZoningEngine")
         _ensure_funcs()
         base_zone = _dlbm_to_planning_zone(dlbm)
 

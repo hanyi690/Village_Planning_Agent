@@ -63,21 +63,12 @@ def _active_chain_roots() -> list[str]:
 # that file's entry here. Adding entries here is forbidden (budget only
 # shrinks). The budget must reach zero before Wave A is marked final-pass.
 #
-# Current baseline (Wave A.1): 26 files / 26 imports reachable from the
-# active chain. Each subsequent wave removes entries until {}.
+# Current baseline (Wave A.1 Task 8): 11 files / 11 imports reachable from the
+# active chain — the 8 legacy-gated EXECUTE files plus 3 newly legacy-gated
+# dev/validation tools (dynamic_zoning, compare_layouts, layout_validator).
+# Each subsequent wave removes entries until {}.
 VIOLATION_BUDGET: dict[str, int] = {
-    "app/modules/kg/queries/semantic.py": 1,
-    "app/modules/schema/contracts/parse_contracts.py": 1,
-    "app/modules/schema/encodings/classification.py": 1,
-    "app/modules/schema/output/gdb.py": 1,
-    "app/modules/schema/utils/metrics.py": 1,
-    "app/modules/spatial_ops/constraint_compiler.py": 1,
-    "app/modules/spatial_ops/context.py": 1,
-    "app/modules/spatial_ops/export_package.py": 1,
-    "app/modules/spatial_ops/land_balance.py": 1,
-    "app/modules/spatial_ops/relations.py": 1,
     "app/tools/gis/_analytics/dynamic_zoning.py": 1,
-    "app/tools/gis/_analytics/metrics_calculator.py": 1,
     "app/tools/gis/_generation/land_use_zone_generator.py": 1,
     "app/tools/gis/_generation/optimizer/mip_allocator.py": 1,
     "app/tools/gis/_generation/optimizer/mip_solver.py": 1,
@@ -88,7 +79,6 @@ VIOLATION_BUDGET: dict[str, int] = {
     "app/tools/gis/_rendering/compare_layouts.py": 1,
     "app/tools/gis/_validation/layout_validator.py": 1,
     "app/tools/gis/generate.py": 1,
-    "app/utils/code_lookup.py": 1,
 }
 
 

@@ -15,7 +15,6 @@ from __future__ import annotations
 from collections import Counter
 from typing import Any, Dict, Set
 
-from ..advisory_crosswalks import get_zone_type_for_dlbm
 from ..encodings.code_sets import (
     BASIC_FARMLAND_CODES,
     GENERAL_AGRICULTURE_CODES,
@@ -111,7 +110,9 @@ def compute_land_use_metrics(gis_data: Dict[str, Any]) -> Dict[str, Any]:
         total_area_ha += area
         if dlbm:
             dlbm_counts[dlbm] += 1
-            zone_type = get_zone_type_for_dlbm(dlbm)
+            # Wave A.1: zone_type is not derived from DLBM in activity chain.
+            # Use parcel's own zone_type attribute if provided, else '未分类'.
+            zone_type = str(props.get("zone_type", "")).strip() or "未分类"
             zone_areas[zone_type] += area
 
     # Compute category areas

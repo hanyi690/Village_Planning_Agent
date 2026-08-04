@@ -20,6 +20,7 @@ from app.modules.schema.advisory_crosswalks import (
     get_primary_zone,
     get_primary_zone_for_planning_zone,
 )
+from app.modules.schema.advisory_crosswalks.legacy import require_legacy
 from app.modules.schema import (
     PLANNING_ZONE_NAMES,
     PRIMARY_ZONE_NAMES,
@@ -376,6 +377,7 @@ def compare(
     Returns:
         ComparisonReport with all match metrics
     """
+    require_legacy("CompareLayouts")
     # Extract layers from generated layout
     func_zone = None
     plan_zone = None

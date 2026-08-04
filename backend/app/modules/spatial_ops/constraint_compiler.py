@@ -21,10 +21,6 @@ from ..schema.contracts.constraint_contracts import (
     DroppedItem,
 )
 from ..schema.contracts.parse_contracts import SpatialConstraint
-from ..schema.advisory_crosswalks import (
-    get_planning_zone_from_landuse,
-    normalize_landuse,
-)
 
 logger = logging.getLogger(__name__)
 
@@ -145,12 +141,7 @@ class ConstraintCompiler:
         if c.type == "area_constraint":
             if c.land_use is None or c.target_area_ha is None:
                 return None
-            zone = None
-            try:
-                if isinstance(c.land_use, str):
-                    zone = get_planning_zone_from_landuse(c.land_use)
-            except Exception:
-                zone = None
+            zone = c.zone_type or ""
 
             return CompiledConstraint(
                 id=f"parse_area_{idx}",

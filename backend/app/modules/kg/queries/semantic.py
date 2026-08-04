@@ -534,7 +534,6 @@ def get_parcels_by_planning_zone(kg, planning_zone: str) -> List[Dict[str, Any]]
         List of parcel summaries with BSM, DLBM, area, and relations.
     """
     try:
-        from app.modules.schema.advisory_crosswalks import normalize_landuse
         from app.modules.schema.encodings.code_sets import PLANNING_ZONE_NAMES
 
         # Validate planning zone
@@ -1167,29 +1166,18 @@ def get_entity_semantics(kg, entity_label: str = "", entity_type: str = "", bsm:
                     break
             result["matching_entities"]["sample_bsms"] = sample_bsms
 
-            # Encoding bridges from code_sets
+            # Encoding bridges - same-system code→name only (Wave A.1:
+            # no cross-system derivation exposed to the LLM)
             try:
-                from app.modules.schema.advisory_crosswalks import (
-                    DLBM_TO_ZONE_TYPE, DLBM_TO_PLANNING_ZONE,
-                    DLBM_TO_PRIMARY_ZONE, DLBM_TO_GHYTBM,
-                )
                 from app.modules.schema.encodings.code_sets import DLBM_TO_DLMC
                 # Find DLBM for this label
                 for dlbm, dlmc in DLBM_TO_DLMC.items():
                     if dlmc == entity_label:
                         result["encoding_bridges"]["dlbm"] = dlbm
                         result["encoding_bridges"]["dlmc"] = dlmc
-                        result["encoding_bridges"]["zone_type"] = DLBM_TO_ZONE_TYPE.get(dlbm, "")
-                        result["encoding_bridges"]["planning_zone"] = DLBM_TO_PLANNING_ZONE.get(dlbm, "")
-                        result["encoding_bridges"]["primary_zone"] = DLBM_TO_PRIMARY_ZONE.get(dlbm, "")
-                        result["encoding_bridges"]["ghytbm"] = DLBM_TO_GHYTBM.get(dlbm, "")
                         break
             except Exception:
                 pass
-
-            # If no taxonomic_parent from KG, derive from code_sets
-            if not result["taxonomic_parent"] and result["encoding_bridges"].get("zone_type"):
-                result["taxonomic_parent"] = result["encoding_bridges"]["zone_type"]
 
         # If entity_type provided, get type-level info
         if entity_type and not entity_label and not bsm:

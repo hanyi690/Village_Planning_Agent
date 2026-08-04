@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
 from app.utils.logger import get_logger
+from app.modules.schema.advisory_crosswalks.legacy import require_legacy
 from app.modules.schema import PLANNING_ZONE_NAMES
 
 logger = get_logger(__name__)
@@ -121,6 +122,7 @@ class LayoutValidator:
         protected_parcels_detail: Optional[List[Dict[str, Any]]] = None,
         kg_vne_summary: Optional[List[Dict[str, Any]]] = None,
     ) -> ValidationReport:
+        require_legacy("LayoutValidator")
         checks = [
             self._check_area_constraints(constraints or [], layout_configs),
             self._check_zone_completeness(layout_configs),
