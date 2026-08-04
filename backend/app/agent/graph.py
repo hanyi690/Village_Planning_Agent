@@ -65,13 +65,22 @@ async def gis_agent_node(state: Dict[str, Any]) -> Dict[str, Any]:
             generates spatial layout with guaranteed step ordering and validation retry.
     """
     from .gis.layout_pipeline import build_layout_pipeline
-    from app.services.session_bundle import build_session_bundle
 
     session_id = state.get("session_id", "")
     village_name = state.get("config", {}).get("village_name", "")
 
-    # ── Load GIS data via DataCatalog (schema-driven, single path) ──
-    gis_bundle = await build_session_bundle(session_id, village_name)
+    # ── 单一路径：SessionPlanningContext 组装 bundle/KG/gazetteer/anchors/reports ──
+    # 消除 gis_agent_node / ensure_session_kg / layout_pipeline._fetch/_build_kg 的重复构建。
+    from app.services.context import build_planning_context
+
+    context = await build_planning_context(
+        session_id, village_name, include_reports=True
+    )
+    village_name = context.village_name or village_name
+    gis_bundle = context.bundle
+    gazetteer = context.gazetteer
+    kg_session_ref = context.kg_session_ref
+
     user_uploaded = state.get("user_uploaded_data", {})
     has_uploaded_sources = any(
         source.startswith("upload:")
@@ -95,6 +104,10 @@ async def gis_agent_node(state: Dict[str, Any]) -> Dict[str, Any]:
     gis_data = gis_bundle.to_geojson_dict()
 
     reports, summaries = await _get_reports_and_summaries(state)
+    if context.reports:
+        reports.update(context.reports)
+    if context.report_summary_index:
+        summaries.update(context.report_summary_index)
 
     # ── Step 1: 收集 L1+L3 instruction 段（P8 结构化定位表）─ EXPLORE 产出 ──
     # 消除双重 parse：不再独立调用 create_parse_agent_graph，统一由
@@ -164,7 +177,9 @@ async def gis_agent_node(state: Dict[str, Any]) -> Dict[str, Any]:
                 }
             }
         )
-        bound_entities = bind_exploration_to_bundle(collection, gis_bundle)
+        bound_entities = bind_exploration_to_bundle(
+            collection, gis_bundle, gazetteer=gazetteer
+        )
         external_intent = format_bound_spatial_intent(
             village_name=village_name,
             bound_entities=bound_entities,
@@ -197,6 +212,7 @@ async def gis_agent_node(state: Dict[str, Any]) -> Dict[str, Any]:
         "dimension_summaries": summaries,
         "kg_turtle": "",
         "kg_constraints": [],
+        "kg_session_ref": kg_session_ref or "",
         "layout_configs": [],
         "allocated_geojson": {},
         "allocation_summary": {},
