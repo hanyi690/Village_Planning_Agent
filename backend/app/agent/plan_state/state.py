@@ -194,13 +194,13 @@ class AgentState(TypedDict, total=False):
     # Performance optimization: batch write and char count cache
     pending_reports: Annotated[List[Dict[str, Any]], _replace_or_merge_lists]  # Buffer for batch DB writes
     layer_char_counts: Annotated[Dict[int, int], _merge_layer_char_counts]  # Cached char counts per layer
-    gis_layout_configs: Annotated[List[Dict[str, Any]], _replace_or_merge_lists]  # GIS Agent输出的图层配置
-    gis_export_result: Dict[str, Any]
-    gis_render_result: List[Dict[str, Any]]
-    gis_render_artifact: Dict[str, Any]
-    gis_validation_result: Dict[str, Any]
-    gis_execution_errors: List[Dict[str, Any]]
-    gis_conflict_result: Dict[str, Any]
+    gis_layout_configs: Annotated[List[Dict[str, Any]], _replace_or_merge_lists]  # DEPRECATED Wave M1: use delivery_manifest
+    gis_export_result: Dict[str, Any]  # DEPRECATED Wave M1: use delivery_manifest
+    gis_render_result: List[Dict[str, Any]]  # DEPRECATED Wave M1: use delivery_manifest
+    gis_render_artifact: Dict[str, Any]  # DEPRECATED Wave M1: use delivery_manifest
+    gis_validation_result: Dict[str, Any]  # DEPRECATED Wave M1: use validation_report_ref
+    gis_execution_errors: List[Dict[str, Any]]  # DEPRECATED Wave M1: use delivery_manifest
+    gis_conflict_result: Dict[str, Any]  # DEPRECATED Wave M1: use delivery_manifest
     user_uploaded_data: Annotated[Dict[str, Dict[str, Any]], _merge_dict_of_dicts]  # 用户上传的GIS数据
     # P0: L1/L2/L3 数据流闭环字段（详见 docs/superpowers/specs/2026-07-02-gis-review-exploration.md）
     _landuse_metrics: Annotated[Dict[str, float], _merge_dict_of_dicts]  # L1 注入的现状用地指标
@@ -209,6 +209,12 @@ class AgentState(TypedDict, total=False):
     explore_instructions: Annotated[Dict[str, Any], _merge_explore_outputs]  # ExplorationInstructionCollection
     report_summary_index: Annotated[Dict[str, Any], _merge_explore_outputs]  # ReportSummaryIndex
     explore_done: Annotated[bool, operator.or_]  # EXPLORE 桥接已执行标记（防重复触发）
+    # ── Wave M1: post-L3 链 typed artifact 引用（conservative：新增，不删除遗留 gis_* 字段）──
+    delivery_manifest: Optional[Any]  # DeliveryManifest — DELIVER 输出（typed）
+    reconciliation_report_ref: Optional[Any]  # ReconciliationReport — RECONCILE 输出（typed）
+    validation_report_ref: Optional[Any]  # ValidationReport — VALIDATE 输出（typed）
+    pending_requests: Annotated[List[Dict[str, Any]], _replace_or_merge_lists]  # 全链 Gate pending requests 累积
+    context_version: str  # PlanningContext 版本戳
 
 
 # ==========================================
@@ -266,6 +272,12 @@ def create_initial_state(
         "intent_targets": {},  # P0: L2 持久化的规划目标面积
         "explore_instructions": {},  # P2: EXPLORE 桥接产出
         "report_summary_index": {},  # P2: EXPLORE 概要索引
+        # ── Wave M1: post-L3 链 typed artifact 引用 ──
+        "delivery_manifest": None,
+        "reconciliation_report_ref": None,
+        "validation_report_ref": None,
+        "pending_requests": [],
+        "context_version": "",
     }
 
 
