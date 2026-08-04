@@ -29,17 +29,9 @@ def test_legacy_exports_from_advisory_crosswalks():
     assert issubclass(LegacyBlocked, Exception)
 
 
-def test_zone_type_deriver_blocked_without_legacy(monkeypatch):
-    monkeypatch.delenv("GIS_LEGACY_MAPPING", raising=False)
-    from app.modules.schema.advisory_crosswalks.legacy import LegacyBlocked
-    from app.tools.gis._generation.zone_type_deriver import derive_zone_types
-    with pytest.raises(LegacyBlocked):
-        derive_zone_types([{"dlbm": "0101", "area_sqm": 1000}])
-
-
-def test_mip_allocator_entry_blocked(monkeypatch):
-    monkeypatch.delenv("GIS_LEGACY_MAPPING", raising=False)
-    from app.modules.schema.advisory_crosswalks.legacy import LegacyBlocked
-    from app.tools.gis._generation.optimizer.mip_allocator import MIPZoneAllocator
-    with pytest.raises(LegacyBlocked):
-        MIPZoneAllocator().solve({}, {})
+def test_legacy_modules_removed_in_wave_i():
+    """Wave I deleted the legacy mapping modules; they must not be importable."""
+    with pytest.raises(ModuleNotFoundError):
+        from app.tools.gis._generation.zone_type_deriver import derive_zone_types  # noqa: F401
+    with pytest.raises(ModuleNotFoundError):
+        from app.tools.gis._generation.optimizer.mip_allocator import MIPZoneAllocator  # noqa: F401

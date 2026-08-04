@@ -1,10 +1,10 @@
-"""End-to-end smoke test: ingest jintian → derive zone_types → emit control_code + planning_zone + custom functional zone.
+"""End-to-end smoke test: ingest jintian → emit control_code + planning_zone + custom functional zone.
 
-Exercises the 4 blocks of the zoning refactor:
+Exercises the zoning refactor blocks:
   Block A: encoding detection on jintian DLBM=1340 (already in appendix5)
-  Block B: zone_type deriver (DLBM → 5-tier)
   Block C: THREE_LINE builder + control_code + planning_zone generators
   Block D: CustomZoningGenerator with jintian_industry vocabulary
+  (Block B zone_type deriver was removed in Wave I — legacy mapping module deleted)
 """
 from pathlib import Path
 
@@ -23,7 +23,6 @@ from app.tools.gis._generation.vector_overlay_zoning import (
     compute_control_codes,
     compute_planning_zones,
 )
-from app.tools.gis._generation.zone_type_deriver import derive_zone_types
 
 
 JINTIAN_CURRENT = (
@@ -34,9 +33,7 @@ JINTIAN_BOUNDARY_BOX = box(115.5, 24.5, 116.5, 25.5)  # bounding box around jint
 
 @pytest.fixture(autouse=True)
 def _legacy_switch(monkeypatch):
-    """This e2e derives zone types from current landuse DLBM — the legacy
-    mapping-style chain, fail-closed by default. Enable the explicit legacy
-    switch (comparison testing only); output is 非规划成果."""
+    """Keep the explicit legacy switch for comparison-oriented mapping output."""
     monkeypatch.setenv("GIS_LEGACY_MAPPING", "1")
 
 
@@ -71,18 +68,6 @@ def test_jintian_ingest_routes_dlbm_through_detector():
     }
 
 
-def test_jintian_derives_zone_types_for_all_parcels():
-    parcels, _ = ingest_current_landuse(str(JINTIAN_CURRENT))
-    parcel_dicts = _to_dicts(parcels)
-    out = derive_zone_types(parcel_dicts)
-    unique_bsms = {p["bsm"] for p in parcel_dicts}
-    assert len(out) == len(unique_bsms)
-    nonempty = [v for v in out.values() if v["zone_type"]]
-    assert len(nonempty) > 0
-    provenances = {v["encoding_provenance"] for v in out.values()}
-    assert any(p.startswith("practical:appendix5") or p.startswith("derived:") for p in provenances)
-
-
 def test_jintian_control_line_builder_records_missing_three_lines():
     bundle = {
         "ecological_redline": [{"bsm": f"E{i}", "geometry": "stub"} for i in range(5)],
@@ -99,14 +84,10 @@ def test_jintian_control_line_builder_records_missing_three_lines():
 
 
 def test_jintian_emits_all_four_block_outputs():
-    """Smoke: all four block APIs run without raising on jintian data."""
+    """Smoke: the remaining block APIs run without raising on jintian data."""
     parcels, _ = ingest_current_landuse(str(JINTIAN_CURRENT))
     parcel_dicts = _to_dicts(parcels)
     assert len(parcel_dicts) > 100
-
-    # Block B
-    zone_types = derive_zone_types(parcel_dicts)
-    assert isinstance(zone_types, dict)
 
     # Block C (control_code needs three_lines; jintian has none of the right
     # ones with valid geometry, so we test the audit path)

@@ -63,22 +63,15 @@ def _active_chain_roots() -> list[str]:
 # that file's entry here. Adding entries here is forbidden (budget only
 # shrinks). The budget must reach zero before Wave A is marked final-pass.
 #
-# Current baseline (Wave A.1 Task 8): 11 files / 11 imports reachable from the
-# active chain — the 8 legacy-gated EXECUTE files plus 3 newly legacy-gated
-# dev/validation tools (dynamic_zoning, compare_layouts, layout_validator).
-# Each subsequent wave removes entries until {}.
+# Current baseline (Wave I Task 7): 3 files / 3 imports reachable from the
+# active chain — the 8 legacy-gated EXECUTE files were deleted in Wave I,
+# leaving only the 3 legacy-gated dev/validation tools (dynamic_zoning,
+# compare_layouts, layout_validator). Each subsequent wave removes entries
+# until {}.
 VIOLATION_BUDGET: dict[str, int] = {
     "app/tools/gis/_analytics/dynamic_zoning.py": 1,
-    "app/tools/gis/_generation/land_use_zone_generator.py": 1,
-    "app/tools/gis/_generation/optimizer/mip_allocator.py": 1,
-    "app/tools/gis/_generation/optimizer/mip_solver.py": 1,
-    "app/tools/gis/_generation/optimizer/planning_zone_mapper.py": 1,
-    "app/tools/gis/_generation/space_control_generator.py": 1,
-    "app/tools/gis/_generation/zone_generator.py": 1,
-    "app/tools/gis/_generation/zone_type_deriver.py": 1,
     "app/tools/gis/_rendering/compare_layouts.py": 1,
     "app/tools/gis/_validation/layout_validator.py": 1,
-    "app/tools/gis/generate.py": 1,
 }
 
 
@@ -163,21 +156,9 @@ def test_active_chain_no_map_code_definition_exposure():
 
 
 # ── Legacy files must be fail-closed (gated) ──────────────────────────
-# Wave A.1: these files still import advisory_crosswalks — INTENTIONALLY.
-# They are the old mapping-style EXECUTE chain, fail-closed by default and
-# only reachable under the explicit legacy switch. Every crosswalk access
-# must be gated by require_legacy / legacy_enabled. They remain in
-# VIOLATION_BUDGET and are cleared in Wave I when rewritten.
-LEGACY_GATED_FILES = [
-    "app/tools/gis/_generation/optimizer/mip_allocator.py",
-    "app/tools/gis/_generation/optimizer/mip_solver.py",
-    "app/tools/gis/_generation/optimizer/planning_zone_mapper.py",
-    "app/tools/gis/_generation/zone_generator.py",
-    "app/tools/gis/_generation/land_use_zone_generator.py",
-    "app/tools/gis/_generation/space_control_generator.py",
-    "app/tools/gis/_generation/zone_type_deriver.py",
-    "app/tools/gis/generate.py",
-]
+# Wave I deleted the 8 legacy-gated EXECUTE-chain files, so no legacy file
+# remains. The list is intentionally empty.
+LEGACY_GATED_FILES = []
 
 
 def test_legacy_files_still_in_violation_budget():

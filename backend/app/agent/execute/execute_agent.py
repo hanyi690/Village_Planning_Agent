@@ -680,25 +680,41 @@ async def _execute_facility_node(state: ExecuteAgentState) -> dict:
 
 
 async def _execute_axis_node(state: ExecuteAgentState) -> dict:
-    """Axis sub-task: development axis + space control zone + land use zone layers.
+    """Axis sub-task: development-axis layer (decision-driven from intent).
 
-    Appends up to 3 layers to layout_configs.
+    Appends up to 1 layer to layout_configs. The 现状-driven space-control and
+    land-use zone layers were removed with the legacy generators (Wave I).
     """
-    from app.tools.gis.generate import (
-        _generate_axes, _generate_space_control_zone, _generate_land_use_zone,
-    )
-
     if "axis" not in state.tasks_to_run:
         return {}
 
     try:
+        from types import SimpleNamespace
+
+        from app.tools.gis._generation.axis_builder import AxisBuilder
+
         layers = list(state.layout_configs)
         gis_data = state.gis_data or {}
-        allocated = state.allocated_geojson or {}
 
-        axis_layer = _generate_axes(state.intent, gis_data)
-        if axis_layer:
-            layers.append(axis_layer)
+        if isinstance(state.intent, dict):
+            axes = list(state.intent.get("development_axes") or state.intent.get("axes") or [])
+        else:
+            axes = list(getattr(state.intent, "development_axes", None) or [])
+        if not axes:
+            return _execution_error(
+                state,
+                "axis",
+                "axis_output_empty",
+                "Axis targets exist but no development-axis layer was produced.",
+            )
+
+        axis_layer = AxisBuilder().build(
+            intent=SimpleNamespace(axes=axes, metadata={}),
+            boundary_geojson=gis_data.get("boundary_geojson"),
+            landuse_current_geojson=gis_data.get("landuse_current_geojson"),
+        )
+        if axis_layer and axis_layer.get("features"):
+            layers.append({"layerType": "infrastructure", "data": axis_layer})
         else:
             return _execution_error(
                 state,
@@ -707,19 +723,9 @@ async def _execute_axis_node(state: ExecuteAgentState) -> dict:
                 "Axis targets exist but no development-axis layer was produced.",
             )
 
-        space_ctrl_layer = _generate_space_control_zone(
-            gis_data, allocated, state.intent, state.kg_three_lines or None,
-        )
-        if space_ctrl_layer:
-            layers.append(space_ctrl_layer)
-
-        land_use_layer = _generate_land_use_zone(allocated, gis_data)
-        if land_use_layer:
-            layers.append(land_use_layer)
-
         added = len(layers) - len(state.layout_configs)
         if added:
-            logger.info("[EXECUTE:axis] appended %d layers (axis/space-control/land-use)", added)
+            logger.info("[EXECUTE:axis] appended %d layer (development axis)", added)
         return {"layout_configs": layers}
     except Exception as e:
         logger.error("[EXECUTE:axis] failed: %s", e, exc_info=True)

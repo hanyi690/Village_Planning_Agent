@@ -635,40 +635,22 @@ async def gis_zones(request: ZonesRequest):
             return {"success": False, "error": "GIS data not loaded", "timing_ms": round((time.time() - t0) * 1000)}
 
         if request.zone_type == "land_use":
-            from app.tools.gis._generation.land_use_zone_generator import LandUseZoneGenerator, VNE_CATEGORIES
-            generator = LandUseZoneGenerator()
-            geojson = generator.generate(
-                boundary=gis_data.get("boundary_geojson"),
-                current_landuse=gis_data.get("landuse_current_geojson"),
-                planned_landuse=gis_data.get("landuse_planned_geojson"),
-            )
             return _sanitize_floats({
                 "success": True,
                 "zone_type": "land_use",
-                "categories": VNE_CATEGORIES,
-                "geojson": geojson,
-                "feature_count": len(geojson.get("features", [])) if geojson else 0,
+                "geojson": {"type": "FeatureCollection", "features": []},
+                "feature_count": 0,
+                "note": "legacy land_use_zone_generator removed in Wave I",
                 "timing_ms": round((time.time() - t0) * 1000),
             })
 
         elif request.zone_type == "space_control":
-            from app.tools.gis._generation.space_control_generator import SpaceControlZoneGenerator, SPACE_CONTROL_ZONES
-            from app.modules.schema.output.colors import SPACE_CONTROL_COLORS
-
-            generator = SpaceControlZoneGenerator()
-            geojson = generator.generate(
-                boundary=gis_data.get("boundary_geojson"),
-                farmland_protection=gis_data.get("farmland_protection_geojson"),
-                ecological_protection=gis_data.get("ecological_protection_geojson"),
-                current_landuse=gis_data.get("landuse_current_geojson"),
-            )
-            definitions = {code: {"name": info["name"], "description": info["description"], "color": SPACE_CONTROL_COLORS.get(code, {})} for code, info in SPACE_CONTROL_ZONES.items()}
             return _sanitize_floats({
                 "success": True,
                 "zone_type": "space_control",
-                "definitions": definitions,
-                "geojson": geojson,
-                "feature_count": len(geojson.get("features", [])) if geojson else 0,
+                "geojson": {"type": "FeatureCollection", "features": []},
+                "feature_count": 0,
+                "note": "legacy space_control_generator removed in Wave I",
                 "timing_ms": round((time.time() - t0) * 1000),
             })
 

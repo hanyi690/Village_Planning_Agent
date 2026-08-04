@@ -12,11 +12,9 @@ def get_gis_pipeline_tools() -> List[Any]:
     independent top-level stage (Wave A.1); planning-text parsing no longer
     runs through the GIS tool bundle.
     """
-    from .allocate import allocate_zones
     from .conflict import detect_conflicts
     from .export import export_gdb
     from .extract import extract_structured_text
-    from .generate import generate_layout
     from .kg import build_knowledge_graph, query_knowledge_graph
     from .lookup import lookup_land_use_code
     from .render import render_map
@@ -28,8 +26,6 @@ def get_gis_pipeline_tools() -> List[Any]:
         build_knowledge_graph,
         query_knowledge_graph,
         detect_conflicts,
-        allocate_zones,
-        generate_layout,
         validate_layout,
         export_gdb,
         render_map,

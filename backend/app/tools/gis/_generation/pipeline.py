@@ -12,6 +12,189 @@ from typing import Any, Callable, Dict, List, Optional
 logger = logging.getLogger(__name__)
 
 
+def _parcel_from_feature(feature: dict) -> Any:
+    """Adapt a landuse GeoJSON feature into the Land Design Worker parcel shape."""
+    from types import SimpleNamespace
+
+    props = feature.get("properties") or {}
+    return SimpleNamespace(
+        bsm=str(props.get("BSM") or props.get("bsm") or ""),
+        geometry=feature.get("geometry"),
+        dlbm=str(props.get("DLBM") or props.get("dlbm") or ""),
+        area_sqm=float(props.get("area_sqm") or props.get("area") or 0),
+        area_ha=float(props.get("area_ha") or 0),
+    )
+
+
+def _zone_targets_of(intent: Any) -> List[Any]:
+    """Extract zone targets from a typed SpatialPlanningIntent or dict intent."""
+    from app.modules.schema.contracts.parse_contracts import ZoneTarget
+
+    if intent is None:
+        return []
+    if isinstance(intent, dict):
+        targets = intent.get("zone_targets") or intent.get("zones") or []
+        coerced = []
+        for raw in targets:
+            if isinstance(raw, dict):
+                try:
+                    coerced.append(ZoneTarget(**raw))
+                except Exception:
+                    coerced.append(raw)
+            else:
+                coerced.append(raw)
+        return coerced
+    return list(getattr(intent, "zone_targets", None) or [])
+
+
+def _allocated_from_changes(landuse: dict, zone_changes: list) -> dict:
+    """landuse features with reclassified parcels tagged with their planning land use."""
+    assigned = {}
+    for change in zone_changes:
+        if getattr(change, "action", "") != "reclassify":
+            continue
+        cls = getattr(change, "after_classification", None)
+        assigned[str(getattr(change, "bsm", ""))] = {
+            "planning_land_use": str(getattr(cls, "code", "") or ""),
+            "zone_type": str(getattr(cls, "canonical_name", "") or ""),
+        }
+    features = []
+    for feature in (landuse.get("features") or []):
+        props = dict(feature.get("properties") or {})
+        bsm = str(props.get("BSM") or props.get("bsm") or "")
+        if bsm in assigned:
+            props["planning_land_use"] = assigned[bsm]["planning_land_use"]
+            props["zone_type"] = assigned[bsm]["zone_type"]
+        new_feature = dict(feature)
+        new_feature["properties"] = props
+        features.append(new_feature)
+    return {"type": "FeatureCollection", "features": features}
+
+
+def _function_zone_layer(zone_changes: list) -> Optional[Dict[str, Any]]:
+    """Build the function_zone layer from reclassified ParcelChange entries."""
+    from shapely import wkt
+    from shapely.geometry import mapping as geometry_mapping
+
+    features = []
+    for change in zone_changes:
+        if getattr(change, "action", "") != "reclassify":
+            continue
+        geometry = {}
+        after_wkt = getattr(change, "after_geometry_wkt", "") or ""
+        if after_wkt:
+            try:
+                geom = wkt.loads(after_wkt)
+                if not geom.is_empty:
+                    geometry = geometry_mapping(geom)
+            except Exception:
+                geometry = {}
+        if not geometry:
+            continue
+        cls = getattr(change, "after_classification", None)
+        bsm = str(getattr(change, "bsm", ""))
+        features.append({
+            "type": "Feature",
+            "properties": {
+                "bsm": bsm,
+                "planning_land_use": str(getattr(cls, "code", "") or ""),
+                "zone_type": str(getattr(cls, "canonical_name", "") or ""),
+                "action": getattr(change, "action", ""),
+                "source_bsm": bsm,
+                "area_ha": round(float(getattr(change, "new_area_ha", 0) or 0), 2),
+            },
+            "geometry": geometry,
+        })
+    if not features:
+        return None
+    return {
+        "layerType": "function_zone",
+        "layerName": "功能分区",
+        "data": {"type": "FeatureCollection", "features": features},
+    }
+
+
+def _planning_zone_layer(allocated_geojson: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    """planning_zone layer from deterministically allocated parcels (no crosswalks)."""
+    if not allocated_geojson or not allocated_geojson.get("features"):
+        return None
+    features = []
+    for feat in allocated_geojson.get("features", []):
+        props = dict(feat.get("properties") or {})
+        zone_type = str(props.get("zone_type") or props.get("planning_land_use") or "")
+        if not zone_type:
+            continue
+        features.append({
+            "type": "Feature",
+            "geometry": feat.get("geometry", {}),
+            "properties": {**props, "zone_type": zone_type},
+        })
+    if not features:
+        return None
+    return {
+        "layerType": "planning_zone",
+        "data": {"type": "FeatureCollection", "features": features},
+    }
+
+
+def _facility_point_layer(intent: Any) -> Optional[Dict[str, Any]]:
+    """facility_point layer from FacilityTarget anchors (deterministic, no FacilityPlacer)."""
+    if intent is None:
+        return None
+    facilities = (
+        intent.get("facilities") if isinstance(intent, dict) else getattr(intent, "facilities", None)
+    )
+    features = []
+    for facility in facilities or []:
+        anchor = facility.get("anchor_point") if isinstance(facility, dict) else getattr(facility, "anchor_point", None)
+        if not anchor or len(anchor) < 2:
+            continue
+        ftype = facility.get("type", "") if isinstance(facility, dict) else getattr(facility, "type", "")
+        features.append({
+            "type": "Feature",
+            "properties": {
+                "facility_id": f"F{len(features) + 1:02d}",
+                "facility_type": ftype,
+                "status": "planned_new",
+            },
+            "geometry": {"type": "Point", "coordinates": [float(anchor[0]), float(anchor[1])]},
+        })
+    if not features:
+        return None
+    return {
+        "layerType": "facility_point",
+        "layerName": "公共服务设施",
+        "data": {"type": "FeatureCollection", "features": features},
+    }
+
+
+def _axis_layer(intent: Any, gis_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """Development-axis layer via AxisBuilder (kept module)."""
+    from types import SimpleNamespace
+
+    from app.tools.gis._generation.axis_builder import AxisBuilder
+
+    if intent is None:
+        return None
+    if isinstance(intent, dict):
+        axes = list(intent.get("development_axes") or intent.get("axes") or [])
+    else:
+        axes = list(getattr(intent, "development_axes", None) or [])
+    if not axes:
+        return None
+    geojson = AxisBuilder().build(
+        intent=SimpleNamespace(axes=axes, metadata={}),
+        boundary_geojson=gis_data.get("boundary_geojson"),
+        landuse_current_geojson=gis_data.get("landuse_current_geojson"),
+    )
+    if geojson is None or not geojson.get("features"):
+        return None
+    return {
+        "layerType": "infrastructure",
+        "data": geojson,
+    }
+
+
 def run_layout_pipeline(
     intent: Dict[str, Any],
     gis_data: Dict[str, Any],
@@ -27,7 +210,7 @@ def run_layout_pipeline(
 ) -> Dict[str, Any]:
     """Execute the full spatial layout pipeline.
 
-    Steps: KG → Conflict → MIP Allocate → Generate Layers → Export → Render
+    Steps: KG → Conflict → Deterministic Allocate → Generate Layers → Export → Render
 
     Args:
         intent: UnifiedSpatialIntent as dict (zones, facilities, axes, constraints).
@@ -87,69 +270,49 @@ def run_layout_pipeline(
         except Exception as e:
             result["conflict"] = {"error": str(e)}
 
-    # ── Step 3: MIP Allocate ────────────────────────────────────
+    # ── Step 3: Deterministic Allocate ───────────────────────────
     allocated_geojson = None
+    zone_changes: List[Any] = []
     if run_allocate:
         try:
-            from app.tools.gis._analytics.metrics_calculator import GISMetricsCalculator
-            from .optimizer.mip_allocator import MIPZoneAllocator
+            from app.agent.execute.land_design_worker import design_zone_parcel
 
-            metrics = GISMetricsCalculator.compute_land_use_metrics(gis_data)
-            total_area_ha = metrics["total_area_ha"]
-            targets = {}
-            for z in intent.get("zones", []):
-                lu, ratio = z.get("land_use", ""), z.get("area_ratio", 0)
-                if lu and ratio:
-                    targets[lu] = ratio * total_area_ha
+            landuse = landuse_geojson or {}
+            parcel_by_bsm = {
+                str((feature.get("properties") or {}).get("BSM")
+                    or (feature.get("properties") or {}).get("bsm") or ""): _parcel_from_feature(feature)
+                for feature in (landuse.get("features") or [])
+            }
 
-            if targets and landuse_geojson:
-                allocator = MIPZoneAllocator()
-                allocated_geojson, mip_trace = allocator.solve(
-                    landuse_geojson=landuse_geojson,
-                    targets=targets,
-                    constraints=kg_constraints or None,
-                    kg=kg,
-                )
-                result["allocation"] = {
-                    "mode": mip_trace.get("mode", "unknown"),
-                    "changed_pct": mip_trace.get("changed_pct", 0),
-                    "solver_status": mip_trace.get("solver_status", "unknown"),
-                }
-            else:
-                result["allocation"] = {"mode": "skipped", "reason": "no targets or landuse data"}
+            zone_targets = _zone_targets_of(intent)
+            for zone_target in zone_targets:
+                if not getattr(zone_target, "candidate_bsms", None):
+                    continue
+                zone_changes.extend(design_zone_parcel(zone_target, parcel_by_bsm))
+            allocated_geojson = _allocated_from_changes(landuse, zone_changes)
+            result["allocation"] = {
+                "mode": "deterministic",
+                "allocated_count": len(zone_changes),
+                "zone_target_count": len(zone_targets),
+            }
         except Exception as e:
             result["allocation"] = {"mode": "failed", "error": str(e)}
 
     # ── Step 4: Generate Layers ─────────────────────────────────
     if run_generate:
-        from app.tools.gis.generate import (
-            _generate_function_zones,
-            _make_planning_zone_layer,
-            _generate_facilities,
-            _generate_axes,
-            _generate_space_control_zone,
-            _generate_land_use_zone,
-        )
-
         layers: List[Dict[str, Any]] = []
-        fz = _generate_function_zones(intent, gis_data)
+        fz = _function_zone_layer(zone_changes)
         if fz:
             layers.append(fz)
-        pz = _make_planning_zone_layer(allocated_geojson, gis_data)
+        pz = _planning_zone_layer(allocated_geojson)
         if pz:
             layers.append(pz)
-        fp = _generate_facilities(intent, gis_data)
+        fp = _facility_point_layer(intent)
         if fp:
             layers.append(fp)
-        ax = _generate_axes(intent, gis_data)
+        ax = _axis_layer(intent, gis_data)
         if ax:
             layers.append(ax)
-        sc = _generate_space_control_zone(gis_data, allocated_geojson, intent)
-        if sc:
-            layers.append(sc)
-        lu = _generate_land_use_zone(allocated_geojson, gis_data)
-        if lu:
-            layers.append(lu)
 
         result["layers"] = layers
         result["layer_summary"] = [

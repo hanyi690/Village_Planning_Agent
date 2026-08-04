@@ -103,44 +103,6 @@ def test_truncate_by_area_caps_over_target():
     assert len(chosen) == 2  # 6+5 >= 10
 
 
-# ── P1-5: DLBM 分区别名匹配 ──
-
-def test_match_parcel_indices_alias():
-    from app.tools.gis._generation.zone_generator import ZoneGenerator
-
-    gen = ZoneGenerator()
-    parcel_zones = {
-        "农业用地": [0, 1, 2],
-        "生态绿地": [3, 4],
-        "居住用地": [5],
-        "水域": [6],
-    }
-    for name, expected in (
-        ("一般农业区", [0, 1, 2]),
-        ("基本农田保护区", [0, 1, 2]),
-        ("生态保护区", [3, 4]),
-        ("林业发展区", [3, 4]),
-        ("村庄建设区", [5]),
-        ("水域保护区", [6]),
-    ):
-        assert gen._match_parcel_indices(name, parcel_zones, None) == expected
-
-
-def test_match_parcel_indices_substring_and_dlbm():
-    from app.tools.gis._generation.zone_generator import ZoneGenerator
-    from app.modules.schema.contracts.parse_contracts import ZoneTarget
-
-    gen = ZoneGenerator()
-    parcel_zones = {"生态绿地": [3, 4]}
-    # 子串命中："生态区" 是 "生态绿地" 子串的反向（标准名 in 名）
-    assert gen._match_parcel_indices("生态区", parcel_zones, None) == [3, 4]
-    # dlbm 映射兜底
-    zt = ZoneTarget(land_use="未知区", dlbm="0401", area_ratio=0.1)
-    assert gen._match_parcel_indices("未知区", parcel_zones, zt) == [3, 4]
-    # 空名不猜测
-    assert gen._match_parcel_indices("", parcel_zones, None) == []
-
-
 # ── P0-2: shutdown_database 超时兜底 ──
 
 def test_shutdown_database_timeout_bounded():
