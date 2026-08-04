@@ -22,15 +22,20 @@ def test_compile_l1_observation_returns_fragment(land_use_report):
     assert frag.trace.profile == CompilationProfile.L1_OBSERVATION
 
 
-def test_compile_l3_planning_not_implemented_in_wave_b():
-    with pytest.raises(NotImplementedError):
-        compile_dimension_report(
-            CompilationProfile.L3_PLANNING,
-            dimension_key="land_use_planning",
-            content="",
-            instruction="",
-            summary="",
-        )
+def test_compile_l3_planning_returns_fragment():
+    from app.modules.schema.contracts.l3_contracts import L3ProgramFragment
+
+    frag = compile_dimension_report(
+        CompilationProfile.L3_PLANNING,
+        dimension_key="land_use_planning",
+        content="",
+        instruction="",
+        summary="",
+    )
+    assert isinstance(frag, L3ProgramFragment)
+    assert frag.dimension_key == "land_use_planning"
+    assert frag.trace is not None
+    assert frag.trace.profile == CompilationProfile.L3_PLANNING
 
 
 def test_compile_revision_not_implemented_in_wave_b():

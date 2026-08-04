@@ -1,8 +1,8 @@
 """Shared parse-compiler core - profile dispatch.
 
 Wave B delivers the L1_OBSERVATION profile. Wave D delivers L2_STRATEGY.
-L3_PLANNING and REVISION are Wave F (roadmap row F). The top-level agent/parse
-stage is a thin LangGraph wrapper over this core (Wave F).
+Wave E delivers L3_PLANNING. REVISION is Wave F (roadmap row F). The
+top-level agent/parse stage is a thin LangGraph wrapper over this core (Wave F).
 """
 from __future__ import annotations
 

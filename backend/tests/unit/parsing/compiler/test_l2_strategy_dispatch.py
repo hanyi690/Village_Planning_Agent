@@ -32,14 +32,16 @@ def test_l1_observation_dispatch_still_works():
     assert isinstance(frag, L1DimensionFragment)
 
 
-def test_l3_planning_still_wave_f():
-    with pytest.raises(NotImplementedError):
-        compile_dimension_report(
-            CompilationProfile.L3_PLANNING,
-            dimension_key="x",
-            content="x",
-            instruction="",
-        )
+def test_l3_planning_dispatch_returns_fragment():
+    from app.modules.schema.contracts.l3_contracts import L3ProgramFragment
+
+    frag = compile_dimension_report(
+        CompilationProfile.L3_PLANNING,
+        dimension_key="x",
+        content="【INSTRUCTION】\n| 类型 | 名称 | 位置 | 描述 | 规模 |\n|---|---|---|---|---|\n| 项目 | 项目A | 东 | 描述 | 10公顷 |\n",
+        instruction="",
+    )
+    assert isinstance(frag, L3ProgramFragment)
 
 
 def test_revision_still_wave_f():
