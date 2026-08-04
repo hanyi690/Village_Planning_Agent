@@ -22,32 +22,32 @@ FastAPI app (main.py)
 
 ## 2. 7 个核心端点
 
-| # | 方法 | 路径 | 说明 |
-|---|------|------|------|
-| 1 | POST | `/api/sessions` | 创建会话（支持 `multipart/form-data` 文件上传） |
-| 2 | GET | `/api/sessions/{id}/stream` | SSE 事件流（单通道，所有数据由此推送） |
-| 3 | GET | `/api/sessions/{id}/sync` | 断线重连（`?from_seq=N` 增量同步） |
-| 4 | POST | `/api/sessions/{id}/feedback` | 反馈接口（approve / reject 触发级联修订 / message 注入） |
-| 5 | GET | `/api/sessions/{id}/checkpoints` | 检查点列表（标记 stable / intermediate） |
-| 6 | POST | `/api/sessions/{id}/resume/{checkpoint_id}` | 从检查点恢复（仅允许 stable 检查点） |
-| 7 | GET | `/api/sessions/{id}/reports/{dim_key}` | 维度报告全文（`?version=N` 查历史版本） |
+| # | 方法 | 路径                                          | 说明                                                     |
+| - | ---- | --------------------------------------------- | -------------------------------------------------------- |
+| 1 | POST | `/api/sessions`                             | 创建会话（支持`multipart/form-data` 文件上传）         |
+| 2 | GET  | `/api/sessions/{id}/stream`                 | SSE 事件流（单通道，所有数据由此推送）                   |
+| 3 | GET  | `/api/sessions/{id}/sync`                   | 断线重连（`?from_seq=N` 增量同步）                     |
+| 4 | POST | `/api/sessions/{id}/feedback`               | 反馈接口（approve / reject 触发级联修订 / message 注入） |
+| 5 | GET  | `/api/sessions/{id}/checkpoints`            | 检查点列表（标记 stable / intermediate）                 |
+| 6 | POST | `/api/sessions/{id}/resume/{checkpoint_id}` | 从检查点恢复（仅允许 stable 检查点）                     |
+| 7 | GET  | `/api/sessions/{id}/reports/{dim_key}`      | 维度报告全文（`?version=N` 查历史版本）                |
 
 ### 辅助端点
 
-| 方法 | 路径 | 说明 |
-|------|------|------|
-| GET | `/api/sessions/{id}/reports/{dim_key}/versions` | 维度报告版本列表 |
-| GET | `/api/sessions/{id}/status` | 会话状态（含 interrupt 检测） |
-| DELETE | `/api/sessions/{id}` | 删除会话 |
-| GET | `/api/sessions/{id}/layer/{layer}/reports` | 层级报告（含知识来源） |
-| GET | `/api/projects` | 项目列表 |
-| GET | `/api/projects/{name}/sessions` | 项目下会话列表 |
-| GET | `/api/projects/{name}/reports/{dim_key}` | 跨会话查维度报告 |
-| POST | `/api/sessions/{id}/export` | 导出 DOCX/JSON/MD |
-| GET/POST | `/api/sessions/{id}/planning-text` | 规划文本生成与查询 |
-| GET | `/api/sessions/{id}/geocode` | 村庄地理编码 |
-| GET/PATCH | `/api/sessions/{id}/rag-config` | RAG 配置读写 |
-| PATCH | `/api/sessions/{id}/step-mode` | 步进模式切换 |
+| 方法      | 路径                                              | 说明                          |
+| --------- | ------------------------------------------------- | ----------------------------- |
+| GET       | `/api/sessions/{id}/reports/{dim_key}/versions` | 维度报告版本列表              |
+| GET       | `/api/sessions/{id}/status`                     | 会话状态（含 interrupt 检测） |
+| DELETE    | `/api/sessions/{id}`                            | 删除会话                      |
+| GET       | `/api/sessions/{id}/layer/{layer}/reports`      | 层级报告（含知识来源）        |
+| GET       | `/api/projects`                                 | 项目列表                      |
+| GET       | `/api/projects/{name}/sessions`                 | 项目下会话列表                |
+| GET       | `/api/projects/{name}/reports/{dim_key}`        | 跨会话查维度报告              |
+| POST      | `/api/sessions/{id}/export`                     | 导出 DOCX/JSON/MD             |
+| GET/POST  | `/api/sessions/{id}/planning-text`              | 规划文本生成与查询            |
+| GET       | `/api/sessions/{id}/geocode`                    | 村庄地理编码                  |
+| GET/PATCH | `/api/sessions/{id}/rag-config`                 | RAG 配置读写                  |
+| PATCH     | `/api/sessions/{id}/step-mode`                  | 步进模式切换                  |
 
 ### 天地图瓦片代理
 
@@ -98,12 +98,12 @@ async def lifespan(app: FastAPI):
 
 ## 5. 服务层（`backend/app/services/`）
 
-| 服务 | 文件 | 职责 |
-|------|------|------|
-| `PlanningRuntimeService` | `runtime.py` | LangGraph 运行时单例。图构建缓存、状态读写、执行触发、interrupt/resume |
-| `sse_manager` | `sse/sse_manager.py`（`sse/`） | SSE 事件队列管理、历史事件缓存、断线重连 |
-| `checkpoint_service` | `checkpoint.py` | 检查点重建、stable 检测 |
-| `ReportStore` | `report_store.py` | 维度报告持久化、版本管理、层级摘要 |
+| 服务                       | 文件                               | 职责                                                                   |
+| -------------------------- | ---------------------------------- | ---------------------------------------------------------------------- |
+| `PlanningRuntimeService` | `runtime.py`                     | LangGraph 运行时单例。图构建缓存、状态读写、执行触发、interrupt/resume |
+| `sse_manager`            | `sse/sse_manager.py`（`sse/`） | SSE 事件队列管理、历史事件缓存、断线重连                               |
+| `checkpoint_service`     | `checkpoint.py`                  | 检查点重建、stable 检测                                                |
+| `ReportStore`            | `report_store.py`                | 维度报告持久化、版本管理、层级摘要                                     |
 
 ## 6. 相关文件
 
@@ -130,9 +130,9 @@ backend/app/
 
 以下旧版端点已**废弃并移除**（`routes.py` 注释记录于 2026-05-08/09）：
 
-| 旧端点 | 替代 |
-|--------|------|
-| `/api/planning/*` | `/api/sessions/*` |
-| `/api/data/*` | 数据通过规划流程内部获取 |
-| `/api/files/*`, `/api/gis_upload` | 整合到 `POST /api/sessions`（multipart） |
-| `/api/knowledge/*` | 移至命令行脚本 |
+| 旧端点                                | 替代                                      |
+| ------------------------------------- | ----------------------------------------- |
+| `/api/planning/*`                   | `/api/sessions/*`                       |
+| `/api/data/*`                       | 数据通过规划流程内部获取                  |
+| `/api/files/*`, `/api/gis_upload` | 整合到`POST /api/sessions`（multipart） |
+| `/api/knowledge/*`                  | 移至命令行脚本                            |

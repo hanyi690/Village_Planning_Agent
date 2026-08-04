@@ -1,53 +1,37 @@
-# 架构文档（Architecture）
+# 架构实现文档
 
-> 本目录回答"代码在哪里、怎么跑"（where / how）。
-> 设计理由（why）见 [`docs/design/`](../design/)。
+> `docs/design/` 说明为什么这样设计；本文档目录说明目标结构映射到哪里，以及当前代码如何迁移。
 
-## 权威链（Authority Chain）
+## 权威链
 
-```
-代码 (backend/app/**, frontend/**)          ← 最终事实源
+```text
+backend/app/**                 ← 当前实现事实源
   ↑
-design/00_SYSTEM_DESIGN.md                  ← North Star（为什么这么设计）
+docs/design/00_SYSTEM_DESIGN  ← 目标架构 North Star
   ↑
-design/01-10_*.md                           ← 设计问题展开
+docs/design/01-11              ← 契约、管线、迁移和状态
   ↑
-architecture/*.md                           ← 技术实现映射（本文档目录）
-  ↑
-README.md（根）                             ← 对外门面（只链接不重复）
+docs/architecture/*.md         ← 实现映射
 ```
 
-- `design/` 回答"为什么"
-- `architecture/` 回答"在哪里、怎么跑"
-- `audits/` 和 `proposals/` 为诊断参考和未落地提案，**不参与**权威链
+如果当前代码和目标设计不一致，以 [10_IMPLEMENTATION_STATUS.md](../design/10_IMPLEMENTATION_STATUS.md) 标注的迁移状态为准，不应把旧实现反向写回目标设计。
 
-## 架构文档索引
+## 文档索引
 
-| 文档 | 核心内容 |
-|------|----------|
-| [structure.md](./structure.md) | 项目结构与实现总览（顶层布局、五层模块、主图、会话路径） |
-| [agent-graph.md](./agent-graph.md) | 6 节点主图（`graph.py` + `routing.py` + `state.py`），节点表、ASCII 图、路由逻辑 |
-| [backend-api.md](./backend-api.md) | `/api/sessions/*` 7 端点 + SSE 单通道 + 服务层 + 天地图瓦片代理 |
-| [frontend.md](./frontend.md) | Next.js 14 + Zustand 5 + MapLibre GL，目录结构、SSE 连接管理 |
-| [modules.md](./modules.md) | 五层模块实现映射（schema / data / spatial_ops / kg / rag） |
-| [deployment.md](./deployment.md) | 部署配置（Docker Compose、`.env`、LLM 切换） |
-| [rag-system.md](./rag-system.md) | RAG 知识检索（Small-to-Big + 层级感知 + ChromaDB） |
+| 文档 | 内容 |
+|---|---|
+| [structure.md](structure.md) | 目录、上下文和子图总览 |
+| [agent-graph.md](agent-graph.md) | 当前主图与目标分层子图 |
+| [modules.md](modules.md) | 模块职责和依赖边界 |
+| [backend-api.md](backend-api.md) | API、SSE 和服务适配 |
+| [frontend.md](frontend.md) | 前端状态、地图和 SSE |
+| [rag-system.md](rag-system.md) | RAG 数据摄取与检索实现 |
+| [deployment.md](deployment.md) | 部署和运行环境 |
 
 ## 快速导航
 
-| 想了解... | 请阅读 |
-|----------|--------|
-| 项目怎么组织 | [structure.md](./structure.md) |
-| 主图怎么跑 | [agent-graph.md](./agent-graph.md) |
-| API 端点有哪些 | [backend-api.md](./backend-api.md) |
-| 前端状态怎么管 | [frontend.md](./frontend.md) |
-| 五层模块如何分层 | [modules.md](./modules.md) |
-| 怎么部署 | [deployment.md](./deployment.md) |
-| RAG 怎么检索 | [rag-system.md](./rag-system.md) |
-
-## 相关资源
-
-- [设计文档](../design/) — North Star 与设计展开
-- [术语表](../reference/terminology.md) — 术语定义
-- [审计诊断](../audits/) — 架构审计
-- [重构提案](../proposals/) — 未落地提案
+- 设计总图：[design/00_SYSTEM_DESIGN.md](../design/00_SYSTEM_DESIGN.md)
+- 规划管线：[design/04_PLANNING_PIPELINE.md](../design/04_PLANNING_PIPELINE.md)
+- EXPLORE：[design/05_EXPLORE_BRIDGE.md](../design/05_EXPLORE_BRIDGE.md)
+- PARSE/GROUND/SELECT：[design/06_PARSE_EXECUTE.md](../design/06_PARSE_EXECUTE.md)
+- 迁移计划：[design/09_INTEGRATION_BREAKPOINTS.md](../design/09_INTEGRATION_BREAKPOINTS.md)

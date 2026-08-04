@@ -80,7 +80,7 @@ README.md（根）                             ← 对外门面（只链接不�
 |------|------|
 | [README.md](./architecture/README.md) | 架构文档导航 |
 | [structure.md](./architecture/structure.md) | 项目结构与实现总览 |
-| [agent-graph.md](./architecture/agent-graph.md) | 6 节点主图 |
+| [agent-graph.md](./architecture/agent-graph.md) | 当前主图与目标分层子图 |
 | [backend-api.md](./architecture/backend-api.md) | 后端 API + SSE |
 | [frontend.md](./architecture/frontend.md) | 前端架构 |
 | [rag-system.md](./architecture/rag-system.md) | RAG 知识检索 |
