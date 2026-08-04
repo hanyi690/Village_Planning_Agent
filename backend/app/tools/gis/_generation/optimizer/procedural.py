@@ -1,9 +1,8 @@
 """Geometry procedural utilities — merge, split, simplify, buffer.
 
-NOTE: These functions are not currently used in production code paths.
-They are retained for future integration (Phase 4 of GIS architecture refactoring):
+Used by zone generation and layout pipeline:
   - merge_parcels → zone_generator (merge adjacent same-type parcels after allocation)
-  - simplify_boundary → map_renderer (reduce GeoJSON payload before rendering)
+  - simplify_boundary → GeoJSON payload reduction before rendering
   - split_by_area, buffer_zone → potential future use
 """
 

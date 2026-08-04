@@ -291,6 +291,31 @@ async def test_process_uploaded_file_db_uses_filename_type_fallback(monkeypatch)
 
 
 @pytest.mark.asyncio
+async def test_process_uploaded_file_db_normalizes_placeholder_type(monkeypatch):
+    """Placeholder gis_data_type (upload/auto/unknown) falls back to filename inference."""
+    from app.api import session_routes
+    from app.api.session_routes import _process_uploaded_file_db
+
+    captured = {}
+
+    async def fake_create(**kwargs):
+        captured.update(kwargs)
+        return 44
+
+    monkeypatch.setattr(session_routes, "create_uploaded_file_async", fake_create)
+    monkeypatch.setattr(
+        session_routes, "_infer_geojson_data_type", lambda geojson: "upload"
+    )
+    data = _geojson([{"name": "地块A"}])
+    file = _FakeUploadFile("road.geojson", json.dumps(data, ensure_ascii=False))
+
+    result = await _process_uploaded_file_db(file, "sess-upload", "village_data")
+
+    assert result["gis_data_type"] == "road"
+    assert captured["gis_data_type"] == "road"
+
+
+@pytest.mark.asyncio
 async def test_process_uploaded_file_db_document(monkeypatch):
     from app.api import session_routes
     from app.api.session_routes import _process_uploaded_file_db

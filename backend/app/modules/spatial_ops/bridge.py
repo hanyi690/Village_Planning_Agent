@@ -405,7 +405,7 @@ def build_constraint_index(bundle) -> Optional[ConstraintIndex]:
         ("cultivated_land_target", polygons.get("cultivated_land_target")),
         ("urban_dev_boundary", polygons.get("urban_dev_boundary")),
         ("village_dev_boundary", polygons.get("village_dev_boundary")),
-        ("conditional_construction_zone", polygons.get("conditional_construction_zone")),
+        ("conditional_construction_zone", polygons.get("construction_zone")),
         ("construction_ctrl_zone", polygons.get("construction_ctrl_zone")),
         ("hazard_control_line", polygons.get("hazard_control_line")),
         ("flood_control_line", polygons.get("flood_control_line")),

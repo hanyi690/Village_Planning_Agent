@@ -114,31 +114,31 @@ sources:
 
   jintian_farmland_protection:
     driver: file_vector
-    path: "data/gis/jintian/planned/farmland_protection.geojson"
+    path: "data/gis/jintian/current/farmland_protection.geojson"
     layer_type: farmland_protection
     crs: EPSG:4326
 
   jintian_ecological_protection:
     driver: file_vector
-    path: "data/gis/jintian/planned/ecological_protection.geojson"
+    path: "data/gis/jintian/current/ecological_protection.geojson"
     layer_type: ecological_protection
     crs: EPSG:4326
 
   jintian_historical_protection:
     driver: file_vector
-    path: "data/gis/jintian/planned/historical_protection.geojson"
+    path: "data/gis/jintian/current/historical_protection.geojson"
     layer_type: historical_protection
     crs: EPSG:4326
 
   jintian_construction_zone:
     driver: file_vector
-    path: "data/gis/jintian/planned/construction_zone.geojson"
+    path: "data/gis/jintian/current/construction_zone.geojson"
     layer_type: conditional_construction_zone
     crs: EPSG:4326
 
   jintian_geological_hazard:
     driver: file_vector
-    path: "data/gis/jintian/planned/geological_hazard_points.geojson"
+    path: "data/gis/jintian/current/geological_hazard_points.geojson"
     layer_type: geological_hazard_point
     crs: EPSG:4326
 

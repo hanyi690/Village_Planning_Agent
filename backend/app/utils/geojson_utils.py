@@ -219,12 +219,17 @@ def build_parcel_index(
         dlbm = str(props.get("DLBM") or props.get("dlbm") or "").strip()
         if not bsm:
             continue
-        shape_area = props.get("SHAPE_Area", 0) or 0
+        shape_area = (
+            props.get("SHAPE_Area")
+            or props.get("Shape_Area")
+            or props.get("area_sqm")
+            or 0
+        )
         composite_key = f"{bsm}_{dlbm}_{int(shape_area)}"
         if bsm in seen_bsms:
             duplicate_bsms.add(bsm)
         seen_bsms.add(bsm)
-        area = (props.get("DLMJ", 0) or shape_area) / 10000
+        area = (props.get("DLMJ") or props.get("area_sqm") or shape_area) / 10000
         current_zone = zone_type_fn(dlbm) if zone_type_fn else ""
         parcel_db[composite_key] = {
             "area_ha": area,

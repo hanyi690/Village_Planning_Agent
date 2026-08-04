@@ -34,6 +34,55 @@ logger = get_logger(__name__)
 DEFAULT_CONFIG_PATH = Path(__file__).parent / "sources.yaml"
 
 
+_DIRTY_LAYER_TYPES = {"upload", "auto", "unknown", ""}
+
+
+def _infer_layer_key_from_upload(item: Dict[str, Any]) -> Optional[str]:
+    """Re-infer a GIS layer key from filename + GeoJSON properties.
+
+    Defensive fallback for rows persisted with a placeholder/empty
+    ``gis_data_type`` (``upload`` / ``auto`` / ``unknown`` / ``None``) —
+    e.g. uploads stored before type normalization existed. Without this,
+    those features would be silently dropped at bundle build (the KG
+    prebuild then produces an empty graph).
+    """
+    filename = str(
+        item.get("original_filename") or item.get("filename") or ""
+    ).lower()
+    if "boundary" in filename or "边界" in filename:
+        return "boundary"
+    if "landuse" in filename or "用地" in filename or "现状" in filename:
+        return "landuse_current"
+    if "road" in filename or "道路" in filename:
+        return "road"
+    if "annotation" in filename or "注记" in filename:
+        return "current_annotation"
+    if "water" in filename or "水" in filename or "河流" in filename:
+        return "water"
+    if "residential" in filename or "住宅" in filename or "居民" in filename:
+        return "residential"
+
+    geojson = item.get("gis_data") or {}
+    features = geojson.get("features") or []
+    if features:
+        props = features[0].get("properties") or {}
+        name = str(props.get("name", "") or "").lower()
+        layer = str(props.get("layer", "") or "").lower()
+        if "边界" in name or "boundary" in layer:
+            return "boundary"
+        if "道路" in name or "road" in layer:
+            return "road"
+        if "用地" in name or "landuse" in layer:
+            return "landuse_current"
+        if "注记" in name or "annotation" in layer:
+            return "current_annotation"
+        if "水" in name or "water" in layer or "河流" in name:
+            return "water"
+        if "住宅" in name or "residential" in layer:
+            return "residential"
+    return None
+
+
 def _merge_geojson_into_bundle(
     bundle: Any,
     layer_key: str,
@@ -896,7 +945,9 @@ class DataCatalog:
             geojson = item.get("gis_data") or {}
             if not isinstance(geojson, dict) or geojson.get("type") != "FeatureCollection":
                 continue
-            dtype = item.get("gis_data_type") or "upload"
+            dtype = item.get("gis_data_type") or ""
+            if dtype in _DIRTY_LAYER_TYPES:
+                dtype = _infer_layer_key_from_upload(item) or dtype
             _merge_geojson_into_bundle(bundle, dtype, geojson)
 
         try:

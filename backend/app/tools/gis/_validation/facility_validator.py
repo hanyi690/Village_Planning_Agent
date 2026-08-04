@@ -10,34 +10,13 @@ and ecological protection zone identification.
 
 from typing import Dict, Any, List, Optional, Tuple, Literal
 from app.utils.logger import get_logger
+from app.utils.geo_utils import haversine_distance
+from app.utils.geojson_utils import geojson_to_geodataframe, GEOPANDAS_AVAILABLE
 
 logger = get_logger(__name__)
 
-# Import core analysis modules
-try:
-    from app.core.accessibility_core import (
-        haversine_distance,
-        SERVICE_RADIUS_STANDARDS,
-        run_accessibility_analysis,
-    )
-    ACCESSIBILITY_AVAILABLE = True
-except ImportError:
-    ACCESSIBILITY_AVAILABLE = False
-    logger.warning("[gis_validation] accessibility_core not available")
-
-try:
-    from app.core.gis_core import run_gis_analysis
-    GIS_AVAILABLE = True
-except ImportError:
-    GIS_AVAILABLE = False
-    logger.warning("[gis_validation] gis_core not available")
-
-try:
-    from app.core.spatial_analysis import calculate_buffer_zones, geojson_to_geodataframe
-    SPATIAL_AVAILABLE = True
-except ImportError:
-    SPATIAL_AVAILABLE = False
-    logger.warning("[gis_validation] spatial_analysis not available")
+# Spatial analysis capability is backed by geopandas availability.
+SPATIAL_AVAILABLE = GEOPANDAS_AVAILABLE
 
 
 # Facility siting standards (from planning regulations)
@@ -441,34 +420,29 @@ def _check_protection_zones(
     Returns:
         Dict with protection check results
     """
-    from app.core.spatial_analysis import run_spatial_query
+    from shapely.geometry import shape
 
     conflicts = []
     in_protected_zone = False
 
-    point_geom = {"type": "Point", "coordinates": list(location)}
+    point_geom = shape({"type": "Point", "coordinates": list(location)})
 
     for zone_type, zone_geojson in protection_zones.items():
         if not zone_geojson or not zone_geojson.get("features"):
             continue
 
-        try:
-            result = run_spatial_query(
-                query_type="contains",
-                geometry=point_geom,
-                target_layer=zone_geojson,
-                limit=1,
-            )
-
-            if result.get("success") and result.get("data", {}).get("match_count", 0) > 0:
-                conflicts.append({
-                    "zone_type": zone_type,
-                    "severity": "high" if zone_type == "farmland_protection" else "medium",
-                })
-                in_protected_zone = True
-
-        except Exception:
-            pass
+        for feature in zone_geojson.get("features", []):
+            try:
+                zone_geom = shape(feature.get("geometry", {}))
+                if zone_geom is not None and not zone_geom.is_empty and zone_geom.contains(point_geom):
+                    conflicts.append({
+                        "zone_type": zone_type,
+                        "severity": "high" if zone_type == "farmland_protection" else "medium",
+                    })
+                    in_protected_zone = True
+                    break
+            except Exception:
+                continue
 
     return {
         "checked": True,
@@ -492,34 +466,27 @@ def _check_hazard_zones(
     Returns:
         Dict with hazard check results
     """
-    from app.core.spatial_analysis import run_spatial_query
+    from shapely.geometry import shape
 
     if not hazard_zones or not hazard_zones.get("features"):
         return {"checked": False, "reason": "No hazard zones provided"}
 
-    point_geom = {"type": "Point", "coordinates": list(location)}
+    point_geom = shape({"type": "Point", "coordinates": list(location)})
 
     try:
-        # Check if in hazard zone
-        result = run_spatial_query(
-            query_type="contains",
-            geometry=point_geom,
-            target_layer=hazard_zones,
-            limit=1,
-        )
+        in_hazard_zone = False
+        near_hazard_zone = False
 
-        in_hazard_zone = result.get("success") and result.get("data", {}).get("match_count", 0) > 0
+        for feature in hazard_zones.get("features", []):
+            zone_geom = shape(feature.get("geometry", {}))
+            if zone_geom is None or zone_geom.is_empty:
+                continue
 
-        # Check if near hazard zone (within 500m)
-        near_result = run_spatial_query(
-            query_type="nearest",
-            geometry=point_geom,
-            target_layer=hazard_zones,
-            max_distance=500,
-            limit=1,
-        )
-
-        near_hazard_zone = near_result.get("success") and near_result.get("data", {}).get("match_count", 0) > 0
+            if zone_geom.contains(point_geom):
+                in_hazard_zone = True
+            # ~500m in degrees at equator
+            if zone_geom.distance(point_geom) <= 500 / 111320:
+                near_hazard_zone = True
 
         return {
             "checked": True,
@@ -665,31 +632,43 @@ def assess_ecological_sensitivity(
         if water_features:
             water_gdf = geojson_to_geodataframe(water_features)
             if water_gdf is not None:
+                from shapely.ops import unary_union
+                from shapely.geometry.mapping import mapping
+                from app.utils.geo_utils import calculate_area_km2
+
                 for factor_name, factor_config in ECOLOGICAL_SENSITIVITY_FACTORS.items():
                     if factor_name in ["water_body", "river", "wetland"]:
                         buffer_distance = factor_config.get("buffer_distance", 50)
                         weight = factor_config.get("weight", 0.2)
 
-                        # Create buffer zones
-                        buffer_result = calculate_buffer_zones(
-                            water_features,
-                            buffer_distance,
-                            dissolve=True
-                        )
+                        # Create buffer zones (~buffer_distance m in degrees at equator)
+                        buffered = []
+                        for geom in water_gdf.geometry:
+                            if geom is not None and not geom.is_empty:
+                                buffered.append(geom.buffer(buffer_distance / 111320))
+                        if not buffered:
+                            continue
 
-                        if buffer_result.get("success"):
-                            buffer_geojson = buffer_result["data"]["geojson"]
-                            buffer_area = buffer_result["data"]["total_area_km2"]
+                        union = unary_union(buffered)
+                        buffer_geojson = {
+                            "type": "FeatureCollection",
+                            "features": [{
+                                "type": "Feature",
+                                "geometry": mapping(union),
+                                "properties": {},
+                            }],
+                        }
+                        buffer_area = calculate_area_km2(union)
 
-                            sensitivity_zones.append({
-                                "zone_type": factor_name,
-                                "buffer_distance_m": buffer_distance,
-                                "area_km2": buffer_area,
-                                "sensitivity_weight": weight,
-                                "description": factor_config.get("description", ""),
-                                "geojson": buffer_geojson,
-                            })
-                            total_sensitive_area += buffer_area * weight
+                        sensitivity_zones.append({
+                            "zone_type": factor_name,
+                            "buffer_distance_m": buffer_distance,
+                            "area_km2": buffer_area,
+                            "sensitivity_weight": weight,
+                            "description": factor_config.get("description", ""),
+                            "geojson": buffer_geojson,
+                        })
+                        total_sensitive_area += buffer_area * weight
 
         # 2. Slope analysis (if data provided)
         if slope_data:

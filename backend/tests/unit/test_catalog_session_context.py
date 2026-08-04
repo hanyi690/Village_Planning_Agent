@@ -163,6 +163,59 @@ async def test_populate_session_context_merges_uploaded_gis(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_populate_session_context_reinfers_dirty_gis_type(monkeypatch):
+    """Placeholder gis_data_type (upload/auto/unknown) re-inferred from filename.
+
+    A legacy upload row stored with a placeholder type must still land its
+    features in the canonical bundle group, otherwise the KG prebuild silently
+    produces an empty graph (660 parcels dropped).
+    """
+    from app.modules.schema.types.canonical import VillageBundle
+
+    bundle = VillageBundle(village_name="金田村")
+    catalog = _new_catalog()
+
+    async def fake_get_session(session_id):
+        return {"session_id": session_id, "village_name": "金田村"}
+
+    async def fake_get_uploaded(session_id, file_category=None):
+        if file_category == "gis_data":
+            return [
+                {
+                    "original_filename": "landuse.geojson",
+                    "gis_data_type": "upload",
+                    "gis_data": {
+                        "type": "FeatureCollection",
+                        "features": [
+                            {"type": "Feature", "geometry": {"type": "Polygon", "coordinates": [[[0, 0], [1, 0], [1, 1], [0, 1], [0, 0]]]}, "properties": {"BSM": "P1", "DLBM": "1100"}},
+                        ],
+                    },
+                }
+            ]
+        return []
+
+    async def fake_get_reports(session_id):
+        return {}
+
+    monkeypatch.setattr("app.database.operations.get_planning_session_async", fake_get_session)
+    monkeypatch.setattr(
+        "app.database.operations.get_uploaded_files_by_session_async", fake_get_uploaded
+    )
+    monkeypatch.setattr("app.database.operations.get_session_reports_async", fake_get_reports)
+    monkeypatch.setattr(
+        "app.modules.data.documents.loader.list_available_documents",
+        lambda *a, **k: [],
+    )
+
+    await catalog._populate_session_context(bundle, "sess-001")
+
+    polygons = bundle.polygons.get("landuse_current")
+    assert len(polygons) == 1
+    assert "upload:landuse_current" in bundle.metadata.provider_sources
+    assert polygons[0].dlbm == "1100"
+
+
+@pytest.mark.asyncio
 async def test_load_village_bundle_async_calls_sync_and_populate(monkeypatch):
     from app.modules.schema.types.canonical import VillageBundle
 

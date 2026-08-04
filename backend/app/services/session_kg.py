@@ -55,6 +55,17 @@ async def ensure_session_kg(
 
         # 计算 parcel 拓扑关系（含 parcel-road / parcel-water 跨层拓扑）
         parcels = bundle.polygons.get("landuse_current") or []
+        if not parcels:
+            logger.error(
+                "[SessionKG] Bundle for session %s (village=%s) has NO landuse_current "
+                "parcels — refusing to register an empty KG. Uploaded GIS layers were "
+                "likely mis-typed or skipped at bundle build.",
+                session_id, getattr(bundle, "village_name", ""),
+            )
+            from app.services.session_bundle import invalidate_session_bundle
+
+            invalidate_session_bundle(session_id)
+            return None
         roads = bundle.lines.get("roads_current") or []
         water = bundle.polygons.get("water_bodies") or []
         relations = None

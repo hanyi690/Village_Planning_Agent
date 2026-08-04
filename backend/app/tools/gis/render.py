@@ -1,7 +1,6 @@
 """render_map tool — convert GeoJSON layers to frontend MapLibre format.
 
-Merges:
-  - layout/map_renderer.py (MapRenderer)
+Renders layers directly from spatial data via spatial_ops.map_layers.
 """
 
 from __future__ import annotations
