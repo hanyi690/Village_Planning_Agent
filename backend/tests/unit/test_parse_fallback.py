@@ -1,6 +1,6 @@
 def test_merge_fallback_targets_backfills_missing_categories():
-    from app.agent.gis.parse_fallback import merge_fallback_targets
-    from app.agent.gis.parse.state import SpatialPlanningIntent
+    from app.agent.select.parse_fallback import merge_fallback_targets
+    from app.agent.select.parse_state import SpatialPlanningIntent
     from app.modules.schema.contracts.parse_contracts import ZoneTarget, FacilityTarget, RoadTarget
 
     external = SpatialPlanningIntent(

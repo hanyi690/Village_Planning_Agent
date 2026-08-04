@@ -14,7 +14,7 @@ def create_parse_agent_graph():
     Returns the parse function for direct invocation (not a LangGraph).
     Kept for backward compatibility with external callers.
     """
-    from app.agent.gis.parse import parse_async
+    from app.agent.select.parse_agent import parse_async
     return parse_async
 
 

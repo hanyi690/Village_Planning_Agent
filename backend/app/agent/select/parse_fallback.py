@@ -1,4 +1,7 @@
-"""PARSE-as-fallback: merge missing intent categories without disturbing anchors."""
+"""PARSE-as-fallback: merge missing intent categories without disturbing anchors.
+
+Migrated from agent/gis/parse_fallback.py per docs/architecture/agent-graph.md §5.
+"""
 from __future__ import annotations
 
 

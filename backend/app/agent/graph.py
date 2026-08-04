@@ -133,7 +133,7 @@ async def gis_agent_node(state: Dict[str, Any]) -> Dict[str, Any]:
     try:
         from app.agent.explore.contracts import ExplorationInstructionCollection
         from app.agent.gis.format_bound_intent import format_bound_spatial_intent
-        from app.agent.gis.parse import parse
+        from app.agent.select.parse_agent import parse
         from app.modules.spatial_ops.bundle_binder import bind_exploration_to_bundle
 
         planning_text = "\n\n".join(

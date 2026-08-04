@@ -67,7 +67,7 @@ def extract_vocabulary_deterministic(reports: Dict[str, str]) -> Vocabulary:
     for content in (reports or {}).values():
         zone_targets = list(_extract_zone_tables(content))
         try:
-            from app.agent.gis.parse.agent import _extract_instruction_tables
+            from app.agent.select.parse_agent import _extract_instruction_tables
 
             zone_targets.extend(
                 (_extract_instruction_tables(content).get("zones") or [])

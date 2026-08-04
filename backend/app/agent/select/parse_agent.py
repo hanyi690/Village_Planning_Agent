@@ -8,6 +8,8 @@ Public API:
   parse(planning_text, village_name, ...) -> ParseResult
   parse_async(...) -> ParseResult
   ParseResult: dataclass with .intent (SpatialPlanningIntent)
+
+Migrated from agent/gis/parse/agent.py per docs/architecture/agent-graph.md §5.
 """
 
 from __future__ import annotations

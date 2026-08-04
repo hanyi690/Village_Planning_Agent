@@ -16,6 +16,8 @@ Inspired by:
   - Spatial-Agent: GeoFlow Graph (concept transformation, not free text)
   - GeoAgents: spatial tools as first-class citizens (SpatialRule -> Shapely ops)
   - GeoWorkbench: compute_spatial_context() as explicit pipeline stage
+
+Migrated from agent/gis/parse/state.py per docs/architecture/agent-graph.md §5.
 """
 
 from __future__ import annotations

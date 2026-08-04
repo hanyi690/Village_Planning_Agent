@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pytest
 
-from app.agent.gis.parse.agent import PendingBinding, extract_bindings
+from app.agent.select.parse_agent import PendingBinding, extract_bindings
 from app.modules.kg import get_kg_manager
 from app.modules.schema.types.base import PolygonFeature
 from app.modules.schema.types.canonical import VillageBundle
@@ -63,7 +63,7 @@ REPORT = (
 
 
 def test_deterministic_extractor_picks_village_bsm_pairs():
-    from app.agent.gis.parse.agent import _extract_bindings_deterministic
+    from app.agent.select.parse_agent import _extract_bindings_deterministic
 
     bindings = _extract_bindings_deterministic({"land_use": REPORT})
     assert len(bindings) >= 1
@@ -75,7 +75,7 @@ def test_deterministic_extractor_picks_village_bsm_pairs():
 
 def test_validate_accepts_internal_village_without_annotation():
     """田坑自然村无注记点，但地块中心在村界内 → 通过。"""
-    from app.agent.gis.parse.agent import _validate_binding
+    from app.agent.select.parse_agent import _validate_binding
 
     binding = PendingBinding(
         natural_village="田坑自然村", feature_type="parcel",
@@ -88,7 +88,7 @@ def test_validate_accepts_internal_village_without_annotation():
 
 def test_validate_rejects_external_admin_village():
     """八社村 注记点在村界外 → 拒绝（村外毗邻行政村，非本村居民点）。"""
-    from app.agent.gis.parse.agent import _validate_binding
+    from app.agent.select.parse_agent import _validate_binding
 
     binding = PendingBinding(
         natural_village="八社村", feature_type="parcel",
@@ -102,7 +102,7 @@ def test_validate_rejects_external_admin_village():
 
 def test_validate_rejects_internal_name_bound_to_outside_parcel():
     """村内村名绑定到村界外地块 → 拒绝。"""
-    from app.agent.gis.parse.agent import _validate_binding
+    from app.agent.select.parse_agent import _validate_binding
 
     bundle = _make_bundle_with_boundary()
     bundle.add(
@@ -124,7 +124,7 @@ def test_validate_rejects_internal_name_bound_to_outside_parcel():
 
 
 def test_validate_rejects_unknown_bsm():
-    from app.agent.gis.parse.agent import _validate_binding
+    from app.agent.select.parse_agent import _validate_binding
 
     binding = PendingBinding(
         natural_village="田坑自然村", feature_type="parcel",
@@ -138,7 +138,7 @@ def test_validate_rejects_unknown_bsm():
 
 def test_extract_entity_semantics_picks_zones_and_projects():
     """P4: 报告分区表/项目库 → FunctionalZone/Project 实体语义注解。"""
-    from app.agent.gis.parse.agent import _extract_entity_semantics
+    from app.agent.select.parse_agent import _extract_entity_semantics
 
     report = (
         "【功能分区表】\n"
@@ -160,7 +160,7 @@ def test_extract_bindings_writes_semantic_annotations(monkeypatch, tmp_path: Pat
     """P4/P6: extract_bindings（enrichment）写入分区/项目实体注解。"""
     import asyncio
 
-    import app.agent.gis.parse.agent as parse_mod
+    import app.agent.select.parse_agent as parse_mod
     import app.modules.kg.enrichment.bindings as enrich_mod
     import app.modules.kg.memory as mem_mod
 
@@ -200,7 +200,7 @@ def test_extract_bindings_writes_semantic_annotations(monkeypatch, tmp_path: Pat
 def test_extract_bindings_full_flow(monkeypatch, tmp_path: Path):
     import asyncio
 
-    import app.agent.gis.parse.agent as parse_mod
+    import app.agent.select.parse_agent as parse_mod
     import app.modules.kg.enrichment.bindings as enrich_mod
     import app.modules.kg.memory as mem_mod
 

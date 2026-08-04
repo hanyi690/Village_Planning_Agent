@@ -19,7 +19,6 @@ logger = logging.getLogger(__name__)
 
 # ── Dev data helpers (replace legacy gis.data.loader; remove when routes are rewritten) ──
 from app.modules.data.catalog.catalog import DataCatalog
-from app.tools.gis.parse import resolve_gen_intent, resolve_plan_intent, parse_text_via_llm, _parse_reports_to_intent
 from app.modules.data.documents.loader import load_planning_text
 
 
@@ -40,6 +39,69 @@ class PlanningTextLoader:
     @staticmethod
     def load_village_planning_markdown(village_name: str) -> str:
         return load_planning_text(village_name) or ""
+
+
+def _get_village_params(gis_data: Dict[str, Any]) -> Dict[str, str]:
+    """Inline replacement for the deprecated get_village_params helper."""
+    from app.tools.gis._analytics.metrics_calculator import GISMetricsCalculator
+
+    metrics = GISMetricsCalculator.compute_land_use_metrics(gis_data)
+    total_area = str(round(metrics["total_area_ha"], 2))
+    zone_areas = metrics.get("zone_areas", {})
+    sorted_zones = sorted(zone_areas.items(), key=lambda x: -x[1])
+    top_zones = [z for z, _ in sorted_zones[:3]]
+    zone_names = {
+        "农业用地": "农业用地", "生态绿地": "林地", "居住用地": "居民点",
+        "水域": "水域", "交通用地": "交通", "产业用地": "产业",
+        "公共服务用地": "公服", "商业用地": "商业",
+    }
+    descriptions = [zone_names.get(z, z) for z in top_zones]
+    land_use_description = (
+        descriptions[0] + "为主，含" + "、".join(descriptions[1:]) if descriptions else "未知"
+    )
+    return {
+        "total_area": total_area,
+        "land_use_description": land_use_description,
+        "village_name": "金田村委会",
+    }
+
+
+def _get_data_summary(gis_data: Dict[str, Any]) -> Dict[str, Any]:
+    """Inline replacement for the deprecated get_data_summary helper."""
+    summary: Dict[str, Any] = {}
+    for key, geojson in gis_data.items():
+        if not isinstance(geojson, dict) or "features" not in geojson:
+            continue
+        feats = geojson.get("features", [])
+        geom_types: Dict[str, int] = {}
+        for f in feats:
+            gt = f.get("geometry", {}).get("type", "None")
+            geom_types[gt] = geom_types.get(gt, 0) + 1
+        summary[key] = {"feature_count": len(feats), "geometry_types": geom_types}
+    return summary
+
+
+def _report_content_text(parsed: Dict[str, Any]) -> str:
+    """Extract planning text from a dimension report record."""
+    content = parsed.get("content", "")
+    if content:
+        return str(content)
+    summary = parsed.get("summary", {}) or {}
+    return str(summary.get("text_summary", "") or "")
+
+
+async def _resolve_intent_via_parse(village_name: str, planning_text: str = "") -> Any:
+    """Resolve a spatial intent via the PARSE Agent (deterministic rule-based).
+
+    Returns a SpatialPlanningIntent (app.modules.schema.contracts.parse_contracts).
+    """
+    from app.agent.select.parse_agent import parse_async
+
+    text = planning_text or ""
+    if not text:
+        text = load_planning_text(village_name) or ""
+    result = await parse_async(planning_text=text, village_name=village_name)
+    return result.intent
 
 
 router = APIRouter(prefix="/api/dev/gis", tags=["GIS Dev"])
@@ -185,16 +247,14 @@ async def gis_data(request: DataRequest):
     t0 = time.time()
     result: Dict[str, Any] = {"success": True}
     try:
-        from app.tools.gis.parse import get_village_params, get_data_summary
-
         gis_data = load_all(request.location)
-        result["data_summary"] = get_data_summary(gis_data)
+        result["data_summary"] = _get_data_summary(gis_data)
 
         if "data" in request.include:
             result["gis_data"] = {k: v for k, v in gis_data.items() if k.endswith("_geojson")}
 
         if "center" in request.include or "bbox" in request.include:
-            params = get_village_params(gis_data)
+            params = _get_village_params(gis_data)
             if "center" in request.include:
                 result["center"] = params.get("center")
             if "bbox" in request.include:
@@ -285,11 +345,9 @@ async def _validate_layout(request: ValidateRequest, t0: float) -> Dict[str, Any
     # Mode 2: generate from jintian data then validate
     if request.use_jintian_data and not layout_configs:
         from app.tools.gis._generation.pipeline import run_layout_pipeline
-        from app.tools.gis.parse import _dict_to_intent
 
         gis_data = load_all()
-        intent_dict = resolve_gen_intent("金田村委会", gis_data)
-        intent = _dict_to_intent(intent_dict)
+        intent = await _resolve_intent_via_parse("金田村委会")
 
         pipeline_result = await asyncio.to_thread(
             run_layout_pipeline, intent, gis_data, run_export=False, run_render=False,
@@ -397,7 +455,6 @@ async def gis_layout(request: LayoutRequest):
     t0 = time.time()
     try:
         from app.tools.gis._generation.pipeline import run_layout_pipeline, build_three_way_comparison
-        from app.tools.gis.parse import _dict_to_intent
 
         gis_data = load_all(request.village_name)
         planned_data = load_planned() if request.compare_to_planned else {}
@@ -408,21 +465,17 @@ async def gis_layout(request: LayoutRequest):
         # Resolve intent and run pipeline for each path
         for path_name in (["gen", "plan"] if request.run_path == "both" else [request.run_path]):
             try:
-                if request.use_llm:
-                    intent_dict = parse_text_via_llm(
-                        text=request.planning_text or "",
-                        village_name=request.village_name,
-                        gis_data=gis_data,
+                if request.use_llm or path_name == "gen":
+                    intent = await _resolve_intent_via_parse(
+                        request.village_name, planning_text=request.planning_text or "",
                     )
-                elif path_name == "gen":
-                    intent_dict = resolve_gen_intent(request.village_name, gis_data)
                 else:
-                    intent_dict = resolve_plan_intent(request.village_name, gis_data)
+                    intent = await _resolve_intent_via_parse(request.village_name)
             except Exception as e:
                 logger.warning(f"[{path_name}] Intent resolution failed: {e}")
-                intent_dict = {"zones": [], "facilities": [], "axes": [], "constraints": []}
+                from app.agent.select.parse_agent import parse_async as _empty_parse
+                intent = (await _empty_parse(planning_text="", village_name=request.village_name)).intent
 
-            intent = _dict_to_intent(intent_dict)
             pipeline_result = await asyncio.to_thread(
                 run_layout_pipeline,
                 intent, gis_data, request.village_name,
@@ -430,8 +483,8 @@ async def gis_layout(request: LayoutRequest):
                 run_render=request.render,
                 output_dir=request.output_dir,
             )
-            pipeline_result["parse_source"] = intent_dict.get("metadata", {}).get("source", f"{path_name}_cached")
-            pipeline_result["intent"] = intent_dict
+            pipeline_result["parse_source"] = "parse_agent"
+            pipeline_result["intent"] = intent.model_dump() if hasattr(intent, "model_dump") else intent
 
             if path_name == "gen":
                 gen_result = pipeline_result
@@ -533,12 +586,14 @@ async def gis_intent(request: IntentRequest):
                     "content": parsed.get("text_summary", ""),
                 }
 
-            from app.tools.gis.parse import _parse_reports_to_intent
-            _gis_data = load_all()
-            result = _parse_reports_to_intent(reports=reports, village_name=request.village_name, gis_data=_gis_data)
-            if not result.get("success"):
-                return {"success": False, "error": result.get("error", "Unknown"), "timing_ms": round((time.time() - t0) * 1000)}
-            intent_json = result["data"]["intent_json"]
+            reports_text = "\n\n".join(
+                f"[{dk}]\n{_report_content_text(p)}"
+                for dk, p in reports.items()
+            )
+            parse_result = await _resolve_intent_via_parse(
+                request.village_name, planning_text=reports_text,
+            )
+            intent_json = parse_result.model_dump()
             return _sanitize_floats({"success": True, "intent": intent_json, "source": "db_l3", "timing_ms": round((time.time() - t0) * 1000)})
 
         # Option 2/3: Text-based
@@ -549,12 +604,11 @@ async def gis_intent(request: IntentRequest):
         if not planning_text:
             return {"success": False, "error": "No planning text provided", "timing_ms": round((time.time() - t0) * 1000)}
 
-        from app.agent.gis.prompts import format_parse_prompt
-        from app.tools.gis.parse import parse_text_via_llm
-        _gis_data = load_all()
-
-        intent = parse_text_via_llm(text=planning_text, village_name=request.village_name, gis_data=_gis_data)
-        return _sanitize_floats({"success": True, "intent": intent, "source": "llm", "timing_ms": round((time.time() - t0) * 1000)})
+        parse_result = await _resolve_intent_via_parse(
+            request.village_name, planning_text=planning_text,
+        )
+        intent = parse_result.model_dump()
+        return _sanitize_floats({"success": True, "intent": intent, "source": "parse_agent", "timing_ms": round((time.time() - t0) * 1000)})
 
     except Exception as e:
         logger.error(f"[GIS] /intent failed: {e}", exc_info=True)

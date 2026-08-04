@@ -360,8 +360,8 @@ async def _parse_intent_node(state: GISPipelineState) -> dict:
       - operation_sequence: List[SpatialOperation] with spatial anchors
       - constraint_set: List[SpatialConstraint] with spatial rules
     """
-    from app.agent.gis.parse import parse_async, ParseResult
-    from app.agent.gis.parse.state import SpatialPlanningIntent
+    from app.agent.select.parse_agent import parse_async, ParseResult
+    from app.agent.select.parse_state import SpatialPlanningIntent
 
     reports = state.reports or {}
     village_name = state.village_name
@@ -377,8 +377,8 @@ async def _parse_intent_node(state: GISPipelineState) -> dict:
         )
         if has_structured:
             intent = existing
-            from app.agent.gis.parse_fallback import merge_fallback_targets
-            from app.agent.gis.parse import parse_async as _fallback_parse
+            from app.agent.select.parse_fallback import merge_fallback_targets
+            from app.agent.select.parse_agent import parse_async as _fallback_parse
 
             planning_text = _build_planning_text(state)
             if planning_text:
@@ -394,7 +394,7 @@ async def _parse_intent_node(state: GISPipelineState) -> dict:
                     logger.warning("[Pipeline:parse] PARSE fallback failed: %s", e)
                 # P8: 合并的 PARSE 项目/设施/分区位置名 → gazetteer → candidate_bsms
                 try:
-                    from app.agent.gis.parse.agent import resolve_spatial_anchors
+                    from app.agent.select.parse_agent import resolve_spatial_anchors
 
                     resolve_spatial_anchors(
                         intent,
@@ -436,7 +436,7 @@ async def _parse_intent_node(state: GISPipelineState) -> dict:
 
         # P8: 自然村/位置名 → gazetteer → candidate_bsms（intent 原地填充）
         try:
-            from app.agent.gis.parse.agent import resolve_spatial_anchors
+            from app.agent.select.parse_agent import resolve_spatial_anchors
 
             resolve_spatial_anchors(
                 intent,

@@ -102,7 +102,7 @@ class TestSpatialModels:
 
     def test_spatial_anchor_resolution_status(self):
         """SpatialAnchor resolution_status must be one of 3 values."""
-        from app.agent.gis.parse.state import SpatialAnchor
+        from app.agent.select.parse_state import SpatialAnchor
 
         for status in ["anchored", "partial", "unresolved"]:
             anchor = SpatialAnchor(
@@ -115,7 +115,7 @@ class TestSpatialModels:
 
     def test_spatial_rule_operations(self):
         """SpatialRule must accept 5 operation types."""
-        from app.agent.gis.parse.state import SpatialRule
+        from app.agent.select.parse_state import SpatialRule
 
         for op in ["no_overlap", "buffer_exclusion", "contained_by", "adjacent_to", "distance_within"]:
             rule = SpatialRule(operation=op, subject="construction", object="farmland")
@@ -123,7 +123,7 @@ class TestSpatialModels:
 
     def test_spatial_operation_with_anchor(self):
         """SpatialOperation should accept SpatialAnchor."""
-        from app.agent.gis.parse.state import SpatialOperation, SpatialAnchor
+        from app.agent.select.parse_state import SpatialOperation, SpatialAnchor
 
         op = SpatialOperation(
             action="create",
@@ -145,7 +145,7 @@ class TestSpatialModels:
 
     def test_spatial_constraint_with_rule(self):
         """SpatialConstraint should accept SpatialRule."""
-        from app.agent.gis.parse.state import SpatialConstraint, SpatialRule
+        from app.agent.select.parse_state import SpatialConstraint, SpatialRule
 
         constraint = SpatialConstraint(
             type="spatial_constraint",
@@ -163,7 +163,7 @@ class TestSpatialModels:
 
     def test_spatial_planning_intent_with_targets(self):
         """SpatialPlanningIntent should accept List[ZoneTarget]."""
-        from app.agent.gis.parse.state import (
+        from app.agent.select.parse_state import (
             SpatialPlanningIntent,
             ZoneTarget,
             SpatialPreference,
@@ -189,7 +189,7 @@ class TestSpatialModels:
 
     def test_section_info_types(self):
         """SectionInfo should accept all 13 section types."""
-        from app.agent.gis.parse.state import SectionInfo
+        from app.agent.select.parse_state import SectionInfo
 
         valid_types = [
             "preamble", "target", "regulation", "project_table",
@@ -271,16 +271,16 @@ class TestParseAgentGraph:
     """Test PARSE Agent entry points (post-v9: pure functions, no StateGraph)."""
 
     def test_graph_compiles(self):
-        """create_parse_agent_graph returns a callable parse entry."""
-        from app.agent.gis.agent import create_parse_agent_graph
+        """parse_async is a callable parse entry (post-migration, no StateGraph)."""
+        from app.agent.select.parse_agent import parse_async
 
-        parse_fn = create_parse_agent_graph()
+        parse_fn = parse_async
         assert callable(parse_fn)
 
     def test_graph_has_expected_nodes(self):
         """parse_async returns a typed ParseResult with intent targets."""
         import asyncio
-        from app.agent.gis.parse import parse_async
+        from app.agent.select.parse_agent import parse_async
 
         async def _run():
             return await parse_async(
@@ -295,7 +295,7 @@ class TestParseAgentGraph:
 
     def test_route_by_section_fan_out(self):
         """parse() extracts across sections: zone targets + facilities + axes."""
-        from app.agent.gis.parse import parse
+        from app.agent.select.parse_agent import parse
 
         result = parse(
             "规划：村庄建设区13%，生态保护区15.39%\n"

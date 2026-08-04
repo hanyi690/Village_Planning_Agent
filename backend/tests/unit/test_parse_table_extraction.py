@@ -1,6 +1,6 @@
 """P3 单测：PARSE 结构化表格解析（功能分区表/土地用途分区表/项目库）。"""
 
-from app.agent.gis.parse import parse
+from app.agent.select.parse_agent import parse
 
 
 ZONE_TABLE = """【功能分区表】

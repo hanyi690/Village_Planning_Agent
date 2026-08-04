@@ -1,6 +1,6 @@
 def test_compare_intent_to_layout_detects_missing_project():
     from app.agent.explore.verification import compare_intent_to_layout
-    from app.agent.gis.parse.state import SpatialPlanningIntent
+    from app.agent.select.parse_state import SpatialPlanningIntent
     from app.modules.schema.contracts.parse_contracts import ProjectTarget, ZoneTarget
 
     intent = SpatialPlanningIntent(

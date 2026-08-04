@@ -2,8 +2,8 @@
 
 from unittest.mock import MagicMock, patch
 
-from app.agent.gis.parse import parse
-from app.agent.gis.parse.agent import (
+from app.agent.select.parse_agent import parse
+from app.agent.select.parse_agent import (
     _extract_instruction_tables,
     _extract_location_tokens,
     resolve_spatial_anchors,
@@ -100,7 +100,7 @@ def test_location_tokens_splitting():
 
 def test_zone_regex_does_not_match_prose_with_trailing_numbers():
     """P3-6: 正文长句（逗号分隔 + 尾部数字）不得误提取为分区目标。"""
-    from app.agent.gis.parse.agent import _extract_zone_targets
+    from app.agent.select.parse_agent import _extract_zone_targets
 
     text = """【产业发展定位】
 核心目标：至规划期末实现农业总产值翻番，旅游年接待游客突破5万人次。
@@ -114,7 +114,7 @@ def test_zone_regex_does_not_match_prose_with_trailing_numbers():
 
 
 def test_direction_from_location():
-    from app.agent.gis.parse.agent import _direction_from_location
+    from app.agent.select.parse_agent import _direction_from_location
 
     assert _direction_from_location("村中部") == "center"
     assert _direction_from_location("村东北部与西南部") == "northeast"

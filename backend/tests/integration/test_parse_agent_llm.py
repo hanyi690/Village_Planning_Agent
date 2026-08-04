@@ -173,8 +173,8 @@ class TestParseAgentLLM:
         """Run full PARSE Agent pipeline: text + GIS → operations + constraints + intent."""
         _setup_llm_cache()
 
-        from app.agent.gis.parse.agent import build_parse_agent_graph
-        from app.agent.gis.parse.state import ParseAgentState
+        from app.agent.select.parse_agent import build_parse_agent_graph
+        from app.agent.select.parse_state import ParseAgentState
         from app.modules.spatial_ops import compute_spatial_context
 
         # Step 1: Compute spatial context
@@ -339,8 +339,8 @@ class TestParseNodesLLM:
         """Test classify_sections node with LLM."""
         _setup_llm_cache()
 
-        from app.agent.gis.parse.agent import classify_sections_node
-        from app.agent.gis.parse.state import ParseAgentState
+        from app.agent.select.parse_agent import classify_sections_node
+        from app.agent.select.parse_state import ParseAgentState
         from app.modules.spatial_ops import compute_spatial_context
 
         spatial_context = compute_spatial_context(jintian_gis_data)
@@ -367,8 +367,8 @@ class TestParseNodesLLM:
         """Test extract_projects node with LLM."""
         _setup_llm_cache()
 
-        from app.agent.gis.parse.agent import explore_projects_node
-        from app.agent.gis.parse.state import ParseAgentState, SectionInfo
+        from app.agent.select.parse_agent import explore_projects_node
+        from app.agent.select.parse_state import ParseAgentState, SectionInfo
         from app.modules.spatial_ops import compute_spatial_context
 
         spatial_context = compute_spatial_context(jintian_gis_data)
