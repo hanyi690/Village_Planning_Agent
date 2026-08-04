@@ -63,16 +63,12 @@ def _active_chain_roots() -> list[str]:
 # that file's entry here. Adding entries here is forbidden (budget only
 # shrinks). The budget must reach zero before Wave A is marked final-pass.
 #
-# Current baseline (Wave I Task 7): 3 files / 3 imports reachable from the
-# active chain — the 8 legacy-gated EXECUTE files were deleted in Wave I,
-# leaving only the 3 legacy-gated dev/validation tools (dynamic_zoning,
-# compare_layouts, layout_validator). Each subsequent wave removes entries
-# until {}.
-VIOLATION_BUDGET: dict[str, int] = {
-    "app/tools/gis/_analytics/dynamic_zoning.py": 1,
-    "app/tools/gis/_rendering/compare_layouts.py": 1,
-    "app/tools/gis/_validation/layout_validator.py": 1,
-}
+# Current baseline (Wave J Task 7): 0 files / 0 imports reachable from the
+# active chain — the final 3 legacy dev/validation tools (dynamic_zoning,
+# compare_layouts, layout_validator) were deleted in Wave J, so the budget
+# is now empty and the active chain is fully decoupled from the legacy
+# cross-system mapping symbols.
+VIOLATION_BUDGET: dict[str, int] = {}
 
 
 @pytest.fixture(scope="module")

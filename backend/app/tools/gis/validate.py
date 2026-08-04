@@ -1,7 +1,7 @@
 """validate_layout tool — spatial layout validation against constraints and standards.
 
 Merges:
-  - layout/validation/layout_validator.py  (LayoutValidator, 8 checks)
+  - app.agent.validate.aggregate           (validate_aggregate, 8 checks)
   - layout/validation/facility_validator.py (facility siting validation)
   - tools/gis/layout_tools.py              (validate_layout @tool)
 """
@@ -18,13 +18,7 @@ from app.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
-# Re-export from the internal _validation module
-from ._validation.layout_validator import (
-    LayoutValidator,
-    ValidationReport,
-    Violation,
-    CheckResult,
-)
+from app.agent.validate.aggregate import validate_aggregate
 
 
 from app.tools.helpers import make_result, to_tool_message
@@ -57,16 +51,18 @@ def validate_layout(
             )],
         })
 
-    validator = LayoutValidator()
-    report = validator.validate(
-        layout_configs,
-        protected_parcels_detail=kg_protected_parcels_detail,
-        kg_vne_summary=kg_vne_summary,
+    report = validate_aggregate(
+        planned_state=None,
+        changeset=None,
+        layout_configs=layout_configs,
+        intent=None,
+        constraint_index=None,
+        run_id="",
     )
 
     result = {
-        "status": report.status,
-        "checks": [{"name": c.check_name, "passed": c.passed, "violations": len(c.violations)} for c in report.checks],
+        "status": "pass" if report.overall_passed else "fail",
+        "checks": [{"name": c.check_name, "passed": c.passed, "violations": len(c.affected_parcels)} for c in report.checks],
         "total_checks": len(report.checks),
         "passed_checks": sum(1 for c in report.checks if c.passed),
     }
@@ -80,9 +76,9 @@ def validate_layout(
             for a in adjustments
         ]
 
-    if report.status == "fail" and auto_retry:
+    if not report.overall_passed and auto_retry:
         result["retry_suggestions"] = [
-            f"{c.check_name}: {c.violations[0].message}" if c.violations else f"{c.check_name}: adjust"
+            f"{c.check_name}: {c.fix_suggestion}" if c.fix_suggestion else f"{c.check_name}: adjust"
             for c in report.checks if not c.passed
         ]
 

@@ -517,27 +517,6 @@ def build_three_way_comparison(
     gis_data: Dict[str, Any],
 ) -> Dict[str, Any]:
     """Build three-way comparison report: gen vs planned, plan vs planned, gen vs plan."""
-    from app.tools.gis._rendering.compare_layouts import compare
-
-    protection = {}
-    for key, name in [
-        ("farmland_protection_geojson", "farmland"),
-        ("ecological_protection_geojson", "ecological"),
-        ("historical_protection_geojson", "historical"),
-    ]:
-        val = gis_data.get(key)
-        if val and val.get("features"):
-            protection[name] = val
-
-    comparison: Dict[str, Any] = {}
-    if gen_layers and planned_data:
-        report = compare(gen_layers, planned_data, protection if protection else None)
-        comparison["gen_vs_planned"] = report.to_dict() if hasattr(report, "to_dict") else report
-    if plan_layers and planned_data:
-        report = compare(plan_layers, planned_data, protection if protection else None)
-        comparison["plan_vs_planned"] = report.to_dict() if hasattr(report, "to_dict") else report
-    if gen_layers and plan_layers:
-        report = compare(gen_layers, plan_layers, protection if protection else None)
-        comparison["gen_vs_plan"] = report.to_dict() if hasattr(report, "to_dict") else report
-
-    return comparison
+    return {
+        "note": "three-way comparison migrated to app.agent.execute.review.build_before_after_geojson (Wave I)"
+    }

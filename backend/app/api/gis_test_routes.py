@@ -339,7 +339,7 @@ async def gis_validate(request: ValidateRequest):
 
 
 async def _validate_layout(request: ValidateRequest, t0: float) -> Dict[str, Any]:
-    from app.tools.gis._validation.layout_validator import LayoutValidator
+    from app.agent.validate.aggregate import validate_aggregate
 
     layout_configs = request.layout_configs
 
@@ -358,22 +358,35 @@ async def _validate_layout(request: ValidateRequest, t0: float) -> Dict[str, Any
     if not layout_configs:
         return {"success": False, "error": "No layout_configs provided", "timing_ms": round((time.time() - t0) * 1000)}
 
-    validator = LayoutValidator()
-    report = await asyncio.to_thread(validator.validate, layout_configs, request.constraints)
+    report = validate_aggregate(
+        planned_state=None,
+        changeset=None,
+        layout_configs=layout_configs,
+        intent=None,
+        constraint_index=None,
+        run_id="",
+    )
 
     checks_detail = [
         {
             "name": c.check_name,
             "passed": c.passed,
-            "violation_count": c.violation_count,
-            "violations": [{"check": v.check, "severity": v.severity, "message": v.message} for v in c.violations],
+            "violation_count": len(c.affected_parcels),
+            "violations": [
+                {
+                    "check": c.check_id,
+                    "severity": "error" if not c.passed else "warning",
+                    "message": c.fix_suggestion or c.actual_value,
+                }
+                for _ in c.affected_parcels
+            ],
         }
         for c in report.checks
     ]
 
     return _sanitize_floats({
         "success": True,
-        "validation": report.to_dict(),
+        "validation": report.model_dump(),
         "checks": checks_detail,
         "timing_ms": round((time.time() - t0) * 1000),
     })
@@ -522,12 +535,18 @@ async def gis_layout(request: LayoutRequest):
         # Optional: validation
         validation = None
         if request.include_validation:
-            from app.tools.gis._validation.layout_validator import LayoutValidator
+            from app.agent.validate.aggregate import validate_aggregate
             layers = gen_result.get("layers") or plan_result.get("layers") or []
             if layers:
-                validator = LayoutValidator()
-                report = await asyncio.to_thread(validator.validate, layers)
-                validation = report.to_dict()
+                report = validate_aggregate(
+                    planned_state=None,
+                    changeset=None,
+                    layout_configs=layers,
+                    intent=None,
+                    constraint_index=None,
+                    run_id="",
+                )
+                validation = report.model_dump()
 
         # Build response
         response: Dict[str, Any] = {"success": True, "timing_ms": round((time.time() - t0) * 1000)}

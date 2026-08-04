@@ -6,12 +6,10 @@ from .metrics_calculator import GISMetricsCalculator
 from .coverage import calculate_gis_coverage as calculate_coverage
 from .accessibility import run_accessibility_analysis
 from .isochrone import generate_isochrones
-from .dynamic_zoning import DynamicZoningEngine
 
 __all__ = [
     "GISMetricsCalculator",
     "calculate_coverage",
     "run_accessibility_analysis",
     "generate_isochrones",
-    "DynamicZoningEngine",
 ]

@@ -2,12 +2,11 @@
 
 Wave I requires app.agent.execute and app.tools.gis._generation (including its
 optimizer/ subdir) to stay decoupled from app.modules.schema.advisory_crosswalks.
-Task 7 deleted the 8 legacy-gated EXECUTE files and shrank the violation budget
-to 3 dev/validation-only files (dynamic_zoning, compare_layouts,
-layout_validator), which are out of scope for this scan. The AST scan is
-authoritative; the sys.modules snapshot is a best-effort delta check (it only
-flags crosswalk modules newly loaded by importing app.agent.execute, so it
-tolerates crosswalks being pre-loaded by other fixtures in the full suite).
+Wave J Task 7 deleted the final 3 dev/validation-only files (dynamic_zoning,
+compare_layouts, layout_validator), shrinking the violation budget to zero. The
+AST scan is authoritative; the sys.modules snapshot is a best-effort delta check
+(it only flags crosswalk modules newly loaded by importing app.agent.execute, so
+it tolerates crosswalks being pre-loaded by other fixtures in the full suite).
 """
 from __future__ import annotations
 
@@ -39,11 +38,7 @@ _DELETED_LEGACY_FILES = (
     "app/tools/gis/generate.py",
 )
 
-_EXPECTED_BUDGET_FILES = (
-    "app/tools/gis/_analytics/dynamic_zoning.py",
-    "app/tools/gis/_rendering/compare_layouts.py",
-    "app/tools/gis/_validation/layout_validator.py",
-)
+_EXPECTED_BUDGET_FILES = ()
 
 
 def _py_files(directory):
@@ -104,8 +99,8 @@ def test_deleted_legacy_files_removed():
     assert not remaining, "legacy-gated files still exist:\n" + "\n".join(remaining)
 
 
-def test_crosswalk_budget_is_three():
-    assert len(VIOLATION_BUDGET) == 3
+def test_crosswalk_budget_is_zero():
+    assert len(VIOLATION_BUDGET) == 0
     assert set(VIOLATION_BUDGET) == set(_EXPECTED_BUDGET_FILES)
     assert LEGACY_GATED_FILES == []
     for rel in _DELETED_LEGACY_FILES:
