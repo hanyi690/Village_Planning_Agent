@@ -187,3 +187,38 @@ def test_no_cluster_uses_representative_point():
 
 def test_invalid_geometry_returns_none():
     assert place_anchor_point(None) is None
+
+from app.modules.spatial_ops.selection import CandidateParcel, rank_candidates
+
+
+def _rank_parcel(bsm: str, distance_m: float) -> CandidateParcel:
+    return CandidateParcel(bsm=bsm, geometry={}, dlmc="空闲宅基地", area_ha=0.1, distance_m=distance_m)
+
+
+def test_rank_default_deterministic():
+    ordered = rank_candidates(
+        [_rank_parcel("a", 900), _rank_parcel("b", 100), _rank_parcel("c", 300)], cluster_centroid=(0.0, 0.0)
+    )
+    assert ordered == ["b", "c", "a"]
+
+
+def test_rank_llm_reorders():
+    def fake_ranker(candidates, ctx):
+        return ["a", "c", "b"]
+
+    ordered = rank_candidates(
+        [_rank_parcel("a", 100), _rank_parcel("b", 200), _rank_parcel("c", 300)],
+        cluster_centroid=(0.0, 0.0), ranker=fake_ranker,
+    )
+    assert ordered == ["a", "c", "b"]
+
+
+def test_rank_llm_whitelisted_to_pool():
+    def fake_ranker(candidates, ctx):
+        return ["not-in-pool", "b"]
+
+    ordered = rank_candidates(
+        [_rank_parcel("a", 100), _rank_parcel("b", 200)], cluster_centroid=(0.0, 0.0), ranker=fake_ranker,
+    )
+    assert ordered[0] == "b"
+    assert "not-in-pool" not in ordered

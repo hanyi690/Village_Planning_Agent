@@ -211,3 +211,27 @@ def place_anchor_point(
         nearest = exterior.interpolate(exterior.project(target))
         return (nearest.x, nearest.y)
     return (rep.x, rep.y)
+
+Ranker = Callable[[List[CandidateParcel], Dict[str, Any]], List[str]]
+
+
+def rank_candidates(
+    candidates: List[CandidateParcel],
+    *,
+    cluster_centroid: Optional[Tuple[float, float]] = None,
+    target_ha: Optional[float] = None,
+    ranker: Optional[Ranker] = None,
+    context: Optional[Dict[str, Any]] = None,
+) -> List[str]:
+    pool = {c.bsm for c in candidates}
+    if ranker is None:
+        scored = score_candidates(candidates, cluster_centroid=cluster_centroid, target_ha=target_ha)
+        return [s.bsm for s in scored]
+    ctx = dict(context or {})
+    ctx.setdefault("cluster_centroid", cluster_centroid)
+    ctx.setdefault("target_ha", target_ha)
+    ordered = [b for b in (ranker(candidates, ctx) or []) if b in pool]
+    for c in candidates:
+        if c.bsm not in ordered:
+            ordered.append(c.bsm)
+    return ordered
