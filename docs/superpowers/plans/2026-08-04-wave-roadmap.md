@@ -16,7 +16,8 @@
 | C | EXPLORE | 删除候选地块/BBox 决策/intent 写入；只返回 EvidenceBundle | 请求、证据、来源、置信度、未解决项 | - |
 | D | L2 STRATEGIZE | 独立策略子图 + 一致性 Gate；输出 L2Strategy；不生成坐标/候选/分区 | 目标—问题—策略—证据矩阵、策略冲突 | - |
 | E | L3 PLAN | 从"先列分区面积"改为生成 PlanningProgram；项目需求/用地需求/实施计划子图 | 项目表、土地需求表、项目依赖图、遗漏项 | - |
-| F | PARSE | 独立 Intent Compiler 子图；编译为 IntentCompilationResult + SpatialReferenceSpec | 源字段→结构化字段逐项对应、编译错误 | - |
+| F | PARSE | 独立顶层 Intent Compiler 子图；Hybrid PARSE 三模式（COMPILE/REPAIR/REVISE）：确定性抽取优先，LLM 只产出结构化 CompilationPatch，确定性合并 + 复验；缺失规划内容回传 L3，低置信度/大改写走人工审查；编译为 IntentCompilationResult + SpatialReferenceSpec | 源字段→结构化字段逐项对应、编译诊断、补丁清单 | - |
+| A.1 | PARSE 契约 + 文档 | PARSE 顶层阶段契约落地：ParseMode/CompilationStatus/PatchOperation/CompilationPatch/ParseDiagnostic/ParseTrace/ParseRevisionRequest；IntentCompilationResult 升级为根 artifact（保留 intent/compilation_errors 兼容字段）；agent-graph.md + roadmap 记录 Hybrid PARSE 设计 | 契约定义、单测、架构文档 | - |
 | G | GROUND | 注入 Gazetteer/SemanticQuery/SpatialQuery ports 消除对 KG 反向依赖；生成 CandidateSite | 候选区域 GeoJSON、候选地块组合、约束覆盖、未解析原因 | spatial_ops→kg 反向依赖 |
 | H | SELECT | 硬约束过滤 + 多因子评分 + 冲突分配；输出 SiteSelectionDecision；删除"第一个可用候选"逻辑 | 完整排名、淘汰理由、最终组合、地图预览 | - |
 | I | EXECUTE | Land Design Worker 生成项目轮廓 + ParcelChangeSet；其他 Worker 只消费决定；删除现状驱动 ZoneGenerator/MIP 正式路径 | PlannedState、操作日志、面积守恒、地块谱系、前后对比图 | 8 个 EXECUTE 链 advisory_crosswalks 违规 |
