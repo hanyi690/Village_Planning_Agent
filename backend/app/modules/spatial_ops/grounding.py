@@ -721,11 +721,23 @@ def _resolve_directional(desc: str, parcels: list) -> ResolvedSpatialDescription
             direction = eng
             break
     if direction in ("center",):
-        # 村中部 → 全村范围（无方向偏移）
-        bsms = [p.bsm for p in parcels if p.bsm]
+        from app.utils.crs_engine import (
+            meters_to_degrees_lat,
+            meters_to_degrees_lon,
+        )
+
+        lon, lat = center
+        radius_m = 500
+        dx = meters_to_degrees_lon(radius_m, lat)
+        dy = meters_to_degrees_lat(radius_m)
+        bbox = (lon - dx, lat - dy, lon + dx, lat + dy)
+        bsms = query_parcels_in_bbox(parcels, bbox)
         return ResolvedSpatialDescription(
-            candidate_bsms=bsms, evidence_text=desc,
-            query_path="geometry:center", confidence=0.5,
+            candidate_bsms=bsms,
+            candidate_bbox=bbox,
+            evidence_text=desc,
+            query_path="geometry:center_bbox",
+            confidence=0.6,
         )
     bbox = resolve_directional_bbox(center, direction)
     if bbox is None:

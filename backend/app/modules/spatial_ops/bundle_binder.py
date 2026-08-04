@@ -50,7 +50,7 @@ class DeterministicBundleBinder:
             if value:
                 self.by_bsm[value] = copy.deepcopy(feature)
 
-    def bind(self, instructions: Any) -> Dict[str, Any]:
+    def bind(self, instructions: Any, gazetteer: Any = None) -> Dict[str, Any]:
         payload = instructions.model_dump() if hasattr(instructions, "model_dump") else dict(instructions)
         output: List[Dict[str, Any]] = []
         for record in payload.get("instructions", []):
@@ -77,10 +77,19 @@ class DeterministicBundleBinder:
 
             # A2 语义绑定：无 BSM 时，实体提及村名 → KG gazetteer → 候选 BSM 集
             if status == "unresolved" and not source_bsms:
-                from app.modules.kg.gazetteer import load_gazetteer
+                if gazetteer is None:
+                    # 调用方应通过 PlanningContext 注入 gazetteer（P0 多源坐标+组合名）。
+                    # 为兼容遗留调用，仍允许从 bundle 村名加载；禁止硬编码村名。
+                    village_name = ""
+                    try:
+                        village_name = str(getattr(self.bundle, "village_name", "") or "")
+                    except Exception:
+                        pass
+                    if village_name:
+                        from app.modules.kg.gazetteer import load_gazetteer
 
-                gazetteer = load_gazetteer("jintian")
-                if gazetteer.entries:
+                        gazetteer = load_gazetteer(village_name)
+                if gazetteer is not None and getattr(gazetteer, "entries", None):
                     for mention in (instruction.get("entity_mentions") or []):
                         entry = gazetteer.resolve(str(mention))
                         if entry is not None and entry.bsms:
@@ -123,8 +132,11 @@ class DeterministicBundleBinder:
 def bind_exploration_to_bundle(
     instructions: Any, bundle: Any, *, output_path: Optional[Path] = None,
     kg_results: Optional[Mapping[str, Any]] = None,
+    gazetteer: Any = None,
 ) -> Dict[str, Any]:
-    result = DeterministicBundleBinder(bundle, kg_results).bind(instructions)
+    result = DeterministicBundleBinder(bundle, kg_results).bind(
+        instructions, gazetteer=gazetteer
+    )
     if output_path is not None:
         output_path.parent.mkdir(parents=True, exist_ok=True)
         output_path.write_text(json.dumps(result, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")

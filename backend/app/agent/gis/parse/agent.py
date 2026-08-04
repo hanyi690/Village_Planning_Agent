@@ -773,36 +773,22 @@ async def extract_bindings(
 
 
 # ── P8: 自然村/位置名 → BSM（gazetteer 解析，intent 原地填充）────────
-
-_LOCATION_SEP_RE = re.compile(r"[、，,；;/\s]+|至|和|与")
-_LOCATION_STRIP = ("自然村", "村", "组", "段", "沿", "线", "附近", "周边", "区域", "一带")
+# Token 提取与 gazetteer 解析已上移至 app.modules.spatial_ops.resolver
+# （单一空间解析入口）。此处仅保留对旧名称的兼容再导出。
 
 
 def _extract_location_tokens(location: str) -> List[str]:
-    """位置文本 → 候选 token：'肩丰、田坑' / '肩丰至炉池段' / '园寨自然村'。"""
-    tokens = []
-    for part in _LOCATION_SEP_RE.split(location or ""):
-        part = part.strip()
-        for suffix in _LOCATION_STRIP:
-            part = part.rstrip(suffix)
-        part = part.strip()
-        if part and not any(ch.isdigit() for ch in part):
-            tokens.append(part)
-    return list(dict.fromkeys(tokens))
+    """位置文本 → 候选 token（委托 spatial_ops.resolver）。"""
+    from app.modules.spatial_ops.resolver import _extract_location_tokens as _impl
+
+    return _impl(location)
 
 
 def _resolve_gazetteer_bsms(token: str, gazetteer: Any) -> List[str]:
-    """token → gazetteer 解析 → BSM 列表（精确 → 村后缀 → fuzzy）。"""
-    if gazetteer is None:
-        return []
-    for candidate in (token, f"{token}村", f"{token}自然村", f"{token}组"):
-        entry = gazetteer.resolve(candidate, fuzzy=False)
-        if entry is not None and entry.bsms:
-            return list(entry.bsms)
-    entry = gazetteer.resolve(token, fuzzy=True)
-    if entry is not None and entry.bsms:
-        return list(entry.bsms)
-    return []
+    """token → gazetteer 解析 → BSM 列表（委托 spatial_ops.resolver）。"""
+    from app.modules.spatial_ops.resolver import _resolve_gazetteer_bsms as _impl
+
+    return _impl(token, gazetteer)
 
 
 def resolve_spatial_anchors(
@@ -812,117 +798,17 @@ def resolve_spatial_anchors(
 ) -> int:
     """将 intent 中位置文本（INSTRUCTION/表格提取）解析为具体 BSM 集。
 
-    - ZoneTarget: 位置 → candidate_bsms（MIP canvas / ZoneGenerator 空间过滤）
-    - FacilityTarget: 位置 → candidate_bsms（FacilityPlacer 候选池）
-    - AxisTarget: 位置 → corridor_bsms（AxisBuilder 走廊）
-    仅读取 gazetteer（不落盘）；无匹配保留原文 spatial_hint 供语义使用。
-    返回成功解析的实体数。
+    委托 ``app.modules.spatial_ops.resolver.resolve_intent_anchors``
+    （唯一空间解析入口）。仅读取 gazetteer（不落盘）；无匹配保留原文
+    spatial_hint 供语义使用。返回成功解析的实体数。
     """
-    if not village_name and not village_anchors:
-        return 0
-    gazetteer = None
-    if village_name:
-        try:
-            from app.modules.kg.gazetteer import load_gazetteer
+    from app.modules.spatial_ops.resolver import resolve_intent_anchors as _resolve
 
-            gazetteer = load_gazetteer(village_name)
-        except Exception:
-            gazetteer = None
-
-    resolved = 0
-    kg_anchors = []
-    for anchor in village_anchors or []:
-        try:
-            lon = float(anchor.get("lon"))
-            lat = float(anchor.get("lat"))
-        except (TypeError, ValueError, AttributeError):
-            continue
-        if lon == 0 and lat == 0:
-            continue
-        kg_anchors.append({"name": str(anchor.get("name") or ""), "lon": lon, "lat": lat})
-    for zt in (intent.zone_targets if hasattr(intent, "zone_targets") else []):
-        location = ""
-        if zt.spatial_preference is not None:
-            location = zt.spatial_preference.reference or ""
-        if not location and zt.semantic is not None:
-            location = zt.semantic.spatial_hint or ""
-        for token in _extract_location_tokens(location):
-            bsms = _resolve_gazetteer_bsms(token, gazetteer)
-            if bsms and not any(b in zt.candidate_bsms for b in bsms):
-                zt.candidate_bsms.extend(bsms)
-                resolved += 1
-    for ft in (intent.facilities if hasattr(intent, "facilities") else []):
-        location = ft.location_hint or ft.anchor_village or ""
-        for token in _extract_location_tokens(location):
-            bsms = _resolve_gazetteer_bsms(token, gazetteer)
-            if bsms and not any(b in ft.candidate_bsms for b in bsms):
-                ft.candidate_bsms.extend(bsms)
-                resolved += 1
-        if ft.anchor_point is None and kg_anchors:
-            matched = next(
-                (a for a in kg_anchors if a["name"] and a["name"] in location),
-                None,
-            )
-            if matched:
-                ft.anchor_point = (matched["lon"], matched["lat"])
-                ft.semantic.reasoning_trace = "KG village anchor matched by location hint"
-                resolved += 1
-    for ax in (intent.development_axes if hasattr(intent, "development_axes") else []):
-        location = ax.reference_feature or (ax.semantic.spatial_hint if ax.semantic else "") or ""
-        for token in _extract_location_tokens(location):
-            bsms = _resolve_gazetteer_bsms(token, gazetteer)
-            if bsms and not any(b in ax.corridor_bsms for b in bsms):
-                ax.corridor_bsms.extend(bsms)
-                resolved += 1
-    for prj in (intent.project_targets if hasattr(intent, "project_targets") else []):
-        location = prj.location_hint or (prj.semantic.spatial_hint if prj.semantic else "") or ""
-        for token in _extract_location_tokens(location):
-            bsms = _resolve_gazetteer_bsms(token, gazetteer)
-            if bsms and not any(b in prj.candidate_bsms for b in bsms):
-                prj.candidate_bsms.extend(bsms)
-                resolved += 1
-        if not prj.candidate_bsms and kg_anchors:
-            text = f"{prj.name} {location}"
-            matched = next(
-                (a for a in kg_anchors if a["name"] and a["name"] in text),
-                None,
-            )
-            if matched:
-                prj.semantic.reasoning_trace = "KG village anchor matched by project location hint"
-                resolved += 1
-
-    for rt in (intent.road_targets if hasattr(intent, "road_targets") else []):
-        if not kg_anchors:
-            continue
-        text = " ".join(
-            [
-                str(getattr(rt, "road_level", "") or ""),
-                str(getattr(rt, "connects", "") or ""),
-                str(getattr(getattr(rt, "semantic", None), "natural_language_description", "") or ""),
-            ]
-        )
-        named = [a for a in kg_anchors if a["name"] and a["name"] in text]
-        candidates = named if len(named) >= 2 else kg_anchors
-        if len(candidates) < 2:
-            continue
-        if "南北" in text:
-            start, end = min(candidates, key=lambda a: a["lat"]), max(candidates, key=lambda a: a["lat"])
-        elif "东西" in text:
-            start, end = min(candidates, key=lambda a: a["lon"]), max(candidates, key=lambda a: a["lon"])
-        else:
-            start, end = min(candidates, key=lambda a: (a["lon"], a["lat"])), max(candidates, key=lambda a: (a["lon"], a["lat"]))
-        if getattr(rt, "start_anchor", None) is None:
-            rt.start_anchor = (start["lon"], start["lat"])
-        if getattr(rt, "end_anchor", None) is None:
-            rt.end_anchor = (end["lon"], end["lat"])
-        if not getattr(rt, "connects", None):
-            rt.connects = [start["name"], end["name"]]
-        rt.semantic.reasoning_trace = "KG village anchors inferred road endpoints; requires route validation"
-        resolved += 1
-
-    if resolved:
-        logger.info("[PARSE] spatial anchors resolved: %d entities via gazetteer(%s)", resolved, village_name)
-    return resolved
+    return _resolve(
+        intent,
+        village_name=village_name,
+        village_anchors=village_anchors,
+    )
 
 
 __all__ = ["parse", "parse_async", "ParseResult", "PendingBinding", "extract_bindings"]
