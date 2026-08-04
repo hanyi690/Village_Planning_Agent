@@ -153,3 +153,37 @@ def apply_scale_filter(
         c for c in candidates
         if not (c.area_ha > max_area_ha and c.dlmc in _NON_CONSTRUCTION_DLMC)
     ]
+
+
+@dataclass
+class ScoredCandidate:
+    bsm: str
+    score: float
+    distance_m: Optional[float]
+    reasons: List[str] = field(default_factory=list)
+
+
+def _is_construction_dlmc(dlmc: str) -> bool:
+    return any(kw in (dlmc or "") for kw in ("建设", "居住", "宅基", "空闲"))
+
+
+def score_candidates(
+    candidates: List[CandidateParcel],
+    *,
+    cluster_centroid: Optional[Tuple[float, float]] = None,
+    target_ha: Optional[float] = None,
+) -> List[ScoredCandidate]:
+    scored: List[ScoredCandidate] = []
+    for c in candidates:
+        proximity = 0.5
+        if cluster_centroid is not None and c.distance_m is not None:
+            proximity = 1.0 / (1.0 + c.distance_m / 500.0)
+        construction = 1.0 if _is_construction_dlmc(c.dlmc) else 0.3
+        area_fit = 0.5
+        if target_ha is not None and c.area_ha > 0:
+            ratio = c.area_ha / target_ha
+            area_fit = max(0.0, 1.0 - abs(math.log2(ratio)))
+        score = 0.5 * proximity + 0.3 * construction + 0.2 * area_fit
+        scored.append(ScoredCandidate(bsm=c.bsm, score=score, distance_m=c.distance_m))
+    scored.sort(key=lambda s: s.score, reverse=True)
+    return scored

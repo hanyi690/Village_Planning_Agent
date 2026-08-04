@@ -111,3 +111,43 @@ def test_scale_filter_allows_small_non_construction():
 def test_scale_filter_large_block_bypasses():
     out = apply_scale_filter([_big("商品林")], allow_large_block=True)
     assert len(out) == 1
+
+
+from app.modules.spatial_ops.selection import CandidateParcel, score_candidates
+
+
+def _scored_parcel(bsm: str, dlmc: str, area_ha: float, distance_m: float) -> CandidateParcel:
+    return CandidateParcel(bsm=bsm, geometry={}, dlmc=dlmc, area_ha=area_ha, distance_m=distance_m)
+
+
+def test_score_prefers_closer():
+    scored = score_candidates(
+        [_scored_parcel("far", "空闲宅基地", 0.1, 2000), _scored_parcel("near", "空闲宅基地", 0.1, 100)],
+        cluster_centroid=(0.0, 0.0),
+    )
+    assert scored[0].bsm == "near"
+
+
+def test_score_prefers_construction():
+    scored = score_candidates(
+        [_scored_parcel("farm", "耕地", 0.1, 100), _scored_parcel("bldg", "村庄建设用地", 0.1, 100)],
+        cluster_centroid=(0.0, 0.0),
+    )
+    assert scored[0].bsm == "bldg"
+
+
+def test_score_area_fit_penalizes_oversized():
+    scored = score_candidates(
+        [_scored_parcel("big", "空闲宅基地", 100.0, 100), _scored_parcel("fit", "空闲宅基地", 0.15, 100)],
+        cluster_centroid=(0.0, 0.0), target_ha=0.15,
+    )
+    assert scored[0].bsm == "fit"
+
+
+def test_score_sorted_desc():
+    scored = score_candidates(
+        [_scored_parcel("a", "空闲宅基地", 0.1, 50), _scored_parcel("b", "空闲宅基地", 0.1, 300), _scored_parcel("c", "空闲宅基地", 0.1, 900)],
+        cluster_centroid=(0.0, 0.0),
+    )
+    scores = [s.score for s in scored]
+    assert scores == sorted(scores, reverse=True)
