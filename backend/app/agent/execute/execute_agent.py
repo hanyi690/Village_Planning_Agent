@@ -1070,13 +1070,13 @@ def _route_after_validate(state: ExecuteAgentState) -> Literal["pass", "retry"]:
 def _layout_configs_to_planned_state(state: ExecuteAgentState):
     """Normalize generated layers into the authoritative L4 contract."""
     from shapely.geometry import shape
-    from app.modules.kg.builder.layer4 import (
-        PlannedAxisEntry,
-        PlannedFacilityEntry,
-        PlannedParcelEntry,
-        PlannedRoadEntry,
+    from app.modules.schema.contracts.planned_state_contracts import (
+        PlannedAxis,
+        PlannedFacility,
+        PlannedParcel,
+        PlannedRoad,
         PlannedState,
-        PlannedZoneEntry,
+        PlannedZone,
     )
     from app.modules.kg.ontology import EntityIdPolicy
 
@@ -1159,7 +1159,7 @@ def _layout_configs_to_planned_state(state: ExecuteAgentState):
                 area_ha = float(props.get("area_ha") or props.get("allocated_area_ha") or 0)
                 target_uri = zone_targets.get(target_use, "")
                 if bsm:
-                    planned.parcels.append(PlannedParcelEntry(
+                    planned.parcels.append(PlannedParcel(
                         bsm=bsm,
                         planning_land_use=target_use,
                         zone_type=target_use,
@@ -1172,7 +1172,7 @@ def _layout_configs_to_planned_state(state: ExecuteAgentState):
                         operation=str(props.get("operation") or "reclassify"),
                     ))
                 else:
-                    planned.zones.append(PlannedZoneEntry(
+                    planned.zones.append(PlannedZone(
                         zone_type=target_use or layer_type,
                         area_ha=area_ha,
                         name=str(props.get("name") or target_use),
@@ -1196,7 +1196,7 @@ def _layout_configs_to_planned_state(state: ExecuteAgentState):
                 if layer_type in {"planned_project", "project_point"}:
                     project_id = str(props.get("project_id") or "")
                     target_uri = str(EntityIdPolicy.uri("project_target", project_id)) if project_id else ""
-                planned.facilities.append(PlannedFacilityEntry(
+                planned.facilities.append(PlannedFacility(
                     name=str(props.get("name") or props.get("facility_type") or props.get("project_name") or f"point-{index}"),
                     facility_type=str(props.get("facility_type") or props.get("project_category") or "project"),
                     lon=float(coordinates[0]),
@@ -1214,14 +1214,14 @@ def _layout_configs_to_planned_state(state: ExecuteAgentState):
                     or ""
                 )
                 if layer_type in {"planned_road", "road", "road_network"}:
-                    planned.roads.append(PlannedRoadEntry(
+                    planned.roads.append(PlannedRoad(
                         name=str(props.get("name") or props.get("road_name") or f"road-{index}"),
                         road_level=str(props.get("road_level") or props.get("road_class") or ""),
                         width_m=float(props.get("width_m") or props.get("recommended_width_m") or 0),
                         derived_from_target=road_targets.get(source_key, ""),
                     ))
                 elif layer_type in {"axis", "development_axis", "infrastructure"}:
-                    planned.axes.append(PlannedAxisEntry(
+                    planned.axes.append(PlannedAxis(
                         name=str(props.get("name") or props.get("label") or f"axis-{index}"),
                         reference_feature=str(props.get("reference_feature") or ""),
                         direction=str(props.get("direction") or ""),

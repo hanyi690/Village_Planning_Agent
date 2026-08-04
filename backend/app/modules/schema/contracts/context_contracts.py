@@ -3,7 +3,7 @@
 [v4.4] SpatialCognitiveUnit 三层抽象统一了所有空间认知元素：
   - 认知锚点（FacilityAnchor, ResidentialClusterAnchor, ...）
   - 规划意图（ZoneTarget, FacilityTarget, RoadTarget）
-  - 规划状态（PlannedState, PlannedParcelEntry）
+  - 规划状态（PlannedState 见 planned_state_contracts.py）
 
 与 Schema 层 SpatialFeature → PointFeature/LineFeature/PolygonFeature 对齐。
 下游可按形态统一遍历（isinstance 分发），按语义具体处理。
@@ -196,86 +196,6 @@ class TerrainProfile:
     suitability_area_pct: Dict[str, float] = field(default_factory=dict)
 
 
-# ── Layer 4: PlanBlock (incremental change-set) ──
-#
-# PlanBlock is NOT a SpatialCognitiveUnit - it's a "change operation set".
-# Only records CHANGES from L1; unchanged parcels have no L4 triples.
-# Query semantics: effective_state(parcel) = L1(parcel) + L4_delta(parcel)
-#
-# Actions for ParcelChange:
-#   reclassify - same bsm as L1, only land_use changed
-#   modify     - same bsm as L1, area/geometry adjusted
-#   split      - NEW bsm(s) for sub-parcels, derived_from_bsms = [parent_bsm]
-#   merge      - NEW bsm for merged parcel, derived_from_bsms = [bsm_1, bsm_2, ...]
-
-
-@dataclass
-class ParcelChange:
-    """Single parcel planning change (delta entry, not full copy)."""
-    bsm: str
-    action: str = "modify"
-    derived_from_bsms: List[str] = field(default_factory=list)
-    new_planning_land_use: str = ""
-    new_area_ha: Optional[float] = None
-    new_zone_type: str = ""
-
-
-@dataclass
-class FacilityChange:
-    """Facility planning change."""
-    name: str
-    action: str = "new"
-    facility_type: str = ""
-    area_sqm: Optional[float] = None
-    center: Optional[Tuple[float, float]] = None
-    derived_from_name: str = ""
-
-
-@dataclass
-class RoadChange:
-    """Road planning change."""
-    name: str
-    action: str = "new"
-    road_level: str = ""
-    width_m: float = 0.0
-    path: Optional[List[Tuple[float, float]]] = None
-    derived_from_name: str = ""
-
-
-@dataclass
-class SettlementChange:
-    """Natural village settlement planning change."""
-    settlement_name: str
-    action: str = "retain"
-    new_population: Optional[int] = None
-    new_area_ha: Optional[float] = None
-    target_location: Optional[Tuple[float, float]] = None
-    merge_into: str = ""
-
-
-@dataclass
-class PlanBlock:
-    """Planning change-set (delta) - Layer 4 container.
-
-    Unlike a full-mirror PlannedState, PlanBlock only stores CHANGES.
-    Unchanged parcels have no L4 triples; query falls back to L1.
-
-    effective_state(parcel) = L1(parcel) + L4_delta(parcel)
-
-    For split: multiple ParcelChange entries, each with a new bsm and
-        derived_from_bsms = [parent_bsm].
-    For merge: one ParcelChange with a new bsm and derived_from_bsms
-        = [bsm_1, bsm_2, ...].
-    """
-    version: str = "v1"
-    parcel_changes: List[ParcelChange] = field(default_factory=list)
-    settlement_changes: List[SettlementChange] = field(default_factory=list)
-    facility_changes: List[FacilityChange] = field(default_factory=list)
-    road_changes: List[RoadChange] = field(default_factory=list)
-    summary_metrics: Dict[str, float] = field(default_factory=dict)
-    source: str = ""
-
-
 __all__ = [
     # L0 base
     "SpatialCognitiveUnit",
@@ -297,10 +217,4 @@ __all__ = [
     "LanduseEntry",
     "SpatialRelation",
     "TerrainProfile",
-    # PlanBlock (Layer 4 incremental change-set)
-    "ParcelChange",
-    "FacilityChange",
-    "RoadChange",
-    "SettlementChange",
-    "PlanBlock",
 ]

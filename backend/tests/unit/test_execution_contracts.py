@@ -6,38 +6,40 @@ Trimmed in V4 audit:
   spec coverage, validation).
 
 Verifies:
-1. ValidationCheckResult.overall_passed is a computed field
-2. ValidationCheckItem supports all 8 check IDs from design doc §5.6
+1. ValidationReport.overall_passed is a stored field
+2. ValidationCheck supports all 8 check IDs from design doc §5.6
 """
 
 
-def test_validation_check_result_overall_passed_field():
+def test_validation_report_overall_passed_field():
     """overall_passed is a stored field reflecting validation outcome.
 
     When set to False (default), it correctly reports failure even if
-    passed_count > 0. This verifies the field is present and typed correctly.
+    checks passed_count > 0. This verifies the field is present and typed
+    correctly on the unified ValidationReport.
     """
-    from app.modules.schema.contracts.validation_contracts import (
-        ValidationCheckResult, ValidationCheckItem,
+    from app.modules.schema.contracts.validation_report_contracts import (
+        ValidationReport, ValidationCheck,
     )
-    result = ValidationCheckResult(
+    result = ValidationReport(
+        context_version="v1",
+        artifact_id="val-1",
         checks=[
-            ValidationCheckItem(check_id="construction_cap", passed=True),
-            ValidationCheckItem(check_id="farmland_floor", passed=False),
+            ValidationCheck(check_id="construction_cap", passed=True),
+            ValidationCheck(check_id="farmland_floor", passed=False),
         ],
-        total_checks=2,
-        passed_count=1,
+        overall_passed=False,
     )
     # Default overall_passed is False when any check fails
     assert result.overall_passed is False
 
     # Explicit True when all checks pass
-    result_pass = ValidationCheckResult(
+    result_pass = ValidationReport(
+        context_version="v1",
+        artifact_id="val-2",
         checks=[
-            ValidationCheckItem(check_id="construction_cap", passed=True),
+            ValidationCheck(check_id="construction_cap", passed=True),
         ],
-        total_checks=1,
-        passed_count=1,
         overall_passed=True,
     )
     assert result_pass.overall_passed is True
@@ -49,7 +51,7 @@ def test_all_8_validation_checks_constructible():
     This is a spec-coverage test: it ensures the contract supports the
     full set of validation checks defined in the design document.
     """
-    from app.modules.schema.contracts.validation_contracts import ValidationCheckItem
+    from app.modules.schema.contracts.validation_report_contracts import ValidationCheck
     check_ids = [
         "construction_cap",
         "farmland_floor",
@@ -61,5 +63,5 @@ def test_all_8_validation_checks_constructible():
         "three_line_compliance",
     ]
     for cid in check_ids:
-        item = ValidationCheckItem(check_id=cid, passed=True)
+        item = ValidationCheck(check_id=cid, passed=True)
         assert item.check_id == cid

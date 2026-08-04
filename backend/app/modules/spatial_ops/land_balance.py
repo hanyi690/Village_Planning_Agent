@@ -11,11 +11,11 @@ import logging
 from collections import defaultdict
 from typing import Any, Dict, List, Optional
 
-from ..schema.contracts.delivery_contracts import (
-    DeliveryGate,
+from ..schema.contracts.land_balance_contracts import (
     LandBalanceRow,
     LandBalanceTable,
 )
+from ..schema.contracts.delivery_manifest_contracts import DeliveryGate
 from ..schema.advisory_crosswalks import (
     get_planning_zone_from_landuse,
     normalize_landuse,

@@ -54,7 +54,7 @@ def kg_main():
 
 
 def test_l4_provenance_five_predicates(kg_main):
-    from app.modules.kg.builder.layer4 import PlannedState, PlannedParcelEntry, apply_planned_state
+    from app.modules.kg.builder.layer4 import PlannedState, PlannedParcel, apply_planned_state
     from rdflib import Namespace, RDF, URIRef
     PLN = Namespace("http://village-planning.org/ontology#")
 
@@ -67,7 +67,7 @@ def test_l4_provenance_five_predicates(kg_main):
 
     kg_plan = kg_main.clone_static_layer()
     apply_planned_state(kg_plan, PlannedState(version="v1", parcels=[
-        PlannedParcelEntry(
+        PlannedParcel(
             bsm=f"{real_bsm}_prov",
             planning_land_use="2121",
             area_ha=0.5,
@@ -99,10 +99,10 @@ def test_l4_provenance_five_predicates(kg_main):
 
 
 def test_l4_provenance_defaults_empty(kg_main):
-    from app.modules.kg.builder.layer4 import PlannedState, PlannedParcelEntry, apply_planned_state
+    from app.modules.kg.builder.layer4 import PlannedState, PlannedParcel, apply_planned_state
     kg_plan = kg_main.clone_static_layer()
     apply_planned_state(kg_plan, PlannedState(version="v1", parcels=[
-        PlannedParcelEntry(bsm="NO_PROV", planning_land_use="0101"),
+        PlannedParcel(bsm="NO_PROV", planning_land_use="0101"),
     ]))
     pp_rows = kg_plan.query(
         "PREFIX pln: <http://village-planning.org/ontology#> "
@@ -115,10 +115,10 @@ def test_l4_provenance_defaults_empty(kg_main):
 
 
 def test_l4_provenance_spquery(kg_main):
-    from app.modules.kg.builder.layer4 import PlannedState, PlannedParcelEntry, apply_planned_state
+    from app.modules.kg.builder.layer4 import PlannedState, PlannedParcel, apply_planned_state
     kg_plan = kg_main.clone_static_layer()
     apply_planned_state(kg_plan, PlannedState(version="v1", parcels=[
-        PlannedParcelEntry(
+        PlannedParcel(
             bsm="SPQ1", planning_land_use="2121",
             source_spec="attributive:all_forest",
             decided_by="llm", operation="new", area_change_ha=1.5,

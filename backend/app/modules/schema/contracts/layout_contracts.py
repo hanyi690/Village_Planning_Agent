@@ -137,26 +137,6 @@ class ConflictReport(BaseModel):
     severity: Literal["none", "low", "medium", "high"] = "none"
 
 
-class ViolationItem(BaseModel):
-    """Single validation violation."""
-
-    check_name: str = ""
-    description: str = ""
-    actual_value: Any = None
-    expected_value: Any = None
-    fix_suggestion: str = ""
-
-
-class ValidationReport(BaseModel):
-    """Output of validate_layout — Worker-Evaluator pattern gate."""
-
-    passed: bool = False
-    violations: List[ViolationItem] = Field(default_factory=list)
-    checks_total: int = 8
-    checks_passed: int = 0
-    retry_suggestions: List[str] = Field(default_factory=list)
-
-
 class AllocationResult(BaseModel):
     """Output of allocate_zones — MIP or greedy allocation result."""
 
@@ -189,8 +169,6 @@ __all__ = [
     "UnifiedSpatialIntent",
     "ConflictItem",
     "ConflictReport",
-    "ViolationItem",
-    "ValidationReport",
     "AllocationResult",
     "ExportResult",
 ]

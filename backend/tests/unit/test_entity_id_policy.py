@@ -190,11 +190,11 @@ class TestL4EntityIdAndLinks:
 
     def test_l4_parcel_uri_has_version(self, kg_test):
         """L4 PlannedParcel URI includes version suffix."""
-        from app.modules.kg.builder.layer4 import PlannedState, PlannedParcelEntry, apply_planned_state
+        from app.modules.kg.builder.layer4 import PlannedState, PlannedParcel, apply_planned_state
         kg_clone = kg_test.clone_static_layer()
         apply_planned_state(kg_clone, PlannedState(
             version="v1",
-            parcels=[PlannedParcelEntry(bsm="P001", planning_land_use="2121")],
+            parcels=[PlannedParcel(bsm="P001", planning_land_use="2121")],
         ))
         # Check URI format
         for s in kg_clone.g.subjects(RDF.type, EntityTypes.PlannedParcel):
@@ -203,11 +203,11 @@ class TestL4EntityIdAndLinks:
 
     def test_l4_parcel_has_bsm_literal(self, kg_test):
         """L4 PlannedParcel has PLN.bsm literal."""
-        from app.modules.kg.builder.layer4 import PlannedState, PlannedParcelEntry, apply_planned_state
+        from app.modules.kg.builder.layer4 import PlannedState, PlannedParcel, apply_planned_state
         kg_clone = kg_test.clone_static_layer()
         apply_planned_state(kg_clone, PlannedState(
             version="v1",
-            parcels=[PlannedParcelEntry(bsm="P001", planning_land_use="2121")],
+            parcels=[PlannedParcel(bsm="P001", planning_land_use="2121")],
         ))
         for s in kg_clone.g.subjects(RDF.type, EntityTypes.PlannedParcel):
             bsms = list(kg_clone.g.triples((s, PLN.bsm, None)))
@@ -216,17 +216,17 @@ class TestL4EntityIdAndLinks:
     def test_l4_derived_from_target(self, kg_test):
         """L4 entity writes derived_from_target when source field set."""
         from app.modules.kg.builder.layer4 import (
-            PlannedState, PlannedParcelEntry, PlannedFacilityEntry, apply_planned_state,
+            PlannedState, PlannedParcel, PlannedFacility, apply_planned_state,
         )
         target_uri = str(PLN["zone_target_residential"])
         kg_clone = kg_test.clone_static_layer()
         apply_planned_state(kg_clone, PlannedState(
             version="v1",
-            parcels=[PlannedParcelEntry(
+            parcels=[PlannedParcel(
                 bsm="P001", planning_land_use="2121",
                 derived_from_zone_target=target_uri,
             )],
-            facilities=[PlannedFacilityEntry(
+            facilities=[PlannedFacility(
                 name="新设施", facility_type="公共服务",
                 derived_from_target=str(PLN["facility_target_公共服务"]),
             )],

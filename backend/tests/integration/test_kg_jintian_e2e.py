@@ -533,7 +533,7 @@ class TestPlanInjectionIsolated:
             SpatialPlanningIntent, ZoneTarget,
         )
         from app.modules.kg.builder.layer4 import (
-            PlannedState, PlannedParcelEntry,
+            PlannedState, PlannedParcel,
         )
 
         # Build a KG with L3+L4
@@ -543,7 +543,7 @@ class TestPlanInjectionIsolated:
             zone_targets=[ZoneTarget(land_use="2121", area_ratio=10.0)],
         ))
         apply_planned_state(kg_with_l34, PlannedState(version="test",
-            parcels=[PlannedParcelEntry(bsm="CLONE_TEST", planning_land_use="2121")]))
+            parcels=[PlannedParcel(bsm="CLONE_TEST", planning_land_use="2121")]))
 
         # Now clone THIS - the new clone should NOT have L3/L4
         kg_clean = kg_with_l34.clone_static_layer()
@@ -559,7 +559,7 @@ class TestPlanInjectionIsolated:
     def test_inject_planned_state_to_clone(self, kg_main, village_bundle):
         """Inject PlannedState into a CLONE, not kg_main."""
         from app.modules.kg.builder.layer4 import (
-            PlannedState, PlannedParcelEntry, PlannedFacilityEntry, PlannedRoadEntry,
+            PlannedState, PlannedParcel, PlannedFacility, PlannedRoad,
         )
 
         # Get a real BSM from the main KG for realistic test
@@ -579,19 +579,19 @@ class TestPlanInjectionIsolated:
         planned = PlannedState(
             version="v1",
             parcels=[
-                PlannedParcelEntry(bsm=bsm, planning_land_use="2121",
+                PlannedParcel(bsm=bsm, planning_land_use="2121",
                                    area_ha=0.15, zone_type="村庄建设区")
                 for bsm in real_bsms
             ],
             facilities=[
-                PlannedFacilityEntry(name="展销中心", facility_type="商业",
+                PlannedFacility(name="展销中心", facility_type="商业",
                                      lon=113.5, lat=23.5),
-                PlannedFacilityEntry(name="文化活动站", facility_type="文化",
+                PlannedFacility(name="文化活动站", facility_type="文化",
                                      lon=113.51, lat=23.51),
             ],
             roads=[
-                PlannedRoadEntry(name="规划主干道", road_level="主干道", width_m=12),
-                PlannedRoadEntry(name="规划村道", road_level="村道", width_m=6),
+                PlannedRoad(name="规划主干道", road_level="主干道", width_m=12),
+                PlannedRoad(name="规划村道", road_level="村道", width_m=6),
             ],
         )
         apply_planned_state(kg_plan, planned)
@@ -641,7 +641,7 @@ class TestPlanInjectionIsolated:
         Uses ConstraintIndex (spatial_ops bridge) to check planned parcels
         against farmland_protection / ecological_redline / historical_protection.
         """
-        from app.modules.kg.builder.layer4 import PlannedState, PlannedParcelEntry
+        from app.modules.kg.builder.layer4 import PlannedState, PlannedParcel
         from rdflib import Namespace
         PLN = Namespace("http://village-planning.org/ontology#")
 
@@ -664,20 +664,20 @@ class TestPlanInjectionIsolated:
         if real_bsm:
             # This parcel overlaps a constraint - should detect violation
             apply_planned_state(kg_plan, PlannedState(version="v1",
-                parcels=[PlannedParcelEntry(bsm=real_bsm, planning_land_use="2121")]))
+                parcels=[PlannedParcel(bsm=real_bsm, planning_land_use="2121")]))
             violations = check_constraint_violations(kg_plan, "v1")
             assert isinstance(violations, list)
             assert len(violations) > 0, f"Expected violations for BSM {real_bsm} in protected zone"
         else:
             # No overlapping parcel found - just verify method runs
             apply_planned_state(kg_plan, PlannedState(version="v1",
-                parcels=[PlannedParcelEntry(bsm="NO_OVERLAP_TEST", planning_land_use="2121")]))
+                parcels=[PlannedParcel(bsm="NO_OVERLAP_TEST", planning_land_use="2121")]))
             violations = check_constraint_violations(kg_plan, "v1")
             assert isinstance(violations, list)
 
     def test_compare_versions(self, kg_main):
         """compare_versions detects changes between two planned versions."""
-        from app.modules.kg.builder.layer4 import PlannedState, PlannedParcelEntry
+        from app.modules.kg.builder.layer4 import PlannedState, PlannedParcel
         kg_plan = kg_main.clone_static_layer()
 
         # Get a real BSM
@@ -692,11 +692,11 @@ class TestPlanInjectionIsolated:
 
         # Version A: residential
         apply_planned_state(kg_plan, PlannedState(version="v1",
-            parcels=[PlannedParcelEntry(bsm=real_bsm, planning_land_use="2121",
+            parcels=[PlannedParcel(bsm=real_bsm, planning_land_use="2121",
                                        area_ha=0.5)]))
         # Version B: same parcel, different land use
         apply_planned_state(kg_plan, PlannedState(version="v2",
-            parcels=[PlannedParcelEntry(bsm=real_bsm, planning_land_use="0101",
+            parcels=[PlannedParcel(bsm=real_bsm, planning_land_use="0101",
                                        area_ha=0.5)]))
 
         diff = compare_versions(kg_plan, "v1", "v2")
@@ -710,15 +710,15 @@ class TestPlanInjectionIsolated:
 
     def test_get_planned_parcels_in_zone(self, kg_main):
         """get_planned_parcels_in_zone queries L4 by zone type."""
-        from app.modules.kg.builder.layer4 import PlannedState, PlannedParcelEntry
+        from app.modules.kg.builder.layer4 import PlannedState, PlannedParcel
         kg_plan = kg_main.clone_static_layer()
         apply_planned_state(kg_plan, PlannedState(version="v1",
             parcels=[
-                PlannedParcelEntry(bsm="Z1",  planning_land_use="2121",
+                PlannedParcel(bsm="Z1",  planning_land_use="2121",
                                    zone_type="村庄建设区", area_ha=0.3),
-                PlannedParcelEntry(bsm="Z2",  planning_land_use="0101",
+                PlannedParcel(bsm="Z2",  planning_land_use="0101",
                                    zone_type="农田保护区", area_ha=1.2),
-                PlannedParcelEntry(bsm="Z3",  planning_land_use="2121",
+                PlannedParcel(bsm="Z3",  planning_land_use="2121",
                                    zone_type="村庄建设区", area_ha=0.4),
             ]))
 
@@ -734,7 +734,7 @@ class TestPlanInjectionIsolated:
         or merge multiple into one. The new parcels get new identifiers
         with derived_from linking back to L1 parents.
         """
-        from app.modules.kg.builder.layer4 import PlannedState, PlannedParcelEntry
+        from app.modules.kg.builder.layer4 import PlannedState, PlannedParcel
         # Get a real L1 bsm
         from rdflib import Namespace
         PLN = Namespace("http://village-planning.org/ontology#")
@@ -751,16 +751,16 @@ class TestPlanInjectionIsolated:
         apply_planned_state(kg_plan, PlannedState(version="v1",
             parcels=[
                 # Split: real_bsm -> two sub-parcels
-                PlannedParcelEntry(
+                PlannedParcel(
                     bsm=f"{real_bsm}_s1", 
                     planning_land_use="2121", area_ha=0.3,
                     derived_from_bsms=[real_bsm]),
-                PlannedParcelEntry(
+                PlannedParcel(
                     bsm=f"{real_bsm}_s2", 
                     planning_land_use="0101", area_ha=0.7,
                     derived_from_bsms=[real_bsm]),
                 # Merge: two L1 parcels -> one merged parcel
-                PlannedParcelEntry(
+                PlannedParcel(
                     bsm=f"{real_bsm}_merged", 
                     planning_land_use="2121", area_ha=1.5,
                     derived_from_bsms=[real_bsm, "OTHER_BSM"]),
@@ -783,7 +783,7 @@ class TestPlanInjectionIsolated:
         Unchanged parcels (no L4 triple) -> return L1 dlbm.
         Changed parcels (L4 triple exists) -> return L4 planning_land_use.
         """
-        from app.modules.kg.builder.layer4 import PlannedState, PlannedParcelEntry
+        from app.modules.kg.builder.layer4 import PlannedState, PlannedParcel
         from rdflib import Namespace
         PLN = Namespace("http://village-planning.org/ontology#")
 
@@ -804,7 +804,7 @@ class TestPlanInjectionIsolated:
         # Apply plan: change parcel 0, leave parcel 1 unchanged
         apply_planned_state(kg_plan, PlannedState(version="v1",
             parcels=[
-                PlannedParcelEntry(bsm=real_bsms[0], 
+                PlannedParcel(bsm=real_bsms[0], 
                              planning_land_use="2121",
                              derived_from_bsms=[real_bsms[0]]),
             ]))
@@ -818,7 +818,7 @@ class TestPlanInjectionIsolated:
 
     def test_sparse_write_no_l4_for_unchanged(self, kg_main):
         """Sparse write: 660 L1 parcels, only 3 L4 changes -> minimal triples."""
-        from app.modules.kg.builder.layer4 import PlannedState, PlannedParcelEntry
+        from app.modules.kg.builder.layer4 import PlannedState, PlannedParcel
         from rdflib import Namespace
         PLN = Namespace("http://village-planning.org/ontology#")
 
@@ -827,11 +827,11 @@ class TestPlanInjectionIsolated:
 
         apply_planned_state(kg_plan, PlannedState(version="v1",
             parcels=[
-                PlannedParcelEntry(bsm="SPARSE_1", 
+                PlannedParcel(bsm="SPARSE_1", 
                              planning_land_use="2121"),
-                PlannedParcelEntry(bsm="SPARSE_2", 
+                PlannedParcel(bsm="SPARSE_2", 
                              planning_land_use="0101"),
-                PlannedParcelEntry(bsm="SPARSE_3", 
+                PlannedParcel(bsm="SPARSE_3", 
                              planning_land_use="0301"),
             ]))
 
@@ -844,13 +844,13 @@ class TestPlanInjectionIsolated:
 
     def test_get_plan_changes(self, kg_main):
         """get_plan_changes returns delta entries for a version."""
-        from app.modules.kg.builder.layer4 import PlannedState, PlannedParcelEntry
+        from app.modules.kg.builder.layer4 import PlannedState, PlannedParcel
         kg_plan = kg_main.clone_static_layer()
         apply_planned_state(kg_plan, PlannedState(version="v1",
             parcels=[
-                PlannedParcelEntry(bsm="CHG_1", 
+                PlannedParcel(bsm="CHG_1", 
                              planning_land_use="2121"),
-                PlannedParcelEntry(bsm="CHG_2", 
+                PlannedParcel(bsm="CHG_2", 
                              area_ha=0.5),
             ]))
 
@@ -1016,54 +1016,53 @@ class TestSpatialCognitiveUnitHierarchy:
         assert intent.reasoning_trace == "提取了设施需求"
 
     def test_l4_plan_block_is_delta_not_morphology(self):
-        """L4 PlanBlock is a change-set container, NOT a SpatialCognitiveUnit.
+        """L4 ParcelChangeSet is a change-set container, NOT a SpatialCognitiveUnit.
 
-        Unlike L1 anchors (ResidentialClusterAnchor etc.), PlanBlock and its
+        Unlike L1 anchors (ResidentialClusterAnchor etc.), ParcelChangeSet and its
         Change types do NOT inherit from Point/Line/PolygonBasedCognition.
         They are 'change operation descriptors', not spatial features.
         """
-        from app.modules.schema.contracts.context_contracts import (
-            PlanBlock, ParcelChange, FacilityChange, RoadChange,
-            SpatialCognitiveUnit,
+        from app.modules.schema.contracts.parcel_change_contracts import (
+            ParcelChangeSet, ParcelChange, FacilityChange, RoadChange,
         )
-        # PlanBlock is NOT a SpatialCognitiveUnit
-        assert not issubclass(PlanBlock, SpatialCognitiveUnit)
+        from app.modules.schema.contracts.context_contracts import SpatialCognitiveUnit
+        # ParcelChangeSet is NOT a SpatialCognitiveUnit
+        assert not issubclass(ParcelChangeSet, SpatialCognitiveUnit)
         assert not issubclass(ParcelChange, SpatialCognitiveUnit)
         assert not issubclass(FacilityChange, SpatialCognitiveUnit)
         assert not issubclass(RoadChange, SpatialCognitiveUnit)
 
     def test_plan_block_delta_structure(self):
-        """PlanBlock contains change entries with action + derived_from."""
-        from app.modules.schema.contracts.context_contracts import (
-            PlanBlock, ParcelChange, FacilityChange, RoadChange,
+        """ParcelChangeSet contains change entries with action + derived_from."""
+        from app.modules.schema.contracts.parcel_change_contracts import (
+            ParcelChangeSet, ParcelChange,
         )
-        ps = PlanBlock(
-            version="test",
-            parcel_changes=[
+        from app.modules.schema.contracts.classification_ref import ClassificationRef
+        pc = ClassificationRef(system="ghytbm", code="2121", canonical_name="村庄建设用地", source="derived")
+        ps = ParcelChangeSet(
+            context_version="v1",
+            artifact_id="test",
+            changes=[
                 ParcelChange(bsm="X1", action="reclassify",
-                             new_planning_land_use="2121",
+                             after_classification=pc,
                              derived_from_bsms=["X1"]),
                 ParcelChange(bsm="P1_s1", action="split",
-                             new_planning_land_use="2121",
+                             after_classification=pc,
                              derived_from_bsms=["P1"]),
                 ParcelChange(bsm="A_B_merged", action="merge",
-                             new_planning_land_use="0101",
+                             after_classification=pc,
                              derived_from_bsms=["A", "B"]),
             ],
-            facility_changes=[FacilityChange(name="F1", action="new")],
-            road_changes=[RoadChange(name="R1", action="new")],
         )
-        assert len(ps.parcel_changes) == 3
-        assert len(ps.facility_changes) == 1
-        assert len(ps.road_changes) == 1
+        assert len(ps.changes) == 3
         # Verify action types
-        actions = {pc.action for pc in ps.parcel_changes}
+        actions = {pc.action for pc in ps.changes}
         assert actions == {"reclassify", "split", "merge"}
         # Verify split has new bsm + parent
-        split_pc = next(pc for pc in ps.parcel_changes if pc.action == "split")
+        split_pc = next(pc for pc in ps.changes if pc.action == "split")
         assert split_pc.bsm != split_pc.derived_from_bsms[0]
         # Verify merge has new bsm + multiple parents
-        merge_pc = next(pc for pc in ps.parcel_changes if pc.action == "merge")
+        merge_pc = next(pc for pc in ps.changes if pc.action == "merge")
         assert len(merge_pc.derived_from_bsms) >= 2
 
 

@@ -43,17 +43,17 @@ class TestIngestFeatureAliasMapping:
 
 class TestL4PlannedStateUniqueIDs:
     def test_planned_parcel_all_unique_uris(self):
-        from app.modules.kg.builder.layer4 import PlannedParcelEntry, PlannedState
+        from app.modules.kg.builder.layer4 import PlannedParcel, PlannedState
         from app.modules.kg.ontology import EntityIdPolicy
 
         entries = []
         for i in range(582):
             if i < 125:
-                entries.append(PlannedParcelEntry(bsm=""))
+                entries.append(PlannedParcel(bsm=""))
             elif i < 125 + 96:
-                entries.append(PlannedParcelEntry(bsm="3020550"))
+                entries.append(PlannedParcel(bsm="3020550"))
             else:
-                entries.append(PlannedParcelEntry(bsm=f"unique_{i}"))
+                entries.append(PlannedParcel(bsm=f"unique_{i}"))
 
         state = PlannedState(parcels=entries)
         uris = set()
@@ -67,10 +67,10 @@ class TestL4PlannedStateUniqueIDs:
         assert len(uris) == 582, f"Expected 582 unique URIs, got {len(uris)}"
 
     def test_planned_zone_all_unique_uris(self):
-        from app.modules.kg.builder.layer4 import PlannedZoneEntry, PlannedState
+        from app.modules.kg.builder.layer4 import PlannedZone, PlannedState
         from app.modules.kg.ontology import EntityIdPolicy
 
-        entries = [PlannedZoneEntry(zone_type="有条件建设区", name="建设区") for _ in range(139)]
+        entries = [PlannedZone(zone_type="有条件建设区", name="建设区") for _ in range(139)]
         state = PlannedState(zones=entries)
         uris = set()
         zone_seq: dict[str, int] = {}

@@ -11,117 +11,32 @@ Unchanged entities have no L4 triples; query falls back to L1.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
 
 from rdflib import Literal, RDF, URIRef
 from rdflib.namespace import XSD
 
-
-
 from app.utils.logger import get_logger
-from ..ontology import PLN, EntityTypes, Relations, EntityIdPolicy
+from ..ontology import PLN, EntityTypes, EntityIdPolicy
+from app.modules.schema.contracts.planned_state_contracts import (
+    PlannedAxis,
+    PlannedFacility,
+    PlannedParcel,
+    PlannedRoad,
+    PlannedState,
+    PlannedZone,
+)
 
 logger = get_logger(__name__)
-
-
-# ── PlannedState entry types ──
-
-
-@dataclass
-class PlannedParcelEntry:
-    """规划地块 - 对应 L3 ZoneTarget 的落实
-
-    geometry: WKT geometry string (e.g. "POLYGON((...))") or empty.
-    Geometry is injected into bundle (not stored in KG) per VKG design.
-    When empty, EXECUTE must fall back to BSM -> SpatialIndex lookup.
-
-    Provenance fields (EXECUTE_KG_UTILIZATION_DESIGN §3):
-      source_spec: PARSE spec that originated this change (e.g. "directional:east_of_village")
-      decided_by: "rule" | "llm" | "human"
-      operation: "reclassify" | "merge" | "split" | "new" | "demolish"
-      area_change_ha: signed area delta (negative = decrease)
-    """
-    bsm: str
-    planning_land_use: str = ""
-    zone_type: str = ""
-    area_ha: float = 0.0
-    geometry: str = ""
-    derived_from_bsms: List[str] = field(default_factory=list)
-    derived_from_zone_target: str = ""
-    source_spec: str = ""
-    decided_by: str = ""
-    operation: str = ""
-    area_change_ha: float = 0.0
-
-
-@dataclass
-class PlannedZoneEntry:
-    """规划分区面 — 线围成的面，对应 L3 ZoneTarget 的落实"""
-    zone_type: str
-    area_ha: float = 0.0
-    name: str = ""
-    geometry: str = ""                               # WKT geometry string (injected into bundle, not KG)
-    derived_from_zone_target: str = ""
-
-
-@dataclass
-class PlannedFacilityEntry:
-    """规划设施点 — 对应 L3 FacilityTarget 的落实"""
-    name: str
-    facility_type: str = ""
-    lon: float = 0.0
-    lat: float = 0.0
-    service_radius: int = 0
-    derived_from_target: str = ""
-
-
-@dataclass
-class PlannedRoadEntry:
-    """规划道路线 — 对应 L3 RoadTarget 的落实"""
-    name: str
-    road_level: str = ""
-    width_m: float = 0.0
-    derived_from_target: str = ""
-
-
-@dataclass
-class PlannedAxisEntry:
-    """规划发展轴线 — 对应 L3 AxisTarget 的落实"""
-    name: str
-    reference_feature: str = ""
-    direction: str = ""
-    derived_from_target: str = ""
-
-
-@dataclass
-class PlannedState:
-    """规划成果状态 — L4 层的完整视图
-
-    Morphologically aligned with VillageBundle:
-      parcels → PlannedParcel (面)
-      zones → PlannedZone (面)
-      facilities → PlannedFacility (点)
-      roads → PlannedRoad (线)
-      axes → PlannedAxis (线)
-    """
-    version: str = "current"
-    parcels: List[PlannedParcelEntry] = field(default_factory=list)
-    zones: List[PlannedZoneEntry] = field(default_factory=list)
-    facilities: List[PlannedFacilityEntry] = field(default_factory=list)
-    roads: List[PlannedRoadEntry] = field(default_factory=list)
-    axes: List[PlannedAxisEntry] = field(default_factory=list)
-    source: str = ""
 
 
 def ingest_planned_state_from_geojson(data_dir: str | Path) -> PlannedState:
     """Read planned/ GeoJSON files (landuse, road, construction_zone) into PlannedState.
 
     These are planning outputs (L4), not L1 reference layers:
-      - planned/landuse.geojson  → PlannedParcelEntry (GHYTBM = appendix5 planning code)
-      - planned/road.geojson     → PlannedRoadEntry (sparse: LnType + geometry)
-      - planned/construction_zone.geojson → PlannedZoneEntry (LX = zone type)
+      - planned/landuse.geojson  → PlannedParcel (GHYTBM = appendix5 planning code)
+      - planned/road.geojson     → PlannedRoad (sparse: LnType + geometry)
+      - planned/construction_zone.geojson → PlannedZone (LX = zone type)
 
     Reads GeoJSON directly (avoids ingest_feature whitelist mismatch).
     Uses shapely for geometry → WKT conversion.
@@ -167,7 +82,7 @@ def ingest_planned_state_from_geojson(data_dir: str | Path) -> PlannedState:
     data_dir = Path(data_dir)
     state = PlannedState(source="planned_geojson")
 
-    # ── planned/landuse.geojson → PlannedParcelEntry ──
+    # ── planned/landuse.geojson → PlannedParcel ──
     landuse_path = data_dir / "planned" / "landuse.geojson"
     if landuse_path.exists():
         with open(landuse_path, encoding="utf-8") as f:
@@ -179,7 +94,7 @@ def ingest_planned_state_from_geojson(data_dir: str | Path) -> PlannedState:
             bsm = str(props.get("BSM") or "").strip()
             land_use = str(props.get("GHYTBM") or props.get("GHFLBM") or "").strip()
             dlmj = float(props.get("DLMJ") or 0)
-            state.parcels.append(PlannedParcelEntry(
+            state.parcels.append(PlannedParcel(
                 bsm=bsm,
                 planning_land_use=land_use,
                 zone_type="planned",
@@ -188,7 +103,7 @@ def ingest_planned_state_from_geojson(data_dir: str | Path) -> PlannedState:
             ))
         logger.info("L4 ingest: %d PlannedParcel from %s", len(state.parcels), landuse_path.name)
 
-    # ── planned/road.geojson → PlannedRoadEntry ──
+    # ── planned/road.geojson → PlannedRoad ──
     road_path = data_dir / "planned" / "road.geojson"
     if road_path.exists():
         with open(road_path, encoding="utf-8") as f:
@@ -196,14 +111,14 @@ def ingest_planned_state_from_geojson(data_dir: str | Path) -> PlannedState:
         for i, feat in enumerate(data.get("features", [])):
             props = feat.get("properties", {})
             ln_type = str(props.get("LnType") or "").strip()
-            state.roads.append(PlannedRoadEntry(
+            state.roads.append(PlannedRoad(
                 name=f"规划道路_{i}",
                 road_level=ln_type or "unknown",
                 width_m=0.0,
             ))
         logger.info("L4 ingest: %d PlannedRoad from %s", len(state.roads), road_path.name)
 
-    # ── planned/construction_zone.geojson → PlannedZoneEntry ──
+    # ── planned/construction_zone.geojson → PlannedZone ──
     cz_path = data_dir / "planned" / "construction_zone.geojson"
     if cz_path.exists():
         with open(cz_path, encoding="utf-8") as f:
@@ -215,7 +130,7 @@ def ingest_planned_state_from_geojson(data_dir: str | Path) -> PlannedState:
             zone_type = str(props.get("LX") or "有条件建设区").strip()
             mj = float(props.get("MJ") or 0)
             name = str(props.get("XZQHM") or "建设区").strip()
-            state.zones.append(PlannedZoneEntry(
+            state.zones.append(PlannedZone(
                 zone_type=zone_type,
                 area_ha=mj / 10000.0 if mj else 0.0,
                 name=name,

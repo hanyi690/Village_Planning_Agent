@@ -1,0 +1,47 @@
+from __future__ import annotations
+
+from enum import Enum
+from typing import Any
+
+from pydantic import BaseModel, Field
+
+
+class ReviewStatus(str, Enum):
+    AWAITING_REVIEW = "awaiting_review"
+    APPROVED = "approved"
+    CHANGES_REQUESTED = "changes_requested"
+
+
+class ReviewPackage(BaseModel):
+    run_id: str
+    module: str
+    summary_md: str = ""
+    artifact_json: dict[str, Any] = Field(default_factory=dict)
+    trace_json: dict[str, Any] = Field(default_factory=dict)
+    preview_geojson: dict[str, Any] | None = None
+    before_after_geojson: dict[str, Any] | None = None
+    status: ReviewStatus = ReviewStatus.AWAITING_REVIEW
+
+
+class HumanReviewRequest(BaseModel):
+    request_id: str
+    stage: str = ""
+    reason: str = ""
+    options: list[dict] = Field(default_factory=list)
+    context_refs: list[str] = Field(default_factory=list)
+
+
+class ReviewDecision(BaseModel):
+    request_id: str
+    decision: str = ""  # "approved" | "rejected" | "changes_requested"
+    comments: str = ""
+    decided_by: str = ""
+    decided_at: str = ""
+
+
+class ReviewComment(BaseModel):
+    comment_id: str
+    author: str = ""
+    body: str = ""
+    target_artifact: str = ""
+    target_line: int | None = None
