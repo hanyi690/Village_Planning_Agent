@@ -12,6 +12,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 from app.modules.ports.artifact_store import ArtifactStorePort
+from app.modules.ports.bundle_assembly import BundleAssemblyPort
 from app.modules.ports.context_provider import ContextProviderPort
 from app.modules.ports.gazetteer import GazetteerPort
 from app.modules.ports.nomenclature_registry import NomenclatureRegistryPort
@@ -29,6 +30,7 @@ class PlanningPorts:
     spatial_query: SpatialQueryPort | None = None
     gazetteer: GazetteerPort | None = None
     nomenclature_registry: NomenclatureRegistryPort | None = None
+    bundle_assembly: BundleAssemblyPort | None = None
 
     @property
     def has_artifact_store(self) -> bool:

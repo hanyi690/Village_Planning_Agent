@@ -129,6 +129,12 @@ async def build_planning_context(
     except Exception as e:
         logger.warning("[PlanningContext] spatial_query adapter build failed: %s", e)
     ports = PlanningPorts(gazetteer=gazetteer_port, spatial_query=spatial_query_port)
+    try:
+        from app.modules.data.bundle_assembly_adapter import DataBundleAssemblyAdapter
+
+        ports.bundle_assembly = DataBundleAssemblyAdapter()
+    except Exception as e:
+        logger.warning("[PlanningContext] bundle_assembly adapter build failed: %s", e)
 
     # 4. Constraint index
     constraint_index = None
