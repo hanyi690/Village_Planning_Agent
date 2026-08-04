@@ -23,17 +23,27 @@ def test_revision_dispatch_raises_not_implemented():
         )
 
 
-def test_compile_revision_stub_raises_not_implemented():
+def test_compile_revision_returns_fragment():
     from app.modules.parsing.compiler.profiles.revision import compile_revision
+    from app.modules.schema.contracts.l3_contracts import L3ProgramFragment
+    from app.modules.schema.contracts.parse_result_contracts import ParseRevisionRequest
 
-    with pytest.raises(NotImplementedError):
-        compile_revision(
-            revision_request=None,
-            base_result=None,
-            dimension_key="land_use",
-            content="",
-            instruction="",
-        )
+    report = (
+        "## 产业规划\n"
+        "【INSTRUCTION】\n"
+        "| 类型 | 名称 | 位置 | 描述 | 规模 |\n"
+        "|---|---|---|---|---|\n"
+        "| 项目 | 项目A | 东 | 描述 | 10公顷 |\n"
+    )
+    frag = compile_revision(
+        revision_request=ParseRevisionRequest(user_revisions={"interventions.0.scale": "5ha"}),
+        base_result=None,
+        dimension_key="industry",
+        content=report,
+        instruction=report,
+    )
+    assert isinstance(frag, L3ProgramFragment)
+    assert frag.interventions[0].scale == "5ha"
 
 
 def test_build_fragment_provenance_source_module():
