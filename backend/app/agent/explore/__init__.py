@@ -17,6 +17,7 @@ EXPLORE 在本仓库有两层实现并存：
 from .agent import ExploreFlashAgent, SessionKGQuery, explore_planning_text
 from .contracts import ExplorationInstruction, ExplorationInstructionCollection
 from .summaries import build_report_summary_index, build_spatial_cognition
+from .service import retrieve_evidence, render_evidence_prompt_section
 
 __all__ = [
     # Bridge-mode agent (Flash LLM, opt-in via GIS_EXPLORE_LLM_ENABLED)
@@ -28,4 +29,7 @@ __all__ = [
     # Dimension-cognition mode (deterministic, used by analysis/node.py)
     "build_report_summary_index",
     "build_spatial_cognition",
+    # Evidence service (Wave C, deterministic orchestrator)
+    "retrieve_evidence",
+    "render_evidence_prompt_section",
 ]
