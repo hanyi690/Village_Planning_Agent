@@ -65,8 +65,21 @@ def test_exploration_request():
 
 
 def test_l1_snapshot_has_gaps():
-    snap = L1Snapshot(context_version="v1", artifact_id="l1-1", facts=[], constraints=[], issues=[], opportunities=[], evidence_gaps=["缺少人口数据"], sources=[])
-    assert snap.evidence_gaps == ["缺少人口数据"]
+    from app.modules.schema.contracts.l1_contracts import EvidenceGap
+
+    snap = L1Snapshot(
+        context_version="v1",
+        artifact_id="l1-1",
+        facts=[],
+        constraints=[],
+        issues=[],
+        opportunities=[],
+        evidence_gaps=[
+            EvidenceGap(gap_id="g1", dimension="socio_economic", description="缺少人口数据"),
+        ],
+        sources=[],
+    )
+    assert snap.evidence_gaps[0].description == "缺少人口数据"
 
 
 def test_l2_strategy():
@@ -85,3 +98,73 @@ def test_planning_program():
     prog = PlanningProgram(context_version="v1", artifact_id="l3-1", interventions=[iv], dependencies=[dep], omissions=[])
     assert prog.interventions[0].name == "村道拓宽"
     assert prog.dependencies[0].to_intervention_id == "iv-2"
+
+
+def test_l1_snapshot_evidence_gap_is_structured():
+    from app.modules.schema.contracts.l1_contracts import EvidenceGap
+
+    gap = EvidenceGap(
+        gap_id="socio_economic-0",
+        dimension="socio_economic",
+        description="缺少自然村人口数据",
+        required_fact="各自然村常住人口",
+        severity="warning",
+    )
+    snap = L1Snapshot(
+        context_version="v1",
+        artifact_id="l1-1",
+        facts=["村域总面积 5.2 km2"],
+        constraints=["基本农田保护红线"],
+        issues=[],
+        opportunities=[],
+        evidence_gaps=[gap],
+        sources=[],
+    )
+    assert snap.evidence_gaps[0].gap_id == "socio_economic-0"
+    assert snap.evidence_gaps[0].dimension == "socio_economic"
+
+
+def test_l1_snapshot_has_classification_refs():
+    from app.modules.schema.contracts.classification_ref import ClassificationRef
+
+    cref = ClassificationRef(system="gbt21010", code="0101", canonical_name="水田", source="ingested")
+    snap = L1Snapshot(context_version="v1", artifact_id="l1-2", classification_refs=[cref])
+    assert snap.classification_refs[0].code == "0101"
+
+
+def test_l1_snapshot_has_dimension_provenance():
+    from app.modules.schema.contracts.provenance import Provenance
+
+    dim_prov = Provenance(
+        source="l1_observe", run_id="r1", module="l1_observe",
+        trace=["socio_economic", "report-001"],
+    )
+    snap = L1Snapshot(context_version="v1", artifact_id="l1-3", dimension_provenance=[dim_prov])
+    assert snap.dimension_provenance[0].trace == ["socio_economic", "report-001"]
+
+
+def test_l1_dimension_fragment_carries_typed_fields():
+    from app.modules.schema.contracts.l1_contracts import EvidenceGap, L1DimensionFragment
+    from app.modules.schema.contracts.parse_result_contracts import ParseDiagnostic
+
+    frag = L1DimensionFragment(
+        dimension_key="land_use",
+        facts=["现状以水田为主"],
+        constraints=["基本农田保护红线"],
+        issues=[],
+        opportunities=[],
+        evidence_gaps=[],
+        classification_refs=[],
+        spatial_facts=[],
+        diagnostics=[ParseDiagnostic(severity="info", code="OK", message="parsed")],
+    )
+    assert frag.dimension_key == "land_use"
+    assert frag.diagnostics[0].code == "OK"
+
+
+def test_compilation_profile_enum():
+    from app.modules.schema.contracts.parsing_contracts import CompilationProfile
+
+    assert CompilationProfile.L1_OBSERVATION == "l1_observation"
+    assert CompilationProfile.L3_PLANNING == "l3_planning"
+    assert CompilationProfile.REVISION == "revision"

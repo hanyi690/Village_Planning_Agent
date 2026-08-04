@@ -34,6 +34,7 @@ from .l3_contracts import *  # noqa: F401,F403
 from .constraint_contracts import *  # noqa: F401,F403
 from .spatial_reference_contracts import *  # noqa: F401,F403
 from .parse_result_contracts import *  # noqa: F401,F403
+from .parsing_contracts import *  # noqa: F401,F403
 from .grounding_contracts import *  # noqa: F401,F403
 from .selection_contracts import *  # noqa: F401,F403
 from .execution_plan_contracts import *  # noqa: F401,F403
