@@ -72,3 +72,25 @@ flowchart TD
 ## 5. 状态规则
 
 LangGraph State 只保存：`context_ref`、`active_stage`、`active_gate`、`artifact_refs`、`pending_requests`、`validation_issues` 和 `human_review`。完整报告、KG、地块和图层通过 artifact store 读取。
+
+## 6. 相关文件
+
+> 注：本结构为 2026-08 迁移后的目录归属。L1/L2/L3 子图尚未独立（L2/L3 暂借 l1_observe 实现），GROUND/SELECT/VALIDATE/RECONCILE 核心算法仍在 app/modules/spatial_ops + app/modules/kg，后续逐模块完善时再深入。
+
+```
+backend/app/agent/
+├── bootstrap/          # 主图工厂 + 阶段机 (graph.py, phase_machine.py, gis_agent_entry.py)
+├── conversation_router/ # 中央路由 (node.py + edges.py)
+├── l1_observe/         # L1 现状分析 (analysis_node.py + pipeline.py + formatters.py)
+├── l2_strategize/      # L2 策略推导 (占位, 暂借 l1_observe)
+├── l3_plan/            # L3 详细规划 (占位, 暂借 l1_observe)
+├── explore/            # EXPLORE 认知引擎 (横向能力)
+├── ground/             # GROUND 空间接地 (format_bound_intent.py)
+├── select/             # SELECT/PARSE (parse_agent.py, parse_state.py, parse_fallback.py, prompts.py)
+├── execute/            # EXECUTE (layout_pipeline.py, execute_agent.py, road_generator.py, vocab_*)
+├── validate/           # VALIDATE (占位)
+├── plan_state/         # PLAN_STATE (state.py + completion_node.py)
+├── reconcile/          # RECONCILE (占位)
+├── deliver/            # DELIVER (gis_pipeline_state.py)
+└── tools/              # 主图工具调度 (execute_node.py)
+```
