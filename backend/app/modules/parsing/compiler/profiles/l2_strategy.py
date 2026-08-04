@@ -179,7 +179,13 @@ def compile_l2_strategy(
         strategy_issues=strategy_issues,
         spatial_structure=spatial_structure,
         diagnostics=diagnostics,
-        provenance=build_fragment_provenance(dimension_key, report_id, run_id, section_locators),
+        provenance=build_fragment_provenance(
+            dimension_key,
+            report_id,
+            run_id,
+            section_locators,
+            source_module="l2_strategize",
+        ),
         trace=CompilerTrace(
             profile=CompilationProfile.L2_STRATEGY,
             steps=steps,

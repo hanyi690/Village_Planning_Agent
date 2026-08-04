@@ -141,7 +141,13 @@ def compile_l1_observation(
         classification_refs=classification_refs,
         spatial_facts=spatial_facts,
         diagnostics=diagnostics,
-        provenance=build_fragment_provenance(dimension_key, report_id, run_id, section_locators),
+        provenance=build_fragment_provenance(
+            dimension_key,
+            report_id,
+            run_id,
+            section_locators,
+            source_module="l1_observe",
+        ),
         trace=CompilerTrace(
             profile=CompilationProfile.L1_OBSERVATION,
             steps=steps,

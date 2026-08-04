@@ -250,7 +250,13 @@ def compile_l3_planning(
         program_issues=program_issues,
         omissions=omissions,
         diagnostics=diagnostics,
-        provenance=build_fragment_provenance(dimension_key, report_id, run_id, section_locators),
+        provenance=build_fragment_provenance(
+            dimension_key,
+            report_id,
+            run_id,
+            section_locators,
+            source_module="l3_plan",
+        ),
         trace=CompilerTrace(
             profile=CompilationProfile.L3_PLANNING,
             steps=steps,
