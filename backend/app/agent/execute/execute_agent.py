@@ -864,98 +864,6 @@ async def _execute_road_node(state: ExecuteAgentState) -> dict:
     return {"layout_configs": updated}
 
 
-def _build_l3_l4_consistency_report(state: ExecuteAgentState) -> dict:
-    """Compare structured L3 targets with generated L4-ready geometries."""
-    intent = state.intent
-    expected_projects = {
-        target.project_id
-        for target in (getattr(intent, "project_targets", None) or [])
-    }
-    expected_roads = list(getattr(intent, "road_targets", None) or [])
-    expected_zones = list(getattr(intent, "zone_targets", None) or [])
-    placed_projects = set()
-    planned_road_count = 0
-    zone_area_by_name = {}
-
-    for config in state.layout_configs or []:
-        layer_type = config.get("layerType") or config.get("layer_type") or ""
-        data = config.get("data") or config.get("geojson") or {}
-        features = data.get("features") if isinstance(data, dict) else None
-        features = features or config.get("features") or []
-        if layer_type == "planned_project":
-            placed_projects.update(
-                str((feature.get("properties") or {}).get("project_id") or "")
-                for feature in features
-            )
-        if layer_type in {"planned_road", "road", "road_network"}:
-            planned_road_count += sum(
-                1 for feature in features
-                if (feature.get("geometry") or {}).get("type")
-                in {"LineString", "MultiLineString"}
-            )
-        if layer_type in {
-            "custom_planning_zone",
-            "planning_zone",
-            "function_zone",
-            "land_use_zone",
-        }:
-            for feature in features:
-                props = feature.get("properties") or {}
-                name = str(
-                    props.get("target_use")
-                    or props.get("planning_zone")
-                    or props.get("zone_type")
-                    or props.get("land_use")
-                    or ""
-                )
-                zone_area_by_name[name] = zone_area_by_name.get(name, 0.0) + float(
-                    props.get("area_ha") or props.get("allocated_area_ha") or 0
-                )
-
-    placed_projects.discard("")
-    missing_projects = sorted(expected_projects - placed_projects)
-    differences = []
-    suggestions = []
-    if missing_projects:
-        differences.append({
-            "check": "project_placement",
-            "expected": len(expected_projects),
-            "actual": len(placed_projects),
-            "missing_ids": missing_projects,
-        })
-        suggestions.append("重新绑定缺失项目的独立候选 BSM，并检查限制区冲突。")
-    if expected_roads and planned_road_count < len(expected_roads):
-        differences.append({
-            "check": "road_connectivity",
-            "expected": len(expected_roads),
-            "actual": planned_road_count,
-        })
-        suggestions.append("补齐道路目标端点，使用项目点和现状道路节点重新寻路。")
-
-    area_checks = []
-    for target in expected_zones:
-        if target.area_ha is None:
-            continue
-        actual = zone_area_by_name.get(target.land_use, 0.0)
-        delta = round(actual - float(target.area_ha), 4)
-        area_checks.append({
-            "target": target.land_use,
-            "expected_ha": float(target.area_ha),
-            "actual_ha": actual,
-            "delta_ha": delta,
-        })
-    return {
-        "passed": not differences,
-        "consistent_items": {
-            "placed_project_ids": sorted(expected_projects & placed_projects),
-            "zone_area_checks": area_checks,
-            "planned_road_count": planned_road_count,
-        },
-        "differences": differences,
-        "revision_suggestions": suggestions,
-    }
-
-
 async def _validate_node(state: ExecuteAgentState) -> dict:
     """Evaluator gate: validate layout via VALIDATE subgraph, surface adjustments.
 
@@ -1056,7 +964,16 @@ async def _validate_node(state: ExecuteAgentState) -> dict:
                 "check": "custom_planning_zone_overlap",
                 "message": "Custom planning zones overlap after global allocation.",
             })
-        consistency = _build_l3_l4_consistency_report(state)
+        consistency = {}
+        if state.reconciliation_report is not None:
+            consistency = {
+                "l3_l4_consistency": (
+                    getattr(state.reconciliation_report, "coverage_matrix", None)
+                ).model_dump(mode="json") if hasattr(state.reconciliation_report, "coverage_matrix") else {},
+                "reconciliation_issues": len(
+                    getattr(state.reconciliation_report, "inconsistencies", None) or []
+                ),
+            }
         try:
             from app.agent.explore.verification import save_explore_verification
 
@@ -1068,7 +985,7 @@ async def _validate_node(state: ExecuteAgentState) -> dict:
             logger.debug("[EXECUTE:validate] explore verification failed: %s", e)
         passed = report.overall_passed and (
             custom_validation is None or custom_validation["passed"]
-        ) and consistency["passed"]
+        )
         violations = [
             {"check": issue.code, "message": issue.message}
             for stage_issues in report.issues_by_stage.values()
@@ -1096,6 +1013,7 @@ async def _validate_node(state: ExecuteAgentState) -> dict:
             },
             "constraint_adjustments": adj_dicts,
             "validation_report": report,
+            "reconciliation_report": state.reconciliation_report,
         }
     except Exception as e:
         logger.error("[EXECUTE:validate] failed: %s", e, exc_info=True)
