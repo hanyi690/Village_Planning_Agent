@@ -65,6 +65,7 @@ class ExecuteAgentState(BaseModel):
     validation_result: Dict[str, Any] = Field(default_factory=dict)
     validation_report: Optional[Any] = None  # ValidationReport — typed VALIDATE output
     reconciliation_report: Optional[Any] = None  # ReconciliationReport — typed RECONCILE output (Wave M wires)
+    delivery_manifest: Optional[Any] = None  # DeliveryManifest — DELIVER output (Wave M wires)
     validation_round: int = 0
     constraint_adjustments: List[Dict[str, Any]] = Field(default_factory=list)
 
