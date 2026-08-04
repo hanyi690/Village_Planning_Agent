@@ -1,7 +1,7 @@
 """D 子任务：L1 prompt 注入 EXPLORE brief 单测。"""
 import pytest
 
-from app.agent.analysis.node import _build_prompt
+from app.agent.l1_observe.analysis_node import _build_prompt
 from app.config import get_dimension_config
 
 BRIEF_SECTION = (

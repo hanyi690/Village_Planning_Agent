@@ -21,7 +21,7 @@ from app.agent.plan_state.state import AgentState, create_initial_state
 from app.agent.bootstrap.phase_machine import PlanningPhase, get_layer_dimensions
 from app.agent.conversation_router import after_conversation, after_analysis, conversation_node
 from .tools import execute_tools_node
-from .analysis import analyze_dimension, DIMENSION_NAMES
+from app.agent.l1_observe import analyze_dimension, DIMENSION_NAMES
 from .completion import layer_completion_check
 
 from ..utils.logger import get_logger

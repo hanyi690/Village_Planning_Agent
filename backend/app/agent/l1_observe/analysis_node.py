@@ -15,10 +15,10 @@ from datetime import datetime
 from enum import Enum
 from typing import Dict, Any, List, Optional
 from langchain_core.messages import AIMessage
-from ...config import get_dimension_config, get_dimension_layer, list_dimensions
-from ...core.llm import create_llm
-from ...core.settings import LLM_MODEL, MAX_TOKENS, LLM_STREAM_TIMEOUT
-from ...core.events import SSEEventType
+from app.config import get_dimension_config, get_dimension_layer, list_dimensions
+from app.core.llm import create_llm
+from app.core.settings import LLM_MODEL, MAX_TOKENS, LLM_STREAM_TIMEOUT
+from app.core.events import SSEEventType
 from app.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -422,8 +422,8 @@ async def analyze_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
     # 5. DataPipeline: execute tools and format professional data
     professional_data_section = ""
     try:
-        from .pipeline import DataPipeline
-        from .formatters import generate_professional_data_section
+        from app.agent.l1_observe.pipeline import DataPipeline
+        from app.agent.l1_observe.formatters import generate_professional_data_section
         pipeline = DataPipeline()
 
         # Only load dependency data if dimension has tools configured
