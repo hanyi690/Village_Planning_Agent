@@ -1,5 +1,7 @@
 """GIS Agent state — unified Pydantic BaseModel following LangGraph best practices.
 
+Migrated from agent/gis/state.py per docs/architecture/agent-graph.md §5.
+
 Architecture:
   - GISPipelineInput: API-layer input (session, village, planning text)
   - GISPipelineOutput: API-layer output (export result, render result)

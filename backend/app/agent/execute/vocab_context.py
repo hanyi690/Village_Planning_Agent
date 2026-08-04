@@ -1,5 +1,7 @@
 """地块多因子上下文构造（B3）— 供自定义功能区规则求值。
 
+Migrated from agent/gis/vocab/context.py per docs/architecture/agent-graph.md §5.
+
 每地块：dlbm / area_ha / slope_deg(DEM) / road_distance_m / zone_membership / poi_hits
 因子缺失降级：slope 无 DEM → 999（slope_lt 视为通过）；
               road 无道路 → 99999（road_distance_lt 视为不通过）。

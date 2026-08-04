@@ -2,7 +2,7 @@
 
 import asyncio
 
-from app.agent.gis.vocab_extractor import (
+from app.agent.execute.vocab_extractor import (
     extract_vocabulary_deterministic,
     extract_vocabulary_from_reports,
     register_session_vocabulary,

@@ -1,5 +1,7 @@
 """Road execution adapter for the GIS EXECUTE Agent.
 
+Migrated from agent/gis/execute/road/generator.py per docs/architecture/agent-graph.md §5.
+
 This module bridges the agent-layer ``RoadTarget`` intent contract to the
 deterministic road-planning services.  The agent does not draw road geometry
 directly; it prepares structured spatial inputs, runs Stage 2.6/3 gates, and

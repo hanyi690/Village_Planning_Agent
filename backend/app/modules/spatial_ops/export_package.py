@@ -157,7 +157,7 @@ def export_gdb_package(
         "session_id": session_id,
         "village_name": village_name,
         "generated_at": datetime.now(timezone.utc).isoformat(),
-        "producer": "app.agent.gis.layout_pipeline",
+        "producer": "app.agent.execute.layout_pipeline",
         "validation": validation_result or {},
         "layout_layers": [
             {

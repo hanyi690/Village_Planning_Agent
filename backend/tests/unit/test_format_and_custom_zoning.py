@@ -1,6 +1,6 @@
 """P6/P6.5 单测：format_bound_intent project 域 + CustomZoningGenerator 规则选择。"""
 
-from app.agent.gis.format_bound_intent import format_bound_spatial_intent
+from app.agent.ground.format_bound_intent import format_bound_spatial_intent
 from app.modules.schema.contracts.custom_zone_contracts import Vocabulary, VocabularyCategory
 from app.modules.schema.encodings.dicts.vocabularies.loader import register_vocabulary
 from app.tools.gis._generation.custom_zone_generator import CustomZoningGenerator

@@ -1,5 +1,7 @@
 """Strict, tool-free conversion of Explore/Binder artifacts to planning intent.
 
+Migrated from agent/gis/format_bound_intent.py per docs/architecture/agent-graph.md §5.
+
 v4 extensions (P6):
   - ``project`` domain → ``CustomZoneTarget`` (vocabulary_name / category_code
     matched against the session vocabulary, target_bsms from the binder)

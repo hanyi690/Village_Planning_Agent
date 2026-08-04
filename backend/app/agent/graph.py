@@ -64,7 +64,7 @@ async def gis_agent_node(state: Dict[str, Any]) -> Dict[str, Any]:
     Step 2: LAYOUT Pipeline (deterministic skeleton + ReAct subgraph + Evaluator Gate)
             generates spatial layout with guaranteed step ordering and validation retry.
     """
-    from .gis.layout_pipeline import build_layout_pipeline
+    from app.agent.execute.layout_pipeline import build_layout_pipeline
 
     session_id = state.get("session_id", "")
     village_name = state.get("config", {}).get("village_name", "")
@@ -132,7 +132,7 @@ async def gis_agent_node(state: Dict[str, Any]) -> Dict[str, Any]:
     external_intent = None
     try:
         from app.agent.explore.contracts import ExplorationInstructionCollection
-        from app.agent.gis.format_bound_intent import format_bound_spatial_intent
+        from app.agent.ground.format_bound_intent import format_bound_spatial_intent
         from app.agent.select.parse_agent import parse
         from app.modules.spatial_ops.bundle_binder import bind_exploration_to_bundle
 
@@ -148,7 +148,7 @@ async def gis_agent_node(state: Dict[str, Any]) -> Dict[str, Any]:
 
         vocabulary_name = ""
         if planning_text:
-            from app.agent.gis.vocab_extractor import (
+            from app.agent.execute.vocab_extractor import (
                 extract_vocabulary_deterministic,
             )
             from app.modules.schema.encodings.dicts.vocabularies.loader import (

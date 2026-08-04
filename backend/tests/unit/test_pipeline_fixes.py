@@ -46,7 +46,7 @@ def _fake_bundle(dem_path, n_parcels=2):
 
 
 def test_load_dem_slope(tmp_path):
-    from app.agent.gis.vocab.context import _load_dem_slope
+    from app.agent.execute.vocab_context import _load_dem_slope
 
     dem = tmp_path / "dem.tif"
     _make_dem_tif(dem)
@@ -59,7 +59,7 @@ def test_load_dem_slope(tmp_path):
 
 
 def test_load_dem_slope_missing_dem(tmp_path):
-    from app.agent.gis.vocab.context import _load_dem_slope
+    from app.agent.execute.vocab_context import _load_dem_slope
 
     bundle = types.SimpleNamespace(
         rasters=types.SimpleNamespace(dem=None), polygons={"landuse_current": []}

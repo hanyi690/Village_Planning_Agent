@@ -1,5 +1,7 @@
 """EXECUTE Agent state - execution layer sub-state.
 
+Migrated from agent/gis/execute/state.py per docs/architecture/agent-graph.md §5.
+
 Constructed from GISPipelineState at the execute boundary.
 Focused on spatial result production (layout / facility / axis / road).
 

@@ -1,5 +1,7 @@
 """EXECUTE Agent - spatial execution subgraph.
 
+Migrated from agent/gis/execute/agent.py per docs/architecture/agent-graph.md §5.
+
 Consumes PARSE intent + KG context, produces spatial layout results.
 Peer to PARSE Agent (parse/), invoked by the top-level GIS pipeline.
 
@@ -27,7 +29,7 @@ from typing import Any, Awaitable, Callable, Literal
 
 from langgraph.graph import StateGraph, END, START
 
-from .state import ExecuteAgentState
+from app.agent.execute.execute_state import ExecuteAgentState
 from app.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -372,7 +374,7 @@ async def _execute_layout_node(state: ExecuteAgentState) -> dict:
             mip_c = _spatial_constraint_to_mip(c)
             if mip_c:
                 mip_parse_constraints.append(mip_c)
-        from app.agent.gis.execute.constraints import merge_sourced_constraints
+        from app.agent.execute.execute_constraints import merge_sourced_constraints
 
         all_constraints = merge_sourced_constraints(
             list(state.kg_constraints or []), mip_parse_constraints
@@ -446,7 +448,7 @@ async def _execute_layout_node(state: ExecuteAgentState) -> dict:
 
                 # B3: 多因子上下文（slope/road/zone/poi）合并进 parcels，供规则求值
                 try:
-                    from app.agent.gis.vocab.context import build_parcel_contexts
+                    from app.agent.execute.vocab_context import build_parcel_contexts
 
                     ctxs = build_parcel_contexts(parcels, gis_bundle)
                     for p in parcels:
@@ -681,7 +683,7 @@ async def _execute_road_node(state: ExecuteAgentState) -> dict:
 
     diagnostic_layers: List[Dict[str, Any]] = []
     try:
-        from app.agent.gis.execute.road.generator import (
+        from app.agent.execute.road_generator import (
             execute_road_planning_from_agent_state,
         )
 

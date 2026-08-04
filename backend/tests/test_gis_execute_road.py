@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from rdflib import Graph, Literal, RDF, URIRef
 
-from app.agent.gis.execute.road.generator import execute_road_planning_from_agent_state
-from app.agent.gis.execute.state import ExecuteAgentState
+from app.agent.execute.road_generator import execute_road_planning_from_agent_state
+from app.agent.execute.execute_state import ExecuteAgentState
 from app.modules.kg.ontology import PLN
 
 

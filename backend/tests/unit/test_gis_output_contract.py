@@ -75,8 +75,8 @@ def test_render_builder_includes_current_roads_and_annotations():
 
 
 def test_fetch_reuses_caller_bundle_and_preserves_overrides():
-    from app.agent.gis.layout_pipeline import _fetch_gis_data_node
-    from app.agent.gis.state import GISPipelineState
+    from app.agent.execute.layout_pipeline import _fetch_gis_data_node
+    from app.agent.deliver.gis_pipeline_state import GISPipelineState
 
     base = {"type": "FeatureCollection", "features": [_feature("BASE")]}
     override = {"type": "FeatureCollection", "features": [_feature("USER")]}
@@ -94,7 +94,7 @@ def test_fetch_reuses_caller_bundle_and_preserves_overrides():
 
 
 def test_pipeline_state_accepts_typed_derived_relations():
-    from app.agent.gis.state import GISPipelineState
+    from app.agent.deliver.gis_pipeline_state import GISPipelineState
 
     relations = SimpleNamespace(touches=[], nearby=[], connected=[])
     state = GISPipelineState(gis_data={"_parcel_relations": relations})
@@ -103,8 +103,8 @@ def test_pipeline_state_accepts_typed_derived_relations():
 
 
 def test_fetch_session_fallback_never_uses_configured_sources(monkeypatch):
-    from app.agent.gis.layout_pipeline import _fetch_gis_data_node
-    from app.agent.gis.state import GISPipelineState
+    from app.agent.execute.layout_pipeline import _fetch_gis_data_node
+    from app.agent.deliver.gis_pipeline_state import GISPipelineState
     from app.modules.data.catalog.catalog import DataCatalog
 
     bundle = SimpleNamespace(
@@ -136,8 +136,8 @@ def test_fetch_session_fallback_never_uses_configured_sources(monkeypatch):
 
 
 def test_trace_layer_uses_real_parcel_geometry_only():
-    from app.agent.gis.layout_pipeline import _build_trace_layer
-    from app.agent.gis.state import GISPipelineState
+    from app.agent.execute.layout_pipeline import _build_trace_layer
+    from app.agent.deliver.gis_pipeline_state import GISPipelineState
 
     parcel = _feature("P001")
     state = GISPipelineState(
@@ -165,8 +165,8 @@ def test_trace_layer_uses_real_parcel_geometry_only():
 
 
 def test_empty_layout_fails_validation_closed():
-    from app.agent.gis.execute.agent import _validate_node
-    from app.agent.gis.execute.state import ExecuteAgentState
+    from app.agent.execute.execute_agent import _validate_node
+    from app.agent.execute.execute_state import ExecuteAgentState
 
     result = asyncio.run(_validate_node(ExecuteAgentState()))
 
@@ -175,8 +175,8 @@ def test_empty_layout_fails_validation_closed():
 
 
 def test_legacy_intent_routes_declared_execute_children():
-    from app.agent.gis.execute.agent import _route_tasks_node
-    from app.agent.gis.execute.state import ExecuteAgentState
+    from app.agent.execute.execute_agent import _route_tasks_node
+    from app.agent.execute.execute_state import ExecuteAgentState
 
     state = ExecuteAgentState(
         intent={
@@ -232,8 +232,8 @@ def test_road_grounding_infers_endpoints_from_kg_village_anchors():
 
 
 def test_missing_zone_targets_are_not_replaced_with_current_landuse():
-    from app.agent.gis.execute.agent import _execute_layout_node
-    from app.agent.gis.execute.state import ExecuteAgentState
+    from app.agent.execute.execute_agent import _execute_layout_node
+    from app.agent.execute.execute_state import ExecuteAgentState
 
     state = ExecuteAgentState(
         intent=SimpleNamespace(zone_targets=[]),
@@ -252,8 +252,8 @@ def test_missing_zone_targets_are_not_replaced_with_current_landuse():
 
 
 def test_execution_errors_fail_validation_closed():
-    from app.agent.gis.execute.agent import _validate_node
-    from app.agent.gis.execute.state import ExecuteAgentState
+    from app.agent.execute.execute_agent import _validate_node
+    from app.agent.execute.execute_state import ExecuteAgentState
 
     state = ExecuteAgentState(
         layout_configs=[{"layerType": "facility_point", "data": {}}],
@@ -310,7 +310,7 @@ def test_parse_prefers_authoritative_zone_table_over_regex_noise():
 def test_execute_checkpoint_output_converts_numpy_scalars():
     import numpy as np
 
-    from app.agent.gis.execute.agent import _checkpoint_safe
+    from app.agent.execute.execute_agent import _checkpoint_safe
 
     result = _checkpoint_safe(
         {"score": np.float64(1.25), "coords": [np.int64(2)]}
@@ -339,8 +339,8 @@ def test_parse_extracts_structured_road_table():
 
 
 def test_export_is_blocked_when_validation_failed(tmp_path, monkeypatch):
-    from app.agent.gis.layout_pipeline import _export_gdb_node
-    from app.agent.gis.state import GISPipelineState
+    from app.agent.execute.layout_pipeline import _export_gdb_node
+    from app.agent.deliver.gis_pipeline_state import GISPipelineState
 
     monkeypatch.chdir(tmp_path)
     state = GISPipelineState(

@@ -1,5 +1,7 @@
 """GIS LAYOUT pipeline — unified StateGraph with deterministic skeleton + ReAct adaptivity.
 
+Migrated from agent/gis/layout_pipeline.py per docs/architecture/agent-graph.md §5.
+
 Architecture (LangGraph best practices):
   - Single StateGraph with GISPipelineState (Pydantic BaseModel)
   - Deterministic skeleton: fetch → build_kg → parse → write_kg_l3 → execute → export → render
@@ -19,7 +21,7 @@ from typing import Literal, Optional
 
 from langgraph.graph import StateGraph, END, START
 
-from .state import GISPipelineState, GISPipelineInput, GISPipelineOutput
+from app.agent.deliver.gis_pipeline_state import GISPipelineState, GISPipelineInput, GISPipelineOutput
 from app.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -34,8 +36,8 @@ def _attach_custom_zone_targets(intent: Any, reports: Dict[str, Any], village_na
     按类别规则选地；target_bsms 继承该实体已 gazetteer 解析的候选 BSM。
     返回新增 target 数。
     """
-    from app.agent.gis.format_bound_intent import _match_category_code
-    from app.agent.gis.vocab_extractor import extract_vocabulary_deterministic
+    from app.agent.ground.format_bound_intent import _match_category_code
+    from app.agent.execute.vocab_extractor import extract_vocabulary_deterministic
     from app.modules.schema.contracts.custom_zone_contracts import CustomZoneTarget
     from app.modules.schema.encodings.dicts.vocabularies.loader import register_vocabulary
 
@@ -975,7 +977,8 @@ async def _execute_node(state: GISPipelineState) -> dict:
     Maps GISPipelineState -> ExecuteAgentState, invokes the execute subgraph
     (with internal Worker-Evaluator retry loop), maps results back.
     """
-    from app.agent.gis.execute import build_execute_agent_graph, ExecuteAgentState
+    from app.agent.execute.execute_agent import build_execute_agent_graph
+    from app.agent.execute.execute_state import ExecuteAgentState
 
     try:
         exec_state = ExecuteAgentState(

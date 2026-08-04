@@ -1,4 +1,7 @@
-"""Constraint provenance — tag each MIP constraint with its source and dedupe."""
+"""Constraint provenance — tag each MIP constraint with its source and dedupe.
+
+Migrated from agent/gis/execute/constraints.py per docs/architecture/agent-graph.md §5.
+"""
 from __future__ import annotations
 from typing import Any, Dict, List
 

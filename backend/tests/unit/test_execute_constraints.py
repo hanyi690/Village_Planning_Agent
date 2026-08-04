@@ -1,5 +1,5 @@
 def test_merge_sourced_constraints_tags_and_dedupes():
-    from app.agent.gis.execute.constraints import merge_sourced_constraints
+    from app.agent.execute.execute_constraints import merge_sourced_constraints
 
     kg = [{"id": "eco", "operator": ">=", "value": 330.0}, {"id": "eco", "operator": ">=", "value": 330.0}]
     parse = [{"type": "farmland_protection", "value": 85.2, "source_text": "农田保护区 85.20公顷"}]

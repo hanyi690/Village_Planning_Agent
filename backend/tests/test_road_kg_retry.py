@@ -9,7 +9,7 @@ from rdflib import Graph, Literal, RDF, URIRef
 
 from app.modules.kg.ontology import PLN
 from app.modules.kg.manager import get_kg_manager
-from app.agent.gis.execute.road.generator import _default_kg_retry_adapter
+from app.agent.execute.road_generator import _default_kg_retry_adapter
 from app.services.modules.gis.road import RDFLibKGSpatialRetryAdapter, normalise_kg_retry_response
 
 

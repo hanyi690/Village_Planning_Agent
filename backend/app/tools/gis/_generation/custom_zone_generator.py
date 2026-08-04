@@ -67,7 +67,7 @@ def _supplement_by_area(
 
     def _score(p):
         if rules and contexts:
-            from app.agent.gis.vocab.rules import rule_to_condition
+            from app.agent.execute.vocab_rules import rule_to_condition
             hit = 0
             for r in rules:
                 try:
@@ -215,10 +215,10 @@ class CustomZoningGenerator:
 
         v5 multi-factor: dlbm_in / within_zone / not_within_zone /
         slope_lt / road_distance_lt / near_poi + and/any/not composites.
-        Evaluation delegates to ``app.agent.gis.vocab.rules`` (expr_eval),
+        Evaluation delegates to ``app.agent.execute.vocab_rules`` (expr_eval),
         removing the previous duplicate hand-rolled evaluator.
         """
-        from app.agent.gis.vocab.rules import evaluate_rules, parcel_to_context
+        from app.agent.execute.vocab_rules import evaluate_rules, parcel_to_context
 
         rules = category.typing_rules or []
         if not rules:
