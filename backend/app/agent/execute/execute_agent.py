@@ -16,7 +16,7 @@ Worker-Evaluator loop:
   validate --pass--> END | --retry--> layout (max 3 rounds)
 
 P1 wiring: nodes call the underlying generation helpers directly
-(generate._generate_*, MIPZoneAllocator, LayoutValidator.validate)
+(generate._generate_*, LayoutValidator.validate)
 rather than the @tool wrappers, bypassing InjectedState. This couples execute/
 to tools/gis private helpers; P2 should promote them to a public generation API.
 """
@@ -321,25 +321,198 @@ async def _execute_project_node(state: ExecuteAgentState) -> dict:
     return _project_output(state, features, unresolved)
 
 
-async def _execute_layout_node(state: ExecuteAgentState) -> dict:
-    """Layout sub-task: allocate land use and build canonical custom planning zones.
+def _function_zone_layer(zone_changes: list) -> dict | None:
+    """Build the function_zone layer from reclassified ParcelChange entries."""
+    from shapely import wkt
+    from shapely.geometry import mapping as geometry_mapping
 
-    Replaces the deprecated allocate_and_generate ReAct node with a deterministic
-    pipeline: operations -> allocation -> custom candidate selection -> global
-    custom-zone allocation -> canonical planning-zone output.
-    constraint_adjustments from validate feedback are applied to targets on retry.
-    """
-    from app.tools.gis.generate import (
-        _apply_operations, _generate_function_zones,
+    features = []
+    for change in zone_changes:
+        if getattr(change, "action", "") != "reclassify":
+            continue
+        geometry = {}
+        after_wkt = getattr(change, "after_geometry_wkt", "") or ""
+        if after_wkt:
+            try:
+                geom = wkt.loads(after_wkt)
+                if not geom.is_empty:
+                    geometry = geometry_mapping(geom)
+            except Exception:
+                geometry = {}
+        if not geometry:
+            continue
+        cls = getattr(change, "after_classification", None)
+        bsm = str(getattr(change, "bsm", ""))
+        features.append({
+            "type": "Feature",
+            "properties": {
+                "bsm": bsm,
+                "planning_land_use": str(getattr(cls, "code", "") or ""),
+                "zone_type": str(getattr(cls, "canonical_name", "") or ""),
+                "action": getattr(change, "action", ""),
+                "source_bsm": bsm,
+                "area_ha": round(float(getattr(change, "new_area_ha", 0) or 0), 2),
+            },
+            "geometry": geometry,
+        })
+    if not features:
+        return None
+    return {
+        "layerType": "function_zone",
+        "layerName": "功能分区",
+        "data": {"type": "FeatureCollection", "features": features},
+    }
+
+
+def _allocated_geojson_from_changes(landuse: dict, zone_changes: list) -> dict:
+    """landuse features with reclassified parcels tagged with their planning land use."""
+    assigned = {}
+    for change in zone_changes:
+        if getattr(change, "action", "") != "reclassify":
+            continue
+        cls = getattr(change, "after_classification", None)
+        assigned[str(getattr(change, "bsm", ""))] = {
+            "planning_land_use": str(getattr(cls, "code", "") or ""),
+            "zone_type": str(getattr(cls, "canonical_name", "") or ""),
+        }
+    features = []
+    for feature in landuse.get("features") or []:
+        props = dict(feature.get("properties") or {})
+        bsm = str(props.get("BSM") or props.get("bsm") or "")
+        if bsm in assigned:
+            props["planning_land_use"] = assigned[bsm]["planning_land_use"]
+            props["zone_type"] = assigned[bsm]["zone_type"]
+        new_feature = dict(feature)
+        new_feature["properties"] = props
+        features.append(new_feature)
+    return {"type": "FeatureCollection", "features": features}
+
+
+def _assign_custom_zone_features(landuse: dict, candidates: dict, pending_zone_name: str) -> dict:
+    """Tag every landuse feature with its custom zone (pending for unclaimed parcels)."""
+    bsm_to_zone = {}
+    for zone_name, bsms in (candidates or {}).items():
+        for bsm in bsms:
+            bsm_to_zone[str(bsm)] = zone_name
+    features = []
+    for feature in landuse.get("features") or []:
+        props = dict(feature.get("properties") or {})
+        bsm = str(props.get("BSM") or props.get("bsm") or "")
+        props["assigned_zone"] = bsm_to_zone.get(bsm, pending_zone_name)
+        new_feature = dict(feature)
+        new_feature["properties"] = props
+        features.append(new_feature)
+    return {"type": "FeatureCollection", "features": features}
+
+
+def _build_custom_planning_layer(
+    state: ExecuteAgentState,
+    landuse: dict,
+    custom_targets: list,
+) -> dict | None:
+    """Build the custom_planning_zone layer via the vocabulary-driven generator (no MIP)."""
+    from app.modules.spatial_ops.custom_planning import (
+        PENDING_ZONE_NAME,
+        build_custom_planning_zone_layer,
+        build_custom_zone_allocation_inputs,
     )
-    from app.tools.gis.allocate import _spatial_constraint_to_mip
-    from app.tools.gis._generation.optimizer.mip_allocator import MIPZoneAllocator
+    from app.tools.gis._generation.custom_zone_generator import CustomZoningGenerator
+    from shapely.geometry import shape
+
+    gis_bundle = getattr(state, "gis_bundle", None)
+    parcels = [
+        {
+            "bsm": str(f.get("properties", {}).get("BSM", "") or f.get("properties", {}).get("bsm", "")),
+            "dlbm": str(f.get("properties", {}).get("DLBM", "") or f.get("properties", {}).get("dlbm", "")),
+            "area_ha": float(f.get("properties", {}).get("area_sqm", 0) or 0) / 10000.0,
+            "geometry": shape(f["geometry"]) if f.get("geometry") else None,
+        }
+        for f in (landuse.get("features") or [])
+    ]
+    parcels = [p for p in parcels if p["bsm"] and p["geometry"] is not None]
+
+    try:
+        from app.agent.execute.vocab_context import build_parcel_contexts
+
+        ctxs = build_parcel_contexts(parcels, gis_bundle)
+        for p in parcels:
+            p.update(ctxs.get(str(p["bsm"]), {}))
+    except Exception as e:
+        logger.warning("[EXECUTE:layout] parcel context build failed: %s", e)
+
+    three_lines = {}
+    if gis_bundle is not None:
+        for bundle_key, subtype in (
+            ("ecological_redline", "ecological_redline"),
+            ("farmland_protection", "farmland_redline"),
+        ):
+            geoms = [
+                getattr(f, "geometry", None)
+                for f in (gis_bundle.polygons.get(bundle_key) or [])
+            ]
+            three_lines[subtype] = [{"geometry": shape(g)} for g in geoms if g]
+    for gis_key, subtype in (
+        ("ecological_protection_geojson", "ecological_redline"),
+        ("farmland_protection_geojson", "farmland_redline"),
+    ):
+        if three_lines.get(subtype):
+            continue
+        source = (state.gis_data or {}).get(gis_key) or {}
+        three_lines[subtype] = [
+            {"geometry": shape(feature["geometry"])}
+            for feature in source.get("features") or []
+            if feature.get("geometry")
+        ]
+
+    intent_dict = (
+        state.intent.model_dump(exclude_none=True)
+        if hasattr(state.intent, "model_dump")
+        else dict(state.intent or {})
+    )
+    if intent_dict.get("custom_zone_targets") and not intent_dict.get("vocabulary_name"):
+        intent_dict["vocabulary_name"] = intent_dict["custom_zone_targets"][0].get("vocabulary_name", "")
+    if not intent_dict.get("vocabulary_name"):
+        logger.warning("[EXECUTE:layout] custom targets present but no vocabulary_name - skipping custom layer")
+        return None
+
+    gen = CustomZoningGenerator(parcels, intent_dict, three_lines=three_lines)
+    zones, _audit = gen.generate_with_validation()
+    if not zones:
+        return None
+    _targets, candidates, metadata = build_custom_zone_allocation_inputs(landuse, zones)
+    custom_allocated = _assign_custom_zone_features(landuse, candidates, PENDING_ZONE_NAME)
+    custom_layer = build_custom_planning_zone_layer(custom_allocated, metadata)
+    if not custom_layer.get("features"):
+        return None
+    return {
+        "layerType": "custom_planning_zone",
+        "layerName": "自定义规划分区",
+        "data": custom_layer,
+    }
+
+
+async def _execute_layout_node(state: ExecuteAgentState) -> dict:
+    """Layout sub-task: deterministic zone reclassification (no MIP).
+
+    Reclassifies each zone target's candidate parcels to the zone's planning
+    land use via the Land Design Worker, building function_zone /
+    custom_planning_zone layers and accumulating ParcelChange entries on state.
+    """
+    from app.agent.execute.land_design_worker import (
+        build_parcel_change_set,
+        design_zone_parcel,
+    )
+
+    if state.tasks_to_run and "layout" not in state.tasks_to_run:
+        return {}
 
     gis_data = state.gis_data or {}
     gis_bundle = getattr(state, "gis_bundle", None)
-    if gis_bundle is not None and hasattr(gis_bundle, "polygons") and (gis_bundle.polygons.get("landuse_current") or gis_bundle.polygons.get("landuse_planned")):
-        landuse_dict = gis_bundle.to_geojson_dict()
-        landuse = landuse_dict.get("landuse_current_geojson")
+    if gis_bundle is not None and hasattr(gis_bundle, "polygons") and (
+        gis_bundle.polygons.get("landuse_current")
+        or gis_bundle.polygons.get("landuse_planned")
+    ):
+        landuse = gis_bundle.to_geojson_dict().get("landuse_current_geojson")
     else:
         landuse = gis_data.get("landuse_current_geojson")
     if not landuse or not landuse.get("features"):
@@ -351,229 +524,76 @@ async def _execute_layout_node(state: ExecuteAgentState) -> dict:
             "Current land-use polygons are required for layout execution.",
         )
 
-    try:
-        allocated = state.allocated_geojson or {}
-        if state.operation_sequence and allocated:
-            allocated = _apply_operations(allocated, state.operation_sequence)
+    zone_targets = getattr(state.intent, "zone_targets", None)
+    if zone_targets is None and isinstance(state.intent, dict):
+        zone_targets = state.intent.get("zone_targets")
+    zone_targets = list(zone_targets or [])
 
-        total_area_ha = sum(
-            float(f.get("properties", {}).get("area_sqm", 0) or 0) / 10000.0
-            for f in landuse.get("features", [])
+    custom_targets = getattr(state.intent, "custom_zone_targets", None)
+    if custom_targets is None and isinstance(state.intent, dict):
+        custom_targets = state.intent.get("custom_zone_targets")
+    custom_targets = list(custom_targets or [])
+
+    if not zone_targets and not custom_targets:
+        message = "No explicit planning zone targets were derived from the reports."
+        logger.error("[EXECUTE:layout] %s", message)
+        return _execution_error(
+            state,
+            "layout",
+            "missing_zone_targets",
+            message,
         )
 
-        # Direct ZoneTarget extraction
-        zone_targets = list(state.intent.zone_targets) if hasattr(state.intent, 'zone_targets') and state.intent.zone_targets else []
-        target_map = {}
-        for zone_target in zone_targets:
-            if not zone_target.land_use:
-                continue
-            if getattr(zone_target, "area_ha", None):
-                target_map[zone_target.land_use] = round(zone_target.area_ha, 2)
-            elif zone_target.area_ratio > 0:
-                target_map[zone_target.land_use] = round(
-                    zone_target.area_ratio * total_area_ha,
-                    2,
+    parcel_by_bsm = {
+        str((feature.get("properties") or {}).get("BSM")
+            or (feature.get("properties") or {}).get("bsm") or ""): _parcel_from_feature(feature)
+        for feature in (landuse.get("features") or [])
+    }
+
+    zone_changes = []
+    for zone_target in zone_targets:
+        if not getattr(zone_target, "candidate_bsms", None):
+            continue
+        zone_changes.extend(design_zone_parcel(zone_target, parcel_by_bsm))
+    state.parcel_changes.extend(zone_changes)
+    if state.parcel_changes:
+        state.parcel_changeset = build_parcel_change_set(list(state.parcel_changes))
+
+    layers = []
+    func_layer = _function_zone_layer(zone_changes)
+    if func_layer:
+        layers.append(func_layer)
+
+    summary = {
+        "mode": "deterministic",
+        "allocated_count": len(zone_changes),
+        "zone_target_count": len(zone_targets),
+    }
+
+    allocated_geojson = _allocated_geojson_from_changes(landuse, zone_changes)
+
+    if custom_targets:
+        try:
+            custom_layer = _build_custom_planning_layer(state, landuse, custom_targets)
+            if custom_layer:
+                layers.append(custom_layer)
+                summary["custom_zone_count"] = len(
+                    (custom_layer.get("data") or {}).get("features") or []
                 )
+        except Exception as e:
+            logger.error("[EXECUTE:layout] custom zoning failed: %s", e, exc_info=True)
 
-        if not target_map:
-            message = "No explicit planning zone targets were derived from the reports."
-            logger.error("[EXECUTE:layout] %s", message)
-            return _execution_error(
-                state,
-                "layout",
-                "missing_zone_targets",
-                message,
-            )
-        density_hints = {zt.land_use: zt.density for zt in zone_targets if zt.land_use and zt.density}
-        adjacency_rules = {}
-        for zt in zone_targets:
-            if zt.land_use and zt.adjacency_rules:
-                adjacency_rules[zt.land_use] = {
-                    "prefer": list(zt.adjacency_rules.prefer) if zt.adjacency_rules.prefer else [],
-                    "avoid": list(zt.adjacency_rules.avoid) if zt.adjacency_rules.avoid else [],
-                }
+    logger.info(
+        "[EXECUTE:layout] reclassified %d parcels, %d layers",
+        len(zone_changes), len(layers),
+    )
 
-        if state.constraint_adjustments:
-            for adj in state.constraint_adjustments:
-                zone = adj.get("zone", "")
-                delta = adj.get("delta_ha", 0)
-                if zone in target_map and delta:
-                    target_map[zone] = round(target_map[zone] + delta, 2)
-                    logger.info(
-                        "[EXECUTE:layout] adjusted %s by %+.1f ha (reason: %s)",
-                        zone, delta, adj.get("reason", ""),
-                    )
-
-        mip_parse_constraints = []
-        for c in (state.constraint_set or []):
-            mip_c = _spatial_constraint_to_mip(c)
-            if mip_c:
-                mip_parse_constraints.append(mip_c)
-        from app.agent.execute.execute_constraints import merge_sourced_constraints
-
-        all_constraints = merge_sourced_constraints(
-            list(state.kg_constraints or []), mip_parse_constraints
-        )
-
-        zone_candidate_bsms = {
-            zt.land_use: list(dict.fromkeys(zt.candidate_bsms))
-            for zt in zone_targets
-            if zt.land_use and zt.candidate_bsms
-        }
-
-        allocator = MIPZoneAllocator()
-        allocated_geojson, alloc_trace = allocator.solve(
-            landuse_geojson=landuse,
-            targets=target_map,
-            constraints=all_constraints,
-            zone_targets=zone_targets,
-            parse_constraints=state.constraint_set,
-            density_hints=density_hints or None,
-            adjacency_rules=adjacency_rules or None,
-            facility_anchors=state.facility_anchors,
-            protected_parcels_detail=state.kg_protected_parcels_detail or None,
-            three_line_targets=state.kg_three_lines or None,
-            vne_summary=state.kg_vne_summary or None,
-            zone_candidate_bsms=zone_candidate_bsms or None,
-        )
-
-        summary = {
-            "mode": alloc_trace.get("mode", "mip"),
-            "allocated_count": len(allocated_geojson.get("features", [])),
-        }
-        if density_hints:
-            summary["density_hints"] = density_hints
-        if adjacency_rules:
-            summary["adjacency_rules"] = adjacency_rules
-
-        # Step 6: Generate function zone + planning zone layers
-        layers = []
-        # _generate_function_zones 依赖 landuse_current_geojson — 从 bundle 派生
-        # 的 landuse 注入 gis_data（state.gis_data 可能为空，导致 intent-only fallback）
-        gis_data_for_zones = dict(state.gis_data or {})
-        gis_data_for_zones["landuse_current_geojson"] = landuse
-        func_layer = _generate_function_zones(state.intent, gis_data_for_zones)
-        if func_layer:
-            layers.append(func_layer)
-        # 自定义主分区：先用既有词汇/规则筛选候选，再由 MIP 解决跨区冲突。
-        custom_targets = getattr(state.intent, "custom_zone_targets", None)
-        if custom_targets is None and isinstance(state.intent, dict):
-            custom_targets = state.intent.get("custom_zone_targets")
-        custom_targets = custom_targets or []
-        logger.info("[EXECUTE:layout] custom targets=%d (intent=%s)", len(custom_targets), type(state.intent).__name__)
-        if custom_targets:
-            try:
-                from app.tools.gis._generation.custom_zone_generator import CustomZoningGenerator
-                from shapely.geometry import shape
-                from app.modules.spatial_ops.custom_planning import (
-                    build_custom_planning_zone_layer,
-                    build_custom_zone_allocation_inputs,
-                )
-
-                parcels = [
-                    {
-                        "bsm": str(f.get("properties", {}).get("BSM", "") or f.get("properties", {}).get("bsm", "")),
-                        "dlbm": str(f.get("properties", {}).get("DLBM", "") or f.get("properties", {}).get("dlbm", "")),
-                        "area_ha": float(f.get("properties", {}).get("area_sqm", 0) or 0) / 10000.0,
-                        "geometry": shape(f["geometry"]) if f.get("geometry") else None,
-                    }
-                    for f in (landuse.get("features") or [])
-                ]
-                parcels = [p for p in parcels if p["bsm"] and p["geometry"] is not None]
-
-                # B3: 多因子上下文（slope/road/zone/poi）合并进 parcels，供规则求值
-                try:
-                    from app.agent.execute.vocab_context import build_parcel_contexts
-
-                    ctxs = build_parcel_contexts(parcels, gis_bundle)
-                    for p in parcels:
-                        p.update(ctxs.get(str(p["bsm"]), {}))
-                except Exception as e:
-                    logger.warning("[EXECUTE:layout] parcel context build failed: %s", e)
-
-                three_lines = {}
-                if gis_bundle is not None:
-                    for bundle_key, subtype in (
-                        ("ecological_redline", "ecological_redline"),
-                        ("farmland_protection", "farmland_redline"),
-                    ):
-                        feats = gis_bundle.polygons.get(bundle_key) or []
-                        geoms = [getattr(f, "geometry", None) for f in feats]
-                        three_lines[subtype] = [
-                            {"geometry": shape(g)} for g in geoms if g
-                        ]
-                # 上传的限制区也是正式输入。Bundle 不可用或不含该层时，直接
-                # 使用本 session 的 GeoJSON，不能把保护约束降级为渲染附件。
-                for gis_key, subtype in (
-                    ("ecological_protection_geojson", "ecological_redline"),
-                    ("farmland_protection_geojson", "farmland_redline"),
-                ):
-                    if three_lines.get(subtype):
-                        continue
-                    source = (state.gis_data or {}).get(gis_key) or {}
-                    three_lines[subtype] = [
-                        {"geometry": shape(feature["geometry"])}
-                        for feature in source.get("features") or []
-                        if feature.get("geometry")
-                    ]
-
-                intent_dict = (
-                    state.intent.model_dump(exclude_none=True)
-                    if hasattr(state.intent, "model_dump")
-                    else dict(state.intent or {})
-                )
-                # 顶层 vocabulary_name 从第一个 target 继承（session 注册名）
-                if intent_dict.get("custom_zone_targets") and not intent_dict.get("vocabulary_name"):
-                    intent_dict["vocabulary_name"] = intent_dict["custom_zone_targets"][0].get("vocabulary_name", "")
-                if not intent_dict.get("vocabulary_name"):
-                    logger.warning("[EXECUTE:layout] custom targets present but no vocabulary_name — skipping custom layer")
-                    custom_targets = []
-                gen = CustomZoningGenerator(parcels, intent_dict, three_lines=three_lines)
-                zones, _audit = gen.generate_with_validation()
-                if zones:
-                    custom_targets, candidate_bsms, metadata = build_custom_zone_allocation_inputs(
-                        landuse, zones,
-                    )
-                    custom_allocated, custom_trace = allocator.solve(
-                        landuse_geojson=landuse,
-                        targets=custom_targets,
-                        constraints=all_constraints,
-                        protected_parcels_detail=state.kg_protected_parcels_detail or None,
-                        three_line_targets=state.kg_three_lines or None,
-                        vne_summary=state.kg_vne_summary or None,
-                        zone_candidate_bsms=candidate_bsms,
-                    )
-                    custom_layer = build_custom_planning_zone_layer(custom_allocated, metadata)
-                    if custom_layer.get("features"):
-                        layers.append({
-                            "layerType": "custom_planning_zone",
-                            "layerName": "自定义规划分区",
-                            "data": custom_layer,
-                            "allocation_trace": custom_trace,
-                        })
-                        summary["custom_zone_count"] = len(custom_layer["features"])
-                        summary["custom_zone_mode"] = custom_trace.get("mode", "mip")
-                        logger.info(
-                            "[EXECUTE:layout] custom_planning_zone: %d features",
-                            len(custom_layer["features"]),
-                        )
-            except Exception as e:
-                logger.error("[EXECUTE:layout] custom zoning failed: %s", e, exc_info=True)
-
-        logger.info(
-            "[EXECUTE:layout] allocated %d parcels, %d layers (mode=%s)",
-            summary["allocated_count"], len(layers), summary["mode"],
-        )
-
-        return {
-            "allocated_geojson": allocated_geojson,
-            "allocation_summary": summary,
-            "layout_configs": layers,
-            "constraint_adjustments": [],  # clear after consume
-        }
-    except Exception as e:
-        logger.error("[EXECUTE:layout] failed: %s", e, exc_info=True)
-        return _execution_error(state, "layout", "layout_failed", str(e))
+    return {
+        "allocated_geojson": allocated_geojson,
+        "allocation_summary": summary,
+        "layout_configs": layers,
+        "constraint_adjustments": [],
+    }
 
 
 async def _execute_facility_node(state: ExecuteAgentState) -> dict:
