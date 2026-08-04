@@ -136,3 +136,5 @@ graphify-out/
 
 # Script cache
 scripts/.kg_cache/
+
+docs/参考报告/mermaid-diagram.svg
