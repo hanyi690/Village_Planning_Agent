@@ -340,6 +340,96 @@ async def load_dependency_reports(
     return deps, same_layer_contexts
 
 
+async def load_layered_dependency_reports(
+    dimension_key: str,
+    cfg: Any,
+    dim_layer: int,
+    session_id: str,
+    is_revision: bool,
+) -> tuple[str, str, str]:
+    """Load same-layer + split cross-layer dependency reports.
+
+    For L3 the cross-layer deps split into L1 (layer_depends_on) and L2
+    (phase_depends_on). Returns (l1_deps, l2_deps, same_layer_contexts).
+    For non-L3 layers, l2_deps is "".
+    """
+    from app.services.report_store import ReportStore
+
+    store = ReportStore.get_instance()
+    same_layer_contexts = ""
+
+    # 同层依赖加载（与 load_dependency_reports 完全一致）
+    same_layer_deps = getattr(cfg, "depends_on", [])
+    if same_layer_deps:
+        contexts = []
+        missing_deps = []
+
+        max_wait_seconds = 30 if is_revision else 120
+        check_interval = 2
+
+        for dep_key in same_layer_deps:
+            report = None
+            waited = 0
+
+            # 轮询等待：从 DB 获取（上游节点完成后会立即写入 DB）
+            while waited < max_wait_seconds:
+                db_report = await store.get_latest(session_id, dep_key)
+                if db_report:
+                    report = db_report
+                    contexts.append(f"【{dep_key}】分析结果：\n{report}")
+                    logger.info(f"[dimension_runtime] {dimension_key}: 从DB获取依赖 {dep_key}（等待 {waited}s）")
+                    break
+
+                await asyncio.sleep(check_interval)
+                waited += check_interval
+
+            if not report:
+                missing_deps.append(dep_key)
+
+        if missing_deps:
+            # Fallback: retry each missing dep individually
+            logger.warning(
+                f"[dimension_runtime] {dimension_key}: DB 中依赖报告缺失 {missing_deps}，尝试回退获取"
+            )
+            recovered_deps = []
+            still_missing = []
+            for dep_key in missing_deps:
+                dep_report = await store.get_latest_report(session_id, dep_key)
+                if dep_report:
+                    contexts.append(f"【{dep_key}】分析结果：\n{dep_report['content']}")
+                    recovered_deps.append(dep_key)
+                    logger.info(f"[dimension_runtime] {dimension_key}: 从回退获取依赖 {dep_key}")
+                else:
+                    still_missing.append(dep_key)
+
+            if still_missing:
+                logger.error(
+                    f"[dimension_runtime] {dimension_key}: 依赖报告加载失败（DB + 回退均失败）: {still_missing}"
+                )
+                raise DependencyError(f"维度 {dimension_key} 的依赖报告加载失败: {still_missing}")
+            else:
+                logger.info(f"[dimension_runtime] {dimension_key}: 通过回退恢复依赖 {recovered_deps}")
+
+        same_layer_contexts = "\n\n".join(contexts)
+        logger.info(f"[dimension_runtime] {dimension_key}: 加载同层依赖 {len(same_layer_deps)} 个")
+
+    # 跨层依赖加载：L1 (layer_depends_on) 与 L2 (phase_depends_on) 分开返回
+    layer1_deps = getattr(cfg, "layer_depends_on", [])
+    layer2_deps = getattr(cfg, "phase_depends_on", [])
+    l1_deps = ""
+    l2_deps = ""
+    if layer1_deps:
+        # 顺序调用避免 SQLite aiosqlite 连接管理问题
+        layer1_reports = await store.get_layer_reports(session_id, 1)
+        l1_deps = "\n".join([f"【{k}】{layer1_reports.get(k, '')}" for k in layer1_deps if layer1_reports.get(k)])
+    if dim_layer == 3 and layer2_deps:
+        layer2_reports = await store.get_layer_reports(session_id, 2)
+        l2_deps = "\n".join([f"【{k}】{layer2_reports.get(k, '')}" for k in layer2_deps if layer2_reports.get(k)])
+    logger.info(f"[dimension_runtime] {dimension_key}: 加载分层跨层依赖 L1={len(layer1_deps)} L2={len(layer2_deps)} 个")
+
+    return l1_deps, l2_deps, same_layer_contexts
+
+
 async def publish_dimension_start(
     session_id: str,
     dimension_key: str,
@@ -477,6 +567,7 @@ __all__ = [
     "DependencyError",
     "run_rag",
     "load_dependency_reports",
+    "load_layered_dependency_reports",
     "publish_dimension_start",
     "publish_dimension_delta",
     "publish_dimension_complete",
