@@ -29,7 +29,7 @@ from ..advisory_crosswalks import (
     get_planning_zone_from_landuse,
     normalize_landuse,
 )
-from .semantic_fields import SemanticMetadata
+from .provenance import SemanticMetadata
 
 
 # ── Zone spatial preference ─────────────────────────────────────────

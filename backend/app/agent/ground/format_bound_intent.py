@@ -23,7 +23,7 @@ from app.modules.schema.contracts.parse_contracts import (
     SpatialPlanningIntent,
     ZoneTarget,
 )
-from app.modules.schema.contracts.semantic_fields import SemanticMetadata
+from app.modules.schema.contracts.provenance import SemanticMetadata
 
 
 def _feature_props(features: Mapping[str, Any]) -> Iterable[Dict[str, Any]]:

@@ -1,0 +1,9 @@
+from __future__ import annotations
+
+from typing import Any, Protocol
+
+
+class SemanticQueryPort(Protocol):
+    def query_entities(self, run_id: str, query: str, limit: int = 10) -> list[dict[str, Any]]: ...
+    def query_relations(self, run_id: str, entity_id: str, relation: str) -> list[dict[str, Any]]: ...
+    def resolve_ambiguous(self, run_id: str, name: str, candidates: list[str]) -> str | None: ...

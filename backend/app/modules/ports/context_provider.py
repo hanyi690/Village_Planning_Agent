@@ -1,0 +1,9 @@
+from __future__ import annotations
+
+from typing import Any, Protocol
+
+
+class ContextProviderPort(Protocol):
+    def get_context(self, run_id: str) -> Any: ...
+    def get_dataset(self, run_id: str, dataset_id: str) -> Any: ...
+    def get_version(self, run_id: str) -> str: ...

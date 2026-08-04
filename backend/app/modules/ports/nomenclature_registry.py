@@ -1,0 +1,9 @@
+from __future__ import annotations
+
+from typing import Protocol
+
+
+class NomenclatureRegistryPort(Protocol):
+    def get_canonical_name(self, system: str, code: str) -> str: ...
+    def get_code(self, system: str, canonical_name: str) -> str: ...
+    def list_by_system(self, system: str) -> list[tuple[str, str]]: ...

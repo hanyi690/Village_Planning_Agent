@@ -7,7 +7,9 @@
 - context_contracts.py:   spatial cognition cards (ContextBlock-based)
 """
 
-from .semantic_fields import *  # noqa: F401,F403
+from .contract_meta import *  # noqa: F401,F403
+from .provenance import *  # noqa: F401,F403
+from .classification_ref import *  # noqa: F401,F403
 from .parse_contracts import *  # noqa: F401,F403
 from .execution_contracts import *  # noqa: F401,F403
 from .validation_contracts import *  # noqa: F401,F403

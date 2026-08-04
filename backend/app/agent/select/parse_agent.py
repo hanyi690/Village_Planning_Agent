@@ -29,7 +29,7 @@ from app.modules.schema.contracts.parse_contracts import (
     SpatialPreference,
     ZoneTarget,
 )
-from app.modules.schema.contracts.semantic_fields import SemanticMetadata
+from app.modules.schema.contracts.provenance import SemanticMetadata
 from app.modules.parsing.spatial_language import direction_from_location
 from app.utils.logger import get_logger
 
