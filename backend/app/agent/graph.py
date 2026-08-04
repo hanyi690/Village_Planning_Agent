@@ -19,8 +19,7 @@ from langchain_core.messages import AIMessage
 
 from app.agent.plan_state.state import AgentState, create_initial_state
 from app.agent.bootstrap.phase_machine import PlanningPhase, get_layer_dimensions
-from .routing import after_conversation, after_analysis
-from .conversation import conversation_node
+from app.agent.conversation_router import after_conversation, after_analysis, conversation_node
 from .tools import execute_tools_node
 from .analysis import analyze_dimension, DIMENSION_NAMES
 from .completion import layer_completion_check

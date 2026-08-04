@@ -6,6 +6,8 @@ the model can choose between routing intents and actual tool calls.
 
 System prompt is built via ChatPromptTemplate so the template is reusable,
 cacheable, and testable in isolation.
+
+Migrated from agent/conversation/node.py per docs/architecture/agent-graph.md §5.
 """
 
 from typing import Dict, Any, Optional
@@ -14,7 +16,7 @@ from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain_core.runnables import RunnableSerializable
 
 from app.core.settings import LLM_MODEL, MAX_TOKENS
-from ...core.llm import create_llm
+from app.core.llm import create_llm
 from app.utils.logger import get_logger
 from app.agent.bootstrap.phase_machine import PlanningPhase, PHASE_DESCRIPTIONS
 from app.tools.intent_tools import advance_planning_intent, gis_analysis

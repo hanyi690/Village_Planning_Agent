@@ -7,6 +7,8 @@
 路由函数：
 - after_conversation: 对话后路由（级联修订、推进意图）
 - after_analysis: 分析后路由（层级完成、波次推进）
+
+Migrated from agent/routing.py per docs/architecture/agent-graph.md §5.
 """
 
 from typing import Union, List, Dict, Any, Optional
@@ -15,10 +17,10 @@ from langgraph.types import Send
 from langchain_core.messages import AIMessage
 
 from app.agent.bootstrap.phase_machine import PlanningPhase, get_layer_dimensions, _phase_to_layer
-from ..config import get_dimension_layer
-from ..config.dependency import get_impact_tree_compat, get_next_revision_wave
-from ..tools.intent_tools import advance_planning_intent, gis_analysis
-from ..utils.logger import get_logger
+from app.config import get_dimension_layer
+from app.config.dependency import get_impact_tree_compat, get_next_revision_wave
+from app.tools.intent_tools import advance_planning_intent, gis_analysis
+from app.utils.logger import get_logger
 
 
 logger = get_logger(__name__)
@@ -174,7 +176,7 @@ def after_analysis(
         all_completed = baseline_dims + revision_completed
 
         # 检查哪些维度的依赖已完成
-        from ..config.loader import list_dimensions, get_dimension_layer
+        from app.config.loader import list_dimensions, get_dimension_layer
 
         logger.info(
             "[after_analysis] Checking deps: all_completed=%s",
@@ -253,7 +255,7 @@ def after_analysis(
     total_dims = get_layer_dimensions(layer)
 
     # 检查同层依赖，只分发依赖已完成的 dimensions
-    from ..config.loader import list_dimensions
+    from app.config.loader import list_dimensions
 
     dim_configs = list_dimensions(layer)
     ready_dims = []
@@ -345,7 +347,7 @@ def _dispatch_current(state: Dict[str, Any]) -> Union[List[Send], str]:
         return END
 
     # 只分发同层依赖已完成的维度
-    from ..config.loader import list_dimensions
+    from app.config.loader import list_dimensions
     dim_configs = list_dimensions(layer)
     config_map = {d.key: d for d in dim_configs}
 
