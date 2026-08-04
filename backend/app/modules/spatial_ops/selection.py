@@ -187,3 +187,27 @@ def score_candidates(
         scored.append(ScoredCandidate(bsm=c.bsm, score=score, distance_m=c.distance_m))
     scored.sort(key=lambda s: s.score, reverse=True)
     return scored
+
+
+def place_anchor_point(
+    geometry: Dict[str, Any],
+    cluster_centroid: Optional[Tuple[float, float]] = None,
+    small_area_ha: float = 2.0,
+) -> Optional[Tuple[float, float]]:
+    from shapely.geometry import Point, shape
+
+    try:
+        geom = shape(geometry)
+    except Exception:
+        return None
+    if geom.is_empty:
+        return None
+    rep = geom.representative_point()
+    if cluster_centroid is None:
+        return (rep.x, rep.y)
+    if compute_area_ha(geometry) > small_area_ha and geom.geom_type in ("Polygon", "MultiPolygon"):
+        exterior = geom.exterior if geom.geom_type == "Polygon" else geom.convex_hull.exterior
+        target = Point(cluster_centroid)
+        nearest = exterior.interpolate(exterior.project(target))
+        return (nearest.x, nearest.y)
+    return (rep.x, rep.y)

@@ -151,3 +151,39 @@ def test_score_sorted_desc():
     )
     scores = [s.score for s in scored]
     assert scores == sorted(scores, reverse=True)
+
+
+from shapely.geometry import Point, shape
+from app.modules.spatial_ops.selection import place_anchor_point
+
+
+def _big_geom(cx: float = 0.0, cy: float = 0.0):
+    return {"type": "Polygon", "coordinates": [[[cx, cy], [cx + 0.1, cy], [cx + 0.1, cy + 0.1], [cx, cy + 0.1], [cx, cy]]]}
+
+
+def _small_geom(cx: float = 0.0, cy: float = 0.0):
+    return {"type": "Polygon", "coordinates": [[[cx, cy], [cx + 0.001, cy], [cx + 0.001, cy + 0.001], [cx, cy + 0.001], [cx, cy]]]}
+
+
+def test_small_parcel_uses_representative_point():
+    pt = place_anchor_point(_small_geom(5.0, 5.0), cluster_centroid=(0.0, 0.0))
+    assert pt is not None
+    assert shape(_small_geom(5.0, 5.0)).contains(Point(pt))
+
+
+def test_large_parcel_hugs_cluster():
+    cluster = (0.0, 0.0)
+    pt = place_anchor_point(_big_geom(10.0, 10.0), cluster_centroid=cluster)
+    dist_no_anchor = Point(place_anchor_point(_big_geom(10.0, 10.0))).distance(Point(cluster))
+    dist_anchored = Point(pt).distance(Point(cluster))
+    assert dist_anchored < dist_no_anchor
+
+
+def test_no_cluster_uses_representative_point():
+    pt = place_anchor_point(_big_geom(5.0, 5.0))
+    assert pt is not None
+    assert shape(_big_geom(5.0, 5.0)).contains(Point(pt))
+
+
+def test_invalid_geometry_returns_none():
+    assert place_anchor_point(None) is None
