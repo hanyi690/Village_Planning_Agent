@@ -15,7 +15,7 @@ from __future__ import annotations
 import logging
 from typing import Any, Dict, List, Optional, Tuple
 
-from app.agent.select_graph.adapter import filter_parcels_for_target, grounding_to_candidate_parcels
+from app.agent.select.adapter import filter_parcels_for_target, grounding_to_candidate_parcels
 from app.modules.context.planning_context import PlanningContext
 from app.modules.schema.contracts.grounding_contracts import GroundingResult
 from app.modules.schema.contracts.parse_contracts import ProjectTarget
@@ -180,7 +180,7 @@ def build_site_selection_decision(
         provenance=Provenance(
             source="select_aggregate",
             run_id=run_id,
-            module="app.agent.select_graph.aggregate",
+            module="app.agent.select.aggregate",
             trace=[f"session:{session_id}"],
             natural_language_description=(
                 f"SELECT aggregate for {len(placements)} targets"

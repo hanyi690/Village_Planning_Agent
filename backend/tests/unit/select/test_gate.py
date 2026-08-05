@@ -1,6 +1,6 @@
 """SELECT gate tests - evaluate_select_gate / select_gate_route."""
 
-from app.agent.select_graph.gate import evaluate_select_gate, select_gate_route
+from app.agent.select.gate import evaluate_select_gate, select_gate_route
 from app.modules.schema.contracts.selection_contracts import (
     EliminatedCandidate,
     RankedCandidate,

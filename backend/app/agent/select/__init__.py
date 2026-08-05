@@ -1,11 +1,28 @@
-﻿"""SELECT Agent subpackage - re-exports for backward compatibility.
+"""SELECT subgraph — candidate parcel ranking and selection.
 
-Wave M2: parse_agent.py has been deleted. parse/parse_async/ParseResult
-now live in app.modules.parsing.text_parser. This file re-exports them
-for backward compatibility with any code that imports from app.agent.select.
+Consumes GROUND's GroundingResult and exposes an adapter from CandidateSite
+(source_parcels) to the legacy CandidateParcel that SELECT scoring consumes.
 """
 
-from app.modules.parsing.text_parser import parse, parse_async, ParseResult
-from .parse_state import ParseAgentState, SectionInfo
+from __future__ import annotations
 
-__all__ = ["parse", "parse_async", "ParseResult", "ParseAgentState", "SectionInfo"]
+from .adapter import candidate_site_to_parcels, grounding_to_candidate_parcels
+from .aggregate import (
+    build_land_design_brief,
+    build_site_selection_decision,
+    select_aggregate,
+)
+from .gate import evaluate_select_gate, select_gate_route
+from .review import build_preview_geojson, build_select_review_package
+
+__all__ = [
+    "candidate_site_to_parcels",
+    "grounding_to_candidate_parcels",
+    "select_aggregate",
+    "build_site_selection_decision",
+    "build_land_design_brief",
+    "evaluate_select_gate",
+    "select_gate_route",
+    "build_select_review_package",
+    "build_preview_geojson",
+]

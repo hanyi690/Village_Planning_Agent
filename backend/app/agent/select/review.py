@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from app.agent.select_graph.gate import select_gate_route
+from app.agent.select.gate import select_gate_route
 from app.modules.schema.contracts.grounding_contracts import GroundingResult
 from app.modules.schema.contracts.selection_contracts import (
     LandDesignBrief,

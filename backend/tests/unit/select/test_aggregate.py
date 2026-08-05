@@ -1,6 +1,6 @@
 """Unit tests for the SELECT aggregate (select_aggregate)."""
 
-from app.agent.select_graph.aggregate import (
+from app.agent.select.aggregate import (
     build_land_design_brief,
     select_aggregate,
 )

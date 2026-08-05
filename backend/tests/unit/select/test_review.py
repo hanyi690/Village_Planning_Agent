@@ -2,8 +2,8 @@
 
 import json
 
-from app.agent.select_graph.gate import evaluate_select_gate
-from app.agent.select_graph.review import (
+from app.agent.select.gate import evaluate_select_gate
+from app.agent.select.review import (
     build_preview_geojson,
     build_select_review_package,
 )

@@ -30,11 +30,11 @@ from app.agent.execute.land_design_worker import design_all
 from app.agent.ground.aggregate import ground_aggregate
 from app.agent.l3_plan.aggregate import merge_program_fragments
 from app.agent.parse.aggregate import compile_program
-from app.agent.select_graph.adapter import (
+from app.agent.select.adapter import (
     filter_parcels_for_target,
     grounding_to_candidate_parcels,
 )
-from app.agent.select_graph.aggregate import select_aggregate
+from app.agent.select.aggregate import select_aggregate
 from app.agent.validate.aggregate import validate_aggregate
 from app.modules.context.planning_context import PlanningContext
 from app.modules.parsing.compiler.core import compile_dimension_report

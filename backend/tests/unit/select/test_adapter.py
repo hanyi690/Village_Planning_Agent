@@ -2,7 +2,7 @@
 
 import pytest
 
-from app.agent.select_graph.adapter import candidate_site_to_parcels, grounding_to_candidate_parcels
+from app.agent.select.adapter import candidate_site_to_parcels, grounding_to_candidate_parcels
 from app.modules.schema import DLBM_TO_DLMC
 from app.modules.schema.contracts.grounding_contracts import CandidateSite, GroundingResult
 

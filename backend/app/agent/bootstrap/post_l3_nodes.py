@@ -16,8 +16,8 @@ from app.agent.ground.aggregate import ground_aggregate, retrieve_evidence
 from app.agent.ground.gate import evaluate_ground_gate
 from app.agent.parse.aggregate import compile_program_async
 from app.agent.parse.gate_node import evaluate_parse_gate
-from app.agent.select_graph.aggregate import select_aggregate
-from app.agent.select_graph.gate import evaluate_select_gate
+from app.agent.select.aggregate import select_aggregate
+from app.agent.select.gate import evaluate_select_gate
 from app.modules.schema.contracts.grounding_contracts import SpatialQueryEvidence
 from app.utils.logger import get_logger
 

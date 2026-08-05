@@ -2,11 +2,11 @@
 
 import pytest
 
-from app.agent.select_graph.adapter import (
+from app.agent.select.adapter import (
     filter_parcels_for_target,
     grounding_to_candidate_parcels,
 )
-from app.agent.select_graph.aggregate import select_aggregate
+from app.agent.select.aggregate import select_aggregate
 from app.modules.context.planning_context import PlanningContext
 from app.modules.schema.contracts.grounding_contracts import CandidateSite, GroundingResult
 from app.modules.schema.contracts.parse_contracts import FacilityTarget, ProjectTarget, SpatialPlanningIntent

@@ -5,7 +5,7 @@ layer (app.modules.kg) and from the legacy parse agent (app.agent.select). The
 independent spatial_ops scan locks selection.py as a pure module with no
 app.agent imports. The AST scan is authoritative; the sys.modules snapshot is a
 best-effort delta check (it only flags kg modules newly loaded by importing the
-select_graph package, so it tolerates kg being pre-loaded by other fixtures in
+select package, so it tolerates kg being pre-loaded by other fixtures in
 the full suite).
 """
 from __future__ import annotations
@@ -15,7 +15,7 @@ import pathlib
 import sys
 
 _PACKAGE_ROOT = pathlib.Path(__file__).resolve().parents[3] / "app"
-_SELECT_GRAPH_DIR = _PACKAGE_ROOT / "agent" / "select_graph"
+_SELECT_DIR = _PACKAGE_ROOT / "agent" / "select"
 _SPATIAL_OPS_SELECTION_FILE = _PACKAGE_ROOT / "modules" / "spatial_ops" / "selection.py"
 
 
@@ -67,35 +67,28 @@ def _test_matcher_detects_forbidden_import():
     assert _matches_any(refs[3], ("app.agent.select",))
 
 
-def test_select_graph_package_no_kg_imports():
+def test_select_package_no_kg_imports():
     _test_matcher_detects_forbidden_import()
-    offenders = _scan_for(_SELECT_GRAPH_DIR, ("app.modules.kg",))
-    assert not offenders, "select_graph imports kg:\n" + "\n".join(offenders)
+    offenders = _scan_for(_SELECT_DIR, ("app.modules.kg",))
+    assert not offenders, "select imports kg:\n" + "\n".join(offenders)
 
 
-def test_select_graph_package_no_agent_select_imports():
-    offenders = _scan_for(_SELECT_GRAPH_DIR, ("app.agent.select",))
-    assert not offenders, "select_graph imports app.agent.select:\n" + "\n".join(
-        offenders
-    )
-
-
-def test_select_graph_package_no_legacy_parse_agent():
-    offenders = _scan_for(_SELECT_GRAPH_DIR, ("app.agent.select.parse_agent",))
+def test_select_package_no_legacy_parse_agent():
+    offenders = _scan_for(_SELECT_DIR, ("app.agent.select.parse_agent",))
     assert not offenders, (
-        "select_graph imports app.agent.select.parse_agent:\n" + "\n".join(offenders)
+        "select imports app.agent.select.parse_agent:\n" + "\n".join(offenders)
     )
 
 
-def test_import_select_graph_loads_no_kg_modules():
+def test_import_select_loads_no_kg_modules():
     before = set(sys.modules)
-    import app.agent.select_graph  # noqa: F401
+    import app.agent.select  # noqa: F401
 
     new_modules = set(sys.modules) - before
     offenders = [
         name for name in new_modules if name.startswith("app.modules.kg")
     ]
-    assert not offenders, "importing select_graph loaded kg modules: " + ", ".join(
+    assert not offenders, "importing select loaded kg modules: " + ", ".join(
         sorted(offenders)
     )
 
@@ -109,7 +102,7 @@ _ALLOWED_APP_ROOTS = (
     "app.modules.schema",
     "app.modules.context",
     "app.modules.spatial_ops",
-    "app.agent.select_graph",
+    "app.agent.select",
     "app.modules.ports",
 )
 
@@ -120,14 +113,14 @@ def _disallowed_app_imports(node):
             yield ref
 
 
-def test_select_graph_imports_only_allowed_modules():
+def test_select_imports_only_allowed_modules():
     offenders = []
-    for file in _py_files(_SELECT_GRAPH_DIR):
+    for file in _py_files(_SELECT_DIR):
         tree = ast.parse(file.read_text(encoding="utf-8-sig"))
         for node in ast.walk(tree):
             for ref in _disallowed_app_imports(node):
                 offenders.append(f"{file.name}: {ref!r}")
     assert not offenders, (
-        "select_graph reaches beyond schema/context/spatial_ops/ports/select_graph:\n"
+        "select reaches beyond schema/context/spatial_ops/ports/select:\n"
         + "\n".join(offenders)
     )
