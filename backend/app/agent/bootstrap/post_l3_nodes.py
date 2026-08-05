@@ -18,7 +18,6 @@ from app.agent.parse.aggregate import compile_program_async
 from app.agent.parse.gate_node import evaluate_parse_gate
 from app.agent.select_graph.aggregate import select_aggregate
 from app.agent.select_graph.gate import evaluate_select_gate
-from app.agent.zoning.aggregate import zoning_node
 from app.modules.schema.contracts.grounding_contracts import SpatialQueryEvidence
 from app.utils.logger import get_logger
 
@@ -150,6 +149,48 @@ def _resolve_context(state: PostL3ChainState) -> Any:
     return None
 
 
+async def _record_step_report(
+    state: PostL3ChainState, stage: str, *,
+    inputs: dict, outputs: dict, artifacts: list | None = None,
+    diagnostics: dict | None = None,
+) -> None:
+    """Non-fatal: record a StepReport for a post-L3 stage."""
+    try:
+        from app.services.step_report import save_step_report
+
+        await save_step_report(
+            session_id=state.session_id, stage=stage,
+            step_name=f"post_l3:{stage.lower()}",
+            layer=3, inputs=inputs, outputs=outputs,
+            artifacts=artifacts or [], diagnostics=diagnostics or {},
+        )
+    except Exception:
+        pass
+
+
+def _persist_artifact(run_id: str, module: str, artifact_type: str, payload: Any, *, context_version: str = "") -> dict:
+    """Store a typed artifact to FilesystemArtifactStore; return the ArtifactRef dict.
+
+    Non-fatal: any storage failure (missing run_id, unserializable payload,
+    IO error) yields ``{}`` so the chain node still returns normally.
+    """
+    try:
+        from app.modules.ports.artifact_store import ArtifactRef
+        from app.services.artifact_store import FilesystemArtifactStore
+
+        ref = ArtifactRef(
+            context_version=context_version,
+            artifact_id=f"{module}-{run_id}-v1",
+            module=module, run_id=run_id,
+            artifact_type=artifact_type, revision="v1",
+        )
+        payload_json = payload.model_dump(mode="json") if hasattr(payload, "model_dump") else payload
+        FilesystemArtifactStore().store(ref, payload_json)
+        return ref.model_dump(mode="json")
+    except Exception:
+        return {}
+
+
 async def parse_node(state: PostL3ChainState) -> dict[str, Any]:
     """PARSE node: compile PlanningProgram -> IntentCompilationResult + specs."""
     retry_patch = _retry_patch(state, "parse")
@@ -161,6 +202,19 @@ async def parse_node(state: PostL3ChainState) -> dict[str, Any]:
         program,
         run_id=run_id,
         context_version=state.context_version,
+    )
+    intent = getattr(result, "typed_intent", None)
+    await _record_step_report(
+        state, "PARSE",
+        inputs={
+            "program_ref": getattr(program, "artifact_id", "") if program is not None else "",
+            "planning_program": bool(program),
+        },
+        outputs={
+            "projects": len(getattr(intent, "project_targets", None) or []),
+            "specs": len(specs or []),
+        },
+        diagnostics={"gate_route": _gate_route(gate)},
     )
     return {
         "intent": result,
@@ -195,10 +249,25 @@ async def ground_node(state: PostL3ChainState) -> dict[str, Any]:
                 if hasattr(candidate, "evidence_refs"):
                     candidate.evidence_refs.extend(refs)
     gate = evaluate_ground_gate(result)
+    run_id = state.run_id or state.session_id
+    await _record_step_report(
+        state, "GROUND",
+        inputs={"specs_count": len(state.specs or [])},
+        outputs={
+            "candidates_count": len(getattr(result, "candidates", None) or []),
+            "unresolved_count": len(getattr(result, "unresolved", None) or []),
+        },
+        diagnostics={"gate_route": _gate_route(gate)},
+    )
+    grounding_result_ref = _persist_artifact(
+        run_id, "ground", "GroundingResult", result,
+        context_version=state.context_version,
+    )
     return {
         "grounding_result": result,
         "ground_gate": gate,
         "upstream_gates": _accumulate_gate(state.upstream_gates, gate),
+        "grounding_result_ref": grounding_result_ref,
         **retry_patch,
     }
 
@@ -212,11 +281,26 @@ async def select_node(state: PostL3ChainState) -> dict[str, Any]:
     )
     projects = list(getattr(state.intent, "project_targets", None) or [])
     gate = evaluate_select_gate(decision, target_count=len(projects))
+    run_id = state.run_id or state.session_id
+    await _record_step_report(
+        state, "SELECT",
+        inputs={"target_count": len(projects)},
+        outputs={
+            "selected_count": len(getattr(decision, "selected_combination", None) or []),
+            "briefs_count": len(briefs or []),
+        },
+        diagnostics={"gate_route": _gate_route(gate)},
+    )
+    site_selection_ref = _persist_artifact(
+        run_id, "select", "SiteSelectionDecision", decision,
+        context_version=state.context_version,
+    )
     return {
         "site_selection": decision,
         "land_design_briefs": briefs,
         "select_gate": gate,
         "upstream_gates": _accumulate_gate(state.upstream_gates, gate),
+        "site_selection_ref": site_selection_ref,
         **retry_patch,
     }
 
@@ -259,12 +343,33 @@ async def execute_node(state: PostL3ChainState) -> dict[str, Any]:
         logger.warning("[post_l3:execute] no parcel_changeset produced")
         planned_state = None
 
+    run_id = state.run_id or state.session_id
+    await _record_step_report(
+        state, "EXECUTE",
+        inputs={},
+        outputs={
+            "changeset_changes": len(getattr(changeset, "changes", None) or []),
+            "planned_state_parcels": len(getattr(planned_state, "parcels", None) or []),
+            "layout_count": len(result.get("layout_configs", []) or []),
+        },
+        diagnostics={"execution_errors": result.get("execution_errors", []) or []},
+    )
+    parcel_changeset_ref = _persist_artifact(
+        run_id, "execute", "ParcelChangeSet", changeset,
+        context_version=state.context_version,
+    )
+    planned_state_ref = _persist_artifact(
+        run_id, "execute", "PlannedState", planned_state,
+        context_version=state.context_version,
+    )
     return {
         "planned_state": planned_state,
         "parcel_changeset": changeset,
         "layout_configs": list(result.get("layout_configs", []) or []),
         "allocated_geojson": result.get("allocated_geojson", {}) or {},
         "execution_errors": list(result.get("execution_errors", []) or []),
+        "parcel_changeset_ref": parcel_changeset_ref,
+        "planned_state_ref": planned_state_ref,
     }
 
 
@@ -285,10 +390,25 @@ async def validate_node(state: PostL3ChainState) -> dict[str, Any]:
         run_id=state.run_id or state.session_id,
     )
     gate = evaluate_validate_gate(report)
+    run_id = state.run_id or state.session_id
+    await _record_step_report(
+        state, "VALIDATE",
+        inputs={},
+        outputs={
+            "overall_passed": bool(getattr(report, "overall_passed", False)),
+            "checks_count": len(getattr(report, "checks", None) or []),
+        },
+        diagnostics={"gate_route": _gate_route(gate)},
+    )
+    validation_report_ref = _persist_artifact(
+        run_id, "validate", "ValidationReport", report,
+        context_version=state.context_version,
+    )
     return {
         "validation_report": report,
         "validate_gate": gate,
         "upstream_gates": _accumulate_gate(state.upstream_gates, gate),
+        "validation_report_ref": validation_report_ref,
         **retry_patch,
     }
 
@@ -310,10 +430,26 @@ async def reconcile_node(state: PostL3ChainState) -> dict[str, Any]:
         run_id=state.run_id or state.session_id,
     )
     gate = evaluate_reconcile_gate(report)
+    run_id = state.run_id or state.session_id
+    coverage = getattr(report, "coverage_matrix", None)
+    await _record_step_report(
+        state, "RECONCILE",
+        inputs={},
+        outputs={
+            "inconsistencies_count": len(getattr(report, "inconsistencies", None) or []),
+            "coverage_rows": len(getattr(coverage, "rows", None) or []),
+        },
+        diagnostics={"gate_route": _gate_route(gate)},
+    )
+    reconciliation_report_ref = _persist_artifact(
+        run_id, "reconcile", "ReconciliationReport", report,
+        context_version=state.context_version,
+    )
     return {
         "reconciliation_report": report,
         "reconcile_gate": gate,
         "upstream_gates": _accumulate_gate(state.upstream_gates, gate),
+        "reconciliation_report_ref": reconciliation_report_ref,
         **retry_patch,
     }
 
@@ -366,6 +502,18 @@ async def deliver_node(state: PostL3ChainState) -> dict[str, Any]:
         run_id=state.run_id or state.session_id,
     )
     gate = evaluate_deliver_gate(manifest)
+    await _record_step_report(
+        state, "DELIVER",
+        inputs={},
+        outputs={
+            "manifest_deliverables": len(getattr(manifest, "deliverables", None) or []),
+            "statutory_complete": bool(getattr(manifest, "statutory_complete", False)),
+        },
+        diagnostics={
+            "gate_route": _gate_route(gate),
+            "export_status": (export_result or {}).get("status", ""),
+        },
+    )
     return {
         "delivery_manifest": manifest,
         "deliver_gate": gate,
@@ -473,7 +621,6 @@ __all__ = [
     "reconcile_node",
     "deliver_node",
     "human_review_node",
-    "zoning_node",
     "retrieve_evidence",
     "_gate_route",
     "_gate_failure_context",

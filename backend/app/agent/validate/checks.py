@@ -29,6 +29,7 @@ from types import SimpleNamespace
 from typing import Any, List, Optional
 
 from app.modules.schema.contracts.validation_report_contracts import ValidationCheck
+from app.modules.spatial_ops.selection import _PROHIBITED_CONSTRAINTS
 
 _AREA_TOLERANCE = 0.05
 _POLYGON_TYPES = ("Polygon", "MultiPolygon")
@@ -47,15 +48,6 @@ _POLYGON_LAYER_TYPES = {
     "zone_layer",
     "project_layer",
     "polygon_layer",
-}
-
-_PROHIBITED_CONSTRAINTS = {
-    "farmland_protection",
-    "ecological_redline",
-    "historical_protection",
-    "cultivated_land_target",
-    "hazard_control_line",
-    "flood_control_line",
 }
 
 

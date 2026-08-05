@@ -1,6 +1,6 @@
 """End-to-end deterministic acceptance test for the village-planning chain.
 
-Drives the full PARSE -> GROUND -> SELECT -> EXECUTE -> ZONING -> VALIDATE
+Drives the full PARSE -> GROUND -> SELECT -> EXECUTE -> VALIDATE
 pipeline on a synthetic 8-parcel village using a pre-written L3 report and a
 fake spatial resolver. No LLM, no DB, no network: every stage is
 deterministic and the whole chain is executed synchronously in one test.
@@ -14,8 +14,7 @@ Verified quirks (read from source before writing this test):
   - The legacy intent builder in ``compile_node._build_legacy_intent`` maps
     ``category == "zone"`` interventions onto ``project_targets`` (only
     ``restoration``/``protection`` become ``zone_targets``), so
-    ``intent.zone_targets`` stays empty and the ZONING stage fills "unassigned"
-    assignments from the remaining land-use parcels.
+    ``intent.zone_targets`` stays empty.
   - ``design_project_footprint`` decides a split via ``geom.area / 10000``,
     which only yields real hectares for metre-unit coordinates. Degree-unit
     coordinates would give ~1e-7 "ha" and never split, so the parcels here use
@@ -37,7 +36,6 @@ from app.agent.select_graph.adapter import (
 )
 from app.agent.select_graph.aggregate import select_aggregate
 from app.agent.validate.aggregate import validate_aggregate
-from app.agent.zoning.aggregate import zoning_aggregate
 from app.modules.context.planning_context import PlanningContext
 from app.modules.parsing.compiler.core import compile_dimension_report
 from app.modules.ports.planning_ports import PlanningPorts
@@ -251,13 +249,14 @@ def test_planning_chain_e2e():
     assert industrial_creates, "industrial split must produce a create change"
     assert industrial_preserves, "industrial split must leave a preserve remainder"
 
-    # ── ZONING ─────────────────────────────────────────────────────────
-    zone_assignments, zone_changes = zoning_aggregate(intent, changeset, context)
-    assert zone_assignments, "ZONING must assign the remaining parcels"
-    assert len(zone_changes) >= 0
-    assert any(
-        a.source in ("zone_target", "preserve", "unassigned") for a in zone_assignments
-    ), "zone assignments must carry a recognized source"
+    # ── EXECUTE layout verification ────────────────────────────────────
+    # Wave O removed the standalone ZONING node; EXECUTE is now the sole
+    # producer of the parcel/layout layer. Verify the changeset is non-empty
+    # and fully traceable (there is no separate zoning layer).
+    assert changeset.changes, "EXECUTE layout must be non-empty"
+    assert all(c.project_ref for c in changeset.changes), (
+        "every EXECUTE change must trace to a project"
+    )
 
     # ── VALIDATE ───────────────────────────────────────────────────────
     report = validate_aggregate(
@@ -272,8 +271,7 @@ def test_planning_chain_e2e():
         "VALIDATE report must contain the traceability check"
     )
 
-    # ── Final acceptance: non-empty traceable project + zoning layers ──
+    # ── Final acceptance: non-empty traceable project layer ───────────
     traced = [c for c in changeset.changes if c.project_ref]
     assert traced, "project layer must be non-empty"
     assert all(c.project_ref for c in traced), "every project change must be traceable"
-    assert zone_assignments, "zoning layer must be non-empty"

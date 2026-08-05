@@ -56,8 +56,13 @@ class PostL3ChainState(BaseModel):
     execution_errors: List[Dict[str, Any]] = Field(default_factory=list)
     execute_gate: Any = None
 
-    # ── ZONING output ──
-    zone_assignments: List[Any] = Field(default_factory=list)  # list[ZoneAssignment]
+    # ── Artifact refs (FilesystemArtifactStore, Wave O) ──
+    grounding_result_ref: Dict[str, Any] = Field(default_factory=dict)
+    site_selection_ref: Dict[str, Any] = Field(default_factory=dict)
+    parcel_changeset_ref: Dict[str, Any] = Field(default_factory=dict)
+    planned_state_ref: Dict[str, Any] = Field(default_factory=dict)
+    validation_report_ref: Dict[str, Any] = Field(default_factory=dict)
+    reconciliation_report_ref: Dict[str, Any] = Field(default_factory=dict)
 
     # ── VALIDATE output ──
     validation_report: Any = None  # ValidationReport (typed)

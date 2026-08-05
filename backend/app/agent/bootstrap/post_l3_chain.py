@@ -27,7 +27,6 @@ from .post_l3_nodes import (
     reconcile_node,
     select_node,
     validate_node,
-    zoning_node,
 )
 from .post_l3_state import PostL3ChainState
 
@@ -159,7 +158,6 @@ def build_post_l3_chain(checkpointer=None):
     graph.add_node("ground", ground_node)
     graph.add_node("select", select_node)
     graph.add_node("execute", execute_node)
-    graph.add_node("zoning", zoning_node)
     graph.add_node("validate", validate_node)
     graph.add_node("reconcile", reconcile_node)
     graph.add_node("deliver", deliver_node)
@@ -178,8 +176,7 @@ def build_post_l3_chain(checkpointer=None):
         "select", _route_after_select,
         {"execute": "execute", "ground": "ground", "human_end": "human_review", "end": END},
     )
-    graph.add_edge("execute", "zoning")
-    graph.add_edge("zoning", "validate")
+    graph.add_edge("execute", "validate")
     graph.add_conditional_edges(
         "validate", _route_after_validate,
         {"reconcile": "reconcile", "execute": "execute", "select": "select",
