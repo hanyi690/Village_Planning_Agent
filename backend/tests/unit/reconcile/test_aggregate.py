@@ -177,3 +177,49 @@ def test_build_coverage_matrix_direct():
     matrix = build_coverage_matrix(program, specs, grounding, decision, changeset, planned)
     assert len(matrix.rows) == 1
     assert matrix.rows[0].status == "covered"
+
+
+def test_aggregate_order_independent_bsm_chain():
+    """P4: coverage matrix links are order-independent on the BSM chain.
+
+    selected_combination, changes and parcels are shuffled out of their natural
+    order; the candidate -> selection link is resolved semantically by BSM
+    membership in the candidate's source parcels, and the selection -> change ->
+    planned links are resolved by BSM equality. Only the intervention -> spec and
+    spec -> candidate links stay positional, because SpatialReferenceSpec and
+    CandidateSite carry no join IDs (no intervention_ref/spec_ref).
+    """
+    program = make_program(
+        [make_intervention("int-A"), make_intervention("int-B"), make_intervention("int-C")]
+    )
+    specs = make_specs(3)
+    grounding = make_grounding(
+        [
+            make_site("site-A", ["PA"]),
+            make_site("site-B", ["PB"]),
+            make_site("site-C", ["PC"]),
+        ]
+    )
+    decision = make_decision(["PB", "PC", "PA"])
+    changeset = make_changeset([make_change("PC"), make_change("PA"), make_change("PB")])
+    planned = make_planned_state(
+        [make_parcel("PB"), make_parcel("PC"), make_parcel("PA")]
+    )
+    result = reconcile_aggregate(program, specs, grounding, decision, changeset, planned, SpatialPlanningIntent())
+    rows = {row.intervention_id: row for row in result.coverage_matrix.rows}
+    assert set(rows) == {"int-A", "int-B", "int-C"}
+    for row in rows.values():
+        assert row.status == "covered"
+    assert rows["int-A"].candidate_site_id == "site-A"
+    assert rows["int-B"].candidate_site_id == "site-B"
+    assert rows["int-C"].candidate_site_id == "site-C"
+    assert rows["int-A"].selected_bsm == "PA"
+    assert rows["int-B"].selected_bsm == "PB"
+    assert rows["int-C"].selected_bsm == "PC"
+    assert rows["int-A"].change_bsm == "PA"
+    assert rows["int-B"].change_bsm == "PB"
+    assert rows["int-C"].change_bsm == "PC"
+    assert rows["int-A"].planned_parcel_bsm == "PA"
+    assert rows["int-B"].planned_parcel_bsm == "PB"
+    assert rows["int-C"].planned_parcel_bsm == "PC"
+    assert result.inconsistencies == []

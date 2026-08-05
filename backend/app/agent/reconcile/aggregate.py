@@ -61,9 +61,18 @@ def build_coverage_matrix(program, specs, grounding_result, decision, changeset,
     parcels = list(getattr(planned_state, "parcels", None) or [])
     rows: list[CoverageMatrixRow] = []
     for i, intervention in enumerate(interventions):
+        # intervention -> spec: SpatialReferenceSpec carries no intervention_ref/
+        # intervention_id, so there is no semantic key to join on; fall back to
+        # positional pairing (PARSE emits specs in intervention order).
         spec_index = i if i < len(specs) else None
+        # spec -> candidate: CandidateSite carries no spec_ref, so pairing is
+        # positional (GROUND emits candidates in resolved-spec order).
         candidate = candidates[i] if i < len(candidates) else None
-        selected_bsm = selected[i] if i < len(selected) else None
+        # candidate -> selection: selected_combination holds bare BSM strings
+        # with no site ref; link semantically by BSM membership in the candidate's
+        # source parcels so this link is order-independent.
+        candidate_bsms = set(getattr(candidate, "source_parcels", None) or []) if candidate else set()
+        selected_bsm = next((b for b in selected if b in candidate_bsms), None)
         change_bsm = None
         if selected_bsm:
             for change in changes:
