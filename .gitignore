@@ -65,8 +65,10 @@ frontend/public/test-data/
 # source-code output subpackages are not generated output
 !backend/app/modules/spatial_ops/output/
 !backend/app/modules/spatial_ops/output/**
+backend/app/modules/spatial_ops/output/__pycache__/
 !backend/app/modules/schema/output/
 !backend/app/modules/schema/output/**
+backend/app/modules/schema/output/__pycache__/
 
 # Next.js
 frontend/.next/
