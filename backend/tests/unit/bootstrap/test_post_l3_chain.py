@@ -29,14 +29,16 @@ def test_route_after_parse_pass():
 
 def test_route_after_parse_human():
     state = PostL3ChainState(parse_gate=_gate("HUMAN"))
-    assert _route_after_parse(state) == "end"
+    assert _route_after_parse(state) == "human_end"
 
 
-def test_route_after_deliver_always_end():
+def test_route_after_deliver_pass():
     state = PostL3ChainState(deliver_gate=_gate(None))
     assert _route_after_deliver(state) == "end"
-    state2 = PostL3ChainState(deliver_gate=_gate("RETRY_VALIDATE"))
-    assert _route_after_deliver(state2) == "end"
+
+def test_route_after_deliver_retry_validate():
+    state = PostL3ChainState(deliver_gate=_gate("RETRY_VALIDATE"), retry_counts={})
+    assert _route_after_deliver(state) == "validate"
 
 
 @pytest.mark.asyncio

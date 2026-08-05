@@ -222,6 +222,39 @@ async def deliver_node(state: PostL3ChainState) -> dict[str, Any]:
     }
 
 
+async def human_review_node(state: PostL3ChainState) -> dict[str, Any]:
+    """Collect human-review items from the gate that triggered HUMAN route.
+
+    Wave M2: this node is the terminal target for HUMAN routes. It reads
+    the most recent gate decision (whichever stage triggered HUMAN), extracts
+    its pending_requests, and populates human_review_items on state.
+    """
+    items: list[dict[str, Any]] = []
+
+    for gate_attr in (
+        "parse_gate", "ground_gate", "select_gate",
+        "validate_gate", "reconcile_gate", "deliver_gate",
+    ):
+        gate = getattr(state, gate_attr, None)
+        if gate is None:
+            continue
+        route = getattr(gate, "feedback_route", None)
+        if route is None and isinstance(gate, dict):
+            route = gate.get("feedback_route")
+        if route != "HUMAN":
+            continue
+        pending = getattr(gate, "pending_requests", None) or []
+        for pr in pending:
+            if hasattr(pr, "model_dump"):
+                items.append(pr.model_dump())
+            elif isinstance(pr, dict):
+                items.append(pr)
+        break  # only process the first HUMAN gate
+
+    logger.info("[post_l3:human_review] collected %d human review items", len(items))
+    return {"human_review_items": items}
+
+
 __all__ = [
     "parse_node",
     "ground_node",
@@ -230,4 +263,5 @@ __all__ = [
     "validate_node",
     "reconcile_node",
     "deliver_node",
+    "human_review_node",
 ]
