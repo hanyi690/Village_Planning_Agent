@@ -8,6 +8,7 @@ from enum import Enum
 from typing import Dict, List, Optional
 
 from app.config import get_layer_dimensions as _get_layer_dimensions, get_wave_config
+from app.modules.schema.layers import LAYER_NAMES, LAYER_NAMES_BY_NUMBER, get_layer_name
 
 DEFAULT_RAG_LAYER_CONFIG = {1: True, 2: False, 3: True}
 
@@ -70,14 +71,6 @@ PHASE_ORDER: List[str] = [
     PlanningPhase.COMPLETED.value
 ]
 
-LAYER_NAMES: Dict[str, str] = {
-    "layer1": "现状分析", "layer2": "规划思路", "layer3": "详细规划",
-}
-
-LAYER_NAMES_BY_NUMBER: Dict[int, str] = {
-    1: "现状分析", 2: "规划思路", 3: "详细规划",
-}
-
 PHASE_DESCRIPTIONS: Dict[str, str] = {
     PlanningPhase.INIT.value: "初始化阶段",
     PlanningPhase.LAYER1.value: "现状分析阶段",
@@ -90,10 +83,6 @@ PHASE_DESCRIPTIONS: Dict[str, str] = {
 # ==========================================
 # 辅助函数
 # ==========================================
-
-def get_layer_name(layer: int) -> str:
-    return LAYER_NAMES_BY_NUMBER.get(layer, f"Layer {layer}")
-
 
 def _phase_to_layer(phase: str) -> Optional[int]:
     """phase 转 layer"""
