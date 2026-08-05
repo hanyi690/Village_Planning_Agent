@@ -1,4 +1,4 @@
-﻿"""GIS Dev API — 8 endpoints for development/testing.
+"""GIS Dev API — 8 endpoints for development/testing.
 
 Production should disable this router. Each endpoint wraps GIS services
 for the frontend test-gis page.
@@ -409,7 +409,7 @@ async def _validate_ecological(request: ValidateRequest, t0: float) -> Dict[str,
 
 async def _validate_constraint(request: ValidateRequest, t0: float) -> Dict[str, Any]:
     from app.tools.gis._analytics.metrics_calculator import GISMetricsCalculator
-    from app.tools.gis._conflict.detector import ConflictDetector
+    from app.modules.spatial_ops.conflict.detector import ConflictDetector
 
     gis_data = load_all()
     summaries = GISMetricsCalculator.compute_summaries(gis_data)

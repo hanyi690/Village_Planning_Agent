@@ -1,11 +1,11 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 from pathlib import Path
 
 import numpy as np
 from PIL import Image
 
-from app.services.modules.gis.road.demo_terrain import _write_geotiff
+from tests.fixtures.road.demo_terrain import _write_geotiff
 
 
 def test_qgis_geotiff_declares_wgs84_and_nodata(tmp_path: Path) -> None:

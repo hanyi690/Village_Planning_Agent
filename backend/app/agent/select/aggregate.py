@@ -26,7 +26,7 @@ from app.modules.schema.contracts.selection_contracts import (
     RankedCandidate,
     SiteSelectionDecision,
 )
-from app.modules.spatial_ops.facility_location import (
+from app.modules.spatial_ops.selection.facility_location import (
     DemandPoint,
     FacilityCandidate,
     solve_maximal_covering,

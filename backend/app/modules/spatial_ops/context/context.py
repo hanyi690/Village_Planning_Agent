@@ -27,8 +27,15 @@ from app.modules.schema.contracts.context_contracts import (
 from app.modules.schema.types.canonical import VillageBundle
 from app.modules.schema.types.spatial_types import ANNOTATION_LABEL_TYPE_MAP
 
-from .geometry import _compute_centroid, _compute_total_area, _find_parcels_near_point
-from .relations import _compute_spatial_relations, _compute_zone_adjacency
+from app.modules.spatial_ops.geometry import (
+    _compute_centroid,
+    _compute_total_area,
+    _find_parcels_near_point,
+)
+from app.modules.spatial_ops.geometry.relations import (
+    _compute_spatial_relations,
+    _compute_zone_adjacency,
+)
 
 logger = get_logger(__name__)
 

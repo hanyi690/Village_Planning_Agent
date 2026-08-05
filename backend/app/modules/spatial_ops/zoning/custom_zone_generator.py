@@ -3,7 +3,6 @@ from typing import Iterable, List, Tuple
 from shapely.geometry.base import BaseGeometry
 from shapely.ops import unary_union
 
-from app.modules.kg.ontology import EntityTypes, ThreeLineSubtypes
 from app.modules.schema.contracts.custom_zone_contracts import (
     CustomZoneTarget,
     Vocabulary,
@@ -11,6 +10,11 @@ from app.modules.schema.contracts.custom_zone_contracts import (
 )
 from app.modules.schema.encodings.dicts.vocabularies.loader import get_vocabulary
 from app.modules.schema.provenance import ProvenanceAudit, ProvenanceSource
+
+# Three-line protection subtypes whose parcels must be excluded from custom zones.
+THREE_LINE_PROTECTION_SUBTYPES = ("ecological_redline", "farmland_redline")
+# L4 entity type label for vocabulary-driven functional zones.
+FUNCTIONAL_ZONE_ENTITY_TYPE = "FunctionalZone"
 
 
 def _truncate_by_area(parcels: List[dict], target_ha: float) -> List[dict]:
@@ -67,7 +71,7 @@ def _supplement_by_area(
 
     def _score(p):
         if rules and contexts:
-            from app.agent.execute.vocab_rules import rule_to_condition
+            from app.modules.spatial_ops.zoning.vocab_rules import rule_to_condition
             hit = 0
             for r in rules:
                 try:
@@ -96,7 +100,8 @@ class CustomZoningGenerator:
       parcels: iterable of dicts with ``bsm``, ``geometry``, optional ``dlbm``
       intent: dict (or SpatialPlanningIntent-shaped) with ``vocabulary_name``
               and ``custom_zone_targets`` (list of CustomZoneTarget)
-      three_lines: dict keyed by ThreeLineSubtypes → feature list (for
+      three_lines: dict keyed by three-line subtype (``ecological_redline`` /
+              ``farmland_redline``) → feature list (for
               protection-line intersection checks)
 
     Output:
@@ -184,7 +189,7 @@ class CustomZoningGenerator:
             confidence = round((target.confidence or 0.7) * (0.7 if supplemented else 1.0), 3)
             zones.append(
                 {
-                    "entity_type": EntityTypes.FunctionalZone,
+                    "entity_type": FUNCTIONAL_ZONE_ENTITY_TYPE,
                     "pln:vocabulary_name": self.vocabulary.name,
                     "pln:category_code": target.category_code,
                     "pln:category_name_zh": category.name_zh,
@@ -215,10 +220,10 @@ class CustomZoningGenerator:
 
         v5 multi-factor: dlbm_in / within_zone / not_within_zone /
         slope_lt / road_distance_lt / near_poi + and/any/not composites.
-        Evaluation delegates to ``app.agent.execute.vocab_rules`` (expr_eval),
+        Evaluation delegates to ``app.modules.spatial_ops.zoning.vocab_rules`` (expr_eval),
         removing the previous duplicate hand-rolled evaluator.
         """
-        from app.agent.execute.vocab_rules import evaluate_rules, parcel_to_context
+        from app.modules.spatial_ops.zoning.vocab_rules import evaluate_rules, parcel_to_context
 
         rules = category.typing_rules or []
         if not rules:
@@ -239,10 +244,7 @@ class CustomZoningGenerator:
 
     def _protection_geometry(self) -> BaseGeometry | None:
         geoms: List[BaseGeometry] = []
-        for subtype in (
-            ThreeLineSubtypes.ECOLOGICAL_REDLINE,
-            ThreeLineSubtypes.FARMLAND_REDLINE,
-        ):
+        for subtype in THREE_LINE_PROTECTION_SUBTYPES:
             for f in self.three_lines.get(subtype, []) or []:
                 g = f.get("geometry")
                 if g is not None:

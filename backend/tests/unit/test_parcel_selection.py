@@ -45,7 +45,7 @@ class _FakeConstraintIndex:
 
     def geometry_in_constraint(self, geometry):
         if self._block:
-            from app.modules.spatial_ops.bridge import ConstraintOverlap
+            from app.modules.spatial_ops.index.bridge import ConstraintOverlap
             return [ConstraintOverlap(bsm="", constraint_type=self._ctype)]
         return []
 

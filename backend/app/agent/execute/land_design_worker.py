@@ -24,7 +24,7 @@ from app.modules.schema.contracts.parse_contracts import (
 from app.modules.schema.contracts.selection_contracts import LandDesignBrief, SiteSelectionDecision
 from app.modules.spatial_ops.parcel_ops import create_parcel, merge_parcels, reclassify_parcel
 from app.modules.spatial_ops.selection import parse_scale_ha
-from app.modules.spatial_ops.subdivision import apply_setback, split_for_footprint
+from app.modules.spatial_ops.geometry.subdivision import apply_setback, split_for_footprint
 
 DEFAULT_CONSTRUCTION_CODE = "0701"
 

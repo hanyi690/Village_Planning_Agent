@@ -1,4 +1,4 @@
-"""Acceptance tests for Stage-1 deterministic road-network construction."""
+﻿"""Acceptance tests for Stage-1 deterministic road-network construction."""
 
 from __future__ import annotations
 
@@ -10,8 +10,8 @@ import geopandas as gpd
 import pytest
 from shapely.geometry import LineString
 
-from app.services.modules.gis.road.network_builder import RoadNetworkBuilder
-from app.services.modules.gis.road.schemas import NetworkBuildConfig
+from app.modules.spatial_ops.road.network_builder import RoadNetworkBuilder
+from app.modules.spatial_ops.road.schemas import NetworkBuildConfig
 
 
 def _gdf(lines: list[LineString]) -> gpd.GeoDataFrame:

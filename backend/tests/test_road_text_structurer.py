@@ -1,4 +1,4 @@
-"""Acceptance tests for Stage-2 evidence-backed structuring."""
+﻿"""Acceptance tests for Stage-2 evidence-backed structuring."""
 
 from __future__ import annotations
 
@@ -8,8 +8,8 @@ from pathlib import Path
 import openpyxl
 import pytest
 
-from app.services.modules.gis.road.schemas import Stage2StructureConfig
-from app.services.modules.gis.road.text_structurer import structure_road_requirements
+from app.modules.spatial_ops.road.schemas import Stage2StructureConfig
+from app.modules.spatial_ops.road.text_structurer import structure_road_requirements
 
 
 def _write_workbook(path: Path) -> None:

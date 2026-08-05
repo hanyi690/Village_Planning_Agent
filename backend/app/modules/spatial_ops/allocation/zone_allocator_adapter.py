@@ -26,9 +26,9 @@ _PRESERVE_KINDS = ("preserve", "blacklist", "restricted")
 
 
 def _parcel_area_ha(parcel: Any) -> float:
-    area_sqm = float(getattr(parcel, "area_sqm", 0) or 0)
+    area_sqm = float(getattr(parcel, "area_sqm", 0) or 0)  # getattr intentional: accepts mappings/objects/strings
     if area_sqm <= 0:
-        area_sqm = float(getattr(parcel, "area_ha", 0) or 0) * 10000
+        area_sqm = float(getattr(parcel, "area_ha", 0) or 0) * 10000  # getattr intentional: heterogeneous input
     return area_sqm / 10000 if area_sqm > 10000 else area_sqm
 
 
@@ -37,7 +37,7 @@ def _as_bsm(item: Any) -> str:
         return item
     if isinstance(item, Mapping):
         return str(item.get("bsm") or item.get("id") or "")
-    return str(getattr(item, "bsm", None) or "")
+    return str(getattr(item, "bsm", None) or "")  # getattr intentional: heterogeneous input
 
 
 def _entry_area_ha(item: Any, parcel_by_bsm: Mapping[str, Any]) -> float:
@@ -49,10 +49,10 @@ def _entry_area_ha(item: Any, parcel_by_bsm: Mapping[str, Any]) -> float:
         if value not in (None, ""):
             return float(value) / 10000.0
     else:
-        value = getattr(item, "area_ha", None)
+        value = getattr(item, "area_ha", None)  # getattr intentional: heterogeneous input
         if value not in (None, ""):
             return float(value)
-        value = getattr(item, "area_sqm", None)
+        value = getattr(item, "area_sqm", None)  # getattr intentional: heterogeneous input
         if value not in (None, ""):
             return float(value) / 10000.0
     parcel = parcel_by_bsm.get(_as_bsm(item))

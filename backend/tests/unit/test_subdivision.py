@@ -7,7 +7,7 @@ import math
 import pytest
 from shapely.geometry import Polygon, box
 
-from app.modules.spatial_ops.subdivision import (
+from app.modules.spatial_ops.geometry.subdivision import (
     apply_setback,
     obb_subdivide,
     split_for_footprint,

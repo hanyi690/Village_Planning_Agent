@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import json
 from pathlib import Path
@@ -7,7 +7,7 @@ import geopandas as gpd
 import numpy as np
 from PIL import Image
 
-from app.services.modules.gis.road.qgis_package import build_qgis_demo_package
+from app.modules.spatial_ops.road.qgis_export import build_qgis_demo_package
 
 
 CRS = {"type": "name", "properties": {"name": "EPSG:4326"}}

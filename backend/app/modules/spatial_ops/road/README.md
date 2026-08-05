@@ -87,7 +87,7 @@ Stage5(evaluator) ──> Stage6(comparison, held-out 专用)
 - `build_road_network`（Stage1 路网）
 - `build_planning_nodes` / `build_planning_nodes_with_kg_retry_*`（Stage2.6，含 KG 重试）
 - `bind_road_spatial_requirements`（Stage3 绑定）
-- `run_stage4_road_planning`（Stage4 自动路由，输入门控不足时 EXECUTE 降级到 `spatial_ops.road_planner.plan_roads`）
+- `run_stage4_road_planning`（Stage4 自动路由，输入门控不足时 EXECUTE 显式 unresolved，不再降级到已删除的 `road_planner` fallback）
 
 ---
 

@@ -4,7 +4,7 @@ from unittest.mock import MagicMock, patch
 
 from app.modules.parsing.text_parser import parse
 from app.modules.parsing.tables import extract_instruction_tables
-from app.modules.spatial_ops.resolver import (
+from app.modules.spatial_ops.grounding.resolver import (
     _extract_location_tokens,
     resolve_spatial_anchors,
 )

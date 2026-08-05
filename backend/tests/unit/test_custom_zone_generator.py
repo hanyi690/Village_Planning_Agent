@@ -5,7 +5,7 @@ from app.modules.schema.contracts.custom_zone_contracts import (
     Vocabulary,
     VocabularyCategory,
 )
-from app.tools.gis._generation.custom_zone_generator import (
+from app.modules.spatial_ops.zoning.custom_zone_generator import (
     CustomZoningGenerator,
 )
 from app.modules.schema.provenance import ProvenanceSource

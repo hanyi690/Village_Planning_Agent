@@ -172,7 +172,7 @@ def _axis_layer(intent: Any, gis_data: Dict[str, Any]) -> Optional[Dict[str, Any
     """Development-axis layer via AxisBuilder (kept module)."""
     from types import SimpleNamespace
 
-    from app.tools.gis._generation.axis_builder import AxisBuilder
+    from app.modules.spatial_ops.geometry.axis_builder import AxisBuilder
 
     if intent is None:
         return None
@@ -256,8 +256,8 @@ def run_layout_pipeline(
     if run_conflict:
         try:
             from app.tools.gis._analytics.metrics_calculator import GISMetricsCalculator
-            from app.tools.gis._conflict.detector import ConflictDetector
-            from app.tools.gis._conflict.resolver import ConflictResolver
+            from app.modules.spatial_ops.conflict.detector import ConflictDetector
+            from app.modules.spatial_ops.conflict.resolver import ConflictResolver
 
             summaries = GISMetricsCalculator.compute_summaries(gis_data)
             conflict_report = ConflictDetector().detect_all(summaries)

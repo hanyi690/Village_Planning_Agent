@@ -13,7 +13,7 @@ from langgraph.prebuilt import InjectedState
 from langgraph.types import Command
 
 from app.utils.logger import get_logger
-from app.modules.spatial_ops.map_layers import build_map_layers
+from app.modules.spatial_ops.output.map_layers import build_map_layers
 
 logger = get_logger(__name__)
 

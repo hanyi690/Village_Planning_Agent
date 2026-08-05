@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import math
 from pathlib import Path
@@ -7,7 +7,7 @@ import numpy as np
 from shapely.geometry import LineString, Point, box
 from shapely.ops import unary_union
 
-from app.services.modules.gis.road.terrain_router import (
+from app.modules.spatial_ops.road.terrain_router import (
     generate_least_cost_routes,
     load_terrain_context,
     route_impact_metrics,

@@ -1,10 +1,10 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import hashlib
 import json
 from pathlib import Path
 
-from app.services.modules.gis.road import (
+from tests.fixtures.road.demo_proxy import (
     build_demo_imagery_reviewed_road_baseline,
     generate_demo_proxy_inputs,
 )

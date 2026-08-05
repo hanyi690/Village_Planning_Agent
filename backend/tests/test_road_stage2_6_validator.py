@@ -1,12 +1,12 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import json
 from pathlib import Path
 
 import pytest
 
-from app.services.modules.gis.road import PlanningNodeBuildConfig, build_planning_nodes
-from app.services.modules.gis.road.stage2_6_validator import validate_stage2_6_outputs
+from app.modules.spatial_ops.road import PlanningNodeBuildConfig, build_planning_nodes
+from app.modules.spatial_ops.road.stage2_6_validator import validate_stage2_6_outputs
 
 
 CRS = {"type": "name", "properties": {"name": "EPSG:4527"}}

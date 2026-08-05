@@ -21,15 +21,15 @@ from app.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
-# Re-export from the internal _conflict module
-from ._conflict.detector import (
+# Re-export from the spatial_ops conflict subpackage
+from app.modules.spatial_ops.conflict.detector import (
     ConflictDetector,
     ConflictReport,
     MetricConflict,
     ConstraintViolation,
     SpatialConflict,
 )
-from ._conflict.resolver import (
+from app.modules.spatial_ops.conflict.resolver import (
     ConflictResolver,
     ResolutionReport,
 )

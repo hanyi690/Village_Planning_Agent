@@ -34,9 +34,8 @@ from .provenance import SemanticMetadata
 class SpatialPreference(BaseModel):
     """Zone spatial preference — from PARSE's understanding of planning text.
 
-    Canonical source of spatial preference. ZoneIntent (in layout_contracts.py)
-    is a derived view that maps direction to Direction enum and
-    reference to reference_feature.
+    Canonical source of spatial preference. ZoneIntent is a derived view
+    that maps direction to Direction enum and reference to reference_feature.
     """
 
     direction: Optional[str] = None

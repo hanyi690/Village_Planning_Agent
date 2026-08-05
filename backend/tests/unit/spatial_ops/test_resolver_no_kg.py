@@ -22,8 +22,8 @@ from app.modules.schema.contracts.spatial_reference_contracts import (
 )
 from app.modules.schema.types.canonical import VillageBundle
 from app.modules.schema.types.spatial_types import CurrentLandUseParcel
-from app.modules.spatial_ops.bundle_binder import DeterministicBundleBinder
-from app.modules.spatial_ops.resolver import SpatialResolver, resolve_intent_anchors
+from app.modules.spatial_ops.grounding.bundle_binder import DeterministicBundleBinder
+from app.modules.spatial_ops.grounding.resolver import SpatialResolver, resolve_intent_anchors
 
 
 def _polygon(coords):

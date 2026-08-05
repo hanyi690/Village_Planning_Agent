@@ -23,12 +23,12 @@
 
 | 能力 | 状态 | 当前实现事实 |
 |---|---|---|
-| EXECUTE 子图 | CURRENT / PARTIAL | `execute_agent.py` 仍是 `route_tasks → layout → project → facility → axis → road → validate → write_l4` 的混合子图；尚未重构为 `SiteSelectionDecision + ExecutionPlan` 唯一输入。 |
+| EXECUTE 子图 | CURRENT / PARTIAL | `execute_agent.py` 已重构为多 worker 子图：`route_tasks → prepare_inputs → project_worker → zone_worker → [facility_worker ‖ axis_worker] → road_worker → merge_worker_results → geometry_materialize → planned_state_builder → execution_review`；各 worker 返回统一 `WorkerResult`。 |
 | Project Worker | CURRENT / PARTIAL | `land_design_worker.py` 支持项目 footprint、OBB/split 相关操作；仍由集中式 execute_agent 调度，未形成独立 WorkerResult 契约。 |
-| Zone Worker / MIP | PARTIAL / GAP | 当前 `_execute_layout_node` 使用确定性 zone reclassify；Wave I 已删除旧 `mip_allocator.py`、`mip_solver.py` 和旧 zone generators。`ZoneAllocatorPort + MIPZoneAllocator` 属于必须恢复的目标能力。 |
+| Zone Worker / MIP | CURRENT / PARTIAL | `zone_worker` 对空候选 zone 经 `ZoneAllocatorPort + PuLP adapter`（`app/agent/execute/zone_allocator_adapter.py`）求解，不可行显式 unresolved；其余 zone 仍使用确定性 reclassify。 |
 | Custom zoning | PARTIAL | `custom_zone_contracts.py`、`custom_zone_generator.py` 和 `spatial_ops/custom_planning.py` 仍存在；当前主要是词汇/图层生成与规则路径，尚未成为由 L2/L3 目标驱动、经 MIP/约束求解的新规划分区。 |
 | Facility Worker | CURRENT / PARTIAL | `_execute_facility_node` 已改为决策驱动，不再默认从 KG POI 自行找点；尚未统一为独立 `FacilityWorkerResult` 并进入统一 ExecutionPlan。 |
-| Road Worker | CURRENT / DUPLICATE | `execute/road_generator.py` 和 `services/modules/gis/road/` 保留 staged road pipeline；`_execute_road_node` 还可 fallback 到 `spatial_ops.road_planner`，正式入口尚未收敛。 |
+| Road Worker | CURRENT / PARTIAL | staged road pipeline 已迁移至 `app/modules/spatial_ops/road/`，`spatial_ops.road_planner` fallback 已删除；`execute/road_generator.py` 为 EXECUTE 入口，RoadPlannerPort 收敛仍属后续工作。 |
 | Axis Worker | CURRENT / PARTIAL | `_execute_axis_node` 和 AxisBuilder 存在，但与项目、分区、道路统一设计依赖尚未固化。 |
 | ExecutionPlan | CONTRACT ONLY / PARTIAL | `execution_plan_contracts.py` 已存在 WorkerTask、AllocationProblem、WorkerResult 等模型；post-L3 EXECUTE 尚未只接受 `SiteSelectionDecision + ExecutionPlan`。 |
 | ParcelChangeSet | CURRENT | `land_design_worker` 和 `planned_state_builder` 可生成/转换统一 changeset；仍需禁止后续节点在 PlannedState 生成后静默修改 changeset。 |
@@ -48,13 +48,13 @@
 
 | 区域 | 状态 | 说明 |
 |---|---|---|
-| `app/services/modules/gis/road/` | DEPRECATED TARGET | 当前包含真实 staged road 实现，但目录混合 service 与 infrastructure；目标是通过 RoadPlannerPort 收敛为唯一 Road Worker。 |
-| `app/modules/spatial_ops/road_planner.py` | DEPRECATED TARGET | 简化道路 fallback；只能显式标记 degraded，不能与 staged planner 并列为正式入口。 |
+| `app/services/modules/gis/road/` | 已删除 | 已迁移至 `app/modules/spatial_ops/road/`，`services/modules` 目录已删除。 |
+| `app/modules/spatial_ops/road_planner.py` | DELETED | 简化道路 fallback 已删除；road worker 无可用 plan 时显式 unresolved。 |
 | `app/tools/gis/_generation/` | PARTIAL / LEGACY MIX | custom zoning、facility、optimizer 辅助代码仍有调用方；需逐项标记 ACTIVE/ADAPTER/DEPRECATED 后再删除。 |
 | `app/agent/select/` | DEPRECATED TARGET | 仍有旧 parse fallback/state 兼容代码；正式 SELECT 为 `app/agent/select_graph/`。 |
-| `layout_contracts.py` | DEPRECATED TARGET | 与 parse、execution_plan、planned_state 存在概念重叠；EXECUTE 新契约稳定后删除。 |
+| `layout_contracts.py` | DELETED | 已删除；`ZoneIntent/UnifiedSpatialIntent/AllocationResult` 等旧 LAYOUT 契约不再由 schema 导出。 |
 | `parse_contracts.py` | PARTIAL | 同时承载 intent target、spatial operation、constraint 和指标表；后续应拆为 intent/operation/indicator 三组，但不能在未迁移调用方前直接删除。 |
-| `contracts/__init__.py` | DEPRECATED TARGET | 当前 wildcard 导出过多；业务代码应从具体契约文件显式导入。 |
+| `contracts/__init__.py` | DEPRECATED TARGET | wildcard 导出过多；已移除 `layout_contracts` 导出，业务代码仍应从具体契约文件显式导入。 |
 | `PlanningTextGenerator` | DEPRECATED | 见 `PLANNING_TEXT_DEPRECATION.md`；不消费 typed artifacts 和 DeliveryManifest，不作为新规划成果入口。 |
 
 ## 5. 当前可验证边界

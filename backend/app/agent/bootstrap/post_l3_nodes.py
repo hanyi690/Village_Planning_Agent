@@ -458,7 +458,7 @@ async def deliver_node(state: PostL3ChainState) -> dict[str, Any]:
     """DELIVER node: export + deliver_aggregate + gate."""
     from app.agent.deliver.aggregate import deliver_aggregate
     from app.agent.deliver.gate import evaluate_deliver_gate
-    from app.modules.spatial_ops.export_package import export_gdb_package
+    from app.modules.spatial_ops.output.export_package import export_gdb_package
 
     retry_patch = _retry_patch(state, "deliver")
     context = _resolve_context(state)

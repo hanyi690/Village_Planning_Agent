@@ -46,7 +46,7 @@ def _fake_bundle(dem_path, n_parcels=2):
 
 
 def test_load_dem_slope(tmp_path):
-    from app.agent.execute.vocab_context import _load_dem_slope
+    from app.modules.spatial_ops.zoning.vocab_context import _load_dem_slope
 
     dem = tmp_path / "dem.tif"
     _make_dem_tif(dem)
@@ -59,7 +59,7 @@ def test_load_dem_slope(tmp_path):
 
 
 def test_load_dem_slope_missing_dem(tmp_path):
-    from app.agent.execute.vocab_context import _load_dem_slope
+    from app.modules.spatial_ops.zoning.vocab_context import _load_dem_slope
 
     bundle = types.SimpleNamespace(
         rasters=types.SimpleNamespace(dem=None), polygons={"landuse_current": []}
@@ -74,7 +74,7 @@ def _parcel(bsm, area_ha):
 
 
 def test_supplement_by_area_fills_gap():
-    from app.tools.gis._generation.custom_zone_generator import _supplement_by_area
+    from app.modules.spatial_ops.zoning.custom_zone_generator import _supplement_by_area
 
     selected = [_parcel("B1", 1.0)]
     pool = [_parcel("B2", 2.0), _parcel("B3", 3.0), _parcel("B4", 4.0)]
@@ -87,7 +87,7 @@ def test_supplement_by_area_fills_gap():
 
 
 def test_supplement_by_area_no_gap():
-    from app.tools.gis._generation.custom_zone_generator import _supplement_by_area
+    from app.modules.spatial_ops.zoning.custom_zone_generator import _supplement_by_area
 
     selected = [_parcel("B1", 8.0), _parcel("B2", 3.0)]
     filled, supplemented = _supplement_by_area(selected, 10.0, [])
@@ -96,7 +96,7 @@ def test_supplement_by_area_no_gap():
 
 
 def test_truncate_by_area_caps_over_target():
-    from app.tools.gis._generation.custom_zone_generator import _truncate_by_area
+    from app.modules.spatial_ops.zoning.custom_zone_generator import _truncate_by_area
 
     parcels = [_parcel("B1", 6.0), _parcel("B2", 5.0), _parcel("B3", 2.0)]
     chosen = _truncate_by_area(parcels, 10.0)

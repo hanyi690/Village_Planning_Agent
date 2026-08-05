@@ -11,11 +11,11 @@ import logging
 from collections import defaultdict
 from typing import Any, Dict, List, Optional
 
-from ..schema.contracts.land_balance_contracts import (
+from app.modules.schema.contracts.land_balance_contracts import (
     LandBalanceRow,
     LandBalanceTable,
 )
-from ..schema.contracts.delivery_manifest_contracts import DeliveryGate
+from app.modules.schema.contracts.delivery_manifest_contracts import DeliveryGate
 
 logger = logging.getLogger(__name__)
 
@@ -184,7 +184,7 @@ def _code_to_name(code: str) -> str:
     if code in _KNOWN_NAMES:
         return _KNOWN_NAMES[code]
     try:
-        from ..schema.encodings.code_sets import DLBM_TO_DLMC, GHYTBM_TO_GHYTMC
+        from app.modules.schema.encodings.code_sets import DLBM_TO_DLMC, GHYTBM_TO_GHYTMC
 
         for mapping in [GHYTBM_TO_GHYTMC, DLBM_TO_DLMC]:
             if code in mapping:

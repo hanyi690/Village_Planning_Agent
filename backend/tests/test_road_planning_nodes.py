@@ -1,11 +1,11 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import json
 from pathlib import Path
 
 import pytest
 
-from app.services.modules.gis.road import (
+from app.modules.spatial_ops.road import (
     PlanningNodeBuildConfig,
     build_planning_nodes,
     build_planning_nodes_with_kg_retry_adapter,

@@ -8,7 +8,7 @@ from langchain_core.tools import InjectedToolCallId, tool
 from langgraph.prebuilt import InjectedState
 from langgraph.types import Command
 
-from app.modules.spatial_ops.export_package import export_gdb_package
+from app.modules.spatial_ops.output.export_package import export_gdb_package
 from app.tools.helpers import make_result, to_tool_message
 
 

@@ -1,7 +1,6 @@
 """Cross-layer data contracts — PARSE, EXECUTE, LAYOUT, and spatial cognition.
 
 - parse_contracts.py:     PARSE output (text -> intent)
-- layout_contracts.py:    LAYOUT tools (intent + pipeline output)
 - context_contracts.py:   spatial cognition cards (ContextBlock-based)
 - context_ref_contracts.py: run/dataset context references
 - workflow_contracts.py:  workflow control (run requests, routing, gates, feedback)
@@ -23,7 +22,6 @@ from .contract_meta import *  # noqa: F401,F403
 from .provenance import *  # noqa: F401,F403
 from .classification_ref import *  # noqa: F401,F403
 from .parse_contracts import *  # noqa: F401,F403
-from .layout_contracts import *  # noqa: F401,F403
 from .context_contracts import *  # noqa: F401,F403
 from .context_ref_contracts import *  # noqa: F401,F403
 from .workflow_contracts import *  # noqa: F401,F403

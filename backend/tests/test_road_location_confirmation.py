@@ -1,4 +1,4 @@
-"""Acceptance tests for Stage-2.5 manual spatial confirmation."""
+﻿"""Acceptance tests for Stage-2.5 manual spatial confirmation."""
 
 from __future__ import annotations
 
@@ -7,11 +7,11 @@ from pathlib import Path
 
 import pytest
 
-from app.services.modules.gis.road.location_confirmation import (
+from app.modules.spatial_ops.road.location_confirmation import (
     apply_location_confirmations,
     generate_location_confirmation_workflow,
 )
-from app.services.modules.gis.road.schemas import LocationConfirmationConfig
+from app.modules.spatial_ops.road.schemas import LocationConfirmationConfig
 
 
 def _write(path: Path, payload: object) -> None:

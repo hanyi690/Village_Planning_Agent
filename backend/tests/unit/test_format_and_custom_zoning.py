@@ -3,7 +3,7 @@
 from app.agent.ground.format_bound_intent import format_bound_spatial_intent
 from app.modules.schema.contracts.custom_zone_contracts import Vocabulary, VocabularyCategory
 from app.modules.schema.encodings.dicts.vocabularies.loader import register_vocabulary
-from app.tools.gis._generation.custom_zone_generator import CustomZoningGenerator
+from app.modules.spatial_ops.zoning.custom_zone_generator import CustomZoningGenerator
 
 
 def test_format_project_domain_to_custom_zone_target():

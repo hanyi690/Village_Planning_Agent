@@ -1,11 +1,11 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import json
 from pathlib import Path
 
 import pytest
 
-from app.services.modules.gis.road import SpatialBindingConfig, bind_road_spatial_requirements
+from app.modules.spatial_ops.road import SpatialBindingConfig, bind_road_spatial_requirements
 
 
 CRS = {"type": "name", "properties": {"name": "EPSG:4527"}}

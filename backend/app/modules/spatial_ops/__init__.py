@@ -17,16 +17,19 @@ compute_context_blocks(VillageBundle) is the sole public entry point.
 [v5.1] Added export_package.py (validated session output packaging).
 """
 
-from .bridge import (
+from .index.bridge import (
     SpatialIndex, OverlapResult, build_spatial_index,
     ConstraintIndex, ConstraintOverlap, build_constraint_index,
 )
-from .context import compute_context_blocks
-from .bundle_binder import DeterministicBundleBinder, bind_exploration_to_bundle
+from .context.context import compute_context_blocks
+from .grounding.bundle_binder import (
+    DeterministicBundleBinder,
+    bind_exploration_to_bundle,
+)
 
 # Backward compat alias: compute_spatial_context → compute_context_blocks
 compute_spatial_context = compute_context_blocks
-from .grounding import (
+from .grounding.grounding import (
     ZoneSpatialAnchor,
     resolve_directional_bbox,
     query_parcels_in_bbox,
@@ -36,8 +39,8 @@ from .grounding import (
     compute_target_area,
     ground_zone_spatial_preference,
 )
-from .land_balance import check_delivery_gate, compute_land_balance
-from .parcel_ops import (
+from .land_balance.land_balance import check_delivery_gate, compute_land_balance
+from .parcel_ops.parcel_ops import (
     apply_operations,
     create_parcel,
     merge_parcels,

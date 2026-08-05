@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import json
 from pathlib import Path
@@ -10,7 +10,7 @@ from rdflib import Graph, Literal, RDF, URIRef
 from app.modules.kg.ontology import PLN
 from app.modules.kg.manager import get_kg_manager
 from app.agent.execute.road_generator import _default_kg_retry_adapter
-from app.services.modules.gis.road import RDFLibKGSpatialRetryAdapter, normalise_kg_retry_response
+from app.modules.spatial_ops.road import RDFLibKGSpatialRetryAdapter, normalise_kg_retry_response
 
 
 def _write(path: Path, payload: object) -> None:

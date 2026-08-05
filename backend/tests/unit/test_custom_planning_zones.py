@@ -1,4 +1,4 @@
-from app.modules.spatial_ops.custom_planning import (
+from app.modules.spatial_ops.zoning.custom_planning import (
     PENDING_ZONE_NAME,
     build_custom_planning_zone_layer,
     build_custom_zone_allocation_inputs,

@@ -18,7 +18,7 @@ def _feature(bsm: str, coordinates=None):
 
 
 def test_render_builder_returns_frontend_layers():
-    from app.modules.spatial_ops.map_layers import build_map_layers
+    from app.modules.spatial_ops.output.map_layers import build_map_layers
 
     layers = build_map_layers(
         [{"layerType": "planning_zone", "data": {"type": "FeatureCollection", "features": []}}],
@@ -29,7 +29,7 @@ def test_render_builder_returns_frontend_layers():
 
 
 def test_render_builder_accepts_execute_road_shape():
-    from app.modules.spatial_ops.map_layers import build_map_layers
+    from app.modules.spatial_ops.output.map_layers import build_map_layers
 
     road = {
         "type": "Feature",
@@ -49,7 +49,7 @@ def test_render_builder_accepts_execute_road_shape():
 
 
 def test_render_builder_includes_current_roads_and_annotations():
-    from app.modules.spatial_ops.map_layers import build_map_layers
+    from app.modules.spatial_ops.output.map_layers import build_map_layers
 
     road = {
         "type": "FeatureCollection",
@@ -84,7 +84,7 @@ def test_pipeline_state_accepts_typed_derived_relations():
 
 
 def test_trace_layer_uses_real_parcel_geometry_only():
-    from app.modules.spatial_ops.map_layers import build_trace_layer
+    from app.modules.spatial_ops.output.map_layers import build_trace_layer
 
     parcel = _feature("P001")
 
@@ -138,7 +138,7 @@ def test_legacy_intent_routes_declared_execute_children():
 
 
 def test_road_grounding_infers_endpoints_from_kg_village_anchors():
-    from app.modules.spatial_ops.resolver import resolve_spatial_anchors
+    from app.modules.spatial_ops.grounding.resolver import resolve_spatial_anchors
     from app.modules.schema.contracts.parse_contracts import RoadTarget, SpatialPlanningIntent
 
     road = RoadTarget(road_level="南北向通村道路", width_m=6.0)
@@ -264,7 +264,7 @@ def test_parse_extracts_structured_road_table():
 
 
 def test_export_package_includes_road_and_manifest(tmp_path):
-    from app.modules.spatial_ops.export_package import export_gdb_package
+    from app.modules.spatial_ops.output.export_package import export_gdb_package
 
     road = {
         "type": "FeatureCollection",
@@ -297,7 +297,7 @@ def test_export_package_includes_road_and_manifest(tmp_path):
 
 
 def test_export_uses_allocated_landuse_for_balance_without_current_gis(tmp_path):
-    from app.modules.spatial_ops.export_package import export_gdb_package
+    from app.modules.spatial_ops.output.export_package import export_gdb_package
 
     allocated = {
         "type": "FeatureCollection",
@@ -325,7 +325,7 @@ def test_export_uses_allocated_landuse_for_balance_without_current_gis(tmp_path)
 
 
 def test_export_land_balance_treats_missing_area_as_zero(tmp_path):
-    from app.modules.spatial_ops.export_package import export_gdb_package
+    from app.modules.spatial_ops.output.export_package import export_gdb_package
 
     allocated = {
         "type": "FeatureCollection",

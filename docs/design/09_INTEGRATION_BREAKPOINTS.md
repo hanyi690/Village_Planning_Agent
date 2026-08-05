@@ -9,15 +9,15 @@
 | PARSE 入口 | `app/agent/parse/` 已是正式 compiler；旧 `agent/select` parse state/fallback 仍被测试和兼容代码引用 | 只保留共享 IntentCompiler，删除旧 SELECT/PARSE 入口 |
 | GROUND 隐式回退 | Gazetteer、中心 BBox 和 resolver 兼容路径仍存在 | 统一 SpatialReference → CandidateSite 失败码，禁止静默扩大候选范围 |
 | SELECT 候选回退 | 无项目专属候选时仍可能回退到完整候选池 | RETRY_GROUND / EXPLORE / HUMAN，不得把全池当项目候选 |
-| 道路重复 | staged planner 与 local planner 并存 | 单一 Road Worker |
+| 道路重复 | 已解决：staged planner 迁至 `app/modules/spatial_ops/road/`，local `road_planner` fallback 已删除 | 单一 Road Worker / RoadPlannerPort 收敛 |
 | 总重试 | 一个异常可能触发空意图或另一个算法 | Validation Router 定向反馈 |
 | L1 命名冲突 | 规划 L1/L2/L3 与 KG L1/L2/L3/L4 混用 | KG 改名 BaseFacts/DerivedRelations/IntentGraph/PlannedState |
 | 状态复制 | AgentState、PostL3ChainState、ExecuteAgentState 和兼容 GIS 字段并存 | Artifact 引用 + 单一 Context + 唯一 PlannedState |
 | EXECUTE 输入 | 当前同时接收 intent、bundle、selection 和 legacy layout 数据 | 只接收 `SiteSelectionDecision + ExecutionPlan` |
 | 分区求解缺失 | Wave I 删除 MIP allocator，当前 layout 使用确定性 reclassify | ZoneAllocatorPort + MIPZoneAllocator，失败显式 degraded/unresolved |
-| 道路实现重复 | staged road planner 与 `spatial_ops.road_planner` fallback 并存 | staged planner 为 canonical Road Worker，fallback 显式标记 |
+| 道路实现重复 | 已解决：staged road planner 迁至 `app/modules/spatial_ops/road/`，`spatial_ops.road_planner` fallback 已删除 | staged planner 为 canonical Road Worker，失败显式 unresolved |
 | 契约重复 | `parse_contracts`、`layout_contracts`、`custom_zone_contracts`、`execution_plan_contracts` 有概念重叠 | 先冻结 canonical contracts，再删除 layout/legacy 模型 |
-| service/module 混层 | `services/modules/gis/road` 同时承载应用调用和 GIS 实现 | RoadPlannerPort + application service + infrastructure adapter |
+| service/module 混层 | 已解决：`services/modules/gis/road` 已迁移至 `app/modules/spatial_ops/road/`，`services/modules` 目录已删除 | RoadPlannerPort + application service + infrastructure adapter |
 
 ## 2. 分阶段迁移
 

@@ -423,7 +423,7 @@ def _resolve_zone_allocator(state: ExecuteAgentState) -> Any:
     ports = getattr(state, "ports", None)
     allocator = getattr(ports, "zone_allocator", None) if ports is not None else None
     if allocator is None:
-        from app.agent.execute.zone_allocator_adapter import PuLPZoneAllocator
+        from app.modules.spatial_ops.allocation.zone_allocator_adapter import PuLPZoneAllocator
 
         allocator = PuLPZoneAllocator()
     return allocator
@@ -711,7 +711,7 @@ def _axis_worker(state: ExecuteAgentState) -> WorkerResult:
     """Axis worker: development-axis layer (decision-driven from intent)."""
     from types import SimpleNamespace
 
-    from app.tools.gis._generation.axis_builder import AxisBuilder
+    from app.modules.spatial_ops.geometry.axis_builder import AxisBuilder
 
     if not _task_enabled(state, "axis"):
         return WorkerResult(worker_type="axis")
@@ -830,75 +830,12 @@ def _road_worker(state: ExecuteAgentState) -> WorkerResult:
             "[EXECUTE:road] stage generator failed, falling back to local plan_roads: %s", e
         )
 
-    try:
-        from app.modules.spatial_ops.road_planner import plan_roads
-    except ImportError:  # pragma: no cover - fallback module removed
-        logger.warning("[EXECUTE:road] local plan_roads unavailable; road worker unresolved")
-        return WorkerResult(
-            worker_type="road",
-            unresolved_items=[{
-                "code": "road_failed",
-                "message": "Local plan_roads fallback is unavailable.",
-            }],
-        )
-
-    try:
-        if not intent or not road_targets:
-            logger.info("[EXECUTE:road] no road targets in intent, skipping")
-            return WorkerResult(worker_type="road")
-
-        bundle = state.gis_bundle
-        current_roads = []
-        if bundle is not None:
-            roads = bundle.lines.get("roads_current") if bundle.lines is not None else None
-            if roads is not None:
-                current_roads = list(roads)
-            if not current_roads:
-                current_roads = getattr(bundle, "roads", [])
-
-        planned_roads = plan_roads(
-            road_targets=road_targets,
-            current_roads=current_roads,
-        )
-    except Exception as e:
-        logger.warning("[EXECUTE:road] failed: %s", e)
-        return WorkerResult(
-            worker_type="road",
-            unresolved_items=[{"code": "road_failed", "message": str(e)}],
-        )
-
-    if not planned_roads:
-        logger.info("[EXECUTE:road] no roads generated")
-        return WorkerResult(
-            worker_type="road",
-            unresolved_items=[{
-                "code": "road_output_empty",
-                "message": "Road targets exist but no planned road was produced.",
-            }],
-        )
-
-    for road in planned_roads:
-        geometry = road.get("geometry")
-        if isinstance(geometry, str):
-            try:
-                road["geometry"] = json.loads(geometry)
-            except json.JSONDecodeError:
-                road["geometry"] = None
-
-    road_layer = {
-        "layer_type": "planned_road",
-        "features": planned_roads,
-        "count": len(planned_roads),
-    }
+    logger.warning("[EXECUTE:road] no usable road plan produced; road worker unresolved")
     return WorkerResult(
         worker_type="road",
-        layers=[road_layer] + diagnostic_layers,
-        diagnostics=[{
-            "code": "road_plan_ok",
-            "count": len(planned_roads),
-            "upgrade": sum(1 for r in planned_roads if r.get("operation") == "upgrade"),
-            "create": sum(1 for r in planned_roads if r.get("operation") == "create"),
-            "preserve": sum(1 for r in planned_roads if r.get("operation") == "preserve"),
+        unresolved_items=[{
+            "code": "road_unresolved",
+            "message": "No road plan produced: stage generator unavailable or failed.",
         }],
     )
 
@@ -1317,12 +1254,12 @@ def _build_custom_planning_layer(
     custom_targets: list,
 ) -> dict | None:
     """Build the custom_planning_zone layer via the vocabulary-driven generator (no MIP)."""
-    from app.modules.spatial_ops.custom_planning import (
+    from app.modules.spatial_ops.zoning.custom_planning import (
         PENDING_ZONE_NAME,
         build_custom_planning_zone_layer,
         build_custom_zone_allocation_inputs,
     )
-    from app.tools.gis._generation.custom_zone_generator import CustomZoningGenerator
+    from app.modules.spatial_ops.zoning.custom_zone_generator import CustomZoningGenerator
     from shapely.geometry import shape
 
     gis_bundle = getattr(state, "gis_bundle", None)
@@ -1338,7 +1275,7 @@ def _build_custom_planning_layer(
     parcels = [p for p in parcels if p["bsm"] and p["geometry"] is not None]
 
     try:
-        from app.agent.execute.vocab_context import build_parcel_contexts
+        from app.modules.spatial_ops.zoning.vocab_context import build_parcel_contexts
 
         ctxs = build_parcel_contexts(parcels, gis_bundle)
         for p in parcels:

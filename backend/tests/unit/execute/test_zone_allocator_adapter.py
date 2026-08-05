@@ -2,7 +2,10 @@
 
 from types import SimpleNamespace
 
-from app.agent.execute.zone_allocator_adapter import PuLPZoneAllocator, allocate_zones
+from app.modules.spatial_ops.allocation.zone_allocator_adapter import (
+    PuLPZoneAllocator,
+    allocate_zones,
+)
 from app.modules.ports.zone_allocator import ZoneAllocatorPort
 
 

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from app.modules.spatial_ops.facility_location import (
+from app.modules.spatial_ops.selection.facility_location import (
     DemandPoint,
     FacilityCandidate,
     compute_coverage_matrix,

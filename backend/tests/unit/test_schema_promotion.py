@@ -18,8 +18,8 @@ def test_new_import_canonical():
 
 
 def test_new_import_contracts():
-    from app.modules.schema.contracts.layout_contracts import ZoneIntent, AllocationResult
-    assert ZoneIntent is not None
+    from app.modules.schema.contracts.selection_contracts import SiteSelectionDecision
+    assert SiteSelectionDecision is not None
 
 
 def test_new_import_spatial_types():
@@ -41,10 +41,9 @@ def test_new_import_dicts():
 
 
 def test_new_barrel_import():
-    from app.modules.schema import BBox, ZoneIntent
+    from app.modules.schema import BBox
     from app.modules.schema.advisory_crosswalks import get_zone_type_for_dlbm
     assert BBox is not None
-    assert ZoneIntent is not None
     assert get_zone_type_for_dlbm is not None
 
 
@@ -92,6 +91,6 @@ def test_spatial_ops_import():
 
 def test_spatial_ops_submodules():
     from app.modules.spatial_ops.geometry import _compute_centroid, _compute_total_area
-    from app.modules.spatial_ops.relations import _compute_spatial_relations, _compute_zone_adjacency
+    from app.modules.spatial_ops.geometry.relations import _compute_spatial_relations, _compute_zone_adjacency
     assert _compute_centroid is not None
     assert _compute_spatial_relations is not None

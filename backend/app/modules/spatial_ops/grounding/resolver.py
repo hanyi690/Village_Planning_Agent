@@ -98,10 +98,10 @@ class SpatialResolver:
         Delegates to ``grounding.resolve_spatial_description`` with all
         context-injected dependencies (gazetteer / KG / constraint index).
         """
-        from app.modules.spatial_ops.grounding import resolve_spatial_description
+        from .grounding import resolve_spatial_description
 
         if not desc or self.bundle is None:
-            from app.modules.spatial_ops.grounding import ResolvedSpatialDescription
+            from .grounding import ResolvedSpatialDescription
 
             return ResolvedSpatialDescription(
                 evidence_text=desc,
@@ -183,7 +183,7 @@ class SpatialResolver:
         confidence = 0.7 if final_bsms else 0.3
         if not final_bsms and bbox:
             # Directional bbox with no KG match: fall back to geometry query.
-            from app.modules.spatial_ops.grounding import query_parcels_in_bbox
+            from .grounding import query_parcels_in_bbox
 
             parcels = self.context.bundle_parcels()
             final_bsms = query_parcels_in_bbox(parcels, bbox)
@@ -210,7 +210,7 @@ class SpatialResolver:
 
     def _directional_bbox(self, direction: str) -> Optional[tuple]:
         """Directional bbox around the bundle's village center."""
-        from app.modules.spatial_ops.grounding import (
+        from .grounding import (
             _village_center,
             resolve_directional_bbox,
         )
@@ -240,7 +240,7 @@ class SpatialResolver:
         Delegates to ``bundle_binder`` with a gazetteer injected from the
         context so the binder never hardcodes a village name.
         """
-        from app.modules.spatial_ops.bundle_binder import DeterministicBundleBinder
+        from .bundle_binder import DeterministicBundleBinder
 
         binder = DeterministicBundleBinder(self.bundle)
         return binder.bind(instructions, gazetteer=self.gazetteer)

@@ -91,22 +91,6 @@ def __getattr__(name: str) -> Any:
         from .comparison_evaluator import compare_road_plans
 
         return compare_road_plans
-    if name == "generate_demo_proxy_inputs":
-        from .demo_proxy import generate_demo_proxy_inputs
-
-        return generate_demo_proxy_inputs
-    if name == "build_demo_imagery_reviewed_road_baseline":
-        from .demo_proxy import build_demo_imagery_reviewed_road_baseline
-
-        return build_demo_imagery_reviewed_road_baseline
-    if name == "build_demo_terrain_grid":
-        from .demo_terrain import build_demo_terrain_grid
-
-        return build_demo_terrain_grid
-    if name == "build_qgis_demo_package":
-        from .qgis_package import build_qgis_demo_package
-
-        return build_qgis_demo_package
     raise AttributeError(name)
 
 __all__ = [
@@ -142,9 +126,5 @@ __all__ = [
     "run_stage4_road_planning",
     "score_road_candidates",
     "compare_road_plans",
-    "generate_demo_proxy_inputs",
-    "build_demo_imagery_reviewed_road_baseline",
-    "build_demo_terrain_grid",
-    "build_qgis_demo_package",
     "structure_road_requirements",
 ]

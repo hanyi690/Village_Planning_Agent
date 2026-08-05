@@ -44,5 +44,5 @@ def test_extract_instruction_tables_with_section():
 
 
 def test_resolve_spatial_anchors_importable():
-    from app.modules.spatial_ops.resolver import resolve_spatial_anchors
+    from app.modules.spatial_ops.grounding.resolver import resolve_spatial_anchors
     assert callable(resolve_spatial_anchors)

@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import hashlib
 import json
@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from app.services.modules.gis.road import PlanComparisonConfig, compare_road_plans
+from app.modules.spatial_ops.road import PlanComparisonConfig, compare_road_plans
 
 
 CRS = {"type": "name", "properties": {"name": "EPSG:4527"}}

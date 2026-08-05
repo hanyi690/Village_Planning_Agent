@@ -16,7 +16,9 @@ import sys
 
 _PACKAGE_ROOT = pathlib.Path(__file__).resolve().parents[3] / "app"
 _SELECT_DIR = _PACKAGE_ROOT / "agent" / "select"
-_SPATIAL_OPS_SELECTION_FILE = _PACKAGE_ROOT / "modules" / "spatial_ops" / "selection.py"
+_SPATIAL_OPS_SELECTION_FILE = (
+    _PACKAGE_ROOT / "modules" / "spatial_ops" / "selection" / "selection.py"
+)
 
 
 def _py_files(directory):

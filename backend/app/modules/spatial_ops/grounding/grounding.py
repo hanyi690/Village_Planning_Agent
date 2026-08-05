@@ -794,7 +794,7 @@ def _resolve_constraint(
     if constraint_index is None:
         # 尝试从 bundle 构建
         try:
-            from app.modules.spatial_ops.bridge import build_constraint_index
+            from app.modules.spatial_ops.index.bridge import build_constraint_index
 
             constraint_index = build_constraint_index(bundle)
         except Exception:

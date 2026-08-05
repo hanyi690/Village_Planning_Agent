@@ -52,7 +52,7 @@ def _load_dem_slope(bundle: Any) -> Optional[Dict[str, float]]:
             transform = src.transform
             result = {}
             for f in (bundle.polygons.get("landuse_current") or []):
-                geom = getattr(f, "geometry", None)
+                geom = getattr(f, "geometry", None)  # getattr intentional: defensive over feature types
                 if not geom:
                     continue
                 c = shape(geom).centroid
@@ -61,7 +61,7 @@ def _load_dem_slope(bundle: Any) -> Optional[Dict[str, float]]:
                 if 0 <= r < slope_arr.shape[0] and 0 <= c_ < slope_arr.shape[1]:
                     val = float(slope_arr[r, c_])
                     if np.isfinite(val):
-                        result[str(getattr(f, "bsm", ""))] = val
+                        result[str(getattr(f, "bsm", ""))] = val  # getattr intentional: defensive over feature types
             return result
     except Exception as e:
         logger.debug("[Context] DEM slope unavailable: %s", e)
@@ -76,19 +76,19 @@ def _road_distances(bundle: Any) -> Dict[str, float]:
 
         roads = []
         for f in (bundle.lines.get("roads_current") or []) + (bundle.lines.get("roads_planned") or []):
-            geom = getattr(f, "geometry", None)
+            geom = getattr(f, "geometry", None)  # getattr intentional: defensive over feature types
             if geom:
                 roads.append(shape(geom))
         if not roads:
             return {}
         result = {}
         for f in (bundle.polygons.get("landuse_current") or []):
-            geom = getattr(f, "geometry", None)
+            geom = getattr(f, "geometry", None)  # getattr intentional: defensive over feature types
             if not geom:
                 continue
             c = shape(geom).centroid
             best = min((c.distance(r) for r in roads), default=99999.0)
-            result[str(getattr(f, "bsm", ""))] = best * 111320.0  # 度→米近似
+            result[str(getattr(f, "bsm", ""))] = best * 111320.0  # getattr intentional: defensive over feature types; 度→米近似
         return result
     except Exception as e:
         logger.debug("[Context] road distance unavailable: %s", e)
@@ -106,15 +106,15 @@ def _zone_membership(bundle: Any) -> Dict[str, List[str]]:
             ("ecological_redline", "in_ecological_redline"),
             ("farmland_protection", "in_basic_farmland"),
         ):
-            geoms = [shape(getattr(f, "geometry", None)) for f in (bundle.polygons.get(key) or [])]
+            geoms = [shape(getattr(f, "geometry", None)) for f in (bundle.polygons.get(key) or [])]  # getattr intentional: defensive over feature types
             geoms = [g for g in geoms if g is not None and not g.is_empty]
             if not geoms:
                 continue
             union = unary_union(geoms)
             for f in (bundle.polygons.get("landuse_current") or []):
-                geom = getattr(f, "geometry", None)
+                geom = getattr(f, "geometry", None)  # getattr intentional: defensive over feature types
                 if geom and shape(geom).intersects(union):
-                    membership.setdefault(str(getattr(f, "bsm", "")), []).append(label)
+                    membership.setdefault(str(getattr(f, "bsm", "")), []).append(label)  # getattr intentional: defensive over feature types
         return membership
     except Exception as e:
         logger.debug("[Context] zone membership unavailable: %s", e)
@@ -129,15 +129,15 @@ def _poi_hits(bundle: Any) -> Dict[str, List[Dict[str, str]]]:
 
         hits: Dict[str, List[Dict[str, str]]] = {}
         for f in (bundle.polygons.get("historical_protection") or []):
-            geom = getattr(f, "geometry", None)
+            geom = getattr(f, "geometry", None)  # getattr intentional: defensive over feature types
             name = str(getattr(f, "protection_level", "") or "历史保护")
             if not geom:
                 continue
             c = shape(geom).centroid
             for p in (bundle.polygons.get("landuse_current") or []):
-                pgeom = getattr(p, "geometry", None)
+                pgeom = getattr(p, "geometry", None)  # getattr intentional: defensive over feature types
                 if pgeom and shape(pgeom).distance(c) < 0.003:  # ~300m
-                    hits.setdefault(str(getattr(p, "bsm", "")), []).append({"name": name})
+                    hits.setdefault(str(getattr(p, "bsm", "")), []).append({"name": name})  # getattr intentional: defensive over feature types
         return hits
     except Exception as e:
         logger.debug("[Context] poi unavailable: %s", e)

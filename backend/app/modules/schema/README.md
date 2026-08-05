@@ -429,7 +429,6 @@ layer_types:
 | `parse_contracts.py`      | PARSE 输出契约      | PARSE Agent        | KG, EXECUTE           |
 | `execution_contracts.py`  | EXECUTE 输入契约    | ConstraintCompiler | MIP solver, EXECUTE   |
 | `validation_contracts.py` | 验证闭环契约        | Evaluator          | Worker-Evaluator loop |
-| `layout_contracts.py`     | LAYOUT 工具契约     | LAYOUT tools       | ZoneGenerator, etc.   |
 | `context_contracts.py`    | [v4.3] 空间认知契约 | spatial_ops        | PARSE, LAYOUT, KG     |
 
 [v4.3] `context_contracts.py` 定义 `ContextBlockType` / `ContextBlock` + 7 种子类型（`LanduseEntry`/`NaturalVillageAnchor`/`SpatialRelation`/`ConstraintSummary`/`FacilityAnchor`/`TerrainProfile`），从 `layout_contracts.py` 迁出以反映空间认知契约的多消费者性质。`SpatialContext` Pydantic 单体模型已永久删除，由 `List[ContextBlock]` 模块化 dataclass 架构替代。
