@@ -5,6 +5,14 @@ Routes each of the 22 articles to S-COPY, S-ASSEMBLE, S-TEMPLATE, or S-GENERATE,
 then assembles the complete planning document.
 """
 
+# ⚠️ DEPRECATED (Wave O)
+# SectionBuilder 是遗留系统产物，S-COPY / S-ASSEMBLE / S-TEMPLATE / S-GENERATE
+# 四策略均基于 ReportStore 中的原始报告文本（L1/L2/L3 markdown）组装条文，
+# 不消费 typed artifacts（L1Snapshot/L2Strategy/PlanningProgram/DeliveryManifest）、
+# 不消费 bundle 表格、不接 post-L3 链输出。
+# 最终规划输出请改用 stage_report（全链每模块输入/输出审计）+ typed artifact 审查。
+# 本模块保留仅为兼容既有 API 路由；新功能禁止扩展此路径。
+
 import re
 import difflib
 from typing import Dict, List, Optional, Tuple

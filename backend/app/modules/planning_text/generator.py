@@ -7,8 +7,16 @@ optionally run LLM for S-GENERATE articles, append RAG appendix,
 and export to markdown + JSON.
 """
 
+# ⚠️ DEPRECATED (Wave O)
+# PlanningTextGenerator 是遗留系统产物，仅从 ReportStore 读原始报告文本生成 22 条法定条文。
+# 它不使用 typed artifacts（L1Snapshot/L2Strategy/PlanningProgram/DeliveryManifest）、
+# 不消费 bundle 表格、不接 post-L3 链输出（DeliveryManifest）。
+# 最终规划输出请改用 stage_report（全链每模块输入/输出审计）+ typed artifact 审查。
+# 本模块保留仅为兼容既有 API 路由；新功能禁止扩展此路径。
+
 import asyncio
 import logging
+import warnings
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -42,6 +50,11 @@ class GenerationResult:
 class PlanningTextGenerator:
 
     def __init__(self, config: PlanningTextConfig):
+        warnings.warn(
+            "PlanningTextGenerator is deprecated (Wave O): does not consume typed artifacts / bundle tables / post-L3 output. Prefer stage_report + typed artifacts.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         self.config = config
         self.store = ReportStore.get_instance()
 
