@@ -247,6 +247,32 @@ def after_analysis(
             return "explore"
         return END
 
+    # ── Wave M2: gate-aware routing ──
+    # If a layer gate decision is present and not PASS, route accordingly
+    # before falling through to normal dimension dispatch.
+    layer_num = _phase_to_layer(phase)
+    if layer_num is not None:
+        gate_key = f"l{layer_num}_gate_decision"
+        gate_decision = state.get(gate_key)
+        if gate_decision is not None:
+            route = gate_decision.get("feedback_route") if isinstance(gate_decision, dict) else None
+            if route and route != "PASS":
+                logger.info("[after_analysis] Gate %s routed %s", gate_key, route)
+                if route == "EXPLORE":
+                    return "explore"
+                if route == "HUMAN":
+                    return END
+                if route in ("L1", "L2", "L3"):
+                    # Rework: re-dispatch dimensions of this layer
+                    # Clear completed_dimensions for this layer so they get re-run
+                    from app.config.loader import list_dimensions
+                    dim_configs = list_dimensions(layer_num)
+                    rework_dims = [d.key for d in dim_configs]
+                    if rework_dims:
+                        logger.info("[after_analysis] Gate rework: re-dispatching %s", rework_dims)
+                        return [Send("analyze_dimension", {**state, "dimension_key": d}) for d in rework_dims]
+                    return END
+
     layer = _phase_to_layer(phase)
     if layer is None:
         return END
