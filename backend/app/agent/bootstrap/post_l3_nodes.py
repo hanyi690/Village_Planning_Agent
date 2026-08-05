@@ -12,7 +12,7 @@ from typing import Any
 
 from app.agent.ground.aggregate import ground_aggregate
 from app.agent.ground.gate import evaluate_ground_gate
-from app.agent.parse.aggregate import compile_program
+from app.agent.parse.aggregate import compile_program_async
 from app.agent.parse.gate_node import evaluate_parse_gate
 from app.agent.select_graph.aggregate import select_aggregate
 from app.agent.select_graph.gate import evaluate_select_gate
@@ -33,7 +33,7 @@ async def parse_node(state: PostL3ChainState) -> dict[str, Any]:
     if program is None:
         logger.warning("[post_l3:parse] no planning_program in state; empty compile")
     run_id = state.run_id or state.session_id
-    result, specs, gate = compile_program(
+    result, specs, gate = await compile_program_async(
         program,
         run_id=run_id,
         context_version=state.context_version,

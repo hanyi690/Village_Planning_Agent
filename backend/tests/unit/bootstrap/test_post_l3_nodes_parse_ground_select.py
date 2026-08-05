@@ -14,21 +14,26 @@ def _pass_gate():
     return GateDecision(stage="parse", passed=True, feedback_route=None)
 
 
-@pytest.mark.asyncio
-async def test_parse_node_compiles_program(monkeypatch):
-    program = SimpleNamespace(artifact_id="l3-1", interventions=[])
+async def _async_compile(program, run_id="", context_version=""):
     result = IntentCompilationResult()
     spec = SimpleNamespace(type="directional")
     gate = _pass_gate()
+    return result, [spec], gate
+
+
+@pytest.mark.asyncio
+async def test_parse_node_compiles_program(monkeypatch):
+    program = SimpleNamespace(artifact_id="l3-1", interventions=[])
     monkeypatch.setattr(
-        "app.agent.bootstrap.post_l3_nodes.compile_program",
-        lambda program, run_id="", context_version="": (result, [spec], gate),
+        "app.agent.bootstrap.post_l3_nodes.compile_program_async",
+        _async_compile,
     )
     state = PostL3ChainState(planning_program=program, run_id="r1")
     out = await parse_node(state)
-    assert out["intent"] is result
-    assert out["specs"] == [spec]
-    assert out["parse_gate"] is gate
+    assert isinstance(out["intent"], IntentCompilationResult)
+    assert out["specs"] == [SimpleNamespace(type="directional")]
+    assert out["parse_gate"].stage == "parse"
+    assert out["parse_gate"].passed is True
     assert len(out["upstream_gates"]) == 1
 
 

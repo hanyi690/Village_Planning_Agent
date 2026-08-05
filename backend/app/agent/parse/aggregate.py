@@ -30,6 +30,7 @@ from app.utils.logger import get_logger
 
 from .compile_node import compile_program_deterministic
 from .gate_node import evaluate_parse_gate
+from .llm_patch import generate_llm_patches
 from .merge_node import apply_patches
 from .review import build_parse_review_package
 from .route_node import route_compilation
@@ -91,6 +92,72 @@ def compile_program(
 
     route = route_compilation(result, diags)
     if route in ("llm_patch", "human_review"):
+        result.compilation_status = CompilationStatus.NEEDS_REVIEW
+
+    gate_decision = evaluate_parse_gate(
+        result, run_id=run_id, context_version=context_version
+    )
+
+    if gate_decision.passed and result.compilation_status == CompilationStatus.DRAFT:
+        result.compilation_status = CompilationStatus.VALIDATED
+
+    if not result.context_version:
+        result.context_version = context_version
+
+    return result, specs, gate_decision
+
+
+async def compile_program_async(
+    program: PlanningProgram,
+    *,
+    run_id: str = "",
+    context_version: str = "",
+    mode: ParseMode = ParseMode.COMPILE,
+    revision_request: ParseRevisionRequest | None = None,
+    base_result: IntentCompilationResult | None = None,
+    patches: list[CompilationPatch] | None = None,
+) -> tuple[IntentCompilationResult, list[SpatialReferenceSpec], GateDecision]:
+    """Async top-level PARSE pipeline with the LLM patch route activated.
+
+    Mirrors ``compile_program`` but when routing decides ``llm_patch`` the LLM
+    patch path is actually invoked: generate -> apply -> re-route. Only
+    ``human_review`` (or a failed/empty LLM patch attempt) routes to
+    NEEDS_REVIEW. ``compile_program`` (sync) is kept unchanged for callers
+    that cannot await.
+    """
+    if mode == ParseMode.COMPILE:
+        result, specs, diags = compile_program_deterministic(
+            program,
+            run_id=run_id,
+            context_version=context_version,
+            program_ref=program.artifact_id,
+        )
+        specs = _coerce_specs(result.spatial_reference_specs)
+    else:
+        if base_result is not None:
+            base = base_result
+        else:
+            base, _, _ = compile_program_deterministic(
+                program,
+                run_id=run_id,
+                context_version=context_version,
+                program_ref=program.artifact_id,
+            )
+        result = apply_patches(base, patches or [], run_id=run_id)
+        specs = _coerce_specs(result.spatial_reference_specs)
+        diags = result.diagnostics
+
+    route = route_compilation(result, diags)
+    if route == "llm_patch":
+        generated = await generate_llm_patches(result, diags, program)
+        if generated:
+            result = apply_patches(result, generated, run_id=run_id)
+            specs = _coerce_specs(result.spatial_reference_specs)
+            diags = result.diagnostics
+            route = route_compilation(result, diags)
+        else:
+            route = "human_review"
+    if route == "human_review":
         result.compilation_status = CompilationStatus.NEEDS_REVIEW
 
     gate_decision = evaluate_parse_gate(
@@ -191,7 +258,7 @@ async def parse_aggregate(
     mode_raw = state.get("parse_mode", "compile")
     mode = ParseMode(mode_raw) if not isinstance(mode_raw, ParseMode) else mode_raw
 
-    result, specs, gate_decision = compile_program(
+    result, specs, gate_decision = await compile_program_async(
         program,
         run_id=run_id,
         context_version=context_version,
@@ -238,4 +305,4 @@ async def parse_aggregate(
     }
 
 
-__all__ = ["compile_program", "parse_aggregate"]
+__all__ = ["compile_program", "compile_program_async", "parse_aggregate"]
