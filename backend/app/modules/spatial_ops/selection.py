@@ -187,7 +187,16 @@ def score_candidates(
             ratio = c.area_ha / target_ha
             area_fit = max(0.0, 1.0 - abs(math.log2(ratio)))
         score = 0.5 * proximity + 0.3 * construction + 0.2 * area_fit
-        scored.append(ScoredCandidate(bsm=c.bsm, score=score, distance_m=c.distance_m))
+        reasons = [f"construction:{construction:.2f}"]
+        if cluster_centroid is not None and c.distance_m is not None:
+            reasons.append(f"proximity:{proximity:.2f}")
+        if target_ha is not None and c.area_ha > 0:
+            reasons.append(f"area_fit:{area_fit:.2f}")
+        scored.append(
+            ScoredCandidate(
+                bsm=c.bsm, score=score, distance_m=c.distance_m, reasons=reasons
+            )
+        )
     scored.sort(key=lambda s: s.score, reverse=True)
     return scored
 
@@ -225,11 +234,12 @@ def rank_candidates(
     target_ha: Optional[float] = None,
     ranker: Optional[Ranker] = None,
     context: Optional[Dict[str, Any]] = None,
-) -> List[str]:
+) -> List[ScoredCandidate]:
     pool = {c.bsm for c in candidates}
     if ranker is None:
-        scored = score_candidates(candidates, cluster_centroid=cluster_centroid, target_ha=target_ha)
-        return [s.bsm for s in scored]
+        return score_candidates(
+            candidates, cluster_centroid=cluster_centroid, target_ha=target_ha
+        )
     ctx = dict(context or {})
     ctx.setdefault("cluster_centroid", cluster_centroid)
     ctx.setdefault("target_ha", target_ha)
@@ -237,7 +247,7 @@ def rank_candidates(
     for c in candidates:
         if c.bsm not in ordered:
             ordered.append(c.bsm)
-    return ordered
+    return [ScoredCandidate(bsm=b, score=0.0, distance_m=None) for b in ordered]
 
 
 @dataclass
@@ -248,6 +258,8 @@ class PlacementDecision:
     reason: str = ""
     status: str = "unplaced"  # placed / unplaced / deferred
     rejected: List[Rejection] = field(default_factory=list)
+    ranking: List[ScoredCandidate] = field(default_factory=list)
+    selected_score: float = 0.0
 
 
 def select_parcel(
@@ -265,11 +277,12 @@ def select_parcel(
         candidates, constraint_index=constraint_index, hazards=hazards, occupied=occupied
     )
     survivors = apply_scale_filter(survivors, allow_large_block=is_large_block_target(target))
-    order = rank_candidates(
+    ranked = rank_candidates(
         survivors, cluster_centroid=cluster_centroid, target_ha=target_ha, ranker=ranker,
     )
     by_bsm = {c.bsm: c for c in survivors}
-    for bsm in order:
+    for scored in ranked:
+        bsm = scored.bsm
         cand = by_bsm[bsm]
         point = place_anchor_point(cand.geometry, cluster_centroid)
         if point is None:
@@ -282,5 +295,13 @@ def select_parcel(
             reason=f"rank_top:{bsm}",
             status="placed",
             rejected=rejected,
+            ranking=ranked,
+            selected_score=scored.score,
         )
-    return PlacementDecision(target_id=target.target_id, status="unplaced", rejected=rejected)
+    return PlacementDecision(
+        target_id=target.target_id,
+        status="unplaced",
+        rejected=rejected,
+        ranking=ranked,
+        selected_score=0.0,
+    )

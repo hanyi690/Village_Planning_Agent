@@ -27,6 +27,7 @@ from app.modules.schema.contracts.selection_contracts import (
 )
 from app.modules.spatial_ops.selection import (
     PlacementDecision,
+    ScoredCandidate,
     SelectionTarget,
     select_parcel,
 )
@@ -38,6 +39,19 @@ _SCORE_BREAKDOWN_STUBS = {
     "road_access": 0.0,
     "service_coverage": 0.0,
 }
+
+
+def _breakdown_from_scored(scored: ScoredCandidate) -> Dict[str, float]:
+    """Build a 5-key breakdown from a ScoredCandidate's dimension reasons."""
+    breakdown = dict(_SCORE_BREAKDOWN_STUBS)
+    for reason in scored.reasons:
+        label, sep, value = reason.partition(":")
+        if sep and label in breakdown:
+            try:
+                breakdown[label] = float(value)
+            except ValueError:
+                pass
+    return breakdown
 
 
 def _setback_requirements(decision: PlacementDecision) -> List[str]:
@@ -78,9 +92,10 @@ def build_site_selection_decision(
 ) -> SiteSelectionDecision:
     """Aggregate placement decisions into a ``SiteSelectionDecision``.
 
-    Score note: ``select_parcel`` returns ``PlacementDecision`` (no per-candidate
-    scores), so the ranked score uses the deterministic default 1.0 for placed
-    and 0.0 for unplaced; ``score_breakdown`` keeps the mandated 5-key stub shape.
+    Ranked scores come from ``select_parcel``'s per-candidate ranking: the
+    winner's real score and 3-dimension breakdown are surfaced; the zero-stub
+    ``road_access``/``service_coverage`` dimensions stay 0.0 until external
+    network/facility data is wired in.
     """
     selected_combination = [d.selected_bsm for d in placements if d.status == "placed"]
     full_ranking: List[RankedCandidate] = []
@@ -92,13 +107,23 @@ def build_site_selection_decision(
         if placement.status == "placed":
             placed_count += 1
             rank += 1
-            best_score_by_target[placement.target_id] = 1.0
+            winner = next(
+                (s for s in placement.ranking if s.bsm == placement.selected_bsm),
+                None,
+            )
+            if winner is not None:
+                score = winner.score
+                breakdown = _breakdown_from_scored(winner)
+            else:
+                score = placement.selected_score
+                breakdown = dict(_SCORE_BREAKDOWN_STUBS)
+            best_score_by_target[placement.target_id] = score
             full_ranking.append(
                 RankedCandidate(
                     candidate_id=placement.selected_bsm,
                     rank=rank,
-                    score=1.0,
-                    score_breakdown=dict(_SCORE_BREAKDOWN_STUBS),
+                    score=score,
+                    score_breakdown=breakdown,
                 )
             )
         else:

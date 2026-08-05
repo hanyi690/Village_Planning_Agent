@@ -104,6 +104,24 @@ def test_score_breakdown_has_five_keys(make_bundle):
         assert set(ranked.score_breakdown.keys()) == _SCORE_KEYS
 
 
+def test_score_breakdown_has_real_values(make_bundle):
+    result = _result(["P001"])
+    intent = _intent([_project("p1")])
+    context = _context(make_bundle([make_parcel("P001")]))
+
+    decision, _ = select_aggregate(result, intent, context)
+
+    assert len(decision.full_ranking) == 1
+    ranked = decision.full_ranking[0]
+    assert ranked.score > 0
+    assert ranked.score_breakdown["proximity"] == 0.0
+    assert ranked.score_breakdown["construction"] == 0.3
+    assert ranked.score_breakdown["area_fit"] > 0
+    assert ranked.score_breakdown["road_access"] == 0.0
+    assert ranked.score_breakdown["service_coverage"] == 0.0
+    assert decision.decision_factors["best_score_by_target"]["p1"] == ranked.score
+
+
 def test_land_design_brief_fields(make_bundle):
     result = _result(["P001"])
     project = _project("p1", related_road_targets=["r1"], related_facility_types=["f1"])
