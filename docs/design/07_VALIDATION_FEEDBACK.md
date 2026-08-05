@@ -55,7 +55,7 @@ GROUND 的多实体歧义和 SELECT 的低置信度选址可以触发局部人�
 
 `RECONCILE` 比较：
 
-- L3PlanningIntent 中的目标是否都产生了 PlannedState。
+- `PlanningProgram` 中的干预是否都被编译，且 `IntentCompilationResult` 中的目标是否都产生了 PlannedState。
 - 每个 PlannedState 是否能回溯到目标、候选、决定和证据。
 - 规划数量、规模、位置和约束是否仍满足文本要求。
 - 渲染图层、GDB 图层和报告中的统计是否一致。

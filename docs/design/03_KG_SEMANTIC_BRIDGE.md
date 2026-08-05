@@ -45,12 +45,14 @@ class SpatialQueryPort(Protocol):
 
 | 规划阶段 | KG 用法 |
 |---|---|
-| L1 | 获取现状事实、约束覆盖和空间认知摘要 |
+| L1 | 通过 EXPLORE 请求现状事实、约束覆盖和空间认知摘要 |
+| L2 | 通过 EXPLORE 请求空间格局、设施覆盖、交通可达性和发展条件证据 |
+| L3 | 通过 EXPLORE 请求项目、设施、道路和空间关系相关证据 |
 | L2 | 验证策略是否违反现状结构和管制关系 |
 | L3 | 将规划文本编译为 IntentGraph，并保留证据来源 |
 | GROUND | 将 `SpatialReferenceSpec` 解析为实体和候选集 |
 | SELECT | 读取候选特征、关系和约束，生成评分输入 |
-| EXECUTE | 读取 `PlacementDecision`，写入 PlannedState |
+| EXECUTE | 读取 `SiteSelectionDecision`，写入 PlannedState |
 | RECONCILE | 对账 IntentGraph 与 PlannedState |
 
 ## 5. 写入规则
@@ -60,6 +62,8 @@ class SpatialQueryPort(Protocol):
 - IntentGraph 只能由 IntentCompiler 提交 revision。
 - PlannedState 只能由 Execute 提交，并携带 `derived_from`。
 - 所有 KG 写入都必须带 session、version 和 provenance。
+- L1/L2/L3 不直接持有 KG 实例；KG 查询由 EXPLORE 通过 `SemanticQueryPort` 统一执行。
+- `SpatialCognitionEvidence` 是供维度分析消费的证据视图，不是候选地块或选址决定。
 
 ## 6. 失败语义
 

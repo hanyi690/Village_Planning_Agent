@@ -17,6 +17,14 @@ conversation
 
 当前路径仅适合作为迁移兼容层，不是目标边界。
 
+当前新 `retrieve_evidence()` 调用发生在共享维度 worker 内、报告生成之前；L3 完成后仍存在旧的
+`explore -> gis_agent` 桥接。因此当前代码同时存在“按维度证据注入”和“旧后置桥接”两种语义，
+后者必须在目标主图接入时删除。
+
+当前 L1 的 12 个维度已经通过 `Send` 并行运行。每个 worker 生成完整报告后，还会生成并保存
+`DimensionReport.summary`；但该字段目前只是维度 schema 外壳、字符数、正文前 200 字预览以及空的
+`key_points` / `metrics`，不是语义摘要或权威事实。
+
 ## 2. 目标主图
 
 ```mermaid
@@ -51,9 +59,37 @@ flowchart TD
     Router -->|pass| Delivery["delivery_gate"]
 ```
 
-### 2.1 PARSE 子图（独立顶层阶段）
+### 2.1 L1 子图（并行报告与并行编译）
 
-PARSE 是**独立的顶层阶段**，形式上不属于 select_graph（不再与 SELECT 合并）。输入为 L3 `PlanningProgram`，输出为 `IntentCompilationResult` + `SpatialReferenceSpec`。
+```mermaid
+flowchart TD
+    Dispatch["L1 dimension dispatch"] --> W1["12 × report worker (parallel)"]
+    W1 --> Report["AnalysisReport<br/>content + instruction + provenance"]
+    W1 --> Compile["12 × fragment compiler (parallel)<br/>profile=L1_OBSERVATION"]
+    Compile --> Fragment["L1DimensionFragment"]
+    Fragment --> Aggregate["l1_aggregate<br/>deterministic join"]
+    Aggregate --> Snapshot["L1Snapshot"]
+    Snapshot --> Gate{"L1 Evidence Gate"}
+```
+
+- 保留现有 12 维报告及 `【INSTRUCTION】`，继续服务 UI、SSE、KG enrichment 和人工审查。
+- fragment compiler 是共享 IntentCompiler 的 L1 profile，不是 12 个新的顶层图节点。
+- 每个 worker 完成后立即编译自身 fragment；不同维度可继续并行。
+- `l1_aggregate` 只合并 fragment、检查重复/冲突/证据缺口、建立 provenance 并构造 Gate 输入；
+  不调用 LLM，也不重新解析 12 份报告。
+- `DimensionReport.summary` 只作兼容性预览，不得直接汇聚为 `L1Snapshot`。
+
+### 2.2 PARSE 子图（独立顶层阶段）
+
+PARSE 是**独立的顶层阶段**，形式上不属于 L1 或 select_graph。L1 只是复用同一个 compiler core
+生成维度 fragment，不表示工作流提前进入顶层 PARSE。顶层 PARSE 输入为 L3 `PlanningProgram`，
+输出为 `IntentCompilationResult` + `SpatialReferenceSpec`。
+
+共享 compiler core 提供两个 profile：
+
+- **L1_OBSERVATION**：输入 `AnalysisReport.content`、独立 `instruction`、证据引用和 legacy summary，
+  输出 `L1DimensionFragment`。
+- **L3_PLANNING**：输入 `PlanningProgram`，输出 `IntentCompilationResult` + `SpatialReferenceSpec`。
 
 三种模式：
 
@@ -90,12 +126,12 @@ flowchart TD
 |---|---|---|
 | `l1_graph` | Context + EvidenceBundle | `L1Snapshot` |
 | `l2_graph` | `L1Snapshot` | `L2Strategy` |
-| `l3_graph` | L1 + L2 + evidence | `L3PlanningIntent` |
+| `l3_graph` | L1 + L2 + evidence | `PlanningProgram` |
 | `parse_graph` | `PlanningProgram` | `IntentCompilationResult` + `SpatialReferenceSpec` |
 | `explore_graph` | `ExplorationRequest` | `EvidenceBundle` |
 | `ground_graph` | `SpatialReferenceSpec` | `GroundingResult` |
-| `select_graph` | `GroundingResult` + requirements | `PlacementDecision` |
-| `execute_graph` | `PlacementDecision` | `PlannedState` |
+| `select_graph` | `GroundingResult` + requirements | `SiteSelectionDecision` |
+| `execute_graph` | `SiteSelectionDecision` | `PlannedState` |
 | `validate_graph` | artifacts + context | `ValidationReport` |
 
 ## 4. Agent 形态
@@ -106,6 +142,19 @@ flowchart TD
 - SELECT：规则过滤 + 可选 Top-K Selection Agent。
 - EXECUTE：确定性 Worker，不使用自由规划 Agent。
 - VALIDATE：确定性 Evaluator。
+
+EXPLORE 是 L1/L2/L3 共用的 session-wide evidence service。维度 worker 可以请求空间认知，
+但不直接调用 KG；请求由 EXPLORE 按阶段、维度和 query purpose 从 KG、Bundle、报告、
+`【INSTRUCTION】`、typed artifacts、已有证据和外部来源中渐进式检索，返回 `EvidenceBundle`。
+GROUND 才将 PARSE 的 `SpatialReferenceSpec` 接到候选实体和几何；EXPLORE 不生成候选集。
+
+目标图允许 Bootstrap 在 L1 前准备 evidence index，但不设置一个声称“证据已经充分”的固定
+EXPLORE 阶段。证据充分性只能由各阶段 Gate 判断；Gate 必须能根据结构化 EvidenceGap 再次调用
+EXPLORE。L1 并行 worker 不能假设同层其他报告已经可检索。
+
+在顶层 PARSE 完成前，真实主图测试止于报告层和独立 compiler/aggregate 组件。只有
+`L2Strategy`、`PlanningProgram` 成为阶段权威产物且 `L3_PLANNING` profile 接入 Parse Gate 后，
+才允许把测试称为 L1→L2→L3→PARSE 端到端验证。
 
 ## 5. 状态规则
 

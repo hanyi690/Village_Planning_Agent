@@ -24,10 +24,14 @@ flowchart TD
     G2 -->|通过| L3["L3 PLAN\n详细规划意图"]
     G2 -->|缺事实| Explore
     G2 -->|事实不一致| L1
-    L3 --> G3{"L3 Intent Gate"}
-    G3 -->|通过| Ground["GROUND\n空间引用接地"]
+    L3 --> G3{"L3 Program Gate"}
     G3 -->|缺信息| Explore
     G3 -->|意图不完整| L3
+    G3 -->|通过| Parse["PARSE\nIntent Compiler"]
+    Parse --> PG{"Parse Gate"}
+    PG -->|修复 / 局部纠正| Parse
+    PG -->|缺少规划内容| L3
+    PG -->|通过| Ground["GROUND\n空间引用接地"]
     Ground --> GG{"Grounding Gate"}
     GG -->|通过| Select["SELECT\n候选评估与选址"]
     GG -->|实体歧义| Explore
@@ -48,7 +52,18 @@ flowchart TD
     Delivery -->|失败| Validate
 ```
 
-EXPLORE 是横向能力，不是固定的“L3 后桥接节点”。L1、L2、L3、GROUND 和 VALIDATE 都可以提交 `ExplorationRequest`；EXPLORE 只返回证据和事实，不返回最终候选地块，也不直接改变规划意图。
+EXPLORE 是横向能力，不是固定的“L3 后桥接节点”。L1、L2、L3、GROUND 和 VALIDATE 都可以提交
+`ExplorationRequest`。EXPLORE 的检索范围覆盖整个 session：`BaseFacts`、`DerivedRelations`、
+VillageBundle、各层 AnalysisReport、`【INSTRUCTION】`、typed artifacts、既有 EvidenceBundle、
+用户修订记录和允许的外部来源。KG 只是其中一个来源，不是 EXPLORE 的全部输入。
+
+L1/L2/L3 都可以消费空间认知，但不直接持有 KG 实例或维护维度专属 KG 查询；它们按
+`stage + dimension_key + query_purpose + evidence_gap` 提交请求，由 EXPLORE 返回带 provenance 的
+`EvidenceBundle`。EXPLORE 只返回事实、证据和空间认知，不返回最终候选地块，也不直接改变规划意图。
+
+Bootstrap 可以在 L1 前准备 KG、Bundle 和 artifact 的 evidence index，但该动作不代表探索完成。
+实际证据是否充分由各阶段 Gate 判断；worker 和 Gate 按问题、维度及 EvidenceGap 发起增量检索。
+因此系统中不存在“一次预设搜索即可满足 L1/L2/L3”的假设。
 
 ## 2. 三类权威产物
 
@@ -56,9 +71,10 @@ EXPLORE 是横向能力，不是固定的“L3 后桥接节点”。L1、L2、L3
 |---|---|---|---|
 | `L1Snapshot` | L1 子图 | L2、L3、Explore | 已核验的现状事实、约束、问题和证据缺口 |
 | `L2Strategy` | L2 子图 | L3、Select、Explore | 目标、定位、策略和策略冲突 |
-| `L3PlanningIntent` | L3 子图 / IntentCompiler | Ground、Select、Execute | 类型化的 Zone、Facility、Road、Project 和空间引用 |
+| `PlanningProgram` | L3 子图 | PARSE、L2、Explore | 项目、设施、道路、保护修复等规划干预及其依赖 |
+| `IntentCompilationResult` | PARSE / IntentCompiler | Ground、Select、Execute | 从 PlanningProgram 编译得到的类型化目标、约束和空间引用 |
 | `GroundingResult` | Ground 子图 | Select | 空间引用对应的实体、候选及查询证据 |
-| `PlacementDecision` | Select 子图 | Execute | 经过硬约束和评分后的最终选址决定 |
+| `SiteSelectionDecision` | Select 子图 | Execute | 经过硬约束、评分和冲突分配后的最终选址决定 |
 | `PlannedState` | Execute 子图 | Validate、Reconcile、Delivery | 实际生成的规划图层和派生关系 |
 
 Markdown 报告、SSE 事件和 UI 展示都是这些产物的视图，不是新的事实源。
@@ -67,7 +83,7 @@ Markdown 报告、SSE 事件和 UI 展示都是这些产物的视图，不是新
 
 | 能力 | 目标形态 | 允许做什么 | 不允许做什么 |
 |---|---|---|---|
-| EXPLORE | 工具调用 Agent | 查询 KG、RAG、报告和外部资料，整理证据 | 生成候选 BSM、修改意图、选最终位置 |
+| EXPLORE | session evidence service / 工具调用 Agent | 按阶段和维度检索 KG、Bundle、报告、typed artifacts、RAG 和外部资料，整理证据与空间认知 | 生成候选 BSM、修改意图、选最终位置 |
 | L1/L2/L3 分析 | 专业分析 Agent | 解释事实、推导策略、生成规划文本草案 | 绕过 Gate 直接写空间成果 |
 | PARSE / IntentCompiler | 类型化编译节点 | 文本转 Target、Constraint、`SpatialReferenceSpec` | 查询地块或决定最终选址 |
 | GROUND | 确定性子图，可含歧义处理节点 | 实体解析、KG 候选、几何精化 | 评价候选优劣 |
@@ -104,9 +120,24 @@ Application subgraphs and API routes
 | `IntentGraph` | 当前规划周期内的类型化意图实体 |
 | `PlannedState` | 执行后产生的规划成果实体 |
 
-## 6. 设计状态
+## 6. 当前实现边界
 
-本文描述目标结构；代码当前仍保留旧的 6 节点主图、EXPLORE→GIS 直连和大型 `layout_pipeline`。这些差异集中记录在 [10_IMPLEMENTATION_STATUS.md](10_IMPLEMENTATION_STATUS.md)，迁移顺序记录在 [09_INTEGRATION_BREAKPOINTS.md](09_INTEGRATION_BREAKPOINTS.md)。
+上图是目标设计，不是当前代码的逐节点描述。当前主图已经拆出独立的 L1/L2/L3 worker、层级 aggregate
+和 post-L3 链；post-L3 链由 `gis_agent_node` 调用，当前运行顺序为：
+
+```text
+PARSE → GROUND → SELECT → EXECUTE → VALIDATE → RECONCILE → DELIVER
+```
+
+当前 EXECUTE 仍是 Wave I 的混合实现：项目、分区、设施、轴线和道路节点共存；分区使用确定性
+reclassify，MIP 正式 allocator 已在 Wave I 删除；道路同时保留 staged planner 和简化 fallback。
+`ExecutionPlan`、统一 Zone Worker、MIP ZoneAllocator 和唯一 Road Worker 仍属于后续收敛工作。
+
+因此当前真实 session 可以验证报告、`【INSTRUCTION】`、部分 typed aggregate 和 post-L3 节点，但不能据此
+宣称“现状报告 + GIS → 合理项目定位、规划分区、道路和地块重组”已经端到端可用。
+
+实现状态以 [10_IMPLEMENTATION_STATUS.md](10_IMPLEMENTATION_STATUS.md) 为准；目录迁移和重复实现清理记录在
+[09_INTEGRATION_BREAKPOINTS.md](09_INTEGRATION_BREAKPOINTS.md)。
 
 ## 7. 相关文档
 

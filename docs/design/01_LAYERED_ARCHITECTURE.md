@@ -29,15 +29,24 @@ Schema contracts and encodings
 - `PlanningContext`
 - `L1Snapshot`
 - `L2Strategy`
-- `L3PlanningIntent`
+- `PlanningProgram`
+- `IntentCompilationResult`
 - `SpatialReferenceSpec`
 - `GroundingResult`
-- `PlacementDecision`
+- `SiteSelectionDecision`
 - `ExecutionPlan`
 - `ValidationReport`
 - `DeliveryGate`
 
 Schema 不读取数据库、文件、KG 或 LLM。
+
+当前契约目录按阶段拆分是允许的，但并非每个文件都代表独立运行阶段。`contract_meta.py`、
+`provenance.py`、`classification_ref.py`、evidence/context/workflow contracts 是稳定共性；
+`l1/l2/l3`、`grounding`、`selection`、`execution_plan`、`planned_state`、`validation`、
+`reconciliation`、`delivery` 和 `review` 是阶段 artifact。`parse_contracts.py` 当前仍同时承载
+intent target、spatial operation、constraint 和指标模型；`layout_contracts.py` 与
+`execution_plan_contracts.py` 存在遗留重叠，`custom_zone_contracts.py` 只应保留词汇/功能区语义，
+不应成为第二套执行目标模型。契约合并应在调用方迁移和 EXECUTE 输入冻结后进行，当前先禁止新增旧模型依赖。
 
 ### 2.2 Data repositories
 
@@ -59,7 +68,10 @@ Schema 不读取数据库、文件、KG 或 LLM。
 
 ### 2.5 Planning domain services
 
-目标位置：`backend/app/modules/planning/`（迁移期间可由现有 `agent/gis`、`spatial_ops` 和 `tools/gis/_generation` 分批承接）。
+目标位置：由 `backend/app/modules/` 下的领域模块和 ports 承接；当前尚不存在完整的
+`backend/app/modules/planning/` 聚合包。迁移期间能力分散在 `agent/`、`modules/spatial_ops/`、
+`modules/parsing/`、`tools/gis/_generation/` 和 `services/modules/gis/road/`，这些目录不能因此被视为
+已经完成了领域边界收敛。
 
 包含：
 
@@ -75,13 +87,17 @@ Schema 不读取数据库、文件、KG 或 LLM。
 
 位置：`backend/app/agent/`。
 
-只负责节点编排、并行调度、Gate、重试和人工中断。它不应该直接拼接 GeoJSON、加载 Gazetteer、选择 BSM 或实现道路算法。
+目标上只负责节点编排、并行调度、Gate、重试和人工中断。当前 `agent/execute/execute_agent.py` 仍直接
+调用几何、道路和图层生成逻辑；这属于已识别的迁移断点，不应继续扩展。
 
-### 2.7 Adapters
+### 2.7 Application services and adapters
 
 位置：`backend/app/api/`、`backend/app/services/`、`backend/app/tools/`。
 
-适配数据库、LLM、外部地图、SSE 和文件输出。适配器可以调用领域服务，但不能反向把领域服务绑定到某个 Agent State。
+`backend/app/services/` 应只保留应用编排、Context 构建、artifact、报告、SSE 和会话服务；
+`backend/app/services/modules/gis/road/` 当前包含实际道路算法，是历史迁移遗留的混合目录，不能作为最终分层。
+它应迁移到基础设施道路适配器，并通过 `RoadPlannerPort` 被应用服务调用。适配器可以调用领域服务，但不能
+反向把领域服务绑定到某个 Agent State。
 
 ## 3. 允许与禁止的依赖
 
@@ -120,3 +136,6 @@ PlanningContext
 3. 新增 import 边界检查，禁止出现 `modules → agent/services/api`。
 4. 每迁移一个子图，保留输入/输出快照测试。
 5. 目录重命名晚于职责切分，避免“换目录但耦合不变”。
+6. `modules/spatial_ops/road_planner.py` 与 `services/modules/gis/road/` 不得长期作为两个正式道路入口；
+   在收敛完成前必须明确 staged planner 是 canonical，local planner 只能显式标记为 degraded。
+7. `schema/contracts/__init__.py` 不再使用 wildcard 作为业务代码的主要导入入口；业务代码应从具体契约文件导入。
