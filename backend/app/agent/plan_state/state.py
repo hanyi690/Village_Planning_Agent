@@ -217,6 +217,11 @@ class AgentState(TypedDict, total=False):
     context_version: str  # PlanningContext 版本戳
     # ── Wave M2: layer aggregate wiring ──
     layer_just_completed: Optional[int]  # set by completion_check, consumed by layer_aggregate_node
+    # ── Wave N P5: post-L3 HITL pending/resume fields ──
+    post_l3_pending_review: Annotated[List[Dict[str, Any]], _replace_or_merge_lists]  # HUMAN 暂停时的待审 items
+    post_l3_thread_id: str  # post-L3 chain 的 LangGraph thread_id（= session_id）
+    post_l3_status: str  # "needs_human_review" 等
+    post_l3_decisions: Optional[Any]  # resume 后回写的审查决策
 
 
 # ==========================================
@@ -281,6 +286,11 @@ def create_initial_state(
         "pending_requests": [],
         "context_version": "",
         "layer_just_completed": None,
+        # ── Wave N P5: post-L3 HITL ──
+        "post_l3_pending_review": [],
+        "post_l3_thread_id": "",
+        "post_l3_status": "",
+        "post_l3_decisions": None,
     }
 
 

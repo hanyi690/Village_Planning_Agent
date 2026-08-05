@@ -104,10 +104,23 @@ def test_chain_compiles_with_retry():
     assert graph is not None
 
 
-# ── HUMAN route populates human_review_items ──
+# ── HUMAN route: no items -> END; with items -> interrupt (HITL) ──
 
 @pytest.mark.asyncio
-async def test_human_review_node_populates_items(monkeypatch):
+async def test_human_review_node_no_items_returns_empty():
+    from app.agent.bootstrap.post_l3_nodes import human_review_node
+
+    state = PostL3ChainState(parse_gate=_gate(None), human_review_items=[])
+    result = await human_review_node(state)
+    assert result["human_review_items"] == []
+    assert "human_review_decisions" not in result
+
+
+@pytest.mark.asyncio
+async def test_human_review_node_with_items_interrupts_outside_graph():
+    """With HUMAN items the node calls interrupt(); outside a graph run this
+    raises (no runnable context). The full pause/resume flow is exercised in
+    test_post_l3_hitl.py through a compiled graph with a checkpointer."""
     from app.agent.bootstrap.post_l3_nodes import human_review_node
     from app.modules.schema.contracts.workflow_contracts import PendingRequest
 
@@ -125,6 +138,5 @@ async def test_human_review_node_populates_items(monkeypatch):
         ],
     )
     state = PostL3ChainState(parse_gate=gate, human_review_items=[])
-    result = await human_review_node(state)
-    assert len(result["human_review_items"]) == 1
-    assert result["human_review_items"][0]["request_id"] == "pr-1"
+    with pytest.raises(RuntimeError):
+        await human_review_node(state)

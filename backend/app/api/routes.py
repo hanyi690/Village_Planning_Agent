@@ -26,6 +26,7 @@ from fastapi.responses import Response
 
 from app.api.session_routes import router as session_router
 from app.api.gis_test_routes import router as gis_test_router
+from app.api.human_review_routes import router as human_review_router
 from app.core.settings import TIANDITU_API_KEY
 
 logger = logging.getLogger(__name__)
@@ -38,6 +39,9 @@ router.include_router(session_router, tags=["Session"])
 
 # GIS dev test API (开发环境专用)
 router.include_router(gis_test_router, tags=["GIS Dev"])
+
+# Post-L3 HITL (人工审查 interrupt + resume)
+router.include_router(human_review_router, tags=["Human Review"])
 
 
 # ============================================

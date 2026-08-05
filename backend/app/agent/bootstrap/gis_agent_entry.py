@@ -2,7 +2,7 @@
 
 from typing import Dict, Any, List, Literal, Optional
 from langgraph.graph import END
-from langgraph.errors import NodeError
+from langgraph.errors import GraphInterrupt, NodeError
 from langgraph.types import Command
 from langchain_core.messages import AIMessage
 
@@ -84,7 +84,7 @@ async def gis_agent_node(state: Dict[str, Any]) -> Dict[str, Any]:
         logger.warning("[gis_agent_node] L3 program compile failed: %s", e)
         planning_program = None
 
-    # ── Step 3: 运行 post-L3 链 ──
+    # ── Step 3: 运行 post-L3 链（HITL: 捕获 interrupt 暂停）──
     chain_state = PostL3ChainState(
         session_id=session_id,
         village_name=village_name,
@@ -95,8 +95,34 @@ async def gis_agent_node(state: Dict[str, Any]) -> Dict[str, Any]:
         messages=list(state.get("messages", []) or []),
     )
 
-    chain = build_post_l3_chain()
-    chain_result = await chain.ainvoke(chain_state.model_dump())
+    from app.database.engine import get_global_checkpointer
+
+    chain = build_post_l3_chain(checkpointer=await get_global_checkpointer())
+    config = {"configurable": {"thread_id": session_id}}
+
+    # context 含 KG 闭包/适配器等不可序列化对象，无法写入 checkpoint：
+    # 从图输入剥离（checkpoint 存 None），节点经会话 context 缓存恢复。
+    chain_input = chain_state.model_dump()
+    chain_input["context"] = None
+
+    try:
+        chain_result = await chain.ainvoke(chain_input, config)
+    except GraphInterrupt as exc:
+        interrupt_payloads = _extract_interrupt_payloads(exc)
+    else:
+        interrupt_payloads = chain_result.get("__interrupt__") or []
+
+    if interrupt_payloads:
+        items = _pending_items_from_interrupts(interrupt_payloads)
+        logger.info(
+            "[gis_agent_node] post-L3 chain paused at human_review: %d items "
+            "(thread_id=%s)", len(items), session_id,
+        )
+        return {
+            "post_l3_pending_review": items,
+            "post_l3_thread_id": session_id,
+            "post_l3_status": "needs_human_review",
+        }
 
     delivery_manifest = chain_result.get("delivery_manifest")
     layout_configs = list(chain_result.get("layout_configs", []) or [])
@@ -206,6 +232,30 @@ def _get_reports_fallback(state: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
         for dim_key in dims:
             result[dim_key] = {"status": "completed", "layer": layer_key}
     return result
+
+
+def _extract_interrupt_payloads(exc: GraphInterrupt) -> list[Any]:
+    """Extract the list of langgraph Interrupt objects from a GraphInterrupt.
+
+    LangGraph 1.x stores the interrupt sequence on the exception; prefer the
+    public ``interrupts`` attribute when present, else fall back to ``args[0]``.
+    """
+    if getattr(exc, "interrupts", None):
+        return list(exc.interrupts)
+    if exc.args and isinstance(exc.args[0], (list, tuple)):
+        return list(exc.args[0])
+    return []
+
+
+def _pending_items_from_interrupts(interrupts: list[Any]) -> list[Dict[str, Any]]:
+    """Pull human_review_items out of the interrupt payload(s)."""
+    for intr in interrupts:
+        value = getattr(intr, "value", None)
+        if isinstance(value, dict):
+            items = value.get("human_review_items") or []
+            if items:
+                return list(items)
+    return []
 
 
 def _format_gis_result(result: Dict[str, Any], layout_configs: List[Dict[str, Any]]) -> str:

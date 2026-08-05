@@ -130,8 +130,26 @@ def _route_after_deliver(state: PostL3ChainState) -> str:
     return "human_end"
 
 
-def build_post_l3_chain():
-    """Build and compile the post-L3 subgraph chain with retry loops."""
+def _route_after_human_review(state: PostL3ChainState) -> str:
+    """Route after human_review: both pause (interrupt handled inside node)
+    and completed-review flows terminate at END.
+
+    The node itself pauses via interrupt() when items exist; the conditional
+    edge is only traversed on resume (decisions written back) or when there
+    were no items. Either way the chain ends.
+    """
+    return "end"
+
+
+def build_post_l3_chain(checkpointer=None):
+    """Build and compile the post-L3 subgraph chain with retry loops.
+
+    Args:
+        checkpointer: optional LangGraph BaseCheckpointSaver. When provided,
+            the graph can pause at human_review (HITL) and be resumed with
+            Command(resume=...). Defaults to None (no persistence; interrupt
+            pauses but cannot be resumed).
+    """
     graph = StateGraph(PostL3ChainState)
 
     graph.add_node("parse", parse_node)
@@ -170,9 +188,12 @@ def build_post_l3_chain():
         "deliver", _route_after_deliver,
         {"end": END, "validate": "validate", "human_end": "human_review"},
     )
-    graph.add_edge("human_review", END)
+    graph.add_conditional_edges(
+        "human_review", _route_after_human_review,
+        {"end": END},
+    )
 
-    compiled = graph.compile()
+    compiled = graph.compile(checkpointer=checkpointer)
     logger.info(
         "[post_l3] chain compiled (M2 retry): "
         "parse->ground->select->execute->validate->reconcile->deliver + human_review"

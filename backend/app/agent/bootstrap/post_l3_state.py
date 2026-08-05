@@ -80,6 +80,10 @@ class PostL3ChainState(BaseModel):
     explore_cache: Dict[str, Any] = Field(default_factory=dict)
     human_review_items: List[Dict[str, Any]] = Field(default_factory=list)
 
+    # ── Wave N P5: HITL resume state ──
+    human_review_decisions: Any = None  # resume 后回填的审查决策
+    status: str = ""  # 可选状态标记（needs_human_review 等）
+
     # ── Messages ──
     messages: List[Any] = Field(default_factory=list)
 

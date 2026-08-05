@@ -10,6 +10,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from langgraph.types import interrupt
+
 from app.agent.ground.aggregate import ground_aggregate
 from app.agent.ground.gate import evaluate_ground_gate
 from app.agent.parse.aggregate import compile_program_async
@@ -25,6 +27,28 @@ logger = get_logger(__name__)
 
 def _accumulate_gate(gates: list[Any], gate: Any) -> list[Any]:
     return list(gates or []) + ([gate] if gate is not None else [])
+
+
+def _resolve_context(state: PostL3ChainState) -> Any:
+    """Return the live PlanningContext for a chain run.
+
+    When the chain is compiled with a checkpointer, gis_agent_node strips
+    ``context`` from the serialized state (PlanningContext holds non-serializable
+    KG closures/adapters). The real context is kept in the session context cache
+    (``build_planning_context``), so nodes fall back to it here. Direct node
+    invocation (tests / no checkpointer) still passes ``state.context`` directly.
+    """
+    context = getattr(state, "context", None)
+    if context is not None:
+        return context
+    if getattr(state, "session_id", ""):
+        try:
+            from app.services.context.planning_context import get_cached_context
+
+            return get_cached_context(state.session_id)
+        except Exception:
+            return None
+    return None
 
 
 async def parse_node(state: PostL3ChainState) -> dict[str, Any]:
@@ -48,7 +72,7 @@ async def parse_node(state: PostL3ChainState) -> dict[str, Any]:
 
 async def ground_node(state: PostL3ChainState) -> dict[str, Any]:
     """GROUND node: specs + context -> GroundingResult + gate."""
-    context = state.context
+    context = _resolve_context(state)
     result = ground_aggregate(list(state.specs or []), context)
     gate = evaluate_ground_gate(result)
     return {
@@ -60,7 +84,7 @@ async def ground_node(state: PostL3ChainState) -> dict[str, Any]:
 
 async def select_node(state: PostL3ChainState) -> dict[str, Any]:
     """SELECT node: GroundingResult + intent + context -> SiteSelectionDecision."""
-    context = state.context
+    context = _resolve_context(state)
     decision, briefs = select_aggregate(
         state.grounding_result, state.intent, context
     )
@@ -80,7 +104,7 @@ async def execute_node(state: PostL3ChainState) -> dict[str, Any]:
     from app.agent.execute.execute_state import ExecuteAgentState
     from app.agent.execute.planned_state_builder import changeset_to_planned_state
 
-    context = state.context
+    context = _resolve_context(state)
     intent = state.intent
     bundle = getattr(context, "bundle", None)
     gis_data = bundle.to_geojson_dict() if bundle is not None and hasattr(bundle, "to_geojson_dict") else {}
@@ -126,7 +150,7 @@ async def validate_node(state: PostL3ChainState) -> dict[str, Any]:
     from app.agent.validate.aggregate import validate_aggregate
     from app.agent.validate.gate import evaluate_validate_gate
 
-    context = state.context
+    context = _resolve_context(state)
     constraint_index = getattr(context, "constraint_index", None)
     report = validate_aggregate(
         state.planned_state,
@@ -173,7 +197,7 @@ async def deliver_node(state: PostL3ChainState) -> dict[str, Any]:
     from app.agent.deliver.gate import evaluate_deliver_gate
     from app.modules.spatial_ops.export_package import export_gdb_package
 
-    context = state.context
+    context = _resolve_context(state)
     bundle = getattr(context, "bundle", None)
     gis_data = bundle.to_geojson_dict() if bundle is not None and hasattr(bundle, "to_geojson_dict") else {}
 
@@ -222,12 +246,12 @@ async def deliver_node(state: PostL3ChainState) -> dict[str, Any]:
     }
 
 
-async def human_review_node(state: PostL3ChainState) -> dict[str, Any]:
-    """Collect human-review items from the gate that triggered HUMAN route.
+def _collect_human_items(state: PostL3ChainState) -> list[dict[str, Any]]:
+    """Extract pending_requests from the most recent HUMAN gate decision.
 
-    Wave M2: this node is the terminal target for HUMAN routes. It reads
-    the most recent gate decision (whichever stage triggered HUMAN), extracts
-    its pending_requests, and populates human_review_items on state.
+    Reads each gate in chain order, takes the first gate whose
+    feedback_route == HUMAN, and dumps its pending_requests to dicts
+    (JSON-serializable for the interrupt payload / checkpoint).
     """
     items: list[dict[str, Any]] = []
 
@@ -251,8 +275,32 @@ async def human_review_node(state: PostL3ChainState) -> dict[str, Any]:
                 items.append(pr)
         break  # only process the first HUMAN gate
 
-    logger.info("[post_l3:human_review] collected %d human review items", len(items))
-    return {"human_review_items": items}
+    return items
+
+
+async def human_review_node(state: PostL3ChainState) -> dict[str, Any]:
+    """Collect human-review items; if any, pause for real human review.
+
+    Wave N P5 (HITL): on first execution the node collects the items and
+    calls interrupt() to pause the graph with a checkpointer. On resume the
+    second interrupt() call returns the external review decisions, which are
+    written back to human_review_decisions so the chain can proceed to END.
+    """
+    items = _collect_human_items(state)
+
+    if not items:
+        logger.info("[post_l3:human_review] no items; chain continues to END")
+        return {"human_review_items": []}
+
+    logger.info("[post_l3:human_review] collected %d items; INTERRUPT awaiting review", len(items))
+    decisions = interrupt(
+        {"human_review_items": items, "reason": "post_l3_human_review"}
+    )
+    logger.info("[post_l3:human_review] RESUME decisions received: %s", decisions)
+    return {
+        "human_review_items": items,
+        "human_review_decisions": decisions,
+    }
 
 
 __all__ = [

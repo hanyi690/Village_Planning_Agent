@@ -1,4 +1,4 @@
-﻿"""gis_agent_node tests — post-L3 chain invocation + AgentState write-back."""
+"""gis_agent_node tests — post-L3 chain invocation + AgentState write-back."""
 
 from types import SimpleNamespace
 
@@ -12,6 +12,15 @@ def _bundle():
     from app.modules.schema.types.canonical import VillageBundle
 
     return VillageBundle(village_name="金田村")
+
+
+def _mock_global_checkpointer(monkeypatch):
+    async def fake_get_global_checkpointer():
+        return object()
+
+    monkeypatch.setattr(
+        "app.database.engine.get_global_checkpointer", fake_get_global_checkpointer
+    )
 
 
 def _context():
@@ -45,7 +54,7 @@ async def test_gis_agent_node_writes_delivery_manifest(monkeypatch):
         def get(self, key, default=None):
             return self._d.get(key, default)
 
-    async def fake_chain_ainvoke(self, state):
+    async def fake_chain_ainvoke(self, state, config=None):
         return FakeChainResult(
             {
                 "delivery_manifest": manifest,
@@ -60,8 +69,8 @@ async def test_gis_agent_node_writes_delivery_manifest(monkeypatch):
         )
 
     class FakeChain:
-        async def ainvoke(self, state):
-            return await fake_chain_ainvoke(self, state)
+        async def ainvoke(self, state, config=None):
+            return await fake_chain_ainvoke(self, state, config)
 
     monkeypatch.setattr(
         "app.services.context.build_planning_context", fake_build_planning_context
@@ -69,8 +78,9 @@ async def test_gis_agent_node_writes_delivery_manifest(monkeypatch):
     monkeypatch.setattr(
         "app.agent.l3_plan.aggregate.l3_aggregate", fake_l3_aggregate
     )
+    _mock_global_checkpointer(monkeypatch)
     monkeypatch.setattr(
-        "app.agent.bootstrap.post_l3_chain.build_post_l3_chain", lambda: FakeChain()
+        "app.agent.bootstrap.post_l3_chain.build_post_l3_chain", lambda checkpointer=None: FakeChain()
     )
 
     out = await gis_agent_node(
@@ -104,7 +114,7 @@ async def test_gis_agent_node_merges_user_uploads(monkeypatch):
         raise RuntimeError("no reports")
 
     class FakeChain:
-        async def ainvoke(self, state):
+        async def ainvoke(self, state, config=None):
             return {
                 "delivery_manifest": manifest,
                 "layout_configs": [],
@@ -122,8 +132,9 @@ async def test_gis_agent_node_merges_user_uploads(monkeypatch):
     monkeypatch.setattr(
         "app.agent.l3_plan.aggregate.l3_aggregate", fake_l3_aggregate
     )
+    _mock_global_checkpointer(monkeypatch)
     monkeypatch.setattr(
-        "app.agent.bootstrap.post_l3_chain.build_post_l3_chain", lambda: FakeChain()
+        "app.agent.bootstrap.post_l3_chain.build_post_l3_chain", lambda checkpointer=None: FakeChain()
     )
 
     out = await gis_agent_node(
