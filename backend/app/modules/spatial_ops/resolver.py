@@ -371,19 +371,17 @@ def resolve_spatial_anchors(
     intent: Any,
     village_name: str = "",
     village_anchors: Optional[List[Dict[str, Any]]] = None,
+    gazetteer: Any = None,
 ) -> int:
     """将 intent 中位置文本解析为具体 BSM 集。
 
-    Thin wrapper around resolve_intent_anchors that auto-loads the gazetteer.
+    Thin wrapper around resolve_intent_anchors. The gazetteer should be
+    passed by the caller (loaded via PlanningContext). If not provided,
+    resolution is skipped (returns 0).
     Migrated from app.agent.select.parse_agent.resolve_spatial_anchors (Wave M2).
     """
-    gazetteer = None
-    if village_name:
-        try:
-            from app.modules.kg.gazetteer import load_gazetteer
-            gazetteer = load_gazetteer(village_name)
-        except Exception:
-            pass
+    if gazetteer is None and not village_anchors:
+        return 0
 
     return resolve_intent_anchors(
         intent,

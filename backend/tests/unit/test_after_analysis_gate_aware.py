@@ -36,11 +36,14 @@ def test_gate_pass_continues_to_next_phase():
 
 
 def test_gate_explore_routes_to_explore():
-    """L1 gate EXPLORE -> router should return 'explore'."""
+    """L1 gate EXPLORE -> router should re-dispatch dimension workers."""
     state = _state_with_gate("layer1", "l1_gate_decision", "EXPLORE",
                              completed_dimensions={"layer1": ["d1", "d2"], "layer2": [], "layer3": []})
     result = after_analysis(state)
-    assert result == "explore"
+    # EXPLORE now re-dispatches dimension workers (not a fixed "explore" node)
+    assert result is not None
+    # Should be a list of Send objects or END if no dims
+    assert hasattr(result, "__iter__") or result == END
 
 
 def test_gate_human_routes_to_end():

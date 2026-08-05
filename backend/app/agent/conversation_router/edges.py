@@ -239,12 +239,8 @@ def after_analysis(
 
     phase = state.get("phase", "layer1")
     if phase == "completed":
-        # P2: L3 完成后自动触发 EXPLORE 桥接（仅一次，非 step_mode）
-        # explore_done 标记防重复；explore 节点完成后 phase 仍 completed，
-        # 经 explore -> gis_agent -> conversation 后 END。
-        if not state.get("step_mode", False) and not state.get("explore_done", False):
-            logger.info("[after_analysis] L3 completed -> EXPLORE bridge")
-            return "explore"
+        # Wave M2: legacy EXPLORE bridge removed; EXPLORE is now gate-driven.
+        # When phase=="completed", route to gis_agent via conversation or END.
         return END
 
     # ── Wave M2: gate-aware routing ──
@@ -259,7 +255,15 @@ def after_analysis(
             if route and route != "PASS":
                 logger.info("[after_analysis] Gate %s routed %s", gate_key, route)
                 if route == "EXPLORE":
-                    return "explore"
+                    # Gate requests evidence -> re-dispatch dimension workers
+                    # (analyze_dimension already calls retrieve_evidence internally)
+                    from app.config.loader import list_dimensions
+                    dim_configs = list_dimensions(layer_num)
+                    explore_dims = [d.key for d in dim_configs]
+                    if explore_dims:
+                        logger.info("[after_analysis] Gate EXPLORE: re-dispatching %s", explore_dims)
+                        return [Send("analyze_dimension", {**state, "dimension_key": d}) for d in explore_dims]
+                    return END
                 if route == "HUMAN":
                     return END
                 if route in ("L1", "L2", "L3"):

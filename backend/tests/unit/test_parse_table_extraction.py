@@ -1,6 +1,6 @@
-"""P3 单测：PARSE 结构化表格解析（功能分区表/土地用途分区表/项目库）。"""
+﻿"""P3 单测：PARSE 结构化表格解析（功能分区表/土地用途分区表/项目库）。"""
 
-from app.agent.select.parse_agent import parse
+from app.modules.parsing.text_parser import parse
 
 
 ZONE_TABLE = """【功能分区表】
@@ -42,3 +42,4 @@ def test_table_and_regex_merge_no_duplicate():
     result = parse(text, village_name="金田村")
     names = [zt.land_use for zt in result.intent.zone_targets]
     assert names.count("村庄建设区") >= 1
+

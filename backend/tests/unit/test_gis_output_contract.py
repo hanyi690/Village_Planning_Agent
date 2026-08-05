@@ -1,4 +1,4 @@
-"""GIS formal-output contract tests."""
+﻿"""GIS formal-output contract tests."""
 
 import asyncio
 import json
@@ -159,7 +159,7 @@ def test_facility_placer_accepts_parse_planned_new_status():
 
 
 def test_road_grounding_infers_endpoints_from_kg_village_anchors():
-    from app.agent.select.parse_agent import resolve_spatial_anchors
+    from app.modules.spatial_ops.resolver import resolve_spatial_anchors
     from app.modules.schema.contracts.parse_contracts import RoadTarget, SpatialPlanningIntent
 
     road = RoadTarget(road_level="南北向通村道路", width_m=6.0)
@@ -234,7 +234,7 @@ def test_zone_table_preserves_absolute_area_target():
 
 
 def test_parse_prefers_authoritative_zone_table_over_regex_noise():
-    from app.agent.select.parse_agent import parse
+    from app.modules.parsing.text_parser import parse
 
     result = parse(
         """
@@ -267,7 +267,7 @@ def test_execute_checkpoint_output_converts_numpy_scalars():
 
 
 def test_parse_extracts_structured_road_table():
-    from app.agent.select.parse_agent import parse
+    from app.modules.parsing.text_parser import parse
 
     result = parse(
         """
@@ -491,3 +491,4 @@ def test_interactive_html_map_is_self_contained(tmp_path):
     assert 'data-target="layer-0"' in content
     assert "mouseenter" in content
     assert "map-tooltip" in content
+

@@ -1,4 +1,4 @@
-"""PARSE Agent unit tests — spatial models, spatial context, and parse tools.
+﻿"""PARSE Agent unit tests — spatial models, spatial context, and parse tools.
 
 Sections:
   1. Spatial Models (8 tests) — Pydantic schema validation
@@ -273,7 +273,7 @@ class TestParseAgentGraph:
 
     def test_graph_compiles(self):
         """parse_async is a callable parse entry (post-migration, no StateGraph)."""
-        from app.agent.select.parse_agent import parse_async
+        from app.modules.parsing.text_parser import parse_async
 
         parse_fn = parse_async
         assert callable(parse_fn)
@@ -281,7 +281,7 @@ class TestParseAgentGraph:
     def test_graph_has_expected_nodes(self):
         """parse_async returns a typed ParseResult with intent targets."""
         import asyncio
-        from app.agent.select.parse_agent import parse_async
+        from app.modules.parsing.text_parser import parse_async
 
         async def _run():
             return await parse_async(
@@ -296,7 +296,7 @@ class TestParseAgentGraph:
 
     def test_route_by_section_fan_out(self):
         """parse() extracts across sections: zone targets + facilities + axes."""
-        from app.agent.select.parse_agent import parse
+        from app.modules.parsing.text_parser import parse
 
         result = parse(
             "规划：村庄建设区13%，生态保护区15.39%\n"
@@ -305,3 +305,4 @@ class TestParseAgentGraph:
         )
         assert any(zt.land_use == "村庄建设区" for zt in result.intent.zone_targets)
         assert any(ax.reference_feature or ax.direction for ax in result.intent.development_axes)
+

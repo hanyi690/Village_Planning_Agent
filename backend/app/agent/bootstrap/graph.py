@@ -29,19 +29,13 @@ async def analyze_dimension_node(state: Dict[str, Any]) -> Dict[str, Any]:
     return await analyze_dimension(state)
 
 
-async def explore_node(state: Dict[str, Any]) -> Dict[str, Any]:
-    """EXPLORE 桥接节点 — L3 完成后读 L1/L2/L3 + KG 认知，产出空间定位指令."""
-    from app.agent.explore.node import explore_node as _explore_node
-
-    return await _explore_node(state)
-
-
 def create_unified_planning_graph(checkpointer=None) -> StateGraph:
-    """创建统一规划图（6 节点）— 纯函数，每次返回新图。
+    """创建统一规划图 - 纯函数，每次返回新图。
 
     缓存责任由调用方承担（`PlanningRuntimeService._graph` 单例）。
+    Wave M2: explore_node removed (EXPLORE is now gate-driven horizontal service).
     """
-    logger.info("[图构建] 构建 6 节点图")
+    logger.info("[图构建] 构建规划图")
     builder = StateGraph(AgentState)
 
     builder.add_node("conversation", conversation_node)
@@ -49,7 +43,6 @@ def create_unified_planning_graph(checkpointer=None) -> StateGraph:
     builder.add_node("analyze_dimension", analyze_dimension_node)
     builder.add_node("layer_completion_check", layer_completion_check)
     builder.add_node("layer_aggregate", layer_aggregate_node)
-    builder.add_node("explore", explore_node)
     builder.add_node("gis_agent", gis_agent_node, error_handler=_gis_error_handler)
 
     builder.add_edge(START, "conversation")
@@ -60,9 +53,8 @@ def create_unified_planning_graph(checkpointer=None) -> StateGraph:
     builder.add_edge("gis_agent", END)
     builder.add_edge("analyze_dimension", "layer_completion_check")
     builder.add_edge("layer_completion_check", "layer_aggregate")
-    builder.add_edge("explore", "gis_agent")
     builder.add_conditional_edges("layer_aggregate", after_analysis,
-        {"analyze_dimension": "analyze_dimension", "explore": "explore",
+        {"analyze_dimension": "analyze_dimension",
          "conversation": "conversation", END: END})
 
     return builder.compile(checkpointer=checkpointer)

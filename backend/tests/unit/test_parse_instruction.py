@@ -1,10 +1,10 @@
-"""P8 单测：INSTRUCTION 段结构化提取 + 自然村→BSM 解析 + 位置列提取。"""
+﻿"""P8 单测：INSTRUCTION 段结构化提取 + 自然村→BSM 解析 + 位置列提取。"""
 
 from unittest.mock import MagicMock, patch
 
-from app.agent.select.parse_agent import parse
-from app.agent.select.parse_agent import (
-    _extract_instruction_tables,
+from app.modules.parsing.text_parser import parse
+from app.modules.parsing.tables import extract_instruction_tables
+from app.modules.spatial_ops.resolver import (
     _extract_location_tokens,
     resolve_spatial_anchors,
 )
@@ -24,7 +24,7 @@ INSTRUCTION_TABLE = """【INSTRUCTION】（内部指令段，仅供下游 GIS �
 
 
 def test_instruction_zones_facilities_axes():
-    r = _extract_instruction_tables(INSTRUCTION_TABLE)
+    r = extract_instruction_tables(INSTRUCTION_TABLE)
     assert len(r["zones"]) == 1
     assert r["zones"][0].land_use == "田园生活区"
     assert r["zones"][0].spatial_preference.reference == "村中部"
@@ -42,13 +42,13 @@ def test_instruction_bad_rows_skipped():
 | 未知类型 | 乱数据 | 园寨 | bad | - |
 | 设施 |  | 园寨 | 空名称丢弃 | - |
 """
-    r = _extract_instruction_tables(text)
+    r = extract_instruction_tables(text)
     assert len(r["facilities"]) == 1  # 空名称行被丢弃
 
 
 def test_instruction_marker_absent_returns_empty():
-    r = _extract_instruction_tables("无 INSTRUCTION 段")
-    assert r == {"zones": [], "facilities": [], "axes": []}
+    r = extract_instruction_tables("无 INSTRUCTION 段")
+    assert r == {"projects": [], "zones": [], "facilities": [], "axes": [], "roads": []}
 
 
 def test_parse_merges_instruction_with_tables():
@@ -100,7 +100,7 @@ def test_location_tokens_splitting():
 
 def test_zone_regex_does_not_match_prose_with_trailing_numbers():
     """P3-6: 正文长句（逗号分隔 + 尾部数字）不得误提取为分区目标。"""
-    from app.agent.select.parse_agent import _extract_zone_targets
+    from app.modules.parsing.text_parser import _extract_zone_targets
 
     text = """【产业发展定位】
 核心目标：至规划期末实现农业总产值翻番，旅游年接待游客突破5万人次。
@@ -114,7 +114,7 @@ def test_zone_regex_does_not_match_prose_with_trailing_numbers():
 
 
 def test_direction_from_location():
-    from app.agent.select.parse_agent import _direction_from_location
+    from app.modules.parsing.spatial_language import direction_from_location as _direction_from_location
 
     assert _direction_from_location("村中部") == "center"
     assert _direction_from_location("村东北部与西南部") == "northeast"
@@ -133,9 +133,7 @@ def test_resolve_spatial_anchors_fills_candidate_bsms():
     intent = SpatialPlanningIntent()
     intent.facilities.append(FacilityTarget(type="公厕", location_hint="肩丰"))
 
-    with patch("app.modules.kg.gazetteer.load_gazetteer", return_value=gaz) as m:
-        n = resolve_spatial_anchors(intent, village_name="jintian")
-    m.assert_called_once_with("jintian")
+    n = resolve_spatial_anchors(intent, village_name="jintian", gazetteer=gaz)
     assert n == 1
     assert intent.facilities[0].candidate_bsms == ["BSM001", "BSM002"]
 
@@ -143,7 +141,7 @@ def test_resolve_spatial_anchors_fills_candidate_bsms():
 def test_resolve_spatial_anchors_no_gazetteer():
     intent = SpatialPlanningIntent()
     intent.facilities.append(FacilityTarget(type="公厕", location_hint="肩丰"))
-    with patch("app.modules.kg.gazetteer.load_gazetteer", return_value=MagicMock(entries=[])):
-        n = resolve_spatial_anchors(intent, village_name="jintian")
+    n = resolve_spatial_anchors(intent, village_name="jintian")
     assert n == 0
     assert intent.facilities[0].candidate_bsms == []
+
