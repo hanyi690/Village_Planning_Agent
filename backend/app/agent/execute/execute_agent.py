@@ -491,6 +491,51 @@ def _build_custom_planning_layer(
     }
 
 
+def _adjustment_get(adjustment: Any, key: str, default: Any = None) -> Any:
+    """Read a field from a legacy adjustment dict or an attribute-carrying object."""
+    if isinstance(adjustment, dict):
+        return adjustment.get(key, default)
+    value = getattr(adjustment, key, None)
+    return default if value is None else value
+
+
+def _apply_constraint_adjustments(zone_targets: list, adjustments: list) -> list:
+    """Apply constraint_adjustments (legacy {zone, delta_ha} shape) to zone targets.
+
+    Matches each adjustment to a zone target by land_use / planning_zone /
+    zone_id and shifts its area_ha target by delta_ha (positive or negative).
+    Unmatched zones are skipped safely. Returns the applied adjustments.
+    """
+    applied: List[dict] = []
+    if not adjustments:
+        return applied
+    target_by_zone: Dict[str, Any] = {}
+    for target in zone_targets:
+        for key in (
+            getattr(target, "land_use", None),
+            getattr(target, "planning_zone", None),
+            getattr(target, "zone_id", None),
+        ):
+            if key:
+                target_by_zone.setdefault(str(key), target)
+    for adjustment in adjustments or []:
+        zone = _adjustment_get(adjustment, "zone", "")
+        if not zone:
+            continue
+        target = target_by_zone.get(str(zone))
+        if target is None:
+            continue
+        delta_ha = _adjustment_get(adjustment, "delta_ha", 0.0) or 0.0
+        try:
+            delta_ha = float(delta_ha)
+        except (TypeError, ValueError):
+            delta_ha = 0.0
+        current = getattr(target, "area_ha", None)
+        setattr(target, "area_ha", (float(current) if current is not None else 0.0) + delta_ha)
+        applied.append(adjustment)
+    return applied
+
+
 async def _execute_layout_node(state: ExecuteAgentState) -> dict:
     """Layout sub-task: deterministic zone reclassification (no MIP).
 
@@ -550,6 +595,10 @@ async def _execute_layout_node(state: ExecuteAgentState) -> dict:
         for feature in (landuse.get("features") or [])
     }
 
+    applied_adjustments = _apply_constraint_adjustments(
+        zone_targets, list(state.constraint_adjustments or [])
+    )
+
     zone_changes = []
     for zone_target in zone_targets:
         if not getattr(zone_target, "candidate_bsms", None):
@@ -568,6 +617,7 @@ async def _execute_layout_node(state: ExecuteAgentState) -> dict:
         "mode": "deterministic",
         "allocated_count": len(zone_changes),
         "zone_target_count": len(zone_targets),
+        "adjustments_applied": len(applied_adjustments),
     }
 
     allocated_geojson = _allocated_geojson_from_changes(landuse, zone_changes)
@@ -592,7 +642,7 @@ async def _execute_layout_node(state: ExecuteAgentState) -> dict:
         "allocated_geojson": allocated_geojson,
         "allocation_summary": summary,
         "layout_configs": layers,
-        "constraint_adjustments": [],
+        "constraint_adjustments": applied_adjustments,
     }
 
 
@@ -864,6 +914,26 @@ async def _execute_road_node(state: ExecuteAgentState) -> dict:
     return {"layout_configs": updated}
 
 
+def _delta_ha_from(adjustment: Any) -> float:
+    """Best-effort area delta (ha) from a ConstraintAdjustment.
+
+    Returns (adjusted_value - original_value) when both are numeric, else 0.0.
+    """
+    original_value = getattr(adjustment, "original_value", None)
+    adjusted_value = getattr(adjustment, "adjusted_value", None)
+    try:
+        original = float(original_value) if original_value not in (None, "") else None
+    except (TypeError, ValueError):
+        original = None
+    try:
+        adjusted = float(adjusted_value) if adjusted_value not in (None, "") else None
+    except (TypeError, ValueError):
+        adjusted = None
+    if original is None or adjusted is None:
+        return 0.0
+    return adjusted - original
+
+
 async def _validate_node(state: ExecuteAgentState) -> dict:
     """Evaluator gate: validate layout via VALIDATE subgraph, surface adjustments.
 
@@ -991,10 +1061,18 @@ async def _validate_node(state: ExecuteAgentState) -> dict:
             for stage_issues in report.issues_by_stage.values()
             for issue in stage_issues
         ]
-        # validate_aggregate emits no adjustments yet; ConstraintAdjustment
-        # (constraint_id/adjustment_type) does not map to the legacy {zone,
-        # delta_ha, reason} retry-loop shape, so surface an empty list.
-        adj_dicts = []
+        # Map typed ConstraintAdjustment entries to the legacy {zone, action,
+        # delta_ha, reason, priority} retry-loop shape consumed by the layout node.
+        adj_dicts = [
+            {
+                "zone": adj.constraint_id,
+                "action": adj.adjustment_type,
+                "delta_ha": _delta_ha_from(adj),
+                "reason": adj.reason,
+                "priority": "normal",
+            }
+            for adj in (report.adjustments or [])
+        ]
 
         round_num = state.validation_round + 1
         logger.info(

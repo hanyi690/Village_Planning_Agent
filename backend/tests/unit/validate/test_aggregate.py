@@ -140,3 +140,22 @@ def test_aggregate_deterministic():
     b = validate_aggregate(state, changeset, layouts, intent, idx)
     assert a.overall_passed == b.overall_passed
     assert a.issues_by_stage == b.issues_by_stage
+
+
+def test_aggregate_generates_adjustments_for_failures():
+    state = make_planned_state(parcels=[make_parcel("P001", "", "reclassify")])
+    result = validate_aggregate(state, make_changeset(), [], make_intent(), None)
+    assert result.adjustments
+    for adj in result.adjustments:
+        assert adj.constraint_id
+        assert adj.adjustment_type == "relax"
+        assert adj.source_check == adj.constraint_id
+        assert adj.reason
+    assert {a.constraint_id for a in result.adjustments} == {"classification_missing"}
+
+
+def test_aggregate_all_pass_no_adjustments():
+    state, changeset, layouts, intent = _clean_inputs()
+    result = validate_aggregate(state, changeset, layouts, intent, FakeConstraintIndex([]))
+    assert result.overall_passed is True
+    assert result.adjustments == []

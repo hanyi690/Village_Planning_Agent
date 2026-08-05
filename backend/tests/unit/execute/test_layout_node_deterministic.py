@@ -148,6 +148,52 @@ def test_layout_node_custom_zone_targets():
     assert len(custom[0]["data"]["features"]) >= 1
 
 
+def test_layout_node_applies_constraint_adjustments():
+    state = _state(
+        intent=SpatialPlanningIntent(
+            zone_targets=[_zone(bsms=["P001"], area_ha=10.0)]
+        ),
+    )
+    state.constraint_adjustments = [
+        {
+            "zone": "生态保护区",
+            "action": "relax",
+            "delta_ha": 2.0,
+            "reason": "adjust area target",
+            "priority": "normal",
+        }
+    ]
+
+    result = asyncio.run(_execute_layout_node(state))
+
+    assert result["constraint_adjustments"] == state.constraint_adjustments
+    assert result["allocation_summary"]["adjustments_applied"] == 1
+    assert state.intent.zone_targets[0].area_ha == 12.0
+
+
+def test_layout_node_skips_unmatched_adjustments():
+    state = _state(
+        intent=SpatialPlanningIntent(
+            zone_targets=[_zone(bsms=["P001"], area_ha=10.0)]
+        ),
+    )
+    state.constraint_adjustments = [
+        {
+            "zone": "non_existent_zone",
+            "action": "relax",
+            "delta_ha": 5.0,
+            "reason": "no match",
+            "priority": "normal",
+        }
+    ]
+
+    result = asyncio.run(_execute_layout_node(state))
+
+    assert result["constraint_adjustments"] == []
+    assert result["allocation_summary"]["adjustments_applied"] == 0
+    assert state.intent.zone_targets[0].area_ha == 10.0
+
+
 def test_layout_node_empty_intent():
     state = _state(intent=SpatialPlanningIntent())
 

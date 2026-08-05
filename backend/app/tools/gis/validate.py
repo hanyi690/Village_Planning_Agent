@@ -19,9 +19,59 @@ from app.utils.logger import get_logger
 logger = get_logger(__name__)
 
 from app.agent.validate.aggregate import validate_aggregate
-
-
 from app.tools.helpers import make_result, to_tool_message
+
+
+def _adjustment_delta_ha(adjustment: Any) -> float:
+    """Area delta (ha) from an adjustment: explicit delta_ha, else numeric original/adjusted delta."""
+    if isinstance(adjustment, dict):
+        delta = adjustment.get("delta_ha")
+        if delta is not None:
+            try:
+                return float(delta)
+            except (TypeError, ValueError):
+                return 0.0
+        original_value = adjustment.get("original_value")
+        adjusted_value = adjustment.get("adjusted_value")
+    else:
+        delta = getattr(adjustment, "delta_ha", None)
+        if delta is not None:
+            try:
+                return float(delta)
+            except (TypeError, ValueError):
+                return 0.0
+        original_value = getattr(adjustment, "original_value", None)
+        adjusted_value = getattr(adjustment, "adjusted_value", None)
+    try:
+        original = float(original_value) if original_value not in (None, "") else None
+    except (TypeError, ValueError):
+        original = None
+    try:
+        adjusted = float(adjusted_value) if adjusted_value not in (None, "") else None
+    except (TypeError, ValueError):
+        adjusted = None
+    if original is None or adjusted is None:
+        return 0.0
+    return adjusted - original
+
+
+def _adjustment_to_legacy(adjustment: Any) -> Dict[str, Any]:
+    """Normalize a ConstraintAdjustment (or legacy dict) to the {zone, action, delta_ha, ...} shape."""
+    if isinstance(adjustment, dict):
+        return {
+            "zone": adjustment.get("zone") or adjustment.get("constraint_id") or "",
+            "action": adjustment.get("action") or adjustment.get("adjustment_type") or "",
+            "delta_ha": _adjustment_delta_ha(adjustment),
+            "reason": adjustment.get("reason") or "",
+            "priority": adjustment.get("priority") or "normal",
+        }
+    return {
+        "zone": getattr(adjustment, "zone", None) or getattr(adjustment, "constraint_id", "") or "",
+        "action": getattr(adjustment, "action", None) or getattr(adjustment, "adjustment_type", "") or "",
+        "delta_ha": _adjustment_delta_ha(adjustment),
+        "reason": getattr(adjustment, "reason", "") or "",
+        "priority": getattr(adjustment, "priority", None) or "normal",
+    }
 
 
 @tool
@@ -70,11 +120,7 @@ def validate_layout(
     # Step 3: Build structured adjustments from violations
     adjustments = getattr(report, "adjustments", None) or []
     if adjustments:
-        result["adjustments"] = [
-            {"zone": a.zone, "action": a.action, "delta_ha": a.delta_ha,
-             "reason": a.reason, "priority": a.priority}
-            for a in adjustments
-        ]
+        result["adjustments"] = [_adjustment_to_legacy(a) for a in adjustments]
 
     if not report.overall_passed and auto_retry:
         result["retry_suggestions"] = [
@@ -87,10 +133,6 @@ def validate_layout(
     }
     # Store adjustments in state for allocate feedback (Step 3)
     if adjustments:
-        update_payload["constraint_adjustments"] = [
-            {"zone": a.zone, "action": a.action, "delta_ha": a.delta_ha,
-             "reason": a.reason, "priority": a.priority}
-            for a in adjustments
-        ]
+        update_payload["constraint_adjustments"] = [_adjustment_to_legacy(a) for a in adjustments]
 
     return Command(update=update_payload)

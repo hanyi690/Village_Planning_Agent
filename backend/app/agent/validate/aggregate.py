@@ -22,6 +22,7 @@ from app.agent.validate.checks import (
 )
 from app.modules.schema.contracts.provenance import Provenance
 from app.modules.schema.contracts.validation_report_contracts import (
+    ConstraintAdjustment,
     ValidationCheck,
     ValidationIssue,
     ValidationReport,
@@ -84,11 +85,24 @@ def validate_aggregate(
         natural_language_description=f"VALIDATE aggregate: {len(all_checks)} checks",
     )
 
+    adjustments = [
+        ConstraintAdjustment(
+            constraint_id=check.check_id,
+            adjustment_type="relax",
+            original_value=check.expected_value,
+            adjusted_value=check.actual_value,
+            reason=check.fix_suggestion or "",
+            source_check=check.check_id,
+        )
+        for check in all_checks
+        if not check.passed
+    ]
+
     return ValidationReport(
         checks=all_checks,
         overall_passed=overall_passed,
         issues_by_stage=issues_by_stage,
-        adjustments=[],
+        adjustments=adjustments,
         provenance=provenance,
     )
 

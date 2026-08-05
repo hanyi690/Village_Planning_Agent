@@ -102,6 +102,14 @@ def test_validate_node_classification_failure():
     assert "EXECUTE" in report.issues_by_stage
     assert any(i.code == "classification_missing" for i in report.issues_by_stage["EXECUTE"])
 
+    adjustments = result["constraint_adjustments"]
+    assert adjustments, "expected non-empty constraint_adjustments from failing checks"
+    for adj in adjustments:
+        assert set(adj) >= {"zone", "action", "delta_ha", "reason", "priority"}
+        assert isinstance(adj["delta_ha"], (int, float))
+        assert adj["action"] == "relax"
+    assert "classification_missing" in {adj["zone"] for adj in adjustments}
+
 
 def test_validate_node_no_layout():
     state = _state(session_id="s3", layout_configs=[])
