@@ -71,8 +71,16 @@ def _state(**overrides):
     return ExecuteAgentState(**defaults)
 
 
-def test_validate_node_returns_report():
-    state = _state()
+def test_validate_node_returns_report(monkeypatch):
+    class _NoOverlapConstraintIndex:
+        def geometry_in_constraint(self, geometry):
+            return []
+
+    monkeypatch.setattr(
+        "app.modules.spatial_ops.build_constraint_index",
+        lambda gis_bundle: _NoOverlapConstraintIndex(),
+    )
+    state = _state(gis_bundle={"dummy": True})
 
     result = asyncio.run(_validate_node(state))
 

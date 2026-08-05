@@ -56,6 +56,9 @@ class PostL3ChainState(BaseModel):
     execution_errors: List[Dict[str, Any]] = Field(default_factory=list)
     execute_gate: Any = None
 
+    # ── ZONING output ──
+    zone_assignments: List[Any] = Field(default_factory=list)  # list[ZoneAssignment]
+
     # ── VALIDATE output ──
     validation_report: Any = None  # ValidationReport (typed)
     validate_gate: Any = None  # GateDecision (typed)
@@ -77,6 +80,7 @@ class PostL3ChainState(BaseModel):
     # ── Wave M2: retry loop state ──
     retry_counts: Dict[str, int] = Field(default_factory=dict)
     max_retries: int = 3
+    error_feedback: Dict[str, str] = Field(default_factory=dict)
     explore_cache: Dict[str, Any] = Field(default_factory=dict)
     human_review_items: List[Dict[str, Any]] = Field(default_factory=list)
 

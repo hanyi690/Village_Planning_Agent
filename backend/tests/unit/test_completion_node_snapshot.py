@@ -66,7 +66,8 @@ async def test_auto_layer_complete_snapshots_layer(monkeypatch, _mock_snapshot, 
     state = _layer_state(1, get_layer_dimensions(1))
     result = await layer_completion_check(state)
 
-    assert result["phase"] == "layer2"
+    assert "phase" not in result
+    assert result["layer_just_completed"] == 1
     assert _mock_snapshot == [("sess-001", "layer1", None)]
 
 
@@ -78,7 +79,8 @@ async def test_auto_layer3_complete_snapshots_final(monkeypatch, _mock_snapshot,
     state = _layer_state(3, get_layer_dimensions(3))
     result = await layer_completion_check(state)
 
-    assert result["phase"] == "completed"
+    assert "phase" not in result
+    assert result["layer_just_completed"] == 3
     assert _mock_snapshot == [("sess-001", "final", None)]
 
 
@@ -109,7 +111,8 @@ async def test_step_approve_snapshots_layer(monkeypatch, _mock_snapshot, _mock_s
     state = _layer_state(1, get_layer_dimensions(1), step_mode=True)
     result = await layer_completion_check(state)
 
-    assert result["phase"] == "layer2"
+    assert "phase" not in result
+    assert result["layer_just_completed"] == 1
     assert _mock_snapshot == [("sess-001", "layer1", None)]
 
 

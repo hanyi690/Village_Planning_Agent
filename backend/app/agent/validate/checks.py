@@ -1,6 +1,6 @@
 """VALIDATE subgraph — deterministic validation checks (Wave J Task 1).
 
-Eight pure, deterministic checks that validate planning artifacts and
+Nine pure, deterministic checks that validate planning artifacts and
 attribute each finding to the responsibility stage that should fix it:
 
   1. hard_constraints       -> SELECT/EXECUTE  candidate falls in a prohibited constraint
@@ -32,6 +32,22 @@ from app.modules.schema.contracts.validation_report_contracts import ValidationC
 
 _AREA_TOLERANCE = 0.05
 _POLYGON_TYPES = ("Polygon", "MultiPolygon")
+
+_POLYGON_LAYER_TYPES = {
+    "zone",
+    "parcel",
+    "polygon",
+    "project",
+    "facility",
+    "road",
+    "protection",
+    "restoration",
+    "landuse",
+    "parcel_layer",
+    "zone_layer",
+    "project_layer",
+    "polygon_layer",
+}
 
 _PROHIBITED_CONSTRAINTS = {
     "farmland_protection",
@@ -85,10 +101,11 @@ def check_hard_constraints(planned_state: Any, constraint_index: Any) -> List[Va
             _check(
                 "hard_constraints",
                 "硬性约束核查",
-                True,
+                False,
                 stage="SELECT",
                 actual="constraint_index unavailable",
                 expected="constraint_index available",
+                fix="提供约束图层后再放行硬约束核查",
             )
         ]
     affected: List[str] = []
@@ -127,19 +144,21 @@ def check_area_conservation(changeset: Any) -> List[ValidationCheck]:
     """Check split/merge changes conserve area (5% tolerance on degree^2 areas)."""
     if changeset is None:
         return [_check("area_conservation", "面积守恒", True, stage="EXECUTE")]
-    if changeset.area_conservation_verified:
-        return [
-            _check(
-                "area_conservation",
-                "面积守恒",
-                True,
-                stage="EXECUTE",
-                actual="verified by pipeline",
-            )
-        ]
+    total_before = 0.0
+    total_after = 0.0
+    pair_diffs: List[tuple] = []
+    for change in changeset.changes or []:
+        before_area = _wkt_area(change.before_geometry_wkt)
+        after_area = _wkt_area(change.after_geometry_wkt)
+        if before_area > 0 and after_area > 0:
+            total_before += before_area
+            total_after += after_area
+            pair_diffs.append((abs(after_area - before_area), change.bsm))
     split_groups: dict = {}
     for change in changeset.changes or []:
-        if change.action == "split":
+        if change.action in ("split", "merge", "create"):
+            if change.action == "create" and not (change.derived_from_bsms or []):
+                continue
             key = tuple(sorted(change.derived_from_bsms or [])) or (change.bsm,)
             group = split_groups.setdefault(key, {"before": 0.0, "after": 0.0, "bsms": []})
             before = _wkt_area(change.before_geometry_wkt)
@@ -155,17 +174,84 @@ def check_area_conservation(changeset: Any) -> List[ValidationCheck]:
         ratio = abs(group["after"] - before) / max(before, 1e-9)
         if ratio >= _AREA_TOLERANCE:
             mismatched.extend(group["bsms"])
-    passed = not mismatched
+    drift = 0.0
+    if total_before > 0:
+        drift = abs(total_after - total_before) / max(total_before, 1e-9)
+    drift_failed = total_before > 0 and drift >= _AREA_TOLERANCE
+    pair_diffs.sort(reverse=True)
+    offenders = [bsm for _, bsm in pair_diffs[:5]]
+
+    if drift_failed:
+        return [
+            _check(
+                "area_conservation",
+                "面积守恒",
+                False,
+                stage="EXECUTE",
+                actual=f"drift={drift:.4f}",
+                expected="sum(after) ≈ sum(before) within 5%",
+                parcels=offenders,
+                fix="核对 split/merge/create 地块面积，避免面积损失或新增",
+            )
+        ]
+    if mismatched:
+        return [
+            _check(
+                "area_conservation",
+                "面积守恒",
+                False,
+                stage="EXECUTE",
+                actual=", ".join(mismatched),
+                expected="split parts sum to the source area within 5%",
+                parcels=mismatched,
+                fix="核对 split/merge 地块面积，避免面积损失或新增",
+            )
+        ]
     return [
         _check(
             "area_conservation",
             "面积守恒",
+            True,
+            stage="EXECUTE",
+            actual="no area pairs to verify" if not pair_diffs else f"drift={drift:.4f}",
+            expected="sum(after) ≈ sum(before) within 5%",
+        )
+    ]
+
+
+def check_traceability(parcel_changeset: Any, intent: Any = None) -> List[ValidationCheck]:
+    """Check every planning project maps to at least one ParcelChange."""
+    expected = [p.project_id for p in (getattr(intent, "project_targets", None) or [])]
+    actual: List[str] = []
+    for change in (parcel_changeset.changes if parcel_changeset is not None else None) or []:
+        ref = getattr(change, "project_ref", None) or ""
+        if ref:
+            actual.append(ref)
+    actual = sorted(set(actual))
+    if not expected:
+        return [
+            _check(
+                "traceability",
+                "干预-地块追溯",
+                True,
+                stage="EXECUTE",
+                actual="no projects to verify",
+                expected="每个规划项目至少对应一个 ParcelChange，且所有 project_ref 可追溯",
+            )
+        ]
+    missing = [pid for pid in expected if pid not in actual]
+    orphan = [ref for ref in actual if ref not in expected]
+    passed = not missing and not orphan
+    return [
+        _check(
+            "traceability",
+            "干预-地块追溯",
             passed,
             stage="EXECUTE",
-            actual=", ".join(mismatched),
-            expected="split parts sum to the source area within 5%",
-            parcels=mismatched,
-            fix="核对 split/merge 地块面积，避免面积损失或新增",
+            actual=f"missing={missing}, orphan={orphan}",
+            expected="每个规划项目至少对应一个 ParcelChange，且所有 project_ref 可追溯",
+            parcels=missing,
+            fix="补齐项目对应地块或修正 project_ref",
         )
     ]
 
@@ -199,7 +285,9 @@ def check_topology(layout_configs: Any) -> List[ValidationCheck]:
             elif not s.is_valid:
                 invalid.append(name)
             geoms.append(s)
-        if layer.get("layerType") in ("zone", "parcel", "polygon") and geoms:
+        all_polygon = bool(geoms) and all(g.geom_type in _POLYGON_TYPES for g in geoms)
+        layer_type = layer.get("layerType")
+        if all_polygon and (layer_type in _POLYGON_LAYER_TYPES or not layer_type):
             polygon_groups.append(geoms)
 
     validity_passed = not invalid and not empty
@@ -494,4 +582,5 @@ __all__ = [
     "check_accessibility",
     "check_contract_completeness",
     "check_classification_missing",
+    "check_traceability",
 ]

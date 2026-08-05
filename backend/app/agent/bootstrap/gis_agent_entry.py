@@ -68,18 +68,24 @@ async def gis_agent_node(state: Dict[str, Any]) -> Dict[str, Any]:
     # ── Step 2: 从 L3 报告编译 PlanningProgram（确定性编译器）──
     planning_program = None
     try:
-        from app.agent.l3_plan.aggregate import l3_aggregate
-
-        l3_out = await l3_aggregate(
-            {"session_id": session_id, "run_id": session_id, "context_version": ""}
-        )
         from app.modules.ports.artifact_store import ArtifactRef
         from app.modules.schema.contracts.l3_contracts import PlanningProgram
         from app.services.artifact_store import FilesystemArtifactStore
 
-        ref = ArtifactRef(**l3_out["l3_program_ref"])
-        payload = FilesystemArtifactStore().retrieve(ref)
-        planning_program = PlanningProgram(**payload)
+        existing_ref = state.get("l3_program_ref")
+        if isinstance(existing_ref, dict) and existing_ref.get("artifact_id"):
+            ref = ArtifactRef(**existing_ref)
+            payload = FilesystemArtifactStore().retrieve(ref)
+            planning_program = PlanningProgram(**payload)
+        else:
+            from app.agent.l3_plan.aggregate import l3_aggregate
+
+            l3_out = await l3_aggregate(
+                {"session_id": session_id, "run_id": session_id, "context_version": ""}
+            )
+            ref = ArtifactRef(**l3_out["l3_program_ref"])
+            payload = FilesystemArtifactStore().retrieve(ref)
+            planning_program = PlanningProgram(**payload)
     except Exception as e:
         logger.warning("[gis_agent_node] L3 program compile failed: %s", e)
         planning_program = None

@@ -77,9 +77,9 @@ def test_route_after_validate_retry_parse():
     assert _route_after_validate(state) == "parse"
 
 
-def test_route_after_validate_retry_l3_cannot_loop():
+def test_route_after_validate_retry_l3_routes_to_human_review():
     state = _state("validate_gate", _gate("RETRY_L3", "validate"), retry_counts={})
-    assert _route_after_validate(state) == "end"
+    assert _route_after_validate(state) == "human_review"
 
 
 def test_route_after_reconcile_retry_execute():

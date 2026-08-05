@@ -67,6 +67,7 @@ class CandidateParcel:
     area_ha: float = 0.0
     cluster: str = ""
     distance_m: Optional[float] = None
+    target_ref: str = ""
 
 
 def is_large_block_target(target: SelectionTarget) -> bool:
@@ -170,12 +171,113 @@ def _is_construction_dlmc(dlmc: str) -> bool:
     return any(kw in (dlmc or "") for kw in ("建设", "居住", "宅基", "空闲"))
 
 
+_PROJECT_WEIGHT_KEYS = (
+    "proximity",
+    "construction",
+    "area_fit",
+    "road_access",
+    "service_coverage",
+    "adjacency",
+    "conversion_cost",
+    "slope_hazard",
+    "l2_structure_fit",
+)
+
+# Per-project-type weight sets for the extended scoring formula. Each set sums
+# to 1.0. industrial favors road access + conversion cost; residential favors
+# adjacency + service coverage; facility favors service coverage + road access.
+PROJECT_WEIGHTS: Dict[str, Dict[str, float]] = {
+    "industrial": {
+        "proximity": 0.15,
+        "construction": 0.10,
+        "area_fit": 0.15,
+        "road_access": 0.25,
+        "service_coverage": 0.05,
+        "adjacency": 0.05,
+        "conversion_cost": 0.15,
+        "slope_hazard": 0.05,
+        "l2_structure_fit": 0.05,
+    },
+    "residential": {
+        "proximity": 0.15,
+        "construction": 0.10,
+        "area_fit": 0.15,
+        "road_access": 0.10,
+        "service_coverage": 0.15,
+        "adjacency": 0.15,
+        "conversion_cost": 0.05,
+        "slope_hazard": 0.10,
+        "l2_structure_fit": 0.05,
+    },
+    "facility": {
+        "proximity": 0.15,
+        "construction": 0.05,
+        "area_fit": 0.15,
+        "road_access": 0.20,
+        "service_coverage": 0.25,
+        "adjacency": 0.05,
+        "conversion_cost": 0.05,
+        "slope_hazard": 0.05,
+        "l2_structure_fit": 0.05,
+    },
+    "default": {
+        "proximity": 0.20,
+        "construction": 0.10,
+        "area_fit": 0.15,
+        "road_access": 0.15,
+        "service_coverage": 0.10,
+        "adjacency": 0.10,
+        "conversion_cost": 0.10,
+        "slope_hazard": 0.05,
+        "l2_structure_fit": 0.05,
+    },
+}
+
+_NEW_CRITERION_DICTS = (
+    "road_distance_m",
+    "service_coverage",
+    "adjacency",
+    "conversion_cost",
+    "slope_hazard",
+    "l2_structure_fit",
+)
+
+
 def score_candidates(
     candidates: List[CandidateParcel],
     *,
     cluster_centroid: Optional[Tuple[float, float]] = None,
     target_ha: Optional[float] = None,
+    road_distance_m: Optional[Dict[str, float]] = None,
+    service_coverage: Optional[Dict[str, float]] = None,
+    adjacency: Optional[Dict[str, float]] = None,
+    conversion_cost: Optional[Dict[str, float]] = None,
+    slope_hazard: Optional[Dict[str, float]] = None,
+    l2_structure_fit: Optional[Dict[str, float]] = None,
+    project_type: Optional[str] = None,
 ) -> List[ScoredCandidate]:
+    """Score candidates, optionally with the extended weighted formula.
+
+    When none of the new per-criterion dicts is provided the exact legacy
+    formula (``0.5*proximity + 0.3*construction + 0.2*area_fit``) is kept, so
+    existing callers and ordering tests are byte-for-byte unchanged. When any
+    new dict is present a ``PROJECT_WEIGHTS`` weighted blend of all nine
+    dimensions is used; each optional dimension defaults to 0.5 when its dict
+    is None or the bsm is absent. Dict values are pre-normalized to [0,1]
+    (higher = better; ``slope_hazard`` higher = safer).
+    """
+    new_criteria = {
+        "road_distance_m": road_distance_m,
+        "service_coverage": service_coverage,
+        "adjacency": adjacency,
+        "conversion_cost": conversion_cost,
+        "slope_hazard": slope_hazard,
+        "l2_structure_fit": l2_structure_fit,
+    }
+    extended = any(v is not None for v in new_criteria.values())
+    weights = None
+    if extended:
+        weights = PROJECT_WEIGHTS.get(project_type or "default", PROJECT_WEIGHTS["default"])
     scored: List[ScoredCandidate] = []
     for c in candidates:
         proximity = 0.5
@@ -186,12 +288,51 @@ def score_candidates(
         if target_ha is not None and c.area_ha > 0:
             ratio = c.area_ha / target_ha
             area_fit = max(0.0, 1.0 - abs(math.log2(ratio)))
-        score = 0.5 * proximity + 0.3 * construction + 0.2 * area_fit
         reasons = [f"construction:{construction:.2f}"]
         if cluster_centroid is not None and c.distance_m is not None:
             reasons.append(f"proximity:{proximity:.2f}")
         if target_ha is not None and c.area_ha > 0:
             reasons.append(f"area_fit:{area_fit:.2f}")
+        if not extended:
+            score = 0.5 * proximity + 0.3 * construction + 0.2 * area_fit
+            scored.append(
+                ScoredCandidate(
+                    bsm=c.bsm, score=score, distance_m=c.distance_m, reasons=reasons
+                )
+            )
+            continue
+        dims: Dict[str, float] = {
+            "proximity": proximity,
+            "construction": construction,
+            "area_fit": area_fit,
+        }
+        if road_distance_m is not None:
+            d = road_distance_m.get(c.bsm)
+            if d is not None:
+                dims["road_access"] = 1.0 / (1.0 + d / 300.0)
+                reasons.append(f"road_access:{dims['road_access']:.2f}")
+            else:
+                dims["road_access"] = 0.5
+        else:
+            dims["road_access"] = 0.5
+        for key in (
+            "service_coverage",
+            "adjacency",
+            "conversion_cost",
+            "slope_hazard",
+            "l2_structure_fit",
+        ):
+            data = new_criteria[key]
+            if data is None:
+                dims[key] = 0.5
+            else:
+                val = data.get(c.bsm, 0.5)
+                if val is None:
+                    val = 0.5
+                dims[key] = val
+                if c.bsm in data:
+                    reasons.append(f"{key}:{val:.2f}")
+        score = sum(weights[k] * dims[k] for k in _PROJECT_WEIGHT_KEYS)
         scored.append(
             ScoredCandidate(
                 bsm=c.bsm, score=score, distance_m=c.distance_m, reasons=reasons
@@ -234,11 +375,27 @@ def rank_candidates(
     target_ha: Optional[float] = None,
     ranker: Optional[Ranker] = None,
     context: Optional[Dict[str, Any]] = None,
+    road_distance_m: Optional[Dict[str, float]] = None,
+    service_coverage: Optional[Dict[str, float]] = None,
+    adjacency: Optional[Dict[str, float]] = None,
+    conversion_cost: Optional[Dict[str, float]] = None,
+    slope_hazard: Optional[Dict[str, float]] = None,
+    l2_structure_fit: Optional[Dict[str, float]] = None,
+    project_type: Optional[str] = None,
 ) -> List[ScoredCandidate]:
     pool = {c.bsm for c in candidates}
     if ranker is None:
         return score_candidates(
-            candidates, cluster_centroid=cluster_centroid, target_ha=target_ha
+            candidates,
+            cluster_centroid=cluster_centroid,
+            target_ha=target_ha,
+            road_distance_m=road_distance_m,
+            service_coverage=service_coverage,
+            adjacency=adjacency,
+            conversion_cost=conversion_cost,
+            slope_hazard=slope_hazard,
+            l2_structure_fit=l2_structure_fit,
+            project_type=project_type,
         )
     ctx = dict(context or {})
     ctx.setdefault("cluster_centroid", cluster_centroid)

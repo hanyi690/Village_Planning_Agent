@@ -27,6 +27,8 @@ class CandidateSite(BaseModel):
     hard_constraint_result: HardConstraintResult | None = None
     metrics: dict = Field(default_factory=dict)
     evidence_refs: list[str] = Field(default_factory=list)
+    target_ref: str | None = None
+    project_ref: str | None = None
 
 
 class GroundingResult(ContractMeta):

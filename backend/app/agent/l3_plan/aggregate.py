@@ -10,7 +10,8 @@ from __future__ import annotations
 from typing import Any
 
 from app.modules.ports.artifact_store import ArtifactRef
-from app.modules.schema.contracts.l1_contracts import EvidenceGap
+from app.modules.schema.contracts.l1_contracts import EvidenceGap, L1Snapshot
+from app.modules.schema.contracts.l2_contracts import L2Strategy
 from app.modules.schema.contracts.l3_contracts import (
     InterventionDependency,
     L3ProgramFragment,
@@ -127,6 +128,104 @@ def merge_program_fragments(
     )
 
 
+def enrich_program_from_upstream(
+    program: PlanningProgram,
+    base_dir: str,
+    run_id: str,
+) -> tuple[list[str] | None, Any | None]:
+    """Load L1/L2 artifacts by run_id convention and enrich the program.
+
+    Sets ``l1_snapshot_ref`` / ``l2_strategy_ref``, back-fills each
+    intervention's ``derives_from_strategy`` from the L2 spatial structure,
+    and appends cross-layer warning issues (``l1_constraint_unaddressed`` /
+    ``strategy_orphan``). Returns ``(l1_constraints, l2_strategy)`` for the
+    L3 gate; each is ``None`` when the corresponding artifact is unavailable.
+    """
+    l1_constraints: list[str] | None = None
+    l2_strategy: Any | None = None
+
+    store = FilesystemArtifactStore(base_dir=base_dir)
+
+    snapshot: L1Snapshot | None = None
+    try:
+        l1_payload = store.retrieve(
+            ArtifactRef(
+                artifact_id=f"l1-{run_id}-v1",
+                module="l1_observe",
+                run_id=run_id,
+                artifact_type="L1Snapshot",
+                revision="v1",
+            )
+        )
+        snapshot = L1Snapshot(**l1_payload)
+    except Exception as e:
+        logger.info("[l3_aggregate] L1 snapshot not found, skipping enrichment: %s", e)
+
+    strategy: L2Strategy | None = None
+    try:
+        l2_payload = store.retrieve(
+            ArtifactRef(
+                artifact_id=f"l2-{run_id}-v1",
+                module="l2_strategize",
+                run_id=run_id,
+                artifact_type="L2Strategy",
+                revision="v1",
+            )
+        )
+        strategy = L2Strategy(**l2_payload)
+    except Exception as e:
+        logger.info("[l3_aggregate] L2 strategy not found, skipping enrichment: %s", e)
+
+    if snapshot is not None:
+        program.l1_snapshot_ref = f"l1-{run_id}-v1"
+        l1_constraints = list(snapshot.constraints)
+
+    if strategy is not None:
+        program.l2_strategy_ref = f"l2-{run_id}-v1"
+        l2_strategy = strategy
+        for intervention in program.interventions:
+            if intervention.derives_from_strategy is None:
+                if strategy.spatial_structure:
+                    intervention.derives_from_strategy = strategy.spatial_structure
+                elif strategy.implementation_priorities:
+                    intervention.derives_from_strategy = strategy.implementation_priorities[0]
+
+    if snapshot is not None and snapshot.constraints:
+        for intervention in program.interventions:
+            unaddressed = [
+                c
+                for c in snapshot.constraints
+                if not any(c.lower() in ic.lower() for ic in intervention.constraints)
+            ]
+            if unaddressed:
+                program.program_issues.append(
+                    ProgramIssue(
+                        stage="l3",
+                        severity="warning",
+                        code="l1_constraint_unaddressed",
+                        message="L1 约束未被干预方案覆盖: " + "; ".join(unaddressed[:3]),
+                        detail="; ".join(unaddressed[:3]),
+                    )
+                )
+
+    if (
+        strategy is not None
+        and strategy.spatial_structure
+        and not any(i.derives_from_strategy for i in program.interventions)
+    ):
+        program.program_issues.append(
+            ProgramIssue(
+                stage="l3",
+                severity="warning",
+                code="strategy_orphan",
+                message="L2 空间结构未映射到任何干预方案",
+                detail=strategy.spatial_structure,
+            )
+        )
+
+    return l1_constraints, l2_strategy
+
+
 async def l3_aggregate(
     state: dict[str, Any],
     *,
@@ -173,6 +272,10 @@ async def l3_aggregate(
         natural_language_description="L3 PLAN aggregated program from compiled dimension fragments.",
     )
 
+    l1_constraints, l2_strategy = enrich_program_from_upstream(
+        program, base_dir=base_dir, run_id=run_id
+    )
+
     artifact_store = FilesystemArtifactStore(base_dir=base_dir)
     ref = ArtifactRef(
         context_version=context_version,
@@ -185,7 +288,13 @@ async def l3_aggregate(
     artifact_store.store(ref, program.model_dump(mode="json"))
     logger.info("[l3_aggregate] PlanningProgram stored: %s", ref)
 
-    gate_decision = evaluate_l3_gate(program, run_id=run_id, context_version=context_version)
+    gate_decision = evaluate_l3_gate(
+        program,
+        run_id=run_id,
+        context_version=context_version,
+        l1_constraints=l1_constraints,
+        l2_strategy=l2_strategy,
+    )
 
     pkg = build_l3_review_package(
         program=program,
@@ -210,4 +319,4 @@ async def l3_aggregate(
     }
 
 
-__all__ = ["l3_aggregate", "merge_program_fragments"]
+__all__ = ["l3_aggregate", "merge_program_fragments", "enrich_program_from_upstream"]

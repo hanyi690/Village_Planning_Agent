@@ -1,4 +1,4 @@
-"""VALIDATE subgraph — deterministic orchestration of the 8 checks into a typed ValidationReport.
+"""VALIDATE subgraph — deterministic orchestration of the 9 checks into a typed ValidationReport.
 
 Calls each Task 1 check function, flattens the resulting ValidationCheck list, then
 builds a ValidationReport with overall_passed, issues grouped by responsibility stage,
@@ -19,6 +19,7 @@ from app.agent.validate.checks import (
     check_hard_constraints,
     check_overlap,
     check_topology,
+    check_traceability,
 )
 from app.modules.schema.contracts.provenance import Provenance
 from app.modules.schema.contracts.validation_report_contracts import (
@@ -55,7 +56,7 @@ def validate_aggregate(
     constraint_index: Any,
     run_id: str = "",
 ) -> ValidationReport:
-    """Run all 8 VALIDATE checks and aggregate their findings into a ValidationReport."""
+    """Run all 9 VALIDATE checks and aggregate their findings into a ValidationReport."""
     if planned_state is None:
         planned_state = SimpleNamespace(parcels=[], facilities=[])
 
@@ -68,6 +69,7 @@ def validate_aggregate(
     all_checks.extend(check_accessibility(planned_state, intent))
     all_checks.extend(check_contract_completeness(planned_state, changeset, intent))
     all_checks.extend(check_classification_missing(planned_state))
+    all_checks.extend(check_traceability(changeset, intent))
 
     overall_passed = all(c.passed for c in all_checks)
 

@@ -39,7 +39,8 @@ def test_layer1_complete_triggers_extraction(monkeypatch):
     result = asyncio.run(node_mod.layer_completion_check(state))
 
     assert calls == [("sess-wave", 1)]
-    assert result["phase"] == "layer2"
+    assert "phase" not in result
+    assert result["layer_just_completed"] == 1
 
 
 def test_maybe_extract_bindings_is_non_fatal(monkeypatch):

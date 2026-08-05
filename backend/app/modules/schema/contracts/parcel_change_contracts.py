@@ -18,6 +18,8 @@ class ParcelChange(BaseModel):
     before_geometry_wkt: str = ""
     after_geometry_wkt: str = ""
     new_area_ha: float = 0.0
+    project_ref: str | None = None
+    intervention_id: str | None = None
 
 
 class FacilityChange(BaseModel):

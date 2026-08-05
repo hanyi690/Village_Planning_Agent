@@ -10,7 +10,7 @@ and context the output is fully deterministic.
 """
 from __future__ import annotations
 
-from typing import List
+from typing import Any, List, Optional
 
 from app.modules.context.planning_context import PlanningContext
 from app.modules.schema.contracts.contract_meta import StageIssue
@@ -51,6 +51,8 @@ def build_candidate_site(
             "spec_type": spec.type,
         },
         evidence_refs=list(source_parcels),
+        target_ref=(getattr(spec, "intervention_id", None) or None),
+        project_ref=(getattr(spec, "project_ref", None) or None),
     )
 
 
@@ -85,6 +87,8 @@ def ground_aggregate(
                     "type": spec_type,
                     "direction": getattr(spec, "direction", None),
                     "topo": getattr(spec, "topo", None),
+                    "intervention_id": getattr(spec, "intervention_id", None),
+                    "project_ref": getattr(spec, "project_ref", None),
                 },
                 result_count=len(resolved.final_bsms),
                 result_refs=list(resolved.final_bsms),
@@ -123,4 +127,95 @@ def ground_aggregate(
     )
 
 
-__all__ = ["ground_aggregate", "build_candidate_site"]
+async def retrieve_evidence(
+    context: Any,
+    evidence_requests: Optional[List[str]] = None,
+) -> List[SpatialQueryEvidence]:
+    """Lightweight evidence re-check for GROUND EXPLORE retries.
+
+    Gathers a small, serializable set of evidence rows describing what was
+    re-checked against the current PlanningContext: bundle land-use layer
+    counts, resolved parcel count, village anchors and gazetteer coverage.
+    Never raises — any missing infrastructure simply yields fewer rows and a
+    fully absent context returns ``[]``.
+    """
+    rows: List[SpatialQueryEvidence] = []
+    try:
+        if context is None:
+            return rows
+
+        bundle = getattr(context, "bundle", None)
+        if bundle is not None:
+            polygons = getattr(bundle, "polygons", None)
+            if isinstance(polygons, dict):
+                rows.append(
+                    SpatialQueryEvidence(
+                        query_type="bundle:layer_counts",
+                        query_params={"layers": sorted(str(k) for k in polygons.keys())},
+                        result_count=len(polygons),
+                        result_refs=[str(k) for k in polygons.keys()],
+                    )
+                )
+
+        parcels = None
+        if bundle is not None and hasattr(bundle, "bundle_parcels"):
+            try:
+                parcels = list(bundle.bundle_parcels())
+            except Exception:
+                parcels = None
+        if parcels is None and hasattr(context, "bundle_parcels"):
+            try:
+                parcels = list(context.bundle_parcels())
+            except Exception:
+                parcels = None
+        if parcels:
+            rows.append(
+                SpatialQueryEvidence(
+                    query_type="bundle:parcel_count",
+                    query_params={"count": len(parcels)},
+                    result_count=len(parcels),
+                    result_refs=[str(getattr(p, "bsm", "") or "") for p in parcels[:10]],
+                )
+            )
+
+        anchors = getattr(context, "village_anchors", None) or []
+        if anchors:
+            rows.append(
+                SpatialQueryEvidence(
+                    query_type="context:village_anchors",
+                    query_params={"count": len(anchors)},
+                    result_count=len(anchors),
+                    result_refs=[
+                        str(a.get("name") or a.get("label") or "")
+                        for a in anchors
+                        if isinstance(a, dict)
+                    ],
+                )
+            )
+
+        gazetteer = getattr(context, "gazetteer", None)
+        if gazetteer is not None:
+            rows.append(
+                SpatialQueryEvidence(
+                    query_type="context:gazetteer",
+                    query_params={"present": True},
+                    result_count=1,
+                    result_refs=["gazetteer"],
+                )
+            )
+
+        if evidence_requests:
+            rows.append(
+                SpatialQueryEvidence(
+                    query_type="retry:evidence_requests",
+                    query_params={"requests": list(evidence_requests)},
+                    result_count=len(evidence_requests),
+                    result_refs=list(evidence_requests),
+                )
+            )
+    except Exception:
+        return []
+    return rows
+
+
+__all__ = ["ground_aggregate", "build_candidate_site", "retrieve_evidence"]

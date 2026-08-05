@@ -105,8 +105,14 @@ def map_intervention_to_spec(
     if not candidates:
         return None
     if len(candidates) == 1:
-        return candidates[0]
-    return SpatialReferenceSpec(type="composed", op="and", children=candidates)
+        spec = candidates[0]
+        spec.intervention_id = intervention.intervention_id
+        spec.project_ref = getattr(intervention, "project_ref", None)
+        return spec
+    spec = SpatialReferenceSpec(type="composed", op="and", children=candidates)
+    spec.intervention_id = intervention.intervention_id
+    spec.project_ref = getattr(intervention, "project_ref", None)
+    return spec
 
 
 def map_interventions_to_specs(
@@ -133,6 +139,8 @@ def map_interventions_to_specs(
                 )
             )
         else:
+            spec.intervention_id = intervention.intervention_id
+            spec.project_ref = getattr(intervention, "project_ref", None)
             specs.append(spec)
     return specs, diagnostics
 

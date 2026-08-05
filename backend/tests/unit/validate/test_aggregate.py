@@ -4,7 +4,7 @@ from types import SimpleNamespace
 
 from app.agent.validate.aggregate import validate_aggregate
 from app.modules.schema.contracts.parcel_change_contracts import ParcelChangeSet
-from app.modules.schema.contracts.parse_contracts import ProjectTarget, SpatialPlanningIntent
+from app.modules.schema.contracts.parse_contracts import SpatialPlanningIntent
 from app.modules.schema.contracts.planned_state_contracts import PlannedParcel, PlannedState
 from app.modules.schema.contracts.validation_report_contracts import ValidationReport
 
@@ -53,7 +53,7 @@ def polygon_feature(coords, name=""):
 
 def make_intent():
     return SpatialPlanningIntent(
-        project_targets=[ProjectTarget(project_id="p1", name="P1")],
+        project_targets=[],
         zone_targets=[],
     )
 
@@ -144,7 +144,7 @@ def test_aggregate_deterministic():
 
 def test_aggregate_generates_adjustments_for_failures():
     state = make_planned_state(parcels=[make_parcel("P001", "", "reclassify")])
-    result = validate_aggregate(state, make_changeset(), [], make_intent(), None)
+    result = validate_aggregate(state, make_changeset(), [], make_intent(), FakeConstraintIndex([]))
     assert result.adjustments
     for adj in result.adjustments:
         assert adj.constraint_id

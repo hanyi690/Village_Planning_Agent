@@ -12,9 +12,10 @@ output is fully deterministic.
 
 from __future__ import annotations
 
-from typing import Any, List, Optional, Tuple
+import logging
+from typing import Any, Dict, List, Optional, Tuple
 
-from app.agent.select_graph.adapter import grounding_to_candidate_parcels
+from app.agent.select_graph.adapter import filter_parcels_for_target, grounding_to_candidate_parcels
 from app.modules.context.planning_context import PlanningContext
 from app.modules.schema.contracts.grounding_contracts import GroundingResult
 from app.modules.schema.contracts.parse_contracts import ProjectTarget
@@ -25,12 +26,20 @@ from app.modules.schema.contracts.selection_contracts import (
     RankedCandidate,
     SiteSelectionDecision,
 )
+from app.modules.spatial_ops.facility_location import (
+    DemandPoint,
+    FacilityCandidate,
+    solve_maximal_covering,
+)
 from app.modules.spatial_ops.selection import (
+    CandidateParcel,
     PlacementDecision,
     ScoredCandidate,
     SelectionTarget,
     select_parcel,
 )
+
+logger = logging.getLogger(__name__)
 
 _SCORE_BREAKDOWN_STUBS = {
     "proximity": 0.0,
@@ -124,6 +133,7 @@ def build_site_selection_decision(
                     rank=rank,
                     score=score,
                     score_breakdown=breakdown,
+                    project_ref=placement.target_id or None,
                 )
             )
         else:
@@ -193,6 +203,118 @@ def _cluster_centroid(context: PlanningContext) -> Optional[Tuple[float, float]]
     return None
 
 
+def _geometry_centroid(geometry: Dict[str, Any]) -> Optional[Tuple[float, float]]:
+    if not geometry:
+        return None
+    from shapely.geometry import shape
+
+    try:
+        geom = shape(geometry)
+    except Exception:
+        return None
+    if geom.is_empty:
+        return None
+    centroid = geom.centroid
+    return (centroid.x, centroid.y)
+
+
+def _facility_demand_points(context: PlanningContext) -> List[DemandPoint]:
+    """Weighted demand points from village anchors, falling back to bundle settlements."""
+    demand: List[DemandPoint] = []
+    anchors = getattr(context, "village_anchors", None) or []
+    for i, anchor in enumerate(anchors):
+        if isinstance(anchor, dict):
+            lon = anchor.get("lon")
+            lat = anchor.get("lat")
+        else:
+            lon = getattr(anchor, "lon", None)
+            lat = getattr(anchor, "lat", None)
+        if lon is None or lat is None:
+            continue
+        demand.append(DemandPoint(id=f"village_{i}", lon=float(lon), lat=float(lat), weight=1.0))
+    if demand:
+        return demand
+    bundle = getattr(context, "bundle", None)
+    settlements = []
+    if bundle is not None and getattr(bundle, "polygons", None) is not None:
+        settlements = bundle.polygons.get("settlement") or []
+    for i, s in enumerate(settlements):
+        centroid = _geometry_centroid(getattr(s, "geometry", None))
+        if centroid is None:
+            continue
+        demand.append(DemandPoint(id=f"settlement_{i}", lon=centroid[0], lat=centroid[1], weight=1.0))
+    return demand
+
+
+def _place_facility(
+    facility: Any,
+    parcels: List[CandidateParcel],
+    context: PlanningContext,
+    cluster_centroid: Optional[Tuple[float, float]],
+    occupied: List[Tuple[float, float]],
+) -> Tuple[PlacementDecision, str]:
+    """Place one facility: MCLP when a service radius is known, else select_parcel.
+
+    Mutates ``facility.anchor_point`` in place so the returned intent carries the
+    resolved location. Returns the placement decision and the chosen bsm.
+    """
+    pool = list(parcels)
+    if facility.candidate_bsms:
+        wanted = set(facility.candidate_bsms)
+        pool = [p for p in parcels if p.bsm in wanted]
+    facility_candidates: List[FacilityCandidate] = []
+    by_bsm: Dict[str, CandidateParcel] = {}
+    for p in pool:
+        centroid = _geometry_centroid(p.geometry)
+        if centroid is None:
+            continue
+        facility_candidates.append(
+            FacilityCandidate(candidate_id=p.bsm, lon=centroid[0], lat=centroid[1])
+        )
+        by_bsm[p.bsm] = p
+    if facility.service_radius is not None and facility_candidates:
+        demand = _facility_demand_points(context)
+        if demand:
+            chosen = solve_maximal_covering(
+                facility_candidates,
+                demand,
+                float(facility.service_radius),
+                n_facilities=1,
+            )
+            if chosen:
+                bsm = chosen[0]
+                centroid = by_bsm[bsm].geometry and _geometry_centroid(by_bsm[bsm].geometry)
+                facility.anchor_point = centroid
+                return (
+                    PlacementDecision(
+                        target_id=f"facility:{facility.type}",
+                        selected_bsm=bsm,
+                        anchor_point=centroid,
+                        reason=f"mclp:{bsm}",
+                        status="placed",
+                        selected_score=1.0,
+                    ),
+                    bsm,
+                )
+    target = SelectionTarget(
+        target_id=f"facility:{facility.type}",
+        name=facility.type,
+        category="facility",
+        scale_text="",
+    )
+    decision = select_parcel(
+        target,
+        candidates=pool,
+        constraint_index=context.constraint_index,
+        hazards=None,
+        occupied=occupied,
+        cluster_centroid=cluster_centroid,
+    )
+    if decision.status == "placed" and decision.anchor_point is not None:
+        facility.anchor_point = decision.anchor_point
+    return decision, decision.selected_bsm
+
+
 def select_aggregate(
     result: GroundingResult,
     intent: Any,
@@ -204,6 +326,7 @@ def select_aggregate(
         return empty, []
     parcels = grounding_to_candidate_parcels(result, context.bundle)
     projects = list(getattr(intent, "project_targets", None) or [])
+    facilities = list(getattr(intent, "facilities", None) or [])
     cluster_centroid = _cluster_centroid(context)
     occupied: List[Tuple[float, float]] = []
     placements: List[PlacementDecision] = []
@@ -214,9 +337,16 @@ def select_aggregate(
             category="project",
             scale_text=project.scale_text,
         )
+        project_pool = filter_parcels_for_target(parcels, project.project_id)
+        if not project_pool:
+            logger.warning(
+                "select_aggregate: no parcels tagged for project %s; falling back to full pool",
+                project.project_id,
+            )
+            project_pool = parcels
         placement = select_parcel(
             target,
-            candidates=parcels,
+            candidates=project_pool,
             constraint_index=context.constraint_index,
             hazards=None,
             occupied=occupied,
@@ -226,6 +356,38 @@ def select_aggregate(
             occupied.append(placement.anchor_point)
         placements.append(placement)
     decision = build_site_selection_decision(placements, run_id=run_id, session_id=run_id)
+    facility_placements: Dict[str, Dict[str, Any]] = {}
+    facility_rank = len(placements) + 1
+    for facility in facilities:
+        decision_p, bsm = _place_facility(
+            facility, parcels, context, cluster_centroid, occupied
+        )
+        if decision_p.status == "placed":
+            decision.selected_combination.append(bsm)
+            decision.full_ranking.append(
+                RankedCandidate(
+                    candidate_id=bsm,
+                    rank=facility_rank,
+                    score=decision_p.selected_score,
+                    score_breakdown=dict(_SCORE_BREAKDOWN_STUBS),
+                    project_ref=f"facility:{facility.type}",
+                )
+            )
+            facility_rank += 1
+            facility_placements[facility.type] = {
+                "bsm": bsm,
+                "anchor_point": facility.anchor_point,
+                "status": "placed",
+            }
+        else:
+            facility_placements[facility.type] = {
+                "bsm": "",
+                "anchor_point": facility.anchor_point,
+                "status": "unplaced",
+            }
+    if facilities:
+        decision.decision_factors["facility_count"] = len(facilities)
+        decision.decision_factors["facility_placements"] = facility_placements
     briefs = [
         build_land_design_brief(project, placement, context)
         for project, placement in zip(projects, placements)

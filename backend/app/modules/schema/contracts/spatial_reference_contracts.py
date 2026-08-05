@@ -48,6 +48,8 @@ class SpatialReferenceSpec(BaseModel):
     attr_filter: Optional[Dict[str, Any]] = None
     op: Optional[str] = Field(None, description="and | or | not (for composed type)")
     children: List["SpatialReferenceSpec"] = Field(default_factory=list)
+    intervention_id: Optional[str] = None
+    project_ref: Optional[str] = None
 
     model_config = {"extra": "forbid"}
 

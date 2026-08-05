@@ -22,10 +22,6 @@ def evaluate_l2_gate(
     context_version: str = "",
     l1_constraints: list[str] | None = None,
 ) -> GateDecision:
-    # Reserved for Wave M: cross-checking strategy text against L1 constraints.
-    # Kept deterministic and unused until a reliable detection is available.
-    del l1_constraints
-
     stage = "l2"
     cv = context_version or strategy.context_version
     gate_artifact_id = "gate-l2-" + (strategy.artifact_id or "0")
@@ -35,8 +31,22 @@ def evaluate_l2_gate(
         and not strategy.implementation_priorities
         and not strategy.spatial_structure
     ):
+        pending: list[PendingRequest] = []
+        if l1_constraints:
+            pending.append(
+                PendingRequest(
+                    request_id="pr-l2-empty-l1",
+                    stage="l2",
+                    request_type="strategy_rework",
+                    context={
+                        "message": "L2 produced an empty strategy but L1 constraints are present",
+                        "l1_constraints_present": len(l1_constraints),
+                    },
+                )
+            )
         return GateDecision(
             stage=stage, passed=False, feedback_route="HUMAN",
+            pending_requests=pending,
             context_version=cv, artifact_id=gate_artifact_id,
         )
 

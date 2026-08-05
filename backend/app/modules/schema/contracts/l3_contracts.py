@@ -17,7 +17,7 @@ from .provenance import Provenance
 class PlanningIntervention(BaseModel):
     intervention_id: str
     name: str
-    category: Literal["project", "facility", "road", "restoration", "protection"] = "project"
+    category: Literal["project", "facility", "road", "restoration", "protection", "zone"] = "project"
     problem_addressed: str = ""
     scale: str = ""
     area_range_ha: tuple[float, float] | None = None
@@ -27,6 +27,7 @@ class PlanningIntervention(BaseModel):
     spatial_requirements: dict = {}
     constraints: list[str] = []
     evidence_refs: list[str] = []
+    derives_from_strategy: str | None = None
 
 
 class InterventionDependency(BaseModel):
@@ -69,6 +70,8 @@ class PlanningProgram(ContractMeta):
     program_issues: list[ProgramIssue] = []
     dimension_provenance: list[Provenance] = []
     provenance: "Provenance | None" = None
+    l1_snapshot_ref: str = ""
+    l2_strategy_ref: str = ""
 
 __all__ = [
     "PlanningIntervention",

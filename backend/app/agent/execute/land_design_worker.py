@@ -8,6 +8,7 @@ no MIP. All geometry mutations delegate to app.modules.spatial_ops.parcel_ops.
 from __future__ import annotations
 
 import json
+import re
 from typing import Any, Dict, List, Optional, Tuple
 
 from shapely.geometry import Point, shape
@@ -22,6 +23,8 @@ from app.modules.schema.contracts.parse_contracts import (
 )
 from app.modules.schema.contracts.selection_contracts import LandDesignBrief, SiteSelectionDecision
 from app.modules.spatial_ops.parcel_ops import create_parcel, merge_parcels, reclassify_parcel
+from app.modules.spatial_ops.selection import parse_scale_ha
+from app.modules.spatial_ops.subdivision import apply_setback, split_for_footprint
 
 DEFAULT_CONSTRUCTION_CODE = "0701"
 
@@ -122,6 +125,8 @@ def design_project_parcel(
             before_geometry_wkt=_geometry_to_wkt(_parcel_geometry(parcel)),
             after_geometry_wkt=_geometry_to_wkt(_parcel_geometry(parcel)),
             new_area_ha=_parcel_area_ha(parcel),
+            project_ref=project.project_id,
+            intervention_id=project.project_id,
         )
 
     new_code, new_name = _resolve_project_code(brief)
@@ -161,7 +166,140 @@ def design_project_parcel(
         before_geometry_wkt=before_wkt,
         after_geometry_wkt=_geometry_to_wkt(after_geom),
         new_area_ha=float(result.get("area_ha", 0.0) or 0.0),
+        project_ref=project.project_id,
+        intervention_id=project.project_id,
     )
+
+
+def design_project_footprint(
+    project: ProjectTarget,
+    brief: Optional[LandDesignBrief],
+    selected_bsm: str,
+    parcel_by_bsm: Dict[str, Any],
+) -> List[ParcelChange]:
+    """Design real project footprints for a project (merge/setback/split).
+
+    Unlike ``design_project_parcel`` (whole-parcel reclassification only), this
+    produces an actual footprint geometry when the source parcel is much larger
+    than the project's target area.
+
+    Split decision (tolerance = ``brief.area_tolerance_pct``/100, default 5%):
+      * ``target_ha`` is None            -> single reclassify/merge (no scale to meet)
+      * parcel area < target_ha         -> single change (below-target still places)
+      * parcel area within tolerance    -> single change (already fits)
+      * parcel area > target*(1+tol)    -> split_for_footprint: one "create"
+                                           footprint + "preserve" remainder(s)
+
+    Areas use the same convention as app.modules.spatial_ops.subdivision
+    (polygon area / 10000 -> ha), so the decision and the split stay consistent.
+    Returns ``[]`` when the selected parcel is missing or geometry is unusable.
+    """
+    parcel = parcel_by_bsm.get(str(selected_bsm))
+    if parcel is None:
+        return []
+
+    if brief is None:
+        change = design_project_parcel(project, None, selected_bsm, parcel_by_bsm)
+        return [change] if change is not None else []
+
+    new_code, new_name = _resolve_project_code(brief)
+    candidate_bsms = list(project.candidate_bsms or [])
+
+    source_geom = None
+    source_bsms = [str(selected_bsm)]
+    if len(candidate_bsms) > 1:
+        source_parcels = [
+            parcel_by_bsm[b] for b in candidate_bsms if b in parcel_by_bsm
+        ]
+        merged = merge_parcels(
+            source_parcels, new_code, f"MERGED_{'_'.join(candidate_bsms)}"
+        )
+        if merged is not None:
+            try:
+                merged_geom = shape(json.loads(merged.get("geometry", "")))
+            except Exception:
+                merged_geom = None
+            if merged_geom is not None and not merged_geom.is_empty:
+                source_geom = merged_geom
+                source_bsms = list(merged.get("derived_from_bsms") or source_bsms)
+    if source_geom is None:
+        try:
+            source_geom = shape(_parcel_geometry(parcel))
+        except Exception:
+            source_geom = None
+    if source_geom is None or source_geom.is_empty:
+        return []
+
+    target_ha = project.area_ha
+    if target_ha is None:
+        target_ha = parse_scale_ha(project.scale_text)
+
+    if brief.setback_requirements:
+        match = re.search(r"(\d+(?:\.\d+)?)", brief.setback_requirements[0])
+        if match:
+            setback_m = float(match.group(1))
+            if setback_m > 0:
+                setback_geom = apply_setback(source_geom, setback_m)
+                if setback_geom is not None and not setback_geom.is_empty and setback_geom.area > 0:
+                    source_geom = setback_geom
+
+    tolerance = brief.area_tolerance_pct / 100.0
+    area_ha = source_geom.area / 10000.0
+
+    def _single_change() -> List[ParcelChange]:
+        change = design_project_parcel(project, brief, selected_bsm, parcel_by_bsm)
+        if change is None:
+            return []
+        change.project_ref = project.project_id
+        change.intervention_id = project.project_id
+        return [change]
+
+    if target_ha is None or target_ha <= 0:
+        return _single_change()
+    if area_ha < target_ha:
+        return _single_change()
+    if abs(area_ha - target_ha) / target_ha <= tolerance:
+        return _single_change()
+    if area_ha <= target_ha * (1.0 + tolerance):
+        return _single_change()
+
+    try:
+        footprint, remainders = split_for_footprint(
+            source_geom, target_ha, brief.area_tolerance_pct
+        )
+    except ValueError:
+        return _single_change()
+    if footprint is None or footprint.is_empty or footprint.area <= 0:
+        return _single_change()
+
+    source_wkt = source_geom.wkt
+    changes = [
+        ParcelChange(
+            bsm=f"{project.project_id}_FP",
+            action="create",
+            derived_from_bsms=list(source_bsms),
+            after_classification=_classification(new_code, new_name),
+            before_geometry_wkt=source_wkt,
+            after_geometry_wkt=footprint.wkt,
+            new_area_ha=footprint.area / 10000.0,
+            project_ref=project.project_id,
+            intervention_id=project.project_id,
+        )
+    ]
+    for i, remainder in enumerate(remainders):
+        changes.append(
+            ParcelChange(
+                bsm=f"{project.project_id}_REM_{i}",
+                action="preserve",
+                derived_from_bsms=list(source_bsms),
+                before_geometry_wkt=source_wkt,
+                after_geometry_wkt=remainder.wkt,
+                new_area_ha=remainder.area / 10000.0,
+                project_ref=project.project_id,
+                intervention_id=project.project_id,
+            )
+        )
+    return changes
 
 
 def design_zone_parcel(
@@ -185,6 +323,8 @@ def design_zone_parcel(
                 before_geometry_wkt=_geometry_to_wkt(_parcel_geometry(parcel)),
                 after_geometry_wkt=_geometry_to_wkt(_parcel_geometry(parcel)),
                 new_area_ha=float(result.get("area_ha", 0.0) or 0.0),
+                project_ref=f"zone:{zone_target.zone_id or zone_target.land_use}",
+                intervention_id=zone_target.zone_id or "",
             )
         )
     return changes
@@ -195,18 +335,51 @@ def design_facility_parcel(
     parcel_by_bsm: Dict[str, Any],
     brief: Optional[LandDesignBrief],
 ) -> Optional[ParcelChange]:
-    """Create a small facility footprint parcel from its anchor point.
+    """Place a facility on an existing parcel or create a small buffer footprint.
 
     Returns None when the facility has no anchor_point (cannot be placed
-    deterministically). The footprint is a buffer around the anchor with
-    FACILITY_BUFFER_RADIUS degrees (~20 m).
+    deterministically). When exactly one parcel contains the anchor point, the
+    facility footprint is that parcel (reclassify, no new geometry). Otherwise a
+    circular buffer around the anchor is created; its radius is the facility's
+    ``service_radius`` (metres, converted via ~111 320 m/deg) when set, else the
+    module-level ``FACILITY_BUFFER_RADIUS`` (~20 m).
     """
     anchor = facility_target.anchor_point
     if anchor is None:
         return None
     lon, lat = float(anchor[0]), float(anchor[1])
+    anchor_pt = Point(lon, lat)
+
+    containing: List[Tuple[str, Any]] = []
+    for bsm, parcel in (parcel_by_bsm or {}).items():
+        try:
+            geom = shape(_parcel_geometry(parcel))
+        except Exception:
+            continue
+        if geom.is_empty:
+            continue
+        if geom.contains(anchor_pt):
+            containing.append((str(bsm), parcel, geom))
+    if len(containing) == 1:
+        bsm, parcel, parcel_geom = containing[0]
+        code = facility_target.type or str(getattr(parcel, "dlbm", "") or "")
+        return ParcelChange(
+            bsm=bsm,
+            action="reclassify",
+            derived_from_bsms=[bsm],
+            after_classification=_classification(code, code) if code else None,
+            before_geometry_wkt=parcel_geom.wkt,
+            after_geometry_wkt=parcel_geom.wkt,
+            new_area_ha=parcel_geom.area / 10000.0,
+            project_ref=f"facility:{facility_target.type}",
+            intervention_id=facility_target.source_project_id or facility_target.type,
+        )
+
+    radius = FACILITY_BUFFER_RADIUS
+    if facility_target.service_radius:
+        radius = facility_target.service_radius / 111320.0
     try:
-        buffer_geom = Point(lon, lat).buffer(FACILITY_BUFFER_RADIUS)
+        buffer_geom = anchor_pt.buffer(radius)
         geom_dict = json.loads(json.dumps(buffer_geom.__geo_interface__))
     except Exception:
         return None
@@ -219,6 +392,8 @@ def design_facility_parcel(
         after_classification=_classification(facility_target.type or "", facility_target.type or ""),
         after_geometry_wkt=_geometry_to_wkt(geom_dict),
         new_area_ha=float(buffer_geom.area / 10000),
+        project_ref=f"facility:{facility_target.type}",
+        intervention_id=facility_target.source_project_id or facility_target.type,
     )
 
 
@@ -255,9 +430,9 @@ def design_all(
         brief = briefs[i] if i < len(briefs) else None
         bsm = selected[i] if i < len(selected) else None
         if bsm:
-            change = design_project_parcel(project, brief, bsm, parcel_by_bsm)
-            if change is not None:
-                all_changes.append(change)
+            all_changes.extend(
+                design_project_footprint(project, brief, bsm, parcel_by_bsm)
+            )
 
     for zone_target in getattr(intent, "zone_targets", None) or []:
         all_changes.extend(design_zone_parcel(zone_target, parcel_by_bsm))
@@ -272,6 +447,7 @@ def design_all(
 
 __all__ = [
     "design_project_parcel",
+    "design_project_footprint",
     "design_zone_parcel",
     "design_facility_parcel",
     "build_parcel_change_set",

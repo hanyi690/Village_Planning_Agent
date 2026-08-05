@@ -94,7 +94,7 @@ def after_conversation(
         )
         for d in wave0_dims:
             logger.debug("[after_conversation] Sending dimension: %s", d)
-        return [Send("analyze_dimension", {
+        return [Send("layer_router", {
             **state, "dimension_key": d,
             "completed_dimensions": new_completed,
             "is_revision": True,
@@ -225,7 +225,7 @@ def after_analysis(
 
         if ready_dims:
             logger.info("[after_analysis] Revision ready dims (dependency-checked): %s", ready_dims)
-            return [Send("analyze_dimension", {**state, "dimension_key": d, "is_revision": True, "revision_impact_tree": impact_tree}) for d in ready_dims]
+            return [Send("layer_router", {**state, "dimension_key": d, "is_revision": True, "revision_impact_tree": impact_tree}) for d in ready_dims]
 
         # 检查是否所有修订维度都已完成（只检查 revision_completed，不含基线）
         if set(revision_completed) >= set(all_revision_dims):
@@ -244,95 +244,57 @@ def after_analysis(
         return END
 
     # ── Wave M2: gate-aware routing ──
-    # If a layer gate decision is present and not PASS, route accordingly
-    # before falling through to normal dimension dispatch.
-    layer_num = _phase_to_layer(phase)
+    # If a layer gate decision is present, route accordingly before falling
+    # through to normal dimension dispatch. `layer_just_completed` is preferred
+    # (robust), falling back to phase — after the completion-node fix the two
+    # agree until the gate PASSES (phase is only advanced on PASS).
+    layer_num = state.get("layer_just_completed")
+    if layer_num is None:
+        layer_num = _phase_to_layer(phase)
     if layer_num is not None:
         gate_key = f"l{layer_num}_gate_decision"
         gate_decision = state.get(gate_key)
         if gate_decision is not None:
             route = gate_decision.get("feedback_route") if isinstance(gate_decision, dict) else None
-            if route and route != "PASS":
-                logger.info("[after_analysis] Gate %s routed %s", gate_key, route)
-                if route == "EXPLORE":
-                    # Gate requests evidence -> re-dispatch dimension workers
-                    # (analyze_dimension already calls retrieve_evidence internally)
-                    from app.config.loader import list_dimensions
-                    dim_configs = list_dimensions(layer_num)
-                    explore_dims = [d.key for d in dim_configs]
-                    if explore_dims:
-                        logger.info("[after_analysis] Gate EXPLORE: re-dispatching %s", explore_dims)
-                        return [Send("analyze_dimension", {**state, "dimension_key": d}) for d in explore_dims]
-                    return END
-                if route == "HUMAN":
-                    return END
-                if route in ("L1", "L2", "L3"):
-                    # Rework: re-dispatch dimensions of this layer
-                    # Clear completed_dimensions for this layer so they get re-run
-                    from app.config.loader import list_dimensions
-                    dim_configs = list_dimensions(layer_num)
-                    rework_dims = [d.key for d in dim_configs]
-                    if rework_dims:
-                        logger.info("[after_analysis] Gate rework: re-dispatching %s", rework_dims)
-                        return [Send("analyze_dimension", {**state, "dimension_key": d}) for d in rework_dims]
-                    return END
+            if route is None or route == "PASS":
+                # Gate PASS -> phase is advanced by the `advance_phase` node
+                # (it writes phase + dispatches the next layer's dimensions).
+                logger.info("[after_analysis] Gate %s PASS -> advance_phase", gate_key)
+                return "advance_phase"
+            logger.info("[after_analysis] Gate %s routed %s", gate_key, route)
+            if route == "EXPLORE":
+                # Gate requests evidence -> re-dispatch dimension workers
+                # (workers already call retrieve_evidence internally)
+                from app.config.loader import list_dimensions
+                dim_configs = list_dimensions(layer_num)
+                explore_dims = [d.key for d in dim_configs]
+                if explore_dims:
+                    logger.info("[after_analysis] Gate EXPLORE: re-dispatching %s", explore_dims)
+                    return [Send("layer_router", {**state, "dimension_key": d}) for d in explore_dims]
+                return END
+            if route == "HUMAN":
+                return END
+            if route in ("L1", "L2", "L3"):
+                # Rework: re-dispatch dimensions of this layer
+                from app.config.loader import list_dimensions
+                dim_configs = list_dimensions(layer_num)
+                rework_dims = [d.key for d in dim_configs]
+                if rework_dims:
+                    logger.info("[after_analysis] Gate rework: re-dispatching %s", rework_dims)
+                    return [Send("layer_router", {**state, "dimension_key": d}) for d in rework_dims]
+                return END
 
     layer = _phase_to_layer(phase)
     if layer is None:
         return END
 
-    completed = state.get("completed_dimensions", {}).get(f"layer{layer}", [])
-    total_dims = get_layer_dimensions(layer)
+    from app.agent.bootstrap.layer_router import _ready_dispatch
 
-    # 检查同层依赖，只分发依赖已完成的 dimensions
-    from app.config.loader import list_dimensions
-
-    dim_configs = list_dimensions(layer)
-    ready_dims = []
-    for dim in dim_configs:
-        if dim.key in completed:
-            continue
-        # 检查同层依赖是否都已完成
-        if all(dep in completed for dep in dim.depends_on):
-            ready_dims.append(dim.key)
-
-    # Continuous mode: check next-layer dims whose cross-layer deps are ready
-    # Must run even when current-layer has no ready dims (all dispatched)
-    cross_ready = []
-    next_layer = layer + 1
-    step_mode = state.get("step_mode", False)
-    if next_layer <= 3 and not step_mode:
-        next_dims = list_dimensions(next_layer)
-        next_completed = state.get("completed_dimensions", {}).get(f"layer{next_layer}", [])
-        completed_all = state.get("completed_dimensions", {})
-        for dim in next_dims:
-            if dim.key in next_completed:
-                continue
-            if not all(dep in next_completed for dep in dim.depends_on):
-                continue
-            cross_deps = list(getattr(dim, 'layer_depends_on', []) or [])
-            if not all(dep in completed for dep in cross_deps):
-                continue
-            phase_deps = list(getattr(dim, 'phase_depends_on', []) or [])
-            prev_layer_key = f"layer{layer}"
-            prev_completed = completed_all.get(prev_layer_key, [])
-            if not all(dep in prev_completed for dep in phase_deps):
-                continue
-            cross_ready.append(dim.key)
-            logger.info(
-                "[after_analysis] Cross-layer early dispatch: %s (layer=%s, cross_deps=%s)",
-                dim.key, next_layer, cross_deps + phase_deps,
-            )
-
-    logger.info(
-        "[after_analysis] phase=%s layer=%s completed=%s/%s ready=%s cross_ready=%s step_mode=%s is_revision=%s",
-        phase, layer, len(completed), len(total_dims),
-        ready_dims, cross_ready, step_mode, is_revision,
-    )
-
-    all_ready = ready_dims + cross_ready
-    if all_ready:
-        return [Send("analyze_dimension", {**state, "dimension_key": d}) for d in all_ready]
+    sends = _ready_dispatch(state, phase)
+    if sends:
+        logger.info("[after_analysis] phase=%s layer=%s dispatching %d dim(s) is_revision=%s",
+                    phase, layer, len(sends), is_revision)
+        return sends
 
     logger.info("[after_analysis] No ready dims, returning END")
     return END
@@ -390,7 +352,7 @@ def _dispatch_current(state: Dict[str, Any]) -> Union[List[Send], str]:
     if not ready:
         return END
 
-    return [Send("analyze_dimension", {**state, "dimension_key": d, "phase": phase}) for d in ready]
+    return [Send("layer_router", {**state, "dimension_key": d, "phase": phase}) for d in ready]
 
 
 __all__ = ["after_conversation", "after_analysis"]

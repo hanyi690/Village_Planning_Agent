@@ -32,9 +32,10 @@ _NAME_HEADER_RE = re.compile(r"(名称|类型)")
 
 _CATEGORY_MAP = {
     "项目": "project",
-    "功能分区": "project",
+    "功能分区": "zone",
     "设施": "facility",
     "轴线": "restoration",
+    "道路": "road",
 }
 
 _GAP_KEYWORDS = ("缺失", "待定", "需进一步", "尚不明确", "缺乏")

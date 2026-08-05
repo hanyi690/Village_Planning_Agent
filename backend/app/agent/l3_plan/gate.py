@@ -25,22 +25,55 @@ def evaluate_l3_gate(
     l1_constraints: list[str] | None = None,
     l2_strategy: Any | None = None,
 ) -> GateDecision:
-    # Reserved for Wave M: cross-checking program against L1 constraints and
-    # L2 strategy. Kept deterministic and unused until a reliable detection is
-    # available.
-    del l1_constraints, l2_strategy
-
     stage = "l3"
     cv = context_version or program.context_version
     gate_artifact_id = "gate-l3-" + (program.artifact_id or "0")
 
-    if (
+    empty_program = (
         not program.interventions
         and not program.dependencies
         and not program.omissions
-    ):
+    )
+    has_spatial_strategy = (
+        l2_strategy is not None
+        and isinstance(getattr(l2_strategy, "spatial_structure", ""), str)
+        and bool(l2_strategy.spatial_structure.strip())
+    )
+
+    if empty_program and not has_spatial_strategy:
+        pending: list[PendingRequest] = []
+        if l1_constraints:
+            pending.append(
+                PendingRequest(
+                    request_id="pr-l3-empty-l1",
+                    stage="l3",
+                    request_type="program_rework",
+                    context={
+                        "message": "L3 produced an empty program but L1 constraints are present",
+                        "l1_constraints_present": len(l1_constraints),
+                    },
+                )
+            )
         return GateDecision(
             stage=stage, passed=False, feedback_route="HUMAN",
+            pending_requests=pending,
+            context_version=cv, artifact_id=gate_artifact_id,
+        )
+
+    if has_spatial_strategy and not program.interventions:
+        return GateDecision(
+            stage=stage, passed=False, feedback_route="L3",
+            pending_requests=[
+                PendingRequest(
+                    request_id="pr-l3-strategy-orphan",
+                    stage="l3",
+                    request_type="program_rework",
+                    context={
+                        "message": "L2 spatial structure defined but L3 produced zero interventions",
+                        "detail": l2_strategy.spatial_structure.strip()[:200],
+                    },
+                )
+            ],
             context_version=cv, artifact_id=gate_artifact_id,
         )
 

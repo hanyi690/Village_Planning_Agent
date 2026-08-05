@@ -11,6 +11,7 @@ class RankedCandidate(BaseModel):
     rank: int
     score: float = 0.0
     score_breakdown: dict = Field(default_factory=dict)
+    project_ref: str | None = None
 
 
 class EliminatedCandidate(BaseModel):

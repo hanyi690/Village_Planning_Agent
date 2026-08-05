@@ -24,15 +24,13 @@ def _state_with_gate(phase, gate_key, gate_route, **kwargs):
 
 
 def test_gate_pass_continues_to_next_phase():
-    """L1 gate PASS -> router should try to dispatch next-layer dims or END."""
+    """L1 gate PASS -> router routes to advance_phase (phase advance moved out of
+    completion_check into the gate-PASS path; the advance_phase node writes phase
+    and dispatches the next layer)."""
     state = _state_with_gate("layer1", "l1_gate_decision", None,
                              completed_dimensions={"layer1": ["d1", "d2"], "layer2": [], "layer3": []})
-    # phase is layer1, all dims complete, gate PASS -> should advance (no ready dims -> END)
     result = after_analysis(state)
-    # With all dims complete and gate PASS, after_analysis falls through to phase advance
-    # Since we can't test phase advance directly (it's in completion_check), we verify
-    # the router doesn't block on gate
-    assert result is not None
+    assert result == "advance_phase"
 
 
 def test_gate_explore_routes_to_explore():

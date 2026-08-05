@@ -27,6 +27,7 @@ from .post_l3_nodes import (
     reconcile_node,
     select_node,
     validate_node,
+    zoning_node,
 )
 from .post_l3_state import PostL3ChainState
 
@@ -44,7 +45,11 @@ def _gate_route(gate: Any) -> str:
 
 
 def _retry_or_human(state: PostL3ChainState, stage: str, retry_target: str) -> str:
-    """Check retry count; if under cap, return retry_target; else human_end."""
+    """Pure router: pick retry_target vs human escalation based on the cap.
+
+    The counter is owned by the nodes via _retry_patch (post_l3_nodes.py);
+    this router only decides the target and never writes state.
+    """
     counts = dict(state.retry_counts or {})
     current = counts.get(stage, 0)
     max_retries = state.max_retries or 3
@@ -53,12 +58,9 @@ def _retry_or_human(state: PostL3ChainState, stage: str, retry_target: str) -> s
             "[post_l3] %s retry exceeded %d rounds -> HUMAN", stage, max_retries,
         )
         return "human_end"
-    counts[stage] = current + 1
     logger.info(
         "[post_l3] %s retry %d/%d -> %s", stage, current + 1, max_retries, retry_target,
     )
-    # Note: retry_counts update is returned by the node, not the router.
-    # The router only decides the target; the node increments the counter.
     return retry_target
 
 
@@ -103,9 +105,9 @@ def _route_after_validate(state: PostL3ChainState) -> str:
     if route == "RETRY_PARSE":
         return _retry_or_human(state, "validate", "parse")
     if route == "RETRY_L3":
-        # Cannot loop back to L3 in the post-L3 chain; terminate
-        logger.warning("[post_l3] validate RETRY_L3 cannot loop -> END")
-        return "end"
+        # Full re-entry into the main-graph L3 worker is out of scope for the
+        # post-L3 subgraph; surface the failure to a human as a review item.
+        return "human_review"
     return "human_end"
 
 
@@ -116,8 +118,9 @@ def _route_after_reconcile(state: PostL3ChainState) -> str:
     if route == "RETRY_EXECUTE":
         return _retry_or_human(state, "reconcile", "execute")
     if route == "RETRY_L3":
-        logger.warning("[post_l3] reconcile RETRY_L3 cannot loop -> END")
-        return "end"
+        # Full re-entry into the main-graph L3 worker is out of scope for the
+        # post-L3 subgraph; surface the failure to a human as a review item.
+        return "human_review"
     return "human_end"
 
 
@@ -156,6 +159,7 @@ def build_post_l3_chain(checkpointer=None):
     graph.add_node("ground", ground_node)
     graph.add_node("select", select_node)
     graph.add_node("execute", execute_node)
+    graph.add_node("zoning", zoning_node)
     graph.add_node("validate", validate_node)
     graph.add_node("reconcile", reconcile_node)
     graph.add_node("deliver", deliver_node)
@@ -174,15 +178,18 @@ def build_post_l3_chain(checkpointer=None):
         "select", _route_after_select,
         {"execute": "execute", "ground": "ground", "human_end": "human_review", "end": END},
     )
-    graph.add_edge("execute", "validate")
+    graph.add_edge("execute", "zoning")
+    graph.add_edge("zoning", "validate")
     graph.add_conditional_edges(
         "validate", _route_after_validate,
         {"reconcile": "reconcile", "execute": "execute", "select": "select",
-         "ground": "ground", "parse": "parse", "human_end": "human_review", "end": END},
+         "ground": "ground", "parse": "parse", "human_end": "human_review",
+         "human_review": "human_review", "end": END},
     )
     graph.add_conditional_edges(
         "reconcile", _route_after_reconcile,
-        {"deliver": "deliver", "execute": "execute", "human_end": "human_review", "end": END},
+        {"deliver": "deliver", "execute": "execute", "human_end": "human_review",
+         "human_review": "human_review", "end": END},
     )
     graph.add_conditional_edges(
         "deliver", _route_after_deliver,
