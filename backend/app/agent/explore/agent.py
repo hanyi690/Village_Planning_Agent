@@ -205,9 +205,9 @@ def _instructions_from_l3_table(text: str) -> List[ExplorationInstruction]:
     """Convert every formal L3 row into one evidence-preserving instruction."""
     if "【INSTRUCTION】" not in (text or ""):
         return []
-    from app.agent.select.parse_agent import _extract_instruction_tables
+    from app.modules.parsing.tables import extract_instruction_tables
 
-    extracted = _extract_instruction_tables(text)
+    extracted = extract_instruction_tables(text)
     collections = (
         ("project", extracted.get("projects") or []),
         ("zone", extracted.get("zones") or []),

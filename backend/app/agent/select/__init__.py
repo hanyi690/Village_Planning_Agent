@@ -1,12 +1,11 @@
-﻿"""SELECT Agent subpackage - unified planning text parser.
+﻿"""SELECT Agent subpackage - re-exports for backward compatibility.
 
-Migrated from agent/gis/parse per docs/architecture/agent-graph.md §5.
-Public API:
-  parse / parse_async - deterministic rule-based parsing
-  ParseResult - output container with SpatialPlanningIntent
+Wave M2: parse_agent.py has been deleted. parse/parse_async/ParseResult
+now live in app.modules.parsing.text_parser. This file re-exports them
+for backward compatibility with any code that imports from app.agent.select.
 """
 
-from .parse_agent import parse, parse_async, ParseResult
+from app.modules.parsing.text_parser import parse, parse_async, ParseResult
 from .parse_state import ParseAgentState, SectionInfo
 
 __all__ = ["parse", "parse_async", "ParseResult", "ParseAgentState", "SectionInfo"]

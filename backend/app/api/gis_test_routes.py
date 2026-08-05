@@ -1,4 +1,4 @@
-"""GIS Dev API — 8 endpoints for development/testing.
+﻿"""GIS Dev API — 8 endpoints for development/testing.
 
 Production should disable this router. Each endpoint wraps GIS services
 for the frontend test-gis page.
@@ -95,7 +95,7 @@ async def _resolve_intent_via_parse(village_name: str, planning_text: str = "") 
 
     Returns a SpatialPlanningIntent (app.modules.schema.contracts.parse_contracts).
     """
-    from app.agent.select.parse_agent import parse_async
+    from app.modules.parsing.text_parser import parse_async
 
     text = planning_text or ""
     if not text:
@@ -487,7 +487,7 @@ async def gis_layout(request: LayoutRequest):
                     intent = await _resolve_intent_via_parse(request.village_name)
             except Exception as e:
                 logger.warning(f"[{path_name}] Intent resolution failed: {e}")
-                from app.agent.select.parse_agent import parse_async as _empty_parse
+                from app.modules.parsing.text_parser import parse_async as _empty_parse
                 intent = (await _empty_parse(planning_text="", village_name=request.village_name)).intent
 
             pipeline_result = await asyncio.to_thread(
@@ -707,3 +707,4 @@ async def get_file(filepath: str):
             return json.load(f)
     except Exception as e:
         return {"error": str(e)}
+
