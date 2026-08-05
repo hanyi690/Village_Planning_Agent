@@ -161,4 +161,58 @@ def render_evidence_prompt_section(
     return "\n".join(lines)
 
 
-__all__ = ["retrieve_evidence", "render_evidence_prompt_section"]
+async def retrieve_evidence_for_gate(
+    gate_decision: dict,
+    session_id: str,
+    village_name: str = "",
+) -> list:
+    """Translate a gate's EXPLORE pending_requests into evidence retrievals.
+
+    Wave M2: called when a layer gate returns feedback_route="EXPLORE".
+    Converts each PendingRequest (with stage="explore") into an
+    ExplorationRequest, calls retrieve_evidence, and returns the list of
+    ExplorationResult objects. Non-EXPLORE gates or empty pending_requests
+    produce no retrievals.
+    """
+    route = gate_decision.get("feedback_route") if isinstance(gate_decision, dict) else None
+    if route != "EXPLORE":
+        return []
+
+    pending = gate_decision.get("pending_requests") or []
+    if not pending:
+        return []
+
+    results = []
+    for pr in pending:
+        if isinstance(pr, dict):
+            ctx = pr.get("context") or {}
+            request = ExplorationRequest(
+                run_id=session_id,
+                request_type=pr.get("request_type", "evidence_gap"),
+                query=ctx.get("message", ctx.get("reason", "")),
+                dimension_key=ctx.get("dimension", ""),
+                stage=gate_decision.get("stage", ""),
+                query_purpose="gap_resolution",
+                required_facts=ctx.get("required_fact", []) if isinstance(ctx.get("required_fact"), list) else [ctx.get("required_fact", "")] if ctx.get("required_fact") else [],
+            )
+        else:
+            # PendingRequest Pydantic model
+            ctx = getattr(pr, "context", {}) or {}
+            request = ExplorationRequest(
+                run_id=session_id,
+                request_type=getattr(pr, "request_type", "evidence_gap"),
+                query=ctx.get("message", ctx.get("reason", "")),
+                dimension_key=ctx.get("dimension", ""),
+                stage=gate_decision.get("stage", ""),
+                query_purpose="gap_resolution",
+            )
+        try:
+            result = await retrieve_evidence(request, session_id, village_name)
+            results.append(result)
+        except Exception as e:
+            logger.warning("[retrieve_evidence_for_gate] failed for %s: %s", request.request_type, e)
+
+    return results
+
+
+__all__ = ["retrieve_evidence", "render_evidence_prompt_section", "retrieve_evidence_for_gate"]
