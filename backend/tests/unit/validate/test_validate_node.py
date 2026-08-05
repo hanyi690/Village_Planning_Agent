@@ -1,17 +1,19 @@
-"""EXECUTE _validate_node: consume the VALIDATE aggregate subgraph (Wave J Task 5).
+"""EXECUTE _execution_review_node: execution checks only (Wave O).
 
-Covers the happy path (typed ValidationReport stored on state), the
-classification-missing failure, the no-layout and execution-error short
-circuits, the removal of the legacy LayoutValidator import, and the new
-validation_report state field default.
+The Wave O refactor replaced the internal full-VALIDATE node with a lightweight
+execution review (input completeness / worker-output completeness / change
+lineage / geometry validity / worker conflicts) that produces
+``validation_result`` for the outer post-L3 VALIDATE stage. Covers the pass
+path, and the input / execution-error / geometry / conflict failure paths.
 """
 
 import asyncio
 from pathlib import Path
 
-from app.agent.execute.execute_agent import _validate_node
+from app.agent.execute.execute_agent import _execution_review_node
 from app.agent.execute.execute_state import ExecuteAgentState
 from app.modules.schema.contracts.classification_ref import ClassificationRef
+from app.modules.schema.contracts.execution_plan_contracts import WorkerResult
 from app.modules.schema.contracts.parcel_change_contracts import ParcelChange, ParcelChangeSet
 from app.modules.schema.contracts.parse_contracts import SpatialPlanningIntent
 
@@ -20,36 +22,13 @@ _EXECUTE_AGENT_PATH = (
 )
 
 WKT = "POLYGON ((0 0, 0 1, 1 1, 1 0, 0 0))"
-LAYOUT_A = [[0.0, 0.0], [0.0, 1.0], [1.0, 1.0], [1.0, 0.0], [0.0, 0.0]]
-
-
-def _layer(layer_type="function_zone", features=None):
-    return {
-        "layerType": layer_type,
-        "data": {"type": "FeatureCollection", "features": list(features or [])},
-    }
-
-
-def _polygon_feature(coords, name=""):
-    return {
-        "type": "Feature",
-        "properties": {"name": name},
-        "geometry": {"type": "Polygon", "coordinates": [coords]},
-    }
-
-
-def _make_changeset(changes=None, area_conservation_verified=True):
-    return ParcelChangeSet(
-        changes=list(changes or []),
-        area_conservation_verified=area_conservation_verified,
-        geometry_validity_verified=True,
-    )
 
 
 def _classified_change(bsm="P001", code="0701"):
     return ParcelChange(
         bsm=bsm,
         action="reclassify",
+        derived_from_bsms=[bsm],
         after_classification=ClassificationRef(
             system="ghytbm", code=code, canonical_name="林地", source="derived"
         ),
@@ -58,89 +37,112 @@ def _classified_change(bsm="P001", code="0701"):
     )
 
 
+def _make_changeset(changes=None):
+    return ParcelChangeSet(changes=list(changes or []))
+
+
+def _zone_result():
+    return WorkerResult(
+        worker_type="zone",
+        layers=[{"layerType": "function_zone", "data": {"features": []}}],
+        parcel_changes=[_classified_change()],
+    )
+
+
 def _state(**overrides):
     defaults = dict(
         session_id="s1",
         validation_result={},
-        layout_configs=[_layer("function_zone", [_polygon_feature(LAYOUT_A, "Z1")])],
-        parcel_changeset=_make_changeset(changes=[_classified_change()]),
+        layout_configs=[{"layerType": "function_zone", "data": {"features": []}}],
+        parcel_changeset=_make_changeset([_classified_change()]),
         intent=SpatialPlanningIntent(),
         gis_bundle=None,
+        parcel_by_bsm={"P001": object()},
+        tasks_to_run=["layout"],
+        worker_results=[_zone_result()],
+        worker_conflict_diagnostics=[],
+        geometry_materialize_report={
+            "geometry_valid": True,
+            "checked_changes": 1,
+            "diagnostics": [],
+        },
     )
     defaults.update(overrides)
     return ExecuteAgentState(**defaults)
 
 
-def test_validate_node_returns_report(monkeypatch):
-    class _NoOverlapConstraintIndex:
-        def geometry_in_constraint(self, geometry):
-            return []
+def test_execution_review_passes_with_complete_inputs():
+    state = _state()
 
-    monkeypatch.setattr(
-        "app.modules.spatial_ops.build_constraint_index",
-        lambda gis_bundle: _NoOverlapConstraintIndex(),
-    )
-    state = _state(gis_bundle={"dummy": True})
+    result = asyncio.run(_execution_review_node(state))
 
-    result = asyncio.run(_validate_node(state))
-
-    report = result.get("validation_report")
-    assert report is not None
-    assert isinstance(report.overall_passed, bool)
-    assert result["validation_result"]["passed"] == report.overall_passed
+    assert result["validation_result"]["passed"] is True
+    assert result["validation_result"]["status"] == "pass"
+    assert result["execution_review_report"]["passed"] is True
     assert result["validation_round"] == 1
-    assert result["constraint_adjustments"] == []
 
 
-def test_validate_node_classification_failure():
+def test_execution_review_fails_missing_inputs():
+    state = _state(parcel_by_bsm={}, worker_results=[])
+
+    result = asyncio.run(_execution_review_node(state))
+
+    assert result["validation_result"]["passed"] is False
+    assert result["validation_result"]["reason"] == "execution_review_failed"
+    checks = {check["check"]: check["passed"] for check in result["execution_review_report"]["checks"]}
+    assert checks["input_completeness"] is False
+    assert checks["worker_output_completeness"] is False
+
+
+def test_execution_review_fails_execution_errors():
     state = _state(
-        session_id="s2",
-        parcel_changeset=_make_changeset(
-            changes=[ParcelChange(bsm="P001", action="reclassify", after_classification=None)]
-        ),
+        execution_errors=[{"stage": "route", "code": "missing_session_kg", "message": "x"}],
     )
 
-    result = asyncio.run(_validate_node(state))
+    result = asyncio.run(_execution_review_node(state))
 
     assert result["validation_result"]["passed"] is False
     violations = result["validation_result"]["violations"]
-    assert any(v["check"] == "classification_missing" for v in violations)
-    report = result.get("validation_report")
-    assert report is not None
-    assert "EXECUTE" in report.issues_by_stage
-    assert any(i.code == "classification_missing" for i in report.issues_by_stage["EXECUTE"])
-
-    adjustments = result["constraint_adjustments"]
-    assert adjustments, "expected non-empty constraint_adjustments from failing checks"
-    for adj in adjustments:
-        assert set(adj) >= {"zone", "action", "delta_ha", "reason", "priority"}
-        assert isinstance(adj["delta_ha"], (int, float))
-        assert adj["action"] == "relax"
-    assert "classification_missing" in {adj["zone"] for adj in adjustments}
+    assert any(v["check"] == "missing_session_kg" for v in violations)
 
 
-def test_validate_node_no_layout():
-    state = _state(session_id="s3", layout_configs=[])
-
-    result = asyncio.run(_validate_node(state))
-
-    assert result["validation_result"]["passed"] is False
-    assert result["validation_result"]["reason"] == "no_layout"
-
-
-def test_validate_node_execution_errors():
+def test_execution_review_fails_geometry_invalid():
     state = _state(
-        session_id="s4",
-        execution_errors=[{"code": "road_failed", "message": "x"}],
+        geometry_materialize_report={
+            "geometry_valid": False,
+            "checked_changes": 1,
+            "diagnostics": [
+                {"code": "missing_after_geometry", "bsm": "P001", "action": "create"}
+            ],
+        },
     )
 
-    result = asyncio.run(_validate_node(state))
+    result = asyncio.run(_execution_review_node(state))
 
     assert result["validation_result"]["passed"] is False
-    assert result["validation_result"]["reason"] == "execution_errors"
+    violations = result["validation_result"]["violations"]
+    assert any(v["check"] == "missing_after_geometry" for v in violations)
 
 
-def test_validate_node_no_layout_validator_import():
+def test_execution_review_fails_worker_conflict():
+    state = _state(
+        worker_conflict_diagnostics=[
+            {
+                "type": "bsm_conflict",
+                "bsm": "P001",
+                "workers": [{"worker_type": "project", "after_code": "0701"}],
+            }
+        ],
+    )
+
+    result = asyncio.run(_execution_review_node(state))
+
+    assert result["validation_result"]["passed"] is False
+    violations = result["validation_result"]["violations"]
+    assert any(v["check"] == "worker_conflict" for v in violations)
+
+
+def test_execution_review_no_layout_validator_import():
     source = _EXECUTE_AGENT_PATH.read_text(encoding="utf-8")
 
     assert "from app.tools.gis._validation.layout_validator import" not in source

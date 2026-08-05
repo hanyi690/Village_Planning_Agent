@@ -1,9 +1,9 @@
-"""EXECUTE _execute_project_node: Land Design Worker polygon footprint + ParcelChange accumulation."""
+"""EXECUTE project worker: Land Design Worker polygon footprint + ParcelChange accumulation."""
 
 import asyncio
 from pathlib import Path
 
-from app.agent.execute.execute_agent import _execute_project_node
+from app.agent.execute.execute_agent import _project_worker_node
 from app.agent.execute.execute_state import ExecuteAgentState
 from app.modules.schema.contracts.parse_contracts import ProjectTarget, SpatialPlanningIntent
 from app.modules.schema.contracts.selection_contracts import LandDesignBrief, SiteSelectionDecision
@@ -47,14 +47,19 @@ def _state(selected=None, brief=None):
     )
 
 
+def _worker_result(result):
+    return result["worker_results"][0]
+
+
 def _project_layer(result):
-    return next(c for c in result["layout_configs"] if c["layerType"] == "planned_project")
+    worker = _worker_result(result)
+    return next(c for c in worker.layers if c["layerType"] == "planned_project")
 
 
-def test_project_node_polygon_footprint():
+def test_project_worker_polygon_footprint():
     state = _state()
 
-    result = asyncio.run(_execute_project_node(state))
+    result = asyncio.run(_project_worker_node(state))
 
     layer = _project_layer(result)
     features = layer["data"]["features"]
@@ -65,25 +70,30 @@ def test_project_node_polygon_footprint():
     assert props["change_action"] == "reclassify"
 
 
-def test_project_node_accumulates_parcel_changes():
+def test_project_worker_accumulates_parcel_changes():
     state = _state()
 
-    asyncio.run(_execute_project_node(state))
+    result = asyncio.run(_project_worker_node(state))
 
-    assert len(state.parcel_changes) == 1
-    change = state.parcel_changes[0]
+    changes = _worker_result(result).parcel_changes
+    assert len(changes) == 1
+    change = changes[0]
     assert change.action in {"reclassify", "merge"}
     assert change.bsm == "P001"
     assert change.derived_from_bsms == ["P001"]
 
 
-def test_project_node_builds_changeset():
+def test_project_worker_builds_changeset_via_merge():
+    from app.agent.execute.merge import merge_worker_results
+
     state = _state()
 
-    asyncio.run(_execute_project_node(state))
+    result = asyncio.run(_project_worker_node(state))
 
-    assert state.parcel_changeset is not None
-    assert len(state.parcel_changeset.changes) == 1
+    changeset, layouts, diagnostics = merge_worker_results([_worker_result(result)])
+    assert changeset is not None
+    assert len(changeset.changes) == 1
+    assert layouts
 
 
 def test_legacy_loop_deleted():

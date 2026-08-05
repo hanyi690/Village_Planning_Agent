@@ -1,8 +1,8 @@
-"""P7 单测：EXECUTE layout 节点接线 CustomZoningGenerator → custom_functional_zone 层。"""
+"""P7 单测：EXECUTE zone worker 接线 CustomZoningGenerator → custom_functional_zone 层。"""
 
 import asyncio
 
-from app.agent.execute.execute_agent import _execute_layout_node
+from app.agent.execute.execute_agent import _zone_worker_node
 from app.agent.execute.execute_state import ExecuteAgentState
 from app.modules.schema.contracts.custom_zone_contracts import (
     CustomZoneTarget,
@@ -53,8 +53,8 @@ def test_execute_layout_adds_custom_functional_zone_layer():
         gis_data={"landuse_current_geojson": _LANDUSE},
         intent=intent,
     )
-    result = asyncio.run(_execute_layout_node(state))
-    layers = result.get("layout_configs", [])
+    result = asyncio.run(_zone_worker_node(state))
+    layers = result["worker_results"][0].layers
     custom = [c for c in layers if c.get("layerType") == "custom_planning_zone"]
     assert custom, f"expected custom_planning_zone layer, got {[c.get('layerType') for c in layers]}"
     features = custom[0]["data"]["features"]

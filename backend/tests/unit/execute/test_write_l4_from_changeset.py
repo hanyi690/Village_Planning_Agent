@@ -1,8 +1,9 @@
 """EXECUTE _write_l4_node: consumes ParcelChangeSet via planned_state_builder (Wave I Task 6).
 
-The L4 write node must build PlannedState from state.parcel_changeset through
-changeset_to_planned_state, keeping the old _layout_configs_to_planned_state
-GeoJSON path as fallback when no changeset is present.
+The L4 write node builds PlannedState from state.parcel_changeset through
+changeset_to_planned_state. The legacy _layout_configs_to_planned_state GeoJSON
+fallback was removed in the Wave O multi-worker refactor (planned_state_builder
+always produces the PlannedState), so a run without a changeset skips the write.
 """
 
 import asyncio
@@ -91,13 +92,14 @@ def test_l4_uses_changeset_path(monkeypatch):
     assert calls["bump"] == [1]
 
 
-def test_l4_fallback_when_no_changeset(monkeypatch):
+def test_l4_skips_when_no_changeset(monkeypatch):
     calls, kg = _patch_kg_deps(monkeypatch)
     state = ExecuteAgentState(
         session_id="s1",
         validation_result={"passed": True},
         intent=SpatialPlanningIntent(),
         parcel_changeset=None,
+        planned_state=None,
         layout_configs=[
             {
                 "layerType": "planned_project",
@@ -119,11 +121,8 @@ def test_l4_fallback_when_no_changeset(monkeypatch):
     result = asyncio.run(_write_l4_node(state))
 
     assert result == {}
-    assert len(calls["apply"]) == 1
-    planned_state = calls["apply"][0]
-    assert len(planned_state.facilities) == 1
-    assert planned_state.facilities[0].name == "学校"
-    assert calls["bump"] == [1]
+    assert calls["apply"] == []
+    assert calls["bump"] == []
 
 
 def test_l4_skips_when_validation_not_passed(monkeypatch):

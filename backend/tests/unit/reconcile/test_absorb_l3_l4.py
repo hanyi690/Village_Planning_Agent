@@ -60,15 +60,15 @@ def test_state_reconciliation_report_field_settable():
     assert state.reconciliation_report == {"dummy": True}
 
 
-def test_validate_node_still_works():
-    """_validate_node runs without the removed helper (no layout -> fail path)."""
-    from app.agent.execute.execute_agent import _validate_node
+def test_execution_review_still_works():
+    """_execution_review_node runs without the removed helper (empty -> fail path)."""
+    from app.agent.execute.execute_agent import _execution_review_node
 
     state = ExecuteAgentState(
         session_id="s1",
         layout_configs=[],
         validation_result={},
     )
-    result = asyncio.run(_validate_node(state))
+    result = asyncio.run(_execution_review_node(state))
     assert result["validation_result"]["passed"] is False
-    assert result["validation_result"]["reason"] == "no_layout"
+    assert result["validation_result"]["reason"] == "execution_review_failed"

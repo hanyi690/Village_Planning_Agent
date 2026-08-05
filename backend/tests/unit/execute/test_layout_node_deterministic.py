@@ -1,4 +1,4 @@
-"""EXECUTE _execute_layout_node: deterministic zone reclassification (no MIP).
+"""EXECUTE zone worker: deterministic zone reclassification + MIP allocation (Wave O).
 
 Covers the deterministic reclassify path (function_zone layer + ParcelChange
 accumulation), the "deterministic" summary mode, the absence of any MIP
@@ -9,7 +9,10 @@ custom planning-zone path via CustomZoningGenerator (vocabulary-driven, no MIP).
 import asyncio
 from pathlib import Path
 
-from app.agent.execute.execute_agent import _execute_layout_node
+from app.agent.execute.execute_agent import (
+    _prepare_inputs_node,
+    _zone_worker_node,
+)
 from app.agent.execute.execute_state import ExecuteAgentState
 from app.modules.schema.contracts.custom_zone_contracts import (
     CustomZoneTarget,
@@ -59,14 +62,19 @@ def _state(intent=None, landuse=None):
     )
 
 
+def _worker_result(result):
+    return result["worker_results"][0]
+
+
 def test_layout_node_reclassifies_zone_targets():
     state = _state(
         intent=SpatialPlanningIntent(zone_targets=[_zone(bsms=["P001"])])
     )
 
-    result = asyncio.run(_execute_layout_node(state))
+    result = asyncio.run(_zone_worker_node(state))
 
-    func = next(c for c in result["layout_configs"] if c["layerType"] == "function_zone")
+    worker = _worker_result(result)
+    func = next(c for c in worker.layers if c["layerType"] == "function_zone")
     features = func["data"]["features"]
     assert len(features) == 1
     assert features[0]["geometry"]["type"] == "Polygon"
@@ -75,11 +83,9 @@ def test_layout_node_reclassifies_zone_targets():
     assert props["planning_land_use"] == "生态保护区"
     assert props["zone_type"] == "生态保护区"
     assert props["action"] == "reclassify"
-    assert len(state.parcel_changes) == 1
-    assert state.parcel_changes[0].action == "reclassify"
-    assert state.parcel_changes[0].bsm == "P001"
-    assert state.parcel_changeset is not None
-    assert len(state.parcel_changeset.changes) == 1
+    assert len(worker.parcel_changes) == 1
+    assert worker.parcel_changes[0].action == "reclassify"
+    assert worker.parcel_changes[0].bsm == "P001"
 
 
 def test_layout_node_mode_deterministic():
@@ -87,7 +93,7 @@ def test_layout_node_mode_deterministic():
         intent=SpatialPlanningIntent(zone_targets=[_zone(bsms=["P001"])])
     )
 
-    result = asyncio.run(_execute_layout_node(state))
+    result = asyncio.run(_zone_worker_node(state))
 
     summary = result["allocation_summary"]
     assert summary["mode"] == "deterministic"
@@ -107,8 +113,10 @@ def test_layout_node_no_mip_import():
 def test_layout_node_missing_zone_targets():
     state = _state(intent=SpatialPlanningIntent())
 
-    result = asyncio.run(_execute_layout_node(state))
+    result = asyncio.run(_zone_worker_node(state))
 
+    codes = [item["code"] for item in _worker_result(result).unresolved_items]
+    assert "missing_zone_targets" in codes
     errors = result.get("execution_errors", [])
     assert any(e.get("code") == "missing_zone_targets" for e in errors)
 
@@ -140,9 +148,9 @@ def test_layout_node_custom_zone_targets():
         )
     )
 
-    result = asyncio.run(_execute_layout_node(state))
+    result = asyncio.run(_zone_worker_node(state))
 
-    layers = result.get("layout_configs", [])
+    layers = _worker_result(result).layers
     custom = [c for c in layers if c.get("layerType") == "custom_planning_zone"]
     assert custom, f"expected custom_planning_zone layer, got {[c.get('layerType') for c in layers]}"
     assert len(custom[0]["data"]["features"]) >= 1
@@ -164,11 +172,12 @@ def test_layout_node_applies_constraint_adjustments():
         }
     ]
 
-    result = asyncio.run(_execute_layout_node(state))
-
-    assert result["constraint_adjustments"] == state.constraint_adjustments
-    assert result["allocation_summary"]["adjustments_applied"] == 1
+    prepared = asyncio.run(_prepare_inputs_node(state))
+    assert prepared["constraint_adjustments"] == state.constraint_adjustments
     assert state.intent.zone_targets[0].area_ha == 12.0
+
+    result = asyncio.run(_zone_worker_node(state))
+    assert result["allocation_summary"]["adjustments_applied"] == 1
 
 
 def test_layout_node_skips_unmatched_adjustments():
@@ -187,17 +196,19 @@ def test_layout_node_skips_unmatched_adjustments():
         }
     ]
 
-    result = asyncio.run(_execute_layout_node(state))
-
-    assert result["constraint_adjustments"] == []
-    assert result["allocation_summary"]["adjustments_applied"] == 0
+    prepared = asyncio.run(_prepare_inputs_node(state))
+    assert prepared["constraint_adjustments"] == []
     assert state.intent.zone_targets[0].area_ha == 10.0
+    state.constraint_adjustments = prepared["constraint_adjustments"]
+
+    result = asyncio.run(_zone_worker_node(state))
+    assert result["allocation_summary"]["adjustments_applied"] == 0
 
 
 def test_layout_node_empty_intent():
     state = _state(intent=SpatialPlanningIntent())
 
-    result = asyncio.run(_execute_layout_node(state))
+    result = asyncio.run(_zone_worker_node(state))
 
-    errors = result.get("execution_errors", [])
-    assert any(e.get("code") == "missing_zone_targets" for e in errors)
+    codes = [item["code"] for item in _worker_result(result).unresolved_items]
+    assert "missing_zone_targets" in codes

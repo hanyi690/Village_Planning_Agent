@@ -1,4 +1,4 @@
-"""EXECUTE _execute_project_node: consume SiteSelectionDecision from SELECT.
+"""EXECUTE project worker: consume SiteSelectionDecision from SELECT.
 
 Covers the SSD primary path (Land Design Worker Polygon footprint), the
 no-SSD / empty-selection no-output behavior, graceful unknown-BSM skip, and
@@ -7,7 +7,7 @@ the new ExecuteAgentState fields defaulting.
 
 import asyncio
 
-from app.agent.execute.execute_agent import _execute_project_node
+from app.agent.execute.execute_agent import _project_worker_node
 from app.agent.execute.execute_state import ExecuteAgentState
 from app.modules.schema.contracts.parse_contracts import ProjectTarget, SpatialPlanningIntent
 from app.modules.schema.contracts.selection_contracts import LandDesignBrief, SiteSelectionDecision
@@ -40,8 +40,13 @@ def _project(project_id="p1", candidate_bsms=None):
     )
 
 
+def _worker_result(result):
+    return result["worker_results"][0]
+
+
 def _project_layer(result):
-    return next(c for c in result["layout_configs"] if c["layerType"] == "planned_project")
+    worker = _worker_result(result)
+    return next(c for c in worker.layers if c["layerType"] == "planned_project")
 
 
 def test_ssd_path_builds_layer():
@@ -53,7 +58,7 @@ def test_ssd_path_builds_layer():
         tasks_to_run=["project"],
     )
 
-    result = asyncio.run(_execute_project_node(state))
+    result = asyncio.run(_project_worker_node(state))
 
     layer = _project_layer(result)
     features = layer["data"]["features"]
@@ -65,7 +70,6 @@ def test_ssd_path_builds_layer():
     assert features[0]["geometry"]["type"] == "Polygon"
     assert props["geometry_source"] == "land_design_worker"
     assert props["change_action"] == "reclassify"
-    assert state.parcel_changeset is not None
 
 
 def test_no_ssd_no_output():
@@ -75,9 +79,11 @@ def test_no_ssd_no_output():
         tasks_to_run=["project"],
     )
 
-    result = asyncio.run(_execute_project_node(state))
+    result = asyncio.run(_project_worker_node(state))
 
-    assert result == {}
+    worker = _worker_result(result)
+    assert worker.layers == []
+    assert worker.parcel_changes == []
 
 
 def test_ssd_empty_selection_no_output():
@@ -88,9 +94,11 @@ def test_ssd_empty_selection_no_output():
         tasks_to_run=["project"],
     )
 
-    result = asyncio.run(_execute_project_node(state))
+    result = asyncio.run(_project_worker_node(state))
 
-    assert result == {}
+    worker = _worker_result(result)
+    assert worker.layers == []
+    assert worker.parcel_changes == []
 
 
 def test_ssd_unknown_bsm_skipped():
@@ -101,11 +109,11 @@ def test_ssd_unknown_bsm_skipped():
         tasks_to_run=["project"],
     )
 
-    result = asyncio.run(_execute_project_node(state))
+    result = asyncio.run(_project_worker_node(state))
 
-    assert state.parcel_changes == []
-    assert state.parcel_changeset is None
-    assert not any(c.get("layerType") == "planned_project" for c in result.get("layout_configs", []))
+    worker = _worker_result(result)
+    assert worker.parcel_changes == []
+    assert not any(c.get("layerType") == "planned_project" for c in worker.layers)
 
 
 def test_state_fields_default():
@@ -115,3 +123,4 @@ def test_state_fields_default():
     assert state.land_design_briefs == []
     assert state.parcel_changes == []
     assert state.parcel_changeset is None
+    assert state.worker_results == []

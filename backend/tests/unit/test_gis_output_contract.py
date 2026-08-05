@@ -1,4 +1,4 @@
-﻿"""GIS formal-output contract tests."""
+"""GIS formal-output contract tests."""
 
 import asyncio
 import json
@@ -111,13 +111,13 @@ def test_trace_layer_uses_real_parcel_geometry_only():
 
 
 def test_empty_layout_fails_validation_closed():
-    from app.agent.execute.execute_agent import _validate_node
+    from app.agent.execute.execute_agent import _execution_review_node
     from app.agent.execute.execute_state import ExecuteAgentState
 
-    result = asyncio.run(_validate_node(ExecuteAgentState()))
+    result = asyncio.run(_execution_review_node(ExecuteAgentState()))
 
     assert result["validation_result"]["passed"] is False
-    assert result["validation_result"]["reason"] == "no_layout"
+    assert result["validation_result"]["reason"] == "execution_review_failed"
 
 
 def test_legacy_intent_routes_declared_execute_children():
@@ -135,27 +135,6 @@ def test_legacy_intent_routes_declared_execute_children():
     result = asyncio.run(_route_tasks_node(state))
 
     assert result["tasks_to_run"] == ["layout", "facility", "axis", "road"]
-
-
-def test_facility_placer_accepts_parse_planned_new_status():
-    from app.tools.gis._generation.facility_placer import FacilityPlacer
-
-    landuse = {
-        "type": "FeatureCollection",
-        "features": [_feature("P001")],
-    }
-    boundary = {
-        "type": "FeatureCollection",
-        "features": [_feature("B0")],
-    }
-    result = FacilityPlacer().place(
-        [{"facility_id": "F01", "facility_type": "观景亭", "status": "planned_new"}],
-        landuse_geojson=landuse,
-        boundary_geojson=boundary,
-    )
-
-    assert len(result["features"]) == 1
-    assert result["features"][0]["properties"]["facility_id"] == "F01"
 
 
 def test_road_grounding_infers_endpoints_from_kg_village_anchors():
@@ -178,7 +157,7 @@ def test_road_grounding_infers_endpoints_from_kg_village_anchors():
 
 
 def test_missing_zone_targets_are_not_replaced_with_current_landuse():
-    from app.agent.execute.execute_agent import _execute_layout_node
+    from app.agent.execute.execute_agent import _zone_worker_node
     from app.agent.execute.execute_state import ExecuteAgentState
 
     state = ExecuteAgentState(
@@ -191,14 +170,14 @@ def test_missing_zone_targets_are_not_replaced_with_current_landuse():
         },
     )
 
-    result = asyncio.run(_execute_layout_node(state))
+    result = asyncio.run(_zone_worker_node(state))
 
     assert result["execution_errors"][0]["code"] == "missing_zone_targets"
     assert "layout_configs" not in result
 
 
 def test_execution_errors_fail_validation_closed():
-    from app.agent.execute.execute_agent import _validate_node
+    from app.agent.execute.execute_agent import _execution_review_node
     from app.agent.execute.execute_state import ExecuteAgentState
 
     state = ExecuteAgentState(
@@ -212,10 +191,10 @@ def test_execution_errors_fail_validation_closed():
         ],
     )
 
-    result = asyncio.run(_validate_node(state))
+    result = asyncio.run(_execution_review_node(state))
 
     assert result["validation_result"]["passed"] is False
-    assert result["validation_result"]["reason"] == "execution_errors"
+    assert result["validation_result"]["reason"] == "execution_review_failed"
 
 
 def test_zone_table_preserves_absolute_area_target():

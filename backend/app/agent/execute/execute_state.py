@@ -11,9 +11,37 @@ top-level GISPipelineState, exchanged via state mapping at subgraph boundaries.
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional
+from typing import Annotated, Any, Dict, List, Optional
 
 from pydantic import BaseModel, Field
+
+
+def _upsert_worker_results(current: List[Any], updates: List[Any]) -> List[Any]:
+    """LangGraph reducer: upsert WorkerResult entries by worker_type.
+
+    Re-running a worker (execution retry) replaces only its own entry while
+    preserving the other workers' results, so the fan-out/fan-in merge stays
+    correct across retry rounds.
+    """
+    out = list(current or [])
+    for upd in updates or []:
+        worker_type = (
+            upd.get("worker_type")
+            if isinstance(upd, dict)
+            else getattr(upd, "worker_type", None)
+        )
+        out = [
+            r
+            for r in out
+            if (
+                r.get("worker_type")
+                if isinstance(r, dict)
+                else getattr(r, "worker_type", None)
+            )
+            != worker_type
+        ]
+        out.append(upd)
+    return out
 
 
 class ExecuteAgentState(BaseModel):
@@ -60,6 +88,16 @@ class ExecuteAgentState(BaseModel):
     execution_errors: List[Dict[str, Any]] = Field(default_factory=list)
     # P0: 结构化未解析目标（禁止静默丢弃候选失败）
     unresolved_targets: List[Dict[str, Any]] = Field(default_factory=list)
+
+    # ── Wave O: multi-worker subgraph ──
+    parcel_by_bsm: Dict[str, Any] = Field(default_factory=dict)  # bsm -> parcel (prepared once)
+    execution_plan: Optional[Any] = None  # ExecutionPlan — compiled by prepare_inputs
+    ports: Optional[Any] = None  # PlanningPorts — injected zone_allocator/road_planner
+    worker_results: Annotated[List[Any], _upsert_worker_results] = Field(default_factory=list)  # list[WorkerResult]
+    worker_conflict_diagnostics: List[Dict[str, Any]] = Field(default_factory=list)  # BSM conflicts from merge
+    planned_state: Optional[Any] = None  # PlannedState — produced by planned_state_builder
+    execution_review_report: Dict[str, Any] = Field(default_factory=dict)  # execution_review diagnostics
+    geometry_materialize_report: Dict[str, Any] = Field(default_factory=dict)  # geometry confirmation
 
     # ── Validation (Worker-Evaluator loop) ──
     validation_result: Dict[str, Any] = Field(default_factory=dict)
