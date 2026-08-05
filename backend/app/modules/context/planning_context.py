@@ -79,14 +79,6 @@ class PlanningContext:
         """Back-compat accessor for the injected artifact store (or None)."""
         return self.ports.artifact_store if self.ports else None
 
-    @property
-    def has_bundle(self) -> bool:
-        return self.bundle is not None
-
-    @property
-    def has_kg(self) -> bool:
-        return self.kg is not None and self.kg_session_ref != ""
-
     def bundle_parcels(self) -> List[Any]:
         """Land-use parcels of the context bundle (typed objects)."""
         if self.bundle is None:

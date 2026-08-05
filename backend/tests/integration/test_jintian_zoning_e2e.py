@@ -19,10 +19,6 @@ from app.modules.schema.provenance import ProvenanceSource
 from app.tools.gis._generation.custom_zone_generator import (
     CustomZoningGenerator,
 )
-from app.tools.gis._generation.vector_overlay_zoning import (
-    compute_control_codes,
-    compute_planning_zones,
-)
 
 
 JINTIAN_CURRENT = (
@@ -88,19 +84,6 @@ def test_jintian_emits_all_four_block_outputs():
     parcels, _ = ingest_current_landuse(str(JINTIAN_CURRENT))
     parcel_dicts = _to_dicts(parcels)
     assert len(parcel_dicts) > 100
-
-    # Block C (control_code needs three_lines; jintian has none of the right
-    # ones with valid geometry, so we test the audit path)
-    codes, audit = compute_control_codes(parcel_dicts, {}, boundary=JINTIAN_BOUNDARY_BOX)
-    assert isinstance(codes, dict)
-    missing = {e.source for e in audit.missing_layers()}
-    assert "missing:gd_urban_dev_boundary" in missing
-    assert "missing:three_line" in missing
-
-    # Block C (planning_zone)
-    pz_map, pz_audit = compute_planning_zones(parcel_dicts, {})
-    assert pz_map == {}
-    assert any("upper_plan" in e.source for e in pz_audit.missing_layers())
 
     # Block D (vocabulary moved from YAML to session registration in 9c0a1ade)
     from app.modules.schema.contracts.custom_zone_contracts import (

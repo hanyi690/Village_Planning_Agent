@@ -62,7 +62,7 @@ def test_format_project_domain_to_custom_zone_target():
 
 def test_format_dedupes_zone_targets_by_land_use():
     """同 land_use 的 zone 域实体应合并候选 BSM，不产生重复 ZoneTarget（KG URI 冲突根因）。"""
-    from app.agent.select.parse_state import SpatialPlanningIntent
+    from app.modules.schema.contracts.parse_contracts import SpatialPlanningIntent
     from app.modules.schema.contracts.parse_contracts import ZoneTarget
 
     fallback = SpatialPlanningIntent(

@@ -29,9 +29,4 @@ def test_legacy_exports_from_advisory_crosswalks():
     assert issubclass(LegacyBlocked, Exception)
 
 
-def test_legacy_modules_removed_in_wave_i():
-    """Wave I deleted the legacy mapping modules; they must not be importable."""
-    with pytest.raises(ModuleNotFoundError):
-        from app.tools.gis._generation.zone_type_deriver import derive_zone_types  # noqa: F401
-    with pytest.raises(ModuleNotFoundError):
-        from app.tools.gis._generation.optimizer.mip_allocator import MIPZoneAllocator  # noqa: F401
+

@@ -2,7 +2,7 @@
 
 The existing vocabulary generator selects suitable parcel candidates for one
 theme at a time.  This module turns those candidates into a single mutually
-exclusive, coverage-complete planning layer after global MIP allocation.
+exclusive, coverage-complete planning layer after deterministic vocabulary-driven allocation.
 """
 
 from __future__ import annotations
@@ -35,7 +35,7 @@ def build_custom_zone_allocation_inputs(
     landuse_geojson: Dict[str, Any],
     generated_zones: Iterable[Dict[str, Any]],
 ) -> Tuple[Dict[str, float], Dict[str, List[str]], Dict[str, Dict[str, Any]]]:
-    """Translate CustomZoningGenerator output into global MIP inputs.
+    """Translate CustomZoningGenerator output into deterministic allocation inputs.
 
     Every parcel is eligible for exactly one explicit fallback zone when it is
     not selected by any evidence-backed custom target.  This avoids silently

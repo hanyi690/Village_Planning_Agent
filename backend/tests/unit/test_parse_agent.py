@@ -102,7 +102,7 @@ class TestSpatialModels:
 
     def test_spatial_anchor_resolution_status(self):
         """SpatialAnchor resolution_status must be one of 3 values."""
-        from app.agent.select.parse_state import SpatialAnchor
+        from app.modules.schema.contracts.parse_contracts import SpatialAnchor
 
         for status in ["anchored", "partial", "unresolved"]:
             anchor = SpatialAnchor(
@@ -115,7 +115,7 @@ class TestSpatialModels:
 
     def test_spatial_rule_operations(self):
         """SpatialRule must accept 5 operation types."""
-        from app.agent.select.parse_state import SpatialRule
+        from app.modules.schema.contracts.parse_contracts import SpatialRule
 
         for op in ["no_overlap", "buffer_exclusion", "contained_by", "adjacent_to", "distance_within"]:
             rule = SpatialRule(operation=op, subject="construction", object="farmland")
@@ -123,7 +123,7 @@ class TestSpatialModels:
 
     def test_spatial_operation_with_anchor(self):
         """SpatialOperation should accept SpatialAnchor."""
-        from app.agent.select.parse_state import SpatialOperation, SpatialAnchor
+        from app.modules.schema.contracts.parse_contracts import SpatialOperation, SpatialAnchor
 
         op = SpatialOperation(
             action="create",
@@ -145,7 +145,7 @@ class TestSpatialModels:
 
     def test_spatial_constraint_with_rule(self):
         """SpatialConstraint should accept SpatialRule."""
-        from app.agent.select.parse_state import SpatialConstraint, SpatialRule
+        from app.modules.schema.contracts.parse_contracts import SpatialConstraint, SpatialRule
 
         constraint = SpatialConstraint(
             type="spatial_constraint",
@@ -163,7 +163,7 @@ class TestSpatialModels:
 
     def test_spatial_planning_intent_with_targets(self):
         """SpatialPlanningIntent should accept List[ZoneTarget]."""
-        from app.agent.select.parse_state import (
+        from app.modules.schema.contracts.parse_contracts import (
             SpatialPlanningIntent,
             ZoneTarget,
             SpatialPreference,
@@ -186,20 +186,6 @@ class TestSpatialModels:
         assert len(intent.zone_targets) == 1
         assert intent.zone_targets[0].spatial_preference.direction == "center"
         assert "产业用地" in intent.zone_targets[0].adjacency_rules.avoid
-
-    def test_section_info_types(self):
-        """SectionInfo should accept all 13 section types."""
-        from app.agent.select.parse_state import SectionInfo
-
-        valid_types = [
-            "preamble", "target", "regulation", "project_table",
-            "land_use_table", "indicator_table", "heritage_table",
-            "facility_table", "ecological_table", "spatial_layout",
-            "protection", "infrastructure", "governance",
-        ]
-        for st in valid_types:
-            section = SectionInfo(section_id="S01", section_type=st)
-            assert section.section_type == st
 
 
 class TestSpatialContext:

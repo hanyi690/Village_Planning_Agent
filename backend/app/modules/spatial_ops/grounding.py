@@ -210,7 +210,7 @@ def compute_proximity_weights(
 ) -> Dict[str, float]:
     """计算地块到参考点的邻近度评分 (0.0-1.0).
 
-    距离越近权重越高，用于 MIP 目标函数.
+    距离越近权重越高，用于 SELECT 评分函数.
     weight = max(0, 1 - distance / max_distance_m)
 
     Args:
