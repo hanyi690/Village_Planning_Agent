@@ -16,8 +16,10 @@ from app.modules.ports.bundle_assembly import BundleAssemblyPort
 from app.modules.ports.context_provider import ContextProviderPort
 from app.modules.ports.gazetteer import GazetteerPort
 from app.modules.ports.nomenclature_registry import NomenclatureRegistryPort
+from app.modules.ports.road_planner import RoadPlannerPort
 from app.modules.ports.semantic_query import SemanticQueryPort
 from app.modules.ports.spatial_query import SpatialQueryPort
+from app.modules.ports.zone_allocator import ZoneAllocatorPort
 
 
 @dataclass
@@ -31,6 +33,8 @@ class PlanningPorts:
     gazetteer: GazetteerPort | None = None
     nomenclature_registry: NomenclatureRegistryPort | None = None
     bundle_assembly: BundleAssemblyPort | None = None
+    zone_allocator: ZoneAllocatorPort | None = None
+    road_planner: RoadPlannerPort | None = None
 
     @property
     def has_artifact_store(self) -> bool:
