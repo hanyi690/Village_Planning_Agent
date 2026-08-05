@@ -125,7 +125,7 @@ async def test_deliver_node_produces_manifest(monkeypatch):
         lambda manifest: gate,
     )
     monkeypatch.setattr(
-        "app.modules.spatial_ops.export_package.export_gdb_package",
+        "app.modules.spatial_ops.output.export_package.export_gdb_package",
         lambda **kwargs: {"status": "completed", "exported_files": ["a.geojson"]},
     )
     state = PostL3ChainState(

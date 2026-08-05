@@ -62,6 +62,12 @@ output/
 data/gis/jintian/output/
 frontend/public/test-data/
 
+# source-code output subpackages are not generated output
+!backend/app/modules/spatial_ops/output/
+!backend/app/modules/spatial_ops/output/**
+!backend/app/modules/schema/output/
+!backend/app/modules/schema/output/**
+
 # Next.js
 frontend/.next/
 frontend/out/
