@@ -74,6 +74,12 @@ class PostL3ChainState(BaseModel):
     # ── Accumulated upstream gates (consumed by DELIVER for pending items) ──
     upstream_gates: List[Any] = Field(default_factory=list)
 
+    # ── Wave M2: retry loop state ──
+    retry_counts: Dict[str, int] = Field(default_factory=dict)
+    max_retries: int = 3
+    explore_cache: Dict[str, Any] = Field(default_factory=dict)
+    human_review_items: List[Dict[str, Any]] = Field(default_factory=list)
+
     # ── Messages ──
     messages: List[Any] = Field(default_factory=list)
 
