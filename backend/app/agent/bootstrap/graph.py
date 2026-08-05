@@ -10,6 +10,7 @@ from app.agent.tools import execute_tools_node
 from app.agent.l1_observe import analyze_dimension, DIMENSION_NAMES
 from app.agent.plan_state import layer_completion_check
 from app.agent.bootstrap.gis_agent_entry import gis_agent_node, _gis_error_handler
+from app.agent.bootstrap.layer_aggregate_node import layer_aggregate_node
 
 from app.utils.logger import get_logger
 logger = get_logger(__name__)
@@ -47,6 +48,7 @@ def create_unified_planning_graph(checkpointer=None) -> StateGraph:
     builder.add_node("execute_tools", execute_tools_node)
     builder.add_node("analyze_dimension", analyze_dimension_node)
     builder.add_node("layer_completion_check", layer_completion_check)
+    builder.add_node("layer_aggregate", layer_aggregate_node)
     builder.add_node("explore", explore_node)
     builder.add_node("gis_agent", gis_agent_node, error_handler=_gis_error_handler)
 
@@ -57,8 +59,9 @@ def create_unified_planning_graph(checkpointer=None) -> StateGraph:
     builder.add_edge("execute_tools", "conversation")
     builder.add_edge("gis_agent", END)
     builder.add_edge("analyze_dimension", "layer_completion_check")
+    builder.add_edge("layer_completion_check", "layer_aggregate")
     builder.add_edge("explore", "gis_agent")
-    builder.add_conditional_edges("layer_completion_check", after_analysis,
+    builder.add_conditional_edges("layer_aggregate", after_analysis,
         {"analyze_dimension": "analyze_dimension", "explore": "explore",
          "conversation": "conversation", END: END})
 

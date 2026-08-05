@@ -215,6 +215,8 @@ class AgentState(TypedDict, total=False):
     validation_report_ref: Optional[Any]  # ValidationReport — VALIDATE 输出（typed）
     pending_requests: Annotated[List[Dict[str, Any]], _replace_or_merge_lists]  # 全链 Gate pending requests 累积
     context_version: str  # PlanningContext 版本戳
+    # ── Wave M2: layer aggregate wiring ──
+    layer_just_completed: Optional[int]  # set by completion_check, consumed by layer_aggregate_node
 
 
 # ==========================================
@@ -278,6 +280,7 @@ def create_initial_state(
         "validation_report_ref": None,
         "pending_requests": [],
         "context_version": "",
+        "layer_just_completed": None,
     }
 
 

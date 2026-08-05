@@ -262,10 +262,11 @@ async def layer_completion_check(
                         "phase": next_phase,
                         "previous_layer": layer,
                         "pending_reports": [],
+                        "layer_just_completed": layer,
                     }
             # Layer 3 complete after approval
             logger.info("[layer_completion_check] Layer 3 approved, all layers complete")
-            return {"phase": "completed", "pending_reports": []}
+            return {"phase": "completed", "pending_reports": [], "layer_just_completed": layer}
 
         elif action == "reject":
             SSEPublisher.send_layer_complete(
@@ -319,6 +320,7 @@ async def layer_completion_check(
                 "phase": next_phase,
                 "previous_layer": layer,
                 "pending_reports": [],
+                "layer_just_completed": layer,
             }
 
     # Layer 3 complete in auto mode -> mark completed
@@ -326,6 +328,7 @@ async def layer_completion_check(
     return {
         "phase": "completed",
         "pending_reports": [],
+        "layer_just_completed": layer,
     }
 
 
