@@ -65,6 +65,7 @@ def _to_facility_target(intervention: PlanningIntervention) -> FacilityTarget:
         status="planned_new",
         location_hint=_spatial_hint(intervention),
         source_project_id=intervention.intervention_id,
+        source_instruction_id=intervention.intervention_id,
         direction="center",
         semantic=_semantic(intervention),
     )
@@ -100,7 +101,7 @@ def _build_legacy_intent(program: PlanningProgram) -> SpatialPlanningIntent:
             intent.facilities.append(_to_facility_target(intervention))
         elif category == "road":
             intent.road_targets.append(_to_road_target(intervention))
-        elif category in ("restoration", "protection"):
+        elif category in ("restoration", "protection", "zone"):
             intent.zone_targets.append(_to_zone_target(intervention))
         else:
             intent.project_targets.append(_to_project_target(intervention, index))
