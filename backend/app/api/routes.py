@@ -27,6 +27,8 @@ from fastapi.responses import Response
 from app.api.session_routes import router as session_router
 from app.api.gis_test_routes import router as gis_test_router
 from app.api.human_review_routes import router as human_review_router
+from app.api.artifact_routes import router as artifact_router
+from app.api.render_routes import router as render_router
 from app.core.settings import TIANDITU_API_KEY
 
 logger = logging.getLogger(__name__)
@@ -42,6 +44,12 @@ router.include_router(gis_test_router, tags=["GIS Dev"])
 
 # Post-L3 HITL (人工审查 interrupt + resume)
 router.include_router(human_review_router, tags=["Human Review"])
+
+# Artifact query API (只读)
+router.include_router(artifact_router, tags=["Artifacts"])
+
+# Render layer API (PlannedState -> GeoJSON)
+router.include_router(render_router, tags=["Render"])
 
 
 # ============================================

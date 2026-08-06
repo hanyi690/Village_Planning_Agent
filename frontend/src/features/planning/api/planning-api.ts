@@ -25,6 +25,14 @@ import type {
   StepModeResponse,
   GeocodeResponse,
   GisDataUploadResponse,
+  ArtifactType,
+  ArtifactListResponse,
+  ArtifactResponse,
+  ArtifactRefResponse,
+  RenderLayersResponse,
+  HumanReviewListResponse,
+  HumanReviewResolveRequest,
+  HumanReviewResolveResponse,
 } from './types';
 
 // ============================================
@@ -629,5 +637,61 @@ export const planningApi = {
     }
 
     return response.json();
+  },
+
+  /**
+   * List all typed pipeline artifacts
+   * GET /api/sessions/{session_id}/artifacts
+   */
+  async getArtifacts(sessionId: string): Promise<ArtifactListResponse> {
+    return apiRequest<ArtifactListResponse>(`/api/sessions/${sessionId}/artifacts`);
+  },
+
+  /**
+   * Get a typed artifact by type (with optional version)
+   * GET /api/sessions/{session_id}/artifacts/{artifact_type}?version=N
+   */
+  async getArtifact(sessionId: string, artifactType: ArtifactType, version?: number): Promise<ArtifactResponse> {
+    const qs = version !== undefined ? `?version=${version}` : '';
+    return apiRequest<ArtifactResponse>(
+      `/api/sessions/${sessionId}/artifacts/${artifactType}${qs}`
+    );
+  },
+
+  /**
+   * Get artifact ref metadata
+   * GET /api/sessions/{session_id}/artifacts/{artifact_type}/ref
+   */
+  async getArtifactRef(sessionId: string, artifactType: ArtifactType): Promise<ArtifactRefResponse> {
+    return apiRequest<ArtifactRefResponse>(
+      `/api/sessions/${sessionId}/artifacts/${artifactType}/ref`
+    );
+  },
+
+  /**
+   * Get render layers (GeoJSON) for a session
+   * GET /api/sessions/{session_id}/render-layers
+   */
+  async getRenderLayers(sessionId: string): Promise<RenderLayersResponse> {
+    return apiRequest<RenderLayersResponse>(`/api/sessions/${sessionId}/render-layers`);
+  },
+
+  /**
+   * Get pending human-review items for a paused post-L3 chain
+   * GET /api/human-review/{session_id}
+   */
+  async getHumanReview(sessionId: string): Promise<HumanReviewListResponse> {
+    return apiRequest<HumanReviewListResponse>(`/api/human-review/${sessionId}`);
+  },
+
+  /**
+   * Submit human-review decisions and resume the post-L3 chain
+   * POST /api/human-review/{session_id}/resolve
+   */
+  async resolveHumanReview(sessionId: string, decisions: Record<string, unknown>): Promise<HumanReviewResolveResponse> {
+    return apiRequest<HumanReviewResolveResponse>(`/api/human-review/${sessionId}/resolve`, {
+      method: 'POST',
+      body: JSON.stringify({ decisions } satisfies HumanReviewResolveRequest),
+    });
   },
 };

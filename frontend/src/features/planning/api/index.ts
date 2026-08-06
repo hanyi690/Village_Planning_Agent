@@ -28,6 +28,17 @@ export type {
   ReviewData,
   ImageData,
   ImageSourceType,
+  ArtifactType,
+  ArtifactRef,
+  ArtifactListResponse,
+  ArtifactResponse,
+  ArtifactRefResponse,
+  RenderLayer,
+  RenderLayersResponse,
+  HumanReviewItem,
+  HumanReviewListResponse,
+  HumanReviewResolveRequest,
+  HumanReviewResolveResponse,
 } from './types';
 
 // Client

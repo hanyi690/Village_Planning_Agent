@@ -313,7 +313,6 @@ export interface SessionStatusResponse {
     layer3: string[];
   };
   previous_layer: number;
-  gis_layout_configs?: Array<Record<string, unknown>>;
   step_mode: boolean;
   interrupt_info?: {
     layer?: number;
@@ -643,4 +642,100 @@ export interface GisDataUploadResponse {
   data_type: string | null;
   feature_count: number;
   parse_status: string;
+}
+
+// ============================================
+// Artifact (typed pipeline artifacts) Types
+// ============================================
+
+export type ArtifactType =
+  | 'L1Snapshot'
+  | 'L2Strategy'
+  | 'PlanningProgram'
+  | 'IntentCompilationResult'
+  | 'GroundingResult'
+  | 'SiteSelectionDecision'
+  | 'ExecutionPlan'
+  | 'ParcelChangeSet'
+  | 'PlannedState'
+  | 'ValidationReport'
+  | 'ReconciliationReport'
+  | 'DeliveryManifest';
+
+export interface ArtifactRef {
+  context_version: string;
+  artifact_id: string;
+  module: string;
+  run_id: string;
+  artifact_type: string;
+  revision: string;
+}
+
+export interface ArtifactListResponse {
+  session_id: string;
+  artifacts: ArtifactRef[];
+  count: number;
+}
+
+export interface ArtifactResponse {
+  session_id: string;
+  artifact_type: string;
+  revision: string;
+  artifact_ref: ArtifactRef;
+  payload: Record<string, unknown>;
+  manifest: Record<string, unknown>;
+}
+
+export interface ArtifactRefResponse {
+  session_id: string;
+  artifact_type: string;
+  revision: string;
+  artifact_ref: ArtifactRef;
+  manifest: Record<string, unknown>;
+}
+
+// ============================================
+// Render Layers Types
+// ============================================
+
+export interface RenderLayer {
+  layerType: string;
+  layerName: string;
+  data: {
+    type: 'FeatureCollection';
+    features: Array<{ type: 'Feature'; geometry: unknown; properties: Record<string, unknown> }>;
+  };
+}
+
+export interface RenderLayersResponse {
+  session_id: string;
+  layers: RenderLayer[];
+}
+
+// ============================================
+// Human Review (HITL) Types
+// ============================================
+
+export interface HumanReviewItem {
+  request_id: string;
+  stage: string;
+  request_type: string;
+  context?: Record<string, unknown>;
+}
+
+export interface HumanReviewListResponse {
+  session_id: string;
+  post_l3_status: string;
+  pending_items: HumanReviewItem[];
+  count: number;
+}
+
+export interface HumanReviewResolveRequest {
+  decisions: Record<string, unknown>;
+}
+
+export interface HumanReviewResolveResponse {
+  session_id: string;
+  resolved: boolean;
+  result: Record<string, unknown>;
 }
