@@ -10,7 +10,7 @@ PARSE / IntentCompiler (top-level)
     PlanningProgram + evidence → IntentCompilationResult + SpatialReferenceSpec
 
 GROUND
-    SpatialReferenceSpec + context → GroundingResult
+    SpatialReferenceSpec + PlaceEvidenceIndex + context → GroundingResult
 
 SELECT
     GroundingResult + requirements → SiteSelectionDecision

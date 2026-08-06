@@ -24,6 +24,10 @@ Spatial query service (geometry / index / distance / topology)
 | `IntentGraph` | L3 的 Zone/Facility/Road/Project 和空间引用关系 | IntentCompiler | Ground、Select、Execute、Reconcile |
 | `PlannedState` | PlannedZone、PlannedFacility、PlannedRoad、PlannedProject | Execute | Validate、Reconcile、Delivery |
 
+地名解析不直接把 KG 查询结果当作最终候选。KG 的实体、别名、关系和来源应与 L1 产出的
+`L1LocationFact`、VillageBundle 几何共同组成 `PlaceEvidenceIndex`，由 GROUND 的
+`PlaceEvidencePort` 消费。详细流程见 [12_PLACE_NAME_RESOLUTION.md](12_PLACE_NAME_RESOLUTION.md)。
+
 ## 3. KG 接口
 
 ```python

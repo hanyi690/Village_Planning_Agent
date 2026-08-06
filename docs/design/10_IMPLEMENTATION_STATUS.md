@@ -16,6 +16,7 @@
 | L3 PlanningProgram | CURRENT / PARTIAL | 独立 `l3_plan/worker.py`、`aggregate.py`、G3 gate 和 review package 存在；PlanningProgram 仍主要是干预与依赖汇总，不是完整空间设计方案。 |
 | PARSE / IntentCompiler | CURRENT / PARTIAL | `app/agent/parse/` 的确定性编译、L3 profile、REPAIR/REVISE 路由和异步 LLM patch 已存在；输出可以组件测试，但真实 session 的完整链路仍依赖 post-L3 接线和 artifact 恢复。 |
 | EXPLORE | PARTIAL | `retrieve_evidence()` 已检索 KG、Bundle、报告和 `【INSTRUCTION】`；typed artifact、历史证据、修订记录和 intervention-specific 查询计划尚未完全接入。 |
+| 地名解析 / PlaceEvidenceIndex | PARTIAL / GAP | `SpatialResolver` 已统一 KG/SpatialQueryPort、Gazetteer、Bundle 和方向 bbox 路径；当前尚未把 L1 typed location facts 纳入候选索引和评分，短名称 fuzzy 也不能作为可靠的自动解析。设计见 `12_PLACE_NAME_RESOLUTION.md`。 |
 | GROUND | CURRENT / PARTIAL | `ground_aggregate` 产出 `GroundingResult/CandidateSite` 和 gate；候选与 intervention 的强关联、约束证据完整性和真实 session 接线仍需验证。 |
 | SELECT | CURRENT / PARTIAL | `select_graph/aggregate.py` 使用硬约束、评分和冲突分配产出 `SiteSelectionDecision`；仍需删除“无项目候选时回退完整候选池”的不安全路径。 |
 
