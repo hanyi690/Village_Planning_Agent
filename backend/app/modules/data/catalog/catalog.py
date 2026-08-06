@@ -103,6 +103,9 @@ def _merge_geojson_into_bundle(
     aliases = {
         "road": "current_road",
         "residential": "current_building",
+        "annotation": "current_annotation",
+        "construction_zone": "conditional_construction_zone",
+        "geological_hazard_points": "geological_hazard_point",
     }
     gis_type_ref = aliases.get(layer_key, layer_key)
 

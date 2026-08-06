@@ -40,9 +40,12 @@ def compute_land_balance(
     current_total = 0.0
     for p in current_parcels:
         code = _get_attr(p, "dlbm", "") or _get_attr(p, "ghytbm", "0000")
-        area = float(_get_attr(p, "area_sqm", 0) or _get_attr(p, "area_ha", 0) or _get_attr(p, "area", 0) or 0)
-        if area > 10000 or area == 0:
-            area = area / 10000 if area > 10000 else 0
+        area_sqm = float(_get_attr(p, "area_sqm", 0) or 0)
+        area_ha = float(_get_attr(p, "area_ha", 0) or _get_attr(p, "area", 0) or 0)
+        if area_sqm > 0:
+            area = area_sqm / 10000.0
+        else:
+            area = area_ha
         current_by_code[code] += area
         current_total += area
 

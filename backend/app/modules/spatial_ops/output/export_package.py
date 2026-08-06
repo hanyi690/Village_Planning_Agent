@@ -74,7 +74,7 @@ def export_gdb_package(
         "current_road": "road_geojson",
         "current_annotation": "annotation_geojson",
         "planned_landuse": None,
-        "ecological_redline": "ecological_protection_geojson",
+        "ecological_redline": "ecological_redline_geojson",
         "farmland_protection": "farmland_protection_geojson",
         "historical_protection": "historical_protection_geojson",
         "construction_zone": "construction_zone_geojson",

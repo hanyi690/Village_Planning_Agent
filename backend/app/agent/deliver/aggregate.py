@@ -88,6 +88,52 @@ def collect_upstream_human_items(upstream_gates) -> list[HumanItem]:
     return items
 
 
+def _build_planned_view(current_parcels, planned_state) -> list:
+    """Build the complete planned-parcel view for land-balance closure.
+
+    ``PlannedState.parcels`` only carries changed parcels (the changeset);
+    unchanged current parcels must be carried through as preserves so the
+    planned total area can close against the current total within tolerance.
+    ``current_parcels`` are the L1 current parcels; a current parcel is
+    considered changed when its ``bsm`` appears in any planned parcel's
+    ``derived_from_bsms`` or equals a planned parcel's ``bsm``.
+    """
+    planned_parcels = list(getattr(planned_state, "parcels", None) or [])
+    if not current_parcels:
+        return planned_parcels
+    changed_bsms: set = set()
+    for pp in planned_parcels:
+        changed_bsms.add(str(getattr(pp, "bsm", "") or ""))
+        for src in getattr(pp, "derived_from_bsms", None) or []:
+            changed_bsms.add(str(src))
+    view = list(planned_parcels)
+    for cur in current_parcels:
+        bsm = str(getattr(cur, "bsm", "") or "")
+        if not bsm or bsm in changed_bsms:
+            continue
+        code = (
+            getattr(cur, "planning_land_use", "")
+            or getattr(cur, "dlbm", "")
+            or "0000"
+        )
+        area_sqm = float(getattr(cur, "area_sqm", 0) or 0)
+        area_ha = float(getattr(cur, "area_ha", 0) or 0)
+        view.append(
+            {
+                "bsm": bsm,
+                "planning_land_use": code,
+                "zone_type": code,
+                "area_ha": area_ha if area_ha > 0 else (area_sqm / 10000.0 if area_sqm else 0.0),
+                "geometry": "",
+                "derived_from_bsms": [],
+                "decided_by": "preserve",
+                "operation": "preserve",
+                "area_change_ha": 0.0,
+            }
+        )
+    return view
+
+
 def deliver_aggregate(
     planned_state,
     validation_report,
@@ -112,7 +158,7 @@ def deliver_aggregate(
 
     gate = check_delivery_gate(
         current_parcels=list(current_parcels or []),
-        planned_parcels=list(getattr(planned_state, "parcels", None) or []),
+        planned_parcels=_build_planned_view(current_parcels, planned_state),
     )
 
     pending_human_items = check_items + upstream_items

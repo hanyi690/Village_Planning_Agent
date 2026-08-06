@@ -25,6 +25,25 @@ _BLOCKING_LAYER_DESC = "导出结果缺少法定图层"
 _BLOCKING_LAYER_REASON = "export_gdb_package 未产出完整法定图层"
 
 
+def _statutory_source_for(layer: str) -> str:
+    """Map a statutory layer key to its exported source path.
+
+    The export package writes files at GDB_LAYER_REGISTRY sources (e.g.
+    ``current/boundary.geojson``), which differ from the layer keys used in
+    ``REQUIRED_STATUTORY_LAYERS``. Matching against the real source path keeps
+    the check aligned with what ``export_gdb_package`` actually writes.
+    """
+    try:
+        from app.modules.schema.output.gdb import GDB_LAYER_REGISTRY
+
+        entry = GDB_LAYER_REGISTRY.get(layer)
+        if entry is not None:
+            return str(entry.get("source", "") or "")
+    except Exception:
+        pass
+    return layer
+
+
 def check_statutory_layers_complete(export_result: dict | None) -> list[HumanItem]:
     """Check the export package contains all required statutory layers."""
     if export_result is None:
@@ -41,7 +60,7 @@ def check_statutory_layers_complete(export_result: dict | None) -> list[HumanIte
     missing = [
         layer
         for layer in REQUIRED_STATUTORY_LAYERS
-        if layer not in exported_text
+        if _statutory_source_for(layer) not in exported_text
     ]
     if not missing:
         return []
