@@ -217,6 +217,7 @@ class PlanningRuntimeService:
 
         await cls.ensure_initialized()
         config = cls.get_thread_config(session_id)
+        config["recursion_limit"] = 100
 
         if state_updates:
             command = Command(resume=resume_data, update=state_updates)
@@ -382,14 +383,12 @@ class PlanningRuntimeService:
             "human_feedback": "",
             "step_mode": step_mode,
             "previous_layer": 0,  # 新架构：刚完成的层级
+            "l1_gate_decision": None,
+            "l2_gate_decision": None,
+            "l3_gate_decision": None,
+            "l1_snapshot_ref": None,
+            "l2_strategy_ref": None,
             "gis_analysis_results": {},  # 新架构：GIS分析结果
-            "gis_layout_configs": [],
-            "gis_export_result": {},
-            "gis_render_result": [],
-            "gis_render_artifact": {},
-            "gis_validation_result": {},
-            "gis_execution_errors": [],
-            "gis_conflict_result": {},
             "user_uploaded_data": user_uploaded_gis_data or {},
             "metadata": {
                 "published_layers": [],
@@ -700,6 +699,7 @@ class PlanningRuntimeService:
         # 4. Build config with max_concurrency + optional streaming callback
         config = cls.get_thread_config(session_id, checkpoint_id=checkpoint_id)
         config["max_concurrency"] = GRAPH_MAX_CONCURRENCY
+        config["recursion_limit"] = 100
 
         streaming_enabled = (initial_state.get("_streaming_enabled", True) if initial_state else True)
         if streaming_enabled:

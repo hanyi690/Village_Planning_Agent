@@ -26,7 +26,7 @@ class PostL3ChainState(BaseModel):
     village_name: str = ""
     run_id: str = ""
 
-    # ── Shared PlanningContext (not serialized; rebuilt via context factory) ──
+    # ── Shared PlanningContext (不序列化；经 _resolve_context 从缓存重建) ──
     context: Any = None
     context_version: str = ""
 
@@ -47,6 +47,7 @@ class PostL3ChainState(BaseModel):
     site_selection: Any = None  # SiteSelectionDecision (typed)
     land_design_briefs: List[Any] = Field(default_factory=list)  # list[LandDesignBrief]
     select_gate: Any = None  # GateDecision (typed)
+    execution_plan: Any = None  # ExecutionPlan (typed)
 
     # ── EXECUTE output ──
     planned_state: Any = None  # PlannedState (typed)

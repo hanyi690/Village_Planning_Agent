@@ -35,6 +35,15 @@ _PHASE_TO_WORKER: Dict[str, str] = {
 }
 
 
+def _worker_for_phase(phase: str) -> str:
+    """Return the worker node name matching ``phase`` (layer1/2/3 -> l1/l2/l3_worker)."""
+    worker = _PHASE_TO_WORKER.get(phase)
+    if worker is None:
+        logger.warning("[_worker_for_phase] unexpected phase=%r, defaulting to l1_worker", phase)
+        return "l1_worker"
+    return worker
+
+
 def route_by_phase(state: Dict[str, Any]) -> str:
     """Return the worker node name matching ``state['phase']``.
 
@@ -89,9 +98,8 @@ async def l3_worker_node(state: Dict[str, Any]) -> Dict[str, Any]:
 def _ready_dispatch(state: Dict[str, Any], phase: str) -> List[Send]:
     """Build the Send list for ready dimensions of ``phase``.
 
-    Same-layer dependency check plus cross-layer "continuous mode" dispatch
-    (next-layer dims whose cross-layer deps are already satisfied). Returns an
-    empty list when nothing is ready.
+    Same-layer dependency check only. Cross-layer dispatch is handled by
+    ``advance_phase_node`` after the layer gate PASS.
     """
     layer = _phase_to_layer(phase)
     if layer is None:
@@ -108,28 +116,8 @@ def _ready_dispatch(state: Dict[str, Any], phase: str) -> List[Send]:
         if all(dep in completed for dep in (dim.depends_on or [])):
             ready.append(dim.key)
 
-    # Continuous mode: dispatch next-layer dims whose cross-layer deps are ready
-    next_layer = layer + 1
-    step_mode = state.get("step_mode", False)
-    if next_layer <= 3 and not step_mode:
-        next_dims = list_dimensions(next_layer)
-        next_completed = state.get("completed_dimensions", {}).get(f"layer{next_layer}", [])
-        completed_all = state.get("completed_dimensions", {})
-        for dim in next_dims:
-            if dim.key in next_completed:
-                continue
-            if not all(dep in next_completed for dep in (dim.depends_on or [])):
-                continue
-            cross_deps = list(getattr(dim, "layer_depends_on", []) or [])
-            if not all(dep in completed for dep in cross_deps):
-                continue
-            phase_deps = list(getattr(dim, "phase_depends_on", []) or [])
-            prev_completed = completed_all.get(f"layer{layer}", [])
-            if not all(dep in prev_completed for dep in phase_deps):
-                continue
-            ready.append(dim.key)
-
-    return [Send("layer_router", {**state, "phase": phase, "dimension_key": d}) for d in ready]
+    worker = _worker_for_phase(phase)
+    return [Send(worker, {**state, "phase": phase, "dimension_key": d}) for d in ready]
 
 
 def advance_phase_node(state: Dict[str, Any]) -> Command:
@@ -137,7 +125,8 @@ def advance_phase_node(state: Dict[str, Any]) -> Command:
 
     Called when ``after_analysis`` sees a PASS gate decision. Advances ``phase``
     (layer1 -> layer2 -> layer3 -> completed) and routes to the next layer's
-    dispatch via Send, or to END when the plan is complete / nothing is ready.
+    dispatch via Send, or to the post-L3 chain (parse) when the plan is
+    complete, or to END when nothing is ready.
     """
     phase = state.get("phase", "layer1")
     layer = _phase_to_layer(phase)
@@ -154,6 +143,11 @@ def advance_phase_node(state: Dict[str, Any]) -> Command:
     if sends:
         logger.info("[advance_phase] %s -> %s, dispatching %d dim(s)", phase, next_phase, len(sends))
         return Command(update=update, goto=sends)
+    if next_phase == "completed":
+        # Wave M: L1/L2/L3 全部完成 -> 自动进入 post-L3 链（parse 主图节点）。
+        # 不再依赖用户消息触发 gis_analysis / gis_agent 黑盒节点。
+        logger.info("[advance_phase] %s -> completed, entering post-L3 chain (parse)", phase)
+        return Command(update=update, goto="parse")
     logger.info("[advance_phase] %s -> %s, no ready dims, END", phase, next_phase)
     return Command(update=update, goto=END)
 

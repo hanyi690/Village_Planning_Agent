@@ -15,6 +15,8 @@ from typing import Annotated, Any, Dict, List, Optional
 
 from pydantic import BaseModel, Field
 
+from app.modules.schema.contracts.selection_contracts import LandDesignBrief
+
 
 def _upsert_worker_results(current: List[Any], updates: List[Any]) -> List[Any]:
     """LangGraph reducer: upsert WorkerResult entries by worker_type.
@@ -68,7 +70,7 @@ class ExecuteAgentState(BaseModel):
 
     # ── SELECT output (site selection + land design briefs) ──
     site_selection: Optional[Any] = None  # SiteSelectionDecision (typed) — SELECT subgraph output
-    land_design_briefs: List[Any] = Field(default_factory=list)  # list[LandDesignBrief] — SELECT output
+    land_design_briefs: List[LandDesignBrief] = Field(default_factory=list)  # list[LandDesignBrief] — SELECT output
     parcel_changes: List[Any] = Field(default_factory=list)  # list[ParcelChange] — accumulated by Land Design Worker nodes
     parcel_changeset: Optional[Any] = None  # ParcelChangeSet — final aggregated changeset
 
@@ -91,7 +93,7 @@ class ExecuteAgentState(BaseModel):
 
     # ── Wave O: multi-worker subgraph ──
     parcel_by_bsm: Dict[str, Any] = Field(default_factory=dict)  # bsm -> parcel (prepared once)
-    execution_plan: Optional[Any] = None  # ExecutionPlan — compiled by prepare_inputs
+    execution_plan: Optional[Any] = None  # ExecutionPlan — built upstream (post-L3 select)
     ports: Optional[Any] = None  # PlanningPorts — injected zone_allocator/road_planner
     worker_results: Annotated[List[Any], _upsert_worker_results] = Field(default_factory=list)  # list[WorkerResult]
     worker_conflict_diagnostics: List[Dict[str, Any]] = Field(default_factory=list)  # BSM conflicts from merge

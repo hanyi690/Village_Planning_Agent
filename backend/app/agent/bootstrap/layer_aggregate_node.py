@@ -20,6 +20,22 @@ from app.utils.logger import get_logger
 logger = get_logger(__name__)
 
 
+def _update_explore_retry(state: Dict[str, Any], patch: Dict[str, Any], layer: int, gate_key: str) -> None:
+    """Update the EXPLORE retry counter based on the layer gate decision.
+
+    Non-PASS gates (EXPLORE/rework) increment the counter; PASS resets it.
+    """
+    gate = patch.get(gate_key) or {}
+    route = gate.get("feedback_route") if isinstance(gate, dict) else None
+    counts = dict(state.get("retry_counts") or {})
+    counter_key = f"l{layer}_explore"
+    if route is None or route == "PASS":
+        counts.pop(counter_key, None)
+    else:
+        counts[counter_key] = counts.get(counter_key, 0) + 1
+    patch["retry_counts"] = counts
+
+
 async def layer_aggregate_node(state: Dict[str, Any]) -> Dict[str, Any]:
     """Invoke the layer-specific aggregate based on `layer_just_completed`."""
     if state.get("is_revision"):
@@ -36,6 +52,7 @@ async def layer_aggregate_node(state: Dict[str, Any]) -> Dict[str, Any]:
 
         patch = await l1_aggregate(state)
         patch["layer_just_completed"] = None
+        _update_explore_retry(state, patch, layer, "l1_gate_decision")
         return patch
 
     if layer == 2:
@@ -43,6 +60,7 @@ async def layer_aggregate_node(state: Dict[str, Any]) -> Dict[str, Any]:
 
         patch = await l2_aggregate(state)
         patch["layer_just_completed"] = None
+        _update_explore_retry(state, patch, layer, "l2_gate_decision")
         return patch
 
     if layer == 3:
@@ -50,6 +68,7 @@ async def layer_aggregate_node(state: Dict[str, Any]) -> Dict[str, Any]:
 
         patch = await l3_aggregate(state)
         patch["layer_just_completed"] = None
+        _update_explore_retry(state, patch, layer, "l3_gate_decision")
         return patch
 
     logger.warning("[layer_aggregate] unknown layer=%s, skipping", layer)

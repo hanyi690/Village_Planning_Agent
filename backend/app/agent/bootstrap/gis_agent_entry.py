@@ -176,14 +176,6 @@ async def gis_agent_node(state: Dict[str, Any]) -> Dict[str, Any]:
         "delivery_manifest": delivery_manifest,
         "reconciliation_report_ref": reconciliation_report,
         "validation_report_ref": validation_report,
-        # ── DEPRECATED Wave M1: use delivery_manifest ──
-        "gis_layout_configs": layout_configs,
-        "gis_export_result": export_result,
-        "gis_render_result": render_result,
-        "gis_render_artifact": render_artifact,
-        "gis_validation_result": summary_payload["validation_result"],
-        "gis_execution_errors": execution_errors,
-        "gis_conflict_result": {},
     }
 
 

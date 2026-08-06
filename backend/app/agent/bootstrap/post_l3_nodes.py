@@ -12,6 +12,7 @@ from typing import Any
 
 from langgraph.types import interrupt
 
+from app.agent.execute.plan_builder import build_execution_plan
 from app.agent.ground.aggregate import ground_aggregate, retrieve_evidence
 from app.agent.ground.gate import evaluate_ground_gate
 from app.agent.parse.aggregate import compile_program_async
@@ -127,26 +128,27 @@ def _accumulate_gate(gates: list[Any], gate: Any) -> list[Any]:
     return list(gates or []) + ([gate] if gate is not None else [])
 
 
-def _resolve_context(state: PostL3ChainState) -> Any:
+async def _resolve_context(state: PostL3ChainState) -> Any:
     """Return the live PlanningContext for a chain run.
 
-    When the chain is compiled with a checkpointer, gis_agent_node strips
-    ``context`` from the serialized state (PlanningContext holds non-serializable
-    KG closures/adapters). The real context is kept in the session context cache
-    (``build_planning_context``), so nodes fall back to it here. Direct node
-    invocation (tests / no checkpointer) still passes ``state.context`` directly.
+    Direct node invocation (tests / no checkpointer) passes ``state.context``
+    directly. In a compiled chain the checkpointer strips ``context`` (it holds
+    non-serializable KG closures/adapters), so the authoritative context is
+    recovered through the session context factory: ``build_planning_context``
+    with ``refresh=False`` returns the cached instance (never a second copy),
+    or builds + caches once when the cache is cold.
     """
     context = getattr(state, "context", None)
     if context is not None:
         return context
-    if getattr(state, "session_id", ""):
-        try:
-            from app.services.context.planning_context import get_cached_context
+    if not getattr(state, "session_id", ""):
+        return None
+    try:
+        from app.services.context.planning_context import build_planning_context
 
-            return get_cached_context(state.session_id)
-        except Exception:
-            return None
-    return None
+        return await build_planning_context(state.session_id, refresh=False)
+    except Exception:
+        return None
 
 
 async def _record_step_report(
@@ -234,7 +236,7 @@ async def ground_node(state: PostL3ChainState) -> dict[str, Any]:
     retry_counts["ground"] and records error_feedback["ground"].
     """
     retry_patch = _retry_patch(state, "ground")
-    context = _resolve_context(state)
+    context = await _resolve_context(state)
     evidence: list[SpatialQueryEvidence] = []
     if retry_patch:
         gate = getattr(state, "ground_gate", None)
@@ -275,7 +277,7 @@ async def ground_node(state: PostL3ChainState) -> dict[str, Any]:
 async def select_node(state: PostL3ChainState) -> dict[str, Any]:
     """SELECT node: GroundingResult + intent + context -> SiteSelectionDecision."""
     retry_patch = _retry_patch(state, "select")
-    context = _resolve_context(state)
+    context = await _resolve_context(state)
     decision, briefs = select_aggregate(
         state.grounding_result, state.intent, context
     )
@@ -295,12 +297,20 @@ async def select_node(state: PostL3ChainState) -> dict[str, Any]:
         run_id, "select", "SiteSelectionDecision", decision,
         context_version=state.context_version,
     )
+    execution_plan = build_execution_plan(
+        state.intent,
+        decision,
+        briefs,
+        run_id=run_id,
+        context_version=state.context_version,
+    )
     return {
         "site_selection": decision,
         "land_design_briefs": briefs,
         "select_gate": gate,
         "upstream_gates": _accumulate_gate(state.upstream_gates, gate),
         "site_selection_ref": site_selection_ref,
+        "execution_plan": execution_plan,
         **retry_patch,
     }
 
@@ -311,7 +321,7 @@ async def execute_node(state: PostL3ChainState) -> dict[str, Any]:
     from app.agent.execute.execute_state import ExecuteAgentState
     from app.agent.execute.planned_state_builder import changeset_to_planned_state
 
-    context = _resolve_context(state)
+    context = await _resolve_context(state)
     intent = state.intent
     bundle = getattr(context, "bundle", None)
     gis_data = bundle.to_geojson_dict() if bundle is not None and hasattr(bundle, "to_geojson_dict") else {}
@@ -325,6 +335,7 @@ async def execute_node(state: PostL3ChainState) -> dict[str, Any]:
         facility_anchors=getattr(context, "village_anchors", None),
         site_selection=state.site_selection,
         land_design_briefs=list(state.land_design_briefs or []),
+        execution_plan=state.execution_plan,
         kg_session_ref=getattr(context, "kg_session_ref", "") or "",
         messages=list(state.messages),
     )
@@ -379,7 +390,7 @@ async def validate_node(state: PostL3ChainState) -> dict[str, Any]:
     from app.agent.validate.gate import evaluate_validate_gate
 
     retry_patch = _retry_patch(state, "validate")
-    context = _resolve_context(state)
+    context = await _resolve_context(state)
     constraint_index = getattr(context, "constraint_index", None)
     report = validate_aggregate(
         state.planned_state,
@@ -461,7 +472,7 @@ async def deliver_node(state: PostL3ChainState) -> dict[str, Any]:
     from app.modules.spatial_ops.output.export_package import export_gdb_package
 
     retry_patch = _retry_patch(state, "deliver")
-    context = _resolve_context(state)
+    context = await _resolve_context(state)
     bundle = getattr(context, "bundle", None)
     gis_data = bundle.to_geojson_dict() if bundle is not None and hasattr(bundle, "to_geojson_dict") else {}
 
@@ -514,10 +525,24 @@ async def deliver_node(state: PostL3ChainState) -> dict[str, Any]:
             "export_status": (export_result or {}).get("status", ""),
         },
     )
+    render_result = []
+    try:
+        from app.agent.deliver.render_layers import build_render_layers
+
+        render_result = build_render_layers(
+            state.planned_state,
+            list(state.layout_configs or []),
+            gis_data,
+        )
+    except Exception as e:
+        logger.warning("[post_l3:deliver] render layers failed: %s", e)
+        render_result = []
+
     return {
         "delivery_manifest": manifest,
         "deliver_gate": gate,
         "export_result": export_result,
+        "render_result": render_result,
         "upstream_gates": _accumulate_gate(state.upstream_gates, gate),
         **retry_patch,
     }

@@ -17,6 +17,7 @@ from langgraph.types import Send
 from langchain_core.messages import AIMessage
 
 from app.agent.bootstrap.phase_machine import PlanningPhase, get_layer_dimensions, _phase_to_layer
+from app.agent.bootstrap.layer_router import _worker_for_phase
 from app.config import get_dimension_layer
 from app.config.dependency import get_impact_tree_compat, get_next_revision_wave
 from app.tools.intent_tools import advance_planning_intent, gis_analysis
@@ -94,7 +95,8 @@ def after_conversation(
         )
         for d in wave0_dims:
             logger.debug("[after_conversation] Sending dimension: %s", d)
-        return [Send("layer_router", {
+        worker = _worker_for_phase(state.get("phase", "layer1"))
+        return [Send(worker, {
             **state, "dimension_key": d,
             "completed_dimensions": new_completed,
             "is_revision": True,
@@ -114,8 +116,10 @@ def after_conversation(
                 logger.info("[after_conversation] ROUTE: advance_planning_intent detected -> _dispatch_current")
                 return _dispatch_current(state)
             if name in (gis_analysis.name, "GISAnalysis"):
-                logger.info("[after_conversation] ROUTE: gis_analysis detected -> gis_agent")
-                return "gis_agent"
+                # Wave M: 手动触发 GIS/空间布局 -> 直接进入 post-L3 链起点（parse），
+                # 不再经过 gis_agent 黑盒节点。
+                logger.info("[after_conversation] ROUTE: gis_analysis detected -> parse (post-L3 chain)")
+                return "parse"
         logger.info("[after_conversation] ROUTE: unknown tool_call -> execute_tools (name=%s)", last_msg.tool_calls[0].get("name"))
         return "execute_tools"
 
@@ -225,7 +229,8 @@ def after_analysis(
 
         if ready_dims:
             logger.info("[after_analysis] Revision ready dims (dependency-checked): %s", ready_dims)
-            return [Send("layer_router", {**state, "dimension_key": d, "is_revision": True, "revision_impact_tree": impact_tree}) for d in ready_dims]
+            worker = _worker_for_phase(state.get("phase", "layer1"))
+            return [Send(worker, {**state, "dimension_key": d, "is_revision": True, "revision_impact_tree": impact_tree}) for d in ready_dims]
 
         # 检查是否所有修订维度都已完成（只检查 revision_completed，不含基线）
         if set(revision_completed) >= set(all_revision_dims):
@@ -263,14 +268,19 @@ def after_analysis(
                 return "advance_phase"
             logger.info("[after_analysis] Gate %s routed %s", gate_key, route)
             if route == "EXPLORE":
-                # Gate requests evidence -> re-dispatch dimension workers
-                # (workers already call retrieve_evidence internally)
+                # 死循环防护：同一层 EXPLORE 重试超过 2 次 -> END（不再 re-dispatch）
+                counts = state.get("retry_counts") or {}
+                explore_count = counts.get(f"l{layer_num}_explore", 0)
+                if explore_count >= 2:
+                    logger.warning("[after_analysis] EXPLORE retry exhausted for L%d -> END", layer_num)
+                    return END
                 from app.config.loader import list_dimensions
                 dim_configs = list_dimensions(layer_num)
                 explore_dims = [d.key for d in dim_configs]
                 if explore_dims:
-                    logger.info("[after_analysis] Gate EXPLORE: re-dispatching %s", explore_dims)
-                    return [Send("layer_router", {**state, "dimension_key": d}) for d in explore_dims]
+                    logger.info("[after_analysis] Gate EXPLORE (attempt %d): re-dispatching %s", explore_count + 1, explore_dims)
+                    worker = _worker_for_phase(state.get("phase", "layer1"))
+                    return [Send(worker, {**state, "dimension_key": d}) for d in explore_dims]
                 return END
             if route == "HUMAN":
                 return END
@@ -281,7 +291,8 @@ def after_analysis(
                 rework_dims = [d.key for d in dim_configs]
                 if rework_dims:
                     logger.info("[after_analysis] Gate rework: re-dispatching %s", rework_dims)
-                    return [Send("layer_router", {**state, "dimension_key": d}) for d in rework_dims]
+                    worker = _worker_for_phase(state.get("phase", "layer1"))
+                    return [Send(worker, {**state, "dimension_key": d}) for d in rework_dims]
                 return END
 
     layer = _phase_to_layer(phase)
@@ -352,7 +363,8 @@ def _dispatch_current(state: Dict[str, Any]) -> Union[List[Send], str]:
     if not ready:
         return END
 
-    return [Send("layer_router", {**state, "dimension_key": d, "phase": phase}) for d in ready]
+    worker = _worker_for_phase(phase)
+    return [Send(worker, {**state, "dimension_key": d, "phase": phase}) for d in ready]
 
 
 __all__ = ["after_conversation", "after_analysis"]

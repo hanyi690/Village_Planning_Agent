@@ -194,13 +194,6 @@ class AgentState(TypedDict, total=False):
     # Performance optimization: batch write and char count cache
     pending_reports: Annotated[List[Dict[str, Any]], _replace_or_merge_lists]  # Buffer for batch DB writes
     layer_char_counts: Annotated[Dict[int, int], _merge_layer_char_counts]  # Cached char counts per layer
-    gis_layout_configs: Annotated[List[Dict[str, Any]], _replace_or_merge_lists]  # DEPRECATED Wave M1: use delivery_manifest
-    gis_export_result: Dict[str, Any]  # DEPRECATED Wave M1: use delivery_manifest
-    gis_render_result: List[Dict[str, Any]]  # DEPRECATED Wave M1: use delivery_manifest
-    gis_render_artifact: Dict[str, Any]  # DEPRECATED Wave M1: use delivery_manifest
-    gis_validation_result: Dict[str, Any]  # DEPRECATED Wave M1: use validation_report_ref
-    gis_execution_errors: List[Dict[str, Any]]  # DEPRECATED Wave M1: use delivery_manifest
-    gis_conflict_result: Dict[str, Any]  # DEPRECATED Wave M1: use delivery_manifest
     user_uploaded_data: Annotated[Dict[str, Dict[str, Any]], _merge_dict_of_dicts]  # 用户上传的GIS数据
     # P0: L1/L2/L3 数据流闭环字段（详见 docs/superpowers/specs/2026-07-02-gis-review-exploration.md）
     _landuse_metrics: Annotated[Dict[str, float], _merge_dict_of_dicts]  # L1 注入的现状用地指标
@@ -209,7 +202,7 @@ class AgentState(TypedDict, total=False):
     explore_instructions: Annotated[Dict[str, Any], _merge_explore_outputs]  # ExplorationInstructionCollection
     report_summary_index: Annotated[Dict[str, Any], _merge_explore_outputs]  # ReportSummaryIndex
     explore_done: Annotated[bool, operator.or_]  # EXPLORE 桥接已执行标记（防重复触发）
-    # ── Wave M1: post-L3 链 typed artifact 引用（conservative：新增，不删除遗留 gis_* 字段）──
+    # ── Wave M1: post-L3 链 typed artifact 引用 ──
     delivery_manifest: Optional[Any]  # DeliveryManifest — DELIVER 输出（typed）
     reconciliation_report_ref: Optional[Any]  # ReconciliationReport — RECONCILE 输出（typed）
     validation_report_ref: Optional[Any]  # ValidationReport — VALIDATE 输出（typed）
@@ -217,11 +210,54 @@ class AgentState(TypedDict, total=False):
     context_version: str  # PlanningContext 版本戳
     # ── Wave M2: layer aggregate wiring ──
     layer_just_completed: Optional[int]  # set by completion_check, consumed by layer_aggregate_node
+    # ── Wave M2: layer aggregate gate decisions + artifact refs（供 after_analysis 消费）──
+    l1_gate_decision: Optional[Dict[str, Any]]  # L1 Evidence Gate decision
+    l2_gate_decision: Optional[Dict[str, Any]]  # L2 Consistency Gate decision
+    l3_gate_decision: Optional[Dict[str, Any]]  # L3 Program Gate decision
+    l1_snapshot_ref: Optional[Dict[str, Any]]  # L1Snapshot artifact ref
+    l2_strategy_ref: Optional[Dict[str, Any]]  # L2Strategy artifact ref
     # ── Wave N P5: post-L3 HITL pending/resume fields ──
     post_l3_pending_review: Annotated[List[Dict[str, Any]], _replace_or_merge_lists]  # HUMAN 暂停时的待审 items
     post_l3_thread_id: str  # post-L3 chain 的 LangGraph thread_id（= session_id）
     post_l3_status: str  # "needs_human_review" 等
     post_l3_decisions: Optional[Any]  # resume 后回写的审查决策
+    # ── Wave M: post-L3 主图独立节点链 typed artifacts（单一状态源）──
+    # L3 输入
+    planning_program: Optional[Any]  # PlanningProgram (typed)
+    l3_program_ref: Optional[Dict[str, Any]]  # PlanningProgram artifact ref
+    # PARSE 输出
+    intent: Optional[Any]  # IntentCompilationResult (typed)
+    specs: List[Any]  # list[SpatialReferenceSpec]
+    parse_gate: Optional[Any]  # GateDecision
+    # GROUND 输出
+    grounding_result: Optional[Any]  # GroundingResult (typed)
+    ground_gate: Optional[Any]  # GateDecision
+    # SELECT 输出
+    site_selection: Optional[Any]  # SiteSelectionDecision (typed)
+    land_design_briefs: List[Any]  # list[LandDesignBrief]
+    select_gate: Optional[Any]  # GateDecision
+    # EXECUTE 输出
+    execution_plan: Optional[Any]  # ExecutionPlan (typed)
+    parcel_changeset: Optional[Any]  # ParcelChangeSet (typed)
+    layout_configs: List[Dict[str, Any]]
+    allocated_geojson: Dict[str, Any]
+    # VALIDATE 输出
+    validation_report: Optional[Any]  # ValidationReport (typed)
+    validate_gate: Optional[Any]  # GateDecision
+    # RECONCILE 输出
+    reconciliation_report: Optional[Any]  # ReconciliationReport (typed)
+    reconcile_gate: Optional[Any]  # GateDecision
+    # DELIVER 输出
+    deliver_gate: Optional[Any]  # GateDecision
+    export_result: Optional[Dict[str, Any]]
+    render_result: List[Dict[str, Any]]
+    # Gate 累积 + 重试
+    upstream_gates: List[Any]
+    retry_counts: Dict[str, int]
+    max_retries: int
+    error_feedback: Dict[str, str]
+    human_review_items: List[Dict[str, Any]]
+    human_review_decisions: Optional[Any]
 
 
 # ==========================================
@@ -267,13 +303,6 @@ def create_initial_state(
         "last_revised_dimensions": [],
         "pending_reports": [],  # Buffer for batch DB writes
         "layer_char_counts": {},  # Cached char counts per layer
-        "gis_layout_configs": [],  # GIS Agent输出的图层配置
-        "gis_export_result": {},
-        "gis_render_result": [],
-        "gis_render_artifact": {},
-        "gis_validation_result": {},
-        "gis_execution_errors": [],
-        "gis_conflict_result": {},
         "user_uploaded_data": {},  # 用户上传的GIS数据
         "_landuse_metrics": {},  # P0: L1 注入的现状用地指标
         "intent_targets": {},  # P0: L2 持久化的规划目标面积
@@ -286,11 +315,44 @@ def create_initial_state(
         "pending_requests": [],
         "context_version": "",
         "layer_just_completed": None,
+        "l1_gate_decision": None,
+        "l2_gate_decision": None,
+        "l3_gate_decision": None,
+        "l1_snapshot_ref": None,
+        "l2_strategy_ref": None,
         # ── Wave N P5: post-L3 HITL ──
         "post_l3_pending_review": [],
         "post_l3_thread_id": "",
         "post_l3_status": "",
         "post_l3_decisions": None,
+        # ── Wave M: post-L3 主图独立节点链初始值 ──
+        "planning_program": None,
+        "l3_program_ref": None,
+        "intent": None,
+        "specs": [],
+        "parse_gate": None,
+        "grounding_result": None,
+        "ground_gate": None,
+        "site_selection": None,
+        "land_design_briefs": [],
+        "select_gate": None,
+        "execution_plan": None,
+        "parcel_changeset": None,
+        "layout_configs": [],
+        "allocated_geojson": {},
+        "validation_report": None,
+        "validate_gate": None,
+        "reconciliation_report": None,
+        "reconcile_gate": None,
+        "deliver_gate": None,
+        "export_result": None,
+        "render_result": [],
+        "upstream_gates": [],
+        "retry_counts": {},
+        "max_retries": 3,
+        "error_feedback": {},
+        "human_review_items": [],
+        "human_review_decisions": None,
     }
 
 
@@ -385,7 +447,6 @@ def state_to_ui_status(state: Dict[str, Any], db_session: Optional[Dict] = None,
         "county": db_session.get("county") if db_session else state.get("config", {}).get("county", ""),
         "township": db_session.get("township") if db_session else state.get("config", {}).get("township", ""),
         "planning_period": db_session.get("planning_period") if db_session else state.get("config", {}).get("planning_period", "2022-2035年"),
-        "gis_layout_configs": state.get("gis_layout_configs", []),
     }
 
     return _sanitize_json(result)

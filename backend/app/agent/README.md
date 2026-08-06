@@ -69,7 +69,7 @@ START → conversation ─┬─ execute_tools ──→ conversation
 - **进度**：`phase`（init/layer1/layer2/layer3/completed）、`current_wave`、`completed_dimensions`（`{layerN: [dim_keys]}`，reducer 并行合并）、`step_mode`、`previous_layer`。
 - **配置**：`config`（deep-merge reducer；village_data / village_name / task_description / constraints / rag 开关）。
 - **修订**：`need_revision` / `revision_target_dimensions` / `is_revision`（OR reducer）/ `revision_impact_tree` / `revision_completed_dims` / `revision_feedback`。
-- **性能优化**：`pending_reports`（批量写库缓冲，`[]` 显式清空）/ `layer_char_counts` / `gis_layout_configs` / `user_uploaded_data`。
+- **性能优化**：`pending_reports`（批量写库缓冲，`[]` 显式清空）/ `layer_char_counts` / `user_uploaded_data`。
 - **P0 数据流闭环**：`_landuse_metrics`（L1 现状用地指标 → L3 注入）、`intent_targets`（L2 规划目标面积 → L3）。
 - **已移除**（存 `ReportStore`）：`reports` / `report_versions` / `summaries`。
 
@@ -89,7 +89,7 @@ START → conversation ─┬─ execute_tools ──→ conversation
 L2 规划思路（4 维）→ L3 详细规划（12 维，P8 INSTRUCTION 表格段）
    ↓ gis_agent_node
 PARSE（L3 摘要 → SpatialPlanningIntent，select/）→ LAYOUT pipeline（execute/）
-   ↓ SSE 推送 / gis_layout_configs
+   ↓ SSE 推送 / delivery_manifest
 规划文本生成（modules/planning_text：22 条条文 + RAG 附录 + DOCX 导出）
 ```
 
