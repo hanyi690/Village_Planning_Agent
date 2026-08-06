@@ -219,6 +219,10 @@ class PlanningRuntimeService:
         config = cls.get_thread_config(session_id)
         config["recursion_limit"] = 100
 
+        if not resume_data:
+            logger.warning("[PlanningRuntimeService] [%s] Empty resume payload; normalizing to no_op", session_id)
+            resume_data = {"action": "no_op"}
+
         if state_updates:
             command = Command(resume=resume_data, update=state_updates)
         else:
@@ -274,6 +278,13 @@ class PlanningRuntimeService:
                             sse_manager.append_event(session_id, checkpoint_saved_event)
                             sse_manager.publish_sync(session_id, checkpoint_saved_event)
                             last_completed_layer = 0
+
+            final_state = await cls.aget_state_values(session_id)
+            deliver_gate = (final_state or {}).get("deliver_gate") or {}
+            deliver_route = deliver_gate.get("feedback_route") if isinstance(deliver_gate, dict) else getattr(deliver_gate, "feedback_route", None)
+            if final_state and final_state.get("phase") == "completed" and deliver_route == "PASS":
+                await cls._append_event(session_id, create_completed_event(session_id))
+            sse_manager.set_execution_active(session_id, False)
 
             # Send resumed SSE event
             sse_manager.append_event(session_id, {
@@ -816,7 +827,9 @@ class PlanningRuntimeService:
 
             # Only send completed event when all 3 layers are done
             final_state = await cls.aget_state_values(session_id)
-            if final_state and final_state.get("phase") == "completed":
+            deliver_gate = (final_state or {}).get("deliver_gate") or {}
+            deliver_route = deliver_gate.get("feedback_route") if isinstance(deliver_gate, dict) else getattr(deliver_gate, "feedback_route", None)
+            if final_state and final_state.get("phase") == "completed" and deliver_route == "PASS":
                 await cls._append_event(session_id, create_completed_event(session_id))
             sse_manager.set_execution_active(session_id, False)
 

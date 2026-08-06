@@ -23,22 +23,43 @@ router = APIRouter()
 class ResolveRequest(BaseModel):
     """审查决策请求体 — 直接传给 post-L3 链的 interrupt() 调用点。"""
 
-    decisions: Dict[str, Any] = Field(..., description="审查决策（resume payload）")
+    decisions: Dict[str, Any] = Field(..., min_length=1, description="审查决策（resume payload，不可为空）")
 
 
 @router.get("/api/human-review/{session_id}")
 async def get_human_review(session_id: str):
-    """返回暂停在 human_review 的 post-L3 链待审 items（从主图 AgentState 读）。"""
+    """Return pending human-review items of a paused post-L3 chain."""
     from app.services.runtime import PlanningRuntimeService
 
-    state = await PlanningRuntimeService.aget_state_values(session_id)
-    if not state:
+    snapshot = await PlanningRuntimeService.aget_state(session_id)
+    if not snapshot:
         raise HTTPException(status_code=404, detail=f"Session not found: {session_id}")
 
-    pending = list(state.get("post_l3_pending_review") or [])
+    state = dict(snapshot.values) if snapshot.values else {}
+
+    pending = list(state.get("human_review_items") or state.get("post_l3_pending_review") or [])
+    paused_stage = state.get("paused_stage") or ""
+
+    # On the first interrupt the checkpoint state has not yet been written,
+    # so fall back to the interrupt payload carried by snapshot.tasks.
+    for task in snapshot.tasks or ():
+        for interrupt in getattr(task, "interrupts", None) or ():
+            payload = getattr(interrupt, "value", None)
+            if not isinstance(payload, dict):
+                continue
+            if not pending:
+                pending = list(payload.get("human_review_items") or [])
+            if not paused_stage:
+                paused_stage = payload.get("paused_stage") or ""
+            if pending and paused_stage:
+                break
+        if pending and paused_stage:
+            break
+
     return {
         "session_id": session_id,
         "post_l3_status": state.get("post_l3_status", ""),
+        "paused_stage": paused_stage,
         "pending_items": pending,
         "count": len(pending),
     }
@@ -47,6 +68,8 @@ async def get_human_review(session_id: str):
 @router.post("/api/human-review/{session_id}/resolve")
 async def resolve_human_review(session_id: str, request: ResolveRequest):
     """提交审查决策并 resume post-L3 链，返回最终成果。"""
+    if not request.decisions:
+        raise HTTPException(status_code=422, detail="decisions must be a non-empty object")
     try:
         result = await resume_post_l3_chain(session_id, request.decisions)
     except Exception as e:  # noqa: BLE001 — surface to caller

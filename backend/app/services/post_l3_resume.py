@@ -1,12 +1,13 @@
 """Post-L3 chain resume service (Wave N P5 — HITL interrupt + resume).
 
 Resumes a paused post-L3 chain (human_review interrupt) using the official
-LangGraph ``Command(resume=...)`` pattern and the same global checkpointer the
-chain was compiled with, so the checkpoint written by ``gis_agent_node`` can be
-resumed. Collects the final chain state (delivery_manifest / validation_report /
-reconciliation_report / export_result / human_review_decisions), persists a
-lightweight JSON snapshot per session (``.run-tmp/post_l3/{session_id}``) and
-returns the result dict.
+LangGraph ``Command(resume=...)`` pattern against the SAME main graph
+(``create_unified_planning_graph``) via ``PlanningRuntimeService``. The pause
+happens inside the main graph's ``human_review`` node; resuming a different
+compiled graph would not see the checkpoint. Collects the final AgentState
+(delivery_manifest / validation_report / reconciliation_report / export_result /
+human_review_decisions), persists a lightweight JSON snapshot per session
+(``.run-tmp/post_l3/{session_id}``) and returns the result dict.
 """
 
 from __future__ import annotations
@@ -19,10 +20,6 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Optional
 
-from langgraph.types import Command
-
-from app.agent.bootstrap.post_l3_chain import build_post_l3_chain
-from app.database.engine import get_global_checkpointer
 from app.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -109,7 +106,7 @@ def _collect_result(state: Dict[str, Any]) -> Dict[str, Any]:
         "export_result": state.get("export_result") or {},
         "human_review_items": list(state.get("human_review_items") or []),
         "human_review_decisions": state.get("human_review_decisions"),
-        "status": state.get("status", ""),
+        "status": state.get("post_l3_status") or state.get("status", ""),
     }
 
 
@@ -117,53 +114,33 @@ async def resume_post_l3_chain(session_id: str, decisions: Dict[str, Any]) -> Di
     """Resume a paused post-L3 chain and return its final result.
 
     Args:
-        session_id: thread_id of the paused post-L3 chain (= planning session id).
+        session_id: thread_id of the paused main graph (= planning session id).
         decisions: human review decisions passed to ``interrupt()`` via
             ``Command(resume=...)``.
 
     Returns:
-        dict with the collected final chain state (delivery_manifest,
+        dict with the collected final AgentState (delivery_manifest,
         validation_report, reconciliation_report, export_result,
         human_review_decisions, ...).
     """
-    checkpointer = await get_global_checkpointer()
-    chain = build_post_l3_chain(checkpointer=checkpointer)
-    config = {"configurable": {"thread_id": session_id}}
+    from app.services.runtime import PlanningRuntimeService
 
-    final_state: Dict[str, Any] = {}
-    async for chunk in chain.astream(
-        Command(resume=decisions),
-        config,
-        stream_mode=["values"],
-        version="v2",
-    ):
-        if isinstance(chunk, dict) and chunk.get("type") == "values":
-            data = chunk.get("data")
-        elif isinstance(chunk, dict):
-            data = chunk
-        else:
-            data = chunk
-        if data is None:
-            continue
-        if hasattr(data, "model_dump"):
-            final_state = data.model_dump()
-        elif isinstance(data, dict):
-            final_state = data
+    await PlanningRuntimeService.ensure_initialized()
+    await PlanningRuntimeService.resume_from_interrupt(session_id, decisions)
+
+    final_state = await PlanningRuntimeService.aget_state_values(session_id) or {}
 
     result = _collect_result(final_state)
     PostL3ResultStore().save(session_id, result)
 
     try:
-        from app.services.runtime import PlanningRuntimeService
-
         await PlanningRuntimeService.aupdate_state(
             session_id,
             {
                 "post_l3_decisions": decisions,
-                "post_l3_pending_review": [],
                 "post_l3_status": "resumed",
             },
-            as_node="gis_agent",
+            as_node="human_review",
         )
     except Exception as e:  # noqa: BLE001 — best-effort AgentState write-back
         logger.warning("[post_l3_resume] AgentState write-back skipped: %s", e)
