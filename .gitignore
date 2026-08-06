@@ -133,6 +133,10 @@ backend/test-screenshots/
 backend/script.txt
 docs/test-reports/
 frontend/e2e/gis_shared_fixtures.ts
+backend/.pytest-tmp/
+backend/.run-tmp/
+backend/scripts/_chain_err.txt
+backend/scripts/_chain_out.txt
 
 # Claude Code local
 .claude/.cozempic-init.lock
