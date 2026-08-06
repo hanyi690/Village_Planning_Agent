@@ -91,7 +91,9 @@ def changeset_to_planned_state(changeset: ParcelChangeSet, intent: Any = None) -
         roads = [_road_target_to_planned_road(t) for t in (getattr(intent, "road_targets", None) or [])]
         axes = [_axis_target_to_planned_axis(t) for t in (getattr(intent, "development_axes", None) or [])]
         facilities = [
-            _facility_target_to_planned_facility(t) for t in (getattr(intent, "facilities", None) or [])
+            _facility_target_to_planned_facility(t)
+            for t in (getattr(intent, "facilities", None) or [])
+            if getattr(t, "anchor_point", None) is not None
         ]
 
     # zones stays empty: zone parcel changes arrive as reclassify ParcelChanges,

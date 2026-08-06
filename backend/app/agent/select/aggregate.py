@@ -340,10 +340,18 @@ def select_aggregate(
         project_pool = filter_parcels_for_target(parcels, project.project_id)
         if not project_pool:
             logger.warning(
-                "select_aggregate: no parcels tagged for project %s; falling back to full pool",
+                "select_aggregate: no candidates for project %s; routing to RETRY_GROUND",
                 project.project_id,
             )
-            project_pool = parcels
+            placements.append(
+                PlacementDecision(
+                    target_id=project.project_id,
+                    selected_bsm="",
+                    status="unplaced",
+                    reason="no_project_candidates",
+                )
+            )
+            continue
         placement = select_parcel(
             target,
             candidates=project_pool,
@@ -356,9 +364,23 @@ def select_aggregate(
             occupied.append(placement.anchor_point)
         placements.append(placement)
     decision = build_site_selection_decision(placements, run_id=run_id, session_id=run_id)
+    # Backfill facility candidate_bsms from grounding candidate sites so
+    # placement honours the grounded direction (e.g. 南部) instead of falling
+    # back to the global pool (which collapses all facilities onto one parcel).
+    candidate_sites = list(getattr(result, "candidates", None) or [])
+    for facility in facilities:
+        if getattr(facility, "candidate_bsms", None):
+            continue
+        fac_id = getattr(facility, "source_instruction_id", "") or ""
+        for site in candidate_sites:
+            if getattr(site, "target_ref", None) == fac_id:
+                site_bsms = list(getattr(site, "source_parcels", None) or [])
+                if site_bsms:
+                    facility.candidate_bsms = site_bsms
+                break
     facility_placements: Dict[str, Dict[str, Any]] = {}
     facility_rank = len(placements) + 1
-    for facility in facilities:
+    for i, facility in enumerate(facilities):
         decision_p, bsm = _place_facility(
             facility, parcels, context, cluster_centroid, occupied
         )
@@ -374,16 +396,20 @@ def select_aggregate(
                 )
             )
             facility_rank += 1
-            facility_placements[facility.type] = {
+            if facility.anchor_point is not None:
+                occupied.append(facility.anchor_point)
+            facility_placements[f"facility_{i}"] = {
                 "bsm": bsm,
                 "anchor_point": facility.anchor_point,
                 "status": "placed",
+                "facility_type": facility.type,
             }
         else:
-            facility_placements[facility.type] = {
+            facility_placements[f"facility_{i}"] = {
                 "bsm": "",
                 "anchor_point": facility.anchor_point,
                 "status": "unplaced",
+                "facility_type": facility.type,
             }
     if facilities:
         decision.decision_factors["facility_count"] = len(facilities)

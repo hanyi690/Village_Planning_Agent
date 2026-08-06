@@ -32,9 +32,29 @@ FACILITY_BUFFER_RADIUS = 0.0002  # degrees, ~20 m at equator
 
 
 def _geometry_to_wkt(geometry: dict) -> str:
-    """Convert a GeoJSON geometry dict to WKT; return "" for invalid geometry."""
+    """Convert a GeoJSON geometry dict to WKT; return "" for invalid geometry.
+
+    Invalid geometry (e.g. self-intersecting polygons from cadastral input or
+    merge/split output) is repaired via buffer(0)/make_valid so the produced
+    WKT is always topologically valid. GeometryCollection results are reduced
+    to their areal parts (mirrors app/utils/geo_utils.py convention).
+    """
     try:
-        return shape(geometry).wkt
+        g = shape(geometry)
+        if not g.is_valid:
+            from shapely.ops import unary_union
+            from shapely.validation import make_valid
+
+            try:
+                g = g.buffer(0)
+            except Exception:
+                g = make_valid(g)
+            if g.geom_type == "GeometryCollection":
+                areal = [p for p in g.geoms if p.area > 0]
+                if not areal:
+                    return ""
+                g = unary_union(areal) if len(areal) > 1 else areal[0]
+        return g.wkt
     except Exception:
         return ""
 

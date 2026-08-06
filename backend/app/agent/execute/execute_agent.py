@@ -159,13 +159,37 @@ def _parcel_from_feature(feature: dict) -> Any:
     """Adapt a landuse GeoJSON feature into the Land Design Worker parcel shape.
 
     The worker reads .bsm/.geometry/.dlbm/.area_sqm from each parcel entry.
+
+    Invalid source geometry (e.g. self-intersecting cadastral polygons) is
+    repaired at load time via buffer(0)/make_valid so downstream WKT output
+    never carries an invalid geometry. GeometryCollection results are reduced
+    to their areal parts (mirrors app/utils/geo_utils.py convention).
     """
     from types import SimpleNamespace
 
+    from shapely.geometry import mapping, shape
+    from shapely.ops import unary_union
+    from shapely.validation import make_valid
+
     props = feature.get("properties") or {}
+    raw_geom = feature.get("geometry")
+    if raw_geom and isinstance(raw_geom, dict) and raw_geom.get("type"):
+        try:
+            g = shape(raw_geom)
+            if not g.is_valid:
+                try:
+                    g = g.buffer(0)
+                except Exception:
+                    g = make_valid(g)
+                if g.geom_type == "GeometryCollection":
+                    areal = [p for p in g.geoms if p.area > 0]
+                    g = unary_union(areal) if len(areal) > 1 else areal[0]
+                raw_geom = mapping(g)
+        except Exception:
+            pass
     return SimpleNamespace(
         bsm=str(props.get("BSM") or props.get("bsm") or ""),
-        geometry=feature.get("geometry"),
+        geometry=raw_geom,
         dlbm=str(props.get("DLBM") or props.get("dlbm") or ""),
         area_sqm=float(props.get("area_sqm") or props.get("area") or 0),
         area_ha=float(props.get("area_ha") or 0),
@@ -195,18 +219,6 @@ def _footprint_geometry(change: Any, fallback_geometry: dict) -> dict:
         except Exception:
             pass
     return fallback_geometry or {}
-
-
-def _assemble_execution_plan(state: ExecuteAgentState) -> Any:
-    """Compile the ExecutionPlan envelope (Wave O contract) from upstream inputs."""
-    from app.modules.schema.contracts.execution_plan_contracts import ExecutionPlan
-
-    return ExecutionPlan(
-        plan_id=f"execute-{state.session_id or 'current'}",
-        intent=state.intent,
-        site_selection=state.site_selection,
-        land_design_briefs=list(state.land_design_briefs or []),
-    )
 
 
 # ── Node implementations ─────────────────────────────────────────────
@@ -304,7 +316,7 @@ async def _prepare_inputs_node(state: ExecuteAgentState) -> dict:
     applied = _apply_constraint_adjustments(
         zone_targets, list(state.constraint_adjustments or [])
     )
-    execution_plan = _assemble_execution_plan(state)
+    execution_plan = state.execution_plan
     return {
         "parcel_by_bsm": parcel_by_bsm,
         "constraint_adjustments": applied,
@@ -355,7 +367,9 @@ def _project_worker(state: ExecuteAgentState) -> WorkerResult:
         brief = briefs[index] if index < len(briefs) else None
         if brief is not None:
             project = projects_by_id.get(getattr(brief, "project_ref", ""))
-        worker_brief = brief if project is not None else None
+        if project is None:
+            continue
+        worker_brief = brief
         change_list = design_project_footprint(project, worker_brief, str(bsm), parcel_by_bsm)
         if not change_list:
             continue

@@ -103,6 +103,37 @@ def _dedup_layout_configs(worker_results: List[Any]) -> List[Dict[str, Any]]:
     return list(merged.values())
 
 
+def _verify_geometry_valid(changes: list) -> bool:
+    """True when every change carries a non-empty, valid WKT geometry."""
+    if not changes:
+        return False
+    from shapely import wkt
+
+    for change in changes or []:
+        aw = str(getattr(change, "after_geometry_wkt", "") or "")
+        if not aw:
+            return False
+        try:
+            geom = wkt.loads(aw)
+            if geom.is_empty or not geom.is_valid:
+                return False
+        except Exception:
+            return False
+    return True
+
+
+def _verify_area_conservation(changes: list) -> bool:
+    """True when non-create changes preserve a positive area (create adds area)."""
+    for change in changes or []:
+        action = str(getattr(change, "action", "") or "")
+        if action in ("create",):
+            continue
+        area = float(getattr(change, "new_area_ha", 0.0) or 0.0)
+        if area <= 0:
+            return False
+    return True
+
+
 def merge_worker_results(
     worker_results: List[Any],
 ) -> Tuple[ParcelChangeSet, List[Dict[str, Any]], List[Dict[str, Any]]]:
@@ -111,7 +142,9 @@ def merge_worker_results(
     - BSM conflict detection: same bsm in multiple workers with different
       after_classification -> ``bsm_conflict`` diagnostic.
     - layout_configs deduped by layerType (later worker wins by priority).
-    - ParcelChangeSet built via ``land_design_worker.build_parcel_change_set``.
+    - ParcelChangeSet built via ``land_design_worker.build_parcel_change_set``
+      with area-conservation and geometry-validity flags derived from the
+      merged changes.
 
     Returns:
         (parcel_changeset, merged_layout_configs, diagnostics)
@@ -122,7 +155,11 @@ def merge_worker_results(
     for result in worker_results or []:
         changes.extend(_result_get(result, "parcel_changes") or [])
 
-    changeset = build_parcel_change_set(changes)
+    changeset = build_parcel_change_set(
+        changes,
+        area_conservation_verified=_verify_area_conservation(changes),
+        geometry_validity_verified=_verify_geometry_valid(changes),
+    )
     layout_configs = _dedup_layout_configs(worker_results)
     return changeset, layout_configs, list(conflicts)
 

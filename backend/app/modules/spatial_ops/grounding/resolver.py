@@ -188,7 +188,7 @@ class SpatialResolver:
             parcels = self.context.bundle_parcels()
             final_bsms = query_parcels_in_bbox(parcels, bbox)
             provenance["path"] += "+geometry:bbox"
-            confidence = 0.5
+            confidence = 0.8
 
         return ResolvedSpatialRef(
             final_bsms=final_bsms,

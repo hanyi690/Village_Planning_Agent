@@ -38,6 +38,9 @@ def select_gate_route(
     """Return the deterministic route: "PASS"|"RETRY_GROUND"|"HUMAN"."""
     if target_count > 0 and len(decision.selected_combination) < target_count:
         return "RETRY_GROUND"
+    unplaced = decision.decision_factors.get("unplaced_count", 0) or 0
+    if unplaced > 0:
+        return "RETRY_GROUND"
     top = _top_score(decision)
     if top is not None and top < confidence_threshold:
         return "HUMAN"

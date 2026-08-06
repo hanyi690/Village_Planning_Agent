@@ -51,6 +51,24 @@ _POLYGON_LAYER_TYPES = {
 }
 
 
+def _feature_name(props: dict) -> str:
+    """Resolve a human-readable identifier for a layer feature.
+
+    Layer builders emit ``bsm``/``source_bsm``/``project_name``/``facility_id``
+    instead of ``name``; fall back so topology/continuity findings stay
+    attributable to a specific feature.
+    """
+    return (
+        props.get("name")
+        or props.get("bsm")
+        or props.get("source_bsm")
+        or props.get("project_name")
+        or props.get("facility_id")
+        or props.get("project_id")
+        or ""
+    )
+
+
 def _check(
     check_id: str,
     check_name: str,
@@ -265,7 +283,7 @@ def check_topology(layout_configs: Any) -> List[ValidationCheck]:
             if not geometry:
                 continue
             props = feature.get("properties") or {} if isinstance(feature, dict) else {}
-            name = props.get("name") or ""
+            name = _feature_name(props)
             try:
                 from shapely.geometry import shape
 
@@ -364,11 +382,28 @@ def check_overlap(layout_configs: Any) -> List[ValidationCheck]:
     ]
 
 
+_ZONE_CONTINUITY_LAYER_TYPES = {
+    "zone",
+    "zone_layer",
+    "function_zone",
+    "custom_planning_zone",
+}
+
+
 def check_continuity(layout_configs: Any) -> List[ValidationCheck]:
-    """Check each zone is a single contiguous geometry (no fragmented parts)."""
+    """Check each zone is a single contiguous geometry (no fragmented parts).
+
+    Continuity is a zone-partition concern (fragmented zone geometry), so only
+    zone layers are checked; project/facility/road layers are excluded because
+    a project or facility footprint may legitimately sit on a multi-part parcel
+    (e.g. a fragmented real-world homestead parcel).
+    """
     fragmented: List[str] = []
     for layer in layout_configs or []:
         if not isinstance(layer, dict):
+            continue
+        layer_type = layer.get("layerType") or ""
+        if layer_type not in _ZONE_CONTINUITY_LAYER_TYPES:
             continue
         data = layer.get("data") or {}
         if data.get("type") != "FeatureCollection":
@@ -379,7 +414,7 @@ def check_continuity(layout_configs: Any) -> List[ValidationCheck]:
             if not geometry:
                 continue
             props = feature.get("properties") or {} if isinstance(feature, dict) else {}
-            name = props.get("name") or "unnamed"
+            name = _feature_name(props) or "unnamed"
             try:
                 from shapely.geometry import shape
 
@@ -390,7 +425,17 @@ def check_continuity(layout_configs: Any) -> List[ValidationCheck]:
         for name, geoms in name_groups.items():
             for g in geoms:
                 if g.geom_type == "MultiPolygon" and len(g.geoms) > 1:
-                    fragmented.append(name)
+                    # Touching/overlapping parts are make_valid repair artifacts
+                    # of an originally self-intersecting parcel (still one logical
+                    # parcel); only genuinely separated parts indicate fragmentation.
+                    try:
+                        from shapely.ops import unary_union
+
+                        merged = unary_union(g)
+                    except Exception:
+                        merged = g
+                    if merged.geom_type == "MultiPolygon" and len(merged.geoms) > 1:
+                        fragmented.append(name)
             if len(geoms) > 1:
                 fragmented.append(name)
     fragmented = sorted(set(fragmented))
