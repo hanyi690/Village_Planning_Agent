@@ -7,7 +7,6 @@ and a Provenance record. No LLM, no KG, no MIP — deterministic only.
 
 from __future__ import annotations
 
-from types import SimpleNamespace
 from typing import Any, List
 
 from app.agent.validate.checks import (
@@ -58,7 +57,26 @@ def validate_aggregate(
 ) -> ValidationReport:
     """Run all 9 VALIDATE checks and aggregate their findings into a ValidationReport."""
     if planned_state is None:
-        planned_state = SimpleNamespace(parcels=[], facilities=[])
+        missing_check = ValidationCheck(
+            check_id="missing_planned_state",
+            check_name="planned_state presence",
+            passed=False,
+            actual_value="None",
+            expected_value="non-null PlannedState",
+            responsible_stage="EXECUTE",
+            fix_suggestion="EXECUTE produced no planned_state; retry EXECUTE",
+        )
+        return ValidationReport(
+            checks=[missing_check],
+            overall_passed=False,
+            issues_by_stage={"EXECUTE": [_check_to_issue(missing_check)]},
+            adjustments=[],
+            provenance=Provenance(
+                source="validate_aggregate", run_id=run_id,
+                module="app.agent.validate.aggregate",
+                natural_language_description="blocked: planned_state is None",
+            ),
+        )
 
     all_checks: List[ValidationCheck] = []
     all_checks.extend(check_hard_constraints(planned_state, constraint_index))

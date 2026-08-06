@@ -13,8 +13,9 @@ the L3 gate PASS flows into PARSE without a ``gis_agent`` black-box node.
 
 from __future__ import annotations
 
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional, Tuple
 
+from app.modules.schema.contracts.workflow_contracts import GateDecision
 from app.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -28,6 +29,30 @@ _RETRY_ROUTES: Dict[str, frozenset[str]] = {
     "reconcile": frozenset({"RETRY_EXECUTE", "RETRY_L3"}),
     "deliver": frozenset({"RETRY_VALIDATE"}),
 }
+
+# Stage -> next stage after a HUMAN approve (forward chain).
+_STAGE_FORWARD_TARGET = {
+    "parse": "ground",
+    "ground": "select",
+    "select": "execute",
+    "validate": "reconcile",
+    "reconcile": "deliver",
+    "deliver": "__end__",
+}
+
+# Gate state channel names (there is no execute_gate).
+_GATE_CHANNELS = (
+    "parse_gate", "ground_gate", "select_gate",
+    "validate_gate", "reconcile_gate", "deliver_gate",
+)
+
+
+def _pass_gate(stage: str) -> GateDecision:
+    """Construct a force-pass GateDecision for a stage (approve path)."""
+    return GateDecision(
+        stage=stage, passed=True, feedback_route=None,
+        pending_requests=[], evidence_requests=[],
+    )
 
 
 def _gate_route(gate: Any) -> str:
@@ -179,7 +204,9 @@ def _jsonable(obj: Any) -> Any:
 def _persist_artifact(
     state: Dict[str, Any], module: str, artifact_type: str, payload: Any,
 ) -> Dict[str, Any]:
-    """Store a typed artifact to FilesystemArtifactStore; return ArtifactRef dict."""
+    """Store a typed artifact to FilesystemArtifactStore; return ArtifactRef dict.
+    Audit-only side-effect: refs are never reloaded downstream (no loader exists; crash recovery deferred).
+    """
     try:
         from app.modules.ports.artifact_store import ArtifactRef
         from app.services.artifact_store import FilesystemArtifactStore
@@ -251,13 +278,31 @@ async def parse_node(state: Dict[str, Any]) -> Dict[str, Any]:
 async def ground_node(state: Dict[str, Any]) -> Dict[str, Any]:
     """GROUND node: specs + context -> GroundingResult + gate."""
     from app.agent.ground.aggregate import ground_aggregate
+    from app.agent.ground.aggregate import retrieve_evidence
     from app.agent.ground.gate import evaluate_ground_gate
     from app.modules.schema.contracts.spatial_reference_contracts import SpatialReferenceSpec
 
     retry_patch = _retry_patch(state, "ground")
     context = await _resolve_context(state)
     specs = [_to_typed(s, SpatialReferenceSpec) for s in (state.get("specs") or [])]
+    evidence = []
+    if retry_patch:
+        prior_gate = state.get("ground_gate")
+        requests = getattr(prior_gate, "evidence_requests", None)
+        if requests is None and isinstance(prior_gate, dict):
+            requests = prior_gate.get("evidence_requests")
+        try:
+            evidence = await retrieve_evidence(context, requests or None)
+        except Exception as e:
+            logger.warning("[post_l3:main:ground] retrieve_evidence failed: %s", e)
     result = ground_aggregate(specs, context)
+    if evidence and hasattr(result, "spatial_query_evidence"):
+        result.spatial_query_evidence.extend(evidence)
+        refs = [ref for e in evidence for ref in e.result_refs if ref]
+        if refs:
+            for candidate in (getattr(result, "candidates", None) or []):
+                if hasattr(candidate, "evidence_refs"):
+                    candidate.evidence_refs.extend(refs)
     gate = evaluate_ground_gate(result)
     ref = _persist_artifact(state, "ground", "GroundingResult", result)
     return {
@@ -274,6 +319,7 @@ async def ground_node(state: Dict[str, Any]) -> Dict[str, Any]:
 
 async def select_node(state: Dict[str, Any]) -> Dict[str, Any]:
     """SELECT node: GroundingResult + intent + context -> SiteSelectionDecision."""
+    from app.agent.execute.plan_builder import build_execution_plan
     from app.agent.select.aggregate import select_aggregate
     from app.agent.select.gate import evaluate_select_gate
     from app.modules.schema.contracts.grounding_contracts import GroundingResult
@@ -289,6 +335,13 @@ async def select_node(state: Dict[str, Any]) -> Dict[str, Any]:
     intent.typed_intent = plan_intent
     projects = list(getattr(plan_intent, "project_targets", None) or [])
     gate = evaluate_select_gate(decision, target_count=len(projects))
+    execution_plan = build_execution_plan(
+        intent,
+        decision,
+        briefs,
+        run_id=_run_id(state),
+        context_version=_context_version(state),
+    )
     ref = _persist_artifact(state, "select", "SiteSelectionDecision", decision)
     return {
         "site_selection": _dump(decision),
@@ -297,6 +350,7 @@ async def select_node(state: Dict[str, Any]) -> Dict[str, Any]:
         "select_gate": _dump(gate),
         "upstream_gates": _accumulate_gate(state.get("upstream_gates"), _dump(gate)),
         "site_selection_ref": ref,
+        "execution_plan": _dump(execution_plan),
         **retry_patch,
     }
 
@@ -319,6 +373,16 @@ async def execute_node(state: Dict[str, Any]) -> Dict[str, Any]:
     plan_intent = _to_typed(getattr(intent, "typed_intent", None) or intent, SpatialPlanningIntent)
     site_selection = _to_typed(state.get("site_selection"), SiteSelectionDecision)
     execution_plan = _to_typed(state.get("execution_plan"), ExecutionPlan)
+    if execution_plan is None and intent is not None and site_selection is not None:
+        from app.agent.execute.plan_builder import build_execution_plan
+
+        execution_plan = build_execution_plan(
+            intent,
+            site_selection,
+            state.get("land_design_briefs") or [],
+            run_id=_run_id(state),
+            context_version=_context_version(state),
+        )
     bundle = getattr(context, "bundle", None)
     gis_data = bundle.to_geojson_dict() if bundle is not None and hasattr(bundle, "to_geojson_dict") else {}
 
@@ -378,6 +442,7 @@ async def validate_node(state: Dict[str, Any]) -> Dict[str, Any]:
     """VALIDATE node: run validate_aggregate + gate."""
     from app.agent.validate.aggregate import validate_aggregate
     from app.agent.validate.gate import evaluate_validate_gate
+    from app.modules.schema.contracts.parse_contracts import SpatialPlanningIntent
     from app.modules.schema.contracts.planned_state_contracts import PlannedState
     from app.modules.schema.contracts.parcel_change_contracts import ParcelChangeSet
     from app.modules.schema.contracts.parse_result_contracts import IntentCompilationResult
@@ -388,11 +453,12 @@ async def validate_node(state: Dict[str, Any]) -> Dict[str, Any]:
     planned_state = _to_typed(state.get("planned_state"), PlannedState)
     changeset = _to_typed(state.get("parcel_changeset"), ParcelChangeSet)
     intent = _to_typed(state.get("intent"), IntentCompilationResult)
+    plan_intent = _to_typed(getattr(intent, "typed_intent", None) or intent, SpatialPlanningIntent)
     report = validate_aggregate(
         planned_state,
         changeset,
         state.get("layout_configs"),
-        intent,
+        plan_intent,
         constraint_index,
         run_id=_run_id(state),
     )
@@ -423,7 +489,31 @@ async def reconcile_node(state: Dict[str, Any]) -> Dict[str, Any]:
     from app.modules.schema.contracts.parse_result_contracts import IntentCompilationResult
 
     retry_patch = _retry_patch(state, "reconcile")
-    program = _to_typed(state.get("planning_program"), PlanningProgram)
+    program = _load_planning_program(state)
+    if program is None:
+        from app.modules.schema.contracts.reconciliation_contracts import (
+            ReconciliationInconsistency,
+            ReconciliationReport,
+        )
+        report = ReconciliationReport(
+            inconsistencies=[
+                ReconciliationInconsistency(
+                    intervention_id="__missing_program__",
+                    field="planning_program",
+                    expected="non-null PlanningProgram",
+                    actual="None",
+                    severity="error",
+                    responsible_stage="L3",
+                )
+            ],
+        )
+        gate = evaluate_reconcile_gate(report)
+        return {
+            "reconciliation_report": _dump(report),
+            "reconcile_gate": _dump(gate),
+            "upstream_gates": _accumulate_gate(state.get("upstream_gates"), _dump(gate)),
+            **retry_patch,
+        }
     specs = [_to_typed(s, SpatialReferenceSpec) for s in (state.get("specs") or [])]
     grounding = _to_typed(state.get("grounding_result"), GroundingResult)
     decision = _to_typed(state.get("site_selection"), SiteSelectionDecision)
@@ -533,13 +623,13 @@ async def deliver_node(state: Dict[str, Any]) -> Dict[str, Any]:
 # ── HUMAN REVIEW ───────────────────────────────────────────────────────
 
 
-def _collect_human_items(state: Dict[str, Any]) -> List[Dict[str, Any]]:
-    """Extract pending_requests from the most recent HUMAN gate decision."""
+def _collect_human_items(state: Dict[str, Any]) -> Tuple[Optional[str], List[Dict[str, Any]]]:
+    """Extract pending_requests from the most recent HUMAN gate decision.
+
+    Returns (stage, items); stage is None when no gate routed HUMAN.
+    """
     items: List[Dict[str, Any]] = []
-    for gate_attr in (
-        "parse_gate", "ground_gate", "select_gate",
-        "validate_gate", "reconcile_gate", "deliver_gate",
-    ):
+    for gate_attr in _GATE_CHANNELS:
         gate = state.get(gate_attr)
         if gate is None:
             continue
@@ -548,14 +638,17 @@ def _collect_human_items(state: Dict[str, Any]) -> List[Dict[str, Any]]:
             route = gate.get("feedback_route")
         if route != "HUMAN":
             continue
-        pending = getattr(gate, "pending_requests", None) or []
+        pending = getattr(gate, "pending_requests", None)
+        if pending is None and isinstance(gate, dict):
+            pending = gate.get("pending_requests")
+        pending = pending or []
         for pr in pending:
             if hasattr(pr, "model_dump"):
                 items.append(pr.model_dump())
             elif isinstance(pr, dict):
                 items.append(pr)
-        break  # only process the first HUMAN gate
-    return items
+        return gate_attr.replace("_gate", ""), items
+    return None, items
 
 
 def _retry_exhaustion_items(state: Dict[str, Any]) -> List[Dict[str, Any]]:
@@ -577,17 +670,21 @@ def _retry_exhaustion_items(state: Dict[str, Any]) -> List[Dict[str, Any]]:
     ]
 
 
-def collect_human_review_items(state: Dict[str, Any]) -> List[Dict[str, Any]]:
-    """Public helper: return the human-review items for the current state."""
-    items = _collect_human_items(state)
-    if not items:
-        items = _retry_exhaustion_items(state)
-    return items
+def collect_human_review_items(state: Dict[str, Any]) -> Tuple[Optional[str], List[Dict[str, Any]]]:
+    """Public helper: return (stage, human-review items) for the current state.
+
+    Falls back to synthetic retry-exhaustion items when no gate routed HUMAN.
+    """
+    stage, items = _collect_human_items(state)
+    if stage is not None:
+        return stage, items
+    return None, _retry_exhaustion_items(state)
 
 
 __all__ = [
     "parse_node", "ground_node", "select_node", "execute_node",
     "validate_node", "reconcile_node", "deliver_node",
     "collect_human_review_items",
-    "_gate_route", "_retry_patch",
+    "_gate_route", "_retry_patch", "_pass_gate",
+    "_STAGE_FORWARD_TARGET", "_GATE_CHANNELS",
 ]

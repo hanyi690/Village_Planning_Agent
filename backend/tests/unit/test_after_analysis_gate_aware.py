@@ -1,6 +1,5 @@
 """Gate-aware after_analysis router tests."""
 
-import app.agent.bootstrap.graph  # noqa: F401  # resolves circular import
 from langgraph.graph import END
 from app.agent.conversation_router.edges import after_analysis
 

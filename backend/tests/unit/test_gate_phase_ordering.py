@@ -10,8 +10,6 @@ import pytest
 from langgraph.graph import END
 from langgraph.types import Command, Send
 
-import app.agent.bootstrap.graph  # noqa: F401  # resolves circular import
-
 from app.agent.bootstrap.phase_machine import get_layer_dimensions
 
 

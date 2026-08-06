@@ -1,6 +1,5 @@
 """AgentState Wave M1 conservative additions tests."""
 
-import app.agent.bootstrap.graph  # noqa: F401  # resolves bootstrap<->plan_state circular import
 from app.agent.plan_state.state import AgentState, create_initial_state
 
 

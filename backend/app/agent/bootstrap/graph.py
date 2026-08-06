@@ -2,14 +2,13 @@
 
 from typing import Dict, Any, List, Literal, Optional
 from langgraph.graph import StateGraph, END, START
+from langchain_core.messages import HumanMessage
 
 from app.agent.plan_state.state import AgentState, create_initial_state
 from app.agent.bootstrap.phase_machine import PlanningPhase, get_layer_dimensions
-from app.agent.conversation_router import after_conversation, after_analysis, conversation_node
 from app.agent.tools import execute_tools_node
 from app.agent.l1_observe import analyze_dimension, DIMENSION_NAMES
 from app.agent.plan_state import layer_completion_check
-from app.agent.bootstrap.gis_agent_entry import gis_agent_node, _gis_error_handler
 from app.agent.bootstrap.layer_aggregate_node import layer_aggregate_node
 from app.agent.bootstrap.layer_router import (
     l1_worker_node,
@@ -18,6 +17,7 @@ from app.agent.bootstrap.layer_router import (
     advance_phase_node,
 )
 from app.agent.bootstrap import post_l3_main_nodes
+from app.agent.bootstrap.post_l3_main_nodes import _STAGE_FORWARD_TARGET, _pass_gate, _dump
 
 from app.utils.logger import get_logger
 logger = get_logger(__name__)
@@ -115,6 +115,21 @@ def route_after_deliver(state: Dict[str, Any]) -> str:
     return "human_review"
 
 
+def route_after_human_review(state: Dict[str, Any]) -> str:
+    """Route post-HITL resume: approve forwards, reject goes to conversation."""
+    decisions = state.get("human_review_decisions") or {}
+    paused_stage = state.get("paused_stage")
+    action = decisions.get("action") if isinstance(decisions, dict) else None
+    if action == "approve":
+        if paused_stage and paused_stage in _STAGE_FORWARD_TARGET:
+            target = _STAGE_FORWARD_TARGET[paused_stage]
+            return END if target == "__end__" else target
+        return END
+    if action == "reject":
+        return "conversation"
+    return END
+
+
 def create_unified_planning_graph(checkpointer=None) -> StateGraph:
     """创建统一规划图 - 纯函数，每次返回新图。
 
@@ -124,6 +139,8 @@ def create_unified_planning_graph(checkpointer=None) -> StateGraph:
     reconcile/deliver/human_review），L3 gate PASS 后经 advance_phase 自动进入
     parse，不再依赖 gis_agent 黑盒节点。
     """
+    from app.agent.conversation_router import after_conversation, after_analysis, conversation_node
+
     logger.info("[图构建] 构建规划图")
     builder = StateGraph(AgentState)
 
@@ -174,7 +191,11 @@ def create_unified_planning_graph(checkpointer=None) -> StateGraph:
         {"deliver": "deliver", "execute": "execute", "human_review": "human_review"})
     builder.add_conditional_edges("deliver", route_after_deliver,
         {END: END, "validate": "validate", "human_review": "human_review"})
-    builder.add_conditional_edges("human_review", lambda state: END, {END: END})
+    builder.add_conditional_edges("human_review", route_after_human_review,
+        {"parse": "parse", "ground": "ground", "select": "select",
+         "execute": "execute", "validate": "validate", "reconcile": "reconcile",
+         "deliver": "deliver", "conversation": "conversation",
+         END: END})
 
     return builder.compile(checkpointer=checkpointer)
 
@@ -183,33 +204,57 @@ async def human_review_node(state: Dict[str, Any]) -> Dict[str, Any]:
     """Human review node for the main-graph post-L3 chain.
 
     Collects HUMAN-gate items (or retry-exhaustion items) into
-    ``human_review_items``; pauses via interrupt() when a checkpointer is
-    present, otherwise records the items and continues to END.
+    ``human_review_items``; publishes a pause event; pauses via interrupt()
+    when a checkpointer is present, otherwise records the items and continues
+    to END.
     """
     from langgraph.types import interrupt
 
-    items = post_l3_main_nodes.collect_human_review_items(state)
+    paused_stage, items = post_l3_main_nodes.collect_human_review_items(state)
     if not items:
         logger.info("[main:human_review] no items; chain continues to END")
-        return {"human_review_items": []}
+        return {"human_review_items": [], "paused_stage": None}
+
+    session_id = state.get("session_id")
+    if session_id:
+        try:
+            from app.services.sse import sse_manager
+
+            await sse_manager.publish(session_id, {
+                "type": "human_review_paused",
+                "paused_stage": paused_stage,
+                "reason": "post_l3_human_review",
+                "item_count": len(items),
+            })
+        except Exception as e:
+            logger.warning("[main:human_review] SSE publish failed: %s", e)
 
     logger.info("[main:human_review] collected %d items; INTERRUPT awaiting review", len(items))
     decisions = interrupt(
         {
             "human_review_items": items,
+            "paused_stage": paused_stage,
             "error_feedback": dict(state.get("error_feedback") or {}),
             "reason": "post_l3_human_review",
         }
     )
     logger.info("[main:human_review] RESUME decisions received: %s", decisions)
-    return {
+    decisions = decisions or {}
+    result = {
         "human_review_items": items,
+        "paused_stage": paused_stage,
         "human_review_decisions": decisions,
     }
+    action = decisions.get("action") if isinstance(decisions, dict) else None
+    if action == "approve" and paused_stage:
+        result[f"{paused_stage}_gate"] = _dump(_pass_gate(paused_stage))
+    elif action == "reject":
+        feedback = decisions.get("feedback") if isinstance(decisions, dict) else None
+        result["messages"] = [HumanMessage(content=feedback or "方案已拒绝，请调整后重新规划")]
+    return result
 
 
 __all__ = [
     "AgentState", "PlanningPhase",
     "create_unified_planning_graph",
-    "gis_agent_node",
 ]

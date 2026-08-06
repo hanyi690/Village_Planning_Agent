@@ -9,13 +9,6 @@ from typing import TypedDict, List, Dict, Any, Optional, Annotated
 from langchain_core.messages import BaseMessage
 from langgraph.graph.message import add_messages
 
-from app.agent.bootstrap.phase_machine import (
-    PlanningPhase,
-    get_layer_name,
-    _phase_to_layer,
-    _layer_to_phase,
-)
-
 # Use plain add_messages reducer.
 # DeltaChannel is NOT supported with SqliteSaver (requires per-channel blob table,
 # only InMemorySaver / PostgresSaver support delta chains).
@@ -232,15 +225,21 @@ class AgentState(TypedDict, total=False):
     # GROUND 输出
     grounding_result: Optional[Any]  # GroundingResult (typed)
     ground_gate: Optional[Any]  # GateDecision
+    grounding_result_ref: Optional[Dict[str, Any]]  # GroundingResult artifact ref (audit-only, no loader; crash recovery deferred)
     # SELECT 输出
     site_selection: Optional[Any]  # SiteSelectionDecision (typed)
     land_design_briefs: List[Any]  # list[LandDesignBrief]
     select_gate: Optional[Any]  # GateDecision
+    site_selection_ref: Optional[Dict[str, Any]]  # SiteSelectionDecision artifact ref (audit-only, no loader; crash recovery deferred)
     # EXECUTE 输出
     execution_plan: Optional[Any]  # ExecutionPlan (typed)
     parcel_changeset: Optional[Any]  # ParcelChangeSet (typed)
     layout_configs: List[Dict[str, Any]]
     allocated_geojson: Dict[str, Any]
+    planned_state: Optional[Any]  # PlannedState (typed) - EXECUTE output
+    execution_errors: Annotated[List[Dict[str, Any]], _replace_or_merge_lists]  # EXECUTE errors
+    parcel_changeset_ref: Optional[Dict[str, Any]]  # ParcelChangeSet artifact ref (audit-only, no loader; crash recovery deferred)
+    planned_state_ref: Optional[Dict[str, Any]]  # PlannedState artifact ref (audit-only, no loader; crash recovery deferred)
     # VALIDATE 输出
     validation_report: Optional[Any]  # ValidationReport (typed)
     validate_gate: Optional[Any]  # GateDecision
@@ -258,6 +257,7 @@ class AgentState(TypedDict, total=False):
     error_feedback: Dict[str, str]
     human_review_items: List[Dict[str, Any]]
     human_review_decisions: Optional[Any]
+    paused_stage: Optional[str]  # stage that paused the post-L3 chain for HITL
 
 
 # ==========================================
@@ -274,6 +274,8 @@ def create_initial_state(
     village_name: str = "",
 ) -> Dict[str, Any]:
     """创建初始状态"""
+    from app.agent.bootstrap.phase_machine import PlanningPhase
+
     return {
         "session_id": session_id,
         "project_name": project_name,
@@ -340,6 +342,12 @@ def create_initial_state(
         "parcel_changeset": None,
         "layout_configs": [],
         "allocated_geojson": {},
+        "planned_state": None,
+        "execution_errors": [],
+        "grounding_result_ref": None,
+        "site_selection_ref": None,
+        "parcel_changeset_ref": None,
+        "planned_state_ref": None,
         "validation_report": None,
         "validate_gate": None,
         "reconciliation_report": None,
@@ -353,6 +361,7 @@ def create_initial_state(
         "error_feedback": {},
         "human_review_items": [],
         "human_review_decisions": None,
+        "paused_stage": None,
     }
 
 
@@ -374,6 +383,8 @@ def state_to_ui_status(state: Dict[str, Any], db_session: Optional[Dict] = None,
 
     注意：reports 字段已移除，前端应从数据库 API 获取报告内容
     """
+    from app.agent.bootstrap.phase_machine import get_layer_name, _phase_to_layer
+
     phase = state.get("phase", "init")
     current_layer = _phase_to_layer(phase)
     if current_layer is None:
@@ -382,11 +393,20 @@ def state_to_ui_status(state: Dict[str, Any], db_session: Optional[Dict] = None,
     metadata = state.get("metadata", {})
     progress = metadata.get("progress", (current_layer / 3) * 100 if current_layer else 0)
 
-    # Determine status based on phase and interrupt state
-    if phase == "completed":
-        status = "completed"
-    elif is_interrupted:
+    deliver_gate = state.get("deliver_gate")
+    deliver_pass = False
+    if deliver_gate is not None:
+        route = getattr(deliver_gate, "feedback_route", None)
+        if route is None and isinstance(deliver_gate, dict):
+            route = deliver_gate.get("feedback_route")
+        deliver_pass = route == "PASS"
+
+    if is_interrupted:
         status = "paused"
+    elif phase == "completed" and deliver_pass:
+        status = "completed"
+    elif phase == "completed":
+        status = "running"
     elif phase == "init":
         status = "pending"
     else:
