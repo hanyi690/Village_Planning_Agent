@@ -12,13 +12,24 @@ from app.modules.schema.contracts.validation_report_contracts import ValidationC
 
 
 def test_statutory_layers_complete_passes():
-    exported = "\n".join(f"output/layer_{l}.geojson" for l in REQUIRED_STATUTORY_LAYERS)
+    from app.modules.schema.output.gdb import GDB_LAYER_REGISTRY
+
+    exported = "\n".join(
+        GDB_LAYER_REGISTRY[l]["source"] for l in REQUIRED_STATUTORY_LAYERS
+    )
     result = check_statutory_layers_complete({"exported_files": [exported]})
     assert result == []
 
 
 def test_statutory_layers_complete_blocks_on_missing():
-    exported = "output/layer_admin_area.geojson\noutput/layer_planned_landuse.geojson"
+    from app.modules.schema.output.gdb import GDB_LAYER_REGISTRY
+
+    exported = "\n".join(
+        [
+            GDB_LAYER_REGISTRY["admin_area"]["source"],
+            GDB_LAYER_REGISTRY["planned_landuse"]["source"],
+        ]
+    )
     result = check_statutory_layers_complete({"exported_files": [exported]})
     assert len(result) > 0
     assert all(item.blocking for item in result)

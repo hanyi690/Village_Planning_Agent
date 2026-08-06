@@ -67,7 +67,7 @@ def test_merge_program_fragments():
     assert p.omissions == ["消防通道"]
     assert len(p.evidence_gaps) == 1
     assert len(p.dimension_provenance) == 2
-    assert p.sources == []
+    assert [s.reference for s in p.sources] == ["l3_plan"]
 
 
 @pytest.mark.asyncio

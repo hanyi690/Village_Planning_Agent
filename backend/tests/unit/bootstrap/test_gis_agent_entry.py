@@ -94,10 +94,10 @@ async def test_gis_agent_node_writes_delivery_manifest(monkeypatch):
     assert out["delivery_manifest"] is manifest
     assert out["validation_report_ref"] is not None
     assert out["reconciliation_report_ref"] is not None
-    # conservative: legacy fields still written
-    assert "gis_layout_configs" in out
-    assert "gis_validation_result" in out
-    assert "gis_export_result" in out
+    # legacy gis_* fields removed (use delivery_manifest)
+    assert "gis_layout_configs" not in out
+    assert "gis_validation_result" not in out
+    assert "gis_export_result" not in out
     assert any(m.content for m in out["messages"])
 
 

@@ -1,6 +1,6 @@
 """EXECUTE worker contracts: ExecutionPlan / WorkerResult / allocation contracts (Wave O)."""
 
-from app.modules.schema.contracts import (
+from app.modules.schema.contracts.execution_plan_contracts import (
     ExecutionPlan,
     ExecutionResult,
     ParcelAllocationProblem,

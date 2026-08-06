@@ -132,6 +132,7 @@ def test_facility_mclp_sets_anchor(make_bundle):
     assert facility.anchor_point[0] == pytest.approx(0.5, abs=1e-6)
     assert facility.anchor_point[1] == pytest.approx(0.5, abs=1e-6)
     assert decision.decision_factors["facility_count"] == 1
-    placed = decision.decision_factors["facility_placements"]["文化活动室"]
+    placed = decision.decision_factors["facility_placements"]["facility_0"]
     assert placed["status"] == "placed"
+    assert placed["facility_type"] == "文化活动室"
     assert placed["bsm"] == "P003"

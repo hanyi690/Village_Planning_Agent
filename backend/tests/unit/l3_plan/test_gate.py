@@ -62,11 +62,11 @@ def test_explore_when_gaps():
     assert any(r.request_type == "evidence_gap" for r in d.pending_requests)
 
 
-def test_explore_when_no_sources():
+def test_pass_when_interventions_exist_without_sources():
     p = _program(sources=[])
     d = evaluate_l3_gate(p)
-    assert d.passed is False
-    assert d.feedback_route == "EXPLORE"
+    assert d.passed is True
+    assert d.feedback_route is None
 
 
 def test_pass_with_sources_and_warning_gaps_resolved():

@@ -68,8 +68,15 @@ def test_explore_when_gaps():
     assert any(p.request_type == "evidence_gap" for p in d.pending_requests)
 
 
-def test_explore_when_no_sources():
+def test_pass_when_no_sources_but_goals_present():
     s = _strategy(sources=[])
+    d = evaluate_l2_gate(s)
+    assert d.passed is True
+    assert d.feedback_route is None
+
+
+def test_explore_when_no_sources_and_no_goals():
+    s = _strategy(sources=[], development_goals=[])
     d = evaluate_l2_gate(s)
     assert d.passed is False
     assert d.feedback_route == "EXPLORE"

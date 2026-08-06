@@ -66,8 +66,15 @@ def test_gate_routes_to_human_when_snapshot_empty():
     assert decision.feedback_route == "HUMAN"
 
 
-def test_gate_does_not_pass_when_no_sources():
+def test_gate_passes_when_no_sources_but_facts_present():
     decision = evaluate_l1_gate(_base_snapshot(sources=[]), run_id="r1", context_version="v1")
+    assert decision.passed is True
+    assert decision.feedback_route is None
+
+
+def test_gate_routes_to_explore_when_no_facts_and_no_sources():
+    snap = _base_snapshot(sources=[], facts=[])
+    decision = evaluate_l1_gate(snap, run_id="r1", context_version="v1")
     assert decision.passed is False
     assert decision.feedback_route == "EXPLORE"
 

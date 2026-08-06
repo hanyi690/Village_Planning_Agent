@@ -55,7 +55,7 @@ def test_merge_strategy_fragments():
     assert s.spatial_structure == "集聚提升类"
     assert len(s.dimension_provenance) == 2
     assert len(s.evidence_gaps) == 1
-    assert s.sources == []
+    assert [src.reference for src in s.sources] == ["l2_observe"]
 
 
 @pytest.mark.asyncio

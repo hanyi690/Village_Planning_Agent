@@ -79,6 +79,32 @@ def test_no_reverse_dependencies(dir_rel, patterns, desc):
 # ── KG builder file structure invariant ──────────────────────────────
 
 
+def test_no_top_level_contracts_barrel_imports():
+    """No app code imports from the contracts barrel (top-level wildcard).
+
+    All business code must import from a specific contract file, e.g.
+    ``from app.modules.schema.contracts.l1_contracts import L1Snapshot``.
+    """
+    pattern = re.compile(r"^\s*from app\.modules\.schema\.contracts\s+import\b")
+    offenders = []
+    for py_file in (BACKEND_ROOT / "app").rglob("*.py"):
+        if "__pycache__" in str(py_file):
+            continue
+        content = py_file.read_text(encoding="utf-8")
+        for line_num, line in enumerate(content.splitlines(), 1):
+            stripped = line.strip()
+            if stripped.startswith("#"):
+                continue
+            if pattern.match(line):
+                offenders.append(
+                    f"{py_file.relative_to(BACKEND_ROOT)}:{line_num}: {stripped}"
+                )
+    assert not offenders, (
+        "Contracts barrel (top-level wildcard) imports forbidden:\n"
+        + "\n".join(offenders)
+    )
+
+
 def test_kg_builder_subpackage_has_expected_files():
     """builder/ subpackage has the expected files for v5 composition architecture."""
     builder_dir = BACKEND_ROOT / "app" / "modules" / "kg" / "builder"

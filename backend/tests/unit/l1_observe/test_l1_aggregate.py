@@ -76,6 +76,7 @@ async def test_l1_aggregate_produces_snapshot_and_review(tmp_path, monkeypatch):
     assert payload["facts"]
     assert payload["constraints"]
     assert payload["classification_refs"]
+    assert payload["sources"]
 
     review_id = result["l1_review_id"]
     pkg = read_review_package(run_id, "l1_observe", review_id, base_dir=str(tmp_path))
@@ -83,8 +84,8 @@ async def test_l1_aggregate_produces_snapshot_and_review(tmp_path, monkeypatch):
     assert "证据缺口" in pkg.summary_md
 
     gate = result["l1_gate_decision"]
-    assert gate["passed"] is False
-    assert gate["feedback_route"] == "EXPLORE"
+    assert gate["passed"] is True
+    assert gate["feedback_route"] is None
 
 
 @pytest.mark.asyncio

@@ -50,7 +50,7 @@ def _l1_complete_state(gate_route, **overrides):
 
 
 def test_after_analysis_explore_does_not_advance_phase():
-    """L1 completion with EXPLORE gate -> re-dispatch via layer_router, no phase advance."""
+    """L1 completion with EXPLORE gate -> re-dispatch to worker, no phase advance."""
     from app.agent.conversation_router.edges import after_analysis
 
     state = _l1_complete_state("EXPLORE")
@@ -58,7 +58,7 @@ def test_after_analysis_explore_does_not_advance_phase():
 
     assert isinstance(result, list) and len(result) > 0
     assert all(isinstance(s, Send) for s in result)
-    assert all(s.node == "layer_router" for s in result)
+    assert all(s.node == "l1_worker" for s in result)
     # EXPLORE is NOT a PASS -> phase must not advance
     assert all(s.arg.get("phase") == "layer1" for s in result)
 
@@ -77,9 +77,9 @@ def test_after_analysis_pass_routes_to_advance_phase_and_advances():
     assert cmd.update["phase"] == "layer2"
     assert cmd.update["previous_layer"] == 1
     assert cmd.update["layer_just_completed"] is None
-    # Routes to the next layer's dispatch (Sends to layer_router) or END when nothing ready
+    # Routes to the next layer's dispatch (Sends to worker) or END when nothing ready
     if isinstance(cmd.goto, list):
-        assert all(s.node == "layer_router" for s in cmd.goto)
+        assert all(s.node == "l2_worker" for s in cmd.goto)
     else:
         assert cmd.goto == END
 
@@ -101,7 +101,7 @@ def test_after_analysis_human_and_rework_do_not_advance():
 
     rework = after_analysis(_l1_complete_state("L1"))
     assert isinstance(rework, list)
-    assert all(s.node == "layer_router" for s in rework)
+    assert all(s.node == "l1_worker" for s in rework)
     assert all(s.arg.get("phase") == "layer1" for s in rework)
 
 

@@ -33,7 +33,9 @@ REQUIRED_LAYERS = (
 
 
 def _full_export():
-    lines = [f"output/layer_{l}.geojson" for l in REQUIRED_LAYERS]
+    from app.modules.schema.output.gdb import GDB_LAYER_REGISTRY
+
+    lines = [GDB_LAYER_REGISTRY[l]["source"] for l in REQUIRED_LAYERS]
     return {"exported_files": ["\n".join(lines)]}
 
 
@@ -98,7 +100,7 @@ def test_build_deliverables_from_export():
     dels = build_deliverables_from_export(_full_export())
     assert len(dels) == 1
     assert dels[0].deliverable_id == "deliverable-0"
-    assert "admin_area" in dels[0].path
+    assert "current/boundary.geojson" in dels[0].path
 
 
 def test_build_deliverables_from_none():

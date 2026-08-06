@@ -13,13 +13,18 @@ def test_initial_state_has_m1_fields():
     assert state["context_version"] == ""
 
 
-def test_initial_state_keeps_legacy_gis_fields():
+def test_initial_state_removes_legacy_gis_fields():
     state = create_initial_state(session_id="s1", project_name="金田村", village_data="")
-    assert state["gis_layout_configs"] == []
-    assert state["gis_export_result"] == {}
-    assert state["gis_render_result"] == []
-    assert state["gis_validation_result"] == {}
-    assert state["gis_execution_errors"] == []
+    for key in (
+        "gis_layout_configs",
+        "gis_export_result",
+        "gis_render_result",
+        "gis_render_artifact",
+        "gis_validation_result",
+        "gis_execution_errors",
+        "gis_conflict_result",
+    ):
+        assert key not in state, key
 
 
 def test_m1_fields_are_in_typed_state():
@@ -32,6 +37,14 @@ def test_m1_fields_are_in_typed_state():
         "context_version",
     ):
         assert key in keys, key
-    # legacy fields still declared (conservative, not deleted)
-    for key in ("gis_layout_configs", "gis_export_result", "gis_render_result"):
-        assert key in keys, key
+    # legacy gis_* fields removed (deprecated, use delivery_manifest)
+    for key in (
+        "gis_layout_configs",
+        "gis_export_result",
+        "gis_render_result",
+        "gis_render_artifact",
+        "gis_validation_result",
+        "gis_execution_errors",
+        "gis_conflict_result",
+    ):
+        assert key not in keys, key
