@@ -220,6 +220,26 @@ class ReportStore:
         logger.info(f"[ReportStore] Bulk saved {len(reports)} reports: {[r['dimension_key'] for r in reports]}")
         return report_ids
 
+    async def update_summary(self, session_id: str, dim_key: str, version: int, summary: str) -> bool:
+        """Update the summary of an existing report (async background enrichment).
+
+        Returns True if updated, False if the report row was not found.
+        """
+        async with get_async_session() as db:
+            result = await db.execute(
+                select(DimensionReport).where(
+                    DimensionReport.session_id == session_id,
+                    DimensionReport.dimension_key == dim_key,
+                    DimensionReport.version == version,
+                )
+            )
+            report = result.scalar_one_or_none()
+            if report is None:
+                return False
+            report.summary = summary
+            await db.commit()
+            return True
+
     async def _generate_summary(self, content: str, dim_key: str = "", layer: int = 1) -> str:
         """Generate structured JSON summary preserving key data for downstream use.
 

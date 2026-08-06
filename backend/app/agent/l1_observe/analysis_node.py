@@ -22,7 +22,9 @@ from app.utils.logger import get_logger
 from app.agent.explore.service import retrieve_evidence, render_evidence_prompt_section
 from app.modules.schema.contracts.evidence_contracts import ExplorationRequest
 from app.agent.common.dimension_runtime import (
+    enrich_summary_background,
     generate_summary,
+    generate_summary_regex,
     load_dependency_reports,
     publish_dimension_complete,
     publish_dimension_delta,
@@ -309,7 +311,8 @@ async def analyze_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
     report_id = str(uuid.uuid4())
 
     # 8. Generate structured summary (before SSE event so it can reference it)
-    structured_summary_str = await _generate_summary(dim_key, dim_layer, llm_response, rag_log)
+    structured_summary_str = generate_summary_regex(dim_key, dim_layer, llm_response)
+    asyncio.create_task(enrich_summary_background(dim_key, dim_layer, llm_response, session_id, next_version))
 
     # 9. Prepare pending report data for batch write
     phase_key = f"layer{dim_layer}"

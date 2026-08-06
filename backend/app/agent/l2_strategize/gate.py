@@ -70,7 +70,7 @@ def evaluate_l2_gate(
         )
 
     actionable_gaps = [g for g in strategy.evidence_gaps if g.severity in ("warning", "error")]
-    missing_sources = not strategy.sources
+    missing_sources = not strategy.sources and not strategy.development_goals
     if missing_sources or actionable_gaps:
         pending: list[PendingRequest] = []
         if missing_sources:

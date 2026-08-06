@@ -97,7 +97,7 @@ def evaluate_l3_gate(
         )
 
     actionable_gaps = [g for g in program.evidence_gaps if g.severity in ("warning", "error")]
-    missing_sources = not program.sources
+    missing_sources = not program.sources and not program.interventions
     if missing_sources or actionable_gaps:
         pending: list[PendingRequest] = []
         if missing_sources:

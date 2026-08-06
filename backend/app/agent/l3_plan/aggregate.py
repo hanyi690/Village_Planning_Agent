@@ -10,6 +10,7 @@ from __future__ import annotations
 from typing import Any
 
 from app.modules.ports.artifact_store import ArtifactRef
+from app.modules.schema.contracts.evidence_contracts import EvidenceSource
 from app.modules.schema.contracts.l1_contracts import EvidenceGap, L1Snapshot
 from app.modules.schema.contracts.l2_contracts import L2Strategy
 from app.modules.schema.contracts.l3_contracts import (
@@ -96,6 +97,7 @@ def merge_program_fragments(
     evidence_gaps: list[EvidenceGap] = []
     program_issues: list[ProgramIssue] = []
     dimension_provenance: list[Provenance] = []
+    source_refs: list[str] = []
 
     for frag in fragments:
         interventions.extend(frag.interventions)
@@ -103,6 +105,8 @@ def merge_program_fragments(
         omissions.extend(frag.omissions)
         evidence_gaps.extend(frag.evidence_gaps)
         program_issues.extend(frag.program_issues)
+        if frag.provenance is not None and frag.provenance.source:
+            source_refs.append(frag.provenance.source)
         dimension_provenance.append(
             frag.provenance
             if frag.provenance is not None
@@ -121,7 +125,10 @@ def merge_program_fragments(
         dependencies=_dedup_dependencies(dependencies),
         omissions=_dedup(omissions),
         evidence_gaps=_dedup_by_id(evidence_gaps, id_attr="gap_id"),
-        sources=[],
+        sources=[
+            EvidenceSource(source_type="report", reference=s)
+            for s in _dedup(source_refs)
+        ],
         program_issues=program_issues,
         dimension_provenance=dimension_provenance,
         provenance=None,
@@ -252,7 +259,7 @@ async def l3_aggregate(
             CompilationProfile.L3_PLANNING,
             dimension_key=dim_key,
             content=content,
-            instruction=content,
+            instruction=rec.get("instruction", "") or "",
             summary=summary,
             report_id=report_id,
             run_id=run_id,

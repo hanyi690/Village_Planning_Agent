@@ -10,6 +10,7 @@ from __future__ import annotations
 from typing import Any
 
 from app.modules.ports.artifact_store import ArtifactRef
+from app.modules.schema.contracts.evidence_contracts import EvidenceSource
 from app.modules.schema.contracts.l1_contracts import EvidenceGap
 from app.modules.schema.contracts.l2_contracts import L2Strategy, L2StrategyFragment
 from app.modules.schema.contracts.parsing_contracts import CompilationProfile
@@ -34,6 +35,16 @@ def _dedup(items: list[str]) -> list[str]:
     return out
 
 
+def _dedup_sources(sources: list[EvidenceSource]) -> list[EvidenceSource]:
+    seen: set[str] = set()
+    out: list[EvidenceSource] = []
+    for s in sources:
+        if s.reference not in seen:
+            seen.add(s.reference)
+            out.append(s)
+    return out
+
+
 def merge_strategy_fragments(
     fragments: list[L2StrategyFragment],
     run_id: str,
@@ -46,6 +57,7 @@ def merge_strategy_fragments(
     strategy_issues: list[Any] = []
     spatial_structure = ""
     dimension_provenance: list[Provenance] = []
+    sources: list[EvidenceSource] = []
 
     for frag in fragments:
         goals.extend(frag.goals)
@@ -66,6 +78,13 @@ def merge_strategy_fragments(
                 trace=[f"fragment:{frag.dimension_key}"],
             )
         )
+        if frag.provenance and frag.provenance.source:
+            sources.append(
+                EvidenceSource(
+                    source_type="report",
+                    reference=frag.provenance.source,
+                )
+            )
 
     return L2Strategy(
         context_version="",
@@ -76,7 +95,7 @@ def merge_strategy_fragments(
         strategy_conflicts=conflicts,
         evidence_refs=[],
         evidence_gaps=evidence_gaps,
-        sources=[],
+        sources=_dedup_sources(sources),
         strategy_issues=strategy_issues,
         dimension_provenance=dimension_provenance,
     )
@@ -108,7 +127,7 @@ async def l2_aggregate(
             CompilationProfile.L2_STRATEGY,
             dimension_key=dim_key,
             content=content,
-            instruction=content,
+            instruction=rec.get("instruction", "") or "",
             summary=summary,
             report_id=report_id,
             run_id=run_id,

@@ -12,6 +12,7 @@ from typing import Any
 from app.modules.ports.artifact_store import ArtifactRef
 from app.modules.schema.contracts.classification_ref import ClassificationRef
 from app.modules.schema.contracts.contract_meta import StageIssue
+from app.modules.schema.contracts.evidence_contracts import EvidenceSource
 from app.modules.schema.contracts.l1_contracts import EvidenceGap, L1DimensionFragment, L1Snapshot
 from app.modules.schema.contracts.parsing_contracts import CompilationProfile
 from app.modules.schema.contracts.provenance import Provenance
@@ -46,6 +47,7 @@ def merge_fragments(
     evidence_gaps: list[EvidenceGap] = []
     classification_refs: list[ClassificationRef] = []
     dimension_provenance: list[Provenance] = []
+    source_refs: list[str] = []
 
     for frag in fragments:
         facts.extend(frag.facts)
@@ -64,6 +66,8 @@ def merge_fragments(
                 trace=[f"fragment:{frag.dimension_key}"],
             )
         )
+        if frag.provenance is not None and frag.provenance.source:
+            source_refs.append(frag.provenance.source)
 
     snapshot = L1Snapshot(
         context_version="",
@@ -73,7 +77,10 @@ def merge_fragments(
         issues=issues,
         opportunities=_dedup(opportunities),
         evidence_gaps=evidence_gaps,
-        sources=[],
+        sources=[
+            EvidenceSource(source_type="report", reference=ref)
+            for ref in _dedup(source_refs)
+        ],
         classification_refs=classification_refs,
         dimension_provenance=dimension_provenance,
     )
@@ -124,7 +131,7 @@ async def l1_aggregate(
             CompilationProfile.L1_OBSERVATION,
             dimension_key=dim_key,
             content=content,
-            instruction=content,
+            instruction=rec.get("instruction", "") or "",
             summary=summary,
             report_id=report_id,
             run_id=run_id,

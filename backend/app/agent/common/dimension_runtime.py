@@ -258,54 +258,20 @@ async def load_dependency_reports(
     same_layer_deps = getattr(cfg, "depends_on", [])
     if same_layer_deps:
         contexts = []
-        missing_deps = []
-
-        max_wait_seconds = 30 if is_revision else 120
-        check_interval = 2
-
         for dep_key in same_layer_deps:
-            report = None
-            waited = 0
-
-            # 轮询等待：从 DB 获取（上游节点完成后会立即写入 DB）
-            while waited < max_wait_seconds:
-                db_report = await store.get_latest(session_id, dep_key)
-                if db_report:
-                    report = db_report
-                    contexts.append(f"【{dep_key}】分析结果：\n{report}")
-                    logger.info(f"[dimension_runtime] {dimension_key}: 从DB获取依赖 {dep_key}（等待 {waited}s）")
-                    break
-
-                await asyncio.sleep(check_interval)
-                waited += check_interval
-
-            if not report:
-                missing_deps.append(dep_key)
-
-        if missing_deps:
-            # Fallback: retry each missing dep individually
-            logger.warning(
-                f"[dimension_runtime] {dimension_key}: DB 中依赖报告缺失 {missing_deps}，尝试回退获取"
+            db_report = await store.get_latest(session_id, dep_key)
+            if db_report:
+                contexts.append(f"【{dep_key}】分析结果：\n{db_report}")
+                continue
+            # Fallback: get_latest_report
+            dep_report = await store.get_latest_report(session_id, dep_key)
+            if dep_report:
+                contexts.append(f"【{dep_key}】分析结果：\n{dep_report['content']}")
+                continue
+            raise DependencyError(
+                f"维度 {dimension_key} 的同层依赖 {dep_key} 报告缺失"
+                "（_ready_dispatch 应保证依赖已完成，此为调度 bug）"
             )
-            recovered_deps = []
-            still_missing = []
-            for dep_key in missing_deps:
-                dep_report = await store.get_latest_report(session_id, dep_key)
-                if dep_report:
-                    contexts.append(f"【{dep_key}】分析结果：\n{dep_report['content']}")
-                    recovered_deps.append(dep_key)
-                    logger.info(f"[dimension_runtime] {dimension_key}: 从回退获取依赖 {dep_key}")
-                else:
-                    still_missing.append(dep_key)
-
-            if still_missing:
-                logger.error(
-                    f"[dimension_runtime] {dimension_key}: 依赖报告加载失败（DB + 回退均失败）: {still_missing}"
-                )
-                raise DependencyError(f"维度 {dimension_key} 的依赖报告加载失败: {still_missing}")
-            else:
-                logger.info(f"[dimension_runtime] {dimension_key}: 通过回退恢复依赖 {recovered_deps}")
-
         same_layer_contexts = "\n\n".join(contexts)
         logger.info(f"[dimension_runtime] {dimension_key}: 加载同层依赖 {len(same_layer_deps)} 个")
 
@@ -362,54 +328,20 @@ async def load_layered_dependency_reports(
     same_layer_deps = getattr(cfg, "depends_on", [])
     if same_layer_deps:
         contexts = []
-        missing_deps = []
-
-        max_wait_seconds = 30 if is_revision else 120
-        check_interval = 2
-
         for dep_key in same_layer_deps:
-            report = None
-            waited = 0
-
-            # 轮询等待：从 DB 获取（上游节点完成后会立即写入 DB）
-            while waited < max_wait_seconds:
-                db_report = await store.get_latest(session_id, dep_key)
-                if db_report:
-                    report = db_report
-                    contexts.append(f"【{dep_key}】分析结果：\n{report}")
-                    logger.info(f"[dimension_runtime] {dimension_key}: 从DB获取依赖 {dep_key}（等待 {waited}s）")
-                    break
-
-                await asyncio.sleep(check_interval)
-                waited += check_interval
-
-            if not report:
-                missing_deps.append(dep_key)
-
-        if missing_deps:
-            # Fallback: retry each missing dep individually
-            logger.warning(
-                f"[dimension_runtime] {dimension_key}: DB 中依赖报告缺失 {missing_deps}，尝试回退获取"
+            db_report = await store.get_latest(session_id, dep_key)
+            if db_report:
+                contexts.append(f"【{dep_key}】分析结果：\n{db_report}")
+                continue
+            # Fallback: get_latest_report
+            dep_report = await store.get_latest_report(session_id, dep_key)
+            if dep_report:
+                contexts.append(f"【{dep_key}】分析结果：\n{dep_report['content']}")
+                continue
+            raise DependencyError(
+                f"维度 {dimension_key} 的同层依赖 {dep_key} 报告缺失"
+                "（_ready_dispatch 应保证依赖已完成，此为调度 bug）"
             )
-            recovered_deps = []
-            still_missing = []
-            for dep_key in missing_deps:
-                dep_report = await store.get_latest_report(session_id, dep_key)
-                if dep_report:
-                    contexts.append(f"【{dep_key}】分析结果：\n{dep_report['content']}")
-                    recovered_deps.append(dep_key)
-                    logger.info(f"[dimension_runtime] {dimension_key}: 从回退获取依赖 {dep_key}")
-                else:
-                    still_missing.append(dep_key)
-
-            if still_missing:
-                logger.error(
-                    f"[dimension_runtime] {dimension_key}: 依赖报告加载失败（DB + 回退均失败）: {still_missing}"
-                )
-                raise DependencyError(f"维度 {dimension_key} 的依赖报告加载失败: {still_missing}")
-            else:
-                logger.info(f"[dimension_runtime] {dimension_key}: 通过回退恢复依赖 {recovered_deps}")
-
         same_layer_contexts = "\n\n".join(contexts)
         logger.info(f"[dimension_runtime] {dimension_key}: 加载同层依赖 {len(same_layer_deps)} 个")
 
@@ -561,6 +493,65 @@ async def generate_summary(dimension_key: str, dim_layer: int, content: str) -> 
         return fallback.model_dump_json(ensure_ascii=False)
 
 
+def generate_summary_regex(dimension_key: str, dim_layer: int, content: str) -> str:
+    """Layer-1 only: deterministic regex extraction (zero LLM, instant).
+
+    Returns the BaseDimensionSummary JSON used for the immediate DB write;
+    the Flash-LLM enrichment happens later in the background task.
+    """
+    from app.modules.parsing.schemas import BaseDimensionSummary
+    from app.modules.parsing.summary_generator import (
+        _extract_dimension_metrics,
+        _extract_key_points_regex,
+        _extract_metrics_regex,
+    )
+
+    if not content:
+        return BaseDimensionSummary(
+            dimension_key=dimension_key,
+            layer=dim_layer,
+            word_count=0,
+            text_summary="",
+            metrics={},
+        ).model_dump_json(ensure_ascii=False)
+
+    regex_metrics = _extract_metrics_regex(content)
+    dimension_metrics = _extract_dimension_metrics(dimension_key, content)
+    metrics = {**regex_metrics, **dimension_metrics}
+    key_points = _extract_key_points_regex(content)
+    summary = BaseDimensionSummary(
+        dimension_key=dimension_key,
+        layer=dim_layer,
+        word_count=len(content),
+        key_points=key_points[:5],
+        text_summary=content[:200],
+        metrics=metrics,
+    )
+    return summary.model_dump_json(ensure_ascii=False)
+
+
+async def enrich_summary_background(
+    dimension_key: str,
+    dim_layer: int,
+    content: str,
+    session_id: str,
+    version: int,
+) -> None:
+    """Background task: Flash-LLM summary enrichment + DB update. Non-fatal."""
+    try:
+        from app.modules.parsing.summary_generator import generate_structured_summary
+
+        summary = await generate_structured_summary(dimension_key, dim_layer, content)
+        if not summary:
+            return
+        from app.services.report_store import ReportStore
+
+        store = ReportStore.get_instance()
+        await store.update_summary(session_id, dimension_key, version, summary)
+    except Exception as e:
+        logger.warning(f"[dimension_runtime] background summary enrich failed for {dimension_key}: {e}")
+
+
 __all__ = [
     "RetrievedChunk",
     "RAGRetrievalLog",
@@ -574,4 +565,6 @@ __all__ = [
     "save_report_immediate",
     "save_step_report",
     "generate_summary",
+    "generate_summary_regex",
+    "enrich_summary_background",
 ]

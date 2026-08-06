@@ -25,7 +25,9 @@ from app.core.llm import create_llm
 from app.core.settings import LLM_MODEL, MAX_TOKENS, LLM_STREAM_TIMEOUT
 from app.utils.logger import get_logger
 from app.agent.common.dimension_runtime import (
+    enrich_summary_background,
     generate_summary,
+    generate_summary_regex,
     load_layered_dependency_reports,
     publish_dimension_complete,
     publish_dimension_delta,
@@ -241,7 +243,8 @@ async def analyze_l3_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
     report_id = str(uuid.uuid4())
 
     # 7.5 生成结构化摘要
-    structured_summary_str = await generate_summary(dim_key, dim_layer, llm_response)
+    structured_summary_str = generate_summary_regex(dim_key, dim_layer, llm_response)
+    asyncio.create_task(enrich_summary_background(dim_key, dim_layer, llm_response, session_id, next_version))
 
     # 8. 准备 pending report 数据
     phase_key = f"layer{dim_layer}"

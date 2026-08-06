@@ -51,7 +51,7 @@ def evaluate_l1_gate(
         )
 
     actionable_gaps = [g for g in snapshot.evidence_gaps if g.severity in ("warning", "error")]
-    missing_sources = not snapshot.sources
+    missing_sources = not snapshot.sources and not snapshot.facts
     if missing_sources or actionable_gaps:
         pending: list[PendingRequest] = []
         if missing_sources:
