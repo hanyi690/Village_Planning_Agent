@@ -21,7 +21,7 @@ def test_dependency_graph_artifact_exists():
 
     # Verify the graph contains the new Wave M1/M2 modules
     bootstrap_files = [f for f in imports if "agent/bootstrap/" in f]
-    assert any("post_l3_chain" in f for f in bootstrap_files)
+    assert any("post_l3_main_nodes" in f for f in bootstrap_files)
     assert any("layer_aggregate_node" in f for f in bootstrap_files)
 
     # Verify no kg->data reverse dependency remains

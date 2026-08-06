@@ -111,10 +111,10 @@ def test_mvp_artifacts_importable() -> None:
         assert cls is not None, name
 
 
-def test_post_l3_chain_constructible() -> None:
-    from app.agent.bootstrap.post_l3_chain import build_post_l3_chain
+def test_unified_planning_graph_constructible() -> None:
+    from app.agent.bootstrap.graph import create_unified_planning_graph
 
-    assert callable(build_post_l3_chain)
+    assert callable(create_unified_planning_graph)
 
 
 @pytest.mark.slow

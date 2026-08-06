@@ -9,8 +9,6 @@ cached context when the serialized ``state.context`` is stripped (checkpoint).
 
 import pytest
 
-from app.agent.bootstrap.post_l3_state import PostL3ChainState
-
 
 @pytest.fixture(autouse=True)
 def _clear_context_cache():
@@ -105,13 +103,13 @@ async def test_resolve_context_rebuilds_from_cache(
     await setup()
     try:
         _patch_deps(monkeypatch)
-        from app.agent.bootstrap.post_l3_nodes import _resolve_context
+        from app.agent.bootstrap.post_l3_main_nodes import _resolve_context
         from app.services.context.planning_context import build_planning_context
 
         ctx = await build_planning_context(
             "sess-c1", village_name="金田村", include_reports=False
         )
-        state = PostL3ChainState(session_id="sess-c1", context=None)
+        state = {"session_id": "sess-c1"}
         resolved = await _resolve_context(state)
         assert resolved is ctx
     finally:
@@ -119,10 +117,8 @@ async def test_resolve_context_rebuilds_from_cache(
 
 
 @pytest.mark.asyncio
-async def test_resolve_context_prefers_state_context(pipeline_reset):
-    from app.agent.bootstrap.post_l3_nodes import _resolve_context
+async def test_resolve_context_empty_session_returns_none(pipeline_reset):
+    from app.agent.bootstrap.post_l3_main_nodes import _resolve_context
 
-    fake = object()
-    state = PostL3ChainState(session_id="sess-c1", context=fake)
-    resolved = await _resolve_context(state)
-    assert resolved is fake
+    resolved = await _resolve_context({"session_id": ""})
+    assert resolved is None

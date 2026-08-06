@@ -245,8 +245,7 @@ async def test_compile_program_async_clean_compile_no_llm(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_parse_node_uses_async_entry(monkeypatch):
-    from app.agent.bootstrap.post_l3_nodes import parse_node
-    from app.agent.bootstrap.post_l3_state import PostL3ChainState
+    from app.agent.bootstrap.post_l3_main_nodes import parse_node
 
     captured = {}
 
@@ -256,15 +255,18 @@ async def test_parse_node_uses_async_entry(monkeypatch):
         return object(), [object()], object()
 
     monkeypatch.setattr(
-        "app.agent.bootstrap.post_l3_nodes.compile_program_async", fake_async_compile
+        "app.agent.parse.aggregate.compile_program_async", fake_async_compile
     )
-    state = PostL3ChainState(
-        planning_program=_ambiguous_program(), run_id="r1", context_version="cv"
-    )
+    state = {
+        "session_id": "s1",
+        "run_id": "r1",
+        "context_version": "cv",
+        "planning_program": _ambiguous_program(),
+    }
     out = await parse_node(state)
 
     assert captured["run_id"] == "r1"
-    assert captured["program"] is state.planning_program
+    assert captured["program"] is state["planning_program"]
     assert "intent" in out
     assert "specs" in out
     assert "parse_gate" in out

@@ -2,11 +2,9 @@
 
 Covers ``enrich_program_from_upstream`` (L1/L2 artifact loading into the L3
 program), the re-enabled cross-layer gate checks in ``evaluate_l3_gate`` /
-``evaluate_l2_gate``, and the ``gis_agent_node`` L3 program reuse path.
+``evaluate_l2_gate``, and the post-L3 ``_load_planning_program`` reuse path.
 """
 from __future__ import annotations
-
-from types import SimpleNamespace
 
 import pytest
 
@@ -200,42 +198,12 @@ def test_l2_gate_empty_without_l1_constraints_routes_human():
     assert d.pending_requests == []
 
 
-# ── gis_agent_node L3 program reuse ─────────────────────────────────────
-
-
-def _bundle():
-    from app.modules.schema.types.canonical import VillageBundle
-
-    return VillageBundle(village_name="金田村")
-
-
-def _mock_global_checkpointer(monkeypatch):
-    async def fake_get_global_checkpointer():
-        return object()
-
-    monkeypatch.setattr(
-        "app.database.engine.get_global_checkpointer", fake_get_global_checkpointer
-    )
-
-
-def _context():
-    return SimpleNamespace(
-        bundle=_bundle(),
-        gazetteer=None,
-        kg_session_ref="kg-1",
-        village_name="金田村",
-        context_version="v1",
-        reports={},
-        report_summary_index={},
-        constraint_index=None,
-        village_anchors=[],
-    )
+# ── post-L3 _load_planning_program reuse ────────────────────────────────
 
 
 @pytest.mark.asyncio
-async def test_gis_agent_node_uses_existing_l3_program_ref(monkeypatch, tmp_path):
-    from app.agent.bootstrap.gis_agent_entry import gis_agent_node
-    from app.modules.schema.contracts.delivery_manifest_contracts import DeliveryManifest
+async def test_load_planning_program_from_l3_ref(monkeypatch, tmp_path):
+    from app.agent.bootstrap.post_l3_main_nodes import _load_planning_program
 
     store = FilesystemArtifactStore(base_dir=str(tmp_path))
     program = PlanningProgram(
@@ -259,58 +227,41 @@ async def test_gis_agent_node_uses_existing_l3_program_ref(monkeypatch, tmp_path
         "context_version": "",
     }
 
-    async def fake_build_planning_context(*a, **k):
-        return _context()
-
-    def fake_l3_aggregate(state):
-        raise AssertionError(
-            "l3_aggregate must not be called when state has l3_program_ref"
-        )
-
-    manifest = DeliveryManifest(statutory_complete=True)
-    captured = {}
-
-    class FakeChain:
-        async def ainvoke(self, state, config=None):
-            captured["planning_program"] = state.get("planning_program")
-            return {
-                "delivery_manifest": manifest,
-                "layout_configs": [],
-                "validation_report": SimpleNamespace(overall_passed=True),
-                "reconciliation_report": SimpleNamespace(),
-                "export_result": {"status": "completed", "exported_files": []},
-                "render_result": [],
-                "render_artifact": {},
-                "execution_errors": [],
-            }
-
-    monkeypatch.setattr(
-        "app.services.context.build_planning_context", fake_build_planning_context
-    )
-    monkeypatch.setattr(
-        "app.agent.l3_plan.aggregate.l3_aggregate", fake_l3_aggregate
-    )
     monkeypatch.setattr(
         "app.services.artifact_store.FilesystemArtifactStore",
         lambda base_dir=".run-tmp": FilesystemArtifactStore(base_dir=str(tmp_path)),
     )
-    _mock_global_checkpointer(monkeypatch)
-    monkeypatch.setattr(
-        "app.agent.bootstrap.post_l3_chain.build_post_l3_chain",
-        lambda checkpointer=None: FakeChain(),
-    )
 
-    out = await gis_agent_node(
-        {
-            "session_id": "s1",
-            "config": {"village_name": "金田村"},
-            "user_uploaded_data": {},
-            "messages": [],
-            "l3_program_ref": l3_program_ref,
-        }
+    loaded = _load_planning_program(
+        {"session_id": "s1", "l3_program_ref": l3_program_ref}
     )
-    assert out["delivery_manifest"] is manifest
-    loaded = captured.get("planning_program")
-    assert loaded is not None
-    assert loaded.get("artifact_id") == "l3-s1-v1"
-    assert len(loaded.get("interventions", [])) == 1
+    assert isinstance(loaded, PlanningProgram)
+    assert loaded.artifact_id == "l3-s1-v1"
+    assert len(loaded.interventions) == 1
+
+
+def test_load_planning_program_prefers_state_program():
+    from app.agent.bootstrap.post_l3_main_nodes import _load_planning_program
+
+    program = PlanningProgram(
+        interventions=[PlanningIntervention(intervention_id="i1", name="项目A")]
+    )
+    loaded = _load_planning_program({"planning_program": program})
+    assert loaded is program
+
+
+def test_load_planning_program_from_state_dict():
+    from app.agent.bootstrap.post_l3_main_nodes import _load_planning_program
+
+    program = PlanningProgram(
+        interventions=[PlanningIntervention(intervention_id="i1", name="项目A")]
+    )
+    loaded = _load_planning_program({"planning_program": program.model_dump()})
+    assert isinstance(loaded, PlanningProgram)
+    assert len(loaded.interventions) == 1
+
+
+def test_load_planning_program_missing_returns_none():
+    from app.agent.bootstrap.post_l3_main_nodes import _load_planning_program
+
+    assert _load_planning_program({"session_id": "s1"}) is None
