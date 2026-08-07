@@ -123,3 +123,51 @@ def test_state_has_context_fingerprint_and_bootstrap_flag():
     annotations = set(AgentState.__annotations__.keys())
     assert "context_fingerprint" in annotations
     assert "bootstrap_context_done" in annotations
+
+
+def test_bootstrap_context_node_sets_version_and_fingerprint():
+    import asyncio
+    from app.agent.bootstrap.context_bootstrap import bootstrap_context_node
+    from unittest.mock import patch, AsyncMock, MagicMock
+
+    state = {
+        "session_id": "test-boot-1",
+        "config": {"village_name": "TestVillage"},
+        "context_version": "",
+        "context_fingerprint": "",
+        "context_ref": {"session_id": "test-boot-1", "version": ""},
+        "bootstrap_context_done": False,
+    }
+
+    mock_context = AsyncMock()
+    mock_context.version = 1
+    mock_context.session_id = "test-boot-1"
+    mock_context.snapshot_meta = MagicMock(return_value={"session_id": "test-boot-1", "version": 1})
+
+    with patch(
+        "app.agent.bootstrap.context_bootstrap.build_planning_context",
+        new_callable=AsyncMock,
+        return_value=mock_context,
+    ):
+        result = asyncio.run(bootstrap_context_node(state))
+
+    assert result["context_version"] == "1"
+    assert result["context_fingerprint"] != ""
+    assert result["bootstrap_context_done"] is True
+    assert result["context_ref"]["version"] == "1"
+
+
+def test_bootstrap_context_is_idempotent_when_already_done():
+    import asyncio
+    from app.agent.bootstrap.context_bootstrap import bootstrap_context_node
+
+    state = {
+        "session_id": "test-boot-2",
+        "config": {"village_name": "TestVillage"},
+        "context_version": "1",
+        "context_fingerprint": "sha256:existing",
+        "context_ref": {"session_id": "test-boot-2", "version": "1"},
+        "bootstrap_context_done": True,
+    }
+    result = asyncio.run(bootstrap_context_node(state))
+    assert result == {}
