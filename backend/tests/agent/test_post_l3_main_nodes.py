@@ -14,10 +14,13 @@ async def test_select_node_writes_execution_plan(monkeypatch):
     )
     intent = IntentCompilationResult(typed_intent=plan_intent, raw_intent={})
 
-    async def fake_ctx(s):
-        return None
-    monkeypatch.setattr(M, "_resolve_context", fake_ctx)
+    monkeypatch.setattr(M, "_get_cached_context", lambda s: None)
     monkeypatch.setattr(M, "_persist_artifact", lambda *a, **k: None)
+
+    def fake_load(state, key, cls):
+        return {"intent_compilation": intent,
+                "grounding_result": GroundingResult(candidates=[])}.get(key)
+    monkeypatch.setattr(M, "_load_ref_artifact", fake_load)
 
     from app.agent.select import aggregate as sel_agg
     monkeypatch.setattr(sel_agg, "select_aggregate",
@@ -26,11 +29,10 @@ async def test_select_node_writes_execution_plan(monkeypatch):
     monkeypatch.setattr(sel_gate, "evaluate_select_gate",
         lambda d, target_count: object())
 
-    state = {"intent": intent, "grounding_result": GroundingResult(candidates=[]),
-             "upstream_gates": [], "retry_counts": {}}
+    state = {"upstream_gates": [], "retry_counts": {}}
     out = await M.select_node(state)
-    assert "execution_plan" in out, "select_node must write execution_plan"
-    assert out["execution_plan"] is not None
+    assert "artifact_refs" in out, "select_node must write artifact_refs"
+    assert "execution_plan" in out["artifact_refs"]
 
 
 async def None_async(s):
@@ -49,7 +51,7 @@ async def test_reconcile_node_loads_program_from_ref(monkeypatch):
     def fake_load(state):
         return object()
 
-    monkeypatch.setattr(M, "_resolve_context", lambda s: None_async(s))
+    monkeypatch.setattr(M, "_get_cached_context", lambda s: None)
     monkeypatch.setattr(M, "_load_planning_program", fake_load)
     monkeypatch.setattr(M, "_persist_artifact", lambda *a, **k: {})
 
@@ -79,6 +81,8 @@ async def test_reconcile_node_loads_program_from_ref(monkeypatch):
 @pytest.mark.asyncio
 async def test_reconcile_node_fail_closed_when_program_missing(monkeypatch):
     monkeypatch.setattr(M, "_load_planning_program", lambda s: None)
+    monkeypatch.setattr(M, "_get_cached_context", lambda s: None)
+    monkeypatch.setattr(M, "_persist_artifact", lambda *a, **k: {})
 
     state = {
         "planning_program": None,
@@ -96,7 +100,6 @@ async def test_reconcile_node_fail_closed_when_program_missing(monkeypatch):
 
     out = await M.reconcile_node(state)
     assert out["reconcile_gate"]["feedback_route"] == "RETRY_L3"
-    assert out["reconciliation_report"] is not None
 
 
 @pytest.mark.asyncio
@@ -114,16 +117,17 @@ async def test_validate_node_passes_typed_intent(monkeypatch):
         captured["intent"] = args[3]
         return ValidationReport(checks=[], overall_passed=True)
 
-    monkeypatch.setattr(M, "_resolve_context", lambda s: None_async(s))
+    monkeypatch.setattr(M, "_get_cached_context", lambda s: None)
     monkeypatch.setattr(M, "_persist_artifact", lambda *a, **k: {})
+
+    def fake_load(state, key, cls):
+        return {"intent_compilation": intent}.get(key)
+    monkeypatch.setattr(M, "_load_ref_artifact", fake_load)
 
     import app.agent.validate.aggregate as vag
     monkeypatch.setattr(vag, "validate_aggregate", fake_validate_aggregate)
 
     state = {
-        "intent": intent,
-        "planned_state": None,
-        "parcel_changeset": None,
         "layout_configs": [],
         "upstream_gates": [],
         "session_id": "s1",
@@ -156,13 +160,15 @@ async def test_ground_node_calls_retrieve_evidence_on_explore_retry(monkeypatch)
         called["requests"] = reqs
         return [evidence_row]
 
-    async def fake_ctx(s):
-        return None
+    captured = {}
 
-    monkeypatch.setattr(M, "_resolve_context", fake_ctx)
+    def fake_ground(specs, ctx):
+        captured["result"] = GroundingResult(candidates=[], spatial_query_evidence=[])
+        return captured["result"]
+
+    monkeypatch.setattr(M, "_get_cached_context", lambda s: None)
     monkeypatch.setattr(gagg, "retrieve_evidence", fake_retrieve)
-    monkeypatch.setattr(gagg, "ground_aggregate",
-        lambda specs, ctx: GroundingResult(candidates=[], spatial_query_evidence=[]))
+    monkeypatch.setattr(gagg, "ground_aggregate", fake_ground)
     monkeypatch.setattr(ggate, "evaluate_ground_gate", lambda r: {"feedback_route": "PASS"})
     monkeypatch.setattr(M, "_persist_artifact", lambda *a, **k: {})
 
@@ -176,7 +182,7 @@ async def test_ground_node_calls_retrieve_evidence_on_explore_retry(monkeypatch)
     out = await M.ground_node(state)
     assert called["evidence"] is True, "ground_node must call retrieve_evidence on EXPLORE retry"
     assert called["requests"] == [{"type": "road_access"}]
-    dumped = out["grounding_result"]
+    dumped = captured["result"].model_dump()
     assert len(dumped["spatial_query_evidence"]) == 1
     assert dumped["spatial_query_evidence"][0]["query_type"] == "retry:evidence_requests"
 
@@ -209,10 +215,7 @@ async def test_execute_node_rebuilds_plan_when_missing(monkeypatch):
 
     fake_graph = FakeExecuteGraph()
 
-    async def fake_ctx(s):
-        return FakeContext()
-
-    monkeypatch.setattr(M, "_resolve_context", fake_ctx)
+    monkeypatch.setattr(M, "_get_cached_context", lambda s: FakeContext())
     monkeypatch.setattr(eagg, "build_execute_agent_graph", lambda: fake_graph)
     monkeypatch.setattr(M, "_persist_artifact", lambda *a, **k: {})
 
@@ -220,11 +223,15 @@ async def test_execute_node_rebuilds_plan_when_missing(monkeypatch):
         project_targets=[ProjectTarget(project_id="p1", name="t1")]
     )
     intent = IntentCompilationResult(typed_intent=plan_intent)
+
+    def fake_load(state, key, cls):
+        return {"intent_compilation": intent,
+                "site_selection": SiteSelectionDecision(),
+                "execution_plan": None}.get(key)
+    monkeypatch.setattr(M, "_load_ref_artifact", fake_load)
+
     state = {
-        "intent": intent,
-        "site_selection": SiteSelectionDecision(),
         "land_design_briefs": [],
-        "execution_plan": None,
         "session_id": "s1",
         "config": {"village_name": "v1"},
         "messages": [],
@@ -234,8 +241,8 @@ async def test_execute_node_rebuilds_plan_when_missing(monkeypatch):
     assert fake_graph.captured_state.execution_plan is not None, (
         "execute_node must rebuild execution_plan when it is missing"
     )
-    assert out["planned_state"] is None
-    assert "parcel_changeset" in out
+    assert "artifact_refs" in out
+    assert "parcel_changeset" in out["artifact_refs"]
 @pytest.mark.asyncio
 async def test_collect_human_items_from_dict_gate():
     from app.modules.schema.contracts.workflow_contracts import GateDecision

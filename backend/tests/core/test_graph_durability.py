@@ -46,11 +46,13 @@ def test_parent_checkpointer_and_interrupt_replay():
 
 def test_checkpoint_state_contains_refs_not_payload():
     state = create_initial_state("run-1", "v", "data")
+    state["context_version"] = "7"
+    state["context_fingerprint"] = "sha256:test"
     state["context_ref"] = {"session_id": "run-1", "version": "7"}
     ref = store_artifact(state, "planned_state", "execute", "PlannedState", {"parcels": [1]})
     state["artifact_refs"] = {"planned_state": ref}
-    assert state["planned_state"] is None
-    assert load_artifact(state, "planned_state")["parcels"] == [1]
+    loaded = load_artifact(state, "planned_state")
+    assert loaded["parcels"] == [1]
 
 
 def test_artifact_ref_carries_context_fingerprint():
@@ -107,7 +109,6 @@ def test_state_has_no_full_typed_business_objects():
         "grounding_result", "site_selection", "execution_plan",
         "parcel_changeset", "planned_state", "validation_report",
         "reconciliation_report", "allocated_geojson", "render_result",
-        "layout_configs",
         "grounding_result_ref", "site_selection_ref", "parcel_changeset_ref",
         "planned_state_ref", "validation_report_ref", "reconciliation_report_ref",
         "l3_program_ref",

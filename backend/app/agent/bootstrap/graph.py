@@ -1,12 +1,12 @@
 """Main planning graph factory. Migrated from agent/graph.py per docs/architecture/agent-graph.md §5."""
 
+import hashlib
 from typing import Dict, Any, List, Literal, Optional
 from langgraph.graph import StateGraph, END, START
 from langchain_core.messages import HumanMessage
 
 from app.agent.plan_state.state import AgentState, create_initial_state
 from app.agent.bootstrap.phase_machine import PlanningPhase, get_layer_dimensions
-from app.agent.tools import execute_tools_node
 from app.agent.l1_observe import analyze_dimension, DIMENSION_NAMES
 from app.agent.plan_state import layer_completion_check
 from app.agent.bootstrap.layer_aggregate_node import layer_aggregate_node
@@ -18,17 +18,29 @@ from app.agent.bootstrap.layer_router import (
 )
 from app.agent.bootstrap import post_l3_main_nodes
 from app.agent.bootstrap.post_l3_main_nodes import _STAGE_FORWARD_TARGET, _pass_gate, _dump
+from app.agent.bootstrap.context_bootstrap import bootstrap_context_node
 
 from app.utils.logger import get_logger
 logger = get_logger(__name__)
+
+
+async def execute_tools_node(state: Dict[str, Any]) -> Dict[str, Any]:
+    """Load tool/model registrations only when a tool stage is executed."""
+    from app.agent.tools import execute_tools_node as _execute_tools_node
+    return await _execute_tools_node(state)
 
 
 # TimeoutPolicy + error_handler for node-level fault tolerance (LangGraph v1.2)
 try:
     from langgraph.types import RetryPolicy
     _HAS_RETRY_POLICY = True
+    _TRANSIENT_RETRY_POLICY = RetryPolicy(
+        max_attempts=3,
+        retry_on=(TimeoutError, OSError, ConnectionError),
+    )
 except ImportError:
     _HAS_RETRY_POLICY = False
+    _TRANSIENT_RETRY_POLICY = None
 
 
 async def analyze_dimension_node(state: Dict[str, Any]) -> Dict[str, Any]:
@@ -145,13 +157,17 @@ def create_unified_planning_graph(checkpointer=None) -> StateGraph:
     builder = StateGraph(AgentState)
 
     builder.add_node("conversation", conversation_node)
-    builder.add_node("execute_tools", execute_tools_node)
+    if _HAS_RETRY_POLICY:
+        builder.add_node("execute_tools", execute_tools_node, retry_policy=_TRANSIENT_RETRY_POLICY)
+    else:
+        builder.add_node("execute_tools", execute_tools_node)
     builder.add_node("l1_worker", l1_worker_node)
     builder.add_node("l2_worker", l2_worker_node)
     builder.add_node("l3_worker", l3_worker_node)
     builder.add_node("advance_phase", advance_phase_node)
     builder.add_node("layer_completion_check", layer_completion_check)
     builder.add_node("layer_aggregate", layer_aggregate_node)
+    builder.add_node("bootstrap_context", bootstrap_context_node)
     # ── Wave M: post-L3 主图独立节点 ──
     builder.add_node("parse", post_l3_main_nodes.parse_node)
     builder.add_node("ground", post_l3_main_nodes.ground_node)
@@ -160,14 +176,18 @@ def create_unified_planning_graph(checkpointer=None) -> StateGraph:
     builder.add_node("validate", post_l3_main_nodes.validate_node)
     builder.add_node("reconcile", post_l3_main_nodes.reconcile_node)
     builder.add_node("deliver", post_l3_main_nodes.deliver_node)
-    builder.add_node("human_review", human_review_node)
+    builder.add_node("human_review_prepare", prepare_human_review)
+    builder.add_node("human_review_publish", publish_human_review_pause)
+    builder.add_node("human_review_wait", await_human_review)
+    builder.add_node("human_review_apply", apply_human_review_decision)
 
     builder.add_edge(START, "conversation")
     builder.add_conditional_edges("conversation", after_conversation,
-        {"execute_tools": "execute_tools", "parse": "parse",
+        {"execute_tools": "execute_tools", "parse": "bootstrap_context",
          "l1_worker": "l1_worker", "l2_worker": "l2_worker", "l3_worker": "l3_worker",
          END: END})
     builder.add_edge("execute_tools", "conversation")
+    builder.add_edge("bootstrap_context", "parse")
     builder.add_edge("l1_worker", "layer_completion_check")
     builder.add_edge("l2_worker", "layer_completion_check")
     builder.add_edge("l3_worker", "layer_completion_check")
@@ -175,23 +195,27 @@ def create_unified_planning_graph(checkpointer=None) -> StateGraph:
     builder.add_conditional_edges("layer_aggregate", after_analysis,
         {"advance_phase": "advance_phase", "conversation": "conversation",
          "l1_worker": "l1_worker", "l2_worker": "l2_worker", "l3_worker": "l3_worker",
+         "human_review": "human_review_prepare",
          END: END})
     # ── Wave M: post-L3 主图链条件边 ──
     builder.add_conditional_edges("parse", route_after_parse,
-        {"ground": "ground", "parse": "parse", "human_review": "human_review"})
+        {"ground": "ground", "parse": "parse", "human_review": "human_review_prepare"})
     builder.add_conditional_edges("ground", route_after_ground,
-        {"select": "select", "ground": "ground", "human_review": "human_review"})
+        {"select": "select", "ground": "ground", "human_review": "human_review_prepare"})
     builder.add_conditional_edges("select", route_after_select,
-        {"execute": "execute", "ground": "ground", "human_review": "human_review"})
+        {"execute": "execute", "ground": "ground", "human_review": "human_review_prepare"})
     builder.add_edge("execute", "validate")
     builder.add_conditional_edges("validate", route_after_validate,
         {"reconcile": "reconcile", "execute": "execute", "select": "select",
-         "ground": "ground", "parse": "parse", "human_review": "human_review"})
+         "ground": "ground", "parse": "parse", "human_review": "human_review_prepare"})
     builder.add_conditional_edges("reconcile", route_after_reconcile,
-        {"deliver": "deliver", "execute": "execute", "human_review": "human_review"})
+        {"deliver": "deliver", "execute": "execute", "human_review": "human_review_prepare"})
     builder.add_conditional_edges("deliver", route_after_deliver,
-        {END: END, "validate": "validate", "human_review": "human_review"})
-    builder.add_conditional_edges("human_review", route_after_human_review,
+        {END: END, "validate": "validate", "human_review": "human_review_prepare"})
+    builder.add_edge("human_review_prepare", "human_review_publish")
+    builder.add_edge("human_review_publish", "human_review_wait")
+    builder.add_edge("human_review_wait", "human_review_apply")
+    builder.add_conditional_edges("human_review_apply", route_after_human_review,
         {"parse": "parse", "ground": "ground", "select": "select",
          "execute": "execute", "validate": "validate", "reconcile": "reconcile",
          "deliver": "deliver", "conversation": "conversation",
@@ -200,36 +224,48 @@ def create_unified_planning_graph(checkpointer=None) -> StateGraph:
     return builder.compile(checkpointer=checkpointer)
 
 
-async def human_review_node(state: Dict[str, Any]) -> Dict[str, Any]:
-    """Human review node for the main-graph post-L3 chain.
-
-    Collects HUMAN-gate items (or retry-exhaustion items) into
-    ``human_review_items``; publishes a pause event; pauses via interrupt()
-    when a checkpointer is present, otherwise records the items and continues
-    to END.
-    """
-    from langgraph.types import interrupt
-
+async def prepare_human_review(state: Dict[str, Any]) -> Dict[str, Any]:
+    """Pure HITL preparation; no external side effects."""
     paused_stage, items = post_l3_main_nodes.collect_human_review_items(state)
-    if not items:
-        logger.info("[main:human_review] no items; chain continues to END")
-        return {"human_review_items": [], "paused_stage": None}
+    event_id = hashlib.sha256(
+        repr((state.get("session_id"), paused_stage, items, state.get("retry_counts"))).encode()
+    ).hexdigest()[:24]
+    return {
+        "human_review_items": items,
+        "paused_stage": paused_stage,
+        "human_review_event_id": event_id,
+        "human_review_pause_published": False,
+    }
 
+
+async def publish_human_review_pause(state: Dict[str, Any]) -> Dict[str, Any]:
+    """Idempotently publish the pause notification."""
+    items = state.get("human_review_items") or []
+    if not items or state.get("human_review_pause_published"):
+        return {"human_review_pause_published": True}
     session_id = state.get("session_id")
     if session_id:
         try:
             from app.services.sse import sse_manager
-
             await sse_manager.publish(session_id, {
                 "type": "human_review_paused",
-                "paused_stage": paused_stage,
+                "event_id": state.get("human_review_event_id"),
+                "paused_stage": state.get("paused_stage"),
                 "reason": "post_l3_human_review",
                 "item_count": len(items),
             })
-        except Exception as e:
-            logger.warning("[main:human_review] SSE publish failed: %s", e)
+        except Exception as exc:
+            logger.warning("[main:human_review] SSE publish failed: %s", exc)
+    return {"human_review_pause_published": True}
 
-    logger.info("[main:human_review] collected %d items; INTERRUPT awaiting review", len(items))
+
+async def await_human_review(state: Dict[str, Any]) -> Dict[str, Any]:
+    """The only node containing interrupt(); it has no pre-interrupt effects."""
+    from langgraph.types import interrupt
+    items = state.get("human_review_items") or []
+    paused_stage = state.get("paused_stage")
+    if not items:
+        return {"human_review_decisions": {}}
     decisions = interrupt(
         {
             "human_review_items": items,
@@ -238,8 +274,16 @@ async def human_review_node(state: Dict[str, Any]) -> Dict[str, Any]:
             "reason": "post_l3_human_review",
         }
     )
-    logger.info("[main:human_review] RESUME decisions received: %s", decisions)
-    decisions = decisions or {}
+    return {"human_review_decisions": decisions or {}}
+
+
+async def apply_human_review_decision(state: Dict[str, Any]) -> Dict[str, Any]:
+    """Apply an already-resumed decision, creating a new gate revision."""
+    items = state.get("human_review_items") or []
+    paused_stage = state.get("paused_stage")
+    decisions = state.get("human_review_decisions") or {}
+    if not items:
+        return {"human_review_items": [], "paused_stage": None}
     result = {
         "human_review_items": items,
         "paused_stage": paused_stage,

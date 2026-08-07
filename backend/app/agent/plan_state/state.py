@@ -234,6 +234,7 @@ class AgentState(TypedDict, total=False):
     select_gate: Optional[Any]  # GateDecision
     # EXECUTE 输出
     execution_errors: Annotated[List[Dict[str, Any]], _replace_or_merge_lists]  # EXECUTE errors
+    layout_configs: List[Dict[str, Any]]
     # VALIDATE 输出
     validate_gate: Optional[Any]  # GateDecision
     # RECONCILE 输出
@@ -329,6 +330,7 @@ def create_initial_state(
         "land_design_briefs": [],
         "select_gate": None,
         "execution_errors": [],
+        "layout_configs": [],
         "validate_gate": None,
         "reconcile_gate": None,
         "deliver_gate": None,

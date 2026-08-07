@@ -1,9 +1,8 @@
 from app.agent.plan_state.state import AgentState, create_initial_state
 
 REQUIRED_POST_L3_KEYS = (
-    "planned_state", "execution_errors",
-    "grounding_result_ref", "site_selection_ref",
-    "parcel_changeset_ref", "planned_state_ref",
+    "execution_errors", "layout_configs",
+    "artifact_refs",
 )
 
 def test_agent_state_declares_post_l3_output_keys():

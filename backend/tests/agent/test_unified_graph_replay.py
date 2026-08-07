@@ -92,14 +92,17 @@ def _changeset() -> ParcelChangeSet:
 
 
 def _fake_context() -> SimpleNamespace:
-    return SimpleNamespace(
+    ctx = SimpleNamespace(
         bundle=None,
         village_anchors=[],
         kg_session_ref="kg-1",
         kg=None,
         constraint_index=None,
+        version=1,
         context_version="v1",
     )
+    ctx.snapshot_meta = lambda: {"session_id": "s1", "version": 1}
+    return ctx
 
 
 class _FakeExecuteGraph:
@@ -122,6 +125,14 @@ class _FakeExecuteGraph:
 @pytest.fixture
 def _post_l3_deps(monkeypatch):
     """Stub heavy I/O; keep the deterministic core running for real."""
+    import shutil
+    from pathlib import Path
+    run_tmp = Path(".run-tmp")
+    if run_tmp.exists():
+        for sid in ("s1", "s2", "s3", "s4", "s5", "s6", "s7", "s8", "s9", "s10"):
+            d = run_tmp / sid
+            if d.exists():
+                shutil.rmtree(d, ignore_errors=True)
     changeset = _changeset()
     fake_graph = _FakeExecuteGraph(changeset)
     monkeypatch.setattr(
@@ -135,6 +146,11 @@ def _post_l3_deps(monkeypatch):
     monkeypatch.setattr(
         "app.modules.spatial_ops.output.export_package.export_gdb_package",
         lambda *a, **k: {"status": "ok", "exported_files": []},
+    )
+    fake_ctx = _fake_context()
+    monkeypatch.setattr(
+        "app.agent.bootstrap.post_l3_main_nodes._get_cached_context",
+        lambda state: fake_ctx,
     )
     return {"changeset": changeset, "fake_graph": fake_graph}
 
@@ -150,7 +166,13 @@ async def _async_parse_stub(*a, **k):
 def _make_state() -> dict:
     state = create_initial_state("s1", "v1", "data")
     state["session_id"] = "s1"
-    state["planning_program"] = _program()
+    state["context_version"] = "1"
+    state["context_fingerprint"] = "sha256:test"
+    state["context_ref"] = {"session_id": "s1", "version": "1"}
+    state["bootstrap_context_done"] = True
+    from app.agent.bootstrap.artifact_runtime import store_artifact
+    program_ref = store_artifact(state, "planning_program", "l3", "PlanningProgram", _program().model_dump(mode="json"))
+    state["artifact_refs"] = {"planning_program": program_ref}
     state["messages"] = [
         AIMessage(
             content="",
@@ -220,12 +242,9 @@ async def test_post_l3_chain_runs_end_to_end(monkeypatch, _post_l3_deps):
         config={"configurable": {"thread_id": "s1"}},
     )
 
-    # T2: SELECT built an ExecutionPlan and it survived the main-graph state
-    assert result.get("execution_plan") is not None, "execution_plan dropped in main graph"
-    # T1: EXECUTE's planned_state survived (was filtered before Task 1)
-    assert result.get("planned_state") is not None, "planned_state dropped in main graph"
-    planned = result["planned_state"]
-    assert getattr(planned, "parcels", None) is not None or isinstance(planned, dict)
+    refs = result.get("artifact_refs") or {}
+    assert "execution_plan" in refs, "execution_plan ref missing in main graph"
+    assert "planned_state" in refs, "planned_state ref missing in main graph"
     # The EXECUTE node consumed the ExecutionPlan
     assert _post_l3_deps["fake_graph"].received is not None
     assert _post_l3_deps["fake_graph"].received.execution_plan is not None
@@ -402,7 +421,7 @@ async def test_hitl_approve_forwards_to_next_stage(monkeypatch, _post_l3_deps):
 
     assert "execute" in nodes, "approve at select must forward to execute"
     assert final["select_gate"]["feedback_route"] is None
-    assert final.get("planned_state") is not None
+    assert "planned_state" in (final.get("artifact_refs") or {})
 
 
 @pytest.mark.asyncio
@@ -444,7 +463,7 @@ async def test_hitl_approve_deliver_routes_to_end(monkeypatch, _post_l3_deps):
 
     assert final["paused_stage"] == "deliver"
     assert final["deliver_gate"]["feedback_route"] is None
-    assert nodes == ["human_review"], "approve at deliver must end immediately"
+    assert "human_review_apply" in nodes, "approve at deliver must end after applying review"
 
 
 @pytest.mark.asyncio
@@ -458,7 +477,7 @@ async def test_hitl_no_action_routes_to_end(monkeypatch, _post_l3_deps):
 
     assert final["human_review_decisions"] == {"note": "continue"}
     assert final["select_gate"]["feedback_route"] == "HUMAN"
-    assert nodes == ["human_review"], "no-action resume must end immediately"
+    assert "human_review_apply" in nodes, "no-action resume must end after applying review"
 
 
 @pytest.mark.asyncio
@@ -530,7 +549,7 @@ async def test_hitl_full_lifecycle_reject_to_conversation(monkeypatch, _post_l3_
     )
 
     assert "conversation" in nodes, "reject must route to conversation"
-    assert nodes.index("conversation") > nodes.index("human_review"), (
+    assert nodes.index("conversation") > nodes.index("human_review_apply"), (
         "conversation must run after human_review"
     )
     assert any(

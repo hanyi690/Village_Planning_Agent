@@ -3,7 +3,7 @@
 Verifies the design point that all stages share one authoritative
 ``PlanningContext`` per session: ``build_planning_context`` with
 ``refresh=False`` returns the cached instance (identity-stable), a forced
-refresh bumps the version, and the post-L3 ``_resolve_context`` recovers the
+refresh bumps the version, and the post-L3 ``_get_cached_context`` recovers the
 cached context when the serialized ``state.context`` is stripped (checkpoint).
 """
 
@@ -103,22 +103,21 @@ async def test_resolve_context_rebuilds_from_cache(
     await setup()
     try:
         _patch_deps(monkeypatch)
-        from app.agent.bootstrap.post_l3_main_nodes import _resolve_context
+        from app.agent.bootstrap.post_l3_main_nodes import _get_cached_context
         from app.services.context.planning_context import build_planning_context
 
         ctx = await build_planning_context(
             "sess-c1", village_name="金田村", include_reports=False
         )
         state = {"session_id": "sess-c1"}
-        resolved = await _resolve_context(state)
+        resolved = _get_cached_context(state)
         assert resolved is ctx
     finally:
         await teardown()
 
 
-@pytest.mark.asyncio
-async def test_resolve_context_empty_session_returns_none(pipeline_reset):
-    from app.agent.bootstrap.post_l3_main_nodes import _resolve_context
+def test_resolve_context_empty_session_returns_none(pipeline_reset):
+    from app.agent.bootstrap.post_l3_main_nodes import _get_cached_context
 
-    resolved = await _resolve_context({"session_id": ""})
+    resolved = _get_cached_context({"session_id": ""})
     assert resolved is None

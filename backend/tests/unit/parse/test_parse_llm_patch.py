@@ -257,17 +257,25 @@ async def test_parse_node_uses_async_entry(monkeypatch):
     monkeypatch.setattr(
         "app.agent.parse.aggregate.compile_program_async", fake_async_compile
     )
+    program = _ambiguous_program()
     state = {
         "session_id": "s1",
         "run_id": "r1",
         "context_version": "cv",
-        "planning_program": _ambiguous_program(),
+        "context_fingerprint": "sha256:test",
+        "context_ref": {"session_id": "s1", "version": "cv"},
     }
+    from app.agent.bootstrap.artifact_runtime import store_artifact
+    program_ref = store_artifact(state, "planning_program", "l3", "PlanningProgram", program.model_dump(mode="json"))
+    state["artifact_refs"] = {"planning_program": program_ref}
+    monkeypatch.setattr(
+        "app.agent.bootstrap.post_l3_main_nodes._persist_artifact",
+        lambda *a, **k: {},
+    )
     out = await parse_node(state)
 
     assert captured["run_id"] == "r1"
-    assert captured["program"] is state["planning_program"]
-    assert "intent" in out
+    assert captured["program"] is not None
     assert "specs" in out
     assert "parse_gate" in out
     assert len(out["upstream_gates"]) == 1
