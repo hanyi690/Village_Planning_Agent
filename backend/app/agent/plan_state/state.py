@@ -143,6 +143,13 @@ def _merge_explore_outputs(
     return result
 
 
+def _merge_artifact_refs(a: Dict[str, Any], b: Dict[str, Any]) -> Dict[str, Any]:
+    """Merge reference deltas without copying the referenced payloads."""
+    if not b:
+        return a
+    return {**(a or {}), **b}
+
+
 class AgentState(TypedDict, total=False):
     """
     核心状态 - 精简版
@@ -196,11 +203,12 @@ class AgentState(TypedDict, total=False):
     report_summary_index: Annotated[Dict[str, Any], _merge_explore_outputs]  # ReportSummaryIndex
     explore_done: Annotated[bool, operator.or_]  # EXPLORE 桥接已执行标记（防重复触发）
     # ── Wave M1: post-L3 链 typed artifact 引用 ──
-    delivery_manifest: Optional[Any]  # DeliveryManifest — DELIVER 输出（typed）
-    reconciliation_report_ref: Optional[Any]  # ReconciliationReport — RECONCILE 输出（typed）
-    validation_report_ref: Optional[Any]  # ValidationReport — VALIDATE 输出（typed）
     pending_requests: Annotated[List[Dict[str, Any]], _replace_or_merge_lists]  # 全链 Gate pending requests 累积
     context_version: str  # PlanningContext 版本戳
+    context_ref: Dict[str, Any]  # session/version reference; context is loaded from the cache
+    context_fingerprint: str
+    bootstrap_context_done: bool
+    artifact_refs: Annotated[Dict[str, Any], _merge_artifact_refs]
     # ── Wave M2: layer aggregate wiring ──
     layer_just_completed: Optional[int]  # set by completion_check, consumed by layer_aggregate_node
     # ── Wave M2: layer aggregate gate decisions + artifact refs（供 after_analysis 消费）──
@@ -216,40 +224,23 @@ class AgentState(TypedDict, total=False):
     post_l3_decisions: Optional[Any]  # resume 后回写的审查决策
     # ── Wave M: post-L3 主图独立节点链 typed artifacts（单一状态源）──
     # L3 输入
-    planning_program: Optional[Any]  # PlanningProgram (typed)
-    l3_program_ref: Optional[Dict[str, Any]]  # PlanningProgram artifact ref
     # PARSE 输出
-    intent: Optional[Any]  # IntentCompilationResult (typed)
     specs: List[Any]  # list[SpatialReferenceSpec]
     parse_gate: Optional[Any]  # GateDecision
     # GROUND 输出
-    grounding_result: Optional[Any]  # GroundingResult (typed)
     ground_gate: Optional[Any]  # GateDecision
-    grounding_result_ref: Optional[Dict[str, Any]]  # GroundingResult artifact ref (audit-only, no loader; crash recovery deferred)
     # SELECT 输出
-    site_selection: Optional[Any]  # SiteSelectionDecision (typed)
     land_design_briefs: List[Any]  # list[LandDesignBrief]
     select_gate: Optional[Any]  # GateDecision
-    site_selection_ref: Optional[Dict[str, Any]]  # SiteSelectionDecision artifact ref (audit-only, no loader; crash recovery deferred)
     # EXECUTE 输出
-    execution_plan: Optional[Any]  # ExecutionPlan (typed)
-    parcel_changeset: Optional[Any]  # ParcelChangeSet (typed)
-    layout_configs: List[Dict[str, Any]]
-    allocated_geojson: Dict[str, Any]
-    planned_state: Optional[Any]  # PlannedState (typed) - EXECUTE output
     execution_errors: Annotated[List[Dict[str, Any]], _replace_or_merge_lists]  # EXECUTE errors
-    parcel_changeset_ref: Optional[Dict[str, Any]]  # ParcelChangeSet artifact ref (audit-only, no loader; crash recovery deferred)
-    planned_state_ref: Optional[Dict[str, Any]]  # PlannedState artifact ref (audit-only, no loader; crash recovery deferred)
     # VALIDATE 输出
-    validation_report: Optional[Any]  # ValidationReport (typed)
     validate_gate: Optional[Any]  # GateDecision
     # RECONCILE 输出
-    reconciliation_report: Optional[Any]  # ReconciliationReport (typed)
     reconcile_gate: Optional[Any]  # GateDecision
     # DELIVER 输出
     deliver_gate: Optional[Any]  # GateDecision
     export_result: Optional[Dict[str, Any]]
-    render_result: List[Dict[str, Any]]
     # Gate 累积 + 重试
     upstream_gates: List[Any]
     retry_counts: Dict[str, int]
@@ -257,6 +248,8 @@ class AgentState(TypedDict, total=False):
     error_feedback: Dict[str, str]
     human_review_items: List[Dict[str, Any]]
     human_review_decisions: Optional[Any]
+    human_review_event_id: str
+    human_review_pause_published: bool
     paused_stage: Optional[str]  # stage that paused the post-L3 chain for HITL
 
 
@@ -275,6 +268,7 @@ def create_initial_state(
 ) -> Dict[str, Any]:
     """创建初始状态"""
     from app.agent.bootstrap.phase_machine import PlanningPhase
+    from app.core.settings import BUSINESS_RETRY_LIMIT
 
     return {
         "session_id": session_id,
@@ -311,11 +305,12 @@ def create_initial_state(
         "explore_instructions": {},  # P2: EXPLORE 桥接产出
         "report_summary_index": {},  # P2: EXPLORE 概要索引
         # ── Wave M1: post-L3 链 typed artifact 引用 ──
-        "delivery_manifest": None,
-        "reconciliation_report_ref": None,
-        "validation_report_ref": None,
         "pending_requests": [],
         "context_version": "",
+        "context_ref": {"session_id": session_id, "version": ""},
+        "context_fingerprint": "",
+        "bootstrap_context_done": False,
+        "artifact_refs": {},
         "layer_just_completed": None,
         "l1_gate_decision": None,
         "l2_gate_decision": None,
@@ -328,39 +323,24 @@ def create_initial_state(
         "post_l3_status": "",
         "post_l3_decisions": None,
         # ── Wave M: post-L3 主图独立节点链初始值 ──
-        "planning_program": None,
-        "l3_program_ref": None,
-        "intent": None,
         "specs": [],
         "parse_gate": None,
-        "grounding_result": None,
         "ground_gate": None,
-        "site_selection": None,
         "land_design_briefs": [],
         "select_gate": None,
-        "execution_plan": None,
-        "parcel_changeset": None,
-        "layout_configs": [],
-        "allocated_geojson": {},
-        "planned_state": None,
         "execution_errors": [],
-        "grounding_result_ref": None,
-        "site_selection_ref": None,
-        "parcel_changeset_ref": None,
-        "planned_state_ref": None,
-        "validation_report": None,
         "validate_gate": None,
-        "reconciliation_report": None,
         "reconcile_gate": None,
         "deliver_gate": None,
         "export_result": None,
-        "render_result": [],
         "upstream_gates": [],
         "retry_counts": {},
-        "max_retries": 3,
+        "max_retries": BUSINESS_RETRY_LIMIT,
         "error_feedback": {},
         "human_review_items": [],
         "human_review_decisions": None,
+        "human_review_event_id": "",
+        "human_review_pause_published": False,
         "paused_stage": None,
     }
 

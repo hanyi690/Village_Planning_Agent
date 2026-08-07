@@ -97,3 +97,29 @@ def test_load_artifact_rejects_fingerprint_mismatch():
     state["context_fingerprint"] = "sha256:tampered"
     with pytest.raises(ArtifactReplayError, match="fingerprint"):
         load_artifact(state, "planned_state")
+
+
+def test_state_has_no_full_typed_business_objects():
+    from app.agent.plan_state.state import AgentState
+
+    removed_fields = {
+        "delivery_manifest", "planning_program", "intent",
+        "grounding_result", "site_selection", "execution_plan",
+        "parcel_changeset", "planned_state", "validation_report",
+        "reconciliation_report", "allocated_geojson", "render_result",
+        "layout_configs",
+        "grounding_result_ref", "site_selection_ref", "parcel_changeset_ref",
+        "planned_state_ref", "validation_report_ref", "reconciliation_report_ref",
+        "l3_program_ref",
+    }
+    annotations = set(AgentState.__annotations__.keys())
+    for field in removed_fields:
+        assert field not in annotations, f"{field} should be removed from AgentState"
+
+
+def test_state_has_context_fingerprint_and_bootstrap_flag():
+    from app.agent.plan_state.state import AgentState
+
+    annotations = set(AgentState.__annotations__.keys())
+    assert "context_fingerprint" in annotations
+    assert "bootstrap_context_done" in annotations
