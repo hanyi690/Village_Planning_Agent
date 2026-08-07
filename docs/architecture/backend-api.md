@@ -7,20 +7,23 @@
 
 后端为 FastAPI 单体应用，入口 `backend/app/main.py`。
 
-- **API 基础路径**：`/api/sessions/*`（旧版 `/api/planning/*` 已**废弃并移除**）
-- **数据通道**：SSE 单通道 —— 所有数据通过 SSE 流推送，Checkpoint 为唯一数据源（SSOT）
-- **路由聚合**：`routes.py` 统一路由器，聚合 `session_router` + `gis_test_router`
+- **API 基础路径**：`/api/*`；会话端点在 `/api/sessions/*`，人工审核在 `/api/human-review/*`
+- **数据通道**：SSE 单通道 -- 所有数据通过 SSE 流推送，Checkpoint 为唯一数据源（SSOT）
+- **路由聚合**：`routes.py` 统一聚合 session、GIS Dev、human-review、artifact 与 render router
+- **GIS Dev 路由**：`gis_test_router` 受 `IS_PRODUCTION` 门控，仅在非生产环境挂载（`routes.py:43`）
 
 ```
 FastAPI app (main.py)
   └─ router (routes.py)
-       ├─ session_router (session_routes.py)   ← 7 核心端点
+       ├─ session_router (session_routes.py)   ← 会话、SSE、恢复与反馈
        ├─ gis_test_router (gis_test_routes.py)  ← 开发环境 GIS 测试
+       ├─ human_review_router (human_review_routes.py)
+       ├─ artifact_router / render_router
        ├─ /api/health
        └─ /api/tiles/tianditu/{layer_proj}/{z}/{y}/{x}  ← 天地图瓦片代理
 ```
 
-## 2. 7 个核心端点
+## 2. 主要会话端点（非完整清单）
 
 | # | 方法 | 路径                                          | 说明                                                     |
 | - | ---- | --------------------------------------------- | -------------------------------------------------------- |
@@ -31,6 +34,25 @@ FastAPI app (main.py)
 | 5 | GET  | `/api/sessions/{id}/checkpoints`            | 检查点列表（标记 stable / intermediate）                 |
 | 6 | POST | `/api/sessions/{id}/resume/{checkpoint_id}` | 从检查点恢复（仅允许 stable 检查点）                     |
 | 7 | GET  | `/api/sessions/{id}/reports/{dim_key}`      | 维度报告全文（`?version=N` 查历史版本）                |
+
+### 人工审核端点（post-L3 HITL，`human_review_routes.py`）
+
+| 方法 | 路径 | 说明 |
+| ---- | ---- | ---- |
+| GET  | `/api/human-review/{session_id}` | 返回 `human_review_items` + `paused_stage`（首次 interrupt 时从 `snapshot.tasks` 兜底） |
+| POST | `/api/human-review/{session_id}/resolve` | 提交 `ResolveRequest`，调用 `resume_post_l3_chain` 恢复链 |
+
+`ResolveRequest` 字段：
+
+| 字段 | 类型 | 说明 |
+| ---- | ---- | ---- |
+| `decisions` | `Dict[str, Any]` | resume payload（非空），直接传给 `interrupt()` 调用点 |
+| `action`    | `str`            | `retry` / `accept` / `reject`（可省略，从 `decisions["action"]` 兜底） |
+
+`action` 路由语义（见 `route_after_human_review`）：
+- `accept`：按 `_STAGE_FORWARD_TARGET[paused_stage]` 前进，`__end__` 则 `END`
+- `retry`：回到 `paused_stage` 重跑
+- `reject`：回到 `conversation` 节点
 
 ### 辅助端点
 
@@ -78,6 +100,23 @@ Frontend (EventSource)
 - `GET /api/sessions/{id}/sync?from_seq=N` 支持断线重连，补发丢失事件
 - `completed` / `error` 事件关闭流
 
+### SSE 事件类型（`app/core/events.py::SSEEventType`）
+
+| 类别 | 事件 |
+| ---- | ---- |
+| 连接 | `connected`、`heartbeat`、`completed`、`error`、`resumed`、`pause` |
+| 层级 | `layer_started`、`layer_completed`、`layer_paused`、`execution_resumed` |
+| 维度 | `dimension_start`、`dimension_delta`、`dimension_complete`、`dimension_error` |
+| 级联 | `cascade_impact`、`cascade_complete` |
+| AI 响应 | `ai_response_delta`、`ai_response_complete` |
+| 检查点 | `checkpoint_saved`、`revision_completed` |
+| 工具 | `tool_started`、`tool_status`（legacy: `tool_call` / `tool_progress` / `tool_result`） |
+| GIS | `gis_result`、`gis_layer_update` |
+| RAG | `rag_query`、`rag_result` |
+| 配置 / HITL | `rag_config_updated`、`step_mode_updated`、`human_review_paused` |
+
+`human_review_paused` 由 `human_review_publish` 节点幂等发布，携带 `event_id`、`paused_stage`、`reason`、`item_count`。
+
 ## 4. 应用生命周期（`main.py` lifespan）
 
 ```python
@@ -101,7 +140,7 @@ async def lifespan(app: FastAPI):
 | 服务                       | 文件                               | 职责                                                                   |
 | -------------------------- | ---------------------------------- | ---------------------------------------------------------------------- |
 | `PlanningRuntimeService` | `runtime.py`                     | LangGraph 运行时单例。图构建缓存、状态读写、执行触发、interrupt/resume |
-| `sse_manager`            | `sse/sse_manager.py`（`sse/`） | SSE 事件队列管理、历史事件缓存、断线重连                               |
+| `sse_manager`            | `sse.py`                    | SSE 事件队列管理、历史事件缓存、断线重连                               |
 | `checkpoint_service`     | `checkpoint.py`                  | 检查点重建、stable 检测                                                |
 | `ReportStore`            | `report_store.py`                | 维度报告持久化、版本管理、层级摘要                                     |
 
@@ -111,13 +150,13 @@ async def lifespan(app: FastAPI):
 backend/app/
 ├── main.py                    # FastAPI 入口 + lifespan + 中间件
 ├── api/
-│   ├── routes.py              # 统一路由器（聚合 session + gis_test + tiles）
-│   ├── session_routes.py      # 7 核心端点 + 辅助端点
+│   ├── routes.py              # 统一路由器（聚合 session、GIS Dev、审核、artifact、render）
+│   ├── session_routes.py      # 会话、SSE、恢复与反馈端点
 │   ├── gis_test_routes.py     # 开发环境 GIS 测试
 │   └── schemas.py             # Pydantic 请求/响应模型
 ├── services/
 │   ├── runtime.py             # PlanningRuntimeService 单例
-│   ├── sse/                   # SSE 管理器
+│   ├── sse.py                 # SSE 管理器
 │   ├── checkpoint.py          # 检查点服务
 │   └── report_store.py        # 报告存储
 ├── database/                  # SQLModel + 异步引擎

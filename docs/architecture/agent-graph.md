@@ -1,29 +1,45 @@
 # 工作流图：当前实现与目标子图
 
-## 1. 当前主图
+## 1. 当前主图（代码事实，2026-08-07）
 
-当前入口为 `backend/app/agent/bootstrap/graph.py:create_unified_planning_graph`，包含 conversation、execute_tools、analyze_dimension、layer_completion_check、explore 和 gis_agent 六类节点。`gis_agent` 内部继续调用 `layout_pipeline`，因此顶层图看似简单，实际把 PARSE、KG、EXECUTE、VALIDATE、EXPORT、RENDER 聚合在一个节点中。
-
-当前主要路径：
+当前入口为 `backend/app/agent/bootstrap/graph.py:create_unified_planning_graph`。根图有 **20 个显式执行节点**；LangGraph 可视图中的第 21 个节点是隐式 `START`，不是额外业务阶段。
 
 ```text
-conversation
-  → analyze_dimension (Send 并行)
-  → layer_completion_check
-  → explore
-  → gis_agent
-  → END
+START -> conversation ─┬-> execute_tools -> conversation
+                     ├-> l1_worker | l2_worker | l3_worker
+                     │      -> layer_completion_check -> layer_aggregate -> advance_phase
+                     └-> bootstrap_context -> parse -> ground -> select -> execute -> validate -> reconcile -> deliver -> END
+
+任一 post-L3 Gate 可回退到前置阶段，或进入：
+human_review_prepare -> human_review_publish -> human_review_wait -> human_review_apply
 ```
 
-当前路径仅适合作为迁移兼容层，不是目标边界。
+20 个显式节点（按加入顺序）：
+`conversation`、`execute_tools`、`l1_worker`、`l2_worker`、`l3_worker`、`advance_phase`、`layer_completion_check`、`layer_aggregate`、`bootstrap_context`、`parse`、`ground`、`select`、`execute`、`validate`、`reconcile`、`deliver`、`human_review_prepare`、`human_review_publish`、`human_review_wait`、`human_review_apply`。
 
-当前新 `retrieve_evidence()` 调用发生在共享维度 worker 内、报告生成之前；L3 完成后仍存在旧的
-`explore -> gis_agent` 桥接。因此当前代码同时存在“按维度证据注入”和“旧后置桥接”两种语义，
-后者必须在目标主图接入时删除。
+其中 post-L3 的七个阶段已经是根图节点，不再由 `gis_agent` wrapper 聚合。`human_review_wait` 是唯一 `interrupt()` 点；`prepare`/`publish`/`apply` 三个节点必须可重放。
 
-当前 L1 的 12 个维度已经通过 `Send` 并行运行。每个 worker 生成完整报告后，还会生成并保存
-`DimensionReport.summary`；但该字段目前只是维度 schema 外壳、字符数、正文前 200 字预览以及空的
-`key_points` / `metrics`，不是语义摘要或权威事实。
+### 1.1 bootstrap_context 节点（Wave M3）
+
+`bootstrap_context` 在 `conversation` 路由到 PARSE 时执行一次，冻结上下文快照：
+
+- 调用 `build_planning_context(session_id, village_name)` 生成 `PlanningContext`，写入 `context_version` 与 `context_fingerprint`（`sha256:` 前缀 + 16 位 hex，由 `snapshot_meta()` 排序后哈希得到）。
+- `bootstrap_context_done=True` 防止后续 replay 重复构建；后续 post-L3 节点统一通过 `context_ref` 读取已冻结的上下文。
+- 失败时降级为空 fingerprint，不阻断主图。
+
+### 1.2 ref-only 状态与 `_load_ref_artifact`
+
+post-L3 的所有节点（parse/ground/select/execute/validate/reconcile/deliver）通过 `post_l3_main_nodes._load_ref_artifact(state, key, cls)` 从 artifact store 读取 typed artifact，AgentState 不再持有完整业务对象，只保存 `artifact_refs` + `*_gate` 决策。`context_fingerprint` 随 `ArtifactRef`/`ContractMeta` 一起持久化，replay 时用于校验 artifact 身份一致性。
+
+### 1.3 EXECUTE 子图与 HITL
+
+- EXECUTE 子图（`build_execute_agent_graph`）在 `PlanningRuntimeService.initialize()` 中**编译一次**，与主图共享同一个 `checkpointer`，避免每次调用重建。
+- HITL 由 4 个节点构成：`prepare`（收集 items + 生成 event_id，纯函数）→ `publish`（幂等发布 `HUMAN_REVIEW_PAUSED` SSE）→ `wait`（唯一 `interrupt()` 点）→ `apply`（写回 gate 决策）。`_retry_or_human` 在 retry 用尽时将 `paused_stage` 写入状态后转入 `human_review_prepare`。
+- resolve API 的 `action` 取 `retry`/`accept`/`reject`：`accept` 按 `_STAGE_FORWARD_TARGET` 前进，`retry` 回到 `paused_stage`，`reject` 回到 `conversation`。
+
+### 1.4 迁移期残留
+
+`AgentState` 仍处于 ref-only 收敛期：已移除 13 个 typed 业务对象字段（如完整 `PlanningProgram`、`GroundingResult`、`SiteSelectionDecision`、`PlannedState`、`ValidationReport` 等的内联存储），改为通过 `artifact_refs` 引用；当前约 69 个字段（含中间态/重试/HITL 字段）。`layout_configs` 等少量字段仍是迁移兼容字段。
 
 ## 2. 目标主图
 
@@ -158,7 +174,7 @@ EXPLORE。L1 并行 worker 不能假设同层其他报告已经可检索。
 
 ## 5. 状态规则
 
-LangGraph State 只保存：`context_ref`、`active_stage`、`active_gate`、`artifact_refs`、`pending_requests`、`validation_issues` 和 `human_review`。完整报告、KG、地块和图层通过 artifact store 读取。
+LangGraph State 只保存：`context_ref`、`context_version`、`context_fingerprint`、`bootstrap_context_done`、`active_stage`、`active_gate`（`parse_gate`/`ground_gate`/`select_gate`/`validate_gate`/`reconcile_gate`/`deliver_gate`）、`artifact_refs`、`pending_requests`、`validation_issues`、`retry_counts`、`paused_stage` 和 `human_review_*`。完整业务对象（`PlanningProgram`、`GroundingResult`、`SiteSelectionDecision`、`PlannedState`、`ValidationReport` 等）通过 artifact store 读取，不内联进 State。
 
 ## 6. 相关文件
 
@@ -166,15 +182,20 @@ LangGraph State 只保存：`context_ref`、`active_stage`、`active_gate`、`ar
 
 ```
 backend/app/agent/
-├── bootstrap/          # 主图工厂 + 阶段机 (graph.py, phase_machine.py, gis_agent_entry.py)
+├── bootstrap/          # 主图工厂、阶段机、artifact loader、主阶段节点
+│   ├── graph.py            # create_unified_planning_graph + HITL 4 节点
+│   ├── context_bootstrap.py # bootstrap_context 节点（Wave M3）
+│   ├── post_l3_main_nodes.py # parse/ground/select/execute/validate/reconcile/deliver + _load_ref_artifact
+│   ├── layer_aggregate_node.py
+│   └── layer_router.py     # l1/l2/l3 worker + advance_phase
+├── execute/            # EXECUTE compiled subgraph（build_execute_agent_graph，共享 checkpointer）
 ├── conversation_router/ # 中央路由 (node.py + edges.py)
 ├── l1_observe/         # L1 现状分析 (analysis_node.py + pipeline.py + formatters.py)
 ├── l2_strategize/      # L2 策略推导 (占位, 暂借 l1_observe)
 ├── l3_plan/            # L3 详细规划 (占位, 暂借 l1_observe)
 ├── explore/            # EXPLORE 认知引擎 (横向能力)
 ├── ground/             # GROUND 空间接地 (format_bound_intent.py)
-├── select/             # SELECT/PARSE (parse_agent.py, parse_state.py, parse_fallback.py, prompts.py)
-├── execute/            # EXECUTE (layout_pipeline.py, execute_agent.py, road_generator.py, vocab_*)
+├── select/             # SELECT 聚合与 Gate
 ├── validate/           # VALIDATE (占位)
 ├── plan_state/         # PLAN_STATE (state.py + completion_node.py)
 ├── reconcile/          # RECONCILE (占位)

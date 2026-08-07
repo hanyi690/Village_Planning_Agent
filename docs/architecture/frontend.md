@@ -102,16 +102,36 @@ frontend/
 POST /api/sessions  ──►  session_id
                             │
                             ▼
-                    useSSE(session_id)
+                     useSSE(session_id)
                             │ EventSource
                             ▼
-                GET /api/sessions/{id}/stream
+                 GET /api/sessions/{id}/stream
                             │
                     SSE events (single channel)
                             │
                             ▼
-                    useHandlers → planningStore
+                     useHandlers -> planningStore
 ```
+
+**SSE 事件清单**（`api/types.ts` 的 `SSEEventType` + `planning-api.ts` 的注册列表，二者必须同步）：
+
+| 类别 | 事件 |
+| ---- | ---- |
+| 维度 | `dimension_start`、`dimension_delta`、`dimension_complete` |
+| 层级 | `layer_started`、`layer_completed` |
+| 工具 | `tool_call`、`tool_progress`、`tool_result` |
+| AI 响应 | `ai_response_delta`、`ai_response_complete` |
+| GIS / RAG | `gis_result`、`gis_layer_update`、`rag_result` |
+| 级联 | `cascade_impact`、`cascade_complete` |
+| 设置 / HITL | `rag_config_updated`、`step_mode_updated`、`human_review_paused` |
+
+`human_review_paused` 已同时加入 `SSEEventType` 联合类型与 `planning-api.ts` 的 `addEventListener` 注册列表，前端可直接渲染 HITL 暂停状态。
+
+**连接生命周期修复**：
+
+- `useSSE`（`hooks/useSSE.ts`）曾对 `pause` / `completed` 注册重复监听，导致暂停后状态错乱 -- 已移除重复监听，`completed` 事件统一在单一 handler 中 `close()` EventSource 并设置 `shouldSuppressReconnect`。
+- 重连定时器 `reconnectTimerRef` 现在在组件卸载（unmount cleanup）和 sessionId 变更两条路径上都 `clearTimeout` + 置空，修复了重连定时器泄漏。
+- 批处理 timeout `batchTimeoutRef` 同样在 unmount 时清理。
 
 ## 5. 地图（MapLibre GL）
 
@@ -119,7 +139,7 @@ POST /api/sessions  ──►  session_id
 - **底图**：天地图瓦片，经后端代理 `/api/tiles/tianditu/{layer_proj}/{z}/{y}/{x}`
 - **组件**：`components/gis/MapView.tsx`
 - **图层控制**：`LayerTogglePanel`、`LegendPanel`
-- **GIS 结果**：`gis_agent` 产出的 `layout_configs` 经 SSE `gis_layer_update` 事件推送，前端渲染
+- **GIS 结果**：DELIVER/Render 产出的图层数据经 SSE `gis_layer_update` 事件推送，前端渲染。`layout_configs` 仍是迁移期兼容字段。
 
 ## 6. 脚本命令
 
