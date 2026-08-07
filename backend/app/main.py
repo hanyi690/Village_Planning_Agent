@@ -180,6 +180,9 @@ async def lifespan(app: FastAPI):
         raise
     app.state.readiness = {"database": "ready", "checkpointer": "ready", "langgraph": "ready"}
 
+    from app.services.composition import CompositionRoot
+    CompositionRoot.initialize()
+
     # Save event loop for cross-thread SSE publishing
     from app.services.sse import sse_manager
     sse_manager.save_event_loop(asyncio.get_running_loop())

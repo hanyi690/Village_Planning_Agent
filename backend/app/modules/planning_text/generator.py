@@ -22,7 +22,8 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 from dataclasses import dataclass, field
 
-from app.services.report_store import ReportStore
+from app.modules.ports.report_reader import ReportReaderPort
+from app.modules.ports.registry import get_report_store_default
 
 from .config import PlanningTextConfig
 from .content_extractor import ContentExtractor, ExtractedData, create_extracted_data
@@ -49,14 +50,16 @@ class GenerationResult:
 
 class PlanningTextGenerator:
 
-    def __init__(self, config: PlanningTextConfig):
+    def __init__(self, config: PlanningTextConfig, store: ReportReaderPort = None):
         warnings.warn(
             "PlanningTextGenerator is deprecated (Wave O): does not consume typed artifacts / bundle tables / post-L3 output. Prefer stage_report + typed artifacts.",
             DeprecationWarning,
             stacklevel=2,
         )
         self.config = config
-        self.store = ReportStore.get_instance()
+        if store is None:
+            store = get_report_store_default()
+        self.store = store
 
     # ---- Public API ----
 

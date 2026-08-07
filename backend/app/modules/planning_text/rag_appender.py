@@ -8,7 +8,8 @@ listing all RAG knowledge sources grouped by dimension with labels.
 import logging
 from typing import Any, Dict, List
 
-from app.services.report_store import ReportStore
+from app.modules.ports.report_reader import ReportReaderPort
+from app.modules.ports.registry import get_report_store_default
 
 logger = logging.getLogger(__name__)
 
@@ -24,9 +25,11 @@ _TYPE_LABELS = {
 
 class RAGAppender:
 
-    def __init__(self, session_id: str):
+    def __init__(self, session_id: str, store: ReportReaderPort = None):
         self.session_id = session_id
-        self.store = ReportStore.get_instance()
+        if store is None:
+            store = get_report_store_default()
+        self.store = store
 
     async def append(self, document: str) -> str:
         parts = ["", "## 附录：知识来源与参考依据", ""]

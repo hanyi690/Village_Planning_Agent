@@ -17,7 +17,8 @@ from docx.shared import Pt, Cm
 from docx.enum.text import WD_ALIGN_PARAGRAPH, WD_LINE_SPACING
 from docx.enum.table import WD_TABLE_ALIGNMENT
 
-from app.services.report_store import ReportStore
+from app.modules.ports.report_reader import ReportReaderPort
+from app.modules.ports.registry import get_report_store_default
 from app.modules.schema.layers import LAYER_NAMES_BY_NUMBER
 from .docx_styles import (
     setup_document_styles,
@@ -80,9 +81,11 @@ class LayerExportResult:
 class LayerExporter:
     """Exports layer-specific reports in multiple formats."""
 
-    def __init__(self, config: LayerExportConfig):
+    def __init__(self, config: LayerExportConfig, store: ReportReaderPort = None):
         self.config = config
-        self.store = ReportStore.get_instance()
+        if store is None:
+            store = get_report_store_default()
+        self.store = store
 
     async def export_layer(self, layer: int) -> LayerExportResult:
         """Export a single layer report.

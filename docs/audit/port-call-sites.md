@@ -58,10 +58,10 @@ modules by the composition root (`app/services/composition.py`).
 
 ## Residuals
 
-- `app/modules/kg/enrichment/report_entity_enrichment.py` still lazily imports
-  `get_cached_context` from `app.services.context.planning_context`. The port
-  is defined, but the enrichment is a module-level function invoked from the
-  agent `completion_node` with a deep call chain; threading a context-reader
-  through `run_wave`/`extract_bindings` would require invasive signature
-  changes across both the agent and module. The port is declared and the
-  function guards on a lazy import, so this is flagged as a residual.
+None. All five `modules -> services` reverse imports were eliminated. Modules
+now depend either on the Port Protocols (`report_reader.py`,
+`report_writer.py`, `context_reader.py`) or on the neutral registry
+(`app/modules/ports/registry.py`) that the composition root populates at boot.
+The composition root (`app/services/composition.py`) owns the concrete
+singletons and registers them into the registry; modules never import
+`app.services` directly.

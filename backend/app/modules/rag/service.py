@@ -201,7 +201,8 @@ class RagService:
     async def generate_queries(
         self,
         cfg: Any,
-        state: Dict[str, Any]
+        state: Dict[str, Any],
+        store: Any = None,
     ) -> List[str]:
         """
         使用 LLM-Flash 基于依赖信息动态生成多条 RAG 查询
@@ -209,11 +210,16 @@ class RagService:
         Args:
             cfg: Dimension config (has name, rag_query, depends_on, etc.)
             state: Current agent state (has session_id, completed_dimensions, etc.)
+            store: ReportReaderPort-compatible reader. Defaults to the
+                composition root's report store when omitted.
 
         Returns:
             多条检索查询字符串
         """
-        from app.services.report_store import ReportStore
+        if store is None:
+            from app.modules.ports.registry import get_report_store_default
+
+            store = get_report_store_default()
 
         dim_key = cfg.key if hasattr(cfg, 'key') else "unknown"
         dim_name = cfg.name if hasattr(cfg, 'name') else dim_key
@@ -237,7 +243,7 @@ class RagService:
 
         all_deps = depends_on + layer_depends_on + phase_depends_on
 
-        store = ReportStore.get_instance()
+        # store resolved from generate_queries caller (composition root default)
 
         # 批量加载依赖摘要（避免 N+1 查询）
         # Full text + structured summary metrics for better RAG queries
