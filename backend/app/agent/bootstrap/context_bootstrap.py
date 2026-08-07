@@ -52,7 +52,7 @@ def _hydrate_l1_spatial_facts(state: Dict[str, Any], context: Any) -> None:
 
 async def bootstrap_context_node(state: Dict[str, Any]) -> Dict[str, Any]:
     session_id = state.get("session_id", "")
-    if state.get("bootstrap_context_done") and session_id:
+    if state.get("bootstrap_context_done") and state.get("context_version") and session_id:
         # A checkpoint may be resumed in a fresh worker process where the
         # in-process cache is empty.  The boolean is not proof that the
         # PlanningContext is available; rebuild the same authoritative
