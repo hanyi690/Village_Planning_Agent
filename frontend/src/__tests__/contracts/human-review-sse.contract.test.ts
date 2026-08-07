@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect } from '@jest/globals';
 import type { HumanReviewItem, HumanReviewListResponse } from '../../features/planning/api/types';
 
 describe('Human Review SSE Contract', () => {

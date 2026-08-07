@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, jest } from '@jest/globals';
 import { usePlanningStore } from '../../features/planning/store/planningStore';
 import * as planningApi from '../../features/planning/api/planning-api';
 
@@ -41,45 +41,45 @@ describe('human_review_paused event handling', () => {
 describe('fetchHumanReviewItems action', () => {
   it('fetches items and stores them', async () => {
     const items = [{ request_id: 'req-1', stage: 'execute', request_type: 'zone_review' }];
-    vi.spyOn(planningApi.planningApi, 'getHumanReview').mockResolvedValue({
+    jest.spyOn(planningApi.planningApi, 'getHumanReview').mockResolvedValue({
       session_id: 'sess-1', post_l3_status: 'paused', pending_items: items, count: 1,
     });
     await usePlanningStore.getState().fetchHumanReviewItems('sess-1');
     expect(usePlanningStore.getState().humanReviewItems).toEqual(items);
-    vi.restoreAllMocks();
+    jest.restoreAllMocks();
   });
 
   it('sets error on fetch failure', async () => {
-    vi.spyOn(planningApi.planningApi, 'getHumanReview').mockRejectedValue(new Error('network'));
+    jest.spyOn(planningApi.planningApi, 'getHumanReview').mockRejectedValue(new Error('network'));
     await usePlanningStore.getState().fetchHumanReviewItems('sess-1');
     expect(usePlanningStore.getState().humanReviewError).toBeTruthy();
-    vi.restoreAllMocks();
+    jest.restoreAllMocks();
   });
 });
 
 describe('resolveHumanReview action', () => {
   it('sets isResolvingReview on success but does NOT set status=planning', async () => {
     usePlanningStore.setState({ status: 'paused', humanReviewEventId: 'evt-1', pausedStage: 'execute' });
-    vi.spyOn(planningApi.planningApi, 'resolveHumanReview').mockResolvedValue({
+    jest.spyOn(planningApi.planningApi, 'resolveHumanReview').mockResolvedValue({
       session_id: 'sess-1', resolved: true, result: {},
     });
     await usePlanningStore.getState().resolveHumanReview('sess-1', { r1: { action: 'approve' } });
     const state = usePlanningStore.getState();
     expect(state.isResolvingReview).toBe(true);
     expect(state.status).toBe('paused');
-    vi.restoreAllMocks();
+    jest.restoreAllMocks();
   });
 
   it('does NOT clear paused state on resolve failure', async () => {
     usePlanningStore.setState({ status: 'paused', humanReviewEventId: 'evt-1', pausedStage: 'execute' });
-    vi.spyOn(planningApi.planningApi, 'resolveHumanReview').mockRejectedValue(new Error('server'));
+    jest.spyOn(planningApi.planningApi, 'resolveHumanReview').mockRejectedValue(new Error('server'));
     await usePlanningStore.getState().resolveHumanReview('sess-1', { r1: { action: 'approve' } });
     const state = usePlanningStore.getState();
     expect(state.status).toBe('paused');
     expect(state.humanReviewEventId).toBe('evt-1');
     expect(state.humanReviewError).toBeTruthy();
     expect(state.isResolvingReview).toBe(false);
-    vi.restoreAllMocks();
+    jest.restoreAllMocks();
   });
 });
 
