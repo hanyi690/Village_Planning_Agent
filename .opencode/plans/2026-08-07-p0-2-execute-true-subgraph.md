@@ -1,4 +1,4 @@
-# P0-2: EXECUTE True Subgraph Mount
+﻿# P0-2: EXECUTE True Subgraph Mount
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
@@ -206,191 +206,102 @@ git commit -m "fix: compile EXECUTE subgraph without its own checkpointer"
 
 ---
 
-### Task 3: Mount EXECUTE as a formal subgraph node
+### Task 3: EXECUTE via wrapper function + independent checkpointer
 
 **Files:**
-- Modify: `backend/app/agent/bootstrap/graph.py:178` (replace `add_node("execute", execute_node)` with `add_node("execute", compiled_execute)`)
-- Modify: `backend/app/agent/bootstrap/post_l3_main_nodes.py` (split execute_node into pre/post mapping nodes)
-- Modify: `backend/app/agent/plan_state/state.py` (add `execute_agent_state` field to AgentState)
+- Modify: `backend/app/agent/bootstrap/post_l3_main_nodes.py` (keep `execute_node` as wrapper, or rename; it already maps parent refs -> ExecuteAgentState -> parent refs)
+- Modify: `backend/app/services/runtime.py` (compile EXECUTE with an independent checkpointer)
+- Revert: `backend/app/agent/plan_state/state.py` (REMOVE the 12 EXECUTE channel fields added by the previous Approach 1)
+- Revert: `backend/app/agent/bootstrap/graph.py` (keep `execute_node` as a plain function node, NOT a mounted compiled subgraph)
 - Test: `backend/tests/agent/test_execute_subgraph_isolation.py`
 
-**Approach:** The formal subgraph mount means LangGraph calls the compiled EXECUTE graph directly as a node. But the parent and child have different state schemas. We need:
+**Approach (FINAL, per Context7 + Exa official LangGraph practice):** When the parent and subgraph have **different state schemas** (AgentState TypedDict vs ExecuteAgentState BaseModel, with no shared keys), LangGraph's official recommended pattern is **"Call a subgraph inside a node"** — a wrapper function that explicitly maps parent state to subgraph input and back. Direct `add_node(compiled_subgraph)` is only for graphs that SHARE state keys.
 
-1. A `pre_execute` node that maps parent AgentState -> ExecuteAgentState and stores it in `state["execute_agent_state"]`
-2. The formal subgraph mount reads `execute_agent_state` as its input
-3. A `post_execute` node that maps the subgraph output back to parent AgentState
+The original economics: `execute_node` (post_l3_main_nodes.py) already IS this wrapper — it builds `ExecuteAgentState` from parent refs, calls `graph.ainvoke(exec_state, config)`, and maps `result` back to parent. The ONLY bug was the checkpoint namespace collision (same checkpointer + same thread_id + default empty ns).
 
-The subgraph's `ExecuteAgentState` must be expressible as a dict in the parent state. LangGraph will pass the relevant keys to the subgraph.
+**Fix: give EXECUTE an independent checkpointer** so its checkpoints live in a separate namespace, while sharing the thread_id. Per LangGraph docs, a subgraph compiled with `checkpointer=True` (or its own checkpointer instance) gets independent checkpoint history. Because the wrapper passes a DISTINCT `checkpoint_ns` (e.g. `"execute"`) in the config, the EXECUTE checkpoints are isolated from the parent's `""` namespace.
 
-**Simpler alternative:** Since `ExecuteAgentState` is a Pydantic BaseModel (not a TypedDict), and LangGraph subgraphs with `add_node(compiled_graph)` expect the parent state to contain keys matching the child's state schema, we can add the child's keys to `AgentState` as optional fields. But this pollutes the parent schema.
-
-**Recommended approach:** Use a wrapper node that invokes the compiled subgraph. The key difference from the current code is: (1) the subgraph is compiled without a checkpointer, (2) the wrapper passes the parent config (with thread_id) so LangGraph routes through the parent's checkpointer. Per Context7, when a compiled graph without its own checkpointer is passed to `add_node`, LangGraph manages the namespace. But when called via `.ainvoke()` inside a wrapper function, we must explicitly pass a distinct `checkpoint_ns`.
-
-**Final decision:** Mount the compiled subgraph directly via `add_node("execute_subgraph", compiled_execute)` and add pre/post mapping nodes. The graph structure becomes:
-
+The graph structure stays:
 ```
-... -> select -> pre_execute -> execute_subgraph -> post_execute -> validate -> ...
+... -> select -> execute (wrapper function) -> validate -> ...
 ```
 
-- [ ] **Step 1: Add execute_agent_state to AgentState**
+- [ ] **Step 1: Revert Approach 1 — remove the 12 EXECUTE channel fields from AgentState**
 
-In `backend/app/agent/plan_state/state.py`, add to the `AgentState` TypedDict:
-
+In `backend/app/agent/plan_state/state.py`, remove the EXECUTE channel fields added previously:
 ```python
-    execute_agent_state: dict  # mapped ExecuteAgentState for the formal subgraph
+    intent: Any
+    site_selection: Any
+    execution_plan: Any
+    gis_data: dict
+    gis_bundle: Any
+    facility_anchors: list
+    kg_session_ref: str
+    parcel_changeset: Any
+    layout_configs: list
+    execution_errors: list
+    allocated_geojson: dict
+    allocation_summary: dict
+    planned_state: Any
 ```
+(These 12 fields were added by the previous Approach 1. Remove them to restore ref-only AgentState. Note: `layout_configs` and `execution_errors` may already exist in AgentState independently — check; only remove the ones the Approach 1 mount added.)
 
-And in `create_initial_state`, add:
+- [ ] **Step 2: Revert graph.py to keep execute_node as a plain function node**
 
+In `backend/app/agent/bootstrap/graph.py`, revert the Approach 1 changes:
+- Remove `pre_execute_node` / `post_execute_node` registration and the `add_node("execute", compiled_execute)` mount
+- Restore `builder.add_node("execute", post_l3_main_nodes.execute_node)`
+- Restore edges: select -> execute -> validate (remove pre_execute/post_execute edges)
+- Restore `route_after_select`/`route_after_validate`/`route_after_reconcile`/`route_after_human_review` maps to route to `"execute"` (not `"pre_execute"`)
+
+- [ ] **Step 3: Compile EXECUTE with an independent checkpointer**
+
+In `backend/app/services/runtime.py`, change the EXECUTE compile to give it an independent checkpointer:
 ```python
-        "execute_agent_state": {},
+        from app.agent.execute.execute_agent import build_execute_agent_graph
+        cls._execute_subgraph = build_execute_agent_graph(checkpointer=True)
+        logger.info("[PlanningRuntimeService] EXECUTE subgraph compiled (independent checkpointer)")
 ```
+`checkpointer=True` makes LangGraph give the subgraph its own checkpoint history (per official time-travel docs). Verify `build_execute_agent_graph` passes it to `compile()`.
 
-- [ ] **Step 2: Create pre_execute and post_execute nodes**
+- [ ] **Step 4: Pass a distinct checkpoint_ns when invoking EXECUTE**
 
-In `backend/app/agent/bootstrap/post_l3_main_nodes.py`, refactor `execute_node` into:
-
+In `backend/app/agent/bootstrap/post_l3_main_nodes.py` `execute_node`, change the `graph.ainvoke(...)` call to pass a distinct `checkpoint_ns`:
 ```python
-async def pre_execute_node(state: Dict[str, Any]) -> Dict[str, Any]:
-    """Map parent AgentState -> ExecuteAgentState dict for the formal subgraph."""
-    from app.agent.execute.execute_state import ExecuteAgentState
-    from app.modules.schema.contracts.parse_contracts import SpatialPlanningIntent
-    from app.modules.schema.contracts.parse_result_contracts import IntentCompilationResult
-    from app.modules.schema.contracts.selection_contracts import SiteSelectionDecision
-    from app.modules.schema.contracts.execution_plan_contracts import ExecutionPlan
-
-    context = await _require_context(state)
-    intent = _load_ref_artifact(state, "intent_compilation", IntentCompilationResult)
-    plan_intent = _to_typed(getattr(intent, "typed_intent", None) or intent, SpatialPlanningIntent)
-    site_selection = _load_ref_artifact(state, "site_selection", SiteSelectionDecision)
-    execution_plan = _load_ref_artifact(state, "execution_plan", ExecutionPlan)
-    if execution_plan is None and intent is not None and site_selection is not None:
-        from app.agent.execute.plan_builder import build_execution_plan
-        execution_plan = build_execution_plan(
-            intent, site_selection, state.get("land_design_briefs") or [],
-            run_id=_run_id(state), context_version=_context_version(state),
-        )
-    bundle = getattr(context, "bundle", None)
-    gis_data = bundle.to_geojson_dict() if bundle is not None and hasattr(bundle, "to_geojson_dict") else {}
-
-    kg_obj = getattr(context, "kg", None)
-    if kg_obj is not None and plan_intent is not None:
-        try:
-            from app.modules.kg.builder.layer3 import build_intent_layer
-            build_intent_layer(kg_obj, plan_intent)
-        except Exception as e:
-            logger.warning("[pre_execute] build_intent_layer failed: %s", e)
-
-    exec_state = ExecuteAgentState(
-        session_id=state.get("session_id", ""),
-        village_name=state.get("config", {}).get("village_name", ""),
-        gis_data=gis_data,
-        gis_bundle=bundle,
-        intent=plan_intent,
-        facility_anchors=getattr(context, "village_anchors", None),
-        site_selection=site_selection,
-        land_design_briefs=list(state.get("land_design_briefs") or []),
-        execution_plan=execution_plan,
-        kg_session_ref=getattr(context, "kg_session_ref", "") or "",
-        messages=list(state.get("messages") or []),
+    result = await graph.ainvoke(
+        exec_state,
+        config={"configurable": {"thread_id": state.get("session_id", ""), "checkpoint_ns": "execute"}},
     )
-    return {
-        "execute_agent_state": exec_state.model_dump(mode="json"),
-        **_adopt_context(state, context),
-    }
-
-
-async def post_execute_node(state: Dict[str, Any]) -> Dict[str, Any]:
-    """Map ExecuteAgentState output back to parent AgentState."""
-    from app.agent.execute.planned_state_builder import changeset_to_planned_state
-    from app.modules.schema.contracts.parse_contracts import SpatialPlanningIntent
-
-    exec_result = state.get("execute_agent_state", {})
-    changeset = exec_result.get("parcel_changeset")
-    # Reload intent for planned_state construction
-    from app.modules.schema.contracts.parse_result_contracts import IntentCompilationResult
-    intent = _load_ref_artifact(state, "intent_compilation", IntentCompilationResult)
-    plan_intent = _to_typed(getattr(intent, "typed_intent", None) or intent, SpatialPlanningIntent)
-
-    if changeset is not None:
-        planned_state = changeset_to_planned_state(changeset, plan_intent)
-    else:
-        logger.warning("[post_execute] no parcel_changeset produced")
-        planned_state = None
-
-    refs = {
-        "parcel_changeset": _persist_artifact(state, "execute", "ParcelChangeSet", changeset),
-        "planned_state": _persist_artifact(state, "execute", "PlannedState", planned_state),
-        "allocated_geojson": _persist_artifact(
-            state, "execute", "AllocatedGeoJSON", exec_result.get("allocated_geojson", {}) or {}
-        ),
-    }
-    return {
-        "layout_configs": _jsonable(list(exec_result.get("layout_configs", []) or [])),
-        "execution_errors": _jsonable(list(exec_result.get("execution_errors", []) or [])),
-        "artifact_refs": refs,
-    }
 ```
+This isolates EXECUTE checkpoints from the parent's `""` namespace, preventing parent-state clobbering.
 
-- [ ] **Step 3: Mount the compiled subgraph in the parent graph**
+- [ ] **Step 5: Run the integration/regression tests**
 
-In `backend/app/agent/bootstrap/graph.py`, change the node registration and edges:
+Run: `cd backend && python -m pytest --basetemp=C:\Users\24957\AppData\Local\Temp\opencode\pt tests/agent/test_execute_subgraph_isolation.py tests/agent/test_post_l3_main_nodes.py -v`
+Then: `cd backend && python -m pytest --basetemp=C:\Users\24957\AppData\Local\Temp\opencode\pt tests/core/ tests/agent/ -v`
+Fix breakage. Pre-existing failures (test_post_l3_main_nodes.py 6 tests, test_unified_graph_replay) are NOT yours — report them.
 
-Current (line 178):
-```python
-    builder.add_node("execute", post_l3_main_nodes.execute_node)
-```
+- [ ] **Step 6: Verify the wave_m ref-only test passes again**
 
-New:
-```python
-    from app.agent.execute.execute_agent import build_execute_agent_graph
-    compiled_execute = build_execute_agent_graph()
-    builder.add_node("pre_execute", post_l3_main_nodes.pre_execute_node)
-    builder.add_node("execute", compiled_execute)
-    builder.add_node("post_execute", post_l3_main_nodes.post_execute_node)
-```
+Run: `cd backend && python -m pytest --basetemp=C:\Users\24957\AppData\Local\Temp\opencode\pt tests/unit/test_agent_state_wave_m_fields.py -v`
+This test asserts site_selection/execution_plan/etc. are NOT in AgentState. After reverting the channel fields, it should PASS again.
 
-Update the edges (lines 208-210):
-```python
-    builder.add_conditional_edges("select", route_after_select,
-        {"execute": "pre_execute", "ground": "ground", "human_review": "human_review_prepare"})
-    builder.add_edge("pre_execute", "execute")
-    builder.add_edge("execute", "post_execute")
-    builder.add_edge("post_execute", "validate")
-```
-
-Also update any other edges that reference `"execute"` to go to `"pre_execute"` instead (e.g., in `route_after_validate` which can route back to `"execute"` for retry - change to `"pre_execute"`).
-
-- [ ] **Step 4: Run the integration tests**
-
-Run: `cd backend && python -m pytest tests/agent/test_execute_subgraph_isolation.py tests/agent/test_post_l3_main_nodes.py -v`
-Expected: PASS
-
-- [ ] **Step 5: Run full regression**
-
-Run: `cd backend && python -m pytest tests/core/ tests/agent/ -v`
-Expected: All pass
-
-- [ ] **Step 6: Commit**
+- [ ] **Step 7: Commit**
 
 ```bash
-git add backend/app/agent/bootstrap/graph.py backend/app/agent/bootstrap/post_l3_main_nodes.py backend/app/agent/plan_state/state.py backend/app/services/runtime.py
-git commit -m "fix: mount EXECUTE as formal subgraph with pre/post mapping nodes
+git add backend/app/agent/bootstrap/post_l3_main_nodes.py backend/app/services/runtime.py backend/app/agent/plan_state/state.py backend/app/agent/bootstrap/graph.py
+git commit -m "fix: EXECUTE via wrapper function with independent checkpointer
 
-The EXECUTE subgraph was compiled with the parent's checkpointer and
-invoked via direct .ainvoke() with the same thread_id and default empty
-checkpoint_ns, causing ExecuteAgentState checkpoints to clobber the
-parent's AgentState history.
-
-Now the compiled EXECUTE graph (without its own checkpointer) is mounted
-via add_node('execute', compiled_execute). LangGraph auto-assigns a
-nested checkpoint_ns. pre_execute maps parent state -> ExecuteAgentState;
-post_execute maps the result back. Per Context7 LangGraph docs, a
-compiled graph without its own checkpointer mounted via add_node gets
-automatic namespace isolation."
+Revert Approach 1 (which added 12 EXECUTE channel fields to AgentState,
+polluting the ref-only schema and breaking test_agent_state_wave_m_fields).
+Per LangGraph official practice, when parent and subgraph have different
+state schemas the recommended pattern is 'Call a subgraph inside a node'
+(a wrapper function that maps state in/out). execute_node already is that
+wrapper. The real fix is giving EXECUTE an independent checkpointer
+(checkpointer=True) and passing a distinct checkpoint_ns ('execute') so
+its checkpoints are isolated from the parent's '' namespace, eliminating
+the parent-state clobbering without polluting the parent schema."
 ```
-
----
 
 ### Task 4: Full regression and audit ledger
 
