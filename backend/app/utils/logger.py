@@ -15,9 +15,13 @@ from app.core.settings import LOG_DIR
 _session_id_var: contextvars.ContextVar[str] = contextvars.ContextVar("session_id", default="")
 
 
-def set_session_id(sid: str) -> None:
+def set_session_id(sid: str):
     """Set session_id for current async context (call once per request)."""
-    _session_id_var.set(sid)
+    return _session_id_var.set(sid)
+
+
+def reset_session_id(token) -> None:
+    _session_id_var.reset(token)
 
 
 def get_session_id() -> str:

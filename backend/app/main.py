@@ -24,7 +24,10 @@ from fastapi.responses import JSONResponse
 # Add parent directory to Python path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from app.core.settings import LOG_LEVEL, LOG_DIR, LOG_FILE_MAX_BYTES, LOG_FILE_BACKUP_COUNT, LOG_RETENTION_DAYS, PROJECT_ROOT
+from app.core.settings import (
+    BACKEND_STARTUP_TIMEOUT_SECONDS, LOG_LEVEL, LOG_DIR, LOG_FILE_MAX_BYTES,
+    LOG_FILE_BACKUP_COUNT, LOG_RETENTION_DAYS, PROJECT_ROOT, IS_PRODUCTION,
+)
 from app.utils.logger import SessionFilter, ensure_log_dir
 
 # Ensure log directory exists before configuring handlers
@@ -103,8 +106,6 @@ logging.config.dictConfig(LOGGING_CONFIG)
 logger = logging.getLogger(__name__)
 
 # Environment configuration
-IS_PRODUCTION = os.getenv("ENVIRONMENT") == "production"
-# Development origins: 3000/3001/3002 are common Next.js ports
 ALLOWED_ORIGINS = os.getenv(
     "ALLOWED_ORIGINS",
     "http://localhost:3000,http://localhost:3001,http://localhost:3002,http://localhost:8000"
@@ -165,25 +166,19 @@ async def lifespan(app: FastAPI):
     logger.info(f"📁 Project root: {PROJECT_ROOT}")
     logger.info(f"📁 Working directory: {os.getcwd()}")
 
-    # Initialize async database
-    logger.info("🗄️  Initializing database...")
+    app.state.readiness = {"database": "starting", "checkpointer": "starting", "langgraph": "starting"}
     try:
-        from app.database import init_async_db
-        if await init_async_db():
-            logger.info("✅ Database initialized successfully")
-        else:
-            logger.error("❌ Database initialization failed")
-    except Exception as e:
-        logger.error(f"❌ Database initialization failed: {e}", exc_info=True)
-
-    # Initialize PlanningRuntimeService (LangGraph runtime singleton)
-    logger.info("🔧 Initializing PlanningRuntimeService...")
-    try:
-        from app.services.runtime import PlanningRuntimeService
-        await PlanningRuntimeService.initialize()
-        logger.info("✅ PlanningRuntimeService initialized successfully")
-    except Exception as e:
-        logger.error(f"❌ PlanningRuntimeService initialization failed: {e}", exc_info=True)
+        async with asyncio.timeout(BACKEND_STARTUP_TIMEOUT_SECONDS):
+            from app.database import init_async_db
+            if not await init_async_db():
+                raise RuntimeError("database initialization returned false")
+            from app.services.runtime import PlanningRuntimeService
+            await PlanningRuntimeService.initialize()
+    except Exception:
+        logger.exception("Core backend startup failed")
+        app.state.readiness = {"database": "failed", "checkpointer": "failed", "langgraph": "failed"}
+        raise
+    app.state.readiness = {"database": "ready", "checkpointer": "ready", "langgraph": "ready"}
 
     # Save event loop for cross-thread SSE publishing
     from app.services.sse import sse_manager
@@ -215,7 +210,8 @@ async def lifespan(app: FastAPI):
     logger.info("🧹 Cleaning up resources...")
     try:
         from app.database import dispose_async_engine
-        await dispose_async_engine()
+        async with asyncio.timeout(5):
+            await dispose_async_engine()
         logger.info("✅ Database engine disposed")
     except Exception as e:
         logger.error(f"❌ Failed to dispose database engine: {e}", exc_info=True)
@@ -261,9 +257,12 @@ async def session_id_middleware(request: Request, call_next):
     import re
     m = re.search(r"/api/sessions/([^/]+)", path)
     sid = m.group(1) if m else ""
-    _set_session_id(sid)
-    response: Response = await call_next(request)
-    _set_session_id("")
+    from app.utils.logger import set_session_id, reset_session_id
+    token = set_session_id(sid)
+    try:
+        response: Response = await call_next(request)
+    finally:
+        reset_session_id(token)
     return response
 
 # Include unified router (aggregates all API routes)
@@ -279,7 +278,7 @@ app.include_router(router)
 async def health_check() -> dict[str, str]:
     """Health check endpoint"""
     return {
-        "status": "healthy",
+        "status": "alive",
         "service": "village-planning-backend",
         "version": "1.0.0"
     }
