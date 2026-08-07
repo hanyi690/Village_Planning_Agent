@@ -117,6 +117,7 @@ import {
   NAV_KEYS,
 } from "@/features/planning/constants";
 import type { NavigationKey } from "@/features/planning/constants";
+import type { HumanReviewItem } from '../api/types';
 
 export type ProcessPanelTab = "messages" | "map" | "history" | "settings";
 import {
@@ -234,6 +235,13 @@ export interface PlanningState {
   isPaused: boolean;
   pendingReviewLayer: number | null;
   lastPauseLayer: number;
+
+  // HITL Human Review state
+  humanReviewEventId: string | null;
+  pausedStage: string | null;
+  humanReviewItems: HumanReviewItem[];
+  humanReviewError: string | null;
+  isResolvingReview: boolean;
 
   // SSE Reconnect
   sseResumeTrigger: number;
@@ -389,6 +397,11 @@ function createInitialState(conversationId: string): PlanningState {
     isPaused: false,
     pendingReviewLayer: null,
     lastPauseLayer: 0,
+    humanReviewEventId: null,
+    pausedStage: null,
+    humanReviewItems: [],
+    humanReviewError: null,
+    isResolvingReview: false,
     sseResumeTrigger: 0,
     lastProcessedSeq: 0,
 
