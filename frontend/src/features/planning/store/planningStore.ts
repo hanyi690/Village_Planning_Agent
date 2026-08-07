@@ -118,6 +118,7 @@ import {
 } from "@/features/planning/constants";
 import type { NavigationKey } from "@/features/planning/constants";
 import type { HumanReviewItem } from '../api/types';
+import { planningApi } from '../api/planning-api';
 
 export type ProcessPanelTab = "messages" | "map" | "history" | "settings";
 import {
@@ -563,6 +564,10 @@ export interface PlanningActions {
 
   // SSE Event handling
   handleSSEEvent: (event: StoreEvent) => void;
+
+  // HITL Human Review actions
+  fetchHumanReviewItems: (sessionId: string) => Promise<void>;
+  resolveHumanReview: (sessionId: string, decisions: Record<string, unknown>) => Promise<void>;
 
   // SSE Reconnect trigger
   triggerSseReconnect: () => void;
@@ -2121,6 +2126,33 @@ export const usePlanningStore = create<PlanningState & PlanningActions>()(
       set((state) => {
         handleSSEEventInStore(state, event);
       }),
+
+    fetchHumanReviewItems: async (sessionId) => {
+      try {
+        const response = await planningApi.getHumanReview(sessionId);
+        set((state) => {
+          state.humanReviewItems = response.pending_items || [];
+          state.humanReviewError = null;
+        });
+      } catch (err) {
+        set((state) => {
+          state.humanReviewError = err instanceof Error ? err.message : 'Failed to fetch review items';
+        });
+      }
+    },
+
+    resolveHumanReview: async (sessionId, decisions) => {
+      set((state) => { state.isResolvingReview = true; state.humanReviewError = null; });
+      try {
+        await planningApi.resolveHumanReview(sessionId, decisions);
+        set((state) => { state.isResolvingReview = true; });
+      } catch (err) {
+        set((state) => {
+          state.isResolvingReview = false;
+          state.humanReviewError = err instanceof Error ? err.message : 'Failed to resolve review';
+        });
+      }
+    },
 
     // SSE Reconnect trigger - increment to trigger reconnect
     triggerSseReconnect: () =>
