@@ -45,6 +45,7 @@ export function useSSEConnection({
   const prevSessionIdRef = useRef<string | null>(null);
   const prevResumeTriggerRef = useRef<number>(0);
   const reconnectAttemptsRef = useRef(0);
+  const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Batch processing refs
   const batchQueueRef = useRef<BatchEvent[]>([]);
@@ -227,7 +228,7 @@ export function useSSEConnection({
           if (reconnectAttemptsRef.current < MAX_RECONNECT_ATTEMPTS) {
             reconnectAttemptsRef.current++;
             const delay = Math.min(1000 * reconnectAttemptsRef.current, 5000);
-            setTimeout(() => {
+            reconnectTimerRef.current = setTimeout(() => {
               const currentSessionId = usePlanningStore.getState().sessionId;
               if (currentSessionId) {
                 connectSSE(currentSessionId);
@@ -291,12 +292,20 @@ export function useSSEConnection({
         sseConnectionRef.current.close();
         sseConnectionRef.current = null;
       }
+      if (reconnectTimerRef.current) {
+        clearTimeout(reconnectTimerRef.current);
+        reconnectTimerRef.current = null;
+      }
     };
   }, [sessionId, enabled, resumeTrigger, connectSSE]);
 
   // Cleanup batch timeout on unmount
   useEffect(() => {
     return () => {
+      if (reconnectTimerRef.current) {
+        clearTimeout(reconnectTimerRef.current);
+        reconnectTimerRef.current = null;
+      }
       if (batchTimeoutRef.current) {
         clearTimeout(batchTimeoutRef.current);
         batchTimeoutRef.current = null;
