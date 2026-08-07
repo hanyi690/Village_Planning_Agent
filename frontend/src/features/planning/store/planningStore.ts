@@ -1635,6 +1635,24 @@ function handleSSEEventInStore(state: PlanningState, event: StoreEvent): void {
       }
       break;
     }
+
+    case "human_review_paused": {
+      const hitlData = data as {
+        event_id?: string;
+        paused_stage?: string;
+        reason?: string;
+        item_count?: number;
+      };
+      // Idempotent: don't override if already paused for this stage
+      if (!state.humanReviewEventId) {
+        state.humanReviewEventId = hitlData.event_id || null;
+        state.pausedStage = hitlData.paused_stage || null;
+        state.humanReviewError = null;
+        state.status = "paused";
+        deriveUIStateInStore(state);
+      }
+      break;
+    }
   }
 }
 
