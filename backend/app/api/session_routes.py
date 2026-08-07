@@ -44,6 +44,7 @@ from app.database.operations import (
 )
 from app.services.sse import sse_manager
 from app.services.checkpoint import checkpoint_service
+from app.services.composition import CompositionRoot
 from app.agent.plan_state.state import state_to_ui_status
 from app.agent.bootstrap.phase_machine import get_layer_dimensions, get_layer_name, get_next_phase, _phase_to_layer
 from app.utils.sse_publisher import SSEPublisher
@@ -51,6 +52,17 @@ from app.core.events import SSEEventType
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
+
+
+def _launch_background(session_id: str, coro) -> None:
+    """Launch a fire-and-forget graph execution task for a session.
+
+    Routes through the composition root's TaskSupervisor so at most one
+    execution per session runs at a time (a newer submission cancels an
+    in-flight one) and tasks are tracked for clean shutdown.
+    """
+    supervisor = CompositionRoot.get_task_supervisor()
+    supervisor.create_task(session_id, coro)
 
 
 async def _get_report_from_db(session_id: str, dim_key: str) -> dict:
@@ -578,7 +590,7 @@ async def submit_feedback(session_id: str, request: FeedbackRequest):
         logger.info("[feedback/approve] session=%s phase=%s", session_id, current_phase)
 
         # Resume from interrupt: approve action handled in layer_completion_check
-        asyncio.create_task(PlanningRuntimeService.resume_from_interrupt(
+        _launch_background(session_id, PlanningRuntimeService.resume_from_interrupt(
             session_id,
             resume_data={"action": "approve"},
         ))
@@ -605,7 +617,7 @@ async def submit_feedback(session_id: str, request: FeedbackRequest):
                     final_tree.setdefault(wave, []).extend(already_executed)
         final_tree = {w: list(set(dims)) for w, d in final_tree.items() if d}
 
-        asyncio.create_task(PlanningRuntimeService.resume_from_interrupt(
+        _launch_background(session_id, PlanningRuntimeService.resume_from_interrupt(
             session_id,
             resume_data={
                 "action": "reject",
@@ -655,14 +667,14 @@ async def submit_feedback(session_id: str, request: FeedbackRequest):
                         "args": {"reason": request.message}
                     }],
                 )
-                asyncio.create_task(PlanningRuntimeService.resume_from_interrupt(
+                _launch_background(session_id, PlanningRuntimeService.resume_from_interrupt(
                     session_id,
                     resume_data={"action": "message_injected", "message": request.message},
                     state_updates={"messages": [HumanMessage(content=request.message), synthetic_msg]},
                 ))
                 logger.info("[feedback] [%s] GIS intent detected, resumed from interrupt", session_id)
             else:
-                asyncio.create_task(PlanningRuntimeService.resume_from_interrupt(
+                _launch_background(session_id, PlanningRuntimeService.resume_from_interrupt(
                     session_id,
                     resume_data={"action": "message_injected", "message": request.message},
                     state_updates={"messages": [HumanMessage(content=request.message)]},
@@ -685,7 +697,7 @@ async def submit_feedback(session_id: str, request: FeedbackRequest):
                     {"messages": [HumanMessage(content=request.message), synthetic_msg]},
                     as_node="__start__",
                 )
-                asyncio.create_task(PlanningRuntimeService._trigger_planning_execution(session_id))
+                _launch_background(session_id, PlanningRuntimeService._trigger_planning_execution(session_id))
                 logger.info("[feedback] [%s] GIS intent detected, new execution", session_id)
             else:
                 await PlanningRuntimeService.aupdate_state(
@@ -693,7 +705,7 @@ async def submit_feedback(session_id: str, request: FeedbackRequest):
                     {"messages": [HumanMessage(content=request.message)]},
                     as_node="__start__",
                 )
-                asyncio.create_task(PlanningRuntimeService._trigger_planning_execution(session_id))
+                _launch_background(session_id, PlanningRuntimeService._trigger_planning_execution(session_id))
 
         return {"status": "message_accepted"}
 
@@ -765,7 +777,7 @@ async def resume_from_checkpoint(session_id: str, checkpoint_id: str):
     sse_manager.append_event(session_id, {"type": "resumed", "checkpoint_id": checkpoint_id, "layer": layer, "kind": kind})
     sse_manager.publish_sync(session_id, {"type": "resumed", "checkpoint_id": checkpoint_id})
 
-    asyncio.create_task(PlanningRuntimeService._trigger_planning_execution(
+    _launch_background(session_id, PlanningRuntimeService._trigger_planning_execution(
         session_id, checkpoint_id=checkpoint_id, state_values=values
     ))
     return {"status": "resumed", "checkpoint_id": checkpoint_id, "layer": layer, "kind": kind}
@@ -1071,7 +1083,7 @@ async def update_step_mode(session_id: str, request: StepModeRequest):
         snapshot = await PlanningRuntimeService.aget_state(session_id)
         is_interrupted = snapshot and snapshot.next and len(snapshot.next) > 0
         if is_interrupted:
-            asyncio.create_task(PlanningRuntimeService.resume_from_interrupt(
+            _launch_background(session_id, PlanningRuntimeService.resume_from_interrupt(
                 session_id,
                 resume_data={"action": "approve"},
             ))
