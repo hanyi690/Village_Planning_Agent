@@ -149,9 +149,10 @@ async def main() -> int:
     print(f"[verify] session {session_id} created", flush=True)
 
     from app.services.runtime import PlanningRuntimeService
+    from app.agent.plan_state.state_factory import StateFactory
 
     await PlanningRuntimeService.ensure_initialized()
-    initial_state = PlanningRuntimeService.build_initial_state(
+    initial_state = StateFactory.create(
         project_name=cfg["project_name"],
         village_data=_load_report_md(),
         village_name=cfg["village_name"],

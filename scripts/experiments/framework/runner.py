@@ -46,6 +46,7 @@ class ExperimentRunner(ABC):
         Uses in-process SSE listener to wait for each layer completion.
         """
         from app.services.runtime import PlanningRuntimeService
+        from app.agent.plan_state.state_factory import StateFactory
         from app.services.sse import sse_manager
         from app.utils.sse_publisher import SSEPublisher
         from app.agent.state import get_layer_dimensions, get_layer_name
@@ -61,7 +62,7 @@ class ExperimentRunner(ABC):
         # Create PlanningSession record (experiment bypasses normal flow)
         await self._create_planning_session(session_id, project_name, rag_config)
 
-        initial_state = PlanningRuntimeService.build_initial_state(
+        initial_state = StateFactory.create(
             project_name=project_name,
             village_data=village_data or self.config.village.status_report,
             village_name=self.config.village.village_name,

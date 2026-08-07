@@ -132,6 +132,7 @@ async def _run_full_graph(session_id: str) -> None:
     from app.agent.state import get_layer_dimensions, get_layer_name
     from app.database.operations import create_planning_session_async
     from app.services.runtime import PlanningRuntimeService
+    from app.agent.plan_state.state_factory import StateFactory
     from app.services.sse import sse_manager
     from app.utils.sse_publisher import SSEPublisher
     from app.utils.stats_collector import StatsCollector
@@ -143,7 +144,7 @@ async def _run_full_graph(session_id: str) -> None:
     stats = StatsCollector.get_instance()
     stats.start_session(session_id, "金田村规划")
 
-    initial_state = PlanningRuntimeService.build_initial_state(
+    initial_state = StateFactory.create(
         project_name="金田村规划",
         village_data=village_data,
         village_name=village_name,

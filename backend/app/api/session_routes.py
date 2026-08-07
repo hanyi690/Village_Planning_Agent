@@ -484,7 +484,8 @@ async def create_session(
         },
     )
 
-    initial_state = PlanningRuntimeService.build_initial_state(
+    from app.agent.plan_state.state_factory import StateFactory
+    initial_state = StateFactory.create(
         project_name=project_name,
         village_data=parsed_content,
         village_name=village_name,

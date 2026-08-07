@@ -42,6 +42,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(
 async def _run_graph(session_id: str, listener) -> str:
     """进程内直接执行规划图，事件驱动等待"""
     from app.services.runtime import PlanningRuntimeService
+    from app.agent.plan_state.state_factory import StateFactory
     from app.services.sse import sse_manager
     from app.utils.sse_publisher import SSEPublisher
     from app.agent.state import get_layer_dimensions, get_layer_name
@@ -54,7 +55,7 @@ async def _run_graph(session_id: str, listener) -> str:
     stats = StatsCollector.get_instance()
     stats.start_session(session_id, "金田村规划")
 
-    initial_state = PlanningRuntimeService.build_initial_state(
+    initial_state = StateFactory.create(
         project_name="金田村规划",
         village_data=village_data,
         village_name=village_name,

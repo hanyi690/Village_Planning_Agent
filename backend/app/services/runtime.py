@@ -338,93 +338,6 @@ class PlanningRuntimeService:
         """Generate unique session ID."""
         return str(uuid.uuid4())
 
-    @staticmethod
-    def build_initial_state(
-        project_name: str,
-        village_data: str,
-        task_description: str,
-        constraints: str,
-        session_id: str,
-        village_name: str = "",
-        province: str = "",
-        city: str = "",
-        county: str = "",
-        township: str = "",
-        planning_period: str = "2022-2035年",
-        enable_review: bool = False,
-        stream_mode: bool = True,
-        step_mode: bool = False,
-        rag_enabled: bool = True,
-        rag_layer_config: Optional[Dict[int, bool]] = None,
-        disable_tools: bool = False,
-        image_ids: Optional[List[str]] = None,
-        uploaded_files: Optional[List[Dict]] = None,
-        user_uploaded_gis_data: Optional[Dict[str, Any]] = None,
-    ) -> Dict[str, Any]:
-        """Build initial state for main graph execution.
-
-        Args:
-            rag_enabled: Global RAG switch (backward compatible)
-            rag_layer_config: Layer-level RAG config, e.g. {1: True, 2: False, 3: True}
-                             Unspecified layers use rag_enabled as default
-        """
-        # Build Layer-level RAG config
-        if rag_layer_config is None:
-            rag_layer_config = {1: rag_enabled, 2: False, 3: rag_enabled}
-        else:
-            # Fill unspecified layers
-            for layer in [1, 2, 3]:
-                if layer not in rag_layer_config:
-                    rag_layer_config[layer] = rag_enabled
-
-        state = {
-            "messages": [],  # Will be set by _trigger_planning_execution
-            "session_id": session_id,
-            "project_name": project_name,
-            "config": {
-                "village_data": village_data,
-                "village_name": village_name or project_name,
-                "province": province,
-                "city": city,
-                "county": county,
-                "township": township,
-                "planning_period": planning_period,
-                "task_description": task_description,
-                "constraints": constraints,
-                "rag_enabled": rag_enabled,  # Keep global switch (backward compatible)
-                "rag_layer_config": rag_layer_config,  # NEW: Layer-level switch
-                "knowledge_cache": {},
-            },
-            "image_ids": image_ids or [],  # 图片ID引用，仅 Layer 1 使用
-            "uploaded_files": uploaded_files or [],  # 上传文件元数据列表
-            "phase": "init",
-            "current_wave": 1,
-            "reports": {"layer1": {}, "layer2": {}, "layer3": {}},
-            "completed_dimensions": {"layer1": [], "layer2": [], "layer3": []},
-            "dimension_summaries": {},  # 新架构：摘要索引
-            "sse_events": [],
-            "need_revision": False,
-            "revision_target_dimensions": [],
-            "human_feedback": "",
-            "step_mode": step_mode,
-            "previous_layer": 0,  # 新架构：刚完成的层级
-            "l1_gate_decision": None,
-            "l2_gate_decision": None,
-            "l3_gate_decision": None,
-            "l1_snapshot_ref": None,
-            "l2_strategy_ref": None,
-            "gis_analysis_results": {},  # 新架构：GIS分析结果
-            "user_uploaded_data": user_uploaded_gis_data or {},
-            "metadata": {
-                "published_layers": [],
-                "version": 0,
-                "last_signal_timestamp": None,
-            },
-            "_streaming_enabled": stream_mode,
-        }
-        logger.info(f"[PlanningRuntimeService] Initial state built for session {session_id}")
-        return state
-
     @classmethod
     async def start_session(
         cls,
@@ -483,7 +396,8 @@ class PlanningRuntimeService:
             rate_limiter.mark_task_started(project_name)
 
         # Build initial state
-        initial_state = cls.build_initial_state(
+        from app.agent.plan_state.state_factory import StateFactory
+        initial_state = StateFactory.create(
             project_name=project_name,
             village_data=village_data,
             village_name=village_name,

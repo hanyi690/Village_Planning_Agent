@@ -280,84 +280,17 @@ def create_initial_state(
     image_ids: Optional[List[str]] = None,
     village_name: str = "",
 ) -> Dict[str, Any]:
-    """创建初始状态"""
-    from app.agent.bootstrap.phase_machine import PlanningPhase
-    from app.core.settings import BUSINESS_RETRY_LIMIT
-
-    return {
-        "session_id": session_id,
-        "project_name": project_name,
-        "messages": [],
-        "phase": PlanningPhase.INIT.value,
-        "current_wave": 1,
-        "config": {
-            "village_data": village_data,
-            "village_name": village_name or project_name,
-            "task_description": task_description,
-            "constraints": constraints,
-            "knowledge_cache": {},
-        },
-        "image_ids": image_ids or [],
-        "completed_dimensions": {"layer1": [], "layer2": [], "layer3": []},
-        "feedback": None,
-        "step_mode": False,
-        "previous_layer": 0,
-        "metadata": {},
-        "need_revision": False,
-        "revision_target_dimensions": [],
-        "human_feedback": "",
-        "is_revision": False,
-        "revision_impact_tree": None,
-        "revision_completed_dims": {},
-        "revision_feedback": None,
-        "last_revised_dimensions": [],
-        "pending_reports": [],  # Buffer for batch DB writes
-        "layer_char_counts": {},  # Cached char counts per layer
-        "user_uploaded_data": {},  # 用户上传的GIS数据
-        "_landuse_metrics": {},  # P0: L1 注入的现状用地指标
-        "intent_targets": {},  # P0: L2 持久化的规划目标面积
-        "explore_instructions": {},  # P2: EXPLORE 桥接产出
-        "report_summary_index": {},  # P2: EXPLORE 概要索引
-        # ── Wave M1: post-L3 链 typed artifact 引用 ──
-        "pending_requests": [],
-        "context_version": "",
-        "context_ref": {"session_id": session_id, "version": ""},
-        "context_fingerprint": "",
-        "bootstrap_context_done": False,
-        "artifact_refs": {},
-        "layer_just_completed": None,
-        "l1_gate_decision": None,
-        "l2_gate_decision": None,
-        "l3_gate_decision": None,
-        "l1_snapshot_ref": None,
-        "l2_strategy_ref": None,
-        # ── Wave N P5: post-L3 HITL ──
-        "post_l3_pending_review": [],
-        "post_l3_thread_id": "",
-        "post_l3_status": "",
-        "post_l3_decisions": None,
-        # ── Wave M: post-L3 主图独立节点链初始值 ──
-        "specs": [],
-        "parse_gate": None,
-        "ground_gate": None,
-        "land_design_briefs": [],
-        "select_gate": None,
-        "execution_errors": [],
-        "layout_configs": [],
-        "validate_gate": None,
-        "reconcile_gate": None,
-        "deliver_gate": None,
-        "export_result": None,
-        "upstream_gates": [],
-        "retry_counts": {},
-        "max_retries": BUSINESS_RETRY_LIMIT,
-        "error_feedback": {},
-        "human_review_items": [],
-        "human_review_decisions": None,
-        "human_review_event_id": "",
-        "human_review_pause_published": False,
-        "paused_stage": None,
-    }
+    """Create initial state (delegates to StateFactory)."""
+    from app.agent.plan_state.state_factory import StateFactory
+    return StateFactory.create(
+        session_id=session_id,
+        project_name=project_name,
+        village_data=village_data,
+        task_description=task_description,
+        constraints=constraints,
+        image_ids=image_ids,
+        village_name=village_name,
+    )
 
 
 def _sanitize_json(obj):
