@@ -1118,7 +1118,7 @@ async def _write_l4_node(state: ExecuteAgentState) -> dict:
 # ── Graph builder ────────────────────────────────────────────────────
 
 
-def build_execute_agent_graph():
+def build_execute_agent_graph(checkpointer=None):
     """Build the EXECUTE Agent StateGraph.
 
     Wave O multi-worker subgraph:
@@ -1168,7 +1168,10 @@ def build_execute_agent_graph():
         {"retry": "zone_worker", "pass": END, "human": END},
     )
 
-    compiled = graph.compile()
+    compile_kwargs = {}
+    if checkpointer is not None:
+        compile_kwargs["checkpointer"] = checkpointer
+    compiled = graph.compile(**compile_kwargs)
     logger.info(
         "[EXECUTE] Agent graph compiled: 11 nodes (multi-worker subgraph), 1 conditional edge"
     )

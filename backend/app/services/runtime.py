@@ -39,7 +39,7 @@ from app.database.operations import (
 from app.api.schemas import TaskStatus
 from app.services.sse import sse_manager
 from app.services.checkpoint import checkpoint_service, checkpoint_persistence_manager
-from app.core.settings import MAX_SESSION_EVENTS, GRAPH_MAX_CONCURRENCY
+from app.core.settings import MAX_SESSION_EVENTS, GRAPH_MAX_CONCURRENCY, GRAPH_RECURSION_LIMIT
 from app.agent.bootstrap.graph import create_unified_planning_graph
 from app.agent.plan_state.state import state_to_ui_status
 from app.agent.bootstrap.phase_machine import (
@@ -96,6 +96,7 @@ class PlanningRuntimeService:
     _instance: Optional["PlanningRuntimeService"] = None
     _checkpointer: Optional[BaseCheckpointSaver] = None
     _graph: Optional[StateGraph] = None
+    _execute_subgraph: Optional[Any] = None
     _initialized: bool = False
     _lock: Optional[asyncio.Lock] = None
     _execution_locks: Dict[str, asyncio.Lock] = {}
@@ -129,6 +130,10 @@ class PlanningRuntimeService:
 
             cls._graph = create_unified_planning_graph(checkpointer=cls._checkpointer)
             logger.info("[PlanningRuntimeService] Graph created")
+
+            from app.agent.execute.execute_agent import build_execute_agent_graph
+            cls._execute_subgraph = build_execute_agent_graph(checkpointer=cls._checkpointer)
+            logger.info("[PlanningRuntimeService] EXECUTE subgraph compiled")
 
             cls._initialized = True
             logger.info("[PlanningRuntimeService] Initialization complete")
@@ -217,11 +222,10 @@ class PlanningRuntimeService:
 
         await cls.ensure_initialized()
         config = cls.get_thread_config(session_id)
-        config["recursion_limit"] = 100
+        config["recursion_limit"] = GRAPH_RECURSION_LIMIT
 
         if not resume_data:
-            logger.warning("[PlanningRuntimeService] [%s] Empty resume payload; normalizing to no_op", session_id)
-            resume_data = {"action": "no_op"}
+            raise ValueError("resume payload must be a non-empty object")
 
         if state_updates:
             command = Command(resume=resume_data, update=state_updates)
@@ -710,7 +714,7 @@ class PlanningRuntimeService:
         # 4. Build config with max_concurrency + optional streaming callback
         config = cls.get_thread_config(session_id, checkpoint_id=checkpoint_id)
         config["max_concurrency"] = GRAPH_MAX_CONCURRENCY
-        config["recursion_limit"] = 100
+        config["recursion_limit"] = GRAPH_RECURSION_LIMIT
 
         streaming_enabled = (initial_state.get("_streaming_enabled", True) if initial_state else True)
         if streaming_enabled:

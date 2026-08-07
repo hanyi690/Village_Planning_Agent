@@ -363,7 +363,7 @@ async def select_node(state: Dict[str, Any]) -> Dict[str, Any]:
 
 async def execute_node(state: Dict[str, Any]) -> Dict[str, Any]:
     """EXECUTE node: run the EXECUTE subgraph -> planned state + changeset."""
-    from app.agent.execute.execute_agent import build_execute_agent_graph
+    from app.services.runtime import PlanningRuntimeService
     from app.agent.execute.execute_state import ExecuteAgentState
     from app.agent.execute.planned_state_builder import changeset_to_planned_state
     from app.modules.schema.contracts.parse_contracts import SpatialPlanningIntent
@@ -403,7 +403,10 @@ async def execute_node(state: Dict[str, Any]) -> Dict[str, Any]:
         messages=list(state.get("messages") or []),
     )
 
-    graph = build_execute_agent_graph()
+    graph = PlanningRuntimeService._execute_subgraph
+    if graph is None:
+        await PlanningRuntimeService.ensure_initialized()
+        graph = PlanningRuntimeService._execute_subgraph
     kg_obj = getattr(context, "kg", None)
     if kg_obj is not None and plan_intent is not None:
         try:
@@ -414,7 +417,7 @@ async def execute_node(state: Dict[str, Any]) -> Dict[str, Any]:
             logger.warning("[post_l3:main:execute] build_intent_layer failed: %s", e)
     result = await graph.ainvoke(
         exec_state,
-        config={"configurable": {"__pregel_checkpointer": None}},
+        config={"configurable": {"thread_id": state.get("session_id", "")}},
     )
 
     changeset = result.get("parcel_changeset")

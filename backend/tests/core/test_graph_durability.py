@@ -172,3 +172,12 @@ def test_bootstrap_context_is_idempotent_when_already_done():
     }
     result = asyncio.run(bootstrap_context_node(state))
     assert result == {}
+
+
+def test_build_execute_agent_graph_accepts_checkpointer():
+    from langgraph.checkpoint.memory import MemorySaver
+    from app.agent.execute.execute_agent import build_execute_agent_graph
+
+    checkpointer = MemorySaver()
+    graph = build_execute_agent_graph(checkpointer=checkpointer)
+    assert graph is not None
