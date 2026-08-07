@@ -235,3 +235,21 @@ def test_artifact_refs_round_trip_through_checkpoint():
 
             loaded = load_artifact(deserialized, "planned_state")
             assert loaded == {"parcels": [1, 2, 3]}
+
+
+def test_task_supervisor_tracks_and_cancels_tasks():
+    import asyncio
+    from app.services.task_supervisor import TaskSupervisor
+
+    async def test():
+        supervisor = TaskSupervisor()
+
+        async def dummy():
+            await asyncio.sleep(10)
+
+        task = supervisor.create_task("session-1", dummy())
+        assert supervisor.active_count == 1
+        supervisor.cancel("session-1")
+        assert supervisor.active_count == 0
+
+    asyncio.run(test())

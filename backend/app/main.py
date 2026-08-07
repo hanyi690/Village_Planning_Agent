@@ -209,6 +209,11 @@ async def lifespan(app: FastAPI):
     # Clean up resources
     logger.info("🧹 Cleaning up resources...")
     try:
+        from app.services.runtime import PlanningRuntimeService
+        await PlanningRuntimeService.shutdown()
+    except Exception as e:
+        logger.error(f"❌ Failed to cancel runtime tasks: {e}", exc_info=True)
+    try:
         from app.database import dispose_async_engine
         async with asyncio.timeout(5):
             await dispose_async_engine()
