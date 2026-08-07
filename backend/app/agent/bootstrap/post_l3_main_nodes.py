@@ -696,6 +696,15 @@ def _retry_exhaustion_items(state: Dict[str, Any]) -> List[Dict[str, Any]]:
     ]
 
 
+def _detect_retry_exhaustion_stage(state: Dict[str, Any]) -> Optional[str]:
+    counts = state.get("retry_counts") or {}
+    max_retries = state.get("max_retries", 3)
+    for stage, count in counts.items():
+        if count >= max_retries:
+            return stage
+    return "post_l3"
+
+
 def collect_human_review_items(state: Dict[str, Any]) -> Tuple[Optional[str], List[Dict[str, Any]]]:
     """Public helper: return (stage, human-review items) for the current state.
 
@@ -704,7 +713,8 @@ def collect_human_review_items(state: Dict[str, Any]) -> Tuple[Optional[str], Li
     stage, items = _collect_human_items(state)
     if stage is not None:
         return stage, items
-    return None, _retry_exhaustion_items(state)
+    exhaustion_stage = _detect_retry_exhaustion_stage(state)
+    return exhaustion_stage, _retry_exhaustion_items(state)
 
 
 __all__ = [
