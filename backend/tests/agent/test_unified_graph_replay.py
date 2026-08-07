@@ -152,7 +152,7 @@ def _post_l3_deps(monkeypatch):
     fake_graph = _FakeExecuteGraph(changeset)
     monkeypatch.setattr(
         "app.agent.execute.execute_agent.build_execute_agent_graph",
-        lambda: fake_graph.build(),
+        lambda **kwargs: fake_graph.build(),
     )
     monkeypatch.setattr(
         "app.agent.deliver.render_layers.build_render_layers",
