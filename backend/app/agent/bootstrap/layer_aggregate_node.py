@@ -59,6 +59,12 @@ async def layer_aggregate_node(state: Dict[str, Any]) -> Dict[str, Any]:
         context_patch = await bootstrap_context_node(state)
         aggregate_state = {**state, **context_patch}
 
+    if not aggregate_state.get("context_version") or not aggregate_state.get("context_ref"):
+        raise RuntimeError(
+            "CONTEXT_NOT_FROZEN: cannot persist versioned artifact with empty "
+            "context_version. bootstrap_context failed to establish a valid context."
+        )
+
     if layer == 1:
         from app.agent.l1_observe.aggregate import l1_aggregate
 

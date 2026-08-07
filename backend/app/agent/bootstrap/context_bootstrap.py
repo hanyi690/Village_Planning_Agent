@@ -64,14 +64,18 @@ async def bootstrap_context_node(state: Dict[str, Any]) -> Dict[str, Any]:
             return {}
     if not session_id:
         logger.warning("[bootstrap] no session_id; skipping context build")
-        return {"bootstrap_context_done": True, "context_version": "", "context_fingerprint": ""}
+        raise RuntimeError(
+            "CONTEXT_BOOTSTRAP_FAILED: no session_id; cannot establish PlanningContext"
+        )
 
     village_name = str((state.get("config") or {}).get("village_name", ""))
     try:
         context = await build_planning_context(session_id, village_name=village_name or None)
     except Exception as exc:
         logger.error("[bootstrap] context build failed: %s", exc)
-        return {"bootstrap_context_done": True, "context_version": "", "context_fingerprint": ""}
+        raise RuntimeError(
+            f"CONTEXT_BOOTSTRAP_FAILED: build_planning_context raised {exc}"
+        ) from exc
 
     version = str(getattr(context, "version", 1))
     meta = context.snapshot_meta()
