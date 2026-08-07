@@ -66,3 +66,34 @@ def test_artifact_ref_carries_context_fingerprint():
     assert ref.context_fingerprint == "sha256:abc123"
     dumped = ref.model_dump(mode="json")
     assert "context_fingerprint" in dumped
+
+
+def test_store_and_load_artifact_with_fingerprint():
+    from app.agent.bootstrap.artifact_runtime import store_artifact, load_artifact
+
+    state = create_initial_state("run-fp-1", "v", "data")
+    state["context_version"] = "1"
+    state["context_fingerprint"] = "sha256:abc"
+    state["context_ref"] = {"session_id": "run-fp-1", "version": "1"}
+    ref = store_artifact(state, "planned_state", "execute", "PlannedState", {"x": 1})
+    assert ref["context_fingerprint"] == "sha256:abc"
+    state["artifact_refs"] = {"planned_state": ref}
+
+    loaded = load_artifact(state, "planned_state")
+    assert loaded == {"x": 1}
+
+
+def test_load_artifact_rejects_fingerprint_mismatch():
+    from app.agent.bootstrap.artifact_runtime import store_artifact, load_artifact, ArtifactReplayError
+    import pytest
+
+    state = create_initial_state("run-fp-2", "v", "data")
+    state["context_version"] = "1"
+    state["context_fingerprint"] = "sha256:original"
+    state["context_ref"] = {"session_id": "run-fp-2", "version": "1"}
+    ref = store_artifact(state, "planned_state", "execute", "PlannedState", {"x": 1})
+    state["artifact_refs"] = {"planned_state": ref}
+
+    state["context_fingerprint"] = "sha256:tampered"
+    with pytest.raises(ArtifactReplayError, match="fingerprint"):
+        load_artifact(state, "planned_state")
