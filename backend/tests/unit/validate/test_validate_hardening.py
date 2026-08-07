@@ -84,25 +84,15 @@ def test_area_conservation_create_ignored():
 
 
 def test_topology_detects_project_layer():
-    project = _make_layout("project", [_polygon_feature(UNIT_SQUARE, "PROJ1")])
+    project = PlannedState(
+        parcels=[PlannedParcel(bsm="P001", geometry=_wkt(UNIT_SQUARE))]
+    )
     project_gaps = next(c for c in check_topology(project) if c.check_id == "topology_gaps")
     assert project_gaps.passed is True
 
-    road = [
-        {
-            "layerType": "road",
-            "data": {
-                "type": "FeatureCollection",
-                "features": [
-                    {
-                        "type": "Feature",
-                        "properties": {"name": "RD1"},
-                        "geometry": {"type": "LineString", "coordinates": [[0.0, 0.0], [1.0, 1.0]]},
-                    }
-                ],
-            },
-        }
-    ]
+    road = PlannedState(
+        parcels=[PlannedParcel(bsm="P001", geometry="LINESTRING (0 0, 1 1)")]
+    )
     road_gaps = next(c for c in check_topology(road) if c.check_id == "topology_gaps")
     assert road_gaps.passed is True
 

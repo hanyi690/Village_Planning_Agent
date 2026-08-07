@@ -113,37 +113,48 @@ def test_check_area_conservation_mismatch():
 
 
 def test_check_overlap_detects():
-    layer = make_layout_configs("parcel", [polygon_feature(UNIT_SQUARE), polygon_feature(UNIT_SQUARE)])
-    checks = check_overlap(layer)
+    state = make_planned_state(
+        parcels=[
+            make_parcel("P001", geometry_wkt=WKT),
+            make_parcel("P002", geometry_wkt=WKT),
+        ]
+    )
+    checks = check_overlap(state)
     assert checks[0].passed is False
 
 
 def test_check_overlap_pass():
-    layer = make_layout_configs("parcel", [polygon_feature(UNIT_SQUARE), polygon_feature(UNIT_SQUARE_B)])
-    checks = check_overlap(layer)
+    state = make_planned_state(
+        parcels=[
+            make_parcel("P001", geometry_wkt=WKT),
+            make_parcel("P002", geometry_wkt="POLYGON ((2 2, 2 3, 3 3, 3 2, 2 2))"),
+        ]
+    )
+    checks = check_overlap(state)
     assert checks[0].passed is True
 
 
 def test_check_topology_invalid():
-    bowtie = [[0.0, 0.0], [1.0, 1.0], [1.0, 0.0], [0.0, 1.0], [0.0, 0.0]]
-    invalid = check_topology(make_layout_configs("zone", [polygon_feature(bowtie)]))
+    bowtie = "POLYGON ((0 0, 1 1, 1 0, 0 1, 0 0))"
+    state = make_planned_state(parcels=[make_parcel("P001", geometry_wkt=bowtie)])
+    invalid = check_topology(state)
     validity = next(c for c in invalid if c.check_id == "topology_validity")
     assert validity.passed is False
-    valid = check_topology(make_layout_configs("zone", [polygon_feature(UNIT_SQUARE)]))
+    valid = check_topology(make_planned_state(parcels=[make_parcel("P001", geometry_wkt=WKT)]))
     valid_check = next(c for c in valid if c.check_id == "topology_validity")
     assert valid_check.passed is True
 
 
 def test_check_continuity_fragmented():
-    multipolygon = {
-        "type": "MultiPolygon",
-        "coordinates": [
-            [UNIT_SQUARE],
-            [[[2.0, 2.0], [2.0, 3.0], [3.0, 3.0], [3.0, 2.0], [2.0, 2.0]]],
-        ],
-    }
-    feature = {"type": "Feature", "properties": {"name": "Z1"}, "geometry": multipolygon}
-    checks = check_continuity(make_layout_configs("zone", [feature]))
+    from app.modules.schema.contracts.planned_state_contracts import PlannedZone
+
+    multipolygon_wkt = (
+        "MULTIPOLYGON (((0 0, 0 1, 1 1, 1 0, 0 0)), "
+        "((2 2, 2 3, 3 3, 3 2, 2 2)))"
+    )
+    state = make_planned_state()
+    state.zones = [PlannedZone(name="Z1", geometry=multipolygon_wkt)]
+    checks = check_continuity(state)
     assert checks[0].passed is False
     assert checks[0].responsible_stage == "EXECUTE"
 

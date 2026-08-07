@@ -34,40 +34,6 @@ from app.modules.spatial_ops.selection import _PROHIBITED_CONSTRAINTS
 _AREA_TOLERANCE = 0.05
 _POLYGON_TYPES = ("Polygon", "MultiPolygon")
 
-_POLYGON_LAYER_TYPES = {
-    "zone",
-    "parcel",
-    "polygon",
-    "project",
-    "facility",
-    "road",
-    "protection",
-    "restoration",
-    "landuse",
-    "parcel_layer",
-    "zone_layer",
-    "project_layer",
-    "polygon_layer",
-}
-
-
-def _feature_name(props: dict) -> str:
-    """Resolve a human-readable identifier for a layer feature.
-
-    Layer builders emit ``bsm``/``source_bsm``/``project_name``/``facility_id``
-    instead of ``name``; fall back so topology/continuity findings stay
-    attributable to a specific feature.
-    """
-    return (
-        props.get("name")
-        or props.get("bsm")
-        or props.get("source_bsm")
-        or props.get("project_name")
-        or props.get("facility_id")
-        or props.get("project_id")
-        or ""
-    )
-
 
 def _check(
     check_id: str,
@@ -266,39 +232,41 @@ def check_traceability(parcel_changeset: Any, intent: Any = None) -> List[Valida
     ]
 
 
-def check_topology(layout_configs: Any) -> List[ValidationCheck]:
-    """Check geometries are valid/non-empty and polygon layers have no gaps."""
+def _planned_geoms(planned_state: Any) -> List[tuple]:
+    """Collect (name, shapely geometry) pairs from PlannedState parcels/zones.
+
+    ADR-003: PlannedState is the sole fact source for planned geometry; the
+    render-view ``layout_configs`` is not consulted for validation.
+    """
+    from shapely import wkt as _wkt
+
+    items: List[tuple] = []
+    for entry in (getattr(planned_state, "parcels", None) or []) + (
+        getattr(planned_state, "zones", None) or []
+    ):
+        wkt = (getattr(entry, "geometry", "") or "").strip()
+        if not wkt:
+            continue
+        name = getattr(entry, "bsm", "") or getattr(entry, "name", "") or ""
+        try:
+            g = _wkt.loads(wkt)
+        except Exception:
+            continue
+        items.append((name, g))
+    return items
+
+
+def check_topology(planned_state: Any) -> List[ValidationCheck]:
+    """Check planned geometries are valid/non-empty and polygons have no gaps."""
     invalid: List[str] = []
     empty: List[str] = []
-    polygon_groups: List[List[Any]] = []
-    for layer in layout_configs or []:
-        if not isinstance(layer, dict):
-            continue
-        data = layer.get("data") or {}
-        if data.get("type") != "FeatureCollection":
-            continue
-        geoms: List[Any] = []
-        for feature in data.get("features") or []:
-            geometry = feature.get("geometry") if isinstance(feature, dict) else None
-            if not geometry:
-                continue
-            props = feature.get("properties") or {} if isinstance(feature, dict) else {}
-            name = _feature_name(props)
-            try:
-                from shapely.geometry import shape
-
-                s = shape(geometry)
-            except Exception:
-                continue
-            if s.is_empty:
-                empty.append(name)
-            elif not s.is_valid:
-                invalid.append(name)
-            geoms.append(s)
-        all_polygon = bool(geoms) and all(g.geom_type in _POLYGON_TYPES for g in geoms)
-        layer_type = layer.get("layerType")
-        if all_polygon and (layer_type in _POLYGON_LAYER_TYPES or not layer_type):
-            polygon_groups.append(geoms)
+    geoms: List[Any] = []
+    for name, s in _planned_geoms(planned_state):
+        geoms.append(s)
+        if s.is_empty:
+            empty.append(name)
+        elif not s.is_valid:
+            invalid.append(name)
 
     validity_passed = not invalid and not empty
     checks = [
@@ -312,17 +280,17 @@ def check_topology(layout_configs: Any) -> List[ValidationCheck]:
             fix="修复自相交、空几何等问题",
         )
     ]
+    polygon_geoms = [g for g in geoms if g.geom_type in _POLYGON_TYPES]
     gap_area = 0.0
-    for geoms in polygon_groups:
+    if polygon_geoms:
         try:
             from shapely.ops import unary_union
 
-            union = unary_union([g for g in geoms if not g.is_empty])
-            if union.is_empty:
-                continue
-            gap_area += union.convex_hull.difference(union).area
+            union = unary_union([g for g in polygon_geoms if not g.is_empty])
+            if not union.is_empty:
+                gap_area = union.convex_hull.difference(union).area
         except Exception:
-            continue
+            pass
     gap_passed = gap_area <= 1e-9
     checks.append(
         _check(
@@ -338,36 +306,20 @@ def check_topology(layout_configs: Any) -> List[ValidationCheck]:
     return checks
 
 
-def check_overlap(layout_configs: Any) -> List[ValidationCheck]:
-    """Check no pair of polygons in a layer overlaps."""
+def check_overlap(planned_state: Any) -> List[ValidationCheck]:
+    """Check no pair of polygon geometries overlaps."""
+    geoms: List[Any] = [
+        g for _, g in _planned_geoms(planned_state) if g.geom_type in _POLYGON_TYPES
+    ]
     pair_count = 0
-    for layer in layout_configs or []:
-        if not isinstance(layer, dict):
-            continue
-        data = layer.get("data") or {}
-        if data.get("type") != "FeatureCollection":
-            continue
-        geoms: List[Any] = []
-        for feature in data.get("features") or []:
-            geometry = feature.get("geometry") if isinstance(feature, dict) else None
-            if not geometry:
-                continue
+    for i in range(len(geoms)):
+        for j in range(i + 1, len(geoms)):
             try:
-                from shapely.geometry import shape
-
-                s = shape(geometry)
-                if not s.is_empty and s.geom_type in _POLYGON_TYPES:
-                    geoms.append(s)
+                inter = geoms[i].intersection(geoms[j])
+                if not inter.is_empty and inter.area > 1e-12:
+                    pair_count += 1
             except Exception:
                 continue
-        for i in range(len(geoms)):
-            for j in range(i + 1, len(geoms)):
-                try:
-                    inter = geoms[i].intersection(geoms[j])
-                    if not inter.is_empty and inter.area > 1e-12:
-                        pair_count += 1
-                except Exception:
-                    continue
     passed = pair_count == 0
     return [
         _check(
@@ -382,62 +334,39 @@ def check_overlap(layout_configs: Any) -> List[ValidationCheck]:
     ]
 
 
-_ZONE_CONTINUITY_LAYER_TYPES = {
-    "zone",
-    "zone_layer",
-    "function_zone",
-    "custom_planning_zone",
-}
-
-
-def check_continuity(layout_configs: Any) -> List[ValidationCheck]:
-    """Check each zone is a single contiguous geometry (no fragmented parts).
+def check_continuity(planned_state: Any) -> List[ValidationCheck]:
+    """Check each planned zone is a single contiguous geometry (no fragmented parts).
 
     Continuity is a zone-partition concern (fragmented zone geometry), so only
-    zone layers are checked; project/facility/road layers are excluded because
-    a project or facility footprint may legitimately sit on a multi-part parcel
-    (e.g. a fragmented real-world homestead parcel).
+    ``PlannedState.zones`` are checked; project/facility/road footprints are
+    excluded because they may legitimately sit on a multi-part parcel.
     """
+    from shapely import wkt as _wkt
+    from shapely.ops import unary_union
+
     fragmented: List[str] = []
-    for layer in layout_configs or []:
-        if not isinstance(layer, dict):
+    name_groups: dict = {}
+    for zone in getattr(planned_state, "zones", None) or []:
+        wkt = (getattr(zone, "geometry", "") or "").strip()
+        if not wkt:
             continue
-        layer_type = layer.get("layerType") or ""
-        if layer_type not in _ZONE_CONTINUITY_LAYER_TYPES:
+        try:
+            s = _wkt.loads(wkt)
+        except Exception:
             continue
-        data = layer.get("data") or {}
-        if data.get("type") != "FeatureCollection":
-            continue
-        name_groups: dict = {}
-        for feature in data.get("features") or []:
-            geometry = feature.get("geometry") if isinstance(feature, dict) else None
-            if not geometry:
-                continue
-            props = feature.get("properties") or {} if isinstance(feature, dict) else {}
-            name = _feature_name(props) or "unnamed"
-            try:
-                from shapely.geometry import shape
-
-                s = shape(geometry)
-            except Exception:
-                continue
-            name_groups.setdefault(name, []).append(s)
-        for name, geoms in name_groups.items():
-            for g in geoms:
-                if g.geom_type == "MultiPolygon" and len(g.geoms) > 1:
-                    # Touching/overlapping parts are make_valid repair artifacts
-                    # of an originally self-intersecting parcel (still one logical
-                    # parcel); only genuinely separated parts indicate fragmentation.
-                    try:
-                        from shapely.ops import unary_union
-
-                        merged = unary_union(g)
-                    except Exception:
-                        merged = g
-                    if merged.geom_type == "MultiPolygon" and len(merged.geoms) > 1:
-                        fragmented.append(name)
-            if len(geoms) > 1:
-                fragmented.append(name)
+        name = getattr(zone, "name", "") or "unnamed"
+        name_groups.setdefault(name, []).append(s)
+    for name, geoms in name_groups.items():
+        for g in geoms:
+            if g.geom_type == "MultiPolygon" and len(g.geoms) > 1:
+                try:
+                    merged = unary_union(g)
+                except Exception:
+                    merged = g
+                if merged.geom_type == "MultiPolygon" and len(merged.geoms) > 1:
+                    fragmented.append(name)
+        if len(geoms) > 1:
+            fragmented.append(name)
     fragmented = sorted(set(fragmented))
     passed = not fragmented
     return [

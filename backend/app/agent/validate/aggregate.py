@@ -81,9 +81,9 @@ def validate_aggregate(
     all_checks: List[ValidationCheck] = []
     all_checks.extend(check_hard_constraints(planned_state, constraint_index))
     all_checks.extend(check_area_conservation(changeset))
-    all_checks.extend(check_topology(layout_configs))
-    all_checks.extend(check_overlap(layout_configs))
-    all_checks.extend(check_continuity(layout_configs))
+    all_checks.extend(check_topology(planned_state))
+    all_checks.extend(check_overlap(planned_state))
+    all_checks.extend(check_continuity(planned_state))
     all_checks.extend(check_accessibility(planned_state, intent))
     all_checks.extend(check_contract_completeness(planned_state, changeset, intent))
     all_checks.extend(check_classification_missing(planned_state))
