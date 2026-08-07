@@ -181,3 +181,57 @@ def test_build_execute_agent_graph_accepts_checkpointer():
     checkpointer = MemorySaver()
     graph = build_execute_agent_graph(checkpointer=checkpointer)
     assert graph is not None
+
+
+def test_checkpoint_state_has_no_geojson_or_full_business_objects():
+    from app.agent.plan_state.state import create_initial_state
+
+    state = create_initial_state("run-budget-1", "v", "data")
+    state["context_version"] = "1"
+    state["context_fingerprint"] = "sha256:test"
+    state["context_ref"] = {"session_id": "run-budget-1", "version": "1"}
+    state["bootstrap_context_done"] = True
+
+    forbidden_keys = {
+        "allocated_geojson", "render_result",
+        "planned_state", "parcel_changeset", "grounding_result",
+        "site_selection", "validation_report", "reconciliation_report",
+        "delivery_manifest", "planning_program", "intent",
+        "execution_plan",
+        "grounding_result_ref", "site_selection_ref", "parcel_changeset_ref",
+        "planned_state_ref", "validation_report_ref", "reconciliation_report_ref",
+        "l3_program_ref",
+    }
+    for key in forbidden_keys:
+        assert key not in state, f"checkpoint must not contain '{key}'"
+
+
+def test_artifact_refs_round_trip_through_checkpoint():
+    from app.agent.bootstrap.artifact_runtime import store_artifact, load_artifact
+    from app.agent.plan_state.state import create_initial_state
+    import json
+    import tempfile
+    import os
+    from unittest.mock import patch
+
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        with patch("app.agent.bootstrap.artifact_runtime.FilesystemArtifactStore") as mock_store_cls:
+            from app.services.artifact_store import FilesystemArtifactStore
+            real_store = FilesystemArtifactStore(base_dir=tmp_dir)
+            mock_store_cls.return_value = real_store
+            mock_store_cls.side_effect = lambda *a, **kw: real_store
+
+            state = create_initial_state("run-rt-1", "v", "data")
+            state["context_version"] = "1"
+            state["context_fingerprint"] = "sha256:rt"
+            state["context_ref"] = {"session_id": "run-rt-1", "version": "1"}
+
+            ref = store_artifact(state, "planned_state", "execute", "PlannedState", {"parcels": [1, 2, 3]})
+            state["artifact_refs"] = {"planned_state": ref}
+
+            serialized = json.dumps(state, default=str, sort_keys=True)
+            deserialized = json.loads(serialized)
+            deserialized["context_fingerprint"] = state["context_fingerprint"]
+
+            loaded = load_artifact(deserialized, "planned_state")
+            assert loaded == {"parcels": [1, 2, 3]}
