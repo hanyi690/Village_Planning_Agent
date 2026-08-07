@@ -12,7 +12,7 @@ import logging
 from typing import Any, Dict
 
 from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from app.services.post_l3_resume import resume_post_l3_chain
 
@@ -21,9 +21,23 @@ router = APIRouter()
 
 
 class ResolveRequest(BaseModel):
-    """审查决策请求体 — 直接传给 post-L3 链的 interrupt() 调用点。"""
+    """审查决策请求体 - 直接传给 post-L3 链的 interrupt() 调用点。"""
 
     decisions: Dict[str, Any] = Field(..., min_length=1, description="审查决策（resume payload，不可为空）")
+    action: str = Field(None, pattern="^(retry|accept|reject)$", description="审查动作: retry/accept/reject")
+
+    @model_validator(mode="after")
+    def _populate_action(self):
+        if self.action is None:
+            dec = self.decisions if isinstance(self.decisions, dict) else {}
+            dec_action = dec.get("action")
+            if dec_action is not None:
+                self.action = dec_action
+        if self.action is None:
+            raise ValueError("action is required (either top-level or decisions['action'])")
+        if self.action not in ("retry", "accept", "reject"):
+            raise ValueError(f"action must be one of retry/accept/reject, got {self.action!r}")
+        return self
 
 
 @router.get("/api/human-review/{session_id}")
@@ -72,6 +86,8 @@ async def resolve_human_review(session_id: str, request: ResolveRequest):
         raise HTTPException(status_code=422, detail="decisions must be a non-empty object")
     try:
         result = await resume_post_l3_chain(session_id, request.decisions)
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
     except Exception as e:  # noqa: BLE001 — surface to caller
         logger.error("[human-review] resolve failed for %s: %s", session_id, e)
         raise HTTPException(status_code=500, detail=f"Resume failed: {e}")

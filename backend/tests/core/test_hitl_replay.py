@@ -71,3 +71,48 @@ def test_retry_exhaustion_defaults_to_post_l3_when_no_specific_stage():
     stage, items = collect_human_review_items(state)
     assert stage is not None
     assert len(items) > 0
+
+
+def test_resolve_request_validates_action():
+    from app.api.human_review_routes import ResolveRequest
+    from pydantic import ValidationError
+    import pytest
+
+    req = ResolveRequest(decisions={"action": "retry"})
+    assert req.action == "retry"
+
+    req2 = ResolveRequest(decisions={"action": "accept", "feedback": "ok"})
+    assert req2.action == "accept"
+
+    with pytest.raises(ValidationError):
+        ResolveRequest(decisions={"action": "invalid_action"})
+
+
+def test_route_after_human_review_handles_retry():
+    from app.agent.bootstrap.graph import route_after_human_review
+
+    state = {
+        "human_review_decisions": {"action": "retry"},
+        "paused_stage": "validate",
+    }
+    assert route_after_human_review(state) == "validate"
+
+
+def test_route_after_human_review_handles_accept():
+    from app.agent.bootstrap.graph import route_after_human_review
+
+    state = {
+        "human_review_decisions": {"action": "accept"},
+        "paused_stage": "validate",
+    }
+    assert route_after_human_review(state) == "reconcile"
+
+
+def test_route_after_human_review_handles_reject():
+    from app.agent.bootstrap.graph import route_after_human_review
+
+    state = {
+        "human_review_decisions": {"action": "reject"},
+        "paused_stage": "validate",
+    }
+    assert route_after_human_review(state) == "conversation"

@@ -19,6 +19,7 @@ from app.agent.bootstrap.layer_router import (
 from app.agent.bootstrap import post_l3_main_nodes
 from app.agent.bootstrap.post_l3_main_nodes import _STAGE_FORWARD_TARGET, _pass_gate, _dump
 from app.agent.bootstrap.context_bootstrap import bootstrap_context_node
+from app.core.events import SSEEventType
 
 from app.utils.logger import get_logger
 logger = get_logger(__name__)
@@ -132,11 +133,13 @@ def route_after_human_review(state: Dict[str, Any]) -> str:
     decisions = state.get("human_review_decisions") or {}
     paused_stage = state.get("paused_stage")
     action = decisions.get("action") if isinstance(decisions, dict) else None
-    if action == "approve":
+    if action in ("accept", "approve"):
         if paused_stage and paused_stage in _STAGE_FORWARD_TARGET:
             target = _STAGE_FORWARD_TARGET[paused_stage]
             return END if target == "__end__" else target
         return END
+    if action == "retry":
+        return paused_stage if paused_stage else "parse"
     if action == "reject":
         return "conversation"
     return END
@@ -248,7 +251,7 @@ async def publish_human_review_pause(state: Dict[str, Any]) -> Dict[str, Any]:
         try:
             from app.services.sse import sse_manager
             await sse_manager.publish(session_id, {
-                "type": "human_review_paused",
+                "type": SSEEventType.HUMAN_REVIEW_PAUSED,
                 "event_id": state.get("human_review_event_id"),
                 "paused_stage": state.get("paused_stage"),
                 "reason": "post_l3_human_review",
@@ -290,7 +293,7 @@ async def apply_human_review_decision(state: Dict[str, Any]) -> Dict[str, Any]:
         "human_review_decisions": decisions,
     }
     action = decisions.get("action") if isinstance(decisions, dict) else None
-    if action == "approve" and paused_stage:
+    if action in ("accept", "approve") and paused_stage:
         result[f"{paused_stage}_gate"] = _dump(_pass_gate(paused_stage))
     elif action == "reject":
         feedback = decisions.get("feedback") if isinstance(decisions, dict) else None
