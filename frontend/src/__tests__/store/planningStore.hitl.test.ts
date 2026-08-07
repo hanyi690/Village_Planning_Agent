@@ -82,3 +82,21 @@ describe('resolveHumanReview action', () => {
     vi.restoreAllMocks();
   });
 });
+
+describe('execution_resumed clears HITL state', () => {
+  it('clears all HITL fields when execution resumes', () => {
+    usePlanningStore.setState({
+      status: 'paused', humanReviewEventId: 'evt-1', pausedStage: 'execute',
+      humanReviewItems: [{ request_id: 'r1', stage: 'execute', request_type: 'zone_review' }],
+      isResolvingReview: true, humanReviewError: null,
+    });
+    usePlanningStore.getState().handleSSEEvent({ type: 'execution_resumed', data: {} });
+    const state = usePlanningStore.getState();
+    expect(state.status).toBe('planning');
+    expect(state.humanReviewEventId).toBeNull();
+    expect(state.pausedStage).toBeNull();
+    expect(state.humanReviewItems).toEqual([]);
+    expect(state.isResolvingReview).toBe(false);
+    expect(state.humanReviewError).toBeNull();
+  });
+});

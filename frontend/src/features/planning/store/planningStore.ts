@@ -1132,6 +1132,11 @@ function handleSSEEventInStore(state: PlanningState, event: StoreEvent): void {
     case "execution_resumed": {
       state.interruptInfo = undefined;
       state.status = "planning";
+      state.humanReviewEventId = null;
+      state.pausedStage = null;
+      state.humanReviewItems = [];
+      state.isResolvingReview = false;
+      state.humanReviewError = null;
       deriveUIStateInStore(state);
       break;
     }
