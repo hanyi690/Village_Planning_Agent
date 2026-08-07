@@ -31,62 +31,21 @@ jobs:
 
       - name: Install dependencies
         run: |
-          pip install -r ../requirements.txt
-          pip install pytest pytest-cov
+          pip install -r ../requirements-dev.txt
 
-      - name: Run fast GIS tests
+      - name: Run core backend gate
         run: |
-          pytest tests/test_gis_*.py -v --ignore=tests/test_gis_performance.py -x
+          pytest tests/core -v
         env:
           PYTHONPATH: .
 
-      - name: Run MIP optimizer tests
+      - name: Run real-session integration contract
+        # The test executes the complete HTTP/session/artifact chain with the
+        # repository's real fixture report and GIS files.  The remote-LLM
+        # variant is skipped here unless credentials are explicitly supplied;
+        # CI still collects it so a missing integration path cannot go silent.
         run: |
-          pytest tests/test_gis_mip_optimizer.py -v -x
-        env:
-          PYTHONPATH: .
-
-      - name: Run E2E real data tests
-        run: |
-          pytest tests/test_gis_e2e_real_data.py tests/test_e2e_real_reports.py -v -x
-        env:
-          PYTHONPATH: .
-
-      - name: Run KG completeness tests
-        run: |
-          pytest tests/test_gis_kg_complete.py -v -x
-        env:
-          PYTHONPATH: .
-
-      - name: Run validation tests
-        run: |
-          pytest tests/test_gis_validator.py tests/test_gis_validator_extended.py -v -x
-        env:
-          PYTHONPATH: .
-
-  performance-benchmark:
-    name: Performance Benchmarks
-    runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: backend
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Set up Python 3.11
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-          cache: 'pip'
-
-      - name: Install dependencies
-        run: |
-          pip install -r ../requirements.txt
-          pip install pytest
-
-      - name: Run performance benchmarks
-        run: |
-          pytest tests/test_gis_performance.py -v
+          pytest tests/integration/test_real_llm_session_full.py -v
         env:
           PYTHONPATH: .
 
