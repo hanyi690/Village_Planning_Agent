@@ -106,20 +106,35 @@ def _fake_context() -> SimpleNamespace:
 
 
 class _FakeExecuteGraph:
-    """Stands in for build_execute_agent_graph(); records the input state."""
+    """Records inputs and stands in for build_execute_agent_graph().
+
+    ``build()`` returns a real compiled StateGraph (a Runnable) so the parent
+    graph can mount it as a formal subgraph node; ``received`` is captured via
+    the recording child node.
+    """
 
     def __init__(self, changeset: ParcelChangeSet):
         self.received = None
         self.changeset = changeset
 
-    async def ainvoke(self, exec_state, config=None):
-        self.received = exec_state
-        return {
-            "parcel_changeset": self.changeset,
-            "layout_configs": [],
-            "allocated_geojson": {},
-            "execution_errors": [],
-        }
+    def build(self):
+        from langgraph.graph import StateGraph, END, START
+        from app.agent.execute.execute_state import ExecuteAgentState
+
+        def child_node(state: ExecuteAgentState):
+            self.received = state
+            return {
+                "parcel_changeset": self.changeset,
+                "layout_configs": [],
+                "allocated_geojson": {},
+                "execution_errors": [],
+            }
+
+        builder = StateGraph(ExecuteAgentState)
+        builder.add_node("child", child_node)
+        builder.add_edge(START, "child")
+        builder.add_edge("child", END)
+        return builder.compile()
 
 
 @pytest.fixture
@@ -137,7 +152,7 @@ def _post_l3_deps(monkeypatch):
     fake_graph = _FakeExecuteGraph(changeset)
     monkeypatch.setattr(
         "app.agent.execute.execute_agent.build_execute_agent_graph",
-        lambda: fake_graph,
+        lambda: fake_graph.build(),
     )
     monkeypatch.setattr(
         "app.agent.deliver.render_layers.build_render_layers",

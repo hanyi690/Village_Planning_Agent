@@ -175,7 +175,11 @@ def create_unified_planning_graph(checkpointer=None) -> StateGraph:
     builder.add_node("parse", post_l3_main_nodes.parse_node)
     builder.add_node("ground", post_l3_main_nodes.ground_node)
     builder.add_node("select", post_l3_main_nodes.select_node)
-    builder.add_node("execute", post_l3_main_nodes.execute_node)
+    from app.agent.execute.execute_agent import build_execute_agent_graph
+    compiled_execute = build_execute_agent_graph()
+    builder.add_node("pre_execute", post_l3_main_nodes.pre_execute_node)
+    builder.add_node("execute", compiled_execute)
+    builder.add_node("post_execute", post_l3_main_nodes.post_execute_node)
     builder.add_node("validate", post_l3_main_nodes.validate_node)
     builder.add_node("reconcile", post_l3_main_nodes.reconcile_node)
     builder.add_node("deliver", post_l3_main_nodes.deliver_node)
@@ -206,13 +210,15 @@ def create_unified_planning_graph(checkpointer=None) -> StateGraph:
     builder.add_conditional_edges("ground", route_after_ground,
         {"select": "select", "ground": "ground", "human_review": "human_review_prepare"})
     builder.add_conditional_edges("select", route_after_select,
-        {"execute": "execute", "ground": "ground", "human_review": "human_review_prepare"})
-    builder.add_edge("execute", "validate")
+        {"execute": "pre_execute", "ground": "ground", "human_review": "human_review_prepare"})
+    builder.add_edge("pre_execute", "execute")
+    builder.add_edge("execute", "post_execute")
+    builder.add_edge("post_execute", "validate")
     builder.add_conditional_edges("validate", route_after_validate,
-        {"reconcile": "reconcile", "execute": "execute", "select": "select",
+        {"reconcile": "reconcile", "execute": "pre_execute", "select": "select",
          "ground": "ground", "parse": "parse", "human_review": "human_review_prepare"})
     builder.add_conditional_edges("reconcile", route_after_reconcile,
-        {"deliver": "deliver", "execute": "execute", "human_review": "human_review_prepare"})
+        {"deliver": "deliver", "execute": "pre_execute", "human_review": "human_review_prepare"})
     builder.add_conditional_edges("deliver", route_after_deliver,
         {END: END, "validate": "validate", "human_review": "human_review_prepare"})
     builder.add_edge("human_review_prepare", "human_review_publish")
@@ -220,7 +226,7 @@ def create_unified_planning_graph(checkpointer=None) -> StateGraph:
     builder.add_edge("human_review_wait", "human_review_apply")
     builder.add_conditional_edges("human_review_apply", route_after_human_review,
         {"parse": "parse", "ground": "ground", "select": "select",
-         "execute": "execute", "validate": "validate", "reconcile": "reconcile",
+         "execute": "pre_execute", "validate": "validate", "reconcile": "reconcile",
          "deliver": "deliver", "conversation": "conversation",
          END: END})
 

@@ -102,8 +102,12 @@ def test_load_artifact_rejects_fingerprint_mismatch():
 
 
 def test_state_has_no_full_typed_business_objects():
-    from app.agent.plan_state.state import AgentState
+    from app.agent.plan_state.state import AgentState, create_initial_state
 
+    # These typed objects must never be persisted as initial-state defaults.
+    # They are either stored via artifact_refs, or (for the EXECUTE subgraph
+    # formal-mount channels) only declared as optional top-level schema fields
+    # that are populated transiently and never written into create_initial_state.
     removed_fields = {
         "delivery_manifest", "planning_program", "intent",
         "grounding_result", "site_selection", "execution_plan",
@@ -114,7 +118,20 @@ def test_state_has_no_full_typed_business_objects():
         "l3_program_ref",
     }
     annotations = set(AgentState.__annotations__.keys())
+    # Yielding defaults: the transient EXECUTE subgraph channels are allowed as
+    # schema annotations (LangGraph maps subgraph state by field name) but must
+    # not leak into the initial checkpoint state.
+    allowed_transient = {
+        "intent", "site_selection", "execution_plan",
+        "parcel_changeset", "planned_state", "allocated_geojson",
+    }
+    init_state = create_initial_state("run-durability", "v", "data")
     for field in removed_fields:
+        if field in allowed_transient:
+            assert field not in init_state, (
+                f"{field} must not be a create_initial_state default"
+            )
+            continue
         assert field not in annotations, f"{field} should be removed from AgentState"
 
 

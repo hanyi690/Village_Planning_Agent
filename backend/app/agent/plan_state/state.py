@@ -235,6 +235,19 @@ class AgentState(TypedDict, total=False):
     # EXECUTE 输出
     execution_errors: Annotated[List[Dict[str, Any]], _replace_or_merge_lists]  # EXECUTE errors
     layout_configs: List[Dict[str, Any]]
+    # ── EXECUTE subgraph formal-mount channels (mapped by field name at top level) ──
+    intent: Any  # SpatialPlanningIntent
+    site_selection: Any  # SiteSelectionDecision
+    execution_plan: Any  # ExecutionPlan
+    gis_data: dict
+    gis_bundle: Any  # GISDataBundle
+    facility_anchors: list
+    kg_session_ref: str
+    village_name: str
+    parcel_changeset: Any  # ParcelChangeSet
+    allocated_geojson: dict
+    allocation_summary: dict
+    planned_state: Any  # PlannedState
     # VALIDATE 输出
     validate_gate: Optional[Any]  # GateDecision
     # RECONCILE 输出

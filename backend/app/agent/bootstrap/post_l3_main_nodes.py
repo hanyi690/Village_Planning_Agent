@@ -480,11 +480,13 @@ async def select_node(state: Dict[str, Any]) -> Dict[str, Any]:
 # ── EXECUTE ────────────────────────────────────────────────────────────
 
 
-async def execute_node(state: Dict[str, Any]) -> Dict[str, Any]:
-    """EXECUTE node: run the EXECUTE subgraph -> planned state + changeset."""
-    from app.services.runtime import PlanningRuntimeService
-    from app.agent.execute.execute_state import ExecuteAgentState
-    from app.agent.execute.planned_state_builder import changeset_to_planned_state
+async def pre_execute_node(state: Dict[str, Any]) -> Dict[str, Any]:
+    """Map parent AgentState -> EXECUTE subgraph top-level channels.
+
+    LangGraph maps subgraph state by field name at the parent top level.
+    This node materializes the EXECUTE input channels as top-level AgentState
+    fields so the mounted subgraph can read them.
+    """
     from app.modules.schema.contracts.parse_contracts import SpatialPlanningIntent
     from app.modules.schema.contracts.parse_result_contracts import IntentCompilationResult
     from app.modules.schema.contracts.selection_contracts import SiteSelectionDecision
@@ -508,24 +510,6 @@ async def execute_node(state: Dict[str, Any]) -> Dict[str, Any]:
     bundle = getattr(context, "bundle", None)
     gis_data = bundle.to_geojson_dict() if bundle is not None and hasattr(bundle, "to_geojson_dict") else {}
 
-    exec_state = ExecuteAgentState(
-        session_id=state.get("session_id", ""),
-        village_name=state.get("config", {}).get("village_name", ""),
-        gis_data=gis_data,
-        gis_bundle=bundle,
-        intent=plan_intent,
-        facility_anchors=getattr(context, "village_anchors", None),
-        site_selection=site_selection,
-        land_design_briefs=list(state.get("land_design_briefs") or []),
-        execution_plan=execution_plan,
-        kg_session_ref=getattr(context, "kg_session_ref", "") or "",
-        messages=list(state.get("messages") or []),
-    )
-
-    graph = PlanningRuntimeService._execute_subgraph
-    if graph is None:
-        await PlanningRuntimeService.ensure_initialized()
-        graph = PlanningRuntimeService._execute_subgraph
     kg_obj = getattr(context, "kg", None)
     if kg_obj is not None and plan_intent is not None:
         try:
@@ -533,31 +517,48 @@ async def execute_node(state: Dict[str, Any]) -> Dict[str, Any]:
 
             build_intent_layer(kg_obj, plan_intent)
         except Exception as e:
-            logger.warning("[post_l3:main:execute] build_intent_layer failed: %s", e)
-    result = await graph.ainvoke(
-        exec_state,
-        config={"configurable": {"thread_id": state.get("session_id", "")}},
-    )
+            logger.warning("[post_l3:main:pre_execute] build_intent_layer failed: %s", e)
 
-    changeset = result.get("parcel_changeset")
+    return {
+        "intent": plan_intent,
+        "site_selection": site_selection,
+        "execution_plan": execution_plan,
+        "gis_data": gis_data,
+        "gis_bundle": bundle,
+        "facility_anchors": getattr(context, "village_anchors", None),
+        "kg_session_ref": getattr(context, "kg_session_ref", "") or "",
+        "village_name": state.get("config", {}).get("village_name", ""),
+        **_adopt_context(state, context),
+    }
+
+
+async def post_execute_node(state: Dict[str, Any]) -> Dict[str, Any]:
+    """Map EXECUTE subgraph output channels back to parent AgentState refs."""
+    from app.agent.execute.planned_state_builder import changeset_to_planned_state
+    from app.modules.schema.contracts.parse_contracts import SpatialPlanningIntent
+    from app.modules.schema.contracts.parse_result_contracts import IntentCompilationResult
+
+    changeset = state.get("parcel_changeset")
+    intent = _load_ref_artifact(state, "intent_compilation", IntentCompilationResult)
+    plan_intent = _to_typed(getattr(intent, "typed_intent", None) or intent, SpatialPlanningIntent)
+
     if changeset is not None:
         planned_state = changeset_to_planned_state(changeset, plan_intent)
     else:
-        logger.warning("[post_l3:main:execute] no parcel_changeset produced")
-        planned_state = None
+        logger.warning("[post_l3:main:post_execute] no parcel_changeset produced")
+        planned_state = state.get("planned_state")
 
     refs = {
         "parcel_changeset": _persist_artifact(state, "execute", "ParcelChangeSet", changeset),
         "planned_state": _persist_artifact(state, "execute", "PlannedState", planned_state),
         "allocated_geojson": _persist_artifact(
-            state, "execute", "AllocatedGeoJSON", result.get("allocated_geojson", {}) or {}
+            state, "execute", "AllocatedGeoJSON", state.get("allocated_geojson", {}) or {}
         ),
     }
     return {
-        "layout_configs": _jsonable(list(result.get("layout_configs", []) or [])),
-        "execution_errors": _jsonable(list(result.get("execution_errors", []) or [])),
+        "layout_configs": _jsonable(list(state.get("layout_configs", []) or [])),
+        "execution_errors": _jsonable(list(state.get("execution_errors", []) or [])),
         "artifact_refs": refs,
-        **_adopt_context(state, context),
     }
 
 
@@ -765,7 +766,8 @@ from app.agent.bootstrap.stage_audit import audited_stage
 parse_node = audited_stage("PARSE")(parse_node)
 ground_node = audited_stage("GROUND")(ground_node)
 select_node = audited_stage("SELECT")(select_node)
-execute_node = audited_stage("EXECUTE")(execute_node)
+pre_execute_node = audited_stage("EXECUTE")(pre_execute_node)
+post_execute_node = audited_stage("EXECUTE")(post_execute_node)
 validate_node = audited_stage("VALIDATE")(validate_node)
 reconcile_node = audited_stage("RECONCILE")(reconcile_node)
 deliver_node = audited_stage("DELIVER")(deliver_node)

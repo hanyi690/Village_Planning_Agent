@@ -188,8 +188,7 @@ async def test_ground_node_calls_retrieve_evidence_on_explore_retry(monkeypatch)
 
 
 @pytest.mark.asyncio
-async def test_execute_node_rebuilds_plan_when_missing(monkeypatch):
-    from app.agent.execute import execute_agent as eagg
+async def test_pre_execute_node_rebuilds_plan_when_missing(monkeypatch):
     from app.modules.schema.contracts.parse_contracts import SpatialPlanningIntent, ProjectTarget
     from app.modules.schema.contracts.parse_result_contracts import IntentCompilationResult
     from app.modules.schema.contracts.selection_contracts import SiteSelectionDecision
@@ -199,24 +198,12 @@ async def test_execute_node_rebuilds_plan_when_missing(monkeypatch):
         village_anchors = []
         kg_session_ref = ""
         kg = None
+        version = "v1"
 
-    class FakeExecuteGraph:
-        def __init__(self):
-            self.captured_state = None
-
-        async def ainvoke(self, state, config=None):
-            self.captured_state = state
-            return {
-                "parcel_changeset": None,
-                "layout_configs": [],
-                "allocated_geojson": {},
-                "execution_errors": [],
-            }
-
-    fake_graph = FakeExecuteGraph()
+        def snapshot_meta(self):
+            return {"session_id": "s1", "version": "v1"}
 
     monkeypatch.setattr(M, "_get_cached_context", lambda s: FakeContext())
-    monkeypatch.setattr(eagg, "build_execute_agent_graph", lambda: fake_graph)
     monkeypatch.setattr(M, "_persist_artifact", lambda *a, **k: {})
 
     plan_intent = SpatialPlanningIntent(
@@ -236,13 +223,49 @@ async def test_execute_node_rebuilds_plan_when_missing(monkeypatch):
         "config": {"village_name": "v1"},
         "messages": [],
     }
-    out = await M.execute_node(state)
-    assert fake_graph.captured_state is not None, "execute_node must invoke the execute graph"
-    assert fake_graph.captured_state.execution_plan is not None, (
-        "execute_node must rebuild execution_plan when it is missing"
+    out = await M.pre_execute_node(state)
+    assert out.get("execution_plan") is not None, (
+        "pre_execute_node must rebuild execution_plan when it is missing"
     )
-    assert "artifact_refs" in out
-    assert "parcel_changeset" in out["artifact_refs"]
+    assert out.get("intent") is plan_intent
+    assert "village_name" in out
+
+
+@pytest.mark.asyncio
+async def test_post_execute_node_persists_outputs(monkeypatch):
+    class FakeContext:
+        bundle = None
+        village_anchors = []
+        kg_session_ref = ""
+        kg = None
+
+    monkeypatch.setattr(M, "_get_cached_context", lambda s: FakeContext())
+    captured = {}
+
+    def fake_persist(state, module, artifact_type, payload):
+        captured[artifact_type] = payload
+        return {"module": module, "type": artifact_type}
+
+    monkeypatch.setattr(M, "_persist_artifact", fake_persist)
+    monkeypatch.setattr(
+        "app.agent.execute.planned_state_builder.changeset_to_planned_state",
+        lambda changeset, intent: {"planned": True},
+    )
+
+    state = {
+        "session_id": "s1",
+        "parcel_changeset": {"changes": []},
+        "layout_configs": [{"a": 1}],
+        "execution_errors": [{"code": "x"}],
+        "allocated_geojson": {"type": "FeatureCollection", "features": []},
+    }
+    out = await M.post_execute_node(state)
+    assert captured.get("ParcelChangeSet") is not None
+    assert captured.get("PlannedState") is not None
+    assert captured.get("AllocatedGeoJSON") is not None
+    assert out.get("layout_configs") == [{"a": 1}]
+    assert out.get("execution_errors") == [{"code": "x"}]
+    assert out.get("artifact_refs", {}).get("parcel_changeset") is not None
 @pytest.mark.asyncio
 async def test_collect_human_items_from_dict_gate():
     from app.modules.schema.contracts.workflow_contracts import GateDecision

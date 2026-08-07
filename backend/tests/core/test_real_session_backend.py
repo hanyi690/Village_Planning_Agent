@@ -164,7 +164,25 @@ async def test_real_session_fixture_runs_all_post_l3_stages(
         state["artifact_refs"]["planning_program"] = store_artifact(
             state, "planning_program", "l3", "PlanningProgram", program.model_dump(mode="json")
         )
-        for fn in (nodes.parse_node, nodes.ground_node, nodes.select_node, nodes.execute_node, nodes.validate_node, nodes.reconcile_node, nodes.deliver_node):
+        for fn in (nodes.parse_node, nodes.ground_node, nodes.select_node):
+            delta = await fn(state)
+            if delta.get("artifact_refs"):
+                delta["artifact_refs"] = {**(state.get("artifact_refs") or {}), **delta["artifact_refs"]}
+            state.update(delta)
+
+        # EXECUTE is a formal mounted subgraph: pre_execute maps inputs, the
+        # subgraph runs, post_execute maps outputs back and persists artifacts.
+        # It must run before VALIDATE (which consumes the changeset).
+        pre = await nodes.pre_execute_node(state)
+        execute_result = await (PlanningRuntimeService._execute_subgraph).ainvoke(pre, config={})
+        state.update(pre)
+        state.update(execute_result)
+        post = await nodes.post_execute_node(state)
+        if post.get("artifact_refs"):
+            post["artifact_refs"] = {**(state.get("artifact_refs") or {}), **post["artifact_refs"]}
+        state.update(post)
+
+        for fn in (nodes.validate_node, nodes.reconcile_node, nodes.deliver_node):
             delta = await fn(state)
             if delta.get("artifact_refs"):
                 delta["artifact_refs"] = {**(state.get("artifact_refs") or {}), **delta["artifact_refs"]}
