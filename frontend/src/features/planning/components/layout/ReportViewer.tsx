@@ -55,6 +55,7 @@ import {
   getDimensionIcon,
 } from "../../config/dimensions";
 import CascadePanel from "../CascadePanel";
+import { HumanReviewPanel } from "../review/HumanReviewPanel";
 import { cn } from "../../utils/cn";
 import { createErrorMessage } from "../../utils";
 
@@ -1037,6 +1038,9 @@ const ReportViewer = memo(function ReportViewer({
 
           {/* Input Form Card (idle state) */}
           {showInputForm && <VillageInputForm onSubmit={handleSubmit} />}
+
+          {/* Human review panel (post-L3 HITL pause) */}
+          <HumanReviewPanel />
 
           {/* Layer dimension grids (non-idle state) */}
           {!showInputForm &&

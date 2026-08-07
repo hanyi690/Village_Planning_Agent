@@ -2138,6 +2138,14 @@ export const usePlanningStore = create<PlanningState & PlanningActions>()(
         set((state) => {
           state.humanReviewItems = response.pending_items || [];
           state.humanReviewError = null;
+          if (response.pending_items.length > 0 && response.post_l3_status === 'paused') {
+            state.status = 'paused';
+            state.pausedStage = response.pending_items[0]?.stage || null;
+            if (!state.humanReviewEventId) {
+              state.humanReviewEventId = 'recovered-' + response.session_id;
+            }
+            deriveUIStateInStore(state);
+          }
         });
       } catch (err) {
         set((state) => {

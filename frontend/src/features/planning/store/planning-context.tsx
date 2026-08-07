@@ -405,11 +405,29 @@ export function PlanningProvider({ children, conversationId }: PlanningProviderP
   const sseResumeTrigger = usePlanningStore((state) => state.sseResumeTrigger);
   const initConversation = usePlanningStore((state) => state.initConversation);
   const setCheckpoints = usePlanningStore((state) => state.setCheckpoints);
+  const humanReviewEventId = usePlanningStore((state) => state.humanReviewEventId);
+  const fetchHumanReviewItems = usePlanningStore((state) => state.fetchHumanReviewItems);
 
   // Initialize store with conversationId
   useEffect(() => {
     initConversation(conversationId);
   }, [conversationId, initConversation]);
+
+  // Auto-fetch pending review items when SSE pause event arrives
+  useEffect(() => {
+    if (humanReviewEventId && sessionId) {
+      fetchHumanReviewItems(sessionId);
+    }
+  }, [humanReviewEventId, sessionId, fetchHumanReviewItems]);
+
+  // Page-refresh recovery: check for paused state on mount
+  useEffect(() => {
+    if (sessionId) {
+      fetchHumanReviewItems(sessionId);
+    }
+    // Only on mount/sessionId change
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sessionId]);
 
   // SSE connection with reconnect trigger
   useSSEConnection({ sessionId, resumeTrigger: sseResumeTrigger });

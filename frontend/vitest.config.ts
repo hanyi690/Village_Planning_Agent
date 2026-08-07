@@ -3,12 +3,12 @@ import path from 'path';
 
 export default defineConfig({
   oxc: {
-    jsx: 'automatic',
+    jsx: { runtime: 'automatic', development: true },
   },
   test: {
     environment: 'jsdom',
     globals: true,
-    setupFiles: ['./jest.setup.ts'],
+    setupFiles: ['./jest.setup.ts', './vitest.setup.ts'],
     include: ['src/**/__tests__/**/*.test.{ts,tsx}'],
   },
   resolve: {
