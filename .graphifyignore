@@ -1,0 +1,35 @@
+# Node modules
+**/node_modules/**
+
+# Python caches
+**/__pycache__/**
+**/.pytest_cache/**
+**/*.pyc
+
+# Test artifacts
+**/playwright-report/**
+**/test-results/**
+**/.pytest-tmp*/
+**/*.webm
+**/*.mp4
+
+# Images
+**/*.png
+**/*.jpg
+**/*.jpeg
+**/*.gif
+**/*.svg
+**/*.ico
+**/*.bmp
+
+# Build outputs
+**/dist/**
+**/build/**
+**/.cache/**
+
+# Graphify output (don't recurse into own output)
+**/graphify-out/**
+
+# Temp/runtime
+**/.run-tmp*/
+**/tmp/
