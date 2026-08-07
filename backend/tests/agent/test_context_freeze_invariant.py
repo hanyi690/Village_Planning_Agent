@@ -166,3 +166,50 @@ async def test_all_layer_artifacts_share_same_context_version(monkeypatch):
         await layer_aggregate_node(layer_state)
 
     assert all(v == "1" for v in versions)
+
+
+@pytest.mark.asyncio
+async def test_l1_strict_recovery_after_cache_loss():
+    """Save L1 artifact with valid context, then load_artifact must succeed."""
+    from datetime import datetime, timezone
+
+    from app.agent.bootstrap.artifact_runtime import store_artifact, load_artifact
+    from app.modules.schema.contracts.l1_contracts import L1Snapshot
+
+    import shutil
+    from pathlib import Path
+
+    shutil.rmtree(Path(".run-tmp", "test-recover-001"), ignore_errors=True)
+
+    state = {
+        "session_id": "test-recover-001",
+        "run_id": "test-recover-001",
+        "context_version": "1",
+        "context_fingerprint": "sha256:test",
+        "context_ref": {"session_id": "test-recover-001", "version": "1"},
+        "artifact_refs": {},
+    }
+    snapshot = L1Snapshot(
+        session_id="test-recover-001",
+        context_version="1",
+        context_fingerprint="sha256:test",
+        village_name="test",
+        planning_period="2022-2035",
+        facts=[],
+        facts_by_dimension={},
+        created_at=datetime(2022, 1, 1, tzinfo=timezone.utc),
+    )
+    # store_artifact returns a dict ref; MUST write it back into artifact_refs
+    ref = store_artifact(
+        state, "l1_snapshot", "l1_observe", "L1Snapshot", snapshot
+    )
+    state["artifact_refs"]["l1_snapshot"] = ref
+
+    # load_artifact must succeed and version must match
+    loaded = load_artifact(state, "l1_snapshot", L1Snapshot)
+    assert loaded is not None, (
+        "load_artifact returned None - artifact_refs may not contain the ref "
+        "or the store path doesn't match."
+    )
+    assert str(loaded.context_version) == "1"
+    assert str(loaded.context_fingerprint) == "sha256:test"
