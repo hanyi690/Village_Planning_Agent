@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from app.agent.bootstrap.context_guard import require_frozen_context
 from app.modules.ports.artifact_store import ArtifactRef
 from app.modules.schema.contracts.evidence_contracts import EvidenceSource
 from app.modules.schema.contracts.l1_contracts import EvidenceGap, L1Snapshot
@@ -243,6 +244,8 @@ async def l3_aggregate(
     run_id = state.get("run_id", state.get("session_id", ""))
     session_id = state.get("session_id", run_id)
     context_version = state.get("context_version", "")
+
+    require_frozen_context(state)
 
     store = ReportStore.get_instance()
     raw_reports = await store.get_layer_reports_with_sources(session_id, layer=3)

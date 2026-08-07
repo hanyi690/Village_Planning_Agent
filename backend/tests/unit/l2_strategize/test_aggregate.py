@@ -91,7 +91,7 @@ async def test_l2_aggregate_returns_refs(tmp_path, monkeypatch):
         wraps=real_evaluate_l2_gate,
     ) as mock_gate:
         result = await l2_aggregate(
-            {"session_id": "s1", "run_id": "r1", "context_version": "v1"},
+            {"session_id": "s1", "run_id": "r1", "context_version": "v1", "context_ref": {"session_id": "s1", "version": "v1"}},
             base_dir=str(tmp_path),
         )
 

@@ -60,7 +60,12 @@ async def test_l1_aggregate_produces_snapshot_and_review(tmp_path, monkeypatch):
         fake_get_layer_reports_with_sources,
     )
 
-    state = {"session_id": session_id, "run_id": run_id, "context_version": "v1"}
+    state = {
+        "session_id": session_id,
+        "run_id": run_id,
+        "context_version": "v1",
+        "context_ref": {"session_id": session_id, "version": "v1"},
+    }
 
     result = await l1_aggregate(state, base_dir=str(tmp_path))
 
