@@ -21,15 +21,15 @@ import logging
 import random
 
 import httpx
-from fastapi import APIRouter
-from fastapi.responses import Response
+from fastapi import APIRouter, Request
+from fastapi.responses import JSONResponse, Response
 
 from app.api.session_routes import router as session_router
 from app.api.gis_test_routes import router as gis_test_router
 from app.api.human_review_routes import router as human_review_router
 from app.api.artifact_routes import router as artifact_router
 from app.api.render_routes import router as render_router
-from app.core.settings import TIANDITU_API_KEY
+from app.core.settings import IS_PRODUCTION, TIANDITU_API_KEY
 
 logger = logging.getLogger(__name__)
 
@@ -40,7 +40,8 @@ router = APIRouter()
 router.include_router(session_router, tags=["Session"])
 
 # GIS dev test API (开发环境专用)
-router.include_router(gis_test_router, tags=["GIS Dev"])
+if not IS_PRODUCTION:
+    router.include_router(gis_test_router, tags=["GIS Dev"])
 
 # Post-L3 HITL (人工审查 interrupt + resume)
 router.include_router(human_review_router, tags=["Human Review"])
@@ -57,12 +58,15 @@ router.include_router(render_router, tags=["Render"])
 # ============================================
 
 @router.get("/api/health", tags=["Health"])
-async def unified_health_check():
-    """Unified health check endpoint"""
+async def unified_health_check(request: Request):
+    """Readiness check for core resources initialized by lifespan."""
+    readiness = getattr(request.app.state, "readiness", None)
+    if not readiness or not all(value == "ready" for value in readiness.values()):
+        return JSONResponse(status_code=503, content={"status": "not_ready", "components": readiness or {}})
     return {
-        "status": "healthy",
+        "status": "ready",
         "service": "village-planning-backend",
-        "version": "2.0.0",
+        "components": readiness,
         "modules": ["session"],
         "architecture": "SSE-single-channel"
     }

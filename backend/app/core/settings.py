@@ -4,6 +4,8 @@ from dotenv import load_dotenv
 
 load_dotenv(override=True)
 
+IS_PRODUCTION = os.getenv("ENVIRONMENT") == "production"
+
 # Project root directory (cross-platform)
 # backend/app/core/settings.py -> PROJECT_ROOT = project root
 # Support PROJECT_ROOT env var override (for Docker where file layout differs)
@@ -44,6 +46,9 @@ EMBEDDING_RATE_LIMIT_RPS = float(os.getenv("EMBEDDING_RATE_LIMIT_RPS", "25"))
 
 # LangGraph Send API parallel node limit (prevents 28-dimension full-parallel burst)
 GRAPH_MAX_CONCURRENCY = int(os.getenv("GRAPH_MAX_CONCURRENCY", "50"))
+BACKEND_STARTUP_TIMEOUT_SECONDS = float(os.getenv("BACKEND_STARTUP_TIMEOUT_SECONDS", "30"))
+GRAPH_RECURSION_LIMIT = int(os.getenv("GRAPH_RECURSION_LIMIT", "100"))
+BUSINESS_RETRY_LIMIT = int(os.getenv("BUSINESS_RETRY_LIMIT", "3"))
 
 # OpenAI-compatible API base URL (for DeepSeek, etc.)
 OPENAI_API_BASE = os.getenv("OPENAI_API_BASE")
