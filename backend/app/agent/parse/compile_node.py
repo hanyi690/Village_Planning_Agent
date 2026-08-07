@@ -95,7 +95,7 @@ def _to_zone_target(intervention: PlanningIntervention) -> ZoneTarget:
     )
 
 
-def _build_legacy_intent(program: PlanningProgram) -> SpatialPlanningIntent:
+def _build_intent(program: PlanningProgram) -> SpatialPlanningIntent:
     intent = SpatialPlanningIntent(village_name="", planning_period="", raw_text="")
     for index, intervention in enumerate(program.interventions):
         category = intervention.category
@@ -160,7 +160,7 @@ def compile_program_deterministic(
 
     No LLM calls. Returns (IntentCompilationResult, SpatialReferenceSpec[], diagnostics).
     """
-    intent = _build_legacy_intent(program)
+    intent = _build_intent(program)
     project_requirements = _build_project_requirements(program)
     specs, spec_diags = map_interventions_to_specs(program.interventions)
     diagnostics = _build_diagnostics(program, spec_diags)

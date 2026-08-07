@@ -11,7 +11,7 @@ Verified quirks (read from source before writing this test):
     via ``_interventions_from_instruction``; the prose ``## 项目`` chapters are
     only used for locators/diagnostics. We therefore keep the chapters for
     readability and put the real typed rows in the INSTRUCTION table.
-  - The legacy intent builder in ``compile_node._build_legacy_intent`` maps
+  - The canonical intent builder in ``compile_node._build_intent`` maps
     ``category == "zone"`` interventions onto ``project_targets`` (only
     ``restoration``/``protection`` become ``zone_targets``), so
     ``intent.zone_targets`` stays empty.
@@ -30,11 +30,11 @@ from app.agent.execute.land_design_worker import design_all
 from app.agent.ground.aggregate import ground_aggregate
 from app.agent.l3_plan.aggregate import merge_program_fragments
 from app.agent.parse.aggregate import compile_program
-from app.agent.select.adapter import (
-    filter_parcels_for_target,
-    grounding_to_candidate_parcels,
+from app.agent.select.aggregate import (
+    _filter_parcels_for_target,
+    _grounding_to_candidate_parcels,
+    select_aggregate,
 )
-from app.agent.select.aggregate import select_aggregate
 from app.agent.validate.aggregate import validate_aggregate
 from app.agent.execute.planned_state_builder import changeset_to_planned_state
 from app.modules.context.planning_context import PlanningContext
@@ -211,9 +211,9 @@ def test_planning_chain_e2e():
     assert isinstance(decision, SiteSelectionDecision)
     assert decision.decision_factors["placed_count"] >= 2, ">= 2 projects placed"
 
-    all_candidates = grounding_to_candidate_parcels(grounding, bundle)
-    industrial_pool = {p.bsm for p in filter_parcels_for_target(all_candidates, industrial.project_id)}
-    plaza_pool = {p.bsm for p in filter_parcels_for_target(all_candidates, plaza.project_id)}
+    all_candidates = _grounding_to_candidate_parcels(grounding, bundle)
+    industrial_pool = {p.bsm for p in _filter_parcels_for_target(all_candidates, industrial.project_id)}
+    plaza_pool = {p.bsm for p in _filter_parcels_for_target(all_candidates, plaza.project_id)}
     assert industrial_pool != plaza_pool, "project candidate pools must differ"
     assert industrial_pool == set(NORTH), "industrial pool must be the northern parcels"
     assert plaza_pool == set(SOUTH), "plaza pool must be the southern parcels"
