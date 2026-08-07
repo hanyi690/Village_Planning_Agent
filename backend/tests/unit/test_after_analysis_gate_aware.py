@@ -44,11 +44,11 @@ def test_gate_explore_routes_to_explore():
 
 
 def test_gate_human_routes_to_end():
-    """L1 gate HUMAN -> router should return END."""
+    """L1 gate HUMAN -> router routes to human_review checkpoint."""
     state = _state_with_gate("layer1", "l1_gate_decision", "HUMAN",
                              completed_dimensions={"layer1": ["d1", "d2"], "layer2": [], "layer3": []})
     result = after_analysis(state)
-    assert result == END
+    assert result == "human_review"
 
 
 def test_gate_l1_rework_dispatches_dimensions():

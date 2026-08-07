@@ -95,7 +95,7 @@ def test_after_analysis_human_and_rework_do_not_advance():
     from app.agent.conversation_router.edges import after_analysis
 
     human = after_analysis(_l1_complete_state("HUMAN"))
-    assert human == END
+    assert human == "human_review"
 
     rework = after_analysis(_l1_complete_state("L1"))
     assert isinstance(rework, list)

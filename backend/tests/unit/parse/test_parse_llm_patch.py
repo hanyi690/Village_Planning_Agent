@@ -244,7 +244,7 @@ async def test_compile_program_async_clean_compile_no_llm(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_parse_node_uses_async_entry(monkeypatch):
+async def test_parse_node_uses_async_entry(monkeypatch, tmp_path):
     from app.agent.bootstrap.post_l3_main_nodes import parse_node
 
     captured = {}
@@ -256,6 +256,12 @@ async def test_parse_node_uses_async_entry(monkeypatch):
 
     monkeypatch.setattr(
         "app.agent.parse.aggregate.compile_program_async", fake_async_compile
+    )
+    from app.services.artifact_store import FilesystemArtifactStore
+
+    monkeypatch.setattr(
+        "app.agent.bootstrap.artifact_runtime.FilesystemArtifactStore",
+        lambda: FilesystemArtifactStore(base_dir=str(tmp_path)),
     )
     program = _ambiguous_program()
     state = {

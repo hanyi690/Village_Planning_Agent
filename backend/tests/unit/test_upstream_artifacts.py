@@ -228,35 +228,68 @@ async def test_load_planning_program_from_l3_ref(monkeypatch, tmp_path):
     }
 
     monkeypatch.setattr(
-        "app.services.artifact_store.FilesystemArtifactStore",
-        lambda base_dir=".run-tmp": FilesystemArtifactStore(base_dir=str(tmp_path)),
+        "app.agent.bootstrap.artifact_runtime.FilesystemArtifactStore",
+        lambda: FilesystemArtifactStore(base_dir=str(tmp_path)),
     )
 
     loaded = _load_planning_program(
-        {"session_id": "s1", "l3_program_ref": l3_program_ref}
+        {"session_id": "s1", "context_version": "", "l3_program_ref": l3_program_ref}
     )
     assert isinstance(loaded, PlanningProgram)
     assert loaded.artifact_id == "l3-s1-v1"
     assert len(loaded.interventions) == 1
 
 
-def test_load_planning_program_prefers_state_program():
+def test_load_planning_program_prefers_state_program(monkeypatch, tmp_path):
+    from app.agent.bootstrap.artifact_runtime import store_artifact
     from app.agent.bootstrap.post_l3_main_nodes import _load_planning_program
 
+    monkeypatch.setattr(
+        "app.agent.bootstrap.artifact_runtime.FilesystemArtifactStore",
+        lambda: FilesystemArtifactStore(base_dir=str(tmp_path)),
+    )
     program = PlanningProgram(
         interventions=[PlanningIntervention(intervention_id="i1", name="项目A")]
     )
-    loaded = _load_planning_program({"planning_program": program})
-    assert loaded is program
+    state = {
+        "session_id": "s1",
+        "run_id": "r1",
+        "context_version": "cv",
+        "context_fingerprint": "sha256:test",
+        "context_ref": {"session_id": "s1", "version": "cv"},
+    }
+    program_ref = store_artifact(
+        state, "planning_program", "l3", "PlanningProgram", program.model_dump(mode="json")
+    )
+    state["artifact_refs"] = {"planning_program": program_ref}
+    loaded = _load_planning_program(state)
+    assert isinstance(loaded, PlanningProgram)
+    assert len(loaded.interventions) == 1
 
 
-def test_load_planning_program_from_state_dict():
+def test_load_planning_program_from_state_dict(monkeypatch, tmp_path):
+    from app.agent.bootstrap.artifact_runtime import store_artifact
     from app.agent.bootstrap.post_l3_main_nodes import _load_planning_program
 
+    monkeypatch.setattr(
+        "app.agent.bootstrap.artifact_runtime.FilesystemArtifactStore",
+        lambda: FilesystemArtifactStore(base_dir=str(tmp_path)),
+    )
     program = PlanningProgram(
         interventions=[PlanningIntervention(intervention_id="i1", name="项目A")]
     )
-    loaded = _load_planning_program({"planning_program": program.model_dump()})
+    state = {
+        "session_id": "s1",
+        "run_id": "r1",
+        "context_version": "cv",
+        "context_fingerprint": "sha256:test",
+        "context_ref": {"session_id": "s1", "version": "cv"},
+    }
+    program_ref = store_artifact(
+        state, "planning_program", "l3", "PlanningProgram", program.model_dump(mode="json")
+    )
+    state["artifact_refs"] = {"planning_program": program_ref}
+    loaded = _load_planning_program(state)
     assert isinstance(loaded, PlanningProgram)
     assert len(loaded.interventions) == 1
 
