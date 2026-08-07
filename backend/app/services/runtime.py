@@ -134,7 +134,7 @@ class PlanningRuntimeService:
             logger.info("[PlanningRuntimeService] Graph created")
 
             from app.agent.execute.execute_agent import build_execute_agent_graph
-            cls._execute_subgraph = build_execute_agent_graph(checkpointer=cls._checkpointer)
+            cls._execute_subgraph = build_execute_agent_graph()
             logger.info("[PlanningRuntimeService] EXECUTE subgraph compiled")
 
             cls._initialized = True
