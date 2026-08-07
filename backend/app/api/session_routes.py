@@ -603,14 +603,14 @@ async def submit_feedback(session_id: str, request: FeedbackRequest):
 
     if request.dimensions and request.feedback:
         # Reject with feedback: compute impact tree and resume from interrupt
-        from app.config.dependency import get_impact_tree_compat
+        from app.config.dependency import compute_impact_tree
 
         final_tree: Dict[int, List[str]] = {0: list(request.dimensions)}
         completed_dims = state.get("completed_dimensions", {})
         all_completed_keys = set(d for dims in completed_dims.values() for d in dims)
 
         for target_dim in request.dimensions:
-            tree = get_impact_tree_compat(target_dim)
+            tree = compute_impact_tree(target_dim)
             for wave, dims in tree.items():
                 already_executed = [d for d in dims if d in all_completed_keys]
                 if already_executed:
@@ -772,6 +772,18 @@ async def resume_from_checkpoint(session_id: str, checkpoint_id: str):
             detail=f"Checkpoint {checkpoint_id} is an intermediate state (kind={kind}), "
                    f"not a stable completion checkpoint. Restore from a 'layer' or 'revision' checkpoint.",
         )
+
+    # ADR-005: migrate legacy artifact references exactly once at the
+    # checkpoint-import boundary, before any runtime node executes.
+    if values:
+        try:
+            from app.agent.bootstrap.artifact_runtime import migrate_legacy_artifacts
+            values["artifact_refs"] = migrate_legacy_artifacts(values)
+        except Exception as exc:
+            logger.warning(
+                "[checkpoint] legacy artifact migration failed for %s: %s",
+                checkpoint_id, exc,
+            )
 
     layer = values.get("previous_layer", 1) or 1
     sse_manager.append_event(session_id, {"type": "resumed", "checkpoint_id": checkpoint_id, "layer": layer, "kind": kind})

@@ -55,7 +55,7 @@
 
 - **Wave 波次**：`calculate_waves(phase)` — `Wave = max(依赖维度 Wave) + 1`，无依赖为 Wave 1；`get_wave_dimensions(phase, wave)` / `get_total_waves(phase)`
 - **下游依赖**：`get_downstream_dependencies`（同层）+ `get_downstream_dependencies_compat`（跨层合流，修订用）
-- **影响树**：`get_impact_tree_compat(dimension_key)` — 迭代稳定计算修订影响波次（处理跨层依赖与基线维度），`get_next_revision_wave` 取下一个待执行波次
+- **影响树**：`compute_impact_tree(dimension_key)` — 迭代稳定计算修订影响波次（处理跨层依赖与基线维度，ADR-004），`get_next_revision_wave` 取下一个待执行波次
 - **三层依赖链**：`get_full_dependency_chain()` 汇总所有维度 `{layer, layer_depends_on, phase_depends_on, depends_on_same_layer, wave}`
 - **修订序列**：`get_revision_wave_dimensions(target, completed)` — 对多目标维度取各波次并集
 - **就绪检查**：`check_detailed_dependencies_ready(dim, completed)` — L3 执行前校验跨层依赖完成

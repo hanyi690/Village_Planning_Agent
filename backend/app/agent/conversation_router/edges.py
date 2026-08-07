@@ -19,7 +19,7 @@ from langchain_core.messages import AIMessage
 from app.agent.bootstrap.phase_machine import PlanningPhase, get_layer_dimensions, _phase_to_layer
 from app.agent.bootstrap.layer_router import _worker_for_phase
 from app.config import get_dimension_layer
-from app.config.dependency import get_impact_tree_compat, get_next_revision_wave
+from app.config.dependency import compute_impact_tree, get_next_revision_wave
 from app.tools.intent_tools import advance_planning_intent, gis_analysis
 from app.utils.logger import get_logger
 
@@ -67,7 +67,7 @@ def after_conversation(
         if not final_tree:
             downstream_tree: Dict[int, List[str]] = {}
             for target_dim in target_dims:
-                tree = get_impact_tree_compat(target_dim)
+                tree = compute_impact_tree(target_dim)
                 for wave, dims in tree.items():
                     downstream_tree.setdefault(wave, []).extend(dims)
 

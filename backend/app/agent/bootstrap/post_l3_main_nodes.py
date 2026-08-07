@@ -281,16 +281,10 @@ def _load_planning_program(state: Dict[str, Any]) -> Any:
 
 
 def _load_ref_artifact(state: Dict[str, Any], key: str, cls: type) -> Any:
-    """Load a typed artifact from the canonical refs, with legacy fallback."""
+    """Load a typed artifact from the canonical refs in stamped state."""
     try:
-        from app.agent.bootstrap.artifact_runtime import (
-            ArtifactReplayError,
-            load_artifact,
-            migrate_legacy_artifacts,
-        )
-        migrated = dict(state)
-        migrated["artifact_refs"] = migrate_legacy_artifacts(state)
-        value = load_artifact(migrated, key, cls)
+        from app.agent.bootstrap.artifact_runtime import ArtifactReplayError, load_artifact
+        value = load_artifact(state, key, cls)
         return value
     except ArtifactReplayError:
         raise

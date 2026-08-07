@@ -12,12 +12,10 @@ logger = get_logger(__name__)
 def _hydrate_l1_spatial_facts(state: Dict[str, Any], context: Any) -> None:
     """Attach L1 location facts and materialize their GIS↔KG bindings."""
     try:
-        from app.agent.bootstrap.artifact_runtime import load_artifact, migrate_legacy_artifacts
+        from app.agent.bootstrap.artifact_runtime import load_artifact
         from app.modules.schema.contracts.l1_contracts import L1Snapshot
 
-        migrated = dict(state)
-        migrated["artifact_refs"] = migrate_legacy_artifacts(state)
-        snapshot = load_artifact(migrated, "l1_snapshot", L1Snapshot)
+        snapshot = load_artifact(state, "l1_snapshot", L1Snapshot)
         if snapshot is None:
             return
         facts = list(getattr(snapshot, "location_facts", []) or [])

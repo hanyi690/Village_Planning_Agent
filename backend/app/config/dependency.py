@@ -8,6 +8,8 @@ from typing import Dict, List, Set, Optional
 
 from .loader import PlanningConfig, PhaseConfig, DimensionConfig, _get_cached_config
 
+RevisionImpactTree = Dict[int, List[str]]
+
 
 def calculate_waves(phase: PhaseConfig) -> Dict[str, int]:
     """计算阶段内所有维度的执行波次"""
@@ -146,13 +148,13 @@ def get_downstream_dependencies_compat(dimension_key: str) -> List[str]:
     return downstream
 
 
-def get_impact_tree_compat(dimension_key: str) -> Dict[int, List[str]]:
-    """获取维度修改后的影响树（正确计算 Wave 编号）
+def compute_impact_tree(dimension_key: str) -> RevisionImpactTree:
+    """Compute the revision impact tree for a revised dimension (canonical, ADR-004).
 
-    Wave 编号基于依赖维度的最大 Wave + 1，而非简单的 BFS 层级。
-    例如：
-    - project_bank 依赖 industry(Wave 1) 和 traffic_planning(Wave 2)
-    - project_bank 应在 Wave 3 (max(1, 2) + 1)
+    Wave numbers use the "max(dependency wave) + 1" staging rule (see below).
+    The target (revised) dimension itself is Wave 0 and is excluded from the
+    tree. This is the single owned implementation; runtime consumers read the
+    pre-computed ``revision_impact_tree`` from state instead of calling it.
     """
     # 获取所有下游维度
     all_downstream: Set[str] = set()
@@ -362,7 +364,7 @@ def get_revision_wave_dimensions(
         if target_dim not in all_impact_dims:
             all_impact_dims[target_dim] = 0
 
-        impact_tree = get_impact_tree_compat(dimension_key=target_dim)
+        impact_tree = compute_impact_tree(dimension_key=target_dim)
         for wave, dims in impact_tree.items():
             for dim in dims:
                 if dim not in all_impact_dims:

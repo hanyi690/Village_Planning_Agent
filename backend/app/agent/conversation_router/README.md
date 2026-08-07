@@ -20,7 +20,7 @@
 | 状态 | `app/agent/plan_state/state.py` | `AgentState` |
 | 阶段 | `app/agent/bootstrap/phase_machine.py` | `PlanningPhase`、`get_layer_dimensions`、`_phase_to_layer` |
 | 意图工具 | `app/tools/intent_tools.py` | `advance_planning_intent` / `gis_analysis` |
-| 配置 | `app/config/dependency.py` | `get_impact_tree_compat` / `get_next_revision_wave` |
+| 配置 | `app/config/dependency.py` | `compute_impact_tree` / `get_next_revision_wave` |
 
 ## 依赖方向
 
