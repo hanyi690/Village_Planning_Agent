@@ -30,7 +30,7 @@ prepare_human_review → publish_human_review_pause → await_human_review → a
 
 - `AgentState` 仍含 legacy 完整产物和图层字段，尚未实现完全 ref-only checkpoint。
 - 当前 `execute_node` 在调用时构建并执行子图，尚非直接挂载到父图的持久化子图。
-- 后端会发布 `human_review_paused`，前端 SSE 契约尚未消费该事件；审核暂停目前未形成完整 UI 闭环。
+- 后端发布 `human_review_paused`，前端已接入消费（`SSEEventType` / `planning-api.ts` 注册、`planningStore` 处理、`HumanReviewPanel` 渲染与 `resolveHumanReview` 提交），HITL 暂停已形成 UI 闭环。
 - `context_version` 在直接启动 post-L3 链时可能晚于 PARSE 产物写入；完整恢复链应以集成测试为准。
 
 目标设计与迁移取舍见 [agent-graph.md](../../../docs/architecture/agent-graph.md)。
