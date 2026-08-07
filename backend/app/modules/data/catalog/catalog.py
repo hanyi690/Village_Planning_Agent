@@ -27,201 +27,21 @@ from app.utils.logger import get_logger
 
 from ..contracts import DataResult, DataSourceMetadata
 from ..sources import DataSourceDriver, DriverRegistry
+from .assembly import (
+    _merge_geojson_into_bundle,
+    _merge_geojson_upload_fallback,
+)
 from .config import CatalogConfig
+from .geometry_fallback import (
+    _center_to_bbox as _center_to_bbox_impl,
+    _derive_bbox_from_boundary as _derive_bbox_impl,
+    _extract_coords,
+)
+from .inference import _DIRTY_LAYER_TYPES, _infer_layer_key_from_upload
 
 logger = get_logger(__name__)
 
 DEFAULT_CONFIG_PATH = Path(__file__).parent / "sources.yaml"
-
-
-_DIRTY_LAYER_TYPES = {"upload", "auto", "unknown", ""}
-
-
-def _infer_layer_key_from_upload(item: Dict[str, Any]) -> Optional[str]:
-    """Re-infer a GIS layer key from filename + GeoJSON properties.
-
-    Defensive fallback for rows persisted with a placeholder/empty
-    ``gis_data_type`` (``upload`` / ``auto`` / ``unknown`` / ``None``) —
-    e.g. uploads stored before type normalization existed. Without this,
-    those features would be silently dropped at bundle build (the KG
-    prebuild then produces an empty graph).
-    """
-    filename = str(
-        item.get("original_filename") or item.get("filename") or ""
-    ).lower()
-    # The administrative boundary *line* is a distinct layer.  Check it
-    # before the broader boundary match; otherwise a file named
-    # ``admin_boundary_line.geojson`` is routed to ``admin_area`` and every
-    # line feature is rejected by the polygon model.
-    if "admin_boundary_line" in filename or "行政界线" in filename:
-        return "admin_boundary_line"
-    if "boundary" in filename or "边界" in filename:
-        return "boundary"
-    if "landuse" in filename or "用地" in filename or "现状" in filename:
-        return "landuse_current"
-    if "road" in filename or "道路" in filename:
-        return "road"
-    if "annotation" in filename or "注记" in filename:
-        return "current_annotation"
-    if "water" in filename or "水" in filename or "河流" in filename:
-        return "water"
-    if "residential" in filename or "住宅" in filename or "居民" in filename:
-        return "residential"
-    if "construction_zone" in filename or "建设区" in filename:
-        return "construction_zone"
-    if "farmland_protection" in filename or "基本农田" in filename:
-        return "farmland_protection"
-    if "ecological_protection" in filename or "生态保护" in filename:
-        return "ecological_protection"
-    if "historical_protection" in filename or "历史保护" in filename:
-        return "historical_protection"
-    if "geological_hazard" in filename or "地质灾害" in filename:
-        return "geological_hazard_points"
-
-    geojson = item.get("gis_data") or {}
-    features = geojson.get("features") or []
-    if features:
-        props = features[0].get("properties") or {}
-        name = str(props.get("name", "") or "").lower()
-        layer = str(props.get("layer", "") or "").lower()
-        if "边界" in name or "boundary" in layer:
-            return "boundary"
-        if "道路" in name or "road" in layer:
-            return "road"
-        if "用地" in name or "landuse" in layer:
-            return "landuse_current"
-        if "注记" in name or "annotation" in layer:
-            return "current_annotation"
-        if "水" in name or "water" in layer or "河流" in name:
-            return "water"
-        if "住宅" in name or "residential" in layer:
-            return "residential"
-    return None
-
-
-def _merge_geojson_into_bundle(
-    bundle: Any,
-    layer_key: str,
-    geojson: Dict[str, Any],
-) -> int:
-    """Merge a user-uploaded GeoJSON FeatureCollection into a VillageBundle.
-
-    Registered layer types are validated through the registry adapter and
-    routed to their canonical bundle target (for example ``landuse_current``).
-    Unregistered upload types (e.g. ``upload_roads``) fall back to the legacy
-    geometry-based merge, stored under ``upload_{layer_key}`` so nothing is
-    silently dropped.
-    """
-    features = geojson.get("features", [])
-    if not features:
-        return 0
-
-    aliases = {
-        "road": "current_road",
-        "residential": "current_building",
-        "annotation": "current_annotation",
-        "construction_zone": "conditional_construction_zone",
-        "geological_hazard_points": "geological_hazard_point",
-    }
-    gis_type_ref = aliases.get(layer_key, layer_key)
-
-    from app.modules.data.adapters import ADAPTERS
-    from app.modules.schema.types.layer_registry import GIS_LAYER_REGISTRY
-
-    entry = GIS_LAYER_REGISTRY.get(gis_type_ref)
-    if entry is not None and entry.ingest is not None:
-        adapter = ADAPTERS.get(entry.ingest.adapter)
-        if adapter is not None:
-            result = adapter.load(geojson, entry)
-            for feature in result.features:
-                bundle.add(feature)
-            merged = len(result.features)
-            if result.warnings:
-                bundle.metadata.crs_warnings.extend(result.warnings[:5])
-            if merged:
-                source_name = f"upload:{gis_type_ref}"
-                if source_name not in bundle.metadata.provider_sources:
-                    bundle.metadata.provider_sources.append(source_name)
-                logger.info(
-                    "[DataCatalog] Merged %d uploaded features into bundle (type=%s)",
-                    merged, gis_type_ref,
-                )
-            return merged
-
-    # Fallback: unregistered upload type — store under upload_{layer_key}.
-    return _merge_geojson_upload_fallback(bundle, layer_key, geojson)
-
-
-def _merge_geojson_upload_fallback(
-    bundle: Any,
-    layer_key: str,
-    geojson: Dict[str, Any],
-) -> int:
-    """Legacy geometry-based merge for unregistered upload types.
-
-    Routes features into the bundle point/line/polygon groups by geometry
-    type and stores them under ``upload_{layer_key}`` (layer_type
-    ``upload_{layer_key}``), preserving original properties as ``_raw``.
-    """
-    from app.modules.schema.types.base import LineFeature, PointFeature, PolygonFeature
-
-    features = geojson.get("features", []) or []
-    if not features:
-        return 0
-
-    target_key = f"upload_{layer_key}"
-    merged = 0
-    for f in features:
-        geometry = f.get("geometry") or {}
-        props = f.get("properties") or {}
-        geom_type = geometry.get("type", "")
-        bsm = props.get("BSM") or props.get("bsm") or ""
-        try:
-            if geom_type in ("Point", "MultiPoint"):
-                feat = PointFeature(geometry=geometry, bsm=bsm, layer_type=target_key, _raw=props)
-                bundle.points._layers.setdefault(target_key, []).append(feat)
-            elif geom_type in ("LineString", "MultiLineString"):
-                feat = LineFeature(geometry=geometry, bsm=bsm, layer_type=target_key, _raw=props)
-                bundle.lines._layers.setdefault(target_key, []).append(feat)
-            else:
-                feat = PolygonFeature(geometry=geometry, bsm=bsm, layer_type=target_key, _raw=props)
-                bundle.polygons._layers.setdefault(target_key, []).append(feat)
-        except Exception as e:
-            logger.debug("[DataCatalog] Skipping uploaded feature in %s: %s", target_key, e)
-            continue
-        merged += 1
-
-    if merged:
-        logger.info(
-            "[DataCatalog] Merged %d uploaded features into bundle (key=%s)",
-            merged, target_key,
-        )
-    return merged
-
-
-def _extract_coords(geometry: Dict[str, Any], out: List[Tuple[float, float]]) -> None:
-    """Recursively extract (lon, lat) coordinate pairs from a GeoJSON geometry."""
-    geom_type = geometry.get("type", "")
-    coords = geometry.get("coordinates", [])
-
-    if geom_type == "Point":
-        if len(coords) >= 2:
-            out.append((coords[0], coords[1]))
-    elif geom_type in ("LineString", "MultiPoint"):
-        for c in coords:
-            if len(c) >= 2:
-                out.append((c[0], c[1]))
-    elif geom_type in ("Polygon", "MultiLineString"):
-        for ring in coords:
-            for c in ring:
-                if len(c) >= 2:
-                    out.append((c[0], c[1]))
-    elif geom_type == "MultiPolygon":
-        for polygon in coords:
-            for ring in polygon:
-                for c in ring:
-                    if len(c) >= 2:
-                        out.append((c[0], c[1]))
 
 
 class DataCatalog:
@@ -1052,31 +872,8 @@ class DataCatalog:
 
     @staticmethod
     def _derive_bbox_from_boundary(geojson: Dict[str, Any]) -> Optional[BBox]:
-        """Derive BBox from boundary GeoJSON geometry.
-
-        Extracts all coordinates from the boundary features and computes
-        the axis-aligned bounding box. Returns None if no valid coordinates.
-        """
-        if not isinstance(geojson, dict):
-            return None
-        features = geojson.get("features", [])
-        if not features:
-            return None
-
-        all_coords: List[Tuple[float, float]] = []
-        for f in features:
-            geom = f.get("geometry", {})
-            _extract_coords(geom, all_coords)
-
-        if not all_coords:
-            return None
-
-        lons = [c[0] for c in all_coords]
-        lats = [c[1] for c in all_coords]
-        bbox = BBox(west=min(lons), south=min(lats), east=max(lons), north=max(lats))
-        if bbox.is_valid():
-            return bbox
-        return None
+        """Derive BBox from boundary GeoJSON geometry."""
+        return _derive_bbox_impl(geojson)
 
     def _geocode_village(self, village_name: str) -> Optional[BBox]:
         """Fallback: geocode village name to bbox (when no boundary data).
@@ -1125,12 +922,6 @@ class DataCatalog:
         center: Tuple[float, float], buffer_km: float
     ) -> BBox:
         """Convert a center point + buffer distance to a BBox."""
-        buffer_deg = buffer_km / 111.0
-        return BBox(
-            west=center[0] - buffer_deg,
-            south=center[1] - buffer_deg,
-            east=center[0] + buffer_deg,
-            north=center[1] + buffer_deg,
-        )
+        return _center_to_bbox_impl(center, buffer_km)
 
     __all__ = ["DataCatalog"]
