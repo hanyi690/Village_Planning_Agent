@@ -152,7 +152,9 @@ export type PlanningSSEEventType =
   | 'cascade_complete'
   // Settings Events
   | 'rag_config_updated'
-  | 'step_mode_updated';
+  | 'step_mode_updated'
+  // HITL Events
+  | 'human_review_paused';
 
 /**
  * 后端未实现的SSE事件类型 - 保留用于向后兼容或未来实现

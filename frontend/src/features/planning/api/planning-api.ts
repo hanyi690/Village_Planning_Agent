@@ -226,19 +226,15 @@ export const planningApi = {
       // Settings Events
       'rag_config_updated',
       'step_mode_updated',
+      // HITL Events
+      'human_review_paused',
     ];
 
     for (const eventType of eventTypes) {
       es.addEventListener(eventType, (e) => parseEvent(e, eventType));
     }
 
-    es.addEventListener('pause', (e) => {
-      parseEvent(e, 'pause');
-      console.log('[SSE] pause event received, keeping connection open for resume');
-    });
-
     es.addEventListener('completed', (e) => {
-      parseEvent(e, 'completed');
       shouldSuppressReconnect = true;
       if (es.readyState !== EventSource.CLOSED) {
         es.close();
