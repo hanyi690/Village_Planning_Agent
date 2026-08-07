@@ -1,0 +1,294 @@
+"""PlaceEvidenceIndex - deterministic, versioned evidence index (design §3.2).
+
+Built once from a ``PlanningContext``: gazetteer entries, L1 typed location
+facts, bundle POI annotations and (optionally) KG entity names. Resolution
+(source candidate generation §4.1) is deterministic and scored over the eight
+dimensions; ``candidate_bsms`` returns the source BSM set for the resolver.
+"""
+from __future__ import annotations
+
+from typing import Any, Dict, List, Optional
+
+from app.modules.schema.contracts.place_resolution_contracts import (
+    PlaceEvidenceEntry,
+    PlaceResolutionCandidate,
+    PlaceResolutionResult,
+)
+from app.modules.spatial_ops.evidence.evidence_scorer import (
+    score_candidate,
+    total,
+)
+
+_RESOLVED_THRESHOLD = 0.8
+_AMBIGUOUS_GAP = 0.15
+
+
+class PlaceEvidenceIndex:
+    """A versioned snapshot of place evidence derived from a context."""
+
+    def __init__(self, context: Any, version: tuple = (0, 0)):
+        self.context = context
+        self.version = version
+        self.entries: List[PlaceEvidenceEntry] = []
+        self._by_canonical: Dict[str, PlaceEvidenceEntry] = {}
+        self._by_alias: Dict[str, PlaceEvidenceEntry] = {}
+
+    @classmethod
+    def build(cls, context: Any) -> "PlaceEvidenceIndex":
+        """Construct the index from a ``PlanningContext``."""
+        version = (
+            int(getattr(context, "version", 0) or 0),
+            int(getattr(context, "kg_version", 0) or 0),
+        )
+        index = cls(context=context, version=version)
+
+        if getattr(context, "gazetteer", None) is not None:
+            for e in getattr(context.gazetteer, "entries", []) or []:
+                index._register_from_gazetteer(e)
+
+        for fact in getattr(context, "location_facts", []) or []:
+            index._register_from_l1_fact(fact)
+
+        bundle = getattr(context, "bundle", None)
+        if bundle is not None:
+            pois = (bundle.points.get("annotations_current") or []) if getattr(bundle, "points", None) else []
+            index._register_poi(pois)
+
+        kg = getattr(context, "kg", None)
+        if kg is not None:
+            index._register_kg_names(kg)
+
+        return index
+
+    # ── Registration ─────────────────────────────────────────────────
+
+    def _register_from_gazetteer(self, entry: Any) -> None:
+        name = getattr(entry, "name", "") or ""
+        if not name:
+            return
+        bsms = [str(b) for b in (getattr(entry, "bsms", None) or [])]
+        entity_uri = getattr(entry, "entity_uri", "") or name
+        centroid = getattr(entry, "centroid", None)
+        geometry_ref = None
+        if centroid:
+            geometry_ref = f"POINT({centroid[0]} {centroid[1]})" if len(centroid) >= 2 else None
+        aliases = [str(a) for a in (getattr(entry, "aliases", None) or []) if a]
+        self._add_entry(
+            PlaceEvidenceEntry(
+                canonical_name=name,
+                aliases=aliases,
+                entity_refs=[entity_uri],
+                entity_types=["village"],
+                role="village",
+                source_bsms=bsms,
+                geometry_ref=geometry_ref,
+                provenance=["gazetteer"],
+                confidence=float(getattr(entry, "confidence", 0.0) or 0.0),
+            )
+        )
+
+    def _register_from_l1_fact(self, fact: Any) -> None:
+        norm = getattr(fact, "normalized_name", "") or ""
+        mention = getattr(fact, "normalized_name", "") or getattr(fact, "mention", "") or ""
+        name = norm or mention
+        if not name:
+            return
+        role = getattr(fact, "role", "unknown") or "unknown"
+        aliases = [str(a) for a in (getattr(fact, "aliases", None) or []) if a]
+        if name not in aliases:
+            aliases.append(name)
+        self._add_entry(
+            PlaceEvidenceEntry(
+                canonical_name=name,
+                aliases=aliases,
+                entity_refs=[f"l1_fact:{name}"],
+                entity_types=[role],
+                role=role,
+                source_bsms=[],
+                geometry_ref=None,
+                provenance=["l1_fact"],
+                confidence=float(getattr(fact, "confidence", 0.0) or 0.0),
+            )
+        )
+
+    def _register_poi(self, pois: List[Any]) -> None:
+        for p in pois:
+            text = getattr(p, "text", "") or ""
+            if not text:
+                continue
+            category = getattr(p, "category", "") or ""
+            geom = getattr(p, "geometry", None) or {}  # getattr intentional: heterogeneous feature objects
+            geometry_ref = None
+            if isinstance(geom, dict):
+                coords = geom.get("coordinates")
+                if coords and len(coords) >= 2:
+                    geometry_ref = f"POINT({coords[0]} {coords[1]})"
+            role = "facility" if category == "现状设施点" else "landmark"
+            self._add_entry(
+                PlaceEvidenceEntry(
+                    canonical_name=text,
+                    aliases=[],
+                    entity_refs=[f"poi:{text}"],
+                    entity_types=[role],
+                    role=role,
+                    source_bsms=[],
+                    geometry_ref=geometry_ref,
+                    provenance=["poi"],
+                    confidence=0.5,
+                )
+            )
+
+    def _register_kg_names(self, kg: Any) -> None:
+        graph = getattr(kg, "graph", None)
+        if graph is None:
+            return
+        try:
+            from rdflib import RDF, URIRef
+
+            for s, _, o in graph.triples((None, RDF.type, None)):
+                if str(o).endswith("residential_cluster"):
+                    name = self._first_label(graph, s)
+                    if name:
+                        self._add_entry(
+                            PlaceEvidenceEntry(
+                                canonical_name=name,
+                                aliases=[],
+                                entity_refs=[str(s)],
+                                entity_types=["village"],
+                                role="village",
+                                source_bsms=[],
+                                geometry_ref=None,
+                                provenance=["kg"],
+                                confidence=0.4,
+                            )
+                        )
+        except Exception:
+            return
+
+    @staticmethod
+    def _first_label(graph: Any, subject: Any) -> Optional[str]:
+        for _, predicate, obj in graph.predicate_objects(subject):
+            if predicate.endswith("label") or predicate.endswith("name"):
+                txt = str(obj).strip()
+                if txt and not txt.startswith("http"):
+                    return txt
+        for _, _, obj in graph.predicate_objects(subject):
+            if hasattr(obj, "language") and obj.language is not None:
+                txt = str(obj).strip()
+                if txt:
+                    return txt
+        return None
+
+    def _add_entry(self, entry: PlaceEvidenceEntry) -> None:
+        self.entries.append(entry)
+        key = _normalize(entry.canonical_name)
+        self._by_canonical.setdefault(key, entry)
+        for alias in entry.aliases:
+            self._by_alias.setdefault(_normalize(alias), entry)
+
+    # ── Resolution ───────────────────────────────────────────────────
+
+    def resolve_mention(
+        self, mention: str, role: str = "unknown", hints: str = ""
+    ) -> PlaceResolutionResult:
+        """Resolve a mention to candidates, classify, and trace the lookup."""
+        trace: List[Dict[str, Any]] = []
+        norm = _normalize(mention)
+        trace.append({"step": "normalize", "input": mention, "normalized": norm})
+
+        candidates: List[PlaceResolutionCandidate] = []
+        seen: Dict[str, PlaceEvidenceEntry] = {}
+
+        exact = self._by_canonical.get(norm) or self._by_alias.get(norm)
+        if exact is not None:
+            seen[exact.canonical_name] = exact
+            trace.append({"step": "exact", "matched": exact.canonical_name})
+
+        for key, entry in self._by_canonical.items():
+            if entry.canonical_name in seen:
+                continue
+            if norm and norm in key:
+                seen[entry.canonical_name] = entry
+                trace.append({"step": "substring", "matched": entry.canonical_name})
+
+        for key, entry in self._by_alias.items():
+            if entry.canonical_name in seen:
+                continue
+            if norm and norm in key:
+                seen[entry.canonical_name] = entry
+                trace.append({"step": "alias_substring", "matched": entry.canonical_name})
+
+        for entry in seen.values():
+            evidence = score_candidate(mention, entry, role=role, hints=hints, context=self.context)
+            score = total(evidence)
+            candidates.append(
+                PlaceResolutionCandidate(
+                    entity_ref=""
+                    if not entry.entity_refs
+                    else entry.entity_refs[0],
+                    entity_type=entry.entity_types[0] if entry.entity_types else entry.role,
+                    canonical_name=entry.canonical_name,
+                    aliases=list(entry.aliases),
+                    geometry_ref=entry.geometry_ref,
+                    source_bsms=list(entry.source_bsms),
+                    score=round(score, 4),
+                    evidence_refs=list(entry.provenance),
+                    evidence=evidence,
+                )
+            )
+
+        candidates.sort(key=lambda c: c.score, reverse=True)
+        trace.append({"step": "score", "candidate_count": len(candidates)})
+
+        status: str
+        selected_entity_ref: Optional[str] = None
+        unresolved_reason: Optional[str] = None
+
+        if not candidates:
+            status = "unresolved"
+            unresolved_reason = "no candidate matched the mention"
+        else:
+            top = candidates[0]
+            if top.score >= _RESOLVED_THRESHOLD:
+                status = "resolved"
+                selected_entity_ref = top.entity_ref
+            elif len(candidates) > 1 and (candidates[0].score - candidates[1].score) <= _AMBIGUOUS_GAP:
+                status = "ambiguous"
+                unresolved_reason = "multiple close candidates or weak evidence"
+            else:
+                status = "ambiguous"
+                unresolved_reason = "only weak evidence; manual review required"
+
+        return PlaceResolutionResult(
+            mention=mention,
+            normalized_name=norm,
+            status=status,
+            selected_entity_ref=selected_entity_ref,
+            candidates=candidates,
+            evidence_refs=[c.entity_ref for c in candidates],
+            query_trace=trace,
+            unresolved_reason=unresolved_reason,
+            context_version=".".join(str(v) for v in self.version),
+            context_fingerprint=f"{self.context.session_id}@{self.version[0]}:kg{self.version[1]}",
+        )
+
+    def candidate_bsms(self, mention: str) -> List[str]:
+        """Source BSM set of the resolved candidate (used by the resolver)."""
+        result = self.resolve_mention(mention)
+        if result.status != "resolved" or not result.candidates:
+            return []
+        return list(result.candidates[0].source_bsms)
+
+
+def _normalize(name: str) -> str:
+    if not name:
+        return ""
+    cleaned = name.strip().lower()
+    for suffix in ("自然村", "村"):
+        if cleaned.endswith(suffix):
+            cleaned = cleaned[: -len(suffix)].strip()
+            break
+    return cleaned
+
+
+__all__ = ["PlaceEvidenceIndex"]

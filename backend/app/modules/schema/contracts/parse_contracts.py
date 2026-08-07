@@ -186,6 +186,7 @@ class ProjectTarget(BaseModel):
     project_id: str
     name: str
     category: str = "other"
+    requires_spatial: bool = True
     action: Literal[
         "preserve",
         "new",

@@ -272,8 +272,17 @@ def after_analysis(
                 counts = state.get("retry_counts") or {}
                 explore_count = counts.get(f"l{layer_num}_explore", 0)
                 if explore_count >= 2:
-                    logger.warning("[after_analysis] EXPLORE retry exhausted for L%d -> END", layer_num)
-                    return END
+                    logger.warning("[after_analysis] EXPLORE retry exhausted for L%d -> HUMAN", layer_num)
+                    # Convert exhaustion into an explicit business gate.  END
+                    # loses the breakpoint and makes a real session look like
+                    # a successful stop; the HITL path preserves the pending
+                    # evidence requests and allows an operator to approve or
+                    # reject the next revision.
+                    if isinstance(gate_decision, dict):
+                        gate_decision = dict(gate_decision)
+                        gate_decision["feedback_route"] = "HUMAN"
+                        state[gate_key] = gate_decision
+                    return "human_review"
                 from app.config.loader import list_dimensions
                 dim_configs = list_dimensions(layer_num)
                 explore_dims = [d.key for d in dim_configs]
@@ -283,7 +292,10 @@ def after_analysis(
                     return [Send(worker, {**state, "dimension_key": d}) for d in explore_dims]
                 return END
             if route == "HUMAN":
-                return END
+                # Always enter the persisted HITL checkpoint. Returning END
+                # here loses the gate route and leaves real sessions looking
+                # like an unexplained stop.
+                return "human_review"
             if route in ("L1", "L2", "L3"):
                 # Rework: re-dispatch dimensions of this layer
                 from app.config.loader import list_dimensions

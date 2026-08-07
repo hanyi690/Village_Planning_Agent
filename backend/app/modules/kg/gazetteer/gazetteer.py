@@ -17,16 +17,12 @@ KG 子模块：地名解析是 KG 语义能力，agent 层（Binder/EXPLORE/渲�
 from __future__ import annotations
 
 import difflib
-import json
 from dataclasses import dataclass, field
-from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from app.utils.logger import get_logger
 
 logger = get_logger(__name__)
-
-_GAZETTEER_DIR = Path(__file__).resolve().parents[5] / "data" / "gazetteer"
 
 _FUZZY_THRESHOLD = 0.6
 
@@ -43,26 +39,6 @@ class GazetteerEntry:
     source: str = "kg_cluster"      # kg_cluster | bundle_annotation | l1_enrichment | llm_confirmed
     confidence: float = 0.0
     description: str = ""
-
-    def to_dict(self) -> Dict[str, Any]:
-        return {
-            "name": self.name,
-            "aliases": self.aliases,
-            "entity_uri": self.entity_uri,
-            "bsms": self.bsms,
-            "centroid": self.centroid,
-            "source": self.source,
-            "confidence": self.confidence,
-            "description": self.description,
-        }
-
-    @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "GazetteerEntry":
-        return cls(**{k: data.get(k, v) for k, v in {
-            "name": "", "aliases": [], "entity_uri": "", "bsms": [],
-            "centroid": None, "source": "kg_cluster", "confidence": 0.0,
-            "description": "",
-        }.items()})
 
 
 class Gazetteer:
@@ -96,40 +72,25 @@ class Gazetteer:
     def upsert(self, entry: GazetteerEntry) -> None:
         existing = self._by_name.get(entry.name)
         if existing is not None:
+            # Preserve spatial evidence when a later semantic annotation only
+            # contributes a name/description.  Replacing a KG cluster entry
+            # with an empty L1 entry silently broke GROUND resolution.
+            if not entry.bsms and existing.bsms:
+                entry.bsms = list(existing.bsms)
+            if entry.centroid is None and existing.centroid is not None:
+                entry.centroid = list(existing.centroid)
+            if not entry.entity_uri:
+                entry.entity_uri = existing.entity_uri
+            if not entry.aliases:
+                entry.aliases = list(existing.aliases)
             self.entries.remove(existing)
+            for key, value in list(self._by_name.items()):
+                if value is existing:
+                    del self._by_name[key]
         self.entries.append(entry)
         self._by_name[entry.name] = entry
         for alias in entry.aliases:
             self._by_name.setdefault(alias, entry)
-
-    def to_dict(self) -> Dict[str, Any]:
-        return {"entries": [e.to_dict() for e in self.entries]}
-
-    @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "Gazetteer":
-        return cls([GazetteerEntry.from_dict(e) for e in data.get("entries", [])])
-
-
-def gazetteer_path(village: str) -> Path:
-    _GAZETTEER_DIR.mkdir(parents=True, exist_ok=True)
-    return _GAZETTEER_DIR / f"{village}.json"
-
-
-def save_gazetteer(gazetteer: Gazetteer, village: str) -> Path:
-    path = gazetteer_path(village)
-    path.write_text(json.dumps(gazetteer.to_dict(), ensure_ascii=False, indent=2), encoding="utf-8")
-    return path
-
-
-def load_gazetteer(village: str) -> Gazetteer:
-    path = gazetteer_path(village)
-    if not path.exists():
-        return Gazetteer()
-    try:
-        return Gazetteer.from_dict(json.loads(path.read_text(encoding="utf-8")))
-    except Exception as e:
-        logger.warning("[Gazetteer] load failed: %s", e)
-        return Gazetteer()
 
 
 def _cluster_entries_from_kg(kg: Any, bundle: Any) -> List[GazetteerEntry]:
@@ -375,8 +336,6 @@ __all__ = [
     "Gazetteer",
     "GazetteerEntry",
     "build_gazetteer",
-    "load_gazetteer",
-    "save_gazetteer",
     "confirm_with_llm",
     "spatial_check",
     "_external_anchors_from_bundle",

@@ -622,7 +622,7 @@ def resolve_spatial_description(
     kg: Any = None,
     gazetteer: Any = None,
     constraint_index: Any = None,
-    kg_query_fn: Any = None,
+    evidence_index: Any = None,
 ) -> ResolvedSpatialDescription:
     """KG 拓扑优先的空间描述分派器 — 方位/描述 → 候选 BSM。
 
@@ -630,20 +630,18 @@ def resolve_spatial_description(
       toponym "园寨"         → gazetteer.resolve → entry.bsms（P0 多源坐标+组合名）
       directional "村北"     → resolve_directional_bbox + query_parcels_in_bbox（几何兜底）
       topology_adjacent "靠近园寨" → gazetteer.resolve → entry.bsms → KG sfTouches 邻居
-      linear_road "沿122乡道" → kg_query_fn("get_parcels_intersecting_road")（sfIntersects）
-      linear_water "沿金田河" → kg_query_fn("get_parcels_touching_water")（sfTouches）
+      linear_road "沿122乡道" → evidence_index.candidate_bsms（road 提及）
+      linear_water "沿金田河" → evidence_index.candidate_bsms（water 提及）
       constraint_edge "生态边缘" → ConstraintIndex 约束重叠地块（几何）
       compound "村北靠近园寨"  → directional BBox ∩ topology_adjacent
 
     Args:
         desc: 空间描述文本。
         bundle: VillageBundle（提供 landuse_current 地块）。
-        kg: 预留（调用方若想直接传 KG 实例；实际查询走 kg_query_fn）。
-        gazetteer: 村庄地名册（P0 增强后含多源坐标+组合名）；为 None 时从
-            load_gazetteer(bundle.village_name) 加载。
+        kg: 预留（调用方若想直接传 KG 实例）。
+        gazetteer: 村庄地名册（P0 增强后含多源坐标+组合名）。
         constraint_index: ConstraintIndex（约束重叠检查）；为 None 时跳过约束过滤。
-        kg_query_fn: KG 查询回调 callable(template_name, **params) -> list[dict]。
-            由调用方（EXPLORE/agent 层）注入，spatial_ops 不直接 import kg。
+        evidence_index: PlaceEvidenceIndex 快照；为 None 时线性/复合解析退化几何路径。
 
     Returns:
         ResolvedSpatialDescription。
@@ -667,11 +665,11 @@ def resolve_spatial_description(
     if dtype == "directional":
         return _resolve_directional(desc, parcels)
     if dtype in ("linear_road", "linear_water"):
-        return _resolve_linear(desc, dtype, kg_query_fn, parcels)
+        return _resolve_linear(desc, dtype, evidence_index, parcels)
     if dtype == "constraint":
         return _resolve_constraint(desc, constraint_index, parcels, bundle)
     if dtype == "compound":
-        return _resolve_compound(desc, gazetteer, kg_query_fn, parcels, constraint_index)
+        return _resolve_compound(desc, gazetteer, evidence_index, parcels, constraint_index)
     return ResolvedSpatialDescription(evidence_text=desc,
                                       unresolved_reason=f"unsupported type {dtype}")
 
@@ -751,29 +749,25 @@ def _resolve_directional(desc: str, parcels: list) -> ResolvedSpatialDescription
 
 
 def _resolve_linear(
-    desc: str, dtype: str, kg_query_fn: Any, parcels: list,
+    desc: str, dtype: str, evidence_index: Any, parcels: list,
 ) -> ResolvedSpatialDescription:
-    """线性描述 → KG 拓扑（road sfIntersects / water sfTouches）。
+    """线性描述 → 证据索引候选（road / water 提及）。
 
-    优先用注入的 kg_query_fn（调用方提供 KG 查询）；不可用或空时退化几何 buffer。
+    优先用注入的 evidence_index 解析提及；不可用或空时退化几何 buffer。
     """
-    if kg_query_fn is not None:
+    if evidence_index is not None:
         try:
-            if dtype == "linear_road":
-                rows = kg_query_fn("get_parcels_intersecting_road")
-                bsms = [r["bsm"] for r in rows if r.get("bsm")]
-                path = "kg:road_intersects"
-            else:
-                rows = kg_query_fn("get_parcels_touching_water")
-                bsms = [r["bsm"] for r in rows if r.get("bsm")]
-                path = "kg:water_touches"
-            if bsms:
-                return ResolvedSpatialDescription(
-                    candidate_bsms=bsms, evidence_text=desc,
-                    query_path=path, confidence=0.7,
-                )
+            mention = _extract_linear_mention(desc)
+            if mention:
+                bsms = evidence_index.candidate_bsms(mention)
+                path = "evidence:linear_touching"
+                if bsms:
+                    return ResolvedSpatialDescription(
+                        candidate_bsms=bsms, evidence_text=desc,
+                        query_path=path, confidence=0.7,
+                    )
         except Exception as e:
-            logger.debug("[grounding:linear] KG query failed: %s", e)
+            logger.debug("[grounding:linear] evidence query failed: %s", e)
 
     # 几何兜底：沿 village 整体中心 buffer
     center = _village_center(parcels)
@@ -815,7 +809,7 @@ def _resolve_constraint(
 
 
 def _resolve_compound(
-    desc: str, gazetteer: Any, kg_query_fn: Any, parcels: list, constraint_index: Any,
+    desc: str, gazetteer: Any, evidence_index: Any, parcels: list, constraint_index: Any,
 ) -> ResolvedSpatialDescription:
     """复合描述（方向+地名）→ 方向 BBox ∩ 地名拓扑邻居。"""
     dir_result = _resolve_directional(desc, parcels)
@@ -838,6 +832,18 @@ def _resolve_compound(
                 query_path="kg:compound_direction_toponym", confidence=0.7,
             )
     return dir_result
+
+
+def _extract_linear_mention(desc: str) -> str:
+    """从线性描述提取提及（'沿X河'/'顺X路' 中的 X）。"""
+    for kw in _LINEAR_HINTS:
+        if kw in desc:
+            rest = (desc.split(kw)[-1] or "").strip()
+            for suf in ("河", "溪", "江", "塘", "湖", "渠", "公路", "乡道", "村道", "路", "道"):
+                if rest.endswith(suf):
+                    return rest[:-len(suf)].strip()
+            return rest
+    return ""
 
 
 def _extract_toponym(desc: str) -> str:

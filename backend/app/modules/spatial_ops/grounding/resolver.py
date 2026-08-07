@@ -9,7 +9,7 @@ place, all reading from a ``PlanningContext``:
     bind              deterministic bundle binding (BSM-first)
 
 Every method takes its facts from ``PlanningContext`` (bundle / gazetteer /
-KG / constraint index / kg_query_fn) instead of each caller building its own
+KG / constraint index / evidence index) instead of each caller building its own
 gazetteer/KG/center fallback. Callers that only have a village name + anchors
 can use the module-level ``resolve_intent_anchors`` helper.
 
@@ -87,8 +87,8 @@ class SpatialResolver:
         return self.context.constraint_index
 
     @property
-    def kg_query_fn(self):
-        return self.context.kg_query_fn
+    def evidence_index(self):
+        return self.context.evidence_index
 
     # ── 1. Free-text description (EXPLORE / GROUND) ────────────────
 
@@ -113,7 +113,7 @@ class SpatialResolver:
             kg=self.kg,
             gazetteer=self.gazetteer,
             constraint_index=self.constraint_index,
-            kg_query_fn=self.kg_query_fn,
+            evidence_index=self.evidence_index,
         )
 
     # ── 2. Closed-set spec (PARSE -> GROUND boundary) ──────────────
@@ -130,29 +130,22 @@ class SpatialResolver:
             ResolvedSpatialRef,
         )
 
-        provenance: Dict[str, Any] = {"path": "kg:resolve_candidates"}
+        provenance: Dict[str, Any] = {"path": "evidence:candidates"}
         candidates: CandidateSet = CandidateSet()
-        port = getattr(self.context.ports, "spatial_query", None)
         try:
-            if port is not None:
-                run_id = getattr(self.context, "session_id", "") or ""
-                result = port.resolve_candidates(run_id, spec)
-                if result is not None:
-                    candidates = result
-            elif self.kg_query_fn is not None:
-                result = self.kg_query_fn("resolve_candidates", spec=spec)
-                if isinstance(result, dict) and "bsms" in result:
-                    candidates = CandidateSet(
-                        bsms=[str(b) for b in (result.get("bsms") or [])],
-                        ref_bsms=[str(b) for b in (result.get("ref_bsms") or [])],
-                    )
-                elif isinstance(result, list):
-                    bsms = [
-                        str(r.get("bsm"))
-                        for r in result
-                        if isinstance(r, dict) and r.get("bsm")
-                    ]
-                    candidates = CandidateSet(bsms=bsms)
+            if self.evidence_index is not None:
+                mention = self._spec_mention(spec)
+                if mention:
+                    evidence_bsms = self.evidence_index.candidate_bsms(mention)
+                    if evidence_bsms:
+                        candidates = CandidateSet(bsms=list(evidence_bsms))
+            if not candidates.bsms and not candidates.ref_bsms:
+                port = getattr(self.context.ports, "spatial_query", None)
+                if port is not None:
+                    run_id = getattr(self.context, "session_id", "") or ""
+                    result = port.resolve_candidates(run_id, spec)
+                    if result is not None:
+                        candidates = result
         except Exception as e:
             logger.warning("[SpatialResolver] resolve_candidates failed: %s", e)
             provenance["error"] = str(e)
@@ -161,6 +154,37 @@ class SpatialResolver:
         final_bsms = self._filter_to_bundle(bsms)
         provenance["kg_count"] = len(bsms)
         provenance["bundle_count"] = len(final_bsms)
+
+        # KG relation materialization does not always contain a nearby edge
+        # from a named natural village to its parcels. When PARSE gives an
+        # explicit village label, use the session gazetteer as the same
+        # coarse-reference fallback; this still resolves only existing BSMs
+        # from the uploaded bundle and never fabricates geometry.
+        if not final_bsms and self.gazetteer is not None:
+            try:
+                filt = getattr(spec.reference, "filter", None) or {}
+                label = str(filt.get("label_contains") or "")
+                token = label
+                for suffix in ("自然村", "村", "组"):
+                    token = token.rstrip(suffix)
+                location_facts = list(getattr(self.context, "location_facts", []) or [])
+                fact_match = next(
+                    (
+                        fact
+                        for fact in location_facts
+                        if str(getattr(fact, "normalized_name", "")) in {label, f"{token}村"}
+                    ),
+                    None,
+                )
+                if fact_match is not None:
+                    provenance["path"] += "+l1_location_fact"
+                gazetteer_bsms = _resolve_gazetteer_bsms(token, self.gazetteer)
+                final_bsms = self._filter_to_bundle(gazetteer_bsms)
+                if final_bsms:
+                    provenance["path"] += "+gazetteer:village"
+                    provenance["gazetteer_count"] = len(final_bsms)
+            except Exception as exc:
+                logger.debug("[SpatialResolver] gazetteer fallback failed: %s", exc)
 
         bbox = None
         direction = getattr(spec, "direction", None)
@@ -207,6 +231,16 @@ class SpatialResolver:
             if bsm:
                 by_bsm[bsm] = True
         return [b for b in bsms if b in by_bsm]
+
+    def _spec_mention(self, spec: Any) -> str:
+        ref = getattr(spec, "reference", None)
+        if ref is None:
+            return ""
+        filt = getattr(ref, "filter", None) or {}
+        label = str(filt.get("label_contains") or "")
+        if label:
+            return label
+        return str(getattr(ref, "name", "") or "")
 
     def _directional_bbox(self, direction: str) -> Optional[tuple]:
         """Directional bbox around the bundle's village center."""

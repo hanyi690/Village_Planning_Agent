@@ -26,6 +26,29 @@ from app.utils.logger import get_logger
 logger = get_logger(__name__)
 
 
+def _valid_geometry(geometry):
+    """Return a valid GEOS geometry or ``None`` for unusable input.
+
+    Uploaded GIS is an external boundary. Shapely's documented ``make_valid``
+    may return a multi-part or geometry collection; both are safe for the
+    predicate operations used here. Invalid input is never allowed to reach
+    an ``intersects``/``intersection`` call unchecked.
+    """
+    if geometry is None or geometry.is_empty:
+        return None
+    if geometry.is_valid:
+        return geometry
+    try:
+        from shapely.validation import make_valid
+
+        repaired = make_valid(geometry)
+        if repaired is not None and not repaired.is_empty and repaired.is_valid:
+            return repaired
+    except Exception as exc:
+        logger.warning("[SpatialIndex] make_valid failed: %s", exc)
+    return None
+
+
 @dataclass
 class OverlapResult:
     bsm: str
@@ -53,8 +76,8 @@ def _build_rtree(parcels):
         if not bsm or geom is None:
             continue
         try:
-            s = shape(geom)
-            if s.is_empty:
+            s = _valid_geometry(shape(geom))
+            if s is None:
                 continue
             area_sqm = p.area_sqm or 0
             zt = p.zone_type
@@ -418,8 +441,8 @@ def build_constraint_index(bundle) -> Optional[ConstraintIndex]:
             if geom is None:
                 continue
             try:
-                s = shape(geom)
-                if s.is_empty:
+                s = _valid_geometry(shape(geom))
+                if s is None:
                     continue
                 rows.append({"bsm": bsm, "constraint_type": ctype, "geometry": s})
             except Exception:

@@ -8,7 +8,10 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from app.modules.parsing.compiler.spec_mapper import map_interventions_to_specs
+from app.modules.parsing.compiler.spec_mapper import (
+    map_intervention_to_spec,
+    map_interventions_to_specs,
+)
 from app.modules.schema.contracts.l3_contracts import PlanningIntervention, PlanningProgram
 from app.modules.schema.contracts.parse_contracts import (
     FacilityTarget,
@@ -48,6 +51,7 @@ def _to_project_target(intervention: PlanningIntervention, index: int) -> Projec
         project_id=intervention.intervention_id,
         name=intervention.name,
         category="other",
+        requires_spatial=map_intervention_to_spec(intervention) is not None,
         action="new",
         scale_text=intervention.scale,
         area_ha=intervention.area_range_ha[0] if intervention.area_range_ha else None,

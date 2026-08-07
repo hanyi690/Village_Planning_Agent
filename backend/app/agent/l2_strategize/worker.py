@@ -115,6 +115,13 @@ async def analyze_l2_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
 
     # 4. EXPLORE evidence service（L2 只注入证据，不调用 GIS/DataPipeline 工具）
     explore_section = ""
+    explore_audit = {
+        "fact_statements": [],
+        "fact_count": 0,
+        "source_refs": [],
+        "kg_confidence": 0.0,
+        "kg_topology_facts": [],
+    }
     try:
         explore_request = ExplorationRequest(
             run_id=f"{session_id}:{dim_key}:L{dim_layer}",
@@ -134,6 +141,13 @@ async def analyze_l2_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
             explore_result.evidence_bundle,
             explore_result.spatial_cognition,
         )
+        explore_audit = {
+            "fact_statements": [f.statement for f in explore_result.evidence_bundle.facts],
+            "fact_count": len(explore_result.evidence_bundle.facts),
+            "source_refs": [s.reference for s in explore_result.evidence_bundle.sources],
+            "kg_confidence": explore_result.spatial_cognition.kg_confidence,
+            "kg_topology_facts": list(explore_result.spatial_cognition.topology_facts),
+        }
         if explore_section:
             logger.info(
                 "[analyze_l2_dimension] %s: EXPLORE evidence injected (%d chars, %d facts)",
@@ -141,6 +155,17 @@ async def analyze_l2_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
             )
     except Exception as e:
         logger.warning("[analyze_l2_dimension] %s: EXPLORE evidence failed: %s", dim_key, e)
+
+    # L1 is an explicit upstream fact producer.  Load its persisted snapshot
+    # by ref so L2 consumes the same versioned facts that L3 will later use;
+    # do not rely only on the dimension-report text search path.
+    l1_fact_section, l1_fact_audit = _load_l1_fact_section(
+        state,
+        dimension_key=dim_key,
+        source_dimensions=list(getattr(cfg, "layer_depends_on", []) or []),
+    )
+    if l1_fact_section:
+        explore_section = f"{l1_fact_section}\n\n{explore_section}".strip()
 
     # 5. 组装 L2 Prompt（concept 模板）
     prompt = _build_prompt(
@@ -270,16 +295,25 @@ async def analyze_l2_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
             step_name=f"analyze_l2_dimension:{dim_key}",
             dimension_key=dim_key,
             layer=dim_layer,
-            is_revision=is_revision,
+            inputs={
+                "dependency_reports_summary": _dependency_summary(deps),
+                "same_layer_dependency_reports_summary": _dependency_summary(same_layer_contexts),
+                "instruction_removed": True,
+            },
             outputs={
                 "report_id": report_id,
                 "word_count": len(llm_response),
                 "instruction_len": len(instr),
                 "has_instruction": bool(instr),
+                "kg_evidence_consumed": explore_audit,
             },
             diagnostics={
+                "is_revision": is_revision,
                 "rag_sources": len(rag_log.sources) if rag_log and rag_log.rag_enabled else 0,
                 "kg_cognition": bool(explore_section),
+                "kg_fact_count": explore_audit["fact_count"],
+                "l1_fact_count": l1_fact_audit["fact_count"],
+                "l1_snapshot_ref": l1_fact_audit["snapshot_ref"],
             },
         )
     except Exception as e:
@@ -342,6 +376,80 @@ def _build_prompt(
         layer2_contexts=same_layer_contexts,  # 传递同层依赖报告
         professional_data=explore_section,  # EXPLORE 证据作为专业数据
     )
+
+
+def _load_l1_fact_section(
+    state: Dict[str, Any],
+    *,
+    dimension_key: str = "",
+    source_dimensions: list[str] | None = None,
+) -> tuple[str, Dict[str, Any]]:
+    """Load the canonical L1Snapshot facts for explicit L2 consumption."""
+    ref_data = state.get("l1_snapshot_ref") or (state.get("artifact_refs") or {}).get("l1_snapshot")
+    audit: Dict[str, Any] = {"fact_count": 0, "snapshot_ref": ref_data}
+    if not isinstance(ref_data, dict):
+        return "", audit
+
+    try:
+        from app.modules.ports.artifact_store import ArtifactRef
+        from app.services.artifact_store import FilesystemArtifactStore
+
+        ref = ArtifactRef(**{
+            "artifact_id": ref_data["artifact_id"],
+            "module": ref_data.get("module", "l1_" + "observe"),
+            "run_id": ref_data["run_id"],
+            "artifact_type": ref_data.get("artifact_type", "L1Snapshot"),
+            "context_version": ref_data.get("context_version", ""),
+            "revision": ref_data.get("revision", "v1"),
+        })
+        payload = FilesystemArtifactStore().retrieve(ref)
+        by_dimension = payload.get("facts_by_dimension") or {}
+        location_facts = payload.get("location_facts") or []
+        selected_dimensions = list(source_dimensions or [])
+        if dimension_key in by_dimension:
+            selected_dimensions.insert(0, dimension_key)
+        scoped = [
+            str(item)
+            for source_dimension in dict.fromkeys(selected_dimensions)
+            for item in (by_dimension.get(source_dimension) or [])
+        ]
+        # A dimension with no exact L1 counterpart receives no unrelated L1
+        # prose; the KG EXPLORE path remains available separately.
+        facts = scoped
+        audit["fact_count"] = len(facts)
+        scoped_locations = [
+            item for item in location_facts
+            if not selected_dimensions or item.get("dimension_key") in selected_dimensions
+        ]
+        audit["location_fact_count"] = len(scoped_locations)
+        if not facts and not scoped_locations:
+            return "", audit
+        lines = [
+            f"【L1 对 {dimension_key} 的上游事实（来自 L1Snapshot artifact，必须在 L2 策略中消费）】"
+        ]
+        lines.extend(f"- {fact}" for fact in facts)
+        if scoped_locations:
+            lines.append("【L1 上游地点事实（仅作为地点证据，不是选址决定）】")
+            for fact in scoped_locations:
+                lines.append(
+                    f"- {fact.get('normalized_name') or fact.get('mention')}: "
+                    f"{fact.get('spatial_hint', '')[:240]}"
+                )
+        return "\n".join(lines), audit
+    except Exception as exc:  # fail closed for audit, preserve existing explore path
+        audit["load_error"] = f"{type(exc).__name__}: {exc}"
+        return "", audit
+
+
+def _dependency_summary(text: str) -> Dict[str, Any]:
+    """Compact audit view; the full dependency prose remains prompt input."""
+    import re
+
+    return {
+        "sections": re.findall(r"【([^】]+)】", text or ""),
+        "chars": len(text or ""),
+        "preview": (text or "")[:500],
+    }
 
 
 __all__ = ["analyze_l2_dimension", "_get_llm"]

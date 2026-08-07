@@ -24,12 +24,12 @@ LangGraph checkpoint 只保存工作流恢复所需的状态和 artifact 引用�
 
 ## 1.1 当前实现边界
 
-上图是目标持久化模型。当前 `AgentState` 已显式保存 post-L3 的 delivery、validation、reconciliation
-引用和 HITL 状态，但 L1Snapshot、L2Strategy、PlanningProgram、GroundingResult 和
-SiteSelectionDecision 的引用仍主要由 aggregate 返回值、FilesystemArtifactStore 和 `run_id` 约定传递，
-尚未全部成为主图 State 的强类型字段。`gis_agent_entry.py` 在引用缺失时仍可能重新执行 L3 aggregate。
+当前实现已引入 `context_ref`、统一 `artifact_refs` 及 `bootstrap/artifact_runtime.py` 的 session、run、
+context version、类型和 checksum 校验。但 `AgentState` 仍保留 legacy 完整产物字段与 `layout_configs`，
+因此 checkpoint 尚未达到本节定义的纯引用目标。
 
-因此当前 artifact store 已可用于恢复和审查，但尚未达到“所有阶段只通过显式 artifact ref 消费”的目标。
+此外，默认 ArtifactStore 仍依赖相对 `.run-tmp` 路径；测试和运行器必须显式隔离 store、session 与 run。
+PARSE 必须在产物写入前获得稳定 context version，否则后续阶段的严格引用校验会拒绝该产物。
 
 ## 2. 数据分类
 

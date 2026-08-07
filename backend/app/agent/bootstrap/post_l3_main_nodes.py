@@ -12,6 +12,7 @@ without a wrapper graph or a ``gis_agent`` black-box node.
 
 from __future__ import annotations
 
+import re
 from typing import Any, Dict, List, Optional, Tuple
 
 from app.modules.schema.contracts.workflow_contracts import GateDecision
@@ -127,6 +128,25 @@ def _context_version(state: Dict[str, Any]) -> str:
     return state.get("context_version", "")
 
 
+def _adopt_context(state: Dict[str, Any], context: Any) -> Dict[str, Any]:
+    """Make the loaded context reference explicit in the next state patch."""
+    version = str(getattr(context, "version", "") or "")
+    state["context_version"] = version
+    state["context_ref"] = {"session_id": state.get("session_id", ""), "version": version}
+    if not state.get("context_fingerprint"):
+        import hashlib
+
+        meta = context.snapshot_meta()
+        state["context_fingerprint"] = "sha256:" + hashlib.sha256(
+            repr(sorted(meta.items())).encode("utf-8")
+        ).hexdigest()[:16]
+    return {
+        "context_version": state["context_version"],
+        "context_ref": state["context_ref"],
+        "context_fingerprint": state.get("context_fingerprint", ""),
+    }
+
+
 def _get_cached_context(state: Dict[str, Any]) -> Any:
     session_id = state.get("session_id", "")
     if not session_id:
@@ -136,6 +156,33 @@ def _get_cached_context(state: Dict[str, Any]) -> Any:
         return get_cached_context(session_id)
     except Exception:
         return None
+
+
+async def _require_context(state: Dict[str, Any]) -> Any:
+    """Load the checkpoint's PlanningContext, rebuilding after process restart.
+
+    ``bootstrap_context_done`` is only a checkpoint marker; the actual context
+    lives in an in-process cache and can disappear when a worker restarts.
+    Rebuilding through the canonical factory is idempotent and preserves the
+    single versioned context contract.  A version mismatch is fail-closed.
+    """
+    context = _get_cached_context(state)
+    if context is None:
+        # Reuse the bootstrap node so recovery also hydrates L1 location facts
+        # from the canonical artifact_refs map before spatial grounding.
+        from app.agent.bootstrap.context_bootstrap import bootstrap_context_node
+        await bootstrap_context_node(state)
+        context = _get_cached_context(state)
+    if context is None:
+        raise RuntimeError("PLANNING_CONTEXT_UNAVAILABLE: bootstrap returned no context")
+    expected = _context_version(state)
+    actual = str(getattr(context, "version", ""))
+    if expected and actual and expected != actual:
+        raise RuntimeError(
+            f"CONTEXT_VERSION_MISMATCH: checkpoint={expected} loaded={actual}"
+        )
+    _adopt_context(state, context)
+    return context
 
 
 def _to_typed(data: Any, cls: type) -> Any:
@@ -252,6 +299,61 @@ def _load_ref_artifact(state: Dict[str, Any], key: str, cls: type) -> Any:
         return None
 
 
+def _spatial_spec_village_names(spec: Any) -> List[str]:
+    """Collect village labels from a possibly composed spatial spec."""
+    names: List[str] = []
+    children = getattr(spec, "children", None) or []
+    for child in children:
+        names.extend(_spatial_spec_village_names(child))
+    reference = getattr(spec, "reference", None)
+    filt = getattr(reference, "filter", None) if reference is not None else None
+    label = str((filt or {}).get("label_contains") or "").strip()
+    if label:
+        names.append(label)
+    return list(dict.fromkeys(names))
+
+
+def _spec_has_source_support(spec: Any, program: Any, context: Any) -> bool:
+    """Require a real BSM-backed gazetteer entry for named village specs."""
+    labels = _spatial_spec_village_names(spec)
+    if not labels:
+        return True
+    entries = getattr(getattr(context, "gazetteer", None), "entries", []) or []
+    resolved_names = set()
+    for entry in entries:
+        if getattr(entry, "bsms", None):
+            resolved_names.add(str(getattr(entry, "name", "")))
+            resolved_names.update(str(alias) for alias in (getattr(entry, "aliases", []) or []))
+    for label in labels:
+        base = label
+        for suffix in ("自然村", "村"):
+            base = base.rstrip(suffix)
+        if label in resolved_names or base in resolved_names:
+            return True
+        # A report sentence is provenance, not geometry.  Named-village
+        # spatial specs require a BSM-backed gazetteer entry; otherwise GROUND
+        # would fabricate a location from prose and silently pass the gate.
+    return False
+
+
+def _filter_unsupported_spatial_specs(specs: List[Any], program: Any, context: Any) -> tuple[List[Any], List[Dict[str, Any]]]:
+    """Drop only unsupported named-village specs; preserve an auditable diagnostic."""
+    kept: List[Any] = []
+    diagnostics: List[Dict[str, Any]] = []
+    for spec in specs:
+        if _spec_has_source_support(spec, program, context):
+            kept.append(spec)
+            continue
+        labels = _spatial_spec_village_names(spec)
+        diagnostics.append({
+            "code": "UNSUPPORTED_SPATIAL_REFERENCE",
+            "intervention_id": getattr(spec, "intervention_id", ""),
+            "labels": labels,
+            "message": "named village has no GIS BSM binding and no object-specific source evidence",
+        })
+    return kept, diagnostics
+
+
 # ── PARSE ──────────────────────────────────────────────────────────────
 
 
@@ -263,17 +365,32 @@ async def parse_node(state: Dict[str, Any]) -> Dict[str, Any]:
     program = _load_planning_program(state)
     if program is None:
         logger.warning("[post_l3:main:parse] no planning_program; empty compile")
+    context = await _require_context(state)
     result, specs, gate = await compile_program_async(
         program,
         run_id=_run_id(state),
-        context_version=_context_version(state),
+        context_version=str(getattr(context, "version", "")),
     )
+    specs, unsupported = _filter_unsupported_spatial_specs(specs, program, context)
+    if unsupported:
+        from app.modules.schema.contracts.parse_result_contracts import ParseDiagnostic
+
+        diagnostics = list(getattr(result, "diagnostics", []) or [])
+        diagnostics.extend(ParseDiagnostic(**item) for item in unsupported)
+        result.diagnostics = diagnostics
+        result.spatial_reference_specs = specs
+        logger.warning(
+            "[post_l3:main:parse] dropped %d unsupported spatial refs: %s",
+            len(unsupported),
+            unsupported,
+        )
     intent_ref = _persist_artifact(state, "parse", "IntentCompilationResult", result)
     return {
         "specs": _dump_list(specs),
         "parse_gate": _dump(gate),
         "upstream_gates": _accumulate_gate(state.get("upstream_gates"), _dump(gate)),
         "artifact_refs": {"intent_compilation": intent_ref} if intent_ref else {},
+        **_adopt_context(state, context),
         **retry_patch,
     }
 
@@ -289,7 +406,7 @@ async def ground_node(state: Dict[str, Any]) -> Dict[str, Any]:
     from app.modules.schema.contracts.spatial_reference_contracts import SpatialReferenceSpec
 
     retry_patch = _retry_patch(state, "ground")
-    context = _get_cached_context(state)
+    context = await _require_context(state)
     specs = [_to_typed(s, SpatialReferenceSpec) for s in (state.get("specs") or [])]
     evidence = []
     if retry_patch:
@@ -315,6 +432,7 @@ async def ground_node(state: Dict[str, Any]) -> Dict[str, Any]:
         "ground_gate": _dump(gate),
         "upstream_gates": _accumulate_gate(state.get("upstream_gates"), _dump(gate)),
         "artifact_refs": {"grounding_result": ref} if ref else {},
+        **_adopt_context(state, context),
         **retry_patch,
     }
 
@@ -332,7 +450,7 @@ async def select_node(state: Dict[str, Any]) -> Dict[str, Any]:
     from app.modules.schema.contracts.parse_result_contracts import IntentCompilationResult
 
     retry_patch = _retry_patch(state, "select")
-    context = _get_cached_context(state)
+    context = await _require_context(state)
     grounding = _load_ref_artifact(state, "grounding_result", GroundingResult)
     intent = _load_ref_artifact(state, "intent_compilation", IntentCompilationResult)
     plan_intent = _to_typed(getattr(intent, "typed_intent", None) or intent, SpatialPlanningIntent)
@@ -354,6 +472,7 @@ async def select_node(state: Dict[str, Any]) -> Dict[str, Any]:
         "select_gate": _dump(gate),
         "upstream_gates": _accumulate_gate(state.get("upstream_gates"), _dump(gate)),
         "artifact_refs": {"site_selection": ref, "execution_plan": plan_ref},
+        **_adopt_context(state, context),
         **retry_patch,
     }
 
@@ -371,7 +490,7 @@ async def execute_node(state: Dict[str, Any]) -> Dict[str, Any]:
     from app.modules.schema.contracts.selection_contracts import SiteSelectionDecision
     from app.modules.schema.contracts.execution_plan_contracts import ExecutionPlan
 
-    context = _get_cached_context(state)
+    context = await _require_context(state)
     intent = _load_ref_artifact(state, "intent_compilation", IntentCompilationResult)
     plan_intent = _to_typed(getattr(intent, "typed_intent", None) or intent, SpatialPlanningIntent)
     site_selection = _load_ref_artifact(state, "site_selection", SiteSelectionDecision)
@@ -438,6 +557,7 @@ async def execute_node(state: Dict[str, Any]) -> Dict[str, Any]:
         "layout_configs": _jsonable(list(result.get("layout_configs", []) or [])),
         "execution_errors": _jsonable(list(result.get("execution_errors", []) or [])),
         "artifact_refs": refs,
+        **_adopt_context(state, context),
     }
 
 
@@ -454,7 +574,7 @@ async def validate_node(state: Dict[str, Any]) -> Dict[str, Any]:
     from app.modules.schema.contracts.parse_result_contracts import IntentCompilationResult
 
     retry_patch = _retry_patch(state, "validate")
-    context = _get_cached_context(state)
+    context = await _require_context(state)
     constraint_index = getattr(context, "constraint_index", None)
     planned_state = _load_ref_artifact(state, "planned_state", PlannedState)
     changeset = _load_ref_artifact(state, "parcel_changeset", ParcelChangeSet)
@@ -474,6 +594,7 @@ async def validate_node(state: Dict[str, Any]) -> Dict[str, Any]:
         "validate_gate": _dump(gate),
         "upstream_gates": _accumulate_gate(state.get("upstream_gates"), _dump(gate)),
         "artifact_refs": {"validation_report": ref} if ref else {},
+        **_adopt_context(state, context),
         **retry_patch,
     }
 
@@ -494,7 +615,7 @@ async def reconcile_node(state: Dict[str, Any]) -> Dict[str, Any]:
     from app.modules.schema.contracts.parse_result_contracts import IntentCompilationResult
 
     retry_patch = _retry_patch(state, "reconcile")
-    context = _get_cached_context(state)
+    context = await _require_context(state)
     program = _load_planning_program(state)
     if program is None:
         from app.modules.schema.contracts.reconciliation_contracts import (
@@ -519,6 +640,7 @@ async def reconcile_node(state: Dict[str, Any]) -> Dict[str, Any]:
             "reconcile_gate": _dump(gate),
             "upstream_gates": _accumulate_gate(state.get("upstream_gates"), _dump(gate)),
             "artifact_refs": {"reconciliation_report": ref} if ref else {},
+            **_adopt_context(state, context),
             **retry_patch,
         }
     specs = [_to_typed(s, SpatialReferenceSpec) for s in (state.get("specs") or [])]
@@ -543,6 +665,7 @@ async def reconcile_node(state: Dict[str, Any]) -> Dict[str, Any]:
         "reconcile_gate": _dump(gate),
         "upstream_gates": _accumulate_gate(state.get("upstream_gates"), _dump(gate)),
         "artifact_refs": {"reconciliation_report": ref} if ref else {},
+        **_adopt_context(state, context),
         **retry_patch,
     }
 
@@ -560,7 +683,7 @@ async def deliver_node(state: Dict[str, Any]) -> Dict[str, Any]:
     from app.modules.schema.contracts.reconciliation_contracts import ReconciliationReport
 
     retry_patch = _retry_patch(state, "deliver")
-    context = _get_cached_context(state)
+    context = await _require_context(state)
     bundle = getattr(context, "bundle", None)
     gis_data = bundle.to_geojson_dict() if bundle is not None and hasattr(bundle, "to_geojson_dict") else {}
     planned_state = _load_ref_artifact(state, "planned_state", PlannedState)
@@ -630,6 +753,7 @@ async def deliver_node(state: Dict[str, Any]) -> Dict[str, Any]:
         "deliver_gate": _dump(gate),
         "export_result": export_result,
         "upstream_gates": _accumulate_gate(state.get("upstream_gates"), _dump(gate)),
+        **_adopt_context(state, context),
         **retry_patch,
     }
 

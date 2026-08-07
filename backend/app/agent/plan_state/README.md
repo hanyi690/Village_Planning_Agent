@@ -9,7 +9,7 @@
 
 **做**：`state.py` 定义 `AgentState`（`total=False`）——进度（`phase` / `current_wave` / `completed_dimensions` / `step_mode` / `previous_layer`）、配置（`config`）、修订（`need_revision` / `revision_target_dimensions` / `revision_impact_tree` / `revision_feedback`）、性能（`pending_reports` / `layer_char_counts`）、P0 数据闭环（`_landuse_metrics` / `intent_targets`）；提供 reducer（`_messages_reducer` = `add_messages`，`completed_dimensions` 并行合并）、`create_initial_state`、`state_to_ui_status`、`get_*` 查询函数。`completion_node.py` 实现 `layer_completion_check`：reducer 合并并行结果后检测层完成、发 `layer_completed` / `layer_paused` SSE、`step_mode` 走 `interrupt()` 审批暂停、层边界触发 bundle 快照（`snapshot_session_bundle`）+ 绑定提取（`_maybe_extract_bindings`）+ KG enrichment。
 
-**不做**：不包含任何维度分析逻辑；不定义 post-L3 链状态（那是 `bootstrap/post_l3_state.py` 的 `PostL3ChainState`）。
+**不做**：不包含任何维度分析逻辑；post-L3 阶段与人工审核状态直接归入 `AgentState`，不再维护独立 wrapper state。
 
 ## 输入/输出契约
 

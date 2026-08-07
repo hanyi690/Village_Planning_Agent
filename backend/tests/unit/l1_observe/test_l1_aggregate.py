@@ -65,6 +65,7 @@ async def test_l1_aggregate_produces_snapshot_and_review(tmp_path, monkeypatch):
     result = await l1_aggregate(state, base_dir=str(tmp_path))
 
     assert "l1_snapshot_ref" in result
+    assert result["artifact_refs"]["l1_snapshot"]["artifact_type"] == "L1Snapshot"
     assert "l1_gate_decision" in result
     assert "l1_review_id" in result
 

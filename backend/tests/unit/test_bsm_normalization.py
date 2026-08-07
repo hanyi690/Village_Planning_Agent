@@ -40,6 +40,29 @@ class TestIngestFeatureAliasMapping:
         finally:
             os.unlink(filepath)
 
+    def test_ingest_preserves_provider_properties_for_kg_labels(self):
+        from app.modules.data.ingest import ingest_feature
+        import tempfile, json, os
+
+        geojson = {
+            "type": "FeatureCollection",
+            "features": [{
+                "type": "Feature",
+                "geometry": {"type": "Point", "coordinates": [116.0, 24.8]},
+                "properties": {"地质灾害点名称": "肩丰刘某", "类型": "滑坡"},
+            }],
+        }
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".geojson", delete=False, encoding="utf-8") as f:
+            json.dump(geojson, f, ensure_ascii=False)
+            f.flush()
+            filepath = f.name
+        try:
+            feats, _ = ingest_feature(filepath, "geological_hazard_point")
+            assert len(feats) == 1
+            assert feats[0]._raw["地质灾害点名称"] == "肩丰刘某"
+        finally:
+            os.unlink(filepath)
+
 
 class TestL4PlannedStateUniqueIDs:
     def test_planned_parcel_all_unique_uris(self):

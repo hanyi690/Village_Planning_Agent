@@ -22,7 +22,7 @@ or ``app.api``. The async factory that *builds* a context lives in
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Dict, List
 
 from app.modules.ports.planning_ports import PlanningPorts
 
@@ -44,8 +44,10 @@ class PlanningContext:
         village_anchors: Pre-computed ``get_village_anchors`` rows.
         reports: Layer report content, ``{dim_key: {content, instruction, ...}}``.
         report_summary_index: ``{dim_key: {summary, metrics, key_points, ...}}``.
-        kg_query_fn: Callable ``(template_name, **params) -> list[dict]`` bound
-            to the live session KG. Used by ``spatial_ops`` without importing KG.
+        location_facts: Typed L1 place mentions used by PlaceEvidenceIndex/
+            GROUND; these are not final candidate selections.
+        evidence_index: Pre-built ``PlaceEvidenceIndex`` snapshot (may be None
+            when the evidence module or its inputs are unavailable).
         ports: Typed ``PlanningPorts`` bundle of injected dependency-inversion
             port implementations (artifact_store, semantic_query, spatial_query,
             gazetteer, nomenclature_registry, context_provider). May be empty.
@@ -63,7 +65,9 @@ class PlanningContext:
     village_anchors: List[Dict[str, Any]] = field(default_factory=list)
     reports: Dict[str, Dict[str, Any]] = field(default_factory=dict)
     report_summary_index: Dict[str, Dict[str, Any]] = field(default_factory=dict)
-    kg_query_fn: Optional[Callable[..., List[Dict[str, Any]]]] = None
+    l1_snapshot_ref: str = ""
+    location_facts: List[Any] = field(default_factory=list)
+    evidence_index: Any = None
     ports: PlanningPorts = field(default_factory=PlanningPorts)
 
     @property
@@ -97,7 +101,10 @@ class PlanningContext:
             "has_kg": self.has_kg,
             "has_gazetteer": self.gazetteer is not None,
             "has_constraint_index": self.constraint_index is not None,
+            "has_evidence_index": self.evidence_index is not None,
             "report_count": len(self.reports),
+            "location_fact_count": len(self.location_facts),
+            "l1_snapshot_ref": self.l1_snapshot_ref,
         }
 
 

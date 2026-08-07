@@ -544,7 +544,10 @@ def check_contract_completeness(
         intent = SimpleNamespace(project_targets=[], zone_targets=[])
     project_targets = list(getattr(intent, "project_targets", None) or [])
     zone_targets = list(getattr(intent, "zone_targets", None) or [])
-    need_parcels = bool(project_targets or zone_targets)
+    spatial_projects = [
+        p for p in project_targets if getattr(p, "requires_spatial", True)
+    ]
+    need_parcels = bool(spatial_projects or zone_targets)
     parcels_present = (not need_parcels) or bool(planned_state.parcels)
     missing_bsm = [p.bsm for p in planned_state.parcels if not (p.bsm or "").strip()]
     missing_geom = [p.bsm or "?" for p in planned_state.parcels if not (p.geometry or "").strip()]

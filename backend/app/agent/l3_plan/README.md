@@ -80,7 +80,7 @@
 ## 相关文档
 
 - `../README.md` — agent 编排层总览
-- `../bootstrap/layer_aggregate_node.py` — aggregate 调用方
-- `../bootstrap/gis_agent_entry.py` — post-L3 入口（从 L3 报告编译 PlanningProgram 或读 artifact）
+- `../bootstrap/graph.py` — aggregate 调用方与阶段路由
+- `../bootstrap/post_l3_main_nodes.py` — post-L3 入口（从 L3 产物加载 PlanningProgram）
 - `../parse/README.md` — PARSE（下游消费者）
 - `app/modules/parsing/compiler/profiles/l3_planning.py` — L3 提取 profile

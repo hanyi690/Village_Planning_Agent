@@ -18,6 +18,7 @@ Session Routes - 统一的会话 API (新架构)
 """
 
 import asyncio
+import hashlib
 import json
 import logging
 from datetime import datetime
@@ -115,6 +116,8 @@ def _infer_geojson_data_type(geojson: Dict[str, Any]) -> Optional[str]:
 def _infer_data_type_from_filename(filename: str) -> Optional[str]:
     """Infer GIS data type from filename patterns."""
     lower = filename.lower()
+    if "admin_boundary_line" in lower or "行政界线" in lower:
+        return "admin_boundary_line"
     if "boundary" in lower or "边界" in lower:
         return "boundary"
     if "landuse" in lower or "用地" in lower or "现状" in lower:
@@ -127,6 +130,16 @@ def _infer_data_type_from_filename(filename: str) -> Optional[str]:
         return "water"
     if "residential" in lower or "住宅" in lower or "居民" in lower:
         return "residential"
+    if "construction_zone" in lower or "建设区" in lower:
+        return "construction_zone"
+    if "farmland_protection" in lower or "基本农田" in lower:
+        return "farmland_protection"
+    if "ecological_protection" in lower or "生态保护" in lower:
+        return "ecological_protection"
+    if "historical_protection" in lower or "历史保护" in lower:
+        return "historical_protection"
+    if "geological_hazard" in lower or "地质灾害" in lower:
+        return "geological_hazard_points"
     return None
 
 
@@ -149,6 +162,7 @@ async def _parse_file_in_memory(
         "gis_data_type": None,
         "parse_status": "pending",
         "parse_error": None,
+        "geometry_audit": None,
     }
 
     try:
@@ -159,6 +173,7 @@ async def _parse_file_in_memory(
                 if geojson.get("type") == "FeatureCollection":
                     result["gis_data"] = geojson
                     result["gis_data_type"] = _infer_geojson_data_type(geojson)
+                    result["geometry_audit"] = _audit_geojson_geometry(geojson)
                     result["parse_status"] = "success"
                 else:
                     result["parse_status"] = "failed"
@@ -197,6 +212,53 @@ async def _parse_file_in_memory(
     return result
 
 
+def _audit_geojson_geometry(geojson: Dict[str, Any]) -> Dict[str, Any]:
+    """Record source geometry validity without mutating uploaded data.
+
+    The raw upload remains the source of truth.  Spatial adapters may repair
+    invalid shapes with Shapely ``make_valid`` at their boundary, but the
+    upload audit must preserve the original feature index and reason so a
+    later topology failure can be traced back to the input file.
+    """
+    audit = {"feature_count": 0, "invalid_count": 0, "null_geometry_count": 0, "samples": []}
+    features = geojson.get("features") or []
+    audit["feature_count"] = len(features)
+    try:
+        from shapely.geometry import shape
+        from shapely.validation import explain_validity
+    except Exception as exc:
+        audit["status"] = "unavailable"
+        audit["error"] = f"shapely unavailable: {type(exc).__name__}"
+        return audit
+
+    for index, feature in enumerate(features):
+        geometry = (feature or {}).get("geometry") or {}
+        if not geometry:
+            audit["null_geometry_count"] += 1
+            continue
+        try:
+            candidate = shape(geometry)
+            if candidate.is_empty or not candidate.is_valid:
+                audit["invalid_count"] += 1
+                if len(audit["samples"]) < 10:
+                    props = (feature or {}).get("properties") or {}
+                    audit["samples"].append({
+                        "feature_index": index,
+                        "reason": "empty" if candidate.is_empty else explain_validity(candidate),
+                        "bsm": str(props.get("BSM", props.get("bsm", "")) or ""),
+                    })
+        except Exception as exc:
+            audit["invalid_count"] += 1
+            if len(audit["samples"]) < 10:
+                audit["samples"].append({
+                    "feature_index": index,
+                    "reason": f"parse_error:{type(exc).__name__}",
+                    "bsm": "",
+                })
+    audit["status"] = "ok"
+    return audit
+
+
 async def _process_uploaded_file_db(
     file: UploadFile,
     session_id: str,
@@ -217,7 +279,20 @@ async def _process_uploaded_file_db(
 
     # Parse file in memory
     parse_result = await _parse_file_in_memory(file, content)
-    dtype = parse_result["gis_data_type"]
+    geometry_audit = parse_result.get("geometry_audit") or {}
+    if geometry_audit.get("invalid_count"):
+        logger.warning(
+            "[SessionRoutes] Source geometry audit: %s invalid=%s samples=%s",
+            filename,
+            geometry_audit.get("invalid_count"),
+            geometry_audit.get("samples", [])[:3],
+        )
+    # Prefer the explicit filename contract over weak first-feature property
+    # inference.  This is required for uploaded layers such as
+    # ``admin_boundary_line.geojson`` whose geometry type is enough to
+    # distinguish them but whose properties may not carry a layer label.
+    filename_dtype = _infer_data_type_from_filename(filename)
+    dtype = filename_dtype or parse_result["gis_data_type"]
     if dtype in {"upload", "auto", "unknown"}:
         dtype = None
     if parse_result["gis_data"] and not dtype:
@@ -248,10 +323,12 @@ async def _process_uploaded_file_db(
         "file_category": file_category,
         "file_type": parse_result["file_type"],
         "size_bytes": len(content),
+        "checksum": hashlib.sha256(content).hexdigest(),
         "parse_status": parse_result["parse_status"],
         "parsed_text": parse_result["parsed_text"],
         "gis_data": parse_result["gis_data"],
         "gis_data_type": parse_result["gis_data_type"],
+        "geometry_audit": parse_result.get("geometry_audit"),
     }
 
 
@@ -357,6 +434,7 @@ async def create_session(
                 "file_category": r["file_category"],
                 "file_type": r["file_type"],
                 "size_bytes": r["size_bytes"],
+                "geometry_audit": r.get("geometry_audit"),
             })
 
             # Merge parsed text into initial state

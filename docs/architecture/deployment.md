@@ -9,7 +9,7 @@
 
 | 组件 | 技术 | 版本要求 |
 |---|---|---|
-| 后端 | Python + FastAPI | Python 3.13+ |
+| 后端 | Python + FastAPI | Python 3.11+（CI 与容器当前使用 3.11） |
 | 前端 | Next.js + React | Node.js 18+，Next.js 14 |
 | 数据库 | SQLite + WAL 模式 | 内置，无需独立部署 |
 | 向量库 | ChromaDB | 内置持久化 |
@@ -130,7 +130,7 @@ npm install
 
 ```bash
 # 后端（端口 8000）
-python backend/main.py
+cd backend && python -m uvicorn app.main:app --host 127.0.0.1 --port 8000
 
 # 前端（端口 3000）
 cd frontend && npm run dev

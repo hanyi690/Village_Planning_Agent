@@ -30,7 +30,12 @@ def route_compilation(
     if any(d.severity == "error" for d in diagnostics):
         return "human_review"
     ambiguous = sum(1 for d in diagnostics if d.code == "AMBIGUOUS_REFERENCE")
-    if ambiguous >= _ROUTE_LLM_THRESHOLD:
+    # Partial spatial coverage is safe to continue: mapped interventions can
+    # be grounded and the unresolved ones remain explicit diagnostics for
+    # VALIDATE/HUMAN. Only an entirely unmappable program needs the expensive
+    # patch/review route; otherwise one verbose L3 report can deadlock PARSE
+    # despite having usable spatial references.
+    if ambiguous >= _ROUTE_LLM_THRESHOLD and not result.spatial_reference_specs:
         return "llm_patch"
     return "merge"
 

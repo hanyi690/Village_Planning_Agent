@@ -379,9 +379,14 @@ def add_annotations(kg, annotations: list):
     from app.modules.schema.types.spatial_types import CurrentFacility
     fc, vc = 0, 0
     for ann in annotations:
+        lt = str(getattr(ann, "layer_type", "") or "")  # getattr intentional: heterogeneous annotation objects
         cat = getattr(ann, "category", "") or ""
-        if cat == "村名":
-            text = getattr(ann, "text", "") or ""
+        raw = getattr(ann, "_raw", {}) or {}
+        raw_cat = str(raw.get("category", "") or cat or "")
+        is_village = cat == "村名" or raw_cat == "村名" or lt == "external_natural_village"
+        is_facility = cat == "现状设施点" or raw_cat == "现状设施点" or lt in ("external_village_committee", "external_facility")
+        if is_village:
+            text = getattr(ann, "text", "") or str(raw.get("name_norm", "") or "").strip()
             bsm = str(ann.bsm).strip()
             ysdm = str(ann.ysdm).strip()
             if text and hasattr(ann, "geometry"):
@@ -396,13 +401,22 @@ def add_annotations(kg, annotations: list):
                 add_centroid(kg.g, uri, coords[0], coords[1])
                 add_geo_feature_type(kg.g, uri)
                 vc += 1
-        elif cat == "现状设施点":
+        elif is_facility:
             extra = ann.model_extra or {}
             facility = CurrentFacility.from_annotation_feature(
                 {"properties": extra, "geometry": ann.geometry}
             ) if ann.model_extra else None
             if facility is None:
-                continue
+                name = getattr(ann, "text", "") or str(raw.get("name_norm", "") or "").strip()
+                facility = CurrentFacility(
+                    geometry=ann.geometry,
+                    bsm=str(ann.bsm).strip(),
+                    facility_type="公共服务",
+                    facility_name=name or "unknown",
+                    scale="",
+                    service_radius=0.0,
+                    category="public_service",
+                )
             bsm = str(facility.bsm).strip()
             ysdm = str(facility.ysdm).strip()
             if bsm:
@@ -420,6 +434,36 @@ def add_annotations(kg, annotations: list):
             kg.g.add((fac_uri, Relations.sfWithin, PLN.village))
             kg.g.add((PLN.village, PLN.has_facility, fac_uri))
             add_geo_feature_type(kg.g, fac_uri)
+            fc += 1
+        elif lt == "external_road_label":
+            name = getattr(ann, "text", "") or str(raw.get("name", "") or raw.get("name_norm", "") or "").strip()
+            bsm = str(ann.bsm).strip()
+            ysdm = str(ann.ysdm).strip()
+            uri = EntityIdPolicy.fallback_uri("external_road", ysdm, vc)
+            EntityIdPolicy.attach_bsm(kg.g, uri, bsm)
+            kg.g.add((uri, RDF.type, EntityTypes.Road))
+            kg.g.add((uri, PLN.name, Literal(name or f"道路_{bsm or vc}")))
+            kg.g.add((uri, PLN.road_level, Literal("村道")))
+            coords = ann.geometry.get("coordinates", [0, 0])
+            add_centroid(kg.g, uri, coords[0], coords[1])
+            kg.g.add((uri, Relations.sfWithin, PLN.village))
+            kg.g.add((uri, gis_type_ref, Literal("road")))
+            add_geo_feature_type(kg.g, uri)
+            vc += 1
+        elif lt == "external_water_label":
+            name = getattr(ann, "text", "") or str(raw.get("name", "") or raw.get("name_norm", "") or "").strip()
+            bsm = str(ann.bsm).strip()
+            ysdm = str(ann.ysdm).strip()
+            uri = EntityIdPolicy.fallback_uri("external_water", ysdm, fc)
+            EntityIdPolicy.attach_bsm(kg.g, uri, bsm)
+            kg.g.add((uri, RDF.type, EntityTypes.WaterBody))
+            kg.g.add((uri, PLN.name, Literal(name or f"水体_{bsm or fc}")))
+            kg.g.add((uri, PLN.water_type, Literal("水域")))
+            coords = ann.geometry.get("coordinates", [0, 0])
+            add_centroid(kg.g, uri, coords[0], coords[1])
+            kg.g.add((uri, Relations.sfWithin, PLN.village))
+            kg.g.add((uri, gis_type_ref, Literal("water")))
+            add_geo_feature_type(kg.g, uri)
             fc += 1
     if fc or vc:
         logger.info("Annotations: %d facilities, %d villages", fc, vc)

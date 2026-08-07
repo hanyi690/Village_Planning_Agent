@@ -11,7 +11,7 @@ eliminating the repeated Bundle/KG/report rebuilds in ``gis_agent_node``,
 Versioning: every rebuild bumps ``PlanningContext.version``. The bundle is
 cached in ``app.services.session_bundle``; the session KG is idempotent in
 ``KGManager``. ``build_planning_context`` reuses both and only assembles the
-derived parts (gazetteer / constraint index / anchors / kg_query_fn).
+derived parts (gazetteer / ports / constraint index / anchors / evidence).
 """
 
 from __future__ import annotations
@@ -105,15 +105,17 @@ async def build_planning_context(
     gazetteer = None
     if resolved_village:
         try:
-            from app.modules.kg.gazetteer import load_gazetteer
+            from app.modules.kg.gazetteer import build_gazetteer
 
-            gazetteer = load_gazetteer(resolved_village)
+            if kg is not None and bundle is not None and getattr(kg, "g", None) is not None:
+                gazetteer = build_gazetteer(kg, bundle, memory=None)
         except Exception as e:
-            logger.warning("[PlanningContext] gazetteer load failed: %s", e)
+            logger.warning("[PlanningContext] gazetteer build failed: %s", e)
 
     # 3.5 Injected ports (kg adapters: gazetteer + spatial_query)
     gazetteer_port = None
     spatial_query_port = None
+    semantic_query_port = None
     try:
         if gazetteer is not None:
             from app.modules.kg.adapters.gazetteer_adapter import KGGazetteerAdapter
@@ -128,7 +130,18 @@ async def build_planning_context(
             spatial_query_port = KGSpatialQueryAdapter(kg)
     except Exception as e:
         logger.warning("[PlanningContext] spatial_query adapter build failed: %s", e)
-    ports = PlanningPorts(gazetteer=gazetteer_port, spatial_query=spatial_query_port)
+    try:
+        if kg is not None:
+            from app.modules.kg.adapters.semantic_query_adapter import KGSemanticQueryAdapter
+
+            semantic_query_port = KGSemanticQueryAdapter(kg)
+    except Exception as e:
+        logger.warning("[PlanningContext] semantic_query adapter build failed: %s", e)
+    ports = PlanningPorts(
+        gazetteer=gazetteer_port,
+        spatial_query=spatial_query_port,
+        semantic_query=semantic_query_port,
+    )
     try:
         from app.modules.data.bundle_assembly_adapter import DataBundleAssemblyAdapter
 
@@ -146,9 +159,8 @@ async def build_planning_context(
         except Exception as e:
             logger.warning("[PlanningContext] constraint index build failed: %s", e)
 
-    # 5. Village anchors + kg_query_fn (only when KG is live)
+    # 5. Village anchors (only when KG is live)
     village_anchors: list = []
-    kg_query_fn = None
     if kg is not None and kg_session_ref:
         try:
             from app.modules.kg.queries.sparql import query_kg
@@ -156,13 +168,6 @@ async def build_planning_context(
             village_anchors = query_kg(kg, "get_village_anchors") or []
         except Exception as e:
             logger.warning("[PlanningContext] village anchors query failed: %s", e)
-        try:
-            from app.modules.kg.queries.sparql import query_kg as _qkg
-
-            def kg_query_fn(template_name: str, **kw):
-                return _qkg(kg, template_name, **kw)
-        except Exception:
-            kg_query_fn = None
 
     # 6. Reports + summary index (DB I/O, optional)
     reports: Dict[str, Dict[str, Any]] = {}
@@ -200,9 +205,16 @@ async def build_planning_context(
         village_anchors=village_anchors,
         reports=reports,
         report_summary_index=report_summary_index,
-        kg_query_fn=kg_query_fn,
         ports=ports,
     )
+
+    # 6.5 PlaceEvidenceIndex (non-fatal; None on failure)
+    try:
+        from app.modules.spatial_ops.evidence.place_evidence_index import PlaceEvidenceIndex
+
+        context.evidence_index = PlaceEvidenceIndex.build(context)
+    except Exception as e:
+        logger.warning("[PlanningContext] evidence index build failed: %s", e)
     _context_cache[session_id] = context
     logger.info(
         "[PlanningContext] built v%d for %s (%s): bundle=%s kg=%s gaz=%s cidx=%s reports=%d anchors=%d",

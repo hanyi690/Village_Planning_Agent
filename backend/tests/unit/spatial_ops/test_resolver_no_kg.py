@@ -18,6 +18,7 @@ from app.modules.schema.contracts.parse_contracts import (
 )
 from app.modules.schema.contracts.spatial_reference_contracts import (
     CandidateSet,
+    RefObject,
     SpatialReferenceSpec,
 )
 from app.modules.schema.types.canonical import VillageBundle
@@ -96,19 +97,21 @@ class TestResolveSpecViaInjectedPort:
 
 
 class TestResolveSpecFallback:
-    def test_kg_query_fn_fallback_when_no_port(self):
-        def kg_query_fn(template_name, **params):
-            return {"bsms": ["P001"]}
-
-        context = _context(kg_query_fn=kg_query_fn)
+    def test_evidence_index_fallback_when_no_port(self):
+        evidence_index = MagicMock()
+        evidence_index.candidate_bsms.return_value = ["P001"]
+        context = _context(evidence_index=evidence_index)
         resolver = SpatialResolver(context)
-        spec = SpatialReferenceSpec(type="attributive")
+        spec = SpatialReferenceSpec(
+            type="attributive",
+            reference=RefObject(kind="place_name", filter={"label_contains": "田坑"}),
+        )
 
         result = resolver.resolve_spec(spec)
 
         assert "P001" in result.final_bsms
 
-    def test_no_port_no_query_returns_empty_without_crash(self):
+    def test_no_port_no_evidence_returns_empty_without_crash(self):
         context = _context()
         resolver = SpatialResolver(context)
         spec = SpatialReferenceSpec(type="attributive")

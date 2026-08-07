@@ -11,7 +11,7 @@ must fire AFTER the interrupt point to avoid duplication.
 Migrated from agent/completion/node.py per docs/architecture/agent-graph.md §5.
 """
 
-from typing import Dict, Any
+from typing import Any, Dict, Optional
 
 from langgraph.types import interrupt
 from app.utils.logger import get_logger
@@ -37,7 +37,11 @@ async def _snapshot_bundle(session_id: str, trigger_reason: str) -> None:
         )
 
 
-async def _maybe_extract_bindings(session_id: str, layer: int) -> None:
+async def _maybe_extract_bindings(
+    session_id: str,
+    layer: int,
+    state: Optional[Dict[str, Any]] = None,
+) -> None:
     """Wave-end hook: extract village/BSM bindings from the completed layer.
 
     Non-fatal: extraction failures are logged and never break the pipeline.
@@ -73,13 +77,38 @@ async def _maybe_extract_bindings(session_id: str, layer: int) -> None:
             _bundle = await resolve_bundle(session_id)
         except Exception:
             pass
+        location_facts = []
+        if layer == 1:
+            try:
+                from app.agent.bootstrap.artifact_runtime import load_artifact
+                from app.modules.schema.contracts.l1_contracts import L1Snapshot
+
+                refs = dict((state or {}).get("artifact_refs") or {})
+                migrated = dict(state or {})
+                migrated["artifact_refs"] = refs
+                snapshot = load_artifact(migrated, "l1_snapshot", L1Snapshot)
+                location_facts = list(getattr(snapshot, "location_facts", []) or [])
+            except Exception as exc:
+                logger.warning("[layer_completion_check] L1 location facts load failed: %s", exc)
         stats = await run_wave(
             session_id, wave=layer, reports=reports, bundle=_bundle,
             instruction_texts=instruction_texts,
+            location_facts=location_facts,
         )
         logger.info("[layer_completion_check] KG enrichment layer=%d stats=%s", layer, stats)
     except Exception as e:
         logger.warning("[layer_completion_check] KG enrichment failed for %s L%d: %s", session_id, layer, e)
+
+
+async def _invoke_extraction(session_id: str, layer: int, state: Dict[str, Any]) -> None:
+    """Invoke the enrichment hook while keeping older test/plugin hooks valid."""
+    import inspect
+
+    parameters = inspect.signature(_maybe_extract_bindings).parameters
+    if len(parameters) < 3:
+        await _maybe_extract_bindings(session_id, layer)  # type: ignore[misc]
+    else:
+        await _maybe_extract_bindings(session_id, layer, state)
 
 
 async def layer_completion_check(
@@ -241,7 +270,7 @@ async def layer_completion_check(
                 dimension_count=len(completed),
                 total_chars=total_chars,
             )
-            await _maybe_extract_bindings(session_id, layer)
+            await _invoke_extraction(session_id, layer, state)
             await _snapshot_bundle(
                 session_id, "final" if layer >= 3 else f"layer{layer}",
             )
@@ -298,7 +327,7 @@ async def layer_completion_check(
         dimension_count=len(completed),
         total_chars=total_chars,
     )
-    await _maybe_extract_bindings(session_id, layer)
+    await _invoke_extraction(session_id, layer, state)
     await _snapshot_bundle(
         session_id, "final" if layer >= 3 else f"layer{layer}",
     )

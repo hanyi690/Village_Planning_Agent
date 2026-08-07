@@ -98,5 +98,6 @@ async def test_l2_aggregate_returns_refs(tmp_path, monkeypatch):
     assert mock_gate.called
     assert mock_write.call_args.args[0].run_id == "r1"
     assert result["l2_strategy_ref"]["artifact_type"] == "L2Strategy"
+    assert result["artifact_refs"]["l2_strategy"]["artifact_type"] == "L2Strategy"
     assert result["l2_gate_decision"]["stage"] == "l2"
     assert result["l2_review_id"] == "review-1"

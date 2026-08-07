@@ -5,6 +5,8 @@
 """
 
 import asyncio
+import os
+import threading
 import time
 import uuid
 import json
@@ -13,7 +15,7 @@ from dataclasses import asdict
 from datetime import datetime
 from enum import Enum
 from typing import Dict, Any, List, Optional
-from langchain_core.messages import AIMessage
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from app.config import get_dimension_config, get_dimension_layer, list_dimensions
 from app.core.llm import create_llm
 from app.core.settings import LLM_MODEL, MAX_TOKENS, LLM_STREAM_TIMEOUT
@@ -39,6 +41,9 @@ logger = get_logger(__name__)
 
 # Cached LLM instance — reused across all dimension analyses
 _llm_cache: Optional[Any] = None
+_L1_LLM_SLOTS = threading.BoundedSemaphore(
+    max(1, int(os.getenv("L1_LLM_MAX_CONCURRENT", "3")))
+)
 
 
 def _get_llm():
@@ -202,6 +207,13 @@ async def analyze_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
 
     # 5.5 + 5.6: EXPLORE evidence service (replaces _optimize_semantics + _build_explore_brief)
     explore_section = ""
+    explore_audit = {
+        "fact_statements": [],
+        "fact_count": 0,
+        "source_refs": [],
+        "kg_confidence": 0.0,
+        "kg_topology_facts": [],
+    }
     try:
         explore_request = ExplorationRequest(
             run_id=f"{session_id}:{dim_key}:L{dim_layer}",
@@ -221,6 +233,13 @@ async def analyze_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
             explore_result.evidence_bundle,
             explore_result.spatial_cognition,
         )
+        explore_audit = {
+            "fact_statements": [f.statement for f in explore_result.evidence_bundle.facts],
+            "fact_count": len(explore_result.evidence_bundle.facts),
+            "source_refs": [s.reference for s in explore_result.evidence_bundle.sources],
+            "kg_confidence": explore_result.spatial_cognition.kg_confidence,
+            "kg_topology_facts": list(explore_result.spatial_cognition.topology_facts),
+        }
         if explore_section:
             logger.info(
                 "[analyze_dimension] %s: EXPLORE evidence injected (%d chars, %d facts)",
@@ -252,19 +271,36 @@ async def analyze_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
     llm_response = ""
     _last_publish_time = 0.0
     _PUBLISH_INTERVAL = 0.1  # 100ms throttle
+    llm_input = prompt
+    if dim_layer == 1:
+        llm_input = [
+            SystemMessage(
+                content=(
+                    "你是村庄规划L1现状观察节点。必须严格执行输出协议："
+                    "先输出维度分析正文，最后必须输出字面量【INSTRUCTION】及其五列表格。"
+                    "即使没有对象也不得省略marker、表头和分隔行。"
+                    "表格只能摘录正文明确出现的现状对象，不得编造。"
+                )
+            ),
+            HumanMessage(content=prompt),
+        ]
 
+    await asyncio.to_thread(_L1_LLM_SLOTS.acquire)
     try:
-        async with asyncio.timeout(LLM_STREAM_TIMEOUT):
-            async for chunk in llm.astream(prompt):
-                if hasattr(chunk, 'content') and chunk.content:
-                    llm_response += chunk.content
-                    now = time.time()
-                    if now - _last_publish_time >= _PUBLISH_INTERVAL:
-                        await publish_dimension_delta(
-                            session_id, dim_key, dim_name, dim_layer, is_revision,
-                            chunk.content, llm_response,
-                        )
-                        _last_publish_time = now
+        try:
+            async with asyncio.timeout(LLM_STREAM_TIMEOUT):
+                async for chunk in llm.astream(llm_input):
+                    if hasattr(chunk, 'content') and chunk.content:
+                        llm_response += chunk.content
+                        now = time.time()
+                        if now - _last_publish_time >= _PUBLISH_INTERVAL:
+                            await publish_dimension_delta(
+                                session_id, dim_key, dim_name, dim_layer, is_revision,
+                                chunk.content, llm_response,
+                            )
+                            _last_publish_time = now
+        finally:
+            _L1_LLM_SLOTS.release()
     except asyncio.TimeoutError:
         logger.error(f"[analyze_dimension] {dim_key}: LLM stream timeout after {LLM_STREAM_TIMEOUT}s")
         await sse_manager.publish(session_id, {
@@ -295,6 +331,17 @@ async def analyze_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
 
     llm_elapsed = time.time() - llm_start_time
     logger.info(f"[analyze_dimension] {dim_key}: LLM completed in {llm_elapsed:.1f}s, output = {len(llm_response)} chars")
+
+    # The private section is a required output protocol.  Do not issue a
+    # second "repair" generation or synthesize rows here: if it is missing,
+    # preserve the violation in the audit so the gate can fail closed.
+    instruction_repaired = False
+    instruction_repair_source = ""
+    if dim_layer == 1 and "【INSTRUCTION】" not in llm_response:
+        logger.error(
+            "[analyze_dimension] %s: L1 output protocol violation: missing INSTRUCTION",
+            dim_key,
+        )
 
     # 7.5 统计收集 - 记录 LLM 时间和输出
     stats.record_llm_time(session_id, dim_key, llm_elapsed, len(llm_response))
@@ -379,16 +426,25 @@ async def analyze_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
                 step_name=f"analyze_dimension:{dim_key}",
                 dimension_key=dim_key,
                 layer=dim_layer,
-                is_revision=state.get("is_revision", False),
+                inputs={
+                    "dependency_reports_summary": _dependency_summary(deps),
+                    "same_layer_dependency_reports_summary": _dependency_summary(same_layer_contexts),
+                    "instruction_removed": True,
+                },
                 outputs={
                     "report_id": report_id,
                     "word_count": len(llm_response),
                     "instruction_len": len(instr),
                     "has_instruction": bool(instr),
+                    "instruction_repaired": instruction_repaired,
+                    "instruction_repair_source": instruction_repair_source,
+                    "kg_evidence_consumed": explore_audit,
                 },
                 diagnostics={
+                    "is_revision": state.get("is_revision", False),
                     "rag_sources": len(rag_log.sources) if rag_log and rag_log.rag_enabled else 0,
                     "kg_cognition": bool(explore_section),
+                    "kg_fact_count": explore_audit["fact_count"],
                 },
             )
         except Exception as e:
@@ -408,6 +464,17 @@ async def analyze_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
             result["revision_impact_tree"] = impact_tree
 
     return result
+
+
+def _dependency_summary(text: str) -> Dict[str, Any]:
+    """Compact dependency audit; full prose is only passed to the prompt."""
+    import re
+
+    return {
+        "sections": re.findall(r"【([^】]+)】", text or ""),
+        "chars": len(text or ""),
+        "preview": (text or "")[:500],
+    }
 
 
 def _extract_landuse_metrics(summary_obj: Any, dim_key: str) -> Dict[str, float]:

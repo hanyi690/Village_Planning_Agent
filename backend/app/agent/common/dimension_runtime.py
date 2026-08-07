@@ -27,6 +27,16 @@ from app.utils.logger import get_logger
 logger = get_logger(__name__)
 
 
+def _display_report(content: str | None) -> str:
+    """Return dependency report prose without the private INSTRUCTION block."""
+    if not content:
+        return ""
+    from app.services.report_store import split_instruction
+
+    display, _ = split_instruction(content)
+    return display
+
+
 # ============================================
 # RAG Retrieval Logging
 # ============================================
@@ -261,12 +271,12 @@ async def load_dependency_reports(
         for dep_key in same_layer_deps:
             db_report = await store.get_latest(session_id, dep_key)
             if db_report:
-                contexts.append(f"【{dep_key}】分析结果：\n{db_report}")
+                contexts.append(f"【{dep_key}】分析结果：\n{_display_report(db_report)}")
                 continue
             # Fallback: get_latest_report
             dep_report = await store.get_latest_report(session_id, dep_key)
             if dep_report:
-                contexts.append(f"【{dep_key}】分析结果：\n{dep_report['content']}")
+                contexts.append(f"【{dep_key}】分析结果：\n{_display_report(dep_report['content'])}")
                 continue
             raise DependencyError(
                 f"维度 {dimension_key} 的同层依赖 {dep_key} 报告缺失"
@@ -281,9 +291,9 @@ async def load_dependency_reports(
         layer1_deps = getattr(cfg, "layer_depends_on", [])
         layer1_reports = await store.get_layer_reports(session_id, 1)
         if layer1_deps:
-            deps = "\n".join([f"【{k}】{layer1_reports.get(k, '')}" for k in layer1_deps if layer1_reports.get(k)])
+            deps = "\n".join([f"【{k}】{_display_report(layer1_reports.get(k, ''))}" for k in layer1_deps if layer1_reports.get(k)])
         else:
-            deps = "\n".join([f"【{k}】{v}" for k, v in layer1_reports.items() if v])
+            deps = "\n".join([f"【{k}】{_display_report(v)}" for k, v in layer1_reports.items() if v])
         logger.info(f"[dimension_runtime] {dimension_key}: 加载跨层依赖 {len(layer1_deps) if layer1_deps else len(layer1_reports)} 个")
 
     elif dim_layer == 3:
@@ -296,10 +306,10 @@ async def load_dependency_reports(
         deps_parts = []
         for k in layer1_deps:
             if layer1_reports.get(k):
-                deps_parts.append(f"【{k}】{layer1_reports[k]}")
+                deps_parts.append(f"【{k}】{_display_report(layer1_reports[k])}")
         for k in layer2_deps:
             if layer2_reports.get(k):
-                deps_parts.append(f"【{k}】{layer2_reports[k]}")
+                deps_parts.append(f"【{k}】{_display_report(layer2_reports[k])}")
         deps = "\n".join(deps_parts)
         logger.info(f"[dimension_runtime] {dimension_key}: 加载跨层依赖 L1={len(layer1_deps)} L2={len(layer2_deps)} 个")
 
@@ -331,12 +341,12 @@ async def load_layered_dependency_reports(
         for dep_key in same_layer_deps:
             db_report = await store.get_latest(session_id, dep_key)
             if db_report:
-                contexts.append(f"【{dep_key}】分析结果：\n{db_report}")
+                contexts.append(f"【{dep_key}】分析结果：\n{_display_report(db_report)}")
                 continue
             # Fallback: get_latest_report
             dep_report = await store.get_latest_report(session_id, dep_key)
             if dep_report:
-                contexts.append(f"【{dep_key}】分析结果：\n{dep_report['content']}")
+                contexts.append(f"【{dep_key}】分析结果：\n{_display_report(dep_report['content'])}")
                 continue
             raise DependencyError(
                 f"维度 {dimension_key} 的同层依赖 {dep_key} 报告缺失"
@@ -353,10 +363,10 @@ async def load_layered_dependency_reports(
     if layer1_deps:
         # 顺序调用避免 SQLite aiosqlite 连接管理问题
         layer1_reports = await store.get_layer_reports(session_id, 1)
-        l1_deps = "\n".join([f"【{k}】{layer1_reports.get(k, '')}" for k in layer1_deps if layer1_reports.get(k)])
+        l1_deps = "\n".join([f"【{k}】{_display_report(layer1_reports.get(k, ''))}" for k in layer1_deps if layer1_reports.get(k)])
     if dim_layer == 3 and layer2_deps:
         layer2_reports = await store.get_layer_reports(session_id, 2)
-        l2_deps = "\n".join([f"【{k}】{layer2_reports.get(k, '')}" for k in layer2_deps if layer2_reports.get(k)])
+        l2_deps = "\n".join([f"【{k}】{_display_report(layer2_reports.get(k, ''))}" for k in layer2_deps if layer2_reports.get(k)])
     logger.info(f"[dimension_runtime] {dimension_key}: 加载分层跨层依赖 L1={len(layer1_deps)} L2={len(layer2_deps)} 个")
 
     return l1_deps, l2_deps, same_layer_contexts

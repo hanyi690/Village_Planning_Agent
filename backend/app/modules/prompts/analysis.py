@@ -23,6 +23,8 @@ ANALYSIS_RULES = """
 - 禁止使用"（一）（二）"等分项编号
 - 禁止使用"1.""2.""3."等数字编号作为小标题
 - 使用【主题】格式标记段落主题，用自然段落叙述内容
+- 每个可核验的现状事实单独成行，并以“【事实】”开头；事实必须直接来自输入数据或已注入的 KG evidence
+- 正文至少包含 3 条“【事实】”行；若输入没有足够事实，明确写“【事实】数据中未提供”，不得只输出泛泛建议
 """
 
 # ==========================================
@@ -32,7 +34,9 @@ ANALYSIS_RULES = """
 # ==========================================
 
 INSTRUCTION_OUTPUT_GUIDE = """
-【INSTRUCTION】（内部指令段，仅供下游空间定位解析，不属于报告正文，展示时必须忽略）
+【INSTRUCTION】（机器消费契约；必须出现在你的最终回答末尾）
+这是强制输出格式，不是可选说明。即使没有对象，也必须输出 marker、表头和分隔行，禁止省略。
+本维度允许提取的现状对象范围：{dimension_focus}
 请在报告正文结束后，将报告中涉及的现状对象整理为以下固定列 markdown 表格（严格按此表头与列序，每行一条记录）：
 
 | 类型 | 名称 | 位置 | 描述 | 规模 |
@@ -407,10 +411,27 @@ ANALYSIS_DIMENSIONS = {
 # 辅助函数
 # ==========================================
 
-def _instruction_output_guide(natural_villages: str = "") -> str:
+_L1_INSTRUCTION_FOCUS = {
+    "location": "自然村、现状道路、对外交通节点、现状交通设施",
+    "socio_economic": "自然村、现状产业点、现状经营设施",
+    "villager_wishes": "村民明确提到的现状设施、现状项目和所在自然村",
+    "superior_planning": "上位规划明确提到的现状边界、保护对象、现状约束位置",
+    "natural_environment": "现状河流、山体、林地、灾害点和所在自然村",
+    "land_use": "现状地类、现状分区和所在自然村",
+    "traffic": "现状道路、桥梁、交通设施和所在自然村",
+    "public_services": "现状公共服务设施和所在自然村",
+    "infrastructure": "现状给排水、电力、通信、环卫设施和所在自然村",
+    "ecological_green": "现状生态斑块、河流、林地和所在自然村",
+    "architecture": "现状建筑、建筑群和所在自然村",
+    "historical_culture": "现状古建筑、古树、遗址、传统村落和所在自然村",
+}
+
+
+def _instruction_output_guide(natural_villages: str = "", dimension_key: str = "") -> str:
     nv = (natural_villages or "").strip()
     nv_suffix = f"（如 {nv}）" if nv else ""
-    return INSTRUCTION_OUTPUT_GUIDE.format(nv_suffix=nv_suffix)
+    focus = _L1_INSTRUCTION_FOCUS.get(dimension_key, "本维度报告正文明确出现的现状对象")
+    return INSTRUCTION_OUTPUT_GUIDE.format(nv_suffix=nv_suffix, dimension_focus=focus)
 
 
 def get_dimension_prompt(dimension_key: str, raw_data: str = "", village_name: str = "",
@@ -465,7 +486,7 @@ def get_dimension_prompt(dimension_key: str, raw_data: str = "", village_name: s
         result += "\n\n**【上传图片分析指引】**：\n请结合上传的图片分析村庄现状。图片可能展示村庄实景、设施、环境、建筑等。"
 
     # P8: 文末 INSTRUCTION 段引导（内部指令，保存时剥离不展示）
-    result += _instruction_output_guide(natural_villages)
+    result += _instruction_output_guide(natural_villages, dimension_key=dimension_key)
 
     return result
 

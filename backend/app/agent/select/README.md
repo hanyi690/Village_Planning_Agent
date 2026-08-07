@@ -73,7 +73,7 @@
 ## 相关文档
 
 - `../README.md` — agent 编排层总览
-- `../bootstrap/post_l3_chain.py` — SELECT 的 RETRY_GROUND 回退路由
+- `../bootstrap/graph.py` / `post_l3_main_nodes.py` — SELECT 的 RETRY_GROUND 回退路由
 - `../ground/README.md` — GROUND（上游：`GroundingResult`）
 - `../execute/README.md` — EXECUTE（下游消费者：`SiteSelectionDecision` + `LandDesignBrief`）
 - `app/modules/spatial_ops/selection/` — 选址核心算法

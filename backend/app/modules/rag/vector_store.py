@@ -496,12 +496,23 @@ class HierarchyVectorStore:
         chroma_filter = None
         if doc_types:
             chroma_filter = {"doc_type": {"$in": list(doc_types)}}
-        child_results = self.vectorstore.similarity_search_with_score(
-            query, k=k * 2, filter=chroma_filter
-        )
-        # 回退：过滤后结果不足 k 个时，补充全类型结果
+        # Chroma itself documents thread safety, but this process embeds a
+        # synchronous OpenAI client and the native HNSW/SQLite path in the
+        # same call.  Keep the complete native query (including embedding)
+        # in one critical section so concurrent LangGraph Send workers cannot
+        # overlap C-extension calls or race a shared local persistence handle.
+        with self._lock:
+            child_results = self.vectorstore.similarity_search_with_score(
+                query, k=k * 2, filter=chroma_filter
+            )
+            # 回退：过滤后结果不足 k 个时，补充全类型结果
+            if doc_types and len(child_results) < k:
+                fallback = self.vectorstore.similarity_search_with_score(query, k=k)
+            else:
+                fallback = []
+
+        # Merge fallback results outside the native critical section.
         if doc_types and len(child_results) < k:
-            fallback = self.vectorstore.similarity_search_with_score(query, k=k)
             seen_ids = {doc.metadata.get("chunk_id") for doc, _ in child_results}
             for doc, score in fallback:
                 if doc.metadata.get("chunk_id") not in seen_ids:

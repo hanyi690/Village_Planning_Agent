@@ -59,6 +59,7 @@ class SSEEventType(str):
     # Config events
     RAG_CONFIG_UPDATED = "rag_config_updated"
     STEP_MODE_UPDATED = "step_mode_updated"
+    HUMAN_REVIEW_PAUSED = "human_review_paused"
 
 
 __all__ = ["SSEEventType"]

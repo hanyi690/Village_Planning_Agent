@@ -135,26 +135,24 @@ class TestResolveSpatialDescription:
         from app.modules.spatial_ops.grounding import resolve_spatial_description
 
         bundle = self._make_bundle()
-        kg = MagicMock()
-        kg_query_fn = lambda name, **kw: (
-            [{"bsm": "BSM001", "dlbm": "1100"}]
-            if name == "get_parcels_intersecting_road" else []
+        evidence_index = MagicMock()
+        evidence_index.candidate_bsms.return_value = ["BSM001"]
+        r = resolve_spatial_description(
+            "沿122乡道", bundle, evidence_index=evidence_index
         )
-        r = resolve_spatial_description("沿122乡道", bundle, kg=kg, kg_query_fn=kg_query_fn)
-        assert r.query_path == "kg:road_intersects"
+        assert r.query_path == "evidence:linear_touching"
         assert r.candidate_bsms == ["BSM001"]
 
     def test_linear_water_kg(self):
         from app.modules.spatial_ops.grounding import resolve_spatial_description
 
         bundle = self._make_bundle()
-        kg = MagicMock()
-        kg_query_fn = lambda name, **kw: (
-            [{"bsm": "BSM002", "dlbm": "3100"}]
-            if name == "get_parcels_touching_water" else []
+        evidence_index = MagicMock()
+        evidence_index.candidate_bsms.return_value = ["BSM002"]
+        r = resolve_spatial_description(
+            "沿金田河", bundle, evidence_index=evidence_index
         )
-        r = resolve_spatial_description("沿金田河", bundle, kg=kg, kg_query_fn=kg_query_fn)
-        assert r.query_path == "kg:water_touches"
+        assert r.query_path == "evidence:linear_touching"
         assert r.candidate_bsms == ["BSM002"]
 
     def test_empty_desc(self):

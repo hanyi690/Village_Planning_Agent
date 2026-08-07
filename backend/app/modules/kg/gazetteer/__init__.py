@@ -4,8 +4,6 @@ from .gazetteer import (
     GazetteerEntry,
     build_gazetteer,
     confirm_with_llm,
-    load_gazetteer,
-    save_gazetteer,
     spatial_check,
     spatial_score,
 )
@@ -15,8 +13,6 @@ __all__ = [
     "GazetteerEntry",
     "build_gazetteer",
     "confirm_with_llm",
-    "load_gazetteer",
-    "save_gazetteer",
     "spatial_check",
     "spatial_score",
 ]

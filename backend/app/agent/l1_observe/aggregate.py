@@ -36,6 +36,33 @@ def _dedup(items: list[str]) -> list[str]:
     return out
 
 
+def _dedup_sources(sources: list[EvidenceSource]) -> list[EvidenceSource]:
+    seen: set[str] = set()
+    result: list[EvidenceSource] = []
+    for source in sources:
+        if source.reference not in seen:
+            seen.add(source.reference)
+            result.append(source)
+    return result
+
+
+def _dedup_location_facts(facts: list[Any]) -> list[Any]:
+    seen: set[tuple[str, str, str, str]] = set()
+    result: list[Any] = []
+    for fact in facts:
+        key = (
+            str(getattr(fact, "normalized_name", "")),
+            str(getattr(fact, "role", "")),
+            str(getattr(fact, "dimension_key", "")),
+            str(getattr(fact, "source_report_ref", "")),
+        )
+        if key in seen:
+            continue
+        seen.add(key)
+        result.append(fact)
+    return result
+
+
 def merge_fragments(
     fragments: list[L1DimensionFragment],
     run_id: str,
@@ -46,6 +73,7 @@ def merge_fragments(
     opportunities: list[str] = []
     evidence_gaps: list[EvidenceGap] = []
     classification_refs: list[ClassificationRef] = []
+    location_facts: list[Any] = []
     dimension_provenance: list[Provenance] = []
     source_refs: list[str] = []
 
@@ -56,6 +84,7 @@ def merge_fragments(
         opportunities.extend(frag.opportunities)
         evidence_gaps.extend(frag.evidence_gaps)
         classification_refs.extend(frag.classification_refs)
+        location_facts.extend(frag.location_facts)
         dimension_provenance.append(
             frag.provenance
             if frag.provenance is not None
@@ -73,6 +102,11 @@ def merge_fragments(
         context_version="",
         artifact_id="",
         facts=_dedup(facts),
+        facts_by_dimension={
+            frag.dimension_key: _dedup(list(frag.facts))
+            for frag in fragments
+        },
+        location_facts=_dedup_location_facts(location_facts),
         constraints=_dedup(constraints),
         issues=issues,
         opportunities=_dedup(opportunities),
@@ -87,6 +121,12 @@ def merge_fragments(
 
     fact_keys: dict[str, list[str]] = {}
     for f in snapshot.facts:
+        # Free-form model observations are independent facts, not variants of
+        # one field.  Only structured ``key: value`` facts participate in the
+        # contradiction check; otherwise 12 valid observations would trigger
+        # an L1 rework loop merely because they share the fallback label.
+        if "模型观察:" in f or "事实:" in f:
+            continue
         key = f.split(":")[0] if ":" in f else f
         fact_keys.setdefault(key, []).append(f)
     for key, variants in fact_keys.items():
@@ -141,6 +181,58 @@ async def l1_aggregate(
 
     snapshot = merge_fragments(fragments, run_id=run_id)
     snapshot.context_version = context_version
+    # Preserve the dimension that actually consumed each KG fact.  The
+    # flattened ``facts`` list remains backwards compatible, while L2 reads
+    # this scoped map to avoid feeding unrelated evidence into a dimension.
+    try:
+        from app.services.step_report import get_session_step_reports
+
+        for step in await get_session_step_reports(session_id):
+            if step.get("stage") != "L1" or not step.get("dimension_key"):
+                continue
+            consumed = (step.get("outputs") or {}).get("kg_evidence_consumed") or {}
+            statements = consumed.get("fact_statements") or []
+            if not statements:
+                continue
+            dim = step["dimension_key"]
+            scoped = [f"[{dim}] KG事实: {statement}" for statement in statements]
+            snapshot.facts_by_dimension[dim] = _dedup(
+                [*(snapshot.facts_by_dimension.get(dim) or []), *scoped]
+            )
+            snapshot.facts = _dedup([*snapshot.facts, *scoped])
+    except Exception as exc:
+        logger.warning("[l1_aggregate] dimension-scoped KG fact merge failed: %s", exc)
+    # Promote the canonical session-KG evidence into the L1Snapshot.  The
+    # dimension compiler may legitimately produce no markdown facts when a
+    # remote model returns prose without headings; that must not erase the
+    # real GIS/KG facts that L1 observed and that L2 is required to consume.
+    kg_fact_count = 0
+    try:
+        from app.agent.explore.service import retrieve_evidence
+        from app.modules.schema.contracts.evidence_contracts import ExplorationRequest
+
+        evidence = await retrieve_evidence(
+            ExplorationRequest(
+                run_id=f"{session_id}:l1_snapshot",
+                request_type="spatial_lookup",
+                query="L1 canonical session KG facts",
+                stage="L1",
+                dimension_key="l1_snapshot",
+                query_purpose="snapshot_fact_production",
+                entity_scope=["parcels", "facilities", "roads", "annotations"],
+            ),
+            session_id=session_id,
+            village_name=state.get("config", {}).get("village_name", ""),
+        )
+        kg_facts = [fact.statement for fact in evidence.evidence_bundle.facts]
+        kg_fact_count = len(kg_facts)
+        snapshot.facts = _dedup([*snapshot.facts, *kg_facts])
+        snapshot.sources = _dedup_sources([
+            *snapshot.sources,
+            *evidence.evidence_bundle.sources,
+        ])
+    except Exception as exc:  # preserve L1 compiler output; gate remains fail-closed
+        logger.warning("[l1_aggregate] session KG fact promotion failed: %s", exc)
     artifact_id = f"l1-{run_id}-v1"
     snapshot.artifact_id = artifact_id
     snapshot.provenance = Provenance(
@@ -174,6 +266,40 @@ async def l1_aggregate(
     review_id = write_review_package(pkg, base_dir=base_dir)
     logger.info("[l1_aggregate] review package written: review_id=%s", review_id)
 
+    try:
+        from app.services.step_report import save_step_report
+
+        await save_step_report(
+            session_id,
+            "L1",
+            step_name="l1_aggregate",
+            layer=1,
+            outputs={
+                "fact_count": len(snapshot.facts),
+                "facts_produced": snapshot.facts,
+                "facts_by_dimension": snapshot.facts_by_dimension,
+                "location_facts": [fact.model_dump(mode="json") for fact in snapshot.location_facts],
+                "constraint_count": len(snapshot.constraints),
+                "source_refs": [s.reference for s in snapshot.sources],
+                "gate_route": gate_decision.feedback_route or ("PASS" if gate_decision.passed else "FAIL"),
+            },
+            artifacts=[{
+                "key": "l1_snapshot",
+                "artifact_id": ref.artifact_id,
+                "module": ref.module,
+                "run_id": ref.run_id,
+                "artifact_type": ref.artifact_type,
+                "revision": ref.revision,
+                "context_version": ref.context_version,
+            }],
+            diagnostics={
+                "fact_producer": "L1 report compiler + session KG evidence promotion",
+                "kg_fact_count": kg_fact_count,
+            },
+        )
+    except Exception as exc:
+        logger.debug("[l1_aggregate] step report failed: %s", exc)
+
     return {
         "l1_snapshot_ref": {
             "artifact_id": artifact_id,
@@ -182,6 +308,16 @@ async def l1_aggregate(
             "artifact_type": "L1Snapshot",
             "revision": "v1",
             "context_version": context_version,
+        },
+        "artifact_refs": {
+            "l1_snapshot": {
+                "artifact_id": artifact_id,
+                "module": "l1_observe",
+                "run_id": run_id,
+                "artifact_type": "L1Snapshot",
+                "revision": "v1",
+                "context_version": context_version,
+            }
         },
         "l1_gate_decision": gate_decision.model_dump(mode="json"),
         "l1_review_id": review_id,

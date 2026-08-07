@@ -7,6 +7,8 @@ back to problem_addressed and functions) via direction_from_location().
 """
 from __future__ import annotations
 
+import re
+
 from app.modules.parsing.spatial_language import direction_from_location
 from app.modules.schema.contracts.l3_contracts import PlanningIntervention
 from app.modules.schema.contracts.parse_result_contracts import ParseDiagnostic
@@ -28,6 +30,42 @@ _DIRECTION_TO_8WIND = {
 
 _ATTR_KEYS = ("dlbm_in", "land_use")
 _TOPO_KEYS = ("adjacent_to", "near", "within")
+
+
+def _explicit_village_name(intervention: PlanningIntervention) -> str:
+    """Extract only a village name explicitly present in the model text.
+
+    This is a textual reference, not a coordinate guess. Generic phrases
+    such as ``全村`` are ignored because they do not identify a GIS entity.
+    """
+    text = " ".join(
+        [intervention.name, intervention.problem_addressed, *intervention.functions]
+    )
+    # Prefer the closed-set natural-village names produced by KG enrichment.
+    # This prevents a greedy regex from turning phrases such as
+    # “主要功能为村庄服务” into a fake place name.
+    try:
+        from app.modules.kg.enrichment.report_entity_enrichment import (
+            _KNOWN_NATURAL_VILLAGES,
+        )
+
+        matches = [
+            (text.find(village), village)
+            for village in _KNOWN_NATURAL_VILLAGES
+            if village in text
+        ]
+        if matches:
+            _, village = min(matches, key=lambda item: item[0])
+            return village if village.endswith("村") else village + "村"
+    except Exception:
+        pass
+
+    # Conservative fallback for a root-village name explicitly delimited by
+    # punctuation/whitespace. Never infer from an arbitrary long Chinese span.
+    match = re.search(r"(?:^|[，。；：、\s(（])([\u4e00-\u9fff]{2,4}村)(?=$|[，。；：、\s)）])", text)
+    if match and match.group(1) not in {"全村", "村庄", "村域"}:
+        return match.group(1)
+    return ""
 
 
 def _direction_from_requirements(intervention: PlanningIntervention) -> str:
@@ -93,6 +131,23 @@ def _build_candidates(
                     ),
                 )
             )
+
+    # Real L3 prose occasionally contains an explicit village name but omits
+    # the private INSTRUCTION table. Preserve that textual reference so the
+    # normal resolver can locate the corresponding GIS feature. Do not invent
+    # a location when the prose contains no named village.
+    village_name = _explicit_village_name(intervention)
+    if village_name and not candidates:
+        candidates.append(
+            SpatialReferenceSpec(
+                type="topological",
+                topo="nearby",
+                reference=RefObject(
+                    kind="entity_type",
+                    filter={"label_contains": village_name},
+                ),
+            )
+        )
 
     return candidates
 

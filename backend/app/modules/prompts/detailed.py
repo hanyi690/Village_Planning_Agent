@@ -78,8 +78,23 @@ INSTRUCTION_OUTPUT_GUIDE = """
 约束：
 - 位置必须与正文描述一致，禁止编造
 - 只可提取正文已出现的内容，不得新增规划对象
+- 对产业、设施、交通、生态、空间结构、土地利用等空间维度，正文
+  至少应有一条规划对象带有可核验的自然村、方位、功能分区或村域范围；
+  不得把所有空间对象的“位置”都留空。L3 只需提供粗粒度空间引用，
+  地块级精确落位由后续 GROUND/SELECT 完成。
 - 表格前后各留一个空行；无内容时输出空表格（保留表头行与分隔行）
 
+"""
+
+LOCATION_EVIDENCE_GUIDE = """
+【空间位置证据闭集】
+以下是上游报告与已绑定 GIS/KG 的可核验位置证据：
+{location_evidence}
+
+硬约束：
+- 只能使用上面证据中出现、且与当前对象有直接关系的位置；不得从行政区划名单推断对象位置。
+- 证据没有支持的位置必须留空，不能为了让表格完整而补写自然村名。
+- “位于某村”必须同时在上游现状/规划依赖中有同一对象与该村的明确关系；仅出现村名不构成位置证据。
 """
 
 
@@ -897,6 +912,10 @@ def get_dimension_prompt(dimension_key: str, revision_instruction: str = "", **k
             kwargs[param] = ""
 
     result = template.format(**kwargs)
+
+    location_evidence = str(kwargs.get("location_evidence") or "").strip()
+    if location_evidence:
+        result += LOCATION_EVIDENCE_GUIDE.format(location_evidence=location_evidence)
 
     # 添加修订指令（级联修订场景）
     if revision_instruction:

@@ -26,6 +26,24 @@ def test_land_use_instruction_becomes_spatial_facts(land_use_report):
     assert any("文化礼堂" in f for f in frag.spatial_facts)
 
 
+def test_l1_location_facts_use_instruction_rows_not_prose():
+    frag = compile_l1_observation(
+        dimension_key="location",
+        content="# 区位\n正文提到金田村，但不应直接成为地点事实。",
+        instruction=(
+            "【INSTRUCTION】\n"
+            "| 类型 | 名称 | 位置 | 描述 | 规模 |\n"
+            "| --- | --- | --- | --- | --- |\n"
+            "| 现状项目 | 村庄公共服务 | 金田村 | 服务设施集中 | 1处 |\n"
+        ),
+        report_id="rpt-location",
+        summary="",
+    )
+    assert len(frag.location_facts) == 1
+    assert frag.location_facts[0].normalized_name == "金田村"
+    assert frag.location_facts[0].source_report_ref == "rpt-location"
+
+
 def test_socio_economic_missing_data_becomes_evidence_gap(socio_economic_report):
     frag = compile_l1_observation(**socio_economic_report, run_id="r1")
     assert len(frag.evidence_gaps) == 1

@@ -16,7 +16,6 @@ from app.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
-_VLL_RE = re.compile(r"([\u4e00-\u9fff]{2,8}村)")
 _BSM_NUM_RE = re.compile(r"(\d{15,25})")
 
 # 金田村 12 个自然村（行政事实，规划文本 L160）— 用于过滤"金田村(村域)/个自然村(泛称)"等非村名
@@ -24,19 +23,6 @@ _KNOWN_NATURAL_VILLAGES = {
     "园寨", "田坑", "社前", "分水", "清明", "塘笃",
     "长塘", "炉池", "肩丰", "营仔", "新山", "黄竹",
 }
-_VIL_EXCLUDES = {"金田村", "自然村", "全村", "该村", "各村", "本村"}
-
-
-def _is_village_name(name: str) -> bool:
-    if name in _VIL_EXCLUDES:
-        return False
-    if name.endswith("自然村"):
-        base = name[:-3]
-    elif name.endswith("村"):
-        base = name[:-1]
-    else:
-        base = name
-    return base in _KNOWN_NATURAL_VILLAGES
 
 
 # ── L1 INSTRUCTION 表 → LocationAnchor 提取 ─────────────────────────────
@@ -160,7 +146,7 @@ def _commit_instruction_anchors(
 
     返回写入的条目数。
     """
-    from app.modules.kg.gazetteer import GazetteerEntry, save_gazetteer
+    from app.modules.kg.gazetteer import GazetteerEntry
 
     anchors = _extract_instruction_anchors(instruction_texts or {})
     if not anchors:
@@ -200,10 +186,6 @@ def _commit_instruction_anchors(
             )
             gazetteer.upsert(combo)
             written += 1
-    try:
-        save_gazetteer(gazetteer, "jintian")
-    except Exception as e:
-        logger.warning("[Enrich:instruction] gazetteer save failed: %s", e)
     logger.info(
         "[Enrich:instruction] %d anchors -> %d combo entries",
         len(anchors), written,
@@ -217,19 +199,140 @@ def _get_semantic_memory():
     return get_semantic_memory()
 
 
-def _extract_village_mentions(reports: Dict[str, str]) -> List[Dict[str, str]]:
-    """村名 + 特征窗口提取（L1 回流输入）。"""
+def _location_fact_mentions(location_facts: Optional[List[Any]]) -> List[Dict[str, str]]:
+    """Convert structured L1 location facts into KG enrichment mentions."""
     mentions: List[Dict[str, str]] = []
-    seen = set()
-    for dim_key, content in (reports or {}).items():
-        for m in _VLL_RE.finditer(content or ""):
-            name = m.group(1)
-            if not _is_village_name(name) or name in seen:
+    seen: set[tuple[str, str]] = set()
+    for fact in location_facts or []:
+        evidence_text = " ".join(
+            str(getattr(fact, field, "") or "").strip()
+            for field in ("normalized_name", "spatial_hint", "source_span")
+        )
+        if not evidence_text.strip():
+            continue
+        dim = str(getattr(fact, "dimension_key", "") or "l1_location_fact")
+        for base in _KNOWN_NATURAL_VILLAGES:
+            if base not in evidence_text or (base, dim) in seen:
                 continue
-            seen.add(name)
-            window = (content or "")[m.start(): m.start() + 120]
-            mentions.append({"name": name, "hints": window[:80], "dim": dim_key})
+            seen.add((base, dim))
+            mentions.append({
+                "name": f"{base}村",
+                "hints": str(
+                    getattr(fact, "spatial_hint", "")
+                    or getattr(fact, "source_span", "")
+                    or getattr(fact, "normalized_name", "")
+                )[:160],
+                "dim": dim,
+            })
     return mentions
+
+
+def _feature_text(feature: Any) -> str:
+    raw = getattr(feature, "_raw", None)
+    if not isinstance(raw, dict):
+        raw = getattr(feature, "properties", None)
+    if not isinstance(raw, dict):
+        raw = {}
+    values = [str(v) for v in raw.values() if v not in (None, "")]
+    for attr in ("name", "label", "description", "layer_type"):
+        value = getattr(feature, attr, None)
+        if value:
+            values.append(str(value))
+    return " ".join(values)
+
+
+def _feature_centroid(feature: Any) -> Optional[List[float]]:
+    geometry = getattr(feature, "geometry", None)  # getattr intentional: heterogeneous feature objects
+    if not geometry:
+        return None
+    try:
+        from app.modules.spatial_ops.geometry import _compute_centroid
+
+        return _compute_centroid({
+            "type": "FeatureCollection",
+            "features": [{"type": "Feature", "properties": {}, "geometry": geometry}],
+        })
+    except Exception:
+        return None
+
+
+def _materialize_gis_village_entries(
+    gazetteer: Any,
+    bundle: Any,
+    village_bases: List[str],
+) -> int:
+    """Bind report village facts to real GIS parcels through named features.
+
+    This is deliberately evidence-first: a village entry is created only
+    when an uploaded bundle feature contains the village name and has usable
+    geometry.  Its BSMs come from the nearest existing KG residential
+    cluster; no parcel or coordinate is fabricated for an unlocated village.
+    """
+    from app.modules.kg.gazetteer import GazetteerEntry
+
+    if gazetteer is None or bundle is None:
+        return 0
+    clusters = [
+        entry for entry in getattr(gazetteer, "entries", [])
+        if entry.source == "kg_cluster" and entry.bsms and entry.centroid
+    ]
+    if not clusters:
+        return 0
+    features: List[Any] = []
+    for group_name in ("points", "lines", "polygons"):
+        group = getattr(bundle, group_name, None)
+        if group is None:
+            continue
+        try:
+            features.extend(list(getattr(group, "all_features", []) or []))
+        except Exception:
+            continue
+
+    written = 0
+    for base in village_bases:
+        village_name = f"{base}村"
+        if gazetteer.resolve(village_name, fuzzy=False) is not None:
+            existing = gazetteer.resolve(village_name, fuzzy=False)
+            if existing is not None and existing.bsms:
+                continue
+        observations: List[List[float]] = []
+        for feature in features:
+            text = _feature_text(feature)
+            if base not in text:
+                continue
+            point = _feature_centroid(feature)
+            if point and len(point) >= 2:
+                observations.append([float(point[0]), float(point[1])])
+        if not observations:
+            continue
+        centroid = [
+            sum(point[0] for point in observations) / len(observations),
+            sum(point[1] for point in observations) / len(observations),
+        ]
+        cluster = min(
+            clusters,
+            key=lambda entry: (
+                (float(entry.centroid[0]) - centroid[0]) ** 2
+                + (float(entry.centroid[1]) - centroid[1]) ** 2
+            ),
+        )
+        gazetteer.upsert(GazetteerEntry(
+            name=village_name,
+            aliases=[base, f"{base}自然村"],
+            entity_uri=cluster.entity_uri,
+            bsms=list(cluster.bsms),
+            centroid=list(cluster.centroid),
+            source="gis_name_binding",
+            confidence=0.8,
+            description=(
+                f"{village_name}：由上传 GIS 属性名匹配 {len(observations)} 个真实要素，"
+                f"绑定最近 KG 居民点 {cluster.name}。"
+            ),
+        ))
+        written += 1
+    if written:
+        logger.info("[Enrich:GIS] materialized %d named village bindings", written)
+    return written
 
 
 _BATCH_CONFIRM_SIZE = 15  # 批量判定小批大小（单次 prompt 可读性优先，避免 104 对全量一次）
@@ -345,7 +448,7 @@ def _commit_village_binding(
         则校验候选 cluster 质心与该坐标距离 < 200m，防止"多村名绑同 cluster"。
     """
     from app.modules.kg import EntityAnnotation
-    from app.modules.kg.gazetteer import GazetteerEntry, save_gazetteer, spatial_check
+    from app.modules.kg.gazetteer import GazetteerEntry, spatial_check
 
     # 闸门 1：特征词空间校验
     if not spatial_check(mention["hints"], _cluster_dlbms(chosen, bsm_to_dlbm)):
@@ -374,10 +477,6 @@ def _commit_village_binding(
         description=f"{mention['name']}（{chosen.name}，源自{mention['dim']}报告）",
     )
     gazetteer.upsert(new_entry)
-    try:
-        save_gazetteer(gazetteer, "jintian")
-    except Exception as e:
-        logger.warning("[Enrich] gazetteer save failed: %s", e)
 
     ann = EntityAnnotation(
         entity_uri=chosen.entity_uri,
@@ -419,6 +518,7 @@ async def extract_bindings(
     kg: Any = None,
     bundle: Any = None,
     instruction_texts: Optional[Dict[str, str]] = None,
+    location_facts: Optional[List[Any]] = None,
 ) -> Dict[str, Any]:
     """实体语义增强：村名→gazetteer 绑定（L1）+ 分区/项目实体注解（L2/L3）。
 
@@ -426,30 +526,65 @@ async def extract_bindings(
     """
     from app.modules.kg import require_session_kg
     from app.modules.kg.gazetteer import build_gazetteer
-    from app.modules.kg.gazetteer.gazetteer import save_gazetteer
     from app.modules.kg.memory import save_memory_state
 
     kg = kg if kg is not None else require_session_kg(session_id)
 
     memory = _get_semantic_memory()
     gazetteer = build_gazetteer(kg, bundle, memory)
-    if gazetteer.entries:
-        try:
-            save_gazetteer(gazetteer, "jintian")
-        except Exception as e:
-            logger.warning("[Enrich] gazetteer save failed: %s", e)
+    gis_village_entries = _materialize_gis_village_entries(
+        gazetteer,
+        bundle,
+        list(dict.fromkeys([
+            str(item.get("name", ""))[:-1]
+            for item in _location_fact_mentions(location_facts)
+            if str(item.get("name", "")).endswith("村")
+        ])),
+    )
+    # The planning context is intentionally built once before L1.  Enrichment
+    # updates the same in-memory gazetteer object consumed by later GROUND;
+    # rebuilding the whole context here would violate the frozen context_ref.
+    try:
+        from app.services.context.planning_context import get_cached_context
+
+        cached_context = get_cached_context(session_id)
+        if cached_context is not None:
+            cached_context.gazetteer = gazetteer
+            if getattr(cached_context, "ports", None) is not None:
+                from app.modules.kg.adapters.gazetteer_adapter import KGGazetteerAdapter
+
+                cached_context.ports.gazetteer = KGGazetteerAdapter(gazetteer)
+    except Exception as exc:
+        logger.warning("[Enrich:GIS] cached context gazetteer update failed: %s", exc)
 
     bound_clusters = 0
     anchor_entries = 0
     if wave in (1, 3):
         bsm_to_dlbm = _build_bsm_to_dlbm(kg)
-        mentions = _extract_village_mentions(reports)
+        mentions: List[Dict[str, str]] = _location_fact_mentions(location_facts)
         direct_picks = []          # 候选==1（gazetteer 命中）直接绑定
         ambiguous = []             # 候选>1 → 批量 LLM 判定
         unresolved_amb = []
         for mention in mentions:
             candidates = _gather_candidates(mention, gazetteer, bsm_to_dlbm)
             if not candidates:
+                # Preserve the L1 fact in semantic KG even when GIS has no
+                # named geometry yet.  An empty binding is explicit and
+                # fail-closed; it must not be mistaken for a resolved parcel.
+                _get_semantic_memory().add_entity_annotation(
+                    __import__("app.modules.kg", fromlist=["EntityAnnotation"]).EntityAnnotation(
+                        entity_uri=f"pln:l1_location_fact:{mention['name']}",
+                        entity_type="L1LocationFact",
+                        description=(
+                            f"{mention['name']}（L1 位置事实，尚无上传 GIS 要素完成空间绑定；"
+                            f"来源：{mention.get('dim', '')}）"
+                        ),
+                        source_text_refs=[mention.get("dim", "")],
+                        round_added=wave,
+                        valid_from_round=wave,
+                        confidence=0.5,
+                    )
+                )
                 continue
             if len(candidates) == 1:
                 direct_picks.append((mention, candidates[0]))
@@ -551,6 +686,7 @@ async def extract_bindings(
         "wave": wave,
         "village_bound": bound_clusters,
         "anchor_entries": anchor_entries,
+        "gis_village_entries": gis_village_entries,
         "semantic_entities": semantic_written,
     }
     logger.info("[Enrich] session=%s stats=%s", session_id, stats)
@@ -558,7 +694,8 @@ async def extract_bindings(
 
 
 async def run_wave(session_id: str, wave: int, reports: Dict[str, str], bundle: Any = None,
-                   instruction_texts: Optional[Dict[str, str]] = None) -> Dict[str, Any]:
+                   instruction_texts: Optional[Dict[str, str]] = None,
+                   location_facts: Optional[List[Any]] = None) -> Dict[str, Any]:
     """Wave 末尾入口（completion node 调用，bundle 由 agent 层传入）。"""
     from app.core.settings import GIS_EXPLORE_LLM_ENABLED
 
@@ -581,6 +718,7 @@ async def run_wave(session_id: str, wave: int, reports: Dict[str, str], bundle: 
     return await extract_bindings(
         session_id, wave, reports, llm=llm, bundle=bundle,
         instruction_texts=instruction_texts,
+        location_facts=location_facts,
     )
 
 

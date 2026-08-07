@@ -218,17 +218,21 @@ def compute_parcel_relations(parcels: List[Any], roads: Optional[List[Any]] = No
 
     # L2: nearby (area-weighted centroid distance threshold)
     try:
-        centroids = gdf_metric.geometry.centroid
+        # Materialize geometry and metadata once.  Repeated GeoSeries.iloc
+        # access inside the O(n²) loop is both slow and unstable with the
+        # Windows pandas/geopandas stack on the real 660-parcel fixture.
+        centroids = list(gdf_metric.geometry.centroid)
+        parcel_meta = list(zip(gdf.bsm.tolist(), gdf.dlbm.tolist()))
         # area-weighted: larger parcels have wider nearby range
-        sqrt_areas = [max(g.area, 1) ** 0.5 for g in gdf_metric.geometry]
+        sqrt_areas = [max(g.area, 1) ** 0.5 for g in list(gdf_metric.geometry)]
         for i in range(len(centroids)):
             for j in range(i + 1, len(centroids)):
-                dist = centroids.iloc[i].distance(centroids.iloc[j])
+                dist = centroids[i].distance(centroids[j])
                 threshold = min(500.0, max(200.0, (sqrt_areas[i] + sqrt_areas[j]) * 2))
                 if dist <= threshold:
                     result.nearby.append(NearbyRelation(
-                        bsm_a=gdf.iloc[i].bsm, bsm_b=gdf.iloc[j].bsm,
-                        dlbm_a=gdf.iloc[i].dlbm, dlbm_b=gdf.iloc[j].dlbm,
+                        bsm_a=parcel_meta[i][0], bsm_b=parcel_meta[j][0],
+                        dlbm_a=parcel_meta[i][1], dlbm_b=parcel_meta[j][1],
                         centroid_distance_m=round(dist, 2),
                     ))
     except Exception as e:
@@ -280,9 +284,17 @@ def compute_parcel_relations(parcels: List[Any], roads: Optional[List[Any]] = No
                     for a in range(len(crossed_bsms)):
                         for b in range(a + 1, len(crossed_bsms)):
                             try:
-                                clip_len = road_geom.intersection(
-                                    crossed_bsms[a][1].union(crossed_bsms[b][1])
-                                ).length
+                                # Current land-use parcels are a partition and
+                                # therefore do not overlap.  Measuring each
+                                # parcel intersection separately is equivalent
+                                # to intersecting their union, but avoids a
+                                # repeated GEOS polygon-union call for every
+                                # road/parcel pair (which is prohibitively
+                                # expensive and unstable on Windows).
+                                clip_len = (
+                                    road_geom.intersection(crossed_bsms[a][1]).length
+                                    + road_geom.intersection(crossed_bsms[b][1]).length
+                                )
                             except Exception:
                                 clip_len = 0.0
                             result.connected.append(ConnectedRelation(

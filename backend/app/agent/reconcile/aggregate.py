@@ -107,7 +107,10 @@ def build_coverage_matrix(program, specs, grounding_result, decision, changeset,
 
 
 def check_l3_l4_target_coverage(intent, planned_state) -> list[ReconciliationInconsistency]:
-    project_targets = list(getattr(intent, "project_targets", None) or [])
+    project_targets = [
+        p for p in (getattr(intent, "project_targets", None) or [])
+        if getattr(p, "requires_spatial", True)
+    ]
     road_targets = list(getattr(intent, "road_targets", None) or [])
     zone_targets = list(getattr(intent, "zone_targets", None) or [])
     parcels = list(getattr(planned_state, "parcels", None) or [])

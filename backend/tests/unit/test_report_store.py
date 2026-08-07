@@ -171,6 +171,36 @@ async def test_bulk_save_upsert_same_report_id(report_session):
 
 
 @pytest.mark.asyncio
+async def test_bulk_save_is_idempotent_for_instruction_column(report_session):
+    from app.services.report_store import ReportStore
+
+    make_session, cleanup = report_session
+    sid = await make_session("sess-instruction-idempotent")
+    store = ReportStore()
+    try:
+        pending = {
+            "session_id": sid, "dimension_key": "location", "layer": 1,
+            "version": 1, "report_id": "r-instruction-idempotent",
+            "content": (
+                "正文\n\n【INSTRUCTION】\n"
+                "| 类型 | 名称 | 位置 | 描述 | 规模 |\n"
+                "| --- | --- | --- | --- | --- |\n"
+                "| 现状分区 | 金田村 | 金田村 | 会话村名 | |\n"
+            ),
+            "summary": "{}",
+        }
+        await store.bulk_save([pending])
+        # Simulates the second completion save after the first call split the
+        # mutable pending dict into content + instruction.
+        await store.bulk_save([pending])
+        reports = await store.get_layer_reports_with_sources(sid, 1)
+        assert reports["location"]["content"] == "正文"
+        assert "【INSTRUCTION】" in (reports["location"]["instruction"] or "")
+    finally:
+        await cleanup()
+
+
+@pytest.mark.asyncio
 async def test_delete_session_reports(report_session):
     from app.database.operations import get_session_reports_async
     from app.services.report_store import ReportStore

@@ -37,3 +37,13 @@ def test_parse_instruction_tables_facility_rows():
 
 def test_parse_instruction_tables_empty():
     assert parse_instruction_tables("") == {}
+
+
+def test_parse_instruction_tables_l1_location_contract():
+    parsed = parse_instruction_tables(
+        "【INSTRUCTION】\n"
+        "| 类型 | 名称 | 位置 | 描述 | 规模 |\n"
+        "| --- | --- | --- | --- | --- |\n"
+        "| 现状项目 | 村庄公共服务 | 金田村 | 公共服务设施集中 | 1处 |\n"
+    )
+    assert parsed["l1_rows"][0]["位置"] == "金田村"

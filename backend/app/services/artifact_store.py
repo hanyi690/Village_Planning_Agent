@@ -85,7 +85,11 @@ class FilesystemArtifactStore:
     def store(self, ref: ArtifactRef, payload: dict[str, Any]) -> ArtifactRef:
         d = self._artifact_dir(ref)
         d.mkdir(parents=True, exist_ok=True)
-        payload_bytes = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+        # Canonical serialization makes replay checksum validation stable
+        # across process/order differences.
+        payload_bytes = json.dumps(
+            payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+        ).encode("utf-8")
         checksum = hashlib.sha256(payload_bytes).hexdigest()
 
         # atomic payload write: temp file in same dir -> rename

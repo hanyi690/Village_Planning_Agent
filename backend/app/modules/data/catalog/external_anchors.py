@@ -715,6 +715,7 @@ class ExternalAnchorPipeline:
                     f = PointFeature(
                         geometry=geom, bsm="",
                         layer_type=layer_type,
+                        category=feat.category.value,
                         _raw={
                             **feat.raw,
                             "anchor_source": feat.source,

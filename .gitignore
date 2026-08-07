@@ -144,7 +144,13 @@ backend/scripts/_chain_out.txt
 
 # Graphify output
 .graphify_python
+.graphify_detect.json
+.graphify_incremental.json
 graphify-out/
+
+# Real-LLM session debug logs
+backend/real-llm-*.stdout
+backend/real-llm-*.stderr
 
 # Script cache
 scripts/.kg_cache/

@@ -32,7 +32,7 @@ import hashlib
 import json
 from collections import OrderedDict
 from dataclasses import dataclass
-from threading import Lock
+from threading import Lock, RLock
 from typing import Any, Dict, List, Optional, Tuple
 
 from app.utils.logger import get_logger
@@ -119,10 +119,12 @@ class KGManager:
         kg = manager.get_or_build_layer1(village_name, bundle=bundle)
         manager.register_session(session_id, kg)
 
-    Thread safety:
-        Singleton creation is thread-safe via __new__ + Lock.
-        Cache operations are NOT thread-safe (GIL-dependent in CPython).
-        For multi-threaded environments, add per-cache locks.
+        Thread safety:
+        RDFLib graphs are not mutated or cloned concurrently. A process-local
+        re-entrant build lock serializes Layer 1 construction, cache cloning,
+        and session registration. This is required because Session background
+        tasks may run on different threads/event loops during TestClient and
+        ASGI shutdown/startup.
     """
 
     _instance: Optional["KGManager"] = None
@@ -137,6 +139,7 @@ class KGManager:
                 instance._query_cache: Dict[str, Tuple[int, Any]] = {}
                 instance._session_versions: Dict[str, int] = {}
                 instance._cache_enabled = True
+                instance._build_lock = RLock()
                 cls._instance = instance
             return cls._instance
 
@@ -171,48 +174,52 @@ class KGManager:
         """
         from app.modules.kg.builder import PlanningKG, KGBuilder
 
-        # Use typed parcels for cache key when available
-        parcels = bundle.polygons.get("landuse_current") if bundle else None
-        cache_key = compute_layer1_cache_key(village_name, parcels)
-        key_str = str(cache_key) if cache_key else ""
+        # RDFLib's in-memory store is process-local and must not be cloned or
+        # mutated concurrently. Keep the lock across the complete check/build
+        # sequence so two sessions cannot both construct the same graph while
+        # another thread is cloning the cache.
+        with self._build_lock:
+            # Use typed parcels for cache key when available
+            parcels = bundle.polygons.get("landuse_current") if bundle else None
+            cache_key = compute_layer1_cache_key(village_name, parcels)
+            key_str = str(cache_key) if cache_key else ""
 
-        # Try cache
-        if self._cache_enabled and key_str and key_str in self._layer1_cache:
-            cached_kg = self._layer1_cache.get(key_str)
-            if cached_kg is not None:
-                kg = cached_kg.clone_static_layer()
-                logger.info("[KGManager] Layer 1 cache HIT: %s", key_str)
-                return kg, True
+            if self._cache_enabled and key_str and key_str in self._layer1_cache:
+                cached_kg = self._layer1_cache.get(key_str)
+                if cached_kg is not None:
+                    kg = cached_kg.clone_static_layer()
+                    logger.info("[KGManager] Layer 1 cache HIT: %s", key_str)
+                    return kg, True
 
-        # Build fresh
-        if bundle is not None:
-            kg = KGBuilder.build(
-                village_name, bundle,
-                parcel_relations=parcel_relations,
-                constraint_index=constraint_index,
-            )
-        else:
-            kg = PlanningKG(village_name=village_name)
-            logger.warning("[KGManager] No bundle provided — skipping Layer 1 build")
+            if bundle is not None:
+                kg = KGBuilder.build(
+                    village_name, bundle,
+                    parcel_relations=parcel_relations,
+                    constraint_index=constraint_index,
+                )
+            else:
+                kg = PlanningKG(village_name=village_name)
+                logger.warning("[KGManager] No bundle provided — skipping Layer 1 build")
 
-        # Store in cache
-        if self._cache_enabled and key_str:
-            self._layer1_cache.put(key_str, kg.clone_static_layer())
-            logger.info("[KGManager] Layer 1 cached: %s (%d triples)", key_str, kg.get_triple_count())
+            if self._cache_enabled and key_str:
+                self._layer1_cache.put(key_str, kg.clone_static_layer())
+                logger.info("[KGManager] Layer 1 cached: %s (%d triples)", key_str, kg.get_triple_count())
 
-        return kg, False
+            return kg, False
 
     # ── Session management ─────────────────────────────────────────
 
     def register_session(self, session_id: str, kg: Any) -> None:
         """Register a KG instance for a session."""
-        self._session_kgs[session_id] = kg
-        self._session_versions.setdefault(session_id, 1)
+        with self._build_lock:
+            self._session_kgs[session_id] = kg
+            self._session_versions.setdefault(session_id, 1)
         logger.debug("[KGManager] Session registered: %s", session_id)
 
     def get_session_kg(self, session_id: str) -> Optional[Any]:
         """Get the KG instance for a session."""
-        return self._session_kgs.get(session_id)
+        with self._build_lock:
+            return self._session_kgs.get(session_id)
 
     def require_session_kg(self, session_id: str) -> Any:
         """Return only ``session_id``'s KG or raise a clear isolation error.
@@ -237,21 +244,23 @@ class KGManager:
         Used by PARSE agent tool execution when no specific session_id is known.
         Returns None if no KG is available.
         """
-        if self._session_kgs:
-            return list(self._session_kgs.values())[-1]
-        if self._layer1_cache._data:
-            return list(self._layer1_cache._data.values())[-1]
-        return None
+        with self._build_lock:
+            if self._session_kgs:
+                return list(self._session_kgs.values())[-1]
+            if self._layer1_cache._data:
+                return list(self._layer1_cache._data.values())[-1]
+            return None
 
     def remove_session(self, session_id: str) -> None:
         """Remove a session and its associated data."""
-        self._session_kgs.pop(session_id, None)
-        self._session_versions.pop(session_id, None)
-        # Clean query cache entries for this session
-        prefix = f"{session_id}:"
-        keys_to_remove = [k for k in self._query_cache if k.startswith(prefix)]
-        for k in keys_to_remove:
-            del self._query_cache[k]
+        with self._build_lock:
+            self._session_kgs.pop(session_id, None)
+            self._session_versions.pop(session_id, None)
+            # Clean query cache entries for this session
+            prefix = f"{session_id}:"
+            keys_to_remove = [k for k in self._query_cache if k.startswith(prefix)]
+            for k in keys_to_remove:
+                del self._query_cache[k]
 
     # ── Query cache ────────────────────────────────────────────────
 
@@ -277,48 +286,50 @@ class KGManager:
 
         params_key = hashlib.md5(json.dumps(params, sort_keys=True).encode()).hexdigest()
         cache_key = f"{session_id}:{template_name}:{params_key}"
-        current_version = self._session_versions.get(session_id, 1)
+        with self._build_lock:
+            current_version = self._session_versions.get(session_id, 1)
 
-        cached = self._query_cache.get(cache_key)
-        if cached is not None and cached[0] == current_version:
-            logger.debug("[KGManager] Query cache HIT: %s", template_name)
-            return cached[1]
+            cached = self._query_cache.get(cache_key)
+            if cached is not None and cached[0] == current_version:
+                logger.debug("[KGManager] Query cache HIT: %s", template_name)
+                return cached[1]
 
-        # Execute query
-        result = query_kg(kg, template_name, **params)
-
-        # Cache with current version
-        self._query_cache[cache_key] = (current_version, result)
-        logger.debug(
-            "[KGManager] Query cached: %s (v=%d)", template_name, current_version
-        )
-
-        return result
+            # Serialize reads as well as writes. RDFLib's default in-memory
+            # store does not provide a cross-thread safety contract.
+            result = query_kg(kg, template_name, **params)
+            self._query_cache[cache_key] = (current_version, result)
+            logger.debug(
+                "[KGManager] Query cached: %s (v=%d)", template_name, current_version
+            )
+            return result
 
     def bump_version(self, session_id: str) -> int:
         """Bump KG version for session — invalidates all cached queries.
 
         Call this when KG triples are modified during closed-loop iterations.
         """
-        new_version = self._session_versions.get(session_id, 1) + 1
-        self._session_versions[session_id] = new_version
+        with self._build_lock:
+            new_version = self._session_versions.get(session_id, 1) + 1
+            self._session_versions[session_id] = new_version
         logger.info("[KGManager] Version bump: %s -> v%d", session_id, new_version)
         return new_version
 
     def get_session_version(self, session_id: str) -> int:
         """Return the mutation version for one session."""
-        if session_id not in self._session_kgs:
-            raise LookupError(
-                f"KG is not initialized for session_id={session_id!r}"
-            )
-        return self._session_versions.get(session_id, 1)
+        with self._build_lock:
+            if session_id not in self._session_kgs:
+                raise LookupError(
+                    f"KG is not initialized for session_id={session_id!r}"
+                )
+            return self._session_versions.get(session_id, 1)
 
     @property
     def version(self) -> int:
         """Get current version (for testing). Returns max version across sessions."""
-        if not self._session_versions:
-            return 0
-        return max(self._session_versions.values())
+        with self._build_lock:
+            if not self._session_versions:
+                return 0
+            return max(self._session_versions.values())
 
     # ── Convenience: full build with cache ──────────────────────────
 
@@ -347,12 +358,13 @@ class KGManager:
 
     def stats(self) -> Dict[str, Any]:
         """Get cache statistics."""
-        return {
-            "layer1_cache_size": len(self._layer1_cache),
-            "session_count": len(self._session_kgs),
-            "query_cache_size": len(self._query_cache),
-            "cache_enabled": self._cache_enabled,
-        }
+        with self._build_lock:
+            return {
+                "layer1_cache_size": len(self._layer1_cache),
+                "session_count": len(self._session_kgs),
+                "query_cache_size": len(self._query_cache),
+                "cache_enabled": self._cache_enabled,
+            }
 
 
 # ── Singleton access ───────────────────────────────────────────────

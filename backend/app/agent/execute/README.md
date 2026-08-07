@@ -64,7 +64,7 @@
 | 输入选择 | `app/modules/schema/contracts/selection_contracts.py` | `SiteSelectionDecision`、`LandDesignBrief` |
 | 输入意图 | `app/modules/schema/contracts/parse_contracts.py` | `SpatialPlanningIntent`（`project_targets`/`zone_targets`/`facilities`/`development_axes`/`road_targets`） |
 
-**子图边界**：输入 `ExecuteAgentState`（由 post-L3 `execute_node` 从 `PostL3ChainState` 构造）；输出 `parcel_changeset`、`planned_state`、`layout_configs`、`allocated_geojson`、`execution_errors`、`validation_result`。
+**子图边界**：输入 `ExecuteAgentState`（由 post-L3 `execute_node` 从当前 `AgentState` 构造）；输出 `parcel_changeset`、`planned_state`、`layout_configs`、`allocated_geojson`、`execution_errors`、`validation_result`。
 
 ## 依赖方向
 
@@ -86,7 +86,7 @@
 ## 相关文档
 
 - `../README.md` — agent 编排层总览
-- `../bootstrap/post_l3_chain.py` / `post_l3_nodes.py` — EXECUTE 子图在 post-L3 链中的调用（`execute_node`）
+- `../bootstrap/post_l3_main_nodes.py` — EXECUTE 子图在 post-L3 主图中的调用（`execute_node`）
 - `../select/README.md` — SELECT（上游：`SiteSelectionDecision`）
 - `../validate/README.md` — VALIDATE（下游：消费 `ParcelChangeSet` + `PlannedState`）
 - `app/modules/spatial_ops/` — 空间算子域

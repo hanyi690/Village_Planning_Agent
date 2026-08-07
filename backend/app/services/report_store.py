@@ -168,11 +168,20 @@ class ReportStore:
         if not reports:
             return []
 
-        # P8: 文末 INSTRUCTION 段剥离存储（content 保持展示文本）
+        # P8: 文末 INSTRUCTION 段剥离存储（content 保持展示文本）。
+        # bulk_save() is called both by the immediate write and by the layer
+        # completion hook.  After the first call content is already split;
+        # never erase the independently persisted instruction on the second
+        # idempotent save.
         for report_data in reports:
-            display_content, instruction = split_instruction(report_data["content"])
-            report_data["content"] = display_content
-            report_data["instruction"] = instruction or None
+            content = report_data.get("content", "") or ""
+            if _INSTRUCTION_MARKER in content:
+                display_content, instruction = split_instruction(content)
+                report_data["content"] = display_content
+                if instruction:
+                    report_data["instruction"] = instruction
+            elif not report_data.get("instruction"):
+                report_data["instruction"] = None
 
         async with get_async_session() as db:
             for report_data in reports:

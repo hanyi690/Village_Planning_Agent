@@ -9,11 +9,59 @@ from app.utils.logger import get_logger
 logger = get_logger(__name__)
 
 
-async def bootstrap_context_node(state: Dict[str, Any]) -> Dict[str, Any]:
-    if state.get("bootstrap_context_done"):
-        return {}
+def _hydrate_l1_spatial_facts(state: Dict[str, Any], context: Any) -> None:
+    """Attach L1 location facts and materialize their GIS↔KG bindings."""
+    try:
+        from app.agent.bootstrap.artifact_runtime import load_artifact, migrate_legacy_artifacts
+        from app.modules.schema.contracts.l1_contracts import L1Snapshot
 
+        migrated = dict(state)
+        migrated["artifact_refs"] = migrate_legacy_artifacts(state)
+        snapshot = load_artifact(migrated, "l1_snapshot", L1Snapshot)
+        if snapshot is None:
+            return
+        facts = list(getattr(snapshot, "location_facts", []) or [])
+        context.location_facts = facts
+
+        from app.modules.kg.enrichment.report_entity_enrichment import (
+            _location_fact_mentions,
+            _materialize_gis_village_entries,
+        )
+
+        bases = list(dict.fromkeys(
+            str(item.get("name", ""))[:-1]
+            for item in _location_fact_mentions(facts)
+            if str(item.get("name", "")).endswith("村")
+        ))
+        written = _materialize_gis_village_entries(
+            getattr(context, "gazetteer", None),
+            getattr(context, "bundle", None),
+            bases,
+        )
+        if written and getattr(context, "ports", None) is not None:
+            from app.modules.kg.adapters.gazetteer_adapter import KGGazetteerAdapter
+
+            context.ports.gazetteer = KGGazetteerAdapter(context.gazetteer)
+        logger.info(
+            "[bootstrap] hydrated %d L1 location facts; GIS village bindings=%d",
+            len(facts), written,
+        )
+    except Exception as exc:
+        logger.warning("[bootstrap] L1 spatial fact hydration failed: %s", exc)
+
+
+async def bootstrap_context_node(state: Dict[str, Any]) -> Dict[str, Any]:
     session_id = state.get("session_id", "")
+    if state.get("bootstrap_context_done") and session_id:
+        # A checkpoint may be resumed in a fresh worker process where the
+        # in-process cache is empty.  The boolean is not proof that the
+        # PlanningContext is available; rebuild the same authoritative
+        # context instead of allowing downstream stages to receive None.
+        from app.services.context.planning_context import get_cached_context
+        cached = get_cached_context(session_id)
+        if cached is not None:
+            _hydrate_l1_spatial_facts(state, cached)
+            return {}
     if not session_id:
         logger.warning("[bootstrap] no session_id; skipping context build")
         return {"bootstrap_context_done": True, "context_version": "", "context_fingerprint": ""}
@@ -47,6 +95,7 @@ async def bootstrap_context_node(state: Dict[str, Any]) -> Dict[str, Any]:
             l1_snapshot = L1Snapshot(**payload)
         if l1_snapshot is not None:
             context.location_facts = list(getattr(l1_snapshot, "location_facts", []) or [])
+            _hydrate_l1_spatial_facts(state, context)
     except Exception as exc:
         logger.debug("[bootstrap] L1 location facts unavailable: %s", exc)
 

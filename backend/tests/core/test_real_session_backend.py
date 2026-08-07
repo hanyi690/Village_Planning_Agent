@@ -134,18 +134,17 @@ async def test_real_session_fixture_runs_all_post_l3_stages(
             async def ainvoke(self, state, config=None):
                 return {"parcel_changeset": changeset, "layout_configs": [], "allocated_geojson": {}, "execution_errors": []}
 
-        monkeypatch.setattr("app.agent.execute.execute_agent.build_execute_agent_graph", lambda: FakeExecuteGraph())
+        monkeypatch.setattr(PlanningRuntimeService, "_execute_subgraph", FakeExecuteGraph())
         monkeypatch.setattr(nodes, "_get_cached_context", lambda state: context)
 
         state = create_initial_state(session_id, "金田村规划", "current_report")
         report_checksum = hashlib.sha256(report_text.encode("utf-8")).hexdigest()
         from app.agent.bootstrap.artifact_runtime import store_artifact
-        program_ref = store_artifact(state, "planning_program", "l3", "PlanningProgram", program.model_dump(mode="json"))
         state.update({
             "context_version": str(context.version),
             "context_fingerprint": getattr(context, "context_fingerprint", "") or "",
             "context_ref": {"session_id": session_id, "version": str(context.version)},
-            "artifact_refs": {"planning_program": program_ref},
+            "artifact_refs": {},
             "uploaded_files": [
                 {"filename": "current_report.md", "checksum": report_checksum},
                 *[
@@ -159,6 +158,12 @@ async def test_real_session_fixture_runs_all_post_l3_stages(
                 ],
             ],
         })
+        # Artifact identity is bound to the context version at write time.
+        # Build the fixture ref only after the state carries the canonical
+        # PlanningContext reference; the loader must remain fail-closed.
+        state["artifact_refs"]["planning_program"] = store_artifact(
+            state, "planning_program", "l3", "PlanningProgram", program.model_dump(mode="json")
+        )
         for fn in (nodes.parse_node, nodes.ground_node, nodes.select_node, nodes.execute_node, nodes.validate_node, nodes.reconcile_node, nodes.deliver_node):
             delta = await fn(state)
             if delta.get("artifact_refs"):

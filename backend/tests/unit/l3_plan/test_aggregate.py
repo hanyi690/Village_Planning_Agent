@@ -105,5 +105,6 @@ async def test_l3_aggregate_returns_refs(tmp_path, monkeypatch):
     assert mock_gate.called
     assert mock_write.call_args.args[0].run_id == "r1"
     assert result["l3_program_ref"]["artifact_type"] == "PlanningProgram"
+    assert result["artifact_refs"]["planning_program"]["artifact_type"] == "PlanningProgram"
     assert result["l3_gate_decision"]["stage"] == "l3"
     assert result["l3_review_id"] == "review-1"

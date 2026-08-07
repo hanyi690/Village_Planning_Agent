@@ -73,6 +73,6 @@
 ## 相关文档
 
 - `../README.md` — agent 编排层总览
-- `../bootstrap/post_l3_chain.py` — RECONCILE 的 RETRY_* 回退路由
+- `../bootstrap/graph.py` / `post_l3_main_nodes.py` — RECONCILE 的 RETRY_* 回退路由
 - `../validate/README.md` — VALIDATE（上游）
 - `../deliver/README.md` — DELIVER（下游消费者：`CoverageMatrix` → `TraceabilityEntry`）

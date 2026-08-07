@@ -170,6 +170,35 @@ async def l2_aggregate(
     review_id = write_review_package(pkg, base_dir=base_dir)
     logger.info("[l2_aggregate] review package written: review_id=%s", review_id)
 
+    try:
+        from app.services.step_report import save_step_report
+
+        await save_step_report(
+            session_id,
+            "L2",
+            step_name="l2_aggregate",
+            layer=2,
+            outputs={
+                "development_goals": strategy.development_goals,
+                "implementation_priorities": strategy.implementation_priorities,
+                "evidence_refs": strategy.evidence_refs,
+                "evidence_gap_count": len(strategy.evidence_gaps),
+                "gate_route": gate_decision.feedback_route or ("PASS" if gate_decision.passed else "FAIL"),
+            },
+            artifacts=[{
+                "key": "l2_strategy",
+                "artifact_id": ref.artifact_id,
+                "module": ref.module,
+                "run_id": ref.run_id,
+                "artifact_type": ref.artifact_type,
+                "revision": ref.revision,
+                "context_version": ref.context_version,
+            }],
+            diagnostics={"fact_consumer": "L2 dimension prompts via EXPLORE evidence service"},
+        )
+    except Exception as exc:
+        logger.debug("[l2_aggregate] step report failed: %s", exc)
+
     return {
         "l2_strategy_ref": {
             "artifact_id": artifact_id,
@@ -178,6 +207,16 @@ async def l2_aggregate(
             "artifact_type": "L2Strategy",
             "revision": "v1",
             "context_version": context_version,
+        },
+        "artifact_refs": {
+            "l2_strategy": {
+                "artifact_id": artifact_id,
+                "module": "l2_strategize",
+                "run_id": run_id,
+                "artifact_type": "L2Strategy",
+                "revision": "v1",
+                "context_version": context_version,
+            }
         },
         "l2_gate_decision": gate_decision.model_dump(mode="json"),
         "l2_review_id": review_id,

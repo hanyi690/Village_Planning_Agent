@@ -161,6 +161,7 @@ def test_bootstrap_context_node_sets_version_and_fingerprint():
 def test_bootstrap_context_is_idempotent_when_already_done():
     import asyncio
     from app.agent.bootstrap.context_bootstrap import bootstrap_context_node
+    from unittest.mock import AsyncMock, MagicMock, patch
 
     state = {
         "session_id": "test-boot-2",
@@ -170,8 +171,14 @@ def test_bootstrap_context_is_idempotent_when_already_done():
         "context_ref": {"session_id": "test-boot-2", "version": "1"},
         "bootstrap_context_done": True,
     }
-    result = asyncio.run(bootstrap_context_node(state))
-    assert result == {}
+    context = MagicMock(version=1, snapshot_meta=MagicMock(return_value={"version": 1}))
+    with patch(
+        "app.agent.bootstrap.context_bootstrap.build_planning_context",
+        new_callable=AsyncMock,
+        return_value=context,
+    ):
+        result = asyncio.run(bootstrap_context_node(state))
+    assert result["context_version"] == "1"
 
 
 def test_build_execute_agent_graph_accepts_checkpointer():

@@ -321,6 +321,10 @@ async def l3_aggregate(
             "revision": "v1",
             "context_version": context_version,
         },
+        # The post-L3 chain consumes the canonical ref-only map.  Keeping only
+        # this reference in AgentState also makes recovery independent of the
+        # legacy l3_program_ref field.
+        "artifact_refs": {"planning_program": ref.model_dump(mode="json")},
         "l3_gate_decision": gate_decision.model_dump(mode="json"),
         "l3_review_id": review_id,
     }

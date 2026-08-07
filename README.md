@@ -4,13 +4,13 @@
 
 ## 核心特性
 
-- **6 节点主图**：`conversation` → `analyze_dimension` / `execute_tools` / `explore` / `gis_agent` → `layer_completion_check`
+- **19 个显式主图节点**：对话/工具、L1–L3 worker、层级编排、PARSE→DELIVER 与四节点 HITL 流程
 - **三层递进规划**：现状分析(L1, 12 维) → 规划思路(L2, 4 维) → 详细规划(L3, 12 维)
 - **五层模块架构**：`Schema ← Data ← SpatialOps ← KG ← Agent`（单向依赖）
 - **RAG 知识检索**：Small-to-Big + 层级感知，法规条文与技术指标智能注入
 - **SSE 单通道**：所有数据通过 SSE 推送，Checkpoint 为唯一数据源（SSOT）
 - **级联修复**：驳回后自动计算影响树，按依赖链波次重分析
-- **GIS 空间布局**：PARSE ReAct（意图解析）+ LAYOUT 混合管线（骨架 + ReAct + Evaluator Gate）
+- **后 L3 规划链**：`PARSE → GROUND → SELECT → EXECUTE → VALIDATE → RECONCILE → DELIVER`
 
 ## 系统架构
 
@@ -20,16 +20,16 @@
 ├─────────────────────────────────────────────────────────────────────┤
 │                                                                     │
 │  ┌────────────┐    ┌───────────────┐    ┌────────────────────────┐  │
-│  │ Frontend   │───▶│  FastAPI API  │───▶│  LangGraph 主图 (6节点) │  │
-│  │ Next.js 14 │SSE │  /api/sessions│    │  backend/app/agent/    │  │
-│  │ + MapLibre │    │  /* (7端点)   │    │  graph.py              │  │
+│  │ Frontend   │───▶│  FastAPI API  │───▶│ LangGraph 主图（19节点）│  │
+│  │ Next.js 14 │SSE │  /api/*       │    │  agent/bootstrap/      │  │
+│  │ + MapLibre │    │  session/HITL │    │  graph.py              │  │
 │  └────────────┘    └───────────────┘    └───────────┬────────────┘  │
 │       │                                            │               │
 │       │                            ┌────────────────┼───────────┐   │
 │       │                            ▼                ▼           ▼   │
 │       │                      ┌─────────┐  ┌──────────────┐ ┌──────┐ │
-│       │                      │ analyze │  │  gis_agent   │ │ RAG  │ │
-│       │                      │dimension│  │ PARSE+LAYOUT │ │Chroma│ │
+│       │                      │ L1/L2/L3│  │ POST-L3 链   │ │ RAG  │ │
+│       │                      │ workers │  │ PARSE→DELIVER│ │Chroma│ │
 │       │                      └────┬────┘  └──────┬───────┘ └──────┘ │
 │       │                           │              │                  │
 │       │                           ▼              ▼                  │
@@ -44,17 +44,15 @@
 └─────────────────────────────────────────────────────────────────────┘
 ```
 
-### 6 节点主图
+### 当前主图
 
 ```
-START → conversation ──► analyze_dimension ──► layer_completion_check
-              │                ▲                      │
-              ├─► execute_tools─┘                      │
-              ├─► gis_agent ──────────────────────────┘
-              └─► END (闲聊/问答)
+START → conversation ─┬→ execute_tools → conversation
+                     ├→ l1_worker | l2_worker | l3_worker
+                     │      → layer_completion_check → layer_aggregate → advance_phase
+                     └→ parse → ground → select → execute → validate → reconcile → deliver → END
 
-layer_completion_check (phase=completed, 非 step_mode)
-              └─► explore ──► gis_agent ──► END
+任一 post-L3 Gate 还可回退重试或进入四节点人工审核流程。
 ```
 
 详见 [docs/architecture/agent-graph.md](docs/architecture/agent-graph.md)
@@ -71,7 +69,7 @@ Layer 1 (现状分析)  ──▶  Layer 2 (规划思路)  ──▶  Layer 3 (�
 
 ### 环境要求
 
-- Python 3.13+
+- Python 3.11+（CI 与容器当前使用 3.11）
 - Node.js 18+（推荐 20+）
 - LLM API Key（DashScope / DeepSeek / OpenAI / 智谱AI）
 
@@ -113,7 +111,7 @@ MULTIMODAL_MODEL=qwen3.5-plus
 
 ```bash
 # 后端（端口 8000）
-python backend/main.py
+cd backend && python -m uvicorn app.main:app --host 127.0.0.1 --port 8000
 
 # 前端（端口 3000）
 cd frontend && npm run dev
@@ -158,19 +156,19 @@ Village_Planning_Agent/
 │       ├── main.py                     # FastAPI app 定义
 │       ├── api/                        # API 路由层
 │       │   ├── routes.py               # 统一路由器
-│       │   ├── session_routes.py       # 7 核心端点
+│       │   ├── session_routes.py       # 会话、流式、恢复与反馈端点
 │       │   ├── gis_test_routes.py      # GIS 测试（开发）
 │       │   └── schemas.py              # 请求/响应模型
 │       ├── agent/                      # LangGraph Agent 核心
-│       │   ├── graph.py                # create_unified_planning_graph (6节点)
-│       │   ├── routing.py              # after_conversation + after_analysis
-│       │   ├── state.py                # AgentState, PlanningPhase
-│       │   ├── conversation/node.py    # 中央路由节点
+│       │   ├── bootstrap/graph.py      # create_unified_planning_graph（19 个显式节点）
+│       │   ├── bootstrap/post_l3_main_nodes.py # PARSE 至 DELIVER 主图节点
+│       │   ├── plan_state/state.py     # AgentState, PlanningPhase
+│       │   ├── conversation_router/    # 中央路由节点与边
 │       │   ├── tools/execute_node.py   # 工具执行节点
-│       │   ├── analysis/               # 维度分析（RAG + KG + DataPipeline）
-│       │   ├── explore/                # EXPLORE 认知引擎（桥接 + 概要索引）
-│       │   ├── completion/node.py      # 层级完成检测 + interrupt
-│       │   └── gis/                    # GIS Agent (PARSE + LAYOUT)
+│       │   ├── l1_observe/             # L1 维度分析（RAG + KG + DataPipeline）
+│       │   ├── l2_strategize/          # L2 策略分析
+│       │   ├── l3_plan/                # L3 详细规划
+│       │   └── execute/                # EXECUTE 子图与空间 worker
 │       ├── modules/                    # 五层业务模块
 │       │   ├── schema/                 # ① 类型契约层（零依赖）
 │       │   ├── data/                   # ② 数据获取层
@@ -209,7 +207,7 @@ Village_Planning_Agent/
 
 ## API 端点
 
-### 核心 API（`/api/sessions/*`）
+### 核心会话 API（`/api/sessions/*`，非完整清单）
 
 | # | 方法 | 路径 | 说明 |
 |---|------|------|------|
@@ -221,7 +219,7 @@ Village_Planning_Agent/
 | 6 | POST | `/api/sessions/{id}/resume/{checkpoint_id}` | 从检查点恢复 |
 | 7 | GET | `/api/sessions/{id}/reports/{dim_key}` | 维度报告全文 |
 
-> 旧版 `/api/planning/*` 已**废弃并移除**。
+> 人工审核 API 位于 `/api/human-review/*`；完整路由以 `backend/app/api/routes.py` 为准。
 
 详见 [docs/architecture/backend-api.md](docs/architecture/backend-api.md)
 

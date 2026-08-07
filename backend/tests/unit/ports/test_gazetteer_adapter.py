@@ -35,9 +35,3 @@ def test_get_cluster_by_name_kg_cluster(gazetteer):
     d = adapter.get_cluster_by_name("run-1", "园寨")
     assert d is not None
     assert d["source"] == "kg_cluster"
-
-
-def test_load_for_village():
-    adapter = KGGazetteerAdapter(None)
-    result = adapter.load_for_village("run-1", "fake_village_for_test")
-    assert result is None or hasattr(result, "resolve")

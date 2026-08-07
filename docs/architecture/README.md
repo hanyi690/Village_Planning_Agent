@@ -14,7 +14,7 @@ docs/design/01-11              ← 契约、管线、迁移和状态
 docs/architecture/*.md         ← 实现映射
 ```
 
-如果当前代码和目标设计不一致，以 [10_IMPLEMENTATION_STATUS.md](../design/10_IMPLEMENTATION_STATUS.md) 标注的迁移状态为准，不应把旧实现反向写回目标设计。
+如果当前代码和目标设计不一致，以代码和可重复测试为当前事实源；目标文档必须明确标为目标，不能把计划中的能力写成已实现。
 
 ## 文档索引
 

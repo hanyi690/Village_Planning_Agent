@@ -36,6 +36,7 @@ from app.agent.select.adapter import (
 )
 from app.agent.select.aggregate import select_aggregate
 from app.agent.validate.aggregate import validate_aggregate
+from app.agent.execute.planned_state_builder import changeset_to_planned_state
 from app.modules.context.planning_context import PlanningContext
 from app.modules.parsing.compiler.core import compile_dimension_report
 from app.modules.ports.planning_ports import PlanningPorts
@@ -259,8 +260,9 @@ def test_planning_chain_e2e():
     )
 
     # ── VALIDATE ───────────────────────────────────────────────────────
+    planned_state = changeset_to_planned_state(changeset, intent)
     report = validate_aggregate(
-        None,
+        planned_state,
         changeset,
         [],
         intent,

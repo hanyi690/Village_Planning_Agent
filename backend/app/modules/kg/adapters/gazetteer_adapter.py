@@ -44,10 +44,3 @@ class KGGazetteerAdapter(GazetteerPort):
         if entry is None or entry.source != "kg_cluster":
             return None
         return asdict(entry)
-
-    def load_for_village(self, run_id: str, village_name: str) -> "GazetteerPort | None":
-        try:
-            from app.modules.kg.gazetteer import load_gazetteer
-            return KGGazetteerAdapter(load_gazetteer(village_name))
-        except Exception:
-            return None

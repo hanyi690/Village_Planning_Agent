@@ -49,6 +49,12 @@ def _infer_layer_key_from_upload(item: Dict[str, Any]) -> Optional[str]:
     filename = str(
         item.get("original_filename") or item.get("filename") or ""
     ).lower()
+    # The administrative boundary *line* is a distinct layer.  Check it
+    # before the broader boundary match; otherwise a file named
+    # ``admin_boundary_line.geojson`` is routed to ``admin_area`` and every
+    # line feature is rejected by the polygon model.
+    if "admin_boundary_line" in filename or "行政界线" in filename:
+        return "admin_boundary_line"
     if "boundary" in filename or "边界" in filename:
         return "boundary"
     if "landuse" in filename or "用地" in filename or "现状" in filename:
@@ -61,6 +67,16 @@ def _infer_layer_key_from_upload(item: Dict[str, Any]) -> Optional[str]:
         return "water"
     if "residential" in filename or "住宅" in filename or "居民" in filename:
         return "residential"
+    if "construction_zone" in filename or "建设区" in filename:
+        return "construction_zone"
+    if "farmland_protection" in filename or "基本农田" in filename:
+        return "farmland_protection"
+    if "ecological_protection" in filename or "生态保护" in filename:
+        return "ecological_protection"
+    if "historical_protection" in filename or "历史保护" in filename:
+        return "historical_protection"
+    if "geological_hazard" in filename or "地质灾害" in filename:
+        return "geological_hazard_points"
 
     geojson = item.get("gis_data") or {}
     features = geojson.get("features") or []

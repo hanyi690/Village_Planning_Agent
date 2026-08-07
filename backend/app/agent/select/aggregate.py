@@ -331,6 +331,17 @@ def select_aggregate(
     occupied: List[Tuple[float, float]] = []
     placements: List[PlacementDecision] = []
     for project in projects:
+        # L3 may contain non-spatial programme actions (training, service
+        # operations, research, etc.). They remain execution tasks but do not
+        # require a parcel. Only an explicitly spatial target participates in
+        # SELECT; an explicitly spatial target with no grounded pool remains
+        # a hard GROUND/SELECT failure.
+        if not getattr(project, "requires_spatial", True):
+            logger.info(
+                "select_aggregate: non-spatial project %s deferred to EXECUTE",
+                project.project_id,
+            )
+            continue
         target = SelectionTarget(
             target_id=project.project_id,
             name=project.name,

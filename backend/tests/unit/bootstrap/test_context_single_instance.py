@@ -23,7 +23,6 @@ def _clear_context_cache():
 
 def _patch_deps(monkeypatch):
     """Stub the heavy factory internals so build runs offline + fast."""
-    import app.modules.kg.gazetteer as gazpkg
     import app.modules.kg.manager as km
     import app.modules.kg.queries.sparql as sparql
     import app.services.session_bundle as sb
@@ -54,7 +53,6 @@ def _patch_deps(monkeypatch):
     monkeypatch.setattr(
         sparql, "query_kg", lambda _kg, _template_name, **_params: []
     )
-    monkeypatch.setattr(gazpkg, "load_gazetteer", lambda _village: None)
 
 
 @pytest.mark.asyncio

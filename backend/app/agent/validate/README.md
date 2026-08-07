@@ -74,7 +74,7 @@
 ## 相关文档
 
 - `../README.md` — agent 编排层总览
-- `../bootstrap/post_l3_chain.py` — VALIDATE 的 RETRY_* 回退路由
+- `../bootstrap/graph.py` / `post_l3_main_nodes.py` — VALIDATE 的 RETRY_* 回退路由
 - `../execute/README.md` — EXECUTE（上游：`ParcelChangeSet` + `PlannedState`）
 - `../reconcile/README.md` — RECONCILE（下游消费者：`ValidationReport`）
 - `app/modules/schema/contracts/validation_report_contracts.py` — 校验契约

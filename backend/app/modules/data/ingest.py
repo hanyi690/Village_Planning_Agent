@@ -41,7 +41,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Set, Tuple
+from typing import Any, Dict, List, Mapping, Optional, Set, Tuple
 
 from app.modules.schema.types.spatial_types import (
     SpatialFeature,
@@ -544,6 +544,39 @@ def _init_feature_registry():
         _FEATURE_TYPE_REGISTRY[key] = (model_class, entry.default_gdb_path)
 
 
+_SOURCE_LABEL_KEYS = (
+    "名称", "名", "地名", "位置", "地址", "村", "乡", "镇", "街道",
+    "描述", "备注", "类型", "类别", "label", "name", "location",
+    "address", "description", "remark", "bsm", "ysdm",
+)
+
+
+def _compact_source_properties(props: Mapping[str, Any] | None) -> Dict[str, Any]:
+    """Keep only bounded, label-bearing provider fields for KG enrichment.
+
+    The full GeoJSON property map is not part of the domain feature contract.
+    Retaining it on every parcel/line duplicates hundreds of large dictionaries
+    and can trigger native-memory pressure in geometry/model extensions.  KG
+    needs source labels and stable identifiers, so preserve only scalar values
+    whose keys can contribute to those relations.
+    """
+    if not props:
+        return {}
+    compact: Dict[str, Any] = {}
+    for raw_key, value in props.items():
+        key = str(raw_key)
+        key_lower = key.lower()
+        if key not in {"BSM", "YSDM", "OBJECTID", "FID"} and not any(
+            token in key or token in key_lower for token in _SOURCE_LABEL_KEYS
+        ):
+            continue
+        if isinstance(value, (str, int, float, bool)):
+            text = str(value)
+            if len(text) <= 512:
+                compact[key] = value
+    return compact
+
+
 def ingest_feature(
     filepath: str,
     feature_type: str,
@@ -586,7 +619,13 @@ def ingest_feature(
         props = feat.get("properties", {})
         geom = feat.get("geometry", {})
 
-        kwargs: Dict[str, Any] = {"geometry": geom}
+        # Preserve a bounded source-label map for KG enrichment.  Keeping every
+        # provider property on every feature multiplies memory use for large
+        # parcel/line layers and is not needed by the typed domain model.
+        kwargs: Dict[str, Any] = {
+            "geometry": geom,
+            "_raw": _compact_source_properties(props),
+        }
 
         for field_name in _model_fields:
             if field_name in ("geometry",):

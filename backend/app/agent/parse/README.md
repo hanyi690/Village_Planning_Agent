@@ -80,7 +80,7 @@
 ## 相关文档
 
 - `../README.md` — agent 编排层总览
-- `../bootstrap/post_l3_chain.py` — PARSE 在 post-L3 链中的重试路由（REPAIR/REVISE）
+- `../bootstrap/graph.py` / `post_l3_main_nodes.py` — PARSE 在 post-L3 主图中的重试路由（REPAIR/REVISE）
 - `../ground/README.md` — GROUND（下游消费者：`SpatialReferenceSpec` → `CandidateSite`）
 - `app/modules/schema/contracts/parse_contracts.py` — 意图模型契约
 - `docs/gis/integration/PARSE_SPATIAL_GROUNDING_DESIGN.md` — 空间引用设计

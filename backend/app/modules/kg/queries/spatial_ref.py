@@ -174,4 +174,11 @@ def _uri_to_id(kg, uri) -> Optional[str]:
     return str(uri)
 
 
-__all__ = ["resolve_candidates"]
+__all__ = [
+    "resolve_candidates",
+    "_entity_ids_by_type",
+    "_entity_ids_by_label",
+    "_resolve_topological",
+    "_ids_to_uris",
+    "_uri_to_id",
+]

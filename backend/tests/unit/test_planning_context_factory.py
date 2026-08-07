@@ -5,6 +5,20 @@ import pytest
 from app.modules.ports.planning_ports import PlanningPorts
 
 
+class _FakeKG:
+    """Fake KG with a ``.g`` graph so the fresh gazetteer build runs."""
+
+    def __init__(self):
+        class _G:
+            def subjects(self, *a, **k):
+                return []
+
+            def triples(self, *a, **k):
+                return []
+
+        self.g = _G()
+
+
 @pytest.fixture(autouse=True)
 def _clear_context_cache():
     import app.services.context.planning_context as pc
@@ -25,12 +39,11 @@ def _fake_bundle(name="金田村", session_id="sess-test"):
     return bundle
 
 
-def _patch_deps(monkeypatch, kg, gazetteer, session="sess-test", village="金田村"):
+def _patch_deps(monkeypatch, kg, session="sess-test", village="金田村"):
     import app.services.session_bundle as sb
     import app.services.session_kg as sk
     import app.modules.kg.manager as km
     import app.modules.kg.queries.sparql as sparql
-    import app.modules.kg.gazetteer as gazpkg
 
     async def fake_bundle(_session_id, village_name=None):
         return _fake_bundle(village_name or village, _session_id)
@@ -51,15 +64,13 @@ def _patch_deps(monkeypatch, kg, gazetteer, session="sess-test", village="金田
     monkeypatch.setattr(
         sparql, "query_kg", lambda _kg, _template_name, **_params: []
     )
-    monkeypatch.setattr(gazpkg, "load_gazetteer", lambda _village: gazetteer)
 
 
 @pytest.mark.asyncio
 async def test_ports_populated_when_kg_and_gazetteer_present(monkeypatch):
-    from app.modules.kg.gazetteer import Gazetteer
     from app.services.context.planning_context import build_planning_context
 
-    _patch_deps(monkeypatch, kg=object(), gazetteer=Gazetteer())
+    _patch_deps(monkeypatch, kg=_FakeKG())
 
     context = await build_planning_context(
         "sess-test", village_name="金田村", include_reports=False
@@ -74,10 +85,9 @@ async def test_ports_populated_when_kg_and_gazetteer_present(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_ports_preserve_existing_fields(monkeypatch):
-    from app.modules.kg.gazetteer import Gazetteer
     from app.services.context.planning_context import build_planning_context
 
-    _patch_deps(monkeypatch, kg=object(), gazetteer=Gazetteer())
+    _patch_deps(monkeypatch, kg=_FakeKG())
 
     context = await build_planning_context(
         "sess-test", village_name="金田村", include_reports=False
@@ -88,32 +98,30 @@ async def test_ports_preserve_existing_fields(monkeypatch):
     assert context.ports.spatial_query is not None
     assert context.ports.artifact_store is None
     assert context.ports.context_provider is None
-    assert context.ports.semantic_query is None
+    assert context.ports.semantic_query is not None
     assert context.ports.nomenclature_registry is None
 
 
 @pytest.mark.asyncio
 async def test_ports_spatial_query_none_when_no_kg(monkeypatch):
-    from app.modules.kg.gazetteer import Gazetteer
     from app.services.context.planning_context import build_planning_context
 
-    _patch_deps(monkeypatch, kg=None, gazetteer=Gazetteer())
+    _patch_deps(monkeypatch, kg=None)
 
     context = await build_planning_context(
         "sess-test", village_name="金田村", include_reports=False
     )
 
     assert context.ports is not None
-    assert context.ports.gazetteer is not None
+    assert context.ports.gazetteer is None
     assert context.ports.spatial_query is None
 
 
 @pytest.mark.asyncio
 async def test_ports_graceful_when_adapter_build_fails(monkeypatch):
-    from app.modules.kg.gazetteer import Gazetteer
     from app.services.context.planning_context import build_planning_context
 
-    _patch_deps(monkeypatch, kg=object(), gazetteer=Gazetteer())
+    _patch_deps(monkeypatch, kg=_FakeKG())
 
     import app.modules.kg.adapters.spatial_query_adapter as sqa
 

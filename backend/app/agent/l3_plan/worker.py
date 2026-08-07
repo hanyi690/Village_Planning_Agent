@@ -85,6 +85,54 @@ def _extract_natural_villages(text: str) -> str:
     return "、".join(found)
 
 
+def _location_evidence(text: str) -> str:
+    """Extract compact, source-backed location rows for the L3 prompt.
+
+    The complete dependency reports remain in the prompt.  This separate
+    block makes the spatial provenance decision explicit and prevents the
+    model from turning a village list into an unsupported project location.
+    """
+    try:
+        from app.modules.kg.enrichment.report_entity_enrichment import (
+            _KNOWN_NATURAL_VILLAGES,
+        )
+    except Exception:
+        _KNOWN_NATURAL_VILLAGES = set()
+    rows: List[str] = []
+    seen: set[str] = set()
+    for raw_line in (text or "").splitlines():
+        line = raw_line.strip()
+        if not line or not any(name in line for name in _KNOWN_NATURAL_VILLAGES):
+            continue
+        if not any(token in line for token in ("位于", "分布", "涉及", "集中", "位置", "布局")):
+            continue
+        if line in seen:
+            continue
+        seen.add(line)
+        rows.append(line[:320])
+        if len(rows) >= 60:
+            break
+    return "\n".join(f"- {row}" for row in rows) or "（依赖报告未提供可核验的对象—村庄位置关系）"
+
+
+def _resolvable_villages(session_id: str) -> str:
+    """Return only village aliases currently backed by real BSMs."""
+    try:
+        from app.services.context.planning_context import get_cached_context
+
+        context = get_cached_context(session_id)
+        names: List[str] = []
+        for entry in (getattr(getattr(context, "gazetteer", None), "entries", []) or []):
+            if not getattr(entry, "bsms", None):
+                continue
+            name = str(getattr(entry, "name", "") or "")
+            if name.endswith(("村", "自然村")) and name not in names:
+                names.append(name)
+        return "、".join(names)
+    except Exception:
+        return ""
+
+
 async def analyze_l3_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
     """L3-only dimension analysis worker.
 
@@ -167,6 +215,7 @@ async def analyze_l3_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
     # 5. 组装 L3 Prompt（detailed 模板）
     prompt = _build_prompt(
         cfg, state, rag_context, l1_deps, l2_deps, same_layer_contexts, "", explore_section,
+        resolvable_villages=_resolvable_villages(session_id),
     )
     logger.info(f"[analyze_l3_dimension] {dim_key}: Prompt length = {len(prompt)} chars")
 
@@ -293,6 +342,15 @@ async def analyze_l3_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
             dimension_key=dim_key,
             layer=dim_layer,
             is_revision=is_revision,
+            inputs={
+                # The complete dependency prose is still passed to the LLM
+                # prompt.  The persisted operator audit deliberately keeps a
+                # compact summary so reports remain readable.
+                "dependency_reports_summary": _dependency_summary(l1_deps),
+                "l2_dependency_reports_summary": _dependency_summary(l2_deps),
+                "same_layer_dependency_reports_summary": _dependency_summary(same_layer_contexts),
+                "instruction_removed": True,
+            },
             outputs={
                 "report_id": report_id,
                 "word_count": len(llm_response),
@@ -321,6 +379,19 @@ async def analyze_l3_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
     return result
 
 
+def _dependency_summary(text: str) -> Dict[str, Any]:
+    """Summarize dependency prose for the human audit, not for the prompt."""
+    from app.services.report_store import split_instruction
+
+    display, _ = split_instruction(text or "")
+    sections = re.findall(r"^#{1,6}\s+(.+)$", display, re.MULTILINE)
+    return {
+        "sections": sections[:20],
+        "chars": len(display),
+        "preview": display[:500],
+    }
+
+
 def _build_prompt(
     cfg: Any,
     state: Dict[str, Any],
@@ -330,6 +401,7 @@ def _build_prompt(
     same_layer_contexts: str = "",
     professional_data_section: str = "",
     explore_section: str = "",
+    resolvable_villages: str = "",
 ) -> str:
     """组装 L3 Prompt - 使用 detailed 模板（L1 现状与 L2 规划思路分开注入）"""
     dim_key = getattr(cfg, 'key', state.get("dimension_key", ""))
@@ -364,7 +436,8 @@ def _build_prompt(
         professional_data_section=professional_data_section + explore_section,
         _landuse_metrics=state.get("_landuse_metrics", {}),
         intent_targets=state.get("intent_targets", {}),
-        natural_villages=_extract_natural_villages(l1_deps),
+        natural_villages=resolvable_villages or _extract_natural_villages(l1_deps),
+        location_evidence=_location_evidence(l1_deps + "\n" + l2_deps),
     )
 
 

@@ -71,7 +71,7 @@
 ## 相关文档
 
 - `../README.md` — agent 编排层总览
-- `../bootstrap/post_l3_chain.py` / `post_l3_nodes.py` — DELIVER 在链中的导出 + gate 调用（`deliver_node`）
+- `../bootstrap/post_l3_main_nodes.py` — DELIVER 在主图中的导出 + gate 调用（`deliver_node`）
 - `../reconcile/README.md` — RECONCILE（上游：`CoverageMatrix`）
 - `../validate/README.md` — VALIDATE（上游：`ValidationReport`）
 - `app/modules/spatial_ops/land_balance.py` — `check_delivery_gate`

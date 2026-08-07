@@ -8,7 +8,6 @@ from __future__ import annotations
 import asyncio
 from typing import Any, Dict, List, Optional
 
-from app.tools.tools import TOOL_REGISTRY
 from app.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -27,6 +26,7 @@ class DataPipeline:
     """
 
     def __init__(self) -> None:
+        from app.tools.tools import TOOL_REGISTRY
         self._registry = TOOL_REGISTRY
 
     async def get_professional_data(

@@ -122,8 +122,7 @@ Application subgraphs and API routes
 
 ## 6. 当前实现边界
 
-上图是目标设计，不是当前代码的逐节点描述。当前主图已经拆出独立的 L1/L2/L3 worker、层级 aggregate
-和 post-L3 链；post-L3 链由 `gis_agent_node` 调用，当前运行顺序为：
+上图是目标设计。当前唯一主图已经拆出独立的 L1/L2/L3 worker、层级 aggregate 和七个顶层阶段节点，运行顺序为：
 
 ```text
 PARSE → GROUND → SELECT → EXECUTE → VALIDATE → RECONCILE → DELIVER
@@ -134,8 +133,8 @@ PARSE → GROUND → SELECT → EXECUTE → VALIDATE → RECONCILE → DELIVER
 `services/modules` 目录已清除。分区求解经 `ZoneAllocatorPort`（PuLP MIP）处理空候选 zone，失败显式 unresolved。
 `ExecutionPlan`、统一 WorkerResult 契约和 RoadPlannerPort 收敛仍属后续工作。
 
-因此当前真实 session 可以验证报告、`【INSTRUCTION】`、部分 typed aggregate 和 post-L3 节点，但不能据此
-宣称“现状报告 + GIS → 合理项目定位、规划分区、道路和地块重组”已经端到端可用。
+离线核心链覆盖 PARSE 到 DELIVER 的阶段边界，但当前集成测试已暴露 context version 衔接断点，
+因此不能把它视为完整可恢复的端到端链。真实模型与外部 GIS 仍属于后续验收范围。
 
 实现状态以 [10_IMPLEMENTATION_STATUS.md](10_IMPLEMENTATION_STATUS.md) 为准；目录迁移和重复实现清理记录在
 [09_INTEGRATION_BREAKPOINTS.md](09_INTEGRATION_BREAKPOINTS.md)。

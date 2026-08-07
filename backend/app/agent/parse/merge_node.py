@@ -59,9 +59,10 @@ def _resolve_parent(obj: Any, path: str) -> tuple[Any, str] | None:
 
 
 def _apply_update(obj: Any, path: str, value: Any) -> bool:
-    parent, last = _resolve_parent(obj, path)
-    if parent is None:
+    resolved = _resolve_parent(obj, path)
+    if resolved is None:
         return False
+    parent, last = resolved
     if isinstance(parent, BaseModel):
         if not hasattr(parent, last):
             return False
@@ -80,9 +81,10 @@ def _apply_update(obj: Any, path: str, value: Any) -> bool:
 
 
 def _apply_append(obj: Any, path: str, value: Any) -> bool:
-    parent, last = _resolve_parent(obj, path)
-    if parent is None:
+    resolved = _resolve_parent(obj, path)
+    if resolved is None:
         return False
+    parent, last = resolved
     if isinstance(parent, BaseModel):
         if not hasattr(parent, last):
             return False
@@ -107,9 +109,10 @@ def _apply_append(obj: Any, path: str, value: Any) -> bool:
 
 
 def _apply_remove(obj: Any, path: str, value: Any) -> bool:
-    parent, last = _resolve_parent(obj, path)
-    if parent is None:
+    resolved = _resolve_parent(obj, path)
+    if resolved is None:
         return False
+    parent, last = resolved
     if isinstance(parent, BaseModel):
         if not hasattr(parent, last):
             return False

@@ -12,6 +12,22 @@ from .parsing_contracts import CompilerTrace
 from .provenance import Provenance
 
 
+class L1LocationFact(BaseModel):
+    """A traceable place mention extracted from an L1 observation report."""
+
+    mention: str
+    normalized_name: str
+    role: str = "unknown"
+    aliases: list[str] = []
+    spatial_hint: str = ""
+    related_mentions: list[str] = []
+    source_report_ref: str = ""
+    dimension_key: str = ""
+    source_span: str = ""
+    evidence_refs: list[str] = []
+    confidence: float = 0.0
+
+
 class EvidenceGap(BaseModel):
     """Structured evidence gap emitted by L1, resolvable by EXPLORE.
 
@@ -41,6 +57,7 @@ class L1DimensionFragment(BaseModel):
     evidence_gaps: list[EvidenceGap] = []
     classification_refs: list[ClassificationRef] = []
     spatial_facts: list[str] = []
+    location_facts: list[L1LocationFact] = []
     diagnostics: list[ParseDiagnostic] = []
     provenance: "Provenance | None" = None
     trace: "CompilerTrace | None" = None
@@ -48,6 +65,10 @@ class L1DimensionFragment(BaseModel):
 
 class L1Snapshot(ContractMeta):
     facts: list[str] = []
+    # Dimension-scoped facts are the auditable source for downstream strategy
+    # prompts; ``facts`` remains the backward-compatible flattened view.
+    facts_by_dimension: dict[str, list[str]] = {}
+    location_facts: list[L1LocationFact] = []
     constraints: list[str] = []
     issues: list[StageIssue] = []
     opportunities: list[str] = []
@@ -61,5 +82,6 @@ class L1Snapshot(ContractMeta):
 __all__ = [
     "L1Snapshot",
     "L1DimensionFragment",
+    "L1LocationFact",
     "EvidenceGap",
 ]

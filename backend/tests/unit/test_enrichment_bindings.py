@@ -4,7 +4,6 @@ import asyncio
 from pathlib import Path
 
 from app.modules.kg.enrichment import extract_bindings
-from app.modules.kg.enrichment.bindings import _extract_village_mentions, _is_village_name
 from app.modules.kg.gazetteer import Gazetteer, GazetteerEntry, spatial_score
 
 
@@ -26,15 +25,6 @@ class _FakeKG:
                 return []
 
         self.g = _G()
-
-
-def test_village_name_filter():
-    assert _is_village_name("田坑村") is True
-    assert _is_village_name("田坑自然村") is True
-    assert _is_village_name("金田村") is False        # 村域
-    assert _is_village_name("个自然村") is False      # 泛称
-    assert _is_village_name("黄竹村和田坑村") is False  # 连写
-    assert _is_village_name("八社村") is False         # 村外行政村
 
 
 def test_gazetteer_fuzzy_and_score():
@@ -74,12 +64,3 @@ def test_extract_bindings_writes_semantic_annotations(monkeypatch, tmp_path: Pat
     uris = [a.entity_uri for a in fake_store.entity_annotations.values()]
     assert any("FunctionalZone" in u for u in uris)
     assert (tmp_path / "sess-e_round_3.json").exists()
-
-
-def test_village_mentions_from_l3_text():
-    text = "炉池自然村周边山体治理，田坑自然村耕地12.5公顷，全村统一规划。"
-    mentions = _extract_village_mentions({"disaster_prevention": text})
-    names = [m["name"] for m in mentions]
-    assert "炉池自然村" in names
-    assert "田坑自然村" in names
-    assert "全村" not in names

@@ -267,9 +267,9 @@ async def test_parse_node_uses_async_entry(monkeypatch, tmp_path):
     state = {
         "session_id": "s1",
         "run_id": "r1",
-        "context_version": "cv",
+        "context_version": "1",
         "context_fingerprint": "sha256:test",
-        "context_ref": {"session_id": "s1", "version": "cv"},
+        "context_ref": {"session_id": "s1", "version": "1"},
     }
     from app.agent.bootstrap.artifact_runtime import store_artifact
     program_ref = store_artifact(state, "planning_program", "l3", "PlanningProgram", program.model_dump(mode="json"))

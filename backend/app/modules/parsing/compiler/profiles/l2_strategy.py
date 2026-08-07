@@ -58,6 +58,18 @@ def _extract_bullets(section: str) -> list[str]:
     return [b.strip() for b in _BULLET_RE.findall(section)]
 
 
+def _extract_content_lines(section: str) -> list[str]:
+    """Extract prose rows when the LLM omits Markdown bullet markers."""
+    rows: list[str] = []
+    for raw in section.splitlines():
+        line = raw.strip()
+        if not line or line.startswith(("#", "|", "```", "---", "【")):
+            continue
+        if len(line) >= 8:
+            rows.append(line)
+    return rows
+
+
 def compile_l2_strategy(
     *,
     dimension_key: str,
@@ -94,6 +106,8 @@ def compile_l2_strategy(
         if "【规划策略】" in display:
             section_locators.append("【规划策略】")
             strategies = _extract_bullets(_marker_section(display, "【规划策略】"))
+            if not strategies:
+                strategies = _extract_content_lines(_marker_section(display, "【规划策略】"))
         priorities = [s for s in strategies if any(m in s for m in _PRIORITY_KEYWORDS)]
         steps.append(f"markers: goals={len(goals)} strategies={len(strategies)}")
 
@@ -107,6 +121,13 @@ def compile_l2_strategy(
                     goals.append(line)
                     section_locators.append(f"goal:{line[:20]}")
         steps.append(f"development goals: {len(goals)}")
+        if not goals:
+            for line in display.splitlines():
+                line = line.strip()
+                if "总体目标" in line and len(line) >= 8:
+                    goals.append(line)
+                    section_locators.append(f"goal:{line[:20]}")
+                    break
 
     if dimension_key == "planning_positioning":
         for title, body in chapters:
@@ -120,6 +141,13 @@ def compile_l2_strategy(
                     break
             if spatial_structure:
                 break
+        if not spatial_structure:
+            for line in display.splitlines():
+                line = line.strip()
+                if line.startswith("村庄分类") and "：" in line:
+                    spatial_structure = line.split("：", 1)[1].strip()
+                    section_locators.append("村庄分类")
+                    break
         if not spatial_structure:
             for title, body in chapters:
                 for line in body.splitlines():

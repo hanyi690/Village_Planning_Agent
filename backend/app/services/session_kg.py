@@ -15,11 +15,17 @@
 
 from __future__ import annotations
 
+from threading import RLock
 from typing import Any, Dict, Optional
 
 from app.utils.logger import get_logger
 
 logger = get_logger(__name__)
+
+# The bundle/GIS preparation is async, but RDFLib graph construction is
+# synchronous and mutates an in-memory store. Keep the final check-and-register
+# section atomic across ASGI worker threads and TestClient lifecycle threads.
+_SESSION_KG_BUILD_LOCK = RLock()
 
 
 async def ensure_session_kg(
@@ -40,8 +46,9 @@ async def ensure_session_kg(
     from app.modules.kg import get_kg_manager
 
     manager = get_kg_manager()
-    if not force and manager.get_session_kg(session_id) is not None:
-        return {"cache_hit": True, "session_id": session_id}
+    with _SESSION_KG_BUILD_LOCK:
+        if not force and manager.get_session_kg(session_id) is not None:
+            return {"cache_hit": True, "session_id": session_id}
 
     try:
         from app.services.session_bundle import build_session_bundle
@@ -83,12 +90,17 @@ async def ensure_session_kg(
 
         from app.modules.kg import open_kg_session
 
-        snap = open_kg_session(
-            session_id=session_id,
-            village_name=bundle.village_name,
-            bundle=bundle,
-            parcel_relations=relations,
-        )
+        with _SESSION_KG_BUILD_LOCK:
+            # Re-check after the expensive async bundle load. Another worker
+            # may have completed the same session while we were awaiting it.
+            if not force and manager.get_session_kg(session_id) is not None:
+                return {"cache_hit": True, "session_id": session_id}
+            snap = open_kg_session(
+                session_id=session_id,
+                village_name=bundle.village_name,
+                bundle=bundle,
+                parcel_relations=relations,
+            )
         logger.info(
             "[SessionKG] Pre-built for session %s (village=%s): %d triples, "
             "cache_hit=%s, version=%d",
@@ -100,13 +112,6 @@ async def ensure_session_kg(
             from app.services.step_report import save_step_report
 
             n_combo = 0
-            try:
-                from app.modules.kg.gazetteer import load_gazetteer
-
-                gaz = load_gazetteer(bundle.village_name or "jintian")
-                n_combo = sum(1 for e in getattr(gaz, "entries", []) if "@" in (e.name or ""))
-            except Exception:
-                pass
             await save_step_report(
                 session_id, "KG_PREBUILD",
                 step_name="kg_prebuild",
