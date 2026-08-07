@@ -34,5 +34,6 @@ class ContractMeta(BaseModel):
 
     schema_version: str = "1.0"
     context_version: str = ""
+    context_fingerprint: str = ""
     artifact_id: str = ""
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
