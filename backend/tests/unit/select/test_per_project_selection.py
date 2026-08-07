@@ -2,11 +2,11 @@
 
 import pytest
 
-from app.agent.select.adapter import (
-    filter_parcels_for_target,
-    grounding_to_candidate_parcels,
+from app.agent.select.aggregate import (
+    _filter_parcels_for_target,
+    _grounding_to_candidate_parcels,
+    select_aggregate,
 )
-from app.agent.select.aggregate import select_aggregate
 from app.modules.context.planning_context import PlanningContext
 from app.modules.schema.contracts.grounding_contracts import CandidateSite, GroundingResult
 from app.modules.schema.contracts.parse_contracts import FacilityTarget, ProjectTarget, SpatialPlanningIntent
@@ -51,9 +51,9 @@ def test_pool_filtered_per_project(make_bundle):
     bundle = make_bundle(
         [make_parcel("P001"), make_parcel("P002"), make_parcel("P003")]
     )
-    pool = grounding_to_candidate_parcels(result, bundle)
+    pool = _grounding_to_candidate_parcels(result, bundle)
 
-    filtered = filter_parcels_for_target(pool, "p1")
+    filtered = _filter_parcels_for_target(pool, "p1")
     bsms = {p.bsm for p in filtered}
 
     assert "P001" in bsms

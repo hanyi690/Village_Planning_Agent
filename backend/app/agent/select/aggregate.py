@@ -15,9 +15,9 @@ from __future__ import annotations
 import logging
 from typing import Any, Dict, List, Optional, Tuple
 
-from app.agent.select.adapter import filter_parcels_for_target, grounding_to_candidate_parcels
 from app.modules.context.planning_context import PlanningContext
-from app.modules.schema.contracts.grounding_contracts import GroundingResult
+from app.modules.schema import DLBM_TO_DLMC
+from app.modules.schema.contracts.grounding_contracts import CandidateSite, GroundingResult
 from app.modules.schema.contracts.parse_contracts import ProjectTarget
 from app.modules.schema.contracts.provenance import Provenance
 from app.modules.schema.contracts.selection_contracts import (
@@ -48,6 +48,60 @@ _SCORE_BREAKDOWN_STUBS = {
     "road_access": 0.0,
     "service_coverage": 0.0,
 }
+
+
+def _candidate_site_to_parcels(
+    site: CandidateSite, parcel_by_bsm: dict[str, object]
+) -> list[CandidateParcel]:
+    """Derive one CandidateParcel per source BSM from a CandidateSite.
+
+    CandidateParcel is a computation intermediate built at the selection edge
+    (ADR-002); CandidateSite remains the canonical candidate model.
+    """
+    parcels = []
+    for bsm in site.source_parcels:
+        parcel = parcel_by_bsm.get(str(bsm))
+        if parcel is None:
+            continue
+        dlbm = str(getattr(parcel, "dlbm", ""))
+        parcels.append(
+            CandidateParcel(
+                bsm=str(bsm),
+                geometry=getattr(parcel, "geometry", {}),
+                dlbm=dlbm,
+                dlmc=DLBM_TO_DLMC.get(dlbm, ""),
+                area_ha=(getattr(parcel, "area_sqm", 0.0) or 0.0) / 10000.0,
+                target_ref=(getattr(site, "target_ref", None) or ""),
+            )
+        )
+    return parcels
+
+
+def _grounding_to_candidate_parcels(
+    result: GroundingResult, bundle
+) -> list[CandidateParcel]:
+    """Derive the per-parcel pool from a GroundingResult at the selection edge."""
+    parcel_by_bsm = {}
+    for p in (bundle.polygons.get("landuse_current") or []):
+        parcel_by_bsm[str(p.bsm)] = p
+    parcels = []
+    for site in result.candidates:
+        parcels.extend(_candidate_site_to_parcels(site, parcel_by_bsm))
+    return parcels
+
+
+def _filter_parcels_for_target(
+    parcels: list[CandidateParcel], target_ref: str
+) -> list[CandidateParcel]:
+    """Keep parcels tagged for ``target_ref`` plus any untargeted parcels.
+
+    Untargeted parcels (``target_ref == ""``) remain eligible for every project
+    so placement still works when grounding has not yet tagged a candidate.
+    """
+    return [
+        p for p in parcels
+        if p.target_ref == target_ref or p.target_ref == ""
+    ]
 
 
 def _breakdown_from_scored(scored: ScoredCandidate) -> Dict[str, float]:
@@ -324,7 +378,7 @@ def select_aggregate(
     if context.bundle is None:
         empty = build_site_selection_decision([], run_id=run_id, session_id=run_id)
         return empty, []
-    parcels = grounding_to_candidate_parcels(result, context.bundle)
+    parcels = _grounding_to_candidate_parcels(result, context.bundle)
     projects = list(getattr(intent, "project_targets", None) or [])
     facilities = list(getattr(intent, "facilities", None) or [])
     cluster_centroid = _cluster_centroid(context)
@@ -348,7 +402,7 @@ def select_aggregate(
             category="project",
             scale_text=project.scale_text,
         )
-        project_pool = filter_parcels_for_target(parcels, project.project_id)
+        project_pool = _filter_parcels_for_target(parcels, project.project_id)
         if not project_pool:
             logger.warning(
                 "select_aggregate: no candidates for project %s; routing to RETRY_GROUND",
