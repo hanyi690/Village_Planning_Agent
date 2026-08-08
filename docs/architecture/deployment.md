@@ -28,7 +28,7 @@
 
 | 变量 | 说明 | 示例/默认值 |
 |---|---|---|
-| `LLM_PROVIDER` | LLM 提供商 | `deepseek` / `openai` / `zhipuai` |
+| `LLM_PROVIDER` | LLM 提供商 | `deepseek` / `openai` / `zhipuai` / `minimax` |
 | `OPENAI_API_KEY` | API 密钥（兼容 DeepSeek/DashScope） | 你的密钥 |
 | `OPENAI_API_BASE` | API 基础 URL | `https://dashscope.aliyuncs.com/compatible-mode/v1`（DashScope） |
 | `LLM_MODEL` | 模型名称 | qwen-plus 系列 |
@@ -36,12 +36,16 @@
 | `LLM_MAX_CONCURRENT` | LLM 最大并发请求 | `50`（DashScope 限制 500 RPS / 30000 RPM） |
 | `LLM_STREAM_TIMEOUT` | 流式超时（秒） | `300` |
 | `LLM_REQUEST_TIMEOUT` | 请求超时（秒） | `180` |
+| `MINIMAX_API_KEY` | MiniMax 备用模型 API 密钥 | 你的 MiniMax API key |
+| `MINIMAX_API_BASE` | MiniMax OpenAI 兼容地址 | `https://api.minimaxi.com/v1` |
+| `MINIMAX_MODEL` | MiniMax 模型名称 | `MiniMax-M2.7` |
 
 **支持的 LLM 提供商**：
 - **DashScope（qwen-plus 系列）**：`OPENAI_API_BASE=https://dashscope.aliyuncs.com/compatible-mode/v1`（推荐）
 - **DeepSeek**：`OPENAI_API_BASE=https://api.deepseek.com/v1`，`LLM_MODEL=deepseek-chat`
 - **OpenAI**：`OPENAI_API_BASE` 留空，`LLM_MODEL=gpt-4o`
 - **ZhipuAI（GLM）**：`LLM_PROVIDER=zhipuai`，`ZHIPUAI_API_KEY=你的密钥`，`LLM_MODEL=glm-4-flash`
+- **MiniMax（备用）**：`LLM_PROVIDER=minimax`，`MINIMAX_API_KEY=你的密钥`，`MINIMAX_MODEL=MiniMax-M2.7`，`MINIMAX_API_BASE=https://api.minimaxi.com/v1`
 
 #### Embedding 配置
 

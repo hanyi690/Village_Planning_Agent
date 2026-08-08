@@ -242,6 +242,33 @@ def after_analysis(
         logger.info("[after_analysis] Revision waiting for deps: %s", pending)
         return END
 
+    fatal_error = state.get("fatal_error")
+    if fatal_error:
+        # A provider stream timeout is a transient infrastructure breakpoint.
+        # Preserve the exact failed dimension in the checkpoint and enter the
+        # normal HUMAN interrupt so an operator can resume the pending L3
+        # worker without replaying completed dimensions.
+        if (
+            isinstance(fatal_error, dict)
+            and fatal_error.get("code") in {"llm_stream_timeout", "llm_timeout"}
+            and str(state.get("phase", "")).lower() == "layer3"
+        ):
+            state["l3_gate_decision"] = {
+                "stage": "l3",
+                "passed": False,
+                "feedback_route": "HUMAN",
+                "diagnostic_code": "L3_LLM_TIMEOUT_CHECKPOINT",
+                "pending_requests": [{
+                    "request_id": "l3-llm-timeout",
+                    "stage": "l3",
+                    "request_type": "transient_llm_timeout",
+                    "context": dict(fatal_error),
+                }],
+            }
+            return "human_review"
+        logger.error("[after_analysis] terminal failure; stopping dispatch: %s", fatal_error)
+        return END
+
     phase = state.get("phase", "layer1")
     if phase == "completed":
         # Wave M2: legacy EXPLORE bridge removed; EXPLORE is now gate-driven.
@@ -297,6 +324,60 @@ def after_analysis(
                 # like an unexplained stop.
                 return "human_review"
             if route in ("L1", "L2", "L3"):
+                # Rework is a business retry, not an unbounded graph loop.
+                # The aggregate node increments the per-layer counter for
+                # every non-PASS gate.  Once the configured budget is
+                # exhausted, preserve the exact gate diagnostics and enter
+                # the persisted HUMAN checkpoint instead of dispatching the
+                # same expensive LLM batch forever.
+                counts = state.get("retry_counts") or {}
+                retry_count = int(counts.get(f"l{layer_num}_explore", 0))
+                retry_limit = int(state.get("max_retries") or 3)
+                # L3 protocol/spatial contract violations are not transient
+                # infrastructure failures. Re-running all 12 expensive L3
+                # calls amplifies memory and can reproduce the same malformed
+                # output. Preserve the exact pending requests and enter HITL
+                # after the first failed aggregate; an operator can provide a
+                # targeted revision or reject the run.
+                pending = gate_decision.get("pending_requests", []) if isinstance(gate_decision, dict) else []
+                hard_contract_failure = layer_num == 3 and any(
+                    any(code in str(item) for code in ("missing_instruction_marker", "missing_spatial_instruction"))
+                    for item in pending
+                )
+                if hard_contract_failure:
+                    logger.warning("[after_analysis] L3 contract failure -> HUMAN without full-layer replay")
+                    if isinstance(gate_decision, dict):
+                        gate_decision = dict(gate_decision)
+                        gate_decision["feedback_route"] = "HUMAN"
+                        gate_decision.setdefault("diagnostic_code", "L3_CONTRACT_REVIEW_REQUIRED")
+                        state[gate_key] = gate_decision
+                    return "human_review"
+                # L3 gate failures are business/contract findings over a
+                # complete 12-dimension plan, not transient infrastructure
+                # errors. Re-running every L3 LLM worker can duplicate large
+                # prompts and amplify memory without changing the evidence.
+                # Preserve the exact pending requests and send them through
+                # the persisted HUMAN checkpoint for an explicit decision.
+                if layer_num == 3:
+                    logger.warning("[after_analysis] L3 business gate -> HUMAN without full-layer replay")
+                    if isinstance(gate_decision, dict):
+                        gate_decision = dict(gate_decision)
+                        gate_decision["feedback_route"] = "HUMAN"
+                        gate_decision.setdefault("diagnostic_code", "L3_GATE_REVIEW_REQUIRED")
+                        state[gate_key] = gate_decision
+                    return "human_review"
+                if retry_count >= retry_limit:
+                    logger.warning(
+                        "[after_analysis] %s rework exhausted for L%d -> HUMAN",
+                        route,
+                        layer_num,
+                    )
+                    if isinstance(gate_decision, dict):
+                        gate_decision = dict(gate_decision)
+                        gate_decision["feedback_route"] = "HUMAN"
+                        gate_decision.setdefault("diagnostic_code", "BUSINESS_RETRY_EXHAUSTED")
+                        state[gate_key] = gate_decision
+                    return "human_review"
                 # Rework: re-dispatch dimensions of this layer
                 from app.config.loader import list_dimensions
                 dim_configs = list_dimensions(layer_num)

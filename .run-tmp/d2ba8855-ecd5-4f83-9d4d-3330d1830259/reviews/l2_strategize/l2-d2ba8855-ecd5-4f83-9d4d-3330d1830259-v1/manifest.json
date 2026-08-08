@@ -1,0 +1,16 @@
+{
+  "review_id": "l2-d2ba8855-ecd5-4f83-9d4d-3330d1830259-v1",
+  "revision": 1,
+  "run_id": "d2ba8855-ecd5-4f83-9d4d-3330d1830259",
+  "module": "l2_strategize",
+  "status": "awaiting_review",
+  "artifact_ref": {
+    "artifact_id": "l2-d2ba8855-ecd5-4f83-9d4d-3330d1830259-v1",
+    "module": "l2_strategize",
+    "run_id": "d2ba8855-ecd5-4f83-9d4d-3330d1830259",
+    "artifact_type": "L2Strategy",
+    "revision": "v1"
+  },
+  "created_at": "2026-08-08T08:18:45.505154+00:00",
+  "updated_at": "2026-08-08T08:18:45.505155+00:00"
+}

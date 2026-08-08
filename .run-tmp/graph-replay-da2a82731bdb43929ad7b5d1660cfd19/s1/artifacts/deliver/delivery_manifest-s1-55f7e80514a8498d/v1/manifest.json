@@ -1,0 +1,12 @@
+{
+  "artifact_id": "delivery_manifest-s1-55f7e80514a8498d",
+  "module": "deliver",
+  "run_id": "s1",
+  "artifact_type": "DeliveryManifest",
+  "context_version": "1",
+  "context_fingerprint": "sha256:test",
+  "revision": "v1",
+  "created_at": "2026-08-08T10:32:53.062204+00:00",
+  "checksum": "2a081911dbacdd98c6f07edb0612509e0a800670609f51c5726748493b00dd67",
+  "payload_bytes": 437
+}

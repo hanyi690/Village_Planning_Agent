@@ -11,6 +11,7 @@ compute_parcel_relations computes three-layer spatial relations for KG consumpti
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from numbers import Integral
 from typing import Any, Dict, List, Optional, Tuple
 
 from app.utils.logger import get_logger
@@ -160,8 +161,58 @@ def compute_parcel_relations(parcels: List[Any], roads: Optional[List[Any]] = No
         ParcelRelations with touches, nearby, connected, parcel_road_intersects,
         and parcel_water_touches lists.
     """
-    import geopandas as gpd
     from shapely.geometry import shape
+    from shapely.ops import transform
+    from shapely.strtree import STRtree
+    try:
+        from shapely.validation import make_valid
+    except ImportError:  # pragma: no cover - Shapely 1.x fallback
+        make_valid = None
+    try:
+        from pyproj import Transformer
+        _project = Transformer.from_crs("EPSG:4326", "EPSG:3857", always_xy=True).transform
+    except Exception:
+        _project = None
+
+    def _safe_geometry(value: Any):
+        """Materialize a valid geometry before any GEOS predicate.
+
+        Uploaded GeoJSON is preserved unchanged for audit; relation computation
+        uses this derived copy.  Invalid rings are repaired with the official
+        Shapely ``make_valid`` operation and unusable results fail closed.
+        """
+        try:
+            geom = shape(value)
+            if geom.is_empty:
+                return None
+            if not geom.is_valid and make_valid is not None:
+                geom = make_valid(geom)
+            if geom.is_empty or not geom.is_valid:
+                return None
+            return geom
+        except Exception:
+            return None
+
+    def _metric(geom):
+        if _project is None:
+            return geom
+        try:
+            return transform(_project, geom)
+        except Exception:
+            return None
+
+    def _query_indices(tree, geom, geoms):
+        try:
+            hits = tree.query(geom)
+            if len(hits) == 0:
+                return []
+            first = hits[0]
+            if isinstance(first, Integral):
+                return [int(i) for i in hits]
+            positions = {id(g): i for i, g in enumerate(geoms)}
+            return [positions[id(g)] for g in hits if id(g) in positions]
+        except Exception:
+            return []
 
     if not parcels:
         return ParcelRelations()
@@ -176,8 +227,8 @@ def compute_parcel_relations(parcels: List[Any], roads: Optional[List[Any]] = No
         if not bsm or geom is None:
             continue
         try:
-            s = shape(geom)
-            if s.is_empty:
+            s = _safe_geometry(geom)
+            if s is None:
                 continue
             composite_key = f"{bsm}_{dlbm}_{int(area_sqm)}"
             rows.append({"bsm": bsm, "dlbm": dlbm, "area_sqm": area_sqm,
@@ -188,29 +239,35 @@ def compute_parcel_relations(parcels: List[Any], roads: Optional[List[Any]] = No
     if not rows:
         return ParcelRelations()
 
-    gdf = gpd.GeoDataFrame(rows, crs="EPSG:4326")
-    gdf_metric = gdf.to_crs("EPSG:3857")
+    parcel_meta = [(r["bsm"], r["dlbm"], r["area_sqm"]) for r in rows]
+    parcel_geoms = [r["geometry"] for r in rows]
+    metric_geoms = [_metric(g) for g in parcel_geoms]
+    valid = [i for i, g in enumerate(metric_geoms) if g is not None and not g.is_empty]
+    parcel_meta = [parcel_meta[i] for i in valid]
+    parcel_geoms = [parcel_geoms[i] for i in valid]
+    metric_geoms = [metric_geoms[i] for i in valid]
+    if not metric_geoms:
+        return ParcelRelations()
+    parcel_tree = STRtree(metric_geoms)
 
     result = ParcelRelations()
 
     # L1: topological touches
     try:
-        sindex = gdf_metric.sindex
-        for i in range(len(gdf_metric)):
-            geom_i = gdf_metric.iloc[i].geometry
-            possible = list(sindex.intersection(geom_i.bounds))
+        for i, geom_i in enumerate(metric_geoms):
+            possible = _query_indices(parcel_tree, geom_i, metric_geoms)
             for j in possible:
                 if i >= j:
                     continue
-                geom_j = gdf_metric.iloc[j].geometry
+                geom_j = metric_geoms[j]
                 if geom_i.touches(geom_j):
                     try:
                         shared = geom_i.intersection(geom_j).length
                     except Exception:
                         shared = 0.0
                     result.touches.append(TouchRelation(
-                        bsm_a=gdf.iloc[i].bsm, bsm_b=gdf.iloc[j].bsm,
-                        dlbm_a=gdf.iloc[i].dlbm, dlbm_b=gdf.iloc[j].dlbm,
+                        bsm_a=parcel_meta[i][0], bsm_b=parcel_meta[j][0],
+                        dlbm_a=parcel_meta[i][1], dlbm_b=parcel_meta[j][1],
                         shared_boundary_length_m=round(shared, 2),
                     ))
     except Exception as e:
@@ -221,10 +278,9 @@ def compute_parcel_relations(parcels: List[Any], roads: Optional[List[Any]] = No
         # Materialize geometry and metadata once.  Repeated GeoSeries.iloc
         # access inside the O(n²) loop is both slow and unstable with the
         # Windows pandas/geopandas stack on the real 660-parcel fixture.
-        centroids = list(gdf_metric.geometry.centroid)
-        parcel_meta = list(zip(gdf.bsm.tolist(), gdf.dlbm.tolist()))
+        centroids = [g.centroid for g in metric_geoms]
         # area-weighted: larger parcels have wider nearby range
-        sqrt_areas = [max(g.area, 1) ** 0.5 for g in list(gdf_metric.geometry)]
+        sqrt_areas = [max(g.area, 1) ** 0.5 for g in metric_geoms]
         for i in range(len(centroids)):
             for j in range(i + 1, len(centroids)):
                 dist = centroids[i].distance(centroids[j])
@@ -250,35 +306,29 @@ def compute_parcel_relations(parcels: List[Any], roads: Optional[List[Any]] = No
                 if rd_geom is None:
                     continue
                 try:
-                    rs = _shape(rd_geom)
-                    if rs.is_empty:
+                    rs = _safe_geometry(rd_geom)
+                    if rs is None:
                         continue
                     road_geoms.append((rd_bsm, rd_name, rs))
                 except Exception:
                     continue
 
             if road_geoms:
-                rd_metric = gpd.GeoDataFrame(
-                    {"road_bsm": [r[0] for r in road_geoms],
-                     "road_name": [r[1] for r in road_geoms],
-                     "geometry": [r[2] for r in road_geoms]},
-                    crs="EPSG:4326",
-                ).to_crs("EPSG:3857")
-
-                parcel_sindex = gdf_metric.sindex
-                for ri in range(len(rd_metric)):
-                    road_geom = rd_metric.iloc[ri].geometry
-                    rd_id = rd_metric.iloc[ri].road_bsm or rd_metric.iloc[ri].road_name
+                rd_metric = [(r[0], r[1], _metric(r[2])) for r in road_geoms]
+                for ri, (road_bsm, road_name, road_geom) in enumerate(rd_metric):
+                    if road_geom is None or road_geom.is_empty:
+                        continue
+                    rd_id = road_bsm or road_name
                     # Find parcels this road crosses
-                    possible_idx = list(parcel_sindex.intersection(road_geom.bounds))
+                    possible_idx = _query_indices(parcel_tree, road_geom, metric_geoms)
                     crossed_bsms = []
                     for pi in possible_idx:
-                        pgeom = gdf_metric.iloc[pi].geometry
+                        pgeom = metric_geoms[pi]
                         if road_geom.crosses(pgeom) or road_geom.intersects(pgeom):
-                            crossed_bsms.append((gdf.iloc[pi].bsm, pgeom))
+                            crossed_bsms.append((parcel_meta[pi][0], pgeom))
                             # cross-layer: record parcel↔road intersects
                             result.parcel_road_intersects.append(
-                                (gdf.iloc[pi].bsm, rd_id)
+                                (parcel_meta[pi][0], rd_id)
                             )
                     # All pairs of parcels crossed by the same road are connected
                     for a in range(len(crossed_bsms)):
@@ -317,30 +367,24 @@ def compute_parcel_relations(parcels: List[Any], roads: Optional[List[Any]] = No
                 if not w_id or w_geom is None:
                     continue
                 try:
-                    ws = _shape(w_geom)
-                    if ws.is_empty:
+                    ws = _safe_geometry(w_geom)
+                    if ws is None:
                         continue
                     water_geoms.append((w_id, ws))
                 except Exception:
                     continue
 
             if water_geoms:
-                w_metric = gpd.GeoDataFrame(
-                    {"water_id": [w[0] for w in water_geoms],
-                     "geometry": [w[1] for w in water_geoms]},
-                    crs="EPSG:4326",
-                ).to_crs("EPSG:3857")
-
-                parcel_sindex = gdf_metric.sindex
-                for wi in range(len(w_metric)):
-                    water_geom = w_metric.iloc[wi].geometry
-                    water_id = w_metric.iloc[wi].water_id
-                    possible_idx = list(parcel_sindex.intersection(water_geom.bounds))
+                w_metric = [(w[0], _metric(w[1])) for w in water_geoms]
+                for wi, (water_id, water_geom) in enumerate(w_metric):
+                    if water_geom is None or water_geom.is_empty:
+                        continue
+                    possible_idx = _query_indices(parcel_tree, water_geom, metric_geoms)
                     for pi in possible_idx:
-                        parcel_geom = gdf_metric.iloc[pi].geometry
+                        parcel_geom = metric_geoms[pi]
                         if parcel_geom.touches(water_geom) or parcel_geom.intersects(water_geom):
                             result.parcel_water_touches.append(
-                                (gdf.iloc[pi].bsm, water_id)
+                                (parcel_meta[pi][0], water_id)
                             )
         except Exception as e:
             logger.warning("[geometry] Cross-layer water computation failed: %s", e)

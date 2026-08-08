@@ -1,0 +1,12 @@
+{
+  "artifact_id": "l1-d2ba8855-ecd5-4f83-9d4d-3330d1830259-v1",
+  "module": "l1_observe",
+  "run_id": "d2ba8855-ecd5-4f83-9d4d-3330d1830259",
+  "artifact_type": "L1Snapshot",
+  "context_version": "1",
+  "context_fingerprint": "sha256:fbc7ca040e97883d",
+  "revision": "v1",
+  "created_at": "2026-08-08T08:15:08.630932+00:00",
+  "checksum": "641814cceb4e751ae813244b1f3eb4e35e76cfb9ba2e09602d77d7d654a07b42",
+  "payload_bytes": 34877
+}

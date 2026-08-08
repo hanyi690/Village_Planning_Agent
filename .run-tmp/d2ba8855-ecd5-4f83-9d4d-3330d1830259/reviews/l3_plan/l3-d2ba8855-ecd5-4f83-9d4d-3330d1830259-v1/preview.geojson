@@ -1,0 +1,8 @@
+{
+  "type": "FeatureCollection",
+  "features": [],
+  "properties": {
+    "note": "L3 PLAN produces no spatial geometry; preview empty until GROUND/SELECT.",
+    "artifact_id": "l3-d2ba8855-ecd5-4f83-9d4d-3330d1830259-v1"
+  }
+}

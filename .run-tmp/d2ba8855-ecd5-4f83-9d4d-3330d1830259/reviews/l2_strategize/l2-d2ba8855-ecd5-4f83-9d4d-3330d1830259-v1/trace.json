@@ -1,0 +1,48 @@
+{
+  "artifact_id": "l2-d2ba8855-ecd5-4f83-9d4d-3330d1830259-v1",
+  "context_version": "1",
+  "dimension_provenance": [
+    {
+      "source": "l2_strategize",
+      "run_id": "d2ba8855-ecd5-4f83-9d4d-3330d1830259",
+      "module": "l2_strategize",
+      "trace": [
+        "development_goals",
+        "rpt-development_goals-v1"
+      ]
+    },
+    {
+      "source": "l2_strategize",
+      "run_id": "d2ba8855-ecd5-4f83-9d4d-3330d1830259",
+      "module": "l2_strategize",
+      "trace": [
+        "planning_positioning",
+        "rpt-planning_positioning-v1"
+      ]
+    },
+    {
+      "source": "l2_strategize",
+      "run_id": "d2ba8855-ecd5-4f83-9d4d-3330d1830259",
+      "module": "l2_strategize",
+      "trace": [
+        "planning_strategies",
+        "rpt-planning_strategies-v1"
+      ]
+    },
+    {
+      "source": "l2_strategize",
+      "run_id": "d2ba8855-ecd5-4f83-9d4d-3330d1830259",
+      "module": "l2_strategize",
+      "trace": [
+        "resource_endowment",
+        "rpt-resource_endowment-v1"
+      ]
+    }
+  ],
+  "dimension_reports": {},
+  "extraction_steps": [
+    "compile_l2_strategy (per dimension)",
+    "merge_strategy_fragments",
+    "evaluate_l2_gate"
+  ]
+}

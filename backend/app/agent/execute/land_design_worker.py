@@ -60,14 +60,20 @@ def _geometry_to_wkt(geometry: dict) -> str:
 
 
 def _parcel_geometry(parcel: Any) -> dict:
-    geometry = getattr(parcel, "geometry", None)
+    geometry = parcel.get("geometry") if isinstance(parcel, dict) else getattr(parcel, "geometry", None)
     return geometry if isinstance(geometry, dict) else {}
 
 
 def _parcel_area_ha(parcel: Any) -> float:
-    area_sqm = float(getattr(parcel, "area_sqm", 0) or 0)
+    area_sqm = float(
+        (parcel.get("area_sqm", 0) if isinstance(parcel, dict) else getattr(parcel, "area_sqm", 0))
+        or 0
+    )
     if area_sqm <= 0:
-        area_sqm = float(getattr(parcel, "area_ha", 0) or 0) * 10000
+        area_sqm = float(
+            (parcel.get("area_ha", 0) if isinstance(parcel, dict) else getattr(parcel, "area_ha", 0))
+            or 0
+        ) * 10000
     return area_sqm / 10000 if area_sqm > 10000 else area_sqm
 
 
@@ -136,7 +142,10 @@ def design_project_parcel(
         return None
 
     if brief is None:
-        dlbm = str(getattr(parcel, "dlbm", "") or "")
+        dlbm = str(
+            (parcel.get("dlbm", "") if isinstance(parcel, dict) else getattr(parcel, "dlbm", ""))
+            or ""
+        )
         return ParcelChange(
             bsm=str(selected_bsm),
             action="preserve",
@@ -382,7 +391,10 @@ def design_facility_parcel(
             containing.append((str(bsm), parcel, geom))
     if len(containing) == 1:
         bsm, parcel, parcel_geom = containing[0]
-        code = facility_target.type or str(getattr(parcel, "dlbm", "") or "")
+        code = facility_target.type or str(
+            (parcel.get("dlbm", "") if isinstance(parcel, dict) else getattr(parcel, "dlbm", ""))
+            or ""
+        )
         return ParcelChange(
             bsm=bsm,
             action="reclassify",

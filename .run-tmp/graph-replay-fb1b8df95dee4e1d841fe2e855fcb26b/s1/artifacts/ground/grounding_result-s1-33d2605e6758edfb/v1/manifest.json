@@ -1,0 +1,12 @@
+{
+  "artifact_id": "grounding_result-s1-33d2605e6758edfb",
+  "module": "ground",
+  "run_id": "s1",
+  "artifact_type": "GroundingResult",
+  "context_version": "1",
+  "context_fingerprint": "sha256:test",
+  "revision": "v1",
+  "created_at": "2026-08-08T10:43:53.843163+00:00",
+  "checksum": "1683aeaf25c534431b92e3274dc6e5de7fd498c687e06c21e530524f588e3a21",
+  "payload_bytes": 208
+}

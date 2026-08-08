@@ -10,6 +10,15 @@ from app.agent.execute.execute_state import ExecuteAgentState
 
 def _checkpoint_safe(value: Any) -> Any:
     """Convert NumPy scalar containers to checkpoint-serializable primitives."""
+    # Worker input adapters historically used ``SimpleNamespace`` for parcels.
+    # That object is convenient inside a worker but msgpack cannot persist it
+    # in a LangGraph checkpoint (the failure only surfaced when resuming HUMAN).
+    # Convert it at the subgraph boundary; downstream parcel helpers accept
+    # both mapping and attribute-shaped values.
+    from types import SimpleNamespace
+
+    if isinstance(value, SimpleNamespace):
+        return {str(key): _checkpoint_safe(item) for key, item in vars(value).items()}
     module_name = type(value).__module__
     if module_name == "numpy" or module_name.startswith("numpy."):
         if hasattr(value, "item"):

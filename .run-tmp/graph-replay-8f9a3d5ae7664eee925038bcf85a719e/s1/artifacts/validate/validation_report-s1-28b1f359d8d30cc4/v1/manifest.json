@@ -1,0 +1,12 @@
+{
+  "artifact_id": "validation_report-s1-28b1f359d8d30cc4",
+  "module": "validate",
+  "run_id": "s1",
+  "artifact_type": "ValidationReport",
+  "context_version": "1",
+  "context_fingerprint": "sha256:test",
+  "revision": "v1",
+  "created_at": "2026-08-08T10:57:55.032611+00:00",
+  "checksum": "e2996eed29a0ff2c7de291e3e7a57437144212f62c05c2213ef1b2b8167f0157",
+  "payload_bytes": 220
+}

@@ -16,6 +16,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import threading
 import time
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
@@ -25,6 +26,42 @@ from app.core.events import SSEEventType
 from app.utils.logger import get_logger
 
 logger = get_logger(__name__)
+
+# Provider failures are session-scoped circuit-breaker events.  A LangGraph
+# layer fans out several dimensions concurrently; once the provider rejects
+# one request, later waves must not keep spending requests on the same outage.
+_PROVIDER_FAILURE_LOCK = threading.Lock()
+_PROVIDER_FAILURE_SESSIONS: set[str] = set()
+
+
+def reset_provider_failure(session_id: str) -> None:
+    if session_id:
+        with _PROVIDER_FAILURE_LOCK:
+            _PROVIDER_FAILURE_SESSIONS.discard(session_id)
+
+
+def provider_failure_open(session_id: str) -> bool:
+    if not session_id:
+        return False
+    with _PROVIDER_FAILURE_LOCK:
+        return session_id in _PROVIDER_FAILURE_SESSIONS
+
+
+def trip_provider_failure(session_id: str) -> None:
+    if session_id:
+        with _PROVIDER_FAILURE_LOCK:
+            _PROVIDER_FAILURE_SESSIONS.add(session_id)
+
+
+def dimension_failure_attempt(state: dict[str, Any], dimension_key: str) -> dict[str, int]:
+    """Return a monotonic per-dimension failure count for checkpoint audits."""
+    counts = dict(state.get("dimension_retry_counts") or {})
+    key = str(dimension_key or "unknown")
+    try:
+        counts[key] = int(counts.get(key, 0)) + 1
+    except (TypeError, ValueError):
+        counts[key] = 1
+    return counts
 
 
 def _display_report(content: str | None) -> str:
@@ -90,6 +127,23 @@ async def run_rag(dimension_key: str, cfg: Any, state: Dict[str, Any]) -> tuple[
     config = state.get("config", {})
     dim_layer = getattr(cfg, "layer", get_dimension_layer(dimension_key) or 3)
     prefer_doc_types = getattr(cfg, "prefer_doc_types", None) or None
+
+    if provider_failure_open(session_id):
+        return (
+            "",
+            RAGRetrievalLog(
+                dimension_key=dimension_key,
+                query="",
+                query_generation_method="circuit_open",
+                retrieved_chunks=[],
+                total_results=0,
+                retrieval_latency_ms=0,
+                context_length=0,
+                context_truncated=False,
+                rag_enabled=False,
+                skip_reason="LLM provider circuit is open",
+            ),
+        )
 
     _latest = await PlanningRuntimeService.aget_state_values(session_id)
     live_config = _latest.get("config", {}) if _latest else config
@@ -237,6 +291,11 @@ async def run_rag(dimension_key: str, cfg: Any, state: Dict[str, Any]) -> tuple[
         )
         return (ctx, rlog)
     except Exception as e:
+        message = str(e).lower()
+        if any(marker in message for marker in (
+            "invalid_api_key", "arrearage", "access denied", "401", "402",
+        )):
+            trip_provider_failure(session_id)
         logger.error(f"[dimension_runtime] {dimension_key}: RAG failed: {e}")
         rlog = RAGRetrievalLog(
             dimension_key=dimension_key, query="", query_generation_method="failed",

@@ -164,14 +164,49 @@ def _external_anchors_from_bundle(bundle: Any) -> List[GazetteerEntry]:
     """
     if bundle is None:
         return []
+    # Uploaded annotation points are authoritative GIS evidence, but the
+    # grounding contract requires a BSM-backed entry.  Bind each point to the
+    # actual landuse parcel that contains/touches it; this is a deterministic
+    # geometric relation, never a name-based or nearest-parcel guess.
+    landuse = list((getattr(bundle, "polygons", None) or {}).get("landuse_current") or [])
+    from shapely.geometry import Point, shape
+
+    def bsms_at(coords: Any) -> List[str]:
+        try:
+            point = Point(float(coords[0]), float(coords[1]))
+        except (TypeError, ValueError, IndexError):
+            return []
+        matched: List[str] = []
+        for parcel in landuse:
+            try:
+                geom = shape(getattr(parcel, "geometry", None) or {})
+                if not geom.is_empty and (geom.contains(point) or geom.touches(point)):
+                    bsm = str(getattr(parcel, "bsm", "") or "").strip()
+                    if bsm:
+                        matched.append(bsm)
+            except Exception:
+                continue
+        return matched
+
     entries: List[GazetteerEntry] = []
     for f in (bundle.points.get("annotations_current") or []):
-        layer_type = str(f.layer_type or "")
-        if layer_type != "external_natural_village":
-            continue
+        layer_type = str(getattr(f, "layer_type", "") or "")
         raw = getattr(f, "_raw", {}) or {}
-        name_norm = str(raw.get("name_norm", "") or "").strip()
-        anchor_source = str(raw.get("anchor_source", "") or "").strip()
+        if (not isinstance(raw, dict) or not raw) and hasattr(f, "model_dump"):
+            try:
+                raw = f.model_dump(by_alias=True)
+            except Exception:
+                raw = {}
+        # Accept both the external-provider contract and ordinary uploaded
+        # annotation.geojson (分类=村名, 注记=...).  The latter is source GIS
+        # evidence, not a generated label, so it must participate in lookup.
+        is_named_annotation = str(raw.get("分类", raw.get("category", "")) or "").strip() in {"村名", "自然村"}
+        if layer_type != "external_natural_village" and not is_named_annotation:
+            continue
+        name_norm = str(
+            raw.get("name_norm") or raw.get("注记") or raw.get("text") or ""
+        ).strip()
+        anchor_source = str(raw.get("anchor_source", "uploaded_annotation") or "").strip()
         if not name_norm:
             continue
         geom = f.geometry or {}
@@ -182,7 +217,7 @@ def _external_anchors_from_bundle(bundle: Any) -> List[GazetteerEntry]:
             name=name_norm,
             aliases=[],
             entity_uri=f"pln:external_{anchor_source}_{name_norm}",
-            bsms=[],
+            bsms=bsms_at(coords),
             centroid=[float(coords[0]), float(coords[1])],
             source=anchor_source or "external_anchors",
             confidence=0.9,

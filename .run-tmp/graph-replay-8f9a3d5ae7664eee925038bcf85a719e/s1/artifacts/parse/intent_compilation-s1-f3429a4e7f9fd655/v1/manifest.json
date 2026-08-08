@@ -1,0 +1,12 @@
+{
+  "artifact_id": "intent_compilation-s1-f3429a4e7f9fd655",
+  "module": "parse",
+  "run_id": "s1",
+  "artifact_type": "IntentCompilationResult",
+  "context_version": "1",
+  "context_fingerprint": "sha256:test",
+  "revision": "v1",
+  "created_at": "2026-08-08T10:57:54.894688+00:00",
+  "checksum": "d4e5e13cfee9870c6d42c06a163e73b6a70aad140ed98c715ffd9650a9c64acd",
+  "payload_bytes": 1317
+}

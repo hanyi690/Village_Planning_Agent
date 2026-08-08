@@ -18,7 +18,7 @@ from typing import Dict, Any, List, Optional
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from app.config import get_dimension_config, get_dimension_layer, list_dimensions
 from app.core.llm import create_llm
-from app.core.settings import LLM_MODEL, MAX_TOKENS, LLM_STREAM_TIMEOUT
+from app.core.settings import MAX_TOKENS, LLM_STREAM_TIMEOUT
 from app.core.events import SSEEventType
 from app.utils.logger import get_logger
 from app.agent.explore.service import retrieve_evidence, render_evidence_prompt_section
@@ -31,6 +31,9 @@ from app.agent.common.dimension_runtime import (
     publish_dimension_complete,
     publish_dimension_delta,
     publish_dimension_start,
+    provider_failure_open,
+    trip_provider_failure,
+    dimension_failure_attempt,
     run_rag,
     save_report_immediate,
     save_step_report,
@@ -49,7 +52,7 @@ _L1_LLM_SLOTS = threading.BoundedSemaphore(
 def _get_llm():
     global _llm_cache
     if _llm_cache is None:
-        _llm_cache = create_llm(model=LLM_MODEL, temperature=0.7, max_tokens=MAX_TOKENS, streaming=True)
+        _llm_cache = create_llm(temperature=0.7, max_tokens=MAX_TOKENS, streaming=True)
     return _llm_cache
 
 
@@ -266,6 +269,14 @@ async def analyze_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
 
     # 7. 流式 LLM + SSE
     llm = _get_llm()
+    if provider_failure_open(session_id):
+        return {
+            "fatal_error": {
+                "stage": f"L{dim_layer}", "dimension": dim_key,
+                "code": "llm_provider_circuit_open",
+                "message": "LLM provider circuit is open after a prior session failure",
+            }
+        }
     llm_start_time = time.time()
 
     llm_response = ""
@@ -276,10 +287,11 @@ async def analyze_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
         llm_input = [
             SystemMessage(
                 content=(
-                    "你是村庄规划L1现状观察节点。必须严格执行输出协议："
-                    "先输出维度分析正文，最后必须输出字面量【INSTRUCTION】及其五列表格。"
-                    "即使没有对象也不得省略marker、表头和分隔行。"
-                    "表格只能摘录正文明确出现的现状对象，不得编造。"
+                    "你是村庄规划L1现状观察节点。输出必须遵守以下协议，协议优先于其他写作习惯："
+                    "先写维度分析正文；正文结束后单独一行输出字面量【INSTRUCTION】；"
+                    "下一行必须是表头 | 类型 | 名称 | 位置 | 现状描述 | 证据来源 |，再下一行是 |---|---|---|---|---|；"
+                    "之后每个现状空间对象一行。即使没有对象，也必须输出marker、表头和分隔行。"
+                    "禁止用代码围栏包裹该部分，禁止改写marker。表格只能摘录正文明确出现的现状对象，不得编造。"
                 )
             ),
             HumanMessage(content=prompt),
@@ -302,6 +314,7 @@ async def analyze_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
         finally:
             _L1_LLM_SLOTS.release()
     except asyncio.TimeoutError:
+        trip_provider_failure(session_id)
         logger.error(f"[analyze_dimension] {dim_key}: LLM stream timeout after {LLM_STREAM_TIMEOUT}s")
         await sse_manager.publish(session_id, {
             "type": SSEEventType.DIMENSION_ERROR,
@@ -310,8 +323,18 @@ async def analyze_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
             "layer": dim_layer,
             "error": f"LLM stream timeout ({LLM_STREAM_TIMEOUT}s)",
         })
-        return {"messages": [AIMessage(content=f"[执行失败] LLM流式超时({LLM_STREAM_TIMEOUT}s)")]}
+        return {
+            "messages": [AIMessage(content=f"[执行失败] LLM流式超时({LLM_STREAM_TIMEOUT}s)")],
+            "dimension_retry_counts": dimension_failure_attempt(state, dim_key),
+            "fatal_error": {
+                "stage": f"L{dim_layer}",
+                "dimension": dim_key,
+                "code": "llm_stream_timeout",
+                "message": f"LLM stream timeout ({LLM_STREAM_TIMEOUT}s)",
+            },
+        }
     except Exception as e:
+        trip_provider_failure(session_id)
         logger.error(f"[analyze_dimension] {dim_key}: LLM 失败: {e}")
         await sse_manager.publish(session_id, {
             "type": SSEEventType.DIMENSION_ERROR,
@@ -320,7 +343,16 @@ async def analyze_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
             "layer": dim_layer,
             "error": str(e),
         })
-        return {"messages": [AIMessage(content=f"[执行失败] LLM错误: {e}")]}
+        return {
+            "messages": [AIMessage(content=f"[执行失败] LLM错误: {e}")],
+            "dimension_retry_counts": dimension_failure_attempt(state, dim_key),
+            "fatal_error": {
+                "stage": f"L{dim_layer}",
+                "dimension": dim_key,
+                "code": "llm_provider_error",
+                "message": str(e),
+            },
+        }
 
     # Flush remaining delta (throttle may have skipped the last chunk)
     if llm_response and _last_publish_time > 0:

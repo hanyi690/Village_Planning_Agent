@@ -22,7 +22,7 @@ from langchain_core.messages import AIMessage
 from app.config import get_dimension_config
 from app.core.events import SSEEventType
 from app.core.llm import create_llm
-from app.core.settings import LLM_MODEL, MAX_TOKENS, LLM_STREAM_TIMEOUT
+from app.core.settings import MAX_TOKENS, LLM_STREAM_TIMEOUT
 from app.utils.logger import get_logger
 from app.agent.common.dimension_runtime import (
     enrich_summary_background,
@@ -32,6 +32,9 @@ from app.agent.common.dimension_runtime import (
     publish_dimension_complete,
     publish_dimension_delta,
     publish_dimension_start,
+    provider_failure_open,
+    trip_provider_failure,
+    dimension_failure_attempt,
     run_rag,
     save_report_immediate,
     save_step_report,
@@ -50,7 +53,7 @@ _llm_cache: Optional[Any] = None
 def _get_llm():
     global _llm_cache
     if _llm_cache is None:
-        _llm_cache = create_llm(model=LLM_MODEL, temperature=0.7, max_tokens=MAX_TOKENS, streaming=True)
+        _llm_cache = create_llm(temperature=0.7, max_tokens=MAX_TOKENS, streaming=True)
     return _llm_cache
 
 
@@ -229,6 +232,15 @@ async def analyze_l3_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
 
     # 6. 流式 LLM + SSE
     llm = _get_llm()
+    if provider_failure_open(session_id):
+        return {
+            "dimension_retry_counts": dimension_failure_attempt(state, dim_key),
+            "fatal_error": {
+                "stage": f"L{dim_layer}", "dimension": dim_key,
+                "code": "llm_provider_circuit_open",
+                "message": "LLM provider circuit is open after a prior session failure",
+            }
+        }
     llm_start_time = time.time()
 
     llm_response = ""
@@ -248,6 +260,7 @@ async def analyze_l3_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
                         )
                         _last_publish_time = now
     except asyncio.TimeoutError:
+        trip_provider_failure(session_id)
         logger.error(f"[analyze_l3_dimension] {dim_key}: LLM stream timeout after {LLM_STREAM_TIMEOUT}s")
         await sse_manager.publish(session_id, {
             "type": SSEEventType.DIMENSION_ERROR,
@@ -256,8 +269,17 @@ async def analyze_l3_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
             "layer": dim_layer,
             "error": f"LLM stream timeout ({LLM_STREAM_TIMEOUT}s)",
         })
-        return {"messages": [AIMessage(content=f"[执行失败] LLM流式超时({LLM_STREAM_TIMEOUT}s)")]}
+        return {
+            "messages": [AIMessage(content=f"[执行失败] LLM流式超时({LLM_STREAM_TIMEOUT}s)")],
+            "dimension_retry_counts": dimension_failure_attempt(state, dim_key),
+            "fatal_error": {
+                "stage": f"L{dim_layer}", "dimension": dim_key,
+                "code": "llm_stream_timeout",
+                "message": f"LLM stream timeout ({LLM_STREAM_TIMEOUT}s)",
+            },
+        }
     except Exception as e:
+        trip_provider_failure(session_id)
         logger.error(f"[analyze_l3_dimension] {dim_key}: LLM 失败: {e}")
         await sse_manager.publish(session_id, {
             "type": SSEEventType.DIMENSION_ERROR,
@@ -266,7 +288,14 @@ async def analyze_l3_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
             "layer": dim_layer,
             "error": str(e),
         })
-        return {"messages": [AIMessage(content=f"[执行失败] LLM错误: {e}")]}
+        return {
+            "messages": [AIMessage(content=f"[执行失败] LLM错误: {e}")],
+            "dimension_retry_counts": dimension_failure_attempt(state, dim_key),
+            "fatal_error": {
+                "stage": f"L{dim_layer}", "dimension": dim_key,
+                "code": "llm_provider_error", "message": str(e),
+            },
+        }
 
     # Flush remaining delta (throttle may have skipped the last chunk)
     if llm_response and _last_publish_time > 0:

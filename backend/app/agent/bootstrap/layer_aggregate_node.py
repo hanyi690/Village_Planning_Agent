@@ -73,6 +73,15 @@ async def layer_aggregate_node(state: Dict[str, Any]) -> Dict[str, Any]:
             patch = {**{k: aggregate_state[k] for k in ("context_version", "context_fingerprint", "context_ref", "bootstrap_context_done") if k in aggregate_state}, **patch}
         patch["layer_just_completed"] = None
         _update_explore_retry(state, patch, layer, "l1_gate_decision")
+        # Enrichment consumes the typed L1Snapshot; it must run after this
+        # aggregate persisted its artifact, not in layer_completion_check.
+        from app.agent.plan_state.completion_node import _invoke_extraction
+
+        await _invoke_extraction(
+            session_id=state.get("session_id", ""),
+            layer=1,
+            state={**aggregate_state, **patch},
+        )
         return patch
 
     if layer == 2:
@@ -83,6 +92,13 @@ async def layer_aggregate_node(state: Dict[str, Any]) -> Dict[str, Any]:
             patch = {**{k: aggregate_state[k] for k in ("context_version", "context_fingerprint", "context_ref", "bootstrap_context_done") if k in aggregate_state}, **patch}
         patch["layer_just_completed"] = None
         _update_explore_retry(state, patch, layer, "l2_gate_decision")
+        from app.agent.plan_state.completion_node import _invoke_extraction
+
+        await _invoke_extraction(
+            session_id=state.get("session_id", ""),
+            layer=2,
+            state={**aggregate_state, **patch},
+        )
         return patch
 
     if layer == 3:
@@ -93,6 +109,13 @@ async def layer_aggregate_node(state: Dict[str, Any]) -> Dict[str, Any]:
             patch = {**{k: aggregate_state[k] for k in ("context_version", "context_fingerprint", "context_ref", "bootstrap_context_done") if k in aggregate_state}, **patch}
         patch["layer_just_completed"] = None
         _update_explore_retry(state, patch, layer, "l3_gate_decision")
+        from app.agent.plan_state.completion_node import _invoke_extraction
+
+        await _invoke_extraction(
+            session_id=state.get("session_id", ""),
+            layer=3,
+            state={**aggregate_state, **patch},
+        )
         return patch
 
     logger.warning("[layer_aggregate] unknown layer=%s, skipping", layer)

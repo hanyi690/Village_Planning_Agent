@@ -49,7 +49,7 @@ def _normalize_layer(config: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     layer_type = config.get("layerType") or config.get("layer_type")
     if not layer_type:
         return None
-    data = config.get("data")
+    data = config.get("data") or config.get("geojson")
     if data is None and config.get("features") is not None:
         data = _feature_collection(config.get("features") or [])
     if not data or not data.get("features"):

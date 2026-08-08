@@ -153,6 +153,7 @@ async def l2_aggregate(
     artifact_store = FilesystemArtifactStore(base_dir=base_dir)
     ref = ArtifactRef(
         context_version=context_version,
+        context_fingerprint=state.get("context_fingerprint", ""),
         artifact_id=artifact_id,
         module="l2_strategize",
         run_id=run_id,
@@ -175,12 +176,19 @@ async def l2_aggregate(
 
     try:
         from app.services.step_report import save_step_report
+        from app.agent.bootstrap.stage_audit import build_input_audit
 
         await save_step_report(
             session_id,
             "L2",
             step_name="l2_aggregate",
             layer=2,
+            inputs=build_input_audit(
+                state,
+                stage="L2",
+                source_refs=["artifact:l1_snapshot", *[f"L2:{key}" for key in sorted(raw_reports)]],
+                artifact_refs={"l1_snapshot": (state.get("artifact_refs") or {}).get("l1_snapshot")},
+            ),
             outputs={
                 "development_goals": strategy.development_goals,
                 "implementation_priorities": strategy.implementation_priorities,
@@ -196,6 +204,8 @@ async def l2_aggregate(
                 "artifact_type": ref.artifact_type,
                 "revision": ref.revision,
                 "context_version": ref.context_version,
+                "context_fingerprint": ref.context_fingerprint,
+                "checksum": ref.checksum,
             }],
             diagnostics={"fact_consumer": "L2 dimension prompts via EXPLORE evidence service"},
         )
@@ -210,6 +220,8 @@ async def l2_aggregate(
             "artifact_type": "L2Strategy",
             "revision": "v1",
             "context_version": context_version,
+            "context_fingerprint": state.get("context_fingerprint", ""),
+            "checksum": ref.checksum,
         },
         "artifact_refs": {
             "l2_strategy": {
@@ -219,6 +231,8 @@ async def l2_aggregate(
                 "artifact_type": "L2Strategy",
                 "revision": "v1",
                 "context_version": context_version,
+                "context_fingerprint": state.get("context_fingerprint", ""),
+                "checksum": ref.checksum,
             }
         },
         "l2_gate_decision": gate_decision.model_dump(mode="json"),

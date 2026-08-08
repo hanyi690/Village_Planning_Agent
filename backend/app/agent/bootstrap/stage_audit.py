@@ -31,6 +31,34 @@ def _checksum(value: Any) -> str:
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
 
+def _output_snapshot(value: Any, *, depth: int = 0) -> Any:
+    """Keep stage outputs inspectable without copying typed GIS payloads.
+
+    StepReport is an audit record, not a second artifact store.  It therefore
+    records scalar metadata and collection sizes while leaving full payloads
+    behind the artifact refs.
+    """
+    if depth >= 2:
+        if isinstance(value, dict):
+            result = {"keys": list(value)[:20], "key_count": len(value)}
+            if isinstance(value.get("features"), list):
+                result["feature_count"] = len(value["features"])
+            return result
+        if isinstance(value, (list, tuple)):
+            return {"items": len(value)}
+    if isinstance(value, dict):
+        return {
+            str(key): _output_snapshot(item, depth=depth + 1)
+            for key, item in list(value.items())[:40]
+            if key not in {"planned_state", "parcel_changeset", "allocated_geojson"}
+        }
+    if isinstance(value, (list, tuple)):
+        return {"items": len(value), "sample": [_output_snapshot(item, depth=depth + 1) for item in value[:3]]}
+    if isinstance(value, str) and len(value) > 800:
+        return {"chars": len(value), "preview": value[:500]}
+    return value
+
+
 def _gate_route(value: Any) -> str | None:
     if value is None:
         return None
@@ -52,6 +80,33 @@ def _input_snapshot(state: Dict[str, Any], stage: str) -> Dict[str, Any]:
             "artifact_refs": state.get("artifact_refs") or {},
             "context_ref": state.get("context_ref") or {},
             "source_refs": state.get("uploaded_files") or [],
+        }),
+    }
+
+
+def build_input_audit(
+    state: Dict[str, Any],
+    *,
+    stage: str,
+    source_refs: list[str] | None = None,
+    artifact_refs: Dict[str, Any] | None = None,
+) -> Dict[str, Any]:
+    """Build the same ref/checksum input contract for layer aggregates."""
+    refs = artifact_refs if artifact_refs is not None else state.get("artifact_refs") or {}
+    context_ref = state.get("context_ref") or {
+        "session_id": state.get("session_id", ""),
+        "version": state.get("context_version", ""),
+    }
+    sources = list(source_refs or [])
+    return {
+        "artifact_refs": refs,
+        "context_ref": context_ref,
+        "source_refs": sources,
+        "input_checksum": _checksum({
+            "stage": stage,
+            "artifact_refs": refs,
+            "context_ref": context_ref,
+            "source_refs": sources,
         }),
     }
 
@@ -90,6 +145,7 @@ def audited_stage(stage: str) -> Callable[[Callable[..., Awaitable[Dict[str, Any
                 outputs = {
                     "artifact_refs": refs,
                     "output_keys": sorted(k for k in result if k not in {"planned_state", "parcel_changeset", "allocated_geojson"}),
+                    "output_summary": _output_snapshot(result),
                     "output_checksum": _checksum(refs),
                 }
                 gate = next((result.get(k) for k in result if k.endswith("_gate")), None)
@@ -122,4 +178,4 @@ def audited_stage(stage: str) -> Callable[[Callable[..., Awaitable[Dict[str, Any
     return decorator
 
 
-__all__ = ["audited_stage"]
+__all__ = ["audited_stage", "build_input_audit"]

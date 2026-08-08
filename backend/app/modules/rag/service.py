@@ -61,6 +61,24 @@ class RagService:
     def __init__(self):
         """Initialize RAG service"""
         try:
+            # MiniMax is used here for text generation, but it is not an
+            # embedding provider.  Do not repeatedly send a DashScope key to
+            # the vector endpoint unless the operator explicitly opts into a
+            # separately configured embedding service.
+            from app.core.llm import LLMProvider, get_provider
+            import os
+
+            embedding_opt_in = os.getenv("RAG_DASHSCOPE_ENABLED", "").lower() in {
+                "1", "true", "yes"
+            }
+            if get_provider() == LLMProvider.MINIMAX and not embedding_opt_in:
+                self._vector_store = None
+                self._cache = None
+                logger.info(
+                    "[RagService] Vector retrieval disabled for MiniMax; "
+                    "set RAG_DASHSCOPE_ENABLED=true with a valid embedding key to enable it"
+                )
+                return
             from .vector_store import HierarchyVectorStore, get_vector_cache
             self._vector_store = HierarchyVectorStore()
             self._cache = get_vector_cache()

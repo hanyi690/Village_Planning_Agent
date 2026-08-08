@@ -59,8 +59,21 @@ def build_coverage_matrix(program, specs, grounding_result, decision, changeset,
     selected = list(getattr(decision, "selected_combination", None) or [])
     changes = list(getattr(changeset, "changes", None) or [])
     parcels = list(getattr(planned_state, "parcels", None) or [])
+    deferred = {
+        str(value)
+        for value in ((getattr(decision, "decision_factors", None) or {}).get("deferred_targets") or [])
+    }
     rows: list[CoverageMatrixRow] = []
     for i, intervention in enumerate(interventions):
+        if str(getattr(intervention, "intervention_id", "")) in deferred:
+            rows.append(
+                CoverageMatrixRow(
+                    intervention_id=intervention.intervention_id,
+                    spec_index=i if i < len(specs) else None,
+                    status="deferred",
+                )
+            )
+            continue
         # intervention -> spec: SpatialReferenceSpec carries no intervention_ref/
         # intervention_id, so there is no semantic key to join on; fall back to
         # positional pairing (PARSE emits specs in intervention order).
@@ -106,10 +119,15 @@ def build_coverage_matrix(program, specs, grounding_result, decision, changeset,
     return CoverageMatrix(rows=rows)
 
 
-def check_l3_l4_target_coverage(intent, planned_state) -> list[ReconciliationInconsistency]:
+def check_l3_l4_target_coverage(intent, planned_state, decision=None) -> list[ReconciliationInconsistency]:
+    deferred = {
+        str(value)
+        for value in ((getattr(decision, "decision_factors", None) or {}).get("deferred_targets") or [])
+    }
     project_targets = [
         p for p in (getattr(intent, "project_targets", None) or [])
         if getattr(p, "requires_spatial", True)
+        and str(getattr(p, "project_id", "")) not in deferred
     ]
     road_targets = list(getattr(intent, "road_targets", None) or [])
     zone_targets = list(getattr(intent, "zone_targets", None) or [])
@@ -163,13 +181,13 @@ def reconcile_aggregate(
     run_id: str = "",
 ) -> ReconciliationReport:
     all_inconsistencies: list[ReconciliationInconsistency] = []
-    all_inconsistencies.extend(check_intervention_coverage(program, specs))
-    all_inconsistencies.extend(check_spec_candidate_coverage(specs, grounding_result))
+    all_inconsistencies.extend(check_intervention_coverage(program, specs, decision))
+    all_inconsistencies.extend(check_spec_candidate_coverage(specs, grounding_result, decision))
     all_inconsistencies.extend(check_candidate_selection_coverage(grounding_result, decision))
     all_inconsistencies.extend(check_selection_change_coverage(decision, changeset))
     all_inconsistencies.extend(check_change_planned_coverage(changeset, planned_state))
     all_inconsistencies.extend(check_quantitative_drift(program, planned_state))
-    all_inconsistencies.extend(check_l3_l4_target_coverage(intent, planned_state))
+    all_inconsistencies.extend(check_l3_l4_target_coverage(intent, planned_state, decision))
 
     coverage_matrix = build_coverage_matrix(program, specs, grounding_result, decision, changeset, planned_state)
 

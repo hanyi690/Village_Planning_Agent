@@ -10,17 +10,16 @@ cacheable, and testable in isolation.
 Migrated from agent/conversation/node.py per docs/architecture/agent-graph.md §5.
 """
 
-from typing import Dict, Any, Optional
-
-from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
-from langchain_core.runnables import RunnableSerializable
+from typing import Dict, Any, Optional, TYPE_CHECKING
 
 from app.core.settings import LLM_MODEL, MAX_TOKENS
 from app.core.llm import create_llm
 from app.utils.logger import get_logger
 from app.agent.bootstrap.phase_machine import PlanningPhase, PHASE_DESCRIPTIONS
-from app.tools.intent_tools import advance_planning_intent, gis_analysis
-from app.tools.tools import get_tools_for_llm
+
+if TYPE_CHECKING:
+    from langchain_core.prompts import ChatPromptTemplate
+    from langchain_core.runnables import RunnableSerializable
 
 logger = get_logger(__name__)
 
@@ -45,21 +44,28 @@ SYSTEM_TEMPLATE = """你是村庄规划助手，正在进行 {project_name} 的�
 
 
 # Module-level cached chain (LLM + bind_tools is static)
-_llm_with_tools: Optional[RunnableSerializable] = None
+_llm_with_tools: Optional[Any] = None
 
 
-def _get_llm_with_tools() -> RunnableSerializable:
+def _get_llm_with_tools() -> Any:
     """Lazy-init the LLM+tools chain (cached across calls)."""
+    from app.tools.intent_tools import advance_planning_intent, gis_analysis
+    from app.tools.tools import get_tools_for_llm
+
     global _llm_with_tools
     if _llm_with_tools is None:
-        llm = create_llm(model=LLM_MODEL, temperature=0.7, max_tokens=MAX_TOKENS)
+        # Do not pin the primary provider's model here: MiniMax and other
+        # OpenAI-compatible providers have their own valid model ids.
+        llm = create_llm(temperature=0.7, max_tokens=MAX_TOKENS)
         bind_list = [advance_planning_intent, gis_analysis] + list(get_tools_for_llm())
         _llm_with_tools = llm.bind_tools(bind_list)
     return _llm_with_tools
 
 
-def _build_prompt(state: Dict[str, Any]) -> ChatPromptTemplate:
+def _build_prompt(state: Dict[str, Any]) -> Any:
     """Build the ChatPromptTemplate with phase / config filled in."""
+    from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
+
     phase = state.get("phase", PlanningPhase.INIT.value)
     config = state.get("config", {})
     return ChatPromptTemplate.from_messages([

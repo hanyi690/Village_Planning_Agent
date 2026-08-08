@@ -140,6 +140,8 @@ def enrich_program_from_upstream(
     program: PlanningProgram,
     base_dir: str,
     run_id: str,
+    context_version: str = "",
+    context_fingerprint: str = "",
 ) -> tuple[list[str] | None, Any | None]:
     """Load L1/L2 artifacts by run_id convention and enrich the program.
 
@@ -163,6 +165,8 @@ def enrich_program_from_upstream(
                 run_id=run_id,
                 artifact_type="L1Snapshot",
                 revision="v1",
+                context_version=context_version,
+                context_fingerprint=context_fingerprint,
             )
         )
         snapshot = L1Snapshot(**l1_payload)
@@ -178,6 +182,8 @@ def enrich_program_from_upstream(
                 run_id=run_id,
                 artifact_type="L2Strategy",
                 revision="v1",
+                context_version=context_version,
+                context_fingerprint=context_fingerprint,
             )
         )
         strategy = L2Strategy(**l2_payload)
@@ -283,12 +289,17 @@ async def l3_aggregate(
     )
 
     l1_constraints, l2_strategy = enrich_program_from_upstream(
-        program, base_dir=base_dir, run_id=run_id
+        program,
+        base_dir=base_dir,
+        run_id=run_id,
+        context_version=context_version,
+        context_fingerprint=state.get("context_fingerprint", ""),
     )
 
     artifact_store = FilesystemArtifactStore(base_dir=base_dir)
     ref = ArtifactRef(
         context_version=context_version,
+        context_fingerprint=state.get("context_fingerprint", ""),
         artifact_id=artifact_id,
         module="l3_plan",
         run_id=run_id,
@@ -315,6 +326,50 @@ async def l3_aggregate(
     review_id = write_review_package(pkg, base_dir=base_dir)
     logger.info("[l3_aggregate] review package written: review_id=%s", review_id)
 
+    try:
+        from app.services.step_report import save_step_report
+        from app.agent.bootstrap.stage_audit import build_input_audit
+
+        await save_step_report(
+            session_id,
+            "L3",
+            step_name="l3_aggregate",
+            layer=3,
+            inputs=build_input_audit(
+                state,
+                stage="L3",
+                source_refs=["artifact:l1_snapshot", "artifact:l2_strategy", *[f"L3:{key}" for key in sorted(raw_reports)]],
+                artifact_refs={
+                    key: (state.get("artifact_refs") or {}).get(key)
+                    for key in ("l1_snapshot", "l2_strategy")
+                    if (state.get("artifact_refs") or {}).get(key)
+                },
+            ),
+            outputs={
+                "intervention_count": len(program.interventions),
+                "spatial_instruction_count": sum(
+                    1 for item in program.interventions
+                    if getattr(item, "spatial_requirements", None)
+                ),
+                "program_issue_count": len(program.program_issues),
+                "gate_route": gate_decision.feedback_route or ("PASS" if gate_decision.passed else "FAIL"),
+            },
+            artifacts=[{
+                "key": "planning_program",
+                "artifact_id": ref.artifact_id,
+                "module": ref.module,
+                "run_id": ref.run_id,
+                "artifact_type": ref.artifact_type,
+                "revision": ref.revision,
+                "context_version": ref.context_version,
+                "context_fingerprint": ref.context_fingerprint,
+                "checksum": ref.checksum,
+            }],
+            diagnostics={"fact_consumer": "L1Snapshot + L2Strategy + L3 dimension reports"},
+        )
+    except Exception as exc:
+        logger.debug("[l3_aggregate] step report failed: %s", exc)
+
     return {
         "l3_program_ref": {
             "artifact_id": artifact_id,
@@ -323,6 +378,7 @@ async def l3_aggregate(
             "artifact_type": "PlanningProgram",
             "revision": "v1",
             "context_version": context_version,
+            "context_fingerprint": state.get("context_fingerprint", ""),
         },
         # The post-L3 chain consumes the canonical ref-only map.  Keeping only
         # this reference in AgentState also makes recovery independent of the

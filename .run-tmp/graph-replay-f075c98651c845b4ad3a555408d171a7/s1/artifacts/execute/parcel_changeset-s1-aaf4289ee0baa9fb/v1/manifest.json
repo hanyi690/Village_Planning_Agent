@@ -1,0 +1,12 @@
+{
+  "artifact_id": "parcel_changeset-s1-aaf4289ee0baa9fb",
+  "module": "execute",
+  "run_id": "s1",
+  "artifact_type": "ParcelChangeSet",
+  "context_version": "1",
+  "context_fingerprint": "sha256:test",
+  "revision": "v1",
+  "created_at": "2026-08-08T07:07:42.326005+00:00",
+  "checksum": "918811dfb850c644cf23d8439e7bb5a352c836c76ed8913c803c81247c19fc94",
+  "payload_bytes": 564
+}

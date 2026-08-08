@@ -12,13 +12,15 @@ class ArtifactRef(ContractMeta):
     """Reference to a stored artifact.
 
     Carries the full envelope metadata so list operations round-trip
-    ``context_version`` / ``artifact_type`` / ``revision`` faithfully.
+    ``context_version`` / ``context_fingerprint`` / ``artifact_type`` /
+    ``revision`` / ``checksum`` faithfully.
     """
 
     module: str
     run_id: str
     artifact_type: str = ""
     revision: str = "v1"
+    checksum: str = ""
     stored_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
     def __str__(self) -> str:  # pragma: no cover - debug aid
@@ -32,7 +34,8 @@ class ArtifactStorePort(Protocol):
     - persist a full envelope (manifest) + payload per artifact revision;
     - be atomic per write (no partial file on failure);
     - constrain path identifiers (run_id/module/artifact_id) to safe tokens;
-    - preserve ``context_version``, ``artifact_type`` and ``revision`` on list.
+    - preserve ``context_version``, ``context_fingerprint``, ``artifact_type``,
+      ``revision`` and ``checksum`` on list.
     """
 
     def store(self, ref: ArtifactRef, payload: dict[str, Any]) -> ArtifactRef: ...

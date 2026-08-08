@@ -1,0 +1,73 @@
+{
+  "input": "F:\\project\\Village_Planning_Agent\\docs\\weekly-reports\\2026-08-01.docx",
+  "fonts_by_char_count": {
+    "\u9ed1\u4f53": 52
+  },
+  "direct_run_formatting_runs": 20,
+  "direct_paragraph_formatting_paragraphs": 0,
+  "heading_like_paragraphs_not_heading_style": [
+    {
+      "para_index": 10,
+      "text": "\u8bcd\u6c47\u8868 = L3 \u62a5\u544a\u52a8\u6001\u4ea7\u7269\uff1a\u529f\u80fd\u533a\u7c7b\u522b\u968f\u62a5\u544a\u53d8\u5316\uff08LLM \u81ea\u7531\u7ed9\u8272\uff09\uff0c\u4f46\u8868\u683c\u95ed\u96c6\uff08LLM \u53ea\u589e\u5f3a\u62a5\u544a\u8868\u683c\u5df2\u6709\u7684\u5206\u533a\uff0c\u7f16\u9020\u7c7b\u522b\u4e22\u5f03\uff09\uff0c\u65e2\u52a8\u6001\u53c8\u9632\u5e7b\u89c9\u3002",
+      "style": "Normal"
+    },
+    {
+      "para_index": 12,
+      "text": "\u8fdb\u7a0b\u81ea\u7ed3\u675f\u56db\u5c42\u9632\u5fa1\uff1a\u8fde\u63a5\u663e\u5f0f\u5173\u95ed\uff08\u6cbb\u672c\uff09\u2192 watchdog \u5f3a\u6740\uff08\u515c\u5e95\uff09\u2192 \u73af\u8282\u8d85\u65f6\uff08\u9632\u5361\uff09\u2192 \u72b6\u6001\u65ad\u70b9\uff08\u53ef\u7eed\u8dd1\uff09\u3002",
+      "style": "Normal"
+    },
+    {
+      "para_index": 19,
+      "text": "1. \u591a\u56e0\u5b50\u5b8c\u6574\u63a5\u5165\uff1a\u5761\u5ea6\uff08DEM\uff09\u3001\u9053\u8def\u8ddd\u79bb\u3001POI \u90bb\u8fd1\u56e0\u5b50\u6ce8\u5165\u5730\u5757\u4e0a\u4e0b\u6587\uff1bLLM \u63d0\u53d6\u590d\u5408\u89c4\u5219\u8868\u8fbe\u5f0f\u3002",
+      "style": "Normal"
+    },
+    {
+      "para_index": 20,
+      "text": "2. \u9879\u76ee\u70b9\u843d\u4f4d\uff1a\u517c\u5bb9\u77e9\u9635 + \u8bbe\u65bd\u843d\u4f4d\u5668 + validator \u8fc7\u7ea2\u7ebf\u3002",
+      "style": "Normal"
+    },
+    {
+      "para_index": 21,
+      "text": "3. MIP \u6821\u9a8c\u6536\u655b\uff1a\u8865\u5efa\u8bbe\u7528\u5730\u603b\u91cf/\u670d\u52a1\u534a\u5f84\u7ea6\u675f\uff0cvalidation 3 \u8f6e\u6536\u655b\u3002",
+      "style": "Normal"
+    },
+    {
+      "para_index": 22,
+      "text": "4. \u6e32\u67d3\u89c4\u8303\u5bf9\u9f50\uff1a\u56fe\u4f8b\u6309\u7528\u5730\u5206\u7c7b\u6307\u5357\u914d\u8272\u3001CGCS2000 \u58f0\u660e\u3001\u56fe\u540d/\u5236\u56fe\u65f6\u95f4\u843d\u6b3e\u3002",
+      "style": "Normal"
+    }
+  ],
+  "examples": {
+    "direct_run_formatting": [
+      {
+        "para_index": 1,
+        "run_text": "\u5468\u62a5\uff082026-07-28 ~ 2026-08-01\uff09",
+        "style": "Heading 1"
+      },
+      {
+        "para_index": 2,
+        "run_text": "\u4e00\u3001\u5b9e\u73b0\u4e86\u4ec0\u4e48",
+        "style": "Heading 2"
+      },
+      {
+        "para_index": 3,
+        "run_text": "1. EXPLORE \u7edf\u4e00\u8bbf\u95ee\u5c42\uff1a",
+        "style": "Normal"
+      },
+      {
+        "para_index": 4,
+        "run_text": "2. \u62a5\u544a\u2192KG \u8bed\u4e49\u95ed\u73af\uff1a",
+        "style": "Normal"
+      },
+      {
+        "para_index": 5,
+        "run_text": "3. \u4ea7\u4e1a\u7a7a\u95f4\u5e03\u5c40\u89c4\u5212\u56fe\uff08\u81ea\u5b9a\u4e49\u529f\u80fd\u533a\uff09\uff1a",
+        "style": "Normal"
+      }
+    ]
+  },
+  "notes": [
+    "Direct formatting is not always wrong, but it often causes inconsistent output when templates change.",
+    "Heading-like paragraphs not using Heading styles can break TOC and accessibility."
+  ]
+}

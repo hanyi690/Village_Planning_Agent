@@ -112,7 +112,7 @@ def _parcel_from_feature(feature: dict) -> Any:
 
 
 def _parcel_geometry(parcel: Any) -> dict:
-    geometry = getattr(parcel, "geometry", None)
+    geometry = parcel.get("geometry") if isinstance(parcel, dict) else getattr(parcel, "geometry", None)
     return geometry if isinstance(geometry, dict) else {}
 
 

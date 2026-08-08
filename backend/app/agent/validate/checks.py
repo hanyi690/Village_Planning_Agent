@@ -198,9 +198,17 @@ def check_area_conservation(changeset: Any) -> List[ValidationCheck]:
     ]
 
 
-def check_traceability(parcel_changeset: Any, intent: Any = None) -> List[ValidationCheck]:
+def check_traceability(parcel_changeset: Any, intent: Any = None, decision: Any = None) -> List[ValidationCheck]:
     """Check every planning project maps to at least one ParcelChange."""
-    expected = [p.project_id for p in (getattr(intent, "project_targets", None) or [])]
+    factors = getattr(decision, "decision_factors", None) or {}
+    if not isinstance(factors, dict):
+        factors = {}
+    deferred = {str(value) for value in (factors.get("deferred_targets") or [])}
+    expected = [
+        p.project_id
+        for p in (getattr(intent, "project_targets", None) or [])
+        if str(getattr(p, "project_id", "")) not in deferred
+    ]
     actual: List[str] = []
     for change in (parcel_changeset.changes if parcel_changeset is not None else None) or []:
         ref = getattr(change, "project_ref", None) or ""

@@ -15,7 +15,7 @@ class CoverageMatrixRow(BaseModel):
     selected_bsm: str = ""
     change_bsm: str = ""
     planned_parcel_bsm: str = ""
-    status: Literal["covered", "partial", "missing"] = "missing"
+    status: Literal["covered", "partial", "missing", "deferred"] = "missing"
 
 
 class CoverageMatrix(BaseModel):

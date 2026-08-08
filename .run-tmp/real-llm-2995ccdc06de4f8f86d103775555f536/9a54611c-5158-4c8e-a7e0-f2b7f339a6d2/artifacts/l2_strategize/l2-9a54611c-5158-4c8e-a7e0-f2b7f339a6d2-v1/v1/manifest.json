@@ -1,0 +1,12 @@
+{
+  "artifact_id": "l2-9a54611c-5158-4c8e-a7e0-f2b7f339a6d2-v1",
+  "module": "l2_strategize",
+  "run_id": "9a54611c-5158-4c8e-a7e0-f2b7f339a6d2",
+  "artifact_type": "L2Strategy",
+  "context_version": "1",
+  "context_fingerprint": "sha256:7029fcbec94a8843",
+  "revision": "v1",
+  "created_at": "2026-08-08T10:13:45.824803+00:00",
+  "checksum": "2f73b1ac717e82de0b553b5b18094fe47b8ece38028ac5cdc1a197026c93ed55",
+  "payload_bytes": 6539
+}

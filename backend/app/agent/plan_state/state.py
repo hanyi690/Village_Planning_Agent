@@ -150,6 +150,17 @@ def _merge_artifact_refs(a: Dict[str, Any], b: Dict[str, Any]) -> Dict[str, Any]
     return {**(a or {}), **b}
 
 
+def _merge_retry_counts(a: Dict[str, int], b: Dict[str, int]) -> Dict[str, int]:
+    """Merge parallel dimension attempts without losing the largest count."""
+    result = dict(a or {})
+    for key, value in (b or {}).items():
+        try:
+            result[key] = max(int(result.get(key, 0)), int(value))
+        except (TypeError, ValueError):
+            result[key] = result.get(key, 0)
+    return result
+
+
 class AgentState(TypedDict, total=False):
     """
     核心状态 - 精简版
@@ -195,6 +206,7 @@ class AgentState(TypedDict, total=False):
     pending_reports: Annotated[List[Dict[str, Any]], _replace_or_merge_lists]  # Buffer for batch DB writes
     layer_char_counts: Annotated[Dict[int, int], _merge_layer_char_counts]  # Cached char counts per layer
     user_uploaded_data: Annotated[Dict[str, Dict[str, Any]], _merge_dict_of_dicts]  # 用户上传的GIS数据
+    uploaded_files: List[Dict[str, Any]]  # upload metadata only; file bytes stay in storage
     # P0: L1/L2/L3 数据流闭环字段（详见 docs/superpowers/specs/2026-07-02-gis-review-exploration.md）
     _landuse_metrics: Annotated[Dict[str, float], _merge_dict_of_dicts]  # L1 注入的现状用地指标
     intent_targets: Annotated[Dict[str, float], _merge_dict_of_dicts]  # L2 持久化的规划目标面积
@@ -242,16 +254,26 @@ class AgentState(TypedDict, total=False):
     # DELIVER 输出
     deliver_gate: Optional[Any]  # GateDecision
     export_result: Optional[Dict[str, Any]]
+    render_artifacts: Dict[str, Any]
     # Gate 累积 + 重试
     upstream_gates: List[Any]
     retry_counts: Dict[str, int]
+    dimension_retry_counts: Annotated[Dict[str, int], _merge_retry_counts]
+    dimension_retry_limit: int
     max_retries: int
     error_feedback: Dict[str, str]
     human_review_items: List[Dict[str, Any]]
     human_review_decisions: Optional[Any]
     human_review_event_id: str
     human_review_pause_published: bool
+    human_review_resume_consumed: bool
+    human_deferred_targets: List[str]
+    human_deferred_select_revision: bool
     paused_stage: Optional[str]  # stage that paused the post-L3 chain for HITL
+    # Terminal infrastructure/configuration failure.  This is deliberately
+    # separate from business Gate retries: a non-retryable model/provider
+    # error must stop dispatch rather than redispatching the same dimension.
+    fatal_error: Optional[Dict[str, Any]]
 
 
 # ==========================================

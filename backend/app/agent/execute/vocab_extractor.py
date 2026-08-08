@@ -203,7 +203,7 @@ async def extract_vocabulary_from_reports(
             )
 
             llm = create_llm(
-                model=GIS_EXPLORE_MODEL,
+                model=None,
                 temperature=GIS_EXPLORE_TEMPERATURE,
                 max_tokens=GIS_EXPLORE_MAX_TOKENS,
                 streaming=False,

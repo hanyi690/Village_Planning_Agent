@@ -33,19 +33,18 @@ jobs:
         run: |
           pip install -r ../requirements-dev.txt
 
-      - name: Run core backend gate
+      - name: Run backend E2E gate
         run: |
-          python -m pytest tests/core -v
+          python -m pytest tests/e2e -v -m "e2e and not slow"
         env:
           PYTHONPATH: .
 
       - name: Run real-session integration contract
         # The test executes the complete HTTP/session/artifact chain with the
-        # repository's real fixture report and GIS files.  The remote-LLM
-        # variant is skipped here unless credentials are explicitly supplied;
-        # CI still collects it so a missing integration path cannot go silent.
+        # repository's real fixture report and GIS files. It is opt-in because
+        # it requires remote LLM credentials and can run for up to 30 minutes.
         run: |
-          python -m pytest tests/integration/test_real_llm_session_full.py -v
+          python -m pytest tests/e2e/test_real_llm_session_full.py -v -m e2e
         env:
           PYTHONPATH: .
 

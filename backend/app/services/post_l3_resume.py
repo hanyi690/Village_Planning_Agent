@@ -133,18 +133,6 @@ async def resume_post_l3_chain(session_id: str, decisions: Dict[str, Any]) -> Di
     result = _collect_result(final_state)
     PostL3ResultStore().save(session_id, result)
 
-    try:
-        await PlanningRuntimeService.aupdate_state(
-            session_id,
-            {
-                "post_l3_decisions": decisions,
-                "post_l3_status": "resumed",
-            },
-            as_node="human_review",
-        )
-    except Exception as e:  # noqa: BLE001 — best-effort AgentState write-back
-        logger.warning("[post_l3_resume] AgentState write-back skipped: %s", e)
-
     logger.info("[post_l3_resume] resumed session %s -> %s", session_id, result["status"])
     return result
 

@@ -89,7 +89,21 @@ async def resolve_human_review(session_id: str, request: ResolveRequest):
     if not request.decisions:
         raise HTTPException(status_code=422, detail="decisions must be a non-empty object")
     try:
+        # One interrupt checkpoint has one resume token.  A client may poll
+        # or retry an HTTP request while the graph is still running; do not
+        # feed the same decision into the checkpoint a second time.  A new
+        # HUMAN pause resets this marker in ``prepare_human_review``.
+        from app.services.runtime import PlanningRuntimeService
+
+        current = await PlanningRuntimeService.aget_state_values(session_id) or {}
+        if current.get("human_review_resume_consumed"):
+            raise HTTPException(
+                status_code=409,
+                detail="human review checkpoint was already resumed; wait for a new HUMAN pause",
+            )
         result = await resume_post_l3_chain(session_id, request.decisions)
+    except HTTPException:
+        raise
     except ValueError as e:
         raise HTTPException(status_code=422, detail=str(e))
     except Exception as e:  # noqa: BLE001 — surface to caller

@@ -5,10 +5,11 @@ same factory with different parameters; no separate test-only constructor.
 """
 from __future__ import annotations
 
+import os
 from typing import Any, Dict, List, Optional
 
 from app.agent.bootstrap.phase_machine import PlanningPhase
-from app.core.settings import BUSINESS_RETRY_LIMIT
+from app.core.settings import BUSINESS_RETRY_LIMIT, RAG_ENABLED
 
 
 class StateFactory:
@@ -29,12 +30,14 @@ class StateFactory:
         enable_review: bool = False,
         stream_mode: bool = True,
         step_mode: bool = False,
-        rag_enabled: bool = True,
+        rag_enabled: Optional[bool] = None,
         rag_layer_config: Optional[Dict[int, bool]] = None,
         disable_tools: bool = False,
         uploaded_files: Optional[List[Dict]] = None,
         user_uploaded_gis_data: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
+        if rag_enabled is None:
+            rag_enabled = RAG_ENABLED
         if rag_layer_config is None:
             rag_layer_config = {1: rag_enabled, 2: False, 3: rag_enabled}
         else:
@@ -80,6 +83,7 @@ class StateFactory:
             "pending_reports": [],
             "layer_char_counts": {},
             "user_uploaded_data": user_uploaded_gis_data or {},
+            "uploaded_files": uploaded_files or [],
             "_landuse_metrics": {},
             "intent_targets": {},
             "explore_instructions": {},
@@ -115,13 +119,20 @@ class StateFactory:
             "reconcile_gate": None,
             "deliver_gate": None,
             "export_result": None,
+            "render_artifacts": {},
             "upstream_gates": [],
             "retry_counts": {},
+            "dimension_retry_counts": {},
+            "dimension_retry_limit": max(0, int(os.getenv("DIMENSION_RETRY_LIMIT", "1"))),
             "max_retries": BUSINESS_RETRY_LIMIT,
             "error_feedback": {},
             "human_review_items": [],
             "human_review_decisions": None,
             "human_review_event_id": "",
             "human_review_pause_published": False,
+            "human_review_resume_consumed": False,
+            "human_deferred_targets": [],
+            "human_deferred_select_revision": False,
             "paused_stage": None,
+            "fatal_error": None,
         }

@@ -1,0 +1,12 @@
+{
+  "artifact_id": "site_selection-s1-96c6c2f9d0042e56",
+  "module": "select",
+  "run_id": "s1",
+  "artifact_type": "SiteSelectionDecision",
+  "context_version": "1",
+  "context_fingerprint": "sha256:test",
+  "revision": "v1",
+  "created_at": "2026-08-08T10:38:30.189067+00:00",
+  "checksum": "75819d2f197ac9afc02c51e92ddcab664415129341aa4b40eaa89df9b5cd352f",
+  "payload_bytes": 267
+}

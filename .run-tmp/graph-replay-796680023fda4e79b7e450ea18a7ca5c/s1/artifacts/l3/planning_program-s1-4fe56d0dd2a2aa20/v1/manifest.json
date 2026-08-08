@@ -1,0 +1,12 @@
+{
+  "artifact_id": "planning_program-s1-4fe56d0dd2a2aa20",
+  "module": "l3",
+  "run_id": "s1",
+  "artifact_type": "PlanningProgram",
+  "context_version": "1",
+  "context_fingerprint": "sha256:test",
+  "revision": "v1",
+  "created_at": "2026-08-08T10:59:29.934927+00:00",
+  "checksum": "d2d9cceac3857e19cb65e9dc314a97a95a974ae6071fdf5aa114522679b07f6a",
+  "payload_bytes": 608
+}

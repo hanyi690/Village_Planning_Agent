@@ -10,12 +10,14 @@ BACKEND_ROOT = Path(__file__).resolve().parent
 if str(BACKEND_ROOT) not in sys.path:
     sys.path.insert(0, str(BACKEND_ROOT))
 
-if Path.cwd().resolve() == BACKEND_ROOT.resolve():
-    pytest_plugins = ["tests.fixtures.db"]
+# pytest's rootdir is selected from backend/pytest.ini even when the command
+# is launched from the repository root.  Fixture discovery must therefore not
+# depend on the caller's current directory.
+pytest_plugins = ["tests.fixtures.db"]
 
 
 def pytest_collection_modifyitems(items):
     for item in items:
         path = str(item.fspath).replace("\\", "/")
-        if "/tests/integration/" in path:
-            item.add_marker(pytest.mark.integration)
+        if "/tests/e2e/" in path:
+            item.add_marker(pytest.mark.e2e)

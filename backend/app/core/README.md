@@ -8,12 +8,12 @@
 
 | 模块 | 职责 | 关键导出 |
 |------|------|----------|
-| `llm.py` | 统一 LLM 工厂（OpenAI/DeepSeek + 智谱 GLM + DashScope Flash） | `create_llm` / `create_flash_llm` / `get_default_llm` |
+| `llm.py` | 统一 LLM 工厂（OpenAI/DeepSeek + 智谱 GLM + MiniMax + DashScope Flash） | `create_llm` / `create_flash_llm` / `get_default_llm` |
 | `events.py` | SSE 事件类型常量（全系统唯一来源） | `SSEEventType` |
 | `tracing.py` | LangSmith 追踪管理（单例） | `get_langsmith_manager` / `create_run_metadata` |
 | `settings.py` | 环境配置加载（.env → 模块级常量） | 全量配置常量（见 `app/config/README.md` 关联） |
 
-> `core/settings.py` 是配置源头（`.env` 经 `load_dotenv(override=True)` 加载）；`app/config/` 是**领域配置**（YAML 维度/阶段定义）。两者分工见 `app/config/README.md`。
+> `core/settings.py` 是配置源头（环境变量优先，其次 cwd/root `.env`）；`app/config/` 是**领域配置**（YAML 维度/阶段定义）。两者分工见 `app/config/README.md`。
 
 ---
 
@@ -25,6 +25,7 @@
 |-------------|------|------|
 | `deepseek` / `openai` | `LLMProvider.OPENAI` | `ChatOpenAI`（`OPENAI_API_BASE` 覆盖 base_url） |
 | `zhipuai` | `LLMProvider.ZHIPUAI` | `ChatZhipuAI`（langchain-classic → langchain-community fallback） |
+| `minimax` | `LLMProvider.MINIMAX` | `ChatOpenAI`（官方 OpenAI 兼容接口） |
 
 - **Flash 模型**：`create_flash_llm` 走 DashScope（`DASHSCOPE_API_KEY` + `DASHSCOPE_API_BASE`），轻量任务专用
 - **全局并发闸门**：`get_llm_semaphore(max_concurrent=20)` 惰性单例 `asyncio.Semaphore`，维度并行分析限流用（与 `LLM_MAX_CONCURRENT` 是两套机制，前者为显式信号量）

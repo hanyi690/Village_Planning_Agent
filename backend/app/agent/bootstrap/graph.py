@@ -56,7 +56,8 @@ def _retry_or_human(state: Dict[str, Any], stage: str, retry_target: str) -> str
     """Pick retry_target vs human escalation based on the retry cap."""
     counts = dict(state.get("retry_counts") or {})
     current = counts.get(stage, 0)
-    max_retries = state.get("max_retries") or 3
+    configured_limit = state.get("max_retries")
+    max_retries = 3 if configured_limit is None else max(0, int(configured_limit))
     if current >= max_retries:
         logger.warning("[main] %s retry exceeded %d rounds -> human", stage, max_retries)
         return "human_review"
@@ -130,16 +131,37 @@ def route_after_deliver(state: Dict[str, Any]) -> str:
 
 def route_after_human_review(state: Dict[str, Any]) -> str:
     """Route post-HITL resume: approve forwards, reject goes to conversation."""
+    if state.get("fatal_error"):
+        return END
     decisions = state.get("human_review_decisions") or {}
     paused_stage = state.get("paused_stage")
     action = decisions.get("action") if isinstance(decisions, dict) else None
     if action in ("accept", "approve"):
+        if (
+            paused_stage == "select"
+            and isinstance(decisions, dict)
+            and decisions.get("defer_unresolved_spatial_references") is True
+            and state.get("human_deferred_select_revision")
+        ):
+            return "execute"
+        if (
+            paused_stage == "ground"
+            and isinstance(decisions, dict)
+            and decisions.get("defer_unresolved_spatial_references") is True
+        ):
+            return "select"
         if paused_stage and paused_stage in _STAGE_FORWARD_TARGET:
             target = _STAGE_FORWARD_TARGET[paused_stage]
             return END if target == "__end__" else target
         return END
     if action == "retry":
-        return paused_stage if paused_stage else "parse"
+        retry_stage = paused_stage if paused_stage else "parse"
+        configured_limit = state.get("max_retries")
+        max_retries = 3 if configured_limit is None else max(0, int(configured_limit))
+        current = int((state.get("retry_counts") or {}).get(retry_stage, 0))
+        if current >= max_retries:
+            return END
+        return retry_stage
     if action == "reject":
         return "conversation"
     return END
@@ -219,7 +241,8 @@ def create_unified_planning_graph(checkpointer=None) -> StateGraph:
     builder.add_edge("human_review_publish", "human_review_wait")
     builder.add_edge("human_review_wait", "human_review_apply")
     builder.add_conditional_edges("human_review_apply", route_after_human_review,
-        {"parse": "parse", "ground": "ground", "select": "select",
+        {"l1_worker": "l1_worker", "l2_worker": "l2_worker", "l3_worker": "l3_worker",
+         "parse": "parse", "ground": "ground", "select": "select",
          "execute": "execute", "validate": "validate", "reconcile": "reconcile",
          "deliver": "deliver", "conversation": "conversation",
          END: END})
@@ -230,14 +253,58 @@ def create_unified_planning_graph(checkpointer=None) -> StateGraph:
 async def prepare_human_review(state: Dict[str, Any]) -> Dict[str, Any]:
     """Pure HITL preparation; no external side effects."""
     paused_stage, items = post_l3_main_nodes.collect_human_review_items(state)
+    # Routing functions are intentionally pure and cannot persist a gate
+    # mutation while selecting ``human_review``.  When a layer contract or
+    # retry budget routes directly from ``after_analysis`` to HUMAN, promote
+    # that decision here before building the interrupt payload.  Otherwise
+    # the graph would reach the HUMAN branch with an L3 gate still labelled
+    # ``L3`` and collect no review items, silently ending instead of pausing.
+    gate_patch = {}
+    # A retry budget is a business gate, not an implicit retry forever loop.
+    # When VALIDATE exhausted RETRY_EXECUTE, preserve the exact VALIDATE
+    # checkpoint as the HUMAN pause so approval can continue to RECONCILE.
+    counts = state.get("retry_counts") or {}
+    max_retries = 3 if state.get("max_retries") is None else max(0, int(state.get("max_retries")))
+    if int(counts.get("validate", 0)) >= max_retries:
+        gate = state.get("validate_gate")
+        if isinstance(gate, dict) and gate.get("pending_requests"):
+            human_gate = dict(gate)
+            human_gate["feedback_route"] = "HUMAN"
+            human_gate.setdefault("diagnostic_code", "VALIDATE_RETRY_EXHAUSTED")
+            gate_patch["validate_gate"] = human_gate
+            paused_stage = "validate"
+            items = list(human_gate.get("pending_requests") or [])
+    if not items or paused_stage == "post_l3":
+        for gate_attr in (
+            # Scan downstream stages first; stale upstream EXPLORE gates are
+            # retained for audit but must not steal a later HUMAN pause.
+            "deliver_gate", "reconcile_gate", "validate_gate", "select_gate",
+            "ground_gate", "parse_gate",
+            "l3_gate_decision", "l2_gate_decision", "l1_gate_decision",
+        ):
+            gate = state.get(gate_attr)
+            if not isinstance(gate, dict):
+                continue
+            pending = list(gate.get("pending_requests") or [])
+            route = gate.get("feedback_route")
+            if pending and route not in {None, "PASS", "HUMAN"}:
+                human_gate = dict(gate)
+                human_gate["feedback_route"] = "HUMAN"
+                human_gate.setdefault("diagnostic_code", "BUSINESS_GATE_REVIEW_REQUIRED")
+                gate_patch[gate_attr] = human_gate
+                paused_stage = gate_attr.removesuffix("_gate_decision").removesuffix("_gate")
+                items = pending
+                break
     event_id = hashlib.sha256(
         repr((state.get("session_id"), paused_stage, items, state.get("retry_counts"))).encode()
     ).hexdigest()[:24]
     return {
+        **gate_patch,
         "human_review_items": items,
         "paused_stage": paused_stage,
         "human_review_event_id": event_id,
         "human_review_pause_published": False,
+        "human_review_resume_consumed": False,
     }
 
 
@@ -292,14 +359,157 @@ async def apply_human_review_decision(state: Dict[str, Any]) -> Dict[str, Any]:
         "human_review_items": items,
         "paused_stage": paused_stage,
         "human_review_decisions": decisions,
+        "human_review_resume_consumed": True,
     }
     action = decisions.get("action") if isinstance(decisions, dict) else None
+    if action == "retry" and paused_stage:
+        configured_limit = state.get("max_retries")
+        max_retries = 3 if configured_limit is None else max(0, int(configured_limit))
+        current = int((state.get("retry_counts") or {}).get(paused_stage, 0))
+        if current >= max_retries:
+            result["fatal_error"] = {
+                "stage": paused_stage,
+                "code": "BUSINESS_RETRY_EXHAUSTED",
+                "message": f"{paused_stage} business retry limit exhausted ({current}/{max_retries})",
+            }
     if action in ("accept", "approve") and paused_stage:
-        result[f"{paused_stage}_gate"] = _dump(_pass_gate(paused_stage))
+        if (
+            paused_stage == "l3"
+            and isinstance(state.get("fatal_error"), dict)
+            and state["fatal_error"].get("code") in {
+                "llm_stream_timeout", "llm_timeout", "llm_provider_error",
+                "llm_provider_circuit_open",
+            }
+        ):
+            dimension = str(state["fatal_error"].get("dimension") or "")
+            attempts = int((state.get("dimension_retry_counts") or {}).get(dimension, 0))
+            limit = max(0, int(state.get("dimension_retry_limit", 1)))
+            if attempts <= limit:
+                result["fatal_error"] = None
+            else:
+                result["fatal_error"] = {
+                    **state["fatal_error"],
+                    "code": "LLM_DIMENSION_RETRY_EXHAUSTED",
+                    "message": f"dimension {dimension} retry limit exhausted ({attempts}/{limit})",
+                }
+        if paused_stage in {"l1", "l2", "l3"}:
+            result[f"{paused_stage}_gate_decision"] = _dump(_pass_gate(paused_stage))
+        else:
+            result[f"{paused_stage}_gate"] = _dump(_pass_gate(paused_stage))
+        if isinstance(decisions, dict) and decisions.get("acknowledge_unresolved_spatial_references"):
+            result["human_acknowledged_unresolved_spatial"] = True
+        if (
+            paused_stage in {"ground", "select"}
+            and isinstance(decisions, dict)
+            and decisions.get("defer_unresolved_spatial_references") is True
+        ):
+            # A human may explicitly defer targets for which the uploaded GIS
+            # has no authoritative geometry.  This is not a candidate
+            # fallback: create a new SELECT artifact revision that records the
+            # deferred target ids, then let EXECUTE consume only the proven
+            # selections.  The old failed artifact remains immutable.
+            if paused_stage == "select":
+                result.update(await _apply_deferred_select_review(state))
+            else:
+                # GROUND can pause before SELECT has emitted its typed
+                # decision. Preserve the stage boundary and let SELECT build
+                # its own artifact from the persisted GroundingResult.
+                ground_gate = dict(state.get("ground_gate") or {})
+                ground_gate.update({
+                    "stage": "ground",
+                    "passed": True,
+                    "feedback_route": "PASS",
+                    "diagnostic_code": "HUMAN_DEFERRED_UNRESOLVED_SPATIAL",
+                    "pending_requests": [],
+                })
+                result.update({
+                    "ground_gate": ground_gate,
+                    "human_deferred_select_revision": False,
+                })
     elif action == "reject":
         feedback = decisions.get("feedback") if isinstance(decisions, dict) else None
         result["messages"] = [HumanMessage(content=feedback or "方案已拒绝，请调整后重新规划")]
     return result
+
+
+async def _apply_deferred_select_review(state: Dict[str, Any]) -> Dict[str, Any]:
+    """Create a traceable SELECT revision for explicit human deferrals."""
+    from app.agent.bootstrap.artifact_runtime import load_artifact, store_artifact
+    from app.modules.schema.contracts.execution_plan_contracts import ExecutionPlan
+    from app.modules.schema.contracts.parse_result_contracts import IntentCompilationResult
+    from app.modules.schema.contracts.selection_contracts import SiteSelectionDecision
+
+    decision = load_artifact(state, "site_selection", SiteSelectionDecision)
+    intent_result = load_artifact(state, "intent_compilation", IntentCompilationResult)
+    if decision is None or intent_result is None:
+        return {
+            "fatal_error": {
+                "stage": "select",
+                "code": "HUMAN_DEFER_SELECTION_ARTIFACT_MISSING",
+                "message": "Cannot create a deferred SELECT revision without the original typed artifacts.",
+            }
+        }
+
+    intent = getattr(intent_result, "typed_intent", None) or intent_result
+    placed = {
+        str(candidate.project_ref)
+        for candidate in (decision.full_ranking or [])
+        if getattr(candidate, "project_ref", None)
+    }
+    deferred = [
+        str(project.project_id)
+        for project in (getattr(intent, "project_targets", None) or [])
+        if getattr(project, "requires_spatial", True)
+        and str(getattr(project, "project_id", "")) not in placed
+    ]
+    if not deferred:
+        return {
+            "human_deferred_targets": [],
+            "human_deferred_select_revision": False,
+        }
+
+    revised = decision.model_copy(deep=True)
+    factors = dict(revised.decision_factors or {})
+    factors.update({
+        "unplaced_count": 0,
+        "deferred_count": len(deferred),
+        "deferred_targets": deferred,
+        "deferred_by": "human_review",
+    })
+    revised.decision_factors = factors
+    revised.review_status = "human_approved"
+    select_ref = store_artifact(
+        state,
+        "site_selection",
+        "human_review",
+        "SiteSelectionDecision",
+        revised,
+    )
+
+    # Keep the execution plan's embedded selection snapshot aligned with the
+    # new ref.  EXECUTE still consumes the canonical site_selection ref, but
+    # the plan must remain a truthful audit artifact too.
+    plan = load_artifact(state, "execution_plan", ExecutionPlan)
+    refs = {"site_selection": select_ref}
+    if plan is not None:
+        plan_revision = plan.model_copy(deep=True)
+        plan_revision.site_selection = revised
+        refs["execution_plan"] = store_artifact(
+            state, "execution_plan", "human_review", "ExecutionPlan", plan_revision
+        )
+
+    gate = _pass_gate("select").model_dump(mode="json")
+    gate.update({
+        "feedback_route": "PASS",
+        "diagnostic_code": "HUMAN_DEFERRED_UNRESOLVED_SPATIAL",
+        "pending_requests": [],
+    })
+    return {
+        "artifact_refs": refs,
+        "select_gate": gate,
+        "human_deferred_targets": deferred,
+        "human_deferred_select_revision": True,
+    }
 
 
 __all__ = [

@@ -1,0 +1,12 @@
+{
+  "artifact_id": "l3-9a54611c-5158-4c8e-a7e0-f2b7f339a6d2-v1",
+  "module": "l3_plan",
+  "run_id": "9a54611c-5158-4c8e-a7e0-f2b7f339a6d2",
+  "artifact_type": "PlanningProgram",
+  "context_version": "1",
+  "context_fingerprint": "sha256:7029fcbec94a8843",
+  "revision": "v1",
+  "created_at": "2026-08-08T10:20:59.726965+00:00",
+  "checksum": "b7b957ddd4bfb71f783d447df44d79dd94d29a8b5c02413c717f58af98868e37",
+  "payload_bytes": 24404
+}

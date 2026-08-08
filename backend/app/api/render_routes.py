@@ -167,6 +167,16 @@ def _normalize_layout_layers(configs: List[Dict[str, Any]]) -> List[Dict[str, An
     return layers
 
 
+def _latest_artifact_ref(refs: List[Any]) -> Any:
+    """Choose the newest manifest-backed ref, independent of directory order."""
+    return max(
+        refs,
+        key=lambda ref: getattr(ref, "stored_at", None).timestamp()
+        if getattr(ref, "stored_at", None) is not None
+        else 0.0,
+    )
+
+
 async def _get_layout_configs(session_id: str) -> List[Dict[str, Any]]:
     """Best-effort read of live ``layout_configs`` from the AgentState."""
     try:
@@ -195,7 +205,12 @@ async def get_render_layers(session_id: str):
             status_code=404,
             detail=f"PlannedState artifact not found for session: {session_id}",
         )
-    planned_state = store.retrieve(refs[0])
+    # Retries/revisions create a new content-addressed artifact id.  The
+    # filesystem listing is deterministic but not a chronological contract;
+    # selecting refs[0] can therefore render an older PlannedState.  The
+    # manifest timestamp is the authoritative write order for this run.
+    latest_ref = _latest_artifact_ref(refs)
+    planned_state = store.retrieve(latest_ref)
 
     layers_by_type: Dict[str, Dict[str, Any]] = {}
     for layer in _normalize_layout_layers(await _get_layout_configs(session_id)):

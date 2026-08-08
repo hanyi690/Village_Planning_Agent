@@ -172,8 +172,23 @@ class PlanningRuntimeService:
     async def aget_state_values(cls, session_id: str) -> Optional[Dict[str, Any]]:
         """Get checkpoint state values (convenience method)."""
         snapshot = await cls.aget_state(session_id)
-        if snapshot and snapshot.values:
-            return dict(snapshot.values)
+        if snapshot:
+            values = dict(snapshot.values or {})
+            # During the first interrupt checkpoint LangGraph can expose the
+            # resume payload on the pending task before it merges the waiting
+            # node's values.  Surface the same HUMAN fields to internal
+            # callers so they cannot mistake a real pause for a running gap.
+            for task in snapshot.tasks or ():
+                for pending_interrupt in getattr(task, "interrupts", None) or ():
+                    payload = getattr(pending_interrupt, "value", None)
+                    if not isinstance(payload, dict):
+                        continue
+                    for key in ("human_review_items", "paused_stage", "post_l3_status"):
+                        value = payload.get(key)
+                        if value not in (None, "", []):
+                            values[key] = value
+            if values or any(getattr(t, "interrupts", None) for t in snapshot.tasks or ()):
+                return values
         return None
 
     @classmethod
@@ -232,6 +247,13 @@ class PlanningRuntimeService:
         await cls.ensure_initialized()
         config = cls.get_thread_config(session_id)
         config["recursion_limit"] = GRAPH_RECURSION_LIMIT
+
+        # A provider failure opens a session-scoped circuit breaker so a
+        # parallel wave stops spending requests.  An explicit HUMAN resume is
+        # the operator's bounded permission to try the failed dimension again;
+        # reset the breaker here, never on ordinary graph replay.
+        from app.agent.common.dimension_runtime import reset_provider_failure
+        reset_provider_failure(session_id)
 
         if not resume_data:
             raise ValueError("resume payload must be a non-empty object")
@@ -293,6 +315,17 @@ class PlanningRuntimeService:
                             last_completed_layer = 0
 
             final_state = await cls.aget_state_values(session_id)
+            fatal_error = (final_state or {}).get("fatal_error")
+            if fatal_error:
+                message = fatal_error.get("message", "planning execution failed") if isinstance(fatal_error, dict) else str(fatal_error)
+                await update_planning_session_async(session_id, {
+                    "status": TaskStatus.failed,
+                    "execution_error": message,
+                })
+                await cls._append_event(session_id, create_error_event(session_id, message))
+                logger.error("[PlanningRuntimeService] [%s] Terminal graph failure: %s", session_id, fatal_error)
+                sse_manager.set_execution_active(session_id, False)
+                return
             deliver_gate = (final_state or {}).get("deliver_gate") or {}
             deliver_route = deliver_gate.get("feedback_route") if isinstance(deliver_gate, dict) else getattr(deliver_gate, "feedback_route", None)
             if final_state and final_state.get("phase") == "completed" and deliver_route == "PASS":
@@ -608,6 +641,8 @@ class PlanningRuntimeService:
         #    on a fresh thread with no execution history."
         #    LangGraph 1.2.8 fixes DeltaChannel fresh-thread aupdate_state bug (PR #8290).
         if initial_state:
+            from app.agent.common.dimension_runtime import reset_provider_failure
+            reset_provider_failure(session_id)
             clean_state = {k: v for k, v in initial_state.items() if k != "messages"}
             clean_state["phase"] = "layer1"
 

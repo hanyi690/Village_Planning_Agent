@@ -1,0 +1,12 @@
+{
+  "artifact_id": "execution_plan-s1-c017cb46b2608ea2",
+  "module": "select",
+  "run_id": "s1",
+  "artifact_type": "ExecutionPlan",
+  "context_version": "1",
+  "context_fingerprint": "sha256:test",
+  "revision": "v1",
+  "created_at": "2026-08-08T07:45:58.505680+00:00",
+  "checksum": "bfa0e40f6dbd471d18f3c9cc8cb463d0d654edd5882cd90a95fb7ee87b106eae",
+  "payload_bytes": 1470
+}

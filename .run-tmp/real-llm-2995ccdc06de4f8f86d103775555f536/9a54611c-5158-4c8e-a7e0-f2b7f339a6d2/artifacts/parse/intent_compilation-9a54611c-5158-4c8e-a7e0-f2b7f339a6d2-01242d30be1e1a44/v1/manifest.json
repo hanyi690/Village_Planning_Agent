@@ -1,0 +1,12 @@
+{
+  "artifact_id": "intent_compilation-9a54611c-5158-4c8e-a7e0-f2b7f339a6d2-01242d30be1e1a44",
+  "module": "parse",
+  "run_id": "9a54611c-5158-4c8e-a7e0-f2b7f339a6d2",
+  "artifact_type": "IntentCompilationResult",
+  "context_version": "1",
+  "context_fingerprint": "sha256:7029fcbec94a8843",
+  "revision": "v1",
+  "created_at": "2026-08-08T10:21:04.172034+00:00",
+  "checksum": "e7dcc0bbf954e49baa44184babea30618c59c27e04647fd62b11ff9cc0fe8f5a",
+  "payload_bytes": 103830
+}

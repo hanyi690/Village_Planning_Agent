@@ -2,7 +2,19 @@ import os
 from pathlib import Path
 from dotenv import load_dotenv
 
-load_dotenv(override=True)
+# The supported production command runs with ``backend`` as cwd, while the
+# repository-managed .env lives at the workspace root.  Relying on
+# ``load_dotenv()`` alone therefore silently drops the configured provider
+# and key.  Resolve both locations explicitly.  Process environment values
+# retain precedence so a deployed/CI key cannot be overwritten by a stale
+# workspace file.
+_ENV_PROJECT_ROOT = (
+    Path(os.getenv("PROJECT_ROOT")).resolve()
+    if os.getenv("PROJECT_ROOT")
+    else Path(__file__).resolve().parents[3]
+)
+load_dotenv(Path.cwd() / ".env", override=False)
+load_dotenv(_ENV_PROJECT_ROOT / ".env", override=False)
 
 IS_PRODUCTION = os.getenv("ENVIRONMENT") == "production"
 
@@ -18,6 +30,13 @@ ZHIPUAI_API_KEY = os.getenv("ZHIPUAI_API_KEY")
 # DashScope (阿里云百炼) API 配置
 DASHSCOPE_API_KEY = os.getenv("DASHSCOPE_API_KEY")
 DASHSCOPE_API_BASE = os.getenv("DASHSCOPE_API_BASE", "https://dashscope.aliyuncs.com/compatible-mode/v1")
+
+# MiniMax OpenAI-compatible backup provider.  Keep this separate from the
+# primary OPENAI_API_KEY/base pair so switching providers cannot silently send
+# a MiniMax key to DashScope (or vice versa).
+MINIMAX_API_KEY = os.getenv("MINIMAX_API_KEY")
+MINIMAX_API_BASE = os.getenv("MINIMAX_API_BASE", "https://api.minimaxi.com/v1")
+MINIMAX_MODEL = os.getenv("MINIMAX_MODEL", "MiniMax-M2.7")
 
 # LLM Configuration
 # LLM_PROVIDER: 必填，可选值: "deepseek", "openai", "zhipuai"

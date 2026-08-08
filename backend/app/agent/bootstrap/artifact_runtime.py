@@ -87,6 +87,9 @@ def store_artifact(
             raise ArtifactReplayError(
                 f"non-deterministic replay for {key}: {artifact_id} checksum changed"
             )
+        if existing.get("context_fingerprint") and fingerprint and existing.get("context_fingerprint") != fingerprint:
+            raise ArtifactReplayError(f"artifact {key} existing fingerprint mismatch")
+        ref.checksum = str(existing.get("checksum", ""))
         return ref.model_dump(mode="json")
     store.store(ref, payload_json)
     return ref.model_dump(mode="json")
@@ -118,6 +121,9 @@ def load_artifact(state: dict[str, Any], key: str, model: type[T] | None = None)
         raise ArtifactReplayError(f"artifact {key} fingerprint mismatch")
     payload = FilesystemArtifactStore().retrieve(ref)
     manifest = FilesystemArtifactStore().read_manifest(ref)
+    manifest_fingerprint = str(manifest.get("context_fingerprint", ""))
+    if manifest_fingerprint and state_fingerprint and manifest_fingerprint != state_fingerprint:
+        raise ArtifactReplayError(f"artifact {key} manifest fingerprint mismatch")
     if manifest.get("artifact_type") != ref.artifact_type:
         raise ArtifactReplayError(f"artifact {key} type metadata mismatch")
     stored_checksum = hashlib.sha256(
@@ -130,6 +136,8 @@ def load_artifact(state: dict[str, Any], key: str, model: type[T] | None = None)
     ).hexdigest()
     if manifest.get("checksum") not in {stored_checksum, legacy_checksum}:
         raise ArtifactReplayError(f"artifact {key} checksum mismatch")
+    if ref.checksum and manifest.get("checksum") != ref.checksum:
+        raise ArtifactReplayError(f"artifact {key} reference checksum mismatch")
     if model is not None:
         return model(**payload)
     return payload

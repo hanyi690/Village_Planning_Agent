@@ -1,0 +1,12 @@
+{
+  "artifact_id": "site_selection-9a54611c-5158-4c8e-a7e0-f2b7f339a6d2-c5f099842e46493b",
+  "module": "select",
+  "run_id": "9a54611c-5158-4c8e-a7e0-f2b7f339a6d2",
+  "artifact_type": "SiteSelectionDecision",
+  "context_version": "1",
+  "context_fingerprint": "sha256:7029fcbec94a8843",
+  "revision": "v1",
+  "created_at": "2026-08-08T10:21:15.031711+00:00",
+  "checksum": "ca4083b67e8e83718538c2266be119af54156e59b523297fbc929d9ed9af874d",
+  "payload_bytes": 22684
+}

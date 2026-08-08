@@ -66,7 +66,7 @@ async def create_session(
     task_description: str = Form("制定村庄发展规划", description="任务描述"),
     constraints: str = Form("无特殊约束", description="约束条件"),
     step_mode: bool = Form(False, description="分步执行模式"),
-    rag_enabled: bool = Form(True, description="启用 RAG 知识检索（实验对比用）"),
+    rag_enabled: Optional[bool] = Form(None, description="启用 RAG 知识检索；未提供时继承 RAG_ENABLED"),
     rag_layer_config: str = Form("", description="Layer-level RAG config (JSON, e.g. '{\"1\":true,\"2\":false,\"3\":true}')"),
     village_data: str = Form("", description="村庄基础数据（文本）"),
     village_data_files: List[UploadFile] = File(None, description="村庄数据文件"),
@@ -130,6 +130,8 @@ async def create_session(
                     "file_category": r["file_category"],
                     "file_type": r["file_type"],
                     "size_bytes": r["size_bytes"],
+                    "checksum": r.get("checksum", ""),
+                    "parse_status": r.get("parse_status", ""),
                     "geometry_audit": r.get("geometry_audit"),
                 })
 
@@ -250,6 +252,24 @@ async def get_session_status(session_id: str):
         and checkpoint_state.tasks
         and any(getattr(t, 'interrupts', None) for t in checkpoint_state.tasks)
     )
+    # LangGraph may expose the first interrupt payload on PregelTask before
+    # the node's returned values are materialized in ``snapshot.values``.
+    # Promote that payload into the status view so clients can discover a
+    # HUMAN pause without racing the checkpoint writer.
+    if is_interrupted and checkpoint_state:
+        for task in checkpoint_state.tasks or ():
+            for pending_interrupt in getattr(task, "interrupts", None) or ():
+                payload = getattr(pending_interrupt, "value", None)
+                if not isinstance(payload, dict):
+                    continue
+                for key in ("human_review_items", "paused_stage", "post_l3_status"):
+                    value = payload.get(key)
+                    if value not in (None, "", []):
+                        state[key] = value
+                if state.get("human_review_items") and state.get("paused_stage"):
+                    break
+            if state.get("human_review_items") and state.get("paused_stage"):
+                break
     return state_to_ui_status(state, db_session, is_interrupted=is_interrupted)
 
 

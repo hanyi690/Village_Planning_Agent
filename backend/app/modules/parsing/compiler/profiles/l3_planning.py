@@ -44,6 +44,22 @@ _CONTRADICTION_KEYWORDS = ("冲突", "矛盾", "重叠")
 _DEPENDENCY_MARKERS = ("策略逻辑关系", "依赖", "时序", "先后", "前置")
 _PROJECT_KEYWORDS = ("项目", "设施", "道路")
 
+# These dimensions feed the spatial grounding chain.  A planning
+# intervention may stay coarse (village/zone/direction), but it must carry a
+# source-backed spatial reference before it can be handed to PARSE/GROUND.
+_SPATIAL_DIMENSIONS = frozenset({
+    "industry",
+    "traffic",
+    "traffic_planning",
+    "public_service",
+    "infrastructure",
+    "infrastructure_planning",
+    "ecological",
+    "spatial_structure",
+    "land_use_planning",
+    "settlement_planning",
+})
+
 
 def _iter_chapters(content: str) -> list[tuple[str, str]]:
     """Yield (chapter_title, chapter_body) from markdown content."""
@@ -177,6 +193,7 @@ def compile_l3_planning(
     steps: list[str] = []
     display, instr_from_content = split_content_instruction(content or "")
     instr = instruction or instr_from_content
+    had_marker = "【INSTRUCTION】" in (content or "")
 
     interventions: list[PlanningIntervention] = []
     dependencies: list[InterventionDependency] = []
@@ -194,6 +211,49 @@ def compile_l3_planning(
     if not interventions:
         interventions = _fallback_interventions(display, dimension_key)
     steps.append(f"interventions: {len(interventions)}")
+
+    # The marker is an internal transport contract, not presentation text.
+    # Falling back to prose-only project rows silently creates interventions
+    # which the spatial compiler cannot ground.  Record that divergence so
+    # the L3 gate can stop before PARSE/EXECUTE instead of guessing a site.
+    if interventions and not instr.strip():
+        program_issues.append(
+            ProgramIssue(
+                stage="l3",
+                severity="error",
+                code="missing_instruction_marker",
+                message="L3 response omitted the required 【INSTRUCTION】 section",
+                detail=(
+                    "Planning interventions were recovered from display text, "
+                    "but no source-backed spatial instruction table was present."
+                ),
+            )
+        )
+    elif interventions and not had_marker:
+        program_issues.append(
+            ProgramIssue(
+                stage="l3",
+                severity="warning",
+                code="instruction_marker_recovered",
+                message="从模型输出中的结构化表格恢复了缺失的【INSTRUCTION】标记",
+                detail="仅恢复传输标记，未推断或补写名称、位置、规模或几何。",
+            )
+        )
+
+    if dimension_key in _SPATIAL_DIMENSIONS:
+        unmapped = [iv for iv in interventions if not iv.spatial_requirements]
+        if unmapped:
+            program_issues.append(
+                ProgramIssue(
+                    stage="l3",
+                    severity="error",
+                    code="missing_spatial_instruction",
+                    message=(
+                        f"{len(unmapped)} 个 {dimension_key} 干预缺少可核验空间引用"
+                    ),
+                    detail=", ".join(iv.intervention_id for iv in unmapped[:20]),
+                )
+            )
 
     dependencies = _detect_dependencies(display, interventions)
     steps.append(f"dependencies: {len(dependencies)}")

@@ -8,6 +8,7 @@ from __future__ import annotations
 import asyncio
 
 import json
+import os
 import re
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
@@ -228,13 +229,24 @@ def _location_fact_mentions(location_facts: Optional[List[Any]]) -> List[Dict[st
 
 
 def _feature_text(feature: Any) -> str:
+    # Uploaded features are Pydantic models with ``extra=allow``.  Their
+    # original GeoJSON properties are not exposed as ``properties``; aliases
+    # such as ``地质灾害点名称`` may only be present in ``model_dump()``.
+    # Reading only name/label therefore silently dropped real village names
+    # before GROUND.  Keep the raw source values as evidence and include the
+    # model's extra fields without inventing any geometry.
     raw = getattr(feature, "_raw", None)
     if not isinstance(raw, dict):
         raw = getattr(feature, "properties", None)
+    if (not isinstance(raw, dict) or not raw) and hasattr(feature, "model_dump"):
+        try:
+            raw = feature.model_dump(by_alias=True)
+        except Exception:
+            raw = None
     if not isinstance(raw, dict):
-        raw = {}
+        raw = vars(feature) if hasattr(feature, "__dict__") else {}
     values = [str(v) for v in raw.values() if v not in (None, "")]
-    for attr in ("name", "label", "description", "layer_type"):
+    for attr in ("name", "label", "description", "text", "category", "layer_type"):
         value = getattr(feature, attr, None)
         if value:
             values.append(str(value))
@@ -363,7 +375,12 @@ def _gather_candidates(mention: Dict[str, str], gazetteer: Any, bsm_to_dlbm: Dic
     """候选生成：gazetteer 命中 → 单候选；否则按村名特征 hints 与聚类 dlbm 构成的空间校验。"""
     from app.modules.kg.gazetteer import spatial_score
 
-    entry = gazetteer.resolve(mention["name"])
+    # A report village reference is a contractual name, not a fuzzy search
+    # query.  Fuzzy resolution here can silently turn ``田坑村`` into an
+    # unrelated ``符坑村`` and then make GROUND appear spatially supported.
+    # Keep candidate generation fail-closed; approximate matches belong in a
+    # HUMAN review item with explicit evidence.
+    entry = gazetteer.resolve(mention["name"], fuzzy=False)
     if entry is not None and entry.entity_uri:
         return [entry]
     return [
@@ -701,7 +718,13 @@ async def run_wave(session_id: str, wave: int, reports: Dict[str, str], bundle: 
     from app.core.settings import GIS_EXPLORE_LLM_ENABLED
 
     llm = None
-    if GIS_EXPLORE_LLM_ENABLED:
+    # MiniMax is used for the primary planning stages.  Its optional batch
+    # name-confirmation call is deliberately opt-in because a non-JSON answer
+    # must not hold the KG enrichment wave for repeated 30s timeouts.  The
+    # deterministic spatial gate remains authoritative for bindings.
+    from app.core.llm import LLMProvider, get_provider
+    semantic_confirm = os.getenv("GIS_ENRICH_LLM_CONFIRM", "").lower() in {"1", "true", "yes"}
+    if GIS_EXPLORE_LLM_ENABLED and (get_provider() != LLMProvider.MINIMAX or semantic_confirm):
         from app.core.llm import create_llm
         from app.core.settings import (
             GIS_EXPLORE_MAX_TOKENS,
@@ -710,7 +733,7 @@ async def run_wave(session_id: str, wave: int, reports: Dict[str, str], bundle: 
         )
 
         llm = create_llm(
-            model=GIS_EXPLORE_MODEL,
+            model=None,
             temperature=GIS_EXPLORE_TEMPERATURE,
             max_tokens=GIS_EXPLORE_MAX_TOKENS,
             streaming=False,

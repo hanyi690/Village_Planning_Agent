@@ -8,7 +8,7 @@
 - ``make_session_with_uploads``: async helper that persists a planning session
   plus uploaded files through the real ``app.database.operations`` layer.
 
-Import path: fixtures are exposed to pytest via ``tests/conftest.py``
+Import path: fixtures are exposed to pytest via the repository/backend conftest
 (``pytest_plugins``), so tests just ``from tests.fixtures.db import ...`` or
 request the fixture by name.
 """

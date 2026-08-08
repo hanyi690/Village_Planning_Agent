@@ -32,6 +32,10 @@ _RETRY_ROUTES: Dict[str, frozenset[str]] = {
 
 # Stage -> next stage after a HUMAN approve (forward chain).
 _STAGE_FORWARD_TARGET = {
+    "l1": "l2_worker",
+    "l2": "l3_worker",
+    # Layer-3 review is the hand-off into the explicit post-L3 chain.
+    "l3": "parse",
     "parse": "ground",
     "ground": "select",
     "select": "execute",
@@ -175,6 +179,18 @@ async def _require_context(state: Dict[str, Any]) -> Any:
         context = _get_cached_context(state)
     if context is None:
         raise RuntimeError("PLANNING_CONTEXT_UNAVAILABLE: bootstrap returned no context")
+    # The context object is cached across the L1/L2/L3 waves.  Enrichment can
+    # finish after bootstrap, so a cached context must still hydrate the
+    # authoritative L1 location-fact artifact before GROUND.  Without this
+    # call the resolver saw the same context version but an empty
+    # ``location_facts`` list, making the L1 -> KG -> GROUND evidence path
+    # disappear after a normal layer completion.
+    try:
+        from app.agent.bootstrap.context_bootstrap import _hydrate_l1_spatial_facts
+
+        _hydrate_l1_spatial_facts(state, context)
+    except Exception as exc:
+        logger.warning("[post_l3:main] cached context L1 hydration failed: %s", exc)
     expected = _context_version(state)
     actual = str(getattr(context, "version", ""))
     if expected and actual and expected != actual:
@@ -319,31 +335,29 @@ def _spec_has_source_support(spec: Any, program: Any, context: Any) -> bool:
             resolved_names.add(str(getattr(entry, "name", "")))
             resolved_names.update(str(alias) for alias in (getattr(entry, "aliases", []) or []))
     for label in labels:
-        base = label
-        for suffix in ("自然村", "村"):
-            base = base.rstrip(suffix)
-        if label in resolved_names or base in resolved_names:
-            return True
-        # A report sentence is provenance, not geometry.  Named-village
-        # spatial specs require a BSM-backed gazetteer entry; otherwise GROUND
-        # would fabricate a location from prose and silently pass the gate.
-    return False
+        base = label.removesuffix("自然村").removesuffix("村")
+        if label not in resolved_names and base not in resolved_names:
+            # A report sentence is provenance, not geometry. Named-village
+            # spatial specs require a BSM-backed gazetteer entry; otherwise
+            # GROUND must expose the missing evidence instead of fabricating
+            # a location or silently dropping the requirement.
+            return False
+    return True
 
 
 def _filter_unsupported_spatial_specs(specs: List[Any], program: Any, context: Any) -> tuple[List[Any], List[Dict[str, Any]]]:
-    """Drop only unsupported named-village specs; preserve an auditable diagnostic."""
-    kept: List[Any] = []
+    """Preserve specs and annotate missing evidence for the GROUND gate."""
+    kept: List[Any] = list(specs)
     diagnostics: List[Dict[str, Any]] = []
     for spec in specs:
         if _spec_has_source_support(spec, program, context):
-            kept.append(spec)
             continue
         labels = _spatial_spec_village_names(spec)
         diagnostics.append({
             "code": "UNSUPPORTED_SPATIAL_REFERENCE",
             "intervention_id": getattr(spec, "intervention_id", ""),
             "labels": labels,
-            "message": "named village has no GIS BSM binding and no object-specific source evidence",
+            "message": "named village has no GIS BSM binding and no object-specific source evidence; GROUND must resolve or route HUMAN",
         })
     return kept, diagnostics
 
@@ -374,7 +388,7 @@ async def parse_node(state: Dict[str, Any]) -> Dict[str, Any]:
         result.diagnostics = diagnostics
         result.spatial_reference_specs = specs
         logger.warning(
-            "[post_l3:main:parse] dropped %d unsupported spatial refs: %s",
+            "[post_l3:main:parse] retained %d spatial refs with unsupported-source diagnostics: %s",
             len(unsupported),
             unsupported,
         )
@@ -420,6 +434,13 @@ async def ground_node(state: Dict[str, Any]) -> Dict[str, Any]:
             for candidate in (getattr(result, "candidates", None) or []):
                 if hasattr(candidate, "evidence_refs"):
                     candidate.evidence_refs.extend(refs)
+    if state.get("human_acknowledged_unresolved_spatial") and getattr(result, "unresolved", None):
+        logger.warning(
+            "[post_l3:main:ground] operator acknowledged %d unresolved spatial references; "
+            "continuing with resolved candidates only",
+            len(result.unresolved),
+        )
+        result.unresolved = []
     gate = evaluate_ground_gate(result)
     ref = _persist_artifact(state, "ground", "GroundingResult", result)
     return {
@@ -442,13 +463,23 @@ async def select_node(state: Dict[str, Any]) -> Dict[str, Any]:
     from app.modules.schema.contracts.grounding_contracts import GroundingResult
     from app.modules.schema.contracts.parse_contracts import SpatialPlanningIntent
     from app.modules.schema.contracts.parse_result_contracts import IntentCompilationResult
+    from app.modules.schema.contracts.selection_contracts import SiteSelectionDecision
 
     retry_patch = _retry_patch(state, "select")
     context = await _require_context(state)
     grounding = _load_ref_artifact(state, "grounding_result", GroundingResult)
     intent = _load_ref_artifact(state, "intent_compilation", IntentCompilationResult)
     plan_intent = _to_typed(getattr(intent, "typed_intent", None) or intent, SpatialPlanningIntent)
-    decision, briefs = select_aggregate(grounding, plan_intent, context)
+    import asyncio
+    from app.core.settings import GIS_TIMEOUT
+    try:
+        async with asyncio.timeout(max(30, int(GIS_TIMEOUT) * 4)):
+            decision, briefs = await asyncio.to_thread(
+                select_aggregate, grounding, plan_intent, context
+            )
+    except TimeoutError as exc:
+        logger.error("[post_l3:main:select] aggregate timeout; failing closed")
+        raise RuntimeError("SELECT_TIMEOUT: candidate selection exceeded its cancellation boundary") from exc
     intent.typed_intent = plan_intent
     projects = list(getattr(plan_intent, "project_targets", None) or [])
     gate = evaluate_select_gate(decision, target_count=len(projects))
@@ -536,10 +567,21 @@ async def execute_node(state: Dict[str, Any]) -> Dict[str, Any]:
             build_intent_layer(kg_obj, plan_intent)
         except Exception as e:
             logger.warning("[post_l3:main:execute] build_intent_layer failed: %s", e)
-    result = await graph.ainvoke(
-        exec_state,
-        config={"configurable": {"thread_id": state.get("session_id", ""), "checkpoint_ns": "execute"}},
-    )
+    # EXECUTE contains several GIS workers and must have a structured
+    # cancellation boundary.  Without it a native geometry operation can
+    # keep the session task alive indefinitely after a bad external feature.
+    import asyncio
+    from app.core.settings import LLM_REQUEST_TIMEOUT
+
+    try:
+        async with asyncio.timeout(max(30, int(LLM_REQUEST_TIMEOUT))):
+            result = await graph.ainvoke(
+                exec_state,
+                config={"configurable": {"thread_id": state.get("session_id", ""), "checkpoint_ns": "execute"}},
+            )
+    except TimeoutError as exc:
+        logger.error("[post_l3:main:execute] subgraph timeout; failing closed")
+        raise RuntimeError("EXECUTE_TIMEOUT: GIS worker subgraph exceeded its cancellation boundary") from exc
 
     changeset = result.get("parcel_changeset")
     if changeset is not None:
@@ -574,6 +616,7 @@ async def validate_node(state: Dict[str, Any]) -> Dict[str, Any]:
     from app.modules.schema.contracts.planned_state_contracts import PlannedState
     from app.modules.schema.contracts.parcel_change_contracts import ParcelChangeSet
     from app.modules.schema.contracts.parse_result_contracts import IntentCompilationResult
+    from app.modules.schema.contracts.selection_contracts import SiteSelectionDecision
 
     retry_patch = _retry_patch(state, "validate")
     context = await _require_context(state)
@@ -582,6 +625,7 @@ async def validate_node(state: Dict[str, Any]) -> Dict[str, Any]:
     changeset = _load_ref_artifact(state, "parcel_changeset", ParcelChangeSet)
     intent = _load_ref_artifact(state, "intent_compilation", IntentCompilationResult)
     plan_intent = _to_typed(getattr(intent, "typed_intent", None) or intent, SpatialPlanningIntent)
+    selection = _load_ref_artifact(state, "site_selection", SiteSelectionDecision)
     report = validate_aggregate(
         planned_state,
         changeset,
@@ -589,6 +633,7 @@ async def validate_node(state: Dict[str, Any]) -> Dict[str, Any]:
         plan_intent,
         constraint_index,
         run_id=_run_id(state),
+        decision=selection,
     )
     gate = evaluate_validate_gate(report)
     ref = _persist_artifact(state, "validate", "ValidationReport", report)
@@ -727,9 +772,6 @@ async def deliver_node(state: Dict[str, Any]) -> Dict[str, Any]:
         current_parcels=current_parcels,
         run_id=_run_id(state),
     )
-    gate = evaluate_deliver_gate(manifest)
-    manifest_ref = _persist_artifact(state, "deliver", "DeliveryManifest", manifest)
-
     render_result = []
     try:
         from app.agent.deliver.render_layers import build_render_layers
@@ -745,6 +787,64 @@ async def deliver_node(state: Dict[str, Any]) -> Dict[str, Any]:
 
     render_ref = _persist_artifact(state, "deliver", "RenderLayers", render_result)
 
+    # DELIVER owns the operator-facing render side effects.  Keep these
+    # session-scoped and deterministic so replay can reuse the same layer
+    # artifact while the report still exposes the actual files produced.
+    render_artifacts: Dict[str, Any] = {
+        "layer_count": len(render_result),
+        "feature_counts": {
+            str(layer.get("layerType") or layer.get("layer_type") or "layer"): len(
+                (layer.get("geojson") or layer.get("data") or {}).get("features") or []
+            )
+            for layer in render_result
+            if isinstance(layer, dict)
+        },
+    }
+    try:
+        from pathlib import Path
+
+        from app.services.run_paths import session_run_dir
+
+        output_dir = session_run_dir(state.get("session_id", "")) / "render"
+        from app.tools.gis.html_render import render_interactive_map
+        from app.tools.gis.static_render import render_map_preview
+
+        village_name = str((state.get("config") or {}).get("village_name", ""))
+        render_artifacts["static_preview"] = render_map_preview(
+            render_result, str(output_dir), village_name
+        )
+        render_artifacts["interactive_map"] = render_interactive_map(
+            render_result, str(output_dir), village_name
+        )
+    except Exception as exc:
+        # Preserve the typed RenderLayers artifact and make the missing file
+        # an explicit DELIVER diagnostic instead of hiding it in a log.
+        render_artifacts["error"] = {
+            "code": "RENDER_FILE_FAILED",
+            "type": type(exc).__name__,
+            "message": str(exc),
+        }
+
+    if not render_artifacts.get("layer_count") or render_artifacts.get("error"):
+        render_reason = (
+            (render_artifacts.get("error") or {}).get("message")
+            if isinstance(render_artifacts.get("error"), dict)
+            else "no renderable layers"
+        ) or "no renderable layers"
+        from app.modules.schema.contracts.delivery_manifest_contracts import HumanItem
+
+        manifest.pending_human_items.append(HumanItem(
+            item_id=f"hi-render-{_run_id(state)}",
+            description="DELIVER 图层渲染产物缺失",
+            reason=render_reason,
+            blocking=True,
+        ))
+        manifest.statutory_complete = False
+        manifest.statutory_complete_breakdown["render_output"] = False
+
+    gate = evaluate_deliver_gate(manifest)
+    manifest_ref = _persist_artifact(state, "deliver", "DeliveryManifest", manifest)
+
     return {
         "artifact_refs": {
             key: ref for key, ref in {
@@ -754,6 +854,7 @@ async def deliver_node(state: Dict[str, Any]) -> Dict[str, Any]:
         },
         "deliver_gate": _dump(gate),
         "export_result": export_result,
+        "render_artifacts": render_artifacts,
         "upstream_gates": _accumulate_gate(state.get("upstream_gates"), _dump(gate)),
         **_adopt_context(state, context),
         **retry_patch,

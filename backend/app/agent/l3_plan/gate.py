@@ -79,7 +79,12 @@ def evaluate_l3_gate(
 
     contradictions = [
         i for i in program.program_issues
-        if i.code == "program_contradiction" and i.severity == "error"
+        if i.severity == "error"
+        and i.code in {
+            "program_contradiction",
+            "missing_instruction_marker",
+            "missing_spatial_instruction",
+        }
     ]
     if contradictions:
         return GateDecision(

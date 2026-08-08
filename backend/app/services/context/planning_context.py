@@ -34,6 +34,48 @@ class ContextBuildError(RuntimeError):
     pass
 
 
+def _load_session_semantic_memory(session_id: str) -> Any:
+    """Restore the latest persisted KG semantic annotations for a session.
+
+    L1 enrichment writes village→ResidentialCluster bindings to the semantic
+    memory round files.  A resumed LangGraph thread may run in a fresh worker
+    where the process singleton is empty; rebuilding a gazetteer without this
+    persisted memory silently drops the L1 bindings and makes GROUND diverge
+    from the checkpoint.  Loading the latest round is deterministic and scoped
+    to the session id, so it does not introduce cross-session state.
+    """
+    try:
+        from app.modules.kg.memory import (
+            SemanticMemoryStore,
+            get_memory_dir,
+            load_memory_state,
+        )
+
+        candidates = list(get_memory_dir().glob(f"{session_id}_round_*.json"))
+        if not candidates:
+            return SemanticMemoryStore()
+
+        def round_number(path: Any) -> int:
+            try:
+                return int(path.stem.rsplit("_round_", 1)[1])
+            except (IndexError, TypeError, ValueError):
+                return -1
+
+        latest = max(candidates, key=round_number)
+        round_num = round_number(latest)
+        if round_num < 0:
+            return SemanticMemoryStore()
+        return load_memory_state(session_id, round_num)
+    except Exception as exc:
+        logger.warning("[PlanningContext] semantic memory restore failed: %s", exc)
+        try:
+            from app.modules.kg.memory import SemanticMemoryStore
+
+            return SemanticMemoryStore()
+        except Exception:
+            return None
+
+
 def _next_version(session_id: str) -> int:
     _build_counter[session_id] = _build_counter.get(session_id, 0) + 1
     return _build_counter[session_id]
@@ -142,7 +184,12 @@ async def build_planning_context(
             from app.modules.kg.gazetteer import build_gazetteer
 
             if kg is not None and bundle is not None and getattr(kg, "g", None) is not None:
-                gazetteer = build_gazetteer(kg, bundle, memory=None)
+                # The latest L1/L2/L3 enrichment round is part of the
+                # authoritative context inputs.  It must be restored before
+                # any checkpoint replay; otherwise the same thread sees a
+                # different gazetteer after process restart.
+                memory = _load_session_semantic_memory(session_id)
+                gazetteer = build_gazetteer(kg, bundle, memory=memory)
         except Exception as e:
             logger.warning("[PlanningContext] gazetteer build failed: %s", e)
 

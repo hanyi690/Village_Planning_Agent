@@ -82,6 +82,7 @@ INSTRUCTION_OUTPUT_GUIDE = """
   至少应有一条规划对象带有可核验的自然村、方位、功能分区或村域范围；
   不得把所有空间对象的“位置”都留空。L3 只需提供粗粒度空间引用，
   地块级精确落位由后续 GROUND/SELECT 完成。
+{spatial_rule}
 - 表格前后各留一个空行；无内容时输出空表格（保留表头行与分隔行）
 
 """
@@ -98,10 +99,30 @@ LOCATION_EVIDENCE_GUIDE = """
 """
 
 
-def _instruction_output_guide(natural_villages: str = "") -> str:
+_SPATIAL_PROMPT_DIMENSIONS = frozenset({
+    "industry", "traffic", "traffic_planning", "public_service",
+    "infrastructure", "infrastructure_planning", "ecological",
+    "spatial_structure", "land_use_planning", "settlement_planning",
+})
+
+
+def _instruction_output_guide(
+    natural_villages: str = "",
+    dimension_key: str = "",
+) -> str:
     nv = (natural_villages or "").strip()
     nv_suffix = f"（如 {nv}）" if nv else ""
-    return INSTRUCTION_OUTPUT_GUIDE.format(nv_suffix=nv_suffix)
+    spatial_rule = ""
+    if dimension_key in _SPATIAL_PROMPT_DIMENSIONS:
+        spatial_rule = (
+            "- 当前维度属于空间可执行维度：若正文产生任一项目/设施/分区/道路/轴线，"
+            "每一行都必须填写来源明确的粗粒度位置；没有证据时不要生成该对象，"
+            "也不要填写无法由上游报告核验的村名。"
+        )
+    return INSTRUCTION_OUTPUT_GUIDE.format(
+        nv_suffix=nv_suffix,
+        spatial_rule=spatial_rule,
+    )
 
 
 # ==========================================
@@ -922,7 +943,10 @@ def get_dimension_prompt(dimension_key: str, revision_instruction: str = "", **k
         result = revision_instruction + "\n\n" + result
 
     # P8: 文末 INSTRUCTION 段引导（内部指令，保存时剥离不展示）
-    result += _instruction_output_guide(kwargs.get("natural_villages", ""))
+    result += _instruction_output_guide(
+        kwargs.get("natural_villages", ""),
+        dimension_key=dimension_key,
+    )
 
     return result
 

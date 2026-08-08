@@ -39,15 +39,26 @@ def _inc(
     )
 
 
-def check_intervention_coverage(program, specs) -> list[ReconciliationInconsistency]:
+def _deferred_targets(decision) -> set[str]:
+    if decision is None:
+        return set()
+    factors = getattr(decision, "decision_factors", None) or {}
+    return {str(value) for value in (factors.get("deferred_targets") or [])}
+
+
+def check_intervention_coverage(program, specs, decision=None) -> list[ReconciliationInconsistency]:
     interventions = list(getattr(program, "interventions", None) or [])
     specs = list(specs or [])
     inconsistencies: list[ReconciliationInconsistency] = []
+    deferred = _deferred_targets(decision)
     for i, intervention in enumerate(interventions):
+        intervention_id = str(getattr(intervention, "intervention_id", ""))
+        if intervention_id in deferred:
+            continue
         if i >= len(specs) or specs[i] is None:
             inconsistencies.append(
                 _inc(
-                    intervention.intervention_id,
+                    intervention_id,
                     "spec",
                     intervention.intervention_id,
                     "",
@@ -57,11 +68,20 @@ def check_intervention_coverage(program, specs) -> list[ReconciliationInconsiste
     return inconsistencies
 
 
-def check_spec_candidate_coverage(specs, grounding_result) -> list[ReconciliationInconsistency]:
+def check_spec_candidate_coverage(specs, grounding_result, decision=None) -> list[ReconciliationInconsistency]:
     specs = list(specs or [])
     candidates = list(getattr(grounding_result, "candidates", None) or [])
     inconsistencies: list[ReconciliationInconsistency] = []
+    deferred = _deferred_targets(decision)
     for i in range(len(specs)):
+        spec = specs[i]
+        ref = str(
+            getattr(spec, "intervention_id", None)
+            or getattr(spec, "project_ref", None)
+            or ""
+        )
+        if ref in deferred:
+            continue
         if len(candidates) < i + 1:
             inconsistencies.append(
                 _inc(
@@ -80,7 +100,11 @@ def check_candidate_selection_coverage(grounding_result, decision) -> list[Recon
     candidates = list(getattr(grounding_result, "candidates", None) or [])
     candidate_bsms = {bsm for site in candidates for bsm in site.source_parcels}
     inconsistencies: list[ReconciliationInconsistency] = []
+    deferred = _deferred_targets(decision)
     for site in candidates:
+        ref = str(getattr(site, "target_ref", None) or getattr(site, "project_ref", None) or "")
+        if ref in deferred:
+            continue
         if not (set(site.source_parcels) & selected):
             inconsistencies.append(
                 _inc(

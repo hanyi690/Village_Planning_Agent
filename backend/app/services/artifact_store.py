@@ -53,7 +53,11 @@ def _sha256(payload: dict[str, Any]) -> str:
 class FilesystemArtifactStore:
     """Store/retrieve versioned pipeline artifacts as JSON files under a base dir."""
 
-    def __init__(self, base_dir: str | Path = ".run-tmp"):
+    def __init__(self, base_dir: str | Path | None = None):
+        if base_dir is None or str(base_dir) == ".run-tmp":
+            from app.services.run_paths import run_tmp_root
+
+            base_dir = run_tmp_root()
         self.base_dir = Path(base_dir)
 
     # ── paths ──────────────────────────────────────────────────────────
@@ -111,11 +115,13 @@ class FilesystemArtifactStore:
             "run_id": ref.run_id,
             "artifact_type": ref.artifact_type,
             "context_version": ref.context_version,
+            "context_fingerprint": ref.context_fingerprint,
             "revision": ref.revision,
             "created_at": ref.stored_at.isoformat(),
             "checksum": checksum,
             "payload_bytes": len(payload_bytes),
         }
+        ref.checksum = checksum
         self._atomic_write_json(d / _MANIFEST, manifest)
 
         # update revision index (latest revision pointer)
@@ -173,11 +179,13 @@ class FilesystemArtifactStore:
     def _ref_from_manifest(self, manifest: dict[str, Any], run_id: str, module: str) -> ArtifactRef:
         return ArtifactRef(
             context_version=str(manifest.get("context_version", "")),
+            context_fingerprint=str(manifest.get("context_fingerprint", "")),
             artifact_id=str(manifest.get("artifact_id", "")),
             module=module,
             run_id=run_id,
             artifact_type=str(manifest.get("artifact_type", "")),
             revision=str(manifest.get("revision", "v1")),
+            checksum=str(manifest.get("checksum", "")),
         )
 
     def list_by_run(self, run_id: str) -> list[ArtifactRef]:

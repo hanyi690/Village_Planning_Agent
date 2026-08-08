@@ -39,7 +39,9 @@ def split_instruction(content: str) -> tuple:
         return (content or "", "")
     idx = content.find(_INSTRUCTION_MARKER)
     if idx < 0:
-        return (content, "")
+        from app.modules.parsing.compiler.instruction_parser import split_content_instruction
+
+        return split_content_instruction(content)
     display = content[:idx].rstrip()
     instruction = content[idx:].strip()
     return (display, instruction)

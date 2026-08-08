@@ -270,7 +270,6 @@ async def layer_completion_check(
                 dimension_count=len(completed),
                 total_chars=total_chars,
             )
-            await _invoke_extraction(session_id, layer, state)
             await _snapshot_bundle(
                 session_id, "final" if layer >= 3 else f"layer{layer}",
             )
@@ -327,7 +326,6 @@ async def layer_completion_check(
         dimension_count=len(completed),
         total_chars=total_chars,
     )
-    await _invoke_extraction(session_id, layer, state)
     await _snapshot_bundle(
         session_id, "final" if layer >= 3 else f"layer{layer}",
     )

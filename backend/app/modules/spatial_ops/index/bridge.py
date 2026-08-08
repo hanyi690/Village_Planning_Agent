@@ -283,6 +283,16 @@ class ConstraintIndex:
     def __init__(self, gdf, crs: str = "EPSG:4326"):
         self._gdf = gdf
         self._crs = crs
+        # Selection evaluates the same grounded parcel for multiple project
+        # targets.  Cache the projected index and predicate results so a
+        # large uploaded bundle does not repeat O(features) GEOS work.
+        self._metric_gdf = None
+        self._geometry_cache: Dict[str, List[ConstraintOverlap]] = {}
+
+    def _metric(self):
+        if self._metric_gdf is None:
+            self._metric_gdf = self._gdf.to_crs("EPSG:3857")
+        return self._metric_gdf
 
     def parcel_in_constraint(self, bsm: str) -> List[ConstraintOverlap]:
         """Check if a parcel (by BSM) overlaps any constraint polygon.
@@ -305,12 +315,13 @@ class ConstraintIndex:
         row = self._gdf.loc[self._gdf["bsm"] == bsm]
         if row.empty:
             return []
-        parcel_geom = row.iloc[0].geometry
-        if parcel_geom.is_empty:
+        parcel_geom = _valid_geometry(row.iloc[0].geometry)
+        if parcel_geom is None:
+            logger.warning("[ConstraintIndex] invalid parcel geometry skipped: bsm=%s", bsm)
             return []
 
         results = []
-        gdf_metric = self._gdf.to_crs("EPSG:3857")
+        gdf_metric = self._metric()
         parcel_metric = gpd.GeoSeries([parcel_geom], crs=self._crs).to_crs("EPSG:3857").iloc[0]
         parcel_area = parcel_metric.area
 
@@ -358,21 +369,36 @@ class ConstraintIndex:
             return []
 
         try:
-            query_geom = shape(geometry)
-            if query_geom.is_empty:
+            query_geom = _valid_geometry(shape(geometry))
+            if query_geom is None:
+                logger.warning("[ConstraintIndex] invalid query geometry rejected")
                 return []
-            gdf_metric = self._gdf.to_crs("EPSG:3857")
+            gdf_metric = self._metric()
             q_metric = gpd.GeoSeries([query_geom], crs=self._crs).to_crs("EPSG:3857").iloc[0]
             q_area = q_metric.area
+
+            cache_key = query_geom.wkb_hex
+            cached = self._geometry_cache.get(cache_key)
+            if cached is not None:
+                return list(cached)
 
             results = []
             sindex = gdf_metric.sindex
             possible = list(sindex.intersection(q_metric.bounds))
             for i in possible:
-                c_geom = gdf_metric.iloc[i].geometry
-                if not c_geom.intersects(q_metric):
+                c_geom = _valid_geometry(gdf_metric.iloc[i].geometry)
+                q_safe = _valid_geometry(q_metric)
+                if c_geom is None or q_safe is None:
                     continue
-                overlap = c_geom.intersection(q_metric)
+                try:
+                    if not c_geom.intersects(q_safe):
+                        continue
+                    overlap = c_geom.intersection(q_safe)
+                except Exception as exc:
+                    # One malformed external feature must not turn a batch
+                    # constraint query into an unbounded exception/log loop.
+                    logger.warning("[ConstraintIndex] skipped invalid feature %s: %s", i, exc)
+                    continue
                 if overlap.is_empty or overlap.area == 0:
                     continue
                 c_type = self._gdf.iloc[i].get("constraint_type", "")
@@ -387,6 +413,7 @@ class ConstraintIndex:
                     parcel_total_area_sqm=round(q_area, 2),
                 ))
             results.sort(key=lambda r: -r.overlap_area_sqm)
+            self._geometry_cache[cache_key] = list(results)
             return results
         except Exception as e:
             logger.error("[ConstraintIndex] geometry_in_constraint failed: %s", e)
@@ -632,6 +659,110 @@ def compute_cross_layer_relations(bundle) -> Dict[str, list]:
     polygons = getattr(bundle, "polygons", None)
     if polygons is None:
         return {}
+
+    # Keep this hot path independent of GeoPandas' pandas extension arrays.
+    # On Windows, vectorized GeoSeries predicates over the real upload can
+    # corrupt process state when an invalid ring is present.  Shapely's scalar
+    # predicates over repaired geometries and STRtree indices are deterministic
+    # and retain the same relation contract.
+    from shapely.ops import transform
+    from shapely.strtree import STRtree
+    try:
+        from pyproj import Transformer
+        project = Transformer.from_crs("EPSG:4326", "EPSG:3857", always_xy=True).transform
+    except Exception:
+        project = None
+
+    def _safe_geom(value):
+        try:
+            geom = value if hasattr(value, "is_valid") else shape(value)
+            if geom.is_empty:
+                return None
+            if not geom.is_valid:
+                geom = make_valid(geom)
+            return geom if geom is not None and not geom.is_empty and geom.is_valid else None
+        except Exception:
+            return None
+
+    def _metric(geom):
+        try:
+            return transform(project, geom) if project is not None else geom
+        except Exception:
+            return None
+
+    def _indices(tree, geom):
+        try:
+            return [int(i) for i in tree.query(geom)]
+        except Exception:
+            return []
+
+    def _predicate(fn, *args):
+        try:
+            return fn(*args)
+        except Exception:
+            return False
+
+    result: Dict[str, list] = {"located_in": [], "intersects": [], "contains": []}
+    poly_entries = [(_p, u, _safe_geom(s)) for _p, u, s in _collect_entities(bundle, _POLYGON_LAYERS)]
+    poly_entries = [(p, u, s) for p, u, s in poly_entries if s is not None]
+    point_entries = [(_p, u, _safe_geom(s)) for _p, u, s in _collect_entities(bundle, _POINT_LAYERS)]
+    point_entries = [(_p, u, s) for _p, u, s in point_entries if s is not None]
+    line_entries = [(_p, u, _safe_geom(s)) for _p, u, s in _collect_entities(bundle, _LINE_LAYERS)]
+    line_entries = [(_p, u, s) for _p, u, s in line_entries if s is not None]
+
+    def _indexed(entries):
+        metric = [_metric(s) for _p, _u, s in entries]
+        valid = [i for i, s in enumerate(metric) if s is not None and not s.is_empty]
+        return [(entries[i][0], entries[i][1], metric[i]) for i in valid]
+
+    metric_polys = _indexed(poly_entries)
+    poly_tree = STRtree([s for _p, _u, s in metric_polys]) if metric_polys else None
+    if poly_tree:
+        for _prefix, pt_uri, pt_s in point_entries:
+            pt = _metric(pt_s)
+            for i in _indices(poly_tree, pt):
+                pp, pu, ps = metric_polys[i]
+                if _predicate(ps.contains, pt):
+                    result["located_in"].append((pt_uri, pu))
+                    result["contains"].append((pu, pt_uri))
+                    break
+
+    protection_types = {"farmland_protection", "ecological_redline", "historical_protection", "zone_conditional"}
+    parcel_rows = [(u, s) for p, u, s in metric_polys if p == "parcel"]
+    prot_rows = [(u, s) for p, u, s in metric_polys if p in protection_types]
+    prot_tree = STRtree([s for _u, s in prot_rows]) if prot_rows else None
+    if prot_tree:
+        for pa_uri, pa_geom in parcel_rows:
+            for i in _indices(prot_tree, pa_geom):
+                pc_uri, pc_geom = prot_rows[i]
+                if not _predicate(pa_geom.intersects, pc_geom):
+                    continue
+                try:
+                    overlap = pa_geom.intersection(pc_geom)
+                    if not overlap.is_empty and overlap.area:
+                        result["intersects"].append((pa_uri, pc_uri, round(overlap.area / pa_geom.area * 100, 1) if pa_geom.area else 0.0))
+                except Exception:
+                    continue
+
+    metric_lines = _indexed(line_entries)
+    if prot_tree:
+        for _prefix, li_uri, li_geom in metric_lines:
+            for i in _indices(prot_tree, li_geom):
+                if _predicate(li_geom.intersects, prot_rows[i][1]):
+                    result["intersects"].append((li_uri, prot_rows[i][0], 0.0))
+
+    admin_rows = [(u, s) for p, u, s in metric_polys if p == "admin"]
+    admin_tree = STRtree([s for _u, s in admin_rows]) if admin_rows else None
+    if admin_tree:
+        for _prefix, li_uri, li_geom in metric_lines:
+            for i in _indices(admin_tree, li_geom):
+                if _predicate(admin_rows[i][1].contains, li_geom):
+                    result["located_in"].append((li_uri, admin_rows[i][0]))
+                    break
+
+    total = len(result["located_in"]) + len(result["intersects"]) + len(result["contains"])
+    logger.info("[compute_cross_layer_relations] %d relations: %d located_in, %d intersects, %d contains", total, len(result["located_in"]), len(result["intersects"]), len(result["contains"]))
+    return result
 
     result: Dict[str, list] = {"located_in": [], "intersects": [], "contains": []}
 

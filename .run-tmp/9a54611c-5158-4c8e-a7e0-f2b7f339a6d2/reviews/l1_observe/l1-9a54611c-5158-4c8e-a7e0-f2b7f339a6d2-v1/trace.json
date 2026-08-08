@@ -1,0 +1,120 @@
+{
+  "artifact_id": "l1-9a54611c-5158-4c8e-a7e0-f2b7f339a6d2-v1",
+  "context_version": "1",
+  "dimension_provenance": [
+    {
+      "source": "l1_observe",
+      "run_id": "9a54611c-5158-4c8e-a7e0-f2b7f339a6d2",
+      "module": "l1_observe",
+      "trace": [
+        "architecture",
+        "rpt-architecture-v1"
+      ]
+    },
+    {
+      "source": "l1_observe",
+      "run_id": "9a54611c-5158-4c8e-a7e0-f2b7f339a6d2",
+      "module": "l1_observe",
+      "trace": [
+        "ecological_green",
+        "rpt-ecological_green-v1"
+      ]
+    },
+    {
+      "source": "l1_observe",
+      "run_id": "9a54611c-5158-4c8e-a7e0-f2b7f339a6d2",
+      "module": "l1_observe",
+      "trace": [
+        "historical_culture",
+        "rpt-historical_culture-v1"
+      ]
+    },
+    {
+      "source": "l1_observe",
+      "run_id": "9a54611c-5158-4c8e-a7e0-f2b7f339a6d2",
+      "module": "l1_observe",
+      "trace": [
+        "infrastructure",
+        "rpt-infrastructure-v1"
+      ]
+    },
+    {
+      "source": "l1_observe",
+      "run_id": "9a54611c-5158-4c8e-a7e0-f2b7f339a6d2",
+      "module": "l1_observe",
+      "trace": [
+        "land_use",
+        "rpt-land_use-v1"
+      ]
+    },
+    {
+      "source": "l1_observe",
+      "run_id": "9a54611c-5158-4c8e-a7e0-f2b7f339a6d2",
+      "module": "l1_observe",
+      "trace": [
+        "location",
+        "rpt-location-v1"
+      ]
+    },
+    {
+      "source": "l1_observe",
+      "run_id": "9a54611c-5158-4c8e-a7e0-f2b7f339a6d2",
+      "module": "l1_observe",
+      "trace": [
+        "natural_environment",
+        "rpt-natural_environment-v1"
+      ]
+    },
+    {
+      "source": "l1_observe",
+      "run_id": "9a54611c-5158-4c8e-a7e0-f2b7f339a6d2",
+      "module": "l1_observe",
+      "trace": [
+        "public_services",
+        "rpt-public_services-v1"
+      ]
+    },
+    {
+      "source": "l1_observe",
+      "run_id": "9a54611c-5158-4c8e-a7e0-f2b7f339a6d2",
+      "module": "l1_observe",
+      "trace": [
+        "socio_economic",
+        "rpt-socio_economic-v1"
+      ]
+    },
+    {
+      "source": "l1_observe",
+      "run_id": "9a54611c-5158-4c8e-a7e0-f2b7f339a6d2",
+      "module": "l1_observe",
+      "trace": [
+        "superior_planning",
+        "rpt-superior_planning-v1"
+      ]
+    },
+    {
+      "source": "l1_observe",
+      "run_id": "9a54611c-5158-4c8e-a7e0-f2b7f339a6d2",
+      "module": "l1_observe",
+      "trace": [
+        "traffic",
+        "rpt-traffic-v1"
+      ]
+    },
+    {
+      "source": "l1_observe",
+      "run_id": "9a54611c-5158-4c8e-a7e0-f2b7f339a6d2",
+      "module": "l1_observe",
+      "trace": [
+        "villager_wishes",
+        "rpt-villager_wishes-v1"
+      ]
+    }
+  ],
+  "dimension_reports": {},
+  "extraction_steps": [
+    "compile_l1_observation (per dimension)",
+    "merge_fragments",
+    "evaluate_l1_gate"
+  ]
+}

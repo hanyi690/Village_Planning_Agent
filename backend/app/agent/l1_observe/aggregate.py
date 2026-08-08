@@ -210,6 +210,8 @@ async def l1_aggregate(
     # remote model returns prose without headings; that must not erase the
     # real GIS/KG facts that L1 observed and that L2 is required to consume.
     kg_fact_count = 0
+    kg_facts: list[str] = []
+    kg_source_refs: list[str] = []
     try:
         from app.agent.explore.service import retrieve_evidence
         from app.modules.schema.contracts.evidence_contracts import ExplorationRequest
@@ -229,6 +231,7 @@ async def l1_aggregate(
         )
         kg_facts = [fact.statement for fact in evidence.evidence_bundle.facts]
         kg_fact_count = len(kg_facts)
+        kg_source_refs = [s.reference for s in evidence.evidence_bundle.sources]
         snapshot.facts = _dedup([*snapshot.facts, *kg_facts])
         snapshot.sources = _dedup_sources([
             *snapshot.sources,
@@ -249,6 +252,7 @@ async def l1_aggregate(
     artifact_store = FilesystemArtifactStore(base_dir=base_dir)
     ref = ArtifactRef(
         context_version=context_version,
+        context_fingerprint=state.get("context_fingerprint", ""),
         artifact_id=artifact_id,
         module="l1_observe",
         run_id=run_id,
@@ -271,17 +275,28 @@ async def l1_aggregate(
 
     try:
         from app.services.step_report import save_step_report
+        from app.agent.bootstrap.stage_audit import build_input_audit
 
         await save_step_report(
             session_id,
             "L1",
             step_name="l1_aggregate",
             layer=1,
+            inputs=build_input_audit(
+                state,
+                stage="L1",
+                source_refs=[f"L1:{key}" for key in sorted(raw_reports)],
+            ),
             outputs={
                 "fact_count": len(snapshot.facts),
                 "facts_produced": snapshot.facts,
                 "facts_by_dimension": snapshot.facts_by_dimension,
                 "location_facts": [fact.model_dump(mode="json") for fact in snapshot.location_facts],
+                "kg_evidence_produced": {
+                    "fact_count": kg_fact_count,
+                    "fact_statements": kg_facts,
+                    "source_refs": kg_source_refs,
+                },
                 "constraint_count": len(snapshot.constraints),
                 "source_refs": [s.reference for s in snapshot.sources],
                 "gate_route": gate_decision.feedback_route or ("PASS" if gate_decision.passed else "FAIL"),
@@ -294,6 +309,8 @@ async def l1_aggregate(
                 "artifact_type": ref.artifact_type,
                 "revision": ref.revision,
                 "context_version": ref.context_version,
+                "context_fingerprint": ref.context_fingerprint,
+                "checksum": ref.checksum,
             }],
             diagnostics={
                 "fact_producer": "L1 report compiler + session KG evidence promotion",
@@ -311,6 +328,8 @@ async def l1_aggregate(
             "artifact_type": "L1Snapshot",
             "revision": "v1",
             "context_version": context_version,
+            "context_fingerprint": state.get("context_fingerprint", ""),
+            "checksum": ref.checksum,
         },
         "artifact_refs": {
             "l1_snapshot": {
@@ -320,6 +339,8 @@ async def l1_aggregate(
                 "artifact_type": "L1Snapshot",
                 "revision": "v1",
                 "context_version": context_version,
+                "context_fingerprint": state.get("context_fingerprint", ""),
+                "checksum": ref.checksum,
             }
         },
         "l1_gate_decision": gate_decision.model_dump(mode="json"),

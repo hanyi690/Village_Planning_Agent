@@ -34,6 +34,7 @@ class LLMProvider(Enum):
     """LLM Provider enumeration"""
     OPENAI = "openai"
     ZHIPUAI = "zhipuai"
+    MINIMAX = "minimax"
 
 
 def get_provider(explicit_provider: Optional[str] = None) -> LLMProvider:
@@ -48,6 +49,8 @@ def get_provider(explicit_provider: Optional[str] = None) -> LLMProvider:
         return LLMProvider.OPENAI
     elif provider_name == "zhipuai":
         return LLMProvider.ZHIPUAI
+    elif provider_name in ("minimax", "minimaxai", "mini-max"):
+        return LLMProvider.MINIMAX
     else:
         logger.warning(f"Unknown provider '{provider_name}', falling back to OpenAI")
         return LLMProvider.OPENAI
@@ -59,6 +62,11 @@ def get_api_key(provider: LLMProvider) -> str:
         key = os.getenv("ZHIPUAI_API_KEY")
         if not key:
             raise ValueError("ZHIPUAI_API_KEY not found in environment.")
+        return key
+    elif provider == LLMProvider.MINIMAX:
+        key = os.getenv("MINIMAX_API_KEY")
+        if not key:
+            raise ValueError("MINIMAX_API_KEY not found in environment.")
         return key
     else:
         key = os.getenv("OPENAI_API_KEY")
@@ -107,6 +115,7 @@ def _create_openai_llm(
     if OPENAI_API_BASE:
         kwargs['base_url'] = OPENAI_API_BASE
     kwargs['request_timeout'] = LLM_REQUEST_TIMEOUT
+    kwargs.setdefault('max_retries', max(0, int(os.getenv('LLM_PROVIDER_MAX_RETRIES', '1'))))
 
     all_callbacks = _merge_callbacks(callbacks)
     if all_callbacks:
@@ -198,6 +207,50 @@ def _create_zhipuai_llm(
     )
 
 
+def _create_minimax_llm(
+    model: str,
+    temperature: float = 0.7,
+    max_tokens: int = 2000,
+    callbacks: Optional[List[Any]] = None,
+    metadata: Optional[Dict[str, Any]] = None,
+    streaming: bool = False,
+    **kwargs,
+) -> Any:
+    """Create MiniMax through its official OpenAI-compatible endpoint.
+
+    MiniMax documents ``temperature`` as an open interval ``(0, 1]``;
+    normalise a caller's deterministic ``0`` to the smallest valid value
+    rather than sending a request the provider will reject.
+    """
+    try:
+        from langchain_openai import ChatOpenAI
+    except ImportError:
+        from langchain_community.chat_models import ChatOpenAI
+
+    from app.core.settings import MINIMAX_API_BASE, LLM_REQUEST_TIMEOUT
+
+    api_key = get_api_key(LLMProvider.MINIMAX)
+    effective_temperature = min(1.0, max(0.01, float(temperature)))
+    kwargs["base_url"] = MINIMAX_API_BASE
+    kwargs["request_timeout"] = LLM_REQUEST_TIMEOUT
+    kwargs.setdefault("max_retries", max(0, int(os.getenv("LLM_PROVIDER_MAX_RETRIES", "1"))))
+
+    all_callbacks = _merge_callbacks(callbacks)
+    if all_callbacks:
+        kwargs["callbacks"] = all_callbacks
+    if metadata:
+        kwargs["metadata"] = metadata
+
+    return ChatOpenAI(
+        model=model,
+        temperature=effective_temperature,
+        max_tokens=max_tokens,
+        api_key=api_key,
+        streaming=streaming,
+        **kwargs,
+    )
+
+
 def create_llm(
     model: Optional[str] = None,
     temperature: float = 0.7,
@@ -209,19 +262,29 @@ def create_llm(
     **kwargs
 ) -> Any:
     """Create an LLM instance with specified provider."""
-    from app.core.settings import LLM_MODEL, LANGCHAIN_TRACING_V2, LANGCHAIN_PROJECT
+    from app.core.settings import (
+        LLM_MODEL,
+        MINIMAX_MODEL,
+        LANGCHAIN_TRACING_V2,
+        LANGCHAIN_PROJECT,
+    )
 
+    selected_provider = get_provider(provider)
     if model is None:
-        model = LLM_MODEL
+        model = MINIMAX_MODEL if selected_provider == LLMProvider.MINIMAX else LLM_MODEL
 
     if LANGCHAIN_TRACING_V2:
         logger.debug(f"[LLM Factory] LangSmith tracing enabled (project: {LANGCHAIN_PROJECT})")
 
-    selected_provider = get_provider(provider)
     logger.debug(f"[LLM Factory] Creating LLM: model={model}, provider={selected_provider.value}")
 
     if selected_provider == LLMProvider.ZHIPUAI:
         return _create_zhipuai_llm(
+            model=model, temperature=temperature, max_tokens=max_tokens,
+            callbacks=callbacks, metadata=metadata, streaming=streaming, **kwargs
+        )
+    elif selected_provider == LLMProvider.MINIMAX:
+        return _create_minimax_llm(
             model=model, temperature=temperature, max_tokens=max_tokens,
             callbacks=callbacks, metadata=metadata, streaming=streaming, **kwargs
         )
@@ -269,6 +332,21 @@ def get_zhipuai_llm(
                               callbacks=callbacks, metadata=metadata, **kwargs)
 
 
+def get_minimax_llm(
+    model: str = "MiniMax-M2.7",
+    temperature: float = 0.7,
+    max_tokens: int = 2000,
+    callbacks: Optional[List[Any]] = None,
+    metadata: Optional[Dict[str, Any]] = None,
+    **kwargs,
+) -> Any:
+    """Get a MiniMax LLM explicitly through the OpenAI-compatible endpoint."""
+    return _create_minimax_llm(
+        model, temperature, max_tokens,
+        callbacks=callbacks, metadata=metadata, **kwargs
+    )
+
+
 def create_flash_llm(
     model: Optional[str] = None,
     temperature: Optional[float] = None,
@@ -278,6 +356,19 @@ def create_flash_llm(
     **kwargs
 ) -> Any:
     """Create a Flash model instance for lightweight tasks."""
+    # Flash callers historically supplied the DashScope-only ``qwen-flash``
+    # name.  When the active provider is MiniMax that name is invalid; route
+    # through the same provider-aware factory and let its configured default
+    # model be selected instead of sending a cross-provider model id.
+    if get_provider() == LLMProvider.MINIMAX:
+        return create_llm(
+            temperature=temperature if temperature is not None else 0.3,
+            max_tokens=max_tokens if max_tokens is not None else 500,
+            callbacks=callbacks,
+            metadata=metadata,
+            streaming=bool(kwargs.pop("streaming", False)),
+            **kwargs,
+        )
     try:
         from langchain_openai import ChatOpenAI
     except ImportError:
@@ -328,5 +419,6 @@ __all__ = [
     "get_default_llm",
     "get_openai_llm",
     "get_zhipuai_llm",
+    "get_minimax_llm",
     "create_flash_llm",
 ]

@@ -1,0 +1,12 @@
+{
+  "artifact_id": "reconciliation_report-s1-fa72a5d3c558fd50",
+  "module": "reconcile",
+  "run_id": "s1",
+  "artifact_type": "ReconciliationReport",
+  "context_version": "1",
+  "context_fingerprint": "sha256:test",
+  "revision": "v1",
+  "created_at": "2026-08-08T10:41:01.565982+00:00",
+  "checksum": "1b230f7a4da35fb7d048643265c8ab923ca12181bb1c7d0b1bf49498a103c251",
+  "payload_bytes": 199
+}

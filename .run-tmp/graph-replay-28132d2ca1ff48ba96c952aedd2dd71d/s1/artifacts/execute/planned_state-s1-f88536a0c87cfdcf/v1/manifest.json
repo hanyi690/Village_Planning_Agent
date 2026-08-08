@@ -1,0 +1,12 @@
+{
+  "artifact_id": "planned_state-s1-f88536a0c87cfdcf",
+  "module": "execute",
+  "run_id": "s1",
+  "artifact_type": "PlannedState",
+  "context_version": "1",
+  "context_fingerprint": "sha256:test",
+  "revision": "v1",
+  "created_at": "2026-08-08T10:23:08.042262+00:00",
+  "checksum": "93938ed9ec3a52789c6d80bab87bd4b2dd65b38fe642a8db7dd926987f3c7bef",
+  "payload_bytes": 505
+}

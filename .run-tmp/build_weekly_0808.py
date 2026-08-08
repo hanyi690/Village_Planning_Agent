@@ -1,0 +1,153 @@
+from pathlib import Path
+
+from docx import Document
+from docx.enum.text import WD_ALIGN_PARAGRAPH
+from docx.oxml.ns import qn
+from docx.shared import Pt
+
+
+ROOT = Path(r"F:\project\Village_Planning_Agent")
+TEMPLATE = ROOT / "docs/weekly-reports/2026-08-01.docx"
+OUTPUT = ROOT / "docs/weekly-reports/2026-08-08.docx"
+
+
+def set_east_asia(run, font_name):
+    run.font.name = font_name
+    run._element.get_or_add_rPr().rFonts.set(qn("w:eastAsia"), font_name)
+
+
+def clear_body(document):
+    body = document._element.body
+    sect_pr = body.sectPr
+    for child in list(body):
+        if child is not sect_pr:
+            body.remove(child)
+
+
+def add_labeled_paragraph(document, label, text):
+    paragraph = document.add_paragraph()
+    label_run = paragraph.add_run(label)
+    label_run.bold = True
+    paragraph.add_run(text)
+    return paragraph
+
+
+document = Document(TEMPLATE)
+clear_body(document)
+
+normal = document.styles["Normal"]
+normal.font.name = "宋体"
+normal.font.size = Pt(12)
+normal.element.rPr.rFonts.set(qn("w:eastAsia"), "宋体")
+normal.paragraph_format.space_after = Pt(4)
+normal.paragraph_format.line_spacing = Pt(20)
+
+title = document.add_heading("周报（2026-08-04 ~ 2026-08-08）", level=1)
+title.alignment = WD_ALIGN_PARAGRAPH.CENTER
+for run in title.runs:
+    run.font.size = Pt(18)
+    set_east_asia(run, "黑体")
+
+
+def add_section_heading(text):
+    heading = document.add_heading(text, level=2)
+    for run in heading.runs:
+        run.font.size = Pt(13)
+        set_east_asia(run, "黑体")
+
+
+add_section_heading("一、实现了什么")
+add_labeled_paragraph(
+    document,
+    "1. 统一主图与七阶段链路：",
+    "将 PARSE → GROUND → SELECT → EXECUTE → VALIDATE → RECONCILE → DELIVER 收敛为统一主图，补齐各阶段 aggregate、gate、review package 与责任路由，并保留 HUMAN_REVIEW 的暂停/恢复路径。",
+)
+add_labeled_paragraph(
+    document,
+    "2. 状态与上下文重构：",
+    "引入一次性 bootstrap_context，checkpoint 只保存 context_ref、artifact_refs、版本指纹和校验信息；统一 StateFactory，让 EXECUTE 作为正式子图运行并隔离其 checkpointer。",
+)
+add_labeled_paragraph(
+    document,
+    "3. 架构解耦与遗留清理：",
+    "以 Composition Root + Ports 取代 modules → services 反向依赖，统一 Candidate 模型，移除 runtime adapters、legacy crosswalks 和旧执行链；拆分 execute_agent.py、DataCatalog、planningStore.ts、session_routes.py 等大文件。",
+)
+add_labeled_paragraph(
+    document,
+    "4. HITL 前后端竖向链路：",
+    "接入 human_review_paused SSE 事件、PlanningStore 状态、人工审核面板、查询/决策 API、页面刷新恢复，以及 retry/accept/reject 决策；修复 post-L3 恢复路由、重复提交和重试上限问题。",
+)
+add_labeled_paragraph(
+    document,
+    "5. 运行可靠性与边界硬化：",
+    "补齐无效几何审计与 make_valid 边界修复、VALIDATE fail-closed、会话创建补偿事务、完整资源释放、TaskSupervisor 取消竞态修复、应用 shutdown 和 CI /api/health 就绪门禁。",
+)
+
+add_section_heading("二、实现思路")
+add_labeled_paragraph(
+    document,
+    "checkpoint 只保存可持久化引用：",
+    "大对象统一进入 ArtifactStore，状态只携带版本化的 context_ref 和 typed artifact_refs，通过 context_fingerprint、输入/输出 checksum 和父级引用保证重启、重放可核验。",
+)
+add_labeled_paragraph(
+    document,
+    "Gate 负责业务分流，重试不再隐式兜底：",
+    "每个阶段显式返回 PASS、重试、HUMAN 或终止；没有空间证据时保留原始引用并进入 GROUND/HUMAN，禁止 SELECT 猜测地块，也不把外部模型/账户错误伪装成业务缺口。",
+)
+add_labeled_paragraph(
+    document,
+    "事实沿 KG → L1 → L2 → L3 逐级提升：",
+    "L1 从 session KG 提升可追溯事实到 L1Snapshot，L2/L3 通过 artifact ref 消费上游结果，StepReport 同时记录来源、checksum、输入引用和输出摘要。",
+)
+add_labeled_paragraph(
+    document,
+    "资源生命周期由组合根统一拥有：",
+    "数据库、checkpointer、图和后台任务均由应用 lifespan/CompositionRoot 管理；会话创建失败执行补偿释放，正常退出和异常退出均走 shutdown，TaskSupervisor 负责可观察、可取消的后台任务。",
+)
+
+add_section_heading("三、实现成果")
+add_labeled_paragraph(
+    document,
+    "核心链路验收：",
+    "已提交的真实后端运行记录显示，使用真实报告和 10 个 GIS GeoJSON 输入，在隔离 SQLite 与确定性本地适配器下跑通 PARSE → GROUND → SELECT → EXECUTE → VALIDATE → RECONCILE → DELIVER；核心门禁 12 项测试通过，最终 DELIVER Gate 为 PASS，并生成阶段报告、ArtifactStore 产物和可查询的 render-layers 结果。",
+)
+add_labeled_paragraph(
+    document,
+    "KG 事实流可追溯：",
+    "真实 session 构建了 660 个地块、131 条道路、30 个设施和 32,966 个 triples；L1 实际消费 session KG 并写入 L1Snapshot，L2/L3 通过上游 artifact ref 继续消费，事实来源不再依赖模型是否输出规范标题。",
+)
+add_labeled_paragraph(
+    document,
+    "重构后的审计与运维产物：",
+    "新增/同步架构 ADR、模块边界审计、真实 session 阶段报告、Graphify 重构前后对比、HITL/上下文冻结/EXECUTE 隔离记录；CI 具备后端健康检查、超时日志和 E2E 入口。",
+)
+add_labeled_paragraph(
+    document,
+    "当前边界：",
+    "真实远端 LLM 运行已能执行 L1/L2/L3 并暴露空间证据缺口、凭证和 provider 边界等问题，但尚不能据此宣称真实链路已经取得最终 PNG/HTML 交付；没有合法地块证据时，GROUND/HUMAN 的 fail-closed 行为是预期结果。",
+)
+
+add_section_heading("四、未来优化")
+add_labeled_paragraph(
+    document,
+    "1. 完成真实远端闭环验收：",
+    "恢复有效 provider 凭证，补齐缺少坐标/BSM 证据的村名空间引用，重新验证 HUMAN → EXECUTE → VALIDATE → RECONCILE → DELIVER 及 PNG/HTML 交付。",
+)
+add_labeled_paragraph(
+    document,
+    "2. 收敛真实运行剩余断点：",
+    "重点复跑 checkpoint 序列化、HUMAN 恢复、provider-aware 辅助调用和 render-layers 最新 PlannedState 选择，保留首个偏离阶段与审计产物。",
+)
+add_labeled_paragraph(
+    document,
+    "3. 完成 E2E 测试与 CI 整理：",
+    "以 E2E 为默认验证入口，清理已废弃测试/配置，确保 Windows 超时、健康门禁、隔离运行目录和真实 LLM 慢测均可重复运行。",
+)
+add_labeled_paragraph(
+    document,
+    "4. 生成最终架构证据包：",
+    "按重构后的最终代码重新生成 Graphify 图谱，补齐模块边界/部署文档与交付层规范，形成可供评审的代码、运行和产物三类证据。",
+)
+
+document.save(OUTPUT)
+print(OUTPUT)
