@@ -35,7 +35,7 @@ jobs:
 
       - name: Run core backend gate
         run: |
-          pytest tests/core -v
+          python -m pytest tests/core -v
         env:
           PYTHONPATH: .
 
@@ -45,7 +45,7 @@ jobs:
         # variant is skipped here unless credentials are explicitly supplied;
         # CI still collects it so a missing integration path cannot go silent.
         run: |
-          pytest tests/integration/test_real_llm_session_full.py -v
+          python -m pytest tests/integration/test_real_llm_session_full.py -v
         env:
           PYTHONPATH: .
 

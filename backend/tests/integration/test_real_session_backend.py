@@ -11,6 +11,9 @@ from types import SimpleNamespace
 import pytest
 
 
+pytestmark = pytest.mark.integration
+
+
 FIXTURE = Path(__file__).parents[1] / "fixtures" / "mvp_village"
 
 

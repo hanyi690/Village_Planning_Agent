@@ -57,7 +57,7 @@ Session IDs are intentionally random per run, so operators should use the ID ret
 
 ```powershell
 cd backend
-D:\python\python.exe -B -m pytest tests/core/test_real_session_backend.py -q
+D:\python\python.exe -B -m pytest tests/integration/test_real_session_backend.py -q -m integration
 D:\python\python.exe -B -m pytest tests/core -q
 ```
 

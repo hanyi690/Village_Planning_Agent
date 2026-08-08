@@ -1,5 +1,6 @@
 import sys
 import subprocess
+from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
@@ -8,7 +9,10 @@ from fastapi.testclient import TestClient
 def test_import_is_model_lazy():
     result = subprocess.run(
         [sys.executable, "-c", "import sys; import app.main; print('torch' in sys.modules, 'transformers' in sys.modules)"],
-        capture_output=True, text=True, check=True,
+        capture_output=True,
+        text=True,
+        check=True,
+        cwd=Path(__file__).resolve().parents[2],
     )
     assert "False False" in result.stdout
 

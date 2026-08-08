@@ -107,8 +107,15 @@ def test_no_direct_crosswalk_in_forbidden_agent_stages(_imports):
         "app/agent/select",
         "app/agent/execute",
         "app/agent/validate",
+        "app/agent/parse",
+        "app/agent/reconcile",
+        "app/agent/deliver",
+        "app/agent/bootstrap",
+        "app/tools/gis/_generation",
     ]
-    pattern = re.compile(r"^\s*from app\.modules\.schema\.advisory_crosswalks")
+    pattern = re.compile(
+        r"^\s*(?:from|import) app\.modules\.schema\.advisory_crosswalks"
+    )
     offenders = []
     for dir_rel in forbidden_dirs:
         target = BACKEND_ROOT / dir_rel
@@ -186,4 +193,3 @@ def test_legacy_crosswalk_imports_are_gated():
         "legacy files import advisory_crosswalks without a require_legacy/"
         "legacy_enabled gate (must be fail-closed):\n" + "\n".join(ungated)
     )
-

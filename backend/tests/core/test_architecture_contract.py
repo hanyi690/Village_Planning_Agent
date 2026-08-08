@@ -23,7 +23,7 @@ def test_deleted_wrapper_is_not_referenced_by_active_code():
 def test_real_session_contract_is_isolated_and_in_ci():
     """P1 guard: the real chain may not reuse a repository .run-tmp/s1."""
     integration = ROOT / "tests/integration/test_real_llm_session_full.py"
-    core = ROOT / "tests/core/test_real_session_backend.py"
+    core = ROOT / "tests/integration/test_real_session_backend.py"
     workflow = ROOT.parent / ".github/workflows/gis-engine-ci.yml"
     for path in (integration, core):
         text = path.read_text(encoding="utf-8")
