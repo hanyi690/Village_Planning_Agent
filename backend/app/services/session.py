@@ -25,6 +25,87 @@ from app.database.operations import (
 logger = logging.getLogger(__name__)
 
 
+async def _cancel_session_tasks(session_id: str) -> bool:
+    try:
+        from app.services.composition import CompositionRoot
+        sup = CompositionRoot.get_task_supervisor()
+        await sup.cancel(session_id)
+        return True
+    except Exception as e:
+        logger.warning(f"[SessionService] [{session_id}] task cancel failed: {e}")
+        return False
+
+
+async def _clear_session_context(session_id: str) -> bool:
+    try:
+        from app.services.context.planning_context import (
+            _context_cache,
+            invalidate_planning_context,
+        )
+        invalidate_planning_context(session_id)
+        _context_cache.pop(session_id, None)
+        return True
+    except Exception as e:
+        logger.warning(f"[SessionService] [{session_id}] context clear failed: {e}")
+        return False
+
+
+async def _delete_session_bundle(session_id: str) -> bool:
+    try:
+        from app.services.session_bundle import invalidate_session_bundle
+        invalidate_session_bundle(session_id)
+        return True
+    except Exception as e:
+        logger.warning(f"[SessionService] [{session_id}] bundle delete failed: {e}")
+        return False
+
+
+async def _delete_session_kg(session_id: str) -> bool:
+    try:
+        from app.modules.kg.manager import get_kg_manager
+        get_kg_manager().remove_session(session_id)
+        return True
+    except Exception as e:
+        logger.warning(f"[SessionService] [{session_id}] KG delete failed: {e}")
+        return False
+
+
+async def _delete_session_artifacts(session_id: str) -> bool:
+    try:
+        import shutil
+        from pathlib import Path
+
+        artifact_dir = Path(".run-tmp") / session_id
+        if artifact_dir.exists():
+            shutil.rmtree(artifact_dir)
+        return True
+    except Exception as e:
+        logger.warning(f"[SessionService] [{session_id}] artifact delete failed: {e}")
+        return False
+
+
+async def _delete_session_checkpoint(session_id: str) -> bool:
+    try:
+        from app.database.engine import get_global_checkpointer
+        checkpointer = await get_global_checkpointer()
+        if hasattr(checkpointer, "adelete_thread"):
+            await checkpointer.adelete_thread(session_id)
+            return True
+        return True
+    except Exception as e:
+        logger.warning(f"[SessionService] [{session_id}] checkpoint delete failed: {e}")
+        return False
+
+
+async def _clear_session_sse(session_id: str) -> bool:
+    try:
+        sse_manager.clear_session(session_id)
+        return True
+    except Exception as e:
+        logger.warning(f"[SessionService] [{session_id}] SSE clear failed: {e}")
+        return False
+
+
 class LayerReportsResponse:
     """Response model for layer reports."""
     def __init__(
@@ -93,42 +174,47 @@ class SessionService:
             return False
 
     @staticmethod
-    async def delete_session(session_id: str) -> Dict[str, bool]:
+    async def delete_session(session_id: str, project_name: str = None) -> Dict[str, bool]:
         """
         Delete a session completely.
 
         Removes session from:
-        1. Memory (via SSEManager)
-        2. Database (planning_sessions table)
-        3. LangGraph checkpoints
-        4. Uploaded files (cascade via FK, but explicit cleanup for logging)
-        5. Dimension reports (cascade via FK, but explicit cleanup for logging)
-        6. UI sessions and dimension revisions
+        1. Running planning tasks (TaskSupervisor)
+        2. PlanningContext cache
+        3. Session bundle cache
+        4. Knowledge graph
+        5. Artifact files on disk
+        6. LangGraph checkpoint thread
+        7. SSE session data
+        8. Uploaded files
+        9. Dimension reports
+        10. UI sessions
+        11. Database record
 
         Args:
             session_id: Session identifier
+            project_name: Kept for backward API compatibility (no longer used)
 
         Returns:
             Dict with deletion status for each category
         """
-        result = {
-            "memory": False,
-            "database": False,
-            "checkpoint": False,
-            "uploaded_files": False,
-            "dimension_reports": False,
-            "ui_sessions": False,
-        }
+        result: Dict[str, bool] = {}
 
-        # Get session info for checkpoint deletion
-        session_info = sse_manager.get_session(session_id)
-        project_name = session_info.get("project_name") if session_info else None
+        for key, coro in [
+            ("tasks", _cancel_session_tasks(session_id)),
+            ("context", _clear_session_context(session_id)),
+            ("bundle", _delete_session_bundle(session_id)),
+            ("kg", _delete_session_kg(session_id)),
+            ("artifacts", _delete_session_artifacts(session_id)),
+            ("checkpoint", _delete_session_checkpoint(session_id)),
+            ("sse", _clear_session_sse(session_id)),
+        ]:
+            try:
+                result[key] = await coro
+            except Exception as e:
+                logger.warning(f"[SessionService] [{session_id}] {key} cleanup failed: {e}")
+                result[key] = False
 
-        # 1. Delete memory states via SSEManager
-        memory_result = sse_manager.delete_session_all_states(session_id)
-        result["memory"] = any(memory_result.values())
-
-        # 2. Delete uploaded files (explicit cleanup before CASCADE)
         try:
             from app.database.operations import delete_uploaded_files_async
             file_count = await delete_uploaded_files_async(session_id)
@@ -136,8 +222,8 @@ class SessionService:
             logger.info(f"[SessionService] [{session_id}] Deleted {file_count} uploaded files")
         except Exception as e:
             logger.warning(f"[SessionService] [{session_id}] Uploaded files cleanup warning: {e}")
+            result["uploaded_files"] = False
 
-        # 3. Delete dimension reports (explicit cleanup before CASCADE)
         try:
             from app.services.report_store import ReportStore
             store = ReportStore.get_instance()
@@ -146,12 +232,10 @@ class SessionService:
             logger.info(f"[SessionService] [{session_id}] Deleted {report_count} dimension reports")
         except Exception as e:
             logger.warning(f"[SessionService] [{session_id}] Dimension reports cleanup warning: {e}")
+            result["dimension_reports"] = False
 
-        # 4. Delete UI sessions
         try:
-            from app.database.operations import delete_ui_session_async
-            # Find UI sessions linked to this planning session via task_id
-            from app.database.operations import list_ui_sessions_async
+            from app.database.operations import delete_ui_session_async, list_ui_sessions_async
             ui_sessions = await list_ui_sessions_async(task_id=session_id)
             for ui_session in ui_sessions:
                 await delete_ui_session_async(ui_session["conversation_id"])
@@ -159,29 +243,9 @@ class SessionService:
             logger.info(f"[SessionService] [{session_id}] Deleted {len(ui_sessions)} UI sessions")
         except Exception as e:
             logger.warning(f"[SessionService] [{session_id}] UI sessions cleanup warning: {e}")
+            result["ui_sessions"] = False
 
-        # 5. Delete database record (CASCADE will handle remaining FK records)
-        db_deleted = await delete_planning_session_async(session_id)
-        result["database"] = db_deleted
-
-        # 6. Delete LangGraph checkpoint
-        if project_name:
-            try:
-                from app.services.runtime import PlanningRuntimeService
-                from app.database.engine import get_global_checkpointer
-
-                await PlanningRuntimeService.ensure_initialized()
-                checkpointer = await get_global_checkpointer()
-                config = PlanningRuntimeService.get_thread_config(session_id)
-
-                checkpoints = [c async for c in checkpointer.aget_tuple(config)]
-                for checkpoint in checkpoints:
-                    await checkpointer.adelete(config)
-
-                result["checkpoint"] = True
-                logger.info(f"[SessionService] [{session_id}] Checkpoint deleted")
-            except Exception as e:
-                logger.warning(f"[SessionService] [{session_id}] Failed to delete checkpoint: {e}")
+        result["database"] = await delete_planning_session_async(session_id)
 
         logger.info(f"[SessionService] [{session_id}] Session deleted: {result}")
         return result
