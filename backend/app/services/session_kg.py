@@ -3,8 +3,8 @@
 设计动机（KG 应在 L1 就由预先建立）：
   - L1 各维度通过 ``retrieve_evidence``（EXPLORE 证据服务，替代已废弃的
     ``_optimize_semantics -> build_spatial_cognition``）注入 KG 证据与空间认知；
-  - 若 session KG 在 L1 前未注册，``session_kg()`` 会回退 ``get_any_kg()``（可能拿到
-    别的会话的 KG），L1 收不到正确认知；
+  - 若 session KG 在 L1 前未注册，``session_kg()`` 返回 None，L1 收不到
+    正确认知；
   - 预建时顺带计算 ``compute_parcel_relations``（sfTouches / nearby / connected /
     parcel-road intersects / parcel-water touches），让 KG L2 真正具备拓扑关系，
     供 grounding 的 KG 拓扑优先查询消费。
