@@ -21,6 +21,8 @@ or ``app.api``. The async factory that *builds* a context lives in
 
 from __future__ import annotations
 
+import hashlib
+import json
 from dataclasses import dataclass, field
 from typing import Any, Dict, List
 
@@ -69,6 +71,16 @@ class PlanningContext:
     location_facts: List[Any] = field(default_factory=list)
     evidence_index: Any = None
     ports: PlanningPorts = field(default_factory=PlanningPorts)
+    content_hash: str = ""
+    capabilities: Dict[str, bool] = field(default_factory=dict)
+    required_capabilities_missing: List[str] = field(default_factory=list)
+    _content_inputs: Dict[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        if not self.capabilities:
+            self._record_capabilities()
+        if not self.content_hash:
+            self._recompute_hash()
 
     @property
     def has_bundle(self) -> bool:
@@ -105,6 +117,22 @@ class PlanningContext:
             "report_count": len(self.reports),
             "location_fact_count": len(self.location_facts),
             "l1_snapshot_ref": self.l1_snapshot_ref,
+            "content_hash": self.content_hash,
+            "capabilities": dict(self.capabilities),
+            "required_capabilities_missing": list(self.required_capabilities_missing),
+        }
+
+    def _recompute_hash(self) -> None:
+        payload = json.dumps(self._content_inputs, sort_keys=True, default=str)
+        self.content_hash = hashlib.sha256(payload.encode()).hexdigest()
+
+    def _record_capabilities(self) -> None:
+        self.capabilities = {
+            "bundle": self.bundle is not None,
+            "kg": self.kg is not None,
+            "gazetteer": self.gazetteer is not None,
+            "constraint_index": self.constraint_index is not None,
+            "reports": bool(self.reports),
         }
 
 
