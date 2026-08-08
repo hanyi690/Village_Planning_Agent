@@ -266,8 +266,26 @@ def create_initial_state(
     constraints: str = "无特殊约束",
     image_ids: Optional[List[str]] = None,
     village_name: str = "",
+    province: str = "",
+    city: str = "",
+    county: str = "",
+    township: str = "",
+    planning_period: str = "2022-2035年",
+    enable_review: bool = False,
+    stream_mode: bool = True,
+    step_mode: bool = False,
+    rag_enabled: bool = True,
+    rag_layer_config: Optional[Dict[int, bool]] = None,
+    disable_tools: bool = False,
+    uploaded_files: Optional[List[Dict]] = None,
+    user_uploaded_gis_data: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
-    """Create initial state (delegates to StateFactory)."""
+    """Create initial state (delegates to StateFactory).
+
+    .. deprecated::
+        Use StateFactory.create directly. This wrapper is kept for
+        backward compatibility with test fixtures.
+    """
     from app.agent.plan_state.state_factory import StateFactory
     return StateFactory.create(
         session_id=session_id,
@@ -277,6 +295,19 @@ def create_initial_state(
         constraints=constraints,
         image_ids=image_ids,
         village_name=village_name,
+        province=province,
+        city=city,
+        county=county,
+        township=township,
+        planning_period=planning_period,
+        enable_review=enable_review,
+        stream_mode=stream_mode,
+        step_mode=step_mode,
+        rag_enabled=rag_enabled,
+        rag_layer_config=rag_layer_config,
+        disable_tools=disable_tools,
+        uploaded_files=uploaded_files,
+        user_uploaded_gis_data=user_uploaded_gis_data,
     )
 
 
