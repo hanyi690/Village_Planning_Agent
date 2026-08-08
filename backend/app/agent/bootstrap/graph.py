@@ -259,6 +259,7 @@ async def publish_human_review_pause(state: Dict[str, Any]) -> Dict[str, Any]:
             })
         except Exception as exc:
             logger.warning("[main:human_review] SSE publish failed: %s", exc)
+            return {"human_review_pause_published": False}
     return {"human_review_pause_published": True}
 
 
