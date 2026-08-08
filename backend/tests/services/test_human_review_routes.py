@@ -118,4 +118,4 @@ def test_resolve_accepts_non_empty_decisions(monkeypatch):
     assert resp.status_code == 200
     body = resp.json()
     assert body["resolved"] is True
-    assert received["decisions"] == {"action": "approve"}
+    assert received["decisions"] == {"action": "accept"}

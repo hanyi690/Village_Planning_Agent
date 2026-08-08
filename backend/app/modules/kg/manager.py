@@ -225,8 +225,8 @@ class KGManager:
         """Return only ``session_id``'s KG or raise a clear isolation error.
 
         Interactive agents (EXPLORE / PARSE / EXECUTE) must use this method
-        instead of ``get_any_kg``; ``get_any_kg`` remains for legacy callers
-        outside the GIS planning pipeline.
+        Interactive agents (EXPLORE / PARSE / EXECUTE) must use this method
+        instead of the removed ``get_any_kg``.
         """
         if not session_id:
             raise ValueError("session_id is required for KG queries")
@@ -237,19 +237,6 @@ class KGManager:
                 "Call open_kg_session first."
             )
         return kg
-
-    def get_any_kg(self) -> Optional[Any]:
-        """Return the most recently registered session KG, or a cached Layer 1 KG.
-
-        Used by PARSE agent tool execution when no specific session_id is known.
-        Returns None if no KG is available.
-        """
-        with self._build_lock:
-            if self._session_kgs:
-                return list(self._session_kgs.values())[-1]
-            if self._layer1_cache._data:
-                return list(self._layer1_cache._data.values())[-1]
-            return None
 
     def remove_session(self, session_id: str) -> None:
         """Remove a session and its associated data."""

@@ -24,7 +24,7 @@ class ResolveRequest(BaseModel):
     """审查决策请求体 - 直接传给 post-L3 链的 interrupt() 调用点。"""
 
     decisions: Dict[str, Any] = Field(..., min_length=1, description="审查决策（resume payload，不可为空）")
-    action: str = Field(None, pattern="^(retry|accept|reject)$", description="审查动作: retry/accept/reject")
+    action: str = Field(None, pattern="^(retry|accept|reject|approve)$", description="审查动作: retry/accept(approve)/reject")
 
     @model_validator(mode="after")
     def _populate_action(self):
@@ -35,8 +35,12 @@ class ResolveRequest(BaseModel):
                 self.action = dec_action
         if self.action is None:
             raise ValueError("action is required (either top-level or decisions['action'])")
-        if self.action not in ("retry", "accept", "reject"):
-            raise ValueError(f"action must be one of retry/accept/reject, got {self.action!r}")
+        if self.action not in ("retry", "accept", "reject", "approve"):
+            raise ValueError(f"action must be one of retry/accept(approve)/reject, got {self.action!r}")
+        if self.action == "approve":
+            self.action = "accept"
+        if isinstance(self.decisions, dict) and self.decisions.get("action") == "approve":
+            self.decisions["action"] = "accept"
         return self
 
 

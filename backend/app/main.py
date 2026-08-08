@@ -172,6 +172,8 @@ async def lifespan(app: FastAPI):
             from app.database import init_async_db
             if not await init_async_db():
                 raise RuntimeError("database initialization returned false")
+            from app.services.composition import CompositionRoot
+            CompositionRoot.initialize()
             from app.services.runtime import PlanningRuntimeService
             await PlanningRuntimeService.initialize()
     except Exception:
@@ -179,9 +181,6 @@ async def lifespan(app: FastAPI):
         app.state.readiness = {"database": "failed", "checkpointer": "failed", "langgraph": "failed"}
         raise
     app.state.readiness = {"database": "ready", "checkpointer": "ready", "langgraph": "ready"}
-
-    from app.services.composition import CompositionRoot
-    CompositionRoot.initialize()
 
     # Save event loop for cross-thread SSE publishing
     from app.services.sse import sse_manager
@@ -223,6 +222,12 @@ async def lifespan(app: FastAPI):
         logger.info("✅ Database engine disposed")
     except Exception as e:
         logger.error(f"❌ Failed to dispose database engine: {e}", exc_info=True)
+    try:
+        from app.database import shutdown_database
+        await shutdown_database()
+        logger.info("✅ Database connections fully shutdown")
+    except Exception as e:
+        logger.error(f"❌ Failed to shutdown database: {e}", exc_info=True)
 
     logger.info("👋 后端服务关闭")
 

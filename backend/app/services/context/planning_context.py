@@ -30,9 +30,39 @@ _context_cache: Dict[str, PlanningContext] = {}
 _build_counter: Dict[str, int] = {}
 
 
+class ContextBuildError(RuntimeError):
+    pass
+
+
 def _next_version(session_id: str) -> int:
     _build_counter[session_id] = _build_counter.get(session_id, 0) + 1
     return _build_counter[session_id]
+
+
+async def _next_persisted_version(session_id: str) -> int:
+    """Get a monotonic version from the DB so it survives process restart."""
+    try:
+        import aiosqlite
+        from app.database.engine import get_db_path
+
+        async with aiosqlite.connect(str(get_db_path())) as conn:
+            await conn.execute(
+                "CREATE TABLE IF NOT EXISTS context_version (session_id TEXT PRIMARY KEY, version INTEGER)"
+            )
+            await conn.execute(
+                "INSERT INTO context_version(session_id, version) VALUES(?, 1) "
+                "ON CONFLICT(session_id) DO UPDATE SET version = version + 1",
+                (session_id,),
+            )
+            await conn.commit()
+            async with conn.execute(
+                "SELECT version FROM context_version WHERE session_id = ?", (session_id,)
+            ) as cur:
+                row = await cur.fetchone()
+                return int(row[0]) if row else 1
+    except Exception as e:
+        logger.warning("[PlanningContext] persisted version failed, using in-process fallback: %s", e)
+        return _next_version(session_id)
 
 
 def get_cached_context(session_id: str) -> Optional[PlanningContext]:
@@ -68,13 +98,15 @@ async def build_planning_context(
     from app.services.session_bundle import build_session_bundle
     from app.services.session_kg import ensure_session_kg
 
-    version = _next_version(session_id)
+    version = await _next_persisted_version(session_id)
 
     # 1. Bundle (cached by session_bundle; village_name resolved there)
     bundle = None
+    bundle_error: Optional[str] = None
     try:
         bundle = await build_session_bundle(session_id, village_name or None)
     except Exception as e:
+        bundle_error = str(e)
         logger.warning("[PlanningContext] bundle build failed: %s", e)
 
     resolved_village = str(getattr(bundle, "village_name", "") or "") or village_name
@@ -83,6 +115,7 @@ async def build_planning_context(
     kg_session_ref = ""
     kg_version = 0
     kg = None
+    kg_error: Optional[str] = None
     if session_id:
         try:
             snap = await ensure_session_kg(session_id, resolved_village)
@@ -99,6 +132,7 @@ async def build_planning_context(
                 except Exception:
                     pass
         except Exception as e:
+            kg_error = str(e)
             logger.warning("[PlanningContext] session KG access failed: %s", e)
 
     # 3. Gazetteer
@@ -192,6 +226,11 @@ async def build_planning_context(
         except Exception as e:
             logger.warning("[PlanningContext] report load failed: %s", e)
 
+    if bundle is None:
+        raise ContextBuildError(
+            f"required capability 'bundle' missing (bundle_error={bundle_error})"
+        )
+
     context = PlanningContext(
         session_id=session_id,
         village_name=resolved_village,
@@ -207,6 +246,25 @@ async def build_planning_context(
         report_summary_index=report_summary_index,
         ports=ports,
     )
+
+    parcel_count = len(context.bundle_parcels())
+    context._content_inputs = {
+        "session_id": session_id,
+        "village_name": resolved_village,
+        "version": version,
+        "parcel_count": parcel_count,
+        "kg_session_ref": kg_session_ref,
+        "kg_version": kg_version,
+        "has_constraint_index": constraint_index is not None,
+        "report_count": len(reports),
+        "report_keys": sorted(reports.keys()),
+    }
+    context._record_capabilities()
+    context.required_capabilities_missing = [
+        cap for cap, present in context.capabilities.items()
+        if not present and cap != "bundle"
+    ]
+    context._recompute_hash()
 
     # 6.5 PlaceEvidenceIndex (non-fatal; None on failure)
     try:
@@ -243,4 +301,5 @@ __all__ = [
     "build_planning_context",
     "get_cached_context",
     "invalidate_planning_context",
+    "ContextBuildError",
 ]

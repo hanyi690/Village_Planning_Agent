@@ -15,6 +15,7 @@ from app.api.session_routes import _launch_background, _process_uploaded_file_db
 from app.agent.plan_state.state import state_to_ui_status
 from app.database.operations import (
     create_planning_session_async,
+    delete_planning_session_async,
     update_planning_session_async,
 )
 from app.services.runtime import PlanningRuntimeService
@@ -42,6 +43,14 @@ class SessionCreateResponse(BaseModel):
     session_id: str
     stream_url: str
     status: str = "running"
+
+
+async def _delete_uploaded_files(session_id: str) -> None:
+    try:
+        from app.database.operations import delete_uploaded_files_async
+        await delete_uploaded_files_async(session_id)
+    except Exception as e:
+        logger.warning(f"[create_session] Failed to clean up uploaded files for {session_id}: {e}")
 
 
 @router.post("/api/sessions", response_model=SessionCreateResponse)
@@ -99,110 +108,116 @@ async def create_session(
         "constraints": constraints,
     })
 
-    # Process uploaded files and store to database
-    file_groups = [
-        (village_data_files, "village_data"),
-        (task_files, "task_description"),
-        (constraint_files, "constraint"),
-    ]
+    try:
+        # Process uploaded files and store to database
+        file_groups = [
+            (village_data_files, "village_data"),
+            (task_files, "task_description"),
+            (constraint_files, "constraint"),
+        ]
 
-    for file_group, file_category in file_groups:
-        if not file_group:
-            continue
-        results = await asyncio.gather(*[
-            _process_uploaded_file_db(f, session_id, file_category) for f in file_group
-        ])
+        for file_group, file_category in file_groups:
+            if not file_group:
+                continue
+            results = await asyncio.gather(*[
+                _process_uploaded_file_db(f, session_id, file_category) for f in file_group
+            ])
 
-        for r in results:
-            uploaded_files.append({
-                "id": r["id"],
-                "filename": r["filename"],
-                "file_category": r["file_category"],
-                "file_type": r["file_type"],
-                "size_bytes": r["size_bytes"],
-                "geometry_audit": r.get("geometry_audit"),
-            })
+            for r in results:
+                uploaded_files.append({
+                    "id": r["id"],
+                    "filename": r["filename"],
+                    "file_category": r["file_category"],
+                    "file_type": r["file_type"],
+                    "size_bytes": r["size_bytes"],
+                    "geometry_audit": r.get("geometry_audit"),
+                })
 
-            # Merge parsed text into initial state
-            if file_category == "village_data" and r.get("parsed_text"):
-                parsed_content += f"\n\n--- 村庄数据: {r['filename']} ---\n{r['parsed_text']}"
-            elif file_category == "task_description" and r.get("parsed_text"):
-                if not task_description or task_description == "制定村庄发展规划":
-                    task_description = r["parsed_text"].strip()
-            elif file_category == "constraint" and r.get("parsed_text"):
-                if not constraints or constraints == "无特殊约束":
-                    constraints = r["parsed_text"].strip()
+                # Merge parsed text into initial state
+                if file_category == "village_data" and r.get("parsed_text"):
+                    parsed_content += f"\n\n--- 村庄数据: {r['filename']} ---\n{r['parsed_text']}"
+                elif file_category == "task_description" and r.get("parsed_text"):
+                    if not task_description or task_description == "制定村庄发展规划":
+                        task_description = r["parsed_text"].strip()
+                elif file_category == "constraint" and r.get("parsed_text"):
+                    if not constraints or constraints == "无特殊约束":
+                        constraints = r["parsed_text"].strip()
 
-            # Collect GeoJSON data for GIS pipeline
-            if r.get("gis_data"):
-                dtype = r.get("gis_data_type")
-                if dtype:
-                    user_uploaded_gis_data[dtype] = r["gis_data"]
-                else:
-                    fname = r.get("filename", "").lower()
-                    for target_type, keyword in [
-                        ("boundary", "boundary"),
-                        ("admin_boundary_line", "admin_boundary"),
-                        ("landuse_current", "landuse"),
-                        ("road", "road"),
-                        ("annotation", "annotation"),
-                        ("water", "water"),
-                        ("construction_zone", "construction"),
-                        ("farmland_protection", "farmland"),
-                        ("ecological_protection", "ecological"),
-                        ("historical_protection", "historical"),
-                        ("geological_hazard_points", "geological_hazard"),
-                    ]:
-                        if keyword in fname:
-                            user_uploaded_gis_data[target_type] = r["gis_data"]
-                            break
+                # Collect GeoJSON data for GIS pipeline
+                if r.get("gis_data"):
+                    dtype = r.get("gis_data_type")
+                    if dtype:
+                        user_uploaded_gis_data[dtype] = r["gis_data"]
+                    else:
+                        fname = r.get("filename", "").lower()
+                        for target_type, keyword in [
+                            ("boundary", "boundary"),
+                            ("admin_boundary_line", "admin_boundary"),
+                            ("landuse_current", "landuse"),
+                            ("road", "road"),
+                            ("annotation", "annotation"),
+                            ("water", "water"),
+                            ("construction_zone", "construction"),
+                            ("farmland_protection", "farmland"),
+                            ("ecological_protection", "ecological"),
+                            ("historical_protection", "historical"),
+                            ("geological_hazard_points", "geological_hazard"),
+                        ]:
+                            if keyword in fname:
+                                user_uploaded_gis_data[target_type] = r["gis_data"]
+                                break
 
-    # 验证数据
-    if len(parsed_content.strip()) < 10:
-        raise HTTPException(status_code=400, detail="村庄数据不能为空或过短")
+        # 验证数据
+        if len(parsed_content.strip()) < 10:
+            raise HTTPException(status_code=400, detail="村庄数据不能为空或过短")
 
-    await update_planning_session_async(
-        session_id,
-        {
-            "village_data": parsed_content,
-            "task_description": task_description,
-            "constraints": constraints,
-        },
-    )
+        await update_planning_session_async(
+            session_id,
+            {
+                "village_data": parsed_content,
+                "task_description": task_description,
+                "constraints": constraints,
+            },
+        )
 
-    from app.agent.plan_state.state_factory import StateFactory
-    initial_state = StateFactory.create(
-        project_name=project_name,
-        village_data=parsed_content,
-        village_name=village_name,
-        province=province,
-        city=city,
-        county=county,
-        township=township,
-        planning_period=planning_period,
-        task_description=task_description,
-        constraints=constraints,
-        session_id=session_id,
-        stream_mode=True,
-        step_mode=step_mode,
-        rag_enabled=rag_enabled,
-        rag_layer_config=parsed_rag_layer_config,
-        uploaded_files=uploaded_files if uploaded_files else None,
-        user_uploaded_gis_data=user_uploaded_gis_data if user_uploaded_gis_data else None,
-    )
+        from app.agent.plan_state.state_factory import StateFactory
+        initial_state = StateFactory.create(
+            project_name=project_name,
+            village_data=parsed_content,
+            village_name=village_name,
+            province=province,
+            city=city,
+            county=county,
+            township=township,
+            planning_period=planning_period,
+            task_description=task_description,
+            constraints=constraints,
+            session_id=session_id,
+            stream_mode=True,
+            step_mode=step_mode,
+            rag_enabled=rag_enabled,
+            rag_layer_config=parsed_rag_layer_config,
+            uploaded_files=uploaded_files if uploaded_files else None,
+            user_uploaded_gis_data=user_uploaded_gis_data if user_uploaded_gis_data else None,
+        )
 
-    sse_manager.init_session(session_id, {
-        "session_id": session_id,
-        "project_name": project_name,
-        "created_at": datetime.now().isoformat(),
-    })
-    sse_manager.set_execution_active(session_id, True)
+        sse_manager.init_session(session_id, {
+            "session_id": session_id,
+            "project_name": project_name,
+            "created_at": datetime.now().isoformat(),
+        })
+        sse_manager.set_execution_active(session_id, True)
 
-    await PlanningRuntimeService.ensure_initialized()
+        await PlanningRuntimeService.ensure_initialized()
 
-    SSEPublisher.send_layer_start(session_id, 1, get_layer_name(1), len(get_layer_dimensions(1)))
+        SSEPublisher.send_layer_start(session_id, 1, get_layer_name(1), len(get_layer_dimensions(1)))
 
-    background_tasks.add_task(PlanningRuntimeService._trigger_planning_execution, session_id, initial_state)
+        background_tasks.add_task(PlanningRuntimeService._trigger_planning_execution, session_id, initial_state)
+    except Exception:
+        await delete_planning_session_async(session_id)
+        await _delete_uploaded_files(session_id)
+        logger.error(f"[create_session] Failed for session {session_id}, rolled back DB + files")
+        raise
 
     return SessionCreateResponse(session_id=session_id,
         stream_url=f"/api/sessions/{session_id}/stream", status=TaskStatus.running)

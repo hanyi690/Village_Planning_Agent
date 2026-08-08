@@ -123,7 +123,7 @@ def build_execute_agent_graph(checkpointer=None):
     )
 
     compile_kwargs = {}
-    if checkpointer is not None:
+    if checkpointer is not None and checkpointer is not True:
         compile_kwargs["checkpointer"] = checkpointer
     compiled = graph.compile(**compile_kwargs)
     logger.info(

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import hashlib
 from typing import Any, Dict
 
 from app.services.context.planning_context import build_planning_context
@@ -76,11 +75,12 @@ async def bootstrap_context_node(state: Dict[str, Any]) -> Dict[str, Any]:
         ) from exc
 
     version = str(getattr(context, "version", 1))
-    meta = context.snapshot_meta()
-    fingerprint_input = repr(sorted(meta.items()))
-    fingerprint = "sha256:" + hashlib.sha256(
-        fingerprint_input.encode("utf-8")
-    ).hexdigest()[:16]
+    content_hash = getattr(context, "content_hash", "")
+    if not content_hash:
+        raise RuntimeError(
+            "CONTEXT_BOOTSTRAP_FAILED: context has no content_hash - not frozen"
+        )
+    fingerprint = "sha256:" + content_hash[:16]
 
     try:
         from app.modules.schema.contracts.l1_contracts import L1Snapshot

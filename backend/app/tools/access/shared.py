@@ -47,15 +47,12 @@ async def resolve_bundle(session_id: str) -> VillageBundle:
 
 
 def session_kg(session_id: str):
-    """Return the session KG (preferred), falling back to any registered KG."""
+    """Return the session KG, or None if no KG is registered for this session."""
     try:
         from app.modules.kg.manager import KGManager
 
         manager = KGManager()
-        kg = manager.get_session_kg(session_id)
-        if kg is None:
-            kg = manager.get_any_kg()
-        return kg
+        return manager.get_session_kg(session_id)
     except Exception as e:
         logger.warning("[Access] KG access failed for %s: %s", session_id, e)
         return None
