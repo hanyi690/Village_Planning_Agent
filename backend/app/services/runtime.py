@@ -38,7 +38,6 @@ from app.database.operations import (
 )
 from app.api.schemas import TaskStatus
 from app.services.sse import sse_manager
-from app.services.task_supervisor import TaskSupervisor
 from app.services.checkpoint import checkpoint_service, checkpoint_persistence_manager
 from app.core.settings import MAX_SESSION_EVENTS, GRAPH_MAX_CONCURRENCY, GRAPH_RECURSION_LIMIT
 from app.agent.bootstrap.graph import create_unified_planning_graph
@@ -101,7 +100,6 @@ class PlanningRuntimeService:
     _initialized: bool = False
     _lock: Optional[asyncio.Lock] = None
     _execution_locks: Dict[str, asyncio.Lock] = {}
-    _task_supervisor: Optional[TaskSupervisor] = None
 
     # ==========================================
     # LangGraph Runtime Operations
@@ -138,7 +136,6 @@ class PlanningRuntimeService:
             logger.info("[PlanningRuntimeService] EXECUTE subgraph compiled (independent checkpointer)")
 
             cls._initialized = True
-            cls._task_supervisor = TaskSupervisor()
             logger.info("[PlanningRuntimeService] Initialization complete")
 
     @classmethod
@@ -150,9 +147,11 @@ class PlanningRuntimeService:
     @classmethod
     async def shutdown(cls) -> None:
         """Cancel all tracked background tasks on application shutdown."""
-        if cls._task_supervisor:
-            await cls._task_supervisor.cancel_all()
-            logger.info("[PlanningRuntimeService] All tracked tasks cancelled")
+        from app.services.composition import CompositionRoot
+
+        sup = CompositionRoot.get_task_supervisor()
+        await sup.cancel_all()
+        logger.info("[PlanningRuntimeService] All tracked tasks cancelled")
 
     @classmethod
     def get_thread_config(cls, session_id: str, checkpoint_id: str = None) -> Dict[str, Any]:
@@ -824,7 +823,9 @@ class PlanningRuntimeService:
         await set_stream_state_async(session_id, "active")
 
         # Start background execution
-        cls._task_supervisor.create_task(
+        from app.services.composition import CompositionRoot
+
+        CompositionRoot.get_task_supervisor().create_task(
             session_id,
             cls._trigger_planning_execution(session_id, state_values=full_state),
         )

@@ -273,7 +273,8 @@ def test_task_supervisor_tracks_and_cancels_tasks():
 
         task = supervisor.create_task("session-1", dummy())
         assert supervisor.active_count == 1
-        supervisor.cancel("session-1")
+        await asyncio.sleep(0)
+        await supervisor.cancel("session-1")
         assert supervisor.active_count == 0
 
     asyncio.run(test())

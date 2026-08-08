@@ -172,6 +172,8 @@ async def lifespan(app: FastAPI):
             from app.database import init_async_db
             if not await init_async_db():
                 raise RuntimeError("database initialization returned false")
+            from app.services.composition import CompositionRoot
+            CompositionRoot.initialize()
             from app.services.runtime import PlanningRuntimeService
             await PlanningRuntimeService.initialize()
     except Exception:
@@ -179,9 +181,6 @@ async def lifespan(app: FastAPI):
         app.state.readiness = {"database": "failed", "checkpointer": "failed", "langgraph": "failed"}
         raise
     app.state.readiness = {"database": "ready", "checkpointer": "ready", "langgraph": "ready"}
-
-    from app.services.composition import CompositionRoot
-    CompositionRoot.initialize()
 
     # Save event loop for cross-thread SSE publishing
     from app.services.sse import sse_manager
