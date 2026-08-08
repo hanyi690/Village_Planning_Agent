@@ -85,9 +85,11 @@ def check_hard_constraints(planned_state: Any, constraint_index: Any) -> List[Va
             )
         ]
     affected: List[str] = []
+    query_errors: List[str] = []
     for parcel in planned_state.parcels or []:
         wkt = (parcel.geometry or "").strip()
         if not wkt:
+            query_errors.append(parcel.bsm)
             continue
         try:
             from shapely import wkt as _wkt
@@ -95,23 +97,24 @@ def check_hard_constraints(planned_state: Any, constraint_index: Any) -> List[Va
 
             geojson = mapping(_wkt.loads(wkt))
             overlaps = constraint_index.geometry_in_constraint(geojson) or []
-        except Exception:
+        except Exception as exc:
+            query_errors.append(f"{parcel.bsm}: {exc}")
             continue
         for ov in overlaps:
             if getattr(ov, "constraint_type", "") in _PROHIBITED_CONSTRAINTS:
                 affected.append(parcel.bsm)
                 break
-    passed = not affected
+    passed = not affected and not query_errors
     return [
         _check(
             "hard_constraints",
             "硬性约束核查",
             passed,
             stage="SELECT",
-            actual=", ".join(affected),
-            expected="no parcel overlaps a prohibited constraint",
+            actual=f"affected={affected}, query_errors={query_errors}",
+            expected="no parcels violate prohibited constraints and no query failures",
             parcels=affected,
-            fix="重新选择不落入生态红线/基本农田/灾害控制线等地块",
+            fix="提供约束图层或修复几何解析后再放行硬约束核查",
         )
     ]
 
@@ -232,8 +235,8 @@ def check_traceability(parcel_changeset: Any, intent: Any = None) -> List[Valida
     ]
 
 
-def _planned_geoms(planned_state: Any) -> List[tuple]:
-    """Collect (name, shapely geometry) pairs from PlannedState parcels/zones.
+def _planned_geoms(planned_state: Any) -> tuple[List[tuple], List[tuple]]:
+    """Collect (name, shapely geometry) pairs and (name, error) parse failures.
 
     ADR-003: PlannedState is the sole fact source for planned geometry; the
     render-view ``layout_configs`` is not consulted for validation.
@@ -241,43 +244,50 @@ def _planned_geoms(planned_state: Any) -> List[tuple]:
     from shapely import wkt as _wkt
 
     items: List[tuple] = []
+    errors: List[tuple] = []
     for entry in (getattr(planned_state, "parcels", None) or []) + (
         getattr(planned_state, "zones", None) or []
     ):
         wkt = (getattr(entry, "geometry", "") or "").strip()
-        if not wkt:
-            continue
         name = getattr(entry, "bsm", "") or getattr(entry, "name", "") or ""
+        if not wkt:
+            errors.append((name, "empty geometry"))
+            continue
         try:
             g = _wkt.loads(wkt)
-        except Exception:
+        except Exception as exc:
+            errors.append((name, f"parse error: {exc}"))
             continue
         items.append((name, g))
-    return items
+    return items, errors
 
 
 def check_topology(planned_state: Any) -> List[ValidationCheck]:
     """Check planned geometries are valid/non-empty and polygons have no gaps."""
     invalid: List[str] = []
     empty: List[str] = []
+    parse_errors: List[str] = []
     geoms: List[Any] = []
-    for name, s in _planned_geoms(planned_state):
+    items, errors = _planned_geoms(planned_state)
+    for name, err in errors:
+        parse_errors.append(name)
+    for name, s in items:
         geoms.append(s)
         if s.is_empty:
             empty.append(name)
         elif not s.is_valid:
             invalid.append(name)
 
-    validity_passed = not invalid and not empty
+    validity_passed = not invalid and not empty and not parse_errors
     checks = [
         _check(
             "topology_validity",
             "拓扑有效性",
             validity_passed,
             stage="EXECUTE",
-            actual=f"invalid={invalid}, empty={empty}",
-            expected="no invalid or empty geometries",
-            fix="修复自相交、空几何等问题",
+            actual=f"invalid={invalid}, empty={empty}, parse_errors={parse_errors}",
+            expected="no invalid, empty, or unparseable geometries",
+            fix="修复自相交、空几何或 WKT 解析错误",
         )
     ]
     polygon_geoms = [g for g in geoms if g.geom_type in _POLYGON_TYPES]
@@ -289,8 +299,19 @@ def check_topology(planned_state: Any) -> List[ValidationCheck]:
             union = unary_union([g for g in polygon_geoms if not g.is_empty])
             if not union.is_empty:
                 gap_area = union.convex_hull.difference(union).area
-        except Exception:
-            pass
+        except Exception as exc:
+            checks.append(
+                _check(
+                    "topology_gaps",
+                    "拓扑缝隙",
+                    False,
+                    stage="EXECUTE",
+                    actual=f"gap computation failed: {exc}",
+                    expected="polygon layers cover their convex hull without gaps",
+                    fix="修复拓扑计算异常",
+                )
+            )
+            return checks
     gap_passed = gap_area <= 1e-9
     checks.append(
         _check(
@@ -308,9 +329,9 @@ def check_topology(planned_state: Any) -> List[ValidationCheck]:
 
 def check_overlap(planned_state: Any) -> List[ValidationCheck]:
     """Check no pair of polygon geometries overlaps."""
-    geoms: List[Any] = [
-        g for _, g in _planned_geoms(planned_state) if g.geom_type in _POLYGON_TYPES
-    ]
+    items, errors = _planned_geoms(planned_state)
+    parse_failed = [name for name, _ in errors]
+    geoms: List[Any] = [g for _, g in items if g.geom_type in _POLYGON_TYPES]
     pair_count = 0
     for i in range(len(geoms)):
         for j in range(i + 1, len(geoms)):
@@ -319,17 +340,17 @@ def check_overlap(planned_state: Any) -> List[ValidationCheck]:
                 if not inter.is_empty and inter.area > 1e-12:
                     pair_count += 1
             except Exception:
-                continue
-    passed = pair_count == 0
+                pair_count += 1
+    passed = pair_count == 0 and not parse_failed
     return [
         _check(
             "overlap",
             "图层重叠",
             passed,
             stage="EXECUTE",
-            actual=f"{pair_count} overlapping pairs",
-            expected="no polygon pairs overlap",
-            fix="消除地块/图斑之间的重叠区域",
+            actual=f"{pair_count} overlapping pairs, parse_errors={parse_failed}",
+            expected="no polygon pairs overlap and no unparseable geometries",
+            fix="消除地块/图斑之间的重叠区域或修复 WKT",
         )
     ]
 
