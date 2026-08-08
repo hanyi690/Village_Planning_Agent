@@ -222,6 +222,12 @@ async def lifespan(app: FastAPI):
         logger.info("✅ Database engine disposed")
     except Exception as e:
         logger.error(f"❌ Failed to dispose database engine: {e}", exc_info=True)
+    try:
+        from app.database import shutdown_database
+        await shutdown_database()
+        logger.info("✅ Database connections fully shutdown")
+    except Exception as e:
+        logger.error(f"❌ Failed to shutdown database: {e}", exc_info=True)
 
     logger.info("👋 后端服务关闭")
 
