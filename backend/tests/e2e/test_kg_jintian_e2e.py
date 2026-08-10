@@ -1206,11 +1206,13 @@ class TestProvenanceInKG:
         build_intent_layer(kg, intent)
         manager = get_kg_manager()
         manager.register_session(execute_state.session_id, kg)
+        execute_state.execution_outcome = outcome
         execute_state.validation_result = {"passed": True}
         try:
-            asyncio.run(_write_l4_node(execute_state))
+            l4_result = asyncio.run(_write_l4_node(execute_state))
         finally:
             manager.remove_session(execute_state.session_id)
+        assert l4_result["execution_outcome_target_ids"] == [target_id]
 
         target_uri = EntityIdPolicy.uri("facility_target", target_id)
         planned_uris = list(kg.g.subjects(RDF.type, EntityTypes.PlannedFacility))

@@ -492,13 +492,22 @@ async def test_stage_audit_exposes_gate_checksums_fingerprint_route_and_progress
             },
         }
 
-    await validate_node({"session_id": "audit-1", "artifact_refs": {}})
+    state = {"session_id": "audit-1", "artifact_refs": {}}
+    await validate_node(state)
+    first = saved[-1]
+    await validate_node({
+        **state,
+        "validate_gate": {
+            "input_checksum": first["inputs"]["input_checksum"],
+            "output_checksum": first["outputs"]["output_checksum"],
+        },
+    })
 
     completed = saved[-1]
     diagnostics = completed["diagnostics"]
     assert diagnostics["gate_input_checksum"] == "gate-input"
     assert diagnostics["gate_output_checksum"] == "gate-output"
-    assert diagnostics["issue_fingerprint"] == "issue-1"
+    assert diagnostics["issue_fingerprint"]
     assert diagnostics["route_reason"] == "identical_no_progress"
     assert diagnostics["progress_made"] is False
 
@@ -566,3 +575,50 @@ async def test_stage_audit_uses_semantic_refs_for_all_post_l3_stages(monkeypatch
         second = saved[-1]
         assert second["inputs"]["input_checksum"] == inputs["input_checksum"]
         assert second["outputs"]["output_checksum"] == outputs["output_checksum"]
+
+
+@pytest.mark.asyncio
+async def test_stage_audit_distinguishes_gate_issues_and_detects_no_progress(monkeypatch):
+    from app.agent.bootstrap import stage_audit
+
+    saved = []
+
+    async def capture(*args, **kwargs):
+        saved.append(kwargs)
+
+    monkeypatch.setattr(stage_audit, "_save", capture)
+    ref = {
+        "artifact_type": "ValidationReport",
+        "semantic_checksum": "same-output",
+    }
+
+    @stage_audit.audited_stage("VALIDATE")
+    async def validate_node(state):
+        return {
+            "artifact_refs": {"validation_report": ref},
+            "validate_gate": {
+                "passed": False,
+                "feedback_route": "END_DIAGNOSTIC",
+                "pending_requests": [{"request_id": state["issue"]}],
+            },
+        }
+
+    base = {
+        "session_id": "audit-progress",
+        "artifact_refs": {"validation_report": ref},
+        "context_ref": {"session_id": "audit-progress", "version": "1"},
+        "issue": "issue-a",
+    }
+    await validate_node(base)
+    first = saved[-1]
+    first_diagnostics = first["diagnostics"]
+    prior_gate = {
+        "input_checksum": first["inputs"]["input_checksum"],
+        "output_checksum": first["outputs"]["output_checksum"],
+    }
+
+    saved.clear()
+    await validate_node({**base, "issue": "issue-b", "validate_gate": prior_gate})
+    second_diagnostics = saved[-1]["diagnostics"]
+    assert second_diagnostics["issue_fingerprint"] != first_diagnostics["issue_fingerprint"]
+    assert second_diagnostics["progress_made"] is False

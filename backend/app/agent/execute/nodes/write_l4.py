@@ -59,6 +59,22 @@ async def _write_l4_node(state: ExecuteAgentState) -> dict:
         logger.warning("[EXECUTE:l4_write] no parcel_changeset/planned_state; skipping L4 write")
         return {}
 
+    outcome = getattr(state, "execution_outcome", None)
+    outcome_targets = {
+        (str(getattr(item, "target_id", "")), str(getattr(item, "expected_output_kind", "")))
+        for item in (getattr(outcome, "task_results", None) or [])
+        if str(getattr(item, "status", "")) == "succeeded"
+    }
+    planned_targets = {
+        (str(getattr(item, "derived_from_target", "")), "point")
+        for item in (planned_state.facilities or [])
+        if getattr(item, "derived_from_target", "")
+    }
+    if planned_targets and not planned_targets <= outcome_targets:
+        missing = sorted(planned_targets - outcome_targets)
+        logger.warning("[EXECUTE:l4_write] execution outcome missing planned targets: %s", missing)
+        return {"l4_write_error": "execution_outcome_target_coverage", "missing_targets": missing}
+
     written = sum(
         len(items)
         for items in (
@@ -74,4 +90,7 @@ async def _write_l4_node(state: ExecuteAgentState) -> dict:
         manager.bump_version(session_id)
         logger.info("[EXECUTE:l4_write] Wrote %d L4 entities to KG", written)
 
-    return {}
+    return {
+        "l4_written": written,
+        "execution_outcome_target_ids": sorted({target_id for target_id, _ in outcome_targets}),
+    }

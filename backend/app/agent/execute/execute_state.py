@@ -88,6 +88,7 @@ class ExecuteAgentState(BaseModel):
     allocation_summary: Dict[str, Any] = Field(default_factory=dict)
     layout_configs: List[Dict[str, Any]] = Field(default_factory=list)
     action_results: List[Any] = Field(default_factory=list)
+    execution_outcome: Optional[Any] = None
     execution_errors: List[Dict[str, Any]] = Field(default_factory=list)
     # P0: 结构化未解析目标（禁止静默丢弃候选失败）
     unresolved_targets: List[Dict[str, Any]] = Field(default_factory=list)

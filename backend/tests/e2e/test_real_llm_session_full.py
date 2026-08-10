@@ -39,6 +39,8 @@ def _post_l3_poll_terminal(state: dict) -> bool:
         return True
     if state.get("fatal_error"):
         return True
+    if state.get("human_review_resume_consumed"):
+        return False
     return bool(state.get("paused_stage") or state.get("human_review_items"))
 
 
@@ -58,6 +60,11 @@ def test_phase_completed_without_post_l3_delivery_is_not_terminal():
     assert _post_l3_poll_terminal({
         "phase": "completed",
         "deliver_gate": {"feedback_route": "END_DIAGNOSTIC"},
+    })
+    assert _post_l3_poll_terminal({"paused_stage": "validate"})
+    assert not _post_l3_poll_terminal({
+        "paused_stage": "validate",
+        "human_review_resume_consumed": True,
     })
 
 
@@ -297,7 +304,7 @@ def test_real_llm_session_full_fixture(sqlite_db, pipeline_reset, monkeypatch):
             selection = load_artifact(state, "site_selection", SiteSelectionDecision)
             assert manifest is not None, state.get("artifact_refs")
             assert outcome is not None, state.get("artifact_refs")
-            assert manifest.delivery_status in {"complete", "partial"}, manifest
+            assert manifest.delivery_status in {"complete", "partial", "diagnostic_only"}, manifest
             assert state.get("delivery_status") == manifest.delivery_status
             if manifest.delivery_status == "partial":
                 assert manifest.statutory_complete is False
@@ -332,9 +339,12 @@ def test_real_llm_session_full_fixture(sqlite_db, pipeline_reset, monkeypatch):
             status_payload = status_response.json()
             assert status_payload.get("delivery_status") == manifest.delivery_status
             assert status_payload.get("deferral_summary") == manifest.deferral_summary
-            assert status_payload.get("diagnostic_terminal") == state.get("diagnostic_terminal") or (
-                not manifest.diagnostic_summary and not status_payload.get("diagnostic_terminal")
-            )
+            assert "diagnostic_terminal" in status_payload
+            if manifest.delivery_status == "diagnostic_only":
+                assert manifest.diagnostic_summary
+                assert status_payload["diagnostic_terminal"]
+            else:
+                assert status_payload["diagnostic_terminal"] == state.get("diagnostic_terminal", {})
 
             deliver_gate = state.get("deliver_gate") or {}
             deliver_route = (

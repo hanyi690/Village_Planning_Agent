@@ -703,6 +703,15 @@ async def execute_node(state: Dict[str, Any]) -> Dict[str, Any]:
         planned_state = None
 
     outcome = _execution_outcome_from_result(execution_plan, result)
+    if planned_state is not None:
+        from app.agent.execute.nodes.write_l4 import _write_l4_node
+
+        exec_state.parcel_changeset = changeset
+        exec_state.layout_configs = list(result.get("layout_configs", []) or [])
+        exec_state.planned_state = planned_state
+        exec_state.execution_outcome = outcome
+        exec_state.validation_result = dict(result.get("validation_result") or {})
+        await _write_l4_node(exec_state)
     refs = {
         "execution_outcome": _persist_artifact(state, "execute", "ExecutionOutcome", outcome),
         "parcel_changeset": _persist_artifact(state, "execute", "ParcelChangeSet", changeset),
