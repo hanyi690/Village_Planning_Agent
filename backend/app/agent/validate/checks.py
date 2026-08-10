@@ -44,6 +44,7 @@ def _check(
     actual: str = "",
     expected: str = "",
     parcels: Optional[List[str]] = None,
+    targets: Optional[List[str]] = None,
     fix: str = "",
 ) -> ValidationCheck:
     return ValidationCheck(
@@ -54,6 +55,7 @@ def _check(
         expected_value=expected,
         responsible_stage=stage,
         affected_parcels=list(parcels or []),
+        affected_target_ids=list(targets or []),
         fix_suggestion=fix,
     )
 
@@ -208,46 +210,51 @@ def check_traceability(
 ) -> List[ValidationCheck]:
     """Trace each planned target to the output kind declared by EXECUTE."""
     if execution_plan is not None:
+        from app.agent.common.execution_evidence import (
+            active_output_covered,
+            contradictory_statuses,
+            deferred_outcome_contradiction,
+            group_execution_results,
+            stable_output_key,
+        )
+
         active_tasks = list(getattr(execution_plan, "worker_tasks", None) or [])
         deferred_tasks = list(getattr(execution_plan, "deferred_tasks", None) or [])
-        results = list(getattr(execution_outcome, "task_results", None) or [])
-        result_by_key = {
-            (
-                str(getattr(result, "target_id", "")),
-                str(getattr(result, "expected_output_kind", "")),
-            ): result
-            for result in results
-        }
+        result_groups = group_execution_results(execution_outcome)
         failed: list[str] = []
+        duplicate: list[str] = []
+        deferred_contradictions: list[str] = []
         expected_kinds: set[str] = set()
         planned_keys: set[tuple[str, str]] = set()
         for task in active_tasks:
             target_id = str(getattr(task, "target_id", ""))
             output_kind = str(getattr(task, "expected_output_kind", ""))
-            key = (target_id, output_kind)
+            key = stable_output_key(task)
             planned_keys.add(key)
             expected_kinds.add(output_kind)
-            result = result_by_key.get(key)
-            artifacts = list(getattr(result, "output_artifacts", None) or []) if result else []
-            if (
-                result is None
-                or getattr(result, "status", "failed") != "succeeded"
-                or output_kind not in artifacts
-            ):
+            results = result_groups.get(key, [])
+            if contradictory_statuses(results):
+                duplicate.append(target_id)
+            if not active_output_covered(results, output_kind):
                 failed.append(target_id)
         for task in deferred_tasks:
-            planned_keys.add((
-                str(getattr(task, "target_id", "")),
-                str(getattr(task, "expected_output_kind", "")),
-            ))
+            key = stable_output_key(task)
+            planned_keys.add(key)
             expected_kinds.add(str(getattr(task, "expected_output_kind", "")))
+            if deferred_outcome_contradiction(result_groups.get(key, [])):
+                deferred_contradictions.append(str(getattr(task, "target_id", "")))
         orphan = sorted(
             target_id
-            for target_id, output_kind in result_by_key
+            for target_id, output_kind in result_groups
             if (target_id, output_kind) not in planned_keys
         )
         failed = sorted(set(failed))
-        passed = not failed and not orphan
+        duplicate = sorted(set(duplicate))
+        deferred_contradictions = sorted(set(deferred_contradictions))
+        passed = not failed and not orphan and not deferred_contradictions
+        affected_targets = sorted(set(
+            failed + orphan + deferred_contradictions
+        ))
         kinds = sorted(kind for kind in expected_kinds if kind)
         return [
             _check(
@@ -255,9 +262,12 @@ def check_traceability(
                 "目标-产物追溯",
                 passed,
                 stage="EXECUTE",
-                actual=f"failed={failed}, orphan={orphan}",
+                actual=(
+                    f"failed={failed}, orphan={orphan}, duplicate={duplicate}, "
+                    f"deferred_contradictions={deferred_contradictions}"
+                ),
                 expected=f"每个目标产出声明类型 {kinds} 或具有显式 deferred 状态",
-                parcels=failed,
+                targets=affected_targets,
                 fix="按稳定 target_id 和 expected_output_kind 补齐执行结果或显式延期",
             )
         ]
@@ -363,18 +373,8 @@ def check_topology(planned_state: Any) -> List[ValidationCheck]:
     ]
     from shapely import wkt as _wkt
 
-    polygon_geoms: List[Any] = []
-    for zone in getattr(planned_state, "zones", None) or []:
-        raw = (getattr(zone, "geometry", "") or "").strip()
-        if not raw:
-            continue
-        try:
-            geom = _wkt.loads(raw)
-        except Exception:
-            continue
-        if geom.geom_type in _POLYGON_TYPES:
-            polygon_geoms.append(geom)
-    if not polygon_geoms:
+    domains = list(getattr(planned_state, "coverage_domains", None) or [])
+    if not domains:
         checks.append(
             _check(
                 "topology_gaps",
@@ -386,36 +386,53 @@ def check_topology(planned_state: Any) -> List[ValidationCheck]:
             )
         )
         return checks
-    gap_area = 0.0
-    if polygon_geoms:
+
+    zone_geoms: dict[str, Any] = {}
+    for zone in getattr(planned_state, "zones", None) or []:
+        raw = (getattr(zone, "geometry", "") or "").strip()
+        if not raw:
+            continue
+        try:
+            geom = _wkt.loads(raw)
+        except Exception:
+            continue
+        if geom.geom_type in _POLYGON_TYPES:
+            name = str(getattr(zone, "name", "") or "")
+            target = str(getattr(zone, "derived_from_zone_target", "") or "")
+            if name:
+                zone_geoms[name] = geom
+            if target:
+                zone_geoms[target] = geom
+
+    domain_results: list[str] = []
+    gap_passed = True
+    for domain in domains:
+        domain_id = str(getattr(domain, "domain_id", "") or "unnamed")
+        boundary_raw = str(getattr(domain, "boundary_geometry", "") or "").strip()
+        refs = list(getattr(domain, "zone_refs", None) or [])
         try:
             from shapely.ops import unary_union
 
-            union = unary_union([g for g in polygon_geoms if not g.is_empty])
-            if not union.is_empty:
-                gap_area = union.convex_hull.difference(union).area
+            boundary = _wkt.loads(boundary_raw)
+            selected = [zone_geoms[ref] for ref in refs if ref in zone_geoms]
+            if not refs or len(selected) != len(refs) or boundary.is_empty:
+                raise ValueError("coverage domain boundary or zone_refs are incomplete")
+            union = unary_union([geom for geom in selected if not geom.is_empty])
+            gap_area = boundary.difference(union).area
+            domain_results.append(f"{domain_id}:gap_area={gap_area:.6f}")
+            if gap_area > 1e-9:
+                gap_passed = False
         except Exception as exc:
-            checks.append(
-                _check(
-                    "topology_gaps",
-                    "拓扑缝隙",
-                    False,
-                    stage="EXECUTE",
-                    actual=f"gap computation failed: {exc}",
-                    expected="polygon layers cover their convex hull without gaps",
-                    fix="修复拓扑计算异常",
-                )
-            )
-            return checks
-    gap_passed = gap_area <= 1e-9
+            gap_passed = False
+            domain_results.append(f"{domain_id}:error={exc}")
     checks.append(
         _check(
             "topology_gaps",
             "拓扑缝隙",
             gap_passed,
             stage="EXECUTE",
-            actual=f"gap_area={gap_area:.6f}",
-            expected="polygon layers cover their convex hull without gaps",
+            actual=", ".join(domain_results),
+            expected="declared partition/coverage boundaries contain no uncovered area",
             fix="补充缺失图斑或调整边界",
         )
     )

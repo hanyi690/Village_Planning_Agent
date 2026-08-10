@@ -110,10 +110,13 @@ def evaluate_reconcile_gate(
     if route != "PASS":
         counts = _error_counts(report)
         dominant, error_count = _dominant_stage(counts)
+        stable_targets = {
+            row.target_id for row in report.coverage_matrix.rows if row.target_id
+        }
         target_ids = sorted({
             item.intervention_id
             for item in report.inconsistencies
-            if item.severity == "error" and item.intervention_id
+            if item.severity == "error" and item.intervention_id in stable_targets
         })
         pending = [
             PendingRequest(

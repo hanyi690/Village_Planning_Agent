@@ -27,6 +27,7 @@ from pathlib import Path
 from typing import Any
 
 from app.modules.ports.artifact_store import ArtifactRef
+from app.services.artifact_fingerprint import semantic_checksum
 from app.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -95,6 +96,7 @@ class FilesystemArtifactStore:
             payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")
         ).encode("utf-8")
         checksum = hashlib.sha256(payload_bytes).hexdigest()
+        semantic = semantic_checksum(payload)
 
         # atomic payload write: temp file in same dir -> rename
         fd, tmp = tempfile.mkstemp(dir=str(d), suffix=".tmp")
@@ -119,9 +121,11 @@ class FilesystemArtifactStore:
             "revision": ref.revision,
             "created_at": ref.stored_at.isoformat(),
             "checksum": checksum,
+            "semantic_checksum": semantic,
             "payload_bytes": len(payload_bytes),
         }
         ref.checksum = checksum
+        ref.semantic_checksum = semantic
         self._atomic_write_json(d / _MANIFEST, manifest)
 
         # update revision index (latest revision pointer)
@@ -186,6 +190,7 @@ class FilesystemArtifactStore:
             artifact_type=str(manifest.get("artifact_type", "")),
             revision=str(manifest.get("revision", "v1")),
             checksum=str(manifest.get("checksum", "")),
+            semantic_checksum=str(manifest.get("semantic_checksum", "")),
         )
 
     def list_by_run(self, run_id: str) -> list[ArtifactRef]:

@@ -27,6 +27,7 @@ from langgraph.types import Command
 from langchain_core.messages import AIMessage, HumanMessage
 
 from app.agent.bootstrap.graph import (
+    END_DIAGNOSTIC,
     apply_human_review_decision,
     create_unified_planning_graph,
     route_after_human_review,
@@ -702,14 +703,16 @@ def test_llm_provider_circuit_breaker_is_session_scoped():
 
 def test_business_retry_limit_zero_escalates_without_retry():
     """A configured zero limit must not be replaced by the default limit."""
-    assert route_after_parse({
+    state = {
         "max_retries": 0,
         "retry_counts": {},
         "parse_gate": {"feedback_route": "REPAIR"},
-    }) == "human_review"
+    }
+    assert route_after_parse(state) == END_DIAGNOSTIC
+    assert state["delivery_status"] == "diagnostic_only"
 
 
-def test_select_retry_exhaustion_promotes_select_gate_over_stale_ground():
+def test_select_retry_exhaustion_routes_to_diagnostic_terminal():
     from app.agent.bootstrap.graph import route_after_select
 
     state = {
@@ -718,16 +721,14 @@ def test_select_retry_exhaustion_promotes_select_gate_over_stale_ground():
         "select_gate": {"feedback_route": "RETRY_GROUND", "pending_requests": []},
         "ground_gate": {"feedback_route": "EXPLORE", "pending_requests": [{"stage": "ground"}]},
     }
-    assert route_after_select(state) == "human_review"
-    assert state["select_gate"]["feedback_route"] == "HUMAN"
-    assert state["select_gate"]["pending_requests"]
+    assert route_after_select(state) == END_DIAGNOSTIC
+    assert state["select_gate"]["feedback_route"] == "END_DIAGNOSTIC"
+    assert state["delivery_status"] == "diagnostic_only"
 
 
 def test_human_retry_exhaustion_becomes_terminal_failure():
     """HUMAN retry cannot re-enter a failed stage after the cap is reached."""
     import asyncio
-    from langgraph.graph import END
-
     state = {
         "max_retries": 1,
         "retry_counts": {"ground": 1},
@@ -736,8 +737,10 @@ def test_human_retry_exhaustion_becomes_terminal_failure():
         "human_review_decisions": {"action": "retry"},
     }
     patch = asyncio.run(apply_human_review_decision(state))
-    assert patch["fatal_error"]["code"] == "BUSINESS_RETRY_EXHAUSTED"
-    assert route_after_human_review({**state, **patch}) == END
+    assert "fatal_error" not in patch
+    assert patch["delivery_status"] == "diagnostic_only"
+    assert patch["ground_gate"]["feedback_route"] == "END_DIAGNOSTIC"
+    assert route_after_human_review({**state, **patch}) == END_DIAGNOSTIC
 
 
 def test_duplicate_human_resolve_is_rejected(monkeypatch):

@@ -12,6 +12,7 @@ import json
 from typing import Any, TypeVar
 
 from app.modules.ports.artifact_store import ArtifactRef
+from app.services.artifact_fingerprint import semantic_checksum
 from app.services.artifact_store import FilesystemArtifactStore
 
 T = TypeVar("T")
@@ -84,12 +85,16 @@ def store_artifact(
     if existing is not None:
         existing_payload = store.retrieve(ref)
         if payload_checksum(existing_payload) != payload_checksum(payload_json):
-            raise ArtifactReplayError(
-                f"non-deterministic replay for {key}: {artifact_id} checksum changed"
-            )
+            if semantic_checksum(existing_payload) != semantic_checksum(payload_json):
+                raise ArtifactReplayError(
+                    f"non-deterministic replay for {key}: {artifact_id} checksum changed"
+                )
         if existing.get("context_fingerprint") and fingerprint and existing.get("context_fingerprint") != fingerprint:
             raise ArtifactReplayError(f"artifact {key} existing fingerprint mismatch")
         ref.checksum = str(existing.get("checksum", ""))
+        ref.semantic_checksum = str(
+            existing.get("semantic_checksum") or semantic_checksum(existing_payload)
+        )
         return ref.model_dump(mode="json")
     store.store(ref, payload_json)
     return ref.model_dump(mode="json")
@@ -138,6 +143,12 @@ def load_artifact(state: dict[str, Any], key: str, model: type[T] | None = None)
         raise ArtifactReplayError(f"artifact {key} checksum mismatch")
     if ref.checksum and manifest.get("checksum") != ref.checksum:
         raise ArtifactReplayError(f"artifact {key} reference checksum mismatch")
+    stored_semantic = semantic_checksum(payload)
+    manifest_semantic = str(manifest.get("semantic_checksum") or stored_semantic)
+    if manifest_semantic != stored_semantic:
+        raise ArtifactReplayError(f"artifact {key} semantic checksum mismatch")
+    if ref.semantic_checksum and manifest_semantic != ref.semantic_checksum:
+        raise ArtifactReplayError(f"artifact {key} reference semantic checksum mismatch")
     if model is not None:
         return model(**payload)
     return payload

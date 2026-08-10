@@ -136,27 +136,26 @@ def build_coverage_matrix(
             program, specs, grounding_result, decision, changeset, planned_state
         )
 
-    results = list(getattr(execution_outcome, "task_results", None) or [])
-    result_by_key = {
-        (
-            str(getattr(result, "task_id", "")),
-            str(getattr(result, "target_id", "")),
-            str(getattr(result, "expected_output_kind", "")),
-        ): result
-        for result in results
-    }
+    from app.agent.common.execution_evidence import (
+        active_output_covered,
+        deferred_outcome_contradiction,
+        group_execution_results,
+        stable_output_key,
+    )
+
+    result_groups = group_execution_results(execution_outcome)
     rows: list[CoverageMatrixRow] = []
     for task in list(getattr(execution_plan, "worker_tasks", None) or []):
         task_id = str(getattr(task, "task_id", ""))
         target_id = str(getattr(task, "target_id", ""))
         output_kind = str(getattr(task, "expected_output_kind", "parcel"))
-        result = result_by_key.get((task_id, target_id, output_kind))
-        artifacts = list(getattr(result, "output_artifacts", None) or []) if result else []
-        covered = bool(
-            result is not None
-            and getattr(result, "status", "failed") == "succeeded"
-            and output_kind in artifacts
-        )
+        results = result_groups.get(stable_output_key(task), [])
+        artifacts = sorted({
+            artifact
+            for result in results
+            for artifact in list(getattr(result, "output_artifacts", None) or [])
+        })
+        covered = active_output_covered(results, output_kind)
         rows.append(
             CoverageMatrixRow(
                 target_id=target_id,
@@ -170,6 +169,8 @@ def build_coverage_matrix(
         )
     for task in list(getattr(execution_plan, "deferred_tasks", None) or []):
         target_id = str(getattr(task, "target_id", ""))
+        results = result_groups.get(stable_output_key(task), [])
+        contradiction = deferred_outcome_contradiction(results)
         rows.append(
             CoverageMatrixRow(
                 target_id=target_id,
@@ -177,7 +178,12 @@ def build_coverage_matrix(
                 expected_output_kind=str(getattr(task, "expected_output_kind", "parcel")),
                 execution_task_id=str(getattr(task, "task_id", "")),
                 intervention_id=target_id,
-                status="deferred",
+                output_artifacts=sorted({
+                    artifact
+                    for result in results
+                    for artifact in list(getattr(result, "output_artifacts", None) or [])
+                }),
+                status="failed" if contradiction else "deferred",
             )
         )
     return CoverageMatrix(rows=rows)
@@ -187,38 +193,65 @@ def check_target_execution_coverage(
     execution_plan,
     execution_outcome,
 ) -> list[ReconciliationInconsistency]:
-    matrix = build_coverage_matrix(
-        execution_plan=execution_plan,
-        execution_outcome=execution_outcome,
+    from app.agent.common.execution_evidence import (
+        active_output_covered,
+        contradictory_statuses,
+        deferred_outcome_contradiction,
+        group_execution_results,
+        stable_output_key,
     )
-    inconsistencies = [
-        _inc(
-            row.target_id,
-            "execution_status",
-            f"covered:{row.expected_output_kind}",
-            f"failed:{row.expected_output_kind}",
-            stage="EXECUTE",
-        )
-        for row in matrix.rows
-        if row.status == "failed"
-    ]
-    planned_keys = {
-        (row.execution_task_id, row.target_id, row.expected_output_kind)
-        for row in matrix.rows
-    }
-    for result in list(getattr(execution_outcome, "task_results", None) or []):
-        key = (
-            str(getattr(result, "task_id", "")),
-            str(getattr(result, "target_id", "")),
-            str(getattr(result, "expected_output_kind", "")),
-        )
+
+    result_groups = group_execution_results(execution_outcome)
+    inconsistencies: list[ReconciliationInconsistency] = []
+    planned_keys: set[tuple[str, str]] = set()
+    for task in list(getattr(execution_plan, "worker_tasks", None) or []):
+        key = stable_output_key(task)
+        planned_keys.add(key)
+        results = result_groups.get(key, [])
+        statuses = sorted({str(getattr(result, "status", "")) for result in results})
+        if contradictory_statuses(results):
+            inconsistencies.append(
+                _inc(
+                    key[0],
+                    "duplicate_execution_outcome",
+                    f"one consistent outcome:{key[1]}",
+                    f"statuses={statuses}",
+                    stage="EXECUTE",
+                )
+            )
+        elif not active_output_covered(results, key[1]):
+            inconsistencies.append(
+                _inc(
+                    key[0],
+                    "execution_status",
+                    f"covered:{key[1]}",
+                    f"statuses={statuses or ['missing']}",
+                    stage="EXECUTE",
+                )
+            )
+    for task in list(getattr(execution_plan, "deferred_tasks", None) or []):
+        key = stable_output_key(task)
+        planned_keys.add(key)
+        results = result_groups.get(key, [])
+        if deferred_outcome_contradiction(results):
+            statuses = sorted({str(getattr(result, "status", "")) for result in results})
+            inconsistencies.append(
+                _inc(
+                    key[0],
+                    "deferred_outcome_contradiction",
+                    f"deferred:{key[1]}",
+                    f"statuses={statuses}",
+                    stage="EXECUTE",
+                )
+            )
+    for key in result_groups:
         if key not in planned_keys:
             inconsistencies.append(
                 _inc(
-                    key[1],
+                    key[0],
                     "execution_outcome",
                     "target and output kind declared by ExecutionPlan",
-                    f"orphan:{key[2]}",
+                    f"orphan:{key[1]}",
                     stage="EXECUTE",
                 )
             )

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
@@ -30,6 +30,15 @@ class PlannedZone(BaseModel):
     derived_from_zone_target: str = ""
 
 
+class CoverageDomain(BaseModel):
+    """Explicit boundary whose declared zones must form a partition/coverage."""
+
+    domain_id: str
+    domain_type: Literal["partition", "coverage"] = "partition"
+    boundary_geometry: str
+    zone_refs: list[str] = Field(default_factory=list)
+
+
 class PlannedFacility(BaseModel):
     name: str = ""
     facility_type: str = ""
@@ -57,6 +66,7 @@ class PlannedState(ContractMeta):
     version: str = "v1"
     parcels: list[PlannedParcel] = Field(default_factory=list)
     zones: list[PlannedZone] = Field(default_factory=list)
+    coverage_domains: list[CoverageDomain] = Field(default_factory=list)
     facilities: list[PlannedFacility] = Field(default_factory=list)
     roads: list[PlannedRoad] = Field(default_factory=list)
     axes: list[PlannedAxis] = Field(default_factory=list)

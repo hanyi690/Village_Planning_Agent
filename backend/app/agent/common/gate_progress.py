@@ -2,38 +2,12 @@
 
 from __future__ import annotations
 
-import hashlib
-import json
 from typing import Any
 
-
-_VOLATILE_KEYS = {"artifact_id", "created_at", "stored_at"}
-
-
-def _jsonable(value: Any) -> Any:
-    if hasattr(value, "model_dump"):
-        value = value.model_dump(mode="json")
-    if isinstance(value, dict):
-        return {
-            str(key): _jsonable(item)
-            for key, item in value.items()
-            if key not in _VOLATILE_KEYS
-        }
-    if isinstance(value, (list, tuple)):
-        return [_jsonable(item) for item in value]
-    if isinstance(value, (str, int, float, bool)) or value is None:
-        return value
-    return str(value)
-
+from app.services.artifact_fingerprint import semantic_checksum, semantic_payload
 
 def checksum(value: Any) -> str:
-    raw = json.dumps(
-        _jsonable(value),
-        sort_keys=True,
-        ensure_ascii=False,
-        separators=(",", ":"),
-    )
-    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+    return semantic_checksum(value)
 
 
 def stable_artifact_refs(refs: dict[str, Any] | None) -> dict[str, Any]:
@@ -47,13 +21,14 @@ def stable_artifact_refs(refs: dict[str, Any] | None) -> dict[str, Any]:
                     "artifact_id",
                     "artifact_type",
                     "checksum",
+                    "semantic_checksum",
                     "context_version",
                     "context_fingerprint",
                     "revision",
                 )
             }
         else:
-            stable[key] = _jsonable(ref)
+            stable[key] = semantic_payload(ref)
     return stable
 
 
@@ -65,7 +40,12 @@ def _input_fingerprint_view(refs: dict[str, Any]) -> dict[str, Any]:
             view[key] = ref
             continue
         view[key] = {
-            "identity": ref.get("checksum") or ref.get("artifact_id") or "",
+            "identity": (
+                ref.get("semantic_checksum")
+                or ref.get("checksum")
+                or ref.get("artifact_id")
+                or ""
+            ),
             "artifact_type": ref.get("artifact_type", ""),
             "context_version": ref.get("context_version", ""),
             "context_fingerprint": ref.get("context_fingerprint", ""),

@@ -25,6 +25,7 @@ class ValidationCheck(BaseModel):
     expected_value: str = ""
     responsible_stage: Literal["L3", "PARSE", "GROUND", "SELECT", "EXECUTE"] = "EXECUTE"
     affected_parcels: list[str] = Field(default_factory=list)
+    affected_target_ids: list[str] = Field(default_factory=list)
     fix_suggestion: str = ""
 
 

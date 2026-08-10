@@ -116,7 +116,7 @@ def evaluate_validate_gate(
             target_id
             for check in report.checks
             if not check.passed
-            for target_id in check.affected_parcels
+            for target_id in check.affected_target_ids
             if target_id
         })
         pending = [
