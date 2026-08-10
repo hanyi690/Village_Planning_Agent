@@ -296,6 +296,49 @@ def test_partial_ground_deferral_remains_blocking_with_remaining_target_ids(monk
     }) == "human_review"
 
 
+def test_partial_select_deferral_stays_in_human_review(monkeypatch):
+    from app.agent.bootstrap.graph import apply_human_review_decision, route_after_human_review
+    from app.modules.schema.contracts.contract_meta import StageIssue
+    from app.modules.schema.contracts.grounding_contracts import GroundingResult, SpatialQueryEvidence
+
+    grounding = GroundingResult(
+        unresolved=[
+            StageIssue(stage="ground", severity="warning", code="unresolved", message="one", related_artifact_id="target-1"),
+            StageIssue(stage="ground", severity="warning", code="unresolved", message="two", related_artifact_id="target-2"),
+        ],
+        spatial_query_evidence=[
+            SpatialQueryEvidence(target_id="target-1", spec_id="spec-1"),
+            SpatialQueryEvidence(target_id="target-2", spec_id="spec-2"),
+        ],
+    )
+    monkeypatch.setattr(
+        "app.agent.bootstrap.artifact_runtime.load_artifact",
+        lambda state, key, model: grounding,
+    )
+    monkeypatch.setattr(
+        "app.agent.bootstrap.artifact_runtime.store_artifact",
+        lambda *args: {"artifact_id": "ledger-1"},
+    )
+
+    state = {
+        "human_review_items": [{"request_id": "select-1"}],
+        "paused_stage": "select",
+        "ground_gate": {"stage": "ground", "passed": False, "feedback_route": "HUMAN"},
+        "artifact_refs": {"grounding_result": {"artifact_id": "ground-1"}},
+        "human_deferred_select_revision": True,
+        "human_review_decisions": {
+            "action": "accept",
+            "defer_unresolved_spatial_references": True,
+            "deferred_target_ids": ["target-1"],
+        },
+    }
+
+    patch = asyncio.run(apply_human_review_decision(state))
+
+    assert patch["remaining_target_ids"] == ["target-2"]
+    assert route_after_human_review({**state, **patch}) == "human_review"
+
+
 def test_ground_candidate_uses_target_id_not_intervention_id(monkeypatch):
     class Resolver:
         def __init__(self, context):
@@ -439,6 +482,68 @@ def test_mixed_action_and_spatial_projects_do_not_emit_action_parcel_changes(mon
     assert [change.project_ref for change in result.parcel_changes] == ["spatial-target"]
     assert result.action_results[0].target_id == "action-target"
     assert result.action_results[0].expected_output_kind == "action"
+
+
+def test_action_result_survives_execute_aggregation_and_is_artifact_addressable(monkeypatch):
+    from app.agent.bootstrap import post_l3_main_nodes
+    from app.agent.execute.execute_state import ExecuteAgentState
+    from app.agent.execute.nodes.merge_and_materialize import _merge_worker_results_node
+    from app.modules.schema.contracts.execution_plan_contracts import WorkerResult
+
+    worker_result = WorkerResult(
+        worker_type="project",
+        action_results=[{
+            "target_id": "action-target",
+            "action": "建立巡查制度",
+        }],
+    )
+    merged = asyncio.run(
+        _merge_worker_results_node(ExecuteAgentState(worker_results=[worker_result]))
+    )
+
+    assert [item.target_id for item in merged["action_results"]] == ["action-target"]
+
+    context = SimpleNamespace(
+        version="1",
+        bundle=None,
+        village_anchors=[],
+        kg_session_ref="",
+        kg=None,
+    )
+    context.snapshot_meta = lambda: {"session_id": "execute-action", "version": "1"}
+
+    async def require_context(state):
+        return context
+
+    class ExecuteGraph:
+        async def ainvoke(self, state, config):
+            return merged
+
+    captured = []
+
+    def persist(state, module, artifact_type, payload):
+        captured.append((artifact_type, payload))
+        return {"artifact_id": artifact_type}
+
+    def load_artifact(state, key, model):
+        if key == "intent_compilation":
+            return SimpleNamespace(typed_intent=None)
+        if key == "execution_plan":
+            return SimpleNamespace()
+        return SimpleNamespace()
+
+    monkeypatch.setattr(post_l3_main_nodes, "_require_context", require_context)
+    monkeypatch.setattr(post_l3_main_nodes, "_load_ref_artifact", load_artifact)
+    monkeypatch.setattr(post_l3_main_nodes, "_persist_artifact", persist)
+    monkeypatch.setattr(
+        "app.services.runtime.PlanningRuntimeService._execute_subgraph", ExecuteGraph()
+    )
+
+    patch = asyncio.run(post_l3_main_nodes.execute_node({"session_id": "execute-action"}))
+
+    outcome = next(payload for kind, payload in captured if kind == "ExecutionOutcome")
+    assert outcome.action_results[0].target_id == "action-target"
+    assert patch["artifact_refs"]["execution_outcome"]["artifact_id"] == "ExecutionOutcome"
 
 
 def test_review_matches_specs_by_authoritative_target_id():

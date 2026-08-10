@@ -19,6 +19,7 @@ from __future__ import annotations
 from typing import Any, Dict, List, Tuple
 
 from app.agent.execute.land_design_worker import build_parcel_change_set
+from app.modules.schema.contracts.execution_plan_contracts import TypedActionResult
 from app.modules.schema.contracts.parcel_change_contracts import ParcelChange, ParcelChangeSet
 
 # Later workers win when two workers emit the same layerType.
@@ -103,6 +104,18 @@ def _dedup_layout_configs(worker_results: List[Any]) -> List[Dict[str, Any]]:
     return list(merged.values())
 
 
+def _collect_action_results(worker_results: List[Any]) -> List[TypedActionResult]:
+    """Collect typed non-spatial results without converting them into parcels."""
+    action_results: List[TypedActionResult] = []
+    for result in worker_results or []:
+        for action_result in _result_get(result, "action_results") or []:
+            if isinstance(action_result, TypedActionResult):
+                action_results.append(action_result)
+            elif isinstance(action_result, dict):
+                action_results.append(TypedActionResult(**action_result))
+    return action_results
+
+
 def _verify_geometry_valid(changes: list) -> bool:
     """True when every change carries a non-empty, valid WKT geometry."""
     if not changes:
@@ -136,8 +149,8 @@ def _verify_area_conservation(changes: list) -> bool:
 
 def merge_worker_results(
     worker_results: List[Any],
-) -> Tuple[ParcelChangeSet, List[Dict[str, Any]], List[Dict[str, Any]]]:
-    """Merge WorkerResults into a unified (ParcelChangeSet, layout_configs, diagnostics).
+) -> Tuple[ParcelChangeSet, List[Dict[str, Any]], List[Dict[str, Any]], List[TypedActionResult]]:
+    """Merge WorkerResults into parcel, layout, diagnostics, and action outputs.
 
     - BSM conflict detection: same bsm in multiple workers with different
       after_classification -> ``bsm_conflict`` diagnostic.
@@ -147,7 +160,7 @@ def merge_worker_results(
       merged changes.
 
     Returns:
-        (parcel_changeset, merged_layout_configs, diagnostics)
+        (parcel_changeset, merged_layout_configs, diagnostics, action_results)
     """
     conflicts = _detect_bsm_conflicts(worker_results)
 
@@ -161,11 +174,12 @@ def merge_worker_results(
         geometry_validity_verified=_verify_geometry_valid(changes),
     )
     layout_configs = _dedup_layout_configs(worker_results)
-    return changeset, layout_configs, list(conflicts)
+    return changeset, layout_configs, list(conflicts), _collect_action_results(worker_results)
 
 
 __all__ = [
     "merge_worker_results",
     "_detect_bsm_conflicts",
     "_dedup_layout_configs",
+    "_collect_action_results",
 ]

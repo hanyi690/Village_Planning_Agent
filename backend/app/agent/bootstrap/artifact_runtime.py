@@ -18,7 +18,7 @@ T = TypeVar("T")
 
 ARTIFACT_KEYS = (
     "l1_snapshot", "l2_strategy", "planning_program", "intent_compilation",
-    "grounding_result", "site_selection", "execution_plan", "parcel_changeset",
+    "grounding_result", "site_selection", "execution_plan", "execution_outcome", "parcel_changeset",
     "planned_state", "validation_report", "reconciliation_report", "delivery_manifest",
     "allocated_geojson", "render_layers", "deferral_ledger",
 )

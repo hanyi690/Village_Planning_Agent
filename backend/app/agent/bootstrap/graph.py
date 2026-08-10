@@ -169,6 +169,21 @@ def route_after_deliver(state: Dict[str, Any]) -> str:
     return "human_review"
 
 
+def _remaining_unresolved_target_ids(state: Dict[str, Any]) -> list[str]:
+    """Return unresolved target IDs still represented by the blocking gate."""
+    remaining = state.get("remaining_target_ids") or []
+    target_ids = [str(target_id) for target_id in remaining if str(target_id)] if isinstance(remaining, list) else []
+    gate = state.get("ground_gate") or {}
+    pending = gate.get("pending_requests") if isinstance(gate, dict) else getattr(gate, "pending_requests", [])
+    for request in pending or []:
+        context = request.get("context") if isinstance(request, dict) else getattr(request, "context", {})
+        if not isinstance(context, dict):
+            continue
+        ids = context.get("remaining_target_ids") or []
+        target_ids.extend(str(target_id) for target_id in ids if str(target_id))
+    return list(dict.fromkeys(target_ids))
+
+
 def route_after_human_review(state: Dict[str, Any]) -> str:
     """Route post-HITL resume: approve forwards, reject goes to conversation."""
     if state.get("fatal_error"):
@@ -177,6 +192,8 @@ def route_after_human_review(state: Dict[str, Any]) -> str:
     paused_stage = state.get("paused_stage")
     action = decisions.get("action") if isinstance(decisions, dict) else None
     if action in ("accept", "approve"):
+        if _remaining_unresolved_target_ids(state):
+            return "human_review"
         if (
             paused_stage == "select"
             and isinstance(decisions, dict)
@@ -467,7 +484,19 @@ async def apply_human_review_decision(state: Dict[str, Any]) -> Dict[str, Any]:
             result.update({
                 "ground_gate": ground_gate,
                 "human_deferred_targets": deferred_target_ids,
+                "human_deferred_select_revision": False,
+                "remaining_target_ids": remaining_target_ids,
             })
+            if paused_stage == "select":
+                select_gate = dict(state.get("select_gate") or {})
+                select_gate.update({
+                    "stage": "select",
+                    "passed": False,
+                    "feedback_route": "HUMAN",
+                    "diagnostic_code": "HUMAN_DEFER_SPATIAL_REMAINING",
+                    "pending_requests": list(ground_gate["pending_requests"]),
+                })
+                result["select_gate"] = select_gate
             if deferral_patch.get("artifact_refs"):
                 result["artifact_refs"] = deferral_patch["artifact_refs"]
             return result

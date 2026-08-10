@@ -277,6 +277,7 @@ def _persist_artifact(
             "PlanningProgram": "planning_program",
             "IntentCompilationResult": "intent_compilation",
             "ExecutionPlan": "execution_plan",
+            "ExecutionOutcome": "execution_outcome",
             "AllocatedGeoJSON": "allocated_geojson",
             "RenderLayers": "render_layers",
         }
@@ -514,7 +515,7 @@ async def execute_node(state: Dict[str, Any]) -> Dict[str, Any]:
     from app.modules.schema.contracts.parse_contracts import SpatialPlanningIntent
     from app.modules.schema.contracts.parse_result_contracts import IntentCompilationResult
     from app.modules.schema.contracts.selection_contracts import SiteSelectionDecision
-    from app.modules.schema.contracts.execution_plan_contracts import ExecutionPlan
+    from app.modules.schema.contracts.execution_plan_contracts import ExecutionOutcome, ExecutionPlan
 
     context = await _require_context(state)
     intent = _load_ref_artifact(state, "intent_compilation", IntentCompilationResult)
@@ -583,7 +584,9 @@ async def execute_node(state: Dict[str, Any]) -> Dict[str, Any]:
         logger.warning("[post_l3:main:execute] no parcel_changeset produced")
         planned_state = None
 
+    outcome = ExecutionOutcome(action_results=list(result.get("action_results", []) or []))
     refs = {
+        "execution_outcome": _persist_artifact(state, "execute", "ExecutionOutcome", outcome),
         "parcel_changeset": _persist_artifact(state, "execute", "ParcelChangeSet", changeset),
         "planned_state": _persist_artifact(state, "execute", "PlannedState", planned_state),
         "allocated_geojson": _persist_artifact(
@@ -592,6 +595,7 @@ async def execute_node(state: Dict[str, Any]) -> Dict[str, Any]:
     }
     return {
         "layout_configs": _jsonable(list(result.get("layout_configs", []) or [])),
+        "action_results": _jsonable(outcome.action_results),
         "execution_errors": _jsonable(list(result.get("execution_errors", []) or [])),
         "artifact_refs": refs,
         **_adopt_context(state, context),

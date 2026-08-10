@@ -42,6 +42,12 @@ class TypedActionResult(BaseModel):
     details: dict = Field(default_factory=dict)
 
 
+class ExecutionOutcome(ContractMeta):
+    """Authoritative EXECUTE artifact for non-spatial action outputs."""
+
+    action_results: list[TypedActionResult] = Field(default_factory=list)
+
+
 class ExecutionPlan(ContractMeta):
     """EXECUTE worker scheduling plan.
 
@@ -119,6 +125,7 @@ __all__ = [
     "WorkerTask",
     "ExecutionResult",
     "TypedActionResult",
+    "ExecutionOutcome",
     "ExecutionPlan",
     "ZoneAssignmentEntry",
     "ParcelAllocationProblem",

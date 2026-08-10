@@ -12,13 +12,14 @@ async def _merge_worker_results_node(state: ExecuteAgentState) -> dict:
     """Merge all WorkerResults into a unified ParcelChangeSet + layout_configs."""
     from app.agent.execute.merge import merge_worker_results
 
-    changeset, layout_configs, diagnostics = merge_worker_results(
+    changeset, layout_configs, diagnostics, action_results = merge_worker_results(
         list(state.worker_results)
     )
     update: Dict[str, Any] = {
         "parcel_changeset": changeset,
         "layout_configs": layout_configs,
         "worker_conflict_diagnostics": diagnostics,
+        "action_results": action_results,
     }
     if changeset is not None:
         update["parcel_changes"] = list(changeset.changes)

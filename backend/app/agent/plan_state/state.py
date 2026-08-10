@@ -264,6 +264,7 @@ class AgentState(TypedDict, total=False):
     # EXECUTE 输出
     execution_errors: Annotated[List[Dict[str, Any]], _replace_or_merge_lists]  # EXECUTE errors
     layout_configs: List[Dict[str, Any]]
+    action_results: List[Dict[str, Any]]
     # VALIDATE 输出
     validate_gate: Optional[Any]  # GateDecision
     # RECONCILE 输出
