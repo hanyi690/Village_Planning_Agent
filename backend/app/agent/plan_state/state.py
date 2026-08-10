@@ -161,6 +161,23 @@ def _merge_retry_counts(a: Dict[str, int], b: Dict[str, int]) -> Dict[str, int]:
     return result
 
 
+def _preserve_fatal_error(a: Optional[Dict[str, Any]], b: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    """Keep the first provider/config failure across parallel dimensions."""
+    return a or b
+
+
+def _merge_failure_events(a: List[Dict[str, Any]], b: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    if b == []:
+        return []
+    result = list(a or [])
+    seen = {str(item) for item in result}
+    for item in b or []:
+        if str(item) not in seen:
+            result.append(item)
+            seen.add(str(item))
+    return result
+
+
 class AgentState(TypedDict, total=False):
     """
     核心状态 - 精简版
@@ -273,7 +290,8 @@ class AgentState(TypedDict, total=False):
     # Terminal infrastructure/configuration failure.  This is deliberately
     # separate from business Gate retries: a non-retryable model/provider
     # error must stop dispatch rather than redispatching the same dimension.
-    fatal_error: Optional[Dict[str, Any]]
+    fatal_error: Annotated[Optional[Dict[str, Any]], _preserve_fatal_error]
+    provider_failures: Annotated[List[Dict[str, Any]], _merge_failure_events]
 
 
 # ==========================================

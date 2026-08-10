@@ -243,6 +243,10 @@ def after_analysis(
         return END
 
     fatal_error = state.get("fatal_error")
+    if not isinstance(fatal_error, dict):
+        failures = state.get("provider_failures") or []
+        if failures and isinstance(failures[0], dict):
+            fatal_error = failures[0]
     if fatal_error:
         # A provider stream timeout is a transient infrastructure breakpoint.
         # Preserve the exact failed dimension in the checkpoint and enter the
@@ -250,18 +254,24 @@ def after_analysis(
         # worker without replaying completed dimensions.
         if (
             isinstance(fatal_error, dict)
-            and fatal_error.get("code") in {"llm_stream_timeout", "llm_timeout"}
-            and str(state.get("phase", "")).lower() == "layer3"
+            and fatal_error.get("code") in {
+                "llm_stream_timeout",
+                "llm_timeout",
+                "llm_provider_error",
+                "llm_provider_circuit_open",
+            }
+            and str(state.get("phase", "")).lower() in {"layer1", "layer2", "layer3"}
         ):
-            state["l3_gate_decision"] = {
-                "stage": "l3",
+            layer_name = str(state.get("phase", "layer3")).lower().replace("layer", "l")
+            state[f"{layer_name}_gate_decision"] = {
+                "stage": layer_name,
                 "passed": False,
                 "feedback_route": "HUMAN",
-                "diagnostic_code": "L3_LLM_TIMEOUT_CHECKPOINT",
+                "diagnostic_code": f"{layer_name.upper()}_LLM_CHECKPOINT",
                 "pending_requests": [{
-                    "request_id": "l3-llm-timeout",
-                    "stage": "l3",
-                    "request_type": "transient_llm_timeout",
+                    "request_id": f"{layer_name}-llm-failure",
+                    "stage": layer_name,
+                    "request_type": "transient_llm_failure",
                     "context": dict(fatal_error),
                 }],
             }

@@ -39,9 +39,14 @@ def _hydrate_l1_spatial_facts(state: Dict[str, Any], context: Any) -> None:
             from app.modules.kg.adapters.gazetteer_adapter import KGGazetteerAdapter
 
             context.ports.gazetteer = KGGazetteerAdapter(context.gazetteer)
+        # L1 facts are the authoritative typed spatial evidence.  Rebuild the
+        # index after hydration so facilities, roads, water and areas are
+        # visible to GROUND in the same snapshot as village bindings.
+        from app.modules.spatial_ops.evidence.place_evidence_index import PlaceEvidenceIndex
+        context.evidence_index = PlaceEvidenceIndex.build(context)
         logger.info(
-            "[bootstrap] hydrated %d L1 location facts; GIS village bindings=%d",
-            len(facts), written,
+            "[bootstrap] hydrated %d L1 location facts; GIS village bindings=%d; evidence entries=%d",
+            len(facts), written, len(getattr(context.evidence_index, "entries", []) or []),
         )
     except Exception as exc:
         logger.warning("[bootstrap] L1 spatial fact hydration failed: %s", exc)

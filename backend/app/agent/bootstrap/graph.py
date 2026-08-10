@@ -49,6 +49,27 @@ async def analyze_dimension_node(state: Dict[str, Any]) -> Dict[str, Any]:
     return await analyze_dimension(state)
 
 
+async def _audited_dimension_worker(worker, state: Dict[str, Any]) -> Dict[str, Any]:
+    """Preserve provider failures as a merge-safe parallel event channel."""
+    patch = await worker(state)
+    if isinstance(patch, dict) and isinstance(patch.get("fatal_error"), dict):
+        patch = dict(patch)
+        patch["provider_failures"] = [dict(patch["fatal_error"])]
+    return patch
+
+
+async def audited_l1_worker(state: Dict[str, Any]) -> Dict[str, Any]:
+    return await _audited_dimension_worker(l1_worker_node, state)
+
+
+async def audited_l2_worker(state: Dict[str, Any]) -> Dict[str, Any]:
+    return await _audited_dimension_worker(l2_worker_node, state)
+
+
+async def audited_l3_worker(state: Dict[str, Any]) -> Dict[str, Any]:
+    return await _audited_dimension_worker(l3_worker_node, state)
+
+
 # ── Wave M: post-L3 gate routers (pure functions over AgentState) ──────
 
 
@@ -60,6 +81,25 @@ def _retry_or_human(state: Dict[str, Any], stage: str, retry_target: str) -> str
     max_retries = 3 if configured_limit is None else max(0, int(configured_limit))
     if current >= max_retries:
         logger.warning("[main] %s retry exceeded %d rounds -> human", stage, max_retries)
+        gate_key = f"{stage}_gate"
+        gate = state.get(gate_key)
+        if isinstance(gate, dict):
+            gate = dict(gate)
+            gate["feedback_route"] = "HUMAN"
+            gate.setdefault("diagnostic_code", f"{stage.upper()}_RETRY_EXHAUSTED")
+            pending = list(gate.get("pending_requests") or [])
+            if not pending:
+                pending = [{
+                    "request_id": f"{stage}-retry-exhausted",
+                    "stage": stage,
+                    "request_type": "business_retry_exhausted",
+                    "context": {"retry_count": current, "retry_limit": max_retries},
+                }]
+            gate["pending_requests"] = pending
+            # Routing callbacks receive the checkpoint state object; retaining
+            # this mutation lets prepare_human_review select the exhausted
+            # downstream gate instead of a stale upstream GROUND gate.
+            state[gate_key] = gate
         return "human_review"
     logger.info("[main] %s retry %d/%d -> %s", stage, current + 1, max_retries, retry_target)
     return retry_target
@@ -186,9 +226,9 @@ def create_unified_planning_graph(checkpointer=None) -> StateGraph:
         builder.add_node("execute_tools", execute_tools_node, retry_policy=_TRANSIENT_RETRY_POLICY)
     else:
         builder.add_node("execute_tools", execute_tools_node)
-    builder.add_node("l1_worker", l1_worker_node)
-    builder.add_node("l2_worker", l2_worker_node)
-    builder.add_node("l3_worker", l3_worker_node)
+    builder.add_node("l1_worker", audited_l1_worker)
+    builder.add_node("l2_worker", audited_l2_worker)
+    builder.add_node("l3_worker", audited_l3_worker)
     builder.add_node("advance_phase", advance_phase_node)
     builder.add_node("layer_completion_check", layer_completion_check)
     builder.add_node("layer_aggregate", layer_aggregate_node)
@@ -295,6 +335,20 @@ async def prepare_human_review(state: Dict[str, Any]) -> Dict[str, Any]:
                 paused_stage = gate_attr.removesuffix("_gate_decision").removesuffix("_gate")
                 items = pending
                 break
+    if not items:
+        failures = state.get("provider_failures") or []
+        failure = failures[0] if failures and isinstance(failures[0], dict) else None
+        if failure:
+            paused_stage = str(failure.get("stage") or state.get("phase") or "layer3").lower()
+            if paused_stage.startswith("layer"):
+                paused_stage = paused_stage.replace("layer", "l")
+            items = [{
+                "request_id": f"{paused_stage}-provider-failure",
+                "stage": paused_stage,
+                "request_type": "transient_llm_failure",
+                "context": dict(failure),
+            }]
+            gate_patch["fatal_error"] = dict(failure)
     event_id = hashlib.sha256(
         repr((state.get("session_id"), paused_stage, items, state.get("retry_counts"))).encode()
     ).hexdigest()[:24]
@@ -372,6 +426,31 @@ async def apply_human_review_decision(state: Dict[str, Any]) -> Dict[str, Any]:
                 "code": "BUSINESS_RETRY_EXHAUSTED",
                 "message": f"{paused_stage} business retry limit exhausted ({current}/{max_retries})",
             }
+        elif (
+            paused_stage in {"l1", "l2", "l3"}
+            and isinstance(state.get("fatal_error"), dict)
+            and state["fatal_error"].get("code") in {
+                "llm_stream_timeout",
+                "llm_timeout",
+                "llm_provider_error",
+                "llm_provider_circuit_open",
+            }
+        ):
+            dimension = str(state["fatal_error"].get("dimension") or "")
+            attempts = int((state.get("dimension_retry_counts") or {}).get(dimension, 0))
+            limit = max(0, int(state.get("dimension_retry_limit", 1)))
+            if attempts <= limit:
+                # The retry action is an explicit operator decision.  Clear
+                # only this infrastructure failure; the worker will create
+                # a fresh attempt and increment the same dimension counter
+                # if it fails again.
+                result["fatal_error"] = None
+            else:
+                result["fatal_error"] = {
+                    **state["fatal_error"],
+                    "code": "LLM_DIMENSION_RETRY_EXHAUSTED",
+                    "message": f"dimension {dimension} retry limit exhausted ({attempts}/{limit})",
+                }
     if action in ("accept", "approve") and paused_stage:
         if (
             paused_stage == "l3"
@@ -396,6 +475,8 @@ async def apply_human_review_decision(state: Dict[str, Any]) -> Dict[str, Any]:
             result[f"{paused_stage}_gate_decision"] = _dump(_pass_gate(paused_stage))
         else:
             result[f"{paused_stage}_gate"] = _dump(_pass_gate(paused_stage))
+        if isinstance(state.get("provider_failures"), list) and state.get("provider_failures"):
+            result["provider_failures"] = []
         if isinstance(decisions, dict) and decisions.get("acknowledge_unresolved_spatial_references"):
             result["human_acknowledged_unresolved_spatial"] = True
         if (
