@@ -116,6 +116,7 @@ class WorkerResult(BaseModel):
     """Unified output envelope produced by a single EXECUTE worker."""
 
     worker_type: str
+    task_results: list[ExecutionResult] = Field(default_factory=list)
     layers: list[Any] = Field(default_factory=list)
     parcel_changes: list[Any] = Field(default_factory=list)
     action_results: list[TypedActionResult] = Field(default_factory=list)

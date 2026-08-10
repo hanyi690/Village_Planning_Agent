@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from app.agent.execute.execute_state import ExecuteAgentState
-from app.agent.execute.nodes.worker_common import _execution_intent_from_plan, _intent_list, _task_enabled
+from app.agent.execute.nodes.worker_common import _execution_intent_from_plan, _intent_list, _task_enabled, _task_execution_result
 from app.modules.schema.contracts.execution_plan_contracts import WorkerResult
 from app.utils.logger import get_logger
 
@@ -52,6 +52,17 @@ def _axis_worker(state: ExecuteAgentState) -> WorkerResult:
 
     return WorkerResult(
         worker_type="axis",
+        task_results=[
+            result
+            for axis in axes
+            if (result := _task_execution_result(
+                state,
+                "axis_construction",
+                axis.target_id,
+                status="succeeded" if layers else "failed",
+                diagnostics=[] if layers else list(unresolved),
+            )) is not None
+        ],
         layers=layers,
         unresolved_items=unresolved,
         diagnostics=[{"code": "axis_ok", "layers": len(layers)}],

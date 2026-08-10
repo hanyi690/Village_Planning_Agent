@@ -17,6 +17,7 @@ from app.agent.execute.nodes.worker_common import (
     _intent_list,
     _resolve_parcel_by_bsm,
     _task_enabled,
+    _task_execution_result,
 )
 from app.modules.schema.contracts.execution_plan_contracts import WorkerResult
 from app.modules.schema.contracts.parcel_change_contracts import ParcelChange
@@ -50,6 +51,7 @@ def _allocate_empty_zone_targets(
     parcel_by_bsm: Dict[str, Any],
     zone_changes: List[ParcelChange],
     diagnostics: List[Dict[str, Any]],
+    task_statuses: Dict[str, str],
 ) -> List[Dict[str, Any]]:
     """MIP-allocate parcels for zone targets with no candidate_bsms.
 
@@ -86,20 +88,26 @@ def _allocate_empty_zone_targets(
         solution = allocator.allocate(targets, candidates, constraints=None, metadata=metadata)
     except Exception as e:  # pragma: no cover - defensive
         for zone_target in empty_targets:
+            target_id = str(getattr(zone_target, "target_id", "") or "")
+            task_statuses[target_id] = "failed"
             unresolved.append({
                 "code": "design_unresolved",
                 "kind": "zone_allocation_error",
                 "target": _zone_target_key(zone_target),
+                "target_id": target_id,
                 "message": str(e),
             })
         return unresolved
 
     if not getattr(solution, "feasible", False):
         for zone_target in empty_targets:
+            target_id = str(getattr(zone_target, "target_id", "") or "")
+            task_statuses[target_id] = "failed"
             unresolved.append({
                 "code": "design_unresolved",
                 "kind": "zone_allocation_infeasible",
                 "target": _zone_target_key(zone_target),
+                "target_id": target_id,
                 "diagnostics": list(getattr(solution, "diagnostics", None) or []),
             })
         return unresolved
@@ -107,6 +115,7 @@ def _allocate_empty_zone_targets(
     from app.agent.execute.land_design_worker import design_zone_parcel
 
     for zone_target in empty_targets:
+        target_id = str(getattr(zone_target, "target_id", "") or "")
         key = _zone_target_key(zone_target)
         assigned_bsms = [
             entry.bsm
@@ -114,15 +123,19 @@ def _allocate_empty_zone_targets(
             if entry.zone_id == key
         ]
         if not assigned_bsms:
+            task_statuses[target_id] = "failed"
             unresolved.append({
                 "code": "design_unresolved",
                 "kind": "zone_allocation_empty",
                 "target": key,
+                "target_id": target_id,
                 "message": "Allocator returned no assignments for zone.",
             })
             continue
         allocated_target = zone_target.model_copy(update={"candidate_bsms": assigned_bsms})
-        zone_changes.extend(design_zone_parcel(allocated_target, parcel_by_bsm))
+        changes = design_zone_parcel(allocated_target, parcel_by_bsm)
+        zone_changes.extend(changes)
+        task_statuses[target_id] = "succeeded" if changes else "failed"
         diagnostics.append({
             "code": "zone_allocated",
             "target": key,
@@ -162,16 +175,28 @@ def _zone_worker(state: ExecuteAgentState) -> WorkerResult:
         )
 
     zone_changes: List[ParcelChange] = []
+    task_statuses: Dict[str, str] = {}
     empty_targets = []
     for zone_target in zone_targets:
         if not getattr(zone_target, "candidate_bsms", None):
             empty_targets.append(zone_target)
             continue
-        zone_changes.extend(design_zone_parcel(zone_target, parcel_by_bsm))
+        changes = design_zone_parcel(zone_target, parcel_by_bsm)
+        zone_changes.extend(changes)
+        task_statuses[str(getattr(zone_target, "target_id", "") or "")] = (
+            "succeeded" if changes else "failed"
+        )
+        if not changes:
+            unresolved.append({
+                "code": "zone_output_empty",
+                "target_id": getattr(zone_target, "target_id", ""),
+                "message": "Zone target produced no parcel changes.",
+            })
 
     unresolved.extend(
         _allocate_empty_zone_targets(
             state, empty_targets, parcel_by_bsm, zone_changes, diagnostics
+            , task_statuses
         )
     )
 
@@ -195,6 +220,20 @@ def _zone_worker(state: ExecuteAgentState) -> WorkerResult:
 
     return WorkerResult(
         worker_type="zone",
+        task_results=[
+            result
+            for zone_target in zone_targets
+            if (result := _task_execution_result(
+                state,
+                "parcel_transformation",
+                zone_target.target_id,
+                status=task_statuses.get(zone_target.target_id, "failed"),
+                diagnostics=[
+                    item for item in unresolved
+                    if item.get("target_id") == zone_target.target_id
+                ],
+            )) is not None
+        ],
         layers=layers,
         parcel_changes=zone_changes,
         unresolved_items=unresolved,

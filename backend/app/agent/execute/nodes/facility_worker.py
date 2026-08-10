@@ -6,7 +6,7 @@ from typing import List
 
 from app.agent.execute.execute_state import ExecuteAgentState
 from app.agent.execute.nodes.common import _execution_error
-from app.agent.execute.nodes.worker_common import _execution_intent_from_plan, _resolve_parcel_by_bsm, _task_enabled
+from app.agent.execute.nodes.worker_common import _execution_intent_from_plan, _resolve_parcel_by_bsm, _task_enabled, _task_execution_result
 from app.modules.schema.contracts.execution_plan_contracts import WorkerResult
 from app.modules.schema.contracts.parcel_change_contracts import ParcelChange
 from app.utils.logger import get_logger
@@ -30,6 +30,7 @@ def _facility_worker(state: ExecuteAgentState) -> WorkerResult:
     parcel_by_bsm = _resolve_parcel_by_bsm(state)
     features = []
     changes: List[ParcelChange] = []
+    task_results = []
     for facility in facilities:
         change = design_facility_parcel(facility, parcel_by_bsm, None)
         if change is None:
@@ -37,6 +38,15 @@ def _facility_worker(state: ExecuteAgentState) -> WorkerResult:
                 "[EXECUTE:facility] skipped %s (no anchor_point)",
                 getattr(facility, "type", ""),
             )
+            task_result = _task_execution_result(
+                state,
+                "facility_placement",
+                facility.target_id,
+                status="failed",
+                diagnostics=[{"code": "facility_anchor_missing", "target_id": facility.target_id}],
+            )
+            if task_result is not None:
+                task_results.append(task_result)
             continue
         changes.append(change)
         geometry = {}
@@ -53,6 +63,14 @@ def _facility_worker(state: ExecuteAgentState) -> WorkerResult:
             },
             "geometry": geometry,
         })
+        task_result = _task_execution_result(
+            state,
+            "facility_placement",
+            facility.target_id,
+            status="succeeded",
+        )
+        if task_result is not None:
+            task_results.append(task_result)
 
     layers = []
     if features:
@@ -69,6 +87,7 @@ def _facility_worker(state: ExecuteAgentState) -> WorkerResult:
         })
     return WorkerResult(
         worker_type="facility",
+        task_results=task_results,
         layers=layers,
         parcel_changes=changes,
         unresolved_items=unresolved,

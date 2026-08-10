@@ -7,7 +7,7 @@ from typing import Any, Dict
 from app.agent.execute.execute_state import ExecuteAgentState
 from app.agent.execute.nodes.common import _execution_error
 from app.agent.execute.nodes.constraints import _apply_constraint_adjustments
-from app.agent.execute.nodes.worker_common import _build_parcel_by_bsm, _execution_intent_from_plan, _intent_list, _plan_tasks
+from app.agent.execute.nodes.worker_common import _build_parcel_by_bsm, _execution_intent_from_plan, _intent_list, _plan_tasks, worker_route_key
 from app.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -26,20 +26,14 @@ async def _route_tasks_node(state: ExecuteAgentState) -> dict:
         return _execution_error(state, "route", "missing_execution_plan", "EXECUTE requires an ExecutionPlan.")
     tasks = []
     defer_road = os.getenv("GIS_DEFER_ROAD", "").strip().lower() in {"1", "true", "yes"}
-    worker_types = {str(getattr(task.worker_type, "value", task.worker_type)) for task in plan_tasks}
-    if "project_footprint" in worker_types:
-        tasks.append("project")
-    if "parcel_transformation" in worker_types:
-        tasks.append("layout")
-    if "facility_placement" in worker_types:
-        tasks.append("facility")
-    if "axis_construction" in worker_types:
-        tasks.append("axis")
-    if "non_spatial_action" in worker_types:
-        tasks.append("action")
-    if "road_construction" in worker_types and not defer_road:
+    worker_types = {getattr(task, "worker_type", "") for task in plan_tasks}
+    route_keys = {worker_route_key(worker_type) for worker_type in worker_types}
+    for route_key in ("project", "layout", "facility", "axis", "action"):
+        if route_key in route_keys:
+            tasks.append(route_key)
+    if "road" in route_keys and not defer_road:
         tasks.append("road")
-    elif "road_construction" in worker_types and defer_road:
+    elif "road" in route_keys and defer_road:
         logger.warning("[EXECUTE] road task deferred by GIS_DEFER_ROAD")
     logger.info("[EXECUTE] tasks routed: %s", tasks)
     result = {"tasks_to_run": tasks}

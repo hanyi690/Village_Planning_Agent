@@ -69,10 +69,12 @@ def build_intent_layer(kg, intent: Any) -> None:
     # ── Project targets (parents of facility/road/zone execution targets) ──
     project_uris = {}
     for project in intent.project_targets:
-        p_uri = EntityIdPolicy.uri("project_target", project.project_id)
+        target_id = project.target_id
+        p_uri = EntityIdPolicy.uri("project_target", target_id)
+        project_uris[target_id] = p_uri
         project_uris[project.project_id] = p_uri
         kg.g.add((p_uri, RDF.type, EntityTypes.ProjectTarget))
-        kg.g.add((p_uri, PLN.target_id, Literal(project.project_id)))
+        kg.g.add((p_uri, PLN.target_id, Literal(target_id)))
         kg.g.add((p_uri, PLN.name, Literal(project.name)))
         kg.g.add((p_uri, PLN.project_category, Literal(project.category)))
         kg.g.add((p_uri, PLN.operation, Literal(project.action)))
@@ -107,7 +109,7 @@ def build_intent_layer(kg, intent: Any) -> None:
 
     # ── Zone targets ──
     for zt in intent.zone_targets:
-        target_id = zt.zone_id or zt.land_use or f"idx{zc}"
+        target_id = zt.target_id
         z_uri = EntityIdPolicy.uri("zone_target", target_id)
         kg.g.add((z_uri, RDF.type, EntityTypes.ZoneTarget))
         kg.g.add((z_uri, PLN.target_id, Literal(target_id)))
@@ -160,7 +162,7 @@ def build_intent_layer(kg, intent: Any) -> None:
 
     # ── Facility targets ──
     for ft in intent.facilities:
-        target_id = ft.source_instruction_id or ft.type or f"idx{fc}"
+        target_id = ft.target_id
         f_uri = EntityIdPolicy.uri("facility_target", target_id)
         kg.g.add((f_uri, RDF.type, EntityTypes.FacilityTarget))
         kg.g.add((f_uri, PLN.target_id, Literal(target_id)))
@@ -201,7 +203,7 @@ def build_intent_layer(kg, intent: Any) -> None:
 
     # ── Development axes ──
     for ax in intent.development_axes:
-        target_id = ax.source_instruction_id or ax.reference_feature or f"idx{ac}"
+        target_id = ax.target_id
         a_uri = EntityIdPolicy.uri("axis_target", target_id)
         kg.g.add((a_uri, RDF.type, EntityTypes.AxisTarget))
         kg.g.add((a_uri, PLN.target_id, Literal(target_id)))
@@ -239,7 +241,7 @@ def build_intent_layer(kg, intent: Any) -> None:
 
     # ── Road targets (NEW — fills road sub-task gap) ──
     for rt in intent.road_targets:
-        target_id = rt.source_instruction_id or rt.source_project_id or rt.road_level or f"idx{rc}"
+        target_id = rt.target_id
         r_uri = EntityIdPolicy.uri("road_target", target_id)
         kg.g.add((r_uri, RDF.type, EntityTypes.RoadTarget))
         kg.g.add((r_uri, PLN.target_id, Literal(target_id)))

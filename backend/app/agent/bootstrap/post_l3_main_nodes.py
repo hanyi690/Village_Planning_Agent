@@ -506,14 +506,7 @@ def _execution_outcome_from_result(execution_plan: Any, result: Dict[str, Any]) 
     """Classify each planned task from the actual worker dispatch and output."""
     from app.modules.schema.contracts.execution_plan_contracts import ExecutionOutcome, ExecutionResult
 
-    worker_name = {
-        "project_footprint": "project",
-        "parcel_transformation": "zone",
-        "facility_placement": "facility",
-        "axis_construction": "axis",
-        "road_construction": "road",
-        "non_spatial_action": "action",
-    }
+    from app.agent.execute.nodes.worker_common import worker_result_key, worker_route_key
     action_results = list(result.get("action_results", []) or [])
     action_target_ids = {
         str(getattr(item, "target_id", "") or (item.get("target_id") if isinstance(item, dict) else ""))
@@ -529,41 +522,49 @@ def _execution_outcome_from_result(execution_plan: Any, result: Dict[str, Any]) 
         output_kind = getattr(task, "expected_output_kind", "parcel")
         task_worker_type = getattr(task, "worker_type", "")
         task_worker_type = str(getattr(task_worker_type, "value", task_worker_type))
-        stage = worker_name.get(task_worker_type, getattr(task, "target_type", ""))
+        stage = worker_route_key(task_worker_type)
+        result_key = worker_result_key(task_worker_type)
         matching_results = [
             worker for worker in worker_results
-            if str(getattr(worker, "worker_type", "") if not isinstance(worker, dict) else worker.get("worker_type", "")) == stage
+            if str(getattr(worker, "worker_type", "") if not isinstance(worker, dict) else worker.get("worker_type", "")) == result_key
         ]
-        unresolved = [
+        task_records = [
             item
             for worker in matching_results
-            for item in (getattr(worker, "unresolved_items", []) if not isinstance(worker, dict) else worker.get("unresolved_items", [])) or []
+            for item in (getattr(worker, "task_results", []) if not isinstance(worker, dict) else worker.get("task_results", [])) or []
+            if str(getattr(item, "task_id", "") if not isinstance(item, dict) else item.get("task_id", "")) == task_id
         ]
         task_errors = [
             item for item in errors
             if str(item.get("stage", "") if isinstance(item, dict) else "") in {stage, task_worker_type, target_id}
         ]
-        diagnostics = [item for item in unresolved + task_errors if isinstance(item, dict)]
+        diagnostics = [item for item in task_errors if isinstance(item, dict)]
         failed = False
         if isinstance(routed_tasks, list) and stage not in routed_tasks:
             diagnostics.append({"code": "worker_not_dispatched", "stage": stage})
             failed = True
-        elif output_kind == "action":
-            failed = target_id not in action_target_ids
-            if failed:
+        elif not task_records:
+            diagnostics.append({"code": "task_result_missing", "task_id": task_id})
+            failed = True
+        else:
+            task_record = task_records[-1]
+            record_status = getattr(task_record, "status", "failed") if not isinstance(task_record, dict) else task_record.get("status", "failed")
+            record_diagnostics = getattr(task_record, "diagnostics", []) if not isinstance(task_record, dict) else task_record.get("diagnostics", [])
+            diagnostics.extend(item for item in (record_diagnostics or []) if isinstance(item, dict))
+            failed = record_status != "succeeded" or bool(task_errors)
+            if output_kind == "action" and target_id not in action_target_ids:
                 diagnostics.append({"code": "action_result_missing", "target_id": target_id})
-        elif not matching_results:
-            diagnostics.append({"code": "worker_result_missing", "stage": stage})
-            failed = True
-        elif unresolved or task_errors:
-            failed = True
+                failed = True
         task_results.append(ExecutionResult(
             task_id=task_id,
             target_id=target_id,
             status="failed" if failed else "succeeded",
             expected_output_kind=output_kind,
             output_artifacts=[] if failed else [output_kind],
-            errors=[str(item) for item in task_errors],
+            errors=[str(item) for item in task_errors] + (
+                list(getattr(task_records[-1], "errors", []) if not isinstance(task_records[-1], dict) else task_records[-1].get("errors", []))
+                if task_records else []
+            ),
             diagnostics=diagnostics,
         ))
     for task in list(getattr(execution_plan, "deferred_tasks", None) or []):

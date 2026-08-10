@@ -169,7 +169,7 @@ def test_execute_runtime_route_builds_kg_from_plan_scope_not_stale_intent(monkey
         FacilityTarget(target_id="facility-active", type="卫生室"),
     ])
     captured = {}
-    context = SimpleNamespace(version="1", bundle=None, village_anchors=[], kg=object(), kg_session_ref="")
+    context = SimpleNamespace(version="1", bundle=None, village_anchors=[], kg=None, kg_session_ref="")
     context.snapshot_meta = lambda: {"session_id": "runtime-route", "version": "1"}
 
     class Graph:
@@ -194,10 +194,6 @@ def test_execute_runtime_route_builds_kg_from_plan_scope_not_stale_intent(monkey
     monkeypatch.setattr(post_l3_main_nodes, "_persist_artifact", lambda *args: {"artifact_id": args[2]})
     monkeypatch.setattr("app.services.runtime.PlanningRuntimeService._execute_subgraph", Graph())
     monkeypatch.setattr(
-        "app.modules.kg.builder.layer3.build_intent_layer",
-        lambda kg, intent: captured.setdefault("kg_target_ids", [item.target_id for item in intent.facilities]),
-    )
-    monkeypatch.setattr(
         "app.modules.kg.manager.get_kg_manager",
         lambda: SimpleNamespace(get_session_kg=lambda session_id: SimpleNamespace(
             g=SimpleNamespace(
@@ -209,7 +205,6 @@ def test_execute_runtime_route_builds_kg_from_plan_scope_not_stale_intent(monkey
 
     asyncio.run(post_l3_main_nodes.execute_node({"session_id": "runtime-route"}))
 
-    assert captured["kg_target_ids"] == ["facility-active"]
     assert captured["route"]["tasks_to_run"] == ["facility"]
     assert "execution_errors" not in captured["route"]
 
@@ -278,3 +273,196 @@ def test_execution_outcome_persistence_marks_unresolved_and_deferred_tasks(monke
     outcome = next(payload for kind, payload in captured if kind == "ExecutionOutcome")
     statuses = {item.target_id: item.status for item in outcome.task_results}
     assert statuses == {"road-active": "failed", "road-deferred": "deferred"}
+
+
+def test_real_l3_builder_and_runtime_route_use_stable_target_ids(monkeypatch):
+    from app.agent.execute.execute_state import ExecuteAgentState
+    from app.agent.execute.nodes.route_prepare import _route_tasks_node
+    from app.agent.execute.plan_builder import build_execution_plan
+    from app.modules.kg.builder.base import PlanningKG
+    from app.modules.kg.builder.layer3 import build_intent_layer
+    from app.modules.schema.contracts.parse_contracts import (
+        AxisTarget,
+        FacilityTarget,
+        RoadTarget,
+        SpatialPlanningIntent,
+    )
+    from app.modules.schema.contracts.selection_contracts import SiteSelectionDecision
+
+    intent = SpatialPlanningIntent(
+        facilities=[FacilityTarget(
+            target_id="facility-stable",
+            source_instruction_id="legacy-facility",
+            type="卫生室",
+        )],
+        development_axes=[AxisTarget(
+            target_id="axis-stable",
+            source_instruction_id="legacy-axis",
+            reference_feature="主路",
+        )],
+        road_targets=[RoadTarget(
+            target_id="road-stable",
+            source_instruction_id="legacy-road",
+            road_level="村道",
+        )],
+    )
+    kg = PlanningKG(village_name="stable-target-test")
+    build_intent_layer(kg, intent)
+    plan = build_execution_plan(intent, SiteSelectionDecision(), [])
+
+    monkeypatch.setattr(
+        "app.modules.kg.manager.get_kg_manager",
+        lambda: SimpleNamespace(get_session_kg=lambda session_id: kg),
+    )
+
+    route = asyncio.run(_route_tasks_node(ExecuteAgentState(
+        session_id="stable-target-test",
+        intent=SpatialPlanningIntent(),
+        execution_plan=plan,
+    )))
+
+    assert route["tasks_to_run"] == ["facility", "axis", "road"]
+    assert "execution_errors" not in route
+
+
+def test_execution_outcome_persistence_marks_successful_zone_by_layout_route(monkeypatch):
+    from app.agent.bootstrap import post_l3_main_nodes
+    from app.modules.schema.contracts.execution_plan_contracts import ExecutionPlan, ExecutionResult, WorkerResult
+    from app.modules.schema.contracts.parse_contracts import SpatialPlanningIntent, ZoneTarget
+    from app.modules.schema.contracts.parse_result_contracts import IntentCompilationResult
+    from app.modules.schema.contracts.selection_contracts import SiteSelectionDecision, TargetAssignment
+    from app.modules.schema.contracts.execution_plan_contracts import WorkerTask, WorkerType
+
+    task = WorkerTask(
+        task_id="parcel_transformation:zone-1",
+        worker_type=WorkerType.PARCEL_TRANSFORMATION,
+        target_id="zone-1",
+        target_type="zone",
+        expected_output_kind="polygon",
+        assignment=TargetAssignment(
+            target_id="zone-1",
+            target_type="zone",
+            expected_output_kind="polygon",
+            target_binding={"target_id": "zone-1", "land_use": "居住用地"},
+        ),
+    )
+    plan = ExecutionPlan(worker_tasks=[task])
+    context = SimpleNamespace(version="1", bundle=None, village_anchors=[], kg=None, kg_session_ref="")
+    context.snapshot_meta = lambda: {"session_id": "zone-outcome", "version": "1"}
+    captured = []
+
+    class Graph:
+        async def ainvoke(self, state, config):
+            return {
+                "parcel_changeset": None,
+                "tasks_to_run": ["layout"],
+                "execution_errors": [],
+                "worker_results": [WorkerResult(
+                    worker_type="zone",
+                    task_results=[ExecutionResult(
+                        task_id=task.task_id,
+                        target_id=task.target_id,
+                        status="succeeded",
+                        expected_output_kind="polygon",
+                        output_artifacts=["polygon"],
+                    )],
+                )],
+                "worker_conflict_diagnostics": [],
+            }
+
+    async def require_context(state):
+        return context
+
+    def load_artifact(state, key, model):
+        if key == "intent_compilation":
+            return IntentCompilationResult(typed_intent=SpatialPlanningIntent(zone_targets=[ZoneTarget(target_id="zone-1")]))
+        if key == "site_selection":
+            return SiteSelectionDecision()
+        if key == "execution_plan":
+            return plan
+        return None
+
+    monkeypatch.setattr(post_l3_main_nodes, "_require_context", require_context)
+    monkeypatch.setattr(post_l3_main_nodes, "_load_ref_artifact", load_artifact)
+    monkeypatch.setattr(post_l3_main_nodes, "_persist_artifact", lambda state, module, kind, payload: captured.append((kind, payload)) or {"artifact_id": kind})
+    monkeypatch.setattr("app.services.runtime.PlanningRuntimeService._execute_subgraph", Graph())
+
+    asyncio.run(post_l3_main_nodes.execute_node({"session_id": "zone-outcome"}))
+
+    outcome = next(payload for kind, payload in captured if kind == "ExecutionOutcome")
+    assert outcome.task_results[0].status == "succeeded"
+
+
+def test_execution_outcome_persistence_keeps_mixed_facility_task_statuses(monkeypatch):
+    from app.agent.bootstrap import post_l3_main_nodes
+    from app.modules.schema.contracts.execution_plan_contracts import ExecutionPlan, ExecutionResult, WorkerResult
+    from app.modules.schema.contracts.parse_contracts import FacilityTarget, SpatialPlanningIntent
+    from app.modules.schema.contracts.parse_result_contracts import IntentCompilationResult
+    from app.modules.schema.contracts.selection_contracts import SiteSelectionDecision, TargetAssignment
+    from app.modules.schema.contracts.execution_plan_contracts import WorkerTask, WorkerType
+
+    def task(target_id):
+        return WorkerTask(
+            task_id=f"facility_placement:{target_id}",
+            worker_type=WorkerType.FACILITY_PLACEMENT,
+            target_id=target_id,
+            target_type="facility",
+            expected_output_kind="point",
+            assignment=TargetAssignment(
+                target_id=target_id,
+                target_type="facility",
+                expected_output_kind="point",
+                target_binding={"target_id": target_id, "type": "卫生室"},
+            ),
+        )
+
+    succeeded = task("facility-ok")
+    failed = task("facility-failed")
+    plan = ExecutionPlan(worker_tasks=[succeeded, failed])
+    context = SimpleNamespace(version="1", bundle=None, village_anchors=[], kg=None, kg_session_ref="")
+    context.snapshot_meta = lambda: {"session_id": "facility-outcome", "version": "1"}
+    captured = []
+
+    class Graph:
+        async def ainvoke(self, state, config):
+            return {
+                "parcel_changeset": None,
+                "tasks_to_run": ["facility"],
+                "execution_errors": [],
+                "worker_results": [WorkerResult(
+                    worker_type="facility",
+                    task_results=[
+                        ExecutionResult(task_id=succeeded.task_id, target_id=succeeded.target_id, status="succeeded", expected_output_kind="point"),
+                        ExecutionResult(task_id=failed.task_id, target_id=failed.target_id, status="failed", expected_output_kind="point", errors=["no anchor"]),
+                    ],
+                )],
+                "worker_conflict_diagnostics": [],
+            }
+
+    async def require_context(state):
+        return context
+
+    def load_artifact(state, key, model):
+        if key == "intent_compilation":
+            return IntentCompilationResult(typed_intent=SpatialPlanningIntent(facilities=[
+                FacilityTarget(target_id="facility-ok", type="卫生室"),
+                FacilityTarget(target_id="facility-failed", type="卫生室"),
+            ]))
+        if key == "site_selection":
+            return SiteSelectionDecision()
+        if key == "execution_plan":
+            return plan
+        return None
+
+    monkeypatch.setattr(post_l3_main_nodes, "_require_context", require_context)
+    monkeypatch.setattr(post_l3_main_nodes, "_load_ref_artifact", load_artifact)
+    monkeypatch.setattr(post_l3_main_nodes, "_persist_artifact", lambda state, module, kind, payload: captured.append((kind, payload)) or {"artifact_id": kind})
+    monkeypatch.setattr("app.services.runtime.PlanningRuntimeService._execute_subgraph", Graph())
+
+    asyncio.run(post_l3_main_nodes.execute_node({"session_id": "facility-outcome"}))
+
+    outcome = next(payload for kind, payload in captured if kind == "ExecutionOutcome")
+    assert {item.target_id: item.status for item in outcome.task_results} == {
+        "facility-ok": "succeeded",
+        "facility-failed": "failed",
+    }

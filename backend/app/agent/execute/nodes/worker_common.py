@@ -7,6 +7,39 @@ from typing import Any, Dict, Iterable, List
 from app.agent.execute.execute_state import ExecuteAgentState
 
 
+WORKER_ROUTE_KEYS = {
+    "project_footprint": "project",
+    "parcel_transformation": "layout",
+    "facility_placement": "facility",
+    "axis_construction": "axis",
+    "road_construction": "road",
+    "non_spatial_action": "action",
+}
+
+WORKER_RESULT_KEYS = {
+    "project_footprint": "project",
+    "parcel_transformation": "zone",
+    "facility_placement": "facility",
+    "axis_construction": "axis",
+    "road_construction": "road",
+    "non_spatial_action": "action",
+}
+
+
+def _worker_type_value(worker_type: Any) -> str:
+    return str(getattr(worker_type, "value", worker_type))
+
+
+def worker_route_key(worker_type: Any) -> str:
+    """Canonical EXECUTE route key for a WorkerType or its serialized value."""
+    return WORKER_ROUTE_KEYS.get(_worker_type_value(worker_type), "")
+
+
+def worker_result_key(worker_type: Any) -> str:
+    """Canonical WorkerResult label for a WorkerType or serialized value."""
+    return WORKER_RESULT_KEYS.get(_worker_type_value(worker_type), "")
+
+
 def _task_value(task: Any, name: str, default: Any = None) -> Any:
     return task.get(name, default) if isinstance(task, dict) else getattr(task, name, default)
 
@@ -20,8 +53,41 @@ def _plan_tasks(state: ExecuteAgentState, worker_types: Iterable[str] | None = N
     allowed = {str(item) for item in worker_types}
     return [
         task for task in tasks
-        if str(_task_value(task, "worker_type", "").value if hasattr(_task_value(task, "worker_type", ""), "value") else _task_value(task, "worker_type", "")) in allowed
+        if _worker_type_value(_task_value(task, "worker_type", "")) in allowed
     ]
+
+
+def _task_execution_result(
+    state: ExecuteAgentState,
+    worker_type: str,
+    target_id: str,
+    *,
+    status: str,
+    diagnostics: list[dict] | None = None,
+    errors: list[str] | None = None,
+) -> Any:
+    """Build target-specific worker evidence for one plan task."""
+    from app.modules.schema.contracts.execution_plan_contracts import ExecutionResult
+
+    task = next(
+        (
+            item for item in _plan_tasks(state, {worker_type})
+            if str(_task_value(item, "target_id", "")) == str(target_id)
+        ),
+        None,
+    )
+    if task is None:
+        return None
+    output_kind = _task_value(task, "expected_output_kind", "parcel")
+    return ExecutionResult(
+        task_id=str(_task_value(task, "task_id", "")),
+        target_id=str(target_id),
+        status=status,
+        expected_output_kind=output_kind,
+        output_artifacts=[output_kind] if status == "succeeded" else [],
+        diagnostics=list(diagnostics or []),
+        errors=list(errors or []),
+    )
 
 
 def _execution_intent_from_plan(state: ExecuteAgentState) -> Any:

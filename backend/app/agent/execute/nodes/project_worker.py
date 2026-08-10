@@ -13,6 +13,7 @@ from app.agent.execute.nodes.worker_common import (
     _parcel_geometry,
     _resolve_parcel_by_bsm,
     _task_enabled,
+    _task_execution_result,
 )
 from app.modules.schema.contracts.execution_plan_contracts import TypedActionResult, WorkerResult
 from app.modules.schema.contracts.parcel_change_contracts import ParcelChange
@@ -57,6 +58,7 @@ def _project_worker(state: ExecuteAgentState) -> WorkerResult:
     }
     features = []
     changes: List[ParcelChange] = []
+    completed_target_ids = set()
     action_results = [
         TypedActionResult(
             target_id=project.target_id,
@@ -83,6 +85,7 @@ def _project_worker(state: ExecuteAgentState) -> WorkerResult:
         if not change_list:
             continue
         changes.extend(change_list)
+        completed_target_ids.add(target_id)
         primary = change_list[0]
         props = {
             "project_id": project.target_id,
@@ -118,8 +121,23 @@ def _project_worker(state: ExecuteAgentState) -> WorkerResult:
             "code": "project_output_empty",
             "message": "Project targets exist but none could be placed on a constraint-safe candidate parcel.",
         })
+    task_results = []
+    for project in projects:
+        task_result = _task_execution_result(
+            state,
+            "project_footprint",
+            project.target_id,
+            status="succeeded" if project.target_id in completed_target_ids else "failed",
+            diagnostics=[] if project.target_id in completed_target_ids else [{
+                "code": "project_output_missing",
+                "target_id": project.target_id,
+            }],
+        )
+        if task_result is not None:
+            task_results.append(task_result)
     return WorkerResult(
         worker_type="project",
+        task_results=task_results,
         layers=layers,
         parcel_changes=changes,
         action_results=action_results,

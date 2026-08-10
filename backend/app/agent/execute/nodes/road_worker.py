@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Any, Dict, List
 
 from app.agent.execute.execute_state import ExecuteAgentState
-from app.agent.execute.nodes.worker_common import _execution_intent_from_plan, _intent_list, _task_enabled
+from app.agent.execute.nodes.worker_common import _execution_intent_from_plan, _intent_list, _task_enabled, _task_execution_result
 from app.modules.schema.contracts.execution_plan_contracts import WorkerResult
 from app.utils.logger import get_logger
 
@@ -28,6 +28,19 @@ def _road_worker(state: ExecuteAgentState) -> WorkerResult:
     intent = _execution_intent_from_plan(state)
     road_targets = _intent_list(intent, "road_targets")
 
+    def task_results(status: str, diagnostics: list[dict] | None = None):
+        return [
+            result
+            for road in road_targets
+            if (result := _task_execution_result(
+                state,
+                "road_construction",
+                road.target_id,
+                status=status,
+                diagnostics=diagnostics,
+            )) is not None
+        ]
+
     ports = getattr(state, "ports", None)
     planner = getattr(ports, "road_planner", None) if ports is not None else None
     if planner is not None:
@@ -36,6 +49,7 @@ def _road_worker(state: ExecuteAgentState) -> WorkerResult:
                 plan_result = planner.plan(state)
                 return WorkerResult(
                     worker_type="road",
+                    task_results=task_results("succeeded"),
                     layers=list(getattr(plan_result, "layers", None) or []),
                     unresolved_items=list(getattr(plan_result, "unresolved_items", None) or []),
                     diagnostics=[{"code": "road_planner_port", "available": True}],
@@ -71,6 +85,7 @@ def _road_worker(state: ExecuteAgentState) -> WorkerResult:
             )
             return WorkerResult(
                 worker_type="road",
+                task_results=task_results("succeeded"),
                 layers=list(layers),
                 diagnostics=[{"code": "road_stage_generator", "ran": bool(result.get("ran"))}],
             )
@@ -83,6 +98,10 @@ def _road_worker(state: ExecuteAgentState) -> WorkerResult:
     logger.warning("[EXECUTE:road] no usable road plan produced; road worker unresolved")
     return WorkerResult(
         worker_type="road",
+        task_results=task_results("failed", [{
+            "code": "road_unresolved",
+            "message": "No road plan produced: stage generator unavailable or failed.",
+        }]),
         unresolved_items=[{
             "code": "road_unresolved",
             "message": "No road plan produced: stage generator unavailable or failed.",
