@@ -661,7 +661,7 @@ def resolve_spatial_description(
     logger.info("[grounding:resolve] desc='%s' type=%s", desc, dtype)
 
     if dtype == "toponym":
-        return _resolve_toponym(desc, gazetteer, parcels)
+        return _resolve_toponym(desc, gazetteer, parcels, evidence_index)
     if dtype == "directional":
         return _resolve_directional(desc, parcels)
     if dtype in ("linear_road", "linear_water"):
@@ -683,9 +683,30 @@ def _default_gazetteer(bundle: Any):
 
 
 def _resolve_toponym(
-    desc: str, gazetteer: Any, parcels: list,
+    desc: str, gazetteer: Any, parcels: list, evidence_index: Any = None,
 ) -> ResolvedSpatialDescription:
     """地名 → gazetteer entry → entry.bsms（P0 多源坐标 + 组合名条目）。"""
+    if evidence_index is not None:
+        try:
+            resolved = evidence_index.resolve_mention(desc)
+            if resolved.status == "resolved" and resolved.candidates:
+                candidate = resolved.candidates[0]
+                if candidate.source_bsms:
+                    return ResolvedSpatialDescription(
+                        candidate_bsms=list(candidate.source_bsms), evidence_text=desc,
+                        query_path="evidence:typed_spatial_fact", confidence=candidate.score,
+                    )
+                # A real typed fact without parcel linkage is an unresolved
+                # breakpoint, not permission to substitute the village center.
+                if candidate.geometry_ref:
+                    return ResolvedSpatialDescription(
+                        evidence_text=desc,
+                        query_path="evidence:typed_spatial_fact",
+                        confidence=candidate.score,
+                        unresolved_reason="typed spatial fact has geometry but no parcel linkage",
+                    )
+        except Exception as exc:
+            logger.debug("[grounding:toponym] evidence query failed: %s", exc)
     if gazetteer is None:
         return ResolvedSpatialDescription(evidence_text=desc,
                                           unresolved_reason="no gazetteer")
@@ -817,7 +838,7 @@ def _resolve_compound(
         # 方向解析失败，退回地名
         for kw in _DIRECTION_KEYWORDS:
             desc = desc.replace(kw, "靠近")
-        return _resolve_toponym(desc, gazetteer, parcels)
+        return _resolve_toponym(desc, gazetteer, parcels, evidence_index)
     # 地名部分：取包含的村名
     village_name = _extract_toponym(desc)
     if village_name and gazetteer is not None:

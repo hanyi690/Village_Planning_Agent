@@ -124,6 +124,7 @@ class PlaceEvidenceIndex:
                 if coords and len(coords) >= 2:
                     geometry_ref = f"POINT({coords[0]} {coords[1]})"
             role = "facility" if category == "现状设施点" else "landmark"
+            source_bsms = self._poi_source_bsms(geom)
             self._add_entry(
                 PlaceEvidenceEntry(
                     canonical_name=text,
@@ -131,12 +132,30 @@ class PlaceEvidenceIndex:
                     entity_refs=[f"poi:{text}"],
                     entity_types=[role],
                     role=role,
-                    source_bsms=[],
+                    source_bsms=source_bsms,
                     geometry_ref=geometry_ref,
                     provenance=["poi"],
                     confidence=0.5,
                 )
             )
+
+    def _poi_source_bsms(self, geometry: Any) -> List[str]:
+        """Bind an uploaded point to nearby real parcels, without fabrication."""
+        if not isinstance(geometry, dict):
+            return []
+        coords = geometry.get("coordinates")
+        if not coords or len(coords) < 2:
+            return []
+        try:
+            from app.modules.spatial_ops.grounding.grounding import query_parcels_near_entity
+
+            return query_parcels_near_entity(
+                self.context.bundle_parcels(),
+                (float(coords[0]), float(coords[1])),
+                max_distance_m=500,
+            )
+        except Exception:
+            return []
 
     def _register_kg_names(self, kg: Any) -> None:
         graph = getattr(kg, "graph", None)
@@ -180,9 +199,21 @@ class PlaceEvidenceIndex:
         return None
 
     def _add_entry(self, entry: PlaceEvidenceEntry) -> None:
-        self.entries.append(entry)
         key = _normalize(entry.canonical_name)
-        self._by_canonical.setdefault(key, entry)
+        existing = self._by_canonical.get(key)
+        if existing is not None:
+            existing.aliases = list(dict.fromkeys([*existing.aliases, *entry.aliases]))
+            existing.entity_refs = list(dict.fromkeys([*existing.entity_refs, *entry.entity_refs]))
+            existing.entity_types = list(dict.fromkeys([*existing.entity_types, *entry.entity_types]))
+            existing.source_bsms = list(dict.fromkeys([*existing.source_bsms, *entry.source_bsms]))
+            existing.provenance = list(dict.fromkeys([*existing.provenance, *entry.provenance]))
+            if not existing.geometry_ref and entry.geometry_ref:
+                existing.geometry_ref = entry.geometry_ref
+            existing.confidence = max(existing.confidence, entry.confidence)
+            entry = existing
+        else:
+            self.entries.append(entry)
+            self._by_canonical[key] = entry
         for alias in entry.aliases:
             self._by_alias.setdefault(_normalize(alias), entry)
 
