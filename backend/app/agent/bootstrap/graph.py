@@ -189,7 +189,9 @@ def route_after_human_review(state: Dict[str, Any]) -> str:
             and isinstance(decisions, dict)
             and decisions.get("defer_unresolved_spatial_references") is True
         ):
-            return "select"
+            if post_l3_main_nodes._gate_route(state.get("ground_gate")) == "PASS":
+                return "select"
+            return "human_review"
         if paused_stage and paused_stage in _STAGE_FORWARD_TARGET:
             target = _STAGE_FORWARD_TARGET[paused_stage]
             return END if target == "__end__" else target
@@ -447,6 +449,28 @@ async def apply_human_review_decision(state: Dict[str, Any]) -> Dict[str, Any]:
         )
         if deferral_patch.get("fatal_error"):
             return {**result, **deferral_patch}
+        remaining_target_ids = deferral_patch.get("remaining_target_ids") or []
+        if remaining_target_ids:
+            ground_gate = dict(state.get("ground_gate") or {})
+            ground_gate.update({
+                "stage": "ground",
+                "passed": False,
+                "feedback_route": "HUMAN",
+                "diagnostic_code": "HUMAN_DEFER_SPATIAL_REMAINING",
+                "pending_requests": [{
+                    "request_id": "pr-ground-defer-remaining",
+                    "stage": "ground",
+                    "request_type": "spatial_reference_unresolved",
+                    "context": {"remaining_target_ids": remaining_target_ids},
+                }],
+            })
+            result.update({
+                "ground_gate": ground_gate,
+                "human_deferred_targets": deferred_target_ids,
+            })
+            if deferral_patch.get("artifact_refs"):
+                result["artifact_refs"] = deferral_patch["artifact_refs"]
+            return result
     if action == "retry" and paused_stage:
         configured_limit = state.get("max_retries")
         max_retries = 3 if configured_limit is None else max(0, int(configured_limit))
@@ -590,6 +614,22 @@ async def _record_target_deferrals(
                 "message": "Only currently unresolved target IDs may be deferred: " + ", ".join(unknown_ids),
             }
         }
+    spec_ids_by_target = {
+        str(evidence.target_id): str(evidence.spec_id)
+        for evidence in grounding.spatial_query_evidence
+        if evidence.target_id and evidence.spec_id
+    }
+    missing_spec_ids = [
+        target_id for target_id in target_ids if target_id not in spec_ids_by_target
+    ]
+    if missing_spec_ids:
+        return {
+            "fatal_error": {
+                "stage": "ground",
+                "code": "HUMAN_DEFER_SPEC_LINK_MISSING",
+                "message": "Cannot defer targets without linked GROUND spec IDs: " + ", ".join(missing_spec_ids),
+            }
+        }
     grounding_ref = (state.get("artifact_refs") or {}).get("grounding_result") or {}
     grounding_id = str(grounding_ref.get("artifact_id") or "grounding_result")
     decision = HumanDeferralDecision(
@@ -604,7 +644,7 @@ async def _record_target_deferrals(
                 reason="spatial_reference_unresolved",
                 source_refs=(
                     f"artifact:grounding_result:{grounding_id}",
-                    f"spec:{target_id}",
+                    f"spec:{spec_ids_by_target[target_id]}",
                 ),
                 decision=decision,
             )
@@ -617,6 +657,7 @@ async def _record_target_deferrals(
     return {
         "artifact_refs": {"deferral_ledger": ref},
         "human_deferred_targets": target_ids,
+        "remaining_target_ids": sorted(unresolved_ids - set(target_ids)),
     }
 
 

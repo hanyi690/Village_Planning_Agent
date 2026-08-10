@@ -11,7 +11,7 @@ from app.agent.execute.nodes.worker_common import (
     _resolve_parcel_by_bsm,
     _task_enabled,
 )
-from app.modules.schema.contracts.execution_plan_contracts import WorkerResult
+from app.modules.schema.contracts.execution_plan_contracts import TypedActionResult, WorkerResult
 from app.modules.schema.contracts.parcel_change_contracts import ParcelChange
 from app.utils.logger import get_logger
 
@@ -21,10 +21,8 @@ logger = get_logger(__name__)
 def _project_worker(state: ExecuteAgentState) -> WorkerResult:
     """Project worker: place each L3 project on the SSD-selected parcel.
 
-    Consumes ``SiteSelectionDecision.selected_combination`` (ordered BSM list,
-    paired with land design briefs) and runs ``design_project_footprint``
-    (OBB split) for real project footprints. Returns a ``WorkerResult``; never
-    mutates shared state.
+    Joins selected parcels and design briefs by stable target ID. Non-spatial
+    action targets produce typed action results and never parcel changes.
     """
     from app.agent.execute.land_design_worker import design_project_footprint
 
@@ -33,46 +31,53 @@ def _project_worker(state: ExecuteAgentState) -> WorkerResult:
 
     projects = list(getattr(state.intent, "project_targets", None) or [])
     parcel_by_bsm = _resolve_parcel_by_bsm(state)
-    selected = list(getattr(state.site_selection, "selected_combination", None) or [])
-    if not selected:
-        logger.warning("[EXECUTE:project] SELECT not wired; project worker produces no output")
-        return WorkerResult(
-            worker_type="project",
-            diagnostics=[{
-                "code": "no_selection",
-                "message": "SELECT not wired; no selected parcels for projects.",
-            }],
-        )
-
-    projects_by_id = {
-        getattr(project, "project_id", ""): project for project in projects
+    ranking = list(getattr(state.site_selection, "full_ranking", None) or [])
+    selected_by_target = {
+        str(item.project_ref): str(item.candidate_id)
+        for item in ranking
+        if getattr(item, "project_ref", None) and getattr(item, "candidate_id", None)
+    }
+    projects_by_target = {
+        str(getattr(project, "target_id", "")): project for project in projects
+        if getattr(project, "target_id", "")
     }
     briefs = list(state.land_design_briefs or [])
+    briefs_by_target = {
+        str(brief.project_ref): brief
+        for brief in briefs
+        if getattr(brief, "project_ref", "")
+    }
     features = []
     changes: List[ParcelChange] = []
-    for index, bsm in enumerate(selected):
+    action_results = [
+        TypedActionResult(
+            target_id=project.target_id,
+            action=project.action,
+            details={"name": project.name},
+        )
+        for project in projects
+        if not getattr(project, "requires_spatial", True)
+        or getattr(project, "expected_output_kind", "") == "action"
+    ]
+    for target_id, bsm in selected_by_target.items():
+        project = projects_by_target.get(target_id)
+        if project is None or not getattr(project, "requires_spatial", True):
+            continue
+        if getattr(project, "expected_output_kind", "") == "action":
+            continue
         parcel = parcel_by_bsm.get(str(bsm))
         if parcel is None or not _parcel_geometry(parcel):
             continue
-        project = None
-        brief = briefs[index] if index < len(briefs) else None
-        if brief is not None:
-            project = projects_by_id.get(getattr(brief, "project_ref", ""))
-        if project is None:
+        brief = briefs_by_target.get(target_id)
+        if brief is None:
             continue
-        worker_brief = brief
-        change_list = design_project_footprint(project, worker_brief, str(bsm), parcel_by_bsm)
+        change_list = design_project_footprint(project, brief, str(bsm), parcel_by_bsm)
         if not change_list:
             continue
         changes.extend(change_list)
         primary = change_list[0]
-        project_id = ""
-        if project is not None:
-            project_id = getattr(project, "project_id", "")
-        elif brief is not None:
-            project_id = getattr(brief, "project_ref", "")
         props = {
-            "project_id": project_id,
+            "project_id": project.target_id,
             "project_name": getattr(project, "name", ""),
             "project_category": getattr(project, "category", "other"),
             "action": getattr(project, "action", "new"),
@@ -85,8 +90,7 @@ def _project_worker(state: ExecuteAgentState) -> WorkerResult:
             "geometry_source": "land_design_worker",
             "change_action": primary.action,
         }
-        if brief is not None:
-            props["project_ref"] = getattr(brief, "project_ref", "")
+        props["project_ref"] = target_id
         features.append({
             "type": "Feature",
             "properties": props,
@@ -101,7 +105,7 @@ def _project_worker(state: ExecuteAgentState) -> WorkerResult:
             "data": {"type": "FeatureCollection", "features": features},
         })
     unresolved = []
-    if not features:
+    if projects_by_target and not features and not action_results:
         unresolved.append({
             "code": "project_output_empty",
             "message": "Project targets exist but none could be placed on a constraint-safe candidate parcel.",
@@ -110,8 +114,14 @@ def _project_worker(state: ExecuteAgentState) -> WorkerResult:
         worker_type="project",
         layers=layers,
         parcel_changes=changes,
+        action_results=action_results,
         unresolved_items=unresolved,
-        diagnostics=[{"code": "project_ok", "projects_placed": len(features), "changes": len(changes)}],
+        diagnostics=[{
+            "code": "project_ok",
+            "projects_placed": len(features),
+            "changes": len(changes),
+            "actions": len(action_results),
+        }],
     )
 
 

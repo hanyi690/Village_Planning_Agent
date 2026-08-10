@@ -51,7 +51,7 @@ def build_candidate_site(
             "spec_type": spec.type,
         },
         evidence_refs=list(source_parcels),
-        target_ref=(getattr(spec, "intervention_id", None) or None),
+        target_ref=(getattr(spec, "target_id", None) or None),
         project_ref=(getattr(spec, "project_ref", None) or None),
     )
 

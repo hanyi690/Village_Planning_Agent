@@ -89,9 +89,8 @@ def _spec_ref_for_target(
     target_meta: dict[str, str],
     specs: list[SpatialReferenceSpec],
 ) -> str:
-    tokens = [entry["target_id"], entry["name"], target_meta.get("location_hint", "")]
     for spec in specs:
-        if _spec_mentions(spec, tokens):
+        if spec.target_id == entry["target_id"]:
             return spec.type
     return "unmapped"
 

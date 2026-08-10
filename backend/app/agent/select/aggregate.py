@@ -137,7 +137,7 @@ def build_land_design_brief(
     access = [f"road:{r}" for r in (project.related_road_targets or [])]
     adjacency = [f"facility:{f}" for f in (project.related_facility_types or [])]
     return LandDesignBrief(
-        project_ref=project.project_id,
+        project_ref=project.target_id,
         footprint_conditions=footprint,
         access_requirements=access,
         adjacency_requirements=adjacency,
@@ -341,7 +341,7 @@ def _place_facility(
                 facility.anchor_point = centroid
                 return (
                     PlacementDecision(
-                        target_id=f"facility:{facility.type}",
+                        target_id=facility.target_id,
                         selected_bsm=bsm,
                         anchor_point=centroid,
                         reason=f"mclp:{bsm}",
@@ -351,7 +351,7 @@ def _place_facility(
                     bsm,
                 )
     target = SelectionTarget(
-        target_id=f"facility:{facility.type}",
+        target_id=facility.target_id,
         name=facility.type,
         category="facility",
         scale_text="",
@@ -393,24 +393,24 @@ def select_aggregate(
         if not getattr(project, "requires_spatial", True):
             logger.info(
                 "select_aggregate: non-spatial project %s deferred to EXECUTE",
-                project.project_id,
+                project.target_id,
             )
             continue
         target = SelectionTarget(
-            target_id=project.project_id,
+            target_id=project.target_id,
             name=project.name,
             category="project",
             scale_text=project.scale_text,
         )
-        project_pool = _filter_parcels_for_target(parcels, project.project_id)
+        project_pool = _filter_parcels_for_target(parcels, project.target_id)
         if not project_pool:
             logger.warning(
                 "select_aggregate: no candidates for project %s; routing to RETRY_GROUND",
-                project.project_id,
+                project.target_id,
             )
             placements.append(
                 PlacementDecision(
-                    target_id=project.project_id,
+                    target_id=project.target_id,
                     selected_bsm="",
                     status="unplaced",
                     reason="no_project_candidates",
@@ -436,7 +436,7 @@ def select_aggregate(
     for facility in facilities:
         if getattr(facility, "candidate_bsms", None):
             continue
-        fac_id = getattr(facility, "source_instruction_id", "") or ""
+        fac_id = getattr(facility, "target_id", "") or ""
         for site in candidate_sites:
             if getattr(site, "target_ref", None) == fac_id:
                 site_bsms = list(getattr(site, "source_parcels", None) or [])
@@ -457,20 +457,20 @@ def select_aggregate(
                     rank=facility_rank,
                     score=decision_p.selected_score,
                     score_breakdown=dict(_SCORE_BREAKDOWN_STUBS),
-                    project_ref=f"facility:{facility.type}",
+                    project_ref=facility.target_id,
                 )
             )
             facility_rank += 1
             if facility.anchor_point is not None:
                 occupied.append(facility.anchor_point)
-            facility_placements[f"facility_{i}"] = {
+            facility_placements[facility.target_id] = {
                 "bsm": bsm,
                 "anchor_point": facility.anchor_point,
                 "status": "placed",
                 "facility_type": facility.type,
             }
         else:
-            facility_placements[f"facility_{i}"] = {
+            facility_placements[facility.target_id] = {
                 "bsm": "",
                 "anchor_point": facility.anchor_point,
                 "status": "unplaced",
@@ -479,10 +479,11 @@ def select_aggregate(
     if facilities:
         decision.decision_factors["facility_count"] = len(facilities)
         decision.decision_factors["facility_placements"] = facility_placements
+    projects_by_target = {project.target_id: project for project in projects}
     briefs = [
-        build_land_design_brief(project, placement, context)
-        for project, placement in zip(projects, placements)
-        if placement.status == "placed"
+        build_land_design_brief(projects_by_target[placement.target_id], placement, context)
+        for placement in placements
+        if placement.status == "placed" and placement.target_id in projects_by_target
     ]
     return decision, briefs
 

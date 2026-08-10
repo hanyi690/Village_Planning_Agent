@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from enum import Enum
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
@@ -30,6 +30,16 @@ class ExecutionResult(BaseModel):
     status: str = "pending"  # "pending" | "running" | "succeeded" | "failed"
     output_artifacts: list[str] = Field(default_factory=list)
     errors: list[str] = Field(default_factory=list)
+
+
+class TypedActionResult(BaseModel):
+    """Typed non-spatial execution output for one action target."""
+
+    target_id: str
+    action: str = ""
+    status: str = "succeeded"
+    expected_output_kind: Literal["action"] = "action"
+    details: dict = Field(default_factory=dict)
 
 
 class ExecutionPlan(ContractMeta):
@@ -86,6 +96,7 @@ class WorkerResult(BaseModel):
     worker_type: str
     layers: list[Any] = Field(default_factory=list)
     parcel_changes: list[Any] = Field(default_factory=list)
+    action_results: list[TypedActionResult] = Field(default_factory=list)
     relations: list[Any] = Field(default_factory=list)
     unresolved_items: list[Any] = Field(default_factory=list)
     diagnostics: list[Any] = Field(default_factory=list)
@@ -107,6 +118,7 @@ __all__ = [
     "WorkerType",
     "WorkerTask",
     "ExecutionResult",
+    "TypedActionResult",
     "ExecutionPlan",
     "ZoneAssignmentEntry",
     "ParcelAllocationProblem",
