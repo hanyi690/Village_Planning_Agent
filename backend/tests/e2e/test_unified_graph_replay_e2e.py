@@ -798,8 +798,9 @@ def test_l3_without_instruction_or_spatial_reference_fails_closed():
     gate = evaluate_l3_gate(program)
     assert gate.feedback_route == "L3"
     specs, diagnostics = map_interventions_to_specs(program.interventions)
-    assert specs == []
-    assert diagnostics
+    assert len(specs) == 1
+    assert specs[0].unresolved_reason == "missing_location_evidence"
+    assert diagnostics[0].code == "UNRESOLVED_SPATIAL_REFERENCE"
 
 
 def test_l3_instruction_table_produces_coarse_spatial_spec():

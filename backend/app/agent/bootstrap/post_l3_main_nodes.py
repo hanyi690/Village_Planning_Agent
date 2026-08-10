@@ -434,13 +434,6 @@ async def ground_node(state: Dict[str, Any]) -> Dict[str, Any]:
             for candidate in (getattr(result, "candidates", None) or []):
                 if hasattr(candidate, "evidence_refs"):
                     candidate.evidence_refs.extend(refs)
-    if state.get("human_acknowledged_unresolved_spatial") and getattr(result, "unresolved", None):
-        logger.warning(
-            "[post_l3:main:ground] operator acknowledged %d unresolved spatial references; "
-            "continuing with resolved candidates only",
-            len(result.unresolved),
-        )
-        result.unresolved = []
     gate = evaluate_ground_gate(result)
     ref = _persist_artifact(state, "ground", "GroundingResult", result)
     return {

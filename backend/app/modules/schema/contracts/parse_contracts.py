@@ -23,7 +23,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Literal, Optional, Tuple
 
-from pydantic import BaseModel, Field, computed_field
+from pydantic import BaseModel, Field, computed_field, model_validator
 
 from .provenance import SemanticMetadata
 
@@ -50,7 +50,31 @@ class AdjacencyRules(BaseModel):
     avoid: List[str] = Field(default_factory=list)
 
 
-class ZoneTarget(BaseModel):
+class TargetExecutionContract(BaseModel):
+    """Stable target identity and output semantics shared by PARSE targets."""
+
+    target_id: str = ""
+    execution_mode: Literal["spatial", "non_spatial"] = "spatial"
+    expected_output_kind: Literal["parcel", "polygon", "point", "line", "action"] = "parcel"
+    requires_spatial: bool = True
+
+    @model_validator(mode="after")
+    def validate_execution_contract(self) -> "TargetExecutionContract":
+        if not self.target_id:
+            for field_name in ("project_id", "zone_id", "source_instruction_id", "source_project_id"):
+                candidate = str(getattr(self, field_name, "") or "").strip()
+                if candidate:
+                    self.target_id = candidate
+                    break
+        self.requires_spatial = self.execution_mode == "spatial"
+        if self.execution_mode == "non_spatial":
+            self.expected_output_kind = "action"
+        elif self.expected_output_kind == "action":
+            raise ValueError("spatial targets cannot declare action output")
+        return self
+
+
+class ZoneTarget(TargetExecutionContract):
     """Zone target with controlled vocabulary and spatial preference.
 
     VNE codes follow 住建部《村庄规划用地分类指南》:
@@ -69,6 +93,7 @@ class ZoneTarget(BaseModel):
     candidate_bsms/bbox (空间接地结果): spatial_ops.grounding 填充的客观计算结果。
     """
 
+    expected_output_kind: Literal["polygon", "action"] = "polygon"
     land_use: Optional[str] = None
     raw_term: str = ""                           # 文档原词，留审计
     planning_zone: Optional[str] = None # PARSE 判断，非派生。LLM 决定此地块应属哪个规划分区
@@ -98,7 +123,7 @@ class ZoneTarget(BaseModel):
         return self.vne_code[0] if self.vne_code else None
 
 
-class FacilityTarget(BaseModel):
+class FacilityTarget(TargetExecutionContract):
     """Facility requirement with spatial anchoring.
 
     candidate_bsms and anchor_point are filled by spatial_ops.grounding post-format.
@@ -106,6 +131,7 @@ class FacilityTarget(BaseModel):
     SemanticMetadata.spatial_hint retains the original text (e.g. "村北") for traceability.
     """
 
+    expected_output_kind: Literal["point", "action"] = "point"
     type: str = ""
     status: Literal[
         "existing_preserve",
@@ -128,7 +154,7 @@ class FacilityTarget(BaseModel):
     semantic: SemanticMetadata = Field(default_factory=SemanticMetadata)
 
 
-class AxisTarget(BaseModel):
+class AxisTarget(TargetExecutionContract):
     """Development axis with connectivity.
 
     start_anchor/end_anchor provide precise coordinate anchors for axis line
@@ -137,6 +163,7 @@ class AxisTarget(BaseModel):
     SemanticMetadata.natural_language_description retains labels like "南北发展轴".
     """
 
+    expected_output_kind: Literal["line", "action"] = "line"
     reference_feature: str = ""
     connects: List[str] = Field(default_factory=list)
     # === 轴线类型（AxisBuilder 用）===
@@ -155,7 +182,7 @@ class AxisTarget(BaseModel):
     semantic: SemanticMetadata = Field(default_factory=SemanticMetadata)
 
 
-class RoadTarget(BaseModel):
+class RoadTarget(TargetExecutionContract):
     """Road planning target — fills the road sub-task gap.
 
     PARSE extracts road info from planning text (level, width, connectivity).
@@ -163,6 +190,7 @@ class RoadTarget(BaseModel):
     EXECUTE road sub-task consumes this for planned road network generation.
     """
 
+    expected_output_kind: Literal["line", "action"] = "line"
     road_level: str = ""                         # "主干道"/"次干道"/"支路"/"村道"
     width_m: float = 0.0
     connects: List[str] = Field(default_factory=list)  # ["村北", "村南"]
@@ -180,13 +208,12 @@ class RoadTarget(BaseModel):
     semantic: SemanticMetadata = Field(default_factory=SemanticMetadata)
 
 
-class ProjectTarget(BaseModel):
+class ProjectTarget(TargetExecutionContract):
     """L3 project-bank item preserved as the parent planning intent."""
 
     project_id: str
     name: str
     category: str = "other"
-    requires_spatial: bool = True
     action: Literal[
         "preserve",
         "new",

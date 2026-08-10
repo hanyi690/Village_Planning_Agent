@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import Literal
+
 from pydantic import BaseModel, Field
 
 from .contract_meta import ContractMeta, StageIssue
@@ -17,6 +19,8 @@ class SpatialQueryEvidence(BaseModel):
     query_params: dict = Field(default_factory=dict)
     result_count: int = 0
     result_refs: list[str] = Field(default_factory=list)
+    target_id: str = ""
+    spec_id: str = ""
 
 
 class CandidateSite(BaseModel):
@@ -32,6 +36,7 @@ class CandidateSite(BaseModel):
 
 
 class GroundingResult(ContractMeta):
+    schema_version: Literal["2.0"] = "2.0"
     candidates: list[CandidateSite] = Field(default_factory=list)
     unresolved: list[StageIssue] = Field(default_factory=list)
     spatial_query_evidence: list[SpatialQueryEvidence] = Field(default_factory=list)

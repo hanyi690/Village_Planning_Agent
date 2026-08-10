@@ -416,6 +416,37 @@ async def apply_human_review_decision(state: Dict[str, Any]) -> Dict[str, Any]:
         "human_review_resume_consumed": True,
     }
     action = decisions.get("action") if isinstance(decisions, dict) else None
+    deferral_patch = {}
+    deferred_target_ids: list[str] = []
+    if (
+        action in ("accept", "approve")
+        and paused_stage in {"ground", "select"}
+        and isinstance(decisions, dict)
+        and decisions.get("defer_unresolved_spatial_references") is True
+    ):
+        raw_ids = decisions.get("deferred_target_ids")
+        if not isinstance(raw_ids, list) or not raw_ids:
+            result["fatal_error"] = {
+                "stage": paused_stage,
+                "code": "HUMAN_DEFER_TARGET_IDS_REQUIRED",
+                "message": "Explicit deferred_target_ids are required for spatial deferral.",
+            }
+            return result
+        deferred_target_ids = list(dict.fromkeys(
+            str(target_id).strip() for target_id in raw_ids if str(target_id).strip()
+        ))
+        if not deferred_target_ids:
+            result["fatal_error"] = {
+                "stage": paused_stage,
+                "code": "HUMAN_DEFER_TARGET_IDS_REQUIRED",
+                "message": "Explicit deferred_target_ids are required for spatial deferral.",
+            }
+            return result
+        deferral_patch = await _record_target_deferrals(
+            state, decisions, deferred_target_ids
+        )
+        if deferral_patch.get("fatal_error"):
+            return {**result, **deferral_patch}
     if action == "retry" and paused_stage:
         configured_limit = state.get("max_retries")
         max_retries = 3 if configured_limit is None else max(0, int(configured_limit))
@@ -477,8 +508,6 @@ async def apply_human_review_decision(state: Dict[str, Any]) -> Dict[str, Any]:
             result[f"{paused_stage}_gate"] = _dump(_pass_gate(paused_stage))
         if isinstance(state.get("provider_failures"), list) and state.get("provider_failures"):
             result["provider_failures"] = []
-        if isinstance(decisions, dict) and decisions.get("acknowledge_unresolved_spatial_references"):
-            result["human_acknowledged_unresolved_spatial"] = True
         if (
             paused_stage in {"ground", "select"}
             and isinstance(decisions, dict)
@@ -490,7 +519,9 @@ async def apply_human_review_decision(state: Dict[str, Any]) -> Dict[str, Any]:
             # deferred target ids, then let EXECUTE consume only the proven
             # selections.  The old failed artifact remains immutable.
             if paused_stage == "select":
-                result.update(await _apply_deferred_select_review(state))
+                result.update(
+                    await _apply_deferred_select_review(state, deferred_target_ids)
+                )
             else:
                 # GROUND can pause before SELECT has emitted its typed
                 # decision. Preserve the stage boundary and let SELECT build
@@ -505,15 +536,93 @@ async def apply_human_review_decision(state: Dict[str, Any]) -> Dict[str, Any]:
                 })
                 result.update({
                     "ground_gate": ground_gate,
+                    "human_deferred_targets": deferred_target_ids,
                     "human_deferred_select_revision": False,
                 })
+            if deferral_patch.get("artifact_refs"):
+                result["artifact_refs"] = {
+                    **(result.get("artifact_refs") or {}),
+                    **deferral_patch["artifact_refs"],
+                }
+            for key, value in deferral_patch.items():
+                if key != "artifact_refs":
+                    result[key] = value
     elif action == "reject":
         feedback = decisions.get("feedback") if isinstance(decisions, dict) else None
         result["messages"] = [HumanMessage(content=feedback or "方案已拒绝，请调整后重新规划")]
     return result
 
 
-async def _apply_deferred_select_review(state: Dict[str, Any]) -> Dict[str, Any]:
+async def _record_target_deferrals(
+    state: Dict[str, Any],
+    decisions: Dict[str, Any],
+    target_ids: list[str],
+) -> Dict[str, Any]:
+    """Persist an immutable ledger only for explicitly unresolved targets."""
+    from app.agent.bootstrap.artifact_runtime import load_artifact, store_artifact
+    from app.modules.schema.contracts.deferral_contracts import (
+        DeferralLedger,
+        HumanDeferralDecision,
+        TargetDeferral,
+    )
+    from app.modules.schema.contracts.grounding_contracts import GroundingResult
+
+    grounding = load_artifact(state, "grounding_result", GroundingResult)
+    if grounding is None:
+        return {
+            "fatal_error": {
+                "stage": "ground",
+                "code": "HUMAN_DEFER_GROUNDING_ARTIFACT_MISSING",
+                "message": "Cannot defer targets without the typed GroundingResult.",
+            }
+        }
+    unresolved_ids = {
+        str(issue.related_artifact_id)
+        for issue in grounding.unresolved
+        if issue.related_artifact_id
+    }
+    unknown_ids = [target_id for target_id in target_ids if target_id not in unresolved_ids]
+    if unknown_ids:
+        return {
+            "fatal_error": {
+                "stage": "ground",
+                "code": "HUMAN_DEFER_TARGET_NOT_UNRESOLVED",
+                "message": "Only currently unresolved target IDs may be deferred: " + ", ".join(unknown_ids),
+            }
+        }
+    grounding_ref = (state.get("artifact_refs") or {}).get("grounding_result") or {}
+    grounding_id = str(grounding_ref.get("artifact_id") or "grounding_result")
+    decision = HumanDeferralDecision(
+        decision_id=str(state.get("human_review_event_id") or "human-review"),
+        decided_by=str(decisions.get("decided_by") or ""),
+        rationale=str(decisions.get("feedback") or ""),
+    )
+    ledger = DeferralLedger(
+        entries=tuple(
+            TargetDeferral(
+                target_id=target_id,
+                reason="spatial_reference_unresolved",
+                source_refs=(
+                    f"artifact:grounding_result:{grounding_id}",
+                    f"spec:{target_id}",
+                ),
+                decision=decision,
+            )
+            for target_id in target_ids
+        )
+    )
+    ref = store_artifact(
+        state, "deferral_ledger", "human_review", "DeferralLedger", ledger
+    )
+    return {
+        "artifact_refs": {"deferral_ledger": ref},
+        "human_deferred_targets": target_ids,
+    }
+
+
+async def _apply_deferred_select_review(
+    state: Dict[str, Any], deferred: list[str]
+) -> Dict[str, Any]:
     """Create a traceable SELECT revision for explicit human deferrals."""
     from app.agent.bootstrap.artifact_runtime import load_artifact, store_artifact
     from app.modules.schema.contracts.execution_plan_contracts import ExecutionPlan
@@ -531,18 +640,6 @@ async def _apply_deferred_select_review(state: Dict[str, Any]) -> Dict[str, Any]
             }
         }
 
-    intent = getattr(intent_result, "typed_intent", None) or intent_result
-    placed = {
-        str(candidate.project_ref)
-        for candidate in (decision.full_ranking or [])
-        if getattr(candidate, "project_ref", None)
-    }
-    deferred = [
-        str(project.project_id)
-        for project in (getattr(intent, "project_targets", None) or [])
-        if getattr(project, "requires_spatial", True)
-        and str(getattr(project, "project_id", "")) not in placed
-    ]
     if not deferred:
         return {
             "human_deferred_targets": [],

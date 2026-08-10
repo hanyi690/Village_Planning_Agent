@@ -155,17 +155,30 @@ def _build_candidates(
 def map_intervention_to_spec(
     intervention: PlanningIntervention,
 ) -> SpatialReferenceSpec | None:
-    """Deterministic rule-based mapping. Returns None if unmappable."""
+    """Deterministically map a spatial intervention to one linked spec."""
+    if intervention.execution_mode == "non_spatial":
+        return None
     candidates = _build_candidates(intervention)
     if not candidates:
-        return None
+        return SpatialReferenceSpec(
+            type="composed",
+            op="and",
+            intervention_id=intervention.intervention_id,
+            target_id=intervention.target_id,
+            spec_id=f"spatial-ref:{intervention.target_id}",
+            unresolved_reason="missing_location_evidence",
+        )
     if len(candidates) == 1:
         spec = candidates[0]
         spec.intervention_id = intervention.intervention_id
+        spec.target_id = intervention.target_id
+        spec.spec_id = f"spatial-ref:{intervention.target_id}"
         spec.project_ref = getattr(intervention, "project_ref", None)
         return spec
     spec = SpatialReferenceSpec(type="composed", op="and", children=candidates)
     spec.intervention_id = intervention.intervention_id
+    spec.target_id = intervention.target_id
+    spec.spec_id = f"spatial-ref:{intervention.target_id}"
     spec.project_ref = getattr(intervention, "project_ref", None)
     return spec
 
@@ -173,30 +186,36 @@ def map_intervention_to_spec(
 def map_interventions_to_specs(
     interventions: list[PlanningIntervention],
 ) -> tuple[list[SpatialReferenceSpec], list[ParseDiagnostic]]:
-    """Batch mapping. Returns (specs, diagnostics) - one diagnostic per unmappable."""
+    """Batch map targets while retaining unresolved spatial requirements."""
     specs: list[SpatialReferenceSpec] = []
     diagnostics: list[ParseDiagnostic] = []
     for intervention in interventions:
         spec = map_intervention_to_spec(intervention)
         if spec is None:
-            diagnostics.append(
-                ParseDiagnostic(
-                    diagnostic_id=f"spec-{intervention.intervention_id}-ambiguous",
-                    severity="warning",
-                    code="AMBIGUOUS_REFERENCE",
-                    message=(
-                        "No spatial reference detected for intervention "
-                        f"'{intervention.intervention_id}'"
-                    ),
-                    field_path=(
-                        f"interventions.{intervention.intervention_id}.spatial_requirements"
-                    ),
-                )
-            )
+            continue
         else:
             spec.intervention_id = intervention.intervention_id
+            spec.target_id = intervention.target_id
+            spec.spec_id = f"spatial-ref:{intervention.target_id}"
             spec.project_ref = getattr(intervention, "project_ref", None)
             specs.append(spec)
+            if spec.unresolved_reason:
+                diagnostics.append(
+                    ParseDiagnostic(
+                        diagnostic_id=f"spec-{intervention.target_id}-unresolved",
+                        severity="warning",
+                        code="UNRESOLVED_SPATIAL_REFERENCE",
+                        message=(
+                            "Spatial target has no source-backed location evidence: "
+                            f"'{intervention.target_id}'"
+                        ),
+                        field_path=(
+                            f"interventions.{intervention.intervention_id}.spatial_requirements"
+                        ),
+                        target_id=intervention.target_id,
+                        spec_id=spec.spec_id,
+                    )
+                )
     return specs, diagnostics
 
 

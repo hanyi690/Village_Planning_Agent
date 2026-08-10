@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, model_validator
 
 from .contract_meta import ContractMeta
 from .evidence_contracts import EvidenceSource
@@ -17,17 +17,38 @@ from .provenance import Provenance
 class PlanningIntervention(BaseModel):
     intervention_id: str
     name: str
+    target_id: str = ""
+    execution_mode: Literal["spatial", "non_spatial"] = "spatial"
+    expected_output_kind: Literal["parcel", "polygon", "point", "line", "action"] = "parcel"
     category: Literal["project", "facility", "road", "restoration", "protection", "zone"] = "project"
     problem_addressed: str = ""
     scale: str = ""
     area_range_ha: tuple[float, float] | None = None
-    functions: list[str] = []
+    functions: list[str] = Field(default_factory=list)
     service_population: str | None = None
     implementation_phase: Literal["short", "medium", "long"] = "short"
-    spatial_requirements: dict = {}
-    constraints: list[str] = []
-    evidence_refs: list[str] = []
+    spatial_requirements: dict = Field(default_factory=dict)
+    constraints: list[str] = Field(default_factory=list)
+    evidence_refs: list[str] = Field(default_factory=list)
     derives_from_strategy: str | None = None
+
+    @model_validator(mode="after")
+    def validate_target_contract(self) -> "PlanningIntervention":
+        if not self.target_id:
+            self.target_id = self.intervention_id
+        if self.execution_mode == "non_spatial":
+            self.expected_output_kind = "action"
+        elif self.expected_output_kind == "action":
+            raise ValueError("spatial interventions cannot declare action output")
+        elif self.expected_output_kind == "parcel":
+            self.expected_output_kind = {
+                "facility": "point",
+                "road": "line",
+                "restoration": "polygon",
+                "protection": "polygon",
+                "zone": "polygon",
+            }.get(self.category, "parcel")
+        return self
 
 
 class InterventionDependency(BaseModel):
@@ -61,6 +82,7 @@ class L3ProgramFragment(BaseModel):
 
 
 class PlanningProgram(ContractMeta):
+    schema_version: Literal["2.0"] = "2.0"
     interventions: list[PlanningIntervention] = []
     dependencies: list[InterventionDependency] = []
     omissions: list[str] = []

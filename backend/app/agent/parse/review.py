@@ -33,14 +33,14 @@ def _iter_targets(result: IntentCompilationResult) -> list[dict[str, Any]]:
     targets: list[dict[str, Any]] = []
     for item in intent.project_targets:
         targets.append(
-            {"target_type": "project", "name": item.name, "target_id": item.project_id}
+            {"target_type": "project", "name": item.name, "target_id": item.target_id}
         )
     for item in intent.facilities:
         targets.append(
             {
                 "target_type": "facility",
                 "name": item.type,
-                "target_id": item.source_project_id or item.type,
+                "target_id": item.target_id,
             }
         )
     for item in intent.road_targets:
@@ -48,7 +48,7 @@ def _iter_targets(result: IntentCompilationResult) -> list[dict[str, Any]]:
             {
                 "target_type": "road",
                 "name": item.road_level,
-                "target_id": item.source_project_id or item.road_level,
+                "target_id": item.target_id,
             }
         )
     for item in intent.zone_targets:
@@ -56,7 +56,7 @@ def _iter_targets(result: IntentCompilationResult) -> list[dict[str, Any]]:
             {
                 "target_type": "zone",
                 "name": item.land_use or "",
-                "target_id": item.zone_id or item.source_instruction_id or "",
+                "target_id": item.target_id,
             }
         )
     return targets
@@ -104,16 +104,16 @@ def _collect_target_meta(result: IntentCompilationResult) -> dict[str, dict[str,
     meta: dict[str, dict[str, str]] = {}
     for item in intent.project_targets:
         hint = item.semantic.spatial_hint or item.location_hint if item.semantic else item.location_hint
-        meta[item.project_id] = {"location_hint": hint}
+        meta[item.target_id] = {"location_hint": hint}
     for item in intent.facilities:
         hint = item.semantic.spatial_hint if item.semantic else ""
-        meta[item.source_project_id] = {"location_hint": hint or item.location_hint}
+        meta[item.target_id] = {"location_hint": hint or item.location_hint}
     for item in intent.road_targets:
         hint = item.semantic.spatial_hint if item.semantic else ""
-        meta[item.source_project_id] = {"location_hint": hint}
+        meta[item.target_id] = {"location_hint": hint}
     for item in intent.zone_targets:
         hint = item.semantic.spatial_hint if item.semantic else ""
-        meta[item.zone_id or item.source_instruction_id] = {"location_hint": hint}
+        meta[item.target_id] = {"location_hint": hint}
     return meta
 
 

@@ -48,10 +48,12 @@ def _semantic(intervention: PlanningIntervention) -> SemanticMetadata:
 
 def _to_project_target(intervention: PlanningIntervention, index: int) -> ProjectTarget:
     return ProjectTarget(
+        target_id=intervention.target_id,
         project_id=intervention.intervention_id,
         name=intervention.name,
         category="other",
-        requires_spatial=map_intervention_to_spec(intervention) is not None,
+        execution_mode=intervention.execution_mode,
+        expected_output_kind=intervention.expected_output_kind,
         action="new",
         scale_text=intervention.scale,
         area_ha=intervention.area_range_ha[0] if intervention.area_range_ha else None,
@@ -65,7 +67,10 @@ def _to_project_target(intervention: PlanningIntervention, index: int) -> Projec
 
 def _to_facility_target(intervention: PlanningIntervention) -> FacilityTarget:
     return FacilityTarget(
+        target_id=intervention.target_id,
         type=intervention.name,
+        execution_mode=intervention.execution_mode,
+        expected_output_kind=intervention.expected_output_kind,
         status="planned_new",
         location_hint=_spatial_hint(intervention),
         source_project_id=intervention.intervention_id,
@@ -77,7 +82,10 @@ def _to_facility_target(intervention: PlanningIntervention) -> FacilityTarget:
 
 def _to_road_target(intervention: PlanningIntervention) -> RoadTarget:
     return RoadTarget(
+        target_id=intervention.target_id,
         road_level=intervention.name,
+        execution_mode=intervention.execution_mode,
+        expected_output_kind=intervention.expected_output_kind,
         width_m=0.0,
         connects=[],
         source_project_id=intervention.intervention_id,
@@ -87,7 +95,10 @@ def _to_road_target(intervention: PlanningIntervention) -> RoadTarget:
 
 def _to_zone_target(intervention: PlanningIntervention) -> ZoneTarget:
     return ZoneTarget(
+        target_id=intervention.target_id,
         land_use=intervention.functions[0] if intervention.functions else intervention.name,
+        execution_mode=intervention.execution_mode,
+        expected_output_kind=intervention.expected_output_kind,
         area_ha=intervention.area_range_ha[0] if intervention.area_range_ha else None,
         zone_id=intervention.intervention_id,
         source_instruction_id=intervention.intervention_id,

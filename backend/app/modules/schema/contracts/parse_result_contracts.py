@@ -65,6 +65,8 @@ class ParseDiagnostic(BaseModel):
     message: str = ""
     field_path: str = ""
     source_text_loc: str = ""
+    target_id: str = ""
+    spec_id: str = ""
 
 
 class ParseTrace(BaseModel):
@@ -84,6 +86,7 @@ class ParseRevisionRequest(BaseModel):
 
 
 class IntentCompilationResult(ContractMeta):
+    schema_version: Literal["2.0"] = "2.0"
     # 正式字段（不再用 Any intent 承载）
     program_ref: str = ""
     base_revision_ref: str = ""

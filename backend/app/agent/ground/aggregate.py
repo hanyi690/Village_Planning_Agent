@@ -78,7 +78,10 @@ def ground_aggregate(
     spatial_query_evidence: List[SpatialQueryEvidence] = []
 
     for index, spec in enumerate(specs):
-        resolved = resolver.resolve_spec(spec)
+        if getattr(spec, "unresolved_reason", ""):
+            resolved = ResolvedSpatialRef()
+        else:
+            resolved = resolver.resolve_spec(spec)
         spec_type = getattr(spec, "type", "")
         spatial_query_evidence.append(
             SpatialQueryEvidence(
@@ -88,10 +91,14 @@ def ground_aggregate(
                     "direction": getattr(spec, "direction", None),
                     "topo": getattr(spec, "topo", None),
                     "intervention_id": getattr(spec, "intervention_id", None),
+                    "target_id": getattr(spec, "target_id", ""),
+                    "spec_id": getattr(spec, "spec_id", ""),
                     "project_ref": getattr(spec, "project_ref", None),
                 },
                 result_count=len(resolved.final_bsms),
                 result_refs=list(resolved.final_bsms),
+                target_id=getattr(spec, "target_id", ""),
+                spec_id=getattr(spec, "spec_id", ""),
             )
         )
         if resolved.final_bsms:
@@ -106,6 +113,12 @@ def ground_aggregate(
                         f"unresolved spec: no candidates resolved for "
                         f"type={spec_type}"
                     ),
+                    detail=(
+                        f"target_id={getattr(spec, 'target_id', '')}; "
+                        f"spec_id={getattr(spec, 'spec_id', '')}; "
+                        f"reason={getattr(spec, 'unresolved_reason', '') or 'no_candidates'}"
+                    ),
+                    related_artifact_id=(getattr(spec, "target_id", "") or None),
                 )
             )
 
