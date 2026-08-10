@@ -24,6 +24,24 @@ def _live_llm_configured() -> bool:
     return bool(os.getenv("OPENAI_API_KEY"))
 
 
+def _post_l3_poll_terminal(state: dict) -> bool:
+    """Return true only for a delivery terminal, fatal error, or interrupt."""
+    delivery_status = str(state.get("delivery_status") or "")
+    if delivery_status in {"complete", "partial", "diagnostic_only"}:
+        return True
+    deliver_gate = state.get("deliver_gate") or {}
+    route = (
+        deliver_gate.get("feedback_route")
+        if isinstance(deliver_gate, dict)
+        else getattr(deliver_gate, "feedback_route", None)
+    )
+    if route in {"PASS", "END_DIAGNOSTIC"}:
+        return True
+    if state.get("fatal_error"):
+        return True
+    return bool(state.get("paused_stage") or state.get("human_review_items"))
+
+
 pytestmark = [
     pytest.mark.e2e,
     pytest.mark.slow,
@@ -32,6 +50,15 @@ pytestmark = [
         reason="live LLM credentials are not configured; set the provider API key to run this chain",
     ),
 ]
+
+
+def test_phase_completed_without_post_l3_delivery_is_not_terminal():
+    assert not _post_l3_poll_terminal({"phase": "completed"})
+    assert _post_l3_poll_terminal({"phase": "completed", "delivery_status": "partial"})
+    assert _post_l3_poll_terminal({
+        "phase": "completed",
+        "deliver_gate": {"feedback_route": "END_DIAGNOSTIC"},
+    })
 
 
 @pytest.mark.timeout(1800)
@@ -145,9 +172,7 @@ def test_real_llm_session_full_fixture(sqlite_db, pipeline_reset, monkeypatch):
                         current = asyncio.run(PlanningRuntimeService.aget_state_values(session_id)) or {}
                         if (
                             not current.get("human_review_resume_consumed")
-                            or current.get("deliver_gate")
-                            or current.get("fatal_error")
-                            or str(current.get("phase", "")).lower() in {"completed", "failed", "error"}
+                            or _post_l3_poll_terminal(current)
                         ):
                             break
                     if current.get("human_review_resume_consumed"):
@@ -160,7 +185,7 @@ def test_real_llm_session_full_fixture(sqlite_db, pipeline_reset, monkeypatch):
                     # bounded loop until a pause or a terminal state appears.
                     wait_deadline = time.monotonic() + 45.0
                     while time.monotonic() < wait_deadline:
-                        if current.get("deliver_gate") or current.get("fatal_error") or str(current.get("phase", "")).lower() in {"completed", "failed", "error"}:
+                        if _post_l3_poll_terminal(current):
                             break
                         time.sleep(0.5)
                         current = asyncio.run(PlanningRuntimeService.aget_state_values(session_id)) or {}
@@ -201,9 +226,7 @@ def test_real_llm_session_full_fixture(sqlite_db, pipeline_reset, monkeypatch):
             while time.monotonic() < deadline:
                 state = asyncio.run(PlanningRuntimeService.aget_state_values(session_id)) or {}
                 if state and (
-                    state.get("deliver_gate")
-                    or state.get("paused_stage")
-                    or str(state.get("phase", "")).lower() in {"completed", "failed", "error"}
+                    _post_l3_poll_terminal(state)
                 ):
                     break
                 time.sleep(0.5)
@@ -280,7 +303,7 @@ def test_real_llm_session_full_fixture(sqlite_db, pipeline_reset, monkeypatch):
                 assert manifest.statutory_complete is False
                 assert manifest.deferral_ledger is not None
                 assert manifest.deferral_ledger.entries
-                assert manifest.deferral_summary.get("deferred_target_count", 0) > 0
+                assert manifest.deferral_summary.get("count", 0) > 0
                 assert any(item.status == "deferred" for item in manifest.traceability)
 
             outcome_target_ids = {
@@ -309,7 +332,9 @@ def test_real_llm_session_full_fixture(sqlite_db, pipeline_reset, monkeypatch):
             status_payload = status_response.json()
             assert status_payload.get("delivery_status") == manifest.delivery_status
             assert status_payload.get("deferral_summary") == manifest.deferral_summary
-            assert "diagnostic_summary" in status_payload
+            assert status_payload.get("diagnostic_terminal") == state.get("diagnostic_terminal") or (
+                not manifest.diagnostic_summary and not status_payload.get("diagnostic_terminal")
+            )
 
             deliver_gate = state.get("deliver_gate") or {}
             deliver_route = (

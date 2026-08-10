@@ -1116,71 +1116,101 @@ class TestProvenanceInKG:
     """Verify v2 execution target provenance is written into the L4 KG."""
 
     def test_v2_execution_result_target_provenance_reaches_l4(self):
+        import asyncio
+
         from rdflib import RDF
 
-        from app.agent.execute.planned_state_builder import changeset_to_planned_state
+        from app.agent.bootstrap.post_l3_main_nodes import _execution_outcome_from_result
+        from app.agent.execute.execute_state import ExecuteAgentState
+        from app.agent.execute.nodes.facility_worker import _facility_worker
+        from app.agent.execute.nodes.merge_and_materialize import (
+            _merge_worker_results_node,
+            _planned_state_builder_node,
+        )
+        from app.agent.execute.nodes.write_l4 import _write_l4_node
         from app.modules.kg.builder.base import PlanningKG
         from app.modules.kg.builder.layer3 import build_intent_layer
-        from app.modules.kg.builder.layer4 import apply_planned_state
         from app.modules.kg.ontology import EntityIdPolicy, EntityTypes, PLN
         from app.modules.schema.contracts.execution_plan_contracts import (
-            ExecutionOutcome,
-            ExecutionResult,
+            ExecutionPlan,
+            WorkerTask,
+            WorkerType,
         )
-        from app.modules.schema.contracts.parcel_change_contracts import ParcelChangeSet
         from app.modules.schema.contracts.parse_contracts import (
             FacilityTarget,
             SpatialPlanningIntent,
         )
+        from app.modules.schema.contracts.selection_contracts import TargetAssignment
+        from app.modules.kg.manager import get_kg_manager
 
         target_id = "facility-v2"
         intent = SpatialPlanningIntent(
-            facilities=[FacilityTarget(target_id=target_id, type="卫生室")]
-        )
-        outcome = ExecutionOutcome(
-            task_results=[
-                ExecutionResult(
-                    task_id=f"facility_placement:{target_id}",
+            facilities=[
+                FacilityTarget(
                     target_id=target_id,
-                    status="succeeded",
-                    expected_output_kind="point",
-                    output_artifacts=["facility_point"],
+                    type="卫生室",
+                    status="planned_new",
+                    anchor_point=(116.0, 24.0),
                 )
             ]
         )
-        planned_state = changeset_to_planned_state(
-            ParcelChangeSet(),
-            intent,
-            layout_configs=[
-                {
-                    "layerType": "facility_point",
-                    "data": {
-                        "type": "FeatureCollection",
-                        "features": [
-                            {
-                                "type": "Feature",
-                                "properties": {
-                                    "target_id": target_id,
-                                    "facility_type": "卫生室",
-                                },
-                                "geometry": {
-                                    "type": "Point",
-                                    "coordinates": [116.0, 24.0],
-                                },
-                            }
-                        ],
-                    },
-                }
-            ],
+        assignment = TargetAssignment(
+            target_id=target_id,
+            target_type="facility",
+            status="placed",
+            expected_output_kind="point",
+            anchor_point=(116.0, 24.0),
+            target_binding=intent.facilities[0].model_dump(mode="json"),
+        )
+        plan = ExecutionPlan(
+            worker_tasks=[
+                WorkerTask(
+                    task_id=f"facility_placement:{target_id}",
+                    worker_type=WorkerType.FACILITY_PLACEMENT,
+                    target_id=target_id,
+                    target_type="facility",
+                    expected_output_kind="point",
+                    assignment=assignment,
+                )
+            ]
+        )
+        execute_state = ExecuteAgentState(
+            session_id="kg-v2-provenance",
+            intent=intent,
+            execution_plan=plan,
+            tasks_to_run=["facility"],
         )
 
+        worker = _facility_worker(execute_state)
+        assert worker.task_results[0].target_id == target_id
+        outcome = _execution_outcome_from_result(
+            plan,
+            {"worker_results": [worker]},
+        )
         assert outcome.schema_version == "2.0"
+        assert outcome.task_results[0].status == "succeeded"
         assert outcome.task_results[0].target_id == target_id
+
+        execute_state.worker_results = [worker]
+        execute_state = execute_state.model_copy(
+            update=asyncio.run(_merge_worker_results_node(execute_state))
+        )
+        execute_state = execute_state.model_copy(
+            update=asyncio.run(_planned_state_builder_node(execute_state))
+        )
+        planned_state = execute_state.planned_state
+        assert planned_state is not None
         assert planned_state.facilities[0].derived_from_target == target_id
 
         kg = PlanningKG(village_name="v2-provenance")
         build_intent_layer(kg, intent)
-        apply_planned_state(kg, planned_state)
+        manager = get_kg_manager()
+        manager.register_session(execute_state.session_id, kg)
+        execute_state.validation_result = {"passed": True}
+        try:
+            asyncio.run(_write_l4_node(execute_state))
+        finally:
+            manager.remove_session(execute_state.session_id)
 
         target_uri = EntityIdPolicy.uri("facility_target", target_id)
         planned_uris = list(kg.g.subjects(RDF.type, EntityTypes.PlannedFacility))

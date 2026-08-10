@@ -13,6 +13,8 @@ from functools import wraps
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Dict
 
+from app.services.artifact_fingerprint import semantic_checksum
+
 
 def _jsonable(value: Any) -> Any:
     if hasattr(value, "model_dump"):
@@ -73,19 +75,71 @@ def _gate_field(value: Any, name: str, default: Any = None) -> Any:
     return getattr(value, name, default)
 
 
+def _semantic_refs(refs: Dict[str, Any] | None) -> Dict[str, Any]:
+    """Return deterministic artifact identities without storage metadata."""
+    result: Dict[str, Any] = {}
+    for key, ref in sorted((refs or {}).items()):
+        if isinstance(ref, dict):
+            result[key] = {
+                "artifact_type": ref.get("artifact_type", ""),
+                "identity": (
+                    ref.get("semantic_checksum")
+                    or ref.get("checksum")
+                    or ref.get("artifact_id", "")
+                ),
+                "context_version": ref.get("context_version", ""),
+                "context_fingerprint": ref.get("context_fingerprint", ""),
+                "revision": ref.get("revision", ""),
+            }
+        else:
+            result[key] = semantic_checksum(ref)
+    return result
+
+
+def _stage_route(gate: Any, result: Dict[str, Any]) -> str:
+    route = _gate_route(gate)
+    if route:
+        return route
+    return "DIAGNOSTIC" if result.get("fatal_error") or result.get("execution_errors") else "PASS"
+
+
+def _stage_reason(gate: Any, result: Dict[str, Any], route: str) -> str:
+    reason = str(_gate_field(gate, "route_reason", "") or "")
+    if reason:
+        return reason
+    if result.get("fatal_error"):
+        return "stage_output_fatal_error"
+    if result.get("execution_errors"):
+        return "stage_output_execution_errors"
+    return f"stage_output_{route.lower()}"
+
+
+def _stage_issue_fingerprint(gate: Any, result: Dict[str, Any]) -> str:
+    fingerprint = str(_gate_field(gate, "issue_fingerprint", "") or "")
+    if fingerprint:
+        return fingerprint
+    return semantic_checksum({
+        "issues": result.get("validation_issues") or result.get("diagnostics") or [],
+        "errors": result.get("execution_errors") or [],
+    })
+
+
 def _input_snapshot(state: Dict[str, Any], stage: str) -> Dict[str, Any]:
+    refs = _semantic_refs(state.get("artifact_refs") or {})
+    context_ref = state.get("context_ref") or {
+        "session_id": state.get("session_id", ""),
+        "version": state.get("context_version", ""),
+    }
+    sources = state.get("uploaded_files") or state.get("metadata", {}).get("source_refs", [])
     return {
-        "artifact_refs": state.get("artifact_refs") or {},
-        "context_ref": state.get("context_ref") or {
-            "session_id": state.get("session_id", ""),
-            "version": state.get("context_version", ""),
-        },
-        "source_refs": state.get("uploaded_files") or state.get("metadata", {}).get("source_refs", []),
-        "input_checksum": _checksum({
+        "artifact_refs": refs,
+        "context_ref": context_ref,
+        "source_refs": sources,
+        "input_checksum": semantic_checksum({
             "stage": stage,
-            "artifact_refs": state.get("artifact_refs") or {},
-            "context_ref": state.get("context_ref") or {},
-            "source_refs": state.get("uploaded_files") or [],
+            "artifact_refs": refs,
+            "context_ref": context_ref,
+            "source_refs": sources,
         }),
     }
 
@@ -99,6 +153,7 @@ def build_input_audit(
 ) -> Dict[str, Any]:
     """Build the same ref/checksum input contract for layer aggregates."""
     refs = artifact_refs if artifact_refs is not None else state.get("artifact_refs") or {}
+    refs = _semantic_refs(refs)
     context_ref = state.get("context_ref") or {
         "session_id": state.get("session_id", ""),
         "version": state.get("context_version", ""),
@@ -108,7 +163,7 @@ def build_input_audit(
         "artifact_refs": refs,
         "context_ref": context_ref,
         "source_refs": sources,
-        "input_checksum": _checksum({
+        "input_checksum": semantic_checksum({
             "stage": stage,
             "artifact_refs": refs,
             "context_ref": context_ref,
@@ -148,19 +203,27 @@ def audited_stage(stage: str) -> Callable[[Callable[..., Awaitable[Dict[str, Any
                 result = await fn(state)
                 result = result or {}
                 refs = result.get("artifact_refs") or {}
+                route = _stage_route(gate := next((result.get(k) for k in result if k.endswith("_gate")), None), result)
+                output_checksum = semantic_checksum(_semantic_refs(refs))
                 outputs = {
-                    "artifact_refs": refs,
+                    "artifact_refs": _semantic_refs(refs),
                     "output_keys": sorted(k for k in result if k not in {"planned_state", "parcel_changeset", "allocated_geojson"}),
-                    "output_summary": _output_snapshot(result),
-                    "output_checksum": _checksum(refs),
+                    "output_summary": _output_snapshot({
+                        **result,
+                        "artifact_refs": _semantic_refs(refs),
+                    }),
+                    "output_checksum": output_checksum,
                 }
-                gate = next((result.get(k) for k in result if k.endswith("_gate")), None)
                 gate_audit = {
-                    "gate_input_checksum": _gate_field(gate, "input_checksum", ""),
-                    "gate_output_checksum": _gate_field(gate, "output_checksum", ""),
-                    "issue_fingerprint": _gate_field(gate, "issue_fingerprint", ""),
-                    "route_reason": _gate_field(gate, "route_reason", ""),
-                    "progress_made": _gate_field(gate, "progress_made", None),
+                    "gate_input_checksum": _gate_field(gate, "input_checksum", "") or inputs["input_checksum"],
+                    "gate_output_checksum": _gate_field(gate, "output_checksum", "") or output_checksum,
+                    "issue_fingerprint": _stage_issue_fingerprint(gate, result),
+                    "route_reason": _stage_reason(gate, result, route),
+                    "progress_made": (
+                        _gate_field(gate, "progress_made", None)
+                        if _gate_field(gate, "progress_made", None) is not None
+                        else bool(refs or result.get("output_keys") or result.get("artifact_refs"))
+                    ),
                 }
                 await _save(
                     session_id, stage, step_name,
@@ -169,7 +232,7 @@ def audited_stage(stage: str) -> Callable[[Callable[..., Awaitable[Dict[str, Any
                     artifacts=[{"key": key, **(ref or {})} for key, ref in refs.items() if ref],
                     diagnostics={
                         "status": "stage_completed",
-                        "gate_route": _gate_route(gate),
+                        "gate_route": route,
                         "attempt": (state.get("retry_counts") or {}).get(stage.lower(), 0) + 1,
                         "duration_ms": round((time.perf_counter() - started) * 1000, 2),
                         **gate_audit,

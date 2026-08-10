@@ -501,3 +501,68 @@ async def test_stage_audit_exposes_gate_checksums_fingerprint_route_and_progress
     assert diagnostics["issue_fingerprint"] == "issue-1"
     assert diagnostics["route_reason"] == "identical_no_progress"
     assert diagnostics["progress_made"] is False
+
+
+@pytest.mark.asyncio
+async def test_stage_audit_uses_semantic_refs_for_all_post_l3_stages(monkeypatch):
+    from app.agent.bootstrap import stage_audit
+
+    saved = []
+
+    async def capture(*args, **kwargs):
+        saved.append(kwargs)
+
+    monkeypatch.setattr(stage_audit, "_save", capture)
+    ref = {
+        "artifact_id": "stable-id",
+        "artifact_type": "TypedArtifact",
+        "semantic_checksum": "semantic-content",
+        "checksum": "raw-content",
+        "stored_at": "volatile-time-a",
+    }
+
+    for stage in ("PARSE", "GROUND", "SELECT", "EXECUTE"):
+        saved.clear()
+
+        @stage_audit.audited_stage(stage)
+        async def stage_node(_state, _stage=stage):
+            result = {"artifact_refs": {"output": ref}}
+            if _stage != "EXECUTE":
+                result[f"{_stage.lower()}_gate"] = {
+                    "passed": True,
+                    "feedback_route": None,
+                }
+            return result
+
+        await stage_node({
+            "session_id": f"audit-{stage}",
+            "artifact_refs": {"input": ref},
+            "context_ref": {"session_id": "audit", "version": "1"},
+        })
+        completed = saved[-1]
+        diagnostics = completed["diagnostics"]
+        inputs = completed["inputs"]
+        outputs = completed["outputs"]
+        for key in (
+            "gate_input_checksum",
+            "gate_output_checksum",
+            "issue_fingerprint",
+            "route_reason",
+        ):
+            assert diagnostics[key]
+        assert diagnostics["gate_route"] == "PASS"
+        assert diagnostics["progress_made"] is True
+        assert inputs["input_checksum"]
+        assert outputs["output_checksum"]
+        assert "stored_at" not in str(inputs)
+        assert "stored_at" not in str(outputs)
+
+        ref["stored_at"] = "volatile-time-b"
+        await stage_node({
+            "session_id": f"audit-{stage}",
+            "artifact_refs": {"input": ref},
+            "context_ref": {"session_id": "audit", "version": "1"},
+        })
+        second = saved[-1]
+        assert second["inputs"]["input_checksum"] == inputs["input_checksum"]
+        assert second["outputs"]["output_checksum"] == outputs["output_checksum"]
