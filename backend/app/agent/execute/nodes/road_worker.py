@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from typing import Any, Dict, List
-
 from app.agent.execute.execute_state import ExecuteAgentState
 from app.agent.execute.nodes.worker_common import _execution_intent_from_plan, _intent_list, _task_enabled, _task_execution_result
 from app.modules.schema.contracts.execution_plan_contracts import WorkerResult
@@ -28,18 +26,63 @@ def _road_worker(state: ExecuteAgentState) -> WorkerResult:
     intent = _execution_intent_from_plan(state)
     road_targets = _intent_list(intent, "road_targets")
 
-    def task_results(status: str, diagnostics: list[dict] | None = None):
-        return [
-            result
-            for road in road_targets
-            if (result := _task_execution_result(
+    target_ids = {str(road.target_id) for road in road_targets}
+
+    def values(value):
+        return {str(item) for item in value} if isinstance(value, list) else {str(value)}
+
+    def layer_target_ids(layers):
+        produced = set()
+        for layer in layers:
+            data = layer.get("data") or layer
+            for feature in data.get("features") or []:
+                properties = feature.get("properties") or {}
+                for key in ("target_id", "project_id", "source_project_id", "source_id", "source_intent_ids", "grouped_source_ids"):
+                    produced.update(values(properties.get(key)))
+        return produced & target_ids
+
+    def item_target_ids(items):
+        matched = {}
+        for road in road_targets:
+            target_id = str(road.target_id)
+            matched[target_id] = [
+                item for item in items
+                if isinstance(item, dict)
+                and target_id in {
+                    value
+                    for key in ("target_id", "project_id", "source_project_id", "source_id", "source_intent_ids")
+                    for value in values(item.get(key))
+                }
+            ]
+        return matched
+
+    def task_results(layers, unresolved_items=None, error=""):
+        unresolved_by_target = item_target_ids(list(unresolved_items or []))
+        produced = layer_target_ids(layers)
+        if len(road_targets) == 1 and layers and not produced:
+            produced = {str(road_targets[0].target_id)}
+        results = []
+        for road in road_targets:
+            target_id = str(road.target_id)
+            diagnostics = list(unresolved_by_target[target_id])
+            succeeded = target_id in produced and not diagnostics and not error
+            if not succeeded and not diagnostics:
+                diagnostics.append({
+                    "code": "road_target_unresolved",
+                    "target_id": target_id,
+                    "message": "No planned-road output was produced for this target.",
+                })
+            result = _task_execution_result(
                 state,
                 "road_construction",
-                road.target_id,
-                status=status,
+                target_id,
+                status="succeeded" if succeeded else "failed",
                 diagnostics=diagnostics,
-            )) is not None
-        ]
+                errors=[error] if error else [],
+            )
+            if result is not None:
+                results.append(result)
+        return results
 
     ports = getattr(state, "ports", None)
     planner = getattr(ports, "road_planner", None) if ports is not None else None
@@ -47,17 +90,19 @@ def _road_worker(state: ExecuteAgentState) -> WorkerResult:
         try:
             if planner.is_available():
                 plan_result = planner.plan(state)
+                layers = list(getattr(plan_result, "layers", None) or [])
+                unresolved_items = list(getattr(plan_result, "unresolved_items", None) or [])
                 return WorkerResult(
                     worker_type="road",
-                    task_results=task_results("succeeded"),
-                    layers=list(getattr(plan_result, "layers", None) or []),
-                    unresolved_items=list(getattr(plan_result, "unresolved_items", None) or []),
+                    task_results=task_results(layers, unresolved_items),
+                    layers=layers,
+                    unresolved_items=unresolved_items,
                     diagnostics=[{"code": "road_planner_port", "available": True}],
                 )
         except Exception as e:
             logger.warning("[EXECUTE:road] planner port failed: %s", e)
 
-    diagnostic_layers: List[Dict[str, Any]] = []
+    generator_error = ""
     try:
         from app.agent.execute.road_generator import (
             execute_road_planning_from_agent_state,
@@ -65,7 +110,6 @@ def _road_worker(state: ExecuteAgentState) -> WorkerResult:
 
         result = execute_road_planning_from_agent_state(state.model_copy(update={"intent": intent}))
         layers = result.get("layout_layers") or []
-        diagnostic_layers = list(layers)
         formal_road_layers = [
             layer
             for layer in layers
@@ -85,27 +129,26 @@ def _road_worker(state: ExecuteAgentState) -> WorkerResult:
             )
             return WorkerResult(
                 worker_type="road",
-                task_results=task_results("succeeded"),
+                task_results=task_results(formal_road_layers),
                 layers=list(layers),
                 diagnostics=[{"code": "road_stage_generator", "ran": bool(result.get("ran"))}],
             )
         logger.info("[EXECUTE:road] stage generator skipped: %s", result.get("reason"))
     except Exception as e:
+        generator_error = str(e)
         logger.warning(
             "[EXECUTE:road] stage generator failed, falling back to local plan_roads: %s", e
         )
 
     logger.warning("[EXECUTE:road] no usable road plan produced; road worker unresolved")
+    unresolved_items = [{
+        "code": "road_unresolved",
+        "message": "No road plan produced: stage generator unavailable or failed.",
+    }]
     return WorkerResult(
         worker_type="road",
-        task_results=task_results("failed", [{
-            "code": "road_unresolved",
-            "message": "No road plan produced: stage generator unavailable or failed.",
-        }]),
-        unresolved_items=[{
-            "code": "road_unresolved",
-            "message": "No road plan produced: stage generator unavailable or failed.",
-        }],
+        task_results=task_results([], unresolved_items, generator_error),
+        unresolved_items=unresolved_items,
     )
 
 

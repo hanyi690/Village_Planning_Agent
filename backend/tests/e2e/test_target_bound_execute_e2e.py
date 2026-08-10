@@ -7,6 +7,64 @@ import asyncio
 pytestmark = pytest.mark.e2e
 
 
+def _line_task(worker_type, target_id, target_type, binding):
+    from app.modules.schema.contracts.execution_plan_contracts import WorkerTask
+    from app.modules.schema.contracts.selection_contracts import TargetAssignment
+
+    return WorkerTask(
+        task_id=f"{worker_type.value}:{target_id}",
+        worker_type=worker_type,
+        target_id=target_id,
+        target_type=target_type,
+        expected_output_kind="line",
+        assignment=TargetAssignment(
+            target_id=target_id,
+            target_type=target_type,
+            expected_output_kind="line",
+            target_binding=binding,
+        ),
+    )
+
+
+def _persisted_outcome(monkeypatch, session_id, plan, intent, worker_result, route):
+    from app.agent.bootstrap import post_l3_main_nodes
+    from app.modules.schema.contracts.parse_result_contracts import IntentCompilationResult
+    from app.modules.schema.contracts.selection_contracts import SiteSelectionDecision
+
+    context = SimpleNamespace(version="1", bundle=None, village_anchors=[], kg=None, kg_session_ref="")
+    context.snapshot_meta = lambda: {"session_id": session_id, "version": "1"}
+    captured = []
+
+    class Graph:
+        async def ainvoke(self, state, config):
+            return {
+                "parcel_changeset": None,
+                "tasks_to_run": [route],
+                "execution_errors": [],
+                "worker_results": [worker_result],
+                "worker_conflict_diagnostics": [],
+            }
+
+    async def require_context(state):
+        return context
+
+    def load_artifact(state, key, model):
+        if key == "intent_compilation":
+            return IntentCompilationResult(typed_intent=intent)
+        if key == "site_selection":
+            return SiteSelectionDecision()
+        if key == "execution_plan":
+            return plan
+        return None
+
+    monkeypatch.setattr(post_l3_main_nodes, "_require_context", require_context)
+    monkeypatch.setattr(post_l3_main_nodes, "_load_ref_artifact", load_artifact)
+    monkeypatch.setattr(post_l3_main_nodes, "_persist_artifact", lambda state, module, kind, payload: captured.append((kind, payload)) or {"artifact_id": kind})
+    monkeypatch.setattr("app.services.runtime.PlanningRuntimeService._execute_subgraph", Graph())
+    asyncio.run(post_l3_main_nodes.execute_node({"session_id": session_id}))
+    return next(payload for kind, payload in captured if kind == "ExecutionOutcome")
+
+
 def test_worker_task_carries_stable_target_assignment_binding():
     from app.modules.schema.contracts.selection_contracts import TargetAssignment
 
@@ -465,4 +523,116 @@ def test_execution_outcome_persistence_keeps_mixed_facility_task_statuses(monkey
     assert {item.target_id: item.status for item in outcome.task_results} == {
         "facility-ok": "succeeded",
         "facility-failed": "failed",
+    }
+
+
+def test_axis_worker_persists_mixed_target_outcomes(monkeypatch):
+    from app.agent.execute.execute_state import ExecuteAgentState
+    from app.agent.execute.nodes.axis_worker import _axis_worker
+    from app.modules.schema.contracts.execution_plan_contracts import ExecutionPlan, WorkerType
+    from app.modules.schema.contracts.parse_contracts import AxisTarget, SpatialPlanningIntent
+
+    axes = [
+        AxisTarget(target_id="axis-ok", label="轴线一"),
+        AxisTarget(target_id="axis-missing", label="轴线二"),
+    ]
+    tasks = [
+        _line_task(WorkerType.AXIS_CONSTRUCTION, axis.target_id, "axis", axis.model_dump(mode="json"))
+        for axis in axes
+    ]
+
+    def build(self, intent, **kwargs):
+        axis = intent.axes[0]
+        if axis.target_id == "axis-ok":
+            return {
+                "type": "FeatureCollection",
+                "features": [{
+                    "type": "Feature",
+                    "properties": {"name": axis.label},
+                    "geometry": {"type": "LineString", "coordinates": [[116.0, 24.0], [116.1, 24.1]]},
+                }],
+            }
+        return None
+
+    monkeypatch.setattr("app.modules.spatial_ops.geometry.axis_builder.AxisBuilder.build", build)
+    plan = ExecutionPlan(worker_tasks=tasks)
+    result = _axis_worker(ExecuteAgentState(
+        intent=SpatialPlanningIntent(development_axes=axes),
+        execution_plan=plan,
+        tasks_to_run=["axis"],
+    ))
+
+    assert {item.target_id: item.status for item in result.task_results} == {
+        "axis-ok": "succeeded",
+        "axis-missing": "failed",
+    }
+    assert result.layers[0]["data"]["features"][0]["properties"]["target_id"] == "axis-ok"
+    outcome = _persisted_outcome(
+        monkeypatch,
+        "axis-mixed-outcome",
+        plan,
+        SpatialPlanningIntent(development_axes=axes),
+        result,
+        "axis",
+    )
+    assert {item.target_id: item.status for item in outcome.task_results} == {
+        "axis-ok": "succeeded",
+        "axis-missing": "failed",
+    }
+
+
+def test_road_worker_persists_mixed_target_outcomes(monkeypatch):
+    from app.agent.execute.execute_state import ExecuteAgentState
+    from app.agent.execute.nodes.road_worker import _road_worker
+    from app.modules.schema.contracts.execution_plan_contracts import ExecutionPlan, WorkerType
+    from app.modules.schema.contracts.parse_contracts import RoadTarget, SpatialPlanningIntent
+
+    roads = [
+        RoadTarget(target_id="road-ok", road_level="村道"),
+        RoadTarget(target_id="road-missing", road_level="村道"),
+    ]
+    tasks = [
+        _line_task(WorkerType.ROAD_CONSTRUCTION, road.target_id, "road", road.model_dump(mode="json"))
+        for road in roads
+    ]
+    monkeypatch.setattr(
+        "app.agent.execute.road_generator.execute_road_planning_from_agent_state",
+        lambda state: {
+            "ran": True,
+            "road_target_count": 2,
+            "layout_layers": [{
+                "layerType": "planned_road_candidates",
+                "data": {
+                    "type": "FeatureCollection",
+                    "features": [{
+                        "type": "Feature",
+                        "properties": {"target_id": "road-ok"},
+                        "geometry": {"type": "LineString", "coordinates": [[116.0, 24.0], [116.1, 24.1]]},
+                    }],
+                },
+            }],
+        },
+    )
+    plan = ExecutionPlan(worker_tasks=tasks)
+    result = _road_worker(ExecuteAgentState(
+        intent=SpatialPlanningIntent(road_targets=roads),
+        execution_plan=plan,
+        tasks_to_run=["road"],
+    ))
+
+    assert {item.target_id: item.status for item in result.task_results} == {
+        "road-ok": "succeeded",
+        "road-missing": "failed",
+    }
+    outcome = _persisted_outcome(
+        monkeypatch,
+        "road-mixed-outcome",
+        plan,
+        SpatialPlanningIntent(road_targets=roads),
+        result,
+        "road",
+    )
+    assert {item.target_id: item.status for item in outcome.task_results} == {
+        "road-ok": "succeeded",
+        "road-missing": "failed",
     }

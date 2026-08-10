@@ -166,7 +166,8 @@ def _road_targets_to_stage2(
 
     for index, target in enumerate(road_targets, start=1):
         project_id = str(
-            target.get("source_project_id")
+            target.get("target_id")
+            or target.get("source_project_id")
             or target.get("source_instruction_id")
             or f"RP-PARSE-{index:04d}"
         )
@@ -185,6 +186,7 @@ def _road_targets_to_stage2(
         projects.append(
             {
                 "project_id": project_id,
+                "target_id": target.get("target_id") or project_id,
                 "name": evidence or f"{start_name}-{end_name}",
                 "action": action,
                 "road_class": target.get("road_level") or "village_road",

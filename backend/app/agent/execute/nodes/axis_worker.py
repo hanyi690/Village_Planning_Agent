@@ -31,41 +31,64 @@ def _axis_worker(state: ExecuteAgentState) -> WorkerResult:
             }],
         )
 
-    layers = []
+    features = []
     unresolved = []
-    try:
-        axis_layer = AxisBuilder().build(
-            intent=SimpleNamespace(axes=axes, metadata={}),
-            boundary_geojson=gis_data.get("boundary_geojson"),
-            landuse_current_geojson=gis_data.get("landuse_current_geojson"),
-        )
-        if axis_layer and axis_layer.get("features"):
-            layers.append({"layerType": "infrastructure", "data": axis_layer})
-        else:
-            unresolved.append({
-                "code": "axis_output_empty",
-                "message": "Axis targets exist but no development-axis layer was produced.",
+    task_results = []
+    for axis in axes:
+        target_id = str(axis.target_id)
+        target_unresolved = []
+        errors = []
+        target_features = []
+        try:
+            axis_layer = AxisBuilder().build(
+                intent=SimpleNamespace(axes=[axis], metadata={}),
+                boundary_geojson=gis_data.get("boundary_geojson"),
+                landuse_current_geojson=gis_data.get("landuse_current_geojson"),
+            )
+            target_features = list((axis_layer or {}).get("features") or [])
+            if target_features:
+                for feature in target_features:
+                    properties = dict(feature.get("properties") or {})
+                    properties["target_id"] = target_id
+                    feature["properties"] = properties
+                features.extend(target_features)
+            else:
+                target_unresolved.append({
+                    "code": "axis_output_empty",
+                    "target_id": target_id,
+                    "message": "No development-axis layer was produced for this target.",
+                })
+        except Exception as e:
+            logger.error("[EXECUTE:axis] failed for %s: %s", target_id, e, exc_info=True)
+            errors.append(str(e))
+            target_unresolved.append({
+                "code": "axis_failed",
+                "target_id": target_id,
+                "message": str(e),
             })
-    except Exception as e:
-        logger.error("[EXECUTE:axis] failed: %s", e, exc_info=True)
-        unresolved.append({"code": "axis_failed", "message": str(e)})
+        unresolved.extend(target_unresolved)
+        result = _task_execution_result(
+            state,
+            "axis_construction",
+            target_id,
+            status="succeeded" if target_features else "failed",
+            diagnostics=target_unresolved,
+            errors=errors,
+        )
+        if result is not None:
+            task_results.append(result)
+
+    layers = [{
+        "layerType": "infrastructure",
+        "data": {"type": "FeatureCollection", "features": features},
+    }] if features else []
 
     return WorkerResult(
         worker_type="axis",
-        task_results=[
-            result
-            for axis in axes
-            if (result := _task_execution_result(
-                state,
-                "axis_construction",
-                axis.target_id,
-                status="succeeded" if layers else "failed",
-                diagnostics=[] if layers else list(unresolved),
-            )) is not None
-        ],
+        task_results=task_results,
         layers=layers,
         unresolved_items=unresolved,
-        diagnostics=[{"code": "axis_ok", "layers": len(layers)}],
+        diagnostics=[{"code": "axis_ok", "targets_with_output": len(features)}],
     )
 
 
