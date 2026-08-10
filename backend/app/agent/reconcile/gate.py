@@ -118,6 +118,11 @@ def evaluate_reconcile_gate(
             for item in report.inconsistencies
             if item.severity == "error" and item.intervention_id in stable_targets
         })
+        non_target_blocker_count = sum(
+            1
+            for item in report.inconsistencies
+            if item.severity == "error" and item.intervention_id not in stable_targets
+        )
         pending = [
             PendingRequest(
                 request_id="pr-reconcile-" + route.lower() + "-0",
@@ -128,6 +133,7 @@ def evaluate_reconcile_gate(
                     "stage": dominant,
                     "error_count": error_count,
                     "target_ids": target_ids,
+                    "non_target_blocker_count": non_target_blocker_count,
                     "issue_fingerprint": progress["issue_fingerprint"],
                 },
             )

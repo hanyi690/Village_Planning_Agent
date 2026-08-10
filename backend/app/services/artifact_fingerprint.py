@@ -10,6 +10,18 @@ from typing import Any
 _VOLATILE_CONTRACT_FIELDS = {"artifact_id", "created_at"}
 
 
+def _is_execution_result(value: dict[str, Any]) -> bool:
+    """Identify outcome result rows without matching ExecutionPlan tasks."""
+    return (
+        "task_id" in value
+        and "target_id" in value
+        and "status" in value
+        and "expected_output_kind" in value
+        and "output_artifacts" in value
+        and "worker_type" not in value
+    )
+
+
 def _jsonable(value: Any) -> Any:
     if hasattr(value, "model_dump"):
         value = value.model_dump(mode="json")
@@ -20,12 +32,14 @@ def _jsonable(value: Any) -> Any:
         is_provenance = all(
             key in value for key in ("source", "run_id", "module", "timestamp")
         )
+        is_execution_result = _is_execution_result(value)
         return {
             str(key): _jsonable(item)
             for key, item in value.items()
             if not (
                 (is_contract and key in _VOLATILE_CONTRACT_FIELDS)
                 or (is_provenance and key == "timestamp")
+                or (is_execution_result and key == "task_id")
             )
         }
     if isinstance(value, (list, tuple)):

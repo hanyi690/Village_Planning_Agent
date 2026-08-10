@@ -75,41 +75,65 @@ async def audited_l3_worker(state: Dict[str, Any]) -> Dict[str, Any]:
 # ── Wave M: post-L3 gate routers (pure functions over AgentState) ──────
 
 
+_BUSINESS_RETRY_ROUTES = {
+    "parse": {"REPAIR", "REVISE"},
+    "ground": {"EXPLORE"},
+    "select": {"RETRY_GROUND"},
+    "validate": {"RETRY_EXECUTE", "RETRY_SELECT", "RETRY_GROUND", "RETRY_PARSE"},
+    "reconcile": {"RETRY_EXECUTE"},
+    "deliver": {"RETRY_VALIDATE"},
+}
+
+
+def _retry_limit(state: Dict[str, Any]) -> int:
+    configured = state.get("max_retries")
+    return 3 if configured is None else max(0, int(configured))
+
+
+def _exhausted_retry_stage(state: Dict[str, Any]) -> str | None:
+    """Find the downstream-most retry gate whose persisted budget is spent."""
+    counts = state.get("retry_counts") or {}
+    limit = _retry_limit(state)
+    for stage in ("deliver", "reconcile", "validate", "select", "ground", "parse"):
+        route = post_l3_main_nodes._gate_route(state.get(f"{stage}_gate"))
+        if route in _BUSINESS_RETRY_ROUTES[stage] and int(counts.get(stage, 0)) >= limit:
+            return stage
+    return None
+
+
+def _retry_exhaustion_patch(state: Dict[str, Any]) -> Dict[str, Any]:
+    """Build the explicit state update persisted by the diagnostic node."""
+    stage = _exhausted_retry_stage(state)
+    if stage is None:
+        return {}
+    gate_key = f"{stage}_gate"
+    source_gate = state.get(gate_key) or {}
+    gate = dict(source_gate) if isinstance(source_gate, dict) else _dump(source_gate)
+    gate["feedback_route"] = "END_DIAGNOSTIC"
+    gate.setdefault("diagnostic_code", f"{stage.upper()}_RETRY_EXHAUSTED")
+    current = int((state.get("retry_counts") or {}).get(stage, 0))
+    limit = _retry_limit(state)
+    return {
+        gate_key: gate,
+        "paused_stage": stage,
+        "delivery_status": "diagnostic_only",
+        "diagnostic_terminal": {
+            "stage": stage,
+            "issue_fingerprint": str(gate.get("issue_fingerprint") or ""),
+            "reason": "business_retry_exhausted",
+            "retry_count": current,
+            "retry_limit": limit,
+        },
+    }
+
+
 def _retry_or_human(state: Dict[str, Any], stage: str, retry_target: str) -> str:
     """Pick retry_target or diagnostic termination based on the retry cap."""
     counts = dict(state.get("retry_counts") or {})
     current = counts.get(stage, 0)
-    configured_limit = state.get("max_retries")
-    max_retries = 3 if configured_limit is None else max(0, int(configured_limit))
+    max_retries = _retry_limit(state)
     if current >= max_retries:
         logger.warning("[main] %s retry exceeded %d rounds -> diagnostic", stage, max_retries)
-        gate_key = f"{stage}_gate"
-        gate = state.get(gate_key)
-        if isinstance(gate, dict):
-            gate = dict(gate)
-            gate["feedback_route"] = "END_DIAGNOSTIC"
-            gate.setdefault("diagnostic_code", f"{stage.upper()}_RETRY_EXHAUSTED")
-            pending = list(gate.get("pending_requests") or [])
-            if not pending:
-                pending = [{
-                    "request_id": f"{stage}-retry-exhausted",
-                    "stage": stage,
-                    "request_type": "business_retry_exhausted",
-                    "context": {"retry_count": current, "retry_limit": max_retries},
-                }]
-            gate["pending_requests"] = pending
-            state[gate_key] = gate
-        state["paused_stage"] = stage
-        state["delivery_status"] = "diagnostic_only"
-        state["diagnostic_terminal"] = {
-            "stage": stage,
-            "issue_fingerprint": (
-                gate.get("issue_fingerprint", "") if isinstance(gate, dict) else ""
-            ),
-            "reason": "business_retry_exhausted",
-            "retry_count": current,
-            "retry_limit": max_retries,
-        }
         return END_DIAGNOSTIC
     logger.info("[main] %s retry %d/%d -> %s", stage, current + 1, max_retries, retry_target)
     return retry_target
@@ -247,14 +271,6 @@ def route_after_human_review(state: Dict[str, Any]) -> str:
         max_retries = 3 if configured_limit is None else max(0, int(configured_limit))
         current = int((state.get("retry_counts") or {}).get(retry_stage, 0))
         if current >= max_retries:
-            state["paused_stage"] = retry_stage
-            state["delivery_status"] = "diagnostic_only"
-            state["diagnostic_terminal"] = {
-                "stage": retry_stage,
-                "reason": "business_retry_exhausted",
-                "retry_count": current,
-                "retry_limit": max_retries,
-            }
             return END_DIAGNOSTIC
         return retry_stage
     if action == "reject":
@@ -264,6 +280,9 @@ def route_after_human_review(state: Dict[str, Any]) -> str:
 
 async def end_diagnostic_node(state: Dict[str, Any]) -> Dict[str, Any]:
     """Terminate a structurally blocked run without cycling upstream."""
+    exhaustion_patch = _retry_exhaustion_patch(state)
+    if exhaustion_patch:
+        return exhaustion_patch
     stage = str(state.get("paused_stage") or "post_l3")
     gate = state.get(f"{stage}_gate") or {}
     terminal = dict(state.get("diagnostic_terminal") or {})
@@ -379,20 +398,6 @@ async def prepare_human_review(state: Dict[str, Any]) -> Dict[str, Any]:
     # the graph would reach the HUMAN branch with an L3 gate still labelled
     # ``L3`` and collect no review items, silently ending instead of pausing.
     gate_patch = {}
-    # A retry budget is a business gate, not an implicit retry forever loop.
-    # When VALIDATE exhausted RETRY_EXECUTE, preserve the exact VALIDATE
-    # checkpoint as the HUMAN pause so approval can continue to RECONCILE.
-    counts = state.get("retry_counts") or {}
-    max_retries = 3 if state.get("max_retries") is None else max(0, int(state.get("max_retries")))
-    if int(counts.get("validate", 0)) >= max_retries:
-        gate = state.get("validate_gate")
-        if isinstance(gate, dict) and gate.get("pending_requests"):
-            human_gate = dict(gate)
-            human_gate["feedback_route"] = "HUMAN"
-            human_gate.setdefault("diagnostic_code", "VALIDATE_RETRY_EXHAUSTED")
-            gate_patch["validate_gate"] = human_gate
-            paused_stage = "validate"
-            items = list(human_gate.get("pending_requests") or [])
     if not items or paused_stage == "post_l3":
         for gate_attr in (
             # Scan downstream stages first; stale upstream EXPLORE gates are
@@ -746,23 +751,28 @@ async def _apply_structural_target_deferrals(
     active_ids = {
         str(task.target_id) for task in plan.worker_tasks if str(task.target_id)
     }
-    failed_ids = {
-        str(item.target_id)
-        for item in outcome.task_results
-        if item.status == "failed" and str(item.target_id)
-    }
     gate = state.get(f"{stage}_gate") or {}
     pending = gate.get("pending_requests") if isinstance(gate, dict) else getattr(gate, "pending_requests", [])
-    gate_ids = {
-        str(target_id)
-        for request in (pending or [])
-        for target_id in (
-            (request.get("context") or {}).get("target_ids", [])
+    gate_ids: set[str] = set()
+    non_target_blocker_count = 0
+    for request in pending or []:
+        context = (
+            request.get("context")
             if isinstance(request, dict)
-            else (getattr(request, "context", {}) or {}).get("target_ids", [])
+            else getattr(request, "context", {})
+        ) or {}
+        if not isinstance(context, dict):
+            non_target_blocker_count += 1
+            continue
+        request_target_ids = context.get("target_ids")
+        if isinstance(request_target_ids, list):
+            gate_ids.update(str(target_id) for target_id in request_target_ids if str(target_id))
+        elif request_target_ids is None:
+            non_target_blocker_count += 1
+        non_target_blocker_count += max(
+            0,
+            int(context.get("non_target_blocker_count") or 0),
         )
-        if str(target_id)
-    }
     deferrable_ids = active_ids & gate_ids
     unknown = sorted(set(target_ids) - deferrable_ids)
     if unknown:
@@ -845,15 +855,16 @@ async def _apply_structural_target_deferrals(
         state, "execution_plan", "human_review", "ExecutionPlan", revised_plan
     )
 
-    remaining = sorted(failed_ids - deferred_set)
+    remaining = sorted(gate_ids - deferred_set)
+    structurally_blocked = bool(remaining or non_target_blocker_count)
     revised_gate = dict(gate) if isinstance(gate, dict) else _dump(gate)
     revised_gate.update({
         "stage": stage,
         "passed": False,
-        "feedback_route": "END_DIAGNOSTIC" if remaining else "RETRY_EXECUTE",
+        "feedback_route": "END_DIAGNOSTIC" if structurally_blocked else "RETRY_EXECUTE",
         "route_reason": (
             "remaining_non_deferred_structural_blockers"
-            if remaining else "human_target_deferral_plan_revision"
+            if structurally_blocked else "human_target_deferral_plan_revision"
         ),
         "pending_requests": [],
     })
@@ -861,10 +872,10 @@ async def _apply_structural_target_deferrals(
         "artifact_refs": artifact_refs,
         f"{stage}_gate": revised_gate,
         "human_deferred_targets": target_ids,
-        "structural_deferral_revision": not remaining,
+        "structural_deferral_revision": not structurally_blocked,
         "remaining_target_ids": remaining,
     }
-    if remaining:
+    if structurally_blocked:
         patch.update({
             "delivery_status": "diagnostic_only",
             "diagnostic_terminal": {
@@ -872,6 +883,7 @@ async def _apply_structural_target_deferrals(
                 "issue_fingerprint": str(revised_gate.get("issue_fingerprint") or ""),
                 "reason": "remaining_non_deferred_structural_blockers",
                 "target_ids": remaining,
+                "non_target_blocker_count": non_target_blocker_count,
             },
         })
     return patch

@@ -709,7 +709,7 @@ def test_business_retry_limit_zero_escalates_without_retry():
         "parse_gate": {"feedback_route": "REPAIR"},
     }
     assert route_after_parse(state) == END_DIAGNOSTIC
-    assert state["delivery_status"] == "diagnostic_only"
+    assert "delivery_status" not in state
 
 
 def test_select_retry_exhaustion_routes_to_diagnostic_terminal():
@@ -722,8 +722,57 @@ def test_select_retry_exhaustion_routes_to_diagnostic_terminal():
         "ground_gate": {"feedback_route": "EXPLORE", "pending_requests": [{"stage": "ground"}]},
     }
     assert route_after_select(state) == END_DIAGNOSTIC
-    assert state["select_gate"]["feedback_route"] == "END_DIAGNOSTIC"
-    assert state["delivery_status"] == "diagnostic_only"
+    assert state["select_gate"]["feedback_route"] == "RETRY_GROUND"
+    assert "delivery_status" not in state
+
+
+@pytest.mark.asyncio
+async def test_compiled_graph_persists_retry_exhaustion_diagnostic(
+    monkeypatch,
+    _post_l3_deps,
+):
+    async def _retrying_parse(*args, **kwargs):
+        return (
+            _intent_result(),
+            [],
+            GateDecision(
+                stage='parse',
+                passed=False,
+                feedback_route='REPAIR',
+                pending_requests=[
+                    {
+                        'request_id': 'parse-repair-1',
+                        'stage': 'parse',
+                        'request_type': 'parse_repair',
+                        'context': {'message': 'deterministic parse issue'},
+                    }
+                ],
+            ),
+        )
+
+    monkeypatch.setattr(
+        'app.agent.parse.aggregate.compile_program_async',
+        _retrying_parse,
+    )
+    checkpointer = MemorySaver()
+    graph = create_unified_planning_graph(checkpointer=checkpointer)
+    config = {'configurable': {'thread_id': 'retry-exhaustion-checkpoint'}}
+    state = _make_state()
+    state['max_retries'] = 0
+
+    final = await graph.ainvoke(state, config=config)
+    checkpoint = graph.get_state(config).values
+
+    for persisted in (final, checkpoint):
+        assert persisted['delivery_status'] == 'diagnostic_only'
+        assert persisted['parse_gate']['feedback_route'] == 'END_DIAGNOSTIC'
+        assert persisted['diagnostic_terminal'] == {
+            'stage': 'parse',
+            'issue_fingerprint': '',
+            'reason': 'business_retry_exhausted',
+            'retry_count': 0,
+            'retry_limit': 0,
+        }
 
 
 def test_human_retry_exhaustion_becomes_terminal_failure():

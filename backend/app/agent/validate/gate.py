@@ -119,6 +119,11 @@ def evaluate_validate_gate(
             for target_id in check.affected_target_ids
             if target_id
         })
+        non_target_blocker_count = sum(
+            1
+            for check in report.checks
+            if not check.passed and not check.affected_target_ids
+        )
         pending = [
             PendingRequest(
                 request_id="pr-validate-" + route.lower() + "-0",
@@ -129,6 +134,7 @@ def evaluate_validate_gate(
                     "stage": dominant,
                     "error_issue_count": error_count,
                     "target_ids": target_ids,
+                    "non_target_blocker_count": non_target_blocker_count,
                     "issue_fingerprint": progress["issue_fingerprint"],
                 },
             )

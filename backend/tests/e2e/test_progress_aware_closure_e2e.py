@@ -155,6 +155,92 @@ def test_persisted_semantic_checksum_stops_identical_retry_loop(tmp_path):
     assert second_gate.route_reason == 'identical_no_progress'
 
 
+def test_persisted_task_id_only_change_is_not_gate_progress(tmp_path):
+    store = FilesystemArtifactStore(tmp_path)
+    first_outcome = ExecutionOutcome(
+        task_results=[
+            ExecutionResult(
+                task_id='facility-task-v1',
+                target_id='facility-1',
+                status='failed',
+                expected_output_kind='point',
+            )
+        ],
+    )
+    second_outcome = first_outcome.model_copy(deep=True)
+    second_outcome.task_results[0].task_id = 'facility-task-regenerated-v2'
+    first_ref = store.store(
+        ArtifactRef(
+            artifact_id='task-id-outcome-1',
+            module='execute',
+            run_id='semantic-task-id-retry',
+            artifact_type='ExecutionOutcome',
+        ),
+        first_outcome.model_dump(mode='json'),
+    )
+    second_ref = store.store(
+        ArtifactRef(
+            artifact_id='task-id-outcome-2',
+            module='execute',
+            run_id='semantic-task-id-retry',
+            artifact_type='ExecutionOutcome',
+        ),
+        second_outcome.model_dump(mode='json'),
+    )
+
+    assert first_ref.checksum != second_ref.checksum
+    assert first_ref.semantic_checksum == second_ref.semantic_checksum
+
+    report = _failed_validation_report()
+    first_gate = evaluate_validate_gate(
+        report,
+        input_artifact_refs={
+            'execution_outcome': first_ref.model_dump(mode='json'),
+        },
+    )
+    second_gate = evaluate_validate_gate(
+        report,
+        input_artifact_refs={
+            'execution_outcome': second_ref.model_dump(mode='json'),
+        },
+        previous_gate=first_gate,
+    )
+
+    assert first_gate.feedback_route == 'RETRY_EXECUTE'
+    assert second_gate.feedback_route == 'HUMAN'
+    assert second_gate.route_reason == 'identical_no_progress'
+
+
+def test_execution_plan_task_identity_remains_in_semantic_checksum(tmp_path):
+    store = FilesystemArtifactStore(tmp_path)
+    first_plan = ExecutionPlan(worker_tasks=[_task('facility-1', 'point')])
+    regenerated_task = _task('facility-1', 'point').model_copy(
+        update={'task_id': 'regenerated-plan-task-id'},
+    )
+    second_plan = ExecutionPlan(worker_tasks=[regenerated_task])
+
+    first_ref = store.store(
+        ArtifactRef(
+            artifact_id='dependency-plan-1',
+            module='select',
+            run_id='plan-dependency-semantics',
+            artifact_type='ExecutionPlan',
+        ),
+        first_plan.model_dump(mode='json'),
+    )
+    second_ref = store.store(
+        ArtifactRef(
+            artifact_id='dependency-plan-2',
+            module='select',
+            run_id='plan-dependency-semantics',
+            artifact_type='ExecutionPlan',
+        ),
+        second_plan.model_dump(mode='json'),
+    )
+
+    assert first_ref.semantic_checksum != second_ref.semantic_checksum
+
+
 def test_validate_traceability_uses_target_output_kind_not_parcel_count():
     point_task = _task('facility-1', 'point', target_type='facility')
     action_task = _task('policy-1', 'action')
@@ -430,8 +516,8 @@ def test_retry_limit_routes_to_diagnostic_state():
     }
 
     assert route_after_validate(state) == END_DIAGNOSTIC
-    assert state['delivery_status'] == 'diagnostic_only'
-    assert state['validate_gate']['feedback_route'] == 'END_DIAGNOSTIC'
+    assert 'delivery_status' not in state
+    assert state['validate_gate']['feedback_route'] == 'RETRY_EXECUTE'
 
 
 def test_identical_reconcile_fingerprints_escalate_without_execute_loop():
@@ -572,6 +658,144 @@ async def test_human_target_deferral_creates_new_plan_revision(monkeypatch):
     assert route_after_human_review({**state, **patch}) == 'execute'
 
 
+@pytest.mark.parametrize('remaining_evidence', ['missing', 'wrong_kind'])
+@pytest.mark.asyncio
+async def test_partial_target_deferral_keeps_authoritative_gate_blocker(
+    monkeypatch,
+    remaining_evidence,
+):
+    failed_task = _task('facility-1', 'point', target_type='facility')
+    remaining_task = _task('road-1', 'line', target_type='road')
+    plan = ExecutionPlan(worker_tasks=[failed_task, remaining_task])
+    results = [
+        ExecutionResult(
+            task_id=failed_task.task_id,
+            target_id=failed_task.target_id,
+            status='failed',
+            expected_output_kind='point',
+        )
+    ]
+    if remaining_evidence == 'wrong_kind':
+        results.append(
+            ExecutionResult(
+                task_id=remaining_task.task_id,
+                target_id=remaining_task.target_id,
+                status='succeeded',
+                expected_output_kind='point',
+                output_artifacts=['point'],
+            )
+        )
+    outcome = ExecutionOutcome(task_results=results)
+
+    monkeypatch.setattr(
+        'app.agent.bootstrap.artifact_runtime.load_artifact',
+        lambda state, key, model: {
+            'execution_plan': plan,
+            'execution_outcome': outcome,
+            'deferral_ledger': None,
+            'site_selection': None,
+        }.get(key),
+    )
+    monkeypatch.setattr(
+        'app.agent.bootstrap.artifact_runtime.store_artifact',
+        lambda state, key, module, artifact_type, payload: {
+            'artifact_id': f'{key}-revision',
+            'artifact_type': artifact_type,
+            'checksum': f'{key}-checksum',
+        },
+    )
+    state = {
+        'human_review_items': [{'request_id': 'validate-partial'}],
+        'human_review_event_id': 'review-partial',
+        'paused_stage': 'validate',
+        'validate_gate': {
+            'stage': 'validate',
+            'passed': False,
+            'feedback_route': 'HUMAN',
+            'pending_requests': [
+                {
+                    'context': {
+                        'target_ids': ['facility-1', 'road-1'],
+                        'non_target_blocker_count': 0,
+                    }
+                }
+            ],
+        },
+        'human_review_decisions': {
+            'action': 'accept',
+            'deferred_target_ids': ['facility-1'],
+        },
+    }
+
+    patch = await apply_human_review_decision(state)
+
+    assert patch['remaining_target_ids'] == ['road-1']
+    assert patch['structural_deferral_revision'] is False
+    assert patch['validate_gate']['feedback_route'] == 'END_DIAGNOSTIC'
+    assert patch['delivery_status'] == 'diagnostic_only'
+    assert route_after_human_review({**state, **patch}) == END_DIAGNOSTIC
+
+
+@pytest.mark.asyncio
+async def test_target_deferral_cannot_clear_non_target_structural_blocker(monkeypatch):
+    task = _task('facility-1', 'point', target_type='facility')
+    plan = ExecutionPlan(worker_tasks=[task])
+    outcome = ExecutionOutcome(task_results=[
+        ExecutionResult(
+            task_id=task.task_id,
+            target_id=task.target_id,
+            status='failed',
+            expected_output_kind='point',
+        )
+    ])
+    monkeypatch.setattr(
+        'app.agent.bootstrap.artifact_runtime.load_artifact',
+        lambda state, key, model: {
+            'execution_plan': plan,
+            'execution_outcome': outcome,
+            'deferral_ledger': None,
+            'site_selection': None,
+        }.get(key),
+    )
+    monkeypatch.setattr(
+        'app.agent.bootstrap.artifact_runtime.store_artifact',
+        lambda state, key, module, artifact_type, payload: {
+            'artifact_id': f'{key}-revision',
+            'artifact_type': artifact_type,
+            'checksum': f'{key}-checksum',
+        },
+    )
+    state = {
+        'human_review_items': [{'request_id': 'validate-mixed'}],
+        'human_review_event_id': 'review-mixed',
+        'paused_stage': 'validate',
+        'validate_gate': {
+            'stage': 'validate',
+            'passed': False,
+            'feedback_route': 'HUMAN',
+            'pending_requests': [
+                {
+                    'context': {
+                        'target_ids': ['facility-1'],
+                        'non_target_blocker_count': 1,
+                    }
+                }
+            ],
+        },
+        'human_review_decisions': {
+            'action': 'accept',
+            'deferred_target_ids': ['facility-1'],
+        },
+    }
+
+    patch = await apply_human_review_decision(state)
+
+    assert patch['remaining_target_ids'] == []
+    assert patch['structural_deferral_revision'] is False
+    assert patch['validate_gate']['feedback_route'] == 'END_DIAGNOSTIC'
+    assert patch['diagnostic_terminal']['non_target_blocker_count'] == 1
+
+
 @pytest.mark.asyncio
 async def test_non_target_structural_check_cannot_defer_parcel_bsm(monkeypatch):
     task = _task('facility-target-1', 'point', target_type='facility')
@@ -609,6 +833,7 @@ async def test_non_target_structural_check_cannot_defer_parcel_bsm(monkeypatch):
     )
     gate = evaluate_validate_gate(report).model_dump(mode='json')
     assert gate['pending_requests'][0]['context']['target_ids'] == []
+    assert gate['pending_requests'][0]['context']['non_target_blocker_count'] == 1
 
     monkeypatch.setattr(
         'app.agent.bootstrap.artifact_runtime.load_artifact',
