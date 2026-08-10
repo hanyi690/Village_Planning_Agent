@@ -150,7 +150,7 @@ def test_acknowledgement_does_not_clear_ground_unresolved_items(monkeypatch):
     )
     monkeypatch.setattr(
         "app.agent.ground.gate.evaluate_ground_gate",
-        lambda result: SimpleNamespace(model_dump=lambda mode: {"passed": False}),
+        lambda result, **kwargs: SimpleNamespace(model_dump=lambda mode: {"passed": False}),
     )
     monkeypatch.setattr(
         post_l3_main_nodes,

@@ -139,10 +139,13 @@ def _human_artifact_detail(key: str, payload: Any) -> Dict[str, Any]:
         for name in ("selections", "selected_sites", "unplaced_targets", "issues"):
             take(name, 12)
     elif key == "execution_plan":
-        for name in ("tasks", "project_tasks", "zone_tasks", "facility_tasks", "axis_tasks", "road_tasks", "unresolved_targets"):
+        for name in ("worker_tasks", "deferred_tasks", "dependencies", "provenance"):
             take(name, 12)
+    elif key == "execution_outcome":
+        for name in ("task_results", "action_results", "diagnostics"):
+            take(name, 20)
     elif key in {"parcel_changeset", "planned_state"}:
-        for name in ("changes", "layers", "planned_features", "unresolved_targets", "provenance"):
+        for name in ("changes", "parcels", "zones", "facilities", "roads", "axes", "provenance"):
             take(name, 12)
     elif key == "validation_report":
         for name in ("checks", "violations", "diagnostics", "overall_passed"):
@@ -151,7 +154,12 @@ def _human_artifact_detail(key: str, payload: Any) -> Dict[str, Any]:
         for name in ("inconsistencies", "diagnostics", "overall_consistent"):
             take(name, 16)
     elif key == "delivery_manifest":
-        for name in ("statutory_complete", "statutory_complete_breakdown", "pending_human_items", "artifacts"):
+        for name in (
+            "delivery_status", "statutory_complete",
+            "statutory_complete_breakdown", "pending_human_items",
+            "deferral_summary", "diagnostic_summary", "traceability",
+            "action_results", "deliverables",
+        ):
             take(name, 16)
     elif key == "render_layers":
         if isinstance(payload, list):

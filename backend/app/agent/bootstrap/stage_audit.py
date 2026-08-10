@@ -67,6 +67,12 @@ def _gate_route(value: Any) -> str | None:
     return getattr(value, "feedback_route", None) or ("PASS" if getattr(value, "passed", False) else None)
 
 
+def _gate_field(value: Any, name: str, default: Any = None) -> Any:
+    if isinstance(value, dict):
+        return value.get(name, default)
+    return getattr(value, name, default)
+
+
 def _input_snapshot(state: Dict[str, Any], stage: str) -> Dict[str, Any]:
     return {
         "artifact_refs": state.get("artifact_refs") or {},
@@ -149,6 +155,13 @@ def audited_stage(stage: str) -> Callable[[Callable[..., Awaitable[Dict[str, Any
                     "output_checksum": _checksum(refs),
                 }
                 gate = next((result.get(k) for k in result if k.endswith("_gate")), None)
+                gate_audit = {
+                    "gate_input_checksum": _gate_field(gate, "input_checksum", ""),
+                    "gate_output_checksum": _gate_field(gate, "output_checksum", ""),
+                    "issue_fingerprint": _gate_field(gate, "issue_fingerprint", ""),
+                    "route_reason": _gate_field(gate, "route_reason", ""),
+                    "progress_made": _gate_field(gate, "progress_made", None),
+                }
                 await _save(
                     session_id, stage, step_name,
                     inputs=inputs,
@@ -159,6 +172,7 @@ def audited_stage(stage: str) -> Callable[[Callable[..., Awaitable[Dict[str, Any
                         "gate_route": _gate_route(gate),
                         "attempt": (state.get("retry_counts") or {}).get(stage.lower(), 0) + 1,
                         "duration_ms": round((time.perf_counter() - started) * 1000, 2),
+                        **gate_audit,
                     },
                 )
                 return result

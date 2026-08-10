@@ -328,8 +328,17 @@ class PlanningRuntimeService:
                 return
             deliver_gate = (final_state or {}).get("deliver_gate") or {}
             deliver_route = deliver_gate.get("feedback_route") if isinstance(deliver_gate, dict) else getattr(deliver_gate, "feedback_route", None)
-            if final_state and final_state.get("phase") == "completed" and deliver_route == "PASS":
-                await cls._append_event(session_id, create_completed_event(session_id))
+            delivery_status = str((final_state or {}).get("delivery_status") or "")
+            if final_state and final_state.get("phase") == "completed" and (
+                deliver_route == "PASS"
+                or delivery_status in {"complete", "partial", "diagnostic_only"}
+            ):
+                await cls._append_event(session_id, create_completed_event(
+                    session_id,
+                    delivery_status=delivery_status,
+                    deferral_summary=final_state.get("deferral_summary") or {},
+                    diagnostic_terminal=final_state.get("diagnostic_terminal") or {},
+                ))
             sse_manager.set_execution_active(session_id, False)
 
             # Send resumed SSE event
@@ -791,8 +800,17 @@ class PlanningRuntimeService:
             final_state = await cls.aget_state_values(session_id)
             deliver_gate = (final_state or {}).get("deliver_gate") or {}
             deliver_route = deliver_gate.get("feedback_route") if isinstance(deliver_gate, dict) else getattr(deliver_gate, "feedback_route", None)
-            if final_state and final_state.get("phase") == "completed" and deliver_route == "PASS":
-                await cls._append_event(session_id, create_completed_event(session_id))
+            delivery_status = str((final_state or {}).get("delivery_status") or "")
+            if final_state and final_state.get("phase") == "completed" and (
+                deliver_route == "PASS"
+                or delivery_status in {"complete", "partial", "diagnostic_only"}
+            ):
+                await cls._append_event(session_id, create_completed_event(
+                    session_id,
+                    delivery_status=delivery_status,
+                    deferral_summary=final_state.get("deferral_summary") or {},
+                    diagnostic_terminal=final_state.get("diagnostic_terminal") or {},
+                ))
             sse_manager.set_execution_active(session_id, False)
 
             logger.info(f"[PlanningRuntimeService] [{session_id}] Background execution completed")

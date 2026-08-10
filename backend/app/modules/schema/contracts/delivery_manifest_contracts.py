@@ -9,11 +9,13 @@ Design: 02_EXECUTION_PLAN.md Module F, Module G
 
 from __future__ import annotations
 
-from typing import List
+from typing import List, Literal
 
 from pydantic import BaseModel, Field
 
 from .contract_meta import ContractMeta
+from .deferral_contracts import DeferralLedger
+from .execution_plan_contracts import TypedActionResult
 from .provenance import Provenance
 
 
@@ -81,6 +83,12 @@ class Deliverable(BaseModel):
 
 
 class TraceabilityEntry(BaseModel):
+    target_id: str = ""
+    target_type: str = ""
+    expected_output_kind: Literal["parcel", "polygon", "point", "line", "action"] = "parcel"
+    execution_task_id: str = ""
+    output_artifacts: list[str] = Field(default_factory=list)
+    status: Literal["covered", "partial", "missing", "deferred", "failed"] = "missing"
     intervention_id: str = ""
     requirement_id: str = ""
     candidate_id: str = ""
@@ -98,8 +106,16 @@ class HumanItem(BaseModel):
 
 
 class DeliveryManifest(ContractMeta):
+    schema_version: Literal["2.0"] = "2.0"
+    delivery_status: Literal["complete", "partial", "diagnostic_only"] = "diagnostic_only"
     deliverables: list[Deliverable] = Field(default_factory=list)
     traceability: list[TraceabilityEntry] = Field(default_factory=list)
+    action_results: list[TypedActionResult] = Field(default_factory=list)
+    deferral_ledger: DeferralLedger | None = None
+    deferral_summary: dict = Field(default_factory=dict)
+    diagnostic_summary: dict = Field(default_factory=dict)
+    expected_spatial_output_count: int = 0
+    render_layer_count: int = 0
     pending_human_items: list[HumanItem] = Field(default_factory=list)
     delivery_gate: DeliveryGate | None = None
     provenance: "Provenance | None" = None

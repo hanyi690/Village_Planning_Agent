@@ -460,7 +460,7 @@ async def ground_node(state: Dict[str, Any]) -> Dict[str, Any]:
             for candidate in (getattr(result, "candidates", None) or []):
                 if hasattr(candidate, "evidence_refs"):
                     candidate.evidence_refs.extend(refs)
-    gate = evaluate_ground_gate(result)
+    gate = evaluate_ground_gate(result, expected_spec_count=len(specs))
     ref = _persist_artifact(state, "ground", "GroundingResult", result)
     return {
         "ground_gate": _dump(gate),
@@ -503,7 +503,10 @@ async def select_node(state: Dict[str, Any]) -> Dict[str, Any]:
         raise RuntimeError("SELECT_TIMEOUT: candidate selection exceeded its cancellation boundary") from exc
     intent.typed_intent = plan_intent
     projects = list(getattr(plan_intent, "project_targets", None) or [])
-    gate = evaluate_select_gate(decision, target_count=len(projects))
+    spatial_projects = [
+        project for project in projects if getattr(project, "requires_spatial", True)
+    ]
+    gate = evaluate_select_gate(decision, target_count=len(spatial_projects))
     execution_plan = build_execution_plan(
         intent,
         decision,
@@ -690,7 +693,11 @@ async def execute_node(state: Dict[str, Any]) -> Dict[str, Any]:
 
     changeset = result.get("parcel_changeset")
     if changeset is not None:
-        planned_state = changeset_to_planned_state(changeset, execution_intent)
+        planned_state = changeset_to_planned_state(
+            changeset,
+            execution_intent,
+            list(result.get("layout_configs", []) or []),
+        )
     else:
         logger.warning("[post_l3:main:execute] no parcel_changeset produced")
         planned_state = None
@@ -886,6 +893,11 @@ async def deliver_node(state: Dict[str, Any]) -> Dict[str, Any]:
     from app.modules.schema.contracts.planned_state_contracts import PlannedState
     from app.modules.schema.contracts.validation_report_contracts import ValidationReport
     from app.modules.schema.contracts.reconciliation_contracts import ReconciliationReport
+    from app.modules.schema.contracts.deferral_contracts import DeferralLedger
+    from app.modules.schema.contracts.execution_plan_contracts import (
+        ExecutionOutcome,
+        ExecutionPlan,
+    )
 
     retry_patch = _retry_patch(state, "deliver")
     context = await _require_context(state)
@@ -894,17 +906,33 @@ async def deliver_node(state: Dict[str, Any]) -> Dict[str, Any]:
     planned_state = _load_ref_artifact(state, "planned_state", PlannedState)
     validation_report = _load_ref_artifact(state, "validation_report", ValidationReport)
     reconciliation_report = _load_ref_artifact(state, "reconciliation_report", ReconciliationReport)
+    execution_plan = _load_ref_artifact(state, "execution_plan", ExecutionPlan)
+    execution_outcome = _load_ref_artifact(state, "execution_outcome", ExecutionOutcome)
+    deferral_ledger = _load_ref_artifact(state, "deferral_ledger", DeferralLedger)
     allocated_geojson = _load_ref_artifact(state, "allocated_geojson", dict) or {}
 
     validation_result = {}
     if validation_report is not None:
         validation_result = {"passed": validation_report.overall_passed}
 
+    expected_spatial_output_count = sum(
+        1
+        for task in (getattr(execution_plan, "worker_tasks", None) or [])
+        if str(getattr(task, "expected_output_kind", "")) != "action"
+    )
+    render_result = []
+    try:
+        from app.agent.deliver.render_layers import build_render_layers
+
+        render_result = build_render_layers(planned_state)
+    except Exception as e:
+        logger.warning("[post_l3:main:deliver] render_layers failed: %s", e)
+
     export_result = None
-    if planned_state is not None and state.get("layout_configs"):
+    if planned_state is not None and expected_spatial_output_count > 0:
         try:
             export_result = export_gdb_package(
-                layout_configs=state.get("layout_configs"),
+                layout_configs=render_result,
                 allocated_geojson=allocated_geojson or None,
                 gis_data=gis_data,
                 village_name=state.get("config", {}).get("village_name", ""),
@@ -920,28 +948,6 @@ async def deliver_node(state: Dict[str, Any]) -> Dict[str, Any]:
         current_parcels = list(bundle.bundle_parcels())
     elif bundle is not None and hasattr(bundle, "polygons"):
         current_parcels = list(bundle.polygons.get("landuse_current") or [])
-
-    manifest = deliver_aggregate(
-        planned_state,
-        validation_report,
-        reconciliation_report,
-        list(state.get("upstream_gates") or []),
-        export_result,
-        current_parcels=current_parcels,
-        run_id=_run_id(state),
-    )
-    render_result = []
-    try:
-        from app.agent.deliver.render_layers import build_render_layers
-
-        render_result = build_render_layers(
-            planned_state,
-            list(state.get("layout_configs") or []),
-            gis_data,
-        )
-    except Exception as e:
-        logger.warning("[post_l3:main:deliver] render_layers failed: %s", e)
-        render_result = []
 
     render_ref = _persist_artifact(state, "deliver", "RenderLayers", render_result)
 
@@ -968,12 +974,15 @@ async def deliver_node(state: Dict[str, Any]) -> Dict[str, Any]:
         from app.tools.gis.static_render import render_map_preview
 
         village_name = str((state.get("config") or {}).get("village_name", ""))
-        render_artifacts["static_preview"] = render_map_preview(
-            render_result, str(output_dir), village_name
-        )
-        render_artifacts["interactive_map"] = render_interactive_map(
-            render_result, str(output_dir), village_name
-        )
+        if render_result:
+            render_artifacts["static_preview"] = render_map_preview(
+                render_result, str(output_dir), village_name
+            )
+            render_artifacts["interactive_map"] = render_interactive_map(
+                render_result, str(output_dir), village_name
+            )
+        else:
+            render_artifacts["mapless"] = True
     except Exception as exc:
         # Preserve the typed RenderLayers artifact and make the missing file
         # an explicit DELIVER diagnostic instead of hiding it in a log.
@@ -983,24 +992,29 @@ async def deliver_node(state: Dict[str, Any]) -> Dict[str, Any]:
             "message": str(exc),
         }
 
-    if not render_artifacts.get("layer_count") or render_artifacts.get("error"):
-        render_reason = (
-            (render_artifacts.get("error") or {}).get("message")
-            if isinstance(render_artifacts.get("error"), dict)
-            else "no renderable layers"
-        ) or "no renderable layers"
-        from app.modules.schema.contracts.delivery_manifest_contracts import HumanItem
-
-        manifest.pending_human_items.append(HumanItem(
-            item_id=f"hi-render-{_run_id(state)}",
-            description="DELIVER 图层渲染产物缺失",
-            reason=render_reason,
-            blocking=True,
-        ))
-        manifest.statutory_complete = False
-        manifest.statutory_complete_breakdown["render_output"] = False
-
-    gate = evaluate_deliver_gate(manifest)
+    render_error = ""
+    if isinstance(render_artifacts.get("error"), dict):
+        render_error = str(render_artifacts["error"].get("message") or "")
+    manifest = deliver_aggregate(
+        planned_state,
+        validation_report,
+        reconciliation_report,
+        list(state.get("upstream_gates") or []),
+        export_result,
+        current_parcels=current_parcels,
+        run_id=_run_id(state),
+        execution_plan=execution_plan,
+        execution_outcome=execution_outcome,
+        deferral_ledger=deferral_ledger,
+        expected_spatial_output_count=expected_spatial_output_count,
+        render_layer_count=len(render_result),
+        render_error=render_error,
+    )
+    gate = evaluate_deliver_gate(
+        manifest,
+        input_artifact_refs=state.get("artifact_refs") or {},
+        previous_gate=state.get("deliver_gate"),
+    )
     manifest_ref = _persist_artifact(state, "deliver", "DeliveryManifest", manifest)
 
     return {
@@ -1011,6 +1025,17 @@ async def deliver_node(state: Dict[str, Any]) -> Dict[str, Any]:
             }.items() if ref
         },
         "deliver_gate": _dump(gate),
+        "delivery_status": manifest.delivery_status,
+        "deferral_summary": manifest.deferral_summary,
+        "diagnostic_terminal": (
+            {
+                "stage": "deliver",
+                "reason": "remaining_non_deferred_delivery_blockers",
+                **manifest.diagnostic_summary,
+            }
+            if manifest.delivery_status == "diagnostic_only"
+            else {}
+        ),
         "export_result": export_result,
         "render_artifacts": render_artifacts,
         "upstream_gates": _accumulate_gate(state.get("upstream_gates"), _dump(gate)),

@@ -202,9 +202,7 @@ def route_after_deliver(state: Dict[str, Any]) -> str:
     route = post_l3_main_nodes._gate_route(state.get("deliver_gate"))
     if route == "PASS":
         return END
-    if route == "RETRY_VALIDATE":
-        return _retry_or_human(state, "deliver", "validate")
-    return "human_review"
+    return END_DIAGNOSTIC
 
 
 def _remaining_unresolved_target_ids(state: Dict[str, Any]) -> list[str]:
@@ -278,14 +276,87 @@ def route_after_human_review(state: Dict[str, Any]) -> str:
     return END
 
 
+def _diagnostic_manifest_patch(
+    state: Dict[str, Any],
+    terminal: Dict[str, Any],
+) -> Dict[str, Any]:
+    """Persist the terminal diagnostic as the authoritative delivery artifact."""
+    if not state.get("session_id"):
+        return {}
+    try:
+        from app.agent.bootstrap.artifact_runtime import load_artifact, store_artifact
+        from app.agent.deliver.aggregate import build_traceability_from_coverage
+        from app.modules.schema.contracts.deferral_contracts import DeferralLedger
+        from app.modules.schema.contracts.delivery_manifest_contracts import DeliveryManifest
+        from app.modules.schema.contracts.execution_plan_contracts import ExecutionOutcome
+        from app.modules.schema.contracts.reconciliation_contracts import ReconciliationReport
+
+        ledger = load_artifact(state, "deferral_ledger", DeferralLedger)
+        outcome = load_artifact(state, "execution_outcome", ExecutionOutcome)
+        reconciliation = load_artifact(
+            state, "reconciliation_report", ReconciliationReport
+        )
+        existing = load_artifact(state, "delivery_manifest", DeliveryManifest)
+        entries = list(getattr(ledger, "entries", None) or [])
+        deferral_summary = {
+            "count": len(entries),
+            "target_ids": [entry.target_id for entry in entries],
+            "actions": [entry.decision.action for entry in entries],
+        }
+        diagnostic_summary = dict(terminal)
+        if existing is None:
+            coverage = getattr(reconciliation, "coverage_matrix", None)
+            manifest = DeliveryManifest(
+                delivery_status="diagnostic_only",
+                traceability=(
+                    build_traceability_from_coverage(coverage)
+                    if coverage is not None
+                    else []
+                ),
+                action_results=list(getattr(outcome, "action_results", None) or []),
+                deferral_ledger=ledger,
+                deferral_summary=deferral_summary,
+                diagnostic_summary=diagnostic_summary,
+                statutory_complete=False,
+            )
+        else:
+            manifest = existing.model_copy(deep=True, update={
+                "delivery_status": "diagnostic_only",
+                "statutory_complete": False,
+                "diagnostic_summary": diagnostic_summary,
+                "deferral_ledger": ledger or existing.deferral_ledger,
+                "deferral_summary": deferral_summary,
+            })
+        ref = store_artifact(
+            state,
+            "delivery_manifest",
+            "end_diagnostic",
+            "DeliveryManifest",
+            manifest,
+        )
+        return {
+            "artifact_refs": {"delivery_manifest": ref},
+            "deferral_summary": deferral_summary,
+        }
+    except Exception as exc:
+        logger.warning("[main:end_diagnostic] manifest persistence failed: %s", exc)
+        return {}
+
+
 async def end_diagnostic_node(state: Dict[str, Any]) -> Dict[str, Any]:
     """Terminate a structurally blocked run without cycling upstream."""
     exhaustion_patch = _retry_exhaustion_patch(state)
-    if exhaustion_patch:
-        return exhaustion_patch
-    stage = str(state.get("paused_stage") or "post_l3")
+    stage = str(
+        exhaustion_patch.get("paused_stage")
+        or state.get("paused_stage")
+        or "post_l3"
+    )
     gate = state.get(f"{stage}_gate") or {}
-    terminal = dict(state.get("diagnostic_terminal") or {})
+    terminal = dict(
+        exhaustion_patch.get("diagnostic_terminal")
+        or state.get("diagnostic_terminal")
+        or {}
+    )
     terminal.setdefault("stage", stage)
     terminal.setdefault(
         "issue_fingerprint",
@@ -294,7 +365,12 @@ async def end_diagnostic_node(state: Dict[str, Any]) -> Dict[str, Any]:
         else getattr(gate, "issue_fingerprint", ""),
     )
     terminal.setdefault("reason", "remaining_non_deferred_structural_blockers")
-    return {"delivery_status": "diagnostic_only", "diagnostic_terminal": terminal}
+    return {
+        **exhaustion_patch,
+        "delivery_status": "diagnostic_only",
+        "diagnostic_terminal": terminal,
+        **_diagnostic_manifest_patch(state, terminal),
+    }
 
 
 def create_unified_planning_graph(checkpointer=None) -> StateGraph:
@@ -372,8 +448,7 @@ def create_unified_planning_graph(checkpointer=None) -> StateGraph:
         {"deliver": "deliver", "execute": "execute", "human_review": "human_review_prepare",
          END_DIAGNOSTIC: END_DIAGNOSTIC})
     builder.add_conditional_edges("deliver", route_after_deliver,
-        {END: END, "validate": "validate", "human_review": "human_review_prepare",
-         END_DIAGNOSTIC: END_DIAGNOSTIC})
+        {END: END, END_DIAGNOSTIC: END_DIAGNOSTIC})
     builder.add_edge("human_review_prepare", "human_review_publish")
     builder.add_edge("human_review_publish", "human_review_wait")
     builder.add_edge("human_review_wait", "human_review_apply")
@@ -872,6 +947,11 @@ async def _apply_structural_target_deferrals(
         "artifact_refs": artifact_refs,
         f"{stage}_gate": revised_gate,
         "human_deferred_targets": target_ids,
+        "deferral_summary": {
+            "count": len(ledger.entries),
+            "target_ids": [entry.target_id for entry in ledger.entries],
+            "actions": [entry.decision.action for entry in ledger.entries],
+        },
         "structural_deferral_revision": not structurally_blocked,
         "remaining_target_ids": remaining,
     }
@@ -969,6 +1049,11 @@ async def _record_target_deferrals(
     return {
         "artifact_refs": {"deferral_ledger": ref},
         "human_deferred_targets": target_ids,
+        "deferral_summary": {
+            "count": len(ledger.entries),
+            "target_ids": [entry.target_id for entry in ledger.entries],
+            "actions": [entry.decision.action for entry in ledger.entries],
+        },
         "remaining_target_ids": sorted(unresolved_ids - set(target_ids)),
     }
 

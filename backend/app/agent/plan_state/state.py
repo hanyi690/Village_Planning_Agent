@@ -289,6 +289,7 @@ class AgentState(TypedDict, total=False):
     human_deferred_select_revision: bool
     structural_deferral_revision: bool
     delivery_status: str
+    deferral_summary: Dict[str, Any]
     diagnostic_terminal: Dict[str, Any]
     paused_stage: Optional[str]  # stage that paused the post-L3 chain for HITL
     # Terminal infrastructure/configuration failure.  This is deliberately
@@ -384,6 +385,12 @@ def state_to_ui_status(state: Dict[str, Any], db_session: Optional[Dict] = None,
     progress = metadata.get("progress", (current_layer / 3) * 100 if current_layer else 0)
 
     deliver_gate = state.get("deliver_gate")
+    delivery_status = str(state.get("delivery_status") or "")
+    delivery_terminal = delivery_status in {
+        "complete",
+        "partial",
+        "diagnostic_only",
+    }
     deliver_pass = False
     if deliver_gate is not None:
         route = getattr(deliver_gate, "feedback_route", None)
@@ -393,7 +400,7 @@ def state_to_ui_status(state: Dict[str, Any], db_session: Optional[Dict] = None,
 
     if is_interrupted:
         status = "paused"
-    elif phase == "completed" and deliver_pass:
+    elif phase == "completed" and (deliver_pass or delivery_terminal):
         status = "completed"
     elif phase == "completed":
         status = "running"
@@ -436,6 +443,13 @@ def state_to_ui_status(state: Dict[str, Any], db_session: Optional[Dict] = None,
         "created_at": db_session.get("created_at") if db_session else metadata.get("created_at", ""),
         "execution_error": metadata.get("execution_error"),
         "execution_complete": phase == "completed",
+        "delivery_status": delivery_status,
+        "deferral_summary": state.get("deferral_summary") or {
+            "count": 0,
+            "target_ids": [],
+            "actions": [],
+        },
+        "diagnostic_terminal": state.get("diagnostic_terminal") or {},
         "last_checkpoint_id": metadata.get("last_checkpoint_id", ""),
         # Agent State (Single Source of Truth)
         "phase": phase,

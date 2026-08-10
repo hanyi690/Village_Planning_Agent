@@ -2,8 +2,8 @@
 
 GET /api/sessions/{session_id}/render-layers
 - Reads the latest ``PlannedState`` artifact from ``FilesystemArtifactStore``.
-- Optionally merges ``layout_configs`` from the live AgentState (best effort)
-  for the richer execution layers (``planned_project`` etc.).
+- Derives every layer from that typed artifact; live execution layouts are not
+  a rendering source.
 - Emits ``{layerType, layerName, data: FeatureCollection}`` entries.
 """
 
@@ -14,6 +14,8 @@ from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, HTTPException
 
+from app.agent.deliver.render_layers import build_render_layers
+from app.modules.schema.contracts.planned_state_contracts import PlannedState
 from app.services.artifact_store import FilesystemArtifactStore
 
 logger = logging.getLogger(__name__)
@@ -190,11 +192,7 @@ async def _get_layout_configs(session_id: str) -> List[Dict[str, Any]]:
 
 @router.get("/api/sessions/{session_id}/render-layers")
 async def get_render_layers(session_id: str):
-    """Derive renderable GeoJSON layers from the latest PlannedState artifact.
-
-    ``layout_configs`` layers (when available) take precedence over the
-    PlannedState-derived fallbacks; missing layer types are simply omitted.
-    """
+    """Derive renderable GeoJSON layers from the latest PlannedState artifact."""
     store = FilesystemArtifactStore()
     refs = [
         ref for ref in store.list_by_run(session_id)
@@ -210,17 +208,12 @@ async def get_render_layers(session_id: str):
     # selecting refs[0] can therefore render an older PlannedState.  The
     # manifest timestamp is the authoritative write order for this run.
     latest_ref = _latest_artifact_ref(refs)
-    planned_state = store.retrieve(latest_ref)
-
-    layers_by_type: Dict[str, Dict[str, Any]] = {}
-    for layer in _normalize_layout_layers(await _get_layout_configs(session_id)):
-        layers_by_type[layer["layerType"]] = layer
-    for layer in _derive_layers(planned_state):
-        layers_by_type.setdefault(layer["layerType"], layer)
+    planned_state = PlannedState(**store.retrieve(latest_ref))
+    layers = build_render_layers(planned_state)
 
     return {
         "session_id": session_id,
-        "layers": [layers_by_type[key] for key in sorted(layers_by_type)],
+        "layers": layers,
     }
 
 

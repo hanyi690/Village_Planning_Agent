@@ -43,7 +43,11 @@ async def _write_l4_node(state: ExecuteAgentState) -> dict:
     if getattr(state, "parcel_changeset", None) is not None:
         from app.agent.execute.planned_state_builder import changeset_to_planned_state
 
-        planned_state = changeset_to_planned_state(state.parcel_changeset, state.intent)
+        planned_state = changeset_to_planned_state(
+            state.parcel_changeset,
+            state.intent,
+            list(state.layout_configs or []),
+        )
         logger.info(
             "[EXECUTE:l4_write] building PlannedState from ParcelChangeSet (%d changes)",
             len(state.parcel_changeset.changes),

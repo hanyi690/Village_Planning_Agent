@@ -1,22 +1,21 @@
-"""DELIVER gate - 3-way router over a DeliveryManifest.
+"""DELIVER terminal router over a DeliveryManifest.
 
 Mirrors the RECONCILE/VALIDATE gate convention (app.agent.reconcile.gate)
 with stage="deliver". Pure function: DeliveryManifest -> GateDecision.
 No I/O, no LLM, no KG - deterministic only.
 
-Routes (precedence high -> low):
-  PASS            -> statutory_complete is True
-  RETRY_VALIDATE  -> dominant blocking item is classification_missing
-                     (item_id "hi-class-*") — fixable by re-validation
-  HUMAN           -> export failure (hi-layers-*), upstream unresolved
-                     (hi-upstream-*), tie between blocking categories, or
-                     delivery_gate failed with no blocking item
+Routes:
+  PASS            -> complete or controlled partial terminal delivery
+  END_DIAGNOSTIC  -> remaining non-deferred blocker
 
 Determinism: routing is a pure function of the manifest fields.
 Only the gate function is delivered here; main graph wiring lands in Wave M.
 """
 from __future__ import annotations
 
+from typing import Any
+
+from app.agent.common.gate_progress import gate_progress_metadata
 from app.modules.schema.contracts.delivery_manifest_contracts import (
     DeliveryManifest,
 )
@@ -48,23 +47,42 @@ def _blocking_categories(manifest: DeliveryManifest) -> set[str]:
 
 
 def deliver_gate_route(manifest: DeliveryManifest) -> str:
-    """Return the deterministic route: "PASS"|"RETRY_VALIDATE"|"HUMAN"."""
-    if manifest.statutory_complete:
+    """Return PASS for successful terminals, otherwise END_DIAGNOSTIC."""
+    if manifest.delivery_status in {"complete", "partial"}:
         return "PASS"
-
-    categories = _blocking_categories(manifest)
-
-    if len(categories) == 1 and categories == {"classification"}:
-        return "RETRY_VALIDATE"
-
-    return "HUMAN"
+    return "END_DIAGNOSTIC"
 
 
-def evaluate_deliver_gate(manifest: DeliveryManifest) -> GateDecision:
+def evaluate_deliver_gate(
+    manifest: DeliveryManifest,
+    *,
+    input_artifact_refs: dict[str, Any] | None = None,
+    previous_gate: Any = None,
+) -> GateDecision:
     stage = STAGE
     gate_artifact_id = "gate-deliver-" + (manifest.artifact_id or "0")
 
     route = deliver_gate_route(manifest)
+    issue_payload = [
+        item.model_dump(mode="json")
+        for item in manifest.pending_human_items
+        if item.blocking
+    ]
+    progress, _ = gate_progress_metadata(
+        input_artifact_refs=input_artifact_refs,
+        output={
+            "delivery_status": manifest.delivery_status,
+            "statutory_complete": manifest.statutory_complete,
+            "traceability": [item.model_dump(mode="json") for item in manifest.traceability],
+        },
+        issues=issue_payload,
+        previous_gate=previous_gate,
+    )
+    route_reason = (
+        f"terminal_delivery:{manifest.delivery_status}"
+        if route == "PASS"
+        else "remaining_non_deferred_delivery_blockers"
+    )
 
     if route != "PASS":
         categories = sorted(_blocking_categories(manifest))
@@ -76,6 +94,10 @@ def evaluate_deliver_gate(manifest: DeliveryManifest) -> GateDecision:
                 context={
                     "reason": route,
                     "blocking_categories": categories,
+                    "delivery_status": manifest.delivery_status,
+                    "blocking_item_ids": manifest.diagnostic_summary.get(
+                        "blocking_item_ids", []
+                    ),
                 },
             )
         ]
@@ -86,6 +108,8 @@ def evaluate_deliver_gate(manifest: DeliveryManifest) -> GateDecision:
             pending_requests=pending,
             context_version=manifest.context_version,
             artifact_id=gate_artifact_id,
+            route_reason=route_reason,
+            **progress,
         )
 
     return GateDecision(
@@ -95,6 +119,8 @@ def evaluate_deliver_gate(manifest: DeliveryManifest) -> GateDecision:
         pending_requests=[],
         context_version=manifest.context_version,
         artifact_id=gate_artifact_id,
+        route_reason=route_reason,
+        **progress,
     )
 
 

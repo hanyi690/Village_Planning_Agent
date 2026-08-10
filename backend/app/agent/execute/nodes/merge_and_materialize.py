@@ -70,5 +70,9 @@ async def _planned_state_builder_node(state: ExecuteAgentState) -> dict:
 
     if state.parcel_changeset is None:
         return {}
-    planned_state = changeset_to_planned_state(state.parcel_changeset, _execution_intent_from_plan(state))
+    planned_state = changeset_to_planned_state(
+        state.parcel_changeset,
+        _execution_intent_from_plan(state),
+        list(state.layout_configs or []),
+    )
     return {"planned_state": planned_state}

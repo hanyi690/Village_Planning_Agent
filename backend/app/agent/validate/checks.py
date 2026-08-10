@@ -74,6 +74,17 @@ def _wkt_area(wkt: str) -> float:
 
 def check_hard_constraints(planned_state: Any, constraint_index: Any) -> List[ValidationCheck]:
     """Check no planned parcel overlaps a prohibited constraint polygon."""
+    if not (getattr(planned_state, "parcels", None) or []):
+        return [
+            _check(
+                "hard_constraints",
+                "硬性约束核查",
+                True,
+                stage="SELECT",
+                actual="not_applicable:no_planned_parcels",
+                expected="constraint checks apply to planned parcel geometry",
+            )
+        ]
     if constraint_index is None:
         return [
             _check(
@@ -614,7 +625,8 @@ def check_contract_completeness(
     missing_bsm = [p.bsm for p in planned_state.parcels if not (p.bsm or "").strip()]
     missing_geom = [p.bsm or "?" for p in planned_state.parcels if not (p.geometry or "").strip()]
     parcel_fields_ok = not missing_bsm and not missing_geom
-    flags_ok = bool(
+    has_changes = bool(changeset and (getattr(changeset, "changes", None) or []))
+    flags_ok = (not need_parcels and not has_changes) or bool(
         changeset
         and changeset.area_conservation_verified
         and changeset.geometry_validity_verified

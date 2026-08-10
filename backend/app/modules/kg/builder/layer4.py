@@ -30,6 +30,12 @@ from app.modules.schema.contracts.planned_state_contracts import (
 logger = get_logger(__name__)
 
 
+def _target_uri(entity_type: str, target_id: str) -> URIRef:
+    if target_id.startswith(("http://", "https://", "urn:")):
+        return URIRef(target_id)
+    return EntityIdPolicy.uri(entity_type, target_id)
+
+
 def ingest_planned_state_from_geojson(data_dir: str | Path) -> PlannedState:
     """Read planned/ GeoJSON files (landuse, road, construction_zone) into PlannedState.
 
@@ -179,7 +185,11 @@ def apply_planned_state(kg, planned_state: PlannedState) -> None:
                     kg.g.add((uri, PLN.derived_from, s))
                     break
         if p.derived_from_zone_target:
-            kg.g.add((uri, PLN.derived_from_target, URIRef(p.derived_from_zone_target)))
+            kg.g.add((
+                uri,
+                PLN.derived_from_target,
+                _target_uri("zone_target", p.derived_from_zone_target),
+            ))
         if p.source_spec:
             kg.g.add((uri, PLN.source_spec, Literal(p.source_spec)))
         if p.decided_by:
@@ -206,7 +216,11 @@ def apply_planned_state(kg, planned_state: PlannedState) -> None:
         if z.area_ha:
             kg.g.add((uri, PLN.area_target_ha, Literal(z.area_ha, datatype=XSD.double)))
         if z.derived_from_zone_target:
-            kg.g.add((uri, PLN.derived_from_target, URIRef(z.derived_from_zone_target)))
+            kg.g.add((
+                uri,
+                PLN.derived_from_target,
+                _target_uri("zone_target", z.derived_from_zone_target),
+            ))
         count += 1
 
     # ── PlannedFacility ──
@@ -224,7 +238,11 @@ def apply_planned_state(kg, planned_state: PlannedState) -> None:
         if f.service_radius:
             kg.g.add((uri, PLN.service_radius, Literal(f.service_radius, datatype=XSD.integer)))
         if f.derived_from_target:
-            kg.g.add((uri, PLN.derived_from_target, URIRef(f.derived_from_target)))
+            kg.g.add((
+                uri,
+                PLN.derived_from_target,
+                _target_uri("facility_target", f.derived_from_target),
+            ))
         count += 1
 
     # ── PlannedRoad ──
@@ -239,7 +257,11 @@ def apply_planned_state(kg, planned_state: PlannedState) -> None:
         if r.width_m:
             kg.g.add((uri, PLN.buffer_width_m, Literal(r.width_m, datatype=XSD.double)))
         if r.derived_from_target:
-            kg.g.add((uri, PLN.derived_from_target, URIRef(r.derived_from_target)))
+            kg.g.add((
+                uri,
+                PLN.derived_from_target,
+                _target_uri("road_target", r.derived_from_target),
+            ))
         count += 1
 
     # ── PlannedAxis ──
@@ -254,7 +276,11 @@ def apply_planned_state(kg, planned_state: PlannedState) -> None:
         if a.direction:
             kg.g.add((uri, PLN.direction, Literal(a.direction)))
         if a.derived_from_target:
-            kg.g.add((uri, PLN.derived_from_target, URIRef(a.derived_from_target)))
+            kg.g.add((
+                uri,
+                PLN.derived_from_target,
+                _target_uri("axis_target", a.derived_from_target),
+            ))
         count += 1
 
     if count:

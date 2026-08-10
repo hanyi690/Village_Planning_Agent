@@ -9,13 +9,28 @@ from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 
-def create_completed_event(session_id: str) -> Dict[str, Any]:
+def create_completed_event(
+    session_id: str,
+    *,
+    delivery_status: str = "",
+    deferral_summary: Optional[Dict[str, Any]] = None,
+    diagnostic_terminal: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
     """Create a completed event."""
-    return {
+    event = {
         "type": "completed",
         "session_id": session_id,
         "timestamp": datetime.now().isoformat(),
     }
+    if delivery_status:
+        event["delivery_status"] = delivery_status
+    event["deferral_summary"] = deferral_summary or {
+        "count": 0,
+        "target_ids": [],
+        "actions": [],
+    }
+    event["diagnostic_terminal"] = diagnostic_terminal or {}
+    return event
 
 
 def create_error_event(session_id: str, error_message: str) -> Dict[str, Any]:

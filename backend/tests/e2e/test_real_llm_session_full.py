@@ -218,9 +218,14 @@ def test_real_llm_session_full_fixture(sqlite_db, pipeline_reset, monkeypatch):
                 stage_report, encoding="utf-8"
             )
             required_stages = ("PARSE", "GROUND", "SELECT", "EXECUTE", "VALIDATE", "RECONCILE", "DELIVER")
+            completed_reports = [
+                item
+                for item in trace.get("reports", [])
+                if (item.get("diagnostics") or {}).get("status") == "stage_completed"
+            ]
             missing_stages = [
                 stage for stage in required_stages
-                if not any(report.get("stage") == stage for report in trace.get("reports", []))
+                if not any(report.get("stage") == stage for report in completed_reports)
                 or f"## {stage} /" not in stage_report
             ]
             assert not missing_stages, (
@@ -230,13 +235,81 @@ def test_real_llm_session_full_fixture(sqlite_db, pipeline_reset, monkeypatch):
                 f"human_resolutions={human_resolutions!r}, "
                 f"stage_report={run_root / session_id / 'reports' / 'stage-report.md'}"
             )
-            for report_item in trace.get("reports", []):
+            for report_item in completed_reports:
                 if report_item.get("stage") not in required_stages:
                     continue
                 assert (report_item.get("inputs") or {}).get("input_checksum"), report_item
                 assert (report_item.get("outputs") or {}).get("output_checksum"), report_item
                 assert "output_summary" in (report_item.get("outputs") or {}), report_item
+                diagnostics = report_item.get("diagnostics") or {}
+                for key in (
+                    "gate_input_checksum",
+                    "gate_output_checksum",
+                    "issue_fingerprint",
+                    "route_reason",
+                    "progress_made",
+                    "gate_route",
+                ):
+                    assert key in diagnostics, report_item
             assert "input_checksum" in stage_report and "output_summary" in stage_report
+
+            validation_fingerprints = [
+                str((item.get("diagnostics") or {}).get("issue_fingerprint"))
+                for item in completed_reports
+                if item.get("stage") == "VALIDATE"
+                and (item.get("diagnostics") or {}).get("issue_fingerprint")
+            ]
+            assert len(validation_fingerprints) == len(set(validation_fingerprints)), (
+                "VALIDATE repeated an identical issue fingerprint; "
+                f"fingerprints={validation_fingerprints!r}"
+            )
+
+            from app.agent.bootstrap.artifact_runtime import load_artifact
+            from app.modules.schema.contracts.delivery_manifest_contracts import DeliveryManifest
+            from app.modules.schema.contracts.execution_plan_contracts import ExecutionOutcome
+            from app.modules.schema.contracts.selection_contracts import SiteSelectionDecision
+
+            manifest = load_artifact(state, "delivery_manifest", DeliveryManifest)
+            outcome = load_artifact(state, "execution_outcome", ExecutionOutcome)
+            selection = load_artifact(state, "site_selection", SiteSelectionDecision)
+            assert manifest is not None, state.get("artifact_refs")
+            assert outcome is not None, state.get("artifact_refs")
+            assert manifest.delivery_status in {"complete", "partial"}, manifest
+            assert state.get("delivery_status") == manifest.delivery_status
+            if manifest.delivery_status == "partial":
+                assert manifest.statutory_complete is False
+                assert manifest.deferral_ledger is not None
+                assert manifest.deferral_ledger.entries
+                assert manifest.deferral_summary.get("deferred_target_count", 0) > 0
+                assert any(item.status == "deferred" for item in manifest.traceability)
+
+            outcome_target_ids = {
+                item.target_id
+                for item in outcome.task_results
+                if item.status in {"succeeded", "deferred"}
+            }
+            deferred_target_ids = {
+                item.target_id
+                for item in (manifest.deferral_ledger.entries if manifest.deferral_ledger else ())
+            }
+            selected_facility_ids = {
+                item.target_id
+                for item in (selection.target_assignments if selection else [])
+                if item.target_type == "facility" and item.status == "placed"
+            }
+            assert selected_facility_ids <= outcome_target_ids | deferred_target_ids, (
+                "selected facilities are not fully accounted by execution/deferral; "
+                f"selected={sorted(selected_facility_ids)!r}, "
+                f"outcome={sorted(outcome_target_ids)!r}, "
+                f"deferred={sorted(deferred_target_ids)!r}"
+            )
+
+            status_response = client.get(f"/api/sessions/{session_id}/status")
+            assert status_response.status_code == 200, status_response.text
+            status_payload = status_response.json()
+            assert status_payload.get("delivery_status") == manifest.delivery_status
+            assert status_payload.get("deferral_summary") == manifest.deferral_summary
+            assert "diagnostic_summary" in status_payload
 
             deliver_gate = state.get("deliver_gate") or {}
             deliver_route = (
@@ -244,8 +317,8 @@ def test_real_llm_session_full_fixture(sqlite_db, pipeline_reset, monkeypatch):
                 if isinstance(deliver_gate, dict)
                 else getattr(deliver_gate, "feedback_route", None)
             )
-            assert deliver_route == "PASS", (
-                "real LLM session did not reach DELIVER PASS; "
+            assert deliver_route in {None, "PASS"}, (
+                "real LLM session did not reach a successful terminal delivery; "
                 f"phase={state.get('phase')!r}, deliver_gate={deliver_gate!r}, "
                 f"paused_stage={state.get('paused_stage')!r}, "
                 f"human_review_items={state.get('human_review_items')!r}, "

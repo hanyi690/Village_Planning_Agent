@@ -29,9 +29,14 @@ def _is_ambiguous(candidate: CandidateSite, ambiguity_threshold: float) -> bool:
 
 
 def ground_gate_route(
-    result: GroundingResult, *, ambiguity_threshold: float = 0.6
+    result: GroundingResult,
+    *,
+    ambiguity_threshold: float = 0.6,
+    expected_spec_count: int | None = None,
 ) -> str:
     """Return the deterministic route for ``result``: "PASS"|"EXPLORE"|"HUMAN"."""
+    if expected_spec_count == 0 and not result.unresolved:
+        return "PASS"
     if result.unresolved or not result.candidates:
         return "EXPLORE"
     if any(_is_ambiguous(c, ambiguity_threshold) for c in result.candidates):
@@ -40,13 +45,20 @@ def ground_gate_route(
 
 
 def evaluate_ground_gate(
-    result: GroundingResult, *, ambiguity_threshold: float = 0.6
+    result: GroundingResult,
+    *,
+    ambiguity_threshold: float = 0.6,
+    expected_spec_count: int | None = None,
 ) -> GateDecision:
     stage = STAGE
     cv = result.context_version
     gate_artifact_id = "gate-ground-" + (result.artifact_id or "0")
 
-    route = ground_gate_route(result, ambiguity_threshold=ambiguity_threshold)
+    route = ground_gate_route(
+        result,
+        ambiguity_threshold=ambiguity_threshold,
+        expected_spec_count=expected_spec_count,
+    )
 
     if route == "EXPLORE":
         pending = [

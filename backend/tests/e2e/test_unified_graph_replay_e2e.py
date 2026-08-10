@@ -64,6 +64,22 @@ def _program() -> PlanningProgram:
     )
 
 
+def _action_program() -> PlanningProgram:
+    return PlanningProgram(
+        artifact_id="l3-action-v1",
+        interventions=[
+            PlanningIntervention(
+                intervention_id="action-1",
+                target_id="action-1",
+                name="建立年度运营巡检制度",
+                execution_mode="non_spatial",
+                expected_output_kind="action",
+                category="project",
+            )
+        ],
+    )
+
+
 def _intent_result() -> IntentCompilationResult:
     typed = SpatialPlanningIntent(
         village_name="金田村",
@@ -216,15 +232,25 @@ async def _async_parse_stub(*a, **k):
     return _intent_result(), [], _pass_gate("parse")
 
 
-def _make_state() -> dict:
-    state = create_initial_state("s1", "v1", "data")
-    state["session_id"] = "s1"
+def _make_state(
+    program: PlanningProgram | None = None,
+    session_id: str = "s1",
+) -> dict:
+    state = create_initial_state(session_id, "v1", "data")
+    state["session_id"] = session_id
     state["context_version"] = "1"
     state["context_fingerprint"] = "sha256:test"
-    state["context_ref"] = {"session_id": "s1", "version": "1"}
+    state["context_ref"] = {"session_id": session_id, "version": "1"}
     state["bootstrap_context_done"] = True
     from app.agent.bootstrap.artifact_runtime import store_artifact
-    program_ref = store_artifact(state, "planning_program", "l3", "PlanningProgram", _program().model_dump(mode="json"))
+    selected_program = program or _program()
+    program_ref = store_artifact(
+        state,
+        "planning_program",
+        "l3",
+        "PlanningProgram",
+        selected_program.model_dump(mode="json"),
+    )
     state["artifact_refs"] = {"planning_program": program_ref}
     state["messages"] = [
         AIMessage(
@@ -235,6 +261,94 @@ def _make_state() -> dict:
         )
     ]
     return state
+
+
+@pytest.mark.asyncio
+async def test_real_post_l3_replay_action_only_is_mapless_complete(monkeypatch):
+    """Replay real post-L3 stages with a deterministic L3 input and no LLM calls."""
+    from pathlib import Path
+
+    from app.agent.execute.execute_agent import build_execute_agent_graph
+    from app.modules.context.planning_context import PlanningContext
+    from app.modules.kg.builder import PlanningKG
+    from app.modules.kg.manager import get_kg_manager
+    from app.modules.schema.contracts.delivery_manifest_contracts import DeliveryManifest
+    from app.modules.schema.contracts.execution_plan_contracts import ExecutionOutcome
+    from app.services.runtime import PlanningRuntimeService
+    from app.agent.bootstrap.artifact_runtime import load_artifact
+
+    session_id = f"real-post-l3-{uuid4().hex}"
+    run_tmp = Path.cwd() / ".run-tmp" / session_id
+    monkeypatch.setenv("BACKEND_RUN_TMP_DIR", str(run_tmp))
+
+    kg = PlanningKG(village_name="deterministic-action")
+    manager = get_kg_manager()
+    manager.register_session(session_id, kg)
+    context = PlanningContext(
+        session_id=session_id,
+        village_name="deterministic-action",
+        bundle=None,
+        village_anchors=[],
+        kg_session_ref=session_id,
+        kg=kg,
+        constraint_index=None,
+        version=1,
+    )
+
+    async def _context_input(*args, **kwargs):
+        return context
+
+    async def _bootstrap_input(state):
+        return {
+            "context_version": "1",
+            "context_fingerprint": "sha256:test",
+            "context_ref": {"session_id": session_id, "version": "1"},
+            "bootstrap_context_done": True,
+        }
+
+    async def _skip_db_audit(*args, **kwargs):
+        return None
+
+    monkeypatch.setattr(
+        "app.services.context.planning_context.build_planning_context",
+        _context_input,
+    )
+    monkeypatch.setattr(
+        "app.agent.bootstrap.post_l3_main_nodes._get_cached_context",
+        lambda state: context,
+    )
+    monkeypatch.setattr(
+        "app.agent.bootstrap.graph.bootstrap_context_node",
+        _bootstrap_input,
+    )
+    monkeypatch.setattr("app.agent.bootstrap.stage_audit._save", _skip_db_audit)
+    monkeypatch.setattr(
+        PlanningRuntimeService,
+        "_execute_subgraph",
+        build_execute_agent_graph(),
+    )
+
+    try:
+        graph = create_unified_planning_graph(checkpointer=MemorySaver())
+        result = await graph.ainvoke(
+            _make_state(_action_program(), session_id),
+            config={"configurable": {"thread_id": session_id}},
+        )
+
+        manifest = load_artifact(result, "delivery_manifest", DeliveryManifest)
+        outcome = load_artifact(result, "execution_outcome", ExecutionOutcome)
+        assert manifest is not None, result.get("validate_gate")
+        assert manifest.delivery_status == "complete", manifest.model_dump(mode="json")
+        assert manifest.expected_spatial_output_count == 0
+        assert manifest.render_layer_count == 0
+        assert manifest.action_results[0].target_id == "action-1"
+        assert outcome is not None
+        assert outcome.task_results[0].status == "succeeded"
+        assert outcome.task_results[0].expected_output_kind == "action"
+        assert result["deliver_gate"]["feedback_route"] is None
+        assert result["render_artifacts"]["mapless"] is True
+    finally:
+        manager.remove_session(session_id)
 
 
 @pytest.mark.asyncio
@@ -254,7 +368,7 @@ async def test_post_l3_chain_runs_end_to_end(monkeypatch, _post_l3_deps):
     )
     monkeypatch.setattr(
         "app.agent.ground.gate.evaluate_ground_gate",
-        lambda result: _pass_gate("ground"),
+        lambda result, **kwargs: _pass_gate("ground"),
     )
     monkeypatch.setattr(
         "app.agent.select.aggregate.select_aggregate",
@@ -286,7 +400,7 @@ async def test_post_l3_chain_runs_end_to_end(monkeypatch, _post_l3_deps):
     )
     monkeypatch.setattr(
         "app.agent.deliver.gate.evaluate_deliver_gate",
-        lambda manifest: _pass_gate("deliver"),
+        lambda manifest, **kwargs: _pass_gate("deliver"),
     )
 
     graph = create_unified_planning_graph(checkpointer=MemorySaver())
@@ -323,7 +437,7 @@ async def test_hitl_interrupt_and_resume_same_graph(monkeypatch, _post_l3_deps):
     )
     monkeypatch.setattr(
         "app.agent.ground.gate.evaluate_ground_gate",
-        lambda result: _pass_gate("ground"),
+        lambda result, **kwargs: _pass_gate("ground"),
     )
     # SELECT gate routes HUMAN -> route_after_select sends to human_review
     monkeypatch.setattr(
@@ -393,8 +507,15 @@ def _stub_full_chain(monkeypatch, human_stage=None):
     def _select_gate(decision, target_count):
         return _human_gate("select") if human_stage == "select" else _pass_gate("select")
 
-    def _deliver_gate(manifest):
-        return _human_gate("deliver") if human_stage == "deliver" else _pass_gate("deliver")
+    def _deliver_gate(manifest, **kwargs):
+        if human_stage == "deliver":
+            return GateDecision(
+                stage="deliver",
+                passed=False,
+                feedback_route="END_DIAGNOSTIC",
+                pending_requests=[],
+            )
+        return _pass_gate("deliver")
 
     monkeypatch.setattr(
         "app.services.context.planning_context.build_planning_context", _async_context)
@@ -402,7 +523,7 @@ def _stub_full_chain(monkeypatch, human_stage=None):
     monkeypatch.setattr("app.agent.ground.aggregate.ground_aggregate",
                         lambda specs, context: _grounding())
     monkeypatch.setattr("app.agent.ground.gate.evaluate_ground_gate",
-                        lambda result: _pass_gate("ground"))
+                        lambda result, **kwargs: _pass_gate("ground"))
     monkeypatch.setattr("app.agent.select.aggregate.select_aggregate",
                         lambda grounding, intent, context: (_decision(), []))
     monkeypatch.setattr("app.agent.select.gate.evaluate_select_gate", _select_gate)
@@ -506,17 +627,22 @@ async def test_hitl_reject_routes_to_conversation(monkeypatch, _post_l3_deps):
 
 
 @pytest.mark.asyncio
-async def test_hitl_approve_deliver_routes_to_end(monkeypatch, _post_l3_deps):
-    """Approve at deliver force-passes deliver_gate and terminates at END."""
+async def test_deliver_blocker_terminates_diagnostic_without_hitl(monkeypatch, _post_l3_deps):
+    """A DELIVER blocker terminates diagnostically without an upstream cycle."""
     _stub_full_chain(monkeypatch, human_stage="deliver")
     graph = create_unified_planning_graph(checkpointer=MemorySaver())
     config = {"configurable": {"thread_id": "s7"}}
-    await graph.ainvoke(_make_state(), config=config)
-    final, nodes = await _resume_and_capture(graph, config, {"action": "approve"})
+    nodes = []
+    async for chunk in graph.astream(
+        _make_state(), config=config, stream_mode="updates"
+    ):
+        nodes.extend(key for key in chunk if key != "__interrupt__")
+    final = graph.get_state(config).values
 
-    assert final["paused_stage"] == "deliver"
-    assert final["deliver_gate"]["feedback_route"] is None
-    assert "human_review_apply" in nodes, "approve at deliver must end after applying review"
+    assert final["delivery_status"] == "diagnostic_only"
+    assert final["deliver_gate"]["feedback_route"] == "END_DIAGNOSTIC"
+    assert END_DIAGNOSTIC in nodes
+    assert "human_review_prepare" not in nodes
 
 
 @pytest.mark.asyncio
@@ -632,7 +758,7 @@ def _pass_reconcile_report():
 
 def _pass_manifest():
     from app.modules.schema.contracts.delivery_manifest_contracts import DeliveryManifest
-    return DeliveryManifest(statutory_complete=True)
+    return DeliveryManifest(delivery_status="complete", statutory_complete=True)
 
 
 def test_execute_checkpoint_boundary_converts_runtime_parcel_namespace():

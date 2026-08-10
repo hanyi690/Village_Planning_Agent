@@ -29,11 +29,16 @@ async def _execution_review_node(state: ExecuteAgentState) -> dict:
     checks: List[Dict[str, Any]] = []
     violations: List[Dict[str, Any]] = []
 
-    input_ok = bool(state.parcel_by_bsm)
+    plan_tasks = list(getattr(state.execution_plan, "worker_tasks", None) or [])
+    action_only = bool(plan_tasks) and all(
+        str(getattr(task, "expected_output_kind", "")) == "action"
+        for task in plan_tasks
+    )
+    input_ok = bool(state.parcel_by_bsm) or action_only
     if not input_ok:
         violations.append({
             "check": "missing_parcel_input",
-            "message": "No parcel_by_bsm prepared (landuse input missing).",
+            "message": "No parcel_by_bsm prepared for spatial execution (landuse input missing).",
         })
     checks.append({"check": "input_completeness", "passed": input_ok})
 

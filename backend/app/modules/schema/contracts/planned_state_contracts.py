@@ -45,6 +45,7 @@ class PlannedFacility(BaseModel):
     lon: float = 0.0
     lat: float = 0.0
     service_radius: float = 0.0
+    geometry: str = ""
     derived_from_target: str = ""
 
 
@@ -52,6 +53,7 @@ class PlannedRoad(BaseModel):
     name: str = ""
     road_level: str = ""
     width_m: float = 0.0
+    geometry: str = ""
     derived_from_target: str = ""
 
 
@@ -59,6 +61,7 @@ class PlannedAxis(BaseModel):
     name: str = ""
     reference_feature: str = ""
     direction: str = ""
+    geometry: str = ""
     derived_from_target: str = ""
 
 

@@ -18,9 +18,15 @@ from app.agent.deliver.checks import (
 )
 from app.modules.schema.contracts.delivery_manifest_contracts import (
     Deliverable,
+    DeliveryGate,
     DeliveryManifest,
     HumanItem,
     TraceabilityEntry,
+)
+from app.modules.schema.contracts.deferral_contracts import DeferralLedger
+from app.modules.schema.contracts.execution_plan_contracts import (
+    ExecutionOutcome,
+    ExecutionPlan,
 )
 from app.modules.schema.contracts.provenance import Provenance
 from app.modules.schema.contracts.reconciliation_contracts import CoverageMatrix
@@ -36,6 +42,12 @@ def build_traceability_from_coverage(
     for row in rows:
         entries.append(
             TraceabilityEntry(
+                target_id=row.target_id,
+                target_type=row.target_type,
+                expected_output_kind=row.expected_output_kind,
+                execution_task_id=row.execution_task_id,
+                output_artifacts=list(row.output_artifacts),
+                status=row.status,
                 intervention_id=row.intervention_id,
                 requirement_id="" if row.spec_index is None else str(row.spec_index),
                 candidate_id=row.candidate_site_id,
@@ -134,6 +146,79 @@ def _build_planned_view(current_parcels, planned_state) -> list:
     return view
 
 
+def _deferral_summary(ledger: DeferralLedger | None) -> dict:
+    entries = list(getattr(ledger, "entries", None) or [])
+    return {
+        "count": len(entries),
+        "target_ids": [entry.target_id for entry in entries],
+        "actions": [entry.decision.action for entry in entries],
+    }
+
+
+def _expected_spatial_outputs(plan: ExecutionPlan | None) -> int:
+    return sum(
+        1
+        for task in (getattr(plan, "worker_tasks", None) or [])
+        if str(getattr(task, "expected_output_kind", "")) != "action"
+    )
+
+
+def _execution_blockers(
+    plan: ExecutionPlan | None,
+    outcome: ExecutionOutcome | None,
+    coverage_matrix: CoverageMatrix,
+    ledger: DeferralLedger | None,
+) -> list[HumanItem]:
+    if plan is None:
+        return []
+    rows = {
+        (str(row.target_id), str(row.expected_output_kind)): row
+        for row in coverage_matrix.rows
+    }
+    results = {
+        (str(result.target_id), str(result.expected_output_kind)): result
+        for result in (getattr(outcome, "task_results", None) or [])
+    }
+    action_ids = {
+        str(result.target_id)
+        for result in (getattr(outcome, "action_results", None) or [])
+    }
+    blockers: list[HumanItem] = []
+    for task in plan.worker_tasks:
+        key = (str(task.target_id), str(task.expected_output_kind))
+        row = rows.get(key)
+        result = results.get(key)
+        covered = row is not None and row.status == "covered"
+        succeeded = result is not None and result.status == "succeeded"
+        action_present = key[1] != "action" or key[0] in action_ids
+        if covered and succeeded and action_present:
+            continue
+        blockers.append(HumanItem(
+            item_id=f"hi-execution-{key[0]}",
+            description=f"活动目标未形成可交付结果: {key[0]}",
+            reason=(
+                f"coverage={getattr(row, 'status', 'missing')}; "
+                f"execution={getattr(result, 'status', 'missing')}; "
+                f"output_kind={key[1]}"
+            ),
+            blocking=True,
+        ))
+
+    ledger_ids = {
+        str(entry.target_id) for entry in (getattr(ledger, "entries", None) or [])
+    }
+    for task in plan.deferred_tasks:
+        if str(task.target_id) in ledger_ids:
+            continue
+        blockers.append(HumanItem(
+            item_id=f"hi-deferral-ledger-{task.target_id}",
+            description=f"延期目标缺少法定台账记录: {task.target_id}",
+            reason="ExecutionPlan.deferred_tasks must be backed by DeferralLedger.",
+            blocking=True,
+        ))
+    return blockers
+
+
 def deliver_aggregate(
     planned_state,
     validation_report,
@@ -143,6 +228,12 @@ def deliver_aggregate(
     *,
     current_parcels=None,
     run_id: str = "",
+    execution_plan: ExecutionPlan | None = None,
+    execution_outcome: ExecutionOutcome | None = None,
+    deferral_ledger: DeferralLedger | None = None,
+    expected_spatial_output_count: int | None = None,
+    render_layer_count: int = 0,
+    render_error: str = "",
 ) -> DeliveryManifest:
     """Run deliver checks and build a typed DeliveryManifest."""
     coverage_matrix = getattr(reconciliation_report, "coverage_matrix", None) or CoverageMatrix()
@@ -150,16 +241,59 @@ def deliver_aggregate(
     deliverables = build_deliverables_from_export(export_result)
 
     check_items: list[HumanItem] = []
-    check_items.extend(check_statutory_layers_complete(export_result))
+    spatial_output_count = (
+        _expected_spatial_outputs(execution_plan)
+        if expected_spatial_output_count is None
+        else max(0, int(expected_spatial_output_count))
+    )
+    check_items.extend(check_statutory_layers_complete(
+        export_result,
+        required=spatial_output_count > 0,
+    ))
     check_items.extend(check_traceability_complete(coverage_matrix))
     check_items.extend(check_classification_for_statutory(validation_report))
+    check_items.extend(_execution_blockers(
+        execution_plan,
+        execution_outcome,
+        coverage_matrix,
+        deferral_ledger,
+    ))
+    if spatial_output_count > 0 and render_layer_count <= 0:
+        check_items.append(HumanItem(
+            item_id="hi-render-empty",
+            description="活动空间目标缺少可渲染几何",
+            reason="PlannedState did not produce any render layer.",
+            blocking=True,
+        ))
+    if spatial_output_count > 0 and render_error:
+        check_items.append(HumanItem(
+            item_id="hi-render-file",
+            description="空间成果渲染文件生成失败",
+            reason=render_error,
+            blocking=True,
+        ))
 
     upstream_items = collect_upstream_human_items(upstream_gates)
 
-    gate = check_delivery_gate(
-        current_parcels=list(current_parcels or []),
-        planned_parcels=_build_planned_view(current_parcels, planned_state),
+    land_balance_expected = any(
+        str(getattr(task, "expected_output_kind", "")) in {"parcel", "polygon"}
+        for task in (getattr(execution_plan, "worker_tasks", None) or [])
     )
+    gate = (
+        check_delivery_gate(
+            current_parcels=list(current_parcels or []),
+            planned_parcels=_build_planned_view(current_parcels, planned_state),
+        )
+        if land_balance_expected or execution_plan is None
+        else DeliveryGate(land_balance_closed=True, zones_complete=True)
+    )
+    if spatial_output_count > 0 and not gate.passed:
+        check_items.append(HumanItem(
+            item_id="hi-delivery-gate",
+            description="空间成果未通过交付硬门槛",
+            reason="; ".join(gate.failures),
+            blocking=True,
+        ))
 
     pending_human_items = check_items + upstream_items
     blocking = [item for item in pending_human_items if item.blocking]
@@ -167,7 +301,26 @@ def deliver_aggregate(
         item.item_id == "hi-class-0" for item in check_items
     )
     no_blocking_items = not blocking
-    statutory_complete = gate.passed and no_blocking_items and classification_complete
+    deferral_summary = _deferral_summary(deferral_ledger)
+    delivery_status = (
+        "diagnostic_only"
+        if blocking
+        else "partial"
+        if deferral_summary["count"] > 0
+        else "complete"
+    )
+    statutory_complete = (
+        spatial_output_count > 0
+        and delivery_status == "complete"
+        and gate.passed
+        and no_blocking_items
+        and classification_complete
+    )
+    diagnostic_summary = {
+        "blocking_count": len(blocking),
+        "blocking_item_ids": [item.item_id for item in blocking],
+        "reasons": [item.reason for item in blocking],
+    } if blocking else {}
 
     provenance = Provenance(
         source="deliver_aggregate",
@@ -177,8 +330,15 @@ def deliver_aggregate(
     )
 
     return DeliveryManifest(
+        delivery_status=delivery_status,
         deliverables=deliverables,
         traceability=traceability,
+        action_results=list(getattr(execution_outcome, "action_results", None) or []),
+        deferral_ledger=deferral_ledger,
+        deferral_summary=deferral_summary,
+        diagnostic_summary=diagnostic_summary,
+        expected_spatial_output_count=spatial_output_count,
+        render_layer_count=render_layer_count,
         pending_human_items=pending_human_items,
         delivery_gate=gate,
         provenance=provenance,

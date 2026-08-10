@@ -44,8 +44,14 @@ def _statutory_source_for(layer: str) -> str:
     return layer
 
 
-def check_statutory_layers_complete(export_result: dict | None) -> list[HumanItem]:
+def check_statutory_layers_complete(
+    export_result: dict | None,
+    *,
+    required: bool = True,
+) -> list[HumanItem]:
     """Check the export package contains all required statutory layers."""
+    if not required:
+        return []
     if export_result is None:
         return [
             HumanItem(

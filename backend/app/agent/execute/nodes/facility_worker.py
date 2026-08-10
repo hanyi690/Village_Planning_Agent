@@ -56,6 +56,7 @@ def _facility_worker(state: ExecuteAgentState) -> WorkerResult:
             "type": "Feature",
             "properties": {
                 "facility_id": change.bsm,
+                "target_id": facility.target_id,
                 "facility_type": getattr(facility, "type", ""),
                 "status": "planned_new",
                 "source_bsm": change.bsm,
