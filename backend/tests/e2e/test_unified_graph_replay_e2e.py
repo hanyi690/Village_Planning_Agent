@@ -650,10 +650,8 @@ def test_execute_checkpoint_boundary_converts_runtime_parcel_namespace():
     }
 
 
-def test_llm_provider_failure_stops_dimension_redispatch():
-    """A terminal provider error must not be dispatched indefinitely."""
-    from langgraph.graph import END
-
+def test_llm_provider_failure_routes_to_human_review():
+    """A transient provider error in L1/L2/L3 routes to HUMAN checkpoint."""
     assert after_analysis({
         "phase": "layer1",
         "fatal_error": {
@@ -663,7 +661,27 @@ def test_llm_provider_failure_stops_dimension_redispatch():
             "message": "provider rejected request",
         },
         "completed_dimensions": {"layer1": []},
-    }) == END
+    }) == "human_review"
+
+
+def test_merge_safe_provider_failure_routes_to_human_review():
+    assert after_analysis({
+        "phase": "layer3",
+        "provider_failures": [{
+            "stage": "L3", "dimension": "ecological",
+            "code": "llm_stream_timeout", "message": "timeout",
+        }],
+        "completed_dimensions": {"layer3": ["industry"]},
+    }) == "human_review"
+
+
+def test_parallel_dimension_failure_is_preserved_for_human_route():
+    """A successful sibling must not overwrite a provider failure in fan-in."""
+    from app.agent.plan_state.state import _preserve_fatal_error
+
+    failure = {"stage": "L2", "dimension": "planning_positioning", "code": "llm_stream_timeout"}
+    assert _preserve_fatal_error(None, failure) == failure
+    assert _preserve_fatal_error(failure, None) == failure
 
 
 def test_llm_provider_circuit_breaker_is_session_scoped():
@@ -689,6 +707,20 @@ def test_business_retry_limit_zero_escalates_without_retry():
         "retry_counts": {},
         "parse_gate": {"feedback_route": "REPAIR"},
     }) == "human_review"
+
+
+def test_select_retry_exhaustion_promotes_select_gate_over_stale_ground():
+    from app.agent.bootstrap.graph import route_after_select
+
+    state = {
+        "max_retries": 1,
+        "retry_counts": {"select": 1},
+        "select_gate": {"feedback_route": "RETRY_GROUND", "pending_requests": []},
+        "ground_gate": {"feedback_route": "EXPLORE", "pending_requests": [{"stage": "ground"}]},
+    }
+    assert route_after_select(state) == "human_review"
+    assert state["select_gate"]["feedback_route"] == "HUMAN"
+    assert state["select_gate"]["pending_requests"]
 
 
 def test_human_retry_exhaustion_becomes_terminal_failure():
