@@ -13,17 +13,17 @@ import re
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
 
+from app.modules.kg.village_name_registry import load_all_village_names
 from app.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
 _BSM_NUM_RE = re.compile(r"(\d{15,25})")
 
-# 金田村 12 个自然村（行政事实，规划文本 L160）— 用于过滤"金田村(村域)/个自然村(泛称)"等非村名
-_KNOWN_NATURAL_VILLAGES = {
-    "园寨", "田坑", "社前", "分水", "清明", "塘笃",
-    "长塘", "炉池", "肩丰", "营仔", "新山", "黄竹",
-}
+# The registry is the sole source of the closed set.  Load the configured
+# data set union so this module does not silently bind every session to a
+# hard-coded village key.
+_KNOWN_NATURAL_VILLAGES = set(load_all_village_names())
 
 
 # ── L1 INSTRUCTION 表 → LocationAnchor 提取 ─────────────────────────────
@@ -205,15 +205,22 @@ def _location_fact_mentions(location_facts: Optional[List[Any]]) -> List[Dict[st
     mentions: List[Dict[str, str]] = []
     seen: set[tuple[str, str]] = set()
     for fact in location_facts or []:
-        evidence_text = " ".join(
-            str(getattr(fact, field, "") or "").strip()
-            for field in ("normalized_name", "spatial_hint", "source_span")
-        )
-        if not evidence_text.strip():
+        # The L1 model output is authoritative.  This consumer is specifically
+        # the village-binding branch, so retain only typed village facts and
+        # never reverse-search a configured village closed set in free text.
+        role = str(getattr(fact, "role", "") or "").strip().lower()
+        if role not in {"village", "natural_village", "settlement", "村庄", "自然村"}:
+            continue
+        normalized = str(getattr(fact, "normalized_name", "") or "").strip()
+        if not normalized:
             continue
         dim = str(getattr(fact, "dimension_key", "") or "l1_location_fact")
-        for base in _KNOWN_NATURAL_VILLAGES:
-            if base not in evidence_text or (base, dim) in seen:
+        for token in re.split(r"[、，,;/至和与\\s]+", normalized):
+            token = token.strip()
+            if not token:
+                continue
+            base = token.removesuffix("自然村").removesuffix("村").strip()
+            if not base or (base, dim) in seen:
                 continue
             seen.add((base, dim))
             mentions.append({
@@ -221,7 +228,7 @@ def _location_fact_mentions(location_facts: Optional[List[Any]]) -> List[Dict[st
                 "hints": str(
                     getattr(fact, "spatial_hint", "")
                     or getattr(fact, "source_span", "")
-                    or getattr(fact, "normalized_name", "")
+                    or normalized
                 )[:160],
                 "dim": dim,
             })

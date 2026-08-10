@@ -470,13 +470,11 @@ class DataCatalog:
         enrichment 用错 region 搜索。
         """
         try:
-            from pathlib import Path
             import yaml
+            from app.modules.kg.village_name_registry import find_village_yaml
 
-            cfg_path = Path("data/gis") / str(village_name).strip() / "villages.yaml"
-            if not cfg_path.exists():
-                cfg_path = Path("data/gis/jintian/villages.yaml")
-            if not cfg_path.exists():
+            cfg_path = find_village_yaml(str(village_name).strip())
+            if cfg_path is None:
                 return {}
             data = yaml.safe_load(cfg_path.read_text(encoding="utf-8")) or {}
             v = data.get("village", {}) or {}
@@ -499,15 +497,12 @@ class DataCatalog:
         的自然村搜索关键词。文件缺失时回退到空列表（不阻断管线）。
         """
         try:
-            from pathlib import Path
             import yaml
+            from app.modules.kg.village_name_registry import find_village_yaml
 
-            cfg_path = Path("data/gis") / str(village_name).strip() / "villages.yaml"
-            if not cfg_path.exists():
-                # 兜底：按村庄名猜测（如"金田村委会" → jintian）
-                cfg_path = Path("data/gis/jintian/villages.yaml")
-                if not cfg_path.exists():
-                    return []
+            cfg_path = find_village_yaml(str(village_name).strip())
+            if cfg_path is None:
+                return []
             data = yaml.safe_load(cfg_path.read_text(encoding="utf-8")) or {}
             names = [str(n).strip() for n in (data.get("natural_villages", []) or []) if str(n).strip()]
             anchors = []
