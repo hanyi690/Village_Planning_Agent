@@ -493,6 +493,7 @@ def select_aggregate(
                 "status": "placed",
                 "facility_type": facility.type,
             }
+        else:
             decision.target_assignments.append(
                 TargetAssignment(
                     target_id=facility.target_id,
@@ -503,7 +504,6 @@ def select_aggregate(
                     target_binding=facility.model_dump(mode="json"),
                 )
             )
-        else:
             facility_placements[facility.target_id] = {
                 "bsm": "",
                 "anchor_point": facility.anchor_point,

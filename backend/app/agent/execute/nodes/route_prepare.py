@@ -49,7 +49,7 @@ async def _route_tasks_node(state: ExecuteAgentState) -> dict:
         try:
             from rdflib import RDF
             from app.modules.kg.manager import get_kg_manager
-            from app.modules.kg.ontology import EntityTypes
+            from app.modules.kg.ontology import EntityTypes, PLN
 
             kg = get_kg_manager().get_session_kg(session_id)
             if kg is None:
@@ -60,18 +60,40 @@ async def _route_tasks_node(state: ExecuteAgentState) -> dict:
                     "Session KG is required before EXECUTE.",
                 ) | result
             expected = {
-                EntityTypes.ProjectTarget: len(getattr(bound_intent, "project_targets", None) or []),
-                EntityTypes.ZoneTarget: len(getattr(bound_intent, "zone_targets", None) or []),
-                EntityTypes.FacilityTarget: len(getattr(bound_intent, "facilities", None) or []),
-                EntityTypes.AxisTarget: len(getattr(bound_intent, "development_axes", None) or []),
-                EntityTypes.RoadTarget: len(getattr(bound_intent, "road_targets", None) or []),
+                EntityTypes.ProjectTarget: {
+                    str(item.target_id) for item in (getattr(bound_intent, "project_targets", None) or [])
+                },
+                EntityTypes.ZoneTarget: {
+                    str(item.target_id) for item in (getattr(bound_intent, "zone_targets", None) or [])
+                },
+                EntityTypes.FacilityTarget: {
+                    str(item.target_id) for item in (getattr(bound_intent, "facilities", None) or [])
+                },
+                EntityTypes.AxisTarget: {
+                    str(item.target_id) for item in (getattr(bound_intent, "development_axes", None) or [])
+                },
+                EntityTypes.RoadTarget: {
+                    str(item.target_id) for item in (getattr(bound_intent, "road_targets", None) or [])
+                },
             }
             mismatches = []
-            for entity_type, expected_count in expected.items():
-                actual_count = len(set(kg.g.subjects(RDF.type, entity_type)))
-                if actual_count != expected_count:
+            for entity_type, expected_ids in expected.items():
+                if not expected_ids:
+                    continue
+                subjects = set(kg.g.subjects(RDF.type, entity_type))
+                actual_ids = {
+                    str(target_id)
+                    for subject in subjects
+                    for target_id in kg.g.objects(subject, PLN.target_id)
+                }
+                missing_ids = expected_ids - actual_ids
+                if actual_ids and missing_ids:
                     mismatches.append(
-                        f"{entity_type.split('/')[-1]} state={expected_count} kg={actual_count}"
+                        f"{entity_type.split('/')[-1]} missing={sorted(missing_ids)}"
+                    )
+                elif not actual_ids and len(subjects) < len(expected_ids):
+                    mismatches.append(
+                        f"{entity_type.split('/')[-1]} state={len(expected_ids)} kg={len(subjects)}"
                     )
             if mismatches:
                 return _execution_error(

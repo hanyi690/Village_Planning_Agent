@@ -502,6 +502,84 @@ async def select_node(state: Dict[str, Any]) -> Dict[str, Any]:
 # ── EXECUTE ────────────────────────────────────────────────────────────
 
 
+def _execution_outcome_from_result(execution_plan: Any, result: Dict[str, Any]) -> Any:
+    """Classify each planned task from the actual worker dispatch and output."""
+    from app.modules.schema.contracts.execution_plan_contracts import ExecutionOutcome, ExecutionResult
+
+    worker_name = {
+        "project_footprint": "project",
+        "parcel_transformation": "zone",
+        "facility_placement": "facility",
+        "axis_construction": "axis",
+        "road_construction": "road",
+        "non_spatial_action": "action",
+    }
+    action_results = list(result.get("action_results", []) or [])
+    action_target_ids = {
+        str(getattr(item, "target_id", "") or (item.get("target_id") if isinstance(item, dict) else ""))
+        for item in action_results
+    }
+    errors = list(result.get("execution_errors", []) or [])
+    worker_results = list(result.get("worker_results", []) or [])
+    routed_tasks = result.get("tasks_to_run")
+    task_results = []
+    for task in list(getattr(execution_plan, "worker_tasks", None) or []):
+        task_id = str(getattr(task, "task_id", ""))
+        target_id = str(getattr(task, "target_id", ""))
+        output_kind = getattr(task, "expected_output_kind", "parcel")
+        task_worker_type = getattr(task, "worker_type", "")
+        task_worker_type = str(getattr(task_worker_type, "value", task_worker_type))
+        stage = worker_name.get(task_worker_type, getattr(task, "target_type", ""))
+        matching_results = [
+            worker for worker in worker_results
+            if str(getattr(worker, "worker_type", "") if not isinstance(worker, dict) else worker.get("worker_type", "")) == stage
+        ]
+        unresolved = [
+            item
+            for worker in matching_results
+            for item in (getattr(worker, "unresolved_items", []) if not isinstance(worker, dict) else worker.get("unresolved_items", [])) or []
+        ]
+        task_errors = [
+            item for item in errors
+            if str(item.get("stage", "") if isinstance(item, dict) else "") in {stage, task_worker_type, target_id}
+        ]
+        diagnostics = [item for item in unresolved + task_errors if isinstance(item, dict)]
+        failed = False
+        if isinstance(routed_tasks, list) and stage not in routed_tasks:
+            diagnostics.append({"code": "worker_not_dispatched", "stage": stage})
+            failed = True
+        elif output_kind == "action":
+            failed = target_id not in action_target_ids
+            if failed:
+                diagnostics.append({"code": "action_result_missing", "target_id": target_id})
+        elif not matching_results:
+            diagnostics.append({"code": "worker_result_missing", "stage": stage})
+            failed = True
+        elif unresolved or task_errors:
+            failed = True
+        task_results.append(ExecutionResult(
+            task_id=task_id,
+            target_id=target_id,
+            status="failed" if failed else "succeeded",
+            expected_output_kind=output_kind,
+            output_artifacts=[] if failed else [output_kind],
+            errors=[str(item) for item in task_errors],
+            diagnostics=diagnostics,
+        ))
+    for task in list(getattr(execution_plan, "deferred_tasks", None) or []):
+        task_results.append(ExecutionResult(
+            task_id=str(getattr(task, "task_id", "")),
+            target_id=str(getattr(task, "target_id", "")),
+            status="deferred",
+            expected_output_kind=getattr(task, "expected_output_kind", "parcel"),
+        ))
+    return ExecutionOutcome(
+        task_results=task_results,
+        action_results=action_results,
+        diagnostics=list(result.get("worker_conflict_diagnostics", []) or []) + errors,
+    )
+
+
 async def execute_node(state: Dict[str, Any]) -> Dict[str, Any]:
     """EXECUTE node: wrapper that maps AgentState -> ExecuteAgentState, runs the
     EXECUTE subgraph, and maps the result back to AgentState refs.
@@ -518,7 +596,7 @@ async def execute_node(state: Dict[str, Any]) -> Dict[str, Any]:
     from app.modules.schema.contracts.parse_contracts import SpatialPlanningIntent
     from app.modules.schema.contracts.parse_result_contracts import IntentCompilationResult
     from app.modules.schema.contracts.selection_contracts import SiteSelectionDecision
-    from app.modules.schema.contracts.execution_plan_contracts import ExecutionOutcome, ExecutionPlan, ExecutionResult
+    from app.modules.schema.contracts.execution_plan_contracts import ExecutionPlan
 
     context = await _require_context(state)
     intent = _load_ref_artifact(state, "intent_compilation", IntentCompilationResult)
@@ -553,16 +631,19 @@ async def execute_node(state: Dict[str, Any]) -> Dict[str, Any]:
         messages=list(state.get("messages") or []),
     )
 
+    from app.agent.execute.nodes.worker_common import _execution_intent_from_plan
+
+    execution_intent = _execution_intent_from_plan(exec_state)
     graph = PlanningRuntimeService._execute_subgraph
     if graph is None:
         await PlanningRuntimeService.ensure_initialized()
         graph = PlanningRuntimeService._execute_subgraph
     kg_obj = getattr(context, "kg", None)
-    if kg_obj is not None and plan_intent is not None:
+    if kg_obj is not None and execution_intent is not None:
         try:
             from app.modules.kg.builder.layer3 import build_intent_layer
 
-            build_intent_layer(kg_obj, plan_intent)
+            build_intent_layer(kg_obj, execution_intent)
         except Exception as e:
             logger.warning("[post_l3:main:execute] build_intent_layer failed: %s", e)
     # EXECUTE contains several GIS workers and must have a structured
@@ -583,45 +664,12 @@ async def execute_node(state: Dict[str, Any]) -> Dict[str, Any]:
 
     changeset = result.get("parcel_changeset")
     if changeset is not None:
-        from app.agent.execute.nodes.worker_common import _execution_intent_from_plan
-
-        planned_state = changeset_to_planned_state(changeset, _execution_intent_from_plan(exec_state))
+        planned_state = changeset_to_planned_state(changeset, execution_intent)
     else:
         logger.warning("[post_l3:main:execute] no parcel_changeset produced")
         planned_state = None
 
-    action_results = list(result.get("action_results", []) or [])
-    action_target_ids = {
-        str(getattr(item, "target_id", "") or (item.get("target_id") if isinstance(item, dict) else ""))
-        for item in action_results
-    }
-    errors = list(result.get("execution_errors", []) or [])
-    task_results = []
-    for task in list(getattr(execution_plan, "worker_tasks", None) or []):
-        task_id = str(getattr(task, "task_id", ""))
-        target_id = str(getattr(task, "target_id", ""))
-        output_kind = getattr(task, "expected_output_kind", "parcel")
-        failed = output_kind == "action" and target_id not in action_target_ids
-        task_results.append(ExecutionResult(
-            task_id=task_id,
-            target_id=target_id,
-            status="failed" if failed else "succeeded",
-            expected_output_kind=output_kind,
-            output_artifacts=[] if failed else [output_kind],
-            errors=[str(item) for item in errors] if failed else [],
-        ))
-    for task in list(getattr(execution_plan, "deferred_tasks", None) or []):
-        task_results.append(ExecutionResult(
-            task_id=str(getattr(task, "task_id", "")),
-            target_id=str(getattr(task, "target_id", "")),
-            status="deferred",
-            expected_output_kind=getattr(task, "expected_output_kind", "parcel"),
-        ))
-    outcome = ExecutionOutcome(
-        task_results=task_results,
-        action_results=action_results,
-        diagnostics=list(result.get("worker_conflict_diagnostics", []) or []) + errors,
-    )
+    outcome = _execution_outcome_from_result(execution_plan, result)
     refs = {
         "execution_outcome": _persist_artifact(state, "execute", "ExecutionOutcome", outcome),
         "parcel_changeset": _persist_artifact(state, "execute", "ParcelChangeSet", changeset),
