@@ -21,6 +21,9 @@ Only the gate function is delivered here; main graph wiring lands in Wave M.
 """
 from __future__ import annotations
 
+from typing import Any
+
+from app.agent.common.gate_progress import gate_progress_metadata
 from app.modules.schema.contracts.reconciliation_contracts import (
     ReconciliationInconsistency,
     ReconciliationReport,
@@ -76,15 +79,42 @@ def reconcile_gate_route(report: ReconciliationReport) -> str:
     return _STAGE_ROUTE.get(stage, "HUMAN")
 
 
-def evaluate_reconcile_gate(report: ReconciliationReport) -> GateDecision:
+def evaluate_reconcile_gate(
+    report: ReconciliationReport,
+    *,
+    input_artifact_refs: dict[str, Any] | None = None,
+    previous_gate: Any = None,
+) -> GateDecision:
     stage = STAGE
     gate_artifact_id = "gate-reconcile-" + (report.artifact_id or "0")
 
     route = reconcile_gate_route(report)
+    issue_payload = [item.model_dump(mode="json") for item in report.inconsistencies]
+    progress, identical = gate_progress_metadata(
+        input_artifact_refs=input_artifact_refs,
+        output={
+            "coverage_matrix": report.coverage_matrix.model_dump(mode="json"),
+            "inconsistencies": issue_payload,
+        },
+        issues=issue_payload,
+        previous_gate=previous_gate,
+    )
+    route_reason = "checks_passed" if route == "PASS" else f"dominant_route:{route}"
+    if route.startswith("RETRY_") and identical:
+        route = "HUMAN"
+        route_reason = "identical_no_progress"
+    elif route.startswith("RETRY_") and progress["inputs_changed"] is False:
+        route = "HUMAN"
+        route_reason = "inputs_unchanged"
 
     if route != "PASS":
         counts = _error_counts(report)
         dominant, error_count = _dominant_stage(counts)
+        target_ids = sorted({
+            item.intervention_id
+            for item in report.inconsistencies
+            if item.severity == "error" and item.intervention_id
+        })
         pending = [
             PendingRequest(
                 request_id="pr-reconcile-" + route.lower() + "-0",
@@ -94,6 +124,8 @@ def evaluate_reconcile_gate(report: ReconciliationReport) -> GateDecision:
                     "reason": route,
                     "stage": dominant,
                     "error_count": error_count,
+                    "target_ids": target_ids,
+                    "issue_fingerprint": progress["issue_fingerprint"],
                 },
             )
         ]
@@ -104,6 +136,8 @@ def evaluate_reconcile_gate(report: ReconciliationReport) -> GateDecision:
             pending_requests=pending,
             context_version=report.context_version,
             artifact_id=gate_artifact_id,
+            route_reason=route_reason,
+            **progress,
         )
 
     return GateDecision(
@@ -113,6 +147,8 @@ def evaluate_reconcile_gate(report: ReconciliationReport) -> GateDecision:
         pending_requests=[],
         context_version=report.context_version,
         artifact_id=gate_artifact_id,
+        route_reason=route_reason,
+        **progress,
     )
 
 

@@ -69,6 +69,31 @@ def _gate_route(gate: Any) -> str:
     return route or "PASS"
 
 
+def _evaluate_progress_gate(
+    evaluator: Any,
+    report: Any,
+    *,
+    input_artifact_refs: Dict[str, Any],
+    previous_gate: Any,
+) -> Any:
+    """Pass audit metadata when supported by the evaluator/test double."""
+    import inspect
+
+    parameters = inspect.signature(evaluator).parameters.values()
+    supports_metadata = any(
+        parameter.kind == inspect.Parameter.VAR_KEYWORD
+        or parameter.name == "input_artifact_refs"
+        for parameter in parameters
+    )
+    if not supports_metadata:
+        return evaluator(report)
+    return evaluator(
+        report,
+        input_artifact_refs=input_artifact_refs,
+        previous_gate=previous_gate,
+    )
+
+
 def _gate_failure_context(gate: Any) -> str:
     """Human-readable failure reason from a gate decision."""
     if gate is None:
@@ -700,6 +725,10 @@ async def validate_node(state: Dict[str, Any]) -> Dict[str, Any]:
     from app.modules.schema.contracts.parcel_change_contracts import ParcelChangeSet
     from app.modules.schema.contracts.parse_result_contracts import IntentCompilationResult
     from app.modules.schema.contracts.selection_contracts import SiteSelectionDecision
+    from app.modules.schema.contracts.execution_plan_contracts import (
+        ExecutionOutcome,
+        ExecutionPlan,
+    )
 
     retry_patch = _retry_patch(state, "validate")
     context = await _require_context(state)
@@ -709,6 +738,8 @@ async def validate_node(state: Dict[str, Any]) -> Dict[str, Any]:
     intent = _load_ref_artifact(state, "intent_compilation", IntentCompilationResult)
     plan_intent = _to_typed(getattr(intent, "typed_intent", None) or intent, SpatialPlanningIntent)
     selection = _load_ref_artifact(state, "site_selection", SiteSelectionDecision)
+    execution_plan = _load_ref_artifact(state, "execution_plan", ExecutionPlan)
+    execution_outcome = _load_ref_artifact(state, "execution_outcome", ExecutionOutcome)
     report = validate_aggregate(
         planned_state,
         changeset,
@@ -717,8 +748,24 @@ async def validate_node(state: Dict[str, Any]) -> Dict[str, Any]:
         constraint_index,
         run_id=_run_id(state),
         decision=selection,
+        execution_plan=execution_plan,
+        execution_outcome=execution_outcome,
     )
-    gate = evaluate_validate_gate(report)
+    input_keys = {
+        "intent_compilation", "site_selection", "execution_plan",
+        "execution_outcome", "parcel_changeset", "planned_state", "deferral_ledger",
+    }
+    input_refs = {
+        key: value
+        for key, value in (state.get("artifact_refs") or {}).items()
+        if key in input_keys
+    }
+    gate = _evaluate_progress_gate(
+        evaluate_validate_gate,
+        report,
+        input_artifact_refs=input_refs,
+        previous_gate=state.get("validate_gate"),
+    )
     ref = _persist_artifact(state, "validate", "ValidationReport", report)
     return {
         "validate_gate": _dump(gate),
@@ -743,6 +790,10 @@ async def reconcile_node(state: Dict[str, Any]) -> Dict[str, Any]:
     from app.modules.schema.contracts.parcel_change_contracts import ParcelChangeSet
     from app.modules.schema.contracts.planned_state_contracts import PlannedState
     from app.modules.schema.contracts.parse_result_contracts import IntentCompilationResult
+    from app.modules.schema.contracts.execution_plan_contracts import (
+        ExecutionOutcome,
+        ExecutionPlan,
+    )
 
     retry_patch = _retry_patch(state, "reconcile")
     context = await _require_context(state)
@@ -764,7 +815,12 @@ async def reconcile_node(state: Dict[str, Any]) -> Dict[str, Any]:
                 )
             ],
         )
-        gate = evaluate_reconcile_gate(report)
+        gate = _evaluate_progress_gate(
+            evaluate_reconcile_gate,
+            report,
+            input_artifact_refs=state.get("artifact_refs") or {},
+            previous_gate=state.get("reconcile_gate"),
+        )
         ref = _persist_artifact(state, "reconcile", "ReconciliationReport", report)
         return {
             "reconcile_gate": _dump(gate),
@@ -779,6 +835,8 @@ async def reconcile_node(state: Dict[str, Any]) -> Dict[str, Any]:
     changeset = _load_ref_artifact(state, "parcel_changeset", ParcelChangeSet)
     planned_state = _load_ref_artifact(state, "planned_state", PlannedState)
     intent = _load_ref_artifact(state, "intent_compilation", IntentCompilationResult)
+    execution_plan = _load_ref_artifact(state, "execution_plan", ExecutionPlan)
+    execution_outcome = _load_ref_artifact(state, "execution_outcome", ExecutionOutcome)
     report = reconcile_aggregate(
         program,
         specs,
@@ -787,9 +845,26 @@ async def reconcile_node(state: Dict[str, Any]) -> Dict[str, Any]:
         changeset,
         planned_state,
         intent,
+        execution_plan=execution_plan,
+        execution_outcome=execution_outcome,
         run_id=_run_id(state),
     )
-    gate = evaluate_reconcile_gate(report)
+    input_keys = {
+        "planning_program", "intent_compilation", "grounding_result",
+        "site_selection", "execution_plan", "execution_outcome",
+        "parcel_changeset", "planned_state", "validation_report", "deferral_ledger",
+    }
+    input_refs = {
+        key: value
+        for key, value in (state.get("artifact_refs") or {}).items()
+        if key in input_keys
+    }
+    gate = _evaluate_progress_gate(
+        evaluate_reconcile_gate,
+        report,
+        input_artifact_refs=input_refs,
+        previous_gate=state.get("reconcile_gate"),
+    )
     ref = _persist_artifact(state, "reconcile", "ReconciliationReport", report)
     return {
         "reconcile_gate": _dump(gate),

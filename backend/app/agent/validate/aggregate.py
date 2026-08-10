@@ -55,6 +55,8 @@ def validate_aggregate(
     constraint_index: Any,
     run_id: str = "",
     decision: Any = None,
+    execution_plan: Any = None,
+    execution_outcome: Any = None,
 ) -> ValidationReport:
     """Run all 9 VALIDATE checks and aggregate their findings into a ValidationReport."""
     if planned_state is None:
@@ -88,7 +90,13 @@ def validate_aggregate(
     all_checks.extend(check_accessibility(planned_state, intent))
     all_checks.extend(check_contract_completeness(planned_state, changeset, intent))
     all_checks.extend(check_classification_missing(planned_state))
-    all_checks.extend(check_traceability(changeset, intent, decision=decision))
+    all_checks.extend(check_traceability(
+        changeset,
+        intent,
+        decision=decision,
+        execution_plan=execution_plan,
+        execution_outcome=execution_outcome,
+    ))
 
     overall_passed = all(c.passed for c in all_checks)
 

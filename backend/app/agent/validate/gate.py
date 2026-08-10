@@ -23,6 +23,9 @@ Only RETRY_EXECUTE is wired in the current graph; Wave M connects the others.
 """
 from __future__ import annotations
 
+from typing import Any
+
+from app.agent.common.gate_progress import gate_progress_metadata
 from app.modules.schema.contracts.validation_report_contracts import ValidationReport
 from app.modules.schema.contracts.workflow_contracts import (
     GateDecision,
@@ -77,15 +80,45 @@ def validate_gate_route(report: ValidationReport) -> str:
     return _STAGE_ROUTE[stage]
 
 
-def evaluate_validate_gate(report: ValidationReport) -> GateDecision:
+def evaluate_validate_gate(
+    report: ValidationReport,
+    *,
+    input_artifact_refs: dict[str, Any] | None = None,
+    previous_gate: Any = None,
+) -> GateDecision:
     stage = STAGE
     gate_artifact_id = "gate-validate-" + (report.artifact_id or "0")
 
     route = validate_gate_route(report)
+    failed_checks = [
+        check.model_dump(mode="json")
+        for check in report.checks
+        if not check.passed
+    ]
+    progress, identical = gate_progress_metadata(
+        input_artifact_refs=input_artifact_refs,
+        output={"checks": failed_checks, "overall_passed": report.overall_passed},
+        issues=report.issues_by_stage,
+        previous_gate=previous_gate,
+    )
+    route_reason = "checks_passed" if route == "PASS" else f"dominant_route:{route}"
+    if route.startswith("RETRY_") and identical:
+        route = "HUMAN"
+        route_reason = "identical_no_progress"
+    elif route.startswith("RETRY_") and progress["inputs_changed"] is False:
+        route = "HUMAN"
+        route_reason = "inputs_unchanged"
 
     if route != "PASS":
         counts = _error_counts(report)
         dominant, error_count = _dominant_stage(counts)
+        target_ids = sorted({
+            target_id
+            for check in report.checks
+            if not check.passed
+            for target_id in check.affected_parcels
+            if target_id
+        })
         pending = [
             PendingRequest(
                 request_id="pr-validate-" + route.lower() + "-0",
@@ -95,6 +128,8 @@ def evaluate_validate_gate(report: ValidationReport) -> GateDecision:
                     "reason": route,
                     "stage": dominant,
                     "error_issue_count": error_count,
+                    "target_ids": target_ids,
+                    "issue_fingerprint": progress["issue_fingerprint"],
                 },
             )
         ]
@@ -105,6 +140,8 @@ def evaluate_validate_gate(report: ValidationReport) -> GateDecision:
             pending_requests=pending,
             context_version=report.context_version,
             artifact_id=gate_artifact_id,
+            route_reason=route_reason,
+            **progress,
         )
 
     return GateDecision(
@@ -114,6 +151,8 @@ def evaluate_validate_gate(report: ValidationReport) -> GateDecision:
         pending_requests=[],
         context_version=report.context_version,
         artifact_id=gate_artifact_id,
+        route_reason=route_reason,
+        **progress,
     )
 
 

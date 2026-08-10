@@ -24,6 +24,8 @@ from app.core.events import SSEEventType
 from app.utils.logger import get_logger
 logger = get_logger(__name__)
 
+END_DIAGNOSTIC = "end_diagnostic"
+
 
 async def execute_tools_node(state: Dict[str, Any]) -> Dict[str, Any]:
     """Load tool/model registrations only when a tool stage is executed."""
@@ -136,6 +138,8 @@ def route_after_validate(state: Dict[str, Any]) -> str:
     route = post_l3_main_nodes._gate_route(state.get("validate_gate"))
     if route == "PASS":
         return "reconcile"
+    if route == "END_DIAGNOSTIC":
+        return END_DIAGNOSTIC
     if route in ("RETRY_EXECUTE", "RETRY_SELECT", "RETRY_GROUND", "RETRY_PARSE"):
         stage_map = {
             "RETRY_EXECUTE": "validate",
@@ -153,6 +157,8 @@ def route_after_reconcile(state: Dict[str, Any]) -> str:
     route = post_l3_main_nodes._gate_route(state.get("reconcile_gate"))
     if route == "PASS":
         return "deliver"
+    if route == "END_DIAGNOSTIC":
+        return END_DIAGNOSTIC
     if route == "RETRY_EXECUTE":
         return _retry_or_human(state, "reconcile", "execute")
     if route == "RETRY_L3":
@@ -192,6 +198,12 @@ def route_after_human_review(state: Dict[str, Any]) -> str:
     paused_stage = state.get("paused_stage")
     action = decisions.get("action") if isinstance(decisions, dict) else None
     if action in ("accept", "approve"):
+        if paused_stage in {"validate", "reconcile"}:
+            if state.get("delivery_status") == "diagnostic_only":
+                return END_DIAGNOSTIC
+            if state.get("structural_deferral_revision"):
+                return "execute"
+            return END_DIAGNOSTIC
         if _remaining_unresolved_target_ids(state):
             return "human_review"
         if (
@@ -215,6 +227,12 @@ def route_after_human_review(state: Dict[str, Any]) -> str:
         return END
     if action == "retry":
         retry_stage = paused_stage if paused_stage else "parse"
+        if retry_stage in {"validate", "reconcile"}:
+            gate = state.get(f"{retry_stage}_gate") or {}
+            progress_made = gate.get("progress_made") if isinstance(gate, dict) else getattr(gate, "progress_made", None)
+            inputs_changed = gate.get("inputs_changed") if isinstance(gate, dict) else getattr(gate, "inputs_changed", None)
+            if progress_made is False or inputs_changed is False:
+                return END_DIAGNOSTIC
         configured_limit = state.get("max_retries")
         max_retries = 3 if configured_limit is None else max(0, int(configured_limit))
         current = int((state.get("retry_counts") or {}).get(retry_stage, 0))
@@ -224,6 +242,24 @@ def route_after_human_review(state: Dict[str, Any]) -> str:
     if action == "reject":
         return "conversation"
     return END
+
+
+async def end_diagnostic_node(state: Dict[str, Any]) -> Dict[str, Any]:
+    """Terminate a structurally blocked run without cycling upstream."""
+    stage = str(state.get("paused_stage") or "post_l3")
+    gate = state.get(f"{stage}_gate") or {}
+    return {
+        "delivery_status": "diagnostic_only",
+        "diagnostic_terminal": {
+            "stage": stage,
+            "issue_fingerprint": (
+                gate.get("issue_fingerprint", "")
+                if isinstance(gate, dict)
+                else getattr(gate, "issue_fingerprint", "")
+            ),
+            "reason": "remaining_non_deferred_structural_blockers",
+        },
+    }
 
 
 def create_unified_planning_graph(checkpointer=None) -> StateGraph:
@@ -264,6 +300,7 @@ def create_unified_planning_graph(checkpointer=None) -> StateGraph:
     builder.add_node("human_review_publish", publish_human_review_pause)
     builder.add_node("human_review_wait", await_human_review)
     builder.add_node("human_review_apply", apply_human_review_decision)
+    builder.add_node(END_DIAGNOSTIC, end_diagnostic_node)
 
     builder.add_edge(START, "conversation")
     builder.add_conditional_edges("conversation", after_conversation,
@@ -291,9 +328,11 @@ def create_unified_planning_graph(checkpointer=None) -> StateGraph:
     builder.add_edge("execute", "validate")
     builder.add_conditional_edges("validate", route_after_validate,
         {"reconcile": "reconcile", "execute": "execute", "select": "select",
-         "ground": "ground", "parse": "parse", "human_review": "human_review_prepare"})
+         "ground": "ground", "parse": "parse", "human_review": "human_review_prepare",
+         END_DIAGNOSTIC: END_DIAGNOSTIC})
     builder.add_conditional_edges("reconcile", route_after_reconcile,
-        {"deliver": "deliver", "execute": "execute", "human_review": "human_review_prepare"})
+        {"deliver": "deliver", "execute": "execute", "human_review": "human_review_prepare",
+         END_DIAGNOSTIC: END_DIAGNOSTIC})
     builder.add_conditional_edges("deliver", route_after_deliver,
         {END: END, "validate": "validate", "human_review": "human_review_prepare"})
     builder.add_edge("human_review_prepare", "human_review_publish")
@@ -304,7 +343,8 @@ def create_unified_planning_graph(checkpointer=None) -> StateGraph:
          "parse": "parse", "ground": "ground", "select": "select",
          "execute": "execute", "validate": "validate", "reconcile": "reconcile",
          "deliver": "deliver", "conversation": "conversation",
-         END: END})
+         END_DIAGNOSTIC: END_DIAGNOSTIC, END: END})
+    builder.add_edge(END_DIAGNOSTIC, END)
 
     return builder.compile(checkpointer=checkpointer)
 
@@ -437,6 +477,40 @@ async def apply_human_review_decision(state: Dict[str, Any]) -> Dict[str, Any]:
     action = decisions.get("action") if isinstance(decisions, dict) else None
     deferral_patch = {}
     deferred_target_ids: list[str] = []
+    if action in ("accept", "approve") and paused_stage in {"validate", "reconcile"}:
+        raw_ids = decisions.get("deferred_target_ids") if isinstance(decisions, dict) else None
+        deferred_target_ids = list(dict.fromkeys(
+            str(target_id).strip()
+            for target_id in (raw_ids or [])
+            if str(target_id).strip()
+        ))
+        if deferred_target_ids:
+            result.update(await _apply_structural_target_deferrals(
+                state,
+                decisions,
+                deferred_target_ids,
+                paused_stage,
+            ))
+            return result
+        gate_key = f"{paused_stage}_gate"
+        gate = dict(state.get(gate_key) or {})
+        gate.update({
+            "stage": paused_stage,
+            "passed": False,
+            "feedback_route": "END_DIAGNOSTIC",
+            "route_reason": "human_accept_cannot_override_structural_failure",
+        })
+        result.update({
+            gate_key: gate,
+            "delivery_status": "diagnostic_only",
+            "structural_deferral_revision": False,
+            "diagnostic_terminal": {
+                "stage": paused_stage,
+                "issue_fingerprint": str(gate.get("issue_fingerprint") or ""),
+                "reason": "remaining_non_deferred_structural_blockers",
+            },
+        })
+        return result
     if (
         action in ("accept", "approve")
         and paused_stage in {"ground", "select"}
@@ -604,6 +678,170 @@ async def apply_human_review_decision(state: Dict[str, Any]) -> Dict[str, Any]:
         feedback = decisions.get("feedback") if isinstance(decisions, dict) else None
         result["messages"] = [HumanMessage(content=feedback or "方案已拒绝，请调整后重新规划")]
     return result
+
+
+async def _apply_structural_target_deferrals(
+    state: Dict[str, Any],
+    decisions: Dict[str, Any],
+    target_ids: list[str],
+    stage: str,
+) -> Dict[str, Any]:
+    """Persist target deferrals and a new immutable execution-plan revision."""
+    from app.agent.bootstrap.artifact_runtime import load_artifact, store_artifact
+    from app.modules.schema.contracts.deferral_contracts import (
+        DeferralLedger,
+        HumanDeferralDecision,
+        TargetDeferral,
+    )
+    from app.modules.schema.contracts.execution_plan_contracts import (
+        ExecutionOutcome,
+        ExecutionPlan,
+    )
+    from app.modules.schema.contracts.selection_contracts import SiteSelectionDecision
+
+    plan = load_artifact(state, "execution_plan", ExecutionPlan)
+    outcome = load_artifact(state, "execution_outcome", ExecutionOutcome)
+    if plan is None or outcome is None:
+        return {
+            "fatal_error": {
+                "stage": stage,
+                "code": "HUMAN_DEFER_EXECUTION_ARTIFACT_MISSING",
+                "message": "Structural deferral requires ExecutionPlan and ExecutionOutcome.",
+            }
+        }
+
+    active_ids = {
+        str(task.target_id) for task in plan.worker_tasks if str(task.target_id)
+    }
+    failed_ids = {
+        str(item.target_id)
+        for item in outcome.task_results
+        if item.status == "failed" and str(item.target_id)
+    }
+    gate = state.get(f"{stage}_gate") or {}
+    pending = gate.get("pending_requests") if isinstance(gate, dict) else getattr(gate, "pending_requests", [])
+    gate_ids = {
+        str(target_id)
+        for request in (pending or [])
+        for target_id in (
+            (request.get("context") or {}).get("target_ids", [])
+            if isinstance(request, dict)
+            else (getattr(request, "context", {}) or {}).get("target_ids", [])
+        )
+        if str(target_id)
+    }
+    deferrable_ids = active_ids & (failed_ids | gate_ids)
+    unknown = sorted(set(target_ids) - deferrable_ids)
+    if unknown:
+        return {
+            "fatal_error": {
+                "stage": stage,
+                "code": "HUMAN_DEFER_TARGET_NOT_BLOCKING",
+                "message": "Only currently blocking target IDs may be deferred: " + ", ".join(unknown),
+            }
+        }
+
+    review_id = str(state.get("human_review_event_id") or "human-review")
+    decision = HumanDeferralDecision(
+        decision_id=review_id,
+        decided_by=str(decisions.get("decided_by") or ""),
+        rationale=str(decisions.get("feedback") or ""),
+    )
+    refs = state.get("artifact_refs") or {}
+    report_key = "validation_report" if stage == "validate" else "reconciliation_report"
+    source_refs = tuple(
+        f"artifact:{key}:{(refs.get(key) or {}).get('artifact_id', key)}"
+        for key in ("execution_outcome", report_key)
+    )
+    existing_ledger = load_artifact(state, "deferral_ledger", DeferralLedger)
+    existing_entries = tuple(getattr(existing_ledger, "entries", ()) or ())
+    new_entries = tuple(
+        TargetDeferral(
+            target_id=target_id,
+            reason=f"{stage}_structural_failure",
+            source_refs=source_refs,
+            decision=decision,
+        )
+        for target_id in target_ids
+    )
+    ledger = DeferralLedger(entries=existing_entries + new_entries)
+
+    deferred_set = set(target_ids)
+    kept_tasks = []
+    moved_tasks = []
+    for task in plan.worker_tasks:
+        if task.target_id not in deferred_set:
+            kept_tasks.append(task)
+            continue
+        assignment = task.assignment.model_copy(update={"status": "deferred"})
+        moved_tasks.append(task.model_copy(update={"assignment": assignment}))
+    revised_plan = plan.model_copy(deep=True, update={
+        "plan_id": f"{plan.plan_id}:review-{review_id[:12]}",
+        "worker_tasks": kept_tasks,
+        "deferred_tasks": list(plan.deferred_tasks) + moved_tasks,
+    })
+    artifact_refs = {
+        "deferral_ledger": store_artifact(
+            state, "deferral_ledger", "human_review", "DeferralLedger", ledger
+        ),
+    }
+
+    selection = load_artifact(state, "site_selection", SiteSelectionDecision)
+    if selection is not None:
+        revised_selection = selection.model_copy(deep=True)
+        revised_selection.target_assignments = [
+            assignment.model_copy(update={"status": "deferred"})
+            if assignment.target_id in deferred_set else assignment
+            for assignment in revised_selection.target_assignments
+        ]
+        factors = dict(revised_selection.decision_factors or {})
+        prior = [str(value) for value in factors.get("deferred_targets", [])]
+        factors["deferred_targets"] = list(dict.fromkeys(prior + target_ids))
+        factors["deferred_by"] = "human_review"
+        revised_selection.decision_factors = factors
+        revised_selection.refresh_derived_summaries()
+        revised_plan.site_selection = revised_selection
+        artifact_refs["site_selection"] = store_artifact(
+            state,
+            "site_selection",
+            "human_review",
+            "SiteSelectionDecision",
+            revised_selection,
+        )
+    artifact_refs["execution_plan"] = store_artifact(
+        state, "execution_plan", "human_review", "ExecutionPlan", revised_plan
+    )
+
+    remaining = sorted(failed_ids - deferred_set)
+    revised_gate = dict(gate) if isinstance(gate, dict) else _dump(gate)
+    revised_gate.update({
+        "stage": stage,
+        "passed": False,
+        "feedback_route": "END_DIAGNOSTIC" if remaining else "RETRY_EXECUTE",
+        "route_reason": (
+            "remaining_non_deferred_structural_blockers"
+            if remaining else "human_target_deferral_plan_revision"
+        ),
+        "pending_requests": [],
+    })
+    patch: Dict[str, Any] = {
+        "artifact_refs": artifact_refs,
+        f"{stage}_gate": revised_gate,
+        "human_deferred_targets": target_ids,
+        "structural_deferral_revision": not remaining,
+        "remaining_target_ids": remaining,
+    }
+    if remaining:
+        patch.update({
+            "delivery_status": "diagnostic_only",
+            "diagnostic_terminal": {
+                "stage": stage,
+                "issue_fingerprint": str(revised_gate.get("issue_fingerprint") or ""),
+                "reason": "remaining_non_deferred_structural_blockers",
+                "target_ids": remaining,
+            },
+        })
+    return patch
 
 
 async def _record_target_deferrals(

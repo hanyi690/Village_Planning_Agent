@@ -198,8 +198,71 @@ def check_area_conservation(changeset: Any) -> List[ValidationCheck]:
     ]
 
 
-def check_traceability(parcel_changeset: Any, intent: Any = None, decision: Any = None) -> List[ValidationCheck]:
-    """Check every planning project maps to at least one ParcelChange."""
+def check_traceability(
+    parcel_changeset: Any,
+    intent: Any = None,
+    decision: Any = None,
+    *,
+    execution_plan: Any = None,
+    execution_outcome: Any = None,
+) -> List[ValidationCheck]:
+    """Trace each planned target to the output kind declared by EXECUTE."""
+    if execution_plan is not None:
+        active_tasks = list(getattr(execution_plan, "worker_tasks", None) or [])
+        deferred_tasks = list(getattr(execution_plan, "deferred_tasks", None) or [])
+        results = list(getattr(execution_outcome, "task_results", None) or [])
+        result_by_key = {
+            (
+                str(getattr(result, "target_id", "")),
+                str(getattr(result, "expected_output_kind", "")),
+            ): result
+            for result in results
+        }
+        failed: list[str] = []
+        expected_kinds: set[str] = set()
+        planned_keys: set[tuple[str, str]] = set()
+        for task in active_tasks:
+            target_id = str(getattr(task, "target_id", ""))
+            output_kind = str(getattr(task, "expected_output_kind", ""))
+            key = (target_id, output_kind)
+            planned_keys.add(key)
+            expected_kinds.add(output_kind)
+            result = result_by_key.get(key)
+            artifacts = list(getattr(result, "output_artifacts", None) or []) if result else []
+            if (
+                result is None
+                or getattr(result, "status", "failed") != "succeeded"
+                or output_kind not in artifacts
+            ):
+                failed.append(target_id)
+        for task in deferred_tasks:
+            planned_keys.add((
+                str(getattr(task, "target_id", "")),
+                str(getattr(task, "expected_output_kind", "")),
+            ))
+            expected_kinds.add(str(getattr(task, "expected_output_kind", "")))
+        orphan = sorted(
+            target_id
+            for target_id, output_kind in result_by_key
+            if (target_id, output_kind) not in planned_keys
+        )
+        failed = sorted(set(failed))
+        passed = not failed and not orphan
+        kinds = sorted(kind for kind in expected_kinds if kind)
+        return [
+            _check(
+                "traceability",
+                "目标-产物追溯",
+                passed,
+                stage="EXECUTE",
+                actual=f"failed={failed}, orphan={orphan}",
+                expected=f"每个目标产出声明类型 {kinds} 或具有显式 deferred 状态",
+                parcels=failed,
+                fix="按稳定 target_id 和 expected_output_kind 补齐执行结果或显式延期",
+            )
+        ]
+
+    # Legacy fallback for callers that have not loaded the authoritative plan.
     factors = getattr(decision, "decision_factors", None) or {}
     if not isinstance(factors, dict):
         factors = {}
@@ -271,7 +334,7 @@ def _planned_geoms(planned_state: Any) -> tuple[List[tuple], List[tuple]]:
 
 
 def check_topology(planned_state: Any) -> List[ValidationCheck]:
-    """Check planned geometries are valid/non-empty and polygons have no gaps."""
+    """Check validity globally and gaps only for explicit zone partitions."""
     invalid: List[str] = []
     empty: List[str] = []
     parse_errors: List[str] = []
@@ -298,7 +361,31 @@ def check_topology(planned_state: Any) -> List[ValidationCheck]:
             fix="修复自相交、空几何或 WKT 解析错误",
         )
     ]
-    polygon_geoms = [g for g in geoms if g.geom_type in _POLYGON_TYPES]
+    from shapely import wkt as _wkt
+
+    polygon_geoms: List[Any] = []
+    for zone in getattr(planned_state, "zones", None) or []:
+        raw = (getattr(zone, "geometry", "") or "").strip()
+        if not raw:
+            continue
+        try:
+            geom = _wkt.loads(raw)
+        except Exception:
+            continue
+        if geom.geom_type in _POLYGON_TYPES:
+            polygon_geoms.append(geom)
+    if not polygon_geoms:
+        checks.append(
+            _check(
+                "topology_gaps",
+                "拓扑缝隙",
+                True,
+                stage="EXECUTE",
+                actual="not_applicable:no_partition_domain",
+                expected="gap checks apply only to explicit zone partition domains",
+            )
+        )
+        return checks
     gap_area = 0.0
     if polygon_geoms:
         try:

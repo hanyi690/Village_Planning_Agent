@@ -287,6 +287,9 @@ class AgentState(TypedDict, total=False):
     human_review_resume_consumed: bool
     human_deferred_targets: List[str]
     human_deferred_select_revision: bool
+    structural_deferral_revision: bool
+    delivery_status: str
+    diagnostic_terminal: Dict[str, Any]
     paused_stage: Optional[str]  # stage that paused the post-L3 chain for HITL
     # Terminal infrastructure/configuration failure.  This is deliberately
     # separate from business Gate retries: a non-retryable model/provider

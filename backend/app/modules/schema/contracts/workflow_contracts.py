@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from enum import Enum
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from .contract_meta import ContractMeta
 
@@ -55,6 +55,14 @@ class GateDecision(ContractMeta):
     pending_requests: list[PendingRequest] = []
     evidence_requests: list[str] = []
     context_version: str = ""
+    input_artifact_refs: dict = Field(default_factory=dict)
+    input_checksum: str = ""
+    output_checksum: str = ""
+    issue_fingerprint: str = ""
+    previous_issue_fingerprint: str = ""
+    progress_made: bool | None = None
+    inputs_changed: bool | None = None
+    route_reason: str = ""
 
 
 class RoutingDecision(BaseModel):

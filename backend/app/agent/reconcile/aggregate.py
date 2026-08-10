@@ -52,7 +52,7 @@ def _chain_status(spec_ok: bool, candidate_ok: bool, selection_ok: bool, change_
     return "missing"
 
 
-def build_coverage_matrix(program, specs, grounding_result, decision, changeset, planned_state) -> CoverageMatrix:
+def _build_legacy_coverage_matrix(program, specs, grounding_result, decision, changeset, planned_state) -> CoverageMatrix:
     interventions = list(getattr(program, "interventions", None) or [])
     specs = list(specs or [])
     candidates = list(getattr(grounding_result, "candidates", None) or [])
@@ -119,6 +119,112 @@ def build_coverage_matrix(program, specs, grounding_result, decision, changeset,
     return CoverageMatrix(rows=rows)
 
 
+def build_coverage_matrix(
+    program=None,
+    specs=None,
+    grounding_result=None,
+    decision=None,
+    changeset=None,
+    planned_state=None,
+    *,
+    execution_plan=None,
+    execution_outcome=None,
+) -> CoverageMatrix:
+    """Build v2 coverage from stable target IDs and declared output kinds."""
+    if execution_plan is None:
+        return _build_legacy_coverage_matrix(
+            program, specs, grounding_result, decision, changeset, planned_state
+        )
+
+    results = list(getattr(execution_outcome, "task_results", None) or [])
+    result_by_key = {
+        (
+            str(getattr(result, "task_id", "")),
+            str(getattr(result, "target_id", "")),
+            str(getattr(result, "expected_output_kind", "")),
+        ): result
+        for result in results
+    }
+    rows: list[CoverageMatrixRow] = []
+    for task in list(getattr(execution_plan, "worker_tasks", None) or []):
+        task_id = str(getattr(task, "task_id", ""))
+        target_id = str(getattr(task, "target_id", ""))
+        output_kind = str(getattr(task, "expected_output_kind", "parcel"))
+        result = result_by_key.get((task_id, target_id, output_kind))
+        artifacts = list(getattr(result, "output_artifacts", None) or []) if result else []
+        covered = bool(
+            result is not None
+            and getattr(result, "status", "failed") == "succeeded"
+            and output_kind in artifacts
+        )
+        rows.append(
+            CoverageMatrixRow(
+                target_id=target_id,
+                target_type=str(getattr(task, "target_type", "")),
+                expected_output_kind=output_kind,
+                execution_task_id=task_id,
+                output_artifacts=artifacts,
+                intervention_id=target_id,
+                status="covered" if covered else "failed",
+            )
+        )
+    for task in list(getattr(execution_plan, "deferred_tasks", None) or []):
+        target_id = str(getattr(task, "target_id", ""))
+        rows.append(
+            CoverageMatrixRow(
+                target_id=target_id,
+                target_type=str(getattr(task, "target_type", "")),
+                expected_output_kind=str(getattr(task, "expected_output_kind", "parcel")),
+                execution_task_id=str(getattr(task, "task_id", "")),
+                intervention_id=target_id,
+                status="deferred",
+            )
+        )
+    return CoverageMatrix(rows=rows)
+
+
+def check_target_execution_coverage(
+    execution_plan,
+    execution_outcome,
+) -> list[ReconciliationInconsistency]:
+    matrix = build_coverage_matrix(
+        execution_plan=execution_plan,
+        execution_outcome=execution_outcome,
+    )
+    inconsistencies = [
+        _inc(
+            row.target_id,
+            "execution_status",
+            f"covered:{row.expected_output_kind}",
+            f"failed:{row.expected_output_kind}",
+            stage="EXECUTE",
+        )
+        for row in matrix.rows
+        if row.status == "failed"
+    ]
+    planned_keys = {
+        (row.execution_task_id, row.target_id, row.expected_output_kind)
+        for row in matrix.rows
+    }
+    for result in list(getattr(execution_outcome, "task_results", None) or []):
+        key = (
+            str(getattr(result, "task_id", "")),
+            str(getattr(result, "target_id", "")),
+            str(getattr(result, "expected_output_kind", "")),
+        )
+        if key not in planned_keys:
+            inconsistencies.append(
+                _inc(
+                    key[1],
+                    "execution_outcome",
+                    "target and output kind declared by ExecutionPlan",
+                    f"orphan:{key[2]}",
+                    stage="EXECUTE",
+                )
+            )
+    return inconsistencies
+
+
 def check_l3_l4_target_coverage(intent, planned_state, decision=None) -> list[ReconciliationInconsistency]:
     deferred = {
         str(value)
@@ -178,24 +284,41 @@ def reconcile_aggregate(
     planned_state=None,
     intent=None,
     *,
+    execution_plan=None,
+    execution_outcome=None,
     run_id: str = "",
 ) -> ReconciliationReport:
     all_inconsistencies: list[ReconciliationInconsistency] = []
-    all_inconsistencies.extend(check_intervention_coverage(program, specs, decision))
-    all_inconsistencies.extend(check_spec_candidate_coverage(specs, grounding_result, decision))
-    all_inconsistencies.extend(check_candidate_selection_coverage(grounding_result, decision))
-    all_inconsistencies.extend(check_selection_change_coverage(decision, changeset))
-    all_inconsistencies.extend(check_change_planned_coverage(changeset, planned_state))
-    all_inconsistencies.extend(check_quantitative_drift(program, planned_state))
-    all_inconsistencies.extend(check_l3_l4_target_coverage(intent, planned_state, decision))
+    if execution_plan is not None:
+        all_inconsistencies.extend(
+            check_target_execution_coverage(execution_plan, execution_outcome)
+        )
+        all_inconsistencies.extend(check_quantitative_drift(program, planned_state))
+    else:
+        all_inconsistencies.extend(check_intervention_coverage(program, specs, decision))
+        all_inconsistencies.extend(check_spec_candidate_coverage(specs, grounding_result, decision))
+        all_inconsistencies.extend(check_candidate_selection_coverage(grounding_result, decision))
+        all_inconsistencies.extend(check_selection_change_coverage(decision, changeset))
+        all_inconsistencies.extend(check_change_planned_coverage(changeset, planned_state))
+        all_inconsistencies.extend(check_quantitative_drift(program, planned_state))
+        all_inconsistencies.extend(check_l3_l4_target_coverage(intent, planned_state, decision))
 
-    coverage_matrix = build_coverage_matrix(program, specs, grounding_result, decision, changeset, planned_state)
+    coverage_matrix = build_coverage_matrix(
+        program,
+        specs,
+        grounding_result,
+        decision,
+        changeset,
+        planned_state,
+        execution_plan=execution_plan,
+        execution_outcome=execution_outcome,
+    )
 
     provenance = Provenance(
         source="reconcile_aggregate",
         run_id=run_id,
         module="app.agent.reconcile.aggregate",
-        natural_language_description=f"RECONCILE aggregate: {len(coverage_matrix.rows)} interventions traced",
+        natural_language_description=f"RECONCILE aggregate: {len(coverage_matrix.rows)} targets traced",
     )
 
     return ReconciliationReport(
@@ -207,6 +330,7 @@ def reconcile_aggregate(
 
 __all__ = [
     "build_coverage_matrix",
+    "check_target_execution_coverage",
     "check_l3_l4_target_coverage",
     "reconcile_aggregate",
 ]
