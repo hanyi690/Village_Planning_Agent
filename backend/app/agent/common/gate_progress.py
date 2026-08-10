@@ -54,6 +54,14 @@ def _input_fingerprint_view(refs: dict[str, Any]) -> dict[str, Any]:
     return view
 
 
+def canonical_input_checksum(refs: dict[str, Any] | None) -> str:
+    return checksum(_input_fingerprint_view(stable_artifact_refs(refs)))
+
+
+def canonical_output_checksum(output: Any) -> str:
+    return checksum(output)
+
+
 def gate_progress_metadata(
     *,
     input_artifact_refs: dict[str, Any] | None,
@@ -62,8 +70,8 @@ def gate_progress_metadata(
     previous_gate: Any = None,
 ) -> tuple[dict[str, Any], bool]:
     refs = stable_artifact_refs(input_artifact_refs)
-    input_checksum = checksum(_input_fingerprint_view(refs))
-    output_checksum = checksum(output)
+    input_checksum = canonical_input_checksum(refs)
+    output_checksum = canonical_output_checksum(output)
     issue_fingerprint = checksum(issues)
     previous = (
         previous_gate.model_dump(mode="json")
@@ -93,4 +101,4 @@ def gate_progress_metadata(
     }, identical
 
 
-__all__ = ["checksum", "gate_progress_metadata", "stable_artifact_refs"]
+__all__ = ["checksum", "canonical_input_checksum", "canonical_output_checksum", "gate_progress_metadata", "stable_artifact_refs"]

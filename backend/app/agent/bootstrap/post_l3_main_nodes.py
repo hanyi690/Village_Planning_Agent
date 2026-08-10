@@ -703,6 +703,7 @@ async def execute_node(state: Dict[str, Any]) -> Dict[str, Any]:
         planned_state = None
 
     outcome = _execution_outcome_from_result(execution_plan, result)
+    l4_write_result: Dict[str, Any] = {}
     if planned_state is not None:
         from app.agent.execute.nodes.write_l4 import _write_l4_node
 
@@ -711,7 +712,7 @@ async def execute_node(state: Dict[str, Any]) -> Dict[str, Any]:
         exec_state.planned_state = planned_state
         exec_state.execution_outcome = outcome
         exec_state.validation_result = dict(result.get("validation_result") or {})
-        await _write_l4_node(exec_state)
+        l4_write_result = await _write_l4_node(exec_state) or {}
     refs = {
         "execution_outcome": _persist_artifact(state, "execute", "ExecutionOutcome", outcome),
         "parcel_changeset": _persist_artifact(state, "execute", "ParcelChangeSet", changeset),
@@ -720,10 +721,17 @@ async def execute_node(state: Dict[str, Any]) -> Dict[str, Any]:
             state, "execute", "AllocatedGeoJSON", result.get("allocated_geojson", {}) or {}
         ),
     }
+    l4_error = l4_write_result.get("l4_write_error")
+    execution_errors = list(result.get("execution_errors", []) or [])
+    if l4_error:
+        execution_errors.append({"stage": "L4", "code": l4_error, "missing_targets": l4_write_result.get("missing_targets", [])})
     return {
         "layout_configs": _jsonable(list(result.get("layout_configs", []) or [])),
         "action_results": _jsonable(outcome.action_results),
-        "execution_errors": _jsonable(list(result.get("execution_errors", []) or [])),
+        "execution_errors": _jsonable(execution_errors),
+        "l4_write_result": _jsonable(l4_write_result),
+        "execution_outcome_target_coverage": _jsonable(l4_write_result.get("execution_outcome_target_ids", [])),
+        **({"fatal_error": l4_error, "delivery_status": "diagnostic_only"} if l4_error else {}),
         "artifact_refs": refs,
         **_adopt_context(state, context),
     }

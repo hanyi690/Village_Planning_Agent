@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any, Awaitable, Callable, Dict
 
 from app.services.artifact_fingerprint import semantic_checksum
+from app.agent.common.gate_progress import canonical_input_checksum, canonical_output_checksum
 
 
 def _jsonable(value: Any) -> Any:
@@ -151,12 +152,7 @@ def _input_snapshot(state: Dict[str, Any], stage: str) -> Dict[str, Any]:
         "artifact_refs": refs,
         "context_ref": context_ref,
         "source_refs": sources,
-        "input_checksum": semantic_checksum({
-            "stage": stage,
-            "artifact_refs": refs,
-            "context_ref": context_ref,
-            "source_refs": sources,
-        }),
+        "input_checksum": canonical_input_checksum(state.get("artifact_refs") or {}),
     }
 
 
@@ -179,12 +175,7 @@ def build_input_audit(
         "artifact_refs": refs,
         "context_ref": context_ref,
         "source_refs": sources,
-        "input_checksum": semantic_checksum({
-            "stage": stage,
-            "artifact_refs": refs,
-            "context_ref": context_ref,
-            "source_refs": sources,
-        }),
+        "input_checksum": canonical_input_checksum(artifact_refs if artifact_refs is not None else state.get("artifact_refs") or {}),
     }
 
 
@@ -219,16 +210,19 @@ def audited_stage(stage: str) -> Callable[[Callable[..., Awaitable[Dict[str, Any
                 result = await fn(state)
                 result = result or {}
                 refs = result.get("artifact_refs") or {}
-                route = _stage_route(gate := next((result.get(k) for k in result if k.endswith("_gate")), None), result)
+                gate = next((result.get(k) for k in result if k.endswith("_gate")), None)
+                route = _stage_route(gate, result)
                 semantic_output = _semantic_stage_output(result, refs)
-                output_checksum = semantic_checksum(semantic_output)
+                current_input = str(_gate_field(gate, "input_checksum", "") or inputs["input_checksum"])
+                output_checksum = str(_gate_field(gate, "output_checksum", "") or canonical_output_checksum(semantic_output))
                 previous_gate = state.get(f"{stage.lower()}_gate")
-                previous_input = str(_gate_field(previous_gate, "input_checksum", "") or "")
-                previous_output = str(_gate_field(previous_gate, "output_checksum", "") or "")
+                previous_audit = (state.get("stage_audit") or {}).get(stage, {})
+                previous_input = str(_gate_field(previous_gate, "input_checksum", "") or previous_audit.get("input_checksum", ""))
+                previous_output = str(_gate_field(previous_gate, "output_checksum", "") or previous_audit.get("output_checksum", ""))
                 has_previous = bool(previous_input or previous_output)
                 semantic_changed = (
                     not has_previous
-                    or inputs["input_checksum"] != previous_input
+                    or current_input != previous_input
                     or output_checksum != previous_output
                 )
                 stage_outputs_present = bool(
@@ -249,8 +243,8 @@ def audited_stage(stage: str) -> Callable[[Callable[..., Awaitable[Dict[str, Any
                     "output_checksum": output_checksum,
                 }
                 gate_audit = {
-                    "gate_input_checksum": _gate_field(gate, "input_checksum", "") or inputs["input_checksum"],
-                    "gate_output_checksum": _gate_field(gate, "output_checksum", "") or output_checksum,
+                    "gate_input_checksum": current_input,
+                    "gate_output_checksum": output_checksum,
                     "issue_fingerprint": _stage_issue_fingerprint(gate, result),
                     "route_reason": _stage_reason(gate, result, route),
                     "progress_made": semantic_changed and stage_outputs_present,

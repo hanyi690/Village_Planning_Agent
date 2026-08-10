@@ -498,8 +498,8 @@ async def test_stage_audit_exposes_gate_checksums_fingerprint_route_and_progress
     await validate_node({
         **state,
         "validate_gate": {
-            "input_checksum": first["inputs"]["input_checksum"],
-            "output_checksum": first["outputs"]["output_checksum"],
+            "input_checksum": "gate-input",
+            "output_checksum": "gate-output",
         },
     })
 

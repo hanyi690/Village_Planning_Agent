@@ -304,7 +304,7 @@ def test_real_llm_session_full_fixture(sqlite_db, pipeline_reset, monkeypatch):
             selection = load_artifact(state, "site_selection", SiteSelectionDecision)
             assert manifest is not None, state.get("artifact_refs")
             assert outcome is not None, state.get("artifact_refs")
-            assert manifest.delivery_status in {"complete", "partial", "diagnostic_only"}, manifest
+            assert manifest.delivery_status in {"complete", "partial"}, manifest
             assert state.get("delivery_status") == manifest.delivery_status
             if manifest.delivery_status == "partial":
                 assert manifest.statutory_complete is False
@@ -340,11 +340,7 @@ def test_real_llm_session_full_fixture(sqlite_db, pipeline_reset, monkeypatch):
             assert status_payload.get("delivery_status") == manifest.delivery_status
             assert status_payload.get("deferral_summary") == manifest.deferral_summary
             assert "diagnostic_terminal" in status_payload
-            if manifest.delivery_status == "diagnostic_only":
-                assert manifest.diagnostic_summary
-                assert status_payload["diagnostic_terminal"]
-            else:
-                assert status_payload["diagnostic_terminal"] == state.get("diagnostic_terminal", {})
+            assert status_payload["diagnostic_terminal"] == state.get("diagnostic_terminal", {})
 
             deliver_gate = state.get("deliver_gate") or {}
             deliver_route = (
