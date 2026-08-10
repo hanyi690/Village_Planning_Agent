@@ -1281,6 +1281,7 @@ def _road_intents(stage2_dir: Path) -> List[Dict[str, Any]]:
                 "confidence": round(confidence, 3),
                 "requires_human_confirmation": requires_review,
                 "project_id": project.get("project_id"),
+                "target_id": project.get("target_id") or project.get("project_id"),
                 "recommended_road_class": project.get("recommended_road_class") or "village_road",
                 "recommended_width_m": project.get("recommended_width_m"),
                 "path_bsms": _string_list(project.get("path_bsms")),
@@ -2035,6 +2036,7 @@ def _road_planning_requests(
         if not intent_id:
             continue
         action = str(intent.get("action") or "new")
+        target_id = str(intent.get("target_id") or "")
         start_node = _role_node(nodes_by_intent_role.get(intent_id, {}).get("start", []))
         end_node = _role_node(nodes_by_intent_role.get(intent_id, {}).get("end", []))
         if not start_node or not end_node:
@@ -2091,6 +2093,8 @@ def _road_planning_requests(
                 "end_node_id": end_id,
                 "served_node_ids": sorted({start_id, end_id}),
                 "related_intent_ids": [intent_id],
+                "target_id": target_id,
+                "target_ids": [target_id] if target_id else [],
                 "source_bsm_list": source_bsms,
                 "recommended_road_class": intent.get("recommended_road_class") or "village_road",
                 "recommended_width_m": intent.get("recommended_width_m")
@@ -2116,6 +2120,12 @@ def _road_planning_requests(
         road_ref = f"nearest_road:{props.get('nearest_road_id')}" if props.get("nearest_road_id") else None
         requires_review = bool(props.get("requires_human_confirmation")) or action == "manual_review"
         related_intents = sorted(intent_by_node.get(node_id, set()))
+        target_ids = sorted({
+            str(intents_by_id[intent_id].get("target_id") or "")
+            for intent_id in related_intents
+            if intent_id in intents_by_id
+            and str(intents_by_id[intent_id].get("target_id") or "")
+        })
         node_type = str(props.get("node_type") or "facility_node")
         requests.append(
             {
@@ -2126,6 +2136,8 @@ def _road_planning_requests(
                 "end_node_id": road_ref,
                 "served_node_ids": [node_id],
                 "related_intent_ids": related_intents,
+                "target_id": target_ids[0] if len(target_ids) == 1 else "",
+                "target_ids": target_ids,
                 "source_bsm_list": props.get("source_bsm_list") or [],
                 "recommended_road_class": "village_road",
                 "recommended_width_m": _recommended_width(action, node_type),
@@ -2907,6 +2919,8 @@ def _compatibility_projects(requests: Sequence[Mapping[str, Any]]) -> Dict[str, 
                 "served_node_ids": request.get("served_node_ids"),
                 "source_bsm_list": request.get("source_bsm_list"),
                 "related_intent_ids": request.get("related_intent_ids"),
+                "target_id": request.get("target_id"),
+                "target_ids": request.get("target_ids"),
                 "requires_human_confirmation": request.get("requires_human_confirmation"),
                 "recommended_road_class": request.get("recommended_road_class"),
                 "recommended_width_m": request.get("recommended_width_m"),

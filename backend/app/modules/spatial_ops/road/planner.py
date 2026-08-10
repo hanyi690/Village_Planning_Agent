@@ -336,9 +336,11 @@ def _request(
     planned_width_m: Optional[float] = None,
     access_point_count: int = 1,
     grouped_source_ids: Optional[Sequence[str]] = None,
+    target_ids: Optional[Sequence[str]] = None,
     access_distance_m: Optional[float] = None,
 ) -> Dict[str, Any]:
-    return {
+    stable_target_ids = sorted({str(item) for item in (target_ids or []) if str(item)})
+    request = {
         "request_id": request_id,
         "source_type": source_type,
         "source_id": source_id,
@@ -351,8 +353,12 @@ def _request(
         "planned_width_m": planned_width_m,
         "access_point_count": access_point_count,
         "grouped_source_ids": list(grouped_source_ids or [source_id]),
+        "target_ids": stable_target_ids,
         "access_distance_m": access_distance_m,
     }
+    if len(stable_target_ids) == 1:
+        request["target_id"] = stable_target_ids[0]
+    return request
 
 
 def _priority_rank(value: Any) -> int:
@@ -394,6 +400,12 @@ def _access_cluster_requests(
             origin = points[0] if len(points) == 1 else MultiPoint(points).centroid
             target, access_distance = _nearest_road_point(origin, edges)
             source_ids = sorted(str(item["source_id"]) for item in cluster_items)
+            target_ids = sorted({
+                str(target_id)
+                for item in cluster_items
+                for target_id in item.get("target_ids") or []
+                if str(target_id)
+            })
             source_label = "+".join(source_ids[:4]) + (f"+{len(source_ids) - 4}more" if len(source_ids) > 4 else "")
             if access_distance < config.min_access_connector_length_m:
                 blocked.append(
@@ -423,6 +435,7 @@ def _access_cluster_requests(
                     planned_width_m=primary.get("planned_width_m"),
                     access_point_count=len(cluster_items),
                     grouped_source_ids=source_ids,
+                    target_ids=target_ids,
                     access_distance_m=round(float(access_distance), 3),
                 )
             )
@@ -515,11 +528,16 @@ def _candidate_requests(
                 endpoint_index[(str(props.get("project_id")), str(props.get("endpoint")))] = _transform(shape(feature["geometry"]), transformer)
     for project in sorted(project_payload.get("projects", []), key=lambda item: str(item.get("project_id") or "")):
         project_id = str(project.get("project_id") or "")
+        project_target_ids = sorted({
+            str(item)
+            for item in (project.get("target_ids") or [project.get("target_id")])
+            if str(item or "")
+        })
         start = endpoint_index.get((project_id, "start"))
         end = endpoint_index.get((project_id, "end"))
         if project.get("action") == "new":
             if start is not None and end is not None:
-                requests.append(_request("", "text_new_road", project_id, start, end, start_requires_network=False, end_requires_network=False, priority=str(project.get("priority") or "medium"), requested_action="new", planned_width_m=project.get("min_width_m")))
+                requests.append(_request("", "text_new_road", project_id, start, end, start_requires_network=False, end_requires_network=False, priority=str(project.get("priority") or "medium"), requested_action="new", planned_width_m=project.get("min_width_m"), target_ids=project_target_ids))
             else:
                 blocked.append({"source_type": "text_new_road", "source_id": project_id, "reason": "unresolved_start_or_end"})
         for side, point in (("start", start), ("end", end)):
@@ -533,6 +551,7 @@ def _candidate_requests(
                         "priority": str(project.get("priority") or "medium"),
                         "requested_action": str(project.get("action") or "new"),
                         "planned_width_m": project.get("min_width_m"),
+                        "target_ids": project_target_ids,
                     }
                 )
 
@@ -905,9 +924,12 @@ def _generate_candidates(
                 "requested_action": str(request.get("requested_action") or "new"),
                 "access_point_count": int(request.get("access_point_count") or 1),
                 "grouped_source_ids": request.get("grouped_source_ids") or [request["source_id"]],
+                "target_ids": request.get("target_ids") or [],
                 "access_distance_m": request.get("access_distance_m"),
                 **{key: value for key, value in impact.items() if not key.endswith("_geometry")},
             }
+            if request.get("target_id"):
+                properties["target_id"] = request["target_id"]
             if terrain_route:
                 properties.update(
                     {
@@ -947,6 +969,8 @@ def _generate_candidates(
                                 "length_m": round(float(part.length), 3),
                                 "planned_width_m": planned_width,
                                 "access_point_count": int(request.get("access_point_count") or 1),
+                                "target_ids": request.get("target_ids") or [],
+                                **({"target_id": request["target_id"]} if request.get("target_id") else {}),
                             },
                         }
                     )

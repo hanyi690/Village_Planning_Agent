@@ -27,9 +27,17 @@ def _road_worker(state: ExecuteAgentState) -> WorkerResult:
     road_targets = _intent_list(intent, "road_targets")
 
     target_ids = {str(road.target_id) for road in road_targets}
+    provenance_keys = (
+        "target_id", "target_ids", "project_id", "source_project_id",
+        "source_id", "source_intent_ids", "grouped_source_ids",
+    )
 
     def values(value):
-        return {str(item) for item in value} if isinstance(value, list) else {str(value)}
+        if value is None:
+            return set()
+        if isinstance(value, (list, tuple, set)):
+            return {str(item) for item in value}
+        return {str(value)}
 
     def layer_target_ids(layers):
         produced = set()
@@ -37,7 +45,7 @@ def _road_worker(state: ExecuteAgentState) -> WorkerResult:
             data = layer.get("data") or layer
             for feature in data.get("features") or []:
                 properties = feature.get("properties") or {}
-                for key in ("target_id", "project_id", "source_project_id", "source_id", "source_intent_ids", "grouped_source_ids"):
+                for key in provenance_keys:
                     produced.update(values(properties.get(key)))
         return produced & target_ids
 
@@ -50,7 +58,7 @@ def _road_worker(state: ExecuteAgentState) -> WorkerResult:
                 if isinstance(item, dict)
                 and target_id in {
                     value
-                    for key in ("target_id", "project_id", "source_project_id", "source_id", "source_intent_ids")
+                    for key in provenance_keys
                     for value in values(item.get(key))
                 }
             ]

@@ -581,58 +581,108 @@ def test_axis_worker_persists_mixed_target_outcomes(monkeypatch):
     }
 
 
-def test_road_worker_persists_mixed_target_outcomes(monkeypatch):
+def test_road_worker_persists_mixed_target_outcomes_from_real_planner(monkeypatch, tmp_path):
     from app.agent.execute.execute_state import ExecuteAgentState
     from app.agent.execute.nodes.road_worker import _road_worker
     from app.modules.schema.contracts.execution_plan_contracts import ExecutionPlan, WorkerType
     from app.modules.schema.contracts.parse_contracts import RoadTarget, SpatialPlanningIntent
 
     roads = [
-        RoadTarget(target_id="road-ok", road_level="村道"),
-        RoadTarget(target_id="road-missing", road_level="村道"),
+        RoadTarget(
+            target_id="road-access",
+            road_level="村道",
+            start_anchor=(116.004, 24.0005),
+            end_anchor=(116.012, 24.0),
+            semantic={"raw_text": "修复村道"},
+        ),
+        RoadTarget(
+            target_id="road-on-network",
+            road_level="村道",
+            start_anchor=(116.02, 24.0),
+            end_anchor=(116.025, 24.0),
+            semantic={"raw_text": "修复村道"},
+        ),
     ]
     tasks = [
         _line_task(WorkerType.ROAD_CONSTRUCTION, road.target_id, "road", road.model_dump(mode="json"))
         for road in roads
     ]
-    monkeypatch.setattr(
-        "app.agent.execute.road_generator.execute_road_planning_from_agent_state",
-        lambda state: {
-            "ran": True,
-            "road_target_count": 2,
-            "layout_layers": [{
-                "layerType": "planned_road_candidates",
-                "data": {
-                    "type": "FeatureCollection",
-                    "features": [{
-                        "type": "Feature",
-                        "properties": {"target_id": "road-ok"},
-                        "geometry": {"type": "LineString", "coordinates": [[116.0, 24.0], [116.1, 24.1]]},
-                    }],
+    crs = {"type": "name", "properties": {"name": "EPSG:4326"}}
+    gis_data = {
+        "road_geojson": {
+            "type": "FeatureCollection",
+            "crs": crs,
+            "features": [{
+                "type": "Feature",
+                "properties": {"name": "existing-road"},
+                "geometry": {
+                    "type": "LineString",
+                    "coordinates": [[116.0, 24.0], [116.03, 24.0]],
                 },
             }],
         },
-    )
+        "boundary_geojson": {
+            "type": "FeatureCollection",
+            "crs": crs,
+            "features": [{
+                "type": "Feature",
+                "properties": {"name": "test-boundary"},
+                "geometry": {
+                    "type": "Polygon",
+                    "coordinates": [[[115.99, 23.99], [116.04, 23.99], [116.04, 24.01], [115.99, 24.01], [115.99, 23.99]]],
+                },
+            }],
+        },
+        "landuse_current_geojson": {
+            "type": "FeatureCollection",
+            "crs": crs,
+            "features": [{
+                "type": "Feature",
+                "properties": {"land_use": "建设用地"},
+                "geometry": {
+                    "type": "Polygon",
+                    "coordinates": [[[115.99, 23.99], [116.04, 23.99], [116.04, 24.01], [115.99, 24.01], [115.99, 23.99]]],
+                },
+            }],
+        },
+    }
+    monkeypatch.setattr("app.agent.execute.road_generator._project_root", lambda: tmp_path)
     plan = ExecutionPlan(worker_tasks=tasks)
     result = _road_worker(ExecuteAgentState(
+        session_id="road-real-provenance",
+        gis_data=gis_data,
         intent=SpatialPlanningIntent(road_targets=roads),
         execution_plan=plan,
         tasks_to_run=["road"],
     ))
 
+    candidate_properties = [
+        feature["properties"]
+        for layer in result.layers
+        if layer.get("layerType") == "planned_road_candidates"
+        for feature in layer["data"]["features"]
+    ]
+    access_properties = [
+        properties
+        for properties in candidate_properties
+        if properties.get("target_id") == "road-access"
+    ]
+    assert access_properties
+    assert all(properties["target_ids"] == ["road-access"] for properties in access_properties)
+    assert all(properties["source_id"] != "road-access" for properties in access_properties)
     assert {item.target_id: item.status for item in result.task_results} == {
-        "road-ok": "succeeded",
-        "road-missing": "failed",
+        "road-access": "succeeded",
+        "road-on-network": "failed",
     }
     outcome = _persisted_outcome(
         monkeypatch,
-        "road-mixed-outcome",
+        "road-real-provenance",
         plan,
         SpatialPlanningIntent(road_targets=roads),
         result,
         "road",
     )
     assert {item.target_id: item.status for item in outcome.task_results} == {
-        "road-ok": "succeeded",
-        "road-missing": "failed",
+        "road-access": "succeeded",
+        "road-on-network": "failed",
     }
