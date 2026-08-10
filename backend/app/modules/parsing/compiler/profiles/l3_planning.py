@@ -192,6 +192,8 @@ def compile_l3_planning(
 ) -> L3ProgramFragment:
     steps: list[str] = []
     display, instr_from_content = split_content_instruction(content or "")
+    from app.modules.parsing.compiler.profiles.l1_observation import _clean_model_text
+    display = _clean_model_text(display)
     instr = instruction or instr_from_content
     had_marker = "【INSTRUCTION】" in (content or "")
 

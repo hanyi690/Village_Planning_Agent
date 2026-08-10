@@ -213,6 +213,9 @@ def _extract_report_location_facts(
 def _clean_model_text(text: str) -> str:
     """Remove reasoning/protocol chatter before compiling human facts."""
     cleaned = re.sub(r"<think>.*?</think>", "", text or "", flags=re.I | re.S)
+    cleaned = re.sub(r"<think>.*$", "", cleaned, flags=re.I | re.S)
+    cleaned = re.sub(r"^\[[^\]]+\]\s*模型观察:\s*", "", cleaned, flags=re.MULTILINE)
+    cleaned = re.sub(r"^\s*模型观察:\s*", "", cleaned, flags=re.MULTILINE)
     lines: list[str] = []
     meta_patterns = (
         "用户要求我", "按照要求的格式", "输出一个固定格式", "让我先仔细阅读",
@@ -265,30 +268,45 @@ def _extract_location_facts(
         if not name and not location:
             continue
         candidate_text = f"{name} {location} {description}"
-        role = "village" if name.endswith("村") or location.endswith("村") else "unknown"
+        role = "village" if name.endswith("村") else "unknown"
         if "道路" in kind or "道路" in candidate_text or re.search(r"[YX]\d{3}乡道", candidate_text):
             role = "road"
         elif "河" in candidate_text or "水" in kind:
             role = "water"
         elif "分区" in kind:
             role = "area"
-        normalized = location or name
-        aliases = list(dict.fromkeys(x for x in (name, location) if x))
-        key = f"{normalized}|{role}|{dimension_key}|{report_id}"
-        if key in seen:
-            continue
-        seen.add(key)
-        facts.append(L1LocationFact(
-            mention=name or location,
-            normalized_name=normalized,
-            role=role,
-            aliases=aliases,
-            spatial_hint=location or description,
-            source_report_ref=report_id,
-            dimension_key=dimension_key,
-            source_span=" | ".join(x for x in (kind, name, location, description) if x),
-            confidence=0.95 if location else 0.8,
-        ))
+        elif "设施" in kind or "设施" in candidate_text or "点" in kind:
+            role = "facility"
+        location_parts = _split_explicit_places(location) if location else []
+        if not location_parts:
+            location_parts = [location] if location else [""]
+        source_span = " | ".join(x for x in (kind, name, location, description) if x)
+        parts_to_emit: list[tuple[str, str, str]] = []
+        # Preserve the named object itself (facility/road/water/area) and its
+        # explicit location as separate typed facts.  Previously the location
+        # value replaced the object name, so facilities disappeared before KG.
+        if name and role != "village":
+            parts_to_emit.append((name, role, name))
+        for location_part in location_parts:
+            part_role = "village" if location_part.endswith(("村", "自然村")) else (role if not name else "village")
+            parts_to_emit.append((location_part or name, part_role, location_part or description))
+        for normalized, part_role, spatial_hint in parts_to_emit:
+            aliases = list(dict.fromkeys(x for x in (name, normalized) if x))
+            key = f"{normalized}|{part_role}|{dimension_key}|{report_id}"
+            if key in seen:
+                continue
+            seen.add(key)
+            facts.append(L1LocationFact(
+                mention=name or location_part,
+                normalized_name=normalized,
+                role=part_role,
+                aliases=aliases,
+                spatial_hint=spatial_hint,
+                source_report_ref=report_id,
+                dimension_key=dimension_key,
+                source_span=source_span,
+                confidence=0.95 if location_part else 0.8,
+            ))
     return facts
 
 
@@ -358,12 +376,13 @@ def compile_l1_observation(
         dimension_key=dimension_key,
         report_id=report_id,
     )
-    source_location_facts = _extract_report_location_facts(
-        source_display,
-        dimension_key=dimension_key,
-        report_id=report_id,
-    )
-    location_facts = _dedup_location_facts_local([*location_facts, *source_location_facts])
+    # The uploaded report is raw input, not an L1 intermediate artifact.  It
+    # may be retained as an audit/source reference, but it must never be
+    # promoted directly into ``location_facts``.  Location facts cross the
+    # PARSE boundary only through the model's structured INSTRUCTION table;
+    # otherwise a malformed L1 response would appear valid and GROUND would
+    # consume facts the model never actually produced.
+    location_facts = _dedup_location_facts_local(location_facts)
     section_locators: list[str] = []
 
     chapters = _iter_chapters(display)
