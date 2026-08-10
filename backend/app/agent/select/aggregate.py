@@ -25,6 +25,7 @@ from app.modules.schema.contracts.selection_contracts import (
     LandDesignBrief,
     RankedCandidate,
     SiteSelectionDecision,
+    TargetAssignment,
 )
 from app.modules.spatial_ops.selection.facility_location import (
     DemandPoint,
@@ -160,7 +161,7 @@ def build_site_selection_decision(
     ``road_access``/``service_coverage`` dimensions stay 0.0 until external
     network/facility data is wired in.
     """
-    selected_combination = [d.selected_bsm for d in placements if d.status == "placed"]
+    assignments: List[TargetAssignment] = []
     full_ranking: List[RankedCandidate] = []
     eliminated: List[EliminatedCandidate] = []
     best_score_by_target = {}
@@ -190,8 +191,28 @@ def build_site_selection_decision(
                     project_ref=placement.target_id or None,
                 )
             )
+            assignments.append(
+                TargetAssignment(
+                    target_id=placement.target_id,
+                    target_type="project",
+                    status="placed",
+                    selected_bsm=placement.selected_bsm,
+                    anchor_point=placement.anchor_point,
+                    expected_output_kind="parcel",
+                    score=score,
+                    score_breakdown=breakdown,
+                )
+            )
         else:
             best_score_by_target[placement.target_id] = 0.0
+            assignments.append(
+                TargetAssignment(
+                    target_id=placement.target_id,
+                    target_type="project",
+                    status="unplaced",
+                    expected_output_kind="parcel",
+                )
+            )
         for rejection in placement.rejected:
             is_occupied = (
                 placement.status != "placed"
@@ -221,7 +242,7 @@ def build_site_selection_decision(
                     )
                 )
     decision = SiteSelectionDecision(
-        selected_combination=selected_combination,
+        target_assignments=assignments,
         full_ranking=full_ranking,
         eliminated=eliminated,
         decision_factors={
@@ -450,14 +471,17 @@ def select_aggregate(
             facility, parcels, context, cluster_centroid, occupied
         )
         if decision_p.status == "placed":
-            decision.selected_combination.append(bsm)
-            decision.full_ranking.append(
-                RankedCandidate(
-                    candidate_id=bsm,
-                    rank=facility_rank,
+            decision.target_assignments.append(
+                TargetAssignment(
+                    target_id=facility.target_id,
+                    target_type="facility",
+                    status="placed",
+                    selected_bsm=bsm,
+                    anchor_point=facility.anchor_point,
+                    expected_output_kind=facility.expected_output_kind,
+                    target_binding=facility.model_dump(mode="json"),
                     score=decision_p.selected_score,
                     score_breakdown=dict(_SCORE_BREAKDOWN_STUBS),
-                    project_ref=facility.target_id,
                 )
             )
             facility_rank += 1
@@ -469,6 +493,16 @@ def select_aggregate(
                 "status": "placed",
                 "facility_type": facility.type,
             }
+            decision.target_assignments.append(
+                TargetAssignment(
+                    target_id=facility.target_id,
+                    target_type="facility",
+                    status="unplaced",
+                    anchor_point=facility.anchor_point,
+                    expected_output_kind=facility.expected_output_kind,
+                    target_binding=facility.model_dump(mode="json"),
+                )
+            )
         else:
             facility_placements[facility.target_id] = {
                 "bsm": "",
@@ -479,6 +513,27 @@ def select_aggregate(
     if facilities:
         decision.decision_factors["facility_count"] = len(facilities)
         decision.decision_factors["facility_placements"] = facility_placements
+    assigned_ids = {assignment.target_id for assignment in decision.target_assignments}
+    for target_type, targets in (
+        ("project", projects),
+        ("zone", list(getattr(intent, "zone_targets", None) or [])),
+        ("axis", list(getattr(intent, "development_axes", None) or [])),
+        ("road", list(getattr(intent, "road_targets", None) or [])),
+    ):
+        for target in targets:
+            target_id = str(getattr(target, "target_id", "") or "")
+            if not target_id or target_id in assigned_ids:
+                continue
+            decision.target_assignments.append(
+                TargetAssignment(
+                    target_id=target_id,
+                    target_type=target_type,
+                    status="ready",
+                    expected_output_kind=getattr(target, "expected_output_kind", "parcel"),
+                    target_binding=target.model_dump(mode="json"),
+                )
+            )
+    decision.refresh_derived_summaries()
     projects_by_target = {project.target_id: project for project in projects}
     briefs = [
         build_land_design_brief(projects_by_target[placement.target_id], placement, context)

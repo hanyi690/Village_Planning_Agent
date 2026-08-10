@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Any, Dict, List
 
 from app.agent.execute.execute_state import ExecuteAgentState
-from app.agent.execute.nodes.worker_common import _intent_list, _task_enabled
+from app.agent.execute.nodes.worker_common import _execution_intent_from_plan, _intent_list, _task_enabled
 from app.modules.schema.contracts.execution_plan_contracts import WorkerResult
 from app.utils.logger import get_logger
 
@@ -25,7 +25,7 @@ def _road_worker(state: ExecuteAgentState) -> WorkerResult:
     if not _task_enabled(state, "road"):
         return WorkerResult(worker_type="road")
 
-    intent = state.intent
+    intent = _execution_intent_from_plan(state)
     road_targets = _intent_list(intent, "road_targets")
 
     ports = getattr(state, "ports", None)
@@ -49,7 +49,7 @@ def _road_worker(state: ExecuteAgentState) -> WorkerResult:
             execute_road_planning_from_agent_state,
         )
 
-        result = execute_road_planning_from_agent_state(state)
+        result = execute_road_planning_from_agent_state(state.model_copy(update={"intent": intent}))
         layers = result.get("layout_layers") or []
         diagnostic_layers = list(layers)
         formal_road_layers = [

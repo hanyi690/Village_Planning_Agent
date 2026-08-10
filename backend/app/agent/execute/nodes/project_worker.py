@@ -6,7 +6,10 @@ from typing import List
 
 from app.agent.execute.execute_state import ExecuteAgentState
 from app.agent.execute.nodes.worker_common import (
+    _execution_intent_from_plan,
     _footprint_geometry,
+    _plan_tasks,
+    _task_value,
     _parcel_geometry,
     _resolve_parcel_by_bsm,
     _task_enabled,
@@ -29,14 +32,19 @@ def _project_worker(state: ExecuteAgentState) -> WorkerResult:
     if not _task_enabled(state, "project"):
         return WorkerResult(worker_type="project")
 
-    projects = list(getattr(state.intent, "project_targets", None) or [])
+    projects = list(getattr(_execution_intent_from_plan(state), "project_targets", None) or [])
     parcel_by_bsm = _resolve_parcel_by_bsm(state)
-    ranking = list(getattr(state.site_selection, "full_ranking", None) or [])
     selected_by_target = {
-        str(item.project_ref): str(item.candidate_id)
-        for item in ranking
-        if getattr(item, "project_ref", None) and getattr(item, "candidate_id", None)
+        str(_task_value(task, "target_id", "")): str(_task_value(_task_value(task, "assignment"), "selected_bsm", ""))
+        for task in _plan_tasks(state, {"project_footprint"})
+        if _task_value(_task_value(task, "assignment"), "selected_bsm", "")
     }
+    if state.execution_plan is None:
+        selected_by_target = {
+            str(item.project_ref): str(item.candidate_id)
+            for item in list(getattr(state.site_selection, "full_ranking", None) or [])
+            if getattr(item, "project_ref", None) and getattr(item, "candidate_id", None)
+        }
     projects_by_target = {
         str(getattr(project, "target_id", "")): project for project in projects
         if getattr(project, "target_id", "")

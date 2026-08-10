@@ -458,12 +458,14 @@ async def select_node(state: Dict[str, Any]) -> Dict[str, Any]:
     from app.modules.schema.contracts.parse_contracts import SpatialPlanningIntent
     from app.modules.schema.contracts.parse_result_contracts import IntentCompilationResult
     from app.modules.schema.contracts.selection_contracts import SiteSelectionDecision
+    from app.modules.schema.contracts.deferral_contracts import DeferralLedger
 
     retry_patch = _retry_patch(state, "select")
     context = await _require_context(state)
     grounding = _load_ref_artifact(state, "grounding_result", GroundingResult)
     intent = _load_ref_artifact(state, "intent_compilation", IntentCompilationResult)
     plan_intent = _to_typed(getattr(intent, "typed_intent", None) or intent, SpatialPlanningIntent)
+    deferral_ledger = _load_ref_artifact(state, "deferral_ledger", DeferralLedger)
     import asyncio
     from app.core.settings import GIS_TIMEOUT
     try:
@@ -483,6 +485,7 @@ async def select_node(state: Dict[str, Any]) -> Dict[str, Any]:
         briefs,
         run_id=_run_id(state),
         context_version=_context_version(state),
+        deferral_ledger=deferral_ledger,
     )
     ref = _persist_artifact(state, "select", "SiteSelectionDecision", decision)
     plan_ref = _persist_artifact(state, "select", "ExecutionPlan", execution_plan)
@@ -515,7 +518,7 @@ async def execute_node(state: Dict[str, Any]) -> Dict[str, Any]:
     from app.modules.schema.contracts.parse_contracts import SpatialPlanningIntent
     from app.modules.schema.contracts.parse_result_contracts import IntentCompilationResult
     from app.modules.schema.contracts.selection_contracts import SiteSelectionDecision
-    from app.modules.schema.contracts.execution_plan_contracts import ExecutionOutcome, ExecutionPlan
+    from app.modules.schema.contracts.execution_plan_contracts import ExecutionOutcome, ExecutionPlan, ExecutionResult
 
     context = await _require_context(state)
     intent = _load_ref_artifact(state, "intent_compilation", IntentCompilationResult)
@@ -535,6 +538,7 @@ async def execute_node(state: Dict[str, Any]) -> Dict[str, Any]:
     bundle = getattr(context, "bundle", None)
     gis_data = bundle.to_geojson_dict() if bundle is not None and hasattr(bundle, "to_geojson_dict") else {}
 
+    plan_briefs = list(getattr(execution_plan, "land_design_briefs", None) or state.get("land_design_briefs") or [])
     exec_state = ExecuteAgentState(
         session_id=state.get("session_id", ""),
         village_name=state.get("config", {}).get("village_name", ""),
@@ -543,7 +547,7 @@ async def execute_node(state: Dict[str, Any]) -> Dict[str, Any]:
         intent=plan_intent,
         facility_anchors=getattr(context, "village_anchors", None),
         site_selection=site_selection,
-        land_design_briefs=list(state.get("land_design_briefs") or []),
+        land_design_briefs=plan_briefs,
         execution_plan=execution_plan,
         kg_session_ref=getattr(context, "kg_session_ref", "") or "",
         messages=list(state.get("messages") or []),
@@ -579,12 +583,45 @@ async def execute_node(state: Dict[str, Any]) -> Dict[str, Any]:
 
     changeset = result.get("parcel_changeset")
     if changeset is not None:
-        planned_state = changeset_to_planned_state(changeset, plan_intent)
+        from app.agent.execute.nodes.worker_common import _execution_intent_from_plan
+
+        planned_state = changeset_to_planned_state(changeset, _execution_intent_from_plan(exec_state))
     else:
         logger.warning("[post_l3:main:execute] no parcel_changeset produced")
         planned_state = None
 
-    outcome = ExecutionOutcome(action_results=list(result.get("action_results", []) or []))
+    action_results = list(result.get("action_results", []) or [])
+    action_target_ids = {
+        str(getattr(item, "target_id", "") or (item.get("target_id") if isinstance(item, dict) else ""))
+        for item in action_results
+    }
+    errors = list(result.get("execution_errors", []) or [])
+    task_results = []
+    for task in list(getattr(execution_plan, "worker_tasks", None) or []):
+        task_id = str(getattr(task, "task_id", ""))
+        target_id = str(getattr(task, "target_id", ""))
+        output_kind = getattr(task, "expected_output_kind", "parcel")
+        failed = output_kind == "action" and target_id not in action_target_ids
+        task_results.append(ExecutionResult(
+            task_id=task_id,
+            target_id=target_id,
+            status="failed" if failed else "succeeded",
+            expected_output_kind=output_kind,
+            output_artifacts=[] if failed else [output_kind],
+            errors=[str(item) for item in errors] if failed else [],
+        ))
+    for task in list(getattr(execution_plan, "deferred_tasks", None) or []):
+        task_results.append(ExecutionResult(
+            task_id=str(getattr(task, "task_id", "")),
+            target_id=str(getattr(task, "target_id", "")),
+            status="deferred",
+            expected_output_kind=getattr(task, "expected_output_kind", "parcel"),
+        ))
+    outcome = ExecutionOutcome(
+        task_results=task_results,
+        action_results=action_results,
+        diagnostics=list(result.get("worker_conflict_diagnostics", []) or []) + errors,
+    )
     refs = {
         "execution_outcome": _persist_artifact(state, "execute", "ExecutionOutcome", outcome),
         "parcel_changeset": _persist_artifact(state, "execute", "ParcelChangeSet", changeset),

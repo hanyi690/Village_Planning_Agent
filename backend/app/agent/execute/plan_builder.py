@@ -1,137 +1,105 @@
-"""ExecutionPlan builder — thin layer over intent targets + SELECT output.
-
-Wave O: EXECUTE consumes ``SiteSelectionDecision + ExecutionPlan``; the
-ExecutionPlan is produced here (post-L3 SELECT) rather than assembled inside
-EXECUTE, so the worker task list + dependency graph reflect the PARSE intent
-targets and the SELECT decision. This is a thin layer: it only generates the
-WorkerTask list + dependency edges, and does NOT inject L2 strategy
-constraints (that stays with the select/validate layers).
-"""
+"""Build the authoritative, target-bound EXECUTE dispatch plan."""
 
 from __future__ import annotations
 
-from typing import Any, List
+from typing import Any
 
-from app.modules.schema.contracts.execution_plan_contracts import (
-    ExecutionPlan,
-    WorkerTask,
-    WorkerType,
-)
-from app.utils.logger import get_logger
-
-logger = get_logger(__name__)
-
-
-def _intent_list(intent: Any, key: str) -> List[Any]:
-    """Read a list field off a typed intent or a legacy intent dict."""
-    if intent is None:
-        return []
-    if isinstance(intent, dict):
-        value = intent.get(key)
-    else:
-        value = getattr(intent, key, None)
-    return list(value or [])
+from app.modules.schema.contracts.execution_plan_contracts import ExecutionPlan, WorkerTask, WorkerType
+from app.modules.schema.contracts.selection_contracts import TargetAssignment
 
 
 def _unwrap_intent(intent: Any) -> Any:
-    """Unwrap an IntentCompilationResult to its typed SpatialPlanningIntent."""
-    if intent is not None and not isinstance(intent, dict):
-        typed = getattr(intent, "typed_intent", None)
-        if typed is not None:
-            return typed
-    return intent
+    return getattr(intent, "typed_intent", None) or intent
 
 
-def _target_id(item: Any, key: str, fallback_key: str = "") -> str:
-    """Defensively read an identifier off a typed target / dict / bare value."""
-    if item is None:
-        return ""
-    if isinstance(item, dict):
-        value = item.get(key)
-        if not value and fallback_key:
-            value = item.get(fallback_key)
-    else:
-        value = getattr(item, key, None)
-        if not value and fallback_key:
-            value = getattr(item, fallback_key, None)
-    return str(value or "")
+def _items(intent: Any, name: str) -> list[Any]:
+    value = intent.get(name) if isinstance(intent, dict) else getattr(intent, name, None)
+    return list(value or [])
 
 
-def build_execution_plan(
-    intent,
-    site_selection,
-    land_design_briefs,
-    *,
-    run_id: str = "",
-    context_version: str = "",
-) -> ExecutionPlan:
-    """From intent targets + site_selection generate WorkerTask list + dependency graph.
+def _deferred_target_ids(ledger: Any) -> set[str]:
+    return {str(entry.target_id) for entry in (getattr(ledger, "entries", None) or [])}
 
-    Thin layer: only generates the task list + dependency edges; does NOT inject
-    L2 strategy constraints.
-    """
+
+def _worker_type(target_type: str, target: Any) -> WorkerType:
+    if getattr(target, "execution_mode", "spatial") == "non_spatial":
+        return WorkerType.NON_SPATIAL_ACTION
+    return {
+        "project": WorkerType.PROJECT_FOOTPRINT,
+        "zone": WorkerType.PARCEL_TRANSFORMATION,
+        "facility": WorkerType.FACILITY_PLACEMENT,
+        "axis": WorkerType.AXIS_CONSTRUCTION,
+        "road": WorkerType.ROAD_CONSTRUCTION,
+    }[target_type]
+
+
+def build_execution_plan(intent, site_selection, land_design_briefs, *, run_id: str = "", context_version: str = "", deferral_ledger: Any = None) -> ExecutionPlan:
+    """Create self-contained worker tasks keyed only by stable target IDs."""
     intent = _unwrap_intent(intent)
-    tasks: List[WorkerTask] = []
-    project_task_ids: List[str] = []
-    facility_task_ids: List[str] = []
-
-    for index, item in enumerate(_intent_list(intent, "project_targets")):
-        project_id = _target_id(item, "project_id")
-        if not project_id:
-            project_id = f"p{index}"
-        task_id = f"project-{project_id}"
-        project_task_ids.append(task_id)
-        tasks.append(WorkerTask(
-            task_id=task_id,
-            worker_type=WorkerType.PROJECT_FOOTPRINT,
-            payload={"project_id": project_id},
-        ))
-
-    for index, item in enumerate(_intent_list(intent, "zone_targets")):
-        zone_id = _target_id(item, "zone_id", fallback_key="land_use")
-        if not zone_id:
-            zone_id = f"z{index}"
-        tasks.append(WorkerTask(
-            task_id=f"zone-{zone_id}",
-            worker_type=WorkerType.PARCEL_TRANSFORMATION,
-            payload={"zone_id": zone_id},
-            depends_on=list(project_task_ids),
-        ))
-
-    for index, item in enumerate(_intent_list(intent, "facilities")):
-        facility_type = _target_id(item, "type")
-        if not facility_type:
-            facility_type = f"f{index}"
-        task_id = f"facility-{facility_type}"
-        facility_task_ids.append(task_id)
-        tasks.append(WorkerTask(
-            task_id=task_id,
-            worker_type=WorkerType.FACILITY_PLACEMENT,
-            payload={"facility_type": facility_type},
-        ))
-
-    for index, item in enumerate(_intent_list(intent, "road_targets")):
-        road_id = _target_id(item, "road_id", fallback_key="road_level")
-        if not road_id:
-            road_id = f"r{index}"
-        tasks.append(WorkerTask(
-            task_id=f"road-{road_id}",
-            worker_type=WorkerType.ROAD_CONSTRUCTION,
-            payload={"road_id": road_id},
-            depends_on=list(project_task_ids) + list(facility_task_ids),
-        ))
-
-    dependencies: List[dict] = []
-    for task in tasks:
-        for dep in task.depends_on:
-            dependencies.append({"from": dep, "to": task.task_id})
-
+    assignments = {
+        item.target_id: item for item in (getattr(site_selection, "target_assignments", None) or [])
+    }
+    deferred_ids = _deferred_target_ids(deferral_ledger)
+    task_specs = (
+        ("project", "project_targets"),
+        ("zone", "zone_targets"),
+        ("facility", "facilities"),
+        ("axis", "development_axes"),
+        ("road", "road_targets"),
+    )
+    tasks: list[WorkerTask] = []
+    deferred_tasks: list[WorkerTask] = []
+    project_task_ids: list[str] = []
+    facility_task_ids: list[str] = []
+    for target_type, field_name in task_specs:
+        for target in _items(intent, field_name):
+            target_id = str(getattr(target, "target_id", "") or "")
+            if not target_id:
+                continue
+            assignment = assignments.get(target_id)
+            if assignment is None:
+                assignment = TargetAssignment(
+                    target_id=target_id,
+                    target_type=target_type,
+                    status="ready",
+                    expected_output_kind=getattr(target, "expected_output_kind", "parcel"),
+                    target_binding=target.model_dump(mode="json"),
+                )
+            elif not assignment.target_binding:
+                assignment = assignment.model_copy(update={"target_binding": target.model_dump(mode="json")})
+            worker_type = _worker_type(target_type, target)
+            task_id = f"{worker_type.value}:{target_id}"
+            depends_on = []
+            if target_type == "zone":
+                depends_on = list(project_task_ids)
+            elif target_type == "road":
+                depends_on = list(project_task_ids) + list(facility_task_ids)
+            task = WorkerTask(
+                task_id=task_id,
+                worker_type=worker_type,
+                target_id=target_id,
+                target_type=target_type,
+                expected_output_kind=assignment.expected_output_kind,
+                assignment=assignment,
+                payload={"target_id": target_id},
+                depends_on=depends_on,
+                input_artifact_refs=["artifact:intent_compilation", "artifact:site_selection"],
+            )
+            if target_id in deferred_ids:
+                deferred_tasks.append(task)
+                continue
+            tasks.append(task)
+            if target_type == "project":
+                project_task_ids.append(task_id)
+            elif target_type == "facility":
+                facility_task_ids.append(task_id)
     return ExecutionPlan(
+        schema_version="2.0",
         plan_id=f"execute-{run_id or 'current'}",
         worker_tasks=tasks,
-        dependencies=dependencies,
+        deferred_tasks=deferred_tasks,
+        dependencies=[{"from": dependency, "to": task.task_id} for task in tasks for dependency in task.depends_on],
         context_version=context_version,
-        intent=intent,
         site_selection=site_selection,
         land_design_briefs=list(land_design_briefs or []),
     )

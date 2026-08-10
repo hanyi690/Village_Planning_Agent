@@ -7,6 +7,7 @@ from pydantic import BaseModel, Field
 
 from .contract_meta import ContractMeta
 from .provenance import Provenance
+from .selection_contracts import TargetAssignment
 
 
 class WorkerType(str, Enum):
@@ -16,20 +17,30 @@ class WorkerType(str, Enum):
     ROAD_CONSTRUCTION = "road_construction"
     RESTORATION = "restoration"
     ZONE_SYNTHESIS = "zone_synthesis"
+    AXIS_CONSTRUCTION = "axis_construction"
+    NON_SPATIAL_ACTION = "non_spatial_action"
 
 
 class WorkerTask(BaseModel):
     task_id: str
     worker_type: WorkerType
+    target_id: str
+    target_type: str
+    expected_output_kind: Literal["parcel", "polygon", "point", "line", "action"]
+    assignment: TargetAssignment
     payload: dict = Field(default_factory=dict)
     depends_on: list[str] = Field(default_factory=list)
+    input_artifact_refs: list[str] = Field(default_factory=list)
 
 
 class ExecutionResult(BaseModel):
     task_id: str
-    status: str = "pending"  # "pending" | "running" | "succeeded" | "failed"
+    target_id: str = ""
+    status: Literal["pending", "running", "succeeded", "deferred", "failed"] = "pending"
+    expected_output_kind: Literal["parcel", "polygon", "point", "line", "action"] = "parcel"
     output_artifacts: list[str] = Field(default_factory=list)
     errors: list[str] = Field(default_factory=list)
+    diagnostics: list[dict] = Field(default_factory=list)
 
 
 class TypedActionResult(BaseModel):
@@ -43,9 +54,12 @@ class TypedActionResult(BaseModel):
 
 
 class ExecutionOutcome(ContractMeta):
-    """Authoritative EXECUTE artifact for non-spatial action outputs."""
+    """Authoritative per-task EXECUTE artifact."""
 
+    schema_version: Literal["2.0"] = "2.0"
+    task_results: list[ExecutionResult] = Field(default_factory=list)
     action_results: list[TypedActionResult] = Field(default_factory=list)
+    diagnostics: list[dict] = Field(default_factory=list)
 
 
 class ExecutionPlan(ContractMeta):
@@ -56,8 +70,10 @@ class ExecutionPlan(ContractMeta):
     imports (parse_contracts / selection_contracts import this package).
     """
 
+    schema_version: Literal["2.0"] = "2.0"
     plan_id: str = ""
     worker_tasks: list[WorkerTask] = Field(default_factory=list)
+    deferred_tasks: list[WorkerTask] = Field(default_factory=list)
     dependencies: list[dict] = Field(default_factory=list)
     provenance: "Provenance | None" = None
 

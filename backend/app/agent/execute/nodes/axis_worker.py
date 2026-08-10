@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from app.agent.execute.execute_state import ExecuteAgentState
-from app.agent.execute.nodes.worker_common import _intent_list, _task_enabled
+from app.agent.execute.nodes.worker_common import _execution_intent_from_plan, _intent_list, _task_enabled
 from app.modules.schema.contracts.execution_plan_contracts import WorkerResult
 from app.utils.logger import get_logger
 
@@ -20,7 +20,8 @@ def _axis_worker(state: ExecuteAgentState) -> WorkerResult:
         return WorkerResult(worker_type="axis")
 
     gis_data = state.gis_data or {}
-    axes = _intent_list(state.intent, "development_axes") or _intent_list(state.intent, "axes")
+    bound_intent = _execution_intent_from_plan(state)
+    axes = _intent_list(bound_intent, "development_axes") or _intent_list(bound_intent, "axes")
     if not axes:
         return WorkerResult(
             worker_type="axis",

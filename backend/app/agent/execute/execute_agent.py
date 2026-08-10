@@ -31,6 +31,8 @@ from app.agent.execute.execute_state import ExecuteAgentState
 from app.agent.execute.nodes import (
     _axis_worker,
     _axis_worker_node,
+    _action_worker,
+    _action_worker_node,
     _checkpoint_safe,
     _checkpoint_safe_node,
     _execution_error,
@@ -95,6 +97,7 @@ def build_execute_agent_graph(checkpointer=None):
     graph.add_node("zone_worker", _checkpoint_safe_node(_zone_worker_node))
     graph.add_node("facility_worker", _checkpoint_safe_node(_facility_worker_node))
     graph.add_node("axis_worker", _checkpoint_safe_node(_axis_worker_node))
+    graph.add_node("action_worker", _checkpoint_safe_node(_action_worker_node))
     graph.add_node("road_worker", _checkpoint_safe_node(_road_worker_node))
     graph.add_node("merge_worker_results", _checkpoint_safe_node(_merge_worker_results_node))
     graph.add_node("geometry_materialize", _checkpoint_safe_node(_geometry_materialize_node))
@@ -111,7 +114,8 @@ def build_execute_agent_graph(checkpointer=None):
     # Fan-in: both workers join at road_worker
     graph.add_edge("facility_worker", "road_worker")
     graph.add_edge("axis_worker", "road_worker")
-    graph.add_edge("road_worker", "merge_worker_results")
+    graph.add_edge("road_worker", "action_worker")
+    graph.add_edge("action_worker", "merge_worker_results")
     graph.add_edge("merge_worker_results", "geometry_materialize")
     graph.add_edge("geometry_materialize", "planned_state_builder")
     graph.add_edge("planned_state_builder", "execution_review")
@@ -148,6 +152,8 @@ __all__ = [
     "_facility_worker_node",
     "_axis_worker",
     "_axis_worker_node",
+    "_action_worker",
+    "_action_worker_node",
     "_road_worker",
     "_road_worker_node",
     "_merge_worker_results_node",

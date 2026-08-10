@@ -2,9 +2,66 @@
 
 from __future__ import annotations
 
-from typing import Any, Dict, List
+from typing import Any, Dict, Iterable, List
 
 from app.agent.execute.execute_state import ExecuteAgentState
+
+
+def _task_value(task: Any, name: str, default: Any = None) -> Any:
+    return task.get(name, default) if isinstance(task, dict) else getattr(task, name, default)
+
+
+def _plan_tasks(state: ExecuteAgentState, worker_types: Iterable[str] | None = None) -> list[Any]:
+    """Read dispatchable tasks only from the authoritative ExecutionPlan."""
+    plan = state.execution_plan
+    tasks = list(_task_value(plan, "worker_tasks", []) or []) if plan is not None else []
+    if worker_types is None:
+        return tasks
+    allowed = {str(item) for item in worker_types}
+    return [
+        task for task in tasks
+        if str(_task_value(task, "worker_type", "").value if hasattr(_task_value(task, "worker_type", ""), "value") else _task_value(task, "worker_type", "")) in allowed
+    ]
+
+
+def _execution_intent_from_plan(state: ExecuteAgentState) -> Any:
+    """Rebuild worker inputs from task snapshots, never from a stale intent."""
+    if state.execution_plan is None:
+        return state.intent
+    from app.modules.schema.contracts.parse_contracts import (
+        AxisTarget,
+        FacilityTarget,
+        ProjectTarget,
+        RoadTarget,
+        SpatialPlanningIntent,
+        ZoneTarget,
+    )
+
+    model_by_type = {
+        "project": ("project_targets", ProjectTarget),
+        "zone": ("zone_targets", ZoneTarget),
+        "facility": ("facilities", FacilityTarget),
+        "axis": ("development_axes", AxisTarget),
+        "road": ("road_targets", RoadTarget),
+    }
+    values: dict[str, list[Any]] = {field: [] for field, _ in model_by_type.values()}
+    for task in _plan_tasks(state):
+        target_type = str(_task_value(task, "target_type", ""))
+        binding = _task_value(task, "assignment")
+        payload = _task_value(binding, "target_binding", {}) or {}
+        payload = dict(payload)
+        anchor = _task_value(binding, "anchor_point")
+        if anchor is not None:
+            payload["anchor_point"] = anchor
+        selected_bsm = str(_task_value(binding, "selected_bsm", "") or "")
+        if selected_bsm:
+            payload.setdefault("candidate_bsms", [selected_bsm])
+        payload["target_id"] = str(_task_value(task, "target_id", payload.get("target_id", "")) or "")
+        spec = model_by_type.get(target_type)
+        if spec is not None:
+            field, model = spec
+            values[field].append(model.model_validate(payload))
+    return SpatialPlanningIntent(**values)
 
 
 def _intent_list(intent: Any, key: str) -> List[Any]:

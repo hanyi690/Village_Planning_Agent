@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Any, Dict, List
 
 from app.agent.execute.execute_state import ExecuteAgentState
-from app.agent.execute.nodes.worker_common import _worker_result_get
+from app.agent.execute.nodes.worker_common import _execution_intent_from_plan, _worker_result_get
 
 
 async def _merge_worker_results_node(state: ExecuteAgentState) -> dict:
@@ -70,5 +70,5 @@ async def _planned_state_builder_node(state: ExecuteAgentState) -> dict:
 
     if state.parcel_changeset is None:
         return {}
-    planned_state = changeset_to_planned_state(state.parcel_changeset, state.intent)
+    planned_state = changeset_to_planned_state(state.parcel_changeset, _execution_intent_from_plan(state))
     return {"planned_state": planned_state}

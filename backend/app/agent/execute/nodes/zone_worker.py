@@ -13,6 +13,7 @@ from app.agent.execute.legacy.layer_helpers import (
 from app.agent.execute.nodes.common import _execution_error
 from app.agent.execute.nodes.worker_common import (
     _build_landuse_geojson,
+    _execution_intent_from_plan,
     _intent_list,
     _resolve_parcel_by_bsm,
     _task_enabled,
@@ -61,7 +62,7 @@ def _allocate_empty_zone_targets(
         return unresolved
 
     claimed: set = set()
-    for zone_target in _intent_list(state.intent, "zone_targets"):
+    for zone_target in _intent_list(_execution_intent_from_plan(state), "zone_targets"):
         for bsm in getattr(zone_target, "candidate_bsms", None) or []:
             claimed.add(str(bsm))
     pool = [bsm for bsm in parcel_by_bsm if str(bsm) not in claimed]
@@ -144,8 +145,9 @@ def _zone_worker(state: ExecuteAgentState) -> WorkerResult:
         return WorkerResult(worker_type="zone")
 
     landuse = _build_landuse_geojson(state)
-    zone_targets = _intent_list(state.intent, "zone_targets")
-    custom_targets = _intent_list(state.intent, "custom_zone_targets")
+    bound_intent = _execution_intent_from_plan(state)
+    zone_targets = _intent_list(bound_intent, "zone_targets")
+    custom_targets = _intent_list(bound_intent, "custom_zone_targets")
     parcel_by_bsm = _resolve_parcel_by_bsm(state)
 
     diagnostics: List[Dict[str, Any]] = []
@@ -217,7 +219,7 @@ async def _zone_worker_node(state: ExecuteAgentState) -> dict:
         update["allocation_summary"] = {
             "mode": "deterministic",
             "allocated_count": len(zone_changes),
-            "zone_target_count": len(_intent_list(state.intent, "zone_targets")),
+            "zone_target_count": len(_intent_list(_execution_intent_from_plan(state), "zone_targets")),
             "adjustments_applied": len(list(state.constraint_adjustments or [])),
             "custom_zone_count": sum(
                 1 for layer in result.layers

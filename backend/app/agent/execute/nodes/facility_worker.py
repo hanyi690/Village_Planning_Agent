@@ -6,7 +6,7 @@ from typing import List
 
 from app.agent.execute.execute_state import ExecuteAgentState
 from app.agent.execute.nodes.common import _execution_error
-from app.agent.execute.nodes.worker_common import _resolve_parcel_by_bsm, _task_enabled
+from app.agent.execute.nodes.worker_common import _execution_intent_from_plan, _resolve_parcel_by_bsm, _task_enabled
 from app.modules.schema.contracts.execution_plan_contracts import WorkerResult
 from app.modules.schema.contracts.parcel_change_contracts import ParcelChange
 from app.utils.logger import get_logger
@@ -23,13 +23,10 @@ def _facility_worker(state: ExecuteAgentState) -> WorkerResult:
     an existing parcel. No KG POI lookup, no FacilityPlacer.
     """
     from app.agent.execute.land_design_worker import design_facility_parcel
-    from shapely import wkt
-    from shapely.geometry import mapping as geometry_mapping
-
     if not _task_enabled(state, "facility"):
         return WorkerResult(worker_type="facility")
 
-    facilities = list(getattr(state.intent, "facilities", None) or [])
+    facilities = list(getattr(_execution_intent_from_plan(state), "facilities", None) or [])
     parcel_by_bsm = _resolve_parcel_by_bsm(state)
     features = []
     changes: List[ParcelChange] = []
@@ -43,14 +40,8 @@ def _facility_worker(state: ExecuteAgentState) -> WorkerResult:
             continue
         changes.append(change)
         geometry = {}
-        after_wkt = getattr(change, "after_geometry_wkt", "") or ""
-        if after_wkt:
-            try:
-                geom = wkt.loads(after_wkt)
-                if not geom.is_empty:
-                    geometry = geometry_mapping(geom)
-            except Exception:
-                geometry = {}
+        if facility.anchor_point is not None:
+            geometry = {"type": "Point", "coordinates": list(facility.anchor_point)}
         features.append({
             "type": "Feature",
             "properties": {
