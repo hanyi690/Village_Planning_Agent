@@ -515,6 +515,7 @@ async def test_stage_audit_exposes_gate_checksums_fingerprint_route_and_progress
 @pytest.mark.asyncio
 async def test_stage_audit_uses_semantic_refs_for_all_post_l3_stages(monkeypatch):
     from app.agent.bootstrap import stage_audit
+    from app.agent.common.gate_progress import gate_progress_metadata
 
     saved = []
 
@@ -537,9 +538,16 @@ async def test_stage_audit_uses_semantic_refs_for_all_post_l3_stages(monkeypatch
         async def stage_node(_state, _stage=stage):
             result = {"artifact_refs": {"output": ref}}
             if _stage != "EXECUTE":
+                progress, _ = gate_progress_metadata(
+                    input_artifact_refs=_state["artifact_refs"],
+                    output={"stage": _stage, "status": "passed"},
+                    issues=[],
+                )
                 result[f"{_stage.lower()}_gate"] = {
                     "passed": True,
                     "feedback_route": None,
+                    "route_reason": "checks_passed",
+                    **progress,
                 }
             return result
 
@@ -560,7 +568,8 @@ async def test_stage_audit_uses_semantic_refs_for_all_post_l3_stages(monkeypatch
         ):
             assert diagnostics[key]
         assert diagnostics["gate_route"] == "PASS"
-        assert diagnostics["progress_made"] is True
+        expected_progress = True if stage == "EXECUTE" else None
+        assert diagnostics["progress_made"] is expected_progress
         assert inputs["input_checksum"]
         assert outputs["output_checksum"]
         assert "stored_at" not in str(inputs)
@@ -578,8 +587,9 @@ async def test_stage_audit_uses_semantic_refs_for_all_post_l3_stages(monkeypatch
 
 
 @pytest.mark.asyncio
-async def test_stage_audit_distinguishes_gate_issues_and_detects_no_progress(monkeypatch):
+async def test_stage_audit_adopts_gate_issue_change_progress(monkeypatch):
     from app.agent.bootstrap import stage_audit
+    from app.agent.common.gate_progress import gate_progress_metadata
 
     saved = []
 
@@ -594,12 +604,20 @@ async def test_stage_audit_distinguishes_gate_issues_and_detects_no_progress(mon
 
     @stage_audit.audited_stage("VALIDATE")
     async def validate_node(state):
+        progress, _ = gate_progress_metadata(
+            input_artifact_refs=state["artifact_refs"],
+            output={"status": "blocked"},
+            issues=[state["issue"]],
+            previous_gate=state.get("validate_gate"),
+        )
         return {
             "artifact_refs": {"validation_report": ref},
             "validate_gate": {
                 "passed": False,
                 "feedback_route": "END_DIAGNOSTIC",
                 "pending_requests": [{"request_id": state["issue"]}],
+                "route_reason": "validation_blocked",
+                **progress,
             },
         }
 
@@ -609,16 +627,134 @@ async def test_stage_audit_distinguishes_gate_issues_and_detects_no_progress(mon
         "context_ref": {"session_id": "audit-progress", "version": "1"},
         "issue": "issue-a",
     }
-    await validate_node(base)
+    first_patch = await validate_node(base)
     first = saved[-1]
     first_diagnostics = first["diagnostics"]
-    prior_gate = {
-        "input_checksum": first["inputs"]["input_checksum"],
-        "output_checksum": first["outputs"]["output_checksum"],
-    }
+    prior_gate = first_patch["validate_gate"]
 
     saved.clear()
     await validate_node({**base, "issue": "issue-b", "validate_gate": prior_gate})
     second_diagnostics = saved[-1]["diagnostics"]
     assert second_diagnostics["issue_fingerprint"] != first_diagnostics["issue_fingerprint"]
-    assert second_diagnostics["progress_made"] is False
+    assert second_diagnostics["progress_made"] is True
+
+
+@pytest.mark.asyncio
+async def test_stage_audit_adopts_actual_gate_metadata_on_unchanged_replay(monkeypatch):
+    from app.agent.bootstrap import stage_audit
+    from app.agent.validate.gate import evaluate_validate_gate
+    from app.modules.schema.contracts.validation_report_contracts import ValidationReport
+
+    saved = []
+
+    async def capture(*args, **kwargs):
+        saved.append(kwargs)
+
+    monkeypatch.setattr(stage_audit, "_save", capture)
+    report = ValidationReport(
+        artifact_id="validation-report-1",
+        checks=[],
+        overall_passed=True,
+    )
+    input_ref = {
+        "artifact_id": "execution-outcome-1",
+        "artifact_type": "ExecutionOutcome",
+        "semantic_checksum": "execution-outcome-content",
+        "stored_at": "volatile-a",
+    }
+    output_ref = {
+        "artifact_id": "validation-report-1",
+        "artifact_type": "ValidationReport",
+        "semantic_checksum": "validation-report-content",
+        "stored_at": "volatile-a",
+    }
+
+    @stage_audit.audited_stage("VALIDATE")
+    async def validate_node(state):
+        gate = evaluate_validate_gate(
+            report,
+            input_artifact_refs={"execution_outcome": state["artifact_refs"]["execution_outcome"]},
+            previous_gate=state.get("validate_gate"),
+        )
+        return {
+            "artifact_refs": {"validation_report": output_ref},
+            "validate_gate": gate.model_dump(mode="json"),
+        }
+
+    initial = {
+        "session_id": "actual-gate-replay",
+        "artifact_refs": {"execution_outcome": input_ref},
+    }
+    first_patch = await validate_node(initial)
+    replay_state = {
+        **initial,
+        **first_patch,
+        "artifact_refs": {
+            **initial["artifact_refs"],
+            **first_patch["artifact_refs"],
+        },
+    }
+    output_ref["stored_at"] = "volatile-b"
+    second_patch = await validate_node(replay_state)
+
+    gate = second_patch["validate_gate"]
+    completed = saved[-1]
+    diagnostics = completed["diagnostics"]
+    assert gate["progress_made"] is False
+    assert completed["inputs"]["input_checksum"] == gate["input_checksum"]
+    assert completed["outputs"]["output_checksum"] == gate["output_checksum"]
+    assert diagnostics["gate_input_checksum"] == gate["input_checksum"]
+    assert diagnostics["gate_output_checksum"] == gate["output_checksum"]
+    assert diagnostics["issue_fingerprint"] == gate["issue_fingerprint"]
+    assert diagnostics["route_reason"] == gate["route_reason"]
+    assert diagnostics["progress_made"] is gate["progress_made"]
+    assert second_patch["stage_audit"]["VALIDATE"] == {
+        "input_checksum": gate["input_checksum"],
+        "output_checksum": gate["output_checksum"],
+        "issue_fingerprint": gate["issue_fingerprint"],
+        "route_reason": gate["route_reason"],
+        "progress_made": gate["progress_made"],
+    }
+
+
+@pytest.mark.asyncio
+async def test_gate_less_execute_persists_canonical_stage_audit_for_replay(monkeypatch):
+    from app.agent.bootstrap import stage_audit
+    from app.agent.plan_state.state import AgentState
+
+    saved = []
+
+    async def capture(*args, **kwargs):
+        saved.append(kwargs)
+
+    monkeypatch.setattr(stage_audit, "_save", capture)
+    ref = {
+        "artifact_id": "execution-outcome-1",
+        "artifact_type": "ExecutionOutcome",
+        "semantic_checksum": "execution-outcome-content",
+        "stored_at": "volatile-a",
+    }
+
+    @stage_audit.audited_stage("EXECUTE")
+    async def execute_node(_state):
+        return {
+            "artifact_refs": {"execution_outcome": ref},
+            "execution_errors": [],
+        }
+
+    initial = {
+        "session_id": "gate-less-execute-replay",
+        "artifact_refs": {"execution_outcome": ref},
+    }
+    first_patch = await execute_node(initial)
+    ref["stored_at"] = "volatile-b"
+    second_patch = await execute_node({**initial, **first_patch})
+
+    assert "stage_audit" in AgentState.__annotations__
+    first_audit = first_patch["stage_audit"]["EXECUTE"]
+    second_audit = second_patch["stage_audit"]["EXECUTE"]
+    assert first_audit["input_checksum"] == second_audit["input_checksum"]
+    assert first_audit["output_checksum"] == second_audit["output_checksum"]
+    assert first_audit["issue_fingerprint"] == second_audit["issue_fingerprint"]
+    assert second_audit["progress_made"] is False
+    assert saved[-1]["diagnostics"]["progress_made"] is False

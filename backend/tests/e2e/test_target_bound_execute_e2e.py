@@ -267,6 +267,184 @@ def test_execute_runtime_route_builds_kg_from_plan_scope_not_stale_intent(monkey
     assert "execution_errors" not in captured["route"]
 
 
+@pytest.mark.asyncio
+async def test_execute_wrapper_preserves_l4_failure_and_routes_terminal_diagnostic(monkeypatch):
+    from langgraph.graph import END, START, StateGraph
+
+    from app.agent.bootstrap import graph as bootstrap_graph
+    from app.agent.bootstrap import post_l3_main_nodes, stage_audit
+    from app.agent.plan_state.state import AgentState
+    from app.modules.schema.contracts.execution_plan_contracts import (
+        ExecutionPlan,
+        ExecutionResult,
+        WorkerResult,
+        WorkerTask,
+        WorkerType,
+    )
+    from app.modules.schema.contracts.parse_contracts import (
+        FacilityTarget,
+        SpatialPlanningIntent,
+    )
+    from app.modules.schema.contracts.parse_result_contracts import IntentCompilationResult
+    from app.modules.schema.contracts.selection_contracts import (
+        SiteSelectionDecision,
+        TargetAssignment,
+    )
+
+    target_id = "facility-l4-coverage"
+    task = WorkerTask(
+        task_id=f"facility_placement:{target_id}",
+        worker_type=WorkerType.FACILITY_PLACEMENT,
+        target_id=target_id,
+        target_type="facility",
+        expected_output_kind="point",
+        assignment=TargetAssignment(
+            target_id=target_id,
+            target_type="facility",
+            status="placed",
+            anchor_point=(116.0, 24.0),
+            expected_output_kind="point",
+            target_binding={"target_id": target_id, "type": "卫生室"},
+        ),
+    )
+    execution_plan = ExecutionPlan(worker_tasks=[task])
+    intent = SpatialPlanningIntent(
+        facilities=[FacilityTarget(target_id=target_id, type="卫生室")]
+    )
+    context = SimpleNamespace(
+        version="1",
+        bundle=None,
+        village_anchors=[],
+        kg=None,
+        kg_session_ref="",
+    )
+    context.snapshot_meta = lambda: {
+        "session_id": "execute-l4-terminal",
+        "version": "1",
+    }
+    captured = {}
+
+    class ExecuteGraph:
+        async def ainvoke(self, state, config):
+            return {
+                "parcel_changeset": SimpleNamespace(changes=[]),
+                "layout_configs": [],
+                "tasks_to_run": ["facility"],
+                "worker_results": [
+                    WorkerResult(
+                        worker_type="facility",
+                        task_results=[
+                            ExecutionResult(
+                                task_id=task.task_id,
+                                target_id=target_id,
+                                status="succeeded",
+                                expected_output_kind="point",
+                            )
+                        ],
+                    )
+                ],
+                "execution_errors": [],
+                "worker_conflict_diagnostics": [],
+                "validation_result": {"passed": True},
+            }
+
+    async def require_context(_state):
+        return context
+
+    def load_artifact(_state, key, _model):
+        if key == "intent_compilation":
+            return IntentCompilationResult(typed_intent=intent)
+        if key == "site_selection":
+            return SiteSelectionDecision()
+        if key == "execution_plan":
+            return execution_plan
+        return None
+
+    async def fail_l4_write(execute_state):
+        captured["execution_outcome"] = execute_state.execution_outcome
+        return {
+            "l4_write_error": "execution_outcome_target_coverage",
+            "missing_targets": [[target_id, "point"]],
+            "execution_outcome_target_ids": [],
+        }
+
+    async def skip_audit(*args, **kwargs):
+        return None
+
+    monkeypatch.setattr(post_l3_main_nodes, "_require_context", require_context)
+    monkeypatch.setattr(post_l3_main_nodes, "_load_ref_artifact", load_artifact)
+    monkeypatch.setattr(
+        post_l3_main_nodes,
+        "_persist_artifact",
+        lambda _state, _module, kind, _payload: {
+            "artifact_id": kind,
+            "artifact_type": kind,
+            "semantic_checksum": f"{kind}-content",
+        },
+    )
+    monkeypatch.setattr(
+        "app.services.runtime.PlanningRuntimeService._execute_subgraph",
+        ExecuteGraph(),
+    )
+    monkeypatch.setattr(
+        "app.agent.execute.planned_state_builder.changeset_to_planned_state",
+        lambda *args, **kwargs: SimpleNamespace(),
+    )
+    monkeypatch.setattr(
+        "app.agent.execute.nodes.write_l4._write_l4_node",
+        fail_l4_write,
+    )
+    monkeypatch.setattr(stage_audit, "_save", skip_audit)
+    monkeypatch.setattr(
+        bootstrap_graph,
+        "_diagnostic_manifest_patch",
+        lambda *args, **kwargs: {},
+    )
+
+    builder = StateGraph(AgentState)
+    builder.add_node("execute", post_l3_main_nodes.execute_node)
+    builder.add_node("validate", lambda _state: {"phase": "validate-reached"})
+    builder.add_node(
+        bootstrap_graph.END_DIAGNOSTIC,
+        bootstrap_graph.end_diagnostic_node,
+    )
+    builder.add_edge(START, "execute")
+    builder.add_conditional_edges(
+        "execute",
+        bootstrap_graph.route_after_execute,
+        {
+            "validate": "validate",
+            bootstrap_graph.END_DIAGNOSTIC: bootstrap_graph.END_DIAGNOSTIC,
+        },
+    )
+    builder.add_edge("validate", END)
+    builder.add_edge(bootstrap_graph.END_DIAGNOSTIC, END)
+    graph = builder.compile()
+
+    final = await graph.ainvoke(
+        {"session_id": "execute-l4-terminal", "artifact_refs": {}}
+    )
+
+    outcome = captured["execution_outcome"]
+    assert outcome.task_results[0].target_id == target_id
+    assert outcome.task_results[0].status == "succeeded"
+    assert final["l4_write_result"]["l4_write_error"] == "execution_outcome_target_coverage"
+    assert final["execution_outcome_target_coverage"] == []
+    assert final["fatal_error"] == {
+        "stage": "EXECUTE",
+        "code": "execution_outcome_target_coverage",
+        "message": "L4 write failed: execution_outcome_target_coverage",
+        "missing_targets": [[target_id, "point"]],
+    }
+    assert final["delivery_status"] == "diagnostic_only"
+    assert final["diagnostic_terminal"]["stage"] == "execute"
+    assert final["diagnostic_terminal"]["reason"] == "execution_outcome_target_coverage"
+    assert final.get("phase") != "validate-reached"
+    assert "EXECUTE" in final["stage_audit"]
+    assert "l4_write_result" in AgentState.__annotations__
+    assert "execution_outcome_target_coverage" in AgentState.__annotations__
+
+
 def test_execution_outcome_persistence_marks_unresolved_and_deferred_tasks(monkeypatch):
     from app.agent.bootstrap import post_l3_main_nodes
     from app.modules.schema.contracts.execution_plan_contracts import ExecutionPlan, WorkerTask, WorkerType, WorkerResult

@@ -265,6 +265,8 @@ class AgentState(TypedDict, total=False):
     execution_errors: Annotated[List[Dict[str, Any]], _replace_or_merge_lists]  # EXECUTE errors
     layout_configs: List[Dict[str, Any]]
     action_results: List[Dict[str, Any]]
+    l4_write_result: Dict[str, Any]
+    execution_outcome_target_coverage: List[str]
     # VALIDATE 输出
     validate_gate: Optional[Any]  # GateDecision
     # RECONCILE 输出
@@ -275,6 +277,7 @@ class AgentState(TypedDict, total=False):
     render_artifacts: Dict[str, Any]
     # Gate 累积 + 重试
     upstream_gates: List[Any]
+    stage_audit: Annotated[Dict[str, Dict[str, Any]], _merge_dict_of_dicts]
     retry_counts: Dict[str, int]
     dimension_retry_counts: Annotated[Dict[str, int], _merge_retry_counts]
     dimension_retry_limit: int

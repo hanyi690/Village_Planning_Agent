@@ -712,7 +712,15 @@ async def execute_node(state: Dict[str, Any]) -> Dict[str, Any]:
         exec_state.planned_state = planned_state
         exec_state.execution_outcome = outcome
         exec_state.validation_result = dict(result.get("validation_result") or {})
-        l4_write_result = await _write_l4_node(exec_state) or {}
+        try:
+            l4_write_result = await _write_l4_node(exec_state) or {}
+        except Exception as exc:
+            logger.exception("[post_l3:main:execute] L4 write failed")
+            l4_write_result = {
+                "l4_write_error": "l4_write_failed",
+                "error_type": type(exc).__name__,
+                "message": str(exc),
+            }
     refs = {
         "execution_outcome": _persist_artifact(state, "execute", "ExecutionOutcome", outcome),
         "parcel_changeset": _persist_artifact(state, "execute", "ParcelChangeSet", changeset),
@@ -725,13 +733,35 @@ async def execute_node(state: Dict[str, Any]) -> Dict[str, Any]:
     execution_errors = list(result.get("execution_errors", []) or [])
     if l4_error:
         execution_errors.append({"stage": "L4", "code": l4_error, "missing_targets": l4_write_result.get("missing_targets", [])})
+    fatal_error = None
+    diagnostic_terminal = None
+    if l4_error:
+        from app.services.artifact_fingerprint import semantic_checksum
+
+        missing_targets = _jsonable(l4_write_result.get("missing_targets", []))
+        fatal_error = {
+            "stage": "EXECUTE",
+            "code": str(l4_error),
+            "message": f"L4 write failed: {l4_error}",
+            "missing_targets": missing_targets,
+        }
+        diagnostic_terminal = {
+            "stage": "execute",
+            "reason": str(l4_error),
+            "issue_fingerprint": semantic_checksum(l4_write_result),
+            "missing_targets": missing_targets,
+        }
     return {
         "layout_configs": _jsonable(list(result.get("layout_configs", []) or [])),
         "action_results": _jsonable(outcome.action_results),
         "execution_errors": _jsonable(execution_errors),
         "l4_write_result": _jsonable(l4_write_result),
         "execution_outcome_target_coverage": _jsonable(l4_write_result.get("execution_outcome_target_ids", [])),
-        **({"fatal_error": l4_error, "delivery_status": "diagnostic_only"} if l4_error else {}),
+        **({
+            "fatal_error": fatal_error,
+            "delivery_status": "diagnostic_only",
+            "diagnostic_terminal": diagnostic_terminal,
+        } if l4_error else {}),
         "artifact_refs": refs,
         **_adopt_context(state, context),
     }

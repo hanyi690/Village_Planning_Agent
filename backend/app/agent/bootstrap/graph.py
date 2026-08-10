@@ -166,6 +166,15 @@ def route_after_select(state: Dict[str, Any]) -> str:
     return "human_review"
 
 
+def route_after_execute(state: Dict[str, Any]) -> str:
+    l4_result = state.get("l4_write_result") or {}
+    if isinstance(l4_result, dict) and l4_result.get("l4_write_error"):
+        return END_DIAGNOSTIC
+    if isinstance(state.get("fatal_error"), dict):
+        return END_DIAGNOSTIC
+    return "validate"
+
+
 def route_after_validate(state: Dict[str, Any]) -> str:
     route = post_l3_main_nodes._gate_route(state.get("validate_gate"))
     if route == "PASS":
@@ -439,7 +448,8 @@ def create_unified_planning_graph(checkpointer=None) -> StateGraph:
     builder.add_conditional_edges("select", route_after_select,
         {"execute": "execute", "ground": "ground", "human_review": "human_review_prepare",
          END_DIAGNOSTIC: END_DIAGNOSTIC})
-    builder.add_edge("execute", "validate")
+    builder.add_conditional_edges("execute", route_after_execute,
+        {"validate": "validate", END_DIAGNOSTIC: END_DIAGNOSTIC})
     builder.add_conditional_edges("validate", route_after_validate,
         {"reconcile": "reconcile", "execute": "execute", "select": "select",
          "ground": "ground", "parse": "parse", "human_review": "human_review_prepare",
