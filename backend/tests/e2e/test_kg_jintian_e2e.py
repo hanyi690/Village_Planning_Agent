@@ -1039,7 +1039,7 @@ class TestSpatialCognitiveUnitHierarchy:
             ParcelChangeSet, ParcelChange,
         )
         from app.modules.schema.contracts.classification_ref import ClassificationRef
-        pc = ClassificationRef(system="ghytbm", code="2121", canonical_name="村庄建设用地", source="derived")
+        pc = ClassificationRef(system="ghytbm", code="1100", canonical_name="耕地", source="derived", evidence_refs=["test:classification:X1"])
         ps = ParcelChangeSet(
             context_version="v1",
             artifact_id="test",
