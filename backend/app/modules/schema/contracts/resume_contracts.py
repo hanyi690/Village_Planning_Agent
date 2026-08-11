@@ -21,6 +21,41 @@ class ResumeMode(StrEnum):
     BLOCKED = "blocked"
 
 
+class ResumeCommand(BaseModel):
+    """Application-level command for continuing a persisted execution.
+
+    ``checkpoint_id`` is only a cursor.  The service must still build a
+    ``ResumePlan`` from that cursor before invoking LangGraph.  ``event_id``
+    is the compare-and-set token for HUMAN decisions; it is deliberately not
+    inferred from the latest state so a stale browser cannot consume a newer
+    interrupt.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    command_id: str = Field(min_length=1)
+    session_id: str = Field(min_length=1)
+    mode: ResumeMode
+    checkpoint_id: Optional[str] = None
+    event_id: Optional[str] = None
+    expected_last_event_seq: Optional[int] = Field(default=None, ge=0)
+    payload: Dict[str, Any] = Field(default_factory=dict)
+
+
+class ResumeResult(BaseModel):
+    """Stable acknowledgement returned after a resume command is accepted."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    command_id: str
+    session_id: str
+    status: str
+    mode: ResumeMode
+    checkpoint_id: Optional[str] = None
+    event_id: Optional[str] = None
+    resume_plan: Dict[str, Any]
+
+
 class ResumePlan(BaseModel):
     """Auditable application decision for a checkpoint operation."""
 
@@ -291,6 +326,8 @@ def build_resume_plan(
 __all__ = [
     "ARTIFACT_STAGE_ORDER",
     "ResumeMode",
+    "ResumeCommand",
+    "ResumeResult",
     "ResumePlan",
     "build_resume_plan",
 ]
