@@ -155,6 +155,41 @@ def _cluster_entries_from_kg(kg: Any, bundle: Any) -> List[GazetteerEntry]:
     return entries
 
 
+def _facility_entries_from_kg(kg: Any) -> List[GazetteerEntry]:
+    """Expose named L1 Facility entities as geocoder candidates.
+
+    KG already stores facility name/type and point coordinates.  Previously
+    that query path was available to cognition only; PARSE/GROUND could not
+    resolve a report facility against the same point entity.
+    """
+    from rdflib import RDF
+    from app.modules.kg.ontology import PLN, EntityTypes
+
+    entries: List[GazetteerEntry] = []
+    for facility in kg.g.subjects(RDF.type, EntityTypes.Facility):
+        name = str(kg.g.value(facility, PLN.name) or "").strip()
+        if not name:
+            continue
+        lon = kg.g.value(facility, PLN.lon)
+        lat = kg.g.value(facility, PLN.lat)
+        try:
+            centroid = [float(lon), float(lat)] if lon is not None and lat is not None else None
+        except (TypeError, ValueError):
+            centroid = None
+        bsm = str(kg.g.value(facility, PLN.bsm) or "").strip()
+        entries.append(GazetteerEntry(
+            name=name,
+            aliases=[str(kg.g.value(facility, PLN.facility_type) or "").strip()],
+            entity_uri=str(facility),
+            bsms=[bsm] if bsm else [],
+            centroid=centroid,
+            source="kg_facility",
+            confidence=0.9 if centroid else 0.6,
+            description=f"KG L1 现状设施：{name}",
+        ))
+    return entries
+
+
 def _external_anchors_from_bundle(bundle: Any) -> List[GazetteerEntry]:
     """从 bundle 多源 API 注入的自然村注记构建权威坐标条目。
 
@@ -245,14 +280,22 @@ def _annotation_entries_from_memory(memory: Any, bundle: Any) -> List[GazetteerE
                     parcels_by_bsm[bsm] = c
     for uri, ann in (memory.entity_annotations or {}).items():
         desc = ann.description or ""
-        if "村" in desc or "自然村" in desc:
+        if "村" in desc or "自然村" in desc or ann.entity_type == "LocationAnchor":
             name = desc.split("（")[0].strip()
             if not name:
                 continue
-            bsms = []
-            for ref in (ann.source_text_refs or []):
-                pass
+            bsms = [
+                str(ref)
+                for ref in (ann.intent_refs or [])
+                if str(ref).isdigit()
+            ]
             centroid = None
+            points = [parcels_by_bsm[b] for b in bsms if b in parcels_by_bsm]
+            if points:
+                centroid = [
+                    sum(point[0] for point in points) / len(points),
+                    sum(point[1] for point in points) / len(points),
+                ]
             entries.append(GazetteerEntry(
                 name=name[:20],
                 entity_uri=uri,
@@ -273,6 +316,8 @@ def build_gazetteer(kg: Any, bundle: Any, memory: Any = None) -> Gazetteer:
     gazetteer = Gazetteer()
     try:
         for e in _cluster_entries_from_kg(kg, bundle):
+            gazetteer.upsert(e)
+        for e in _facility_entries_from_kg(kg):
             gazetteer.upsert(e)
     except Exception as e:
         logger.warning("[Gazetteer] cluster build failed: %s", e)

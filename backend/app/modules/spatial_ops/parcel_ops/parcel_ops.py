@@ -52,7 +52,7 @@ def reclassify_parcel(
     bsm = _get_attr(parcel, "bsm", "")
     geometry = _get_attr(parcel, "geometry", {})
     area_sqm = float(_get_attr(parcel, "area_sqm", 0) or _get_attr(parcel, "area_ha", 0) * 10000 or _get_attr(parcel, "area", 0) or 0)
-    area_ha = area_sqm / 10000 if area_sqm > 10000 else area_sqm
+    area_ha = area_sqm / 10000
 
     import json
     geom_str = json.dumps(geometry, ensure_ascii=False) if isinstance(geometry, dict) else str(geometry)
@@ -79,7 +79,7 @@ def modify_parcel(
     bsm = _get_attr(parcel, "bsm", "")
     geometry = _get_attr(parcel, "geometry", {})
     area_sqm = float(_get_attr(parcel, "area_sqm", 0) or _get_attr(parcel, "area_ha", 0) * 10000 or _get_attr(parcel, "area", 0) or 0)
-    area_ha = field_changes.get("area_ha", 0) or (area_sqm / 10000 if area_sqm > 10000 else area_sqm)
+    area_ha = field_changes.get("area_ha", 0) or (area_sqm / 10000)
 
     import json
     geom_str = json.dumps(geometry, ensure_ascii=False) if isinstance(geometry, dict) else str(geometry)
@@ -130,7 +130,7 @@ def merge_parcels(
             geom = _get_attr(p, "geometry", None)
             bsm = _get_attr(p, "bsm", "")
             area_sqm = float(_get_attr(p, "area_sqm", 0) or _get_attr(p, "area_ha", 0) * 10000 or _get_attr(p, "area", 0) or 0)
-            area = area_sqm / 10000 if area_sqm > 10000 else area_sqm
+            area = area_sqm / 10000
 
             if isinstance(geom, dict):
                 shp = shape(geom)

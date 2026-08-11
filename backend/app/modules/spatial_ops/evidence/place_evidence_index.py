@@ -73,19 +73,34 @@ class PlaceEvidenceIndex:
         if centroid:
             geometry_ref = f"POINT({centroid[0]} {centroid[1]})" if len(centroid) >= 2 else None
         aliases = [str(a) for a in (getattr(entry, "aliases", None) or []) if a]
+        role, entity_types = self._gazetteer_role(entry)
         self._add_entry(
             PlaceEvidenceEntry(
                 canonical_name=name,
                 aliases=aliases,
                 entity_refs=[entity_uri],
-                entity_types=["village"],
-                role="village",
+                entity_types=entity_types,
+                role=role,
                 source_bsms=bsms,
                 geometry_ref=geometry_ref,
                 provenance=["gazetteer"],
                 confidence=float(getattr(entry, "confidence", 0.0) or 0.0),
             )
         )
+
+    @staticmethod
+    def _gazetteer_role(entry: Any) -> tuple[str, list[str]]:
+        """Dispatch a gazetteer entry's role from its source and anchor URI kind."""
+        source = str(getattr(entry, "source", "") or "")
+        if source == "kg_facility":
+            return "facility", ["facility"]
+        if source == "l1_instruction":
+            uri = str(getattr(entry, "entity_uri", "") or "")
+            for kind in ("facility", "project", "zone", "landmark"):
+                if f"anchor_{kind}_" in uri:
+                    return kind, [kind]
+            return "village", ["village"]
+        return "village", ["village"]
 
     def _register_from_l1_fact(self, fact: Any) -> None:
         norm = getattr(fact, "normalized_name", "") or ""

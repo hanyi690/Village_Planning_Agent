@@ -166,6 +166,7 @@ def map_intervention_to_spec(
             intervention_id=intervention.intervention_id,
             target_id=intervention.target_id,
             spec_id=f"spatial-ref:{intervention.target_id}",
+            project_ref=intervention.intervention_id,
             unresolved_reason="missing_location_evidence",
         )
     if len(candidates) == 1:
@@ -173,13 +174,13 @@ def map_intervention_to_spec(
         spec.intervention_id = intervention.intervention_id
         spec.target_id = intervention.target_id
         spec.spec_id = f"spatial-ref:{intervention.target_id}"
-        spec.project_ref = getattr(intervention, "project_ref", None)
+        spec.project_ref = intervention.intervention_id
         return spec
     spec = SpatialReferenceSpec(type="composed", op="and", children=candidates)
     spec.intervention_id = intervention.intervention_id
     spec.target_id = intervention.target_id
     spec.spec_id = f"spatial-ref:{intervention.target_id}"
-    spec.project_ref = getattr(intervention, "project_ref", None)
+    spec.project_ref = intervention.intervention_id
     return spec
 
 
@@ -197,7 +198,7 @@ def map_interventions_to_specs(
             spec.intervention_id = intervention.intervention_id
             spec.target_id = intervention.target_id
             spec.spec_id = f"spatial-ref:{intervention.target_id}"
-            spec.project_ref = getattr(intervention, "project_ref", None)
+            spec.project_ref = intervention.intervention_id
             specs.append(spec)
             if spec.unresolved_reason:
                 diagnostics.append(

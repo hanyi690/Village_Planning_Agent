@@ -288,7 +288,7 @@ def _extract_location_facts(
         if name and role != "village":
             parts_to_emit.append((name, role, name))
         for location_part in location_parts:
-            part_role = "village" if location_part.endswith(("村", "自然村")) else (role if not name else "village")
+            part_role = "village" if location_part.endswith(("村", "自然村")) or location_part in _known_village_names() else role
             parts_to_emit.append((location_part or name, part_role, location_part or description))
         for normalized, part_role, spatial_hint in parts_to_emit:
             aliases = list(dict.fromkeys(x for x in (name, normalized) if x))
@@ -339,11 +339,13 @@ def _parse_land_use_table(chapter_body: str) -> list[dict[str, str]]:
             continue
         if any("地类" in c or "名称" in c for c in cells):
             continue  # header row
+        has_code = bool(re.fullmatch(r"[A-Za-z0-9._-]+", cells[0]))
         rows.append(
             {
-                "name": cells[0],
-                "area": cells[1] if len(cells) > 1 else "",
-                "ratio": cells[2] if len(cells) > 2 else "",
+                "code": cells[0] if has_code else "",
+                "name": cells[1] if has_code and len(cells) > 1 else cells[0],
+                "area": cells[2] if has_code and len(cells) > 2 else (cells[1] if len(cells) > 1 else ""),
+                "ratio": cells[3] if has_code and len(cells) > 3 else (cells[2] if len(cells) > 2 else ""),
             }
         )
     return rows
@@ -397,13 +399,15 @@ def compile_l1_observation(
         if "用地结构" in title or "地类" in title:
             for row in _parse_land_use_table(body):
                 name = row["name"]
+                if not row.get("code"):
+                    continue
                 if not name or name in ("地类",) or any(x in name for x in ("未分类", "未利用")):
                     continue
                 # 现状分类仅为事实：无规划用途/分区推导，无跨体系映射。
                 classification_refs.append(
                     ClassificationRef(
                         system="gbt21010",
-                        code=name,
+                        code=row.get("code", ""),
                         canonical_name=name,
                         source="ingested",
                     )

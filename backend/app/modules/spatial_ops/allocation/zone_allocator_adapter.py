@@ -29,7 +29,7 @@ def _parcel_area_ha(parcel: Any) -> float:
     area_sqm = float(getattr(parcel, "area_sqm", 0) or 0)  # getattr intentional: accepts mappings/objects/strings
     if area_sqm <= 0:
         area_sqm = float(getattr(parcel, "area_ha", 0) or 0) * 10000  # getattr intentional: heterogeneous input
-    return area_sqm / 10000 if area_sqm > 10000 else area_sqm
+    return area_sqm / 10000
 
 
 def _as_bsm(item: Any) -> str:

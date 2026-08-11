@@ -186,6 +186,23 @@ def _commit_instruction_anchors(
                 description=f"{anchor.description}；位于{v}",
             )
             gazetteer.upsert(combo)
+            # Persist the geocoded facility/project/place binding.  The
+            # process gazetteer is rebuilt at stage boundaries, so keeping
+            # only the in-memory combo entry makes GROUND lose the exact
+            # target anchor after PARSE.  Reuse the real village BSMs; do not
+            # invent a point for a facility whose source row has no geometry.
+            _get_semantic_memory().add_entity_annotation(
+                __import__("app.modules.kg", fromlist=["EntityAnnotation"]).EntityAnnotation(
+                    entity_uri=combo.entity_uri,
+                    entity_type="LocationAnchor",
+                    description=f"{combo_name}（{anchor.description}；位于{v}）",
+                    intent_refs=list(entry.bsms) if entry else [],
+                    source_text_refs=[anchor.dim, anchor.location],
+                    round_added=wave,
+                    valid_from_round=wave,
+                    confidence=0.6,
+                )
+            )
             written += 1
     logger.info(
         "[Enrich:instruction] %d anchors -> %d combo entries",
@@ -200,38 +217,55 @@ def _get_semantic_memory():
     return get_semantic_memory()
 
 
+_VILLAGE_ROLES = frozenset({"village", "natural_village", "settlement", "村庄", "自然村"})
+
+
 def _location_fact_mentions(location_facts: Optional[List[Any]]) -> List[Dict[str, str]]:
-    """Convert structured L1 location facts into KG enrichment mentions."""
+    """Convert structured L1 location facts into KG enrichment mentions.
+
+    Village facts keep the existing ``{base}村`` name suffix (the village-binding
+    branch).  Non-village typed facts (facility/project/zone/landmark/...) are
+    retained with their original name and an explicit ``role`` so downstream
+    consumers can distinguish them without treating them as residential clusters.
+    """
     mentions: List[Dict[str, str]] = []
     seen: set[tuple[str, str]] = set()
     for fact in location_facts or []:
-        # The L1 model output is authoritative.  This consumer is specifically
-        # the village-binding branch, so retain only typed village facts and
-        # never reverse-search a configured village closed set in free text.
         role = str(getattr(fact, "role", "") or "").strip().lower()
-        if role not in {"village", "natural_village", "settlement", "村庄", "自然村"}:
-            continue
         normalized = str(getattr(fact, "normalized_name", "") or "").strip()
         if not normalized:
             continue
         dim = str(getattr(fact, "dimension_key", "") or "l1_location_fact")
+        hint = str(
+            getattr(fact, "spatial_hint", "")
+            or getattr(fact, "source_span", "")
+            or normalized
+        )[:160]
         for token in re.split(r"[、，,;/至和与\\s]+", normalized):
             token = token.strip()
             if not token:
                 continue
-            base = token.removesuffix("自然村").removesuffix("村").strip()
-            if not base or (base, dim) in seen:
-                continue
-            seen.add((base, dim))
-            mentions.append({
-                "name": f"{base}村",
-                "hints": str(
-                    getattr(fact, "spatial_hint", "")
-                    or getattr(fact, "source_span", "")
-                    or normalized
-                )[:160],
-                "dim": dim,
-            })
+            if role in _VILLAGE_ROLES:
+                base = token.removesuffix("自然村").removesuffix("村").strip()
+                if not base or (base, dim) in seen:
+                    continue
+                seen.add((base, dim))
+                mentions.append({
+                    "name": f"{base}村",
+                    "role": "village",
+                    "hints": hint,
+                    "dim": dim,
+                })
+            else:
+                if (token, dim) in seen:
+                    continue
+                seen.add((token, dim))
+                mentions.append({
+                    "name": token,
+                    "role": role,
+                    "hints": hint,
+                    "dim": dim,
+                })
     return mentions
 
 
@@ -348,6 +382,24 @@ def _materialize_gis_village_entries(
                 f"绑定最近 KG 居民点 {cluster.name}。"
             ),
         ))
+        # Persist the GIS-backed name binding as semantic memory.  The
+        # in-process Gazetteer is rebuilt at PARSE/GROUND boundaries, so a
+        # runtime-only upsert would otherwise disappear before grounding.
+        _get_semantic_memory().add_entity_annotation(
+            __import__("app.modules.kg", fromlist=["EntityAnnotation"]).EntityAnnotation(
+                entity_uri=f"pln:gis_village_binding:{base}",
+                entity_type="GISVillageBinding",
+                description=(
+                    f"{village_name}（GIS 属性名绑定，真实要素 {len(observations)} 个；"
+                    f"KG 居民点 {cluster.name}）"
+                ),
+                intent_refs=list(cluster.bsms),
+                source_text_refs=["uploaded_gis_name_binding"],
+                round_added=1,
+                valid_from_round=1,
+                confidence=0.8,
+            )
+        )
         written += 1
     if written:
         logger.info("[Enrich:GIS] materialized %d named village bindings", written)
@@ -591,6 +643,8 @@ async def extract_bindings(
         ambiguous = []             # 候选>1 → 批量 LLM 判定
         unresolved_amb = []
         for mention in mentions:
+            if mention.get("role", "village") not in _VILLAGE_ROLES:
+                continue
             candidates = _gather_candidates(mention, gazetteer, bsm_to_dlbm)
             if not candidates:
                 # Preserve the L1 fact in semantic KG even when GIS has no
