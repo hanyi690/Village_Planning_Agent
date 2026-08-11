@@ -17,10 +17,25 @@ from app.modules.schema.contracts.l3_contracts import (
     PlanningIntervention,
     PlanningProgram,
 )
+from app.modules.schema.contracts.classification_ref import (
+    ClassificationDecision,
+    ClassificationSystem,
+)
 from app.modules.schema.contracts.spatial_reference_contracts import SpatialReferenceSpec
 
 
 pytestmark = pytest.mark.e2e
+
+
+def _explicit_classification(target_id: str) -> ClassificationDecision:
+    return ClassificationDecision(
+        target_id=target_id,
+        code_system=ClassificationSystem.GHYTBM,
+        candidate_codes=["1100"],
+        selected_code="1100",
+        evidence_refs=[f"test:{target_id}"],
+        status="resolved",
+    )
 
 
 def test_physical_target_stays_spatial_when_location_evidence_is_missing():
@@ -410,7 +425,18 @@ def test_ground_candidate_uses_target_id_not_intervention_id(monkeypatch):
                 spec_id="spec-1",
             )
         ],
-        object(),
+        SimpleNamespace(
+            bundle_parcels=lambda: [
+                SimpleNamespace(
+                    bsm="P-1",
+                    area_sqm=10000.0,
+                    geometry={
+                        "type": "Polygon",
+                        "coordinates": [[[0, 0], [1, 0], [1, 1], [0, 1], [0, 0]]],
+                    },
+                )
+            ]
+        ),
     )
 
     assert result.candidates[0].target_ref == "target-1"
@@ -442,8 +468,18 @@ def test_duplicate_facilities_keep_distinct_target_ids_in_selection(monkeypatch)
     )
     intent = SpatialPlanningIntent(
         facilities=[
-            FacilityTarget(target_id="facility-1", type="卫生室", candidate_bsms=["P-1"]),
-            FacilityTarget(target_id="facility-2", type="卫生室", candidate_bsms=["P-2"]),
+            FacilityTarget(
+                target_id="facility-1",
+                type="卫生室",
+                candidate_bsms=["P-1"],
+                classification_decision=_explicit_classification("facility-1"),
+            ),
+            FacilityTarget(
+                target_id="facility-2",
+                type="卫生室",
+                candidate_bsms=["P-2"],
+                classification_decision=_explicit_classification("facility-2"),
+            ),
         ]
     )
     monkeypatch.setattr(
@@ -498,7 +534,12 @@ def test_select_uses_only_target_bound_project_candidates(monkeypatch):
     )
     intent = SpatialPlanningIntent(
         project_targets=[
-            ProjectTarget(target_id="project-1", project_id="project-1", name="服务中心"),
+            ProjectTarget(
+                target_id="project-1",
+                project_id="project-1",
+                name="服务中心",
+                classification_decision=_explicit_classification("project-1"),
+            ),
         ]
     )
 
@@ -548,7 +589,11 @@ def test_select_rejects_unbound_project_candidates_for_spatial_targets(monkeypat
     )
     intent = SpatialPlanningIntent(
         project_targets=[
-            ProjectTarget(target_id="project-1", project_id="project-1", name="服务中心"),
+            ProjectTarget(
+                target_id="project-1",
+                project_id="project-1",
+                name="服务中心",
+            ),
         ]
     )
 
@@ -569,7 +614,7 @@ def test_select_rejects_unbound_project_candidates_for_spatial_targets(monkeypat
     assert decision.decision_factors["unplaced_count"] == 1
     assert decision.target_assignments[0].target_id == "project-1"
     assert decision.target_assignments[0].status == "unplaced"
-    assert decision.target_assignments[0].reason == "no_project_candidates"
+    assert decision.target_assignments[0].reason == "classification_unresolved"
 
 
 def test_facility_without_target_specific_candidates_becomes_unplaced(monkeypatch):
@@ -611,7 +656,7 @@ def test_facility_without_target_specific_candidates_becomes_unplaced(monkeypatc
         if assignment.target_id == "facility-1"
     )
     assert facility_assignment.status == "unplaced"
-    assert facility_assignment.reason == "no_target_specific_candidates"
+    assert facility_assignment.reason == "classification_unresolved"
     assert decision.decision_factors["facility_placements"]["facility-1"]["status"] == "unplaced"
     assert decision.decision_factors["facility_placements"]["facility-1"]["bsm"] == ""
 
@@ -644,7 +689,12 @@ def test_non_spatial_projects_remain_ready_without_blocking_select(monkeypatch):
                 execution_mode="non_spatial",
                 expected_output_kind="action",
             ),
-            ProjectTarget(target_id="project-1", project_id="project-1", name="服务中心"),
+            ProjectTarget(
+                target_id="project-1",
+                project_id="project-1",
+                name="服务中心",
+                classification_decision=_explicit_classification("project-1"),
+            ),
         ]
     )
 
@@ -692,7 +742,12 @@ def test_mixed_action_and_spatial_projects_do_not_emit_action_parcel_changes(mon
         execution_mode="non_spatial",
         expected_output_kind="action",
     )
-    spatial_target = ProjectTarget(target_id="spatial-target", project_id="spatial-target", name="建设服务点")
+    spatial_target = ProjectTarget(
+        target_id="spatial-target",
+        project_id="spatial-target",
+        name="建设服务点",
+        classification_decision=_explicit_classification("spatial-target"),
+    )
     intent = SpatialPlanningIntent(project_targets=[action_target, spatial_target])
     parcel = SimpleNamespace(
         bsm="P-1",
