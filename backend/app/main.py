@@ -29,15 +29,29 @@ from app.core.settings import (
     BACKEND_STARTUP_TIMEOUT_SECONDS, LOG_LEVEL, LOG_DIR, LOG_FILE_MAX_BYTES,
     LOG_FILE_BACKUP_COUNT, LOG_RETENTION_DAYS, PROJECT_ROOT, IS_PRODUCTION,
 )
-from app.utils.logger import SessionFilter, ensure_log_dir
+from app.utils.logger import SessionFilter
 
-# Ensure log directory exists before configuring handlers
-ensure_log_dir()
 
-# Keep runtime logs in a fresh workspace-owned directory. Historical log files
-# may be owned by another Windows sandbox identity and cannot be reopened.
-LOG_DIR = Path(os.getenv("BACKEND_LOG_DIR", str(PROJECT_ROOT / "output" / "runtime-logs")))
-LOG_DIR.mkdir(parents=True, exist_ok=True)
+def _select_log_dir() -> Path:
+    """Choose a writable log directory before logging handlers are created."""
+    configured = os.getenv("BACKEND_LOG_DIR", "").strip()
+    candidates = [
+        Path(configured) if configured else PROJECT_ROOT / "output" / "runtime-logs",
+        Path(os.getenv("TEMP", ".")) / "village-planning-runtime-logs",
+    ]
+    for candidate in candidates:
+        try:
+            candidate.mkdir(parents=True, exist_ok=True)
+            probe = candidate / ".write-probe"
+            probe.touch()
+            probe.unlink()
+            return candidate
+        except (OSError, PermissionError):
+            continue
+    raise RuntimeError("No writable runtime log directory is available")
+
+
+LOG_DIR = _select_log_dir()
 
 # Configure logging with dictConfig to avoid duplicate handlers
 import logging.config

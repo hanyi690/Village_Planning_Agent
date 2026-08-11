@@ -829,6 +829,22 @@ class PlanningRuntimeService:
 
         except Exception as e:
             logger.error(f"[PlanningRuntimeService] [{session_id}] Execution failed: {e}", exc_info=True)
+            failure = {
+                "stage": str((await cls.aget_state_values(session_id) or {}).get("phase") or "unknown"),
+                "code": type(e).__name__,
+                "message": str(e),
+            }
+            try:
+                await cls.aupdate_state(session_id, {
+                    "fatal_error": failure,
+                    "delivery_status": "diagnostic_only",
+                    "diagnostic_terminal": failure,
+                    "phase": "completed",
+                    "current_stage": "TERMINAL",
+                    "next_stage": "",
+                }, as_node="terminal_error")
+            except Exception as state_error:
+                logger.error("[PlanningRuntimeService] failed to persist terminal error: %s", state_error)
             await cls._append_event(session_id, create_error_event(session_id, str(e)))
             sse_manager.set_execution_active(session_id, False)
         finally:
