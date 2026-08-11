@@ -34,6 +34,8 @@ docs/architecture/*.md         ← 实现映射
 
 ## 快速导航
 
+- [后端模块、状态与同步机制深度审查及理想设计](../audits/backend-ideal-architecture-2026-08-11.md)
+
 - 设计总图：[design/00_SYSTEM_DESIGN.md](../design/00_SYSTEM_DESIGN.md)
 - 规划管线：[design/04_PLANNING_PIPELINE.md](../design/04_PLANNING_PIPELINE.md)
 - EXPLORE：[design/05_EXPLORE_BRIDGE.md](../design/05_EXPLORE_BRIDGE.md)
