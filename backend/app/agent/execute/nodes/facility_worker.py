@@ -32,8 +32,40 @@ def _facility_worker(state: ExecuteAgentState) -> WorkerResult:
     changes: List[ParcelChange] = []
     task_results = []
     for facility in facilities:
+        if facility.anchor_point is None and state.execution_plan is not None:
+            for task in getattr(state.execution_plan, "worker_tasks", None) or []:
+                task_target_id = task.get("target_id", "") if isinstance(task, dict) else getattr(task, "target_id", "")
+                if str(task_target_id) != str(facility.target_id):
+                    continue
+                assignment = task.get("assignment") if isinstance(task, dict) else getattr(task, "assignment", None)
+                anchor = assignment.get("anchor_point") if isinstance(assignment, dict) else getattr(assignment, "anchor_point", None)
+                if anchor is not None:
+                    facility.anchor_point = anchor
+                break
         change = design_facility_parcel(facility, parcel_by_bsm, None)
         if change is None:
+            if facility.anchor_point is not None:
+                features.append({
+                    "type": "Feature",
+                    "properties": {
+                        "facility_id": f"facility:{facility.target_id}",
+                        "target_id": facility.target_id,
+                        "facility_type": getattr(facility, "type", ""),
+                        "status": "planned_new",
+                        "source_bsm": "",
+                        "change_action": "point_only",
+                    },
+                    "geometry": {"type": "Point", "coordinates": list(facility.anchor_point)},
+                })
+                task_result = _task_execution_result(
+                    state,
+                    "facility_placement",
+                    facility.target_id,
+                    status="succeeded",
+                )
+                if task_result is not None:
+                    task_results.append(task_result)
+                continue
             logger.warning(
                 "[EXECUTE:facility] skipped %s (no anchor_point)",
                 getattr(facility, "type", ""),

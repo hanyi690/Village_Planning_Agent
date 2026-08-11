@@ -53,6 +53,8 @@ _SCORE_BREAKDOWN_STUBS = {
 
 def _classification_ready(target: Any) -> bool:
     decision = getattr(target, "classification_decision", None)
+    if getattr(target, "expected_output_kind", "") == "point":
+        return True
     return decision is not None and getattr(decision, "status", "") == "resolved"
 
 
