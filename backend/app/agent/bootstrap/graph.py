@@ -262,6 +262,13 @@ def route_after_human_review(state: Dict[str, Any]) -> str:
             if state.get("structural_deferral_revision"):
                 return "execute"
             return END_DIAGNOSTIC
+        # Approving a layer gate means continue processing.  Unresolved
+        # spatial facts must remain unresolved and be handled by PARSE/GROUND;
+        # they must not send an approved L3 checkpoint back to HUMAN.
+        if paused_stage in {"l1", "l2", "l3"}:
+            target = _STAGE_FORWARD_TARGET.get(paused_stage)
+            if target:
+                return END if target == "__end__" else target
         if _remaining_unresolved_target_ids(state):
             return "human_review"
         if (
@@ -279,9 +286,6 @@ def route_after_human_review(state: Dict[str, Any]) -> str:
             if post_l3_main_nodes._gate_route(state.get("ground_gate")) == "PASS":
                 return "select"
             return "human_review"
-        if paused_stage and paused_stage in _STAGE_FORWARD_TARGET:
-            target = _STAGE_FORWARD_TARGET[paused_stage]
-            return END if target == "__end__" else target
         return END
     if action == "retry":
         retry_stage = paused_stage if paused_stage else "parse"
