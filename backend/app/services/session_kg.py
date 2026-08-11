@@ -15,6 +15,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from threading import RLock
 from typing import Any, Dict, Optional
 
@@ -26,6 +27,28 @@ logger = get_logger(__name__)
 # synchronous and mutates an in-memory store. Keep the final check-and-register
 # section atomic across ASGI worker threads and TestClient lifecycle threads.
 _SESSION_KG_BUILD_LOCK = RLock()
+_SESSION_KG_ASYNC_LOCKS: Dict[tuple[int, str], asyncio.Lock] = {}
+_SESSION_KG_ASYNC_LOCKS_GUARD = RLock()
+
+
+def _session_kg_lock(session_id: str) -> asyncio.Lock:
+    """Return the lock owned by the current event loop for one session.
+
+    KG construction is synchronous at the RDF layer but begins with async
+    bundle I/O.  The old RLock only protected the final registration, so two
+    requests could build the same RDF graph concurrently before either one
+    registered it.  The lock is intentionally per session: unrelated
+    sessions may prepare their bundles concurrently, while one session has a
+    single KG writer.
+    """
+    loop = asyncio.get_running_loop()
+    key = (id(loop), session_id)
+    with _SESSION_KG_ASYNC_LOCKS_GUARD:
+        lock = _SESSION_KG_ASYNC_LOCKS.get(key)
+        if lock is None:
+            lock = asyncio.Lock()
+            _SESSION_KG_ASYNC_LOCKS[key] = lock
+        return lock
 
 
 async def ensure_session_kg(
@@ -46,38 +69,37 @@ async def ensure_session_kg(
     from app.modules.kg import get_kg_manager
 
     manager = get_kg_manager()
-    with _SESSION_KG_BUILD_LOCK:
-        if not force and manager.get_session_kg(session_id) is not None:
-            return {"cache_hit": True, "session_id": session_id}
+    async with _session_kg_lock(session_id):
+        with _SESSION_KG_BUILD_LOCK:
+            if not force and manager.get_session_kg(session_id) is not None:
+                return {"cache_hit": True, "session_id": session_id}
 
-    try:
-        from app.services.session_bundle import build_session_bundle
-        from app.modules.spatial_ops.geometry import compute_parcel_relations
+        try:
+            from app.services.session_bundle import build_session_bundle
+            from app.modules.spatial_ops.geometry import compute_parcel_relations
 
-        bundle = await build_session_bundle(session_id, village_name)
-        if bundle is None or not getattr(bundle, "village_name", ""):
-            logger.warning(
-                "[SessionKG] No bundle for session %s, skip pre-build", session_id
-            )
-            return None
+            bundle = await build_session_bundle(session_id, village_name)
+            if bundle is None or not getattr(bundle, "village_name", ""):
+                logger.warning(
+                    "[SessionKG] No bundle for session %s, skip pre-build", session_id
+                )
+                return None
 
-        # 计算 parcel 拓扑关系（含 parcel-road / parcel-water 跨层拓扑）
-        parcels = bundle.polygons.get("landuse_current") or []
-        if not parcels:
-            logger.error(
-                "[SessionKG] Bundle for session %s (village=%s) has NO landuse_current "
-                "parcels — refusing to register an empty KG. Uploaded GIS layers were "
-                "likely mis-typed or skipped at bundle build.",
-                session_id, getattr(bundle, "village_name", ""),
-            )
-            from app.services.session_bundle import invalidate_session_bundle
+            parcels = bundle.polygons.get("landuse_current") or []
+            if not parcels:
+                logger.error(
+                    "[SessionKG] Bundle for session %s (village=%s) has NO landuse_current "
+                    "parcels — refusing to register an empty KG. Uploaded GIS layers were "
+                    "likely mis-typed or skipped at bundle build.",
+                    session_id, getattr(bundle, "village_name", ""),
+                )
+                from app.services.session_bundle import invalidate_session_bundle
 
-            invalidate_session_bundle(session_id)
-            return None
-        roads = bundle.lines.get("roads_current") or []
-        water = bundle.polygons.get("water_bodies") or []
-        relations = None
-        if parcels:
+                invalidate_session_bundle(session_id)
+                return None
+
+            roads = bundle.lines.get("roads_current") or []
+            water = bundle.polygons.get("water_bodies") or []
             relations = compute_parcel_relations(parcels, roads, water)
             logger.info(
                 "[SessionKG] parcel relations for %s: %d touches, %d nearby, "
@@ -88,56 +110,53 @@ async def ensure_session_kg(
                 len(relations.parcel_water_touches),
             )
 
-        from app.modules.kg import open_kg_session
+            from app.modules.kg import open_kg_session
 
-        with _SESSION_KG_BUILD_LOCK:
-            # Re-check after the expensive async bundle load. Another worker
-            # may have completed the same session while we were awaiting it.
-            if not force and manager.get_session_kg(session_id) is not None:
-                return {"cache_hit": True, "session_id": session_id}
-            snap = open_kg_session(
-                session_id=session_id,
-                village_name=bundle.village_name,
-                bundle=bundle,
-                parcel_relations=relations,
-            )
-        logger.info(
-            "[SessionKG] Pre-built for session %s (village=%s): %d triples, "
-            "cache_hit=%s, version=%d",
-            session_id, bundle.village_name, snap.triple_count,
-            snap.cache_hit, snap.version,
-        )
-        # P2: KG 预建步骤 Report（供 positioning-trace 面板）
-        try:
-            from app.services.step_report import save_step_report
+            with _SESSION_KG_BUILD_LOCK:
+                if not force and manager.get_session_kg(session_id) is not None:
+                    return {"cache_hit": True, "session_id": session_id}
+                snap = open_kg_session(
+                    session_id=session_id,
+                    village_name=bundle.village_name,
+                    bundle=bundle,
+                    parcel_relations=relations,
+                )
 
-            n_combo = 0
-            await save_step_report(
-                session_id, "KG_PREBUILD",
-                step_name="kg_prebuild",
-                outputs={
-                    "triple_count": snap.triple_count,
-                    "version": snap.version,
-                    "cache_hit": snap.cache_hit,
-                    "gazetteer_combo_entries": n_combo,
-                },
-                diagnostics={
-                    "sfTouches": len(relations.touches) if relations else 0,
-                    "road_intersects": len(relations.parcel_road_intersects) if relations else 0,
-                    "water_touches": len(relations.parcel_water_touches) if relations else 0,
-                },
+            logger.info(
+                "[SessionKG] Pre-built for session %s (village=%s): %d triples, "
+                "cache_hit=%s, version=%d",
+                session_id, bundle.village_name, snap.triple_count,
+                snap.cache_hit, snap.version,
             )
-        except Exception as e:
-            logger.debug("[SessionKG] step report failed: %s", e)
-        return {
-            "session_id": session_id,
-            "cache_hit": snap.cache_hit,
-            "triple_count": snap.triple_count,
-            "version": snap.version,
-        }
-    except Exception as e:  # noqa: BLE001 — 非致命
-        logger.warning("[SessionKG] Pre-build failed for %s: %s", session_id, e)
-        return None
+            try:
+                from app.services.step_report import save_step_report
+
+                await save_step_report(
+                    session_id, "KG_PREBUILD",
+                    step_name="kg_prebuild",
+                    outputs={
+                        "triple_count": snap.triple_count,
+                        "version": snap.version,
+                        "cache_hit": snap.cache_hit,
+                        "gazetteer_combo_entries": 0,
+                    },
+                    diagnostics={
+                        "sfTouches": len(relations.touches),
+                        "road_intersects": len(relations.parcel_road_intersects),
+                        "water_touches": len(relations.parcel_water_touches),
+                    },
+                )
+            except Exception as e:
+                logger.debug("[SessionKG] step report failed: %s", e)
+            return {
+                "session_id": session_id,
+                "cache_hit": snap.cache_hit,
+                "triple_count": snap.triple_count,
+                "version": snap.version,
+            }
+        except Exception as e:  # noqa: BLE001 — 非致命
+            logger.warning("[SessionKG] Pre-build failed for %s: %s", session_id, e, exc_info=True)
+            return None
 
 
 __all__ = ["ensure_session_kg"]

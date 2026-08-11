@@ -117,8 +117,15 @@ async def shutdown_database() -> None:
 
 async def _shutdown_database_inner() -> None:
     global _checkpointer, _checkpointer_initialized
-    if _checkpointer is not None:
-        conn = getattr(_checkpointer, "conn", None)
+    with _checkpointers_guard:
+        checkpointers = list(_checkpointers_by_loop.values())
+        if _checkpointer is not None and _checkpointer not in checkpointers:
+            checkpointers.append(_checkpointer)
+        _checkpointers_by_loop.clear()
+        _checkpointer = None
+        _checkpointer_initialized = False
+    for saver in checkpointers:
+        conn = getattr(saver, "conn", None)
         if conn is not None:
             try:
                 await conn.close()
@@ -127,9 +134,6 @@ async def _shutdown_database_inner() -> None:
                     conn.stop()
                 except Exception:
                     pass
-        _checkpointer = None
-        _checkpointer_initialized = False
-
     global async_engine, AsyncSessionLocal
     if async_engine is not None:
         try:
@@ -270,6 +274,8 @@ async def _run_migrations(engine) -> None:
 _checkpointer = None
 _checkpointer_lock = None
 _checkpointer_initialized = False
+_checkpointers_by_loop = {}
+_checkpointers_guard = threading.RLock()
 
 
 async def get_global_checkpointer():
@@ -291,19 +297,26 @@ async def get_global_checkpointer():
 
     global _checkpointer, _checkpointer_lock, _checkpointer_initialized
 
-    # Create lock if needed
-    if _checkpointer_lock is None:
-        _checkpointer_lock = asyncio.Lock()
+    loop = asyncio.get_running_loop()
+    loop_key = id(loop)
+    with _checkpointers_guard:
+        existing = _checkpointers_by_loop.get(loop_key)
+    if existing is not None:
+        _checkpointer = existing
+        _checkpointer_initialized = True
+        return existing
 
-    # Fast path: already initialized
-    if _checkpointer is not None and _checkpointer_initialized:
-        return _checkpointer
+    if _checkpointer_lock is None or getattr(_checkpointer_lock, "_loop", loop) is not loop:
+        _checkpointer_lock = asyncio.Lock()
 
     # Slow path: need initialization (with lock)
     async with _checkpointer_lock:
-        # Double check: may have been initialized while waiting for lock
-        if _checkpointer is not None and _checkpointer_initialized:
-            return _checkpointer
+        with _checkpointers_guard:
+            existing = _checkpointers_by_loop.get(loop_key)
+        if existing is not None:
+            _checkpointer = existing
+            _checkpointer_initialized = True
+            return existing
 
         try:
             logger.info("[Checkpointer] Initializing global AsyncSqliteSaver instance...")
@@ -317,15 +330,18 @@ async def get_global_checkpointer():
             await conn.execute("PRAGMA cache_size=-64000")  # 64MB cache
             logger.info("[Checkpointer] WAL mode enabled")
 
-            _checkpointer = AsyncSqliteSaver(conn)
+            saver = AsyncSqliteSaver(conn)
 
             # Initialize table structure (only on first call)
-            await _checkpointer.setup()
+            await saver.setup()
 
+            with _checkpointers_guard:
+                _checkpointers_by_loop[loop_key] = saver
+            _checkpointer = saver
             _checkpointer_initialized = True
-            logger.info("[Checkpointer] Global AsyncSqliteSaver instance initialized successfully")
+            logger.info("[Checkpointer] AsyncSqliteSaver initialized for event loop %s", loop_key)
 
-            return _checkpointer
+            return saver
 
         except Exception as e:
             logger.error(f"[Checkpointer] Initialization failed: {e}", exc_info=True)
