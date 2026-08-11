@@ -305,6 +305,7 @@ def _persist_artifact(
             "ExecutionOutcome": "execution_outcome",
             "AllocatedGeoJSON": "allocated_geojson",
             "RenderLayers": "render_layers",
+            "DeliverySpatialSnapshot": "delivery_spatial_snapshot",
             "DeferralLedger": "deferral_ledger",
         }
         key = key_by_type.get(artifact_type, artifact_type.lower())
@@ -1017,21 +1018,65 @@ async def deliver_node(state: Dict[str, Any]) -> Dict[str, Any]:
         for task in (getattr(execution_plan, "worker_tasks", None) or [])
         if str(getattr(task, "expected_output_kind", "")) != "action"
     )
+    delivery_snapshot = None
+    delivery_snapshot_ref = None
+    complete_planned_geojson = None
+    delivery_snapshot_error = ""
+    if expected_spatial_output_count > 0 and isinstance(gis_data, dict):
+        try:
+            from app.modules.schema.contracts.parcel_change_contracts import ParcelChangeSet
+            from app.modules.spatial_ops.io import (
+                build_delivery_spatial_snapshot_from_gis_data,
+                load_complete_planned_geojson,
+            )
+            from app.services.run_paths import session_run_dir
+
+            changeset = _load_ref_artifact(state, "parcel_changeset", ParcelChangeSet)
+            planned_changes = list(getattr(changeset, "changes", None) or [])
+            delivery_snapshot = build_delivery_spatial_snapshot_from_gis_data(
+                gis_data,
+                planned_geojson=allocated_geojson,
+                planned_changes=planned_changes,
+                output_dir=session_run_dir(state.get("session_id", "")) / "spatial_snapshot",
+                output_artifact_ref=(
+                    f"delivery-spatial-snapshot-{state.get('session_id', '')}"
+                ),
+                provenance={"stage": "DELIVER"},
+            )
+            complete_planned_geojson = load_complete_planned_geojson(delivery_snapshot)
+            delivery_snapshot_ref = _persist_artifact(
+                state,
+                "deliver",
+                "DeliverySpatialSnapshot",
+                delivery_snapshot,
+            )
+        except Exception as exc:
+            delivery_snapshot_error = f"{type(exc).__name__}: {exc}"
+            logger.warning(
+                "[post_l3:main:deliver] delivery snapshot failed: %s",
+                delivery_snapshot_error,
+            )
+
+    planned_geojson_for_delivery = complete_planned_geojson or allocated_geojson
     render_result = []
     try:
         from app.agent.deliver.render_layers import build_delivery_render_layers
 
-        render_result = build_delivery_render_layers(planned_state, allocated_geojson, gis_data)
+        render_result = build_delivery_render_layers(
+            planned_state,
+            planned_geojson_for_delivery,
+            gis_data,
+        )
     except Exception as e:
         logger.warning("[post_l3:main:deliver] render_layers failed: %s", e)
 
     export_result = None
     if planned_state is not None and expected_spatial_output_count > 0:
         try:
-            allocated_for_export = allocated_geojson
+            allocated_for_export = planned_geojson_for_delivery
             allocated_features = (
-                allocated_geojson.get("features", [])
-                if isinstance(allocated_geojson, dict)
+                allocated_for_export.get("features", [])
+                if isinstance(allocated_for_export, dict)
                 else []
             )
             current_landuse = gis_data.get("landuse_current_geojson") if isinstance(gis_data, dict) else None
@@ -1055,7 +1100,9 @@ async def deliver_node(state: Dict[str, Any]) -> Dict[str, Any]:
                 session_id=state.get("session_id", ""),
                 validation_result=validation_result,
             )
-            if allocated_for_export is not allocated_geojson:
+            if delivery_snapshot is not None:
+                export_result["planned_landuse_source"] = "delivery_spatial_snapshot"
+            elif allocated_for_export is not allocated_geojson:
                 export_result["planned_landuse_source"] = "current_landuse_preserved"
         except Exception as e:
             logger.warning("[post_l3:main:deliver] export failed: %s", e)
@@ -1082,6 +1129,10 @@ async def deliver_node(state: Dict[str, Any]) -> Dict[str, Any]:
             if isinstance(layer, dict)
         },
     }
+    if delivery_snapshot is not None:
+        render_artifacts["delivery_snapshot_checksum"] = delivery_snapshot.checksum
+    if delivery_snapshot_error:
+        render_artifacts["delivery_snapshot_error"] = delivery_snapshot_error
     try:
         from pathlib import Path
 
@@ -1140,6 +1191,7 @@ async def deliver_node(state: Dict[str, Any]) -> Dict[str, Any]:
             key: ref for key, ref in {
                 "delivery_manifest": manifest_ref,
                 "render_layers": render_ref,
+                "delivery_spatial_snapshot": delivery_snapshot_ref,
                 "deferral_ledger": ledger_ref,
             }.items() if ref
         },

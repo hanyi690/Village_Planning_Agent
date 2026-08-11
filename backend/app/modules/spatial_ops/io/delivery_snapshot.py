@@ -171,6 +171,106 @@ def _unique_refs(refs: Iterable[SpatialLayerRef]) -> list[SpatialLayerRef]:
     return list(result.values())
 
 
+def _geojson_change(feature: Mapping[str, Any]) -> dict[str, Any]:
+    properties = dict(feature.get("properties") or {})
+    status = str(properties.get("change_status") or "modified").lower()
+    action = {
+        "preserved": "preserve",
+        "unchanged": "preserve",
+        "created": "create",
+        "split": "split",
+        "merged": "merge",
+    }.get(status, "modify")
+    source_bsms = properties.get("source_bsms") or properties.get("source_bsm")
+    if isinstance(source_bsms, str):
+        source_bsms = [source_bsms]
+    if not source_bsms and action != "create" and properties.get("BSM"):
+        source_bsms = [str(properties["BSM"])]
+    return {
+        "bsm": str(properties.get("BSM") or properties.get("bsm") or ""),
+        "action": action,
+        "derived_from_bsms": list(source_bsms or []),
+        "after_geometry": copy.deepcopy(feature.get("geometry")),
+    }
+
+
+def _write_source_layer(output_dir: Path, key: str, payload: Mapping[str, Any]) -> SpatialLayerRef:
+    source_path = output_dir / "sources" / f"{key}.geojson"
+    source_path.parent.mkdir(parents=True, exist_ok=True)
+    source_path.write_text(
+        json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")),
+        encoding="utf-8",
+    )
+    return SpatialLayerRef(
+        artifact_ref=f"delivery-source:{key}",
+        path=str(source_path),
+        layer_name=key,
+        driver="GeoJSON",
+    )
+
+
+def build_delivery_spatial_snapshot_from_gis_data(
+    gis_data: Mapping[str, Any],
+    *,
+    planned_geojson: Mapping[str, Any] | None = None,
+    planned_changes: Iterable[Any] = (),
+    output_dir: str | Path,
+    output_artifact_ref: str = "delivery-spatial-snapshot",
+    provenance: Mapping[str, Any] | None = None,
+) -> DeliverySpatialSnapshot:
+    """Create a delivery snapshot from in-memory bundle layers.
+
+    This adapter is intended for DELIVER only.  It writes immutable source
+    layer copies and the complete planned layer under the session run folder;
+    callers persist only the typed snapshot reference in workflow state.
+    """
+    root = Path(output_dir)
+    source_refs: dict[str, SpatialLayerRef] = {}
+    for key, payload in (gis_data or {}).items():
+        if not str(key).endswith("_geojson") or not isinstance(payload, Mapping):
+            continue
+        if payload.get("type") != "FeatureCollection":
+            continue
+        source_refs[str(key)] = _write_source_layer(root, str(key), payload)
+    current_ref = source_refs.get("landuse_current_geojson")
+    if current_ref is None:
+        raise ValueError("delivery snapshot requires landuse_current_geojson")
+
+    changes = list(planned_changes)
+    if not changes and planned_geojson and planned_geojson.get("features"):
+        changes = [_geojson_change(feature) for feature in planned_geojson["features"]]
+    constraint_names = {
+        "ecological_redline_geojson",
+        "farmland_protection_geojson",
+        "historical_protection_geojson",
+        "construction_zone_geojson",
+        "hazard_points_geojson",
+    }
+    constraints = {
+        key: ref for key, ref in source_refs.items() if key in constraint_names
+    }
+    return build_delivery_spatial_snapshot(
+        current_ref,
+        changes,
+        output_path=root / "planned" / "complete_planned_landuse.geojson",
+        output_artifact_ref=output_artifact_ref,
+        current_layers=source_refs,
+        constraint_layers=constraints,
+        provenance={"source": "gis_data_delivery_boundary", **dict(provenance or {})},
+    )
+
+
+def load_complete_planned_geojson(snapshot: DeliverySpatialSnapshot) -> dict[str, Any]:
+    """Load the complete planned layer referenced by a local snapshot."""
+    ref = snapshot.complete_planned_landuse
+    if ref is None:
+        raise ValueError("delivery snapshot has no complete_planned_landuse reference")
+    payload = json.loads(Path(ref.path).read_text(encoding="utf-8"))
+    if payload.get("type") != "FeatureCollection":
+        raise ValueError("complete planned artifact is not a FeatureCollection")
+    return payload
+
+
 def build_delivery_spatial_snapshot(
     current_landuse_ref: SpatialLayerRef,
     planned_changes: Iterable[Any] = (),
@@ -289,4 +389,9 @@ def build_delivery_spatial_snapshot(
 build_delivery_snapshot = build_delivery_spatial_snapshot
 
 
-__all__ = ["build_delivery_spatial_snapshot", "build_delivery_snapshot"]
+__all__ = [
+    "build_delivery_spatial_snapshot",
+    "build_delivery_snapshot",
+    "build_delivery_spatial_snapshot_from_gis_data",
+    "load_complete_planned_geojson",
+]

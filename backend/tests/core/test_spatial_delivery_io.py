@@ -16,6 +16,8 @@ from app.modules.spatial_ops.io import (
     GeoJSONSpatialDataPort,
     PyogrioSpatialDataPort,
     build_delivery_spatial_snapshot,
+    build_delivery_spatial_snapshot_from_gis_data,
+    load_complete_planned_geojson,
 )
 
 
@@ -141,3 +143,53 @@ def test_delivery_snapshot_preserves_unmodified_features_and_is_checksummed(tmp_
     assert by_bsm["P001"]["properties"]["change_status"] == "modified"
     assert by_bsm["P002"]["properties"]["change_status"] == "preserved"
     assert by_bsm["P002"]["geometry"]["coordinates"] == [[[10, 10], [11, 10], [11, 11], [10, 11], [10, 10]]]
+
+
+def test_gis_data_delivery_integration_writes_and_reloads_complete_artifact(tmp_path: Path) -> None:
+    current = {
+        "type": "FeatureCollection",
+        "features": [
+            {
+                "type": "Feature",
+                "properties": {"BSM": "P001"},
+                "geometry": {
+                    "type": "Polygon",
+                    "coordinates": [[[0, 0], [1, 0], [1, 1], [0, 1], [0, 0]]],
+                },
+            },
+            {
+                "type": "Feature",
+                "properties": {"BSM": "P002"},
+                "geometry": {
+                    "type": "Polygon",
+                    "coordinates": [[[10, 10], [11, 10], [11, 11], [10, 11], [10, 10]]],
+                },
+            },
+        ],
+    }
+    planned = {
+        "type": "FeatureCollection",
+        "features": [
+            {
+                "type": "Feature",
+                "properties": {"BSM": "P001", "change_status": "modified"},
+                "geometry": {
+                    "type": "Polygon",
+                    "coordinates": [[[0, 0], [2, 0], [2, 2], [0, 2], [0, 0]]],
+                },
+            }
+        ],
+    }
+    snapshot = build_delivery_spatial_snapshot_from_gis_data(
+        {"landuse_current_geojson": current, "boundary_geojson": current},
+        planned_geojson=planned,
+        output_dir=tmp_path,
+    )
+
+    complete = load_complete_planned_geojson(snapshot)
+    by_bsm = {feature["properties"]["BSM"]: feature for feature in complete["features"]}
+    assert snapshot.complete_planned_landuse is not None
+    assert snapshot.complete_planned_landuse.checksum
+    assert len(complete["features"]) == 2
+    assert by_bsm["P001"]["properties"]["change_status"] == "modified"
+    assert by_bsm["P002"]["properties"]["change_status"] == "preserved"
