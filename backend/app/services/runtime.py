@@ -183,8 +183,14 @@ class PlanningRuntimeService:
                     payload = getattr(pending_interrupt, "value", None)
                     if not isinstance(payload, dict):
                         continue
-                    for key in ("human_review_items", "paused_stage", "post_l3_status"):
-                        value = payload.get(key)
+                    from app.modules.schema.contracts.human_interrupt_contracts import normalize_human_interrupt
+
+                    normalized_interrupt = normalize_human_interrupt(payload)
+                    values["human_interrupt"] = normalized_interrupt
+                    values["human_review_items"] = normalized_interrupt.get("items", [])
+                    values["human_review_event_id"] = normalized_interrupt.get("event_id", "")
+                    for key in ("paused_stage", "post_l3_status"):
+                        value = normalized_interrupt.get(key) or payload.get(key)
                         if value not in (None, "", []):
                             values[key] = value
             if values or any(getattr(t, "interrupts", None) for t in snapshot.tasks or ()):
@@ -535,8 +541,14 @@ class PlanningRuntimeService:
             raise HTTPException(status_code=404, detail=f"Session not found: {session_id}")
 
         checkpoint_state = await cls.aget_state(session_id)
-        state = dict(checkpoint_state.values) if checkpoint_state and checkpoint_state.values else {}
-        is_interrupted = bool(checkpoint_state and checkpoint_state.next)
+        state = await cls.aget_state_values(session_id) or {}
+        # ``snapshot.next`` means scheduled nodes, not necessarily a HUMAN
+        # pause.  A real interrupt is represented by PregelTask.interrupts.
+        is_interrupted = bool(
+            checkpoint_state
+            and checkpoint_state.tasks
+            and any(getattr(task, "interrupts", None) for task in checkpoint_state.tasks)
+        )
 
         ui_status = state_to_ui_status(state, db_session, is_interrupted=is_interrupted)
         ui_status["session_id"] = session_id

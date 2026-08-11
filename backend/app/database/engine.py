@@ -7,9 +7,10 @@ Provides SQLite connection and session factory for async operations.
 
 import asyncio
 import logging
+import threading
 from contextlib import asynccontextmanager
 from pathlib import Path
-from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine, async_sessionmaker
+from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 from sqlmodel import SQLModel
 
 from app.core.settings import DATABASE_DIR
@@ -28,65 +29,68 @@ DB_PATH = DATABASE_DIR / "village_planning.db"
 ASYNC_DATABASE_URL = f"sqlite+aiosqlite:///{DB_PATH}"
 
 # Async engine
-async_engine = None
-_async_engine_ref_count = 0
+async_engine: AsyncEngine | None = None
+_engine_creation_lock = threading.Lock()
 
 # Async session factory
-AsyncSessionLocal = None
+AsyncSessionLocal: async_sessionmaker[AsyncSession] | None = None
 
 
-async def get_async_engine() -> create_async_engine:
+async def get_async_engine() -> AsyncEngine:
     """
-    Get or create async database engine (with reference counting)
-    获取或创建异步数据库引擎（带引用计数）
+    Get or create the process-local async database engine.
+    获取或创建进程级异步数据库引擎。
     
     Returns:
         AsyncEngine: The async database engine
     """
-    global async_engine, _async_engine_ref_count
-    
-    if async_engine is None:
-        # Ensure data directory exists
+    global async_engine
+
+    if async_engine is not None:
+        return async_engine
+
+    with _engine_creation_lock:
+        if async_engine is not None:
+            return async_engine
+
         DATABASE_DIR.mkdir(parents=True, exist_ok=True)
-        
-        # Create async engine with SQLite configuration
-        async_engine = create_async_engine(
+        engine = create_async_engine(
             ASYNC_DATABASE_URL,
             connect_args={"check_same_thread": False},
             pool_pre_ping=True,
         )
-        
-        # 启用 WAL 模式以提高并发写入安全性
+
         from sqlalchemy import event
-        
-        @event.listens_for(async_engine.sync_engine, "connect")
+
+        @event.listens_for(engine.sync_engine, "connect")
         def set_sqlite_pragma(dbapi_connection, connection_record):
             cursor = dbapi_connection.cursor()
             cursor.execute("PRAGMA journal_mode=WAL")
             cursor.execute("PRAGMA synchronous=NORMAL")
-            cursor.execute("PRAGMA cache_size=-64000")  # 64MB cache
-            cursor.execute("PRAGMA foreign_keys=ON")    # FK CASCADE cleanup
+            cursor.execute("PRAGMA cache_size=-64000")
+            cursor.execute("PRAGMA foreign_keys=ON")
             cursor.close()
-        
+
+        async_engine = engine
         logger.info("[Async DB] WAL mode enabled")
-        logger.info(f"[Async DB] Async database engine created: {DB_PATH}")
-    
-    _async_engine_ref_count += 1
+        logger.info("[Async DB] Async database engine created: %s", DB_PATH)
+
     return async_engine
 
 
 async def dispose_async_engine() -> None:
     """
-    Close async database engine when reference count reaches zero
-    引用计数为零时关闭异步数据库引擎
+    Dispose the application-owned engine and its session factory.
+    释放应用级引擎及其会话工厂。
     """
-    global async_engine, _async_engine_ref_count
-    
-    _async_engine_ref_count -= 1
-    
-    if _async_engine_ref_count <= 0 and async_engine is not None:
-        await async_engine.dispose()
-        async_engine = None
+    global async_engine, AsyncSessionLocal
+
+    engine = async_engine
+    async_engine = None
+    AsyncSessionLocal = None
+
+    if engine is not None:
+        await engine.dispose()
         logger.info("[Async DB] Async database engine disposed")
 
 
@@ -126,14 +130,14 @@ async def _shutdown_database_inner() -> None:
         _checkpointer = None
         _checkpointer_initialized = False
 
-    global async_engine, _async_engine_ref_count
+    global async_engine, AsyncSessionLocal
     if async_engine is not None:
         try:
             await async_engine.dispose()
         except Exception:
             pass
         async_engine = None
-    _async_engine_ref_count = 0
+    AsyncSessionLocal = None
 
 
 @asynccontextmanager
@@ -155,15 +159,14 @@ async def get_async_session() -> AsyncSession:
     if AsyncSessionLocal is None:
         engine = await get_async_engine()
         AsyncSessionLocal = async_sessionmaker(
-            autocommit=False,
+            bind=engine,
             autoflush=False,
-            bind=engine
+            expire_on_commit=False,
         )
     
     async with AsyncSessionLocal() as session:
         try:
             yield session
-            await session.commit()
         except Exception:
             await session.rollback()
             raise

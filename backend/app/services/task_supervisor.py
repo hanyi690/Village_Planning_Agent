@@ -8,6 +8,10 @@ from app.utils.logger import get_logger
 logger = get_logger(__name__)
 
 
+def build_summary_task_key(session_id: str, layer: int, dimension: str, version: int) -> str:
+    return f"{session_id}:summary:{layer}:{dimension}:{version}"
+
+
 class TaskSupervisor:
     def __init__(self):
         self._tasks: Dict[str, asyncio.Task] = {}
@@ -33,31 +37,43 @@ class TaskSupervisor:
         task.add_done_callback(_done_callback)
         return task
 
-    async def cancel(self, key: str) -> None:
-        task = self._tasks.pop(key, None)
-        if task is None or task.done():
+    async def _cancel_many(self, keys: list[str]) -> None:
+        to_wait: list[tuple[str, asyncio.Task]] = []
+        for key in keys:
+            task = self._tasks.pop(key, None)
+            if task is None or task.done():
+                continue
+            task.cancel()
+            to_wait.append((key, task))
+
+        if not to_wait:
             return
-        task.cancel()
-        try:
-            await task
-        except asyncio.CancelledError:
-            pass
-        except Exception as exc:
-            logger.error("[TaskSupervisor] task %s raised during cancel: %s", key, exc)
+
+        results = await asyncio.gather(
+            *(task for _, task in to_wait),
+            return_exceptions=True,
+        )
+        for (key, _), result in zip(to_wait, results):
+            if isinstance(result, Exception) and not isinstance(result, asyncio.CancelledError):
+                logger.error("[TaskSupervisor] task %s raised during cancel: %s", key, result)
+
+    async def cancel(self, key: str) -> None:
+        await self._cancel_many([key])
+
+    async def cancel_session(self, session_id: str) -> None:
+        owned_prefix = f"{session_id}:"
+        owned_keys = [
+            key for key in list(self._tasks.keys())
+            if key == session_id or key.startswith(owned_prefix)
+        ]
+        await self._cancel_many(owned_keys)
 
     async def cancel_all(self) -> None:
-        keys = list(self._tasks.keys())
-        tasks = [self._tasks.pop(key, None) for key in keys]
-        to_wait = [t for t in tasks if t is not None and not t.done()]
-        for t in to_wait:
-            t.cancel()
-        if to_wait:
-            await asyncio.gather(*to_wait, return_exceptions=True)
+        await self._cancel_many(list(self._tasks.keys()))
         self._tasks.clear()
 
     @property
     def active_count(self) -> int:
         return len(self._tasks)
 
-
-__all__ = ["TaskSupervisor"]
+__all__ = ["TaskSupervisor", "build_summary_task_key"]

@@ -6,7 +6,8 @@ Layout (per review: artifacts and reviews are separated under one run):
     {base_dir}/{run_id}/artifacts/{module}/{artifact_id}/{revision}/payload.json
 
 - ``manifest.json`` holds the full envelope: artifact_id, module, run_id,
-  artifact_type, context_version, revision, created_at, checksum, byte size.
+  artifact_type, context_version, revision, created_at, checksum, byte size,
+  and parent revision/checksum identities.
 - ``payload.json`` holds the business payload.
 - Writes are atomic: payload is written to a temp file, fsynced, then renamed;
   the manifest is written last as the commit point.
@@ -119,6 +120,7 @@ class FilesystemArtifactStore:
             "context_version": ref.context_version,
             "context_fingerprint": ref.context_fingerprint,
             "revision": ref.revision,
+            "parent_checksums": dict(ref.parent_checksums),
             "created_at": ref.stored_at.isoformat(),
             "checksum": checksum,
             "semantic_checksum": semantic,
@@ -191,6 +193,10 @@ class FilesystemArtifactStore:
             revision=str(manifest.get("revision", "v1")),
             checksum=str(manifest.get("checksum", "")),
             semantic_checksum=str(manifest.get("semantic_checksum", "")),
+            parent_checksums={
+                str(key): str(value)
+                for key, value in (manifest.get("parent_checksums") or {}).items()
+            },
         )
 
     def list_by_run(self, run_id: str) -> list[ArtifactRef]:

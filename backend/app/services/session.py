@@ -29,7 +29,7 @@ async def _cancel_session_tasks(session_id: str) -> bool:
     try:
         from app.services.composition import CompositionRoot
         sup = CompositionRoot.get_task_supervisor()
-        await sup.cancel(session_id)
+        await sup.cancel_session(session_id)
         return True
     except Exception as e:
         logger.warning(f"[SessionService] [{session_id}] task cancel failed: {e}")

@@ -266,6 +266,17 @@ class CheckpointService:
                 return events
 
             state = checkpoint_state.values
+            pending_interrupts = [
+                interrupt
+                for task in (checkpoint_state.tasks or ())
+                for interrupt in (getattr(task, "interrupts", None) or ())
+            ]
+            is_interrupted = bool(pending_interrupts)
+            interrupt_payload = (
+                getattr(pending_interrupts[0], "value", None)
+                if pending_interrupts
+                else None
+            )
 
             metadata = state.get("metadata", {})
             completed_dims = state.get("completed_dimensions", {})
@@ -346,26 +357,41 @@ class CheckpointService:
                             events.append(dim_event)
                             logger.debug(f"[CheckpointService] Session {session_id}: rebuilt dimension_complete {dim_key}")
 
-            # Detect interrupt state: snapshot.next contains pending node names
-            is_interrupted = (
-                checkpoint_state.next
-                and "layer_completion_check" in (checkpoint_state.next or [])
-            )
             if is_interrupted:
-                previous_layer = state.get("previous_layer", 1)
                 checkpoint_id = checkpoint_state.config.get("configurable", {}).get("checkpoint_id", "")
-                pause_event = {
-                    "type": "pause",
-                    "session_id": session_id,
-                    "current_layer": previous_layer,
-                    "checkpoint_id": checkpoint_id,
-                    "reason": "step_mode",
-                    "timestamp": datetime.now().isoformat(),
-                    "_rebuild": True,
-                    "seq": sse_manager.get_next_seq(session_id),
-                }
+                from app.modules.schema.contracts.human_interrupt_contracts import normalize_human_interrupt
+
+                if isinstance(interrupt_payload, dict):
+                    normalized = normalize_human_interrupt(interrupt_payload)
+                else:
+                    normalized = {}
+                if normalized.get("channel") == "post_l3_review":
+                    pause_event = {
+                        "type": "human_review_paused",
+                        "session_id": session_id,
+                        "event_id": normalized.get("event_id"),
+                        "channel": normalized.get("channel"),
+                        "reason": normalized.get("reason"),
+                        "items": normalized.get("items", []),
+                        "paused_stage": normalized.get("paused_stage"),
+                        "_rebuild": True,
+                        "seq": sse_manager.get_next_seq(session_id),
+                    }
+                else:
+                    previous_layer = state.get("previous_layer", 1)
+                    pause_event = {
+                        "type": "pause",
+                        "session_id": session_id,
+                        "current_layer": previous_layer,
+                        "checkpoint_id": checkpoint_id,
+                        "reason": "step_mode",
+                        "interrupt_info": normalized or None,
+                        "timestamp": datetime.now().isoformat(),
+                        "_rebuild": True,
+                        "seq": sse_manager.get_next_seq(session_id),
+                    }
                 events.append(pause_event)
-                logger.info(f"[CheckpointService] Session {session_id}: rebuilt pause event Layer {previous_layer}")
+                logger.info("[CheckpointService] Session %s: rebuilt HUMAN pause event", session_id)
 
             logger.info(f"[CheckpointService] Session {session_id}: rebuilt {len(events)} events total")
 

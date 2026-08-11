@@ -270,6 +270,13 @@ def create_llm(
     )
 
     selected_provider = get_provider(provider)
+    # MiniMax reasoning responses can otherwise inherit an accidentally huge
+    # workspace MAX_TOKENS (for example 65536), keeping every long planning
+    # dimension open for many minutes.  Keep the provider boundary bounded;
+    # stage contracts still require complete human-readable sections and do
+    # not rely on truncation as a recovery strategy.
+    if selected_provider == LLMProvider.MINIMAX:
+        max_tokens = min(int(max_tokens), 8192)
     if model is None:
         model = MINIMAX_MODEL if selected_provider == LLMProvider.MINIMAX else LLM_MODEL
 

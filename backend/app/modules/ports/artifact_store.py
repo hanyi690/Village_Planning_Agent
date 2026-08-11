@@ -22,6 +22,7 @@ class ArtifactRef(ContractMeta):
     revision: str = "v1"
     checksum: str = ""
     semantic_checksum: str = ""
+    parent_checksums: dict[str, str] = Field(default_factory=dict)
     stored_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
     def __str__(self) -> str:  # pragma: no cover - debug aid
@@ -36,7 +37,8 @@ class ArtifactStorePort(Protocol):
     - be atomic per write (no partial file on failure);
     - constrain path identifiers (run_id/module/artifact_id) to safe tokens;
     - preserve ``context_version``, ``context_fingerprint``, ``artifact_type``,
-      ``revision``, raw ``checksum`` and ``semantic_checksum`` on list.
+      ``revision``, raw ``checksum``, ``semantic_checksum`` and
+      ``parent_checksums`` on list.
     """
 
     def store(self, ref: ArtifactRef, payload: dict[str, Any]) -> ArtifactRef: ...
