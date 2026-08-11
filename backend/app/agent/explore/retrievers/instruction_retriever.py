@@ -14,6 +14,48 @@ from app.utils.logger import get_logger
 logger = get_logger(__name__)
 
 
+def _table_facts(instruction: str, source_ref: str) -> list[EvidenceFact]:
+    """Compile instruction markdown rows into auditable evidence facts."""
+    from app.modules.parsing.tables import _iter_tables
+
+    facts: list[EvidenceFact] = []
+    seen: set[tuple[str, ...]] = set()
+    for table_index, (header, rows) in enumerate(_iter_tables(instruction), start=1):
+        normalized_header = [str(cell).strip() for cell in header]
+        if not normalized_header or not rows:
+            continue
+        for row_index, row in enumerate(rows, start=1):
+            cells = tuple(str(cell).strip() for cell in row)
+            if len(cells) != len(normalized_header) or not any(cells):
+                continue
+            if cells in seen:
+                continue
+            seen.add(cells)
+            fields = {
+                normalized_header[i]: cells[i]
+                for i in range(len(normalized_header))
+                if cells[i]
+            }
+            name = fields.get("名称") or fields.get("项目") or fields.get("项目名称") or ""
+            location = fields.get("位置") or fields.get("选址") or fields.get("所在位置") or ""
+            fact_type = fields.get("类型") or fields.get("类别") or "instruction_row"
+            statement = "；".join(f"{key}={value}" for key, value in fields.items())
+            evidence_span = " | ".join(cells)
+            facts.append(EvidenceFact(
+                statement=statement[:500],
+                confidence=0.95 if name else 0.8,
+                source_refs=[source_ref],
+                spatial_refs=[location] if location else [],
+                fact_type=fact_type,
+                fields=fields,
+                evidence_span=evidence_span,
+                source_locator=f"{source_ref}:table-{table_index}:row-{row_index}",
+                support_relation="quotation",
+                status="verified" if fields else "not_stated",
+            ))
+    return facts
+
+
 async def retrieve_from_instructions(
     session_id: str,
     dimension_key: str,
@@ -51,12 +93,21 @@ async def retrieve_from_instructions(
                 reference=f"L{layer}:{dk}:instruction",
                 confidence=0.95,
             ))
-            for line in instr.strip().split("\n"):
-                line = line.strip()
-                if len(line) >= 4:
-                    facts.append(EvidenceFact(
-                        statement=line[:200],
-                        confidence=0.9,
-                        source_refs=[f"L{layer}:{dk}:instruction"],
-                    ))
+            source_ref = f"L{layer}:{dk}:instruction"
+            structured = _table_facts(instr, source_ref)
+            if structured:
+                facts.extend(structured)
+            else:
+                for line_no, raw in enumerate(instr.strip().splitlines(), start=1):
+                    line = raw.strip()
+                    if len(line) >= 4 and not line.startswith("【INSTRUCTION】"):
+                        facts.append(EvidenceFact(
+                            statement=line[:500],
+                            confidence=0.6,
+                            source_refs=[source_ref],
+                            evidence_span=line,
+                            source_locator=f"{source_ref}:line-{line_no}",
+                            support_relation="quotation",
+                            status="unstructured",
+                        ))
     return facts, sources

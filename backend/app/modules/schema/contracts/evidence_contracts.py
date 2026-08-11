@@ -36,6 +36,24 @@ class EvidenceFact(BaseModel):
     confidence: float = 1.0
     source_refs: list[str] = []
     spatial_refs: list[str] = []
+    fact_type: str = "statement"
+    fields: dict[str, str] = {}
+    evidence_span: str = ""
+    source_locator: str = ""
+    support_relation: str = "quotation"
+    status: str = "verified"
+    fact_type: str = "statement"
+    fields: dict[str, str] = {}
+    evidence_span: str = ""
+    source_locator: str = ""
+    support_relation: str = "quotation"
+    status: str = "verified"
+    fact_type: str = "statement"
+    fields: dict[str, str] = {}
+    evidence_span: str = ""
+    source_locator: str = ""
+    support_relation: str = "quotation"
+    status: str = "verified"
 
 
 class EvidenceGapResolution(BaseModel):
