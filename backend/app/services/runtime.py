@@ -270,6 +270,14 @@ class PlanningRuntimeService:
             command = Command(resume=resume_data)
 
         async with cls._execution_locks.setdefault(session_id, asyncio.Lock()):
+            initial_state = await cls.aget_state_values(session_id) or {}
+            initial_signature = (
+                initial_state.get("phase"),
+                initial_state.get("current_stage"),
+                initial_state.get("next_stage"),
+                initial_state.get("paused_stage"),
+                initial_state.get("human_review_event_id"),
+            )
             logger.info(
                 "[PlanningRuntimeService] [%s] RESUME from interrupt: resume_data=%s state_updates=%s",
                 session_id, resume_data,
@@ -283,10 +291,18 @@ class PlanningRuntimeService:
 
             last_completed_layer = 0
             last_phase = ""
+            observed_signatures = []
 
             async for part in stream_iterator:
                 if part.get("type") == 'values':
                     state = part["data"]
+                    observed_signatures.append((
+                        state.get("phase"),
+                        state.get("current_stage"),
+                        state.get("next_stage"),
+                        state.get("paused_stage"),
+                        state.get("human_review_event_id"),
+                    ))
                     # Detect layer completion for SSE events (correlate with checkpoint)
                     if state.get('previous_layer') and state.get('previous_layer', 0) > 0:
                         layer = state.get('previous_layer', 0)
@@ -321,6 +337,54 @@ class PlanningRuntimeService:
                             last_completed_layer = 0
 
             final_state = await cls.aget_state_values(session_id)
+            final_signature = (
+                (final_state or {}).get("phase"),
+                (final_state or {}).get("current_stage"),
+                (final_state or {}).get("next_stage"),
+                (final_state or {}).get("paused_stage"),
+                (final_state or {}).get("human_review_event_id"),
+            )
+            terminal_status = str((final_state or {}).get("delivery_status") or "")
+            still_paused = bool((final_state or {}).get("human_interrupt")) or bool(
+                (final_state or {}).get("paused_stage")
+            )
+            if (
+                final_state
+                and final_signature == initial_signature
+                and still_paused
+                and terminal_status not in {"complete", "partial", "diagnostic_only"}
+                and not final_state.get("fatal_error")
+            ):
+                diagnostic = {
+                    "stage": (final_state.get("paused_stage") or final_state.get("phase") or "unknown"),
+                    "reason": "resume_no_progress",
+                    "message": "Resume returned without advancing the checkpoint or reaching a terminal state.",
+                    "initial_signature": initial_signature,
+                    "final_signature": final_signature,
+                }
+                logger.error("[PlanningRuntimeService] [%s] Resume made no progress: %s", session_id, diagnostic)
+                try:
+                    await cls._graph.aupdate_state(
+                        config,
+                        {
+                            "delivery_status": "diagnostic_only",
+                            "diagnostic_terminal": diagnostic,
+                            "fatal_error": diagnostic,
+                            "phase": "completed",
+                            "current_stage": diagnostic["stage"],
+                            "next_stage": "TERMINAL",
+                        },
+                        as_node="resume_no_progress",
+                    )
+                except Exception as state_error:
+                    logger.error("[PlanningRuntimeService] [%s] failed to persist resume diagnostic: %s", session_id, state_error)
+                await update_planning_session_async(session_id, {
+                    "status": TaskStatus.failed,
+                    "execution_error": diagnostic["message"],
+                })
+                await cls._append_event(session_id, create_error_event(session_id, diagnostic["message"]))
+                sse_manager.set_execution_active(session_id, False)
+                return
             fatal_error = (final_state or {}).get("fatal_error")
             if fatal_error:
                 message = fatal_error.get("message", "planning execution failed") if isinstance(fatal_error, dict) else str(fatal_error)
