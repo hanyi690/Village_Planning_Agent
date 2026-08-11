@@ -319,7 +319,10 @@ def apply_operations(
 
     for bsm, cp in current_map.items():
         if bsm not in modified_bsms:
-            dlbm = _get_attr(cp, "dlbm", "0701")
+            dlbm = _get_attr(cp, "dlbm", "")
+            if not dlbm:
+                warnings.append(f"parcel {bsm}: preserved without classification because source DLBM is missing")
+                continue
             planned.append(reclassify_parcel(cp, dlbm))
             warnings.append(f"parcel {bsm}: kept current land use (unchanged)")
 

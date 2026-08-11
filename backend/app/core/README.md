@@ -19,7 +19,7 @@
 
 ## 二、LLM 工厂（`llm.py`）
 
-**Provider 决策**：`get_provider()` 依据 `LLM_PROVIDER`（默认 `deepseek`）映射：
+**Provider 决策**：`get_provider()` 依据 `LLM_PROVIDER`（默认 `minimax`）映射：
 
 | Provider 名 | 枚举 | 通道 |
 |-------------|------|------|

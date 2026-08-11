@@ -24,7 +24,8 @@ from ..encodings.code_sets import (
 )
 
 
-# Construction DLBM codes (all zone types that are construction)
+# Construction codes in the source DLBM system only. These are analytical
+# groupings and must never be used to create a planning classification.
 CONSTRUCTION_DLBM_CODES: Set[str] = set()
 for _zt, _dlbms in {
     "居住用地": ["0700", "0701", "0702", "2121", "2030"],

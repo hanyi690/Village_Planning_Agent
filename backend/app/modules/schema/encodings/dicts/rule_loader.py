@@ -361,23 +361,12 @@ class PlanningRuleLoader:
 
     @lru_cache(maxsize=1)
     def format_vne_mapping_for_prompt(self) -> str:
-        """Format GHYTBM → VNE mapping as a derivation rule for LLM.
+        """Return no cross-system prompt material.
 
-        The LLM must auto-compute vne_code from the GHYTBM code.
+        VNE is an independent classification decision and must never be
+        generated from GHYTBM by the prompt builder.
         """
-        try:
-            from ..code_sets import VNE_CODE_TO_NAME
-            from ...advisory_crosswalks import GHYTBM_TO_VNE
-        except Exception:
-            return ""
-        if not GHYTBM_TO_VNE:
-            return ""
-        lines = ["## GHYTBM → VNE 推导规则（自动计算 vne_code）", ""]
-        for ghytbm, vne in GHYTBM_TO_VNE.items():
-            vne_name = VNE_CODE_TO_NAME.get(vne, "")
-            lines.append(f"- {ghytbm} → {vne}（{vne_name}）")
-        lines.append("")
-        return "\n".join(lines)
+        return ""
 
 
 # ── Singleton ───────────────────────────────────────────────────────

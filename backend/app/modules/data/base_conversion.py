@@ -16,10 +16,8 @@
 
 from typing import Dict, Optional, Tuple
 
-from app.modules.schema.advisory_crosswalks import (
-    get_ghytbm_for_dlbm,
-    get_ghytbm_conversion_info,
-)
+class CrossSystemInferenceDisabled(ValueError):
+    """Raised when a caller attempts to infer planning codes from DLBM."""
 
 
 def lookup_ghytbm(dlbm: str) -> str:
@@ -35,7 +33,9 @@ def lookup_ghytbm(dlbm: str) -> str:
     Returns:
         GHYTBM 编码 (4 位, 如 "1100"), 或空字符串。
     """
-    return get_ghytbm_for_dlbm(dlbm)
+    raise CrossSystemInferenceDisabled(
+        "DLBM to GHYTBM inference is disabled; provide an independent ClassificationDecision."
+    )
 
 
 def lookup_ghytbm_with_info(dlbm: str) -> Tuple[str, str, str]:
@@ -47,13 +47,16 @@ def lookup_ghytbm_with_info(dlbm: str) -> Tuple[str, str, str]:
         - conversion_type: "一一对应" / "一对多" / ""
         - condition: 消歧条件 (仅"一对多"时有意义)
     """
-    return get_ghytbm_conversion_info(dlbm)
+    raise CrossSystemInferenceDisabled(
+        "DLBM to GHYTBM inference is disabled; provide an independent ClassificationDecision."
+    )
 
 
 def is_ambiguous(dlbm: str) -> bool:
     """判断该 DLBM 是否存在一对多消歧需求."""
-    _ghytbm, ctype, _cond = get_ghytbm_conversion_info(dlbm)
-    return ctype == "一对多"
+    raise CrossSystemInferenceDisabled(
+        "Cross-system ambiguity detection is disabled without an explicit planning decision."
+    )
 
 
 def get_alternative_ghytbms(dlbm: str) -> Dict[str, str]:
@@ -63,19 +66,9 @@ def get_alternative_ghytbms(dlbm: str) -> Dict[str, str]:
         {ghytbm: condition, ...} 例如:
         {"1340": "商品林", "1350": "生态林"}
     """
-    from app.modules.schema.encodings.dicts.loader import get_center
-    center = get_center()
-    dlbm_ghytbm = center.get("dlbm_to_ghytbm")
-    raw = dlbm_ghytbm.raw.get("mappings", []) if dlbm_ghytbm else []
-    result: Dict[str, str] = {}
-    for entry in raw:
-        if entry.get("dlbm") == dlbm and entry.get("conversion_type") == "一对多":
-            alt = entry.get("alternative_ghytbm", "")
-            alt_cond = entry.get("alternative_condition", "")
-            if alt:
-                result[entry.get("ghytbm", "")] = entry.get("condition", "")
-                result[alt] = alt_cond
-    return result
+    raise CrossSystemInferenceDisabled(
+        "Cross-system alternatives are disabled; use a single-system closed candidate set."
+    )
 
 
 __all__ = [

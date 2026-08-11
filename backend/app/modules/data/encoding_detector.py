@@ -3,7 +3,6 @@ from typing import Optional
 
 import yaml
 
-from app.modules.schema.advisory_crosswalks import DLBM_TO_GHYTBM
 from app.modules.schema.encodings import code_sets as cs
 from app.modules.schema.provenance import ProvenanceSource
 
@@ -17,7 +16,7 @@ def _tugui_codes() -> set[str]:
 
 
 _TUGUI_CODES: set[str] = _tugui_codes()
-_GBT21010_CODES: set[str] = set(DLBM_TO_GHYTBM.keys())
+_GBT21010_CODES: set[str] = set(cs.DLBM_TO_DLMC.keys())
 _APPENDIX5_CODES: set[str] = set(cs.GHYTBM_TO_GHYTMC.keys())
 _VNE_CODES: set[str] = set(cs.VNE_CODE_TO_NAME.keys())
 

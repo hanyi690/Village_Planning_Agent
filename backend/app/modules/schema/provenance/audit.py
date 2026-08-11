@@ -8,7 +8,6 @@ class ProvenanceSource(str, Enum):
     PRACTICAL_APPENDIX5 = "practical:appendix5"
     TUGUI = "tugui"
     VNE = "vne"
-    DERIVED_DLBM_TO_GHYTBM = "derived:dlbm_to_ghytbm"
     DERIVED_DLBM_TO_ZONE_TYPE = "derived:dlbm_to_zone_type"
     DERIVED_THREE_LINE_OVERLAY = "derived:three_line_overlay"
     DERIVED_UPPER_PLAN_OVERLAY = "derived:upper_plan_overlay"
