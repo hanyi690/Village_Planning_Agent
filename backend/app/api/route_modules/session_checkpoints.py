@@ -5,34 +5,26 @@ from typing import Any, Dict
 
 from fastapi import APIRouter, HTTPException
 
-from app.api.session_routes import _launch_background
+from app.services.composition import CompositionRoot
 from app.services.runtime import PlanningRuntimeService
 from app.services.sse import sse_manager
+from app.modules.schema.contracts.resume_contracts import (
+    ResumeMode,
+    build_resume_plan,
+)
+from app.services.checkpoint_policy import (
+    classify_checkpoint,
+    first_pending_interrupt_payload,
+    has_pending_interrupt,
+)
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
-def _is_stable_checkpoint(values: Dict[str, Any]) -> tuple:
-    """判断检查点是否为稳定完成快照（非并行中间态）
-
-    并行 Send API 每完成一个节点就保存检查点，这些中间检查点状态不完整。
-    只有 layer_completion_check 执行后的检查点才是真正的完成快照。
-
-    Returns:
-        (is_stable: bool, kind: str)  kind ∈ {"layer", "revision", "completed", "intermediate"}
-    """
-    if not values:
-        return False, "intermediate"
-    if values.get("phase") == "completed":
-        return True, "completed"
-    if (values.get("last_revised_dimensions")
-            and not values.get("is_revision", False)):
-        return True, "revision"
-    if (values.get("is_interrupted")
-            and values.get("previous_layer", 0) > 0):
-        return True, "layer"
-    return False, "intermediate"
+def _launch_background(session_id: str, coro) -> None:
+    """Use the task supervisor without importing the aggregate router."""
+    CompositionRoot.get_task_supervisor().create_task(session_id, coro)
 
 
 @router.get("/api/sessions/{session_id}/checkpoints")
@@ -42,13 +34,23 @@ async def get_checkpoints(session_id: str):
     async for snapshot in PlanningRuntimeService.aget_state_history(session_id):
         checkpoint_id = snapshot.config.get("configurable", {}).get("checkpoint_id", "")
         values = dict(snapshot.values) if snapshot.values else {}
-        is_stable, kind = _is_stable_checkpoint(values)
+        pending_interrupt = has_pending_interrupt(snapshot)
+        is_stable, kind = classify_checkpoint(values, pending_interrupt=pending_interrupt)
+        plan = build_resume_plan(
+            values,
+            session_id=session_id,
+            checkpoint_id=checkpoint_id,
+            checkpoint_kind=kind,
+            next_nodes=snapshot.next or (),
+            pending_interrupt=first_pending_interrupt_payload(snapshot),
+        )
         checkpoints.append({
             "checkpoint_id": checkpoint_id,
             "phase": values.get("phase", "init"),
             "layer": values.get("previous_layer", 0),
             "stable": is_stable,
             "kind": kind,
+            "resume_plan": plan.model_dump(mode="json"),
         })
     return {"session_id": session_id, "checkpoints": checkpoints, "count": len(checkpoints)}
 
@@ -66,13 +68,31 @@ async def resume_from_checkpoint(session_id: str, checkpoint_id: str):
         raise HTTPException(status_code=404, detail=f"Checkpoint not found: {checkpoint_id}")
 
     values = dict(target_state.values) if target_state.values else {}
-    is_stable, kind = _is_stable_checkpoint(values)
+    pending_interrupt = has_pending_interrupt(target_state)
+    is_stable, kind = classify_checkpoint(values, pending_interrupt=pending_interrupt)
+    interrupt_payload = first_pending_interrupt_payload(target_state)
+    plan = build_resume_plan(
+        values,
+        session_id=session_id,
+        checkpoint_id=checkpoint_id,
+        checkpoint_kind=kind,
+        next_nodes=target_state.next or (),
+        pending_interrupt=interrupt_payload,
+    )
     if not is_stable:
         raise HTTPException(
             status_code=400,
             detail=f"Checkpoint {checkpoint_id} is an intermediate state (kind={kind}), "
                    f"not a stable completion checkpoint. Restore from a 'layer' or 'revision' checkpoint.",
         )
+
+    if plan.mode == ResumeMode.INTERRUPT:
+        raise HTTPException(
+            status_code=409,
+            detail="This checkpoint has a pending HUMAN interrupt; use the channel-specific resolve endpoint.",
+        )
+    if plan.mode in {ResumeMode.BLOCKED, ResumeMode.COMPLETED}:
+        raise HTTPException(status_code=409, detail=plan.reason)
 
     # ADR-005: migrate legacy artifact references exactly once at the
     # checkpoint-import boundary, before any runtime node executes.
@@ -93,7 +113,13 @@ async def resume_from_checkpoint(session_id: str, checkpoint_id: str):
     _launch_background(session_id, PlanningRuntimeService._trigger_planning_execution(
         session_id, checkpoint_id=checkpoint_id, state_values=values
     ))
-    return {"status": "resumed", "checkpoint_id": checkpoint_id, "layer": layer, "kind": kind}
+    return {
+        "status": "resumed",
+        "checkpoint_id": checkpoint_id,
+        "layer": layer,
+        "kind": kind,
+        "resume_plan": plan.model_dump(mode="json"),
+    }
 
 
 __all__ = ["router"]

@@ -214,7 +214,13 @@ async def create_session(
 
         SSEPublisher.send_layer_start(session_id, 1, get_layer_name(1), len(get_layer_dimensions(1)))
 
-        background_tasks.add_task(PlanningRuntimeService._trigger_planning_execution, session_id, initial_state)
+        # Long-running graph execution belongs to the application task
+        # supervisor. FastAPI BackgroundTasks waits for the task in TestClient
+        # and couples execution lifetime to the response lifecycle.
+        _launch_background(
+            session_id,
+            PlanningRuntimeService._trigger_planning_execution(session_id, initial_state),
+        )
     except Exception:
         await delete_planning_session_async(session_id)
         await _delete_uploaded_files(session_id)
@@ -242,7 +248,7 @@ async def get_session_status(session_id: str):
         raise HTTPException(status_code=404, detail=f"Session not found: {session_id}")
 
     checkpoint_state = await PlanningRuntimeService.aget_state(session_id)
-    state = dict(checkpoint_state.values) if checkpoint_state and checkpoint_state.values else {}
+    state = await PlanningRuntimeService.aget_state_values(session_id) or {}
     # Detect interrupt state from snapshot.tasks with non-empty interrupts.
     # snapshot.next is truthy after aupdate_state(as_node="__start__") —
     # it means nodes are scheduled, NOT that the graph is interrupted.
@@ -252,24 +258,6 @@ async def get_session_status(session_id: str):
         and checkpoint_state.tasks
         and any(getattr(t, 'interrupts', None) for t in checkpoint_state.tasks)
     )
-    # LangGraph may expose the first interrupt payload on PregelTask before
-    # the node's returned values are materialized in ``snapshot.values``.
-    # Promote that payload into the status view so clients can discover a
-    # HUMAN pause without racing the checkpoint writer.
-    if is_interrupted and checkpoint_state:
-        for task in checkpoint_state.tasks or ():
-            for pending_interrupt in getattr(task, "interrupts", None) or ():
-                payload = getattr(pending_interrupt, "value", None)
-                if not isinstance(payload, dict):
-                    continue
-                for key in ("human_review_items", "paused_stage", "post_l3_status"):
-                    value = payload.get(key)
-                    if value not in (None, "", []):
-                        state[key] = value
-                if state.get("human_review_items") and state.get("paused_stage"):
-                    break
-            if state.get("human_review_items") and state.get("paused_stage"):
-                break
     return state_to_ui_status(state, db_session, is_interrupted=is_interrupted)
 
 

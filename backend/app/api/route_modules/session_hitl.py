@@ -44,10 +44,30 @@ async def submit_feedback(session_id: str, request: FeedbackRequest):
         next_phase = get_next_phase(current_phase)
         logger.info("[feedback/approve] session=%s phase=%s", session_id, current_phase)
 
+        # A layer HUMAN gate is reached after the aggregate node has already
+        # produced its artifact.  Approval must therefore create a new PASS
+        # gate revision before resuming the graph; otherwise the aggregate is
+        # rerun and its original HUMAN decision immediately pauses again.
+        state_updates = None
+        gate_key = f"l{current_layer}_gate_decision"
+        gate = state.get(gate_key)
+        if isinstance(gate, dict) and gate.get("feedback_route") == "HUMAN":
+            approved_gate = dict(gate)
+            approved_gate.update({
+                "stage": f"l{current_layer}",
+                "passed": True,
+                "feedback_route": None,
+                "pending_requests": [],
+                "human_approved": True,
+                "revision": int(approved_gate.get("revision") or 1) + 1,
+            })
+            state_updates = {gate_key: approved_gate}
+
         # Resume from interrupt: approve action handled in layer_completion_check
         _launch_background(session_id, PlanningRuntimeService.resume_from_interrupt(
             session_id,
             resume_data={"action": "approve"},
+            state_updates=state_updates,
         ))
         return {
             "status": "approved",
@@ -270,7 +290,11 @@ async def update_step_mode(session_id: str, request: StepModeRequest):
     if not request.step_mode:
         snapshot = await PlanningRuntimeService.aget_state(session_id)
         is_interrupted = snapshot and snapshot.next and len(snapshot.next) > 0
-        if is_interrupted:
+        interrupt_info = state.get("human_interrupt") or {}
+        # Toggling step mode may auto-approve only the step-mode checkpoint.
+        # A post-L3 review is an independent business gate and must remain
+        # explicitly resolved by the human-review endpoint.
+        if is_interrupted and interrupt_info.get("channel") == "step_mode":
             _launch_background(session_id, PlanningRuntimeService.resume_from_interrupt(
                 session_id,
                 resume_data={"action": "approve"},
