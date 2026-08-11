@@ -36,7 +36,7 @@ ensure_log_dir()
 
 # Keep runtime logs in a fresh workspace-owned directory. Historical log files
 # may be owned by another Windows sandbox identity and cannot be reopened.
-LOG_DIR = PROJECT_ROOT / "output" / "runtime-logs"
+LOG_DIR = Path(os.getenv("BACKEND_LOG_DIR", str(PROJECT_ROOT / "output" / "runtime-logs")))
 LOG_DIR.mkdir(parents=True, exist_ok=True)
 
 # Configure logging with dictConfig to avoid duplicate handlers
