@@ -31,7 +31,7 @@ export class SSECollector {
 
   /** Connect to SSE stream for a session. */
   connect(sessionId: string): void {
-    const url = `${this.baseUrl}/api/sessions/${sessionId}/stream`;
+    const url = `${this.baseUrl}/api/v1/sessions/${sessionId}/events`;
 
     // Use fetch with streaming for Node.js compatibility (EventSource not in Node)
     this.abortController = new AbortController();

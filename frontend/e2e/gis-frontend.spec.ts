@@ -53,7 +53,7 @@ async function injectSessionWithSync(
       try {
         const [checkpointsResp, statusData] = await Promise.all([
           fetch(`${backendUrl}/api/sessions/${sid}/checkpoints`).then((r) => r.json()),
-          fetch(`${backendUrl}/api/sessions/${sid}/status`).then((r) => r.json()),
+          fetch(`${backendUrl}/api/v1/sessions/${sid}/state`).then((r) => r.json()),
         ]);
         getState().setCheckpoints(
           checkpointsResp.checkpoints.map((cp: any) => ({

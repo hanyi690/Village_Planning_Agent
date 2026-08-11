@@ -469,7 +469,7 @@ export interface PlanningActions {
 // ============================================
 
 export const usePlanningStore = create<PlanningState & PlanningActions>()(
-  immer((set, _get) => ({
+  immer((set, get) => ({
     // Initial state
     ...createInitialState('default'),
 
@@ -873,7 +873,9 @@ export const usePlanningStore = create<PlanningState & PlanningActions>()(
     resolveHumanReview: async (sessionId, decisions) => {
       set((state) => { state.isResolvingReview = true; state.humanReviewError = null; });
       try {
-        await planningApi.resolveHumanReview(sessionId, decisions);
+        const eventId = get().humanReviewEventId;
+        if (!eventId) throw new Error('Missing human-review event id');
+        await planningApi.resolveHumanReview(sessionId, decisions, eventId);
         set((state) => { state.isResolvingReview = true; });
       } catch (err) {
         set((state) => {

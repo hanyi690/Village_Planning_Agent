@@ -1,5 +1,8 @@
 # 前端架构（Frontend）
 
+> API/SSE 地址以 `frontend-api-v1.md` 和 `api-sse-cutover.md` 为准；本文旧流程图
+> 中的 `/stream` 与 `/status` 仅用于理解历史实现。
+
 > 回答"前端状态怎么管、SSE 怎么连"。
 > 技术栈：Next.js 14 + React 18 + Zustand 5 + MapLibre GL。
 

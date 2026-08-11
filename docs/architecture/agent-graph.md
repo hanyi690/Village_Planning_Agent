@@ -208,7 +208,8 @@ backend/app/agent/
 ├── bootstrap/          # 主图工厂、阶段机、artifact loader、主阶段节点
 │   ├── graph.py            # create_unified_planning_graph + HITL 4 节点
 │   ├── context_bootstrap.py # bootstrap_context 节点（Wave M3）
-│   ├── post_l3_main_nodes.py # parse/ground/select/execute/validate/reconcile/deliver + _load_ref_artifact
+│   ├── post_l3_main_nodes.py # 阶段装载、Gate、artifact 持久化与主图 patch
+│   └── ../deliver/spatial_products.py # DELIVER snapshot/render/export 单一空间服务
 │   ├── layer_aggregate_node.py
 │   └── layer_router.py     # l1/l2/l3 worker + advance_phase
 ├── execute/            # EXECUTE compiled subgraph（当前独立编译；目标是父图持久化挂载）

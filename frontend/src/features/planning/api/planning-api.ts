@@ -25,10 +25,6 @@ import type {
   StepModeResponse,
   GeocodeResponse,
   GisDataUploadResponse,
-  ArtifactType,
-  ArtifactListResponse,
-  ArtifactResponse,
-  ArtifactRefResponse,
   RenderLayersResponse,
   HumanReviewListResponse,
   HumanReviewResolveRequest,
@@ -42,7 +38,7 @@ import type {
 export const planningApi = {
   /**
    * Start a new planning session (multipart/form-data)
-   * POST /api/sessions
+   * POST /api/v1/sessions
    */
   async startPlanning(request: StartPlanningRequest): Promise<StartPlanningResponse> {
     const formData = new FormData();
@@ -73,7 +69,7 @@ export const planningApi = {
       for (const f of request.constraintFiles) formData.append('constraint_files', f, f.name);
     }
 
-    const response = await fetch(`${API_BASE_URL}/api/sessions`, {
+    const response = await fetch(`${API_BASE_URL}/api/v1/sessions`, {
       method: 'POST',
       body: formData,
     });
@@ -89,7 +85,7 @@ export const planningApi = {
 
   /**
    * Get SSE stream for planning session
-   * GET /api/sessions/{session_id}/stream
+   * GET /api/v1/sessions/{session_id}/events
    */
   createStream(
     sessionId: string,
@@ -97,7 +93,7 @@ export const planningApi = {
     onError?: (error: Error) => void,
     onReconnect?: () => void
   ): EventSource {
-    const url = `${API_BASE_URL}/api/sessions/${sessionId}/stream`;
+    const url = `${API_BASE_URL}/api/v1/sessions/${sessionId}/events`;
     const es = new EventSource(url);
 
     let isReconnecting = false;
@@ -112,7 +108,19 @@ export const planningApi = {
 
       try {
         const rawData = event.data;
-        const data = JSON.parse(rawData) as PlanningSSEDataBase;
+        const envelope = JSON.parse(rawData) as {
+          type: string;
+          seq: number;
+          data: PlanningSSEDataBase & { type?: PlanningSSEEventType };
+        };
+        const legacyType = envelope.type === 'progress' && envelope.data.type
+          ? envelope.data.type
+          : envelope.type === 'human_review'
+            ? 'human_review_paused'
+            : envelope.type === 'failed'
+              ? 'error'
+              : envelope.type as PlanningSSEEventType;
+        const data = { ...envelope.data, seq: envelope.seq } as PlanningSSEDataBase;
 
         if (type === 'layer_completed') {
           const layer = data.layer ?? '?';
@@ -170,7 +178,7 @@ export const planningApi = {
           console.log(`[SSE] gis_result: ${dimKey} (${dimName})`);
         }
 
-        onEvent({ type, data, session_id: sessionId });
+        onEvent({ type: legacyType, data, session_id: sessionId });
       } catch (error) {
         console.error(`[SSE] Failed to parse ${type}:`, error);
         console.error(`[SSE] Raw data length: ${event.data?.length || 0}`);
@@ -186,52 +194,13 @@ export const planningApi = {
     //   3. Add the handler in planningStore.ts handleSSEEvent switch
     //   4. Add to useSSE.ts criticalEventTypes (if it should skip batch delay)
     //   5. Add the type string HERE
-    const eventTypes: PlanningSSEEventType[] = [
-      // Connection Events
-      'connected',
-      'heartbeat',
-      'error',
-      // Layer Events
-      'layer_started',
-      'layer_completed',
-      'layer_paused',
-      'execution_resumed',
-      // Dimension Events
-      'dimension_start',
-      'dimension_delta',
-      'dimension_complete',
-      // Progress Events
-      'checkpoint_saved',
-      'pause',
-      'resumed',
-      'completed',
-      'revision_completed',
-      // Tool Events (NEW)
-      'tool_started',
-      'tool_status',
-      // Tool Events (Legacy)
-      'tool_call',
-      'tool_progress',
-      'tool_result',
-      // AI Response Events
-      'ai_response_delta',
-      'ai_response_complete',
-      // GIS & RAG Events
-      'rag_result',
-      'gis_result',
-      'gis_layer_update',
-      // Cascade Events
-      'cascade_impact',
-      'cascade_complete',
-      // Settings Events
-      'rag_config_updated',
-      'step_mode_updated',
-      // HITL Events
-      'human_review_paused',
-    ];
+    const eventTypes = [
+      'progress', 'human_review', 'delivery_ready', 'completed', 'failed',
+      'resync_required',
+    ] as const;
 
     for (const eventType of eventTypes) {
-      es.addEventListener(eventType, (e) => parseEvent(e, eventType));
+      es.addEventListener(eventType, (e) => parseEvent(e, eventType as PlanningSSEEventType));
     }
 
     es.addEventListener('completed', (e) => {
@@ -368,22 +337,39 @@ export const planningApi = {
 
   /**
    * Get session status
-   * GET /api/sessions/{session_id}/status
+   * GET /api/v1/sessions/{session_id}/state
    */
   async getStatus(sessionId: string): Promise<SessionStatusResponse> {
-    return apiRequest<SessionStatusResponse>(`/api/sessions/${sessionId}/status`);
+    const state = await apiRequest<SessionStatusResponse>(`/api/v1/sessions/${sessionId}/state`);
+    return state;
   },
 
   /**
    * Sync events from a specific sequence number (for SSE reconnection)
-   * GET /api/sessions/{session_id}/sync?from_seq=N
+   * GET /api/v1/sessions/{session_id}/events/sync?after=N
    */
   async syncEvents(sessionId: string, fromSeq: number): Promise<{
     events: PlanningSSEEvent[];
     last_seq: number;
     from_seq: number;
   }> {
-    return apiRequest(`/api/sessions/${sessionId}/sync?from_seq=${fromSeq}`);
+    const result = await apiRequest<{
+      events: Array<{ type: string; seq: number; data: PlanningSSEDataBase & { type?: PlanningSSEEventType } }>;
+      last_seq: number;
+      resync_required: boolean;
+    }>(`/api/v1/sessions/${sessionId}/events/sync?after=${fromSeq}`);
+    return {
+      events: result.events.map((event) => ({
+        type: event.type === 'progress' && event.data.type
+          ? event.data.type
+          : event.type === 'human_review'
+            ? 'human_review_paused'
+            : event.type === 'failed' ? 'error' : event.type as PlanningSSEEventType,
+        data: { ...event.data, seq: event.seq },
+      })),
+      last_seq: result.last_seq,
+      from_seq: fromSeq,
+    };
   },
 
   /**
@@ -636,58 +622,57 @@ export const planningApi = {
   },
 
   /**
-   * List all typed pipeline artifacts
-   * GET /api/sessions/{session_id}/artifacts
-   */
-  async getArtifacts(sessionId: string): Promise<ArtifactListResponse> {
-    return apiRequest<ArtifactListResponse>(`/api/sessions/${sessionId}/artifacts`);
-  },
-
-  /**
-   * Get a typed artifact by type (with optional version)
-   * GET /api/sessions/{session_id}/artifacts/{artifact_type}?version=N
-   */
-  async getArtifact(sessionId: string, artifactType: ArtifactType, version?: number): Promise<ArtifactResponse> {
-    const qs = version !== undefined ? `?version=${version}` : '';
-    return apiRequest<ArtifactResponse>(
-      `/api/sessions/${sessionId}/artifacts/${artifactType}${qs}`
-    );
-  },
-
-  /**
-   * Get artifact ref metadata
-   * GET /api/sessions/{session_id}/artifacts/{artifact_type}/ref
-   */
-  async getArtifactRef(sessionId: string, artifactType: ArtifactType): Promise<ArtifactRefResponse> {
-    return apiRequest<ArtifactRefResponse>(
-      `/api/sessions/${sessionId}/artifacts/${artifactType}/ref`
-    );
-  },
-
-  /**
-   * Get render layers (GeoJSON) for a session
-   * GET /api/sessions/{session_id}/render-layers
+   * Get authoritative snapshot layers for a session.
    */
   async getRenderLayers(sessionId: string): Promise<RenderLayersResponse> {
-    return apiRequest<RenderLayersResponse>(`/api/sessions/${sessionId}/render-layers`);
+    const response = await apiRequest<{
+      layers: Array<{ layer_type: string; layer_name: string; geojson: RenderLayersResponse['layers'][number]['data'] }>;
+    }>(`/api/v1/sessions/${sessionId}/map-layers`);
+    return {
+      session_id: sessionId,
+      layers: response.layers.map((layer) => ({
+        layerType: layer.layer_type,
+        layerName: layer.layer_name,
+        data: layer.geojson,
+      })),
+    };
   },
 
   /**
    * Get pending human-review items for a paused post-L3 chain
-   * GET /api/human-review/{session_id}
+   * GET /api/v1/sessions/{session_id}/human-review
    */
   async getHumanReview(sessionId: string): Promise<HumanReviewListResponse> {
-    return apiRequest<HumanReviewListResponse>(`/api/human-review/${sessionId}`);
+    const response = await apiRequest<{
+      pending: boolean;
+      event_id?: string;
+      paused_stage: string;
+      items: HumanReviewListResponse['pending_items'];
+    }>(`/api/v1/sessions/${sessionId}/human-review`);
+    return {
+      session_id: sessionId,
+      post_l3_status: response.pending ? 'paused' : 'running',
+      event_id: response.event_id,
+      pending_items: response.items,
+      count: response.items.length,
+    };
   },
 
   /**
    * Submit human-review decisions and resume the post-L3 chain
-   * POST /api/human-review/{session_id}/resolve
+   * POST /api/v1/sessions/{session_id}/human-review
    */
-  async resolveHumanReview(sessionId: string, decisions: Record<string, unknown>): Promise<HumanReviewResolveResponse> {
-    return apiRequest<HumanReviewResolveResponse>(`/api/human-review/${sessionId}/resolve`, {
+  async resolveHumanReview(
+    sessionId: string,
+    decisions: Record<string, unknown>,
+    eventId: string,
+  ): Promise<HumanReviewResolveResponse> {
+    const action = decisions.action === 'retry' || decisions.action === 'reject'
+      ? decisions.action
+      : 'approve';
+    return apiRequest<HumanReviewResolveResponse>(`/api/v1/sessions/${sessionId}/human-review`, {
       method: 'POST',
-      body: JSON.stringify({ decisions } satisfies HumanReviewResolveRequest),
+      body: JSON.stringify({ event_id: eventId, action, decisions } satisfies HumanReviewResolveRequest & { action: string }),
     });
   },
 };

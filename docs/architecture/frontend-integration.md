@@ -1,5 +1,8 @@
 # 前端对接：Typed Artifact 消费（Frontend Integration）
 
+> 历史资料：正式契约见 `frontend-api-v1.md` 和 `api-sse-cutover.md`。本文中的
+> `/stream`、`/artifacts`、`/render-layers` 和旧 Human Review 端点均已退役。
+
 > 回答"前端如何消费 typed artifact，而不是解析 Markdown 文本"。
 > 配套文档：[frontend.md](./frontend.md)（前端架构/SSE）、[backend-api.md](./backend-api.md)（后端 API 总览）、
 > [../design/00_SYSTEM_DESIGN.md](../design/00_SYSTEM_DESIGN.md)（系统设计：三类权威产物）。
