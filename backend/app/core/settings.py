@@ -36,13 +36,13 @@ DASHSCOPE_API_BASE = os.getenv("DASHSCOPE_API_BASE", "https://dashscope.aliyuncs
 # a MiniMax key to DashScope (or vice versa).
 MINIMAX_API_KEY = os.getenv("MINIMAX_API_KEY")
 MINIMAX_API_BASE = os.getenv("MINIMAX_API_BASE", "https://api.minimaxi.com/v1")
-MINIMAX_MODEL = os.getenv("MINIMAX_MODEL", "MiniMax-M2.7")
+MINIMAX_MODEL = os.getenv("MINIMAX_MODEL", "MiniMax-M2.7-highspeed")
 
 # LLM Configuration
 # MiniMax is the default provider; every model setting remains explicitly
 # overridable for controlled experiments and provider-specific deployments.
 LLM_PROVIDER = os.getenv("LLM_PROVIDER", "minimax")
-LLM_MODEL = os.getenv("LLM_MODEL", "MiniMax-M2.7")
+LLM_MODEL = os.getenv("LLM_MODEL", "MiniMax-M2.7-highspeed")
 MAX_TOKENS = int(os.getenv("MAX_TOKENS", "8192"))
 
 # LLM Request Timeout (seconds)
@@ -362,7 +362,7 @@ SSE_QUEUE_WAIT_TIMEOUT = 0.1
 # ==========================================
 
 MULTIMODAL_ENABLED = os.getenv("MULTIMODAL_ENABLED", "false").lower() == "true"
-MULTIMODAL_MODEL = os.getenv("MULTIMODAL_MODEL", "MiniMax-M2.7")
+MULTIMODAL_MODEL = os.getenv("MULTIMODAL_MODEL", "MiniMax-M2.7-highspeed")
 IMAGE_DETAIL_LEVEL = os.getenv("IMAGE_DETAIL_LEVEL", "auto")  # "low", "high", or "auto"
 MAX_IMAGE_SIZE_MULTIMODAL = int(os.getenv("MAX_IMAGE_SIZE_MULTIMODAL", "10_000_000"))  # 10MB
 DEFAULT_IMAGE_FORMAT = os.getenv("DEFAULT_IMAGE_FORMAT", "jpeg")  # jpeg, png, gif, webp
@@ -373,7 +373,7 @@ DEFAULT_IMAGE_FORMAT = os.getenv("DEFAULT_IMAGE_FORMAT", "jpeg")  # jpeg, png, g
 # Flash model is used for lightweight tasks: summaries, keyword extraction, etc.
 # Uses DashScope's OpenAI-compatible endpoint for unified calling pattern.
 
-FLASH_MODEL_NAME = os.getenv("FLASH_MODEL_NAME", "MiniMax-M2.7")
+FLASH_MODEL_NAME = os.getenv("FLASH_MODEL_NAME", "MiniMax-M2.7-highspeed")
 FLASH_MODEL_MAX_TOKENS = int(os.getenv("FLASH_MODEL_MAX_TOKENS", "500"))
 FLASH_MODEL_TEMPERATURE = float(os.getenv("FLASH_MODEL_TEMPERATURE", "0.3"))
 
@@ -393,6 +393,6 @@ FLASH_MODEL_TEMPERATURE = float(os.getenv("FLASH_MODEL_TEMPERATURE", "0.3"))
 # - GIS_EXPLORE_MAX_TOKENS: budget for per-call Flash responses.
 
 GIS_EXPLORE_LLM_ENABLED = os.getenv("GIS_EXPLORE_LLM_ENABLED", "true").lower() in {"1", "true", "yes"}
-GIS_EXPLORE_MODEL = os.getenv("GIS_EXPLORE_MODEL", "MiniMax-M2.7")
+GIS_EXPLORE_MODEL = os.getenv("GIS_EXPLORE_MODEL", "MiniMax-M2.7-highspeed")
 GIS_EXPLORE_MAX_TOKENS = int(os.getenv("GIS_EXPLORE_MAX_TOKENS", "1200"))
 GIS_EXPLORE_TEMPERATURE = float(os.getenv("GIS_EXPLORE_TEMPERATURE", "0.1"))

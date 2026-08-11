@@ -340,7 +340,7 @@ def get_zhipuai_llm(
 
 
 def get_minimax_llm(
-    model: str = "MiniMax-M2.7",
+    model: str = "MiniMax-M2.7-highspeed",
     temperature: float = 0.7,
     max_tokens: int = 2000,
     callbacks: Optional[List[Any]] = None,

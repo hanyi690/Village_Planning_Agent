@@ -565,6 +565,9 @@ async def save_step_report(
 
 async def generate_summary(dimension_key: str, dim_layer: int, content: str) -> str:
     """Generate structured summary JSON string with fallback."""
+    from app.core.settings import BACKGROUND_SUMMARY_ENRICHMENT
+    if not BACKGROUND_SUMMARY_ENRICHMENT:
+        return generate_summary_regex(dimension_key, dim_layer, content)
     from app.modules.parsing.summary_generator import generate_structured_summary
 
     try:

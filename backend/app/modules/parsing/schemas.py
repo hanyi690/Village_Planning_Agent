@@ -119,6 +119,9 @@ class BaseDimensionSummary(BaseModel):
     key_points: List[str] = Field(default_factory=list, description="3-5 key findings")
     text_summary: str = Field(default="", description="Natural-language summary (<=200 chars)")
     metrics: Dict[str, Any] = Field(default_factory=dict, description="Dimension-specific metrics")
+    evidence_refs: List[str] = Field(default_factory=list, description="Source evidence references")
+    summary_source: str = Field(default="deterministic", description="Summary generation source")
+    summary_status: str = Field(default="resolved", description="Summary generation status")
 
 
 # ---- Layer 1: Current situation (12) ----
