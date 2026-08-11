@@ -117,6 +117,12 @@ def _ready_dispatch(state: Dict[str, Any], phase: str) -> List[Send]:
             ready.append(dim.key)
 
     worker = _worker_for_phase(phase)
+    logger.info(
+        "[dimension_dispatch] phase=%s ready_count=%d ready_dimensions=%s",
+        phase,
+        len(ready),
+        ready,
+    )
     return [Send(worker, {**state, "phase": phase, "dimension_key": d}) for d in ready]
 
 
