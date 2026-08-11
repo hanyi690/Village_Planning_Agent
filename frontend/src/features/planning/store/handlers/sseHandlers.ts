@@ -10,6 +10,7 @@ import type {
   GISLayerConfig,
 } from '@/types/message/message-types';
 import type { PipelineTrace, PlanningState, StoreEvent } from '../planningStore';
+import type { HumanReviewItem } from '../../api/types';
 import { NAV_KEYS } from '../../constants';
 import {
   createBaseMessage,
@@ -932,8 +933,13 @@ export function handleSSEEventInStore(
         if (completedData.layer3)
           state.completedDimensions.layer3 = completedData.layer3;
       }
-      if (syncData.interrupt_info !== undefined)
-        state.interruptInfo = syncData.interrupt_info as PlanningState['interruptInfo'];
+      if (syncData.interrupt_info !== undefined) {
+        const interruptInfo = syncData.interrupt_info as PlanningState['interruptInfo'];
+        state.interruptInfo = interruptInfo;
+        state.humanReviewEventId = interruptInfo?.event_id || null;
+        state.pausedStage = interruptInfo?.paused_stage || null;
+        state.humanReviewItems = interruptInfo?.items || [];
+      }
       if (syncData.previous_layer !== undefined)
         state.previous_layer = syncData.previous_layer as number;
       deriveUIStateInStore(state);
@@ -990,13 +996,23 @@ export function handleSSEEventInStore(
     case 'human_review_paused': {
       const hitlData = data as {
         event_id?: string;
+        channel?: string;
+        items?: HumanReviewItem[];
         paused_stage?: string;
         reason?: string;
         item_count?: number;
       };
       if (!state.humanReviewEventId) {
+        state.interruptInfo = {
+          event_id: hitlData.event_id,
+          channel: hitlData.channel || 'post_l3_review',
+          reason: hitlData.reason || 'human_review_required',
+          paused_stage: hitlData.paused_stage,
+          items: hitlData.items || [],
+        };
         state.humanReviewEventId = hitlData.event_id || null;
         state.pausedStage = hitlData.paused_stage || null;
+        state.humanReviewItems = hitlData.items || state.humanReviewItems;
         state.humanReviewError = null;
         state.status = 'paused';
         deriveUIStateInStore(state);

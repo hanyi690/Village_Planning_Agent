@@ -178,7 +178,15 @@ export type AgentPhaseValue = (typeof AgentPhase)[keyof typeof AgentPhase];
  */
 export function agentPhaseToStatus(
   phase: string,
-  interrupt_info?: { layer?: number; phase?: string; layer_name?: string; reason?: string },
+  interrupt_info?: {
+    event_id?: string;
+    channel?: string;
+    layer?: number;
+    phase?: string;
+    layer_name?: string;
+    reason?: string;
+    paused_stage?: string;
+  },
   need_revision?: boolean
 ): PlanningStatus {
   if (interrupt_info) return 'paused';

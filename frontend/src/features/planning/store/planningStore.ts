@@ -133,6 +133,18 @@ interface CompletedDimensions {
   layer3: string[];
 }
 
+export interface HumanInterruptInfo {
+  event_id?: string;
+  channel?: 'step_mode' | 'post_l3_review' | string;
+  reason?: 'human_review_required' | string;
+  layer?: number;
+  phase?: string;
+  layer_name?: string;
+  paused_stage?: string;
+  items?: HumanReviewItem[];
+  error_feedback?: Record<string, string>;
+}
+
 interface ToolStatus {
   toolName: string;
   status: 'running' | 'success' | 'error';
@@ -189,12 +201,7 @@ export interface PlanningState {
   reports: Reports;
   previous_layer: number;
   step_mode: boolean;
-  interruptInfo?: {
-    layer?: number;
-    phase?: string;
-    layer_name?: string;
-    reason?: string;
-  };
+  interruptInfo?: HumanInterruptInfo;
 
   completedDimensions: CompletedDimensions;
   currentLayer: number | null;
@@ -662,7 +669,11 @@ export const usePlanningStore = create<PlanningState & PlanningActions>()(
             state.completedDimensions.layer3 = completedData.layer3;
         }
         if (backendData.interrupt_info !== undefined) {
-          state.interruptInfo = backendData.interrupt_info as PlanningState['interruptInfo'];
+          const interruptInfo = backendData.interrupt_info as PlanningState['interruptInfo'];
+          state.interruptInfo = interruptInfo;
+          state.humanReviewEventId = interruptInfo?.event_id || null;
+          state.pausedStage = interruptInfo?.paused_stage || null;
+          state.humanReviewItems = interruptInfo?.items || [];
         }
         if (backendData.previous_layer)
           state.previous_layer = backendData.previous_layer;
@@ -705,7 +716,11 @@ export const usePlanningStore = create<PlanningState & PlanningActions>()(
           if (reportsData.layer3) state.reports.layer3 = reportsData.layer3;
         }
         if (data.interrupt_info !== undefined) {
-          state.interruptInfo = data.interrupt_info as PlanningState['interruptInfo'];
+          const interruptInfo = data.interrupt_info as PlanningState['interruptInfo'];
+          state.interruptInfo = interruptInfo;
+          state.humanReviewEventId = interruptInfo?.event_id || null;
+          state.pausedStage = interruptInfo?.paused_stage || null;
+          state.humanReviewItems = interruptInfo?.items || [];
         }
         if (data.previous_layer !== undefined) {
           state.previous_layer = data.previous_layer as number;
@@ -844,9 +859,7 @@ export const usePlanningStore = create<PlanningState & PlanningActions>()(
           if (response.pending_items.length > 0 && response.post_l3_status === 'paused') {
             state.status = 'paused';
             state.pausedStage = response.pending_items[0]?.stage || null;
-            if (!state.humanReviewEventId) {
-              state.humanReviewEventId = 'recovered-' + response.session_id;
-            }
+            state.humanReviewEventId = response.event_id || state.humanReviewEventId;
             deriveUIStateInStore(state);
           }
         });

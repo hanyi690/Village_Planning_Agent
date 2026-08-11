@@ -317,10 +317,15 @@ export interface SessionStatusResponse {
   previous_layer: number;
   step_mode: boolean;
   interrupt_info?: {
+    event_id?: string;
+    channel?: 'step_mode' | 'post_l3_review' | string;
     layer?: number;
     phase?: string;
     layer_name?: string;
     reason?: string;
+    paused_stage?: string;
+    items?: HumanReviewItem[];
+    error_feedback?: Record<string, string>;
   };
 
   rag_enabled?: boolean;
@@ -728,12 +733,20 @@ export interface HumanReviewItem {
 export interface HumanReviewListResponse {
   session_id: string;
   post_l3_status: string;
+  event_id?: string;
+  interrupt_info?: {
+    event_id?: string;
+    channel?: string;
+    reason?: string;
+    paused_stage?: string;
+  } | null;
   pending_items: HumanReviewItem[];
   count: number;
 }
 
 export interface HumanReviewResolveRequest {
   decisions: Record<string, unknown>;
+  event_id?: string;
 }
 
 export interface HumanReviewResolveResponse {
