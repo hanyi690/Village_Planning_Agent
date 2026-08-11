@@ -296,6 +296,57 @@ def test_partial_ground_deferral_remains_blocking_with_remaining_target_ids(monk
     }) == "human_review"
 
 
+def test_full_ground_deferral_advances_to_select_with_audited_gate(monkeypatch):
+    from app.agent.bootstrap.graph import apply_human_review_decision, route_after_human_review
+    from app.modules.schema.contracts.contract_meta import StageIssue
+    from app.modules.schema.contracts.grounding_contracts import GroundingResult, SpatialQueryEvidence
+
+    grounding = GroundingResult(
+        unresolved=[
+            StageIssue(stage="ground", severity="warning", code="unresolved", message="one", related_artifact_id="target-1"),
+            StageIssue(stage="ground", severity="warning", code="unresolved", message="two", related_artifact_id="target-2"),
+        ],
+        spatial_query_evidence=[
+            SpatialQueryEvidence(target_id="target-1", spec_id="spec-1"),
+            SpatialQueryEvidence(target_id="target-2", spec_id="spec-2"),
+        ],
+    )
+    monkeypatch.setattr(
+        "app.agent.bootstrap.artifact_runtime.load_artifact",
+        lambda state, key, model: grounding,
+    )
+    monkeypatch.setattr(
+        "app.agent.bootstrap.artifact_runtime.store_artifact",
+        lambda *args: {"artifact_id": "ledger-1"},
+    )
+
+    patch = asyncio.run(
+        apply_human_review_decision({
+            "human_review_items": [{"request_id": "ground-1"}],
+            "paused_stage": "ground",
+            "ground_gate": {"stage": "ground", "passed": False, "feedback_route": "HUMAN"},
+            "artifact_refs": {"grounding_result": {"artifact_id": "ground-1"}},
+            "human_review_decisions": {
+                "action": "accept",
+                "defer_unresolved_spatial_references": True,
+                "deferred_target_ids": ["target-1", "target-2"],
+            },
+        })
+    )
+
+    assert patch["remaining_target_ids"] == []
+    assert patch["ground_gate"]["passed"] is True
+    assert patch["ground_gate"]["feedback_route"] == "PASS"
+    assert route_after_human_review({
+        "paused_stage": "ground",
+        "human_review_decisions": {
+            "action": "accept",
+            "defer_unresolved_spatial_references": True,
+        },
+        **patch,
+    }) == "select"
+
+
 def test_partial_select_deferral_stays_in_human_review(monkeypatch):
     from app.agent.bootstrap.graph import apply_human_review_decision, route_after_human_review
     from app.modules.schema.contracts.contract_meta import StageIssue
@@ -418,6 +469,211 @@ def test_duplicate_facilities_keep_distinct_target_ids_in_selection(monkeypatch)
 
     assert {item.project_ref for item in decision.full_ranking} == {"facility-1", "facility-2"}
     assert set(decision.decision_factors["facility_placements"]) == {"facility-1", "facility-2"}
+
+
+def test_select_uses_only_target_bound_project_candidates(monkeypatch):
+    from app.agent.select.aggregate import select_aggregate
+    from app.modules.schema.contracts.grounding_contracts import CandidateSite, GroundingResult
+    from app.modules.schema.contracts.parse_contracts import ProjectTarget, SpatialPlanningIntent
+    from app.modules.spatial_ops.selection import PlacementDecision
+
+    seen = {}
+    parcel_a = SimpleNamespace(
+        bsm="P-1",
+        dlbm="1201",
+        area_sqm=10000.0,
+        geometry={"type": "Polygon", "coordinates": [[[0, 0], [1, 0], [1, 1], [0, 1], [0, 0]]]},
+    )
+    parcel_b = SimpleNamespace(
+        bsm="P-2",
+        dlbm="1201",
+        area_sqm=10000.0,
+        geometry={"type": "Polygon", "coordinates": [[[2, 0], [3, 0], [3, 1], [2, 1], [2, 0]]]},
+    )
+    context = SimpleNamespace(
+        session_id="target-filter-test",
+        bundle=SimpleNamespace(polygons={"landuse_current": [parcel_a, parcel_b]}),
+        village_anchors=[],
+        constraint_index=None,
+    )
+    intent = SpatialPlanningIntent(
+        project_targets=[
+            ProjectTarget(target_id="project-1", project_id="project-1", name="服务中心"),
+        ]
+    )
+
+    def fake_select(target, candidates, **kwargs):
+        seen["bsms"] = [candidate.bsm for candidate in candidates]
+        return PlacementDecision(
+            target_id=target.target_id,
+            selected_bsm=candidates[0].bsm,
+            anchor_point=(0.0, 0.0),
+            status="placed",
+        )
+
+    monkeypatch.setattr("app.agent.select.aggregate.select_parcel", fake_select)
+
+    decision, briefs = select_aggregate(
+        GroundingResult(
+            candidates=[
+                CandidateSite(site_id="project", source_parcels=["P-1"], target_ref="project-1"),
+                CandidateSite(site_id="other", source_parcels=["P-2"], target_ref="project-2"),
+            ]
+        ),
+        intent,
+        context,
+    )
+
+    assert seen["bsms"] == ["P-1"]
+    assert decision.target_assignments[0].selected_bsm == "P-1"
+    assert [brief.project_ref for brief in briefs] == ["project-1"]
+
+
+def test_select_rejects_unbound_project_candidates_for_spatial_targets(monkeypatch):
+    from app.agent.select.aggregate import select_aggregate
+    from app.modules.schema.contracts.grounding_contracts import CandidateSite, GroundingResult
+    from app.modules.schema.contracts.parse_contracts import ProjectTarget, SpatialPlanningIntent
+
+    parcel = SimpleNamespace(
+        bsm="P-1",
+        dlbm="1201",
+        area_sqm=10000.0,
+        geometry={"type": "Polygon", "coordinates": [[[0, 0], [1, 0], [1, 1], [0, 1], [0, 0]]]},
+    )
+    context = SimpleNamespace(
+        session_id="unbound-project-test",
+        bundle=SimpleNamespace(polygons={"landuse_current": [parcel]}),
+        village_anchors=[],
+        constraint_index=None,
+    )
+    intent = SpatialPlanningIntent(
+        project_targets=[
+            ProjectTarget(target_id="project-1", project_id="project-1", name="服务中心"),
+        ]
+    )
+
+    def fail_if_called(*args, **kwargs):
+        raise AssertionError("select_parcel must not run without target-bound candidates")
+
+    monkeypatch.setattr("app.agent.select.aggregate.select_parcel", fail_if_called)
+
+    decision, briefs = select_aggregate(
+        GroundingResult(
+            candidates=[CandidateSite(site_id="unbound", source_parcels=["P-1"], target_ref="")]
+        ),
+        intent,
+        context,
+    )
+
+    assert briefs == []
+    assert decision.decision_factors["unplaced_count"] == 1
+    assert decision.target_assignments[0].target_id == "project-1"
+    assert decision.target_assignments[0].status == "unplaced"
+    assert decision.target_assignments[0].reason == "no_project_candidates"
+
+
+def test_facility_without_target_specific_candidates_becomes_unplaced(monkeypatch):
+    from app.agent.select.aggregate import select_aggregate
+    from app.modules.schema.contracts.grounding_contracts import CandidateSite, GroundingResult
+    from app.modules.schema.contracts.parse_contracts import FacilityTarget, SpatialPlanningIntent
+
+    parcel = SimpleNamespace(
+        bsm="P-1",
+        dlbm="1201",
+        area_sqm=10000.0,
+        geometry={"type": "Polygon", "coordinates": [[[0, 0], [1, 0], [1, 1], [0, 1], [0, 0]]]},
+    )
+    context = SimpleNamespace(
+        session_id="facility-unbound-test",
+        bundle=SimpleNamespace(polygons={"landuse_current": [parcel]}),
+        village_anchors=[],
+        constraint_index=None,
+    )
+    intent = SpatialPlanningIntent(
+        facilities=[FacilityTarget(target_id="facility-1", type="卫生室")]
+    )
+
+    def fail_if_called(*args, **kwargs):
+        raise AssertionError("facility fallback must not consume the global parcel pool")
+
+    monkeypatch.setattr("app.agent.select.aggregate.select_parcel", fail_if_called)
+
+    decision, _ = select_aggregate(
+        GroundingResult(
+            candidates=[CandidateSite(site_id="other", source_parcels=["P-1"], target_ref="project-1")]
+        ),
+        intent,
+        context,
+    )
+
+    facility_assignment = next(
+        assignment for assignment in decision.target_assignments
+        if assignment.target_id == "facility-1"
+    )
+    assert facility_assignment.status == "unplaced"
+    assert facility_assignment.reason == "no_target_specific_candidates"
+    assert decision.decision_factors["facility_placements"]["facility-1"]["status"] == "unplaced"
+    assert decision.decision_factors["facility_placements"]["facility-1"]["bsm"] == ""
+
+
+def test_non_spatial_projects_remain_ready_without_blocking_select(monkeypatch):
+    from app.agent.select.aggregate import select_aggregate
+    from app.modules.schema.contracts.grounding_contracts import CandidateSite, GroundingResult
+    from app.modules.schema.contracts.parse_contracts import ProjectTarget, SpatialPlanningIntent
+    from app.modules.spatial_ops.selection import PlacementDecision
+
+    calls = []
+    parcel = SimpleNamespace(
+        bsm="P-1",
+        dlbm="1201",
+        area_sqm=10000.0,
+        geometry={"type": "Polygon", "coordinates": [[[0, 0], [1, 0], [1, 1], [0, 1], [0, 0]]]},
+    )
+    context = SimpleNamespace(
+        session_id="non-spatial-select-test",
+        bundle=SimpleNamespace(polygons={"landuse_current": [parcel]}),
+        village_anchors=[],
+        constraint_index=None,
+    )
+    intent = SpatialPlanningIntent(
+        project_targets=[
+            ProjectTarget(
+                target_id="action-1",
+                project_id="action-1",
+                name="建立巡查制度",
+                execution_mode="non_spatial",
+                expected_output_kind="action",
+            ),
+            ProjectTarget(target_id="project-1", project_id="project-1", name="服务中心"),
+        ]
+    )
+
+    def fake_select(target, candidates, **kwargs):
+        calls.append(target.target_id)
+        return PlacementDecision(
+            target_id=target.target_id,
+            selected_bsm="P-1",
+            anchor_point=(0.0, 0.0),
+            status="placed",
+        )
+
+    monkeypatch.setattr("app.agent.select.aggregate.select_parcel", fake_select)
+
+    decision, briefs = select_aggregate(
+        GroundingResult(
+            candidates=[CandidateSite(site_id="project", source_parcels=["P-1"], target_ref="project-1")]
+        ),
+        intent,
+        context,
+    )
+
+    by_target = {assignment.target_id: assignment for assignment in decision.target_assignments}
+    assert calls == ["project-1"]
+    assert decision.decision_factors["unplaced_count"] == 0
+    assert by_target["project-1"].status == "placed"
+    assert by_target["action-1"].status == "ready"
+    assert by_target["action-1"].expected_output_kind == "action"
+    assert [brief.project_ref for brief in briefs] == ["project-1"]
 
 
 def test_mixed_action_and_spatial_projects_do_not_emit_action_parcel_changes(monkeypatch):

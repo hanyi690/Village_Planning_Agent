@@ -376,7 +376,7 @@ async def test_post_l3_chain_runs_end_to_end(monkeypatch, _post_l3_deps):
     )
     monkeypatch.setattr(
         "app.agent.select.gate.evaluate_select_gate",
-        lambda decision, target_count: _pass_gate("select"),
+        lambda decision, target_count, **kwargs: _pass_gate("select"),
     )
     monkeypatch.setattr(
         "app.agent.validate.aggregate.validate_aggregate",
@@ -446,7 +446,7 @@ async def test_hitl_interrupt_and_resume_same_graph(monkeypatch, _post_l3_deps):
     )
     monkeypatch.setattr(
         "app.agent.select.gate.evaluate_select_gate",
-        lambda decision, target_count: GateDecision(
+        lambda decision, target_count, **kwargs: GateDecision(
             stage="select",
             passed=False,
             feedback_route="HUMAN",
@@ -504,7 +504,7 @@ def _human_gate(stage: str) -> GateDecision:
 
 def _stub_full_chain(monkeypatch, human_stage=None):
     """Stub the full post-L3 chain; the named stage's gate routes HUMAN."""
-    def _select_gate(decision, target_count):
+    def _select_gate(decision, target_count, **kwargs):
         return _human_gate("select") if human_stage == "select" else _pass_gate("select")
 
     def _deliver_gate(manifest, **kwargs):

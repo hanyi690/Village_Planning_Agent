@@ -44,6 +44,20 @@ def _post_l3_poll_terminal(state: dict) -> bool:
     return bool(state.get("paused_stage") or state.get("human_review_items"))
 
 
+def _delivery_poll_terminal(state: dict) -> bool:
+    """Return true only when the post-L3 delivery path is actually terminal."""
+    delivery_status = str(state.get("delivery_status") or "")
+    if delivery_status in {"complete", "partial", "diagnostic_only"}:
+        return True
+    deliver_gate = state.get("deliver_gate") or {}
+    route = (
+        deliver_gate.get("feedback_route")
+        if isinstance(deliver_gate, dict)
+        else getattr(deliver_gate, "feedback_route", None)
+    )
+    return route in {"PASS", "END_DIAGNOSTIC"} or bool(state.get("fatal_error"))
+
+
 pytestmark = [
     pytest.mark.e2e,
     pytest.mark.slow,
@@ -146,6 +160,16 @@ def test_real_llm_session_full_fixture(sqlite_db, pipeline_reset, monkeypatch):
             ))
         report = (fixture / "current_report.md").read_text(encoding="utf-8")
         with TestClient(main.app) as client:
+            # TestClient runs the ASGI app and its async SQLite checkpointer in
+            # a dedicated portal loop.  State reads must use that same loop;
+            # repeatedly creating asyncio.run() loops leaves the checkpointer
+            # lock bound to a different loop and masks the real session result.
+            def get_state_values(session: str) -> dict:
+                return client.portal.call(
+                    PlanningRuntimeService.aget_state_values,
+                    session,
+                ) or {}
+
             response = client.post(
                 "/api/sessions",
                 data={
@@ -167,8 +191,11 @@ def test_real_llm_session_full_fixture(sqlite_db, pipeline_reset, monkeypatch):
             # references, not a synthetic geometry mapping or candidate
             # fallback.  Each resume is bounded and auditable.
             human_resolutions = []
-            for _ in range(6):
-                current = asyncio.run(PlanningRuntimeService.aget_state_values(session_id)) or {}
+            # L3 summary enrichment is supervised but may finish after the
+            # worker checkpoint. Keep polling long enough for the official
+            # interrupt payload to become visible before declaring a deadlock.
+            for _ in range(20):
+                current = get_state_values(session_id)
                 if current.get("human_review_resume_consumed"):
                     # The previous resume is still being replayed.  Do not
                     # submit the same decision twice; wait for a fresh HUMAN
@@ -176,7 +203,7 @@ def test_real_llm_session_full_fixture(sqlite_db, pipeline_reset, monkeypatch):
                     resume_wait_deadline = time.monotonic() + 45.0
                     while time.monotonic() < resume_wait_deadline:
                         time.sleep(0.5)
-                        current = asyncio.run(PlanningRuntimeService.aget_state_values(session_id)) or {}
+                        current = get_state_values(session_id)
                         if (
                             not current.get("human_review_resume_consumed")
                             or _post_l3_poll_terminal(current)
@@ -185,6 +212,15 @@ def test_real_llm_session_full_fixture(sqlite_db, pipeline_reset, monkeypatch):
                     if current.get("human_review_resume_consumed"):
                         break
                 paused_stage = current.get("paused_stage") or ""
+                # The interrupt payload is the authoritative HITL signal.
+                # State snapshots can briefly lag the checkpoint transaction,
+                # so query the public review endpoint before deciding that
+                # the graph is still running.
+                review = client.get(f"/api/human-review/{session_id}")
+                assert review.status_code == 200, review.text
+                review_payload = review.json()
+                if review_payload.get("pending_items"):
+                    paused_stage = review_payload.get("paused_stage") or paused_stage
                 if not paused_stage:
                     # HUMAN preparation/checkpointing can lag the worker's
                     # layer aggregate by a few seconds. Do not mistake that
@@ -195,29 +231,57 @@ def test_real_llm_session_full_fixture(sqlite_db, pipeline_reset, monkeypatch):
                         if _post_l3_poll_terminal(current):
                             break
                         time.sleep(0.5)
-                        current = asyncio.run(PlanningRuntimeService.aget_state_values(session_id)) or {}
+                        current = get_state_values(session_id)
                         paused_stage = current.get("paused_stage") or ""
                         if paused_stage:
                             break
                     if not paused_stage:
                         continue
-                review = client.get(f"/api/human-review/{session_id}")
-                assert review.status_code == 200, review.text
-                review_payload = review.json()
+                    # The first review GET may have raced the checkpoint
+                    # write. Refresh it after the state snapshot exposes the
+                    # paused stage; never treat the stale empty response as
+                    # proof that no HUMAN items exist.
+                    review = client.get(f"/api/human-review/{session_id}")
+                    assert review.status_code == 200, review.text
+                    review_payload = review.json()
                 if not (review_payload.get("pending_items") or []):
                     break
-                decision = {
-                    "action": "accept",
-                    "feedback": (
-                        "测试操作员确认继续；未解析村名保留为人工确认项，"
-                        "不得视为已有坐标或 BSM 绑定。"
-                    ),
-                    "acknowledge_unresolved_spatial_references": True,
-                    "defer_unresolved_spatial_references": True,
-                }
+                provider_failure = any(
+                    (item.get("context") or {}).get("code") in {
+                        "llm_provider_error",
+                        "llm_stream_timeout",
+                        "llm_timeout",
+                        "llm_provider_circuit_open",
+                    }
+                    for item in review_payload.get("pending_items") or []
+                    if isinstance(item, dict)
+                )
+                if provider_failure:
+                    decision = {
+                        "action": "retry",
+                        "feedback": "仅重试失败维度；未完成层不得被人工放行。",
+                    }
+                    action = "retry"
+                else:
+                    decision = {
+                        "action": "accept",
+                        "feedback": (
+                            "测试操作员确认继续；未解析村名保留为人工确认项，"
+                            "不得视为已有坐标或 BSM 绑定。"
+                        ),
+                        "acknowledge_unresolved_spatial_references": True,
+                        "defer_unresolved_spatial_references": True,
+                        "deferred_target_ids": list(dict.fromkeys(
+                            str(target_id)
+                            for item in review_payload.get("pending_items") or []
+                            for target_id in ((item.get("context") or {}).get("target_ids") or [])
+                            if str(target_id).strip()
+                        )),
+                    }
+                    action = "accept"
                 resolved = client.post(
                     f"/api/human-review/{session_id}/resolve",
-                    json={"action": "accept", "decisions": decision},
+                    json={"action": action, "decisions": decision},
                 )
                 assert resolved.status_code == 200, resolved.text
                 human_resolutions.append({
@@ -228,12 +292,12 @@ def test_real_llm_session_full_fixture(sqlite_db, pipeline_reset, monkeypatch):
             # The runtime may hand work to TaskSupervisor after the FastAPI
             # background callback returns, so poll the checkpoint explicitly
             # instead of assuming TestClient waited for the graph.
-            deadline = time.monotonic() + 45.0
+            deadline = time.monotonic() + 600.0
             state = {}
             while time.monotonic() < deadline:
-                state = asyncio.run(PlanningRuntimeService.aget_state_values(session_id)) or {}
+                state = get_state_values(session_id)
                 if state and (
-                    _post_l3_poll_terminal(state)
+                    _delivery_poll_terminal(state)
                 ):
                     break
                 time.sleep(0.5)

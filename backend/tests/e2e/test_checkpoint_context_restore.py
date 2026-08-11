@@ -25,3 +25,36 @@ def test_latest_session_semantic_memory_is_restored(monkeypatch, tmp_path: Path)
     assert "urn:latest" in restored.entity_annotations
     assert "urn:old" not in restored.entity_annotations
 
+
+def test_persisted_gis_village_binding_restores_bsms():
+    from app.modules.kg.gazetteer.gazetteer import _annotation_entries_from_memory
+
+    memory = SemanticMemoryStore()
+    memory.add_entity_annotation(EntityAnnotation(
+        "pln:gis_village_binding:营仔",
+        "GISVillageBinding",
+        "营仔村（GIS 属性名绑定）",
+        intent_refs=["441426211000049192"],
+    ))
+
+    entries = _annotation_entries_from_memory(memory, bundle=None)
+
+    assert entries[0].name == "营仔村"
+    assert entries[0].bsms == ["441426211000049192"]
+
+
+def test_persisted_facility_anchor_restores_exact_target_binding():
+    from app.modules.kg.gazetteer.gazetteer import _annotation_entries_from_memory
+
+    memory = SemanticMemoryStore()
+    memory.add_entity_annotation(EntityAnnotation(
+        "pln:anchor_facility:活动场地:营仔",
+        "LocationAnchor",
+        "活动场地@营仔（L1 instruction；位于营仔）",
+        intent_refs=["441426211000049192"],
+    ))
+
+    entries = _annotation_entries_from_memory(memory, bundle=None)
+
+    assert entries[0].name == "活动场地@营仔"
+    assert entries[0].bsms == ["441426211000049192"]
