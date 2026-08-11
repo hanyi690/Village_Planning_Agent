@@ -13,6 +13,10 @@
 | 总重试 | 一个异常可能触发空意图或另一个算法 | Validation Router 定向反馈 |
 | L1 命名冲突 | 规划 L1/L2/L3 与 KG L1/L2/L3/L4 混用 | KG 改名 BaseFacts/DerivedRelations/IntentGraph/PlannedState |
 | 状态复制 | AgentState、PostL3ChainState、ExecuteAgentState 和兼容 GIS 字段并存 | Artifact 引用 + 单一 Context + 唯一 PlannedState |
+| checkpoint 恢复计划缺失 | LangGraph `next`、HUMAN API、层完成 checkpoint 和 post-L3 resume 分别解释恢复 | `ResumePlan` 统一输出 `resume_from/reuse/rerun/reason/checksums`，再由同一 runtime 执行 |
+| 稳定 checkpoint 判定 | 旧逻辑依赖未统一写入的 `is_interrupted`，且无法识别 pending interrupt | 以 `PregelTask.interrupts`、`layer_just_completed`、revision 和终态组合判定，不再把 `next` 当 HUMAN 标记 |
+| GROUND geometry 缺失 | `source_parcels` 存在但 `available_geometry_wkt` 为空，SELECT 无法生成可执行 anchor | BSM/source parcel → geometry 回查必须是 GROUND 的硬契约；失败显式 `GEOMETRY_UNAVAILABLE`，禁止静默空 geometry |
+| post-L3 状态回写 | post-L3 resolve 结果可能成功但主会话仍显示旧 layer pause | 只允许主图 checkpoint 成为 SSOT；resolve 后重新读取同一 thread 的 canonical interrupt/state，禁止旁路结果覆盖状态 |
 | EXECUTE 输入 | 当前同时接收 intent、bundle、selection 和 legacy layout 数据 | 只接收 `SiteSelectionDecision + ExecutionPlan` |
 | 分区求解缺失 | Wave I 删除 MIP allocator，当前 layout 使用确定性 reclassify | ZoneAllocatorPort + MIPZoneAllocator，失败显式 degraded/unresolved |
 | 道路实现重复 | 已解决：staged road planner 迁至 `app/modules/spatial_ops/road/`，`spatial_ops.road_planner` fallback 已删除 | staged planner 为 canonical Road Worker，失败显式 unresolved |
@@ -60,6 +64,14 @@
 - 增加 Intent ↔ PlannedState Reconcile。
 - Delivery Gate 只交付通过的成果包。
 
+### M6：checkpoint resume planner（新增，目标优先）
+
+- 用 `ResumePlan` 将 LangGraph cursor、pending interrupt、artifact refs、context fingerprint 和 Gate checksum 组合为一个可审计决策。
+- checkpoint API 只能恢复 `ResumePlan.mode` 为 `resume_checkpoint` 或 `rerun_from_stage` 的 checkpoint；HUMAN 必须走对应的 canonical interrupt resolve。
+- 通过 `artifact_refs` 的父版本与 checksum 计算最早失效阶段；仅重跑该阶段及其下游。
+- 为每个阶段补充 replay contract test：输入 context/artifact 不变时必须复用；输入或父 artifact revision 变化时必须生成新的 plan。
+- 在 SELECT→EXECUTE→RenderLayers→VALIDATE→RECONCILE→DELIVER 完成一次无外部 provider 的闭环验收后，才能宣称 checkpoint resume planner 可用。
+
 ## 3. 迁移验收
 
 - 静态 import 检查不允许 `modules → agent/services/api`。
@@ -67,3 +79,4 @@
 - 同一输入和 context version 可重放出相同 GroundingResult。
 - 任何最终选址都有 `SiteSelectionDecision` 和证据。
 - 任意失败都能定位到 L1/L2/L3/GROUND/SELECT/EXECUTE/DELIVERY 之一。
+- 任意稳定 checkpoint 都能导出与实际执行一致的 `ResumePlan`；HUMAN checkpoint 不被普通 `/resume/{checkpoint_id}` 误恢复。

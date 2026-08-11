@@ -4,7 +4,7 @@
 
 ## 核心特性
 
-- **19 个显式主图节点**：对话/工具、L1–L3 worker、层级编排、PARSE→DELIVER 与四节点 HITL 流程
+- **20 个显式主图业务节点**：对话/工具、L1–L3 worker、层级编排、PARSE→DELIVER 与四节点 HITL 流程
 - **三层递进规划**：现状分析(L1, 12 维) → 规划思路(L2, 4 维) → 详细规划(L3, 12 维)
 - **五层模块架构**：`Schema ← Data ← SpatialOps ← KG ← Agent`（单向依赖）
 - **RAG 知识检索**：Small-to-Big + 层级感知，法规条文与技术指标智能注入
@@ -20,7 +20,7 @@
 ├─────────────────────────────────────────────────────────────────────┤
 │                                                                     │
 │  ┌────────────┐    ┌───────────────┐    ┌────────────────────────┐  │
-│  │ Frontend   │───▶│  FastAPI API  │───▶│ LangGraph 主图（19节点）│  │
+│  │ Frontend   │───▶│  FastAPI API  │───▶│ LangGraph 主图（20业务节点）│  │
 │  │ Next.js 14 │SSE │  /api/*       │    │  agent/bootstrap/      │  │
 │  │ + MapLibre │    │  session/HITL │    │  graph.py              │  │
 │  └────────────┘    └───────────────┘    └───────────┬────────────┘  │
@@ -166,7 +166,7 @@ Village_Planning_Agent/
 │       │   ├── gis_test_routes.py      # GIS 测试（开发）
 │       │   └── schemas.py              # 请求/响应模型
 │       ├── agent/                      # LangGraph Agent 核心
-│       │   ├── bootstrap/graph.py      # create_unified_planning_graph（19 个显式节点）
+│       │   ├── bootstrap/graph.py      # create_unified_planning_graph（20 个显式业务节点）
 │       │   ├── bootstrap/post_l3_main_nodes.py # PARSE 至 DELIVER 主图节点
 │       │   ├── plan_state/state.py     # AgentState, PlanningPhase
 │       │   ├── conversation_router/    # 中央路由节点与边

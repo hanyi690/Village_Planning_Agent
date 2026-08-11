@@ -31,23 +31,24 @@ FastAPI app (main.py)
 | 2 | GET  | `/api/sessions/{id}/stream`                 | SSE 事件流（单通道，所有数据由此推送）                   |
 | 3 | GET  | `/api/sessions/{id}/sync`                   | 断线重连（`?from_seq=N` 增量同步）                     |
 | 4 | POST | `/api/sessions/{id}/feedback`               | 反馈接口（approve / reject 触发级联修订 / message 注入） |
-| 5 | GET  | `/api/sessions/{id}/checkpoints`            | 检查点列表（标记 stable / intermediate）                 |
-| 6 | POST | `/api/sessions/{id}/resume/{checkpoint_id}` | 从检查点恢复（仅允许 stable 检查点）                     |
+| 5 | GET  | `/api/sessions/{id}/checkpoints`            | 检查点列表（标记 stable / intermediate，并返回 `resume_plan`） |
+| 6 | POST | `/api/sessions/{id}/resume/{checkpoint_id}` | 按 `resume_plan` 从稳定 checkpoint 恢复；HUMAN checkpoint 必须走对应审核接口 |
 | 7 | GET  | `/api/sessions/{id}/reports/{dim_key}`      | 维度报告全文（`?version=N` 查历史版本）                |
 
 ### 人工审核端点（post-L3 HITL，`human_review_routes.py`）
 
 | 方法 | 路径 | 说明 |
 | ---- | ---- | ---- |
-| GET  | `/api/human-review/{session_id}` | 返回 `human_review_items` + `paused_stage`（首次 interrupt 时从 `snapshot.tasks` 兜底） |
+| GET  | `/api/human-review/{session_id}` | 返回 canonical `interrupt_info`（含 `event_id/channel/reason/items/paused_stage`）及兼容的 `pending_items`（首次 interrupt 时从 `snapshot.tasks` 兜底） |
 | POST | `/api/human-review/{session_id}/resolve` | 提交 `ResolveRequest`，调用 `resume_post_l3_chain` 恢复链 |
 
 `ResolveRequest` 字段：
 
 | 字段 | 类型 | 说明 |
 | ---- | ---- | ---- |
-| `decisions` | `Dict[str, Any]` | resume payload（非空），直接传给 `interrupt()` 调用点 |
-| `action`    | `str`            | `retry` / `accept` / `reject`（可省略，从 `decisions["action"]` 兜底） |
+| `decisions` | `Dict[str, Any]` | resume payload（非空），进入图前统一为 canonical decision |
+| `action`    | `str`            | `retry` / `approve` / `reject`；`accept` 仅作为旧客户端别名（可省略，从 `decisions["action"]` 兜底） |
+| `event_id`  | `str`            | 可选的 HUMAN checkpoint 幂等键；不匹配当前暂停点时返回 409 |
 
 `action` 路由语义（见 `route_after_human_review`）：
 - `accept`：按 `_STAGE_FORWARD_TARGET[paused_stage]` 前进，`__end__` 则 `END`
@@ -116,6 +117,29 @@ Frontend (EventSource)
 | 配置 / HITL | `rag_config_updated`、`step_mode_updated`、`human_review_paused` |
 
 `human_review_paused` 由 `human_review_publish` 节点幂等发布，携带 `event_id`、`paused_stage`、`reason`、`item_count`。
+
+### Checkpoint 与恢复计划
+
+`GET /api/sessions/{id}/checkpoints` 的每项都包含：
+
+```json
+{
+  "checkpoint_id": "...",
+  "stable": true,
+  "kind": "layer | revision | human | completed | intermediate",
+  "resume_plan": {
+    "mode": "resume_checkpoint | resume_interrupt | rerun_from_stage | completed | blocked",
+    "resume_from": "SELECT",
+    "reuse": ["grounding_result"],
+    "rerun": ["SELECT", "EXECUTE", "VALIDATE", "RECONCILE", "DELIVER"],
+    "reason": "...",
+    "input_checksums": {},
+    "output_checksums": {}
+  }
+}
+```
+
+`stable=true` 不代表可以无条件恢复：真实 pending `PregelTask.interrupts` 会被分类为 `kind=human`，普通 checkpoint resume 对此返回 `409`，必须提交同一个 `event_id` 对应的 canonical HUMAN decision。`next` 只描述 LangGraph cursor，`resume_plan` 才描述业务 artifact 的复用与重跑边界。
 
 ## 4. 应用生命周期（`main.py` lifespan）
 

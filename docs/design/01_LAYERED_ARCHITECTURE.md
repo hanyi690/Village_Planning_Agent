@@ -139,3 +139,14 @@ PlanningContext
 6. `modules/spatial_ops/road_planner.py` 与 `services/modules/gis/road/` 不得长期作为两个正式道路入口；
    在收敛完成前必须明确 staged planner 是 canonical，local planner 只能显式标记为 degraded。
 7. `schema/contracts/__init__.py` 不再使用 wildcard 作为业务代码的主要导入入口；业务代码应从具体契约文件导入。
+
+## 6. 理想实现的运行时不变量
+
+分层边界还必须覆盖运行时行为：
+
+1. `schema/contracts` 定义跨 API、Agent、SSE 和前端的唯一数据形状。HUMAN interrupt 的两个业务频道只能通过 `channel` 区分，不得分别维护 `step_mode` 和 `post_l3` 的 payload 字段。
+2. Workflow 层只负责 `interrupt`、恢复路由和幂等事件；人工决策的业务解释留在 domain/service 层，不能让前端猜测 `reason` 字符串。
+3. LangGraph 的 checkpoint、`thread_id` 和恢复入口必须保持一致。EXECUTE 的独立编译调用是当前迁移缺口，不是目标架构。
+4. 资源生命周期由应用层统一管理；数据库 session 不跨并发 worker 共享，流式响应的取消和清理必须可观测。
+
+上述不变量以官方语义为验收依据：[LangGraph interrupts](https://docs.langchain.com/oss/python/langgraph/interrupts)、[LangGraph persistence](https://docs.langchain.com/oss/python/langgraph/persistence)、[FastAPI lifespan](https://fastapi.tiangolo.com/advanced/events/) 和 [SQLAlchemy asyncio](https://docs.sqlalchemy.org/en/20/orm/extensions/asyncio.html)。

@@ -55,6 +55,7 @@ README.md（根）                             ← 对外门面（只链接不�
 | 看 EXPLORE 桥接 | [design/05_EXPLORE_BRIDGE.md](./design/05_EXPLORE_BRIDGE.md) |
 | 看实现状态 | [design/10_IMPLEMENTATION_STATUS.md](./design/10_IMPLEMENTATION_STATUS.md) |
 | 看集成断点 | [design/09_INTEGRATION_BREAKPOINTS.md](./design/09_INTEGRATION_BREAKPOINTS.md) |
+| 看官方实践审计 | [audits/backend-official-practice-2026-08-10.md](./audits/backend-official-practice-2026-08-10.md) |
 
 ## design/ 文档索引
 

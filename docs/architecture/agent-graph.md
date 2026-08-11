@@ -1,8 +1,8 @@
 # 工作流图：当前实现与目标子图
 
-## 1. 当前主图（代码事实，2026-08-07）
+## 1. 当前主图（代码事实，2026-08-10）
 
-当前入口为 `backend/app/agent/bootstrap/graph.py:create_unified_planning_graph`。根图有 **20 个显式执行节点**；LangGraph 可视图中的第 21 个节点是隐式 `START`，不是额外业务阶段。
+当前入口为 `backend/app/agent/bootstrap/graph.py:create_unified_planning_graph`。根图有 **20 个显式业务节点**，另有 `END_DIAGNOSTIC` 终止诊断节点；LangGraph 可视图中的隐式 `START` 不计入业务阶段。
 
 ```text
 START -> conversation ─┬-> execute_tools -> conversation
@@ -14,10 +14,10 @@ START -> conversation ─┬-> execute_tools -> conversation
 human_review_prepare -> human_review_publish -> human_review_wait -> human_review_apply
 ```
 
-20 个显式节点（按加入顺序）：
+20 个显式业务节点（按加入顺序）：
 `conversation`、`execute_tools`、`l1_worker`、`l2_worker`、`l3_worker`、`advance_phase`、`layer_completion_check`、`layer_aggregate`、`bootstrap_context`、`parse`、`ground`、`select`、`execute`、`validate`、`reconcile`、`deliver`、`human_review_prepare`、`human_review_publish`、`human_review_wait`、`human_review_apply`。
 
-其中 post-L3 的七个阶段已经是根图节点，不再由 `gis_agent` wrapper 聚合。`human_review_wait` 是唯一 `interrupt()` 点；`prepare`/`publish`/`apply` 三个节点必须可重放。
+其中 post-L3 的七个阶段已经是根图节点，不再由 `gis_agent` wrapper 聚合。`human_review_wait` 是 post-L3 的唯一 `interrupt()` 点；step-mode 的 `layer_completion_check` 是另一条业务频道，但两者共享 `HumanInterrupt` canonical payload。`prepare`/`publish`/`apply` 三个节点必须可重放。
 
 ### 1.1 bootstrap_context 节点（Wave M3）
 
@@ -34,12 +34,35 @@ post-L3 的所有节点（parse/ground/select/execute/validate/reconcile/deliver
 ### 1.3 EXECUTE 子图与 HITL
 
 - EXECUTE 子图（`build_execute_agent_graph`）在 `PlanningRuntimeService.initialize()` 中**编译一次**，与主图共享同一个 `checkpointer`，避免每次调用重建。
-- HITL 由 4 个节点构成：`prepare`（收集 items + 生成 event_id，纯函数）→ `publish`（幂等发布 `HUMAN_REVIEW_PAUSED` SSE）→ `wait`（唯一 `interrupt()` 点）→ `apply`（写回 gate 决策）。`_retry_or_human` 在 retry 用尽时将 `paused_stage` 写入状态后转入 `human_review_prepare`。
+- HITL 由 4 个节点构成：`prepare`（收集 items + 生成稳定 `event_id`，纯函数）→ `publish`（幂等发布 `HUMAN_REVIEW_PAUSED` SSE）→ `wait`（post-L3 的 `interrupt()` 点）→ `apply`（写回 gate 决策）。step-mode 的 `layer_completion_check` 使用同一 `HumanInterrupt` contract；`_retry_or_human` 在 retry 用尽时将 `paused_stage` 写入状态后转入 `human_review_prepare`。
+- canonical payload 字段是 `event_id/channel/reason/layer/phase/layer_name/paused_stage/items/error_feedback`；旧的 `human_review_items`、`human_review_event_id` 和历史 reason 只允许在 API、interrupt transport、checkpoint 兼容边界出现，不能进入新的业务逻辑。
+
+### 1.4 Checkpoint 与 ResumePlan
+
+LangGraph 的 `thread_id` 是恢复同一图线程的持久化游标，`checkpoint_id` 可以定位历史状态；它们不等价于业务恢复计划。每次 checkpoint 恢复前，应用层必须生成 `ResumePlan`：
+
+```text
+PregelTask.interrupts / graph.next
+        + context_version / context_fingerprint
+        + artifact_refs / parent checksums
+        + gate / deferral revision
+        ↓
+ResumePlan
+  ├── mode: resume_interrupt | resume_checkpoint | rerun_from_stage | completed | blocked
+  ├── resume_from
+  ├── reuse: 可证明身份一致的 artifact
+  ├── rerun: 最早失效阶段及全部下游
+  └── reason + input/output checksums
+```
+
+判定规则：pending `PregelTask.interrupts` 优先于 `next`；HUMAN 只能通过对应 `Command(resume=...)` 恢复；context 或父 artifact checksum 变化时从最早受影响阶段生成新 revision；终态和诊断终止不允许伪恢复。默认父图挂载的无独立 checkpoint 子图只能在父图粒度 time travel；若要在 EXECUTE 内部节点之间恢复，必须显式配置并审计子图 checkpoint namespace。
+
+这部分采用 Context7 与 Exa 对官方 LangGraph 文档的交叉结果：[persistence](https://docs.langchain.com/oss/python/langgraph/persistence)、[interrupts](https://docs.langchain.com/oss/python/langgraph/interrupts)、[subgraphs](https://docs.langchain.com/oss/python/langgraph/use-subgraphs)、[time travel](https://docs.langchain.com/oss/python/langgraph/use-time-travel)。
 - resolve API 的 `action` 取 `retry`/`accept`/`reject`：`accept` 按 `_STAGE_FORWARD_TARGET` 前进，`retry` 回到 `paused_stage`，`reject` 回到 `conversation`。
 
 ### 1.4 迁移期残留
 
-`AgentState` 仍处于 ref-only 收敛期：已移除 13 个 typed 业务对象字段（如完整 `PlanningProgram`、`GroundingResult`、`SiteSelectionDecision`、`PlannedState`、`ValidationReport` 等的内联存储），改为通过 `artifact_refs` 引用；当前约 69 个字段（含中间态/重试/HITL 字段）。`layout_configs` 等少量字段仍是迁移兼容字段。
+`AgentState` 仍处于 ref-only 收敛期：已移除 13 个 typed 业务对象字段（如完整 `PlanningProgram`、`GroundingResult`、`SiteSelectionDecision`、`PlannedState`、`ValidationReport` 等的内联存储），改为通过 `artifact_refs` 引用；当前约 70 个字段（含 canonical `human_interrupt`、中间态/重试/HITL 兼容字段）。`layout_configs` 等少量字段仍是迁移兼容字段。
 
 ## 2. 目标主图
 
@@ -174,7 +197,7 @@ EXPLORE。L1 并行 worker 不能假设同层其他报告已经可检索。
 
 ## 5. 状态规则
 
-LangGraph State 只保存：`context_ref`、`context_version`、`context_fingerprint`、`bootstrap_context_done`、`active_stage`、`active_gate`（`parse_gate`/`ground_gate`/`select_gate`/`validate_gate`/`reconcile_gate`/`deliver_gate`）、`artifact_refs`、`pending_requests`、`validation_issues`、`retry_counts`、`paused_stage` 和 `human_review_*`。完整业务对象（`PlanningProgram`、`GroundingResult`、`SiteSelectionDecision`、`PlannedState`、`ValidationReport` 等）通过 artifact store 读取，不内联进 State。
+LangGraph State 只保存：`context_ref`、`context_version`、`context_fingerprint`、`bootstrap_context_done`、`active_stage`、`active_gate`（`parse_gate`/`ground_gate`/`select_gate`/`validate_gate`/`reconcile_gate`/`deliver_gate`）、`artifact_refs`、`pending_requests`、`validation_issues`、`retry_counts`、`paused_stage`、canonical `human_interrupt` 和必要的 `human_review_*` 兼容字段。完整业务对象（`PlanningProgram`、`GroundingResult`、`SiteSelectionDecision`、`PlannedState`、`ValidationReport` 等）通过 artifact store 读取，不内联进 State。
 
 ## 6. 相关文件
 
@@ -188,7 +211,7 @@ backend/app/agent/
 │   ├── post_l3_main_nodes.py # parse/ground/select/execute/validate/reconcile/deliver + _load_ref_artifact
 │   ├── layer_aggregate_node.py
 │   └── layer_router.py     # l1/l2/l3 worker + advance_phase
-├── execute/            # EXECUTE compiled subgraph（build_execute_agent_graph，共享 checkpointer）
+├── execute/            # EXECUTE compiled subgraph（当前独立编译；目标是父图持久化挂载）
 ├── conversation_router/ # 中央路由 (node.py + edges.py)
 ├── l1_observe/         # L1 现状分析 (analysis_node.py + pipeline.py + formatters.py)
 ├── l2_strategize/      # L2 策略推导 (占位, 暂借 l1_observe)

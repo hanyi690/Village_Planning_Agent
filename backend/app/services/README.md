@@ -24,6 +24,7 @@ HTTP (api/) ──> services/ ──> agent/ (LangGraph)
 |------|------|----------|
 | `sse.py` | SSE 连接订阅、事件发布、会话内存态（SSOT） | `SSEManager.publish` / `subscribe` |
 | `runtime.py` | 统一规划运行时（LangGraph 图执行 + 会话管理） | `PlanningRuntimeService.start_session` / `resume_from_interrupt` |
+| `checkpoint_policy.py` | 纯 checkpoint 稳定性分类与 pending interrupt 提取 | `classify_checkpoint` / `first_pending_interrupt_payload` |
 | `checkpoint.py` | Checkpoint 业务逻辑 + 持久化同步 | `CheckpointService.rebuild_events` / `get_layer_reports` |
 | `session.py` | 会话生命周期（创建/删除/层级报告） | `SessionService.create_session` / `delete_session` |
 | `report_store.py` | 维度报告存储（版本化，SQLModel） | `ReportStore.save` / `bulk_save` / `get_layer_reports_with_sources` |
@@ -68,6 +69,7 @@ HTTP (api/) ──> services/ ──> agent/ (LangGraph)
 - **合成意图消息**：无既有 intent 时注入带 `advance_planning_intent` tool_call 的合成 `AIMessage`（`_KNOWN_INTENT_NAMES` 去重）
 - **流式执行**：`_execute_planning` 以 `stream_mode=['values','checkpoints']` 消费图输出，`values` 检测层级/修订完成，`checkpoints` 发 `checkpoint_saved` 事件（修订后清空 `last_revised_dimensions` 防误判）
 - **中断恢复**：`resume_from_interrupt()` 走官方 `Command(resume=...)` 模式；`resume_execution()` 从 checkpoint 恢复
+- **恢复计划**：checkpoint API 先生成 schema contract `ResumePlan`，区分普通继续、HUMAN 恢复、下游重跑、终态和阻断；不把 LangGraph `next` 直接当作业务恢复结论
 - **状态工具**：`aget_state` / `aupdate_state`（`as_node="__start__"` 写新鲜线程初始态）/ `aget_state_history`
 
 ### 3.3 CheckpointService（`checkpoint.py`）

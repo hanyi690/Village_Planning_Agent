@@ -31,6 +31,40 @@ context version、类型和 checksum 校验。但 `AgentState` 仍保留 legacy 
 此外，默认 ArtifactStore 仍依赖相对 `.run-tmp` 路径；测试和运行器必须显式隔离 store、session 与 run。
 PARSE 必须在产物写入前获得稳定 context version，否则后续阶段的严格引用校验会拒绝该产物。
 
+## 1.2 Checkpoint resume planner（目标契约）
+
+LangGraph checkpoint 只回答“图从哪里继续”，不回答“哪些业务产物仍可复用”。因此系统必须在 checkpoint API 和恢复执行之间增加一个纯函数 `ResumePlan`：
+
+```json
+{
+  "session_id": "session-1",
+  "checkpoint_id": "checkpoint-1",
+  "mode": "resume_checkpoint | resume_interrupt | rerun_from_stage | completed | blocked",
+  "resume_from": "SELECT",
+  "checkpoint_kind": "layer | revision | human | completed | intermediate",
+  "reuse": ["l1_snapshot", "l2_strategy", "planning_program", "grounding_result"],
+  "rerun": ["SELECT", "EXECUTE", "VALIDATE", "RECONCILE", "DELIVER"],
+  "reason": "new SELECT-level deferral revision",
+  "context_version": "...",
+  "context_fingerprint": "...",
+  "input_checksums": {},
+  "output_checksums": {},
+  "graph_next": ["select"]
+}
+```
+
+恢复判定必须遵循以下优先级：
+
+1. **pending interrupt 优先**：有真实 `PregelTask.interrupts` 时，只能使用对应 channel 的 `Command(resume=...)`；不能把 `snapshot.next` 当成普通继续执行。
+2. **context 身份优先**：`context_version`、`context_fingerprint` 或 artifact ref 不一致时，禁止混用旧产物，生成新的 revision 或从最早受影响阶段重跑。
+3. **artifact 依赖优先**：`completed_dimensions` 只证明报告维度完成，不能证明 L1Snapshot、PlanningProgram、GroundingResult、SiteSelectionDecision、ExecutionPlan、PlannedState 和校验报告仍然有效。
+4. **最小下游重跑**：保持上游不可变 artifact，按依赖边界从最早失效阶段生成新 artifact revision；不得从 `START` 重新调用所有 LLM。
+5. **终态不可恢复**：`delivery_status` 已终态或 `diagnostic_terminal` 已写入时，必须明确新输入/新 revision，不能返回一个看似成功的空 resume。
+
+当前实现新增 `backend/app/modules/schema/contracts/resume_contracts.py`，并由 checkpoint 列表/恢复 API 输出 `resume_plan`。这是恢复决策的统一入口；它还没有替代 LangGraph 的执行 cursor，也不会伪装成完整端到端保证。
+
+这套设计直接采用官方对照结果：LangGraph 将 `thread_id` 定义为线程级持久化游标，`checkpoint_id` 可定位历史 checkpoint；`interrupt()` 恢复时节点从头重放，前置副作用必须幂等；默认子图只能在父图粒度进行 time travel，想在子图内部恢复必须明确配置子图 checkpoint。参考 [LangGraph persistence](https://docs.langchain.com/oss/python/langgraph/persistence)、[LangGraph interrupts](https://docs.langchain.com/oss/python/langgraph/interrupts)、[LangGraph subgraphs](https://docs.langchain.com/oss/python/langgraph/use-subgraphs) 和 [LangGraph time travel](https://docs.langchain.com/oss/python/langgraph/use-time-travel)。这些结论同时由本次 Exa 检索的官方 LangChain 文档交叉验证。
+
 ## 2. 数据分类
 
 | 数据 | 权威存储 | 生命周期 | 版本要求 |
@@ -124,3 +158,6 @@ class PlanningContextProvider(Protocol):
 - 每个成果图层都能追溯到 `SiteSelectionDecision`、`IntentCompilationResult`、
   `PlanningProgram` 和原始证据。
 - 删除或刷新数据时不会产生无来源的孤立 KG 节点。
+- 每个可恢复 checkpoint 都能生成 `ResumePlan`，明确 `reuse/rerun/reason`，并能区分普通继续、HUMAN 恢复、下游重跑和阻断。
+- 从任意稳定阶段恢复时，验证不会重复执行已确认且 checksum 未变化的上游 LLM/artifact 节点。
+- SELECT 修订、EXECUTE、VALIDATE、RECONCILE、DELIVER 必须在同一主 session 状态和 artifact revision 上闭合。

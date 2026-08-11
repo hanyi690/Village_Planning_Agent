@@ -139,7 +139,41 @@ PARSE → GROUND → SELECT → EXECUTE → VALIDATE → RECONCILE → DELIVER
 实现状态以 [10_IMPLEMENTATION_STATUS.md](10_IMPLEMENTATION_STATUS.md) 为准；目录迁移和重复实现清理记录在
 [09_INTEGRATION_BREAKPOINTS.md](09_INTEGRATION_BREAKPOINTS.md)。
 
-## 7. 相关文档
+## 7. 理想运行时契约（优先于当前兼容实现）
+
+本节是目标设计，不因当前代码的分歧而降低目标。当前实现只能通过兼容层逐步靠拢，不能反向把兼容字段升级为正式设计。兼容别名可以在 API、interrupt transport 和 checkpoint 读取边界短期存在，但不得成为新的状态或业务分支依据。
+
+### 7.1 HUMAN interrupt 必须只有一个协议
+
+step-mode 层完成审核和 post-L3 Gate 审核是两个业务频道，但必须共享同一传输契约：
+
+```json
+{
+  "event_id": "stable-idempotency-key",
+  "channel": "step_mode | post_l3_review",
+  "reason": "human_review_required",
+  "layer": 1,
+  "phase": "layer1",
+  "layer_name": "现状分析",
+  "paused_stage": "validate",
+  "items": [],
+  "error_feedback": {}
+}
+```
+
+`event_id` 是一次 HUMAN checkpoint 的幂等键；`channel` 表示业务来源；`items`、`paused_stage` 和 `error_feedback` 不能因频道不同而改名。恢复值也只有一个入口，使用 `{action, feedback, dimensions, images, deferred_target_ids}`，API 边界可接受 `accept` 作为旧客户端别名，但进入图后必须规范化为 `approve`。
+
+中断前的节点只能计算并写入可重放的状态；发布 SSE 必须是幂等操作；真正的副作用放在恢复之后。这个约束来自 LangGraph 官方 interrupt 语义：恢复会从中断节点开始重放，且 checkpoint 必须与相同的 `thread_id` 一起使用。参考 [LangGraph interrupts](https://docs.langchain.com/oss/python/langgraph/interrupts) 和 [LangGraph persistence](https://docs.langchain.com/oss/python/langgraph/persistence)。
+
+### 7.2 持久化、生命周期和并发边界
+
+- 主图、EXECUTE 子图和恢复请求必须使用同一个持久化线程身份；目标态是父图直接挂载可持久化子图，不能以“另编译、另调用、另套状态”模拟嵌套。
+- FastAPI 资源初始化和释放归属 `lifespan`；SSE 流在客户端断开后必须取消生产任务，并在 `finally` 中释放订阅。参考 [FastAPI lifespan](https://fastapi.tiangolo.com/advanced/events/) 和 [StreamingResponse](https://fastapi.tiangolo.com/advanced/stream-data)。
+- SQLAlchemy `AsyncSession` 是单并发任务边界内的工作单元；禁止在并发 worker 之间共享 session，提交由业务事务显式控制，释放由依赖作用域负责。参考 [SQLAlchemy asyncio ORM](https://docs.sqlalchemy.org/en/20/orm/extensions/asyncio.html)。
+
+这些是“闭环可用”的基础约束，而不是初期可牺牲项。当前实现的偏差、兼容字段和迁移顺序见 [10_IMPLEMENTATION_STATUS.md](10_IMPLEMENTATION_STATUS.md) 与 [backend-official-practice-2026-08-10.md](../audits/backend-official-practice-2026-08-10.md)。
+
+## 8. 相关文档
 
 - [01_LAYERED_ARCHITECTURE.md](01_LAYERED_ARCHITECTURE.md)：模块层和依赖规则
 - [02_DATA_PERSISTENCE.md](02_DATA_PERSISTENCE.md)：上下文、产物和版本持久化
