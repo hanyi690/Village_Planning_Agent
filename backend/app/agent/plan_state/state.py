@@ -283,6 +283,7 @@ class AgentState(TypedDict, total=False):
     dimension_retry_limit: int
     max_retries: int
     error_feedback: Dict[str, str]
+    human_interrupt: Optional[Dict[str, Any]]
     human_review_items: List[Dict[str, Any]]
     human_review_decisions: Optional[Any]
     human_review_event_id: str
@@ -412,15 +413,37 @@ def state_to_ui_status(state: Dict[str, Any], db_session: Optional[Dict] = None,
     else:
         status = "running"
 
-    # Build interrupt_info from interrupt state
+    # Build one canonical interrupt projection from checkpoint state.  Older
+    # checkpoints only have the legacy HUMAN fields; normalize those at the
+    # boundary so the UI never needs to know which graph branch paused.
     interrupt_info = None
     if is_interrupted:
-        interrupt_info = {
-            "layer": current_layer or 0,
-            "phase": phase,
-            "layer_name": get_layer_name(current_layer or 0) if (current_layer or 0) > 0 else None,
-            "reason": "step_mode" if state.get("step_mode", False) else "pause",
-        }
+        from app.modules.schema.contracts.human_interrupt_contracts import (
+            build_human_interrupt,
+            HumanInterruptChannel,
+            normalize_human_interrupt,
+        )
+
+        raw_interrupt = state.get("human_interrupt")
+        if isinstance(raw_interrupt, dict):
+            interrupt_info = normalize_human_interrupt(raw_interrupt)
+        else:
+            legacy_items = list(state.get("human_review_items") or [])
+            channel = (
+                HumanInterruptChannel.POST_L3_REVIEW
+                if legacy_items or state.get("paused_stage")
+                else HumanInterruptChannel.STEP_MODE
+            )
+            interrupt_info = build_human_interrupt(
+                event_id=str(state.get("human_review_event_id") or "unknown-human-interrupt"),
+                channel=channel,
+                layer=current_layer or 0,
+                phase=phase,
+                layer_name=get_layer_name(current_layer or 0) if (current_layer or 0) > 0 else None,
+                paused_stage=state.get("paused_stage") or (phase if channel == HumanInterruptChannel.STEP_MODE else None),
+                items=legacy_items,
+                error_feedback=dict(state.get("error_feedback") or {}),
+            )
 
     # Convert messages to UI format
     messages_raw = state.get("messages", [])

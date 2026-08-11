@@ -88,7 +88,12 @@ def validate_aggregate(
     all_checks.extend(check_overlap(planned_state))
     all_checks.extend(check_continuity(planned_state))
     all_checks.extend(check_accessibility(planned_state, intent))
-    all_checks.extend(check_contract_completeness(planned_state, changeset, intent))
+    all_checks.extend(check_contract_completeness(
+        planned_state,
+        changeset,
+        intent,
+        execution_plan=execution_plan,
+    ))
     all_checks.extend(check_classification_missing(planned_state))
     all_checks.extend(check_traceability(
         changeset,

@@ -5,10 +5,10 @@ convention in app.agent.{l1_observe,l2_strategize,l3_plan,parse} with
 stage="ground".
 
 Routes (precedence high -> low):
-  EXPLORE -> unresolved specs remain, or no candidates were produced
-             (nothing resolved -> request exploration)
-  HUMAN   -> some candidate is ambiguous: multiple source parcels with
-             confidence below ``ambiguity_threshold`` (needs human review)
+  EXPLORE -> no candidates were produced and there is no target-specific
+             unresolved reference (request evidence exploration)
+  HUMAN   -> target-specific unresolved references or ambiguous candidates
+             require an explicit human decision
   PASS    -> all specs resolved, candidates non-empty, no ambiguity
 
 Determinism: routing is a pure function of the result fields, no RNG, no LLM.
@@ -37,7 +37,9 @@ def ground_gate_route(
     """Return the deterministic route for ``result``: "PASS"|"EXPLORE"|"HUMAN"."""
     if expected_spec_count == 0 and not result.unresolved:
         return "PASS"
-    if result.unresolved or not result.candidates:
+    if result.unresolved:
+        return "HUMAN"
+    if not result.candidates:
         return "EXPLORE"
     if any(_is_ambiguous(c, ambiguity_threshold) for c in result.candidates):
         return "HUMAN"
@@ -84,10 +86,26 @@ def evaluate_ground_gate(
         )
 
     if route == "HUMAN":
+        pending = [
+            PendingRequest(
+                request_id=f"pr-ground-unresolved-{index}",
+                stage="ground",
+                request_type="spatial_reference_unresolved",
+                context={
+                    "reason": "spatial_reference_unresolved",
+                    "message": issue.message,
+                    "detail": issue.detail or "",
+                    "target_ids": [issue.related_artifact_id]
+                    if issue.related_artifact_id else [],
+                },
+            )
+            for index, issue in enumerate(result.unresolved)
+        ]
         return GateDecision(
             stage=stage,
             passed=False,
             feedback_route="HUMAN",
+            pending_requests=pending,
             context_version=cv,
             artifact_id=gate_artifact_id,
         )

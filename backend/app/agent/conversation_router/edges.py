@@ -305,6 +305,13 @@ def after_analysis(
                 return "advance_phase"
             logger.info("[after_analysis] Gate %s routed %s", gate_key, route)
             if route == "EXPLORE":
+                # L3 evidence gaps are business review findings, not a
+                # license to replay all twelve expensive L3 workers.  The
+                # design contract requires an auditable HUMAN checkpoint so
+                # an operator can supply or defer the missing evidence.
+                if layer_num == 3:
+                    logger.warning("[after_analysis] L3 EXPLORE gap -> HUMAN without full-layer replay")
+                    return "human_review"
                 # 死循环防护：同一层 EXPLORE 重试超过 2 次 -> END（不再 re-dispatch）
                 counts = state.get("retry_counts") or {}
                 explore_count = counts.get(f"l{layer_num}_explore", 0)
@@ -409,6 +416,21 @@ def after_analysis(
         logger.info("[after_analysis] phase=%s layer=%s dispatching %d dim(s) is_revision=%s",
                     phase, layer, len(sends), is_revision)
         return sends
+
+    # A partially completed layer with no ready dimension is a dependency
+    # deadlock, not a successful end. Preserve it as an auditable HUMAN
+    # checkpoint so the operator can inspect the missing dimensions.
+    if phase in {"layer1", "layer2", "layer3"}:
+        from app.config.loader import list_dimensions
+
+        layer_dims = list_dimensions(_phase_to_layer(phase) or 0)
+        completed = set((state.get("completed_dimensions") or {}).get(phase, []))
+        if len(completed) < len(layer_dims):
+            logger.warning(
+                "[after_analysis] dependency deadlock in %s: completed=%s/%s -> HUMAN",
+                phase, len(completed), len(layer_dims),
+            )
+            return "human_review"
 
     logger.info("[after_analysis] No ready dims, returning END")
     return END

@@ -1,6 +1,6 @@
 # Agent 编排层
 
-`app.agent` 包含 LangGraph 主图和 EXECUTE 子图。当前根图有 **19 个显式执行节点**；LangGraph 图视图将隐式 `START` 一并计数时显示为 20 个。
+`app.agent` 包含 LangGraph 主图和 EXECUTE 子图。当前根图有 **20 个显式业务节点**，另有 `END_DIAGNOSTIC` 终止诊断节点；隐式 `START` 不计入业务阶段。
 
 ## 当前主路径
 
@@ -15,7 +15,7 @@ conversation → L1/L2/L3 worker → layer_completion_check → layer_aggregate
 prepare_human_review → publish_human_review_pause → await_human_review → apply_human_review_decision
 ```
 
-只有 `await_human_review` 调用 `interrupt()`；因此其前置节点必须保持幂等。
+`await_human_review` 和 step-mode 的 `layer_completion_check` 是两条业务频道，但都使用 `HumanInterrupt` canonical payload；各自中断点之前的节点必须保持幂等。
 
 ## 入口与边界
 
@@ -32,5 +32,6 @@ prepare_human_review → publish_human_review_pause → await_human_review → a
 - 当前 `execute_node` 在调用时构建并执行子图，尚非直接挂载到父图的持久化子图。
 - 后端发布 `human_review_paused`，前端已接入消费（`SSEEventType` / `planning-api.ts` 注册、`planningStore` 处理、`HumanReviewPanel` 渲染与 `resolveHumanReview` 提交），HITL 暂停已形成 UI 闭环。
 - `context_version` 在直接启动 post-L3 链时可能晚于 PARSE 产物写入；完整恢复链应以集成测试为准。
+- HUMAN payload 的 canonical 字段为 `event_id/channel/reason/items/paused_stage`；旧字段只在兼容边界保留，避免前端直接依赖 graph 分支名称。
 
 目标设计与迁移取舍见 [agent-graph.md](../../../docs/architecture/agent-graph.md)。

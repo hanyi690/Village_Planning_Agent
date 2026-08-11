@@ -4,8 +4,8 @@ Pure function: SiteSelectionDecision -> GateDecision. No I/O. Mirrors the gate
 convention in app.agent.ground.gate with stage="select".
 
 Routes (precedence high -> low):
-  RETRY_GROUND -> not all targets got a parcel (selected_combination shorter
-                  than target_count), so re-run ground for more candidates
+  HUMAN   -> one or more target assignments is unplaced; the target must be
+             explicitly deferred or reviewed rather than repeating GROUND
   HUMAN   -> all targets placed but top-ranked score below
              ``confidence_threshold`` (needs human review)
   PASS    -> all targets placed and confidence acceptable
@@ -16,6 +16,7 @@ from __future__ import annotations
 
 from app.modules.schema.contracts.selection_contracts import SiteSelectionDecision
 from app.modules.schema.contracts.workflow_contracts import GateDecision, PendingRequest
+from app.agent.common.gate_progress import gate_progress_metadata
 
 STAGE = "select"
 
@@ -35,12 +36,10 @@ def select_gate_route(
     target_count: int,
     confidence_threshold: float = 0.4,
 ) -> str:
-    """Return the deterministic route: "PASS"|"RETRY_GROUND"|"HUMAN"."""
-    if target_count > 0 and len(decision.selected_combination) < target_count:
-        return "RETRY_GROUND"
+    """Return the deterministic route: "PASS"|"HUMAN"."""
     unplaced = decision.decision_factors.get("unplaced_count", 0) or 0
     if unplaced > 0:
-        return "RETRY_GROUND"
+        return "HUMAN"
     top = _top_score(decision)
     if top is not None and top < confidence_threshold:
         return "HUMAN"
@@ -52,6 +51,8 @@ def evaluate_select_gate(
     *,
     target_count: int,
     confidence_threshold: float = 0.4,
+    input_artifact_refs: dict | None = None,
+    previous_gate: Any = None,
 ) -> GateDecision:
     stage = STAGE
     gate_artifact_id = "gate-select-" + (decision.artifact_id or "0")
@@ -60,26 +61,49 @@ def evaluate_select_gate(
         decision, target_count=target_count, confidence_threshold=confidence_threshold
     )
 
-    if route == "RETRY_GROUND":
+    unplaced_target_ids = [
+        assignment.target_id
+        for assignment in (decision.target_assignments or [])
+        if assignment.status == "unplaced" and assignment.target_id
+    ]
+    progress, identical = gate_progress_metadata(
+        input_artifact_refs=input_artifact_refs,
+        output={
+            "unplaced_count": decision.decision_factors.get("unplaced_count", 0) or 0,
+            "selected_combination": decision.selected_combination,
+            "best_score_by_target": decision.decision_factors.get("best_score_by_target", {}),
+        },
+        issues=sorted(unplaced_target_ids),
+        previous_gate=previous_gate,
+    )
+    route_reason = "all_placed" if route == "PASS" else "unplaced_or_low_confidence"
+    if route == "HUMAN" and progress["inputs_changed"] is False:
+        route_reason = "inputs_unchanged"
+
+    if route == "HUMAN" and unplaced_target_ids:
         pending = [
             PendingRequest(
-                request_id="pr-select-no-candidate-0",
+                request_id="pr-select-unplaced-targets",
                 stage=stage,
                 request_type="selection_no_candidate",
                 context={
                     "reason": "selection_no_candidate",
+                    "target_ids": unplaced_target_ids,
                     "target_count": target_count,
                     "placed_count": len(decision.selected_combination),
+                    "issue_fingerprint": progress["issue_fingerprint"],
                 },
             )
         ]
         return GateDecision(
             stage=stage,
             passed=False,
-            feedback_route="RETRY_GROUND",
+            feedback_route="HUMAN",
             pending_requests=pending,
             context_version=decision.context_version,
             artifact_id=gate_artifact_id,
+            route_reason=route_reason,
+            **progress,
         )
 
     if route == "HUMAN":
@@ -93,6 +117,7 @@ def evaluate_select_gate(
                     "target_count": target_count,
                     "placed_count": len(decision.selected_combination),
                     "confidence": _top_score(decision),
+                    "issue_fingerprint": progress["issue_fingerprint"],
                 },
             )
         ]
@@ -103,6 +128,8 @@ def evaluate_select_gate(
             pending_requests=pending,
             context_version=decision.context_version,
             artifact_id=gate_artifact_id,
+            route_reason=route_reason,
+            **progress,
         )
 
     return GateDecision(
@@ -111,6 +138,8 @@ def evaluate_select_gate(
         feedback_route=None,
         context_version=decision.context_version,
         artifact_id=gate_artifact_id,
+        route_reason="all_placed",
+        **progress,
     )
 
 

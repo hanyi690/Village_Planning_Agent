@@ -44,6 +44,23 @@ def payload_checksum(payload: Any) -> str:
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
 
+def _ref_value(ref: Any, field: str, default: str = "") -> str:
+    if isinstance(ref, dict):
+        return str(ref.get(field) or default)
+    return str(getattr(ref, field, default) or default)
+
+
+def _parent_checksums(refs: dict[str, Any], *, exclude_key: str) -> dict[str, str]:
+    parents: dict[str, str] = {}
+    for parent_key, parent_ref in refs.items():
+        if parent_key == exclude_key or not parent_ref:
+            continue
+        revision = _ref_value(parent_ref, "revision", "v1")
+        checksum = _ref_value(parent_ref, "checksum") or _ref_value(parent_ref, "semantic_checksum")
+        parents[str(parent_key)] = f"{revision}:{checksum}"
+    return parents
+
+
 def context_ref_for(state: dict[str, Any]) -> dict[str, Any]:
     """Return the stable context reference carried by a workflow state."""
     ref = state.get("context_ref")
@@ -64,9 +81,16 @@ def store_artifact(
         raise ValueError(f"unknown artifact key: {key}")
     run_id = state.get("run_id") or state.get("session_id", "")
     context = context_ref_for(state)
+    current_refs = dict(state.get("artifact_refs") or {})
+    parent_refs = {
+        parent_key: parent_ref
+        for parent_key, parent_ref in current_refs.items()
+        if parent_key != key
+    }
+    parent_checksums = _parent_checksums(current_refs, exclude_key=key)
     input_fingerprint = payload_checksum({
         "key": key, "context": context, "attempt": attempt,
-        "parents": state.get("artifact_refs") or {},
+        "parents": parent_refs,
     })
     artifact_id = f"{key}-{run_id}-{input_fingerprint[:16]}"
     fingerprint = str(state.get("context_fingerprint", ""))
@@ -75,6 +99,7 @@ def store_artifact(
         context_fingerprint=fingerprint,
         artifact_id=artifact_id,
         module=module, run_id=run_id, artifact_type=artifact_type, revision="v1",
+        parent_checksums=parent_checksums,
     )
     store = FilesystemArtifactStore()
     payload_json = _jsonable(payload)
@@ -95,6 +120,10 @@ def store_artifact(
         ref.semantic_checksum = str(
             existing.get("semantic_checksum") or semantic_checksum(existing_payload)
         )
+        ref.parent_checksums = {
+            str(parent_key): str(parent_value)
+            for parent_key, parent_value in (existing.get("parent_checksums") or parent_checksums).items()
+        }
         return ref.model_dump(mode="json")
     store.store(ref, payload_json)
     return ref.model_dump(mode="json")

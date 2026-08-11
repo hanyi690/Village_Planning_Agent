@@ -64,23 +64,42 @@ def _build_legacy_coverage_matrix(program, specs, grounding_result, decision, ch
         for value in ((getattr(decision, "decision_factors", None) or {}).get("deferred_targets") or [])
     }
     rows: list[CoverageMatrixRow] = []
-    for i, intervention in enumerate(interventions):
-        if str(getattr(intervention, "intervention_id", "")) in deferred:
+    for intervention in interventions:
+        int_id = str(getattr(intervention, "intervention_id", ""))
+        target_id = str(getattr(intervention, "target_id", "") or int_id)
+        # intervention -> spec: resolve ONLY via semantic keys (intervention_id
+        # then target_id).  Positional pairing is intentionally removed: it
+        # silently mis-associates when PARSE/GROUND ordering changes, which is
+        # exactly the breakpoint this module exists to detect.
+        spec_index = None
+        for idx, spec in enumerate(specs):
+            spec_int = str(getattr(spec, "intervention_id", "") or "")
+            spec_tgt = str(getattr(spec, "target_id", "") or "")
+            if spec_int and spec_int == int_id:
+                spec_index = idx
+                break
+            if spec_tgt and spec_tgt == target_id:
+                spec_index = idx
+                break
+        linked_spec = specs[spec_index] if spec_index is not None else None
+        if str(int_id) in deferred:
             rows.append(
                 CoverageMatrixRow(
                     intervention_id=intervention.intervention_id,
-                    spec_index=i if i < len(specs) else None,
+                    spec_index=spec_index,
                     status="deferred",
                 )
             )
             continue
-        # intervention -> spec: SpatialReferenceSpec carries no intervention_ref/
-        # intervention_id, so there is no semantic key to join on; fall back to
-        # positional pairing (PARSE emits specs in intervention order).
-        spec_index = i if i < len(specs) else None
-        # spec -> candidate: CandidateSite carries no spec_ref, so pairing is
-        # positional (GROUND emits candidates in resolved-spec order).
-        candidate = candidates[i] if i < len(candidates) else None
+        # spec -> candidate: resolve ONLY via candidate.target_ref == spec.target_id.
+        # Positional pairing is intentionally removed (see above).
+        candidate = None
+        if linked_spec is not None:
+            spec_tgt = str(getattr(linked_spec, "target_id", "") or "")
+            candidate = next(
+                (c for c in candidates if str(getattr(c, "target_ref", "") or "") == spec_tgt),
+                None,
+            )
         # candidate -> selection: selected_combination holds bare BSM strings
         # with no site ref; link semantically by BSM membership in the candidate's
         # source parcels so this link is order-independent.

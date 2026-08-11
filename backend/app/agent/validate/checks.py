@@ -610,7 +610,10 @@ def check_accessibility(planned_state: Any, intent: Any = None) -> List[Validati
 
 
 def check_contract_completeness(
-    planned_state: Any, changeset: Any, intent: Any = None
+    planned_state: Any,
+    changeset: Any,
+    intent: Any = None,
+    execution_plan: Any = None,
 ) -> List[ValidationCheck]:
     """Check parcels are produced when targets exist and fields are complete."""
     if intent is None:
@@ -621,6 +624,17 @@ def check_contract_completeness(
         p for p in project_targets if getattr(p, "requires_spatial", True)
     ]
     need_parcels = bool(spatial_projects or zone_targets)
+    if execution_plan is not None and need_parcels:
+        active_tasks = [
+            task
+            for task in (getattr(execution_plan, "worker_tasks", None) or [])
+            if str(getattr(task, "target_id", ""))
+        ]
+        # Explicit HUMAN deferrals remove those targets from the active
+        # execution contract. A run with no remaining spatial task is a
+        # valid no-change/partial result, not a fabricated parcel failure.
+        if not active_tasks:
+            need_parcels = False
     parcels_present = (not need_parcels) or bool(planned_state.parcels)
     missing_bsm = [p.bsm for p in planned_state.parcels if not (p.bsm or "").strip()]
     missing_geom = [p.bsm or "?" for p in planned_state.parcels if not (p.geometry or "").strip()]

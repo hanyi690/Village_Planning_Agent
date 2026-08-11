@@ -26,8 +26,6 @@ from app.modules.spatial_ops.parcel_ops import create_parcel, merge_parcels, rec
 from app.modules.spatial_ops.selection import parse_scale_ha
 from app.modules.spatial_ops.geometry.subdivision import apply_setback, split_for_footprint
 
-DEFAULT_CONSTRUCTION_CODE = "0701"
-
 FACILITY_BUFFER_RADIUS = 0.0002  # degrees, ~20 m at equator
 
 
@@ -74,19 +72,18 @@ def _parcel_area_ha(parcel: Any) -> float:
             (parcel.get("area_ha", 0) if isinstance(parcel, dict) else getattr(parcel, "area_ha", 0))
             or 0
         ) * 10000
-    return area_sqm / 10000 if area_sqm > 10000 else area_sqm
+    return area_sqm / 10000
 
 
 def _looks_like_code(value: str) -> bool:
     return bool(value) and any(ch.isdigit() for ch in value)
 
 
-def _resolve_project_code(brief: Optional[LandDesignBrief]) -> Tuple[str, str]:
+def _resolve_project_code(brief: Optional[LandDesignBrief]) -> Optional[Tuple[str, str]]:
     """Resolve (code, name) for a project parcel from its design brief.
 
-    Rule: use a "code:" footprint entry when present; otherwise fall back to
-    DEFAULT_CONSTRUCTION_CODE. Callers pass a None brief to signal "no design
-    intent" which triggers a preserve action instead.
+    A project code must be supplied explicitly by a frozen classification
+    decision. Free-text footprint conditions are not a classification source.
     """
     if brief is not None:
         for condition in brief.footprint_conditions or []:
@@ -94,7 +91,7 @@ def _resolve_project_code(brief: Optional[LandDesignBrief]) -> Tuple[str, str]:
                 code = condition[len("code:") :].strip()
                 if code:
                     return code, code
-    return DEFAULT_CONSTRUCTION_CODE, DEFAULT_CONSTRUCTION_CODE
+    return None
 
 
 def _resolve_zone_code(zone_target: ZoneTarget) -> Tuple[str, str]:
@@ -119,6 +116,7 @@ def _classification(code: str, name: str, source: str = "derived") -> Classifica
         code=code,
         canonical_name=name,
         source=source,
+        evidence_refs=[f"classification:{code}"],
     )
 
 
@@ -146,11 +144,15 @@ def design_project_parcel(
             (parcel.get("dlbm", "") if isinstance(parcel, dict) else getattr(parcel, "dlbm", ""))
             or ""
         )
+        dlmc = str(
+            (parcel.get("dlmc", "") if isinstance(parcel, dict) else getattr(parcel, "dlmc", ""))
+            or ""
+        )
         return ParcelChange(
             bsm=str(selected_bsm),
             action="preserve",
             derived_from_bsms=[str(selected_bsm)],
-            after_classification=_classification(dlbm, "", source="preserve"),
+            after_classification=_classification(dlbm, dlmc, source="preserve"),
             before_geometry_wkt=_geometry_to_wkt(_parcel_geometry(parcel)),
             after_geometry_wkt=_geometry_to_wkt(_parcel_geometry(parcel)),
             new_area_ha=_parcel_area_ha(parcel),
@@ -158,7 +160,10 @@ def design_project_parcel(
             intervention_id=project.project_id,
         )
 
-    new_code, new_name = _resolve_project_code(brief)
+    resolved_code = _resolve_project_code(brief)
+    if resolved_code is None:
+        return None
+    new_code, new_name = resolved_code
     candidate_bsms = list(project.candidate_bsms or [])
 
     if len(candidate_bsms) > 1:
@@ -231,7 +236,10 @@ def design_project_footprint(
         change = design_project_parcel(project, None, selected_bsm, parcel_by_bsm)
         return [change] if change is not None else []
 
-    new_code, new_name = _resolve_project_code(brief)
+    resolved_code = _resolve_project_code(brief)
+    if resolved_code is None:
+        return []
+    new_code, new_name = resolved_code
     candidate_bsms = list(project.candidate_bsms or [])
 
     source_geom = None

@@ -10,7 +10,9 @@ not reference the L1 analysis node implementation.
 from __future__ import annotations
 
 import asyncio
+import os
 import re
+import threading
 import time
 import uuid
 from dataclasses import asdict
@@ -42,12 +44,16 @@ from app.agent.common.dimension_runtime import (
 from app.agent.explore.service import retrieve_evidence, render_evidence_prompt_section
 from app.modules.prompts.detailed import get_dimension_prompt as get_layer3_prompt
 from app.modules.schema.contracts.evidence_contracts import ExplorationRequest
+from app.services.task_supervisor import build_summary_task_key
 
 logger = get_logger(__name__)
 
 
 # Cached LLM instance — reused across all L3 dimension analyses
 _llm_cache: Optional[Any] = None
+_L3_LLM_SLOTS = threading.BoundedSemaphore(
+    max(1, int(os.getenv("L3_LLM_MAX_CONCURRENT", "3")))
+)
 
 
 def _get_llm():
@@ -247,18 +253,22 @@ async def analyze_l3_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
     _last_publish_time = 0.0
     _PUBLISH_INTERVAL = 0.1  # 100ms throttle
 
+    await asyncio.to_thread(_L3_LLM_SLOTS.acquire)
     try:
-        async with asyncio.timeout(LLM_STREAM_TIMEOUT):
-            async for chunk in llm.astream(prompt):
-                if hasattr(chunk, 'content') and chunk.content:
-                    llm_response += chunk.content
-                    now = time.time()
-                    if now - _last_publish_time >= _PUBLISH_INTERVAL:
-                        await publish_dimension_delta(
-                            session_id, dim_key, dim_name, dim_layer, is_revision,
-                            chunk.content, llm_response,
-                        )
-                        _last_publish_time = now
+        try:
+            async with asyncio.timeout(LLM_STREAM_TIMEOUT):
+                async for chunk in llm.astream(prompt):
+                    if hasattr(chunk, 'content') and chunk.content:
+                        llm_response += chunk.content
+                        now = time.time()
+                        if now - _last_publish_time >= _PUBLISH_INTERVAL:
+                            await publish_dimension_delta(
+                                session_id, dim_key, dim_name, dim_layer, is_revision,
+                                chunk.content, llm_response,
+                            )
+                            _last_publish_time = now
+        finally:
+            _L3_LLM_SLOTS.release()
     except asyncio.TimeoutError:
         trip_provider_failure(session_id)
         logger.error(f"[analyze_l3_dimension] {dim_key}: LLM stream timeout after {LLM_STREAM_TIMEOUT}s")
@@ -322,7 +332,12 @@ async def analyze_l3_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
 
     # 7.5 生成结构化摘要
     structured_summary_str = generate_summary_regex(dim_key, dim_layer, llm_response)
-    asyncio.create_task(enrich_summary_background(dim_key, dim_layer, llm_response, session_id, next_version))
+    from app.services.composition import CompositionRoot
+
+    CompositionRoot.get_task_supervisor().create_task(
+        build_summary_task_key(session_id, dim_layer, dim_key, next_version),
+        enrich_summary_background(dim_key, dim_layer, llm_response, session_id, next_version),
+    )
 
     # 8. 准备 pending report 数据
     phase_key = f"layer{dim_layer}"

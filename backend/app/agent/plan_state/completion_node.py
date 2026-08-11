@@ -15,6 +15,12 @@ from typing import Any, Dict, Optional
 
 from langgraph.types import interrupt
 from app.utils.logger import get_logger
+from app.modules.schema.contracts.human_interrupt_contracts import (
+    HumanInterruptChannel,
+    build_human_interrupt,
+    normalize_human_decision,
+    stable_human_interrupt_id,
+)
 
 logger = get_logger(__name__)
 
@@ -245,12 +251,33 @@ async def layer_completion_check(
             "[layer_completion_check] INTERRUPT: layer=%d phase=%s step_mode=True, awaiting human review",
             layer, phase,
         )
-        resume_data = interrupt({
-            "layer": layer,
-            "phase": phase,
-            "layer_name": get_layer_name(layer),
-            "reason": "step_mode_awaiting_review",
-        })
+        review_items = [{
+            "request_id": f"layer-{layer}-completion-review",
+            "stage": phase,
+            "request_type": "layer_completion_review",
+            "context": {
+                "completed_dimensions": list(completed),
+                "dimension_count": len(completed),
+                "total_chars": total_chars,
+            },
+        }]
+        event_id = stable_human_interrupt_id(
+            str(session_id),
+            HumanInterruptChannel.STEP_MODE,
+            layer=layer,
+            phase=phase,
+            items=review_items,
+        )
+        resume_data = interrupt(build_human_interrupt(
+            event_id=event_id,
+            channel=HumanInterruptChannel.STEP_MODE,
+            layer=layer,
+            phase=phase,
+            layer_name=get_layer_name(layer),
+            paused_stage=phase,
+            items=review_items,
+        ))
+        resume_data = normalize_human_decision(resume_data)
         action = resume_data.get("action", "approve")
         logger.info(
             "[layer_completion_check] RESUME received: action=%s layer=%d feedback=%s dimensions=%s images_count=%d resume_data_keys=%s",

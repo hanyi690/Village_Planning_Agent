@@ -7,7 +7,7 @@
 
 ## 职责边界
 
-**做**：编排确定性选址（`select_aggregate`）：经 `adapter.grounding_to_candidate_parcels` 把 `GroundingResult.candidates` 桥接为 `CandidateParcel[]`；对每个 `ProjectTarget` 调 `spatial_ops/selection.select_parcel` 做**优先级顺序 + 冲突分配**（已占锚点累积，先占先得，后到者被拒）；设施用 `spatial_ops/selection/facility_location.solve_maximal_covering`（MCLP，已知服务半径时）；`build_site_selection_decision` 聚合成 `SiteSelectionDecision`（`selected_combination` / `full_ranking` / `eliminated` / `decision_factors`）；`build_land_design_brief` 产出 `LandDesignBrief`；`evaluate_select_gate` 出 Select gate。
+**做**：编排确定性选址（`select_aggregate`）：经 `adapter.grounding_to_candidate_parcels` 把 `GroundingResult.candidates` 桥接为 `CandidateParcel[]`；对每个 `ProjectTarget` 调 `spatial_ops/selection.select_parcel` 做**优先级顺序 + 冲突分配**（已占锚点累积，先占先得，后到者被拒）；空间项目只允许消费 `target_ref == target_id` 的候选，未绑定候选不会再回退给所有项目；设施用 `spatial_ops/selection/facility_location.solve_maximal_covering`（MCLP，已知服务半径时），但前提仍是已有目标专属 `candidate_bsms`；缺少目标专属候选时会直接以 `no_target_specific_candidates` 标记为 `unplaced`；`build_site_selection_decision` 聚合成 `SiteSelectionDecision`（`selected_combination` / `full_ranking` / `eliminated` / `decision_factors`）；`build_land_design_brief` 产出 `LandDesignBrief`；`evaluate_select_gate` 出 Select gate。
 
 **不做**：不重新解析空间引用（那是 PARSE/GROUND）；不做任何地块几何变更（那是 EXECUTE）；不直接改 `GroundingResult` 排序——SELECT 的排名只存在于 `SiteSelectionDecision.full_ranking`。同一输入重复运行完全确定（`occupied` 锚点按输入顺序累积、`placement` 按项目顺序处理）。
 
@@ -62,7 +62,7 @@
 
 ## 禁止行为
 
-- **不得**在无安全依据时回退到全候选池（`filter_parcels_for_target` 只允许"未打标地块对每个项目保持可配"，绝不绕过约束）。
+- **不得**在无安全依据时回退到全候选池；空间项目和设施都必须使用目标绑定候选，空 `target_ref` 不是有效的空间项目匹配。
 - 不得修改 `GroundingResult` / 重跑 GROUND 逻辑（候选不足应走 `RETRY_GROUND` 路由，由 post-L3 链回 `ground` 节点）。
 - 不得在 SELECT 内调用 LLM 或写 KG。
 - 门路由必须纯函数化（`select_gate_route`），禁止在 aggregate 内内联放行。

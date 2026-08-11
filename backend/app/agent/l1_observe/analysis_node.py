@@ -38,6 +38,7 @@ from app.agent.common.dimension_runtime import (
     save_report_immediate,
     save_step_report,
 )
+from app.services.task_supervisor import build_summary_task_key
 
 logger = get_logger(__name__)
 
@@ -391,7 +392,12 @@ async def analyze_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
 
     # 8. Generate structured summary (before SSE event so it can reference it)
     structured_summary_str = generate_summary_regex(dim_key, dim_layer, llm_response)
-    asyncio.create_task(enrich_summary_background(dim_key, dim_layer, llm_response, session_id, next_version))
+    from app.services.composition import CompositionRoot
+
+    CompositionRoot.get_task_supervisor().create_task(
+        build_summary_task_key(session_id, dim_layer, dim_key, next_version),
+        enrich_summary_background(dim_key, dim_layer, llm_response, session_id, next_version),
+    )
 
     # 9. Prepare pending report data for batch write
     phase_key = f"layer{dim_layer}"

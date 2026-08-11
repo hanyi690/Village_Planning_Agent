@@ -213,17 +213,19 @@ def audited_stage(stage: str) -> Callable[[Callable[..., Awaitable[Dict[str, Any
                 gate = next((result.get(k) for k in result if k.endswith("_gate")), None)
                 route = _stage_route(gate, result)
                 semantic_output = _semantic_stage_output(result, refs)
+                canonical_input = inputs["input_checksum"]
+                canonical_output = canonical_output_checksum(semantic_output)
                 if gate is not None:
                     audit_record = {
-                        "input_checksum": str(_gate_field(gate, "input_checksum", "") or ""),
-                        "output_checksum": str(_gate_field(gate, "output_checksum", "") or ""),
+                        "input_checksum": str(_gate_field(gate, "input_checksum", "") or "") or canonical_input,
+                        "output_checksum": str(_gate_field(gate, "output_checksum", "") or "") or canonical_output,
                         "issue_fingerprint": str(_gate_field(gate, "issue_fingerprint", "") or ""),
                         "route_reason": str(_gate_field(gate, "route_reason", "") or ""),
                         "progress_made": _gate_field(gate, "progress_made", None),
                     }
                 else:
-                    current_input = inputs["input_checksum"]
-                    output_checksum = canonical_output_checksum(semantic_output)
+                    current_input = canonical_input
+                    output_checksum = canonical_output
                     previous_audit = (state.get("stage_audit") or {}).get(stage, {})
                     previous_input = str(previous_audit.get("input_checksum") or "")
                     previous_output = str(previous_audit.get("output_checksum") or "")

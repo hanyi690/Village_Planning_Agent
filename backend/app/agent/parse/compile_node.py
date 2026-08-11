@@ -29,6 +29,11 @@ from app.modules.schema.contracts.parse_result_contracts import (
     ProjectRequirement,
 )
 from app.modules.schema.contracts.provenance import Provenance, SemanticMetadata
+from app.modules.schema.contracts.spatial_reference_contracts import SpatialReferenceSpec
+from app.modules.schema.contracts.target_binding_contracts import (
+    TargetBinding,
+    TargetBindingTable,
+)
 
 
 def _spatial_hint(intervention: PlanningIntervention) -> str:
@@ -160,6 +165,34 @@ def _build_diagnostics(
     return diagnostics
 
 
+def _build_target_binding_table(
+    program: PlanningProgram,
+    specs: list[SpatialReferenceSpec],
+) -> TargetBindingTable:
+    """Build the authoritative target_id <-> intervention_id <-> spec_id table.
+
+    Links each intervention to its spec by semantic key (spec.target_id ==
+    intervention.target_id), never by position. Interventions without a spatial
+    spec (non_spatial / skipped by the mapper) still yield a binding with an
+    empty spec_id so the target remains traceable end-to-end.
+    """
+    spec_by_target = {spec.target_id: spec for spec in specs if spec.target_id}
+    bindings: list[TargetBinding] = []
+    for intervention in program.interventions:
+        spec = spec_by_target.get(intervention.target_id)
+        bindings.append(
+            TargetBinding(
+                target_id=intervention.target_id,
+                intervention_id=intervention.intervention_id,
+                spec_id=spec.spec_id if spec else "",
+                project_ref=intervention.intervention_id,
+                target_type=intervention.category,
+                expected_output_kind=intervention.expected_output_kind,
+            )
+        )
+    return TargetBindingTable(bindings=tuple(bindings))
+
+
 def compile_program_deterministic(
     program: PlanningProgram,
     *,
@@ -174,6 +207,7 @@ def compile_program_deterministic(
     intent = _build_intent(program)
     project_requirements = _build_project_requirements(program)
     specs, spec_diags = map_interventions_to_specs(program.interventions)
+    target_binding_table = _build_target_binding_table(program, specs)
     diagnostics = _build_diagnostics(program, spec_diags)
 
     now = datetime.now(timezone.utc).isoformat()
@@ -221,6 +255,7 @@ def compile_program_deterministic(
         constraint_set=None,
         diagnostics=diagnostics,
         patches=[],
+        target_binding_table=target_binding_table,
         compilation_status=CompilationStatus.DRAFT,
         confidence=0.0,
         provenance=provenance,

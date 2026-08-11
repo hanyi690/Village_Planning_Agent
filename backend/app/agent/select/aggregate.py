@@ -94,15 +94,8 @@ def _grounding_to_candidate_parcels(
 def _filter_parcels_for_target(
     parcels: list[CandidateParcel], target_ref: str
 ) -> list[CandidateParcel]:
-    """Keep parcels tagged for ``target_ref`` plus any untargeted parcels.
-
-    Untargeted parcels (``target_ref == ""``) remain eligible for every project
-    so placement still works when grounding has not yet tagged a candidate.
-    """
-    return [
-        p for p in parcels
-        if p.target_ref == target_ref or p.target_ref == ""
-    ]
+    """Keep only parcels explicitly tagged for ``target_ref``."""
+    return [p for p in parcels if p.target_ref == target_ref]
 
 
 def _breakdown_from_scored(scored: ScoredCandidate) -> Dict[str, float]:
@@ -211,6 +204,7 @@ def build_site_selection_decision(
                     target_type="project",
                     status="unplaced",
                     expected_output_kind="parcel",
+                    reason=placement.reason,
                 )
             )
         for rejection in placement.rejected:
@@ -333,10 +327,17 @@ def _place_facility(
     Mutates ``facility.anchor_point`` in place so the returned intent carries the
     resolved location. Returns the placement decision and the chosen bsm.
     """
-    pool = list(parcels)
-    if facility.candidate_bsms:
-        wanted = set(facility.candidate_bsms)
-        pool = [p for p in parcels if p.bsm in wanted]
+    if not facility.candidate_bsms:
+        return (
+            PlacementDecision(
+                target_id=facility.target_id,
+                status="unplaced",
+                reason="no_target_specific_candidates",
+            ),
+            "",
+        )
+    wanted = set(facility.candidate_bsms)
+    pool = [p for p in parcels if p.bsm in wanted]
     facility_candidates: List[FacilityCandidate] = []
     by_bsm: Dict[str, CandidateParcel] = {}
     for p in pool:
@@ -426,7 +427,7 @@ def select_aggregate(
         project_pool = _filter_parcels_for_target(parcels, project.target_id)
         if not project_pool:
             logger.warning(
-                "select_aggregate: no candidates for project %s; routing to RETRY_GROUND",
+                "select_aggregate: no candidates for project %s; marking unplaced for human review",
                 project.target_id,
             )
             placements.append(
@@ -502,6 +503,7 @@ def select_aggregate(
                     anchor_point=facility.anchor_point,
                     expected_output_kind=facility.expected_output_kind,
                     target_binding=facility.model_dump(mode="json"),
+                    reason=decision_p.reason,
                 )
             )
             facility_placements[facility.target_id] = {

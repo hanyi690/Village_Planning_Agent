@@ -1,6 +1,5 @@
 """Main planning graph factory. Migrated from agent/graph.py per docs/architecture/agent-graph.md §5."""
 
-import hashlib
 from typing import Dict, Any, List, Literal, Optional
 from langgraph.graph import StateGraph, END, START
 from langchain_core.messages import HumanMessage
@@ -20,6 +19,12 @@ from app.agent.bootstrap import post_l3_main_nodes
 from app.agent.bootstrap.post_l3_main_nodes import _STAGE_FORWARD_TARGET, _pass_gate, _dump
 from app.agent.bootstrap.context_bootstrap import bootstrap_context_node
 from app.core.events import SSEEventType
+from app.modules.schema.contracts.human_interrupt_contracts import (
+    HumanInterruptChannel,
+    build_human_interrupt,
+    normalize_human_decision,
+    stable_human_interrupt_id,
+)
 
 from app.utils.logger import get_logger
 logger = get_logger(__name__)
@@ -132,6 +137,21 @@ def _retry_or_human(state: Dict[str, Any], stage: str, retry_target: str) -> str
     counts = dict(state.get("retry_counts") or {})
     current = counts.get(stage, 0)
     max_retries = _retry_limit(state)
+    if stage == "validate":
+        gate = state.get("validate_gate") or {}
+        current_fingerprint = (
+            gate.get("issue_fingerprint", "")
+            if isinstance(gate, dict)
+            else getattr(gate, "issue_fingerprint", "")
+        )
+        previous = (state.get("stage_audit") or {}).get("VALIDATE", {})
+        previous_fingerprint = str(previous.get("issue_fingerprint") or "")
+        if current_fingerprint and current_fingerprint == previous_fingerprint:
+            logger.warning(
+                "[main] VALIDATE repeated issue fingerprint %s -> HUMAN",
+                current_fingerprint,
+            )
+            return "human_review"
     if current >= max_retries:
         logger.warning("[main] %s retry exceeded %d rounds -> diagnostic", stage, max_retries)
         return END_DIAGNOSTIC
@@ -467,6 +487,7 @@ def create_unified_planning_graph(checkpointer=None) -> StateGraph:
          "parse": "parse", "ground": "ground", "select": "select",
          "execute": "execute", "validate": "validate", "reconcile": "reconcile",
          "deliver": "deliver", "conversation": "conversation",
+         "human_review": "human_review_prepare",
          END_DIAGNOSTIC: END_DIAGNOSTIC, END: END})
     builder.add_edge(END_DIAGNOSTIC, END)
 
@@ -505,6 +526,64 @@ async def prepare_human_review(state: Dict[str, Any]) -> Dict[str, Any]:
                 items = pending
                 break
     if not items:
+        # Layer gates can legitimately route HUMAN with only a structured
+        # decision (for example an empty L2 strategy) and no pending request.
+        # Do not let that branch fall through to await_human_review with an
+        # empty item list: the graph would terminate while the session still
+        # reports the previous layer.  Synthesize one actionable review item
+        # so the operator can explicitly approve or revise the gate.
+        for gate_attr in (
+            "l3_gate_decision", "l2_gate_decision", "l1_gate_decision",
+        ):
+            gate = state.get(gate_attr)
+            if not isinstance(gate, dict) or gate.get("feedback_route") != "HUMAN":
+                continue
+            paused_stage = gate_attr.removesuffix("_gate_decision")
+            items = [{
+                "request_id": f"{paused_stage}-gate-review",
+                "stage": paused_stage,
+                "request_type": "gate_review",
+                "context": {
+                    "message": gate.get("diagnostic_code") or "Gate requires explicit human review",
+                    "evidence_requests": list(gate.get("evidence_requests") or []),
+                },
+            }]
+            break
+    if not items:
+        # A layer can reach this branch when dependency scheduling has no
+        # ready node but the layer is still incomplete. Do not let that
+        # structural deadlock disappear as an unexplained END; expose the
+        # exact missing dimensions for human review.
+        phase = str(state.get("phase") or "")
+        if phase in {"layer1", "layer2", "layer3"}:
+            from app.config.loader import list_dimensions
+
+            expected = {d.key for d in list_dimensions(int(phase[-1]))}
+            completed = set(
+                (state.get("completed_dimensions") or {}).get(phase, [])
+            )
+            missing = sorted(expected - completed)
+            if missing:
+                paused_stage = phase
+                items = [{
+                    "request_id": f"{phase}-dependency-deadlock",
+                    "stage": phase,
+                    "request_type": "dependency_deadlock_review",
+                    "context": {
+                        "message": "当前层仍未完成且没有可派发的依赖就绪维度。",
+                        "completed_dimensions": sorted(completed),
+                        "missing_dimensions": missing,
+                    },
+                }]
+                gate_patch[f"l{phase[-1]}_gate_decision"] = {
+                    "stage": phase,
+                    "passed": False,
+                    "feedback_route": "HUMAN",
+                    "diagnostic_code": "LAYER_DEPENDENCY_DEADLOCK",
+                    "pending_requests": items,
+                }
+
+    if not items:
         failures = state.get("provider_failures") or []
         failure = failures[0] if failures and isinstance(failures[0], dict) else None
         if failure:
@@ -518,11 +597,23 @@ async def prepare_human_review(state: Dict[str, Any]) -> Dict[str, Any]:
                 "context": dict(failure),
             }]
             gate_patch["fatal_error"] = dict(failure)
-    event_id = hashlib.sha256(
-        repr((state.get("session_id"), paused_stage, items, state.get("retry_counts"))).encode()
-    ).hexdigest()[:24]
+    event_id = stable_human_interrupt_id(
+        str(state.get("session_id") or ""),
+        HumanInterruptChannel.POST_L3_REVIEW,
+        paused_stage=paused_stage,
+        items=items,
+        retry_counts=state.get("retry_counts"),
+    )
+    human_interrupt = build_human_interrupt(
+        event_id=event_id,
+        channel=HumanInterruptChannel.POST_L3_REVIEW,
+        items=items,
+        paused_stage=paused_stage,
+        error_feedback=dict(state.get("error_feedback") or {}),
+    )
     return {
         **gate_patch,
+        "human_interrupt": human_interrupt,
         "human_review_items": items,
         "paused_stage": paused_stage,
         "human_review_event_id": event_id,
@@ -533,7 +624,8 @@ async def prepare_human_review(state: Dict[str, Any]) -> Dict[str, Any]:
 
 async def publish_human_review_pause(state: Dict[str, Any]) -> Dict[str, Any]:
     """Idempotently publish the pause notification."""
-    items = state.get("human_review_items") or []
+    interrupt_payload = state.get("human_interrupt") or {}
+    items = interrupt_payload.get("items") or state.get("human_review_items") or []
     if not items or state.get("human_review_pause_published"):
         return {"human_review_pause_published": True}
     session_id = state.get("session_id")
@@ -542,9 +634,11 @@ async def publish_human_review_pause(state: Dict[str, Any]) -> Dict[str, Any]:
             from app.services.sse import sse_manager
             await sse_manager.publish(session_id, {
                 "type": SSEEventType.HUMAN_REVIEW_PAUSED,
-                "event_id": state.get("human_review_event_id"),
-                "paused_stage": state.get("paused_stage"),
-                "reason": "post_l3_human_review",
+                "event_id": interrupt_payload.get("event_id") or state.get("human_review_event_id"),
+                "channel": interrupt_payload.get("channel", HumanInterruptChannel.POST_L3_REVIEW.value),
+                "reason": interrupt_payload.get("reason", "human_review_required"),
+                "items": items,
+                "paused_stage": interrupt_payload.get("paused_stage") or state.get("paused_stage"),
                 "item_count": len(items),
             })
         except Exception as exc:
@@ -556,19 +650,21 @@ async def publish_human_review_pause(state: Dict[str, Any]) -> Dict[str, Any]:
 async def await_human_review(state: Dict[str, Any]) -> Dict[str, Any]:
     """The only node containing interrupt(); it has no pre-interrupt effects."""
     from langgraph.types import interrupt
-    items = state.get("human_review_items") or []
-    paused_stage = state.get("paused_stage")
+    interrupt_payload = state.get("human_interrupt") or {}
+    items = interrupt_payload.get("items") or state.get("human_review_items") or []
+    paused_stage = interrupt_payload.get("paused_stage") or state.get("paused_stage")
     if not items:
         return {"human_review_decisions": {}}
-    decisions = interrupt(
-        {
-            "human_review_items": items,
-            "paused_stage": paused_stage,
-            "error_feedback": dict(state.get("error_feedback") or {}),
-            "reason": "post_l3_human_review",
-        }
-    )
-    return {"human_review_decisions": decisions or {}}
+    if not interrupt_payload:
+        interrupt_payload = build_human_interrupt(
+            event_id=str(state.get("human_review_event_id") or "unknown-human-interrupt"),
+            channel=HumanInterruptChannel.POST_L3_REVIEW,
+            items=items,
+            paused_stage=paused_stage,
+            error_feedback=dict(state.get("error_feedback") or {}),
+        )
+    decisions = interrupt(interrupt_payload)
+    return {"human_review_decisions": normalize_human_decision(decisions)}
 
 
 async def apply_human_review_decision(state: Dict[str, Any]) -> Dict[str, Any]:
@@ -577,12 +673,13 @@ async def apply_human_review_decision(state: Dict[str, Any]) -> Dict[str, Any]:
     paused_stage = state.get("paused_stage")
     decisions = state.get("human_review_decisions") or {}
     if not items:
-        return {"human_review_items": [], "paused_stage": None}
+        return {"human_interrupt": None, "human_review_items": [], "paused_stage": None}
     result = {
         "human_review_items": items,
         "paused_stage": paused_stage,
         "human_review_decisions": decisions,
         "human_review_resume_consumed": True,
+        "human_interrupt": None,
     }
     action = decisions.get("action") if isinstance(decisions, dict) else None
     deferral_patch = {}
@@ -645,9 +742,21 @@ async def apply_human_review_decision(state: Dict[str, Any]) -> Dict[str, Any]:
                 "message": "Explicit deferred_target_ids are required for spatial deferral.",
             }
             return result
-        deferral_patch = await _record_target_deferrals(
-            state, decisions, deferred_target_ids
-        )
+        if paused_stage == "select":
+            # SELECT can be blocked even when GROUND produced a candidate:
+            # the candidate may lack usable geometry/anchor or fail the
+            # target-level assignment contract.  Such a target is a SELECT
+            # deferral, not a GROUND unresolved reference.  Requiring it to
+            # appear in GroundingResult.unresolved incorrectly rejects valid
+            # human decisions (and was the source of the 3-target mismatch
+            # in the real MiniMax run).
+            deferral_patch = await _record_select_target_deferrals(
+                state, decisions, deferred_target_ids
+            )
+        else:
+            deferral_patch = await _record_target_deferrals(
+                state, decisions, deferred_target_ids
+            )
         if deferral_patch.get("fatal_error"):
             return {**result, **deferral_patch}
         remaining_target_ids = deferral_patch.get("remaining_target_ids") or []
@@ -688,7 +797,28 @@ async def apply_human_review_decision(state: Dict[str, Any]) -> Dict[str, Any]:
         configured_limit = state.get("max_retries")
         max_retries = 3 if configured_limit is None else max(0, int(configured_limit))
         current = int((state.get("retry_counts") or {}).get(paused_stage, 0))
-        if current >= max_retries:
+        if paused_stage in {"ground", "select"} and _select_or_ground_inputs_unchanged(
+            state, paused_stage
+        ):
+            # Retrying a stage whose inputs are byte-identical to the previous
+            # attempt cannot make progress: GROUND would re-produce the same
+            # candidates and SELECT would re-mark the same targets unplaced.
+            # Escalate back to HUMAN and surface the deferral requirement
+            # instead of looping the operator back into the same dead end.
+            gate_key = f"{paused_stage}_gate"
+            gate = dict(state.get(gate_key) or {})
+            gate.update({
+                "stage": paused_stage,
+                "passed": False,
+                "feedback_route": "HUMAN",
+                "diagnostic_code": "HUMAN_RETRY_NO_PROGRESS",
+                "pending_requests": list(gate.get("pending_requests") or []),
+            })
+            result.update({
+                gate_key: gate,
+                "human_retry_no_progress": True,
+            })
+        elif current >= max_retries:
             gate_key = f"{paused_stage}_gate"
             gate = dict(state.get(gate_key) or {})
             gate.update({
@@ -801,6 +931,19 @@ async def apply_human_review_decision(state: Dict[str, Any]) -> Dict[str, Any]:
         feedback = decisions.get("feedback") if isinstance(decisions, dict) else None
         result["messages"] = [HumanMessage(content=feedback or "方案已拒绝，请调整后重新规划")]
     return result
+
+
+def _select_or_ground_inputs_unchanged(state: Dict[str, Any], stage: str) -> bool:
+    """Whether a retry of ``stage`` (ground/select) would reuse identical inputs.
+
+    Uses the gate's persisted ``inputs_changed`` fingerprint (set by
+    ``gate_progress_metadata``).  When the previous run already reported
+    unchanged inputs, re-running the stage cannot change its outcome.
+    """
+    gate = dict(state.get(f"{stage}_gate") or {})
+    if gate.get("inputs_changed") is False:
+        return True
+    return False
 
 
 async def _apply_structural_target_deferrals(
@@ -1056,15 +1199,107 @@ async def _record_target_deferrals(
     ref = store_artifact(
         state, "deferral_ledger", "human_review", "DeferralLedger", ledger
     )
+    remaining = sorted(unresolved_ids - set(target_ids))
+    ground_gate_patch = {
+        "stage": "ground",
+        "passed": False,
+        "feedback_route": "HUMAN",
+        "pending_requests": [{
+            "request_id": "pr-ground-deferred-remaining",
+            "stage": "ground",
+            "request_type": "spatial_reference_unresolved",
+            "context": {"remaining_target_ids": remaining},
+        }] if remaining else [],
+        "deferred_target_ids": sorted(set(target_ids)),
+        "route_reason": (
+            "human_deferred_remaining_unresolved"
+            if remaining else "human_deferred_all_unresolved"
+        ),
+    }
+    if not remaining:
+        ground_gate_patch.update({
+            "passed": True,
+            "feedback_route": "PASS",
+        })
     return {
         "artifact_refs": {"deferral_ledger": ref},
         "human_deferred_targets": target_ids,
+        "ground_gate": ground_gate_patch,
         "deferral_summary": {
             "count": len(ledger.entries),
             "target_ids": [entry.target_id for entry in ledger.entries],
             "actions": [entry.decision.action for entry in ledger.entries],
         },
-        "remaining_target_ids": sorted(unresolved_ids - set(target_ids)),
+        "remaining_target_ids": remaining,
+    }
+
+
+async def _record_select_target_deferrals(
+    state: Dict[str, Any],
+    decisions: Dict[str, Any],
+    target_ids: list[str],
+) -> Dict[str, Any]:
+    """Record explicit SELECT-level deferrals in the immutable ledger."""
+    from app.agent.bootstrap.artifact_runtime import store_artifact
+    from app.modules.schema.contracts.deferral_contracts import (
+        DeferralLedger,
+        HumanDeferralDecision,
+        TargetDeferral,
+    )
+
+    gate = state.get("select_gate") or {}
+    pending = gate.get("pending_requests", []) if isinstance(gate, dict) else []
+    allowed: set[str] = set()
+    for request in pending:
+        context = request.get("context", {}) if isinstance(request, dict) else {}
+        allowed.update(str(item) for item in (context.get("target_ids") or []) if str(item))
+    # When the select gate carries no pending requests (e.g. the pause was
+    # routed from a ground-level unresolved reference), fall back to the
+    # ground deferral path which validates against GroundingResult.unresolved.
+    if not allowed:
+        return await _record_target_deferrals(state, decisions, target_ids)
+    unknown = sorted(set(target_ids) - allowed)
+    if unknown:
+        return {
+            "fatal_error": {
+                "stage": "select",
+                "code": "HUMAN_DEFER_TARGET_NOT_SELECT_BLOCKING",
+                "message": "Only currently blocking SELECT target IDs may be deferred: " + ", ".join(unknown),
+            }
+        }
+
+    refs = state.get("artifact_refs") or {}
+    decision = HumanDeferralDecision(
+        decision_id=str(state.get("human_review_event_id") or "human-review"),
+        decided_by=str(decisions.get("decided_by") or ""),
+        rationale=str(decisions.get("feedback") or ""),
+    )
+    existing = state.get("deferral_ledger")
+    entries = list(getattr(existing, "entries", ()) or [])
+    entries.extend(
+        TargetDeferral(
+            target_id=target_id,
+            reason="selection_no_candidate",
+            source_refs=(
+                f"artifact:site_selection:{(refs.get('site_selection') or {}).get('artifact_id', 'site_selection')}",
+                f"artifact:grounding_result:{(refs.get('grounding_result') or {}).get('artifact_id', 'grounding_result')}",
+            ),
+            decision=decision,
+        )
+        for target_id in target_ids
+    )
+    ledger = DeferralLedger(entries=tuple(entries))
+    ref = store_artifact(state, "deferral_ledger", "human_review", "DeferralLedger", ledger)
+    remaining = sorted(allowed - set(target_ids))
+    return {
+        "artifact_refs": {"deferral_ledger": ref},
+        "human_deferred_targets": target_ids,
+        "remaining_target_ids": remaining,
+        "deferral_summary": {
+            "count": len(ledger.entries),
+            "target_ids": [entry.target_id for entry in ledger.entries],
+            "actions": [entry.decision.action for entry in ledger.entries],
+        },
     }
 
 

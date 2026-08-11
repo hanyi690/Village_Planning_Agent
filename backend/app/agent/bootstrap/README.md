@@ -1,6 +1,6 @@
 # bootstrap：图装配与阶段编排
 
-`graph.py` 装配唯一根图。它包含 19 个显式节点：对话/工具、L1–L3 worker、层级编排、七个 post-L3 阶段，以及四个 HITL 节点。
+`graph.py` 装配唯一根图。它包含 20 个显式业务节点：对话/工具、L1–L3 worker、层级编排、七个 post-L3 阶段，以及四个 HITL 节点；`END_DIAGNOSTIC` 是终止诊断节点。
 
 ## 关键文件
 
@@ -22,7 +22,7 @@ START → conversation → L1/L2/L3 → layer_completion_check → layer_aggrega
 human_review_prepare → human_review_publish → human_review_wait → human_review_apply
 ```
 
-`human_review_wait` 是唯一 interrupt 点；发布和准备节点不得写入不可重放的副作用。业务 Gate 重试使用 `retry_counts`，LangGraph `RetryPolicy` 只面向暂态基础设施异常。
+`human_review_wait` 是 post-L3 interrupt 点，step-mode 的 `layer_completion_check` 是另一条业务 interrupt 频道；两者必须使用同一 `HumanInterrupt` contract。发布和准备节点不得写入不可重放的副作用。业务 Gate 重试使用 `retry_counts`，LangGraph `RetryPolicy` 只面向暂态基础设施异常。
 
 ## 当前限制
 

@@ -305,6 +305,7 @@ def _persist_artifact(
             "ExecutionOutcome": "execution_outcome",
             "AllocatedGeoJSON": "allocated_geojson",
             "RenderLayers": "render_layers",
+            "DeferralLedger": "deferral_ledger",
         }
         key = key_by_type.get(artifact_type, artifact_type.lower())
         return store_artifact(state, key, module, artifact_type, payload)
@@ -506,7 +507,12 @@ async def select_node(state: Dict[str, Any]) -> Dict[str, Any]:
     spatial_projects = [
         project for project in projects if getattr(project, "requires_spatial", True)
     ]
-    gate = evaluate_select_gate(decision, target_count=len(spatial_projects))
+    gate = evaluate_select_gate(
+        decision,
+        target_count=len(spatial_projects),
+        input_artifact_refs=state.get("artifact_refs"),
+        previous_gate=state.get("select_gate"),
+    )
     execution_plan = build_execution_plan(
         intent,
         decision,
@@ -958,6 +964,50 @@ async def deliver_node(state: Dict[str, Any]) -> Dict[str, Any]:
     deferral_ledger = _load_ref_artifact(state, "deferral_ledger", DeferralLedger)
     allocated_geojson = _load_ref_artifact(state, "allocated_geojson", dict) or {}
 
+    # Keep the delivery invariant explicit: every deferred execution task
+    # must have a ledger entry.  Older checkpoints can contain a revised
+    # ExecutionPlan whose deferred tasks were created by a later HUMAN
+    # decision while the ledger reference still points at the prior revision.
+    # Reconcile that metadata at the delivery boundary with an auditable
+    # system decision; never silently treat the tasks as delivered.
+    if execution_plan is not None:
+        from app.modules.schema.contracts.deferral_contracts import (
+            HumanDeferralDecision,
+            TargetDeferral,
+        )
+
+        ledger_entries = list(getattr(deferral_ledger, "entries", None) or [])
+        ledger_ids = {str(entry.target_id) for entry in ledger_entries}
+        missing_deferred = [
+            task for task in (getattr(execution_plan, "deferred_tasks", None) or [])
+            if str(getattr(task, "target_id", ""))
+            and str(getattr(task, "target_id", "")) not in ledger_ids
+        ]
+        if missing_deferred:
+            decision = HumanDeferralDecision(
+                decision_id=str(state.get("human_review_event_id") or "delivery-ledger-reconciliation"),
+                decided_by="system:delivery-ledger-reconciliation",
+                rationale=(
+                    "ExecutionPlan already classified this target as deferred; "
+                    "delivery recorded the missing immutable ledger link before export."
+                ),
+            )
+            ledger_entries.extend(
+                TargetDeferral(
+                    target_id=str(task.target_id),
+                    reason="execution_plan_deferred_ledger_reconciliation",
+                    source_refs=(
+                        f"artifact:execution_plan:{(state.get('artifact_refs') or {}).get('execution_plan', {}).get('artifact_id', 'execution_plan')}",
+                    ),
+                    decision=decision,
+                )
+                for task in missing_deferred
+            )
+            deferral_ledger = DeferralLedger(entries=tuple(ledger_entries))
+            ledger_ref = _persist_artifact(state, "deliver", "DeferralLedger", deferral_ledger)
+        else:
+            ledger_ref = None
+
     validation_result = {}
     if validation_report is not None:
         validation_result = {"passed": validation_report.overall_passed}
@@ -969,23 +1019,44 @@ async def deliver_node(state: Dict[str, Any]) -> Dict[str, Any]:
     )
     render_result = []
     try:
-        from app.agent.deliver.render_layers import build_render_layers
+        from app.agent.deliver.render_layers import build_delivery_render_layers
 
-        render_result = build_render_layers(planned_state)
+        render_result = build_delivery_render_layers(planned_state, allocated_geojson, gis_data)
     except Exception as e:
         logger.warning("[post_l3:main:deliver] render_layers failed: %s", e)
 
     export_result = None
     if planned_state is not None and expected_spatial_output_count > 0:
         try:
+            allocated_for_export = allocated_geojson
+            allocated_features = (
+                allocated_geojson.get("features", [])
+                if isinstance(allocated_geojson, dict)
+                else []
+            )
+            current_landuse = gis_data.get("landuse_current_geojson") if isinstance(gis_data, dict) else None
+            # If every spatial change is deferred, preserve the authoritative
+            # current land-use layer as the planned layer. This is an explicit
+            # no-change result, not a synthetic planning allocation; all
+            # feature properties carry the provenance for downstream review.
+            if not allocated_features and isinstance(current_landuse, dict):
+                import copy
+
+                allocated_for_export = copy.deepcopy(current_landuse)
+                for feature in allocated_for_export.get("features", []) or []:
+                    properties = feature.setdefault("properties", {})
+                    properties["planning_status"] = "unchanged_preserved"
+                    properties["planning_provenance"] = "current_landuse_no_verified_change"
             export_result = export_gdb_package(
                 layout_configs=render_result,
-                allocated_geojson=allocated_geojson or None,
+                allocated_geojson=allocated_for_export or None,
                 gis_data=gis_data,
                 village_name=state.get("config", {}).get("village_name", ""),
                 session_id=state.get("session_id", ""),
                 validation_result=validation_result,
             )
+            if allocated_for_export is not allocated_geojson:
+                export_result["planned_landuse_source"] = "current_landuse_preserved"
         except Exception as e:
             logger.warning("[post_l3:main:deliver] export failed: %s", e)
             export_result = None
@@ -1069,6 +1140,7 @@ async def deliver_node(state: Dict[str, Any]) -> Dict[str, Any]:
             key: ref for key, ref in {
                 "delivery_manifest": manifest_ref,
                 "render_layers": render_ref,
+                "deferral_ledger": ledger_ref,
             }.items() if ref
         },
         "deliver_gate": _dump(gate),

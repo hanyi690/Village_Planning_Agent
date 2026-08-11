@@ -11,6 +11,29 @@ logger = get_logger(__name__)
 def _hydrate_l1_spatial_facts(state: Dict[str, Any], context: Any) -> None:
     """Attach L1 location facts and materialize their GIS↔KG bindings."""
     try:
+        # Context objects can survive in-process while the session KG memory
+        # is advanced by PARSE/L1 enrichment.  Rebuild the semantic lookup
+        # from the persisted session memory before hydrating facts; otherwise
+        # the next stage sees the old village-only gazetteer and loses the
+        # facility/place bindings created by L1.
+        from app.modules.kg.gazetteer import build_gazetteer
+        from app.services.context.planning_context import _load_session_semantic_memory
+
+        session_id = str(state.get("session_id", "") or "")
+        kg = getattr(context, "kg", None)
+        if session_id and kg is not None:
+            restored_gazetteer = build_gazetteer(
+                kg,
+                getattr(context, "bundle", None),
+                _load_session_semantic_memory(session_id),
+            )
+            if restored_gazetteer.entries:
+                context.gazetteer = restored_gazetteer
+                if getattr(context, "ports", None) is not None:
+                    from app.modules.kg.adapters.gazetteer_adapter import KGGazetteerAdapter
+
+                    context.ports.gazetteer = KGGazetteerAdapter(restored_gazetteer)
+
         from app.agent.bootstrap.artifact_runtime import load_artifact
         from app.modules.schema.contracts.l1_contracts import L1Snapshot
 

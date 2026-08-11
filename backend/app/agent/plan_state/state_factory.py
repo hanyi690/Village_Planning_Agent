@@ -129,6 +129,7 @@ class StateFactory:
             "dimension_retry_limit": max(0, int(os.getenv("DIMENSION_RETRY_LIMIT", "1"))),
             "max_retries": BUSINESS_RETRY_LIMIT,
             "error_feedback": {},
+            "human_interrupt": None,
             "human_review_items": [],
             "human_review_decisions": None,
             "human_review_event_id": "",

@@ -113,23 +113,40 @@ def _build_planned_view(current_parcels, planned_state) -> list:
     planned_parcels = list(getattr(planned_state, "parcels", None) or [])
     if not current_parcels:
         return planned_parcels
+    current_bsms = {
+        str(_parcel_value(parcel, "bsm", "") or "")
+        for parcel in current_parcels
+        if _parcel_value(parcel, "bsm", "")
+    }
     changed_bsms: set = set()
+    verified_planned = []
     for pp in planned_parcels:
-        changed_bsms.add(str(getattr(pp, "bsm", "") or ""))
-        for src in getattr(pp, "derived_from_bsms", None) or []:
+        bsm = str(_parcel_value(pp, "bsm", "") or "")
+        sources = {
+            str(src)
+            for src in (_parcel_value(pp, "derived_from_bsms", None) or [])
+            if src
+        }
+        # A planned parcel without a current BSM or source BSM is not an
+        # auditable replacement and must not inflate the statutory balance.
+        if bsm in current_bsms or sources.intersection(current_bsms):
+            verified_planned.append(pp)
+        if bsm in current_bsms:
+            changed_bsms.add(bsm)
+        for src in sources:
             changed_bsms.add(str(src))
-    view = list(planned_parcels)
+    view = verified_planned
     for cur in current_parcels:
-        bsm = str(getattr(cur, "bsm", "") or "")
+        bsm = str(_parcel_value(cur, "bsm", "") or "")
         if not bsm or bsm in changed_bsms:
             continue
         code = (
-            getattr(cur, "planning_land_use", "")
-            or getattr(cur, "dlbm", "")
+            _parcel_value(cur, "planning_land_use", "")
+            or _parcel_value(cur, "dlbm", "")
             or "0000"
         )
-        area_sqm = float(getattr(cur, "area_sqm", 0) or 0)
-        area_ha = float(getattr(cur, "area_ha", 0) or 0)
+        area_sqm = float(_parcel_value(cur, "area_sqm", 0) or 0)
+        area_ha = float(_parcel_value(cur, "area_ha", 0) or 0)
         view.append(
             {
                 "bsm": bsm,
@@ -144,6 +161,13 @@ def _build_planned_view(current_parcels, planned_state) -> list:
             }
         )
     return view
+
+
+def _parcel_value(parcel, key: str, default=None):
+    """Read parcel fields from either contract objects or serialized dicts."""
+    if isinstance(parcel, dict):
+        return parcel.get(key, default)
+    return getattr(parcel, key, default)
 
 
 def _deferral_summary(ledger: DeferralLedger | None) -> dict:
