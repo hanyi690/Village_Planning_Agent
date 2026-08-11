@@ -19,6 +19,7 @@ from app.modules.schema.contracts.evidence_contracts import (
 from app.utils.logger import get_logger
 
 logger = get_logger(__name__)
+_EVIDENCE_CACHE: dict[tuple, ExplorationResult] = {}
 
 
 async def retrieve_evidence(
@@ -33,6 +34,19 @@ async def retrieve_evidence(
 
     Returns ExplorationResult with evidence_bundle and spatial_cognition.
     """
+    cache_key = (
+        session_id,
+        request.stage,
+        request.dimension_key,
+        request.query,
+        tuple(sorted(request.entity_scope)),
+        request.query_purpose,
+    )
+    cached = _EVIDENCE_CACHE.get(cache_key)
+    if cached is not None:
+        logger.debug("[retrieve_evidence] cache hit session=%s dimension=%s stage=%s", session_id, request.dimension_key, request.stage)
+        return cached
+
     from app.agent.explore.retrievers.report_retriever import retrieve_from_reports
     from app.agent.explore.retrievers.kg_retriever import retrieve_from_kg
     from app.agent.explore.retrievers.bundle_retriever import retrieve_from_bundle
@@ -115,10 +129,12 @@ async def retrieve_evidence(
         confidence=round(confidence, 3),
         unresolved=list(request.questions) if request.questions else [],
     )
-    return ExplorationResult(
+    result = ExplorationResult(
         evidence_bundle=bundle,
         spatial_cognition=cognition,
     )
+    _EVIDENCE_CACHE[cache_key] = result
+    return result
 
 
 def render_evidence_prompt_section(
