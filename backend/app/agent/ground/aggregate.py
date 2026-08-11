@@ -12,6 +12,9 @@ from __future__ import annotations
 
 from typing import Any, List, Optional
 
+from shapely.geometry import shape
+from shapely.ops import unary_union
+
 from app.modules.context.planning_context import PlanningContext
 from app.modules.schema.contracts.contract_meta import StageIssue
 from app.modules.schema.contracts.grounding_contracts import (
@@ -31,6 +34,7 @@ def build_candidate_site(
     spec: SpatialReferenceSpec,
     resolved: ResolvedSpatialRef,
     index: int,
+    context: Optional[PlanningContext] = None,
 ) -> CandidateSite:
     """Map one resolved spec to a ``CandidateSite``.
 
@@ -40,12 +44,40 @@ def build_candidate_site(
     source_parcels = list(resolved.final_bsms)
     first_bsm = source_parcels[0] if source_parcels else ""
     site_id = f"site_{index + 1}_{first_bsm}" if first_bsm else f"site_{index + 1}"
+    parcels_by_bsm = {}
+    if context is not None:
+        try:
+            parcels = context.bundle_parcels()
+            parcels_by_bsm = {
+                str(getattr(parcel, "bsm", "") or (parcel.get("bsm", "") if isinstance(parcel, dict) else "")): parcel
+                for parcel in parcels
+            }
+        except Exception:
+            parcels_by_bsm = {}
+    geometries = []
+    area_ha = 0.0
+    for bsm in source_parcels:
+        parcel = parcels_by_bsm.get(str(bsm))
+        if parcel is None:
+            continue
+        raw_geometry = parcel.get("geometry") if isinstance(parcel, dict) else getattr(parcel, "geometry", None)
+        try:
+            geometry = shape(raw_geometry) if isinstance(raw_geometry, dict) else None
+            if geometry is not None and not geometry.is_empty and geometry.is_valid:
+                geometries.append(geometry)
+        except Exception:
+            pass
+        raw_area_sqm = parcel.get("area_sqm", 0) if isinstance(parcel, dict) else getattr(parcel, "area_sqm", 0)
+        area_ha += float(raw_area_sqm or 0) / 10000.0
+    geometry_wkt = resolved.reference_geometry_wkt or ""
+    if not geometry_wkt and geometries:
+        geometry_wkt = unary_union(geometries).wkt
     return CandidateSite(
         site_id=site_id,
         source_parcels=source_parcels,
-        available_geometry_wkt=resolved.reference_geometry_wkt or "",
-        available_area_ha=0.0,
-        hard_constraint_result=None,
+        available_geometry_wkt=geometry_wkt,
+        available_area_ha=area_ha,
+        hard_constraint_result={"constraint_id": "ground_geometry", "passed": bool(geometry_wkt and area_ha > 0)},
         metrics={
             "confidence": resolved.confidence,
             "spec_type": spec.type,
@@ -102,7 +134,20 @@ def ground_aggregate(
             )
         )
         if resolved.final_bsms:
-            candidates.append(build_candidate_site(spec, resolved, index))
+            candidate = build_candidate_site(spec, resolved, index, context)
+            if candidate.available_area_ha > 0 and candidate.available_geometry_wkt:
+                candidates.append(candidate)
+            else:
+                unresolved.append(
+                    StageIssue(
+                        stage="ground",
+                        severity="warning",
+                        code="resolved_geometry_invalid",
+                        message="resolved BSMs have no valid positive-area geometry",
+                        detail=f"target_id={getattr(spec, 'target_id', '')}; bsms={resolved.final_bsms}",
+                        related_artifact_id=(getattr(spec, "target_id", "") or None),
+                    )
+                )
         else:
             unresolved.append(
                 StageIssue(

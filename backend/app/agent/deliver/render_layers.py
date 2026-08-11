@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
 
-__all__ = ["build_render_layers"]
+__all__ = ["build_render_layers", "build_delivery_render_layers"]
 
 
 def _wkt_to_geojson(wkt: str) -> Optional[Dict[str, Any]]:
@@ -162,3 +162,42 @@ def build_render_layers(
             layers.append(layer)
 
     return layers
+
+
+def build_delivery_render_layers(
+    planned_state: Any,
+    allocated_geojson: Optional[Dict[str, Any]],
+    gis_data: Optional[Dict[str, Any]] = None,
+) -> List[Dict[str, Any]]:
+    """Build the complete delivery view from one current/planned snapshot.
+
+    The planned parcel layer is materialized at delivery time. If execution
+    produced no parcel changes, the current layer is copied as preserved
+    output; it is never synthesized from the sparse PlannedState.
+    """
+    import copy
+    from app.modules.spatial_ops.output.map_layers import build_map_layers
+
+    current = gis_data or {}
+    planned = copy.deepcopy(allocated_geojson or {})
+    if not planned.get("features") and isinstance(current.get("landuse_current_geojson"), dict):
+        planned = copy.deepcopy(current["landuse_current_geojson"])
+        for feature in planned.get("features", []):
+            props = feature.setdefault("properties", {})
+            props["change_status"] = "preserved"
+            props["provenance"] = "current_landuse_delivery_snapshot"
+    if planned.get("features"):
+        for feature in planned.get("features", []):
+            props = feature.setdefault("properties", {})
+            props.setdefault("change_status", "modified")
+            props.setdefault("provenance", "allocated_planned_landuse")
+        layouts = build_render_layers(planned_state)
+        layouts.insert(0, {
+            "layerType": "complete_planned_landuse",
+            "layerName": "完整期末地类（含未修改地块）",
+            "data": planned,
+            "geojson": planned,
+            "color": "#2563eb",
+        })
+        return build_map_layers(layouts, current)
+    return build_map_layers(build_render_layers(planned_state), current)
