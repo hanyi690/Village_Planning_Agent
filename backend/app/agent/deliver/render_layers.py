@@ -4,7 +4,11 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
 
-__all__ = ["build_render_layers", "build_delivery_render_layers"]
+__all__ = [
+    "build_render_layers",
+    "build_delivery_render_layers",
+    "build_complete_planned_geojson",
+]
 
 
 def _wkt_to_geojson(wkt: str) -> Optional[Dict[str, Any]]:
@@ -25,6 +29,202 @@ def _wkt_to_geojson(wkt: str) -> Optional[Dict[str, Any]]:
 
 def _feature_collection(features: List[Dict[str, Any]]) -> Dict[str, Any]:
     return {"type": "FeatureCollection", "features": features}
+
+
+def _parcel_value(parcel: Any, key: str, default: Any = None) -> Any:
+    if isinstance(parcel, dict):
+        return parcel.get(key, default)
+    return getattr(parcel, key, default)
+
+
+def _feature_bsm(feature: Dict[str, Any]) -> str:
+    properties = feature.get("properties") or {}
+    return str(properties.get("BSM") or properties.get("bsm") or "")
+
+
+def _planned_parcel_feature(parcel: Any) -> Optional[Dict[str, Any]]:
+    geometry = _wkt_to_geojson(_parcel_value(parcel, "geometry", "") or "")
+    bsm = str(_parcel_value(parcel, "bsm", "") or "")
+    if geometry is None or not bsm:
+        return None
+    return {
+        "type": "Feature",
+        "properties": {
+            "BSM": bsm,
+            "planning_land_use": _parcel_value(parcel, "planning_land_use", ""),
+            "zone_type": _parcel_value(parcel, "zone_type", ""),
+            "area_ha": _parcel_value(parcel, "area_ha", 0),
+            "operation": _parcel_value(parcel, "operation", ""),
+            "derived_from_bsms": list(
+                _parcel_value(parcel, "derived_from_bsms", None) or []
+            ),
+        },
+        "geometry": geometry,
+    }
+
+
+def _tag_planned_feature(
+    feature: Dict[str, Any],
+    *,
+    preserved: bool,
+    provenance: str,
+) -> Dict[str, Any]:
+    result = dict(feature)
+    properties = dict(result.get("properties") or {})
+    if preserved:
+        properties.setdefault("change_status", "preserved")
+        properties.setdefault("planning_status", "unchanged_preserved")
+    else:
+        properties.setdefault("change_status", "planned")
+        properties.setdefault("planning_status", "planned")
+    properties.setdefault("provenance", provenance)
+    properties.setdefault("planning_provenance", provenance)
+    result["properties"] = properties
+    return result
+
+
+def build_complete_planned_geojson(
+    allocated_geojson: Optional[Dict[str, Any]],
+    current_geojson: Optional[Dict[str, Any]],
+    planned_state: Any = None,
+) -> Dict[str, Any]:
+    """Build one auditable, complete planned land-use snapshot.
+
+    ``allocated_geojson`` may contain only changed parcels. The current layer
+    is therefore the authoritative base: every current parcel absent from the
+    planned changes is carried through as an unchanged parcel. PlannedState
+    parcels are allowed to replace a current parcel only when their BSM (or a
+    source BSM) is auditable against that same current snapshot.
+    """
+    import copy
+
+    current_features = list((current_geojson or {}).get("features", []) or [])
+    allocated_features = list((allocated_geojson or {}).get("features", []) or [])
+    current_by_bsm = {
+        _feature_bsm(feature): feature
+        for feature in current_features
+        if _feature_bsm(feature)
+    }
+    current_bsms = set(current_by_bsm)
+
+    planned_by_bsm: Dict[str, Dict[str, Any]] = {}
+    planned_parcels = _parcel_value(planned_state, "parcels", None) or []
+    for parcel in planned_parcels:
+        bsm = str(_parcel_value(parcel, "bsm", "") or "")
+        sources = {
+            str(source)
+            for source in (_parcel_value(parcel, "derived_from_bsms", None) or [])
+            if source
+        }
+        if bsm not in current_bsms and not sources.intersection(current_bsms):
+            continue
+        feature = _planned_parcel_feature(parcel)
+        if feature is not None:
+            keys = [bsm] if bsm in current_bsms else sorted(sources.intersection(current_bsms))
+            for key in keys:
+                planned_by_bsm[key] = feature
+
+    allocated_by_bsm: Dict[str, Dict[str, Any]] = {}
+    allocated_without_bsm: List[Dict[str, Any]] = []
+    for feature in allocated_features:
+        bsm = _feature_bsm(feature)
+        properties = feature.get("properties") or {}
+        sources = {
+            str(source)
+            for source in (
+                properties.get("derived_from_bsms")
+                or properties.get("source_bsms")
+                or []
+            )
+            if source
+        }
+        if current_bsms and bsm not in current_bsms and not sources.intersection(current_bsms):
+            continue
+        if bsm:
+            keys = [bsm] if bsm in current_bsms else sorted(sources.intersection(current_bsms))
+            for key in keys or [bsm]:
+                allocated_by_bsm[key] = feature
+        elif not current_bsms:
+            allocated_without_bsm.append(feature)
+
+    def merge_planned(
+        feature: Dict[str, Any],
+        planned_feature: Optional[Dict[str, Any]],
+    ) -> Dict[str, Any]:
+        result = copy.deepcopy(feature)
+        if planned_feature is None:
+            props = result.get("properties") or {}
+            changed = any(
+                props.get(key) not in (None, "", [], {})
+                for key in (
+                    "planning_land_use",
+                    "assigned_zone",
+                    "operation",
+                    "planning_status",
+                    "change_status",
+                )
+            )
+            return _tag_planned_feature(
+                result,
+                preserved=not changed,
+                provenance=(
+                    "allocated_planned_landuse"
+                    if changed
+                    else "current_landuse_delivery_snapshot"
+                ),
+            )
+        planned_props = planned_feature.get("properties") or {}
+        props = dict(result.get("properties") or {})
+        for key in (
+            "planning_land_use",
+            "zone_type",
+            "area_ha",
+            "operation",
+            "derived_from_bsms",
+        ):
+            value = planned_props.get(key)
+            if value not in (None, "", [], {}):
+                props[key] = value
+        result["properties"] = props
+        if planned_feature.get("geometry") is not None:
+            result["geometry"] = planned_feature["geometry"]
+        preserved = str(props.get("operation") or "") == "preserve"
+        return _tag_planned_feature(
+            result,
+            preserved=preserved,
+            provenance="planned_state_snapshot",
+        )
+
+    complete: List[Dict[str, Any]] = []
+    for current in current_features:
+        bsm = _feature_bsm(current)
+        feature = allocated_by_bsm.pop(bsm, None) if bsm else None
+        feature = feature or current
+        complete.append(merge_planned(feature, planned_by_bsm.pop(bsm, None)))
+
+    for bsm, feature in allocated_by_bsm.items():
+        complete.append(merge_planned(feature, planned_by_bsm.pop(bsm, None)))
+    for feature in allocated_without_bsm:
+        complete.append(merge_planned(feature, None))
+
+    return _feature_collection(complete)
+
+
+def _delivery_gis_data(gis_data: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    """Normalize known bundle/control-layer aliases for delivery rendering."""
+    current = dict(gis_data or {})
+    aliases = {
+        "ecological_protection_geojson": ("ecological_redline_geojson",),
+        "construction_boundary_geojson": ("construction_zone_geojson",),
+    }
+    for target, candidates in aliases.items():
+        if current.get(target):
+            continue
+        for candidate in candidates:
+            if current.get(candidate):
+                current[target] = current[candidate]
+                break
+    return current
 
 
 def _function_zone_layer(planned_state: Any) -> Optional[Dict[str, Any]]:
@@ -175,22 +375,15 @@ def build_delivery_render_layers(
     produced no parcel changes, the current layer is copied as preserved
     output; it is never synthesized from the sparse PlannedState.
     """
-    import copy
     from app.modules.spatial_ops.output.map_layers import build_map_layers
 
-    current = gis_data or {}
-    planned = copy.deepcopy(allocated_geojson or {})
-    if not planned.get("features") and isinstance(current.get("landuse_current_geojson"), dict):
-        planned = copy.deepcopy(current["landuse_current_geojson"])
-        for feature in planned.get("features", []):
-            props = feature.setdefault("properties", {})
-            props["change_status"] = "preserved"
-            props["provenance"] = "current_landuse_delivery_snapshot"
+    current = _delivery_gis_data(gis_data)
+    planned = build_complete_planned_geojson(
+        allocated_geojson,
+        current.get("landuse_current_geojson"),
+        planned_state,
+    )
     if planned.get("features"):
-        for feature in planned.get("features", []):
-            props = feature.setdefault("properties", {})
-            props.setdefault("change_status", "modified")
-            props.setdefault("provenance", "allocated_planned_landuse")
         layouts = build_render_layers(planned_state)
         layouts.insert(0, {
             "layerType": "complete_planned_landuse",

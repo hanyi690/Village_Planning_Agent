@@ -163,6 +163,42 @@ def _build_planned_view(current_parcels, planned_state) -> list:
     return view
 
 
+def _planned_view_from_export(export_result: dict | None) -> list | None:
+    """Read the same complete planned snapshot used by export and render."""
+    if not isinstance(export_result, dict):
+        return None
+    geojson = export_result.get("planned_landuse_geojson")
+    if not isinstance(geojson, dict):
+        return None
+    rows = []
+    for feature in geojson.get("features", []) or []:
+        properties = feature.get("properties") or {}
+        area_ha = float(properties.get("area_ha") or 0)
+        if area_ha <= 0:
+            area_sqm = float(
+                properties.get("area_sqm")
+                or properties.get("DLMJ")
+                or properties.get("area")
+                or 0
+            )
+            area_ha = area_sqm / 10000.0
+        rows.append({
+            "bsm": properties.get("BSM") or properties.get("bsm") or "",
+            "planning_land_use": (
+                properties.get("planning_land_use")
+                or properties.get("GHYTBM")
+                or properties.get("QMDLBM")
+                or properties.get("DLBM")
+                or "0000"
+            ),
+            "zone_type": properties.get("zone_type") or properties.get("planning_zone") or "",
+            "area_ha": area_ha,
+            "geometry": "",
+            "derived_from_bsms": list(properties.get("derived_from_bsms") or []),
+        })
+    return rows
+
+
 def _parcel_value(parcel, key: str, default=None):
     """Read parcel fields from either contract objects or serialized dicts."""
     if isinstance(parcel, dict):
@@ -303,10 +339,16 @@ def deliver_aggregate(
         str(getattr(task, "expected_output_kind", "")) in {"parcel", "polygon"}
         for task in (getattr(execution_plan, "worker_tasks", None) or [])
     )
+    exported_planned = _planned_view_from_export(export_result)
+    planned_for_balance = (
+        exported_planned
+        if exported_planned
+        else _build_planned_view(current_parcels, planned_state)
+    )
     gate = (
         check_delivery_gate(
             current_parcels=list(current_parcels or []),
-            planned_parcels=_build_planned_view(current_parcels, planned_state),
+            planned_parcels=planned_for_balance,
         )
         if land_balance_expected or execution_plan is None
         else DeliveryGate(land_balance_closed=True, zones_complete=True)

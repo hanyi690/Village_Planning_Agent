@@ -40,6 +40,23 @@ def _normalize_fields(geojson: Dict, layer_key: str) -> Dict:
     return geojson
 
 
+def _gis_layer(
+    gis_data: Dict[str, Optional[Dict[str, Any]]],
+    key: str,
+) -> Optional[Dict[str, Any]]:
+    aliases = {
+        "ecological_redline_geojson": ("ecological_protection_geojson",),
+        "construction_zone_geojson": ("construction_boundary_geojson",),
+    }
+    value = gis_data.get(key)
+    if value:
+        return value
+    for alias in aliases.get(key, ()):
+        if gis_data.get(alias):
+            return gis_data[alias]
+    return None
+
+
 def export_gdb_package(
     layout_configs: Optional[List[Dict[str, Any]]],
     allocated_geojson: Optional[Dict[str, Any]],
@@ -65,7 +82,14 @@ def export_gdb_package(
 
     os.makedirs(output_dir, exist_ok=True)
 
+    from app.agent.deliver.render_layers import build_complete_planned_geojson
     from app.modules.schema.output.gdb import GDB_LAYER_REGISTRY
+
+    current_landuse = _gis_layer(gis_data or {}, "landuse_current_geojson")
+    complete_planned = build_complete_planned_geojson(
+        allocated_geojson,
+        current_landuse,
+    )
 
     LAYER_GIS_KEY_MAP: Dict[str, Optional[str]] = {
         "admin_area": "boundary_geojson",
@@ -95,10 +119,11 @@ def export_gdb_package(
         source = layer_def.get("source", "")
         gis_key = LAYER_GIS_KEY_MAP.get(layer_key)
 
-        # planned_landuse comes from allocated_geojson, not gis_data
+        # planned_landuse comes from the complete delivery snapshot, not the
+        # sparse allocated changeset.
         # space_control_zone and land_use_zone come from layout_configs
         if layer_key == "planned_landuse":
-            geojson = allocated_geojson
+            geojson = complete_planned
         elif layer_key == "space_control_zone":
             geojson = _find_layer_in_configs(layout_configs, "space_control_zone")
         elif layer_key == "land_use_zone":
@@ -113,7 +138,7 @@ def export_gdb_package(
                 None,
             )
         elif gis_key and gis_data:
-            geojson = gis_data.get(gis_key)
+            geojson = _gis_layer(gis_data, gis_key)
         else:
             geojson = None
 
@@ -134,9 +159,7 @@ def export_gdb_package(
         exported.append("planned/custom_planning_zone.geojson")
 
     # ── Land balance table ─────────────────────────────────────
-    balance_geojson = allocated_geojson or (gis_data or {}).get(
-        "landuse_current_geojson"
-    )
+    balance_geojson = complete_planned
     if balance_geojson:
         balance = _compute_land_balance(balance_geojson)
         balance_path = os.path.join(output_dir, "tables/land_balance.json")
@@ -181,6 +204,7 @@ def export_gdb_package(
         "output_dir": output_dir,
         "exported_files": exported,
         "file_count": len(exported),
+        "planned_landuse_geojson": complete_planned,
     }
 
 
