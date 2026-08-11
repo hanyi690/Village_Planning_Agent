@@ -16,6 +16,9 @@
 from __future__ import annotations
 
 import asyncio
+import os
+from concurrent.futures import ProcessPoolExecutor
+from multiprocessing import get_context
 from threading import RLock
 from typing import Any, Dict, Optional
 
@@ -29,6 +32,19 @@ logger = get_logger(__name__)
 _SESSION_KG_BUILD_LOCK = RLock()
 _SESSION_KG_ASYNC_LOCKS: Dict[tuple[int, str], asyncio.Lock] = {}
 _SESSION_KG_ASYNC_LOCKS_GUARD = RLock()
+_KG_PROCESS_POOL: Optional[ProcessPoolExecutor] = None
+_KG_PROCESS_POOL_LOCK = RLock()
+
+
+def _kg_process_pool() -> ProcessPoolExecutor:
+    global _KG_PROCESS_POOL
+    with _KG_PROCESS_POOL_LOCK:
+        if _KG_PROCESS_POOL is None:
+            _KG_PROCESS_POOL = ProcessPoolExecutor(
+                max_workers=1,
+                mp_context=get_context("spawn"),
+            )
+        return _KG_PROCESS_POOL
 
 
 def _session_kg_lock(session_id: str) -> asyncio.Lock:
@@ -110,17 +126,55 @@ async def ensure_session_kg(
                 len(relations.parcel_water_touches),
             )
 
-            from app.modules.kg import open_kg_session
+            from app.modules.kg import PlanningKG
+            from app.modules.kg.interface import KGSessionSnapshot
+            from app.modules.kg.manager import compute_layer1_cache_key
 
             with _SESSION_KG_BUILD_LOCK:
                 if not force and manager.get_session_kg(session_id) is not None:
                     return {"cache_hit": True, "session_id": session_id}
-                snap = open_kg_session(
-                    session_id=session_id,
-                    village_name=bundle.village_name,
-                    bundle=bundle,
-                    parcel_relations=relations,
-                )
+                isolated = os.getenv("KG_BUILD_ISOLATED_PROCESS", "true").lower() not in {
+                    "0", "false", "no", "off"
+                }
+                if isolated:
+                    loop = asyncio.get_running_loop()
+                    future = loop.run_in_executor(
+                        _kg_process_pool(),
+                        __import__(
+                            "app.modules.kg.process_worker",
+                            fromlist=["build_layer1_turtle_worker"],
+                        ).build_layer1_turtle_worker,
+                        bundle.village_name,
+                        bundle,
+                        relations,
+                    )
+                    worker_result = await future
+                    kg = PlanningKG.from_turtle(
+                        worker_result["turtle"],
+                        village_name=bundle.village_name,
+                    )
+                    manager.register_session(session_id, kg)
+                    cache_key = compute_layer1_cache_key(
+                        bundle.village_name,
+                        bundle.polygons.get("landuse_current"),
+                    )
+                    snap = KGSessionSnapshot(
+                        session_id=session_id,
+                        village_name=bundle.village_name,
+                        version=manager.get_session_version(session_id),
+                        triple_count=int(worker_result["triple_count"]),
+                        cache_hit=False,
+                        layer1_cache_key=str(cache_key) if cache_key else "",
+                    )
+                else:
+                    from app.modules.kg import open_kg_session
+
+                    snap = open_kg_session(
+                        session_id=session_id,
+                        village_name=bundle.village_name,
+                        bundle=bundle,
+                        parcel_relations=relations,
+                    )
 
             logger.info(
                 "[SessionKG] Pre-built for session %s (village=%s): %d triples, "
