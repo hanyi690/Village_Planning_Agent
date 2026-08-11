@@ -164,6 +164,10 @@ def design_project_parcel(
     if resolved_code is None:
         return None
     new_code, new_name = resolved_code
+    try:
+        planned_classification = _classification(new_code, new_name)
+    except ValueError:
+        return None
     candidate_bsms = list(project.candidate_bsms or [])
 
     if len(candidate_bsms) > 1:
@@ -196,7 +200,7 @@ def design_project_parcel(
         bsm=str(result.get("bsm", selected_bsm)),
         action=action,
         derived_from_bsms=list(result.get("derived_from_bsms") or []),
-        after_classification=_classification(new_code, new_name),
+        after_classification=planned_classification,
         before_geometry_wkt=before_wkt,
         after_geometry_wkt=_geometry_to_wkt(after_geom),
         new_area_ha=float(result.get("area_ha", 0.0) or 0.0),
@@ -240,6 +244,10 @@ def design_project_footprint(
     if resolved_code is None:
         return []
     new_code, new_name = resolved_code
+    try:
+        planned_classification = _classification(new_code, new_name)
+    except ValueError:
+        return []
     candidate_bsms = list(project.candidate_bsms or [])
 
     source_geom = None
@@ -315,7 +323,7 @@ def design_project_footprint(
             bsm=f"{project.project_id}_FP",
             action="create",
             derived_from_bsms=list(source_bsms),
-            after_classification=_classification(new_code, new_name),
+            after_classification=planned_classification,
             before_geometry_wkt=source_wkt,
             after_geometry_wkt=footprint.wkt,
             new_area_ha=footprint.area / 10000.0,
@@ -345,6 +353,10 @@ def design_zone_parcel(
 ) -> List[ParcelChange]:
     """Reclassify every candidate parcel of a zone target to the zone's land use."""
     code, name = _resolve_zone_code(zone_target)
+    try:
+        zone_classification = _classification(code, name)
+    except ValueError:
+        return []
     changes: List[ParcelChange] = []
     for bsm in zone_target.candidate_bsms or []:
         parcel = parcel_by_bsm.get(str(bsm))
@@ -356,7 +368,7 @@ def design_zone_parcel(
                 bsm=str(bsm),
                 action="reclassify",
                 derived_from_bsms=[str(bsm)],
-                after_classification=_classification(code, name),
+                after_classification=zone_classification,
                 before_geometry_wkt=_geometry_to_wkt(_parcel_geometry(parcel)),
                 after_geometry_wkt=_geometry_to_wkt(_parcel_geometry(parcel)),
                 new_area_ha=float(result.get("area_ha", 0.0) or 0.0),
@@ -403,11 +415,17 @@ def design_facility_parcel(
             (parcel.get("dlbm", "") if isinstance(parcel, dict) else getattr(parcel, "dlbm", ""))
             or ""
         )
+        if not code:
+            return None
+        try:
+            facility_classification = _classification(code, code)
+        except ValueError:
+            return None
         return ParcelChange(
             bsm=bsm,
             action="reclassify",
             derived_from_bsms=[bsm],
-            after_classification=_classification(code, code) if code else None,
+            after_classification=facility_classification,
             before_geometry_wkt=parcel_geom.wkt,
             after_geometry_wkt=parcel_geom.wkt,
             new_area_ha=parcel_geom.area / 10000.0,
@@ -424,12 +442,16 @@ def design_facility_parcel(
     except Exception:
         return None
     bsm = f"{facility_target.type or 'facility'}_0"
+    try:
+        facility_classification = _classification(facility_target.type or "", facility_target.type or "")
+    except ValueError:
+        return None
     create_parcel(geom_dict, bsm, facility_target.type or "")
     return ParcelChange(
         bsm=bsm,
         action="create",
         derived_from_bsms=[],
-        after_classification=_classification(facility_target.type or "", facility_target.type or ""),
+        after_classification=facility_classification,
         after_geometry_wkt=_geometry_to_wkt(geom_dict),
         new_area_ha=float(buffer_geom.area / 10000),
         project_ref=f"facility:{facility_target.type}",
