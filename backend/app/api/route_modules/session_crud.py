@@ -53,6 +53,7 @@ async def _delete_uploaded_files(session_id: str) -> None:
         logger.warning(f"[create_session] Failed to clean up uploaded files for {session_id}: {e}")
 
 
+@router.post("/api/sessions", response_model=SessionCreateResponse, status_code=200)
 async def create_session(
     background_tasks: BackgroundTasks,
     project_name: str = Form(..., description="项目名称"),

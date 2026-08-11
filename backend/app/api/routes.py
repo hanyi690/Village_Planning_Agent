@@ -26,6 +26,7 @@ from fastapi.responses import JSONResponse, Response
 
 from app.api.session_routes import router as session_router
 from app.api.gis_test_routes import router as gis_test_router
+from app.api.human_review_routes import router as human_review_router
 from app.api.v1 import router as v1_router
 from app.api.v1.contracts import SessionCreated
 from app.api.route_modules.session_crud import create_session
@@ -38,6 +39,7 @@ router = APIRouter()
 
 # Core session API (新架构)
 router.include_router(session_router, tags=["Session (legacy)"], deprecated=True)
+router.include_router(human_review_router, tags=["Human review (legacy)"])
 
 # GIS dev test API (开发环境专用)
 if not IS_PRODUCTION:

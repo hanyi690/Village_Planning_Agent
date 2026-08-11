@@ -836,10 +836,6 @@
           "human_review": {
             "type": "string",
             "title": "Human Review"
-          },
-          "artifacts": {
-            "type": "string",
-            "title": "Artifacts"
           }
         },
         "additionalProperties": false,
@@ -849,8 +845,7 @@
           "event_sync",
           "delivery",
           "map_layers",
-          "human_review",
-          "artifacts"
+          "human_review"
         ],
         "title": "ResourceLinks"
       },
