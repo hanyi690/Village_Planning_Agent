@@ -64,6 +64,7 @@ class CandidateParcel:
     geometry: Dict[str, Any]
     dlmc: str = ""
     dlbm: str = ""
+    dlbm_system: str = ""
     area_ha: float = 0.0
     cluster: str = ""
     distance_m: Optional[float] = None

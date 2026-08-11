@@ -19,6 +19,7 @@ from .dicts.loader import get_center
 class LandUseClass:
     """Complete classification for one code from any encoding system."""
 
+    system: str
     code: str
     name: str
     zone_type: str = ""
@@ -33,12 +34,14 @@ def _load_all_classes() -> List[LandUseClass]:
     """Load LandUseClass from all encoding systems."""
     center = get_center()
     classes: List[LandUseClass] = []
-    seen: Set[str] = set()
+    seen: Set[tuple[str, str]] = set()
     for name in ["appendix5", "tugui", "gbt21010"]:
         try:
             for c in center.encoding(name).to_land_use_classes():
-                if c.code not in seen:
-                    seen.add(c.code)
+                key = (name, c.code)
+                if key not in seen:
+                    c.system = name
+                    seen.add(key)
                     classes.append(c)
         except Exception:
             pass
@@ -83,17 +86,31 @@ class ClassificationSchema:
     classes: List[LandUseClass] = field(default_factory=_get_classes)
 
     def to_dlbm_zone_type(self) -> Dict[str, str]:
-        return {c.code: c.zone_type for c in self.classes}
+        return {
+            c.code: c.zone_type
+            for c in self.classes
+            if c.system == "gbt21010" and c.zone_type
+        }
 
     def to_dlbm_planning_zone(self) -> Dict[str, str]:
-        return {c.code: c.planning_zone for c in self.classes}
+        return {
+            c.code: c.planning_zone
+            for c in self.classes
+            if c.system == "gbt21010" and c.planning_zone
+        }
 
     def to_dlbm_primary_zone(self) -> Dict[str, str]:
-        return {c.code: c.primary_zone for c in self.classes}
+        return {
+            c.code: c.primary_zone
+            for c in self.classes
+            if c.system == "gbt21010" and c.primary_zone
+        }
 
     def to_zone_type_dlbms(self) -> Dict[str, List[str]]:
         result: Dict[str, List[str]] = {}
         for c in self.classes:
+            if c.system != "gbt21010" or not c.zone_type:
+                continue
             result.setdefault(c.zone_type, []).append(c.code)
         return result
 
@@ -117,15 +134,15 @@ class ClassificationSchema:
         seen = set()
         rows = []
         for c in self.classes:
-            key = (c.code, c.name)
+            key = (c.system, c.code, c.name)
             if key in seen:
                 continue
             seen.add(key)
             rows.append(
-                f"| {c.code} | {c.name} | {c.zone_type} | {c.planning_zone} | {c.primary_zone} | {c.gb_ref} |"
+                f"| {c.system} | {c.code} | {c.name} | {c.zone_type} | {c.planning_zone} | {c.primary_zone} | {c.gb_ref} |"
             )
-        header = ("| DLBM | 名称 | 功能分区(L1) | 规划分区(L2) | 三区(L3) | GB/T |\n"
-                  "|------|------|-------------|-------------|---------|------|")
+        header = ("| 体系 | Code | 名称 | 功能分区(L1) | 规划分区(L2) | 三区(L3) | GB/T |\n"
+                  "|------|------|------|-------------|-------------|---------|------|")
         return header + "\n" + "\n".join(sorted(rows))
 
     def to_planning_zone_zone_types(self) -> Dict[str, List[str]]:
@@ -142,15 +159,17 @@ class ClassificationSchema:
     def get_planning_zone_for_zone_type(self, zone_type: str, dlbm: str = "") -> str:
         if dlbm:
             for c in self.classes:
-                if c.code == dlbm:
+                if c.system == "gbt21010" and c.code == dlbm:
                     return c.planning_zone
         planning_count: Dict[str, int] = {}
         for c in self.classes:
+            if c.system != "gbt21010":
+                continue
             if c.zone_type == zone_type:
                 planning_count[c.planning_zone] = planning_count.get(c.planning_zone, 0) + 1
         if planning_count:
             return max(planning_count, key=planning_count.get)
-        return "一般农业区"
+        return ""
 
 
 _SCHEMA: Optional[ClassificationSchema] = None

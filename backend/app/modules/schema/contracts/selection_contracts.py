@@ -5,6 +5,7 @@ from typing import Literal
 from pydantic import BaseModel, Field, model_validator
 
 from .contract_meta import ContractMeta
+from .classification_ref import ClassificationDecision
 from .provenance import Provenance
 
 
@@ -72,6 +73,7 @@ class SiteSelectionDecision(ContractMeta):
 
 class LandDesignBrief(BaseModel):
     project_ref: str
+    classification_decision: ClassificationDecision | None = None
     footprint_conditions: list[str] = Field(default_factory=list)
     area_tolerance_pct: float = 5.0
     access_requirements: list[str] = Field(default_factory=list)

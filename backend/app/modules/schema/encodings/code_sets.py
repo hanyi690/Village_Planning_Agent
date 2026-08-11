@@ -200,36 +200,18 @@ def _mapping_default_to_dict(m) -> Dict[str, str]:
     return {k: v[0] for k, v in raw.items()}
 
 
-_dlbm_to_zone_types_current = get_center().get_mapping("gbt21010_to_zone_types_current")
-_dlbm_to_zone_types_appendix5 = get_center().get_mapping("gbt21010_to_zone_types_appendix5")
-
-# Current functional classification map. Values match the legacy
-# advisory_crosswalks tables exactly: appendix5 (dlbm_ref) mapping is the base
-# DLBM→zone_type table; the current-state encoding is the preferred overlay.
-DLBM_TO_ZONE_TYPE: Dict[str, str] = _mapping_default_to_dict(_dlbm_to_zone_types_appendix5)
-DLBM_TO_ZONE_TYPE_CURRENT: Dict[str, str] = _mapping_default_to_dict(_dlbm_to_zone_types_current)
-
+# DLBM and zone_type are different namespaces.  The old implementation read
+# cross-system mapping tables here and silently filled ``农业用地`` for misses.
+# Keep compatibility symbols for offline callers, but make the default chain
+# fail closed; explicit crosswalk use belongs to advisory_crosswalks only.
+DLBM_TO_ZONE_TYPE: Dict[str, str] = {}
+DLBM_TO_ZONE_TYPE_CURRENT: Dict[str, str] = {}
 ZONE_TYPE_TO_DLBMS: Dict[str, List[str]] = {}
-for _code, _zt in DLBM_TO_ZONE_TYPE.items():
-    ZONE_TYPE_TO_DLBMS.setdefault(_zt, []).append(_code)
-for _code, _zt in DLBM_TO_ZONE_TYPE_CURRENT.items():
-    ZONE_TYPE_TO_DLBMS.setdefault(_zt, []).append(_code)
-
-
-def _zone_type_for_dlbm_with_fallback(dlbm: str) -> str:
-    code = str(dlbm).strip()
-    zt = DLBM_TO_ZONE_TYPE_CURRENT.get(code)
-    if zt:
-        return zt
-    zt = DLBM_TO_ZONE_TYPE_CURRENT.get(code[:2])
-    if zt:
-        return zt
-    return DLBM_TO_ZONE_TYPE.get(code, "农业用地")
 
 
 def get_zone_type_for_dlbm(dlbm: str) -> str:
-    """Current functional classification of a DLBM code (e.g. '0101' -> '农业用地')."""
-    return _zone_type_for_dlbm_with_fallback(dlbm)
+    """Return no zone type without an explicitly declared target namespace."""
+    return ""
 
 
 def get_dlbms_for_zone_type(zone_type: str) -> List[str]:

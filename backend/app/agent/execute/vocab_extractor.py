@@ -31,19 +31,6 @@ _COLOR_POOL = [
     "#f2994a", "#adb5bd", "#e85d75", "#f2c94c",
 ]
 
-# 现状用地分类码（bundle landuse_current 的 dlbm 体系，非规划分类码）
-_DLBM_HINTS: Dict[str, List[str]] = {
-    "生态": ["1340", "1350"],
-    "农田": ["1100"],
-    "农业": ["1100", "1200", "1400"],
-    "村庄": ["2121", "2122"],
-    "建设": ["2121", "2122", "2124"],
-    "林业": ["1340", "1350"],
-    "旅游": ["1100", "1200", "1340", "3100"],
-    "康养": ["1340", "1350", "3100"],
-    "历史": ["2122", "2123"],
-}
-
 _HEX_RE = re.compile(r"^#[0-9a-fA-F]{6}$")
 
 _PROTECTION_KEYWORDS = ("生态", "保护", "农田", "基本农田", "保育")
@@ -51,13 +38,6 @@ _PROTECTION_KEYWORDS = ("生态", "保护", "农田", "基本农田", "保育")
 
 def _is_protection(name: str) -> bool:
     return any(kw in name for kw in _PROTECTION_KEYWORDS)
-
-
-def _default_dlbm_for(name: str) -> List[str]:
-    for kw, codes in _DLBM_HINTS.items():
-        if kw in name:
-            return codes
-    return ["0101"]
 
 
 def extract_vocabulary_deterministic(reports: Dict[str, str]) -> Vocabulary:
@@ -86,7 +66,7 @@ def extract_vocabulary_deterministic(reports: Dict[str, str]) -> Vocabulary:
                     code=f"FZ{len(categories) + 1:02d}",
                     name_zh=name,
                     color=_COLOR_POOL[len(categories) % len(_COLOR_POOL)],
-                    typing_rules=[TypingRule(kind="dlbm_in", value=_default_dlbm_for(name))],
+                    typing_rules=[],
                     is_protection=_is_protection(name),
                 )
             )
@@ -106,9 +86,9 @@ _VOCAB_PROMPT = """你是村庄规划功能区词汇提取助手。从下列 L3 
   "evidence": "报告原文依据句"}}]}}
 要求：
 - color 必须是合法的 hex 格式（#RRGGBB），由你自由选择
-- dlbm_hints 是推测的**现状用地分类码**（1100 耕地、1200 园地、1340 商品林、1350 生态林、2121 宅基地、2124 经营性建设用地、3100 水域）
+- dlbm_hints 仅可作为 rules 中显式 dlbm_in 的候选值；它不是规划分类，也不能单独产生分类结果
 - is_protection: 生态/保护/农田类功能区为 true（与三线重合），建设/产业类为 false
-- rules 是复合规则表达式（可选，缺省时用 dlbm_hints），谓词白名单：
+- rules 是复合规则表达式（可选；缺省时不产生地类规则），谓词白名单：
     dlbm_in[码数组] / within_zone[区域] / not_within_zone[区域] /
     slope_lt[度] / road_distance_lt[米] / near_poi[名称] /
     and[子规则数组] / any[子规则数组] / not[子规则数组]
@@ -147,7 +127,7 @@ async def _extract_vocabulary_llm(llm: Any, reports: Dict[str, str]) -> Vocabula
                 code=f"FZ{len(categories) + 1:02d}",
                 name_zh=name,
                 color=color,
-                typing_rules=rules or [TypingRule(kind="dlbm_in", value=hints or _default_dlbm_for(name))],
+            typing_rules=rules,
                 is_protection=bool(item.get("is_protection")) or _is_protection(name),
             )
         )

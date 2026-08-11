@@ -178,6 +178,16 @@ def _zone_worker(state: ExecuteAgentState) -> WorkerResult:
     task_statuses: Dict[str, str] = {}
     empty_targets = []
     for zone_target in zone_targets:
+        decision = getattr(zone_target, "classification_decision", None)
+        if decision is None or getattr(decision, "status", "") != "resolved":
+            target_id = str(getattr(zone_target, "target_id", "") or "")
+            task_statuses[target_id] = "failed"
+            unresolved.append({
+                "code": "classification_unresolved",
+                "target_id": target_id,
+                "message": "Zone execution requires an explicit resolved classification decision.",
+            })
+            continue
         if not getattr(zone_target, "candidate_bsms", None):
             empty_targets.append(zone_target)
             continue
@@ -195,8 +205,12 @@ def _zone_worker(state: ExecuteAgentState) -> WorkerResult:
 
     unresolved.extend(
         _allocate_empty_zone_targets(
-            state, empty_targets, parcel_by_bsm, zone_changes, diagnostics
-            , task_statuses
+            state,
+            empty_targets,
+            parcel_by_bsm,
+            zone_changes,
+            diagnostics,
+            task_statuses,
         )
     )
 

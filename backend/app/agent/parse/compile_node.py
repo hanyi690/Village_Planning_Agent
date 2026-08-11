@@ -64,6 +64,7 @@ def _to_project_target(intervention: PlanningIntervention, index: int) -> Projec
         area_ha=intervention.area_range_ha[0] if intervention.area_range_ha else None,
         location_hint=_spatial_hint(intervention),
         source_instruction_id=intervention.intervention_id,
+        classification_decision=intervention.classification_decision,
         source_section="L3_PROGRAM",
         source_row=index,
         semantic=_semantic(intervention),
@@ -80,6 +81,7 @@ def _to_facility_target(intervention: PlanningIntervention) -> FacilityTarget:
         location_hint=_spatial_hint(intervention),
         source_project_id=intervention.intervention_id,
         source_instruction_id=intervention.intervention_id,
+        classification_decision=intervention.classification_decision,
         direction="center",
         semantic=_semantic(intervention),
     )
@@ -94,6 +96,7 @@ def _to_road_target(intervention: PlanningIntervention) -> RoadTarget:
         width_m=0.0,
         connects=[],
         source_project_id=intervention.intervention_id,
+        classification_decision=intervention.classification_decision,
         semantic=_semantic(intervention),
     )
 
@@ -107,6 +110,7 @@ def _to_zone_target(intervention: PlanningIntervention) -> ZoneTarget:
         area_ha=intervention.area_range_ha[0] if intervention.area_range_ha else None,
         zone_id=intervention.intervention_id,
         source_instruction_id=intervention.intervention_id,
+        classification_decision=intervention.classification_decision,
         semantic=_semantic(intervention),
     )
 

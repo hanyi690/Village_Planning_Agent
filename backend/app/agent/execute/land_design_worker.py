@@ -13,7 +13,11 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from shapely.geometry import Point, shape
 
-from app.modules.schema.contracts.classification_ref import ClassificationRef
+from app.modules.schema.contracts.classification_ref import (
+    ClassificationDecision,
+    ClassificationRef,
+    classification_code_names,
+)
 from app.modules.schema.contracts.parcel_change_contracts import ParcelChange, ParcelChangeSet
 from app.modules.schema.contracts.parse_contracts import (
     FacilityTarget,
@@ -75,49 +79,59 @@ def _parcel_area_ha(parcel: Any) -> float:
     return area_sqm / 10000
 
 
-def _looks_like_code(value: str) -> bool:
-    return bool(value) and any(ch.isdigit() for ch in value)
+def _classification_from_decision(
+    decision: Optional[ClassificationDecision],
+    *,
+    source: str = "derived",
+) -> Optional[ClassificationRef]:
+    """Materialize only an explicit, namespace-validated classification."""
+    if decision is None or decision.status != "resolved":
+        return None
+    system = decision.code_system.value
+    names = classification_code_names(system)
+    code = str(decision.selected_code or "").strip()
+    if not code or names is None or code not in names:
+        return None
+    try:
+        return ClassificationRef(
+            system=decision.code_system,
+            code=code,
+            canonical_name=names[code],
+            source=source,
+            evidence_refs=list(decision.evidence_refs),
+            decision_ref=decision.target_id,
+        )
+    except ValueError:
+        return None
 
 
-def _resolve_project_code(brief: Optional[LandDesignBrief]) -> Optional[Tuple[str, str]]:
-    """Resolve (code, name) for a project parcel from its design brief.
-
-    A project code must be supplied explicitly by a frozen classification
-    decision. Free-text footprint conditions are not a classification source.
-    """
-    if brief is not None:
-        for condition in brief.footprint_conditions or []:
-            if condition.startswith("code:"):
-                code = condition[len("code:") :].strip()
-                if code:
-                    return code, code
-    return None
-
-
-def _resolve_zone_code(zone_target: ZoneTarget) -> Tuple[str, str]:
-    """Resolve (code, name) for a zone target.
-
-    Rule: use planning_zone when it looks like a code (contains a digit),
-    else use land_use; fall back to vne_code when both are empty.
-    """
-    planning_zone = (zone_target.planning_zone or "").strip()
-    land_use = (zone_target.land_use or "").strip()
-    vne_code = (zone_target.vne_code or "").strip()
-    if _looks_like_code(planning_zone):
-        return planning_zone, land_use
-    if land_use:
-        return land_use, land_use
-    return vne_code, land_use
-
-
-def _classification(code: str, name: str, source: str = "derived") -> ClassificationRef:
-    return ClassificationRef(
-        system="ghytbm",
-        code=code,
-        canonical_name=name,
-        source=source,
-        evidence_refs=[f"classification:{code}"],
-    )
+def _parcel_classification(
+    parcel: Any,
+    *,
+    source: str,
+) -> Optional[ClassificationRef]:
+    """Read a parcel's own declared code system; never infer one from the code."""
+    system = str(
+        (parcel.get("dlbm_system", "") if isinstance(parcel, dict) else getattr(parcel, "dlbm_system", ""))
+        or ""
+    ).strip()
+    code = str(
+        (parcel.get("dlbm", "") if isinstance(parcel, dict) else getattr(parcel, "dlbm", ""))
+        or ""
+    ).strip()
+    names = classification_code_names(system) if system else None
+    if not code or names is None or code not in names:
+        return None
+    try:
+        return ClassificationRef(
+            system=system,
+            code=code,
+            canonical_name=names[code],
+            source=source,
+            evidence_refs=[f"parcel:{code}"],
+        )
+    except ValueError:
+        return None
 
 
 def design_project_parcel(
@@ -140,19 +154,14 @@ def design_project_parcel(
         return None
 
     if brief is None:
-        dlbm = str(
-            (parcel.get("dlbm", "") if isinstance(parcel, dict) else getattr(parcel, "dlbm", ""))
-            or ""
-        )
-        dlmc = str(
-            (parcel.get("dlmc", "") if isinstance(parcel, dict) else getattr(parcel, "dlmc", ""))
-            or ""
-        )
+        preserved = _parcel_classification(parcel, source="preserve")
+        if preserved is None:
+            return None
         return ParcelChange(
             bsm=str(selected_bsm),
             action="preserve",
             derived_from_bsms=[str(selected_bsm)],
-            after_classification=_classification(dlbm, dlmc, source="preserve"),
+            after_classification=preserved,
             before_geometry_wkt=_geometry_to_wkt(_parcel_geometry(parcel)),
             after_geometry_wkt=_geometry_to_wkt(_parcel_geometry(parcel)),
             new_area_ha=_parcel_area_ha(parcel),
@@ -160,14 +169,14 @@ def design_project_parcel(
             intervention_id=project.project_id,
         )
 
-    resolved_code = _resolve_project_code(brief)
-    if resolved_code is None:
+    planned_classification = _classification_from_decision(
+        getattr(project, "classification_decision", None)
+        or getattr(brief, "classification_decision", None)
+    )
+    if planned_classification is None:
         return None
-    new_code, new_name = resolved_code
-    try:
-        planned_classification = _classification(new_code, new_name)
-    except ValueError:
-        return None
+    new_code = planned_classification.code
+    new_name = planned_classification.canonical_name
     candidate_bsms = list(project.candidate_bsms or [])
 
     if len(candidate_bsms) > 1:
@@ -240,14 +249,13 @@ def design_project_footprint(
         change = design_project_parcel(project, None, selected_bsm, parcel_by_bsm)
         return [change] if change is not None else []
 
-    resolved_code = _resolve_project_code(brief)
-    if resolved_code is None:
+    planned_classification = _classification_from_decision(
+        getattr(project, "classification_decision", None)
+        or getattr(brief, "classification_decision", None)
+    )
+    if planned_classification is None:
         return []
-    new_code, new_name = resolved_code
-    try:
-        planned_classification = _classification(new_code, new_name)
-    except ValueError:
-        return []
+    new_code = planned_classification.code
     candidate_bsms = list(project.candidate_bsms or [])
 
     source_geom = None
@@ -352,17 +360,20 @@ def design_zone_parcel(
     parcel_by_bsm: Dict[str, Any],
 ) -> List[ParcelChange]:
     """Reclassify every candidate parcel of a zone target to the zone's land use."""
-    code, name = _resolve_zone_code(zone_target)
-    try:
-        zone_classification = _classification(code, name)
-    except ValueError:
+    zone_classification = _classification_from_decision(
+        getattr(zone_target, "classification_decision", None)
+    )
+    if zone_classification is None:
         return []
+    code = zone_classification.code
     changes: List[ParcelChange] = []
     for bsm in zone_target.candidate_bsms or []:
         parcel = parcel_by_bsm.get(str(bsm))
         if parcel is None:
             continue
-        result = reclassify_parcel(parcel, code, name)
+        result = reclassify_parcel(
+            parcel, code, zone_classification.canonical_name
+        )
         changes.append(
             ParcelChange(
                 bsm=str(bsm),
@@ -411,15 +422,10 @@ def design_facility_parcel(
             containing.append((str(bsm), parcel, geom))
     if len(containing) == 1:
         bsm, parcel, parcel_geom = containing[0]
-        code = facility_target.type or str(
-            (parcel.get("dlbm", "") if isinstance(parcel, dict) else getattr(parcel, "dlbm", ""))
-            or ""
+        facility_classification = _classification_from_decision(
+            getattr(facility_target, "classification_decision", None)
         )
-        if not code:
-            return None
-        try:
-            facility_classification = _classification(code, code)
-        except ValueError:
+        if facility_classification is None:
             return None
         return ParcelChange(
             bsm=bsm,
@@ -442,11 +448,13 @@ def design_facility_parcel(
     except Exception:
         return None
     bsm = f"{facility_target.type or 'facility'}_0"
-    try:
-        facility_classification = _classification(facility_target.type or "", facility_target.type or "")
-    except ValueError:
+    facility_classification = _classification_from_decision(
+        getattr(facility_target, "classification_decision", None)
+    )
+    if facility_classification is None:
         return None
-    create_parcel(geom_dict, bsm, facility_target.type or "")
+    code = facility_classification.code
+    create_parcel(geom_dict, bsm, code)
     return ParcelChange(
         bsm=bsm,
         action="create",

@@ -77,13 +77,13 @@ _ROAD_RE = re.compile(
 def _extract_zone_targets(text: str) -> List[ZoneTarget]:
     targets = []
     for match in _ZONE_TARGET_RE.finditer(text):
-        land_use = match.group(1) or match.group(4) or "村庄建设区"
+        land_use = match.group(1) or match.group(4) or ""
         area_ratio = float(match.group(2) or match.group(3) or 0) / 100.0
-        if area_ratio > 0:
+        if area_ratio > 0 and land_use.strip():
             targets.append(
                 ZoneTarget(
                     zone_id=f"zone_{len(targets)}",
-                    land_use=land_use.strip() if land_use else "村庄建设区",
+                    land_use=land_use.strip(),
                     area_ratio=area_ratio,
                     semantic=SemanticMetadata(
                         natural_language_description=f"规划{land_use}占比{area_ratio*100:.0f}%",

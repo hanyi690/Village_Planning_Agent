@@ -218,6 +218,7 @@ def map_table_to_zone_targets(
         return None
 
     targets = []
+    classification_system = _classification_system_from_headers(headers)
     for row in rows:
         if not row or all(c.strip() == "" for c in row):
             continue
@@ -237,14 +238,18 @@ def map_table_to_zone_targets(
         if ratio_val is not None and ratio_val > 1.0 and "%" in (ratio_str or ""):
             ratio_val = ratio_val / 100.0
 
-        # Try to resolve VNE code from GHYTBM
-        vne_code = _resolve_vne(dlbm)
+        classification_decision = _classification_decision(
+            classification_system,
+            dlbm,
+            evidence_ref="parse:land_use_table",
+        )
 
         targets.append(ZoneTarget(
             land_use=land_use,
             area_ratio=ratio_val or 0.0,
             dlbm=dlbm if dlbm else None,
-            vne_code=vne_code,
+            vne_code=dlbm if classification_system == "vne" and dlbm else None,
+            classification_decision=classification_decision,
         ))
 
     if not targets:
@@ -254,14 +259,56 @@ def map_table_to_zone_targets(
     return targets
 
 
-def _resolve_vne(ghytbm: str) -> Optional[str]:
-    """Resolve VNE code from GHYTBM using schema lookup."""
-    if not ghytbm:
+def _classification_system_from_headers(headers: List[str]) -> Optional[str]:
+    """Identify an explicitly declared code system from table headers.
+
+    A bare ``DLBM`` header is intentionally ambiguous.  Guessing whether it
+    means GB/T 21010, 土规, or a planning layer would reintroduce the exact
+    cross-system inference this parser is required to avoid.
+    """
+    text = " ".join(headers).upper()
+    explicit = (
+        ("GHYTBM", "ghytbm"),
+        ("VNE", "vne"),
+        ("GHFLBM", "ghflbm"),
+        ("YDYHFLDM", "ydyhfldm"),
+        ("QMDLBM", "tugui"),
+        ("GB/T 21010", "gbt21010"),
+        ("GB/T21010", "gbt21010"),
+    )
+    matches = [system for marker, system in explicit if marker in text]
+    return matches[0] if len(set(matches)) == 1 else None
+
+
+def _classification_decision(
+    system: Optional[str],
+    code: str,
+    *,
+    evidence_ref: str,
+):
+    """Build a resolved decision only for an explicit, valid closed-set code."""
+    if not system or not code:
         return None
+    from app.modules.schema.contracts.classification_ref import (
+        ClassificationDecision,
+        ClassificationSystem,
+        classification_code_names,
+    )
+
     try:
-        from app.modules.schema.advisory_crosswalks import GHYTBM_TO_VNE
-        return GHYTBM_TO_VNE.get(ghytbm.strip(), None)
-    except Exception:
+        code_names = classification_code_names(system)
+        if not code_names or code.strip() not in code_names:
+            return None
+        return ClassificationDecision(
+            target_id="table-row",
+            code_system=ClassificationSystem(system),
+            candidate_codes=[code.strip()],
+            selected_code=code.strip(),
+            decision_mode="parse_explicit",
+            evidence_refs=[evidence_ref],
+            status="resolved",
+        )
+    except (KeyError, TypeError, ValueError):
         return None
 
 

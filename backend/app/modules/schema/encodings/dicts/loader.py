@@ -98,6 +98,7 @@ class CodeDictionary:
         result = []
         for entry in self.raw.get("classes", []):
             result.append(LandUseClass(
+                system=self.name,
                 code=str(entry.get("code", "")),
                 name=str(entry.get("name", "")),
                 zone_type=str(entry.get("zone_type", "")),

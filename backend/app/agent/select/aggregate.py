@@ -16,8 +16,8 @@ import logging
 from typing import Any, Dict, List, Optional, Tuple
 
 from app.modules.context.planning_context import PlanningContext
-from app.modules.schema import DLBM_TO_DLMC
 from app.modules.schema.contracts.grounding_contracts import CandidateSite, GroundingResult
+from app.modules.schema.contracts.classification_ref import classification_code_names
 from app.modules.schema.contracts.parse_contracts import ProjectTarget
 from app.modules.schema.contracts.provenance import Provenance
 from app.modules.schema.contracts.selection_contracts import (
@@ -51,6 +51,11 @@ _SCORE_BREAKDOWN_STUBS = {
 }
 
 
+def _classification_ready(target: Any) -> bool:
+    decision = getattr(target, "classification_decision", None)
+    return decision is not None and getattr(decision, "status", "") == "resolved"
+
+
 def _candidate_site_to_parcels(
     site: CandidateSite, parcel_by_bsm: dict[str, object]
 ) -> list[CandidateParcel]:
@@ -64,13 +69,16 @@ def _candidate_site_to_parcels(
         parcel = parcel_by_bsm.get(str(bsm))
         if parcel is None:
             continue
-        dlbm = str(getattr(parcel, "dlbm", ""))
+        dlbm = str(getattr(parcel, "dlbm", "") or "").strip()
+        dlbm_system = str(getattr(parcel, "dlbm_system", "") or "").strip()
+        names = classification_code_names(dlbm_system) if dlbm_system else None
         parcels.append(
             CandidateParcel(
                 bsm=str(bsm),
                 geometry=getattr(parcel, "geometry", {}),
                 dlbm=dlbm,
-                dlmc=DLBM_TO_DLMC.get(dlbm, ""),
+                dlbm_system=dlbm_system,
+                dlmc=(names or {}).get(dlbm, ""),
                 area_ha=(getattr(parcel, "area_sqm", 0.0) or 0.0) / 10000.0,
                 target_ref=(getattr(site, "target_ref", None) or ""),
             )
@@ -132,6 +140,7 @@ def build_land_design_brief(
     adjacency = [f"facility:{f}" for f in (project.related_facility_types or [])]
     return LandDesignBrief(
         project_ref=project.target_id,
+        classification_decision=project.classification_decision,
         footprint_conditions=footprint,
         access_requirements=access,
         adjacency_requirements=adjacency,
@@ -418,6 +427,16 @@ def select_aggregate(
                 project.target_id,
             )
             continue
+        if not _classification_ready(project):
+            placements.append(
+                PlacementDecision(
+                    target_id=project.target_id,
+                    selected_bsm="",
+                    status="unplaced",
+                    reason="classification_unresolved",
+                )
+            )
+            continue
         target = SelectionTarget(
             target_id=project.target_id,
             name=project.name,
@@ -468,6 +487,25 @@ def select_aggregate(
     facility_placements: Dict[str, Dict[str, Any]] = {}
     facility_rank = len(placements) + 1
     for i, facility in enumerate(facilities):
+        if not _classification_ready(facility):
+            decision.target_assignments.append(
+                TargetAssignment(
+                    target_id=facility.target_id,
+                    target_type="facility",
+                    status="unplaced",
+                    anchor_point=facility.anchor_point,
+                    expected_output_kind=facility.expected_output_kind,
+                    target_binding=facility.model_dump(mode="json"),
+                    reason="classification_unresolved",
+                )
+            )
+            facility_placements[facility.target_id] = {
+                "bsm": "",
+                "anchor_point": facility.anchor_point,
+                "status": "unplaced",
+                "facility_type": facility.type,
+            }
+            continue
         decision_p, bsm = _place_facility(
             facility, parcels, context, cluster_centroid, occupied
         )

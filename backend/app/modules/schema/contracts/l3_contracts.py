@@ -7,6 +7,7 @@ from typing import Literal
 from pydantic import BaseModel, Field, model_validator
 
 from .contract_meta import ContractMeta
+from .classification_ref import ClassificationDecision
 from .evidence_contracts import EvidenceSource
 from .l1_contracts import EvidenceGap
 from .parse_result_contracts import ParseDiagnostic
@@ -30,6 +31,9 @@ class PlanningIntervention(BaseModel):
     spatial_requirements: dict = Field(default_factory=dict)
     constraints: list[str] = Field(default_factory=list)
     evidence_refs: list[str] = Field(default_factory=list)
+    # A formal target classification must be selected in its own namespace.
+    # Human-readable ``name``/``functions`` remain semantic context only.
+    classification_decision: ClassificationDecision | None = None
     derives_from_strategy: str | None = None
 
     @model_validator(mode="after")

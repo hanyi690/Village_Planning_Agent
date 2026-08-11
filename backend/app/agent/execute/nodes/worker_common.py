@@ -229,6 +229,7 @@ def _parcel_from_feature(feature: dict) -> Any:
         bsm=str(props.get("BSM") or props.get("bsm") or ""),
         geometry=raw_geom,
         dlbm=str(props.get("DLBM") or props.get("dlbm") or ""),
+        dlbm_system=str(props.get("DLBM_SYSTEM") or props.get("dlbm_system") or ""),
         area_sqm=float(props.get("area_sqm") or props.get("area") or 0),
         area_ha=float(props.get("area_ha") or 0),
     )
