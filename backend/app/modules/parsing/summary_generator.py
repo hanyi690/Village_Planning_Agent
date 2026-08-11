@@ -176,6 +176,14 @@ async def generate_structured_summary(
 
     Returns JSON string compatible with the dimension's Pydantic schema.
     """
+    # This is the hard boundary for the optional enrichment path.  Callers
+    # outside dimension_runtime/report_store also reach this function (notably
+    # background enrichment), so checking the setting only at those call sites
+    # still allowed Instructor requests when enrichment was disabled.
+    from app.core.settings import BACKGROUND_SUMMARY_ENRICHMENT
+    if not BACKGROUND_SUMMARY_ENRICHMENT:
+        return _deterministic_summary_json(dimension_key, layer, content)
+
     if not content:
         return _default_summary_json(dimension_key, layer)
 
@@ -203,6 +211,27 @@ async def generate_structured_summary(
         key_points=regex_key_points[:5],
         text_summary=content[:200],
         metrics=seed_metrics,
+    )
+    return summary.model_dump_json(ensure_ascii=False)
+
+
+def _deterministic_summary_json(
+    dimension_key: str,
+    layer: int,
+    content: str,
+) -> str:
+    """Return the validated summary without creating an LLM client."""
+    if not content:
+        return _default_summary_json(dimension_key, layer)
+    regex_metrics = _extract_metrics_regex(content)
+    dimension_metrics = _extract_dimension_metrics(dimension_key, content)
+    summary = BaseDimensionSummary(
+        dimension_key=dimension_key,
+        layer=layer,
+        word_count=len(content),
+        key_points=_extract_key_points_regex(content)[:5],
+        text_summary=content[:200],
+        metrics={**regex_metrics, **dimension_metrics},
     )
     return summary.model_dump_json(ensure_ascii=False)
 
