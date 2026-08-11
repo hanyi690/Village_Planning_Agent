@@ -252,6 +252,45 @@ async function recover(sessionId: string, lastSeq: number) {
 `action` 只能为 `retry`、`approve`、`reject`。必须回传 GET 得到的同一个
 `event_id`；提交期间禁用按钮。冲突、重复或过期决策不得静默重试，应刷新审核资源。
 
+### 7.1 中断恢复与页面恢复不是一回事
+
+前端只负责两类动作：
+
+1. 页面/SSE 恢复：先读 `/state`，再用 `events/sync?after=N` 补事件；这不会重新运行
+   后端图，也不会产生新的规划 revision。
+2. 用户明确决策：读取 `/human-review` 的当前 `event_id`，提交一次审核命令；这才会
+   继续 LangGraph 执行。
+
+不要让 SSE 重连、页面刷新、轮询超时自动调用审核接口或 checkpoint resume 接口。
+后端恢复是 compare-and-set：旧页面提交 `event_id` 时返回 `409`，前端应重新拉取
+`state` 和 `human-review`，向用户展示当前审核内容，而不是自动重放旧决定。
+
+### 7.2 端到端恢复状态机
+
+```text
+CONNECTING
+  -> BASELINE_LOADING (/state)
+  -> CATCHING_UP (/events/sync?after=N)
+  -> LIVE (EventSource + Last-Event-ID)
+
+LIVE -- human_review --> REVIEWING
+REVIEWING -- user submit(event_id) --> RESUME_REQUESTED
+RESUME_REQUESTED -- 202/200 --> CATCHING_UP
+RESUME_REQUESTED -- 409 --> BASELINE_LOADING
+
+LIVE -- resync_required/seq gap --> BASELINE_LOADING
+LIVE -- completed/failed --> TERMINAL_REFRESH (/state + /delivery)
+```
+
+审核按钮必须以 `event_id` 为版本锁；`status=paused` 不是恢复命令，
+`last_event_seq` 也不是 HUMAN 决策 token。地图和交付数据在恢复后仍然只从新的
+`DeliverySpatialSnapshot` 投影读取，不能把旧 GeoJSON 与新事件拼接。
+
+后端后续若开放通用 `ResumeCommand` API，前端只传 `command_id/session_id/mode` 以及
+对应的 `event_id`、`checkpoint_id` 和小型 `payload`；不得传 `AgentState`、checkpoint
+完整 JSON、artifact 内容或内部 LangGraph 节点名。这样可以在后端替换 checkpoint/store
+实现时保持前端协议稳定。
+
 ## 8. 地图数据
 
 `GET /api/v1/sessions/{id}/map-layers`

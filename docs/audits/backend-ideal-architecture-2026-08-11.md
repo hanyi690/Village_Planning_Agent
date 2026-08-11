@@ -512,3 +512,58 @@ pending event_id 能消费一次。审核决定写不可变 `HumanDecision` arti
 - [FastAPI Server-Sent Events](https://fastapi.tiangolo.com/tutorial/server-sent-events/)
 - [Martin Fowler: Event Sourcing](https://martinfowler.com/eaaDev/EventSourcing.html)
 - [OGC API Features](https://ogcapi.ogc.org/features/)
+
+## 14. Resume 设计（当前优先实现）
+
+恢复必须先区分“客户端恢复显示”和“服务端继续执行”。前者不触发图运行，后者才
+允许消费 checkpoint：
+
+| 场景 | 是否运行图 | 唯一依据 | 结果 |
+|---|---:|---|---|
+| SSE 断线/刷新 | 否 | `last_event_seq` + `/state` | 重建投影，不产生新 revision |
+| HUMAN 决策 | 是 | 同一 `thread_id` + 当前 `human_interrupt.event_id` | `Command(resume=...)`，消费一次中断 |
+| 进程崩溃恢复 | 是 | 持久 checkpoint + artifact checksum | 从最后安全边界继续，复用已提交 artifact |
+| 稳定 checkpoint 恢复 | 是 | 显式 `checkpoint_id` + `ResumePlan` | 创建新的执行分支，不改写历史 |
+| 父 artifact/context 变化 | 是 | 最早失效 parent checksum | 从最早受影响阶段生成新 revision |
+| 已完成/诊断终止 | 否 | `phase`/`diagnostic_terminal` | 返回 blocked/completed，不伪造成功 |
+
+统一命令模型是 `ResumeCommand`（`backend/app/modules/schema/contracts/resume_contracts.py`）：
+
+```text
+command_id                 客户端/操作方幂等键
+session_id                 业务线程，映射 LangGraph thread_id
+mode                       resume_interrupt | resume_checkpoint | rerun_from_stage
+checkpoint_id              可选的历史图游标，不等于业务 revision
+event_id                   HUMAN 决策的 compare-and-set token
+expected_last_event_seq   可选的展示版本保护
+payload                    仅存 action/decision，不存完整业务 artifact
+```
+
+服务端处理顺序固定为：获取当前快照 → 检测真实 `PregelTask.interrupts` → 构造
+`ResumePlan` → 校验 event/checksum/context → 获取执行锁 → 以 `command_id` 幂等去重 →
+提交 artifact → 写 checkpoint ref → 发布事件。任何一步失败都不更新“已恢复”投影。
+
+HUMAN 恢复必须满足：
+
+1. `event_id` 与当前 canonical `human_interrupt.event_id` 相等；
+2. 当前 checkpoint 仍有 pending interrupt，不能只依据 `graph.next`；
+3. 同一 event 只能消费一次；重复请求返回冲突或同一命令的幂等结果；
+4. 决策写入审计事件后才调用 `Command(resume=...)`；
+5. 恢复后的新 HUMAN 暂停必须生成新的 event_id，不能复用旧 token。
+
+普通 checkpoint 恢复不调用 `Command(resume=...)`。它先读取目标 checkpoint 的 state，
+只允许 `layer`/`revision` 等稳定边界，然后使用新 revision 执行下游；原 checkpoint、
+原 artifact 和原事件历史保持不可变。`intermediate`、`human`、`completed`、
+`diagnostic_terminal` 均不得被普通恢复接口伪装成可继续执行。
+
+进程重启不重新调用已完成的 LLM 阶段：阶段成功的 artifact 必须先以 checksum 和
+parent_checksums 持久化，checkpoint 只保存 ref；恢复 planner 只复用可证明身份一致的
+ref，否则从最早失效阶段重跑。真实空间交付始终从同一 `DeliverySpatialSnapshot` 重建，
+禁止 render/export/land-balance 各自重新读取历史状态。
+
+### Resume 验收矩阵
+
+必须覆盖：HUMAN 同 event 重复提交、旧 event 提交、新 event 到达后的旧浏览器提交、
+进程重启后 checkpoint replay、artifact parent checksum 变化、SSE 断线不触发图运行、
+恢复到 completed/diagnostic terminal、恢复期间并发双提交，以及 DELIVER 失败后的
+snapshot-only 重试。没有这些测试，不能把“checkpoint 存在”称为“恢复可用”。
