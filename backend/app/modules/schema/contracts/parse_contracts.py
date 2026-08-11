@@ -26,6 +26,7 @@ from typing import Any, Dict, List, Literal, Optional, Tuple
 from pydantic import BaseModel, Field, computed_field, model_validator
 
 from .provenance import SemanticMetadata
+from .classification_ref import ClassificationDecision
 
 
 # ── Zone spatial preference ─────────────────────────────────────────
@@ -57,6 +58,7 @@ class TargetExecutionContract(BaseModel):
     execution_mode: Literal["spatial", "non_spatial"] = "spatial"
     expected_output_kind: Literal["parcel", "polygon", "point", "line", "action"] = "parcel"
     requires_spatial: bool = True
+    classification_decision: ClassificationDecision | None = None
 
     @model_validator(mode="after")
     def validate_execution_contract(self) -> "TargetExecutionContract":

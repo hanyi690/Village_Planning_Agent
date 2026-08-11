@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import logging
 from enum import Enum
 from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, ConfigDict, Field
+
+logger = logging.getLogger(__name__)
 
 
 class CRS(str, Enum):
@@ -308,16 +311,43 @@ class VillageBundle(BaseModel):
         if len(xzqhdm) == 12 and xzqhdm.isdigit():
             return xzqhdm
         bsm = str(getattr(feature, "bsm", "") or "").strip()  # getattr intentional — feature is Any
-        if len(bsm) == 20 and bsm.isdigit():
+        if len(bsm) >= 12 and bsm.isdigit():
             return bsm[:12]
         return "000000000000"
 
+    def _is_valid_source_bsm(self, bsm: str) -> bool:
+        """Whether ``bsm`` is a plausible source BSM we should preserve.
+
+        Accepts numeric strings of 15-20 digits, covering both the 18-digit
+        NRBS village-parcel format used by real fixtures and the 20-digit
+        synthetic format generated here.
+        """
+        return 15 <= len(bsm) <= 20 and bsm.isdigit()
+
     def _assign_bsm(self, feature: Any) -> None:
-        """为要素分配 20 位标准 BSM（12 位村码 + 8 位顺序号），始终覆写以保证唯一性。"""
+        """Preserve a valid source BSM; generate one only when absent.
+
+        BSM is the cross-stage identity shared by uploaded GIS, KG, GROUND,
+        SELECT and render provenance.  Replacing a real source BSM with a
+        counter value makes otherwise valid candidates impossible to map back
+        to ``landuse_current``.
+        """
+        source_bsm = str(getattr(feature, "bsm", "") or "").strip()
+        if self._is_valid_source_bsm(source_bsm):
+            return
         village_code = self._resolve_village_code(feature)
         seq = self._bsm_counter.get(village_code, 1)
         self._bsm_counter[village_code] = seq + 1
-        feature.bsm = f"{village_code}{seq:08d}"
+        synthetic = f"{village_code}{seq:08d}"
+        if source_bsm:
+            logger.warning(
+                "[BSM-GEN] source=%r len=%d rejected -> synthetic=%s:%08d",
+                source_bsm,
+                len(source_bsm),
+                village_code,
+                seq,
+            )
+        feature.bsm = synthetic
 
     @property
     def boundary(self) -> Any:
@@ -525,6 +555,18 @@ def from_bundle_dict(data: Dict[str, Any]) -> VillageBundle:
     _restore_group(bundle.points, data.get("points"))
     _restore_group(bundle.lines, data.get("lines"))
     _restore_group(bundle.polygons, data.get("polygons"))
+
+    counter: Dict[str, int] = {}
+    for feats in (data.get("polygons") or {}).values():
+        for f in feats:
+            bsm = str((f or {}).get("bsm", "") or "").strip()
+            if len(bsm) >= 12 and bsm.isdigit():
+                village_code = bsm[:12]
+                tail = bsm[12:]
+                seq = int(tail) if tail.isdigit() else 0
+                if seq >= counter.get(village_code, 0):
+                    counter[village_code] = seq + 1
+    object.__setattr__(bundle, "_bsm_counter", counter)
 
     return bundle
 

@@ -96,6 +96,7 @@ class IntentCompilationResult(ContractMeta):
     constraint_set: Any = None  # ConstraintSet (lazy ref)
     diagnostics: list[ParseDiagnostic] = Field(default_factory=list)
     patches: list[CompilationPatch] = Field(default_factory=list)
+    target_binding_table: Any = None  # TargetBindingTable (lazy ref)
     compilation_status: CompilationStatus = CompilationStatus.DRAFT
     confidence: float = 0.0
     provenance: Any = None  # Provenance

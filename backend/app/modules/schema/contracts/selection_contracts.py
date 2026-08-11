@@ -33,6 +33,7 @@ class TargetAssignment(BaseModel):
     expected_output_kind: Literal["parcel", "polygon", "point", "line", "action"] = "parcel"
     target_binding: dict = Field(default_factory=dict)
     input_artifact_refs: list[str] = Field(default_factory=list)
+    reason: str = ""
     score: float = 0.0
     score_breakdown: dict = Field(default_factory=dict)
 

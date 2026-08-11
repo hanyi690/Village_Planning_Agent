@@ -1,7 +1,7 @@
 # Schema Contracts — 跨层数据契约索引
 
 > 村庄规划系统**所有阶段 artifact 与共享事实的类型化契约**。目录内每个文件对应一个阶段或一个共享领域，供 PARSE / GROUND / SELECT / EXECUTE / VALIDATE / RECONCILE / DELIVER 与共享层消费。
-> **Updated: 2026-08-05**（`layout_contracts.py` 已在前序批次删除，勿再引用）
+> **Updated: 2026-08-10**（`layout_contracts.py` 已在前序批次删除，勿再引用）
 
 ---
 
@@ -96,6 +96,8 @@
 | `evidence_contracts.py` | `EvidenceBundle` / `EvidenceFact` / `EvidenceSource` / `ExplorationRequest` / `ExplorationResult` / `SpatialCognitionEvidence` / `EvidenceGapResolution` | EXPLORE 证据探索 |
 | `constraint_contracts.py` | `PlanningConstraint` / `ConstraintSet` / `CompiledConstraint` / `CompilationReport` / `ConflictRecord` / `DroppedItem` | 约束模型（PARSE / EXECUTE 共享） |
 | `workflow_contracts.py` | `GateDecision` / `RoutingDecision` / `FeedbackRoute` / `PlanningRunRequest` / `PendingRequest` | 工作流控制 / Gate |
+| `resume_contracts.py` | `ResumePlan` / `ResumeMode` | checkpoint 恢复计划：区分 interrupt resume、checkpoint continue、下游重跑和阻断 |
+| `human_interrupt_contracts.py` | `HumanInterrupt` / `HumanInterruptItem` / `HumanInterruptChannel` | step-mode 与 post-L3 共用的 HUMAN interrupt payload |
 | `review_contracts.py` | `ReviewPackage` / `ReviewDecision` / `HumanReviewRequest` / `ReviewComment` / `ReviewStatus` | 人工审核包与决策 |
 | `gazetteer_contracts.py` | `GazetteerEntryLike` | 村名→空间实体解析的端口类型 |
 | `land_balance_contracts.py` | `LandBalanceTable` / `LandBalanceRow` | 用地平衡表（EXECUTE / 导出） |
