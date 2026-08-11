@@ -24,6 +24,10 @@ docs/architecture/*.md         ← 实现映射
 | [agent-graph.md](agent-graph.md) | 当前主图与目标分层子图 |
 | [modules.md](modules.md) | 模块职责和依赖边界 |
 | [backend-api.md](backend-api.md) | API、SSE 和服务适配 |
+| [backend-state-contract.md](backend-state-contract.md) | 状态所有权、artifact 与 DELIVER SSOT |
+| [frontend-api-v1.md](frontend-api-v1.md) | 稳定 `/api/v1` 前端对接契约 |
+| [api-sse-cutover.md](api-sse-cutover.md) | API/SSE 切换、旧端点退役矩阵与验收规则 |
+| [../frontend/API_SSE_DEVELOPER_GUIDE.md](../frontend/API_SSE_DEVELOPER_GUIDE.md) | 前端开发者完整接入、恢复、测试与后端演进规范 |
 | [frontend.md](frontend.md) | 前端状态、地图和 SSE |
 | [rag-system.md](rag-system.md) | RAG 数据摄取与检索实现 |
 | [deployment.md](deployment.md) | 部署和运行环境 |

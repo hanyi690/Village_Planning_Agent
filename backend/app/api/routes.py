@@ -26,9 +26,9 @@ from fastapi.responses import JSONResponse, Response
 
 from app.api.session_routes import router as session_router
 from app.api.gis_test_routes import router as gis_test_router
-from app.api.human_review_routes import router as human_review_router
-from app.api.artifact_routes import router as artifact_router
-from app.api.render_routes import router as render_router
+from app.api.v1 import router as v1_router
+from app.api.v1.contracts import SessionCreated
+from app.api.route_modules.session_crud import create_session
 from app.core.settings import IS_PRODUCTION, TIANDITU_API_KEY
 
 logger = logging.getLogger(__name__)
@@ -37,20 +37,25 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 # Core session API (新架构)
-router.include_router(session_router, tags=["Session"])
+router.include_router(session_router, tags=["Session (legacy)"], deprecated=True)
 
 # GIS dev test API (开发环境专用)
 if not IS_PRODUCTION:
     router.include_router(gis_test_router, tags=["GIS Dev"])
 
-# Post-L3 HITL (人工审查 interrupt + resume)
-router.include_router(human_review_router, tags=["Human Review"])
+# Register session bootstrap after the legacy session module has finished
+# loading, while exposing it exclusively through the stable v1 router.
+v1_router.add_api_route(
+    "/sessions",
+    create_session,
+    methods=["POST"],
+    response_model=SessionCreated,
+    status_code=201,
+    summary="Create a planning session",
+)
 
-# Artifact query API (只读)
-router.include_router(artifact_router, tags=["Artifacts"])
-
-# Render layer API (PlannedState -> GeoJSON)
-router.include_router(render_router, tags=["Render"])
+# Stable frontend-facing API.
+router.include_router(v1_router)
 
 
 # ============================================

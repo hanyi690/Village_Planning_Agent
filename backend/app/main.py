@@ -17,7 +17,8 @@ import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
@@ -239,7 +240,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="村庄规划智能体 API",
     description="基于LangGraph的村庄规划智能系统后端服务",
-    version="1.0.0",
+    version="1.1.0",
     docs_url="/docs",
     redoc_url="/redoc",
     lifespan=lifespan
@@ -252,7 +253,7 @@ app.add_middleware(
     allow_origins=ALLOWED_ORIGINS,
     allow_credentials=True,
     allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-    allow_headers=["Content-Type", "Authorization"],
+    allow_headers=["Content-Type", "Authorization", "Last-Event-ID"],
     expose_headers=["Content-Disposition"],
 )
 
@@ -312,12 +313,64 @@ async def root() -> dict[str, str]:
 # Error Handlers
 # ============================================
 
+def _v1_error(request_id: str, code: str, message: str, *, retryable: bool = False, details=None):
+    return {
+        "schema_version": "1.0",
+        "code": code,
+        "message": message,
+        "request_id": request_id,
+        "retryable": retryable,
+        "details": details or {},
+    }
+
+
+@app.exception_handler(HTTPException)
+async def http_exception_handler(request: Request, exc: HTTPException) -> JSONResponse:
+    if not request.url.path.startswith('/api/v1/'):
+        return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
+    request_id = str(uuid.uuid4())
+    return JSONResponse(
+        status_code=exc.status_code,
+        content=_v1_error(
+            request_id,
+            "NOT_FOUND" if exc.status_code == 404 else "REQUEST_REJECTED",
+            str(exc.detail),
+            retryable=exc.status_code >= 500,
+        ),
+    )
+
+
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request: Request, exc: RequestValidationError) -> JSONResponse:
+    if not request.url.path.startswith('/api/v1/'):
+        return JSONResponse(status_code=422, content={"detail": exc.errors()})
+    request_id = str(uuid.uuid4())
+    return JSONResponse(
+        status_code=422,
+        content=_v1_error(
+            request_id,
+            "VALIDATION_FAILED",
+            "request validation failed",
+            details={"errors": exc.errors()},
+        ),
+    )
+
 @app.exception_handler(Exception)
 async def global_exception_handler(request, exc: Exception) -> JSONResponse:
     """Global exception handler"""
     request_id = str(uuid.uuid4())
     logger.error(f"Unhandled exception [{request_id}]: {exc}", exc_info=True)
 
+    if request.url.path.startswith('/api/v1/'):
+        return JSONResponse(
+            status_code=500,
+            content=_v1_error(
+                request_id,
+                "INTERNAL_ERROR",
+                "An unexpected error occurred" if IS_PRODUCTION else str(exc),
+                retryable=True,
+            ),
+        )
     if IS_PRODUCTION:
         return JSONResponse(
             status_code=500,

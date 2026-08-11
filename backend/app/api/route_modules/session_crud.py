@@ -53,7 +53,6 @@ async def _delete_uploaded_files(session_id: str) -> None:
         logger.warning(f"[create_session] Failed to clean up uploaded files for {session_id}: {e}")
 
 
-@router.post("/api/sessions", response_model=SessionCreateResponse)
 async def create_session(
     background_tasks: BackgroundTasks,
     project_name: str = Form(..., description="项目名称"),
@@ -228,7 +227,7 @@ async def create_session(
         raise
 
     return SessionCreateResponse(session_id=session_id,
-        stream_url=f"/api/sessions/{session_id}/stream", status=TaskStatus.running)
+        stream_url=f"/api/v1/sessions/{session_id}/events", status=TaskStatus.running)
 
 
 @router.delete("/api/sessions/{session_id}")
@@ -239,7 +238,6 @@ async def delete_session(session_id: str):
     return {"message": f"Session {session_id} deleted", "deleted_checkpoints": result.get("checkpoint", False)}
 
 
-@router.get("/api/sessions/{session_id}/status")
 async def get_session_status(session_id: str):
     """Get session status"""
     from app.database.operations import get_planning_session_async

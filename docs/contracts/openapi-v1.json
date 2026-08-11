@@ -1,0 +1,1011 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Village Planning Stable API",
+    "version": "1.0.0"
+  },
+  "paths": {
+    "/api/v1/sessions/{session_id}/state": {
+      "get": {
+        "tags": [
+          "Stable v1"
+        ],
+        "summary": "Get State",
+        "operationId": "get_state_api_v1_sessions__session_id__state_get",
+        "parameters": [
+          {
+            "name": "session_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Session Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionProjection"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/sessions/{session_id}/delivery": {
+      "get": {
+        "tags": [
+          "Stable v1"
+        ],
+        "summary": "Get Delivery",
+        "operationId": "get_delivery_api_v1_sessions__session_id__delivery_get",
+        "parameters": [
+          {
+            "name": "session_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Session Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeliveryProjection"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/sessions/{session_id}/map-layers": {
+      "get": {
+        "tags": [
+          "Stable v1"
+        ],
+        "summary": "Get Map Layers",
+        "operationId": "get_map_layers_api_v1_sessions__session_id__map_layers_get",
+        "parameters": [
+          {
+            "name": "session_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Session Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MapLayerCollection"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/sessions/{session_id}/human-review": {
+      "get": {
+        "tags": [
+          "Stable v1"
+        ],
+        "summary": "Get Review",
+        "operationId": "get_review_api_v1_sessions__session_id__human_review_get",
+        "parameters": [
+          {
+            "name": "session_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Session Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HumanReviewProjection"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "Stable v1"
+        ],
+        "summary": "Submit Review",
+        "operationId": "submit_review_api_v1_sessions__session_id__human_review_post",
+        "parameters": [
+          {
+            "name": "session_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Session Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/HumanReviewDecision"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Submit Review Api V1 Sessions  Session Id  Human Review Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/sessions/{session_id}/events/sync": {
+      "get": {
+        "tags": [
+          "Stable v1"
+        ],
+        "summary": "Sync Events",
+        "operationId": "sync_events_api_v1_sessions__session_id__events_sync_get",
+        "parameters": [
+          {
+            "name": "session_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Session Id"
+            }
+          },
+          {
+            "name": "after",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 0,
+              "title": "After"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EventSyncResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/sessions/{session_id}/events": {
+      "get": {
+        "tags": [
+          "Stable v1"
+        ],
+        "summary": "Stream Events",
+        "operationId": "stream_events_api_v1_sessions__session_id__events_get",
+        "parameters": [
+          {
+            "name": "session_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Session Id"
+            }
+          },
+          {
+            "name": "last-event-id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Last-Event-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "text/event-stream": {
+                "itemSchema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "type": "string"
+                    },
+                    "event": {
+                      "type": "string"
+                    },
+                    "id": {
+                      "type": "string"
+                    },
+                    "retry": {
+                      "type": "integer",
+                      "minimum": 0
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/sessions": {
+      "post": {
+        "tags": [
+          "Stable v1"
+        ],
+        "summary": "Create a planning session",
+        "description": "创建新规划会话 - 支持 multipart/form-data 文件上传（按来源区分）",
+        "operationId": "create_session_api_v1_sessions_post",
+        "requestBody": {
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_create_session_api_v1_sessions_post"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionCreated"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "Body_create_session_api_v1_sessions_post": {
+        "properties": {
+          "project_name": {
+            "type": "string",
+            "title": "Project Name",
+            "description": "项目名称"
+          },
+          "village_name": {
+            "type": "string",
+            "title": "Village Name",
+            "description": "村庄名称",
+            "default": ""
+          },
+          "province": {
+            "type": "string",
+            "title": "Province",
+            "description": "省份",
+            "default": ""
+          },
+          "city": {
+            "type": "string",
+            "title": "City",
+            "description": "地级市",
+            "default": ""
+          },
+          "county": {
+            "type": "string",
+            "title": "County",
+            "description": "县/区",
+            "default": ""
+          },
+          "township": {
+            "type": "string",
+            "title": "Township",
+            "description": "乡镇",
+            "default": ""
+          },
+          "planning_period": {
+            "type": "string",
+            "title": "Planning Period",
+            "description": "规划期限",
+            "default": "2022-2035年"
+          },
+          "task_description": {
+            "type": "string",
+            "title": "Task Description",
+            "description": "任务描述",
+            "default": "制定村庄发展规划"
+          },
+          "constraints": {
+            "type": "string",
+            "title": "Constraints",
+            "description": "约束条件",
+            "default": "无特殊约束"
+          },
+          "step_mode": {
+            "type": "boolean",
+            "title": "Step Mode",
+            "description": "分步执行模式",
+            "default": false
+          },
+          "rag_enabled": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rag Enabled",
+            "description": "启用 RAG 知识检索；未提供时继承 RAG_ENABLED"
+          },
+          "rag_layer_config": {
+            "type": "string",
+            "title": "Rag Layer Config",
+            "description": "Layer-level RAG config (JSON, e.g. '{\"1\":true,\"2\":false,\"3\":true}')",
+            "default": ""
+          },
+          "village_data": {
+            "type": "string",
+            "title": "Village Data",
+            "description": "村庄基础数据（文本）",
+            "default": ""
+          },
+          "village_data_files": {
+            "items": {
+              "type": "string",
+              "contentMediaType": "application/octet-stream"
+            },
+            "type": "array",
+            "title": "Village Data Files",
+            "description": "村庄数据文件"
+          },
+          "task_files": {
+            "items": {
+              "type": "string",
+              "contentMediaType": "application/octet-stream"
+            },
+            "type": "array",
+            "title": "Task Files",
+            "description": "任务描述文件"
+          },
+          "constraint_files": {
+            "items": {
+              "type": "string",
+              "contentMediaType": "application/octet-stream"
+            },
+            "type": "array",
+            "title": "Constraint Files",
+            "description": "约束条件文件"
+          }
+        },
+        "type": "object",
+        "required": [
+          "project_name"
+        ],
+        "title": "Body_create_session_api_v1_sessions_post"
+      },
+      "DeliveryProjection": {
+        "properties": {
+          "schema_version": {
+            "type": "string",
+            "const": "1.0",
+            "title": "Schema Version",
+            "default": "1.0"
+          },
+          "session_id": {
+            "type": "string",
+            "title": "Session Id"
+          },
+          "available": {
+            "type": "boolean",
+            "title": "Available"
+          },
+          "delivery_status": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "complete",
+                  "partial",
+                  "diagnostic_only"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Delivery Status"
+          },
+          "statutory_complete": {
+            "type": "boolean",
+            "title": "Statutory Complete",
+            "default": false
+          },
+          "snapshot_checksum": {
+            "type": "string",
+            "title": "Snapshot Checksum",
+            "default": ""
+          },
+          "deferral_summary": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Deferral Summary"
+          },
+          "diagnostic_summary": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Diagnostic Summary"
+          },
+          "deliverables": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "type": "array",
+            "title": "Deliverables"
+          },
+          "downloads": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Downloads"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "session_id",
+          "available"
+        ],
+        "title": "DeliveryProjection"
+      },
+      "EventSyncResponse": {
+        "properties": {
+          "schema_version": {
+            "type": "string",
+            "const": "1.0",
+            "title": "Schema Version",
+            "default": "1.0"
+          },
+          "session_id": {
+            "type": "string",
+            "title": "Session Id"
+          },
+          "events": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "type": "array",
+            "title": "Events"
+          },
+          "last_seq": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Last Seq",
+            "default": 0
+          },
+          "resync_required": {
+            "type": "boolean",
+            "title": "Resync Required",
+            "default": false
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "session_id"
+        ],
+        "title": "EventSyncResponse"
+      },
+      "HTTPValidationError": {
+        "properties": {
+          "detail": {
+            "items": {
+              "$ref": "#/components/schemas/ValidationError"
+            },
+            "type": "array",
+            "title": "Detail"
+          }
+        },
+        "type": "object",
+        "title": "HTTPValidationError"
+      },
+      "HumanReviewDecision": {
+        "properties": {
+          "event_id": {
+            "type": "string",
+            "title": "Event Id"
+          },
+          "action": {
+            "type": "string",
+            "enum": [
+              "retry",
+              "approve",
+              "reject"
+            ],
+            "title": "Action"
+          },
+          "decisions": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Decisions"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "event_id",
+          "action"
+        ],
+        "title": "HumanReviewDecision"
+      },
+      "HumanReviewProjection": {
+        "properties": {
+          "schema_version": {
+            "type": "string",
+            "const": "1.0",
+            "title": "Schema Version",
+            "default": "1.0"
+          },
+          "session_id": {
+            "type": "string",
+            "title": "Session Id"
+          },
+          "pending": {
+            "type": "boolean",
+            "title": "Pending"
+          },
+          "event_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Event Id"
+          },
+          "paused_stage": {
+            "type": "string",
+            "title": "Paused Stage",
+            "default": ""
+          },
+          "items": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "type": "array",
+            "title": "Items"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "session_id",
+          "pending"
+        ],
+        "title": "HumanReviewProjection"
+      },
+      "MapLayer": {
+        "properties": {
+          "layer_type": {
+            "type": "string",
+            "enum": [
+              "current",
+              "planned",
+              "overlay",
+              "constraint"
+            ],
+            "title": "Layer Type"
+          },
+          "layer_name": {
+            "type": "string",
+            "title": "Layer Name"
+          },
+          "crs": {
+            "type": "string",
+            "title": "Crs",
+            "default": ""
+          },
+          "checksum": {
+            "type": "string",
+            "title": "Checksum",
+            "default": ""
+          },
+          "feature_count": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Feature Count",
+            "default": 0
+          },
+          "geojson": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Geojson"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "layer_type",
+          "layer_name",
+          "geojson"
+        ],
+        "title": "MapLayer"
+      },
+      "MapLayerCollection": {
+        "properties": {
+          "schema_version": {
+            "type": "string",
+            "const": "1.0",
+            "title": "Schema Version",
+            "default": "1.0"
+          },
+          "session_id": {
+            "type": "string",
+            "title": "Session Id"
+          },
+          "snapshot_checksum": {
+            "type": "string",
+            "title": "Snapshot Checksum",
+            "default": ""
+          },
+          "delivery_status": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "complete",
+                  "partial",
+                  "diagnostic_only"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Delivery Status"
+          },
+          "layers": {
+            "items": {
+              "$ref": "#/components/schemas/MapLayer"
+            },
+            "type": "array",
+            "title": "Layers"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "session_id"
+        ],
+        "title": "MapLayerCollection"
+      },
+      "ResourceLinks": {
+        "properties": {
+          "events": {
+            "type": "string",
+            "title": "Events"
+          },
+          "event_sync": {
+            "type": "string",
+            "title": "Event Sync"
+          },
+          "delivery": {
+            "type": "string",
+            "title": "Delivery"
+          },
+          "map_layers": {
+            "type": "string",
+            "title": "Map Layers"
+          },
+          "human_review": {
+            "type": "string",
+            "title": "Human Review"
+          },
+          "artifacts": {
+            "type": "string",
+            "title": "Artifacts"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "events",
+          "event_sync",
+          "delivery",
+          "map_layers",
+          "human_review",
+          "artifacts"
+        ],
+        "title": "ResourceLinks"
+      },
+      "SessionCreated": {
+        "properties": {
+          "session_id": {
+            "type": "string",
+            "title": "Session Id"
+          },
+          "stream_url": {
+            "type": "string",
+            "title": "Stream Url"
+          },
+          "status": {
+            "type": "string",
+            "const": "running",
+            "title": "Status",
+            "default": "running"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "session_id",
+          "stream_url"
+        ],
+        "title": "SessionCreated"
+      },
+      "SessionProjection": {
+        "properties": {
+          "schema_version": {
+            "type": "string",
+            "const": "1.0",
+            "title": "Schema Version",
+            "default": "1.0"
+          },
+          "session_id": {
+            "type": "string",
+            "title": "Session Id"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "running",
+              "paused",
+              "reviewing",
+              "revising",
+              "completed",
+              "failed"
+            ],
+            "title": "Status"
+          },
+          "active_stage": {
+            "type": "string",
+            "title": "Active Stage",
+            "default": ""
+          },
+          "phase": {
+            "type": "string",
+            "title": "Phase",
+            "default": ""
+          },
+          "progress": {
+            "type": "number",
+            "maximum": 100.0,
+            "minimum": 0.0,
+            "title": "Progress",
+            "default": 0.0
+          },
+          "human_review_pending": {
+            "type": "boolean",
+            "title": "Human Review Pending",
+            "default": false
+          },
+          "delivery_status": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "complete",
+                  "partial",
+                  "diagnostic_only"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Delivery Status"
+          },
+          "statutory_complete": {
+            "type": "boolean",
+            "title": "Statutory Complete",
+            "default": false
+          },
+          "last_event_seq": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Last Event Seq",
+            "default": 0
+          },
+          "links": {
+            "$ref": "#/components/schemas/ResourceLinks"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "session_id",
+          "status",
+          "links"
+        ],
+        "title": "SessionProjection"
+      },
+      "ValidationError": {
+        "properties": {
+          "loc": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                }
+              ]
+            },
+            "type": "array",
+            "title": "Location"
+          },
+          "msg": {
+            "type": "string",
+            "title": "Message"
+          },
+          "type": {
+            "type": "string",
+            "title": "Error Type"
+          },
+          "input": {
+            "title": "Input"
+          },
+          "ctx": {
+            "type": "object",
+            "title": "Context"
+          }
+        },
+        "type": "object",
+        "required": [
+          "loc",
+          "msg",
+          "type"
+        ],
+        "title": "ValidationError"
+      }
+    }
+  }
+}

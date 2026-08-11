@@ -311,14 +311,12 @@ async def _process_uploaded_file_db(
 # ============================================
 
 from app.api.route_modules.session_crud import router as crud_router
-from app.api.route_modules.session_sse import router as sse_router
 from app.api.route_modules.session_hitl import router as hitl_router
 from app.api.route_modules.session_gis import router as gis_router
 from app.api.route_modules.session_checkpoints import router as checkpoints_router
 from app.api.route_modules.session_history import router as history_router
 
 router.include_router(crud_router)
-router.include_router(sse_router)
 router.include_router(hitl_router)
 router.include_router(gis_router)
 router.include_router(checkpoints_router)

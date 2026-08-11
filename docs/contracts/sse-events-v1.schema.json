@@ -1,0 +1,481 @@
+{
+  "$defs": {
+    "ApiError": {
+      "additionalProperties": false,
+      "properties": {
+        "schema_version": {
+          "const": "1.0",
+          "default": "1.0",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "code": {
+          "title": "Code",
+          "type": "string"
+        },
+        "message": {
+          "title": "Message",
+          "type": "string"
+        },
+        "request_id": {
+          "title": "Request Id",
+          "type": "string"
+        },
+        "retryable": {
+          "default": false,
+          "title": "Retryable",
+          "type": "boolean"
+        },
+        "details": {
+          "additionalProperties": true,
+          "title": "Details",
+          "type": "object"
+        }
+      },
+      "required": [
+        "code",
+        "message",
+        "request_id"
+      ],
+      "title": "ApiError",
+      "type": "object"
+    },
+    "CompletedEvent": {
+      "additionalProperties": false,
+      "properties": {
+        "schema_version": {
+          "const": "1.0",
+          "default": "1.0",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "event_id": {
+          "title": "Event Id",
+          "type": "string"
+        },
+        "seq": {
+          "minimum": 1,
+          "title": "Seq",
+          "type": "integer"
+        },
+        "session_id": {
+          "title": "Session Id",
+          "type": "string"
+        },
+        "occurred_at": {
+          "format": "date-time",
+          "title": "Occurred At",
+          "type": "string"
+        },
+        "type": {
+          "const": "completed",
+          "default": "completed",
+          "title": "Type",
+          "type": "string"
+        },
+        "data": {
+          "additionalProperties": true,
+          "title": "Data",
+          "type": "object"
+        }
+      },
+      "required": [
+        "event_id",
+        "seq",
+        "session_id"
+      ],
+      "title": "CompletedEvent",
+      "type": "object"
+    },
+    "DeliveryProjection": {
+      "additionalProperties": false,
+      "properties": {
+        "schema_version": {
+          "const": "1.0",
+          "default": "1.0",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "session_id": {
+          "title": "Session Id",
+          "type": "string"
+        },
+        "available": {
+          "title": "Available",
+          "type": "boolean"
+        },
+        "delivery_status": {
+          "anyOf": [
+            {
+              "enum": [
+                "complete",
+                "partial",
+                "diagnostic_only"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Delivery Status"
+        },
+        "statutory_complete": {
+          "default": false,
+          "title": "Statutory Complete",
+          "type": "boolean"
+        },
+        "snapshot_checksum": {
+          "default": "",
+          "title": "Snapshot Checksum",
+          "type": "string"
+        },
+        "deferral_summary": {
+          "additionalProperties": true,
+          "title": "Deferral Summary",
+          "type": "object"
+        },
+        "diagnostic_summary": {
+          "additionalProperties": true,
+          "title": "Diagnostic Summary",
+          "type": "object"
+        },
+        "deliverables": {
+          "items": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "title": "Deliverables",
+          "type": "array"
+        },
+        "downloads": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Downloads",
+          "type": "array"
+        }
+      },
+      "required": [
+        "session_id",
+        "available"
+      ],
+      "title": "DeliveryProjection",
+      "type": "object"
+    },
+    "DeliveryReadyEvent": {
+      "additionalProperties": false,
+      "properties": {
+        "schema_version": {
+          "const": "1.0",
+          "default": "1.0",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "event_id": {
+          "title": "Event Id",
+          "type": "string"
+        },
+        "seq": {
+          "minimum": 1,
+          "title": "Seq",
+          "type": "integer"
+        },
+        "session_id": {
+          "title": "Session Id",
+          "type": "string"
+        },
+        "occurred_at": {
+          "format": "date-time",
+          "title": "Occurred At",
+          "type": "string"
+        },
+        "type": {
+          "const": "delivery_ready",
+          "default": "delivery_ready",
+          "title": "Type",
+          "type": "string"
+        },
+        "data": {
+          "$ref": "#/$defs/DeliveryProjection"
+        }
+      },
+      "required": [
+        "event_id",
+        "seq",
+        "session_id",
+        "data"
+      ],
+      "title": "DeliveryReadyEvent",
+      "type": "object"
+    },
+    "FailedEvent": {
+      "additionalProperties": false,
+      "properties": {
+        "schema_version": {
+          "const": "1.0",
+          "default": "1.0",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "event_id": {
+          "title": "Event Id",
+          "type": "string"
+        },
+        "seq": {
+          "minimum": 1,
+          "title": "Seq",
+          "type": "integer"
+        },
+        "session_id": {
+          "title": "Session Id",
+          "type": "string"
+        },
+        "occurred_at": {
+          "format": "date-time",
+          "title": "Occurred At",
+          "type": "string"
+        },
+        "type": {
+          "const": "failed",
+          "default": "failed",
+          "title": "Type",
+          "type": "string"
+        },
+        "data": {
+          "$ref": "#/$defs/ApiError"
+        }
+      },
+      "required": [
+        "event_id",
+        "seq",
+        "session_id",
+        "data"
+      ],
+      "title": "FailedEvent",
+      "type": "object"
+    },
+    "HumanReviewEvent": {
+      "additionalProperties": false,
+      "properties": {
+        "schema_version": {
+          "const": "1.0",
+          "default": "1.0",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "event_id": {
+          "title": "Event Id",
+          "type": "string"
+        },
+        "seq": {
+          "minimum": 1,
+          "title": "Seq",
+          "type": "integer"
+        },
+        "session_id": {
+          "title": "Session Id",
+          "type": "string"
+        },
+        "occurred_at": {
+          "format": "date-time",
+          "title": "Occurred At",
+          "type": "string"
+        },
+        "type": {
+          "const": "human_review",
+          "default": "human_review",
+          "title": "Type",
+          "type": "string"
+        },
+        "data": {
+          "$ref": "#/$defs/HumanReviewProjection"
+        }
+      },
+      "required": [
+        "event_id",
+        "seq",
+        "session_id",
+        "data"
+      ],
+      "title": "HumanReviewEvent",
+      "type": "object"
+    },
+    "HumanReviewProjection": {
+      "additionalProperties": false,
+      "properties": {
+        "schema_version": {
+          "const": "1.0",
+          "default": "1.0",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "session_id": {
+          "title": "Session Id",
+          "type": "string"
+        },
+        "pending": {
+          "title": "Pending",
+          "type": "boolean"
+        },
+        "event_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Event Id"
+        },
+        "paused_stage": {
+          "default": "",
+          "title": "Paused Stage",
+          "type": "string"
+        },
+        "items": {
+          "items": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "title": "Items",
+          "type": "array"
+        }
+      },
+      "required": [
+        "session_id",
+        "pending"
+      ],
+      "title": "HumanReviewProjection",
+      "type": "object"
+    },
+    "ProgressEvent": {
+      "additionalProperties": false,
+      "properties": {
+        "schema_version": {
+          "const": "1.0",
+          "default": "1.0",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "event_id": {
+          "title": "Event Id",
+          "type": "string"
+        },
+        "seq": {
+          "minimum": 1,
+          "title": "Seq",
+          "type": "integer"
+        },
+        "session_id": {
+          "title": "Session Id",
+          "type": "string"
+        },
+        "occurred_at": {
+          "format": "date-time",
+          "title": "Occurred At",
+          "type": "string"
+        },
+        "type": {
+          "const": "progress",
+          "default": "progress",
+          "title": "Type",
+          "type": "string"
+        },
+        "data": {
+          "additionalProperties": true,
+          "title": "Data",
+          "type": "object"
+        }
+      },
+      "required": [
+        "event_id",
+        "seq",
+        "session_id"
+      ],
+      "title": "ProgressEvent",
+      "type": "object"
+    },
+    "ResyncRequiredEvent": {
+      "additionalProperties": false,
+      "properties": {
+        "schema_version": {
+          "const": "1.0",
+          "default": "1.0",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "event_id": {
+          "title": "Event Id",
+          "type": "string"
+        },
+        "seq": {
+          "minimum": 1,
+          "title": "Seq",
+          "type": "integer"
+        },
+        "session_id": {
+          "title": "Session Id",
+          "type": "string"
+        },
+        "occurred_at": {
+          "format": "date-time",
+          "title": "Occurred At",
+          "type": "string"
+        },
+        "type": {
+          "const": "resync_required",
+          "default": "resync_required",
+          "title": "Type",
+          "type": "string"
+        },
+        "data": {
+          "additionalProperties": true,
+          "title": "Data",
+          "type": "object"
+        }
+      },
+      "required": [
+        "event_id",
+        "seq",
+        "session_id"
+      ],
+      "title": "ResyncRequiredEvent",
+      "type": "object"
+    }
+  },
+  "discriminator": {
+    "mapping": {
+      "completed": "#/$defs/CompletedEvent",
+      "delivery_ready": "#/$defs/DeliveryReadyEvent",
+      "failed": "#/$defs/FailedEvent",
+      "human_review": "#/$defs/HumanReviewEvent",
+      "progress": "#/$defs/ProgressEvent",
+      "resync_required": "#/$defs/ResyncRequiredEvent"
+    },
+    "propertyName": "type"
+  },
+  "oneOf": [
+    {
+      "$ref": "#/$defs/ProgressEvent"
+    },
+    {
+      "$ref": "#/$defs/HumanReviewEvent"
+    },
+    {
+      "$ref": "#/$defs/DeliveryReadyEvent"
+    },
+    {
+      "$ref": "#/$defs/CompletedEvent"
+    },
+    {
+      "$ref": "#/$defs/FailedEvent"
+    },
+    {
+      "$ref": "#/$defs/ResyncRequiredEvent"
+    }
+  ]
+}
