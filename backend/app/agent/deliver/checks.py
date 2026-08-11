@@ -2,7 +2,7 @@
 
 Each check returns a list of HumanItem; empty means the check passed.
 Blocking items gate "完整法定成果" (complete statutory output). No LLM,
-no KG, no advisory_crosswalks — pure container math only.
+no KG and no cross-system mapping lookup — pure container math only.
 """
 
 from __future__ import annotations

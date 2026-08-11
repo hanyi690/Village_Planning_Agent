@@ -340,11 +340,7 @@ def deliver_aggregate(
         for task in (getattr(execution_plan, "worker_tasks", None) or [])
     )
     exported_planned = _planned_view_from_export(export_result)
-    planned_for_balance = (
-        exported_planned
-        if exported_planned
-        else _build_planned_view(current_parcels, planned_state)
-    )
+    planned_for_balance = exported_planned or []
     gate = (
         check_delivery_gate(
             current_parcels=list(current_parcels or []),

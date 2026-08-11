@@ -428,8 +428,8 @@ async def test_execute_wrapper_preserves_l4_failure_and_routes_terminal_diagnost
     outcome = captured["execution_outcome"]
     assert outcome.task_results[0].target_id == target_id
     assert outcome.task_results[0].status == "succeeded"
-    assert final["l4_write_result"]["l4_write_error"] == "execution_outcome_target_coverage"
-    assert final["execution_outcome_target_coverage"] == []
+    diagnostics_ref = final["artifact_refs"]["execution_diagnostics"]
+    assert diagnostics_ref["artifact_type"] == "ExecutionDiagnostics"
     assert final["fatal_error"] == {
         "stage": "EXECUTE",
         "code": "execution_outcome_target_coverage",
@@ -441,8 +441,8 @@ async def test_execute_wrapper_preserves_l4_failure_and_routes_terminal_diagnost
     assert final["diagnostic_terminal"]["reason"] == "execution_outcome_target_coverage"
     assert final.get("phase") != "validate-reached"
     assert "EXECUTE" in final["stage_audit"]
-    assert "l4_write_result" in AgentState.__annotations__
-    assert "execution_outcome_target_coverage" in AgentState.__annotations__
+    assert "l4_write_result" not in AgentState.__annotations__
+    assert "execution_outcome_target_coverage" not in AgentState.__annotations__
 
 
 def test_execution_outcome_persistence_marks_unresolved_and_deferred_tasks(monkeypatch):

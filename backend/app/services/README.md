@@ -14,7 +14,7 @@ HTTP (api/) ──> services/ ──> agent/ (LangGraph)
 
 - **单一职责**：`api/` 路由只做参数校验与响应组装，业务编排全部下沉到本层
 - **单例模式**：大多数服务以模块级单例导出（`sse_manager` / `session_service` / `checkpoint_service` / `planning_runtime_service`）
-- **会话状态 SSOT**：内存态统一收归 `sse.py` 的 `SSEManager`，持久态在 `database/`，Checkpoint 态在 LangGraph `SqliteSaver`
+- **状态所有权**：LangGraph checkpoint 保存工作流控制态，Artifact Store 保存阶段业务产物，数据库保存会话与可恢复事件；`SSEManager` 仅维护连接、实时队列和有界重连缓存，不是持久状态 SSOT
 
 ---
 
@@ -22,7 +22,7 @@ HTTP (api/) ──> services/ ──> agent/ (LangGraph)
 
 | 模块 | 职责 | 核心入口 |
 |------|------|----------|
-| `sse.py` | SSE 连接订阅、事件发布、会话内存态（SSOT） | `SSEManager.publish` / `subscribe` |
+| `sse.py` | SSE 连接订阅、事件发布与有界传输缓存 | `SSEManager.publish` / `subscribe` |
 | `runtime.py` | 统一规划运行时（LangGraph 图执行 + 会话管理） | `PlanningRuntimeService.start_session` / `resume_from_interrupt` |
 | `checkpoint_policy.py` | 纯 checkpoint 稳定性分类与 pending interrupt 提取 | `classify_checkpoint` / `first_pending_interrupt_payload` |
 | `checkpoint.py` | Checkpoint 业务逻辑 + 持久化同步 | `CheckpointService.rebuild_events` / `get_layer_reports` |

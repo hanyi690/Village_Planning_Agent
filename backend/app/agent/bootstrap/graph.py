@@ -187,9 +187,6 @@ def route_after_select(state: Dict[str, Any]) -> str:
 
 
 def route_after_execute(state: Dict[str, Any]) -> str:
-    l4_result = state.get("l4_write_result") or {}
-    if isinstance(l4_result, dict) and l4_result.get("l4_write_error"):
-        return END_DIAGNOSTIC
     if isinstance(state.get("fatal_error"), dict):
         return END_DIAGNOSTIC
     return "validate"

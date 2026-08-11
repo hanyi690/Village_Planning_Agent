@@ -4,8 +4,7 @@ Proves the P0 repair stack on the REAL unified planning graph:
   - ``create_unified_planning_graph`` drives PARSE -> GROUND -> SELECT ->
     EXECUTE -> VALIDATE -> RECONCILE -> DELIVER with a MemorySaver
     checkpointer.
-  - T1: ``planned_state`` (a post-L3 EXECUTE output channel) survives the
-    main-graph state (no longer filtered by LangGraph).
+  - T1: ``planned_state`` survives through its canonical artifact reference.
   - T2: ``execution_plan`` is built in SELECT and flows into EXECUTE.
   - HITL: the main-graph ``human_review`` node pauses via ``interrupt()`` and
     resumes on the SAME compiled graph via ``Command(resume=...)``.
@@ -108,10 +107,11 @@ def _changeset() -> ParcelChangeSet:
                 bsm="P1",
                 action="reclassify",
                 after_classification=ClassificationRef(
-                    system="gb",
-                    code="0701",
-                    canonical_name="村庄建设用地",
+                    system="ghytbm",
+                    code="1100",
+                    canonical_name="耕地",
                     source="derived",
+                    evidence_refs=["test:classification:P1"],
                 ),
                 after_geometry_wkt="POLYGON((0 0,1 0,1 1,0 1,0 0))",
             )
@@ -346,7 +346,8 @@ async def test_real_post_l3_replay_action_only_is_mapless_complete(monkeypatch):
         assert outcome.task_results[0].status == "succeeded"
         assert outcome.task_results[0].expected_output_kind == "action"
         assert result["deliver_gate"]["feedback_route"] is None
-        assert result["render_artifacts"]["mapless"] is True
+        render_artifacts = load_artifact(result, "render_artifacts")
+        assert render_artifacts["mapless"] is True
     finally:
         manager.remove_session(session_id)
 

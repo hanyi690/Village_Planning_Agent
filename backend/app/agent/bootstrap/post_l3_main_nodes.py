@@ -307,6 +307,10 @@ def _persist_artifact(
             "RenderLayers": "render_layers",
             "DeliverySpatialSnapshot": "delivery_spatial_snapshot",
             "DeferralLedger": "deferral_ledger",
+            "LayoutConfigs": "layout_configs",
+            "ExecutionDiagnostics": "execution_diagnostics",
+            "ExportResult": "export_result",
+            "RenderArtifacts": "render_artifacts",
         }
         key = key_by_type.get(artifact_type, artifact_type.lower())
         return store_artifact(state, key, module, artifact_type, payload)
@@ -324,7 +328,7 @@ def _load_planning_program(state: Dict[str, Any]) -> Any:
     return program
 
 
-def _load_ref_artifact(state: Dict[str, Any], key: str, cls: type) -> Any:
+def _load_ref_artifact(state: Dict[str, Any], key: str, cls: type | None) -> Any:
     """Load a typed artifact from the canonical refs in stamped state."""
     try:
         from app.agent.bootstrap.artifact_runtime import ArtifactReplayError, load_artifact
@@ -408,6 +412,10 @@ async def parse_node(state: Dict[str, Any]) -> Dict[str, Any]:
         context_version=str(getattr(context, "version", "")),
     )
     specs, unsupported = _filter_unsupported_spatial_specs(specs, program, context)
+    # The compilation artifact is the sole PARSE -> GROUND carrier. Keep its
+    # embedded specs synchronized even when no unsupported-source diagnostic
+    # was produced; the parent graph no longer writes a duplicate `specs` field.
+    result.spatial_reference_specs = specs
     if unsupported:
         from app.modules.schema.contracts.parse_result_contracts import ParseDiagnostic
 
@@ -422,7 +430,6 @@ async def parse_node(state: Dict[str, Any]) -> Dict[str, Any]:
         )
     intent_ref = _persist_artifact(state, "parse", "IntentCompilationResult", result)
     return {
-        "specs": _dump_list(specs),
         "parse_gate": _dump(gate),
         "upstream_gates": _accumulate_gate(state.get("upstream_gates"), _dump(gate)),
         "artifact_refs": {"intent_compilation": intent_ref} if intent_ref else {},
@@ -440,10 +447,15 @@ async def ground_node(state: Dict[str, Any]) -> Dict[str, Any]:
     from app.agent.ground.aggregate import retrieve_evidence
     from app.agent.ground.gate import evaluate_ground_gate
     from app.modules.schema.contracts.spatial_reference_contracts import SpatialReferenceSpec
+    from app.modules.schema.contracts.parse_result_contracts import IntentCompilationResult
 
     retry_patch = _retry_patch(state, "ground")
     context = await _require_context(state)
-    specs = [_to_typed(s, SpatialReferenceSpec) for s in (state.get("specs") or [])]
+    compilation = _load_ref_artifact(state, "intent_compilation", IntentCompilationResult)
+    specs = [
+        _to_typed(item, SpatialReferenceSpec)
+        for item in (getattr(compilation, "spatial_reference_specs", None) or [])
+    ]
     evidence = []
     if retry_patch:
         prior_gate = state.get("ground_gate")
@@ -525,7 +537,6 @@ async def select_node(state: Dict[str, Any]) -> Dict[str, Any]:
     ref = _persist_artifact(state, "select", "SiteSelectionDecision", decision)
     plan_ref = _persist_artifact(state, "select", "ExecutionPlan", execution_plan)
     return {
-        "land_design_briefs": _dump_list(briefs),
         "select_gate": _dump(gate),
         "upstream_gates": _accumulate_gate(state.get("upstream_gates"), _dump(gate)),
         "artifact_refs": {"site_selection": ref, "execution_plan": plan_ref},
@@ -645,14 +656,14 @@ async def execute_node(state: Dict[str, Any]) -> Dict[str, Any]:
         execution_plan = build_execution_plan(
             intent,
             site_selection,
-            state.get("land_design_briefs") or [],
+            [],
             run_id=_run_id(state),
             context_version=_context_version(state),
         )
     bundle = getattr(context, "bundle", None)
     gis_data = bundle.to_geojson_dict() if bundle is not None and hasattr(bundle, "to_geojson_dict") else {}
 
-    plan_briefs = list(getattr(execution_plan, "land_design_briefs", None) or state.get("land_design_briefs") or [])
+    plan_briefs = list(getattr(execution_plan, "land_design_briefs", None) or [])
     exec_state = ExecuteAgentState(
         session_id=state.get("session_id", ""),
         village_name=state.get("config", {}).get("village_name", ""),
@@ -735,6 +746,9 @@ async def execute_node(state: Dict[str, Any]) -> Dict[str, Any]:
         "allocated_geojson": _persist_artifact(
             state, "execute", "AllocatedGeoJSON", result.get("allocated_geojson", {}) or {}
         ),
+        "layout_configs": _persist_artifact(
+            state, "execute", "LayoutConfigs", list(result.get("layout_configs", []) or [])
+        ),
     }
     l4_error = l4_write_result.get("l4_write_error")
     execution_errors = list(result.get("execution_errors", []) or [])
@@ -758,12 +772,21 @@ async def execute_node(state: Dict[str, Any]) -> Dict[str, Any]:
             "issue_fingerprint": semantic_checksum(l4_write_result),
             "missing_targets": missing_targets,
         }
+    diagnostics_ref = _persist_artifact(
+        state,
+        "execute",
+        "ExecutionDiagnostics",
+        {
+            "errors": _jsonable(execution_errors),
+            "l4_write": _jsonable(l4_write_result),
+            "target_coverage": _jsonable(
+                l4_write_result.get("execution_outcome_target_ids", [])
+            ),
+        },
+    )
+    if diagnostics_ref:
+        refs["execution_diagnostics"] = diagnostics_ref
     return {
-        "layout_configs": _jsonable(list(result.get("layout_configs", []) or [])),
-        "action_results": _jsonable(outcome.action_results),
-        "execution_errors": _jsonable(execution_errors),
-        "l4_write_result": _jsonable(l4_write_result),
-        "execution_outcome_target_coverage": _jsonable(l4_write_result.get("execution_outcome_target_ids", [])),
         **({
             "fatal_error": fatal_error,
             "delivery_status": "diagnostic_only",
@@ -801,10 +824,11 @@ async def validate_node(state: Dict[str, Any]) -> Dict[str, Any]:
     selection = _load_ref_artifact(state, "site_selection", SiteSelectionDecision)
     execution_plan = _load_ref_artifact(state, "execution_plan", ExecutionPlan)
     execution_outcome = _load_ref_artifact(state, "execution_outcome", ExecutionOutcome)
+    layout_configs = _load_ref_artifact(state, "layout_configs", None) or []
     report = validate_aggregate(
         planned_state,
         changeset,
-        state.get("layout_configs"),
+        layout_configs,
         plan_intent,
         constraint_index,
         run_id=_run_id(state),
@@ -890,12 +914,15 @@ async def reconcile_node(state: Dict[str, Any]) -> Dict[str, Any]:
             **_adopt_context(state, context),
             **retry_patch,
         }
-    specs = [_to_typed(s, SpatialReferenceSpec) for s in (state.get("specs") or [])]
+    intent = _load_ref_artifact(state, "intent_compilation", IntentCompilationResult)
+    specs = [
+        _to_typed(item, SpatialReferenceSpec)
+        for item in (getattr(intent, "spatial_reference_specs", None) or [])
+    ]
     grounding = _load_ref_artifact(state, "grounding_result", GroundingResult)
     decision = _load_ref_artifact(state, "site_selection", SiteSelectionDecision)
     changeset = _load_ref_artifact(state, "parcel_changeset", ParcelChangeSet)
     planned_state = _load_ref_artifact(state, "planned_state", PlannedState)
-    intent = _load_ref_artifact(state, "intent_compilation", IntentCompilationResult)
     execution_plan = _load_ref_artifact(state, "execution_plan", ExecutionPlan)
     execution_outcome = _load_ref_artifact(state, "execution_outcome", ExecutionOutcome)
     report = reconcile_aggregate(
@@ -943,7 +970,6 @@ async def deliver_node(state: Dict[str, Any]) -> Dict[str, Any]:
     """DELIVER node: export + deliver_aggregate + gate + render layers."""
     from app.agent.deliver.aggregate import deliver_aggregate
     from app.agent.deliver.gate import evaluate_deliver_gate
-    from app.modules.spatial_ops.output.export_package import export_gdb_package
     from app.modules.schema.contracts.planned_state_contracts import PlannedState
     from app.modules.schema.contracts.validation_report_contracts import ValidationReport
     from app.modules.schema.contracts.reconciliation_contracts import ReconciliationReport
@@ -1018,95 +1044,29 @@ async def deliver_node(state: Dict[str, Any]) -> Dict[str, Any]:
         for task in (getattr(execution_plan, "worker_tasks", None) or [])
         if str(getattr(task, "expected_output_kind", "")) != "action"
     )
-    delivery_snapshot = None
-    delivery_snapshot_ref = None
-    complete_planned_geojson = None
-    delivery_snapshot_error = ""
-    if expected_spatial_output_count > 0 and isinstance(gis_data, dict):
-        try:
-            from app.modules.schema.contracts.parcel_change_contracts import ParcelChangeSet
-            from app.modules.spatial_ops.io import (
-                build_delivery_spatial_snapshot_from_gis_data,
-                load_complete_planned_geojson,
-            )
-            from app.services.run_paths import session_run_dir
+    from app.agent.deliver.spatial_products import build_spatial_delivery_products
+    from app.modules.schema.contracts.parcel_change_contracts import ParcelChangeSet
 
-            changeset = _load_ref_artifact(state, "parcel_changeset", ParcelChangeSet)
-            planned_changes = list(getattr(changeset, "changes", None) or [])
-            delivery_snapshot = build_delivery_spatial_snapshot_from_gis_data(
-                gis_data,
-                planned_geojson=allocated_geojson,
-                planned_changes=planned_changes,
-                output_dir=session_run_dir(state.get("session_id", "")) / "spatial_snapshot",
-                output_artifact_ref=(
-                    f"delivery-spatial-snapshot-{state.get('session_id', '')}"
-                ),
-                provenance={"stage": "DELIVER"},
-            )
-            complete_planned_geojson = load_complete_planned_geojson(delivery_snapshot)
-            delivery_snapshot_ref = _persist_artifact(
-                state,
-                "deliver",
-                "DeliverySpatialSnapshot",
-                delivery_snapshot,
-            )
-        except Exception as exc:
-            delivery_snapshot_error = f"{type(exc).__name__}: {exc}"
-            logger.warning(
-                "[post_l3:main:deliver] delivery snapshot failed: %s",
-                delivery_snapshot_error,
-            )
-
-    planned_geojson_for_delivery = complete_planned_geojson or allocated_geojson
-    render_result = []
-    try:
-        from app.agent.deliver.render_layers import build_delivery_render_layers
-
-        render_result = build_delivery_render_layers(
-            planned_state,
-            planned_geojson_for_delivery,
-            gis_data,
-        )
-    except Exception as e:
-        logger.warning("[post_l3:main:deliver] render_layers failed: %s", e)
-
-    export_result = None
-    if planned_state is not None and expected_spatial_output_count > 0:
-        try:
-            allocated_for_export = planned_geojson_for_delivery
-            allocated_features = (
-                allocated_for_export.get("features", [])
-                if isinstance(allocated_for_export, dict)
-                else []
-            )
-            current_landuse = gis_data.get("landuse_current_geojson") if isinstance(gis_data, dict) else None
-            # If every spatial change is deferred, preserve the authoritative
-            # current land-use layer as the planned layer. This is an explicit
-            # no-change result, not a synthetic planning allocation; all
-            # feature properties carry the provenance for downstream review.
-            if not allocated_features and isinstance(current_landuse, dict):
-                import copy
-
-                allocated_for_export = copy.deepcopy(current_landuse)
-                for feature in allocated_for_export.get("features", []) or []:
-                    properties = feature.setdefault("properties", {})
-                    properties["planning_status"] = "unchanged_preserved"
-                    properties["planning_provenance"] = "current_landuse_no_verified_change"
-            export_result = export_gdb_package(
-                layout_configs=render_result,
-                allocated_geojson=allocated_for_export or None,
-                gis_data=gis_data,
-                village_name=state.get("config", {}).get("village_name", ""),
-                session_id=state.get("session_id", ""),
-                validation_result=validation_result,
-            )
-            if delivery_snapshot is not None:
-                export_result["planned_landuse_source"] = "delivery_spatial_snapshot"
-            elif allocated_for_export is not allocated_geojson:
-                export_result["planned_landuse_source"] = "current_landuse_preserved"
-        except Exception as e:
-            logger.warning("[post_l3:main:deliver] export failed: %s", e)
-            export_result = None
+    changeset = _load_ref_artifact(state, "parcel_changeset", ParcelChangeSet)
+    products = build_spatial_delivery_products(
+        session_id=str(state.get("session_id") or ""),
+        village_name=str((state.get("config") or {}).get("village_name") or ""),
+        gis_data=gis_data,
+        allocated_geojson=allocated_geojson,
+        planned_changes=list(getattr(changeset, "changes", None) or []),
+        planned_state=planned_state,
+        validation_result=validation_result,
+    ) if expected_spatial_output_count > 0 else None
+    delivery_snapshot = products.snapshot if products else None
+    delivery_snapshot_error = products.error if products else ""
+    render_result = products.render_layers if products else []
+    export_result = products.export_result if products else None
+    delivery_snapshot_ref = _persist_artifact(
+        state,
+        "deliver",
+        "DeliverySpatialSnapshot",
+        delivery_snapshot,
+    )
 
     current_parcels = []
     if bundle is not None and hasattr(bundle, "bundle_parcels"):
@@ -1185,6 +1145,10 @@ async def deliver_node(state: Dict[str, Any]) -> Dict[str, Any]:
         previous_gate=state.get("deliver_gate"),
     )
     manifest_ref = _persist_artifact(state, "deliver", "DeliveryManifest", manifest)
+    export_ref = _persist_artifact(state, "deliver", "ExportResult", export_result or {})
+    render_artifacts_ref = _persist_artifact(
+        state, "deliver", "RenderArtifacts", render_artifacts
+    )
 
     return {
         "artifact_refs": {
@@ -1193,6 +1157,8 @@ async def deliver_node(state: Dict[str, Any]) -> Dict[str, Any]:
                 "render_layers": render_ref,
                 "delivery_spatial_snapshot": delivery_snapshot_ref,
                 "deferral_ledger": ledger_ref,
+                "export_result": export_ref,
+                "render_artifacts": render_artifacts_ref,
             }.items() if ref
         },
         "deliver_gate": _dump(gate),
@@ -1207,8 +1173,6 @@ async def deliver_node(state: Dict[str, Any]) -> Dict[str, Any]:
             if manifest.delivery_status == "diagnostic_only"
             else {}
         ),
-        "export_result": export_result,
-        "render_artifacts": render_artifacts,
         "upstream_gates": _accumulate_gate(state.get("upstream_gates"), _dump(gate)),
         **_adopt_context(state, context),
         **retry_patch,

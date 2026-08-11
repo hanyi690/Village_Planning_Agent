@@ -4,9 +4,8 @@ Resumes a paused post-L3 chain (human_review interrupt) using the official
 LangGraph ``Command(resume=...)`` pattern against the SAME main graph
 (``create_unified_planning_graph``) via ``PlanningRuntimeService``. The pause
 happens inside the main graph's ``human_review`` node; resuming a different
-compiled graph would not see the checkpoint. Collects the final AgentState
-(delivery_manifest / validation_report / reconciliation_report / export_result /
-human_review_decisions), persists a lightweight JSON snapshot per session
+compiled graph would not see the checkpoint. Resolves final typed outputs from
+``artifact_refs`` instead of expecting them inline in AgentState, then persists a lightweight JSON snapshot per session
 (``.run-tmp/post_l3/{session_id}``) and returns the result dict.
 """
 
@@ -98,12 +97,21 @@ class PostL3ResultStore:
 
 def _collect_result(state: Dict[str, Any]) -> Dict[str, Any]:
     """Pick the post-L3 output artifacts out of the final chain state."""
+    from app.agent.bootstrap.artifact_runtime import load_artifact
+
+    def artifact(key: str) -> Any:
+        try:
+            return _dump_artifact(load_artifact(state, key))
+        except Exception:
+            return None
+
     return {
         "session_id": state.get("session_id", ""),
-        "delivery_manifest": _dump_artifact(state.get("delivery_manifest")),
-        "validation_report": _dump_artifact(state.get("validation_report")),
-        "reconciliation_report": _dump_artifact(state.get("reconciliation_report")),
-        "export_result": state.get("export_result") or {},
+        "delivery_manifest": artifact("delivery_manifest"),
+        "validation_report": artifact("validation_report"),
+        "reconciliation_report": artifact("reconciliation_report"),
+        "export_result": artifact("export_result") or {},
+        "render_artifacts": artifact("render_artifacts") or {},
         "human_review_items": list(state.get("human_review_items") or []),
         "human_review_decisions": state.get("human_review_decisions"),
         "status": state.get("post_l3_status") or state.get("status", ""),

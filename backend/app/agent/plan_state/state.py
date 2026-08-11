@@ -254,27 +254,18 @@ class AgentState(TypedDict, total=False):
     # ── Wave M: post-L3 主图独立节点链 typed artifacts（单一状态源）──
     # L3 输入
     # PARSE 输出
-    specs: List[Any]  # list[SpatialReferenceSpec]
     parse_gate: Optional[Any]  # GateDecision
     # GROUND 输出
     ground_gate: Optional[Any]  # GateDecision
     # SELECT 输出
-    land_design_briefs: List[Any]  # list[LandDesignBrief]
     select_gate: Optional[Any]  # GateDecision
     # EXECUTE 输出
-    execution_errors: Annotated[List[Dict[str, Any]], _replace_or_merge_lists]  # EXECUTE errors
-    layout_configs: List[Dict[str, Any]]
-    action_results: List[Dict[str, Any]]
-    l4_write_result: Dict[str, Any]
-    execution_outcome_target_coverage: List[str]
     # VALIDATE 输出
     validate_gate: Optional[Any]  # GateDecision
     # RECONCILE 输出
     reconcile_gate: Optional[Any]  # GateDecision
     # DELIVER 输出
     deliver_gate: Optional[Any]  # GateDecision
-    export_result: Optional[Dict[str, Any]]
-    render_artifacts: Dict[str, Any]
     # Gate 累积 + 重试
     upstream_gates: List[Any]
     stage_audit: Annotated[Dict[str, Dict[str, Any]], _merge_dict_of_dicts]
