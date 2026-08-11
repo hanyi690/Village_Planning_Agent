@@ -656,7 +656,7 @@ def test_facility_without_target_specific_candidates_becomes_unplaced(monkeypatc
         if assignment.target_id == "facility-1"
     )
     assert facility_assignment.status == "unplaced"
-    assert facility_assignment.reason == "classification_unresolved"
+    assert facility_assignment.reason == "no_target_specific_candidates"
     assert decision.decision_factors["facility_placements"]["facility-1"]["status"] == "unplaced"
     assert decision.decision_factors["facility_placements"]["facility-1"]["bsm"] == ""
 
