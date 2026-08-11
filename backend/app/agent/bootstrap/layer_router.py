@@ -132,10 +132,12 @@ def advance_phase_node(state: Dict[str, Any]) -> Command:
     layer = _phase_to_layer(phase)
     next_phase = get_next_phase(phase)
     if next_phase is None:
-        next_phase = "completed"
+        next_phase = "post_l3"
 
     update: Dict[str, Any] = {
         "phase": next_phase,
+        "current_stage": f"L{layer}" if layer is not None else str(phase).upper(),
+        "next_stage": "L3" if next_phase == "layer3" else ("PARSE" if next_phase == "post_l3" else str(next_phase).upper()),
         "previous_layer": layer if layer is not None else state.get("previous_layer", 0),
         "layer_just_completed": None,
     }
@@ -143,10 +145,15 @@ def advance_phase_node(state: Dict[str, Any]) -> Command:
     if sends:
         logger.info("[advance_phase] %s -> %s, dispatching %d dim(s)", phase, next_phase, len(sends))
         return Command(update=update, goto=sends)
-    if next_phase == "completed":
+    if next_phase == "post_l3":
         # Wave M: L1/L2/L3 全部完成 -> 自动进入 post-L3 链（parse 主图节点）。
         # 不再依赖用户消息触发 gis_analysis / gis_agent 黑盒节点。
-        logger.info("[advance_phase] %s -> completed, entering post-L3 chain (parse)", phase)
+        logger.info("[advance_phase] %s -> post_l3, entering post-L3 chain (parse)", phase)
+        update.update({
+            "post_l3_status": "auto_continue",
+            "paused_stage": "",
+            "next_stage": "PARSE",
+        })
         return Command(update=update, goto="parse")
     logger.info("[advance_phase] %s -> %s, no ready dims, END", phase, next_phase)
     return Command(update=update, goto=END)

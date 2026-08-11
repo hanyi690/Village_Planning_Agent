@@ -253,7 +253,7 @@ def route_after_human_review(state: Dict[str, Any]) -> str:
     if state.get("fatal_error"):
         return END
     decisions = state.get("human_review_decisions") or {}
-    paused_stage = state.get("paused_stage")
+    paused_stage = _normalize_paused_stage(state.get("paused_stage"))
     action = decisions.get("action") if isinstance(decisions, dict) else None
     if action in ("accept", "approve"):
         if paused_stage in {"validate", "reconcile"}:
@@ -300,6 +300,14 @@ def route_after_human_review(state: Dict[str, Any]) -> str:
     if action == "reject":
         return "conversation"
     return END
+
+
+def _normalize_paused_stage(value: Any) -> str | None:
+    """Normalize layer aliases before applying a HUMAN decision."""
+    stage = str(value or "").strip().lower()
+    if stage.startswith("layer") and stage[5:].isdigit():
+        return f"l{stage[5:]}"
+    return stage or None
 
 
 def _diagnostic_manifest_patch(
@@ -667,7 +675,7 @@ async def await_human_review(state: Dict[str, Any]) -> Dict[str, Any]:
 async def apply_human_review_decision(state: Dict[str, Any]) -> Dict[str, Any]:
     """Apply an already-resumed decision, creating a new gate revision."""
     items = state.get("human_review_items") or []
-    paused_stage = state.get("paused_stage")
+    paused_stage = _normalize_paused_stage(state.get("paused_stage"))
     decisions = state.get("human_review_decisions") or {}
     if not items:
         return {"human_interrupt": None, "human_review_items": [], "paused_stage": None}
@@ -790,6 +798,19 @@ async def apply_human_review_decision(state: Dict[str, Any]) -> Dict[str, Any]:
             if deferral_patch.get("artifact_refs"):
                 result["artifact_refs"] = deferral_patch["artifact_refs"]
             return result
+    if action in ("accept", "approve") and paused_stage in {"l1", "l2", "l3"}:
+        gate_key = f"{paused_stage}_gate_decision"
+        gate = dict(state.get(gate_key) or {})
+        gate.update({
+            "stage": paused_stage,
+            "passed": True,
+            "feedback_route": "PASS",
+            "route_reason": "human_approved_layer_gate",
+            "pending_requests": [],
+        })
+        result[gate_key] = gate
+        result["post_l3_status"] = "auto_continue" if paused_stage == "l3" else ""
+        return result
     if action == "retry" and paused_stage:
         configured_limit = state.get("max_retries")
         max_retries = 3 if configured_limit is None else max(0, int(configured_limit))

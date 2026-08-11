@@ -201,6 +201,8 @@ class AgentState(TypedDict, total=False):
     session_id: str
     project_name: str
     phase: str
+    current_stage: str
+    next_stage: str
     current_wave: int
     completed_dimensions: Annotated[Dict[str, List[str]], _merge_dict_of_lists]
     config: Annotated[Dict[str, Any], _merge_config]

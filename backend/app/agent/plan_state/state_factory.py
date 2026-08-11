@@ -106,6 +106,8 @@ class StateFactory:
             "post_l3_pending_review": [],
             "post_l3_thread_id": "",
             "post_l3_status": "",
+            "current_stage": "L1",
+            "next_stage": "L1",
             "post_l3_decisions": None,
             # post-L3 chain
             "parse_gate": None,
