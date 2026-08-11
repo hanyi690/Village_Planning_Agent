@@ -18,7 +18,7 @@ from typing import Dict, Any, List, Optional
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from app.config import get_dimension_config, get_dimension_layer, list_dimensions
 from app.core.llm import create_llm
-from app.core.settings import MAX_TOKENS, LLM_STREAM_TIMEOUT
+from app.core.settings import MAX_TOKENS, LLM_STREAM_TIMEOUT, BACKGROUND_SUMMARY_ENRICHMENT
 from app.core.events import SSEEventType
 from app.utils.logger import get_logger
 from app.agent.explore.service import retrieve_evidence, render_evidence_prompt_section
@@ -394,10 +394,11 @@ async def analyze_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
     structured_summary_str = generate_summary_regex(dim_key, dim_layer, llm_response)
     from app.services.composition import CompositionRoot
 
-    CompositionRoot.get_task_supervisor().create_task(
-        build_summary_task_key(session_id, dim_layer, dim_key, next_version),
-        enrich_summary_background(dim_key, dim_layer, llm_response, session_id, next_version),
-    )
+    if BACKGROUND_SUMMARY_ENRICHMENT:
+        CompositionRoot.get_task_supervisor().create_task(
+            build_summary_task_key(session_id, dim_layer, dim_key, next_version),
+            enrich_summary_background(dim_key, dim_layer, llm_response, session_id, next_version),
+        )
 
     # 9. Prepare pending report data for batch write
     phase_key = f"layer{dim_layer}"

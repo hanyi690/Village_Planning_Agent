@@ -160,6 +160,24 @@ async def run_rag(dimension_key: str, cfg: Any, state: Dict[str, Any]) -> tuple[
     from app.services.sse import sse_manager
     from app.services import RagService
 
+    rag_service = RagService.get_instance()
+    if getattr(rag_service, "_vector_store", None) is None:
+        return (
+            "",
+            RAGRetrievalLog(
+                dimension_key=dimension_key,
+                query="",
+                query_generation_method="skipped_unavailable",
+                retrieved_chunks=[],
+                total_results=0,
+                retrieval_latency_ms=0,
+                context_length=0,
+                context_truncated=False,
+                rag_enabled=False,
+                skip_reason="vector store unavailable; skipped query generation",
+            ),
+        )
+
     knowledge_cache = config.get("knowledge_cache", {})
     if state.get("is_revision") and dimension_key in knowledge_cache:
         cached = knowledge_cache[dimension_key]
@@ -183,7 +201,7 @@ async def run_rag(dimension_key: str, cfg: Any, state: Dict[str, Any]) -> tuple[
 
     start_time = time.time()
     try:
-        queries = await RagService.get_instance().generate_queries(cfg, state)
+        queries = await rag_service.generate_queries(cfg, state)
         query_method = "llm_multi"
 
         # Notify frontend that RAG queries have been generated
@@ -205,7 +223,7 @@ async def run_rag(dimension_key: str, cfg: Any, state: Dict[str, Any]) -> tuple[
             else:
                 uncached_queries.append((query, qhash))
 
-        search_tasks = [RagService.get_instance().search(q, top_k=5, prefer_doc_types=prefer_doc_types) for q, _ in uncached_queries]
+        search_tasks = [rag_service.search(q, top_k=5, prefer_doc_types=prefer_doc_types) for q, _ in uncached_queries]
 
         fresh_results = await asyncio.gather(*search_tasks) if search_tasks else []
 

@@ -52,7 +52,7 @@ LLM_STREAM_TIMEOUT = int(os.getenv("LLM_STREAM_TIMEOUT", "300"))  # 5 minutes
 # LLM Max Concurrent Requests (for asyncio.gather + asyncio.Semaphore)
 # qwen3.7-plus hard limit: 500 RPS / 30,000 RPM. 50 is safe with monitoring.
 # Can be tuned up to 100 with cold start.
-LLM_MAX_CONCURRENT = int(os.getenv("LLM_MAX_CONCURRENT", "50"))
+LLM_MAX_CONCURRENT = int(os.getenv("LLM_MAX_CONCURRENT", "6"))
 
 # LLM Rate Limit (requests_per_second for InMemoryRateLimiter)
 LLM_RATE_LIMIT_RPS = float(os.getenv("LLM_RATE_LIMIT_RPS", "500"))
@@ -65,7 +65,7 @@ EMBEDDING_MAX_CONCURRENT = int(os.getenv("EMBEDDING_MAX_CONCURRENT", "10"))
 EMBEDDING_RATE_LIMIT_RPS = float(os.getenv("EMBEDDING_RATE_LIMIT_RPS", "25"))
 
 # LangGraph Send API parallel node limit (prevents 28-dimension full-parallel burst)
-GRAPH_MAX_CONCURRENCY = int(os.getenv("GRAPH_MAX_CONCURRENCY", "50"))
+GRAPH_MAX_CONCURRENCY = int(os.getenv("GRAPH_MAX_CONCURRENCY", "6"))
 BACKEND_STARTUP_TIMEOUT_SECONDS = float(os.getenv("BACKEND_STARTUP_TIMEOUT_SECONDS", "30"))
 GRAPH_RECURSION_LIMIT = int(os.getenv("GRAPH_RECURSION_LIMIT", "100"))
 BUSINESS_RETRY_LIMIT = int(os.getenv("BUSINESS_RETRY_LIMIT", "3"))
@@ -95,7 +95,11 @@ CHROMA_PERSIST_DIR = RAG_CACHE_DIR / "chroma_db_new"
 # Basic settings
 VECTOR_STORE_DIR = os.getenv("VECTOR_STORE_DIR", str(CHROMA_PERSIST_DIR))
 VECTORDB_PERSIST = os.getenv("VECTORDB_PERSIST", "true").lower() in ("1", "true", "yes")
-RAG_ENABLED = os.getenv("RAG_ENABLED", "true").lower() in ("1", "true", "yes")
+RAG_ENABLED = os.getenv("RAG_ENABLED", "false").lower() in ("1", "true", "yes")
+
+# Flash/instructor enrichment is optional and must not add a second LLM call
+# to the hot path of real planning runs.
+BACKGROUND_SUMMARY_ENRICHMENT = os.getenv("BACKGROUND_SUMMARY_ENRICHMENT", "false").lower() in ("1", "true", "yes")
 
 # Vector database type: chroma (default), faiss, qdrant
 VECTOR_DB_TYPE = os.getenv("VECTOR_DB_TYPE", "chroma")
