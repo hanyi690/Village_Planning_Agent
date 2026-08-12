@@ -270,9 +270,6 @@ async def build_planning_context(
                         reports.setdefault(dk, {}).update(
                             {"content": rec.get("content", ""), "instruction": rec.get("instruction", "")}
                         )
-            for layer in (1, 2, 3):
-                layer_summaries = await store.get_layer_summaries(session_id, layer) or {}
-                report_summary_index.update(layer_summaries)
         except Exception as e:
             logger.warning("[PlanningContext] report load failed: %s", e)
 

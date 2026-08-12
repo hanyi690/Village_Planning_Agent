@@ -1,9 +1,8 @@
 """Parse dimension report summaries back into plain dicts.
 
 ``DimensionReport.summary`` is stored as JSON text (see summary_generator).
-This module reverses that for ``ReportStore.get_layer_summaries`` and any
-consumer that needs the structured form (L2/L3 dependency loading, planning
-text generation).
+This module reverses that for the report store's layer-summary read API and any
+consumer that needs the structured form (UI preview rendering).
 """
 
 from __future__ import annotations

@@ -141,7 +141,7 @@ async def analyze_l3_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
     8. 返回状态更新
     """
     from app.infrastructure.events import event_hub as sse_manager
-    from ...services.report_store import ReportStore
+    from app.infrastructure.reports.report_store import ReportStore
 
     dim_key = state.get("dimension_key")
     if not dim_key:

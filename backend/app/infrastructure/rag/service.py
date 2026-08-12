@@ -263,17 +263,12 @@ class RagService:
 
         # store resolved from generate_queries caller (composition root default)
 
-        # 批量加载依赖摘要（避免 N+1 查询）
-        # Full text + structured summary metrics for better RAG queries
+        # 批量加载依赖报告全文（避免 N+1 查询）
+        # Full text + content-derived metrics for better RAG queries
         if all_deps:
             layer_reports = await store.get_layer_reports(session_id, 1)
             layer_reports_2 = await store.get_layer_reports(session_id, 2) if phase_depends_on else {}
             layer_reports_3 = await store.get_layer_reports(session_id, 3) if depends_on else {}
-
-            # Also load structured summaries for metrics/key_points supplement
-            layer_summaries = await store.get_layer_summaries(session_id, 1)
-            layer_summaries_2 = await store.get_layer_summaries(session_id, 2) if phase_depends_on else {}
-            layer_summaries_3 = await store.get_layer_summaries(session_id, 3) if depends_on else {}
 
             dependency_summaries = []
             for dep_key in all_deps:
@@ -282,15 +277,18 @@ class RagService:
                 full_text = layer_reports.get(dep_key) or layer_reports_2.get(dep_key) or layer_reports_3.get(dep_key)
                 if full_text:
                     parts.append(f"【{dep_key}】\n{full_text[:2000]}")
-                # Structured summary supplement (key metrics + key points)
-                structured = layer_summaries.get(dep_key) or layer_summaries_2.get(dep_key) or layer_summaries_3.get(dep_key)
-                if structured:
-                    metrics = structured.get("metrics", {})
-                    key_points = structured.get("key_points", [])
-                    if metrics:
-                        parts.append(f"关键指标: {json.dumps(metrics, ensure_ascii=False)}")
-                    if key_points:
-                        parts.append(f"核心发现: {'; '.join(key_points[:3])}")
+                # Metrics/key_points supplement derived from the report content
+                # via deterministic regex extractors (no summary reads).
+                from app.data.ingestion.summary_generator import (
+                    _extract_key_points_regex,
+                    _extract_metrics_regex,
+                )
+                metrics = _extract_metrics_regex(full_text or "")
+                key_points = _extract_key_points_regex(full_text or "")
+                if metrics:
+                    parts.append(f"关键指标: {json.dumps(metrics, ensure_ascii=False)}")
+                if key_points:
+                    parts.append(f"核心发现: {'; '.join(key_points[:3])}")
                 if parts:
                     dependency_summaries.append("\n".join(parts))
         else:

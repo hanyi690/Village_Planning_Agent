@@ -204,7 +204,7 @@ class ReportStore:
                     existing_report.version = report_data["version"]
                     existing_report.content = report_data["content"]
                     existing_report.instruction = report_data.get("instruction")
-                    existing_report.summary = report_data.get("summary", report_data["content"][:500])
+                    existing_report.summary = report_data.get("summary", "")
                     existing_report.revision_trigger = report_data.get("revision_trigger")
                     existing_report.knowledge_sources = report_data.get("knowledge_sources")
                     existing_report.gis_data = report_data.get("gis_data")
@@ -219,7 +219,7 @@ class ReportStore:
                         report_id=report_data["report_id"],
                         content=report_data["content"],
                         instruction=report_data.get("instruction"),
-                        summary=report_data.get("summary", report_data["content"][:500]),
+                        summary=report_data.get("summary", ""),
                         revision_trigger=report_data.get("revision_trigger"),
                         knowledge_sources=report_data.get("knowledge_sources"),
                         gis_data=report_data.get("gis_data"),

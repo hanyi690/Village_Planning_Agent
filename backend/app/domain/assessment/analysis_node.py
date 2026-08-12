@@ -121,7 +121,7 @@ async def analyze_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
             state.get("dimension_key"),
             state.get("revision_impact_tree"),
         )
-    from ...services.report_store import ReportStore
+    from app.infrastructure.reports.report_store import ReportStore
 
     dim_key = state.get("dimension_key")
     if not dim_key:
@@ -172,36 +172,29 @@ async def analyze_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
         tool_names = getattr(cfg, "tools", []) or []
         structured_summary = None
 
-        if tool_names and dim_layer >= 2:
+        if tool_names:
             try:
-                # Load data from layer_depends_on dimensions
+                # Canonical upstream facts come from the typed L1Snapshot
+                # artifact, not from re-reading report summaries as input.
+                from app.infrastructure.artifacts.runtime import load_artifact
+                from app.contracts.domain.l1_contracts import L1Snapshot
+
                 dep_keys = getattr(cfg, "layer_depends_on", []) or []
-                if dep_keys:
-                    layer_summaries = await store.get_layer_summaries(session_id, 1)
-                    from ...data.ingestion.schemas import get_dimension_schema
-                    merged_metrics = {}
-                    for dk in dep_keys:
-                        raw = layer_summaries.get(dk)
-                        if raw:
-                            schema_cls = get_dimension_schema(dk)
-                            try:
-                                parsed = schema_cls.model_validate(raw)
-                                if structured_summary is None:
-                                    structured_summary = parsed
-                                if hasattr(parsed, "metrics") and parsed.metrics:
-                                    merged_metrics.update(parsed.metrics)
-                                for fname, finfo in schema_cls.model_fields.items():
-                                    if fname in ("dimension_key", "layer", "word_count", "key_points", "text_summary", "metrics"):
-                                        continue
-                                    val = getattr(parsed, fname, None)
-                                    if val is not None:
-                                        merged_metrics[fname] = val
-                            except Exception:
-                                pass
+                snapshot = load_artifact(state, "l1_snapshot", L1Snapshot)
+                by_dimension = getattr(snapshot, "facts_by_dimension", None) or {}
+                merged_metrics = {}
+                for dk in dict.fromkeys(dep_keys):
+                    facts = by_dimension.get(dk) or []
+                    if facts:
+                        merged_metrics[f"{dk}_facts"] = facts
+                if merged_metrics:
                     state["_dep_metrics"] = merged_metrics
-                    logger.info(f"[analyze_dimension] {dim_key}: loaded {len(merged_metrics)} metrics for tools {tool_names} from deps {dep_keys}")
+                    logger.info(
+                        "[analyze_dimension] %s: loaded %d dep fact groups for tools %s from l1_snapshot",
+                        dim_key, len(merged_metrics), tool_names,
+                    )
             except Exception as e:
-                logger.warning(f"[analyze_dimension] {dim_key}: failed to load prior summaries: {e}")
+                logger.warning(f"[analyze_dimension] {dim_key}: failed to load l1_snapshot facts: {e}")
 
         professional_data = await pipeline.get_professional_data(dim_key, structured_summary, state)
         professional_data_section = generate_professional_data_section(dim_key, professional_data)

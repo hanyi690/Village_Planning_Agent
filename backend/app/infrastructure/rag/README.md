@@ -62,7 +62,7 @@ svc.list_documents() / svc.get_stats() / svc.delete_document(source_name)
   - **Layer 2（通用）**：通用检索；
   - **Layer 3（详细规划）**：结合依赖摘要，检索编制标准、政策法规、相似案例；
   - **special case `superior_planning` + layer 1**：专门 Prompt，注入村庄位置（省/市/县/镇结构化字段或正则提取）与 Flash LLM 预处理的上位规划关键词。
-- 批量加载依赖摘要（`ReportStore.get_layer_reports` / `get_layer_summaries`，避免 N+1）：全文（截断 2000 字符）+ 结构化指标/核心发现。
+- 批量加载依赖报告全文（`ReportStore.get_layer_reports`，避免 N+1）：全文（截断 2000 字符）+ 内容正则提取的指标/核心发现。
 - Flash LLM 生成查询（`create_flash_llm(max_tokens=200, temperature=0.3)`）；失败回退 `f"{dim_name} 规划 技术标准"`。
 - `_expand_query` 领域同义词扩展（村庄→农村/乡村…），最多 3 条。
 
