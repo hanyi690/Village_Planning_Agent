@@ -33,7 +33,28 @@ class _ClassificationResultItem(BaseModel):
 
 
 class _ClassificationResultSet(BaseModel):
-    results: list[_ClassificationResultItem] = []
+    # MiniMax function-calling sometimes wraps the array in a JSON string.
+    results: list[_ClassificationResultItem] | str = []
+
+
+# Deterministic fallback used only when the LLM cannot classify a target.
+# Maps the L3 structured category (not a parcel dlbm or name) to the most
+# appropriate appendix5 planning land-use code; rationale marks it as
+# fallback so VALIDATE/audit can tell it apart from LLM decisions.
+_CATEGORY_FALLBACK_CODES = {
+    "protection": "1350",
+    "restoration": "1350",
+    "ecological": "1350",
+    "heritage": "2320",
+    "facility": "2122",
+    "infrastructure": "2123",
+    "road": "2126",
+    "project": "2124",
+    "zone": "1500",
+    "land_use_planning": "1500",
+    "settlement_planning": "2121",
+    "disaster_prevention": "1500",
+}
 
 
 
@@ -121,32 +142,50 @@ async def generate_classification_decisions(
             '??? JSON?{"results":[{"index":1,"selected_code":"1100","candidate_codes":["1100","1200"],"rationale":"..."}]} '
             "?index ???????selected_code ???? candidate_codes ????????rationale ?????????"
         )
-        try:
-            structured = llm.with_structured_output(
-                _ClassificationResultSet,
-                method="function_calling",
-            )
-            result = await asyncio.wait_for(
-                structured.ainvoke(
-                    [
-                        {"role": "system", "content": prompt},
-                        {"role": "user", "content": "Return the classification results only."},
-                    ]
-                ),
-                timeout=180,
-            )
-            if isinstance(result, _ClassificationResultSet):
-                items = result.results
-            elif isinstance(result, str):
-                items = _ClassificationResultSet.model_validate_json(
-                    _extract_json_object(result)
-                ).results
-            else:
-                items = _ClassificationResultSet.model_validate(result).results
-        except Exception as exc:
+        items: list[Any] = []
+        structured = llm.with_structured_output(
+            _ClassificationResultSet,
+            method="function_calling",
+        )
+        for attempt in range(3):
+            try:
+                result = await asyncio.wait_for(
+                    structured.ainvoke(
+                        [
+                            {"role": "system", "content": prompt},
+                            {"role": "user", "content": "Return the classification results only."},
+                        ]
+                    ),
+                    timeout=180,
+                )
+                if result is None:
+                    raise ValueError("provider returned None")
+                if isinstance(result, _ClassificationResultSet):
+                    raw = result.results
+                    if isinstance(raw, str):
+                        items = _ClassificationResultSet.model_validate_json(
+                            _extract_json_object(raw)
+                        ).results
+                    else:
+                        items = raw
+                elif isinstance(result, str):
+                    items = _ClassificationResultSet.model_validate_json(
+                        _extract_json_object(result)
+                    ).results
+                else:
+                    items = _ClassificationResultSet.model_validate(result).results
+                if items:
+                    break
+            except Exception as exc:
+                logger.warning(
+                    "[classification_generator] structured call failed for batch %d attempt %d: %s",
+                    batch_start // batch_size, attempt + 1, exc,
+                )
+                continue
+        if not items:
             logger.warning(
-                "[classification_generator] structured call failed for batch %d: %s",
-                batch_start // batch_size, exc,
+                "[classification_generator] batch %d produced no items after retries",
+                batch_start // batch_size,
             )
             continue
         for item in items:
@@ -175,6 +214,29 @@ async def generate_classification_decisions(
                     status="resolved",
                 )
             )
+    # Deterministic fallback for targets the LLM could not classify, so the
+    # program stays complete and EXECUTE does not fail-closed on every
+    # polygon target.  Only the L3 structured category is used; rationale
+    # records it as a fallback.
+    covered = {decision.target_id for decision in decisions}
+    for target in targets:
+        if target["target_id"] in covered:
+            continue
+        code = _CATEGORY_FALLBACK_CODES.get(str(target.get("category") or ""))
+        if code is None:
+            code = "1500"
+        decisions.append(
+            ClassificationDecision(
+                target_id=target["target_id"],
+                code_system=ClassificationSystem.APPENDIX5,
+                candidate_codes=[code],
+                selected_code=code,
+                decision_mode="llm_l3_fallback",
+                evidence_refs=list(target.get("evidence_refs") or []),
+                rationale="deterministic fallback from L3 category",
+                status="resolved",
+            )
+        )
     logger.info(
         "[classification_generator] generated %d decisions for %d targets",
         len(decisions), len(targets),
