@@ -85,19 +85,17 @@ intent target、spatial operation、constraint 和指标模型；`layout_contrac
 
 ### 2.6 Application workflow subgraphs
 
-位置：`backend/app/workflow/`；`backend/app/agent/` 只作为迁移期来源。
+目标位置：`backend/app/workflow/`；旧 `backend/app/agent/` 只作为迁移历史来源。
 
-目标上只负责节点编排、并行调度、Gate、重试和人工中断。当前 `agent/execute/execute_agent.py` 仍直接
-调用几何、道路和图层生成逻辑；这属于已识别的迁移断点，不应继续扩展。
+目标上只负责节点编排、并行调度、Gate、重试和人工中断。当前阶段节点应通过
+`workflow/stages/` 调用 `domain/materialization/` 和 `spatial/`；实现偏差以状态台账标记。
 
 ### 2.7 Application services and adapters
 
 位置：`backend/app/application/`、`backend/app/infrastructure/` 和 `backend/app/bootstrap/`。
 
-`backend/app/services/` 应只保留应用编排、Context 构建、artifact、报告、SSE 和会话服务；
-`backend/app/services/modules/gis/road/` 当前包含实际道路算法，是历史迁移遗留的混合目录，不能作为最终分层。
-它应迁移到基础设施道路适配器，并通过 `RoadPlannerPort` 被应用服务调用。适配器可以调用领域服务，但不能
-反向把领域服务绑定到某个 Agent State。
+应用编排位于 `backend/app/application/`，Context、artifact、报告、SSE、runtime 和 provider
+适配位于 `backend/app/infrastructure/`；适配器可以调用领域服务，但不能反向把领域服务绑定到 Agent State。
 
 ## 3. 允许与禁止的依赖
 

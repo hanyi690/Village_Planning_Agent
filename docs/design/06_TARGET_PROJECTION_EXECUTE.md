@@ -1,5 +1,8 @@
 # TARGET_PROJECTION、GROUND、SELECT 与 EXECUTE
 
+> 状态：`TARGET DESIGN`。第 6 节的旧实现表只用于迁移追溯；当前路径和完成度以
+> [`10_IMPLEMENTATION_STATUS.md`](10_IMPLEMENTATION_STATUS.md) 与 `docs/architecture/` 为准。
+
 ## 1. 四个阶段的边界
 
 ```text

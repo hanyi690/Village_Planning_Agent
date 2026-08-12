@@ -1,96 +1,95 @@
-# 项目结构与目标实现映射
+# 当前项目结构
 
-本文档只描述当前代码的实现边界和迁移方向。规范性设计以
-[`docs/design/14_BACKEND_MODULE_BLUEPRINT.md`](../design/14_BACKEND_MODULE_BLUEPRINT.md)
-为准，阶段完成情况以
-[`docs/design/10_IMPLEMENTATION_STATUS.md`](../design/10_IMPLEMENTATION_STATUS.md)
-为准。
+> 本文是实现映射，不是目标蓝图。状态以
+> [`../design/10_IMPLEMENTATION_STATUS.md`](../design/10_IMPLEMENTATION_STATUS.md) 为准。
 
-## 1. 当前运行拓扑
+## 1. 启动与运行路径
 
 ```text
-API / SSE
-  → application queries / commands
-    → services.runtime（LangGraph checkpoint 与执行生命周期）
-      → workflow.root_graph
-        → L1 / L2 / L3
-        → TARGET_PROJECTION → GROUND → SELECT → EXECUTE
-        → VALIDATE → RECONCILE → DELIVER
-          → DeliverySpatialSnapshot
-            → render / export / land balance / manifest
+uvicorn app.main:app
+  → app.bootstrap.lifespan
+      → database.init_async_db
+      → bootstrap.CompositionRoot
+      → infrastructure.runtime.PlanningRuntimeService
+  → app.api.routes
+      → app.api.v1.routes/*
+  → application command/query/projection
+  → workflow.root_graph
+      → L1/L2/L3 workers
+      → TARGET_PROJECTION → GROUND → SELECT → EXECUTE
+      → VALIDATE → RECONCILE → DELIVER
 ```
 
-根图已改用 `WorkflowState` 编译；阶段节点通过
-`workflow/runtime_adapter.py` materialize 一个临时 stage view。该 view 在写入
-checkpoint 前固化为 `workflow_progress` artifact，根 checkpoint 只保存控制字段和
-artifact refs。它不是前端协议，也不是最终阶段模型；下一步继续把 progress 拆为 typed
-stage artifacts。
+本地后端启动目录是 `backend/`，入口模块是 `app.main:app`。FastAPI 的 `/docs` 和 `/redoc`
+由应用自动生成；具体请求/响应以 v1 路由上的 Pydantic contract 为准。
 
-## 2. 目录职责
+## 2. 当前目录职责
 
 ```text
 backend/app/
-├── api/                         # HTTP、SSE、稳定 contract adapter
-├── application/                # 面向用例的 query/command 与公开投影
-│   └── queries/workflow_state.py
-├── workflow/                   # 根图、阶段适配器、阶段审计、阶段 service
-│   ├── root_graph.py
-│   ├── state.py                # ref-only WorkflowState 投影
-│   └── stages/                 # projection/ground/select/execute/.../deliver
-├── agent/                      # 尚未迁移完的 L1-L3、HUMAN、EXECUTE 子图与交付适配器
-├── modules/
-│   ├── data/                   # 上传文件、SessionDataSnapshot、SpatialWorkspace
-│   ├── schema/                 # Pydantic contracts、artifact descriptor、分类闭集
-│   ├── spatial_ops/            # 空间算法、snapshot IO、土地平衡、导出底层能力
-│   ├── kg/                     # 语义查询、别名、BSM、证据索引；不做规划编码决策
-│   └── context/                # PlanningContext 与上下文索引
-├── infrastructure/             # CAS artifact repository、LLM、持久化适配器
-├── services/                  # 运行生命周期、SSE、数据库/外部适配器；不再拥有 StepReport
-└── tools/                     # 外部工具和 GIS 技术适配器；不拥有业务状态
+├── api/              HTTP、SSE、v1 路由和 transport 适配
+├── application/      command、query、projection、resume 和 session 用例
+├── bootstrap/        FastAPI lifespan 与依赖组合根
+├── contracts/        artifact、domain、spatial、workflow 的类型契约
+├── core/             配置、LLM 基础设施和 tracing
+├── data/             上传、摄取、catalog、快照和外部数据适配
+├── database/         数据库引擎、模型和持久化操作
+├── domain/           assessment、objectives、program、ground、allocation、
+│                     materialization、validation、delivery 等业务决策
+├── evidence/         证据索引、检索、KG-facing evidence 模型
+├── infrastructure/   artifact、事件、runtime、LLM、KG、RAG、报告和 provider 适配
+├── spatial/          geometry、grounding、query、allocation、change、delivery、validation
+└── workflow/         根图、控制 state、L1/L2/L3 层编排、阶段节点、对话和工具节点
 ```
 
-## 3. 模块间单向边界
+## 3. 依赖边界
 
-| 边界 | 允许 | 禁止 |
-|---|---|---|
-| API → application | session command、control projection、delivery projection | 读取 `AgentState` 原始 payload、拼接 GIS 状态 |
-| workflow → data | 传 `context_ref`、`SpatialWorkspace` adapter、artifact refs | 把完整 GIS / 报告正文写入 checkpoint |
-| agent → domain | 读取 bundle/context，产出 typed claim/decision | 在 worker 内从名称、`dlbm` 或 KG 推导规划编码 |
-| EXECUTE → spatial_ops | `ClassificationDecision → GeometryOperation → ParcelChange` | worker 自行重复面积、分类、地块读取 |
-| DELIVER → spatial_ops/output | 只接收同一 `DeliverySpatialSnapshot` | 从 `PlannedState`、`gis_data` 或历史文件重新组装期末图层 |
-| renderer/exporter/land balance | 只读 snapshot | 各自选择 current/planned 来源 |
+```text
+api
+  → application
+    → workflow / domain / contracts
+      → data / spatial / evidence
+        → infrastructure adapters
+```
+
+这是用于理解职责的简化图，不表示每个 Python import 都严格形成一条直线。维护时遵守：
+
+- `api` 不读取 checkpoint 内部 payload，也不拼接 GIS 事实；
+- `application` 负责用例和公开 projection，不成为第二个领域算法实现；
+- `workflow` 负责编排和路由，`WorkflowState` 只保存控制数据与 artifact refs；
+- `domain` 只通过 contracts/ports 消费输入，不反向依赖 API、UI 或 provider；
+- `infrastructure` 实现外部系统适配，不把 provider 类型上浮为业务事实；
+- `DELIVER` 从同一个 `DeliverySpatialSnapshot` 派生地图、报告、导出和 manifest。
 
 ## 4. 阶段产物流
 
 ```text
-Data layer
-  → SessionDataSnapshot / PlanningContext / SpatialWorkspace
+SessionDataSnapshot / SpatialWorkspace
   → L1/L2/L3 artifacts
-  → PlanningProgram / IntentCompilationResult
+  → PlanningProgram
+  → IntentCompilationResult / SpatialReferenceSpec
   → GroundingResult
-  → PortfolioDecision / SiteSelectionDecision
-  → ExecutionPlan / ExecutionResult(root → ParcelChangeSet, PlannedState, task records)
-  → ValidationReport / ReconciliationReport / DeferralLedger
+  → SiteSelectionDecision / PortfolioDecision
+  → ExecutionPlan / ExecutionResult
+  → ParcelChangeSet / PlannedState
+  → ValidationReport / ReconciliationReport
   → DeliverySpatialSnapshot
-  → RenderArtifacts / ExportResult / DeliveryManifest
+  → RenderLayers / DeliveryManifest / exports
 ```
 
-当前实现中的分类决策边界：`domain/program/classification.py` 只接受显式闭集
-`ClassificationDecision`，并为缺失的 polygon/parcel 目标生成 `classification_decision_required`
-问题。L3 gate 将其投影为 HUMAN request；`root_graph.py` 在 HUMAN resume 中持久化新的
-`PlanningProgram` artifact，然后从 TARGET_PROJECTION 重新走空间链。EXECUTE 不从项目名称、
-现状 `dlbm` 或 KG 推导规划编码。
+阶段是否形成完整闭环不能由目录或函数名推断；请同时查看状态台账和验收结果。
 
-checkpoint 只保存控制字段和 `ArtifactDescriptor` 引用；阶段 payload、GeoJSON、
-渲染文件和导出文件由 Artifact Store / data layer 持有。`StepReport` 是审计事件，
-记录阶段输入输出引用、耗时、质量摘要和错误，不是第二个业务状态仓库。
+## 5. 阅读与验证
 
-## 5. 迁移中的明确切片
+- 根图节点和分支：看 [agent-graph.md](agent-graph.md)。
+- API 资源和事件：看 [backend-api.md](backend-api.md)。
+- state、artifact、事件和交付 owner：看 [backend-state-contract.md](backend-state-contract.md)。
+- 领域 contract：从 `backend/app/contracts/` 进入，再跟到 `backend/app/domain/`。
+- 运行验证：`pytest backend/tests/contracts backend/tests/core -q`；真实 provider 验收按
+  状态台账中的条件执行，未配置 key 时不得把 skip 写成通过。
 
-1. 根图已切换为 `WorkflowState`；`runtime_adapter` 只作为迁移边界，不能新增业务字段。
-2. 新 application/API 查询已经统一由 `control_state_from_checkpoint()` 生成
-   `WorkflowState`；不得新增对 raw `AgentState` 的前端读取。
-3. `workflow_progress` 是当前阶段迁移载荷的唯一临时 artifact owner；下一阶段按
-   L1/L2/L3 progress、conversation 和 gate contract 拆分它，并删除旧字段读取。
-4. DELIVER 的唯一空间真相是 `DeliverySpatialSnapshot`：同一 snapshot checksum
-   必须贯穿 current/planned/render/export/land balance。
+## 6. 迁移路径说明
+
+`app/agent`、`app/modules` 和 `app/services` 是旧架构路径。它们可以在审计或迁移计划中
+作为历史来源出现，但不再是当前目录、当前入口或新代码的落点。若文档需要解释迁移，
+请明确写成 `HISTORICAL`，并同时给出当前替代路径。

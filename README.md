@@ -1,317 +1,122 @@
-# 村庄规划智能体 (Village Planning Agent)
+# 村庄规划智能体
 
-基于 LangGraph 的智能村庄规划系统：**一条闭环管线** = 文本规划（L1/L2/L3 28 维度）+ 空间布局（PARSE + EXECUTE），全程 KG 语义桥接 + RAG 知识检索。
+基于 FastAPI、LangGraph、Pydantic 和 Next.js 的村庄规划系统。系统把规划认知、证据探索、
+空间决策和成果交付串成可恢复的工作流；当前代码已经完成主要后端目录收敛，但“有节点/有
+测试”不等于完成真实、法定、无 HUMAN 阻塞的规划闭环。
 
-## 核心特性
+## 当前运行链
 
-- **20 个显式主图业务节点**：对话/工具、L1–L3 worker、层级编排、PARSE→DELIVER 与四节点 HITL 流程
-- **三层递进规划**：现状分析(L1, 12 维) → 规划思路(L2, 4 维) → 详细规划(L3, 12 维)
-- **五层模块架构**：`Schema ← Data ← SpatialOps ← KG ← Agent`（单向依赖）
-- **RAG 知识检索**：Small-to-Big + 层级感知，法规条文与技术指标智能注入
-- **SSE 单通道**：所有数据通过 SSE 推送，Checkpoint 为唯一数据源（SSOT）
-- **级联修复**：驳回后自动计算影响树，按依赖链波次重分析
-- **后 L3 规划链**：`PARSE → GROUND → SELECT → EXECUTE → VALIDATE → RECONCILE → DELIVER`
-
-## 系统架构
-
-```
-┌─────────────────────────────────────────────────────────────────────┐
-│                     Village Planning Agent                          │
-├─────────────────────────────────────────────────────────────────────┤
-│                                                                     │
-│  ┌────────────┐    ┌───────────────┐    ┌────────────────────────┐  │
-│  │ Frontend   │───▶│  FastAPI API  │───▶│ LangGraph 主图（20业务节点）│  │
-│  │ Next.js 14 │SSE │  /api/*       │    │  agent/bootstrap/      │  │
-│  │ + MapLibre │    │  session/HITL │    │  graph.py              │  │
-│  └────────────┘    └───────────────┘    └───────────┬────────────┘  │
-│       │                                            │               │
-│       │                            ┌────────────────┼───────────┐   │
-│       │                            ▼                ▼           ▼   │
-│       │                      ┌─────────┐  ┌──────────────┐ ┌──────┐ │
-│       │                      │ L1/L2/L3│  │ POST-L3 链   │ │ RAG  │ │
-│       │                      │ workers │  │ PARSE→DELIVER│ │Chroma│ │
-│       │                      └────┬────┘  └──────┬───────┘ └──────┘ │
-│       │                           │              │                  │
-│       │                           ▼              ▼                  │
-│       │                   ┌──────────────────────────────┐          │
-│       │                   │  五层模块 (app/modules/)      │          │
-│       │                   │  schema ← data ← spatial_ops │          │
-│       │                   │         ← kg ← (rag)         │          │
-│       │                   └──────────────────────────────┘          │
-│       │                                                             │
-│       └────────────────── SSE 单通道 ◄─────────────────────────────│
-│                                                                     │
-└─────────────────────────────────────────────────────────────────────┘
+```text
+上传资料 / SessionDataSnapshot / SpatialWorkspace
+  → L1/L2/L3 认知层
+  → TARGET_PROJECTION → GROUND → SELECT → EXECUTE
+  → VALIDATE → RECONCILE → DELIVER
+  → DeliverySpatialSnapshot → API / SSE / 地图 / 导出
 ```
 
-### 当前主图
+根图入口是 `backend/app/workflow/root_graph.py`，FastAPI 入口是
+`backend/app/main.py`。当前实现、目标设计和未实现清单分开维护：
 
-```
-START → conversation ─┬→ execute_tools → conversation
-                     ├→ l1_worker | l2_worker | l3_worker
-                     │      → layer_completion_check → layer_aggregate → advance_phase
-                     └→ parse → ground → select → execute → validate → reconcile → deliver → END
-
-任一 post-L3 Gate 还可回退重试或进入四节点人工审核流程。
-```
-
-详见 [docs/architecture/agent-graph.md](docs/architecture/agent-graph.md)
-
-### 三层规划流程
-
-```
-Layer 1 (现状分析)  ──▶  Layer 2 (规划思路)  ──▶  Layer 3 (详细规划)
-12 维度并行              4 维度波次执行          12 维度波次执行
-(Map-Reduce)             (Wave 1-4)             (Wave 1-2)
-```
+- 当前代码入口和调用链：[docs/architecture/structure.md](docs/architecture/structure.md)
+- 当前主图：[docs/architecture/agent-graph.md](docs/architecture/agent-graph.md)
+- API/SSE/resume：[docs/architecture/backend-api.md](docs/architecture/backend-api.md)
+- 状态、artifact、交付边界：[docs/architecture/backend-state-contract.md](docs/architecture/backend-state-contract.md)
+- 目标设计：[docs/design/00_SYSTEM_DESIGN.md](docs/design/00_SYSTEM_DESIGN.md)
+- 后端蓝图：[docs/design/14_BACKEND_MODULE_BLUEPRINT.md](docs/design/14_BACKEND_MODULE_BLUEPRINT.md)
+- 实现状态：[docs/design/10_IMPLEMENTATION_STATUS.md](docs/design/10_IMPLEMENTATION_STATUS.md)
+- 完整文档导航：[docs/README.md](docs/README.md)
 
 ## 快速开始
 
-### 环境要求
+### 环境
 
-- Python 3.11+（CI 与容器当前使用 3.11）
+- Python 3.11+
 - Node.js 18+（推荐 20+）
-- LLM API Key（DashScope / DeepSeek / OpenAI / 智谱AI）
+- 至少一个兼容 provider 的 LLM key；没有 key 时真实 LLM 验收应 skip，而不是写成通过
 
 ### 安装
 
-```bash
-# 后端
+```powershell
 pip install -r requirements.txt
-
-# 前端
-cd frontend && npm install
+Set-Location frontend
+npm install
+Set-Location ..
 ```
 
-### 配置
-
-复制 `.env.example` 为 `.env` 并填写：
-
-```env
-# LLM 配置（默认 MiniMax 高速模式）
-LLM_PROVIDER=minimax                      # minimax | openai | deepseek | zhipuai
-MINIMAX_API_KEY=your_minimax_api_key
-MINIMAX_API_BASE=https://api.minimaxi.com/v1
-MINIMAX_MODEL=MiniMax-M2.7-highspeed
-LLM_MODEL=MiniMax-M2.7-highspeed
-MAX_TOKENS=65536
-
-# OpenAI-compatible / DashScope（显式切换）
-# LLM_PROVIDER=openai
-# OPENAI_API_KEY=your_dashscope_api_key
-# OPENAI_API_BASE=https://dashscope.aliyuncs.com/compatible-mode/v1
-# LLM_MODEL=qwen-plus
-
-# Embedding（推荐阿里云 DashScope，内存占用低）
-EMBEDDING_PROVIDER=aliyun
-DASHSCOPE_API_KEY=your_dashscope_api_key
-ALIYUN_EMBEDDING_MODEL=text-embedding-v4
-
-# 多模态（可选）
-MULTIMODAL_ENABLED=true
-MULTIMODAL_MODEL=MiniMax-M2.7-highspeed
-```
-
-> 支持 DeepSeek / OpenAI / 智谱AI / MiniMax 切换，均通过现有 OpenAI 兼容工厂；未显式设置时使用 MiniMax 高速模式。
+复制 `.env.example` 为 `.env`，按需配置 provider、数据库、RAG、地图和 CORS。不要把真实
+key 提交到仓库。
 
 ### 启动
 
-```bash
-# 后端（端口 8000）
-cd backend && python -m uvicorn app.main:app --host 127.0.0.1 --port 8000
+后端：
 
-# 前端（端口 3000）
-cd frontend && npm run dev
+```powershell
+Set-Location backend
+python -m uvicorn app.main:app --host 127.0.0.1 --port 8000
 ```
 
-访问 http://localhost:3000
+前端：
 
-### Docker 部署
-
-```bash
-cp .env.example .env  # 填写 API Key
-docker-compose up -d  # 后端 8003 / 前端 3003
+```powershell
+Set-Location frontend
+npm run dev
 ```
 
-### 构建知识库
+后端 OpenAPI：<http://127.0.0.1:8000/docs>；健康检查：
+<http://127.0.0.1:8000/health> 和 <http://127.0.0.1:8000/api/health>。
 
-```bash
-# 知识库状态
-python -m app.modules.rag.cli status
+Docker 入口仍由 `docker-compose.yml` 提供，但具体端口和环境变量以该文件及 `.env.example`
+为准，不在本文复制第二份配置表。
 
-# 重新导入文档
-python -m app.modules.rag.cli reload <file_path>
+## 当前 API 概览
 
-# 删除文档
-python -m app.modules.rag.cli delete <source_name>
+稳定前端入口是 `/api/v1`：
 
-# 验证一致性
-python -m app.modules.rag.cli verify <source_name>
-```
+| 资源 | 路径 |
+|---|---|
+| 创建会话 | `POST /api/v1/sessions` |
+| 状态 | `GET /api/v1/sessions/{id}/state` |
+| SSE / 补偿 | `GET /api/v1/sessions/{id}/events`、`events/sync?after=N` |
+| HUMAN | `GET/POST /api/v1/sessions/{id}/human-review` |
+| 恢复 | `POST /api/v1/sessions/{id}/resume` |
+| 交付 / 图层 | `GET /api/v1/sessions/{id}/delivery`、`map-layers` |
+| artifact | `GET /api/v1/sessions/{id}/artifacts/{key}` |
 
-支持的文档格式：`.md`, `.txt`, `.pdf`, `.pptx`, `.ppt`, `.docx`, `.doc`
-
-**源文档目录**：`data/policies/`
+详细字段以 `backend/app/api/v1/contracts.py` 和运行中的 OpenAPI 为准。
 
 ## 项目结构
 
-```
-Village_Planning_Agent/
-├── backend/
-│   ├── main.py                         # 应用入口（lifespan + 中间件）
-│   └── app/
-│       ├── main.py                     # FastAPI app 定义
-│       ├── api/                        # API 路由层
-│       │   ├── routes.py               # 统一路由器
-│       │   ├── session_routes.py       # 会话、流式、恢复与反馈端点
-│       │   ├── gis_test_routes.py      # GIS 测试（开发）
-│       │   └── schemas.py              # 请求/响应模型
-│       ├── agent/                      # LangGraph Agent 核心
-│       │   ├── bootstrap/graph.py      # create_unified_planning_graph（20 个显式业务节点）
-│       │   ├── bootstrap/post_l3_main_nodes.py # PARSE 至 DELIVER 主图节点
-│       │   ├── plan_state/state.py     # AgentState, PlanningPhase
-│       │   ├── conversation_router/    # 中央路由节点与边
-│       │   ├── tools/execute_node.py   # 工具执行节点
-│       │   ├── l1_observe/             # L1 维度分析（RAG + KG + DataPipeline）
-│       │   ├── l2_strategize/          # L2 策略分析
-│       │   ├── l3_plan/                # L3 详细规划
-│       │   └── execute/                # EXECUTE 子图与空间 worker
-│       ├── modules/                    # 五层业务模块
-│       │   ├── schema/                 # ① 类型契约层（零依赖）
-│       │   ├── data/                   # ② 数据获取层
-│       │   ├── spatial_ops/            # ③ 空间分析层
-│       │   ├── kg/                     # ④ 知识图谱层
-│       │   ├── rag/                    # RAG 知识检索
-│       │   ├── planning_text/          # 规划文本生成
-│       │   └── prompts/                # Prompt 模板
-│       ├── services/                   # 服务层
-│       │   ├── runtime.py              # PlanningRuntimeService 单例
-│       │   ├── sse/                    # SSE 管理器
-│       │   ├── checkpoint.py           # 检查点服务
-│       │   └── report_store.py         # 报告存储
-│       ├── tools/                      # 工具系统（access/gis/intent）
-│       ├── database/                   # 数据持久层（SQLModel）
-│       ├── core/                       # 核心基础设施（llm, settings）
-│       └── config/                     # 配置层（YAML 驱动）
-├── frontend/
-│   └── src/
-│       ├── app/                        # Next.js App Router
-│       └── features/
-│           ├── planning/               # 规划功能模块
-│           │   ├── store/planningStore.ts   # Zustand 核心状态
-│           │   ├── hooks/              # SSE 连接 + 流式渲染
-│           │   ├── api/                # API 客户端
-│           │   └── components/         # React 组件
-│           └── gis-test/               # GIS 测试模块
-├── data/
-│   ├── policies/                       # RAG 源文档
-│   └── gis/                            # GIS 数据
-├── docs/                               # 文档（见 docs/README.md）
-├── docker-compose.yml
-├── .env.example
-└── requirements.txt
+```text
+backend/app/
+├── api/              HTTP、SSE 和 v1 路由
+├── application/      commands、queries、projections、resume
+├── bootstrap/        lifespan 和组合根
+├── contracts/        跨边界类型契约
+├── data/             上传、摄取、快照和数据适配
+├── domain/           规划、执行、校验和交付业务
+├── evidence/         证据索引与检索模型
+├── infrastructure/   artifact、事件、runtime、LLM、KG、RAG、provider
+├── spatial/          几何、接地、查询、变化、交付和空间校验
+└── workflow/         根图、阶段节点、层编排、对话和工具
 ```
 
-## API 端点
+`WorkflowState` 只保存控制字段和 artifact refs；完整业务结果由 typed contracts 和 CAS
+artifact 持有。旧的 `app/agent`、`app/modules`、`app/services` 路径只在迁移历史中出现，
+不是新代码入口。
 
-### 核心会话 API（`/api/sessions/*`，非完整清单）
+## 验证
 
-| # | 方法 | 路径 | 说明 |
-|---|------|------|------|
-| 1 | POST | `/api/sessions` | 创建会话（支持文件上传） |
-| 2 | GET | `/api/sessions/{id}/stream` | SSE 事件流（单通道） |
-| 3 | GET | `/api/sessions/{id}/sync` | 断线重连（`?from_seq=N`） |
-| 4 | POST | `/api/sessions/{id}/feedback` | 反馈（approve / reject 触发级联修订） |
-| 5 | GET | `/api/sessions/{id}/checkpoints` | 检查点列表 |
-| 6 | POST | `/api/sessions/{id}/resume/{checkpoint_id}` | 从检查点恢复 |
-| 7 | GET | `/api/sessions/{id}/reports/{dim_key}` | 维度报告全文 |
+```powershell
+python -m pytest backend/tests/contracts backend/tests/core -q
+python -m pytest backend/tests/e2e -q
+```
 
-> 人工审核 API 位于 `/api/human-review/*`；完整路由以 `backend/app/api/routes.py` 为准。
+真实验收还必须有真实 provider、checkpoint reopen/resume、实际 HTML/GeoJSON/PNG、
+`ParcelChangeSet` 和 `DeliverySpatialSnapshot` 的一致性证据。单元测试、固定 fixture、
+空变化集或现状复制图不能替代这些证据。
 
-详见 [docs/architecture/backend-api.md](docs/architecture/backend-api.md)
+## 文档状态规则
 
-## SSE 流式事件
-
-| 事件类型 | 说明 |
-|---------|------|
-| `connected` | SSE 连接建立 |
-| `layer_started` | 层级开始执行 |
-| `dimension_start` | 维度开始分析 |
-| `dimension_delta` | 维度内容增量（Token 级） |
-| `dimension_complete` | 维度分析完成 |
-| `layer_completed` | 层级完成 |
-| `tool_call` | 工具开始执行 |
-| `tool_progress` | 工具执行进度 |
-| `tool_result` | 工具执行结果 |
-| `gis_layer_update` | GIS 图层更新 |
-| `checkpoint_saved` | 检查点已保存 |
-| `pause` | 步进暂停 |
-| `resumed` | 恢复执行 |
-| `cascade_impact` | 级联影响（修复触发） |
-| `cascade_complete` | 级联修复完成 |
-| `heartbeat` | 心跳（15 秒无事件） |
-
-## 三层规划维度
-
-### Layer 1: 现状分析（12 维度并行）
-
-| 维度键 | 维度名称 | 工具绑定 |
-|--------|----------|----------|
-| `location` | 区位与对外交通分析 | - |
-| `socio_economic` | 社会经济分析 | `population_model_v1` |
-| `villager_wishes` | 村民意愿与诉求分析 | - |
-| `superior_planning` | 上位规划与政策导向分析 | - |
-| `natural_environment` | 自然环境分析 | `wfs_data_fetch` |
-| `land_use` | 土地利用分析 | `gis_coverage_calculator` |
-| `traffic` | 道路交通分析 | `accessibility_analysis` |
-| `public_services` | 公共服务设施分析 | `poi_search` |
-| `infrastructure` | 基础设施分析 | - |
-| `ecological_green` | 生态绿地分析 | - |
-| `architecture` | 建筑分析 | - |
-| `historical_culture` | 历史文化与乡愁保护分析 | - |
-
-### Layer 2: 规划思路（4 维度波次执行）
-
-| Wave | 维度键 | 维度名称 | 依赖 |
-|------|--------|----------|------|
-| 1 | `resource_endowment` | 资源禀赋分析 | 6 个 Layer 1 维度 |
-| 2 | `planning_positioning` | 规划定位分析 | `resource_endowment` |
-| 3 | `development_goals` | 发展目标分析 | `resource_endowment`, `planning_positioning` |
-| 4 | `planning_strategies` | 规划策略分析 | 前 3 个 Layer 2 维度 |
-
-### Layer 3: 详细规划（12 维度波次执行）
-
-| 维度键 | 维度名称 | RAG |
-|--------|----------|-----|
-| `industry` | 产业规划 | - |
-| `spatial_structure` | 空间结构规划 | - |
-| `land_use_planning` | 土地利用规划 | ✓ |
-| `settlement_planning` | 居民点规划 | - |
-| `traffic_planning` | 道路交通规划 | - |
-| `public_service` | 公共服务设施规划 | - |
-| `infrastructure_planning` | 基础设施规划 | ✓ |
-| `ecological` | 生态绿地规划 | ✓ |
-| `disaster_prevention` | 防震减灾规划 | ✓ |
-| `heritage` | 历史文保规划 | ✓ |
-| `landscape` | 村庄风貌指引 | - |
-| `project_bank` | 建设项目库 | - |
-
-> RAG 标记的维度启用知识检索增强，涉及法规条文和技术标准
-
-## 文档
-
-完整的文档体系导航见 [docs/README.md](docs/README.md)。
-
-| 想了解... | 请阅读 |
-|----------|--------|
-| 系统设计理念 | [docs/design/00_SYSTEM_DESIGN.md](docs/design/00_SYSTEM_DESIGN.md) |
-| 主图怎么跑 | [docs/architecture/agent-graph.md](docs/architecture/agent-graph.md) |
-| API 端点 | [docs/architecture/backend-api.md](docs/architecture/backend-api.md) |
-| 前端架构 | [docs/architecture/frontend.md](docs/architecture/frontend.md) |
-| RAG 检索 | [docs/architecture/rag-system.md](docs/architecture/rag-system.md) |
-| 闭环管线设计 | [docs/design/04_PLANNING_PIPELINE.md](docs/design/04_PLANNING_PIPELINE.md) |
-| 术语表 | [docs/reference/terminology.md](docs/reference/terminology.md) |
-
-## 许可证
-
-MIT License
+文档分为：设计（为什么）、实现（在哪里/怎么跑）、指南（怎么做）、参考（查什么）和
+审计/计划（历史证据或一次性任务）。实现状态统一使用 `CURRENT / PARTIAL / GAP / TARGET /
+HISTORICAL`；详见 [docs/README.md](docs/README.md)。

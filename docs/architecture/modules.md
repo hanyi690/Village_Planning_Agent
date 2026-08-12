@@ -1,89 +1,27 @@
-# 模块实现映射与依赖规则
+# 当前模块职责
 
-## 1. 目标依赖方向
+> 本文只给当前目录和依赖边界做索引。详细目标约束见
+> [`../design/14_BACKEND_MODULE_BLUEPRINT.md`](../design/14_BACKEND_MODULE_BLUEPRINT.md)。
 
-```text
-schema
-  ↑
-data repositories
-  ↑
-spatial query services
-  ↑
-kg semantic services
-  ↑
-planning domain services
-  ↑
-workflow subgraphs / API adapters
-```
+| 当前目录 | 职责 | 主要入口 |
+|---|---|---|
+| `backend/app/api/` | HTTP、SSE、v1 transport | `api/routes.py`、`api/v1/routes/` |
+| `backend/app/application/` | command、query、projection、resume | `commands/`、`queries/`、`projections/` |
+| `backend/app/contracts/` | 跨边界 Pydantic/Typed contracts | `artifacts/`、`domain/`、`spatial/`、`workflow/` |
+| `backend/app/data/` | 上传、摄取、catalog、快照 | `data/ingestion/`、`data/model/` |
+| `backend/app/domain/` | 规划、选址、执行、校验和交付 | `assessment/`、`program/`、`allocation/`、`materialization/`、`delivery/` |
+| `backend/app/evidence/` | evidence model、index 和 retrieval | `evidence/retrieval/` |
+| `backend/app/infrastructure/` | 外部系统和持久化适配器 | `artifacts/`、`events/`、`runtime/`、`llm/`、`kg/`、`rag/` |
+| `backend/app/spatial/` | 几何、接地、空间查询、变化和交付 | `geometry` 对应能力分布在各子包 |
+| `backend/app/workflow/` | 根图、层编排、阶段节点、对话和工具 | `root_graph.py`、`stages/` |
 
-箭头表示“上层依赖下层”。`tools` 是适配器，不是独立业务层。
+## 依赖规则
 
-## 2. Schema
+- API 只调用 application；application 通过 contracts、workflow 和 domain 组合用例。
+- Domain 和 spatial 不依赖 API、UI 或具体 provider。
+- Infrastructure 实现 ports，不把 provider response 当作规划事实。
+- Workflow 负责编排和 gate，不负责重新实现 domain 算法。
+- Artifact refs 是阶段间的连接方式；不要用全局 singleton、隐式 latest 或路径猜测替代它。
 
-位置：`backend/app/modules/schema/`
-
-负责 contracts、编码、层注册、规则描述和 provenance。目标新增或整理：
-
-- `PlanningContext`
-- `EvidenceBundle`
-- `L1Snapshot`
-- `L2Strategy`
-- `L3PlanningIntent`
-- `GroundingResult`
-- `PlacementDecision`
-- `ValidationReport`
-
-## 3. Data
-
-位置：`backend/app/modules/data/`、`services/session_bundle.py`。
-
-负责原始资料、GeoJSON/GeoTIFF、外部锚点、Provider、版本和缓存。业务节点不能在读取 Bundle 时隐式刷新外部数据。
-
-## 4. Spatial Query
-
-位置：`backend/app/modules/spatial_ops/`。
-
-负责几何、空间索引、距离、拓扑、约束和候选精化。它消费 `SpatialReferenceSpec` 或实体引用，不消费自然语言长文本。
-
-## 5. KG
-
-位置：`backend/app/modules/kg/`。
-
-维护 `BaseFacts`、`DerivedRelations`、`IntentGraph`、`PlannedState`。KG 提供 semantic query port；完整几何仍由 Spatial Query Service 计算。
-
-## 6. Planning domain
-
-目标位置：`backend/app/modules/planning/`。
-
-| 服务 | 职责 |
-|---|---|
-| IntentCompiler | L3 文本和证据 → Target、Constraint、SpatialReferenceSpec |
-| GroundingService | 语义实体和空间描述 → GroundingResult |
-| SelectionService | 候选过滤、评分、分配 → PlacementDecision |
-| ExecutionService | PlacementDecision → PlannedState |
-| ReconciliationService | IntentGraph ↔ PlannedState |
-
-## 7. Workflow / Agent
-
-位置：`backend/app/agent/`。
-
-`agent` 只负责 StateGraph、Send 并行、Gate、人工中断、反馈路由和 Agent tool loop。领域算法不能因为位于 `agent` 目录就绕过 contracts。
-
-## 8. 当前重复实现
-
-迁移前需要处理：
-
-- ~~`tools/gis/parse.py` 与旧 parse agent 的双重解析。~~（2026-08 已删除；空间目标只经过 `domain/program/target_projection` 的确定性投影）
-- `modules/spatial_ops/grounding.py`、Explore 节点和 Bundle Binder 的多轨空间接地。
-- staged road planner 与 `spatial_ops/road_planner.py` 的重复道路实现。
-- `AgentState`、`ParseAgentState`、`ExecuteAgentState` 的重复状态字段。
-
-## 9. 边界检查
-
-CI 应阻止以下依赖：
-
-- `modules → agent`
-- `modules → services`
-- `tools → agent`（除兼容转发模块）
-- `planning domain → LangGraph / SSE / ReportStore 实现`
-- 同一目标类型存在两个正式执行器
+旧的 `app/agent`、`app/modules`、`app/services` 目录已不是当前模块。历史迁移记录请查
+`docs/audits/` 和 `docs/superpowers/plans/`，不要从旧文档复制 import 路径。

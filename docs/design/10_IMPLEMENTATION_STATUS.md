@@ -3,7 +3,7 @@
 
 > 本表按当前代码记录事实状态，不把目标设计、目录存在或单元测试通过误认为端到端已实现。
 
-状态：`CURRENT` 当前生产代码存在；`PARTIAL` 有实现但未形成闭环；`TARGET` 设计目标；`DEPRECATED` 兼容或待删除路径。
+状态：`CURRENT` 当前生产路径有代码和证据；`PARTIAL` 有片段但闭环或验收不完整；`GAP` 目标要求尚未实现或接线断裂；`TARGET` 仅为设计；`HISTORICAL` 为带日期的历史证据；`DEPRECATED` 为兼容或迁移残留。
 
 > 2026-08-12 重构分支说明：下方 7.2/7.3 的历史运行数字只作为审计证据，不能替代当前
 > `tests/acceptance` 的真实图 resume 验收。当前代码已经切换到 CAS descriptor 和
@@ -37,23 +37,25 @@
 
 ## 1. 阶段与产物
 
-| API/SSE 稳定边界             | CURRENT / PARTIAL | `app/api/v1/routes.py` 是唯一稳定前端入口；事件序号与历史由 `infrastructure/events/EventRepository` 管理，`EventConnectionHub` 只管理在线队列，`application/queries/run_events.py` 统一 replay/sync；outbox/跨进程发布完整拆分仍未完成。 |
+| API/SSE 稳定边界             | CURRENT / PARTIAL | `app/api/routes.py` 聚合 `app/api/v1/routes/`；事件序号与历史由 `infrastructure/events/repository.py` 管理，`connection_hub.py` 只管理在线队列，`application/queries/run_events.py` 统一 replay/sync；outbox/跨进程发布完整拆分仍未完成。 |
 | Data/Spatial typed boundary  | PARTIAL           | `app/data/model/snapshot.py` 冻结 `SessionDataSnapshot` manifest，`app/spatial/model/workspace.py` 注入 `SpatialWorkspace`；collection registry、质量报告和统一空间内核仍待完成。 |
-| KG typed workspace 边界      | PARTIAL           | `app/modules/kg/service.py` 仍消费 typed spatial input；GIS tool 已改为注入 `spatial_workspace`，KG 与空间 adapter 的参数命名/契约仍需继续收敛。 |
+| KG typed workspace 边界      | PARTIAL           | `app/infrastructure/kg/service.py` 消费 typed spatial input；GIS tool 已改为注入 `spatial_workspace`，KG 与空间 adapter 的参数命名/契约仍需继续收敛。 |
 
 | 能力                          | 状态              | 当前实现事实                                                                                                                                                                                                                                                |
 | ----------------------------- | ----------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| PlanningContext               | PARTIAL           | `app/services/context/` 可构建 Bundle、KG、Gazetteer、SpatialQueryPort 和报告视图；runtime、completion、gis 仍存在重复构建/恢复风险。                                                                                                                     |
-| L1 并行报告                   | CURRENT           | `app/agent/l1_observe/analysis_node.py` 生成 12 维 `AnalysisReport`，保留 `content`、`instruction`、provenance、SSE 和 ReportStore 写入。                                                                                                           |
+| PlanningContext               | PARTIAL           | `app/infrastructure/context/` 可构建 Bundle、KG、Gazetteer、SpatialQueryPort 和报告视图；runtime、completion、gis 仍存在重复构建/恢复风险。                                                                                                                     |
+| L1 并行报告                   | CURRENT           | `app/workflow/layers/` 与 `app/domain/assessment/` 生成并聚合 12 维 `AnalysisReport`，保留 `content`、`instruction`、provenance、SSE 和报告存储写入。                                                                                                           |
 | L1 typed fragment / snapshot  | PARTIAL           | `L1_OBSERVATION` compiler profile、`L1DimensionFragment` 和 `l1_aggregate` 存在；aggregate 通过 ReportStore 读取报告并写入 CAS，已返回显式 `l1_snapshot` descriptor，但认知链尚未迁移为蓝图中的 ASSESS/OBJECTIVES。 |
 | DimensionReport.summary       | CURRENT / LEGACY  | summary_generator 可生成结构化预览字段；它不是权威事实，字段冲突时低于 evidence、正文和 instruction。                                                                                                                                                       |
 | L2 Strategy                   | CURRENT / PARTIAL | 独立`l2_strategize/worker.py`、`aggregate.py`、G2 gate 和 review package 存在；策略对 Grounding、Selection、ExecutionPlan 的输入约束尚未完整落地。                                                                                                      |
 | L3 PlanningProgram            | PARTIAL           | L3 worker 现在只通过 structured output 产生 `PlanningClaimSet`；aggregate 以确定性 adapter 生成非权威 `ProgramProposal`，再由 `domain/program/assembler.py` 唯一组装 `PlanningProgram`。`domain/program/classification.py` 为未决 polygon/parcel 生成显式 HUMAN 决策请求；闭集决定从真实 checkpoint 形成不可变 program revision，再重走空间阶段；未决定目标不得通过 EXECUTE。 |
-| TARGET_PROJECTION            | CURRENT           | `app/domain/program/target_projection/` 只对已组装 `PlanningProgram` 做确定性 spatial-reference projection；旧 `app/agent/parse/`、LLM patch、merge/review 生产路径已删除。 |
+| TARGET_PROJECTION            | CURRENT / PARTIAL | `app/workflow/stages/target_projection.py` 只对已组装 `PlanningProgram` 做确定性 spatial-reference projection；旧文本解析、LLM patch、merge/review 生产路径已删除，真实全链路仍需验收。 |
 | EXPLORE                       | PARTIAL           | `retrieve_evidence()` 已检索 KG、Bundle、报告和 `【INSTRUCTION】`；typed artifact、历史证据、修订记录和 intervention-specific 查询计划尚未完全接入。                                                                                                    |
 | 地名解析 / PlaceEvidenceIndex | PARTIAL / GAP     | `SpatialResolver` 已统一 KG/SpatialQueryPort、Gazetteer、Bundle 和方向 bbox 路径；当前尚未把 L1 typed location facts 纳入候选索引和评分，短名称 fuzzy 也不能作为可靠的自动解析。设计见 `12_PLACE_NAME_RESOLUTION.md`。                                  |
 | GROUND                        | CURRENT / PARTIAL | `ground_aggregate` 产出 `GroundingResult/CandidateSite` 和 gate；候选与 intervention 的强关联、约束证据完整性和真实 session 接线仍需验证。                                                                                                              |
-| SELECT                        | CURRENT / PARTIAL | `app/agent/select/aggregate.py` 使用硬约束、评分和冲突分配产出 `SiteSelectionDecision`；随后由 `app/domain/{demand,suitability,allocation}` 形成三个独立根 artifact，`PortfolioDecision` 未达 `OPTIMAL/FEASIBLE` 时 gate 强制 HUMAN；大量 unplaced 原因分型与真实会话验收仍待完成。 |
+| SELECT                        | CURRENT / PARTIAL | `app/workflow/stages/select.py` 接到 `app/domain/{demand,suitability,allocation}`，使用硬约束、评分和冲突分配产出 `SiteSelectionDecision`；`PortfolioDecision` 未达 `OPTIMAL/FEASIBLE` 时 gate 强制 HUMAN，真实会话验收仍待完成。 |
+
+| LLM 调用 binding tool         | PARTIAL / GAP     | 详见 [17_LLM_TOOL_BINDING.md](17_LLM_TOOL_BINDING.md)。意图工具 `advance_planning_intent` / `gis_analysis` 由 `workflow/conversation/node.py` bind 并路由（CURRENT）；access 读路径工具（`bundle_overview` 等 6 个）已注册到 `ToolRegistry` 但无节点 bind（GAP）；`workflow/tools/execute_node.py` 读取遗留空 `tools.py:TOOL_REGISTRY`，通用执行路径无法执行已注册工具（GAP）；L3 结构化输出走 `with_structured_output(method="function_calling")`（CURRENT）。 |
 
 ## 2. EXECUTE 与 GIS
 
@@ -61,10 +63,10 @@
 | ----------------- | ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | EXECUTE 子图      | CURRENT / PARTIAL       | `execute_agent.py` 已重构为多 worker 子图：`route_tasks → prepare_inputs → project_worker → zone_worker → [facility_worker ‖ axis_worker] → road_worker → merge_worker_results → geometry_materialize → planned_state_builder → execution_review`；各 worker 返回统一 `WorkerResult`。 |
 | Project Worker    | CURRENT / PARTIAL       | `land_design_worker.py` 支持项目 footprint、OBB/split 相关操作；仍由集中式 execute_agent 调度，未形成独立 WorkerResult 契约。                                                                                                                                                                        |
-| Zone Worker / MIP | CURRENT / PARTIAL       | `zone_worker` 对空候选 zone 经 `ZoneAllocatorPort + PuLP adapter`（`app/agent/execute/zone_allocator_adapter.py`）求解，不可行显式 unresolved；其余 zone 仍使用确定性 reclassify。                                                                                                               |
+| Zone Worker / MIP | CURRENT / PARTIAL       | `workflow/stages/execute.py` 接入 zone worker 和 `ZoneAllocatorPort + PuLP adapter`，不可行显式 unresolved；其余 zone 仍使用确定性 reclassify。                                                                                                               |
 | Custom zoning     | PARTIAL                 | `custom_zone_contracts.py`、`custom_zone_generator.py` 和 `spatial_ops/custom_planning.py` 仍存在；当前主要是词汇/图层生成与规则路径，尚未成为由 L2/L3 目标驱动、经 MIP/约束求解的新规划分区。                                                                                                   |
 | Facility Worker   | CURRENT / PARTIAL       | `_execute_facility_node` 已改为决策驱动，不再默认从 KG POI 自行找点；尚未统一为独立 `FacilityWorkerResult` 并进入统一 ExecutionPlan。                                                                                                                                                              |
-| Road Worker       | CURRENT / PARTIAL       | staged road pipeline 已迁移至`app/modules/spatial_ops/road/`，`spatial_ops.road_planner` fallback 已删除；`execute/road_generator.py` 为 EXECUTE 入口，RoadPlannerPort 收敛仍属后续工作。                                                                                                        |
+| Road Worker       | CURRENT / PARTIAL       | staged road pipeline 位于 `app/spatial/` 与 `app/domain/materialization/`；简化 fallback 已删除，RoadPlannerPort 收敛仍属后续工作。                                                                                                        |
 | Axis Worker       | CURRENT / PARTIAL       | `_execute_axis_node` 和 AxisBuilder 存在，但与项目、分区、道路统一设计依赖尚未固化。                                                                                                                                                                                                                 |
 | ExecutionPlan     | CURRENT / PARTIAL | `execution_plan_contracts.py` 的 `ExecutionPlan` 只保存 `portfolio_decision_ref`、worker tasks、依赖和 brief；不再嵌入 `intent`/`site_selection` 副本，task binding 是 worker 的唯一目标输入。真实链路仍需验收。 |
 | ParcelChangeSet   | CURRENT                 | `land_design_worker` 和 `planned_state_builder` 可生成/转换统一 changeset；仍需禁止后续节点在 PlannedState 生成后静默修改 changeset。                                                                                                                                                              |
@@ -74,10 +76,10 @@
 
 | 能力                 | 状态              | 当前实现事实                                                                                                                                               |
 | -------------------- | ----------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| VALIDATE             | CURRENT / PARTIAL | `app/agent/validate/` 已有确定性检查、ValidationReport、责任阶段和 gate；真实链路可能消费旧 PlannedState，必须以唯一 changeset→planned state 流程校验。 |
+| VALIDATE             | CURRENT / PARTIAL | `app/workflow/stages/validate.py` 与 `app/domain/validation/` 提供确定性检查、ValidationReport、责任阶段和 gate；必须以唯一 changeset→planned state 流程校验。 |
 | RECONCILE            | CURRENT / PARTIAL | 已有 coverage matrix、链路覆盖检查、责任归因和 gate；对 intervention/spec/candidate/selection/change/planned 的关联仍依赖 ID 与兼容对齐逻辑。              |
 | DELIVER              | CURRENT / PARTIAL | `DeliverySpatialSnapshot` 已成为 render/export/land-balance/map 的唯一输入；真实产物写出 660 current/planned features、17 个项目点、16 个设施点、双 panel PNG 和 HTML。无任何非 preserve/unchanged `ParcelChange` 时快照强制为 `partial`，PNG/HTML 明示“地类变更 0 个”，不能把现状复制图当作规划成果；法定完整规划仍受显式分类决定、延期和交付闸门约束。 |
-| Step report          | CURRENT / PARTIAL | `app/modules/evidence/step_report.py` 与 `app/modules/evidence/stage_report.py` 生成运行审计；是否覆盖所有 post-L3 节点需以实际接线为准，不应把它当 typed artifact。 |
+| Step report          | CURRENT / PARTIAL | `app/infrastructure/reports/step_report.py` 与 `app/infrastructure/reports/stage_report.py` 生成运行审计；是否覆盖所有 post-L3 节点需以实际接线为准，不应把它当 typed artifact。 |
 | Artifact persistence | CURRENT / MIGRATING | `artifact_schema_version=3` 的 `ArtifactDescriptor` 已接入 runtime、L1/L2/L3/target-projection、post-L3、v1 查询和 StepReport；blob/descriptor create-if-absent，named ref compare-and-set，parent digests 和 branch identity 可验证。旧 `FilesystemArtifactStore`、`ArtifactRef`、revision 路径已删除；EventRepository 已承接事件历史；根图已使用 `WorkflowState`，`workflow_progress` 已收紧为身份、refs 与显式 `stage_payload`，但其中的旧阶段载荷仍需继续拆成 typed artifacts。 |
 
 ## 4. 分层与遗留路径
@@ -121,7 +123,10 @@ changeset、planned state、validation、reconciliation 和 delivery 的版本�
 4. 恢复/重构 MIP ZoneAllocator，收敛 staged Road Planner，禁止静默 fallback。
 5. 再重构 EXECUTE 子图，并进行真实 GIS + 报告端到端验收。
 
-## 7. 状态更新与历史修补
+## 7. HISTORICAL：状态更新与历史修补
+
+本节及其子节保留审计轨迹，不是当前台账。它们可能包含已经删除的路径、当时的测试数字
+和一次性迁移结论；若与第 2–6 节或当前代码冲突，以当前代码和前面的汇总为准。
 
 ### 7.1 自动迭代与多模态状态（2026-08-11）
 
@@ -234,5 +239,26 @@ Delivery snapshot 的几何/占位质量闸门。DELIVER 入口已迁移到 `bac
   CAS 且 sha256 校验；session 删除清理全部存储。
 - `DimensionReport.summary` 仅为 UI 预览字段，不再作为权威事实读取。
 
-剩余已知项：`app/services/runtime.py` + `app/services/context/` 仍待迁移（Phase-5 延期）；
-真实 LLM acceptance 待验证（需配置 MINIMAX key）。
+## 9. 2026-08-12 收敛完成（services/tools/utils 消除）
+
+上一节 Phase 9 完成后，继续消除了最后三个遗留 god-module 目录，全量回归为 `242 passed`：
+
+- `app/utils/` 已删除：logger → `infrastructure/logging`（133 文件重指）；sse/event → `infrastructure/events`；
+  空间工具 → `spatial/model`；文档加载器 → `data/ingestion/documents`；code_lookup → `data/encodings`；
+  rate_limiter/retry/stats → `infrastructure/llm`；删除死代码 parse_reporter/coord_utils。
+- `app/services/` 已删除：`PlanningRuntimeService` → `infrastructure/runtime/planning_runtime_service.py`
+  （`_trigger_planning_execution` 已公开为 `trigger_planning_execution`）；context 工厂 →
+  `infrastructure/context/planning_context_factory.py`。
+- `app/tools/` 已删除：LLM 工具注册表 + access 工具 → `infrastructure/llm/tools/`；html/static render →
+  `infrastructure/rendering/`；删除死 gis tools（conflict/extract/kg/lookup）与 dangling `.analytics` 3 工具。
+- `app/core/` 收敛：events → `contracts/events`（修复 domain→core 依赖方向）；llm → `infrastructure/llm/factory`；
+  instructor_client/tracing → `infrastructure/llm/`。仅剩 `settings.py`（52 文件依赖 + 深度敏感路径，保留为 infra-config singleton）。
+- `app/graphify-out/` 已删除（stale 工具缓存，gitignored）。
+- 输入文档重命名：`bundle.documents.planning_texts` → `input_documents`，与未来的 DELIVER 规划文本输出区分命名。
+
+`app/` 当前仅含 blueprint 目标目录（api/application/bootstrap/contracts/data/domain/evidence/infrastructure/spatial/workflow）
+加 3 个文档化 residual：`app/config/`（domain config，12 importer）、`app/core/settings.py`（infra config singleton）、
+`app/database/`（persistence adapter，作为 `infrastructure/persistence/` 的别名保留）。
+
+剩余项：真实 LLM acceptance 待验证（需配置 MINIMAX key）；DELIVER 规划文本组装器尚未实现（已确认设计方向，
+见 `docs/audits/round-3/storage-architecture.md` 与 DELIVER 导出集成计划）。

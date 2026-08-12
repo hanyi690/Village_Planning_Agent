@@ -127,10 +127,9 @@ Application subgraphs and API routes
 TARGET_PROJECTION → GROUND → SELECT → EXECUTE → VALIDATE → RECONCILE → DELIVER
 ```
 
-当前 EXECUTE 已重构为多 worker 子图：`route_tasks → prepare_inputs → project_worker → zone_worker → [facility_worker ‖ axis_worker] → road_worker → merge_worker_results → geometry_materialize → planned_state_builder → execution_review`。道路规划器位于 `app/modules/spatial_ops/road/`
-（确定性 staged pipeline）；旧的 `spatial_ops.road_planner` 简化 fallback 已删除，
-`services/modules` 目录已清除。分区求解经 `ZoneAllocatorPort`（PuLP MIP）处理空候选 zone，失败显式 unresolved。
-`ExecutionPlan`、统一 WorkerResult 契约和 RoadPlannerPort 收敛仍属后续工作。
+当前 EXECUTE 已接入 `workflow/stages/execute.py`、`domain/materialization/` 和 `spatial/` 的多 worker 路径；
+项目、分区、设施、道路和轴线 worker 的统一 contract、规划变化和真实交付验收仍以
+`10_IMPLEMENTATION_STATUS.md` 为准。本文不把目标 worker 顺序当作完成证明。
 
 离线核心链覆盖 TARGET_PROJECTION 到 DELIVER 的阶段边界；真实 provider 运行和 checkpoint 关闭/重开
 验收仍需配置 provider key，当前缺 key 时 acceptance 明确 skip，不把 fixture 运行当作真实证明。

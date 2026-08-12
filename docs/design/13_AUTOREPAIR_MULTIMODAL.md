@@ -40,7 +40,7 @@ GeoAI 的可用形式是视觉感知、地理记忆、确定性空间工具和�
 
 | 能力 | 当前实现 | 状态 |
 |---|---|---|
-| 自动校验 | `backend/app/agent/validate/` 有确定性 checks、`ValidationReport`、责任阶段和 gate | PARTIAL |
+| 自动校验 | `backend/app/workflow/stages/validate.py` 与 `backend/app/domain/validation/` 有确定性 checks、`ValidationReport`、责任阶段和 gate | PARTIAL |
 | 自动回退 | 阶段路由已有 EXECUTE/SELECT/GROUND 等定向反馈，统一 adjustment executor 仍待完成 | PARTIAL |
 | 自动调整 | `ValidationReport.adjustments` 已存在，但各 worker 消费不完整 | PARTIAL |
 | 无进展保护 | `issue_fingerprint`、`gate_progress_metadata` 会识别重复问题 | CURRENT / 语义不足 |

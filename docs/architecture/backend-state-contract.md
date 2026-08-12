@@ -1,78 +1,77 @@
-# 后端状态与交付边界
+# 当前状态、artifact 与交付边界
 
-本文档是实现映射，不替代 `docs/design/14_BACKEND_MODULE_BLUEPRINT.md` 的目标架构。
+> 本文描述当前实现。目标不变量见
+> [`../design/14_BACKEND_MODULE_BLUEPRINT.md`](../design/14_BACKEND_MODULE_BLUEPRINT.md)，
+> 完成度见 [`../design/10_IMPLEMENTATION_STATUS.md`](../design/10_IMPLEMENTATION_STATUS.md)。
 
-## 1. 状态所有权
+## 1. Owner 表
 
-| 数据 | 当前 owner | 持久位置 | 对外方式 |
-|---|---|---|---|
-| 图路由、阶段、Gate、HUMAN、重试 | LangGraph `WorkflowState`；临时 stage view 存为 `workflow_progress` artifact | checkpoint 只保存控制字段与 refs | application 投影为 `WorkflowState` 后进入 API |
-| 稳定控制投影 | `app/workflow/state.py` | 不单独存储，由 checkpoint 派生 | `SessionProjection`、resume 查询 |
-| 阶段业务结果 | 对应 Pydantic contract | CAS Artifact Store | 通过显式 artifact endpoint 或交付投影 |
-| EXECUTE 结果 | `ExecutionResult`（精确引用 `ParcelChangeSet`、`PlannedState`、任务记录）+ `DeferralLedger` | CAS Artifact Store | 后续阶段只读取 `ExecutionResult` 根引用 |
-| 完整期末空间状态 | `DeliverySpatialSnapshot` | CAS Artifact Store + layer files | `MapLayerCollection`、渲染/导出文件 |
-| 交付结论 | `DeliveryManifest` | CAS Artifact Store | `DeliveryProjection` |
-| 阶段审计 | `modules/evidence.StepReport` | 数据库/事件持久层 | SSE、诊断查询 |
-| 对外运行事件 | `EventRepository`（历史/序号）+ `EventConnectionHub`（在线队列）+ `RunEventQueryService`（replay/sync） | SQLite `run_events` + 进程内在线队列 | 历史序号可跨重启恢复；outbox/跨进程发布仍在迁移 |
+| 内容 | 当前 owner | 持久位置 / 对外方式 |
+|---|---|---|
+| 根图路由、阶段、gate、retry、interrupt、branch | `workflow/state.py` 的 `WorkflowState` | LangGraph checkpoint；由 application projection 对外 |
+| 阶段业务结果 | 对应 `contracts/` + `domain/` 阶段 | `infrastructure/artifacts/` 的 CAS descriptor/blob |
+| 输入资料和快照 | `data/` 的 ingestion/model/snapshot | `SessionDataSnapshot`、`SpatialWorkspace` 和 data-owned sources |
+| 运行事件 | `infrastructure/events/repository.py` | SQLite `run_events`；SSE 在线队列由 `connection_hub.py` 管理 |
+| 阶段审计 | `infrastructure/reports/step_report.py`、`stage_report.py` | 报告/事件持久层；不是业务事实副本 |
+| 执行结果 | `domain/materialization/` + spatial changeset/planned state | artifact refs；后续阶段只消费根引用 |
+| 最终空间快照 | `domain/delivery/` / `spatial/delivery/` | `DeliverySpatialSnapshot`；地图、导出和交付清单共享其 digest |
+| 公开结果 | `application/projections/` | API response models、SSE event projection、map/delivery projection |
 
-## 2. WorkflowState 查询边界
+## 2. WorkflowState 允许保存什么
 
-`backend/app/workflow/state.py` 中的 `WorkflowState` 只包含：会话/分支标识、阶段、
-状态、context ref、artifact refs、gate/interrupt/terminal ref 和 retry。它不包含：
+`WorkflowState` 只保存控制和引用：会话/运行/分支身份、阶段、状态、context reference、
+artifact refs、gate/interrupt/terminal refs、完成维度、retry 和必要的消息/审计控制字段。
 
-- GIS FeatureCollection、文件内容、空间索引或渲染图层；
-- 报告正文、消息历史、worker result 或完整 Pydantic 业务 payload；
-- `PlannedState`、`ParcelChangeSet` 等阶段结果的内联副本。
+它不保存：
 
-`control_state_from_checkpoint()` 是唯一的 checkpoint-to-public 投影点。迁移期的
-`runtime_adapter` 只在节点边界加载 `workflow_progress`，新的 application 模块不得
-读取它。`load_workflow_state()` 是 API 的查询入口。
+- 完整 GIS FeatureCollection、空间索引、文件正文或渲染图层；
+- 完整 `PlanningProgram`、`GroundingResult`、`SiteSelectionDecision`、`PlannedState`、
+  `ValidationReport` 等业务 payload；
+- 由多个阶段各自维护的 `latest`、隐式副本或第二套事件序号。
 
-原始 checkpoint 仍只能由 `PlanningRuntimeService` 和 resume command 使用，因为真实
-LangGraph resume 需要完整 cursor、task interrupt 和分支信息。不得为了“精简”而把真实
-resume 改成从数据库状态重新拼装。
+阶段节点通过 `infrastructure/artifacts/runtime.py` 加载 typed artifact；根图只根据 gate
+artifact 和 refs 做路由。缺少或无法验证的 gate 必须 fail closed，不能默认 PASS。
 
-## 3. 数据层与 Agent 边界
+## 3. 数据、证据和空间边界
 
-用户 GIS 的完整内容由上传文件、`SessionDataSnapshot` 和 `SpatialWorkspace` 保存。
-Agent 只接收 context/bundle 的引用或 data-owned workspace adapter；原始 GIS 不进入
-前端投影，也不得新增 `InjectedState("gis_data")`、`gis_bundle` 或 `allocated_geojson`
-作为图状态通道。缺少 workspace 时应显式失败，不制造空的现状图层。
+- 上传文件先由 `data/ingestion/` 处理；快照和来源信息由 data 层拥有。
+- 空间计算由 `spatial/` 和其 ports/adapters 负责；领域层消费 typed spatial result。
+- 证据检索由 `evidence/` 负责，KG、RAG、Gazetteer 等外部实现位于 `infrastructure/`。
+- LLM、工具和 provider 只能通过 contracts/ports 接入；它们不能直接修改规划事实。
+- 不得新增把裸 GIS、文件路径或 `latest` 塞进 graph state 的通道。
 
-## 4. EXECUTE 与 DELIVER 不变量
+## 4. EXECUTE → DELIVER 不变量
 
 ```text
-ClassificationDecision
-  → GeometryOperation
-    → ParcelChange
-      + current source layers
-        → DeliverySpatialSnapshot
-          → render / export / land balance / DeliveryManifest
+PlanningProgram / SiteSelectionDecision
+  → ExecutionPlan
+    → WorkerResult
+      → ParcelChangeSet
+        → PlannedState
+          + current source layers
+          → DeliverySpatialSnapshot
+            → RenderLayers / land balance / HTML / PNG / GeoJSON / manifest
 ```
 
-EXECUTE 负责把明确的分类决策落成几何操作和 parcel change；KG、现状 `dlbm`、目标
-名称及 advisory crosswalk 不能生成规划编码。DELIVER 只从同一个 snapshot 读取完整
-现状、完整规划、变化 overlays、constraints、checksums 和 provenance。
+EXECUTE 必须使用显式分类、目标和选址决定；不能用现状 `dlbm`、项目名称、KG alias 或
+advisory crosswalk 静默补规划编码。DELIVER 必须从同一个空间快照生成所有输出，不能让
+renderer、exporter、土地平衡和 API 各自选择事实源。
 
-交付渲染必须实际包含一张 PNG 的两个面板：左侧 current、右侧 planned；两侧按地类
-分类着色并保留细地块边界，变化项目和定位点作为独立 overlay。HTML、PNG、GeoJSON、
-土地平衡和 manifest 必须引用同一 snapshot checksum。若源层缺失、几何无法修复或
-规划结果未通过质量检查，交付进入 `diagnostic_only`/`partial`，禁止回退到历史文件。
+若没有实际变化、存在未决分类、空间证据不足或质量检查失败，交付必须显式标记
+`partial` / `diagnostic_only` / HUMAN；复制现状图不是规划完成。
 
-## 5. 真实 resume 与审计
+## 5. Resume 与幂等
 
-- HUMAN resume 必须使用当前真实 checkpoint 的 interrupt event id 和
-  `Command(resume=...)`；不得用伪造 state 直接调用后续节点。
-- checkpoint fork 从指定真实 checkpoint 派生新 branch，沿用父 artifact blob 但写新
-  descriptor；named ref 写入必须幂等，重试不能产生不同内容。
-- 每个阶段由 `audited_stage()` 生成 StepReport，记录输入 refs、输出 refs、gate、错误
-  和质量摘要；DELIVER 额外记录 snapshot checksum、PNG/HTML 路径和 render quality。
+HUMAN resume 必须使用真实 checkpoint 的 interrupt identity，并通过
+`application/commands/resume_*` 和 `application/recovery/resume_service.py` 生成恢复计划。
+历史 checkpoint 恢复应创建新 branch；父 artifact 可复用，但新的 descriptor 必须能证明
+parent digest 和 context identity。
 
-## 6. 当前迁移状态
+LangGraph 的 interrupt 恢复可能重放中断节点之后的调用，因此中断前只允许可重放或幂等
+操作；不可逆副作用放在恢复之后。事件发布、artifact 写入和 named ref 更新均应支持安全重试。
 
-`WorkflowState` 根图切换已完成；`workflow_progress` 内部拆分仍是已知迁移中状态。
-已经完成的边界是：
-独立阶段 service、CAS artifact refs、data-owned workspace、真实 HUMAN/checkpoint
-resume、DeliverySpatialSnapshot 单一空间输入和双面板交付。后续删除 legacy state
-字段必须以“静态依赖扫描 + 真实 resume + 实际读取渲染结果 + StepReport”四项同时通过
-为准，不能只以单元测试通过为准。
+## 6. 当前迁移边界
+
+根图已经使用 `WorkflowState` 和 artifact refs，v1 查询也通过 application projection；
+但部分阶段仍有迁移载荷和兼容字段，真实 provider、进程重启 resume、完整规划变化和多
+进程事件 outbox 仍需按状态台账验收。契约测试通过不能单独关闭这些 `PARTIAL/GAP`。

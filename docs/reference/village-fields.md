@@ -1,63 +1,26 @@
 # 村庄字段参考
 
-> 本文档为村庄规划系统字段定义的快速参考索引。详细实现见 `backend/app/modules/schema/types/` 和 `backend/app/config/document_types.py`。
+> 本文只列出当前字段模型入口。具体字段以 Pydantic contract、数据模型和运行中的
+> artifact schema 为准，不以本页复制的表格作为第二套 schema。
 
-## 空间要素类型层级
+## 当前模型入口
 
-```
-L0  SpatialFeature                  矢量基类: geometry + bsm + ysdm + layer_type
- ├── L1  PointFeature / LineFeature / PolygonFeature
- └── L2  矢量语义子类 (CurrentLandUseParcel, CurrentRoad, ...)
+| 内容 | 代码位置 |
+|---|---|
+| 数据快照、空间和表格模型 | `backend/app/data/model/` |
+| 空间 contract | `backend/app/contracts/spatial/`、`backend/app/spatial/model/` |
+| 规划/执行/交付 contract | `backend/app/contracts/domain/`、`backend/app/contracts/artifacts/` |
+| GIS layer registry | `backend/app/data/model/gis_layer_registry.yaml`、`layer_registry.py` |
+| 编码和字段规则 | `backend/app/data/encodings/dicts/` |
+| 上传和文档字段 | `backend/app/data/ingestion/` |
 
-L0  RasterDataset                   栅格基类: path + crs + bounds + bands
- └── L1  栅格语义子类 (DEMInput / DOMInput / SlopeRaster / ...)
+## 常见字段语义
 
-L0  TableDataset                    表格基类: rows + columns + schema
- └── L1  表格语义子类 (PopulationTable / ControlRuleTable / ...)
+- `bsm`：要素标识，是否必填由具体 contract 决定；
+- `ysdm` / `dlbm`：来源或分类编码，不能直接当作规划目标编码；
+- `geometry`：由空间 contract 和 CRS 约束，不应在 workflow state 中保存完整集合；
+- `layer_type`：由 layer registry 解释，不能代替规划分类决定；
+- `artifact_id`、`digest`、`parents`：用于结果身份和血缘，不是 GIS 属性。
 
-L0  Document                        文档基类: text + doc_type + source
- └── L1  文档语义子类 (PlanningText / L3Report)
-```
-
-## 核心字段
-
-### 矢量要素通用字段
-
-| 字段 | 类型 | 说明 |
-|------|------|------|
-| bsm | str | 要素标识码（Biao Shi Ma） |
-| ysdm | str | 要素代码（编码体系相关） |
-| layer_type | str | 图层类型（GIS_LAYER_REGISTRY 映射） |
-| geometry | dict | GeoJSON 几何 |
-
-### VillageBundle 形态分组
-
-| 形态 | 字段 | 内容 |
-|------|------|------|
-| points | PointLayerGroup | 设施/建筑/注记/高程/灾害 |
-| lines | LineLayerGroup | 道路/等高线/行政界线 |
-| polygons | PolygonLayerGroup | 地块/保护/管控/水系 |
-| rasters | RasterLayerGroup | DEM/DOM/坡度/坡向 |
-| tables | TableLayerGroup | 人口/管制规则/指标 |
-| documents | DocumentGroup | 规划文本/L3报告 |
-
-## GDB 输出图层
-
-GDB_LAYER_REGISTRY 定义 12 层（`modules/schema/output/gdb.py`）：
-
-| 图层 | 几何类型 | 说明 |
-|------|----------|------|
-| current_landuse | Polygon | 现状地类图斑 |
-| planned_landuse | Polygon | 规划地类图斑 |
-| boundary | Polygon | 村界 |
-| current_road | Line | 现状道路 |
-| planned_road | Line | 规划道路 |
-| facility | Point | 公共服务设施 |
-| ... | ... | ... |
-
-## 相关文档
-
-- [Schema 层 README](../../backend/app/modules/schema/README.md) - 类型层级详解
-- [Schema types README](../../backend/app/modules/schema/types/README.md) - 类型定义
-- [数据源规范](../data/data-source.md) - 金田村数据源字段结构
-- [成果合规](../design/08_DELIVERABLES_COMPLIANCE.md) - GDB 汇交图层规范
+成果图层、土地平衡和交付字段由 `DeliverySpatialSnapshot` 统一派生；相关设计见
+[design/08_DELIVERABLES_COMPLIANCE.md](../design/08_DELIVERABLES_COMPLIANCE.md)。
