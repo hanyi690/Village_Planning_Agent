@@ -35,7 +35,25 @@ logger = get_logger(__name__)
 
 
 def _project_root() -> Path:
-    return Path(__file__).resolve().parents[6]
+    """Resolve the repository root; parents[6] over-shoots to the drive root."""
+    try:
+        from app.core.settings import PROJECT_ROOT
+
+        if PROJECT_ROOT:
+            return PROJECT_ROOT
+    except Exception:
+        pass
+    return Path(__file__).resolve().parents[4]
+
+
+def _road_output_root() -> Path:
+    """Road planning artifacts live under the session run tmp root (isolated)."""
+    try:
+        from app.infrastructure.paths import run_tmp_root
+
+        return run_tmp_root() / "road"
+    except Exception:
+        return _project_root() / "output" / "gis-agent-road"
 
 
 def _write_json(path: Path, payload: Any) -> None:
@@ -349,9 +367,7 @@ def execute_road_planning_from_agent_state(state: Any) -> Dict[str, Any]:
         raise ValueError("EXECUTE road worker requires spatial_workspace")
 
     output_root = (
-        _project_root()
-        / "output"
-        / "gis-agent-road"
+        _road_output_root()
         / (str(getattr(state, "session_id", "") or getattr(state, "village_name", "") or "default"))
     )
     input_root = output_root / "inputs"

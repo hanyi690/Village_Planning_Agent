@@ -299,7 +299,13 @@ async def execute_node(state: Dict[str, Any]) -> Dict[str, Any]:
     )
     return {
         **({"fatal_error": fatal_error, "delivery_status": "diagnostic_only", "diagnostic_terminal": diagnostic_terminal} if l4_error else {}),
-        "artifact_refs": {"execution_result": execution_result_ref},
+        "artifact_refs": {
+            "execution_result": execution_result_ref,
+            "parcel_changeset": parcel_changeset_ref,
+            "planned_state": planned_state_ref,
+            "layout_configs": layout_configs_ref,
+            **({"execution_diagnostics": diagnostics_ref} if diagnostics_ref else {}),
+        },
         **_adopt_context(state, context),
     }
 

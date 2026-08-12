@@ -234,7 +234,7 @@ async def layer_completion_check(
 
     # Not complete yet — continue processing
     if not (len(total_dims) > 0 and set(completed) == set(total_dims)):
-        return {}
+        return {"layer_just_completed": None}
 
     logger.info(
         "[layer_completion_check] Layer %d completed: %d dimensions",

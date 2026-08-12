@@ -60,6 +60,19 @@ def route_by_phase(state: Dict[str, Any]) -> str:
     return worker
 
 
+def _dispatch_state(state: Dict[str, Any], **overrides: Any) -> Dict[str, Any]:
+    """Build a worker Send payload without one-shot layer-control residue.
+
+    LangGraph Send branches carry the full parent state; a stale
+    ``layer_just_completed`` from an earlier layer checkpoint must not ride
+    along into the next wave's workers.
+    """
+    payload = dict(state)
+    payload["layer_just_completed"] = None
+    payload.update(overrides)
+    return payload
+
+
 def layer_router_noop(state: Dict[str, Any]) -> Dict[str, Any]:
     """Pass-through noop node (kept for API compatibility).
 
@@ -99,7 +112,7 @@ def revision_dispatch_node(state: Dict[str, Any]) -> Command:
     worker = _worker_for_phase(state.get("phase", "layer3"))
     logger.info("[revision_dispatch] dimensions=%s worker=%s", dimensions, worker)
     return Command(goto=[
-        Send(worker, {**state, "dimension_key": dimension, "is_revision": True})
+        Send(worker, _dispatch_state(state, dimension_key=dimension, is_revision=True))
         for dimension in dimensions
     ])
 
@@ -147,7 +160,7 @@ def _ready_dispatch(state: Dict[str, Any], phase: str) -> List[Send]:
         len(ready),
         ready,
     )
-    return [Send(worker, {**state, "phase": phase, "dimension_key": d}) for d in ready]
+    return [Send(worker, _dispatch_state(state, phase=phase, dimension_key=d)) for d in ready]
 
 
 def advance_phase_node(state: Dict[str, Any]) -> Command:

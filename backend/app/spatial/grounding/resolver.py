@@ -60,6 +60,36 @@ def _resolve_gazetteer_bsms(token: str, gazetteer: Any) -> List[str]:
     return []
 
 
+_VILLAGE_ALL_MARKER = "__VILLAGE_ALL__"
+
+
+def _normalize_spec_mention(label: str) -> str:
+    """Normalize PARSE label_contains into a resolver-friendly mention.
+
+    - '12????' / '9????' / '???' / '??' -> whole-village marker
+    - '?????' / '?????' -> base entity token
+    - pure count/unit text (e.g. '40?') -> empty (no location evidence)
+    """
+    token = (label or "").strip()
+    if not token:
+        return ""
+    if token in {"???", "??", "??"} or (
+        token.endswith("????") and token[:-4].isdigit()
+    ):
+        return _VILLAGE_ALL_MARKER
+    for suffix in ("??", "??", "??", "??", "??", "??", "???", "?"):
+        if token.endswith(suffix):
+            token = token[: -len(suffix)].strip()
+            break
+    if not token:
+        return ""
+    if any(ch.isdigit() for ch in token) and not any(
+        ch.isalpha() for ch in token.replace("?", "").replace("?", "").replace("?", "").replace("?", "").replace("?", "")
+    ):
+        return ""
+    return token
+
+
 class SpatialResolver:
     """One resolver bound to one ``PlanningContext``."""
 
@@ -177,6 +207,17 @@ class SpatialResolver:
         try:
             if self.evidence_index is not None:
                 mention = self._spec_mention(spec)
+                if mention == _VILLAGE_ALL_MARKER:
+                    all_bsms = [
+                        str(parcel.bsm)
+                        for parcel in self.context.current_parcels()
+                        if str(getattr(parcel, "bsm", "") or "")
+                    ]
+                    return ResolvedSpatialRef(
+                        final_bsms=list(dict.fromkeys(all_bsms)),
+                        confidence=1.0 if all_bsms else 0.0,
+                        provenance={"path": "bundle:village_all"},
+                    )
                 if mention:
                     evidence_bsms = self.evidence_index.candidate_bsms(mention)
                     if evidence_bsms:
@@ -281,8 +322,9 @@ class SpatialResolver:
         filt = getattr(ref, "filter", None) or {}
         label = str(filt.get("label_contains") or "")
         if label:
-            return label
-        return str(getattr(ref, "name", "") or "")
+            return _normalize_spec_mention(label)
+        name = str(getattr(ref, "name", "") or "")
+        return _normalize_spec_mention(name) if name else ""
 
     def _directional_bbox(self, direction: str) -> Optional[tuple]:
         """Directional bbox around the bundle's village center."""

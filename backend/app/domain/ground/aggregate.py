@@ -110,10 +110,11 @@ def ground_aggregate(
     spatial_query_evidence: List[SpatialQueryEvidence] = []
 
     for index, spec in enumerate(specs):
-        if getattr(spec, "unresolved_reason", ""):
-            resolved = ResolvedSpatialRef()
-        else:
-            resolved = resolver.resolve_spec(spec)
+        # Design 06/12: TARGET_PROJECTION retains unresolved_reason as a
+        # diagnostic, it must not skip resolution.  GROUND still attempts the
+        # evidence index / gazetteer / directional fallbacks; specs that
+        # cannot be bound stay unresolved and enter the HUMAN gate.
+        resolved = resolver.resolve_spec(spec)
         spec_type = getattr(spec, "type", "")
         spatial_query_evidence.append(
             SpatialQueryEvidence(

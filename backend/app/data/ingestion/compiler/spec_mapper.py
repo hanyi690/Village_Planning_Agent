@@ -124,6 +124,69 @@ def _location_reference(intervention: PlanningIntervention) -> SpatialReferenceS
     )
 
 
+def _semantic_location_reference(
+    intervention: PlanningIntervention,
+) -> SpatialReferenceSpec | None:
+    """Extract a location reference from prose when the location cell is empty.
+
+    L3 claim compilation frequently leaves ``spatial_requirements.location``
+    empty while ``problem_addressed``/``name`` carry explicit spatial scope
+    (e.g. ????? / ?????? / ???).  Mapping that prose into a
+    closed-set spec lets GROUND resolve it through the PlaceEvidenceIndex
+    instead of deferring the target as unresolved.
+    """
+    text = " ".join([
+        str(intervention.problem_addressed or ""),
+        intervention.name,
+        *intervention.functions,
+    ])
+    if not text.strip():
+        return None
+    if any(token in text for token in ("??", "???", "???", "????", "????", "?????")):
+        return SpatialReferenceSpec(
+            type="topological",
+            topo="sfWithin",
+            reference=RefObject(kind="village"),
+        )
+    village_names = _explicit_village_names(intervention)
+    if len(village_names) > 1:
+        return SpatialReferenceSpec(
+            type="composed",
+            op="or",
+            children=[
+                SpatialReferenceSpec(
+                    type="topological",
+                    topo="nearby",
+                    reference=RefObject(
+                        kind="place_name",
+                        filter={"label_contains": village_name},
+                    ),
+                )
+                for village_name in village_names
+            ],
+        )
+    if village_names:
+        return SpatialReferenceSpec(
+            type="topological",
+            topo="nearby",
+            reference=RefObject(
+                kind="place_name",
+                filter={"label_contains": village_names[0]},
+            ),
+        )
+    river = re.search(r"([\u4e00-\u9fff]{1,6}?)", text)
+    if river:
+        return SpatialReferenceSpec(
+            type="topological",
+            topo="nearby",
+            reference=RefObject(
+                kind="place_name",
+                filter={"label_contains": river.group(1)},
+            ),
+        )
+    return None
+
+
 def _direction_from_requirements(intervention: PlanningIntervention) -> str:
     """Return an 8-wind-mappable english direction or '' ('' = none)."""
     for value in intervention.spatial_requirements.values():
@@ -145,6 +208,8 @@ def _build_candidates(
     candidates: list[SpatialReferenceSpec] = []
 
     location_ref = _location_reference(intervention)
+    if location_ref is None:
+        location_ref = _semantic_location_reference(intervention)
     if location_ref is not None:
         candidates.append(location_ref)
 

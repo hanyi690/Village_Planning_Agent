@@ -88,6 +88,17 @@ async def target_projection_node(state: Dict[str, Any]) -> Dict[str, Any]:
         run_id=_run_id(state),
         context_version=str(getattr(context, "version", "")),
     )
+    # Design 03: IntentGraph is written by the IntentCompiler (this stage),
+    # not deferred to EXECUTE, so GROUND/EXECUTE route_prepare can read the
+    # L3 intent entities on the first pass (kg_l3_intent_mismatch guard).
+    intent = getattr(result, "typed_intent", None)
+    kg = getattr(context, "kg", None)
+    if intent is not None and kg is not None:
+        try:
+            from app.infrastructure.kg.builder.layer3 import build_intent_layer
+            build_intent_layer(kg, intent)
+        except Exception as exc:
+            logger.warning("[workflow:target_projection] build_intent_layer failed: %s", exc)
     specs, unsupported = _filter_unsupported_spatial_specs(specs, context)
     result.spatial_reference_specs = specs
     if unsupported:

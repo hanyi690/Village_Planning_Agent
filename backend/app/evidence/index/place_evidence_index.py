@@ -112,19 +112,103 @@ class PlaceEvidenceIndex:
         aliases = [str(a) for a in (getattr(fact, "aliases", None) or []) if a]
         if name not in aliases:
             aliases.append(name)
-        self._add_entry(
-            PlaceEvidenceEntry(
-                canonical_name=name,
-                aliases=aliases,
-                entity_refs=[f"l1_fact:{name}"],
-                entity_types=[role],
-                role=role,
-                source_bsms=[],
-                geometry_ref=None,
-                provenance=["l1_fact"],
-                confidence=float(getattr(fact, "confidence", 0.0) or 0.0),
-            )
+        entry = PlaceEvidenceEntry(
+            canonical_name=name,
+            aliases=aliases,
+            entity_refs=[f"l1_fact:{name}"],
+            entity_types=[role],
+            role=role,
+            source_bsms=[],
+            geometry_ref=None,
+            provenance=["l1_fact"],
+            confidence=float(getattr(fact, "confidence", 0.0) or 0.0),
         )
+        self._add_entry(entry)
+        self._bind_l1_fact_bsms(fact, entry)
+
+    # ?? L1 fact geometry binding (design ?3.2: role-aware) ????????????
+
+    _WATER_DLMC = frozenset({"??", "????", "????", "????", "??"})
+    _ROAD_DLMC = frozenset({"??????", "??????", "????", "????"})
+    _FACILITY_DLMC = frozenset({"????????", "???????????", "??????"})
+
+    def _bind_l1_fact_bsms(self, fact: Any, entry: "PlaceEvidenceEntry") -> None:
+        """Bind an L1 typed fact (water/road/area/facility) to real parcels.
+
+        The L1 compiler extracts names but no geometry; this step reconnects
+        the name to bundle parcels through role-specific matches (DLMC groups,
+        facility points, water/road parcels) so GROUND can consume facilities,
+        roads, water bodies and areas - not just natural villages.
+        """
+        if entry.source_bsms:
+            return
+        role = str(getattr(fact, "role", "") or "")
+        workspace = getattr(self.context, "workspace", None)
+        if workspace is None:
+            return
+        try:
+            parcels = list(workspace.current_parcels() or [])
+        except Exception:
+            return
+        if not parcels:
+            return
+
+        def _parcel_name(p: Any) -> str:
+            return str(getattr(p, "name", "") or "")
+
+        bsms: List[str] = []
+        try:
+            if role == "water":
+                bsms = [str(p.bsm) for p in parcels if _parcel_name(p) in self._WATER_DLMC]
+            elif role == "road":
+                bsms = [str(p.bsm) for p in parcels if _parcel_name(p) in self._ROAD_DLMC]
+            elif role == "area":
+                target = str(getattr(fact, "normalized_name", "") or "")
+                bsms = [
+                    str(p.bsm) for p in parcels
+                    if target and target in _parcel_name(p)
+                ]
+            elif role == "facility":
+                bsms = [str(p.bsm) for p in parcels if _parcel_name(p) in self._FACILITY_DLMC]
+                # Prefer exact facility points (annotation single-char labels).
+                points = []
+                try:
+                    points = list((workspace.points.get("facilities_current") or []) or [])
+                except Exception:
+                    points = []
+                from app.spatial.grounding.grounding import query_parcels_near_entity
+                hit: List[str] = []
+                for pt in points:
+                    geom = getattr(pt, "geometry", None) or {}
+                    text = str(getattr(pt, "facility_name", "") or "")
+                    if not text:
+                        continue
+                    if text in entry.canonical_name or entry.canonical_name[0] == text:
+                        coords = geom.get("coordinates") if isinstance(geom, dict) else None
+                        if coords and len(coords) >= 2:
+                            hit.extend(query_parcels_near_entity(
+                                parcels, (float(coords[0]), float(coords[1])), max_distance_m=500,
+                            ))
+                if hit:
+                    bsms = list(dict.fromkeys(hit))
+        except Exception as exc:
+            logger.debug("[PlaceEvidenceIndex] L1 fact bind failed %s: %s", entry.canonical_name, exc)
+        bsms = [b for b in dict.fromkeys(bsms) if b]
+        if bsms:
+            entry.source_bsms = list(dict.fromkeys([*entry.source_bsms, *bsms]))
+            entry.confidence = max(entry.confidence, 0.5)
+            if not entry.geometry_ref:
+                entry.geometry_ref = f"bundled:{role}"
+
+    @staticmethod
+    def normalize_mention(mention: str) -> str:
+        """Strip spatial-desc suffixes so '?????' -> '???'."""
+        token = (mention or "").strip()
+        for suffix in ("??", "??", "??", "??", "??", "??", "???", "?"):
+            if token.endswith(suffix):
+                token = token[: -len(suffix)].strip()
+                break
+        return token
 
     def _register_poi(self, pois: List[Any]) -> None:
         for p in pois:
@@ -249,6 +333,15 @@ class PlaceEvidenceIndex:
         if exact is not None:
             seen[exact.canonical_name] = exact
             trace.append({"step": "exact", "matched": exact.canonical_name})
+
+        # Role-aware suffix tolerance: '?????' -> '???', '?????' -> '???'.
+        alt = self.normalize_mention(mention)
+        if alt and alt != mention:
+            alt_norm = _normalize(alt)
+            alt_entry = self._by_canonical.get(alt_norm) or self._by_alias.get(alt_norm)
+            if alt_entry is not None and alt_entry.canonical_name not in seen:
+                seen[alt_entry.canonical_name] = alt_entry
+                trace.append({"step": "suffix_exact", "matched": alt_entry.canonical_name})
 
         for key, entry in self._by_canonical.items():
             if entry.canonical_name in seen:

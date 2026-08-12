@@ -17,7 +17,7 @@ from langgraph.types import Send
 from langchain_core.messages import AIMessage
 
 from app.workflow.layers.phase_machine import PlanningPhase, get_layer_dimensions, _phase_to_layer
-from app.workflow.layers.layer_router import _worker_for_phase
+from app.workflow.layers.layer_router import _worker_for_phase, _dispatch_state
 from app.workflow.state import load_root_gate
 from app.config import get_dimension_layer
 from app.config.dependency import compute_impact_tree, get_next_revision_wave
@@ -97,16 +97,16 @@ def after_conversation(
         for d in wave0_dims:
             logger.debug("[after_conversation] Sending dimension: %s", d)
         worker = _worker_for_phase(state.get("phase", "layer1"))
-        return [Send(worker, {
-            **state, "dimension_key": d,
-            "completed_dimensions": new_completed,
-            "is_revision": True,
-            "revision_impact_tree": final_tree,
-            "revision_feedback": feedback,
-            "revision_completed_dims": {},
-            "feedback": None,
-            "need_revision": False,
-        }) for d in wave0_dims]
+        return [Send(worker, _dispatch_state(state,
+            dimension_key=d,
+            completed_dimensions=new_completed,
+            is_revision=True,
+            revision_impact_tree=final_tree,
+            revision_feedback=feedback,
+            revision_completed_dims={},
+            feedback=None,
+            need_revision=False,
+        )) for d in wave0_dims]
 
     # 2. 推进意图检测
     if hasattr(last_msg, "tool_calls") and last_msg.tool_calls:
@@ -231,7 +231,7 @@ def after_analysis(
         if ready_dims:
             logger.info("[after_analysis] Revision ready dims (dependency-checked): %s", ready_dims)
             worker = _worker_for_phase(state.get("phase", "layer1"))
-            return [Send(worker, {**state, "dimension_key": d, "is_revision": True, "revision_impact_tree": impact_tree}) for d in ready_dims]
+            return [Send(worker, _dispatch_state(state, dimension_key=d, is_revision=True, revision_impact_tree=impact_tree)) for d in ready_dims]
 
         # 检查是否所有修订维度都已完成（只检查 revision_completed，不含基线）
         if set(revision_completed) >= set(all_revision_dims):
@@ -279,9 +279,9 @@ def after_analysis(
     # falling back to phase — after the completion-node fix the two agree until
     # the gate PASSES (phase is only advanced on PASS).  The gate is read
     # through the CAS artifact ref; inline layer gate payloads no longer exist.
-    layer_num = state.get("layer_just_completed")
-    if layer_num is None:
-        layer_num = _phase_to_layer(phase)
+    # phase is the authoritative cursor: a stale layer_just_completed from
+    # an earlier checkpoint must never route against an older layer gate.
+    layer_num = _phase_to_layer(phase)
     if layer_num is not None:
         try:
             gate_decision = load_root_gate(state, f"l{layer_num}")
@@ -320,7 +320,7 @@ def after_analysis(
                 if explore_dims:
                     logger.info("[after_analysis] Gate EXPLORE (attempt %d): re-dispatching %s", explore_count + 1, explore_dims)
                     worker = _worker_for_phase(state.get("phase", "layer1"))
-                    return [Send(worker, {**state, "dimension_key": d}) for d in explore_dims]
+                    return [Send(worker, _dispatch_state(state, dimension_key=d)) for d in explore_dims]
                 return END
             if route == "HUMAN":
                 # Always enter the persisted HITL checkpoint. Returning END
@@ -374,7 +374,7 @@ def after_analysis(
                 if rework_dims:
                     logger.info("[after_analysis] Gate rework: re-dispatching %s", rework_dims)
                     worker = _worker_for_phase(state.get("phase", "layer1"))
-                    return [Send(worker, {**state, "dimension_key": d}) for d in rework_dims]
+                    return [Send(worker, _dispatch_state(state, dimension_key=d)) for d in rework_dims]
                 return END
 
     layer = _phase_to_layer(phase)
@@ -461,7 +461,7 @@ def _dispatch_current(state: Dict[str, Any]) -> Union[List[Send], str]:
         return END
 
     worker = _worker_for_phase(phase)
-    return [Send(worker, {**state, "dimension_key": d, "phase": phase}) for d in ready]
+    return [Send(worker, _dispatch_state(state, dimension_key=d, phase=phase)) for d in ready]
 
 
 __all__ = ["after_conversation", "after_analysis"]

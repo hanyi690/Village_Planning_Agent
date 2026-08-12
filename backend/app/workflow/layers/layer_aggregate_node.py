@@ -59,6 +59,21 @@ async def layer_aggregate_node(state: Dict[str, Any]) -> Dict[str, Any]:
     if layer is None:
         return {}
 
+    # Defensive: a stale layer_just_completed from an earlier layer must
+    # never run the wrong aggregate.  phase is the authoritative cursor.
+    phase_layer = None
+    try:
+        from app.workflow.layers.phase_machine import _phase_to_layer
+        phase_layer = _phase_to_layer(str(state.get("phase") or ""))
+    except Exception:
+        phase_layer = None
+    if phase_layer is not None and int(layer) != phase_layer:
+        logger.warning(
+            "[layer_aggregate] stale layer_just_completed=%s vs phase=%s, clearing",
+            layer, state.get("phase"),
+        )
+        return {"layer_just_completed": None}
+
     logger.info("[layer_aggregate] layer=%d, invoking aggregate", layer)
 
     # L1 is the first producer of a persisted typed artifact.  Establish the
