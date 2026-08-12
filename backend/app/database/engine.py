@@ -241,6 +241,10 @@ async def _run_migrations(engine) -> None:
             # P8: INSTRUCTION 结构化段独立列（剥离存储，不参与展示）
             ("instruction", "ALTER TABLE dimension_reports ADD COLUMN instruction TEXT"),
         ],
+        "planning_bundles": [
+            # P0-c: CAS blob descriptor reference for the bundle blob
+            ("bundle_ref", "ALTER TABLE planning_bundles ADD COLUMN bundle_ref TEXT"),
+        ],
     }
 
     async with engine.begin() as conn:

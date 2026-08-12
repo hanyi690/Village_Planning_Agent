@@ -766,7 +766,8 @@ async def create_planning_bundle_async(bundle_data: Dict[str, Any]) -> Dict[str,
     创建规划数据包快照
 
     Args:
-        bundle_data: dict with session_id, version, bundle_json, sha256, trigger_reason
+        bundle_data: dict with session_id, version, bundle_json, sha256,
+            bundle_ref, trigger_reason
 
     Returns:
         Dict with the stored bundle record
@@ -777,6 +778,7 @@ async def create_planning_bundle_async(bundle_data: Dict[str, Any]) -> Dict[str,
             version=bundle_data["version"],
             bundle_json=bundle_data["bundle_json"],
             sha256=bundle_data.get("sha256", ""),
+            bundle_ref=bundle_data.get("bundle_ref"),
             trigger_reason=bundle_data.get("trigger_reason"),
             built_at=bundle_data.get("built_at") or datetime.now(),
         )
@@ -871,6 +873,7 @@ def _planning_bundle_to_dict(db_bundle: PlanningBundle) -> Dict[str, Any]:
         "version": db_bundle.version,
         "bundle_json": db_bundle.bundle_json,
         "sha256": db_bundle.sha256,
+        "bundle_ref": db_bundle.bundle_ref,
         "trigger_reason": db_bundle.trigger_reason,
         "built_at": db_bundle.built_at.isoformat() if db_bundle.built_at else None,
     }

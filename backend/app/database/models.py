@@ -282,6 +282,8 @@ class PlanningBundle(SQLModel, table=True):
     # Content (full JSON snapshot of the session VillageBundle)
     bundle_json: str = Field(sa_column=Text())
     sha256: str = Field(default="")
+    # CAS descriptor reference (JSON string) for the bundle blob in the CAS store
+    bundle_ref: Optional[str] = None
 
     # Metadata
     trigger_reason: Optional[str] = None  # "layer1" | "layer2" | "layer3" | "final" | "manual"

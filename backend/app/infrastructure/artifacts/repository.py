@@ -96,11 +96,61 @@ class ContentAddressedArtifactRepository:
             raise ValueError("descriptor digest does not match descriptor identity")
         return descriptor
 
+    def put_bytes(
+        self,
+        data: bytes,
+        *,
+        schema_id: str,
+        schema_version: str,
+        producer_stage: str,
+        run_id: str,
+        branch_id: str,
+        parent_digests: dict[str, str] | None = None,
+        provenance: dict[str, Any] | None = None,
+    ) -> ArtifactDescriptor:
+        _token(run_id, "run_id")
+        _token(branch_id, "branch_id")
+        blob_digest = _sha256(data)
+        self._create_once(self._blob_path(blob_digest), data)
+        descriptor_payload = {
+            "digest": blob_digest,
+            "media_type": "application/octet-stream",
+            "size_bytes": len(data),
+            "schema_id": schema_id,
+            "schema_version": schema_version,
+            "semantic_digest": blob_digest,
+            "parent_digests": dict(sorted((parent_digests or {}).items())),
+            "producer_stage": producer_stage,
+            "run_id": run_id,
+            "branch_id": branch_id,
+            "provenance": provenance or {},
+        }
+        descriptor_digest = _sha256(_canonical_json(descriptor_payload))
+        descriptor_path = self._descriptor_path(descriptor_digest)
+        if descriptor_path.exists():
+            return self.get_descriptor(descriptor_digest)
+        descriptor = ArtifactDescriptor(
+            **descriptor_payload,
+            descriptor_digest=descriptor_digest,
+            created_at=datetime.now(timezone.utc),
+        )
+        self._create_once(
+            descriptor_path,
+            _canonical_json(descriptor.model_dump(mode="json")),
+        )
+        return self.get_descriptor(descriptor_digest)
+
     def get_json(self, descriptor: ArtifactDescriptor) -> Any:
         data = self._blob_path(descriptor.digest).read_bytes()
         if _sha256(data) != descriptor.digest:
             raise ValueError("artifact blob checksum mismatch")
         return json.loads(data)
+
+    def get_bytes(self, descriptor: ArtifactDescriptor) -> bytes:
+        data = self._blob_path(descriptor.digest).read_bytes()
+        if _sha256(data) != descriptor.digest:
+            raise ValueError("artifact blob checksum mismatch")
+        return data
 
     def get_named_ref(self, run_id: str, branch_id: str, artifact_key: str) -> ArtifactDescriptor | None:
         path = self._named_ref_path(run_id, branch_id, artifact_key)

@@ -80,6 +80,25 @@ class BundleStore:
         bundle_json = self.serialize(bundle)
         sha256 = self._sha256(bundle_json)
 
+        bundle_ref = None
+        try:
+            from app.infrastructure.artifacts.repository import ContentAddressedArtifactRepository
+            from app.infrastructure.paths import run_tmp_root
+            descriptor = ContentAddressedArtifactRepository(run_tmp_root()).put_bytes(
+                bundle_json.encode("utf-8"),
+                schema_id="VillageBundle",
+                schema_version="3",
+                producer_stage="session_bundle",
+                run_id=session_id,
+                branch_id="main",
+            )
+            bundle_ref = json.dumps(descriptor.model_dump(mode="json"))
+        except Exception as exc:
+            logger.warning(
+                "[BundleStore] CAS blob persist failed for %s; falling back to DB blob: %s",
+                session_id, exc,
+            )
+
         if version is None:
             latest = await get_planning_bundle_async(session_id)
             version = (latest.get("version", 0) if latest else 0) + 1
@@ -89,6 +108,7 @@ class BundleStore:
             "version": version,
             "bundle_json": bundle_json,
             "sha256": sha256,
+            "bundle_ref": bundle_ref,
             "trigger_reason": trigger_reason,
         })
         logger.info(
@@ -127,9 +147,27 @@ class BundleStore:
         """
         record = await get_planning_bundle_async(session_id, version=version) if version is not None \
             else await get_planning_bundle_async(session_id)
-        if not record or not record.get("bundle_json"):
+        if not record:
             return None
-        return self.deserialize(record["bundle_json"])
+
+        bundle_ref = record.get("bundle_ref")
+        if bundle_ref:
+            from app.contracts.artifacts.ref import ArtifactRef as ArtifactDescriptor
+            from app.infrastructure.artifacts.repository import ContentAddressedArtifactRepository
+            from app.infrastructure.paths import run_tmp_root
+            descriptor = ArtifactDescriptor.model_validate(json.loads(bundle_ref))
+            bundle_json = ContentAddressedArtifactRepository(run_tmp_root()).get_bytes(descriptor).decode("utf-8")
+        else:
+            bundle_json = record.get("bundle_json")
+
+        if not bundle_json:
+            return None
+        if self._sha256(bundle_json) != record.get("sha256"):
+            raise ValueError(
+                f"[BundleStore] Bundle checksum mismatch for session {session_id} "
+                f"version {record.get('version')}"
+            )
+        return self.deserialize(bundle_json)
 
     async def get_layer_reports_from_bundle(
         self,
