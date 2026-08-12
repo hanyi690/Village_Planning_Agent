@@ -1,6 +1,6 @@
 from types import SimpleNamespace
 
-from app.agent.validate.checks import check_contract_completeness
+from app.domain.validation.validate_checks import check_contract_completeness
 
 
 def test_all_spatial_tasks_deferred_do_not_require_planned_parcels():

@@ -112,8 +112,8 @@ def _read_ledger(state: Dict[str, Any]) -> list[Dict[str, Any]]:
 
 async def validate_node(state: Dict[str, Any]) -> Dict[str, Any]:
     """Validate the immutable EXECUTE outputs and emit a typed gate + next_action."""
-    from app.agent.validate.aggregate import validate_aggregate
-    from app.agent.validate.gate import evaluate_validate_gate
+    from app.domain.validation.validate import validate_aggregate
+    from app.domain.validation.validate_gate import evaluate_validate_gate
     from app.modules.schema.contracts.parse_contracts import SpatialPlanningIntent
     from app.modules.schema.contracts.planned_state_contracts import PlannedState
     from app.modules.schema.contracts.parcel_change_contracts import ParcelChangeSet

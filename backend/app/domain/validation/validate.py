@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from typing import Any, List
 
-from app.agent.validate.checks import (
+from app.domain.validation.validate_checks import (
     check_accessibility,
     check_area_conservation,
     check_classification_missing,
@@ -75,7 +75,7 @@ def validate_aggregate(
             adjustments=[],
             provenance=Provenance(
                 source="validate_aggregate", run_id=run_id,
-                module="app.agent.validate.aggregate",
+                module="app.domain.validation.validate",
                 natural_language_description="blocked: planned_state is None",
             ),
         )
@@ -114,7 +114,7 @@ def validate_aggregate(
     provenance = Provenance(
         source="validate_aggregate",
         run_id=run_id,
-        module="app.agent.validate.aggregate",
+        module="app.domain.validation.validate",
         natural_language_description=f"VALIDATE aggregate: {len(all_checks)} checks",
     )
 

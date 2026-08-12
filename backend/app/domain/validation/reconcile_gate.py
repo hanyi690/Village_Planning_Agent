@@ -1,6 +1,6 @@
 """RECONCILE gate - 4-way responsibility router over a ReconciliationReport.
 
-Mirrors the VALIDATE gate convention (app.agent.validate.gate) with
+Mirrors the VALIDATE gate convention (app.domain.validation.validate_gate) with
 stage="reconcile". Pure function: ReconciliationReport -> GateDecision.
 No I/O, no LLM, no KG - deterministic only.
 
