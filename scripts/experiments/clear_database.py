@@ -94,7 +94,7 @@ async def clear_all_except(keep_session_ids: List[str]) -> Dict[str, int]:
             from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
             from backend.app.core.settings import DATABASE_DIR
 
-            db_path = DATABASE_DIR / "village_planning.db"
+            db_path = DATABASE_DIR / "checkpoints.db"
             if db_path.exists():
                 async with AsyncSqliteSaver.from_conn_string(str(db_path)) as saver:
                     # Get all thread_ids (session_ids) from checkpoints
@@ -137,7 +137,7 @@ async def _get_all_checkpoint_thread_ids() -> List[str]:
     import aiosqlite
     from backend.app.core.settings import DATABASE_DIR
 
-    db_path = DATABASE_DIR / "village_planning.db"
+    db_path = DATABASE_DIR / "checkpoints.db"
     if not db_path.exists():
         return []
 

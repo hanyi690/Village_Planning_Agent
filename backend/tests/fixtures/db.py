@@ -66,6 +66,10 @@ def sqlite_db(tmp_path, monkeypatch):
             "AsyncSessionLocal",
             async_sessionmaker(bind=engine, expire_on_commit=False),
         )
+        monkeypatch.setattr(eng, "CHECKPOINT_DB_PATH", tmp_path / "checkpoints.db")
+        eng._checkpointer = None
+        eng._checkpointer_initialized = False
+        eng._checkpointers_by_loop.clear()
         return engine
 
     async def teardown():

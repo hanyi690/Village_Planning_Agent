@@ -19,6 +19,7 @@ logger = logging.getLogger(__name__)
 
 # Database path from settings
 DB_PATH = DATABASE_DIR / "village_planning.db"
+CHECKPOINT_DB_PATH = DATABASE_DIR / "checkpoints.db"
 
 
 # ==========================================
@@ -319,7 +320,8 @@ async def get_global_checkpointer():
             logger.info("[Checkpointer] Initializing global AsyncSqliteSaver instance...")
 
             # Create connection
-            conn = await aiosqlite.connect(get_db_path(), check_same_thread=False)
+            CHECKPOINT_DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+            conn = await aiosqlite.connect(CHECKPOINT_DB_PATH, check_same_thread=False)
 
             # Enable WAL mode for better concurrent write safety
             await conn.execute("PRAGMA journal_mode=WAL")

@@ -91,6 +91,7 @@ async def _run(args: argparse.Namespace) -> int:
     import app.database.engine as engine
 
     engine.DB_PATH = db_path
+    engine.CHECKPOINT_DB_PATH = db_path
     engine.async_engine = None
     engine.AsyncSessionLocal = None
     engine._checkpointer = None

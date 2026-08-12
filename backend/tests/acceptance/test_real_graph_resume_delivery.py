@@ -178,6 +178,7 @@ def test_real_graph_resume_delivery(sqlite_db, pipeline_reset, monkeypatch):
     # into data/database/village_planning.db and can replay stale state.
     test_db_path = Path(test_engine.url.database).resolve()
     monkeypatch.setattr(db_engine, "DB_PATH", test_db_path)
+    monkeypatch.setattr(db_engine, "CHECKPOINT_DB_PATH", test_db_path)
     monkeypatch.setattr(db_engine, "get_db_path", lambda: test_db_path)
     monkeypatch.setattr(db_engine, "_checkpointer", None)
     monkeypatch.setattr(db_engine, "_checkpointer_initialized", False)

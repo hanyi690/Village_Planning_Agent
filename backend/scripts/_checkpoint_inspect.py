@@ -3,7 +3,7 @@ import sqlite3
 import sys
 from pathlib import Path
 
-db_path = Path(__file__).resolve().parent.parent.parent / "data" / "database" / "village_planning.db"
+db_path = Path(__file__).resolve().parent.parent.parent / "data" / "database" / "checkpoints.db"
 conn = sqlite3.connect(str(db_path))
 cur = conn.cursor()
 cur.execute(
