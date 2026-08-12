@@ -15,7 +15,7 @@ import re
 from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 
-from app.modules.spatial_ops.road import (
+from app.spatial.network import (
     NetworkBuildConfig,
     PlanningNodeBuildConfig,
     RDFLibKGSpatialRetryAdapter,

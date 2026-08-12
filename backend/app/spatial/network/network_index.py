@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from app.modules.spatial_ops.road.schemas import (
+from app.spatial.network.schemas import (
     NetworkBuildConfig,
     NetworkBuildResult,
     RoadEdgeRecord,
@@ -43,7 +43,7 @@ class NetworkIndex:
         }
 
     def build(self, output_dir: str | Any, config: NetworkBuildConfig | None = None) -> NetworkBuildResult:
-        from app.modules.spatial_ops.road.network_builder import RoadNetworkBuilder
+        from app.spatial.network.network_builder import RoadNetworkBuilder
 
         builder = RoadNetworkBuilder(config)
         self._result = builder.build(self._road_source(), output_dir)
