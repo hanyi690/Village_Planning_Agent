@@ -230,7 +230,7 @@ def adapt_legacy_result(task: WorkerInput, legacy: Any) -> WorkerResult:
             "legacy_diagnostics": [_as_dict(item) for item in diagnostics],
             "unresolved_items": [_as_dict(item) for item in unresolved],
         },
-        provenance={"source": "agent.execute.nodes", "ref_kind": "bsm_and_layer_type"},
+        provenance={"source": "app.domain.materialization.nodes", "ref_kind": "bsm_and_layer_type"},
     )
 
 

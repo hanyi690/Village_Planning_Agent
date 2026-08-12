@@ -6,7 +6,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from app.agent.execute.plan_builder import build_execution_plan
+from app.domain.materialization.plan_builder import build_execution_plan
 from app.modules.schema.contracts.classification_ref import (
     ClassificationDecision,
     ClassificationSystem,

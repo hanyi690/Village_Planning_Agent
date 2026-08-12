@@ -130,7 +130,7 @@ class PlanningRuntimeService:
             cls._graph = create_unified_planning_graph(checkpointer=cls._checkpointer)
             logger.info("[PlanningRuntimeService] Graph created")
 
-            from app.agent.execute.execute_agent import build_execute_agent_graph
+            from app.domain.materialization.execute_agent import build_execute_agent_graph
             # EXECUTE has a different local worker schema and is invoked as a
             # stage adapter. Its workspace never crosses the parent graph
             # checkpoint; the parent receives only typed artifact refs/results.

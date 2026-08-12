@@ -18,7 +18,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Tuple
 
-from app.agent.execute.land_design_worker import build_parcel_change_set
+from app.domain.materialization.land_design_worker import build_parcel_change_set
 from app.modules.schema.contracts.execution_plan_contracts import TypedActionResult
 from app.modules.schema.contracts.parcel_change_contracts import ParcelChange, ParcelChangeSet
 

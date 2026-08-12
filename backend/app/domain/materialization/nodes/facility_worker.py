@@ -4,9 +4,9 @@ from __future__ import annotations
 
 from typing import List
 
-from app.agent.execute.execute_state import ExecuteAgentState
-from app.agent.execute.nodes.common import _execution_error
-from app.agent.execute.nodes.worker_common import _execution_intent_from_plan, _resolve_parcel_by_bsm, _task_enabled, _task_execution_result
+from app.domain.materialization.execute_state import ExecuteAgentState
+from app.domain.materialization.nodes.common import _execution_error
+from app.domain.materialization.nodes.worker_common import _execution_intent_from_plan, _resolve_parcel_by_bsm, _task_enabled, _task_execution_result
 from app.modules.schema.contracts.execution_plan_contracts import WorkerResult
 from app.modules.schema.contracts.parcel_change_contracts import ParcelChange
 from app.utils.logger import get_logger
@@ -22,7 +22,7 @@ def _facility_worker(state: ExecuteAgentState) -> WorkerResult:
     branch of ``design_facility_parcel`` activates when an anchor sits inside
     an existing parcel. No KG POI lookup, no FacilityPlacer.
     """
-    from app.agent.execute.land_design_worker import design_facility_parcel
+    from app.domain.materialization.land_design_worker import design_facility_parcel
     if not _task_enabled(state, "facility"):
         return WorkerResult(worker_type="facility")
 

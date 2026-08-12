@@ -330,7 +330,7 @@ def _layer_config(layer_type: str, data: Dict[str, Any], color: str, visible: bo
 def execute_road_planning_from_agent_state(state: Any) -> Dict[str, Any]:
     """Execute the road sub-task from the typed execution plan and workspace."""
 
-    from app.agent.execute.nodes.worker_common import _execution_intent_from_plan
+    from app.domain.materialization.nodes.worker_common import _execution_intent_from_plan
 
     road_targets = _intent_road_targets(_execution_intent_from_plan(state))
     if not road_targets:

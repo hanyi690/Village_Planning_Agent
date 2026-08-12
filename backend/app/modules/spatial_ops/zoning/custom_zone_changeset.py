@@ -13,7 +13,7 @@ from typing import Any, Iterable, Mapping
 from shapely.geometry import shape
 from shapely.geometry.base import BaseGeometry
 
-from app.agent.execute.land_design_worker import _classification_from_decision
+from app.domain.materialization.land_design_worker import _classification_from_decision
 from app.modules.schema.contracts.custom_zone_contracts import CustomZoneTarget, Vocabulary
 from app.modules.schema.contracts.parcel_change_contracts import ParcelChange
 from app.modules.spatial_ops.zoning.custom_zone_generator import CustomZoningGenerator

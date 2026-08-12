@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from app.agent.execute.execute_state import ExecuteAgentState
-from app.agent.execute.nodes.worker_common import _execution_intent_from_plan, _intent_list, _task_enabled, _task_execution_result
+from app.domain.materialization.execute_state import ExecuteAgentState
+from app.domain.materialization.nodes.worker_common import _execution_intent_from_plan, _intent_list, _task_enabled, _task_execution_result
 from app.modules.schema.contracts.execution_plan_contracts import WorkerResult
 from app.utils.logger import get_logger
 

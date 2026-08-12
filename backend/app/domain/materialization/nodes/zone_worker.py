@@ -4,9 +4,9 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Mapping
 
-from app.agent.execute.execute_state import ExecuteAgentState
-from app.agent.execute.nodes.common import _execution_error
-from app.agent.execute.nodes.worker_common import (
+from app.domain.materialization.execute_state import ExecuteAgentState
+from app.domain.materialization.nodes.common import _execution_error
+from app.domain.materialization.nodes.worker_common import (
     _execution_intent_from_plan,
     _intent_list,
     _resolve_parcel_by_bsm,
@@ -206,7 +206,7 @@ def _allocate_empty_zone_targets(
             })
         return unresolved
 
-    from app.agent.execute.land_design_worker import design_zone_parcel
+    from app.domain.materialization.land_design_worker import design_zone_parcel
 
     for zone_target in empty_targets:
         target_id = str(getattr(zone_target, "target_id", "") or "")
@@ -246,7 +246,7 @@ def _zone_worker(state: ExecuteAgentState) -> WorkerResult:
     ``candidate_bsms`` are solved through the ``ZoneAllocatorPort`` (PuLP MIP);
     infeasible allocations become ``design_unresolved`` diagnostics.
     """
-    from app.agent.execute.land_design_worker import design_zone_parcel
+    from app.domain.materialization.land_design_worker import design_zone_parcel
 
     if not _task_enabled(state, "layout"):
         return WorkerResult(worker_type="zone")

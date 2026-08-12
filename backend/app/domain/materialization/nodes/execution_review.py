@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from typing import Any, Dict, List
 
-from app.agent.execute.execute_state import ExecuteAgentState
-from app.agent.execute.nodes.worker_common import _worker_result_get, _worker_type
+from app.domain.materialization.execute_state import ExecuteAgentState
+from app.domain.materialization.nodes.worker_common import _worker_result_get, _worker_type
 from app.utils.logger import get_logger
 
 logger = get_logger(__name__)

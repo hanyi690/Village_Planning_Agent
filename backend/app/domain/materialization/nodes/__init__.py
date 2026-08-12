@@ -1,30 +1,30 @@
 """EXECUTE node modules grouped by responsibility."""
 
-from app.agent.execute.nodes.common import (
+from app.domain.materialization.nodes.common import (
     _checkpoint_safe,
     _checkpoint_safe_node,
     _execution_error,
 )
-from app.agent.execute.nodes.route_prepare import (
+from app.domain.materialization.nodes.route_prepare import (
     _prepare_inputs_node,
     _route_tasks_node,
 )
-from app.agent.execute.nodes.project_worker import _project_worker, _project_worker_node
-from app.agent.execute.nodes.zone_worker import _zone_worker, _zone_worker_node
-from app.agent.execute.nodes.facility_worker import (
+from app.domain.materialization.nodes.project_worker import _project_worker, _project_worker_node
+from app.domain.materialization.nodes.zone_worker import _zone_worker, _zone_worker_node
+from app.domain.materialization.nodes.facility_worker import (
     _facility_worker,
     _facility_worker_node,
 )
-from app.agent.execute.nodes.axis_worker import _axis_worker, _axis_worker_node
-from app.agent.execute.nodes.action_worker import _action_worker, _action_worker_node
-from app.agent.execute.nodes.road_worker import _road_worker, _road_worker_node
-from app.agent.execute.nodes.merge_and_materialize import (
+from app.domain.materialization.nodes.axis_worker import _axis_worker, _axis_worker_node
+from app.domain.materialization.nodes.action_worker import _action_worker, _action_worker_node
+from app.domain.materialization.nodes.road_worker import _road_worker, _road_worker_node
+from app.domain.materialization.nodes.merge_and_materialize import (
     _geometry_materialize_node,
     _merge_worker_results_node,
     _planned_state_builder_node,
 )
-from app.agent.execute.nodes.execution_review import _execution_review_node
-from app.agent.execute.nodes.write_l4 import _write_l4_node
+from app.domain.materialization.nodes.execution_review import _execution_review_node
+from app.domain.materialization.nodes.write_l4 import _write_l4_node
 
 __all__ = [
     "_checkpoint_safe",

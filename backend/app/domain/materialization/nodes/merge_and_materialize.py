@@ -4,13 +4,13 @@ from __future__ import annotations
 
 from typing import Any, Dict, List
 
-from app.agent.execute.execute_state import ExecuteAgentState
-from app.agent.execute.nodes.worker_common import _execution_intent_from_plan, _worker_result_get
+from app.domain.materialization.execute_state import ExecuteAgentState
+from app.domain.materialization.nodes.worker_common import _execution_intent_from_plan, _worker_result_get
 
 
 async def _merge_worker_results_node(state: ExecuteAgentState) -> dict:
     """Merge all WorkerResults into a unified ParcelChangeSet + layout_configs."""
-    from app.agent.execute.merge import merge_worker_results
+    from app.domain.materialization.merge import merge_worker_results
 
     changeset, layout_configs, diagnostics, action_results = merge_worker_results(
         list(state.worker_results)
@@ -66,7 +66,7 @@ async def _geometry_materialize_node(state: ExecuteAgentState) -> dict:
 
 async def _planned_state_builder_node(state: ExecuteAgentState) -> dict:
     """Produce the authoritative PlannedState from the merged ParcelChangeSet."""
-    from app.agent.execute.planned_state_builder import changeset_to_planned_state
+    from app.domain.materialization.planned_state_builder import changeset_to_planned_state
 
     if state.parcel_changeset is None:
         return {}

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from app.agent.execute.execute_state import ExecuteAgentState
+from app.domain.materialization.execute_state import ExecuteAgentState
 from app.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -41,8 +41,8 @@ async def _write_l4_node(state: ExecuteAgentState) -> dict:
 
     planned_state = None
     if getattr(state, "parcel_changeset", None) is not None:
-        from app.agent.execute.planned_state_builder import changeset_to_planned_state
-        from app.agent.execute.nodes.worker_common import _execution_intent_from_plan
+        from app.domain.materialization.planned_state_builder import changeset_to_planned_state
+        from app.domain.materialization.nodes.worker_common import _execution_intent_from_plan
 
         planned_state = changeset_to_planned_state(
             state.parcel_changeset,

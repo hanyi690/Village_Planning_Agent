@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, Iterable, List
 
-from app.agent.execute.execute_state import ExecuteAgentState
+from app.domain.materialization.execute_state import ExecuteAgentState
 
 
 WORKER_ROUTE_KEYS = {

@@ -8,8 +8,8 @@ from types import SimpleNamespace
 
 from shapely.geometry import Polygon, mapping
 
-from app.agent.execute.execute_state import ExecuteAgentState
-from app.agent.execute.nodes.zone_worker import _zone_worker, _zone_worker_node
+from app.domain.materialization.execute_state import ExecuteAgentState
+from app.domain.materialization.nodes.zone_worker import _zone_worker, _zone_worker_node
 from app.modules.schema.contracts.classification_ref import (
     ClassificationDecision,
     ClassificationSystem,
@@ -29,7 +29,7 @@ from app.modules.schema.contracts.custom_zone_contracts import (
     Vocabulary,
     VocabularyCategory,
 )
-from app.agent.execute.plan_builder import (
+from app.domain.materialization.plan_builder import (
     build_execution_plan,
     classification_boundary_diagnostics,
 )

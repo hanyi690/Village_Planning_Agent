@@ -78,7 +78,7 @@ def _classification_diagnostic_result(
 def _task_results_from_execution(execution_plan: Any, result: Dict[str, Any]) -> Any:
     """Classify every planned task from actual worker dispatch and output."""
     from app.modules.schema.contracts.execution_plan_contracts import ExecutionResult, TaskExecutionResult
-    from app.agent.execute.nodes.worker_common import worker_result_key, worker_route_key
+    from app.domain.materialization.nodes.worker_common import worker_result_key, worker_route_key
 
     action_results = list(result.get("action_results", []) or [])
     action_target_ids = {
@@ -156,12 +156,12 @@ def _task_results_from_execution(execution_plan: Any, result: Dict[str, Any]) ->
 async def execute_node(state: Dict[str, Any]) -> Dict[str, Any]:
     """Run the worker subgraph and persist only typed output references."""
     from app.services.runtime import PlanningRuntimeService
-    from app.agent.execute.execute_state import ExecuteAgentState
-    from app.agent.execute.plan_builder import (
+    from app.domain.materialization.execute_state import ExecuteAgentState
+    from app.domain.materialization.plan_builder import (
         build_execution_plan,
         classification_boundary_diagnostics,
     )
-    from app.agent.execute.planned_state_builder import changeset_to_planned_state
+    from app.domain.materialization.planned_state_builder import changeset_to_planned_state
     from app.modules.schema.contracts.deferral_contracts import DeferralLedger
     from app.modules.schema.contracts.parse_contracts import SpatialPlanningIntent
     from app.modules.schema.contracts.parse_result_contracts import IntentCompilationResult
@@ -204,7 +204,7 @@ async def execute_node(state: Dict[str, Any]) -> Dict[str, Any]:
         kg_three_lines=list(state.get("kg_three_lines") or []),
         messages=list(state.get("messages") or []),
     )
-    from app.agent.execute.nodes.worker_common import _execution_intent_from_plan
+    from app.domain.materialization.nodes.worker_common import _execution_intent_from_plan
     execution_intent = _execution_intent_from_plan(exec_state)
     graph = PlanningRuntimeService._execute_subgraph
     if graph is None:
@@ -237,7 +237,7 @@ async def execute_node(state: Dict[str, Any]) -> Dict[str, Any]:
     outcome = _task_results_from_execution(execution_plan, result)
     l4_write_result: Dict[str, Any] = {}
     if planned_state is not None:
-        from app.agent.execute.nodes.write_l4 import _write_l4_node
+        from app.domain.materialization.nodes.write_l4 import _write_l4_node
         exec_state.parcel_changeset = changeset
         exec_state.layout_configs = list(result.get("layout_configs", []) or [])
         exec_state.planned_state = planned_state

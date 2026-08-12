@@ -25,6 +25,6 @@ async def run_worker(task: WorkerInput, *, deps: dict | None = None) -> WorkerRe
     )
     if gate is not None:
         return gate
-    from app.agent.execute.nodes.facility_worker import _facility_worker
+    from app.domain.materialization.nodes.facility_worker import _facility_worker
 
     return adapt_legacy_result(task, _facility_worker(_state_from_deps(deps)))

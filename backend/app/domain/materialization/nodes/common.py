@@ -5,7 +5,7 @@ from __future__ import annotations
 from functools import wraps
 from typing import Any, Awaitable, Callable
 
-from app.agent.execute.execute_state import ExecuteAgentState
+from app.domain.materialization.execute_state import ExecuteAgentState
 
 
 def _checkpoint_safe(value: Any) -> Any:

@@ -27,6 +27,6 @@ async def run_worker(task: WorkerInput, *, deps: dict | None = None) -> WorkerRe
     )
     if gate is not None:
         return gate
-    from app.agent.execute.nodes.road_worker import _road_worker
+    from app.domain.materialization.nodes.road_worker import _road_worker
 
     return adapt_legacy_result(task, _road_worker(_state_from_deps(deps)))

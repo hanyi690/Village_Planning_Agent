@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from typing import List
 
-from app.agent.execute.execute_state import ExecuteAgentState
-from app.agent.execute.nodes.worker_common import (
+from app.domain.materialization.execute_state import ExecuteAgentState
+from app.domain.materialization.nodes.worker_common import (
     _execution_intent_from_plan,
     _footprint_geometry,
     _plan_tasks,
@@ -28,7 +28,7 @@ def _project_worker(state: ExecuteAgentState) -> WorkerResult:
     Joins selected parcels and design briefs by stable target ID. Non-spatial
     action targets produce typed action results and never parcel changes.
     """
-    from app.agent.execute.land_design_worker import design_project_footprint
+    from app.domain.materialization.land_design_worker import design_project_footprint
 
     if not _task_enabled(state, "project"):
         return WorkerResult(worker_type="project")

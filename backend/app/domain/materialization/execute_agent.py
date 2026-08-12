@@ -11,7 +11,7 @@ complete PlannedState via the multi-worker subgraph (Wave O):
       -> planned_state_builder -> execution_review
 
 This module is now the graph builder only. The 11 node functions live in
-``app.agent.execute.nodes`` (one module per responsibility); worker outputs
+``app.domain.materialization.nodes`` (one module per responsibility); worker outputs
 cross the boundary through typed contracts.
 
 Nodes call domain services directly rather than LangChain tool wrappers.
@@ -23,8 +23,8 @@ from typing import Literal
 
 from langgraph.graph import StateGraph, END, START
 
-from app.agent.execute.execute_state import ExecuteAgentState
-from app.agent.execute.nodes import (
+from app.domain.materialization.execute_state import ExecuteAgentState
+from app.domain.materialization.nodes import (
     _axis_worker,
     _axis_worker_node,
     _action_worker,
@@ -48,7 +48,7 @@ from app.agent.execute.nodes import (
     _zone_worker,
     _zone_worker_node,
 )
-from app.agent.execute.nodes.worker_common import _build_parcel_by_bsm
+from app.domain.materialization.nodes.worker_common import _build_parcel_by_bsm
 from app.utils.logger import get_logger
 
 logger = get_logger(__name__)
