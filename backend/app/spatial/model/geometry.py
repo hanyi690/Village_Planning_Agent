@@ -75,7 +75,7 @@ class ParcelRelations:
 def _compute_centroid(boundary_geojson: Dict[str, Any]) -> Optional[Tuple[float, float]]:
     """Compute centroid of boundary polygon from GeoJSON FeatureCollection."""
     try:
-        from app.utils.geojson_utils import geojson_to_geodataframe
+        from .geojson_utils import geojson_to_geodataframe
 
         gdf = geojson_to_geodataframe(boundary_geojson)
         if gdf is None or gdf.empty:
@@ -90,8 +90,8 @@ def _compute_centroid(boundary_geojson: Dict[str, Any]) -> Optional[Tuple[float,
 def _compute_total_area(geojson: Dict[str, Any]) -> float:
     """Compute total area in hectares from a GeoJSON FeatureCollection."""
     try:
-        from app.utils.geojson_utils import geojson_to_geodataframe
-        from app.utils.area_engine import calculate_area_ha
+        from .geojson_utils import geojson_to_geodataframe
+        from .area_engine import calculate_area_ha
 
         gdf = geojson_to_geodataframe(geojson)
         if gdf is None or gdf.empty:

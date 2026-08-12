@@ -56,7 +56,7 @@ def resolve_directional_bbox(
     Returns:
         (min_lon, min_lat, max_lon, max_lat) 或 None (无法识别方向时)
     """
-    from app.utils.crs_engine import meters_to_degrees_lon, meters_to_degrees_lat
+    from app.spatial.model.crs_engine import meters_to_degrees_lon, meters_to_degrees_lat
 
     lon, lat = center
     direction = direction.strip().lower()
@@ -153,7 +153,7 @@ def query_parcels_near_entity(
     Returns:
         距离内的地块 BSM 列表
     """
-    from app.utils.geo_utils import haversine_distance
+    from app.spatial.model.geo_utils import haversine_distance
 
     results = []
     for p in parcels:
@@ -221,7 +221,7 @@ def compute_proximity_weights(
     Returns:
         {bsm: weight} 字典，0.0-1.0 范围
     """
-    from app.utils.geo_utils import haversine_distance
+    from app.spatial.model.geo_utils import haversine_distance
 
     weights = {}
     for p in parcels:
@@ -280,7 +280,7 @@ def ground_zone_spatial_preference(
     Returns:
         ZoneSpatialAnchor 包含完整空间锚定
     """
-    from app.utils.geo_utils import haversine_distance
+    from app.spatial.model.geo_utils import haversine_distance
 
     parcels = bundle.polygons.get("landuse_current") if bundle else []
 
@@ -315,7 +315,7 @@ def ground_zone_spatial_preference(
             from app.spatial.model.geometry import _compute_centroid
             all_geoms = [p.geometry for p in parcels if hasattr(p, "geometry")]
             if all_geoms:
-                from app.utils.geo_utils import safe_unary_union
+                from app.spatial.model.geo_utils import safe_unary_union
                 from shapely.geometry import shape
                 union_geom = safe_unary_union([shape(g) for g in all_geoms])
                 ref_center = (union_geom.centroid.x, union_geom.centroid.y)
@@ -402,7 +402,7 @@ def ground_facility_spatial_preference(
             from app.spatial.model.geometry import _compute_centroid
             all_geoms = [p.geometry for p in parcels if hasattr(p, "geometry")]
             if all_geoms:
-                from app.utils.geo_utils import safe_unary_union
+                from app.spatial.model.geo_utils import safe_unary_union
                 from shapely.geometry import shape
                 union_geom = safe_unary_union([shape(g) for g in all_geoms])
                 ref_center = (union_geom.centroid.x, union_geom.centroid.y)
@@ -485,7 +485,7 @@ def ground_linear_spatial_preference(
             from app.spatial.model.geometry import _compute_centroid
             all_geoms = [p.geometry for p in parcels if hasattr(p, "geometry")]
             if all_geoms:
-                from app.utils.geo_utils import safe_unary_union
+                from app.spatial.model.geo_utils import safe_unary_union
                 from shapely.geometry import shape
                 union_geom = safe_unary_union([shape(g) for g in all_geoms])
                 ref_centers = [(union_geom.centroid.x, union_geom.centroid.y)]
@@ -740,7 +740,7 @@ def _resolve_directional(desc: str, parcels: list) -> ResolvedSpatialDescription
             direction = eng
             break
     if direction in ("center",):
-        from app.utils.crs_engine import (
+        from app.spatial.model.crs_engine import (
             meters_to_degrees_lat,
             meters_to_degrees_lon,
         )
@@ -881,7 +881,7 @@ def _village_center(parcels: list) -> Optional[Tuple[float, float]]:
     """村庄整体质心（几何兜底参考点）。"""
     try:
         from app.spatial.model.geometry import _compute_centroid
-        from app.utils.geo_utils import safe_unary_union
+        from app.spatial.model.geo_utils import safe_unary_union
         from shapely.geometry import shape
 
         geoms = [shape(p.geometry) for p in parcels if hasattr(p, "geometry") and p.geometry]

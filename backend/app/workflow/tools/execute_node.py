@@ -13,7 +13,7 @@ from typing import Dict, Any, Tuple
 from langchain_core.messages import ToolMessage
 
 from app.utils.logger import get_logger
-from app.utils.sse_publisher import SSEPublisher
+from app.infrastructure.events.sse_publisher import SSEPublisher
 from app.tools.registry import ToolRegistry
 from app.tools.tools import TOOL_REGISTRY
 from app.tools.intent_tools import advance_planning_intent, gis_analysis

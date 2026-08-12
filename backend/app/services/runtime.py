@@ -45,8 +45,8 @@ from app.workflow.layers.phase_machine import (
     get_layer_name,
     _phase_to_layer,
 )
-from app.utils.sse_publisher import SSEPublisher
-from app.utils.event_factory import (
+from app.infrastructure.events.sse_publisher import SSEPublisher
+from app.infrastructure.events.event_factory import (
     create_completed_event,
     create_error_event,
     create_layer_started_event,

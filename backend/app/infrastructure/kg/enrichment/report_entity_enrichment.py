@@ -578,7 +578,7 @@ def _centroid_within_200m(a: Optional[List[float]], b: Optional[List[float]]) ->
     if not a or not b or len(a) < 2 or len(b) < 2:
         return True
     try:
-        from app.utils.geo_utils import haversine_distance
+        from app.spatial.model.geo_utils import haversine_distance
 
         dist_m = haversine_distance((float(a[0]), float(a[1])), (float(b[0]), float(b[1])))
         return dist_m < 200.0

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
 
-from app.utils.sse_events import GISLayerConfig
+from app.infrastructure.events.sse_events import GISLayerConfig
 
 
 def build_map_layers(

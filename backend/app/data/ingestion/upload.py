@@ -12,7 +12,7 @@ from typing import Any
 from fastapi import UploadFile
 
 from app.database.operations import create_uploaded_file_async
-from app.utils.document_loader import MarkItDownLoader, classify_file_type
+from app.data.ingestion.documents.document_loader import MarkItDownLoader, classify_file_type
 
 logger = logging.getLogger(__name__)
 

@@ -178,7 +178,7 @@ def degrees_to_meters_lat(degrees: float) -> float:
 def _project_point(lon: float, lat: float, target_crs: str) -> Tuple[float, float]:
     """Project a single WGS-84 (lon, lat) point to target CRS.
 
-    Internal helper used by coord_utils.transform_coord.
+    Internal helper used by coord_transform for WGS-84 coordinate conversions.
     """
     if not GEOPANDAS_AVAILABLE:
         return (lon, lat)

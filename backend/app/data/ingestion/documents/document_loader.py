@@ -245,7 +245,7 @@ class MarkItDownLoader:
 
     def _try_pdf_fallback(self) -> Optional[str]:
         try:
-            from app.utils.pdf_fallback import parse_pdf_with_fallback
+            from .pdf_fallback import parse_pdf_with_fallback
             return parse_pdf_with_fallback(self.file_path)
         except ImportError:
             pass

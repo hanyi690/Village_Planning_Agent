@@ -11,7 +11,7 @@ from __future__ import annotations
 import logging
 from typing import Any, Dict, List, Optional, Tuple
 
-from app.utils.crs_engine import project_to_metric, project_to_wgs84
+from .crs_engine import project_to_metric, project_to_wgs84
 
 logger = logging.getLogger(__name__)
 

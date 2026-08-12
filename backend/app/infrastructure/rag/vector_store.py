@@ -163,8 +163,8 @@ class VectorStoreCache:
                         model="text-embedding-v4",
                     )
                     from app.core.settings import EMBEDDING_MAX_CONCURRENT, EMBEDDING_RATE_LIMIT_RPS
-                    from app.utils.rate_limiter import get_embedding_rate_limiter
-                    from app.utils.retry import async_retry_with_backoff
+                    from app.infrastructure.llm.rate_limiter import get_embedding_rate_limiter
+                    from app.infrastructure.llm.retry import async_retry_with_backoff
 
                     def _init_limiter_sync():
                         try:

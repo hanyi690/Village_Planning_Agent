@@ -4,7 +4,7 @@ Shim: re-exports document_loader for rag module internal use
 Used by: backend/app/services/modules/rag/service.py
 """
 
-from app.utils.document_loader import (
+from app.data.ingestion.documents.document_loader import (
     FileTypeDetector,
     MarkItDownLoader,
     MarkdownCleaner,

@@ -10,8 +10,8 @@ and ecological protection zone identification.
 
 from typing import Dict, Any, List, Optional, Tuple, Literal
 from app.utils.logger import get_logger
-from app.utils.geo_utils import haversine_distance
-from app.utils.geojson_utils import geojson_to_geodataframe, GEOPANDAS_AVAILABLE
+from app.spatial.model.geo_utils import haversine_distance
+from app.spatial.model.geojson_utils import geojson_to_geodataframe, GEOPANDAS_AVAILABLE
 
 logger = get_logger(__name__)
 
@@ -634,7 +634,7 @@ def assess_ecological_sensitivity(
             if water_gdf is not None:
                 from shapely.ops import unary_union
                 from shapely.geometry.mapping import mapping
-                from app.utils.geo_utils import calculate_area_km2
+                from app.spatial.model.geo_utils import calculate_area_km2
 
                 for factor_name, factor_config in ECOLOGICAL_SENSITIVITY_FACTORS.items():
                     if factor_name in ["water_body", "river", "wetland"]:

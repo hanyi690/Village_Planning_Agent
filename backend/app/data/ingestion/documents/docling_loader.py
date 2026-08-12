@@ -9,7 +9,7 @@ Docling Loader - 高级文档解析器
 - Markdown 输出（保留标题结构）
 
 使用方法：
-    from app.utils.docling_loader import DoclingLoader
+    from app.data.ingestion.documents.docling_loader import DoclingLoader
     loader = DoclingLoader(file_path, category="policies")
     documents = loader.load()
 """
@@ -21,7 +21,7 @@ from typing import Any, Dict, List, Optional
 
 from langchain_core.documents import Document
 
-from app.utils.document_loader import FileTypeDetector, MarkdownCleaner
+from .document_loader import FileTypeDetector, MarkdownCleaner
 
 logger = logging.getLogger(__name__)
 
@@ -251,7 +251,7 @@ class DoclingLoader:
     def _fallback_to_markitdown(self) -> str:
         """降级到 MarkItDown"""
         logger.info(f"[DoclingLoader] Falling back to MarkItDown for: {self.file_path.name}")
-        from app.utils.document_loader import MarkItDownLoader
+        from .document_loader import MarkItDownLoader
         loader = MarkItDownLoader(self.file_path, category=self.category)
         docs = loader.load()
         return docs[0].page_content if docs else ""

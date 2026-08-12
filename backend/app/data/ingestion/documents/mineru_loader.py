@@ -10,7 +10,7 @@ MinerU Loader - MinerU API 文档解析器
 - 自动降级到 Docling/MarkItDown
 
 使用方法：
-    from app.utils.mineru_loader import MinerULoader
+    from app.data.ingestion.documents.mineru_loader import MinerULoader
     loader = MinerULoader(file_path, category="policies")
     documents = loader.load()
 """
@@ -23,7 +23,7 @@ from typing import List, Optional
 
 from langchain_core.documents import Document
 
-from app.utils.document_loader import FileTypeDetector, MarkdownCleaner
+from .document_loader import FileTypeDetector, MarkdownCleaner
 
 logger = logging.getLogger(__name__)
 
@@ -331,7 +331,7 @@ class MinerULoader:
         """降级到 Docling"""
         logger.info(f"[MinerULoader] Falling back to Docling for: {self.file_path.name}")
         try:
-            from app.utils.docling_loader import DoclingLoader
+            from .docling_loader import DoclingLoader
             loader = DoclingLoader(self.file_path, category=self.category)
             docs = loader.load()
             return docs[0].page_content if docs else ""
@@ -341,7 +341,7 @@ class MinerULoader:
     def _fallback_to_markitdown(self) -> str:
         """最终降级到 MarkItDown"""
         logger.info(f"[MinerULoader] Falling back to MarkItDown for: {self.file_path.name}")
-        from app.utils.document_loader import MarkItDownLoader
+        from .document_loader import MarkItDownLoader
         loader = MarkItDownLoader(self.file_path, category=self.category)
         docs = loader.load()
         return docs[0].page_content if docs else ""

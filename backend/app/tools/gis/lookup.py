@@ -69,7 +69,7 @@ _SYSTEM_DESCRIPTIONS: Dict[str, str] = {
 }
 
 # Map system keys (in _SYSTEM_PRIORITY) to lookup_code_name code_type values
-# (which are the keys in app.utils.code_lookup.NAME_BY_CODE).
+# (which are the keys in app.data.encodings.code_lookup.NAME_BY_CODE).
 _NAME_LOOKUP_TYPE: Dict[str, str] = {    "gbt21010": "dlbm",
     "appendix5": "ghytbm",
     "tugui": "dlbm",  # tugui uses similar code space
@@ -112,7 +112,7 @@ def decode_code(code: str) -> Dict[str, Any]:
         decode_code("R") -> {"code": "R", "detected_system": "zone_type_gbt50137", ...}
     """
     try:
-        from app.utils.code_lookup import NAME_BY_CODE
+        from app.data.encodings.code_lookup import NAME_BY_CODE
 
         if not code:
             return {

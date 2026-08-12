@@ -29,7 +29,7 @@ def spatial_quality_check(geometries: Iterable[Any]) -> SpatialQualityReport:
     """Validate/repair geometries with shapely make_valid and the area engine."""
     from shapely.geometry import shape
 
-    from app.utils.area_engine import calculate_area_ha
+    from app.spatial.model.area_engine import calculate_area_ha
 
     issues: list[str] = []
     checked = valid = invalid = repaired = empty = 0

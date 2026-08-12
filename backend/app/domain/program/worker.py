@@ -225,7 +225,7 @@ async def analyze_l3_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
     logger.info(f"[analyze_l3_dimension] {dim_key}: Prompt length = {len(prompt)} chars")
 
     # 5.5 统计收集 - 开始维度
-    from ...utils.stats_collector import StatsCollector
+    from app.infrastructure.llm.stats_collector import StatsCollector
     stats = StatsCollector.get_instance()
     stats.start_dimension(session_id, dim_key, dim_name, dim_layer)
     stats.record_prompt(session_id, dim_key, len(prompt))

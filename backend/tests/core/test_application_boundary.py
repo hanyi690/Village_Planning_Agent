@@ -45,7 +45,7 @@ def test_v1_transport_has_no_runtime_store_or_sse_dependencies() -> None:
         "app.services.runtime",
         "app.infrastructure.artifacts.runtime",
         "app.infrastructure.reports.report_store",
-        "app.utils.sse_publisher",
+        "app.infrastructure.events.sse_publisher",
     }
     transport_root = ROOT / "app" / "api" / "v1" / "routes"
     transport_files = sorted(transport_root.glob("*.py")) + [

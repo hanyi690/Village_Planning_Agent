@@ -913,7 +913,7 @@ class DataCatalog:
             return self._center_to_bbox(center, 5.0)
 
         # Step 2: POI search in county region
-        from app.utils.location_parser import parse_location_hierarchy
+        from app.data.model.location_parser import parse_location_hierarchy
         try:
             hierarchy = parse_location_hierarchy(village_name)
             county = hierarchy.get("county", "")

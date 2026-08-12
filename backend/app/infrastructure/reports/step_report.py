@@ -101,7 +101,7 @@ async def save_step_report(
         logger.info("[StepReport] saved %s/%s (%s)", session_id, stage, step_name)
         # P2: SSE 推送 step_report 事件（实时可见）
         try:
-            from app.utils.sse_publisher import SSEPublisher
+            from app.infrastructure.events.sse_publisher import SSEPublisher
 
             SSEPublisher.send_event(
                 session_id=session_id,

@@ -68,8 +68,8 @@ def _lookup_entity_name(kg, uri_or_str) -> str:
 
 
 # ── Write-on-read annotation helpers ──
-# v3.0: _ENTITY_TYPE_CN moved to app.utils.code_lookup.ENTITY_TYPE_CN
-from app.utils.code_lookup import ENTITY_TYPE_CN as _ENTITY_TYPE_CN
+# v3.0: _ENTITY_TYPE_CN moved to app.data.encodings.code_lookup.ENTITY_TYPE_CN
+from app.data.encodings.code_lookup import ENTITY_TYPE_CN as _ENTITY_TYPE_CN
 
 
 def _generate_entity_description(entity_type: str, attrs: Dict[str, str]) -> str:
@@ -163,8 +163,8 @@ def _ensure_entity_annotation(kg, uri_str: str, entity_type: str,
     ))
 
 
-# v3.0: _RELATION_PRED_CN moved to app.utils.code_lookup.RELATION_PRED_CN
-from app.utils.code_lookup import RELATION_PRED_CN as _RELATION_PRED_CN
+# v3.0: _RELATION_PRED_CN moved to app.data.encodings.code_lookup.RELATION_PRED_CN
+from app.data.encodings.code_lookup import RELATION_PRED_CN as _RELATION_PRED_CN
 
 
 def _generate_relation_description(pred_name: str, obj_uri_str: str, kg=None) -> str:
@@ -710,14 +710,14 @@ _LLM_DIRECTION_CN = {
 }
 
 # v3.0: _DLBM_TO_LANDUSE hardcoded dict removed.
-# Use app.utils.code_lookup.lookup_code_name("dlbm", dlbm) instead.
+# Use app.data.encodings.code_lookup.lookup_code_name("dlbm", dlbm) instead.
 def _dlbm_to_name(dlbm: str) -> str:
     """Return Chinese name for a DLBM code, or fallback "地类<code>" if not found.
 
     v3.0: replaced hardcoded 20-entry dict with unified lookup helper.
     The helper covers all ~80 gbt21010 codes via DLBM_TO_DLMC.
     """
-    from app.utils.code_lookup import lookup_code_name
+    from app.data.encodings.code_lookup import lookup_code_name
     return lookup_code_name("dlbm", dlbm) or f"地类{dlbm}"
 
 

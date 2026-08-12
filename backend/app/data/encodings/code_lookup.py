@@ -17,7 +17,7 @@ from __future__ import annotations
 
 from typing import Dict, Optional
 
-from app.data.encodings import code_sets as cs
+from . import code_sets as cs
 
 
 # ── 14 套 encoding 系统的 name_by_code 表 ──

@@ -250,7 +250,7 @@ def _build_residential_clusters(bundle: VillageBundle) -> ContextBlock:
 
         # Build GeoDataFrame from typed parcels for spatial clustering
         import geopandas as gpd
-        from app.utils.crs_engine import project_to_metric
+        from app.spatial.model.crs_engine import project_to_metric
 
         geoms = []
         dlbms = []
@@ -481,7 +481,7 @@ def _build_constraints(bundle: VillageBundle) -> ContextBlock:
 
     Uses typed polygon lists directly — no raw GeoJSON dict traversal.
     """
-    from app.utils.area_engine import calculate_area_ha
+    from app.spatial.model.area_engine import calculate_area_ha
     from shapely.geometry import shape
 
     pg = bundle.polygons

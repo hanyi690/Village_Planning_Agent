@@ -145,7 +145,7 @@ async def layer_completion_check(
         _phase_to_layer, get_layer_dimensions, get_next_phase,
         get_layer_name,
     )
-    from app.utils.sse_publisher import SSEPublisher
+    from app.infrastructure.events.sse_publisher import SSEPublisher
     from app.infrastructure.reports.report_store import ReportStore
 
     # 级联修订完成检测：检查所有修订波次是否完成
