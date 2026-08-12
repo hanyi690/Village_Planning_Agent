@@ -328,6 +328,48 @@ async def l3_aggregate(
         natural_language_description="L3 PLAN aggregated program from compiled dimension fragments.",
     )
 
+    # LLM-assisted closed-set classification: polygon/parcel targets get a
+    # planning land-use code from the authoritative appendix5 set as part of
+    # L3 planning (auditable, evidence-backed), so EXECUTE does not need an
+    # interactive HUMAN decision for every parcel/polygon output.  The codes
+    # remain subject to VALIDATE; nothing is inferred from current dlbm.
+    try:
+        from app.domain.program.classification import (
+            apply_classification_decisions,
+            classification_review_targets,
+        )
+        from app.domain.program.classification_generator import (
+            generate_classification_decisions,
+        )
+
+        pending = classification_review_targets(program)
+        if pending:
+            decisions = await generate_classification_decisions(program)
+            if decisions:
+                revised, _ = apply_classification_decisions(
+                    program,
+                    [decision.model_dump(mode="json") for decision in decisions],
+                )
+                program = revised
+                artifact_id = f"l3-{run_id}-{branch_id}-{semantic_checksum(program)[:16]}"
+                program.artifact_id = artifact_id
+                program.provenance = Provenance(
+                    source="l3_plan",
+                    run_id=run_id,
+                    module="l3_plan",
+                    trace=[f"aggregate:{artifact_id}"],
+                    natural_language_description=(
+                        "L3 PLAN aggregated program from compiled dimension fragments "
+                        "(LLM classification revision)."
+                    ),
+                )
+                logger.info(
+                    "[l3_aggregate] applied %d LLM classification decisions",
+                    len(decisions),
+                )
+    except Exception as exc:
+        logger.warning("[l3_aggregate] LLM classification generation failed: %s", exc)
+
     ref = ArtifactDescriptor.model_validate(
         store_artifact(
             state,
