@@ -14,7 +14,7 @@ from app.contracts.spatial.context_contracts import (
     ResidentialClusterAnchor,
     SpatialRelation,
 )
-from app.utils.logger import get_logger
+from app.infrastructure.logging import get_logger
 
 logger = get_logger(__name__)
 

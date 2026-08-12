@@ -21,7 +21,7 @@ from typing import Any, Dict, List, Optional
 
 from rdflib import RDF, Literal, URIRef
 
-from app.utils.logger import get_logger
+from app.infrastructure.logging import get_logger
 from ..ontology import (
     PLN, EntityTypes, Relations, SemanticPredicates, GeoPredicates,
     GEOMETRY_POLYGON,

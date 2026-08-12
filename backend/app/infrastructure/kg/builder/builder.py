@@ -10,7 +10,7 @@ from __future__ import annotations
 import sys
 from typing import Any, Optional
 
-from app.utils.logger import get_logger
+from app.infrastructure.logging import get_logger
 from ..ontology import PLN, GEO, EntityTypes, Relations, SemanticPredicates
 from ..memory import SemanticMemoryStore
 from .registry import BuildContext, _ordered_builders, _get_bundle_features

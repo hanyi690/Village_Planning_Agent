@@ -12,7 +12,7 @@ from typing import Any
 
 import requests
 
-from app.utils.logger import get_logger
+from app.infrastructure.logging import get_logger
 
 from .base import Connection
 from .rate_limiter import RateLimiter

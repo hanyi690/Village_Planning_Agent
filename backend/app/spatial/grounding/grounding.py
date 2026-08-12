@@ -11,7 +11,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Set, Tuple
 
-from app.utils.logger import get_logger
+from app.infrastructure.logging import get_logger
 
 logger = get_logger(__name__)
 

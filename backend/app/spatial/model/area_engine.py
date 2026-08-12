@@ -14,7 +14,7 @@ from __future__ import annotations
 import math
 from typing import Any, List, Optional, Sequence
 
-from app.utils.logger import get_logger
+from app.infrastructure.logging import get_logger
 
 logger = get_logger(__name__)
 

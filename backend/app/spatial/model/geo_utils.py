@@ -11,7 +11,7 @@ from shapely.geometry import mapping
 from shapely.ops import unary_union
 from shapely.validation import make_valid
 
-from app.utils.logger import get_logger
+from app.infrastructure.logging import get_logger
 
 logger = get_logger(__name__)
 

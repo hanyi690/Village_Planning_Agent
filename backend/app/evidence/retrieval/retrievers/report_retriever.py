@@ -9,7 +9,7 @@ from app.contracts.evidence.evidence_contracts import (
     EvidenceSource,
 )
 from app.infrastructure.reports.report_store import ReportStore
-from app.utils.logger import get_logger
+from app.infrastructure.logging import get_logger
 
 logger = get_logger(__name__)
 

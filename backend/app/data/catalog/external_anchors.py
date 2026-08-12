@@ -27,7 +27,7 @@ from enum import Enum
 from typing import Any, Dict, List, Optional, Tuple
 
 from app.spatial.model.coord_transform import gcj02_to_wgs84
-from app.utils.logger import get_logger
+from app.infrastructure.logging import get_logger
 
 logger = get_logger(__name__)
 

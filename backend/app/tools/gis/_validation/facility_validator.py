@@ -9,7 +9,7 @@ and ecological protection zone identification.
 """
 
 from typing import Dict, Any, List, Optional, Tuple, Literal
-from app.utils.logger import get_logger
+from app.infrastructure.logging import get_logger
 from app.spatial.model.geo_utils import haversine_distance
 from app.spatial.model.geojson_utils import geojson_to_geodataframe, GEOPANDAS_AVAILABLE
 

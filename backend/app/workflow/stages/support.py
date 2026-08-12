@@ -8,7 +8,7 @@ from typing import Any, Dict, List
 
 from app.contracts.artifacts.artifact_descriptor import ArtifactDescriptor
 from app.contracts.workflow.workflow_contracts import GateDecision
-from app.utils.logger import get_logger
+from app.infrastructure.logging import get_logger
 from app.workflow.stage_adapter import StageCompletion, persist_gate_decision
 
 logger = get_logger(__name__)

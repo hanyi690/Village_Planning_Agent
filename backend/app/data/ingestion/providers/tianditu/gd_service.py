@@ -29,7 +29,7 @@ from app.core.settings import (
     GD_TIANDITU_TOKEN,
     GD_TIANDITU_BASE_URL as CONFIG_GD_BASE_URL,
 )
-from app.utils.logger import get_logger
+from app.infrastructure.logging import get_logger
 
 logger = get_logger(__name__)
 

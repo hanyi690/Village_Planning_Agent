@@ -55,7 +55,7 @@ from app.data.model.spatial_types import (
     YDYHFL,
     VNE,
 )
-from app.utils.logger import get_logger
+from app.infrastructure.logging import get_logger
 
 from .contracts import DataResult
 

@@ -12,7 +12,7 @@ below 0.03% within each 3-degree zone.
 import math
 from typing import Optional, Tuple
 
-from app.utils.logger import get_logger
+from app.infrastructure.logging import get_logger
 
 logger = get_logger(__name__)
 

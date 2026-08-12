@@ -8,7 +8,7 @@ This module contains NO TBox declarations - those stay in ontology.py.
 """
 from typing import Any, Dict, List
 
-from app.utils.logger import get_logger
+from app.infrastructure.logging import get_logger
 
 logger = get_logger(__name__)
 

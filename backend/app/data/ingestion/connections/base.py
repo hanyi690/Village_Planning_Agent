@@ -20,7 +20,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from typing import Any, Optional
 
-from app.utils.logger import get_logger
+from app.infrastructure.logging import get_logger
 
 from .rate_limiter import RateLimiter
 

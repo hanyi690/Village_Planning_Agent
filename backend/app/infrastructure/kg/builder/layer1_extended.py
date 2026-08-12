@@ -12,7 +12,7 @@ from ..ontology import (
 from .enrichment import derive_semantic_label, derive_legal_constraint
 from .geo_helpers import add_centroid, add_bbox, add_geo_feature_type
 
-from app.utils.logger import get_logger
+from app.infrastructure.logging import get_logger
 
 logger = get_logger(__name__)
 

@@ -41,7 +41,7 @@
 ## 依赖方向
 
 ```
-connections/ → app.core.settings（凭证）、app.utils.logger
+connections/ → app.core.settings（凭证）、app.infrastructure.logging
    ▲ 被 data/sources（驱动）与 data/catalog 消费
 ```
 

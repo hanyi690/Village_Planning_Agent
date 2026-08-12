@@ -28,7 +28,7 @@ from app.spatial.network import (
     build_road_network,
     run_stage4_road_planning,
 )
-from app.utils.logger import get_logger
+from app.infrastructure.logging import get_logger
 
 
 logger = get_logger(__name__)

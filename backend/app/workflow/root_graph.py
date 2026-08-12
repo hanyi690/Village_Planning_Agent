@@ -49,7 +49,7 @@ from app.contracts.workflow.human_interrupt_contracts import (
     stable_human_interrupt_id,
 )
 
-from app.utils.logger import get_logger
+from app.infrastructure.logging import get_logger
 logger = get_logger(__name__)
 
 END_DIAGNOSTIC = "end_diagnostic"

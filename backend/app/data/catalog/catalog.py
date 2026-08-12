@@ -23,7 +23,7 @@ from typing import Any, Dict, List, Optional, Tuple
 import yaml
 
 from app.data.model.canonical import BBox, VillageBundle, VillageMetadata
-from app.utils.logger import get_logger
+from app.infrastructure.logging import get_logger
 
 from app.data.ingestion.contracts import DataResult, DataSourceMetadata
 from app.data.ingestion.sources import DataSourceDriver, DriverRegistry

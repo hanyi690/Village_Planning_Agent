@@ -27,7 +27,7 @@ from app.core.settings import (
     BACKEND_STARTUP_TIMEOUT_SECONDS, LOG_LEVEL, LOG_DIR, LOG_FILE_MAX_BYTES,
     LOG_FILE_BACKUP_COUNT, LOG_RETENTION_DAYS, PROJECT_ROOT, IS_PRODUCTION,
 )
-from app.utils.logger import SessionFilter
+from app.infrastructure.logging import SessionFilter
 
 
 def _select_log_dir() -> Path:
@@ -155,7 +155,7 @@ app.add_middleware(
 
 # Session ID injection middleware — extracts session_id from URL path
 # so all downstream log records carry it automatically
-from app.utils.logger import set_session_id as _set_session_id
+from app.infrastructure.logging import set_session_id as _set_session_id
 from starlette.requests import Request
 from starlette.responses import Response
 
@@ -167,7 +167,7 @@ async def session_id_middleware(request: Request, call_next):
     import re
     m = re.search(r"/api/v1/sessions/([^/]+)", path)
     sid = m.group(1) if m else ""
-    from app.utils.logger import set_session_id, reset_session_id
+    from app.infrastructure.logging import set_session_id, reset_session_id
     token = set_session_id(sid)
     try:
         response: Response = await call_next(request)

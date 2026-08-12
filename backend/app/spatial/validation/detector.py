@@ -18,7 +18,7 @@ import math
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
 
-from app.utils.logger import get_logger
+from app.infrastructure.logging import get_logger
 from app.infrastructure.rendering.colors import ZONE_TYPE_COLORS
 from app.data.ingestion.semantics import (
     CROSS_DIMENSION_METRICS,

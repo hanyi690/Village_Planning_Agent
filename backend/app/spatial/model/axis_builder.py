@@ -21,7 +21,7 @@ def _valid_coord(x: float, y: float) -> bool:
     """Return True if both coordinates are finite numbers."""
     return not (math.isinf(x) or math.isnan(x) or math.isinf(y) or math.isnan(y))
 
-from app.utils.logger import get_logger
+from app.infrastructure.logging import get_logger
 from .crs_engine import project_to_metric, project_to_wgs84, get_metric_crs
 from .area_engine import calculate_area_ha
 from .geo_utils import safe_geo_series_union

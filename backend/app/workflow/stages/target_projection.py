@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, List
 
-from app.utils.logger import get_logger
+from app.infrastructure.logging import get_logger
 from app.workflow.stage_adapter import persist_stage_artifact
 from app.workflow.stages.support import (
     _adopt_context,

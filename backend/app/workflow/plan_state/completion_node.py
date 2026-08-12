@@ -14,7 +14,7 @@ Migrated from agent/completion/node.py per docs/architecture/agent-graph.md §5.
 from typing import Any, Dict, Optional
 
 from langgraph.types import interrupt
-from app.utils.logger import get_logger
+from app.infrastructure.logging import get_logger
 from app.contracts.workflow.human_interrupt_contracts import (
     HumanInterruptChannel,
     build_human_interrupt,

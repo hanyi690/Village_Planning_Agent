@@ -23,7 +23,7 @@ from app.workflow.layers.phase_machine import _phase_to_layer, get_next_phase
 from app.domain.assessment.analysis_node import analyze_dimension
 from app.domain.objectives.worker import analyze_l2_dimension
 from app.domain.program.worker import analyze_l3_dimension
-from app.utils.logger import get_logger
+from app.infrastructure.logging import get_logger
 
 logger = get_logger(__name__)
 

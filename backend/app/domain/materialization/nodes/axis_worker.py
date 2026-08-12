@@ -5,7 +5,7 @@ from __future__ import annotations
 from app.domain.materialization.execute_state import ExecuteAgentState
 from app.domain.materialization.nodes.worker_common import _execution_intent_from_plan, _intent_list, _task_enabled, _task_execution_result
 from app.contracts.workflow.execution_plan_contracts import WorkerResult
-from app.utils.logger import get_logger
+from app.infrastructure.logging import get_logger
 
 logger = get_logger(__name__)
 

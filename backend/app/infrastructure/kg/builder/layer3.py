@@ -13,7 +13,7 @@ from typing import Any
 from rdflib import Literal, RDF
 from rdflib.namespace import XSD
 
-from app.utils.logger import get_logger
+from app.infrastructure.logging import get_logger
 from ..ontology import PLN, EntityTypes, EntityIdPolicy
 from ..memory import EntityAnnotation
 

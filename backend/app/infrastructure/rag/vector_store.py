@@ -20,7 +20,7 @@ from app.core.settings import (
     DASHSCOPE_API_KEY, OUTLINE_INDEX_DIR,
     RETRIEVE_SCORE_THRESHOLD, MAX_MERGE_CONTENT_LENGTH,
 )
-from app.utils.logger import get_logger
+from app.infrastructure.logging import get_logger
 
 logger = get_logger(__name__)
 

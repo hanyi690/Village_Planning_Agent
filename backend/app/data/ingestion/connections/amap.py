@@ -17,7 +17,7 @@ from app.core.settings import (
     AMAP_RATE_LIMIT,
     GIS_TIMEOUT,
 )
-from app.utils.logger import get_logger
+from app.infrastructure.logging import get_logger
 
 from .base import Connection
 from .rate_limiter import RateLimiter

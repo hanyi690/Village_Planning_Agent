@@ -15,7 +15,7 @@ from typing import Any, Dict, List, Optional, Set
 
 from rdflib import RDF as RDF_TERM, Literal, URIRef
 
-from app.utils.logger import get_logger
+from app.infrastructure.logging import get_logger
 from ..memory import EntityAnnotation, RelationAnnotation
 
 logger = get_logger(__name__)

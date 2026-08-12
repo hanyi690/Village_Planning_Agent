@@ -7,7 +7,7 @@ GeoJSON Utilities - GeoJSON 转换工具函数
 import json
 from typing import Dict, Any, Optional, List
 
-from app.utils.logger import get_logger
+from app.infrastructure.logging import get_logger
 
 logger = get_logger(__name__)
 
@@ -205,7 +205,7 @@ def build_parcel_index(
         Tuple of (parcel_db: dict, duplicate_bsms: set)
         parcel_db maps composite_key -> {area_ha, dlbm, bsm_bare, current_zone, feature}
     """
-    from app.utils.logger import get_logger as _get_logger
+    from app.infrastructure.logging import get_logger as _get_logger
     _logger = _get_logger(__name__)
 
     features = landuse_geojson.get("features", [])

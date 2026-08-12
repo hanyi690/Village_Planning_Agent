@@ -14,7 +14,7 @@ from rdflib import Literal, RDF, URIRef
 from .registry import kg_builder, BuildContext
 from rdflib.namespace import XSD
 
-from app.utils.logger import get_logger
+from app.infrastructure.logging import get_logger
 from ..ontology import (
     PLN, PLN_NS, EntityTypes, Relations, EntityIdPolicy, SemanticPredicates,
     ProvenancePredicates,

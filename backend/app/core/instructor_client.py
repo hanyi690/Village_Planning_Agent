@@ -8,7 +8,7 @@ LangChain with_structured_output approach with stronger schema guarantees.
 import instructor
 from openai import OpenAI
 
-from app.utils.logger import get_logger
+from app.infrastructure.logging import get_logger
 
 logger = get_logger(__name__)
 

@@ -15,7 +15,7 @@ from app.domain.materialization.nodes.worker_common import (
 )
 from app.contracts.workflow.execution_plan_contracts import WorkerResult
 from app.contracts.spatial.parcel_change_contracts import ParcelChange
-from app.utils.logger import get_logger
+from app.infrastructure.logging import get_logger
 
 logger = get_logger(__name__)
 

@@ -22,7 +22,7 @@ from dataclasses import dataclass
 
 from langchain_core.documents import Document
 
-from app.utils.logger import get_logger
+from app.infrastructure.logging import get_logger
 from app.core.llm import create_flash_llm
 from app.core.settings import (
     CHROMA_COLLECTION_NAME,

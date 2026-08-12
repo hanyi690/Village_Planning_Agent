@@ -10,7 +10,7 @@ from app.contracts.evidence.evidence_contracts import (
 from app.tools.access.shared import session_kg
 from app.infrastructure.kg.queries.cognition import get_village_cognition
 from app.infrastructure.kg.queries.sparql import query_kg
-from app.utils.logger import get_logger
+from app.infrastructure.logging import get_logger
 
 logger = get_logger(__name__)
 

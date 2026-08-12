@@ -12,7 +12,7 @@ from langchain_core.tools import tool
 from langchain_core.messages import HumanMessage, SystemMessage
 from pydantic import BaseModel
 
-from app.utils.logger import get_logger
+from app.infrastructure.logging import get_logger
 from app.tools.helpers import make_result
 
 logger = get_logger(__name__)

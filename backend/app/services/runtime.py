@@ -724,7 +724,7 @@ class PlanningRuntimeService:
         branch_id: Optional[str] = None,
     ) -> None:
         """Internal execution method called within the session lock."""
-        from app.utils.logger import set_session_id as _set_sid
+        from app.infrastructure.logging import set_session_id as _set_sid
         _set_sid(session_id)
         # Wait for SSE subscriber to connect before starting execution
         # This prevents early dimension_delta events from being lost

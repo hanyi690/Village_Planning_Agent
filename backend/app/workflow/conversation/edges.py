@@ -22,7 +22,7 @@ from app.workflow.state import load_root_gate
 from app.config import get_dimension_layer
 from app.config.dependency import compute_impact_tree, get_next_revision_wave
 from app.tools.intent_tools import advance_planning_intent, gis_analysis
-from app.utils.logger import get_logger
+from app.infrastructure.logging import get_logger
 
 
 logger = get_logger(__name__)

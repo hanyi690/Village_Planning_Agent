@@ -16,7 +16,7 @@ from pathlib import Path
 from rdflib import Literal, RDF, URIRef
 from rdflib.namespace import XSD
 
-from app.utils.logger import get_logger
+from app.infrastructure.logging import get_logger
 from ..ontology import PLN, EntityTypes, EntityIdPolicy
 from app.contracts.spatial.planned_state_contracts import (
     PlannedAxis,

@@ -14,7 +14,7 @@ from typing import Any, Dict, List, Optional
 
 from rdflib import Literal, RDF, URIRef
 
-from app.utils.logger import get_logger
+from app.infrastructure.logging import get_logger
 from ..ontology import PLN, PLN_NS, EntityTypes, Relations
 from app.contracts.spatial.spatial_reference_contracts import (
     CandidateSet, SpatialReferenceSpec, RefObject,

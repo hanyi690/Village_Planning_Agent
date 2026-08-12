@@ -19,7 +19,7 @@ from app.contracts.workflow.parsing_contracts import CompilationProfile
 from app.contracts.artifacts.provenance import Provenance
 from app.infrastructure.artifacts.fingerprint import semantic_checksum
 from app.infrastructure.reports.review_package import write_review_package
-from app.utils.logger import get_logger
+from app.infrastructure.logging import get_logger
 
 from .gate import evaluate_l2_gate
 from .review import build_l2_review_package

@@ -17,7 +17,7 @@ from langchain_core.messages import ToolMessage
 from langgraph.prebuilt import InjectedState
 from langgraph.types import Command
 
-from app.utils.logger import get_logger
+from app.infrastructure.logging import get_logger
 
 logger = get_logger(__name__)
 

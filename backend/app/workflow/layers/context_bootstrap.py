@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Any, Dict
 
 from app.services.context.planning_context import build_planning_context
-from app.utils.logger import get_logger
+from app.infrastructure.logging import get_logger
 
 logger = get_logger(__name__)
 

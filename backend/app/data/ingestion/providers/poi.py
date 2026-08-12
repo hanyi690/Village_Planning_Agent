@@ -11,7 +11,7 @@ from typing import Dict, Any, Tuple, Optional, List
 from .amap.provider import AmapProvider
 from .amap.constants import POI_TYPES_PUBLIC_SERVICE
 from .tianditu.provider import TiandituProvider
-from app.utils.logger import get_logger
+from app.infrastructure.logging import get_logger
 
 logger = get_logger(__name__)
 

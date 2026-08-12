@@ -16,7 +16,7 @@ from app.contracts.evidence.evidence_contracts import (
     ExplorationResult,
     SpatialCognitionEvidence,
 )
-from app.utils.logger import get_logger
+from app.infrastructure.logging import get_logger
 
 logger = get_logger(__name__)
 _EVIDENCE_CACHE: dict[tuple, ExplorationResult] = {}

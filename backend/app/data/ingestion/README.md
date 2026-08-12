@@ -1,7 +1,7 @@
 # Parsing 模块 — 确定性 + LLM 文本提取工具层
 
 > **定位**: 规划文本/表格/报告的结构化提取工具集，被 L1/L2 report projection、`report_store`、KG enrichment 与 `data/catalog` 消费
-> **依赖**: `parsing → schema.contracts`；`app.core.settings`；`app.utils.logger`；`app.data.ingestion.providers.tianditu`（gazetteer 惰性导入）；`app.modules.schema.encodings.code_sets`（table_schema_inference）
+> **依赖**: `parsing → schema.contracts`；`app.core.settings`；`app.infrastructure.logging`；`app.data.ingestion.providers.tianditu`（gazetteer 惰性导入）；`app.modules.schema.encodings.code_sets`（table_schema_inference）
 > **空间计算禁令**: 本模块不做任何空间计算（BBox / 距离 / 面积 / 过滤），所有空间计算由 `spatial_ops/` 完成
 > **Updated: 2026-08-03**
 
@@ -153,7 +153,7 @@ parse_summary(summary, dimension_key="", layer=1) -> Dict[str, Any]
 
 ## 四、依赖
 
-- **内部**: `app.core.settings`（`GIS_DATA_DIR`）；`app.utils.logger`；`app.contracts.workflow.parse_contracts`（SpatialPreference/ZoneTarget/FacilityTarget/PlanningIndicatorTable/SpatialConstraint）；`app.contracts.artifacts.provenance`（SemanticMetadata）；`app.data.ingestion.providers.tianditu`（TiandituProvider，惰性）；`app.modules.schema.encodings.code_sets`（GHYTBM_TO_VNE）；`app.agent.gis.parse.agent`（`_direction_from_location`，**反向依赖，技术债**）
+- **内部**: `app.core.settings`（`GIS_DATA_DIR`）；`app.infrastructure.logging`；`app.contracts.workflow.parse_contracts`（SpatialPreference/ZoneTarget/FacilityTarget/PlanningIndicatorTable/SpatialConstraint）；`app.contracts.artifacts.provenance`（SemanticMetadata）；`app.data.ingestion.providers.tianditu`（TiandituProvider，惰性）；`app.modules.schema.encodings.code_sets`（GHYTBM_TO_VNE）；`app.agent.gis.parse.agent`（`_direction_from_location`，**反向依赖，技术债**）
 - **外部**: `pydantic>=2.12`；stdlib（re/csv/gzip/json/math/pathlib/dataclasses/enum/typing）
 - **零空间计算依赖**：不导入 geopandas/shapely（设计使然）
 

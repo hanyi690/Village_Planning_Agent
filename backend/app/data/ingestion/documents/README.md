@@ -37,7 +37,7 @@
 ## 依赖方向
 
 ```
-documents/ → app.utils.logger 等
+documents/ → app.infrastructure.logging 等
    ▲ 被 PARSE/PLAN 管线与 report 消费方调用
 ```
 

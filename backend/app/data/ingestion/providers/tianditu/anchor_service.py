@@ -18,7 +18,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from app.data.ingestion.providers.tianditu.wfs import WfsService
 from app.data.catalog.dedup import SimpleCache
-from app.utils.logger import get_logger
+from app.infrastructure.logging import get_logger
 
 logger = get_logger(__name__)
 

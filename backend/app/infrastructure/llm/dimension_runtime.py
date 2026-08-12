@@ -24,7 +24,7 @@ from typing import Any, Dict, List, Optional
 
 from app.config import get_dimension_layer
 from app.core.events import SSEEventType
-from app.utils.logger import get_logger
+from app.infrastructure.logging import get_logger
 
 logger = get_logger(__name__)
 

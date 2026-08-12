@@ -9,7 +9,7 @@ from app.core.settings import GIS_TIMEOUT
 from app.domain.allocation import build_portfolio_decision
 from app.domain.demand import derive_demand_portfolio
 from app.domain.suitability import build_suitability_surface
-from app.utils.logger import get_logger
+from app.infrastructure.logging import get_logger
 from app.workflow.stage_adapter import persist_stage_artifact
 from app.workflow.stages.support import (
     _adopt_context,

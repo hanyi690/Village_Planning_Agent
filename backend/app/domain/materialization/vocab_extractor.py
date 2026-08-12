@@ -22,7 +22,7 @@ from app.contracts.domain.custom_zone_contracts import (
     VocabularyCategory,
 )
 from app.data.encodings.dicts.vocabularies.loader import register_vocabulary
-from app.utils.logger import get_logger
+from app.infrastructure.logging import get_logger
 
 logger = get_logger(__name__)
 

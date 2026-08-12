@@ -49,7 +49,7 @@ from app.domain.materialization.nodes import (
     _zone_worker_node,
 )
 from app.domain.materialization.nodes.worker_common import _build_parcel_by_bsm
-from app.utils.logger import get_logger
+from app.infrastructure.logging import get_logger
 
 logger = get_logger(__name__)
 

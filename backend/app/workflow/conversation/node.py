@@ -14,7 +14,7 @@ from typing import Dict, Any, Optional, TYPE_CHECKING
 
 from app.core.settings import LLM_MODEL, MAX_TOKENS
 from app.core.llm import create_llm
-from app.utils.logger import get_logger
+from app.infrastructure.logging import get_logger
 from app.workflow.layers.phase_machine import PlanningPhase, PHASE_DESCRIPTIONS
 
 if TYPE_CHECKING:

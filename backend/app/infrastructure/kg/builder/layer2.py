@@ -4,7 +4,7 @@ All functions are module-level, operating on a PlanningKG instance passed as `kg
 
 v5.0: Relation quantitative attributes moved to SemanticMemoryStore.
 """
-from app.utils.logger import get_logger
+from app.infrastructure.logging import get_logger
 from ..ontology import PLN, PLN_NS, GEO, EntityTypes, Relations, SemanticPredicates, GeoPredicates
 from ..memory import RelationAnnotation
 from .geo_helpers import parse_wkt_point, add_centroid, add_geo_feature_type

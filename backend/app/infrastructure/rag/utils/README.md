@@ -31,7 +31,7 @@
 ## 依赖方向
 
 ```
-rag/utils/ → app.utils.document_loader、app.core.settings、app.utils.logger
+rag/utils/ → app.utils.document_loader、app.core.settings、app.infrastructure.logging
    ▲ 被 rag 模块（service）消费
 ```
 

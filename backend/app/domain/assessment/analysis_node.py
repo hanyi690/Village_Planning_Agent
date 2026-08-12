@@ -20,7 +20,7 @@ from app.config import get_dimension_config, get_dimension_layer, list_dimension
 from app.core.llm import create_llm
 from app.core.settings import MAX_TOKENS, LLM_STREAM_TIMEOUT, BACKGROUND_SUMMARY_ENRICHMENT
 from app.core.events import SSEEventType
-from app.utils.logger import get_logger
+from app.infrastructure.logging import get_logger
 from app.evidence.retrieval.evidence_service import retrieve_evidence, render_evidence_prompt_section
 from app.contracts.evidence.evidence_contracts import ExplorationRequest
 from app.infrastructure.llm.dimension_runtime import (

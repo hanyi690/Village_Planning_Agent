@@ -23,7 +23,7 @@ from langchain_core.messages import AIMessage
 from app.config import get_dimension_config
 from app.core.events import SSEEventType
 from app.core.settings import LLM_STREAM_TIMEOUT
-from app.utils.logger import get_logger
+from app.infrastructure.logging import get_logger
 from app.infrastructure.llm.dimension_runtime import (
     enrich_summary_background,
     generate_summary,

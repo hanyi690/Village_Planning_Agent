@@ -27,7 +27,7 @@ from app.core.settings import (
     AMAP_MAX_RETRIES,
     GIS_TIMEOUT,
 )
-from app.utils.logger import get_logger
+from app.infrastructure.logging import get_logger
 
 logger = get_logger(__name__)
 
