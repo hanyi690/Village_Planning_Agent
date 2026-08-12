@@ -41,7 +41,7 @@ from app.infrastructure.llm.dimension_runtime import (
     save_step_report,
     strip_model_reasoning,
 )
-from app.agent.explore.service import retrieve_evidence, render_evidence_prompt_section
+from app.evidence.retrieval.evidence_service import retrieve_evidence, render_evidence_prompt_section
 from app.modules.prompts.concept import get_dimension_prompt as get_layer2_prompt
 from app.modules.schema.contracts.evidence_contracts import ExplorationRequest
 from app.services.task_supervisor import build_summary_task_key

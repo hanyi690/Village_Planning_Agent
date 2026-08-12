@@ -3,7 +3,7 @@ import pytest
 
 @pytest.mark.asyncio
 async def test_instruction_rows_keep_fields_and_source_evidence(monkeypatch):
-    from app.agent.explore.retrievers import instruction_retriever as module
+    from app.evidence.retrieval.retrievers import instruction_retriever as module
 
     class FakeStore:
         async def get_layer_reports_with_sources(self, _session_id, layer):
@@ -27,7 +27,7 @@ async def test_instruction_rows_keep_fields_and_source_evidence(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_unstructured_instruction_is_not_high_confidence(monkeypatch):
-    from app.agent.explore.retrievers import instruction_retriever as module
+    from app.evidence.retrieval.retrievers import instruction_retriever as module
 
     class FakeStore:
         async def get_layer_reports_with_sources(self, _session_id, layer):

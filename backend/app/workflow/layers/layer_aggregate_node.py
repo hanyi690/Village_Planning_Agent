@@ -66,7 +66,7 @@ async def layer_aggregate_node(state: Dict[str, Any]) -> Dict[str, Any]:
         )
 
     if layer == 1:
-        from app.agent.l1_observe.aggregate import l1_aggregate
+        from app.domain.assessment.aggregate import l1_aggregate
 
         patch = await l1_aggregate(aggregate_state)
         if aggregate_state is not state:
@@ -85,7 +85,7 @@ async def layer_aggregate_node(state: Dict[str, Any]) -> Dict[str, Any]:
         return patch
 
     if layer == 2:
-        from app.agent.l2_strategize.aggregate import l2_aggregate
+        from app.domain.objectives.aggregate import l2_aggregate
 
         patch = await l2_aggregate(aggregate_state)
         if aggregate_state is not state:
@@ -102,7 +102,7 @@ async def layer_aggregate_node(state: Dict[str, Any]) -> Dict[str, Any]:
         return patch
 
     if layer == 3:
-        from app.agent.l3_plan.aggregate import l3_aggregate
+        from app.domain.program.aggregate import l3_aggregate
 
         patch = await l3_aggregate(aggregate_state)
         if aggregate_state is not state:

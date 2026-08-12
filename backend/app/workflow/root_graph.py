@@ -5,7 +5,7 @@ from langgraph.graph import StateGraph, END, START
 from langchain_core.messages import HumanMessage
 
 from app.workflow.layers.phase_machine import PlanningPhase, get_layer_dimensions
-from app.agent.l1_observe import analyze_dimension, DIMENSION_NAMES
+from app.domain.assessment.analysis_node import analyze_dimension, DIMENSION_NAMES
 from app.workflow.plan_state.completion_node import layer_completion_check
 from app.workflow.layers.layer_aggregate_node import layer_aggregate_node
 from app.workflow.layers.layer_router import (
@@ -121,7 +121,7 @@ def _authorize_command(state: Dict[str, Any], source_stage: str, command):
 
 async def execute_tools_node(state: Dict[str, Any]) -> Dict[str, Any]:
     """Load tool/model registrations only when a tool stage is executed."""
-    from app.agent.tools import execute_tools_node as _execute_tools_node
+    from app.workflow.tools.execute_node import execute_tools_node as _execute_tools_node
     return await _execute_tools_node(state)
 
 
@@ -603,7 +603,7 @@ def create_unified_planning_graph(checkpointer=None) -> StateGraph:
     reconcile/deliver/human_review），L3 gate PASS 后经 advance_phase 自动进入
     target projection，不再依赖 gis_agent 黑盒节点。
     """
-    from app.agent.conversation_router import after_conversation, after_analysis, conversation_node
+    from app.workflow.conversation import after_conversation, after_analysis, conversation_node
 
     logger.info("[图构建] 构建规划图")
     builder = StateGraph(WorkflowState)

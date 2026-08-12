@@ -214,7 +214,7 @@ async def l1_aggregate(
     kg_facts: list[str] = []
     kg_source_refs: list[str] = []
     try:
-        from app.agent.explore.service import retrieve_evidence
+        from app.evidence.retrieval.evidence_service import retrieve_evidence
         from app.modules.schema.contracts.evidence_contracts import ExplorationRequest
 
         evidence = await retrieve_evidence(

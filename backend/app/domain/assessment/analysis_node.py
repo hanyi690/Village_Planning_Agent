@@ -21,7 +21,7 @@ from app.core.llm import create_llm
 from app.core.settings import MAX_TOKENS, LLM_STREAM_TIMEOUT, BACKGROUND_SUMMARY_ENRICHMENT
 from app.core.events import SSEEventType
 from app.utils.logger import get_logger
-from app.agent.explore.service import retrieve_evidence, render_evidence_prompt_section
+from app.evidence.retrieval.evidence_service import retrieve_evidence, render_evidence_prompt_section
 from app.modules.schema.contracts.evidence_contracts import ExplorationRequest
 from app.infrastructure.llm.dimension_runtime import (
     enrich_summary_background,
@@ -164,8 +164,8 @@ async def analyze_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
     # 5. DataPipeline: execute tools and format professional data
     professional_data_section = ""
     try:
-        from app.agent.l1_observe.pipeline import DataPipeline
-        from app.agent.l1_observe.formatters import generate_professional_data_section
+        from app.domain.assessment.pipeline import DataPipeline
+        from app.domain.assessment.formatters import generate_professional_data_section
         pipeline = DataPipeline()
 
         # Only load dependency data if dimension has tools configured

@@ -25,7 +25,7 @@ import re
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional
 
-from app.agent.explore.contracts import (
+from app.evidence.retrieval.contracts import (
     ExplorationInstruction,
     ExplorationInstructionCollection,
 )

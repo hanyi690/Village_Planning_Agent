@@ -47,10 +47,10 @@ async def retrieve_evidence(
         logger.debug("[retrieve_evidence] cache hit session=%s dimension=%s stage=%s", session_id, request.dimension_key, request.stage)
         return cached
 
-    from app.agent.explore.retrievers.report_retriever import retrieve_from_reports
-    from app.agent.explore.retrievers.kg_retriever import retrieve_from_kg
-    from app.agent.explore.retrievers.bundle_retriever import retrieve_from_bundle
-    from app.agent.explore.retrievers.instruction_retriever import retrieve_from_instructions
+    from app.evidence.retrieval.retrievers.report_retriever import retrieve_from_reports
+    from app.evidence.retrieval.retrievers.kg_retriever import retrieve_from_kg
+    from app.evidence.retrieval.retrievers.bundle_retriever import retrieve_from_bundle
+    from app.evidence.retrieval.retrievers.instruction_retriever import retrieve_from_instructions
 
     all_facts: List[EvidenceFact] = []
     all_sources: List[EvidenceSource] = []
