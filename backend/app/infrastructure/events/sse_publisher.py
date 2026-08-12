@@ -12,7 +12,7 @@ SSE 事件发布器
 from typing import Dict, Any, Optional, Callable, List
 from datetime import datetime
 
-from app.core.events import SSEEventType
+from app.contracts.events import SSEEventType
 from app.infrastructure.logging import get_logger
 from .sse_events import (
     GisResultEvent, GisLayerUpdateEvent, GISLayerConfig,

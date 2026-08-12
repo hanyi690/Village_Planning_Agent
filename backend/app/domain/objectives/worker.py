@@ -21,8 +21,8 @@ from typing import Any, Dict, Optional
 from langchain_core.messages import AIMessage
 
 from app.config import get_dimension_config
-from app.core.events import SSEEventType
-from app.core.llm import create_llm
+from app.contracts.events import SSEEventType
+from app.infrastructure.llm.factory import create_llm
 from app.core.settings import MAX_TOKENS, LLM_STREAM_TIMEOUT
 from app.infrastructure.logging import get_logger
 from app.infrastructure.llm.dimension_runtime import (

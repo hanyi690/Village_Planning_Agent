@@ -21,7 +21,7 @@ def get_instructor_client() -> instructor.Instructor:
     if _cached_client is not None:
         return _cached_client
 
-    from app.core.llm import LLMProvider, get_provider
+    from app.infrastructure.llm.factory import LLMProvider, get_provider
     from app.core.settings import (
         DASHSCOPE_API_BASE,
         DASHSCOPE_API_KEY,
@@ -46,6 +46,6 @@ def get_instructor_client() -> instructor.Instructor:
 
 def get_flash_model() -> str:
     """Return the Flash model name for Instructor calls."""
-    from app.core.llm import LLMProvider, get_provider
+    from app.infrastructure.llm.factory import LLMProvider, get_provider
     from app.core.settings import FLASH_MODEL_NAME, MINIMAX_MODEL
     return MINIMAX_MODEL if get_provider() == LLMProvider.MINIMAX else FLASH_MODEL_NAME

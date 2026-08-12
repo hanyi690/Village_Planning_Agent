@@ -208,7 +208,7 @@ class MetadataExtractor:
         Returns:
             Dict with doc_type and keywords
         """
-        from app.core.llm import create_flash_llm
+        from app.infrastructure.llm.factory import create_flash_llm
 
         llm = create_flash_llm(max_tokens=100, temperature=0.1)
 

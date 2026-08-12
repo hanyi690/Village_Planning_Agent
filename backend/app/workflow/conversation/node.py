@@ -12,7 +12,7 @@ Migrated from agent/conversation/node.py per docs/architecture/agent-graph.md §
 from typing import Dict, Any, Optional, TYPE_CHECKING
 
 from app.core.settings import LLM_MODEL, MAX_TOKENS
-from app.core.llm import create_llm
+from app.infrastructure.llm.factory import create_llm
 from app.infrastructure.logging import get_logger
 from app.workflow.layers.phase_machine import PlanningPhase, PHASE_DESCRIPTIONS
 

@@ -175,7 +175,7 @@ async def extract_vocabulary_from_reports(
         from app.core.settings import GIS_EXPLORE_LLM_ENABLED
 
         if GIS_EXPLORE_LLM_ENABLED:
-            from app.core.llm import create_llm
+            from app.infrastructure.llm.factory import create_llm
             from app.core.settings import (
                 GIS_EXPLORE_MAX_TOKENS,
                 GIS_EXPLORE_MODEL,

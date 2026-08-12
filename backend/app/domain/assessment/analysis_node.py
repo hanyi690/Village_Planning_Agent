@@ -17,9 +17,9 @@ from enum import Enum
 from typing import Dict, Any, List, Optional
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from app.config import get_dimension_config, get_dimension_layer, list_dimensions
-from app.core.llm import create_llm
+from app.infrastructure.llm.factory import create_llm
 from app.core.settings import MAX_TOKENS, LLM_STREAM_TIMEOUT, BACKGROUND_SUMMARY_ENRICHMENT
-from app.core.events import SSEEventType
+from app.contracts.events import SSEEventType
 from app.infrastructure.logging import get_logger
 from app.evidence.retrieval.evidence_service import retrieve_evidence, render_evidence_prompt_section
 from app.contracts.evidence.evidence_contracts import ExplorationRequest

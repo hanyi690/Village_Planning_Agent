@@ -16,7 +16,7 @@ from typing import Any
 
 from pydantic import ValidationError
 
-from app.core.llm import create_llm
+from app.infrastructure.llm.factory import create_llm
 from app.core.settings import MAX_TOKENS
 from app.domain.program.claim_draft import PlanningClaimDraftSet
 

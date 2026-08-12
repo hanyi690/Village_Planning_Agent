@@ -783,10 +783,10 @@ async def run_wave(session_id: str, wave: int, reports: Dict[str, str], bundle: 
     # name-confirmation call is deliberately opt-in because a non-JSON answer
     # must not hold the KG enrichment wave for repeated 30s timeouts.  The
     # deterministic spatial gate remains authoritative for bindings.
-    from app.core.llm import LLMProvider, get_provider
+    from app.infrastructure.llm.factory import LLMProvider, get_provider
     semantic_confirm = os.getenv("GIS_ENRICH_LLM_CONFIRM", "").lower() in {"1", "true", "yes"}
     if GIS_EXPLORE_LLM_ENABLED and (get_provider() != LLMProvider.MINIMAX or semantic_confirm):
-        from app.core.llm import create_llm
+        from app.infrastructure.llm.factory import create_llm
         from app.core.settings import (
             GIS_EXPLORE_MAX_TOKENS,
             GIS_EXPLORE_MODEL,

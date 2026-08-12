@@ -23,7 +23,7 @@ from dataclasses import dataclass
 from langchain_core.documents import Document
 
 from app.infrastructure.logging import get_logger
-from app.core.llm import create_flash_llm
+from app.infrastructure.llm.factory import create_flash_llm
 from app.core.settings import (
     CHROMA_COLLECTION_NAME,
     CHROMA_PERSIST_DIR, DATA_DIR, DEFAULT_PROVIDER, OUTLINE_INDEX_DIR,
@@ -65,7 +65,7 @@ class RagService:
             # embedding provider.  Do not repeatedly send a DashScope key to
             # the vector endpoint unless the operator explicitly opts into a
             # separately configured embedding service.
-            from app.core.llm import LLMProvider, get_provider
+            from app.infrastructure.llm.factory import LLMProvider, get_provider
             import os
 
             embedding_opt_in = os.getenv("RAG_DASHSCOPE_ENABLED", "").lower() in {

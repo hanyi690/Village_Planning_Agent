@@ -23,7 +23,7 @@ from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
 from app.config import get_dimension_layer
-from app.core.events import SSEEventType
+from app.contracts.events import SSEEventType
 from app.infrastructure.logging import get_logger
 
 logger = get_logger(__name__)

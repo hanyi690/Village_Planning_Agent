@@ -11,7 +11,7 @@ pytestmark = pytest.mark.e2e
 
 
 def test_minimax_provider_uses_official_openai_endpoint(monkeypatch):
-    from app.core.llm import LLMProvider, create_llm, get_provider
+    from app.infrastructure.llm.factory import LLMProvider, create_llm, get_provider
 
     monkeypatch.setenv("MINIMAX_API_KEY", "test-minimax-key")
     assert get_provider("minimax") is LLMProvider.MINIMAX
@@ -27,7 +27,7 @@ def test_minimax_provider_uses_official_openai_endpoint(monkeypatch):
 
 
 def test_minimax_default_uses_highspeed_model(monkeypatch):
-    from app.core.llm import create_llm
+    from app.infrastructure.llm.factory import create_llm
 
     monkeypatch.setenv("MINIMAX_API_KEY", "test-minimax-key")
     llm = create_llm(provider="minimax", model=None, max_tokens=8)
@@ -36,7 +36,7 @@ def test_minimax_default_uses_highspeed_model(monkeypatch):
 
 
 def test_minimax_streaming_preflight():
-    from app.core.llm import create_llm
+    from app.infrastructure.llm.factory import create_llm
 
     from app.core.settings import MINIMAX_API_KEY
 

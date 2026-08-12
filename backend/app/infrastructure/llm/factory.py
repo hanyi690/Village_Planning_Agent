@@ -82,7 +82,7 @@ def _merge_callbacks(user_callbacks: Optional[List[Any]] = None) -> List[Any]:
         all_callbacks.extend(user_callbacks)
 
     try:
-        from app.core.tracing import get_langsmith_manager
+        from app.infrastructure.llm.tracing import get_langsmith_manager
         langsmith_manager = get_langsmith_manager()
         if langsmith_manager.is_enabled():
             langsmith_callbacks = langsmith_manager.get_callbacks()

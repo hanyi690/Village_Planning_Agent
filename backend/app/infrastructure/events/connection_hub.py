@@ -12,7 +12,7 @@ import logging
 from threading import Lock
 from typing import Any
 
-from app.core.events import SSEEventType
+from app.contracts.events import SSEEventType
 from app.core.settings import SSE_QUEUE_SIZE
 
 from .repository import EventRepository

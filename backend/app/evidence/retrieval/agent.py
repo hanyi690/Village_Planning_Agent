@@ -141,7 +141,7 @@ class ExploreFlashAgent:
     @staticmethod
     def create_flash_llm() -> Any:
         """Construct the independently configured Flash model on demand."""
-        from app.core.llm import create_llm
+        from app.infrastructure.llm.factory import create_llm
         from app.core.settings import (
             GIS_EXPLORE_MAX_TOKENS,
             GIS_EXPLORE_MODEL,

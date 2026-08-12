@@ -246,7 +246,7 @@ async def _instructor_generate(
 
     Returns JSON string of dimension-specific Pydantic schema, or None on failure.
     """
-    from app.core.instructor_client import get_instructor_client, get_flash_model
+    from app.infrastructure.llm.instructor_client import get_instructor_client, get_flash_model
 
     dim_schema = get_dimension_schema(dimension_key)
     client = get_instructor_client()

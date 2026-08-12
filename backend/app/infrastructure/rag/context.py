@@ -232,7 +232,7 @@ class LLMOutlineCorrector:
         """延迟加载 LLM"""
         if self._llm is None:
             try:
-                from app.core.llm import create_flash_llm
+                from app.infrastructure.llm.factory import create_flash_llm
                 self._llm = create_flash_llm()
             except Exception as e:
                 logger.warning(f"加载 Flash LLM 失败: {e}")

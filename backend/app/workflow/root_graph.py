@@ -41,7 +41,7 @@ from app.workflow.stages.support import (
 )
 from app.workflow.stage_adapter import persist_gate_decision, persist_stage_artifact
 from app.workflow.layers.context_bootstrap import bootstrap_context_node
-from app.core.events import SSEEventType
+from app.contracts.events import SSEEventType
 from app.contracts.workflow.human_interrupt_contracts import (
     HumanInterruptChannel,
     build_human_interrupt,

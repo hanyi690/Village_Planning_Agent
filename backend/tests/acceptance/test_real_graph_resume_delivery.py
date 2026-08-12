@@ -147,7 +147,7 @@ def test_real_graph_resume_delivery(sqlite_db, pipeline_reset, monkeypatch):
     import asyncio
 
     async def _llm_preflight() -> None:
-        from app.core.llm import create_llm
+        from app.infrastructure.llm.factory import create_llm
         llm = create_llm(
             temperature=0,
             max_tokens=8,
