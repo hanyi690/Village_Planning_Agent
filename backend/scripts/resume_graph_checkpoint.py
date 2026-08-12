@@ -23,7 +23,6 @@ def _summary(state: dict[str, Any]) -> dict[str, Any]:
     refs = dict(state.get("artifact_refs") or {})
     gate_routes = {}
     for key in (
-        "l1_gate_decision", "l2_gate_decision", "l3_gate_decision",
         "parse_gate", "ground_gate", "select_gate", "validate_gate",
         "reconcile_gate", "deliver_gate",
     ):
@@ -32,6 +31,19 @@ def _summary(state: dict[str, Any]) -> dict[str, Any]:
             gate_routes[key] = gate.get("feedback_route") or (
                 "PASS" if gate.get("passed") is True else None
             )
+    from app.infrastructure.artifacts.runtime import load_artifact
+    from app.modules.schema.contracts.workflow_contracts import GateDecision
+
+    for stage in ("l3", "l2", "l1"):
+        if not refs.get(f"{stage}_gate"):
+            continue
+        try:
+            gate = load_artifact(state, f"{stage}_gate", GateDecision)
+        except Exception:
+            continue
+        gate_routes[f"{stage}_gate"] = gate.feedback_route or (
+            "PASS" if gate.passed is True else None
+        )
     return {
         "session_id": state.get("session_id"),
         "phase": state.get("phase"),

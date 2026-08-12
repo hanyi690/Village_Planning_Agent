@@ -348,6 +348,10 @@ async def l3_aggregate(
         l2_strategy=l2_strategy,
     )
 
+    from app.workflow.stage_adapter import persist_gate_decision
+
+    gate_ref = persist_gate_decision(state, "l3", gate_decision)
+
     pkg = build_l3_review_package(
         program=program,
         artifact_ref=ref,
@@ -394,8 +398,10 @@ async def l3_aggregate(
     return {
         # The post-L3 chain consumes the canonical ref-only map.  Planning
         # program recovery must not depend on a duplicate top-level ref.
-        "artifact_refs": {"planning_program": ref.model_dump(mode="json")},
-        "l3_gate_decision": gate_decision.model_dump(mode="json"),
+        "artifact_refs": {
+            "planning_program": ref.model_dump(mode="json"),
+            "l3_gate": gate_ref.model_dump(mode="json"),
+        },
         "l3_review_id": review_id,
     }
 

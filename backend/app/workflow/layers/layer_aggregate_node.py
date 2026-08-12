@@ -20,13 +20,27 @@ from app.utils.logger import get_logger
 logger = get_logger(__name__)
 
 
-def _update_explore_retry(state: Dict[str, Any], patch: Dict[str, Any], layer: int, gate_key: str) -> None:
-    """Update the EXPLORE retry counter based on the layer gate decision.
+def _update_explore_retry(state: Dict[str, Any], patch: Dict[str, Any], layer: int, stage: str) -> None:
+    """Update the EXPLORE retry counter based on the persisted layer gate.
 
     Non-PASS gates (EXPLORE/rework) increment the counter; PASS resets it.
+    The gate is loaded from the merged CAS artifact refs, not an inline dict.
     """
-    gate = patch.get(gate_key) or {}
-    route = gate.get("feedback_route") if isinstance(gate, dict) else None
+    from app.workflow.state import load_root_gate
+
+    merged = {
+        **state,
+        **patch,
+        "artifact_refs": {
+            **dict(state.get("artifact_refs") or {}),
+            **dict(patch.get("artifact_refs") or {}),
+        },
+    }
+    try:
+        gate = load_root_gate(merged, stage)
+    except Exception:
+        gate = None
+    route = gate.feedback_route if gate is not None else None
     counts = dict(state.get("retry_counts") or {})
     counter_key = f"l{layer}_explore"
     if route is None or route == "PASS":
@@ -72,7 +86,7 @@ async def layer_aggregate_node(state: Dict[str, Any]) -> Dict[str, Any]:
         if aggregate_state is not state:
             patch = {**{k: aggregate_state[k] for k in ("context_version", "context_fingerprint", "context_ref", "bootstrap_context_done") if k in aggregate_state}, **patch}
         patch["layer_just_completed"] = None
-        _update_explore_retry(state, patch, layer, "l1_gate_decision")
+        _update_explore_retry(state, patch, layer, "l1")
         # Enrichment consumes the typed L1Snapshot; it must run after this
         # aggregate persisted its artifact, not in layer_completion_check.
         from app.workflow.plan_state.completion_node import _invoke_extraction
@@ -91,7 +105,7 @@ async def layer_aggregate_node(state: Dict[str, Any]) -> Dict[str, Any]:
         if aggregate_state is not state:
             patch = {**{k: aggregate_state[k] for k in ("context_version", "context_fingerprint", "context_ref", "bootstrap_context_done") if k in aggregate_state}, **patch}
         patch["layer_just_completed"] = None
-        _update_explore_retry(state, patch, layer, "l2_gate_decision")
+        _update_explore_retry(state, patch, layer, "l2")
         from app.workflow.plan_state.completion_node import _invoke_extraction
 
         await _invoke_extraction(
@@ -108,7 +122,7 @@ async def layer_aggregate_node(state: Dict[str, Any]) -> Dict[str, Any]:
         if aggregate_state is not state:
             patch = {**{k: aggregate_state[k] for k in ("context_version", "context_fingerprint", "context_ref", "bootstrap_context_done") if k in aggregate_state}, **patch}
         patch["layer_just_completed"] = None
-        _update_explore_retry(state, patch, layer, "l3_gate_decision")
+        _update_explore_retry(state, patch, layer, "l3")
         from app.workflow.plan_state.completion_node import _invoke_extraction
 
         await _invoke_extraction(

@@ -13,8 +13,11 @@ from app.contracts.artifacts import ArtifactRef
 from app.modules.schema.contracts.workflow_contracts import GateDecision
 
 
-POST_L3_GATE_STAGES = frozenset(
+GATE_STAGES = frozenset(
     {
+        "l1",
+        "l2",
+        "l3",
         "target_projection",
         "ground",
         "select",
@@ -23,7 +26,6 @@ POST_L3_GATE_STAGES = frozenset(
         "deliver",
     }
 )
-LEGACY_GATE_STAGES = frozenset({"l1", "l2", "l3"})
 GATE_LOAD_FAILED = "__GATE_LOAD_FAILED__"
 
 
@@ -39,25 +41,13 @@ class RootGateResolutionError(RuntimeError):
 def load_root_gate(state: dict[str, Any], stage: str) -> GateDecision:
     """Load the typed gate that root routing is allowed to trust.
 
-    Post-L3 gates are reference-only: an inline ``{stage}_gate`` value is
-    intentionally ignored.  L1/L2/L3 are the only temporary exception while
-    their legacy layer state is migrated.  A missing or invalid gate is an
-    error, never an implicit PASS.
+    Every gate is reference-only: an inline ``{stage}_gate`` value is
+    intentionally ignored.  A missing or invalid gate is an error, never an
+    implicit PASS.
     """
 
     normalized_stage = str(stage or "").strip().lower()
-    if normalized_stage in LEGACY_GATE_STAGES:
-        raw = state.get(f"{normalized_stage}_gate_decision")
-        if raw is None:
-            raw = state.get(f"{normalized_stage}_gate")
-        if raw is None:
-            raise RootGateResolutionError(normalized_stage, "legacy gate is missing")
-        try:
-            return GateDecision.model_validate(raw)
-        except Exception as exc:
-            raise RootGateResolutionError(normalized_stage, "legacy gate is invalid") from exc
-
-    if normalized_stage not in POST_L3_GATE_STAGES:
+    if normalized_stage not in GATE_STAGES:
         raise RootGateResolutionError(normalized_stage, "stage is outside root gate scope")
 
     key = f"{normalized_stage}_gate"
@@ -321,18 +311,13 @@ def _latest_gate(state: dict[str, Any]) -> Any:
         "select_gate",
         "ground_gate",
         "target_projection_gate",
+        "l3_gate",
+        "l2_gate",
+        "l1_gate",
     ):
         ref = (state.get("artifact_refs") or {}).get(key)
         if ref:
             return ref
-    for key in (
-        "l3_gate_decision",
-        "l2_gate_decision",
-        "l1_gate_decision",
-    ):
-        value = state.get(key)
-        if value is not None:
-            return value
     return None
 
 
@@ -344,8 +329,7 @@ def control_state_from_checkpoint(state: dict[str, Any]) -> WorkflowState:
 
 __all__ = [
     "GATE_LOAD_FAILED",
-    "LEGACY_GATE_STAGES",
-    "POST_L3_GATE_STAGES",
+    "GATE_STAGES",
     "RootGateResolutionError",
     "WorkflowState",
     "control_state_from_checkpoint",

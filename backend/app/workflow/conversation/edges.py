@@ -18,6 +18,7 @@ from langchain_core.messages import AIMessage
 
 from app.workflow.layers.phase_machine import PlanningPhase, get_layer_dimensions, _phase_to_layer
 from app.workflow.layers.layer_router import _worker_for_phase
+from app.workflow.state import load_root_gate
 from app.config import get_dimension_layer
 from app.config.dependency import compute_impact_tree, get_next_revision_wave
 from app.tools.intent_tools import advance_planning_intent, gis_analysis
@@ -262,19 +263,6 @@ def after_analysis(
             }
             and str(state.get("phase", "")).lower() in {"layer1", "layer2", "layer3"}
         ):
-            layer_name = str(state.get("phase", "layer3")).lower().replace("layer", "l")
-            state[f"{layer_name}_gate_decision"] = {
-                "stage": layer_name,
-                "passed": False,
-                "feedback_route": "HUMAN",
-                "diagnostic_code": f"{layer_name.upper()}_LLM_CHECKPOINT",
-                "pending_requests": [{
-                    "request_id": f"{layer_name}-llm-failure",
-                    "stage": layer_name,
-                    "request_type": "transient_llm_failure",
-                    "context": dict(fatal_error),
-                }],
-            }
             return "human_review"
         logger.error("[after_analysis] terminal failure; stopping dispatch: %s", fatal_error)
         return END
@@ -286,24 +274,27 @@ def after_analysis(
         return "target_projection"
 
     # ── Wave M2: gate-aware routing ──
-    # If a layer gate decision is present, route accordingly before falling
-    # through to normal dimension dispatch. `layer_just_completed` is preferred
-    # (robust), falling back to phase — after the completion-node fix the two
-    # agree until the gate PASSES (phase is only advanced on PASS).
+    # If a layer gate is present, route accordingly before falling through to
+    # normal dimension dispatch. `layer_just_completed` is preferred (robust),
+    # falling back to phase — after the completion-node fix the two agree until
+    # the gate PASSES (phase is only advanced on PASS).  The gate is read
+    # through the CAS artifact ref; inline layer gate payloads no longer exist.
     layer_num = state.get("layer_just_completed")
     if layer_num is None:
         layer_num = _phase_to_layer(phase)
     if layer_num is not None:
-        gate_key = f"l{layer_num}_gate_decision"
-        gate_decision = state.get(gate_key)
+        try:
+            gate_decision = load_root_gate(state, f"l{layer_num}")
+        except Exception:
+            gate_decision = None
         if gate_decision is not None:
-            route = gate_decision.get("feedback_route") if isinstance(gate_decision, dict) else None
+            route = gate_decision.feedback_route
             if route is None or route == "PASS":
                 # Gate PASS -> phase is advanced by the `advance_phase` node
                 # (it writes phase + dispatches the next layer's dimensions).
-                logger.info("[after_analysis] Gate %s PASS -> advance_phase", gate_key)
+                logger.info("[after_analysis] Gate l%d PASS -> advance_phase", layer_num)
                 return "advance_phase"
-            logger.info("[after_analysis] Gate %s routed %s", gate_key, route)
+            logger.info("[after_analysis] Gate l%d routed %s", layer_num, route)
             if route == "EXPLORE":
                 # L3 evidence gaps are business review findings, not a
                 # license to replay all twelve expensive L3 workers.  The
@@ -322,10 +313,6 @@ def after_analysis(
                     # a successful stop; the HITL path preserves the pending
                     # evidence requests and allows an operator to approve or
                     # reject the next revision.
-                    if isinstance(gate_decision, dict):
-                        gate_decision = dict(gate_decision)
-                        gate_decision["feedback_route"] = "HUMAN"
-                        state[gate_key] = gate_decision
                     return "human_review"
                 from app.config.loader import list_dimensions
                 dim_configs = list_dimensions(layer_num)
@@ -356,18 +343,13 @@ def after_analysis(
                 # output. Preserve the exact pending requests and enter HITL
                 # after the first failed aggregate; an operator can provide a
                 # targeted revision or reject the run.
-                pending = gate_decision.get("pending_requests", []) if isinstance(gate_decision, dict) else []
+                pending = list(gate_decision.pending_requests or [])
                 hard_contract_failure = layer_num == 3 and any(
                     any(code in str(item) for code in ("missing_instruction_marker", "missing_spatial_instruction"))
                     for item in pending
                 )
                 if hard_contract_failure:
                     logger.warning("[after_analysis] L3 contract failure -> HUMAN without full-layer replay")
-                    if isinstance(gate_decision, dict):
-                        gate_decision = dict(gate_decision)
-                        gate_decision["feedback_route"] = "HUMAN"
-                        gate_decision.setdefault("diagnostic_code", "L3_CONTRACT_REVIEW_REQUIRED")
-                        state[gate_key] = gate_decision
                     return "human_review"
                 # L3 gate failures are business/contract findings over a
                 # complete 12-dimension plan, not transient infrastructure
@@ -377,11 +359,6 @@ def after_analysis(
                 # the persisted HUMAN checkpoint for an explicit decision.
                 if layer_num == 3:
                     logger.warning("[after_analysis] L3 business gate -> HUMAN without full-layer replay")
-                    if isinstance(gate_decision, dict):
-                        gate_decision = dict(gate_decision)
-                        gate_decision["feedback_route"] = "HUMAN"
-                        gate_decision.setdefault("diagnostic_code", "L3_GATE_REVIEW_REQUIRED")
-                        state[gate_key] = gate_decision
                     return "human_review"
                 if retry_count >= retry_limit:
                     logger.warning(
@@ -389,11 +366,6 @@ def after_analysis(
                         route,
                         layer_num,
                     )
-                    if isinstance(gate_decision, dict):
-                        gate_decision = dict(gate_decision)
-                        gate_decision["feedback_route"] = "HUMAN"
-                        gate_decision.setdefault("diagnostic_code", "BUSINESS_RETRY_EXHAUSTED")
-                        state[gate_key] = gate_decision
                     return "human_review"
                 # Rework: re-dispatch dimensions of this layer
                 from app.config.loader import list_dimensions

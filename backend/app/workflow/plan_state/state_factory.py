@@ -86,14 +86,14 @@ class StateFactory:
             "artifact_refs": {},
             "artifact_schema_version": "3",
             "layer_just_completed": None,
-            "l1_gate_decision": None,
-            "l2_gate_decision": None,
-            "l3_gate_decision": None,
             # post-L3 HITL
             "post_l3_status": "",
             "current_stage": "L1",
             "next_stage": "L1",
             # post-L3 chain
+            "l1_gate": None,
+            "l2_gate": None,
+            "l3_gate": None,
             "target_projection_gate": None,
             "ground_gate": None,
             "select_gate": None,

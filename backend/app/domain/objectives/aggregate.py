@@ -166,6 +166,10 @@ async def l2_aggregate(
 
     gate_decision = evaluate_l2_gate(strategy, run_id=run_id, context_version=context_version)
 
+    from app.workflow.stage_adapter import persist_gate_decision
+
+    gate_ref = persist_gate_decision(state, "l2", gate_decision)
+
     pkg = build_l2_review_package(
         strategy=strategy,
         artifact_ref=ref,
@@ -204,8 +208,10 @@ async def l2_aggregate(
         logger.debug("[l2_aggregate] step report failed: %s", exc)
 
     return {
-        "artifact_refs": {"l2_strategy": ref.model_dump(mode="json")},
-        "l2_gate_decision": gate_decision.model_dump(mode="json"),
+        "artifact_refs": {
+            "l2_strategy": ref.model_dump(mode="json"),
+            "l2_gate": gate_ref.model_dump(mode="json"),
+        },
         "l2_review_id": review_id,
     }
 

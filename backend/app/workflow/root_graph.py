@@ -29,8 +29,7 @@ from app.workflow.routing import authorize_route_result
 from app.workflow.terminal import diagnostic_terminal, terminal_patch
 from app.workflow.state import (
     GATE_LOAD_FAILED,
-    LEGACY_GATE_STAGES,
-    POST_L3_GATE_STAGES,
+    GATE_STAGES,
     WorkflowState,
     load_root_gate,
     root_gate_route,
@@ -349,18 +348,15 @@ def _gate_mutation_patch(
     *,
     artifact_refs: Dict[str, Any] | None = None,
 ) -> Dict[str, Any]:
-    """Persist a root gate mutation according to its migration boundary.
+    """Persist a root gate mutation as a new CAS gate artifact.
 
-    Only L1/L2/L3 may still write legacy gate channels.  Every post-L3
-    mutation gets a new immutable descriptor and publishes both the named
-    stage ref and the generic ``gate_ref`` in the same graph patch.
+    Every mutation gets a new immutable descriptor and publishes both the
+    named stage ref and the generic ``gate_ref`` in the same graph patch.
     """
 
     normalized_stage = str(stage or "").strip().lower()
     serialized = _dump(gate)
-    if normalized_stage in LEGACY_GATE_STAGES:
-        return {f"{normalized_stage}_gate_decision": serialized}
-    if normalized_stage not in POST_L3_GATE_STAGES:
+    if normalized_stage not in GATE_STAGES:
         raise ValueError(f"unsupported root gate mutation stage: {stage}")
 
     refs = {
@@ -716,24 +712,18 @@ async def prepare_human_review(state: Dict[str, Any]) -> Dict[str, Any]:
     # ``L3`` and collect no review items, silently ending instead of pausing.
     gate_patch = {}
     if not items or paused_stage == "post_l3":
-        for gate_attr in (
+        for gate_stage in (
             # Scan downstream stages first; stale upstream EXPLORE gates are
             # retained for audit but must not steal a later HUMAN pause.
-            "deliver_gate", "reconcile_gate", "validate_gate", "select_gate",
-            "ground_gate", "target_projection_gate",
-            "l3_gate_decision", "l2_gate_decision", "l1_gate_decision",
+            "deliver", "reconcile", "validate", "select", "ground",
+            "target_projection",
+            "l3", "l2", "l1",
         ):
-            gate_stage = gate_attr.removesuffix("_gate_decision").removesuffix("_gate")
-            if gate_stage in {"target_projection", "ground", "select", "validate", "reconcile", "deliver"}:
-                try:
-                    gate_model = load_root_gate(state, gate_stage)
-                except Exception:
-                    continue
-                gate = gate_model.model_dump(mode="json")
-            else:
-                gate = state.get(gate_attr)
-            if not isinstance(gate, dict):
+            try:
+                gate_model = load_root_gate(state, gate_stage)
+            except Exception:
                 continue
+            gate = gate_model.model_dump(mode="json")
             pending = list(gate.get("pending_requests") or [])
             route = gate.get("feedback_route")
             if pending and route not in {None, "PASS", "HUMAN"}:
@@ -743,7 +733,7 @@ async def prepare_human_review(state: Dict[str, Any]) -> Dict[str, Any]:
                     human_gate = dict(gate)
                     human_gate["feedback_route"] = "HUMAN"
                     human_gate.setdefault("diagnostic_code", "BUSINESS_GATE_REVIEW_REQUIRED")
-                    gate_patch[gate_attr] = human_gate
+                    gate_patch.update(_gate_mutation_patch(state, gate_stage, human_gate))
                 break
     if not items:
         # Layer gates can legitimately route HUMAN with only a structured
@@ -752,13 +742,14 @@ async def prepare_human_review(state: Dict[str, Any]) -> Dict[str, Any]:
         # empty item list: the graph would terminate while the session still
         # reports the previous layer.  Synthesize one actionable review item
         # so the operator can explicitly approve or revise the gate.
-        for gate_attr in (
-            "l3_gate_decision", "l2_gate_decision", "l1_gate_decision",
-        ):
-            gate = state.get(gate_attr)
+        for gate_stage in ("l3", "l2", "l1"):
+            try:
+                gate = _root_gate_payload(state, gate_stage)
+            except Exception:
+                continue
             if not isinstance(gate, dict) or gate.get("feedback_route") != "HUMAN":
                 continue
-            paused_stage = gate_attr.removesuffix("_gate_decision")
+            paused_stage = gate_stage
             items = [{
                 "request_id": f"{paused_stage}-gate-review",
                 "stage": paused_stage,
@@ -816,13 +807,13 @@ async def prepare_human_review(state: Dict[str, Any]) -> Dict[str, Any]:
                         "missing_dimensions": missing,
                     },
                 }]
-                gate_patch[f"l{phase[-1]}_gate_decision"] = {
-                    "stage": phase,
+                gate_patch.update(_gate_mutation_patch(state, f"l{phase[-1]}", {
+                    "stage": f"l{phase[-1]}",
                     "passed": False,
                     "feedback_route": "HUMAN",
                     "diagnostic_code": "LAYER_DEPENDENCY_DEADLOCK",
                     "pending_requests": items,
-                }
+                }))
 
     if not items:
         failures = state.get("provider_failures") or []
@@ -1124,7 +1115,6 @@ async def apply_human_review_decision(state: Dict[str, Any]) -> Dict[str, Any]:
                 )
             return result
     if action in ("accept", "approve") and paused_stage in {"l1", "l2", "l3"}:
-        gate_key = f"{paused_stage}_gate_decision"
         gate = _root_gate_payload(state, paused_stage)
         gate.update({
             "stage": paused_stage,
@@ -1133,7 +1123,7 @@ async def apply_human_review_decision(state: Dict[str, Any]) -> Dict[str, Any]:
             "route_reason": "human_approved_layer_gate",
             "pending_requests": [],
         })
-        result[gate_key] = gate
+        result.update(_gate_mutation_patch(state, paused_stage, gate))
         result["post_l3_status"] = "auto_continue" if paused_stage == "l3" else ""
         return result
     if action == "retry" and paused_stage:
@@ -1191,7 +1181,8 @@ async def apply_human_review_decision(state: Dict[str, Any]) -> Dict[str, Any]:
                     str(decisions.get("feedback") or "") if isinstance(decisions, dict) else "",
                 ),
                 "retry_counts": counts,
-                "l3_gate_decision": None,
+                # The stale l3_gate CAS ref is left in place; the retry's
+                # aggregate re-persists a fresh gate that overwrites it.
                 "human_review_items": [],
                 "paused_stage": None,
                 "layer_just_completed": None,
@@ -1281,16 +1272,13 @@ async def apply_human_review_decision(state: Dict[str, Any]) -> Dict[str, Any]:
                     "code": "LLM_DIMENSION_RETRY_EXHAUSTED",
                     "message": f"dimension {dimension} retry limit exhausted ({attempts}/{limit})",
                 }
-        if paused_stage in {"l1", "l2", "l3"}:
-            result[f"{paused_stage}_gate_decision"] = _dump(_pass_gate(paused_stage))
-        else:
-            result.update(
-                _gate_mutation_patch(
-                    state,
-                    paused_stage,
-                    _pass_gate(paused_stage),
-                )
+        result.update(
+            _gate_mutation_patch(
+                state,
+                paused_stage,
+                _pass_gate(paused_stage),
             )
+        )
         if isinstance(state.get("provider_failures"), list) and state.get("provider_failures"):
             result["provider_failures"] = []
         if (
@@ -1437,11 +1425,15 @@ async def _apply_classification_revision(
         "PlanningProgram",
         revised,
     )
+    gate_patch = _gate_mutation_patch(state, "l3", _pass_gate("l3"))
     return {
-        "artifact_refs": {"planning_program": ref},
+        **gate_patch,
+        "artifact_refs": {
+            **dict(gate_patch.get("artifact_refs") or {}),
+            "planning_program": ref,
+        },
         "classification_revision": True,
         "classification_decision_targets": target_ids,
-        "l3_gate_decision": _pass_gate("l3").model_dump(mode="json"),
     }
 
 

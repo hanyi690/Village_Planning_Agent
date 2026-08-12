@@ -220,10 +220,7 @@ class AgentState(TypedDict, total=False):
     artifact_schema_version: str  # canonical ArtifactDescriptor schema; current value is "3"
     # ── Wave M2: layer aggregate wiring ──
     layer_just_completed: Optional[int]  # set by completion_check, consumed by layer_aggregate_node
-    # ── Wave M2: layer aggregate gate decisions + artifact refs（供 after_analysis 消费）──
-    l1_gate_decision: Optional[Dict[str, Any]]  # L1 Evidence Gate decision
-    l2_gate_decision: Optional[Dict[str, Any]]  # L2 Consistency Gate decision
-    l3_gate_decision: Optional[Dict[str, Any]]  # L3 Program Gate decision
+    # ── Wave M2: layer aggregate gate refs + artifact refs（供 after_analysis 消费）──
     # ── Wave N P5: post-L3 HITL pending/resume fields ──
     post_l3_status: str  # "needs_human_review" 等
     # ── Wave M: post-L3 主图独立节点链 typed artifacts（单一状态源）──
@@ -241,6 +238,10 @@ class AgentState(TypedDict, total=False):
     reconcile_gate: Optional[Any]  # GateDecision
     # DELIVER 输出
     deliver_gate: Optional[Any]  # GateDecision
+    # L1/L2/L3 layer gate companion payloads
+    l1_gate: Optional[Any]  # GateDecision
+    l2_gate: Optional[Any]  # GateDecision
+    l3_gate: Optional[Any]  # GateDecision
     # Gate 累积 + 重试
     upstream_gates: List[Any]
     stage_audit: Annotated[Dict[str, Dict[str, Any]], _merge_dict_of_dicts]

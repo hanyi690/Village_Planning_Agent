@@ -94,6 +94,29 @@ def _delivery_poll_terminal(state: dict) -> bool:
     return route in {"PASS", "END_DIAGNOSTIC"} or bool(state.get("fatal_error"))
 
 
+def _progress_fingerprint(state: dict) -> str:
+    """Fingerprint of the fields that must move while the graph is running.
+
+    A live graph keeps changing ``phase``/``active_stage``, the per-layer
+    completed dimensions or the delivery fields.  A fingerprint that stays
+    constant across a stall window therefore means the graph terminated
+    without reaching a delivery terminal (or deadlocked), and polling longer
+    only burns the deadline.
+    """
+    completed = state.get("completed_dimensions") or {}
+    return "|".join([
+        str(state.get("phase") or ""),
+        str(state.get("active_stage") or ""),
+        str(state.get("delivery_status") or ""),
+        str(state.get("paused_stage") or ""),
+        str(bool(state.get("human_review_resume_consumed"))),
+        str(len(state.get("human_review_items") or [])),
+        str(sorted(
+            (str(k) + ":" + ",".join(sorted(v)) for k, v in completed.items())
+        )),
+    ])
+
+
 pytestmark = [
     pytest.mark.e2e,
     pytest.mark.slow,
@@ -262,8 +285,26 @@ def test_real_graph_resume_delivery(sqlite_db, pipeline_reset, monkeypatch):
             # L3 summary enrichment is supervised but may finish after the
             # worker checkpoint. Keep polling long enough for the official
             # interrupt payload to become visible before declaring a deadlock.
+            # A stalled fingerprint for STALL_WAIT_S is treated as an early
+            # termination (graph ENDed or deadlocked) and fails fast instead
+            # of exhausting the per-iteration wait budget.
+            last_progress = None
+            last_progress_at = time.monotonic()
             for _ in range(20):
                 current = get_state_values(session_id)
+                progress = _progress_fingerprint(current)
+                now = time.monotonic()
+                if progress != last_progress:
+                    last_progress = progress
+                    last_progress_at = now
+                elif now - last_progress_at > 90.0:
+                    pytest.fail(
+                        "real graph stalled: state fingerprint unchanged for 90s "
+                        f"phase={current.get('phase')!r}, "
+                        f"active_stage={current.get('active_stage')!r}, "
+                        f"paused_stage={current.get('paused_stage')!r}, "
+                        f"delivery_status={current.get('delivery_status')!r}"
+                    )
                 if current.get("human_review_resume_consumed"):
                     # The previous resume is still being replayed.  Do not
                     # submit the same decision twice; wait for a fresh HUMAN
@@ -421,17 +462,37 @@ def test_real_graph_resume_delivery(sqlite_db, pipeline_reset, monkeypatch):
 
             # The runtime may hand work to TaskSupervisor after the FastAPI
             # background callback returns, so poll the checkpoint explicitly
-            # instead of assuming TestClient waited for the graph.
+            # instead of assuming TestClient waited for the graph.  A stalled
+            # fingerprint fails fast instead of consuming the full 600s poll.
             deadline = time.monotonic() + 600.0
             state = {}
+            terminal = False
+            last_progress = None
+            last_progress_at = time.monotonic()
             while time.monotonic() < deadline:
                 state = get_state_values(session_id)
                 if state and (
                     _delivery_poll_terminal(state)
                 ):
+                    terminal = True
+                    break
+                progress = _progress_fingerprint(state)
+                now = time.monotonic()
+                if progress != last_progress:
+                    last_progress = progress
+                    last_progress_at = now
+                elif now - last_progress_at > 120.0:
                     break
                 time.sleep(0.5)
             assert state, f"session state was never checkpointed within 45s: {session_id}"
+            assert terminal or time.monotonic() - last_progress_at <= 120.0, (
+                "real graph stalled after resume: state fingerprint unchanged for 120s "
+                f"phase={state.get('phase')!r}, "
+                f"active_stage={state.get('active_stage')!r}, "
+                f"paused_stage={state.get('paused_stage')!r}, "
+                f"delivery_status={state.get('delivery_status')!r}, "
+                f"session={session_id}"
+            )
             from app.modules.evidence.stage_report import render_stage_report_markdown
             from app.modules.evidence.step_report import (
                 build_backend_run_report,

@@ -265,6 +265,10 @@ async def l1_aggregate(
 
     gate_decision = evaluate_l1_gate(snapshot, run_id=run_id, context_version=context_version)
 
+    from app.workflow.stage_adapter import persist_gate_decision
+
+    gate_ref = persist_gate_decision(state, "l1", gate_decision)
+
     pkg = build_l1_review_package(
         snapshot=snapshot,
         artifact_ref=ref,
@@ -312,8 +316,10 @@ async def l1_aggregate(
         logger.debug("[l1_aggregate] step report failed: %s", exc)
 
     return {
-        "artifact_refs": {"l1_snapshot": ref.model_dump(mode="json")},
-        "l1_gate_decision": gate_decision.model_dump(mode="json"),
+        "artifact_refs": {
+            "l1_snapshot": ref.model_dump(mode="json"),
+            "l1_gate": gate_ref.model_dump(mode="json"),
+        },
         "l1_review_id": review_id,
     }
 

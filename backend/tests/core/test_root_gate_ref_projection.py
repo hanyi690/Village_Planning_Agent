@@ -57,24 +57,50 @@ def test_missing_post_l3_gate_ref_is_fail_closed(tmp_path, monkeypatch):
         raise AssertionError("missing post-L3 gate ref must not load")
 
 
-def test_legacy_gate_scope_is_limited_to_l1_l2_l3(tmp_path, monkeypatch):
-    legacy = {
-        "l1_gate_decision": {
-            "stage": "l1",
-            "passed": True,
-            "feedback_route": "PASS",
-        },
-        "ground_gate": {"stage": "ground", "passed": True, "feedback_route": "PASS"},
+def test_layer_gates_load_through_cas_artifact_ref(tmp_path, monkeypatch):
+    state = _state(
+        tmp_path,
+        monkeypatch,
+        "l1",
+        GateDecision(stage="l1", passed=True, feedback_route=None),
+    )
+
+    gate = load_root_gate(state, "l1")
+    assert gate.stage == "l1"
+    assert gate.passed is True
+    assert state["artifact_refs"]["l1_gate"]
+
+
+def test_l1_l2_l3_are_in_root_gate_scope(tmp_path, monkeypatch):
+    for stage in ("l1", "l2", "l3"):
+        state = _state(
+            tmp_path,
+            monkeypatch,
+            stage,
+            GateDecision(stage=stage, passed=True, feedback_route=None),
+        )
+        gate = load_root_gate(state, stage)
+        assert gate.stage == stage
+        assert state["artifact_refs"][f"{stage}_gate"]
+
+
+def test_inline_layer_gate_decision_is_not_accepted(tmp_path, monkeypatch):
+    monkeypatch.setattr("app.services.run_paths.run_tmp_root", lambda: tmp_path)
+    monkeypatch.setattr("app.infrastructure.artifacts.runtime.run_tmp_root", lambda: tmp_path)
+    state = {
+        "run_id": "run-legacy-inline",
+        "session_id": "run-legacy-inline",
+        "branch_id": "main",
+        "l1_gate_decision": {"stage": "l1", "passed": True, "feedback_route": "PASS"},
         "artifact_refs": {},
     }
 
-    assert load_root_gate(legacy, "l1").passed is True
     try:
-        load_root_gate(legacy, "ground")
+        load_root_gate(state, "l1")
     except RootGateResolutionError as exc:
         assert "missing artifact ref" in exc.reason
     else:
-        raise AssertionError("post-L3 inline gate must not be accepted")
+        raise AssertionError("inline layer gate decision must not be accepted")
 
 
 def test_post_l3_gate_mutations_replace_ref_and_retry_exhaustion_is_persisted(
