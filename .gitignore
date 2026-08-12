@@ -146,6 +146,9 @@ backend/scripts/_chain_out.txt
 .claude/.cozempic-init.lock
 .claude/settings.local.json
 
+# Codex incremental probe artifact
+.codex_incremental_probe.json
+
 # Graphify output
 .graphify_python
 .graphify_detect.json
