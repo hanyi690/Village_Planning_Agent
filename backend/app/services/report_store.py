@@ -263,7 +263,7 @@ class ReportStore:
 
         from app.core.settings import BACKGROUND_SUMMARY_ENRICHMENT
         if not BACKGROUND_SUMMARY_ENRICHMENT:
-            from app.agent.common.dimension_runtime import generate_summary_regex
+            from app.infrastructure.llm.dimension_runtime import generate_summary_regex
             return generate_summary_regex(dim_key, layer, content)
 
         from ..modules.parsing.summary_generator import generate_structured_summary

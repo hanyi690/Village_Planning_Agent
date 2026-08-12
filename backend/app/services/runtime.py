@@ -39,8 +39,8 @@ from app.services.checkpoint import checkpoint_service, checkpoint_persistence_m
 from app.core.settings import GRAPH_MAX_CONCURRENCY, GRAPH_RECURSION_LIMIT
 from app.workflow.root_graph import create_unified_planning_graph
 from app.workflow.runtime_adapter import materialize_workflow_state, pack_workflow_patch
-from app.agent.plan_state.state import state_to_ui_status
-from app.agent.bootstrap.phase_machine import (
+from app.workflow.plan_state.state import state_to_ui_status
+from app.workflow.layers.phase_machine import (
     get_layer_dimensions,
     get_layer_name,
     _phase_to_layer,
@@ -321,7 +321,7 @@ class PlanningRuntimeService:
             # parallel wave stops spending requests.  An explicit HUMAN
             # resume is the operator's bounded permission to try the failed
             # dimension again; reset it only after the token is accepted.
-            from app.agent.common.dimension_runtime import reset_provider_failure
+            from app.infrastructure.llm.dimension_runtime import reset_provider_failure
             reset_provider_failure(session_id)
 
             initial_state = await cls.aget_state_values(session_id) or {}
@@ -552,7 +552,7 @@ class PlanningRuntimeService:
             rate_limiter.mark_task_started(project_name)
 
         # Build initial state
-        from app.agent.plan_state.state_factory import StateFactory
+        from app.workflow.plan_state.state_factory import StateFactory
         initial_state = StateFactory.create(
             project_name=project_name,
             village_name=village_name,
@@ -784,7 +784,7 @@ class PlanningRuntimeService:
         #    on a fresh thread with no execution history."
         #    LangGraph 1.2.8 fixes DeltaChannel fresh-thread aupdate_state bug (PR #8290).
         if initial_state:
-            from app.agent.common.dimension_runtime import reset_provider_failure
+            from app.infrastructure.llm.dimension_runtime import reset_provider_failure
             reset_provider_failure(session_id)
             clean_state = {
                 k: v

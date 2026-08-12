@@ -30,7 +30,7 @@ def _merge_value(key: str, current: Any, update: Any) -> Any:
     """Apply the reducer semantics needed by the still-migrating stages."""
     if key == "messages":
         try:
-            from app.agent.plan_state.state import _messages_reducer
+            from app.workflow.plan_state.state import _messages_reducer
 
             return _messages_reducer(current or [], update or [])
         except Exception:

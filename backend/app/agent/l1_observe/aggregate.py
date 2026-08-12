@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from app.agent.bootstrap.context_guard import require_frozen_context
+from app.domain.common.context_guard import require_frozen_context
 from app.infrastructure.artifacts.runtime import store_artifact
 from app.modules.schema.contracts.artifact_descriptor import ArtifactDescriptor
 from app.modules.schema.contracts.classification_ref import ClassificationRef

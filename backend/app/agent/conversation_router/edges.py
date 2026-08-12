@@ -16,8 +16,8 @@ from langgraph.graph import END
 from langgraph.types import Send
 from langchain_core.messages import AIMessage
 
-from app.agent.bootstrap.phase_machine import PlanningPhase, get_layer_dimensions, _phase_to_layer
-from app.agent.bootstrap.layer_router import _worker_for_phase
+from app.workflow.layers.phase_machine import PlanningPhase, get_layer_dimensions, _phase_to_layer
+from app.workflow.layers.layer_router import _worker_for_phase
 from app.config import get_dimension_layer
 from app.config.dependency import compute_impact_tree, get_next_revision_wave
 from app.tools.intent_tools import advance_planning_intent, gis_analysis
@@ -409,7 +409,7 @@ def after_analysis(
     if layer is None:
         return END
 
-    from app.agent.bootstrap.layer_router import _ready_dispatch
+    from app.workflow.layers.layer_router import _ready_dispatch
 
     sends = _ready_dispatch(state, phase)
     if sends:

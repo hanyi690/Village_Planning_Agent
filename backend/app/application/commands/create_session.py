@@ -133,7 +133,7 @@ class _StarterDefault:
 
 
 def _default_state(command: CreateSessionCommand) -> dict[str, object]:
-    from app.agent.plan_state.state_factory import StateFactory
+    from app.workflow.plan_state.state_factory import StateFactory
 
     return StateFactory.create(
         project_name=command.project_name,

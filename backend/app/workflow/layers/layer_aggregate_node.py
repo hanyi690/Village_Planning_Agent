@@ -54,7 +54,7 @@ async def layer_aggregate_node(state: Dict[str, Any]) -> Dict[str, Any]:
     # context when a resumed worker has lost its in-process cache.
     aggregate_state = state
     if not state.get("context_version") or not state.get("context_ref"):
-        from app.agent.bootstrap.context_bootstrap import bootstrap_context_node
+        from app.workflow.layers.context_bootstrap import bootstrap_context_node
 
         context_patch = await bootstrap_context_node(state)
         aggregate_state = {**state, **context_patch}
@@ -75,7 +75,7 @@ async def layer_aggregate_node(state: Dict[str, Any]) -> Dict[str, Any]:
         _update_explore_retry(state, patch, layer, "l1_gate_decision")
         # Enrichment consumes the typed L1Snapshot; it must run after this
         # aggregate persisted its artifact, not in layer_completion_check.
-        from app.agent.plan_state.completion_node import _invoke_extraction
+        from app.workflow.plan_state.completion_node import _invoke_extraction
 
         await _invoke_extraction(
             session_id=state.get("session_id", ""),
@@ -92,7 +92,7 @@ async def layer_aggregate_node(state: Dict[str, Any]) -> Dict[str, Any]:
             patch = {**{k: aggregate_state[k] for k in ("context_version", "context_fingerprint", "context_ref", "bootstrap_context_done") if k in aggregate_state}, **patch}
         patch["layer_just_completed"] = None
         _update_explore_retry(state, patch, layer, "l2_gate_decision")
-        from app.agent.plan_state.completion_node import _invoke_extraction
+        from app.workflow.plan_state.completion_node import _invoke_extraction
 
         await _invoke_extraction(
             session_id=state.get("session_id", ""),
@@ -109,7 +109,7 @@ async def layer_aggregate_node(state: Dict[str, Any]) -> Dict[str, Any]:
             patch = {**{k: aggregate_state[k] for k in ("context_version", "context_fingerprint", "context_ref", "bootstrap_context_done") if k in aggregate_state}, **patch}
         patch["layer_just_completed"] = None
         _update_explore_retry(state, patch, layer, "l3_gate_decision")
-        from app.agent.plan_state.completion_node import _invoke_extraction
+        from app.workflow.plan_state.completion_node import _invoke_extraction
 
         await _invoke_extraction(
             session_id=state.get("session_id", ""),

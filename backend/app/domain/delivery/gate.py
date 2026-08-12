@@ -15,7 +15,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from app.agent.common.gate_progress import gate_progress_metadata
+from app.domain.common.gate_progress import gate_progress_metadata
 from app.modules.schema.contracts.delivery_manifest_contracts import (
     DeliveryManifest,
 )

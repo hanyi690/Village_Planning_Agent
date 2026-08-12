@@ -95,7 +95,7 @@ def test_checkpoint_resume_script_requires_a_new_branch_for_historical_continuat
 
 
 def test_historical_resume_branch_replaces_checkpoint_namespace():
-    from app.agent.plan_state.state import _replace_branch_id
+    from app.workflow.plan_state.state import _replace_branch_id
 
     assert _replace_branch_id("historical", "resume-1") == "resume-1"
     assert _replace_branch_id("historical", "") == "historical"

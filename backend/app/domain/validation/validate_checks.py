@@ -221,7 +221,7 @@ def check_traceability(
 ) -> List[ValidationCheck]:
     """Trace each planned target to the output kind declared by EXECUTE."""
     if execution_plan is not None:
-        from app.agent.common.execution_evidence import (
+        from app.domain.common.execution_evidence import (
             active_output_covered,
             contradictory_statuses,
             deferred_outcome_contradiction,

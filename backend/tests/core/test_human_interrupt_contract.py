@@ -1,4 +1,4 @@
-from app.agent.plan_state.state import state_to_ui_status
+from app.workflow.plan_state.state import state_to_ui_status
 from app.modules.schema.contracts.human_interrupt_contracts import (
     HumanInterruptChannel,
     build_human_interrupt,

@@ -12,7 +12,7 @@ import logging
 import time
 from typing import Any, Dict, Optional
 
-from app.agent.bootstrap.phase_machine import get_layer_dimensions
+from app.workflow.layers.phase_machine import get_layer_dimensions
 
 logger = logging.getLogger(__name__)
 

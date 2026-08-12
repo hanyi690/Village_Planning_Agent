@@ -19,7 +19,7 @@ from typing import Any, Dict, List
 from langgraph.graph import END
 from langgraph.types import Command, Send
 
-from app.agent.bootstrap.phase_machine import _phase_to_layer, get_next_phase
+from app.workflow.layers.phase_machine import _phase_to_layer, get_next_phase
 from app.agent.l1_observe.analysis_node import analyze_dimension
 from app.agent.l2_strategize.worker import analyze_l2_dimension
 from app.agent.l3_plan.worker import analyze_l3_dimension

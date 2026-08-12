@@ -155,7 +155,7 @@ def build_coverage_matrix(
             program, specs, grounding_result, decision, changeset, planned_state
         )
 
-    from app.agent.common.execution_evidence import (
+    from app.domain.common.execution_evidence import (
         active_output_covered,
         deferred_outcome_contradiction,
         group_execution_results,
@@ -212,7 +212,7 @@ def check_target_execution_coverage(
     execution_plan,
     execution_result,
 ) -> list[ReconciliationInconsistency]:
-    from app.agent.common.execution_evidence import (
+    from app.domain.common.execution_evidence import (
         active_output_covered,
         contradictory_statuses,
         deferred_outcome_contradiction,

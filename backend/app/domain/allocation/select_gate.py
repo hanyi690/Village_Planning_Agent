@@ -18,7 +18,7 @@ from typing import Any
 
 from app.modules.schema.contracts.selection_contracts import SiteSelectionDecision
 from app.modules.schema.contracts.workflow_contracts import GateDecision, PendingRequest
-from app.agent.common.gate_progress import gate_progress_metadata
+from app.domain.common.gate_progress import gate_progress_metadata
 
 STAGE = "select"
 

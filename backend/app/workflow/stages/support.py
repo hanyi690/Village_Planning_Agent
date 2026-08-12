@@ -128,7 +128,7 @@ def _adopt_context(state: Dict[str, Any], context: Any) -> Dict[str, Any]:
 
 
 async def _require_context(state: Dict[str, Any]) -> Any:
-    from app.agent.bootstrap.context_bootstrap import bootstrap_context_node
+    from app.workflow.layers.context_bootstrap import bootstrap_context_node
     from app.services.context.planning_context import get_cached_context
 
     session_id = state.get("session_id", "")
@@ -139,7 +139,7 @@ async def _require_context(state: Dict[str, Any]) -> Any:
     if context is None:
         raise RuntimeError("PLANNING_CONTEXT_UNAVAILABLE: bootstrap returned no context")
     try:
-        from app.agent.bootstrap.context_bootstrap import _hydrate_l1_spatial_facts
+        from app.workflow.layers.context_bootstrap import _hydrate_l1_spatial_facts
 
         _hydrate_l1_spatial_facts(state, context)
     except Exception as exc:

@@ -25,7 +25,7 @@ from app.core.events import SSEEventType
 from app.core.llm import create_llm
 from app.core.settings import MAX_TOKENS, LLM_STREAM_TIMEOUT
 from app.utils.logger import get_logger
-from app.agent.common.dimension_runtime import (
+from app.infrastructure.llm.dimension_runtime import (
     enrich_summary_background,
     generate_summary,
     generate_summary_regex,

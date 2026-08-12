@@ -4,11 +4,11 @@ from typing import Dict, Any, List, Literal, Optional
 from langgraph.graph import StateGraph, END, START
 from langchain_core.messages import HumanMessage
 
-from app.agent.bootstrap.phase_machine import PlanningPhase, get_layer_dimensions
+from app.workflow.layers.phase_machine import PlanningPhase, get_layer_dimensions
 from app.agent.l1_observe import analyze_dimension, DIMENSION_NAMES
-from app.agent.plan_state import layer_completion_check
-from app.agent.bootstrap.layer_aggregate_node import layer_aggregate_node
-from app.agent.bootstrap.layer_router import (
+from app.workflow.plan_state.completion_node import layer_completion_check
+from app.workflow.layers.layer_aggregate_node import layer_aggregate_node
+from app.workflow.layers.layer_router import (
     l1_worker_node,
     l2_worker_node,
     l3_worker_node,
@@ -41,7 +41,7 @@ from app.workflow.stages.support import (
     _pass_gate,
 )
 from app.workflow.stage_adapter import persist_gate_decision
-from app.agent.bootstrap.context_bootstrap import bootstrap_context_node
+from app.workflow.layers.context_bootstrap import bootstrap_context_node
 from app.core.events import SSEEventType
 from app.modules.schema.contracts.human_interrupt_contracts import (
     HumanInterruptChannel,

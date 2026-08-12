@@ -8,7 +8,7 @@ from __future__ import annotations
 import os
 from typing import Any, Dict, List, Optional
 
-from app.agent.bootstrap.phase_machine import PlanningPhase
+from app.workflow.layers.phase_machine import PlanningPhase
 from app.core.settings import BUSINESS_RETRY_LIMIT, RAG_ENABLED
 from app.workflow.runtime_adapter import initial_workflow_state
 

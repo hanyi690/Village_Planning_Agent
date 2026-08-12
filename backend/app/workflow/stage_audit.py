@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Any, Awaitable, Callable, Dict
 
 from app.services.artifact_fingerprint import semantic_checksum
-from app.agent.common.gate_progress import canonical_input_checksum, canonical_output_checksum
+from app.domain.common.gate_progress import canonical_input_checksum, canonical_output_checksum
 
 
 def _jsonable(value: Any) -> Any:

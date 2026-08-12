@@ -292,7 +292,7 @@ def state_to_ui_status(state: Dict[str, Any], db_session: Optional[Dict] = None,
 
     注意：reports 字段已移除，前端应从数据库 API 获取报告内容
     """
-    from app.agent.bootstrap.phase_machine import get_layer_name, _phase_to_layer
+    from app.workflow.layers.phase_machine import get_layer_name, _phase_to_layer
 
     phase = state.get("phase", "init")
     current_layer = _phase_to_layer(phase)

@@ -23,7 +23,7 @@ from app.core.events import SSEEventType
 from app.utils.logger import get_logger
 from app.agent.explore.service import retrieve_evidence, render_evidence_prompt_section
 from app.modules.schema.contracts.evidence_contracts import ExplorationRequest
-from app.agent.common.dimension_runtime import (
+from app.infrastructure.llm.dimension_runtime import (
     enrich_summary_background,
     generate_summary,
     generate_summary_regex,
