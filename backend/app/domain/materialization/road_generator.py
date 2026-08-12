@@ -278,7 +278,7 @@ def _default_kg_retry_adapter(state: Any, gis_data: Mapping[str, Any]) -> Tuple[
         )
         if session_ref:
             try:
-                from app.modules.kg import require_session_kg
+                from app.infrastructure.kg import require_session_kg
 
                 kg = require_session_kg(session_ref)
                 source = "kg_session_interface"

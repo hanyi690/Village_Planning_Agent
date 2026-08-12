@@ -40,7 +40,7 @@ def split_instruction(content: str) -> tuple:
         return (content or "", "")
     idx = content.find(_INSTRUCTION_MARKER)
     if idx < 0:
-        from app.modules.parsing.compiler.instruction_parser import split_content_instruction
+        from app.data.ingestion.compiler.instruction_parser import split_content_instruction
 
         return split_content_instruction(content)
     display = content[:idx].rstrip()
@@ -266,12 +266,12 @@ class ReportStore:
             from app.infrastructure.llm.dimension_runtime import generate_summary_regex
             return generate_summary_regex(dim_key, layer, content)
 
-        from app.modules.parsing.summary_generator import generate_structured_summary
+        from app.data.ingestion.summary_generator import generate_structured_summary
         try:
             return await generate_structured_summary(dim_key, layer, content)
         except Exception as e:
             logger.warning("[ReportStore] Structured summary failed: %s", e)
-            from app.modules.parsing.schemas import BaseDimensionSummary
+            from app.data.ingestion.schemas import BaseDimensionSummary
             summary = BaseDimensionSummary(
                 dimension_key=dim_key, layer=layer,
                 word_count=len(content), key_points=[],
@@ -673,7 +673,7 @@ class ReportStore:
         Returns Dict mapping dim_key -> parsed summary dict.
         Much lighter than get_layer_reports() for cross-layer dependency loading.
         """
-        from app.modules.parsing.summary_parser import parse_summary
+        from app.data.ingestion.summary_parser import parse_summary
         async with get_async_session() as db:
             statement = (
                 select(DimensionReport)

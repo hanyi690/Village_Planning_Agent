@@ -70,7 +70,7 @@ def _extract_natural_villages(text: str) -> str:
     the source is the L1 socio-economic report and the data-layer gazetteer.
     """
     try:
-        from app.modules.parsing.natural_villages import _KNOWN_NATURAL_VILLAGES
+        from app.data.ingestion.natural_villages import _KNOWN_NATURAL_VILLAGES
     except Exception:
         _KNOWN_NATURAL_VILLAGES = set()
     found: List[str] = []
@@ -89,7 +89,7 @@ def _location_evidence(text: str) -> str:
     model from turning a village list into an unsupported project location.
     """
     try:
-        from app.modules.parsing.natural_villages import _KNOWN_NATURAL_VILLAGES
+        from app.data.ingestion.natural_villages import _KNOWN_NATURAL_VILLAGES
     except Exception:
         _KNOWN_NATURAL_VILLAGES = set()
     rows: List[str] = []

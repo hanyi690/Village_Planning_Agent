@@ -16,7 +16,7 @@ logger = get_logger(__name__)
 
 def _table_facts(instruction: str, source_ref: str) -> list[EvidenceFact]:
     """Compile instruction markdown rows into auditable evidence facts."""
-    from app.modules.parsing.tables import _iter_tables
+    from app.data.ingestion.tables import _iter_tables
 
     facts: list[EvidenceFact] = []
     seen: set[tuple[str, ...]] = set()

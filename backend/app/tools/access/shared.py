@@ -49,7 +49,7 @@ async def resolve_bundle(session_id: str) -> VillageBundle:
 def session_kg(session_id: str):
     """Return the session KG, or None if no KG is registered for this session."""
     try:
-        from app.modules.kg.manager import KGManager
+        from app.infrastructure.kg.manager import KGManager
 
         manager = KGManager()
         return manager.get_session_kg(session_id)
@@ -64,7 +64,7 @@ def budget_check(payload: Dict[str, Any], hard_limit: int = 6000) -> Dict[str, A
     Does not hard-truncate (tools already bound their own top_k / max_chars),
     but flags oversized payloads so callers/LLM know the view is partial.
     """
-    from app.modules.kg.queries.contracts import TokenBudget
+    from app.infrastructure.kg.queries.contracts import TokenBudget
 
     try:
         est = TokenBudget.estimate_dict(payload)

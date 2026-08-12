@@ -42,8 +42,8 @@ async def _route_tasks_node(state: ExecuteAgentState) -> dict:
     if session_id and bound_intent is not None:
         try:
             from rdflib import RDF
-            from app.modules.kg.manager import get_kg_manager
-            from app.modules.kg.ontology import EntityTypes, PLN
+            from app.infrastructure.kg.manager import get_kg_manager
+            from app.infrastructure.kg.ontology import EntityTypes, PLN
 
             kg = get_kg_manager().get_session_kg(session_id)
             if kg is None:

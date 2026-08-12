@@ -16,7 +16,7 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Protocol, runtime_checkable
 
 from app.modules.schema.types.layer_registry import GisLayerTypeEntry
-from app.modules.kg.dlq import DlqEntry
+from app.infrastructure.kg.dlq import DlqEntry
 
 
 @dataclass

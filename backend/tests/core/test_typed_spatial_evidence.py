@@ -6,9 +6,9 @@ being coerced to the village role.
 """
 from types import SimpleNamespace
 
-from app.modules.kg.gazetteer import GazetteerEntry
-from app.modules.kg.enrichment.report_entity_enrichment import _location_fact_mentions
-from app.modules.parsing.compiler.profiles.l1_observation import (
+from app.infrastructure.kg.gazetteer import GazetteerEntry
+from app.infrastructure.kg.enrichment.report_entity_enrichment import _location_fact_mentions
+from app.data.ingestion.compiler.profiles.l1_observation import (
     _extract_location_facts,
 )
 from app.evidence.index.place_evidence_index import PlaceEvidenceIndex

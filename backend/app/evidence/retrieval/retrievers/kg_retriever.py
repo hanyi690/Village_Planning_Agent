@@ -8,8 +8,8 @@ from app.modules.schema.contracts.evidence_contracts import (
     SpatialCognitionEvidence,
 )
 from app.tools.access.shared import session_kg
-from app.modules.kg.queries.cognition import get_village_cognition
-from app.modules.kg.queries.sparql import query_kg
+from app.infrastructure.kg.queries.cognition import get_village_cognition
+from app.infrastructure.kg.queries.sparql import query_kg
 from app.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -121,7 +121,7 @@ async def retrieve_from_kg(
 
     entity_annotations: List[str] = []
     try:
-        from app.modules.kg import get_semantic_memory
+        from app.infrastructure.kg import get_semantic_memory
 
         mem = get_semantic_memory()
         for uri, ann in mem.entity_annotations.items():

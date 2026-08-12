@@ -27,7 +27,7 @@ async def _write_l4_node(state: ExecuteAgentState) -> dict:
         return {}
 
     try:
-        from app.modules.kg.manager import get_kg_manager
+        from app.infrastructure.kg.manager import get_kg_manager
         manager = get_kg_manager()
         kg = manager.get_session_kg(session_id)
         if kg is None:
@@ -37,7 +37,7 @@ async def _write_l4_node(state: ExecuteAgentState) -> dict:
         logger.warning("[EXECUTE:l4_write] KG access failed: %s", e)
         return {}
 
-    from app.modules.kg.builder.layer4 import apply_planned_state
+    from app.infrastructure.kg.builder.layer4 import apply_planned_state
 
     planned_state = None
     if getattr(state, "parcel_changeset", None) is not None:

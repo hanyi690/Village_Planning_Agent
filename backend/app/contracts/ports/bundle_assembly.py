@@ -1,6 +1,6 @@
 """BundleAssemblyPort — injectable GeoJSON-to-bundle merging.
 
-Lets ``app.modules.kg`` (and other modules that must not import from
+Lets ``app.infrastructure.kg`` (and other modules that must not import from
 ``app.modules.data``) merge raw GeoJSON layers into a canonical
 ``VillageBundle`` through a protocol, with the implementation living in the
 data layer. Eliminates the historical ``kg -> data`` reverse dependency.

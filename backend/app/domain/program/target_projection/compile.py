@@ -6,7 +6,7 @@ No LLM calls and no natural-language re-interpretation.
 """
 from __future__ import annotations
 
-from app.modules.parsing.compiler.spec_mapper import (
+from app.data.ingestion.compiler.spec_mapper import (
     map_intervention_to_spec,
     map_interventions_to_specs,
 )

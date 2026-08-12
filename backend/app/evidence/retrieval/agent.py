@@ -7,7 +7,7 @@ contract without changing the downstream Binder boundary.
 
 Consumes the access-tools layer (``app.tools.access``) for any bundle data
 needed by downstream stages, and the stable KG boundary
-(``app.modules.kg.require_session_kg`` / ``query_session_template``) for session
+(``app.infrastructure.kg.require_session_kg`` / ``query_session_template``) for session
 KG interactions.
 
 Path placement note
@@ -55,12 +55,12 @@ class SessionKGQuery:
 
     @property
     def kg(self) -> Any:
-        from app.modules.kg import require_session_kg
+        from app.infrastructure.kg import require_session_kg
 
         return require_session_kg(self.session_id)
 
     def query(self, template_name: str, **params: Any) -> List[Dict[str, Any]]:
-        from app.modules.kg import query_session_template
+        from app.infrastructure.kg import query_session_template
 
         return query_session_template(self.session_id, template_name, **params)
 
@@ -205,7 +205,7 @@ def _instructions_from_l3_table(text: str) -> List[ExplorationInstruction]:
     """Convert every formal L3 row into one evidence-preserving instruction."""
     if "【INSTRUCTION】" not in (text or ""):
         return []
-    from app.modules.parsing.tables import extract_instruction_tables
+    from app.data.ingestion.tables import extract_instruction_tables
 
     extracted = extract_instruction_tables(text)
     collections = (

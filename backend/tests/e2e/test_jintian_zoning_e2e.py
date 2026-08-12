@@ -13,8 +13,8 @@ from shapely.geometry import box, shape
 
 from app.modules.data.ingest import ingest_current_landuse
 from app.modules.data.encoding_detector import detect_encoding
-from app.modules.kg.builder.layer1_control_lines import build_control_line_entities
-from app.modules.kg.ontology import EntityTypes
+from app.infrastructure.kg.builder.layer1_control_lines import build_control_line_entities
+from app.infrastructure.kg.ontology import EntityTypes
 from app.modules.schema.provenance import ProvenanceSource
 from app.domain.materialization.zoning.custom_zone_generator import (
     CustomZoningGenerator,

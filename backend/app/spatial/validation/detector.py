@@ -20,7 +20,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from app.utils.logger import get_logger
 from app.modules.schema import ZONE_TYPE_COLORS
-from app.modules.parsing.semantics import (
+from app.data.ingestion.semantics import (
     CROSS_DIMENSION_METRICS,
     FieldRef,
     MetricConcept,

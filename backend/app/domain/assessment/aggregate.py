@@ -163,7 +163,7 @@ async def l1_aggregate(
     store = ReportStore.get_instance()
     raw_reports = await store.get_layer_reports_with_sources(session_id, layer=1)
 
-    from app.modules.parsing.compiler.core import compile_dimension_report
+    from app.data.ingestion.compiler.core import compile_dimension_report
 
     fragments: list[L1DimensionFragment] = []
     for dim_key, rec in raw_reports.items():

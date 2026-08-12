@@ -16,7 +16,7 @@ def _hydrate_l1_spatial_facts(state: Dict[str, Any], context: Any) -> None:
         # from the persisted session memory before hydrating facts; otherwise
         # the next stage sees the old village-only gazetteer and loses the
         # facility/place bindings created by L1.
-        from app.modules.kg.gazetteer import build_gazetteer
+        from app.infrastructure.kg.gazetteer import build_gazetteer
         from app.services.context.planning_context import _load_session_semantic_memory
 
         session_id = str(state.get("session_id", "") or "")
@@ -30,7 +30,7 @@ def _hydrate_l1_spatial_facts(state: Dict[str, Any], context: Any) -> None:
             if restored_gazetteer.entries:
                 context.gazetteer = restored_gazetteer
                 if getattr(context, "ports", None) is not None:
-                    from app.modules.kg.adapters.gazetteer_adapter import KGGazetteerAdapter
+                    from app.infrastructure.kg.adapters.gazetteer_adapter import KGGazetteerAdapter
 
                     context.ports.gazetteer = KGGazetteerAdapter(restored_gazetteer)
 
@@ -43,7 +43,7 @@ def _hydrate_l1_spatial_facts(state: Dict[str, Any], context: Any) -> None:
         facts = list(getattr(snapshot, "location_facts", []) or [])
         context.location_facts = facts
 
-        from app.modules.kg.enrichment.report_entity_enrichment import (
+        from app.infrastructure.kg.enrichment.report_entity_enrichment import (
             _location_fact_mentions,
             _materialize_gis_village_entries,
         )
@@ -59,7 +59,7 @@ def _hydrate_l1_spatial_facts(state: Dict[str, Any], context: Any) -> None:
             bases,
         )
         if written and getattr(context, "ports", None) is not None:
-            from app.modules.kg.adapters.gazetteer_adapter import KGGazetteerAdapter
+            from app.infrastructure.kg.adapters.gazetteer_adapter import KGGazetteerAdapter
 
             context.ports.gazetteer = KGGazetteerAdapter(context.gazetteer)
         # L1 facts are the authoritative typed spatial evidence.  Rebuild the

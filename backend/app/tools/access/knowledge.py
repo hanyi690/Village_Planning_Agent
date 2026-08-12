@@ -27,7 +27,7 @@ async def knowledge_graph_impl(
         return {"success": False, "error": f"无 session KG（session_id={session_id}）"}
 
     try:
-        from app.modules.kg.queries import (
+        from app.infrastructure.kg.queries import (
             get_entity_by_bsm,
             get_entity_semantics,
             get_parcel_neighbors_semantic,
@@ -36,7 +36,7 @@ async def knowledge_graph_impl(
             get_village_constraint_coverage,
             get_village_semantic_summary,
         )
-        from app.modules.kg.queries.cognition import get_village_cognition
+        from app.infrastructure.kg.queries.cognition import get_village_cognition
 
         if kind == "cognition":
             r = get_village_cognition(kg, mode="full")

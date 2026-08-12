@@ -47,7 +47,7 @@ def _load_session_semantic_memory(session_id: str) -> Any:
     to the session id, so it does not introduce cross-session state.
     """
     try:
-        from app.modules.kg.memory import (
+        from app.infrastructure.kg.memory import (
             SemanticMemoryStore,
             get_memory_dir,
             load_memory_state,
@@ -71,7 +71,7 @@ def _load_session_semantic_memory(session_id: str) -> Any:
     except Exception as exc:
         logger.warning("[PlanningContext] semantic memory restore failed: %s", exc)
         try:
-            from app.modules.kg.memory import SemanticMemoryStore
+            from app.infrastructure.kg.memory import SemanticMemoryStore
 
             return SemanticMemoryStore()
         except Exception:
@@ -168,7 +168,7 @@ async def build_planning_context(
                 kg_version = int(snap.get("version", 0) or 0)
             if snap:
                 kg_session_ref = session_id
-            from app.modules.kg.manager import get_kg_manager
+            from app.infrastructure.kg.manager import get_kg_manager
 
             kg = get_kg_manager().get_session_kg(session_id)
             if kg is not None and kg_session_ref:
@@ -184,7 +184,7 @@ async def build_planning_context(
     gazetteer = None
     if resolved_village:
         try:
-            from app.modules.kg.gazetteer import build_gazetteer
+            from app.infrastructure.kg.gazetteer import build_gazetteer
 
             if kg is not None and bundle is not None and getattr(kg, "g", None) is not None:
                 # The latest L1/L2/L3 enrichment round is part of the
@@ -202,21 +202,21 @@ async def build_planning_context(
     semantic_query_port = None
     try:
         if gazetteer is not None:
-            from app.modules.kg.adapters.gazetteer_adapter import KGGazetteerAdapter
+            from app.infrastructure.kg.adapters.gazetteer_adapter import KGGazetteerAdapter
 
             gazetteer_port = KGGazetteerAdapter(gazetteer)
     except Exception as e:
         logger.warning("[PlanningContext] gazetteer adapter build failed: %s", e)
     try:
         if kg is not None:
-            from app.modules.kg.adapters.spatial_query_adapter import KGSpatialQueryAdapter
+            from app.infrastructure.kg.adapters.spatial_query_adapter import KGSpatialQueryAdapter
 
             spatial_query_port = KGSpatialQueryAdapter(kg)
     except Exception as e:
         logger.warning("[PlanningContext] spatial_query adapter build failed: %s", e)
     try:
         if kg is not None:
-            from app.modules.kg.adapters.semantic_query_adapter import KGSemanticQueryAdapter
+            from app.infrastructure.kg.adapters.semantic_query_adapter import KGSemanticQueryAdapter
 
             semantic_query_port = KGSemanticQueryAdapter(kg)
     except Exception as e:
@@ -247,7 +247,7 @@ async def build_planning_context(
     village_anchors: list = []
     if kg is not None and kg_session_ref:
         try:
-            from app.modules.kg.queries.sparql import query_kg
+            from app.infrastructure.kg.queries.sparql import query_kg
 
             village_anchors = query_kg(kg, "get_village_anchors") or []
         except Exception as e:

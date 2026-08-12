@@ -580,13 +580,13 @@ async def generate_summary(dimension_key: str, dim_layer: int, content: str) -> 
     from app.core.settings import BACKGROUND_SUMMARY_ENRICHMENT
     if not BACKGROUND_SUMMARY_ENRICHMENT:
         return generate_summary_regex(dimension_key, dim_layer, content)
-    from app.modules.parsing.summary_generator import generate_structured_summary
+    from app.data.ingestion.summary_generator import generate_structured_summary
 
     try:
         return await generate_structured_summary(dimension_key, dim_layer, content)
     except Exception as e:
         logger.warning(f"[dimension_runtime] {dimension_key}: Summary generation failed: {e}")
-        from app.modules.parsing.schemas import BaseDimensionSummary
+        from app.data.ingestion.schemas import BaseDimensionSummary
 
         fallback = BaseDimensionSummary(
             dimension_key=dimension_key, layer=dim_layer,
@@ -601,8 +601,8 @@ def generate_summary_regex(dimension_key: str, dim_layer: int, content: str) -> 
     Returns the BaseDimensionSummary JSON used for the immediate DB write;
     the Flash-LLM enrichment happens later in the background task.
     """
-    from app.modules.parsing.schemas import BaseDimensionSummary
-    from app.modules.parsing.summary_generator import (
+    from app.data.ingestion.schemas import BaseDimensionSummary
+    from app.data.ingestion.summary_generator import (
         _extract_dimension_metrics,
         _extract_key_points_regex,
         _extract_metrics_regex,
@@ -641,7 +641,7 @@ async def enrich_summary_background(
 ) -> None:
     """Background task: Flash-LLM summary enrichment + DB update. Non-fatal."""
     try:
-        from app.modules.parsing.summary_generator import generate_structured_summary
+        from app.data.ingestion.summary_generator import generate_structured_summary
 
         summary = await generate_structured_summary(dimension_key, dim_layer, content)
         if not summary:

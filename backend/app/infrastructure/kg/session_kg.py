@@ -90,7 +90,7 @@ def _kg_layer1_parent(bundle: Any, session_id: str) -> str:
 
 
 def _load_layer1_from_cas(session_id: str, bundle: Any) -> Optional[Dict[str, Any]]:
-    from app.modules.kg import PlanningKG, get_kg_manager
+    from app.infrastructure.kg import PlanningKG, get_kg_manager
 
     parent = _kg_layer1_parent(bundle, session_id)
     repo = _kg_repo()
@@ -125,7 +125,7 @@ async def ensure_session_kg(
     Returns:
         snapshot dict（cache_hit / triple_count / version）或 None（失败）。
     """
-    from app.modules.kg import get_kg_manager
+    from app.infrastructure.kg import get_kg_manager
 
     manager = get_kg_manager()
     async with _session_kg_lock(session_id):
@@ -185,9 +185,9 @@ async def ensure_session_kg(
                 len(relations.parcel_water_touches),
             )
 
-            from app.modules.kg import PlanningKG
-            from app.modules.kg.interface import KGSessionSnapshot
-            from app.modules.kg.manager import compute_layer1_cache_key
+            from app.infrastructure.kg import PlanningKG
+            from app.infrastructure.kg.interface import KGSessionSnapshot
+            from app.infrastructure.kg.manager import compute_layer1_cache_key
 
             with _SESSION_KG_BUILD_LOCK:
                 if not force and manager.get_session_kg(session_id) is not None:
@@ -200,7 +200,7 @@ async def ensure_session_kg(
                     future = loop.run_in_executor(
                         _kg_process_pool(),
                         __import__(
-                            "app.modules.kg.process_worker",
+                            "app.infrastructure.kg.process_worker",
                             fromlist=["build_layer1_turtle_worker"],
                         ).build_layer1_turtle_worker,
                         bundle.village_name,
@@ -244,7 +244,7 @@ async def ensure_session_kg(
                         layer1_cache_key=str(cache_key) if cache_key else "",
                     )
                 else:
-                    from app.modules.kg import open_kg_session
+                    from app.infrastructure.kg import open_kg_session
 
                     snap = open_kg_session(
                         session_id=session_id,

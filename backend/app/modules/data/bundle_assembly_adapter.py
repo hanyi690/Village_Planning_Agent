@@ -1,7 +1,7 @@
 """Data-layer implementation of BundleAssemblyPort.
 
 Wraps ``app.modules.data.catalog.catalog._merge_geojson_into_bundle`` behind
-the BundleAssemblyPort protocol so modules like ``app.modules.kg`` can inject
+the BundleAssemblyPort protocol so modules like ``app.infrastructure.kg`` can inject
 it without importing from ``app.modules.data`` (eliminating the kg->data
 reverse dependency).
 """

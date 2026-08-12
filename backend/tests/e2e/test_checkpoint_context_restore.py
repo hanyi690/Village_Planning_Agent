@@ -2,7 +2,7 @@
 
 from pathlib import Path
 
-from app.modules.kg.memory import EntityAnnotation, SemanticMemoryStore, save_memory_state
+from app.infrastructure.kg.memory import EntityAnnotation, SemanticMemoryStore, save_memory_state
 from app.services.context import planning_context
 
 
@@ -27,7 +27,7 @@ def test_latest_session_semantic_memory_is_restored(monkeypatch, tmp_path: Path)
 
 
 def test_persisted_gis_village_binding_restores_bsms():
-    from app.modules.kg.gazetteer.gazetteer import _annotation_entries_from_memory
+    from app.infrastructure.kg.gazetteer.gazetteer import _annotation_entries_from_memory
 
     memory = SemanticMemoryStore()
     memory.add_entity_annotation(EntityAnnotation(
@@ -44,7 +44,7 @@ def test_persisted_gis_village_binding_restores_bsms():
 
 
 def test_persisted_facility_anchor_restores_exact_target_binding():
-    from app.modules.kg.gazetteer.gazetteer import _annotation_entries_from_memory
+    from app.infrastructure.kg.gazetteer.gazetteer import _annotation_entries_from_memory
 
     memory = SemanticMemoryStore()
     memory.add_entity_annotation(EntityAnnotation(

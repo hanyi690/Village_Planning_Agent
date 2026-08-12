@@ -3,7 +3,7 @@
 from pathlib import Path
 from types import SimpleNamespace
 
-from app.modules.parsing.compiler.profiles.l1_observation import compile_l1_observation
+from app.data.ingestion.compiler.profiles.l1_observation import compile_l1_observation
 from app.evidence.index.place_evidence_index import PlaceEvidenceIndex
 
 

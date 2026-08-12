@@ -62,7 +62,7 @@ async def _delete_session_bundle(session_id: str) -> bool:
 
 async def _delete_session_kg(session_id: str) -> bool:
     try:
-        from app.modules.kg.manager import get_kg_manager
+        from app.infrastructure.kg.manager import get_kg_manager
         get_kg_manager().remove_session(session_id)
         return True
     except Exception as e:
@@ -136,7 +136,7 @@ async def _delete_session_kg_memory(session_id: str) -> bool:
         import glob
         import os
         import shutil
-        from app.modules.kg.memory import get_memory_dir
+        from app.infrastructure.kg.memory import get_memory_dir
 
         base = get_memory_dir()
         for f in glob.glob(str(base / f"{session_id}_round_*.json")):

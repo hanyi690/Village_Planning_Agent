@@ -145,7 +145,7 @@ async def test_runtime_pipeline_e2e(sqlite_db, pipeline_reset, monkeypatch):
         assert len(restored.polygons.get("landuse_current") or []) > 0
 
         # ── Stage 5: KG build + session registration ─────────────────────
-        from app.modules.kg.manager import KGManager
+        from app.infrastructure.kg.manager import KGManager
 
         kg = KGManager().get_or_build_kg("金田村", bundle=bundle, session_id=sid)
         assert kg is not None

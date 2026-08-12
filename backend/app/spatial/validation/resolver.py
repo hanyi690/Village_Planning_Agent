@@ -19,7 +19,7 @@ from .detector import (
     MetricConflict,
     SpatialConflict,
 )
-from app.modules.parsing.semantics import MetricConcept, ValueSemantics
+from app.data.ingestion.semantics import MetricConcept, ValueSemantics
 
 logger = get_logger(__name__)
 

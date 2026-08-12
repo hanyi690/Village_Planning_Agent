@@ -8,7 +8,7 @@ from langchain_core.tools import InjectedToolCallId, tool
 from langgraph.prebuilt import InjectedState
 from langgraph.types import Command
 
-from app.modules.kg.service import build_knowledge_graph_data
+from app.infrastructure.kg.service import build_knowledge_graph_data
 from app.tools.helpers import make_result, to_tool_message
 
 
@@ -48,7 +48,7 @@ def query_knowledge_graph(
     **params: Any,
 ) -> Command:
     """Query the session graph with a registered SPARQL template."""
-    from app.modules.kg.manager import get_kg_manager
+    from app.infrastructure.kg.manager import get_kg_manager
 
     manager = get_kg_manager()
     kg = manager.get_session_kg(session_id)

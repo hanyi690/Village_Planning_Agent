@@ -86,7 +86,7 @@ async def spatial_context_impl(session_id: str) -> Dict[str, Any]:
     kg = session_kg(session_id)
     if kg is not None:
         try:
-            from app.modules.kg.queries.cognition import get_village_cognition
+            from app.infrastructure.kg.queries.cognition import get_village_cognition
 
             result = get_village_cognition(kg, bundle.village_name, mode="full")
             payload["kg_cognition"] = {

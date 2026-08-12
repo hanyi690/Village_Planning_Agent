@@ -42,14 +42,14 @@ def _is_protection(name: str) -> bool:
 
 def extract_vocabulary_deterministic(reports: Dict[str, str]) -> Vocabulary:
     """无 LLM 兜底：从报告分区表提取类别，语义推断颜色与地类线索。"""
-    from app.modules.parsing.tables import _extract_zone_tables
+    from app.data.ingestion.tables import _extract_zone_tables
 
     categories: List[VocabularyCategory] = []
     seen = set()
     for content in (reports or {}).values():
         zone_targets = list(_extract_zone_tables(content))
         try:
-            from app.modules.parsing.tables import extract_instruction_tables
+            from app.data.ingestion.tables import extract_instruction_tables
 
             zone_targets.extend(
                 (extract_instruction_tables(content).get("zones") or [])

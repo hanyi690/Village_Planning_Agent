@@ -178,7 +178,7 @@ async def analyze_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
                 dep_keys = getattr(cfg, "layer_depends_on", []) or []
                 if dep_keys:
                     layer_summaries = await store.get_layer_summaries(session_id, 1)
-                    from ...modules.parsing.schemas import get_dimension_schema
+                    from ...data.ingestion.schemas import get_dimension_schema
                     merged_metrics = {}
                     for dk in dep_keys:
                         raw = layer_summaries.get(dk)
@@ -513,7 +513,7 @@ def _extract_natural_villages(text: str) -> str:
     数据源 = L1 socio_economic 报告（"完整名单：田坑、黄竹、园寨…"）。
     """
     try:
-        from app.modules.parsing.natural_villages import _KNOWN_NATURAL_VILLAGES
+        from app.data.ingestion.natural_villages import _KNOWN_NATURAL_VILLAGES
     except Exception:
         _KNOWN_NATURAL_VILLAGES = set()
     found: List[str] = []

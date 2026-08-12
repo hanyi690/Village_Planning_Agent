@@ -220,7 +220,7 @@ async def execute_node(state: Dict[str, Any]) -> Dict[str, Any]:
     kg_obj = getattr(context, "kg", None)
     if kg_obj is not None and execution_intent is not None:
         try:
-            from app.modules.kg.builder.layer3 import build_intent_layer
+            from app.infrastructure.kg.builder.layer3 import build_intent_layer
             build_intent_layer(kg_obj, execution_intent)
         except Exception as exc:
             logger.warning("[workflow:execute] build_intent_layer failed: %s", exc)

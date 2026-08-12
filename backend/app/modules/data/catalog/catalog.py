@@ -493,7 +493,7 @@ class DataCatalog:
         """
         try:
             import yaml
-            from app.modules.kg.village_name_registry import find_village_yaml
+            from app.data.model.village_name_registry import find_village_yaml
 
             cfg_path = find_village_yaml(str(village_name).strip())
             if cfg_path is None:
@@ -520,7 +520,7 @@ class DataCatalog:
         """
         try:
             import yaml
-            from app.modules.kg.village_name_registry import find_village_yaml
+            from app.data.model.village_name_registry import find_village_yaml
 
             cfg_path = find_village_yaml(str(village_name).strip())
             if cfg_path is None:
