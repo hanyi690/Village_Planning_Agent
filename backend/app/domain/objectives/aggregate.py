@@ -17,8 +17,8 @@ from app.modules.schema.contracts.l1_contracts import EvidenceGap
 from app.modules.schema.contracts.l2_contracts import L2Strategy, L2StrategyFragment
 from app.modules.schema.contracts.parsing_contracts import CompilationProfile
 from app.modules.schema.contracts.provenance import Provenance
-from app.services.artifact_fingerprint import semantic_checksum
-from app.services.review_package import write_review_package
+from app.infrastructure.artifacts.fingerprint import semantic_checksum
+from app.infrastructure.reports.review_package import write_review_package
 from app.utils.logger import get_logger
 
 from .gate import evaluate_l2_gate
@@ -108,7 +108,7 @@ async def l2_aggregate(
     *,
     base_dir: str = ".run-tmp",
 ) -> dict[str, Any]:
-    from app.services.report_store import ReportStore
+    from app.infrastructure.reports.report_store import ReportStore
 
     run_id = state.get("run_id", state.get("session_id", ""))
     session_id = state.get("session_id", run_id)

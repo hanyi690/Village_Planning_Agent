@@ -16,7 +16,7 @@ from pydantic import ValidationError
 
 from app.infrastructure.artifacts import ContentAddressedArtifactRepository, NamedRefConflict
 from app.modules.schema.contracts.artifact_descriptor import ArtifactDescriptor
-from app.services.run_paths import run_tmp_root
+from app.infrastructure.paths import run_tmp_root
 
 T = TypeVar("T")
 

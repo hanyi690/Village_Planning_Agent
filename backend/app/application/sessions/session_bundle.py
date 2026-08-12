@@ -93,7 +93,7 @@ async def restore_session_bundle(
     ):
         return cached
 
-    from app.services.bundle_store import BundleStore
+    from app.infrastructure.storage.bundle_store import BundleStore
 
     bundle = await BundleStore.get_instance().load_bundle(session_id, version=version)
     if bundle is not None:
@@ -136,7 +136,7 @@ async def snapshot_session_bundle(
     if not session_id:
         return None
 
-    from app.services.bundle_store import BundleStore
+    from app.infrastructure.storage.bundle_store import BundleStore
 
     try:
         bundle = await build_session_bundle(session_id, refresh=True)

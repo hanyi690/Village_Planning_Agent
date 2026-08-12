@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from app.modules.schema.contracts.artifact_descriptor import ArtifactDescriptor
-from app.services.artifact_fingerprint import semantic_checksum
+from app.infrastructure.artifacts.fingerprint import semantic_checksum
 
 
 class NamedRefConflict(RuntimeError):

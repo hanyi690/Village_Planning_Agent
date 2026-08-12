@@ -2,7 +2,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from app.services.resume_service import ResumeConflictError, ResumeService
+from app.application.recovery.resume_service import ResumeConflictError, ResumeService
 from app.modules.schema.contracts.resume_contracts import ResumePlan, ResumeMode
 
 

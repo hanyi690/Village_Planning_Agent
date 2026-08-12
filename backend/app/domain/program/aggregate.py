@@ -26,9 +26,9 @@ from app.modules.schema.contracts.l3_contracts import (
     ProgramIssue,
 )
 from app.modules.schema.contracts.provenance import Provenance
-from app.services.artifact_fingerprint import semantic_checksum
-from app.services.review_package import write_review_package
-from app.services.run_paths import run_tmp_root
+from app.infrastructure.artifacts.fingerprint import semantic_checksum
+from app.infrastructure.reports.review_package import write_review_package
+from app.infrastructure.paths import run_tmp_root
 from app.utils.logger import get_logger
 
 from .gate import evaluate_l3_gate
@@ -256,7 +256,7 @@ async def l3_aggregate(
     *,
     base_dir: str | None = None,
 ) -> dict[str, Any]:
-    from app.services.report_store import ReportStore
+    from app.infrastructure.reports.report_store import ReportStore
 
     effective_base_dir = run_tmp_root() if base_dir is None else base_dir
 

@@ -14,8 +14,8 @@ from app.modules.schema.contracts.resume_contracts import (
     ResumePlan,
     build_resume_plan as _build_contract_plan,
 )
-from app.services.checkpoint_policy import classify_checkpoint, first_pending_interrupt_payload
-from app.services.resume_service import fork_branch_from_plan, mark_plan_fork, plan_blocked
+from app.infrastructure.checkpoint.checkpoint_policy import classify_checkpoint, first_pending_interrupt_payload
+from app.application.recovery.resume_service import fork_branch_from_plan, mark_plan_fork, plan_blocked
 
 
 class CheckpointCursor(BaseModel):

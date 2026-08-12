@@ -48,7 +48,7 @@ def test_v1_transport_has_no_runtime_store_or_sse_dependencies() -> None:
         {
             "app.services.runtime",
             "app.infrastructure.artifacts.runtime",
-            "app.services.report_store",
+            "app.infrastructure.reports.report_store",
             "app.utils.sse_publisher",
         }
     )

@@ -9,7 +9,7 @@ eliminating the repeated Bundle/KG/report rebuilds in ``gis_agent_node``,
 ``ensure_session_kg`` and ``layout_pipeline._fetch/_build_kg``.
 
 Versioning: every rebuild bumps ``PlanningContext.version``. The bundle is
-cached in ``app.services.session_bundle``; the session KG is idempotent in
+cached in ``app.application.sessions.session_bundle``; the session KG is idempotent in
 ``KGManager``. ``build_planning_context`` reuses both and only assembles the
 derived parts (gazetteer / ports / constraint index / anchors / evidence).
 """
@@ -140,8 +140,8 @@ async def build_planning_context(
         if cached is not None:
             return cached
 
-    from app.services.session_bundle import build_session_bundle
-    from app.services.session_kg import ensure_session_kg
+    from app.application.sessions.session_bundle import build_session_bundle
+    from app.infrastructure.kg.session_kg import ensure_session_kg
 
     version = version if version is not None else await _next_persisted_version(session_id)
 
@@ -258,7 +258,7 @@ async def build_planning_context(
     report_summary_index: Dict[str, Dict[str, Any]] = {}
     if include_reports and session_id:
         try:
-            from app.services.report_store import ReportStore
+            from app.infrastructure.reports.report_store import ReportStore
 
             store = ReportStore.get_instance()
             for layer in (1, 2, 3):

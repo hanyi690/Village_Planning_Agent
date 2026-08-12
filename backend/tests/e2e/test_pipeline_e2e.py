@@ -77,7 +77,7 @@ async def test_runtime_pipeline_e2e(sqlite_db, pipeline_reset, monkeypatch):
         assert all(u["parse_status"] == "success" for u in uploads)
 
         # ── Stage 2: build_session_bundle (real DataCatalog) ──────────────
-        from app.services.session_bundle import build_session_bundle
+        from app.application.sessions.session_bundle import build_session_bundle
 
         bundle = await build_session_bundle(sid)
         assert bundle.metadata.session_id == sid
@@ -102,7 +102,7 @@ async def test_runtime_pipeline_e2e(sqlite_db, pipeline_reset, monkeypatch):
 
         # ── Stage 3: reports bulk_save + read-back ────────────────────────
         from app.database.operations import get_session_reports_async
-        from app.services.report_store import ReportStore
+        from app.infrastructure.reports.report_store import ReportStore
 
         store = ReportStore()
         await store.bulk_save([
@@ -122,8 +122,8 @@ async def test_runtime_pipeline_e2e(sqlite_db, pipeline_reset, monkeypatch):
 
         # ── Stage 4: versioned snapshot → planning_bundles ───────────────
         from app.database.operations import get_planning_bundle_async
-        from app.services.bundle_store import BundleStore
-        from app.services.session_bundle import snapshot_session_bundle
+        from app.infrastructure.storage.bundle_store import BundleStore
+        from app.application.sessions.session_bundle import snapshot_session_bundle
 
         snap = await snapshot_session_bundle(sid, trigger_reason="final")
         assert snap is not None
@@ -152,7 +152,7 @@ async def test_runtime_pipeline_e2e(sqlite_db, pipeline_reset, monkeypatch):
         assert KGManager().get_session_kg(sid) is kg
 
         # ── Stage 6: resolve_bundle is snapshot-first (no live build) ────
-        from app.services import session_bundle as sb
+        from app.application.sessions import session_bundle as sb
         from app.tools.access.shared import resolve_bundle
 
         sb._bundle_cache.clear()

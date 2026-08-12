@@ -66,7 +66,7 @@ async def layer_reports_impl(
     if not result:
         # Snapshot has no reports — fall back to the live dimension_reports DB.
         try:
-            from app.services.report_store import ReportStore
+            from app.infrastructure.reports.report_store import ReportStore
 
             store = ReportStore.get_instance()
             layers = [layer] if layer is not None else [1, 2, 3]

@@ -51,7 +51,7 @@ def _artifact_payloads(reports: List[Dict[str, Any]]) -> Dict[str, Any]:
     """Load full persisted payloads for the report without changing checkpoint state."""
     from app.infrastructure.artifacts import ContentAddressedArtifactRepository
     from app.modules.schema.contracts.artifact_descriptor import ArtifactDescriptor
-    from app.services.run_paths import run_tmp_root
+    from app.infrastructure.paths import run_tmp_root
 
     payloads: Dict[str, Any] = {}
     repository = ContentAddressedArtifactRepository(run_tmp_root())
@@ -319,7 +319,7 @@ async def build_stage_report_markdown(session_id: str) -> str:
     # runtime working directory is the backend directory for uvicorn/tests,
     # matching the CAS repository's default `.run-tmp` root.
     markdown = render_stage_report_markdown(reports, summary)
-    from app.services.run_paths import session_run_dir
+    from app.infrastructure.paths import session_run_dir
 
     output = session_run_dir(session_id) / "reports" / "stage-report.md"
     try:

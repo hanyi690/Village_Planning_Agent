@@ -110,7 +110,7 @@ class _IngestionDefault:
 class _StarterDefault:
     async def start(self, session_id: str, initial_state: Mapping[str, object]) -> None:
         from app.infrastructure.events import event_hub
-        from app.services.composition import CompositionRoot
+        from app.bootstrap.composition import CompositionRoot
         from app.services.runtime import PlanningRuntimeService
 
         await PlanningRuntimeService.ensure_initialized()

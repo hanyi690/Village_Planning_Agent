@@ -17,7 +17,7 @@ from app.modules.schema.contracts.resume_contracts import (
     ResumeMode,
     ResumePlan,
 )
-from app.services.resume_service import ResumeConflictError, ResumeService
+from app.application.recovery.resume_service import ResumeConflictError, ResumeService
 
 
 class ResumeRequestError(ValueError):
@@ -100,7 +100,7 @@ class PlanningRuntimeResumePort:
         replay_from_stage: str | None,
         branch_id: str,
     ) -> None:
-        from app.services.composition import CompositionRoot
+        from app.bootstrap.composition import CompositionRoot
         from app.services.runtime import PlanningRuntimeService
 
         await PlanningRuntimeService.ensure_initialized()

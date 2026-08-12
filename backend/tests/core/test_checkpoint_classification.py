@@ -1,4 +1,4 @@
-from app.services.checkpoint_policy import classify_checkpoint
+from app.infrastructure.checkpoint.checkpoint_policy import classify_checkpoint
 
 
 def test_layer_checkpoint_does_not_require_legacy_is_interrupted_flag():

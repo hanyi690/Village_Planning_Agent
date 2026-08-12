@@ -37,7 +37,7 @@ def render_delivery_artifacts(
         artifacts["delivery_snapshot_error"] = snapshot_error
 
     try:
-        from app.services.run_paths import session_run_dir
+        from app.infrastructure.paths import session_run_dir
         from app.tools.gis.html_render import render_interactive_map
         from app.tools.gis.static_render import render_comparison_preview
 

@@ -33,7 +33,7 @@ async def _snapshot_bundle(session_id: str, trigger_reason: str) -> None:
     if not session_id:
         return
     try:
-        from app.services.session_bundle import snapshot_session_bundle
+        from app.application.sessions.session_bundle import snapshot_session_bundle
 
         await snapshot_session_bundle(session_id, trigger_reason=trigger_reason)
     except Exception as e:
@@ -55,7 +55,7 @@ async def _maybe_extract_bindings(
     if not session_id:
         return
     try:
-        from app.services.report_store import ReportStore
+        from app.infrastructure.reports.report_store import ReportStore
 
         store = ReportStore.get_instance()
         reports = await store.get_layer_reports(session_id, layer)
@@ -146,7 +146,7 @@ async def layer_completion_check(
         get_layer_name,
     )
     from app.utils.sse_publisher import SSEPublisher
-    from app.services.report_store import ReportStore
+    from app.infrastructure.reports.report_store import ReportStore
 
     # 级联修订完成检测：检查所有修订波次是否完成
     if state.get("is_revision"):

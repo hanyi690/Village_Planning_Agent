@@ -206,7 +206,7 @@ async def build_positioning_trace(session_id: str) -> Dict[str, Any]:
 
 async def build_backend_run_report(session_id: str) -> Dict[str, Any]:
     """Build an auditable feasibility report for one backend planning run."""
-    from app.services.report_store import ReportStore
+    from app.infrastructure.reports.report_store import ReportStore
 
     trace = await build_positioning_trace(session_id)
     store = ReportStore.get_instance()

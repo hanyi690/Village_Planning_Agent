@@ -6,7 +6,7 @@ from typing import Any, Dict, Optional
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field, model_validator
 
-from app.services.resume_service import ResumeConflictError
+from app.application.recovery.resume_service import ResumeConflictError
 
 logger = logging.getLogger(__name__)
 router = APIRouter()

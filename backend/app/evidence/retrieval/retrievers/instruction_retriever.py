@@ -8,7 +8,7 @@ from app.modules.schema.contracts.evidence_contracts import (
     EvidenceFact,
     EvidenceSource,
 )
-from app.services.report_store import ReportStore, split_instruction
+from app.infrastructure.reports.report_store import ReportStore, split_instruction
 from app.utils.logger import get_logger
 
 logger = get_logger(__name__)

@@ -13,7 +13,7 @@ from functools import wraps
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Dict
 
-from app.services.artifact_fingerprint import semantic_checksum
+from app.infrastructure.artifacts.fingerprint import semantic_checksum
 from app.domain.common.gate_progress import canonical_input_checksum, canonical_output_checksum
 
 

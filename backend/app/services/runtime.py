@@ -35,7 +35,7 @@ from app.database.operations import (
 )
 from app.api.schemas import TaskStatus
 from app.infrastructure.events import event_hub as sse_manager
-from app.services.checkpoint import checkpoint_service, checkpoint_persistence_manager
+from app.application.queries.checkpoint import checkpoint_service, checkpoint_persistence_manager
 from app.core.settings import GRAPH_MAX_CONCURRENCY, GRAPH_RECURSION_LIMIT
 from app.workflow.root_graph import create_unified_planning_graph
 from app.workflow.runtime_adapter import materialize_workflow_state, pack_workflow_patch
@@ -54,7 +54,7 @@ from app.utils.event_factory import (
 )
 
 logger = logging.getLogger(__name__)
-from app.services.resume_service import ResumeConflictError, ResumeService
+from app.application.recovery.resume_service import ResumeConflictError, ResumeService
 
 # Known intent tool names that should not be overridden by synthetic messages
 _KNOWN_INTENT_NAMES = frozenset({"advance_planning_intent", "gis_analysis", "GISAnalysis"})
@@ -95,7 +95,6 @@ class PlanningRuntimeService:
     _instance: Optional["PlanningRuntimeService"] = None
     _checkpointer: Optional[BaseCheckpointSaver] = None
     _graph: Optional[StateGraph] = None
-    _execute_subgraph: Optional[Any] = None
     _initialized: bool = False
     _lock: Optional[asyncio.Lock] = None
     _execution_locks: Dict[str, asyncio.Lock] = {}
@@ -130,16 +129,6 @@ class PlanningRuntimeService:
             cls._graph = create_unified_planning_graph(checkpointer=cls._checkpointer)
             logger.info("[PlanningRuntimeService] Graph created")
 
-            from app.domain.materialization.execute_agent import build_execute_agent_graph
-            # EXECUTE has a different local worker schema and is invoked as a
-            # stage adapter. Its workspace never crosses the parent graph
-            # checkpoint; the parent receives only typed artifact refs/results.
-            cls._execute_subgraph = build_execute_agent_graph(checkpointer=None)
-            logger.info(
-                "[PlanningRuntimeService] EXECUTE subgraph compiled "
-                "(parent checkpoint owns stage boundary)"
-            )
-
             cls._initialized = True
             logger.info("[PlanningRuntimeService] Initialization complete")
 
@@ -152,7 +141,7 @@ class PlanningRuntimeService:
     @classmethod
     async def shutdown(cls) -> None:
         """Cancel all tracked background tasks on application shutdown."""
-        from app.services.composition import CompositionRoot
+        from app.bootstrap.composition import CompositionRoot
 
         sup = CompositionRoot.get_task_supervisor()
         await sup.cancel_all()
@@ -299,7 +288,7 @@ class PlanningRuntimeService:
 
             paused_stage = str(current.get("paused_stage") or "").lower()
             if paused_stage in {"l1", "l2", "l3", "ground", "select"}:
-                from app.services.session_kg import ensure_session_kg
+                from app.infrastructure.kg.session_kg import ensure_session_kg
 
                 context_ref = current.get("context_ref") or {}
                 raw_version = context_ref.get("version") or current.get("context_version")
@@ -750,7 +739,7 @@ class PlanningRuntimeService:
         #    Non-fatal: any failure logs a warning and the pipeline continues.
         if initial_state:
             try:
-                from app.services.session_kg import ensure_session_kg
+                from app.infrastructure.kg.session_kg import ensure_session_kg
 
                 initial_runtime = materialize_workflow_state(initial_state)
                 vname = str((initial_runtime.get("config") or {}).get("village_name", ""))
@@ -1045,7 +1034,7 @@ class PlanningRuntimeService:
             logger.debug(f"[PlanningRuntimeService] [{session_id}] Skipping layer_started: current_layer={current_layer}, need_revision={need_revision}")
 
         # Start background execution
-        from app.services.composition import CompositionRoot
+        from app.bootstrap.composition import CompositionRoot
 
         CompositionRoot.get_task_supervisor().create_task(
             session_id,

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from app.services.artifact_fingerprint import semantic_checksum, semantic_payload
+from app.infrastructure.artifacts.fingerprint import semantic_checksum, semantic_payload
 
 def checksum(value: Any) -> str:
     return semantic_checksum(value)

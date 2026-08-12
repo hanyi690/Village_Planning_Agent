@@ -25,14 +25,14 @@ async def resolve_bundle(session_id: str) -> VillageBundle:
     if not session_id:
         return VillageBundle(village_name="")
 
-    from app.services.session_bundle import build_session_bundle, get_cached_bundle
+    from app.application.sessions.session_bundle import build_session_bundle, get_cached_bundle
 
     cached = get_cached_bundle(session_id)
     if cached is not None:
         return cached
 
     try:
-        from app.services.bundle_store import BundleStore
+        from app.infrastructure.storage.bundle_store import BundleStore
         stored = await BundleStore.get_instance().load_bundle(session_id)
         if stored is not None:
             return stored

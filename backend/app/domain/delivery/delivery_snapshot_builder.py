@@ -38,7 +38,7 @@ def build_spatial_delivery_products(
         canonical_gis_data_from_workspace,
         load_complete_planned_geojson,
     )
-    from app.services.run_paths import session_run_dir
+    from app.infrastructure.paths import session_run_dir
 
     products = SpatialDeliveryProducts()
     try:

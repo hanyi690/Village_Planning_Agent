@@ -17,6 +17,17 @@ from app.workflow.stages.support import (
 
 logger = get_logger(__name__)
 
+_execute_subgraph = None
+
+
+def _get_execute_subgraph():
+    global _execute_subgraph
+    if _execute_subgraph is None:
+        from app.domain.materialization.execute_agent import build_execute_agent_graph
+
+        _execute_subgraph = build_execute_agent_graph(checkpointer=None)
+    return _execute_subgraph
+
 
 def _to_typed(data: Any, cls: type) -> Any:
     if data is None or isinstance(data, cls):
@@ -155,7 +166,6 @@ def _task_results_from_execution(execution_plan: Any, result: Dict[str, Any]) ->
 
 async def execute_node(state: Dict[str, Any]) -> Dict[str, Any]:
     """Run the worker subgraph and persist only typed output references."""
-    from app.services.runtime import PlanningRuntimeService
     from app.domain.materialization.execute_state import ExecuteAgentState
     from app.domain.materialization.plan_builder import (
         build_execution_plan,
@@ -206,10 +216,7 @@ async def execute_node(state: Dict[str, Any]) -> Dict[str, Any]:
     )
     from app.domain.materialization.nodes.worker_common import _execution_intent_from_plan
     execution_intent = _execution_intent_from_plan(exec_state)
-    graph = PlanningRuntimeService._execute_subgraph
-    if graph is None:
-        await PlanningRuntimeService.ensure_initialized()
-        graph = PlanningRuntimeService._execute_subgraph
+    graph = _get_execute_subgraph()
     kg_obj = getattr(context, "kg", None)
     if kg_obj is not None and execution_intent is not None:
         try:
@@ -264,7 +271,7 @@ async def execute_node(state: Dict[str, Any]) -> Dict[str, Any]:
     fatal_error = None
     diagnostic_terminal = None
     if l4_error:
-        from app.services.artifact_fingerprint import semantic_checksum
+        from app.infrastructure.artifacts.fingerprint import semantic_checksum
         missing_targets = _jsonable(l4_write_result.get("missing_targets", []))
         fatal_error = {"stage": "EXECUTE", "code": str(l4_error), "message": f"L4 write failed: {l4_error}", "missing_targets": missing_targets}
         diagnostic_terminal = {"stage": "execute", "reason": str(l4_error), "issue_fingerprint": semantic_checksum(l4_write_result), "missing_targets": missing_targets}

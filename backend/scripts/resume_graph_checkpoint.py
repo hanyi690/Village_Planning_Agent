@@ -101,7 +101,8 @@ async def _run(args: argparse.Namespace) -> int:
 
     PlanningRuntimeService._checkpointer = None
     PlanningRuntimeService._graph = None
-    PlanningRuntimeService._execute_subgraph = None
+    import app.workflow.stages.execute as execute_stage
+    execute_stage._execute_subgraph = None
     PlanningRuntimeService._initialized = False
     PlanningRuntimeService._lock = None
 
@@ -148,7 +149,7 @@ async def _run(args: argparse.Namespace) -> int:
         if not state:
             print(json.dumps({"error": "checkpoint_not_found"}, ensure_ascii=False))
             return 2
-        from app.services.report_store import ReportStore
+        from app.infrastructure.reports.report_store import ReportStore
 
         reports = await ReportStore.get_instance().get_layer_reports_with_sources(
             args.session_id,
@@ -210,7 +211,7 @@ async def _run(args: argparse.Namespace) -> int:
             )
             if has_pending_interrupt:
                 raise RuntimeError("active HUMAN checkpoints require --action and --event-id")
-            from app.services.session_kg import ensure_session_kg
+            from app.infrastructure.kg.session_kg import ensure_session_kg
 
             raw_version = (state.get("context_ref") or {}).get("version") or state.get("context_version")
             bundle_version = int(raw_version) if str(raw_version or "").isdigit() else None

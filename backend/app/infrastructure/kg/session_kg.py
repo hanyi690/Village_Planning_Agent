@@ -102,7 +102,7 @@ async def ensure_session_kg(
                 return {"cache_hit": True, "session_id": session_id}
 
         try:
-            from app.services.session_bundle import build_session_bundle, restore_session_bundle
+            from app.application.sessions.session_bundle import build_session_bundle, restore_session_bundle
             from app.modules.spatial_ops.geometry import compute_parcel_relations
 
             bundle = await restore_session_bundle(session_id, version=bundle_version)
@@ -122,7 +122,7 @@ async def ensure_session_kg(
                     "likely mis-typed or skipped at bundle build.",
                     session_id, getattr(bundle, "village_name", ""),
                 )
-                from app.services.session_bundle import invalidate_session_bundle
+                from app.application.sessions.session_bundle import invalidate_session_bundle
 
                 invalidate_session_bundle(session_id)
                 return None

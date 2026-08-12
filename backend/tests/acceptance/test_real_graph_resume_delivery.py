@@ -182,9 +182,10 @@ def test_real_graph_resume_delivery(sqlite_db, pipeline_reset, monkeypatch):
     monkeypatch.setattr(db_engine, "_checkpointer", None)
     monkeypatch.setattr(db_engine, "_checkpointer_initialized", False)
     from app.services.runtime import PlanningRuntimeService
+    import app.workflow.stages.execute as execute_stage
     monkeypatch.setattr(PlanningRuntimeService, "_checkpointer", None)
     monkeypatch.setattr(PlanningRuntimeService, "_graph", None)
-    monkeypatch.setattr(PlanningRuntimeService, "_execute_subgraph", None)
+    monkeypatch.setattr(execute_stage, "_execute_subgraph", None)
     monkeypatch.setattr(PlanningRuntimeService, "_initialized", False)
     faulthandler.enable(all_threads=True)
     stop_memory_sampler = threading.Event()
@@ -210,7 +211,7 @@ def test_real_graph_resume_delivery(sqlite_db, pipeline_reset, monkeypatch):
         run_root = (Path.cwd() / ".run-tmp" / f"real-llm-{uuid4().hex}").resolve()
         run_root.mkdir(parents=True, exist_ok=True)
         monkeypatch.setenv("BACKEND_RUN_TMP_DIR", str(run_root))
-        from app.services.run_paths import reset_run_tmp_root_cache
+        from app.infrastructure.paths import reset_run_tmp_root_cache
 
         reset_run_tmp_root_cache()
         from fastapi.testclient import TestClient
@@ -247,9 +248,10 @@ def test_real_graph_resume_delivery(sqlite_db, pipeline_reset, monkeypatch):
 
                 await PlanningRuntimeService.shutdown()
                 await database_engine.shutdown_database()
+                import app.workflow.stages.execute as execute_stage
                 PlanningRuntimeService._checkpointer = None
                 PlanningRuntimeService._graph = None
-                PlanningRuntimeService._execute_subgraph = None
+                execute_stage._execute_subgraph = None
                 PlanningRuntimeService._initialized = False
                 PlanningRuntimeService._lock = None
                 PlanningRuntimeService._execution_locks.clear()

@@ -70,7 +70,7 @@ class CheckpointService:
     @classmethod
     async def get_layer_reports(cls, session_id: str, layer: int) -> Dict[str, Any]:
         from app.services.runtime import PlanningRuntimeService
-        from app.services.report_store import ReportStore
+        from app.infrastructure.reports.report_store import ReportStore
 
         state = await PlanningRuntimeService.aget_state_values(session_id)
         if not state:

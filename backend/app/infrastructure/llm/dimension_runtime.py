@@ -69,7 +69,7 @@ def _display_report(content: str | None) -> str:
     """Return dependency report prose without the private INSTRUCTION block."""
     if not content:
         return ""
-    from app.services.report_store import split_instruction
+    from app.infrastructure.reports.report_store import split_instruction
 
     display, _ = split_instruction(content)
     return strip_model_reasoning(display)
@@ -347,7 +347,7 @@ async def load_dependency_reports(
     Returns (deps, same_layer_contexts). Raises DependencyError when
     same-layer dependencies cannot be recovered from DB + fallback.
     """
-    from app.services.report_store import ReportStore
+    from app.infrastructure.reports.report_store import ReportStore
 
     store = ReportStore.get_instance()
     deps = ""
@@ -418,7 +418,7 @@ async def load_layered_dependency_reports(
     (phase_depends_on). Returns (l1_deps, l2_deps, same_layer_contexts).
     For non-L3 layers, l2_deps is "".
     """
-    from app.services.report_store import ReportStore
+    from app.infrastructure.reports.report_store import ReportStore
 
     store = ReportStore.get_instance()
     same_layer_contexts = ""
@@ -646,7 +646,7 @@ async def enrich_summary_background(
         summary = await generate_structured_summary(dimension_key, dim_layer, content)
         if not summary:
             return
-        from app.services.report_store import ReportStore
+        from app.infrastructure.reports.report_store import ReportStore
 
         store = ReportStore.get_instance()
         await store.update_summary(session_id, dimension_key, version, summary)

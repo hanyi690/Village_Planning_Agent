@@ -39,7 +39,7 @@ from app.infrastructure.llm.dimension_runtime import (
     save_step_report,
     strip_model_reasoning,
 )
-from app.services.task_supervisor import build_summary_task_key
+from app.infrastructure.tasks.task_supervisor import build_summary_task_key
 
 logger = get_logger(__name__)
 
@@ -394,7 +394,7 @@ async def analyze_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
 
     # 8. Generate structured summary (before SSE event so it can reference it)
     structured_summary_str = generate_summary_regex(dim_key, dim_layer, llm_response)
-    from app.services.composition import CompositionRoot
+    from app.bootstrap.composition import CompositionRoot
 
     if BACKGROUND_SUMMARY_ENRICHMENT:
         CompositionRoot.get_task_supervisor().create_task(
@@ -446,7 +446,7 @@ async def analyze_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
     # P2: L1/L2/L3 维度步骤 Report（供 positioning-trace 面板定位）
     if dim_layer in (1, 2, 3):
         try:
-            from app.services.report_store import split_instruction
+            from app.infrastructure.reports.report_store import split_instruction
 
             _, instr = split_instruction(llm_response)
             await save_step_report(

@@ -14,7 +14,7 @@ from typing import Any, Dict, Optional
 
 from app.api.schemas import TaskStatus
 from app.infrastructure.events import EventRepository
-from app.services.checkpoint import checkpoint_service
+from app.application.queries.checkpoint import checkpoint_service
 from app.database.operations import (
     create_planning_session_async,
     get_planning_session_async,
@@ -27,7 +27,7 @@ logger = logging.getLogger(__name__)
 
 async def _cancel_session_tasks(session_id: str) -> bool:
     try:
-        from app.services.composition import CompositionRoot
+        from app.bootstrap.composition import CompositionRoot
         sup = CompositionRoot.get_task_supervisor()
         await sup.cancel_session(session_id)
         return True
@@ -52,7 +52,7 @@ async def _clear_session_context(session_id: str) -> bool:
 
 async def _delete_session_bundle(session_id: str) -> bool:
     try:
-        from app.services.session_bundle import invalidate_session_bundle
+        from app.application.sessions.session_bundle import invalidate_session_bundle
         invalidate_session_bundle(session_id)
         return True
     except Exception as e:
@@ -225,7 +225,7 @@ class SessionService:
             result["uploaded_files"] = False
 
         try:
-            from app.services.report_store import ReportStore
+            from app.infrastructure.reports.report_store import ReportStore
             store = ReportStore.get_instance()
             report_count = await store.delete_session_reports(session_id)
             result["dimension_reports"] = True

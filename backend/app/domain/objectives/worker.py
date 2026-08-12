@@ -44,7 +44,7 @@ from app.infrastructure.llm.dimension_runtime import (
 from app.evidence.retrieval.evidence_service import retrieve_evidence, render_evidence_prompt_section
 from app.modules.prompts.concept import get_dimension_prompt as get_layer2_prompt
 from app.modules.schema.contracts.evidence_contracts import ExplorationRequest
-from app.services.task_supervisor import build_summary_task_key
+from app.infrastructure.tasks.task_supervisor import build_summary_task_key
 
 logger = get_logger(__name__)
 
@@ -288,7 +288,7 @@ async def analyze_l2_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
 
     # 7.5 生成结构化摘要
     structured_summary_str = generate_summary_regex(dim_key, dim_layer, llm_response)
-    from app.services.composition import CompositionRoot
+    from app.bootstrap.composition import CompositionRoot
 
     CompositionRoot.get_task_supervisor().create_task(
         build_summary_task_key(session_id, dim_layer, dim_key, next_version),
@@ -333,7 +333,7 @@ async def analyze_l2_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
 
     # L2 维度步骤 Report（供 positioning-trace 面板定位）
     try:
-        from app.services.report_store import split_instruction
+        from app.infrastructure.reports.report_store import split_instruction
 
         _, instr = split_instruction(llm_response)
         await save_step_report(

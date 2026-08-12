@@ -17,7 +17,7 @@ from app.modules.schema.contracts.resume_contracts import (
     build_resume_plan,
     repair_plan_for_integrity,
 )
-from app.services.checkpoint_policy import (
+from app.infrastructure.checkpoint.checkpoint_policy import (
     classify_checkpoint,
     first_pending_interrupt_payload,
     has_pending_interrupt,

@@ -4,8 +4,8 @@ import asyncio
 
 import pytest
 
-from app.services import session as session_service
-from app.services.task_supervisor import TaskSupervisor
+import app.application.sessions.session_service as session_service
+from app.infrastructure.tasks.task_supervisor import TaskSupervisor
 
 class _CancelRecordingSupervisor:
     def __init__(self):
@@ -80,7 +80,7 @@ async def test_task_supervisor_cancel_session_only_cancels_owned_tasks():
 async def test_task_supervisor_logs_background_exception(monkeypatch: pytest.MonkeyPatch):
     errors: list[tuple[str, BaseException]] = []
     monkeypatch.setattr(
-        "app.services.task_supervisor.logger.error",
+        "app.infrastructure.tasks.task_supervisor.logger.error",
         lambda message, key, exc: errors.append((key, exc)),
     )
 
@@ -104,7 +104,7 @@ async def test_task_supervisor_logs_background_exception(monkeypatch: pytest.Mon
 async def test_cancel_session_tasks_uses_cancel_session(monkeypatch: pytest.MonkeyPatch):
     supervisor = _CancelRecordingSupervisor()
     monkeypatch.setattr(
-        "app.services.composition.CompositionRoot.get_task_supervisor",
+        "app.bootstrap.composition.CompositionRoot.get_task_supervisor",
         lambda: supervisor,
     )
 

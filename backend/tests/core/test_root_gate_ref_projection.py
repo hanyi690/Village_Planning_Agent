@@ -13,7 +13,7 @@ from app.workflow.state import RootGateResolutionError, load_root_gate
 
 
 def _state(tmp_path, monkeypatch, stage: str, gate: GateDecision) -> dict:
-    monkeypatch.setattr("app.services.run_paths.run_tmp_root", lambda: tmp_path)
+    monkeypatch.setattr("app.infrastructure.paths.run_tmp_root", lambda: tmp_path)
     monkeypatch.setattr("app.infrastructure.artifacts.runtime.run_tmp_root", lambda: tmp_path)
     state = {
         "run_id": "run-root-gate",
@@ -38,7 +38,7 @@ def test_root_route_uses_gate_artifact_ref_over_inline_gate(tmp_path, monkeypatc
 
 
 def test_missing_post_l3_gate_ref_is_fail_closed(tmp_path, monkeypatch):
-    monkeypatch.setattr("app.services.run_paths.run_tmp_root", lambda: tmp_path)
+    monkeypatch.setattr("app.infrastructure.paths.run_tmp_root", lambda: tmp_path)
     monkeypatch.setattr("app.infrastructure.artifacts.runtime.run_tmp_root", lambda: tmp_path)
     state = {
         "run_id": "run-missing-gate",
@@ -85,7 +85,7 @@ def test_l1_l2_l3_are_in_root_gate_scope(tmp_path, monkeypatch):
 
 
 def test_inline_layer_gate_decision_is_not_accepted(tmp_path, monkeypatch):
-    monkeypatch.setattr("app.services.run_paths.run_tmp_root", lambda: tmp_path)
+    monkeypatch.setattr("app.infrastructure.paths.run_tmp_root", lambda: tmp_path)
     monkeypatch.setattr("app.infrastructure.artifacts.runtime.run_tmp_root", lambda: tmp_path)
     state = {
         "run_id": "run-legacy-inline",

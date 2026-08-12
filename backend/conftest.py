@@ -55,6 +55,6 @@ def pytest_sessionfinish(session, exitstatus):
 def _close_session_kg_process_pool():
     """Ensure isolated KG workers do not outlive the pytest session."""
     yield
-    from app.services.session_kg import shutdown_session_kg_process_pool
+    from app.infrastructure.kg.session_kg import shutdown_session_kg_process_pool
 
     shutdown_session_kg_process_pool()

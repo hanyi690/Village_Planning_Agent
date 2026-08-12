@@ -17,9 +17,9 @@ from typing import Any, Dict, List, Optional, TypedDict
 
 from sqlalchemy import func, select
 
-from ..database.models import DimensionReport
-from ..database.engine import get_async_session
-from ..utils.logger import get_logger
+from app.database.models import DimensionReport
+from app.database.engine import get_async_session
+from app.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
@@ -266,12 +266,12 @@ class ReportStore:
             from app.infrastructure.llm.dimension_runtime import generate_summary_regex
             return generate_summary_regex(dim_key, layer, content)
 
-        from ..modules.parsing.summary_generator import generate_structured_summary
+        from app.modules.parsing.summary_generator import generate_structured_summary
         try:
             return await generate_structured_summary(dim_key, layer, content)
         except Exception as e:
             logger.warning("[ReportStore] Structured summary failed: %s", e)
-            from ..modules.parsing.schemas import BaseDimensionSummary
+            from app.modules.parsing.schemas import BaseDimensionSummary
             summary = BaseDimensionSummary(
                 dimension_key=dim_key, layer=layer,
                 word_count=len(content), key_points=[],
@@ -673,7 +673,7 @@ class ReportStore:
         Returns Dict mapping dim_key -> parsed summary dict.
         Much lighter than get_layer_reports() for cross-layer dependency loading.
         """
-        from ..modules.parsing.summary_parser import parse_summary
+        from app.modules.parsing.summary_parser import parse_summary
         async with get_async_session() as db:
             statement = (
                 select(DimensionReport)

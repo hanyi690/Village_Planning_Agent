@@ -81,9 +81,9 @@ def pipeline_reset():
     """Reset in-process pipeline state before and after a test.
 
     The runtime pipeline keeps process-level caches/singletons:
-      * ``app.services.session_bundle._bundle_cache``
+      * ``app.application.sessions.session_bundle._bundle_cache``
       * ``app.modules.kg.manager.KGManager._instance``
-      * ``app.services.bundle_store.BundleStore._instance``
+      * ``app.infrastructure.storage.bundle_store.BundleStore._instance``
       * ``app.modules.data.connections.base.ConnectionRegistry._connections``
     Clear them so a test observes a clean pipeline and does not leak state
     into the next one.
@@ -91,8 +91,8 @@ def pipeline_reset():
     def _reset() -> None:
         import app.modules.data.connections.base as conn_base
         import app.modules.kg.manager as kg_man
-        import app.services.bundle_store as bs
-        import app.services.session_bundle as sb
+        import app.infrastructure.storage.bundle_store as bs
+        import app.application.sessions.session_bundle as sb
 
         sb._bundle_cache.clear()
         kg_man.KGManager._instance = None

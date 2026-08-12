@@ -44,7 +44,7 @@ from app.evidence.retrieval.evidence_service import retrieve_evidence, render_ev
 from app.modules.prompts.detailed import get_dimension_prompt as get_layer3_prompt
 from app.modules.schema.contracts.evidence_contracts import ExplorationRequest
 from app.contracts.program import PlanningClaimSet
-from app.services.task_supervisor import build_summary_task_key
+from app.infrastructure.tasks.task_supervisor import build_summary_task_key
 
 logger = get_logger(__name__)
 
@@ -418,7 +418,7 @@ async def analyze_l3_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
 
 def _dependency_summary(text: str) -> Dict[str, Any]:
     """Summarize dependency prose for the human audit, not for the prompt."""
-    from app.services.report_store import split_instruction
+    from app.infrastructure.reports.report_store import split_instruction
 
     display, _ = split_instruction(text or "")
     sections = re.findall(r"^#{1,6}\s+(.+)$", display, re.MULTILINE)

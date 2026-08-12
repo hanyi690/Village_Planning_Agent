@@ -37,7 +37,7 @@ def test_target_projection_ground_and_select_use_one_shared_completion_helper() 
 
 
 def test_stage_completion_patch_has_typed_immutable_gate_descriptor(tmp_path, monkeypatch) -> None:
-    monkeypatch.setattr("app.services.run_paths.run_tmp_root", lambda: tmp_path)
+    monkeypatch.setattr("app.infrastructure.paths.run_tmp_root", lambda: tmp_path)
     state = {
         "run_id": "run-stage-completion",
         "session_id": "run-stage-completion",

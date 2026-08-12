@@ -18,8 +18,8 @@ from app.modules.schema.contracts.evidence_contracts import EvidenceSource
 from app.modules.schema.contracts.l1_contracts import EvidenceGap, L1DimensionFragment, L1Snapshot
 from app.modules.schema.contracts.parsing_contracts import CompilationProfile
 from app.modules.schema.contracts.provenance import Provenance
-from app.services.artifact_fingerprint import semantic_checksum
-from app.services.review_package import write_review_package
+from app.infrastructure.artifacts.fingerprint import semantic_checksum
+from app.infrastructure.reports.review_package import write_review_package
 from app.utils.logger import get_logger
 
 from .gate import evaluate_l1_gate
@@ -152,7 +152,7 @@ async def l1_aggregate(
     *,
     base_dir: str = ".run-tmp",
 ) -> dict[str, Any]:
-    from app.services.report_store import ReportStore
+    from app.infrastructure.reports.report_store import ReportStore
 
     run_id = state.get("run_id", state.get("session_id", ""))
     session_id = state.get("session_id", run_id)
