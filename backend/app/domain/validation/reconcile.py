@@ -9,7 +9,7 @@ coverage as an additional check. No LLM, no KG, no MIP - deterministic only.
 
 from __future__ import annotations
 
-from app.agent.reconcile.checks import (
+from app.domain.validation.checks import (
     check_candidate_selection_coverage,
     check_change_planned_coverage,
     check_intervention_coverage,
@@ -369,7 +369,7 @@ def reconcile_aggregate(
     provenance = Provenance(
         source="reconcile_aggregate",
         run_id=run_id,
-        module="app.agent.reconcile.aggregate",
+        module="app.domain.validation.reconcile",
         natural_language_description=f"RECONCILE aggregate: {len(coverage_matrix.rows)} targets traced",
     )
 

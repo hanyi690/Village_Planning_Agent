@@ -29,8 +29,8 @@ def _to_typed(data: Any, cls: type) -> Any:
 
 async def reconcile_node(state: Dict[str, Any]) -> Dict[str, Any]:
     """Reconcile intervention -> selection -> execution -> planned outputs."""
-    from app.agent.reconcile.aggregate import reconcile_aggregate
-    from app.agent.reconcile.gate import evaluate_reconcile_gate
+    from app.domain.validation.reconcile import reconcile_aggregate
+    from app.domain.validation.reconcile_gate import evaluate_reconcile_gate
     from app.modules.schema.contracts.l3_contracts import PlanningProgram
     from app.modules.schema.contracts.spatial_reference_contracts import SpatialReferenceSpec
     from app.modules.schema.contracts.grounding_contracts import GroundingResult
