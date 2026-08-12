@@ -2,8 +2,8 @@
 
 The composition root registers concrete adapters here at boot. Modules read
 the registered default through this lightweight registry instead of importing
-``app.services`` directly, preserving the ``modules -> services`` dependency
-direction while still allowing explicit per-call overrides.
+application services directly, preserving the dependency direction while
+still allowing explicit per-call overrides.
 """
 
 from __future__ import annotations

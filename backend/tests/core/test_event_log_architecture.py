@@ -9,7 +9,7 @@ def test_public_event_queries_use_durable_repository_boundary() -> None:
         path.read_text(encoding="utf-8")
         for path in sorted((ROOT / "api" / "v1" / "routes").glob("*.py"))
     )
-    runtime = (ROOT / "services" / "runtime.py").read_text(encoding="utf-8")
+    runtime = (ROOT / "infrastructure" / "runtime" / "planning_runtime_service.py").read_text(encoding="utf-8")
 
     assert "run_event_queries" in routes
     assert "EventRepository" not in routes
@@ -22,7 +22,7 @@ def test_public_event_queries_use_durable_repository_boundary() -> None:
 def test_event_repository_is_the_only_sequence_allocator() -> None:
     app_sources = "\n".join(
         path.read_text(encoding="utf-8")
-        for directory in (ROOT / "api", ROOT / "services", ROOT / "utils")
+        for directory in (ROOT / "api", ROOT / "infrastructure" / "runtime", ROOT / "utils")
         for path in directory.rglob("*.py")
     )
 

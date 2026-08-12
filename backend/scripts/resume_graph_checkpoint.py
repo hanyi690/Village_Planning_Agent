@@ -98,7 +98,7 @@ async def _run(args: argparse.Namespace) -> int:
     engine._checkpointer_initialized = False
     engine._checkpointers_by_loop.clear()
 
-    from app.services.runtime import PlanningRuntimeService
+    from app.infrastructure.runtime.planning_runtime_service import PlanningRuntimeService
 
     PlanningRuntimeService._checkpointer = None
     PlanningRuntimeService._graph = None
@@ -221,7 +221,7 @@ async def _run(args: argparse.Namespace) -> int:
                 force=bundle_version is not None,
                 bundle_version=bundle_version,
             )
-            await PlanningRuntimeService._trigger_planning_execution(
+            await PlanningRuntimeService.trigger_planning_execution(
                 args.session_id,
                 checkpoint_id=args.checkpoint_id,
                 state_values=state,

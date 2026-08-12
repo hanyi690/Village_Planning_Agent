@@ -25,12 +25,12 @@ class PlanningRuntime(Protocol):
 
 class _PlanningRuntimeDefault:
     async def current_values(self, session_id: str) -> dict[str, object] | None:
-        from app.services.runtime import PlanningRuntimeService
+        from app.infrastructure.runtime.planning_runtime_service import PlanningRuntimeService
 
         return await PlanningRuntimeService.aget_state_values(session_id)
 
     async def aget_state(self, session_id: str) -> Any | None:
-        from app.services.runtime import PlanningRuntimeService
+        from app.infrastructure.runtime.planning_runtime_service import PlanningRuntimeService
 
         return await PlanningRuntimeService.aget_state(session_id)
 
@@ -41,7 +41,7 @@ class _PlanningRuntimeDefault:
         *,
         expected_event_id: str,
     ) -> None:
-        from app.services.runtime import PlanningRuntimeService
+        from app.infrastructure.runtime.planning_runtime_service import PlanningRuntimeService
 
         await PlanningRuntimeService.resume_from_interrupt(
             session_id,

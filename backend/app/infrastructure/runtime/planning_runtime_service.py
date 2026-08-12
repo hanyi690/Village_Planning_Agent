@@ -594,7 +594,7 @@ class PlanningRuntimeService:
 
         # Start background execution
         background_tasks.add_task(
-            cls._trigger_planning_execution,
+            cls.trigger_planning_execution,
             session_id,
             initial_state,
         )
@@ -670,7 +670,7 @@ class PlanningRuntimeService:
             return False
 
     @classmethod
-    async def _trigger_planning_execution(
+    async def trigger_planning_execution(
         cls,
         session_id: str,
         initial_state: Optional[Dict[str, Any]] = None,
@@ -1038,7 +1038,7 @@ class PlanningRuntimeService:
 
         CompositionRoot.get_task_supervisor().create_task(
             session_id,
-            cls._trigger_planning_execution(session_id, state_values=full_state),
+            cls.trigger_planning_execution(session_id, state_values=full_state),
         )
 
         return {

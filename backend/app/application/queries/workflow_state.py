@@ -14,7 +14,7 @@ async def load_workflow_state(session_id: str) -> WorkflowState | None:
     reference in the delivery queries, never through this projection.
     """
 
-    from app.services.runtime import PlanningRuntimeService
+    from app.infrastructure.runtime.planning_runtime_service import PlanningRuntimeService
 
     raw_state = await PlanningRuntimeService.aget_state_values(session_id)
     if not raw_state:

@@ -12,7 +12,7 @@
 **不负责**：
 - 不定义端口（端口定义在 `ports/`）
 - 不做端口之外的业务逻辑（薄适配）
-- 不 import `app.agent` / `app.services` / `app.api` / `app.tools`
+- 不 import `app.agent` / `app.api` / `app.tools`
 
 ---
 

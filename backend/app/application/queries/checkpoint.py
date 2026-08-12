@@ -69,7 +69,7 @@ class CheckpointService:
 
     @classmethod
     async def get_layer_reports(cls, session_id: str, layer: int) -> Dict[str, Any]:
-        from app.services.runtime import PlanningRuntimeService
+        from app.infrastructure.runtime.planning_runtime_service import PlanningRuntimeService
         from app.infrastructure.reports.report_store import ReportStore
 
         state = await PlanningRuntimeService.aget_state_values(session_id)
@@ -99,7 +99,7 @@ class CheckpointService:
         session_id: str,
         state: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, bool]:
-        from app.services.runtime import PlanningRuntimeService
+        from app.infrastructure.runtime.planning_runtime_service import PlanningRuntimeService
 
         state = state or await PlanningRuntimeService.aget_state_values(session_id)
         if not state:
@@ -112,14 +112,14 @@ class CheckpointService:
 
     @classmethod
     async def get_phase(cls, session_id: str) -> str:
-        from app.services.runtime import PlanningRuntimeService
+        from app.infrastructure.runtime.planning_runtime_service import PlanningRuntimeService
 
         state = await PlanningRuntimeService.aget_state_values(session_id)
         return str((state or {}).get("phase", "init"))
 
     @classmethod
     async def validate_session(cls, session_id: str) -> Dict[str, Any]:
-        from app.services.runtime import PlanningRuntimeService
+        from app.infrastructure.runtime.planning_runtime_service import PlanningRuntimeService
 
         state = await PlanningRuntimeService.aget_state_values(session_id)
         if not state:
@@ -128,7 +128,7 @@ class CheckpointService:
 
     @classmethod
     async def get_project_name(cls, session_id: str) -> str:
-        from app.services.runtime import PlanningRuntimeService
+        from app.infrastructure.runtime.planning_runtime_service import PlanningRuntimeService
 
         state = await PlanningRuntimeService.aget_state_values(session_id)
         return str((state or {}).get("project_name", "村庄规划"))
@@ -139,7 +139,7 @@ class CheckpointService:
         session_id: str,
         state: Optional[Dict[str, Any]] = None,
     ) -> tuple[int, str]:
-        from app.services.runtime import PlanningRuntimeService
+        from app.infrastructure.runtime.planning_runtime_service import PlanningRuntimeService
 
         state = state or await PlanningRuntimeService.aget_state_values(session_id) or {}
         previous_layer = int(state.get("previous_layer", 0) or 0)

@@ -58,12 +58,12 @@ class PlanningRuntimeResumePort:
     """Adapter that keeps LangGraph/task-supervisor details out of the API."""
 
     async def current_snapshot(self, session_id: str) -> Any | None:
-        from app.services.runtime import PlanningRuntimeService
+        from app.infrastructure.runtime.planning_runtime_service import PlanningRuntimeService
 
         return await PlanningRuntimeService.aget_state(session_id)
 
     async def checkpoint_snapshot(self, session_id: str, checkpoint_id: str) -> Any | None:
-        from app.services.runtime import PlanningRuntimeService
+        from app.infrastructure.runtime.planning_runtime_service import PlanningRuntimeService
 
         await PlanningRuntimeService.ensure_initialized()
         graph = PlanningRuntimeService.get_graph()
@@ -83,7 +83,7 @@ class PlanningRuntimeResumePort:
         *,
         expected_event_id: str,
     ) -> None:
-        from app.services.runtime import PlanningRuntimeService
+        from app.infrastructure.runtime.planning_runtime_service import PlanningRuntimeService
 
         await PlanningRuntimeService.resume_from_interrupt(
             session_id,
@@ -101,12 +101,12 @@ class PlanningRuntimeResumePort:
         branch_id: str,
     ) -> None:
         from app.bootstrap.composition import CompositionRoot
-        from app.services.runtime import PlanningRuntimeService
+        from app.infrastructure.runtime.planning_runtime_service import PlanningRuntimeService
 
         await PlanningRuntimeService.ensure_initialized()
         CompositionRoot.get_task_supervisor().create_task(
             session_id,
-            PlanningRuntimeService._trigger_planning_execution(
+            PlanningRuntimeService.trigger_planning_execution(
                 session_id,
                 checkpoint_id=checkpoint_id,
                 state_values=state_values,

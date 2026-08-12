@@ -91,7 +91,7 @@ async def conversation_node(state: Dict[str, Any]) -> Dict[str, Any]:
     messages = list(state.get("messages", []))
 
     # If the last message already carries a known intent tool_call
-    # (injected by _trigger_planning_execution), skip the LLM and route directly.
+    # (injected by trigger_planning_execution), skip the LLM and route directly.
     last_msg = messages[-1] if messages else None
     if last_msg and hasattr(last_msg, 'tool_calls') and last_msg.tool_calls:
         known = {"advance_planning_intent", "gis_analysis", "GISAnalysis"}

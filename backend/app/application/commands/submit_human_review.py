@@ -46,7 +46,7 @@ class HumanDecisionRuntimePort(RuntimePort, Protocol):
 
 class _RuntimeDefault:
     async def current_values(self, session_id: str) -> dict[str, object] | None:
-        from app.services.runtime import PlanningRuntimeService
+        from app.infrastructure.runtime.planning_runtime_service import PlanningRuntimeService
 
         return await PlanningRuntimeService.aget_state_values(session_id)
 
@@ -57,7 +57,7 @@ class _RuntimeDefault:
         *,
         expected_event_id: str,
     ) -> None:
-        from app.services.runtime import PlanningRuntimeService
+        from app.infrastructure.runtime.planning_runtime_service import PlanningRuntimeService
 
         await PlanningRuntimeService.resume_from_interrupt(
             session_id,
@@ -135,7 +135,7 @@ async def resolve_human_review(
 ) -> dict[str, object]:
     """Submit the decision and resume the exact active checkpoint (legacy forward)."""
     try:
-        from app.services.runtime import PlanningRuntimeService
+        from app.infrastructure.runtime.planning_runtime_service import PlanningRuntimeService
 
         current = await PlanningRuntimeService.aget_state_values(session_id) or {}
         current_interrupt = current.get("human_interrupt") or {}

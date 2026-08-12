@@ -139,8 +139,7 @@ def test_step_reports_are_owned_by_infrastructure_reports() -> None:
         path.read_text(encoding="utf-8")
         for path in ROOT.rglob("*.py")
     )
-    assert "app.services.step_report" not in production_sources
-    assert "app.services.stage_report" not in production_sources
+    assert "app.services" not in production_sources
     assert "app.modules.evidence" not in production_sources
     assert (ROOT / "infrastructure" / "reports" / "step_report.py").exists()
     assert (ROOT / "infrastructure" / "reports" / "stage_report.py").exists()

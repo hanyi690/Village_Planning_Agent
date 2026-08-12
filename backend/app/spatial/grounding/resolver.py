@@ -13,7 +13,7 @@ KG / constraint index / evidence index) instead of each caller building its own
 gazetteer/KG/center fallback. Callers that only have a village name + anchors
 can use the module-level ``resolve_intent_anchors`` helper.
 
-Dependency rule: this module must not import ``app.agent``, ``app.services``
+Dependency rule: this module must not import ``app.agent``
 or ``app.api``.
 """
 

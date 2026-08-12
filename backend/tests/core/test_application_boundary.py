@@ -42,7 +42,7 @@ def test_v1_transport_has_no_runtime_store_or_sse_dependencies() -> None:
         "CompositionRoot",
     }
     forbidden_imports = {
-        "app.services.runtime",
+        "app.infrastructure.runtime.planning_runtime_service",
         "app.infrastructure.artifacts.runtime",
         "app.infrastructure.reports.report_store",
         "app.infrastructure.events.sse_publisher",

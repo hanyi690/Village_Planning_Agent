@@ -133,7 +133,7 @@ async def run_rag(dimension_key: str, cfg: Any, state: Dict[str, Any]) -> tuple[
     Re-reads live config from the checkpoint so PATCH updates to
     rag_layer_config are visible even though Send freezes state at dispatch.
     """
-    from app.services.runtime import PlanningRuntimeService
+    from app.infrastructure.runtime.planning_runtime_service import PlanningRuntimeService
 
     session_id = state.get("session_id", "")
     config = state.get("config", {})
@@ -170,7 +170,7 @@ async def run_rag(dimension_key: str, cfg: Any, state: Dict[str, Any]) -> tuple[
         return ("", None)
 
     from app.infrastructure.events import event_hub as sse_manager
-    from app.services import RagService
+    from app.infrastructure.rag.service import RagService
 
     rag_service = RagService.get_instance()
     if getattr(rag_service, "_vector_store", None) is None:

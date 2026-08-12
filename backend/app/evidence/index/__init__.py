@@ -1,6 +1,6 @@
 """Place evidence index and deterministic evidence scorer.
 
-Pure module (no ``app.agent`` / ``app.services`` imports). Builds a
+Pure module (no ``app.agent`` / application-layer imports). Builds a
 versioned ``PlaceEvidenceIndex`` from a ``PlanningContext`` and yields
 ``PlaceResolutionResult`` via ``PlaceEvidencePort``.
 """

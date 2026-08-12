@@ -111,7 +111,7 @@ class _StarterDefault:
     async def start(self, session_id: str, initial_state: Mapping[str, object]) -> None:
         from app.infrastructure.events import event_hub
         from app.bootstrap.composition import CompositionRoot
-        from app.services.runtime import PlanningRuntimeService
+        from app.infrastructure.runtime.planning_runtime_service import PlanningRuntimeService
 
         await PlanningRuntimeService.ensure_initialized()
         await event_hub.publish(
@@ -125,7 +125,7 @@ class _StarterDefault:
         )
         CompositionRoot.get_task_supervisor().create_task(
             session_id,
-            PlanningRuntimeService._trigger_planning_execution(
+            PlanningRuntimeService.trigger_planning_execution(
                 session_id,
                 dict(initial_state),
             ),

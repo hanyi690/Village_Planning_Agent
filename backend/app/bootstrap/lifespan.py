@@ -72,7 +72,7 @@ async def lifespan(app):
             if not await init_async_db():
                 raise RuntimeError("database initialization returned false")
             CompositionRoot.initialize()
-            from app.services.runtime import PlanningRuntimeService
+            from app.infrastructure.runtime.planning_runtime_service import PlanningRuntimeService
             await PlanningRuntimeService.initialize()
     except Exception:
         logger.exception("Core backend startup failed")
@@ -99,7 +99,7 @@ async def lifespan(app):
 
     logger.info("Cleaning up resources...")
     try:
-        from app.services.runtime import PlanningRuntimeService
+        from app.infrastructure.runtime.planning_runtime_service import PlanningRuntimeService
         await PlanningRuntimeService.shutdown()
     except Exception as exc:  # noqa: BLE001
         logger.error("Failed to cancel runtime tasks: %s", exc, exc_info=True)

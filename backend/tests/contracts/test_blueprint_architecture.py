@@ -25,13 +25,8 @@ def _has_text(files: list[pathlib.Path], needles: list[str]) -> list[tuple[str, 
 def test_no_legacy_god_modules():
     needles = ["app.agent.", "app.modules."]
     assert not _has_text(_production_files(), needles), "legacy god modules still referenced"
-    leftover_services = re.compile(r"app\.services\.(?!runtime\b|context\b)")
-    offenders = [
-        str(p)
-        for p in _production_files()
-        if leftover_services.search(p.read_text(encoding="utf-8"))
-    ]
-    assert not offenders, "non-deferred app.services reference remains"
+    offenders = _has_text(_production_files(), ["app.services"])
+    assert not offenders, "app.services reference remains"
 
 
 def test_no_workflow_progress_or_legacy_gate():
@@ -41,7 +36,7 @@ def test_no_workflow_progress_or_legacy_gate():
 
 def test_no_services_runtime_in_workflow_domain():
     files = [p for p in _production_files() if "/workflow/" in p.as_posix() or "/domain/" in p.as_posix()]
-    assert not _has_text(files, ["app.services.runtime"]), "workflow/domain must not import services runtime"
+    assert not _has_text(files, ["app.services"]), "workflow/domain must not reference app.services"
 
 
 def test_root_graph_is_single_artifact_producer():

@@ -182,7 +182,7 @@ def test_real_graph_resume_delivery(sqlite_db, pipeline_reset, monkeypatch):
     monkeypatch.setattr(db_engine, "get_db_path", lambda: test_db_path)
     monkeypatch.setattr(db_engine, "_checkpointer", None)
     monkeypatch.setattr(db_engine, "_checkpointer_initialized", False)
-    from app.services.runtime import PlanningRuntimeService
+    from app.infrastructure.runtime.planning_runtime_service import PlanningRuntimeService
     import app.workflow.stages.execute as execute_stage
     monkeypatch.setattr(PlanningRuntimeService, "_checkpointer", None)
     monkeypatch.setattr(PlanningRuntimeService, "_graph", None)
@@ -273,7 +273,7 @@ def test_real_graph_resume_delivery(sqlite_db, pipeline_reset, monkeypatch):
             session_id = response.json()["session_id"]
             (run_root / session_id).mkdir(parents=True, exist_ok=True)
             print(f"[REAL-SESSION] session_create:done session={session_id}", flush=True)
-            from app.services.runtime import PlanningRuntimeService
+            from app.infrastructure.runtime.planning_runtime_service import PlanningRuntimeService
 
             # A real fixture may legitimately stop at HUMAN when the report
             # names a village that has no BSM/coordinate evidence.  The live
