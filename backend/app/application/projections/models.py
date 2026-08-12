@@ -2,7 +2,20 @@
 
 from __future__ import annotations
 
+from enum import Enum
+
 from pydantic import BaseModel, ConfigDict, Field
+
+
+class TaskStatus(str, Enum):
+    """任务状态枚举"""
+    pending = "pending"
+    running = "running"
+    paused = "paused"
+    reviewing = "reviewing"
+    revising = "revising"
+    completed = "completed"
+    failed = "failed"
 
 
 class ProjectionModel(BaseModel):
@@ -64,4 +77,5 @@ __all__ = [
     "MapLayerCollectionView",
     "MapLayerView",
     "SessionView",
+    "TaskStatus",
 ]

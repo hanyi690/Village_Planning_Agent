@@ -38,35 +38,41 @@ def _imports(path: Path) -> set[str]:
 
 
 def test_stable_api_does_not_import_agent_business_models_or_renderers() -> None:
-    imports = _imports(ROOT / 'api/v1/routes.py')
     forbidden = {
         'app.agent.deliver.render_layers',
         'app.domain.delivery.render_layers',
         'app.contracts.spatial.planned_state_contracts',
         'app.infrastructure.export.export_package',
     }
+    transport_root = ROOT / 'api/v1/routes'
+    imports: set[str] = set()
+    for path in sorted(transport_root.glob('*.py')):
+        imports |= _imports(path)
     assert imports.isdisjoint(forbidden)
 
 
 def test_state_and_human_read_routes_use_application_projection() -> None:
-    source = (ROOT / 'api/v1/routes.py').read_text(encoding='utf-8')
-    assert 'app.application.queries.workflow_state' in source
-    state_section = source[source.index("@router.get('/sessions/{session_id}/state'"):]
-    state_section = state_section[:state_section.index("@router.get('/sessions/{session_id}/delivery'")]
-    assert 'load_workflow_state(session_id)' in state_section
-    assert 'aget_state_values(session_id)' not in state_section
+    transport_root = ROOT / 'api/v1/routes'
+    sources = "\n".join(
+        path.read_text(encoding='utf-8') for path in sorted(transport_root.glob('*.py'))
+    )
+    assert 'app.application.queries.workflow_state' in sources
+    state_source = (ROOT / 'api/v1/routes/state.py').read_text(encoding='utf-8')
+    assert 'load_workflow_state(session_id)' in state_source
+    assert 'aget_state_values(session_id)' not in state_source
+    human_source = (ROOT / 'api/v1/routes/human_review.py').read_text(encoding='utf-8')
+    assert 'session_projections.human_review' in human_source
+    assert 'aget_state_values(session_id)' not in human_source
 
 
 def test_map_projection_names_delivery_snapshot_as_its_only_spatial_artifact() -> None:
-    source = (ROOT / 'api/v1/routes.py').read_text(encoding='utf-8')
-    map_section = source[source.index("@router.get('/sessions/{session_id}/map-layers'"):]
-    map_section = map_section[:map_section.index("@router.get('/sessions/{session_id}/human-review'")]
+    map_source = (ROOT / 'api/v1/routes/map_layers.py').read_text(encoding='utf-8')
     delivery_projection = (ROOT / 'application' / 'projections' / 'delivery.py').read_text(encoding='utf-8')
     assert "delivery_spatial_snapshot" in delivery_projection
-    assert "delivery_projections.map_layers" in map_section
-    assert "'PlannedState'" not in map_section
-    assert 'allocated_geojson' not in map_section
-    assert 'gis_data' not in map_section
+    assert "delivery_projections.map_layers" in map_source
+    assert "'PlannedState'" not in map_source
+    assert 'allocated_geojson' not in map_source
+    assert 'gis_data' not in map_source
 
 
 def test_public_contracts_do_not_expose_internal_state_fields() -> None:

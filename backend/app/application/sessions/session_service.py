@@ -12,7 +12,7 @@ import logging
 from datetime import datetime
 from typing import Any, Dict, Optional
 
-from app.api.schemas import TaskStatus
+from app.application.projections.models import TaskStatus
 from app.infrastructure.events import EventRepository
 from app.application.queries.checkpoint import checkpoint_service
 from app.database.operations import (

@@ -41,17 +41,20 @@ def test_v1_transport_has_no_runtime_store_or_sse_dependencies() -> None:
         "resolve_human_review",
         "CompositionRoot",
     }
-    for name in ("routes.py", "session_create.py"):
-        source = (ROOT / "app" / "api" / "v1" / name).read_text(encoding="utf-8")
-        assert not forbidden_names.intersection(source), name
-    assert not _imports(ROOT / "app" / "api" / "v1" / "routes.py").intersection(
-        {
-            "app.services.runtime",
-            "app.infrastructure.artifacts.runtime",
-            "app.infrastructure.reports.report_store",
-            "app.utils.sse_publisher",
-        }
-    )
+    forbidden_imports = {
+        "app.services.runtime",
+        "app.infrastructure.artifacts.runtime",
+        "app.infrastructure.reports.report_store",
+        "app.utils.sse_publisher",
+    }
+    transport_root = ROOT / "app" / "api" / "v1" / "routes"
+    transport_files = sorted(transport_root.glob("*.py")) + [
+        ROOT / "app" / "api" / "v1" / "session_create.py"
+    ]
+    for path in transport_files:
+        source = path.read_text(encoding="utf-8")
+        assert not forbidden_names.intersection(source), path
+        assert not _imports(path).intersection(forbidden_imports), path
 
 
 class _Upload:
@@ -172,9 +175,12 @@ async def test_human_decision_command_enforces_event_compare_and_set() -> None:
 
 
 def test_application_projections_are_the_only_v1_projection_builders() -> None:
-    source = (ROOT / "app" / "api" / "v1" / "routes.py").read_text(encoding="utf-8")
-    assert "application.projections" in source
-    assert "def _artifact_payload" not in source
-    assert "def _delivery_projection" not in source
-    assert "def _render_layer_projection" not in source
-    assert "def _public_event" not in source
+    transport_root = ROOT / "app" / "api" / "v1" / "routes"
+    sources = "\n".join(
+        p.read_text(encoding="utf-8") for p in sorted(transport_root.glob("*.py"))
+    )
+    assert "application.projections" in sources
+    assert "def _artifact_payload" not in sources
+    assert "def _delivery_projection" not in sources
+    assert "def _render_layer_projection" not in sources
+    assert "def _public_event" not in sources

@@ -33,7 +33,7 @@ from app.database.operations import (
     create_planning_session_async,
     update_planning_session_async,
 )
-from app.api.schemas import TaskStatus
+from app.application.projections.models import TaskStatus
 from app.infrastructure.events import event_hub as sse_manager
 from app.application.queries.checkpoint import checkpoint_service, checkpoint_persistence_manager
 from app.core.settings import GRAPH_MAX_CONCURRENCY, GRAPH_RECURSION_LIMIT

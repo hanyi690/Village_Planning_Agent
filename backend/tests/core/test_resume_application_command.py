@@ -166,15 +166,15 @@ async def test_route_only_maps_application_422_and_409(monkeypatch):
 
 
 def test_route_does_not_know_graph_or_task_supervisor():
-    path = Path(__file__).resolve().parents[2] / "app" / "api" / "v1" / "routes.py"
+    path = (
+        Path(__file__).resolve().parents[2]
+        / "app" / "api" / "v1" / "routes" / "__init__.py"
+    )
     tree = ast.parse(path.read_text(encoding="utf-8"))
     source = path.read_text(encoding="utf-8")
-    start = source.index("@router.post('/sessions/{session_id}/resume'")
-    end = source.index("@router.get('/sessions/{session_id}/events/sync'")
-    resume_source = source[start:end]
-    assert "._graph" not in resume_source
-    assert "CompositionRoot" not in resume_source
-    assert "_trigger_planning_execution" not in resume_source
+    assert "._graph" not in source
+    assert "CompositionRoot" not in source
+    assert "_trigger_planning_execution" not in source
     assert any(
         isinstance(node, ast.Call)
         and isinstance(node.func, ast.Attribute)

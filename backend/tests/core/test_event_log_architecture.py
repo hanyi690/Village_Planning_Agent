@@ -5,7 +5,10 @@ ROOT = Path(__file__).resolve().parents[2] / "app"
 
 
 def test_public_event_queries_use_durable_repository_boundary() -> None:
-    routes = (ROOT / "api" / "v1" / "routes.py").read_text(encoding="utf-8")
+    routes = "\n".join(
+        path.read_text(encoding="utf-8")
+        for path in sorted((ROOT / "api" / "v1" / "routes").glob("*.py"))
+    )
     runtime = (ROOT / "services" / "runtime.py").read_text(encoding="utf-8")
 
     assert "run_event_queries" in routes

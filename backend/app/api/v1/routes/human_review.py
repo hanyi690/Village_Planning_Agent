@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException
 
-from app.api.human_review_routes import ResolveRequest, resolve_human_review
 from app.api.v1.contracts import HumanReviewDecision, HumanReviewProjection
 from app.application.commands.submit_human_review import (
     HumanDecisionConflictError,
@@ -46,9 +45,7 @@ async def submit_review(session_id: str, decision: HumanReviewDecision) -> dict[
 
 
 __all__ = [
-    "ResolveRequest",
     "get_review",
-    "resolve_human_review",
     "router",
     "submit_review",
 ]

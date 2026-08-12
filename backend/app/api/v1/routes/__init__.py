@@ -52,12 +52,7 @@ from . import artifacts, delivery, events, human_review, map_layers, sessions, s
 from .artifacts import get_artifact  # noqa: E402,F401
 from .delivery import get_delivery  # noqa: E402,F401
 from .events import stream_events, sync_events  # noqa: E402,F401
-from .human_review import (  # noqa: E402,F401
-    ResolveRequest,
-    get_review,
-    resolve_human_review,
-    submit_review,
-)
+from .human_review import get_review, submit_review  # noqa: E402,F401
 from .map_layers import get_map_layers  # noqa: E402,F401
 from .state import get_state  # noqa: E402,F401
 
@@ -84,7 +79,6 @@ router.include_router(artifacts.router)
 
 
 __all__ = [
-    "ResolveRequest",
     "artifact_queries",
     "create_session",
     "delivery_projections",
@@ -95,7 +89,6 @@ __all__ = [
     "get_state",
     "load_workflow_state",
     "public_event",
-    "resolve_human_review",
     "resume_session",
     "resume_workflow_service",
     "router",
