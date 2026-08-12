@@ -32,6 +32,7 @@ def build_suitability_surface(grounding_result: object) -> SuitabilitySurface:
                 hard_feasible=hard_feasible and not reasons,
                 exclusion_reasons=reasons,
                 evidence_refs=list(candidate.evidence_refs),
+                available_geometry_wkt=str(getattr(candidate, "available_geometry_wkt", "") or ""),
             )
         )
     for issue in tuple(getattr(grounding_result, "unresolved", ()) or ()):

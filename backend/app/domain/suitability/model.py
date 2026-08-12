@@ -19,6 +19,7 @@ class SuitabilityCandidate(BaseModel):
     hard_feasible: bool = False
     exclusion_reasons: list[str] = Field(default_factory=list)
     evidence_refs: list[str] = Field(default_factory=list)
+    available_geometry_wkt: str = ""
 
 
 class SuitabilitySurface(ContractMeta):

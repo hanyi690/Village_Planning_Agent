@@ -47,7 +47,7 @@ def build_portfolio_decision(
                 )
             )
             continue
-        if selected is None or selected.status in {"ready", "unplaced"}:
+        if selected is None or selected.status == "unplaced":
             unmet.append(item.demand_id)
             output.append(
                 AllocationAssignment(
@@ -55,6 +55,23 @@ def build_portfolio_decision(
                     target_id=item.target_id,
                     status="unplaced",
                     reason=str(getattr(selected, "reason", "no_target_assignment") or "no_target_assignment"),
+                )
+            )
+            continue
+        if selected.status == "ready":
+            # SELECT marks zone/road/axis targets ready when it intentionally
+            # hands them to an EXECUTE worker (Zone MIP allocator / road
+            # planner / axis builder) instead of parcel-ranking them.  A
+            # ready state is not an allocation failure: counting it as unmet
+            # makes the portfolio INFEASIBLE and forces SELECT HUMAN deferral
+            # of every zone and road.  Project/facility ready also reaches
+            # here only for non-parcel or pre-bound targets.
+            output.append(
+                AllocationAssignment(
+                    demand_id=item.demand_id,
+                    target_id=item.target_id,
+                    status="assigned",
+                    reason="ready_for_execution_worker",
                 )
             )
             continue
