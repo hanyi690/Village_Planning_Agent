@@ -1,7 +1,6 @@
 """Unified parsing module — deterministic + LLM-based text extraction.
 
 Key components:
-  - admin_code_loader.py:     Administrative code loading for gazetteer
   - gazetteer.py:             Place name resolution (Tier 0-2)
   - semantics.py:             MetricConcept + ValueSemantics for conflict detection
   - schemas.py:               Pydantic input/data schemas

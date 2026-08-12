@@ -52,9 +52,7 @@ def _explicit_village_names(intervention: PlanningIntervention) -> list[str]:
     # This prevents a greedy regex from turning phrases such as
     # “主要功能为村庄服务” into a fake place name.
     try:
-        from app.modules.kg.enrichment.report_entity_enrichment import (
-            _KNOWN_NATURAL_VILLAGES,
-        )
+        from app.modules.parsing.natural_villages import _KNOWN_NATURAL_VILLAGES
 
         matches = [
             (text.find(village), village)

@@ -609,7 +609,7 @@ class DataCatalog:
                 return
 
         try:
-            from app.modules.parsing.admin_code_loader import (
+            from app.modules.data.catalog.admin_code_loader import (
                 get_admin_code_service,
             )
             svc = get_admin_code_service()

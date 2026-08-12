@@ -107,7 +107,7 @@ def _split_explicit_places(value: str) -> list[str]:
 
 def _known_village_names() -> tuple[str, ...]:
     try:
-        from app.modules.kg.enrichment.report_entity_enrichment import _KNOWN_NATURAL_VILLAGES
+        from app.modules.parsing.natural_villages import _KNOWN_NATURAL_VILLAGES
         return tuple(sorted((str(x).removesuffix("村") for x in _KNOWN_NATURAL_VILLAGES), key=len, reverse=True))
     except Exception:
         return ()

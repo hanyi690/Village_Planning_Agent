@@ -13,8 +13,8 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from shapely.geometry import Point, shape
 
+from app.domain.materialization.classification_utils import _classification_from_decision
 from app.modules.schema.contracts.classification_ref import (
-    ClassificationDecision,
     ClassificationRef,
     classification_code_names,
 )
@@ -77,32 +77,6 @@ def _parcel_area_ha(parcel: Any) -> float:
             or 0
         ) * 10000
     return area_sqm / 10000
-
-
-def _classification_from_decision(
-    decision: Optional[ClassificationDecision],
-    *,
-    source: str = "derived",
-) -> Optional[ClassificationRef]:
-    """Materialize only an explicit, namespace-validated classification."""
-    if decision is None or decision.status != "resolved":
-        return None
-    system = decision.code_system.value
-    names = classification_code_names(system)
-    code = str(decision.selected_code or "").strip()
-    if not code or names is None or code not in names:
-        return None
-    try:
-        return ClassificationRef(
-            system=decision.code_system,
-            code=code,
-            canonical_name=names[code],
-            source=source,
-            evidence_refs=list(decision.evidence_refs),
-            decision_ref=decision.target_id,
-        )
-    except ValueError:
-        return None
 
 
 def _parcel_classification(
