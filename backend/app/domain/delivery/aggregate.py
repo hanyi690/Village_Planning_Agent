@@ -11,7 +11,7 @@ missing (08_DELIVERABLES_COMPLIANCE.md §3). No LLM, no KG — deterministic onl
 
 from __future__ import annotations
 
-from app.agent.deliver.checks import (
+from app.domain.delivery.checks import (
     check_classification_for_statutory,
     check_statutory_layers_complete,
     check_traceability_complete,
@@ -342,7 +342,7 @@ def deliver_aggregate(
     provenance = Provenance(
         source="deliver_aggregate",
         run_id=run_id,
-        module="app.agent.deliver.aggregate",
+        module="app.domain.delivery.aggregate",
         natural_language_description=f"DELIVER aggregate: {len(traceability)} interventions traced",
     )
 

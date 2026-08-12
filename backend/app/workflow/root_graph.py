@@ -503,7 +503,7 @@ def _diagnostic_manifest_patch(
         return {}
     try:
         from app.infrastructure.artifacts.runtime import load_artifact, store_artifact
-        from app.agent.deliver.aggregate import build_traceability_from_coverage
+        from app.domain.delivery.aggregate import build_traceability_from_coverage
         from app.modules.schema.contracts.deferral_contracts import DeferralLedger
         from app.modules.schema.contracts.delivery_manifest_contracts import DeliveryManifest
         from app.modules.schema.contracts.execution_plan_contracts import ExecutionResult

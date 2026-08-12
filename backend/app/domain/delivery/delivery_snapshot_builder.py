@@ -28,8 +28,8 @@ def build_spatial_delivery_products(
 ) -> SpatialDeliveryProducts:
     """Build snapshot, render layers and export from one data-layer workspace."""
 
-    from app.agent.deliver.delivery_exporter import export_delivery_products
-    from app.agent.deliver.render_layers import (
+    from app.domain.delivery.delivery_exporter import export_delivery_products
+    from app.domain.delivery.render_layers import (
         build_delivery_render_layers,
         build_planned_overlay_layers,
     )
@@ -70,7 +70,7 @@ def build_spatial_delivery_products(
         )
         products.planned_geojson = load_complete_planned_geojson(products.snapshot)
         products.render_layers = build_delivery_render_layers(products.snapshot)
-        from app.agent.deliver.delivery_validator import assess_render_quality
+        from app.domain.delivery.delivery_validator import assess_render_quality
 
         quality_report = assess_render_quality(products.render_layers)
         products.snapshot = products.snapshot.model_copy(update={"quality_report": quality_report})

@@ -41,6 +41,7 @@ def test_stable_api_does_not_import_agent_business_models_or_renderers() -> None
     imports = _imports(ROOT / 'api/v1/routes.py')
     forbidden = {
         'app.agent.deliver.render_layers',
+        'app.domain.delivery.render_layers',
         'app.modules.schema.contracts.planned_state_contracts',
         'app.modules.spatial_ops.output.export_package',
     }
@@ -75,7 +76,7 @@ def test_public_contracts_do_not_expose_internal_state_fields() -> None:
 
 
 def test_delivery_land_balance_prefers_exported_snapshot_view() -> None:
-    source = (ROOT / 'agent/deliver/aggregate.py').read_text(encoding='utf-8')
+    source = (ROOT / 'domain/delivery/aggregate.py').read_text(encoding='utf-8')
     exported = source.index('exported_planned = _planned_view_from_export(export_result)')
     gate = source.index('check_delivery_gate(', exported)
 

@@ -9,10 +9,10 @@ from __future__ import annotations
 
 from typing import Any, Dict
 
-from app.agent.deliver.aggregate import deliver_aggregate
-from app.agent.deliver.delivery_renderer import render_delivery_artifacts
-from app.agent.deliver.delivery_snapshot_builder import build_spatial_delivery_products
-from app.agent.deliver.gate import evaluate_deliver_gate
+from app.domain.delivery.aggregate import deliver_aggregate
+from app.domain.delivery.delivery_renderer import render_delivery_artifacts
+from app.domain.delivery.delivery_snapshot_builder import build_spatial_delivery_products
+from app.domain.delivery.gate import evaluate_deliver_gate
 from app.modules.schema.contracts.deferral_contracts import DeferralLedger
 from app.modules.schema.contracts.execution_plan_contracts import ExecutionPlan, ExecutionResult
 from app.modules.schema.contracts.parcel_change_contracts import ParcelChangeSet

@@ -1,7 +1,7 @@
 from types import SimpleNamespace
 
-from app.agent.deliver.render_layers import build_delivery_render_layers
-from app.agent.deliver.delivery_validator import (
+from app.domain.delivery.render_layers import build_delivery_render_layers
+from app.domain.delivery.delivery_validator import (
     assess_render_quality,
 )
 from app.modules.spatial_ops.io.delivery_snapshot import (
@@ -84,7 +84,7 @@ def test_delivery_data_layer_rejects_missing_current_landuse():
 
 
 def test_delivery_exposes_project_footprint_and_small_location_point():
-    from app.agent.deliver.render_layers import build_planned_overlay_layers
+    from app.domain.delivery.render_layers import build_planned_overlay_layers
 
     layers = build_planned_overlay_layers(SimpleNamespace(parcels=[_parcel(
         "P001",

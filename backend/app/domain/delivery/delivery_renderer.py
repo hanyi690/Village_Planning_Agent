@@ -18,7 +18,7 @@ def render_delivery_artifacts(
     snapshot_error: str = "",
 ) -> dict[str, Any]:
     """Render PNG/HTML from the exact layers used by delivery export."""
-    from app.agent.deliver.delivery_validator import assess_render_quality
+    from app.domain.delivery.delivery_validator import assess_render_quality
 
     artifacts: dict[str, Any] = {
         "layer_count": len(render_layers),
