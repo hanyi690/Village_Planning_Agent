@@ -91,7 +91,7 @@ def _normalize_spec_mention(label: str) -> str:
     if not token:
         return ""
     if token in {"全村域", "全村", "村域"} or re.fullmatch(
-        r"\d+个自然村", token
+        r"(?:全村)?\d+个自然村", token
     ):
         return _VILLAGE_ALL_MARKER
     for suffix in (
