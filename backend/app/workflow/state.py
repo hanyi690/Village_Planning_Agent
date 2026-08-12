@@ -191,6 +191,13 @@ def _merge_messages(current: Any, update: Any) -> Any:
         return [*(current or []), *(update or [])]
 
 
+def _merge_runtime(current: Any, update: Any) -> Any:
+    """Shallow-merge stage-local runtime dicts (last writer wins per key)."""
+    merged = dict(current or {})
+    merged.update(dict(update or {}))
+    return merged
+
+
 class WorkflowState(TypedDict, total=False):
     """Checkpoint-owned control state and immutable artifact references."""
 
@@ -221,6 +228,7 @@ class WorkflowState(TypedDict, total=False):
     need_revision: Annotated[bool | None, _merge_control]
     last_revised_dimensions: Annotated[list[str], _merge_control]
     revision_feedback: Annotated[str | None, _merge_control]
+    runtime: Annotated[dict[str, Any], _merge_runtime]
 def _active_stage(state: dict[str, Any]) -> str:
     """Derive one stage name without exposing legacy routing fields."""
 

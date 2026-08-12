@@ -28,7 +28,7 @@ ARTIFACT_KEYS = (
     "site_selection", "execution_plan", "execution_result", "parcel_changeset",
     "planned_state", "validation_report", "reconciliation_report", "delivery_manifest",
     "layout_configs", "render_layers", "delivery_spatial_snapshot", "deferral_ledger",
-    "export_result", "render_artifacts", "execution_diagnostics", "workflow_progress",
+    "export_result", "render_artifacts", "execution_diagnostics",
 )
 
 

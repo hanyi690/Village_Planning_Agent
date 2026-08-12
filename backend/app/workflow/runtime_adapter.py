@@ -1,4 +1,8 @@
-"""Adapter between the compact root checkpoint and stage-local runtime data."""
+"""Adapter between the compact root checkpoint and stage-local runtime data.
+
+Stage-local keys travel as a first-class ``runtime`` channel on
+``WorkflowState``, replacing the retired ``workflow_progress`` artifact.
+"""
 
 from __future__ import annotations
 
@@ -18,7 +22,7 @@ _CARRIER_RESERVED_KEYS = _CARRIER_IDENTITY_KEYS | {"artifact_refs"}
 
 # Top-level WorkflowState channels that carry an Annotated reducer.  LangGraph
 # merges parallel workers' writes to these keys; they must not also be baked
-# into the legacy workflow_progress carrier.
+# into the runtime channel.
 _REDUCER_KEYS = frozenset(
     key
     for key, hint in typing.get_type_hints(WorkflowState, include_extras=True).items()
@@ -79,8 +83,9 @@ def materialize_workflow_state(state: dict[str, Any]) -> dict[str, Any]:
     Three shapes of input are handled:
 
     1. Compact root state carrying a ``runtime`` channel: use it directly.
-    2. Compact root state referencing a ``workflow_progress`` artifact: hydrate
-       the legacy stage-local view from that carrier.
+    2. Read-compat shim: compact root state referencing a legacy
+       ``workflow_progress`` artifact (pre-cutover checkpoints) hydrates the
+       stage-local view from that carrier without writing back to it.
     3. A dynamic Send worker payload (has ``dimension_key``): the whole payload
        is the worker's task input, so it becomes the runtime view verbatim.
     """
@@ -89,16 +94,15 @@ def materialize_workflow_state(state: dict[str, Any]) -> dict[str, Any]:
         runtime = dict(state)
     elif not runtime and (state.get("artifact_refs") or {}).get("workflow_progress"):
         from app.infrastructure.artifacts.runtime import load_artifact
-        from app.modules.schema.contracts.workflow_progress_contracts import WorkflowProgress
 
-        progress = load_artifact(state, "workflow_progress", WorkflowProgress)
-        if progress is not None:
+        payload = load_artifact(state, "workflow_progress")
+        if payload is not None:
             runtime = {
-                **dict(progress.stage_payload or {}),
-                "session_id": progress.session_id,
-                "run_id": progress.run_id,
-                "branch_id": progress.branch_id,
-                "artifact_refs": dict(progress.artifact_refs or {}),
+                **dict(payload.get("stage_payload") or {}),
+                "session_id": payload.get("session_id", ""),
+                "run_id": payload.get("run_id", ""),
+                "branch_id": payload.get("branch_id", "main"),
+                "artifact_refs": dict(payload.get("artifact_refs") or {}),
             }
     for key in _CONTROL_KEYS:
         if key in state and key not in {"retry", "interrupt_ref", "terminal_ref", "active_stage", "status"}:
@@ -114,39 +118,19 @@ def materialize_workflow_state(state: dict[str, Any]) -> dict[str, Any]:
     return runtime
 
 
-def _persist_progress(runtime: dict[str, Any]) -> dict[str, Any]:
-    """Persist the remaining legacy stage-local view as an artifact.
+def _carrier(runtime: dict[str, Any]) -> dict[str, Any]:
+    """Return the JSON-safe stage-local subset written to the runtime channel.
 
     Keys carried by top-level ``WorkflowState`` reducer channels are excluded:
-    LangGraph merges them directly, so parallel workers no longer contend on
-    the shared ``workflow_progress`` named ref.
+    LangGraph merges them directly, so parallel workers do not contend on a
+    shared named ref.
     """
-    from app.infrastructure.artifacts.runtime import store_artifact
-
-    refs = dict(runtime.get("artifact_refs") or {})
-    parent_refs = {key: value for key, value in refs.items() if key != "workflow_progress"}
-    carrier = {
+    return {
         key: value
         for key, value in runtime.items()
         if key not in _CARRIER_RESERVED_KEYS
         and key not in _REDUCER_KEYS
     }
-    payload = {
-        "session_id": str(runtime.get("session_id") or ""),
-        "run_id": str(runtime.get("run_id") or ""),
-        "branch_id": str(runtime.get("branch_id") or "main"),
-        "artifact_refs": parent_refs,
-        "stage_payload": carrier,
-    }
-    descriptor = store_artifact(
-        {**runtime, "artifact_refs": refs},
-        "workflow_progress",
-        "WORKFLOW",
-        "WorkflowProgress",
-        payload,
-    )
-    refs["workflow_progress"] = descriptor
-    return refs
 
 
 def _control_projection(runtime: dict[str, Any]) -> dict[str, Any]:
@@ -182,7 +166,7 @@ def _control_projection(runtime: dict[str, Any]) -> dict[str, Any]:
 def initial_workflow_state(runtime: dict[str, Any]) -> dict[str, Any]:
     """Convert a newly-created legacy-shaped input into compact state."""
     payload = dict(runtime)
-    return {"runtime": payload, **_control_projection(payload)}
+    return {"runtime": _carrier(payload), **_control_projection(payload)}
 
 
 def pack_workflow_patch(state: dict[str, Any], patch: dict[str, Any]) -> WorkflowState:
@@ -190,9 +174,7 @@ def pack_workflow_patch(state: dict[str, Any], patch: dict[str, Any]) -> Workflo
     runtime = materialize_workflow_state(state)
     for key, value in patch.items():
         runtime[key] = _merge_value(key, runtime.get(key), value)
-    refs = _persist_progress(runtime)
-    runtime["artifact_refs"] = refs
-    return _control_projection(runtime)
+    return {**_control_projection(runtime), "runtime": _carrier(runtime)}
 
 
 def _adapt_command(state: dict[str, Any], command: Command) -> Command:
@@ -212,8 +194,8 @@ def adapt_node(node: Callable[..., Any], *, worker: bool = False) -> Callable[..
     """Run a legacy-shaped node behind the compact root state boundary.
 
     ``worker=True`` marks a parallel dimension worker.  Workers project shared
-    keys to top-level reducer channels and skip ``workflow_progress``
-    persistence, so concurrent Send branches do not race one CAS named ref.
+    keys to top-level reducer channels only, so concurrent Send branches do not
+    contend on the runtime channel.
     """
     @wraps(node)
     async def wrapped(state: dict[str, Any]) -> dict[str, Any]:
