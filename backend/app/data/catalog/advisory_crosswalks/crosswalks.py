@@ -182,7 +182,7 @@ def get_zone_type_for_dlbm(dlbm: str) -> str:
 def resolve_zone_type_for_dlbm(dlbm: str) -> str:
     """Resolve DLBM to zone type with caching.
 
-    Moved from app.tools.gis._generation.zone_generator - pure lookup,
+    Moved from the legacy GIS zone_generator module - pure lookup,
     no tool-specific logic. The caching is a legitimate schema-level optimization.
     """
     return get_zone_type_for_dlbm(dlbm.strip())

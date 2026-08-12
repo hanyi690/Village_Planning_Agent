@@ -21,7 +21,7 @@ from app.workflow.layers.layer_router import _worker_for_phase
 from app.workflow.state import load_root_gate
 from app.config import get_dimension_layer
 from app.config.dependency import compute_impact_tree, get_next_revision_wave
-from app.tools.intent_tools import advance_planning_intent, gis_analysis
+from app.infrastructure.llm.tools.intent_tools import advance_planning_intent, gis_analysis
 from app.infrastructure.logging import get_logger
 
 

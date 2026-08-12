@@ -14,9 +14,9 @@ from langchain_core.messages import ToolMessage
 
 from app.infrastructure.logging import get_logger
 from app.infrastructure.events.sse_publisher import SSEPublisher
-from app.tools.registry import ToolRegistry
-from app.tools.tools import TOOL_REGISTRY
-from app.tools.intent_tools import advance_planning_intent, gis_analysis
+from app.infrastructure.llm.tools.registry import ToolRegistry
+from app.infrastructure.llm.tools.tools import TOOL_REGISTRY
+from app.infrastructure.llm.tools.intent_tools import advance_planning_intent, gis_analysis
 
 logger = get_logger(__name__)
 

@@ -7,7 +7,7 @@ import json
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Sequence, Tuple
 
-from app.tools.gis.static_render import _coordinates, _feature_color
+from app.infrastructure.rendering.static_render import _coordinates, _feature_color
 
 
 Point = Tuple[float, float]

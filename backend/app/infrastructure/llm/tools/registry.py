@@ -24,26 +24,7 @@ class ToolMetadata:
             self.display_hints = {"primary_view": "text", "priority_fields": []}
 
 
-_TOOL_DEFINITIONS: Dict[str, Dict[str, Any]] = {
-    "population_prediction": {
-        "display_name": "人口预测",
-        "description": "基于人口模型预测未来人口变化趋势，支持村庄规划标准模型。",
-        "estimated_time": 3.0,
-        "display_hints": {"primary_view": "chart", "priority_fields": ["forecast_population", "growth_rate"]},
-    },
-    "knowledge_search": {
-        "display_name": "知识检索",
-        "description": "从知识库检索专业数据和法规条文。",
-        "estimated_time": 2.0,
-        "display_hints": {"primary_view": "text", "priority_fields": ["content", "source"]},
-    },
-    "web_search": {
-        "display_name": "网络搜索",
-        "description": "从互联网搜索实时信息。",
-        "estimated_time": 4.0,
-        "display_hints": {"primary_view": "text", "priority_fields": ["results"]},
-    },
-}
+_TOOL_DEFINITIONS: Dict[str, Dict[str, Any]] = {}
 
 
 class ToolRegistry:
@@ -98,7 +79,7 @@ class ToolRegistry:
         Other agents can adopt any of these lists by declaring the same scope.
         """
         if agent_id == "explore":
-            from app.tools.access import ACCESS_TOOLS
+            from app.infrastructure.llm.tools.access import ACCESS_TOOLS
             return list(ACCESS_TOOLS)
         return []
 

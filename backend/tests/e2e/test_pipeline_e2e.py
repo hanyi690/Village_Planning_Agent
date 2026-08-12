@@ -153,7 +153,7 @@ async def test_runtime_pipeline_e2e(sqlite_db, pipeline_reset, monkeypatch):
 
         # ── Stage 6: resolve_bundle is snapshot-first (no live build) ────
         from app.application.sessions import session_bundle as sb
-        from app.tools.access.shared import resolve_bundle
+        from app.infrastructure.llm.tools.access.shared import resolve_bundle
 
         sb._bundle_cache.clear()
         calls = {"n": 0}
@@ -172,7 +172,7 @@ async def test_runtime_pipeline_e2e(sqlite_db, pipeline_reset, monkeypatch):
         ), "snapshot path lost uploaded text"
 
         # ── Stage 7: EXPLORE access tools (real calls) ───────────────────
-        from app.tools.access.bundle import (
+        from app.infrastructure.llm.tools.access.bundle import (
             bundle_overview_impl,
             spatial_context_impl,
             spatial_features_impl,

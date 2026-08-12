@@ -60,7 +60,7 @@ _ACCESS_METADATA = {
 
 
 def _register() -> None:
-    from app.tools.registry import ToolRegistry
+    from app.infrastructure.llm.tools.registry import ToolRegistry
 
     by_name = {t.name: t for t in ACCESS_TOOLS}
     for name, meta in _ACCESS_METADATA.items():

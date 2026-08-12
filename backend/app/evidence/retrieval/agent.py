@@ -5,7 +5,7 @@ references, never final planning geometry.  Its deterministic baseline makes
 offline/replay runs reproducible; an optional Flash model can refine the same
 contract without changing the downstream Binder boundary.
 
-Consumes the access-tools layer (``app.tools.access``) for any bundle data
+Consumes the access-tools layer (``app.infrastructure.llm.tools.access``) for any bundle data
 needed by downstream stages, and the stable KG boundary
 (``app.infrastructure.kg.require_session_kg`` / ``query_session_template``) for session
 KG interactions.

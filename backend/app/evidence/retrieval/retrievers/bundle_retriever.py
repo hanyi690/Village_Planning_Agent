@@ -8,7 +8,7 @@ from app.contracts.evidence.evidence_contracts import (
     EvidenceFact,
     EvidenceSource,
 )
-from app.tools.access.shared import resolve_bundle, group_stats
+from app.infrastructure.llm.tools.access.shared import resolve_bundle, group_stats
 from app.infrastructure.logging import get_logger
 
 logger = get_logger(__name__)

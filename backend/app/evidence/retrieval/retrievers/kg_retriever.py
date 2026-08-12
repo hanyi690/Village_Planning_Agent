@@ -7,7 +7,7 @@ from app.contracts.evidence.evidence_contracts import (
     EvidenceFact,
     SpatialCognitionEvidence,
 )
-from app.tools.access.shared import session_kg
+from app.infrastructure.llm.tools.access.shared import session_kg
 from app.infrastructure.kg.queries.cognition import get_village_cognition
 from app.infrastructure.kg.queries.sparql import query_kg
 from app.infrastructure.logging import get_logger

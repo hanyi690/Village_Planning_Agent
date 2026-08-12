@@ -1,8 +1,7 @@
 """Conversation node — central router (brain).
 
-Binds advance_planning_intent / gis_analysis BaseTools plus the analytics
-tools (population_prediction, knowledge_search, web_search) to the LLM so
-the model can choose between routing intents and actual tool calls.
+Binds advance_planning_intent / gis_analysis BaseTools to the LLM so the
+model can choose between routing intents and actual tool calls.
 
 System prompt is built via ChatPromptTemplate so the template is reusable,
 cacheable, and testable in isolation.
@@ -33,9 +32,6 @@ SYSTEM_TEMPLATE = """你是村庄规划助手，正在进行 {project_name} 的�
 可用工具：
 - advance_planning_intent: 推进规划流程
 - gis_analysis: GIS可视化分析
-- population_prediction: 人口预测
-- knowledge_search: 知识检索
-- web_search: 网络搜索
 
 响应规则：
 - 用户说"继续规划"或"下一步" -> 调用 advance_planning_intent
@@ -49,15 +45,14 @@ _llm_with_tools: Optional[Any] = None
 
 def _get_llm_with_tools() -> Any:
     """Lazy-init the LLM+tools chain (cached across calls)."""
-    from app.tools.intent_tools import advance_planning_intent, gis_analysis
-    from app.tools.tools import get_tools_for_llm
+    from app.infrastructure.llm.tools.intent_tools import advance_planning_intent, gis_analysis
 
     global _llm_with_tools
     if _llm_with_tools is None:
         # Do not pin the primary provider's model here: MiniMax and other
         # OpenAI-compatible providers have their own valid model ids.
         llm = create_llm(temperature=0.7, max_tokens=MAX_TOKENS)
-        bind_list = [advance_planning_intent, gis_analysis] + list(get_tools_for_llm())
+        bind_list = [advance_planning_intent, gis_analysis]
         _llm_with_tools = llm.bind_tools(bind_list)
     return _llm_with_tools
 

@@ -20,13 +20,13 @@ class DataPipeline:
     1. Read tool config for the dimension (from phases.yaml)
     2. Filter to IMPLEMENTED tools only (STUB tools are skipped)
     3. Build context (inject structured_summary + state data)
-    4. Execute each tool via TOOL_REGISTRY (from tools.py)
+    4. Execute each tool via TOOL_REGISTRY (from infrastructure/llm/tools/tools.py)
     5. Aggregate results as professional_data
     6. Single tool failure is isolated (does not affect others)
     """
 
     def __init__(self) -> None:
-        from app.tools.tools import TOOL_REGISTRY
+        from app.infrastructure.llm.tools.tools import TOOL_REGISTRY
         self._registry = TOOL_REGISTRY
 
     async def get_professional_data(

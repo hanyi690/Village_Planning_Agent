@@ -76,7 +76,7 @@ async def _maybe_extract_bindings(
 
         # KG 多级增强（enrichment）：L1 村名绑定 / L2/L3 实体注解 + 关系注记
         from app.infrastructure.kg.enrichment import run_wave
-        from app.tools.access.shared import resolve_bundle
+        from app.infrastructure.llm.tools.access.shared import resolve_bundle
 
         _bundle = None
         try:

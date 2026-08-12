@@ -78,7 +78,7 @@ def budget_check(payload: Dict[str, Any], hard_limit: int = 6000) -> Dict[str, A
 
 def tool_reply(data: Dict[str, Any]) -> str:
     """Serialize a tool payload into the standard make_result envelope."""
-    from app.tools.helpers import make_result
+    from app.infrastructure.llm.tools.helpers import make_result
 
     return json.dumps(make_result(True, data=data), ensure_ascii=False, default=str)
 

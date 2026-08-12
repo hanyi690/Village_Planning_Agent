@@ -65,7 +65,7 @@ def test_delivery_render_uses_current_layer_from_data_bundle(tmp_path):
     )
     assert len(planned["geojson"]["features"]) == 2
 
-    from app.tools.gis.static_render import render_comparison_preview
+    from app.infrastructure.rendering.static_render import render_comparison_preview
 
     preview = render_comparison_preview(layers, str(tmp_path), "render-quality")
     assert preview["status"] == "completed"

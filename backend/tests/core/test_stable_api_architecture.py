@@ -109,10 +109,9 @@ def test_gis_tools_receive_bundle_refs_not_raw_gis_state() -> None:
 
 
 def test_legacy_agent_gis_layout_tools_are_removed() -> None:
+    assert not (ROOT / "tools" / "gis").exists()
     assert not (ROOT / "tools" / "gis" / "render.py").exists()
     assert not (ROOT / "tools" / "gis" / "validate.py").exists()
-    source = (ROOT / "tools" / "gis" / "__init__.py").read_text(encoding="utf-8")
-    assert "layout_configs" not in source
 
 
 def test_delivery_stage_is_not_embedded_in_main_nodes() -> None:

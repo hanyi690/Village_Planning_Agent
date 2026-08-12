@@ -7,11 +7,12 @@ Key principles:
 - Forward direction only (code → name)
 - 1:1 deterministic mapping (no fuzzy, no multi-result)
 - NEVER chains code→code mappings (e.g., dlbm→ghytbm→ghytmc)
-- Helper for INTERNAL Python callers only — not exposed as LLM tool
-  (for LLM tool version, see app.tools.gis.lookup.decode_code)
+- Helper for INTERNAL Python callers only — not exposed as an LLM tool.
+  The legacy GIS LLM lookup tools were removed; code→name resolution now
+  lives in this module only.
 
 For name→code (reverse, fuzzy, multi-result) with code→code chains,
-use the `lookup_code` tool in app.tools.gis.lookup — that's a different concern.
+that is a different concern and is not handled here.
 """
 from __future__ import annotations
 
@@ -161,8 +162,8 @@ def lookup_code_name(code_type: str, code_value: str) -> str:
         Chinese name string, or '' if not found.
 
     NEVER chains code→code (e.g., dlbm→ghytbm→ghytmc). If you need a related
-    code in a different encoding system, query KG via SPARQL or call the
-    `lookup_code` tool in app.tools.gis.lookup — different concern.
+    code in a different encoding system, query the KG via SPARQL — a different
+    concern.
     """
     if not code_value:
         return ""

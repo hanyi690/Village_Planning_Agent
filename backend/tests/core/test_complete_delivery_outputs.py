@@ -3,8 +3,8 @@ from types import SimpleNamespace
 
 from app.domain.delivery.render_layers import build_delivery_render_layers
 from app.infrastructure.export.export_package import export_delivery_package
-from app.tools.gis.html_render import render_interactive_map
-from app.tools.gis.static_render import render_map_preview
+from app.infrastructure.rendering.html_render import render_interactive_map
+from app.infrastructure.rendering.static_render import render_map_preview
 from app.infrastructure.export.delivery_snapshot import build_delivery_spatial_snapshot_from_gis_data
 
 

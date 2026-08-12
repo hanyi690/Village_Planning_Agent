@@ -38,8 +38,8 @@ def render_delivery_artifacts(
 
     try:
         from app.infrastructure.paths import session_run_dir
-        from app.tools.gis.html_render import render_interactive_map
-        from app.tools.gis.static_render import render_comparison_preview
+        from app.infrastructure.rendering.html_render import render_interactive_map
+        from app.infrastructure.rendering.static_render import render_comparison_preview
 
         output_dir = session_run_dir(session_id) / "render"
         if render_layers:
