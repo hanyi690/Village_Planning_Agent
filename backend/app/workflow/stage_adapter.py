@@ -6,7 +6,7 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
-from app.modules.schema.contracts.artifact_descriptor import ArtifactDescriptor
+from app.contracts.artifacts import ArtifactRef
 from app.workflow.state import WorkflowState
 
 
@@ -16,7 +16,7 @@ class StageCommand(BaseModel):
     run_id: str
     branch_id: str
     context_ref: dict[str, Any]
-    input_refs: dict[str, ArtifactDescriptor] = Field(default_factory=dict)
+    input_refs: dict[str, ArtifactRef] = Field(default_factory=dict)
     attempt: int = 1
 
 
@@ -24,8 +24,8 @@ class StageCompletion(BaseModel):
     """The only result shape a workflow stage may return to the graph."""
 
     stage: str
-    output_refs: dict[str, ArtifactDescriptor] = Field(default_factory=dict)
-    gate_ref: ArtifactDescriptor
+    output_refs: dict[str, ArtifactRef] = Field(default_factory=dict)
+    gate_ref: ArtifactRef
     event_refs: list[str] = Field(default_factory=list)
 
 
@@ -90,7 +90,7 @@ def persist_gate_decision(
     gate: Any,
     *,
     output_refs: dict[str, Any] | None = None,
-) -> ArtifactDescriptor:
+) -> ArtifactRef:
     """Persist a gate as an immutable CAS artifact and return its descriptor.
 
     Gate decisions are not named stage outputs, so they are stored as an
@@ -117,7 +117,7 @@ def persist_gate_decision(
     for key, value in refs.items():
         if not value:
             continue
-        descriptor = value if isinstance(value, ArtifactDescriptor) else ArtifactDescriptor.model_validate(value)
+        descriptor = value if isinstance(value, ArtifactRef) else ArtifactRef.model_validate(value)
         parent_digests[str(key)] = descriptor.digest
     repository = ContentAddressedArtifactRepository(run_tmp_root())
     return repository.put_json(
@@ -140,7 +140,7 @@ def command_from_state(state: dict[str, Any], stage: str) -> StageCommand:
     """Build a typed command from explicit checkpoint references."""
 
     refs = {
-        key: ArtifactDescriptor.model_validate(value)
+        key: ArtifactRef.model_validate(value)
         for key, value in (state.get("artifact_refs") or {}).items()
         if value
     }

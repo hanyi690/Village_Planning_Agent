@@ -187,6 +187,9 @@ def test_real_graph_resume_delivery(sqlite_db, pipeline_reset, monkeypatch):
         run_root = (Path.cwd() / ".run-tmp" / f"real-llm-{uuid4().hex}").resolve()
         run_root.mkdir(parents=True, exist_ok=True)
         monkeypatch.setenv("BACKEND_RUN_TMP_DIR", str(run_root))
+        from app.services.run_paths import reset_run_tmp_root_cache
+
+        reset_run_tmp_root_cache()
         from fastapi.testclient import TestClient
         import app.main as main
 

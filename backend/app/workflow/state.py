@@ -7,9 +7,9 @@ GIS payloads, or worker-local state.
 
 from __future__ import annotations
 
-from typing import Any, TypedDict
+from typing import Annotated, Any, TypedDict
 
-from app.modules.schema.contracts.artifact_descriptor import ArtifactDescriptor
+from app.contracts.artifacts import ArtifactRef
 from app.modules.schema.contracts.workflow_contracts import GateDecision
 
 
@@ -65,7 +65,7 @@ def load_root_gate(state: dict[str, Any], stage: str) -> GateDecision:
     if not raw_ref:
         raise RootGateResolutionError(normalized_stage, f"missing artifact ref: {key}")
     try:
-        descriptor = ArtifactDescriptor.model_validate(raw_ref)
+        descriptor = ArtifactRef.model_validate(raw_ref)
     except Exception as exc:
         raise RootGateResolutionError(normalized_stage, f"invalid artifact ref: {key}") from exc
     if descriptor.schema_id != "GateDecision":
@@ -103,23 +103,134 @@ def root_gate_route(state: dict[str, Any], stage: str) -> str:
     return "PASS" if gate.passed else "HUMAN"
 
 
+def _merge_identity(current: Any, update: Any) -> Any:
+    """Merge run/session/branch identity that parallel workers write identically."""
+    if current is None or current == "" or current == update:
+        return update
+    if isinstance(current, dict) and isinstance(update, dict):
+        merged = dict(current)
+        merged.update(dict(update))
+        return merged
+    raise ValueError(
+        f"parallel writers disagree on identity key: {current!r} vs {update!r}"
+    )
+
+
+def _merge_control(current: Any, update: Any) -> Any:
+    """Merge non-identity control keys (phase/status/stage) across branches.
+
+    Parallel dimension workers and the deferred aggregate/advance nodes may
+    write the same control key within one super-step.  These fields are
+    progress pointers, not business facts: the downstream-most writer wins.
+    """
+    if current is None:
+        return update
+    if isinstance(current, dict) and isinstance(update, dict):
+        merged = dict(current)
+        merged.update(dict(update))
+        return merged
+    return update
+
+
+def _merge_artifact_refs(current: dict[str, Any], update: dict[str, Any]) -> dict[str, Any]:
+    """Merge parallel worker artifact refs by key (last writer wins per key)."""
+    merged = dict(current or {})
+    merged.update(dict(update or {}))
+    return merged
+
+
+def _merge_retry(current: dict[str, Any], update: dict[str, Any]) -> dict[str, Any]:
+    """Merge per-stage retry counters across parallel branches."""
+    merged = dict(current or {})
+    for stage, value in dict(update or {}).items():
+        if isinstance(value, (int, float)):
+            merged[stage] = max(int(merged.get(stage, 0) or 0), int(value))
+        else:
+            merged[stage] = value
+    return merged
+
+
+def _merge_layer_dims(current: dict[str, Any], update: dict[str, Any]) -> dict[str, Any]:
+    """Merge per-phase dimension lists that parallel workers extend.
+
+    Each L1/L2/L3 worker reports ``{phase_key: [own_dimension]}``.  LangGraph
+    calls this reducer with all concurrent writes for a super-step so the
+    phase lists accumulate every worker's dimension (deduped), giving
+    ``layer_completion_check`` the full picture without CAS coordination.
+    """
+    merged = dict(current or {})
+    for name, values in dict(update or {}).items():
+        if isinstance(values, list) and isinstance(merged.get(name), list):
+            merged[name] = list(dict.fromkeys([*merged[name], *values]))
+        else:
+            merged[name] = values
+    return merged
+
+
+def _merge_reports(current: list[dict[str, Any]], update: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Append worker report records (deduped by report_id) across branches."""
+    merged = list(current or [])
+    seen = {str(item.get("report_id")) for item in merged if isinstance(item, dict)}
+    for item in list(update or []):
+        if isinstance(item, dict) and str(item.get("report_id")) in seen:
+            continue
+        merged.append(item)
+        if isinstance(item, dict):
+            seen.add(str(item.get("report_id")))
+    return merged
+
+
+def _merge_char_counts(current: dict[str, Any], update: dict[str, Any]) -> dict[str, Any]:
+    """Merge per-layer character counts (max per layer) across branches."""
+    merged = dict(current or {})
+    for layer, value in dict(update or {}).items():
+        try:
+            merged[layer] = max(int(merged.get(layer, 0) or 0), int(value))
+        except (TypeError, ValueError):
+            merged[layer] = value
+    return merged
+
+
+def _merge_messages(current: Any, update: Any) -> Any:
+    """Append conversation messages across parallel worker branches."""
+    try:
+        from langgraph.graph.message import add_messages
+
+        return add_messages(current or [], update or [])
+    except Exception:
+        return [*(current or []), *(update or [])]
+
+
 class WorkflowState(TypedDict, total=False):
     """Checkpoint-owned control state and immutable artifact references."""
 
-    run_id: str
-    session_id: str
-    branch_id: str
-    phase: str
-    active_stage: str
-    status: str
-    delivery_status: str
-    context_ref: dict[str, Any]
-    context_fingerprint: str
-    artifact_refs: dict[str, ArtifactDescriptor | dict[str, Any]]
-    gate_ref: ArtifactDescriptor | dict[str, Any] | None
-    retry: dict[str, Any]
-    interrupt_ref: ArtifactDescriptor | dict[str, Any] | None
-    terminal_ref: ArtifactDescriptor | dict[str, Any] | None
+    run_id: Annotated[str, _merge_identity]
+    session_id: Annotated[str, _merge_identity]
+    branch_id: Annotated[str, _merge_identity]
+    phase: Annotated[str, _merge_control]
+    active_stage: Annotated[str, _merge_control]
+    status: Annotated[str, _merge_control]
+    delivery_status: Annotated[str, _merge_control]
+    context_ref: Annotated[dict[str, Any], _merge_artifact_refs]
+    context_fingerprint: Annotated[str, _merge_control]
+    artifact_refs: Annotated[dict[str, ArtifactRef], _merge_artifact_refs]
+    gate_ref: Annotated[ArtifactRef | None, _merge_control]
+    retry: Annotated[dict[str, Any], _merge_retry]
+    interrupt_ref: Annotated[ArtifactRef | None, _merge_control]
+    terminal_ref: Annotated[ArtifactRef | None, _merge_control]
+    completed_dimensions: Annotated[dict[str, list[str]], _merge_layer_dims]
+    revision_completed_dims: Annotated[dict[str, list[str]], _merge_layer_dims]
+    pending_reports: Annotated[list[dict[str, Any]], _merge_reports]
+    layer_char_counts: Annotated[dict[str, int], _merge_char_counts]
+    revision_impact_tree: Annotated[dict[str, list[str]], _merge_layer_dims]
+    revision_target_dimensions: Annotated[list[str], _merge_control]
+    messages: Annotated[list[Any], _merge_messages]
+    layer_just_completed: Annotated[int | None, _merge_control]
+    previous_layer: Annotated[int | None, _merge_control]
+    is_revision: Annotated[bool | None, _merge_control]
+    need_revision: Annotated[bool | None, _merge_control]
+    last_revised_dimensions: Annotated[list[str], _merge_control]
+    revision_feedback: Annotated[str | None, _merge_control]
 def _active_stage(state: dict[str, Any]) -> str:
     """Derive one stage name without exposing legacy routing fields."""
 
@@ -181,10 +292,12 @@ def project_workflow_state(state: dict[str, Any]) -> WorkflowState:
     }
 
 
-def _interrupt_projection(state: dict[str, Any]) -> dict[str, Any] | None:
+def _interrupt_projection(state: dict[str, Any]) -> ArtifactRef | dict[str, Any] | None:
     """Normalize HUMAN and step-mode legacy channels into one small payload."""
 
     raw = state.get("interrupt_ref") or state.get("human_interrupt")
+    if isinstance(raw, ArtifactRef):
+        return raw
     interrupt = dict(raw) if isinstance(raw, dict) else {}
     items = list(interrupt.get("items") or state.get("human_review_items") or [])
     event_id = str(interrupt.get("event_id") or state.get("human_review_event_id") or "")

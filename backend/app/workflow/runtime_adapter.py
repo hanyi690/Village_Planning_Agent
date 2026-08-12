@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import inspect
+import typing
 from collections.abc import Callable
 from functools import wraps
 from typing import Any
@@ -11,10 +12,18 @@ from langgraph.types import Command
 
 from app.workflow.state import WorkflowState
 
-
 _CONTROL_KEYS = set(WorkflowState.__annotations__) - {"runtime"}
 _CARRIER_IDENTITY_KEYS = {"session_id", "run_id", "branch_id"}
 _CARRIER_RESERVED_KEYS = _CARRIER_IDENTITY_KEYS | {"artifact_refs"}
+
+# Top-level WorkflowState channels that carry an Annotated reducer.  LangGraph
+# merges parallel workers' writes to these keys; they must not also be baked
+# into the legacy workflow_progress carrier.
+_REDUCER_KEYS = frozenset(
+    key
+    for key, hint in typing.get_type_hints(WorkflowState, include_extras=True).items()
+    if typing.get_origin(hint) is typing.Annotated
+)
 
 
 def _merge_value(key: str, current: Any, update: Any) -> Any:
@@ -29,18 +38,6 @@ def _merge_value(key: str, current: Any, update: Any) -> Any:
     if key in {"artifact_refs", "config", "metadata"}:
         result = dict(current or {})
         result.update(dict(update or {}))
-        return result
-    if key in {"completed_dimensions", "revision_completed_dims", "stage_audit"}:
-        result = dict(current or {})
-        for name, values in dict(update or {}).items():
-            if isinstance(values, dict) and isinstance(result.get(name), dict):
-                nested = dict(result[name])
-                nested.update(values)
-                result[name] = nested
-            elif isinstance(values, list) and isinstance(result.get(name), list):
-                result[name] = list(dict.fromkeys([*result[name], *values]))
-            else:
-                result[name] = values
         return result
     return update
 
@@ -77,9 +74,20 @@ def _restore_messages(messages: Any) -> Any:
 
 
 def materialize_workflow_state(state: dict[str, Any]) -> dict[str, Any]:
-    """Expose stage-local data to one node without putting it in root channels."""
+    """Expose stage-local data to one node without putting it in root channels.
+
+    Three shapes of input are handled:
+
+    1. Compact root state carrying a ``runtime`` channel: use it directly.
+    2. Compact root state referencing a ``workflow_progress`` artifact: hydrate
+       the legacy stage-local view from that carrier.
+    3. A dynamic Send worker payload (has ``dimension_key``): the whole payload
+       is the worker's task input, so it becomes the runtime view verbatim.
+    """
     runtime = dict(state.get("runtime") or {})
-    if not runtime and (state.get("artifact_refs") or {}).get("workflow_progress"):
+    if not runtime and state.get("dimension_key"):
+        runtime = dict(state)
+    elif not runtime and (state.get("artifact_refs") or {}).get("workflow_progress"):
         from app.infrastructure.artifacts.runtime import load_artifact
         from app.modules.schema.contracts.workflow_progress_contracts import WorkflowProgress
 
@@ -107,7 +115,12 @@ def materialize_workflow_state(state: dict[str, Any]) -> dict[str, Any]:
 
 
 def _persist_progress(runtime: dict[str, Any]) -> dict[str, Any]:
-    """Persist the stage-local view before returning a root checkpoint patch."""
+    """Persist the remaining legacy stage-local view as an artifact.
+
+    Keys carried by top-level ``WorkflowState`` reducer channels are excluded:
+    LangGraph merges them directly, so parallel workers no longer contend on
+    the shared ``workflow_progress`` named ref.
+    """
     from app.infrastructure.artifacts.runtime import store_artifact
 
     refs = dict(runtime.get("artifact_refs") or {})
@@ -116,6 +129,7 @@ def _persist_progress(runtime: dict[str, Any]) -> dict[str, Any]:
         key: value
         for key, value in runtime.items()
         if key not in _CARRIER_RESERVED_KEYS
+        and key not in _REDUCER_KEYS
     }
     payload = {
         "session_id": str(runtime.get("session_id") or ""),
@@ -142,7 +156,7 @@ def _control_projection(runtime: dict[str, Any]) -> dict[str, Any]:
     status = "paused" if runtime.get("human_interrupt") or runtime.get("paused_stage") else (
         "completed" if delivery_status else "running"
     )
-    return {
+    projection = {
         "session_id": str(runtime.get("session_id") or ""),
         "run_id": str(runtime.get("run_id") or runtime.get("session_id") or ""),
         "branch_id": str(runtime.get("branch_id") or "main"),
@@ -157,6 +171,12 @@ def _control_projection(runtime: dict[str, Any]) -> dict[str, Any]:
         "interrupt_ref": runtime.get("human_interrupt"),
         "terminal_ref": runtime.get("diagnostic_terminal"),
     }
+    for key in _REDUCER_KEYS:
+        if key in projection:
+            continue
+        if key in runtime and runtime[key] is not None:
+            projection[key] = runtime[key]
+    return projection
 
 
 def initial_workflow_state(runtime: dict[str, Any]) -> dict[str, Any]:
@@ -188,8 +208,13 @@ def _adapt_command(state: dict[str, Any], command: Command) -> Command:
     )
 
 
-def adapt_node(node: Callable[..., Any]) -> Callable[..., Any]:
-    """Run a legacy-shaped node behind the compact root state boundary."""
+def adapt_node(node: Callable[..., Any], *, worker: bool = False) -> Callable[..., Any]:
+    """Run a legacy-shaped node behind the compact root state boundary.
+
+    ``worker=True`` marks a parallel dimension worker.  Workers project shared
+    keys to top-level reducer channels and skip ``workflow_progress``
+    persistence, so concurrent Send branches do not race one CAS named ref.
+    """
     @wraps(node)
     async def wrapped(state: dict[str, Any]) -> dict[str, Any]:
         local_state = materialize_workflow_state(state)
@@ -200,6 +225,11 @@ def adapt_node(node: Callable[..., Any]) -> Callable[..., Any]:
             return _adapt_command(state, result)
         if not isinstance(result, dict):
             return result
+        if worker:
+            runtime = materialize_workflow_state(state)
+            for key, value in result.items():
+                runtime[key] = _merge_value(key, runtime.get(key), value)
+            return _control_projection(runtime)
         return pack_workflow_patch(state, result)
 
     return wrapped

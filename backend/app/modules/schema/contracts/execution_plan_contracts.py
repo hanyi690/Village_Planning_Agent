@@ -3,7 +3,9 @@ from __future__ import annotations
 from enum import Enum
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
+
+from app.contracts.artifacts import ArtifactRef
 
 from .contract_meta import ContractMeta
 from .provenance import Provenance
@@ -64,14 +66,21 @@ class ExecutionResult(ContractMeta):
     """
 
     schema_version: Literal["3.0"] = "3.0"
-    execution_plan_ref: dict[str, Any] = Field(default_factory=dict)
-    parcel_changeset_ref: dict[str, Any] = Field(default_factory=dict)
-    planned_state_ref: dict[str, Any] = Field(default_factory=dict)
-    deferral_ledger_ref: dict[str, Any] = Field(default_factory=dict)
-    layout_configs_ref: dict[str, Any] = Field(default_factory=dict)
+    execution_plan_ref: ArtifactRef | None = Field(default=None)
+    parcel_changeset_ref: ArtifactRef
+    planned_state_ref: ArtifactRef
+    deferral_ledger_ref: ArtifactRef | None = Field(default=None)
+    layout_configs_ref: ArtifactRef
     task_results: list[TaskExecutionResult] = Field(default_factory=list)
     action_results: list[TypedActionResult] = Field(default_factory=list)
     diagnostics: list[dict] = Field(default_factory=list)
+
+    @field_validator("execution_plan_ref", mode="before")
+    @classmethod
+    def empty_ref_means_omitted(cls, value: object) -> object:
+        if value == {}:
+            return None
+        return value
 
 
 class ExecutionPlan(ContractMeta):

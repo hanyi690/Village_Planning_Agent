@@ -1,4 +1,4 @@
-"""
+﻿"""
 FastAPI Backend Application - 村庄规划智能体后端服务
 
 Architecture:
@@ -9,12 +9,10 @@ Architecture:
 
 from __future__ import annotations
 
-import asyncio
 import logging
 import os
 import sys
 import uuid
-from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException
@@ -127,115 +125,8 @@ ALLOWED_ORIGINS = os.getenv(
 ).split(",")
 
 
-# ============================================
-# Application Lifecycle
-# ============================================
 
-def _cleanup_old_logs():
-    """Delete log files older than LOG_RETENTION_DAYS."""
-    import glob
-    import time
-
-    cutoff = time.time() - LOG_RETENTION_DAYS * 86400
-    patterns = ["planning.log*", "planning.error.log*"]
-    deleted = 0
-
-    for pattern in patterns:
-        for path in glob.glob(str(LOG_DIR / pattern)):
-            try:
-                if os.path.getmtime(path) < cutoff:
-                    os.remove(path)
-                    deleted += 1
-            except OSError:
-                pass
-
-    if deleted:
-        logger.info("🧹 Log cleanup: removed %d old log files (retention=%d days)", deleted, LOG_RETENTION_DAYS)
-
-
-async def _log_cleanup_loop():
-    """Periodic log cleanup — runs once per day."""
-    while True:
-        await asyncio.sleep(86400)  # 24 hours
-        try:
-            _cleanup_old_logs()
-        except Exception as e:
-            logger.error(f"Log cleanup failed: {e}")
-
-
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    """Application lifecycle management"""
-    logger.info(f"🚀 村庄规划智能体后端启动中...")
-    logger.info(f"📁 Project root: {PROJECT_ROOT}")
-    logger.info(f"📁 Working directory: {os.getcwd()}")
-
-    app.state.readiness = {"database": "starting", "checkpointer": "starting", "langgraph": "starting"}
-    try:
-        async with asyncio.timeout(BACKEND_STARTUP_TIMEOUT_SECONDS):
-            from app.database import init_async_db
-            if not await init_async_db():
-                raise RuntimeError("database initialization returned false")
-            from app.services.composition import CompositionRoot
-            CompositionRoot.initialize()
-            from app.services.runtime import PlanningRuntimeService
-            await PlanningRuntimeService.initialize()
-    except Exception:
-        logger.exception("Core backend startup failed")
-        app.state.readiness = {"database": "failed", "checkpointer": "failed", "langgraph": "failed"}
-        raise
-    app.state.readiness = {"database": "ready", "checkpointer": "ready", "langgraph": "ready"}
-
-    # Save event loop for cross-thread SSE publishing
-    from app.infrastructure.events import event_hub
-    event_hub.save_event_loop(asyncio.get_running_loop())
-    logger.info("🧹 SSE event loop saved")
-
-    logger.info("✅ 后端服务启动完成")
-
-    # Startup log cleanup
-    _cleanup_old_logs()
-
-    # Periodic log cleanup (every 24 hours)
-    log_cleanup_task = asyncio.create_task(_log_cleanup_loop())
-
-    yield
-
-    # Cancel periodic cleanups
-    log_cleanup_task.cancel()
-    try:
-        await log_cleanup_task
-    except asyncio.CancelledError:
-        pass
-
-    # Clean up resources
-    logger.info("🧹 Cleaning up resources...")
-    try:
-        from app.services.runtime import PlanningRuntimeService
-        await PlanningRuntimeService.shutdown()
-    except Exception as e:
-        logger.error(f"❌ Failed to cancel runtime tasks: {e}", exc_info=True)
-    try:
-        from app.database import dispose_async_engine
-        async with asyncio.timeout(5):
-            await dispose_async_engine()
-        logger.info("✅ Database engine disposed")
-    except Exception as e:
-        logger.error(f"❌ Failed to dispose database engine: {e}", exc_info=True)
-    try:
-        from app.database import shutdown_database
-        await shutdown_database()
-        logger.info("✅ Database connections fully shutdown")
-    except Exception as e:
-        logger.error(f"❌ Failed to shutdown database: {e}", exc_info=True)
-    try:
-        from app.services.session_kg import shutdown_session_kg_process_pool
-        await asyncio.to_thread(shutdown_session_kg_process_pool)
-        logger.info("✅ Session KG worker pool shutdown")
-    except Exception as e:
-        logger.error(f"❌ Failed to shutdown Session KG worker pool: {e}", exc_info=True)
-
-    logger.info("👋 后端服务关闭")
+from app.bootstrap.lifespan import lifespan
 
 
 # ============================================

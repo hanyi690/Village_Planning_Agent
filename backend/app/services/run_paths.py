@@ -4,11 +4,34 @@ from __future__ import annotations
 
 import os
 import tempfile
+import threading
 from pathlib import Path
+
+_run_root_cache: dict[int, Path] = {}
+_run_root_lock = threading.Lock()
 
 
 def run_tmp_root() -> Path:
-    """Return the configured, process-wide root for run artifacts."""
+    """Return the configured, process-wide root for run artifacts.
+
+    The result is cached per process after the first successful probe so that
+    concurrent workers (parallel L1/L2/L3 dimension workers, TaskSupervisor
+    background tasks) always resolve to the same base directory.  Without the
+    cache a concurrent ``.write-probe`` probe can transiently raise and fall
+    back to the temp directory, silently splitting the CAS store between two
+    roots and causing ``load_artifact`` to miss blobs.
+    """
+    pid = os.getpid()
+    with _run_root_lock:
+        cached = _run_root_cache.get(pid)
+        if cached is not None:
+            return cached
+        root = _resolve_run_root()
+        _run_root_cache[pid] = root
+        return root
+
+
+def _resolve_run_root() -> Path:
     configured = os.getenv("BACKEND_RUN_TMP_DIR", ".run-tmp").strip()
     root = Path(configured or ".run-tmp").resolve()
     try:
@@ -30,6 +53,13 @@ def run_tmp_root() -> Path:
         return fallback
 
 
+def reset_run_tmp_root_cache() -> None:
+    """Clear the per-process cache (tests that rebind the run root)."""
+    pid = os.getpid()
+    with _run_root_lock:
+        _run_root_cache.pop(pid, None)
+
+
 def session_run_dir(session_id: str) -> Path:
     """Return a session-scoped directory under the canonical run root."""
     if not session_id or Path(session_id).name != session_id:
@@ -37,4 +67,4 @@ def session_run_dir(session_id: str) -> Path:
     return run_tmp_root() / session_id
 
 
-__all__ = ["run_tmp_root", "session_run_dir"]
+__all__ = ["reset_run_tmp_root_cache", "run_tmp_root", "session_run_dir"]

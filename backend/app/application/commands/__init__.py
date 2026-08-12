@@ -26,6 +26,15 @@ from app.application.commands.submit_human_review import (
     SubmitHumanDecisionService,
     submit_human_decision_service,
 )
+from app.application.commands.resume_checkpoint import (
+    CheckpointCursor,
+    ResumeCheckpointCommand,
+    ResumeCheckpointResult,
+    ResumeCheckpointService,
+    ResumePlanBuilderPort,
+    resume_checkpoint_service,
+)
+from app.application.commands.submit_human_decision import submit_human_decision
 
 __all__ = [
     "ResumeConflictError",
@@ -47,4 +56,11 @@ __all__ = [
     "SubmitHumanDecisionResult",
     "SubmitHumanDecisionService",
     "submit_human_decision_service",
+    "CheckpointCursor",
+    "ResumeCheckpointCommand",
+    "ResumeCheckpointResult",
+    "ResumeCheckpointService",
+    "ResumePlanBuilderPort",
+    "resume_checkpoint_service",
+    "submit_human_decision",
 ]

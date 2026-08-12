@@ -1,151 +1,141 @@
-um'qm
-
-# 后端模块蓝图与唯一状态模型
+# 后端模块蓝图：可并行落地版
 
 > 状态：`TARGET DESIGN`
-> 日期：2026-08-12
-> 适用范围：后端模块、LangGraph、数据/KG/空间、Artifact、API/SSE、测试与交付。
-> 当前实现差距见 [10_IMPLEMENTATION_STATUS.md](10_IMPLEMENTATION_STATUS.md)，代码证据见
-> [backend-ideal-architecture-2026-08-11.md](../audits/backend-ideal-architecture-2026-08-11.md)。
+> 更新时间：2026-08-12
+> 目标：把后端拆成边界清晰、可以并行开发、可以独立验收的模块。
+> 当前实现以 [10_IMPLEMENTATION_STATUS.md](10_IMPLEMENTATION_STATUS.md) 为准；本文件只定义目标边界、契约和落地顺序。
 
-## 1. 设计结论
+## 1. 先看结论
 
-最终后端不再以 `agent/`、`services/` 和 `modules/` 三个宽泛目录互相调用，而按唯一责任拆为：
+后端采用以下依赖方向，依赖只能从上到下：
 
 ```text
-API transport
-  -> application use cases
-     -> workflow orchestration
-        -> planning domain
-           -> data / spatial / evidence ports
-              <- infrastructure adapters
+API / SSE
+    -> Application commands / queries
+        -> Workflow orchestration
+            -> Domain services
+                -> Data / Spatial / Evidence ports
+                    <- Infrastructure adapters
 ```
 
-系统只有六类权威状态：
+规划主链：
 
-1. `SessionDataSnapshot`：原始资料与 GIS 输入，由数据层拥有；
-2. `WorkflowState`：图控制与 artifact refs，由 LangGraph checkpoint 拥有；
-3. `StageArtifact`：阶段业务结果，由不可变 Artifact Store 拥有；
-4. `RunEvent`：面向运行过程的追加事件，由 Event Repository 拥有；
-5. `PublicProjection`：前端查询模型，由 application query service 构建；
-6. `DeliverySpatialSnapshot`：交付空间事实，由 DELIVER 构建并被全部输出消费者只读。
+```text
+SessionDataSnapshot
+  -> AssessmentSnapshot
+  -> ObjectivePortfolio
+  -> DemandPortfolio
+  -> SuitabilityResult
+  -> PortfolioDecision
+  -> ExecutionPlan
+  -> ExecutionResult
+  -> ValidationReport
+  -> ReconciliationReport
+  -> DeliverySpatialSnapshot
+```
 
-任何业务事实只能有一个 owner。SSE、Markdown、StepReport、PNG、HTML 和导出包都是投影或
-交付物，不能反向成为规划真相。
+核心原则只有四条：
 
-## 1.1 2026-08-12 迁移进度
+1. 一个业务事实只有一个 owner；下游通过不可变 artifact ref 读取。
+2. Workflow 只负责编排、路由、暂停和恢复，不实现规划算法。
+3. LLM 只能生成带证据的 claim 或建议，不能直接写空间事实、分类、选址或执行任务。
+4. 所有输出都从权威 artifact 重新投影；报告、SSE、地图、导出包不能反向成为规划真相。
 
-本分支已经开始按上述边界迁移，而不是在旧 `bootstrap` 入口上继续增加兼容逻辑：
+### 1.1 认知视图与业务主链
 
-- 根图位于 `backend/app/workflow/root_graph.py`，TARGET_PROJECTION/GROUND/SELECT/EXECUTE/VALIDATE/RECONCILE
-  已分别位于 `backend/app/workflow/stages/target_projection.py`、`ground.py`、`select.py`、`execute.py`、
-  `validate.py` 和 `reconcile.py`；HUMAN projection 已迁入 `application/interrupts.py`。旧
-  `agent/bootstrap/graph.py`、`agent/bootstrap/post_l3_main_nodes.py` 和
-  `agent/bootstrap/stage_audit.py` 生产路径已删除，审计实现归位到 `workflow/stage_audit.py`。
-- CAS artifact runtime 位于 `backend/app/infrastructure/artifacts/runtime.py`；阶段节点通过
-  `workflow/stage_adapter.py` 持久化 typed artifact，主状态只保留控制字段和 refs。
-- LLM provider 只能先产生 `PlanningClaimDraftSet`，再由领域 adapter 组装 proposal；嵌套 JSON
-  字符串只在 provider adapter 边界归一化，不能直接进入空间执行层。
-- `DeliverySpatialSnapshot` 已在真实运行中成为 current/planned/constraint/render/export 的
-  唯一空间输入。真实 MiniMax 会话已完成真实 LangGraph checkpoint resume 并写出
-  `RECONCILE`、`DELIVER`、660 个 current/planned features、PNG 和 HTML；法定完整性仍以
-  `partial` 和 DeferralLedger 明确表达，不把延期目标伪装成已执行。
-- DELIVER 阶段入口位于 `workflow/stages/deliver.py`；主图只接收被审计的
-  阶段入口，快照、渲染、导出和 manifest 不再和其他 post-L3 节点共用一份交付实现。
-- DELIVER 和所有 post-L3 stage service 使用 `workflow/stages/support.py` 的阶段中立 helper，不反向导入
-  application/API；HUMAN projection 已由 `application/interrupts.py` 统一拥有。
-- 渲染范围由现状地类/边界定义；未解析的 `POINT (0 0)` 等占位几何不得改变地图范围或把真实
-  双面板渲染成空白。`/api/v1/.../map-layers` 对 `RenderLayers` 的列表 artifact 直接返回，
-  不再把合法列表误判为缺失。
-- Data→DELIVER 边界统一收敛几何质量：可恢复的源拓扑错误由 `make_valid` 修复；规划 overlay
-  的 `(0, 0)` 无坐标占位被丢弃并保持空层，不由 renderer 猜测位置；不可恢复几何直接阻断快照。
-  Agent 仍只接收 workspace/bundle，不接收裸 GeoJSON。
-- StepReport 与 Markdown stage report 已从 `app/services/` 无兼容迁移到
-  `app/modules/evidence/`；阶段审计只依赖 evidence writer，services 不再拥有第二套审计实现。
-- EXECUTE 的跨阶段同步已迁移为单一 `ExecutionResult` 根 artifact；其
-  `parcel_changeset_ref`、`planned_state_ref` 和 `layout_configs_ref` 保存精确 CAS 子引用，
-  VALIDATE/RECONCILE/DELIVER 不再读取 `execution_outcome` 或并列的执行结果根。
-- SSE 的历史事件和 `(session_id, seq)` 已由
-  `backend/app/infrastructure/events/repository.py` 的 `EventRepository` 持久化；
-  `backend/app/infrastructure/events/connection_hub.py` 的 `EventConnectionHub` 只负责在线
-  订阅队列，`application/queries/run_events.py` 统一 REST sync 与 SSE replay。outbox/跨进程发布
-  的完整拆分仍是未完成项。
-- 稳定 API 的 state/HUMAN 查询已通过 `app/application/queries/workflow_state.py`，由
-  `control_state_from_checkpoint()` 将内部 checkpoint 投影为 `WorkflowState`；API 不再直接
-  读取 `AgentState` 的 legacy routing/payload 字段。真实 resume 仍由 runtime 使用完整 cursor。
-- 根图已从 `AgentState` 切换为 `WorkflowState`。迁移边界由
-  `workflow/runtime_adapter.py` 负责：节点所需的旧 stage view 写入不可变
-  `workflow_progress` artifact，checkpoint 只保留控制字段和 refs；该 artifact 不是新的
-  业务真相，后续必须继续按 L1/L2/L3、conversation、gate 拆成 typed artifacts。
-- TARGET_PROJECTION/GROUND/SELECT/VALIDATE/RECONCILE/DELIVER 六个新阶段已统一通过
-  `StageCompletion` helper 写入 output refs 和不可变 `GateDecision` ref；post-L3 root routing
-  与 HUMAN gate mutation 只信任这些 refs，缺失/损坏时 fail-closed。L1/L2/L3 的 inline gate
-  仍是明确登记的迁移边界，不能扩展到新阶段。
-- PNG 是一个包含“现状”和“规划”两个面板的真实交付物；规划面沿用快照中的地类字段着色，
-  使用低透明度填充、细深色边界，图例显示真实地类名称。HTML、PNG、土地平衡和导出包都从同一
-  `DeliverySpatialSnapshot` 重建。
-- 2026-08-12 最新真实分支已通过 `test_real_graph_resume_delivery`（真实 provider、LangGraph
-  interrupt/checkpoint reopen/resume、`1 passed in 800.03s`）。最终 run 位于
-  `.run-tmp/real-llm-41545f0093904940b7d0a47315103664/db6118ac-2efe-4cc5-9168-489444fb0f54/`：
-  660 个现状/期末地块、17 个 `planned_project_point`、16 个 `planned_facility`，PNG/HTML/GeoJSON
-  均从同一 `DeliverySpatialSnapshot` 读取。交付仍为 `partial`，未解析的规划分类继续进入
-  DeferralLedger，不把“有项目动作”伪装为完整地块规划。
+L1/L2/L3 是面向分析、审查和报告的认知视图，不应与 KG 的数据层级混用；它们仍然保留，但不再承担“文本直接变成可执行规划”的职责：
 
-仍未完成的迁移必须继续沿此蓝图推进：删除 `workflow_progress` 中的旧 stage 字段，
-由 application query/use-case 层承接 API 对 runtime、artifact 和 event repository 的调用。
-未完成前不得宣称后端已经达到最终简洁态。
+| 认知视图 | 权威产物 | 在业务主链中的作用 |
+|---|---|---|
+| L1 OBSERVE | `L1Snapshot` / `AssessmentSnapshot` | 现状事实、问题、约束和证据缺口 |
+| L2 STRATEGIZE | `L2Strategy` / `ObjectivePortfolio` | 目标、定位、策略和冲突 |
+| L3 PLAN | `PlanningClaimSet`、`ProgramProposal`、`PlanningProgram` | 需求、干预候选和规划程序 |
 
-## 2. 不可妥协的不变量
+规划程序经过 `Demand -> Suitability -> Allocation -> Materialize` 的确定性领域链，才会成为可执行空间结果。这样既保留 L1/L2/L3 的专业分析价值，也避免把 Markdown、JSON 或 LLM 输出直接当作规划事实。
 
-- Agent/Workflow 只传 `bundle_ref`、`context_ref`、`artifact_refs` 和控制字段；不注入裸
-  GeoJSON、660 个地块或可变 `gis_data`。
-- 数据层负责摄取、CRS、schema、BSM、现状地类、来源和完整性；空间层只消费数据层给出的
-  typed workspace。
-- LLM 只能提出带证据的 `PlanningClaim/ProgramProposal`，不能直接生成权威
-  `PlanningProgram`。JSON Schema 只约束传输格式，不构成规划正确性。
-- KG 只返回事实、关系、证据、置信度和 provenance；不得生成规划分类、选址决定或
-  `ParcelChange`。
-- 规划分类只来自显式 `ClassificationDecision`，不能由 `dlbm`、名称、crosswalk 或导出器补码；
-  因而真实 run 中未具备分类决定的 polygon/parcel 目标必须保持 deferred。
-- SELECT 必须返回明确的 solver/decision status；`UNKNOWN`、`INFEASIBLE`、未落位和约束缺证据
-  不能被当作成功。
-- EXECUTE 只能执行 `SiteSelectionDecision + ExecutionPlan`，不得重新解释规划名称、分类或位置。
-- `DeliverySpatialSnapshot` 是 current/planned/change/project/facility/road/axis、土地平衡、
-  渲染和导出的唯一空间输入。
-- checkpoint 历史和 artifact blob 不可覆盖；历史 checkpoint 分叉必须创建新分支引用。
-- Artifact named-ref 写入必须可恢复：若阶段在 checkpoint 提交前已写入与当前 payload、schema 和
-  parent digests 完全相同的 ref，重试应采用既有不可变 descriptor；不同 payload 仍必须触发 CAS 冲突。
-- 正式 API 只有一个版本化入口；正式 SSE 只读取持久事件，进程内队列只负责在线广播。
-- 不保留旧生产路径的兼容分支。每个切换在同一变更中删除旧入口、旧状态和旧测试。
+### 当前状态提醒
 
-## 3. 目标目录
+当前分支已经具备 `WorkflowState`、CAS artifact、事件仓库、规划阶段和 `DeliverySpatialSnapshot` 的部分实现；Application、数据/空间统一契约、地点证据闭环、自动修复、多模态和外部搜索仍有 `PARTIAL/GAP`。不要因为目录或单测存在就标记模块完成。
+
+本蓝图吸收现有设计文档的稳定结论；实现状态、历史审计和任务清单不在这里重复维护。文档取舍见第 11 节。
+
+## 2. 模块拆分
+
+每个模块都应有独立 owner、独立 contract tests 和一个明确的产物。模块之间只通过 contracts、ports 和 artifact refs 通信。
+
+| 编号 | 模块 | 目录 | 唯一职责 | 输入 → 输出 | 可并行性 |
+|---|---|---|---|---|---|
+| M0 | Contracts & Artifact | `contracts/`, `infrastructure/artifacts/` | 冻结 Pydantic 契约、schema、digest、parent refs 和 CAS | payload → `ArtifactDescriptor` / named ref | 先行基础 |
+| M1 | Data Snapshot | `data/` | 摄取文件、CRS/schema/BSM、质量检查、冻结资料快照 | 文件/Bundle → `SessionDataSnapshot` | 依赖 M0 |
+| M2 | Spatial Kernel | `spatial/` | 几何、空间查询、面积、拓扑、overlay、距离和空间质量 | `SpatialWorkspace` → typed spatial result | 依赖 M1，可与 M3 并行 |
+| M3 | Evidence & KG | `evidence/` | 本地证据、KG、地点语义、证据溯源和 EXPLORE | request + refs → `EvidenceBundle` / resolution | 依赖 M0/M1，可与 M2 并行 |
+| M4 | Planning Domain | `domain/` | 需求、适宜性、分配、分类、规划对象组装 | typed inputs → planning artifacts | 依赖 M1/M2/M3 |
+| M5 | Workflow | `workflow/` | 阶段编排、路由、gate、interrupt、resume、dispatch | refs + control → `WorkflowState` patch | 依赖 M0/M4 的接口，可提前搭骨架 |
+| M6 | Execution Workers | `domain/materialization/`, `spatial/allocation/` | 项目、分区、设施、道路、轴线执行和合并 | `ExecutionPlan` → `ExecutionResult` | 依赖 M2/M4；worker 可并行 |
+| M7 | Validate & Reconcile | `domain/validation/`, `workflow/stages/validate.py`, `reconcile.py` | 检查、归因、对账、有限自动修复 | execution refs → reports / adjustments | 依赖 M6，可先冻结契约 |
+| M8 | Delivery | `domain/delivery/`, `spatial/delivery/`, `infrastructure/rendering/`, `export/` | 从唯一空间快照生成地图、报告、HTML、PNG、GeoJSON、manifest | validated refs → `DeliverySpatialSnapshot` / outputs | 依赖 M2/M6/M7 |
+| M9 | Application & API | `application/`, `api/v1/` | 用例、查询投影、HTTP/SSE、认证和生命周期 | public request → projection/event | 依赖 M0/M5/M8，可与 M2/M3 并行 |
+| M10 | Infrastructure Adapters | `infrastructure/` | DB、checkpoint、LLM、GIS、KG、RAG、搜索、媒体适配器 | ports → provider calls | 按 port 独立并行 |
+
+### 2.1 目标目录结构
+
+以下目录是并行开发和依赖检查的目标边界。目录本身不是业务契约，但每个目录必须只承载对应模块职责；移动代码前先冻结 contract，避免只换目录、不换依赖。
 
 ```text
 backend/app/
 ├── api/
 │   └── v1/
 │       ├── routes/
+│       │   ├── sessions.py
+│       │   ├── state.py
+│       │   ├── events.py
+│       │   ├── human_review.py
+│       │   ├── delivery.py
+│       │   ├── map_layers.py
+│       │   └── artifacts.py
 │       ├── contracts/
 │       └── dependencies.py
 ├── application/
 │   ├── commands/
+│   │   ├── create_session.py
+│   │   ├── start_planning.py
+│   │   ├── submit_human_decision.py
+│   │   ├── resume_checkpoint.py
+│   │   ├── retry_delivery.py
+│   │   └── delete_session.py
 │   ├── queries/
+│   │   ├── workflow_state.py
+│   │   ├── run_events.py
+│   │   ├── human_review.py
+│   │   ├── delivery.py
+│   │   └── map_layers.py
 │   ├── projections/
 │   └── unit_of_work.py
 ├── workflow/
 │   ├── root_graph.py
 │   ├── state.py
+│   ├── runtime_adapter.py
 │   ├── stage_adapter.py
 │   ├── routing.py
 │   ├── dispatch.py
 │   ├── interrupts.py
 │   ├── terminal.py
+│   ├── stage_audit.py
 │   └── stages/
+│       ├── target_projection.py
+│       ├── ground.py
+│       ├── select.py
+│       ├── execute.py
+│       ├── validate.py
+│       ├── reconcile.py
+│       ├── deliver.py
+│       └── support.py
 ├── domain/
 │   ├── assessment/
 │   ├── objectives/
 │   ├── demand/
 │   ├── program/
+│   │   └── target_projection/
 │   ├── suitability/
 │   ├── allocation/
 │   ├── materialization/
@@ -171,7 +161,7 @@ backend/app/
 │   ├── model/
 │   │   ├── l1_location_fact.py
 │   │   ├── relation_evidence.py
-│   │   └── place_resolution.py
+│   │   ├── place_resolution.py
 │   │   ├── image_artifact.py
 │   │   ├── image_evidence.py
 │   │   ├── visual_fact.py
@@ -189,12 +179,17 @@ backend/app/
 │   ├── artifacts/
 │   ├── workflow/
 │   │   ├── dispatch.py
-│   │   └── repair.py
-│   ├── public/v1/
+│   │   ├── repair.py
+│   │   └── resume.py
+│   ├── public/
+│   │   └── v1/
 │   └── ports/
+│       ├── context.py
 │       ├── place_evidence.py
 │       ├── external_search.py
-│       └── media_evidence.py
+│       ├── media_evidence.py
+│       ├── spatial.py
+│       └── workers.py
 ├── infrastructure/
 │   ├── persistence/
 │   ├── artifacts/
@@ -214,874 +209,461 @@ backend/app/
     └── lifespan.py
 ```
 
-目标态删除宽泛的 `app/services/`、`app/tools/` 和 `app/modules/` 容器。删除发生在对应能力
-完成迁移后，不保留同一能力的新旧生产实现。
+### 2.2 目录迁移规则
 
-## 4. 各模块功能与实现
+- `app/agent/` 只作为迁移期 workflow 代码来源，不再新增业务算法；迁移完成后由 `workflow/` 和 `domain/` 接管。
+- `app/services/`、`app/tools/`、宽泛 `app/modules/` 不作为最终能力容器；对应能力迁移完成后删除空目录和旧生产入口。
+- `modules/schema` 的稳定契约逐步归并到 `contracts/`；在调用方未切换前不得直接删除旧契约文件。
+- `modules/spatial_ops/road/` 的 staged planner 是唯一正式道路实现；旧 local planner 只能显式标记为 degraded，不能作为静默 fallback。
+- `domain/` 不依赖 `workflow`、`api` 或具体 adapter；`workflow/stages` 通过 `stage_adapter` 调用 domain service。
+- `infrastructure/` 只实现 `contracts/ports`；provider SDK、凭证、重试和序列化不能上浮到 domain/workflow。
 
-### 4.1 API：纯 transport
+### 模块边界规则
 
-职责：HTTP/SSE、认证、请求解析、公开 DTO、状态码和缓存头。
+- `api/` 不得实例化 graph、artifact store、数据库或 SSE history。
+- `application/` 只编排用例和事务，不放规划算法。
+- `workflow/` 不读取裸 GeoJSON、文件路径、`latest artifact`，不直接发 SSE。
+- `domain/` 不依赖 FastAPI、LangGraph、Exa、具体数据库或 provider response。
+- `data/` 是原始资料、CRS、schema、BSM 和数据完整性的 owner。
+- `spatial/` 只消费 typed workspace，不自行刷新数据源。
+- `evidence/` 只能提供事实、关系、证据、置信度和 provenance，不能生成规划决定。
+- `infrastructure/` 只能实现 ports，不向上层泄漏 provider-specific 类型。
 
-正式资源：
+## 3. 唯一状态与 artifact
+
+| 状态/产物 | Owner | 允许保存的内容 | 禁止保存的内容 |
+|---|---|---|---|
+| `SessionDataSnapshot` | Data | 原始资料 manifest、collection、CRS、schema、BSM、质量报告 | 可变运行状态 |
+| `WorkflowState` | Workflow checkpoint | run/thread/branch、当前阶段、gate、interrupt、artifact refs | 裸 GIS、长文本、可变业务事实 |
+| `StageArtifact` | 对应 Domain/Evidence 模块 | 阶段业务结果、schema、parents、provenance | 覆盖历史版本 |
+| `RunEvent` | Event Repository | 追加事件、`session_id + seq`、artifact refs | 业务真相副本 |
+| `PublicProjection` | Application | 面向前端的查询 DTO | 作为下游输入的权威事实 |
+| `DeliverySpatialSnapshot` | Delivery | current/planned/change/project/facility/road/axis、土地平衡、渲染输入 | 反向修改规划结果 |
+
+所有 artifact 必须至少包含：`schema_version`、`digest`、`parents`、`producer`、`run_id`、`branch_id`、`provenance`。blob 只允许 create-if-absent；named ref 只允许 compare-and-set；resume 必须创建新 branch，不能覆盖历史。
+
+### 3.1 单一 PlanningContext
+
+所有 stage 使用同一版本化上下文，只通过引用传递：
 
 ```text
-POST   /api/v1/sessions
-GET    /api/v1/sessions/{id}
-GET    /api/v1/sessions/{id}/state
-GET    /api/v1/sessions/{id}/events
-GET    /api/v1/sessions/{id}/events/sync
-GET    /api/v1/sessions/{id}/human-review
-POST   /api/v1/sessions/{id}/human-review
-POST   /api/v1/sessions/{id}/resume
-GET    /api/v1/sessions/{id}/delivery
-GET    /api/v1/sessions/{id}/map-layers
-GET    /api/v1/sessions/{id}/artifacts/{key}
+PlanningContext
+├── session_id
+├── village_bundle_ref + version
+├── kg_snapshot_ref + version
+├── report_snapshot_ref
+├── evidence_bundle_ref
+├── planning_artifact_refs
+├── context_fingerprint
+└── active_gate
 ```
 
-实现规则：
+同一 session 的 Bundle、KG、报告和 artifact 必须版本一致；外部数据刷新必须显式生成新 snapshot，不得在读取期间偷偷刷新。
 
-- router 只调用 application command/query，不实例化 Artifact Store、Graph 或数据库；
-- 使用 FastAPI 0.141.1 原生 `EventSourceResponse` 和 `ServerSentEvent`；
-- `Last-Event-ID` 只映射持久 `RunEvent.seq`；事件缺口返回 `resync_required`，前端随后读取
-  `/state`，不能触发图 resume；
-- OpenAPI 和 public JSON Schema 由代码生成，不维护第二份手写 schema；
-- 删除未挂载的旧 session、render、export、dev GIS 生产路由。
+### 3.2 ResumePlan
 
-### 4.2 Application：唯一用例边界
+LangGraph checkpoint 只表示“从哪里继续”，不表示“哪些业务产物还能复用”。Application 必须先生成可审计的 `ResumePlan`：
 
-这是当前实现缺失的层。它协调事务和 ports，但不包含规划算法。
+```text
+ResumePlan
+├── mode: resume_checkpoint | resume_interrupt | rerun_from_stage | completed | blocked
+├── resume_from
+├── reuse_refs
+├── rerun_stages
+├── reason
+├── context_fingerprint
+├── input_checksums
+└── output_checksums
+```
 
-Commands：
+判定优先级：pending interrupt → context identity → artifact parent/checksum → 最早失效阶段 → 终态。HUMAN checkpoint 只能通过同一 interrupt channel 的 `Command(resume=...)` 恢复，不能把 `snapshot.next` 当作普通续跑。
 
-- `CreateSession`：摄取文件，冻结 `SessionDataSnapshot`，创建 run/thread；
-- `StartPlanning`：启动根图；
-- `SubmitHumanDecision`：compare-and-set 当前 interrupt，再用 `Command(resume=...)`；
-- `ResumeCheckpoint`：从显式 checkpoint 创建新执行分支；
-- `DeleteSession`：按 repository 生命周期删除会话资源；
-- `RetryDelivery`：只在上游 refs 未变化时重做纯交付 adapter。
+## 4. 工作流与阶段契约
 
-Queries：
-
-- `GetSessionProjection`；
-- `GetHumanReviewProjection`；
-- `GetDeliveryProjection`；
-- `GetMapLayerCollection`；
-- `SyncRunEvents`。
-
-所有写用例通过 `UnitOfWork` 提交 checkpoint 元数据、artifact named ref、event/outbox 和会话状态。
-
-### 4.3 Workflow：只编排，不做业务
-
-根图只表达阶段和返回路由。L1/L2/L3 保留为面向报告和审查的认知视图，不再作为
-“文本逐层传递后直接执行”的业务主干：
+### 4.1 主图
 
 ```text
 INGEST
-  -> ASSESS
-  -> OBJECTIVES -> HUMAN OBJECTIVE GATE
+  -> ASSESS / L1 OBSERVE
+  -> OBJECTIVES / L2 STRATEGIZE -- HUMAN OBJECTIVE GATE
+  -> PROGRAM / L3 PLAN
+  -> TARGET_PROJECTION
+  -> GROUND
   -> DEMAND
   -> SUITABILITY
-  -> PORTFOLIO ALLOCATION -> HUMAN PORTFOLIO GATE
-  -> MATERIALIZE
+  -> ALLOCATION -- HUMAN PORTFOLIO GATE
+  -> MATERIALIZE / EXECUTE
   -> VALIDATE
-  -> SCENARIO EVALUATE
+  -> RECONCILE
   -> DELIVER
 ```
 
-`PARSE` 被删除，不改名为另一种解析器。现有 GROUND、SELECT、EXECUTE 的有效算法分别归入
-SUITABILITY、PORTFOLIO ALLOCATION 和 MATERIALIZE。EXPLORE 是可由 ASSESS、OBJECTIVES、
-SUITABILITY 和 VALIDATE 调用的证据服务，不是固定主阶段。
+`EXPLORE` 是横向能力，不是固定主阶段；`HUMAN` 是路由能力，不是业务模块。旧的“Markdown instruction → PARSE → 执行”不再作为生产链路。
 
-EXPLORE 虽然不是固定主阶段，但属于必须存在的横向能力，不得在迁移时被泛化为不可追踪的
-`evidence lookup`。任何阶段发现证据缺口时，必须形成带 `stage`、`query_purpose`、
-`required_facts`、`entity_scope` 和父 artifact ref 的 `ExplorationRequest`，由 EXPLORE 返回
-不可变 `EvidenceBundle`/`ExplorationResult`；Gate 再明确选择 `PASS`、证据重查、阶段重跑或
-HUMAN。证据链必须支持以下闭环：
+`TARGET_PROJECTION` 只把已组装的 `PlanningProgram` 编译成 `IntentCompilationResult + SpatialReferenceSpec`；它不读取 Markdown、不查询地块、不生成坐标。`GROUND` 负责地点/实体/几何接地，`SELECT` 的职责由 `Demand/Suitability/Allocation` 领域链承接；当前 post-L3 阶段名称可以保留，但不得重新引入文本解析和隐式选址。
+
+每个 stage 只做四步：
 
 ```text
-Stage worker / Gate
-  -> EvidenceGap / ExplorationRequest
-  -> EXPLORE: KG + Bundle + reports + typed artifacts + prior evidence
-  -> EvidenceBundle + provenance + unresolved / contradictions
-  -> affected stage replay
-  -> typed GateDecision
+读取显式 refs
+  -> 校验 schema / parent digest
+  -> 调用一个 domain service
+  -> 写入不可变 artifact、gate 和事件，返回 WorkflowState patch
 ```
 
-智能调度必须采用“LLM 提议、确定性策略批准”的边界，而不是取消阶段 contract 或让 LLM
-直接修改 `WorkflowState`：
+阶段完成协议建议统一为：
 
 ```text
-WorkflowState + GateDecision + EvidenceGap
-  -> LLM DispatchProposal
-  -> DispatchPolicy 校验允许阶段、工具、依赖、artifact refs、预算和幂等性
-  -> DispatchCommand / LangGraph Send
-  -> EXPLORE、专业 Worker 或 Domain Solver
+StageCompletion {
+  stage,
+  status,
+  output_refs,
+  gate_decision_ref,
+  diagnostics,
+  next_action
+}
 ```
 
-LLM 可以选择证据查询计划、允许的工具、可并行的专业 worker 和下一步候选阶段；不得创造
-entity/BSM/geometry、绕过 Gate/solver/HUMAN 或直接触发 EXECUTE。`DispatchProposal`、
-`DispatchPolicy` 和 `DispatchCommand` 必须可审计并携带 parent refs、reason、evidence refs、
-retry budget 和 provenance。
+失败必须是 typed outcome：`success`、`partial`、`unresolved`、`blocked`、`human_required`、`diagnostic`。不能用空集合、默认 approve 或静默 fallback 表示成功。
 
-#### 4.3.1 EXPLORE 的外部搜索边界（含 Exa）
+Gate 只做三件事：检查进入条件、生成 `ValidationIssue`/`ExplorationRequest`、决定通过/定向反馈/HUMAN/终止；Gate 不执行领域算法、不拼接报告、不刷新 Bundle。
 
-外部搜索是 EXPLORE 的一个可替换证据提供方，不是新的规划阶段，也不是 LLM 的直接工具调用。
-EXPLORE 必须先查询 session KG、VillageBundle、报告、typed artifacts 和 prior evidence；只有
-`ExplorationRequest.source_policy` 明确允许外部来源，或本地证据已经返回 typed unresolved gap，才
-能调用 `ExternalSearchPort`。目标接口如下：
+定向反馈规则：
 
-```text
-ExplorationRequest
-  -> ExploreService
-     -> local evidence providers
-     -> ExternalSearchPort (optional)
-        -> ExaSearchAdapter
-     -> ExternalEvidence / EvidenceBundle
-     -> Claim normalization + conflict check
-     -> affected stage replay or HUMAN
-```
+| 缺陷 | 返回 |
+|---|---|
+| 事实缺失/证据过期 | `EXPLORE -> 原阶段` |
+| L1 事实矛盾 | `L1` |
+| 策略与现状冲突 | `L2` 或 `EXPLORE` |
+| 规划目标/分类缺失 | `L3` / `TARGET_PROJECTION` / HUMAN |
+| 实体歧义或几何缺失 | `EXPLORE` / `GROUND` / HUMAN |
+| 候选为空或冲突 | `GROUND` / `ALLOCATION` |
+| worker 算法失败 | `EXECUTE`，保留选址决定 |
+| 文本与成果不一致 | `RECONCILE -> L3/EXECUTE` |
+| 输出规范失败 | `VALIDATE`，不得只改渲染结果 |
 
-`ExternalSearchRequest` 必须包含 query purpose、规范化实体和别名、entity scope、source policy、
-allowed domains/categories、freshness、search mode、result limit、content mode、budget、父 artifact
-refs 和 idempotency key。`ExternalSearchResult` 必须保留 provider/request ID、resolved search mode、
-result URL/ID、标题、发布日期/作者、highlights 或 full-text artifact ref、retrieval status、latency、
-cost、cache/livecrawl policy 和 provenance。`ExaSearchAdapter` 只能位于 infrastructure；domain 和
-workflow 只依赖 `ExternalSearchPort`，不能读取 Exa API key 或 provider-specific response。
+建议的人工确认点为 L1 事实、L2 目标策略、L3 规划程序和 Delivery；GROUND 歧义、低置信度选址、分类决定也可触发局部 HUMAN，不必暂停整个会话。
 
-Exa 的 `highlights` 用于有限预算的 agentic retrieval；只有证据缺口要求完整上下文时才请求 full
-text。Exa structured output 只能作为带来源的 `ExternalClaimDraft`，必须经过 source-backed claim
-normalization、冲突检查和证据审查后才能进入 `EvidenceBundle`；搜索结果本身不能成为事实的无条件
-提升。搜索结果不得直接创建 entity ref、BSM、geometry、classification、`ParcelChange`、
-`SiteSelectionDecision` 或 `ExecutionPlan` task。没有可靠空间来源时，必须返回 unresolved/ambiguous
-并进入 Gate/HUMAN，不能用网页文本猜坐标或自然村位置。
-
-`DispatchPolicy` 只允许 LLM 提议 `EXPLORE.external_search`，并校验来源白名单、查询范围、数据新鲜度、
-成本/延迟预算、父 refs、重试次数和幂等键；策略拒绝、Exa 不可用、无结果、内容抓取失败或来源冲突，
-均转为 typed diagnostic、复用本地证据或 HUMAN，不得静默改用无约束的通用搜索。外部证据与本地
-KG/L1 事实的关系必须在 `EvidenceBundle` 中显式记录，供 Gate 和后续复跑审计。
-
-当前实现中的 `TARGET_PROJECTION` 不是 PARSE 的兼容改名：它只对已经由领域层组装的
-`PlanningProgram` 做确定性空间引用投影，禁止 LLM、原始文本重解释、分类推导和 GeoJSON 读取；
-它应在后续 MATERIALIZE/SUITABILITY 边界进一步合并，但不能重新引入自然语言 parser。
-
-每个节点只允许执行：
-
-```text
-load explicit refs
--> validate schemas and parent digests
--> call one domain stage service
--> persist immutable outputs
--> append outbox events
--> return WorkflowState patch
-```
-
-节点不能直接写 ReportStore、发 SSE、查询“latest artifact”、加载文件路径或运行渲染器。
-
-### 4.4 Assess / Objectives
-
-`ASSESS` 消费冻结的数据和证据投影，产出 `AssessmentSnapshot`：事实、问题、存量能力、约束、
-服务缺口和证据缺口。`OBJECTIVES` 只消费 Assessment refs，产出 `ObjectivePortfolio`：量化目标、
-优先级、时间、预算边界、政策边界和冲突。
-
-并行专业 worker 可以生成 L1/L2/L3 风格的分析报告和 claims，但 aggregate 是唯一
-`AssessmentSnapshot/ObjectivePortfolio` 生产者。报告正文与根产物分离，报告不能被下游正则或
-另一次 LLM 调用再次编译为权威业务事实。
-
-### 4.5 Claims 与 Program Synthesis：规划形成，不是格式转换
-
-当前核心错误不是 Markdown，而是把“专业报告中的建议”直接当成“可执行规划对象”。JSON
-只能让同一错误更稳定。目标流程必须保留下面的因果链：
+### 4.2 规划形成
 
 ```text
 ObservedNeed
   -> PlanningObjective
   -> Evidence-backed Claim
-  -> Domain Intervention Candidate
-  -> Spatial Feasibility
-  -> Cross-domain Portfolio Decision
-  -> Approved PlanningTarget
+  -> InterventionCandidate
+  -> SpatialFeasibility
+  -> PortfolioDecision
+  -> PlanningProgram
 ```
 
-L3 并行专业 Agent 只产出 `PlanningClaim`：事实依据、受影响人口/地块、问题强度、目标、建议措施、
-证据 refs、不确定性和冲突。它可以使用结构化输出减少格式错误，但该结果不可执行。
+LLM 输出 `PlanningClaimDraftSet`，经确定性 adapter、分类决定和领域校验后，才能组装 `PlanningProgram`。JSON Schema 只约束传输格式，不代表规划正确性。
 
-`SYNTHESIZE` 由确定性领域能力和受控决策共同完成：
+报告分为两类：`AnalysisReport` 面向人阅读，保留 `content`、独立 `instruction` 和 provenance；typed artifact 面向机器消费。`legacy summary` 只能做 UI 预览，字段优先级固定为：明确证据/provenance > 报告正文 > 可验证 instruction > legacy summary。不得从 Markdown 或 summary 直接编译执行对象。
 
-- `ServiceGapEngine`：人口、服务半径和现状设施 -> 设施需求；
-- `LandUseNeedEngine`：指标、分类决定、面积和约束 -> 用地/分区需求；
-- `ConnectivityEngine`：路网断点、可达性和项目连接 -> 道路/节点需求；
-- `RiskEcologyEngine`：灾害、生态规则和冲突地块 -> 保护/修复需求；
-- `ProjectCatalog`：把已证实需求映射到允许实施的项目类型、规模区间和必要输入；
-- `FeasibilityPrecheck`：在成为目标前证明至少存在可行空间或明确需 HUMAN 的缺口；
-- `PortfolioSolver`：在面积、资金、阶段、依赖和跨专业冲突下选择组合；
-- `ProgramBoard`：对 solver 不能决定的价值取舍执行一次集中 HUMAN 审查。
+### 4.3 空间执行
 
-最终实现不是一个大 `ProgramComposer`，而是四个相互独立、可审计的模型：
+`SELECT` 只产出 `SiteSelectionDecision`；`EXECUTE` 只消费 `SiteSelectionDecision + ExecutionPlan`，不得重新解释名称、分类、地名或位置。
 
-| 模型                 | 回答                   | 输入                                                | 输出                                |
-| -------------------- | ---------------------- | --------------------------------------------------- | ----------------------------------- |
-| `DemandModel`      | 需要什么、多少、何时   | assessment、objectives、标准和人口/产业预测         | `DemandPortfolio`                 |
-| `SuitabilityModel` | 哪些位置可行、为什么   | data snapshot、criteria、hard exclusions            | `SuitabilitySurface/CandidateSet` |
-| `AllocationModel`  | 哪个需求分配到哪个位置 | demand、candidate、capacity、budget、dependencies   | `PortfolioDecision`               |
-| `ScenarioModel`    | 完整期末状态效果如何   | current state、全部 decisions、materialized changes | `ScenarioSnapshot + Metrics`      |
-
-四个模型不得合并：需求不能从“找到了几个地块”反推；适宜性不能替代需求；分配不能生成不存在的
-需求；情景评价不能偷偷修改分配结果。这对应规划支持系统中 demand、suitability、allocation、
-scenario evaluation 的标准分工。
-
-LLM 可以为候选生成解释、补全非决定性属性或对 portfolio 给出排序建议，但不得创建最终分类、
-BSM、几何或绕过 infeasible 状态。最终 `PlanningProgram` 由 `ProgramAssembler` 从
-`DemandPortfolio`、`PortfolioDecision`、领域引擎结果和 HUMAN decision 确定性组装。
-
-权威规划对象闭集为：
+执行 worker 互不直接调用：
 
 ```text
-Project | Facility | Road | Axis | Zone | Restoration | Protection | Action
+ExecutionPlan
+  -> Project Worker  ┐
+  -> Zone Worker     ├─> WorkerResult[] -> ExecutionResult
+  -> Facility Worker │
+  -> Road Worker     │
+  -> Axis Worker     ┘
 ```
 
-每个对象必须包含稳定 ID、object kind、expected geometry、量化需求、位置要求、硬约束、阶段、
-证据 refs、need/objective refs 和产生它的 domain decision ref。`ProgramAssembler` 只完成：
+`ExecutionResult` 是唯一跨阶段根 artifact，至少引用 `ParcelChangeSet`、`PlannedState` 和 layout/config 子 artifact。下游不得读取旧的平行结果字段。
 
-- ID 分配与跨专业去重；
-- object kind / geometry kind 合法性；
-- 依赖无环；
-- solver 已批准的总量和分类型预算复核；
-- `ClassificationDecision` 的显式存在性；
-- need/objective/evidence/feasibility 的全链覆盖；
-- 形成唯一 `PlanningProgram`。
+SELECT 进入 EXECUTE 前必须完成硬过滤：几何有效、管制/灾害/基本农田等约束满足、目标面积可承载；被排除的候选保留稳定原因码。需要多地块合并时，必须由分区分配器显式声明聚合策略，不能由普通项目选择器隐式放宽约束。
 
-claim 缺证据、领域引擎不可用、空间预检不可行、solver 未给出允许状态或 HUMAN 未决，都进入
-G3/SYNTHESIZE gate；不得靠 LLM 再写一份 JSON 或回退 Markdown 形成规划结果。
+## 5. 关键模块卡片
 
-分类决定的运行时闭环如下：
+### M0 Contracts & Artifact
+
+冻结以下基础类型：`ArtifactDescriptor`、`ArtifactRef`、`StageCompletion`、`GateDecision`、`WorkflowState`、`RunEvent`、`WorkerResult`、`ExecutionResult`。
+
+完成标准：schema 可生成；parent/digest 可验证；重放幂等；同 ref 不同 payload 返回 CAS 冲突；无 `Any` 和 legacy 双写。
+
+### M1 Data Snapshot
+
+职责：读取报告、Bundle 和 GIS，建立 collection registry，统一 `feature_id`、CRS/SRID、schema、digest、source、feature count，并输出 `DataQualityReport`。Data/KG Builder 只负责构建 `BaseFacts`；外部 POI、行政编码、地图锚点的刷新必须先生成新的 Bundle revision。
+
+关键约束：快照冻结后 worker 不得隐式刷新 provider；Agent/Workflow 不接收 `gis_data`、`gis_bundle` 或裸 GeoJSON。
+
+### M2 Spatial Kernel
+
+职责：统一 `SpatialFeature`、`GeometryRef`、`CRSRef`、`AreaMeasurement`，提供 query、grounding、allocation、network、change、validation。
+
+关键约束：所有空间计算从 `SpatialWorkspace` 进入；面积单位显式；可恢复的拓扑错误统一 `make_valid`，不可恢复几何阻断快照；不得用 `(0, 0)` 占位几何推断位置或范围。
+
+### M3 Evidence & KG
+
+职责：本地 KG、报告、Bundle、历史证据和可选外部搜索的统一检索入口。KG 只做语义索引，不替代几何引擎；`BaseFacts`、`DerivedRelations`、`IntentGraph`、`PlannedState` 的写入者和版本必须分开。
+
+`ExplorationRequest` 至少带 `requested_by`、`stage`、`dimension_key`、`query_purpose`、`required_facts`、`entity_scope`、`source_policy` 和 `parent_artifact_ref`；返回 `EvidenceBundle/ExplorationResult`，区分 `not_found`、`stale_snapshot`、`query_error`、`ambiguous`、`insufficient_geometry`。缓存键必须包含 context/KG version 和 query purpose，源版本变化时标记 stale。
+
+地点证据链必须明确：
 
 ```text
-PlanningProgram
-  └─ polygon/parcel without ClassificationDecision
-       → L3 HUMAN request (classification_decision_required)
-       → explicit closed-set ClassificationDecision payload
-       → immutable PlanningProgram revision
-       → TARGET_PROJECTION → GROUND → SELECT → EXECUTE
-```
-
-HUMAN 的 `approve` 不能绕过这个请求；决定必须覆盖全部未决空间目标，且由
-`ClassificationDecision` 自身校验 code system、候选闭集、证据和 selected code。
-提交决定时只从真实 HUMAN checkpoint 继续，已完成的 L1/L2/L3 不重复调用 LLM。
-
-### 4.6 Data：GIS 和资料唯一 owner
-
-`SessionDataSnapshot` 是会话数据的冻结清单，包含逻辑 collection、schema、CRS、feature count、
-digest、source 和时间。`VillageBundleRef` 只指向该 snapshot，不携带数据正文。
-
-数据层负责：
-
-- 上传与外部数据摄取；
-- 字段规范化、稳定 feature/BSM ID；
-- CRS/SRID、几何有效性、单位和精度；
-- current land-use、boundary、road、constraint 等 collection 注册；
-- immutable snapshot 与数据质量报告；
-- 为 spatial 层打开 typed `SpatialWorkspace`。
-
-LLM 只能接收面积汇总、证据摘要和少量相关 feature projection，不能接收完整地块集合。
-Workflow 只传 `VillageBundleRef`；所谓“注入”只能发生在 composition/application 调用 data port
-打开 workspace 的边界，不能进入 Agent state。
-
-### 4.7 Spatial：一个几何内核
-
-所有空间能力统一使用 `SpatialFeature`、`GeometryRef`、`CRSRef`、`AreaMeasurement` 和
-`SpatialWorkspace`。面积只能由 `AreaService` 计算并记录 CRS、算法、单位和精度。
-
-- `query/`：索引、predicate、distance、overlay；
-- `grounding/`：空间描述到实体/candidate refs；必须通过 `PlaceEvidencePort` 消费地点证据解析结果，
-  不得只依赖原始文本、单一地名模糊匹配或 village-center/bbox fallback；
-- `allocation/`：候选过滤、评分、冲突分配、CP-SAT/MIP；
-- `network/`：道路图、连通、路径和线路几何；
-- `change/`：`GeometryOperation -> ParcelChange`；
-- `validation/`：validity、topology、面积、边界和约束；
-- `delivery/`：从 validated execution 构建 snapshot，不渲染、不导出。
-
-PostGIS 实现必须显式设置 SRID，写入前 `ST_IsValid`，面积计算明确 geometry/geography 语义，
-查询使用 GiST 索引。文件型 adapter 必须提供相同 contract，不得使用另一套面积算法。
-
-### 4.8 Evidence / KG
-
-KG 分为 `BaseFacts`、`DerivedRelations`、`EvidenceIndex` 三个可重建投影。输入只来自
-`SessionDataSnapshot` 和已验证 artifact；输出统一为 `EvidenceItem`：subject、predicate、object/ref、
-confidence、source digest、query trace。
-
-删除所有返回规划编码、规划 land-use、候选最终排名和地块变更的 KG helper。规划的
-`IntentGraph`/`PlannedState` 若需要进入 KG，只作为只读派生视图，不成为执行输入。
-
-#### 4.8.1 L1 语义富化与地点反向解析
-
-L1 的 KG 语义辅助定位是目标架构的正式能力，不是旧 `agent/parse` 的可选兼容逻辑。L1
-必须把报告中的地点事实编译为 typed `L1LocationFact`，至少包含：
-
-```python
-class L1LocationFact(BaseModel):
-    mention: str
-    normalized_name: str
-    role: Literal["village", "facility", "road", "water", "landmark", "area", "unknown"]
-    aliases: list[str]
-    spatial_hint: str
-    related_mentions: list[str]
-    source_report_ref: str
-    source_span: str
-    evidence_refs: list[str]
-    confidence: float
-```
-
-`L1Snapshot.location_facts` 只保存报告明确表达的地点语义和来源，不直接写入最终 BSM 或
-选址决定。EXPLORE/Context service 必须基于 `context_version + kg_version + l1_snapshot_ref`
-构建可重放的 `PlaceEvidenceIndex`，至少包含：
-
-```text
-canonical name / alias -> KG entity refs
-L1 normalized name -> L1LocationFact refs
-entity type / role -> candidates
-directed relation and inverse relation -> related entity refs
-village anchor -> geometry / BSM refs
-Bundle geometry -> entity refs
-provenance / version -> evidence refs
-```
-
-地点解析必须支持正向和反向关系，而不是只支持“自然村名查地块”：
-
-```text
-祠堂@社前村
-  -> facility mention: 祠堂
-  -> relation evidence: 祠堂 located_in 社前村
-  -> inverse / related entity lookup: 社前村
-  -> village geometry / centroid / BSM refs
+L1LocationFact
+  -> PlaceEvidenceIndex
+  -> directed / inverse RelationEvidence
   -> PlaceResolutionResult
-  -> GROUND candidate refs
+  -> GROUND
+  -> SELECT 决定最终位置
 ```
 
-同样必须支持 `设施/地标/道路/水体 -> 位于/服务/邻近/连接 -> 自然村`，以及从自然村反查
-其设施、地标和道路。`@`、`位于`、`所在位置`、`服务本村` 等表达只能生成带来源的
-`RelationEvidence`，不能直接生成坐标；关系方向、逆关系、entity type、空间范围和来源必须
-进入可解释评分。
+`PlaceResolutionResult` 必须保留 `status`、候选 refs、evidence refs、relation refs、query trace、index/KG version。精确、歧义、未解析和冲突必须区分；`祠堂@自然村` 等反向关系不能取第一个候选。
 
-地点解析输出为 `PlaceResolutionResult`，至少包含 `resolved | ambiguous | unresolved` 状态、
-候选 entity refs、geometry/BSM refs、`evidence_refs`、`relation_refs`、`query_trace`、
-context/KG/index version 和未决原因。`GROUND` 只消费该结果生成 `GroundingResult`；
-`SELECT` 才负责候选之间的最终分配，地点解析不得直接写 `SiteSelectionDecision`。
+外部搜索只允许通过 `ExternalSearchPort`，由 `infrastructure/search/exa_adapter.py` 实现。调用前先查本地证据；Exa 结果只是带来源的 `ExternalClaimDraft`，必须经过归一化和冲突检查，不能创建 entity、BSM、geometry、classification、`ParcelChange`、`SiteSelectionDecision` 或 `ExecutionPlan`。
 
-确定性解析优先级为：session KG canonical/alias、L1 typed fact、关系/类型/拓扑一致性、
-Bundle 几何、外部 geocoder，最后才是模糊匹配。LLM 只能在 `ambiguous` 的 Top-K 候选上做
-结构化判别，并且不得创造 entity ref、BSM 或坐标；失败时必须保持 `ambiguous` 或
-`unresolved`。
+### M4 Planning Domain
 
-### 4.9 Suitability / Portfolio Allocation
+建议拆成以下独立子包，分别产出根 artifact：
 
-SUITABILITY 将 `DemandItem.spatial_requirements` 编译为 criteria model，依次执行数据准备、硬排除、
-指标统一量纲、权重/规则组合和候选区域定位，返回 candidate refs、逐项得分、排除原因、query trace
-和 evidence。它不改变需求量，也不选择最终地点。
+| 子模块 | 输出 |
+|---|---|
+| `assessment` | `AssessmentSnapshot` |
+| `objectives` | `ObjectivePortfolio` |
+| `demand` | `DemandPortfolio` |
+| `program` | `PlanningClaimSet`、`ProgramProposal`、`PlanningProgram`、`ClassificationDecision` |
+| `suitability` | `SuitabilityResult` |
+| `allocation` | `PortfolioDecision`、`SiteSelectionDecision` |
+| `materialization` | `ExecutionPlan`、`ExecutionResult` |
+| `validation` | `ValidationReport`、`ReconciliationReport`、`IterationRecord` |
+| `delivery` | `DeliverySpatialSnapshot`、`DeliveryManifest` |
 
-PORTFOLIO ALLOCATION 将需求、候选、容量和硬约束构造成显式 `AllocationProblem`：变量、约束、
-目标、整数缩放、输入 digest。设施类任务必须显式区分 demand points、required facilities、candidate
-facilities、capacity、travel mode 和 cutoff。返回 `PortfolioDecision`：assignments、solver status、
-objective、constraint diagnostics、unplaced 和 unmet demand。
+每个子模块只接收 typed input，不能从报告正文、自然语言名称或导出文件重新推断业务事实。
 
-只有 `OPTIMAL` 或业务明确允许的 `FEASIBLE` 可以进入 MATERIALIZE。`INFEASIBLE`、
-`MODEL_INVALID`、`UNKNOWN`、目标无候选和未满足需求必须进入修订/HUMAN。
+L1 内部可以并行执行多个维度 worker，但只有一个确定性的 aggregate 生产 `L1Snapshot`；L2/L3 同理，层级 gate 消费一个版本化 snapshot。`L1LocationFact` 由 L1 compiler 从明确来源段落产生，不能只留在 `facts: list[str]` 中。
 
-### 4.10 Materialize
+### M5 Workflow
 
-`ExecutionPlan` 是唯一 worker 调度输入。每个 task 已经包含 object kind、classification decision、
-assignment、geometry expectation、dependencies 和 input refs。
+拆成 `root_graph`、`state`、`routing`、`dispatch`、`interrupts`、`stage_adapter`、`terminal` 和 `stages/*`。LLM 可以提出 `DispatchProposal`，但必须经 `DispatchPolicy` 校验阶段、工具、父 refs、预算、重试和幂等性后，才能成为 `DispatchCommand`。
 
-Worker 只做一种空间动作：
+HUMAN 只保留一个传输协议，业务频道用 `channel` 区分：`event_id`、`channel`、`reason`、`paused_stage`、`items`、`error_feedback`；恢复输入统一为 `{action, feedback, dimensions, images, deferred_target_ids}`，旧客户端别名只在 API 边界归一化。中断前不执行不可幂等副作用，SSE 发布必须可重放。
 
-- project：项目地块/项目面和小型定位点；
-- facility：设施点及必要服务范围；
-- road：道路线和网络变化；
-- axis：轴线；
-- zone/restoration/protection：面和地块变更；
-- action：非空间实施任务。
+### M6 Execution Workers
 
-Worker 不能重新分类、重新选址、按名称猜类型或直接发事件。fan-in 只合并 typed result，并检测
-BSM/geometry 冲突。EXECUTE 根产物为：
+每个 worker 独立实现 `WorkerInput -> WorkerResult`，结果包含目标 ref、输入 refs、变更 refs、diagnostics 和 provenance。worker 不自行找点、不自行补分类、不修改 source layer、不静默 fallback。
+
+正式 worker 为 Project、Zone、Facility、Road、Axis；Zone 通过 `ZoneAllocatorPort`/约束求解器，Road 通过唯一 `RoadPlannerPort`，失败返回 `unresolved/degraded`，不能悄悄切换第二套算法。
+
+### M7 Validate & Reconcile
+
+校验必须能追溯到责任阶段和目标 ref。自动修复采用有界循环：
 
 ```text
-ExecutionResult
-├── execution_plan_ref
-├── task_results
-├── parcel_change_set_ref
-├── planned_state_ref
-├── deferral_ledger_ref
-└── diagnostics_ref
-```
-
-### 4.11 Validate / Reconcile
-
-VALIDATE 只读取 `ExecutionResult` 及其精确 children refs，按 classification、geometry、topology、
-constraints、area balance、network 和输出完整性生成 `ValidationReport`。每个 issue 必须携带
-responsible stage 和 affected target IDs。
-
-RECONCILE 建立 `PlanningProgram target -> selection -> execution task -> spatial output/change` 覆盖矩阵。
-它不能补造结果；遗漏只能变为明确 deferral 或失败。
-
-#### 4.11.1 VALIDATE 驱动的有界自动修复
-
-`ValidationReport.adjustments` 是确定性修复动作的唯一入口。自动修复由内部
-`ValidationAdjustmentExecutor` 执行，不由 LLM 自由改写 `PlannedState`，也不由某个 worker 静默
-重跑。闭环必须是：
-
-```text
-EXECUTE
-  -> VALIDATE
-  -> diagnose issues_by_stage
-  -> validate ValidationAdjustment target/stage/evidence/params
-  -> apply_validation_adjustments
-  -> earliest affected stage replay
+EXECUTE -> VALIDATE -> diagnose
+  -> ValidationAdjustmentExecutor
+  -> 最早受影响阶段重算
   -> VALIDATE
   -> RECONCILE -> DELIVER
 ```
 
-每个 `ValidationAdjustment` 必须携带 adjustment id、responsible stage、affected target refs、
-input/evidence refs、bounded parameters、parent digests、issue fingerprint、idempotency key 和
-provenance。每轮生成不可变 `IterationRecord`，记录轮次、问题 fingerprint、父 checksum、调整列表、
-受影响目标、前后检查结果、空间 diff 和新 output checksum。调整只能修改已声明的面积/硬约束参数、
-合法候选范围、分类缺口、设施缓冲/面积或道路/轴线合法性；禁止猜坐标、扩大无证据候选池、改写源图层、
-跨系统映射和直接触发 EXECUTE。
+`ValidationAdjustment` 必须绑定 responsible stage、target refs、input/evidence refs、受限参数、parent digest 和 fingerprint。最多两轮；重复 fingerprint、振荡、越权参数或无法收敛时进入 rollback、partial 或 HUMAN。
 
-自动修复最多两轮；相同 fingerprint 与输入 checksum 必须停止，振荡必须回滚到稳定 revision，
-预算耗尽、证据不足或修复仍失败必须落为 `HUMAN`、`partial` 或 `diagnostic_only`。VALIDATE 只有在
-调整执行器返回新的 typed artifact refs 且父链完整时，才允许继续后续阶段。
-
-#### 4.11.2 多模态证据链
-
-多模态输入与文本、KG、空间证据走同一 EvidenceBundle/provenance 链，媒体正文不进入 root
-checkpoint：
+多模态证据复用同一 artifact 链，不建立平行 state：
 
 ```text
-upload / scan / plan / remote sensing / site photo
-  -> ImageArtifact
-  -> OCR / layout / legend / vision
+ImageArtifact
   -> ImageEvidence / VisualFact
-  -> L1/L2/L3 or GROUND evidence
-  -> EXECUTE
-  -> VisualReview
-  -> VALIDATE.adjustments
-  -> RECONCILE / DELIVER
+  -> L1/L2/L3/GROUND evidence
+  -> post-EXECUTE VisualReview
+  -> ValidationAdjustment
 ```
 
-`ImageArtifact` 至少包含 artifact ref、sha256、storage ref、MIME、尺寸、来源、文件名、页码、CRS、
-bbox、采集时间和 preprocessing ref。`ImageEvidence` 包含图片 ref、页/区域 bbox、OCR、版面元素、图例、
-标签、置信度、空间/时间状态、review status 和 provenance。`VisualFact` 只表达带 evidence refs 的
-typed subject/predicate/object observation；`VisualReview` 记录 target ref、规划状态、图面问题、证据
-refs 和关联的 `ValidationAdjustment`。
+`ImageArtifact` 保存 hash、MIME、尺寸、来源、页码/CRS/bbox 和预处理 ref；`ImageEvidence` 保存区域、OCR/图例/视觉要素和 provenance；`VisualReview` 必须绑定 `target_id` 和已有 validation issue。视觉模型只能提供证据或评分，不能直接写坐标、BSM、分类或空间 PASS；视觉失败降级到 OCR/文本证据或 HUMAN。日志只记录 ref/hash/元数据，不记录完整 Base64。
 
-L1 负责从视觉证据提取观察事实，L2/L3 负责将其作为带来源的约束/目标证据，GROUND 只有在 CRS、bbox
-和来源可靠时才可使用其空间提示，SELECT/EXECUTE 仍不得接受视觉模型直接给出的坐标、BSM 或规划决定。
-精确、歧义和未解析必须保持不同状态；OCR/视觉失败时按文本、KG、Bundle 的确定性证据降级，仍不足则
-进入 HUMAN。媒体 adapter 负责裁剪、缩放、detail/token budget 和 `image_url`/Data URL 请求边界；事件
-只记录 media refs、hash、区域、模型、预算、耗时和结果 checksum，不记录完整 base64。
+### M8 Delivery
 
-### 4.12 Deliver / Render / Export
+DELIVER 只消费 `DeliverySpatialSnapshot`，统一生成：current/planned 图层、变化图层、项目/设施/道路/轴线图层、土地平衡、HTML、PNG、GeoJSON 和导出 manifest。所有输出必须从同一快照重建，不能各自读取不同来源。
 
-DELIVER 先从 data snapshot 和 validated `ParcelChangeSet` 构建唯一 `DeliverySpatialSnapshot`：
+交付采用“一图、一表、一规则”：图携带图层版本/符号/空间参考；表携带统计口径/输入版本/校验结果；规则携带编码来源/适用范围/冲突处理。数据库字段 registry、渲染和报告不得各自维护映射。阻断问题只输出诊断包，不输出看似完成的正式成果。
+
+规划分类缺失、几何不可恢复、没有实际变化或存在未决目标时，manifest 必须显式标记 `partial/deferred`，不能把现状复制图当作规划完成。
+
+### M9 Application & API
+
+Commands：`CreateSession`、`StartPlanning`、`SubmitHumanDecision`、`ResumeCheckpoint`、`DeleteSession`、`RetryDelivery`。
+
+Queries：`GetSessionProjection`、`GetWorkflowState`、`GetHumanReviewProjection`、`GetDeliveryProjection`、`GetMapLayerCollection`、`SyncRunEvents`。
+
+稳定 API 只保留 `/api/v1`；路由只调用 command/query。SSE 的历史事件从持久 `EventRepository` replay，`Last-Event-ID` 只映射 `RunEvent.seq`；发生缺口时返回 `resync_required`，前端读取 state，不触发 graph resume。
+
+资源按职责拆分为 session、state、events、human-review、resume、delivery、map-layers 和 artifacts。路由不读取 `Runtime`、`ArtifactStore`、`ReportStore` 或 `EventConnectionHub` 内部状态。
+
+### M10 Infrastructure Adapters
+
+按 port 拆分 checkpoint、persistence、artifact、events、LLM、GIS、KG、RAG、search、media、rendering、export。adapter 负责 provider SDK、重试、超时、凭证和序列化；业务层只看到 canonical contract。每个 adapter 先用 fake 实现完成 substitutability/failure tests，再接真实 provider。
+
+## 6. 并行落地方案
+
+按依赖分波次。每个并行任务都必须先提交 contract，再提交 adapter/实现，最后由 owner 做切换；不要建立长期兼容 facade 或双写路径。
+
+### Wave 0：冻结公共边界（串行）
+
+- M0：Artifact/CAS、`WorkflowState`、stage completion、gate、event 和 worker contracts。
+- 冻结 `PlanningContextProvider`、`ResumePlan`、canonical HUMAN interrupt 和 `ClassificationDecision`。
+- 建立架构测试：依赖方向、禁止裸 GIS、禁止 provider 类型上浮、禁止 API 直读 runtime。
+- 以 `10_IMPLEMENTATION_STATUS.md` 建立 CURRENT/PARTIAL/GAP 基线。
+
+### Wave 1：基础能力（可并行）
+
+| 任务 | 负责模块 | 交付 |
+|---|---|---|
+| A | M1 Data | Snapshot manifest、collection registry、质量报告、冻结/重放测试 |
+| B | M2 Spatial | workspace、几何/面积/拓扑/查询 contract 和 adapter |
+| C | M3 Evidence | EvidenceBundle、L1 location、PlaceEvidenceIndex、resolution contract |
+| D | M9 Application | commands/queries/UoW、API 投影边界、EventRepository 接线 |
+| E | M10 Infra | checkpoint、DB、LLM、GIS、KG、媒体、search ports 的 fake adapters |
+
+A/B/C/D/E 之间只依赖 Wave 0 contract，可并行开发。
+
+### Wave 2：规划与编排（部分并行）
+
+| 任务 | 负责模块 | 前置 | 交付 |
+|---|---|---|---|
+| F | M4 assessment/objectives/demand | A、C | 需求与目标根 artifact |
+| G | M4 program/suitability/allocation | B、C、F | PlanningProgram、可行性、PortfolioDecision |
+| H | M5 Workflow | M0、F/G contract | 主图、gate、interrupt、dispatch、resume |
+| I | M3 Exa adapter | C、E | 外部搜索成功/空结果/冲突/超预算路由 |
+
+F 可与 H/I 并行；G 依赖 F；H 先接 fake domain service，待 G 完成后切真实实现。
+
+地点语义另设 C1 子任务：`L1LocationFact -> PlaceEvidenceIndex -> PlaceResolutionResult -> GROUND`，覆盖 exact、alias、反向关系、同名异类型、冲突、外部 geocoder-only 和 unresolved；短名称 fuzzy 只能产生 `ambiguous`。
+
+### Wave 3：执行、校验、交付（可并行拆 worker）
+
+| 任务 | 负责模块 | 前置 | 交付 |
+|---|---|---|---|
+| J1 | M6 Project/Zone workers | B、G | 独立 WorkerResult、变更集 |
+| J2 | M6 Facility/Road/Axis workers | B、G | 独立 WorkerResult、依赖图 |
+| K | M7 Validate/Reconcile | M0、J1/J2 contract | typed report、adjustment executor、两轮预算 |
+| L | M8 Delivery | B、J1/J2、K contract | 唯一快照、双 panel PNG/HTML/GeoJSON/manifest |
+| M | M3 media evidence | M0、E | ImageArtifact → ImageEvidence → VisualReview |
+
+J1/J2/M 可并行；K 先写 contract 和 fake tests，再接 worker；L 先做 snapshot-only adapter，再接真实执行结果。
+
+本波次的第一条业务闭环优先解决 `ClassificationDecision -> TARGET_PROJECTION -> EXECUTE -> ParcelChangeSet`；没有显式分类决定时必须保持 HUMAN/partial，不能用 `dlbm`、名称、KG 或 crosswalk 补码。
+
+### Wave 4：切换与清理（串行）
+
+1. API 全部切到 Application；SSE 全部切到持久事件。
+2. Workflow 全部切到 `WorkflowState + artifact refs`。
+3. 删除旧 PARSE、旧 `execution_outcome`、旧 report/store 双写和宽泛 service/tool 生产入口。
+4. 更新 OpenAPI、JSON Schema、实现状态和架构测试；删除已替代测试与空目录。
+
+每个波次均按“contract → fake adapter → integration → 唯一调用点切换 → 删除旧入口”的顺序完成；并行分支不得同时修改同一个旧 god module 的不同职责，优先新建窄模块后再切换调用方。
+
+## 7. 每个模块的完成定义
+
+模块同时满足以下条件才可标记 `CURRENT`：
+
+- 输入、输出、owner 和依赖方向唯一；
+- contract tests 覆盖成功、空结果、unresolved、冲突、超时/不可用和越权；
+- artifact 有 schema、digest、parents、provenance，历史不可覆盖，重放幂等；
+- 有 fake adapter 的 integration test 和至少一个真实数据链路证据；
+- 失败不会静默变成空集合、默认成功或猜测值；
+- 相关 API、OpenAPI、JSON Schema、状态台账和文档同步；
+- 影响地图的模块完成实际输出和视觉检查；
+- 新能力没有把业务逻辑塞入 `WorkflowState` 或 provider adapter。
+
+额外门槛：
+
+- 地点能力必须覆盖 L1 → KG/PlaceEvidenceIndex → GROUND，含反向关系、歧义和未解析。
+- 自动修复必须覆盖 fingerprint、幂等、两轮预算、振荡回滚和 HUMAN/partial 终态。
+- 多模态必须覆盖媒体 checksum、区域/source refs、target binding 和失败降级。
+- 外部搜索必须覆盖 allowlist、freshness、成本/延迟、idempotency、provenance 和失败路由。
+- 交付必须证明所有输出来自同一个 `DeliverySpatialSnapshot`。
+
+## 8. 推荐验收路径
+
+### Contract / architecture
+
+```powershell
+pytest backend/tests/contracts backend/tests/core -q
+```
+
+重点验证：CAS 不覆盖、checkpoint 分支、依赖方向、WorkflowState 投影、事件 replay、stage completion、dispatch policy、空间输入边界。
+
+### Integration
+
+```powershell
+pytest backend/tests/e2e -q
+```
+
+至少覆盖：固定 fixture 摄取、snapshot digest、KG/地点证据、真实 API create/resume、worker changeset、validate/reconcile 和 delivery projection。
+
+### Real acceptance
+
+真实验收必须经过：
 
 ```text
-DeliverySpatialSnapshot
-├── current_landuse
-├── complete_planned_landuse
-├── planned_changes
-├── projects / project_points
-├── facilities
-├── roads / axes
-├── zones / restoration / protection
-├── constraints
-├── layer descriptors
-├── parent digests
-└── quality report
+真实报告 + VillageBundle + Session KG
+  -> typed planning artifacts
+  -> GROUND / SELECT / EXECUTE
+  -> ExecutionResult
+  -> VALIDATE / RECONCILE
+  -> DeliverySpatialSnapshot
+  -> HTML + GeoJSON + 双 panel PNG
 ```
 
-`complete_planned_landuse` 从 current land-use 复制后按 `ParcelChangeSet` 应用变更，必须保留地块边界
-和未变化地块。renderer、exporter、land balance 和 map API 都只接收 snapshot descriptor。
+必须实际 reopen/resume LangGraph checkpoint，并检查输出内容、变化数量、延期项、manifest、HTML、GeoJSON 和 PNG。没有分类决定、空间证据或真实变化时，验收结果应为 `partial/blocked`，不能用 approve、fallback 或合成对象掩盖。
 
-正式预览要求：
+验收至少包含以下闭环：
 
-- 一个 PNG，两个有标题的 panel：左为现状、右为规划；
-- 两侧地类均按分类颜色渲染，保留地块边界；
-- 右图高亮变更地块并叠加项目、设施、道路、轴线；
-- 项目/设施定位点足够小，不遮挡地块；
-- HTML 提供 current/planned 和各 planning overlay 的独立开关；
-- 视觉质量检查读取实际 PNG/HTML，而不是只判断文件存在。
+1. `SessionDataSnapshot` 与 `SpatialWorkspace` 可由固定 fixture 重建相同 digest。
+2. L1/L2/L3 typed artifact 具有报告来源、证据和版本；`legacy summary` 不参与权威决策。
+3. 地点解析覆盖 exact/alias/反向关系/歧义/冲突/无几何，GROUND 不猜第一个候选。
+4. `SiteSelectionDecision` 具有完整排名、淘汰原因、约束和 evidence refs；`UNKNOWN/INFEASIBLE` 不得进入 EXECUTE。
+5. `ExecutionResult` 的 changeset、planned state、worker refs 和 checksum 一致。
+6. VALIDATE 能按责任阶段反馈；自动修复最多两轮，并能停止重复/振荡。
+7. Delivery 的地图、表格、规则、HTML、PNG、GeoJSON 和 manifest 均由同一个 snapshot 重建。
+8. API create/state/events/human-review/resume/delivery 只经过 application projection；重启或跨进程事件 sync 与单进程一致。
 
-若未形成任何 `ParcelChange`，期末地类只能标记为 preserve/partial，不能标记为 statutory
-complete；这不是规划变化。前端必须同时展示 `DeliveryManifest` 的 partial reason、未决目标和
-DeferralLedger，避免把一张“现状复制图”误认为规划成果。
+## 9. 禁止的落地捷径
 
-## 5. 唯一状态模型
+- 把整个 `AgentState`、裸 GeoJSON、660 个地块或文件路径塞进 graph state。
+- 让 LLM 直接生成 `PlanningProgram`、分类、坐标、`ParcelChange` 或执行 task。
+- 用 `dlbm`、名称、crosswalk、导出器或第一个候选自动补分类/位置。
+- 让 EXECUTE、renderer 或 exporter 各自读取不同的空间事实。
+- 用空集合、默认 approve、旧结果或复制现状图表示成功。
+- 为了迁移保留长期双写、兼容 facade、第二套事件序号或第二个 artifact owner。
 
-### 5.1 WorkflowState
+## 10. 文档取舍与权威关系
 
-```python
-class WorkflowState(TypedDict, total=False):
-    run_id: str
-    session_id: str
-    branch_id: str
-    phase: WorkflowPhase
-    active_stage: StageName
-    status: RunStatus
-    context_ref: ArtifactDescriptor
-    artifact_refs: dict[ArtifactKey, ArtifactDescriptor]
-    gate_ref: ArtifactDescriptor | None
-    retry: RetryBudget
-    interrupt_ref: ArtifactDescriptor | None
-    terminal_ref: ArtifactDescriptor | None
-```
+本次整理后的文档分工如下。原则是“一个目标架构、一个当前状态、多个专题细节”，不再让多个文档各自维护迁移顺序和目标结论。
 
-目标为 12 个左右字段。messages 属于独立 conversation graph；报告、GIS、gate history、diagnostics、
-review items 和 delivery summary 都不进入 root checkpoint。
+| 文档 | 处理 | 保留内容 |
+|---|---|---|
+| `00_SYSTEM_DESIGN.md` | 保留为 North Star | 产品定位、总图、权威产物和运行时原则；不再另写后端模块目录 |
+| `01_LAYERED_ARCHITECTURE.md` | 保留为分层细节 | 依赖方向、允许/禁止 import、单一 Context；目标冲突以本文为准 |
+| `02_DATA_PERSISTENCE.md` | 保留为持久化细节 | Context、artifact 生命周期、ResumePlan、checkpoint 语义 |
+| `03_KG_SEMANTIC_BRIDGE.md` | 保留为 KG 细节 | KG 四类数据和 KG+Spatial 组合；原补充文档内容已吸收并删除 |
+| `04_PLANNING_PIPELINE.md` | 保留阶段细节 | L1/L2/L3、Gate 和确定性空间链；主阶段名称以本文为准 |
+| `05_EXPLORE_BRIDGE.md`、`11_EXPLORE_KG_ENRICHMENT.md` | 保留为 Evidence 细节 | 请求粒度、来源范围、缓存失效、审计字段和禁止越权 |
+| `06_TARGET_PROJECTION_EXECUTE.md` | 保留执行细节 | projection、GROUND、SELECT、Worker 输入输出和迁移对应 |
+| `07_VALIDATION_FEEDBACK.md`、`08_DELIVERABLES_COMPLIANCE.md` | 保留验收细节 | 定向反馈、一图一表一规则、Delivery Gate；不再维护第二套修复契约 |
+| `09_INTEGRATION_BREAKPOINTS.md` | 降级为历史断点 | 只记录问题证据；迁移顺序以本文第 6 节为唯一推荐顺序 |
+| `10_IMPLEMENTATION_STATUS.md` | 独立保留 | 唯一 CURRENT/PARTIAL/GAP 台账，不混入目标设计 |
+| `12_PLACE_NAME_RESOLUTION.md` | 保留为地点专题 | `L1LocationFact`、索引、解析评分、GROUND 接线和验收用例 |
+| `13_AUTOREPAIR_MULTIMODAL.md` | 保留为扩展专题 | 自动修复、多模态 artifact、视觉边界和真实验收 |
+| `15_IMPLEMENTATION_OVERVIEW_FOR_PPT.md`、`16_PROJECT_INTRO_PPT.md` | 保留为汇报材料 | 只服务 PPT，不作为实现依据 |
+| `docs/audits/*` | 保留为证据 | 代码审查、真实运行和迁移问题；不作为目标架构源 |
+| `docs/superpowers/plans/*` | 保留为任务清单 | 仅描述如何执行；不得反向改变本文边界 |
 
-### 5.2 Stage 协议
+应淘汰或不再扩展的内容：旧 `PARSE` 生产入口、Markdown/JSON 直接生成 `PlanningProgram`、`AgentState` 中的完整业务对象、隐式 `latest`、第二套 artifact/event owner、通用总重试、静默 GIS fallback、由名称/`dlbm`/crosswalk 自动补分类，以及把现状复制图当成规划完成。
 
-```python
-class StageCommand(BaseModel):
-    run_id: str
-    branch_id: str
-    context_ref: ArtifactDescriptor
-    input_refs: dict[ArtifactKey, ArtifactDescriptor]
-    attempt: int
+若专题文档与本文冲突，优先级为：本文目标边界 > `10_IMPLEMENTATION_STATUS.md` 当前事实 > 专题细节 > 审计/计划中的历史表述。完成一个模块后，应同步更新本文引用、状态台账和专题文档；不要在多个文档复制同一套目录或迁移清单。
 
-class StageCompletion(BaseModel):
-    stage: StageName
-    output_refs: dict[ArtifactKey, ArtifactDescriptor]
-    gate_ref: ArtifactDescriptor
-    event_refs: list[EventRef]
-```
+## 11. 参考
 
-所有 stage adapter 共用一个实现模板；禁止七个节点各自重复 artifact/retry/audit 逻辑。
-
-地点证据契约不进入 root checkpoint 的业务正文，只以 artifact refs 传递：
-
-```python
-class RelationEvidence(BaseModel):
-    subject_ref: str
-    predicate: str
-    object_ref: str
-    inverse_predicate: str | None = None
-    source_refs: list[str]
-    confidence: float
-    query_trace: list[dict]
-
-class PlaceResolutionResult(BaseModel):
-    mention: str
-    normalized_name: str
-    status: Literal["resolved", "ambiguous", "unresolved"]
-    candidates: list[dict]
-    evidence_refs: list[str]
-    relation_refs: list[str]
-    query_trace: list[dict]
-    context_version: str
-    kg_version: str
-    index_version: str
-    unresolved_reason: str | None = None
-
-class DispatchProposal(BaseModel):
-    allowed_action: str
-    target_stage: str
-    input_refs: dict[str, str]
-    evidence_refs: list[str]
-    reason: str
-
-class DispatchCommand(BaseModel):
-    action: str
-    target_stage: str
-    input_refs: dict[str, ArtifactDescriptor]
-    parent_digests: list[str]
-    attempt: int
-```
-
-自动修复与多模态/外部搜索也必须在迁移期间先冻结为 typed contracts，再切换生产调用点：
-
-```python
-class ValidationAdjustment(BaseModel):
-    adjustment_id: str
-    responsible_stage: str
-    affected_target_refs: list[str]
-    input_refs: dict[str, ArtifactDescriptor]
-    evidence_refs: list[str]
-    bounded_params: dict[str, object]
-    issue_fingerprint: str
-    idempotency_key: str
-    parent_digests: list[str]
-
-class IterationRecord(BaseModel):
-    iteration: int
-    issue_fingerprint: str
-    parent_checksum: str
-    adjustment_refs: list[str]
-    affected_target_refs: list[str]
-    before_check_refs: list[str]
-    after_check_refs: list[str]
-    spatial_diff_ref: str | None = None
-    output_checksum: str
-
-class ExternalSearchRequest(BaseModel):
-    query_purpose: str
-    normalized_entities: list[dict]
-    entity_scope: list[str]
-    source_policy: dict
-    allowed_domains: list[str]
-    allowed_categories: list[str]
-    freshness: dict
-    search_mode: str
-    result_limit: int
-    content_mode: str
-    budget: dict
-    parent_refs: list[str]
-    idempotency_key: str
-
-class ExternalSearchResult(BaseModel):
-    provider: str
-    request_id: str
-    resolved_search_mode: str
-    result_records: list[dict]
-    evidence_refs: list[str]
-    retrieval_status: str
-    latency_ms: int | None = None
-    cost: dict | None = None
-    provenance: dict
-
-class ImageArtifact(BaseModel):
-    artifact_ref: str
-    sha256: str
-    storage_ref: str
-    mime_type: str
-    width: int
-    height: int
-    source_ref: str
-    page: int | None = None
-    crs: str | None = None
-    bbox: list[float] | None = None
-    preprocessing_ref: str | None = None
-
-class ImageEvidence(BaseModel):
-    image_ref: str
-    region_bbox: list[float] | None = None
-    ocr_text_ref: str | None = None
-    layout: list[dict]
-    legend: list[dict]
-    labels: list[dict]
-    confidence: float
-    spatial_status: str
-    temporal_status: str
-    review_status: str
-    provenance: dict
-
-class VisualFact(BaseModel):
-    dimension: str
-    fact_type: str
-    subject: str
-    predicate: str
-    object: str
-    evidence_refs: list[str]
-    confidence: float
-    human_required: bool
-
-class VisualReview(BaseModel):
-    target_ref: str
-    planning_status: str
-    evidence_refs: list[str]
-    issue: str
-    adjustment_refs: list[str]
-```
-
-端口约束为：`ValidationAdjustmentExecutor` 消费 `ValidationReport` 并返回新的 artifact refs；
-`MediaEvidencePort` 负责媒体存储，`VisualEvidencePort` 负责 typed 提取；`ExternalSearchPort` 负责
-外部检索。Exa、MiniMax vision、OCR 引擎和本地文件存储均只能实现这些 ports，不能被 stage 直接导入。
-
-`PlaceEvidenceIndex` 必须支持 canonical name、alias、role、entity type、directed/inverse
-relation、geometry/BSM 和 provenance 的组合查询。`祠堂@社前村` 解析得到的必须是可追溯的
-`PlaceResolutionResult`，而不是仅把“祠堂”作为一个孤立设施名称返回。
-
-## 6. Artifact、checkpoint 与 resume
-
-当前 `{artifact_id}/{revision}` 可在历史 checkpoint 分叉时撞到同一 `vN` 并覆盖 payload。
-目标使用内容寻址：
-
-```text
-blobs/sha256/{digest}
-descriptors/{digest}.json
-runs/{run_id}/branches/{branch_id}/refs/{artifact_key}.json
-```
-
-`ArtifactDescriptor` 至少包含：digest、media type、byte size、schema ID/version、semantic digest、
-parents、producer stage、run/branch、created_at 和 provenance。blob 写入为 create-if-absent；若已存在则
-校验字节完全相同，永不覆盖。
-
-checkpoint 只保存 descriptor。Workflow 内禁止 `latest` 查询；named ref 只由当前 run/branch 更新。
-历史 checkpoint resume 创建新 `branch_id`，复用有效 parent digest，下游生成新 descriptor。
-
-LangGraph interrupt 的恢复规则：
-
-- 使用相同 `thread_id`；
-- 只有当前真实 pending interrupt 使用 `Command(resume=decision_ref)`；
-- interrupt 节点会从头重放，之前的副作用必须幂等；
-- 普通历史 checkpoint 分叉使用显式 checkpoint config，不伪装 HUMAN resume；
-- 进程恢复复用已提交 CAS artifact，pending writes 只按 LangGraph 官方语义处理。
-
-## 7. Event Log、SSE 与前端投影
-
-`RunEvent` 使用 `(session_id, seq)` 唯一约束，写入 append-only 表。业务事务同时写 outbox；publisher
-提交后投递在线 hub。`SSEConnectionHub` 不存会话状态、不生成 seq、不缓存关键业务事实。
-
-REST `/state` 与 SSE `resync_required` 都调用同一个 `SessionProjectionService`。projection 只读取：
-
-- 当前 checkpoint metadata；
-- checkpoint 中的 explicit refs；
-- 持久 Event Repository cursor；
-- Delivery manifest/snapshot descriptors。
-
-它不能扫描文件夹找“最新 artifact”。
-
-## 8. 测试与真实验收
-
-目标测试布局：
-
-```text
-backend/tests/
-├── architecture/      # import/owner/禁止路径
-├── contracts/         # schema、CAS、ID、状态不变量
-├── integration/
-│   ├── data/
-│   ├── spatial/
-│   ├── evidence/
-│   │   └── test_l1_place_reverse_resolution.py
-│   └── application/
-├── scenarios/
-│   └── jintian_real/  # 固定真实数据与 checkpoint trace
-└── acceptance/
-    └── test_real_graph_resume_delivery.py
-```
-
-不恢复庞杂的 `tests/unit/`。但真实 graph resume 不能替代 CAS 不可覆盖、面积单位、几何有效性、
-solver status、分类闭集和事件幂等等模块不变量；这些放在 contracts/integration。
-
-正式 acceptance 必须：
-
-1. 通过 `/api/v1` 创建真实会话；
-2. 使用真实 `jintian` data snapshot、真实 KG 和配置的真实 LLM；
-3. 主图运行到真实 LangGraph interrupt；
-4. 关闭并重开持久 checkpointer；
-5. 用同一 `session_id/thread_id` 和当前 event ID resume；
-6. 证明已完成 LLM 阶段没有重复调用；必要阶段允许真实 LLM 调用；
-7. 到达 DELIVER，读取 snapshot descriptor 和全部 parent digests；
-8. 读取 `complete_planned_landuse.geojson`，核对现状/规划变化、项目和定位点；
-9. 打开并检查一个双 panel PNG 和 HTML；
-10. 只有规划对象真实落地、校验/对账通过且图面可读，才允许标记可用。
-
-真实 acceptance 若遇到 `classification_decision_required`，不得用通用 approve 或
-`defer_unresolved_spatial_references` 绕过；必须由运行操作员通过
-`REAL_CLASSIFICATION_DECISIONS_JSON`/`REAL_CLASSIFICATION_DECISIONS_PATH` 提供完整的、带证据
-refs 的闭集决定。未提供时，验收应保留真实 HUMAN checkpoint 并失败，而不是生成“规划完成”的结果。
-
-地点证据闭环还必须通过以下 contracts/integration/acceptance 用例：
-
-11. L1 `L1LocationFact` 从结构化报告位置表产生，并保留 `source_report_ref`、`source_span`、
-    `related_mentions` 和 `evidence_refs`；
-12. `祠堂@社前村`、`祠堂 位于 社前村` 能通过正向或逆向 KG 关系解析到社前村 entity、
-    geometry/centroid 和 BSM refs；
-13. 自然村反查其设施、地标、道路时，候选带有 relation refs、source refs 和 query trace；
-14. KG 与 L1 事实冲突、同名自然村多候选、只有模糊名称和无几何时，分别返回
-    `ambiguous`/`unresolved` 并进入 GROUND Gate，不得选第一个候选；
-15. GROUND 消费 `PlaceResolutionResult` 后保留 `target_ref`/`intervention_id`，SELECT 才进行
-    最终位置分配，EXECUTE 不再重新解析地名。
-16. LLM `DispatchProposal` 经过 `DispatchPolicy` 校验后才生成 `DispatchCommand`；拒绝、超预算、
-    缺父 artifact 或越权阶段必须进入 typed diagnostic/HUMAN，不能静默执行。
-17. `ValidationAdjustmentExecutor` 能从 `ValidationReport.adjustments` 驱动最早受影响阶段重算，
-    记录 `IterationRecord`、空间 diff 和新 checksum；重复 fingerprint、振荡和超过两轮必须停止。
-18. `ImageArtifact`、`ImageEvidence`、`VisualFact`、`VisualReview` 的父 digest、区域、来源和
-    target ref 可重放；视觉证据能进入 L1/L2/L3 或 GROUND，视觉问题能绑定现有 adjustment，失败
-    时进入文本/OCR fallback 或 HUMAN，不得直接写坐标/BSM。
-19. `ExternalSearchPort` 的 fake adapter 与 Exa adapter 均能返回相同的
-    `ExternalSearchResult`；请求 ID、URL/ID、highlights/text ref、来源、freshness、成本、延迟和
-    provenance 可重放，重复 idempotency key 不产生重复证据。
-20. Exa 无 key、超时、空结果、抓取失败、来源冲突、来源不在 allowlist 或超预算时，EXPLORE
-    保留 local evidence/unresolved 并进入 Gate/HUMAN；外部结果不能绕过 GROUND/SELECT/EXECUTE。
-
-pytest 不使用共享固定 `--basetemp`。本地使用 `tmp_path`；CI 如需 basetemp，路径必须包含唯一 job/run ID。
-正式验收产物写入独立、显式的 `run-artifacts/{run_id}`，不从 pytest 临时目录冒充交付物。
-
-## 9. 无兼容迁移顺序
-
-每一阶段采用“新实现完成 -> 切换唯一调用点 -> 删除旧实现 -> 真实验收”的原子切换，不建立
-长期双写或兼容 facade。
-
-1. **基础正确性**：先实现 CAS Artifact Repository 和持久 Event Repository；修复历史覆盖风险。
-2. **应用边界**：引入 commands/queries/UoW，API 不再直读 runtime/store/SSE。
-3. **图状态**：建立最小 WorkflowState、统一 stage adapter 和受控 DispatchProposal →
-   DispatchPolicy → DispatchCommand 边界；拆 root graph/post-L3 god files。
-4. **规划形成**：删除 L3 Markdown `INSTRUCTION` 和直接 JSON program 路径，建立 claims、领域需求引擎、可行性预检、portfolio solver 与 ProgramAssembler。
-5. **数据与证据接口冻结**：先冻结 `EvidenceBundle`、`L1LocationFact`、`PlaceEvidenceIndex`、
-   `RelationEvidence`、`PlaceResolutionResult`、`ExternalSearchRequest/Result` 和
-   `ExternalSearchPort`；统一 SessionDataSnapshot/SpatialWorkspace，先接本地 KG/Bundle/report
-   providers，再接 `ExaSearchAdapter`。只有 adapter contract、provenance、预算、幂等和失败路由
-   验收通过后，才切换 EXPLORE 的唯一调用点；接通 L1 → KG 语义富化 → 反向关系解析 → GROUND，
-   并清除 raw GIS/KG 决策 helper。
-6. **选址与执行**：统一 SelectionProblem、ExecutionPlan、worker result 和 ExecutionResult root artifact。
-7. **自动修复与多模态接口冻结**：先冻结 `ValidationAdjustment`、`IterationRecord`、
-   `ValidationAdjustmentExecutor`、`ImageArtifact`、`ImageEvidence`、`VisualFact`、`VisualReview`、
-   `MediaEvidencePort` 和 `VisualEvidencePort`；完成 fake adapter、CAS/provenance、目标绑定、
-   两轮预算、fingerprint/rollback 和视觉失败降级测试后，再切换 VALIDATE/媒体调用点。
-8. **交付**：snapshot-only render/export/balance/map API；完成双 panel 真实视觉验收，并将
-   `VisualReview` 作为交付前校验输入而不是新的规划事实来源。
-9. **API/SSE**：只保留 `/api/v1` 和持久事件重连；删除旧端点和进程内状态缓存。
-10. **最终清理**：删除空目录、死 contract、旧文档和被替代测试，重新生成当前架构图。
-
-任何阶段若真实输出不可用，保持未完成，不用 fallback、合成对象或“文件已生成”掩盖。
-
-## 10. 模块完成定义
-
-一个模块只有同时满足以下条件才算完成：
-
-- 输入/输出 contract 唯一且无 `Any`/legacy 分支；
-- owner 和依赖方向通过 architecture test；
-- 失败为 typed result，不能静默空集合或默认成功；
-- artifact 具有 schema、digest、parents 和 provenance；
-- replay 幂等，不覆盖历史；
-- 有真实数据 integration 证据；
-- 若模块涉及地点语义，必须有 L1 → PlaceEvidenceIndex → GROUND 的真实链路证据，并覆盖
-  `设施/地标/道路/水体 → 自然村` 的反向关系解析；
-- 解析结果必须保留 status、candidate refs、evidence refs、relation refs、query trace 和
-  context/KG/index version；
-- 若模块涉及自动修复，必须由 `ValidationAdjustmentExecutor` 消费 typed adjustments，具备
-  `IterationRecord`、两轮预算、fingerprint 去重、振荡回滚和 HUMAN/partial/diagnostic 终态证据；
-- 若模块涉及多模态，必须具备 `ImageArtifact` → `ImageEvidence/VisualFact` → `VisualReview` 的
-  不可变链路、target 绑定、区域/来源/provenance 和失败降级证据，且视觉模型不能直接写空间决定；
-- 若模块涉及外部搜索，必须通过 `ExternalSearchPort` 和可替换 adapter，具备 source policy、
-  allowlist、freshness、成本/延迟预算、request/idempotency trace 和 Exa 失败/冲突路由，且外部
-  结果不得越过 GROUND/SELECT/EXECUTE 的权威边界；
-- 若模块影响地图，实际读取并视觉检查输出；
-- CURRENT 文档、OpenAPI/JSON Schema 和代码同时更新。
-
-## 11. 研究依据
-
-- [LangGraph persistence](https://docs.langchain.com/oss/python/langgraph/persistence)
-- [LangGraph interrupts](https://docs.langchain.com/oss/python/langgraph/interrupts)
-- [LangGraph checkpointers](https://docs.langchain.com/oss/python/langgraph/checkpointers)
-- [FastAPI Server-Sent Events](https://fastapi.tiangolo.com/tutorial/server-sent-events/)
-- [FastAPI 0.141.1 release notes](https://fastapi.tiangolo.com/release-notes/)
-- [OpenAI Structured Outputs](https://developers.openai.com/api/docs/guides/structured-outputs)
-- [Anthropic structured outputs](https://platform.claude.com/docs/en/build-with-claude/structured-outputs)
-- [Microsoft Event Sourcing pattern](https://learn.microsoft.com/en-us/azure/architecture/patterns/event-sourcing)
-- [OCI content descriptor](https://github.com/opencontainers/image-spec/blob/main/descriptor.md)
-- [PostGIS spatial data management](https://postgis.net/docs/en/using_postgis_dbmanagement.html)
-- [PostGIS ST_IsValid](https://postgis.net/docs/ST_IsValid.html)
-- [PostGIS ST_Area](https://postgis.net/docs/ST_Area.html)
-- [OGC API Features](https://ogcapi.ogc.org/features/)
-- [OR-Tools CP-SAT solver](https://developers.google.com/optimization/cp/cp_solver)
-- [Exa Search API](https://exa.ai/docs/reference/search)
-- [Exa Search API guide](https://exa.ai/docs/reference/search-api-guide)
-- [Exa Contents Retrieval](https://exa.ai/docs/reference/contents-retrieval)
-- [ArcGIS Suitability Modeler workflow](https://doc.esri.com/en/arcgis-pro/latest/help/analysis/spatial-analyst/suitability-modeler/implement-the-suitability-modeling-workflow-using-the-suitability-modeler.html)
-- [ArcGIS location-allocation](https://developers.arcgis.com/documentation/mapping-and-location-services/routing-and-directions/location-allocation/)
-- [ArcGIS Urban parcel suitability](https://doc.esri.com/en/arcgis-urban/latest/help/help-suitability.html)
-- [EU Joint Research Centre LUISA](https://joint-research-centre.ec.europa.eu/luisa/technical-description_en)
-- [pytest temporary directories](https://docs.pytest.org/en/stable/how-to/tmp_path.html)
-- [pytest good integration practices](https://docs.pytest.org/en/stable/explanation/goodpractices.html)
+- [当前实现状态台账](10_IMPLEMENTATION_STATUS.md)
+- [后端架构收敛计划](../superpowers/plans/2026-08-11-backend-architecture-convergence.md)
+- [地点证据集成计划](../superpowers/plans/2026-08-12-blueprint-place-evidence.md)
+- [自动修复、多模态与 Exa 计划](../superpowers/plans/2026-08-12-autorepair-multimodal-exa-blueprint.md)
+- [后端理想架构审计](../audits/backend-ideal-architecture-2026-08-11.md)

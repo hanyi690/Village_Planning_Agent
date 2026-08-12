@@ -8,9 +8,11 @@ runtime owns execution and locking.
 from __future__ import annotations
 
 from typing import Any, Dict
+from uuid import uuid4
 
 from app.modules.schema.contracts.resume_contracts import (
     ARTIFACT_STAGE_ORDER,
+    ResumeMode,
     ResumePlan,
     build_resume_plan,
     repair_plan_for_integrity,
@@ -20,6 +22,39 @@ from app.services.checkpoint_policy import (
     first_pending_interrupt_payload,
     has_pending_interrupt,
 )
+
+FORK_BRANCH_MARKER = "fork branch="
+
+
+def mark_plan_fork(plan: ResumePlan, branch_id: str | None = None) -> ResumePlan:
+    """Return a copy of the plan annotated with the required fork branch.
+
+    A plain checkpoint resume must fork the artifact refs into a new branch
+    (``fork_artifact_refs``) and must never carry ``Command(resume=...)``.
+    The caller reads the branch back with ``fork_branch_from_plan`` and passes
+    it to the runtime's fork path.
+    """
+
+    branch = branch_id or f"fork-{uuid4().hex[:16]}"
+    marker = f"{FORK_BRANCH_MARKER}{branch}"
+    reason = f"{plan.reason}; {marker}" if plan.reason else marker
+    return plan.model_copy(update={"reason": reason})
+
+
+def fork_branch_from_plan(plan: ResumePlan) -> str | None:
+    """Return the branch_id a plan requires, or None when no fork is marked."""
+
+    idx = plan.reason.find(FORK_BRANCH_MARKER)
+    if idx < 0:
+        return None
+    tail = plan.reason[idx + len(FORK_BRANCH_MARKER):].strip()
+    return tail.split(";")[0].strip().split(" ")[0] or None
+
+
+def plan_blocked(plan: ResumePlan, reason: str) -> ResumePlan:
+    """Rebuild the plan as a typed BLOCKED decision with a specific reason."""
+
+    return plan.model_copy(update={"mode": ResumeMode.BLOCKED, "resume_from": "", "reason": reason})
 
 
 class ResumeConflictError(RuntimeError):
@@ -49,6 +84,12 @@ class ResumeService:
         )
         plan = ResumeService.verify_reusable_artifacts(values, plan)
         return stable, kind, plan
+
+    @staticmethod
+    def fork_required(plan: ResumePlan) -> bool:
+        """True when a recovery must fork a new artifact branch."""
+
+        return plan.mode in {ResumeMode.CHECKPOINT, ResumeMode.RERUN}
 
     @staticmethod
     def validate_interrupt(state: Dict[str, Any], expected_event_id: str) -> None:
@@ -121,4 +162,11 @@ class ResumeService:
         return None
 
 
-__all__ = ["ResumeConflictError", "ResumeService"]
+__all__ = [
+    "FORK_BRANCH_MARKER",
+    "ResumeConflictError",
+    "ResumeService",
+    "fork_branch_from_plan",
+    "mark_plan_fork",
+    "plan_blocked",
+]

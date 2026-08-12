@@ -613,17 +613,17 @@ def create_unified_planning_graph(checkpointer=None) -> StateGraph:
         builder.add_node("execute_tools", adapt_node(execute_tools_node), retry_policy=_TRANSIENT_RETRY_POLICY)
     else:
         builder.add_node("execute_tools", adapt_node(execute_tools_node))
-    builder.add_node("l1_worker", adapt_node(audited_l1_worker))
-    builder.add_node("l2_worker", adapt_node(audited_l2_worker))
-    builder.add_node("l3_worker", adapt_node(audited_l3_worker))
+    builder.add_node("l1_worker", adapt_node(audited_l1_worker, worker=True))
+    builder.add_node("l2_worker", adapt_node(audited_l2_worker, worker=True))
+    builder.add_node("l3_worker", adapt_node(audited_l3_worker, worker=True))
     builder.add_node("advance_phase", adapt_node(_authorized_advance_phase))
     builder.add_node("revision_dispatch", adapt_node(_authorized_revision_dispatch))
     # Dynamic Send workers form one map super-step.  The completion barrier
     # must run once only after every pending worker branch has finished;
     # otherwise several completion/aggregate tasks can survive in the same
     # checkpoint and race the post-L3 chain.
-    builder.add_node("layer_completion_check", adapt_node(layer_completion_check), defer=True)
-    builder.add_node("layer_aggregate", adapt_node(layer_aggregate_node))
+    builder.add_node("layer_completion_check", adapt_node(layer_completion_check, worker=True), defer=True)
+    builder.add_node("layer_aggregate", adapt_node(layer_aggregate_node, worker=True))
     builder.add_node("bootstrap_context", adapt_node(bootstrap_context_node))
     # ── Wave M: post-L3 主图独立节点 ──
     builder.add_node("target_projection", adapt_node(target_projection_node))

@@ -1,5 +1,6 @@
 from pathlib import Path
 
+from app.contracts.artifacts import ArtifactRef
 from app.modules.schema.contracts.execution_plan_contracts import (
     ExecutionResult,
     TaskExecutionResult,
@@ -11,15 +12,30 @@ from app.infrastructure.artifacts.runtime import ARTIFACT_KEYS
 ROOT = Path(__file__).resolve().parents[2] / "app"
 
 
+def _ref(schema_id: str) -> ArtifactRef:
+    return ArtifactRef(
+        digest="sha256:" + "a" * 64,
+        descriptor_digest="sha256:" + "b" * 64,
+        size_bytes=1,
+        schema_id=schema_id,
+        schema_version="3",
+        semantic_digest="sha256:" + "c" * 64,
+        producer_stage="execute",
+        run_id="run-1",
+        branch_id="main",
+    )
+
+
 def test_execute_has_one_root_artifact_contract() -> None:
     result = ExecutionResult(
-        execution_plan_ref={"descriptor_digest": "plan"},
-        parcel_changeset_ref={"descriptor_digest": "changes"},
-        planned_state_ref={"descriptor_digest": "planned"},
+        execution_plan_ref=_ref("ExecutionPlan"),
+        parcel_changeset_ref=_ref("ParcelChangeSet"),
+        planned_state_ref=_ref("PlannedState"),
+        layout_configs_ref=_ref("LayoutConfigs"),
         task_results=[TaskExecutionResult(task_id="task-1", status="succeeded")],
     )
 
-    assert result.parcel_changeset_ref["descriptor_digest"] == "changes"
+    assert result.parcel_changeset_ref.descriptor_digest == "sha256:" + "b" * 64
     assert result.task_results[0].task_id == "task-1"
     assert _KEY_BY_TYPE["ExecutionResult"] == "execution_result"
     assert "execution_result" in ARTIFACT_KEYS
