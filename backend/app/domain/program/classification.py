@@ -109,6 +109,31 @@ def apply_classification_decisions(
     return revised, sorted(by_target)
 
 
+def revise_program_with_decisions(
+    program: PlanningProgram,
+    raw_decisions: Any,
+) -> tuple[PlanningProgram, list[str]]:
+    """Apply explicit classification decisions and stamp the revision provenance.
+
+    Thin wrapper over ``apply_classification_decisions`` that also stamps the
+    HUMAN-review revision markers (artifact_id suffix and provenance trace).
+    Pure construction — the caller owns CAS writes.
+    """
+    revised, target_ids = apply_classification_decisions(program, raw_decisions)
+    revised.artifact_id = f"{program.artifact_id}:classification-revision"
+    revised.provenance = (
+        revised.provenance.model_copy(
+            update={
+                "module": "human_review",
+                "trace": [*(revised.provenance.trace or []), "classification_revision"],
+            }
+        )
+        if revised.provenance is not None
+        else None
+    )
+    return revised, target_ids
+
+
 def classification_program_issues(program: PlanningProgram) -> list[ProgramIssue]:
     """Build deterministic issues for missing execution classifications."""
 
@@ -132,4 +157,5 @@ __all__ = [
     "classification_program_issues",
     "classification_review_targets",
     "parse_classification_decisions",
+    "revise_program_with_decisions",
 ]

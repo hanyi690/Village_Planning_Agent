@@ -11,6 +11,11 @@ from .land_design_worker import (
     design_zone_parcel,
 )
 from .planned_state_builder import changeset_to_planned_state
+from .plan_builder import (
+    build_execution_plan,
+    classification_boundary_diagnostics,
+    defer_plan_tasks,
+)
 from .review import build_before_after_geojson, build_execute_review_package
 
 __all__ = [
@@ -25,6 +30,9 @@ __all__ = [
     "build_parcel_change_set",
     "design_all",
     "changeset_to_planned_state",
+    "build_execution_plan",
+    "classification_boundary_diagnostics",
+    "defer_plan_tasks",
     "build_execute_review_package",
     "build_before_after_geojson",
 ]

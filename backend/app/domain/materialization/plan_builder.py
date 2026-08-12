@@ -242,4 +242,35 @@ def build_execution_plan(
     )
 
 
-__all__ = ["build_execution_plan", "classification_boundary_diagnostics"]
+def defer_plan_tasks(
+    plan: ExecutionPlan,
+    target_ids: list[str],
+    review_id: str = "",
+) -> ExecutionPlan:
+    """Create an ExecutionPlan revision that moves targets to deferred_tasks.
+
+    Deferred targets leave ``worker_tasks``, their assignments are stamped
+    ``deferred``, and the revision id carries the human review reference.
+    Pure construction — the caller owns CAS writes.
+    """
+    deferred_set = set(target_ids)
+    kept_tasks: list[WorkerTask] = []
+    moved_tasks: list[WorkerTask] = []
+    for task in plan.worker_tasks:
+        if task.target_id not in deferred_set:
+            kept_tasks.append(task)
+            continue
+        assignment = task.assignment.model_copy(update={"status": "deferred"})
+        moved_tasks.append(task.model_copy(update={"assignment": assignment}))
+    return plan.model_copy(deep=True, update={
+        "plan_id": f"{plan.plan_id}:review-{review_id[:12]}",
+        "worker_tasks": kept_tasks,
+        "deferred_tasks": list(plan.deferred_tasks) + moved_tasks,
+    })
+
+
+__all__ = [
+    "build_execution_plan",
+    "classification_boundary_diagnostics",
+    "defer_plan_tasks",
+]

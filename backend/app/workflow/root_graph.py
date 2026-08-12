@@ -39,7 +39,7 @@ from app.workflow.stages.support import (
     _dump,
     _pass_gate,
 )
-from app.workflow.stage_adapter import persist_gate_decision
+from app.workflow.stage_adapter import persist_gate_decision, persist_stage_artifact
 from app.workflow.layers.context_bootstrap import bootstrap_context_node
 from app.core.events import SSEEventType
 from app.modules.schema.contracts.human_interrupt_contracts import (
@@ -498,8 +498,11 @@ def _diagnostic_manifest_patch(
     if not state.get("session_id"):
         return {}
     try:
-        from app.infrastructure.artifacts.runtime import load_artifact, store_artifact
-        from app.domain.delivery.aggregate import build_traceability_from_coverage
+        from app.infrastructure.artifacts.runtime import load_artifact
+        from app.domain.delivery.aggregate import (
+            build_traceability_from_coverage,
+            mark_manifest_diagnostic,
+        )
         from app.modules.schema.contracts.deferral_contracts import DeferralLedger
         from app.modules.schema.contracts.delivery_manifest_contracts import DeliveryManifest
         from app.modules.schema.contracts.execution_plan_contracts import ExecutionResult
@@ -517,33 +520,16 @@ def _diagnostic_manifest_patch(
             "target_ids": [entry.target_id for entry in entries],
             "actions": [entry.decision.action for entry in entries],
         }
-        diagnostic_summary = dict(terminal)
-        if existing is None:
-            coverage = getattr(reconciliation, "coverage_matrix", None)
-            manifest = DeliveryManifest(
-                delivery_status="diagnostic_only",
-                traceability=(
-                    build_traceability_from_coverage(coverage)
-                    if coverage is not None
-                    else []
-                ),
-                action_results=list(getattr(outcome, "action_results", None) or []),
-                deferral_ledger=ledger,
-                deferral_summary=deferral_summary,
-                diagnostic_summary=diagnostic_summary,
-                statutory_complete=False,
-            )
-        else:
-            manifest = existing.model_copy(deep=True, update={
-                "delivery_status": "diagnostic_only",
-                "statutory_complete": False,
-                "diagnostic_summary": diagnostic_summary,
-                "deferral_ledger": ledger or existing.deferral_ledger,
-                "deferral_summary": deferral_summary,
-            })
-        ref = store_artifact(
+        manifest = mark_manifest_diagnostic(
+            existing,
+            ledger=ledger,
+            execution_result=outcome,
+            reconciliation_report=reconciliation,
+            terminal=terminal,
+            deferral_summary=deferral_summary,
+        )
+        ref = persist_stage_artifact(
             state,
-            "delivery_manifest",
             "end_diagnostic",
             "DeliveryManifest",
             manifest,
@@ -1386,8 +1372,8 @@ async def _apply_classification_revision(
     decisions: Dict[str, Any],
 ) -> Dict[str, Any]:
     """Persist an explicit classification revision and restart spatial stages."""
-    from app.domain.program.classification import apply_classification_decisions
-    from app.infrastructure.artifacts.runtime import load_artifact, store_artifact
+    from app.domain.program.classification import revise_program_with_decisions
+    from app.infrastructure.artifacts.runtime import load_artifact
     from app.modules.schema.contracts.l3_contracts import PlanningProgram
 
     raw = decisions.get("classification_decisions")
@@ -1401,7 +1387,7 @@ async def _apply_classification_revision(
             }
         }
     try:
-        revised, target_ids = apply_classification_decisions(program, raw)
+        revised, target_ids = revise_program_with_decisions(program, raw)
     except (TypeError, ValueError) as exc:
         return {
             "fatal_error": {
@@ -1411,16 +1397,8 @@ async def _apply_classification_revision(
             }
         }
 
-    revised.artifact_id = f"{program.artifact_id}:classification-revision"
-    revised.provenance = revised.provenance.model_copy(
-        update={
-            "module": "human_review",
-            "trace": [*(revised.provenance.trace or []), "classification_revision"],
-        }
-    ) if revised.provenance is not None else None
-    ref = store_artifact(
+    ref = persist_stage_artifact(
         state,
-        "planning_program",
         "human_review",
         "PlanningProgram",
         revised,
@@ -1444,12 +1422,11 @@ async def _apply_structural_target_deferrals(
     stage: str,
 ) -> Dict[str, Any]:
     """Persist target deferrals and a new immutable execution-plan revision."""
-    from app.infrastructure.artifacts.runtime import load_artifact, store_artifact
-    from app.modules.schema.contracts.deferral_contracts import (
-        DeferralLedger,
-        HumanDeferralDecision,
-        TargetDeferral,
-    )
+    from app.domain.allocation.select_service import revise_site_selection_deferral
+    from app.domain.delivery.deferral_ledger import append_ledger, build_target_deferrals
+    from app.domain.materialization.plan_builder import defer_plan_tasks
+    from app.infrastructure.artifacts.runtime import load_artifact
+    from app.modules.schema.contracts.deferral_contracts import DeferralLedger
     from app.modules.schema.contracts.execution_plan_contracts import (
         ExecutionResult,
         ExecutionPlan,
@@ -1493,11 +1470,6 @@ async def _apply_structural_target_deferrals(
         }
 
     review_id = str(state.get("human_review_event_id") or "human-review")
-    decision = HumanDeferralDecision(
-        decision_id=review_id,
-        decided_by=str(decisions.get("decided_by") or ""),
-        rationale=str(decisions.get("feedback") or ""),
-    )
     refs = state.get("artifact_refs") or {}
     report_key = "validation_report" if stage == "validate" else "reconciliation_report"
     source_refs = tuple(
@@ -1505,61 +1477,32 @@ async def _apply_structural_target_deferrals(
         for key in ("execution_result", report_key)
     )
     existing_ledger = load_artifact(state, "deferral_ledger", DeferralLedger)
-    existing_entries = tuple(getattr(existing_ledger, "entries", ()) or ())
-    new_entries = tuple(
-        TargetDeferral(
-            target_id=target_id,
-            reason=f"{stage}_structural_failure",
-            source_refs=source_refs,
-            decision=decision,
-        )
-        for target_id in target_ids
+    new_entries = build_target_deferrals(
+        target_ids,
+        reason=f"{stage}_structural_failure",
+        source_refs=source_refs,
+        review_id=review_id,
+        decided_by=str(decisions.get("decided_by") or ""),
+        rationale=str(decisions.get("feedback") or ""),
     )
-    ledger = DeferralLedger(entries=existing_entries + new_entries)
+    ledger = append_ledger(existing_ledger, new_entries)
 
     deferred_set = set(target_ids)
-    kept_tasks = []
-    moved_tasks = []
-    for task in plan.worker_tasks:
-        if task.target_id not in deferred_set:
-            kept_tasks.append(task)
-            continue
-        assignment = task.assignment.model_copy(update={"status": "deferred"})
-        moved_tasks.append(task.model_copy(update={"assignment": assignment}))
-    revised_plan = plan.model_copy(deep=True, update={
-        "plan_id": f"{plan.plan_id}:review-{review_id[:12]}",
-        "worker_tasks": kept_tasks,
-        "deferred_tasks": list(plan.deferred_tasks) + moved_tasks,
-    })
+    revised_plan = defer_plan_tasks(plan, target_ids, review_id=review_id)
     artifact_refs = {
-        "deferral_ledger": store_artifact(
-            state, "deferral_ledger", "human_review", "DeferralLedger", ledger
+        "deferral_ledger": persist_stage_artifact(
+            state, "human_review", "DeferralLedger", ledger
         ),
     }
 
     selection = load_artifact(state, "site_selection", SiteSelectionDecision)
     if selection is not None:
-        revised_selection = selection.model_copy(deep=True)
-        revised_selection.target_assignments = [
-            assignment.model_copy(update={"status": "deferred"})
-            if assignment.target_id in deferred_set else assignment
-            for assignment in revised_selection.target_assignments
-        ]
-        factors = dict(revised_selection.decision_factors or {})
-        prior = [str(value) for value in factors.get("deferred_targets", [])]
-        factors["deferred_targets"] = list(dict.fromkeys(prior + target_ids))
-        factors["deferred_by"] = "human_review"
-        revised_selection.decision_factors = factors
-        revised_selection.refresh_derived_summaries()
-        artifact_refs["site_selection"] = store_artifact(
-            state,
-            "site_selection",
-            "human_review",
-            "SiteSelectionDecision",
-            revised_selection,
+        revised_selection = revise_site_selection_deferral(selection, target_ids)
+        artifact_refs["site_selection"] = persist_stage_artifact(
+            state, "human_review", "SiteSelectionDecision", revised_selection
         )
-    artifact_refs["execution_plan"] = store_artifact(
-        state, "execution_plan", "human_review", "ExecutionPlan", revised_plan
+    artifact_refs["execution_plan"] = persist_stage_artifact(
+        state, "human_review", "ExecutionPlan", revised_plan
     )
 
     remaining = sorted(gate_ids - deferred_set)
@@ -1612,12 +1555,9 @@ async def _record_target_deferrals(
     target_ids: list[str],
 ) -> Dict[str, Any]:
     """Persist an immutable ledger only for explicitly unresolved targets."""
-    from app.infrastructure.artifacts.runtime import load_artifact, store_artifact
-    from app.modules.schema.contracts.deferral_contracts import (
-        DeferralLedger,
-        HumanDeferralDecision,
-        TargetDeferral,
-    )
+    from app.domain.delivery.deferral_ledger import append_ledger, build_target_deferrals
+    from app.infrastructure.artifacts.runtime import load_artifact
+    from app.modules.schema.contracts.deferral_contracts import DeferralLedger
     from app.modules.schema.contracts.grounding_contracts import GroundingResult
 
     grounding = load_artifact(state, "grounding_result", GroundingResult)
@@ -1661,27 +1601,20 @@ async def _record_target_deferrals(
         }
     grounding_ref = (state.get("artifact_refs") or {}).get("grounding_result") or {}
     grounding_id = str(grounding_ref.get("artifact_id") or "grounding_result")
-    decision = HumanDeferralDecision(
-        decision_id=str(state.get("human_review_event_id") or "human-review"),
+    new_entries = build_target_deferrals(
+        target_ids,
+        reason="spatial_reference_unresolved",
+        source_refs=lambda target_id: (
+            f"artifact:grounding_result:{grounding_id}",
+            f"spec:{spec_ids_by_target[target_id]}",
+        ),
+        review_id=str(state.get("human_review_event_id") or "human-review"),
         decided_by=str(decisions.get("decided_by") or ""),
         rationale=str(decisions.get("feedback") or ""),
     )
-    ledger = DeferralLedger(
-        entries=tuple(
-            TargetDeferral(
-                target_id=target_id,
-                reason="spatial_reference_unresolved",
-                source_refs=(
-                    f"artifact:grounding_result:{grounding_id}",
-                    f"spec:{spec_ids_by_target[target_id]}",
-                ),
-                decision=decision,
-            )
-            for target_id in target_ids
-        )
-    )
-    ref = store_artifact(
-        state, "deferral_ledger", "human_review", "DeferralLedger", ledger
+    ledger = append_ledger(None, new_entries)
+    ref = persist_stage_artifact(
+        state, "human_review", "DeferralLedger", ledger
     )
     remaining = sorted(unresolved_ids - set(target_ids))
     ground_gate_patch = {
@@ -1729,12 +1662,9 @@ async def _record_select_target_deferrals(
     target_ids: list[str],
 ) -> Dict[str, Any]:
     """Record explicit SELECT-level deferrals in the immutable ledger."""
-    from app.infrastructure.artifacts.runtime import store_artifact
-    from app.modules.schema.contracts.deferral_contracts import (
-        DeferralLedger,
-        HumanDeferralDecision,
-        TargetDeferral,
-    )
+    from app.domain.delivery.deferral_ledger import append_ledger, build_target_deferrals
+    from app.infrastructure.artifacts.runtime import load_artifact
+    from app.modules.schema.contracts.deferral_contracts import DeferralLedger
 
     try:
         gate = _root_gate_payload(state, "select")
@@ -1767,27 +1697,20 @@ async def _record_select_target_deferrals(
         }
 
     refs = state.get("artifact_refs") or {}
-    decision = HumanDeferralDecision(
-        decision_id=str(state.get("human_review_event_id") or "human-review"),
+    existing = load_artifact(state, "deferral_ledger", DeferralLedger)
+    new_entries = build_target_deferrals(
+        target_ids,
+        reason="selection_no_candidate",
+        source_refs=lambda target_id: (
+            f"artifact:site_selection:{(refs.get('site_selection') or {}).get('descriptor_digest', 'site_selection')}",
+            f"artifact:grounding_result:{(refs.get('grounding_result') or {}).get('descriptor_digest', 'grounding_result')}",
+        ),
+        review_id=str(state.get("human_review_event_id") or "human-review"),
         decided_by=str(decisions.get("decided_by") or ""),
         rationale=str(decisions.get("feedback") or ""),
     )
-    existing = state.get("deferral_ledger")
-    entries = list(getattr(existing, "entries", ()) or [])
-    entries.extend(
-        TargetDeferral(
-            target_id=target_id,
-            reason="selection_no_candidate",
-            source_refs=(
-                f"artifact:site_selection:{(refs.get('site_selection') or {}).get('descriptor_digest', 'site_selection')}",
-                f"artifact:grounding_result:{(refs.get('grounding_result') or {}).get('descriptor_digest', 'grounding_result')}",
-            ),
-            decision=decision,
-        )
-        for target_id in target_ids
-    )
-    ledger = DeferralLedger(entries=tuple(entries))
-    ref = store_artifact(state, "deferral_ledger", "human_review", "DeferralLedger", ledger)
+    ledger = append_ledger(existing, new_entries)
+    ref = persist_stage_artifact(state, "human_review", "DeferralLedger", ledger)
     remaining = sorted(allowed - set(target_ids))
     return {
         "artifact_refs": {"deferral_ledger": ref},
@@ -1805,7 +1728,8 @@ async def _apply_deferred_select_review(
     state: Dict[str, Any], deferred: list[str]
 ) -> Dict[str, Any]:
     """Create a traceable SELECT revision for explicit human deferrals."""
-    from app.infrastructure.artifacts.runtime import load_artifact, store_artifact
+    from app.domain.allocation.select_service import revise_site_selection_deferral
+    from app.infrastructure.artifacts.runtime import load_artifact
     from app.modules.schema.contracts.execution_plan_contracts import ExecutionPlan
     from app.modules.schema.contracts.parse_result_contracts import IntentCompilationResult
     from app.modules.schema.contracts.selection_contracts import SiteSelectionDecision
@@ -1827,19 +1751,11 @@ async def _apply_deferred_select_review(
             "human_deferred_select_revision": False,
         }
 
-    revised = decision.model_copy(deep=True)
-    factors = dict(revised.decision_factors or {})
-    factors.update({
-        "unplaced_count": 0,
-        "deferred_count": len(deferred),
-        "deferred_targets": deferred,
-        "deferred_by": "human_review",
-    })
-    revised.decision_factors = factors
-    revised.review_status = "human_approved"
-    select_ref = store_artifact(
+    revised = revise_site_selection_deferral(
+        decision, deferred, review_status="human_approved"
+    )
+    select_ref = persist_stage_artifact(
         state,
-        "site_selection",
         "human_review",
         "SiteSelectionDecision",
         revised,
@@ -1851,8 +1767,8 @@ async def _apply_deferred_select_review(
     refs = {"site_selection": select_ref}
     if plan is not None:
         plan_revision = plan.model_copy(deep=True)
-        refs["execution_plan"] = store_artifact(
-            state, "execution_plan", "human_review", "ExecutionPlan", plan_revision
+        refs["execution_plan"] = persist_stage_artifact(
+            state, "human_review", "ExecutionPlan", plan_revision
         )
 
     gate = _pass_gate("select").model_dump(mode="json")

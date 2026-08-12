@@ -7,7 +7,9 @@ from app.domain.delivery.aggregate import (
     build_traceability_from_coverage,
     collect_upstream_human_items,
     deliver_aggregate,
+    mark_manifest_diagnostic,
 )
+from app.domain.delivery.deferral_ledger import append_ledger, build_target_deferrals
 from app.domain.delivery.checks import (
     REQUIRED_STATUTORY_LAYERS,
     check_classification_for_statutory,
@@ -24,6 +26,9 @@ __all__ = [
     "build_traceability_from_coverage",
     "collect_upstream_human_items",
     "deliver_aggregate",
+    "mark_manifest_diagnostic",
+    "append_ledger",
+    "build_target_deferrals",
     "check_statutory_layers_complete",
     "check_traceability_complete",
     "check_classification_for_statutory",

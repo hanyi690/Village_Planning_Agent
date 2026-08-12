@@ -29,7 +29,10 @@ from app.modules.schema.contracts.execution_plan_contracts import (
     ExecutionResult,
 )
 from app.modules.schema.contracts.provenance import Provenance
-from app.modules.schema.contracts.reconciliation_contracts import CoverageMatrix
+from app.modules.schema.contracts.reconciliation_contracts import (
+    CoverageMatrix,
+    ReconciliationReport,
+)
 from app.modules.spatial_ops.land_balance import check_delivery_gate
 
 
@@ -209,6 +212,46 @@ def _execution_blockers(
     return blockers
 
 
+def mark_manifest_diagnostic(
+    existing: DeliveryManifest | None,
+    *,
+    ledger: DeferralLedger | None,
+    execution_result: ExecutionResult | None,
+    reconciliation_report: ReconciliationReport | None,
+    terminal: dict,
+    deferral_summary: dict,
+) -> DeliveryManifest:
+    """Re-persist the delivery manifest in ``diagnostic_only`` terminal state.
+
+    Mirrors the end_diagnostic patch: a fresh manifest is built when none
+    exists, otherwise the existing manifest is deep-copied with only the
+    diagnostic fields updated. Pure construction — the caller owns CAS writes.
+    """
+    diagnostic_summary = dict(terminal)
+    if existing is None:
+        coverage = getattr(reconciliation_report, "coverage_matrix", None)
+        return DeliveryManifest(
+            delivery_status="diagnostic_only",
+            traceability=(
+                build_traceability_from_coverage(coverage)
+                if coverage is not None
+                else []
+            ),
+            action_results=list(getattr(execution_result, "action_results", None) or []),
+            deferral_ledger=ledger,
+            deferral_summary=deferral_summary,
+            diagnostic_summary=diagnostic_summary,
+            statutory_complete=False,
+        )
+    return existing.model_copy(deep=True, update={
+        "delivery_status": "diagnostic_only",
+        "statutory_complete": False,
+        "diagnostic_summary": diagnostic_summary,
+        "deferral_ledger": ledger or existing.deferral_ledger,
+        "deferral_summary": deferral_summary,
+    })
+
+
 def deliver_aggregate(
     planned_state,
     validation_report,
@@ -373,4 +416,5 @@ __all__ = [
     "build_deliverables_from_export",
     "collect_upstream_human_items",
     "deliver_aggregate",
+    "mark_manifest_diagnostic",
 ]

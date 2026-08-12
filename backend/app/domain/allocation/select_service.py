@@ -602,8 +602,54 @@ def select_aggregate(
     return decision, briefs
 
 
+def revise_site_selection_deferral(
+    decision: SiteSelectionDecision,
+    target_ids: list[str],
+    *,
+    review_status: str = "deferred",
+    run_id: str = "",
+    session_id: str = "",
+) -> SiteSelectionDecision:
+    """Apply an explicit human deferral to a ``SiteSelectionDecision`` revision.
+
+    ``review_status="deferred"`` marks the affected assignments deferred and
+    accumulates ``deferred_targets`` into ``decision_factors`` (HUMAN target
+    deferral path). Any other status mirrors the human-approved SELECT revision:
+    the decision factors are replaced with the deferred snapshot and
+    ``review_status`` is stamped ``human_approved``. Pure construction — the
+    caller owns CAS writes.
+    """
+    deferred = [str(target_id) for target_id in target_ids]
+    revised = decision.model_copy(deep=True)
+    factors = dict(revised.decision_factors or {})
+    if review_status == "deferred":
+        deferred_set = set(deferred)
+        revised.target_assignments = [
+            assignment.model_copy(update={"status": "deferred"})
+            if assignment.target_id in deferred_set
+            else assignment
+            for assignment in revised.target_assignments
+        ]
+        prior = [str(value) for value in factors.get("deferred_targets", [])]
+        factors["deferred_targets"] = list(dict.fromkeys(prior + deferred))
+        factors["deferred_by"] = "human_review"
+        revised.decision_factors = factors
+        revised.refresh_derived_summaries()
+    else:
+        factors.update({
+            "unplaced_count": 0,
+            "deferred_count": len(deferred),
+            "deferred_targets": deferred,
+            "deferred_by": "human_review",
+        })
+        revised.decision_factors = factors
+        revised.review_status = "human_approved"
+    return revised
+
+
 __all__ = [
     "select_aggregate",
     "build_site_selection_decision",
     "build_land_design_brief",
+    "revise_site_selection_deferral",
 ]
