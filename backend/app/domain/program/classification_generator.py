@@ -94,7 +94,7 @@ async def generate_classification_decisions(
     program: Any,
     *,
     llm: Any = None,
-    max_targets: int = 60,
+    max_targets: int = 200,
 ) -> list[Any]:
     """Generate closed-set appendix5 classification decisions for unresolved targets."""
     from app.contracts.artifacts.classification_ref import (
