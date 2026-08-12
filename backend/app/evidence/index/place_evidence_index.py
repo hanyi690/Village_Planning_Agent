@@ -349,6 +349,11 @@ class PlaceEvidenceIndex:
             if norm and norm in key:
                 seen[entry.canonical_name] = entry
                 trace.append({"step": "substring", "matched": entry.canonical_name})
+            elif norm and key and key in norm:
+                # Forward substring: a long mention such as
+                # '金田河沿线农业发展区' contains the entity '金田河'.
+                seen[entry.canonical_name] = entry
+                trace.append({"step": "mention_contains_entity", "matched": entry.canonical_name})
 
         for key, entry in self._by_alias.items():
             if entry.canonical_name in seen:
@@ -356,6 +361,9 @@ class PlaceEvidenceIndex:
             if norm and norm in key:
                 seen[entry.canonical_name] = entry
                 trace.append({"step": "alias_substring", "matched": entry.canonical_name})
+            elif norm and key and key in norm:
+                seen[entry.canonical_name] = entry
+                trace.append({"step": "alias_contains_entity", "matched": entry.canonical_name})
 
         for entry in seen.values():
             evidence = score_candidate(mention, entry, role=role, hints=hints, context=self.context)

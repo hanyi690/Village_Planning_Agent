@@ -112,6 +112,32 @@ def _normalize_spec_mention(label: str) -> str:
     return token
 
 
+def _keyword_dlmc_bsms(context: Any, mention: str) -> list[str]:
+    """Fallback: long mentions containing transport/water/forest keywords bind
+    the corresponding DLMC parcel groups even when no typed fact matches."""
+    try:
+        parcels = list(context.current_parcels() or [])
+    except Exception:
+        return []
+    if not parcels:
+        return []
+    targets = []
+    if any(k in mention for k in ("村道", "乡道", "道路", "交通")):
+        targets.extend(["村内交通用地", "对外交通用地"])
+    if "河" in mention or "水域" in mention:
+        targets.append("水域")
+    if any(k in mention for k in ("林", "山", "生态", "绿")):
+        targets.extend(["生态林", "商品林"])
+    if not targets:
+        return []
+    bsms = [
+        str(p.bsm)
+        for p in parcels
+        if str(getattr(p, "name", "") or "") in targets and str(getattr(p, "bsm", "") or "")
+    ]
+    return list(dict.fromkeys(bsms))
+
+
 class SpatialResolver:
     """One resolver bound to one ``PlanningContext``."""
 
@@ -268,6 +294,10 @@ class SpatialResolver:
                         candidates = CandidateSet(
                             bsms=list(dict.fromkeys(evidence_bsms))
                         )
+                    elif mention:
+                        keyword_bsms = _keyword_dlmc_bsms(self.context, mention)
+                        if keyword_bsms:
+                            candidates = CandidateSet(bsms=keyword_bsms)
             if not candidates.bsms and not candidates.ref_bsms:
                 port = getattr(self.context.ports, "spatial_query", None)
                 if port is not None:
