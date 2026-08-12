@@ -10,7 +10,7 @@ from typing import Any
 
 from rdflib import Literal, RDF, URIRef
 
-from app.modules.ports.semantic_query import SemanticQueryPort
+from app.contracts.ports.semantic_query import SemanticQueryPort
 from app.modules.kg.ontology import PLN
 from app.modules.kg.queries.spatial_ref import (
     _entity_ids_by_label,

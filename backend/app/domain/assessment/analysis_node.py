@@ -534,9 +534,9 @@ def _build_prompt(cfg, state, rag_context, deps: str = "", same_layer_contexts: 
         deps: 前序依赖报告（从数据库加载）
         same_layer_contexts: 同层依赖报告
     """
-    from ...modules.prompts.analysis import get_dimension_prompt as get_layer1_prompt
-    from ...modules.prompts.concept import get_dimension_prompt as get_layer2_prompt
-    from ...modules.prompts.detailed import get_dimension_prompt as get_layer3_prompt
+    from app.infrastructure.llm.prompts.analysis import get_dimension_prompt as get_layer1_prompt
+    from app.infrastructure.llm.prompts.concept import get_dimension_prompt as get_layer2_prompt
+    from app.infrastructure.llm.prompts.detailed import get_dimension_prompt as get_layer3_prompt
 
     dim_key = getattr(cfg, 'key', state.get("dimension_key", ""))
     layer = getattr(cfg, 'layer', get_dimension_layer(dim_key) or 1)

@@ -11,14 +11,14 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from app.modules.ports.bundle_assembly import BundleAssemblyPort
-from app.modules.ports.context_provider import ContextProviderPort
-from app.modules.ports.gazetteer import GazetteerPort
-from app.modules.ports.nomenclature_registry import NomenclatureRegistryPort
-from app.modules.ports.road_planner import RoadPlannerPort
-from app.modules.ports.semantic_query import SemanticQueryPort
-from app.modules.ports.spatial_query import SpatialQueryPort
-from app.modules.ports.zone_allocator import ZoneAllocatorPort
+from app.contracts.ports.bundle_assembly import BundleAssemblyPort
+from app.contracts.ports.context import ContextProviderPort
+from app.contracts.ports.gazetteer import GazetteerPort
+from app.contracts.ports.nomenclature_registry import NomenclatureRegistryPort
+from app.contracts.ports.road_planner import RoadPlannerPort
+from app.contracts.ports.semantic_query import SemanticQueryPort
+from app.contracts.ports.spatial_query import SpatialQueryPort
+from app.contracts.ports.zone_allocator import ZoneAllocatorPort
 
 
 @dataclass

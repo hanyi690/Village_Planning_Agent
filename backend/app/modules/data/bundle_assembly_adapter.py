@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from app.modules.ports.bundle_assembly import BundleAssemblyPort
+from app.contracts.ports.bundle_assembly import BundleAssemblyPort
 
 
 class DataBundleAssemblyAdapter:

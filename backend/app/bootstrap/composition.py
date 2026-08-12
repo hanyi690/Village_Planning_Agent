@@ -28,7 +28,7 @@ class CompositionRoot:
             from app.infrastructure.reports.report_store import ReportStore
 
             cls._report_store = ReportStore.get_instance()
-            from app.modules.ports import registry
+            from app.infrastructure import registry
 
             registry.set_report_store_default(cls._report_store)
         if cls._task_supervisor is None:
@@ -54,7 +54,7 @@ class CompositionRoot:
             from app.services.context.planning_context import get_cached_context
 
             cls._context_provider = get_cached_context
-            from app.modules.ports import registry
+            from app.infrastructure import registry
 
             registry.set_context_reader_default(cls._context_provider)
         return cls._context_provider

@@ -235,7 +235,7 @@ class RagService:
             多条检索查询字符串
         """
         if store is None:
-            from app.modules.ports.registry import get_report_store_default
+            from app.infrastructure.registry import get_report_store_default
 
             store = get_report_store_default()
 

@@ -20,7 +20,7 @@ from typing import Any, Dict, Optional
 
 from app.data.model.snapshot import SessionDataSnapshot
 from app.modules.context.planning_context import PlanningContext
-from app.modules.ports.planning_ports import PlanningPorts
+from app.contracts.ports.planning_ports import PlanningPorts
 from app.spatial.model.workspace import SpatialWorkspace
 from app.utils.logger import get_logger
 

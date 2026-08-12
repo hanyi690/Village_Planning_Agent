@@ -49,7 +49,7 @@ async def extract_structured_text(
     """
     try:
         from app.core.llm import create_llm, create_flash_llm
-        from app.modules.prompts.parse_prompts import EXTRACT_TABLES_PROMPT
+        from app.infrastructure.llm.prompts.parse_prompts import EXTRACT_TABLES_PROMPT
 
         # Use thinking-enabled LLM via factory (includes request_timeout, api_key, streaming)
         # max_tokens=32768 must be >> thinking_budget=2000 (DashScope: max_tokens = thinking + output total)

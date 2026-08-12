@@ -1,7 +1,9 @@
 """Spatial query port - geometry and spatial-reference query boundary.
 
 Implemented by kg-side adapters (KG spatial reference resolution) and
-consumed by spatial_ops / agent layers.
+consumed by spatial_ops / agent layers.  This is the synchronous, KG-bound
+spatial read protocol; ``app.contracts.ports.spatial.SpatialQueryPort`` is the
+async workspace-based read boundary (blueprint M2) and stays distinct.
 """
 from __future__ import annotations
 

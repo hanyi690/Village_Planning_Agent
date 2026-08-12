@@ -26,7 +26,7 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List
 
 from app.data.model.snapshot import SessionDataSnapshot
-from app.modules.ports.planning_ports import PlanningPorts
+from app.contracts.ports.planning_ports import PlanningPorts
 from app.spatial.model.workspace import SpatialWorkspace
 
 

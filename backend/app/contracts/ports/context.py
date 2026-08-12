@@ -1,8 +1,13 @@
-"""Planning context provider port (blueprint M0/M5 boundary)."""
+"""Planning context provider ports (blueprint M0/M5 boundary).
+
+``PlanningContextProvider`` is the sync/async session-context boundary used by
+workflow stages.  ``ContextProviderPort`` is the injected run-scoped provider
+bundle carried by ``PlanningPorts`` (get_context / get_dataset / get_version).
+"""
 
 from __future__ import annotations
 
-from typing import Protocol, runtime_checkable
+from typing import Any, Protocol, runtime_checkable
 
 
 @runtime_checkable
@@ -22,4 +27,12 @@ class PlanningContextProvider(Protocol):
         ...
 
 
-__all__ = ["PlanningContextProvider"]
+class ContextProviderPort(Protocol):
+    """Run-scoped context/dataset access injected via ``PlanningPorts``."""
+
+    def get_context(self, run_id: str) -> Any: ...
+    def get_dataset(self, run_id: str, dataset_id: str) -> Any: ...
+    def get_version(self, run_id: str) -> str: ...
+
+
+__all__ = ["ContextProviderPort", "PlanningContextProvider"]

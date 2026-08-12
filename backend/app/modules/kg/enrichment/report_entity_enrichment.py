@@ -621,7 +621,7 @@ async def extract_bindings(
     # updates the same in-memory gazetteer object consumed by later GROUND;
     # rebuilding the whole context here would violate the frozen context_ref.
     try:
-        from app.modules.ports.registry import get_context_reader_default
+        from app.infrastructure.registry import get_context_reader_default
 
         get_context = get_context_reader_default()
         cached_context = get_context(session_id) if get_context is not None else None

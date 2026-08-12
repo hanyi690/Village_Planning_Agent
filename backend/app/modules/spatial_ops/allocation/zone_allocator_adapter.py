@@ -16,7 +16,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 
-from app.modules.ports.zone_allocator import ZoneAllocatorPort
+from app.contracts.ports.zone_allocator import ZoneAllocatorPort
 from app.modules.schema.contracts.execution_plan_contracts import (
     ZoneAllocationSolution,
     ZoneAssignmentEntry,

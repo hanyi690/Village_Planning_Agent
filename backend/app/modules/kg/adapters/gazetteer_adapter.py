@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import asdict
 from typing import Any
 
-from app.modules.ports.gazetteer import GazetteerPort
+from app.contracts.ports.gazetteer import GazetteerPort
 from app.modules.schema.contracts.gazetteer_contracts import GazetteerEntryLike
 
 
