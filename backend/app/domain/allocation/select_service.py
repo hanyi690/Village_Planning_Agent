@@ -503,6 +503,19 @@ def select_aggregate(
                 if site_bsms:
                     facility.candidate_bsms = site_bsms
                 break
+    # Backfill zone candidate_bsms from grounding candidate sites so the
+    # zone worker reclassifies the grounded parcels instead of an empty set.
+    zone_targets_all = list(getattr(intent, "zone_targets", None) or [])
+    for zone in zone_targets_all:
+        if getattr(zone, "candidate_bsms", None):
+            continue
+        zone_id = getattr(zone, "target_id", "") or ""
+        for site in candidate_sites:
+            if getattr(site, "target_ref", None) == zone_id:
+                site_bsms = list(getattr(site, "source_parcels", None) or [])
+                if site_bsms:
+                    zone.candidate_bsms = site_bsms
+                break
     facility_placements: Dict[str, Dict[str, Any]] = {}
     facility_rank = len(placements) + 1
     for i, facility in enumerate(facilities):
