@@ -79,6 +79,8 @@ def _build_synthetic_intent_message(session_id: str, reason: str = "用户启动
     )
 
 
+from langgraph.errors import GraphInterrupt
+
 class PlanningRuntimeService:
     """
     Unified Planning Runtime Service - LangGraph + Business Logic.
@@ -336,47 +338,59 @@ class PlanningRuntimeService:
             last_phase = ""
             observed_signatures = []
 
-            async for part in stream_iterator:
-                if part.get("type") == 'values':
-                    state = materialize_workflow_state(part["data"])
-                    observed_signatures.append((
-                        state.get("phase"),
-                        state.get("current_stage"),
-                        state.get("next_stage"),
-                        state.get("paused_stage"),
-                        state.get("human_review_event_id"),
-                    ))
-                    # Detect layer completion for SSE events (correlate with checkpoint)
-                    if state.get('previous_layer') and state.get('previous_layer', 0) > 0:
-                        layer = state.get('previous_layer', 0)
-                        if layer > 0:
-                            last_completed_layer = layer
-                            last_phase = state.get('phase', '')
+            try:
+                async for part in stream_iterator:
+                    if part.get("type") == 'values':
+                        state = materialize_workflow_state(part["data"])
+                        observed_signatures.append((
+                            state.get("phase"),
+                            state.get("current_stage"),
+                            state.get("next_stage"),
+                            state.get("paused_stage"),
+                            state.get("human_review_event_id"),
+                        ))
+                        # Detect layer completion for SSE events (correlate with checkpoint)
+                        if state.get('previous_layer') and state.get('previous_layer', 0) > 0:
+                            layer = state.get('previous_layer', 0)
+                            if layer > 0:
+                                last_completed_layer = layer
+                                last_phase = state.get('phase', '')
 
-                    # Detect revision completion
-                    last_revised = state.get('last_revised_dimensions', [])
-                    if last_revised and not state.get('is_revision', False):
-                        logger.info(
-                            "[PlanningRuntimeService] [%s] Revision completed after resume: %d dims",
-                            session_id, len(last_revised),
-                        )
-
-                elif part.get("type") == 'checkpoints':
-                    data = part["data"]
-                    await checkpoint_persistence_manager.mark_write_complete(session_id)
-                    if last_completed_layer > 0:
-                        checkpoint_id = None
-                        if hasattr(data, 'config'):
-                            checkpoint_id = data.config.get('configurable', {}).get('checkpoint_id', '')
-                        if checkpoint_id:
-                            checkpoint_saved_event = create_checkpoint_saved_event(
-                                checkpoint_id=checkpoint_id,
-                                layer=last_completed_layer,
-                                phase=last_phase,
-                                session_id=session_id,
+                        # Detect revision completion
+                        last_revised = state.get('last_revised_dimensions', [])
+                        if last_revised and not state.get('is_revision', False):
+                            logger.info(
+                                "[PlanningRuntimeService] [%s] Revision completed after resume: %d dims",
+                                session_id, len(last_revised),
                             )
-                            sse_manager.publish_sync(session_id, checkpoint_saved_event)
-                            last_completed_layer = 0
+
+                    elif part.get("type") == 'checkpoints':
+                        data = part["data"]
+                        await checkpoint_persistence_manager.mark_write_complete(session_id)
+                        if last_completed_layer > 0:
+                            checkpoint_id = None
+                            if hasattr(data, 'config'):
+                                checkpoint_id = data.config.get('configurable', {}).get('checkpoint_id', '')
+                            if checkpoint_id:
+                                checkpoint_saved_event = create_checkpoint_saved_event(
+                                    checkpoint_id=checkpoint_id,
+                                    layer=last_completed_layer,
+                                    phase=last_phase,
+                                    session_id=session_id,
+                                )
+                                sse_manager.publish_sync(session_id, checkpoint_saved_event)
+                                last_completed_layer = 0
+
+            except GraphInterrupt:
+                # A resumed decision can advance the graph straight into the
+                # next HUMAN checkpoint (e.g. VALIDATE approve -> deferral ->
+                # another gate HUMAN).  That is a valid pause, not a failure:
+                # final_state below reflects the new pending interrupt and the
+                # caller keeps polling the review endpoint.
+                logger.info(
+                    "[PlanningRuntimeService] [%s] Resume advanced into a new HUMAN interrupt",
+                    session_id,
+                )
 
             final_state = await cls.aget_state_values(session_id)
             final_signature = (
