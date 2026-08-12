@@ -6,7 +6,7 @@ pure data models with no agent logic, so they live in schema rather than
 in the agent package.
 
 This breaks the reverse dependency where KG previously imported
-SpatialPlanningIntent from app.agent.select.parse_state.
+SpatialPlanningIntent from the legacy select parse_state.
 
 EXECUTE sub-task field mapping:
   layout:   ZoneTarget.land_use/area_ratio/density/adjacency_rules/vne_code

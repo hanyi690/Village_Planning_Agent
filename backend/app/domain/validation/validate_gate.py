@@ -1,7 +1,7 @@
 """VALIDATE gate evaluator - 5-way responsibility router over a ValidationReport.
 
 Pure function: ValidationReport -> GateDecision. No I/O, no LLM, no KG --
-deterministic only. Mirrors the gate convention in app.agent.select.gate
+deterministic only. Mirrors the gate convention in app.domain.allocation.select_gate
 with stage="validate".
 
 Routes (precedence high -> low):

@@ -1,6 +1,6 @@
 """SELECT must preserve target output semantics for EXECUTE dispatch."""
 
-from app.agent.select.aggregate import build_site_selection_decision
+from app.domain.allocation.select_service import build_site_selection_decision
 from app.modules.spatial_ops.selection import PlacementDecision
 
 

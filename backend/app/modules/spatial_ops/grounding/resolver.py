@@ -453,7 +453,7 @@ def resolve_spatial_anchors(
     Thin wrapper around resolve_intent_anchors. The gazetteer should be
     passed by the caller (loaded via PlanningContext). If not provided,
     resolution is skipped (returns 0).
-    Migrated from app.agent.select.parse_agent.resolve_spatial_anchors (Wave M2).
+    Migrated from the legacy select parse agent's resolve_spatial_anchors (Wave M2).
     """
     if gazetteer is None and not village_anchors:
         return 0

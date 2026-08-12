@@ -1,7 +1,7 @@
 """SELECT gate evaluator - 3-route decision over a SiteSelectionDecision.
 
 Pure function: SiteSelectionDecision -> GateDecision. No I/O. Mirrors the gate
-convention in app.agent.ground.gate with stage="select".
+convention in app.domain.ground.gate with stage="select".
 
 Routes (precedence high -> low):
   HUMAN   -> one or more target assignments is unplaced; the target must be

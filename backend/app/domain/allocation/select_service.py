@@ -266,7 +266,7 @@ def build_site_selection_decision(
         provenance=Provenance(
             source="select_aggregate",
             run_id=run_id,
-            module="app.agent.select.aggregate",
+            module="app.domain.allocation.select_service",
             trace=[f"session:{session_id}"],
             natural_language_description=(
                 f"SELECT aggregate for {len(placements)} targets"

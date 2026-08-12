@@ -1,4 +1,4 @@
-from app.agent.select.gate import evaluate_select_gate
+from app.domain.allocation.select_gate import evaluate_select_gate
 from app.domain.allocation import build_portfolio_decision
 from app.domain.demand import derive_demand_portfolio
 from app.domain.suitability import build_suitability_surface

@@ -38,8 +38,8 @@ def _to_typed(data: Any, cls: type) -> Any:
 async def select_node(state: Dict[str, Any]) -> Dict[str, Any]:
     """SELECT node: GroundingResult + intent + context -> SiteSelectionDecision."""
     from app.domain.materialization.plan_builder import build_execution_plan
-    from app.agent.select.aggregate import select_aggregate
-    from app.agent.select.gate import evaluate_select_gate
+    from app.domain.allocation.select_service import select_aggregate
+    from app.domain.allocation.select_gate import evaluate_select_gate
     from app.modules.schema.contracts.deferral_contracts import DeferralLedger
     from app.modules.schema.contracts.grounding_contracts import GroundingResult
     from app.modules.schema.contracts.parse_contracts import SpatialPlanningIntent

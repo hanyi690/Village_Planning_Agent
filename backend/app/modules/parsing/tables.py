@@ -320,7 +320,7 @@ def extract_instruction_tables(text: str) -> Dict[str, List[Any]]:
 
     行级容错：坏行 / 未知类型 / 空名称 丢弃，不影响其余行。
     返回 {projects, zones, facilities, axes, roads}。
-    Migrated from app.agent.select.parse_agent._extract_instruction_tables (Wave M2).
+    Migrated from the legacy select parse agent's extract_instruction_tables (Wave M2).
     """
     section = _extract_instruction_section(text)
     if not section:
