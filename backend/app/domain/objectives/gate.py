@@ -11,8 +11,8 @@ Decision matrix (docs/design/04_PLANNING_PIPELINE.md §8 + 07_VALIDATION_FEEDBAC
 """
 from __future__ import annotations
 
-from app.modules.schema.contracts.l2_contracts import L2Strategy
-from app.modules.schema.contracts.workflow_contracts import GateDecision, PendingRequest
+from app.contracts.domain.l2_contracts import L2Strategy
+from app.contracts.workflow.workflow_contracts import GateDecision, PendingRequest
 
 
 def evaluate_l2_gate(

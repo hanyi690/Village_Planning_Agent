@@ -50,7 +50,7 @@ def _fmt(value: Any) -> str:
 def _artifact_payloads(reports: List[Dict[str, Any]]) -> Dict[str, Any]:
     """Load full persisted payloads for the report without changing checkpoint state."""
     from app.infrastructure.artifacts import ContentAddressedArtifactRepository
-    from app.modules.schema.contracts.artifact_descriptor import ArtifactDescriptor
+    from app.contracts.artifacts.artifact_descriptor import ArtifactDescriptor
     from app.infrastructure.paths import run_tmp_root
 
     payloads: Dict[str, Any] = {}

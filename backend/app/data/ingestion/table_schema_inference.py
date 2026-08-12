@@ -124,7 +124,7 @@ def map_table_to_indicators(
     Returns PlanningIndicatorTable if at least 1 indicator is extracted,
     None otherwise.
     """
-    from app.modules.schema.contracts.parse_contracts import PlanningIndicatorItem, PlanningIndicatorTable
+    from app.contracts.workflow.parse_contracts import PlanningIndicatorItem, PlanningIndicatorTable
 
     # Find column indices
     code_idx = _find_header(headers, "编码", "代码", "指标编码")
@@ -206,7 +206,7 @@ def map_table_to_zone_targets(
 
     Returns list of ZoneTarget if at least 1 is extracted, None otherwise.
     """
-    from app.modules.schema.contracts.parse_contracts import ZoneTarget
+    from app.contracts.workflow.parse_contracts import ZoneTarget
 
     # Find column indices
     name_idx = _find_header(headers, "用地名称", "地类名称", "名称", "用地")
@@ -289,7 +289,7 @@ def _classification_decision(
     """Build a resolved decision only for an explicit, valid closed-set code."""
     if not system or not code:
         return None
-    from app.modules.schema.contracts.classification_ref import (
+    from app.contracts.artifacts.classification_ref import (
         ClassificationDecision,
         ClassificationSystem,
         classification_code_names,
@@ -320,7 +320,7 @@ def map_table_to_facility_targets(
 
     Returns list of FacilityTarget if at least 1 is extracted, None otherwise.
     """
-    from app.modules.schema.contracts.parse_contracts import FacilityTarget
+    from app.contracts.workflow.parse_contracts import FacilityTarget
 
     type_idx = _find_header(headers, "设施类型", "类型", "名称", "设施")
     status_idx = _find_header(headers, "状态", "建设状态", "情况")

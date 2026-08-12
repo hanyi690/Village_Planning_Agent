@@ -641,7 +641,7 @@ def get_parcels_by_bsm_list(kg, bsms: List[str]) -> List[Dict[str, Any]]:
 
 
 def validate_intent(kg, intent: Any) -> List[Dict[str, Any]]:
-    from app.modules.schema.contracts.parse_contracts import SpatialPlanningIntent, FacilityTarget
+    from app.contracts.workflow.parse_contracts import SpatialPlanningIntent, FacilityTarget
     if not isinstance(intent, SpatialPlanningIntent):
         return []
     conflicts = []

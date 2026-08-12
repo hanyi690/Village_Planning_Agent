@@ -56,7 +56,7 @@ def build_intent_layer(kg, intent: Any) -> None:
     spatial anchoring triples (candidate_bsm, excluded_bsm, candidate_bbox,
     spatial_hint, description). Semantic annotations in SemanticMemoryStore.
     """
-    from app.modules.schema.contracts.parse_contracts import (
+    from app.contracts.workflow.parse_contracts import (
         SpatialPlanningIntent, ZoneTarget, FacilityTarget, AxisTarget, RoadTarget,
         ProjectTarget,
     )

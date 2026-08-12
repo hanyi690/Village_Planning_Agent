@@ -4,9 +4,9 @@ from typing import Literal
 
 from pydantic import BaseModel, Field, model_validator
 
-from .contract_meta import ContractMeta
-from .classification_ref import ClassificationDecision
-from .provenance import Provenance
+from app.contracts.artifacts.contract_meta import ContractMeta
+from app.contracts.artifacts.classification_ref import ClassificationDecision
+from app.contracts.artifacts.provenance import Provenance
 
 
 class RankedCandidate(BaseModel):

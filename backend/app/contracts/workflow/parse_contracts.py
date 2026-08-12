@@ -25,8 +25,8 @@ from typing import Any, Dict, List, Literal, Optional, Tuple
 
 from pydantic import BaseModel, Field, computed_field, model_validator
 
-from .provenance import SemanticMetadata
-from .classification_ref import ClassificationDecision
+from app.contracts.artifacts.provenance import SemanticMetadata
+from app.contracts.artifacts.classification_ref import ClassificationDecision
 
 
 # ── Zone spatial preference ─────────────────────────────────────────
@@ -546,7 +546,7 @@ __all__ = [
 
 # P6: forward ref for custom_zone_targets — resolve CustomZoneTarget lazily
 try:
-    from .custom_zone_contracts import CustomZoneTarget  # noqa: F401
+    from app.contracts.domain.custom_zone_contracts import CustomZoneTarget  # noqa: F401
 
     SpatialPlanningIntent.model_rebuild()
 except Exception:

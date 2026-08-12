@@ -14,9 +14,9 @@ from __future__ import annotations
 from typing import Any
 
 from app.domain.program.classification import classification_review_targets
-from app.modules.schema.contracts.classification_ref import classification_code_names
-from app.modules.schema.contracts.l3_contracts import PlanningProgram
-from app.modules.schema.contracts.workflow_contracts import GateDecision, PendingRequest
+from app.contracts.artifacts.classification_ref import classification_code_names
+from app.contracts.domain.l3_contracts import PlanningProgram
+from app.contracts.workflow.workflow_contracts import GateDecision, PendingRequest
 
 
 def evaluate_l3_gate(

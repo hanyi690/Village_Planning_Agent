@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from enum import StrEnum
 
-from app.modules.schema.contracts.place_resolution_contracts import (
+from app.contracts.ports.place_resolution_contracts import (
     PlaceResolutionCandidate,
     PlaceResolutionResult,
 )

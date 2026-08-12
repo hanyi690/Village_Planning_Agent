@@ -4,9 +4,9 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
-from .classification_ref import ClassificationRef
-from .contract_meta import ContractMeta
-from .provenance import Provenance
+from app.contracts.artifacts.classification_ref import ClassificationRef
+from app.contracts.artifacts.contract_meta import ContractMeta
+from app.contracts.artifacts.provenance import Provenance
 
 
 class ParcelChange(BaseModel):

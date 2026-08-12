@@ -20,8 +20,8 @@ from app.domain.validation.validate_checks import (
     check_topology,
     check_traceability,
 )
-from app.modules.schema.contracts.provenance import Provenance
-from app.modules.schema.contracts.validation_report_contracts import (
+from app.contracts.artifacts.provenance import Provenance
+from app.contracts.artifacts.validation_report_contracts import (
     ConstraintAdjustment,
     ValidationCheck,
     ValidationIssue,

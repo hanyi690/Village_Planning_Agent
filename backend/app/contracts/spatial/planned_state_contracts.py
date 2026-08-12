@@ -4,8 +4,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
-from .contract_meta import ContractMeta
-from .provenance import Provenance
+from app.contracts.artifacts.contract_meta import ContractMeta
+from app.contracts.artifacts.provenance import Provenance
 
 
 class PlannedParcel(BaseModel):

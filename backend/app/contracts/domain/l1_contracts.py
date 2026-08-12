@@ -4,12 +4,12 @@ from __future__ import annotations
 
 from pydantic import BaseModel
 
-from .classification_ref import ClassificationRef
-from .contract_meta import ContractMeta, StageIssue
-from .evidence_contracts import EvidenceSource
-from .parse_result_contracts import ParseDiagnostic
-from .parsing_contracts import CompilerTrace
-from .provenance import Provenance
+from app.contracts.artifacts.classification_ref import ClassificationRef
+from app.contracts.artifacts.contract_meta import ContractMeta, StageIssue
+from app.contracts.evidence.evidence_contracts import EvidenceSource
+from app.contracts.workflow.parse_result_contracts import ParseDiagnostic
+from app.contracts.workflow.parsing_contracts import CompilerTrace
+from app.contracts.artifacts.provenance import Provenance
 
 
 class L1LocationFact(BaseModel):

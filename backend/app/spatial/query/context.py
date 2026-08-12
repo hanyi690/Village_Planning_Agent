@@ -13,7 +13,7 @@ from __future__ import annotations
 from typing import Any, Callable, Dict, List, Optional
 
 from app.utils.logger import get_logger
-from app.modules.schema.contracts.context_contracts import (
+from app.contracts.spatial.context_contracts import (
     ConstraintSummary,
     ConstraintZoneAnchor,
     ContextBlock,

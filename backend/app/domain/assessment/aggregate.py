@@ -11,13 +11,13 @@ from typing import Any
 
 from app.domain.common.context_guard import require_frozen_context
 from app.infrastructure.artifacts.runtime import store_artifact
-from app.modules.schema.contracts.artifact_descriptor import ArtifactDescriptor
-from app.modules.schema.contracts.classification_ref import ClassificationRef
-from app.modules.schema.contracts.contract_meta import StageIssue
-from app.modules.schema.contracts.evidence_contracts import EvidenceSource
-from app.modules.schema.contracts.l1_contracts import EvidenceGap, L1DimensionFragment, L1Snapshot
-from app.modules.schema.contracts.parsing_contracts import CompilationProfile
-from app.modules.schema.contracts.provenance import Provenance
+from app.contracts.artifacts.artifact_descriptor import ArtifactDescriptor
+from app.contracts.artifacts.classification_ref import ClassificationRef
+from app.contracts.artifacts.contract_meta import StageIssue
+from app.contracts.evidence.evidence_contracts import EvidenceSource
+from app.contracts.domain.l1_contracts import EvidenceGap, L1DimensionFragment, L1Snapshot
+from app.contracts.workflow.parsing_contracts import CompilationProfile
+from app.contracts.artifacts.provenance import Provenance
 from app.infrastructure.artifacts.fingerprint import semantic_checksum
 from app.infrastructure.reports.review_package import write_review_package
 from app.utils.logger import get_logger
@@ -215,7 +215,7 @@ async def l1_aggregate(
     kg_source_refs: list[str] = []
     try:
         from app.evidence.retrieval.evidence_service import retrieve_evidence
-        from app.modules.schema.contracts.evidence_contracts import ExplorationRequest
+        from app.contracts.evidence.evidence_contracts import ExplorationRequest
 
         evidence = await retrieve_evidence(
             ExplorationRequest(

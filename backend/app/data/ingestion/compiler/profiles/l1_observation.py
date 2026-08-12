@@ -10,13 +10,13 @@ import re
 from html.parser import HTMLParser
 from typing import Any
 
-from app.modules.schema.contracts.classification_ref import ClassificationRef
-from app.modules.schema.contracts.l1_contracts import (
+from app.contracts.artifacts.classification_ref import ClassificationRef
+from app.contracts.domain.l1_contracts import (
     EvidenceGap,
     L1DimensionFragment,
     L1LocationFact,
 )
-from app.modules.schema.contracts.parsing_contracts import CompilationProfile, CompilerTrace
+from app.contracts.workflow.parsing_contracts import CompilationProfile, CompilerTrace
 
 from ..diagnostics import collect_diagnostics
 from ..instruction_parser import parse_instruction_tables, split_content_instruction

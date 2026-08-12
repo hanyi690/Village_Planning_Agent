@@ -1,7 +1,7 @@
 """PlaceEvidenceIndex adapter over the existing SpatialResolver.
 
 The resolution contract is ``PlaceResolutionResult`` from
-``app.modules.schema.contracts.place_resolution_contracts``; this service only
+``app.contracts.ports.place_resolution_contracts``; this service only
 maps the SpatialResolver output onto that contract. It never auto-picks the
 first candidate, and a fuzzy short-name match can only ever yield ``ambiguous``.
 """

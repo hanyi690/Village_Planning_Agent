@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
 
-from app.modules.schema.contracts.place_resolution_contracts import (
+from app.contracts.ports.place_resolution_contracts import (
     PlaceEvidenceEntry,
     PlaceResolutionCandidate,
     PlaceResolutionResult,

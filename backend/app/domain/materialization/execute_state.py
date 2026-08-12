@@ -15,7 +15,7 @@ from typing import Annotated, Any, Dict, List, Optional
 
 from pydantic import BaseModel, Field
 
-from app.modules.schema.contracts.selection_contracts import LandDesignBrief
+from app.contracts.domain.selection_contracts import LandDesignBrief
 
 
 def _upsert_worker_results(current: List[Any], updates: List[Any]) -> List[Any]:

@@ -16,20 +16,20 @@ from app.domain.delivery.checks import (
     check_statutory_layers_complete,
     check_traceability_complete,
 )
-from app.modules.schema.contracts.delivery_manifest_contracts import (
+from app.contracts.artifacts.delivery_manifest_contracts import (
     Deliverable,
     DeliveryGate,
     DeliveryManifest,
     HumanItem,
     TraceabilityEntry,
 )
-from app.modules.schema.contracts.deferral_contracts import DeferralLedger
-from app.modules.schema.contracts.execution_plan_contracts import (
+from app.contracts.artifacts.deferral_contracts import DeferralLedger
+from app.contracts.workflow.execution_plan_contracts import (
     ExecutionPlan,
     ExecutionResult,
 )
-from app.modules.schema.contracts.provenance import Provenance
-from app.modules.schema.contracts.reconciliation_contracts import (
+from app.contracts.artifacts.provenance import Provenance
+from app.contracts.artifacts.reconciliation_contracts import (
     CoverageMatrix,
     ReconciliationReport,
 )

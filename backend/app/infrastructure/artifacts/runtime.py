@@ -15,7 +15,7 @@ from typing import Any, TypeVar
 from pydantic import ValidationError
 
 from app.infrastructure.artifacts import ContentAddressedArtifactRepository, NamedRefConflict
-from app.modules.schema.contracts.artifact_descriptor import ArtifactDescriptor
+from app.contracts.artifacts.artifact_descriptor import ArtifactDescriptor
 from app.infrastructure.paths import run_tmp_root
 
 T = TypeVar("T")

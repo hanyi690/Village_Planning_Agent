@@ -11,8 +11,8 @@ from typing import Any
 from shapely import wkt as shapely_wkt
 from shapely.geometry import mapping
 
-from app.modules.schema.contracts.parcel_change_contracts import ParcelChange, ParcelChangeSet
-from app.modules.schema.contracts.planned_state_contracts import PlannedState
+from app.contracts.spatial.parcel_change_contracts import ParcelChange, ParcelChangeSet
+from app.contracts.spatial.planned_state_contracts import PlannedState
 
 
 def _context_parcels(context: Any) -> dict[str, Any]:

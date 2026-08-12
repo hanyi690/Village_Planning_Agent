@@ -4,9 +4,9 @@ from __future__ import annotations
 
 from typing import Any
 
-from app.modules.schema.contracts.deferral_contracts import DeferralLedger
-from app.modules.schema.contracts.execution_plan_contracts import ExecutionPlan, WorkerTask, WorkerType
-from app.modules.schema.contracts.selection_contracts import TargetAssignment
+from app.contracts.artifacts.deferral_contracts import DeferralLedger
+from app.contracts.workflow.execution_plan_contracts import ExecutionPlan, WorkerTask, WorkerType
+from app.contracts.domain.selection_contracts import TargetAssignment
 
 
 _CLASSIFICATION_OUTPUT_KINDS = frozenset({"parcel", "polygon"})

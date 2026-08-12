@@ -15,17 +15,17 @@ from app.contracts.program import PlanningClaimSet, ProgramProposal
 from app.domain.program.claim_adapter import proposals_from_claims
 from app.domain.program.assembler import assemble_planning_program
 from app.infrastructure.artifacts import ContentAddressedArtifactRepository
-from app.modules.schema.contracts.artifact_descriptor import ArtifactDescriptor
-from app.modules.schema.contracts.evidence_contracts import EvidenceSource
-from app.modules.schema.contracts.l1_contracts import EvidenceGap, L1Snapshot
-from app.modules.schema.contracts.l2_contracts import L2Strategy
-from app.modules.schema.contracts.l3_contracts import (
+from app.contracts.artifacts.artifact_descriptor import ArtifactDescriptor
+from app.contracts.evidence.evidence_contracts import EvidenceSource
+from app.contracts.domain.l1_contracts import EvidenceGap, L1Snapshot
+from app.contracts.domain.l2_contracts import L2Strategy
+from app.contracts.domain.l3_contracts import (
     InterventionDependency,
     L3ProgramFragment,
     PlanningProgram,
     ProgramIssue,
 )
-from app.modules.schema.contracts.provenance import Provenance
+from app.contracts.artifacts.provenance import Provenance
 from app.infrastructure.artifacts.fingerprint import semantic_checksum
 from app.infrastructure.reports.review_package import write_review_package
 from app.infrastructure.paths import run_tmp_root

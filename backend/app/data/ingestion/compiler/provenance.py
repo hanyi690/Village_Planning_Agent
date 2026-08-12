@@ -1,7 +1,7 @@
 """Provenance construction for compiler fragments."""
 from __future__ import annotations
 
-from app.modules.schema.contracts.provenance import Provenance
+from app.contracts.artifacts.provenance import Provenance
 
 
 def build_fragment_provenance(

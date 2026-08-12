@@ -75,8 +75,8 @@ def _filter_unsupported_spatial_specs(
 async def target_projection_node(state: Dict[str, Any]) -> Dict[str, Any]:
     """Project PlanningProgram into typed spatial references for GROUND."""
     from app.domain.program.target_projection.aggregate import project_program_async
-    from app.modules.schema.contracts.parse_result_contracts import ParseDiagnostic
-    from app.modules.schema.contracts.l3_contracts import PlanningProgram
+    from app.contracts.workflow.parse_result_contracts import ParseDiagnostic
+    from app.contracts.domain.l3_contracts import PlanningProgram
 
     retry_patch = _retry_patch(state, "target_projection")
     program = _load_ref_artifact(state, "planning_program", PlanningProgram)

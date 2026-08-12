@@ -8,10 +8,10 @@ from __future__ import annotations
 
 from typing import Any
 
-from app.modules.schema.contracts.delivery_manifest_contracts import (
+from app.contracts.artifacts.delivery_manifest_contracts import (
     DeliveryManifest,
 )
-from app.modules.schema.contracts.workflow_contracts import GateDecision
+from app.contracts.workflow.workflow_contracts import GateDecision
 
 _ROUTE_RATIONALE = {
     "PASS": "statutory output complete; no blocking issues",

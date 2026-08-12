@@ -28,7 +28,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from app.modules.schema.contracts.review_contracts import (
+from app.contracts.workflow.review_contracts import (
     ArtifactDescriptorProjection,
     ReviewDecision,
     ReviewPackage,

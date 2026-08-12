@@ -4,8 +4,8 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
-from .contract_meta import ContractMeta, StageIssue
-from .provenance import Provenance
+from app.contracts.artifacts.contract_meta import ContractMeta, StageIssue
+from app.contracts.artifacts.provenance import Provenance
 
 
 class HardConstraintResult(BaseModel):

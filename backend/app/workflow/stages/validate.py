@@ -114,12 +114,12 @@ async def validate_node(state: Dict[str, Any]) -> Dict[str, Any]:
     """Validate the immutable EXECUTE outputs and emit a typed gate + next_action."""
     from app.domain.validation.validate import validate_aggregate
     from app.domain.validation.validate_gate import evaluate_validate_gate
-    from app.modules.schema.contracts.parse_contracts import SpatialPlanningIntent
-    from app.modules.schema.contracts.planned_state_contracts import PlannedState
-    from app.modules.schema.contracts.parcel_change_contracts import ParcelChangeSet
-    from app.modules.schema.contracts.parse_result_contracts import IntentCompilationResult
-    from app.modules.schema.contracts.selection_contracts import SiteSelectionDecision
-    from app.modules.schema.contracts.execution_plan_contracts import ExecutionPlan, ExecutionResult
+    from app.contracts.workflow.parse_contracts import SpatialPlanningIntent
+    from app.contracts.spatial.planned_state_contracts import PlannedState
+    from app.contracts.spatial.parcel_change_contracts import ParcelChangeSet
+    from app.contracts.workflow.parse_result_contracts import IntentCompilationResult
+    from app.contracts.domain.selection_contracts import SiteSelectionDecision
+    from app.contracts.workflow.execution_plan_contracts import ExecutionPlan, ExecutionResult
 
     retry_patch = _retry_patch(state, "validate")
     context = await _require_context(state)

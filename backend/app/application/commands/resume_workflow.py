@@ -12,7 +12,7 @@ from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from app.modules.schema.contracts.resume_contracts import (
+from app.contracts.workflow.resume_contracts import (
     ResumeCommand,
     ResumeMode,
     ResumePlan,

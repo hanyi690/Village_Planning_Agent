@@ -10,20 +10,20 @@ from shapely.geometry import Polygon, mapping
 
 from app.domain.materialization.execute_state import ExecuteAgentState
 from app.domain.materialization.nodes.zone_worker import _zone_worker, _zone_worker_node
-from app.modules.schema.contracts.classification_ref import (
+from app.contracts.artifacts.classification_ref import (
     ClassificationDecision,
     ClassificationSystem,
 )
-from app.modules.schema.contracts.execution_plan_contracts import (
+from app.contracts.workflow.execution_plan_contracts import (
     ExecutionPlan,
     WorkerTask,
     WorkerType,
     ZoneAllocationSolution,
     ZoneAssignmentEntry,
 )
-from app.modules.schema.contracts.parse_contracts import ZoneTarget
-from app.modules.schema.contracts.selection_contracts import TargetAssignment
-from app.modules.schema.contracts.custom_zone_contracts import (
+from app.contracts.workflow.parse_contracts import ZoneTarget
+from app.contracts.domain.selection_contracts import TargetAssignment
+from app.contracts.domain.custom_zone_contracts import (
     CustomZoneTarget,
     TypingRule,
     Vocabulary,
@@ -37,7 +37,7 @@ from app.domain.materialization.zoning.custom_zone_changeset import (
     materialize_custom_zone_changes,
 )
 from app.modules.schema.encodings.dicts.vocabularies.loader import register_vocabulary
-from app.modules.schema.contracts.spatial_delivery_contracts import SpatialLayerRef
+from app.contracts.spatial.spatial_delivery_contracts import SpatialLayerRef
 from app.infrastructure.gis.spatial_data_port import GeoJSONSpatialDataPort
 from app.infrastructure.export.delivery_snapshot import build_delivery_spatial_snapshot
 

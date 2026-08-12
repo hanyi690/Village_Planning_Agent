@@ -86,7 +86,7 @@ def test_jintian_emits_all_four_block_outputs():
     assert len(parcel_dicts) > 100
 
     # Block D (vocabulary moved from YAML to session registration in 9c0a1ade)
-    from app.modules.schema.contracts.custom_zone_contracts import (
+    from app.contracts.domain.custom_zone_contracts import (
         TypingRule, Vocabulary, VocabularyCategory,
     )
     from app.modules.schema.encodings.dicts.vocabularies.loader import register_vocabulary

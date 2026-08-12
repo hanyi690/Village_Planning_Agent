@@ -333,7 +333,7 @@ def state_to_ui_status(state: Dict[str, Any], db_session: Optional[Dict] = None,
     # boundary so the UI never needs to know which graph branch paused.
     interrupt_info = None
     if is_interrupted:
-        from app.modules.schema.contracts.human_interrupt_contracts import (
+        from app.contracts.workflow.human_interrupt_contracts import (
             build_human_interrupt,
             HumanInterruptChannel,
             normalize_human_interrupt,

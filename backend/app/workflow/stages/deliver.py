@@ -13,12 +13,12 @@ from app.domain.delivery.aggregate import deliver_aggregate
 from app.domain.delivery.delivery_renderer import render_delivery_artifacts
 from app.domain.delivery.delivery_snapshot_builder import build_spatial_delivery_products
 from app.domain.delivery.gate import evaluate_deliver_gate
-from app.modules.schema.contracts.deferral_contracts import DeferralLedger
-from app.modules.schema.contracts.execution_plan_contracts import ExecutionPlan, ExecutionResult
-from app.modules.schema.contracts.parcel_change_contracts import ParcelChangeSet
-from app.modules.schema.contracts.planned_state_contracts import PlannedState
-from app.modules.schema.contracts.reconciliation_contracts import ReconciliationReport
-from app.modules.schema.contracts.validation_report_contracts import ValidationReport
+from app.contracts.artifacts.deferral_contracts import DeferralLedger
+from app.contracts.workflow.execution_plan_contracts import ExecutionPlan, ExecutionResult
+from app.contracts.spatial.parcel_change_contracts import ParcelChangeSet
+from app.contracts.spatial.planned_state_contracts import PlannedState
+from app.contracts.artifacts.reconciliation_contracts import ReconciliationReport
+from app.contracts.artifacts.validation_report_contracts import ValidationReport
 from app.workflow.stage_adapter import persist_stage_artifact
 from app.workflow.stages.support import (
     _adopt_context,
@@ -50,7 +50,7 @@ async def deliver_node(state: Dict[str, Any]) -> Dict[str, Any]:
 
     ledger_ref = None
     if execution_plan is not None:
-        from app.modules.schema.contracts.deferral_contracts import HumanDeferralDecision, TargetDeferral
+        from app.contracts.artifacts.deferral_contracts import HumanDeferralDecision, TargetDeferral
 
         ledger_entries = list(getattr(deferral_ledger, "entries", None) or [])
         ledger_ids = {str(entry.target_id) for entry in ledger_entries}

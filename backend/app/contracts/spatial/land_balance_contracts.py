@@ -12,7 +12,7 @@ from typing import List, Optional
 
 from pydantic import BaseModel, Field
 
-from .delivery_manifest_contracts import DeliveryGate
+from app.contracts.artifacts.delivery_manifest_contracts import DeliveryGate
 
 
 class LandBalanceRow(BaseModel):

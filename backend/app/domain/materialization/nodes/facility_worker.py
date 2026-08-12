@@ -7,8 +7,8 @@ from typing import List
 from app.domain.materialization.execute_state import ExecuteAgentState
 from app.domain.materialization.nodes.common import _execution_error
 from app.domain.materialization.nodes.worker_common import _execution_intent_from_plan, _resolve_parcel_by_bsm, _task_enabled, _task_execution_result
-from app.modules.schema.contracts.execution_plan_contracts import WorkerResult
-from app.modules.schema.contracts.parcel_change_contracts import ParcelChange
+from app.contracts.workflow.execution_plan_contracts import WorkerResult
+from app.contracts.spatial.parcel_change_contracts import ParcelChange
 from app.utils.logger import get_logger
 
 logger = get_logger(__name__)

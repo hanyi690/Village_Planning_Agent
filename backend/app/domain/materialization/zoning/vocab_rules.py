@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, List
 
-from app.modules.schema.contracts.custom_zone_contracts import TypingRule
+from app.contracts.domain.custom_zone_contracts import TypingRule
 from app.modules.schema.encodings.dicts.expr_eval import Condition, MappingContext
 
 

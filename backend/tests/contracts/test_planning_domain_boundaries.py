@@ -2,13 +2,13 @@ from app.domain.allocation.select_gate import evaluate_select_gate
 from app.domain.allocation import build_portfolio_decision
 from app.domain.demand import derive_demand_portfolio
 from app.domain.suitability import build_suitability_surface
-from app.modules.schema.contracts.grounding_contracts import (
+from app.contracts.spatial.grounding_contracts import (
     CandidateSite,
     GroundingResult,
     HardConstraintResult,
 )
-from app.modules.schema.contracts.parse_contracts import ProjectTarget, SpatialPlanningIntent
-from app.modules.schema.contracts.selection_contracts import SiteSelectionDecision, TargetAssignment
+from app.contracts.workflow.parse_contracts import ProjectTarget, SpatialPlanningIntent
+from app.contracts.domain.selection_contracts import SiteSelectionDecision, TargetAssignment
 
 
 def _intent() -> SpatialPlanningIntent:

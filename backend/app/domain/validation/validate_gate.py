@@ -26,8 +26,8 @@ from __future__ import annotations
 from typing import Any
 
 from app.domain.common.gate_progress import gate_progress_metadata
-from app.modules.schema.contracts.validation_report_contracts import ValidationReport
-from app.modules.schema.contracts.workflow_contracts import (
+from app.contracts.artifacts.validation_report_contracts import ValidationReport
+from app.contracts.workflow.workflow_contracts import (
     GateDecision,
     PendingRequest,
     StageId,

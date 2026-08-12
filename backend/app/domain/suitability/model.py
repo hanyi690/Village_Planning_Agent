@@ -6,7 +6,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from app.modules.schema.contracts.contract_meta import ContractMeta
+from app.contracts.artifacts.contract_meta import ContractMeta
 
 
 class SuitabilityCandidate(BaseModel):

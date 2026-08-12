@@ -556,10 +556,10 @@ def test_real_graph_resume_delivery(sqlite_db, pipeline_reset, monkeypatch):
             )
 
             from app.infrastructure.artifacts.runtime import load_artifact
-            from app.modules.schema.contracts.delivery_manifest_contracts import DeliveryManifest
-            from app.modules.schema.contracts.execution_plan_contracts import ExecutionResult
-            from app.modules.schema.contracts.selection_contracts import SiteSelectionDecision
-            from app.modules.schema.contracts.spatial_delivery_contracts import DeliverySpatialSnapshot
+            from app.contracts.artifacts.delivery_manifest_contracts import DeliveryManifest
+            from app.contracts.workflow.execution_plan_contracts import ExecutionResult
+            from app.contracts.domain.selection_contracts import SiteSelectionDecision
+            from app.contracts.spatial.spatial_delivery_contracts import DeliverySpatialSnapshot
 
             manifest = load_artifact(state, "delivery_manifest", DeliveryManifest)
             outcome = load_artifact(state, "execution_result", ExecutionResult)

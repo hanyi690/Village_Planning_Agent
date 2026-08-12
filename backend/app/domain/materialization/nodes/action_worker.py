@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from app.domain.materialization.execute_state import ExecuteAgentState
 from app.domain.materialization.nodes.worker_common import _plan_tasks, _task_value, _task_enabled, _task_execution_result
-from app.modules.schema.contracts.execution_plan_contracts import TypedActionResult, WorkerResult
+from app.contracts.workflow.execution_plan_contracts import TypedActionResult, WorkerResult
 
 
 def _action_worker(state: ExecuteAgentState) -> WorkerResult:

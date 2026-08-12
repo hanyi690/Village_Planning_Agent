@@ -10,13 +10,13 @@ from __future__ import annotations
 
 import re
 
-from app.modules.schema.contracts.l1_contracts import EvidenceGap
-from app.modules.schema.contracts.l2_contracts import (
+from app.contracts.domain.l1_contracts import EvidenceGap
+from app.contracts.domain.l2_contracts import (
     L2StrategyFragment,
     StrategyConflict,
     StrategyIssue,
 )
-from app.modules.schema.contracts.parsing_contracts import CompilationProfile, CompilerTrace
+from app.contracts.workflow.parsing_contracts import CompilationProfile, CompilerTrace
 
 from ..diagnostics import collect_diagnostics
 from ..instruction_parser import split_content_instruction

@@ -40,10 +40,10 @@ async def select_node(state: Dict[str, Any]) -> Dict[str, Any]:
     from app.domain.materialization.plan_builder import build_execution_plan
     from app.domain.allocation.select_service import select_aggregate
     from app.domain.allocation.select_gate import evaluate_select_gate
-    from app.modules.schema.contracts.deferral_contracts import DeferralLedger
-    from app.modules.schema.contracts.grounding_contracts import GroundingResult
-    from app.modules.schema.contracts.parse_contracts import SpatialPlanningIntent
-    from app.modules.schema.contracts.parse_result_contracts import IntentCompilationResult
+    from app.contracts.artifacts.deferral_contracts import DeferralLedger
+    from app.contracts.spatial.grounding_contracts import GroundingResult
+    from app.contracts.workflow.parse_contracts import SpatialPlanningIntent
+    from app.contracts.workflow.parse_result_contracts import IntentCompilationResult
 
     retry_patch = _retry_patch(state, "select")
     context = await _require_context(state)

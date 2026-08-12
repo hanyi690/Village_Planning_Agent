@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from typing import List
 
-from app.modules.schema.contracts.evidence_contracts import (
+from app.contracts.evidence.evidence_contracts import (
     ExplorationRequest,
     EvidenceBundle,
     EvidenceFact,

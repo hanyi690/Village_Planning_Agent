@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from langgraph.types import Send
 
-from app.modules.schema.contracts.artifact_descriptor import ArtifactDescriptor
+from app.contracts.artifacts.artifact_descriptor import ArtifactDescriptor
 from app.workflow.dispatch import (
     DispatchDiagnosticCode,
     DispatchPolicy,

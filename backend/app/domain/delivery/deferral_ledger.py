@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Sequence
 
-from app.modules.schema.contracts.deferral_contracts import (
+from app.contracts.artifacts.deferral_contracts import (
     DeferralLedger,
     HumanDeferralDecision,
     TargetDeferral,

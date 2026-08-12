@@ -15,7 +15,7 @@ from typing import Any, Dict, Optional
 
 from langgraph.types import interrupt
 from app.utils.logger import get_logger
-from app.modules.schema.contracts.human_interrupt_contracts import (
+from app.contracts.workflow.human_interrupt_contracts import (
     HumanInterruptChannel,
     build_human_interrupt,
     normalize_human_decision,
@@ -87,7 +87,7 @@ async def _maybe_extract_bindings(
         if layer == 1:
             try:
                 from app.infrastructure.artifacts.runtime import load_artifact
-                from app.modules.schema.contracts.l1_contracts import L1Snapshot
+                from app.contracts.domain.l1_contracts import L1Snapshot
 
                 refs = dict((state or {}).get("artifact_refs") or {})
                 migrated = dict(state or {})

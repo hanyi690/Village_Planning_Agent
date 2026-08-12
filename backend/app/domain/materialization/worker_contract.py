@@ -3,7 +3,7 @@
 Each execution worker is an independent ``WorkerInput -> WorkerResult``
 function.  ``run_workers`` fans out independent workers and collects results
 into the authoritative ``ExecutionResult`` root artifact (single owner:
-``app.modules.schema.contracts.execution_plan_contracts``).
+``app.contracts.workflow.execution_plan_contracts``).
 """
 
 from __future__ import annotations
@@ -13,7 +13,7 @@ from typing import Any, Callable, Literal
 
 from pydantic import BaseModel, Field
 
-from app.modules.schema.contracts.execution_plan_contracts import (
+from app.contracts.workflow.execution_plan_contracts import (
     ExecutionResult,
     TaskExecutionResult,
 )

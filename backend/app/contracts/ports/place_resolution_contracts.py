@@ -14,7 +14,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel
 
-from .contract_meta import ContractMeta
+from app.contracts.artifacts.contract_meta import ContractMeta
 
 
 class PlaceResolutionCandidate(BaseModel):

@@ -35,7 +35,7 @@ def _hydrate_l1_spatial_facts(state: Dict[str, Any], context: Any) -> None:
                     context.ports.gazetteer = KGGazetteerAdapter(restored_gazetteer)
 
         from app.infrastructure.artifacts.runtime import load_artifact
-        from app.modules.schema.contracts.l1_contracts import L1Snapshot
+        from app.contracts.domain.l1_contracts import L1Snapshot
 
         snapshot = load_artifact(state, "l1_snapshot", L1Snapshot)
         if snapshot is None:
@@ -121,7 +121,7 @@ async def bootstrap_context_node(state: Dict[str, Any]) -> Dict[str, Any]:
     fingerprint = "sha256:" + content_hash[:16]
 
     try:
-        from app.modules.schema.contracts.l1_contracts import L1Snapshot
+        from app.contracts.domain.l1_contracts import L1Snapshot
 
         l1_snapshot = None
         refs = state.get("artifact_refs") or {}

@@ -3,7 +3,7 @@ from typing import Iterable, List, Tuple
 from shapely.geometry.base import BaseGeometry
 from shapely.ops import unary_union
 
-from app.modules.schema.contracts.custom_zone_contracts import (
+from app.contracts.domain.custom_zone_contracts import (
     CustomZoneTarget,
     Vocabulary,
     VocabularyCategory,

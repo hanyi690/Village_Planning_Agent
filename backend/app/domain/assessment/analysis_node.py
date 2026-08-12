@@ -22,7 +22,7 @@ from app.core.settings import MAX_TOKENS, LLM_STREAM_TIMEOUT, BACKGROUND_SUMMARY
 from app.core.events import SSEEventType
 from app.utils.logger import get_logger
 from app.evidence.retrieval.evidence_service import retrieve_evidence, render_evidence_prompt_section
-from app.modules.schema.contracts.evidence_contracts import ExplorationRequest
+from app.contracts.evidence.evidence_contracts import ExplorationRequest
 from app.infrastructure.llm.dimension_runtime import (
     enrich_summary_background,
     generate_summary,

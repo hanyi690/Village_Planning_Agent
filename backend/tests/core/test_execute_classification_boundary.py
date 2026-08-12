@@ -7,16 +7,16 @@ from types import SimpleNamespace
 import pytest
 
 from app.domain.materialization.plan_builder import build_execution_plan
-from app.modules.schema.contracts.classification_ref import (
+from app.contracts.artifacts.classification_ref import (
     ClassificationDecision,
     ClassificationSystem,
 )
-from app.modules.schema.contracts.deferral_contracts import (
+from app.contracts.artifacts.deferral_contracts import (
     DeferralLedger,
     HumanDeferralDecision,
     TargetDeferral,
 )
-from app.modules.schema.contracts.selection_contracts import TargetAssignment
+from app.contracts.domain.selection_contracts import TargetAssignment
 from app.workflow.stages import execute as execute_stage
 
 

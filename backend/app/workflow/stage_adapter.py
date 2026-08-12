@@ -102,7 +102,7 @@ def persist_gate_decision(
     from app.infrastructure.artifacts.repository import ContentAddressedArtifactRepository
     from app.infrastructure.artifacts.runtime import ARTIFACT_SCHEMA_VERSION
     from app.infrastructure.paths import run_tmp_root
-    from app.modules.schema.contracts.workflow_contracts import GateDecision
+    from app.contracts.workflow.workflow_contracts import GateDecision
 
     decision = gate if isinstance(gate, GateDecision) else GateDecision.model_validate(gate)
     run_id = str(state.get("run_id") or state.get("session_id") or "")

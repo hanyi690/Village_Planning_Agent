@@ -177,7 +177,7 @@ class PlanningRuntimeService:
                     payload = getattr(pending_interrupt, "value", None)
                     if not isinstance(payload, dict):
                         continue
-                    from app.modules.schema.contracts.human_interrupt_contracts import normalize_human_interrupt
+                    from app.contracts.workflow.human_interrupt_contracts import normalize_human_interrupt
 
                     normalized_interrupt = normalize_human_interrupt(payload)
                     values["human_interrupt"] = normalized_interrupt

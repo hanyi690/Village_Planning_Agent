@@ -17,7 +17,7 @@ No LLM, no KG, no MIP — pure container/list math only.
 
 from __future__ import annotations
 
-from app.modules.schema.contracts.reconciliation_contracts import ReconciliationInconsistency
+from app.contracts.artifacts.reconciliation_contracts import ReconciliationInconsistency
 
 
 def _inc(

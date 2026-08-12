@@ -4,9 +4,9 @@ L3 is a typed claims boundary and deliberately does not use this parser.
 """
 from __future__ import annotations
 
-from app.modules.schema.contracts.l1_contracts import L1DimensionFragment
-from app.modules.schema.contracts.l2_contracts import L2StrategyFragment
-from app.modules.schema.contracts.parsing_contracts import CompilationProfile
+from app.contracts.domain.l1_contracts import L1DimensionFragment
+from app.contracts.domain.l2_contracts import L2StrategyFragment
+from app.contracts.workflow.parsing_contracts import CompilationProfile
 
 from .diagnostics import collect_diagnostics
 from .provenance import build_fragment_provenance

@@ -31,15 +31,15 @@ async def reconcile_node(state: Dict[str, Any]) -> Dict[str, Any]:
     """Reconcile intervention -> selection -> execution -> planned outputs."""
     from app.domain.validation.reconcile import reconcile_aggregate
     from app.domain.validation.reconcile_gate import evaluate_reconcile_gate
-    from app.modules.schema.contracts.l3_contracts import PlanningProgram
-    from app.modules.schema.contracts.spatial_reference_contracts import SpatialReferenceSpec
-    from app.modules.schema.contracts.grounding_contracts import GroundingResult
-    from app.modules.schema.contracts.selection_contracts import SiteSelectionDecision
-    from app.modules.schema.contracts.parcel_change_contracts import ParcelChangeSet
-    from app.modules.schema.contracts.planned_state_contracts import PlannedState
-    from app.modules.schema.contracts.parse_result_contracts import IntentCompilationResult
-    from app.modules.schema.contracts.execution_plan_contracts import ExecutionPlan, ExecutionResult
-    from app.modules.schema.contracts.reconciliation_contracts import ReconciliationInconsistency, ReconciliationReport
+    from app.contracts.domain.l3_contracts import PlanningProgram
+    from app.contracts.spatial.spatial_reference_contracts import SpatialReferenceSpec
+    from app.contracts.spatial.grounding_contracts import GroundingResult
+    from app.contracts.domain.selection_contracts import SiteSelectionDecision
+    from app.contracts.spatial.parcel_change_contracts import ParcelChangeSet
+    from app.contracts.spatial.planned_state_contracts import PlannedState
+    from app.contracts.workflow.parse_result_contracts import IntentCompilationResult
+    from app.contracts.workflow.execution_plan_contracts import ExecutionPlan, ExecutionResult
+    from app.contracts.artifacts.reconciliation_contracts import ReconciliationInconsistency, ReconciliationReport
 
     retry_patch = _retry_patch(state, "reconcile")
     context = await _require_context(state)

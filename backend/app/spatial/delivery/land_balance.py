@@ -11,11 +11,11 @@ import logging
 from collections import defaultdict
 from typing import Any, Dict, List, Optional
 
-from app.modules.schema.contracts.land_balance_contracts import (
+from app.contracts.spatial.land_balance_contracts import (
     LandBalanceRow,
     LandBalanceTable,
 )
-from app.modules.schema.contracts.delivery_manifest_contracts import DeliveryGate
+from app.contracts.artifacts.delivery_manifest_contracts import DeliveryGate
 
 logger = logging.getLogger(__name__)
 

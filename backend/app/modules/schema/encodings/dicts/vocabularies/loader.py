@@ -3,7 +3,7 @@ from functools import lru_cache
 
 import yaml
 
-from app.modules.schema.contracts.custom_zone_contracts import (
+from app.contracts.domain.custom_zone_contracts import (
     CustomZoneTarget,
     Vocabulary,
     VocabularyCategory,

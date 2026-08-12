@@ -8,11 +8,11 @@ Routes:
 """
 from __future__ import annotations
 
-from app.modules.schema.contracts.parse_result_contracts import (
+from app.contracts.workflow.parse_result_contracts import (
     CompilationStatus,
     IntentCompilationResult,
 )
-from app.modules.schema.contracts.workflow_contracts import GateDecision
+from app.contracts.workflow.workflow_contracts import GateDecision
 
 
 def _is_empty_intent(result: IntentCompilationResult) -> bool:

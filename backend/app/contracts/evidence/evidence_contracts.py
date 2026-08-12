@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from pydantic import BaseModel
 
-from .contract_meta import ContractMeta
-from .provenance import Provenance
+from app.contracts.artifacts.contract_meta import ContractMeta
+from app.contracts.artifacts.provenance import Provenance
 
 
 class ExplorationRequest(BaseModel):

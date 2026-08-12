@@ -8,13 +8,13 @@ fail-closed gate.
 
 from __future__ import annotations
 
-from app.modules.schema.contracts.l3_contracts import PlanningProgram
-from app.modules.schema.contracts.parse_result_contracts import (
+from app.contracts.domain.l3_contracts import PlanningProgram
+from app.contracts.workflow.parse_result_contracts import (
     CompilationStatus,
     IntentCompilationResult,
 )
-from app.modules.schema.contracts.spatial_reference_contracts import SpatialReferenceSpec
-from app.modules.schema.contracts.workflow_contracts import GateDecision
+from app.contracts.spatial.spatial_reference_contracts import SpatialReferenceSpec
+from app.contracts.workflow.workflow_contracts import GateDecision
 
 from .compile import compile_program_deterministic
 from .gate import evaluate_target_projection_gate

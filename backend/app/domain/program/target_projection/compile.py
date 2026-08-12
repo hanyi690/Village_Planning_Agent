@@ -10,8 +10,8 @@ from app.data.ingestion.compiler.spec_mapper import (
     map_intervention_to_spec,
     map_interventions_to_specs,
 )
-from app.modules.schema.contracts.l3_contracts import PlanningIntervention, PlanningProgram
-from app.modules.schema.contracts.parse_contracts import (
+from app.contracts.domain.l3_contracts import PlanningIntervention, PlanningProgram
+from app.contracts.workflow.parse_contracts import (
     FacilityTarget,
     AxisTarget,
     ProjectTarget,
@@ -19,13 +19,13 @@ from app.modules.schema.contracts.parse_contracts import (
     SpatialPlanningIntent,
     ZoneTarget,
 )
-from app.modules.schema.contracts.parse_result_contracts import (
+from app.contracts.workflow.parse_result_contracts import (
     CompilationStatus,
     IntentCompilationResult,
     ParseDiagnostic,
 )
-from app.modules.schema.contracts.provenance import Provenance, SemanticMetadata
-from app.modules.schema.contracts.spatial_reference_contracts import SpatialReferenceSpec
+from app.contracts.artifacts.provenance import Provenance, SemanticMetadata
+from app.contracts.spatial.spatial_reference_contracts import SpatialReferenceSpec
 
 
 def _spatial_hint(intervention: PlanningIntervention) -> str:

@@ -8,8 +8,8 @@ from __future__ import annotations
 
 from typing import Any
 
-from app.modules.schema.contracts.parcel_change_contracts import ParcelChange, ParcelChangeSet
-from app.modules.schema.contracts.planned_state_contracts import (
+from app.contracts.spatial.parcel_change_contracts import ParcelChange, ParcelChangeSet
+from app.contracts.spatial.planned_state_contracts import (
     PlannedAxis,
     PlannedFacility,
     PlannedParcel,

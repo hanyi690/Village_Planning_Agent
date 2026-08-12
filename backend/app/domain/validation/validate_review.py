@@ -8,11 +8,11 @@ from __future__ import annotations
 
 from typing import Any
 
-from app.modules.schema.contracts.validation_report_contracts import (
+from app.contracts.artifacts.validation_report_contracts import (
     ValidationCheck,
     ValidationReport,
 )
-from app.modules.schema.contracts.workflow_contracts import GateDecision
+from app.contracts.workflow.workflow_contracts import GateDecision
 
 _ROUTE_RATIONALE = {
     "PASS": "all validation checks passed",

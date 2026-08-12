@@ -10,7 +10,7 @@ from __future__ import annotations
 from typing import Any, Dict
 from uuid import uuid4
 
-from app.modules.schema.contracts.resume_contracts import (
+from app.contracts.workflow.resume_contracts import (
     ARTIFACT_STAGE_ORDER,
     ResumeMode,
     ResumePlan,

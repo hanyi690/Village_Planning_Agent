@@ -42,7 +42,7 @@ from app.infrastructure.llm.dimension_runtime import (
 )
 from app.evidence.retrieval.evidence_service import retrieve_evidence, render_evidence_prompt_section
 from app.infrastructure.llm.prompts.detailed import get_dimension_prompt as get_layer3_prompt
-from app.modules.schema.contracts.evidence_contracts import ExplorationRequest
+from app.contracts.evidence.evidence_contracts import ExplorationRequest
 from app.contracts.program import PlanningClaimSet
 from app.infrastructure.tasks.task_supervisor import build_summary_task_key
 

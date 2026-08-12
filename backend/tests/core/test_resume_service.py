@@ -3,7 +3,7 @@ from types import SimpleNamespace
 import pytest
 
 from app.application.recovery.resume_service import ResumeConflictError, ResumeService
-from app.modules.schema.contracts.resume_contracts import ResumePlan, ResumeMode
+from app.contracts.workflow.resume_contracts import ResumePlan, ResumeMode
 
 
 def test_plan_for_snapshot_is_shared_checkpoint_policy():

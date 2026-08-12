@@ -1,4 +1,4 @@
-﻿"""SpatialResolver - single entry point for spatial reference resolution.
+"""SpatialResolver - single entry point for spatial reference resolution.
 
 Consolidates the three competing spatial-semantics implementations into one
 place, all reading from a ``PlanningContext``:
@@ -126,7 +126,7 @@ class SpatialResolver:
         applies a directional bbox refinement when the spec carries a direction
         (replacing the village-center bbox fallback used by EXPLORE grounding).
         """
-        from app.modules.schema.contracts.spatial_reference_contracts import (
+        from app.contracts.spatial.spatial_reference_contracts import (
             CandidateSet,
             ResolvedSpatialRef,
         )

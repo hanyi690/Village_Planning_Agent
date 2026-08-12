@@ -62,8 +62,8 @@ class ExploreService:
         The outcome is stored in the bundle provenance trace and can be read
         back with :func:`outcome_of`.
         """
-        from app.modules.schema.contracts.evidence_contracts import EvidenceBundle
-        from app.modules.schema.contracts.provenance import Provenance
+        from app.contracts.evidence.evidence_contracts import EvidenceBundle
+        from app.contracts.artifacts.provenance import Provenance
 
         bundle = EvidenceBundle(
             request=query_purpose,
@@ -104,7 +104,7 @@ class ExploreService:
         if evidence.retrieval_status != "success" or not evidence.claims:
             return self._with_outcome(bundle, ExploreOutcome.EXTERNAL_FAILED)
 
-        from app.modules.schema.contracts.evidence_contracts import EvidenceFact, EvidenceSource
+        from app.contracts.evidence.evidence_contracts import EvidenceFact, EvidenceSource
 
         bundle.sources.append(
             EvidenceSource(
@@ -166,7 +166,7 @@ class ExploreService:
         return ExploreOutcome.NOT_FOUND
 
     def _populate_local(self, bundle: Any, local: Any, query_purpose: str) -> None:
-        from app.modules.schema.contracts.evidence_contracts import EvidenceFact, EvidenceSource
+        from app.contracts.evidence.evidence_contracts import EvidenceFact, EvidenceSource
 
         if local is None:
             bundle.unresolved = [query_purpose, ExploreOutcome.NOT_FOUND.value]
@@ -284,7 +284,7 @@ class ExploreService:
         outcome: ExploreOutcome,
         message: str,
     ) -> Any:
-        from app.modules.schema.contracts.provenance import Provenance
+        from app.contracts.artifacts.provenance import Provenance
 
         bundle = bundle_cls(request=request)
         bundle.unresolved = [message, outcome.value]

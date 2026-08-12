@@ -10,9 +10,9 @@ from __future__ import annotations
 import re
 
 from app.data.ingestion.spatial_language import direction_from_location
-from app.modules.schema.contracts.l3_contracts import PlanningIntervention
-from app.modules.schema.contracts.parse_result_contracts import ParseDiagnostic
-from app.modules.schema.contracts.spatial_reference_contracts import (
+from app.contracts.domain.l3_contracts import PlanningIntervention
+from app.contracts.workflow.parse_result_contracts import ParseDiagnostic
+from app.contracts.spatial.spatial_reference_contracts import (
     RefObject,
     SpatialReferenceSpec,
 )

@@ -1,7 +1,7 @@
 from pathlib import Path
 
 from app.contracts.artifacts import ArtifactRef
-from app.modules.schema.contracts.execution_plan_contracts import (
+from app.contracts.workflow.execution_plan_contracts import (
     ExecutionResult,
     TaskExecutionResult,
 )

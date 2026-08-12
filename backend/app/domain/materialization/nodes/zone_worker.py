@@ -13,8 +13,8 @@ from app.domain.materialization.nodes.worker_common import (
     _task_enabled,
     _task_execution_result,
 )
-from app.modules.schema.contracts.execution_plan_contracts import WorkerResult
-from app.modules.schema.contracts.parcel_change_contracts import ParcelChange
+from app.contracts.workflow.execution_plan_contracts import WorkerResult
+from app.contracts.spatial.parcel_change_contracts import ParcelChange
 from app.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -82,7 +82,7 @@ def _zone_target_key(zone_target: Any) -> str:
 
 def _custom_zone_targets_from_plan(state: ExecuteAgentState) -> tuple[List[Any], List[Any]]:
     """Restore custom targets from zone-task bindings; invalid bindings fail closed."""
-    from app.modules.schema.contracts.custom_zone_contracts import CustomZoneTarget
+    from app.contracts.domain.custom_zone_contracts import CustomZoneTarget
 
     targets: List[Any] = []
     invalid_tasks: List[Any] = []

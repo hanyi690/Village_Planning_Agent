@@ -7,8 +7,8 @@ from pydantic import ValidationError
 
 from app.contracts.artifacts import ArtifactRef
 from app.infrastructure.artifacts import ContentAddressedArtifactRepository
-from app.modules.schema.contracts.artifact_descriptor import ArtifactDescriptor
-from app.modules.schema.contracts.execution_plan_contracts import ExecutionResult
+from app.contracts.artifacts.artifact_descriptor import ArtifactDescriptor
+from app.contracts.workflow.execution_plan_contracts import ExecutionResult
 from app.workflow.stage_adapter import StageCommand, StageCompletion
 from app.workflow.state import WorkflowState, project_workflow_state
 

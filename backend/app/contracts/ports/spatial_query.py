@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from typing import Any, Protocol
 
-from app.modules.schema.contracts.spatial_reference_contracts import (
+from app.contracts.spatial.spatial_reference_contracts import (
     CandidateSet, SpatialReferenceSpec,
 )
 

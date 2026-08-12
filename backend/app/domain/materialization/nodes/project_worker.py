@@ -15,8 +15,8 @@ from app.domain.materialization.nodes.worker_common import (
     _task_enabled,
     _task_execution_result,
 )
-from app.modules.schema.contracts.execution_plan_contracts import TypedActionResult, WorkerResult
-from app.modules.schema.contracts.parcel_change_contracts import ParcelChange
+from app.contracts.workflow.execution_plan_contracts import TypedActionResult, WorkerResult
+from app.contracts.spatial.parcel_change_contracts import ParcelChange
 from app.utils.logger import get_logger
 
 logger = get_logger(__name__)

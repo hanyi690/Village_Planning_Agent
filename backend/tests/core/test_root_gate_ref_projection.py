@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from app.modules.schema.contracts.workflow_contracts import GateDecision
+from app.contracts.workflow.workflow_contracts import GateDecision
 from app.workflow.root_graph import (
     END_DIAGNOSTIC,
     _gate_mutation_patch,

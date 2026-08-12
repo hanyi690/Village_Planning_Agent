@@ -1,4 +1,4 @@
-from app.modules.schema.contracts.resume_contracts import (
+from app.contracts.workflow.resume_contracts import (
     ResumeMode,
     build_resume_plan,
 )

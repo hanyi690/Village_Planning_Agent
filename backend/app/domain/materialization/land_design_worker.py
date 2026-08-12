@@ -14,18 +14,18 @@ from typing import Any, Dict, List, Optional, Tuple
 from shapely.geometry import Point, shape
 
 from app.domain.materialization.classification_utils import _classification_from_decision
-from app.modules.schema.contracts.classification_ref import (
+from app.contracts.artifacts.classification_ref import (
     ClassificationRef,
     classification_code_names,
 )
-from app.modules.schema.contracts.parcel_change_contracts import ParcelChange, ParcelChangeSet
-from app.modules.schema.contracts.parse_contracts import (
+from app.contracts.spatial.parcel_change_contracts import ParcelChange, ParcelChangeSet
+from app.contracts.workflow.parse_contracts import (
     FacilityTarget,
     ProjectTarget,
     SpatialPlanningIntent,
     ZoneTarget,
 )
-from app.modules.schema.contracts.selection_contracts import LandDesignBrief, SiteSelectionDecision
+from app.contracts.domain.selection_contracts import LandDesignBrief, SiteSelectionDecision
 from app.spatial.model.parcel_ops import create_parcel, merge_parcels, reclassify_parcel
 from app.spatial.allocation.selection import parse_scale_ha
 from app.spatial.model.subdivision import apply_setback, split_for_footprint

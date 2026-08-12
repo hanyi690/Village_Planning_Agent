@@ -4,12 +4,12 @@ from __future__ import annotations
 
 from pydantic import BaseModel
 
-from .contract_meta import ContractMeta
-from .evidence_contracts import EvidenceSource
+from app.contracts.artifacts.contract_meta import ContractMeta
+from app.contracts.evidence.evidence_contracts import EvidenceSource
 from .l1_contracts import EvidenceGap
-from .parse_result_contracts import ParseDiagnostic
-from .parsing_contracts import CompilerTrace
-from .provenance import Provenance
+from app.contracts.workflow.parse_result_contracts import ParseDiagnostic
+from app.contracts.workflow.parsing_contracts import CompilerTrace
+from app.contracts.artifacts.provenance import Provenance
 
 
 class StrategyConflict(BaseModel):

@@ -7,9 +7,9 @@ from pydantic import BaseModel, Field, field_validator
 
 from app.contracts.artifacts import ArtifactRef
 
-from .contract_meta import ContractMeta
-from .provenance import Provenance
-from .selection_contracts import TargetAssignment
+from app.contracts.artifacts.contract_meta import ContractMeta
+from app.contracts.artifacts.provenance import Provenance
+from app.contracts.domain.selection_contracts import TargetAssignment
 
 
 class WorkerType(str, Enum):

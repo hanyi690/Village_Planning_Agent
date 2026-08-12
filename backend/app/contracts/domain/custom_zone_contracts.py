@@ -4,7 +4,7 @@ from typing import List, Literal, Optional
 
 from pydantic import BaseModel, Field, model_validator
 
-from .classification_ref import ClassificationDecision
+from app.contracts.artifacts.classification_ref import ClassificationDecision
 
 
 class TypingRule(BaseModel):

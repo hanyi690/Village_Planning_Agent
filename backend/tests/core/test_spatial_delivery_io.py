@@ -7,8 +7,8 @@ from pathlib import Path
 
 import pytest
 
-from app.modules.schema.contracts.parcel_change_contracts import ParcelChange
-from app.modules.schema.contracts.spatial_delivery_contracts import (
+from app.contracts.spatial.parcel_change_contracts import ParcelChange
+from app.contracts.spatial.spatial_delivery_contracts import (
     SpatialLayerRef,
     SpatialReadRequest,
 )

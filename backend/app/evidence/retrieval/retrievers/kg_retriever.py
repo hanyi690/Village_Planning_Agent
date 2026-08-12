@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from typing import List, Tuple
 
-from app.modules.schema.contracts.evidence_contracts import (
+from app.contracts.evidence.evidence_contracts import (
     EvidenceFact,
     SpatialCognitionEvidence,
 )

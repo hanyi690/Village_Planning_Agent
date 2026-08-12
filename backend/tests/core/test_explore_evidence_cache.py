@@ -4,7 +4,7 @@ import pytest
 @pytest.mark.asyncio
 async def test_retrieve_evidence_caches_same_session_request(monkeypatch):
     from app.evidence.retrieval import evidence_service
-    from app.modules.schema.contracts.evidence_contracts import ExplorationRequest
+    from app.contracts.evidence.evidence_contracts import ExplorationRequest
 
     service = evidence_service
 
@@ -19,7 +19,7 @@ async def test_retrieve_evidence_caches_same_session_request(monkeypatch):
         return [], []
 
     async def empty_kg(*_args, **_kwargs):
-        from app.modules.schema.contracts.evidence_contracts import SpatialCognitionEvidence
+        from app.contracts.evidence.evidence_contracts import SpatialCognitionEvidence
         return [], SpatialCognitionEvidence()
 
     monkeypatch.setattr("app.evidence.retrieval.retrievers.report_retriever.retrieve_from_reports", reports)

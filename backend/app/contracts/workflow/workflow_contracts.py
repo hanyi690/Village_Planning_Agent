@@ -6,7 +6,7 @@ from enum import Enum
 
 from pydantic import BaseModel, Field
 
-from .contract_meta import ContractMeta
+from app.contracts.artifacts.contract_meta import ContractMeta
 
 
 class StageId(str, Enum):

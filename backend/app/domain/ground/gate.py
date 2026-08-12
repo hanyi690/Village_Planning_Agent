@@ -15,8 +15,8 @@ Determinism: routing is a pure function of the result fields, no RNG, no LLM.
 """
 from __future__ import annotations
 
-from app.modules.schema.contracts.grounding_contracts import CandidateSite, GroundingResult
-from app.modules.schema.contracts.workflow_contracts import GateDecision, PendingRequest
+from app.contracts.spatial.grounding_contracts import CandidateSite, GroundingResult
+from app.contracts.workflow.workflow_contracts import GateDecision, PendingRequest
 
 STAGE = "ground"
 

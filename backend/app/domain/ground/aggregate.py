@@ -16,14 +16,14 @@ from shapely.geometry import shape
 from shapely.ops import unary_union
 
 from app.infrastructure.context.planning_context import PlanningContext
-from app.modules.schema.contracts.contract_meta import StageIssue
-from app.modules.schema.contracts.grounding_contracts import (
+from app.contracts.artifacts.contract_meta import StageIssue
+from app.contracts.spatial.grounding_contracts import (
     CandidateSite,
     GroundingResult,
     SpatialQueryEvidence,
 )
-from app.modules.schema.contracts.provenance import Provenance
-from app.modules.schema.contracts.spatial_reference_contracts import (
+from app.contracts.artifacts.provenance import Provenance
+from app.contracts.spatial.spatial_reference_contracts import (
     ResolvedSpatialRef,
     SpatialReferenceSpec,
 )

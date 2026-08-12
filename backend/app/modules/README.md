@@ -33,7 +33,7 @@
 ## 输入/输出契约
 
 - **类型事实**：`app.modules.schema.types.canonical.VillageBundle`（形态优先的 typed 数据束）
-- **阶段契约**：`app.modules.schema.contracts/*` —— `L1Snapshot` / `L2Strategy` / `PlanningProgram` / `IntentCompilationResult` / `SpatialReferenceSpec` / `GroundingResult` / `SiteSelectionDecision` / `ExecutionPlan` / `ValidationReport` / `ReconciliationReport` / `DeliveryManifest`
+- **阶段契约**：`app.contracts/*`（折叠自 `app.modules.schema.contracts`，T9a）—— `L1Snapshot` / `L2Strategy` / `PlanningProgram` / `IntentCompilationResult` / `SpatialReferenceSpec` / `GroundingResult` / `SiteSelectionDecision` / `ExecutionPlan` / `ValidationReport` / `ReconciliationReport` / `DeliveryManifest`
 - **会话上下文**：`app.modules.context.planning_context.PlanningContext`（版本化事实容器，见 `context/README.md`）
 - **端口注入**：`app.modules.ports.planning_ports.PlanningPorts`（9 个注入式 Protocol，见 `ports/README.md`）
 

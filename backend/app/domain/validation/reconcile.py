@@ -17,8 +17,8 @@ from app.domain.validation.checks import (
     check_selection_change_coverage,
     check_spec_candidate_coverage,
 )
-from app.modules.schema.contracts.provenance import Provenance
-from app.modules.schema.contracts.reconciliation_contracts import (
+from app.contracts.artifacts.provenance import Provenance
+from app.contracts.artifacts.reconciliation_contracts import (
     CoverageMatrix,
     CoverageMatrixRow,
     ReconciliationInconsistency,

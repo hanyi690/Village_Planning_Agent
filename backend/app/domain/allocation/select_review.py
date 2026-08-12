@@ -9,12 +9,12 @@ from __future__ import annotations
 from typing import Any
 
 from app.domain.allocation.select_gate import select_gate_route
-from app.modules.schema.contracts.grounding_contracts import GroundingResult
-from app.modules.schema.contracts.selection_contracts import (
+from app.contracts.spatial.grounding_contracts import GroundingResult
+from app.contracts.domain.selection_contracts import (
     LandDesignBrief,
     SiteSelectionDecision,
 )
-from app.modules.schema.contracts.workflow_contracts import GateDecision
+from app.contracts.workflow.workflow_contracts import GateDecision
 
 _ROUTE_RATIONALE = {
     "PASS": "all targets placed with acceptable confidence",

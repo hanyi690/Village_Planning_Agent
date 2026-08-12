@@ -8,14 +8,14 @@ from __future__ import annotations
 
 from typing import Any
 
-from app.modules.schema.contracts.artifact_descriptor import ArtifactDescriptor
-from app.modules.schema.contracts.l1_contracts import L1Snapshot
-from app.modules.schema.contracts.review_contracts import (
+from app.contracts.artifacts.artifact_descriptor import ArtifactDescriptor
+from app.contracts.domain.l1_contracts import L1Snapshot
+from app.contracts.workflow.review_contracts import (
     ArtifactDescriptorProjection,
     ReviewPackage,
     ReviewStatus,
 )
-from app.modules.schema.contracts.workflow_contracts import GateDecision
+from app.contracts.workflow.workflow_contracts import GateDecision
 
 
 def build_summary_md(snapshot: L1Snapshot, gate_decision: GateDecision) -> str:

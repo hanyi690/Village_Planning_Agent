@@ -88,7 +88,7 @@ def _classification_diagnostic_result(
 
 def _task_results_from_execution(execution_plan: Any, result: Dict[str, Any]) -> Any:
     """Classify every planned task from actual worker dispatch and output."""
-    from app.modules.schema.contracts.execution_plan_contracts import ExecutionResult, TaskExecutionResult
+    from app.contracts.workflow.execution_plan_contracts import ExecutionResult, TaskExecutionResult
     from app.domain.materialization.nodes.worker_common import worker_result_key, worker_route_key
 
     action_results = list(result.get("action_results", []) or [])
@@ -172,11 +172,11 @@ async def execute_node(state: Dict[str, Any]) -> Dict[str, Any]:
         classification_boundary_diagnostics,
     )
     from app.domain.materialization.planned_state_builder import changeset_to_planned_state
-    from app.modules.schema.contracts.deferral_contracts import DeferralLedger
-    from app.modules.schema.contracts.parse_contracts import SpatialPlanningIntent
-    from app.modules.schema.contracts.parse_result_contracts import IntentCompilationResult
-    from app.modules.schema.contracts.selection_contracts import SiteSelectionDecision
-    from app.modules.schema.contracts.execution_plan_contracts import ExecutionPlan, ExecutionResult
+    from app.contracts.artifacts.deferral_contracts import DeferralLedger
+    from app.contracts.workflow.parse_contracts import SpatialPlanningIntent
+    from app.contracts.workflow.parse_result_contracts import IntentCompilationResult
+    from app.contracts.domain.selection_contracts import SiteSelectionDecision
+    from app.contracts.workflow.execution_plan_contracts import ExecutionPlan, ExecutionResult
 
     intent = _load_ref_artifact(state, "target_projection", IntentCompilationResult)
     plan_intent = _to_typed(getattr(intent, "typed_intent", None) or intent, SpatialPlanningIntent)

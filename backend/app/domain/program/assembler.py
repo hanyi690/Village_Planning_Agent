@@ -9,15 +9,15 @@ from app.domain.allocation.model import AllocationAssignment, PortfolioDecision
 from app.domain.demand.model import DemandItem, DemandPortfolio
 from app.domain.program.classification import classification_program_issues
 from app.domain.program.intent_spec import PlanningHumanDecision, TaskIntentSpec
-from app.modules.schema.contracts.classification_ref import ClassificationDecision
-from app.modules.schema.contracts.l1_contracts import EvidenceGap
-from app.modules.schema.contracts.l3_contracts import (
+from app.contracts.artifacts.classification_ref import ClassificationDecision
+from app.contracts.domain.l1_contracts import EvidenceGap
+from app.contracts.domain.l3_contracts import (
     InterventionDependency,
     PlanningIntervention,
     PlanningProgram,
     ProgramIssue,
 )
-from app.modules.schema.contracts.provenance import Provenance
+from app.contracts.artifacts.provenance import Provenance
 
 
 def _unique(values: Iterable[str]) -> list[str]:

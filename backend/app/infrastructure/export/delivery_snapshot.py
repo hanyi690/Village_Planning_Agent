@@ -8,7 +8,7 @@ from collections.abc import Iterable, Mapping
 from pathlib import Path
 from typing import Any
 
-from app.modules.schema.contracts.spatial_delivery_contracts import (
+from app.contracts.spatial.spatial_delivery_contracts import (
     DeliverySpatialSnapshot,
     SpatialLayerRef,
 )

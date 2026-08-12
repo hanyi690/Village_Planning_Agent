@@ -15,7 +15,7 @@ from app.application.commands.resume_workflow import (
     ResumeWorkflowCommand,
     ResumeWorkflowService,
 )
-from app.modules.schema.contracts.resume_contracts import ResumeMode
+from app.contracts.workflow.resume_contracts import ResumeMode
 
 
 def _snapshot(*, checkpoint_id: str, values: dict) -> SimpleNamespace:

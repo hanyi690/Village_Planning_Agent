@@ -7,9 +7,9 @@ no KG and no cross-system mapping lookup — pure container math only.
 
 from __future__ import annotations
 
-from app.modules.schema.contracts.delivery_manifest_contracts import HumanItem
-from app.modules.schema.contracts.reconciliation_contracts import CoverageMatrix
-from app.modules.schema.contracts.validation_report_contracts import ValidationReport
+from app.contracts.artifacts.delivery_manifest_contracts import HumanItem
+from app.contracts.artifacts.reconciliation_contracts import CoverageMatrix
+from app.contracts.artifacts.validation_report_contracts import ValidationReport
 
 # Required statutory output layers (from GDB_LAYER_REGISTRY / LAYER_GIS_KEY_MAP).
 REQUIRED_STATUTORY_LAYERS = (

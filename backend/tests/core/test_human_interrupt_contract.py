@@ -1,5 +1,5 @@
 from app.workflow.plan_state.state import state_to_ui_status
-from app.modules.schema.contracts.human_interrupt_contracts import (
+from app.contracts.workflow.human_interrupt_contracts import (
     HumanInterruptChannel,
     build_human_interrupt,
     normalize_human_decision,

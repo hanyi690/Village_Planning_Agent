@@ -32,7 +32,7 @@ def format_spatial_context_for_prompt(
     - "standard": + landuse distribution + protection zones (~4000 chars, for extract)
     - "full": + spatial relations + zone adjacency (~12000 chars, for validate)
     """
-    from app.modules.schema.contracts.context_contracts import ContextBlockType as CBT
+    from app.contracts.spatial.context_contracts import ContextBlockType as CBT
 
     lines: list = []
 

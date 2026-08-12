@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from typing import Optional
 
-from app.modules.schema.contracts.classification_ref import (
+from app.contracts.artifacts.classification_ref import (
     ClassificationDecision,
     ClassificationRef,
     classification_code_names,

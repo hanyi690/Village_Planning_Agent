@@ -42,7 +42,7 @@ def test_stable_api_does_not_import_agent_business_models_or_renderers() -> None
     forbidden = {
         'app.agent.deliver.render_layers',
         'app.domain.delivery.render_layers',
-        'app.modules.schema.contracts.planned_state_contracts',
+        'app.contracts.spatial.planned_state_contracts',
         'app.infrastructure.export.export_package',
     }
     assert imports.isdisjoint(forbidden)

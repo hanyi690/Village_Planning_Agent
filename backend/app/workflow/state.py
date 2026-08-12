@@ -10,7 +10,7 @@ from __future__ import annotations
 from typing import Annotated, Any, TypedDict
 
 from app.contracts.artifacts import ArtifactRef
-from app.modules.schema.contracts.workflow_contracts import GateDecision
+from app.contracts.workflow.workflow_contracts import GateDecision
 
 
 GATE_STAGES = frozenset(

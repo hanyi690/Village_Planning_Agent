@@ -8,7 +8,7 @@ from pydantic import Field, model_validator
 
 from app.evidence.model.base import JsonObject, StrictContractModel
 from app.evidence.model.relation_evidence import RelationEvidence
-from app.modules.schema.contracts.artifact_descriptor import ArtifactDescriptor
+from app.contracts.artifacts.artifact_descriptor import ArtifactDescriptor
 
 
 class ValidationAdjustment(StrictContractModel):

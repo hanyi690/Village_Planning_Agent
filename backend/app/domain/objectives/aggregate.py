@@ -11,12 +11,12 @@ from typing import Any
 
 from app.domain.common.context_guard import require_frozen_context
 from app.infrastructure.artifacts.runtime import store_artifact
-from app.modules.schema.contracts.artifact_descriptor import ArtifactDescriptor
-from app.modules.schema.contracts.evidence_contracts import EvidenceSource
-from app.modules.schema.contracts.l1_contracts import EvidenceGap
-from app.modules.schema.contracts.l2_contracts import L2Strategy, L2StrategyFragment
-from app.modules.schema.contracts.parsing_contracts import CompilationProfile
-from app.modules.schema.contracts.provenance import Provenance
+from app.contracts.artifacts.artifact_descriptor import ArtifactDescriptor
+from app.contracts.evidence.evidence_contracts import EvidenceSource
+from app.contracts.domain.l1_contracts import EvidenceGap
+from app.contracts.domain.l2_contracts import L2Strategy, L2StrategyFragment
+from app.contracts.workflow.parsing_contracts import CompilationProfile
+from app.contracts.artifacts.provenance import Provenance
 from app.infrastructure.artifacts.fingerprint import semantic_checksum
 from app.infrastructure.reports.review_package import write_review_package
 from app.utils.logger import get_logger

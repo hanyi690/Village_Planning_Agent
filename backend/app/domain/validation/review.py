@@ -9,11 +9,11 @@ from __future__ import annotations
 
 from typing import Any
 
-from app.modules.schema.contracts.reconciliation_contracts import (
+from app.contracts.artifacts.reconciliation_contracts import (
     CoverageMatrixRow,
     ReconciliationReport,
 )
-from app.modules.schema.contracts.workflow_contracts import GateDecision
+from app.contracts.workflow.workflow_contracts import GateDecision
 
 _LINK_FIELDS = (
     ("intervention_to_spec", "spec_index"),

@@ -24,11 +24,11 @@ from __future__ import annotations
 from typing import Any
 
 from app.domain.common.gate_progress import gate_progress_metadata
-from app.modules.schema.contracts.reconciliation_contracts import (
+from app.contracts.artifacts.reconciliation_contracts import (
     ReconciliationInconsistency,
     ReconciliationReport,
 )
-from app.modules.schema.contracts.workflow_contracts import (
+from app.contracts.workflow.workflow_contracts import (
     GateDecision,
     PendingRequest,
     StageId,

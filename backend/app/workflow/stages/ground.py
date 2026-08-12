@@ -32,8 +32,8 @@ async def ground_node(state: Dict[str, Any]) -> Dict[str, Any]:
     """GROUND node: specs + context -> GroundingResult + gate."""
     from app.domain.ground.aggregate import ground_aggregate, retrieve_evidence
     from app.domain.ground.gate import evaluate_ground_gate
-    from app.modules.schema.contracts.parse_result_contracts import IntentCompilationResult
-    from app.modules.schema.contracts.spatial_reference_contracts import SpatialReferenceSpec
+    from app.contracts.workflow.parse_result_contracts import IntentCompilationResult
+    from app.contracts.spatial.spatial_reference_contracts import SpatialReferenceSpec
 
     retry_patch = _retry_patch(state, "ground")
     context = await _require_context(state)

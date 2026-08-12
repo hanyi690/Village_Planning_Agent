@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from typing import Any, Dict
 
-from app.modules.schema.contracts.place_resolution_contracts import (
+from app.contracts.ports.place_resolution_contracts import (
     PlaceEvidenceEntry,
 )
 

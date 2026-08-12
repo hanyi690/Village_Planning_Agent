@@ -10,7 +10,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from app.modules.schema.contracts.artifact_descriptor import ArtifactDescriptor
+from app.contracts.artifacts.artifact_descriptor import ArtifactDescriptor
 from app.infrastructure.artifacts.fingerprint import semantic_checksum
 
 

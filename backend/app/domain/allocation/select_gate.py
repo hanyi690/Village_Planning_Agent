@@ -16,8 +16,8 @@ from __future__ import annotations
 
 from typing import Any
 
-from app.modules.schema.contracts.selection_contracts import SiteSelectionDecision
-from app.modules.schema.contracts.workflow_contracts import GateDecision, PendingRequest
+from app.contracts.domain.selection_contracts import SiteSelectionDecision
+from app.contracts.workflow.workflow_contracts import GateDecision, PendingRequest
 from app.domain.common.gate_progress import gate_progress_metadata
 
 STAGE = "select"

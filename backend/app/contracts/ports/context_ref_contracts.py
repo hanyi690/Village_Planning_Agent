@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pydantic import BaseModel
 
-from .contract_meta import ContractMeta
+from app.contracts.artifacts.contract_meta import ContractMeta
 
 
 class DatasetRef(BaseModel):

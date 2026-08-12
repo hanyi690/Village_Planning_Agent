@@ -28,7 +28,7 @@ from __future__ import annotations
 from types import SimpleNamespace
 from typing import Any, List, Optional
 
-from app.modules.schema.contracts.validation_report_contracts import ValidationCheck
+from app.contracts.artifacts.validation_report_contracts import ValidationCheck
 from app.spatial.allocation.selection import _PROHIBITED_CONSTRAINTS
 
 _AREA_TOLERANCE = 0.05

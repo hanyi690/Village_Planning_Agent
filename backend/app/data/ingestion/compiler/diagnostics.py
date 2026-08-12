@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import re
 
-from app.modules.schema.contracts.parse_result_contracts import ParseDiagnostic
+from app.contracts.workflow.parse_result_contracts import ParseDiagnostic
 
 _CHAPTER_RE = re.compile(r"^#{1,3}\s+(\S.+)$", re.MULTILINE)
 

@@ -16,11 +16,11 @@ import logging
 from typing import Any, Dict, List, Optional, Tuple
 
 from app.infrastructure.context.planning_context import PlanningContext
-from app.modules.schema.contracts.grounding_contracts import CandidateSite, GroundingResult
-from app.modules.schema.contracts.classification_ref import classification_code_names
-from app.modules.schema.contracts.parse_contracts import ProjectTarget
-from app.modules.schema.contracts.provenance import Provenance
-from app.modules.schema.contracts.selection_contracts import (
+from app.contracts.spatial.grounding_contracts import CandidateSite, GroundingResult
+from app.contracts.artifacts.classification_ref import classification_code_names
+from app.contracts.workflow.parse_contracts import ProjectTarget
+from app.contracts.artifacts.provenance import Provenance
+from app.contracts.domain.selection_contracts import (
     EliminatedCandidate,
     LandDesignBrief,
     RankedCandidate,

@@ -12,7 +12,7 @@ from typing import ClassVar, Mapping
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from app.modules.schema.contracts.artifact_descriptor import ArtifactDescriptor
+from app.contracts.artifacts.artifact_descriptor import ArtifactDescriptor
 
 
 class DispatchAction(StrEnum):

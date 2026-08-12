@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from app.modules.schema.contracts.grounding_contracts import (
+from app.contracts.spatial.grounding_contracts import (
     CandidateSite,
     GroundingResult,
     HardConstraintResult,

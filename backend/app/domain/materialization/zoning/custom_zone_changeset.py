@@ -13,8 +13,8 @@ from typing import Any, Iterable, Mapping
 from shapely.geometry import shape
 from shapely.geometry.base import BaseGeometry
 
-from app.modules.schema.contracts.custom_zone_contracts import CustomZoneTarget, Vocabulary
-from app.modules.schema.contracts.parcel_change_contracts import ParcelChange
+from app.contracts.domain.custom_zone_contracts import CustomZoneTarget, Vocabulary
+from app.contracts.spatial.parcel_change_contracts import ParcelChange
 from app.domain.materialization.zoning.custom_zone_generator import CustomZoningGenerator
 
 

@@ -1,7 +1,7 @@
 """Place evidence index port (blueprint M3 boundary).
 
 The canonical resolution contract lives in
-``app.modules.schema.contracts.place_resolution_contracts``.  Adapters (KG,
+``app.contracts.ports.place_resolution_contracts``.  Adapters (KG,
 gazetteer, bundle, external geocoder) are wired behind this protocol so
 GROUND/SELECT only ever see a typed ``PlaceResolutionResult``.
 """

@@ -8,9 +8,9 @@ from __future__ import annotations
 
 from typing import Any
 
-from app.modules.schema.contracts.grounding_contracts import GroundingResult
-from app.modules.schema.contracts.spatial_reference_contracts import SpatialReferenceSpec
-from app.modules.schema.contracts.workflow_contracts import GateDecision
+from app.contracts.spatial.grounding_contracts import GroundingResult
+from app.contracts.spatial.spatial_reference_contracts import SpatialReferenceSpec
+from app.contracts.workflow.workflow_contracts import GateDecision
 
 _ROUTE_RATIONALE = {
     "EXPLORE": "unresolved specs remain or no candidates resolved; request exploration",

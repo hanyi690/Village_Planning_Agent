@@ -22,7 +22,7 @@ import hashlib
 import re
 from typing import Any, Dict, List, Optional, Tuple
 
-from app.modules.schema.contracts.parse_contracts import (
+from app.contracts.workflow.parse_contracts import (
     AxisTarget,
     FacilityTarget,
     ProjectTarget,
@@ -30,7 +30,7 @@ from app.modules.schema.contracts.parse_contracts import (
     SpatialPreference,
     ZoneTarget,
 )
-from app.modules.schema.contracts.provenance import SemanticMetadata
+from app.contracts.artifacts.provenance import SemanticMetadata
 
 from app.data.ingestion.spatial_language import direction_from_location
 

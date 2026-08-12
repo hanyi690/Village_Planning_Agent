@@ -153,7 +153,7 @@ parse_summary(summary, dimension_key="", layer=1) -> Dict[str, Any]
 
 ## 四、依赖
 
-- **内部**: `app.core.settings`（`GIS_DATA_DIR`）；`app.utils.logger`；`app.modules.schema.contracts.parse_contracts`（SpatialPreference/ZoneTarget/FacilityTarget/PlanningIndicatorTable/SpatialConstraint）；`app.modules.schema.contracts.semantic_fields`（SemanticMetadata）；`app.data.ingestion.providers.tianditu`（TiandituProvider，惰性）；`app.modules.schema.encodings.code_sets`（GHYTBM_TO_VNE）；`app.agent.gis.parse.agent`（`_direction_from_location`，**反向依赖，技术债**）
+- **内部**: `app.core.settings`（`GIS_DATA_DIR`）；`app.utils.logger`；`app.contracts.workflow.parse_contracts`（SpatialPreference/ZoneTarget/FacilityTarget/PlanningIndicatorTable/SpatialConstraint）；`app.contracts.artifacts.provenance`（SemanticMetadata）；`app.data.ingestion.providers.tianditu`（TiandituProvider，惰性）；`app.modules.schema.encodings.code_sets`（GHYTBM_TO_VNE）；`app.agent.gis.parse.agent`（`_direction_from_location`，**反向依赖，技术债**）
 - **外部**: `pydantic>=2.12`；stdlib（re/csv/gzip/json/math/pathlib/dataclasses/enum/typing）
 - **零空间计算依赖**：不导入 geopandas/shapely（设计使然）
 

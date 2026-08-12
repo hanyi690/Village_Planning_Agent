@@ -67,7 +67,7 @@ def _task_execution_result(
     errors: list[str] | None = None,
 ) -> Any:
     """Build target-specific worker evidence for one plan task."""
-    from app.modules.schema.contracts.execution_plan_contracts import TaskExecutionResult
+    from app.contracts.workflow.execution_plan_contracts import TaskExecutionResult
 
     task = next(
         (
@@ -94,7 +94,7 @@ def _execution_intent_from_plan(state: ExecuteAgentState) -> Any:
     """Rebuild worker inputs from task snapshots, never from a stale intent."""
     if state.execution_plan is None:
         return None
-    from app.modules.schema.contracts.parse_contracts import (
+    from app.contracts.workflow.parse_contracts import (
         AxisTarget,
         FacilityTarget,
         ProjectTarget,

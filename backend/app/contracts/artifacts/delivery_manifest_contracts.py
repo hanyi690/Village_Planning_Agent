@@ -15,7 +15,7 @@ from pydantic import BaseModel, Field
 
 from .contract_meta import ContractMeta
 from .deferral_contracts import DeferralLedger
-from .execution_plan_contracts import TypedActionResult
+from app.contracts.workflow.execution_plan_contracts import TypedActionResult
 from .provenance import Provenance
 
 

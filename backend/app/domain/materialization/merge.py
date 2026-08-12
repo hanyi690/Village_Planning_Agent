@@ -19,8 +19,8 @@ from __future__ import annotations
 from typing import Any, Dict, List, Tuple
 
 from app.domain.materialization.land_design_worker import build_parcel_change_set
-from app.modules.schema.contracts.execution_plan_contracts import TypedActionResult
-from app.modules.schema.contracts.parcel_change_contracts import ParcelChange, ParcelChangeSet
+from app.contracts.workflow.execution_plan_contracts import TypedActionResult
+from app.contracts.spatial.parcel_change_contracts import ParcelChange, ParcelChangeSet
 
 # Later workers win when two workers emit the same layerType.
 _WORKER_PRIORITY: Dict[str, int] = {

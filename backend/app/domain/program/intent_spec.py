@@ -11,7 +11,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from app.modules.schema.contracts.execution_plan_contracts import WorkerType
+from app.contracts.workflow.execution_plan_contracts import WorkerType
 
 GeometryExpectation = Literal["parcel", "polygon", "point", "line", "action"]
 ImplementationPhase = Literal["short", "medium", "long"]

@@ -6,7 +6,7 @@ from __future__ import annotations
 
 from typing import Any, Protocol
 
-from app.modules.schema.contracts.gazetteer_contracts import GazetteerEntryLike
+from app.contracts.ports.gazetteer_contracts import GazetteerEntryLike
 
 
 class GazetteerPort(Protocol):

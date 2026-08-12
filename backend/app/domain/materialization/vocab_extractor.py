@@ -16,7 +16,7 @@ import json
 import re
 from typing import Any, Dict, List
 
-from app.modules.schema.contracts.custom_zone_contracts import (
+from app.contracts.domain.custom_zone_contracts import (
     TypingRule,
     Vocabulary,
     VocabularyCategory,

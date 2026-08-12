@@ -18,7 +18,7 @@ from rdflib.namespace import XSD
 
 from app.utils.logger import get_logger
 from ..ontology import PLN, EntityTypes, EntityIdPolicy
-from app.modules.schema.contracts.planned_state_contracts import (
+from app.contracts.spatial.planned_state_contracts import (
     PlannedAxis,
     PlannedFacility,
     PlannedParcel,

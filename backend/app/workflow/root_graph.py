@@ -42,7 +42,7 @@ from app.workflow.stages.support import (
 from app.workflow.stage_adapter import persist_gate_decision, persist_stage_artifact
 from app.workflow.layers.context_bootstrap import bootstrap_context_node
 from app.core.events import SSEEventType
-from app.modules.schema.contracts.human_interrupt_contracts import (
+from app.contracts.workflow.human_interrupt_contracts import (
     HumanInterruptChannel,
     build_human_interrupt,
     normalize_human_decision,
@@ -503,10 +503,10 @@ def _diagnostic_manifest_patch(
             build_traceability_from_coverage,
             mark_manifest_diagnostic,
         )
-        from app.modules.schema.contracts.deferral_contracts import DeferralLedger
-        from app.modules.schema.contracts.delivery_manifest_contracts import DeliveryManifest
-        from app.modules.schema.contracts.execution_plan_contracts import ExecutionResult
-        from app.modules.schema.contracts.reconciliation_contracts import ReconciliationReport
+        from app.contracts.artifacts.deferral_contracts import DeferralLedger
+        from app.contracts.artifacts.delivery_manifest_contracts import DeliveryManifest
+        from app.contracts.workflow.execution_plan_contracts import ExecutionResult
+        from app.contracts.artifacts.reconciliation_contracts import ReconciliationReport
 
         ledger = load_artifact(state, "deferral_ledger", DeferralLedger)
         outcome = load_artifact(state, "execution_result", ExecutionResult)
@@ -1374,7 +1374,7 @@ async def _apply_classification_revision(
     """Persist an explicit classification revision and restart spatial stages."""
     from app.domain.program.classification import revise_program_with_decisions
     from app.infrastructure.artifacts.runtime import load_artifact
-    from app.modules.schema.contracts.l3_contracts import PlanningProgram
+    from app.contracts.domain.l3_contracts import PlanningProgram
 
     raw = decisions.get("classification_decisions")
     program = load_artifact(state, "planning_program", PlanningProgram)
@@ -1426,12 +1426,12 @@ async def _apply_structural_target_deferrals(
     from app.domain.delivery.deferral_ledger import append_ledger, build_target_deferrals
     from app.domain.materialization.plan_builder import defer_plan_tasks
     from app.infrastructure.artifacts.runtime import load_artifact
-    from app.modules.schema.contracts.deferral_contracts import DeferralLedger
-    from app.modules.schema.contracts.execution_plan_contracts import (
+    from app.contracts.artifacts.deferral_contracts import DeferralLedger
+    from app.contracts.workflow.execution_plan_contracts import (
         ExecutionResult,
         ExecutionPlan,
     )
-    from app.modules.schema.contracts.selection_contracts import SiteSelectionDecision
+    from app.contracts.domain.selection_contracts import SiteSelectionDecision
 
     plan = load_artifact(state, "execution_plan", ExecutionPlan)
     outcome = load_artifact(state, "execution_result", ExecutionResult)
@@ -1557,8 +1557,8 @@ async def _record_target_deferrals(
     """Persist an immutable ledger only for explicitly unresolved targets."""
     from app.domain.delivery.deferral_ledger import append_ledger, build_target_deferrals
     from app.infrastructure.artifacts.runtime import load_artifact
-    from app.modules.schema.contracts.deferral_contracts import DeferralLedger
-    from app.modules.schema.contracts.grounding_contracts import GroundingResult
+    from app.contracts.artifacts.deferral_contracts import DeferralLedger
+    from app.contracts.spatial.grounding_contracts import GroundingResult
 
     grounding = load_artifact(state, "grounding_result", GroundingResult)
     if grounding is None:
@@ -1664,7 +1664,7 @@ async def _record_select_target_deferrals(
     """Record explicit SELECT-level deferrals in the immutable ledger."""
     from app.domain.delivery.deferral_ledger import append_ledger, build_target_deferrals
     from app.infrastructure.artifacts.runtime import load_artifact
-    from app.modules.schema.contracts.deferral_contracts import DeferralLedger
+    from app.contracts.artifacts.deferral_contracts import DeferralLedger
 
     try:
         gate = _root_gate_payload(state, "select")
@@ -1730,9 +1730,9 @@ async def _apply_deferred_select_review(
     """Create a traceable SELECT revision for explicit human deferrals."""
     from app.domain.allocation.select_service import revise_site_selection_deferral
     from app.infrastructure.artifacts.runtime import load_artifact
-    from app.modules.schema.contracts.execution_plan_contracts import ExecutionPlan
-    from app.modules.schema.contracts.parse_result_contracts import IntentCompilationResult
-    from app.modules.schema.contracts.selection_contracts import SiteSelectionDecision
+    from app.contracts.workflow.execution_plan_contracts import ExecutionPlan
+    from app.contracts.workflow.parse_result_contracts import IntentCompilationResult
+    from app.contracts.domain.selection_contracts import SiteSelectionDecision
 
     decision = load_artifact(state, "site_selection", SiteSelectionDecision)
     intent_result = load_artifact(state, "target_projection", IntentCompilationResult)

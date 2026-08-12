@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, List
 
-from app.modules.schema.contracts.context_contracts import (
+from app.contracts.spatial.context_contracts import (
     ResidentialClusterAnchor,
     SpatialRelation,
 )

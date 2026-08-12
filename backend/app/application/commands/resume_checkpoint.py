@@ -9,7 +9,7 @@ from typing import Any, Protocol
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from app.modules.schema.contracts.resume_contracts import (
+from app.contracts.workflow.resume_contracts import (
     ResumeMode,
     ResumePlan,
     build_resume_plan as _build_contract_plan,

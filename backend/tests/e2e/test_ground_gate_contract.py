@@ -1,6 +1,6 @@
 from app.domain.ground.gate import evaluate_ground_gate, ground_gate_route
-from app.modules.schema.contracts.contract_meta import StageIssue
-from app.modules.schema.contracts.grounding_contracts import GroundingResult
+from app.contracts.artifacts.contract_meta import StageIssue
+from app.contracts.spatial.grounding_contracts import GroundingResult
 
 
 def test_unresolved_target_reference_routes_to_human_with_target_id():

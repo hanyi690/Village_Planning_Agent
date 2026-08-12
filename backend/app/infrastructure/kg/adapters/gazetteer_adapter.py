@@ -4,7 +4,7 @@ from dataclasses import asdict
 from typing import Any
 
 from app.contracts.ports.gazetteer import GazetteerPort
-from app.modules.schema.contracts.gazetteer_contracts import GazetteerEntryLike
+from app.contracts.ports.gazetteer_contracts import GazetteerEntryLike
 
 
 class KGGazetteerAdapter(GazetteerPort):

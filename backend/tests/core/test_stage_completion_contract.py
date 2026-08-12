@@ -4,8 +4,8 @@ import ast
 from pathlib import Path
 
 from app.infrastructure.artifacts.repository import ContentAddressedArtifactRepository
-from app.modules.schema.contracts.workflow_contracts import GateDecision
-from app.modules.schema.contracts.artifact_descriptor import ArtifactDescriptor
+from app.contracts.workflow.workflow_contracts import GateDecision
+from app.contracts.artifacts.artifact_descriptor import ArtifactDescriptor
 from app.workflow.stage_adapter import StageCompletion, persist_gate_decision
 from app.workflow.stages.support import stage_completion_patch
 

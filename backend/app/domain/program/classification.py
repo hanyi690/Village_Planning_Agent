@@ -11,8 +11,8 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from typing import Any
 
-from app.modules.schema.contracts.classification_ref import ClassificationDecision
-from app.modules.schema.contracts.l3_contracts import PlanningProgram, ProgramIssue
+from app.contracts.artifacts.classification_ref import ClassificationDecision
+from app.contracts.domain.l3_contracts import PlanningProgram, ProgramIssue
 
 
 def _raw_items(raw: Any) -> list[dict[str, Any]]:
