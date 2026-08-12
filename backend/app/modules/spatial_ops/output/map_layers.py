@@ -138,8 +138,8 @@ def build_trace_layer(
     """构建定位校核图层（EXPLORE grounding 指令的候选 BSM → 点/面标注）。
 
     反映 L3 空间描述经 KG 拓扑接地后的候选地块分布，供前端核对
-    "文本说 X 处" vs "几何落在哪"。Migrated from
-    app.agent.execute.layout_pipeline._build_trace_layer (Wave M1).
+    "文本说 X 处" vs "几何落在哪"。Migrated from a
+    legacy Wave-M1 pipeline (historical comment).
     """
     explore = explore_instructions or {}
     instructions = explore.get("instructions") or []

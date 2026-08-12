@@ -1,6 +1,6 @@
 """Shared dimension runtime infrastructure for L1/L2/L3 analysis nodes.
 
-Extracted from ``app.agent.l1_observe.analysis_node.analyze_dimension``
+Extracted from ``app.domain.assessment.analysis_node.analyze_dimension``
 (Wave D) so the new L2 strategize worker can reuse RAG retrieval,
 dependency report loading, SSE publishing, ReportStore save, StepReport
 save, and structured summary generation without importing the whole

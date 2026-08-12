@@ -1,6 +1,6 @@
 """DELIVER terminal router over a DeliveryManifest.
 
-Mirrors the RECONCILE/VALIDATE gate convention (app.agent.reconcile.gate)
+Mirrors the RECONCILE/VALIDATE gate convention (app.domain.validation.reconcile_gate)
 with stage="deliver". Pure function: DeliveryManifest -> GateDecision.
 No I/O, no LLM, no KG - deterministic only.
 

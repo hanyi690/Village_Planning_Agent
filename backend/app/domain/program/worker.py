@@ -2,7 +2,7 @@
 
 Independent L3-only dimension analysis worker (Wave E). Mirrors the shared
 L1/L2 dimension flow but is restricted to the L3 detail-planning layer and
-reuses the shared runtime helpers from ``app.agent.common.dimension_runtime``.
+reuses the shared runtime helpers from ``app.infrastructure.llm.dimension_runtime``.
 Per docs/architecture/agent-graph.md the L3 subgraph is independent and must
 not reference the L1 analysis node implementation.
 """

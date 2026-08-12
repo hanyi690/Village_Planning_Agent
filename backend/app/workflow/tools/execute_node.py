@@ -4,7 +4,7 @@ Filters out intent tools (advance_planning_intent / gis_analysis) routed
 elsewhere, then invokes the remaining BaseTools in parallel. SSE events
 are published around each invocation.
 
-Migrated to app.agent.tools per docs/architecture/agent-graph.md §5.
+This is the tools node in the workflow graph (see docs/architecture/agent-graph.md §5).
 """
 
 import asyncio

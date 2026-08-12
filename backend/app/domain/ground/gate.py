@@ -1,7 +1,7 @@
 """GROUND gate evaluator - 3-route decision over a GroundingResult.
 
 Pure function: GroundingResult -> GateDecision. No I/O. Mirrors the gate
-convention in app.agent.{l1_observe,l2_strategize,l3_plan,parse} with
+convention in app.domain.{assessment,objectives,program} gates with
 stage="ground".
 
 Routes (precedence high -> low):
