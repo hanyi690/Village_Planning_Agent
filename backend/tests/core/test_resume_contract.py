@@ -1,7 +1,9 @@
 from app.modules.schema.contracts.resume_contracts import (
     ResumeCommand,
     ResumeMode,
+    ResumePlan,
     build_resume_plan,
+    repair_plan_for_integrity,
 )
 
 
@@ -57,3 +59,20 @@ def test_resume_command_requires_explicit_mode_and_is_strict():
     assert command.event_id == "human-1"
     assert command.payload["action"] == "approve"
 
+
+def test_integrity_failure_selects_earliest_downstream_replay_stage():
+    plan = ResumePlan(
+        session_id="s1",
+        mode=ResumeMode.CHECKPOINT,
+        resume_from="DELIVER",
+        checkpoint_kind="layer",
+        reuse=["planning_program", "grounding_result", "site_selection", "delivery_manifest"],
+        reason="continue",
+    )
+
+    repaired = repair_plan_for_integrity(plan, ["grounding_result"])
+
+    assert repaired.mode is ResumeMode.RERUN
+    assert repaired.resume_from == "GROUND"
+    assert repaired.reuse == ["planning_program"]
+    assert repaired.rerun[0] == "GROUND"

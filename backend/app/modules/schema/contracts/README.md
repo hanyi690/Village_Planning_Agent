@@ -1,6 +1,6 @@
 # Schema Contracts — 跨层数据契约索引
 
-> 村庄规划系统**所有阶段 artifact 与共享事实的类型化契约**。目录内每个文件对应一个阶段或一个共享领域，供 PARSE / GROUND / SELECT / EXECUTE / VALIDATE / RECONCILE / DELIVER 与共享层消费。
+> 村庄规划系统**所有阶段 artifact 与共享事实的类型化契约**。目录内每个文件对应一个阶段或一个共享领域，供 TARGET_PROJECTION / GROUND / SELECT / EXECUTE / VALIDATE / RECONCILE / DELIVER 与共享层消费。
 > **Updated: 2026-08-10**（`layout_contracts.py` 已在前序批次删除，勿再引用）
 
 ---
@@ -38,13 +38,13 @@
 |---|---|---|---|
 | `l3_contracts.py` | `PlanningProgram` / `L3ProgramFragment` / `PlanningIntervention` / `InterventionDependency` / `ProgramIssue` | L3 详细规划 | EXECUTE / RECONCILE |
 
-### PARSE 解析
+### TARGET_PROJECTION 目标投影
 
 | 文件 | 主要契约类 | 生产 | 消费 |
 |---|---|---|---|
-| `parse_contracts.py` | `SpatialPlanningIntent` / `ZoneTarget` / `FacilityTarget` / `AxisTarget` / `RoadTarget` / `ProjectTarget` / `SpatialOperation` / `SpatialConstraint` / `ThreeZonesThreeLines` / `PlanningIndicatorTable` | PARSE | EXECUTE / GROUND / KG L3 |
-| `parse_result_contracts.py` | `IntentCompilationResult` / `CompilationError` / `CompilationPatch` / `ParseDiagnostic` / `ParseTrace` / `ParseRevisionRequest` | PARSE 编译器 | agent/parse 编排 |
-| `spatial_reference_contracts.py` | `SpatialReferenceSpec` / `CandidateSet` / `ResolvedSpatialRef` / `GeometryRef` / `RefObject` | PARSE / GROUND | spatial_ops / kg 适配器 |
+| `parse_contracts.py` | `SpatialPlanningIntent` / `ZoneTarget` / `FacilityTarget` / `AxisTarget` / `RoadTarget` / `ProjectTarget` / `SpatialOperation` / `SpatialConstraint` / `ThreeZonesThreeLines` / `PlanningIndicatorTable` | TARGET_PROJECTION | EXECUTE / GROUND / KG L3 |
+| `parse_result_contracts.py` | `IntentCompilationResult` / `CompilationStatus` / `ProjectRequirement` / `ParseDiagnostic` | TARGET_PROJECTION 结果 | GROUND / SELECT |
+| `spatial_reference_contracts.py` | `SpatialReferenceSpec` / `CandidateSet` / `ResolvedSpatialRef` / `GeometryRef` / `RefObject` | TARGET_PROJECTION / GROUND | spatial_ops / kg 适配器 |
 
 ### GROUND 空间接地
 
@@ -94,7 +94,7 @@
 | `context_contracts.py` | `ContextBlock` / `ContextBlockType` / `SpatialCognitiveUnit` / `FacilityAnchor` / `TerrainSample` / `ResidentialClusterAnchor` / `ConstraintZoneAnchor` / `SpatialRelation` / `TerrainProfile` | 空间认知卡片（spatial_ops 产出，prompts/agent 消费） |
 | `context_ref_contracts.py` | `PlanningContextRef` / `DatasetRef` / `ContextVersion` | 运行/数据集上下文引用 |
 | `evidence_contracts.py` | `EvidenceBundle` / `EvidenceFact` / `EvidenceSource` / `ExplorationRequest` / `ExplorationResult` / `SpatialCognitionEvidence` / `EvidenceGapResolution` | EXPLORE 证据探索 |
-| `constraint_contracts.py` | `PlanningConstraint` / `ConstraintSet` / `CompiledConstraint` / `CompilationReport` / `ConflictRecord` / `DroppedItem` | 约束模型（PARSE / EXECUTE 共享） |
+| `constraint_contracts.py` | `PlanningConstraint` / `ConstraintSet` / `CompiledConstraint` / `CompilationReport` / `ConflictRecord` / `DroppedItem` | 约束模型（TARGET_PROJECTION / EXECUTE 共享） |
 | `workflow_contracts.py` | `GateDecision` / `RoutingDecision` / `FeedbackRoute` / `PlanningRunRequest` / `PendingRequest` | 工作流控制 / Gate |
 | `resume_contracts.py` | `ResumePlan` / `ResumeMode` | checkpoint 恢复计划：区分 interrupt resume、checkpoint continue、下游重跑和阻断 |
 | `human_interrupt_contracts.py` | `HumanInterrupt` / `HumanInterruptItem` / `HumanInterruptChannel` | step-mode 与 post-L3 共用的 HUMAN interrupt payload |

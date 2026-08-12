@@ -1,4 +1,4 @@
-"""Stable-key helpers for ExecutionPlan/ExecutionOutcome evidence."""
+"""Stable-key helpers for ExecutionPlan/ExecutionResult evidence."""
 
 from __future__ import annotations
 

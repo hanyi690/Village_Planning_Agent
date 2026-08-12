@@ -10,8 +10,8 @@ BOOTSTRAP
   → L2 Consistency Gate
   → L3 PLAN
   → L3 Program Gate
-  → PARSE / IntentCompiler
-  → Parse Gate
+  → TARGET_PROJECTION (deterministic)
+  → Target Projection Gate
   → GROUND
   → SELECT
   → EXECUTE
@@ -106,22 +106,19 @@ L3 dimension workers
   → L3 Program Gate
 ```
 
-L3 Gate 通过后，独立顶层 PARSE 使用 `L3_PLANNING` profile 编译 `PlanningProgram`：
+L3 Gate 通过后，独立顶层 TARGET_PROJECTION 对 `PlanningProgram` 做确定性空间投影：
 
 ```text
 PlanningProgram
-  → deterministic extraction
-  → optional structured CompilationPatch
-  → deterministic merge and validation
+  → deterministic target projection
   → IntentCompilationResult + SpatialReferenceSpec
-  → Parse Gate
+  → Target Projection Gate
 ```
 
-缺少规划内容返回 L3；局部歧义进入 REPAIR；结构性重写进入 REVISE 或人工审查。
+缺少规划内容或空间证据时进入 GROUND/VALIDATE 的人工审查路径；不再通过另一次模型调用修复规划事实。
 
-在 `L3_PLANNING` profile 和顶层 PARSE 未实现前，只能把 L1/L2/L3 Markdown 报告、
-`【INSTRUCTION】` 和 SSE 视为真实运行输出。不能据此宣称 `L2Strategy`、`PlanningProgram`、
-`IntentCompilationResult` 或 `SpatialReferenceSpec` 已通过端到端验证。
+TARGET_PROJECTION 不读取 Markdown、`【INSTRUCTION】` 或原始 GeoJSON；它只加载
+`artifact_refs.planning_program`，并输出可供 GROUND 消费的 typed artifact。
 
 ## 5. GROUND
 
@@ -183,7 +180,7 @@ Worker 只消费 `SiteSelectionDecision` 和 `ExecutionPlan`。不可在 Worker 
 | L1 Evidence Gate | 事实、来源、维度完整性 | EXPLORE 或 L1 |
 | L2 Consistency Gate | 策略与事实、约束一致 | L1、EXPLORE 或 L2 |
 | L3 Program Gate | 干预、需求、依赖和来源完整 | EXPLORE、L3 或人工 |
-| Parse Gate | Target、约束、空间引用和编译诊断完整 | PARSE、L3 或人工 |
+| Target Projection Gate | typed targets、空间引用和诊断完整 | L3、GROUND 或人工 |
 | Grounding Gate | 实体、候选、几何证据 | EXPLORE、L3 或人工 |
 | Selection Gate | 可实施、无冲突、满足指标 | GROUND、L3 或 SELECT |
 | Validation Gate | 规则、几何、拓扑、图层 | EXECUTE、SELECT、GROUND 或 L3 |

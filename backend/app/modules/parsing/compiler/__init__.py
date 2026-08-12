@@ -1,7 +1,7 @@
-"""Shared parse-compiler - text report -> typed stage fragments.
+"""Shared report compiler - text report -> typed stage fragments.
 
-Wave B delivers core + L1_OBSERVATION profile. L3_PLANNING / REVISION
-profiles and the top-level agent/parse stage are Wave F.
+The compiler serves only L1/L2 report projection. L3 claims are produced by
+the L3 worker and target projection consumes the resulting PlanningProgram.
 """
 from __future__ import annotations
 

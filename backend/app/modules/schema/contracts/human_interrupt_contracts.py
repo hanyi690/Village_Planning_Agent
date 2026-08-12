@@ -73,6 +73,7 @@ def stable_human_interrupt_id(
     paused_stage: Optional[str] = None,
     items: Iterable[Dict[str, Any]] = (),
     retry_counts: Optional[Dict[str, int]] = None,
+    generation: int = 0,
 ) -> str:
     """Create a deterministic idempotency key for one HUMAN checkpoint."""
 
@@ -84,6 +85,7 @@ def stable_human_interrupt_id(
         "paused_stage": paused_stage,
         "items": list(items),
         "retry_counts": retry_counts or {},
+        "generation": int(generation),
     }
     encoded = json.dumps(
         material,

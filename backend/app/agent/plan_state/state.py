@@ -1,10 +1,9 @@
-"""Run-time state: AgentState TypedDict, reducers, create_initial_state, state_to_ui_status.
+"""Run-time state: AgentState TypedDict, reducers, and UI status projection.
 
 Migrated from agent/state.py per docs/architecture/agent-graph.md §5.
 """
 
 import math
-import operator
 from typing import TypedDict, List, Dict, Any, Optional, Annotated
 from langchain_core.messages import BaseMessage
 from langgraph.graph.message import add_messages
@@ -110,17 +109,11 @@ def _replace_or_merge_lists(a: List, b: List) -> List:
 
 
 def _merge_layer_char_counts(a: Dict[int, int], b: Dict[int, int]) -> Dict[int, int]:
-    """合并两个 layer 字符数字典，同 layer 时累加。用于并行 fan-in。"""
-    result = dict(a)
-    for layer, count in b.items():
+    """Merge per-layer character counters across parallel workers."""
+    result = dict(a or {})
+    for layer, count in (b or {}).items():
         result[layer] = result.get(layer, 0) + count
     return result
-
-
-def _merge_is_revision(a: bool, b: bool) -> bool:
-    """Merge is_revision using logical OR. If any node sets True, keep True.
-    Ensures revision flag survives parallel fan-in reducer merge."""
-    return a or b
 
 
 def _preserve_impact_tree(a: Optional[Dict[int, List[str]]], b: Optional[Dict[int, List[str]]]) -> Optional[Dict[int, List[str]]]:
@@ -128,19 +121,6 @@ def _preserve_impact_tree(a: Optional[Dict[int, List[str]]], b: Optional[Dict[in
     if b is not None:
         return b
     return a
-
-
-def _merge_explore_outputs(
-    a: Dict[str, Any], b: Dict[str, Any]
-) -> Dict[str, Any]:
-    """EXPLORE 产出的 state 字段合并（保留有值方，防 Send fan-in 覆盖）。"""
-    if not b:
-        return a
-    result = {**a}
-    for k, v in b.items():
-        if v is not None and v != [] and v != {}:
-            result[k] = v
-    return result
 
 
 def _merge_artifact_refs(a: Dict[str, Any], b: Dict[str, Any]) -> Dict[str, Any]:
@@ -176,6 +156,11 @@ def _merge_failure_events(a: List[Dict[str, Any]], b: List[Dict[str, Any]]) -> L
             result.append(item)
             seen.add(str(item))
     return result
+
+
+def _replace_branch_id(a: str, b: str) -> str:
+    """Let a recovery command replace the historical branch namespace."""
+    return str(b or a or "main")
 
 
 class AgentState(TypedDict, total=False):
@@ -216,7 +201,7 @@ class AgentState(TypedDict, total=False):
     need_revision: bool
     revision_target_dimensions: List[str]
     human_feedback: str
-    is_revision: Annotated[bool, _merge_is_revision]
+    is_revision: bool
     revision_impact_tree: Annotated[Optional[Dict[int, List[str]]], _preserve_impact_tree]
     revision_completed_dims: Annotated[Dict[int, List[str]], _merge_revision_completed]
     revision_feedback: Optional[str]
@@ -224,39 +209,27 @@ class AgentState(TypedDict, total=False):
     # Performance optimization: batch write and char count cache
     pending_reports: Annotated[List[Dict[str, Any]], _replace_or_merge_lists]  # Buffer for batch DB writes
     layer_char_counts: Annotated[Dict[int, int], _merge_layer_char_counts]  # Cached char counts per layer
-    user_uploaded_data: Annotated[Dict[str, Dict[str, Any]], _merge_dict_of_dicts]  # 用户上传的GIS数据
-    uploaded_files: List[Dict[str, Any]]  # upload metadata only; file bytes stay in storage
-    # P0: L1/L2/L3 数据流闭环字段（详见 docs/superpowers/specs/2026-07-02-gis-review-exploration.md）
-    _landuse_metrics: Annotated[Dict[str, float], _merge_dict_of_dicts]  # L1 注入的现状用地指标
-    intent_targets: Annotated[Dict[str, float], _merge_dict_of_dicts]  # L2 持久化的规划目标面积
-    # P2: EXPLORE 桥接产出（L3 完成后注入，供 gis_agent 消费）
-    explore_instructions: Annotated[Dict[str, Any], _merge_explore_outputs]  # ExplorationInstructionCollection
-    report_summary_index: Annotated[Dict[str, Any], _merge_explore_outputs]  # ReportSummaryIndex
-    explore_done: Annotated[bool, operator.or_]  # EXPLORE 桥接已执行标记（防重复触发）
     # ── Wave M1: post-L3 链 typed artifact 引用 ──
     pending_requests: Annotated[List[Dict[str, Any]], _replace_or_merge_lists]  # 全链 Gate pending requests 累积
     context_version: str  # PlanningContext 版本戳
     context_ref: Dict[str, Any]  # session/version reference; context is loaded from the cache
     context_fingerprint: str
+    branch_id: Annotated[str, _replace_branch_id]
     bootstrap_context_done: bool
     artifact_refs: Annotated[Dict[str, Any], _merge_artifact_refs]
+    artifact_schema_version: str  # canonical ArtifactDescriptor schema; current value is "3"
     # ── Wave M2: layer aggregate wiring ──
     layer_just_completed: Optional[int]  # set by completion_check, consumed by layer_aggregate_node
     # ── Wave M2: layer aggregate gate decisions + artifact refs（供 after_analysis 消费）──
     l1_gate_decision: Optional[Dict[str, Any]]  # L1 Evidence Gate decision
     l2_gate_decision: Optional[Dict[str, Any]]  # L2 Consistency Gate decision
     l3_gate_decision: Optional[Dict[str, Any]]  # L3 Program Gate decision
-    l1_snapshot_ref: Optional[Dict[str, Any]]  # L1Snapshot artifact ref
-    l2_strategy_ref: Optional[Dict[str, Any]]  # L2Strategy artifact ref
     # ── Wave N P5: post-L3 HITL pending/resume fields ──
-    post_l3_pending_review: Annotated[List[Dict[str, Any]], _replace_or_merge_lists]  # HUMAN 暂停时的待审 items
-    post_l3_thread_id: str  # post-L3 chain 的 LangGraph thread_id（= session_id）
     post_l3_status: str  # "needs_human_review" 等
-    post_l3_decisions: Optional[Any]  # resume 后回写的审查决策
     # ── Wave M: post-L3 主图独立节点链 typed artifacts（单一状态源）──
     # L3 输入
-    # PARSE 输出
-    parse_gate: Optional[Any]  # GateDecision
+    # TARGET_PROJECTION 输出
+    target_projection_gate: Optional[Any]  # GateDecision
     # GROUND 输出
     ground_gate: Optional[Any]  # GateDecision
     # SELECT 输出
@@ -280,6 +253,7 @@ class AgentState(TypedDict, total=False):
     human_review_items: List[Dict[str, Any]]
     human_review_decisions: Optional[Any]
     human_review_event_id: str
+    human_review_generation: int
     human_review_pause_published: bool
     human_review_resume_consumed: bool
     human_deferred_targets: List[str]
@@ -299,59 +273,6 @@ class AgentState(TypedDict, total=False):
 # ==========================================
 # 辅助函数
 # ==========================================
-
-def create_initial_state(
-    session_id: str,
-    project_name: str,
-    village_data: str,
-    task_description: str = "制定村庄总体规划方案",
-    constraints: str = "无特殊约束",
-    image_ids: Optional[List[str]] = None,
-    village_name: str = "",
-    province: str = "",
-    city: str = "",
-    county: str = "",
-    township: str = "",
-    planning_period: str = "2022-2035年",
-    enable_review: bool = False,
-    stream_mode: bool = True,
-    step_mode: bool = False,
-    rag_enabled: bool = True,
-    rag_layer_config: Optional[Dict[int, bool]] = None,
-    disable_tools: bool = False,
-    uploaded_files: Optional[List[Dict]] = None,
-    user_uploaded_gis_data: Optional[Dict[str, Any]] = None,
-) -> Dict[str, Any]:
-    """Create initial state (delegates to StateFactory).
-
-    .. deprecated::
-        Use StateFactory.create directly. This wrapper is kept for
-        backward compatibility with test fixtures.
-    """
-    from app.agent.plan_state.state_factory import StateFactory
-    return StateFactory.create(
-        session_id=session_id,
-        project_name=project_name,
-        village_data=village_data,
-        task_description=task_description,
-        constraints=constraints,
-        image_ids=image_ids,
-        village_name=village_name,
-        province=province,
-        city=city,
-        county=county,
-        township=township,
-        planning_period=planning_period,
-        enable_review=enable_review,
-        stream_mode=stream_mode,
-        step_mode=step_mode,
-        rag_enabled=rag_enabled,
-        rag_layer_config=rag_layer_config,
-        disable_tools=disable_tools,
-        uploaded_files=uploaded_files,
-        user_uploaded_gis_data=user_uploaded_gis_data,
-    )
-
 
 def _sanitize_json(obj):
     """Recursively replace inf/nan floats with None for JSON serialization."""
@@ -497,7 +418,6 @@ def state_to_ui_status(state: Dict[str, Any], db_session: Optional[Dict] = None,
 
 __all__ = [
     "AgentState", "ReportVersion", "DimensionSummary",
-    "create_initial_state",
     "state_to_ui_status",
-    "_merge_lists", "_merge_layer_char_counts",  # Performance optimization reducers
+    "_merge_lists",  # Performance optimization reducers
 ]

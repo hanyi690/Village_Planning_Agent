@@ -73,6 +73,6 @@
 ## 相关文档
 
 - `../README.md` — agent 编排层总览
-- `../bootstrap/graph.py` / `post_l3_main_nodes.py` — GROUND 在 post-L3 主图中的 EXPLORE 重试
+- `../../workflow/root_graph.py` / `../../workflow/stages/ground.py` — GROUND 在主图中的 EXPLORE 重试
 - `../select/README.md` — SELECT（下游消费者：`GroundingResult` → `SiteSelectionDecision`）
 - `app/modules/spatial_ops/grounding/resolver.py` — 空间解析器

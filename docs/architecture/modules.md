@@ -73,10 +73,10 @@ workflow subgraphs / API adapters
 
 迁移前需要处理：
 
-- ~~`tools/gis/parse.py` 与 `agent/gis/parse/agent.py` 的双重解析。~~（2026-08 已迁移：`tools/gis/parse.py` 删除，PARSE 归 `agent/select/parse_agent.py`）
+- ~~`tools/gis/parse.py` 与旧 parse agent 的双重解析。~~（2026-08 已删除；空间目标只经过 `domain/program/target_projection` 的确定性投影）
 - `modules/spatial_ops/grounding.py`、Explore 节点和 Bundle Binder 的多轨空间接地。
 - staged road planner 与 `spatial_ops/road_planner.py` 的重复道路实现。
-- `AgentState`、`GISPipelineState`、`ParseAgentState`、`ExecuteAgentState` 的重复状态字段。
+- `AgentState`、`ParseAgentState`、`ExecuteAgentState` 的重复状态字段。
 
 ## 9. 边界检查
 

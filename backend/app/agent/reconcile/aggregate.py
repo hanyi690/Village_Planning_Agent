@@ -147,7 +147,7 @@ def build_coverage_matrix(
     planned_state=None,
     *,
     execution_plan=None,
-    execution_outcome=None,
+    execution_result=None,
 ) -> CoverageMatrix:
     """Build v2 coverage from stable target IDs and declared output kinds."""
     if execution_plan is None:
@@ -162,7 +162,7 @@ def build_coverage_matrix(
         stable_output_key,
     )
 
-    result_groups = group_execution_results(execution_outcome)
+    result_groups = group_execution_results(execution_result)
     rows: list[CoverageMatrixRow] = []
     for task in list(getattr(execution_plan, "worker_tasks", None) or []):
         task_id = str(getattr(task, "task_id", ""))
@@ -210,7 +210,7 @@ def build_coverage_matrix(
 
 def check_target_execution_coverage(
     execution_plan,
-    execution_outcome,
+    execution_result,
 ) -> list[ReconciliationInconsistency]:
     from app.agent.common.execution_evidence import (
         active_output_covered,
@@ -220,7 +220,7 @@ def check_target_execution_coverage(
         stable_output_key,
     )
 
-    result_groups = group_execution_results(execution_outcome)
+    result_groups = group_execution_results(execution_result)
     inconsistencies: list[ReconciliationInconsistency] = []
     planned_keys: set[tuple[str, str]] = set()
     for task in list(getattr(execution_plan, "worker_tasks", None) or []):
@@ -232,7 +232,7 @@ def check_target_execution_coverage(
             inconsistencies.append(
                 _inc(
                     key[0],
-                    "duplicate_execution_outcome",
+                    "duplicate_execution_result",
                     f"one consistent outcome:{key[1]}",
                     f"statuses={statuses}",
                     stage="EXECUTE",
@@ -268,7 +268,7 @@ def check_target_execution_coverage(
             inconsistencies.append(
                 _inc(
                     key[0],
-                    "execution_outcome",
+                    "execution_result",
                     "target and output kind declared by ExecutionPlan",
                     f"orphan:{key[1]}",
                     stage="EXECUTE",
@@ -337,13 +337,13 @@ def reconcile_aggregate(
     intent=None,
     *,
     execution_plan=None,
-    execution_outcome=None,
+    execution_result=None,
     run_id: str = "",
 ) -> ReconciliationReport:
     all_inconsistencies: list[ReconciliationInconsistency] = []
     if execution_plan is not None:
         all_inconsistencies.extend(
-            check_target_execution_coverage(execution_plan, execution_outcome)
+            check_target_execution_coverage(execution_plan, execution_result)
         )
         all_inconsistencies.extend(check_quantitative_drift(program, planned_state))
     else:
@@ -363,7 +363,7 @@ def reconcile_aggregate(
         changeset,
         planned_state,
         execution_plan=execution_plan,
-        execution_outcome=execution_outcome,
+        execution_result=execution_result,
     )
 
     provenance = Provenance(

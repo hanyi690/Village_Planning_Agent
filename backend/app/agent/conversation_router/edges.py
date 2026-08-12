@@ -116,10 +116,10 @@ def after_conversation(
                 logger.info("[after_conversation] ROUTE: advance_planning_intent detected -> _dispatch_current")
                 return _dispatch_current(state)
             if name in (gis_analysis.name, "GISAnalysis"):
-                # Wave M: 手动触发 GIS/空间布局 -> 直接进入 post-L3 链起点（parse），
+                # Manual GIS/spatial intent enters the target-projection chain,
                 # 不再经过 gis_agent 黑盒节点。
-                logger.info("[after_conversation] ROUTE: gis_analysis detected -> parse (post-L3 chain)")
-                return "parse"
+                logger.info("[after_conversation] ROUTE: gis_analysis detected -> target_projection")
+                return "target_projection"
         logger.info("[after_conversation] ROUTE: unknown tool_call -> execute_tools (name=%s)", last_msg.tool_calls[0].get("name"))
         return "execute_tools"
 
@@ -280,10 +280,10 @@ def after_analysis(
         return END
 
     phase = state.get("phase", "layer1")
-    if phase == "completed":
-        # Wave M2: legacy EXPLORE bridge removed; EXPLORE is now gate-driven.
-        # When phase=="completed", route to gis_agent via conversation or END.
-        return END
+    if phase == "post_l3":
+        # L3 is not a terminal state.  The post-L3 chain owns target projection through
+        # DELIVER and is entered only through advance_phase.
+        return "target_projection"
 
     # ── Wave M2: gate-aware routing ──
     # If a layer gate decision is present, route accordingly before falling

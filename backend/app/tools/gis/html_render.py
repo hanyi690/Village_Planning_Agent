@@ -308,9 +308,59 @@ def render_interactive_map(
         if issue_items
         else '<section class="issues ok"><h3>可行性提示</h3><p>未记录阻断项。</p></section>'
     )
-    project_summary = project_summary or {}
+    project_summary = dict(project_summary or {})
+    derived_summary: Dict[str, List[Dict[str, Any]]] = {
+        "projects": [],
+        "facilities": [],
+        "roads": [],
+        "zones": [],
+    }
+    for layer in layers:
+        layer_type = str(layer.get("layerType") or layer.get("layer_type") or "")
+        features = (layer.get("geojson") or {}).get("features", [])
+        if layer_type == "planned_project_point":
+            for feature in features:
+                props = feature.get("properties") or {}
+                derived_summary["projects"].append({
+                    "name": props.get("project_name") or props.get("name") or "未命名项目",
+                    "status": "已定位",
+                    "detail": props.get("project_ref") or "",
+                })
+        elif layer_type == "facility_point":
+            for feature in features:
+                props = feature.get("properties") or {}
+                derived_summary["facilities"].append({
+                    "name": props.get("name") or props.get("facility_type") or "未命名设施",
+                    "status": "已定位",
+                    "detail": props.get("target_id") or "",
+                })
+        elif layer_type in {"planned_road", "development_axis"}:
+            for feature in features:
+                props = feature.get("properties") or {}
+                derived_summary["roads"].append({
+                    "name": props.get("name") or layer.get("layerName") or "规划线性项目",
+                    "status": "已生成",
+                    "detail": props.get("target_id") or "",
+                })
+        elif layer_type in {"planning_zone", "function_zone", "custom_planning_zone"}:
+            for feature in features:
+                props = feature.get("properties") or {}
+                derived_summary["zones"].append({
+                    "name": props.get("zone_name") or props.get("name") or props.get("zone_type") or "未命名分区",
+                    "status": "已生成",
+                    "detail": "",
+                })
+    for category, items in derived_summary.items():
+        if items:
+            project_summary.setdefault(category, [])
+            project_summary[category] = [*project_summary[category], *items]
     project_blocks: List[str] = []
-    for category, label in (("zones", "规划分区"), ("facilities", "设施项目"), ("roads", "道路项目")):
+    for category, label in (
+        ("projects", "规划项目"),
+        ("zones", "规划分区"),
+        ("facilities", "设施项目"),
+        ("roads", "道路项目"),
+    ):
         items = project_summary.get(category) or []
         rows = []
         for item in items:

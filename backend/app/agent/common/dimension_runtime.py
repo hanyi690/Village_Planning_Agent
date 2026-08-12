@@ -16,6 +16,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import re
 import threading
 import time
 from dataclasses import dataclass
@@ -71,7 +72,18 @@ def _display_report(content: str | None) -> str:
     from app.services.report_store import split_instruction
 
     display, _ = split_instruction(content)
-    return display
+    return strip_model_reasoning(display)
+
+
+def strip_model_reasoning(content: str) -> str:
+    """Remove provider reasoning envelopes before persistence or reuse as evidence."""
+    cleaned = re.sub(
+        r"<(?:think|analysis)>.*?</(?:think|analysis)>",
+        "",
+        content or "",
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+    return cleaned.strip()
 
 
 # ============================================
@@ -157,7 +169,7 @@ async def run_rag(dimension_key: str, cfg: Any, state: Dict[str, Any]) -> tuple[
     if not rag_enabled or not dim_rag_query:
         return ("", None)
 
-    from app.services.sse import sse_manager
+    from app.infrastructure.events import event_hub as sse_manager
     from app.services import RagService
 
     rag_service = RagService.get_instance()
@@ -457,7 +469,7 @@ async def publish_dimension_start(
     is_revision: bool,
 ) -> None:
     """Publish DIMENSION_START SSE event."""
-    from app.services.sse import sse_manager
+    from app.infrastructure.events import event_hub as sse_manager
 
     await sse_manager.publish(session_id, {
         "type": SSEEventType.DIMENSION_START,
@@ -478,7 +490,7 @@ async def publish_dimension_delta(
     accumulated: str,
 ) -> None:
     """Publish a single DIMENSION_DELTA SSE event (throttling handled by caller)."""
-    from app.services.sse import sse_manager
+    from app.infrastructure.events import event_hub as sse_manager
 
     await sse_manager.publish(session_id, {
         "type": SSEEventType.DIMENSION_DELTA,
@@ -503,7 +515,7 @@ async def publish_dimension_complete(
     is_revision: bool,
 ) -> None:
     """Publish DIMENSION_COMPLETE SSE event (parses structured_summary JSON)."""
-    from app.services.sse import sse_manager
+    from app.infrastructure.events import event_hub as sse_manager
 
     try:
         structured_summary_obj = json.loads(structured_summary) if structured_summary else None
@@ -546,7 +558,7 @@ async def save_step_report(
     diagnostics: Optional[Dict[str, Any]] = None,
 ) -> None:
     """Save a StepReport. Non-fatal on error."""
-    from app.services.step_report import save_step_report as _save_step_report
+    from app.modules.evidence.step_report import save_step_report as _save_step_report
 
     inputs = {"is_revision": is_revision}
     try:
@@ -649,6 +661,7 @@ __all__ = [
     "run_rag",
     "load_dependency_reports",
     "load_layered_dependency_reports",
+    "strip_model_reasoning",
     "publish_dimension_start",
     "publish_dimension_delta",
     "publish_dimension_complete",

@@ -1,13 +1,12 @@
-"""Derive every DELIVER render layer from the authoritative PlannedState."""
+"""Build DELIVER render layers from the authoritative spatial snapshot."""
 
 from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
 
 __all__ = [
-    "build_render_layers",
+    "build_planned_overlay_layers",
     "build_delivery_render_layers",
-    "build_complete_planned_geojson",
 ]
 
 
@@ -29,185 +28,6 @@ def _wkt_to_geojson(wkt: str) -> Optional[Dict[str, Any]]:
 
 def _feature_collection(features: List[Dict[str, Any]]) -> Dict[str, Any]:
     return {"type": "FeatureCollection", "features": features}
-
-
-def _parcel_value(parcel: Any, key: str, default: Any = None) -> Any:
-    if isinstance(parcel, dict):
-        return parcel.get(key, default)
-    return getattr(parcel, key, default)
-
-
-def _feature_bsm(feature: Dict[str, Any]) -> str:
-    properties = feature.get("properties") or {}
-    return str(properties.get("BSM") or properties.get("bsm") or "")
-
-
-def _planned_parcel_feature(parcel: Any) -> Optional[Dict[str, Any]]:
-    geometry = _wkt_to_geojson(_parcel_value(parcel, "geometry", "") or "")
-    bsm = str(_parcel_value(parcel, "bsm", "") or "")
-    if geometry is None or not bsm:
-        return None
-    return {
-        "type": "Feature",
-        "properties": {
-            "BSM": bsm,
-            "planning_land_use": _parcel_value(parcel, "planning_land_use", ""),
-            "zone_type": _parcel_value(parcel, "zone_type", ""),
-            "area_ha": _parcel_value(parcel, "area_ha", 0),
-            "operation": _parcel_value(parcel, "operation", ""),
-            "derived_from_bsms": list(
-                _parcel_value(parcel, "derived_from_bsms", None) or []
-            ),
-        },
-        "geometry": geometry,
-    }
-
-
-def _tag_planned_feature(
-    feature: Dict[str, Any],
-    *,
-    preserved: bool,
-    provenance: str,
-) -> Dict[str, Any]:
-    result = dict(feature)
-    properties = dict(result.get("properties") or {})
-    if preserved:
-        properties.setdefault("change_status", "preserved")
-        properties.setdefault("planning_status", "unchanged_preserved")
-    else:
-        properties.setdefault("change_status", "planned")
-        properties.setdefault("planning_status", "planned")
-    properties.setdefault("provenance", provenance)
-    properties.setdefault("planning_provenance", provenance)
-    result["properties"] = properties
-    return result
-
-
-def build_complete_planned_geojson(
-    allocated_geojson: Optional[Dict[str, Any]],
-    current_geojson: Optional[Dict[str, Any]],
-    planned_state: Any = None,
-) -> Dict[str, Any]:
-    """Build one auditable, complete planned land-use snapshot.
-
-    ``allocated_geojson`` may contain only changed parcels. The current layer
-    is therefore the authoritative base: every current parcel absent from the
-    planned changes is carried through as an unchanged parcel. PlannedState
-    parcels are allowed to replace a current parcel only when their BSM (or a
-    source BSM) is auditable against that same current snapshot.
-    """
-    import copy
-
-    current_features = list((current_geojson or {}).get("features", []) or [])
-    allocated_features = list((allocated_geojson or {}).get("features", []) or [])
-    current_by_bsm = {
-        _feature_bsm(feature): feature
-        for feature in current_features
-        if _feature_bsm(feature)
-    }
-    current_bsms = set(current_by_bsm)
-
-    planned_by_bsm: Dict[str, Dict[str, Any]] = {}
-    planned_parcels = _parcel_value(planned_state, "parcels", None) or []
-    for parcel in planned_parcels:
-        bsm = str(_parcel_value(parcel, "bsm", "") or "")
-        sources = {
-            str(source)
-            for source in (_parcel_value(parcel, "derived_from_bsms", None) or [])
-            if source
-        }
-        if bsm not in current_bsms and not sources.intersection(current_bsms):
-            continue
-        feature = _planned_parcel_feature(parcel)
-        if feature is not None:
-            keys = [bsm] if bsm in current_bsms else sorted(sources.intersection(current_bsms))
-            for key in keys:
-                planned_by_bsm[key] = feature
-
-    allocated_by_bsm: Dict[str, Dict[str, Any]] = {}
-    allocated_without_bsm: List[Dict[str, Any]] = []
-    for feature in allocated_features:
-        bsm = _feature_bsm(feature)
-        properties = feature.get("properties") or {}
-        sources = {
-            str(source)
-            for source in (
-                properties.get("derived_from_bsms")
-                or properties.get("source_bsms")
-                or []
-            )
-            if source
-        }
-        if current_bsms and bsm not in current_bsms and not sources.intersection(current_bsms):
-            continue
-        if bsm:
-            keys = [bsm] if bsm in current_bsms else sorted(sources.intersection(current_bsms))
-            for key in keys or [bsm]:
-                allocated_by_bsm[key] = feature
-        elif not current_bsms:
-            allocated_without_bsm.append(feature)
-
-    def merge_planned(
-        feature: Dict[str, Any],
-        planned_feature: Optional[Dict[str, Any]],
-    ) -> Dict[str, Any]:
-        result = copy.deepcopy(feature)
-        if planned_feature is None:
-            props = result.get("properties") or {}
-            changed = any(
-                props.get(key) not in (None, "", [], {})
-                for key in (
-                    "planning_land_use",
-                    "assigned_zone",
-                    "operation",
-                    "planning_status",
-                    "change_status",
-                )
-            )
-            return _tag_planned_feature(
-                result,
-                preserved=not changed,
-                provenance=(
-                    "allocated_planned_landuse"
-                    if changed
-                    else "current_landuse_delivery_snapshot"
-                ),
-            )
-        planned_props = planned_feature.get("properties") or {}
-        props = dict(result.get("properties") or {})
-        for key in (
-            "planning_land_use",
-            "zone_type",
-            "area_ha",
-            "operation",
-            "derived_from_bsms",
-        ):
-            value = planned_props.get(key)
-            if value not in (None, "", [], {}):
-                props[key] = value
-        result["properties"] = props
-        if planned_feature.get("geometry") is not None:
-            result["geometry"] = planned_feature["geometry"]
-        preserved = str(props.get("operation") or "") == "preserve"
-        return _tag_planned_feature(
-            result,
-            preserved=preserved,
-            provenance="planned_state_snapshot",
-        )
-
-    complete: List[Dict[str, Any]] = []
-    for current in current_features:
-        bsm = _feature_bsm(current)
-        feature = allocated_by_bsm.pop(bsm, None) if bsm else None
-        feature = feature or current
-        complete.append(merge_planned(feature, planned_by_bsm.pop(bsm, None)))
-
-    for bsm, feature in allocated_by_bsm.items():
-        complete.append(merge_planned(feature, planned_by_bsm.pop(bsm, None)))
-    for feature in allocated_without_bsm:
-        complete.append(merge_planned(feature, None))
-
-    return _feature_collection(complete)
 
 
 def _delivery_gis_data(gis_data: Optional[Dict[str, Any]]) -> Dict[str, Any]:
@@ -266,7 +86,69 @@ def _function_zone_layer(planned_state: Any) -> Optional[Dict[str, Any]]:
         "layerName": "功能分区",
         "data": data,
         "geojson": data,
+        "color": "#f59e0b",
+        "style": {"fill-opacity": 0.10, "line-opacity": 0.75},
     }
+
+
+def _project_layer(planned_state: Any) -> Optional[Dict[str, Any]]:
+    """Expose project-bound parcel footprints produced by EXECUTE."""
+    features: List[Dict[str, Any]] = []
+    for parcel in getattr(planned_state, "parcels", None) or []:
+        project_ref = str(getattr(parcel, "project_ref", "") or "")
+        geometry = _wkt_to_geojson(getattr(parcel, "geometry", "") or "")
+        if not project_ref or geometry is None:
+            continue
+        features.append({
+            "type": "Feature",
+            "properties": {
+                "project_ref": project_ref,
+                "bsm": getattr(parcel, "bsm", ""),
+                "planning_land_use": getattr(parcel, "planning_land_use", ""),
+                "operation": getattr(parcel, "operation", ""),
+            },
+            "geometry": geometry,
+        })
+    return _layer("planned_project", "规划项目落地", features)
+
+
+def _project_point_layer(planned_state: Any) -> Optional[Dict[str, Any]]:
+    """Expose a small centroid marker for every landed project footprint."""
+    features: List[Dict[str, Any]] = []
+    for project in getattr(planned_state, "project_points", None) or []:
+        geometry = _wkt_to_geojson(getattr(project, "geometry", "") or "")
+        if geometry is None:
+            continue
+        features.append({
+            "type": "Feature",
+            "properties": {
+                "project_ref": getattr(project, "project_ref", ""),
+                "project_name": getattr(project, "name", ""),
+                "marker_size": "small",
+            },
+            "geometry": geometry,
+        })
+    for parcel in getattr(planned_state, "parcels", None) or []:
+        project_ref = str(getattr(parcel, "project_ref", "") or "")
+        geometry = _wkt_to_geojson(getattr(parcel, "geometry", "") or "")
+        if not project_ref or geometry is None:
+            continue
+        try:
+            from shapely.geometry import shape, mapping
+
+            point = mapping(shape(geometry).representative_point())
+        except Exception:
+            continue
+        features.append({
+            "type": "Feature",
+            "properties": {
+                "project_ref": project_ref,
+                "bsm": getattr(parcel, "bsm", ""),
+                "marker_size": "small",
+            },
+            "geometry": point,
+        })
+    return _layer("planned_project_point", "规划项目定位点", features)
 
 
 def _facility_layer(planned_state: Any) -> Optional[Dict[str, Any]]:
@@ -346,13 +228,36 @@ def _layer(
     }
 
 
-def build_render_layers(
+def _planned_changes_layer(planned: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """Expose changed parcels separately from the complete planned base layer."""
+    changed = [
+        feature
+        for feature in planned.get("features", [])
+        if (feature.get("properties") or {}).get("change_status")
+        not in {None, "preserved", "unchanged"}
+    ]
+    if not changed:
+        return None
+    return _layer("planned_changes", "EXECUTE 实际变更", changed) | {
+        "color": "#ef4444",
+        "force_layer_colors": True,
+        "style": {"fill-opacity": 0.78, "line-color": "#b91c1c", "line-width": 2},
+    }
+
+
+def build_planned_overlay_layers(
     planned_state: Any,
 ) -> List[Dict[str, Any]]:
-    """Derive renderable layers only from PlannedState; empty state is mapless."""
+    """Materialize planned overlay payloads at the snapshot-build boundary.
+
+    This is not a renderer input.  The resulting GeoJSON is written into the
+    DeliverySpatialSnapshot before any renderer/exporter is called.
+    """
     layers: List[Dict[str, Any]] = []
     for builder in (
         _function_zone_layer,
+        _project_layer,
+        _project_point_layer,
         _facility_layer,
         _road_layer,
         _axis_layer,
@@ -365,32 +270,84 @@ def build_render_layers(
 
 
 def build_delivery_render_layers(
-    planned_state: Any,
-    allocated_geojson: Optional[Dict[str, Any]],
-    gis_data: Optional[Dict[str, Any]] = None,
+    snapshot: Any,
 ) -> List[Dict[str, Any]]:
-    """Build the complete delivery view from one current/planned snapshot.
-
-    The planned parcel layer is materialized at delivery time. If execution
-    produced no parcel changes, the current layer is copied as preserved
-    output; it is never synthesized from the sparse PlannedState.
-    """
+    """Build all frontend layers by reading one DeliverySpatialSnapshot."""
     from app.modules.spatial_ops.output.map_layers import build_map_layers
+    from app.spatial.delivery import colorize_feature_collection
 
-    current = _delivery_gis_data(gis_data)
-    planned = build_complete_planned_geojson(
-        allocated_geojson,
-        current.get("landuse_current_geojson"),
-        planned_state,
+    from app.modules.spatial_ops.io import (
+        load_complete_planned_geojson,
+        load_snapshot_gis_data,
+        load_snapshot_planned_overlays,
     )
+
+    current = _delivery_gis_data(load_snapshot_gis_data(snapshot))
+    if current.get("landuse_current_geojson"):
+        current["landuse_current_geojson"] = colorize_feature_collection(
+            current["landuse_current_geojson"]
+        )
+    planned = colorize_feature_collection(load_complete_planned_geojson(snapshot))
+    layouts: list[dict[str, Any]] = []
     if planned.get("features"):
-        layouts = build_render_layers(planned_state)
-        layouts.insert(0, {
+        layouts.append({
             "layerType": "complete_planned_landuse",
             "layerName": "完整期末地类（含未修改地块）",
             "data": planned,
             "geojson": planned,
             "color": "#2563eb",
+            "default_visible": True,
+            "style": {
+                "fill-opacity": 0.18,
+                "line-opacity": 0.85,
+                "line-color": "#475569",
+                "line-width": 1,
+            },
         })
-        return build_map_layers(layouts, current)
-    return build_map_layers(build_render_layers(planned_state), current)
+    overlay_names = {
+        "planned_project_geojson": ("planned_project", "规划项目落地", "#f97316"),
+        "planned_project_point_geojson": ("planned_project_point", "规划项目定位点", "#b91c1c"),
+        "planned_facility_geojson": ("facility_point", "公共服务设施", "#2563eb"),
+        "planned_road_geojson": ("planned_road", "规划道路", "#475569"),
+        "planned_axis_geojson": ("development_axis", "发展轴", "#7c3aed"),
+        "planned_zone_geojson": ("planning_zone", "规划分区", "#16a34a"),
+        "planned_restoration_geojson": ("restoration_zone", "生态修复", "#15803d"),
+        "planned_protection_geojson": ("protection_zone", "保护范围", "#7c3aed"),
+    }
+    for key, payload in load_snapshot_planned_overlays(snapshot).items():
+        if not (payload.get("features") or []):
+            continue
+        layer_type, layer_name, color = overlay_names.get(
+            key, (key.removesuffix("_geojson"), key, "#64748b")
+        )
+        layouts.append({
+            "layerType": layer_type,
+            "layerName": layer_name,
+            "data": payload,
+            "geojson": payload,
+            "color": color,
+            "default_visible": layer_type in {
+                "planned_project",
+                "planned_project_point",
+                "facility_point",
+                "planned_road",
+                "development_axis",
+                "planning_zone",
+                "restoration_zone",
+                "protection_zone",
+            },
+            "force_layer_colors": layer_type in {
+                "planned_project",
+                "planned_project_point",
+                "facility_point",
+                "planned_road",
+                "development_axis",
+            },
+            "style": {"fill-opacity": 0.45, "line-opacity": 0.8},
+        })
+    changes_layer = _planned_changes_layer(planned)
+    result = build_map_layers(layouts, current)
+    if changes_layer is not None:
+        changes_layer["default_visible"] = True
+        result.extend(build_map_layers([changes_layer], {}))
+    return result

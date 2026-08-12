@@ -22,7 +22,7 @@ REQUIRED_STATUTORY_LAYERS = (
 )
 
 _BLOCKING_LAYER_DESC = "导出结果缺少法定图层"
-_BLOCKING_LAYER_REASON = "export_gdb_package 未产出完整法定图层"
+_BLOCKING_LAYER_REASON = "export_delivery_package 未产出完整法定图层"
 
 
 def _statutory_source_for(layer: str) -> str:
@@ -31,7 +31,7 @@ def _statutory_source_for(layer: str) -> str:
     The export package writes files at GDB_LAYER_REGISTRY sources (e.g.
     ``current/boundary.geojson``), which differ from the layer keys used in
     ``REQUIRED_STATUTORY_LAYERS``. Matching against the real source path keeps
-    the check aligned with what ``export_gdb_package`` actually writes.
+    the check aligned with what ``export_delivery_package`` actually writes.
     """
     try:
         from app.modules.schema.output.gdb import GDB_LAYER_REGISTRY
@@ -57,7 +57,7 @@ def check_statutory_layers_complete(
             HumanItem(
                 item_id="hi-layers-none-0",
                 description="导出结果缺失",
-                reason="export_gdb_package 未运行",
+                reason="export_delivery_package 未运行",
                 blocking=True,
             )
         ]

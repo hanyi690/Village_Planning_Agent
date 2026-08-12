@@ -18,13 +18,14 @@ def stable_artifact_refs(refs: dict[str, Any] | None) -> dict[str, Any]:
             stable[key] = {
                 field: ref.get(field, "")
                 for field in (
-                    "artifact_id",
-                    "artifact_type",
-                    "checksum",
-                    "semantic_checksum",
-                    "context_version",
-                    "context_fingerprint",
-                    "revision",
+                    "digest",
+                    "descriptor_digest",
+                    "schema_id",
+                    "schema_version",
+                    "semantic_digest",
+                    "parent_digests",
+                    "run_id",
+                    "branch_id",
                 )
             }
         else:
@@ -40,16 +41,12 @@ def _input_fingerprint_view(refs: dict[str, Any]) -> dict[str, Any]:
             view[key] = ref
             continue
         view[key] = {
-            "identity": (
-                ref.get("semantic_checksum")
-                or ref.get("checksum")
-                or ref.get("artifact_id")
-                or ""
-            ),
-            "artifact_type": ref.get("artifact_type", ""),
-            "context_version": ref.get("context_version", ""),
-            "context_fingerprint": ref.get("context_fingerprint", ""),
-            "revision": ref.get("revision", ""),
+            "identity": ref.get("descriptor_digest") or "",
+            "blob_digest": ref.get("digest") or "",
+            "schema_id": ref.get("schema_id", ""),
+            "schema_version": ref.get("schema_version", ""),
+            "parent_digests": ref.get("parent_digests", {}),
+            "branch_id": ref.get("branch_id", ""),
         }
     return view
 

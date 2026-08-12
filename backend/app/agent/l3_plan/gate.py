@@ -4,7 +4,7 @@ Pure function: PlanningProgram -> GateDecision. No I/O.
 Wave E delivers the evaluator; Wave M wires it into the main graph.
 
 Decision matrix (docs/design/04_PLANNING_PIPELINE.md §8 + 07_VALIDATION_FEEDBACK.md):
-  PASS    -> PARSE
+  PASS    -> TARGET_PROJECTION
   EXPLORE -> missing evidence / missing sources
   L3      -> program contradictions (rework L3)
   HUMAN   -> empty program / review checkpoint
@@ -13,6 +13,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from app.domain.program.classification import classification_review_targets
+from app.modules.schema.contracts.classification_ref import classification_code_names
 from app.modules.schema.contracts.l3_contracts import PlanningProgram
 from app.modules.schema.contracts.workflow_contracts import GateDecision, PendingRequest
 
@@ -77,6 +79,42 @@ def evaluate_l3_gate(
             context_version=cv, artifact_id=gate_artifact_id,
         )
 
+    classification_targets = classification_review_targets(program)
+    if classification_targets:
+        target_ids = [item["target_id"] for item in classification_targets]
+        catalog = classification_code_names("ghytbm") or {}
+        return GateDecision(
+            stage=stage,
+            passed=False,
+            feedback_route="HUMAN",
+            pending_requests=[
+                PendingRequest(
+                    request_id="pr-l3-classification-decisions",
+                    stage="l3",
+                    request_type="classification_decision_required",
+                    context={
+                        "message": "空间 polygon/parcel 目标必须先获得显式规划分类决定",
+                        "target_ids": target_ids,
+                        "targets": classification_targets,
+                        "recommended_code_system": "ghytbm",
+                        "classification_catalog": {
+                            "ghytbm": [
+                                {"code": code, "canonical_name": name}
+                                for code, name in sorted(catalog.items())
+                            ]
+                        },
+                        "decision_contract": "ClassificationDecision",
+                        "instruction": (
+                            "只能从声明的闭集编码中选择；不得填写由现状 dlbm、名称或 crosswalk 推导的编码。"
+                        ),
+                    },
+                )
+            ],
+            context_version=cv,
+            artifact_id=gate_artifact_id,
+            route_reason="classification_decision_required",
+        )
+
     contradictions = [
         i for i in program.program_issues
         if i.severity == "error"
@@ -84,6 +122,12 @@ def evaluate_l3_gate(
             "program_contradiction",
             "missing_instruction_marker",
             "missing_spatial_instruction",
+            "stage_role_mismatch",
+            "invalid_instruction_schema",
+            "invalid_instruction_row",
+            "invalid_execution_contract",
+            "execution_owner_violation",
+            "too_many_spatial_interventions",
         }
     ]
     if contradictions:
@@ -91,10 +135,14 @@ def evaluate_l3_gate(
             stage=stage, passed=False, feedback_route="L3",
             pending_requests=[
                 PendingRequest(
-                    request_id=f"pr-l3-rework-{i.code}",
+                    request_id=f"pr-l3-rework-{i.dimension_key or 'program'}-{i.code}",
                     stage="l3",
                     request_type="program_rework",
-                    context={"message": i.message, "detail": i.detail or ""},
+                    context={
+                        "dimension_key": i.dimension_key,
+                        "message": i.message,
+                        "detail": i.detail or "",
+                    },
                 )
                 for i in contradictions
             ],

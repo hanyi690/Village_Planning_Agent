@@ -8,10 +8,10 @@ from __future__ import annotations
 
 from typing import Any
 
-from app.modules.ports.artifact_store import ArtifactRef
+from app.modules.schema.contracts.artifact_descriptor import ArtifactDescriptor
 from app.modules.schema.contracts.l2_contracts import L2Strategy
 from app.modules.schema.contracts.review_contracts import (
-    ArtifactRefLite,
+    ArtifactDescriptorProjection,
     ReviewPackage,
     ReviewStatus,
 )
@@ -107,7 +107,7 @@ def build_preview_geojson(strategy: L2Strategy) -> dict[str, Any]:
 
 def build_l2_review_package(
     strategy: L2Strategy,
-    artifact_ref: ArtifactRef,
+    artifact_ref: ArtifactDescriptor,
     gate_decision: GateDecision,
     run_id: str,
 ) -> ReviewPackage:
@@ -115,13 +115,7 @@ def build_l2_review_package(
         run_id=run_id,
         module="l2_strategize",
         summary_md=build_summary_md(strategy, gate_decision),
-        artifact_ref=ArtifactRefLite(
-            artifact_id=artifact_ref.artifact_id,
-            module=artifact_ref.module,
-            run_id=artifact_ref.run_id,
-            artifact_type=artifact_ref.artifact_type,
-            revision=artifact_ref.revision,
-        ),
+        artifact_ref=ArtifactDescriptorProjection.model_validate(artifact_ref.model_dump()),
         trace_json=build_trace_json(strategy),
         preview_geojson=build_preview_geojson(strategy),
         status=ReviewStatus.AWAITING_REVIEW,

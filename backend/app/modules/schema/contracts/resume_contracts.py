@@ -73,19 +73,62 @@ class ResumePlan(BaseModel):
     context_fingerprint: str = ""
     input_checksums: Dict[str, str] = Field(default_factory=dict)
     output_checksums: Dict[str, str] = Field(default_factory=dict)
+    artifact_integrity: Dict[str, str] = Field(default_factory=dict)
     graph_next: list[str] = Field(default_factory=list)
     interrupt_id: Optional[str] = None
+
+
+def repair_plan_for_integrity(
+    plan: ResumePlan,
+    invalid_artifacts: Iterable[str],
+) -> ResumePlan:
+    """Convert storage failures into the earliest safe downstream replay.
+
+    This only computes the application plan.  The caller must select a
+    historical checkpoint at or before ``resume_from`` before invoking the
+    graph; reusing the original late checkpoint would not actually rerun the
+    affected stage.
+    """
+
+    invalid = set(invalid_artifacts)
+    if not invalid:
+        return plan
+    stage_by_key = dict(ARTIFACT_STAGE_ORDER)
+    ordered = [
+        (key, stage_by_key[key])
+        for key in invalid
+        if key in stage_by_key
+    ]
+    if not ordered:
+        return plan.model_copy(update={
+            "mode": ResumeMode.BLOCKED,
+            "reason": "artifact integrity failed for an unknown stage",
+        })
+    first_key, first_stage = min(
+        ordered,
+        key=lambda item: [stage for _, stage in ARTIFACT_STAGE_ORDER].index(item[1]),
+    )
+    stages = list(dict.fromkeys(stage for _, stage in ARTIFACT_STAGE_ORDER))
+    start = stages.index(first_stage)
+    reuse = [key for key, stage in ARTIFACT_STAGE_ORDER if stages.index(stage) < start]
+    return plan.model_copy(update={
+        "mode": ResumeMode.RERUN,
+        "resume_from": first_stage,
+        "reuse": [key for key in plan.reuse if key in reuse],
+        "rerun": stages[start:],
+        "reason": f"artifact {first_key} integrity failed; replay from {first_stage}",
+    })
 
 
 ARTIFACT_STAGE_ORDER: tuple[tuple[str, str], ...] = (
     ("l1_snapshot", "L1"),
     ("l2_strategy", "L2"),
     ("planning_program", "L3"),
-    ("intent_compilation", "PARSE"),
+    ("target_projection", "TARGET_PROJECTION"),
     ("grounding_result", "GROUND"),
     ("site_selection", "SELECT"),
     ("execution_plan", "EXECUTE"),
-    ("execution_outcome", "EXECUTE"),
+    ("execution_result", "EXECUTE"),
     ("parcel_changeset", "EXECUTE"),
     ("planned_state", "EXECUTE"),
     ("validation_report", "VALIDATE"),
@@ -94,32 +137,42 @@ ARTIFACT_STAGE_ORDER: tuple[tuple[str, str], ...] = (
 )
 
 
-def _ref_checksum(ref: Any) -> str:
+def _ref_digest(ref: Any) -> str:
     if isinstance(ref, dict):
-        return str(ref.get("checksum") or ref.get("semantic_checksum") or "")
-    return str(getattr(ref, "checksum", "") or getattr(ref, "semantic_checksum", "") or "")
+        return str(ref.get("digest") or "")
+    return str(getattr(ref, "digest", "") or "")
 
 
-def _ref_revision(ref: Any) -> str:
+def _ref_descriptor_digest(ref: Any) -> str:
     if isinstance(ref, dict):
-        return str(ref.get("revision") or "v1")
-    return str(getattr(ref, "revision", "v1") or "v1")
+        return str(ref.get("descriptor_digest") or "")
+    return str(getattr(ref, "descriptor_digest", "") or "")
 
 
 def _ref_context_value(ref: Any, field: str) -> str:
     if isinstance(ref, dict):
+        provenance = ref.get("provenance") or {}
+        if field == "context_version":
+            return str((provenance.get("context_ref") or {}).get("version") or "")
+        if field == "context_fingerprint":
+            return str(provenance.get("context_fingerprint") or "")
         return str(ref.get(field) or "")
+    provenance = getattr(ref, "provenance", {}) or {}
+    if field == "context_version":
+        return str((provenance.get("context_ref") or {}).get("version") or "")
+    if field == "context_fingerprint":
+        return str(provenance.get("context_fingerprint") or "")
     return str(getattr(ref, field, "") or "")
 
 
-def _ref_parent_checksums(ref: Any) -> Dict[str, str]:
+def _ref_parent_digests(ref: Any) -> Dict[str, str]:
     if isinstance(ref, dict):
-        parent_checksums = ref.get("parent_checksums") or {}
+        parent_digests = ref.get("parent_digests") or {}
     else:
-        parent_checksums = getattr(ref, "parent_checksums", {}) or {}
+        parent_digests = getattr(ref, "parent_digests", {}) or {}
     return {
         str(parent_key): str(parent_identity)
-        for parent_key, parent_identity in parent_checksums.items()
+        for parent_key, parent_identity in parent_digests.items()
         if str(parent_key)
     }
 
@@ -128,7 +181,7 @@ def _artifact_checksums(refs: Dict[str, Any]) -> Dict[str, str]:
     return {
         key: checksum
         for key, ref in refs.items()
-        if (checksum := _ref_checksum(ref))
+        if (checksum := _ref_descriptor_digest(ref))
     }
 
 
@@ -136,7 +189,7 @@ def _stage_for_node(node: str) -> str:
     normalized = node.lower()
     for token, stage in (
         ("l1", "L1"), ("l2", "L2"), ("l3", "L3"),
-        ("parse", "PARSE"), ("ground", "GROUND"), ("select", "SELECT"),
+        ("target_projection", "TARGET_PROJECTION"), ("ground", "GROUND"), ("select", "SELECT"),
         ("execute", "EXECUTE"), ("validate", "VALIDATE"),
         ("reconcile", "RECONCILE"), ("deliver", "DELIVER"),
     ):
@@ -176,26 +229,23 @@ def _parent_identity_status(
     refs: Dict[str, Any],
     valid_upstream: list[str],
 ) -> str | None:
-    parent_checksums = _ref_parent_checksums(ref)
-    parent_checksums.pop(artifact_key, None)
+    parent_digests = _ref_parent_digests(ref)
+    parent_digests.pop(artifact_key, None)
 
-    if valid_upstream and not parent_checksums:
+    if valid_upstream and not parent_digests:
         return "missing"
 
-    for parent_key, encoded_identity in parent_checksums.items():
-        expected_revision, separator, expected_checksum = encoded_identity.partition(":")
-        if not separator or not expected_revision or not expected_checksum:
+    for parent_key, expected_digest in parent_digests.items():
+        if not expected_digest.startswith("sha256:"):
             return "missing"
         current_parent = refs.get(parent_key)
         if current_parent is None:
             return "changed"
-        if _ref_revision(current_parent) != expected_revision:
-            return "changed"
-        if _ref_checksum(current_parent) != expected_checksum:
+        if _ref_digest(current_parent) != expected_digest:
             return "changed"
 
     for parent_key in valid_upstream:
-        if parent_key not in parent_checksums:
+        if parent_key not in parent_digests:
             return "missing"
 
     return None
@@ -329,5 +379,6 @@ __all__ = [
     "ResumeCommand",
     "ResumeResult",
     "ResumePlan",
+    "repair_plan_for_integrity",
     "build_resume_plan",
 ]

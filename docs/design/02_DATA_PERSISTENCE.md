@@ -24,9 +24,11 @@ LangGraph checkpoint 只保存工作流恢复所需的状态和 artifact 引用�
 
 ## 1.1 当前实现边界
 
-当前实现已引入 `context_ref`、统一 `artifact_refs` 及 `bootstrap/artifact_runtime.py` 的 session、run、
-context version、类型和 checksum 校验。但 `AgentState` 仍保留 legacy 完整产物字段与 `layout_configs`，
-因此 checkpoint 尚未达到本节定义的纯引用目标。
+当前实现已引入 `context_ref`、统一 `artifact_refs` 及
+`infrastructure/artifacts/runtime.py` 的 session、run、context version、类型和 checksum 校验。
+阶段 payload 已从根状态移入 CAS artifact；`AgentState` 仍保留较多 L1-L3 控制、HUMAN 和重试
+channels，因此 checkpoint 尚未达到本节定义的最小 `WorkflowState` 运行 schema。`layout_configs`
+只作为 EXECUTE artifact，不得重新加入父图状态。
 
 此外，默认 ArtifactStore 仍依赖相对 `.run-tmp` 路径；测试和运行器必须显式隔离 store、session 与 run。
 PARSE 必须在产物写入前获得稳定 context version，否则后续阶段的严格引用校验会拒绝该产物。

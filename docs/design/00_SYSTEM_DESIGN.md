@@ -27,9 +27,8 @@ flowchart TD
     L3 --> G3{"L3 Program Gate"}
     G3 -->|缺信息| Explore
     G3 -->|意图不完整| L3
-    G3 -->|通过| Parse["PARSE\nIntent Compiler"]
-    Parse --> PG{"Parse Gate"}
-    PG -->|修复 / 局部纠正| Parse
+    G3 -->|通过| Parse["TARGET_PROJECTION\nDeterministic Projection"]
+    Parse --> PG{"Target Projection Gate"}
     PG -->|缺少规划内容| L3
     PG -->|通过| Ground["GROUND\n空间引用接地"]
     Ground --> GG{"Grounding Gate"}
@@ -71,8 +70,8 @@ Bootstrap 可以在 L1 前准备 KG、Bundle 和 artifact 的 evidence index，�
 | --------------------------- | ---------------------- | ----------------------------- | ------------------------------------------------------- |
 | `L1Snapshot`              | L1 子图                | L2、L3、Explore               | 已核验的现状事实、约束、问题和证据缺口                  |
 | `L2Strategy`              | L2 子图                | L3、Select、Explore           | 目标、定位、策略和策略冲突                              |
-| `PlanningProgram`         | L3 子图                | PARSE、L2、Explore            | 项目、设施、道路、保护修复等规划干预及其依赖            |
-| `IntentCompilationResult` | PARSE / IntentCompiler | Ground、Select、Execute       | 从 PlanningProgram 编译得到的类型化目标、约束和空间引用 |
+| `PlanningProgram`         | L3 子图                | TARGET_PROJECTION、L2、Explore | 项目、设施、道路、保护修复等规划干预及其依赖            |
+| `IntentCompilationResult` | TARGET_PROJECTION      | Ground、Select、Execute       | 从 PlanningProgram 确定性投影得到的类型化目标和空间引用 |
 | `GroundingResult`         | Ground 子图            | Select                        | 空间引用对应的实体、候选及查询证据                      |
 | `SiteSelectionDecision`   | Select 子图            | Execute                       | 经过硬约束、评分和冲突分配后的最终选址决定              |
 | `PlannedState`            | Execute 子图           | Validate、Reconcile、Delivery | 实际生成的规划图层和派生关系                            |
@@ -85,7 +84,7 @@ Markdown 报告、SSE 事件和 UI 展示都是这些产物的视图，不是新
 | ---------------------- | ----------------------------------------- | -------------------------------------------------------------------------------------- | ---------------------------------- |
 | EXPLORE                | session evidence service / 工具调用 Agent | 按阶段和维度检索 KG、Bundle、报告、typed artifacts、RAG 和外部资料，整理证据与空间认知 | 生成候选 BSM、修改意图、选最终位置 |
 | L1/L2/L3 分析          | 专业分析 Agent                            | 解释事实、推导策略、生成规划文本草案                                                   | 绕过 Gate 直接写空间成果           |
-| PARSE / IntentCompiler | 类型化编译节点                            | 文本转 Target、Constraint、`SpatialReferenceSpec`                                    | 查询地块或决定最终选址             |
+| TARGET_PROJECTION       | 确定性领域投影节点                        | `PlanningProgram` 转 typed target、`SpatialReferenceSpec`                             | 读取原文、查询地块或决定最终选址   |
 | GROUND                 | 确定性子图，可含歧义处理节点              | 实体解析、KG 候选、几何精化                                                            | 评价候选优劣                       |
 | SELECT                 | 混合决策子图                              | 硬过滤、评分、可选模型排序、冲突分配                                                   | 直接生成坐标或绕过约束             |
 | EXECUTE                | 算法 Worker 子图                          | MIP、设施、道路、分区和图层生成                                                        | 静默改变规划意图                   |
@@ -125,7 +124,7 @@ Application subgraphs and API routes
 上图是目标设计。当前唯一主图已经拆出独立的 L1/L2/L3 worker、层级 aggregate 和七个顶层阶段节点，运行顺序为：
 
 ```text
-PARSE → GROUND → SELECT → EXECUTE → VALIDATE → RECONCILE → DELIVER
+TARGET_PROJECTION → GROUND → SELECT → EXECUTE → VALIDATE → RECONCILE → DELIVER
 ```
 
 当前 EXECUTE 已重构为多 worker 子图：`route_tasks → prepare_inputs → project_worker → zone_worker → [facility_worker ‖ axis_worker] → road_worker → merge_worker_results → geometry_materialize → planned_state_builder → execution_review`。道路规划器位于 `app/modules/spatial_ops/road/`
@@ -133,8 +132,8 @@ PARSE → GROUND → SELECT → EXECUTE → VALIDATE → RECONCILE → DELIVER
 `services/modules` 目录已清除。分区求解经 `ZoneAllocatorPort`（PuLP MIP）处理空候选 zone，失败显式 unresolved。
 `ExecutionPlan`、统一 WorkerResult 契约和 RoadPlannerPort 收敛仍属后续工作。
 
-离线核心链覆盖 PARSE 到 DELIVER 的阶段边界，但当前集成测试已暴露 context version 衔接断点，
-因此不能把它视为完整可恢复的端到端链。真实模型与外部 GIS 仍属于后续验收范围。
+离线核心链覆盖 TARGET_PROJECTION 到 DELIVER 的阶段边界；真实 provider 运行和 checkpoint 关闭/重开
+验收仍需配置 provider key，当前缺 key 时 acceptance 明确 skip，不把 fixture 运行当作真实证明。
 
 实现状态以 [10_IMPLEMENTATION_STATUS.md](10_IMPLEMENTATION_STATUS.md) 为准；目录迁移和重复实现清理记录在
 [09_INTEGRATION_BREAKPOINTS.md](09_INTEGRATION_BREAKPOINTS.md)。
@@ -180,6 +179,6 @@ step-mode 层完成审核和 post-L3 Gate 审核是两个业务频道，但必�
 - [03_KG_SEMANTIC_BRIDGE.md](03_KG_SEMANTIC_BRIDGE.md)：KG 四类数据边界
 - [04_PLANNING_PIPELINE.md](04_PLANNING_PIPELINE.md)：L1/L2/L3 及空间子图
 - [05_EXPLORE_BRIDGE.md](05_EXPLORE_BRIDGE.md)：EXPLORE 证据探索能力
-- [06_PARSE_EXECUTE.md](06_PARSE_EXECUTE.md)：PARSE、GROUND、SELECT、EXECUTE 契约
+- [06_TARGET_PROJECTION_EXECUTE.md](06_TARGET_PROJECTION_EXECUTE.md)：TARGET_PROJECTION、GROUND、SELECT、EXECUTE 契约
 - [07_VALIDATION_FEEDBACK.md](07_VALIDATION_FEEDBACK.md)：Gate 与定向反馈
 - [10_IMPLEMENTATION_STATUS.md](10_IMPLEMENTATION_STATUS.md)：当前代码与目标态差距

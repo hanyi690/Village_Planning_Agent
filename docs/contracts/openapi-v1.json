@@ -131,6 +131,60 @@
         }
       }
     },
+    "/api/v1/sessions/{session_id}/artifacts/{artifact_key}": {
+      "get": {
+        "tags": [
+          "Stable v1"
+        ],
+        "summary": "Get Artifact",
+        "description": "Read one explicit checkpoint artifact descriptor and its payload.",
+        "operationId": "get_artifact_api_v1_sessions__session_id__artifacts__artifact_key__get",
+        "parameters": [
+          {
+            "name": "session_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Session Id"
+            }
+          },
+          {
+            "name": "artifact_key",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Artifact Key"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Get Artifact Api V1 Sessions  Session Id  Artifacts  Artifact Key  Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/sessions/{session_id}/human-review": {
       "get": {
         "tags": [
@@ -208,6 +262,59 @@
                   "type": "object",
                   "additionalProperties": true,
                   "title": "Response Submit Review Api V1 Sessions  Session Id  Human Review Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/sessions/{session_id}/resume": {
+      "post": {
+        "tags": [
+          "Stable v1"
+        ],
+        "summary": "Resume Session",
+        "description": "Resume the real cursor or fork an explicit historical checkpoint.",
+        "operationId": "resume_session_api_v1_sessions__session_id__resume_post",
+        "parameters": [
+          {
+            "name": "session_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Session Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ResumeRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ResumeAccepted"
                 }
               }
             }
@@ -356,7 +463,6 @@
           "Stable v1"
         ],
         "summary": "Create a planning session",
-        "description": "创建新规划会话 - 支持 multipart/form-data 文件上传（按来源区分）",
         "operationId": "create_session_api_v1_sessions_post",
         "requestBody": {
           "content": {
@@ -399,61 +505,51 @@
         "properties": {
           "project_name": {
             "type": "string",
-            "title": "Project Name",
-            "description": "项目名称"
+            "title": "Project Name"
           },
           "village_name": {
             "type": "string",
             "title": "Village Name",
-            "description": "村庄名称",
             "default": ""
           },
           "province": {
             "type": "string",
             "title": "Province",
-            "description": "省份",
             "default": ""
           },
           "city": {
             "type": "string",
             "title": "City",
-            "description": "地级市",
             "default": ""
           },
           "county": {
             "type": "string",
             "title": "County",
-            "description": "县/区",
             "default": ""
           },
           "township": {
             "type": "string",
             "title": "Township",
-            "description": "乡镇",
             "default": ""
           },
           "planning_period": {
             "type": "string",
             "title": "Planning Period",
-            "description": "规划期限",
             "default": "2022-2035年"
           },
           "task_description": {
             "type": "string",
             "title": "Task Description",
-            "description": "任务描述",
             "default": "制定村庄发展规划"
           },
           "constraints": {
             "type": "string",
             "title": "Constraints",
-            "description": "约束条件",
             "default": "无特殊约束"
           },
           "step_mode": {
             "type": "boolean",
             "title": "Step Mode",
-            "description": "分步执行模式",
             "default": false
           },
           "rag_enabled": {
@@ -465,47 +561,62 @@
                 "type": "null"
               }
             ],
-            "title": "Rag Enabled",
-            "description": "启用 RAG 知识检索；未提供时继承 RAG_ENABLED"
+            "title": "Rag Enabled"
           },
           "rag_layer_config": {
             "type": "string",
             "title": "Rag Layer Config",
-            "description": "Layer-level RAG config (JSON, e.g. '{\"1\":true,\"2\":false,\"3\":true}')",
             "default": ""
           },
           "village_data": {
             "type": "string",
             "title": "Village Data",
-            "description": "村庄基础数据（文本）",
             "default": ""
           },
           "village_data_files": {
-            "items": {
-              "type": "string",
-              "contentMediaType": "application/octet-stream"
-            },
-            "type": "array",
-            "title": "Village Data Files",
-            "description": "村庄数据文件"
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string",
+                  "contentMediaType": "application/octet-stream"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Village Data Files"
           },
           "task_files": {
-            "items": {
-              "type": "string",
-              "contentMediaType": "application/octet-stream"
-            },
-            "type": "array",
-            "title": "Task Files",
-            "description": "任务描述文件"
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string",
+                  "contentMediaType": "application/octet-stream"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Task Files"
           },
           "constraint_files": {
-            "items": {
-              "type": "string",
-              "contentMediaType": "application/octet-stream"
-            },
-            "type": "array",
-            "title": "Constraint Files",
-            "description": "约束条件文件"
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string",
+                  "contentMediaType": "application/octet-stream"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Constraint Files"
           }
         },
         "type": "object",
@@ -836,6 +947,10 @@
           "human_review": {
             "type": "string",
             "title": "Human Review"
+          },
+          "resume": {
+            "type": "string",
+            "title": "Resume"
           }
         },
         "additionalProperties": false,
@@ -845,9 +960,136 @@
           "event_sync",
           "delivery",
           "map_layers",
-          "human_review"
+          "human_review",
+          "resume"
         ],
         "title": "ResourceLinks"
+      },
+      "ResumeAccepted": {
+        "properties": {
+          "schema_version": {
+            "type": "string",
+            "const": "1.0",
+            "title": "Schema Version",
+            "default": "1.0"
+          },
+          "session_id": {
+            "type": "string",
+            "title": "Session Id"
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "interrupt",
+              "checkpoint"
+            ],
+            "title": "Mode"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "resumed",
+              "accepted"
+            ],
+            "title": "Status"
+          },
+          "checkpoint_id": {
+            "type": "string",
+            "title": "Checkpoint Id",
+            "default": ""
+          },
+          "branch_id": {
+            "type": "string",
+            "title": "Branch Id",
+            "default": ""
+          },
+          "resume_plan": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Resume Plan"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "session_id",
+          "mode",
+          "status"
+        ],
+        "title": "ResumeAccepted"
+      },
+      "ResumeRequest": {
+        "properties": {
+          "mode": {
+            "type": "string",
+            "enum": [
+              "interrupt",
+              "checkpoint"
+            ],
+            "title": "Mode"
+          },
+          "event_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Event Id"
+          },
+          "action": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "retry",
+                  "approve",
+                  "reject"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Action"
+          },
+          "feedback": {
+            "type": "string",
+            "title": "Feedback",
+            "default": ""
+          },
+          "checkpoint_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Checkpoint Id"
+          },
+          "replay_from_stage": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Replay From Stage"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "mode"
+        ],
+        "title": "ResumeRequest",
+        "description": "Explicit cursor command for active interrupts or checkpoint forks."
       },
       "SessionCreated": {
         "properties": {

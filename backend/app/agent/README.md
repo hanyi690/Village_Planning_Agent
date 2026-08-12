@@ -19,8 +19,8 @@ prepare_human_review → publish_human_review_pause → await_human_review → a
 
 ## 入口与边界
 
-- `bootstrap/graph.py`：根图与路由接线。
-- `bootstrap/post_l3_main_nodes.py`：PARSE 至 DELIVER 的主图节点、产物加载和 Gate 路由。
+- `../workflow/root_graph.py`：根图与路由接线。
+- `../workflow/root_graph.py`：根图和阶段路由；各 post-L3 节点位于 `../workflow/stages/`。
 - `plan_state/state.py`：`AgentState` 与初始化函数。
 - `execute/execute_agent.py`：EXECUTE 子图定义。
 
@@ -28,10 +28,11 @@ prepare_human_review → publish_human_review_pause → await_human_review → a
 
 ## 已知实现边界
 
-- `AgentState` 仍含 legacy 完整产物和图层字段，尚未实现完全 ref-only checkpoint。
+- `AgentState` 仍是根图的迁移中内部 schema；对外查询必须使用 `app.workflow.state.WorkflowState`。
+- StepReport 已迁移到 `app.modules.evidence`，agent 层不得拥有第二份审计实现。
 - 当前 `execute_node` 在调用时构建并执行子图，尚非直接挂载到父图的持久化子图。
 - 后端发布 `human_review_paused`，前端已接入消费（`SSEEventType` / `planning-api.ts` 注册、`planningStore` 处理、`HumanReviewPanel` 渲染与 `resolveHumanReview` 提交），HITL 暂停已形成 UI 闭环。
 - `context_version` 在直接启动 post-L3 链时可能晚于 PARSE 产物写入；完整恢复链应以集成测试为准。
 - HUMAN payload 的 canonical 字段为 `event_id/channel/reason/items/paused_stage`；旧字段只在兼容边界保留，避免前端直接依赖 graph 分支名称。
 
-目标设计与迁移取舍见 [agent-graph.md](../../../docs/architecture/agent-graph.md)。
+目标设计与迁移取舍见 [14_BACKEND_MODULE_BLUEPRINT.md](../../../docs/design/14_BACKEND_MODULE_BLUEPRINT.md)。

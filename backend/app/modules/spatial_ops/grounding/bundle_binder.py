@@ -40,7 +40,13 @@ class DeterministicBundleBinder:
 
     def __init__(self, bundle: Any, kg_results: Optional[Mapping[str, Any]] = None):
         self.bundle = bundle
-        raw = bundle.to_geojson_dict() if hasattr(bundle, "to_geojson_dict") else bundle
+        raw = (
+            bundle.to_delivery_inputs()
+            if hasattr(bundle, "to_delivery_inputs")
+            else bundle.to_geojson_dict()
+            if hasattr(bundle, "to_geojson_dict")
+            else bundle
+        )
         self._bundle_payload = copy.deepcopy(raw or {})  # defensive: binding is read-only
         self.kg_results = dict(kg_results or {})
         self.by_bsm: Dict[str, Dict[str, Any]] = {}

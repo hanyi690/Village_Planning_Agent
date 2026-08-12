@@ -10,7 +10,7 @@
 - `metrics.py`：`compute_land_use_metrics` —— 从 GIS 数据聚合用地指标（纯函数，依赖 schema code sets + Python 标准库）
 
 **不负责**：
-- 不做完整 `GISMetricsCalculator`（`compute_summaries` / `compute_zone_distribution` / `_layer_geometry_area_ha` 等依赖 GeoDataFrame / area engine 的方法仍留在 `tools/gis/_analytics/metrics_calculator.py`）
+- 不承载 GIS 工具编排；交付所需土地平衡直接使用本目录的纯计算函数。
 - 不做 I/O / 几何引擎集成
 
 ---
@@ -27,7 +27,7 @@
 
 ```
 utils/ → schema/encodings（code sets）、标准库
-   ▲ 被 kg/builder 与 tools/gis/_analytics 复用
+   ▲ 被 KG/交付校验复用
 ```
 
 - 允许：`schema` 内部、标准库

@@ -383,7 +383,6 @@ def design_zone_parcel(
                 before_geometry_wkt=_geometry_to_wkt(_parcel_geometry(parcel)),
                 after_geometry_wkt=_geometry_to_wkt(_parcel_geometry(parcel)),
                 new_area_ha=float(result.get("area_ha", 0.0) or 0.0),
-                project_ref=f"zone:{zone_target.zone_id or zone_target.land_use}",
                 intervention_id=zone_target.zone_id or "",
             )
         )
@@ -435,7 +434,6 @@ def design_facility_parcel(
             before_geometry_wkt=parcel_geom.wkt,
             after_geometry_wkt=parcel_geom.wkt,
             new_area_ha=parcel_geom.area / 10000.0,
-            project_ref=f"facility:{facility_target.type}",
             intervention_id=facility_target.source_project_id or facility_target.type,
         )
 
@@ -462,7 +460,6 @@ def design_facility_parcel(
         after_classification=facility_classification,
         after_geometry_wkt=_geometry_to_wkt(geom_dict),
         new_area_ha=float(buffer_geom.area / 10000),
-        project_ref=f"facility:{facility_target.type}",
         intervention_id=facility_target.source_project_id or facility_target.type,
     )
 

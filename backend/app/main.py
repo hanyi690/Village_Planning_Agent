@@ -3,7 +3,7 @@ FastAPI Backend Application - 村庄规划智能体后端服务
 
 Architecture:
 - routes.py: Unified API router (aggregates all endpoints)
-- services/: Business logic (planning_service, sse_manager, checkpoint_service)
+- services/: Legacy application orchestration being migrated to application/workflow
 - database/: Async database operations
 """
 
@@ -153,17 +153,6 @@ def _cleanup_old_logs():
         logger.info("🧹 Log cleanup: removed %d old log files (retention=%d days)", deleted, LOG_RETENTION_DAYS)
 
 
-async def _sse_cleanup_loop():
-    """Periodic SSE session cleanup — removes expired session data every 10 minutes."""
-    while True:
-        await asyncio.sleep(600)
-        try:
-            from app.services.sse import sse_manager
-            sse_manager.cleanup_expired_sessions()
-        except Exception as e:
-            logger.error(f"SSE cleanup failed: {e}")
-
-
 async def _log_cleanup_loop():
     """Periodic log cleanup — runs once per day."""
     while True:
@@ -198,8 +187,8 @@ async def lifespan(app: FastAPI):
     app.state.readiness = {"database": "ready", "checkpointer": "ready", "langgraph": "ready"}
 
     # Save event loop for cross-thread SSE publishing
-    from app.services.sse import sse_manager
-    sse_manager.save_event_loop(asyncio.get_running_loop())
+    from app.infrastructure.events import event_hub
+    event_hub.save_event_loop(asyncio.get_running_loop())
     logger.info("🧹 SSE event loop saved")
 
     logger.info("✅ 后端服务启动完成")
@@ -207,21 +196,17 @@ async def lifespan(app: FastAPI):
     # Startup log cleanup
     _cleanup_old_logs()
 
-    # Periodic SSE session cleanup (every 10 minutes)
-    sse_cleanup_task = asyncio.create_task(_sse_cleanup_loop())
     # Periodic log cleanup (every 24 hours)
     log_cleanup_task = asyncio.create_task(_log_cleanup_loop())
 
     yield
 
     # Cancel periodic cleanups
-    for task in [sse_cleanup_task, log_cleanup_task]:
-        task.cancel()
-    for task in [sse_cleanup_task, log_cleanup_task]:
-        try:
-            await task
-        except asyncio.CancelledError:
-            pass
+    log_cleanup_task.cancel()
+    try:
+        await log_cleanup_task
+    except asyncio.CancelledError:
+        pass
 
     # Clean up resources
     logger.info("🧹 Cleaning up resources...")
@@ -243,6 +228,12 @@ async def lifespan(app: FastAPI):
         logger.info("✅ Database connections fully shutdown")
     except Exception as e:
         logger.error(f"❌ Failed to shutdown database: {e}", exc_info=True)
+    try:
+        from app.services.session_kg import shutdown_session_kg_process_pool
+        await asyncio.to_thread(shutdown_session_kg_process_pool)
+        logger.info("✅ Session KG worker pool shutdown")
+    except Exception as e:
+        logger.error(f"❌ Failed to shutdown Session KG worker pool: {e}", exc_info=True)
 
     logger.info("👋 后端服务关闭")
 
@@ -281,9 +272,9 @@ from starlette.responses import Response
 @app.middleware("http")
 async def session_id_middleware(request: Request, call_next):
     path = request.url.path
-    # Match /api/sessions/{session_id}/...
+    # Match the versioned session resource.
     import re
-    m = re.search(r"/api/sessions/([^/]+)", path)
+    m = re.search(r"/api/v1/sessions/([^/]+)", path)
     sid = m.group(1) if m else ""
     from app.utils.logger import set_session_id, reset_session_id
     token = set_session_id(sid)

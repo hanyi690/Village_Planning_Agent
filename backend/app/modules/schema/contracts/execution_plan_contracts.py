@@ -33,7 +33,9 @@ class WorkerTask(BaseModel):
     input_artifact_refs: list[str] = Field(default_factory=list)
 
 
-class ExecutionResult(BaseModel):
+class TaskExecutionResult(BaseModel):
+    """Result for one scheduled execution task."""
+
     task_id: str
     target_id: str = ""
     status: Literal["pending", "running", "succeeded", "deferred", "failed"] = "pending"
@@ -53,11 +55,21 @@ class TypedActionResult(BaseModel):
     details: dict = Field(default_factory=dict)
 
 
-class ExecutionOutcome(ContractMeta):
-    """Authoritative per-task EXECUTE artifact."""
+class ExecutionResult(ContractMeta):
+    """Authoritative EXECUTE root artifact.
 
-    schema_version: Literal["2.0"] = "2.0"
-    task_results: list[ExecutionResult] = Field(default_factory=list)
+    Child execution facts are referenced here instead of being exposed as
+    independent workflow outputs.  The workflow carries only this root
+    artifact ref; delivery and validation load its exact child refs.
+    """
+
+    schema_version: Literal["3.0"] = "3.0"
+    execution_plan_ref: dict[str, Any] = Field(default_factory=dict)
+    parcel_changeset_ref: dict[str, Any] = Field(default_factory=dict)
+    planned_state_ref: dict[str, Any] = Field(default_factory=dict)
+    deferral_ledger_ref: dict[str, Any] = Field(default_factory=dict)
+    layout_configs_ref: dict[str, Any] = Field(default_factory=dict)
+    task_results: list[TaskExecutionResult] = Field(default_factory=list)
     action_results: list[TypedActionResult] = Field(default_factory=list)
     diagnostics: list[dict] = Field(default_factory=list)
 
@@ -72,14 +84,12 @@ class ExecutionPlan(ContractMeta):
 
     schema_version: Literal["2.0"] = "2.0"
     plan_id: str = ""
+    portfolio_decision_ref: str = ""
     worker_tasks: list[WorkerTask] = Field(default_factory=list)
     deferred_tasks: list[WorkerTask] = Field(default_factory=list)
     dependencies: list[dict] = Field(default_factory=list)
     provenance: "Provenance | None" = None
 
-    # Lazy references to PARSE/SELECT contracts (embed or None).
-    intent: Any = None
-    site_selection: Any = None
     land_design_briefs: list[Any] = Field(default_factory=list)
 
 
@@ -116,7 +126,7 @@ class WorkerResult(BaseModel):
     """Unified output envelope produced by a single EXECUTE worker."""
 
     worker_type: str
-    task_results: list[ExecutionResult] = Field(default_factory=list)
+    task_results: list[TaskExecutionResult] = Field(default_factory=list)
     layers: list[Any] = Field(default_factory=list)
     parcel_changes: list[Any] = Field(default_factory=list)
     action_results: list[TypedActionResult] = Field(default_factory=list)
@@ -140,9 +150,9 @@ class RoadPlanResult(BaseModel):
 __all__ = [
     "WorkerType",
     "WorkerTask",
+    "TaskExecutionResult",
     "ExecutionResult",
     "TypedActionResult",
-    "ExecutionOutcome",
     "ExecutionPlan",
     "ZoneAssignmentEntry",
     "ParcelAllocationProblem",

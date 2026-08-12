@@ -49,9 +49,9 @@ class PlaceEvidenceIndex:
         for fact in getattr(context, "location_facts", []) or []:
             index._register_from_l1_fact(fact)
 
-        bundle = getattr(context, "bundle", None)
-        if bundle is not None:
-            pois = (bundle.points.get("annotations_current") or []) if getattr(bundle, "points", None) else []
+        workspace = getattr(context, "workspace", None)
+        if workspace is not None:
+            pois = (workspace.points.get("annotations_current") or []) if getattr(workspace, "points", None) else []
             index._register_poi(pois)
 
         kg = getattr(context, "kg", None)
@@ -165,7 +165,7 @@ class PlaceEvidenceIndex:
             from app.modules.spatial_ops.grounding.grounding import query_parcels_near_entity
 
             return query_parcels_near_entity(
-                self.context.bundle_parcels(),
+                self.context.current_parcels(),
                 (float(coords[0]), float(coords[1])),
                 max_distance_m=500,
             )

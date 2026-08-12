@@ -3,7 +3,7 @@
 > **Status: [PRODUCTION]** | **Type: Architecture** | **Updated: 2026-07-29 (v4.9)**
 > **Scope**: 所有空间数据（矢量/栅格/瓦片）和文档（规划文本/L3报告）进入系统的唯一边界
 >
-> **v4.9 变更**: `adapters/` 策略模式正式化 — 5 个内置适配器（parcels/features/raster/table/document）接管 ingest，`DataCatalog.load_village_bundle()` 通过 `ADAPTERS` 注册表分发；`base_conversion.py` 统一 DLBM→GHYTBM 基数转换接口
+> **当前边界**: `adapters/` 策略模式正式化 — 内置适配器接管 ingest，`DataCatalog.load_village_bundle()` 通过 `ADAPTERS` 注册表分发；数据层不提供 DLBM→GHYTBM 推导。
 > **v4.8.1 变更**: DEM 栅格图层完整接入（clip 脚本 + sources.yaml + 适配器）
 > **v4.6 变更**: ControlRule/PlanningIndicator 移入 bundle.tables（类型已定义，ingest 未实现）；KG 不再存储非空间要素；bundle 形态分组直连 KG builder
 
@@ -101,7 +101,6 @@ backend/app/modules/data/
 ├── README.md
 ├── __init__.py
 ├── contracts.py           # DataResult, DataSourceMetadata
-├── base_conversion.py     # [v4.9] DLBM -> GHYTBM 基数转换（附录5）
 ├── ingest.py              # raw GeoJSON -> typed schema models
 ├── catalog/
 │   ├── catalog.py         # DataCatalog
@@ -133,7 +132,7 @@ backend/app/modules/data/
 │   └── osm.py             # OpenStreetMap (osmnx)
 ├── documents/
 │   └── loader.py          # 规划文本/L3 报告加载
-└── providers/             # POI/API 搜索子模块（仍被 _analytics 工具使用）
+└── providers/             # 外部事实提供器，仅由 data/KG 按显式 capability 使用
     ├── tianditu/          # 天地图 API 封装
     ├── amap/              # 高德地图 API 封装
     └── poi.py             # POI 统一搜索接口
@@ -313,7 +312,7 @@ sources:
 
 - **不做渲染**: `tools/gis/_rendering/`
 - **不做 LLM 调用**: `tools/gis/parse`
-- **不做空间分析**: `tools/gis/_analytics/`
+- **不做空间分析**: 空间分析统一由 `modules/spatial_ops/` 负责
 - **不做栅格计算**: `agent/gis/analyze/`
 
 ---
@@ -384,7 +383,7 @@ sources:
 | 类型定义（栅格）         | `backend/app/modules/schema/types/raster_types.py`                          |
 | 数据视图 & LayerGroup    | `backend/app/modules/schema/types/canonical.py`                             |
 | 图层注册表               | `backend/app/modules/schema/types/layer_registry.py`                        |
-| 基数转换（DLBM→GHYTBM） | `backend/app/modules/data/base_conversion.py`                               |
+| 规划分类决定 | `backend/app/domain/program/classification.py`；只接受显式 `ClassificationDecision` |
 | 适配器策略               | `backend/app/modules/data/adapters/`                                        |
 | 摄入端口（旧）           | `backend/app/modules/data/ingest.py`                                        |
 | 数据源配置               | `backend/app/modules/data/catalog/sources.yaml`                             |

@@ -5,10 +5,9 @@ single authoritative view of a planning session: the VillageBundle, the
 session KG reference, the gazetteer, the constraint index and the report
 summaries that the downstream EXPLORE/PARSE/GROUND/SELECT pipeline reads.
 
-The context MAY additionally hold injected port implementations
-(``artifact_store``, ``ports``) so downstream modules can consume services
-without importing ``app.agent`` / ``app.services``, but it stays free of
-those imports itself.
+The context may hold typed data/evidence ports, but artifact descriptors are
+owned by workflow checkpoints and the CAS infrastructure; they are not
+injected into this data context.
 
 Versioning: ``version`` is bumped on every factory rebuild. Consumers that
 cache derived geometry / query results must key on this version so a stale
@@ -26,7 +25,9 @@ import json
 from dataclasses import dataclass, field
 from typing import Any, Dict, List
 
+from app.data.model.snapshot import SessionDataSnapshot
 from app.modules.ports.planning_ports import PlanningPorts
+from app.spatial.model.workspace import SpatialWorkspace
 
 
 @dataclass
@@ -37,7 +38,7 @@ class PlanningContext:
         session_id: Planning session identifier.
         village_name: Resolved village name (never the ``"jintian"`` fallback).
         version: Monotonic build version. Bumped on every rebuild.
-        bundle: Session-scoped ``VillageBundle`` (may be None when not resolvable).
+        workspace: data-owned ``SpatialWorkspace`` (may be None when unavailable).
         kg: Live session ``PlanningKG`` instance (may be None).
         kg_session_ref: KG session key used by ``KGManager``.
         kg_version: KG mutation version (invalidates cached SPARQL results).
@@ -51,14 +52,15 @@ class PlanningContext:
         evidence_index: Pre-built ``PlaceEvidenceIndex`` snapshot (may be None
             when the evidence module or its inputs are unavailable).
         ports: Typed ``PlanningPorts`` bundle of injected dependency-inversion
-            port implementations (artifact_store, semantic_query, spatial_query,
-            gazetteer, nomenclature_registry, context_provider). May be empty.
+        port implementations (semantic_query, spatial_query, gazetteer,
+            nomenclature_registry, context_provider). May be empty.
     """
 
     session_id: str = ""
     village_name: str = ""
     version: int = 1
-    bundle: Any = None
+    workspace: SpatialWorkspace | None = None
+    data_snapshot: SessionDataSnapshot | None = None
     kg: Any = None
     kg_session_ref: str = ""
     kg_version: int = 0
@@ -83,23 +85,38 @@ class PlanningContext:
             self._recompute_hash()
 
     @property
-    def has_bundle(self) -> bool:
-        return self.bundle is not None
+    def has_workspace(self) -> bool:
+        return self.workspace is not None
 
     @property
     def has_kg(self) -> bool:
         return self.kg is not None and self.kg_session_ref != ""
 
-    @property
-    def artifact_store(self) -> Any:
-        """Back-compat accessor for the injected artifact store (or None)."""
-        return self.ports.artifact_store if self.ports else None
-
-    def bundle_parcels(self) -> List[Any]:
-        """Land-use parcels of the context bundle (typed objects)."""
-        if self.bundle is None:
+    def current_parcels(self) -> List[Any]:
+        """Current land-use parcels from the data-owned workspace."""
+        if self.workspace is None:
             return []
-        return list(self.bundle.polygons.get("landuse_current") or [])
+        return self.workspace.current_parcels()
+
+    def input_text(self, source: str, default: str = "") -> str:
+        """Read one planning input from the data-owned workspace."""
+        if self.workspace is None:
+            return default
+        for item in self.workspace.planning_texts:
+            if str(item.get("source", "")) == source:
+                return str(item.get("content", "") or "")
+        return default
+
+    def input_texts(self) -> Dict[str, str]:
+        """Return a source-keyed view of planning inputs without mutating state."""
+        if self.workspace is None:
+            return {}
+        result: Dict[str, str] = {}
+        for item in self.workspace.planning_texts:
+            source = str(item.get("source", "") or "")
+            if source and source not in result:
+                result[source] = str(item.get("content", "") or "")
+        return result
 
     def snapshot_meta(self) -> Dict[str, Any]:
         """Serializable metadata for logs / step reports (no geometry)."""
@@ -109,7 +126,7 @@ class PlanningContext:
             "version": self.version,
             "kg_session_ref": self.kg_session_ref,
             "kg_version": self.kg_version,
-            "has_bundle": self.has_bundle,
+            "has_workspace": self.has_workspace,
             "has_kg": self.has_kg,
             "has_gazetteer": self.gazetteer is not None,
             "has_constraint_index": self.constraint_index is not None,
@@ -128,7 +145,8 @@ class PlanningContext:
 
     def _record_capabilities(self) -> None:
         self.capabilities = {
-            "bundle": self.bundle is not None,
+            "data_snapshot": self.data_snapshot is not None,
+            "workspace": self.workspace is not None,
             "kg": self.kg is not None,
             "gazetteer": self.gazetteer is not None,
             "constraint_index": self.constraint_index is not None,

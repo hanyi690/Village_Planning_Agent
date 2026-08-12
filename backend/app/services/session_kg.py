@@ -47,6 +47,16 @@ def _kg_process_pool() -> ProcessPoolExecutor:
         return _KG_PROCESS_POOL
 
 
+def shutdown_session_kg_process_pool() -> None:
+    """Release the isolated KG worker pool during application/test shutdown."""
+    global _KG_PROCESS_POOL
+    with _KG_PROCESS_POOL_LOCK:
+        pool = _KG_PROCESS_POOL
+        _KG_PROCESS_POOL = None
+    if pool is not None:
+        pool.shutdown(wait=True, cancel_futures=True)
+
+
 def _session_kg_lock(session_id: str) -> asyncio.Lock:
     """Return the lock owned by the current event loop for one session.
 
@@ -71,6 +81,7 @@ async def ensure_session_kg(
     session_id: str,
     village_name: str = "",
     force: bool = False,
+    bundle_version: int | None = None,
 ) -> Optional[Dict[str, Any]]:
     """幂等预建 session KG（L1 前调用）。
 
@@ -91,10 +102,12 @@ async def ensure_session_kg(
                 return {"cache_hit": True, "session_id": session_id}
 
         try:
-            from app.services.session_bundle import build_session_bundle
+            from app.services.session_bundle import build_session_bundle, restore_session_bundle
             from app.modules.spatial_ops.geometry import compute_parcel_relations
 
-            bundle = await build_session_bundle(session_id, village_name)
+            bundle = await restore_session_bundle(session_id, version=bundle_version)
+            if bundle is None:
+                bundle = await build_session_bundle(session_id, village_name)
             if bundle is None or not getattr(bundle, "village_name", ""):
                 logger.warning(
                     "[SessionKG] No bundle for session %s, skip pre-build", session_id
@@ -183,7 +196,7 @@ async def ensure_session_kg(
                 snap.cache_hit, snap.version,
             )
             try:
-                from app.services.step_report import save_step_report
+                from app.modules.evidence.step_report import save_step_report
 
                 await save_step_report(
                     session_id, "KG_PREBUILD",
@@ -213,4 +226,4 @@ async def ensure_session_kg(
             return None
 
 
-__all__ = ["ensure_session_kg"]
+__all__ = ["ensure_session_kg", "shutdown_session_kg_process_pool"]

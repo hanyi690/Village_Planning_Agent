@@ -10,6 +10,7 @@ from .provenance import Provenance
 
 class PlannedParcel(BaseModel):
     bsm: str = ""
+    project_ref: str = ""
     planning_land_use: str = ""
     zone_type: str = ""
     area_ha: float = 0.0
@@ -65,12 +66,21 @@ class PlannedAxis(BaseModel):
     derived_from_target: str = ""
 
 
+class PlannedProjectPoint(BaseModel):
+    """Small spatial marker for a project whose output is a point."""
+
+    project_ref: str = ""
+    name: str = ""
+    geometry: str = ""
+
+
 class PlannedState(ContractMeta):
     version: str = "v1"
     parcels: list[PlannedParcel] = Field(default_factory=list)
     zones: list[PlannedZone] = Field(default_factory=list)
     coverage_domains: list[CoverageDomain] = Field(default_factory=list)
     facilities: list[PlannedFacility] = Field(default_factory=list)
+    project_points: list[PlannedProjectPoint] = Field(default_factory=list)
     roads: list[PlannedRoad] = Field(default_factory=list)
     axes: list[PlannedAxis] = Field(default_factory=list)
     source: str = ""

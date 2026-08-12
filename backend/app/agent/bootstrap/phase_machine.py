@@ -23,7 +23,7 @@ class PlanningPhase(Enum):
     LAYER1 = "layer1"
     LAYER2 = "layer2"
     LAYER3 = "layer3"
-    COMPLETED = "completed"
+    POST_L3 = "post_l3"
 
 
 # ==========================================
@@ -68,7 +68,7 @@ TOTAL_WAVES[1] = 1
 PHASE_ORDER: List[str] = [
     PlanningPhase.INIT.value, PlanningPhase.LAYER1.value,
     PlanningPhase.LAYER2.value, PlanningPhase.LAYER3.value,
-    PlanningPhase.COMPLETED.value
+    PlanningPhase.POST_L3.value,
 ]
 
 PHASE_DESCRIPTIONS: Dict[str, str] = {
@@ -76,7 +76,7 @@ PHASE_DESCRIPTIONS: Dict[str, str] = {
     PlanningPhase.LAYER1.value: "现状分析阶段",
     PlanningPhase.LAYER2.value: "规划思路阶段",
     PlanningPhase.LAYER3.value: "详细规划阶段",
-    PlanningPhase.COMPLETED.value: "规划完成",
+    PlanningPhase.POST_L3.value: "空间规划执行与交付",
 }
 
 
@@ -101,7 +101,7 @@ def _phase_to_layer(phase: str) -> Optional[int]:
                 return num
         except (ValueError, IndexError):
             pass
-    if phase == PlanningPhase.COMPLETED.value:
+    if phase == PlanningPhase.POST_L3.value:
         return None
     return None
 

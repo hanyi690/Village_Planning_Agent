@@ -7,7 +7,7 @@ Provides both LangGraph runtime operations and planning business logic.
 Architecture:
     API Layer → PlanningRuntimeService → LangGraph StateGraph
                   ↓
-                  SSEManager (event publishing)
+                  EventConnectionHub (online event publishing)
 
 Key benefits:
 - Single entry point for all planning operations
@@ -19,7 +19,6 @@ import asyncio
 import logging
 import time
 import uuid
-from collections import deque
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Optional, List
@@ -33,14 +32,13 @@ from app.database.engine import get_global_checkpointer
 from app.database.operations import (
     create_planning_session_async,
     update_planning_session_async,
-    set_stream_state_async,
-    add_session_event_async,
 )
 from app.api.schemas import TaskStatus
-from app.services.sse import sse_manager
+from app.infrastructure.events import event_hub as sse_manager
 from app.services.checkpoint import checkpoint_service, checkpoint_persistence_manager
-from app.core.settings import MAX_SESSION_EVENTS, GRAPH_MAX_CONCURRENCY, GRAPH_RECURSION_LIMIT
-from app.agent.bootstrap.graph import create_unified_planning_graph
+from app.core.settings import GRAPH_MAX_CONCURRENCY, GRAPH_RECURSION_LIMIT
+from app.workflow.root_graph import create_unified_planning_graph
+from app.workflow.runtime_adapter import materialize_workflow_state, pack_workflow_patch
 from app.agent.plan_state.state import state_to_ui_status
 from app.agent.bootstrap.phase_machine import (
     get_layer_dimensions,
@@ -56,6 +54,7 @@ from app.utils.event_factory import (
 )
 
 logger = logging.getLogger(__name__)
+from app.services.resume_service import ResumeConflictError, ResumeService
 
 # Known intent tool names that should not be overridden by synthetic messages
 _KNOWN_INTENT_NAMES = frozenset({"advance_planning_intent", "gis_analysis", "GISAnalysis"})
@@ -132,8 +131,14 @@ class PlanningRuntimeService:
             logger.info("[PlanningRuntimeService] Graph created")
 
             from app.agent.execute.execute_agent import build_execute_agent_graph
-            cls._execute_subgraph = build_execute_agent_graph(checkpointer=cls._checkpointer)
-            logger.info("[PlanningRuntimeService] EXECUTE subgraph compiled (independent checkpointer)")
+            # EXECUTE has a different local worker schema and is invoked as a
+            # stage adapter. Its workspace never crosses the parent graph
+            # checkpoint; the parent receives only typed artifact refs/results.
+            cls._execute_subgraph = build_execute_agent_graph(checkpointer=None)
+            logger.info(
+                "[PlanningRuntimeService] EXECUTE subgraph compiled "
+                "(parent checkpoint owns stage boundary)"
+            )
 
             cls._initialized = True
             logger.info("[PlanningRuntimeService] Initialization complete")
@@ -173,7 +178,7 @@ class PlanningRuntimeService:
         """Get checkpoint state values (convenience method)."""
         snapshot = await cls.aget_state(session_id)
         if snapshot:
-            values = dict(snapshot.values or {})
+            values = materialize_workflow_state(dict(snapshot.values or {}))
             # During the first interrupt checkpoint LangGraph can expose the
             # resume payload on the pending task before it merges the waiting
             # node's values.  Surface the same HUMAN fields to internal
@@ -206,11 +211,24 @@ class PlanningRuntimeService:
     ) -> bool:
         """Update checkpoint state for a session (no graph resumption).
 
-        Uses native graph.aupdate_state() — safe now that context_schema
-        has been removed (step_mode moved to AgentState).
+        Uses native graph.aupdate_state() after packing the stage view into
+        the ref-only WorkflowState checkpoint.
         """
         await cls.ensure_initialized()
         config = cls.get_thread_config(session_id)
+        snapshot = await cls._graph.aget_state(config)
+        raw_state = dict(snapshot.values or {}) if snapshot else {}
+        if "runtime" in updates:
+            runtime_patch = updates.get("runtime")
+            patch = {key: value for key, value in updates.items() if key != "runtime"}
+            if isinstance(runtime_patch, dict):
+                merged_patch = dict(runtime_patch)
+                merged_patch.update(patch)
+                updates = pack_workflow_patch(raw_state, merged_patch)
+            else:
+                updates = pack_workflow_patch(raw_state, patch)
+        else:
+            updates = pack_workflow_patch(raw_state, updates)
 
         await cls._graph.aupdate_state(config, updates, as_node=as_node)
 
@@ -239,6 +257,7 @@ class PlanningRuntimeService:
         session_id: str,
         resume_data: Dict[str, Any],
         state_updates: Optional[Dict[str, Any]] = None,
+        expected_event_id: Optional[str] = None,
     ) -> None:
         """Resume graph after interrupt() using official Command(resume=...) pattern.
 
@@ -254,22 +273,57 @@ class PlanningRuntimeService:
         config = cls.get_thread_config(session_id)
         config["recursion_limit"] = GRAPH_RECURSION_LIMIT
 
-        # A provider failure opens a session-scoped circuit breaker so a
-        # parallel wave stops spending requests.  An explicit HUMAN resume is
-        # the operator's bounded permission to try the failed dimension again;
-        # reset the breaker here, never on ordinary graph replay.
-        from app.agent.common.dimension_runtime import reset_provider_failure
-        reset_provider_failure(session_id)
-
         if not resume_data:
             raise ValueError("resume payload must be a non-empty object")
 
         if state_updates:
-            command = Command(resume=resume_data, update=state_updates)
+            raw_snapshot = await cls.aget_state(session_id)
+            raw_state = dict(raw_snapshot.values or {}) if raw_snapshot else {}
+            command = Command(
+                resume=resume_data,
+                update=pack_workflow_patch(raw_state, state_updates),
+            )
         else:
             command = Command(resume=resume_data)
 
         async with cls._execution_locks.setdefault(session_id, asyncio.Lock()):
+            # Check the token inside the execution lock.  Checking only in
+            # the HTTP handler leaves a race where two identical requests
+            # both pass before the first graph run marks the checkpoint as
+            # consumed, causing duplicate downstream LLM work.
+            if expected_event_id:
+                current = await cls.aget_state_values(session_id) or {}
+                ResumeService.validate_interrupt(current, expected_event_id)
+            else:
+                current = await cls.aget_state_values(session_id) or {}
+
+            paused_stage = str(current.get("paused_stage") or "").lower()
+            if paused_stage in {"l1", "l2", "l3", "ground", "select"}:
+                from app.services.session_kg import ensure_session_kg
+
+                context_ref = current.get("context_ref") or {}
+                raw_version = context_ref.get("version") or current.get("context_version")
+                try:
+                    bundle_version = int(raw_version) if raw_version is not None else None
+                except (TypeError, ValueError):
+                    bundle_version = None
+                restored = await ensure_session_kg(
+                    session_id,
+                    force=bundle_version is not None,
+                    bundle_version=bundle_version,
+                )
+                if restored is None:
+                    raise RuntimeError(
+                        f"cannot resume {paused_stage}: session data/KG restoration failed"
+                    )
+
+            # A provider failure opens a session-scoped circuit breaker so a
+            # parallel wave stops spending requests.  An explicit HUMAN
+            # resume is the operator's bounded permission to try the failed
+            # dimension again; reset it only after the token is accepted.
+            from app.agent.common.dimension_runtime import reset_provider_failure
+            reset_provider_failure(session_id)
+
             initial_state = await cls.aget_state_values(session_id) or {}
             initial_signature = (
                 initial_state.get("phase"),
@@ -295,7 +349,7 @@ class PlanningRuntimeService:
 
             async for part in stream_iterator:
                 if part.get("type") == 'values':
-                    state = part["data"]
+                    state = materialize_workflow_state(part["data"])
                     observed_signatures.append((
                         state.get("phase"),
                         state.get("current_stage"),
@@ -332,7 +386,6 @@ class PlanningRuntimeService:
                                 phase=last_phase,
                                 session_id=session_id,
                             )
-                            sse_manager.append_event(session_id, checkpoint_saved_event)
                             sse_manager.publish_sync(session_id, checkpoint_saved_event)
                             last_completed_layer = 0
 
@@ -364,8 +417,8 @@ class PlanningRuntimeService:
                 }
                 logger.error("[PlanningRuntimeService] [%s] Resume made no progress: %s", session_id, diagnostic)
                 try:
-                    await cls._graph.aupdate_state(
-                        config,
+                    await cls.aupdate_state(
+                        session_id,
                         {
                             "delivery_status": "diagnostic_only",
                             "diagnostic_terminal": diagnostic,
@@ -374,7 +427,7 @@ class PlanningRuntimeService:
                             "current_stage": diagnostic["stage"],
                             "next_stage": "TERMINAL",
                         },
-                        as_node="resume_no_progress",
+                        as_node="end_diagnostic",
                     )
                 except Exception as state_error:
                     logger.error("[PlanningRuntimeService] [%s] failed to persist resume diagnostic: %s", session_id, state_error)
@@ -383,7 +436,6 @@ class PlanningRuntimeService:
                     "execution_error": diagnostic["message"],
                 })
                 await cls._append_event(session_id, create_error_event(session_id, diagnostic["message"]))
-                sse_manager.set_execution_active(session_id, False)
                 return
             fatal_error = (final_state or {}).get("fatal_error")
             if fatal_error:
@@ -394,7 +446,6 @@ class PlanningRuntimeService:
                 })
                 await cls._append_event(session_id, create_error_event(session_id, message))
                 logger.error("[PlanningRuntimeService] [%s] Terminal graph failure: %s", session_id, fatal_error)
-                sse_manager.set_execution_active(session_id, False)
                 return
             deliver_gate = (final_state or {}).get("deliver_gate") or {}
             deliver_route = deliver_gate.get("feedback_route") if isinstance(deliver_gate, dict) else getattr(deliver_gate, "feedback_route", None)
@@ -409,14 +460,8 @@ class PlanningRuntimeService:
                     deferral_summary=final_state.get("deferral_summary") or {},
                     diagnostic_terminal=final_state.get("diagnostic_terminal") or {},
                 ))
-            sse_manager.set_execution_active(session_id, False)
 
             # Send resumed SSE event
-            sse_manager.append_event(session_id, {
-                "type": "resumed",
-                "session_id": session_id,
-                "timestamp": datetime.now().isoformat(),
-            })
             sse_manager.publish_sync(session_id, {
                 "type": "execution_resumed",
                 "session_id": session_id,
@@ -510,10 +555,7 @@ class PlanningRuntimeService:
         from app.agent.plan_state.state_factory import StateFactory
         initial_state = StateFactory.create(
             project_name=project_name,
-            village_data=village_data,
             village_name=village_name,
-            task_description=task_description,
-            constraints=constraints,
             session_id=session_id,
             enable_review=enable_review,
             stream_mode=stream_mode,
@@ -548,15 +590,6 @@ class PlanningRuntimeService:
                 status_code=500,
                 detail=f"Failed to create session in database: {db_error}"
             )
-
-        # Initialize SSE manager session
-        sse_manager.init_session(session_id, {
-            "session_id": session_id,
-            "project_name": project_name,
-            "created_at": datetime.now().isoformat(),
-            "events": deque(maxlen=MAX_SESSION_EVENTS),
-        })
-        sse_manager.set_execution_active(session_id, True)
 
         # Ensure graph is initialized
         await cls.ensure_initialized()
@@ -639,16 +672,12 @@ class PlanningRuntimeService:
 
     @staticmethod
     async def _append_event(session_id: str, event: Dict) -> bool:
-        """Append event to database and SSE manager."""
+        """Publish an event through the single runtime event boundary."""
         try:
-            await add_session_event_async(session_id, event)
-            sse_manager.append_event(session_id, event)
-            sse_manager.publish_sync(session_id, event)
+            await sse_manager.publish(session_id, event)
             return True
         except Exception as e:
-            logger.warning(f"[PlanningRuntimeService] [{session_id}] DB event append failed: {e}")
-            sse_manager.append_event(session_id, event)
-            sse_manager.publish_sync(session_id, event)
+            logger.warning(f"[PlanningRuntimeService] [{session_id}] event publish failed: {e}")
             return False
 
     @classmethod
@@ -658,6 +687,8 @@ class PlanningRuntimeService:
         initial_state: Optional[Dict[str, Any]] = None,
         checkpoint_id: str = None,
         state_values: Optional[Dict[str, Any]] = None,
+        replay_from_stage: Optional[str] = None,
+        branch_id: Optional[str] = None,
     ) -> None:
         """
         Unified trigger for planning execution (skip conversation_node).
@@ -684,7 +715,14 @@ class PlanningRuntimeService:
             return
 
         async with cls._execution_locks[session_id]:
-            await cls._execute_planning(session_id, initial_state, checkpoint_id, state_values)
+            await cls._execute_planning(
+                session_id,
+                initial_state,
+                checkpoint_id,
+                state_values,
+                replay_from_stage,
+                branch_id,
+            )
 
     @classmethod
     async def _execute_planning(
@@ -693,6 +731,8 @@ class PlanningRuntimeService:
         initial_state: Optional[Dict[str, Any]] = None,
         checkpoint_id: str = None,
         state_values: Optional[Dict[str, Any]] = None,
+        replay_from_stage: Optional[str] = None,
+        branch_id: Optional[str] = None,
     ) -> None:
         """Internal execution method called within the session lock."""
         from app.utils.logger import set_session_id as _set_sid
@@ -712,8 +752,26 @@ class PlanningRuntimeService:
             try:
                 from app.services.session_kg import ensure_session_kg
 
-                vname = str((initial_state.get("config") or {}).get("village_name", ""))
-                await ensure_session_kg(session_id, village_name=vname)
+                initial_runtime = materialize_workflow_state(initial_state)
+                vname = str((initial_runtime.get("config") or {}).get("village_name", ""))
+                from app.core.settings import KG_BUILD_TIMEOUT_SECONDS
+                logger.info(
+                    "[PlanningRuntimeService] [%s] KG pre-build started (timeout=%ss)",
+                    session_id,
+                    KG_BUILD_TIMEOUT_SECONDS,
+                )
+                async with asyncio.timeout(KG_BUILD_TIMEOUT_SECONDS):
+                    await ensure_session_kg(session_id, village_name=vname)
+                logger.info("[PlanningRuntimeService] [%s] KG pre-build finished", session_id)
+            except TimeoutError:
+                # KG is enrichment, not a reason to leave the graph without a
+                # checkpoint. Continue with the uploaded bundle and preserve a
+                # diagnostic for the final manifest.
+                logger.error(
+                    "[PlanningRuntimeService] [%s] KG pre-build timed out after %ss; continuing without KG",
+                    session_id,
+                    KG_BUILD_TIMEOUT_SECONDS,
+                )
             except Exception as e:  # noqa: BLE001 — non-fatal
                 logger.warning(
                     "[PlanningRuntimeService] [%s] Session KG pre-build failed: %s",
@@ -728,7 +786,11 @@ class PlanningRuntimeService:
         if initial_state:
             from app.agent.common.dimension_runtime import reset_provider_failure
             reset_provider_failure(session_id)
-            clean_state = {k: v for k, v in initial_state.items() if k != "messages"}
+            clean_state = {
+                k: v
+                for k, v in materialize_workflow_state(initial_state).items()
+                if k != "messages"
+            }
             clean_state["phase"] = "layer1"
 
             # Inject synthetic AIMessage unless last message already has intent
@@ -753,13 +815,35 @@ class PlanningRuntimeService:
             )
 
         stream_input = None  # Resume from checkpoint
+        if replay_from_stage or branch_id:
+            # Command(update=...) creates a descendant checkpoint while
+            # preserving the historical cursor's next node.  This marks the
+            # execution as a recovery revision without mutating the source
+            # checkpoint or routing through START again.
+            from langgraph.types import Command
+
+            updates: dict[str, Any] = {}
+            if replay_from_stage:
+                retry_counts = dict((state_values or {}).get("retry_counts") or {})
+                retry_counts[replay_from_stage] = int(retry_counts.get(replay_from_stage, 0)) + 1
+                updates["retry_counts"] = retry_counts
+            if branch_id:
+                from app.infrastructure.artifacts.runtime import fork_artifact_refs
+
+                fork_state = state_values or await cls.aget_state_values(session_id) or {}
+                updates["artifact_refs"] = fork_artifact_refs(fork_state, branch_id)
+                updates["branch_id"] = branch_id
+            raw_snapshot = await cls.aget_state(session_id)
+            raw_state = dict(raw_snapshot.values or {}) if raw_snapshot else {}
+            stream_input = Command(update=pack_workflow_patch(raw_state, updates))
 
         # 4. Build config with max_concurrency + optional streaming callback
         config = cls.get_thread_config(session_id, checkpoint_id=checkpoint_id)
         config["max_concurrency"] = GRAPH_MAX_CONCURRENCY
         config["recursion_limit"] = GRAPH_RECURSION_LIMIT
 
-        streaming_enabled = (initial_state.get("_streaming_enabled", True) if initial_state else True)
+        initial_runtime = materialize_workflow_state(initial_state) if initial_state else {}
+        streaming_enabled = initial_runtime.get("_streaming_enabled", True)
         if streaming_enabled:
             def token_callback_factory(layer: int, dimension: str):
                 def on_token(token: str, accumulated: str):
@@ -770,7 +854,6 @@ class PlanningRuntimeService:
                         "delta": token,
                         "timestamp": datetime.now().isoformat()
                     }
-                    sse_manager.append_event(session_id, event_data)
                     sse_manager.publish_sync(session_id, event_data)
                 return on_token
             config["configurable"]["_token_callback_factory"] = token_callback_factory
@@ -798,7 +881,7 @@ class PlanningRuntimeService:
 
             async for part in stream_iterator:
                 if part.get("type") == 'values':
-                    state = part["data"]
+                    state = materialize_workflow_state(part["data"])
 
                     # 级联修订完成检测（独立于正常层完成检测）
                     last_revised_dimensions = state.get('last_revised_dimensions', [])
@@ -848,7 +931,6 @@ class PlanningRuntimeService:
                             revised_dimensions=revision_dimensions,
                         )
 
-                        sse_manager.append_event(session_id, checkpoint_saved_event)
                         sse_manager.publish_sync(session_id, checkpoint_saved_event)
 
                         # 修订完成后清除 last_revised_dimensions，防止后续正常检查点被误判
@@ -887,7 +969,6 @@ class PlanningRuntimeService:
                     deferral_summary=final_state.get("deferral_summary") or {},
                     diagnostic_terminal=final_state.get("diagnostic_terminal") or {},
                 ))
-            sse_manager.set_execution_active(session_id, False)
 
             logger.info(f"[PlanningRuntimeService] [{session_id}] Background execution completed")
 
@@ -906,11 +987,10 @@ class PlanningRuntimeService:
                     "phase": "completed",
                     "current_stage": "TERMINAL",
                     "next_stage": "",
-                }, as_node="terminal_error")
+                }, as_node="end_diagnostic")
             except Exception as state_error:
                 logger.error("[PlanningRuntimeService] failed to persist terminal error: %s", state_error)
             await cls._append_event(session_id, create_error_event(session_id, str(e)))
-            sse_manager.set_execution_active(session_id, False)
         finally:
             # Clean up execution lock to prevent memory leak
             cls._execution_locks.pop(session_id, None)
@@ -942,7 +1022,6 @@ class PlanningRuntimeService:
             "message": "Execution resumed after review approval",
             "timestamp": datetime.now().isoformat()
         }
-        sse_manager.append_event(session_id, resumed_event)
         sse_manager.publish_sync(session_id, resumed_event)
 
         # Update database status
@@ -965,8 +1044,6 @@ class PlanningRuntimeService:
         else:
             logger.debug(f"[PlanningRuntimeService] [{session_id}] Skipping layer_started: current_layer={current_layer}, need_revision={need_revision}")
 
-        await set_stream_state_async(session_id, "active")
-
         # Start background execution
         from app.services.composition import CompositionRoot
 
@@ -982,30 +1059,6 @@ class PlanningRuntimeService:
             "current_layer": current_layer,
             "resumed": True
         }
-
-    @classmethod
-    async def subscribe_with_history(cls, session_id: str) -> asyncio.Queue:
-        """Subscribe to session event stream with historical event sync."""
-        queue = await sse_manager.subscribe(session_id)
-
-        historical_events = sse_manager.get_events_copy(session_id)
-        layer_completed_found = any(e.get("type") == "layer_completed" for e in historical_events)
-
-        if len(historical_events) == 0 or not layer_completed_found:
-            logger.info(f"[PlanningRuntimeService] [{session_id}] Rebuilding from checkpoint")
-            rebuilt_events = await checkpoint_service.rebuild_events(session_id)
-
-            if rebuilt_events:
-                for event in rebuilt_events:
-                    try:
-                        queue.put_nowait(event)
-                        sse_manager.append_event(session_id, event)
-                    except asyncio.QueueFull:
-                        logger.warning(f"[PlanningRuntimeService] [{session_id}] Queue full, dropping rebuilt event")
-                        break
-
-        return queue
-
 
 # Singleton instance
 planning_runtime_service = PlanningRuntimeService()

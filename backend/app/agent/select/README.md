@@ -1,6 +1,6 @@
 # agent/select 子包（SELECT 选址决策）
 
-> SELECT 阶段：`GroundingResult` + 意图需求 → `SiteSelectionDecision` → Select gate（PASS / RETRY_GROUND / HUMAN）。
+> SELECT 阶段：`GroundingResult` + 意图需求 → `SiteSelectionDecision` → `DemandPortfolio` / `SuitabilitySurface` / `PortfolioDecision` → Select gate（PASS / RETRY_GROUND / HUMAN）。
 > 对 GROUND 产出的候选做**排名、冲突分配与选优**，产出每个项目/设施落定的地块组合（BSM 级）与 `LandDesignBrief`。
 
 ---
@@ -48,7 +48,7 @@
 | 门决定 | `app/modules/schema/contracts/workflow_contracts.py` | `GateDecision`、`PendingRequest` |
 | 元数据 | `provenance.py` | `Provenance` |
 
-`select_aggregate(result, intent, context)` 返回 `(SiteSelectionDecision, list[LandDesignBrief])`。post-L3 链中 `select_node` 用 `evaluate_select_gate(decision, target_count=len(project_targets))` 出 `select_gate`。
+`select_aggregate(result, intent, context)` 返回 `(SiteSelectionDecision, list[LandDesignBrief])`。post-L3 `select_node` 随后形成三个独立域 artifact：`DemandPortfolio`、`SuitabilitySurface`、`PortfolioDecision`；gate 必须同时检查 `PortfolioDecision.solver_status`，不可行组合不会进入 EXECUTE。
 
 排名语义：`RankedCandidate.rank` 从 1 递增（先项目后设施）；`score_breakdown` 取 `ScoredCandidate.reasons` 的 5 维（proximity / construction / area_fit / road_access / service_coverage），后两维在外部网络/设施数据接入前保持 `0.0` 桩；`eliminated` 记录硬过滤原因（`allocated_to_higher_priority` 用于已占锚点冲突）。
 
@@ -73,7 +73,7 @@
 ## 相关文档
 
 - `../README.md` — agent 编排层总览
-- `../bootstrap/graph.py` / `post_l3_main_nodes.py` — SELECT 的 RETRY_GROUND 回退路由
+- `../../workflow/root_graph.py` / `../../workflow/stages/select.py` — SELECT 的 RETRY_GROUND 回退路由
 - `../ground/README.md` — GROUND（上游：`GroundingResult`）
 - `../execute/README.md` — EXECUTE（下游消费者：`SiteSelectionDecision` + `LandDesignBrief`）
 - `app/modules/spatial_ops/selection/` — 选址核心算法

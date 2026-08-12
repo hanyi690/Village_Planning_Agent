@@ -10,14 +10,15 @@ from __future__ import annotations
 from typing import Any
 
 from app.agent.bootstrap.context_guard import require_frozen_context
-from app.modules.ports.artifact_store import ArtifactRef
+from app.infrastructure.artifacts.runtime import store_artifact
+from app.modules.schema.contracts.artifact_descriptor import ArtifactDescriptor
 from app.modules.schema.contracts.classification_ref import ClassificationRef
 from app.modules.schema.contracts.contract_meta import StageIssue
 from app.modules.schema.contracts.evidence_contracts import EvidenceSource
 from app.modules.schema.contracts.l1_contracts import EvidenceGap, L1DimensionFragment, L1Snapshot
 from app.modules.schema.contracts.parsing_contracts import CompilationProfile
 from app.modules.schema.contracts.provenance import Provenance
-from app.services.artifact_store import FilesystemArtifactStore
+from app.services.artifact_fingerprint import semantic_checksum
 from app.services.review_package import write_review_package
 from app.utils.logger import get_logger
 
@@ -188,7 +189,7 @@ async def l1_aggregate(
     # flattened ``facts`` list remains backwards compatible, while L2 reads
     # this scoped map to avoid feeding unrelated evidence into a dimension.
     try:
-        from app.services.step_report import get_session_step_reports
+        from app.modules.evidence.step_report import get_session_step_reports
 
         for step in await get_session_step_reports(session_id):
             if step.get("stage") != "L1" or not step.get("dimension_key"):
@@ -239,7 +240,8 @@ async def l1_aggregate(
         ])
     except Exception as exc:  # preserve L1 compiler output; gate remains fail-closed
         logger.warning("[l1_aggregate] session KG fact promotion failed: %s", exc)
-    artifact_id = f"l1-{run_id}-v1"
+    branch_id = str(state.get("branch_id") or "main")
+    artifact_id = f"l1-{run_id}-{branch_id}-{semantic_checksum(snapshot)[:16]}"
     snapshot.artifact_id = artifact_id
     snapshot.provenance = Provenance(
         source="l1_observe",
@@ -249,17 +251,16 @@ async def l1_aggregate(
         natural_language_description="L1 OBSERVE aggregated snapshot from compiled dimension fragments.",
     )
 
-    artifact_store = FilesystemArtifactStore(base_dir=base_dir)
-    ref = ArtifactRef(
-        context_version=context_version,
-        context_fingerprint=state.get("context_fingerprint", ""),
-        artifact_id=artifact_id,
-        module="l1_observe",
-        run_id=run_id,
-        artifact_type="L1Snapshot",
-        revision="v1",
+    ref = ArtifactDescriptor.model_validate(
+        store_artifact(
+            state,
+            "l1_snapshot",
+            "l1_observe",
+            "L1Snapshot",
+            snapshot,
+            base_dir=base_dir,
+        )
     )
-    artifact_store.store(ref, snapshot.model_dump(mode="json"))
     logger.info("[l1_aggregate] L1Snapshot stored: %s", ref)
 
     gate_decision = evaluate_l1_gate(snapshot, run_id=run_id, context_version=context_version)
@@ -274,8 +275,8 @@ async def l1_aggregate(
     logger.info("[l1_aggregate] review package written: review_id=%s", review_id)
 
     try:
-        from app.services.step_report import save_step_report
-        from app.agent.bootstrap.stage_audit import build_input_audit
+        from app.modules.evidence.step_report import save_step_report
+        from app.workflow.stage_audit import build_input_audit
 
         await save_step_report(
             session_id,
@@ -301,17 +302,7 @@ async def l1_aggregate(
                 "source_refs": [s.reference for s in snapshot.sources],
                 "gate_route": gate_decision.feedback_route or ("PASS" if gate_decision.passed else "FAIL"),
             },
-            artifacts=[{
-                "key": "l1_snapshot",
-                "artifact_id": ref.artifact_id,
-                "module": ref.module,
-                "run_id": ref.run_id,
-                "artifact_type": ref.artifact_type,
-                "revision": ref.revision,
-                "context_version": ref.context_version,
-                "context_fingerprint": ref.context_fingerprint,
-                "checksum": ref.checksum,
-            }],
+            artifacts=[{"key": "l1_snapshot", **ref.model_dump(mode="json")}],
             diagnostics={
                 "fact_producer": "L1 report compiler + session KG evidence promotion",
                 "kg_fact_count": kg_fact_count,
@@ -321,28 +312,7 @@ async def l1_aggregate(
         logger.debug("[l1_aggregate] step report failed: %s", exc)
 
     return {
-        "l1_snapshot_ref": {
-            "artifact_id": artifact_id,
-            "module": "l1_observe",
-            "run_id": run_id,
-            "artifact_type": "L1Snapshot",
-            "revision": "v1",
-            "context_version": context_version,
-            "context_fingerprint": state.get("context_fingerprint", ""),
-            "checksum": ref.checksum,
-        },
-        "artifact_refs": {
-            "l1_snapshot": {
-                "artifact_id": artifact_id,
-                "module": "l1_observe",
-                "run_id": run_id,
-                "artifact_type": "L1Snapshot",
-                "revision": "v1",
-                "context_version": context_version,
-                "context_fingerprint": state.get("context_fingerprint", ""),
-                "checksum": ref.checksum,
-            }
-        },
+        "artifact_refs": {"l1_snapshot": ref.model_dump(mode="json")},
         "l1_gate_decision": gate_decision.model_dump(mode="json"),
         "l1_review_id": review_id,
     }

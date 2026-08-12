@@ -145,6 +145,20 @@ def test_delivery_snapshot_preserves_unmodified_features_and_is_checksummed(tmp_
     assert by_bsm["P002"]["geometry"]["coordinates"] == [[[10, 10], [11, 10], [11, 11], [10, 11], [10, 10]]]
 
 
+def test_delivery_snapshot_without_material_changes_is_partial(tmp_path: Path) -> None:
+    ref = _write_layer(tmp_path / "current.geojson")
+    snapshot = build_delivery_spatial_snapshot(
+        ref,
+        [],
+        data_port=GeoJSONSpatialDataPort(),
+        output_path=tmp_path / "planned.geojson",
+    )
+
+    assert snapshot.delivery_status == "partial"
+    assert snapshot.statutory_complete is False
+    assert snapshot.change_summary["preserved"] == 2
+
+
 def test_gis_data_delivery_integration_writes_and_reloads_complete_artifact(tmp_path: Path) -> None:
     current = {
         "type": "FeatureCollection",

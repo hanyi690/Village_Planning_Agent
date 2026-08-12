@@ -57,16 +57,15 @@ def _gis_layer(
     return None
 
 
-def export_gdb_package(
+def export_delivery_package(
     layout_configs: Optional[List[Dict[str, Any]]],
-    allocated_geojson: Optional[Dict[str, Any]],
-    gis_data: Dict[str, Optional[Dict[str, Any]]],
+    snapshot: Any,
     village_name: str,
     output_dir: Optional[str] = None,
     session_id: str = "",
     validation_result: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
-    """Export a complete GeoJSON package without LangChain tool wrapping.
+    """Export a package from the authoritative DeliverySpatialSnapshot.
 
     Layers:
       current/ — boundary, landuse, road, annotation
@@ -74,6 +73,14 @@ def export_gdb_package(
                   construction_zone, (+ optional layers)
       tables/ — land_balance.json
     """
+    from app.modules.spatial_ops.io import (
+        load_complete_planned_geojson,
+        load_snapshot_gis_data,
+    )
+
+    gis_data = load_snapshot_gis_data(snapshot)
+    complete_planned_geojson = load_complete_planned_geojson(snapshot)
+
     if not output_dir:
         project_root = Path(__file__).resolve().parents[4]
         run_key = _safe_run_key(session_id or village_name)
@@ -82,14 +89,9 @@ def export_gdb_package(
 
     os.makedirs(output_dir, exist_ok=True)
 
-    from app.agent.deliver.render_layers import build_complete_planned_geojson
     from app.modules.schema.output.gdb import GDB_LAYER_REGISTRY
 
-    current_landuse = _gis_layer(gis_data or {}, "landuse_current_geojson")
-    complete_planned = build_complete_planned_geojson(
-        allocated_geojson,
-        current_landuse,
-    )
+    complete_planned = complete_planned_geojson
 
     LAYER_GIS_KEY_MAP: Dict[str, Optional[str]] = {
         "admin_area": "boundary_geojson",
@@ -180,7 +182,7 @@ def export_gdb_package(
         "session_id": session_id,
         "village_name": village_name,
         "generated_at": datetime.now(timezone.utc).isoformat(),
-        "producer": "app.agent.bootstrap.post_l3_main_nodes",
+        "producer": "app.workflow.stages.deliver",
         "validation": validation_result or {},
         "layout_layers": [
             {
@@ -206,6 +208,9 @@ def export_gdb_package(
         "file_count": len(exported),
         "planned_landuse_geojson": complete_planned,
     }
+
+
+__all__ = ["export_delivery_package"]
 
 
 def _find_layer_in_configs(

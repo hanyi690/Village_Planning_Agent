@@ -50,15 +50,14 @@ def _check_to_issue(check: ValidationCheck) -> ValidationIssue:
 def validate_aggregate(
     planned_state: Any,
     changeset: Any,
-    layout_configs: Any,
     intent: Any,
     constraint_index: Any,
     run_id: str = "",
     decision: Any = None,
     execution_plan: Any = None,
-    execution_outcome: Any = None,
+    execution_result: Any = None,
 ) -> ValidationReport:
-    """Run all 9 VALIDATE checks and aggregate their findings into a ValidationReport."""
+    """Validate typed execution outputs; render layers are not fact inputs."""
     if planned_state is None:
         missing_check = ValidationCheck(
             check_id="missing_planned_state",
@@ -100,7 +99,7 @@ def validate_aggregate(
         intent,
         decision=decision,
         execution_plan=execution_plan,
-        execution_outcome=execution_outcome,
+        execution_result=execution_result,
     ))
 
     overall_passed = all(c.passed for c in all_checks)

@@ -103,8 +103,15 @@ class DataPipeline:
         }
         if state:
             config = state.get("config", {})
-            context["village_data"] = config.get("village_data", "")
             context["project_name"] = state.get("project_name", "")
+            try:
+                from app.services.context.planning_context import get_cached_context
+
+                planning_context = get_cached_context(str(state.get("session_id", "")))
+                if planning_context is not None:
+                    context.update(planning_context.input_texts())
+            except Exception:
+                pass
             # Pass merged dependency metrics for tool parameter resolution
             dep_metrics = state.get("_dep_metrics")
             if dep_metrics:

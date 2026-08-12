@@ -13,11 +13,6 @@ from app.database import engine as database_engine
 @pytest.fixture
 def isolated_database(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
     database_path = tmp_path / "lifecycle.db"
-    monkeypatch.setattr(
-        database_engine,
-        "ASYNC_DATABASE_URL",
-        f"sqlite+aiosqlite:///{database_path}",
-    )
     monkeypatch.setattr(database_engine, "DB_PATH", database_path)
     return database_path
 

@@ -56,7 +56,7 @@ def resolve_candidates(kg, spec: SpatialReferenceSpec) -> CandidateSet:
 
 
 def _resolve_reference(kg, ref: RefObject) -> List[str]:
-    if ref.kind == "entity_type":
+    if ref.kind in {"entity_type", "place_name"}:
         filt = ref.filter or {}
         rdf_type = filt.get("rdf_type", "")
         label_contains = filt.get("label_contains", "")

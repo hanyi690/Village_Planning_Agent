@@ -333,6 +333,9 @@ class VillageBundle(BaseModel):
         to ``landuse_current``.
         """
         source_bsm = str(getattr(feature, "bsm", "") or "").strip()
+        layer_type = str(getattr(feature, "layer_type", "") or "")
+        if source_bsm and layer_type not in {"landuse_current", "landuse_planned"}:
+            return
         if self._is_valid_source_bsm(source_bsm):
             return
         village_code = self._resolve_village_code(feature)

@@ -8,7 +8,7 @@ place, all reading from a ``PlanningContext``:
     resolve_anchors   intent location hints -> candidate BSMs / anchors
     bind              deterministic bundle binding (BSM-first)
 
-Every method takes its facts from ``PlanningContext`` (bundle / gazetteer /
+    Every method takes its facts from ``PlanningContext`` (workspace / gazetteer /
 KG / constraint index / evidence index) instead of each caller building its own
 gazetteer/KG/center fallback. Callers that only have a village name + anchors
 can use the module-level ``resolve_intent_anchors`` helper.
@@ -71,8 +71,8 @@ class SpatialResolver:
         self.context = context
 
     @property
-    def bundle(self):
-        return self.context.bundle
+    def workspace(self):
+        return self.context.workspace
 
     @property
     def gazetteer(self):
@@ -100,7 +100,7 @@ class SpatialResolver:
         """
         from .grounding import resolve_spatial_description
 
-        if not desc or self.bundle is None:
+        if not desc or self.workspace is None:
             from .grounding import ResolvedSpatialDescription
 
             return ResolvedSpatialDescription(
@@ -109,7 +109,7 @@ class SpatialResolver:
             )
         return resolve_spatial_description(
             desc,
-            self.bundle,
+            self.workspace,
             kg=self.kg,
             gazetteer=self.gazetteer,
             constraint_index=self.constraint_index,
@@ -130,8 +130,49 @@ class SpatialResolver:
             ResolvedSpatialRef,
         )
 
+        if getattr(spec, "type", "") == "composed":
+            children = [self.resolve_spec(child) for child in (getattr(spec, "children", None) or [])]
+            child_sets = [set(child.final_bsms) for child in children]
+            op = getattr(spec, "op", None) or "and"
+            if not child_sets:
+                final = set()
+            elif op == "or":
+                final = set().union(*child_sets)
+            elif op == "not":
+                all_bsms = {
+                    str(parcel.bsm)
+                    for parcel in self.context.current_parcels()
+                    if str(getattr(parcel, "bsm", "") or "")
+                }
+                final = all_bsms - set().union(*child_sets)
+            else:
+                final = set.intersection(*child_sets)
+            bboxes = [child.bbox for child in children if child.bbox]
+            return ResolvedSpatialRef(
+                final_bsms=sorted(final),
+                bbox=bboxes[0] if len(bboxes) == 1 else None,
+                confidence=min((child.confidence for child in children), default=0.0),
+                provenance={
+                    "path": f"composed:{op}",
+                    "child_count": len(children),
+                    "child_candidate_counts": [len(child.final_bsms) for child in children],
+                },
+            )
+
         provenance: Dict[str, Any] = {"path": "evidence:candidates"}
         candidates: CandidateSet = CandidateSet()
+        reference = getattr(spec, "reference", None)
+        if getattr(reference, "kind", "") == "village":
+            village_bsms = [
+                str(parcel.bsm)
+                for parcel in self.context.current_parcels()
+                if str(getattr(parcel, "bsm", "") or "")
+            ]
+            return ResolvedSpatialRef(
+                final_bsms=list(dict.fromkeys(village_bsms)),
+                confidence=1.0 if village_bsms else 0.0,
+                provenance={"path": "bundle:village_boundary"},
+            )
         try:
             if self.evidence_index is not None:
                 mention = self._spec_mention(spec)
@@ -209,7 +250,7 @@ class SpatialResolver:
             # Directional bbox with no KG match: fall back to geometry query.
             from .grounding import query_parcels_in_bbox
 
-            parcels = self.context.bundle_parcels()
+            parcels = self.context.current_parcels()
             final_bsms = query_parcels_in_bbox(parcels, bbox)
             provenance["path"] += "+geometry:bbox"
             confidence = 0.8
@@ -226,7 +267,7 @@ class SpatialResolver:
         if not bsms:
             return []
         by_bsm: Dict[str, bool] = {}
-        for p in self.context.bundle_parcels():
+        for p in self.context.current_parcels():
             bsm = str(p.bsm or "").strip()
             if bsm:
                 by_bsm[bsm] = True
@@ -249,7 +290,7 @@ class SpatialResolver:
             resolve_directional_bbox,
         )
 
-        parcels = self.context.bundle_parcels()
+        parcels = self.context.current_parcels()
         center = _village_center(parcels) if parcels else None
         if center is None:
             return None
@@ -276,7 +317,7 @@ class SpatialResolver:
         """
         from .bundle_binder import DeterministicBundleBinder
 
-        binder = DeterministicBundleBinder(self.bundle)
+        binder = DeterministicBundleBinder(self.workspace)
         return binder.bind(instructions, gazetteer=self.gazetteer)
 
 

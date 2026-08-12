@@ -59,6 +59,7 @@ class TargetExecutionContract(BaseModel):
     expected_output_kind: Literal["parcel", "polygon", "point", "line", "action"] = "parcel"
     requires_spatial: bool = True
     classification_decision: ClassificationDecision | None = None
+    claim_refs: list[str] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def validate_execution_contract(self) -> "TargetExecutionContract":

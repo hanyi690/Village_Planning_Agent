@@ -10,7 +10,7 @@ Layout (per review: reviews are separated from artifacts under one run):
     {base_dir}/{run_id}/reviews/{module}/{review_id}/decision.json     (optional)
 
 - ``manifest.json`` persists review_id, revision, run_id, module, status,
-  created_at/updated_at and the artifact_ref (a lightweight ArtifactRefLite,
+  created_at/updated_at and the artifact_ref (an ArtifactDescriptorProjection,
   NOT the embedded payload).
 - ``status`` and ``decision`` are persisted and round-tripped (no reset to
   awaiting_review on read).
@@ -29,7 +29,7 @@ from pathlib import Path
 from typing import Any
 
 from app.modules.schema.contracts.review_contracts import (
-    ArtifactRefLite,
+    ArtifactDescriptorProjection,
     ReviewDecision,
     ReviewPackage,
     ReviewStatus,
@@ -86,7 +86,9 @@ def _pkg_dir(base: Path, run_id: str, module: str, review_id: str) -> Path:
 
 
 def _ensure_review_id(pkg: ReviewPackage) -> str:
-    rid = pkg.review_id or pkg.artifact_ref.artifact_id if pkg.artifact_ref else ""
+    rid = pkg.review_id or ""
+    if not rid and pkg.artifact_ref:
+        rid = pkg.artifact_ref.descriptor_digest.removeprefix("sha256:")[:32]
     if not rid:
         rid = f"{pkg.module}-{pkg.revision}"
     return _validate_id(rid, "review_id")
@@ -133,7 +135,7 @@ def read_review_package(
     manifest = _read_json(manifest_file) or {}
     artifact_ref = None
     if manifest.get("artifact_ref"):
-        artifact_ref = ArtifactRefLite(**manifest["artifact_ref"])
+        artifact_ref = ArtifactDescriptorProjection(**manifest["artifact_ref"])
     decision = None
     if (d / _DECISION).exists():
         decision = ReviewDecision(**_read_json(d / _DECISION))

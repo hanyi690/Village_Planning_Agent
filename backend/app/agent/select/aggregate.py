@@ -157,6 +157,7 @@ def build_site_selection_decision(
     *,
     run_id: str,
     session_id: str,
+    expected_output_kinds: Optional[Dict[str, str]] = None,
 ) -> SiteSelectionDecision:
     """Aggregate placement decisions into a ``SiteSelectionDecision``.
 
@@ -166,6 +167,7 @@ def build_site_selection_decision(
     network/facility data is wired in.
     """
     assignments: List[TargetAssignment] = []
+    expected_output_kinds = expected_output_kinds or {}
     full_ranking: List[RankedCandidate] = []
     eliminated: List[EliminatedCandidate] = []
     best_score_by_target = {}
@@ -202,7 +204,9 @@ def build_site_selection_decision(
                     status="placed",
                     selected_bsm=placement.selected_bsm,
                     anchor_point=placement.anchor_point,
-                    expected_output_kind="parcel",
+                    expected_output_kind=expected_output_kinds.get(
+                        placement.target_id, "parcel"
+                    ),
                     score=score,
                     score_breakdown=breakdown,
                 )
@@ -214,7 +218,9 @@ def build_site_selection_decision(
                     target_id=placement.target_id,
                     target_type="project",
                     status="unplaced",
-                    expected_output_kind="parcel",
+                    expected_output_kind=expected_output_kinds.get(
+                        placement.target_id, "parcel"
+                    ),
                     reason=placement.reason,
                 )
             )
@@ -314,10 +320,10 @@ def _facility_demand_points(context: PlanningContext) -> List[DemandPoint]:
         demand.append(DemandPoint(id=f"village_{i}", lon=float(lon), lat=float(lat), weight=1.0))
     if demand:
         return demand
-    bundle = getattr(context, "bundle", None)
+    workspace = getattr(context, "workspace", None)
     settlements = []
-    if bundle is not None and getattr(bundle, "polygons", None) is not None:
-        settlements = bundle.polygons.get("settlement") or []
+    if workspace is not None and getattr(workspace, "polygons", None) is not None:
+        settlements = workspace.polygons.get("settlement") or []
     for i, s in enumerate(settlements):
         centroid = _geometry_centroid(getattr(s, "geometry", None))
         if centroid is None:
@@ -408,10 +414,10 @@ def select_aggregate(
     context: PlanningContext,
 ) -> Tuple[SiteSelectionDecision, List[LandDesignBrief]]:
     run_id = getattr(context, "session_id", "") or ""
-    if context.bundle is None:
+    if context.workspace is None:
         empty = build_site_selection_decision([], run_id=run_id, session_id=run_id)
         return empty, []
-    parcels = _grounding_to_candidate_parcels(result, context.bundle)
+    parcels = _grounding_to_candidate_parcels(result, context.workspace)
     projects = list(getattr(intent, "project_targets", None) or [])
     facilities = list(getattr(intent, "facilities", None) or [])
     cluster_centroid = _cluster_centroid(context)
@@ -429,7 +435,10 @@ def select_aggregate(
                 project.target_id,
             )
             continue
-        if not _classification_ready(project):
+        if (
+            str(getattr(project, "expected_output_kind", "")) in {"parcel", "polygon"}
+            and not _classification_ready(project)
+        ):
             placements.append(
                 PlacementDecision(
                     target_id=project.target_id,
@@ -471,7 +480,15 @@ def select_aggregate(
         if placement.status == "placed" and placement.anchor_point is not None:
             occupied.append(placement.anchor_point)
         placements.append(placement)
-    decision = build_site_selection_decision(placements, run_id=run_id, session_id=run_id)
+    decision = build_site_selection_decision(
+        placements,
+        run_id=run_id,
+        session_id=run_id,
+        expected_output_kinds={
+            str(project.target_id): str(project.expected_output_kind)
+            for project in projects
+        },
+    )
     # Backfill facility candidate_bsms from grounding candidate sites so
     # placement honours the grounded direction (e.g. 南部) instead of falling
     # back to the global pool (which collapses all facilities onto one parcel).

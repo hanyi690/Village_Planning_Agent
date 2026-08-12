@@ -1,19 +1,4 @@
-"""
-Unified API Routes - All endpoints in one place
-
-This module consolidates all API routes from:
-- session_routes.py (核心会话 API - 7 个端点)
-
-架构变更（2026-05-08）：
-- 旧版：planning_router 包含分散的多个子路由
-- 新版：session_router 统一 7 个核心端点 + 辅助端点
-
-移除端点（2026-05-09）：
-- data, jintian_data: 旧版遗留，数据通过规划流程内部获取
-- files, gis_upload: 整合到 POST /api/sessions multipart/form-data
-- knowledge: 运维操作，移至命令行脚本
-- tiles: 前端直接向地图服务商请求
-"""
+"""Root transport router for the versioned frontend API."""
 
 from __future__ import annotations
 
@@ -24,37 +9,13 @@ import httpx
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse, Response
 
-from app.api.session_routes import router as session_router
-from app.api.gis_test_routes import router as gis_test_router
-from app.api.human_review_routes import router as human_review_router
 from app.api.v1 import router as v1_router
-from app.api.v1.contracts import SessionCreated
-from app.api.route_modules.session_crud import create_session
-from app.core.settings import IS_PRODUCTION, TIANDITU_API_KEY
+from app.core.settings import TIANDITU_API_KEY
 
 logger = logging.getLogger(__name__)
 
 # Main router
 router = APIRouter()
-
-# Core session API (新架构)
-router.include_router(session_router, tags=["Session (legacy)"], deprecated=True)
-router.include_router(human_review_router, tags=["Human review (legacy)"])
-
-# GIS dev test API (开发环境专用)
-if not IS_PRODUCTION:
-    router.include_router(gis_test_router, tags=["GIS Dev"])
-
-# Register session bootstrap after the legacy session module has finished
-# loading, while exposing it exclusively through the stable v1 router.
-v1_router.add_api_route(
-    "/sessions",
-    create_session,
-    methods=["POST"],
-    response_model=SessionCreated,
-    status_code=201,
-    summary="Create a planning session",
-)
 
 # Stable frontend-facing API.
 router.include_router(v1_router)

@@ -80,6 +80,30 @@ def layer_router_node(state: Dict[str, Any]) -> Command:
     return Command(goto=[Send(worker, state)])
 
 
+def revision_dispatch_node(state: Dict[str, Any]) -> Command:
+    """Dispatch only the first pending wave of an explicit revision plan."""
+    impact_tree = state.get("revision_impact_tree") or {}
+    completed = {
+        dimension
+        for dimensions in (state.get("revision_completed_dims") or {}).values()
+        for dimension in dimensions
+    }
+    pending_waves = [
+        (int(wave), [dimension for dimension in dimensions if dimension not in completed])
+        for wave, dimensions in impact_tree.items()
+        if any(dimension not in completed for dimension in dimensions)
+    ]
+    if not pending_waves:
+        return Command(goto=END)
+    _, dimensions = min(pending_waves, key=lambda item: item[0])
+    worker = _worker_for_phase(state.get("phase", "layer3"))
+    logger.info("[revision_dispatch] dimensions=%s worker=%s", dimensions, worker)
+    return Command(goto=[
+        Send(worker, {**state, "dimension_key": dimension, "is_revision": True})
+        for dimension in dimensions
+    ])
+
+
 async def l1_worker_node(state: Dict[str, Any]) -> Dict[str, Any]:
     """L1 dimension worker — delegates to the shared L1 analysis node."""
     return await analyze_dimension(state)
@@ -130,20 +154,20 @@ def advance_phase_node(state: Dict[str, Any]) -> Command:
     """Gate PASS phase advance node.
 
     Called when ``after_analysis`` sees a PASS gate decision. Advances ``phase``
-    (layer1 -> layer2 -> layer3 -> completed) and routes to the next layer's
-    dispatch via Send, or to the post-L3 chain (parse) when the plan is
+    (layer1 -> layer2 -> layer3 -> post_l3) and routes to the next layer's
+    dispatch via Send, or to the post-L3 chain (target projection) when the plan is
     complete, or to END when nothing is ready.
     """
     phase = state.get("phase", "layer1")
     layer = _phase_to_layer(phase)
     next_phase = get_next_phase(phase)
     if next_phase is None:
-        next_phase = "post_l3"
+        raise RuntimeError(f"INVALID_PHASE_TRANSITION: {phase!r} has no successor")
 
     update: Dict[str, Any] = {
         "phase": next_phase,
         "current_stage": f"L{layer}" if layer is not None else str(phase).upper(),
-        "next_stage": "L3" if next_phase == "layer3" else ("PARSE" if next_phase == "post_l3" else str(next_phase).upper()),
+        "next_stage": "L3" if next_phase == "layer3" else ("TARGET_PROJECTION" if next_phase == "post_l3" else str(next_phase).upper()),
         "previous_layer": layer if layer is not None else state.get("previous_layer", 0),
         "layer_just_completed": None,
     }
@@ -152,15 +176,15 @@ def advance_phase_node(state: Dict[str, Any]) -> Command:
         logger.info("[advance_phase] %s -> %s, dispatching %d dim(s)", phase, next_phase, len(sends))
         return Command(update=update, goto=sends)
     if next_phase == "post_l3":
-        # Wave M: L1/L2/L3 全部完成 -> 自动进入 post-L3 链（parse 主图节点）。
+        # L1/L2/L3 completion enters the target-projection chain.
         # 不再依赖用户消息触发 gis_analysis / gis_agent 黑盒节点。
-        logger.info("[advance_phase] %s -> post_l3, entering post-L3 chain (parse)", phase)
+        logger.info("[advance_phase] %s -> post_l3, entering target-projection chain", phase)
         update.update({
             "post_l3_status": "auto_continue",
             "paused_stage": "",
-            "next_stage": "PARSE",
+            "next_stage": "TARGET_PROJECTION",
         })
-        return Command(update=update, goto="parse")
+        return Command(update=update, goto="target_projection")
     logger.info("[advance_phase] %s -> %s, no ready dims, END", phase, next_phase)
     return Command(update=update, goto=END)
 
@@ -169,6 +193,7 @@ __all__ = [
     "route_by_phase",
     "layer_router_noop",
     "layer_router_node",
+    "revision_dispatch_node",
     "l1_worker_node",
     "l2_worker_node",
     "l3_worker_node",

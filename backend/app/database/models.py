@@ -249,65 +249,6 @@ class UploadedFile(SQLModel, table=True):
 
 
 # ==========================================
-# Planning Text Document Models
-# ==========================================
-
-class PlanningTextDocument(SQLModel, table=True):
-    """
-    Planning text document table
-    规划文本文档表
-
-    Stores generated planning documents with version history.
-    支持历史版本，每次重新生成创建新版本。
-    """
-    __tablename__ = "planning_text_documents"
-
-    # Primary key (auto-increment)
-    id: Optional[int] = Field(default=None, primary_key=True)
-
-    # Session relationship with cascade delete
-    session_id: str = Field(
-        sa_column=Column(
-            String,
-            ForeignKey("planning_sessions.session_id", ondelete="CASCADE"),
-            index=True,
-        )
-    )
-
-    # Version management
-    version: int = Field(default=1, index=True)
-    document_id: str = Field(unique=True, index=True)  # UUID for external reference
-
-    # Content
-    markdown_content: str = Field(sa_column=Text())
-    json_content: Optional[Dict[str, Any]] = Field(
-        default=None,
-        sa_column=Column(JSON)
-    )
-
-    # Metadata
-    article_count: int = Field(default=0)
-    generated_at: datetime = Field(default_factory=datetime.now)
-    generation_duration_seconds: Optional[float] = None
-
-    # Status
-    status: str = Field(default="completed")  # pending, generating, completed, failed
-    error_message: Optional[str] = None
-
-    # Version metadata (记录生成触发原因)
-    trigger_reason: Optional[str] = None  # "initial", "dimension_change", "manual"
-    changed_dimensions: Optional[List[str]] = Field(
-        default=None,
-        sa_column=Column(JSON)
-    )
-
-    # Table options
-    __table_args__ = (
-        Index("idx_planning_text_session_version", "session_id", "version"),
-    )
-
-
-# ==========================================
 # Planning Bundle Models
 # ==========================================
 
@@ -397,12 +338,30 @@ class StepReportModel(SQLModel, table=True):
     )
 
 
+class RunEvent(SQLModel, table=True):
+    """Append-only public run event log used by REST sync and SSE replay."""
+
+    __tablename__ = "run_events"
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    session_id: str = Field(index=True)
+    seq: int = Field(index=True)
+    event_type: str = Field(index=True)
+    payload: Dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSON))
+    created_at: datetime = Field(default_factory=datetime.now)
+
+    __table_args__ = (
+        UniqueConstraint("session_id", "seq", name="uq_run_events_session_seq"),
+        Index("idx_run_events_session_seq", "session_id", "seq"),
+    )
+
+
 __all__ = [
     "PlanningSession",
     "UISession",
     "DimensionReport",
     "UploadedFile",
-    "PlanningTextDocument",
     "PlanningBundle",
     "StepReportModel",
+    "RunEvent",
 ]

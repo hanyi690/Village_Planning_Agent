@@ -2,11 +2,11 @@
 
 Migrated from agent/gis/execute/state.py per docs/architecture/agent-graph.md §5.
 
-Constructed from GISPipelineState at the execute boundary.
+Constructed from the canonical planning bundle at the execute boundary.
 Focused on spatial result production (layout / facility / axis / road).
 
-Peer to ParseAgentState (parse/state.py) - both are sub-states of the
-top-level GISPipelineState, exchanged via state mapping at subgraph boundaries.
+Stage-local state is exchanged through
+typed artifacts at subgraph boundaries.
 """
 
 from __future__ import annotations
@@ -49,21 +49,19 @@ def _upsert_worker_results(current: List[Any], updates: List[Any]) -> List[Any]:
 class ExecuteAgentState(BaseModel):
     """EXECUTE Agent internal state.
 
-    Carries upstream inputs (PARSE intent + KG context) and execution outputs
+    Carries upstream target projection + KG context and execution outputs
     (allocated GeoJSON, layout layers, validation result).
 
-    Field types intentionally mirror GISPipelineState so the top-level pipeline
-    can construct this via ExecuteAgentState(**pipeline_state_subset).
+    Stage-local fields are built from the canonical planning bundle and typed
+    artifact inputs; raw GIS is not copied into this state.
     """
 
     # ── Identity ──
     session_id: str = ""
     village_name: str = ""
 
-    # ── Upstream inputs (from PARSE + KG) ──
-    gis_data: Dict[str, Any] = Field(default_factory=dict)
-    gis_bundle: Optional[Any] = None  # GISDataBundle — typed data container
-    intent: Any = None  # SpatialPlanningIntent (typed) or dict (legacy)
+    # ── Upstream inputs (from target projection + KG) ──
+    spatial_workspace: Optional[Any] = None  # data-owned SpatialWorkspace
     operation_sequence: List[Any] = Field(default_factory=list)
     constraint_set: List[Any] = Field(default_factory=list)
     facility_anchors: Optional[List[Dict[str, Any]]] = None
@@ -84,11 +82,10 @@ class ExecuteAgentState(BaseModel):
     kg_vne_summary: List[Dict[str, Any]] = Field(default_factory=list)
 
     # ── Execution outputs ──
-    allocated_geojson: Dict[str, Any] = Field(default_factory=dict)
     allocation_summary: Dict[str, Any] = Field(default_factory=dict)
     layout_configs: List[Dict[str, Any]] = Field(default_factory=list)
     action_results: List[Any] = Field(default_factory=list)
-    execution_outcome: Optional[Any] = None
+    execution_result: Optional[Any] = None
     execution_errors: List[Dict[str, Any]] = Field(default_factory=list)
     # P0: 结构化未解析目标（禁止静默丢弃候选失败）
     unresolved_targets: List[Dict[str, Any]] = Field(default_factory=list)

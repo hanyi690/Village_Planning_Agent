@@ -13,15 +13,24 @@ from .l1_contracts import EvidenceGap
 from .parse_result_contracts import ParseDiagnostic
 from .parsing_contracts import CompilerTrace
 from .provenance import Provenance
+from app.contracts.program import PlanningClaim, ProgramProposal
 
 
 class PlanningIntervention(BaseModel):
     intervention_id: str
     name: str
     target_id: str = ""
-    execution_mode: Literal["spatial", "non_spatial"] = "spatial"
-    expected_output_kind: Literal["parcel", "polygon", "point", "line", "action"] = "parcel"
-    category: Literal["project", "facility", "road", "restoration", "protection", "zone"] = "project"
+    execution_mode: Literal["spatial", "non_spatial"]
+    expected_output_kind: Literal["parcel", "polygon", "point", "line", "action"]
+    category: Literal[
+        "project",
+        "facility",
+        "road",
+        "axis",
+        "restoration",
+        "protection",
+        "zone",
+    ]
     problem_addressed: str = ""
     scale: str = ""
     area_range_ha: tuple[float, float] | None = None
@@ -30,6 +39,7 @@ class PlanningIntervention(BaseModel):
     implementation_phase: Literal["short", "medium", "long"] = "short"
     spatial_requirements: dict = Field(default_factory=dict)
     constraints: list[str] = Field(default_factory=list)
+    claim_refs: list[str] = Field(default_factory=list)
     evidence_refs: list[str] = Field(default_factory=list)
     # A formal target classification must be selected in its own namespace.
     # Human-readable ``name``/``functions`` remain semantic context only.
@@ -41,17 +51,24 @@ class PlanningIntervention(BaseModel):
         if not self.target_id:
             self.target_id = self.intervention_id
         if self.execution_mode == "non_spatial":
-            self.expected_output_kind = "action"
+            if self.expected_output_kind != "action":
+                raise ValueError("non-spatial interventions must declare action output")
         elif self.expected_output_kind == "action":
             raise ValueError("spatial interventions cannot declare action output")
-        elif self.expected_output_kind == "parcel":
-            self.expected_output_kind = {
-                "facility": "point",
-                "road": "line",
-                "restoration": "polygon",
-                "protection": "polygon",
-                "zone": "polygon",
-            }.get(self.category, "parcel")
+        expected_by_category = {
+            "facility": {"point"},
+            "road": {"line"},
+            "axis": {"line"},
+            "restoration": {"polygon"},
+            "protection": {"polygon"},
+            "zone": {"polygon"},
+            "project": {"parcel", "polygon", "point", "action"},
+        }
+        if self.expected_output_kind not in expected_by_category[self.category]:
+            raise ValueError(
+                f"category={self.category} cannot produce "
+                f"expected_output_kind={self.expected_output_kind}"
+            )
         return self
 
 
@@ -65,6 +82,7 @@ class ProgramIssue(BaseModel):
     """Program-level issue for the G3 gate (mirrors StageIssue)."""
 
     stage: str = "l3"
+    dimension_key: str = ""
     severity: str = "warning"  # "info" | "warning" | "error"
     code: str = ""
     message: str = ""
@@ -72,29 +90,36 @@ class ProgramIssue(BaseModel):
 
 
 class L3ProgramFragment(BaseModel):
-    """Per-dimension compiled output of the L3_PLANNING profile."""
+    """Per-dimension proposal output of the L3 planning profile.
+
+    This is deliberately not an executable ``PlanningProgram``.  The domain
+    program assembler is the only boundary that creates that authoritative
+    contract.
+    """
 
     dimension_key: str
-    interventions: list[PlanningIntervention] = []
-    dependencies: list[InterventionDependency] = []
-    evidence_gaps: list[EvidenceGap] = []
-    program_issues: list[ProgramIssue] = []
-    omissions: list[str] = []
-    diagnostics: list[ParseDiagnostic] = []
+    claims: list[PlanningClaim] = Field(default_factory=list)
+    proposals: list[ProgramProposal] = Field(default_factory=list)
+    dependencies: list[InterventionDependency] = Field(default_factory=list)
+    evidence_gaps: list[EvidenceGap] = Field(default_factory=list)
+    program_issues: list[ProgramIssue] = Field(default_factory=list)
+    omissions: list[str] = Field(default_factory=list)
+    diagnostics: list[ParseDiagnostic] = Field(default_factory=list)
     provenance: "Provenance | None" = None
     trace: "CompilerTrace | None" = None
 
 
 class PlanningProgram(ContractMeta):
-    schema_version: Literal["2.0"] = "2.0"
-    interventions: list[PlanningIntervention] = []
-    dependencies: list[InterventionDependency] = []
-    omissions: list[str] = []
+    schema_version: Literal["4.0"] = "4.0"
+    interventions: list[PlanningIntervention] = Field(default_factory=list)
+    claims: list[PlanningClaim] = Field(default_factory=list)
+    dependencies: list[InterventionDependency] = Field(default_factory=list)
+    omissions: list[str] = Field(default_factory=list)
     # Wave E enrichment
-    evidence_gaps: list[EvidenceGap] = []
-    sources: list[EvidenceSource] = []
-    program_issues: list[ProgramIssue] = []
-    dimension_provenance: list[Provenance] = []
+    evidence_gaps: list[EvidenceGap] = Field(default_factory=list)
+    sources: list[EvidenceSource] = Field(default_factory=list)
+    program_issues: list[ProgramIssue] = Field(default_factory=list)
+    dimension_provenance: list[Provenance] = Field(default_factory=list)
     provenance: "Provenance | None" = None
     l1_snapshot_ref: str = ""
     l2_strategy_ref: str = ""

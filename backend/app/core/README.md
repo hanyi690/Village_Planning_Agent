@@ -50,7 +50,8 @@
 - **RAG**：`rag_query` / `rag_result`
 - **配置**：`rag_config_updated` / `step_mode_updated`
 
-消费方：`services/sse.py` 的 `SSEManager`（`CACHE_CONFIG` 按事件类型做关键事件缓存）、`utils/sse_publisher.py`、`utils/event_factory.py`。
+消费方：`infrastructure/events/connection_hub.py` 的 `EventConnectionHub`、
+`application/queries/run_events.py`、`utils/sse_publisher.py`、`utils/event_factory.py`。
 
 ---
 

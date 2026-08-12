@@ -30,6 +30,51 @@ def _as_dict(item: Any) -> dict[str, Any]:
     return {}
 
 
+def _normalize_feature_collection(
+    payload: Mapping[str, Any],
+    *,
+    drop_zero_origin_points: bool = False,
+) -> dict[str, Any]:
+    """Normalize GeoJSON once at the data-to-delivery boundary.
+
+    The renderer must receive valid geometry and must never turn missing
+    coordinates into a visual point.  Invalid source polygons are repaired
+    with Shapely's deterministic ``make_valid``; an unrecoverable feature
+    fails the snapshot build instead of producing a misleading artifact.
+    """
+    normalized = copy.deepcopy(dict(payload))
+    features: list[dict[str, Any]] = []
+    for feature in payload.get("features") or []:
+        item = copy.deepcopy(dict(feature))
+        geometry = item.get("geometry")
+        if geometry is None:
+            features.append(item)
+            continue
+        try:
+            from shapely.geometry import mapping, shape
+            from shapely.validation import make_valid
+
+            parsed = shape(geometry)
+            if (
+                drop_zero_origin_points
+                and parsed.geom_type == "Point"
+                and tuple(parsed.coords)[0] == (0.0, 0.0)
+            ):
+                continue
+            if parsed.is_empty:
+                raise ValueError("empty geometry")
+            if not parsed.is_valid:
+                parsed = make_valid(parsed)
+            if parsed is None or parsed.is_empty or not parsed.is_valid:
+                raise ValueError("geometry remains invalid after make_valid")
+            item["geometry"] = mapping(parsed)
+        except Exception as exc:
+            raise ValueError("delivery input contains unrecoverable geometry") from exc
+        features.append(item)
+    normalized["features"] = features
+    return normalized
+
+
 def _feature_bsm(feature: Mapping[str, Any]) -> str:
     properties = feature.get("properties") or {}
     for key, value in properties.items():
@@ -194,19 +239,52 @@ def _geojson_change(feature: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
-def _write_source_layer(output_dir: Path, key: str, payload: Mapping[str, Any]) -> SpatialLayerRef:
+def _write_source_layer(
+    output_dir: Path,
+    key: str,
+    payload: Mapping[str, Any],
+    *,
+    drop_zero_origin_points: bool = False,
+) -> SpatialLayerRef:
+    payload = _normalize_feature_collection(
+        payload,
+        drop_zero_origin_points=drop_zero_origin_points,
+    )
     source_path = output_dir / "sources" / f"{key}.geojson"
     source_path.parent.mkdir(parents=True, exist_ok=True)
-    source_path.write_text(
-        json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")),
-        encoding="utf-8",
-    )
+    raw = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    source_path.write_bytes(raw)
+    features = list(payload.get("features") or [])
+    fields = sorted({str(field) for feature in features for field in (feature.get("properties") or {})})
+
     return SpatialLayerRef(
         artifact_ref=f"delivery-source:{key}",
         path=str(source_path),
         layer_name=key,
         driver="GeoJSON",
+        fields=fields,
+        feature_count=len(features),
+        bbox=_bounds(features),
+        checksum=hashlib.sha256(raw).hexdigest(),
     )
+
+
+def canonical_gis_data_from_workspace(workspace: Any) -> dict[str, Any]:
+    """Materialize the canonical GIS input at the data-layer boundary.
+
+    Agents pass the typed workspace; they must not manufacture or repair GIS layers.
+    A missing current land-use layer is an input-quality error, not a reason
+    to reinterpret an EXECUTE result as the current state.
+    """
+    if workspace is None or not hasattr(workspace, "to_delivery_inputs"):
+        raise ValueError("delivery requires a SpatialWorkspace")
+    gis_data = workspace.to_delivery_inputs()
+    if not isinstance(gis_data, dict):
+        raise ValueError("SpatialWorkspace did not produce a GIS mapping")
+    current = gis_data.get("landuse_current_geojson")
+    if not isinstance(current, Mapping) or not current.get("features"):
+        raise ValueError("delivery bundle lacks landuse_current_geojson")
+    return gis_data
 
 
 def build_delivery_spatial_snapshot_from_gis_data(
@@ -226,12 +304,27 @@ def build_delivery_spatial_snapshot_from_gis_data(
     """
     root = Path(output_dir)
     source_refs: dict[str, SpatialLayerRef] = {}
+    planned_overlay_names = {
+        "planned_project_geojson",
+        "planned_project_point_geojson",
+        "planned_facility_geojson",
+        "planned_road_geojson",
+        "planned_axis_geojson",
+        "planned_zone_geojson",
+        "planned_restoration_geojson",
+        "planned_protection_geojson",
+    }
     for key, payload in (gis_data or {}).items():
         if not str(key).endswith("_geojson") or not isinstance(payload, Mapping):
             continue
         if payload.get("type") != "FeatureCollection":
             continue
-        source_refs[str(key)] = _write_source_layer(root, str(key), payload)
+        source_refs[str(key)] = _write_source_layer(
+            root,
+            str(key),
+            payload,
+            drop_zero_origin_points=str(key) in planned_overlay_names,
+        )
     current_ref = source_refs.get("landuse_current_geojson")
     if current_ref is None:
         raise ValueError("delivery snapshot requires landuse_current_geojson")
@@ -246,6 +339,22 @@ def build_delivery_spatial_snapshot_from_gis_data(
         "construction_zone_geojson",
         "hazard_points_geojson",
     }
+    planned_overlay_names = {
+        "planned_project_geojson",
+        "planned_project_point_geojson",
+        "planned_facility_geojson",
+        "planned_road_geojson",
+        "planned_axis_geojson",
+        "planned_zone_geojson",
+        "planned_restoration_geojson",
+        "planned_protection_geojson",
+    }
+    planned_overlays = {
+        key: ref for key, ref in source_refs.items() if key in planned_overlay_names
+    }
+    current_sources = {
+        key: ref for key, ref in source_refs.items() if key not in planned_overlay_names
+    }
     constraints = {
         key: ref for key, ref in source_refs.items() if key in constraint_names
     }
@@ -254,7 +363,8 @@ def build_delivery_spatial_snapshot_from_gis_data(
         changes,
         output_path=root / "planned" / "complete_planned_landuse.geojson",
         output_artifact_ref=output_artifact_ref,
-        current_layers=source_refs,
+        current_layers=current_sources,
+        planned_overlay_layers=planned_overlays,
         constraint_layers=constraints,
         provenance={"source": "gis_data_delivery_boundary", **dict(provenance or {})},
     )
@@ -269,6 +379,27 @@ def load_complete_planned_geojson(snapshot: DeliverySpatialSnapshot) -> dict[str
     if payload.get("type") != "FeatureCollection":
         raise ValueError("complete planned artifact is not a FeatureCollection")
     return payload
+
+
+def load_snapshot_gis_data(snapshot: DeliverySpatialSnapshot) -> dict[str, Any]:
+    """Load all source layers referenced by a delivery snapshot."""
+    data: dict[str, Any] = {}
+    refs = [*snapshot.current_layers.values(), *snapshot.constraint_layers.values()]
+    for ref in _unique_refs(refs):
+        payload = json.loads(Path(ref.path).read_text(encoding="utf-8"))
+        if payload.get("type") == "FeatureCollection":
+            data[ref.layer_name] = payload
+    return data
+
+
+def load_snapshot_planned_overlays(snapshot: DeliverySpatialSnapshot) -> dict[str, Any]:
+    """Load only planned overlay layers from the authoritative snapshot."""
+    data: dict[str, Any] = {}
+    for key, ref in snapshot.planned_overlay_layers.items():
+        payload = json.loads(Path(ref.path).read_text(encoding="utf-8"))
+        if payload.get("type") == "FeatureCollection":
+            data[key] = payload
+    return data
 
 
 def build_delivery_spatial_snapshot(
@@ -367,7 +498,16 @@ def build_delivery_spatial_snapshot(
         _source_bsms(change) and not any(bsm in by_bsm for bsm in _source_bsms(change))
         for change in changes
     )
-    status = delivery_status or ("partial" if unresolved_change else "complete")
+    has_material_change = any(
+        str(_value(change, "action", "modify") or "modify").lower()
+        not in {"preserve", "unchanged"}
+        for change in changes
+    )
+    status = (
+        delivery_status or "complete"
+        if has_material_change and not unresolved_change
+        else "partial"
+    )
     snapshot = DeliverySpatialSnapshot(
         current_layers=all_current,
         complete_planned_landuse=complete_ref,
@@ -376,6 +516,14 @@ def build_delivery_spatial_snapshot(
         change_summary=summary,
         source_layer_refs=source_refs,
         classification_audit=dict(classification_audit or {}),
+        parent_digests={
+            key: str(ref.checksum or ref.artifact_ref)
+            for key, ref in {
+                **all_current,
+                **overlays,
+                **constraints,
+            }.items()
+        },
         provenance={"builder": "build_delivery_spatial_snapshot", **dict(provenance or {})},
         delivery_status=status,  # type: ignore[arg-type]
         statutory_complete=statutory_complete,
@@ -393,5 +541,8 @@ __all__ = [
     "build_delivery_spatial_snapshot",
     "build_delivery_snapshot",
     "build_delivery_spatial_snapshot_from_gis_data",
+    "canonical_gis_data_from_workspace",
     "load_complete_planned_geojson",
+    "load_snapshot_gis_data",
+    "load_snapshot_planned_overlays",
 ]

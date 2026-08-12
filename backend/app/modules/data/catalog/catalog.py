@@ -281,17 +281,37 @@ class DataCatalog:
                 )
         return results
 
-    # gis_type_ref -> (ingest port, ingest arg) mapping for typed bundle loading.
-    # Derived from GIS_LAYER_REGISTRY (T6). Kept as backward compat property.
-    @classmethod
-    @property
-    def _TYPED_LAYER_MAP(cls):
-        """Backward compat -- derived from GIS_LAYER_REGISTRY."""
+    def _default_vector_layer_types(self) -> List[str]:
+        """Return the deterministic planning-input layer set.
+
+        Raster and tile sources are presentation/enrichment inputs. They are
+        never fetched implicitly while freezing a planning session because a
+        WMTS request is network-dependent and cannot be part of a reproducible
+        vector snapshot. Callers that explicitly need raster data must pass a
+        layer list containing those types.
+        """
         from app.modules.schema.types.layer_registry import GIS_LAYER_REGISTRY
-        return {
-            lt: (e.ingest.adapter, e.ingest.feature_type) if e.ingest else None
-            for lt, e in GIS_LAYER_REGISTRY.items()
-        }
+
+        # The default session snapshot is reproducible and offline-capable:
+        # use configured local vector facts only. Remote vector/raster/tile
+        # sources remain available through an explicit ``layer_types`` request
+        # and therefore cannot silently change a planning run.
+        return [
+            layer_type
+            for layer_type, entry in GIS_LAYER_REGISTRY.items()
+            if entry.geometry_kind in {"point", "line", "polygon", "annotation"}
+            and any(
+                cfg.get("driver") == "file_vector"
+                and (
+                    cfg.get("layer_type") == layer_type
+                    or any(
+                        layer.get("layer_type") == layer_type
+                        for layer in cfg.get("layers", [])
+                    )
+                )
+                for cfg in self._sources_cfg.values()
+            )
+        ]
 
     def load_village_bundle(
         self,
@@ -318,7 +338,7 @@ class DataCatalog:
         from app.modules.schema.types.layer_registry import GIS_LAYER_REGISTRY
 
         if layer_types is None:
-            layer_types = list(GIS_LAYER_REGISTRY.keys())
+            layer_types = self._default_vector_layer_types()
 
         # Step 1: Load boundary first (no bbox needed for file_vector)
         bbox = None
@@ -415,7 +435,9 @@ class DataCatalog:
                     generated,
                 )
 
-        bundle.metadata.provider_sources = list(results.keys())
+        bundle.metadata.provider_sources = [
+            layer_type for layer_type, result in results.items() if result.success
+        ]
         if bbox:
             bundle.metadata.bbox_wgs84 = bbox
 

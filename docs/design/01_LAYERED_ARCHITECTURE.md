@@ -70,7 +70,7 @@ intent target、spatial operation、constraint 和指标模型；`layout_contrac
 
 目标位置：由 `backend/app/modules/` 下的领域模块和 ports 承接；当前尚不存在完整的
 `backend/app/modules/planning/` 聚合包。迁移期间能力分散在 `agent/`、`modules/spatial_ops/`、
-`modules/parsing/`、`tools/gis/_generation/` 和 `services/modules/gis/road/`，这些目录不能因此被视为
+`modules/parsing/` 和 `services/modules/gis/road/`，这些目录不能因此被视为
 已经完成了领域边界收敛。
 
 包含：

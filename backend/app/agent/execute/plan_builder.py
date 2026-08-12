@@ -4,8 +4,19 @@ from __future__ import annotations
 
 from typing import Any
 
+from app.modules.schema.contracts.deferral_contracts import DeferralLedger
 from app.modules.schema.contracts.execution_plan_contracts import ExecutionPlan, WorkerTask, WorkerType
 from app.modules.schema.contracts.selection_contracts import TargetAssignment
+
+
+_CLASSIFICATION_OUTPUT_KINDS = frozenset({"parcel", "polygon"})
+_TASK_SPECS = (
+    ("project", "project_targets"),
+    ("zone", "zone_targets"),
+    ("facility", "facilities"),
+    ("axis", "development_axes"),
+    ("road", "road_targets"),
+)
 
 
 def _unwrap_intent(intent: Any) -> Any:
@@ -18,7 +29,117 @@ def _items(intent: Any, name: str) -> list[Any]:
 
 
 def _deferred_target_ids(ledger: Any) -> set[str]:
+    if not isinstance(ledger, DeferralLedger):
+        return set()
     return {str(entry.target_id) for entry in (getattr(ledger, "entries", None) or [])}
+
+
+def _value(target: Any, name: str, default: Any = None) -> Any:
+    if isinstance(target, dict):
+        return target.get(name, default)
+    return getattr(target, name, default)
+
+
+def _classification_status(target: Any) -> str:
+    decision = _value(target, "classification_decision")
+    status = _value(decision, "status") if decision is not None else "missing"
+    return str(getattr(status, "value", status) or "unresolved")
+
+
+def _classification_required(target: Any, assignment: Any) -> bool:
+    target_kind = str(_value(target, "expected_output_kind", "") or "")
+    assignment_kind = str(_value(assignment, "expected_output_kind", "") or "")
+    return bool({target_kind, assignment_kind} & _CLASSIFICATION_OUTPUT_KINDS)
+
+
+def _classification_is_resolved(target: Any) -> bool:
+    return _classification_status(target) == "resolved"
+
+
+def _target_index(intent: Any) -> dict[str, Any]:
+    return {
+        str(_value(target, "target_id", "")): target
+        for _, field_name in _TASK_SPECS
+        for target in _items(intent, field_name)
+        if str(_value(target, "target_id", "") or "")
+    }
+
+
+def classification_boundary_diagnostics(
+    intent: Any,
+    execution_plan: ExecutionPlan | None = None,
+    *,
+    deferral_ledger: Any = None,
+) -> list[dict[str, Any]]:
+    """Return auditable violations without deriving a planning class.
+
+    This is deliberately usable by both EXECUTE_PLAN and the EXECUTE stage:
+    an old persisted plan is not trusted merely because it contains a worker
+    task.  Only a typed ``DeferralLedger`` can authorize an unresolved target
+    to remain outside ``worker_tasks``.
+    """
+    intent = _unwrap_intent(intent)
+    targets = _target_index(intent)
+    deferred_ids = _deferred_target_ids(deferral_ledger)
+    diagnostics: list[dict[str, Any]] = []
+
+    for target_id, target in targets.items():
+        assignment_kind = ""
+        if execution_plan is not None:
+            assignment_kind = next(
+                (
+                    str(_value(task, "expected_output_kind", "") or "")
+                    for task in list(getattr(execution_plan, "worker_tasks", None) or [])
+                    + list(getattr(execution_plan, "deferred_tasks", None) or [])
+                    if str(_value(task, "target_id", "") or "") == target_id
+                ),
+                "",
+            )
+        assignment = {"expected_output_kind": assignment_kind}
+        if not _classification_required(target, assignment) or _classification_is_resolved(target):
+            continue
+        if target_id in deferred_ids:
+            continue
+        diagnostics.append(
+            {
+                "code": "classification_decision_required",
+                "target_id": target_id,
+                "expected_output_kind": str(_value(target, "expected_output_kind", "") or ""),
+                "classification_status": _classification_status(target),
+                "message": (
+                    "EXECUTE requires a resolved ClassificationDecision for parcel/polygon output; "
+                    "the target was not dispatched and has no valid DeferralLedger entry."
+                ),
+            }
+        )
+
+    if execution_plan is not None:
+        for task in list(getattr(execution_plan, "worker_tasks", None) or []):
+            output_kind = str(_value(task, "expected_output_kind", "") or "")
+            if output_kind not in _CLASSIFICATION_OUTPUT_KINDS:
+                continue
+            target_id = str(_value(task, "target_id", "") or "")
+            target = targets.get(target_id)
+            if target is None:
+                assignment = _value(task, "assignment")
+                binding = _value(assignment, "target_binding", {}) or {}
+                target = binding if isinstance(binding, dict) else None
+            if target is None or not _classification_is_resolved(target):
+                diagnostics.append(
+                    {
+                        "code": "worker_task_classification_boundary_violation",
+                        "target_id": target_id,
+                        "expected_output_kind": output_kind,
+                        "classification_status": (
+                            _classification_status(target) if target is not None else "missing"
+                        ),
+                        "message": (
+                            "A parcel/polygon worker task has no resolved explicit classification; "
+                            "EXECUTE refuses to run the persisted plan."
+                        ),
+                    }
+                )
+    return diagnostics
 
 
 def _worker_type(target_type: str, target: Any) -> WorkerType:
@@ -33,25 +154,27 @@ def _worker_type(target_type: str, target: Any) -> WorkerType:
     }[target_type]
 
 
-def build_execution_plan(intent, site_selection, land_design_briefs, *, run_id: str = "", context_version: str = "", deferral_ledger: Any = None) -> ExecutionPlan:
+def build_execution_plan(
+    intent,
+    site_selection,
+    land_design_briefs,
+    *,
+    run_id: str = "",
+    context_version: str = "",
+    deferral_ledger: Any = None,
+    portfolio_decision_ref: str = "",
+) -> ExecutionPlan:
     """Create self-contained worker tasks keyed only by stable target IDs."""
     intent = _unwrap_intent(intent)
     assignments = {
         item.target_id: item for item in (getattr(site_selection, "target_assignments", None) or [])
     }
     deferred_ids = _deferred_target_ids(deferral_ledger)
-    task_specs = (
-        ("project", "project_targets"),
-        ("zone", "zone_targets"),
-        ("facility", "facilities"),
-        ("axis", "development_axes"),
-        ("road", "road_targets"),
-    )
     tasks: list[WorkerTask] = []
     deferred_tasks: list[WorkerTask] = []
     project_task_ids: list[str] = []
     facility_task_ids: list[str] = []
-    for target_type, field_name in task_specs:
+    for target_type, field_name in _TASK_SPECS:
         for target in _items(intent, field_name):
             target_id = str(getattr(target, "target_id", "") or "")
             if not target_id:
@@ -83,8 +206,19 @@ def build_execution_plan(intent, site_selection, land_design_briefs, *, run_id: 
                 assignment=assignment,
                 payload={"target_id": target_id},
                 depends_on=depends_on,
-                input_artifact_refs=["artifact:intent_compilation", "artifact:site_selection"],
+                input_artifact_refs=[
+                    "artifact:target_projection",
+                    (
+                        f"artifact:portfolio_decision:{portfolio_decision_ref}"
+                        if portfolio_decision_ref
+                        else "artifact:portfolio_decision"
+                    ),
+                ],
             )
+            if _classification_required(target, assignment) and not _classification_is_resolved(target):
+                if target_id in deferred_ids:
+                    deferred_tasks.append(task)
+                continue
             if target_id in deferred_ids:
                 deferred_tasks.append(task)
                 continue
@@ -100,9 +234,9 @@ def build_execution_plan(intent, site_selection, land_design_briefs, *, run_id: 
         deferred_tasks=deferred_tasks,
         dependencies=[{"from": dependency, "to": task.task_id} for task in tasks for dependency in task.depends_on],
         context_version=context_version,
-        site_selection=site_selection,
         land_design_briefs=list(land_design_briefs or []),
+        portfolio_decision_ref=portfolio_decision_ref,
     )
 
 
-__all__ = ["build_execution_plan"]
+__all__ = ["build_execution_plan", "classification_boundary_diagnostics"]

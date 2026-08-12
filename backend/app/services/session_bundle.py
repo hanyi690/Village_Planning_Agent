@@ -19,6 +19,7 @@ logger = get_logger(__name__)
 
 # In-process cache: session_id -> VillageBundle
 _bundle_cache: Dict[str, VillageBundle] = {}
+_bundle_cache_versions: Dict[str, Optional[int]] = {}
 _cache_lock = asyncio.Lock()
 
 
@@ -77,7 +78,33 @@ async def build_session_bundle(
             )
 
         _bundle_cache[session_id] = bundle
+        _bundle_cache_versions[session_id] = None
         return bundle
+
+
+async def restore_session_bundle(
+    session_id: str,
+    version: Optional[int] = None,
+) -> Optional[VillageBundle]:
+    """Restore an explicit persisted bundle version into the local cache."""
+    cached = get_cached_bundle(session_id)
+    if cached is not None and (
+        version is None or _bundle_cache_versions.get(session_id) == version
+    ):
+        return cached
+
+    from app.services.bundle_store import BundleStore
+
+    bundle = await BundleStore.get_instance().load_bundle(session_id, version=version)
+    if bundle is not None:
+        _bundle_cache[session_id] = bundle
+        _bundle_cache_versions[session_id] = version
+        logger.info(
+            "[SessionBundle] Restored persisted snapshot for %s version=%s",
+            session_id,
+            version if version is not None else "latest",
+        )
+    return bundle
 
 
 def get_cached_bundle(session_id: str) -> Optional[VillageBundle]:
@@ -118,9 +145,10 @@ async def snapshot_session_bundle(
         return None
 
     try:
-        await BundleStore.get_instance().save(
+        stored_version = await BundleStore.get_instance().save(
             session_id, bundle, version=version, trigger_reason=trigger_reason,
         )
+        _bundle_cache_versions[session_id] = stored_version
     except Exception as e:
         logger.error("[SessionBundle] Snapshot save failed for %s: %s", session_id, e)
         return bundle
@@ -136,11 +164,13 @@ def invalidate_session_bundle(session_id: str) -> None:
     """Drop the cached bundle so the next build is a fresh snapshot."""
     if session_id in _bundle_cache:
         del _bundle_cache[session_id]
+    _bundle_cache_versions.pop(session_id, None)
 
 
 __all__ = [
     "build_session_bundle",
     "get_cached_bundle",
+    "restore_session_bundle",
     "snapshot_session_bundle",
     "invalidate_session_bundle",
     "_resolve_village_name",

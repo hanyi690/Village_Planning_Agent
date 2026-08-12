@@ -10,7 +10,7 @@ from fastapi import FastAPI
 from pydantic import TypeAdapter, ValidationError
 
 from app.api.v1.contracts import MapLayer, PublicEvent, SessionProjection
-from app.api.v1.routes import _public_event
+from app.application.projections.events import public_event
 from app.api.routes import v1_router as router
 
 
@@ -67,7 +67,7 @@ def test_public_events_use_discriminator_and_strict_payloads() -> None:
 
 
 def test_legacy_event_is_projected_without_becoming_public_state() -> None:
-    event = _public_event('s1', {
+    event = public_event('s1', {
         'type': 'layer_started',
         'seq': 3,
         'timestamp': datetime.now(timezone.utc).isoformat(),

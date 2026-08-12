@@ -14,38 +14,6 @@ from app.utils.logger import get_logger
 logger = get_logger(__name__)
 
 
-def _legacy_merge_geojson_into_bundle(bundle: Any, layer_key: str, geojson: dict) -> int:
-    """Schema-only fallback: merge raw GeoJSON features into a bundle.
-
-    Used only when no BundleAssemblyPort is injected (legacy callers). Builds
-    typed features from ``app.modules.schema.types.base`` and routes them via
-    ``bundle.add`` (which resolves the canonical bundle target from the layer
-    registry). Keeps ``app.modules.kg`` free of ``app.modules.data`` imports.
-    """
-    from app.modules.schema.types.base import LineFeature, PointFeature, PolygonFeature
-
-    features = (geojson or {}).get("features", []) or []
-    if not features:
-        return 0
-    merged = 0
-    for f in features:
-        geometry = f.get("geometry") or {}
-        props = f.get("properties") or {}
-        bsm = props.get("BSM") or props.get("bsm") or ""
-        geom_type = geometry.get("type", "")
-        try:
-            if geom_type in ("Point", "MultiPoint"):
-                bundle.add(PointFeature(geometry=geometry, bsm=bsm, layer_type=layer_key, **props))
-            elif geom_type in ("LineString", "MultiLineString"):
-                bundle.add(LineFeature(geometry=geometry, bsm=bsm, layer_type=layer_key, **props))
-            else:
-                bundle.add(PolygonFeature(geometry=geometry, bsm=bsm, layer_type=layer_key, **props))
-            merged += 1
-        except Exception:
-            continue
-    return merged
-
-
 def build_knowledge_graph_data(
     reports: Dict[str, Dict[str, Any]],
     gis_data: Dict[str, Optional[Dict[str, Any]]],
@@ -67,43 +35,14 @@ def build_knowledge_graph_data(
     from app.modules.kg import PlanningKG
     from app.modules.kg.queries import query_kg
 
-    # [v4.4] Prefer bundle+blocks path, fallback to legacy
+    if bundle is None:
+        raise ValueError("KG build requires the canonical typed GIS bundle")
+
     gis_payload = dict(gis_data or {})
-    bundle = bundle or gis_payload.pop("_bundle", None)
     gis_payload.pop("_context_blocks", None)
     parcel_relations = gis_payload.pop("_parcel_relations", None)
 
     manager = get_kg_manager()
-
-    if bundle is None:
-        from app.modules.schema.types.canonical import VillageBundle, VillageMetadata
-
-        bundle = VillageBundle(
-            village_name=village_name,
-            metadata=VillageMetadata(village_name=village_name),
-        )
-        raw_layer_map = {
-            "boundary_geojson": "boundary",
-            "landuse_current_geojson": "landuse_current",
-            "road_geojson": "current_road",
-            "water_geojson": "water",
-            "annotation_geojson": "current_annotation",
-            "farmland_protection_geojson": "farmland_protection",
-            "ecological_protection_geojson": "ecological_protection",
-            "historical_protection_geojson": "historical_protection",
-            "construction_zone_geojson": "conditional_construction_zone",
-        }
-        merger = getattr(getattr(ports, "bundle_assembly", None), "merge_geojson_into_bundle", None)
-        merged = 0
-        for data_key, layer_type in raw_layer_map.items():
-            geojson = gis_payload.get(data_key)
-            if isinstance(geojson, dict):
-                if merger is not None:
-                    merged += merger(bundle, layer_type, geojson)
-                else:
-                    merged += _legacy_merge_geojson_into_bundle(bundle, layer_type, geojson)
-        if not merged:
-            raise ValueError("KG build requires a typed GIS bundle or GIS input layers")
 
     # Compute cache key for state reporting (typed parcels only)
     typed_parcels = bundle.polygons.get("landuse_current") if bundle else None

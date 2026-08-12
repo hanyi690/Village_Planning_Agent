@@ -108,6 +108,8 @@ class DeliverySpatialSnapshot(BaseModel):
     change_summary: dict[str, int] = Field(default_factory=dict)
     source_layer_refs: list[SpatialLayerRef] = Field(default_factory=list)
     classification_audit: dict[str, Any] = Field(default_factory=dict)
+    parent_digests: dict[str, str] = Field(default_factory=dict)
+    quality_report: dict[str, Any] = Field(default_factory=dict)
     checksum: str = ""
     provenance: dict[str, Any] = Field(default_factory=dict)
     delivery_status: Literal["complete", "partial", "diagnostic_only"] = "partial"

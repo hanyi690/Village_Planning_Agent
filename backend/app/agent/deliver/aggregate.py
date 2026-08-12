@@ -25,8 +25,8 @@ from app.modules.schema.contracts.delivery_manifest_contracts import (
 )
 from app.modules.schema.contracts.deferral_contracts import DeferralLedger
 from app.modules.schema.contracts.execution_plan_contracts import (
-    ExecutionOutcome,
     ExecutionPlan,
+    ExecutionResult,
 )
 from app.modules.schema.contracts.provenance import Provenance
 from app.modules.schema.contracts.reconciliation_contracts import CoverageMatrix
@@ -100,69 +100,6 @@ def collect_upstream_human_items(upstream_gates) -> list[HumanItem]:
     return items
 
 
-def _build_planned_view(current_parcels, planned_state) -> list:
-    """Build the complete planned-parcel view for land-balance closure.
-
-    ``PlannedState.parcels`` only carries changed parcels (the changeset);
-    unchanged current parcels must be carried through as preserves so the
-    planned total area can close against the current total within tolerance.
-    ``current_parcels`` are the L1 current parcels; a current parcel is
-    considered changed when its ``bsm`` appears in any planned parcel's
-    ``derived_from_bsms`` or equals a planned parcel's ``bsm``.
-    """
-    planned_parcels = list(getattr(planned_state, "parcels", None) or [])
-    if not current_parcels:
-        return planned_parcels
-    current_bsms = {
-        str(_parcel_value(parcel, "bsm", "") or "")
-        for parcel in current_parcels
-        if _parcel_value(parcel, "bsm", "")
-    }
-    changed_bsms: set = set()
-    verified_planned = []
-    for pp in planned_parcels:
-        bsm = str(_parcel_value(pp, "bsm", "") or "")
-        sources = {
-            str(src)
-            for src in (_parcel_value(pp, "derived_from_bsms", None) or [])
-            if src
-        }
-        # A planned parcel without a current BSM or source BSM is not an
-        # auditable replacement and must not inflate the statutory balance.
-        if bsm in current_bsms or sources.intersection(current_bsms):
-            verified_planned.append(pp)
-        if bsm in current_bsms:
-            changed_bsms.add(bsm)
-        for src in sources:
-            changed_bsms.add(str(src))
-    view = verified_planned
-    for cur in current_parcels:
-        bsm = str(_parcel_value(cur, "bsm", "") or "")
-        if not bsm or bsm in changed_bsms:
-            continue
-        code = (
-            _parcel_value(cur, "planning_land_use", "")
-            or _parcel_value(cur, "dlbm", "")
-            or "0000"
-        )
-        area_sqm = float(_parcel_value(cur, "area_sqm", 0) or 0)
-        area_ha = float(_parcel_value(cur, "area_ha", 0) or 0)
-        view.append(
-            {
-                "bsm": bsm,
-                "planning_land_use": code,
-                "zone_type": code,
-                "area_ha": area_ha if area_ha > 0 else (area_sqm / 10000.0 if area_sqm else 0.0),
-                "geometry": "",
-                "derived_from_bsms": [],
-                "decided_by": "preserve",
-                "operation": "preserve",
-                "area_change_ha": 0.0,
-            }
-        )
-    return view
-
-
 def _planned_view_from_export(export_result: dict | None) -> list | None:
     """Read the same complete planned snapshot used by export and render."""
     if not isinstance(export_result, dict):
@@ -199,13 +136,6 @@ def _planned_view_from_export(export_result: dict | None) -> list | None:
     return rows
 
 
-def _parcel_value(parcel, key: str, default=None):
-    """Read parcel fields from either contract objects or serialized dicts."""
-    if isinstance(parcel, dict):
-        return parcel.get(key, default)
-    return getattr(parcel, key, default)
-
-
 def _deferral_summary(ledger: DeferralLedger | None) -> dict:
     entries = list(getattr(ledger, "entries", None) or [])
     return {
@@ -225,7 +155,7 @@ def _expected_spatial_outputs(plan: ExecutionPlan | None) -> int:
 
 def _execution_blockers(
     plan: ExecutionPlan | None,
-    outcome: ExecutionOutcome | None,
+    outcome: ExecutionResult | None,
     coverage_matrix: CoverageMatrix,
     ledger: DeferralLedger | None,
 ) -> list[HumanItem]:
@@ -289,7 +219,7 @@ def deliver_aggregate(
     current_parcels=None,
     run_id: str = "",
     execution_plan: ExecutionPlan | None = None,
-    execution_outcome: ExecutionOutcome | None = None,
+    execution_result: ExecutionResult | None = None,
     deferral_ledger: DeferralLedger | None = None,
     expected_spatial_output_count: int | None = None,
     render_layer_count: int = 0,
@@ -314,7 +244,7 @@ def deliver_aggregate(
     check_items.extend(check_classification_for_statutory(validation_report))
     check_items.extend(_execution_blockers(
         execution_plan,
-        execution_outcome,
+        execution_result,
         coverage_matrix,
         deferral_ledger,
     ))
@@ -322,7 +252,7 @@ def deliver_aggregate(
         check_items.append(HumanItem(
             item_id="hi-render-empty",
             description="活动空间目标缺少可渲染几何",
-            reason="PlannedState did not produce any render layer.",
+            reason="DeliverySpatialSnapshot did not produce any render layer.",
             blocking=True,
         ))
     if spatial_output_count > 0 and render_error:
@@ -339,6 +269,31 @@ def deliver_aggregate(
         str(getattr(task, "expected_output_kind", "")) in {"parcel", "polygon"}
         for task in (getattr(execution_plan, "worker_tasks", None) or [])
     )
+    planned_geojson = (
+        export_result.get("planned_landuse_geojson")
+        if isinstance(export_result, dict)
+        else None
+    )
+    planned_features = (
+        (planned_geojson or {}).get("features", [])
+        if isinstance(planned_geojson, dict)
+        else []
+    )
+    has_material_planned_change = any(
+        (feature.get("properties") or {}).get("change_status")
+        not in {None, "preserved", "unchanged"}
+        for feature in planned_features
+        if isinstance(feature, dict)
+    )
+    if not has_material_planned_change:
+        check_items.append(HumanItem(
+            item_id="hi-no-parcel-changes",
+            description="期末地类没有实际 ParcelChange",
+            reason=(
+                "complete_planned_landuse 仅保留现状地块；项目/设施定位点不能替代地块规划变更。"
+            ),
+            blocking=False,
+        ))
     exported_planned = _planned_view_from_export(export_result)
     planned_for_balance = exported_planned or []
     gate = (
@@ -368,7 +323,7 @@ def deliver_aggregate(
         "diagnostic_only"
         if blocking
         else "partial"
-        if deferral_summary["count"] > 0
+        if deferral_summary["count"] > 0 or not has_material_planned_change
         else "complete"
     )
     statutory_complete = (
@@ -395,7 +350,7 @@ def deliver_aggregate(
         delivery_status=delivery_status,
         deliverables=deliverables,
         traceability=traceability,
-        action_results=list(getattr(execution_outcome, "action_results", None) or []),
+        action_results=list(getattr(execution_result, "action_results", None) or []),
         deferral_ledger=deferral_ledger,
         deferral_summary=deferral_summary,
         diagnostic_summary=diagnostic_summary,

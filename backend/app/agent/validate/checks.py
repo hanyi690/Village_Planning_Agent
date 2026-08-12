@@ -217,7 +217,7 @@ def check_traceability(
     decision: Any = None,
     *,
     execution_plan: Any = None,
-    execution_outcome: Any = None,
+    execution_result: Any = None,
 ) -> List[ValidationCheck]:
     """Trace each planned target to the output kind declared by EXECUTE."""
     if execution_plan is not None:
@@ -231,7 +231,7 @@ def check_traceability(
 
         active_tasks = list(getattr(execution_plan, "worker_tasks", None) or [])
         deferred_tasks = list(getattr(execution_plan, "deferred_tasks", None) or [])
-        result_groups = group_execution_results(execution_outcome)
+        result_groups = group_execution_results(execution_result)
         failed: list[str] = []
         duplicate: list[str] = []
         deferred_contradictions: list[str] = []
@@ -621,20 +621,41 @@ def check_contract_completeness(
     project_targets = list(getattr(intent, "project_targets", None) or [])
     zone_targets = list(getattr(intent, "zone_targets", None) or [])
     spatial_projects = [
-        p for p in project_targets if getattr(p, "requires_spatial", True)
+        p for p in project_targets
+        if getattr(p, "requires_spatial", True)
+        and str(getattr(p, "expected_output_kind", "")) in {"parcel", "polygon"}
     ]
     need_parcels = bool(spatial_projects or zone_targets)
-    if execution_plan is not None and need_parcels:
-        active_tasks = [
+    spatial_target_ids: list[str] = [
+        str(getattr(target, "project_id", "") or getattr(target, "target_id", ""))
+        for target in spatial_projects
+        if str(getattr(target, "project_id", "") or getattr(target, "target_id", ""))
+    ]
+    spatial_target_ids.extend(
+        str(getattr(target, "target_id", "") or getattr(target, "zone_id", ""))
+        for target in zone_targets
+        if str(getattr(target, "target_id", "") or getattr(target, "zone_id", ""))
+    )
+    if execution_plan is not None:
+        active_spatial_tasks = [
             task
             for task in (getattr(execution_plan, "worker_tasks", None) or [])
             if str(getattr(task, "target_id", ""))
+            and str(getattr(task, "expected_output_kind", "")) in {"parcel", "polygon"}
         ]
         # Explicit HUMAN deferrals remove those targets from the active
-        # execution contract. A run with no remaining spatial task is a
-        # valid no-change/partial result, not a fabricated parcel failure.
-        if not active_tasks:
+        # execution contract. Action/line tasks do not require a planned
+        # parcel collection and must not create a false parcel blocker.
+        if active_spatial_tasks:
+            need_parcels = True
+            spatial_target_ids = [
+                str(getattr(task, "target_id", ""))
+                for task in active_spatial_tasks
+                if str(getattr(task, "target_id", ""))
+            ]
+        else:
             need_parcels = False
+            spatial_target_ids = []
     parcels_present = (not need_parcels) or bool(planned_state.parcels)
     missing_bsm = [p.bsm for p in planned_state.parcels if not (p.bsm or "").strip()]
     missing_geom = [p.bsm or "?" for p in planned_state.parcels if not (p.geometry or "").strip()]
@@ -653,6 +674,7 @@ def check_contract_completeness(
             stage="EXECUTE",
             actual=f"{len(planned_state.parcels)} parcels",
             expected="parcels produced when zone/project targets exist",
+            targets=spatial_target_ids,
             fix="补充地块生成逻辑，产出 planned parcels",
         ),
         _check(
@@ -674,6 +696,7 @@ def check_contract_completeness(
                 f"validity={bool(changeset and changeset.geometry_validity_verified)}"
             ),
             expected="area_conservation_verified and geometry_validity_verified recorded",
+            targets=spatial_target_ids,
             fix="记录面积守恒与几何有效性校验结果",
         ),
     ]

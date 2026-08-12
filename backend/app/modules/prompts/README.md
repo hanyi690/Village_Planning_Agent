@@ -19,9 +19,9 @@
 ```
 prompts/
 ├── __init__.py             # 仅导出 parse_prompts（PARSE 专用）
-├── analysis.py             # ★ L1 现状分析：12 维 Prompt + ANALYSIS_RULES + P8 INSTRUCTION 段
+├── analysis.py             # ★ L1 现状分析：12 维 Prompt + ANALYSIS_RULES
 ├── concept.py              # L2 规划思路：4 维 Prompt + GLOBAL_CONCEPT_RULES
-├── detailed.py             # ★ L3 详细规划：12 维 Prompt + WRITING_RULES + GIS_TOOL_GUIDE + P8 INSTRUCTION
+├── detailed.py             # ★ L3 claims：12 维 Prompt + WRITING_RULES + GIS_TOOL_GUIDE + claims schema guide
 └── parse_prompts.py        # PARSE 结构化提取 6 Prompt + format_spatial_context_for_prompt
 ```
 
@@ -32,7 +32,7 @@ prompts/
 ### L1 现状分析（analysis.py）
 - **12 维度**：`location`（区位与对外交通）、`socio_economic`（社会经济）、`villager_wishes`（村民意愿）、`superior_planning`（上位规划）、`natural_environment`（自然环境）、`land_use`（土地利用）、`traffic`（道路交通）、`public_services`（公共服务设施）、`infrastructure`（基础设施）、`ecological_green`（生态绿地）、`architecture`（建筑）、`historical_culture`（历史文化）。
 - `ANALYSIS_RULES`：写作规则（冒号格式、自然段落、禁止章节/条目编号、数值带单位、markdown 表格必须含分隔行、【主题】段落标记）。
-- **P8 INSTRUCTION 段**（`INSTRUCTION_OUTPUT_GUIDE`）：引导 LLM 在报告正文后输出固定列表格 `| 类型 | 名称 | 位置 | 描述 | 规模 |`，类型限 **现状设施 / 现状项目 / 现状分区**——供下游 PARSE 空间定位消费，保存时剥离。
+- L1 report projections may retain a separate evidence table for historical report display; it is not an L3 execution input.
 - `get_dimension_prompt(dimension_key, raw_data, village_name, professional_data, task_description, constraints, knowledge_context, revision_instruction, has_images, natural_villages)`。
 
 ### L2 规划思路（concept.py）
@@ -44,7 +44,7 @@ prompts/
 - **12 维度**：`industry`（产业）、`traffic_planning`（道路交通）、`public_service`（公共服务）、`infrastructure_planning`（基础设施）、`ecological`（生态）、`disaster_prevention`（防灾减灾）、`heritage`（历史文化）、`landscape`（风貌）、`project_bank`（项目库）、`spatial_structure`（空间结构）、`land_use_planning`（土地利用）、`settlement_planning`（居民点）。
 - `WRITING_RULES`：法规条文式直陈（输出将组装为法定文本 .docx 条文）、禁止模糊词、清单必须表格。
 - **GIS_TOOL_GUIDE（P0-3）**：注入现状用地指标（耕地/建设用地/生态红线）与规划目标（农田保护区/村庄建设区/生态保护区），引导空间布局维度引用，含设施服务半径标准（教育 500m / 医疗 300m / 养老 600m / 村委会 500m / 市场 1000m）。
-- **P8 INSTRUCTION 段**：类型限 **项目 / 功能分区 / 设施 / 轴线**（与 L1 不同），供 PARSE 落位。
+- `CLAIMS_OUTPUT_GUIDE`：L3 只输出 `PlanningClaimSet`，不输出 Markdown、BSM、几何或 `ClassificationDecision`。
 - `get_dimension_prompt(dimension_key, revision_instruction, **kwargs)`。
 
 ---
@@ -75,7 +75,7 @@ prompts/
 - 公共注入参数：`{raw_data} {village_name} {task_description} {constraints} {knowledge_context} {professional_data_section}`。
 - 级联修订：`revision_instruction` 前缀注入（独立参数，不混入 knowledge_context）。
 - 多模态：`has_images=True` 追加「上传图片分析指引」段。
-- P8：所有 L1/L3 维度在末尾追加 INSTRUCTION 表格引导。
+- L3 claims：只由 `agent/l3_plan/worker.py` 以 structured output 调用；L1/L2 report projection 保持独立。
 
 ---
 

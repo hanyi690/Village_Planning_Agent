@@ -39,7 +39,7 @@
 
 ```
 providers/ → data/connections（RateLimiter）、app.core.settings、app.utils
-   ▲ 被 data/catalog（external_anchors）、_analytics 工具、search_poi 工具消费
+   ▲ 被 data/catalog（external_anchors）和显式 POI/KG 适配器消费
 ```
 
 - 允许：`data/connections`、`app.core.settings`、`app.utils`、第三方 HTTP 库

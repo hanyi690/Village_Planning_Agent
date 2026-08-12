@@ -67,7 +67,7 @@ def _task_execution_result(
     errors: list[str] | None = None,
 ) -> Any:
     """Build target-specific worker evidence for one plan task."""
-    from app.modules.schema.contracts.execution_plan_contracts import ExecutionResult
+    from app.modules.schema.contracts.execution_plan_contracts import TaskExecutionResult
 
     task = next(
         (
@@ -79,7 +79,7 @@ def _task_execution_result(
     if task is None:
         return None
     output_kind = _task_value(task, "expected_output_kind", "parcel")
-    return ExecutionResult(
+    return TaskExecutionResult(
         task_id=str(_task_value(task, "task_id", "")),
         target_id=str(target_id),
         status=status,
@@ -93,7 +93,7 @@ def _task_execution_result(
 def _execution_intent_from_plan(state: ExecuteAgentState) -> Any:
     """Rebuild worker inputs from task snapshots, never from a stale intent."""
     if state.execution_plan is None:
-        return state.intent
+        return None
     from app.modules.schema.contracts.parse_contracts import (
         AxisTarget,
         FacilityTarget,
@@ -131,7 +131,7 @@ def _execution_intent_from_plan(state: ExecuteAgentState) -> Any:
 
 
 def _intent_list(intent: Any, key: str) -> List[Any]:
-    """Read a list field off a typed intent or a legacy intent dict."""
+    """Read a list field from the plan-derived typed target projection."""
     if intent is None:
         return []
     if isinstance(intent, dict):
@@ -161,16 +161,14 @@ def _task_enabled(state: ExecuteAgentState, task: str) -> bool:
 
 
 def _build_landuse_geojson(state: ExecuteAgentState) -> dict:
-    """Resolve the current land-use GeoJSON from gis_bundle or gis_data."""
-    gis_data = state.gis_data or {}
-    gis_bundle = getattr(state, "gis_bundle", None)
-    if gis_bundle is not None and hasattr(gis_bundle, "polygons") and (
-        gis_bundle.polygons.get("landuse_current")
-        or gis_bundle.polygons.get("landuse_planned")
-    ):
-        landuse = gis_bundle.to_geojson_dict().get("landuse_current_geojson")
+    """Resolve current land use from the bundle-backed data boundary."""
+    spatial_workspace = getattr(state, "spatial_workspace", None)
+    if spatial_workspace is not None:
+        from app.modules.spatial_ops.io import canonical_gis_data_from_workspace
+
+        landuse = canonical_gis_data_from_workspace(spatial_workspace).get("landuse_current_geojson")
     else:
-        landuse = gis_data.get("landuse_current_geojson")
+        raise ValueError("EXECUTE requires spatial_workspace for current land use")
     return landuse or {}
 
 

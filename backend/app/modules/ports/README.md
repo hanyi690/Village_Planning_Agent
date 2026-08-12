@@ -25,7 +25,6 @@
 | `zone_allocator.py` | `ZoneAllocatorPort` | `allocate(targets, candidates, constraints, metadata)` | `spatial_ops.allocation.zone_allocator_adapter`（PuLP MIP，infeasible 不抛异常） |
 | `road_planner.py` | `RoadPlannerPort` | `plan(state)` / `is_available()` | EXECUTE road-construction worker 包装 staged 道路服务 |
 | `spatial_query.py` | `SpatialQueryPort` | `query_by_bbox` / `query_by_geometry` / `compute_overlap` / `nearest_features` / `resolve_candidates` | `kg.adapters.spatial_query_adapter.KGSpatialQueryAdapter` |
-| `artifact_store.py` | `ArtifactStorePort` | `store` / `retrieve` / `list_by_run` / `list_by_module` / `delete` | `services.artifact_store.FilesystemArtifactStore`（原子写 + 路径约束） |
 | `bundle_assembly.py` | `BundleAssemblyPort` | `merge_geojson_into_bundle(bundle, layer_key, geojson)` | `data.bundle_assembly_adapter.DataBundleAssemblyAdapter` |
 | `context_provider.py` | `ContextProviderPort` | `get_context` / `get_dataset` / `get_version` | 应用层 context 服务 |
 | `gazetteer.py` | `GazetteerPort` | `resolve_place_name` / `get_cluster_by_name` / `resolve(name, fuzzy)` | `kg.adapters.gazetteer_adapter.KGGazetteerAdapter` |
@@ -37,7 +36,6 @@
 ```python
 @dataclass
 class PlanningPorts:
-    artifact_store: ArtifactStorePort | None = None
     context_provider: ContextProviderPort | None = None
     semantic_query: SemanticQueryPort | None = None
     spatial_query: SpatialQueryPort | None = None
@@ -48,7 +46,7 @@ class PlanningPorts:
     road_planner: RoadPlannerPort | None = None
 ```
 
-`PlanningPorts` 替换了 `PlanningContext` 上旧的 `ports: dict[str, Any]`，让下游以类型化 Protocol 消费而非 dict 查找。所有字段可选（`None` = 未注入，调用方需判空）；提供 `has_artifact_store` 便捷属性。
+`PlanningPorts` 替换了 `PlanningContext` 上旧的 `ports: dict[str, Any]`，让下游以类型化 Protocol 消费而非 dict 查找。所有字段可选（`None` = 未注入，调用方需判空）。Artifact descriptor/CAS 不属于 PlanningPorts，由 workflow/infrastructure 直接管理。
 
 ---
 
@@ -57,18 +55,18 @@ class PlanningPorts:
 ```
 领域层（modules/）               应用/数据层（实现注入）
   ports/（只定义 Protocol）  ←──  kg/adapters/*、data/bundle_assembly_adapter.py
-       │                          spatial_ops/allocation/、services/artifact_store.py
+       │                          spatial_ops/allocation/、infrastructure/artifacts/repository.py
        └── 被 PlanningContext 持有（PlanningPorts 容器），由 services/context 工厂组装
 ```
 
 - **依赖规则**：领域模块（`spatial_ops` / `kg` 等）依赖 `ports/`；实现（适配器）依赖 `ports/` 并实现其 Protocol。领域层永远不 import 实现方所在层。
-- `ports/` 自身只依赖 `typing.Protocol` + `pydantic`（`ArtifactRef`）+ `schema/contracts`（`ContractMeta` / `GazetteerEntryLike` / `SpatialReferenceSpec`）。
+- `ports/` 自身只依赖 `typing.Protocol` + `schema/contracts`（`ContractMeta` / `GazetteerEntryLike` / `SpatialReferenceSpec`）。Artifact descriptor 与 CAS 属于 infrastructure，不注入 PlanningContext。
 
 ---
 
 ## 禁止行为
 
 - 在端口文件里写任何实现逻辑 / 持有状态 / 定义单例 —— 端口必须保持纯接口
-- 让领域模块直接 import 实现方（如 `spatial_ops → services.artifact_store`）—— 必须经端口
+- 让领域模块直接 import infrastructure 实现方——必须经端口或 application adapter
 - 为"顺手"把未实现的方法加进 Protocol —— 端口应反映真实被消费的边界
 - 在端口签名中引入 `app.agent` / LangGraph State 类型 —— 端口必须与编排层解耦

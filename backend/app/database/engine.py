@@ -25,9 +25,6 @@ DB_PATH = DATABASE_DIR / "village_planning.db"
 # Async Engine
 # ==========================================
 
-# Async database URL
-ASYNC_DATABASE_URL = f"sqlite+aiosqlite:///{DB_PATH}"
-
 # Async engine
 async_engine: AsyncEngine | None = None
 _engine_creation_lock = threading.Lock()
@@ -55,7 +52,7 @@ async def get_async_engine() -> AsyncEngine:
 
         DATABASE_DIR.mkdir(parents=True, exist_ok=True)
         engine = create_async_engine(
-            ASYNC_DATABASE_URL,
+            f"sqlite+aiosqlite:///{DB_PATH}",
             connect_args={"check_same_thread": False},
             pool_pre_ping=True,
         )
@@ -196,9 +193,9 @@ async def init_async_db() -> bool:
             UISession,
             DimensionReport,
             UploadedFile,
-            PlanningTextDocument,
             PlanningBundle,
             StepReportModel,
+            RunEvent,
         )
 
         # Create all tables (except checkpoints, which is managed by LangGraph)

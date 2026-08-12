@@ -123,7 +123,7 @@ class ClassificationDecision(BaseModel):
     candidate_codes: list[str] = Field(default_factory=list)
     selected_code: str = ""
     decision_mode: str = "human"
-    evidence_refs: list[str] = []
+    evidence_refs: list[str] = Field(default_factory=list)
     rationale: str = ""
     status: Literal["unresolved", "resolved"] = "unresolved"
 

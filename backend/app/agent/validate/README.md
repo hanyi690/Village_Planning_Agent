@@ -52,7 +52,7 @@
 | 门决定 | `app/modules/schema/contracts/workflow_contracts.py` | `GateDecision`、`PendingRequest`、`StageId` |
 | 元数据 | `contract_meta.py` / `provenance.py` | `StageIssue`、`Provenance` |
 
-`validate_aggregate(planned_state, changeset, layout_configs, intent, constraint_index, run_id)` 返回 `ValidationReport`。`ValidationCheck.responsible_stage` 取值为 `L3/PARSE/GROUND/SELECT/EXECUTE` 字面量，作为门路由与 `issues_by_stage` 的键。
+`validate_aggregate(planned_state, changeset, intent, constraint_index, run_id)` 返回 `ValidationReport`。它只消费 typed execution outputs，不消费 render layers。`ValidationCheck.responsible_stage` 取值为 `L3/PARSE/GROUND/SELECT/EXECUTE` 字面量，作为门路由与 `issues_by_stage` 的键。
 
 与 EXECUTE review 的关系：`execute/execute_agent.py` 的 `execution_review` 只做执行级检查（输入/输出完整性、变更血缘、几何有效性、worker 冲突）并产出 `validation_result`；完整的面积守恒、硬约束、拓扑、可达性、阶段归因等 9 项检查在本目录的 `validate_aggregate` 中运行，二者职责互补、不重复。失败项产出的 `ConstraintAdjustment` 供 post-L3 链在 `RETRY_EXECUTE` 时作为约束调整回灌 `prepare_inputs`（见 `execute/_prepare_inputs_node`）。
 
@@ -74,7 +74,7 @@
 ## 相关文档
 
 - `../README.md` — agent 编排层总览
-- `../bootstrap/graph.py` / `post_l3_main_nodes.py` — VALIDATE 的 RETRY_* 回退路由
+- `../../workflow/root_graph.py` / `../../workflow/stages/validate.py` — VALIDATE 的 RETRY_* 回退路由
 - `../execute/README.md` — EXECUTE（上游：`ParcelChangeSet` + `PlannedState`）
 - `../reconcile/README.md` — RECONCILE（下游消费者：`ValidationReport`）
 - `app/modules/schema/contracts/validation_report_contracts.py` — 校验契约

@@ -42,7 +42,7 @@
 | `kg_query_fn` | `Callable \| None` | `(template_name, **params) -> list[dict]` |
 | `ports` | `PlanningPorts` | 注入的依赖倒置端口 |
 
-**便捷 API**：`has_bundle` / `has_kg` / `artifact_store`（回兼容访问器）/ `bundle_parcels()`（现状地块列表）/ `snapshot_meta()`（无几何的可序列化元数据）。
+**便捷 API**：`has_workspace` / `has_kg` / `current_parcels()`（现状地块列表）/ `snapshot_meta()`（无几何的可序列化元数据）。`SessionDataSnapshot` 与 `SpatialWorkspace` 属于 data/spatial owner；Artifact descriptor 不注入 PlanningContext。
 
 **版本化规则**：消费者凡缓存派生几何/查询结果，**必须按 `version` 建键**，防止陈旧 context 被误当作新 context。
 

@@ -1,18 +1,14 @@
-"""Stage-specific compilation profiles for the shared parse-compiler.
+"""L1/L2 report projection profiles.
 
-Wave B: l1_observation. Wave D: l2_strategy. Wave E: l3_planning (stub).
-Wave F: revision.
+L3 is intentionally absent: its worker persists typed `PlanningClaimSet`
+objects and the L3 aggregate consumes them directly.
 """
 from __future__ import annotations
 
 from .l1_observation import compile_l1_observation
 from .l2_strategy import compile_l2_strategy
-from .l3_planning import compile_l3_planning
-from .revision import compile_revision
 
 __all__ = [
     "compile_l1_observation",
     "compile_l2_strategy",
-    "compile_l3_planning",
-    "compile_revision",
 ]

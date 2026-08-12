@@ -9,6 +9,7 @@ from __future__ import annotations
 from typing import Any
 
 _INSTRUCTION_MARKER = "【INSTRUCTION】"
+_FIXED_HEADER = "| 执行类型 | 名称 | 位置 | 描述 | 规模 |"
 
 
 def split_content_instruction(content_with_instruction: str) -> tuple[str, str]:
@@ -21,50 +22,31 @@ def split_content_instruction(content_with_instruction: str) -> tuple[str, str]:
         return (content_with_instruction or "", "")
     idx = content_with_instruction.find(_INSTRUCTION_MARKER)
     if idx < 0:
-        recovered = _recover_l3_instruction_table(content_with_instruction)
-        if recovered is not None:
-            display, table = recovered
-            return (display.rstrip(), f"{_INSTRUCTION_MARKER}\n{table.strip()}")
         return (content_with_instruction, "")
     display = content_with_instruction[:idx].rstrip()
     instruction = content_with_instruction[idx:].strip()
     return (display, instruction)
 
 
-def _recover_l3_instruction_table(content: str) -> tuple[str, str] | None:
-    """Recover only model-emitted structured rows when the marker is absent."""
-    lines = (content or "").splitlines()
-    categories = {"项目", "功能分区", "设施", "轴线", "道路"}
-    candidates: list[tuple[int, str]] = []
-    for index, raw in enumerate(lines):
-        line = raw.strip()
-        if line.startswith("-"):
-            line = line[1:].strip()
-        if not (line.startswith("|") and line.endswith("|")):
-            continue
-        cells = [cell.strip() for cell in line.strip("|").split("|")]
-        if len(cells) >= 5 and cells[0] in categories and cells[1]:
-            candidates.append((index, "| " + " | ".join(cells[:5]) + " |"))
-    if not candidates:
-        return None
-    selected: list[tuple[int, str]] = []
-    for item in candidates:
-        if not selected or item[0] <= selected[-1][0] + 1:
-            selected.append(item)
-        else:
-            break
-    if not selected:
-        return None
-    start, end = selected[0][0], selected[-1][0]
-    table = (
-        "| 类型 | 名称 | 位置 | 描述 | 规模 |\n"
-        "| :--- | :--- | :--- | :--- | :--- |\n"
-        + "\n".join(row for _, row in selected)
-    )
-    display = "\n".join(
-        line for index, line in enumerate(lines) if not (start <= index <= end)
-    )
-    return display, table
+def normalize_trailing_instruction_marker(content: str) -> tuple[str, bool]:
+    """Insert only the transport marker before an exact trailing fixed table."""
+    if not content or _INSTRUCTION_MARKER in content:
+        return content or "", False
+    index = content.rfind(_FIXED_HEADER)
+    if index < 0:
+        return content, False
+    table = content[index:].strip()
+    lines = table.splitlines()
+    if len(lines) < 3 or lines[0].strip() != _FIXED_HEADER:
+        return content, False
+    separator = [cell.strip() for cell in lines[1].strip().strip("|").split("|")]
+    if len(separator) != 5 or not all(set(cell) <= {":", "-"} for cell in separator):
+        return content, False
+    data_rows = [line for line in lines[2:] if line.strip().startswith("|")]
+    if not data_rows:
+        return content, False
+    display = content[:index].rstrip()
+    return f"{display}\n\n{_INSTRUCTION_MARKER}\n{table}", True
 
 
 def parse_instruction_tables(instruction: str) -> dict[str, list[dict[str, Any]]]:
@@ -103,4 +85,8 @@ def parse_instruction_tables(instruction: str) -> dict[str, list[dict[str, Any]]
     return result
 
 
-__all__ = ["split_content_instruction", "parse_instruction_tables"]
+__all__ = [
+    "split_content_instruction",
+    "normalize_trailing_instruction_marker",
+    "parse_instruction_tables",
+]

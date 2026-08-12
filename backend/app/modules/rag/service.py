@@ -308,9 +308,20 @@ class RagService:
             location_parts = [province, city, county, township]
             village_context = ''.join(p for p in location_parts if p)
 
-            # Fallback: regex extraction from village_data
+            try:
+                from app.services.context.planning_context import get_cached_context
+
+                planning_context = get_cached_context(session_id)
+                village_data = (
+                    planning_context.input_text("village_data")
+                    if planning_context is not None
+                    else ""
+                )
+            except Exception:
+                village_data = ""
+
+            # Fallback: regex extraction from the data-layer input snapshot
             if not village_context:
-                village_data = config.get("village_data", "")
                 if village_data:
                     loc_match = re.search(r'([^\s]+省)([^\s]+市)([^\s]+县)([^\s]+镇)', village_data[:2000])
                     if loc_match:
@@ -321,7 +332,6 @@ class RagService:
                 village_context = village_name
 
             # Flash LLM preprocessing: extract superior planning keywords
-            village_data = config.get("village_data", "")
             if village_data:
                 try:
                     kw_prompt = f"""从以下村庄现状报告中提取所有涉及上位规划的文档名称和关键词。只输出名称，每行一个，不要解释。

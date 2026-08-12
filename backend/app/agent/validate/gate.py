@@ -10,7 +10,7 @@ Routes (precedence high -> low):
   RETRY_SELECT     -> dominant error stage is SELECT
   RETRY_GROUND     -> dominant error stage is GROUND
   RETRY_L3         -> dominant error stage is L3
-  RETRY_PARSE      -> dominant error stage is PARSE
+  RETRY_TARGET_PROJECTION -> dominant error stage is target projection
   HUMAN            -> tie between two+ dominant error stages, or only
                       warning-severity issues (no error issues)
 
@@ -40,7 +40,7 @@ _STAGE_ROUTE = {
     "SELECT": "RETRY_SELECT",
     "GROUND": "RETRY_GROUND",
     "L3": "RETRY_L3",
-    "PARSE": "RETRY_PARSE",
+    "TARGET_PROJECTION": "RETRY_TARGET_PROJECTION",
 }
 
 
@@ -67,7 +67,7 @@ def _dominant_stage(counts: dict[str, int]) -> tuple[str | None, int]:
 
 def validate_gate_route(report: ValidationReport) -> str:
     """Return the deterministic route:
-    "PASS"|"RETRY_EXECUTE"|"RETRY_SELECT"|"RETRY_GROUND"|"RETRY_L3"|"RETRY_PARSE"|"HUMAN".
+    "PASS"|"RETRY_EXECUTE"|"RETRY_SELECT"|"RETRY_GROUND"|"RETRY_L3"|"RETRY_TARGET_PROJECTION"|"HUMAN".
     """
     if report.overall_passed:
         return "PASS"

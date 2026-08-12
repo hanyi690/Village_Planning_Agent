@@ -34,7 +34,7 @@
 - 被 `app.modules.data.providers.poi`、`app.modules.parsing.gazetteer`
   （地理编码）、`app.modules.data.catalog.external_anchors`
   （source="tianditu_wfs"）、`app.modules.data.sources.api_vector` 与
-  `sources.wmts_tile`（GDSpecializedService）、`app.tools.gis._analytics`
+  `sources.wmts_tile`（GDSpecializedService）
   （等时圈/可达性）消费。
 
 ## 禁止行为

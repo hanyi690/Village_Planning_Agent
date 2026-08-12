@@ -37,6 +37,7 @@ from app.agent.common.dimension_runtime import (
     run_rag,
     save_report_immediate,
     save_step_report,
+    strip_model_reasoning,
 )
 from app.services.task_supervisor import build_summary_task_key
 
@@ -111,7 +112,7 @@ async def analyze_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
     6. 保存版本
     7. 返回状态更新
     """
-    from ...services.sse import sse_manager
+    from app.infrastructure.events import event_hub as sse_manager
 
     # Debug: log revision_impact_tree at entry
     if state.get("is_revision"):
@@ -362,6 +363,7 @@ async def analyze_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
             "", llm_response,
         )
 
+    llm_response = strip_model_reasoning(llm_response)
     llm_elapsed = time.time() - llm_start_time
     logger.info(f"[analyze_dimension] {dim_key}: LLM completed in {llm_elapsed:.1f}s, output = {len(llm_response)} chars")
 
@@ -438,19 +440,6 @@ async def analyze_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
         "layer_char_counts": {dim_layer: len(llm_response)},
     }
 
-    # P0-1: L1 数据流闭环注入（详见 docs/superpowers/specs/2026-07-02-gis-review-exploration.md）
-    # L1 完成后注入 _landuse_metrics（现状用地指标）
-    # L2 纯粹化（v4）：L2 只产大致规划定位，不再注入 intent_targets 面积意向；L3 自洽
-    if structured_summary_obj:
-        try:
-            if dim_layer == 1:
-                _lm = _extract_landuse_metrics(structured_summary_obj, dim_key)
-                if _lm:
-                    result["_landuse_metrics"] = _lm
-                    logger.info(f"[analyze_dimension] {dim_key}: injected _landuse_metrics = {_lm}")
-        except Exception as e:
-            logger.warning(f"[analyze_dimension] {dim_key}: L1/L2 injection failed: {e}")
-
     # 立即写入 DB，使并行节点可通过 DB 回退路径获取依赖报告
     await save_report_immediate(store, pending_report)
 
@@ -494,13 +483,6 @@ async def analyze_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
         rev_completed = _build_revision_completed(state, dim_key)
         if rev_completed:
             result["revision_completed_dims"] = rev_completed
-            result["is_revision"] = True
-        # 返回 revision_impact_tree 以确保 fan-in reducer 能保留该值
-        # _preserve_impact_tree(a, b): b 有值则用 b，否则保留 a
-        # 所有并行节点从同一 Send payload 获取相同 final_tree，不会冲突
-        impact_tree = state.get("revision_impact_tree")
-        if impact_tree:
-            result["revision_impact_tree"] = impact_tree
 
     return result
 
@@ -516,101 +498,6 @@ def _dependency_summary(text: str) -> Dict[str, Any]:
     }
 
 
-def _extract_landuse_metrics(summary_obj: Any, dim_key: str) -> Dict[str, float]:
-    """P0-1: 从 L1 结构化摘要中提取现状用地指标。
-
-    优先从 land_use 维度提取 current_farmland_ha / current_construction_ha / ecological_area_ha，
-    fallback 到 superior_planning 的约束下限值，再 fallback 到 ecological 维度的 min_ecological_redline_ha。
-
-    Returns: {"farmland_ha": float, "construction_ha": float, "ecological_ha": float}
-    若全部为空则返回空 dict（调用方据此跳过注入）。
-    """
-    if not isinstance(summary_obj, dict):
-        return {}
-
-    def _safe_float(v: Any) -> Optional[float]:
-        if v is None or v == "":
-            return None
-        try:
-            return float(v)
-        except (TypeError, ValueError):
-            return None
-
-    farmland = _safe_float(summary_obj.get("current_farmland_ha"))
-    construction = _safe_float(summary_obj.get("current_construction_ha"))
-    ecological = _safe_float(summary_obj.get("ecological_area_ha"))
-
-    # Fallback 1: superior_planning 约束下限值
-    if farmland is None:
-        farmland = _safe_float(summary_obj.get("min_farmland_protection_ha"))
-    if ecological is None:
-        ecological = _safe_float(summary_obj.get("min_ecological_redline_ha"))
-
-    # Fallback 2: ecological 维度字段
-    if ecological is None:
-        ecological = _safe_float(summary_obj.get("planned_ecological_area_ha"))
-
-    result: Dict[str, float] = {}
-    if farmland is not None:
-        result["farmland_ha"] = farmland
-    if construction is not None:
-        result["construction_ha"] = construction
-    if ecological is not None:
-        result["ecological_ha"] = ecological
-
-    return result
-
-
-def _extract_intent_targets(summary_obj: Any, dim_key: str) -> Dict[str, float]:
-    """P0-2: 从 L2 结构化摘要中提取规划目标面积，映射到三区中文名。
-
-    优先字段：planned_farmland_ha / planned_construction_ha / planned_ecological_ha
-    Fallback 1：farmland_protection_ha / construction_land_target_ha / planned_ecological_area_ha
-    Fallback 2：L1 约束下限 min_farmland_protection_ha / min_ecological_redline_ha
-
-    Returns: {"农田保护区": float, "村庄建设区": float, "生态保护区": float}
-    全空则返回空 dict（调用方跳过注入）。
-    """
-    if not isinstance(summary_obj, dict):
-        return {}
-
-    def _safe_float(v: Any) -> Optional[float]:
-        if v is None or v == "":
-            return None
-        try:
-            return float(v)
-        except (TypeError, ValueError):
-            return None
-
-    farmland = _safe_float(summary_obj.get("planned_farmland_ha"))
-    construction = _safe_float(summary_obj.get("planned_construction_ha"))
-    ecological = _safe_float(summary_obj.get("planned_ecological_ha"))
-
-    # Fallback 1: L2 目标字段别名
-    if farmland is None:
-        farmland = _safe_float(summary_obj.get("farmland_protection_ha"))
-    if construction is None:
-        construction = _safe_float(summary_obj.get("construction_land_target_ha"))
-    if ecological is None:
-        ecological = _safe_float(summary_obj.get("planned_ecological_area_ha"))
-
-    # Fallback 2: L1 约束下限值（保底）
-    if farmland is None:
-        farmland = _safe_float(summary_obj.get("min_farmland_protection_ha"))
-    if ecological is None:
-        ecological = _safe_float(summary_obj.get("min_ecological_redline_ha"))
-
-    result: Dict[str, float] = {}
-    if farmland is not None:
-        result["农田保护区"] = farmland
-    if construction is not None:
-        result["村庄建设区"] = construction
-    if ecological is not None:
-        result["生态保护区"] = ecological
-
-    return result
-
-
 async def _generate_summary(dim_key: str, dim_layer: int, content: str, rag_log=None) -> str:
     """Generate structured JSON summary for a dimension report (delegates to shared runtime)."""
     return await generate_summary(dim_key, dim_layer, content)
@@ -622,7 +509,7 @@ _NATURAL_VILLAGE_RE = re.compile(r"[\u4e00-\u9fff]{2}")
 def _extract_natural_villages(text: str) -> str:
     """从 L1 报告提取自然村名单（已知 12 村闭集过滤 → 顿号拼接）。
 
-    P8: L3 prompt 的 INSTRUCTION 位置列引导需要已知自然村名枚举，
+    Location extraction for report evidence uses known natural-village names,
     数据源 = L1 socio_economic 报告（"完整名单：田坑、黄竹、园寨…"）。
     """
     try:
@@ -656,10 +543,22 @@ def _build_prompt(cfg, state, rag_context, deps: str = "", same_layer_contexts: 
     dim_name = getattr(cfg, 'name', DIMENSION_NAMES.get(dim_key, dim_key))
 
     project_name = state.get("project_name", "村庄")
-    village_name = state.get("config", {}).get("village_name", project_name)
-    village_data = state.get("config", {}).get("village_data", "")
-    task_desc = state.get("config", {}).get("task_description", "制定村庄发展规划")
-    constraints = state.get("config", {}).get("constraints", "无特殊约束")
+    config = state.get("config", {})
+    input_texts: Dict[str, str] = {}
+    context_village_name = ""
+    try:
+        from app.services.context.planning_context import get_cached_context
+
+        context = get_cached_context(str(state.get("session_id", "")))
+        if context is not None:
+            input_texts = context.input_texts()
+            context_village_name = str(getattr(context, "village_name", "") or "")
+    except Exception:
+        input_texts = {}
+    village_name = context_village_name or config.get("village_name", project_name)
+    village_data = input_texts.get("village_data", "")
+    task_desc = input_texts.get("task_description", "制定村庄发展规划")
+    constraints = input_texts.get("constraints", "无特殊约束")
 
     # Professional data from DataPipeline (tool results formatted for prompt)
 
@@ -712,7 +611,6 @@ def _build_prompt(cfg, state, rag_context, deps: str = "", same_layer_contexts: 
             professional_data=professional_data_section + explore_section,  # 注入工具计算结果 + EXPLORE 证据
         )
     elif layer == 3:
-        # P0-1/P0-2: inject L1 _landuse_metrics + L2 intent_targets for GIS_TOOL_GUIDE
         # P8: L1 自然村名单注入 INSTRUCTION 位置列引导（已知 12 村枚举）
         return get_layer3_prompt(
             dimension_key=dim_key,
@@ -723,8 +621,6 @@ def _build_prompt(cfg, state, rag_context, deps: str = "", same_layer_contexts: 
             knowledge_context=rag_context or "",
             revision_instruction=revision_instruction,
             professional_data_section=professional_data_section + explore_section,
-            _landuse_metrics=state.get("_landuse_metrics", {}),
-            intent_targets=state.get("intent_targets", {}),
             natural_villages=_extract_natural_villages(deps),
         )
 

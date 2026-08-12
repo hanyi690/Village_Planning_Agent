@@ -13,8 +13,8 @@ HTTP (api/) ──> services/ ──> agent/ (LangGraph)
 ```
 
 - **单一职责**：`api/` 路由只做参数校验与响应组装，业务编排全部下沉到本层
-- **单例模式**：大多数服务以模块级单例导出（`sse_manager` / `session_service` / `checkpoint_service` / `planning_runtime_service`）
-- **状态所有权**：LangGraph checkpoint 保存工作流控制态，Artifact Store 保存阶段业务产物，数据库保存会话与可恢复事件；`SSEManager` 仅维护连接、实时队列和有界重连缓存，不是持久状态 SSOT
+- **单例模式**：运行时和会话服务仍有模块级入口；事件在线广播由 `infrastructure/events/event_hub` 拥有
+- **状态所有权**：LangGraph checkpoint 保存工作流控制态，Artifact Store 保存阶段业务产物，`EventRepository` 保存可恢复事件；`EventConnectionHub` 只维护在线队列，不保存历史或关键事件缓存
 
 ---
 
@@ -22,20 +22,20 @@ HTTP (api/) ──> services/ ──> agent/ (LangGraph)
 
 | 模块 | 职责 | 核心入口 |
 |------|------|----------|
-| `sse.py` | SSE 连接订阅、事件发布与有界传输缓存 | `SSEManager.publish` / `subscribe` |
+| `../infrastructure/events/connection_hub.py` | 在线 SSE 连接与事件广播 | `EventConnectionHub.publish` / `subscribe` |
 | `runtime.py` | 统一规划运行时（LangGraph 图执行 + 会话管理） | `PlanningRuntimeService.start_session` / `resume_from_interrupt` |
 | `checkpoint_policy.py` | 纯 checkpoint 稳定性分类与 pending interrupt 提取 | `classify_checkpoint` / `first_pending_interrupt_payload` |
-| `checkpoint.py` | Checkpoint 业务逻辑 + 持久化同步 | `CheckpointService.rebuild_events` / `get_layer_reports` |
+| `checkpoint.py` | Checkpoint 业务逻辑 + 持久化同步 | `CheckpointService.get_layer_reports` |
 | `session.py` | 会话生命周期（创建/删除/层级报告） | `SessionService.create_session` / `delete_session` |
 | `report_store.py` | 维度报告存储（版本化，SQLModel） | `ReportStore.save` / `bulk_save` / `get_layer_reports_with_sources` |
 | `bundle_store.py` | session 级 `VillageBundle` 快照持久化 | `BundleStore.save` / `load_bundle` |
 | `session_bundle.py` | bundle 构建编排 + 进程内缓存 | `build_session_bundle` / `snapshot_session_bundle` |
 | `session_kg.py` | 会话 KG 预建（L1 前注入基础空间认知 + 地块拓扑关系），幂等 | `ensure_session_kg` |
 | `context/` | 会话规划上下文工厂（组装 `PlanningContext` + 注入端口 + 缓存） | `build_planning_context`（见 `context/README.md`） |
-| `step_report.py` | 全链步骤 Report 落库与查询（`step_reports` 表） | `save_step_report` / `get_session_step_reports` |
-| `stage_report.py` | GIS 全管线 stage 报告 → 人类可读 Markdown | `render_stage_report_markdown` |
+| `step_report.py` | 已迁移至 `app/modules/evidence/step_report.py`；services 不再拥有审计状态 | — |
+| `stage_report.py` | 已迁移至 `app/modules/evidence/stage_report.py`；services 不再拥有报告投影 | — |
 | `review_package.py` | 人工审核包磁盘序列化（manifest/summary/trace/decision） | `write` / `read` / `query` review packages |
-| `artifact_store.py` | 管线 artifact 文件存储（原子写 + 路径约束，实现 `ArtifactStorePort`） | `FilesystemArtifactStore` |
+| `../infrastructure/artifacts/repository.py` | CAS blob、descriptor 和 branch named ref | `ContentAddressedArtifactRepository` |
 | `post_l3_resume.py` | post-L3 链 HITL 中断恢复（`Command(resume=...)` + 快照持久化） | `resume_post_l3` |
 
 > ⚠️ **services/modules/ 已移除**（Batch B）：旧 `services/modules/gis/road/` 的道路算法已迁移至 `app/modules/spatial_ops/road/`（staged 道路规划管线，见 `modules/spatial_ops/road/README.md`），不再作为应用服务子包存在。
@@ -46,25 +46,20 @@ HTTP (api/) ──> services/ ──> agent/ (LangGraph)
 
 ## 三、核心服务详述
 
-### 3.1 SSEManager（`sse.py`）
+### 3.1 事件边界（`infrastructure/events/` + `application/queries/run_events.py`）
 
-会话内存状态的 **SSOT**，全部共享类属性 + 锁保护：
-
-- **事件生命周期**：`publish` → 分配全局递增 `seq` → 写 `_seq_buffer`（断线重连同步，容量 50）→ 按 `CACHE_CONFIG` 缓存关键事件 → 分发给订阅队列
-- **订阅同步**：`subscribe()` 按优先级回放 `pending flush → 缓存事件 → 历史事件`（terminal 事件跳过），保证新连接不丢关键状态
-- **Delta 合并**：`DIMENSION_DELTA` 队列溢出时经 `_delta_coalesce_index` 与最近同维 delta 合并，避免队列无界增长
-- **跨线程发布**：`publish_sync` 借助 `save_event_loop` 保存的主事件循环 `run_coroutine_threadsafe` 发布（LLM 回调等同步上下文使用）
-- **执行态**：`_active_executions`（防重复执行）、`_stream_states`（active/paused/completed）、`_status_log_tracker`（抑制日志刷屏）
-- **清理**：`cleanup_expired_sessions`（默认 24h 过期 + 孤儿状态回收）、`delete_session_all_states`
-
-**CACHE_CONFIG 关键事件**：`DIMENSION_START/COMPLETE/ERROR`、`RAG_RESULT/QUERY`、`LAYER_STARTED/COMPLETED`、`RESUMED`、`CASCADE_IMPACT/COMPLETE`、`GIS_RESULT` —— 维度级事件以 `dimension_key` 二次索引。
+- `EventRepository.append/list_after/last_seq` 是事件历史与序号的唯一 owner。
+- `EventConnectionHub` 只注册在线队列、将已持久化事件广播到当前连接，并负责跨线程投递。
+- `RunEventQueryService` 为 REST `events/sync` 和 SSE `Last-Event-ID` replay 提供同一查询路径。
+- 队列溢出不再写 `pending_events` 或关键事件 cache；事件已经持久化，客户端通过 `resync_required`
+  和 `events/sync` 补偿。
 
 ### 3.2 PlanningRuntimeService（`runtime.py`）
 
 统一规划运行时，合并了旧 `GraphRuntimeService` + `PlanningService`：
 
 - **初始化**：`initialize()` 单例获取 `SqliteSaver` checkpointer + `create_unified_planning_graph()`（幂等，`ensure_initialized` 懒初始化）
-- **会话启动**：`start_session()` → 限流检查 → 生成 UUID → `build_initial_state` → 建库 → 初始化 SSE → 后台任务 `_trigger_planning_execution`
+- **会话启动**：`start_session()` → 限流检查 → 生成 UUID → `build_initial_state` → 建库 → 后台任务 `_trigger_planning_execution`
 - **执行守护**：`_execution_locks[session_id]` 防止同会话重复执行；`wait_for_subscriber`（脚本模式 1s 提前返回）
 - **合成意图消息**：无既有 intent 时注入带 `advance_planning_intent` tool_call 的合成 `AIMessage`（`_KNOWN_INTENT_NAMES` 去重）
 - **流式执行**：`_execute_planning` 以 `stream_mode=['values','checkpoints']` 消费图输出，`values` 检测层级/修订完成，`checkpoints` 发 `checkpoint_saved` 事件（修订后清空 `last_revised_dimensions` 防误判）
@@ -74,7 +69,6 @@ HTTP (api/) ──> services/ ──> agent/ (LangGraph)
 
 ### 3.3 CheckpointService（`checkpoint.py`）
 
-- **`rebuild_events`**：从 checkpoint + DB 重建 `layer_completed` / `dimension_complete` / `pause` 事件（SSE 断线重连时 `runtime.subscribe_with_history` 调用）
 - **`CheckpointPersistenceManager`**：`mark_write_complete` / `wait_for_write` 同步写入与读取（Future 跟踪 + 300s TTL 清理）
 - **业务查询**：`get_layer_reports`、`get_completion_status`、`calculate_next_layer`、`get_project_name`
 
@@ -109,20 +103,20 @@ HTTP (api/) ──> services/ ──> agent/ (LangGraph)
 ```
 POST /api/planning/start
   → PlanningRuntimeService.start_session()
-      → 建 DB 会话 + SSE 内存态 + 后台 _trigger_planning_execution
+      → 建 DB 会话 + 后台 _trigger_planning_execution
           → wait_for_subscriber → aupdate_state(as_node="__start__", 合成 intent)
           → graph.astream(values+checkpoints)
               → values: 检测层完成 → checkpoint_saved SSE
               → checkpoints: mark_write_complete
           → 完成后发 completed 事件
-  ← 前端 SSE /stream/{session_id} 订阅（reconnect 走 subscribe_with_history 重建）
+  ← 前端 SSE /api/v1/sessions/{session_id}/events 订阅（reconnect 走 EventRepository replay）
 ```
 
 人工审核（step_mode）路径：
 
 ```
 layer_completion_check interrupt()
-  → session_routes.py /api/sessions/{id}/feedback (approve/reject)
+  → api/v1/routes.py /api/v1/sessions/{id}/human-review (approve/reject)
       → PlanningRuntimeService.resume_from_interrupt(Command(resume={"action": ...}))
       → 恢复节点 → 下一层或修订
   rollback → 目标 checkpoint state 覆盖（不恢复执行）

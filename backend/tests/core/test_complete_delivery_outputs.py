@@ -1,13 +1,11 @@
 import json
 from types import SimpleNamespace
 
-from app.agent.deliver.render_layers import (
-    build_complete_planned_geojson,
-    build_delivery_render_layers,
-)
-from app.modules.spatial_ops.output.export_package import export_gdb_package
+from app.agent.deliver.render_layers import build_delivery_render_layers
+from app.modules.spatial_ops.output.export_package import export_delivery_package
 from app.tools.gis.html_render import render_interactive_map
 from app.tools.gis.static_render import render_map_preview
+from app.modules.spatial_ops.io import build_delivery_spatial_snapshot_from_gis_data
 
 
 def _polygon(x0, y0, x1, y1):
@@ -35,35 +33,7 @@ def _current_landuse():
     }
 
 
-def test_complete_planned_snapshot_merges_changes_and_preserves_unmodified_parcels():
-    allocated = {
-        "type": "FeatureCollection",
-        "features": [
-            _feature(
-                "P001",
-                _polygon(0, 0, 1, 1),
-                DLBM="0101",
-                area_sqm=10000,
-                planning_land_use="0201",
-                zone_type="村庄建设区",
-            ),
-            _feature("synthetic", _polygon(30, 30, 31, 31), area_sqm=999999),
-        ],
-    }
-
-    snapshot = build_complete_planned_geojson(allocated, _current_landuse())
-
-    assert [feature["properties"]["BSM"] for feature in snapshot["features"]] == [
-        "P001",
-        "P002",
-    ]
-    preserved = snapshot["features"][1]["properties"]
-    assert preserved["planning_status"] == "unchanged_preserved"
-    assert preserved["change_status"] == "preserved"
-    assert snapshot["features"][0]["properties"]["planning_status"] == "planned"
-
-
-def test_delivery_layers_include_complete_planned_and_control_aliases():
+def test_delivery_layers_include_complete_planned_and_control_aliases(tmp_path):
     gis_data = {
         "boundary_geojson": {
             "type": "FeatureCollection",
@@ -86,7 +56,12 @@ def test_delivery_layers_include_complete_planned_and_control_aliases():
         },
     }
 
-    layers = build_delivery_render_layers(SimpleNamespace(), {}, gis_data)
+    snapshot = build_delivery_spatial_snapshot_from_gis_data(
+        gis_data,
+        planned_geojson={"type": "FeatureCollection", "features": []},
+        output_dir=tmp_path / "snapshot",
+    )
+    layers = build_delivery_render_layers(snapshot)
     layer_types = {layer.get("layer_type") or layer.get("layerType") for layer in layers}
     planned = next(
         layer
@@ -97,6 +72,9 @@ def test_delivery_layers_include_complete_planned_and_control_aliases():
 
     assert {"current_landuse", "complete_planned_landuse", "boundary", "input_constraint"} <= layer_types
     assert len(planned["geojson"]["features"]) == 2
+    assert planned["layerName"] == "完整期末地类（含未修改地块）"
+    assert planned["style"]["line-color"] == "#475569"
+    assert planned["style"]["fill-opacity"] < 0.25
 
 
 def test_export_uses_the_same_complete_planned_snapshot_for_landuse_and_balance(tmp_path):
@@ -122,10 +100,14 @@ def test_export_uses_the_same_complete_planned_snapshot_for_landuse_and_balance(
         ],
     }
 
-    result = export_gdb_package(
+    snapshot = build_delivery_spatial_snapshot_from_gis_data(
+        gis_data,
+        planned_geojson=_current_landuse(),
+        output_dir=tmp_path / "snapshot",
+    )
+    result = export_delivery_package(
         layout_configs=[],
-        allocated_geojson=allocated,
-        gis_data=gis_data,
+        snapshot=snapshot,
         village_name="test-village",
         output_dir=str(tmp_path),
     )

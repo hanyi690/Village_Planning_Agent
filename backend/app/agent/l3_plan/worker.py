@@ -10,21 +10,19 @@ not reference the L1 analysis node implementation.
 from __future__ import annotations
 
 import asyncio
-import os
+import json
 import re
-import threading
 import time
 import uuid
 from dataclasses import asdict
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 
 from langchain_core.messages import AIMessage
 
 from app.config import get_dimension_config
 from app.core.events import SSEEventType
-from app.core.llm import create_llm
-from app.core.settings import MAX_TOKENS, LLM_STREAM_TIMEOUT
+from app.core.settings import LLM_STREAM_TIMEOUT
 from app.utils.logger import get_logger
 from app.agent.common.dimension_runtime import (
     enrich_summary_background,
@@ -40,29 +38,18 @@ from app.agent.common.dimension_runtime import (
     run_rag,
     save_report_immediate,
     save_step_report,
+    strip_model_reasoning,
 )
 from app.agent.explore.service import retrieve_evidence, render_evidence_prompt_section
 from app.modules.prompts.detailed import get_dimension_prompt as get_layer3_prompt
 from app.modules.schema.contracts.evidence_contracts import ExplorationRequest
+from app.contracts.program import PlanningClaimSet
 from app.services.task_supervisor import build_summary_task_key
 
 logger = get_logger(__name__)
 
 
 # Cached LLM instance — reused across all L3 dimension analyses
-_llm_cache: Optional[Any] = None
-_L3_LLM_SLOTS = threading.BoundedSemaphore(
-    max(1, int(os.getenv("L3_LLM_MAX_CONCURRENT", "3")))
-)
-
-
-def _get_llm():
-    global _llm_cache
-    if _llm_cache is None:
-        _llm_cache = create_llm(temperature=0.7, max_tokens=MAX_TOKENS, streaming=True)
-    return _llm_cache
-
-
 def _build_revision_completed(state: Dict[str, Any], dim_key: str) -> Dict[int, list]:
     """根据 impact_tree 反查维度所属 wave，构建 revision_completed_dims 更新"""
     impact_tree = state.get("revision_impact_tree", {})
@@ -79,8 +66,8 @@ _NATURAL_VILLAGE_RE = re.compile(r"[\u4e00-\u9fff]{2}")
 def _extract_natural_villages(text: str) -> str:
     """从上游 L1 报告提取自然村名单（已知自然村闭集过滤 → 顿号拼接）。
 
-    P8: L3 prompt 的 INSTRUCTION 位置列引导需要已知自然村名枚举，
-    数据源 = L1 socio_economic 报告（"完整名单：田坑、黄竹、园寨…"）。
+    Location hints for L3 claims are restricted to known, resolvable villages;
+    the source is the L1 socio-economic report and the data-layer gazetteer.
     """
     try:
         from app.modules.kg.enrichment.report_entity_enrichment import _KNOWN_NATURAL_VILLAGES
@@ -150,12 +137,12 @@ async def analyze_l3_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
     2. RAG 查询
     3. 加载分层依赖报告（同层 + L1/L2 跨层分开）
     4. EXPLORE 证据注入
-    5. 组装 L3 Prompt（detailed 模板）
-    6. 流式 LLM + SSE
+    5. 组装 L3 claims prompt（detailed 模板）
+    6. Structured LLM output + SSE
     7. 保存版本
     8. 返回状态更新
     """
-    from ...services.sse import sse_manager
+    from app.infrastructure.events import event_hub as sse_manager
     from ...services.report_store import ReportStore
 
     dim_key = state.get("dimension_key")
@@ -222,8 +209,19 @@ async def analyze_l3_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
         logger.warning("[analyze_l3_dimension] %s: EXPLORE evidence failed: %s", dim_key, e)
 
     # 5. 组装 L3 Prompt（detailed 模板）
+    same_layer_prompt = same_layer_contexts
+    if dim_key == "project_bank":
+        from app.domain.program.claim_projection import compact_claim_context
+
+        same_layer_prompt = compact_claim_context(same_layer_contexts)
+        logger.info(
+            "[analyze_l3_dimension] %s: compacted same-layer claims %d -> %d chars",
+            dim_key,
+            len(same_layer_contexts),
+            len(same_layer_prompt),
+        )
     prompt = _build_prompt(
-        cfg, state, rag_context, l1_deps, l2_deps, same_layer_contexts, "", explore_section,
+        cfg, state, rag_context, l1_deps, l2_deps, same_layer_prompt, "", explore_section,
         resolvable_villages=_resolvable_villages(session_id),
     )
     logger.info(f"[analyze_l3_dimension] {dim_key}: Prompt length = {len(prompt)} chars")
@@ -237,7 +235,10 @@ async def analyze_l3_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
         stats.record_rag_time(session_id, dim_key, rag_log.retrieval_latency_ms, rag_log.total_results)
 
     # 6. 流式 LLM + SSE
-    llm = _get_llm()
+    from app.domain.program.claim_draft import normalize_claim_draft_set
+    from app.infrastructure.llm import get_planning_claim_generator
+
+    claim_generator = get_planning_claim_generator()
     if provider_failure_open(session_id):
         return {
             "dimension_retry_counts": dimension_failure_attempt(state, dim_key),
@@ -249,26 +250,13 @@ async def analyze_l3_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
         }
     llm_start_time = time.time()
 
+    claim_set: PlanningClaimSet | None = None
     llm_response = ""
-    _last_publish_time = 0.0
-    _PUBLISH_INTERVAL = 0.1  # 100ms throttle
 
-    await asyncio.to_thread(_L3_LLM_SLOTS.acquire)
     try:
-        try:
-            async with asyncio.timeout(LLM_STREAM_TIMEOUT):
-                async for chunk in llm.astream(prompt):
-                    if hasattr(chunk, 'content') and chunk.content:
-                        llm_response += chunk.content
-                        now = time.time()
-                        if now - _last_publish_time >= _PUBLISH_INTERVAL:
-                            await publish_dimension_delta(
-                                session_id, dim_key, dim_name, dim_layer, is_revision,
-                                chunk.content, llm_response,
-                            )
-                            _last_publish_time = now
-        finally:
-            _L3_LLM_SLOTS.release()
+        async with asyncio.timeout(LLM_STREAM_TIMEOUT):
+            draft_set = await claim_generator.generate(prompt)
+            claim_set = normalize_claim_draft_set(draft_set, dimension_key=dim_key)
     except asyncio.TimeoutError:
         trip_provider_failure(session_id)
         logger.error(f"[analyze_l3_dimension] {dim_key}: LLM stream timeout after {LLM_STREAM_TIMEOUT}s")
@@ -307,13 +295,23 @@ async def analyze_l3_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
             },
         }
 
-    # Flush remaining delta (throttle may have skipped the last chunk)
-    if llm_response and _last_publish_time > 0:
-        await publish_dimension_delta(
-            session_id, dim_key, dim_name, dim_layer, is_revision,
-            "", llm_response,
-        )
-
+    if claim_set is None:
+        raise RuntimeError(f"L3 claim generation returned no result for {dim_key}")
+    claim_set.dimension_key = dim_key
+    claim_set.claims = [
+        claim.model_copy(update={"dimension_key": claim.dimension_key or dim_key})
+        for claim in claim_set.claims
+    ]
+    llm_response = claim_set.model_dump_json(indent=2)
+    await publish_dimension_delta(
+        session_id,
+        dim_key,
+        dim_name,
+        dim_layer,
+        is_revision,
+        llm_response,
+        llm_response,
+    )
     llm_elapsed = time.time() - llm_start_time
     logger.info(f"[analyze_l3_dimension] {dim_key}: LLM completed in {llm_elapsed:.1f}s, output = {len(llm_response)} chars")
 
@@ -330,13 +328,16 @@ async def analyze_l3_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
     # Generate report_id for pending_reports
     report_id = str(uuid.uuid4())
 
-    # 7.5 生成结构化摘要
-    structured_summary_str = generate_summary_regex(dim_key, dim_layer, llm_response)
-    from app.services.composition import CompositionRoot
-
-    CompositionRoot.get_task_supervisor().create_task(
-        build_summary_task_key(session_id, dim_layer, dim_key, next_version),
-        enrich_summary_background(dim_key, dim_layer, llm_response, session_id, next_version),
+    # Claims are already structured; do not spend a second LLM call to
+    # summarize the same authoritative non-executable output.
+    structured_summary_str = json.dumps(
+        {
+            "dimension_key": dim_key,
+            "layer": dim_layer,
+            "claim_count": len(claim_set.claims),
+            "claims_with_evidence": sum(bool(claim.evidence_refs) for claim in claim_set.claims),
+        },
+        ensure_ascii=False,
     )
 
     # 8. 准备 pending report 数据
@@ -377,9 +378,6 @@ async def analyze_l3_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
 
     # L3 维度步骤 Report（供 positioning-trace 面板定位）
     try:
-        from app.services.report_store import split_instruction
-
-        _, instr = split_instruction(llm_response)
         await save_step_report(
             session_id, "L3",
             step_name=f"analyze_l3_dimension:{dim_key}",
@@ -393,13 +391,13 @@ async def analyze_l3_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
                 "dependency_reports_summary": _dependency_summary(l1_deps),
                 "l2_dependency_reports_summary": _dependency_summary(l2_deps),
                 "same_layer_dependency_reports_summary": _dependency_summary(same_layer_contexts),
-                "instruction_removed": True,
+                "claims_only": True,
             },
             outputs={
                 "report_id": report_id,
                 "word_count": len(llm_response),
-                "instruction_len": len(instr),
-                "has_instruction": bool(instr),
+                "claim_count": len(claim_set.claims),
+                "claims_with_evidence": sum(bool(claim.evidence_refs) for claim in claim_set.claims),
             },
             diagnostics={
                 "rag_sources": len(rag_log.sources) if rag_log and rag_log.rag_enabled else 0,
@@ -414,11 +412,6 @@ async def analyze_l3_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
         rev_completed = _build_revision_completed(state, dim_key)
         if rev_completed:
             result["revision_completed_dims"] = rev_completed
-            result["is_revision"] = True
-        # 返回 revision_impact_tree 以确保 fan-in reducer 能保留该值
-        impact_tree = state.get("revision_impact_tree")
-        if impact_tree:
-            result["revision_impact_tree"] = impact_tree
 
     return result
 
@@ -451,7 +444,15 @@ def _build_prompt(
     dim_key = getattr(cfg, 'key', state.get("dimension_key", ""))
 
     project_name = state.get("project_name", "村庄")
-    constraints = state.get("config", {}).get("constraints", "无特殊约束")
+    constraints = "无特殊约束"
+    try:
+        from app.services.context.planning_context import get_cached_context
+
+        context = get_cached_context(str(state.get("session_id", "")))
+        if context is not None:
+            constraints = context.input_text("constraints", constraints)
+    except Exception:
+        pass
 
     # 级联修订指令
     revision_instruction = ""
@@ -478,11 +479,10 @@ def _build_prompt(
         knowledge_context=rag_context or "",
         revision_instruction=revision_instruction,
         professional_data_section=professional_data_section + explore_section,
-        _landuse_metrics=state.get("_landuse_metrics", {}),
-        intent_targets=state.get("intent_targets", {}),
         natural_villages=resolvable_villages or _extract_natural_villages(l1_deps),
         location_evidence=_location_evidence(l1_deps + "\n" + l2_deps),
+        dimension_plans=same_layer_contexts,
     )
 
 
-__all__ = ["analyze_l3_dimension", "_get_llm"]
+__all__ = ["analyze_l3_dimension"]

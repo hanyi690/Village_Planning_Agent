@@ -13,14 +13,21 @@ class ReviewStatus(str, Enum):
     CHANGES_REQUESTED = "changes_requested"
 
 
-class ArtifactRefLite(BaseModel):
-    """Lightweight reference to a stored artifact (no embedded payload)."""
+class ArtifactDescriptorProjection(BaseModel):
+    """Lightweight immutable descriptor copied into a review projection."""
 
-    artifact_id: str
-    module: str
+    digest: str
+    descriptor_digest: str
+    media_type: str = "application/json"
+    size_bytes: int = 0
+    schema_id: str
+    schema_version: str
+    semantic_digest: str
+    parent_digests: dict[str, str] = Field(default_factory=dict)
+    producer_stage: str
     run_id: str
-    artifact_type: str = ""
-    revision: str = ""
+    branch_id: str
+    provenance: dict[str, Any] = Field(default_factory=dict)
 
 
 class ReviewPackage(BaseModel):
@@ -29,7 +36,7 @@ class ReviewPackage(BaseModel):
     run_id: str
     module: str
     summary_md: str = ""
-    artifact_ref: ArtifactRefLite | None = None
+    artifact_ref: ArtifactDescriptorProjection | None = None
     trace_json: dict[str, Any] = Field(default_factory=dict)
     preview_geojson: dict[str, Any] | None = None
     before_after_geojson: dict[str, Any] | None = None

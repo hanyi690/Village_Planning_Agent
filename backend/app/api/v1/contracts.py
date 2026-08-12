@@ -24,6 +24,7 @@ class ResourceLinks(PublicModel):
     delivery: str
     map_layers: str
     human_review: str
+    resume: str
 
 
 class SessionProjection(PublicModel):
@@ -89,6 +90,27 @@ class HumanReviewDecision(PublicModel):
     event_id: str
     action: Literal['retry', 'approve', 'reject']
     decisions: dict[str, Any] = Field(default_factory=dict)
+
+
+class ResumeRequest(PublicModel):
+    """Explicit cursor command for active interrupts or checkpoint forks."""
+
+    mode: Literal['interrupt', 'checkpoint']
+    event_id: str | None = None
+    action: Literal['retry', 'approve', 'reject'] | None = None
+    feedback: str = ''
+    checkpoint_id: str | None = None
+    replay_from_stage: str | None = None
+
+
+class ResumeAccepted(PublicModel):
+    schema_version: Literal['1.0'] = '1.0'
+    session_id: str
+    mode: Literal['interrupt', 'checkpoint']
+    status: Literal['resumed', 'accepted']
+    checkpoint_id: str = ''
+    branch_id: str = ''
+    resume_plan: dict[str, Any] = Field(default_factory=dict)
 
 
 class ApiError(PublicModel):
@@ -160,5 +182,5 @@ class EventSyncResponse(PublicModel):
 __all__ = [
     'ApiError', 'DeliveryProjection', 'EventSyncResponse', 'HumanReviewDecision',
     'HumanReviewProjection', 'MapLayer', 'MapLayerCollection', 'PublicEvent',
-    'ResourceLinks', 'SessionCreated', 'SessionProjection',
+    'ResourceLinks', 'ResumeAccepted', 'ResumeRequest', 'SessionCreated', 'SessionProjection',
 ]

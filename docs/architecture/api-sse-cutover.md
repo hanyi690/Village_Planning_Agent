@@ -12,7 +12,7 @@
 | 人工审核 | `GET/POST /api/v1/sessions/{id}/human-review` | `/api/human-review/{id}[/resolve]` |
 | 地图 | `GET /api/v1/sessions/{id}/map-layers` | `GET /api/sessions/{id}/render-layers` |
 | 交付 | `GET /api/v1/sessions/{id}/delivery` | 直接读取 DeliveryManifest artifact |
-| Artifact | 不公开；使用聚合资源 | `/api/sessions/{id}/artifacts/**` |
+| Artifact | 当前 checkpoint 的显式 descriptor | `/api/v1/sessions/{id}/artifacts/{artifact_key}` |
 
 报告、反馈、检查点、规划文本、GIS 上传和文件导出尚无 v1 替代，本次继续作为
 业务命令端点存在。

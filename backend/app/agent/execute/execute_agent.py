@@ -2,7 +2,7 @@
 
 Migrated from agent/gis/execute/agent.py per docs/architecture/agent-graph.md §5.
 
-Consumes PARSE intent + SELECT SiteSelectionDecision, compiles them into a
+Consumes target projection + SELECT SiteSelectionDecision, compiles them into a
 complete PlannedState via the multi-worker subgraph (Wave O):
 
     route_tasks -> prepare_inputs -> project_worker -> zone_worker
@@ -11,14 +11,10 @@ complete PlannedState via the multi-worker subgraph (Wave O):
       -> planned_state_builder -> execution_review
 
 This module is now the graph builder only. The 11 node functions live in
-``app.agent.execute.nodes`` (one module per responsibility) and the legacy layer
-helpers live in ``app.agent.execute.legacy.layer_helpers``. This module re-exports
-the node functions and helpers so existing imports keep working unchanged.
+``app.agent.execute.nodes`` (one module per responsibility); worker outputs
+cross the boundary through typed contracts.
 
-P1 wiring: nodes call the underlying generation helpers directly
-(generate._generate_*, validate_aggregate) rather than the @tool wrappers,
-bypassing InjectedState. This couples execute/ to tools/gis private helpers;
-P2 should promote them to a public generation API.
+Nodes call domain services directly rather than LangChain tool wrappers.
 """
 
 from __future__ import annotations

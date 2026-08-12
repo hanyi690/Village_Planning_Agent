@@ -19,7 +19,9 @@ def _axis_worker(state: ExecuteAgentState) -> WorkerResult:
     if not _task_enabled(state, "axis"):
         return WorkerResult(worker_type="axis")
 
-    gis_data = state.gis_data or {}
+    from app.modules.spatial_ops.io import canonical_gis_data_from_workspace
+
+    gis_data = canonical_gis_data_from_workspace(state.spatial_workspace)
     bound_intent = _execution_intent_from_plan(state)
     axes = _intent_list(bound_intent, "development_axes") or _intent_list(bound_intent, "axes")
     if not axes:

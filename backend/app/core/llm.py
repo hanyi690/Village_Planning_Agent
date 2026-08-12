@@ -114,7 +114,7 @@ def _create_openai_llm(
     from app.core.settings import OPENAI_API_BASE, LLM_REQUEST_TIMEOUT
     if OPENAI_API_BASE:
         kwargs['base_url'] = OPENAI_API_BASE
-    kwargs['request_timeout'] = LLM_REQUEST_TIMEOUT
+    kwargs.setdefault('request_timeout', LLM_REQUEST_TIMEOUT)
     kwargs.setdefault('max_retries', max(0, int(os.getenv('LLM_PROVIDER_MAX_RETRIES', '1'))))
 
     all_callbacks = _merge_callbacks(callbacks)
@@ -189,7 +189,7 @@ def _create_zhipuai_llm(
     api_key = get_api_key(LLMProvider.ZHIPUAI)
 
     from app.core.settings import LLM_REQUEST_TIMEOUT
-    kwargs['request_timeout'] = LLM_REQUEST_TIMEOUT
+    kwargs.setdefault('request_timeout', LLM_REQUEST_TIMEOUT)
 
     all_callbacks = _merge_callbacks(callbacks)
     if all_callbacks:
@@ -232,7 +232,7 @@ def _create_minimax_llm(
     api_key = get_api_key(LLMProvider.MINIMAX)
     effective_temperature = min(1.0, max(0.01, float(temperature)))
     kwargs["base_url"] = MINIMAX_API_BASE
-    kwargs["request_timeout"] = LLM_REQUEST_TIMEOUT
+    kwargs.setdefault("request_timeout", LLM_REQUEST_TIMEOUT)
     kwargs.setdefault("max_retries", max(0, int(os.getenv("LLM_PROVIDER_MAX_RETRIES", "1"))))
 
     all_callbacks = _merge_callbacks(callbacks)

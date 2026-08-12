@@ -17,7 +17,7 @@ async def _route_tasks_node(state: ExecuteAgentState) -> dict:
     """Determine which execution sub-tasks to run based on intent.
 
     Layout is the core allocation task. Facility, axis, and road tasks are
-    routed only when the typed or legacy intent declares corresponding targets.
+    routed only when the execution plan declares corresponding targets.
     """
     import os
 
@@ -113,7 +113,10 @@ async def _prepare_inputs_node(state: ExecuteAgentState) -> dict:
     applies any constraint_adjustments to the zone targets (legacy retry-loop
     shape) so the workers consume consistent inputs.
     """
-    parcel_by_bsm = _build_parcel_by_bsm(state)
+    # Action-only plans do not have a spatial parcel input.  Do not require a
+    # GIS bundle for a non-spatial execution branch; spatial workers validate
+    # the bundle when they are actually routed.
+    parcel_by_bsm = _build_parcel_by_bsm(state) if state.spatial_workspace is not None else {}
     zone_targets = _intent_list(_execution_intent_from_plan(state), "zone_targets")
     applied = _apply_constraint_adjustments(
         zone_targets, list(state.constraint_adjustments or [])

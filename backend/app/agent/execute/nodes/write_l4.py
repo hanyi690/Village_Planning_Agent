@@ -42,10 +42,11 @@ async def _write_l4_node(state: ExecuteAgentState) -> dict:
     planned_state = None
     if getattr(state, "parcel_changeset", None) is not None:
         from app.agent.execute.planned_state_builder import changeset_to_planned_state
+        from app.agent.execute.nodes.worker_common import _execution_intent_from_plan
 
         planned_state = changeset_to_planned_state(
             state.parcel_changeset,
-            state.intent,
+            _execution_intent_from_plan(state),
             list(state.layout_configs or []),
         )
         logger.info(
@@ -59,7 +60,7 @@ async def _write_l4_node(state: ExecuteAgentState) -> dict:
         logger.warning("[EXECUTE:l4_write] no parcel_changeset/planned_state; skipping L4 write")
         return {}
 
-    outcome = getattr(state, "execution_outcome", None)
+    outcome = getattr(state, "execution_result", None)
     outcome_targets = {
         (str(getattr(item, "target_id", "")), str(getattr(item, "expected_output_kind", "")))
         for item in (getattr(outcome, "task_results", None) or [])
@@ -73,7 +74,7 @@ async def _write_l4_node(state: ExecuteAgentState) -> dict:
     if planned_targets and not planned_targets <= outcome_targets:
         missing = sorted(planned_targets - outcome_targets)
         logger.warning("[EXECUTE:l4_write] execution outcome missing planned targets: %s", missing)
-        return {"l4_write_error": "execution_outcome_target_coverage", "missing_targets": missing}
+        return {"l4_write_error": "execution_result_target_coverage", "missing_targets": missing}
 
     written = sum(
         len(items)
@@ -92,5 +93,5 @@ async def _write_l4_node(state: ExecuteAgentState) -> dict:
 
     return {
         "l4_written": written,
-        "execution_outcome_target_ids": sorted({target_id for target_id, _ in outcome_targets}),
+        "execution_result_target_ids": sorted({target_id for target_id, _ in outcome_targets}),
     }

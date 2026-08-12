@@ -8,10 +8,10 @@ from __future__ import annotations
 
 from typing import Any
 
-from app.modules.ports.artifact_store import ArtifactRef
+from app.modules.schema.contracts.artifact_descriptor import ArtifactDescriptor
 from app.modules.schema.contracts.l3_contracts import PlanningProgram
 from app.modules.schema.contracts.review_contracts import (
-    ArtifactRefLite,
+    ArtifactDescriptorProjection,
     ReviewPackage,
     ReviewStatus,
 )
@@ -83,7 +83,7 @@ def build_trace_json(
         ],
         "dimension_reports": dimension_reports_meta or {},
         "extraction_steps": [
-            "compile_l3_planning (per dimension)",
+            "PlanningClaimSet (per dimension)",
             "merge_l3_fragments",
             "evaluate_l3_gate",
         ],
@@ -103,7 +103,7 @@ def build_preview_geojson(program: PlanningProgram) -> dict[str, Any]:
 
 def build_l3_review_package(
     program: PlanningProgram,
-    artifact_ref: ArtifactRef,
+    artifact_ref: ArtifactDescriptor,
     gate_decision: GateDecision,
     run_id: str,
 ) -> ReviewPackage:
@@ -111,13 +111,7 @@ def build_l3_review_package(
         run_id=run_id,
         module="l3_plan",
         summary_md=build_summary_md(program, gate_decision),
-        artifact_ref=ArtifactRefLite(
-            artifact_id=artifact_ref.artifact_id,
-            module=artifact_ref.module,
-            run_id=artifact_ref.run_id,
-            artifact_type=artifact_ref.artifact_type,
-            revision=artifact_ref.revision,
-        ),
+        artifact_ref=ArtifactDescriptorProjection.model_validate(artifact_ref.model_dump()),
         trace_json=build_trace_json(program),
         preview_geojson=build_preview_geojson(program),
         status=ReviewStatus.AWAITING_REVIEW,

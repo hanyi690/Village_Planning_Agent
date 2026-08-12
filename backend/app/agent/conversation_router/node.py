@@ -68,14 +68,22 @@ def _build_prompt(state: Dict[str, Any]) -> Any:
 
     phase = state.get("phase", PlanningPhase.INIT.value)
     config = state.get("config", {})
+    input_texts = {}
+    try:
+        from app.services.context.planning_context import get_cached_context
+
+        context = get_cached_context(str(state.get("session_id", "")))
+        input_texts = context.input_texts() if context is not None else {}
+    except Exception:
+        input_texts = {}
     return ChatPromptTemplate.from_messages([
         ("system", SYSTEM_TEMPLATE),
         MessagesPlaceholder("messages"),
     ]).partial(
         project_name=state.get("project_name", ""),
         phase_desc=PHASE_DESCRIPTIONS.get(phase, "未知"),
-        task_desc=config.get("task_description", "制定村庄发展规划"),
-        constraints=config.get("constraints", "无特殊约束"),
+        task_desc=input_texts.get("task_description", "制定村庄发展规划"),
+        constraints=input_texts.get("constraints", "无特殊约束"),
     )
 
 

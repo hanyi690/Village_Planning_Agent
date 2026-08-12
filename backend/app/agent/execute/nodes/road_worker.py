@@ -116,7 +116,7 @@ def _road_worker(state: ExecuteAgentState) -> WorkerResult:
             execute_road_planning_from_agent_state,
         )
 
-        result = execute_road_planning_from_agent_state(state.model_copy(update={"intent": intent}))
+        result = execute_road_planning_from_agent_state(state)
         layers = result.get("layout_layers") or []
         formal_road_layers = [
             layer

@@ -77,6 +77,24 @@ def test_interrupt_id_is_stable_for_equivalent_item_ordering():
     assert first == second
 
 
+def test_interrupt_id_changes_when_human_checkpoint_generation_changes():
+    first = stable_human_interrupt_id(
+        "session-1",
+        HumanInterruptChannel.POST_L3_REVIEW,
+        paused_stage="validate",
+        items=[{"request_id": "a", "stage": "validate", "request_type": "gate_review"}],
+        generation=0,
+    )
+    second = stable_human_interrupt_id(
+        "session-1",
+        HumanInterruptChannel.POST_L3_REVIEW,
+        paused_stage="validate",
+        items=[{"request_id": "a", "stage": "validate", "request_type": "gate_review"}],
+        generation=1,
+    )
+    assert first != second
+
+
 def test_ui_projection_exposes_canonical_interrupt_for_post_l3_pause():
     result = state_to_ui_status(
         {

@@ -5,14 +5,8 @@ from __future__ import annotations
 from typing import Any, Dict, List
 
 from app.agent.execute.execute_state import ExecuteAgentState
-from app.agent.execute.legacy.layer_helpers import (
-    _allocated_geojson_from_changes,
-    _build_custom_planning_layer,
-    _function_zone_layer,
-)
 from app.agent.execute.nodes.common import _execution_error
 from app.agent.execute.nodes.worker_common import (
-    _build_landuse_geojson,
     _execution_intent_from_plan,
     _intent_list,
     _resolve_parcel_by_bsm,
@@ -24,6 +18,47 @@ from app.modules.schema.contracts.parcel_change_contracts import ParcelChange
 from app.utils.logger import get_logger
 
 logger = get_logger(__name__)
+
+
+def _function_zone_layer(zone_changes: list[ParcelChange]) -> dict | None:
+    """Build the diagnostic function-zone overlay from typed changes."""
+    from shapely import wkt
+    from shapely.geometry import mapping
+
+    features = []
+    for change in zone_changes:
+        if getattr(change, "action", "") != "reclassify":
+            continue
+        after_wkt = getattr(change, "after_geometry_wkt", "") or ""
+        if not after_wkt:
+            continue
+        try:
+            geometry = wkt.loads(after_wkt)
+        except Exception:
+            continue
+        if geometry.is_empty:
+            continue
+        classification = getattr(change, "after_classification", None)
+        bsm = str(getattr(change, "bsm", ""))
+        features.append({
+            "type": "Feature",
+            "properties": {
+                "bsm": bsm,
+                "planning_land_use": str(getattr(classification, "code", "") or ""),
+                "zone_type": str(getattr(classification, "canonical_name", "") or ""),
+                "action": getattr(change, "action", ""),
+                "source_bsm": bsm,
+                "area_ha": round(float(getattr(change, "new_area_ha", 0) or 0), 2),
+            },
+            "geometry": mapping(geometry),
+        })
+    if not features:
+        return None
+    return {
+        "layerType": "function_zone",
+        "layerName": "功能分区",
+        "data": {"type": "FeatureCollection", "features": features},
+    }
 
 
 def _resolve_zone_allocator(state: ExecuteAgentState) -> Any:
@@ -157,7 +192,6 @@ def _zone_worker(state: ExecuteAgentState) -> WorkerResult:
     if not _task_enabled(state, "layout"):
         return WorkerResult(worker_type="zone")
 
-    landuse = _build_landuse_geojson(state)
     bound_intent = _execution_intent_from_plan(state)
     zone_targets = _intent_list(bound_intent, "zone_targets")
     custom_targets = _intent_list(bound_intent, "custom_zone_targets")
@@ -220,17 +254,18 @@ def _zone_worker(state: ExecuteAgentState) -> WorkerResult:
         layers.append(func_layer)
 
     if custom_targets:
-        try:
-            custom_layer = _build_custom_planning_layer(state, landuse, custom_targets)
-            if custom_layer:
-                layers.append(custom_layer)
-                diagnostics.append({
-                    "code": "custom_zone_built",
-                    "features": len((custom_layer.get("data") or {}).get("features") or []),
-                })
-        except Exception as e:
-            logger.error("[EXECUTE:zone] custom zoning failed: %s", e, exc_info=True)
-            diagnostics.append({"code": "custom_zoning_failed", "message": str(e)})
+        unresolved.extend({
+            "code": "classification_unresolved",
+            "target_id": str(getattr(target, "target_id", "") or ""),
+            "message": (
+                "Custom zone targets require an explicit ClassificationDecision; "
+                "EXECUTE does not derive planning classes from vocabulary text."
+            ),
+        } for target in custom_targets)
+        diagnostics.append({
+            "code": "custom_zone_deferred",
+            "count": len(custom_targets),
+        })
 
     return WorkerResult(
         worker_type="zone",
@@ -265,18 +300,13 @@ async def _zone_worker_node(state: ExecuteAgentState) -> dict:
             state, "layout", "missing_zone_targets",
             "No explicit planning zone targets were derived from the reports.",
         )["execution_errors"]
-    landuse = _build_landuse_geojson(state)
-    if landuse.get("features"):
+    if result.parcel_changes:
         zone_changes = list(result.parcel_changes)
-        update["allocated_geojson"] = _allocated_geojson_from_changes(landuse, zone_changes)
         update["allocation_summary"] = {
             "mode": "deterministic",
             "allocated_count": len(zone_changes),
             "zone_target_count": len(_intent_list(_execution_intent_from_plan(state), "zone_targets")),
             "adjustments_applied": len(list(state.constraint_adjustments or [])),
-            "custom_zone_count": sum(
-                1 for layer in result.layers
-                if (layer.get("layerType") or layer.get("layer_type")) == "custom_planning_zone"
-            ),
+            "custom_zone_count": 0,
         }
     return update

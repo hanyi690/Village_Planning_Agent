@@ -47,11 +47,22 @@ def test_stable_api_does_not_import_agent_business_models_or_renderers() -> None
     assert imports.isdisjoint(forbidden)
 
 
+def test_state_and_human_read_routes_use_application_projection() -> None:
+    source = (ROOT / 'api/v1/routes.py').read_text(encoding='utf-8')
+    assert 'app.application.queries.workflow_state' in source
+    state_section = source[source.index("@router.get('/sessions/{session_id}/state'"):]
+    state_section = state_section[:state_section.index("@router.get('/sessions/{session_id}/delivery'")]
+    assert 'load_workflow_state(session_id)' in state_section
+    assert 'aget_state_values(session_id)' not in state_section
+
+
 def test_map_projection_names_delivery_snapshot_as_its_only_spatial_artifact() -> None:
     source = (ROOT / 'api/v1/routes.py').read_text(encoding='utf-8')
     map_section = source[source.index("@router.get('/sessions/{session_id}/map-layers'"):]
     map_section = map_section[:map_section.index("@router.get('/sessions/{session_id}/human-review'")]
-    assert "'DeliverySpatialSnapshot'" in map_section
+    delivery_projection = (ROOT / 'application' / 'projections' / 'delivery.py').read_text(encoding='utf-8')
+    assert "delivery_spatial_snapshot" in delivery_projection
+    assert "delivery_projections.map_layers" in map_section
     assert "'PlannedState'" not in map_section
     assert 'allocated_geojson' not in map_section
     assert 'gis_data' not in map_section
@@ -80,3 +91,79 @@ def test_parent_agent_state_no_longer_duplicates_stage_payloads() -> None:
         'export_result', 'render_artifacts', 'execution_errors',
         'l4_write_result', 'execution_outcome_target_coverage',
     })
+
+
+def test_gis_tools_receive_bundle_refs_not_raw_gis_state() -> None:
+    tool_sources = "\n".join(
+        path.read_text(encoding="utf-8")
+        for path in (ROOT / "tools" / "gis").rglob("*.py")
+    )
+    assert 'InjectedState("gis_data")' not in tool_sources
+
+
+def test_legacy_agent_gis_layout_tools_are_removed() -> None:
+    assert not (ROOT / "tools" / "gis" / "render.py").exists()
+    assert not (ROOT / "tools" / "gis" / "validate.py").exists()
+    source = (ROOT / "tools" / "gis" / "__init__.py").read_text(encoding="utf-8")
+    assert "layout_configs" not in source
+
+
+def test_delivery_stage_is_not_embedded_in_main_nodes() -> None:
+    delivery_stage = (ROOT / "workflow" / "stages" / "deliver.py").read_text(encoding="utf-8")
+    assert "async def deliver_node" in delivery_stage
+    assert not (ROOT / "workflow" / "stages" / "main_nodes.py").exists()
+    assert "stages.main_nodes" not in delivery_stage
+
+
+def test_root_graph_does_not_depend_on_stage_private_helpers() -> None:
+    source = (ROOT / "workflow" / "root_graph.py").read_text(encoding="utf-8")
+    assert "main_nodes._" not in source
+    assert "stages.main_nodes" not in source
+    assert "app.application.interrupts" in source
+
+
+def test_stage_routing_policy_lives_in_stage_support() -> None:
+    support = (ROOT / "workflow" / "stages" / "support.py").read_text(encoding="utf-8")
+    assert "STAGE_FORWARD_TARGET" in support
+    assert "GATE_CHANNELS" in support
+
+
+def test_step_reports_are_owned_by_evidence_module() -> None:
+    production_sources = "\n".join(
+        path.read_text(encoding="utf-8")
+        for path in ROOT.rglob("*.py")
+    )
+    assert "app.services.step_report" not in production_sources
+    assert "app.services.stage_report" not in production_sources
+    assert (ROOT / "modules" / "evidence" / "step_report.py").exists()
+    assert (ROOT / "modules" / "evidence" / "stage_report.py").exists()
+
+
+def test_projection_and_ground_are_independent_stage_services() -> None:
+    projection = (ROOT / "workflow" / "stages" / "target_projection.py").read_text(encoding="utf-8")
+    ground = (ROOT / "workflow" / "stages" / "ground.py").read_text(encoding="utf-8")
+    assert "async def target_projection_node" in projection
+    assert "async def ground_node" in ground
+    assert "main_nodes" not in projection
+    assert "main_nodes" not in ground
+
+
+def test_select_is_an_independent_stage_service() -> None:
+    select = (ROOT / "workflow" / "stages" / "select.py").read_text(encoding="utf-8")
+    assert "async def select_node" in select
+    assert "main_nodes" not in select
+
+
+def test_execute_is_an_independent_stage_service() -> None:
+    execute = (ROOT / "workflow" / "stages" / "execute.py").read_text(encoding="utf-8")
+    assert "async def execute_node" in execute
+    assert "main_nodes" not in execute
+
+
+def test_validation_and_reconciliation_are_independent_stage_services() -> None:
+    validate = (ROOT / "workflow" / "stages" / "validate.py").read_text(encoding="utf-8")
+    reconcile = (ROOT / "workflow" / "stages" / "reconcile.py").read_text(encoding="utf-8")
+    assert "async def validate_node" in validate
+    assert "async def reconcile_node" in reconcile
+    assert "main_nodes" not in validate
+    assert "main_nodes" not in reconcile

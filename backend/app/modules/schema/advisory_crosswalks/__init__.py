@@ -9,7 +9,6 @@ The underlying YAML data lives in ``advisory_crosswalks/yaml/`` and is scanned b
 """
 
 from .crosswalks import *  # noqa: F401,F403
-from .legacy import legacy_enabled, require_legacy, LegacyBlocked, legacy_marker
 
 __all__ = [
     # Dicts
@@ -37,6 +36,4 @@ __all__ = [
     "get_ghytbm_for_dlbm", "get_ghytbm_conversion_info",
     "normalize_landuse",
     "get_planning_zone_from_landuse",
-    # Legacy gate (Wave A.1 fail-closed)
-    "legacy_enabled", "require_legacy", "LegacyBlocked", "legacy_marker",
 ]

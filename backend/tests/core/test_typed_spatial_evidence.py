@@ -57,7 +57,7 @@ def test_place_evidence_index_assigns_facility_role_from_gazetteer():
         session_id="s1", version=1, kg_version=1,
         gazetteer=gazetteer, location_facts=[], bundle=None, kg=None,
     )
-    context.bundle_parcels = lambda: []
+    context.current_parcels = lambda: []
     index = PlaceEvidenceIndex.build(context)
 
     entry = _entry_by_name(index, "村委会")
@@ -101,7 +101,7 @@ def test_gazetteer_l1_instruction_anchor_uses_uri_kind():
         session_id="s1", version=1, kg_version=1,
         gazetteer=gazetteer, location_facts=[], bundle=None, kg=None,
     )
-    context.bundle_parcels = lambda: []
+    context.current_parcels = lambda: []
     index = PlaceEvidenceIndex.build(context)
 
     assert _entry_by_name(index, "停车场@园寨").role == "facility"

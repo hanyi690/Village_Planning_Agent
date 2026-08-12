@@ -47,7 +47,7 @@ def build_candidate_site(
     parcels_by_bsm = {}
     if context is not None:
         try:
-            parcels = context.bundle_parcels()
+            parcels = context.current_parcels()
             parcels_by_bsm = {
                 str(getattr(parcel, "bsm", "") or (parcel.get("bsm", "") if isinstance(parcel, dict) else "")): parcel
                 for parcel in parcels
@@ -202,28 +202,28 @@ async def retrieve_evidence(
         if context is None:
             return rows
 
-        bundle = getattr(context, "bundle", None)
-        if bundle is not None:
-            polygons = getattr(bundle, "polygons", None)
-            if isinstance(polygons, dict):
+        workspace = getattr(context, "workspace", None)
+        if workspace is not None:
+            polygons = getattr(workspace, "polygons", None)
+            if polygons is not None:
                 rows.append(
                     SpatialQueryEvidence(
                         query_type="bundle:layer_counts",
                         query_params={"layers": sorted(str(k) for k in polygons.keys())},
-                        result_count=len(polygons),
+                        result_count=len(polygons.keys()),
                         result_refs=[str(k) for k in polygons.keys()],
                     )
                 )
 
         parcels = None
-        if bundle is not None and hasattr(bundle, "bundle_parcels"):
+        if workspace is not None and hasattr(workspace, "current_parcels"):
             try:
-                parcels = list(bundle.bundle_parcels())
+                parcels = list(workspace.current_parcels())
             except Exception:
                 parcels = None
-        if parcels is None and hasattr(context, "bundle_parcels"):
+        if parcels is None and hasattr(context, "current_parcels"):
             try:
-                parcels = list(context.bundle_parcels())
+                parcels = list(context.current_parcels())
             except Exception:
                 parcels = None
         if parcels:

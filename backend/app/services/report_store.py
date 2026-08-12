@@ -29,8 +29,9 @@ _INSTRUCTION_MARKER = "【INSTRUCTION】"
 def split_instruction(content: str) -> tuple:
     """Split report content into (display_content, instruction_section).
 
-    P8: L1/L3 报告文末携带【INSTRUCTION】固定列 markdown 表格段（LLM 生成，
-    供 PARSE 结构化消费）。展示文本与指令段分离存储：
+    L1/L2 report projections may carry a legacy 【INSTRUCTION】 markdown
+    section for their own evidence projection. L3 never uses this field.
+    展示文本与指令段分离存储：
       - display_content: 标记行之前的所有内容（含标记行前导空行清理）
       - instruction_section: 标记行起的全部（含标记行，PARSE 据此定位）
     无标记时原样返回 (content, "")。
@@ -115,7 +116,7 @@ class ReportStore:
             report_id: UUID for retrieving the report
         """
         report_id = str(uuid.uuid4())
-        # P8: 文末 INSTRUCTION 段剥离存储（content 保持展示文本）
+        # L1/L2 report projection: keep any legacy instruction section separate.
         display_content, instruction = split_instruction(content)
         summary = await self._generate_summary(display_content, dim_key, layer)
 
@@ -650,8 +651,11 @@ class ReportStore:
             for r in reports:
                 if r.dimension_key not in seen_dims:
                     result_dict[r.dimension_key] = {
+                        "version": r.version,
+                        "report_id": r.report_id,
                         "content": r.content,
                         "instruction": r.instruction,
+                        "summary": r.summary,
                         "knowledge_sources": r.knowledge_sources or [],
                     }
                     seen_dims.add(r.dimension_key)

@@ -57,6 +57,7 @@ def _project_worker(state: ExecuteAgentState) -> WorkerResult:
         if getattr(brief, "project_ref", "")
     }
     features = []
+    point_features = []
     changes: List[ParcelChange] = []
     completed_target_ids = set()
     action_results = [
@@ -73,10 +74,29 @@ def _project_worker(state: ExecuteAgentState) -> WorkerResult:
         project = projects_by_target.get(target_id)
         if project is None or not getattr(project, "requires_spatial", True):
             continue
-        if getattr(project, "expected_output_kind", "") == "action":
-            continue
         parcel = parcel_by_bsm.get(str(bsm))
         if parcel is None or not _parcel_geometry(parcel):
+            continue
+        if getattr(project, "expected_output_kind", "") == "point":
+            try:
+                from shapely.geometry import mapping, shape
+
+                point = mapping(shape(_parcel_geometry(parcel)).representative_point())
+            except Exception:
+                continue
+            point_features.append({
+                "type": "Feature",
+                "properties": {
+                    "target_id": target_id,
+                    "project_ref": target_id,
+                    "project_name": getattr(project, "name", ""),
+                    "marker_size": "small",
+                },
+                "geometry": point,
+            })
+            completed_target_ids.add(target_id)
+            continue
+        if getattr(project, "expected_output_kind", "") == "action":
             continue
         brief = briefs_by_target.get(target_id)
         if brief is None:
@@ -115,8 +135,14 @@ def _project_worker(state: ExecuteAgentState) -> WorkerResult:
             "layerName": "规划项目",
             "data": {"type": "FeatureCollection", "features": features},
         })
+    if point_features:
+        layers.append({
+            "layerType": "planned_project_point",
+            "layerName": "规划项目定位点",
+            "data": {"type": "FeatureCollection", "features": point_features},
+        })
     unresolved = []
-    if projects_by_target and not features and not action_results:
+    if projects_by_target and not features and not point_features and not action_results:
         unresolved.append({
             "code": "project_output_empty",
             "message": "Project targets exist but none could be placed on a constraint-safe candidate parcel.",

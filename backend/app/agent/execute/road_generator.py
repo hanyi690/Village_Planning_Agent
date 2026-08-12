@@ -169,7 +169,7 @@ def _road_targets_to_stage2(
             target.get("target_id")
             or target.get("source_project_id")
             or target.get("source_instruction_id")
-            or f"RP-PARSE-{index:04d}"
+            or f"RP-TARGET-{index:04d}"
         )
         connects = [str(item) for item in target.get("connects") or [] if str(item or "").strip()]
         path_bsms = [str(item) for item in target.get("path_bsms") or [] if str(item or "").strip()]
@@ -328,22 +328,25 @@ def _layer_config(layer_type: str, data: Dict[str, Any], color: str, visible: bo
 
 
 def execute_road_planning_from_agent_state(state: Any) -> Dict[str, Any]:
-    """Execute the road sub-task from typed PARSE/KG/Data state."""
+    """Execute the road sub-task from the typed execution plan and workspace."""
 
-    road_targets = _intent_road_targets(getattr(state, "intent", None))
+    from app.agent.execute.nodes.worker_common import _execution_intent_from_plan
+
+    road_targets = _intent_road_targets(_execution_intent_from_plan(state))
     if not road_targets:
         return {
             "ran": False,
-            "reason": "No PARSE road_targets were produced; road sub-task skipped.",
+            "reason": "No road targets were produced by the execution plan; road sub-task skipped.",
             "layout_layers": [],
         }
 
-    gis_data = dict(getattr(state, "gis_data", None) or {})
-    bundle = getattr(state, "gis_bundle", None)
-    if bundle is not None and hasattr(bundle, "to_geojson_dict"):
-        merged = bundle.to_geojson_dict()
-        merged.update(gis_data)
-        gis_data = merged
+    bundle = getattr(state, "spatial_workspace", None)
+    if bundle is not None:
+        from app.modules.spatial_ops.io import canonical_gis_data_from_workspace
+
+        gis_data = canonical_gis_data_from_workspace(bundle)
+    else:
+        raise ValueError("EXECUTE road worker requires spatial_workspace")
 
     output_root = (
         _project_root()

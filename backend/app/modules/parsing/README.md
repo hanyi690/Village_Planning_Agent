@@ -1,6 +1,6 @@
 # Parsing 模块 — 确定性 + LLM 文本提取工具层
 
-> **定位**: 规划文本/表格/报告的结构化提取工具集，被 PARSE Agent、`report_store`、KG enrichment 与 `data/catalog` 消费
+> **定位**: 规划文本/表格/报告的结构化提取工具集，被 L1/L2 report projection、`report_store`、KG enrichment 与 `data/catalog` 消费
 > **依赖**: `parsing → schema.contracts`；`app.core.settings`；`app.utils.logger`；`app.modules.data.providers.tianditu`（gazetteer 惰性导入）；`app.modules.schema.encodings.code_sets`（table_schema_inference）
 > **空间计算禁令**: 本模块不做任何空间计算（BBox / 距离 / 面积 / 过滤），所有空间计算由 `spatial_ops/` 完成
 > **Updated: 2026-08-03**
@@ -19,7 +19,7 @@ parsing 是"文本 -> 结构化"的**工具层**，不含 Agent 编排逻辑。�
 | **管理数据** | 2024 全国 5 级行政区划加载 | `admin_code_loader` | zero LLM |
 | **输出 schema** | Pydantic 类型化输出模型 | `schemas` | - |
 
-**与 PARSE Agent 的关系**：PARSE Agent（`agent/gis/parse/agent.py`）直接调用 `tables._extract_zone_tables` / `_extract_project_tables` 等确定性提取器，产出 `schema/contracts/parse_contracts.py` 的最终契约（`SpatialPlanningIntent` / `SpatialOperation` / `SpatialConstraint`）。
+**与 workflow 的关系**：L1/L2 report projection 直接调用 `tables._extract_zone_tables` / `_extract_project_tables` 等确定性提取器；L3 先形成 `PlanningClaimSet`，target projection 只消费已组装的 `PlanningProgram`，不从文本生成执行对象。
 
 **与 ReportStore 的关系**：`report_store` 通过 `summary_generator.generate_structured_summary` 生成维度报告的 JSON 摘要，通过 `summary_parser.parse_summary` 反解析供 L2/L3 依赖加载与规划文本生成使用。
 
@@ -42,7 +42,7 @@ backend/app/modules/parsing/
 └── README.md                    # 本文档
 ```
 
-> ⚠️ 修正历史遗留错误：`structured_output.py`（Instructor 提取入口）**不存在**于本目录，属已废弃设计；`markdown_parser.py` / `section_classifier.py` / `regulation_extractor.py` 已于 2026-08-03 随死代码清理移除（无任何消费者，`detect_table`/`classify_section`/regex 约束提取已被 `tables.py` + PARSE Agent 取代）；`summary_generator.py` / `summary_parser.py` **仍然存在且活跃**（被 `report_store` 使用）。
+> ⚠️ 修正历史遗留错误：`structured_output.py`（Instructor 提取入口）**不存在**于本目录，属已废弃设计；`markdown_parser.py` / `section_classifier.py` / `regulation_extractor.py` 已于 2026-08-03 随死代码清理移除；`summary_generator.py` / `summary_parser.py` **仍然存在且活跃**（被 `report_store` 使用）。
 
 ---
 
@@ -161,12 +161,9 @@ parse_summary(summary, dimension_key="", layer=1) -> Dict[str, Any]
 
 ## 五、测试覆盖
 
-无独立 `test_parsing/` 目录，直接覆盖：
-- `tests/unit/test_parse_table_extraction.py` — `agent.gis.parse.parse()` 端到端表格提取（zone ratios / facility locations / dedup merge）
-- `tests/unit/test_parse_instruction.py` — 【INSTRUCTION】表格解析
-- `tests/unit/test_vocab_extractor.py` — 经 vocab_extractor 使用 `_extract_zone_tables`
-- `tests/unit/test_report_store.py` — 摘要生成/解析链路
-- 集成：`test_parse_agent_llm.py`、`test_kg_jintian_e2e.py`（经 agent 间接覆盖）
+验证位于 `backend/tests/contracts/` 和 `backend/tests/core/`；真实图链路由配置真实 LLM
+后的 `backend/tests/acceptance/test_real_graph_resume_delivery.py` 验收。不存在的 `tests/unit/`
+路径不再作为模块文档入口。
 
 ---
 
@@ -175,7 +172,7 @@ parse_summary(summary, dimension_key="", layer=1) -> Dict[str, Any]
 | 方向 | 模块 | 关系 |
 |------|------|------|
 | 上游 | `schema/contracts/parse_contracts` | 提供最终契约类型（ZoneTarget/FacilityTarget 等） |
-| 下游 | `agent/gis/parse` | PARSE 规则解析器调用 `tables._extract_*` 等 |
+| 下游 | L1/L2 report projection | 调用 `tables._extract_*` 等确定性提取器 |
 | 下游 | `services/report_store` | 经 `summary_generator` / `summary_parser` 生成/解析维度摘要 |
 | 下游 | `agent/gis/vocab_extractor` | 使用 `_extract_zone_tables` |
 | 下游 | `modules/kg/enrichment/bindings` | 使用 `_extract_project_tables` / `_extract_zone_tables` |
@@ -190,13 +187,13 @@ parse_summary(summary, dimension_key="", layer=1) -> Dict[str, Any]
 2. **LLM 兜底**：分节打分 <2 或 regex 未匹配的实质性行才路由给 LLM
 3. **零空间计算**：parsing 不做任何几何运算，所有空间计算由 `spatial_ops/` 完成
 4. **零空间数据**：parsing 不持有 GeoJSON/几何
-5. **工具无状态**：所有函数纯输入纯输出，状态由 PARSE Agent state 管理
+5. **工具无状态**：所有函数纯输入纯输出，状态由 workflow artifact/checkpoint 管理
 6. **单元级语义**：表格列语义按单位推断（`%`/公顷），不依赖领域关键词白名单
 
 ---
 
 ## 八、相关文档
 
-- `backend/app/agent/gis/parse/README.md` — PARSE Agent（parsing 的主要消费者）
+- `backend/app/domain/program/target_projection/` — 已组装 PlanningProgram 的确定性空间投影
 - `backend/app/modules/kg/README.md` — KG 模块（enrichment 消费 parsing 表格提取）
 - `backend/app/modules/schema/contracts/parse_contracts.py` — 最终契约类型

@@ -24,7 +24,7 @@
 
 - `AgentState`、LangGraph checkpoint 或节点名称；
 - Artifact Store 路径、artifact type、revision 或 payload；
-- `PlannedState`、`allocated_geojson`、`gis_data`；
+- `PlannedState`、`DeliverySpatialSnapshot` 和 `DeliveryManifest`；
 - 后端文件路径和磁盘布局；
 - 日志文字、Python 异常类型或 Human Review 的内部 interrupt 格式。
 
@@ -252,6 +252,36 @@ async function recover(sessionId: string, lastSeq: number) {
 `action` 只能为 `retry`、`approve`、`reject`。必须回传 GET 得到的同一个
 `event_id`；提交期间禁用按钮。冲突、重复或过期决策不得静默重试，应刷新审核资源。
 
+当 `items[].request_type=classification_decision_required` 时，`approve` 必须同时提交全部
+未决 polygon/parcel 目标的闭集决定。此决定不是把名称直接改成编码；前端应展示后端返回的
+`targets`、证据 refs 和编码字典，并原样提交用户选择：
+
+```json
+{
+  "event_id": "current-event-id",
+  "action": "approve",
+  "decisions": {
+    "classification_decisions": [
+      {
+        "target_id": "land_use_planning:claim:CLP-003",
+        "code_system": "ghytbm",
+        "candidate_codes": ["2122", "2125"],
+        "selected_code": "2125",
+        "decision_mode": "human",
+        "evidence_refs": ["report:land_use_planning:CLP-003"],
+        "rationale": "经审核选择景观与绿化用地",
+        "status": "resolved"
+      }
+    ]
+  }
+}
+```
+
+后端会把它写成新的 `PlanningProgram` artifact，并从当前真实 checkpoint 重新执行
+TARGET_PROJECTION → GROUND → SELECT → EXECUTE；不会重复已经完成的 L1/L2/L3 LLM。缺少任一
+未决目标、编码不在声明闭集或证据为空时，决定被拒绝。若没有 `ParcelChange`，交付仍只能是
+`partial`/`diagnostic_only`，前端不得显示为法定完整规划。
+
 ### 7.1 中断恢复与页面恢复不是一回事
 
 前端只负责两类动作：
@@ -286,10 +316,29 @@ LIVE -- completed/failed --> TERMINAL_REFRESH (/state + /delivery)
 `last_event_seq` 也不是 HUMAN 决策 token。地图和交付数据在恢复后仍然只从新的
 `DeliverySpatialSnapshot` 投影读取，不能把旧 GeoJSON 与新事件拼接。
 
-后端后续若开放通用 `ResumeCommand` API，前端只传 `command_id/session_id/mode` 以及
-对应的 `event_id`、`checkpoint_id` 和小型 `payload`；不得传 `AgentState`、checkpoint
-完整 JSON、artifact 内容或内部 LangGraph 节点名。这样可以在后端替换 checkpoint/store
-实现时保持前端协议稳定。
+通用恢复入口是 `POST /api/v1/sessions/{id}/resume`。活动 interrupt 只传当前审核返回的
+`event_id` 和小型决策：
+
+```json
+{
+  "mode": "interrupt",
+  "event_id": "evt-current",
+  "action": "approve",
+  "feedback": "确认继续"
+}
+```
+
+历史 cursor 分叉只传真实 `checkpoint_id`，后端返回新的 `branch_id`：
+
+```json
+{
+  "mode": "checkpoint",
+  "checkpoint_id": "真实 checkpoint id",
+  "replay_from_stage": "EXECUTE"
+}
+```
+
+不得传 `AgentState`、checkpoint 完整 JSON、artifact 内容或自行生成的 checkpoint_id。
 
 ## 8. 地图数据
 

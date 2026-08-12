@@ -12,7 +12,7 @@ def _hydrate_l1_spatial_facts(state: Dict[str, Any], context: Any) -> None:
     """Attach L1 location facts and materialize their GIS↔KG bindings."""
     try:
         # Context objects can survive in-process while the session KG memory
-        # is advanced by PARSE/L1 enrichment.  Rebuild the semantic lookup
+        # is advanced by target projection/L1 enrichment.  Rebuild the semantic lookup
         # from the persisted session memory before hydrating facts; otherwise
         # the next stage sees the old village-only gazetteer and loses the
         # facility/place bindings created by L1.
@@ -24,7 +24,7 @@ def _hydrate_l1_spatial_facts(state: Dict[str, Any], context: Any) -> None:
         if session_id and kg is not None:
             restored_gazetteer = build_gazetteer(
                 kg,
-                getattr(context, "bundle", None),
+                getattr(context, "workspace", None),
                 _load_session_semantic_memory(session_id),
             )
             if restored_gazetteer.entries:
@@ -34,7 +34,7 @@ def _hydrate_l1_spatial_facts(state: Dict[str, Any], context: Any) -> None:
 
                     context.ports.gazetteer = KGGazetteerAdapter(restored_gazetteer)
 
-        from app.agent.bootstrap.artifact_runtime import load_artifact
+        from app.infrastructure.artifacts.runtime import load_artifact
         from app.modules.schema.contracts.l1_contracts import L1Snapshot
 
         snapshot = load_artifact(state, "l1_snapshot", L1Snapshot)
@@ -55,7 +55,7 @@ def _hydrate_l1_spatial_facts(state: Dict[str, Any], context: Any) -> None:
         ))
         written = _materialize_gis_village_entries(
             getattr(context, "gazetteer", None),
-            getattr(context, "bundle", None),
+            getattr(context, "workspace", None),
             bases,
         )
         if written and getattr(context, "ports", None) is not None:
@@ -94,8 +94,18 @@ async def bootstrap_context_node(state: Dict[str, Any]) -> Dict[str, Any]:
         )
 
     village_name = str((state.get("config") or {}).get("village_name", ""))
+    expected_version = str(
+        (state.get("context_ref") or {}).get("version")
+        or state.get("context_version")
+        or ""
+    )
     try:
-        context = await build_planning_context(session_id, village_name=village_name or None)
+        context = await build_planning_context(
+            session_id,
+            village_name=village_name or None,
+            include_reports=not bool(expected_version),
+            version=int(expected_version) if expected_version.isdigit() else None,
+        )
     except Exception as exc:
         logger.error("[bootstrap] context build failed: %s", exc)
         raise RuntimeError(
@@ -117,12 +127,9 @@ async def bootstrap_context_node(state: Dict[str, Any]) -> Dict[str, Any]:
         refs = state.get("artifact_refs") or {}
         l1_ref_data = refs.get("l1_snapshot")
         if l1_ref_data:
-            from app.modules.ports.artifact_store import ArtifactRef
-            from app.services.artifact_store import FilesystemArtifactStore
+            from app.infrastructure.artifacts.runtime import load_artifact
 
-            ref = ArtifactRef(**l1_ref_data)
-            payload = FilesystemArtifactStore().retrieve(ref)
-            l1_snapshot = L1Snapshot(**payload)
+            l1_snapshot = load_artifact(state, "l1_snapshot", L1Snapshot)
         if l1_snapshot is not None:
             context.location_facts = list(getattr(l1_snapshot, "location_facts", []) or [])
             _hydrate_l1_spatial_facts(state, context)

@@ -23,7 +23,7 @@
 
 ## 依赖方向
 
-**可导入**：`app/services/runtime`（`PlanningRuntimeService`）、`app/services/report_store`、`app/services/step_report`、`app/core/events`（`SSEEventType`）、`app/config`（`get_dimension_layer`）、`app/utils/logger`。
+**可导入**：`app/services/runtime`（`PlanningRuntimeService`）、`app/services/report_store`、`app/modules/evidence/step_report`、`app/core/events`（`SSEEventType`）、`app/config`（`get_dimension_layer`）、`app/utils/logger`。
 
 **禁止导入**：`app/agent/l1_observe` / `l2_strategize` / `l3_plan`（公共运行时不得反向依赖具体 stage）；任何维度提示词 / LLM 构造逻辑。
 

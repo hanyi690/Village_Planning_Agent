@@ -105,7 +105,7 @@ from app.modules.spatial_ops import (
 - **禁止导入** `app.agent` / `app.services` / `app.api` / `app.tools`（领域层向上依赖即架构缺陷）
 - **不做 LLM 调用** / 不解析自然语言 / 不做文本提取
 - 不把空间计算泄漏到 `kg/`、`parsing/`、`agent/`、`tools/` ——"所有空间计算只在 spatial_ops"是全局原则
-- **已知遗留边（非本模块造成）**：`app.tools.gis._generation.pipeline.py`（工具层编排器）仍导入 `app.agent.execute.land_design_worker`，这是工具→agent 的**已知待迁移边**；`spatial_ops` 自身保持零向上依赖
+- **边界**：空间算法只由本模块和 DELIVER 适配器调用；旧 GIS dev pipeline 已删除，避免工具层重新读取原始 GIS 或生成第二份交付结果。
 - 不在 `__init__.py` 中追加新的扁平模块路径——新能力应落在对应子包下并通过子包 `__init__.py` 导出
 
 ---

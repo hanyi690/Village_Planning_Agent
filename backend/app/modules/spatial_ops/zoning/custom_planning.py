@@ -7,11 +7,9 @@ exclusive, coverage-complete planning layer after deterministic vocabulary-drive
 
 from __future__ import annotations
 
-from collections import defaultdict
 from typing import Any, Dict, Iterable, List, Tuple
 
-from shapely.geometry import mapping, shape
-from shapely.ops import unary_union
+from shapely.geometry import shape
 
 
 PENDING_ZONE_NAME = "待确认分区"
@@ -91,86 +89,6 @@ def build_custom_zone_allocation_inputs(
         "vocabulary_name": "",
     }
     return targets, candidates, metadata
-
-
-def build_custom_planning_zone_layer(
-    allocated_geojson: Dict[str, Any],
-    metadata: Dict[str, Dict[str, Any]],
-) -> Dict[str, Any]:
-    """Merge globally allocated parcels into canonical planning-zone features."""
-    grouped: Dict[str, List[Tuple[Dict[str, Any], Any]]] = defaultdict(list)
-    for index, feature in enumerate(allocated_geojson.get("features") or []):
-        props = feature.get("properties") or {}
-        name = str(props.get("assigned_zone") or "").strip()
-        geometry = feature.get("geometry")
-        if name not in metadata or not geometry:
-            continue
-        grouped[name].append((feature, shape(geometry)))
-
-    # Keep one connected component for each claimed zone.  Small detached
-    # components become explicit pending area rather than being presented as a
-    # coherent planning district without spatial evidence.
-    detached: List[Tuple[Dict[str, Any], Any]] = []
-    for name, members in list(grouped.items()):
-        if name == PENDING_ZONE_NAME or len(members) < 2:
-            continue
-        merged = unary_union([member[1] for member in members])
-        components = list(getattr(merged, "geoms", [merged]))
-        if len(components) < 2:
-            continue
-        primary = max(components, key=lambda component: component.area)
-        connected = []
-        for member in members:
-            if member[1].intersects(primary):
-                connected.append(member)
-            else:
-                detached.append(member)
-        grouped[name] = connected
-    if detached:
-        grouped[PENDING_ZONE_NAME].extend(detached)
-
-    features: List[Dict[str, Any]] = []
-    occupied = None
-    for name, info in metadata.items():
-        members = grouped.get(name, [])
-        if not members:
-            continue
-        geometry = unary_union([member[1] for member in members])
-        if occupied is not None:
-            geometry = geometry.difference(occupied)
-        if geometry.is_empty:
-            continue
-        if name != PENDING_ZONE_NAME:
-            occupied = geometry if occupied is None else unary_union([occupied, geometry])
-        area = sum(_area_ha(member[0]) for member in members)
-        target = float(info.get("target_area_ha") or 0)
-        deviation = (area - target) / target if target else 0.0
-        pending = name == PENDING_ZONE_NAME
-        features.append({
-            "type": "Feature",
-            "geometry": mapping(geometry),
-            "properties": {
-                "zone_id": info["zone_id"],
-                "zone_name": name,
-                "category_name_zh": name,
-                "zone_type": "custom_planning_zone",
-                "category_code": info["category_code"],
-                "color": info["color"],
-                "area_ha": round(area, 2),
-                "target_area_ha": round(target, 2),
-                "area_deviation_ratio": round(deviation, 4),
-                "parcel_count": len(members),
-                "component_count": len(getattr(geometry, "geoms", [geometry])),
-                "parcel_ids": [_bsm(member[0], index) for index, member in enumerate(members)],
-                "evidence_bsms": info["target_bsms"],
-                "decided_by": info["decided_by"],
-                "confidence": info["confidence"],
-                "vocabulary_name": info["vocabulary_name"],
-                "status": "pending" if pending else "generated",
-                "requires_human_confirmation": pending,
-            },
-        })
-    return {"type": "FeatureCollection", "features": features}
 
 
 def validate_custom_planning_zone_layer(geojson: Dict[str, Any]) -> Dict[str, Any]:

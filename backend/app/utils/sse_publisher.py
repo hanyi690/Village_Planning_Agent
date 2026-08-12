@@ -5,7 +5,7 @@ SSE 事件发布器
 支持批量发送事件，配合 Send API 状态驱动模式。
 
 重构说明：
-- 直接使用 sse_manager 而不是 planning.py 的别名函数
+- 直接使用 infrastructure event hub，而不是 planning.py 的别名函数
 - 打破循环依赖，可独立使用
 """
 
@@ -22,32 +22,31 @@ from .sse_events import (
 logger = get_logger(__name__)
 
 # Lazy import to avoid circular dependency issues at module load time
-_sse_manager = None
+_event_hub = None
 
 
-def _get_sse_manager():
-    """Get SSE manager instance (lazy import)."""
-    global _sse_manager
-    if _sse_manager is None:
-        from app.services.sse import sse_manager
-        _sse_manager = sse_manager
-    return _sse_manager
+def _get_event_hub():
+    """Get the online event hub (lazy import)."""
+    global _event_hub
+    if _event_hub is None:
+        from app.infrastructure.events import event_hub
+        _event_hub = event_hub
+    return _event_hub
 
 
 def _send_sse_event(session_id: str, event_data: Dict[str, Any]) -> None:
     """
-    内部函数：发送 SSE 事件到 sse_manager
+    内部函数：发送 SSE 事件到 EventConnectionHub
 
     Args:
         session_id: 会话 ID
         event_data: 事件数据（已包含 type 和 timestamp）
     """
     try:
-        sse_manager = _get_sse_manager()
-        sse_manager.append_event(session_id, event_data)
-        sse_manager.publish_sync(session_id, event_data)
+        event_hub = _get_event_hub()
+        event_hub.publish_sync(session_id, event_data)
     except ImportError:
-        logger.debug(f"[SSE] 无法发送事件: backend.services.sse_manager 未导入")
+        logger.debug(f"[SSE] EventConnectionHub 未导入")
     except Exception as e:
         logger.warning(f"[SSE] 发送事件失败: {e}")
 
@@ -57,7 +56,7 @@ class SSEPublisher:
 
     ⚠️ Adding a new SSE event type requires updates in ALL of these places:
       1. backend/app/core/events.py          - SSEEventType constant
-      2. backend/app/services/sse.py         - CACHE_CONFIG (if critical for reconnect)
+      2. backend/app/infrastructure/events/ - durable event/replay boundary
       3. frontend/src/.../api/planning-api.ts - eventTypes array (MUST, or event is silently dropped)
       4. frontend/src/.../store/planningStore.ts - handleSSEEvent switch case
       5. frontend/src/.../hooks/useSSE.ts    - criticalEventTypes (if it should skip batch delay)
@@ -121,27 +120,6 @@ class SSEPublisher:
             layer_name: Layer display name
             dimension_count: Number of dimensions in this layer
         """
-        sse_manager = _get_sse_manager()
-
-        # Clear old layer_started/layer_completed caches (keep current layer)
-        cleared_layer_started = sse_manager.clear_layer_started_cache(session_id, exclude_layer=layer)
-        if cleared_layer_started > 0:
-            logger.info(f"[SSEPublisher] Cleared {cleared_layer_started} layer_started caches before Layer {layer}")
-
-        cleared_layer_completed = sse_manager.clear_layer_completed_cache(session_id, exclude_layer=layer)
-        if cleared_layer_completed > 0:
-            logger.info(f"[SSEPublisher] Cleared {cleared_layer_completed} layer_completed caches before Layer {layer}")
-
-        # Clear old dimension_complete cache to prevent stale events
-        cleared_count = sse_manager.clear_dimension_cache(session_id)
-        if cleared_count > 0:
-            logger.info(f"[SSEPublisher] Cleared {cleared_count} dimension caches before Layer {layer}")
-
-        # Clear old dimension_start cache to prevent stale events
-        cleared_start_count = sse_manager.clear_dimension_start_cache(session_id)
-        if cleared_start_count > 0:
-            logger.info(f"[SSEPublisher] Cleared {cleared_start_count} dimension_start caches before Layer {layer}")
-
         SSEPublisher.send_event(
             session_id=session_id,
             event_type=SSEEventType.LAYER_STARTED,

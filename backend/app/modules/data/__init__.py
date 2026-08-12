@@ -23,12 +23,6 @@ from __future__ import annotations
 from .catalog import DataCatalog
 from .connections import Connection, ConnectionRegistry
 from .contracts import DataResult, DataSourceMetadata
-from .base_conversion import (
-    lookup_ghytbm,
-    lookup_ghytbm_with_info,
-    is_ambiguous,
-    get_alternative_ghytbms,
-)
 from .ingest import (
     ingest_current_landuse,
     ingest_feature,
@@ -49,11 +43,6 @@ __all__ = [
     # Contracts
     "DataResult",
     "DataSourceMetadata",
-    # Base conversion (DLBM -> GHYTBM)
-    "lookup_ghytbm",
-    "lookup_ghytbm_with_info",
-    "is_ambiguous",
-    "get_alternative_ghytbms",
     # Ingest (raw -> typed schema models)
     "ingest_landuse",
     "ingest_current_landuse",

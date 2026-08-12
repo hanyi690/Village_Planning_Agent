@@ -7,7 +7,7 @@
 
 ## 职责边界
 
-**负责**：领域能力本身 —— 类型契约（schema）、统一数据获取（data）、空间计算（spatial_ops）、语义图谱（kg）、确定性+LLM 文本提取（parsing）、规划文本成果生成（planning_text）、外部知识检索（rag）、Prompt 模板（prompts）、会话事实上下文（context）与依赖倒置端口（ports）。
+**负责**：领域能力本身 —— 类型契约（schema）、统一数据获取（data）、空间计算（spatial_ops）、语义图谱（kg）、确定性+LLM 文本提取（parsing）、外部知识检索（rag）、Prompt 模板（prompts）、会话事实上下文（context）与依赖倒置端口（ports）。
 
 **不负责**：
 - 不编排 LangGraph 节点 / 会话生命周期 / SSE 事件分发（那是 `app.agent` / `app.services` 的职责）
@@ -23,7 +23,6 @@
 | `spatial_ops/` | 全部空间计算的唯一发生地 | `compute_context_blocks` / `build_spatial_index` |
 | `kg/` | 空间语义引擎（RDF 图 + SemanticMemoryStore） | `KGBuilder.build()` |
 | `parsing/` | 确定性 + LLM 文本提取工具层 | `compile_dimension_report` |
-| `planning_text/` | 规划文本成果生成 | S-COPY / S-ASSEMBLE / S-TEMPLATE / S-GENERATE |
 | `rag/` | 外部知识检索与知识库管理 | `RagService` |
 | `prompts/` | 全部分层 Prompt 模板库 | 模板 + 组装函数（不执行逻辑） |
 | `context/` | 会话事实权威（纯数据容器） | `PlanningContext` |

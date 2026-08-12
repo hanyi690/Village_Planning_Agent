@@ -39,6 +39,7 @@ from app.agent.common.dimension_runtime import (
     run_rag,
     save_report_immediate,
     save_step_report,
+    strip_model_reasoning,
 )
 from app.agent.explore.service import retrieve_evidence, render_evidence_prompt_section
 from app.modules.prompts.concept import get_dimension_prompt as get_layer2_prompt
@@ -85,7 +86,7 @@ async def analyze_l2_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
     7. 保存版本
     8. 返回状态更新
     """
-    from ...services.sse import sse_manager
+    from app.infrastructure.events import event_hub as sse_manager
     from ...services.report_store import ReportStore
 
     dim_key = state.get("dimension_key")
@@ -268,6 +269,7 @@ async def analyze_l2_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
             "", llm_response,
         )
 
+    llm_response = strip_model_reasoning(llm_response)
     llm_elapsed = time.time() - llm_start_time
     logger.info(f"[analyze_l2_dimension] {dim_key}: LLM completed in {llm_elapsed:.1f}s, output = {len(llm_response)} chars")
 
@@ -357,7 +359,6 @@ async def analyze_l2_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
                 "kg_cognition": bool(explore_section),
                 "kg_fact_count": explore_audit["fact_count"],
                 "l1_fact_count": l1_fact_audit["fact_count"],
-                "l1_snapshot_ref": l1_fact_audit["snapshot_ref"],
             },
         )
     except Exception as e:
@@ -368,11 +369,6 @@ async def analyze_l2_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
         rev_completed = _build_revision_completed(state, dim_key)
         if rev_completed:
             result["revision_completed_dims"] = rev_completed
-            result["is_revision"] = True
-        # 返回 revision_impact_tree 以确保 fan-in reducer 能保留该值
-        impact_tree = state.get("revision_impact_tree")
-        if impact_tree:
-            result["revision_impact_tree"] = impact_tree
 
     return result
 
@@ -429,24 +425,19 @@ def _load_l1_fact_section(
     source_dimensions: list[str] | None = None,
 ) -> tuple[str, Dict[str, Any]]:
     """Load the canonical L1Snapshot facts for explicit L2 consumption."""
-    ref_data = state.get("l1_snapshot_ref") or (state.get("artifact_refs") or {}).get("l1_snapshot")
+    ref_data = (state.get("artifact_refs") or {}).get("l1_snapshot")
     audit: Dict[str, Any] = {"fact_count": 0, "snapshot_ref": ref_data}
     if not isinstance(ref_data, dict):
         return "", audit
 
     try:
-        from app.modules.ports.artifact_store import ArtifactRef
-        from app.services.artifact_store import FilesystemArtifactStore
+        from app.infrastructure.artifacts.runtime import load_artifact
 
-        ref = ArtifactRef(**{
-            "artifact_id": ref_data["artifact_id"],
-            "module": ref_data.get("module", "l1_" + "observe"),
-            "run_id": ref_data["run_id"],
-            "artifact_type": ref_data.get("artifact_type", "L1Snapshot"),
-            "context_version": ref_data.get("context_version", ""),
-            "revision": ref_data.get("revision", "v1"),
-        })
-        payload = FilesystemArtifactStore().retrieve(ref)
+        payload = load_artifact(state, "l1_snapshot")
+        if hasattr(payload, "model_dump"):
+            payload = payload.model_dump(mode="json")
+        if not isinstance(payload, dict):
+            return "", audit
         by_dimension = payload.get("facts_by_dimension") or {}
         location_facts = payload.get("location_facts") or []
         selected_dimensions = list(source_dimensions or [])

@@ -1,13 +1,7 @@
 """Land use metrics computation — pure aggregation from GIS data.
 
-Extracted from app.tools.gis._analytics.metrics_calculator because
-compute_land_use_metrics is primarily a pure computation function that
-depends on schema code sets and Python stdlib. KG needs this without
-importing from the tools layer.
-
-The full GISMetricsCalculator class remains in tools for its other methods
-(compute_summaries, compute_zone_distribution, _layer_geometry_area_ha)
-that depend on tool-specific infrastructure (GeoDataFrame, area engine).
+The delivery and validation layers use this pure function directly. It owns
+land-use aggregation without importing the deleted GIS dev-tool pipeline.
 """
 
 from __future__ import annotations
@@ -79,13 +73,11 @@ def _empty_metrics() -> Dict[str, Any]:
 def compute_land_use_metrics(gis_data: Dict[str, Any]) -> Dict[str, Any]:
     """Compute land use metrics from GIS data — pure DLBM aggregation.
 
-    This is the core computation extracted from GISMetricsCalculator for
-    use by KG builder without importing from the tools layer.
+    This is the canonical pure aggregation used by KG and delivery checks.
 
     Computes area by zone_type from DLBM codes in landuse_current_geojson.
     When protection layer geometry is available in gis_data, the caller
-    (GISMetricsCalculator) can override ecological/farmland/construction
-    areas with more accurate geometry-based measurements.
+    protection areas are supplied by their dedicated data-layer collections.
 
     Args:
         gis_data: Dict with 'landuse_current_geojson' key containing

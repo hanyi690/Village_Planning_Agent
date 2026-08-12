@@ -7,7 +7,7 @@
 
 ## 职责边界
 
-**负责**：GIS 工具调用面（冲突检测 / GDB 导出 / 结构化文本提取 / KG 构建查询 / 编码查询 / 地图渲染 / 布局校验）+ 内部逻辑子目录（生成 / 校验 / 分析 / 渲染）。
+**负责**：稳定 GIS 工具调用面（冲突检测 / GDB 导出 / KG 构建查询 / 编码查询 / 地图渲染 / 布局校验）。
 
 **不负责**：
 - 不实现空间算法（冲突检测在 `modules/spatial_ops/conflict`，渲染图层契约在 `modules/spatial_ops/output`，分区生成在 `modules/spatial_ops/zoning`）
@@ -17,14 +17,13 @@
 
 ## 输入/输出契约
 
-**入口**（`gis/__init__.py`）：`get_gis_pipeline_tools()` 懒加载工具集（`detect_conflicts` / `export_gdb` / `extract_structured_text` / `build_knowledge_graph` / `query_knowledge_graph` / `lookup_land_use_code` / `render_map` / `validate_layout` 等）。
+**入口**（`gis/__init__.py`）：`get_gis_pipeline_tools()` 懒加载工具集（`detect_conflicts` / `extract_structured_text` / `build_knowledge_graph` / `query_knowledge_graph` / `lookup_land_use_code` / `render_map` / `validate_layout` 等）。
 
 **根级工具文件**：
 
 | 文件 | 工具/职责 |
 |---|---|
 | `conflict.py` | `detect_conflicts`（合并自 layout/conflict detector+resolver 的 @tool 包装） |
-| `export.py` | `export_gdb`（GIS 输出包服务适配器） |
 | `extract.py` | `extract_structured_text`（表格文本 → 结构化 JSON 行） |
 | `kg.py` | `build_knowledge_graph` / `query_knowledge_graph`（KG 服务适配器） |
 | `lookup.py` | `lookup_land_use_code`（同系统 code↔name；跨系统 `map_code` 已移除，advisory 不暴露给 LLM） |
@@ -36,10 +35,7 @@
 
 | 子目录 | 现状 | 见 README |
 |---|---|---|
-| `_generation/` | 仅剩 `pipeline.py` 编排器（axis_builder / custom_zone_generator 已迁出） | `_generation/README.md` |
 | `_validation/` | `facility_validator.py` | `_validation/README.md` |
-| `_analytics/` | accessibility / coverage / isochrone / metrics_calculator | `_analytics/README.md` |
-| `_rendering/` | 空（仅 `__init__.py`，deprecated 槽位） | `_rendering/README.md` |
 | `_conflict/` | **已移除**（Batch B：detector/resolver → `modules/spatial_ops/conflict`） | —（根 README 声明） |
 
 ---

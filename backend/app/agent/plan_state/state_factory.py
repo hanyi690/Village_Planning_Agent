@@ -10,6 +10,7 @@ from typing import Any, Dict, List, Optional
 
 from app.agent.bootstrap.phase_machine import PlanningPhase
 from app.core.settings import BUSINESS_RETRY_LIMIT, RAG_ENABLED
+from app.workflow.runtime_adapter import initial_workflow_state
 
 
 class StateFactory:
@@ -17,9 +18,6 @@ class StateFactory:
     def create(
         session_id: str,
         project_name: str,
-        village_data: str,
-        task_description: str = "制定村庄总体规划方案",
-        constraints: str = "无特殊约束",
         image_ids: Optional[List[str]] = None,
         village_name: str = "",
         province: str = "",
@@ -33,8 +31,6 @@ class StateFactory:
         rag_enabled: Optional[bool] = None,
         rag_layer_config: Optional[Dict[int, bool]] = None,
         disable_tools: bool = False,
-        uploaded_files: Optional[List[Dict]] = None,
-        user_uploaded_gis_data: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         if rag_enabled is None:
             rag_enabled = RAG_ENABLED
@@ -45,25 +41,23 @@ class StateFactory:
                 if layer not in rag_layer_config:
                     rag_layer_config[layer] = rag_enabled
 
-        return {
+        payload = {
             "session_id": session_id,
             "project_name": project_name,
             "messages": [],
             "phase": PlanningPhase.INIT.value,
             "current_wave": 1,
             "config": {
-                "village_data": village_data,
                 "village_name": village_name or project_name,
                 "province": province,
                 "city": city,
                 "county": county,
                 "township": township,
                 "planning_period": planning_period,
-                "task_description": task_description,
-                "constraints": constraints,
                 "rag_enabled": rag_enabled,
                 "rag_layer_config": rag_layer_config,
                 "knowledge_cache": {},
+                "input_owner": "data_context",
             },
             "image_ids": image_ids or [],
             "completed_dimensions": {"layer1": [], "layer2": [], "layer3": []},
@@ -82,35 +76,25 @@ class StateFactory:
             "last_revised_dimensions": [],
             "pending_reports": [],
             "layer_char_counts": {},
-            "user_uploaded_data": user_uploaded_gis_data or {},
-            "uploaded_files": uploaded_files or [],
-            "_landuse_metrics": {},
-            "intent_targets": {},
-            "explore_instructions": {},
-            "report_summary_index": {},
-            "explore_done": False,
             # Context + artifact refs
             "pending_requests": [],
             "context_version": "",
             "context_ref": {"session_id": session_id, "version": ""},
             "context_fingerprint": "",
+            "branch_id": "main",
             "bootstrap_context_done": False,
             "artifact_refs": {},
+            "artifact_schema_version": "3",
             "layer_just_completed": None,
             "l1_gate_decision": None,
             "l2_gate_decision": None,
             "l3_gate_decision": None,
-            "l1_snapshot_ref": None,
-            "l2_strategy_ref": None,
             # post-L3 HITL
-            "post_l3_pending_review": [],
-            "post_l3_thread_id": "",
             "post_l3_status": "",
             "current_stage": "L1",
             "next_stage": "L1",
-            "post_l3_decisions": None,
             # post-L3 chain
-            "parse_gate": None,
+            "target_projection_gate": None,
             "ground_gate": None,
             "select_gate": None,
             "validate_gate": None,
@@ -127,6 +111,7 @@ class StateFactory:
             "human_review_items": [],
             "human_review_decisions": None,
             "human_review_event_id": "",
+            "human_review_generation": 0,
             "human_review_pause_published": False,
             "human_review_resume_consumed": False,
             "human_deferred_targets": [],
@@ -134,3 +119,4 @@ class StateFactory:
             "paused_stage": None,
             "fatal_error": None,
         }
+        return initial_workflow_state(payload)

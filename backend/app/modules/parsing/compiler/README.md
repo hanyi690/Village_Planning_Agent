@@ -1,6 +1,6 @@
 # Parsing Compiler — 共享编译内核
 
-> **定位**：把维度报告（L1 现状 / L2 策略 / L3 项目 / REVISION）**编译为类型化阶段 fragment** 的共享内核。`agent/parse` 顶层是包住此内核的薄 LangGraph 包装。
+> **定位**：把 L1 现状 / L2 策略报告编译为类型化阶段 fragment 的共享内核。L3 不进入本解析器，而由 worker 直接产出 `PlanningClaimSet`。
 > **Updated: 2026-08-05**
 
 ---
@@ -8,16 +8,16 @@
 ## 职责边界
 
 **负责**：
-- profile 分派：`compile_dimension_report(dimension_key, profile, ...)` 按 `CompilationProfile` 选择编译策略
+- profile 分派：`compile_dimension_report(dimension_key, profile, ...)` 仅负责 L1/L2 报告投影
 - 诊断收集：确定性检测解析质量问题（`collect_diagnostics` → `ParseDiagnostic`）
-- `【INSTRUCTION】` 段切分（`split_content_instruction`）
+- L1/L2 历史报告的 `【INSTRUCTION】` 段切分（`split_content_instruction`）
 - fragment 溯源构建（`build_fragment_provenance` → `Provenance`）
-- L3 → 空间参考 DSL 的确定性映射（`spec_mapper`：`PlanningIntervention -> SpatialReferenceSpec`，零 LLM / 零 KG / 零几何）
+- 空间参考映射只由 target projection 的确定性入口调用；它不是 L3 claims 的生产路径。
 
 **不负责**：
 - 不做 LLM 调用（编译是确定性的）
 - 不做任何空间计算
-- 不承载 agent 编排（编排在 `agent/parse`）
+- 不承载 workflow 编排（编排在 bootstrap/workflow 层）
 
 ---
 
@@ -25,17 +25,17 @@
 
 **入口**：`compiler/__init__.py` 导出 `compile_dimension_report` + `CompilationProfile`。
 
-**输出 fragment**（按 profile，契约见 `schema/contracts/`）：`L1DimensionFragment` / `L2StrategyFragment` / `L3ProgramFragment`。
+**输出 fragment**：`L1DimensionFragment` / `L2StrategyFragment`。
 
 **文件清单**：
 
 | 文件 | 职责 |
 |---|---|
-| `core.py` | profile 分派核心（Wave B L1 / Wave D L2 / Wave E L3 / Wave F REVISION） |
+| `core.py` | L1/L2 profile 分派核心 |
 | `diagnostics.py` | 确定性解析质量诊断（章节缺失 / 表格问题 → `ParseDiagnostic`） |
-| `instruction_parser.py` | `【INSTRUCTION】` 段解析（包装 `parsing.tables` 结构表提取） |
+| `instruction_parser.py` | L1/L2 历史报告投影所需的结构表提取 |
 | `provenance.py` | fragment 溯源构建（`source_module` 默认 `l1_observe`） |
-| `spec_mapper.py` | `PlanningIntervention -> SpatialReferenceSpec` 确定性映射（方向提示从 `spatial_requirements` 提取） |
+| `spec_mapper.py` | target projection 的确定性空间引用映射 |
 
 ---
 
@@ -44,7 +44,7 @@
 ```
 compiler/ → schema/contracts（l1/l2/l3、parse_result、parsing、provenance、spatial_reference、classification_ref）
           → modules/parsing（tables、spatial_language）
-   ▲ 被 agent/parse 与 profiles/ 消费
+   ▲ 被 L1/L2 profiles 与 target projection domain 消费
 ```
 
 - 允许：`schema/contracts`、`modules/parsing` 内部、`app.utils`

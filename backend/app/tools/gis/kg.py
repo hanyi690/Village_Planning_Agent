@@ -15,22 +15,23 @@ from app.tools.helpers import make_result, to_tool_message
 @tool
 def build_knowledge_graph(
     reports: Annotated[Dict[str, Dict[str, Any]], InjectedState("reports")],
-    gis_data: Annotated[
-        Dict[str, Optional[Dict[str, Any]]],
-        InjectedState("gis_data"),
-    ],
+    spatial_workspace: Annotated[Any, InjectedState("spatial_workspace")],
     village_name: Annotated[str, InjectedState("village_name")],
     session_id: Annotated[str, InjectedState("session_id")],
     intent: Annotated[Optional[Dict[str, Any]], InjectedState("intent")] = None,
     tool_call_id: Annotated[str, InjectedToolCallId] = "",
 ) -> Command:
     """LangChain wrapper around the direct KG build service."""
+    from app.modules.spatial_ops.io import canonical_gis_data_from_workspace
+
+    gis_data = canonical_gis_data_from_workspace(spatial_workspace)
     update = build_knowledge_graph_data(
         reports=reports,
         gis_data=gis_data,
         village_name=village_name,
         session_id=session_id,
         intent=intent,
+        bundle=spatial_workspace,
     )
     metrics = update.pop("kg_build_metrics", {})
     update["messages"] = [

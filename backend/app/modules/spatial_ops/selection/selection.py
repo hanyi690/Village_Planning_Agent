@@ -48,6 +48,7 @@ def parse_scale_ha(scale_text: str) -> Optional[float]:
 
 _LARGE_BLOCK_KEYWORDS = ("基地", "产业园", "种植园", "养殖场", "示范区", "加工坊", "整理")
 _NON_CONSTRUCTION_DLMC = {"商品林", "生态林", "水域", "耕地"}
+_NON_BUILDABLE_DLMC = {"水域", "生态林"}
 
 
 @dataclass
@@ -118,6 +119,8 @@ def apply_hard_filters(
             rejected.append(Rejection(cand.bsm, "empty_geometry"))
             continue
         detail: List[str] = []
+        if cand.dlmc in _NON_BUILDABLE_DLMC:
+            detail.append(f"landuse_not_suitable:{cand.dlmc}")
         if constraint_index is not None:
             overlaps = constraint_index.geometry_in_constraint(cand.geometry) or []
             blocked = sorted({
@@ -431,8 +434,13 @@ def select_parcel(
     ranker: Optional[Ranker] = None,
 ) -> PlacementDecision:
     target_ha = parse_scale_ha(target.scale_text)
+    target_min_area = target_ha if target.category == "project" else 0.0
     survivors, rejected = apply_hard_filters(
-        candidates, constraint_index=constraint_index, hazards=hazards, occupied=occupied
+        candidates,
+        constraint_index=constraint_index,
+        hazards=hazards,
+        occupied=occupied,
+        min_area_ha=target_min_area or 0.0,
     )
     survivors = apply_scale_filter(survivors, allow_large_block=is_large_block_target(target))
     ranked = rank_candidates(

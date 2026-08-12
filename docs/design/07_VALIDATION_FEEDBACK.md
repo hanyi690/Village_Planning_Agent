@@ -1,5 +1,11 @@
 # 校验、门控与定向反馈
 
+> 本文定义阶段校验和反馈的设计原则。产出驱动自动迭代、多模态证据及其与
+> `ValidationReport.adjustments` 的融合，以
+> [13_AUTOREPAIR_MULTIMODAL.md](13_AUTOREPAIR_MULTIMODAL.md) 为唯一扩展设计。
+> 下文的 `ValidationIssue` 是问题语义视图，不要求新增一套平行业务契约；实现应
+> 映射到现有 `ValidationReport`、`GateDecision` 和 artifact provenance。
+
 ## 1. 校验不是一个总重试循环
 
 校验结果必须带有缺陷归因：
@@ -29,6 +35,12 @@ class ValidationIssue(BaseModel):
 | 图层算法失败 | EXECUTE | 保留选址决定，重跑 Worker |
 | 文本与成果不一致 | L3 Reconcile | 不能只修改渲染结果 |
 | 成果规范失败 | DELIVERY | 返回 Validate，不改变规划意图 |
+
+真实 GIS 迭代反馈：候选绑定不能只验证 BSM 存在。SELECT 进入 EXECUTE 前必须执行
+候选可实施性硬过滤：几何有效、现状地类不是不可建设水域/生态林、项目目标面积有足够
+单地块承载能力；被过滤的 BSM 必须进入 `EliminatedCandidate`，并带有稳定原因码，不能
+让 EXECUTE 先生成再由 VALIDATE 才发现。若目标需要多地块合并，应由对应分区分配器
+显式声明聚合策略，而不是让普通项目选择器隐式放宽面积约束。
 
 ## 3. Gate 行为
 

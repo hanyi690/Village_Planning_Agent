@@ -18,7 +18,7 @@ def build_map_layers(
         layers.append({
             "geojson": gis_data["landuse_current_geojson"],
             "layer_type": "current_landuse",
-            "layer_name": "current_landuse",
+            "layer_name": "现状地类",
             "color": "#d1d5db",
             "semantic_group": "现状底图",
             "default_visible": True,
@@ -50,25 +50,35 @@ def build_map_layers(
             "space_control_zone": ("空间管制", False, "管制规则"),
             "infrastructure": ("发展轴线", True, "L3轴线目标"),
         }
-        semantic_group, default_visible, source_label = semantics.get(
+        semantic_group, semantic_default_visible, source_label = semantics.get(
             display_type, ("规划分析", False, "执行结果")
+        )
+        default_visible = bool(
+            config["default_visible"]
+            if "default_visible" in config
+            else semantic_default_visible
         )
         layers.append({
             "geojson": geojson,
             "layer_type": display_type,
-            "layer_name": config.get("layer_name") or display_type,
+            "layer_name": (
+                config.get("layer_name")
+                or config.get("layerName")
+                or display_type
+            ),
             "color": config.get("color"),
             "style": config.get("style"),
             "semantic_group": semantic_group,
             "default_visible": default_visible,
             "source_label": source_label,
+            "force_layer_colors": bool(config.get("force_layer_colors", False)),
         })
 
     if gis_data.get("road_geojson"):
         layers.append({
             "geojson": gis_data["road_geojson"],
             "layer_type": "current_road",
-            "layer_name": "current_road",
+            "layer_name": "现状道路",
             "color": "#64748b",
             "semantic_group": "现状底图",
             "default_visible": True,
@@ -78,7 +88,7 @@ def build_map_layers(
         layers.append({
             "geojson": gis_data["annotation_geojson"],
             "layer_type": "current_annotation",
-            "layer_name": "current_annotation",
+            "layer_name": "现状标注",
             "color": "#dc2626",
             "semantic_group": "现状底图",
             "default_visible": True,
@@ -105,7 +115,7 @@ def build_map_layers(
         layers.append({
             "geojson": gis_data["boundary_geojson"],
             "layer_type": "boundary",
-            "layer_name": "boundary",
+            "layer_name": "村域边界",
             "color": "#3388ff",
             "semantic_group": "现状底图",
             "default_visible": True,
@@ -114,7 +124,7 @@ def build_map_layers(
     result = []
     for layer in layers:
         normalized = GISLayerConfig(**layer).model_dump(by_alias=True)
-        for key in ("semantic_group", "default_visible", "source_label"):
+        for key in ("semantic_group", "default_visible", "source_label", "force_layer_colors"):
             if key in layer:
                 normalized[key] = layer[key]
         result.append(normalized)

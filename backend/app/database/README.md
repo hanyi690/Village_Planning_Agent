@@ -14,8 +14,8 @@
 ## 架构定位
 
 - 技术栈：`SQLModel` + `sqlalchemy.ext.asyncio` + `aiosqlite`，驱动 `sqlite+aiosqlite:///`（`DATABASE_DIR/village_planning.db`）。
-- **状态不在业务表里**：会话运行状态（`status/is_executing/stream_state` 等冗余字段已被移除）统一由 LangGraph `AsyncSqliteSaver` 写入独立的 `checkpoints` 表管理，业务表只存元数据。`operations.py` 中的 `update_session_state_async` / `is_execution_active_async` / `get_stream_state_async` 等为历史遗留，新链路（`services/`）已不再依赖。
-- 消费方：`services/`（`runtime/session/report_store/bundle_store`）、`api/session_routes.py`、各 `agent` 节点写库。
+- **状态不在业务表里**：会话运行状态统一由 LangGraph `AsyncSqliteSaver` 写入独立的 `checkpoints` 表管理，业务表只存元数据；SSE 事件由事件发布边界负责，不通过数据库 no-op 状态函数伪装持久化。
+- 消费方：`services/`（runtime/session/report/checkpoint）、`api/v1` transport，以及 data-layer ingestion。
 
 ## engine.py 核心机制
 
@@ -31,7 +31,7 @@
 - `init_async_db()`：导入全部模型 → `SQLModel.metadata.create_all`（`checkpoints` 除外，由 LangGraph 管理）→ `_run_migrations()`。
 - `_run_migrations()`：幂等的轻量迁移，按表对 `PRAGMA table_info` 检查缺失列后 `ALTER TABLE`：
   - `planning_sessions`：行政区划列 `village_name/province/city/county/township` + `planning_period`（默认 `2022-2035年`）。
-  - `dimension_reports`：P8 新增 `instruction` 列（INSTRUCTION 结构化段独立存储，不参与展示）。
+- `dimension_reports`：保存阶段报告输入与结构化摘要；PARSE 只消费显式 artifact/ref，不从数据库猜测规划结果。
 
 ### 全局 Checkpointer（LangGraph）
 
@@ -66,12 +66,6 @@
 - 内容：`filename/original_filename/file_size/content_type`、`parsed_text`(Text)、`gis_data`(JSON，GeoJSON FeatureCollection)、`gis_data_type`。
 - 解析状态：`parse_status`（pending/success/failed）+ `parse_error`；`parse_text` 由 `modules/parsing` 填充。
 
-### planning_text_documents — 规划文本文档表
-
-- `session_id`（FK CASCADE）+ `version` + `document_id`（UUID 唯一）；每次重新生成创建新版本。
-- 内容：`markdown_content`(Text) + `json_content`(JSON)；`article_count/generation_duration_seconds`。
-- 版本元数据：`trigger_reason`（initial/dimension_change/manual）+ `changed_dimensions`(JSON)。
-
 ### planning_bundles — 规划数据包快照表
 
 - `session_id`（FK CASCADE）+ `version`；`bundle_json`(Text，会话级 VillageBundle 全量 JSON 快照，含原始输入文档、空间要素与已嵌入的 L1/L2/L3 报告)。
@@ -90,10 +84,8 @@
 | 分组 | 函数 |
 | --- | --- |
 | Planning Session | `create/get/update/delete_planning_session_async`、`list_planning_sessions_async`、`list_projects_async`、`list_project_sessions_async(project_name, limit=100)` |
-| 会话状态（遗留） | `update_session_state_async`、`add_session_event_async`、`get_session_events_async`、`is_execution_active_async`、`set_execution_active_async`、`get_stream_state_async`、`set_stream_state_async` |
 | UI Session | `create/get/update/delete_ui_session_async`、`list_ui_sessions_async` |
 | UploadedFile | `create_uploaded_file_async`、`get_uploaded_files_by_session_async`、`get_uploaded_geojson_data_async`、`delete_uploaded_files_async` |
-| PlanningText | `create/get_planning_text_document_async`、`list_planning_text_versions_async`、`update_planning_text_status_async` |
 | DimensionReport | `get_session_reports_async`（按 layer 分组、只取每维最新版本） |
 | PlanningBundle | `create/get_planning_bundle_async`（默认最新版本）、`list_planning_bundle_versions_async`（不含 bundle_json） |
 
@@ -112,6 +104,6 @@ async def demo():
 
 ## 相关文档
 
-- `app/services/README.md`：ReportStore（dimension_reports 写入）、BundleStore（planning_bundles 快照）、SSEManager 内存状态与数据库的关系。
+- `app/services/README.md`：ReportStore（dimension_reports 写入）、BundleStore（planning_bundles 快照）；事件由 `infrastructure/events` 管理。
 - `app/core/README.md`：`core/settings.py` 中 `DATABASE_DIR` 等配置来源。
-- `app/api/README.md`：会话 API 与检查点恢复（resume）链路。
+- `app/api/README.md`：当前 v1 会话 API 与检查点恢复（resume）链路。

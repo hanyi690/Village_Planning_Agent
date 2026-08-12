@@ -10,13 +10,14 @@ from __future__ import annotations
 from typing import Any
 
 from app.agent.bootstrap.context_guard import require_frozen_context
-from app.modules.ports.artifact_store import ArtifactRef
+from app.infrastructure.artifacts.runtime import store_artifact
+from app.modules.schema.contracts.artifact_descriptor import ArtifactDescriptor
 from app.modules.schema.contracts.evidence_contracts import EvidenceSource
 from app.modules.schema.contracts.l1_contracts import EvidenceGap
 from app.modules.schema.contracts.l2_contracts import L2Strategy, L2StrategyFragment
 from app.modules.schema.contracts.parsing_contracts import CompilationProfile
 from app.modules.schema.contracts.provenance import Provenance
-from app.services.artifact_store import FilesystemArtifactStore
+from app.services.artifact_fingerprint import semantic_checksum
 from app.services.review_package import write_review_package
 from app.utils.logger import get_logger
 
@@ -140,7 +141,8 @@ async def l2_aggregate(
 
     strategy = merge_strategy_fragments(fragments, run_id=run_id)
     strategy.context_version = context_version
-    artifact_id = f"l2-{run_id}-v1"
+    branch_id = str(state.get("branch_id") or "main")
+    artifact_id = f"l2-{run_id}-{branch_id}-{semantic_checksum(strategy)[:16]}"
     strategy.artifact_id = artifact_id
     strategy.provenance = Provenance(
         source="l2_observe",
@@ -150,17 +152,16 @@ async def l2_aggregate(
         natural_language_description="L2 STRATEGIZE aggregated strategy from compiled dimension fragments.",
     )
 
-    artifact_store = FilesystemArtifactStore(base_dir=base_dir)
-    ref = ArtifactRef(
-        context_version=context_version,
-        context_fingerprint=state.get("context_fingerprint", ""),
-        artifact_id=artifact_id,
-        module="l2_strategize",
-        run_id=run_id,
-        artifact_type="L2Strategy",
-        revision="v1",
+    ref = ArtifactDescriptor.model_validate(
+        store_artifact(
+            state,
+            "l2_strategy",
+            "l2_strategize",
+            "L2Strategy",
+            strategy,
+            base_dir=base_dir,
+        )
     )
-    artifact_store.store(ref, strategy.model_dump(mode="json"))
     logger.info("[l2_aggregate] L2Strategy stored: %s", ref)
 
     gate_decision = evaluate_l2_gate(strategy, run_id=run_id, context_version=context_version)
@@ -175,8 +176,8 @@ async def l2_aggregate(
     logger.info("[l2_aggregate] review package written: review_id=%s", review_id)
 
     try:
-        from app.services.step_report import save_step_report
-        from app.agent.bootstrap.stage_audit import build_input_audit
+        from app.modules.evidence.step_report import save_step_report
+        from app.workflow.stage_audit import build_input_audit
 
         await save_step_report(
             session_id,
@@ -196,45 +197,14 @@ async def l2_aggregate(
                 "evidence_gap_count": len(strategy.evidence_gaps),
                 "gate_route": gate_decision.feedback_route or ("PASS" if gate_decision.passed else "FAIL"),
             },
-            artifacts=[{
-                "key": "l2_strategy",
-                "artifact_id": ref.artifact_id,
-                "module": ref.module,
-                "run_id": ref.run_id,
-                "artifact_type": ref.artifact_type,
-                "revision": ref.revision,
-                "context_version": ref.context_version,
-                "context_fingerprint": ref.context_fingerprint,
-                "checksum": ref.checksum,
-            }],
+            artifacts=[{"key": "l2_strategy", **ref.model_dump(mode="json")}],
             diagnostics={"fact_consumer": "L2 dimension prompts via EXPLORE evidence service"},
         )
     except Exception as exc:
         logger.debug("[l2_aggregate] step report failed: %s", exc)
 
     return {
-        "l2_strategy_ref": {
-            "artifact_id": artifact_id,
-            "module": "l2_strategize",
-            "run_id": run_id,
-            "artifact_type": "L2Strategy",
-            "revision": "v1",
-            "context_version": context_version,
-            "context_fingerprint": state.get("context_fingerprint", ""),
-            "checksum": ref.checksum,
-        },
-        "artifact_refs": {
-            "l2_strategy": {
-                "artifact_id": artifact_id,
-                "module": "l2_strategize",
-                "run_id": run_id,
-                "artifact_type": "L2Strategy",
-                "revision": "v1",
-                "context_version": context_version,
-                "context_fingerprint": state.get("context_fingerprint", ""),
-                "checksum": ref.checksum,
-            }
-        },
+        "artifact_refs": {"l2_strategy": ref.model_dump(mode="json")},
         "l2_gate_decision": gate_decision.model_dump(mode="json"),
         "l2_review_id": review_id,
     }

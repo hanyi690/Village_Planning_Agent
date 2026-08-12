@@ -3,6 +3,25 @@
 日期：2026-08-11  
 性质：代码事实审查 + 目标设计，不是已完成实现声明。
 
+> 2026-08-11 重新审查：本文第 3–12 节保留为当前代码问题的历史分析；最新目标设计以
+> [14_BACKEND_MODULE_BLUEPRINT.md](../design/14_BACKEND_MODULE_BLUEPRINT.md) 为准。关键修正是：
+> LLM 直接输出 JSON 与 Markdown 后 PARSE 在规划语义上没有本质区别，二者都不能直接成为
+> `PlanningProgram`。目标主干改为 Demand -> Suitability -> Allocation -> Scenario，LLM 只产生
+> 带证据 claims 和解释。
+
+## 0. 本轮确认的两个阻断级问题
+
+1. `FilesystemArtifactStore.store()` 会对相同 `{artifact_id}/{revision}` 使用 `os.replace`。
+   历史 checkpoint fork 又按旧 ref 的 `vN + 1` 生成 revision，因此不同分支可能覆盖同一 payload。
+   在改为内容寻址不可变 blob 前，历史 resume 产物不能作为稳定审计证据。
+2. L3 仍把 12 个专业报告尾部的 Markdown `【INSTRUCTION】` 编译为规划对象。最近真实 LLM
+   运行虽消除了 type/geometry 组合错误，却形成 205 个 interventions、131 个空间对象，随后
+   GROUND 产生 74 个 HUMAN items。这证明格式合法不等于规划合理，禁止 approve 该 checkpoint。
+
+本轮静态扫描为 503 个 backend Python 文件；`AgentState` 仍约 70+ 字段，`ExecuteAgentState`
+仍同时含输入、KG view、执行事实、校验/交付和消息。API v1 route 仍直接读取 Runtime、Artifact
+Store 和进程内 SSE manager，说明 application 层尚未形成。
+
 ## 1. 结论
 
 当前后端业务能力丰富，契约化、空间算法、Artifact Store、Human Review 和交付快照
@@ -59,11 +78,14 @@ Data+KG 的高耦合整体没有实质下降。
 
 - `GISPipelineState` 在生产调用中没有实际消费者，只被 `ExecuteAgentState` 文档提及，
   是典型迁移残留。
-- `deliver.aggregate._build_planned_view()` 已退出正式交付路径，仅剩测试直接调用，
-  应进入删除队列。
-- `artifact_runtime` 仍保留 legacy ref 字段迁移和旧 checksum 兼容；必须设置明确退役条件。
-- `modules/spatial_ops/output/export_package.py` 反向导入
-  `app.agent.deliver.render_layers`，违反 `modules → agent` 禁止依赖规则。
+- `deliver.aggregate._build_planned_view()` 已退出正式交付路径；其唯一直接测试已删除，
+  正式交付只由 `DeliverySpatialSnapshot` 驱动。
+- `artifact_runtime` 已删除 legacy ref 字段迁移和旧 checksum 兼容；旧 checkpoint 不再作为输入，必须从缺失 canonical ref 的阶段重新生成。
+- `modules/spatial_ops/output/export_package.py` 已强制接收
+  `complete_planned_geojson`，不再由导出器重建 Snapshot；旧 GIS tool `export_gdb`
+  已从工具注册表移除。
+- DELIVER 已停止读取 `allocated_geojson` artifact；完整期末地类只由
+  `ParcelChangeSet` 的 `planned_changes` 在数据层物化。
 - `services → api.schemas` 的反向依赖在历史 Graphify 报告中仍存在，应由 application
   contract 或 port 取代。
 - `SessionProjection`、SSE cache 和 checkpoint 都能表达运行状态，当前缺少单一的
@@ -454,7 +476,10 @@ pending event_id 能消费一次。审核决定写不可变 `HumanDecision` arti
 ### Phase A：删除无风险残留（1–2 周）
 
 - 删除未使用的 `GISPipelineState/Input/Output`；
-- 删除 `_build_planned_view` 及旧测试；
+- `_build_planned_view` 及其旧直接测试已删除；用地平衡只读取导出结果中的
+  完整 Snapshot 视图。
+- `build_complete_planned_geojson` 及其旧直接测试已删除；完整期末地类统一由
+  `DeliverySpatialSnapshot` 数据层物化。
 - 移除 modules/output -> agent 反向导入；
 - 给 legacy artifact/checksum migration 设置版本和截止日期；
 - 建立 import-linter/AST architecture tests；
@@ -504,6 +529,11 @@ pending event_id 能消费一次。审核决定写不可变 `HumanDecision` arti
 完成这三项后，文件数量即使仍然较多，也会从“难以判断真相的复杂”转为“按业务边界
 可局部理解、独立测试和安全演进的复杂”。
 
+当前已完成的状态收敛：删除 `AgentState` 中仅由初始化模板声明、没有生产读取的
+`post_l3_thread_id` 和 `post_l3_decisions`；线程身份统一由 session/thread 配置管理，
+审核决定统一走 canonical interrupt resume。旧 checkpoint 不做兼容迁移；生产恢复只接受
+`artifact_schema_version=3` 与 canonical `artifact_refs`，不满足条件的运行从对应阶段重新生成。
+
 ## 13. 研究来源
 
 - [LangGraph Persistence](https://docs.langchain.com/oss/python/langgraph/persistence)
@@ -512,6 +542,9 @@ pending event_id 能消费一次。审核决定写不可变 `HumanDecision` arti
 - [FastAPI Server-Sent Events](https://fastapi.tiangolo.com/tutorial/server-sent-events/)
 - [Martin Fowler: Event Sourcing](https://martinfowler.com/eaaDev/EventSourcing.html)
 - [OGC API Features](https://ogcapi.ogc.org/features/)
+- [Exa: Reproducible Spatial Analysis Products](https://www.bathyl.com/en/blog/reproducible-spatial-analysis-products)
+- [Exa: CI/CD for Maps — Spatial Data Tests & Rollbacks](https://oracles.cloud/ci-cd-for-maps-versioning-tests-and-deployments-for-spatial-)
+- [Exa: Orchestrating Spatial Pipelines in Python](https://www.geospatialdatamesh.org/spatial-pipeline-orchestration-observability/orchestrating-spatial-pipelines-in-python/)
 
 ## 14. Resume 设计（当前优先实现）
 
@@ -558,8 +591,28 @@ HUMAN 恢复必须满足：
 
 进程重启不重新调用已完成的 LLM 阶段：阶段成功的 artifact 必须先以 checksum 和
 parent_checksums 持久化，checkpoint 只保存 ref；恢复 planner 只复用可证明身份一致的
-ref，否则从最早失效阶段重跑。真实空间交付始终从同一 `DeliverySpatialSnapshot` 重建，
+ref。当前 `ResumeService` 在接受稳定 checkpoint 前会重新校验可复用 ref 的 payload、
+manifest 和 checksum；校验失败会明确返回 `resume_artifact_integrity_failed`，禁止继续
+生成部分成果，并返回从最早受影响阶段开始的 `ResumePlan`；只有选择到该阶段之前的
+历史 checkpoint 后才能实际调用图。checkpoint 恢复器会从历史中选择最近的稳定安全边界，
+跳过含有待重跑阶段 artifact 的晚期 cursor；找不到安全边界时保持阻断。后续由上游阶段重跑策略创建新 revision。真实空间交付始终从同一 `DeliverySpatialSnapshot` 重建，
 禁止 render/export/land-balance 各自重新读取历史状态。
+
+### 14.1 渲染结果验收
+
+仅有 `DeliveryManifest.delivery_status=complete` 不足以证明规划结果可用。DELIVER
+现在同时记录 `render_quality`：现状层是否存在、完整期末规划层是否存在、各层 feature
+数量、空几何数量和重复 BSM。StepReport 将失败的渲染质量记录为
+`render_quality_failed`。真实验收必须读取 PNG/HTML，并确认 current 与 planned 可以
+独立识别；渲染测试不得只断言文件存在。
+
+本规则采用 Exa 检索到的空间产品实践：源数据、派生数据、发布层分离；输出使用不可变
+manifest、checksum 和来源元数据；发布前同时执行几何/属性校验和视觉回归，而不是仅
+依据 HTTP 200 或一个完成状态。
+
+当 `ResumePlan.mode=rerun_from_stage` 时，运行时使用 `Command(update=...)` 创建源
+checkpoint 的后代 checkpoint，并写入 `is_revision=true`、`revision_trigger=checkpoint_recovery`
+和 `recovery_from_stage`。这一步不通过 START 重跑整条图，也不修改源 checkpoint。
 
 ### Resume 验收矩阵
 
@@ -567,3 +620,36 @@ ref，否则从最早失效阶段重跑。真实空间交付始终从同一 `Del
 进程重启后 checkpoint replay、artifact parent checksum 变化、SSE 断线不触发图运行、
 恢复到 completed/diagnostic terminal、恢复期间并发双提交，以及 DELIVER 失败后的
 snapshot-only 重试。没有这些测试，不能把“checkpoint 存在”称为“恢复可用”。
+### 2026-08-11 boundary correction
+
+The delivery fallback that copied EXECUTE `allocated_geojson` into the
+current-land-use layer was rejected and removed. The canonical direction is:
+
+`VillageBundle` → `spatial_ops.io.canonical_gis_data_from_bundle()` → one GIS
+input → `DeliverySpatialSnapshot` → render/export/land balance.
+
+This is a data-layer conversion. Agent nodes only pass the bundle/reference;
+planned output can only populate the planned layer. Missing current land use is
+an explicit delivery input error and cannot be hidden by a render fallback.
+### Real checkpoint resume acceptance evidence
+
+The deterministic spatial resume test now uses a file-backed
+`AsyncSqliteSaver`: the first graph instance pauses at SELECT HUMAN, its SQLite
+connection is closed, a second graph instance reopens the same checkpoint, and
+`Command(resume={"action": "approve"})` continues through EXECUTE, VALIDATE,
+RECONCILE, and DELIVER. The resumed run produced `DeliverySpatialSnapshot`
+checksum `d171fae26702a588c985358f931c26ffb6ae2456575c1478600f072fb48ebffc`,
+7 render layers, 3 current features, 3 complete planned features, and completed
+PNG/HTML artifacts. This is the authoritative resume evidence; the earlier
+MemorySaver-only tests are routing tests, not delivery acceptance evidence.
+### Real checkpoint resume acceptance evidence
+
+The deterministic spatial resume test now uses a file-backed
+`AsyncSqliteSaver`: the first graph instance pauses at SELECT HUMAN, its SQLite
+connection is closed, a second graph instance reopens the same checkpoint, and
+`Command(resume={"action": "approve"})` continues through EXECUTE, VALIDATE,
+RECONCILE, and DELIVER. The resumed run produced `DeliverySpatialSnapshot`
+checksum `d171fae26702a588c985358f931c26ffb6ae2456575c1478600f072fb48ebffc`,
+7 render layers, 3 current features, 3 complete planned features, and completed
+PNG/HTML artifacts. This is the authoritative resume evidence; the earlier
+MemorySaver-only tests are routing tests, not delivery acceptance evidence.

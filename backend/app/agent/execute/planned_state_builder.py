@@ -13,6 +13,7 @@ from app.modules.schema.contracts.planned_state_contracts import (
     PlannedAxis,
     PlannedFacility,
     PlannedParcel,
+    PlannedProjectPoint,
     PlannedRoad,
     PlannedState,
 )
@@ -85,6 +86,7 @@ def _change_to_planned_parcel(change: ParcelChange) -> PlannedParcel:
     code = after.code if after else (before.code if before else "")
     return PlannedParcel(
         bsm=change.bsm,
+        project_ref=str(change.project_ref or ""),
         planning_land_use=code,
         zone_type=code,
         area_ha=change.new_area_ha,
@@ -148,9 +150,21 @@ def changeset_to_planned_state(
     roads: list[PlannedRoad] = []
     axes: list[PlannedAxis] = []
     facilities: list[PlannedFacility] = []
+    project_points: list[PlannedProjectPoint] = []
     facility_targets = _target_map(intent, "facilities")
     road_targets = _target_map(intent, "road_targets")
     axis_targets = _target_map(intent, "development_axes")
+
+    for feature in _layer_features(layout_configs or [], {"planned_project_point"}):
+        properties = dict(feature.get("properties") or {})
+        geometry = _geojson_to_wkt(feature.get("geometry"))
+        if not geometry:
+            continue
+        project_points.append(PlannedProjectPoint(
+            project_ref=str(properties.get("project_ref") or properties.get("target_id") or ""),
+            name=str(properties.get("project_name") or properties.get("name") or ""),
+            geometry=geometry,
+        ))
 
     for feature in _layer_features(layout_configs or [], {"facility_point"}):
         properties = dict(feature.get("properties") or {})
@@ -200,6 +214,7 @@ def changeset_to_planned_state(
         parcels=parcels,
         zones=[],
         facilities=facilities,
+        project_points=project_points,
         roads=roads,
         axes=axes,
         source="parcel_change_set+worker_geometry",

@@ -55,36 +55,15 @@ GIS_TOOL_GUIDE = """
 - 数值若为 N/A 表示 GIS 数据未注入，按常规规划经验给出合理数值并标注"待 GIS 校核"
 """
 
-# ==========================================
-# INSTRUCTION 段（P8：文末结构化定位指令）
-# LLM 在报告正文后输出固定列 markdown 表格，供 PARSE 确定性消费 →
-# 项目/分区/设施/轴线 的空间定位落位。保存时剥离，不参与展示。
-# ==========================================
-
-INSTRUCTION_OUTPUT_GUIDE = """
-【INSTRUCTION】（内部指令段，仅供下游 GIS 空间定位解析，不属于报告正文，展示时必须忽略）
-请在报告正文结束后，将报告中的规划对象整理为以下固定列 markdown 表格（严格按此表头与列序，每行一条记录）：
-
-| 类型 | 名称 | 位置 | 描述 | 规模 |
-| :--- | :--- | :--- | :--- | :--- |
-
-填写规则：
-1. 类型仅限：项目 / 功能分区 / 设施 / 轴线（按报告实际内容选择，无对应对象则不填行）
-2. 名称：与报告正文完全一致的名称
-3. 位置：优先填写正文中的自然村名{nv_suffix}；无自然村时用方位描述（如 村中部、村西部、沿河段）；正文无任何位置信息则留空
-4. 描述：10-30 字概述
-5. 规模：正文中的数字规模（如 1500m、3座、80亩），无则留空
-
-约束：
-- 位置必须与正文描述一致，禁止编造
-- 只可提取正文已出现的内容，不得新增规划对象
-- 对产业、设施、交通、生态、空间结构、土地利用等空间维度，正文
-  至少应有一条规划对象带有可核验的自然村、方位、功能分区或村域范围；
-  不得把所有空间对象的“位置”都留空。L3 只需提供粗粒度空间引用，
-  地块级精确落位由后续 GROUND/SELECT 完成。
-{spatial_rule}
-- 表格前后各留一个空行；无内容时输出空表格（保留表头行与分隔行）
-
+CLAIMS_OUTPUT_GUIDE = """
+【L3 CLAIMS OUTPUT】
+你只能输出符合 PlanningClaimSet 的结构化结果，不得输出 Markdown、【INSTRUCTION】、BSM、几何或最终规划分类。
+每条 claim 必须是带证据的规划判断，包含：claim_id、statement、suggested_category、suggested_output_kind、
+suggested_interventions、quantity/quantity_unit（若有）、implementation_phase、location_hints、
+constraint_refs、objective_refs、evidence_refs、uncertainty。没有证据支持的位置、面积、地块或项目不得编造，
+应留空并说明 uncertainty。suggested_category 只能是 project/facility/road/axis/restoration/protection/zone/action；
+suggested_output_kind 只能是 parcel/polygon/point/line/action。对有明确位置证据的具体 project（例如服务中心、广场、停车场、观景点），应使用 point 作为小型定位输出；只有没有任何空间落位含义的管理/政策/培训事项才使用 action。claim 不是执行目标，不得填写最终 BSM、几何或 ClassificationDecision。
+只返回结构化对象，不要返回解释文字。
 """
 
 LOCATION_EVIDENCE_GUIDE = """
@@ -97,32 +76,6 @@ LOCATION_EVIDENCE_GUIDE = """
 - 证据没有支持的位置必须留空，不能为了让表格完整而补写自然村名。
 - “位于某村”必须同时在上游现状/规划依赖中有同一对象与该村的明确关系；仅出现村名不构成位置证据。
 """
-
-
-_SPATIAL_PROMPT_DIMENSIONS = frozenset({
-    "industry", "traffic", "traffic_planning", "public_service",
-    "infrastructure", "infrastructure_planning", "ecological",
-    "spatial_structure", "land_use_planning", "settlement_planning",
-})
-
-
-def _instruction_output_guide(
-    natural_villages: str = "",
-    dimension_key: str = "",
-) -> str:
-    nv = (natural_villages or "").strip()
-    nv_suffix = f"（如 {nv}）" if nv else ""
-    spatial_rule = ""
-    if dimension_key in _SPATIAL_PROMPT_DIMENSIONS:
-        spatial_rule = (
-            "- 当前维度属于空间可执行维度：若正文产生任一项目/设施/分区/道路/轴线，"
-            "每一行都必须填写来源明确的粗粒度位置；没有证据时不要生成该对象，"
-            "也不要填写无法由上游报告核验的村名。"
-        )
-    return INSTRUCTION_OUTPUT_GUIDE.format(
-        nv_suffix=nv_suffix,
-        spatial_rule=spatial_rule,
-    )
 
 
 # ==========================================
@@ -902,17 +855,15 @@ def get_dimension_prompt(dimension_key: str, revision_instruction: str = "", **k
     # 注入全局写作规则
     kwargs["WRITING_RULES"] = WRITING_RULES
 
-    # 注入 GIS 工具与空间数据引导（P0-3：L1/L2/L3 数据流闭环）
-    # 从 state._landuse_metrics 和 state.intent_targets 提取，若未注入则降级为 N/A
+    # Inject presentation guidance only.  Authoritative land-use metrics are
+    # read by domain stages from data/artifacts, never copied through state.
     kwargs["GIS_TOOL_GUIDE"] = GIS_TOOL_GUIDE
-    _lm = kwargs.get("_landuse_metrics") or {}
-    _it = kwargs.get("intent_targets") or {}
-    kwargs["landuse_metrics_farmland"] = _lm.get("farmland_ha", "N/A")
-    kwargs["landuse_metrics_construction"] = _lm.get("construction_ha", "N/A")
-    kwargs["landuse_metrics_ecological"] = _lm.get("ecological_ha", "N/A")
-    kwargs["intent_targets_farmland"] = _it.get("农田保护区", "N/A")
-    kwargs["intent_targets_construction"] = _it.get("村庄建设区", "N/A")
-    kwargs["intent_targets_ecological"] = _it.get("生态保护区", "N/A")
+    for key in (
+        "landuse_metrics_farmland", "landuse_metrics_construction",
+        "landuse_metrics_ecological", "intent_targets_farmland",
+        "intent_targets_construction", "intent_targets_ecological",
+    ):
+        kwargs[key] = "N/A"
 
     # 动态生成当前日期
     if not kwargs.get("current_date"):
@@ -942,11 +893,9 @@ def get_dimension_prompt(dimension_key: str, revision_instruction: str = "", **k
     if revision_instruction:
         result = revision_instruction + "\n\n" + result
 
-    # P8: 文末 INSTRUCTION 段引导（内部指令，保存时剥离不展示）
-    result += _instruction_output_guide(
-        kwargs.get("natural_villages", ""),
-        dimension_key=dimension_key,
-    )
+    # L3 emits evidence-bearing claims.  Spatial execution is decided later
+    # by the domain engines and never by a report suffix or Markdown table.
+    result += CLAIMS_OUTPUT_GUIDE
 
     return result
 
@@ -999,7 +948,7 @@ def get_dimension_prompt(dimension_key: str, revision_instruction: str = "", **k
 __all__ = [
     "WRITING_RULES",
     "GIS_TOOL_GUIDE",
-    "INSTRUCTION_OUTPUT_GUIDE",
+    "CLAIMS_OUTPUT_GUIDE",
     "INDUSTRY_PLANNING_PROMPT",
     "TRAFFIC_PLANNING_PROMPT",
     "PUBLIC_SERVICE_PROMPT",

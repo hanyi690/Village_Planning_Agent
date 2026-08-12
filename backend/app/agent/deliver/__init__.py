@@ -16,7 +16,7 @@ from app.agent.deliver.checks import (
 )
 from app.agent.deliver.gate import deliver_gate_route, evaluate_deliver_gate
 from app.agent.deliver.review import build_deliver_review_package
-from app.agent.deliver.spatial_products import build_spatial_delivery_products
+from app.agent.deliver.delivery_snapshot_builder import build_spatial_delivery_products
 
 __all__ = [
     "REQUIRED_STATUTORY_LAYERS",

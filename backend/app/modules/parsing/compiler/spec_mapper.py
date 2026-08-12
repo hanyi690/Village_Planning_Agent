@@ -30,17 +30,24 @@ _DIRECTION_TO_8WIND = {
 
 _ATTR_KEYS = ("dlbm_in", "land_use")
 _TOPO_KEYS = ("adjacent_to", "near", "within")
+_UNKNOWN_LOCATIONS = frozenset({"", "待定", "待补充", "待 GIS 校核", "待GIS校核", "无"})
+_VILLAGE_SCOPE_LOCATIONS = frozenset({
+    "全村", "村域", "村域范围", "各自然村", "各村", "各组", "各村民小组",
+})
 
 
-def _explicit_village_name(intervention: PlanningIntervention) -> str:
+def _explicit_village_names(intervention: PlanningIntervention) -> list[str]:
     """Extract only a village name explicitly present in the model text.
 
     This is a textual reference, not a coordinate guess. Generic phrases
     such as ``全村`` are ignored because they do not identify a GIS entity.
     """
-    text = " ".join(
-        [intervention.name, intervention.problem_addressed, *intervention.functions]
-    )
+    text = " ".join([
+        str(intervention.spatial_requirements.get("location") or ""),
+        intervention.name,
+        intervention.problem_addressed,
+        *intervention.functions,
+    ])
     # Prefer the closed-set natural-village names produced by KG enrichment.
     # This prevents a greedy regex from turning phrases such as
     # “主要功能为村庄服务” into a fake place name.
@@ -55,8 +62,10 @@ def _explicit_village_name(intervention: PlanningIntervention) -> str:
             if village in text
         ]
         if matches:
-            _, village = min(matches, key=lambda item: item[0])
-            return village if village.endswith("村") else village + "村"
+            return [
+                village if village.endswith("村") else village + "村"
+                for _, village in sorted(matches, key=lambda item: item[0])
+            ]
     except Exception:
         pass
 
@@ -64,8 +73,57 @@ def _explicit_village_name(intervention: PlanningIntervention) -> str:
     # punctuation/whitespace. Never infer from an arbitrary long Chinese span.
     match = re.search(r"(?:^|[，。；：、\s(（])([\u4e00-\u9fff]{2,4}村)(?=$|[，。；：、\s)）])", text)
     if match and match.group(1) not in {"全村", "村庄", "村域"}:
-        return match.group(1)
-    return ""
+        return [match.group(1)]
+    return []
+
+
+def _location_reference(intervention: PlanningIntervention) -> SpatialReferenceSpec | None:
+    """Map the source-backed INSTRUCTION location cell without inventing a site."""
+    requirements = intervention.spatial_requirements
+    location_value = requirements.get("location")
+    if not location_value:
+        hints = requirements.get("location_hints")
+        if isinstance(hints, list):
+            location_value = "、".join(str(item).strip() for item in hints if str(item).strip())
+    location = str(location_value or "").strip()
+    if location in _UNKNOWN_LOCATIONS:
+        return None
+    normalized = re.sub(r"[\s，,、；;及和与]+", "", location)
+    if normalized in _VILLAGE_SCOPE_LOCATIONS or any(
+        token in location for token in ("全村范围", "村域内", "全域", "各自然村")
+    ):
+        return SpatialReferenceSpec(
+            type="topological",
+            topo="sfWithin",
+            reference=RefObject(kind="village"),
+        )
+
+    village_names = _explicit_village_names(intervention)
+    if len(village_names) > 1:
+        return SpatialReferenceSpec(
+            type="composed",
+            op="or",
+            children=[
+                SpatialReferenceSpec(
+                    type="topological",
+                    topo="nearby",
+                    reference=RefObject(
+                        kind="place_name",
+                        filter={"label_contains": village_name},
+                    ),
+                )
+                for village_name in village_names
+            ],
+        )
+    label = village_names[0] if village_names else location
+    return SpatialReferenceSpec(
+        type="topological",
+        topo="nearby",
+        reference=RefObject(
+            kind="place_name",
+            filter={"label_contains": label},
+        ),
+    )
 
 
 def _direction_from_requirements(intervention: PlanningIntervention) -> str:
@@ -87,6 +145,10 @@ def _build_candidates(
     intervention: PlanningIntervention,
 ) -> list[SpatialReferenceSpec]:
     candidates: list[SpatialReferenceSpec] = []
+
+    location_ref = _location_reference(intervention)
+    if location_ref is not None:
+        candidates.append(location_ref)
 
     direction = _direction_from_requirements(intervention)
     if direction:
@@ -136,19 +198,6 @@ def _build_candidates(
     # the private INSTRUCTION table. Preserve that textual reference so the
     # normal resolver can locate the corresponding GIS feature. Do not invent
     # a location when the prose contains no named village.
-    village_name = _explicit_village_name(intervention)
-    if village_name and not candidates:
-        candidates.append(
-            SpatialReferenceSpec(
-                type="topological",
-                topo="nearby",
-                reference=RefObject(
-                    kind="entity_type",
-                    filter={"label_contains": village_name},
-                ),
-            )
-        )
-
     return candidates
 
 

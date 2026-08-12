@@ -78,6 +78,7 @@ frontend/.env.local
 frontend/.next.bak
 # Testing
 .pytest_cache/
+.pytest-cache/
 .coverage
 htmlcov/
 tests/output/

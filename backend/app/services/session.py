@@ -13,7 +13,7 @@ from datetime import datetime
 from typing import Any, Dict, Optional
 
 from app.api.schemas import TaskStatus
-from app.services.sse import sse_manager
+from app.infrastructure.events import EventRepository
 from app.services.checkpoint import checkpoint_service
 from app.database.operations import (
     create_planning_session_async,
@@ -99,7 +99,7 @@ async def _delete_session_checkpoint(session_id: str) -> bool:
 
 async def _clear_session_sse(session_id: str) -> bool:
     try:
-        sse_manager.clear_session(session_id)
+        await EventRepository.clear(session_id)
         return True
     except Exception as e:
         logger.warning(f"[SessionService] [{session_id}] SSE clear failed: {e}")

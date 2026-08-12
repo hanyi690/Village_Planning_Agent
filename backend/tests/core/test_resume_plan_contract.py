@@ -5,34 +5,34 @@ from app.modules.schema.contracts.resume_contracts import (
 
 
 def _state():
+    l1_digest = "sha256:" + "1" * 64
+    l2_digest = "sha256:" + "2" * 64
+    l3_digest = "sha256:" + "3" * 64
     return {
         "session_id": "session-1",
         "context_version": "ctx-1",
         "context_fingerprint": "fp-1",
         "artifact_refs": {
             "l1_snapshot": {
-                "checksum": "l1-sum",
-                "revision": "v1",
-                "context_version": "ctx-1",
-                "context_fingerprint": "fp-1",
+                "digest": l1_digest,
+                "descriptor_digest": "sha256:" + "a" * 64,
+                "provenance": {"context_ref": {"version": "ctx-1"}, "context_fingerprint": "fp-1"},
             },
             "l2_strategy": {
-                "checksum": "l2-sum",
-                "revision": "v2",
-                "context_version": "ctx-1",
-                "context_fingerprint": "fp-1",
-                "parent_checksums": {
-                    "l1_snapshot": "v1:l1-sum",
+                "digest": l2_digest,
+                "descriptor_digest": "sha256:" + "b" * 64,
+                "provenance": {"context_ref": {"version": "ctx-1"}, "context_fingerprint": "fp-1"},
+                "parent_digests": {
+                    "l1_snapshot": l1_digest,
                 },
             },
             "planning_program": {
-                "checksum": "l3-sum",
-                "revision": "v3",
-                "context_version": "ctx-1",
-                "context_fingerprint": "fp-1",
-                "parent_checksums": {
-                    "l1_snapshot": "v1:l1-sum",
-                    "l2_strategy": "v2:l2-sum",
+                "digest": l3_digest,
+                "descriptor_digest": "sha256:" + "c" * 64,
+                "provenance": {"context_ref": {"version": "ctx-1"}, "context_fingerprint": "fp-1"},
+                "parent_digests": {
+                    "l1_snapshot": l1_digest,
+                    "l2_strategy": l2_digest,
                 },
             },
         },
@@ -41,7 +41,7 @@ def _state():
 
 def test_pending_interrupt_has_priority_over_graph_next():
     state = _state()
-    state["artifact_refs"]["l2_strategy"]["checksum"] = "l2-changed"
+    state["artifact_refs"]["l2_strategy"]["digest"] = "sha256:" + "4" * 64
 
     plan = build_resume_plan(
         state,
@@ -73,12 +73,12 @@ def test_revision_plan_lists_downstream_rerun_boundary_and_checksums_for_unchang
     assert plan.resume_from == "select"
     assert plan.rerun == ["SELECT", "EXECUTE", "VALIDATE", "RECONCILE", "DELIVER"]
     assert plan.reuse == ["l1_snapshot", "l2_strategy", "planning_program"]
-    assert plan.input_checksums["planning_program"] == "l3-sum"
+    assert plan.input_checksums["planning_program"] == "sha256:" + "c" * 64
 
 
 def test_changed_parent_checksum_forces_rerun_from_earliest_invalid_stage():
     state = _state()
-    state["artifact_refs"]["l2_strategy"]["checksum"] = "l2-changed"
+    state["artifact_refs"]["l2_strategy"]["digest"] = "sha256:" + "4" * 64
 
     plan = build_resume_plan(
         state,
@@ -90,13 +90,14 @@ def test_changed_parent_checksum_forces_rerun_from_earliest_invalid_stage():
     assert plan.mode == ResumeMode.RERUN
     assert plan.resume_from == "L3"
     assert plan.reuse == ["l1_snapshot", "l2_strategy"]
-    assert plan.rerun == ["L3", "PARSE", "GROUND", "SELECT", "EXECUTE", "VALIDATE", "RECONCILE", "DELIVER"]
+    assert plan.rerun == ["L3", "TARGET_PROJECTION", "GROUND", "SELECT", "EXECUTE", "VALIDATE", "RECONCILE", "DELIVER"]
     assert plan.reason == "parent identity changed at L3"
 
 
 def test_changed_parent_revision_forces_rerun_from_earliest_invalid_stage():
     state = _state()
-    state["artifact_refs"]["l2_strategy"]["revision"] = "v9"
+    state["artifact_refs"]["l2_strategy"]["descriptor_digest"] = "sha256:" + "9" * 64
+    state["artifact_refs"]["l2_strategy"]["digest"] = "sha256:" + "4" * 64
 
     plan = build_resume_plan(
         state,
@@ -113,7 +114,7 @@ def test_changed_parent_revision_forces_rerun_from_earliest_invalid_stage():
 
 def test_missing_parent_metadata_is_treated_conservatively():
     state = _state()
-    state["artifact_refs"]["planning_program"].pop("parent_checksums")
+    state["artifact_refs"]["planning_program"].pop("parent_digests")
 
     plan = build_resume_plan(
         state,

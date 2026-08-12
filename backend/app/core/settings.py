@@ -52,7 +52,7 @@ LLM_STREAM_TIMEOUT = int(os.getenv("LLM_STREAM_TIMEOUT", "300"))  # 5 minutes
 # LLM Max Concurrent Requests (for asyncio.gather + asyncio.Semaphore)
 # qwen3.7-plus hard limit: 500 RPS / 30,000 RPM. 50 is safe with monitoring.
 # Can be tuned up to 100 with cold start.
-LLM_MAX_CONCURRENT = int(os.getenv("LLM_MAX_CONCURRENT", "6"))
+LLM_MAX_CONCURRENT = int(os.getenv("LLM_MAX_CONCURRENT", "3"))
 
 # LLM Rate Limit (requests_per_second for InMemoryRateLimiter)
 LLM_RATE_LIMIT_RPS = float(os.getenv("LLM_RATE_LIMIT_RPS", "500"))
@@ -66,6 +66,7 @@ EMBEDDING_RATE_LIMIT_RPS = float(os.getenv("EMBEDDING_RATE_LIMIT_RPS", "25"))
 
 # LangGraph Send API parallel node limit (prevents 28-dimension full-parallel burst)
 GRAPH_MAX_CONCURRENCY = int(os.getenv("GRAPH_MAX_CONCURRENCY", "3"))
+KG_BUILD_TIMEOUT_SECONDS = float(os.getenv("KG_BUILD_TIMEOUT_SECONDS", "180"))
 BACKEND_STARTUP_TIMEOUT_SECONDS = float(os.getenv("BACKEND_STARTUP_TIMEOUT_SECONDS", "30"))
 GRAPH_RECURSION_LIMIT = int(os.getenv("GRAPH_RECURSION_LIMIT", "100"))
 BUSINESS_RETRY_LIMIT = int(os.getenv("BUSINESS_RETRY_LIMIT", "3"))
@@ -287,22 +288,22 @@ TECENT_MAP_MAX_RETRIES: int = int(os.getenv("TECENT_MAP_MAX_RETRIES", "3"))
 
 # 是否启用 AMap 外源 POI 注入（村委会/设施/道路名/水库）
 AMAP_EXTERNAL_ANCHOR_ENABLED: bool = os.getenv(
-    "AMAP_EXTERNAL_ANCHOR_ENABLED", "true"
+    "AMAP_EXTERNAL_ANCHOR_ENABLED", "false"
 ).lower() in ("1", "true", "yes")
 
 # 是否启用百度外源 POI 注入
 BAIDU_EXTERNAL_ANCHOR_ENABLED: bool = os.getenv(
-    "BAIDU_EXTERNAL_ANCHOR_ENABLED", "true"
+    "BAIDU_EXTERNAL_ANCHOR_ENABLED", "false"
 ).lower() in ("1", "true", "yes")
 
 # 是否启用腾讯地图外源 POI 注入
 TECENT_MAP_EXTERNAL_ANCHOR_ENABLED: bool = os.getenv(
-    "TECENT_MAP_EXTERNAL_ANCHOR_ENABLED", "true"
+    "TECENT_MAP_EXTERNAL_ANCHOR_ENABLED", "false"
 ).lower() in ("1", "true", "yes")
 
 # 是否启用天地图 WFS 矢量数据注入
 TIANDITU_WFS_ANCHOR_ENABLED: bool = os.getenv(
-    "TIANDITU_WFS_ANCHOR_ENABLED", "true"
+    "TIANDITU_WFS_ANCHOR_ENABLED", "false"
 ).lower() in ("1", "true", "yes")
 
 # WFS 单 layer 最多 features（防大查询）
@@ -343,9 +344,6 @@ LOG_RETENTION_DAYS = int(os.getenv("LOG_RETENTION_DAYS", "30"))  # 自动清理 
 # Backend Session Configuration (from constants/config.py)
 # ==========================================
 
-# Session Event Configuration
-MAX_SESSION_EVENTS = 5000
-
 # Event Cleanup Configuration
 EVENT_CLEANUP_INTERVAL_SECONDS = 300  # 5 minutes
 SESSION_TTL_HOURS = 24
@@ -353,9 +351,6 @@ SESSION_TTL_HOURS = 24
 # SSE Queue Configuration
 # Increased from 500 to 2000 to handle high-frequency events (dimension_delta)
 SSE_QUEUE_SIZE = 2000
-
-# Queue full wait timeout (100ms) - fallback to pending_events cache
-SSE_QUEUE_WAIT_TIMEOUT = 0.1
 
 # ==========================================
 # Multimodal Configuration

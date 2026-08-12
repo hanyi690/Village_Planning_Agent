@@ -86,7 +86,7 @@ async def _maybe_extract_bindings(
         location_facts = []
         if layer == 1:
             try:
-                from app.agent.bootstrap.artifact_runtime import load_artifact
+                from app.infrastructure.artifacts.runtime import load_artifact
                 from app.modules.schema.contracts.l1_contracts import L1Snapshot
 
                 refs = dict((state or {}).get("artifact_refs") or {})
@@ -196,13 +196,23 @@ async def layer_completion_check(
                 revised_dimensions=all_dims,
             )
             await _snapshot_bundle(session_id, "revision")
+            from app.config import get_dimension_layer
+
+            revised_layers = [
+                get_dimension_layer(dimension)
+                for dimension in all_dims
+                if get_dimension_layer(dimension) is not None
+            ]
             return {
                 "is_revision": False,
                 "need_revision": False,
                 "revision_feedback": None,
                 "revision_impact_tree": None,
+                "revision_target_dimensions": [],
+                "revision_completed_dims": {},
                 "last_revised_dimensions": all_dims,
                 "pending_reports": [],
+                "layer_just_completed": max(revised_layers) if revised_layers else None,
             }
         return {}
 

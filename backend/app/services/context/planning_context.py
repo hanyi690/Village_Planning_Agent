@@ -18,8 +18,10 @@ from __future__ import annotations
 
 from typing import Any, Dict, Optional
 
+from app.data.model.snapshot import SessionDataSnapshot
 from app.modules.context.planning_context import PlanningContext
 from app.modules.ports.planning_ports import PlanningPorts
+from app.spatial.model.workspace import SpatialWorkspace
 from app.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -117,6 +119,7 @@ async def build_planning_context(
     village_name: str = "",
     refresh: bool = False,
     include_reports: bool = True,
+    version: int | None = None,
 ) -> PlanningContext:
     """Build (and cache) the authoritative PlanningContext for a session.
 
@@ -140,7 +143,7 @@ async def build_planning_context(
     from app.services.session_bundle import build_session_bundle
     from app.services.session_kg import ensure_session_kg
 
-    version = await _next_persisted_version(session_id)
+    version = version if version is not None else await _next_persisted_version(session_id)
 
     # 1. Bundle (cached by session_bundle; village_name resolved there)
     bundle = None
@@ -278,11 +281,18 @@ async def build_planning_context(
             f"required capability 'bundle' missing (bundle_error={bundle_error})"
         )
 
+    data_snapshot = SessionDataSnapshot.from_bundle(
+        bundle,
+        session_id=session_id,
+        source="data_catalog",
+    )
+    workspace = SpatialWorkspace(data_snapshot, bundle)
     context = PlanningContext(
         session_id=session_id,
         village_name=resolved_village,
         version=version,
-        bundle=bundle,
+        workspace=workspace,
+        data_snapshot=data_snapshot,
         kg=kg,
         kg_session_ref=kg_session_ref,
         kg_version=kg_version,
@@ -294,12 +304,13 @@ async def build_planning_context(
         ports=ports,
     )
 
-    parcel_count = len(context.bundle_parcels())
+    parcel_count = len(context.current_parcels())
     context._content_inputs = {
         "session_id": session_id,
         "village_name": resolved_village,
         "version": version,
         "parcel_count": parcel_count,
+        "data_snapshot_digest": data_snapshot.digest,
         "kg_session_ref": kg_session_ref,
         "kg_version": kg_version,
         "has_constraint_index": constraint_index is not None,
@@ -322,11 +333,11 @@ async def build_planning_context(
         logger.warning("[PlanningContext] evidence index build failed: %s", e)
     _context_cache[session_id] = context
     logger.info(
-        "[PlanningContext] built v%d for %s (%s): bundle=%s kg=%s gaz=%s cidx=%s reports=%d anchors=%d",
+        "[PlanningContext] built v%d for %s (%s): snapshot=%s kg=%s gaz=%s cidx=%s reports=%d anchors=%d",
         version,
         session_id,
         resolved_village or "(none)",
-        bundle is not None,
+        data_snapshot.digest,
         kg is not None,
         gazetteer is not None,
         constraint_index is not None,

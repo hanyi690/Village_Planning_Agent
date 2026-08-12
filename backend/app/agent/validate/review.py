@@ -20,7 +20,7 @@ _ROUTE_RATIONALE = {
     "RETRY_SELECT": "dominant validation errors attributed to SELECT",
     "RETRY_GROUND": "dominant validation errors attributed to GROUND",
     "RETRY_L3": "dominant validation errors attributed to L3",
-    "RETRY_PARSE": "dominant validation errors attributed to PARSE",
+    "RETRY_TARGET_PROJECTION": "dominant validation errors attributed to target projection",
     "HUMAN": "ambiguous validation errors; human review required",
 }
 

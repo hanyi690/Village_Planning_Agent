@@ -1,7 +1,7 @@
 """Layer-name domain constants — layer numbering shared by planning pipeline layers.
 
 Pure data: LAYER_NAMES (str key), LAYER_NAMES_BY_NUMBER (int key), get_layer_name().
-Consumed by agent/bootstrap/phase_machine (re-export) and modules/planning_text.
+Consumed by agent/bootstrap/phase_machine and stage/report projections.
 """
 
 from __future__ import annotations

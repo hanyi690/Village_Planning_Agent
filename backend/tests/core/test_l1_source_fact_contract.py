@@ -94,13 +94,13 @@ def test_typed_facility_fact_reaches_evidence_index_and_real_parcel():
     )
     context = SimpleNamespace(
         session_id="s1", version=1, kg_version=1, gazetteer=None,
-        kg=None, bundle=bundle,
+        kg=None, workspace=bundle,
         location_facts=[SimpleNamespace(
             normalized_name="供水点", mention="供水点", role="facility",
             aliases=[], confidence=0.95,
         )],
     )
-    context.bundle_parcels = lambda: [parcel]
+    context.current_parcels = lambda: [parcel]
     index = PlaceEvidenceIndex.build(context)
     result = index.resolve_mention("供水点", role="facility")
     assert result.status == "resolved"

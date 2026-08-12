@@ -16,7 +16,7 @@ class StageId(str, Enum):
     EXPLORE = "explore"
     L2 = "l2"
     L3 = "l3"
-    PARSE = "parse"
+    TARGET_PROJECTION = "target_projection"
     GROUND = "ground"
     SELECT = "select"
     EXECUTE = "execute"
