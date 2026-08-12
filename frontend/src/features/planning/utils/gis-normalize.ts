@@ -387,3 +387,150 @@ export function normalizeGisLayers(rawLayers: unknown): GISLayerConfig[] {
     .map((layer, index) => normalizeGisLayer(layer, index))
     .filter((layer): layer is GISLayerConfig => Boolean(layer));
 }
+
+// ============================================
+// v1 /map-layers adapter
+// ============================================
+//
+// The blueprint's /map-layers returns MapLayerCollection with
+// layer_type ∈ current | planned | overlay | constraint and concrete
+// layer_name values (e.g. complete_planned_landuse). The internal renderer
+// uses a different vocabulary (final_landuse, planned_road, facility_point…).
+// This adapter maps the authoritative v1 projection onto the internal
+// vocabulary so the map renders from the DeliverySpatialSnapshot, not from
+// ad-hoc SSE deltas.
+
+interface V1MapLayer {
+  layer_type: 'current' | 'planned' | 'overlay' | 'constraint';
+  layer_name: string;
+  geojson?: unknown;
+  data?: unknown;
+  featureCollection?: unknown;
+  feature_collection?: unknown;
+  features?: unknown;
+  crs?: string;
+  checksum?: string;
+  feature_count?: number;
+}
+
+const V1_LAYER_NAME_TO_INTERNAL: Record<string, GISLayerConfig['layerType']> = {
+  // planned landuse
+  complete_planned_landuse: 'final_landuse',
+  planned_landuse: 'final_landuse',
+  planned_changes: 'planning_zone',
+  // current
+  current_landuse: 'final_landuse',
+  // projects / facilities / roads / axis overlays
+  planned_project: 'planning_zone',
+  planned_project_point: 'facility_point',
+  planned_facility: 'facility_point',
+  facility_point: 'facility_point',
+  planned_road: 'planned_road',
+  development_axis: 'development_axis',
+  // constraints
+  constraint: 'construction_control',
+  constraint_layer: 'construction_control',
+};
+
+function internalTypeFromV1(layerType: V1MapLayer['layer_type'], layerName: string): GISLayerConfig['layerType'] {
+  const byName = V1_LAYER_NAME_TO_INTERNAL[layerName.toLowerCase()];
+  if (byName) return byName;
+  // Fallbacks by layer_type group.
+  if (layerType === 'current' || layerType === 'planned') return 'final_landuse';
+  if (layerType === 'overlay') return 'planning_zone';
+  if (layerType === 'constraint') return 'construction_control';
+  return 'planning_zone';
+}
+
+/**
+ * Convert a v1 MapLayerCollection layer into the internal GISLayerConfig.
+ * The geojson is trusted to be an EPSG:4326 FeatureCollection produced by the
+ * backend snapshot, so we skip the expensive nested coordinate normalization.
+ */
+export function normalizeV1MapLayer(raw: unknown, index = 0): GISLayerConfig | null {
+  const value = parseMaybeJson(raw);
+  if (!value || typeof value !== 'object') return null;
+  const obj = value as Record<string, unknown>;
+  const layerType = String(obj.layer_type ?? '').toLowerCase() as V1MapLayer['layer_type'];
+  const layerName = String(obj.layer_name ?? obj.name ?? `layer_${index + 1}`);
+
+  const sourceGeojson = obj.geojson ?? obj.data ?? obj.featureCollection ?? obj.feature_collection ?? obj.features;
+  const geojson = normalizeFeatureCollection(sourceGeojson);
+  if (!geojson || geojson.features.length === 0) return null;
+
+  const internalType = internalTypeFromV1(layerType, layerName);
+
+  let displayGeojson = geojson;
+  if (internalType === 'facility_point') {
+    displayGeojson = {
+      ...geojson,
+      features: geojson.features
+        .filter((feature) => !isJunkAnnotationFeature(feature))
+        .map((feature) => {
+          const properties = feature.properties || {};
+          const normalized = normalizeFacilityLabel(properties);
+          const text = String(properties.text ?? '').trim();
+          if (text && !normalized.label) {
+            return {
+              ...feature,
+              properties: {
+                ...normalized,
+                label: text,
+                project_name: text,
+                status: '规划新建',
+              },
+            };
+          }
+          return { ...feature, properties: normalized };
+        }),
+    };
+  } else if (internalType === 'final_landuse' || internalType === 'function_zone') {
+    displayGeojson = {
+      ...geojson,
+      features: geojson.features.map(normalizeLanduseFeature),
+    };
+  }
+
+  const externalMeta: Record<string, unknown> = {
+    v1_layer_type: layerType,
+    v1_layer_name: layerName,
+    checksum: obj.checksum,
+    feature_count: obj.feature_count,
+  };
+
+  return {
+    geojson: displayGeojson,
+    layerType: internalType,
+    layerName,
+    visible: true,
+    featureCount: displayGeojson.features.length,
+    crs: typeof obj.crs === 'string' ? obj.crs : 'EPSG:4326',
+    metadata: {
+      path: `${layerType}/${layerName}`,
+      v1_layer_name: layerName,
+      ...externalMeta,
+    },
+  };
+}
+
+/**
+ * Convert a full v1 MapLayerCollection response into internal GISLayerConfig[]
+ * ordered current → planned → overlay → constraint.
+ */
+export function normalizeV1MapLayers(rawLayers: unknown): GISLayerConfig[] {
+  if (!Array.isArray(rawLayers)) return [];
+  const order: Record<string, number> = {
+    current: 0,
+    planned: 1,
+    overlay: 2,
+    constraint: 3,
+  };
+  return rawLayers
+    .map((layer, index) => normalizeV1MapLayer(layer, index))
+    .filter((layer): layer is GISLayerConfig => Boolean(layer))
+    .sort((a, b) => {
+      const aOrder = order[String(a.metadata?.v1_layer_type ?? '')] ?? 9;
+      const bOrder = order[String(b.metadata?.v1_layer_type ?? '')] ?? 9;
+      return aOrder - bOrder;
+    });
+}

@@ -23,3 +23,13 @@ npm run test:e2e
 - `e2e/`：规划流程、日志、GIS 图层、导出和生成链路测试。
 
 前端状态是可丢弃的 UI 投影；断线重连必须使用后端 `sync`/status 接口恢复，不能把浏览器内存当作 SSOT。
+
+### v1 交付结论消费
+
+- 人工审核走 `POST /human-review`（`event_id` 乐观锁），历史 checkpoint 分叉走
+  `POST /resume`（`mode: checkpoint`）。
+- `useDeliverySync` 在 `delivery_ready`/终态/`resync_required` 时拉取 `/delivery` 与
+  `/map-layers`，`partial`/`diagnostic_only`/`statutory_complete=false` 由
+  `DeliveryStatusBanner` 显著展示，不显示为法定完整成果。
+- 地图以 `/map-layers` 的 `DeliverySpatialSnapshot` 投影为准（`normalizeV1MapLayers`
+  做 v1 词汇 → 内部渲染词汇映射），`snapshot_checksum` 变化时整体替换图层。

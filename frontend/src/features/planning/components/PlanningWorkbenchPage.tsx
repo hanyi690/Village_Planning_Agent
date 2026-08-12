@@ -48,6 +48,7 @@ import {
   type WorkbenchView,
 } from '@/features/planning/utils/workbench-nav';
 import LlmStatusBanner from '@/features/planning/components/LlmStatusBanner';
+import DeliveryStatusBanner from '@/features/planning/components/DeliveryStatusBanner';
 import ExportDialog from '@/features/planning/components/ExportDialog';
 import QualityEvaluationPanel from '@/features/evaluation/components/QualityEvaluationPanel';
 import { useQualityEvaluation } from '@/features/evaluation/hooks/useQualityEvaluation';
@@ -1833,6 +1834,7 @@ function UnifiedPlanningWorkbench() {
         <main className={`min-h-0 min-w-0 ${workbenchView === 'overview' ? 'flex h-full min-h-0 flex-col overflow-hidden p-2' : 'overflow-y-auto p-3 pb-6 lg:p-4 lg:pb-8'}`}>
           <div className={`mx-auto flex w-full max-w-[1700px] flex-col gap-3 ${workbenchView === 'overview' ? 'min-h-0 flex-1' : 'min-h-full'}`}>
             <LlmStatusBanner />
+            <DeliveryStatusBanner />
             <header className={`flex shrink-0 items-center justify-between rounded-2xl border border-[#e1eee8] bg-white shadow-[0_7px_24px_rgba(42,102,79,0.04)] ${
               workbenchView === 'overview'
                 ? 'hidden'

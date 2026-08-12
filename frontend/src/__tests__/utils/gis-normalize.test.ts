@@ -1,5 +1,9 @@
 import { normalizeTileSource } from '@/features/planning/constants/gis';
-import { normalizeGisLayer } from '@/features/planning/utils/gis-normalize';
+import {
+  normalizeGisLayer,
+  normalizeV1MapLayer,
+  normalizeV1MapLayers,
+} from '@/features/planning/utils/gis-normalize';
 
 const pointCollection = {
   type: 'FeatureCollection',
@@ -117,5 +121,113 @@ describe('normalizeGisLayer', () => {
       facility_name: '规划停车场',
       label: '规划停车场',
     });
+  });
+});
+
+describe('normalizeV1MapLayer', () => {
+  const parcelCollection = {
+    type: 'FeatureCollection',
+    features: [
+      {
+        type: 'Feature',
+        properties: { DLBM: '030101', DLMC: '水田' },
+        geometry: {
+          type: 'Polygon',
+          coordinates: [[[116.1, 24.3], [116.2, 24.3], [116.2, 24.4], [116.1, 24.3]]],
+        },
+      },
+    ],
+  };
+
+  it('maps planned complete_planned_landuse to final_landuse', () => {
+    const layer = normalizeV1MapLayer({
+      layer_type: 'planned',
+      layer_name: 'complete_planned_landuse',
+      geojson: parcelCollection,
+    });
+    expect(layer?.layerType).toBe('final_landuse');
+    expect(layer?.metadata?.v1_layer_name).toBe('complete_planned_landuse');
+  });
+
+  it('maps current_landuse to final_landuse render vocabulary', () => {
+    const layer = normalizeV1MapLayer({
+      layer_type: 'current',
+      layer_name: 'current_landuse',
+      geojson: parcelCollection,
+    });
+    expect(layer?.layerType).toBe('final_landuse');
+  });
+
+  it('maps overlay facility point to facility_point', () => {
+    const layer = normalizeV1MapLayer({
+      layer_type: 'overlay',
+      layer_name: 'planned_facility',
+      geojson: {
+        type: 'FeatureCollection',
+        features: [{
+          type: 'Feature',
+          properties: { '注记': '停' },
+          geometry: { type: 'Point', coordinates: [116.1, 24.3] },
+        }],
+      },
+    });
+    expect(layer?.layerType).toBe('facility_point');
+  });
+
+  it('maps overlay road to planned_road', () => {
+    const layer = normalizeV1MapLayer({
+      layer_type: 'overlay',
+      layer_name: 'planned_road',
+      geojson: {
+        type: 'FeatureCollection',
+        features: [{
+          type: 'Feature',
+          properties: {},
+          geometry: { type: 'LineString', coordinates: [[116.1, 24.3], [116.2, 24.4]] },
+        }],
+      },
+    });
+    expect(layer?.layerType).toBe('planned_road');
+  });
+
+  it('returns null for empty feature collections', () => {
+    const layer = normalizeV1MapLayer({
+      layer_type: 'planned',
+      layer_name: 'complete_planned_landuse',
+      geojson: { type: 'FeatureCollection', features: [] },
+    });
+    expect(layer).toBeNull();
+  });
+});
+
+describe('normalizeV1MapLayers', () => {
+  it('orders current → planned → overlay → constraint', () => {
+    const layers = normalizeV1MapLayers([
+      {
+        layer_type: 'overlay',
+        layer_name: 'planned_road',
+        geojson: {
+          type: 'FeatureCollection',
+          features: [{ type: 'Feature', properties: {}, geometry: { type: 'Point', coordinates: [0, 0] } }],
+        },
+      },
+      {
+        layer_type: 'current',
+        layer_name: 'current_landuse',
+        geojson: {
+          type: 'FeatureCollection',
+          features: [{ type: 'Feature', properties: {}, geometry: { type: 'Point', coordinates: [0, 0] } }],
+        },
+      },
+      {
+        layer_type: 'planned',
+        layer_name: 'complete_planned_landuse',
+        geojson: {
+          type: 'FeatureCollection',
+          features: [{ type: 'Feature', properties: {}, geometry: { type: 'Point', coordinates: [0, 0] } }],
+        },
+      },
+    ]);
+    expect(layers.map((l) => l.metadata?.v1_layer_type)).toEqual(['current', 'planned', 'overlay']);
   });
 });

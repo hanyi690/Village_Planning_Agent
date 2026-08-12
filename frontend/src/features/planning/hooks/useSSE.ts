@@ -84,6 +84,11 @@ export function useSSEConnection({
       'layer_paused',
       'execution_resumed',
       'completed',
+      // v1 delivery / resync / human review — must never be merged or deferred
+      'delivery_ready',
+      'resync_required',
+      'human_review',
+      'human_review_paused',
       // GIS events —图层渲染必须立即可见
       'gis_result',
       'gis_layer_update',
@@ -245,6 +250,12 @@ export function useSSEConnection({
               syncBackendState(statusData);
               return planningApi.syncEvents(currentSessionId, lastSeq);
             }).then((syncResult) => {
+              if (syncResult && syncResult.resync_required) {
+                // Full REST recovery: drop stale events, rebuild from /state.
+                usePlanningStore.getState().setResyncRequired(true);
+                console.warn('[useSSEConnection] resync_required: full REST recovery needed');
+                return;
+              }
               if (syncResult && syncResult.events.length > 0) {
                 console.log(`[useSSEConnection] Synced ${syncResult.events.length} missed events`);
                 for (const event of syncResult.events) {

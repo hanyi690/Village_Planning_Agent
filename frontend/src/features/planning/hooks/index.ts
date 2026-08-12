@@ -66,6 +66,9 @@ export { useStreamingText, useStreamingAccumulator } from "./useStreaming";
 // Approval
 export { useApprovalActions } from "./useApprovalActions";
 
+// Delivery & map-layers (v1 authoritative projection sync)
+export { useDeliverySync } from "./useDelivery";
+
 // Persistence & Session
 export { useMessagePersistence } from "./usePersistence";
 export { useSessionRestore } from "./useSessionRestore";

@@ -26,6 +26,7 @@ import type {
   GeocodeResponse,
   GisDataUploadResponse,
   RenderLayersResponse,
+  DeliveryProjection,
   HumanReviewListResponse,
   HumanReviewResolveRequest,
   HumanReviewResolveResponse,
@@ -296,43 +297,11 @@ export const planningApi = {
   },
 
   /**
-   * Approve current review
-   */
-  async approveReview(sessionId: string): Promise<{ status: string }> {
-    return this.submitFeedback(sessionId, { approve: true });
-  },
-
-  /**
-   * Reject current review with feedback
-   */
-  async rejectReview(sessionId: string, feedback: string, dimensions?: string[], images?: ImageData[]): Promise<{ status: string; dimensions?: string[] }> {
-    return this.submitFeedback(sessionId, {
-      feedback,
-      dimensions,
-      images,
-    });
-  },
-
-  /**
    * Send chat message to planning session
    * POST /api/sessions/{session_id}/feedback
    */
   async sendChatMessage(sessionId: string, message: string, images?: ImageData[]): Promise<{ status: string }> {
     return this.submitFeedback(sessionId, { message, images });
-  },
-
-  /**
-   * Rollback / resume from checkpoint
-   * POST /api/sessions/{session_id}/resume/{checkpoint_id}
-   */
-  async rollbackCheckpoint(sessionId: string, checkpointId: string): Promise<{
-    status: string;
-    checkpoint_id: string;
-    layer: number;
-  }> {
-    return apiRequest(`/api/sessions/${sessionId}/resume/${checkpointId}`, {
-      method: 'POST',
-    });
   },
 
   /**
@@ -352,6 +321,7 @@ export const planningApi = {
     events: PlanningSSEEvent[];
     last_seq: number;
     from_seq: number;
+    resync_required: boolean;
   }> {
     const result = await apiRequest<{
       events: Array<{ type: string; seq: number; data: PlanningSSEDataBase & { type?: PlanningSSEEventType } }>;
@@ -369,6 +339,7 @@ export const planningApi = {
       })),
       last_seq: result.last_seq,
       from_seq: fromSeq,
+      resync_required: Boolean(result.resync_required),
     };
   },
 
@@ -627,15 +598,50 @@ export const planningApi = {
   async getRenderLayers(sessionId: string): Promise<RenderLayersResponse> {
     const response = await apiRequest<{
       layers: Array<{ layer_type: string; layer_name: string; geojson: RenderLayersResponse['layers'][number]['data'] }>;
+      snapshot_checksum?: string;
+      delivery_status?: RenderLayersResponse['delivery_status'];
     }>(`/api/v1/sessions/${sessionId}/map-layers`);
     return {
       session_id: sessionId,
+      snapshot_checksum: response.snapshot_checksum,
+      delivery_status: response.delivery_status,
       layers: response.layers.map((layer) => ({
+        // Preserve the raw v1 layer_type so the adapter can map authoritatively.
         layerType: layer.layer_type,
         layerName: layer.layer_name,
         data: layer.geojson,
       })),
     };
+  },
+
+  /**
+   * Get delivery projection for a session.
+   * GET /api/v1/sessions/{session_id}/delivery
+   */
+  async getDelivery(sessionId: string): Promise<DeliveryProjection> {
+    return apiRequest<DeliveryProjection>(`/api/v1/sessions/${sessionId}/delivery`);
+  },
+
+  /**
+   * Read a typed artifact by explicit key.
+   * GET /api/v1/sessions/{session_id}/artifacts/{artifact_key}
+   * 404 means the stage has not produced it yet, not a session failure.
+   */
+  async getArtifact(
+    sessionId: string,
+    artifactKey: string,
+  ): Promise<{
+    session_id: string;
+    artifact_key: string;
+    artifact_ref: { digest: string; descriptor_digest: string };
+    payload: Record<string, unknown>;
+  }> {
+    return apiRequest<{
+      session_id: string;
+      artifact_key: string;
+      artifact_ref: { digest: string; descriptor_digest: string };
+      payload: Record<string, unknown>;
+    }>(`/api/v1/sessions/${sessionId}/artifacts/${artifactKey}`);
   },
 
   /**
@@ -659,20 +665,62 @@ export const planningApi = {
   },
 
   /**
-   * Submit human-review decisions and resume the post-L3 chain
+   * Submit human-review decisions and resume the post-L3 chain.
    * POST /api/v1/sessions/{session_id}/human-review
+   * action ∈ approve | retry | reject. Must echo the current event_id as an
+   * optimistic lock; a stale/conflicting decision returns 409.
    */
   async resolveHumanReview(
     sessionId: string,
-    decisions: Record<string, unknown>,
     eventId: string,
+    options: {
+      action?: 'approve' | 'retry' | 'reject';
+      feedback?: string;
+      decisions?: Record<string, unknown>;
+    } = {},
   ): Promise<HumanReviewResolveResponse> {
-    const action = decisions.action === 'retry' || decisions.action === 'reject'
-      ? decisions.action
-      : 'approve';
+    const action = options.action ?? 'approve';
+    const decisions = options.decisions ?? {};
     return apiRequest<HumanReviewResolveResponse>(`/api/v1/sessions/${sessionId}/human-review`, {
       method: 'POST',
       body: JSON.stringify({ event_id: eventId, action, decisions } satisfies HumanReviewResolveRequest & { action: string }),
+    });
+  },
+
+  /**
+   * Resume a workflow from a checkpoint or an active interrupt.
+   * POST /api/v1/sessions/{session_id}/resume
+   * - interrupt: resumes the current HUMAN checkpoint with the same event_id.
+   * - checkpoint: forks a historical checkpoint into a new branch.
+   */
+  async resumeSession(
+    sessionId: string,
+    request: {
+      mode: 'interrupt' | 'checkpoint';
+      event_id?: string;
+      action?: 'approve' | 'retry' | 'reject';
+      feedback?: string;
+      checkpoint_id?: string;
+      replay_from_stage?: string;
+    },
+  ): Promise<{
+    session_id: string;
+    mode: 'interrupt' | 'checkpoint';
+    status: string;
+    checkpoint_id: string;
+    branch_id: string;
+    resume_plan: Record<string, unknown>;
+  }> {
+    return apiRequest<{
+      session_id: string;
+      mode: 'interrupt' | 'checkpoint';
+      status: string;
+      checkpoint_id: string;
+      branch_id: string;
+      resume_plan: Record<string, unknown>;
+    }>(`/api/v1/sessions/${sessionId}/resume`, {
+      method: 'POST',
+      body: JSON.stringify(request),
     });
   },
 };

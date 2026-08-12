@@ -35,6 +35,8 @@ export type {
   ArtifactRefResponse,
   RenderLayer,
   RenderLayersResponse,
+  DeliveryStatus,
+  DeliveryProjection,
   HumanReviewItem,
   HumanReviewListResponse,
   HumanReviewResolveRequest,

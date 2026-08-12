@@ -7,6 +7,10 @@ import { createErrorMessage } from '../utils/message-helpers';
 /**
  * Shared approve/reject actions with loading state.
  * Replaces duplicated logic in FocusArea and BottomActionBar.
+ *
+ * Uses the v1 /human-review endpoint with the current event_id as an
+ * optimistic lock. A stale/conflicting event_id returns 409 and the caller
+ * should refresh /state + /human-review rather than auto-retry.
  */
 export function useApprovalActions() {
   const sessionId = useSessionId();
@@ -16,15 +20,32 @@ export function useApprovalActions() {
   const addMessage = usePlanningStore((state) => state.addMessage);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
+  // Fetch the current HUMAN event_id (optimistic lock) before submitting.
+  const resolveWithDecision = useCallback(
+    async (action: 'approve' | 'retry' | 'reject', feedback?: string) => {
+      if (!sessionId) throw new Error('No session ID');
+      const review = usePlanningStore.getState().humanReview;
+      const eventId =
+        review?.event_id ??
+        (await planningApi.getHumanReview(sessionId)).event_id ??
+        null;
+      if (!eventId) {
+        throw new Error('没有待审核的人工审核项（缺少 event_id）');
+      }
+      await planningApi.resolveHumanReview(sessionId, eventId, {
+        action,
+        ...(feedback ? { feedback } : {}),
+      });
+      usePlanningStore.getState().clearHumanReview();
+    },
+    [sessionId],
+  );
+
   const approve = useCallback(async () => {
     if (!sessionId || isSubmitting) return;
     setIsSubmitting(true);
     try {
-      const result = await planningApi.submitFeedback(sessionId, { approve: true });
-      // Read current_layer from backend response for immediate UI sync
-      if (result?.current_layer) {
-        usePlanningStore.setState({ lastPauseLayer: result.current_layer });
-      }
+      await resolveWithDecision('approve');
       setPaused(false);
       setPendingReviewLayer(null);
       // Reconnect/sync SSE so layer_start and subsequent dimension events are not missed.
@@ -36,13 +57,13 @@ export function useApprovalActions() {
     } finally {
       setIsSubmitting(false);
     }
-  }, [sessionId, setPaused, setPendingReviewLayer, triggerSseReconnect, addMessage, isSubmitting]);
+  }, [sessionId, setPaused, setPendingReviewLayer, triggerSseReconnect, addMessage, resolveWithDecision, isSubmitting]);
 
   const reject = useCallback(async () => {
     if (!sessionId || isSubmitting) return;
     setIsSubmitting(true);
     try {
-      await planningApi.submitFeedback(sessionId, { approve: false, feedback: '需要修改' });
+      await resolveWithDecision('reject', '需要修改');
       setPaused(false);
       triggerSseReconnect();
     } catch (error) {
@@ -50,7 +71,7 @@ export function useApprovalActions() {
     } finally {
       setIsSubmitting(false);
     }
-  }, [sessionId, setPaused, triggerSseReconnect, isSubmitting]);
+  }, [sessionId, setPaused, triggerSseReconnect, resolveWithDecision, isSubmitting]);
 
-  return { approve, reject, isSubmitting };
+  return { approve, reject, isSubmitting, resolveWithDecision };
 }

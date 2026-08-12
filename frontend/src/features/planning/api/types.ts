@@ -308,6 +308,12 @@ export interface SessionStatusResponse {
   // Agent State (Single Source of Truth)
   phase: string;
   current_wave: number;
+  // v1 SessionProjection fields (authoritative)
+  delivery_status?: 'complete' | 'partial' | 'diagnostic_only' | null;
+  statutory_complete?: boolean;
+  human_review_pending?: boolean;
+  last_event_seq?: number;
+  active_stage?: string;
   // Note: reports 不再从后端同步，前端通过 SSE 或 API 获取
   completed_dimensions: {
     layer1: string[];
@@ -717,6 +723,27 @@ export interface RenderLayer {
 export interface RenderLayersResponse {
   session_id: string;
   layers: RenderLayer[];
+  snapshot_checksum?: string;
+  delivery_status?: 'complete' | 'partial' | 'diagnostic_only' | null;
+}
+
+// ============================================
+// Delivery Projection Types (v1)
+// ============================================
+
+export type DeliveryStatus = 'complete' | 'partial' | 'diagnostic_only';
+
+export interface DeliveryProjection {
+  schema_version?: '1.0';
+  session_id: string;
+  available: boolean;
+  delivery_status: DeliveryStatus | null;
+  statutory_complete: boolean;
+  snapshot_checksum: string;
+  deferral_summary: Record<string, unknown>;
+  diagnostic_summary: Record<string, unknown>;
+  deliverables: Array<Record<string, unknown>>;
+  downloads: string[];
 }
 
 // ============================================

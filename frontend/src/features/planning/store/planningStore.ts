@@ -399,6 +399,29 @@ export interface PlanningState {
   isFullMapOpen: boolean;
   gisTriggerPending: boolean;
   villageCenter?: [number, number];
+
+  // ============================================
+  // Delivery & Artifact (v1 authoritative projections)
+  // ============================================
+  /** Delivery projection: available, delivery_status, statutory_complete, snapshot_checksum */
+  delivery: {
+    available: boolean;
+    delivery_status: 'complete' | 'partial' | 'diagnostic_only' | null;
+    statutory_complete: boolean;
+    snapshot_checksum: string;
+    deferral_summary: Record<string, unknown>;
+    diagnostic_summary: Record<string, unknown>;
+    deliverables: Array<Record<string, unknown>>;
+    downloads: string[];
+  } | null;
+  /** True when a resync_required event was received and full REST recovery is needed. */
+  resyncRequired: boolean;
+  /** Human review state from /human-review (event_id is the optimistic lock). */
+  humanReview: {
+    event_id: string | null;
+    paused_stage: string;
+    items: Array<Record<string, unknown>>;
+  } | null;
 }
 
 // ============================================
@@ -578,6 +601,11 @@ function createInitialState(conversationId: string): PlanningState {
     isFullMapOpen: false,
     gisTriggerPending: false,
     villageCenter: undefined,
+
+    // Delivery & Artifact
+    delivery: null,
+    resyncRequired: false,
+    humanReview: null,
   };
 }
 
@@ -763,6 +791,18 @@ export interface PlanningActions {
 
   /** Advance SSE dedupe cursor without processing events (history hydrate). */
   setLastProcessedSeq: (seq: number) => void;
+
+  // ============================================
+  // Delivery & Artifact (v1)
+  // ============================================
+  setDelivery: (delivery: PlanningState['delivery']) => void;
+  clearDelivery: () => void;
+  setResyncRequired: (required: boolean) => void;
+  setHumanReview: (review: PlanningState['humanReview']) => void;
+  clearHumanReview: () => void;
+
+  /** Apply authoritative /map-layers layers into the map snapshot. */
+  applyMapLayers: (layers: GISLayerConfig[], snapshotChecksum?: string) => void;
 }
 
 function restoreGisLayersFromStatus(
@@ -829,6 +869,30 @@ function handleSSEEventInStore(state: PlanningState, event: StoreEvent): void {
 
     case "completed": {
       state.status = "completed";
+      break;
+    }
+
+    case "delivery_ready": {
+      // Delivery projection is available; the UI should pull /delivery and
+      // /map-layers. We do not interpret the payload here — the authoritative
+      // data is read from REST so reconnects stay consistent.
+      state.status = "completed";
+      break;
+    }
+
+    case "resync_required": {
+      // Local event window is discontinuous. Do NOT apply stale events;
+      // full REST recovery (/state → /events/sync) is required.
+      state.resyncRequired = true;
+      break;
+    }
+
+    case "human_review":
+    case "human_review_paused": {
+      // A HUMAN checkpoint is active. The UI should pull /human-review for the
+      // current event_id and items. We do not fabricate items from the payload.
+      state.status = "paused";
+      state.isPaused = true;
       break;
     }
 
@@ -2248,6 +2312,33 @@ export const usePlanningStore = create<PlanningState & PlanningActions>()(
         if (backendData.phase) state.phase = backendData.phase;
         if (backendData.current_wave)
           state.currentWave = backendData.current_wave;
+
+        // v1 SessionProjection fields: authoritative delivery / review flags.
+        if (backendData.delivery_status !== undefined) {
+          if (!state.delivery) {
+            state.delivery = {
+              available: false,
+              delivery_status: backendData.delivery_status,
+              statutory_complete: false,
+              snapshot_checksum: '',
+              deferral_summary: {},
+              diagnostic_summary: {},
+              deliverables: [],
+              downloads: [],
+            };
+          }
+          state.delivery.delivery_status = backendData.delivery_status;
+          state.delivery.available = backendData.delivery_status !== null;
+        }
+        if (backendData.statutory_complete !== undefined && state.delivery) {
+          state.delivery.statutory_complete = backendData.statutory_complete;
+        }
+        if (backendData.human_review_pending !== undefined) {
+          state.isPaused = backendData.human_review_pending;
+          if (backendData.human_review_pending && !state.humanReview) {
+            state.humanReview = { event_id: null, paused_stage: '', items: [] };
+          }
+        }
         // Note: reports 不再从后端同步，前端通过 SSE 或 API 获取
         if (backendData.completed_dimensions) {
           const completedData = backendData.completed_dimensions as Record<
@@ -2677,6 +2768,52 @@ export const usePlanningStore = create<PlanningState & PlanningActions>()(
         if (seq > state.lastProcessedSeq) {
           state.lastProcessedSeq = seq;
         }
+      }),
+
+    // ============================================
+    // Delivery & Artifact (v1)
+    // ============================================
+    setDelivery: (delivery) =>
+      set((state) => {
+        state.delivery = delivery;
+      }),
+    clearDelivery: () =>
+      set((state) => {
+        state.delivery = null;
+      }),
+    setResyncRequired: (required) =>
+      set((state) => {
+        state.resyncRequired = required;
+      }),
+    setHumanReview: (review) =>
+      set((state) => {
+        state.humanReview = review;
+      }),
+    clearHumanReview: () =>
+      set((state) => {
+        state.humanReview = null;
+      }),
+
+    applyMapLayers: (layers, snapshotChecksum) =>
+      set((state) => {
+        if (layers.length === 0) return;
+        // Replace the authoritative delivery snapshot wholesale keyed by checksum.
+        // Do NOT merge with prior SSE deltas; a checksum change means a new snapshot.
+        for (const key of Object.keys(state.gisLayers)) {
+          if (
+            key.startsWith("v1_") ||
+            key.startsWith("status_") ||
+            key.startsWith("result_") ||
+            key.endsWith("_spatial_layout")
+          ) {
+            delete state.gisLayers[key];
+          }
+        }
+        state.gisLayers[`v1_${snapshotChecksum || Date.now()}`] = layers;
+        state.gisGenerating = false;
+        state.gisTriggerPending = false;
+        state.isRightPanelExpanded = true;
+        state.processPanelTab = "map";
       }),
 
     initConversation: (conversationId) =>

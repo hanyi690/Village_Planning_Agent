@@ -15,7 +15,7 @@
 
 import { useEffect, useCallback, useMemo, ReactNode, Suspense } from 'react';
 import { usePlanningStore } from '../store/planningStore';
-import { useSSEConnection, useMessagePersistence, useSessionRestore } from '../hooks';
+import { useSSEConnection, useMessagePersistence, useSessionRestore, useDeliverySync } from '../hooks';
 import { planningApi, dataApi, VillageInfo, VillageSession, ImageData } from '../api';
 import { createSystemMessage, createErrorMessage, getErrorMessage } from '@/features/planning/utils';
 import { hydrateSessionSnapshot } from '@/features/planning/utils/session-hydrate';
@@ -167,10 +167,14 @@ Session ID: ${response.session_id.slice(0, 8)}...`;
         sessionId, store.isPaused, store.status, store.interruptInfo);
     logger.context.info('Approving review', { sessionId });
     try {
-      const result = await planningApi.approveReview(sessionId);
-      if (result && 'current_layer' in result && result.current_layer) {
-        usePlanningStore.setState({ lastPauseLayer: result.current_layer as number });
+      // v1: resolve with the current event_id optimistic lock.
+      const review = store.humanReview
+        ?? (await planningApi.getHumanReview(sessionId));
+      if (!review.event_id) {
+        throw new Error('没有待审核的人工审核项（缺少 event_id）');
       }
+      await planningApi.resolveHumanReview(sessionId, review.event_id, { action: 'approve' });
+      store.clearHumanReview();
       store.setPaused(false);
       store.setPendingReviewLayer(null);
       store.setStatus('planning');
@@ -196,7 +200,17 @@ Session ID: ${response.session_id.slice(0, 8)}...`;
         hasImages: (images?.length ?? 0) > 0,
       });
       try {
-        await planningApi.rejectReview(sessionId, feedback, dimensions, images);
+        // v1: reject with the current event_id optimistic lock.
+        const review = store.humanReview
+          ?? (await planningApi.getHumanReview(sessionId));
+        if (!review.event_id) {
+          throw new Error('没有待审核的人工审核项（缺少 event_id）');
+        }
+        await planningApi.resolveHumanReview(sessionId, review.event_id, {
+          action: 'reject',
+          feedback,
+        });
+        store.clearHumanReview();
         store.setPaused(false);
 
         // Use clearRevisionProgress to preserve other completed dimensions
@@ -223,7 +237,11 @@ Session ID: ${response.session_id.slice(0, 8)}...`;
       const store = usePlanningStore.getState();
       const sessionId = store.sessionId;
       if (!sessionId) throw new Error('No session ID');
-      await planningApi.rollbackCheckpoint(sessionId, checkpointId);
+      // v1: fork a historical checkpoint into a new branch.
+      await planningApi.resumeSession(sessionId, {
+        mode: 'checkpoint',
+        checkpoint_id: checkpointId,
+      });
       store.setSelectedCheckpoint(checkpointId);
 
       // Sync state after rollback
@@ -477,6 +495,9 @@ export function PlanningProvider({ children, conversationId }: PlanningProviderP
 
   // SSE connection with reconnect trigger
   useSSEConnection({ sessionId, resumeTrigger: sseResumeTrigger });
+
+  // Delivery + map-layers authoritative projection sync
+  useDeliverySync();
 
   // Message persistence
   useMessagePersistence();
