@@ -12,9 +12,11 @@ from app.modules.schema.contracts.spatial_delivery_contracts import (
     SpatialLayerRef,
     SpatialReadRequest,
 )
-from app.modules.spatial_ops.io import (
+from app.infrastructure.gis.spatial_data_port import (
     GeoJSONSpatialDataPort,
     PyogrioSpatialDataPort,
+)
+from app.infrastructure.export.delivery_snapshot import (
     build_delivery_spatial_snapshot,
     build_delivery_spatial_snapshot_from_gis_data,
     load_complete_planned_geojson,

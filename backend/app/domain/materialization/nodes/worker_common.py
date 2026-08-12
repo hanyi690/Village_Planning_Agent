@@ -164,7 +164,7 @@ def _build_landuse_geojson(state: ExecuteAgentState) -> dict:
     """Resolve current land use from the bundle-backed data boundary."""
     spatial_workspace = getattr(state, "spatial_workspace", None)
     if spatial_workspace is not None:
-        from app.modules.spatial_ops.io import canonical_gis_data_from_workspace
+        from app.infrastructure.export.delivery_snapshot import canonical_gis_data_from_workspace
 
         landuse = canonical_gis_data_from_workspace(spatial_workspace).get("landuse_current_geojson")
     else:

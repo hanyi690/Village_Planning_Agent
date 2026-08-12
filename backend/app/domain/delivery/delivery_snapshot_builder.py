@@ -33,7 +33,7 @@ def build_spatial_delivery_products(
         build_delivery_render_layers,
         build_planned_overlay_layers,
     )
-    from app.modules.spatial_ops.io import (
+    from app.infrastructure.export.delivery_snapshot import (
         build_delivery_spatial_snapshot_from_gis_data,
         canonical_gis_data_from_workspace,
         load_complete_planned_geojson,

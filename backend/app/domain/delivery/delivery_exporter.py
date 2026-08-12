@@ -15,7 +15,7 @@ def export_delivery_products(
 ) -> dict[str, Any]:
     """Write the delivery package from the same snapshot used by rendering."""
 
-    from app.modules.spatial_ops.output.export_package import export_delivery_package
+    from app.infrastructure.export.export_package import export_delivery_package
 
     return export_delivery_package(
         layout_configs=render_layers,

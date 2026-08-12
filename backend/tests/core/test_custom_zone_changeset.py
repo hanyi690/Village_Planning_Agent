@@ -38,7 +38,8 @@ from app.modules.spatial_ops.zoning.custom_zone_changeset import (
 )
 from app.modules.schema.encodings.dicts.vocabularies.loader import register_vocabulary
 from app.modules.schema.contracts.spatial_delivery_contracts import SpatialLayerRef
-from app.modules.spatial_ops.io import GeoJSONSpatialDataPort, build_delivery_spatial_snapshot
+from app.infrastructure.gis.spatial_data_port import GeoJSONSpatialDataPort
+from app.infrastructure.export.delivery_snapshot import build_delivery_spatial_snapshot
 
 
 def _vocabulary(*, rules: list[TypingRule] | None = None) -> Vocabulary:

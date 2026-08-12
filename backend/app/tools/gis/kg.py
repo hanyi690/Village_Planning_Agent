@@ -22,7 +22,7 @@ def build_knowledge_graph(
     tool_call_id: Annotated[str, InjectedToolCallId] = "",
 ) -> Command:
     """LangChain wrapper around the direct KG build service."""
-    from app.modules.spatial_ops.io import canonical_gis_data_from_workspace
+    from app.infrastructure.export.delivery_snapshot import canonical_gis_data_from_workspace
 
     gis_data = canonical_gis_data_from_workspace(spatial_workspace)
     update = build_knowledge_graph_data(

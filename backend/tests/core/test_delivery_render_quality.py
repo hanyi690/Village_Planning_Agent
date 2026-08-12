@@ -4,7 +4,7 @@ from app.domain.delivery.render_layers import build_delivery_render_layers
 from app.domain.delivery.delivery_validator import (
     assess_render_quality,
 )
-from app.modules.spatial_ops.io.delivery_snapshot import (
+from app.infrastructure.export.delivery_snapshot import (
     build_delivery_spatial_snapshot_from_gis_data,
     canonical_gis_data_from_workspace,
 )

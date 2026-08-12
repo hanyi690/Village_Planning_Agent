@@ -13,7 +13,7 @@ from app.modules.schema.contracts.spatial_delivery_contracts import (
     SpatialLayerRef,
 )
 
-from .spatial_data_port import LocalSpatialDataPort, SpatialDataPort
+from app.infrastructure.gis.spatial_data_port import LocalSpatialDataPort, SpatialDataPort
 
 
 def _value(item: Any, name: str, default: Any = None) -> Any:

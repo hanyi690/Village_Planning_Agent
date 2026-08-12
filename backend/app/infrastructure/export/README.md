@@ -1,12 +1,11 @@
-# spatial_ops.output — 前端图层契约与成果导出
+# infrastructure.export — 前端图层契约与成果导出
 
 ## 职责边界
 
-- `map_layers.py`：将 DELIVER 已加载的 snapshot 图层和规划覆盖层转换为前端
+- `app.infrastructure.rendering.map_layers.py`：将 DELIVER 已加载的 snapshot 图层和规划覆盖层转换为前端
   MapLibre 图层契约；它不读取 AgentState，也不决定空间事实。
 - `build_trace_layer(...)`：仅用于 EXPLORE 定位校核视图，不属于正式交付图层。
-- `export_package.py`：标准 GeoJSON 规划成果包导出。
-  - `export_delivery_package(...)`：只接收 `DeliverySpatialSnapshot`，按
+- `export_package.py`：标准 GeoJSON 规划成果包导出。  - `export_delivery_package(...)`：只接收 `DeliverySpatialSnapshot`，按
     GDB_LAYER_REGISTRY 写 current/、planned/、
     tables/（land_balance.json）、layout.json 与 run_manifest.json；
     输出字段按 registry 归一化补齐。

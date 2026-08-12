@@ -273,10 +273,10 @@ def build_delivery_render_layers(
     snapshot: Any,
 ) -> List[Dict[str, Any]]:
     """Build all frontend layers by reading one DeliverySpatialSnapshot."""
-    from app.modules.spatial_ops.output.map_layers import build_map_layers
+    from app.infrastructure.rendering.map_layers import build_map_layers
     from app.spatial.delivery import colorize_feature_collection
 
-    from app.modules.spatial_ops.io import (
+    from app.infrastructure.export.delivery_snapshot import (
         load_complete_planned_geojson,
         load_snapshot_gis_data,
         load_snapshot_planned_overlays,

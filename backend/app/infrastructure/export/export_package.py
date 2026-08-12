@@ -73,7 +73,7 @@ def export_delivery_package(
                   construction_zone, (+ optional layers)
       tables/ — land_balance.json
     """
-    from app.modules.spatial_ops.io import (
+    from app.infrastructure.export.delivery_snapshot import (
         load_complete_planned_geojson,
         load_snapshot_gis_data,
     )
@@ -82,7 +82,7 @@ def export_delivery_package(
     complete_planned_geojson = load_complete_planned_geojson(snapshot)
 
     if not output_dir:
-        project_root = Path(__file__).resolve().parents[4]
+        project_root = Path(__file__).resolve().parents[3]
         run_key = _safe_run_key(session_id or village_name)
         base = project_root / "output" / "gis" / run_key
         output_dir = str(base)

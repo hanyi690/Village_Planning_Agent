@@ -342,7 +342,7 @@ def execute_road_planning_from_agent_state(state: Any) -> Dict[str, Any]:
 
     bundle = getattr(state, "spatial_workspace", None)
     if bundle is not None:
-        from app.modules.spatial_ops.io import canonical_gis_data_from_workspace
+        from app.infrastructure.export.delivery_snapshot import canonical_gis_data_from_workspace
 
         gis_data = canonical_gis_data_from_workspace(bundle)
     else:

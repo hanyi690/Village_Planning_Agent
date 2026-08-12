@@ -19,7 +19,7 @@ def _axis_worker(state: ExecuteAgentState) -> WorkerResult:
     if not _task_enabled(state, "axis"):
         return WorkerResult(worker_type="axis")
 
-    from app.modules.spatial_ops.io import canonical_gis_data_from_workspace
+    from app.infrastructure.export.delivery_snapshot import canonical_gis_data_from_workspace
 
     gis_data = canonical_gis_data_from_workspace(state.spatial_workspace)
     bound_intent = _execution_intent_from_plan(state)

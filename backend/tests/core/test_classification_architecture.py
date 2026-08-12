@@ -9,7 +9,8 @@ from pathlib import Path
 APP = Path(__file__).resolve().parents[2] / "app"
 RUNTIME_ROOTS = (
     APP / "agent",
-    APP / "modules/spatial_ops/output",
+    APP / "infrastructure/rendering",
+    APP / "infrastructure/export",
     APP / "modules/kg",
 )
 FORBIDDEN = (

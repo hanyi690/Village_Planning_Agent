@@ -2,10 +2,10 @@ import json
 from types import SimpleNamespace
 
 from app.domain.delivery.render_layers import build_delivery_render_layers
-from app.modules.spatial_ops.output.export_package import export_delivery_package
+from app.infrastructure.export.export_package import export_delivery_package
 from app.tools.gis.html_render import render_interactive_map
 from app.tools.gis.static_render import render_map_preview
-from app.modules.spatial_ops.io import build_delivery_spatial_snapshot_from_gis_data
+from app.infrastructure.export.delivery_snapshot import build_delivery_spatial_snapshot_from_gis_data
 
 
 def _polygon(x0, y0, x1, y1):
