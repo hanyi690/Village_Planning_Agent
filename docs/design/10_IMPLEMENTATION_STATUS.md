@@ -217,3 +217,22 @@ Delivery snapshot 的几何/占位质量闸门。DELIVER 入口已迁移到 `bac
 | DELIVER planned 输入 | COMPLETE | DELIVER 与 EXECUTE 状态均不再保存或读取 `allocated_geojson`；Snapshot 只接收 `ParcelChangeSet` 的 `planned_changes`。 |
 | HITL resume 路由 | COMPLETE | SELECT approve 直接继续 EXECUTE；显式 deferral 才生成新 revision，避免 checkpoint 元数据导致重复 HUMAN。 |
 | GIS checkpoint resume | CURRENT / PARTIAL | deterministic GIS E2E 已证明主图在 SELECT HUMAN 中断后可通过 SQLite checkpoint 关闭/重开并继续到 DELIVER，产出 660 个期末地块、项目面和定位点；这不是完整真实 LLM/L3 规划验收。当前 acceptance 在缺 provider key 时明确 skip，尚无本轮新真实空间规划 checkpoint。 |
+
+## 8. 2026-08-12 收敛完成状态
+
+本轮后端蓝图重构收敛完成，`tests/e2e tests/core tests/contracts` 全量回归通过
+`238 passed`（含新增 `test_blueprint_architecture.py` 的 5 个聚合架构守门测试）。
+
+- 全部阶段已迁移到 `app/domain/`；`app/agent/` 已删除。
+- `workflow_progress` carrier 已退役，改为 `runtime` channel；`LEGACY_GATE_STAGES`
+  已移除，统一走 CAS `gate_ref`。
+- `root_graph.py` 已收敛为唯一 artifact 生产者，不再直接写领域 artifact。
+- `app/services/` 已折叠（leaf 模块 → application/infrastructure）；仅 `runtime.py` +
+  `context/planning_context.py` 保留（Phase-5 延期项）。
+- `app/modules/` 已全部归并到 blueprint 归属目录并删除。
+- 存储：checkpoints 分离到 `checkpoints.db`；KG Layer-1 turtle 入 CAS；bundle blob 入
+  CAS 且 sha256 校验；session 删除清理全部存储。
+- `DimensionReport.summary` 仅为 UI 预览字段，不再作为权威事实读取。
+
+剩余已知项：`app/services/runtime.py` + `app/services/context/` 仍待迁移（Phase-5 延期）；
+真实 LLM acceptance 待验证（需配置 MINIMAX key）。

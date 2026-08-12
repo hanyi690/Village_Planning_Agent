@@ -16,7 +16,7 @@ def split_content_instruction(content_with_instruction: str) -> tuple[str, str]:
     """Split a report into (display_content, instruction_section).
 
     Local reimplementation of ReportStore.split_instruction semantics so the
-    parsing layer does not depend on app.services.
+    parsing layer stays decoupled from the runtime service layer.
     """
     if not content_with_instruction:
         return (content_with_instruction or "", "")
