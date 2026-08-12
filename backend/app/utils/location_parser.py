@@ -5,7 +5,7 @@ Supports formats:
   - "广东省梅州市平远县泗水镇金田村"
   - "金田村" (village name only)
 
-Migrated from app.modules.data.fetcher.py (deleted).
+Migrated from the data layer (fetcher.py, deleted).
 """
 
 from __future__ import annotations

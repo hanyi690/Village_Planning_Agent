@@ -11,8 +11,8 @@ from pathlib import Path
 import pytest
 from shapely.geometry import box, shape
 
-from app.modules.data.ingest import ingest_current_landuse
-from app.modules.data.encoding_detector import detect_encoding
+from app.data.ingestion.ingest import ingest_current_landuse
+from app.data.ingestion.encoding_detector import detect_encoding
 from app.infrastructure.kg.builder.layer1_control_lines import build_control_line_entities
 from app.infrastructure.kg.ontology import EntityTypes
 from app.modules.schema.provenance import ProvenanceSource

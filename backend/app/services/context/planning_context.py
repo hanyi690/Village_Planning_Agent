@@ -227,7 +227,7 @@ async def build_planning_context(
         semantic_query=semantic_query_port,
     )
     try:
-        from app.modules.data.bundle_assembly_adapter import DataBundleAssemblyAdapter
+        from app.data.ingestion.bundle_assembly_adapter import DataBundleAssemblyAdapter
 
         ports.bundle_assembly = DataBundleAssemblyAdapter()
     except Exception as e:

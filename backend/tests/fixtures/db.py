@@ -88,12 +88,12 @@ def pipeline_reset():
       * ``app.application.sessions.session_bundle._bundle_cache``
       * ``app.infrastructure.kg.manager.KGManager._instance``
       * ``app.infrastructure.storage.bundle_store.BundleStore._instance``
-      * ``app.modules.data.connections.base.ConnectionRegistry._connections``
+      * ``app.data.ingestion.connections.base.ConnectionRegistry._connections``
     Clear them so a test observes a clean pipeline and does not leak state
     into the next one.
     """
     def _reset() -> None:
-        import app.modules.data.connections.base as conn_base
+        import app.data.ingestion.connections.base as conn_base
         import app.infrastructure.kg.manager as kg_man
         import app.infrastructure.storage.bundle_store as bs
         import app.application.sessions.session_bundle as sb

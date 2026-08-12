@@ -70,7 +70,7 @@ async def build_session_bundle(
             )
             bundle = VillageBundle(village_name="")
         else:
-            from app.modules.data.catalog import DataCatalog
+            from app.data.catalog import DataCatalog
 
             bundle = await DataCatalog().load_village_bundle_async(
                 village_name,

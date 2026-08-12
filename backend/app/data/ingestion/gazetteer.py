@@ -45,7 +45,7 @@ class PlaceNameResolver:
     def geocoder(self):
         """Lazy-init Tianditu geocoding client."""
         if self._geocoder is None:
-            from app.modules.data.providers.tianditu import TiandituProvider
+            from app.data.ingestion.providers.tianditu import TiandituProvider
             self._geocoder = TiandituProvider()
         return self._geocoder
 
