@@ -11,7 +11,7 @@ Architecture (see README.md):
     Catalog (YAML) -> Source/Driver -> Connection -> Storage & Cache
                                                         |
                                                         v
-                                              modules.schema.types.canonical
+                                              app.data.model.canonical
 
 Key components:
   - upload.py:                Session input file upload handling

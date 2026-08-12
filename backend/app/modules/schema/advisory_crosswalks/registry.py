@@ -48,7 +48,7 @@ class EncodingRegistry:
     @classmethod
     def from_center(cls) -> "EncodingRegistry":
         """Build the registry reusing advisory crosswalk + same-system tables."""
-        from app.modules.schema.encodings.colors import PLANNING_ZONE_COLORS
+        from app.infrastructure.rendering.colors import PLANNING_ZONE_COLORS
         from app.modules.schema.encodings.dicts.loader import get_center
 
         dlbm_to_category_sets: Dict[str, tuple[str, ...]] = {}

@@ -20,7 +20,7 @@ from app.database.operations import (
     get_planning_bundle_async,
     list_planning_bundle_versions_async,
 )
-from app.modules.schema.types.canonical import VillageBundle, from_bundle_dict, to_bundle_dict
+from app.data.model.canonical import VillageBundle, from_bundle_dict, to_bundle_dict
 from app.utils.logger import get_logger
 
 logger = get_logger(__name__)

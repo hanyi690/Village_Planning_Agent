@@ -420,7 +420,7 @@ def get_gdb_layers_by_category(category: str) -> Dict[str, LayerDef]:
 
 def _load_field_rules() -> Dict[str, Dict[str, Any]]:
     """Load field default rules from DictionaryCenter."""
-    from .dicts.loader import get_center
+    from app.modules.schema.encodings.dicts.loader import get_center
     center = get_center()
     fd = center.get("field_defaults")
     rules = {}
@@ -530,7 +530,7 @@ def enrich_gdb_fields(
 
 def _lookup_field(lookup_name: str, value: str) -> str:
     """Resolve a field value via a named lookup table (same-system code→name)."""
-    from ..encodings.code_sets import DLBM_TO_DLMC, GHYTBM_TO_GHYTMC
+    from app.modules.schema.encodings.code_sets import DLBM_TO_DLMC, GHYTBM_TO_GHYTMC
 
     if lookup_name == "dlbm_to_dlmc":
         return DLBM_TO_DLMC.get(value, "")

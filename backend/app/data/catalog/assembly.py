@@ -42,7 +42,7 @@ def _merge_geojson_into_bundle(
     gis_type_ref = aliases.get(layer_key, layer_key)
 
     from app.data.ingestion.adapters import ADAPTERS
-    from app.modules.schema.types.layer_registry import GIS_LAYER_REGISTRY
+    from app.data.model.layer_registry import GIS_LAYER_REGISTRY
 
     entry = GIS_LAYER_REGISTRY.get(gis_type_ref)
     if entry is not None and entry.ingest is not None:
@@ -79,7 +79,7 @@ def _merge_geojson_upload_fallback(
     type and stores them under ``upload_{layer_key}`` (layer_type
     ``upload_{layer_key}``), preserving original properties as ``_raw``.
     """
-    from app.modules.schema.types.base import LineFeature, PointFeature, PolygonFeature
+    from app.data.model.base import LineFeature, PointFeature, PolygonFeature
 
     features = geojson.get("features", []) or []
     if not features:

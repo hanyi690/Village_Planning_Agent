@@ -24,8 +24,8 @@ from app.modules.schema.contracts.context_contracts import (
     SpatialRelation,
     TerrainProfile,
 )
-from app.modules.schema.types.canonical import VillageBundle
-from app.modules.schema.types.spatial_types import ANNOTATION_LABEL_TYPE_MAP
+from app.data.model.canonical import VillageBundle
+from app.data.model.spatial_types import ANNOTATION_LABEL_TYPE_MAP
 
 from app.spatial.model.geometry import (
     _compute_centroid,
@@ -135,7 +135,7 @@ def _build_village_meta(bundle: VillageBundle) -> ContextBlock:
     boundary = bundle.boundary
     if boundary is not None and hasattr(boundary, "geometry") and boundary.geometry:
         try:
-            from app.modules.schema.types.canonical import _spatial_feature_to_geojson
+            from app.data.model.canonical import _spatial_feature_to_geojson
             feat = _spatial_feature_to_geojson(boundary)
             fc = {"type": "FeatureCollection", "features": [feat]}
             center = _compute_centroid(fc)
@@ -150,7 +150,7 @@ def _build_village_meta(bundle: VillageBundle) -> ContextBlock:
 
     # Construction boundary area
     if bundle.polygons.get("construction_zone"):
-        from app.modules.schema.types.canonical import _features_to_fc
+        from app.data.model.canonical import _features_to_fc
         construction_fc = _features_to_fc(bundle.polygons.get("construction_zone"))
         data["construction_boundary_ha"] = round(_compute_total_area(construction_fc), 2)
     else:
@@ -197,7 +197,7 @@ def _build_landuse_dist(bundle: VillageBundle) -> ContextBlock:
 
     # Enrich with encoding names
     try:
-        from app.modules.schema import DLBM_TO_DLMC
+        from app.modules.schema.encodings.code_sets import DLBM_TO_DLMC
     except ImportError:
         DLBM_TO_DLMC = {}
 

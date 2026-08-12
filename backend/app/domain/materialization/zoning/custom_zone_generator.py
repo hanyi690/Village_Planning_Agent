@@ -9,7 +9,7 @@ from app.modules.schema.contracts.custom_zone_contracts import (
     VocabularyCategory,
 )
 from app.modules.schema.encodings.dicts.vocabularies.loader import get_vocabulary
-from app.modules.schema.provenance import ProvenanceAudit, ProvenanceSource
+from app.data.model.audit import ProvenanceAudit, ProvenanceSource
 
 # Three-line protection subtypes whose parcels must be excluded from custom zones.
 THREE_LINE_PROTECTION_SUBTYPES = ("ecological_redline", "farmland_redline")

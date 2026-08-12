@@ -376,7 +376,7 @@ def add_planning_elements_from_typed(kg, polygons_layer) -> None:
 
 
 def add_annotations(kg, annotations: list):
-    from app.modules.schema.types.spatial_types import CurrentFacility
+    from app.data.model.spatial_types import CurrentFacility
     fc, vc = 0, 0
     for ann in annotations:
         lt = str(getattr(ann, "layer_type", "") or "")  # getattr intentional: heterogeneous annotation objects
@@ -544,7 +544,7 @@ def add_residential_clusters_from_typed(kg, parcels, annotations=None) -> None:
 
     residential_codes = {"2121", "2122", "2123", "0702", "0701"}
     residential = []
-    from app.modules.schema.types.spatial_types import CurrentLandUseParcel
+    from app.data.model.spatial_types import CurrentLandUseParcel
     for p in parcels:
         if not isinstance(p, CurrentLandUseParcel):
             continue
@@ -629,7 +629,7 @@ def add_residential_clusters_from_typed(kg, parcels, annotations=None) -> None:
 
 @kg_builder("current_facility", entity_type="Facility", layer=1, order=10)
 def add_facilities_from_typed(kg, features, *, gtype_ref: str, entry, ctx: BuildContext) -> dict:
-    from app.modules.schema.types.spatial_types import CurrentFacility
+    from app.data.model.spatial_types import CurrentFacility
     count = 0
     for f in features:
         if not isinstance(f, CurrentFacility):

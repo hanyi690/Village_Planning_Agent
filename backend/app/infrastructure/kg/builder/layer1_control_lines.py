@@ -5,7 +5,7 @@ from app.infrastructure.kg.builder.control_line_mapping import (
     THREE_LINE_BUNDLE_KEYS,
 )
 from app.infrastructure.kg.ontology import EntityTypes
-from app.modules.schema.provenance import ProvenanceAudit, ProvenanceSource
+from app.data.model.audit import ProvenanceAudit, ProvenanceSource
 
 
 _DERIVED_PROVENANCE = {

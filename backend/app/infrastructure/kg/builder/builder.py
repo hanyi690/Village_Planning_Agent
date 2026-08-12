@@ -94,7 +94,7 @@ class KGBuilder:
         add_natural_resource_zones(self.kg, bundle.polygons)
 
     def _build_entities(self, bundle):
-        from app.modules.schema.types.layer_registry import GIS_LAYER_REGISTRY
+        from app.data.model.layer_registry import GIS_LAYER_REGISTRY
         for spec in _ordered_builders():
             entry = GIS_LAYER_REGISTRY.get(spec.gis_type_ref)
             if not entry:

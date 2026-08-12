@@ -68,7 +68,7 @@ def _features_to_fc(features: List[Any]) -> dict:
 
 
 def _bundle_key_for(feature: Any) -> str:
-    from app.modules.schema.types.layer_registry import GIS_LAYER_REGISTRY
+    from app.data.model.layer_registry import GIS_LAYER_REGISTRY
 
     lt = feature.layer_type
     entry = GIS_LAYER_REGISTRY.get(lt)
@@ -78,7 +78,7 @@ def _bundle_key_for(feature: Any) -> str:
 
 
 def _geometry_group_for(feature: Any) -> str:
-    from app.modules.schema.types.layer_registry import GIS_LAYER_REGISTRY
+    from app.data.model.layer_registry import GIS_LAYER_REGISTRY
 
     lt = feature.layer_type
     entry = GIS_LAYER_REGISTRY.get(lt)
@@ -167,7 +167,7 @@ class PolygonLayerGroup(BaseModel):
 
     @property
     def constraint_polygons(self) -> List[Any]:
-        from app.modules.schema.types.layer_registry import GIS_LAYER_REGISTRY
+        from app.data.model.layer_registry import GIS_LAYER_REGISTRY
 
         result = []
         for lt, entry in GIS_LAYER_REGISTRY.items():
@@ -290,7 +290,7 @@ class VillageBundle(BaseModel):
         elif group in ("rasters", "tables"):
             # Route by the registry's bundle_target (group + key) instead of
             # dropping the feature: e.g. dem -> self.rasters.dem.
-            from app.modules.schema.types.layer_registry import GIS_LAYER_REGISTRY
+            from app.data.model.layer_registry import GIS_LAYER_REGISTRY
 
             entry = GIS_LAYER_REGISTRY.get(feature.layer_type)
             if entry is not None and entry.bundle_target is not None:

@@ -1,7 +1,7 @@
 """Data contracts - unified result envelope and metadata for all data sources.
 
 All DataSourceDriver.fetch() returns DataResult, never raises.
-Canonical geometry types (BBox) are imported from modules.schema.types.canonical
+Canonical geometry types (BBox) are imported from app.data.model.canonical
 to avoid duplicating the normative data shapes.
 """
 
@@ -10,7 +10,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Dict, Optional
 
-from app.modules.schema.types.canonical import BBox
+from app.data.model.canonical import BBox
 
 
 @dataclass

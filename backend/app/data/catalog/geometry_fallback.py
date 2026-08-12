@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional, Tuple
 
-from app.modules.schema.types.canonical import BBox
+from app.data.model.canonical import BBox
 
 
 def _extract_coords(geometry: Dict[str, Any], out: List[Tuple[float, float]]) -> None:

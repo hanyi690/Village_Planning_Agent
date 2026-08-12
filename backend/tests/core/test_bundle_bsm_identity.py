@@ -1,5 +1,5 @@
-from app.modules.schema.types.canonical import VillageBundle, from_bundle_dict, to_bundle_dict
-from app.modules.schema.types.spatial_types import CurrentLandUseParcel
+from app.data.model.canonical import VillageBundle, from_bundle_dict, to_bundle_dict
+from app.data.model.spatial_types import CurrentLandUseParcel
 
 
 def _parcel(bsm=""):

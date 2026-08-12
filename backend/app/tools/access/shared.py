@@ -14,7 +14,7 @@ from __future__ import annotations
 import json
 from typing import Any, Dict, List, Optional
 
-from app.modules.schema.types.canonical import VillageBundle
+from app.data.model.canonical import VillageBundle
 from app.utils.logger import get_logger
 
 logger = get_logger(__name__)

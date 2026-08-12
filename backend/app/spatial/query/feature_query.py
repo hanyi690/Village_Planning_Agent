@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any, Mapping
 
-from app.modules.schema.types.base import SpatialFeature
+from app.data.model.base import SpatialFeature
 from app.spatial.model.workspace import SpatialWorkspace
 
 BBoxTuple = tuple[float, float, float, float]

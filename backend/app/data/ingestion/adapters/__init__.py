@@ -15,7 +15,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Protocol, runtime_checkable
 
-from app.modules.schema.types.layer_registry import GisLayerTypeEntry
+from app.data.model.layer_registry import GisLayerTypeEntry
 from app.infrastructure.kg.dlq import DlqEntry
 
 

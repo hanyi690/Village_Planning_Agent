@@ -472,7 +472,7 @@ def _add_planning_elements_from_typed(self, polygons_layer) -> None:
 
 
 def add_annotations(self, annotations: list):
-    from app.modules.schema.types.spatial_types import CurrentFacility
+    from app.data.model.spatial_types import CurrentFacility
     fc, vc = 0, 0
     for ann in annotations:
         cat = getattr(ann, "category", "") or ""
@@ -604,7 +604,7 @@ def _add_residential_clusters_from_typed(self, parcels, annotations=None) -> Non
     take priority: if a cluster's centroid is within 150m of an existing
     annotation-based cluster, it is skipped.
     """
-    from app.modules.schema.types.spatial_types import CurrentLandUseParcel
+    from app.data.model.spatial_types import CurrentLandUseParcel
     import math
 
     # Collect existing annotation-based cluster centroids for dedup
@@ -748,7 +748,7 @@ def _parcel_centroid(geom: dict):
 
 def _add_facilities_from_typed(self, facilities) -> None:
     """Create Facility entities from bundle.points.facilities_current."""
-    from app.modules.schema.types.spatial_types import CurrentFacility
+    from app.data.model.spatial_types import CurrentFacility
     count = 0
     for f in facilities:
         if not isinstance(f, CurrentFacility):

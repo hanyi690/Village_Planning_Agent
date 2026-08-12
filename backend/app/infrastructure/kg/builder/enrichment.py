@@ -73,7 +73,7 @@ def get_allowed_operations(ghytbm: str = "", planning_zone: str = "", control_co
 
 def get_gis_layer_group_info(group_name: str) -> dict:
     try:
-        from app.modules.schema.types.layer_registry import GIS_LAYER_REGISTRY
+        from app.data.model.layer_registry import GIS_LAYER_REGISTRY
         for gis_type, entry in GIS_LAYER_REGISTRY.items():
             if _gis_type_matches_group(gis_type, group_name):
                 return {

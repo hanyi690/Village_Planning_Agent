@@ -43,7 +43,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional, Set, Tuple
 
-from app.modules.schema.types.spatial_types import (
+from app.data.model.spatial_types import (
     SpatialFeature,
     BaseLandUseParcel,
     CurrentLandUseParcel,
@@ -532,8 +532,8 @@ def _infer_model_class(layer_type: str) -> str:
 def _init_feature_registry():
     if _FEATURE_TYPE_REGISTRY:
         return
-    from app.modules.schema.types.layer_registry import GIS_LAYER_REGISTRY
-    from app.modules.schema import spatial_types as _st
+    from app.data.model.layer_registry import GIS_LAYER_REGISTRY
+    from app.data.model import spatial_types as _st
     for lt, entry in GIS_LAYER_REGISTRY.items():
         if entry.ingest is None:
             continue
@@ -684,7 +684,7 @@ def ingest_raster(filepath: str, raster_type: str = "dem"):
         FileNotFoundError: 文件不存在
         ImportError: rasterio 未安装
     """
-    from app.modules.schema.types.raster_types import RasterDataset, DEMInput, DOMInput
+    from app.data.model.raster_types import RasterDataset, DEMInput, DOMInput
 
     path = Path(filepath)
     if not path.exists():
@@ -761,7 +761,7 @@ def result_to_parcels(
 
 
 def _make_parcel_entry(layer_type: str) -> Any:
-    from app.modules.schema.types.layer_registry import GisLayerTypeEntry, IngestSpec
+    from app.data.model.layer_registry import GisLayerTypeEntry, IngestSpec
     return GisLayerTypeEntry(
         gis_type_ref=layer_type,
         ingest=IngestSpec(adapter="parcels", feature_type=layer_type),
@@ -787,7 +787,7 @@ def result_to_features(
 
 
 def _make_feature_entry(feature_type: str) -> Any:
-    from app.modules.schema.types.layer_registry import GisLayerTypeEntry, IngestSpec
+    from app.data.model.layer_registry import GisLayerTypeEntry, IngestSpec
     return GisLayerTypeEntry(
         gis_type_ref=feature_type,
         ingest=IngestSpec(adapter="features", feature_type=feature_type),

@@ -2,7 +2,7 @@
 
 Centralizes the correspondence between ingest bundle keys (used by jintian
 data sources and other village bundles) and the existing Pydantic ControlLine
-subclasses defined in ``app.modules.schema.types.spatial_types``.
+subclasses defined in ``app.data.model.spatial_types``.
 
 Three-lines (法定约束底线):
   - ecological_redline             → EcologicalRedline
@@ -18,7 +18,7 @@ CultivatedLandTarget is intentionally excluded — it represents a 耕地保有�
 target, not a hard constraint boundary.
 """
 
-from app.modules.schema.types.spatial_types import (
+from app.data.model.spatial_types import (
     EcologicalRedline,
     FarmlandProtection,
     FloodControlLine,

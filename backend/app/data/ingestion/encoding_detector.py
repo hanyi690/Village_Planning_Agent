@@ -4,7 +4,7 @@ from typing import Optional
 import yaml
 
 from app.modules.schema.encodings import code_sets as cs
-from app.modules.schema.provenance import ProvenanceSource
+from app.data.model.audit import ProvenanceSource
 
 
 _TUGUI_YAML = (

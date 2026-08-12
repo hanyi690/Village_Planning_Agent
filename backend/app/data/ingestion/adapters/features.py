@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from app.modules.schema.types.layer_registry import GisLayerTypeEntry
+from app.data.model.layer_registry import GisLayerTypeEntry
 from app.infrastructure.kg.dlq import DlqCategory, DlqEntry
 
 from ..ingest import ingest_feature

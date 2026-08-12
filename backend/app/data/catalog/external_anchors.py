@@ -697,7 +697,7 @@ class ExternalAnchorPipeline:
         self, bundle: Any, features: List[ExternalFeature]
     ) -> Dict[str, int]:
         """按 category → 现有 sub-key 注入."""
-        from app.modules.schema.types.base import (
+        from app.data.model.base import (
             LineFeature, PointFeature, PolygonFeature,
         )
 

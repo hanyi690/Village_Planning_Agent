@@ -8,7 +8,7 @@ from enum import Enum
 from typing import Dict, List, Optional
 
 from app.config import get_layer_dimensions as _get_layer_dimensions, get_wave_config
-from app.modules.schema.layers import LAYER_NAMES, LAYER_NAMES_BY_NUMBER, get_layer_name
+from app.workflow.layers.layers import LAYER_NAMES, LAYER_NAMES_BY_NUMBER, get_layer_name
 
 DEFAULT_RAG_LAYER_CONFIG = {1: True, 2: False, 3: True}
 

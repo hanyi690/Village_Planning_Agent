@@ -22,7 +22,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import yaml
 
-from app.modules.schema.types.canonical import BBox, VillageBundle, VillageMetadata
+from app.data.model.canonical import BBox, VillageBundle, VillageMetadata
 from app.utils.logger import get_logger
 
 from app.data.ingestion.contracts import DataResult, DataSourceMetadata
@@ -290,7 +290,7 @@ class DataCatalog:
         vector snapshot. Callers that explicitly need raster data must pass a
         layer list containing those types.
         """
-        from app.modules.schema.types.layer_registry import GIS_LAYER_REGISTRY
+        from app.data.model.layer_registry import GIS_LAYER_REGISTRY
 
         # The default session snapshot is reproducible and offline-capable:
         # use configured local vector facts only. Remote vector/raster/tile
@@ -335,7 +335,7 @@ class DataCatalog:
         Returns:
             ``VillageBundle`` with points/lines/polygons/rasters morphology groups.
         """
-        from app.modules.schema.types.layer_registry import GIS_LAYER_REGISTRY
+        from app.data.model.layer_registry import GIS_LAYER_REGISTRY
 
         if layer_types is None:
             layer_types = self._default_vector_layer_types()
@@ -408,7 +408,7 @@ class DataCatalog:
         # Step 4b: Fallback — derive water bodies from DLBM=31xx parcels
         # when external water sources (upload / Tianditu API) are unavailable.
         if not bundle.polygons.get("water_bodies") and bundle.polygons.get("landuse_current"):
-            from app.modules.schema.types.spatial_types import WaterFeature
+            from app.data.model.spatial_types import WaterFeature
             generated = 0
             for p in bundle.polygons.get("landuse_current"):
                 dlbm = p.dlbm or ""

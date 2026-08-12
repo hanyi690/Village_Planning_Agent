@@ -12,7 +12,7 @@ from __future__ import annotations
 import asyncio
 from typing import Any, Dict, Optional
 
-from app.modules.schema.types.canonical import VillageBundle
+from app.data.model.canonical import VillageBundle
 from app.utils.logger import get_logger
 
 logger = get_logger(__name__)

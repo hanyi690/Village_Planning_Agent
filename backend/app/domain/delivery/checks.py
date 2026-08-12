@@ -34,7 +34,7 @@ def _statutory_source_for(layer: str) -> str:
     the check aligned with what ``export_delivery_package`` actually writes.
     """
     try:
-        from app.modules.schema.output.gdb import GDB_LAYER_REGISTRY
+        from app.infrastructure.export.gdb import GDB_LAYER_REGISTRY
 
         entry = GDB_LAYER_REGISTRY.get(layer)
         if entry is not None:

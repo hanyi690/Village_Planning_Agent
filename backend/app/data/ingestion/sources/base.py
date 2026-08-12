@@ -14,7 +14,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from typing import Any, Optional
 
-from app.modules.schema.types.canonical import BBox
+from app.data.model.canonical import BBox
 
 from ..contracts import DataResult, DataSourceMetadata
 

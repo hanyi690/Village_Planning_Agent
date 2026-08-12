@@ -24,7 +24,7 @@ def _safe_run_key(value: str) -> str:
 
 def _normalize_fields(geojson: Dict, layer_key: str) -> Dict:
     """Ensure exported GeoJSON has fields matching GDB_LAYER_REGISTRY."""
-    from app.modules.schema.output.gdb import GDB_LAYER_REGISTRY
+    from app.infrastructure.export.gdb import GDB_LAYER_REGISTRY
 
     layer_def = GDB_LAYER_REGISTRY.get(layer_key, {})
     field_specs = layer_def.get("fields", [])
@@ -89,7 +89,7 @@ def export_delivery_package(
 
     os.makedirs(output_dir, exist_ok=True)
 
-    from app.modules.schema.output.gdb import GDB_LAYER_REGISTRY
+    from app.infrastructure.export.gdb import GDB_LAYER_REGISTRY
 
     complete_planned = complete_planned_geojson
 
