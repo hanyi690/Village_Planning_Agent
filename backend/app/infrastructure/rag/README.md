@@ -34,7 +34,7 @@ rag/
 ## 三、公开 API
 
 ```python
-from app.modules.rag import RagService, DocumentSummary
+from app.infrastructure.rag import RagService, DocumentSummary
 
 svc = RagService.get_instance()          # 线程安全单例
 
@@ -104,7 +104,7 @@ slice(content) / slice_with_cache(file_path, source_name)
 
 **CLI**：
 ```
-python -m app.modules.rag.cli status | delete <source> | reload <file.md> | verify <source>
+python -m app.infrastructure.rag.cli status | delete <source> | reload <file.md> | verify <source>
 ```
 
 ---

@@ -558,7 +558,7 @@ async def save_step_report(
     diagnostics: Optional[Dict[str, Any]] = None,
 ) -> None:
     """Save a StepReport. Non-fatal on error."""
-    from app.modules.evidence.step_report import save_step_report as _save_step_report
+    from app.infrastructure.reports.step_report import save_step_report as _save_step_report
 
     inputs = {"is_revision": is_revision}
     try:

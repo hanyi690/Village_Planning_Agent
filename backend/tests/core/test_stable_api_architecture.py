@@ -129,15 +129,16 @@ def test_stage_routing_policy_lives_in_stage_support() -> None:
     assert "GATE_CHANNELS" in support
 
 
-def test_step_reports_are_owned_by_evidence_module() -> None:
+def test_step_reports_are_owned_by_infrastructure_reports() -> None:
     production_sources = "\n".join(
         path.read_text(encoding="utf-8")
         for path in ROOT.rglob("*.py")
     )
     assert "app.services.step_report" not in production_sources
     assert "app.services.stage_report" not in production_sources
-    assert (ROOT / "modules" / "evidence" / "step_report.py").exists()
-    assert (ROOT / "modules" / "evidence" / "stage_report.py").exists()
+    assert "app.modules.evidence" not in production_sources
+    assert (ROOT / "infrastructure" / "reports" / "step_report.py").exists()
+    assert (ROOT / "infrastructure" / "reports" / "stage_report.py").exists()
 
 
 def test_projection_and_ground_are_independent_stage_services() -> None:

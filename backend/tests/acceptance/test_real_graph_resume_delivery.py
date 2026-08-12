@@ -496,8 +496,8 @@ def test_real_graph_resume_delivery(sqlite_db, pipeline_reset, monkeypatch):
                 f"delivery_status={state.get('delivery_status')!r}, "
                 f"session={session_id}"
             )
-            from app.modules.evidence.stage_report import render_stage_report_markdown
-            from app.modules.evidence.step_report import (
+            from app.infrastructure.reports.stage_report import render_stage_report_markdown
+            from app.infrastructure.reports.step_report import (
                 build_backend_run_report,
                 build_positioning_trace,
             )

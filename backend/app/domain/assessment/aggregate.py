@@ -189,7 +189,7 @@ async def l1_aggregate(
     # flattened ``facts`` list remains backwards compatible, while L2 reads
     # this scoped map to avoid feeding unrelated evidence into a dimension.
     try:
-        from app.modules.evidence.step_report import get_session_step_reports
+        from app.infrastructure.reports.step_report import get_session_step_reports
 
         for step in await get_session_step_reports(session_id):
             if step.get("stage") != "L1" or not step.get("dimension_key"):
@@ -279,7 +279,7 @@ async def l1_aggregate(
     logger.info("[l1_aggregate] review package written: review_id=%s", review_id)
 
     try:
-        from app.modules.evidence.step_report import save_step_report
+        from app.infrastructure.reports.step_report import save_step_report
         from app.workflow.stage_audit import build_input_audit
 
         await save_step_report(

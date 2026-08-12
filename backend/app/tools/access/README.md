@@ -35,7 +35,7 @@
 ## 依赖方向
 
 ```
-access/ → services（session_bundle / BundleStore）、modules/kg.queries、modules/rag、schema/contracts、app.utils
+access/ → services（session_bundle / BundleStore）、modules/kg.queries、infrastructure/rag、schema/contracts、app.utils
    ▲ 被 ToolRegistry.for_agent("explore") 绑定
 ```
 

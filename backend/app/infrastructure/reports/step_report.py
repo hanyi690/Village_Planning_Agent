@@ -370,7 +370,7 @@ async def build_backend_run_report(session_id: str) -> Dict[str, Any]:
         "issues": issues,
     }
     try:
-        from app.modules.evidence.stage_report import render_stage_report_markdown
+        from app.infrastructure.reports.stage_report import render_stage_report_markdown
         report_md = render_stage_report_markdown(trace["reports"], report)
     except Exception:  # noqa: BLE001
         report_md = ""

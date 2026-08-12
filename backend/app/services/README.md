@@ -32,15 +32,15 @@ HTTP (api/) ──> services/ ──> agent/ (LangGraph)
 | `session_bundle.py` | bundle 构建编排 + 进程内缓存 | `build_session_bundle` / `snapshot_session_bundle` |
 | `session_kg.py` | 会话 KG 预建（L1 前注入基础空间认知 + 地块拓扑关系），幂等 | `ensure_session_kg` |
 | `context/` | 会话规划上下文工厂（组装 `PlanningContext` + 注入端口 + 缓存） | `build_planning_context`（见 `context/README.md`） |
-| `step_report.py` | 已迁移至 `app/modules/evidence/step_report.py`；services 不再拥有审计状态 | — |
-| `stage_report.py` | 已迁移至 `app/modules/evidence/stage_report.py`；services 不再拥有报告投影 | — |
+| `step_report.py` | 已迁移至 `app/infrastructure/reports/step_report.py`；services 不再拥有审计状态 | — |
+| `stage_report.py` | 已迁移至 `app/infrastructure/reports/stage_report.py`；services 不再拥有报告投影 | — |
 | `review_package.py` | 人工审核包磁盘序列化（manifest/summary/trace/decision） | `write` / `read` / `query` review packages |
 | `../infrastructure/artifacts/repository.py` | CAS blob、descriptor 和 branch named ref | `ContentAddressedArtifactRepository` |
 | `post_l3_resume.py` | post-L3 链 HITL 中断恢复（`Command(resume=...)` + 快照持久化） | `resume_post_l3` |
 
 > ⚠️ **services/modules/ 已移除**（Batch B）：旧 `services/modules/gis/road/` 的道路算法已迁移至 `app/modules/spatial_ops/road/`（staged 道路规划管线，见 `modules/spatial_ops/road/README.md`），不再作为应用服务子包存在。
 
-> `app/services/__init__.py` 仍为旧时代遗留：仅懒加载转发 `RagService`（实际实现在 `app/modules/rag/service.py`）。新代码不应依赖 `app.services.RagService`，请直接引用 `app.modules.rag`。
+> `app/services/__init__.py` 仍为旧时代遗留：仅懒加载转发 `RagService`（实际实现在 `app/infrastructure/rag/service.py`）。新代码不应依赖 `app.services.RagService`，请直接引用 `app.infrastructure.rag`。
 
 ---
 

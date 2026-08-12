@@ -2,10 +2,10 @@
 RAG Knowledge Base CLI Manager
 
 Usage:
-    python -m app.modules.rag.cli status
-    python -m app.modules.rag.cli delete <source_name>
-    python -m app.modules.rag.cli reload <file_path>
-    python -m app.modules.rag.cli verify <source_name>
+    python -m app.infrastructure.rag.cli status
+    python -m app.infrastructure.rag.cli delete <source_name>
+    python -m app.infrastructure.rag.cli reload <file_path>
+    python -m app.infrastructure.rag.cli verify <source_name>
 
 Subcommands:
     status   Show knowledge base statistics
@@ -42,7 +42,7 @@ logger = logging.getLogger("rag.cli")
 
 def _get_service():
     """Lazy-init RagService singleton."""
-    from app.modules.rag.service import RagService
+    from app.infrastructure.rag.service import RagService
     return RagService.get_instance()
 
 

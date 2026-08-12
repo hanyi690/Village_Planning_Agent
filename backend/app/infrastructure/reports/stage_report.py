@@ -298,7 +298,7 @@ def render_stage_report_markdown(
 
 
 async def build_stage_report_markdown(session_id: str) -> str:
-    from app.modules.evidence.step_report import build_backend_run_report, get_session_step_reports
+    from app.infrastructure.reports.step_report import build_backend_run_report, get_session_step_reports
 
     reports = await get_session_step_reports(session_id)
     if not reports:

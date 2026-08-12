@@ -260,7 +260,7 @@ async def ensure_session_kg(
                 snap.cache_hit, snap.version,
             )
             try:
-                from app.modules.evidence.step_report import save_step_report
+                from app.infrastructure.reports.step_report import save_step_report
 
                 await save_step_report(
                     session_id, "KG_PREBUILD",

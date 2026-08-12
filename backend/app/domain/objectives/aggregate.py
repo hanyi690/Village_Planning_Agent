@@ -180,7 +180,7 @@ async def l2_aggregate(
     logger.info("[l2_aggregate] review package written: review_id=%s", review_id)
 
     try:
-        from app.modules.evidence.step_report import save_step_report
+        from app.infrastructure.reports.step_report import save_step_report
         from app.workflow.stage_audit import build_input_audit
 
         await save_step_report(

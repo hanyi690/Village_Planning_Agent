@@ -24,7 +24,7 @@ _SESSION_SOURCES = {"village_data", "task_description", "constraints", "upload",
 
 
 def _rag_service():
-    from app.modules.rag.service import RagService
+    from app.infrastructure.rag.service import RagService
 
     return RagService.get_instance()
 

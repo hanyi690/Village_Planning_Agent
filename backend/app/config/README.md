@@ -68,4 +68,4 @@
 
 - `app/core/README.md` — 运行参数层（`settings.py`）与 LLM/SSE/Tracing 基础设施
 - `app/agent/README.md` — 主图如何消费 Wave/依赖配置执行维度
-- `app/modules/rag/README.md` — `rag_query` / `prefer_doc_types` 的实际消费方
+- `app/infrastructure/rag/README.md` — `rag_query` / `prefer_doc_types` 的实际消费方

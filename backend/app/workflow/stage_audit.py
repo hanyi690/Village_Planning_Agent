@@ -192,7 +192,7 @@ async def _save(session_id: str, stage: str, step_name: str, **kwargs: Any) -> N
     if not session_id:
         return
     try:
-        from app.modules.evidence.step_report import save_step_report
+        from app.infrastructure.reports.step_report import save_step_report
 
         await save_step_report(session_id, stage, step_name=step_name, **kwargs)
     except Exception:
