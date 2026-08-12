@@ -685,7 +685,7 @@ class ExternalAnchorPipeline:
                 continue
             # 2. boundary filter (严格 — 所有类别)
             if village_boundary is not None:
-                from app.modules.spatial_ops.geometry import point_in_polygon
+                from app.spatial.model.geometry import point_in_polygon
                 if not point_in_polygon((f.lon, f.lat), village_boundary):
                     continue
             kept.append(f)

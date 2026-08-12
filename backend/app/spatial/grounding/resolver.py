@@ -27,7 +27,7 @@ from app.utils.logger import get_logger
 logger = get_logger(__name__)
 
 # ── Location-token helpers (moved from parse/agent.py to keep GROUND
-#    inside spatial_ops; parse/agent.py now delegates to this module). ──
+#    inside grounding; parse/agent.py now delegates to this module). ──
 
 _LOCATION_SEP_RE = re.compile(r"[、，,；;/\s]+|至|和|与")
 _LOCATION_STRIP = ("自然村", "村", "组", "段", "沿", "线", "附近", "周边", "区域", "一带")
@@ -337,7 +337,7 @@ def resolve_intent_anchors(
     """Resolve intent location hints into candidate BSMs / coordinate anchors.
 
     Mirrors the previous ``parse/agent.py:resolve_spatial_anchors`` contract,
-    moved into spatial_ops so GROUND owns all gazetteer/KG anchor resolution.
+    moved into grounding so GROUND owns all gazetteer/KG anchor resolution.
     Only reads gazetteer + KG anchors; never writes. Returns resolved count.
     """
     if gazetteer is None and not village_anchors:

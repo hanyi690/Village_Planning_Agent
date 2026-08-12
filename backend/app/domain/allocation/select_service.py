@@ -3,7 +3,7 @@
 Consumes ``GroundingResult`` + ``SpatialPlanningIntent`` + ``PlanningContext``
 and produces a ``tuple[SiteSelectionDecision, list[LandDesignBrief]]``.
 
-Pure orchestration: selection is delegated to ``spatial_ops.selection.select_parcel``
+Pure orchestration: selection is delegated to ``app.spatial.allocation.selection.select_parcel``
 per project target with priority-sequential conflict allocation (occupied anchor
 points accumulate so a parcel taken by an earlier, higher-priority target is
 rejected for later targets). No LLM, no kg imports; given the same inputs the
@@ -27,12 +27,12 @@ from app.modules.schema.contracts.selection_contracts import (
     SiteSelectionDecision,
     TargetAssignment,
 )
-from app.modules.spatial_ops.selection.facility_location import (
+from app.spatial.allocation.facility_location import (
     DemandPoint,
     FacilityCandidate,
     solve_maximal_covering,
 )
-from app.modules.spatial_ops.selection import (
+from app.spatial.allocation.selection import (
     CandidateParcel,
     PlacementDecision,
     ScoredCandidate,

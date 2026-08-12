@@ -2,7 +2,7 @@
 
 Consumes SiteSelectionDecision + LandDesignBrief + SpatialPlanningIntent and
 produces a unified ParcelChangeSet. Pure deterministic logic: no LLM, no KG,
-no MIP. All geometry mutations delegate to app.modules.spatial_ops.parcel_ops.
+no MIP. All geometry mutations delegate to app.spatial.model.parcel_ops.
 """
 
 from __future__ import annotations
@@ -26,9 +26,9 @@ from app.modules.schema.contracts.parse_contracts import (
     ZoneTarget,
 )
 from app.modules.schema.contracts.selection_contracts import LandDesignBrief, SiteSelectionDecision
-from app.modules.spatial_ops.parcel_ops import create_parcel, merge_parcels, reclassify_parcel
-from app.modules.spatial_ops.selection import parse_scale_ha
-from app.modules.spatial_ops.geometry.subdivision import apply_setback, split_for_footprint
+from app.spatial.model.parcel_ops import create_parcel, merge_parcels, reclassify_parcel
+from app.spatial.allocation.selection import parse_scale_ha
+from app.spatial.model.subdivision import apply_setback, split_for_footprint
 
 FACILITY_BUFFER_RADIUS = 0.0002  # degrees, ~20 m at equator
 
@@ -211,7 +211,7 @@ def design_project_footprint(
       * parcel area > target*(1+tol)    -> split_for_footprint: one "create"
                                            footprint + "preserve" remainder(s)
 
-    Areas use the same convention as app.modules.spatial_ops.subdivision
+    Areas use the same convention as app.spatial.model.subdivision
     (polygon area / 10000 -> ha), so the decision and the split stay consistent.
     Returns ``[]`` when the selected parcel is missing or geometry is unusable.
     """

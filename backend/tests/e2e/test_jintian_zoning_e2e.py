@@ -16,7 +16,7 @@ from app.modules.data.encoding_detector import detect_encoding
 from app.modules.kg.builder.layer1_control_lines import build_control_line_entities
 from app.modules.kg.ontology import EntityTypes
 from app.modules.schema.provenance import ProvenanceSource
-from app.modules.spatial_ops.zoning.custom_zone_generator import (
+from app.domain.materialization.zoning.custom_zone_generator import (
     CustomZoningGenerator,
 )
 

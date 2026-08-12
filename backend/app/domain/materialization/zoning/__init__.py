@@ -1,4 +1,4 @@
-"""Zoning subpackage — vocabulary-driven custom planning zones.
+"""Vocabulary-driven custom planning zones under domain/materialization.
 
 Contains custom_planning.py (canonical planning-zone layer), vocab_rules.py
 (TypingRule DSL), vocab_context.py (per-parcel factor context) and

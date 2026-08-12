@@ -3,7 +3,7 @@
 职责 B: 将自然语言空间描述 (如"村北""靠近刘村") 接地为具体的空间锚定:
   方向描述 → BBox → 候选地块 BSM → 排除约束重叠地块 → 邻近度加权
 
-API 设计: spatial_ops/README.md §4.2
+API 设计: grounding 模块 §4.2
 """
 
 from __future__ import annotations
@@ -102,7 +102,7 @@ def _parcel_centroid(parcel) -> Optional[Tuple[float, float]]:
     geom = parcel.geometry
     if not geom or not isinstance(geom, dict):
         return None
-    from app.modules.spatial_ops.geometry import _compute_centroid
+    from app.spatial.model.geometry import _compute_centroid
     try:
         fc = {"type": "FeatureCollection", "features": [
             {"type": "Feature", "properties": {}, "geometry": geom}
@@ -178,7 +178,7 @@ def query_excluded_parcels(
     当 zone_type 为空时，检查所有约束类型.
 
     Args:
-        constraint_index: ConstraintIndex (from spatial_ops.bridge)
+        constraint_index: ConstraintIndex (from app.spatial.query.bridge)
         parcels: List[CurrentLandUseParcel]
         zone_type: "farmland_protection" / "ecological_redline" / 空（全部）
 
@@ -264,7 +264,7 @@ def ground_zone_spatial_preference(
     query_excluded_parcels + compute_proximity_weights.
 
     当 preselected_bsms 非空时，跳过 BBox 候选搜索，直接使用 LLM 选定的 BSM
-    做排除 + 邻近加权（LLM 语义粗定位 -> spatial_ops 验证/精化）.
+    做排除 + 邻近加权（LLM 语义粗定位 -> spatial 验证/精化）.
 
     preference_desc 格式: "村北靠近刘村" (方向 + 地名)
     从 place_mappings 中查找地名对应的 center.
@@ -312,7 +312,7 @@ def ground_zone_spatial_preference(
     # 3. 如果没有地名匹配，用村庄整体中心
     if ref_center is None and parcels:
         try:
-            from app.modules.spatial_ops.geometry import _compute_centroid
+            from app.spatial.model.geometry import _compute_centroid
             all_geoms = [p.geometry for p in parcels if hasattr(p, "geometry")]
             if all_geoms:
                 from app.utils.geo_utils import safe_unary_union
@@ -399,7 +399,7 @@ def ground_facility_spatial_preference(
 
     if ref_center is None:
         try:
-            from app.modules.spatial_ops.geometry import _compute_centroid
+            from app.spatial.model.geometry import _compute_centroid
             all_geoms = [p.geometry for p in parcels if hasattr(p, "geometry")]
             if all_geoms:
                 from app.utils.geo_utils import safe_unary_union
@@ -482,7 +482,7 @@ def ground_linear_spatial_preference(
 
     if not ref_centers:
         try:
-            from app.modules.spatial_ops.geometry import _compute_centroid
+            from app.spatial.model.geometry import _compute_centroid
             all_geoms = [p.geometry for p in parcels if hasattr(p, "geometry")]
             if all_geoms:
                 from app.utils.geo_utils import safe_unary_union
@@ -675,7 +675,7 @@ def resolve_spatial_description(
 
 
 def _default_gazetteer(bundle: Any):
-    """gazetteer 加载由调用方注入（spatial_ops 不直接依赖 kg）。
+    """gazetteer 加载由调用方注入（grounding 不直接依赖 kg）。
 
     未注入时返回 None，toponym 解析退化几何路径。
     """
@@ -809,7 +809,7 @@ def _resolve_constraint(
     if constraint_index is None:
         # 尝试从 bundle 构建
         try:
-            from app.modules.spatial_ops.index.bridge import build_constraint_index
+            from app.spatial.query.bridge import build_constraint_index
 
             constraint_index = build_constraint_index(bundle)
         except Exception:
@@ -880,7 +880,7 @@ def _extract_toponym(desc: str) -> str:
 def _village_center(parcels: list) -> Optional[Tuple[float, float]]:
     """村庄整体质心（几何兜底参考点）。"""
     try:
-        from app.modules.spatial_ops.geometry import _compute_centroid
+        from app.spatial.model.geometry import _compute_centroid
         from app.utils.geo_utils import safe_unary_union
         from shapely.geometry import shape
 

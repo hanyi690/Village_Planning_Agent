@@ -8,7 +8,7 @@
 与 Schema 层 SpatialFeature → PointFeature/LineFeature/PolygonFeature 对齐。
 下游可按形态统一遍历（isinstance 分发），按语义具体处理。
 
-Produced by: spatial_ops.compute_context_blocks(VillageBundle)
+Produced by: app.spatial.query.context.compute_context_blocks(VillageBundle)
 Consumed by: PARSE Agent, LAYOUT Pipeline, KG builder, prompt formatters
 """
 

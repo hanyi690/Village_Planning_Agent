@@ -27,7 +27,7 @@ from app.modules.schema.contracts.spatial_reference_contracts import (
     ResolvedSpatialRef,
     SpatialReferenceSpec,
 )
-from app.modules.spatial_ops.grounding.resolver import SpatialResolver
+from app.spatial.grounding.resolver import SpatialResolver
 
 
 def build_candidate_site(

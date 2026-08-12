@@ -65,7 +65,7 @@ def _hydrate_l1_spatial_facts(state: Dict[str, Any], context: Any) -> None:
         # L1 facts are the authoritative typed spatial evidence.  Rebuild the
         # index after hydration so facilities, roads, water and areas are
         # visible to GROUND in the same snapshot as village bindings.
-        from app.modules.spatial_ops.evidence.place_evidence_index import PlaceEvidenceIndex
+        from app.evidence.index.place_evidence_index import PlaceEvidenceIndex
         context.evidence_index = PlaceEvidenceIndex.build(context)
         logger.info(
             "[bootstrap] hydrated %d L1 location facts; GIS village bindings=%d; evidence entries=%d",

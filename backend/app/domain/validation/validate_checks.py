@@ -29,7 +29,7 @@ from types import SimpleNamespace
 from typing import Any, List, Optional
 
 from app.modules.schema.contracts.validation_report_contracts import ValidationCheck
-from app.modules.spatial_ops.selection import _PROHIBITED_CONSTRAINTS
+from app.spatial.allocation.selection import _PROHIBITED_CONSTRAINTS
 
 _AREA_TOLERANCE = 0.05
 _POLYGON_TYPES = ("Polygon", "MultiPolygon")

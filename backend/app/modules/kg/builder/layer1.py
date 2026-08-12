@@ -112,7 +112,7 @@ def _add_village_entity(self, village_name: str) -> None:
 
 
 def _add_parcel_relations(self, relations) -> None:
-    from app.modules.spatial_ops.geometry import ParcelRelations
+    from app.spatial.model.geometry import ParcelRelations
     if not relations or not isinstance(relations, ParcelRelations):
         return
     count = 0
@@ -1124,7 +1124,7 @@ def _add_cross_type_relations(self, cross_type_relations=None) -> None:
       - intersects: line-crosses-polygon or polygon-overlaps-polygon (road-intersects-parcel, parcel-intersects-protection)
       - contains: polygon bounds another (boundary-contains-parcel)
 
-    These are pre-computed by spatial_ops (which has shapely/geopandas) and passed in.
+    These are pre-computed by the spatial layer (shapely/geopandas) and passed in.
     KG does zero geometry computation - it only materializes the provided relations as triples.
 
     Args:
@@ -1190,7 +1190,7 @@ def _add_cross_type_relations(self, cross_type_relations=None) -> None:
 def _compute_cross_type_heuristic(self) -> dict:
     """Heuristic cross-type relation computation using centroid proximity (no shapely).
 
-    This is a fallback when spatial_ops hasn't pre-computed relations. It uses
+    This is a fallback when the spatial layer hasn't pre-computed relations. It uses
     parcel centroid (lon/lat) vs facility/building point coordinates for 'located_in'.
     For 'intersects' and 'contains', it requires external computation (returns empty).
 

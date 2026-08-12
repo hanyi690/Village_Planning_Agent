@@ -66,7 +66,7 @@ def _resolve_zone_allocator(state: ExecuteAgentState) -> Any:
     ports = getattr(state, "ports", None)
     allocator = getattr(ports, "zone_allocator", None) if ports is not None else None
     if allocator is None:
-        from app.modules.spatial_ops.allocation.zone_allocator_adapter import PuLPZoneAllocator
+        from app.spatial.allocation.zone_allocator_adapter import PuLPZoneAllocator
 
         allocator = PuLPZoneAllocator()
     return allocator
@@ -338,7 +338,7 @@ def _zone_worker(state: ExecuteAgentState) -> WorkerResult:
     )
 
     if custom_targets:
-        from app.modules.spatial_ops.zoning.custom_zone_changeset import (
+        from app.domain.materialization.zoning.custom_zone_changeset import (
             materialize_custom_zone_changes,
         )
 

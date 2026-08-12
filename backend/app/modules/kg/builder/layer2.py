@@ -1,4 +1,4 @@
-"""Layer 2: spatial relation builders (computed by spatial_ops, injected via parcel_relations).
+"""Layer 2: spatial relation builders (computed by the spatial layer, injected via parcel_relations).
 
 All functions are module-level, operating on a PlanningKG instance passed as `kg`.
 
@@ -26,7 +26,7 @@ def add_parcel_relations(kg, relations) -> None:
     as RDF triples. This follows the v5.0 pattern: RDF graph stores pure relations,
     SemanticMemoryStore stores quantitative details.
     """
-    from app.modules.spatial_ops.geometry import ParcelRelations
+    from app.spatial.model.geometry import ParcelRelations
     if not relations or not isinstance(relations, ParcelRelations):
         return
     count = 0

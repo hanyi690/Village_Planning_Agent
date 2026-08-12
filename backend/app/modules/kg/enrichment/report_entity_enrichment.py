@@ -299,7 +299,7 @@ def _feature_centroid(feature: Any) -> Optional[List[float]]:
     if not geometry:
         return None
     try:
-        from app.modules.spatial_ops.geometry import _compute_centroid
+        from app.spatial.model.geometry import _compute_centroid
 
         return _compute_centroid({
             "type": "FeatureCollection",

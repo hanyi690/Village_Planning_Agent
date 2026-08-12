@@ -6,8 +6,8 @@
   - constraint_block: spatial relation totals + constraint coverage summary
 
 This is the semantic aggregation layer (from RDF triples). Geometric computations
-(clustering, overlap BSM lists) remain in spatial_ops/context.py per the data
-boundary: spatial_ops = geometry authority, KG = semantic authority.
+(clustering, overlap BSM lists) remain in app.spatial.query.context per the data
+boundary: spatial geometry = geometry authority, KG = semantic authority.
 
 Usage:
     from app.modules.kg.queries.cognition import get_village_cognition

@@ -14,7 +14,7 @@ def _axis_worker(state: ExecuteAgentState) -> WorkerResult:
     """Axis worker: development-axis layer (decision-driven from intent)."""
     from types import SimpleNamespace
 
-    from app.modules.spatial_ops.geometry.axis_builder import AxisBuilder
+    from app.spatial.model.axis_builder import AxisBuilder
 
     if not _task_enabled(state, "axis"):
         return WorkerResult(worker_type="axis")

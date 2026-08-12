@@ -166,7 +166,7 @@ class KGManager:
         Builds from bundle morphology groups directly (v4.6 path).
 
         Args:
-            constraint_index: Optional ConstraintIndex from spatial_ops.bridge,
+            constraint_index: Optional ConstraintIndex from app.spatial.query.bridge,
                 injected for constraint violation checking.
 
         Returns:

@@ -101,7 +101,7 @@ def _cluster_entries_from_kg(kg: Any, bundle: Any) -> List[GazetteerEntry]:
     """
     from rdflib import RDF
     from app.modules.kg.ontology import GEO, PLN, EntityTypes
-    from app.modules.spatial_ops.geometry import _compute_centroid
+    from app.spatial.model.geometry import _compute_centroid
 
     parcel_pts = {}
     if bundle is not None:
@@ -263,7 +263,7 @@ def _external_anchors_from_bundle(bundle: Any) -> List[GazetteerEntry]:
 
 def _annotation_entries_from_memory(memory: Any, bundle: Any) -> List[GazetteerEntry]:
     """SemanticMemoryStore 注解（L1 回流产物：村名→BSM）→ 条目候选。"""
-    from app.modules.spatial_ops.geometry import _compute_centroid
+    from app.spatial.model.geometry import _compute_centroid
 
     entries: List[GazetteerEntry] = []
     parcels_by_bsm = {}

@@ -11,7 +11,7 @@ from app.modules.kg.enrichment.report_entity_enrichment import _location_fact_me
 from app.modules.parsing.compiler.profiles.l1_observation import (
     _extract_location_facts,
 )
-from app.modules.spatial_ops.evidence.place_evidence_index import PlaceEvidenceIndex
+from app.evidence.index.place_evidence_index import PlaceEvidenceIndex
 
 
 INSTRUCTION = (

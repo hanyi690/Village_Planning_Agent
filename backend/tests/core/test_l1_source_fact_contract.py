@@ -4,7 +4,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from app.modules.parsing.compiler.profiles.l1_observation import compile_l1_observation
-from app.modules.spatial_ops.evidence.place_evidence_index import PlaceEvidenceIndex
+from app.evidence.index.place_evidence_index import PlaceEvidenceIndex
 
 
 FIXTURE = Path(__file__).parents[1] / "fixtures" / "mvp_village" / "current_report.md"

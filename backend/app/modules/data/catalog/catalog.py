@@ -449,7 +449,7 @@ class DataCatalog:
         try:
             self._auto_fill_admin_meta(bundle, village_name)
             from .external_anchors import ExternalAnchorPipeline
-            from app.modules.spatial_ops.geometry import village_boundary_geometry
+            from app.spatial.model.geometry import village_boundary_geometry
 
             cfg = {
                 "province": bundle.metadata.province or "",

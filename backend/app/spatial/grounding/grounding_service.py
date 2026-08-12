@@ -15,7 +15,7 @@ from app.spatial.model.workspace import SpatialWorkspace
 
 
 def ground_parcels_in_bbox(workspace: SpatialWorkspace, bbox: tuple[float, float, float, float]) -> list[str]:
-    from app.modules.spatial_ops.grounding.grounding import query_parcels_in_bbox
+    from app.spatial.grounding.grounding import query_parcels_in_bbox
 
     return query_parcels_in_bbox(workspace.current_parcels(), bbox)
 
@@ -25,13 +25,13 @@ def ground_parcels_near(
     center: tuple[float, float],
     max_distance_m: float = 500,
 ) -> list[str]:
-    from app.modules.spatial_ops.grounding.grounding import query_parcels_near_entity
+    from app.spatial.grounding.grounding import query_parcels_near_entity
 
     return query_parcels_near_entity(workspace.current_parcels(), center, max_distance_m=max_distance_m)
 
 
 def resolve_spatial_reference(desc: str, workspace: SpatialWorkspace, **kwargs: Any) -> Any:
-    from app.modules.spatial_ops.grounding.grounding import resolve_spatial_description
+    from app.spatial.grounding.grounding import resolve_spatial_description
 
     bundle = getattr(workspace, "_bundle", None)
     if bundle is None:

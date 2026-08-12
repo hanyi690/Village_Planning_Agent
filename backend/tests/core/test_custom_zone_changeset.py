@@ -33,7 +33,7 @@ from app.domain.materialization.plan_builder import (
     build_execution_plan,
     classification_boundary_diagnostics,
 )
-from app.modules.spatial_ops.zoning.custom_zone_changeset import (
+from app.domain.materialization.zoning.custom_zone_changeset import (
     materialize_custom_zone_changes,
 )
 from app.modules.schema.encodings.dicts.vocabularies.loader import register_vocabulary

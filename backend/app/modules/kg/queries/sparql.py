@@ -655,7 +655,7 @@ def validate_intent(kg, intent: Any) -> List[Dict[str, Any]]:
 
 
 def _is_in_protected_zone(kg, bsm: str) -> bool:
-    """Check if a parcel overlaps any constraint polygon via spatial_ops bridge."""
+    """Check if a parcel overlaps any constraint polygon via the spatial query bridge."""
     if kg._constraint_index is None:
         return False
     overlaps = kg._constraint_index.parcel_in_constraint(bsm)
@@ -785,7 +785,7 @@ def get_planned_parcels_in_zone(kg, zone_type: str, version: str = "current"):
 
 
 def check_constraint_violations(kg, version: str = "current"):
-    """Check planned parcels against constraint polygons via spatial_ops bridge."""
+    """Check planned parcels against constraint polygons via the spatial query bridge."""
     violations = []
     if kg._constraint_index is None:
         return violations

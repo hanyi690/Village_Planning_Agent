@@ -1,6 +1,6 @@
 """Zone allocator port - global MIP parcel-to-zone assignment boundary.
 
-Implemented by adapter modules (e.g. ``app.modules.spatial_ops.allocation.zone_allocator_adapter``)
+Implemented by adapter modules (e.g. ``app.spatial.allocation.zone_allocator_adapter``)
 and consumed by the EXECUTE zone-synthesis worker.  ``allocate`` returns a
 ``ZoneAllocationSolution`` (never raises on infeasibility).
 """

@@ -4,7 +4,7 @@ Builds a typed DeliveryManifest from the upstream artifacts: traceability
 populated from the RECONCILE CoverageMatrix, deliverables mapped from the
 export package, pending human items collected from the deliver checks and
 the upstream gates, and a delivery gate computed via
-spatial_ops.land_balance.check_delivery_gate. statutory_complete blocks
+app.spatial.delivery.land_balance.check_delivery_gate. statutory_complete blocks
 "完整法定成果" (complete statutory output) when planning classification is
 missing (08_DELIVERABLES_COMPLIANCE.md §3). No LLM, no KG — deterministic only.
 """
@@ -33,7 +33,7 @@ from app.modules.schema.contracts.reconciliation_contracts import (
     CoverageMatrix,
     ReconciliationReport,
 )
-from app.modules.spatial_ops.land_balance import check_delivery_gate
+from app.spatial.delivery.land_balance import check_delivery_gate
 
 
 def build_traceability_from_coverage(

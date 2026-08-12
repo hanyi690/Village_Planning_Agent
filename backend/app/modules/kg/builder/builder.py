@@ -117,7 +117,7 @@ class KGBuilder:
 
         if cross_type_relations is None and bundle is not None:
             try:
-                from app.modules.spatial_ops.index.bridge import compute_cross_layer_relations
+                from app.spatial.query.bridge import compute_cross_layer_relations
                 computed = compute_cross_layer_relations(bundle)
                 if computed:
                     cross_type_relations = computed

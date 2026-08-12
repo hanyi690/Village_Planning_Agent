@@ -26,7 +26,7 @@ class PlaceEvidenceIndexService:
 
     async def resolve(self, request: object) -> PlaceResolutionResult:
         """Resolve one place mention to a typed, evidence-scored result."""
-        from app.modules.spatial_ops.grounding.resolver import SpatialResolver
+        from app.spatial.grounding.resolver import SpatialResolver
 
         mention = self._mention_of(request)
         if not mention:
@@ -53,7 +53,7 @@ class PlaceEvidenceIndexService:
         request: object,
         mention: str,
     ) -> PlaceResolutionResult:
-        from app.modules.spatial_ops.grounding.grounding import ResolvedSpatialDescription
+        from app.spatial.grounding.grounding import ResolvedSpatialDescription
 
         if isinstance(resolved, ResolvedSpatialDescription):
             return self._map_description(resolved, request, mention)

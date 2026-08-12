@@ -14,7 +14,7 @@ from app.modules.schema.contracts.place_resolution_contracts import (
     PlaceResolutionCandidate,
     PlaceResolutionResult,
 )
-from app.modules.spatial_ops.evidence.evidence_scorer import (
+from app.evidence.index.evidence_scorer import (
     score_candidate,
     total,
 )
@@ -162,7 +162,7 @@ class PlaceEvidenceIndex:
         if not coords or len(coords) < 2:
             return []
         try:
-            from app.modules.spatial_ops.grounding.grounding import query_parcels_near_entity
+            from app.spatial.grounding.grounding import query_parcels_near_entity
 
             return query_parcels_near_entity(
                 self.context.current_parcels(),

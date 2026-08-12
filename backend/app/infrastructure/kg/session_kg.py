@@ -135,7 +135,7 @@ async def ensure_session_kg(
 
         try:
             from app.application.sessions.session_bundle import build_session_bundle, restore_session_bundle
-            from app.modules.spatial_ops.geometry import compute_parcel_relations
+            from app.spatial.model.geometry import compute_parcel_relations
 
             bundle = await restore_session_bundle(session_id, version=bundle_version)
             if bundle is None:

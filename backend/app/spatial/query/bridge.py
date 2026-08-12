@@ -5,14 +5,14 @@ in the VillageBundle for spatial analysis: overlap, proximity, constraint
 checking, area measurement.
 
 Usage:
-    from app.modules.spatial_ops import build_spatial_index
+    from app.spatial.query.bridge import build_spatial_index
 
     idx = build_spatial_index(bundle)
     geom = idx.get_parcel_geometry("441426211000055682")
     overlaps = idx.parcels_intersecting(planned_geometry)
 
 Architecture:
-    spatial_ops (this module) computes ad-hoc spatial queries.
+    This module computes ad-hoc spatial queries.
     KG stores BSM + derived attributes only, never full geometry.
     EXECUTE agent calls this bridge for any spatial verification.
 """
@@ -277,7 +277,7 @@ class ConstraintIndex:
     queries for constraint violation checking.
 
     Constraint polygons are reference-layer data (上级审批成果, 不可修改),
-    accessed via spatial_ops bridge - NOT stored as KG entities.
+    accessed via this bridge - NOT stored as KG entities.
     """
 
     def __init__(self, gdf, crs: str = "EPSG:4326"):

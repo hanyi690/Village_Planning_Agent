@@ -15,7 +15,7 @@ from shapely.geometry.base import BaseGeometry
 
 from app.modules.schema.contracts.custom_zone_contracts import CustomZoneTarget, Vocabulary
 from app.modules.schema.contracts.parcel_change_contracts import ParcelChange
-from app.modules.spatial_ops.zoning.custom_zone_generator import CustomZoningGenerator
+from app.domain.materialization.zoning.custom_zone_generator import CustomZoningGenerator
 
 
 @dataclass

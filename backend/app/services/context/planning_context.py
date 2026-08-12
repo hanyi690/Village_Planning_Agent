@@ -237,7 +237,7 @@ async def build_planning_context(
     constraint_index = None
     if bundle is not None:
         try:
-            from app.modules.spatial_ops import build_constraint_index
+            from app.spatial.query.bridge import build_constraint_index
 
             constraint_index = build_constraint_index(bundle)
         except Exception as e:
@@ -326,7 +326,7 @@ async def build_planning_context(
 
     # 6.5 PlaceEvidenceIndex (non-fatal; None on failure)
     try:
-        from app.modules.spatial_ops.evidence.place_evidence_index import PlaceEvidenceIndex
+        from app.evidence.index.place_evidence_index import PlaceEvidenceIndex
 
         context.evidence_index = PlaceEvidenceIndex.build(context)
     except Exception as e:

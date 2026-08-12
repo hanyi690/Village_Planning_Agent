@@ -1,7 +1,7 @@
 """SELECT must preserve target output semantics for EXECUTE dispatch."""
 
 from app.domain.allocation.select_service import build_site_selection_decision
-from app.modules.spatial_ops.selection import PlacementDecision
+from app.spatial.allocation.selection import PlacementDecision
 
 
 def test_selected_project_keeps_point_output_kind():
