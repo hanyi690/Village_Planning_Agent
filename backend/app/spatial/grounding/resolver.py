@@ -96,7 +96,7 @@ def _normalize_spec_mention(label: str) -> str:
         return _VILLAGE_ALL_MARKER
     for suffix in (
         "沿线", "两岸", "附近", "周边",
-        "一带", "区域", "范围内", "域",
+        "一带", "区域", "范围内", "流域", "域",
     ):
         if token.endswith(suffix):
             token = token[: -len(suffix)].strip()

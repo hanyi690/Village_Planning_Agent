@@ -288,7 +288,7 @@ def map_intervention_to_spec(
         spec.spec_id = f"spatial-ref:{intervention.target_id}"
         spec.project_ref = intervention.intervention_id
         return spec
-    spec = SpatialReferenceSpec(type="composed", op="and", children=candidates)
+    spec = SpatialReferenceSpec(type="composed", op="or", children=candidates)
     spec.intervention_id = intervention.intervention_id
     spec.target_id = intervention.target_id
     spec.spec_id = f"spatial-ref:{intervention.target_id}"
