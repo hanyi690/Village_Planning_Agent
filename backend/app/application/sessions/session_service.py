@@ -73,11 +73,15 @@ async def _delete_session_kg(session_id: str) -> bool:
 async def _delete_session_artifacts(session_id: str) -> bool:
     try:
         import shutil
-        from pathlib import Path
+        from app.infrastructure.paths import run_tmp_root
 
-        artifact_dir = Path(".run-tmp") / session_id
+        root = run_tmp_root()
+        artifact_dir = root / session_id
         if artifact_dir.exists():
             shutil.rmtree(artifact_dir)
+        cas_refs_dir = root / "runs" / session_id
+        if cas_refs_dir.exists():
+            shutil.rmtree(cas_refs_dir)
         return True
     except Exception as e:
         logger.warning(f"[SessionService] [{session_id}] artifact delete failed: {e}")
@@ -103,6 +107,46 @@ async def _clear_session_sse(session_id: str) -> bool:
         return True
     except Exception as e:
         logger.warning(f"[SessionService] [{session_id}] SSE clear failed: {e}")
+        return False
+
+
+async def _clear_session_evidence(session_id: str) -> bool:
+    try:
+        from app.evidence.retrieval.evidence_service import _EVIDENCE_CACHE
+        for key in [k for k in _EVIDENCE_CACHE if k[0] == session_id]:
+            _EVIDENCE_CACHE.pop(key, None)
+        return True
+    except Exception as e:
+        logger.warning(f"[SessionService] [{session_id}] evidence cache clear failed: {e}")
+        return False
+
+
+async def _clear_provider_failures(session_id: str) -> bool:
+    try:
+        from app.infrastructure.llm.dimension_runtime import reset_provider_failure
+        reset_provider_failure(session_id)
+        return True
+    except Exception as e:
+        logger.warning(f"[SessionService] [{session_id}] provider failure reset failed: {e}")
+        return False
+
+
+async def _delete_session_kg_memory(session_id: str) -> bool:
+    try:
+        import glob
+        import os
+        import shutil
+        from app.modules.kg.memory import get_memory_dir
+
+        base = get_memory_dir()
+        for f in glob.glob(str(base / f"{session_id}_round_*.json")):
+            os.remove(f)
+        subdir = base / session_id
+        if subdir.exists():
+            shutil.rmtree(subdir)
+        return True
+    except Exception as e:
+        logger.warning(f"[SessionService] [{session_id}] kg_memory delete failed: {e}")
         return False
 
 
@@ -188,8 +232,12 @@ class SessionService:
         7. SSE session data
         8. Uploaded files
         9. Dimension reports
-        10. UI sessions
-        11. Database record
+         10. UI sessions
+         11. Database record
+         12. Evidence cache
+         13. Provider-failure circuit breaker
+         14. kg_memory round files
+         15. CAS named refs (runs/<session_id>)
 
         Args:
             session_id: Session identifier
@@ -208,6 +256,9 @@ class SessionService:
             ("artifacts", _delete_session_artifacts(session_id)),
             ("checkpoint", _delete_session_checkpoint(session_id)),
             ("sse", _clear_session_sse(session_id)),
+            ("evidence_cache", _clear_session_evidence(session_id)),
+            ("provider_failures", _clear_provider_failures(session_id)),
+            ("kg_memory", _delete_session_kg_memory(session_id)),
         ]:
             try:
                 result[key] = await coro
