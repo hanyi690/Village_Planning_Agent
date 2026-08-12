@@ -31,7 +31,7 @@ channels，因此 checkpoint 尚未达到本节定义的最小 `WorkflowState` �
 只作为 EXECUTE artifact，不得重新加入父图状态。
 
 此外，默认 ArtifactStore 仍依赖相对 `.run-tmp` 路径；测试和运行器必须显式隔离 store、session 与 run。
-PARSE 必须在产物写入前获得稳定 context version，否则后续阶段的严格引用校验会拒绝该产物。
+TARGET_PROJECTION/IntentCompiler 必须在产物写入前获得稳定 context version，否则后续阶段的严格引用校验会拒绝该产物。
 
 ## 1.2 Checkpoint resume planner（目标契约）
 
@@ -63,7 +63,7 @@ LangGraph checkpoint 只回答“图从哪里继续”，不回答“哪些业�
 4. **最小下游重跑**：保持上游不可变 artifact，按依赖边界从最早失效阶段生成新 artifact revision；不得从 `START` 重新调用所有 LLM。
 5. **终态不可恢复**：`delivery_status` 已终态或 `diagnostic_terminal` 已写入时，必须明确新输入/新 revision，不能返回一个看似成功的空 resume。
 
-当前实现新增 `backend/app/modules/schema/contracts/resume_contracts.py`，并由 checkpoint 列表/恢复 API 输出 `resume_plan`。这是恢复决策的统一入口；它还没有替代 LangGraph 的执行 cursor，也不会伪装成完整端到端保证。
+当前实现已提供 `resume_plan` 查询；目标契约归入 `backend/app/contracts/workflow/resume.py`，由 Application/Runtime 共同使用。它是恢复决策的统一入口，但不能替代 LangGraph 执行 cursor，也不会伪装成完整端到端保证。
 
 这套设计直接采用官方对照结果：LangGraph 将 `thread_id` 定义为线程级持久化游标，`checkpoint_id` 可定位历史 checkpoint；`interrupt()` 恢复时节点从头重放，前置副作用必须幂等；默认子图只能在父图粒度进行 time travel，想在子图内部恢复必须明确配置子图 checkpoint。参考 [LangGraph persistence](https://docs.langchain.com/oss/python/langgraph/persistence)、[LangGraph interrupts](https://docs.langchain.com/oss/python/langgraph/interrupts)、[LangGraph subgraphs](https://docs.langchain.com/oss/python/langgraph/use-subgraphs) 和 [LangGraph time travel](https://docs.langchain.com/oss/python/langgraph/use-time-travel)。这些结论同时由本次 Exa 检索的官方 LangChain 文档交叉验证。
 
@@ -111,7 +111,7 @@ refresh_external_sources
 2. `Typed PlanningArtifact`：供后续节点消费的结构化结果，例如 `L1DimensionFragment`、
    `L1Snapshot`、`PlanningProgram` 和 `IntentCompilationResult`。
 
-Markdown 不能作为 PARSE 的唯一输入；PARSE 必须优先消费带 revision 和 provenance 的报告 artifact。
+Markdown 不能作为规划程序的唯一输入；L1/L2/L3 与 TARGET_PROJECTION 必须优先消费带 revision 和 provenance 的 typed artifact。
 
 ### 5.1 当前 `DimensionReport.summary` 的兼容边界
 

@@ -5,263 +5,30 @@
     "version": "1.0.0"
   },
   "paths": {
-    "/api/v1/sessions/{session_id}/state": {
-      "get": {
-        "tags": [
-          "Stable v1"
-        ],
-        "summary": "Get State",
-        "operationId": "get_state_api_v1_sessions__session_id__state_get",
-        "parameters": [
-          {
-            "name": "session_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "title": "Session Id"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/SessionProjection"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v1/sessions/{session_id}/delivery": {
-      "get": {
-        "tags": [
-          "Stable v1"
-        ],
-        "summary": "Get Delivery",
-        "operationId": "get_delivery_api_v1_sessions__session_id__delivery_get",
-        "parameters": [
-          {
-            "name": "session_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "title": "Session Id"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/DeliveryProjection"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v1/sessions/{session_id}/map-layers": {
-      "get": {
-        "tags": [
-          "Stable v1"
-        ],
-        "summary": "Get Map Layers",
-        "operationId": "get_map_layers_api_v1_sessions__session_id__map_layers_get",
-        "parameters": [
-          {
-            "name": "session_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "title": "Session Id"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MapLayerCollection"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v1/sessions/{session_id}/artifacts/{artifact_key}": {
-      "get": {
-        "tags": [
-          "Stable v1"
-        ],
-        "summary": "Get Artifact",
-        "description": "Read one explicit checkpoint artifact descriptor and its payload.",
-        "operationId": "get_artifact_api_v1_sessions__session_id__artifacts__artifact_key__get",
-        "parameters": [
-          {
-            "name": "session_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "title": "Session Id"
-            }
-          },
-          {
-            "name": "artifact_key",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "title": "Artifact Key"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "additionalProperties": true,
-                  "title": "Response Get Artifact Api V1 Sessions  Session Id  Artifacts  Artifact Key  Get"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v1/sessions/{session_id}/human-review": {
-      "get": {
-        "tags": [
-          "Stable v1"
-        ],
-        "summary": "Get Review",
-        "operationId": "get_review_api_v1_sessions__session_id__human_review_get",
-        "parameters": [
-          {
-            "name": "session_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "title": "Session Id"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HumanReviewProjection"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      },
+    "/api/v1/sessions": {
       "post": {
         "tags": [
           "Stable v1"
         ],
-        "summary": "Submit Review",
-        "operationId": "submit_review_api_v1_sessions__session_id__human_review_post",
-        "parameters": [
-          {
-            "name": "session_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "title": "Session Id"
-            }
-          }
-        ],
+        "summary": "Create a planning session",
+        "operationId": "create_session_api_v1_sessions_post",
         "requestBody": {
-          "required": true,
           "content": {
-            "application/json": {
+            "multipart/form-data": {
               "schema": {
-                "$ref": "#/components/schemas/HumanReviewDecision"
+                "$ref": "#/components/schemas/Body_create_session_api_v1_sessions_post"
               }
             }
-          }
+          },
+          "required": true
         },
         "responses": {
-          "200": {
+          "201": {
             "description": "Successful Response",
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "object",
-                  "additionalProperties": true,
-                  "title": "Response Submit Review Api V1 Sessions  Session Id  Human Review Post"
+                  "$ref": "#/components/schemas/SessionCreated"
                 }
               }
             }
@@ -285,7 +52,6 @@
           "Stable v1"
         ],
         "summary": "Resume Session",
-        "description": "Resume the real cursor or fork an explicit historical checkpoint.",
         "operationId": "resume_session_api_v1_sessions__session_id__resume_post",
         "parameters": [
           {
@@ -315,6 +81,48 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ResumeAccepted"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/sessions/{session_id}/state": {
+      "get": {
+        "tags": [
+          "Stable v1"
+        ],
+        "summary": "Get State",
+        "operationId": "get_state_api_v1_sessions__session_id__state_get",
+        "parameters": [
+          {
+            "name": "session_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Session Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionProjection"
                 }
               }
             }
@@ -457,30 +265,220 @@
         }
       }
     },
-    "/api/v1/sessions": {
-      "post": {
+    "/api/v1/sessions/{session_id}/human-review": {
+      "get": {
         "tags": [
           "Stable v1"
         ],
-        "summary": "Create a planning session",
-        "operationId": "create_session_api_v1_sessions_post",
-        "requestBody": {
-          "content": {
-            "multipart/form-data": {
-              "schema": {
-                "$ref": "#/components/schemas/Body_create_session_api_v1_sessions_post"
-              }
+        "summary": "Get Review",
+        "operationId": "get_review_api_v1_sessions__session_id__human_review_get",
+        "parameters": [
+          {
+            "name": "session_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Session Id"
             }
-          },
-          "required": true
-        },
+          }
+        ],
         "responses": {
-          "201": {
+          "200": {
             "description": "Successful Response",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/SessionCreated"
+                  "$ref": "#/components/schemas/HumanReviewProjection"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "Stable v1"
+        ],
+        "summary": "Submit Review",
+        "operationId": "submit_review_api_v1_sessions__session_id__human_review_post",
+        "parameters": [
+          {
+            "name": "session_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Session Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/HumanReviewDecision"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Submit Review Api V1 Sessions  Session Id  Human Review Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/sessions/{session_id}/delivery": {
+      "get": {
+        "tags": [
+          "Stable v1"
+        ],
+        "summary": "Get Delivery",
+        "operationId": "get_delivery_api_v1_sessions__session_id__delivery_get",
+        "parameters": [
+          {
+            "name": "session_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Session Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeliveryProjection"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/sessions/{session_id}/map-layers": {
+      "get": {
+        "tags": [
+          "Stable v1"
+        ],
+        "summary": "Get Map Layers",
+        "operationId": "get_map_layers_api_v1_sessions__session_id__map_layers_get",
+        "parameters": [
+          {
+            "name": "session_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Session Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MapLayerCollection"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/sessions/{session_id}/artifacts/{artifact_key}": {
+      "get": {
+        "tags": [
+          "Stable v1"
+        ],
+        "summary": "Get Artifact",
+        "operationId": "get_artifact_api_v1_sessions__session_id__artifacts__artifact_key__get",
+        "parameters": [
+          {
+            "name": "session_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Session Id"
+            }
+          },
+          {
+            "name": "artifact_key",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Artifact Key"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Get Artifact Api V1 Sessions  Session Id  Artifacts  Artifact Key  Get"
                 }
               }
             }

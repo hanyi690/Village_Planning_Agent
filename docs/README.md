@@ -28,9 +28,13 @@ docs/
 ```
 代码 (backend/app/**, frontend/**)          ← 最终事实源
   ↑
+design/10_IMPLEMENTATION_STATUS.md          ← 当前状态（CURRENT/PARTIAL/GAP）
+  ↑
+design/14_BACKEND_MODULE_BLUEPRINT.md       ← 后端目标边界与唯一落地顺序
+  ↑
 design/00_SYSTEM_DESIGN.md                  ← North Star（为什么这么设计）
   ↑
-design/*.md                                 ← 设计问题展开
+design/*.md                                 ← 专题设计展开
   ↑
 architecture/*.md                           ← 技术实现映射
   ↑
@@ -38,6 +42,8 @@ README.md（根）                             ← 对外门面（只链接不�
 ```
 
 - `design/` 回答**为什么**这么设计
+- `design/14_BACKEND_MODULE_BLUEPRINT.md` 是后端目标模块、目录、状态 owner 和并行落地顺序的唯一汇总
+- `design/10_IMPLEMENTATION_STATUS.md` 是当前代码状态的唯一台账
 - `architecture/` 回答代码**在哪里、怎么跑**
 - `audits/` 和 `proposals/` 为诊断参考和未落地提案，**不参与**权威链
 
@@ -66,7 +72,6 @@ README.md（根）                             ← 对外门面（只链接不�
 | [01_LAYERED_ARCHITECTURE.md](./design/01_LAYERED_ARCHITECTURE.md) | 分层架构 |
 | [02_DATA_PERSISTENCE.md](./design/02_DATA_PERSISTENCE.md) | 数据持久化 |
 | [03_KG_SEMANTIC_BRIDGE.md](./design/03_KG_SEMANTIC_BRIDGE.md) | KG 语义桥接 |
-| [03-kg-spatial-cognition-supplement.md](./design/03-kg-spatial-cognition-supplement.md) | KG 空间认知补充 |
 | [04_PLANNING_PIPELINE.md](./design/04_PLANNING_PIPELINE.md) | 闭环规划管线 |
 | [05_EXPLORE_BRIDGE.md](./design/05_EXPLORE_BRIDGE.md) | EXPLORE 桥接层 |
 | [06_TARGET_PROJECTION_EXECUTE.md](./design/06_TARGET_PROJECTION_EXECUTE.md) | TARGET_PROJECTION + EXECUTE |
@@ -75,8 +80,11 @@ README.md（根）                             ← 对外门面（只链接不�
 | [09_INTEGRATION_BREAKPOINTS.md](./design/09_INTEGRATION_BREAKPOINTS.md) | 集成断点 |
 | [10_IMPLEMENTATION_STATUS.md](./design/10_IMPLEMENTATION_STATUS.md) | 实现状态 |
 | [11_EXPLORE_KG_ENRICHMENT.md](./design/11_EXPLORE_KG_ENRICHMENT.md) | EXPLORE KG 富化 |
+| [12_PLACE_NAME_RESOLUTION.md](./design/12_PLACE_NAME_RESOLUTION.md) | 地名解析与地点证据 |
 | [13_AUTOREPAIR_MULTIMODAL.md](./design/13_AUTOREPAIR_MULTIMODAL.md) | 自动迭代与多模态规划设计 |
 | [14_BACKEND_MODULE_BLUEPRINT.md](./design/14_BACKEND_MODULE_BLUEPRINT.md) | 后端目标模块、状态 owner、规划形成与验收蓝图 |
+| [15_IMPLEMENTATION_OVERVIEW_FOR_PPT.md](./design/15_IMPLEMENTATION_OVERVIEW_FOR_PPT.md) | 实现总览汇报稿 |
+| [16_PROJECT_INTRO_PPT.md](./design/16_PROJECT_INTRO_PPT.md) | 项目介绍汇报稿 |
 
 ## architecture/ 文档索引
 

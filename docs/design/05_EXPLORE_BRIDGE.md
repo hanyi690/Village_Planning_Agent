@@ -6,7 +6,7 @@ EXPLORE 回答：
 
 > “系统还需要知道什么，才能让当前阶段继续并且可解释？”
 
-EXPLORE 不是空间接地器，不是 PARSE 的前置候选生成器，也不是 GIS 的桥接格式转换器。它是
+EXPLORE 不是空间接地器，不是 TARGET_PROJECTION 的前置候选生成器，也不是 GIS 的桥接格式转换器。它是
 session-wide evidence service：统一搜索 KG、VillageBundle、各层报告、`【INSTRUCTION】`、typed
 artifacts、已有证据、用户修订记录和允许的外部来源，生产 `EvidenceBundle`、`ExplorationResult`
 和 `ExplorationRequest` 的闭环记录。
@@ -126,7 +126,7 @@ L1 并行启动时，同层其他报告通常尚未存在。此时 EXPLORE 必�
 未解决问题，不得把“已扫描当前 session”解释为“已经获得完整 L1 认知”。跨维度报告证据在报告
 产生后通过 Gate 请求增量补充。
 
-## 5. 与 PARSE 的关系
+## 5. 与 TARGET_PROJECTION 的关系
 
 推荐流程：
 
@@ -135,11 +135,11 @@ L1/L2/L3 产生带 stage/dimension/purpose 的 ExplorationRequest
   → EXPLORE 搜索整个 session（KG + Bundle + reports + artifacts + prior evidence）
   → 返回 EvidenceBundle / SpatialCognitionEvidence
   → L3 生成 PlanningProgram
-  → 顶层 PARSE / IntentCompiler 消费 PlanningProgram + EvidenceBundle
+  → TARGET_PROJECTION / IntentCompiler 消费 PlanningProgram + EvidenceBundle
   → 生成 IntentCompilationResult + SpatialReferenceSpec
 ```
 
-EXPLORE 与 L1/L2/L3/PARSE 的共享契约是证据引用、空间认知证据和实体引用，而不是共同生成一份
+EXPLORE 与 L1/L2/L3/TARGET_PROJECTION 的共享契约是证据引用、空间认知证据和实体引用，而不是共同生成一份
 “半解析、半接地”的空间结果。
 
 ## 6. 与 GROUND 的关系

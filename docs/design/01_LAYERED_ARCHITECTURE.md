@@ -1,6 +1,7 @@
 # 分层架构与模块边界
 
 > **目标：让目录结构、依赖方向和业务职责一致。** 目录名不是边界；契约和依赖规则才是边界。
+> 目标目录以 [14_BACKEND_MODULE_BLUEPRINT.md](14_BACKEND_MODULE_BLUEPRINT.md) 为准；本文只保留分层规则和依赖约束。
 
 ## 1. 目标分层
 
@@ -22,7 +23,7 @@ Schema contracts and encodings
 
 ### 2.1 Schema contracts
 
-位置：`backend/app/modules/schema/`
+位置：`backend/app/contracts/`
 
 只定义类型、枚举、编码、规则描述和 provenance。典型契约包括：
 
@@ -50,27 +51,26 @@ intent target、spatial operation、constraint 和指标模型；`layout_contrac
 
 ### 2.2 Data repositories
 
-位置：`backend/app/modules/data/` 与会话存储适配器。
+位置：`backend/app/data/` 与 `infrastructure/persistence/` 适配器。
 
 负责数据摄取、类型化、缓存、版本和外部数据源。`DataCatalog` 只生产 `VillageBundle` 或其版本化引用；外部锚点不得在每次业务读取时隐式重新抓取。
 
 ### 2.3 Spatial query services
 
-位置：`backend/app/modules/spatial_ops/`。
+位置：`backend/app/spatial/`。
 
 负责几何、空间索引、候选集精化、距离、拓扑和约束计算。它不解析自然语言，也不决定规划策略。
 
 ### 2.4 KG semantic services
 
-位置：`backend/app/modules/kg/`。
+位置：`backend/app/evidence/kg/` 与 `infrastructure/kg/`。
 
 负责实体、语义关系、来源和可查询的空间认知。KG 不替代完整几何引擎；需要多边形精确计算时，通过 Spatial Query Service 组合完成。
 
 ### 2.5 Planning domain services
 
-目标位置：由 `backend/app/modules/` 下的领域模块和 ports 承接；当前尚不存在完整的
-`backend/app/modules/planning/` 聚合包。迁移期间能力分散在 `agent/`、`modules/spatial_ops/`、
-`modules/parsing/` 和 `services/modules/gis/road/`，这些目录不能因此被视为
+目标位置：`backend/app/domain/` 下的领域模块和 `contracts/ports/`。迁移期间能力仍可能分散在
+`agent/`、`modules/spatial_ops/`、`modules/parsing/` 和历史 service 目录；这些目录不能因此被视为
 已经完成了领域边界收敛。
 
 包含：
@@ -85,14 +85,14 @@ intent target、spatial operation、constraint 和指标模型；`layout_contrac
 
 ### 2.6 Application workflow subgraphs
 
-位置：`backend/app/agent/`。
+位置：`backend/app/workflow/`；`backend/app/agent/` 只作为迁移期来源。
 
 目标上只负责节点编排、并行调度、Gate、重试和人工中断。当前 `agent/execute/execute_agent.py` 仍直接
 调用几何、道路和图层生成逻辑；这属于已识别的迁移断点，不应继续扩展。
 
 ### 2.7 Application services and adapters
 
-位置：`backend/app/api/`、`backend/app/services/`、`backend/app/tools/`。
+位置：`backend/app/application/`、`backend/app/infrastructure/` 和 `backend/app/bootstrap/`。
 
 `backend/app/services/` 应只保留应用编排、Context 构建、artifact、报告、SSE 和会话服务；
 `backend/app/services/modules/gis/road/` 当前包含实际道路算法，是历史迁移遗留的混合目录，不能作为最终分层。
@@ -103,13 +103,13 @@ intent target、spatial operation、constraint 和指标模型；`layout_contrac
 
 | 来源 | 可依赖 | 禁止依赖 |
 |---|---|---|
-| Schema | 标准库、Pydantic | Data、KG、Agent、Service、API |
-| Data | Schema、外部 Provider | Agent、LangGraph |
-| Spatial Query | Schema、Data read port | Agent、LLM、API |
-| KG | Schema、Spatial Query port | Agent State、API |
-| Planning domain | Schema、KG port、Spatial port | LangGraph、SSE、ReportStore 实现 |
+| Contracts | 标准库、Pydantic | Data、KG、Agent、Service、API |
+| Data | Contracts、外部 Provider | Agent、LangGraph |
+| Spatial | Contracts、Data read port | Agent、LLM、API |
+| Evidence/KG | Contracts、Spatial port | Agent State、API |
+| Planning domain | Contracts、Evidence port、Spatial port | LangGraph、SSE、ReportStore 实现 |
 | Workflow | Planning domain、ports、adapters | 直接实现领域算法 |
-| Tools | ports、外部 SDK | 反向导入 Agent 作为业务依赖 |
+| Infrastructure | ports、外部 SDK | 反向导入 Domain/Workflow 作为业务依赖 |
 
 ## 4. 单一上下文原则
 

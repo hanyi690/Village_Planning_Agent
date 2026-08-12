@@ -138,9 +138,7 @@ EXECUTE 只接受 `SiteSelectionDecision` 和 `ExecutionPlan`。按目标类型�
 
 Worker 不得重新执行 target projection，也不得将第一个可用候选当作最终选址。
 
-上述是目标输入边界。当前代码的 `post_l3_nodes.execute_node` 仍向 `ExecuteAgentState` 注入 intent、bundle、
-selection 和 reports-derived 数据，尚未只接受 `SiteSelectionDecision + ExecutionPlan`。当前内部节点仍是
-`route_tasks → execute_layout → execute_project → execute_facility → execute_axis → execute_road → validate → write_l4`。
+上述是目标输入边界。当前实现已经把规划程序、目标投影和交付快照收敛到 typed artifact，但 EXECUTE 的完整 worker contract、统一 `ExecutionResult` 和真实链路仍是 `PARTIAL`；具体事实以 `10_IMPLEMENTATION_STATUS.md` 为准。迁移期的旧 `ExecuteAgentState`、集中式执行节点和 reports-derived 输入不得继续扩展。
 
 目标重构应形成：
 
@@ -150,7 +148,7 @@ prepare_inputs → land_design / allocation → geometry_materialize
 ```
 
 其中 Zone Worker 应由 MIP/约束求解器处理规划分区，不得把现状地类代码直接映射为规划分区；Road Worker 应
-以 staged road planner 为正式路径，简化 planner 只能显式标记为 degraded fallback。EXECUTE 内部的
+以 staged road planner 为正式路径，任何不可用情况都必须显式返回 degraded/unresolved。EXECUTE 内部的
 `execution_review` 只做执行完整性和 Worker 间冲突检查，最终规则、拓扑、面积和连通性校验仍由外层 VALIDATE 负责。
 
 ## 6. 旧实现的迁移对应
@@ -162,4 +160,4 @@ prepare_inputs → land_design / allocation → geometry_materialize
 | `modules/spatial_ops/bundle_binder.py` | 删除；改为 context-aware reference resolution |
 | `agent/gis/execute/agent.py` | 已迁移；当前实现仍集中在 `app/agent/execute/execute_agent.py` |
 | `tools/gis/_generation/*` | 已删除；正式链路由 `agent/execute` 与 `modules/spatial_ops` 提供 |
-| `services/modules/gis/road/*` 与 `spatial_ops/road_planner.py` | 当前并存；目标是以 staged planner 为唯一正式 Road Worker |
+| `services/modules/gis/road/*` 与 `spatial_ops/road_planner.py` | 历史重复实现；staged planner 是唯一正式 Road Worker，旧入口已删除或待清理以 `10_IMPLEMENTATION_STATUS.md` 为准 |

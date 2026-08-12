@@ -34,7 +34,7 @@ ExplorationRequest
 
 EXPLORE 可以发现“园寨实体对应 BSM-001 和 BSM-017”，但返回的是两个 `entity_refs` 及其来源。它不把二者写入 `candidate_bsm_list`，也不判断哪个适合建设养老设施。
 
-GROUND 再根据 PARSE 生成的 `SpatialReferenceSpec` 查询候选；SELECT 再根据目标指标和约束进行选址。
+GROUND 再根据 TARGET_PROJECTION 生成的 `SpatialReferenceSpec` 查询候选；SELECT/ALLOCATION 再根据目标指标和约束进行选址。
 
 ## 5. 缓存与失效
 

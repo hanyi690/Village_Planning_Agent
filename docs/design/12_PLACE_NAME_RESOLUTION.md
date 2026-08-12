@@ -15,7 +15,7 @@ SpatialReferenceSpec
 
 这会造成三个问题：
 
-1. L1 已经确认的地点事实没有进入 PARSE → GROUND 的正式证据链。
+1. L1 已经确认的地点事实没有进入 TARGET_PROJECTION → GROUND 的正式证据链。
 2. KG 的实体别名、类型、拓扑关系和来源没有参与完整的候选评分。
 3. 外部 geocoder 或 village-center/bbox fallback 可能在 session 内已有更好证据时抢占主路径。
 
@@ -179,7 +179,7 @@ class PlaceResolutionResult(ContractMeta):
 ```text
 L1        发现并结构化地点事实
 EXPLORE   查询 KG、L1LocationFact、Bundle 和历史证据
-PARSE     将规划文本中的地点引用编译为 SpatialReferenceSpec
+TARGET_PROJECTION 将 PlanningProgram 中的地点引用编译为 SpatialReferenceSpec
 GROUND    调用 PlaceEvidencePort / SpatialResolver，生成候选空间和证据
 SELECT    仅在候选空间中选择项目位置
 EXECUTE   消费 SiteSelectionDecision + ExecutionPlan，不再解析地名

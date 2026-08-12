@@ -166,10 +166,9 @@ hard constraints
 
 Worker 只消费 `SiteSelectionDecision` 和 `ExecutionPlan`。不可在 Worker 内重新解析文本或偷偷选另一个候选。
 
-当前实现尚未完全达到该目标。`backend/app/agent/execute/execute_agent.py` 仍将路由、布局、项目、设施、
-轴线、道路、局部校验和 L4 写入集中在同一子图中；当前 `execute_layout` 使用确定性 zone reclassify，
-不调用 MIP。`ExecutionPlan` 尚未成为 post-L3 EXECUTE 的唯一输入，正式 Zone Worker 和 Worker 结果合并器
-仍待实现。道路的 staged planner 与 `spatial_ops.road_planner` fallback 也尚未收敛为唯一入口。
+当前实现仍未完全达到该目标。EXECUTE 的完整 `ExecutionPlan`、独立 WorkerResult、ZoneAllocatorPort 和
+RoadPlannerPort 闭环仍为 `PARTIAL`；staged road pipeline 已是 canonical，旧简化 road fallback 已删除。
+具体 CURRENT/PARTIAL/GAP 以 `10_IMPLEMENTATION_STATUS.md` 为准。
 
 因此“Zone = MIP / zoning allocator”和“Road = 唯一正式 road planner”是目标设计，不应标记为 CURRENT。
 

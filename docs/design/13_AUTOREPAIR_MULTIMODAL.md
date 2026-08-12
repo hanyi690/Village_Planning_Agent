@@ -10,7 +10,7 @@
 1. 根据自己的校验产出自动修正可确定的问题；
 2. 在不确定时保留 unresolved/HUMAN/partial 语义；
 3. 使用图片、扫描件、规划图、遥感图和现场照片作为可审计证据；
-4. 将视觉发现接入同一套 PARSE/GROUND/SELECT/EXECUTE/VALIDATE/DELIVER 闭环；
+4. 将视觉发现接入同一套 TARGET_PROJECTION/GROUND/SELECT/EXECUTE/VALIDATE/DELIVER 闭环；
 5. 保留每轮修复的输入、调整、空间差异和交付 checksum。
 
 自动迭代不是无限重试，也不是让 LLM 自由重写规划；多模态也不是向 L1 随意附加
@@ -41,17 +41,17 @@ GeoAI 的可用形式是视觉感知、地理记忆、确定性空间工具和�
 | 能力 | 当前实现 | 状态 |
 |---|---|---|
 | 自动校验 | `backend/app/agent/validate/` 有确定性 checks、`ValidationReport`、责任阶段和 gate | PARTIAL |
-| 自动回退 | `graph.py` 有 `RETRY_EXECUTE/SELECT/GROUND/PARSE` 路由 | PARTIAL |
+| 自动回退 | 阶段路由已有 EXECUTE/SELECT/GROUND 等定向反馈，统一 adjustment executor 仍待完成 | PARTIAL |
 | 自动调整 | `ValidationReport.adjustments` 已存在，但各 worker 消费不完整 | PARTIAL |
 | 无进展保护 | `issue_fingerprint`、`gate_progress_metadata` 会识别重复问题 | CURRENT / 语义不足 |
 | 自动修复闭环 | 同一问题通常转 HUMAN 或重复阶段，尚未统一执行 adjustment | GAP |
-| 修订 | `revision_impact_tree`、artifact revision/checksum、PARSE REPAIR/REVISE 已有基础 | PARTIAL |
+| 修订 | `revision_impact_tree`、artifact revision/checksum、目标投影修订已有基础 | PARTIAL |
 | 图片 API | `ImageData`、`images` 字段存在 | PARTIAL |
 | 图片 State | `image_ids` 存在 | PARTIAL |
 | 图片 LLM 输入 | L1 主要仍发送文本，只记录 `has_images` | GAP |
 | 图片 artifact | 没有统一媒体登记、hash、区域和版本链 | GAP |
 | OCR/版面/图例证据 | 没有统一的 ImageEvidence 索引 | GAP |
-| 多阶段视觉消费 | L2/L3/PARSE/GROUND/SELECT/VALIDATE/DELIVER 未形成正式输入 | GAP |
+| 多阶段视觉消费 | L2/L3/TARGET_PROJECTION/GROUND/SELECT/VALIDATE/DELIVER 未形成正式输入 | GAP |
 | 视觉触发迭代 | 图片问题不能稳定绑定 target 并进入 adjustments | GAP |
 
 因此当前不能宣称已经具备自动规划修复或完整多模态规划。
@@ -104,7 +104,7 @@ checksum、adjustments、受影响目标、检查前后结果和新产物 checks
 | 面积不闭合 | footprint 调整、保留余地、重算 | EXECUTE |
 | 候选违反硬约束 | 排除具体 BSM、重新评分 | SELECT |
 | 有新证据的空候选 | 目标级重读候选 | GROUND |
-| 规划分类缺失 | 同一编码体系闭集决策 | PARSE/EXECUTE |
+| 规划分类缺失 | 同一编码体系闭集决策 | TARGET_PROJECTION/EXECUTE |
 | 设施缓冲/面积错误 | 米制 CRS 确定性重算 | EXECUTE |
 | 道路/轴线无效 | 使用已确认锚点重建 | EXECUTE |
 
@@ -127,7 +127,7 @@ checksum、adjustments、受影响目标、检查前后结果和新产物 checks
   → OCR/布局/图例/图像理解
   → ImageEvidence / VisualFact / MapObservation
   → L1/L2/L3
-  → PARSE/GROUND/SELECT
+  → TARGET_PROJECTION/GROUND/SELECT
   → EXECUTE 后 VisualReview
   → VALIDATE/adjustments
   → RECONCILE/DELIVER
@@ -153,7 +153,7 @@ adjustments；这些是 artifact payload 类型，不是新的 State 平行存�
   `evidence_id`，不得直接产生坐标、BSM 或 CandidateSite。
 - **L2**：结合视觉事实、时间差、区域关系和 GIS 摘要解释空间问题，不重复传全量图片。
 - **L3**：检查规划目标与现场事实是否冲突，判断新增/改造/保留并保留 evidence refs。
-- **PARSE/GROUND**：`visual_exact_label` 仍需核验；`visual_ambiguous_reference` 和
+- **TARGET_PROJECTION/GROUND**：`visual_exact_label` 仍需核验；`visual_ambiguous_reference` 和
   `visual_unresolved` 不得生成坐标、BSM 或空间 PASS；只有可靠 CRS/bbox 或 HUMAN
   确认区域才可辅助 grounding。
 - **SELECT/EXECUTE**：视觉属性可作为可解释评分证据；几何、面积、拓扑、CRS 和分类

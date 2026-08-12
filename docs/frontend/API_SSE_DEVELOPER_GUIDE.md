@@ -485,3 +485,26 @@ E2E 最小链路：创建会话 → state → SSE → 可选 Human Review → de
 
 迁移前不能删除这些命令接口；迁移后按 `api-sse-cutover.md` 相同流程完成调用扫描、
 route absence 测试和文档更新。
+
+### 14.1 前端已对齐 v1 的部分（2026-08-12）
+
+前端工作台已经改为从 v1 权威投影读取规划结论，不再以旧命令接口为规划事实来源：
+
+- **Human Review**：审核动作统一走 `POST /api/v1/sessions/{id}/human-review`，携带
+  `event_id` 乐观锁；`approve/reject` 通过 `resolveHumanReview` 提交，不再走旧的
+  `POST /api/sessions/{id}/feedback`。冲突或过期决策返回 409，前端刷新 `/state` 与
+  `/human-review`，不自动重放。
+- **Resume**：历史 checkpoint 分叉走 `POST /api/v1/sessions/{id}/resume`
+  （`mode: checkpoint`），不再调用旧的 `POST /api/sessions/{id}/resume/{checkpoint_id}`。
+- **Delivery**：末端新增 `useDeliverySync`，在 `delivery_ready`/终态/resync 时拉取
+  `/delivery` 与 `/map-layers`，`partial`/`diagnostic_only`/`statutory_complete=false`
+  在 UI 中显著展示，不显示为法定完整成果。
+- **地图图层**：新增 `normalizeV1MapLayers` 适配层，把 v1 的
+  `current|planned|overlay|constraint` 图层映射到内部渲染词汇，地图以
+  `DeliverySpatialSnapshot`（/map-layers）为准，`snapshot_checksum` 变化时整体替换，
+  不再把 SSE 增量当作最终权威。
+- **Artifact**：新增 `getArtifact` 读取 `/api/v1/sessions/{id}/artifacts/{key}`。
+
+旧命令接口（`planning-text`、`export`、`layer-reports`、`geocode`、`gis-data`、
+`rag-config`、`step-mode`、`delete`）仍可调用，集中在 `planning-api.ts` 客户端中，
+其 v1 迁移作为后续后端改动挂起。
