@@ -38,7 +38,7 @@ async def _cancel_session_tasks(session_id: str) -> bool:
 
 async def _clear_session_context(session_id: str) -> bool:
     try:
-        from app.services.context.planning_context import (
+        from app.infrastructure.context.planning_context_factory import (
             _context_cache,
             invalidate_planning_context,
         )

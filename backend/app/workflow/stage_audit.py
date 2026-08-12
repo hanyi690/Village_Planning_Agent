@@ -147,7 +147,7 @@ def _input_snapshot(state: Dict[str, Any], stage: str) -> Dict[str, Any]:
     }
     sources = list(state.get("metadata", {}).get("source_refs", []) or [])
     try:
-        from app.services.context.planning_context import get_cached_context
+        from app.infrastructure.context.planning_context_factory import get_cached_context
 
         context = get_cached_context(str(state.get("session_id", "")))
         if context is not None and context.data_snapshot is not None:

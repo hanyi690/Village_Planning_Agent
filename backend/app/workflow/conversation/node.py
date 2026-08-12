@@ -70,7 +70,7 @@ def _build_prompt(state: Dict[str, Any]) -> Any:
     config = state.get("config", {})
     input_texts = {}
     try:
-        from app.services.context.planning_context import get_cached_context
+        from app.infrastructure.context.planning_context_factory import get_cached_context
 
         context = get_cached_context(str(state.get("session_id", "")))
         input_texts = context.input_texts() if context is not None else {}

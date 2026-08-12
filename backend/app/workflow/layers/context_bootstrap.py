@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any, Dict
 
-from app.services.context.planning_context import build_planning_context
+from app.infrastructure.context.planning_context_factory import build_planning_context
 from app.infrastructure.logging import get_logger
 
 logger = get_logger(__name__)
@@ -17,7 +17,7 @@ def _hydrate_l1_spatial_facts(state: Dict[str, Any], context: Any) -> None:
         # the next stage sees the old village-only gazetteer and loses the
         # facility/place bindings created by L1.
         from app.infrastructure.kg.gazetteer import build_gazetteer
-        from app.services.context.planning_context import _load_session_semantic_memory
+        from app.infrastructure.context.planning_context_factory import _load_session_semantic_memory
 
         session_id = str(state.get("session_id", "") or "")
         kg = getattr(context, "kg", None)
@@ -82,7 +82,7 @@ async def bootstrap_context_node(state: Dict[str, Any]) -> Dict[str, Any]:
         # in-process cache is empty.  The boolean is not proof that the
         # PlanningContext is available; rebuild the same authoritative
         # context instead of allowing downstream stages to receive None.
-        from app.services.context.planning_context import get_cached_context
+        from app.infrastructure.context.planning_context_factory import get_cached_context
         cached = get_cached_context(session_id)
         if cached is not None:
             _hydrate_l1_spatial_facts(state, cached)

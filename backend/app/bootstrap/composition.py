@@ -51,7 +51,7 @@ class CompositionRoot:
     @classmethod
     def get_context_provider(cls):
         if cls._context_provider is None:
-            from app.services.context.planning_context import get_cached_context
+            from app.infrastructure.context.planning_context_factory import get_cached_context
 
             cls._context_provider = get_cached_context
             from app.infrastructure import registry

@@ -112,7 +112,7 @@ def _location_evidence(text: str) -> str:
 def _resolvable_villages(session_id: str) -> str:
     """Return only village aliases currently backed by real BSMs."""
     try:
-        from app.services.context.planning_context import get_cached_context
+        from app.infrastructure.context.planning_context_factory import get_cached_context
 
         context = get_cached_context(session_id)
         names: List[str] = []
@@ -444,7 +444,7 @@ def _build_prompt(
     project_name = state.get("project_name", "村庄")
     constraints = "无特殊约束"
     try:
-        from app.services.context.planning_context import get_cached_context
+        from app.infrastructure.context.planning_context_factory import get_cached_context
 
         context = get_cached_context(str(state.get("session_id", "")))
         if context is not None:

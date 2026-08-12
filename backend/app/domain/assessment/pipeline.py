@@ -105,7 +105,7 @@ class DataPipeline:
             config = state.get("config", {})
             context["project_name"] = state.get("project_name", "")
             try:
-                from app.services.context.planning_context import get_cached_context
+                from app.infrastructure.context.planning_context_factory import get_cached_context
 
                 planning_context = get_cached_context(str(state.get("session_id", "")))
                 if planning_context is not None:

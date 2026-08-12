@@ -3,7 +3,7 @@
 from pathlib import Path
 
 from app.infrastructure.kg.memory import EntityAnnotation, SemanticMemoryStore, save_memory_state
-from app.services.context import planning_context
+from app.infrastructure.context import planning_context_factory as planning_context
 
 
 def test_latest_session_semantic_memory_is_restored(monkeypatch, tmp_path: Path):

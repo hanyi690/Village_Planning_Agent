@@ -23,7 +23,7 @@
 | `gazetteer_adapter.py` | `KGGazetteerAdapter` | `GazetteerPort` | `resolve(run_id, name, fuzzy=False)` → `GazetteerEntryLike \| None`（包装 `kg/gazetteer`） |
 | `spatial_query_adapter.py` | `KGSpatialQueryAdapter` | `SpatialQueryPort` | `query_by_bbox` / `query_by_geometry` / `compute_overlap` / `nearest_features` / `resolve_candidates`（包装会话 KG） |
 
-**注入路径**：`app.services.context.planning_context` 的 `build_planning_context` 在构建 `PlanningPorts` 时实例化这两个适配器（gazetteer 非 None → `KGGazetteerAdapter`；kg 非 None → `KGSpatialQueryAdapter`）。
+**注入路径**：`app.infrastructure.context.planning_context_factory` 的 `build_planning_context` 在构建 `PlanningPorts` 时实例化这两个适配器（gazetteer 非 None → `KGGazetteerAdapter`；kg 非 None → `KGSpatialQueryAdapter`）。
 
 ---
 

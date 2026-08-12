@@ -16,7 +16,7 @@ context can never be mistaken for a fresh one.
 Dependency rule: this module MUST NOT import ``app.agent``, ``app.services``
 or ``app.api``. Lives in ``app.infrastructure.context`` (folded out of the
 legacy ``app.modules`` context package in Phase 5). The async factory that
-*builds* a context lives in ``app.services.context``.
+*builds* a context lives in ``app.infrastructure.context.planning_context_factory``.
 """
 
 from __future__ import annotations

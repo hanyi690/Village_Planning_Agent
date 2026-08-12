@@ -540,7 +540,7 @@ def _build_prompt(cfg, state, rag_context, deps: str = "", same_layer_contexts: 
     input_texts: Dict[str, str] = {}
     context_village_name = ""
     try:
-        from app.services.context.planning_context import get_cached_context
+        from app.infrastructure.context.planning_context_factory import get_cached_context
 
         context = get_cached_context(str(state.get("session_id", "")))
         if context is not None:
