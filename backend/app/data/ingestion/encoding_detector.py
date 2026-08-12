@@ -3,14 +3,13 @@ from typing import Optional
 
 import yaml
 
-from app.modules.schema.encodings import code_sets as cs
+from app.data.encodings import code_sets as cs
 from app.data.model.audit import ProvenanceSource
 
 
 _TUGUI_YAML = (
     Path(__file__).parents[2]
-    / "modules"
-    / "schema"
+    / "data"
     / "encodings"
     / "dicts"
     / "encodings"

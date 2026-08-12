@@ -1,6 +1,6 @@
 """Cross-system land-use mapping tables and lookup functions.
 
-Isolated from ``app.modules.schema.encodings.code_sets`` so that cross-system
+Isolated from ``app.data.encodings.code_sets`` so that cross-system
 derivation (DLBM→zone_type, DLBM→planning_zone, GHYTBM→VNE, zone_type→planning_zone,
 … ) does not leak into same-system code sets.
 
@@ -13,13 +13,13 @@ from __future__ import annotations
 import functools
 from typing import Dict, List, Optional, Tuple
 
-from app.modules.schema.encodings.code_sets import (
+from app.data.encodings.code_sets import (
     DLBM_TO_DLMC,
     GHYTBM_TO_GHYTMC,
     SPACE_CONTROL_NAME_TO_CODE,
     SPACE_CONTROL_ZONE_CODES,
 )
-from app.modules.schema.encodings.dicts.loader import get_center
+from app.data.encodings.dicts.loader import get_center
 
 
 def _mapping_default_to_dict(m) -> Dict[str, str]:

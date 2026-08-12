@@ -189,8 +189,8 @@ def get_schema() -> ClassificationSchema:
 
 # ============================================================
 # EncodingRegistry - advisory-only cross-system suggestion interface.
-# Wave A.1: moved to app.modules.schema.advisory_crosswalks.registry.
+# Wave A.1: moved to app.data.catalog.advisory_crosswalks.registry.
 # The default chain / schema layer does NOT import advisory crosswalks.
 # Advisory consumers import directly from
-# app.modules.schema.advisory_crosswalks.registry.
+# app.data.catalog.advisory_crosswalks.registry.
 # ============================================================

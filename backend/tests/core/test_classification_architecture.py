@@ -11,7 +11,7 @@ RUNTIME_ROOTS = (
     APP / "agent",
     APP / "infrastructure/rendering",
     APP / "infrastructure/export",
-    APP / "modules/kg",
+    APP / "infrastructure/kg",
 )
 FORBIDDEN = (
     "dlbm_to_ghytbm",
@@ -32,7 +32,7 @@ def test_runtime_paths_do_not_import_or_name_advisory_classification_maps() -> N
                 for node in ast.walk(tree)
                 if isinstance(node, ast.ImportFrom) and node.module
             }
-            if any(name.startswith("app.modules.schema.advisory_crosswalks") for name in imports):
+            if any(name.startswith("app.data.catalog.advisory_crosswalks") for name in imports):
                 violations.append(f"{path.relative_to(APP)}: advisory crosswalk import")
             for token in FORBIDDEN:
                 if token.lower() in source:

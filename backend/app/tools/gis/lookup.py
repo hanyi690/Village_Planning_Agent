@@ -210,7 +210,7 @@ def lookup_land_use_code(land_use_name: str) -> Dict[str, Any]:
         candidates_dlbm.
     """
     try:
-        from app.modules.schema.encodings.code_sets import (
+        from app.data.encodings.code_sets import (
             GHYTBM_TO_GHYTMC,
             GHFLBM_TO_GHYTBMS,
             DLBM_TO_DLMC,

@@ -7,7 +7,7 @@ lookups.
 v5.2 (advisory_crosswalks isolation) changes:
 - Cross-system mappings (DLBM→zone_type, DLBM→planning_zone, DLBM→primary_zone,
   GHYTBM→VNE, zone_type→planning_zone, planning_zone→primary_zone, …) and their
-  lookup functions MOVED to app.modules.schema.advisory_crosswalks.
+  lookup functions MOVED to app.data.catalog.advisory_crosswalks.
 - This module keeps only same-system code→name sets and pure code sets:
   DLBM_TO_DLMC, GHYTBM_TO_GHYTMC, GHYTBM_TO_YDYHFLDM, YDYHFLDM_TO_NAME,
   VNE_CODE_TO_NAME, GHFLBM_MEANING, GHFLBM_TO_GHYTBMS, zone-name lists

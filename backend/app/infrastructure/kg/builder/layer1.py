@@ -52,7 +52,7 @@ def _derive_semantic_label(dlbm: str) -> str:
     if not dlbm:
         return ""
     try:
-        from app.modules.schema.encodings.code_sets import DLBM_TO_DLMC
+        from app.data.encodings.code_sets import DLBM_TO_DLMC
         return DLBM_TO_DLMC.get(str(dlbm).strip(), "")
     except Exception:
         return ""
@@ -86,7 +86,7 @@ def _get_allowed_operations(ghytbm: str = "", planning_zone: str = "", control_c
     Returns a list of operation strings (subset of create/split/merge/modify/reclassify).
     """
     try:
-        from app.modules.schema.encodings.dicts.loader import get_center
+        from app.data.encodings.dicts.loader import get_center
         d = get_center().get("allowed_operations").raw
         if ghytbm:
             entry = d.get("by_ghytbm", {}).get(str(ghytbm).strip())

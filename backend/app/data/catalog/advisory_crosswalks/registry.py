@@ -14,12 +14,12 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Dict, List, Tuple
 
-from app.modules.schema.advisory_crosswalks import (
+from app.data.catalog.advisory_crosswalks import (
     DLBM_TO_ZONE_TYPE,
     DLBM_TO_PLANNING_ZONE,
     DLBM_TO_PRIMARY_ZONE,
 )
-from app.modules.schema.encodings.code_sets import DLBM_TO_DLMC
+from app.data.encodings.code_sets import DLBM_TO_DLMC
 
 
 @dataclass
@@ -49,7 +49,7 @@ class EncodingRegistry:
     def from_center(cls) -> "EncodingRegistry":
         """Build the registry reusing advisory crosswalk + same-system tables."""
         from app.infrastructure.rendering.colors import PLANNING_ZONE_COLORS
-        from app.modules.schema.encodings.dicts.loader import get_center
+        from app.data.encodings.dicts.loader import get_center
 
         dlbm_to_category_sets: Dict[str, tuple[str, ...]] = {}
         try:

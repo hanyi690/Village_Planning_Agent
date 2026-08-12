@@ -11,7 +11,7 @@ Available rule sets:
   - three_line_types.yaml — 3 control lines + construction zone
 
 Usage:
-    from app.modules.schema.encodings.dicts.rule_loader import get_rule_loader
+    from app.data.encodings.dicts.rule_loader import get_rule_loader
 
     loader = get_rule_loader()
     indicators = loader.planning_targets()
@@ -39,7 +39,7 @@ _RULES_DIR = Path(__file__).parent / "rules"
 
 # planning_zone_rules.yaml moved to advisory_crosswalks/yaml.
 # rule_loader.py is at encodings/dicts/ so the advisory dir is at parent.parent.parent.
-_ADVISORY_DIR = Path(__file__).parent.parent.parent / "advisory_crosswalks" / "yaml"
+_ADVISORY_DIR = Path(__file__).parent.parent.parent / "catalog" / "advisory_crosswalks" / "yaml"
 
 
 # ── Typed rule data classes ─────────────────────────────────────────

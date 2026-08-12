@@ -1,7 +1,7 @@
 """Unified code→name lookup helper (v3.0).
 
 This module handles ONLY forward, deterministic 1:1 code→name mappings
-across all encoding systems defined in app.modules.schema.encodings.code_sets.
+across all encoding systems defined in app.data.encodings.code_sets.
 
 Key principles:
 - Forward direction only (code → name)
@@ -17,7 +17,7 @@ from __future__ import annotations
 
 from typing import Dict, Optional
 
-from app.modules.schema.encodings import code_sets as cs
+from app.data.encodings import code_sets as cs
 
 
 # ── 14 套 encoding 系统的 name_by_code 表 ──

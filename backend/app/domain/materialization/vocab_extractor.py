@@ -21,7 +21,7 @@ from app.contracts.domain.custom_zone_contracts import (
     Vocabulary,
     VocabularyCategory,
 )
-from app.modules.schema.encodings.dicts.vocabularies.loader import register_vocabulary
+from app.data.encodings.dicts.vocabularies.loader import register_vocabulary
 from app.utils.logger import get_logger
 
 logger = get_logger(__name__)

@@ -2,7 +2,7 @@
 
 Cross-system mapping tables and lookup functions (DLBM→zone_type, DLBM→planning_zone,
 GHYTBM→VNE, zone_type→planning_zone, planning_zone→primary_zone, …). Same-system
-code→name sets stay in ``app.modules.schema.encodings.code_sets``.
+code→name sets stay in ``app.data.encodings.code_sets``.
 
 The underlying YAML data lives in ``advisory_crosswalks/yaml/`` and is scanned by
 ``DictionaryCenter`` so ``get_center().get(...)`` / ``get_mapping(...)`` keep working.

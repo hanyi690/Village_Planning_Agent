@@ -564,7 +564,7 @@ def _format_encoding_validation(
     lines = []
 
     try:
-        from app.modules.schema.encodings.code_sets import GHYTBM_TO_GHYTMC
+        from app.data.encodings.code_sets import GHYTBM_TO_GHYTMC
 
         # Validate operation land_use_code
         valid_ops = 0

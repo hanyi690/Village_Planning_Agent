@@ -8,7 +8,7 @@ from app.contracts.domain.custom_zone_contracts import (
     Vocabulary,
     VocabularyCategory,
 )
-from app.modules.schema.encodings.dicts.vocabularies.loader import get_vocabulary
+from app.data.encodings.dicts.vocabularies.loader import get_vocabulary
 from app.data.model.audit import ProvenanceAudit, ProvenanceSource
 
 # Three-line protection subtypes whose parcels must be excluded from custom zones.

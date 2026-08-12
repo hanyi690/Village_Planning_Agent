@@ -187,7 +187,7 @@ def _code_to_name(code: str) -> str:
     if code in _KNOWN_NAMES:
         return _KNOWN_NAMES[code]
     try:
-        from app.modules.schema.encodings.code_sets import DLBM_TO_DLMC, GHYTBM_TO_GHYTMC
+        from app.data.encodings.code_sets import DLBM_TO_DLMC, GHYTBM_TO_GHYTMC
 
         for mapping in [GHYTBM_TO_GHYTMC, DLBM_TO_DLMC]:
             if code in mapping:

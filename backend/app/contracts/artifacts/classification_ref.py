@@ -77,8 +77,8 @@ class ClassificationRef(BaseModel):
 
 def _same_system_code_names(system: str) -> dict[str, str] | None:
     """Return one system's own code→name table, without cross-system mappings."""
-    from app.modules.schema.encodings import code_sets
-    from app.modules.schema.encodings.dicts.loader import get_center
+    from app.data.encodings import code_sets
+    from app.data.encodings.dicts.loader import get_center
 
     # These names are deliberately direct dictionary lookups.  Do not add a
     # mapping-table fallback here: a code is valid only in the namespace that

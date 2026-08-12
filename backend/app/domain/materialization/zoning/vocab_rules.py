@@ -10,7 +10,7 @@ from __future__ import annotations
 from typing import Any, Dict, List
 
 from app.contracts.domain.custom_zone_contracts import TypingRule
-from app.modules.schema.encodings.dicts.expr_eval import Condition, MappingContext
+from app.data.encodings.dicts.expr_eval import Condition, MappingContext
 
 
 def rule_to_condition(rule: TypingRule) -> Condition:

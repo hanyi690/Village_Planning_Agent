@@ -9,7 +9,7 @@ from __future__ import annotations
 from collections import Counter
 from typing import Any, Dict, Set
 
-from ..encodings.code_sets import (
+from .code_sets import (
     BASIC_FARMLAND_CODES,
     GENERAL_AGRICULTURE_CODES,
     ECOLOGICAL_CODES,

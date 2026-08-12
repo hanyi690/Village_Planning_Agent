@@ -89,7 +89,7 @@ def test_jintian_emits_all_four_block_outputs():
     from app.contracts.domain.custom_zone_contracts import (
         TypingRule, Vocabulary, VocabularyCategory,
     )
-    from app.modules.schema.encodings.dicts.vocabularies.loader import register_vocabulary
+    from app.data.encodings.dicts.vocabularies.loader import register_vocabulary
 
     register_vocabulary(
         "jintian_industry",

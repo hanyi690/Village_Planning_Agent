@@ -197,7 +197,7 @@ def _build_landuse_dist(bundle: VillageBundle) -> ContextBlock:
 
     # Enrich with encoding names
     try:
-        from app.modules.schema.encodings.code_sets import DLBM_TO_DLMC
+        from app.data.encodings.code_sets import DLBM_TO_DLMC
     except ImportError:
         DLBM_TO_DLMC = {}
 
@@ -244,7 +244,7 @@ def _build_residential_clusters(bundle: VillageBundle) -> ContextBlock:
     try:
         from shapely.geometry import shape
         from shapely.ops import unary_union
-        from app.modules.schema.encodings.code_sets import get_dlbms_for_zone_type
+        from app.data.encodings.code_sets import get_dlbms_for_zone_type
 
         _RESIDENTIAL_DLBMS = set(get_dlbms_for_zone_type("居住用地"))
 
@@ -352,7 +352,7 @@ def _build_residential_clusters(bundle: VillageBundle) -> ContextBlock:
             # Adjacent non-residential zones (simplified)
             adjacent_zones: List[str] = []
             try:
-                from app.modules.schema.encodings.code_sets import get_zone_type_for_dlbm
+                from app.data.encodings.code_sets import get_zone_type_for_dlbm
                 non_res = gdf[~gdf["dlbm"].isin(_RESIDENTIAL_DLBMS)]
                 if not non_res.empty:
                     non_res_metric = project_to_metric(non_res)

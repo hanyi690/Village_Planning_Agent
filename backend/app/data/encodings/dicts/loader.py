@@ -27,7 +27,7 @@ _MAPPINGS_DIR = "mappings"
 
 # Advisory cross-system mappings live outside encodings/dicts (encodings/../.. level).
 # loader.py is at encodings/dicts/ so advisory_crosswalks is at dicts.parent.parent.
-_ADVISORY_DIR = _DICTS_DIR.parent.parent / "advisory_crosswalks" / "yaml"
+_ADVISORY_DIR = _DICTS_DIR.parent.parent / "catalog" / "advisory_crosswalks" / "yaml"
 
 
 # ============================================================

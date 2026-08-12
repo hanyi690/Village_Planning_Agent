@@ -2,7 +2,7 @@
 
 This is the ONLY place where raw file/API data is validated and converted
 into typed spatial models. All other layers (kg / parse / gis tools) MUST
-consume the typed models from `app.modules.schema`, never raw dicts.
+consume the typed models from `app.data`, never raw dicts.
 
 Migrated from `app/modules/gis/schema/ingestion.py` - ingestion is a
 data-layer concern (it reads data and validates it), so it lives here next
@@ -101,7 +101,7 @@ class _EncodingValidator:
     def _ensure_loaded(self):
         if self._dicts is not None:
             return
-        from app.modules.schema.encodings.dicts.loader import get_center
+        from app.data.encodings.dicts.loader import get_center
         center = get_center()
         self._dicts = {}
         for sys_name in [GB_T21010, TUGUI, APPENDIX5, GHFLBM_SYS, YDYHFL, VNE]:

@@ -114,7 +114,7 @@ def _compute_zone_adjacency(parcels: List[Any]) -> Dict[str, List[str]]:
     Accepts List[BaseLandUseParcel] — uses p.dlbm and shape(p.geometry) directly.
     """
     try:
-        from app.modules.schema.encodings.code_sets import get_zone_type_for_dlbm
+        from app.data.encodings.code_sets import get_zone_type_for_dlbm
         from shapely.geometry import shape
 
         if not parcels:

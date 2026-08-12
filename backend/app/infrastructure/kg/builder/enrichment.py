@@ -32,7 +32,7 @@ def derive_semantic_label(dlbm: str) -> str:
     if not dlbm:
         return ""
     try:
-        from app.modules.schema.encodings.code_sets import DLBM_TO_DLMC
+        from app.data.encodings.code_sets import DLBM_TO_DLMC
         return DLBM_TO_DLMC.get(str(dlbm).strip(), "")
     except Exception:
         return ""
@@ -52,7 +52,7 @@ def derive_legal_constraint(planning_zone: str) -> str:
 
 def get_allowed_operations(ghytbm: str = "", planning_zone: str = "", control_code: str = "") -> List[str]:
     try:
-        from app.modules.schema.encodings.dicts.loader import get_center
+        from app.data.encodings.dicts.loader import get_center
         d = get_center().get("allowed_operations").raw
         if ghytbm:
             entry = d.get("by_ghytbm", {}).get(str(ghytbm).strip())

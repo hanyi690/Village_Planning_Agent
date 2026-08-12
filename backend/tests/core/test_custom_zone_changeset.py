@@ -36,7 +36,7 @@ from app.domain.materialization.plan_builder import (
 from app.domain.materialization.zoning.custom_zone_changeset import (
     materialize_custom_zone_changes,
 )
-from app.modules.schema.encodings.dicts.vocabularies.loader import register_vocabulary
+from app.data.encodings.dicts.vocabularies.loader import register_vocabulary
 from app.contracts.spatial.spatial_delivery_contracts import SpatialLayerRef
 from app.infrastructure.gis.spatial_data_port import GeoJSONSpatialDataPort
 from app.infrastructure.export.delivery_snapshot import build_delivery_spatial_snapshot

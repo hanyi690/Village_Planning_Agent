@@ -534,7 +534,7 @@ def get_parcels_by_planning_zone(kg, planning_zone: str) -> List[Dict[str, Any]]
         List of parcel summaries with BSM, DLBM, area, and relations.
     """
     try:
-        from app.modules.schema.encodings.code_sets import PLANNING_ZONE_NAMES
+        from app.data.encodings.code_sets import PLANNING_ZONE_NAMES
 
         # Validate planning zone
         valid_zones = set(PLANNING_ZONE_NAMES)
@@ -1169,7 +1169,7 @@ def get_entity_semantics(kg, entity_label: str = "", entity_type: str = "", bsm:
             # Encoding bridges - same-system code→name only (Wave A.1:
             # no cross-system derivation exposed to the LLM)
             try:
-                from app.modules.schema.encodings.code_sets import DLBM_TO_DLMC
+                from app.data.encodings.code_sets import DLBM_TO_DLMC
                 # Find DLBM for this label
                 for dlbm, dlmc in DLBM_TO_DLMC.items():
                     if dlmc == entity_label:
@@ -1183,7 +1183,7 @@ def get_entity_semantics(kg, entity_label: str = "", entity_type: str = "", bsm:
         if entity_type and not entity_label and not bsm:
             # Get allowed_operations from allowed_operations.yaml by planning_zone
             try:
-                from app.modules.schema.encodings.dicts.loader import get_center
+                from app.data.encodings.dicts.loader import get_center
                 d = get_center().get("allowed_operations").raw
                 # For Zone types, map type name to constraint
                 if entity_type == "Zone":
@@ -1195,7 +1195,7 @@ def get_entity_semantics(kg, entity_label: str = "", entity_type: str = "", bsm:
 
         # Enrich with allowed_operations.yaml note
         try:
-            from app.modules.schema.encodings.dicts.loader import get_center
+            from app.data.encodings.dicts.loader import get_center
             d = get_center().get("allowed_operations").raw
             label = entity_label or result.get("encoding_bridges", {}).get("dlmc", "")
             # Check by_planning_zone
