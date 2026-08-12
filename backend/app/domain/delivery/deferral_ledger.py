@@ -40,7 +40,7 @@ def build_target_deferrals(
             rationale=rationale,
         )
     entries: list[TargetDeferral] = []
-    for target_id in target_ids:
+    for target_id in dict.fromkeys(target_ids):
         refs = source_refs(target_id) if callable(source_refs) else tuple(source_refs)
         entries.append(
             TargetDeferral(
@@ -57,9 +57,19 @@ def append_ledger(
     existing: DeferralLedger | None,
     new_entries: Sequence[TargetDeferral],
 ) -> DeferralLedger:
-    """Append new entries to an existing immutable ledger, preserving prior entries."""
+    """Append new entries to an existing immutable ledger, preserving prior entries.
+
+    A target is deferred once: repeated HUMAN deferral revisions (GROUND,
+    SELECT, VALIDATE) must not stack duplicate ledger rows for the same
+    target - that inflates the deferral summary and re-marks already-deferred
+    targets as structurally blocked.
+    """
     existing_entries = tuple(getattr(existing, "entries", None) or ())
-    return DeferralLedger(entries=existing_entries + tuple(new_entries))
+    seen = {str(entry.target_id) for entry in existing_entries}
+    unique_new = tuple(
+        entry for entry in new_entries if str(getattr(entry, "target_id", "")) not in seen
+    )
+    return DeferralLedger(entries=existing_entries + unique_new)
 
 
 __all__ = ["append_ledger", "build_target_deferrals"]
