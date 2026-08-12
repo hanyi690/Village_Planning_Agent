@@ -64,9 +64,10 @@ class SpatialResolver:
     """One resolver bound to one ``PlanningContext``."""
 
     def __init__(self, context: Any):
-        from app.modules.context.planning_context import PlanningContext
-
-        if not isinstance(context, PlanningContext):
+        if not (
+            hasattr(context, "workspace")
+            and hasattr(context, "kg")
+        ):
             raise TypeError("SpatialResolver requires a PlanningContext")
         self.context = context
 

@@ -3,7 +3,7 @@
 Re-exports are lazy (PEP 562 ``__getattr__``) so importing a single submodule
 (e.g. ``app.contracts.ports.planning_ports``) does not eagerly pull the
 evidence/domain chain through ``adjustment`` — that chain would create an
-import cycle with ``app.modules.context.planning_context``.  ``from
+import cycle with ``app.infrastructure.context.planning_context``.  ``from
 app.contracts.ports import <Name>`` and ``import *`` still work via
 ``__getattr__``.
 """

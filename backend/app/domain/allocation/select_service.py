@@ -15,7 +15,7 @@ from __future__ import annotations
 import logging
 from typing import Any, Dict, List, Optional, Tuple
 
-from app.modules.context.planning_context import PlanningContext
+from app.infrastructure.context.planning_context import PlanningContext
 from app.modules.schema.contracts.grounding_contracts import CandidateSite, GroundingResult
 from app.modules.schema.contracts.classification_ref import classification_code_names
 from app.modules.schema.contracts.parse_contracts import ProjectTarget

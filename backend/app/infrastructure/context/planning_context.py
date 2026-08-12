@@ -14,8 +14,9 @@ cache derived geometry / query results must key on this version so a stale
 context can never be mistaken for a fresh one.
 
 Dependency rule: this module MUST NOT import ``app.agent``, ``app.services``
-or ``app.api``. The async factory that *builds* a context lives in
-``app.services.context``.
+or ``app.api``. Lives in ``app.infrastructure.context`` (folded out of the
+legacy ``app.modules`` context package in Phase 5). The async factory that
+*builds* a context lives in ``app.services.context``.
 """
 
 from __future__ import annotations

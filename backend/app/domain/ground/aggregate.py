@@ -15,7 +15,7 @@ from typing import Any, List, Optional
 from shapely.geometry import shape
 from shapely.ops import unary_union
 
-from app.modules.context.planning_context import PlanningContext
+from app.infrastructure.context.planning_context import PlanningContext
 from app.modules.schema.contracts.contract_meta import StageIssue
 from app.modules.schema.contracts.grounding_contracts import (
     CandidateSite,
