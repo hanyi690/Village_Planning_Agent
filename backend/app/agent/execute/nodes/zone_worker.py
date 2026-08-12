@@ -80,6 +80,27 @@ def _zone_target_key(zone_target: Any) -> str:
     )
 
 
+def _custom_zone_targets_from_plan(state: ExecuteAgentState) -> List[Any]:
+    """Restore custom targets from existing zone-task bindings."""
+    from app.modules.schema.contracts.custom_zone_contracts import CustomZoneTarget
+
+    targets: List[Any] = []
+    for task in list(getattr(state.execution_plan, "worker_tasks", None) or []):
+        if str(getattr(task, "target_type", "") or "") != "zone":
+            continue
+        assignment = getattr(task, "assignment", None)
+        binding = getattr(assignment, "target_binding", {}) or {}
+        if not isinstance(binding, dict):
+            continue
+        if not binding.get("category_code") or not binding.get("vocabulary_name"):
+            continue
+        try:
+            targets.append(CustomZoneTarget.model_validate(binding))
+        except ValueError:
+            continue
+    return targets
+
+
 def _allocate_empty_zone_targets(
     state: ExecuteAgentState,
     empty_targets: List[Any],
@@ -192,9 +213,26 @@ def _zone_worker(state: ExecuteAgentState) -> WorkerResult:
     if not _task_enabled(state, "layout"):
         return WorkerResult(worker_type="zone")
 
-    bound_intent = _execution_intent_from_plan(state)
+    custom_targets = _custom_zone_targets_from_plan(state)
+    custom_target_ids = {str(target.target_id) for target in custom_targets}
+    if custom_target_ids:
+        plan = state.execution_plan.model_copy(update={
+            "worker_tasks": [
+                task
+                for task in state.execution_plan.worker_tasks
+                if str(getattr(task, "target_id", "") or "") not in custom_target_ids
+            ]
+        })
+        zone_state = state.model_copy(update={"execution_plan": plan})
+        bound_intent = _execution_intent_from_plan(zone_state)
+    else:
+        zone_state = state
+        bound_intent = _execution_intent_from_plan(state)
     zone_targets = _intent_list(bound_intent, "zone_targets")
-    custom_targets = _intent_list(bound_intent, "custom_zone_targets")
+    zone_targets = [
+        target for target in zone_targets
+        if str(getattr(target, "target_id", "") or "") not in custom_target_ids
+    ]
     parcel_by_bsm = _resolve_parcel_by_bsm(state)
 
     diagnostics: List[Dict[str, Any]] = []
@@ -239,7 +277,7 @@ def _zone_worker(state: ExecuteAgentState) -> WorkerResult:
 
     unresolved.extend(
         _allocate_empty_zone_targets(
-            state,
+            zone_state,
             empty_targets,
             parcel_by_bsm,
             zone_changes,
@@ -248,30 +286,35 @@ def _zone_worker(state: ExecuteAgentState) -> WorkerResult:
         )
     )
 
+    if custom_targets:
+        from app.modules.spatial_ops.zoning.custom_zone_changeset import (
+            materialize_custom_zone_changes,
+        )
+
+        three_lines = state.kg_three_lines if isinstance(state.kg_three_lines, dict) else None
+        for target in custom_targets:
+            materialized = materialize_custom_zone_changes(
+                target,
+                parcel_by_bsm,
+                three_lines=three_lines,
+            )
+            zone_changes.extend(materialized.changes)
+            unresolved.extend(materialized.unresolved_items)
+            diagnostics.extend(materialized.diagnostics)
+            task_statuses[target.target_id] = (
+                "succeeded" if materialized.changes and not materialized.unresolved_items else "failed"
+            )
+
     layers = []
     func_layer = _function_zone_layer(zone_changes)
     if func_layer:
         layers.append(func_layer)
 
-    if custom_targets:
-        unresolved.extend({
-            "code": "classification_unresolved",
-            "target_id": str(getattr(target, "target_id", "") or ""),
-            "message": (
-                "Custom zone targets require an explicit ClassificationDecision; "
-                "EXECUTE does not derive planning classes from vocabulary text."
-            ),
-        } for target in custom_targets)
-        diagnostics.append({
-            "code": "custom_zone_deferred",
-            "count": len(custom_targets),
-        })
-
     return WorkerResult(
         worker_type="zone",
         task_results=[
             result
-            for zone_target in zone_targets
+            for zone_target in zone_targets + custom_targets
             if (result := _task_execution_result(
                 state,
                 "parcel_transformation",
@@ -305,8 +348,19 @@ async def _zone_worker_node(state: ExecuteAgentState) -> dict:
         update["allocation_summary"] = {
             "mode": "deterministic",
             "allocated_count": len(zone_changes),
-            "zone_target_count": len(_intent_list(_execution_intent_from_plan(state), "zone_targets")),
+            "zone_target_count": sum(
+                1
+                for task in list(getattr(state.execution_plan, "worker_tasks", None) or [])
+                if str(getattr(task, "target_type", "") or "") == "zone"
+                and str(getattr(task.assignment, "target_binding", {}).get("category_code", "") or "")
+                == ""
+            ),
             "adjustments_applied": len(list(state.constraint_adjustments or [])),
-            "custom_zone_count": 0,
+            "custom_zone_count": sum(
+                1
+                for change in zone_changes
+                if str(getattr(change, "intervention_id", "") or "")
+                in {str(target.target_id) for target in _custom_zone_targets_from_plan(state)}
+            ),
         }
     return update

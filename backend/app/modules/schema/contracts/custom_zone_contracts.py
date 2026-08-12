@@ -1,6 +1,10 @@
+import hashlib
+import json
 from typing import List, Literal, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
+
+from .classification_ref import ClassificationDecision
 
 
 class TypingRule(BaseModel):
@@ -42,6 +46,7 @@ class Vocabulary(BaseModel):
 
 
 class CustomZoneTarget(BaseModel):
+    target_id: str = ""
     vocabulary_name: str
     category_code: str
     target_bsms: List[str] = Field(default_factory=list)
@@ -52,3 +57,23 @@ class CustomZoneTarget(BaseModel):
     area_target_ha: Optional[float] = None
     decided_by: Literal["llm", "human", "rule"] = "llm"
     confidence: float = 0.85
+    classification_decision: ClassificationDecision | None = None
+
+    @model_validator(mode="after")
+    def assign_target_id(self) -> "CustomZoneTarget":
+        if self.target_id:
+            return self
+        identity = {
+            "area_target_ha": self.area_target_ha,
+            "category_code": self.category_code,
+            "density": self.density,
+            "spatial_preference": self.spatial_preference,
+            "target_bbox": self.target_bbox,
+            "target_bsms": sorted(str(bsm) for bsm in self.target_bsms),
+            "vocabulary_name": self.vocabulary_name,
+        }
+        digest = hashlib.sha256(
+            json.dumps(identity, ensure_ascii=False, sort_keys=True).encode("utf-8")
+        ).hexdigest()[:16]
+        self.target_id = f"custom-zone:{digest}"
+        return self

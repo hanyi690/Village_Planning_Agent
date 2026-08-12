@@ -13,6 +13,7 @@ _CLASSIFICATION_OUTPUT_KINDS = frozenset({"parcel", "polygon"})
 _TASK_SPECS = (
     ("project", "project_targets"),
     ("zone", "zone_targets"),
+    ("zone", "custom_zone_targets"),
     ("facility", "facilities"),
     ("axis", "development_axes"),
     ("road", "road_targets"),
@@ -47,6 +48,8 @@ def _classification_status(target: Any) -> str:
 
 
 def _classification_required(target: Any, assignment: Any) -> bool:
+    if _value(target, "category_code") and _value(target, "vocabulary_name"):
+        return True
     target_kind = str(_value(target, "expected_output_kind", "") or "")
     assignment_kind = str(_value(assignment, "expected_output_kind", "") or "")
     return bool({target_kind, assignment_kind} & _CLASSIFICATION_OUTPUT_KINDS)
