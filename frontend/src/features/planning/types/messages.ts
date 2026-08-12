@@ -224,12 +224,12 @@ export interface GeoJsonFeatureCollection {
  */
 export interface GISLayerConfig {
   geojson: GeoJsonFeatureCollection;
-  layerType: 'boundary' | 'function_zone' | 'facility_point' | 'development_axis' | 'sensitivity_zone' | 'isochrone' | 'infrastructure' | 'planning_zone' | 'settlement_zone' | 'ecological_redline' | 'farmland_protection' | 'historical_protection' | 'construction_zone' | 'annotation';
+  layerType: 'boundary' | 'planning_scope' | 'final_landuse' | 'land_use_zone' | 'construction_control' | 'function_zone' | 'facility_point' | 'hazard_point' | 'development_axis' | 'sensitivity_zone' | 'isochrone' | 'infrastructure' | 'planned_road' | 'planning_zone' | 'settlement_zone';
   layerName: string;
+  visible?: boolean;
   color?: string;
-  style?: {
-    color?: string;
-  };
+  style?: { color?: string; [key: string]: unknown };
+  metadata?: Record<string, unknown>;
 }
 
 /**

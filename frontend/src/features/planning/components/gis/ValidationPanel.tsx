@@ -12,7 +12,6 @@ import type {
   LayoutValidationResult,
   LayoutValidationCheck,
   LayoutValidationViolation,
-  LayoutValidationDetail,
 } from '@/features/gis-test/api/gis-test-api';
 
 // ============================================
@@ -62,7 +61,7 @@ function OverviewTab({
   checks,
   zoneAreas,
 }: {
-  validation: LayoutValidationDetail;
+  validation: NonNullable<LayoutValidationResult['validation']>;
   checks?: LayoutValidationCheck[];
   zoneAreas?: Record<string, number>;
 }) {
@@ -224,7 +223,7 @@ function ViolationRow({
       } ${onClick ? 'cursor-pointer hover:opacity-80' : ''}`}
       onClick={() => onClick?.(violation)}
     >
-      <SeverityIcon severity={violation.severity as 'error' | 'warning'} />
+      <SeverityIcon severity={violation.severity} />
       <div className="flex-1 min-w-0">
         <div className="font-medium truncate">{violation.check}</div>
         <div className="opacity-80 truncate">{violation.message}</div>
@@ -261,8 +260,7 @@ export default function ValidationPanel({
     );
   }
 
-  const validation = result.validation as LayoutValidationDetail;
-  const { checks, zone_areas } = result;
+  const { validation, checks, zone_areas } = result;
 
   return (
     <div className="space-y-2">

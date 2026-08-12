@@ -33,6 +33,16 @@ export function useMessagePersistence({ enabled = true }: UseMessagePersistenceO
   const messages = usePlanningStore((state) => state.messages);
   const dimensionProgress = usePlanningStore((state) => state.dimensionProgress);
 
+  const clearedForSessionRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    if (clearedForSessionRef.current === sessionId) return;
+    clearedForSessionRef.current = sessionId;
+    savedMessageIdsRef.current.clear();
+    pendingMessagesRef.current = [];
+    messageVersionsRef.current.clear();
+  }, [sessionId]);
+
   // Check if a message should be updated (for layer_completed and dimension_report)
   function shouldMessageBeUpdated(msg: Message): boolean {
     // Handle dimension_report messages

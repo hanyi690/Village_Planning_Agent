@@ -370,8 +370,51 @@
 }
 
 /* Table styles */
-.markdown-content table {
+.markdown-content .table-caption {
+  display: block;
   width: 100%;
+  margin: 18px 0 8px;
+  color: #334155;
+  font-size: 0.9rem;
+  font-weight: 600;
+  line-height: 1.5;
+  text-align: center;
+  white-space: normal;
+  writing-mode: horizontal-tb;
+}
+
+.markdown-content .table-caption + table,
+.markdown-content .table-caption + .table-wrap {
+  margin-top: 0;
+}
+
+.markdown-content .table-caption + .table-wrap table {
+  margin-top: 0;
+}
+
+.markdown-content .table-wrap {
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  margin: 15px 0;
+  max-width: 100%;
+}
+
+.markdown-content .table-wrap table {
+  width: auto;
+  min-width: 100%;
+  border-collapse: collapse;
+  margin: 0;
+  font-size: 0.9rem;
+  background-color: #ffffff;
+  border-radius: 6px;
+  overflow: hidden;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+  table-layout: auto;
+}
+
+.markdown-content table {
+  width: auto;
+  min-width: 100%;
   border-collapse: collapse;
   margin: 15px 0;
   font-size: 0.9rem;
@@ -379,6 +422,7 @@
   border-radius: 6px;
   overflow: hidden;
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+  table-layout: auto;
 }
 
 .markdown-content th,
@@ -386,6 +430,14 @@
   border: 1px solid #e0e0e0;
   padding: 10px 12px;
   text-align: left;
+  white-space: normal;
+  word-break: keep-all;
+  overflow-wrap: break-word;
+  writing-mode: horizontal-tb;
+  text-orientation: mixed;
+  vertical-align: middle;
+  min-width: 4.5rem;
+  line-height: 1.5;
 }
 
 .markdown-content th {
@@ -423,9 +475,10 @@
 .markdown-content td[rowspan],
 .markdown-content th[rowspan] {
   vertical-align: middle;
-  text-align: center;
+  text-align: left;
   background-color: #f5f5f5;
   font-weight: 500;
+  white-space: normal;
 }
 
 .markdown-content td[colspan],

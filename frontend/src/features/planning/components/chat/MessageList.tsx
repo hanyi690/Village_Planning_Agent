@@ -16,9 +16,12 @@ import LayerReportMessage from './LayerReportMessage';
 import CheckpointMarker from './CheckpointMarker';
 import ToolStatusCard from './ToolStatusCard';
 import GisResultCard from './GisResultCard';
+import FileViewerSidebar from './FileViewerSidebar';
+import { usePlanningStore } from '@/features/planning/store';
 
 interface MessageListProps {
   messages: Message[];
+  onFileClick?: (file: FileMessage) => void;
   isTyping?: boolean;
   thinkingState?: 'analyzing' | 'generating' | 'reviewing' | 'processing' | 'waiting';
   thinkingMessage?: string;
@@ -29,6 +32,7 @@ interface MessageListProps {
 
 export default function MessageList({
   messages,
+  onFileClick,
   isTyping,
   thinkingState,
   thinkingMessage,
@@ -36,6 +40,9 @@ export default function MessageList({
   onRollback,
   isRollingBack = false,
 }: MessageListProps) {
+  const viewingFile = usePlanningStore((state) => state.viewingFile);
+  const openFile = onFileClick ?? ((file: FileMessage) => usePlanningStore.getState().setViewingFile(file));
+  const closeFile = () => usePlanningStore.getState().setViewingFile(null);
   const keyCheckpointByLayer = useMemo(() => {
     const map = new Map<number, Checkpoint>();
     for (const cp of checkpoints) {
@@ -55,15 +62,17 @@ export default function MessageList({
     }
   };
 
-  const handleRegenerate = (message: Message) => {
-    console.log('Regenerate message:', message.id);
-  };
-
   return (
-    <div className="p-3 space-y-3">
+    <div className="min-h-full p-4">
       {messages.length === 0 && (
-        <div className="text-center text-slate-500 py-8">
-          <p className="text-sm">开始规划后，消息将显示在这里</p>
+        <div className="flex min-h-[320px] flex-col items-center justify-center px-6 text-center">
+          <div className="mb-3 flex h-10 w-10 items-center justify-center rounded-full bg-gradient-to-br from-sky-500 to-cyan-500 text-xs font-semibold text-white shadow-sm">
+            AI
+          </div>
+          <p className="text-sm font-medium text-slate-700">有什么可以帮你？</p>
+          <p className="mt-1.5 max-w-[260px] text-xs leading-5 text-slate-400">
+            可以询问当前规划结论、数据依据，或提出具体修改意见。
+          </p>
         </div>
       )}
 
@@ -91,11 +100,16 @@ export default function MessageList({
 
           return (
             <div key={message.id} className="flex justify-end">
-              <div className="px-3 py-2 bg-sky-50 border border-sky-200 rounded-lg text-sm text-sky-700">
+              <button
+                type="button"
+                onClick={() => openFile(fileMsg)}
+                className="px-3 py-2 bg-sky-50 border border-sky-200 rounded-lg text-left text-sm text-sky-700 transition hover:bg-sky-100 disabled:cursor-default"
+                title={onFileClick ? '点击查看文件' : undefined}
+              >
                 <span className="font-medium">{fileMsg.filename}</span>
                 <span className="text-sky-400 mx-1">·</span>
                 <span>{fileMsg.fileSize ? `${(fileMsg.fileSize / 1024).toFixed(1)}KB` : ''}</span>
-              </div>
+              </button>
             </div>
           );
         }
@@ -123,7 +137,6 @@ export default function MessageList({
             key={message.id}
             message={message}
             onCopy={handleCopy}
-            onRegenerate={handleRegenerate}
           />
         );
       })}
@@ -143,6 +156,7 @@ export default function MessageList({
           </div>
         </div>
       )}
+      {viewingFile && <FileViewerSidebar file={viewingFile} onClose={closeFile} />}
     </div>
   );
 }

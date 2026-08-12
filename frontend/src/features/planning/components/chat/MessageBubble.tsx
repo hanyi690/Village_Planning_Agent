@@ -1,15 +1,11 @@
 'use client';
 
-/**
- * MessageBubble Component - Gemini Style
- * Individual message bubble with Gemini-style design
- * - AI messages: transparent background, left-aligned with avatar
- * - User messages: pill-shaped, right-aligned
- */
-
-import React, { useState } from 'react';
+import React from 'react';
 import { motion } from 'framer-motion';
-import { Message } from '../../types';
+import { faCopy } from '@fortawesome/free-solid-svg-icons';
+import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
+
+import type { Message } from '../../types';
 import { isUserMessage } from '../../types';
 import MessageContent from './MessageContent';
 import { formatMessageTimestamp } from '@/features/planning/utils';
@@ -17,80 +13,46 @@ import { formatMessageTimestamp } from '@/features/planning/utils';
 interface MessageBubbleProps {
   message: Message;
   onCopy?: (message: Message) => void;
-  onRegenerate?: (message: Message) => void;
   enableStreaming?: boolean;
   dimensionContents?: Record<string, string>;
   children?: React.ReactNode;
 }
 
+const bubbleVariants = {
+  hidden: { opacity: 0, y: 6 },
+  visible: {
+    opacity: 1,
+    y: 0,
+    transition: { duration: 0.18 },
+  },
+};
+
 function MessageBubble({
   message,
   onCopy,
-  onRegenerate,
-  enableStreaming = true,
+  enableStreaming = false,
   dimensionContents,
   children,
 }: MessageBubbleProps) {
-  const [isHovered, setIsHovered] = useState(false);
-  const isUser = isUserMessage(message);
-
-  const handleCopy = () => onCopy?.(message);
-  const handleRegenerate = () => onRegenerate?.(message);
-
-  // Animation variants
-  const bubbleVariants = {
-    hidden: {
-      opacity: 0,
-      y: 10,
-      scale: 0.98,
-    },
-    visible: {
-      opacity: 1,
-      y: 0,
-      scale: 1,
-      transition: {
-        type: 'spring' as const,
-        stiffness: 150,
-        damping: 20,
-      },
-    },
-  };
-
-  // AI Avatar Component with gradient
-  const AIAvatar = () => (
-    <div
-      className="flex-shrink-0 w-7 h-7 rounded-full flex items-center justify-center text-white text-xs font-bold shadow-sm"
-      style={{
-        background: 'linear-gradient(135deg, #0ea5e9 0%, #06b6d4 50%, #0891b2 100%)',
-      }}
-    >
-      <i className="fas fa-sparkles text-[10px]" />
-    </div>
+  const content = children || (
+    <MessageContent
+      message={message}
+      enableStreaming={enableStreaming}
+      dimensionContents={dimensionContents}
+    />
   );
 
-  // User messages: right-aligned pill shape
-  if (isUser) {
+  if (isUserMessage(message)) {
     return (
       <motion.div
         variants={bubbleVariants}
         initial="hidden"
         animate="visible"
-        className="flex justify-end mb-4"
-        onMouseEnter={() => setIsHovered(true)}
-        onMouseLeave={() => setIsHovered(false)}
+        className="flex justify-end py-2"
       >
-        <div className="max-w-[75%] bg-gradient-to-br from-[#e0f2fe]/80 to-[#f0f9ff] border border-[#0ea5e9]/30 text-slate-800 rounded-2xl rounded-br-md px-4 py-3 shadow-sm">
-          {/* Message Content */}
-          {children || (
-            <MessageContent
-              message={message}
-              enableStreaming={enableStreaming}
-              dimensionContents={dimensionContents}
-            />
-          )}
-
-          {/* Timestamp */}
-          <div className="text-[10px] text-[#6e7681] text-right mt-1.5 font-medium">
+        <div className="max-w-[85%] rounded-3xl rounded-br-lg bg-slate-100 px-4 py-2.5 text-sm text-slate-800">
+          {content}
+          <div className="mt-1.5 text-right text-[10px] text-slate-400">
             {formatMessageTimestamp(message.timestamp)}
           </div>
         </div>
@@ -98,82 +60,36 @@ function MessageBubble({
     );
   }
 
-  // AI messages: left-aligned with avatar, transparent background (Gemini style)
   return (
     <motion.div
       variants={bubbleVariants}
       initial="hidden"
       animate="visible"
-      className="flex justify-start mb-4 gap-3"
-      onMouseEnter={() => setIsHovered(true)}
-      onMouseLeave={() => setIsHovered(false)}
+      className="group flex items-start gap-3 py-3"
     >
-      {/* AI Avatar */}
-      <div className="flex-shrink-0 pt-1">
-        <AIAvatar />
+      <div className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-sky-500 to-cyan-500 text-[10px] font-semibold text-white shadow-sm">
+        AI
       </div>
 
-      {/* Message Content Area */}
-      <div className="flex-1 min-w-0">
-        {/* AI Label */}
-        {message.type !== 'progress' && (
-          <div className="flex items-center gap-2 mb-1.5">
-            <span className="text-xs font-medium text-transparent bg-clip-text bg-gradient-to-r from-[#0ea5e9] to-[#10b981]">
-              AI 助手
-            </span>
-          </div>
-        )}
-
-        {/* Message Body */}
-        <div className="relative group">
-          {/* Action Buttons (hover to show) */}
-          <motion.div
-            initial={{ opacity: 0 }}
-            animate={{ opacity: isHovered ? 1 : 0 }}
-            className="absolute -right-2 top-0 flex items-center gap-1 bg-white rounded-lg shadow-md border border-slate-200 p-1 -translate-y-1/2 z-10"
-          >
+      <div className="min-w-0 flex-1">
+        <div className="text-sm leading-6 text-slate-700">{content}</div>
+        <div className="mt-1 flex min-h-6 items-center gap-2 text-[10px] text-slate-400">
+          {onCopy && message.type === 'text' && (
             <button
-              className="w-7 h-7 flex items-center justify-center rounded-md text-slate-400 hover:bg-slate-100 hover:text-slate-600 transition-colors"
-              title="复制"
-              onClick={handleCopy}
+              type="button"
+              onClick={() => onCopy(message)}
               aria-label="复制消息"
+              title="复制消息"
+              className="flex h-6 w-6 items-center justify-center rounded-md text-slate-400 opacity-0 transition-all hover:bg-slate-100 hover:text-slate-600 group-hover:opacity-100 focus:opacity-100"
             >
-              <i className="fas fa-copy text-xs" />
+              <FontAwesomeIcon icon={faCopy} style={{ width: 11, height: 11 }} />
             </button>
-            {message.type === 'text' && (
-              <button
-                className="w-7 h-7 flex items-center justify-center rounded-md text-slate-400 hover:bg-slate-100 hover:text-slate-600 transition-colors"
-                title="重新生成"
-                onClick={handleRegenerate}
-                aria-label="重新生成"
-              >
-                <i className="fas fa-redo text-xs" />
-              </button>
-            )}
-          </motion.div>
-
-          {/* Content - with background and border for visibility */}
-          <div className="text-slate-700 leading-relaxed bg-white border border-slate-200 rounded-2xl px-4 py-3 shadow-sm">
-            {children || (
-              <MessageContent
-                message={message}
-                enableStreaming={enableStreaming}
-                dimensionContents={dimensionContents}
-              />
-            )}
-          </div>
-
-          {/* Timestamp */}
-          <div className="text-[10px] text-[#6e7681] mt-2">
-            {formatMessageTimestamp(message.timestamp)}
-          </div>
+          )}
+          <span>{formatMessageTimestamp(message.timestamp)}</span>
         </div>
       </div>
     </motion.div>
   );
 }
 
-// React.memo 优化：减少不必要的重渲染
-const MemoizedMessageBubble = React.memo(MessageBubble);
-
-export default MemoizedMessageBubble;
+export default React.memo(MessageBubble);

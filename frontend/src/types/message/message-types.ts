@@ -189,14 +189,19 @@ export interface ToolStatusMessage extends BaseMessage {
 // ============================================================================
 
 /**
+ * GeoJSON geometry — shared by features and coordinate transforms.
+ */
+export interface GeoJsonGeometry {
+  type: 'Point' | 'LineString' | 'Polygon' | 'MultiPoint' | 'MultiLineString' | 'MultiPolygon';
+  coordinates: unknown;
+}
+
+/**
  * GeoJSON Feature - 单个地理要素
  */
 export interface GeoJsonFeature {
   type: 'Feature';
-  geometry: {
-    type: 'Point' | 'LineString' | 'Polygon' | 'MultiPoint' | 'MultiLineString' | 'MultiPolygon';
-    coordinates: unknown;
-  };
+  geometry: GeoJsonGeometry;
   properties?: Record<string, unknown>;
 }
 
@@ -213,12 +218,72 @@ export interface GeoJsonFeatureCollection {
  */
 export interface GISLayerConfig {
   geojson: GeoJsonFeatureCollection;
-  layerType: 'boundary' | 'function_zone' | 'facility_point' | 'development_axis' | 'sensitivity_zone' | 'isochrone' | 'infrastructure' | 'planning_zone' | 'settlement_zone' | 'ecological_redline' | 'farmland_protection' | 'historical_protection' | 'construction_zone' | 'annotation';
+  layerType: 'boundary' | 'planning_scope' | 'final_landuse' | 'land_use_zone' | 'construction_control' | 'function_zone' | 'facility_point' | 'hazard_point' | 'development_axis' | 'sensitivity_zone' | 'isochrone' | 'infrastructure' | 'planned_road' | 'planning_zone' | 'settlement_zone';
   layerName: string;
+  visible?: boolean;
   color?: string;
-  style?: {
-    color?: string;
+  standardCode?: string;
+  standardName?: string;
+  dataAuthority?: 'authoritative_current' | 'authoritative_control' | 'generated_plan' | 'reference';
+  requirement?: 'baseline' | 'mandatory' | 'conditional' | 'reference';
+  featureCount?: number;
+  crs?: string;
+  style?: { color?: string; [key: string]: unknown };
+  metadata?: GISLayerMetadata;
+}
+
+export interface GISLayerMetadata {
+  path?: string;
+  generationMode?: string;
+  planningBasis?: {
+    mode?: string;
+    report_count?: number;
+    structured_summary_count?: number;
+    content_characters?: number;
+    source_layers?: number[];
+    source_dimensions?: string[];
   };
+  dataQuality?: {
+    status?: 'ready' | 'degraded' | 'blocked';
+    warning?: string;
+    missing_required?: string[];
+  };
+  intentSummary?: {
+    zone_count?: number;
+    facility_count?: number;
+    axis_count?: number;
+    spatial_structure?: string;
+    planning_year?: string;
+    targets?: Record<string, number>;
+    target_reconciliation?: {
+      available_area_ha?: number;
+      requested?: Record<string, number>;
+      effective?: Record<string, number>;
+    };
+  };
+  validation?: {
+    status?: string;
+    violations?: string[];
+  };
+  generationStage?: string;
+  recommendationStatus?: string;
+  actionCounts?: Record<string, number>;
+  totalLengthM?: number;
+  processTrace?: {
+    pipelineVersion?: string;
+    steps?: Array<{
+      id?: string;
+      label?: string;
+      status?: string;
+      candidateCount?: number;
+      retryRequestCount?: number;
+      [key: string]: unknown;
+    }>;
+    planningNodeCount?: number;
+    humanReviewCount?: number;
+    dataAuthority?: string;
+  };
+  [key: string]: unknown;
 }
 
 /**

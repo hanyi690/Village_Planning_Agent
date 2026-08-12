@@ -69,3 +69,10 @@ export { useApprovalActions } from "./useApprovalActions";
 // Persistence & Session
 export { useMessagePersistence } from "./usePersistence";
 export { useSessionRestore } from "./useSessionRestore";
+
+// Analysis progress
+export { useActiveAnalysisFocus } from "./useActiveAnalysisFocus";
+export type { ActiveAnalysisFocus, AnalysisFocusPhase } from "./useActiveAnalysisFocus";
+export { usePlanningBootstrapStage } from "./usePlanningBootstrapStage";
+export type { PlanningBootstrapStage, PlanningBootstrapStep } from "./usePlanningBootstrapStage";
+export { useAnalysisCompletion } from "./useAnalysisCompletion";

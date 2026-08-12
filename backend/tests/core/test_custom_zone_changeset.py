@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from types import SimpleNamespace
 
 from shapely.geometry import Polygon, mapping
 
@@ -13,6 +14,15 @@ from app.modules.schema.contracts.classification_ref import (
     ClassificationDecision,
     ClassificationSystem,
 )
+from app.modules.schema.contracts.execution_plan_contracts import (
+    ExecutionPlan,
+    WorkerTask,
+    WorkerType,
+    ZoneAllocationSolution,
+    ZoneAssignmentEntry,
+)
+from app.modules.schema.contracts.parse_contracts import ZoneTarget
+from app.modules.schema.contracts.selection_contracts import TargetAssignment
 from app.modules.schema.contracts.custom_zone_contracts import (
     CustomZoneTarget,
     TypingRule,
@@ -240,3 +250,135 @@ def test_scheduled_custom_zone_reaches_worker_and_delivery(tmp_path):
     assert {feature["properties"]["change_status"] for feature in payload["features"]} == {
         "modified"
     }
+
+
+def test_worker_normalizes_list_protection_lines_before_materializing_custom_zone():
+    target = target_with_resolved_decision()
+    intent = type("Intent", (), {"custom_zone_targets": [target]})()
+    selection = type("Selection", (), {"target_assignments": []})()
+    register_vocabulary("test-vocabulary", _vocabulary())
+    plan = build_execution_plan(intent, selection, [])
+    protection = Polygon([(1.5, -1), (3.5, -1), (3.5, 2), (1.5, 2)])
+
+    result = _zone_worker(ExecuteAgentState(
+        execution_plan=plan,
+        parcel_by_bsm=_parcels(),
+        kg_three_lines=[{"subtype": "ecological_redline", "geometry": protection}],
+    ))
+
+    assert [change.bsm for change in result.parcel_changes] == ["P001"]
+
+
+def test_custom_reservation_excludes_mip_candidates_and_reports_explicit_overlap():
+    class CapturingAllocator:
+        def __init__(self):
+            self.candidates = {}
+
+        def allocate(self, targets, candidates, constraints, metadata):
+            self.candidates = candidates
+            return ZoneAllocationSolution(
+                feasible=True,
+                assignments=[ZoneAssignmentEntry(bsm="P003", zone_id="ordinary-mip")],
+            )
+
+    custom = target_with_resolved_decision()
+    ordinary_overlap = ZoneTarget(
+        target_id="ordinary-overlap",
+        zone_id="ordinary-overlap",
+        land_use="ordinary",
+        candidate_bsms=["P001"],
+        classification_decision=_resolved_decision("ordinary-overlap"),
+    )
+    ordinary_mip = ZoneTarget(
+        target_id="ordinary-mip",
+        zone_id="ordinary-mip",
+        land_use="ordinary",
+        classification_decision=_resolved_decision("ordinary-mip"),
+    )
+    intent = type("Intent", (), {
+        "zone_targets": [ordinary_overlap, ordinary_mip],
+        "custom_zone_targets": [custom],
+    })()
+    selection = type("Selection", (), {"target_assignments": []})()
+    register_vocabulary("test-vocabulary", _vocabulary())
+    plan = build_execution_plan(intent, selection, [])
+    allocator = CapturingAllocator()
+    parcels = _parcels()
+    parcels["P003"] = {
+        "bsm": "P003",
+        "area_ha": 1.5,
+        "geometry": mapping(Polygon([(4, 0), (5, 0), (5, 1), (4, 1)])),
+    }
+
+    result = _zone_worker(ExecuteAgentState(
+        execution_plan=plan,
+        parcel_by_bsm=parcels,
+        ports=SimpleNamespace(zone_allocator=allocator),
+    ))
+
+    assert set(allocator.candidates["ordinary-mip"]) == {"P003"}
+    assert [change.bsm for change in result.parcel_changes].count("P001") == 1
+    assert len({change.bsm for change in result.parcel_changes}) == len(result.parcel_changes)
+    assert any(
+        item["code"] == "target_overlap" and item["target_id"] == "ordinary-overlap"
+        for item in result.unresolved_items
+    )
+
+
+def test_invalid_custom_task_binding_is_returned_as_a_failed_task():
+    binding = target_with_resolved_decision().model_dump(mode="json")
+    binding["classification_decision"] = "invalid-persisted-decision"
+    task = WorkerTask(
+        task_id="parcel_transformation:custom-zone-1",
+        worker_type=WorkerType.PARCEL_TRANSFORMATION,
+        target_id="custom-zone-1",
+        target_type="zone",
+        expected_output_kind="parcel",
+        assignment=TargetAssignment(
+            target_id="custom-zone-1",
+            target_type="zone",
+            target_binding=binding,
+        ),
+    )
+
+    result = _zone_worker(ExecuteAgentState(
+        execution_plan=ExecutionPlan(worker_tasks=[task]),
+        parcel_by_bsm=_parcels(),
+    ))
+
+    assert result.task_results[0].status == "failed"
+    assert result.task_results[0].task_id == task.task_id
+    assert any(
+        item["code"] == "custom_zone_binding_invalid" and item["target_id"] == "custom-zone-1"
+        for item in result.unresolved_items
+    )
+
+
+def test_worker_fails_closed_for_decision_target_id_mismatch():
+    target = target_with_resolved_decision().model_copy(update={
+        "classification_decision": _resolved_decision("different-target"),
+    })
+    intent = type("Intent", (), {"custom_zone_targets": [target]})()
+    selection = type("Selection", (), {"target_assignments": []})()
+    register_vocabulary("test-vocabulary", _vocabulary())
+
+    result = _zone_worker(ExecuteAgentState(
+        execution_plan=build_execution_plan(intent, selection, []),
+        parcel_by_bsm=_parcels(),
+    ))
+
+    assert result.parcel_changes == []
+    assert result.task_results[0].status == "failed"
+    assert any(item["code"] == "classification_invalid" for item in result.unresolved_items)
+
+
+def test_partial_custom_materialization_does_not_report_success():
+    target = target_with_resolved_decision().model_copy(update={
+        "target_bsms": ["P001", "P404"],
+    })
+
+    result = materialize_custom_zone_changes(target, _parcels(), vocabulary=_vocabulary())
+
+    assert [change.bsm for change in result.changes] == ["P001"]
+    assert any(item["code"] == "missing_bsm" for item in result.unresolved_items)
+    assert not any(item["code"] == "custom_zone_materialized" for item in result.diagnostics)

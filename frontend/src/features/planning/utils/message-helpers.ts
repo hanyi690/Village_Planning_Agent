@@ -49,7 +49,7 @@ export function createSystemMessage(
     ...createBaseMessage('assistant'),
     type: 'text',
     content: `${prefix}${content}`,
-    created_at: createdAt,
+    created_at: createdAt,  // ✅ 添加 created_at 用于排序
     _pendingStorage: true,
   } as TextMessage & { created_at: string };
 }

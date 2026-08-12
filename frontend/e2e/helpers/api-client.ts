@@ -71,7 +71,7 @@ class ApiClient {
     if (config.stepMode !== undefined) formData.append('step_mode', String(config.stepMode));
     if (config.ragEnabled !== undefined) formData.append('rag_enabled', String(config.ragEnabled));
 
-    const response = await fetch(`${this.baseUrl}/api/v1/sessions`, {
+    const response = await fetch(`${this.baseUrl}/api/sessions`, {
       method: 'POST',
       body: formData,
     });
@@ -87,7 +87,7 @@ class ApiClient {
 
   /** Get session status. */
   async getStatus(sessionId: string): Promise<SessionStatus> {
-    const response = await fetch(`${this.baseUrl}/api/v1/sessions/${sessionId}/state`);
+    const response = await fetch(`${this.baseUrl}/api/sessions/${sessionId}/status`);
     if (!response.ok) {
       throw new Error(`Get status failed (${response.status})`);
     }

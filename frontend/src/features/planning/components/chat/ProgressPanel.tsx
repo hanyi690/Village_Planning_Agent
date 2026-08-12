@@ -278,12 +278,19 @@ function ProgressPanel({
                         <span className={cn(config.colorClass, config.animate && 'animate-spin')}>
                           {config.icon}
                         </span>
-                        <span className="truncate text-slate-700 font-medium" title={dim.name}>
+                        <span className="truncate text-slate-700 font-medium" title={
+                          progress?.status === 'failed' && progress.error
+                            ? `${dim.name}：${progress.error}`
+                            : dim.name
+                        }>
                           {dim.name}
                         </span>
                       </div>
-                      {/* 字数显示 */}
-                      {progress?.wordCount && progress.wordCount > 0 && (
+                      {progress?.status === 'failed' && progress.error ? (
+                        <span className="text-[10px] ml-1 flex-shrink-0 text-red-500" title={progress.error}>
+                          失败
+                        </span>
+                      ) : progress?.wordCount && progress.wordCount > 0 ? (
                         <span
                           className={cn(
                             'text-xs ml-1 flex-shrink-0',
@@ -292,7 +299,7 @@ function ProgressPanel({
                         >
                           {formatWordCount(progress.wordCount)}字
                         </span>
-                      )}
+                      ) : null}
                     </motion.div>
                   );
                 })}

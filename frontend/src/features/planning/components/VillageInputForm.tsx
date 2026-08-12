@@ -248,6 +248,7 @@ const VillageInputForm = memo(function VillageInputForm({ onSubmit, onLoadSessio
   const [constraints, setConstraints] = useState('');
   const [villageData, setVillageData] = useState('');
   const [focusedField, setFocusedField] = useState<string | null>(null);
+  const [isLoadingCompleteResult, setIsLoadingCompleteResult] = useState(false);
 
   const [taskFiles, setTaskFiles] = useState<File[]>([]);
   const [constraintFiles, setConstraintFiles] = useState<File[]>([]);
@@ -309,6 +310,19 @@ const VillageInputForm = memo(function VillageInputForm({ onSubmit, onLoadSessio
         setVillageData(text);
       }
     } catch {}
+  };
+
+  const handleLoadCompleteResult = async () => {
+    setIsLoadingCompleteResult(true);
+    try {
+      await handleLoadDemo();
+      window.location.assign('/');
+    } catch (error) {
+      console.error('Failed to load complete planning result:', error);
+      alert('完整成果加载失败，请先运行成果生成脚本，并确认后端 8000 端口已启动。');
+    } finally {
+      setIsLoadingCompleteResult(false);
+    }
   };
 
   const handleFileSelect = useCallback(
@@ -393,6 +407,14 @@ const VillageInputForm = memo(function VillageInputForm({ onSubmit, onLoadSessio
                   className="ml-1 px-2 py-0.5 text-xs font-medium bg-cyan-50 text-cyan-700 hover:bg-cyan-100 border border-cyan-200 rounded transition-colors"
                 >
                   加载示例数据
+                </button>
+                <button
+                  type="button"
+                  onClick={handleLoadCompleteResult}
+                  disabled={isLoadingCompleteResult}
+                  className="px-2 py-0.5 text-xs font-medium bg-emerald-50 text-emerald-700 hover:bg-emerald-100 border border-emerald-200 rounded transition-colors disabled:cursor-wait disabled:opacity-60"
+                >
+                  {isLoadingCompleteResult ? '正在加载成果…' : '打开完整成果'}
                 </button>
                 <div className="flex-1 h-px bg-gradient-to-l from-amber-300 to-transparent" />
               </div>

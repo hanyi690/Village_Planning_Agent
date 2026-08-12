@@ -91,20 +91,29 @@ function renderDimensionReportMessage(message: DimensionReportMessage) {
 
 // Main Message Content Renderer
 export default function MessageContent(props: MessageContentProps) {
-  const { message, enableStreaming = true } = props;
+  // SSE already updates message.content incrementally. A second client-side
+  // typewriter pass would replay historical messages whenever the panel mounts.
+  const { message, enableStreaming = false } = props;
 
   switch (message.type) {
     case 'text':
+      if (message.role === 'user') {
+        return <div className="whitespace-pre-wrap leading-relaxed">{message.content}</div>;
+      }
+
       return (
-        <div className="whitespace-pre-wrap leading-relaxed">
-          {enableStreaming && message.role !== 'user' ? (
+        <div className="min-w-0 overflow-x-auto leading-relaxed">
+          {enableStreaming && message.streamingState === 'streaming' ? (
             <StreamingText
               content={message.content}
               speed={50}
-              enabled={message.streamingState !== 'completed'}
+              enabled
             />
           ) : (
-            message.content
+            <MarkdownRenderer
+              content={message.content}
+              className="text-sm [&_p]:my-0 [&_p+_*]:mt-2 [&_ul]:my-2 [&_ul]:list-disc [&_ul]:pl-5 [&_ol]:my-2 [&_ol]:list-decimal [&_ol]:pl-5 [&_li]:my-1"
+            />
           )}
         </div>
       );

@@ -154,8 +154,10 @@ export async function loadSessionReports(
     return dims && dims.length > 0;
   });
 
+  const layersToProbe = layersToFetch.length > 0 ? layersToFetch : [...layers];
+
   const results = await Promise.all(
-    layersToFetch.map((layer) => loadLayerReports(sessionId, layer)),
+    layersToProbe.map((layer) => loadLayerReports(sessionId, layer)),
   );
 
   const allReports: Record<string, Record<string, string>> = {};

@@ -15,6 +15,7 @@ import { useEffect, useRef, useCallback } from 'react';
 import { planningApi } from '../api';
 import { usePlanningStore } from '../store/planningStore';
 import { buildDimensionProgressKey } from '@/features/planning/utils/message-helpers';
+import { bootstrapPlanningSession } from '@/features/planning/utils/session-bootstrap';
 import type { PlanningSSEEvent } from '../api/types';
 
 // Internal batch event representation
@@ -45,7 +46,6 @@ export function useSSEConnection({
   const prevSessionIdRef = useRef<string | null>(null);
   const prevResumeTriggerRef = useRef<number>(0);
   const reconnectAttemptsRef = useRef(0);
-  const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Batch processing refs
   const batchQueueRef = useRef<BatchEvent[]>([]);
@@ -228,7 +228,7 @@ export function useSSEConnection({
           if (reconnectAttemptsRef.current < MAX_RECONNECT_ATTEMPTS) {
             reconnectAttemptsRef.current++;
             const delay = Math.min(1000 * reconnectAttemptsRef.current, 5000);
-            reconnectTimerRef.current = setTimeout(() => {
+            setTimeout(() => {
               const currentSessionId = usePlanningStore.getState().sessionId;
               if (currentSessionId) {
                 connectSSE(currentSessionId);
@@ -272,18 +272,41 @@ export function useSSEConnection({
         sseConnectionRef.current.close();
         sseConnectionRef.current = null;
       }
+      // Drop the previous session marker so a later remount with the same
+      // sessionId still reconnects (React Strict Mode closes EventSource on
+      // the first effect cleanup).
+      if (!sessionId) {
+        prevSessionIdRef.current = null;
+      }
       return;
     }
 
-    // Reconnect trigger: sessionId change or resumeTrigger change
+    // Reconnect when session/resume changes, OR when cleanup left us without
+    // a live EventSource (common under Strict Mode double-mount).
     const sessionIdChanged = prevSessionIdRef.current !== sessionId;
     const resumeTriggered = prevResumeTriggerRef.current !== resumeTrigger;
-    const shouldReconnect = sessionIdChanged || resumeTriggered;
+    const connectionMissing = !sseConnectionRef.current;
+    const shouldReconnect = sessionIdChanged || resumeTriggered || connectionMissing;
 
     if (shouldReconnect) {
+      if (sessionIdChanged) {
+        completedDimensionKeysRef.current.clear();
+        batchQueueRef.current = [];
+        if (batchTimeoutRef.current) {
+          clearTimeout(batchTimeoutRef.current);
+          batchTimeoutRef.current = null;
+        }
+      }
       prevSessionIdRef.current = sessionId;
       prevResumeTriggerRef.current = resumeTrigger;
 
+      // Only re-bootstrap on a real session change / resume — not on the
+      // Strict Mode reconnect that only restores the EventSource.
+      if (sessionIdChanged || resumeTriggered) {
+        void bootstrapPlanningSession(sessionId).catch((error) => {
+          console.warn('[useSSEConnection] Session bootstrap failed:', error);
+        });
+      }
       connectSSE(sessionId);
     }
 
@@ -292,20 +315,12 @@ export function useSSEConnection({
         sseConnectionRef.current.close();
         sseConnectionRef.current = null;
       }
-      if (reconnectTimerRef.current) {
-        clearTimeout(reconnectTimerRef.current);
-        reconnectTimerRef.current = null;
-      }
     };
   }, [sessionId, enabled, resumeTrigger, connectSSE]);
 
   // Cleanup batch timeout on unmount
   useEffect(() => {
     return () => {
-      if (reconnectTimerRef.current) {
-        clearTimeout(reconnectTimerRef.current);
-        reconnectTimerRef.current = null;
-      }
       if (batchTimeoutRef.current) {
         clearTimeout(batchTimeoutRef.current);
         batchTimeoutRef.current = null;

@@ -3,87 +3,48 @@
 /**
  * GisResultCard - GIS analysis result card for MessageList
  *
- * Uses lazy-load fold mode: map only renders when expanded,
- * and at most 2 map instances are active simultaneously.
- * Consumes incremental layer updates from store + auto-validates.
+ * The message card is intentionally lightweight. The complete spatial layout
+ * belongs to the Map tab, which avoids mounting a second map inside chat.
  */
 
-import React, { useState, useCallback, useRef, useEffect } from 'react';
+import React from 'react';
 import type { GisResultMessage } from '../../types';
 import type { GISLayerConfig } from '@/types/message/message-types';
 import { parseTimestamp } from '@/features/planning/utils';
 import MarkdownRenderer from '@/features/planning/components/ui/MarkdownRenderer';
-import { MapView, ValidationPanel } from '../gis';
-import { TracePanel } from '../gis';
-import StageReportPanel from '../gis/StageReportPanel';
 import { useGisLayers } from '../../hooks';
 import { usePlanningStore } from '../../store';
-import { gisTestApi, type LayoutValidationResult } from '@/features/gis-test/api/gis-test-api';
-
-// Track active map instances globally (limit to 2)
-const activeMaps = new Set<symbol>();
-const MAX_ACTIVE_MAPS = 2;
 
 interface GisResultCardProps {
   message: GisResultMessage;
 }
 
 function GisResultCard({ message }: GisResultCardProps) {
-  const [expanded, setExpanded] = useState(false);
-  const mapId = useRef(Symbol('gis-map'));
-  const [validationResult, setValidationResult] = useState<LayoutValidationResult | null>(null);
-
-  // Consume incremental layers from store (populated by gis_layer_update SSE)
   const storeLayers = useGisLayers();
-
-  // Pipeline trace from store
-  const pipelineTrace = usePlanningStore((s) => s.pipelineTrace);
-  const sessionId = usePlanningStore((s) => s.sessionId);
+  const setProcessPanelTab = usePlanningStore((s) => s.setProcessPanelTab);
+  const setRightPanelExpanded = usePlanningStore((s) => s.setRightPanelExpanded);
+  const addGisLayersFromUpload = usePlanningStore((s) => s.addGisLayersFromUpload);
 
   // Prefer message.layers (final result), fall back to store incremental layers
   const allLayers: GISLayerConfig[] = message.layers && message.layers.length > 0
     ? message.layers
     : storeLayers;
 
-  // Auto-validate when planning_zone layers appear
-  useEffect(() => {
-    if (!allLayers || allLayers.length === 0) return;
-    const planningLayers = allLayers.filter(l => l.layerType === 'planning_zone');
-    if (planningLayers.length === 0) return;
-    gisTestApi.validate({ validation_type: "layout", layout_configs: planningLayers, use_jintian_data: true })
-      .then(setValidationResult)
-      .catch(() => {});
-  }, [allLayers]);
-
-  // When expanding, enforce the global active map limit
-  const handleToggle = useCallback(() => {
-    if (!expanded) {
-      // Evict oldest map if at limit
-      if (activeMaps.size >= MAX_ACTIVE_MAPS) {
-        const oldest = activeMaps.values().next().value;
-        if (oldest) activeMaps.delete(oldest);
-      }
-      activeMaps.add(mapId.current);
-      setExpanded(true);
-    } else {
-      activeMaps.delete(mapId.current);
-      setExpanded(false);
-    }
-  }, [expanded]);
-
-  // Cleanup on unmount
-  useEffect(() => {
-    return () => {
-      activeMaps.delete(mapId.current);
-    };
-  }, []);
-
   const hasLayers = allLayers && allLayers.length > 0;
   const layerCount = hasLayers ? allLayers!.length : 0;
 
+  const openMap = () => {
+    // Historical GIS messages may contain layers before the map store is restored.
+    if (storeLayers.length === 0 && message.layers?.length) {
+      addGisLayersFromUpload(message.layers as unknown as Array<Record<string, unknown>>);
+    }
+    setRightPanelExpanded(true);
+    setProcessPanelTab('map');
+  };
+
   return (
     <div className="flex justify-start mb-4">
-      <div className="max-w-[85%] bg-white border border-gray-200 rounded-2xl px-4 py-3 shadow-sm">
+      <div className="w-full bg-white border border-slate-200 rounded-lg px-3 py-3 shadow-sm">
         {/* Title */}
         <div className="flex items-center gap-2 mb-3 pb-2 border-b border-gray-100">
           <i className="fas fa-map-marked-alt text-blue-600" />
@@ -123,47 +84,19 @@ function GisResultCard({ message }: GisResultCardProps) {
           </div>
         )}
 
-        {/* Map - lazy load with fold */}
+        {/* Spatial results are rendered in the dedicated Map tab. */}
         {hasLayers && (
-          <div className="mb-3">
-            <button
-              onClick={handleToggle}
-              className="w-full flex items-center justify-between px-3 py-2 bg-gray-50 hover:bg-gray-100 rounded-lg text-sm text-gray-700 transition-colors"
-            >
-              <span className="flex items-center gap-2">
-                <i className="fas fa-map" />
-                {expanded ? '收起地图' : `查看地图 (${layerCount} 图层)`}
-              </span>
-              <i className={`fas fa-chevron-${expanded ? 'up' : 'down'} text-xs`} />
-            </button>
-            {expanded && (
-              <div className="mt-2">
-                <MapView
-                  layers={allLayers!}
-                  center={message.mapOptions?.center}
-                  zoom={message.mapOptions?.zoom}
-                  height="300px"
-                />
-              </div>
-            )}
-          </div>
+          <button
+            onClick={openMap}
+            className="w-full flex items-center justify-between px-3 py-2.5 bg-sky-50 hover:bg-sky-100 border border-sky-200 rounded-lg text-sm text-sky-700 transition-colors"
+          >
+            <span className="flex items-center gap-2">
+              <i className="fas fa-map" />
+              在地图中查看
+            </span>
+            <span className="text-xs text-sky-600">{layerCount} 个图层</span>
+          </button>
         )}
-
-        {/* Validation result */}
-        {validationResult && (
-          <div className="mb-3 border-t border-gray-100 pt-2">
-            <ValidationPanel result={validationResult} />
-          </div>
-        )}
-
-        {/* Pipeline Trace */}
-        {pipelineTrace && (
-          <div className="mb-3 border-t border-gray-100 pt-2">
-            <TracePanel trace={pipelineTrace} />
-          </div>
-        )}
-
-        <StageReportPanel sessionId={sessionId} />
 
         {/* Recommendations */}
         {message.analysisData?.recommendations &&

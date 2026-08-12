@@ -201,6 +201,7 @@ async def execute_node(state: Dict[str, Any]) -> Dict[str, Any]:
         land_design_briefs=list(getattr(execution_plan, "land_design_briefs", None) or []),
         execution_plan=execution_plan,
         kg_session_ref=getattr(context, "kg_session_ref", "") or "",
+        kg_three_lines=list(state.get("kg_three_lines") or []),
         messages=list(state.get("messages") or []),
     )
     from app.agent.execute.nodes.worker_common import _execution_intent_from_plan

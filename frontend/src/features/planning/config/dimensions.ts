@@ -50,16 +50,16 @@ export const DIMENSION_ICONS: Record<string, string> = {
   natural_environment: '🌿',
   land_use: '🏗️',
   traffic: '🚗',
-  public_services: '🏛️',
+  public_services: '🏫',
   infrastructure: '🔧',
   ecological_green: '🌳',
   architecture: '🏠',
-  historical_culture: '🏛️',
+  historical_culture: '🏯',
 
   // Layer 2: 规划思路
   resource_endowment: '💎',
   planning_positioning: '🎯',
-  development_goals: '🎯',
+  development_goals: '📈',
   planning_strategies: '📊',
 
   // Layer 3: 详细规划

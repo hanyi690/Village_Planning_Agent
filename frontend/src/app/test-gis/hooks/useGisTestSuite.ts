@@ -37,19 +37,19 @@ type TestRunner = (params: Record<string, unknown>) => Promise<any>;
 
 const TEST_RUNNERS: Record<string, TestRunner> = {
   'data-fetch': (p) => gisTestApi.fetchData(p),
-  'center': (p) => gisTestApi.fetchData({ ...p, include: ['center'] }),
-  'bbox': (p) => gisTestApi.fetchData({ ...p, include: ['bbox'] }),
-  'isochrone': (p) => gisTestApi.analyze({ ...p, analysis_type: 'isochrone' }),
-  'accessibility': (p) => gisTestApi.analyze({ ...p, analysis_type: 'accessibility' }),
-  'poi-search': (p) => gisTestApi.analyze({ ...p, analysis_type: 'poi' }),
-  'coverage': (p) => gisTestApi.fetchData({ ...p, include: ['coverage'] }),
-  'facility-validation': (p) => gisTestApi.validate({ ...p, validation_type: 'facility' }),
-  'ecological': (p) => gisTestApi.validate({ ...p, validation_type: 'ecological' }),
-  'spatial-layout': (p) => gisTestApi.generateLayout(p),
-  'landuse-change': (p) => gisTestApi.generateLayout({ ...p, include_landuse_change: true }),
-  'constraint-validator': (p) => gisTestApi.validate({ ...p, validation_type: 'constraint' }),
-  'hazard-buffer': (p) => gisTestApi.validate({ ...p, validation_type: 'hazard' }),
-  'layout-validate': (p) => gisTestApi.validate({ ...p, validation_type: 'layout' }),
+  'center': (p) => gisTestApi.getCenter(p),
+  'bbox': (p) => gisTestApi.getBBox(p),
+  'isochrone': (p) => gisTestApi.generateIsochrones(p),
+  'accessibility': (p) => gisTestApi.analyzeAccessibility(p),
+  'poi-search': (p) => gisTestApi.searchPOI(p),
+  'coverage': (p) => gisTestApi.calculateCoverage(p),
+  'facility-validation': (p) => gisTestApi.validateFacility(p),
+  'ecological': (p) => gisTestApi.assessEcological(p),
+  'spatial-layout': (p) => gisTestApi.generateSpatialLayout(p),
+  'landuse-change': (p) => gisTestApi.analyzeLanduseChange(p),
+  'constraint-validator': (p) => gisTestApi.validateConstraints(p),
+  'hazard-buffer': (p) => gisTestApi.generateHazardBuffer(p),
+  'layout-validate': (p) => gisTestApi.validateLayout(p),
 };
 
 // Map test IDs to layer types for MapView rendering

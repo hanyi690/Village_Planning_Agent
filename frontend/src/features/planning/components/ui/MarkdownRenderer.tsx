@@ -1,12 +1,13 @@
 'use client';
 
-import React from 'react';
+import React, { memo } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import remarkMath from 'remark-math';
 import rehypeKatex from 'rehype-katex';
 import rehypeRaw from 'rehype-raw';
 import 'katex/dist/katex.min.css';
+import { normalizeTableCaptions } from '@/features/planning/utils/markdown-table-captions';
 
 interface MarkdownRendererProps {
   content: string;
@@ -37,7 +38,7 @@ function preprocessMathInHtml(content: string): string {
  * Markdown Renderer
  * Uses react-markdown with remark-gfm plugin for full markdown support including tables
  */
-export default function MarkdownRenderer({
+export default memo(function MarkdownRenderer({
   content,
   className = '',
   suppressFirstHeader = false,
@@ -47,6 +48,9 @@ export default function MarkdownRenderer({
     if (!content) return '';
 
     let result = content;
+
+    // Repair captions from both current and historical planning reports.
+    result = normalizeTableCaptions(result);
 
     // Preprocess math in HTML tables
     result = preprocessMathInHtml(result);
@@ -76,6 +80,11 @@ export default function MarkdownRenderer({
         remarkPlugins={[remarkGfm, remarkMath]}
         rehypePlugins={[rehypeRaw, rehypeKatex]}
         components={{
+          table: ({ children, ...props }) => (
+            <div className="table-wrap">
+              <table {...props}>{children}</table>
+            </div>
+          ),
           // Customize link rendering to open in new tab
           a: ({ href, children }) => (
             <a href={href} target="_blank" rel="noopener noreferrer">
@@ -99,4 +108,4 @@ export default function MarkdownRenderer({
       </ReactMarkdown>
     </div>
   );
-}
+});

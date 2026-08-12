@@ -218,7 +218,7 @@ export class Watchdog {
     }
 
     try {
-      const resp = await fetch(`${BACKEND_URL}/api/v1/sessions/${this.sessionId}/state`);
+      const resp = await fetch(`${BACKEND_URL}/api/sessions/${this.sessionId}/status`);
       if (!resp.ok) {
         console.warn(`[Watchdog] Status API returned ${resp.status}`);
         return;

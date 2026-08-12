@@ -92,6 +92,36 @@ export type PlanningStatus =
   | 'completed'
   | 'failed';
 
+/** Backend TaskStatus / state_to_ui_status may emit aliases the UI does not use. */
+export function normalizePlanningStatus(
+  status: string | null | undefined,
+): PlanningStatus | undefined {
+  if (!status) return undefined;
+  if (status === 'running' || status === 'pending') return 'planning';
+  if (status === 'success') return 'completed';
+  if (status === 'error') return 'failed';
+  const known: PlanningStatus[] = [
+    'idle',
+    'collecting',
+    'planning',
+    'paused',
+    'reviewing',
+    'revising',
+    'completed',
+    'failed',
+  ];
+  return known.includes(status as PlanningStatus)
+    ? (status as PlanningStatus)
+    : undefined;
+}
+
+/** Statuses where analysis is actively running or about to stream. */
+export const ACTIVE_PLANNING_STATUSES = new Set<PlanningStatus>([
+  'planning',
+  'revising',
+  'collecting',
+]);
+
 // ============================================
 // Status Badge Constants
 // ============================================
@@ -128,12 +158,13 @@ export type ViewMode = 'WELCOME_FORM' | 'SESSION_ACTIVE';
 /**
  * Navigation key for three-panel workbench focus area routing
  */
-export type NavigationKey = 'overview' | 'chat' | 'approval' | 'planning_text' | `dim:${string}`;
+export type NavigationKey = 'overview' | 'chat' | 'approval' | 'kg_inspection' | 'planning_text' | `dim:${string}`;
 
 export const NAV_KEYS = {
   OVERVIEW: 'overview',
   CHAT: 'chat',
   APPROVAL: 'approval',
+  KG_INSPECTION: 'kg_inspection',
   PLANNING_TEXT: 'planning_text',
   dim: (key: string) => `dim:${key}` as NavigationKey,
 } as const;
@@ -178,15 +209,7 @@ export type AgentPhaseValue = (typeof AgentPhase)[keyof typeof AgentPhase];
  */
 export function agentPhaseToStatus(
   phase: string,
-  interrupt_info?: {
-    event_id?: string;
-    channel?: string;
-    layer?: number;
-    phase?: string;
-    layer_name?: string;
-    reason?: string;
-    paused_stage?: string;
-  },
+  interrupt_info?: { layer?: number; phase?: string; layer_name?: string; reason?: string },
   need_revision?: boolean
 ): PlanningStatus {
   if (interrupt_info) return 'paused';

@@ -46,7 +46,7 @@ function TestGISPageContent() {
   // Pipeline trace from store (populated after spatial-layout test)
   const pipelineTrace = usePlanningStore((s) => s.pipelineTrace);
 
-  // Standard layers from jintian_boundary (loaded via new API)
+  // Standard layers from data/gis/jintian (loaded via API aliases)
   const [standardLayers, setStandardLayers] = useState<GISLayerConfig[]>([]);
   const [standardLoading, setStandardLoading] = useState(false);
   const [jintianFiles, setJintianFiles] = useState<JintianFile[]>([]);
@@ -63,13 +63,12 @@ function TestGISPageContent() {
     const loadJintianFiles = async () => {
       setStandardLoading(true);
       try {
-        const resp = await gisTestApi.listFiles();
-        if (resp.files) {
-          // Adapt string[] to JintianFile-like format
-          const adapted = resp.files.map((f: string) => ({ filename: f, name: f.replace('.geojson', ''), group: 'status', layer_type: 'infrastructure', records: 0 }));
-          setJintianFiles(adapted);
+        const resp = await gisTestApi.listJintianFiles();
+        if (resp.success) {
+          setJintianFiles(resp.files);
+          // Default visibility: only status layers visible
           const defaults: Record<string, boolean> = {};
-          adapted.forEach(f => { defaults[f.filename] = true; });
+          resp.files.forEach(f => { defaults[f.filename] = f.group === 'status'; });
           setVisibleFiles(defaults);
         }
       } catch {
@@ -95,10 +94,10 @@ function TestGISPageContent() {
         if (SKIP_FILES.has(file.filename)) continue;
         if (!visibleFiles[file.filename]) continue;
         try {
-          const geojson = await gisTestApi.getFile(file.filename);
-          if (geojson) {
+          const resp = await gisTestApi.getJintianData(file.filename);
+          if (resp.success && resp.geojson) {
             layers.push({
-              geojson: geojson as GISLayerConfig['geojson'],
+              geojson: resp.geojson as GISLayerConfig['geojson'],
               layerType: file.layer_type as GISLayerConfig['layerType'],
               layerName: file.name,
             });
@@ -208,10 +207,12 @@ function TestGISPageContent() {
         <div className="bg-gray-50 border-b px-6 py-2">
           <div className="max-w-[1800px] mx-auto flex gap-4 text-xs text-gray-600">
             {Object.entries(serviceStatus).map(([key, val]) => (
-              <span key={key} className="flex items-center gap-1">
-                <span className={`w-1.5 h-1.5 rounded-full ${val ? 'bg-green-500' : 'bg-red-400'}`} />
-                {key}
-              </span>
+              typeof val === 'boolean' ? (
+                <span key={key} className="flex items-center gap-1">
+                  <span className={`w-1.5 h-1.5 rounded-full ${val ? 'bg-green-500' : 'bg-red-400'}`} />
+                  {key}
+                </span>
+              ) : null
             ))}
           </div>
         </div>

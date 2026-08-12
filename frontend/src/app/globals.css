@@ -1,13 +1,10 @@
 /* ============================================
-   Global Styles - 村庄规划智能体 (科技简约风格)
-   Tech Minimalist Theme - Light Theme
+   Global Styles - 村庄规划智能体（自然规划工作台）
    ============================================ */
 
 /* 引入现代字体 - 科技简约风格 */
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
-@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&display=swap');
-
 @import 'tailwindcss';
+@import 'maplibre-gl/dist/maplibre-gl.css';
 
 /* Tailwind v4 内容路径配置 */
 @source "../components/**/*.{js,ts,jsx,tsx}";
@@ -17,12 +14,12 @@
 
 /* Tailwind v4 主题扩展 - 科技简约主题 */
 @theme {
-  /* 科技简约主题 - 浅色背景 + 青蓝强调 */
-  --color-primary: #0ea5e9;
-  --color-primary-light: #38bdf8;
-  --color-primary-dark: #0284c7;
+  /* 与规划底图一致的薄荷绿 + 森林绿主色 */
+  --color-primary: #2f7d59;
+  --color-primary-light: #69a982;
+  --color-primary-dark: #1f5b40;
   --color-cta: #10b981;
-  --color-background: #f8fafc;
+  --color-background: #f3f8f2;
 
   /* AI 状态色 - 科技风格 */
   --color-ai-emerald: #10b981;
@@ -42,12 +39,12 @@
      科技简约色彩系统 - 浅色主题
      ============================================ */
 
-  /* Primary 主色 - 青蓝色 */
-  --primary: #0ea5e9;
-  --primary-hover: #0284c7;
-  --primary-light: #e0f2fe;
-  --primary-lighter: #f0f9ff;
-  --primary-dark: #0369a1;
+  /* Primary 主色 - 森林绿 */
+  --primary: #2f7d59;
+  --primary-hover: #256847;
+  --primary-light: #dff1e5;
+  --primary-lighter: #f3f8f2;
+  --primary-dark: #1f5b40;
 
   /* Secondary 次要色 - 翠绿色 */
   --secondary: #10b981;
@@ -59,43 +56,43 @@
 
   /* Background 背景色 - 浅色系 */
   --bg-primary: #ffffff;
-  --bg-secondary: #f8fafc;
-  --bg-tertiary: #f1f5f9;
+  --bg-secondary: #f3f8f2;
+  --bg-tertiary: #eaf3e8;
   --bg-elevated: #ffffff;
 
   /* Surface 表面色 - 卡片、面板 */
   --surface-primary: #ffffff;
-  --surface-secondary: #f8fafc;
-  --surface-tertiary: #e2e8f0;
+  --surface-secondary: #f7faf5;
+  --surface-tertiary: #dfeade;
 
   /* Text 文本色 */
   --text-primary: #0f172a;
   --text-secondary: #475569;
   --text-muted: #94a3b8;
-  --text-link: #0284c7;
+  --text-link: #2f7d59;
 
   /* Border 边框色 */
-  --border-primary: #e2e8f0;
-  --border-secondary: #f1f5f9;
-  --border-muted: #f8fafc;
+  --border-primary: #d9e8d7;
+  --border-secondary: #eaf3e8;
+  --border-muted: #f3f8f2;
 
   /* ============================================
      渐变系统 - 科技风格
      ============================================ */
 
   /* AI 状态渐变 */
-  --ai-gradient-primary: linear-gradient(135deg, #0ea5e9 0%, #10b981 100%);
-  --ai-gradient-secondary: linear-gradient(135deg, #14b8a6 0%, #0ea5e9 100%);
-  --ai-gradient-subtle: linear-gradient(135deg, #f8fafc 0%, #e2e8f0 100%);
+  --ai-gradient-primary: linear-gradient(135deg, #2f7d59 0%, #10b981 100%);
+  --ai-gradient-secondary: linear-gradient(135deg, #4f916c 0%, #2f7d59 100%);
+  --ai-gradient-subtle: linear-gradient(135deg, #f7faf5 0%, #e4efe2 100%);
 
   /* AI 状态色 - 用于 ThinkingIndicator */
-  --ai-analyzing: #0ea5e9;
+  --ai-analyzing: #2f7d59;
   --ai-generating: #10b981;
   --ai-reviewing: #f59e0b;
   --ai-processing: #14b8a6;
 
   /* AI 背景色 - 浅色系 */
-  --ai-bg-analyzing: #e0f2fe;
+  --ai-bg-analyzing: #dff1e5;
   --ai-bg-generating: #d1fae5;
   --ai-bg-reviewing: #fef3c7;
   --ai-bg-processing: #ccfbf1;
@@ -145,7 +142,7 @@
   --shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -2px rgba(0, 0, 0, 0.1);
   --shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -4px rgba(0, 0, 0, 0.1);
   --shadow-xl: 0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 8px 10px -6px rgba(0, 0, 0, 0.1);
-  --shadow-glow: 0 0 20px rgba(14, 165, 233, 0.2);
+  --shadow-glow: 0 0 20px rgba(47, 125, 89, 0.18);
 
   /* 圆角 - 精细设计 */
   --border-radius-sm: 4px;
@@ -181,6 +178,51 @@ body {
   line-height: 1.6;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+}
+
+.safe-area-bottom {
+  padding-bottom: max(0.75rem, env(safe-area-inset-bottom, 0px));
+}
+
+.feature-popup--hover .maplibregl-popup-content {
+  padding: 0;
+  border-radius: 12px;
+  background: transparent;
+  box-shadow: none;
+}
+
+.feature-popup--hover {
+  pointer-events: none;
+}
+
+.feature-popup--hover.maplibregl-popup-anchor-top .maplibregl-popup-tip {
+  border-bottom-color: #26323b;
+}
+
+.feature-popup--hover.maplibregl-popup-anchor-bottom .maplibregl-popup-tip {
+  border-top-color: #26323b;
+}
+
+.feature-popup .maplibregl-popup-content {
+  border-radius: 12px;
+  padding: 0;
+  box-shadow: 0 10px 28px rgba(15, 45, 35, 0.18);
+}
+
+.feature-popup .maplibregl-popup-close-button {
+  width: 30px;
+  height: 30px;
+  font-size: 22px;
+  line-height: 28px;
+  color: #4b6a60;
+  right: 6px;
+  top: 6px;
+  border-radius: 8px;
+}
+
+.feature-popup .maplibregl-popup-close-button:hover {
+  background: #edf7f2;
+  color: #1f6b52;
 }
 
 /* ============================================

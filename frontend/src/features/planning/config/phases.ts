@@ -8,8 +8,8 @@
 // ==========================================
 
 export const PLANNING_DEFAULTS = {
-  // 执行模式
-  stepMode: true,
+  // 执行模式 — continuous by default; step mode pauses after each layer
+  stepMode: false,
   streamMode: true,
   enableReview: false,
 

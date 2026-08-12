@@ -18,8 +18,11 @@ import { usePlanningStore } from '../store/planningStore';
 import { useSSEConnection, useMessagePersistence, useSessionRestore } from '../hooks';
 import { planningApi, dataApi, VillageInfo, VillageSession, ImageData } from '../api';
 import { createSystemMessage, createErrorMessage, getErrorMessage } from '@/features/planning/utils';
-import { loadSessionReports, applySessionReportsToStore } from '@/features/planning/utils/session-report-loader';
+import { hydrateSessionSnapshot } from '@/features/planning/utils/session-hydrate';
 import { logger } from '@/features/planning/utils/logger';
+import { DIMENSIONS_BY_LAYER } from '../config/dimensions';
+import { NAV_KEYS } from '../constants';
+import { setSessionIdInUrl, clearSessionIdFromUrl } from '@/features/planning/utils/session-url';
 import { PLANNING_DEFAULTS } from '../config/planning';
 import type { PlanningParams } from '../types';
 
@@ -47,9 +50,13 @@ export function usePlanningActions() {
       logger.context.info('Starting planning', { projectName: params.projectName });
 
       try {
+        // Each planning run creates a brand-new backend session. Fully reset
+        // client state so artifacts from the previous session cannot bleed through.
+        store.resetSessionState();
         store.setStatus('collecting');
         store.setProjectName(params.projectName);
         store.setStepMode(params.stepMode ?? PLANNING_DEFAULTS.stepMode);
+        clearSessionIdFromUrl();
 
         const response = await planningApi.startPlanning({
           project_name: params.projectName,
@@ -79,6 +86,26 @@ export function usePlanningActions() {
 
         store.setSessionId(response.session_id);
         store.setStatus('planning');
+        setSessionIdInUrl(response.session_id);
+        store.addSessionToHistory({
+          projectName: params.projectName,
+          villageName: params.villageName || params.projectName,
+          sessionId: response.session_id,
+        });
+
+        // Immediate UI feedback before SSE connects and replays cached events.
+        const firstDim = DIMENSIONS_BY_LAYER[1][0];
+        if (firstDim) {
+          store.setSelectedNavigationKey(NAV_KEYS.dim(`1_${firstDim}`));
+        }
+        store.handleSSEEvent({
+          type: 'layer_started',
+          data: {
+            layer: 1,
+            layer_name: '现状分析',
+            dimension_count: DIMENSIONS_BY_LAYER[1].length,
+          },
+        });
 
         // Build initialization message with planning context
         const villageName = params.villageName || params.projectName;
@@ -140,10 +167,15 @@ Session ID: ${response.session_id.slice(0, 8)}...`;
         sessionId, store.isPaused, store.status, store.interruptInfo);
     logger.context.info('Approving review', { sessionId });
     try {
-      await planningApi.approveReview(sessionId);
+      const result = await planningApi.approveReview(sessionId);
+      if (result && 'current_layer' in result && result.current_layer) {
+        usePlanningStore.setState({ lastPauseLayer: result.current_layer as number });
+      }
       store.setPaused(false);
       store.setPendingReviewLayer(null);
-      store.clearProgressState();
+      store.setStatus('planning');
+      // Reconnect SSE so layer_started / dimension events after interrupt resume are not missed.
+      store.triggerSseReconnect();
     } catch (error: unknown) {
       const errorMessage = getErrorMessage(error, 'Unknown error');
       logger.context.error('Failed to approve review', { error: errorMessage });
@@ -256,38 +288,30 @@ Session ID: ${response.session_id.slice(0, 8)}...`;
   const loadHistoricalSession = useCallback(
     async (villageName: string, sessionId: string) => {
       const store = usePlanningStore.getState();
-      store.clearMessages();
+      // Pin target session before reset so URL auto-restore cannot reload the wrong session.
+      store.setPendingHistoricalSessionId(sessionId);
+      setSessionIdInUrl(sessionId);
       store.setProjectName(villageName);
-      store.setSessionId(sessionId);
-      store.setStatus('completed');
 
       try {
-        // Parallel: fetch checkpoints + status at the same time
-        const [checkpointsResp, statusData] = await Promise.all([
-          planningApi.getCheckpoints(sessionId),
-          planningApi.getStatus(sessionId),
-        ]);
+        // Fully isolate from the previous conversation before hydrating.
+        store.resetSessionState();
+        store.setProjectName(villageName);
 
-        store.setCheckpoints(
-          checkpointsResp.checkpoints.map((cp) => ({
-            checkpoint_id: cp.checkpoint_id,
-            description: cp.phase || '',
-            timestamp: '',
-            layer: cp.layer,
-          })),
-        );
-        store.syncBackendState(statusData);
-
-        // Parallel: fetch all layer reports at once
-        const completedDimensions = statusData.completed_dimensions;
-        if (completedDimensions) {
-          const { allReports, allProgress, allRagSources } =
-            await loadSessionReports(sessionId, completedDimensions);
-          applySessionReportsToStore(allReports, allProgress, allRagSources);
+        const { statusData } = await hydrateSessionSnapshot(sessionId);
+        if (statusData.project_name) {
+          store.setProjectName(statusData.project_name);
+        } else {
+          store.setProjectName(villageName);
         }
+
+        store.setSessionId(sessionId);
+        setSessionIdInUrl(sessionId);
       } catch (error: unknown) {
         const errorMessage = getErrorMessage(error, 'Failed to load session');
-        store.setHistoryError(errorMessage);
+        store.addMessage(createErrorMessage(`加载历史会话失败：${errorMessage}`));
+      } finally {
+        usePlanningStore.getState().setPendingHistoricalSessionId(null);
       }
     },
     []
@@ -295,19 +319,56 @@ Session ID: ${response.session_id.slice(0, 8)}...`;
 
   const deleteSession = useCallback(
     async (sessionId: string, _villageName: string): Promise<boolean> => {
+      const store = usePlanningStore.getState();
+      store.markSessionsDeleted([sessionId]);
+      store.removeSessionFromHistory(sessionId);
+      if (store.sessionId === sessionId) {
+        clearSessionIdFromUrl();
+      }
       try {
         await planningApi.deleteSession(sessionId);
-        // Reload villages history
-        await loadVillagesHistory();
         return true;
       } catch (error: unknown) {
+        store.unmarkSessionDeleted(sessionId);
         const errorMessage = getErrorMessage(error, 'Failed to delete session');
-        usePlanningStore.getState().setHistoryError(errorMessage);
+        store.setHistoryError(errorMessage);
+        await loadVillagesHistory();
         return false;
       }
     },
     [loadVillagesHistory]
   );
+
+  const clearAllHistory = useCallback(async (
+    knownSessionIds?: string[],
+  ): Promise<{ success: boolean; clearedActiveSession: boolean }> => {
+    const store = usePlanningStore.getState();
+    const sessionIds = knownSessionIds ?? store.villages.flatMap((village) =>
+      village.sessions.map((session) => session.session_id),
+    );
+    if (sessionIds.length === 0) {
+      return { success: true, clearedActiveSession: false };
+    }
+
+    store.markSessionsDeleted(sessionIds);
+    const clearedActiveSession = Boolean(
+      store.sessionId && sessionIds.includes(store.sessionId),
+    );
+    if (!knownSessionIds) {
+      store.clearVillagesHistory();
+    }
+
+    const results = await Promise.allSettled(
+      sessionIds.map((id) => planningApi.deleteSession(id)),
+    );
+    const failedCount = results.filter((result) => result.status === 'rejected').length;
+    if (failedCount > 0) {
+      store.setHistoryError(`有 ${failedCount} 条历史记录删除失败，已从列表隐藏`);
+      return { success: false, clearedActiveSession };
+    }
+
+    return { success: true, clearedActiveSession };
+  }, []);
 
   const showViewer = useCallback(() => {
     usePlanningStore.getState().setViewerVisible(true);
@@ -333,6 +394,7 @@ Session ID: ${response.session_id.slice(0, 8)}...`;
   }, []);
 
   const resetConversation = useCallback(() => {
+    clearSessionIdFromUrl();
     usePlanningStore.getState().resetConversation();
   }, []);
 
@@ -356,6 +418,7 @@ Session ID: ${response.session_id.slice(0, 8)}...`;
       selectSession,
       loadHistoricalSession,
       deleteSession,
+      clearAllHistory,
       showViewer,
       hideViewer,
       showFileViewer,
@@ -376,6 +439,7 @@ Session ID: ${response.session_id.slice(0, 8)}...`;
       selectSession,
       loadHistoricalSession,
       deleteSession,
+      clearAllHistory,
       showViewer,
       hideViewer,
       showFileViewer,
@@ -405,29 +469,11 @@ export function PlanningProvider({ children, conversationId }: PlanningProviderP
   const sseResumeTrigger = usePlanningStore((state) => state.sseResumeTrigger);
   const initConversation = usePlanningStore((state) => state.initConversation);
   const setCheckpoints = usePlanningStore((state) => state.setCheckpoints);
-  const humanReviewEventId = usePlanningStore((state) => state.humanReviewEventId);
-  const fetchHumanReviewItems = usePlanningStore((state) => state.fetchHumanReviewItems);
 
   // Initialize store with conversationId
   useEffect(() => {
     initConversation(conversationId);
   }, [conversationId, initConversation]);
-
-  // Auto-fetch pending review items when SSE pause event arrives
-  useEffect(() => {
-    if (humanReviewEventId && sessionId) {
-      fetchHumanReviewItems(sessionId);
-    }
-  }, [humanReviewEventId, sessionId, fetchHumanReviewItems]);
-
-  // Page-refresh recovery: check for paused state on mount
-  useEffect(() => {
-    if (sessionId) {
-      fetchHumanReviewItems(sessionId);
-    }
-    // Only on mount/sessionId change
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sessionId]);
 
   // SSE connection with reconnect trigger
   useSSEConnection({ sessionId, resumeTrigger: sseResumeTrigger });

@@ -9,7 +9,7 @@
 
 export const PLANNING_DEFAULTS = {
   // 执行模式
-  stepMode: true,
+  stepMode: false,
   streamMode: true,
   enableReview: false,
 

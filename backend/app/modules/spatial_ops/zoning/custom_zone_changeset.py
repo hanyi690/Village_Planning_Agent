@@ -270,11 +270,12 @@ def materialize_custom_zone_changes(
                 intervention_id=target_id,
             )
         )
-    result.diagnostics.append({
-        "code": "custom_zone_materialized",
-        "target_id": target_id,
-        "selected_count": len(result.changes),
-    })
+    if not result.unresolved_items:
+        result.diagnostics.append({
+            "code": "custom_zone_materialized",
+            "target_id": target_id,
+            "selected_count": len(result.changes),
+        })
     return result
 
 

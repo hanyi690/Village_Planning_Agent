@@ -6,8 +6,10 @@ const nextConfig = {
     const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
     return [
       {
-        source: '/api/:path*',
-        destination: `${apiUrl}/api/:path*`,
+        // Serve compact GIS payload from the local Next route (~9 MB) instead
+        // of proxying the pretty-printed backend file (~30 MB).
+        source: '/api/((?!dev/gis/complete-result).*)',
+        destination: `${apiUrl}/api/$1`,
       },
     ]
   },

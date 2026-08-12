@@ -15,6 +15,7 @@ export interface ValidationResult {
 export const EXPECTED_LAYER_TYPES = [
   'boundary',
   'infrastructure',
+  'planned_road',
   'sensitivity_zone',
   'function_zone',
   'planning_zone',
