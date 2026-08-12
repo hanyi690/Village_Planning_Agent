@@ -131,7 +131,7 @@ def _semantic_location_reference(
 
     L3 claim compilation frequently leaves ``spatial_requirements.location``
     empty while ``problem_addressed``/``name`` carry explicit spatial scope
-    (e.g. ????? / ?????? / ???).  Mapping that prose into a
+    (e.g. 金田村全域 / 沿石窟河沿岸 / 园宅村).  Mapping that prose into a
     closed-set spec lets GROUND resolve it through the PlaceEvidenceIndex
     instead of deferring the target as unresolved.
     """
@@ -142,7 +142,7 @@ def _semantic_location_reference(
     ])
     if not text.strip():
         return None
-    if any(token in text for token in ("??", "???", "???", "????", "????", "?????")):
+    if any(token in text for token in ("全域", "全村域", "村域内", "村域范围", "各自然村", "金田村全域")):
         return SpatialReferenceSpec(
             type="topological",
             topo="sfWithin",

@@ -42,7 +42,7 @@ def _spatial_hint(intervention: PlanningIntervention) -> str:
 
 def _semantic(intervention: PlanningIntervention) -> SemanticMetadata:
     # Keep the full prose in raw_text so GROUND/road Stage 2.6 can mine
-    # location clues (problem_addressed often carries ??/??/??) that
+    # location clues (problem_addressed often carries 村名/河名/全域) that
     # are absent from the structured location cell.
     raw_parts = [
         intervention.name,
@@ -97,9 +97,9 @@ def _to_facility_target(intervention: PlanningIntervention) -> FacilityTarget:
 
 
 _ROAD_LEVEL_KEYWORDS = (
-    ("???", "???"), ("???", "???"), ("??", "??"),
-    ("???", "???"), ("??", "??"), ("??", "??"),
-    ("??", "??"), ("??", "??"),
+    ("主干道", "主干道"), ("次干道", "次干道"), ("支路", "支路"),
+    ("机耕路", "机耕路"), ("巷道", "巷道"), ("村道", "村道"),
+    ("乡道", "乡道"), ("道路", "村道"),
 )
 
 
@@ -112,7 +112,7 @@ def _road_level(intervention: PlanningIntervention) -> str:
     for keyword, level in _ROAD_LEVEL_KEYWORDS:
         if keyword in text:
             return level
-    return "??"
+    return "村道"
 
 
 def _road_width_m(intervention: PlanningIntervention) -> float:

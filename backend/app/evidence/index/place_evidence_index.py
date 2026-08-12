@@ -128,9 +128,9 @@ class PlaceEvidenceIndex:
 
     # ?? L1 fact geometry binding (design ?3.2: role-aware) ????????????
 
-    _WATER_DLMC = frozenset({"??", "????", "????", "????", "??"})
-    _ROAD_DLMC = frozenset({"??????", "??????", "????", "????"})
-    _FACILITY_DLMC = frozenset({"????????", "???????????", "??????"})
+    _WATER_DLMC = frozenset({"水域", "河流水面", "湖泊水面", "坑塘水面", "沟渠"})
+    _ROAD_DLMC = frozenset({"村内交通用地", "对外交通用地", "公路用地", "农村道路"})
+    _FACILITY_DLMC = frozenset({"公共服务设施用地", "公共管理与公共服务用地", "科教文卫用地"})
 
     def _bind_l1_fact_bsms(self, fact: Any, entry: "PlaceEvidenceEntry") -> None:
         """Bind an L1 typed fact (water/road/area/facility) to real parcels.
@@ -202,9 +202,9 @@ class PlaceEvidenceIndex:
 
     @staticmethod
     def normalize_mention(mention: str) -> str:
-        """Strip spatial-desc suffixes so '?????' -> '???'."""
+        """Strip spatial-desc suffixes so '金田河两岸' -> '金田河'."""
         token = (mention or "").strip()
-        for suffix in ("??", "??", "??", "??", "??", "??", "???", "?"):
+        for suffix in ("沿线", "两岸", "附近", "周边", "一带", "区域", "范围内", "域"):
             if token.endswith(suffix):
                 token = token[: -len(suffix)].strip()
                 break

@@ -110,9 +110,9 @@ async def generate_classification_decisions(
     catalog = _build_code_catalog()
     lines = "\n".join(
         (
-            f"{i}. target={t['target_id']} | ??={t['name']} | "
-            f"??={t['category']} | ??={t['expected_output_kind']} | "
-            f"??={json.dumps((t.get('evidence_refs') or [])[:2], ensure_ascii=False)}"
+            f"{i}. target={t['target_id']} | 名称={t['name']} | "
+            f"类别={t['category']} | 产出={t['expected_output_kind']} | "
+            f"依据={json.dumps((t.get('evidence_refs') or [])[:2], ensure_ascii=False)}"
         )
         for i, t in enumerate(targets, 1)
     )
@@ -127,20 +127,20 @@ async def generate_classification_decisions(
         batch = targets[batch_start : batch_start + batch_size]
         lines = "\n".join(
             (
-                f"{i}. target={t['target_id']} | ??={t['name']} | "
-                f"??={t['category']} | ??={t['expected_output_kind']} | "
-                f"??={json.dumps((t.get('evidence_refs') or [])[:2], ensure_ascii=False)}"
+                f"{i}. target={t['target_id']} | 名称={t['name']} | "
+                f"类别={t['category']} | 产出={t['expected_output_kind']} | "
+                f"依据={json.dumps((t.get('evidence_refs') or [])[:2], ensure_ascii=False)}"
             )
             for i, t in enumerate(batch, 1)
         )
         prompt = (
-            "????????????????????????????5?????????????"
-            "??????????????????????????????????\n"
+            "你是村庄规划用地分类助手。对下列每个规划项目，从权威附录５（广东省村庄规划用地分类）"
+            "闭集编码中选择唯一的规划用地编码（规划用途，不是现状地类）。编码表：\n"
             f"{catalog}\n\n"
-            "??????\n"
+            "待分类项目：\n"
             f"{lines}\n\n"
-            '??? JSON?{"results":[{"index":1,"selected_code":"1100","candidate_codes":["1100","1200"],"rationale":"..."}]} '
-            "?index ???????selected_code ???? candidate_codes ????????rationale ?????????"
+            '只输出 JSON：{"results":[{"index":1,"selected_code":"1100","candidate_codes":["1100","1200"],"rationale":"..."}]} '
+            "（index 对应上面编号；selected_code 必须来自 candidate_codes 且都在编码表中；rationale 简短说明规划依据）"
         )
         items: list[Any] = []
         structured = llm.with_structured_output(

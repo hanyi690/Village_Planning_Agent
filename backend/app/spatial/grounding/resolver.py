@@ -63,28 +63,50 @@ def _resolve_gazetteer_bsms(token: str, gazetteer: Any) -> List[str]:
 _VILLAGE_ALL_MARKER = "__VILLAGE_ALL__"
 
 
+_MENTION_SEPARATORS = ("?", "?", ",", "?", ";", "?", "?", "?")
+
+
+_MENTION_SEPARATORS = ("、", "，", ",", "；", ";", "及", "和", "与")
+
+
+def _split_mentions(label: str) -> list[str]:
+    """Split a combined location cell into discrete mentions."""
+    parts = []
+    for raw in re.split(r"[、，,；;及和与]+", label or ""):
+        part = (raw or "").strip()
+        if part:
+            parts.append(part)
+    return parts
+
+
 def _normalize_spec_mention(label: str) -> str:
     """Normalize PARSE label_contains into a resolver-friendly mention.
 
-    - '12????' / '9????' / '???' / '??' -> whole-village marker
-    - '?????' / '?????' -> base entity token
-    - pure count/unit text (e.g. '40?') -> empty (no location evidence)
+    - '12个自然村' / '9个自然村' / '全村域' /
+      '全村' -> whole-village marker
+    - '石窟河沿线' / '金田河两岸' -> base entity token
+    - pure count/unit text (e.g. '40处') -> empty (no location evidence)
     """
     token = (label or "").strip()
     if not token:
         return ""
-    if token in {"???", "??", "??"} or (
-        token.endswith("????") and token[:-4].isdigit()
+    if token in {"全村域", "全村", "村域"} or re.fullmatch(
+        r"\d+个自然村", token
     ):
         return _VILLAGE_ALL_MARKER
-    for suffix in ("??", "??", "??", "??", "??", "??", "???", "?"):
+    for suffix in (
+        "沿线", "两岸", "附近", "周边",
+        "一带", "区域", "范围内", "域",
+    ):
         if token.endswith(suffix):
             token = token[: -len(suffix)].strip()
             break
     if not token:
         return ""
     if any(ch.isdigit() for ch in token) and not any(
-        ch.isalpha() for ch in token.replace("?", "").replace("?", "").replace("?", "").replace("?", "").replace("?", "")
+        ch.isalpha()
+        for ch in token.replace("个", "").replace("处", "").replace("座", "")
+        .replace("米", "").replace("亩", "")
     ):
         return ""
     return token
@@ -219,9 +241,33 @@ class SpatialResolver:
                         provenance={"path": "bundle:village_all"},
                     )
                 if mention:
-                    evidence_bsms = self.evidence_index.candidate_bsms(mention)
+                    # Combined cells ('??Y122?????X038??') are split and
+                    # each part resolved against the evidence index; BSMs are
+                    # merged so partial matches still bind the spec.
+                    evidence_bsms: list[str] = []
+                    parts = _split_mentions(mention)
+                    for part in parts:
+                        part_mention = _normalize_spec_mention(part)
+                        if part_mention == _VILLAGE_ALL_MARKER:
+                            all_bsms = [
+                                str(parcel.bsm)
+                                for parcel in self.context.current_parcels()
+                                if str(getattr(parcel, "bsm", "") or "")
+                            ]
+                            return ResolvedSpatialRef(
+                                final_bsms=list(dict.fromkeys(all_bsms)),
+                                confidence=1.0 if all_bsms else 0.0,
+                                provenance={"path": "bundle:village_all"},
+                            )
+                        if not part_mention:
+                            continue
+                        evidence_bsms.extend(
+                            self.evidence_index.candidate_bsms(part_mention)
+                        )
                     if evidence_bsms:
-                        candidates = CandidateSet(bsms=list(evidence_bsms))
+                        candidates = CandidateSet(
+                            bsms=list(dict.fromkeys(evidence_bsms))
+                        )
             if not candidates.bsms and not candidates.ref_bsms:
                 port = getattr(self.context.ports, "spatial_query", None)
                 if port is not None:
