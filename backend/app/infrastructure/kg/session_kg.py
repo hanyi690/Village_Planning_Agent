@@ -22,6 +22,8 @@ from multiprocessing import get_context
 from threading import RLock
 from typing import Any, Dict, Optional
 
+from app.infrastructure.artifacts.repository import ContentAddressedArtifactRepository
+from app.infrastructure.paths import run_tmp_root
 from app.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -77,6 +79,36 @@ def _session_kg_lock(session_id: str) -> asyncio.Lock:
         return lock
 
 
+def _kg_repo() -> ContentAddressedArtifactRepository:
+    return ContentAddressedArtifactRepository(run_tmp_root())
+
+
+def _kg_layer1_parent(bundle: Any, session_id: str) -> str:
+    from app.data.model.snapshot import SessionDataSnapshot
+
+    return SessionDataSnapshot.from_bundle(bundle, session_id=session_id).digest
+
+
+def _load_layer1_from_cas(session_id: str, bundle: Any) -> Optional[Dict[str, Any]]:
+    from app.modules.kg import PlanningKG, get_kg_manager
+
+    parent = _kg_layer1_parent(bundle, session_id)
+    repo = _kg_repo()
+    ref = repo.get_named_ref(session_id, "main", "kg_layer1")
+    if ref is None or ref.parent_digests.get("bundle") != parent:
+        return None
+    turtle = repo.get_json(ref)
+    kg = PlanningKG.from_turtle(turtle, village_name=bundle.village_name)
+    manager = get_kg_manager()
+    manager.register_session(session_id, kg)
+    return {
+        "session_id": session_id,
+        "cache_hit": True,
+        "triple_count": kg.get_triple_count(),
+        "version": manager.get_session_version(session_id),
+    }
+
+
 async def ensure_session_kg(
     session_id: str,
     village_name: str = "",
@@ -127,6 +159,20 @@ async def ensure_session_kg(
                 invalidate_session_bundle(session_id)
                 return None
 
+            if not force:
+                try:
+                    cached = _load_layer1_from_cas(session_id, bundle)
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning("KG Layer-1 CAS load failed, rebuilding: %s", exc)
+                    cached = None
+                if cached is not None:
+                    logger.info(
+                        "[SessionKG] Loaded Layer-1 from CAS for session %s "
+                        "(village=%s): %d triples, cache_hit=True",
+                        session_id, bundle.village_name, cached["triple_count"],
+                    )
+                    return cached
+
             roads = bundle.lines.get("roads_current") or []
             water = bundle.polygons.get("water_bodies") or []
             relations = compute_parcel_relations(parcels, roads, water)
@@ -162,6 +208,24 @@ async def ensure_session_kg(
                         relations,
                     )
                     worker_result = await future
+                    try:
+                        repo = _kg_repo()
+                        parent = _kg_layer1_parent(bundle, session_id)
+                        desc = repo.put_json(
+                            worker_result["turtle"],
+                            schema_id="KGLayer1Turtle",
+                            schema_version="3",
+                            producer_stage="session_kg",
+                            run_id=session_id,
+                            branch_id="main",
+                            parent_digests={"bundle": parent},
+                        )
+                        repo.compare_and_set_named_ref(
+                            session_id, "main", "kg_layer1", desc,
+                            expected_descriptor_digest=None,
+                        )
+                    except Exception as exc:  # noqa: BLE001
+                        logger.warning("KG Layer-1 CAS persist failed (non-fatal): %s", exc)
                     kg = PlanningKG.from_turtle(
                         worker_result["turtle"],
                         village_name=bundle.village_name,
