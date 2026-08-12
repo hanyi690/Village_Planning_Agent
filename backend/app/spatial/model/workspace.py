@@ -41,13 +41,13 @@ class SpatialWorkspace:
         return self._bundle.metadata
 
     @property
-    def planning_texts(self) -> list[dict[str, Any]]:
+    def input_documents(self) -> list[dict[str, Any]]:
         """Structured planning inputs owned by the data bundle.
 
         Text is exposed only through the data context.  It is never copied
         into LangGraph checkpoint state.
         """
-        return list(getattr(self._bundle.documents, "planning_texts", []) or [])
+        return list(getattr(self._bundle.documents, "input_documents", []) or [])
 
     @property
     def points(self) -> Any:

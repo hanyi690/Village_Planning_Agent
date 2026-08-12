@@ -90,8 +90,8 @@ async def test_runtime_pipeline_e2e(sqlite_db, pipeline_reset, monkeypatch):
         # instead of inventing a DEM or weakening vector assertions.
         assert isinstance(bundle.rasters.all_rasters, dict)
 
-        sources = [t["source"] for t in bundle.documents.planning_texts]
-        assert "upload" in sources, f"uploads not merged into planning_texts: {sources}"
+        sources = [t["source"] for t in bundle.documents.input_documents]
+        assert "upload" in sources, f"uploads not merged into input_documents: {sources}"
 
         upload_sources = [
             source for source in bundle.metadata.provider_sources
@@ -168,7 +168,7 @@ async def test_runtime_pipeline_e2e(sqlite_db, pipeline_reset, monkeypatch):
         assert calls["n"] == 0
         assert (rb.layer_reports or {}).get(1, {}).get("location", {}).get("content")
         assert any(
-            t.get("source") == "upload" for t in rb.documents.planning_texts
+            t.get("source") == "upload" for t in rb.documents.input_documents
         ), "snapshot path lost uploaded text"
 
         # ── Stage 7: EXPLORE access tools (real calls) ───────────────────

@@ -13,7 +13,7 @@
 | `spatial_types.py` | L2 vector semantic subclasses (Group A-F, ~33 concrete classes: parcels, roads, facilities, control zones, natural resources, annotations) + `GisFeature` Discriminated Union |
 | `raster_types.py` | Raster subclasses: `DEMInput`, `DOMInput`, `SlopeRaster`, `AspectRaster`, `SuitabilityRaster`, `TerrainAnalysisResult` |
 | `table_types.py` | `TableDataset` + 7 subclasses (PopulationTable, ControlRuleTable, PlanningIndicatorTable, etc.) |
-| `document_types.py` | `Document` + `PlanningText` + `L3Report` |
+| `document_types.py` | `Document` + `ReferencePlanningText` + `L3Report` |
 | `canonical.py` | `VillageBundle` (morphology-first Pydantic container) + 6 `LayerGroup` classes with dynamic `_layers: dict` + `_bundle_key_for()` routing + `ProjectDataView` + `VillageMetadata` |
 | `layer_registry.py` | `GIS_LAYER_REGISTRY` + `GisLayerTypeEntry` + `build_registry_from_yaml()` |
 | `gis_layer_registry.yaml` | Single source of truth for layer metadata (40+ entries) |
@@ -32,7 +32,7 @@ L0  TableDataset                    (rows + columns + schema)
  └── L1  PopulationTable / ControlRuleTable / ...
 
 L0  Document                        (text + doc_type + source)
- └── L1  PlanningText / L3Report
+ └── L1  ReferencePlanningText / L3Report
 ```
 
 The DU (discriminated union) discriminator is `layer_type` (embedded on each feature). `VillageBundle.add()` in `canonical.py` routes features into morphology groups via `_bundle_key_for()`, which looks up `GIS_LAYER_REGISTRY` (YAML-driven) — not `isinstance` chains. Each `LayerGroup.add()` calls `_bundle_key_for(feature)` to get the `bundle_target.key` from the registry and appends to `_layers[key]`.

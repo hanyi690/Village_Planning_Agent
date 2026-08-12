@@ -103,7 +103,7 @@ class PlanningContext:
         """Read one planning input from the data-owned workspace."""
         if self.workspace is None:
             return default
-        for item in self.workspace.planning_texts:
+        for item in self.workspace.input_documents:
             if str(item.get("source", "")) == source:
                 return str(item.get("content", "") or "")
         return default
@@ -113,7 +113,7 @@ class PlanningContext:
         if self.workspace is None:
             return {}
         result: Dict[str, str] = {}
-        for item in self.workspace.planning_texts:
+        for item in self.workspace.input_documents:
             source = str(item.get("source", "") or "")
             if source and source not in result:
                 result[source] = str(item.get("content", "") or "")

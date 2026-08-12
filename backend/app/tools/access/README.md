@@ -24,7 +24,7 @@
 |---|---|---|
 | `bundle.py` | `bundle_overview` / `spatial_context` / `spatial_features` | 会话数据统计 / 标签分布 / 紧凑结构化负载；`include_geometry` 是 EXECUTE / 渲染的显式逃生门 |
 | `knowledge.py` | `knowledge_graph` | 会话 KG 语义查询（包装 `kg/queries/semantic.py` + `cognition.py`），token 预算 |
-| `rag.py` | `rag_search` / `index_bundle_texts` | 文本清单检索（`documents.planning_texts` 为权威清单，无全库漂移）；全部结果经 `TokenBudget` 标注 |
+| `rag.py` | `rag_search` / `index_bundle_texts` | 文本清单检索（`documents.input_documents` 为权威清单，无全库漂移）；全部结果经 `TokenBudget` 标注 |
 | `reports.py` | `layer_reports` | L1/L2/L3 报告 progressive disclosure：先 summary，仅显式 `include_content` 才物化全文 |
 | `shared.py` | 共享助手 | bundle 解析（内存缓存 → 版本化快照 → 实时构建）+ `budget_check` 预算 |
 

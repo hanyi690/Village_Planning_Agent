@@ -720,7 +720,7 @@ class DataCatalog:
         (unchanged, reuse), then — when ``session_id`` is given — populates the
         session context onto the same bundle instance:
           * ``metadata``: session_id / planning_period / admin hierarchy
-          * ``documents.planning_texts``: village_data text, task description,
+          * ``documents.input_documents``: village_data text, task description,
             constraints, uploaded file parsed text, project planning docs
           * ``layer_reports``: full L1/L2/L3 report contents from the DB
 
@@ -810,7 +810,7 @@ class DataCatalog:
                 {"source": "task_description", "name": "任务描述", "content": session.get("task_description") or ""},
                 {"source": "constraints", "name": "约束条件", "content": session.get("constraints") or ""},
             ]
-            bundle.documents.planning_texts = [
+            bundle.documents.input_documents = [
                 t for t in texts if t["content"].strip()
             ]
 
@@ -823,7 +823,7 @@ class DataCatalog:
             text = f.get("parsed_text") or ""
             if not text.strip():
                 continue
-            bundle.documents.planning_texts.append({
+            bundle.documents.input_documents.append({
                 "source": "upload",
                 "category": f.get("file_category", ""),
                 "name": f.get("original_filename") or f.get("filename", ""),
@@ -860,7 +860,7 @@ class DataCatalog:
                     content = Path(path).read_text(encoding="utf-8")
                 except Exception:
                     continue
-                bundle.documents.planning_texts.append({
+                bundle.documents.input_documents.append({
                     "source": "project_doc",
                     "type": doc.get("type", "unknown"),
                     "name": doc.get("name", ""),

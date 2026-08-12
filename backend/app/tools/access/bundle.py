@@ -46,7 +46,7 @@ async def bundle_overview_impl(session_id: str) -> Dict[str, Any]:
         "tables": list(bundle.tables.all_tables.keys()),
         "documents": [
             {"source": t.get("source"), "name": t.get("name")}
-            for t in bundle.documents.planning_texts
+            for t in bundle.documents.input_documents
         ],
         "layer_reports": {
             str(layer): list(dims.keys())

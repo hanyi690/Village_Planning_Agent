@@ -1,6 +1,6 @@
 """rag_search / index_bundle_texts — 会话文本清单检索。
 
-文本源收口：bundle 快照的 ``documents.planning_texts`` 是会话可检索文本的
+文本源收口：bundle 快照的 ``documents.input_documents`` 是会话可检索文本的
 权威清单。检索时以清单为准：
   - 提供 source/name 过滤时，只在清单命中范围内做关键词检索；
   - 未过滤时，先尝试向量库语义检索（仅收进清单内已有同名文档的结果），
@@ -91,7 +91,7 @@ async def rag_search_impl(
         return {"success": False, "error": "query 不能为空"}
 
     bundle = await resolve_bundle(session_id)
-    inventory = list(bundle.documents.planning_texts or [])
+    inventory = list(bundle.documents.input_documents or [])
 
     if source and source not in _SESSION_SOURCES:
         return {"success": False, "error": f"未知 source: {source}（可选: {'/'.join(sorted(_SESSION_SOURCES))}）"}
@@ -173,7 +173,7 @@ async def index_bundle_texts_impl(
 ) -> Dict[str, Any]:
     """将 bundle 清单中尚未进入向量库的文本补索引（渐进启用）。"""
     bundle = await resolve_bundle(session_id)
-    inventory = list(bundle.documents.planning_texts or [])
+    inventory = list(bundle.documents.input_documents or [])
     if source:
         inventory = [t for t in inventory if t.get("source") == source]
 

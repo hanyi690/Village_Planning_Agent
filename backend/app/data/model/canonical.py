@@ -232,7 +232,7 @@ class TableLayerGroup(BaseModel):
 class DocumentGroup(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
-    planning_texts: List[Any] = Field(default_factory=list)
+    input_documents: List[Any] = Field(default_factory=list)
     l3_reports: List[Any] = Field(default_factory=list)
 
 
@@ -474,7 +474,7 @@ def to_bundle_dict(bundle: VillageBundle) -> Dict[str, Any]:
         "metadata": bundle.metadata.model_dump(mode="json"),
         "layer_reports": _serialize_value(bundle.layer_reports),
         "documents": {
-            "planning_texts": _serialize_value(bundle.documents.planning_texts),
+            "input_documents": _serialize_value(bundle.documents.input_documents),
             "l3_reports": _serialize_value(bundle.documents.l3_reports),
         },
         "rasters": _serialize_value(bundle.rasters.all_rasters),
@@ -529,8 +529,10 @@ def from_bundle_dict(data: Dict[str, Any]) -> VillageBundle:
         }
 
     docs = data.get("documents", {}) or {}
-    if docs.get("planning_texts"):
-        bundle.documents.planning_texts = docs["planning_texts"]
+    if docs.get("input_documents"):
+        bundle.documents.input_documents = docs["input_documents"]
+    elif docs.get("planning_texts"):
+        bundle.documents.input_documents = docs["planning_texts"]
     if docs.get("l3_reports"):
         bundle.documents.l3_reports = docs["l3_reports"]
 

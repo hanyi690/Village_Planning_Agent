@@ -13,7 +13,7 @@ class Document(BaseModel):
     source: str = ""
 
 
-class PlanningText(Document):
+class ReferencePlanningText(Document):
     doc_type: str = "planning_text"
 
 
@@ -22,4 +22,4 @@ class L3Report(Document):
     structured_summary: Dict[str, Any] = Field(default_factory=dict)
 
 
-__all__ = ["Document", "PlanningText", "L3Report"]
+__all__ = ["Document", "ReferencePlanningText", "L3Report"]
