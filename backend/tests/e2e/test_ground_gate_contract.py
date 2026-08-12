@@ -1,4 +1,4 @@
-from app.agent.ground.gate import evaluate_ground_gate, ground_gate_route
+from app.domain.ground.gate import evaluate_ground_gate, ground_gate_route
 from app.modules.schema.contracts.contract_meta import StageIssue
 from app.modules.schema.contracts.grounding_contracts import GroundingResult
 

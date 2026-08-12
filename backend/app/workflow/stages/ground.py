@@ -30,8 +30,8 @@ def _to_typed(data: Any, cls: type) -> Any:
 
 async def ground_node(state: Dict[str, Any]) -> Dict[str, Any]:
     """GROUND node: specs + context -> GroundingResult + gate."""
-    from app.agent.ground.aggregate import ground_aggregate, retrieve_evidence
-    from app.agent.ground.gate import evaluate_ground_gate
+    from app.domain.ground.aggregate import ground_aggregate, retrieve_evidence
+    from app.domain.ground.gate import evaluate_ground_gate
     from app.modules.schema.contracts.parse_result_contracts import IntentCompilationResult
     from app.modules.schema.contracts.spatial_reference_contracts import SpatialReferenceSpec
 
