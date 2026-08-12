@@ -41,10 +41,20 @@ def _spatial_hint(intervention: PlanningIntervention) -> str:
 
 
 def _semantic(intervention: PlanningIntervention) -> SemanticMetadata:
+    # Keep the full prose in raw_text so GROUND/road Stage 2.6 can mine
+    # location clues (problem_addressed often carries ??/??/??) that
+    # are absent from the structured location cell.
+    raw_parts = [
+        intervention.name,
+        str(intervention.problem_addressed or ""),
+        str(intervention.scale or ""),
+        *[str(fn) for fn in (intervention.functions or [])],
+    ]
+    raw_text = " ".join(part for part in raw_parts if part and str(part).strip())
     return SemanticMetadata(
         natural_language_description=intervention.name,
         spatial_hint=_spatial_hint(intervention),
-        raw_text=intervention.name,
+        raw_text=raw_text,
     )
 
 
@@ -86,14 +96,77 @@ def _to_facility_target(intervention: PlanningIntervention) -> FacilityTarget:
     )
 
 
+_ROAD_LEVEL_KEYWORDS = (
+    ("???", "???"), ("???", "???"), ("??", "??"),
+    ("???", "???"), ("??", "??"), ("??", "??"),
+    ("??", "??"), ("??", "??"),
+)
+
+
+def _road_level(intervention: PlanningIntervention) -> str:
+    text = " ".join([
+        str(intervention.name or ""),
+        str((intervention.spatial_requirements or {}).get("location") or ""),
+        str(intervention.problem_addressed or ""),
+    ])
+    for keyword, level in _ROAD_LEVEL_KEYWORDS:
+        if keyword in text:
+            return level
+    return "??"
+
+
+def _road_width_m(intervention: PlanningIntervention) -> float:
+    import re as _re
+
+    text = " ".join([
+        str(intervention.name or ""),
+        str(intervention.scale or ""),
+        str(intervention.problem_addressed or ""),
+    ])
+    match = _re.search(r"(\d+(?:\.\d+)?)\s*?", text)
+    if match:
+        try:
+            return float(match.group(1))
+        except ValueError:
+            return 0.0
+    return 0.0
+
+
+def _road_connects(intervention: PlanningIntervention) -> list[str]:
+    """Extract up to two natural-village endpoints from road prose."""
+    text = " ".join([
+        str((intervention.spatial_requirements or {}).get("location") or ""),
+        str(intervention.name or ""),
+        str(intervention.problem_addressed or ""),
+    ])
+    try:
+        from app.data.ingestion.natural_villages import _KNOWN_NATURAL_VILLAGES
+
+        matches = [
+            (text.find(village), village)
+            for village in _KNOWN_NATURAL_VILLAGES
+            if village in text
+        ]
+        if matches:
+            names = [
+                village if village.endswith("?") else village + "?"
+                for _, village in sorted(matches, key=lambda item: item[0])
+            ]
+            return names[:2]
+    except Exception:
+        pass
+    return []
+
+
 def _to_road_target(intervention: PlanningIntervention) -> RoadTarget:
+    connects = _road_connects(intervention)
     return RoadTarget(
         target_id=intervention.target_id,
-        road_level=intervention.name,
+        road_level=_road_level(intervention),
         execution_mode=intervention.execution_mode,
         expected_output_kind=intervention.expected_output_kind,
-        width_m=0.0,
-        connects=[],
+        width_m=_road_width_m(intervention),
+        connects=connects,
         source_project_id=intervention.intervention_id,
         classification_decision=intervention.classification_decision,
         claim_refs=list(intervention.claim_refs),

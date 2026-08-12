@@ -33,13 +33,17 @@ def build_portfolio_decision(
     score = 0.0
     for item in demand.demands:
         selected = assignments_by_target.get(item.target_id)
-        if item.geometry_kind == "action":
+        if item.geometry_kind in {"action", "line"}:
+            # Line targets (road network) and action targets (non-spatial)
+            # are not parcel allocations; they are handed to EXECUTE workers
+            # directly.  Treating them as unmet parcel demand makes the
+            # portfolio INFEASIBLE and forces SELECT HUMAN deferral.
             output.append(
                 AllocationAssignment(
                     demand_id=item.demand_id,
                     target_id=item.target_id,
-                    status="action",
-                    reason="non_spatial_action",
+                    status="assigned" if item.geometry_kind == "line" else "action",
+                    reason="non_parcel_geometry" if item.geometry_kind == "line" else "non_spatial_action",
                 )
             )
             continue
