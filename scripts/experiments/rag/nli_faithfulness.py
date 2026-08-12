@@ -1,6 +1,6 @@
 """NLI-based Faithfulness and Coverage Evaluation Script.
 
-Uses qwen-flash to perform NLI judgment on cached reports,
+Uses the configured LLM to perform NLI judgment on cached reports,
 evaluating both faithfulness and information coverage.
 
 IMPORTANT: 双维度评估框架
@@ -42,6 +42,19 @@ if str(_BACKEND_ROOT) not in sys.path:
     sys.path.insert(0, str(_BACKEND_ROOT))
 
 logger = logging.getLogger(__name__)
+
+
+async def _invoke_configured_llm(prompt: str) -> str:
+    """Invoke the shared provider-aware LLM with the evaluation defaults."""
+    from app.core.llm import create_llm
+
+    llm = create_llm(
+        temperature=0.1,
+        max_tokens=2000,
+        streaming=False,
+    )
+    response = await asyncio.to_thread(llm.invoke, prompt)
+    return getattr(response, "content", "") or str(response)
 
 
 # ============================================
@@ -199,21 +212,6 @@ async def evaluate_coverage_nli(
         return 0, 0, 1.0
 
     try:
-        import dashscope
-        from dashscope import Generation
-        import os
-
-        api_key = os.getenv("DASHSCOPE_API_KEY")
-        if not api_key:
-            from app.core.settings import DASHSCOPE_API_KEY
-            api_key = DASHSCOPE_API_KEY
-
-        if not api_key:
-            logger.warning("[Coverage] No API key, using rule-based coverage")
-            return _evaluate_coverage_rule(key_facts, report_content)
-
-        dashscope.api_key = api_key
-
         # Build prompt
         facts_text = "\n".join(f"{f.fact_id}. {f.text}" for f in key_facts)
 
@@ -233,27 +231,17 @@ async def evaluate_coverage_nli(
 请返回 JSON 格式：
 {{"results": [{{"id": 1, "verdict": "覆盖"或"未覆盖", "reason": "简要说明"}}, ...]}}"""
 
-        response = await asyncio.to_thread(
-            Generation.call,
-            model="qwen-flash",
-            prompt=prompt,
-            max_tokens=2000,
-            temperature=0.1,
-            result_format="message",
-        )
-
-        if response.status_code == 200:
-            content = response.output.choices[0].message.content
-            json_match = re.search(r'\{[^{}]*"results"[^{}]*\[[^\]]*\][^{}]*\}', content, re.DOTALL)
-            if json_match:
-                data = json.loads(json_match.group())
-                covered = 0
-                for r in data.get("results", []):
-                    if r.get("verdict") == "覆盖":
-                        covered += 1
-                total = len(key_facts)
-                coverage = min(covered / total, 1.0) if total > 0 else 1.0
-                return total, covered, coverage
+        content = await _invoke_configured_llm(prompt)
+        json_match = re.search(r'\{[^{}]*"results"[^{}]*\[[^\]]*\][^{}]*\}', content, re.DOTALL)
+        if json_match:
+            data = json.loads(json_match.group())
+            covered = 0
+            for r in data.get("results", []):
+                if r.get("verdict") == "覆盖":
+                    covered += 1
+            total = len(key_facts)
+            coverage = min(covered / total, 1.0) if total > 0 else 1.0
+            return total, covered, coverage
 
         logger.warning("[Coverage] API call failed, using rule-based")
         return _evaluate_coverage_rule(key_facts, report_content)
@@ -324,33 +312,16 @@ def calculate_rule_faithfulness(claims: List[AtomicClaim], context: str) -> floa
 
 
 # ============================================
-# NLI Judgment via qwen-flash
+# NLI Judgment via the configured LLM
 # ============================================
 
-async def call_qwen_flash_nli(
+async def call_configured_llm_nli(
     claims: List[str],
     knowledge_snippets: str,
     dimension_name: str,
 ) -> List[NLIResult]:
-    """Call qwen-flash for batch NLI judgment."""
+    """Call the configured LLM for batch NLI judgment."""
     try:
-        import dashscope
-        from dashscope import Generation
-
-        # Load API key from environment
-        import os
-        api_key = os.getenv("DASHSCOPE_API_KEY")
-        if not api_key:
-            # Try loading from backend settings
-            from app.core.settings import DASHSCOPE_API_KEY
-            api_key = DASHSCOPE_API_KEY
-
-        if not api_key:
-            logger.warning("[NLI] No DASHSCOPE_API_KEY found, skipping NLI judgment")
-            return []
-
-        dashscope.api_key = api_key
-
         # Build prompt
         claims_text = "\n".join(f"{i+1}. {c}" for i, c in enumerate(claims))
 
@@ -370,32 +341,22 @@ async def call_qwen_flash_nli(
 请返回 JSON 格式：
 {{"results": [{{"id": 1, "verdict": "支持"或"不支持", "reason": "简要说明"}}, ...]}}"""
 
-        response = await asyncio.to_thread(
-            Generation.call,
-            model="qwen-flash",
-            prompt=prompt,
-            max_tokens=2000,
-            temperature=0.1,
-            result_format="message",
-        )
+        content = await _invoke_configured_llm(prompt)
 
-        if response.status_code == 200:
-            content = response.output.choices[0].message.content
+        # Parse JSON from response
+        json_match = re.search(r'\{[^{}]*"results"[^{}]*\[[^\]]*\][^{}]*\}', content, re.DOTALL)
+        if json_match:
+            data = json.loads(json_match.group())
+            results = []
+            for r in data.get("results", []):
+                results.append(NLIResult(
+                    claim_id=r.get("id", 0),
+                    verdict=r.get("verdict", "不支持"),
+                    reason=r.get("reason", ""),
+                ))
+            return results
 
-            # Parse JSON from response
-            json_match = re.search(r'\{[^{}]*"results"[^{}]*\[[^\]]*\][^{}]*\}', content, re.DOTALL)
-            if json_match:
-                data = json.loads(json_match.group())
-                results = []
-                for r in data.get("results", []):
-                    results.append(NLIResult(
-                        claim_id=r.get("id", 0),
-                        verdict=r.get("verdict", "不支持"),
-                        reason=r.get("reason", ""),
-                    ))
-                return results
-
-        logger.warning("[NLI] API call failed: %s", response.status_code)
+        logger.warning("[NLI] Configured LLM returned no parseable result")
         return []
 
     except Exception as e:
@@ -573,7 +534,7 @@ class NLIFaithfulnessAnalyzer:
         if claims:
             faithfulness_rule = calculate_rule_faithfulness(claims, ground_truth)
             claim_texts = [c.text for c in claims]
-            nli_results = await call_qwen_flash_nli(claim_texts, ground_truth, dim_name)
+            nli_results = await call_configured_llm_nli(claim_texts, ground_truth, dim_name)
             supported_nli = sum(1 for r in nli_results if r.verdict == "支持")
             faithfulness_nli = supported_nli / len(claims)
 
@@ -752,8 +713,8 @@ class NLIFaithfulnessAnalyzer:
         lines.extend([
             "## 评估方法说明",
             "",
-            "1. **Faithfulness**: 使用 qwen-flash 判断报告声明是否被 Ground Truth 支持",
-            "2. **Coverage**: 使用 qwen-flash 判断 Ground Truth 关键事实是否被报告覆盖",
+            "1. **Faithfulness**: 使用已配置的 LLM 判断报告声明是否被 Ground Truth 支持",
+            "2. **Coverage**: 使用已配置的 LLM 判断 Ground Truth 关键事实是否被报告覆盖",
             "3. **综合得分**: Faithfulness × Coverage，反映报告的整体质量",
             "",
             "---",

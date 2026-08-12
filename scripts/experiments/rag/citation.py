@@ -912,7 +912,7 @@ async def verify_all_iterations_async(
     llm_extractor = None
     if LLMCitationExtractor is not None:
         llm_extractor = LLMCitationExtractor()
-        logger.info("使用 LLM 提取器（qwen-flash）")
+        logger.info("使用已配置的 LLM 提取器")
     else:
         logger.warning("LLM 提取器不可用，使用正则提取器")
 

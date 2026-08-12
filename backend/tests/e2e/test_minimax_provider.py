@@ -26,6 +26,15 @@ def test_minimax_provider_uses_official_openai_endpoint(monkeypatch):
     assert llm.temperature == 0.01
 
 
+def test_minimax_default_uses_highspeed_model(monkeypatch):
+    from app.core.llm import create_llm
+
+    monkeypatch.setenv("MINIMAX_API_KEY", "test-minimax-key")
+    llm = create_llm(provider="minimax", model=None, max_tokens=8)
+
+    assert llm.model_name == "MiniMax-M2.7-highspeed"
+
+
 def test_minimax_streaming_preflight():
     from app.core.llm import create_llm
 

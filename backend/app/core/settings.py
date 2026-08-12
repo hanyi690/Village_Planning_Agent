@@ -31,18 +31,22 @@ ZHIPUAI_API_KEY = os.getenv("ZHIPUAI_API_KEY")
 DASHSCOPE_API_KEY = os.getenv("DASHSCOPE_API_KEY")
 DASHSCOPE_API_BASE = os.getenv("DASHSCOPE_API_BASE", "https://dashscope.aliyuncs.com/compatible-mode/v1")
 
-# MiniMax OpenAI-compatible backup provider.  Keep this separate from the
+# Implicit LLM calls use MiniMax high-speed unless a provider/model override is
+# supplied explicitly.
+DEFAULT_LLM_MODEL = "MiniMax-M2.7-highspeed"
+
+# MiniMax OpenAI-compatible provider.  Keep this separate from the
 # primary OPENAI_API_KEY/base pair so switching providers cannot silently send
 # a MiniMax key to DashScope (or vice versa).
 MINIMAX_API_KEY = os.getenv("MINIMAX_API_KEY")
 MINIMAX_API_BASE = os.getenv("MINIMAX_API_BASE", "https://api.minimaxi.com/v1")
-MINIMAX_MODEL = os.getenv("MINIMAX_MODEL", "MiniMax-M2.7-highspeed")
+MINIMAX_MODEL = os.getenv("MINIMAX_MODEL", DEFAULT_LLM_MODEL)
 
 # LLM Configuration
 # MiniMax is the default provider; every model setting remains explicitly
 # overridable for controlled experiments and provider-specific deployments.
 LLM_PROVIDER = os.getenv("LLM_PROVIDER", "minimax")
-LLM_MODEL = os.getenv("LLM_MODEL", "MiniMax-M2.7-highspeed")
+LLM_MODEL = os.getenv("LLM_MODEL", DEFAULT_LLM_MODEL)
 MAX_TOKENS = int(os.getenv("MAX_TOKENS", "8192"))
 
 # LLM Request Timeout (seconds)
@@ -357,7 +361,7 @@ SSE_QUEUE_SIZE = 2000
 # ==========================================
 
 MULTIMODAL_ENABLED = os.getenv("MULTIMODAL_ENABLED", "false").lower() == "true"
-MULTIMODAL_MODEL = os.getenv("MULTIMODAL_MODEL", "MiniMax-M2.7-highspeed")
+MULTIMODAL_MODEL = os.getenv("MULTIMODAL_MODEL", DEFAULT_LLM_MODEL)
 IMAGE_DETAIL_LEVEL = os.getenv("IMAGE_DETAIL_LEVEL", "auto")  # "low", "high", or "auto"
 MAX_IMAGE_SIZE_MULTIMODAL = int(os.getenv("MAX_IMAGE_SIZE_MULTIMODAL", "10_000_000"))  # 10MB
 DEFAULT_IMAGE_FORMAT = os.getenv("DEFAULT_IMAGE_FORMAT", "jpeg")  # jpeg, png, gif, webp
@@ -366,9 +370,9 @@ DEFAULT_IMAGE_FORMAT = os.getenv("DEFAULT_IMAGE_FORMAT", "jpeg")  # jpeg, png, g
 # Flash Model Configuration (OpenAI-compatible format via DashScope)
 # ==========================================
 # Flash model is used for lightweight tasks: summaries, keyword extraction, etc.
-# Uses DashScope's OpenAI-compatible endpoint for unified calling pattern.
+# Uses the active provider's OpenAI-compatible endpoint for unified calling.
 
-FLASH_MODEL_NAME = os.getenv("FLASH_MODEL_NAME", "MiniMax-M2.7-highspeed")
+FLASH_MODEL_NAME = os.getenv("FLASH_MODEL_NAME", DEFAULT_LLM_MODEL)
 FLASH_MODEL_MAX_TOKENS = int(os.getenv("FLASH_MODEL_MAX_TOKENS", "500"))
 FLASH_MODEL_TEMPERATURE = float(os.getenv("FLASH_MODEL_TEMPERATURE", "0.3"))
 
@@ -381,13 +385,13 @@ FLASH_MODEL_TEMPERATURE = float(os.getenv("FLASH_MODEL_TEMPERATURE", "0.3"))
 #
 # - GIS_EXPLORE_LLM_ENABLED: master switch.  When False, ExploreFlashAgent
 #   falls back to its deterministic baseline (no LLM calls).
-# - GIS_EXPLORE_MODEL: dedicated Flash model name (DashScope qwen-flash by
+# - GIS_EXPLORE_MODEL: dedicated Flash model name (MiniMax high-speed by
 #   default).
 # - GIS_EXPLORE_TEMPERATURE: lower than the main analysis LLM (0.1) so domain
 #   classification / BSM extraction stay reproducible.
 # - GIS_EXPLORE_MAX_TOKENS: budget for per-call Flash responses.
 
 GIS_EXPLORE_LLM_ENABLED = os.getenv("GIS_EXPLORE_LLM_ENABLED", "true").lower() in {"1", "true", "yes"}
-GIS_EXPLORE_MODEL = os.getenv("GIS_EXPLORE_MODEL", "MiniMax-M2.7-highspeed")
+GIS_EXPLORE_MODEL = os.getenv("GIS_EXPLORE_MODEL", DEFAULT_LLM_MODEL)
 GIS_EXPLORE_MAX_TOKENS = int(os.getenv("GIS_EXPLORE_MAX_TOKENS", "1200"))
 GIS_EXPLORE_TEMPERATURE = float(os.getenv("GIS_EXPLORE_TEMPERATURE", "0.1"))

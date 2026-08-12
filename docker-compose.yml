@@ -20,13 +20,16 @@ services:
       # LLM Configuration
       - OPENAI_API_KEY=${OPENAI_API_KEY}
       - OPENAI_API_BASE=${OPENAI_API_BASE}
-      - LLM_MODEL=${LLM_MODEL:-qwen3.5-plus}
-      - LLM_PROVIDER=${LLM_PROVIDER:-openai}
+      - MINIMAX_API_KEY=${MINIMAX_API_KEY}
+      - MINIMAX_API_BASE=${MINIMAX_API_BASE:-https://api.minimaxi.com/v1}
+      - MINIMAX_MODEL=${MINIMAX_MODEL:-MiniMax-M2.7-highspeed}
+      - LLM_MODEL=${LLM_MODEL:-MiniMax-M2.7-highspeed}
+      - LLM_PROVIDER=${LLM_PROVIDER:-minimax}
       - ALLOWED_ORIGINS=${ALLOWED_ORIGINS}
       - MAX_TOKENS=${MAX_TOKENS:-65536}
       - MULTIMODAL_ENABLED=${MULTIMODAL_ENABLED:-true}
-      - OCR_MODEL_NAME=${OCR_MODEL_NAME:-qwen-vl-max}
-      # LLM Concurrency Control (DashScope qwen3.5-plus: 500 rps, 30000 rpm)
+      - OCR_MODEL_NAME=${OCR_MODEL_NAME:-MiniMax-M2.7-highspeed}
+      # LLM Concurrency Control (override for the selected provider)
       - LLM_MAX_CONCURRENT=${LLM_MAX_CONCURRENT:-50}
       - LLM_STREAM_TIMEOUT=${LLM_STREAM_TIMEOUT:-300}
       - GRAPH_MAX_CONCURRENCY=${GRAPH_MAX_CONCURRENCY:-50}

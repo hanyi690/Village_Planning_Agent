@@ -340,7 +340,7 @@ def get_zhipuai_llm(
 
 
 def get_minimax_llm(
-    model: str = "MiniMax-M2.7-highspeed",
+    model: Optional[str] = None,
     temperature: float = 0.7,
     max_tokens: int = 2000,
     callbacks: Optional[List[Any]] = None,
@@ -348,8 +348,10 @@ def get_minimax_llm(
     **kwargs,
 ) -> Any:
     """Get a MiniMax LLM explicitly through the OpenAI-compatible endpoint."""
+    from app.core.settings import MINIMAX_MODEL
+
     return _create_minimax_llm(
-        model, temperature, max_tokens,
+        model or MINIMAX_MODEL, temperature, max_tokens,
         callbacks=callbacks, metadata=metadata, **kwargs
     )
 
@@ -363,10 +365,9 @@ def create_flash_llm(
     **kwargs
 ) -> Any:
     """Create a Flash model instance for lightweight tasks."""
-    # Flash callers historically supplied the DashScope-only ``qwen-flash``
-    # name.  When the active provider is MiniMax that name is invalid; route
-    # through the same provider-aware factory and let its configured default
-    # model be selected instead of sending a cross-provider model id.
+    # Flash callers historically supplied provider-specific model names. When
+    # the active provider is MiniMax, route through the same provider-aware
+    # factory and let its configured default model be selected.
     if get_provider() == LLMProvider.MINIMAX:
         return create_llm(
             temperature=temperature if temperature is not None else 0.3,

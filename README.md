@@ -88,18 +88,19 @@ cd frontend && npm install
 复制 `.env.example` 为 `.env` 并填写：
 
 ```env
-# LLM 配置（默认 qwen-plus 系列，阿里云 DashScope）
-LLM_PROVIDER=openai                       # openai | deepseek | zhipuai | minimax
-OPENAI_API_KEY=your_dashscope_api_key
-OPENAI_API_BASE=https://dashscope.aliyuncs.com/compatible-mode/v1
-LLM_MODEL=qwen-plus                       # qwen-plus | qwen3.5-plus | deepseek-chat | gpt-4o
+# LLM 配置（默认 MiniMax 高速模式）
+LLM_PROVIDER=minimax                      # minimax | openai | deepseek | zhipuai
+MINIMAX_API_KEY=your_minimax_api_key
+MINIMAX_API_BASE=https://api.minimaxi.com/v1
+MINIMAX_MODEL=MiniMax-M2.7-highspeed
+LLM_MODEL=MiniMax-M2.7-highspeed
 MAX_TOKENS=65536
 
-# MiniMax 备用（显式切换，不自动重复 fallback）
-# LLM_PROVIDER=minimax
-# MINIMAX_API_KEY=your_minimax_api_key
-# MINIMAX_API_BASE=https://api.minimaxi.com/v1
-# MINIMAX_MODEL=MiniMax-M2.7
+# OpenAI-compatible / DashScope（显式切换）
+# LLM_PROVIDER=openai
+# OPENAI_API_KEY=your_dashscope_api_key
+# OPENAI_API_BASE=https://dashscope.aliyuncs.com/compatible-mode/v1
+# LLM_MODEL=qwen-plus
 
 # Embedding（推荐阿里云 DashScope，内存占用低）
 EMBEDDING_PROVIDER=aliyun
@@ -108,10 +109,10 @@ ALIYUN_EMBEDDING_MODEL=text-embedding-v4
 
 # 多模态（可选）
 MULTIMODAL_ENABLED=true
-MULTIMODAL_MODEL=qwen3.5-plus
+MULTIMODAL_MODEL=MiniMax-M2.7-highspeed
 ```
 
-> 支持 DeepSeek / OpenAI / 智谱AI / MiniMax 切换，均通过现有 OpenAI 兼容工厂；MiniMax 作为备用时显式设置 `LLM_PROVIDER=minimax`。
+> 支持 DeepSeek / OpenAI / 智谱AI / MiniMax 切换，均通过现有 OpenAI 兼容工厂；未显式设置时使用 MiniMax 高速模式。
 
 ### 启动
 
