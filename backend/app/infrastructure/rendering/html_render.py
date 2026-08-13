@@ -7,7 +7,11 @@ import json
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Sequence, Tuple
 
-from app.infrastructure.rendering.static_render import _coordinates, _feature_color
+from app.infrastructure.rendering.static_render import (
+    _coordinates,
+    _feature_color,
+    _road_style,
+)
 
 
 Point = Tuple[float, float]
@@ -31,7 +35,7 @@ def _reference_extent(layers: Sequence[Dict[str, Any]]) -> Tuple[float, float, f
         layer_name = layer.get("layerName") or layer.get("layer_name") or ""
         if layer_type == "boundary":
             boundary.extend(points)
-        if layer_name == "current_landuse":
+        if layer_type == "current_landuse":
             current_landuse.extend(points)
     points = boundary or current_landuse or all_points
     if not points:
@@ -89,6 +93,7 @@ def _geometry_svg(
     color: str,
     layer_type: str,
     attrs: str,
+    properties: Dict[str, Any] | None = None,
 ) -> str:
     geometry_type = geometry.get("type", "")
     coordinates = geometry.get("coordinates") or []
@@ -102,8 +107,9 @@ def _geometry_svg(
         if not visible(point):
             return ""
         x, y = project(point)
+        radius = "5.2" if layer_type in {"planned_project_point", "facility_point", "planned_facility"} else "3.2"
         return (
-            f'<circle cx="{x:.2f}" cy="{y:.2f}" r="3.2" fill="{color}" '
+            f'<circle cx="{x:.2f}" cy="{y:.2f}" r="{radius}" fill="{color}" '
             f'stroke="#ffffff" stroke-width="1" {attrs}/>'
         )
     if geometry_type == "MultiPoint":
@@ -115,6 +121,7 @@ def _geometry_svg(
                 color,
                 layer_type,
                 attrs,
+                properties,
             )
             for point in coordinates
         )
@@ -123,10 +130,20 @@ def _geometry_svg(
         if not points or not any(visible(point) for point in points):
             return ""
         path = _path(points, project)
-        width = "2.2" if "road" in layer_type else "1.8"
+        dash = ""
+        if layer_type == "planned_road":
+            road_style = _road_style(properties or {})
+            color = road_style["color"]
+            width = str(max(4, road_style["width"]))
+            if road_style["dash"]:
+                dash = f' stroke-dasharray="{road_style["dash"][0]} {road_style["dash"][1]}"'
+        elif layer_type == "current_road":
+            color, width = "#64748b", "1.5"
+        else:
+            width = "1.8"
         return (
             f'<path d="{path}" fill="none" stroke="{color}" '
-            f'stroke-width="{width}" stroke-linecap="round" {attrs}/>'
+            f'stroke-width="{width}" stroke-linecap="round"{dash} {attrs}/>'
         )
     if geometry_type == "MultiLineString":
         return "".join(
@@ -137,6 +154,7 @@ def _geometry_svg(
                 color,
                 layer_type,
                 attrs,
+                properties,
             )
             for line in coordinates
         )
@@ -148,6 +166,9 @@ def _geometry_svg(
                 paths.append(_path(points, project, close=True))
         if not paths:
             return ""
+        if layer_type == "planned_changes":
+            fill, fill_opacity, stroke_width = "#dc2626", "0.32", "3.2"
+            color = "#b91c1c"
         return (
             f'<path d="{" ".join(paths)}" fill="{fill}" fill-opacity="{fill_opacity}" '
             f'stroke="{color}" stroke-width="{stroke_width}" fill-rule="evenodd" {attrs}/>'
@@ -161,6 +182,7 @@ def _geometry_svg(
                 color,
                 layer_type,
                 attrs,
+                properties,
             )
             for polygon in coordinates
         )
@@ -183,6 +205,8 @@ def _display_properties(properties: Dict[str, Any]) -> str:
         "area_ha",
         "area_sqm",
         "operation",
+        "action",
+        "road_level",
         "requires_human_confirmation",
         "location_status",
     )
@@ -222,7 +246,11 @@ def render_interactive_map(
         elements: List[str] = []
         for feature in features:
             properties = feature.get("properties") or {}
-            color = _feature_color(properties, fallback)
+            color = (
+                fallback
+                if layer.get("force_layer_colors")
+                else _feature_color(properties, fallback)
+            )
             zone_name = (
                 properties.get("zone_name")
                 or properties.get("category_name_zh")
@@ -252,6 +280,7 @@ def render_interactive_map(
                 color,
                 str(layer_type),
                 attrs,
+                properties,
             )
             if element:
                 elements.append(element)
@@ -298,10 +327,32 @@ def render_interactive_map(
             "</label>"
         )
 
+    visible_types = {
+        str(layer.get("layerType") or layer.get("layer_type") or "")
+        for layer in layers
+        if (layer.get("geojson") or {}).get("features")
+    }
+    effective_issues = list(issues or [])
+    existing_codes = {str(item.get("code") or "") for item in effective_issues}
+    if "complete_planned_landuse" in visible_types:
+        if "planned_road" not in visible_types and "PLANNED_ROAD_NOT_GENERATED" not in existing_codes:
+            effective_issues.append({
+                "code": "PLANNED_ROAD_NOT_GENERATED",
+                "message": "规划道路未生成；未使用示意线替代权威道路几何。",
+            })
+        zone_types = {
+            "function_zone", "planning_zone", "custom_planning_zone",
+            "custom_functional_zone", "restoration_zone", "protection_zone",
+        }
+        if not visible_types.intersection(zone_types) and "PLANNED_ZONE_NOT_GENERATED" not in existing_codes:
+            effective_issues.append({
+                "code": "PLANNED_ZONE_NOT_GENERATED",
+                "message": "规划分区未生成；未使用现状地类冒充规划分区。",
+            })
     issue_items = "".join(
         f"<li><code>{html.escape(str(item.get('code', 'issue')))}</code> "
         f"{html.escape(str(item.get('message', '')))}</li>"
-        for item in (issues or [])
+        for item in effective_issues
     )
     issue_panel = (
         f'<section class="issues"><h3>可行性提示</h3><ul>{issue_items}</ul></section>'

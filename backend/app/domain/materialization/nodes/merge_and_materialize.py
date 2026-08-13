@@ -1,28 +1,58 @@
-"""Merge / geometry-materialize / planned-state-builder nodes."""
+"""Merge, geometry confirmation, and authoritative PlannedState nodes."""
 
 from __future__ import annotations
 
+from collections import defaultdict
 from typing import Any, Dict, List
 
 from app.domain.materialization.execute_state import ExecuteAgentState
-from app.domain.materialization.nodes.worker_common import _execution_intent_from_plan, _worker_result_get
+from app.domain.materialization.nodes.worker_common import (
+    _execution_intent_from_plan,
+    _worker_result_get,
+)
+
+
+def _blocking_conflicts(diagnostics: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [item for item in diagnostics or [] if bool(item.get("blocking"))]
+
+
+def _planned_state_blocked_update(
+    diagnostics: list[dict[str, Any]],
+) -> dict[str, Any]:
+    return {
+        "planned_state": None,
+        "execution_errors": [
+            {
+                "code": "planned_state_blocked_by_conflict",
+                "message": (
+                    "Authoritative parcel ownership conflicts must be resolved "
+                    "before PlannedState is written."
+                ),
+                "diagnostics": diagnostics,
+            }
+        ],
+    }
 
 
 async def _merge_worker_results_node(state: ExecuteAgentState) -> dict:
-    """Merge all WorkerResults into a unified ParcelChangeSet + layout_configs."""
+    """Merge WorkerResults and erase conflicting authoritative writes."""
     from app.domain.materialization.merge import merge_worker_results
 
     changeset, layout_configs, diagnostics, action_results = merge_worker_results(
         list(state.worker_results)
     )
+    blockers = _blocking_conflicts(diagnostics)
     update: Dict[str, Any] = {
-        "parcel_changeset": changeset,
+        "parcel_changeset": None if blockers else changeset,
         "layout_configs": layout_configs,
         "worker_conflict_diagnostics": diagnostics,
         "action_results": action_results,
     }
-    if changeset is not None:
+    if changeset is not None and not blockers:
         update["parcel_changes"] = list(changeset.changes)
+
+    if blockers:
+        update.update(_planned_state_blocked_update(blockers))
 
     unresolved = []
     for result in state.worker_results:
@@ -35,12 +65,7 @@ async def _merge_worker_results_node(state: ExecuteAgentState) -> dict:
 
 
 async def _geometry_materialize_node(state: ExecuteAgentState) -> dict:
-    """Confirm the already-determined geometry operations (no site selection).
-
-    Lightweight confirmation: the design phase produced the ParcelChanges; this
-    node only validates that geometry-mutating changes carry a usable
-    ``after_geometry_wkt`` so the later checks can trust the changeset.
-    """
+    """Confirm already-determined geometry operations without re-siting."""
     changeset = state.parcel_changeset
     diagnostics: List[Dict[str, Any]] = []
     geometry_valid = True
@@ -64,10 +89,274 @@ async def _geometry_materialize_node(state: ExecuteAgentState) -> dict:
     return {"geometry_materialize_report": report}
 
 
-async def _planned_state_builder_node(state: ExecuteAgentState) -> dict:
-    """Produce the authoritative PlannedState from the merged ParcelChangeSet."""
-    from app.domain.materialization.planned_state_builder import changeset_to_planned_state
+def _layer_features(
+    layout_configs: list[dict[str, Any]],
+    layer_types: set[str],
+):
+    for layer in layout_configs or []:
+        if not isinstance(layer, dict):
+            continue
+        layer_type = str(layer.get("layerType") or layer.get("layer_type") or "")
+        if layer_type not in layer_types:
+            continue
+        data = layer.get("data") or layer.get("geojson") or {}
+        for feature in data.get("features") or []:
+            if isinstance(feature, dict):
+                yield feature
 
+
+def _shape_geometry(feature: dict[str, Any]):
+    geometry = feature.get("geometry")
+    if not isinstance(geometry, dict) or not geometry.get("type"):
+        return None
+    try:
+        from shapely.geometry import shape
+
+        value = shape(geometry)
+        if value.is_empty or not value.is_valid:
+            return None
+        return value
+    except Exception:
+        return None
+
+
+def _enrich_planned_state(
+    planned_state: Any,
+    layout_configs: list[dict[str, Any]],
+) -> tuple[Any | None, list[dict[str, Any]]]:
+    from shapely.ops import unary_union
+
+    from app.contracts.spatial.planned_state_contracts import (
+        PlannedZone,
+        PlannedZoneOverlay,
+    )
+
+    assignment_features = list(_layer_features(
+        layout_configs,
+        {"authoritative_zone_assignment"},
+    ))
+    assignment_by_bsm: dict[str, tuple[dict[str, Any], Any]] = {}
+    diagnostics: list[dict[str, Any]] = []
+    for feature in assignment_features:
+        properties = dict(feature.get("properties") or {})
+        bsm = str(properties.get("bsm") or "")
+        geometry = _shape_geometry(feature)
+        required_values = (
+            properties.get("target_id"),
+            properties.get("zone_id"),
+            properties.get("project_ref"),
+            properties.get("lineage_id"),
+            properties.get("classification_system"),
+            properties.get("classification_code"),
+            properties.get("geometry_ref"),
+        )
+        if (
+            not bsm
+            or geometry is None
+            or properties.get("materialization_role") != "land_use_assignment"
+            or any(not str(value or "") for value in required_values)
+        ):
+            diagnostics.append({
+                "code": "authoritative_assignment_layer_invalid",
+                "blocking": True,
+                "bsm": bsm,
+            })
+            continue
+        if bsm in assignment_by_bsm:
+            diagnostics.append({
+                "code": "authoritative_assignment_layer_duplicate_bsm",
+                "blocking": True,
+                "bsm": bsm,
+            })
+            continue
+        assignment_by_bsm[bsm] = (properties, geometry)
+
+    planned_bsms = {parcel.bsm for parcel in planned_state.parcels}
+    for bsm in sorted(set(assignment_by_bsm) - planned_bsms):
+        diagnostics.append({
+            "code": "assignment_layer_without_parcel_change",
+            "blocking": True,
+            "bsm": bsm,
+        })
+    if diagnostics:
+        return None, diagnostics
+
+    parcels = []
+    for parcel in planned_state.parcels:
+        entry = assignment_by_bsm.get(parcel.bsm)
+        if entry is None:
+            parcels.append(parcel)
+            continue
+        properties, _geometry = entry
+        if (
+            str(parcel.planning_land_use or "")
+            != str(properties.get("classification_code") or "")
+            or str(parcel.project_ref or "")
+            != str(properties.get("project_ref") or "")
+        ):
+            diagnostics.append({
+                "code": "assignment_layer_change_mismatch",
+                "blocking": True,
+                "bsm": parcel.bsm,
+            })
+            continue
+        parcels.append(parcel.model_copy(update={
+            "project_ref": str(properties.get("project_ref") or ""),
+            "target_ref": str(properties.get("target_id") or ""),
+            "derived_from_zone_target": str(properties.get("target_id") or ""),
+            "lineage_id": str(properties.get("lineage_id") or ""),
+            "claim_refs": list(properties.get("claim_refs") or []),
+            "source_instruction_id": str(
+                properties.get("source_instruction_id") or ""
+            ),
+            "source_report_key": str(properties.get("source_report_key") or ""),
+            "geometry_ref": str(properties.get("geometry_ref") or ""),
+            "classification_system": str(
+                properties.get("classification_system") or ""
+            ),
+            "classification_code": str(
+                properties.get("classification_code") or ""
+            ),
+            "zone_type": str(properties.get("zone_id") or ""),
+        }))
+
+    if diagnostics:
+        return None, diagnostics
+
+    zone_groups: dict[str, list[tuple[str, dict[str, Any], Any]]] = defaultdict(list)
+    for bsm, (properties, geometry) in assignment_by_bsm.items():
+        zone_id = str(
+            properties.get("zone_id")
+            or properties.get("target_id")
+            or ""
+        )
+        zone_groups[zone_id].append((bsm, properties, geometry))
+
+    zones = []
+    for zone_id, entries in sorted(zone_groups.items()):
+        first = entries[0][1]
+        signatures = {
+            (
+                str(item[1].get("target_id") or ""),
+                str(item[1].get("project_ref") or ""),
+                str(item[1].get("classification_system") or ""),
+                str(item[1].get("classification_code") or ""),
+                str(item[1].get("planning_land_use") or ""),
+            )
+            for item in entries
+        }
+        if len(signatures) != 1:
+            diagnostics.append({
+                "code": "authoritative_zone_group_inconsistent",
+                "blocking": True,
+                "zone_id": zone_id,
+                "bsms": sorted(item[0] for item in entries),
+            })
+            continue
+        unioned = unary_union([entry[2] for entry in entries])
+        target_id = str(first.get("target_id") or "")
+        zones.append(PlannedZone(
+            zone_id=zone_id,
+            zone_type=zone_id,
+            planning_land_use=str(first.get("planning_land_use") or ""),
+            classification_system=str(first.get("classification_system") or ""),
+            classification_code=str(first.get("classification_code") or ""),
+            area_ha=round(sum(float(item[1].get("area_ha") or 0) for item in entries), 6),
+            name=str(first.get("planning_land_use") or zone_id),
+            geometry=unioned.wkt,
+            derived_from_zone_target=target_id,
+            target_ref=target_id,
+            project_ref=str(first.get("project_ref") or ""),
+            parcel_bsms=sorted(item[0] for item in entries),
+            lineage_ids=sorted(
+                str(item[1].get("lineage_id") or "")
+                for item in entries
+                if str(item[1].get("lineage_id") or "")
+            ),
+            claim_refs=sorted({
+                str(claim_ref)
+                for item in entries
+                for claim_ref in item[1].get("claim_refs") or []
+                if str(claim_ref)
+            }),
+        ))
+
+    if diagnostics:
+        return None, diagnostics
+
+    overlay_types = {
+        "functional_zone_overlay",
+        "protection_overlay",
+        "restoration_overlay",
+    }
+    overlay_groups: dict[tuple[str, str], list[tuple[str, dict[str, Any], Any]]] = (
+        defaultdict(list)
+    )
+    for feature in _layer_features(layout_configs, overlay_types):
+        properties = dict(feature.get("properties") or {})
+        role = str(properties.get("materialization_role") or "")
+        target_id = str(properties.get("target_id") or "")
+        bsm = str(properties.get("bsm") or "")
+        geometry = _shape_geometry(feature)
+        if role not in {
+            "functional_overlay",
+            "protection_overlay",
+            "restoration_overlay",
+        } or not target_id or geometry is None:
+            diagnostics.append({
+                "code": "zone_overlay_layer_invalid",
+                "blocking": True,
+                "target_id": target_id,
+                "bsm": bsm,
+            })
+            continue
+        overlay_groups[(role, target_id)].append((bsm, properties, geometry))
+    if diagnostics:
+        return None, diagnostics
+
+    overlays = []
+    for (role, target_id), entries in sorted(overlay_groups.items()):
+        unioned = unary_union([entry[2] for entry in entries])
+        first = entries[0][1]
+        overlays.append(PlannedZoneOverlay(
+            overlay_id=target_id,
+            materialization_role=role,
+            name=str(first.get("category_code") or target_id),
+            geometry=unioned.wkt,
+            target_ref=target_id,
+            project_ref=str(first.get("project_ref") or ""),
+            derived_from_bsms=sorted({
+                item[0] for item in entries if item[0]
+            }),
+            lineage_refs=sorted({
+                str(item[1].get("lineage_id") or "")
+                for item in entries
+                if str(item[1].get("lineage_id") or "")
+            }),
+            provenance_refs=sorted({
+                str(ref)
+                for item in entries
+                for ref in item[1].get("provenance_refs") or []
+                if str(ref)
+            }),
+        ))
+
+    return planned_state.model_copy(update={
+        "parcels": parcels,
+        "zones": zones,
+        "overlays": overlays,
+    }), []
+
+
+async def _planned_state_builder_node(state: ExecuteAgentState) -> dict:
+    """Produce PlannedState only when authoritative ownership is conflict-free."""
+    from app.domain.materialization.planned_state_builder import (
+        changeset_to_planned_state,
+    )
+
+    blockers = _blocking_conflicts(list(state.worker_conflict_diagnostics or []))
+    if blockers:
+        return _planned_state_blocked_update(blockers)
     if state.parcel_changeset is None:
         return {}
     planned_state = changeset_to_planned_state(
@@ -75,4 +364,17 @@ async def _planned_state_builder_node(state: ExecuteAgentState) -> dict:
         _execution_intent_from_plan(state),
         list(state.layout_configs or []),
     )
-    return {"planned_state": planned_state}
+    enriched, diagnostics = _enrich_planned_state(
+        planned_state,
+        list(state.layout_configs or []),
+    )
+    if diagnostics:
+        return _planned_state_blocked_update(diagnostics)
+    return {"planned_state": enriched}
+
+
+__all__ = [
+    "_geometry_materialize_node",
+    "_merge_worker_results_node",
+    "_planned_state_builder_node",
+]

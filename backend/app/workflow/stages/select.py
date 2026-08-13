@@ -35,15 +35,70 @@ def _to_typed(data: Any, cls: type) -> Any:
     return data
 
 
+def _ref_digest(ref: Any) -> str:
+    if isinstance(ref, dict):
+        return str(ref.get("digest") or ref.get("descriptor_digest") or "")
+    return str(getattr(ref, "digest", "") or getattr(ref, "descriptor_digest", "") or "")
+
+
+def _apply_repair_directives(plan_intent: Any, compilation: Any) -> Any:
+    """Apply only closed SELECT directives to an isolated intent revision."""
+    if compilation is None or str(getattr(compilation, "status", "")) != "ready":
+        return plan_intent
+    revised = plan_intent.model_copy(deep=True)
+    targets = {
+        str(getattr(target, "target_id", "")): target
+        for field_name in (
+            "project_targets",
+            "zone_targets",
+            "facilities",
+            "development_axes",
+            "road_targets",
+        )
+        for target in list(getattr(revised, field_name, None) or [])
+        if str(getattr(target, "target_id", ""))
+    }
+    for directive in list(getattr(compilation, "directives", None) or []):
+        directive_type = str(getattr(directive, "directive_type", ""))
+        if directive_type not in {"exclude_bsms", "reallocate"}:
+            continue
+        target = targets.get(str(getattr(directive, "target_id", "")))
+        if target is None:
+            continue
+        excluded = set(getattr(directive, "exclude_bsms", None) or [])
+        excluded.update(getattr(directive, "affected_bsms", None) or [])
+        if hasattr(target, "excluded_bsms"):
+            target.excluded_bsms = sorted({
+                *list(getattr(target, "excluded_bsms", None) or []),
+                *excluded,
+            })
+        if hasattr(target, "candidate_bsms"):
+            target.candidate_bsms = [
+                bsm
+                for bsm in list(getattr(target, "candidate_bsms", None) or [])
+                if bsm not in excluded
+            ]
+        if hasattr(target, "path_bsms"):
+            target.path_bsms = [
+                bsm
+                for bsm in list(getattr(target, "path_bsms", None) or [])
+                if bsm not in excluded
+            ]
+    return revised
+
+
 async def select_node(state: Dict[str, Any]) -> Dict[str, Any]:
     """SELECT node: GroundingResult + intent + context -> SiteSelectionDecision."""
     from app.domain.materialization.plan_builder import build_execution_plan
     from app.domain.allocation.select_service import select_aggregate
+    from app.domain.allocation.global_zone_select import allocate_zones_for_select
+    from app.domain.allocation.global_site_select import allocate_non_zone_for_select
     from app.domain.allocation.select_gate import evaluate_select_gate
     from app.contracts.artifacts.deferral_contracts import DeferralLedger
     from app.contracts.spatial.grounding_contracts import GroundingResult
     from app.contracts.workflow.parse_contracts import SpatialPlanningIntent
     from app.contracts.workflow.parse_result_contracts import IntentCompilationResult
+    from app.contracts.workflow.repair_directive_contracts import RepairDirectiveCompilation
 
     retry_patch = _retry_patch(state, "select")
     context = await _require_context(state)
@@ -53,11 +108,53 @@ async def select_node(state: Dict[str, Any]) -> Dict[str, Any]:
         getattr(intent, "typed_intent", None) or intent,
         SpatialPlanningIntent,
     )
+    repair_directives = _load_ref_artifact(
+        state,
+        "repair_directives",
+        RepairDirectiveCompilation,
+    )
+    plan_intent = _apply_repair_directives(plan_intent, repair_directives)
     deferral_ledger = _load_ref_artifact(state, "deferral_ledger", DeferralLedger)
     try:
         async with asyncio.timeout(max(30, int(GIS_TIMEOUT) * 4)):
+            from app.data.catalog import DataCatalog
+            from app.infrastructure.paths import session_run_dir
+
+            suitability_surface = await asyncio.to_thread(
+                build_suitability_surface,
+                grounding,
+                context,
+                catalog=DataCatalog(),
+                cache_dir=session_run_dir(_run_id(state)) / "terrain-evidence",
+            )
+            zone_allocation = await asyncio.to_thread(
+                allocate_zones_for_select,
+                plan_intent,
+                suitability_surface,
+                context,
+                provenance_refs=[
+                    _ref_digest((state.get("artifact_refs") or {}).get("grounding_result")),
+                    _ref_digest((state.get("artifact_refs") or {}).get("target_projection")),
+                ],
+            )
+            site_allocation = await asyncio.to_thread(
+                allocate_non_zone_for_select,
+                plan_intent,
+                suitability_surface,
+                context,
+                provenance_refs=[
+                    _ref_digest((state.get("artifact_refs") or {}).get("grounding_result")),
+                    _ref_digest((state.get("artifact_refs") or {}).get("target_projection")),
+                ],
+            )
             decision, briefs = await asyncio.to_thread(
-                select_aggregate, grounding, plan_intent, context
+                select_aggregate,
+                grounding,
+                plan_intent,
+                context,
+                suitability_surface,
+                zone_allocation,
+                site_allocation,
             )
     except TimeoutError as exc:
         logger.error("[workflow:select] aggregate timeout; failing closed")
@@ -69,7 +166,6 @@ async def select_node(state: Dict[str, Any]) -> Dict[str, Any]:
         plan_intent,
         claims=list(getattr(intent, "claims", None) or []),
     )
-    suitability_surface = build_suitability_surface(grounding)
     portfolio_decision = build_portfolio_decision(
         demand_portfolio,
         suitability_surface,
@@ -91,20 +187,45 @@ async def select_node(state: Dict[str, Any]) -> Dict[str, Any]:
     if suitability_ref:
         artifact_refs["suitability_surface"] = suitability_ref
         output_refs["suitability_surface"] = suitability_ref
+    zone_allocation_ref = persist_stage_artifact(
+        artifact_state,
+        "select",
+        "GlobalZoneAllocationResult",
+        zone_allocation,
+    )
+    if zone_allocation_ref:
+        artifact_refs["global_zone_allocation"] = zone_allocation_ref
+        output_refs["global_zone_allocation"] = zone_allocation_ref
+    site_allocation_ref = persist_stage_artifact(
+        artifact_state,
+        "select",
+        "GlobalSiteAllocationResult",
+        site_allocation,
+    )
+    if site_allocation_ref:
+        artifact_refs["global_site_allocation"] = site_allocation_ref
+        output_refs["global_site_allocation"] = site_allocation_ref
     portfolio_ref = persist_stage_artifact(
         artifact_state, "select", "PortfolioDecision", portfolio_decision
     )
     if portfolio_ref:
         artifact_refs["portfolio_decision"] = portfolio_ref
         output_refs["portfolio_decision"] = portfolio_ref
-    spatial_projects = [
-        project
-        for project in (getattr(plan_intent, "project_targets", None) or [])
-        if getattr(project, "requires_spatial", True)
+    spatial_targets = [
+        target
+        for field_name in (
+            "project_targets",
+            "zone_targets",
+            "facilities",
+            "development_axes",
+            "road_targets",
+        )
+        for target in (getattr(plan_intent, field_name, None) or [])
+        if getattr(target, "requires_spatial", True)
     ]
     gate = evaluate_select_gate(
         decision,
-        target_count=len(spatial_projects),
+        target_count=len(spatial_targets),
         input_artifact_refs=artifact_refs,
         previous_gate=state.get("select_gate"),
         portfolio_decision=portfolio_decision,
@@ -116,7 +237,8 @@ async def select_node(state: Dict[str, Any]) -> Dict[str, Any]:
         run_id=_run_id(state),
         context_version=_context_version(state),
         deferral_ledger=deferral_ledger,
-        portfolio_decision_ref=str((portfolio_ref or {}).get("digest") or ""),
+        portfolio_decision_ref=_ref_digest(portfolio_ref),
+        global_zone_allocation_ref=_ref_digest(zone_allocation_ref),
     )
     ref = persist_stage_artifact(
         artifact_state, "select", "SiteSelectionDecision", decision

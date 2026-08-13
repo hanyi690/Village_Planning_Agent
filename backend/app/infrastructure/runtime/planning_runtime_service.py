@@ -865,8 +865,15 @@ class PlanningRuntimeService:
                 fork_state = state_values or await cls.aget_state_values(session_id) or {}
                 updates["artifact_refs"] = fork_artifact_refs(fork_state, branch_id)
                 updates["branch_id"] = branch_id
-            raw_snapshot = await cls.aget_state(session_id)
-            raw_state = dict(raw_snapshot.values or {}) if raw_snapshot else {}
+            if checkpoint_id and state_values is not None:
+                # Historical replay must build its update against the selected
+                # checkpoint values.  Reading the thread head here would fold
+                # later fatal/HUMAN state back into the historical branch and
+                # make a nominal L3 resume behave like a latest-state retry.
+                raw_state = dict(state_values)
+            else:
+                raw_snapshot = await cls.aget_state(session_id)
+                raw_state = dict(raw_snapshot.values or {}) if raw_snapshot else {}
             stream_input = Command(update=pack_workflow_patch(raw_state, updates))
 
         # 4. Build config with max_concurrency + optional streaming callback

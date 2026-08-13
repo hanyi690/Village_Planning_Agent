@@ -62,6 +62,25 @@ def render_delivery_artifacts(
                     "code": "DELIVERY_STATUS",
                     "message": f"交付状态：{delivery_status}",
                 })
+            layer_types = {
+                str(layer.get("layerType") or layer.get("layer_type") or "")
+                for layer in render_layers
+                if (layer.get("geojson") or layer.get("data") or {}).get("features")
+            }
+            if "planned_road" not in layer_types:
+                delivery_issues.append({
+                    "code": "PLANNED_ROAD_NOT_GENERATED",
+                    "message": "规划道路未生成；地图不会使用示意线替代权威道路几何。",
+                })
+            zone_types = {
+                "function_zone", "planning_zone", "custom_planning_zone",
+                "custom_functional_zone", "restoration_zone", "protection_zone",
+            }
+            if not layer_types.intersection(zone_types):
+                delivery_issues.append({
+                    "code": "PLANNED_ZONE_NOT_GENERATED",
+                    "message": "规划分区未生成；地图不会使用底图地类冒充规划分区。",
+                })
             artifacts["static_preview"] = render_comparison_preview(
                 render_layers, str(output_dir), village_name
             )

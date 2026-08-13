@@ -49,6 +49,9 @@ _KEY_BY_TYPE = {
     "DeferralLedger": "deferral_ledger",
     "LayoutConfigs": "layout_configs",
     "ExecutionDiagnostics": "execution_diagnostics",
+    "RepairDirectiveCompilation": "repair_directives",
+    "RepairImpactPlan": "repair_impact",
+    "GlobalZoneAllocationResult": "global_zone_allocation",
     "ExportResult": "export_result",
     "RenderArtifacts": "render_artifacts",
 }

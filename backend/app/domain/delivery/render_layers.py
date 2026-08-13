@@ -187,6 +187,7 @@ def _road_layer(planned_state: Any) -> Optional[Dict[str, Any]]:
                 "name": getattr(road, "name", ""),
                 "road_level": getattr(road, "road_level", ""),
                 "width_m": getattr(road, "width_m", 0),
+                "action": getattr(road, "action", ""),
             },
             "geometry": geometry,
         })
@@ -308,7 +309,7 @@ def build_delivery_render_layers(
         "planned_project_geojson": ("planned_project", "规划项目落地", "#f97316"),
         "planned_project_point_geojson": ("planned_project_point", "规划项目定位点", "#b91c1c"),
         "planned_facility_geojson": ("facility_point", "公共服务设施", "#2563eb"),
-        "planned_road_geojson": ("planned_road", "规划道路", "#475569"),
+        "planned_road_geojson": ("planned_road", "规划道路", "#d97706"),
         "planned_axis_geojson": ("development_axis", "发展轴", "#7c3aed"),
         "planned_zone_geojson": ("planning_zone", "规划分区", "#16a34a"),
         "planned_restoration_geojson": ("restoration_zone", "生态修复", "#15803d"),
@@ -343,7 +344,11 @@ def build_delivery_render_layers(
                 "planned_road",
                 "development_axis",
             },
-            "style": {"fill-opacity": 0.45, "line-opacity": 0.8},
+            "style": {
+                "fill-opacity": 0.45,
+                "line-opacity": 0.9,
+                "line-width": 7 if layer_type == "planned_road" else 2,
+            },
         })
     changes_layer = _planned_changes_layer(planned)
     result = build_map_layers(layouts, current)

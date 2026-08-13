@@ -5,9 +5,8 @@ I/O, no LLM. Consumed by the ``merge_worker_results`` node in execute_agent.py
 and unit-testable in isolation.
 
 Responsibilities:
-- BSM conflict detection: the same bsm appearing in more than one worker's
-  ``parcel_changes`` with a different ``after_classification`` code is recorded
-  as a ``bsm_conflict`` diagnostic (not silently merged away).
+- BSM ownership enforcement: more than one authoritative write to the same BSM
+  blocks the whole ParcelChangeSet, even when classification codes match.
 - layout_configs dedup by layerType: the higher-priority (later) worker wins
   when two workers emit the same layer type.
 - Build the unified ``ParcelChangeSet`` via
@@ -54,28 +53,54 @@ def _change_after_wkt(change: Any) -> str:
 
 
 def _detect_bsm_conflicts(worker_results: List[Any]) -> List[Dict[str, Any]]:
-    """Detect same-bsm changes with conflicting after_classification across workers."""
+    """Detect multiple authoritative writes to one BSM."""
     by_bsm: Dict[str, List[Tuple[Any, Any]]] = {}
     for result in worker_results or []:
         for change in _result_get(result, "parcel_changes") or []:
             bsm = _change_bsm(change)
-            if not bsm:
+            action = str(getattr(change, "action", "") or "")
+            if not bsm or action == "preserve":
+                continue
+            if not _change_after_code(change):
                 continue
             by_bsm.setdefault(bsm, []).append((result, change))
 
     conflicts: List[Dict[str, Any]] = []
     for bsm, entries in by_bsm.items():
-        codes = {_change_after_code(change) for _result, change in entries}
-        if len(codes) > 1:
+        if len(entries) > 1:
+            target_ids = sorted({
+                str(getattr(change, "intervention_id", "") or "")
+                for _, change in entries
+                if str(getattr(change, "intervention_id", "") or "")
+            })
             conflicts.append(
                 {
                     "type": "bsm_conflict",
+                    "code": "authoritative_land_use_conflict",
+                    "blocking": True,
                     "bsm": bsm,
+                    "affected_bsms": [bsm],
+                    "target_ids": target_ids,
+                    "violation_id": (
+                        "authoritative_land_use_conflict:"
+                        + bsm
+                        + ":"
+                        + ":".join(target_ids)
+                    ),
+                    "evidence_refs": [
+                        f"parcel-change:{bsm}:{target_id}" for target_id in target_ids
+                    ],
                     "workers": [
                         {
                             "worker_type": _result_get(result, "worker_type", ""),
                             "action": getattr(change, "action", ""),
                             "after_code": _change_after_code(change),
+                            "target_id": str(
+                                getattr(change, "intervention_id", "") or ""
+                            ),
+                            "lineage_ref": str(
+                                getattr(change, "project_ref", "") or ""
+                            ),
                         }
                         for result, change in entries
                     ],
@@ -152,8 +177,7 @@ def merge_worker_results(
 ) -> Tuple[ParcelChangeSet, List[Dict[str, Any]], List[Dict[str, Any]], List[TypedActionResult]]:
     """Merge WorkerResults into parcel, layout, diagnostics, and action outputs.
 
-    - BSM conflict detection: same bsm in multiple workers with different
-      after_classification -> ``bsm_conflict`` diagnostic.
+    - Any duplicate authoritative BSM write blocks all parcel changes.
     - layout_configs deduped by layerType (later worker wins by priority).
     - ParcelChangeSet built via ``land_design_worker.build_parcel_change_set``
       with area-conservation and geometry-validity flags derived from the
@@ -168,10 +192,17 @@ def merge_worker_results(
     for result in worker_results or []:
         changes.extend(_result_get(result, "parcel_changes") or [])
 
+    if conflicts:
+        changes = []
+
     changeset = build_parcel_change_set(
         changes,
-        area_conservation_verified=_verify_area_conservation(changes),
-        geometry_validity_verified=_verify_geometry_valid(changes),
+        area_conservation_verified=(
+            not conflicts and _verify_area_conservation(changes)
+        ),
+        geometry_validity_verified=(
+            not conflicts and _verify_geometry_valid(changes)
+        ),
     )
     layout_configs = _dedup_layout_configs(worker_results)
     return changeset, layout_configs, list(conflicts), _collect_action_results(worker_results)

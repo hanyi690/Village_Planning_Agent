@@ -158,7 +158,9 @@ def _control_projection(runtime: dict[str, Any]) -> dict[str, Any]:
     for key in _REDUCER_KEYS:
         if key in projection:
             continue
-        if key in runtime and runtime[key] is not None:
+        if key in runtime and (
+            runtime[key] is not None or key == "fatal_error"
+        ):
             projection[key] = runtime[key]
     return projection
 

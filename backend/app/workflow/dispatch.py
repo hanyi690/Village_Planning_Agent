@@ -164,7 +164,7 @@ class DispatchPolicy(BaseModel):
         "execute": frozenset({"validate", "end_diagnostic"}),
         "validate": frozenset({
             "reconcile", "execute", "select", "ground", "target_projection",
-            "human_review_prepare", "end_diagnostic",
+            "revision_dispatch", "human_review_prepare", "end_diagnostic",
         }),
         "reconcile": frozenset({"deliver", "execute", "human_review_prepare", "end_diagnostic"}),
         "deliver": frozenset({"__end__", "end_diagnostic"}),

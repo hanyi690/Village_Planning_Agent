@@ -55,7 +55,7 @@ def _spatial_hydration_key(
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
-def _hydrate_l1_spatial_facts(state: Dict[str, Any], context: Any) -> None:
+async def _hydrate_l1_spatial_facts(state: Dict[str, Any], context: Any) -> None:
     """Attach L1 facts and build the GIS/KG evidence index once per snapshot."""
     try:
         from app.infrastructure.artifacts.runtime import load_artifact
@@ -118,6 +118,53 @@ def _hydrate_l1_spatial_facts(state: Dict[str, Any], context: Any) -> None:
         if written and getattr(context, "ports", None) is not None:
             context.ports.gazetteer = KGGazetteerAdapter(context.gazetteer)
 
+        # Name backfill: use L1 report names to name nameless KG entities
+        # (roads/water/facilities/clusters) before the evidence index snapshots
+        # entity names, so GROUND can resolve real names to real entities.
+        # Ambiguous (multi-candidate) mentions go through a flash confirmation
+        # cached per session so resume does not repeat model calls.
+        if kg is not None and context.gazetteer is not None:
+            try:
+                from app.infrastructure.kg.enrichment.name_backfill import (
+                    NameMention,
+                    backfill_kg_names,
+                )
+
+                mentions = [
+                    NameMention(
+                        name=str(
+                            getattr(fact, "normalized_name", "")
+                            or getattr(fact, "mention", "")
+                            or ""
+                        ).strip(),
+                        role=str(getattr(fact, "role", "unknown") or "unknown"),
+                        location=str(getattr(fact, "spatial_hint", "") or "").strip(),
+                        source_dimension=str(getattr(fact, "dimension_key", "") or ""),
+                    )
+                    for fact in facts
+                    if str(
+                        getattr(fact, "normalized_name", "")
+                        or getattr(fact, "mention", "")
+                        or ""
+                    ).strip()
+                ]
+                if mentions:
+                    cache_path = None
+                    if session_id:
+                        try:
+                            from app.infrastructure.paths import session_run_dir
+
+                            cache_path = (
+                                session_run_dir(session_id) / "name-backfill-cache.json"
+                            )
+                        except Exception:
+                            cache_path = None
+                    await backfill_kg_names(
+                        kg, context.gazetteer, mentions, cache_path=cache_path
+                    )
+            except Exception as exc:
+                logger.warning("[bootstrap] name backfill failed: %s", exc)
+
         # The index is the typed L1 -> GROUND boundary.  Geometry is materialized
         # from the bundle once and reused for every POI/fact in this build.
         from app.evidence.index.place_evidence_index import PlaceEvidenceIndex
@@ -145,7 +192,7 @@ async def bootstrap_context_node(state: Dict[str, Any]) -> Dict[str, Any]:
         from app.infrastructure.context.planning_context_factory import get_cached_context
         cached = get_cached_context(session_id)
         if cached is not None:
-            _hydrate_l1_spatial_facts(state, cached)
+            await _hydrate_l1_spatial_facts(state, cached)
             return {}
     if not session_id:
         logger.warning("[bootstrap] no session_id; skipping context build")
@@ -192,7 +239,7 @@ async def bootstrap_context_node(state: Dict[str, Any]) -> Dict[str, Any]:
             l1_snapshot = load_artifact(state, "l1_snapshot", L1Snapshot)
         if l1_snapshot is not None:
             context.location_facts = list(getattr(l1_snapshot, "location_facts", []) or [])
-            _hydrate_l1_spatial_facts(state, context)
+            await _hydrate_l1_spatial_facts(state, context)
     except Exception as exc:
         logger.debug("[bootstrap] L1 location facts unavailable: %s", exc)
 

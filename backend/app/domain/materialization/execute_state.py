@@ -68,6 +68,7 @@ class ExecuteAgentState(BaseModel):
 
     # ── SELECT output (site selection + land design briefs) ──
     site_selection: Optional[Any] = None  # SiteSelectionDecision (typed) — SELECT subgraph output
+    global_zone_allocation_result: Optional[Any] = None
     land_design_briefs: List[LandDesignBrief] = Field(default_factory=list)  # list[LandDesignBrief] — SELECT output
     parcel_changes: List[Any] = Field(default_factory=list)  # list[ParcelChange] — accumulated by Land Design Worker nodes
     parcel_changeset: Optional[Any] = None  # ParcelChangeSet — final aggregated changeset

@@ -13,6 +13,7 @@ from app.workflow.layers.layer_router import (
     l2_worker_node,
     l3_worker_node,
     advance_phase_node,
+    provider_resume_dispatch_node,
     revision_dispatch_node,
 )
 from app.application.interrupts import collect_human_review_items
@@ -101,6 +102,15 @@ def _authorized_revision_dispatch(state: Dict[str, Any]):
     return authorization
 
 
+def _authorized_provider_resume_dispatch(state: Dict[str, Any]):
+    """Authorize the explicit provider recovery fan-out."""
+    command = provider_resume_dispatch_node(state)
+    authorization = _authorize_command(state, "provider_resume_dispatch", command)
+    if authorization is None:
+        return command
+    return authorization
+
+
 def _authorize_command(state: Dict[str, Any], source_stage: str, command):
     """Return a terminal Command when a legacy Command contains an invalid jump."""
     from langgraph.types import Command
@@ -170,7 +180,7 @@ _BUSINESS_RETRY_ROUTES = {
     "target_projection": {"REPAIR", "REVISE"},
     "ground": {"EXPLORE"},
     "select": {"RETRY_GROUND"},
-    "validate": {"RETRY_EXECUTE", "RETRY_SELECT", "RETRY_GROUND", "RETRY_TARGET_PROJECTION"},
+    "validate": {"RETRY_EXECUTE", "RETRY_SELECT", "RETRY_GROUND", "RETRY_TARGET_PROJECTION", "RETRY_L3"},
     "reconcile": {"RETRY_EXECUTE"},
     "deliver": {"RETRY_VALIDATE"},
 }
@@ -231,6 +241,13 @@ def _retry_or_human(state: Dict[str, Any], stage: str, retry_target: str) -> str
     current = counts.get(stage, 0)
     max_retries = _retry_limit(state)
     if stage == "validate":
+        impact = state.get("repair_impact") or {}
+        executable_repair = (
+            isinstance(impact, dict)
+            and impact.get("status") == "ready"
+            and bool(impact.get("earliest_invalid_stage"))
+            and bool(impact.get("directive_ids"))
+        )
         try:
             gate = load_root_gate(state, "validate")
         except Exception:
@@ -238,12 +255,22 @@ def _retry_or_human(state: Dict[str, Any], stage: str, retry_target: str) -> str
         current_fingerprint = gate.issue_fingerprint
         previous = (state.get("stage_audit") or {}).get("VALIDATE", {})
         previous_fingerprint = str(previous.get("issue_fingerprint") or "")
-        if current_fingerprint and current_fingerprint == previous_fingerprint:
+        if (
+            not executable_repair
+            and current_fingerprint
+            and current_fingerprint == previous_fingerprint
+        ):
             logger.warning(
                 "[main] VALIDATE repeated issue fingerprint %s -> HUMAN",
                 current_fingerprint,
             )
             return "human_review"
+        if executable_repair:
+            logger.info(
+                "[main] VALIDATE executable repair %s starts at %s; repeated issue fingerprint does not block replay",
+                ",".join(str(item) for item in impact.get("directive_ids") or []),
+                impact.get("earliest_invalid_stage"),
+            )
     if current >= max_retries:
         logger.warning("[main] %s retry exceeded %d rounds -> diagnostic", stage, max_retries)
         return END_DIAGNOSTIC
@@ -307,7 +334,9 @@ def route_after_validate(state: Dict[str, Any]) -> str:
         }
         return _retry_or_human(state, stage_map.get(route, "validate"), route[6:].lower())
     if route == "RETRY_L3":
-        return "human_review"
+        if not state.get("revision_target_dimensions"):
+            return "human_review"
+        return _retry_or_human(state, "validate", "revision_dispatch")
     return "human_review"
 
 
@@ -401,6 +430,8 @@ def _remaining_unresolved_target_ids(state: Dict[str, Any]) -> list[str]:
 def route_after_human_review(state: Dict[str, Any]) -> str:
     """Route post-HITL resume: approve forwards, reject goes to conversation."""
     paused_stage = _normalize_paused_stage(state.get("paused_stage"))
+    if state.get("provider_resume_dimensions"):
+        return "provider_resume_dispatch"
     if paused_stage in {
         "target_projection", "ground", "select", "validate", "reconcile", "deliver",
     } and root_gate_route(state, paused_stage) == GATE_LOAD_FAILED:
@@ -600,6 +631,7 @@ def create_unified_planning_graph(checkpointer=None) -> StateGraph:
     builder.add_node("l3_worker", adapt_node(audited_l3_worker, worker=True))
     builder.add_node("advance_phase", adapt_node(_authorized_advance_phase))
     builder.add_node("revision_dispatch", adapt_node(_authorized_revision_dispatch))
+    builder.add_node("provider_resume_dispatch", adapt_node(_authorized_provider_resume_dispatch))
     # Dynamic Send workers form one map super-step.  The completion barrier
     # must run once only after every pending worker branch has finished;
     # otherwise several completion/aggregate tasks can survive in the same
@@ -660,7 +692,8 @@ def create_unified_planning_graph(checkpointer=None) -> StateGraph:
         {"validate": "validate", END_DIAGNOSTIC: END_DIAGNOSTIC})
     builder.add_conditional_edges("validate", lambda state: _dispatch_route("validate", route_after_validate, state),
         {"reconcile": "reconcile", "execute": "execute", "select": "select",
-         "ground": "ground", "target_projection": "target_projection", "human_review": "human_review_prepare",
+         "ground": "ground", "target_projection": "target_projection", "revision_dispatch": "revision_dispatch",
+         "human_review": "human_review_prepare",
          END_DIAGNOSTIC: END_DIAGNOSTIC})
     builder.add_conditional_edges("reconcile", lambda state: _dispatch_route("reconcile", route_after_reconcile, state),
         {"deliver": "deliver", "execute": "execute", "human_review": "human_review_prepare",
@@ -676,6 +709,7 @@ def create_unified_planning_graph(checkpointer=None) -> StateGraph:
     builder.add_conditional_edges("human_review_apply", lambda state: _dispatch_route("human_review_apply", route_after_human_review, state),
         {"advance_phase": "advance_phase",
          "revision_dispatch": "revision_dispatch",
+         "provider_resume_dispatch": "provider_resume_dispatch",
          "l1_worker": "l1_worker", "l2_worker": "l2_worker", "l3_worker": "l3_worker",
          "target_projection": "target_projection", "ground": "ground", "select": "select",
          "execute": "execute", "validate": "validate", "reconcile": "reconcile",
@@ -925,9 +959,84 @@ def _revision_feedback(items: List[Dict[str, Any]], supplied: str) -> str:
             findings.append(f"{message}：{detail}" if detail else message)
     requirements = (
         "只输出可实施的规划项目，不得把现状描述、数据缺失说明或分析结论当作干预项目；"
-        "最终回答必须包含字面量【INSTRUCTION】及固定列规划表，所有空间项目必须填写有证据支持的位置。"
+        "最终回答必须输出符合 PlanningClaimSet 的结构化结果，不得输出 Markdown 或【INSTRUCTION】。"
     )
     return "\n".join(part for part in [supplied.strip(), *dict.fromkeys(findings), requirements] if part)
+
+
+_TRANSIENT_PROVIDER_CODES = {
+    "llm_stream_timeout",
+    "llm_timeout",
+    "llm_provider_error",
+    "llm_provider_circuit_open",
+}
+
+
+def _provider_failure_dimensions(
+    state: Dict[str, Any],
+    items: List[Dict[str, Any]],
+) -> list[str]:
+    """Collect every failed dimension from the parallel failure channel."""
+    records: list[Dict[str, Any]] = []
+    fatal = state.get("fatal_error")
+    if isinstance(fatal, dict):
+        records.append(fatal)
+    records.extend(
+        item for item in (state.get("provider_failures") or [])
+        if isinstance(item, dict)
+    )
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        context = item.get("context") or {}
+        if isinstance(context, dict):
+            records.append(context)
+    return list(dict.fromkeys(
+        str(record.get("dimension") or record.get("dimension_key") or "").strip()
+        for record in records
+        if str(record.get("code") or "") in _TRANSIENT_PROVIDER_CODES
+        and str(record.get("dimension") or record.get("dimension_key") or "").strip()
+    ))
+
+
+def _provider_resume_patch(
+    state: Dict[str, Any],
+    items: List[Dict[str, Any]],
+) -> Dict[str, Any] | None:
+    """Build a bounded, exact-dimension provider recovery patch."""
+    dimensions = _provider_failure_dimensions(state, items)
+    if not dimensions:
+        return None
+    attempts = state.get("dimension_retry_counts") or {}
+    limit = max(0, int(state.get("dimension_retry_limit", 1)))
+    exhausted = [
+        dimension for dimension in dimensions
+        if int(attempts.get(dimension, 0)) > limit
+    ]
+    if exhausted:
+        return {
+            "provider_resume_dimensions": [],
+            "delivery_status": "diagnostic_only",
+            "diagnostic_terminal": {
+                "stage": str(state.get("phase") or "layer3"),
+                "reason": "provider_dimension_retry_exhausted",
+                "dimensions": exhausted,
+                "retry_limit": limit,
+            },
+        }
+    from app.infrastructure.llm.dimension_runtime import reset_provider_failure
+
+    reset_provider_failure(str(state.get("session_id") or ""))
+    return {
+        "provider_resume_dimensions": dimensions,
+        "provider_failures": [],
+        "fatal_error": None,
+        "human_review_items": [],
+        "paused_stage": None,
+        "layer_just_completed": None,
+        "is_revision": False,
+        "need_revision": False,
+    }
 
 
 async def apply_human_review_decision(state: Dict[str, Any]) -> Dict[str, Any]:
@@ -945,6 +1054,11 @@ async def apply_human_review_decision(state: Dict[str, Any]) -> Dict[str, Any]:
         "human_interrupt": None,
     }
     action = decisions.get("action") if isinstance(decisions, dict) else None
+    if action in ("accept", "approve", "retry"):
+        provider_patch = _provider_resume_patch(state, items)
+        if provider_patch is not None:
+            result.update(provider_patch)
+            return result
     classification_payload = (
         decisions.get("classification_decisions")
         if isinstance(decisions, dict)
@@ -976,6 +1090,23 @@ async def apply_human_review_decision(state: Dict[str, Any]) -> Dict[str, Any]:
             "delivery_status": "diagnostic_only",
         })
         return result
+
+    if (
+        action in ("accept", "approve")
+        and paused_stage == "l3"
+        and any(
+            str(item.get("request_type") or "") == "program_rework"
+            for item in items
+            if isinstance(item, dict)
+        )
+    ):
+        # Acknowledgement is not permission to execute an invalid source
+        # program.  In unattended/test operation, interpret approval as the
+        # safest autonomous choice: retry only the dimensions named by the L3
+        # validator while reusing immutable L1/L2 artifacts and valid siblings.
+        action = "retry"
+        result["autonomous_decision"] = "retry_invalid_l3_dimensions"
+
     deferral_patch = {}
     deferred_target_ids: list[str] = []
     if action in ("accept", "approve") and paused_stage in {"validate", "reconcile"}:

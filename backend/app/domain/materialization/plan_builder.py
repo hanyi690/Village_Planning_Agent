@@ -48,6 +48,12 @@ def _classification_status(target: Any) -> str:
 
 
 def _classification_required(target: Any, assignment: Any) -> bool:
+    if _value(target, "materialization_role") in {
+        "functional_overlay",
+        "protection_overlay",
+        "restoration_overlay",
+    }:
+        return False
     if _value(target, "category_code") and _value(target, "vocabulary_name"):
         return True
     target_kind = str(_value(target, "expected_output_kind", "") or "")
@@ -166,6 +172,27 @@ def _has_resolution_evidence(target: Any, assignment: Any) -> bool:
     back into ``worker_tasks`` so the worker can actually execute instead of
     being locked out forever by an earlier deferral.
     """
+    if getattr(target, "road_planning_kind", None):
+        if getattr(target, "road_planning_kind", None) == "existing_road_intervention":
+            return bool(
+                getattr(target, "existing_road_feature_ids", None)
+                or getattr(target, "existing_road_segment_ids", None)
+            ) and getattr(getattr(target, "routing_evidence", None), "current_network", None) is not None
+        start = getattr(target, "start_endpoint", None)
+        end = getattr(target, "end_endpoint", None)
+        routing = getattr(target, "routing_evidence", None)
+        return bool(
+            getattr(start, "resolution_status", "") == "resolved"
+            and getattr(end, "resolution_status", "") == "resolved"
+            and getattr(routing, "has_routing_basis", False)
+        )
+    if getattr(target, "materialization_role", None) == "land_use_assignment":
+        return bool(
+            assignment is not None
+            and getattr(assignment, "status", "") == "placed"
+            and getattr(assignment, "selected_bsms", None)
+            and getattr(assignment, "allocation_lineage_refs", None)
+        )
     if assignment is not None:
         status = getattr(assignment, "status", "")
         if status in {"placed", "ready"}:
@@ -175,7 +202,7 @@ def _has_resolution_evidence(target: Any, assignment: Any) -> bool:
                 return True
     if getattr(target, "candidate_bsms", None):
         return True
-    for field in ("path_bsms", "connects", "start_anchor", "end_anchor"):
+    for field in ("path_bsms", "start_anchor", "end_anchor"):
         if getattr(target, field, None):
             return True
     return False
@@ -190,6 +217,7 @@ def build_execution_plan(
     context_version: str = "",
     deferral_ledger: Any = None,
     portfolio_decision_ref: str = "",
+    global_zone_allocation_ref: str = "",
 ) -> ExecutionPlan:
     """Create self-contained worker tasks keyed only by stable target IDs."""
     intent = _unwrap_intent(intent)
@@ -211,9 +239,10 @@ def build_execution_plan(
                 assignment = TargetAssignment(
                     target_id=target_id,
                     target_type=target_type,
-                    status="ready",
+                    status="unplaced",
                     expected_output_kind=getattr(target, "expected_output_kind", "parcel"),
                     target_binding=target.model_dump(mode="json"),
+                    reason="site_selection_assignment_missing",
                 )
             elif not assignment.target_binding:
                 assignment = assignment.model_copy(update={"target_binding": target.model_dump(mode="json")})
@@ -240,8 +269,22 @@ def build_execution_plan(
                         if portfolio_decision_ref
                         else "artifact:portfolio_decision"
                     ),
+                    *(
+                        [f"artifact:global_zone_allocation:{global_zone_allocation_ref}"]
+                        if target_type == "zone" and global_zone_allocation_ref
+                        else []
+                    ),
                 ],
             )
+            if assignment.status in {"unplaced", "deferred"}:
+                deferred_tasks.append(
+                    task.model_copy(
+                        update={
+                            "assignment": assignment.model_copy(update={"status": "deferred"})
+                        }
+                    )
+                )
+                continue
             if _classification_required(target, assignment) and not _classification_is_resolved(target):
                 if target_id in deferred_ids:
                     deferred_tasks.append(task)

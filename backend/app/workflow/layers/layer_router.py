@@ -117,6 +117,45 @@ def revision_dispatch_node(state: Dict[str, Any]) -> Command:
     ])
 
 
+def provider_resume_dispatch_node(state: Dict[str, Any]) -> Command:
+    """Resume exactly the provider-failed dimensions once.
+
+    Infrastructure recovery is not a planning revision.  Keeping this as a
+    real Command node lets the checkpoint consume the one-shot dimension list
+    before fan-out and prevents ``after_analysis`` from redispatching every
+    merely incomplete dimension.
+    """
+    dimensions = list(dict.fromkeys(
+        str(item).strip()
+        for item in (state.get("provider_resume_dimensions") or [])
+        if str(item).strip()
+    ))
+    if not dimensions:
+        logger.warning("[provider_resume_dispatch] empty dimension list")
+        return Command(update={"provider_resume_dimensions": []}, goto=END)
+    worker = _worker_for_phase(state.get("phase", "layer3"))
+    logger.info(
+        "[provider_resume_dispatch] dimensions=%s worker=%s",
+        dimensions,
+        worker,
+    )
+    return Command(
+        update={"provider_resume_dimensions": []},
+        goto=[
+            Send(
+                worker,
+                _dispatch_state(
+                    state,
+                    dimension_key=dimension,
+                    is_revision=False,
+                    provider_resume_dimensions=[],
+                ),
+            )
+            for dimension in dimensions
+        ],
+    )
+
+
 async def l1_worker_node(state: Dict[str, Any]) -> Dict[str, Any]:
     """L1 dimension worker — delegates to the shared L1 analysis node."""
     return await analyze_dimension(state)
@@ -207,6 +246,7 @@ __all__ = [
     "layer_router_noop",
     "layer_router_node",
     "revision_dispatch_node",
+    "provider_resume_dispatch_node",
     "l1_worker_node",
     "l2_worker_node",
     "l3_worker_node",

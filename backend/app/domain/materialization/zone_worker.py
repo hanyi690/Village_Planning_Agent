@@ -7,26 +7,38 @@ from app.domain.materialization.worker_contract import (
     WorkerResult,
     _state_from_deps,
     adapt_legacy_result,
-    gate_explicit_inputs,
+    blocked_result,
 )
 
 
 async def run_worker(task: WorkerInput, *, deps: dict | None = None) -> WorkerResult:
-    """Run deterministic zone reclassification and allocation.
-
-    The legacy node still performs parcel reclassification, MIP re-allocation
-    and a direct KG read of the three protection lines, so it is invoked only
-    under explicit opt-in.
-    """
-    gate = gate_explicit_inputs(
-        task,
-        "zone",
-        "parcel reclassification (design_zone_parcel), MIP re-allocation, direct "
-        "KG three-lines read (state.kg_three_lines)",
-        deps=deps,
-    )
-    if gate is not None:
-        return gate
+    """Run assignment-only zone materialization from an explicit artifact."""
+    deps = deps or {}
+    if not task.task_ref:
+        return blocked_result(
+            task,
+            "zone",
+            "zone worker requires a real ExecutionPlan task ref",
+        )
+    if not task.input_refs.get("global_zone_allocation_ref"):
+        return blocked_result(
+            task,
+            "zone",
+            "zone worker requires global_zone_allocation_ref",
+            code="worker_needs_explicit_input",
+        )
+    state = _state_from_deps(deps)
+    allocation = deps.get("global_zone_allocation_result")
+    if state is None or allocation is None:
+        return blocked_result(
+            task,
+            "zone",
+            "global zone allocation artifact or execution state is absent",
+            code="worker_needs_explicit_input",
+        )
     from app.domain.materialization.nodes.zone_worker import _zone_worker
 
-    return adapt_legacy_result(task, _zone_worker(_state_from_deps(deps)))
+    return adapt_legacy_result(
+        task,
+        _zone_worker(state, allocation_result=allocation),
+    )

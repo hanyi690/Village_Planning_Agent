@@ -38,6 +38,7 @@ async def ground_node(state: Dict[str, Any]) -> Dict[str, Any]:
     retry_patch = _retry_patch(state, "ground")
     context = await _require_context(state)
     compilation = _load_ref_artifact(state, "target_projection", IntentCompilationResult)
+    projection_ref = (state.get("artifact_refs") or {}).get("target_projection")
     specs = [
         _to_typed(item, SpatialReferenceSpec)
         for item in (getattr(compilation, "spatial_reference_specs", None) or [])
@@ -58,7 +59,7 @@ async def ground_node(state: Dict[str, Any]) -> Dict[str, Any]:
             from app.spatial.grounding.resolver import SpatialResolver
 
             resolver = SpatialResolver(context)
-            village_cluster_map = await _village_cluster_map_for_context(context)
+            village_cluster_map = await _village_cluster_map_for_context(context, intent)
             resolved_anchors = resolver.resolve_anchors(
                 intent,
                 village_cluster_map=village_cluster_map,
@@ -74,13 +75,8 @@ async def ground_node(state: Dict[str, Any]) -> Dict[str, Any]:
                     working_compilation,
                 )
                 if ref:
-                    state = {
-                        **state,
-                        "artifact_refs": {
-                            **(state.get("artifact_refs") or {}),
-                            "target_projection": ref,
-                        },
-                    }
+                    projection_ref = ref
+                    compilation = working_compilation
                 logger.info(
                     "[workflow:ground] intent anchors resolved: %d entities",
                     resolved_anchors,
@@ -125,27 +121,17 @@ async def ground_node(state: Dict[str, Any]) -> Dict[str, Any]:
                     candidate.evidence_refs.extend(refs)
     gate = evaluate_ground_gate(result, expected_spec_count=len(specs))
     ref = persist_stage_artifact(state, "ground", "GroundingResult", result)
-    patch = stage_completion_patch(
+    output_refs = {"grounding_result": ref}
+    if projection_ref:
+        output_refs["target_projection"] = projection_ref
+    return stage_completion_patch(
         state,
         "ground",
-        output_refs={"grounding_result": ref},
+        output_refs=output_refs,
         gate=gate,
         context_patch=_adopt_context(state, context),
         retry_patch=retry_patch,
     )
-    # stage_completion_patch rebuilds artifact_refs; explicitly carry the
-    # enriched target_projection ref forward so SELECT/EXECUTE consume the
-    # intent that carries GROUND-filled candidate_bsms / anchors.
-    anchor_ref = (
-        (state.get("artifact_refs") or {}).get("target_projection")
-        if isinstance(state.get("artifact_refs"), dict)
-        else None
-    )
-    if anchor_ref:
-        merged_refs = dict(patch.get("artifact_refs") or {})
-        merged_refs["target_projection"] = anchor_ref
-        patch["artifact_refs"] = merged_refs
-    return patch
 
 
 async def _flash_enhance_unresolved(
@@ -175,16 +161,16 @@ async def _flash_enhance_unresolved(
     if isinstance(intent, dict):
         target_lists = [
             intent.get("zone_targets") or [],
-            intent.get("facility_targets") or [],
-            intent.get("axis_targets") or [],
+            intent.get("facilities") or [],
+            intent.get("development_axes") or [],
             intent.get("road_targets") or [],
             intent.get("project_targets") or [],
         ]
     else:
         target_lists = [
             getattr(intent, "zone_targets", None) or [],
-            getattr(intent, "facility_targets", None) or [],
-            getattr(intent, "axis_targets", None) or [],
+            getattr(intent, "facilities", None) or [],
+            getattr(intent, "development_axes", None) or [],
             getattr(intent, "road_targets", None) or [],
             getattr(intent, "project_targets", None) or [],
         ]
@@ -219,7 +205,7 @@ async def _flash_enhance_unresolved(
     if not raw_by_target:
         return {}
 
-    from app.infrastructure.paths import run_tmp_root
+    from app.infrastructure.paths import session_run_dir
     from app.spatial.grounding.flash_mention_extractor import MentionCache, extract_mentions
 
     run_root = None
@@ -243,7 +229,10 @@ async def _flash_enhance_unresolved(
     return enhanced
 
 
-async def _village_cluster_map_for_context(context: Any) -> Dict[str, Any]:
+async def _village_cluster_map_for_context(
+    context: Any,
+    intent: Any,
+) -> Dict[str, Any]:
     """Pre-resolve natural-village -> residential-cluster mapping (cached).
 
     Bundle-derived clusters give road/facility anchors for named villages that
@@ -254,9 +243,7 @@ async def _village_cluster_map_for_context(context: Any) -> Dict[str, Any]:
         workspace = getattr(context, "workspace", None)
         if workspace is None:
             return {}
-        from app.data.ingestion.natural_villages import _KNOWN_NATURAL_VILLAGES
-
-        names = list(_KNOWN_NATURAL_VILLAGES)
+        names = await _settlement_mentions_for_cluster_mapping(context, intent)
         if not names:
             return {}
         parcels = list(workspace.current_parcels() or [])
@@ -270,32 +257,117 @@ async def _village_cluster_map_for_context(context: Any) -> Dict[str, Any]:
         clusters = build_village_clusters(parcels)
         if not clusters:
             return {}
-        from app.infrastructure.paths import run_tmp_root
+        from app.infrastructure.paths import session_run_dir
         from app.spatial.grounding.flash_mention_extractor import (
             create_flash_llm_safe,
         )
 
         cache = None
         try:
-            cache = run_tmp_root() / "village-cluster-map.json"
+            cache = session_run_dir(str(getattr(context, "session_id", "") or "ground")) / "village-cluster-map.json"
         except Exception:
             cache = None
-        report_text = ""
-        try:
-            report_text = getattr(context, "report_text", "") or ""
-        except Exception:
-            pass
+        report_text = _context_report_text(context)
         llm = create_flash_llm_safe()
+        snapshot = getattr(workspace, "snapshot", None)
+        landuse_collection = (
+            snapshot.collection("landuse_current_geojson") if snapshot else None
+        )
         return await map_villages(
             clusters,
             names,
             report_text=report_text,
             cache=cache,
             llm=llm,
+            source_artifact_ref=(
+                f"bundle-snapshot:{snapshot.snapshot_id}" if snapshot else ""
+            ),
+            source_artifact_digest=(
+                str(
+                    getattr(landuse_collection, "digest", "")
+                    or getattr(snapshot, "digest", "")
+                )
+                if snapshot
+                else ""
+            ),
         )
     except Exception as exc:  # noqa: BLE001 - cluster mapping must never break GROUND
         logger.warning("[workflow:ground] village cluster mapping failed: %s", exc)
         return {}
+
+
+def _context_report_text(context: Any) -> str:
+    parts: list[str] = []
+    for payload in dict(getattr(context, "reports", {}) or {}).values():
+        if isinstance(payload, dict):
+            parts.append(str(payload.get("content") or payload.get("summary") or ""))
+        else:
+            parts.append(str(payload or ""))
+    return "\n".join(part for part in parts if part)[:12000]
+
+
+async def _settlement_mentions_for_cluster_mapping(
+    context: Any,
+    intent: Any,
+) -> list[str]:
+    """Collect settlement names from typed facts and one cached flash pass."""
+
+    names: list[str] = []
+    settlement_types = {
+        "AdministrativeVillage",
+        "ResidentialCluster",
+        "administrative_village",
+        "residential_cluster",
+        "village",
+    }
+    for fact in list(getattr(context, "location_facts", []) or []):
+        kind = str(
+            getattr(fact, "entity_type", "")
+            or getattr(fact, "place_type", "")
+            or getattr(fact, "role", "")
+            or ""
+        )
+        name = str(
+            getattr(fact, "normalized_name", "")
+            or getattr(fact, "name", "")
+            or ""
+        ).strip()
+        if name and kind in settlement_types:
+            names.append(name)
+
+    texts: list[str] = []
+    fields = (
+        "zone_targets",
+        "facilities",
+        "development_axes",
+        "road_targets",
+        "project_targets",
+    )
+    for field in fields:
+        targets = intent.get(field, []) if isinstance(intent, dict) else getattr(intent, field, [])
+        for target in list(targets or []):
+            semantic = target.get("semantic", {}) if isinstance(target, dict) else getattr(target, "semantic", None)
+            for attr in ("raw_text", "spatial_hint", "natural_language_description"):
+                value = semantic.get(attr, "") if isinstance(semantic, dict) else getattr(semantic, attr, "")
+                if value:
+                    texts.append(str(value))
+            for attr in ("location_hint", "connects"):
+                value = target.get(attr) if isinstance(target, dict) else getattr(target, attr, None)
+                if isinstance(value, list):
+                    texts.extend(str(item) for item in value if item)
+                elif value:
+                    texts.append(str(value))
+
+    combined = "\n".join(texts)[:5000]
+    if combined:
+        from app.infrastructure.paths import session_run_dir
+        from app.spatial.grounding.flash_mention_extractor import MentionCache, extract_mentions
+
+        cache = MentionCache(run_tmp_root() / "settlement-mention-cache.json")
+        for mention in await extract_mentions(combined, cache=cache):
+            if mention.role == "village" and mention.mention:
+                names.append(mention.mention)
+    return list(dict.fromkeys(names))
 
 
 __all__ = ["ground_node"]

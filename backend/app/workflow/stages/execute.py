@@ -176,11 +176,17 @@ async def execute_node(state: Dict[str, Any]) -> Dict[str, Any]:
     from app.contracts.workflow.parse_contracts import SpatialPlanningIntent
     from app.contracts.workflow.parse_result_contracts import IntentCompilationResult
     from app.contracts.domain.selection_contracts import SiteSelectionDecision
+    from app.contracts.spatial.global_zone_allocation_contracts import GlobalZoneAllocationResult
     from app.contracts.workflow.execution_plan_contracts import ExecutionPlan, ExecutionResult
 
     intent = _load_ref_artifact(state, "target_projection", IntentCompilationResult)
     plan_intent = _to_typed(getattr(intent, "typed_intent", None) or intent, SpatialPlanningIntent)
     site_selection = _load_ref_artifact(state, "site_selection", SiteSelectionDecision)
+    global_zone_allocation = _load_ref_artifact(
+        state,
+        "global_zone_allocation",
+        GlobalZoneAllocationResult,
+    )
     deferral_ledger = _load_ref_artifact(state, "deferral_ledger", DeferralLedger)
     execution_plan = _load_ref_artifact(state, "execution_plan", ExecutionPlan)
     if execution_plan is None and intent is not None and site_selection is not None:
@@ -208,6 +214,7 @@ async def execute_node(state: Dict[str, Any]) -> Dict[str, Any]:
         spatial_workspace=getattr(context, "workspace", None),
         facility_anchors=getattr(context, "village_anchors", None),
         site_selection=site_selection,
+        global_zone_allocation_result=global_zone_allocation,
         land_design_briefs=list(getattr(execution_plan, "land_design_briefs", None) or []),
         execution_plan=execution_plan,
         kg_session_ref=getattr(context, "kg_session_ref", "") or "",
@@ -237,10 +244,18 @@ async def execute_node(state: Dict[str, Any]) -> Dict[str, Any]:
         raise RuntimeError("EXECUTE_TIMEOUT: GIS worker subgraph exceeded its cancellation boundary") from exc
 
     changeset = result.get("parcel_changeset")
-    planned_state = (
-        changeset_to_planned_state(changeset, execution_intent, list(result.get("layout_configs", []) or []))
-        if changeset is not None else None
-    )
+    planned_state = result.get("planned_state")
+    blocking_conflicts = [
+        item
+        for item in list(result.get("worker_conflict_diagnostics", []) or [])
+        if isinstance(item, dict) and bool(item.get("blocking"))
+    ]
+    if planned_state is None and changeset is not None and not blocking_conflicts:
+        planned_state = changeset_to_planned_state(
+            changeset,
+            execution_intent,
+            list(result.get("layout_configs", []) or []),
+        )
     outcome = _task_results_from_execution(execution_plan, result)
     l4_write_result: Dict[str, Any] = {}
     if planned_state is not None:

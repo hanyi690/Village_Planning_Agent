@@ -122,6 +122,13 @@ def _merge_control(current: Any, update: Any) -> Any:
     return update
 
 
+def _merge_fatal_error(current: Any, update: Any) -> Any:
+    """Preserve one parallel failure while allowing explicit recovery clear."""
+    if update is None:
+        return None
+    return current or update
+
+
 def _merge_artifact_refs(current: dict[str, Any], update: dict[str, Any]) -> dict[str, Any]:
     """Merge parallel worker artifact refs by key (last writer wins per key)."""
     merged = dict(current or {})
@@ -167,6 +174,23 @@ def _merge_reports(current: list[dict[str, Any]], update: list[dict[str, Any]]) 
         merged.append(item)
         if isinstance(item, dict):
             seen.add(str(item.get("report_id")))
+    return merged
+
+
+def _merge_failure_events(
+    current: list[dict[str, Any]],
+    update: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Merge all parallel provider failures; an explicit empty list clears."""
+    if update == []:
+        return []
+    merged = list(current or [])
+    seen = {str(item) for item in merged}
+    for item in list(update or []):
+        if str(item) in seen:
+            continue
+        merged.append(item)
+        seen.add(str(item))
     return merged
 
 
@@ -228,7 +252,14 @@ class WorkflowState(TypedDict, total=False):
     need_revision: Annotated[bool | None, _merge_control]
     last_revised_dimensions: Annotated[list[str], _merge_control]
     revision_feedback: Annotated[str | None, _merge_control]
+    fatal_error: Annotated[dict[str, Any] | None, _merge_fatal_error]
+    provider_failures: Annotated[list[dict[str, Any]], _merge_failure_events]
+    dimension_retry_counts: Annotated[dict[str, int], _merge_retry]
     runtime: Annotated[dict[str, Any], _merge_runtime]
+    repair_directives: Annotated[dict[str, Any], _merge_control]
+    repair_impact: Annotated[dict[str, Any], _merge_control]
+
+
 def _active_stage(state: dict[str, Any]) -> str:
     """Derive one stage name without exposing legacy routing fields."""
 
