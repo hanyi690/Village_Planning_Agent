@@ -3,7 +3,6 @@
 // ============================================
 
 import { apiRequest, API_BASE_URL } from './client';
-import { downloadBlob } from '../utils/download';
 import type {
   StartPlanningRequest,
   StartPlanningResponse,
@@ -204,7 +203,7 @@ export const planningApi = {
       es.addEventListener(eventType, (e) => parseEvent(e, eventType as PlanningSSEEventType));
     }
 
-    es.addEventListener('completed', (e) => {
+    es.addEventListener('completed', () => {
       shouldSuppressReconnect = true;
       if (es.readyState !== EventSource.CLOSED) {
         es.close();
@@ -282,26 +281,31 @@ export const planningApi = {
    * Submit feedback (unified endpoint for approve/reject/chat)
    * POST /api/sessions/{session_id}/feedback
    */
-  async submitFeedback(sessionId: string, request: FeedbackRequest): Promise<{
+  async submitFeedback(_sessionId: string, _request: FeedbackRequest): Promise<{
     status: string;
+    reply?: string;
+    draft_feedback?: string;
     dimensions?: string[];
     layer?: number;
     current_layer?: number;
     review_layer?: number;
     next_phase?: string;
   }> {
-    return apiRequest(`/api/sessions/${sessionId}/feedback`, {
-      method: 'POST',
-      body: JSON.stringify(request),
-    });
+    // 该端点已从后端 v1 删除；此方法保留签名仅为类型兼容，运行时不再发起网络请求。
+    throw new Error('[v1] 对话/反馈端点已下线（POST /api/sessions/{id}/feedback）；人工审核请使用 POST /api/v1/sessions/{id}/human-review');
   },
 
   /**
    * Send chat message to planning session
    * POST /api/sessions/{session_id}/feedback
    */
-  async sendChatMessage(sessionId: string, message: string, images?: ImageData[]): Promise<{ status: string }> {
-    return this.submitFeedback(sessionId, { message, images });
+  async sendChatMessage(
+    _sessionId: string,
+    _message: string,
+    _images?: ImageData[],
+  ): Promise<{ status: string; reply?: string; draft_feedback?: string; dimensions?: string[] }> {
+    // 该端点已从后端 v1 删除；此方法保留签名仅为类型兼容，运行时不再发起网络请求。
+    throw new Error('[v1] 对话端点已下线（POST /api/sessions/{id}/feedback）');
   },
 
   /**
@@ -347,36 +351,36 @@ export const planningApi = {
    * Get layer reports
    * GET /api/sessions/{session_id}/layer/{layer}/reports
    */
-  async getLayerReports(sessionId: string, layer: number): Promise<LayerReportsResponse> {
-    return apiRequest<LayerReportsResponse>(`/api/sessions/${sessionId}/layer/${layer}/reports`);
+  async getLayerReports(_sessionId: string, _layer: number): Promise<LayerReportsResponse> {
+    // 该端点已从后端 v1 删除；此方法保留签名仅为类型兼容，运行时不再发起网络请求。
+    throw new Error('[v1] 报告端点已下线（GET /api/sessions/{id}/layer/{layer}/reports）；报告由 SSE dimension_complete 事件提供');
   },
 
   /**
    * Get dimension report (Signal-Fetch Pattern)
    * GET /api/sessions/{session_id}/reports/{dim_key}
    */
-  async getDimensionReport(sessionId: string, dimensionKey: string): Promise<DimensionReportResponse> {
-    return apiRequest<DimensionReportResponse>(
-      `/api/sessions/${sessionId}/reports/${dimensionKey}`
-    );
+  async getDimensionReport(_sessionId: string, _dimensionKey: string): Promise<DimensionReportResponse> {
+    // 该端点已从后端 v1 删除；此方法保留签名仅为类型兼容，运行时不再发起网络请求。
+    throw new Error('[v1] 报告端点已下线（GET /api/sessions/{id}/reports/{dim_key}）');
   },
 
   /**
    * Delete session
    * DELETE /api/sessions/{session_id}
    */
-  async deleteSession(sessionId: string): Promise<{ message: string }> {
-    return apiRequest(`/api/sessions/${sessionId}`, {
-      method: 'DELETE',
-    });
+  async deleteSession(_sessionId: string): Promise<{ message: string }> {
+    // 该端点已从后端 v1 删除；此方法保留签名仅为类型兼容，运行时不再发起网络请求。
+    throw new Error('[v1] 删除会话端点已下线（DELETE /api/sessions/{id}），删除仅作用于本地历史');
   },
 
   /**
    * Get checkpoints for a session
    * GET /api/sessions/{session_id}/checkpoints
    */
-  async getCheckpoints(sessionId: string): Promise<{ session_id: string; checkpoints: { checkpoint_id: string; phase: string; layer: number }[]; count: number }> {
-    return apiRequest(`/api/sessions/${sessionId}/checkpoints`);
+  async getCheckpoints(_sessionId: string): Promise<{ session_id: string; checkpoints: { checkpoint_id: string; phase: string; layer: number }[]; count: number }> {
+    // 该端点已从后端 v1 删除；此方法保留签名仅为类型兼容，运行时不再发起网络请求。
+    throw new Error('[v1] 检查点端点已下线（GET /api/sessions/{id}/checkpoints）');
   },
 
   /**
@@ -384,25 +388,13 @@ export const planningApi = {
    * POST /api/sessions/{session_id}/export?layer=N&format=...
    */
   async exportLayerFormat(
-    sessionId: string,
-    layer: number,
-    format: 'docx' | 'json' | 'md',
-    extraParams: string = '',
+    _sessionId: string,
+    _layer: number,
+    _format: 'docx' | 'json' | 'md',
+    _extraParams: string = '',
   ): Promise<string> {
-    const url = `${API_BASE_URL}/api/sessions/${sessionId}/export?layer=${layer}&format=${format}${extraParams}`;
-    const response = await fetch(url, { method: 'POST' });
-    if (!response.ok) {
-      let detail = `导出失败: ${response.status}`;
-      try {
-        const errorData = await response.json();
-        if (errorData.detail) detail = errorData.detail;
-      } catch { /* response body may not be JSON */ }
-      throw new Error(detail);
-    }
-    const blob = await response.blob();
-    const filename = this.extractFilename(response);
-    downloadBlob(blob, filename);
-    return filename;
+    // 该端点已从后端 v1 删除；此方法保留签名仅为类型兼容，运行时不再发起网络请求。
+    throw new Error('[v1] 导出端点已下线（POST /api/sessions/{id}/export）；下载请等后端提供 /delivery.downloads 服务');
   },
 
   async exportLayerDocx(
@@ -422,23 +414,11 @@ export const planningApi = {
   },
 
   async exportPlanningTextDocx(
-    sessionId: string,
-    projectName: string = '村庄规划',
+    _sessionId: string,
+    _projectName: string = '村庄规划',
   ): Promise<string> {
-    const url = `${API_BASE_URL}/api/sessions/${sessionId}/export?planning_text=true&project_name=${encodeURIComponent(projectName)}`;
-    const response = await fetch(url, { method: 'POST' });
-    if (!response.ok) {
-      let detail = `导出失败: ${response.status}`;
-      try {
-        const errorData = await response.json();
-        if (errorData.detail) detail = errorData.detail;
-      } catch { /* response body may not be JSON */ }
-      throw new Error(detail);
-    }
-    const blob = await response.blob();
-    const filename = this.extractFilename(response);
-    downloadBlob(blob, filename);
-    return filename;
+    // 该端点已从后端 v1 删除；此方法保留签名仅为类型兼容，运行时不再发起网络请求。
+    throw new Error('[v1] 导出端点已下线（POST /api/sessions/{id}/export）');
   },
 
   /**
@@ -467,22 +447,18 @@ export const planningApi = {
    * GET /api/sessions/{session_id}/planning-text
    * GET /api/sessions/{session_id}/planning-text/versions/{version}
    */
-  async getPlanningText(sessionId: string, version?: number): Promise<PlanningTextDocument | null> {
-    const url = version
-      ? `/api/sessions/${sessionId}/planning-text/versions/${version}`
-      : `/api/sessions/${sessionId}/planning-text`;
-    return apiRequest<PlanningTextDocument | null>(url);
+  async getPlanningText(_sessionId: string, _version?: number): Promise<PlanningTextDocument | null> {
+    // 该端点已从后端 v1 删除；此方法保留签名仅为类型兼容，运行时不再发起网络请求。
+    throw new Error('[v1] 规划文本端点已下线（GET /api/sessions/{id}/planning-text）');
   },
 
   /**
    * Get all planning text versions
    * GET /api/sessions/{session_id}/planning-text/versions
    */
-  async getPlanningTextVersions(sessionId: string, limit?: number): Promise<PlanningTextVersionList> {
-    const url = limit
-      ? `/api/sessions/${sessionId}/planning-text/versions?limit=${limit}`
-      : `/api/sessions/${sessionId}/planning-text/versions`;
-    return apiRequest<PlanningTextVersionList>(url);
+  async getPlanningTextVersions(_sessionId: string, _limit?: number): Promise<PlanningTextVersionList> {
+    // 该端点已从后端 v1 删除；此方法保留签名仅为类型兼容，运行时不再发起网络请求。
+    throw new Error('[v1] 规划文本端点已下线（GET /api/sessions/{id}/planning-text/versions）');
   },
 
   /**
@@ -490,16 +466,11 @@ export const planningApi = {
    * POST /api/sessions/{session_id}/planning-text
    */
   async generatePlanningText(
-    sessionId: string,
-    request?: GeneratePlanningTextRequest
+    _sessionId: string,
+    _request?: GeneratePlanningTextRequest
   ): Promise<GeneratePlanningTextResponse> {
-    return apiRequest<GeneratePlanningTextResponse>(
-      `/api/sessions/${sessionId}/planning-text`,
-      {
-        method: 'POST',
-        body: JSON.stringify(request || { trigger_reason: 'initial' }),
-      }
-    );
+    // 该端点已从后端 v1 删除；此方法保留签名仅为类型兼容，运行时不再发起网络请求。
+    throw new Error('[v1] 规划文本端点已下线（POST /api/sessions/{id}/planning-text）');
   },
 
   // ============================================
@@ -511,16 +482,11 @@ export const planningApi = {
    * PATCH /api/sessions/{session_id}/rag-config
    */
   async updateRagConfig(
-    sessionId: string,
-    request: RagConfigRequest
+    _sessionId: string,
+    _request: RagConfigRequest
   ): Promise<RagConfigResponse> {
-    return apiRequest<RagConfigResponse>(
-      `/api/sessions/${sessionId}/rag-config`,
-      {
-        method: 'PATCH',
-        body: JSON.stringify(request),
-      }
-    );
+    // 该端点已从后端 v1 删除；此方法保留签名仅为类型兼容，运行时不再发起网络请求。
+    throw new Error('[v1] RAG 配置端点已下线（PATCH /api/sessions/{id}/rag-config）');
   },
 
   /**
@@ -528,16 +494,11 @@ export const planningApi = {
    * PATCH /api/sessions/{session_id}/step-mode
    */
   async updateStepMode(
-    sessionId: string,
-    request: StepModeRequest
+    _sessionId: string,
+    _request: StepModeRequest
   ): Promise<StepModeResponse> {
-    return apiRequest<StepModeResponse>(
-      `/api/sessions/${sessionId}/step-mode`,
-      {
-        method: 'PATCH',
-        body: JSON.stringify(request),
-      }
-    );
+    // 该端点已从后端 v1 删除；此方法保留签名仅为类型兼容，运行时不再发起网络请求。
+    throw new Error('[v1] 分步模式端点已下线（PATCH /api/sessions/{id}/step-mode）');
   },
 
   /**
@@ -545,8 +506,8 @@ export const planningApi = {
    * GET /api/sessions/{session_id}/geocode
    */
   async geocodeVillage(
-    sessionId: string,
-    params: {
+    _sessionId: string,
+    _params: {
       village_name?: string;
       province?: string;
       city?: string;
@@ -554,15 +515,8 @@ export const planningApi = {
       township?: string;
     }
   ): Promise<GeocodeResponse> {
-    const qs = new URLSearchParams();
-    if (params.village_name) qs.set('village_name', params.village_name);
-    if (params.province) qs.set('province', params.province);
-    if (params.city) qs.set('city', params.city);
-    if (params.county) qs.set('county', params.county);
-    if (params.township) qs.set('township', params.township);
-    return apiRequest<GeocodeResponse>(
-      `/api/sessions/${sessionId}/geocode?${qs.toString()}`
-    );
+    // 该端点已从后端 v1 删除；此方法保留签名仅为类型兼容，运行时不再发起网络请求。
+    throw new Error('[v1] 地理编码端点已下线（GET /api/sessions/{id}/geocode）');
   },
 
   /**
@@ -570,26 +524,12 @@ export const planningApi = {
    * POST /api/sessions/{session_id}/gis-data
    */
   async uploadGisData(
-    sessionId: string,
-    file: File,
-    dataType?: string,
+    _sessionId: string,
+    _file: File,
+    _dataType?: string,
   ): Promise<GisDataUploadResponse> {
-    const formData = new FormData();
-    formData.append('file', file, file.name);
-    if (dataType) formData.append('data_type', dataType);
-
-    const response = await fetch(
-      `${API_BASE_URL}/api/sessions/${sessionId}/gis-data`,
-      { method: 'POST', body: formData },
-    );
-
-    if (!response.ok) {
-      const errorData = await response.json().catch(() => ({}));
-      const detail = errorData.detail || `HTTP ${response.status}`;
-      throw new Error(detail);
-    }
-
-    return response.json();
+    // 该端点已从后端 v1 删除；此方法保留签名仅为类型兼容，运行时不再发起网络请求。
+    throw new Error('[v1] GIS 上传端点已下线（POST /api/sessions/{id}/gis-data）');
   },
 
   /**

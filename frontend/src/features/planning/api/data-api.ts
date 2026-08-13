@@ -2,66 +2,50 @@
 // Data API - 数据访问 API
 // ============================================
 
-import { apiRequest } from './client';
 import type { CrossSessionReport, DimensionVersion } from './types';
 
 // ============================================
 // Data API
 // ============================================
+// v1 对齐：/api/projects 与 /api/sessions/{id}/reports/* 端点已从后端删除。
+// 以下方法保留签名仅为类型兼容，运行时抛错，不再发起网络请求。
+// 历史/对比能力等后端提供 v1 资源（或 /delivery.downloads）后恢复。
 
 export const dataApi = {
   /**
    * List all projects
-   * GET /api/projects
+   * GET /api/projects (已下线)
    */
   async listVillages(): Promise<{ name: string; display_name: string; session_count: number }[]> {
-    const response = await apiRequest<{ projects: { name: string; display_name: string; session_count: number }[] }>('/api/projects');
-    return response.projects || [];
+    throw new Error('[v1] 项目列表端点已下线（GET /api/projects）');
   },
 
   /**
    * Get sessions for a project
-   * GET /api/projects/{name}/sessions
+   * GET /api/projects/{name}/sessions (已下线)
    */
-  async getVillageSessions(villageName: string): Promise<{ session_id: string; created_at: string; completed_at: string | null }[]> {
-    const response = await apiRequest<{ sessions: { session_id: string; created_at: string; completed_at: string | null }[] }>(
-      `/api/projects/${encodeURIComponent(villageName)}/sessions`
-    );
-    return response.sessions || [];
+  async getVillageSessions(_villageName: string): Promise<{ session_id: string; created_at: string; completed_at: string | null }[]> {
+    throw new Error('[v1] 项目会话端点已下线（GET /api/projects/{name}/sessions）');
   },
 
   /**
    * Get cross-session dimension report
-   * GET /api/projects/{name}/reports/{dim_key}?session_id={id}&version={n}
+   * GET /api/projects/{name}/reports/{dim_key} (已下线)
    */
   async getCrossSessionReport(
-    projectName: string,
-    dimKey: string,
-    sessionId?: string,
-    version?: number
+    _projectName: string,
+    _dimKey: string,
+    _sessionId?: string,
+    _version?: number
   ): Promise<CrossSessionReport> {
-    const params = new URLSearchParams();
-    if (sessionId) params.append('session_id', sessionId);
-    if (version !== undefined) params.append('version', String(version));
-
-    const query = params.toString() ? `?${params.toString()}` : '';
-    return apiRequest<CrossSessionReport>(
-      `/api/projects/${encodeURIComponent(projectName)}/reports/${dimKey}${query}`
-    );
+    throw new Error('[v1] 跨会话报告端点已下线（GET /api/projects/{name}/reports/{dim_key}）');
   },
 
   /**
    * Get dimension version history
-   * GET /api/sessions/{id}/reports/{dim_key}/versions
+   * GET /api/sessions/{id}/reports/{dim_key}/versions (已下线)
    */
-  async getDimensionVersions(sessionId: string, dimKey: string): Promise<DimensionVersion[]> {
-    try {
-      const response = await apiRequest<{ versions: DimensionVersion[] }>(
-        `/api/sessions/${sessionId}/reports/${dimKey}/versions`
-      );
-      return response.versions || [];
-    } catch {
-      return [];
-    }
+  async getDimensionVersions(_sessionId: string, _dimKey: string): Promise<DimensionVersion[]> {
+    throw new Error('[v1] 版本历史端点已下线（GET /api/sessions/{id}/reports/{dim_key}/versions）');
   },
 };

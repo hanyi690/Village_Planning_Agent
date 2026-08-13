@@ -1,4 +1,3 @@
-import { apiRequest } from '@/features/planning/api/client';
 
 export interface CitationDetail {
   text: string;
@@ -121,32 +120,35 @@ export interface SessionInfo {
   created_at?: string;
 }
 
+// v1 对齐：/api/projects 与 /api/evaluation/* 均未在后端 v1 提供。
+// 列表类方法返回空结果（页面显示"暂无会话"），其余方法抛错标注已下线。
 export const evaluationApi = {
-  listProjects: () =>
-    apiRequest<{ projects: ProjectInfo[] }>('/api/projects'),
+  listProjects: async (): Promise<{ projects: ProjectInfo[] }> => {
+    // 后端 v1 未提供项目列表；QA 页暂无可选会话。
+    return { projects: [] };
+  },
 
-  listSessions: (projectName: string) =>
-    apiRequest<{ sessions: SessionInfo[] }>(`/api/projects/${encodeURIComponent(projectName)}/sessions`),
+  listSessions: async (_projectName: string): Promise<{ sessions: SessionInfo[] }> => {
+    return { sessions: [] };
+  },
 
-  run: (sessionId: string, signal?: AbortSignal) =>
-    apiRequest<EvaluationRunResponse>(`/api/evaluation/sessions/${sessionId}/run`, {
-      method: 'POST',
-      signal,
-    }),
+  run: async (_sessionId: string, _signal?: AbortSignal): Promise<EvaluationRunResponse> => {
+    throw new Error('[v1] 质量评估端点已下线（/api/evaluation/sessions/{id}/run）');
+  },
 
-  getResults: (sessionId: string) =>
-    apiRequest<EvaluationResult>(`/api/evaluation/sessions/${sessionId}/results`),
+  getResults: async (_sessionId: string): Promise<EvaluationResult> => {
+    throw new Error('[v1] 质量评估端点已下线（/api/evaluation/sessions/{id}/results）');
+  },
 
-  getStatus: (sessionId: string) =>
-    apiRequest<EvaluationStatusResponse>(`/api/evaluation/sessions/${sessionId}/status`),
+  getStatus: async (_sessionId: string): Promise<EvaluationStatusResponse> => {
+    throw new Error('[v1] 质量评估端点已下线（/api/evaluation/sessions/{id}/status）');
+  },
 
-  runCascade: (sessionId: string) =>
-    apiRequest<CascadeConsistencyResult>(`/api/evaluation/sessions/${sessionId}/cascade`, {
-      method: 'POST',
-    }),
+  runCascade: async (_sessionId: string): Promise<CascadeConsistencyResult> => {
+    throw new Error('[v1] 质量评估端点已下线（/api/evaluation/sessions/{id}/cascade）');
+  },
 
-  exportMarkdown: (sessionId: string) =>
-    apiRequest<{ session_id: string; markdown: string; filename: string }>(
-      `/api/evaluation/sessions/${sessionId}/export/markdown`,
-    ),
+  exportMarkdown: async (_sessionId: string): Promise<{ session_id: string; markdown: string; filename: string }> => {
+    throw new Error('[v1] 质量评估端点已下线（/api/evaluation/sessions/{id}/export/markdown）');
+  },
 };
