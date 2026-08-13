@@ -673,6 +673,33 @@ def test_real_graph_resume_delivery(sqlite_db, pipeline_reset, monkeypatch):
                 f"stage_report={run_root / session_id / 'reports' / 'stage-report.md'}"
             )
 
+            # L1 location resolution coverage (历史记录地点 → 实体/空间范围).
+            # Rebuild the authoritative context through the production bootstrap
+            # path (name backfill + evidence index) and tally how many typed L1
+            # facts resolve to a KG entity with a spatial extent (or an extent
+            # alone) that GROUND can consume.
+            from app.evidence.index.resolution_coverage import resolution_coverage
+            from app.infrastructure.context.planning_context_factory import (
+                build_planning_context,
+            )
+            from app.workflow.layers.context_bootstrap import _hydrate_l1_spatial_facts
+
+            audit_context = client.portal.call(
+                build_planning_context, session_id, "", True, True, None
+            )
+            client.portal.call(_hydrate_l1_spatial_facts, state, audit_context)
+            cov = resolution_coverage(audit_context)
+            print(f"[REAL-SESSION] L1 resolution {cov.summary()}", flush=True)
+            min_rate = float(os.getenv("RESOLUTION_COVERAGE_MIN", "0.85"))
+            assert cov.total > 0, (
+                "real L1 snapshot produced no typed location facts; "
+                "observations JSON did not compile into the evidence index"
+            )
+            assert cov.extent_rate >= min_rate, (
+                "real L1 location resolution below threshold "
+                f"min={min_rate:.0%} {cov.summary()} session={session_id}"
+            )
+
             render_response = client.get(f"/api/v1/sessions/{session_id}/map-layers")
             assert render_response.status_code == 200, render_response.text
             layers = render_response.json().get("layers") or []

@@ -37,3 +37,27 @@ def test_runtime_channel_excludes_reducer_and_identity_keys():
     assert "phase" not in carrier
     assert "messages" not in carrier
     assert carrier["retry_counts"] == {"ground": 1}
+
+
+def test_parallel_provider_failures_are_first_class_checkpoint_channels():
+    state = initial_workflow_state({
+        "session_id": "s1",
+        "phase": "layer3",
+        "fatal_error": {"code": "llm_stream_timeout", "dimension": "traffic"},
+        "provider_failures": [
+            {"code": "llm_stream_timeout", "dimension": "traffic"},
+        ],
+        "dimension_retry_counts": {"traffic": 1},
+    })
+
+    assert state["fatal_error"]["dimension"] == "traffic"
+    assert state["provider_failures"][0]["dimension"] == "traffic"
+    assert state["dimension_retry_counts"] == {"traffic": 1}
+    assert "provider_failures" not in state["runtime"]
+
+    cleared = pack_workflow_patch(state, {
+        "fatal_error": None,
+        "provider_failures": [],
+    })
+    assert cleared["fatal_error"] is None
+    assert cleared["provider_failures"] == []

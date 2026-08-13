@@ -50,6 +50,15 @@ def _kg_graph():
     return g
 
 
+def _planning_kg():
+    from app.infrastructure.kg.builder.base import PlanningKG
+
+    kg = PlanningKG(village_name="test")
+    for triple in _kg_graph():
+        kg.g.add(triple)
+    return kg
+
+
 def _context(kg):
     return SimpleNamespace(
         session_id="s-kg",
@@ -100,3 +109,18 @@ def test_kg_entity_resolves_via_mention():
     assert result.status == "resolved"
     assert result.selected_entity_ref == str(PLN.facility_bsm_1)
     assert result.candidates[0].source_bsms == ["bsm-100"]
+
+
+def test_kg_names_registered_via_planning_kg():
+    index = PlaceEvidenceIndex.build(_context(_planning_kg()))
+    by_name = {e.canonical_name: e for e in index.entries}
+    assert "祠堂" in by_name
+    assert "石窟河" in by_name
+    assert "122乡道" in by_name
+    assert "园寨村" in by_name
+    assert "金田村" in by_name
+
+    fac = by_name["祠堂"]
+    assert fac.role == "facility"
+    assert fac.source_bsms == ["bsm-100"]
+    assert fac.geometry_ref == "POINT(113.1 23.1)"

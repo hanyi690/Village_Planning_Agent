@@ -177,3 +177,142 @@ def test_delivery_snapshot_repairs_source_topology_and_drops_axis_placeholder(tm
     assert quality["status"] == "passed"
     assert quality["invalid_geometry_count"] == 0
     assert quality["placeholder_geometry_count"] == 0
+
+
+def _render_feature(geometry, **properties):
+    return {"type": "Feature", "properties": properties, "geometry": geometry}
+
+
+def _render_layer(layer_type, layer_name, features, color="#64748b"):
+    payload = {"type": "FeatureCollection", "features": features}
+    return {
+        "layer_type": layer_type,
+        "layer_name": layer_name,
+        "geojson": payload,
+        "color": color,
+    }
+
+
+def test_comparison_renderer_distinguishes_authoritative_planning_outputs(tmp_path):
+    from app.infrastructure.rendering.html_render import render_interactive_map
+    from app.infrastructure.rendering.static_render import render_comparison_preview
+
+    boundary = {
+        "type": "Polygon",
+        "coordinates": [[[0, 0], [1000, 0], [1000, 800], [0, 800], [0, 0]]],
+    }
+    base = _render_feature(boundary, DLMC="耕地", BSM="P001")
+    changed = _render_feature(
+        {
+            "type": "Polygon",
+            "coordinates": [[[350, 250], [550, 250], [550, 430], [350, 430], [350, 250]]],
+        },
+        planning_land_use="公共服务设施用地",
+        change_status="modified",
+        BSM="P001",
+    )
+    layers = [
+        _render_layer("current_landuse", "现状地类", [base]),
+        _render_layer("complete_planned_landuse", "完整期末地类", [changed]),
+        _render_layer("planned_changes", "规划变更地块", [changed], "#dc2626"),
+        _render_layer(
+            "planned_road",
+            "规划道路",
+            [
+                _render_feature(
+                    {"type": "LineString", "coordinates": [[80, 120], [900, 680]]},
+                    name="产业联络路",
+                    road_level="乡道",
+                    action="new",
+                ),
+                _render_feature(
+                    {"type": "LineString", "coordinates": [[120, 700], [850, 160]]},
+                    name="村道提升段",
+                    road_level="村道",
+                    action="upgrade",
+                ),
+            ],
+            "#d97706",
+        ),
+        _render_layer(
+            "planning_zone",
+            "规划分区",
+            [_render_feature(boundary, zone_name="农业生产区")],
+            "#16a34a",
+        ),
+        _render_layer(
+            "planned_project_point",
+            "规划项目点",
+            [
+                _render_feature({"type": "Point", "coordinates": [420, 340]}, project_name="综合服务中心"),
+                _render_feature({"type": "Point", "coordinates": [640, 520]}, project_name="农产品展销点"),
+            ],
+            "#b91c1c",
+        ),
+        _render_layer(
+            "facility_point",
+            "公共服务设施",
+            [
+                _render_feature({"type": "Point", "coordinates": [300, 520]}, name="卫生室"),
+                _render_feature({"type": "Point", "coordinates": [700, 300]}, name="文化活动室"),
+            ],
+            "#1d4ed8",
+        ),
+        _render_layer("boundary", "村域边界", [_render_feature(boundary)], "#0f172a"),
+    ]
+
+    result = render_comparison_preview(layers, str(tmp_path), "渲染测试样图")
+
+    assert result["status"] == "completed"
+    assert result["planned_road_count"] == 2
+    assert result["planned_zone_count"] == 1
+    assert result["planned_point_count"] == 4
+    assert result["labelled_point_count"] == 4
+    assert result["change_badge_count"] == 1
+    assert result["missing_outputs"] == []
+    assert result["road_styles"] == ["乡道 · 新建", "村道 · 改造"]
+    assert result["scale_bar"]["distance_m"] > 0
+    assert result["panels"]["planned"]["north_arrow"] is True
+    assert result["panels"]["planned"]["layout"]["legend_overlaps_map"] is False
+    assert result["panels"]["planned"]["layout"]["title_reserved_above_map"] is True
+    assert (tmp_path / "planning_preview.png").stat().st_size > 20_000
+
+    html_result = render_interactive_map(layers, str(tmp_path), "渲染测试样图")
+    document = (tmp_path / "planning_map.html").read_text(encoding="utf-8")
+    assert html_result["status"] == "completed"
+    assert 'stroke-dasharray="14 8"' in document
+    assert "PLANNED_ROAD_NOT_GENERATED" not in document
+    assert "PLANNED_ZONE_NOT_GENERATED" not in document
+
+
+def test_comparison_renderer_reports_missing_roads_and_zones(tmp_path):
+    from app.infrastructure.rendering.static_render import render_comparison_preview
+
+    polygon = {
+        "type": "Polygon",
+        "coordinates": [[[0, 0], [100, 0], [100, 100], [0, 100], [0, 0]]],
+    }
+    feature = _render_feature(polygon, DLMC="耕地", change_status="preserved")
+    layers = [
+        _render_layer("current_landuse", "现状地类", [feature]),
+        _render_layer("complete_planned_landuse", "完整期末地类", [feature]),
+        _render_layer("boundary", "村域边界", [_render_feature(polygon)]),
+    ]
+
+    result = render_comparison_preview(layers, str(tmp_path), "无空间成果样图")
+
+    assert result["status"] == "completed"
+    assert result["missing_outputs"] == ["规划道路", "规划分区"]
+    assert result["planned_road_count"] == 0
+    assert result["planned_zone_count"] == 0
+    assert result["planned_change_count"] == 0
+    assert result["change_badge_count"] == 0
+    assert "规划道路" not in result["panels"]["planned"]["legend_items"]
+    assert "规划分区" not in result["panels"]["planned"]["legend_items"]
+
+    from app.infrastructure.rendering.html_render import render_interactive_map
+
+    render_interactive_map(layers, str(tmp_path), "无空间成果样图")
+    document = (tmp_path / "planning_map.html").read_text(encoding="utf-8")
+    assert "PLANNED_ROAD_NOT_GENERATED" in document
+    assert "PLANNED_ZONE_NOT_GENERATED" in document

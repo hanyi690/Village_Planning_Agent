@@ -3,9 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import json
-from types import SimpleNamespace
-
 from shapely.geometry import Polygon, mapping
 
 from app.domain.materialization.execute_state import ExecuteAgentState
@@ -18,8 +15,6 @@ from app.contracts.workflow.execution_plan_contracts import (
     ExecutionPlan,
     WorkerTask,
     WorkerType,
-    ZoneAllocationSolution,
-    ZoneAssignmentEntry,
 )
 from app.contracts.workflow.parse_contracts import ZoneTarget
 from app.contracts.domain.selection_contracts import TargetAssignment
@@ -37,9 +32,6 @@ from app.domain.materialization.zoning.custom_zone_changeset import (
     materialize_custom_zone_changes,
 )
 from app.data.encodings.dicts.vocabularies.loader import register_vocabulary
-from app.contracts.spatial.spatial_delivery_contracts import SpatialLayerRef
-from app.infrastructure.gis.spatial_data_port import GeoJSONSpatialDataPort
-from app.infrastructure.export.delivery_snapshot import build_delivery_spatial_snapshot
 
 
 def _vocabulary(*, rules: list[TypingRule] | None = None) -> Vocabulary:
@@ -123,6 +115,21 @@ def target_with_invalid_decision() -> CustomZoneTarget:
     )
 
 
+def _ready_selection(*targets):
+    return type("Selection", (), {
+        "target_assignments": [
+            TargetAssignment(
+                target_id=target.target_id,
+                target_type="zone",
+                status="ready",
+                expected_output_kind=getattr(target, "expected_output_kind", "parcel"),
+                target_binding=target.model_dump(mode="json"),
+            )
+            for target in targets
+        ]
+    })()
+
+
 def test_resolved_custom_zone_creates_reclassify_changes():
     result = materialize_custom_zone_changes(
         target_with_resolved_decision(), _parcels(), vocabulary=_vocabulary()
@@ -187,21 +194,31 @@ def test_protection_line_excluded_parcel_is_not_materialized():
 
 
 def test_custom_zone_is_scheduled_as_an_existing_zone_task():
-    intent = type("Intent", (), {"custom_zone_targets": [target_with_resolved_decision()]})()
-    selection = type("Selection", (), {"target_assignments": []})()
+    target = target_with_resolved_decision()
+    intent = type("Intent", (), {"custom_zone_targets": [target]})()
+    selection = _ready_selection(target)
 
-    plan = build_execution_plan(intent, selection, [])
+    plan = build_execution_plan(
+        intent,
+        selection,
+        [],
+        global_zone_allocation_ref="zone-allocation-1",
+    )
 
     assert [(task.target_type, task.target_id) for task in plan.worker_tasks] == [
         ("zone", "custom-zone-1")
     ]
     assert plan.worker_tasks[0].worker_type.value == "parcel_transformation"
+    assert any(
+        "global_zone_allocation" in ref
+        for ref in plan.worker_tasks[0].input_artifact_refs
+    )
 
 
 def test_unresolved_custom_zone_is_not_scheduled():
     target = target_without_decision()
     intent = type("Intent", (), {"custom_zone_targets": [target]})()
-    selection = type("Selection", (), {"target_assignments": []})()
+    selection = _ready_selection(target)
 
     plan = build_execution_plan(intent, selection, [])
 
@@ -211,52 +228,35 @@ def test_unresolved_custom_zone_is_not_scheduled():
     ]
 
 
-def test_scheduled_custom_zone_reaches_worker_and_delivery(tmp_path):
+def test_scheduled_custom_zone_reaches_worker_as_functional_overlay():
     target = target_with_resolved_decision()
     intent = type("Intent", (), {"custom_zone_targets": [target]})()
-    selection = type("Selection", (), {"target_assignments": []})()
+    selection = _ready_selection(target)
     register_vocabulary("test-vocabulary", _vocabulary())
     plan = build_execution_plan(intent, selection, [])
 
     state = ExecuteAgentState(execution_plan=plan, parcel_by_bsm=_parcels())
     result = _zone_worker(state)
 
-    assert [change.bsm for change in result.parcel_changes] == ["P001", "P002"]
+    assert result.parcel_changes == []
     assert result.task_results[0].status == "succeeded"
-    assert asyncio.run(_zone_worker_node(state))["allocation_summary"]["custom_zone_count"] == 2
-
-    current = {
-        "type": "FeatureCollection",
-        "features": [
-            {
-                "type": "Feature",
-                "properties": {"BSM": bsm},
-                "geometry": mapping(parcel["geometry"]),
-            }
-            for bsm, parcel in _parcels().items()
-        ],
-    }
-    current_path = tmp_path / "current.geojson"
-    output_path = tmp_path / "planned.geojson"
-    current_path.write_text(json.dumps(current), encoding="utf-8")
-    snapshot = build_delivery_spatial_snapshot(
-        SpatialLayerRef(artifact_ref="current", path=str(current_path), layer_name="current"),
-        result.parcel_changes,
-        data_port=GeoJSONSpatialDataPort(),
-        output_path=output_path,
+    layer = result.layers[0]
+    assert layer["layerType"] == "functional_zone_overlay"
+    assert {
+        feature["properties"]["bsm"]
+        for feature in layer["data"]["features"]
+    } == {"P001", "P002"}
+    assert (
+        asyncio.run(_zone_worker_node(state))["allocation_summary"]
+        ["overlay_feature_count"]
+        == 2
     )
 
-    payload = json.loads(output_path.read_text(encoding="utf-8"))
-    assert snapshot.change_summary["modified"] == 2
-    assert {feature["properties"]["change_status"] for feature in payload["features"]} == {
-        "modified"
-    }
 
-
-def test_worker_normalizes_list_protection_lines_before_materializing_custom_zone():
+def test_worker_does_not_reclassify_or_query_three_lines_for_functional_overlay():
     target = target_with_resolved_decision()
     intent = type("Intent", (), {"custom_zone_targets": [target]})()
-    selection = type("Selection", (), {"target_assignments": []})()
+    selection = _ready_selection(target)
     register_vocabulary("test-vocabulary", _vocabulary())
     plan = build_execution_plan(intent, selection, [])
     protection = Polygon([(1.5, -1), (3.5, -1), (3.5, 2), (1.5, 2)])
@@ -267,20 +267,21 @@ def test_worker_normalizes_list_protection_lines_before_materializing_custom_zon
         kg_three_lines=[{"subtype": "ecological_redline", "geometry": protection}],
     ))
 
-    assert [change.bsm for change in result.parcel_changes] == ["P001"]
+    assert result.parcel_changes == []
+    assert {
+        feature["properties"]["bsm"]
+        for feature in result.layers[0]["data"]["features"]
+    } == {"P001", "P002"}
 
 
-def test_custom_reservation_excludes_mip_candidates_and_reports_explicit_overlap():
+def test_zone_worker_never_calls_legacy_allocator_or_builds_full_parcel_pool():
     class CapturingAllocator:
         def __init__(self):
-            self.candidates = {}
+            self.called = False
 
         def allocate(self, targets, candidates, constraints, metadata):
-            self.candidates = candidates
-            return ZoneAllocationSolution(
-                feasible=True,
-                assignments=[ZoneAssignmentEntry(bsm="P003", zone_id="ordinary-mip")],
-            )
+            self.called = True
+            raise AssertionError("legacy allocator must not be called by materialization")
 
     custom = target_with_resolved_decision()
     ordinary_overlap = ZoneTarget(
@@ -300,7 +301,7 @@ def test_custom_reservation_excludes_mip_candidates_and_reports_explicit_overlap
         "zone_targets": [ordinary_overlap, ordinary_mip],
         "custom_zone_targets": [custom],
     })()
-    selection = type("Selection", (), {"target_assignments": []})()
+    selection = _ready_selection(custom, ordinary_overlap, ordinary_mip)
     register_vocabulary("test-vocabulary", _vocabulary())
     plan = build_execution_plan(intent, selection, [])
     allocator = CapturingAllocator()
@@ -314,16 +315,23 @@ def test_custom_reservation_excludes_mip_candidates_and_reports_explicit_overlap
     result = _zone_worker(ExecuteAgentState(
         execution_plan=plan,
         parcel_by_bsm=parcels,
-        ports=SimpleNamespace(zone_allocator=allocator),
+        ports=type("Ports", (), {"zone_allocator": allocator})(),
     ))
 
-    assert set(allocator.candidates["ordinary-mip"]) == {"P003"}
-    assert [change.bsm for change in result.parcel_changes].count("P001") == 1
-    assert len({change.bsm for change in result.parcel_changes}) == len(result.parcel_changes)
+    assert allocator.called is False
+    assert result.parcel_changes == []
     assert any(
-        item["code"] == "target_overlap" and item["target_id"] == "ordinary-overlap"
+        item["code"] == "global_zone_allocation_missing"
         for item in result.unresolved_items
     )
+    functional = next(
+        layer for layer in result.layers
+        if layer["layerType"] == "functional_zone_overlay"
+    )
+    assert {
+        feature["properties"]["bsm"]
+        for feature in functional["data"]["features"]
+    } == {"P001", "P002"}
 
 
 def test_invalid_custom_task_binding_is_returned_as_a_failed_task():
@@ -360,7 +368,7 @@ def test_worker_fails_closed_for_decision_target_id_mismatch():
         "classification_decision": _resolved_decision("different-target"),
     })
     intent = type("Intent", (), {"custom_zone_targets": [target]})()
-    selection = type("Selection", (), {"target_assignments": []})()
+    selection = _ready_selection(target)
     register_vocabulary("test-vocabulary", _vocabulary())
 
     result = _zone_worker(ExecuteAgentState(

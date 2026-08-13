@@ -42,7 +42,7 @@ def _deferral_ledger(*target_ids: str) -> DeferralLedger:
     ))
 
 
-def test_deferred_zone_with_grounded_parcels_is_lifted():
+def test_deferred_zone_with_only_grounded_parcels_stays_deferred_until_global_select():
     zone = ZoneTarget(
         target_id="zone-grounded",
         zone_id="zone-grounded",
@@ -56,8 +56,8 @@ def test_deferred_zone_with_grounded_parcels_is_lifted():
         intent, selection, [],
         deferral_ledger=_deferral_ledger("zone-grounded"),
     )
-    assert [task.target_id for task in plan.worker_tasks] == ["zone-grounded"]
-    assert plan.deferred_tasks == []
+    assert plan.worker_tasks == []
+    assert [task.target_id for task in plan.deferred_tasks] == ["zone-grounded"]
 
 
 def test_deferred_zone_without_evidence_stays_deferred():
@@ -78,7 +78,7 @@ def test_deferred_zone_without_evidence_stays_deferred():
     assert [task.target_id for task in plan.deferred_tasks] == ["zone-empty"]
 
 
-def test_deferred_road_with_endpoints_is_lifted():
+def test_deferred_road_with_proxy_endpoints_stays_deferred():
     road = RoadTarget(
         target_id="road-lift",
         road_level="村道",
@@ -94,5 +94,5 @@ def test_deferred_road_with_endpoints_is_lifted():
         intent, selection, [],
         deferral_ledger=_deferral_ledger("road-lift"),
     )
-    assert [task.target_id for task in plan.worker_tasks] == ["road-lift"]
-    assert plan.deferred_tasks == []
+    assert plan.worker_tasks == []
+    assert [task.target_id for task in plan.deferred_tasks] == ["road-lift"]

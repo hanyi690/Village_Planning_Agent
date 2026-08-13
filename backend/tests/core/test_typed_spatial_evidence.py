@@ -9,25 +9,22 @@ from types import SimpleNamespace
 from app.infrastructure.kg.gazetteer import GazetteerEntry
 from app.infrastructure.kg.enrichment.report_entity_enrichment import _location_fact_mentions
 from app.data.ingestion.compiler.profiles.l1_observation import (
-    _extract_location_facts,
+    _extract_location_facts_from_observations,
 )
 from app.evidence.index.place_evidence_index import PlaceEvidenceIndex
 
 
-INSTRUCTION = (
-    "【INSTRUCTION】\n"
-    "| 类型 | 名称 | 位置 | 描述 | 规模 |\n"
-    "| :--- | :--- | :--- | :--- | :--- |\n"
-    "| 现状设施 | 祠堂 | 设施点 | 社前村 | 祖祠 | 1处 |\n"
-    "| 现状设施 | 停车场 | 设施点 | 社前村 | 停车 | 1处 |\n"
-)
-
-
 def test_facility_location_fact_keeps_facility_role():
-    """INSTRUCTION rows with a non-village name and explicit facility location
-    must produce a facility fact (previously coerced to village)."""
-    facts = _extract_location_facts(
-        INSTRUCTION,
+    """Observations with a non-village name and explicit facility location
+    must produce a facility fact (never coerced to village)."""
+    import json
+
+    observations = json.dumps([
+        {"entity_type": "现状设施", "name": "祠堂", "location": "设施点", "description": "社前村祖祠", "scale": "1处"},
+        {"entity_type": "现状设施", "name": "停车场", "location": "设施点", "description": "停车", "scale": "1处"},
+    ], ensure_ascii=False)
+    facts = _extract_location_facts_from_observations(
+        observations,
         dimension_key="historical_culture",
         report_id="rpt-historical-culture-v1",
     )

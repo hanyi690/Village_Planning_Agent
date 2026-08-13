@@ -10,14 +10,15 @@ from app.evidence.index.place_evidence_index import PlaceEvidenceIndex
 FIXTURE = Path(__file__).parents[1] / "fixtures" / "mvp_village" / "current_report.md"
 
 
-def test_l1_location_facts_come_from_instruction_not_report_body():
-    """L1LocationFact must only come from the INSTRUCTION table, not report body.
+def test_l1_location_facts_come_from_observations_not_report_body():
+    """L1LocationFact must only come from the observations JSON, not report body.
 
     The uploaded current_report.md is raw input, not an L1 intermediate
     artifact.  Scanning its prose/HTML tables for village names produced
     un-auditable location_facts with comma-joined name strings (e.g.
-    "肩丰、长塘、营仔、田坑、黄竹").  The compiler now only extracts
-    location_facts from the model's structured INSTRUCTION table.
+    "肩丰、长塘、营仔、田坑、黄竹").  The compiler only extracts
+    location_facts from the model's structured observations JSON; an empty
+    instruction must yield zero facts.
     """
     content = FIXTURE.read_text(encoding="utf-8")
     fragment = compile_l1_observation(
@@ -27,14 +28,16 @@ def test_l1_location_facts_come_from_instruction_not_report_body():
         report_id="rpt-socio-economic-v1",
     )
 
-    for fact in fragment.location_facts:
-        assert "、" not in fact.normalized_name
-        assert fact.normalized_name != "全村"
-        assert fact.normalized_name != ""
+    assert fragment.location_facts == []
 
 
-def test_instruction_table_provides_location_facts():
-    """When the model emits an INSTRUCTION table, its rows become location_facts."""
+def test_legacy_markdown_instruction_yields_no_location_facts():
+    """A legacy markdown INSTRUCTION table is no longer a location source.
+
+    Since the dual-response migration the structured observations JSON is the
+    only location-fact source; a markdown table must yield zero facts rather
+    than a silently accepted fallback.
+    """
     instruction = (
         "【INSTRUCTION】\n"
         "| 类型 | 名称 | 位置 | 描述 | 规模 |\n"
@@ -49,16 +52,29 @@ def test_instruction_table_provides_location_facts():
         report_id="rpt-infrastructure-v1",
     )
 
-    names = {fact.normalized_name for fact in fragment.location_facts}
-    assert "园寨" in names
-    assert "营仔" in names
-    assert "服务本村" not in names
-    assert "全村" not in names
-    assert all(fact.source_span for fact in fragment.location_facts)
-    assert all(fact.source_report_ref == "rpt-infrastructure-v1" for fact in fragment.location_facts)
+    assert fragment.location_facts == []
+
+
+def test_observations_json_provides_location_facts():
+    """Dual-response observations JSON compiles into typed location facts."""
+    import json
+
+    instruction = json.dumps([
+        {"entity_type": "现状设施", "name": "供水点", "location": "园寨", "description": "5处供水点", "scale": "5处"},
+        {"entity_type": "道路", "name": "Y122乡道", "location": "村北", "description": "乡道", "scale": ""},
+        {"entity_type": "水系", "name": "金田河", "location": "", "description": "河流", "scale": ""},
+    ], ensure_ascii=False)
+    fragment = compile_l1_observation(
+        dimension_key="infrastructure",
+        content="正文内容",
+        instruction=instruction,
+        report_id="rpt-infra-v1",
+    )
 
     typed = {(fact.normalized_name, fact.role) for fact in fragment.location_facts}
     assert ("供水点", "facility") in typed
+    assert ("Y122乡道", "road") in typed
+    assert ("金田河", "water") in typed
     assert ("园寨", "village") in typed
 
 

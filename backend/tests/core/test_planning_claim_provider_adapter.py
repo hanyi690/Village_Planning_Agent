@@ -16,7 +16,7 @@ class _StructuredInvoker:
         if self.calls == 1:
             return {"claims": "[{claim_id: broken}]"}
         return {
-            "dimension_key": "industry",
+            "report_body": "Provide a small agricultural service point.",
             "claims": [
                 {
                     "claim_id": "industry-1",
@@ -45,5 +45,5 @@ def test_provider_adapter_retries_malformed_nested_json(monkeypatch):
     result = asyncio.run(generator.generate("Generate one planning claim."))
 
     assert invoker.calls == 2
-    assert result.dimension_key == "industry"
+    assert result.report_body == "Provide a small agricultural service point."
     assert result.claims[0].claim_id == "industry-1"

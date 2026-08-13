@@ -1,6 +1,7 @@
 """Location evidence must survive the claim-to-grounding boundary."""
 
 from app.contracts.program import PlanningClaim
+from app.contracts.domain.planning_semantics import FacilityPlanningParameters
 from app.domain.program.assembler import assemble_planning_program
 from app.domain.program.claim_adapter import proposals_from_claims
 from app.domain.program.target_projection.compile import compile_program_deterministic
@@ -14,6 +15,10 @@ def test_claim_location_hints_become_a_closed_set_spatial_reference():
         suggested_category="facility",
         suggested_output_kind="point",
         location_hints=["园寨", "黄竹"],
+        facility_parameters=FacilityPlanningParameters(
+            facility_type="service facility",
+            action="new",
+        ),
     )
     proposal = proposals_from_claims([claim], dimension_key="public_service")[0]
     program = assemble_planning_program([proposal], [], claims=[claim])

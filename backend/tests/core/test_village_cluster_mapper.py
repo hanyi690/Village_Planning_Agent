@@ -1,8 +1,7 @@
 """Village-cluster mapper regression tests.
 
-Clusters are derived from real 宅基地 bundle parcels (no fabrication), and
-the deterministic fallback maps natural villages in a stable order even when
-the flash LLM is unavailable.
+Clusters are derived from real 宅基地 bundle parcels (no fabrication).  A
+name is never assigned by list/size order when report evidence is unavailable.
 """
 from __future__ import annotations
 
@@ -50,11 +49,30 @@ def test_build_village_clusters_uses_residential_parcels():
     assert "farm" not in all_bsms
 
 
-def test_deterministic_map_assigns_village_names_in_size_order():
+def test_missing_report_evidence_keeps_names_unresolved():
     clusters = build_village_clusters(_parcels())
     mapping = asyncio.run(map_villages(clusters, ["园寨", "田坑", "社前"], llm=None))
-    assert set(mapping.keys()) == {"园寨", "田坑", "社前"}
-    assert mapping["园寨"]["bsms"] == clusters[0].bsms
+    assert mapping == {}
+
+
+def test_flash_mapping_requires_verbatim_report_evidence():
+    class FakeLLM:
+        async def ainvoke(self, _prompt):
+            return SimpleNamespace(
+                content='{"田坑": {"cluster_index": 1, "evidence": "田坑位于村域西部"}}'
+            )
+
+    clusters = build_village_clusters(_parcels())
+    mapping = asyncio.run(
+        map_villages(
+            clusters,
+            ["田坑", "社前"],
+            report_text="现状调查显示：田坑位于村域西部。",
+            llm=FakeLLM(),
+        )
+    )
+
+    assert set(mapping) == {"田坑"}
     assert mapping["田坑"]["bsms"] == clusters[1].bsms
-    assert mapping["社前"]["bsms"] == clusters[2].bsms
-    assert mapping["园寨"]["method"] == "deterministic_size_order"
+    assert mapping["田坑"]["method"] == "flash_llm_report_evidence"
+    assert mapping["田坑"]["provenance_refs"]
