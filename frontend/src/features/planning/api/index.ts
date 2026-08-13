@@ -33,6 +33,7 @@ export type {
   ArtifactListResponse,
   ArtifactResponse,
   ArtifactRefResponse,
+  ChatHistoryMessage,
   RenderLayer,
   RenderLayersResponse,
   DeliveryStatus,

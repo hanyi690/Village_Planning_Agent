@@ -298,6 +298,18 @@ export interface FeedbackRequest {
   images?: ImageData[];
 }
 
+/**
+ * Side-chat transcript item restored from a backend status payload.
+ */
+export interface ChatHistoryMessage {
+  id: string;
+  type: 'text';
+  role: 'user' | 'assistant';
+  source: 'chat';
+  content: string;
+  timestamp: string;
+}
+
 export interface SessionStatusResponse {
   session_id: string;
   status: string;
@@ -314,6 +326,12 @@ export interface SessionStatusResponse {
   human_review_pending?: boolean;
   last_event_seq?: number;
   active_stage?: string;
+  // 遗留/可选字段：后端 v1 /state 不再下发，仅当旧兼容数据存在时使用（Phase 2 下线）
+  gis_generation_id?: string;
+  gis_generation_status?: string;
+  gis_generation_error?: string;
+  gis_layout_configs?: Array<Record<string, unknown>>;
+  chat_history?: ChatHistoryMessage[];
   // Note: reports 不再从后端同步，前端通过 SSE 或 API 获取
   completed_dimensions: {
     layer1: string[];
@@ -596,6 +614,7 @@ export interface PlanningTextVersionList {
 export interface GeneratePlanningTextRequest {
   trigger_reason?: 'initial' | 'dimension_change' | 'manual';
   changed_dimensions?: string[];
+  use_llm?: boolean;
 }
 
 /**
@@ -730,21 +749,12 @@ export interface RenderLayersResponse {
 // ============================================
 // Delivery Projection Types (v1)
 // ============================================
+// 权威来源：docs/contracts/openapi-v1.json（openapi-typescript 生成），
+// 手写副本已删除，避免与后端契约漂移。
 
 export type DeliveryStatus = 'complete' | 'partial' | 'diagnostic_only';
 
-export interface DeliveryProjection {
-  schema_version?: '1.0';
-  session_id: string;
-  available: boolean;
-  delivery_status: DeliveryStatus | null;
-  statutory_complete: boolean;
-  snapshot_checksum: string;
-  deferral_summary: Record<string, unknown>;
-  diagnostic_summary: Record<string, unknown>;
-  deliverables: Array<Record<string, unknown>>;
-  downloads: string[];
-}
+export type { DeliveryProjection } from './v1-types';
 
 // ============================================
 // Human Review (HITL) Types
