@@ -15,11 +15,10 @@ import json
 import re
 from typing import Any
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from app.infrastructure.logging import get_logger
 
-logger = get_logger(__name__)
 logger = get_logger(__name__)
 
 
@@ -28,33 +27,13 @@ class _ClassificationResultItem(BaseModel):
 
     index: int
     selected_code: str
-    candidate_codes: list[str] = []
+    candidate_codes: list[str] = Field(default_factory=list)
     rationale: str = ""
 
 
 class _ClassificationResultSet(BaseModel):
     # MiniMax function-calling sometimes wraps the array in a JSON string.
-    results: list[_ClassificationResultItem] | str = []
-
-
-# Deterministic fallback used only when the LLM cannot classify a target.
-# Maps the L3 structured category (not a parcel dlbm or name) to the most
-# appropriate appendix5 planning land-use code; rationale marks it as
-# fallback so VALIDATE/audit can tell it apart from LLM decisions.
-_CATEGORY_FALLBACK_CODES = {
-    "protection": "1350",
-    "restoration": "1350",
-    "ecological": "1350",
-    "heritage": "2320",
-    "facility": "2122",
-    "infrastructure": "2123",
-    "road": "2126",
-    "project": "2124",
-    "zone": "1500",
-    "land_use_planning": "1500",
-    "settlement_planning": "2121",
-    "disaster_prevention": "1500",
-}
+    results: list[_ClassificationResultItem] | str = Field(default_factory=list)
 
 
 
@@ -88,6 +67,50 @@ def _targets_with_evidence(program: Any) -> list[dict[str, Any]]:
     from app.domain.program.classification import classification_review_targets
 
     return classification_review_targets(program)
+
+
+def _validated_batch_items(
+    items: list[Any],
+    *,
+    batch_size: int,
+    code_names: dict[str, str],
+) -> list[_ClassificationResultItem]:
+    """Validate one complete closed-set result batch before applying any item."""
+
+    by_index: dict[int, _ClassificationResultItem] = {}
+    errors: list[str] = []
+    for raw in items:
+        item = (
+            raw
+            if isinstance(raw, _ClassificationResultItem)
+            else _ClassificationResultItem.model_validate(raw)
+        )
+        if not 1 <= item.index <= batch_size:
+            errors.append(f"index {item.index} out of range")
+            continue
+        if item.index in by_index:
+            errors.append(f"duplicate index {item.index}")
+            continue
+        candidates = list(dict.fromkeys(str(code) for code in item.candidate_codes))
+        unknown = [code for code in candidates if code not in code_names]
+        if unknown:
+            errors.append(f"index {item.index} unknown candidate codes {unknown}")
+            continue
+        if item.selected_code not in candidates:
+            errors.append(
+                f"index {item.index} selected_code must occur in candidate_codes"
+            )
+            continue
+        if item.selected_code not in code_names:
+            errors.append(f"index {item.index} unknown selected_code {item.selected_code}")
+            continue
+        by_index[item.index] = item.model_copy(update={"candidate_codes": candidates})
+    missing = sorted(set(range(1, batch_size + 1)) - set(by_index))
+    if missing:
+        errors.append(f"missing indices {missing}")
+    if errors:
+        raise ValueError("; ".join(errors))
+    return [by_index[index] for index in range(1, batch_size + 1)]
 
 
 async def generate_classification_decisions(
@@ -147,13 +170,26 @@ async def generate_classification_decisions(
             _ClassificationResultSet,
             method="function_calling",
         )
+        validation_feedback = ""
         for attempt in range(3):
             try:
                 result = await asyncio.wait_for(
                     structured.ainvoke(
                         [
                             {"role": "system", "content": prompt},
-                            {"role": "user", "content": "Return the classification results only."},
+                            {
+                                "role": "user",
+                                "content": (
+                                    "Return the complete classification results only."
+                                    + (
+                                        " The previous result was rejected: "
+                                        + validation_feedback
+                                        + ". Repair every listed error and return all indices."
+                                        if validation_feedback
+                                        else ""
+                                    )
+                                ),
+                            },
                         ]
                     ),
                     timeout=180,
@@ -174,9 +210,15 @@ async def generate_classification_decisions(
                     ).results
                 else:
                     items = _ClassificationResultSet.model_validate(result).results
-                if items:
-                    break
+                items = _validated_batch_items(
+                    list(items or []),
+                    batch_size=len(batch),
+                    code_names=names,
+                )
+                break
             except Exception as exc:
+                validation_feedback = str(exc)[:1000]
+                items = []
                 logger.warning(
                     "[classification_generator] structured call failed for batch %d attempt %d: %s",
                     batch_start // batch_size, attempt + 1, exc,
@@ -189,19 +231,10 @@ async def generate_classification_decisions(
             )
             continue
         for item in items:
-            try:
-                idx = int(getattr(item, "index", 0))
-            except (TypeError, ValueError):
-                continue
-            if not (1 <= idx <= len(batch)):
-                continue
+            idx = item.index
             target = batch[idx - 1]
-            selected = str(getattr(item, "selected_code", "") or "")
-            candidates = [str(c) for c in (getattr(item, "candidate_codes", []) or [])]
-            if selected not in names or selected not in candidates:
-                continue
-            if not candidates or not all(c in names for c in candidates):
-                continue
+            selected = item.selected_code
+            candidates = item.candidate_codes
             decisions.append(
                 ClassificationDecision(
                     target_id=target["target_id"],
@@ -210,33 +243,10 @@ async def generate_classification_decisions(
                     selected_code=selected,
                     decision_mode="llm_l3",
                     evidence_refs=list(target.get("evidence_refs") or []),
-                    rationale=str(getattr(item, "rationale", "") or "")[:500],
+                    rationale=str(item.rationale or "")[:500],
                     status="resolved",
                 )
             )
-    # Deterministic fallback for targets the LLM could not classify, so the
-    # program stays complete and EXECUTE does not fail-closed on every
-    # polygon target.  Only the L3 structured category is used; rationale
-    # records it as a fallback.
-    covered = {decision.target_id for decision in decisions}
-    for target in targets:
-        if target["target_id"] in covered:
-            continue
-        code = _CATEGORY_FALLBACK_CODES.get(str(target.get("category") or ""))
-        if code is None:
-            code = "1500"
-        decisions.append(
-            ClassificationDecision(
-                target_id=target["target_id"],
-                code_system=ClassificationSystem.APPENDIX5,
-                candidate_codes=[code],
-                selected_code=code,
-                decision_mode="llm_l3_fallback",
-                evidence_refs=list(target.get("evidence_refs") or []),
-                rationale="deterministic fallback from L3 category",
-                status="resolved",
-            )
-        )
     logger.info(
         "[classification_generator] generated %d decisions for %d targets",
         len(decisions), len(targets),

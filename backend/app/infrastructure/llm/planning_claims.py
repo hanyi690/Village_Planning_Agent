@@ -18,7 +18,8 @@ from pydantic import ValidationError
 
 from app.infrastructure.llm.factory import create_llm
 from app.core.settings import MAX_TOKENS
-from app.domain.program.claim_draft import PlanningClaimDraftSet
+from app.core.settings import LLM_STREAM_TIMEOUT
+from app.domain.program.claim_draft import L3DimensionOutput
 
 
 class PlanningClaimGenerator:
@@ -36,49 +37,71 @@ class PlanningClaimGenerator:
             with self._lock:
                 if self._llm is None:
                     self._llm = create_llm(
-                        temperature=0.7,
+                        temperature=0.1,
                         max_tokens=MAX_TOKENS,
                         streaming=False,
                     )
         return self._llm
 
-    async def generate(self, prompt: str) -> PlanningClaimDraftSet:
-        """Call the provider and return a typed, non-authoritative draft."""
+    async def generate(
+        self,
+        prompt: str,
+        *,
+        validation_feedback: list[str] | None = None,
+    ) -> L3DimensionOutput:
+        """Call the provider and return the dual-response report + claims."""
 
         await asyncio.to_thread(self._slots.acquire)
         try:
             structured = self._get_llm().with_structured_output(
-                PlanningClaimDraftSet,
+                L3DimensionOutput,
                 method="function_calling",
             )
             retry_count = max(0, int(os.getenv("L3_PROVIDER_PARSE_RETRIES", "1")))
             last_error: Exception | None = None
             for attempt in range(retry_count + 1):
                 try:
-                    result = await structured.ainvoke([
-                        {"role": "system", "content": prompt},
-                        {
-                            "role": "user",
-                            "content": (
-                                "Return the PlanningClaimSet only."
-                                if attempt == 0
-                                else (
-                                    "Return valid function arguments only. Use strict JSON: "
-                                    "double-quote every key and string, encode nested arrays as "
-                                    "arrays, and omit markdown, comments, and trailing commas."
-                                )
-                            ),
-                        },
-                    ])
-                    if result is None:
-                        return PlanningClaimDraftSet(
-                            diagnostics=["provider returned no structured claim set"]
+                    feedback_text = ""
+                    if validation_feedback:
+                        feedback_text = (
+                            "\nThe previous structured result failed deterministic domain validation. "
+                            "Repair only the listed claims and return the complete claim set again:\n- "
+                            + "\n- ".join(validation_feedback[:40])
                         )
-                    if isinstance(result, PlanningClaimDraftSet):
+                    provider_error_feedback = ""
+                    if attempt > 0 and last_error is not None:
+                        provider_error_feedback = (
+                            "\nThe previous function arguments violated the declared JSON schema. "
+                            "Correct the exact validation errors below; do not invent enum values:\n"
+                            + str(last_error)[:6000]
+                        )
+                    result = await asyncio.wait_for(
+                        structured.ainvoke([
+                            {"role": "system", "content": prompt},
+                            {
+                                "role": "user",
+                                "content": (
+                                    "Return the PlanningClaimSet only." + feedback_text
+                                    if attempt == 0
+                                    else (
+                                        "Return valid function arguments only. Use strict JSON: "
+                                        "double-quote every key and string, encode nested arrays as "
+                                        "arrays, and omit markdown, comments, and trailing commas."
+                                        + provider_error_feedback
+                                        + feedback_text
+                                    )
+                                ),
+                            },
+                        ]),
+                        timeout=float(LLM_STREAM_TIMEOUT),
+                    )
+                    if result is None:
+                        return L3DimensionOutput(report_body="", claims=[])
+                    if isinstance(result, L3DimensionOutput):
                         return result
                     if isinstance(result, str):
                         result = json.loads(result)
-                    return PlanningClaimDraftSet.model_validate(result)
+                    return L3DimensionOutput.model_validate(result)
                 except (ValidationError, json.JSONDecodeError, TypeError, ValueError) as exc:
                     last_error = exc
                     if attempt >= retry_count:

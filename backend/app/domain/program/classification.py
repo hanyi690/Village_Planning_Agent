@@ -53,6 +53,12 @@ def classification_review_targets(program: PlanningProgram) -> list[dict[str, An
     for intervention in program.interventions:
         if intervention.expected_output_kind not in {"parcel", "polygon"}:
             continue
+        if intervention.materialization_role in {
+            "functional_overlay",
+            "protection_overlay",
+            "restoration_overlay",
+        }:
+            continue
         decision = intervention.classification_decision
         if decision is not None and decision.status == "resolved":
             continue

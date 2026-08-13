@@ -9,7 +9,7 @@ from __future__ import annotations
 from typing import Any
 
 _INSTRUCTION_MARKER = "【INSTRUCTION】"
-_FIXED_HEADER = "| 执行类型 | 名称 | 位置 | 描述 | 规模 |"
+_FIXED_HEADER = "| 类型 | 名称 | 位置 | 描述 | 规模 |"
 
 
 def split_content_instruction(content_with_instruction: str) -> tuple[str, str]:

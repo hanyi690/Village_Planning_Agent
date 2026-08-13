@@ -36,11 +36,16 @@ _PLANNING_PATTERNS: list[str] = [
     "docs/MinerU_markdown_*现状报告*.md",
 ]
 
-# Village name aliases for fuzzy matching
-_VILLAGE_ALIASES: Dict[str, list[str]] = {
-    "金田村": ["金田村", "金田"],
-    "金田村委会": ["金田村", "金田"],
-}
+def _village_aliases(village_name: str) -> list[str]:
+    """Derive filename aliases from a village name (no hard-coded table)."""
+    name = (village_name or "").strip()
+    if not name:
+        return []
+    aliases = {name}
+    for suffix in ("村委会", "村"):
+        if name.endswith(suffix) and len(name) > len(suffix):
+            aliases.add(name[: -len(suffix)])
+    return list(aliases)
 
 
 def load_l3_reports() -> Dict[str, Any]:
@@ -110,7 +115,7 @@ def _extract_metrics_regex(content: str) -> Dict[str, Any]:
     return metrics
 
 
-def load_planning_text(village_name: str = "金田村委会") -> str:
+def load_planning_text(village_name: str = "") -> str:
     """Load planning markdown for a village.
 
     Searches docs/ for MinerU-extracted markdown matching the village name.
@@ -125,7 +130,7 @@ def load_planning_text(village_name: str = "金田村委会") -> str:
     Raises:
         FileNotFoundError: If no planning markdown found.
     """
-    aliases = _VILLAGE_ALIASES.get(village_name, [village_name])
+    aliases = _village_aliases(village_name)
 
     for pattern in _PLANNING_PATTERNS:
         full_pattern = str(PROJECT_ROOT / pattern)
@@ -156,7 +161,7 @@ def list_available_documents(village_name: str = "") -> list[Dict[str, str]]:
     Returns:
         List of {"path": str, "name": str, "type": str, "size_chars": int}
     """
-    aliases = _VILLAGE_ALIASES.get(village_name, [village_name]) if village_name else []
+    aliases = _village_aliases(village_name)
     results = []
 
     for pattern in _PLANNING_PATTERNS:

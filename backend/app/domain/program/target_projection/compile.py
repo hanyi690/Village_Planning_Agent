@@ -58,17 +58,38 @@ def _semantic(intervention: PlanningIntervention) -> SemanticMetadata:
     )
 
 
+def _project_action(intervention: PlanningIntervention) -> str:
+    action = intervention.intervention_action
+    if action == "widen":
+        return "upgrade"
+    if action == "harden":
+        return "repair"
+    return action
+
+
 def _to_project_target(intervention: PlanningIntervention, index: int) -> ProjectTarget:
+    role = intervention.materialization_role
+    project_role = role if role != "land_use_assignment" else None
+    parameters = intervention.project_parameters
+    area_ha = intervention.area_range_ha[0] if intervention.area_range_ha else None
+    if area_ha is None and parameters is not None and parameters.footprint_area_m2:
+        area_ha = parameters.footprint_area_m2 / 10000.0
     return ProjectTarget(
         target_id=intervention.target_id,
         project_id=intervention.intervention_id,
         name=intervention.name,
-        category="other",
+        category=intervention.category,
+        materialization_role=project_role,
         execution_mode=intervention.execution_mode,
         expected_output_kind=intervention.expected_output_kind,
-        action="new",
+        action=_project_action(intervention),
         scale_text=intervention.scale,
-        area_ha=intervention.area_range_ha[0] if intervention.area_range_ha else None,
+        area_ha=area_ha,
+        capacity=parameters.capacity if parameters is not None else None,
+        capacity_unit=parameters.capacity_unit if parameters is not None else "",
+        footprint_area_m2=(
+            parameters.footprint_area_m2 if parameters is not None else None
+        ),
         location_hint=_spatial_hint(intervention),
         source_instruction_id=intervention.intervention_id,
         claim_refs=list(intervention.claim_refs),
@@ -80,93 +101,82 @@ def _to_project_target(intervention: PlanningIntervention, index: int) -> Projec
 
 
 def _to_facility_target(intervention: PlanningIntervention) -> FacilityTarget:
+    parameters = intervention.facility_parameters
+    action = parameters.action if parameters is not None else "new"
+    status_by_action = {
+        "preserve": "existing_preserve",
+        "new": "planned_new",
+        "expand": "planned_expand",
+        "relocate": "planned_relocate",
+        "repair": "existing_preserve",
+    }
     return FacilityTarget(
         target_id=intervention.target_id,
-        type=intervention.name,
+        type=(parameters.facility_type if parameters is not None else "") or intervention.name,
+        action=action,
         execution_mode=intervention.execution_mode,
         expected_output_kind=intervention.expected_output_kind,
-        status="planned_new",
+        status=status_by_action[action],
         location_hint=_spatial_hint(intervention),
         source_project_id=intervention.intervention_id,
         source_instruction_id=intervention.intervention_id,
         claim_refs=list(intervention.claim_refs),
         classification_decision=intervention.classification_decision,
         direction="center",
+        service_radius=(
+            round(parameters.service_radius_m)
+            if parameters is not None and parameters.service_radius_m is not None
+            else None
+        ),
+        capacity=parameters.capacity if parameters is not None else None,
+        capacity_unit=parameters.capacity_unit if parameters is not None else "",
+        footprint_area_m2=(
+            parameters.footprint_area_m2 if parameters is not None else None
+        ),
         semantic=_semantic(intervention),
     )
 
 
-_ROAD_LEVEL_KEYWORDS = (
-    ("主干道", "主干道"), ("次干道", "次干道"), ("支路", "支路"),
-    ("机耕路", "机耕路"), ("巷道", "巷道"), ("村道", "村道"),
-    ("乡道", "乡道"), ("道路", "村道"),
-)
-
-
 def _road_level(intervention: PlanningIntervention) -> str:
-    text = " ".join([
-        str(intervention.name or ""),
-        str((intervention.spatial_requirements or {}).get("location") or ""),
-        str(intervention.problem_addressed or ""),
-    ])
-    for keyword, level in _ROAD_LEVEL_KEYWORDS:
-        if keyword in text:
-            return level
-    return "村道"
+    parameters = intervention.road_parameters
+    return parameters.road_level if parameters is not None else ""
 
 
 def _road_width_m(intervention: PlanningIntervention) -> float:
-    import re as _re
-
-    text = " ".join([
-        str(intervention.name or ""),
-        str(intervention.scale or ""),
-        str(intervention.problem_addressed or ""),
-    ])
-    match = _re.search(r"(\d+(?:\.\d+)?)\s*?", text)
-    if match:
-        try:
-            return float(match.group(1))
-        except ValueError:
-            return 0.0
-    return 0.0
+    parameters = intervention.road_parameters
+    if parameters is None:
+        return 0.0
+    return float(parameters.pavement_width_m or parameters.roadbed_width_m or 0.0)
 
 
 def _road_connects(intervention: PlanningIntervention) -> list[str]:
-    """Extract up to two natural-village endpoints from road prose."""
-    text = " ".join([
-        str((intervention.spatial_requirements or {}).get("location") or ""),
-        str(intervention.name or ""),
-        str(intervention.problem_addressed or ""),
-    ])
-    try:
-        from app.data.ingestion.natural_villages import _KNOWN_NATURAL_VILLAGES
-
-        matches = [
-            (text.find(village), village)
-            for village in _KNOWN_NATURAL_VILLAGES
-            if village in text
-        ]
-        if matches:
-            names = [
-                village if village.endswith("村") else village + "村"
-                for _, village in sorted(matches, key=lambda item: item[0])
-            ]
-            return names[:2]
-    except Exception:
-        pass
-    return []
+    """Project L3-owned endpoint semantics without reinterpreting prose."""
+    parameters = intervention.road_parameters
+    return list(parameters.connects) if parameters is not None else []
 
 
 def _to_road_target(intervention: PlanningIntervention) -> RoadTarget:
     connects = _road_connects(intervention)
+    parameters = intervention.road_parameters
     return RoadTarget(
         target_id=intervention.target_id,
         road_level=_road_level(intervention),
         execution_mode=intervention.execution_mode,
         expected_output_kind=intervention.expected_output_kind,
         width_m=_road_width_m(intervention),
+        action=parameters.action if parameters is not None else "new",
+        road_planning_kind=(
+            "new_corridor"
+            if parameters is None or parameters.action == "new"
+            else "existing_road_intervention"
+        ),
+        length_m=parameters.length_m if parameters is not None else None,
+        roadbed_width_m=parameters.roadbed_width_m if parameters is not None else None,
+        pavement_width_m=parameters.pavement_width_m if parameters is not None else None,
         connects=connects,
+        alignment_refs=(
+            list(parameters.alignment_refs) if parameters is not None else []
+        ),
         source_project_id=intervention.intervention_id,
         classification_decision=intervention.classification_decision,
         claim_refs=list(intervention.claim_refs),
@@ -175,9 +185,20 @@ def _to_road_target(intervention: PlanningIntervention) -> RoadTarget:
 
 
 def _to_axis_target(intervention: PlanningIntervention) -> AxisTarget:
+    parameters = intervention.axis_parameters
     return AxisTarget(
         target_id=intervention.target_id,
         label=intervention.name,
+        action=parameters.action if parameters is not None else "new",
+        reference_feature=(
+            "、".join(parameters.reference_features) if parameters is not None else ""
+        ),
+        connects=list(parameters.connects) if parameters is not None else [],
+        direction=parameters.direction if parameters is not None else "",
+        axis_type=parameters.axis_type if parameters is not None else "primary",
+        corridor_width_m=(
+            parameters.corridor_width_m if parameters is not None else None
+        ),
         execution_mode=intervention.execution_mode,
         expected_output_kind=intervention.expected_output_kind,
         source_project_id=intervention.intervention_id,
@@ -189,9 +210,18 @@ def _to_axis_target(intervention: PlanningIntervention) -> AxisTarget:
 
 
 def _to_zone_target(intervention: PlanningIntervention) -> ZoneTarget:
+    parameters = intervention.polygon_parameters
     return ZoneTarget(
         target_id=intervention.target_id,
-        land_use=intervention.functions[0] if intervention.functions else intervention.name,
+        land_use=(
+            parameters.land_use
+            if parameters is not None and parameters.land_use
+            else (intervention.functions[0] if intervention.functions else intervention.name)
+        ),
+        planning_zone=(
+            parameters.planning_zone if parameters is not None else None
+        ),
+        materialization_role="land_use_assignment",
         execution_mode=intervention.execution_mode,
         expected_output_kind=intervention.expected_output_kind,
         area_ha=intervention.area_range_ha[0] if intervention.area_range_ha else None,
@@ -215,8 +245,13 @@ def _build_intent(program: PlanningProgram) -> SpatialPlanningIntent:
             intent.road_targets.append(_to_road_target(intervention))
         elif category == "axis":
             intent.development_axes.append(_to_axis_target(intervention))
-        elif category in ("restoration", "protection", "zone"):
-            intent.zone_targets.append(_to_zone_target(intervention))
+        elif category in ("restoration", "protection"):
+            intent.project_targets.append(_to_project_target(intervention, index))
+        elif category == "zone":
+            if intervention.materialization_role == "land_use_assignment":
+                intent.zone_targets.append(_to_zone_target(intervention))
+            else:
+                intent.project_targets.append(_to_project_target(intervention, index))
         else:
             intent.project_targets.append(_to_project_target(intervention, index))
     return intent
@@ -237,6 +272,66 @@ def _build_diagnostics(
                 field_path="interventions",
             )
         )
+    for intervention in program.interventions:
+        if intervention.category == "road" and intervention.road_parameters is None:
+            diagnostics.append(
+                ParseDiagnostic(
+                    diagnostic_id=f"road-semantics-{intervention.target_id}",
+                    severity="error",
+                    code="ROAD_SEMANTICS_UNRESOLVED",
+                    message="Road length/width/action semantics were not resolved in L3",
+                    field_path="road_parameters",
+                    target_id=intervention.target_id,
+                )
+            )
+        if intervention.category == "facility" and intervention.facility_parameters is None:
+            diagnostics.append(
+                ParseDiagnostic(
+                    diagnostic_id=f"facility-semantics-{intervention.target_id}",
+                    severity="error",
+                    code="FACILITY_SEMANTICS_UNRESOLVED",
+                    message="Facility type/action/scale semantics were not resolved in L3",
+                    field_path="facility_parameters",
+                    target_id=intervention.target_id,
+                )
+            )
+        if intervention.category == "axis" and intervention.axis_parameters is None:
+            diagnostics.append(
+                ParseDiagnostic(
+                    diagnostic_id=f"axis-semantics-{intervention.target_id}",
+                    severity="error",
+                    code="AXIS_SEMANTICS_UNRESOLVED",
+                    message="Axis direction/reference semantics were not resolved in L3",
+                    field_path="axis_parameters",
+                    target_id=intervention.target_id,
+                )
+            )
+        if intervention.category == "zone" and intervention.materialization_role is None:
+            diagnostics.append(
+                ParseDiagnostic(
+                    diagnostic_id=f"zone-role-{intervention.target_id}",
+                    severity="error",
+                    code="ZONE_MATERIALIZATION_UNRESOLVED",
+                    message="Zone versus overlay materialization was not resolved in L3",
+                    field_path="materialization_role",
+                    target_id=intervention.target_id,
+                )
+            )
+        if (
+            intervention.category == "project"
+            and intervention.expected_output_kind in {"parcel", "polygon"}
+            and intervention.materialization_role != "project_footprint"
+        ):
+            diagnostics.append(
+                ParseDiagnostic(
+                    diagnostic_id=f"project-role-{intervention.target_id}",
+                    severity="error",
+                    code="PROJECT_MATERIALIZATION_UNRESOLVED",
+                    message="Spatial project footprint semantics were not resolved in L3",
+                    field_path="materialization_role",
+                    target_id=intervention.target_id,
+                )
+            )
     return diagnostics
 
 

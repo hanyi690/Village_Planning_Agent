@@ -27,6 +27,11 @@ from pydantic import BaseModel, Field, computed_field, model_validator
 
 from app.contracts.artifacts.provenance import SemanticMetadata
 from app.contracts.artifacts.classification_ref import ClassificationDecision
+from app.contracts.domain.road_planning import (
+    RoadEndpointEvidence,
+    RoadPlanningKind,
+    RoadRoutingEvidence,
+)
 
 
 # ── Zone spatial preference ─────────────────────────────────────────
@@ -100,6 +105,7 @@ class ZoneTarget(TargetExecutionContract):
     land_use: Optional[str] = None
     raw_term: str = ""                           # 文档原词，留审计
     planning_zone: Optional[str] = None # PARSE 判断，非派生。LLM 决定此地块应属哪个规划分区
+    materialization_role: Literal["land_use_assignment"] = "land_use_assignment"
     area_ratio: float = 0.0
     area_ha: Optional[float] = None
     dlbm: Optional[str] = None
@@ -136,6 +142,7 @@ class FacilityTarget(TargetExecutionContract):
 
     expected_output_kind: Literal["point", "action"] = "point"
     type: str = ""
+    action: Literal["preserve", "new", "expand", "relocate", "repair"] = "new"
     status: Literal[
         "existing_preserve",
         "planned_new",
@@ -144,6 +151,9 @@ class FacilityTarget(TargetExecutionContract):
     ] = "existing_preserve"
     location_hint: str = ""
     service_radius: Optional[int] = None
+    capacity: Optional[float] = None
+    capacity_unit: str = ""
+    footprint_area_m2: Optional[float] = None
     anchor_village: Optional[str] = None
     source_project_id: str = ""
     source_instruction_id: str = ""
@@ -167,12 +177,14 @@ class AxisTarget(TargetExecutionContract):
     """
 
     expected_output_kind: Literal["line", "action"] = "line"
+    action: Literal["preserve", "new", "upgrade"] = "new"
     reference_feature: str = ""
     connects: List[str] = Field(default_factory=list)
     # === 轴线类型（AxisBuilder 用）===
     direction: str = ""                      # "north-south"/"east-west"/"radial"
     axis_type: str = "primary"              # "primary"/"secondary"/"spatial_control"
     label: str = ""                          # e.g. "南北发展轴"
+    corridor_width_m: Optional[float] = None
     source_project_id: str = ""
     source_instruction_id: str = ""
     source_report_key: str = ""
@@ -196,13 +208,27 @@ class RoadTarget(TargetExecutionContract):
     expected_output_kind: Literal["line", "action"] = "line"
     road_level: str = ""                         # "主干道"/"次干道"/"支路"/"村道"
     width_m: float = 0.0
+    action: Literal["preserve", "new", "upgrade", "widen", "harden", "repair"] = "new"
+    length_m: Optional[float] = None
+    roadbed_width_m: Optional[float] = None
+    pavement_width_m: Optional[float] = None
+    road_planning_kind: Optional[RoadPlanningKind] = None
     connects: List[str] = Field(default_factory=list)  # ["村北", "村南"]
+    alignment_refs: List[str] = Field(default_factory=list)
+    existing_road_feature_ids: List[str] = Field(default_factory=list)
+    existing_road_segment_ids: List[str] = Field(default_factory=list)
+    road_evidence_refs: List[str] = Field(default_factory=list)
     source_project_id: str = ""
     source_instruction_id: str = ""
     source_report_key: str = ""
     # === 空间锚定 ===
     start_anchor: Optional[Tuple[float, float]] = None
     end_anchor: Optional[Tuple[float, float]] = None
+    start_entity_ref: str = ""
+    end_entity_ref: str = ""
+    start_endpoint: Optional[RoadEndpointEvidence] = None
+    end_endpoint: Optional[RoadEndpointEvidence] = None
+    routing_evidence: RoadRoutingEvidence = Field(default_factory=RoadRoutingEvidence)
     path_bsms: List[str] = Field(default_factory=list)
     candidate_bsms: List[str] = Field(default_factory=list)
     candidate_bbox: Optional[Tuple[float, float, float, float]] = None
@@ -217,6 +243,12 @@ class ProjectTarget(TargetExecutionContract):
     project_id: str
     name: str
     category: str = "other"
+    materialization_role: Optional[Literal[
+        "functional_overlay",
+        "protection_overlay",
+        "restoration_overlay",
+        "project_footprint",
+    ]] = None
     action: Literal[
         "preserve",
         "new",
@@ -228,6 +260,9 @@ class ProjectTarget(TargetExecutionContract):
     ] = "new"
     scale_text: str = ""
     area_ha: Optional[float] = None
+    capacity: Optional[float] = None
+    capacity_unit: str = ""
+    footprint_area_m2: Optional[float] = None
     location_hint: str = ""
     candidate_bsms: List[str] = Field(default_factory=list)
     excluded_bsms: List[str] = Field(default_factory=list)

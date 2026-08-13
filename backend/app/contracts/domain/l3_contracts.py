@@ -14,6 +14,13 @@ from app.contracts.workflow.parse_result_contracts import ParseDiagnostic
 from app.contracts.workflow.parsing_contracts import CompilerTrace
 from app.contracts.artifacts.provenance import Provenance
 from app.contracts.program import PlanningClaim, ProgramProposal
+from app.contracts.domain.planning_semantics import (
+    AxisPlanningParameters,
+    FacilityPlanningParameters,
+    PolygonPlanningParameters,
+    ProjectPlanningParameters,
+    RoadPlanningParameters,
+)
 
 
 class PlanningIntervention(BaseModel):
@@ -45,6 +52,29 @@ class PlanningIntervention(BaseModel):
     # Human-readable ``name``/``functions`` remain semantic context only.
     classification_decision: ClassificationDecision | None = None
     derives_from_strategy: str | None = None
+    intervention_action: Literal[
+        "preserve",
+        "new",
+        "expand",
+        "relocate",
+        "upgrade",
+        "widen",
+        "harden",
+        "repair",
+        "demolish",
+    ] = "new"
+    materialization_role: Literal[
+        "land_use_assignment",
+        "functional_overlay",
+        "protection_overlay",
+        "restoration_overlay",
+        "project_footprint",
+    ] | None = None
+    road_parameters: RoadPlanningParameters | None = None
+    facility_parameters: FacilityPlanningParameters | None = None
+    axis_parameters: AxisPlanningParameters | None = None
+    polygon_parameters: PolygonPlanningParameters | None = None
+    project_parameters: ProjectPlanningParameters | None = None
 
     @model_validator(mode="after")
     def validate_target_contract(self) -> "PlanningIntervention":
@@ -125,6 +155,7 @@ class PlanningProgram(ContractMeta):
     l2_strategy_ref: str = ""
 
 __all__ = [
+    "RoadPlanningParameters",
     "PlanningIntervention",
     "InterventionDependency",
     "ProgramIssue",

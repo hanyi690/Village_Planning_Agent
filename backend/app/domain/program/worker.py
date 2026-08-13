@@ -10,12 +10,15 @@ not reference the L1 analysis node implementation.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
+import os
 import re
 import time
 import uuid
 from dataclasses import asdict
 from datetime import datetime
+from pathlib import Path
 from typing import Any, Dict, List
 
 from langchain_core.messages import AIMessage
@@ -49,6 +52,84 @@ from app.infrastructure.tasks.task_supervisor import build_summary_task_key
 logger = get_logger(__name__)
 
 
+def _claim_cache_path(session_id: str, dimension_key: str, prompt: str) -> Path:
+    """Return the content-addressed cache path for one provider invocation."""
+    from app.infrastructure.paths import session_run_dir
+
+    digest = hashlib.sha256(prompt.encode("utf-8")).hexdigest()
+    return (
+        session_run_dir(session_id)
+        / "l3-claim-cache"
+        / dimension_key
+        / f"{digest}.json"
+    )
+
+
+async def _cached_claim_generation(
+    generator: Any,
+    *,
+    session_id: str,
+    dimension_key: str,
+    prompt: str,
+    validation_feedback: list[str] | None = None,
+):
+    """Generate a draft set once and replay it on checkpoint resume.
+
+    The key contains the complete prompt, including validator feedback for a
+    local repair.  A valid provider response is persisted before downstream
+    compilation so an interrupted graph can resume L3 without paying for the
+    same model call again.
+    """
+    from app.domain.program.claim_draft import L3DimensionOutput
+
+    schema_payload = L3DimensionOutput.model_json_schema()
+    schema_checksum = hashlib.sha256(
+        json.dumps(schema_payload, ensure_ascii=False, sort_keys=True).encode("utf-8")
+    ).hexdigest()
+    cache_key = json.dumps(
+        {
+            "prompt": prompt,
+            "validation_feedback": validation_feedback or [],
+            "schema_checksum": schema_checksum,
+        },
+        ensure_ascii=False,
+        sort_keys=True,
+    )
+    path = _claim_cache_path(session_id, dimension_key, cache_key)
+    if path.exists():
+        try:
+            cached = L3DimensionOutput.model_validate_json(
+                path.read_text(encoding="utf-8")
+            )
+            logger.info(
+                "[analyze_l3_dimension] %s: claim cache HIT %s",
+                dimension_key,
+                path.name,
+            )
+            return cached
+        except (OSError, ValueError):
+            logger.warning(
+                "[analyze_l3_dimension] %s: ignoring invalid claim cache %s",
+                dimension_key,
+                path,
+            )
+
+    generated = await generator.generate(
+        prompt,
+        validation_feedback=validation_feedback,
+    )
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_suffix(f".{uuid.uuid4().hex}.tmp")
+    temporary.write_text(generated.model_dump_json(indent=2), encoding="utf-8")
+    os.replace(temporary, path)
+    logger.info(
+        "[analyze_l3_dimension] %s: claim cache WRITE %s",
+        dimension_key,
+        path.name,
+    )
+    return generated
+
+
 # Cached LLM instance — reused across all L3 dimension analyses
 def _build_revision_completed(state: Dict[str, Any], dim_key: str) -> Dict[int, list]:
     """根据 impact_tree 反查维度所属 wave，构建 revision_completed_dims 更新"""
@@ -60,27 +141,6 @@ def _build_revision_completed(state: Dict[str, Any], dim_key: str) -> Dict[int, 
     return result
 
 
-_NATURAL_VILLAGE_RE = re.compile(r"[\u4e00-\u9fff]{2}")
-
-
-def _extract_natural_villages(text: str) -> str:
-    """从上游 L1 报告提取自然村名单（已知自然村闭集过滤 → 顿号拼接）。
-
-    Location hints for L3 claims are restricted to known, resolvable villages;
-    the source is the L1 socio-economic report and the data-layer gazetteer.
-    """
-    try:
-        from app.data.ingestion.natural_villages import _KNOWN_NATURAL_VILLAGES
-    except Exception:
-        _KNOWN_NATURAL_VILLAGES = set()
-    found: List[str] = []
-    for m in _NATURAL_VILLAGE_RE.finditer(text or ""):
-        name = m.group(0)
-        if name in _KNOWN_NATURAL_VILLAGES and name not in found:
-            found.append(name)
-    return "、".join(found)
-
-
 def _location_evidence(text: str) -> str:
     """Extract compact, source-backed location rows for the L3 prompt.
 
@@ -88,15 +148,11 @@ def _location_evidence(text: str) -> str:
     block makes the spatial provenance decision explicit and prevents the
     model from turning a village list into an unsupported project location.
     """
-    try:
-        from app.data.ingestion.natural_villages import _KNOWN_NATURAL_VILLAGES
-    except Exception:
-        _KNOWN_NATURAL_VILLAGES = set()
     rows: List[str] = []
     seen: set[str] = set()
     for raw_line in (text or "").splitlines():
         line = raw_line.strip()
-        if not line or not any(name in line for name in _KNOWN_NATURAL_VILLAGES):
+        if not line:
             continue
         if not any(token in line for token in ("位于", "分布", "涉及", "集中", "位置", "布局")):
             continue
@@ -106,11 +162,16 @@ def _location_evidence(text: str) -> str:
         rows.append(line[:320])
         if len(rows) >= 60:
             break
-    return "\n".join(f"- {row}" for row in rows) or "（依赖报告未提供可核验的对象—村庄位置关系）"
+    return "\n".join(f"- {row}" for row in rows) or "（依赖报告未提供可核验的对象—地点位置关系）"
 
 
-def _resolvable_villages(session_id: str) -> str:
-    """Return only village aliases currently backed by real BSMs."""
+def _resolvable_places(session_id: str) -> str:
+    """Return gazetteer place aliases backed by real BSM evidence.
+
+    This intentionally includes roads, water bodies, facilities, settlements,
+    administrative units and other registered place entities.  The L3 source
+    contract must not collapse spatial evidence to a hard-coded village list.
+    """
     try:
         from app.infrastructure.context.planning_context_factory import get_cached_context
 
@@ -120,8 +181,10 @@ def _resolvable_villages(session_id: str) -> str:
             if not getattr(entry, "bsms", None):
                 continue
             name = str(getattr(entry, "name", "") or "")
-            if name.endswith(("村", "自然村")) and name not in names:
+            if name and name not in names:
                 names.append(name)
+            if len(names) >= 200:
+                break
         return "、".join(names)
     except Exception:
         return ""
@@ -220,7 +283,7 @@ async def analyze_l3_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
         )
     prompt = _build_prompt(
         cfg, state, rag_context, l1_deps, l2_deps, same_layer_prompt, "", explore_section,
-        resolvable_villages=_resolvable_villages(session_id),
+        resolvable_villages=_resolvable_places(session_id),
     )
     logger.info(f"[analyze_l3_dimension] {dim_key}: Prompt length = {len(prompt)} chars")
 
@@ -233,7 +296,13 @@ async def analyze_l3_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
         stats.record_rag_time(session_id, dim_key, rag_log.retrieval_latency_ms, rag_log.total_results)
 
     # 6. 流式 LLM + SSE
-    from app.domain.program.claim_draft import normalize_claim_draft_set
+    from app.domain.program.claim_draft import (
+        PlanningClaimDraftSet,
+        claim_set_semantic_errors,
+        merge_repaired_claim_drafts,
+        normalize_claim_draft_set,
+        semantic_error_claim_ids,
+    )
     from app.infrastructure.llm import get_planning_claim_generator
 
     claim_generator = get_planning_claim_generator()
@@ -252,9 +321,83 @@ async def analyze_l3_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
     llm_response = ""
 
     try:
-        async with asyncio.timeout(LLM_STREAM_TIMEOUT):
-            draft_set = await claim_generator.generate(prompt)
-            claim_set = normalize_claim_draft_set(draft_set, dimension_key=dim_key)
+        # Queueing for the bounded provider semaphore is not an LLM stream
+        # timeout.  Each actual provider invocation owns its timeout after it
+        # acquires a slot inside PlanningClaimGenerator.
+        output = await _cached_claim_generation(
+            claim_generator,
+            session_id=session_id,
+            dimension_key=dim_key,
+            prompt=prompt,
+        )
+        report_body = (output.report_body or "").strip()
+        draft_set = PlanningClaimDraftSet(
+            dimension_key=dim_key,
+            claims=list(output.claims),
+        )
+        if not draft_set.claims and not report_body:
+            draft_set.diagnostics.append("provider returned no structured claim set")
+        claim_set = normalize_claim_draft_set(draft_set, dimension_key=dim_key)
+        semantic_feedback = claim_set_semantic_errors(claim_set)
+        semantic_retry_count = max(
+            0,
+            int(os.getenv("L3_SEMANTIC_COMPILE_RETRIES", "2")),
+        )
+        for semantic_attempt in range(semantic_retry_count):
+            if not semantic_feedback:
+                break
+            rejected_ids = semantic_error_claim_ids(semantic_feedback)
+            rejected = [
+                item.model_dump(mode="json")
+                for item in draft_set.claims
+                if item.claim_id in set(rejected_ids)
+            ]
+            if not rejected:
+                break
+            logger.warning(
+                "[analyze_l3_dimension] %s: local semantic repair round %d claims=%s errors=%s",
+                dim_key,
+                semantic_attempt + 1,
+                rejected_ids,
+                semantic_feedback[:8],
+            )
+            repair_prompt = (
+                "你是 L3 Claim 局部语义编译修复器。只返回下列失败 claim 的完整"
+                "claims 数组（report_body 留空），不得返回已通过 claim，不得新增、删除或改写 claim_id。"
+                "不得创建坐标、BSM、地块或几何。严格按对象参数 schema 修复。"
+                "category/output/phase、各对象 action、axis_type、materialization_role "
+                "必须从工具 schema 的 enum 中选择；不得发明同义词。"
+                "只修改 validator_errors 明确指出的字段，其余字段保持原值。\n"
+                f"dimension={dim_key}\n"
+                f"validator_errors={json.dumps(semantic_feedback, ensure_ascii=False)}\n"
+                f"rejected_claims={json.dumps(rejected, ensure_ascii=False)}"
+            )
+            repair_output = await _cached_claim_generation(
+                claim_generator,
+                session_id=session_id,
+                dimension_key=dim_key,
+                prompt=repair_prompt,
+                validation_feedback=semantic_feedback,
+            )
+            draft_set = merge_repaired_claim_drafts(
+                draft_set,
+                PlanningClaimDraftSet(
+                    dimension_key=dim_key,
+                    claims=list(repair_output.claims),
+                ),
+                rejected_ids,
+            )
+            claim_set = normalize_claim_draft_set(
+                draft_set,
+                dimension_key=dim_key,
+            )
+            semantic_feedback = claim_set_semantic_errors(claim_set)
+        if claim_set is not None and semantic_feedback:
+            claim_set.diagnostics.append(
+                "ERROR[semantic_compile_exhausted] "
+                f"{dim_key}: bounded local repair exhausted; "
+                + "; ".join(semantic_feedback[:20])
+            )
     except asyncio.TimeoutError:
         trip_provider_failure(session_id)
         logger.error(f"[analyze_l3_dimension] {dim_key}: LLM stream timeout after {LLM_STREAM_TIMEOUT}s")
@@ -300,7 +443,8 @@ async def analyze_l3_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
         claim.model_copy(update={"dimension_key": claim.dimension_key or dim_key})
         for claim in claim_set.claims
     ]
-    llm_response = claim_set.model_dump_json(indent=2)
+    claims_json = claim_set.model_dump_json(indent=2)
+    llm_response = report_body or claims_json
     await publish_dimension_delta(
         session_id,
         dim_key,
@@ -346,7 +490,8 @@ async def analyze_l3_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
         "layer": dim_layer,
         "version": next_version,
         "report_id": report_id,
-        "content": llm_response,
+        "content": report_body,
+        "instruction": claims_json,
         "summary": structured_summary_str,
         "revision_trigger": revision_reason,
         "knowledge_sources": asdict(rag_log) if rag_log and rag_log.rag_enabled else None,
@@ -416,9 +561,7 @@ async def analyze_l3_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
 
 def _dependency_summary(text: str) -> Dict[str, Any]:
     """Summarize dependency prose for the human audit, not for the prompt."""
-    from app.infrastructure.reports.report_store import split_instruction
-
-    display, _ = split_instruction(text or "")
+    display = (text or "").strip()
     sections = re.findall(r"^#{1,6}\s+(.+)$", display, re.MULTILINE)
     return {
         "sections": sections[:20],
@@ -477,7 +620,7 @@ def _build_prompt(
         knowledge_context=rag_context or "",
         revision_instruction=revision_instruction,
         professional_data_section=professional_data_section + explore_section,
-        natural_villages=resolvable_villages or _extract_natural_villages(l1_deps),
+        natural_villages=resolvable_villages,
         location_evidence=_location_evidence(l1_deps + "\n" + l2_deps),
         dimension_plans=same_layer_contexts,
     )

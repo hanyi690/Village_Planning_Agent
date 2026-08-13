@@ -36,10 +36,22 @@ def evaluate_target_projection_gate(
     stage = "target_projection"
     cv = context_version or result.context_version
     gate_artifact_id = "gate-target-projection-" + (result.artifact_id or "0")
+    has_error_diagnostics = any(
+        getattr(diagnostic, "severity", "warning") == "error"
+        for diagnostic in (result.diagnostics or [])
+    )
 
-    if result.compilation_status == CompilationStatus.NEEDS_REVIEW or _is_empty_intent(
-        result
-    ):
+    if has_error_diagnostics:
+        return GateDecision(
+            stage=stage,
+            passed=False,
+            feedback_route="L3",
+            context_version=cv,
+            artifact_id=gate_artifact_id,
+            route_reason="target_projection_semantic_error",
+        )
+
+    if result.compilation_status == CompilationStatus.NEEDS_REVIEW or _is_empty_intent(result):
         return GateDecision(
             stage=stage,
             passed=False,

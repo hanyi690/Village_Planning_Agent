@@ -5,8 +5,6 @@
 """
 
 import asyncio
-import os
-import threading
 import time
 import uuid
 import json
@@ -15,9 +13,8 @@ from dataclasses import asdict
 from datetime import datetime
 from enum import Enum
 from typing import Dict, Any, List, Optional
-from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
+from langchain_core.messages import AIMessage
 from app.config import get_dimension_config, get_dimension_layer, list_dimensions
-from app.infrastructure.llm.factory import create_llm
 from app.core.settings import MAX_TOKENS, LLM_STREAM_TIMEOUT, BACKGROUND_SUMMARY_ENRICHMENT
 from app.contracts.events import SSEEventType
 from app.infrastructure.logging import get_logger
@@ -37,25 +34,10 @@ from app.infrastructure.llm.dimension_runtime import (
     run_rag,
     save_report_immediate,
     save_step_report,
-    strip_model_reasoning,
 )
 from app.infrastructure.tasks.task_supervisor import build_summary_task_key
 
 logger = get_logger(__name__)
-
-
-# Cached LLM instance — reused across all dimension analyses
-_llm_cache: Optional[Any] = None
-_L1_LLM_SLOTS = threading.BoundedSemaphore(
-    max(1, int(os.getenv("L1_LLM_MAX_CONCURRENT", "3")))
-)
-
-
-def _get_llm():
-    global _llm_cache
-    if _llm_cache is None:
-        _llm_cache = create_llm(temperature=0.7, max_tokens=MAX_TOKENS, streaming=True)
-    return _llm_cache
 
 
 class ParamSource(str, Enum):
@@ -262,8 +244,7 @@ async def analyze_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
     if rag_log:
         stats.record_rag_time(session_id, dim_key, rag_log.retrieval_latency_ms, rag_log.total_results)
 
-    # 7. 流式 LLM + SSE
-    llm = _get_llm()
+    # 7. L1 dual-response: report body + structured observations (function calling)
     if provider_failure_open(session_id):
         return {
             "fatal_error": {
@@ -274,40 +255,38 @@ async def analyze_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
         }
     llm_start_time = time.time()
 
-    llm_response = ""
-    _last_publish_time = 0.0
-    _PUBLISH_INTERVAL = 0.1  # 100ms throttle
-    llm_input = prompt
-    if dim_layer == 1:
-        llm_input = [
-            SystemMessage(
-                content=(
-                    "你是村庄规划L1现状观察节点。输出必须遵守以下协议，协议优先于其他写作习惯："
-                    "先写维度分析正文；正文结束后单独一行输出字面量【INSTRUCTION】；"
-                    "下一行必须是表头 | 类型 | 名称 | 位置 | 现状描述 | 证据来源 |，再下一行是 |---|---|---|---|---|；"
-                    "之后每个现状空间对象一行。即使没有对象，也必须输出marker、表头和分隔行。"
-                    "禁止用代码围栏包裹该部分，禁止改写marker。表格只能摘录正文明确出现的现状对象，不得编造。"
-                )
-            ),
-            HumanMessage(content=prompt),
-        ]
-
-    await asyncio.to_thread(_L1_LLM_SLOTS.acquire)
+    report_body = ""
+    observations: List[Any] = []
     try:
-        try:
-            async with asyncio.timeout(LLM_STREAM_TIMEOUT):
-                async for chunk in llm.astream(llm_input):
-                    if hasattr(chunk, 'content') and chunk.content:
-                        llm_response += chunk.content
-                        now = time.time()
-                        if now - _last_publish_time >= _PUBLISH_INTERVAL:
-                            await publish_dimension_delta(
-                                session_id, dim_key, dim_name, dim_layer, is_revision,
-                                chunk.content, llm_response,
-                            )
-                            _last_publish_time = now
-        finally:
-            _L1_LLM_SLOTS.release()
+        from app.domain.assessment.observation_draft import L1DimensionOutput
+        from app.infrastructure.llm.factory import create_llm as _create_llm
+
+        structured = _create_llm(
+            temperature=0.3, max_tokens=MAX_TOKENS, streaming=False
+        ).with_structured_output(L1DimensionOutput, method="function_calling")
+        async with asyncio.timeout(LLM_STREAM_TIMEOUT):
+            output = await structured.ainvoke([
+                {
+                    "role": "system",
+                    "content": (
+                        "你是村庄规划 L1 现状观察节点。同时输出两部分："
+                        "report_body 写维度现状分析正文（用【主题】标记段落、以【事实】开头的可核验事实行、"
+                        "markdown 表格列清单）；observations 写正文明确出现的现状空间对象"
+                        "（entity_type 只能是 现状设施/现状项目/现状分区/道路/水系/地物），"
+                        "每个对象含 entity_type/name/location/description/scale。"
+                        "只摘录正文已出现的内容，不得编造；无对象则返回空数组。"
+                    ),
+                },
+                {"role": "user", "content": prompt},
+            ])
+        if output is None:
+            raise ValueError("L1 provider returned None")
+        if isinstance(output, str):
+            output = L1DimensionOutput.model_validate_json(output)
+        elif not isinstance(output, L1DimensionOutput):
+            output = L1DimensionOutput.model_validate(output)
+        report_body = (output.report_body or "").strip()
+        observations = list(output.observations or [])
     except asyncio.TimeoutError:
         trip_provider_failure(session_id)
         logger.error(f"[analyze_dimension] {dim_key}: LLM stream timeout after {LLM_STREAM_TIMEOUT}s")
@@ -349,27 +328,20 @@ async def analyze_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
             },
         }
 
-    # Flush remaining delta (throttle may have skipped the last chunk)
-    if llm_response and _last_publish_time > 0:
-        await publish_dimension_delta(
-            session_id, dim_key, dim_name, dim_layer, is_revision,
-            "", llm_response,
-        )
-
-    llm_response = strip_model_reasoning(llm_response)
+    llm_response = report_body
+    observations_json = json.dumps(
+        [
+            item.model_dump(mode="json") if hasattr(item, "model_dump") else item
+            for item in observations
+        ],
+        ensure_ascii=False,
+    )
+    await publish_dimension_delta(
+        session_id, dim_key, dim_name, dim_layer, is_revision,
+        llm_response, llm_response,
+    )
     llm_elapsed = time.time() - llm_start_time
     logger.info(f"[analyze_dimension] {dim_key}: LLM completed in {llm_elapsed:.1f}s, output = {len(llm_response)} chars")
-
-    # The private section is a required output protocol.  Do not issue a
-    # second "repair" generation or synthesize rows here: if it is missing,
-    # preserve the violation in the audit so the gate can fail closed.
-    instruction_repaired = False
-    instruction_repair_source = ""
-    if dim_layer == 1 and "【INSTRUCTION】" not in llm_response:
-        logger.error(
-            "[analyze_dimension] %s: L1 output protocol violation: missing INSTRUCTION",
-            dim_key,
-        )
 
     # 7.5 统计收集 - 记录 LLM 时间和输出
     stats.record_llm_time(session_id, dim_key, llm_elapsed, len(llm_response))
@@ -380,7 +352,6 @@ async def analyze_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
     latest_version = await store.get_latest_version(session_id, dim_key)
     next_version = latest_version + 1
     revision_reason = state.get("revision_feedback") or state.get("feedback")
-
 
     # Generate report_id for pending_reports
     report_id = str(uuid.uuid4())
@@ -403,7 +374,8 @@ async def analyze_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
         "layer": dim_layer,
         "version": next_version,
         "report_id": report_id,
-        "content": llm_response,
+        "content": report_body,
+        "instruction": observations_json,
         "summary": structured_summary_str,
         "revision_trigger": revision_reason,
         "knowledge_sources": asdict(rag_log) if rag_log and rag_log.rag_enabled else None,
@@ -439,9 +411,6 @@ async def analyze_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
     # P2: L1/L2/L3 维度步骤 Report（供 positioning-trace 面板定位）
     if dim_layer in (1, 2, 3):
         try:
-            from app.infrastructure.reports.report_store import split_instruction
-
-            _, instr = split_instruction(llm_response)
             await save_step_report(
                 state.get("session_id", ""), f"L{dim_layer}",
                 step_name=f"analyze_dimension:{dim_key}",
@@ -450,15 +419,11 @@ async def analyze_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
                 inputs={
                     "dependency_reports_summary": _dependency_summary(deps),
                     "same_layer_dependency_reports_summary": _dependency_summary(same_layer_contexts),
-                    "instruction_removed": True,
                 },
                 outputs={
                     "report_id": report_id,
                     "word_count": len(llm_response),
-                    "instruction_len": len(instr),
-                    "has_instruction": bool(instr),
-                    "instruction_repaired": instruction_repaired,
-                    "instruction_repair_source": instruction_repair_source,
+                    "observation_count": len(observations),
                     "kg_evidence_consumed": explore_audit,
                 },
                 diagnostics={

@@ -56,14 +56,25 @@ GIS_TOOL_GUIDE = """
 """
 
 CLAIMS_OUTPUT_GUIDE = """
-【L3 CLAIMS OUTPUT】
-你只能输出符合 PlanningClaimSet 的结构化结果，不得输出 Markdown、【INSTRUCTION】、BSM、几何或最终规划分类。
+【L3 输出契约】
+你需要同时输出两部分（一次结构化返回）：
+1. report_body：完整的规划报告正文（Markdown 散文 + 表格），用于组装村庄规划法定文本(.docx)；不得为空。
+2. claims：本维度所有带证据的规划判断（结构化 claims 数组）。
+
 每条 claim 必须是带证据的规划判断，包含：claim_id、statement、suggested_category、suggested_output_kind、
 suggested_interventions、quantity/quantity_unit（若有）、implementation_phase、location_hints、
 constraint_refs、objective_refs、evidence_refs、uncertainty。没有证据支持的位置、面积、地块或项目不得编造，
 应留空并说明 uncertainty。suggested_category 只能是 project/facility/road/axis/restoration/protection/zone/action；
 suggested_output_kind 只能是 parcel/polygon/point/line/action。对有明确位置证据的具体 project（例如服务中心、广场、停车场、观景点），应使用 point 作为小型定位输出；只有没有任何空间落位含义的管理/政策/培训事项才使用 action。claim 不是执行目标，不得填写最终 BSM、几何或 ClassificationDecision。
-只返回结构化对象，不要返回解释文字。
+
+每个空间 claim 必须在首次生成时给出与对象类型对应的结构化参数，禁止把关键尺度只写在 statement：
+- road 使用 road_parameters：action 只能是 preserve/new/upgrade/widen/harden/repair；其余字段为 road_level、length、roadbed_width、pavement_width、alignment_refs、connects；每个量值写成 {"value": 数值, "unit": "m|km"}。长度、路基宽、路面宽必须分开；connects 只写原文明确的两端对象，沿既有道路改造则把道路名写入 alignment_refs。缺少宽度标准且无证据时，不得编造，应改为非空间 action 或在 uncertainty 中说明无法形成可执行道路项目。
+- facility 使用 facility_parameters：action 只能是 preserve/new/expand/relocate/repair；其余字段为 facility_type、service_radius、capacity、footprint_area；服务半径用 m/km，占地用 m2/ha。保留、新建、扩建、迁建不得混淆。
+- axis 使用 axis_parameters：action 只能是 preserve/new/upgrade；axis_type 只能是 primary/secondary/spatial_control；其余字段为 direction、reference_features、connects、corridor_width；不得把发展轴退化成普通道路。
+- zone/protection/restoration 以及 polygon/parcel project 使用 polygon_parameters。materialization_role 只能是 land_use_assignment/functional_overlay/protection_overlay/restoration_overlay/project_footprint。真正改变土地用途的 zone 才使用 land_use_assignment，并必须给 area_range（minimum、maximum、unit=m2|ha）；“一心一带多区”等功能结构使用 functional_overlay，不得伪装成地类重分类或虚构面积；保护和修复分别使用对应 overlay。
+- 普通 project 可使用 project_parameters：project_type、action、capacity、footprint_area；action 只能是 preserve/new/expand/relocate/upgrade/widen/harden/repair/demolish。点项目仍须保留 location_hints。
+所有参数只表达规划语义和来源量值，不得填写坐标、BSM、候选地块或几何；单位换算由确定性编译器完成。
+report_body 写完整的法定文本报告正文（用【主题】标记段落、markdown 表格列清单）；claims 只写结构化判断，不要写解释文字。
 """
 
 LOCATION_EVIDENCE_GUIDE = """
@@ -73,8 +84,8 @@ LOCATION_EVIDENCE_GUIDE = """
 
 硬约束：
 - 只能使用上面证据中出现、且与当前对象有直接关系的位置；不得从行政区划名单推断对象位置。
-- 证据没有支持的位置必须留空，不能为了让表格完整而补写自然村名。
-- “位于某村”必须同时在上游现状/规划依赖中有同一对象与该村的明确关系；仅出现村名不构成位置证据。
+- 证据没有支持的位置必须留空，不能为了让表格完整而补写地点名。
+- 位置实体不限于自然村，也可以是道路、水体、设施、地块、居民点、行政单元或其他已注册地点；但同一对象与该地点必须在上游证据中存在直接关系，仅出现名称不构成位置证据。
 """
 
 

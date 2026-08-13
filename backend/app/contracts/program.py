@@ -12,6 +12,16 @@ from typing import Literal
 
 from pydantic import BaseModel, Field, model_validator
 
+from app.contracts.domain.planning_semantics import (
+    AxisPlanningParameters,
+    FacilityPlanningParameters,
+    InterventionAction,
+    MaterializationRole,
+    PolygonPlanningParameters,
+    ProjectPlanningParameters,
+    RoadPlanningParameters,
+)
+
 
 ProposalCategory = Literal[
     "project",
@@ -50,6 +60,14 @@ class PlanningClaim(BaseModel):
     suggested_interventions: list[str] = Field(default_factory=list)
     quantity: float | None = None
     quantity_unit: str = ""
+    area_range_ha: tuple[float, float] | None = None
+    intervention_action: InterventionAction = "new"
+    materialization_role: MaterializationRole | None = None
+    road_parameters: RoadPlanningParameters | None = None
+    facility_parameters: FacilityPlanningParameters | None = None
+    axis_parameters: AxisPlanningParameters | None = None
+    polygon_parameters: PolygonPlanningParameters | None = None
+    project_parameters: ProjectPlanningParameters | None = None
     implementation_phase: Literal["short", "medium", "long"] = "short"
     location_hints: list[str] = Field(default_factory=list)
     constraint_refs: list[str] = Field(default_factory=list)
@@ -76,13 +94,39 @@ class PlanningClaim(BaseModel):
                 f"claim category={self.suggested_category} cannot suggest "
                 f"{self.suggested_output_kind}"
             )
+        if self.road_parameters is not None and self.suggested_category != "road":
+            raise ValueError("road_parameters may only appear on road claims")
+        if self.facility_parameters is not None and self.suggested_category != "facility":
+            raise ValueError("facility_parameters may only appear on facility claims")
+        if self.axis_parameters is not None and self.suggested_category != "axis":
+            raise ValueError("axis_parameters may only appear on axis claims")
+        allowed_roles = {
+            "protection": {"protection_overlay"},
+            "restoration": {"restoration_overlay"},
+            "zone": {
+                "land_use_assignment",
+                "functional_overlay",
+                "protection_overlay",
+                "restoration_overlay",
+                "project_footprint",
+            },
+            "project": {"project_footprint"},
+        }
+        if (
+            self.materialization_role is not None
+            and self.materialization_role
+            not in allowed_roles.get(self.suggested_category, set())
+        ):
+            raise ValueError(
+                "materialization_role is incompatible with suggested_category"
+            )
         return self
 
 
 class PlanningClaimSet(BaseModel):
     """Non-executable, evidence-bearing output of one L3 dimension."""
 
-    schema_version: Literal["1.0"] = "1.0"
+    schema_version: Literal["1.0", "2.0"] = "2.0"
     dimension_key: str = ""
     claims: list[PlanningClaim] = Field(default_factory=list)
     diagnostics: list[str] = Field(default_factory=list)
@@ -99,6 +143,13 @@ class ProgramProposal(BaseModel):
     problem_addressed: str = ""
     scale: str = ""
     area_range_ha: tuple[float, float] | None = None
+    intervention_action: InterventionAction = "new"
+    materialization_role: MaterializationRole | None = None
+    road_parameters: RoadPlanningParameters | None = None
+    facility_parameters: FacilityPlanningParameters | None = None
+    axis_parameters: AxisPlanningParameters | None = None
+    polygon_parameters: PolygonPlanningParameters | None = None
+    project_parameters: ProjectPlanningParameters | None = None
     functions: list[str] = Field(default_factory=list)
     service_population: str | None = None
     implementation_phase: Literal["short", "medium", "long"] = "short"
@@ -127,6 +178,12 @@ class ProgramProposal(BaseModel):
             raise ValueError(
                 f"category={self.category} cannot produce {self.expected_output_kind}"
             )
+        if self.road_parameters is not None and self.category != "road":
+            raise ValueError("road_parameters may only appear on road proposals")
+        if self.facility_parameters is not None and self.category != "facility":
+            raise ValueError("facility_parameters may only appear on facility proposals")
+        if self.axis_parameters is not None and self.category != "axis":
+            raise ValueError("axis_parameters may only appear on axis proposals")
         return self
 
 

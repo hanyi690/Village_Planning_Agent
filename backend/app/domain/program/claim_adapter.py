@@ -46,6 +46,14 @@ def proposals_from_claims(
                     if claim.quantity is not None and claim.quantity_unit
                     else ""
                 ),
+                area_range_ha=claim.area_range_ha,
+                intervention_action=claim.intervention_action,
+                materialization_role=claim.materialization_role,
+                road_parameters=claim.road_parameters,
+                facility_parameters=claim.facility_parameters,
+                axis_parameters=claim.axis_parameters,
+                polygon_parameters=claim.polygon_parameters,
+                project_parameters=claim.project_parameters,
                 implementation_phase=claim.implementation_phase,
                 spatial_requirements=spatial_requirements,
                 constraints=list(claim.constraint_refs),

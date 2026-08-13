@@ -7,6 +7,7 @@ INSTRUCTION text are never executable inputs.
 """
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
 from app.domain.common.context_guard import require_frozen_context
@@ -35,6 +36,42 @@ from .gate import evaluate_l3_gate
 from .review import build_l3_review_package
 
 logger = get_logger(__name__)
+
+
+def _claim_diagnostic_issue(dimension_key: str, diagnostic: Any) -> ProgramIssue:
+    """Preserve typed normalization severity; migrate legacy string reports."""
+    message = str(diagnostic or "").strip()
+    severity = "info"
+    code = "claim_set_diagnostic_audit"
+    for prefix, typed_severity in (
+        ("ERROR[", "error"),
+        ("WARNING[", "warning"),
+        ("INFO[", "info"),
+    ):
+        if not message.startswith(prefix):
+            continue
+        end = message.find("]")
+        code = message[len(prefix) : end] if end > len(prefix) else "claim_set_diagnostic"
+        severity = typed_severity
+        break
+    else:
+        # Compatibility for claim sets persisted before diagnostics became
+        # severity-prefixed.  Provider absence is a real missing dimension;
+        # free-form generation notes and successful normalizations are audit
+        # records, not execution blockers.
+        if message == "provider returned no structured claim set":
+            severity = "error"
+            code = "provider_structured_claim_set_missing"
+        else:
+            severity = "warning"
+            code = "legacy_claim_set_diagnostic"
+    return ProgramIssue(
+        stage="l3",
+        dimension_key=dimension_key,
+        severity=severity,
+        code=code,
+        message=message,
+    )
 
 
 def _dedup(items: list[str]) -> list[str]:
@@ -272,7 +309,7 @@ async def l3_aggregate(
     fragments: list[L3ProgramFragment] = []
     for dim_key, rec in raw_reports.items():
         rec = rec or {}
-        content = rec.get("content", "")
+        content = rec.get("instruction") or rec.get("content", "")
         report_id = rec.get("report_id", f"rpt-{dim_key}-v1")
         try:
             claim_set = PlanningClaimSet.model_validate_json(content)
@@ -289,15 +326,25 @@ async def l3_aggregate(
                 dimension_key=dim_key,
                 claims=claims,
                 program_issues=[
-                    ProgramIssue(
-                        stage="l3",
-                        dimension_key=dim_key,
-                        severity="error",
-                        code="claim_set_diagnostic",
-                        message=diagnostic,
-                    )
+                    _claim_diagnostic_issue(dim_key, diagnostic)
                     for diagnostic in claim_set.diagnostics
-                ],
+                ]
+                + (
+                    [
+                        ProgramIssue(
+                            stage="l3",
+                            dimension_key=dim_key,
+                            severity="error",
+                            code="legacy_claim_schema_requires_recompile",
+                            message=(
+                                "PlanningClaimSet v1 lacks typed object semantics; "
+                                "rerun this L3 dimension with schema v2"
+                            ),
+                        )
+                    ]
+                    if claim_set.schema_version == "1.0"
+                    else []
+                ),
                 provenance=Provenance(
                     source=report_id,
                     run_id=run_id,
@@ -318,6 +365,27 @@ async def l3_aggregate(
         context_fingerprint=state.get("context_fingerprint", ""),
         artifact_refs=dict(state.get("artifact_refs") or {}),
     )
+    # L3 is the only stage allowed to reinterpret planning prose.  Run a
+    # bounded, schema-constrained semantic repair before deterministic target
+    # projection; geometry/BSMs remain exclusively owned by GROUND.
+    from app.domain.program.semantic_repair import repair_planning_program
+
+    repair_result = await repair_planning_program(
+        program,
+        cache_path=(
+            Path(effective_base_dir)
+            / str(session_id)
+            / "l3-semantic-repair-cache.json"
+        ),
+    )
+    program = repair_result.program
+    logger.info(
+        "[l3_aggregate] semantic repair applied=%s attempts=%d cache_hits=%d errors=%d",
+        repair_result.applied,
+        repair_result.attempts,
+        repair_result.cache_hits,
+        len(repair_result.validation_errors),
+    )
     artifact_id = f"l3-{run_id}-{branch_id}-{semantic_checksum(program)[:16]}"
     program.artifact_id = artifact_id
     program.provenance = Provenance(
@@ -327,6 +395,10 @@ async def l3_aggregate(
         trace=[f"aggregate:{artifact_id}"],
         natural_language_description="L3 PLAN aggregated program from compiled dimension fragments.",
     )
+
+    blocking_source_issues = [
+        issue for issue in program.program_issues if issue.severity == "error"
+    ]
 
     # LLM-assisted closed-set classification: polygon/parcel targets get a
     # planning land-use code from the authoritative appendix5 set as part of
@@ -342,7 +414,16 @@ async def l3_aggregate(
             generate_classification_decisions,
         )
 
-        pending = classification_review_targets(program)
+        pending = (
+            []
+            if blocking_source_issues
+            else classification_review_targets(program)
+        )
+        if blocking_source_issues:
+            logger.warning(
+                "[l3_aggregate] skipped classification because %d source errors block L3",
+                len(blocking_source_issues),
+            )
         if pending:
             decisions = await generate_classification_decisions(program)
             if decisions:
@@ -424,6 +505,10 @@ async def l3_aggregate(
             ),
             outputs={
                 "intervention_count": len(program.interventions),
+                "semantic_repair_applied": repair_result.applied,
+                "semantic_repair_attempts": repair_result.attempts,
+                "semantic_repair_cache_hits": repair_result.cache_hits,
+                "semantic_repair_validation_errors": repair_result.validation_errors,
                 "spatial_instruction_count": sum(
                     1 for item in program.interventions
                     if getattr(item, "spatial_requirements", None)

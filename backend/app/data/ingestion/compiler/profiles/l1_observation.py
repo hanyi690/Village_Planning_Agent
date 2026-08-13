@@ -6,8 +6,8 @@ code->name; never imports advisory_crosswalks.
 """
 from __future__ import annotations
 
+import json
 import re
-from html.parser import HTMLParser
 from typing import Any
 
 from app.contracts.artifacts.classification_ref import ClassificationRef
@@ -19,71 +19,10 @@ from app.contracts.domain.l1_contracts import (
 from app.contracts.workflow.parsing_contracts import CompilationProfile, CompilerTrace
 
 from ..diagnostics import collect_diagnostics
-from ..instruction_parser import parse_instruction_tables, split_content_instruction
 from ..provenance import build_fragment_provenance
 
 _CHAPTER_RE = re.compile(r"^#{1,3}\s+(\S.+)$", re.MULTILINE)
 _BULLET_RE = re.compile(r"^\s*[-*]\s+(.+)$", re.MULTILINE)
-_VILLAGE_LIST_RE = re.compile(
-    r"(?:下辖|下属|包括|分别为|分别是)[^。\n]{0,80}?([\u4e00-\u9fff、,，]{2,120})(?:。|其中|$)"
-)
-_VILLAGE_NAME_RE = re.compile(r"[\u4e00-\u9fff]{2,8}(?:自然村|村)")
-
-
-class _ReportTableParser(HTMLParser):
-    """Small dependency-free HTML table reader for uploaded markdown reports."""
-
-    def __init__(self) -> None:
-        super().__init__()
-        self.rows: list[list[str]] = []
-        self._row: list[str] | None = None
-        self._cell: list[str] | None = None
-
-    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
-        if tag == "tr":
-            self._row = []
-        elif tag in {"td", "th"} and self._row is not None:
-            self._cell = []
-
-    def handle_data(self, data: str) -> None:
-        if self._cell is not None:
-            self._cell.append(data)
-
-    def handle_endtag(self, tag: str) -> None:
-        if tag in {"td", "th"} and self._cell is not None and self._row is not None:
-            value = re.sub(r"\s+", " ", "".join(self._cell)).strip()
-            self._row.append(value)
-            self._cell = None
-        elif tag == "tr" and self._row is not None:
-            if self._row:
-                self.rows.append(self._row)
-            self._row = None
-
-
-def _iter_html_tables(content: str) -> list[tuple[list[str], list[list[str]]]]:
-    """Return header/data rows from HTML tables without interpreting domains."""
-    result: list[tuple[list[str], list[list[str]]]] = []
-    for block in re.findall(r"<table\b[^>]*>.*?</table>", content or "", flags=re.I | re.S):
-        parser = _ReportTableParser()
-        parser.feed(block)
-        if len(parser.rows) < 2:
-            continue
-        header = parser.rows[0]
-        rows = [row for row in parser.rows[1:] if any(cell.strip() for cell in row)]
-        if header and rows:
-            result.append((header, rows))
-    return result
-
-
-_DIMENSION_TABLE_TERMS: dict[str, tuple[str, ...]] = {
-    "traffic": ("道路", "停车", "公交", "路灯", "交通"),
-    "infrastructure": ("供水", "变压器", "水电站", "污水", "燃气", "机耕", "污水管", "供水设施", "道路硬化"),
-    "public_services": ("学校", "文化", "广场", "篮球", "养老", "厕所", "服务中心", "卫生", "市场"),
-    "public_service": ("学校", "文化", "广场", "篮球", "养老", "厕所", "服务中心", "卫生", "市场"),
-    "ecological_green": ("生态", "河道", "绿化", "古树", "护栏", "水边"),
-    "historical_culture": ("古驿道", "祠堂", "历史", "文化"),
-    "land_use": ("农田", "复垦", "水田", "用地", "生态修复"),
-}
 
 
 def _split_explicit_places(value: str) -> list[str]:
@@ -111,103 +50,6 @@ def _known_village_names() -> tuple[str, ...]:
         return tuple(sorted((str(x).removesuffix("村") for x in _KNOWN_NATURAL_VILLAGES), key=len, reverse=True))
     except Exception:
         return ()
-
-
-def _extract_places_from_cell(value: str) -> list[str]:
-    """Extract only named places from a table cell; discard service prose."""
-    known = _known_village_names()
-    if known:
-        found: list[str] = []
-        for name in known:
-            if name and name in (value or "") and name not in found:
-                found.append(name)
-        if found:
-            return found
-    return [
-        part for part in _split_explicit_places(value)
-        if part not in {"服务本村", "服务全村", "覆盖全村", "本村", "全村"}
-        and not any(token in part for token in ("经过", "路段", "服务", "覆盖"))
-    ]
-
-
-def _extract_report_location_facts(
-    display: str,
-    *,
-    dimension_key: str,
-    report_id: str,
-) -> list[L1LocationFact]:
-    """Extract explicit source-report places when the LLM omitted INSTRUCTION.
-
-    This is not a guessed GIS binding: it only records names and the exact
-    source span.  Geometry remains the responsibility of GROUND/gazetteer.
-    """
-    facts: list[L1LocationFact] = []
-    seen: set[tuple[str, str]] = set()
-
-    # The socioeconomic report is the authoritative source for the village
-    # list.  Keep this extraction dimension-scoped instead of copying it into
-    # every L1 dimension.
-    if dimension_key in {"location", "socio_economic", "architecture"}:
-        for match in _VILLAGE_LIST_RE.finditer(display or ""):
-            sentence = match.group(0)
-            known = _known_village_names()
-            names = [name for name in known if name and name in sentence]
-            # The report writes bare names in the list; do not treat arbitrary
-            # two-character words in an administrative sentence as places.
-            for name in names:
-                name = name.removesuffix("自然村").removesuffix("村").strip()
-                if not name or name in {"分别为", "分别是"}:
-                    continue
-                key = (name, "village")
-                if key in seen:
-                    continue
-                seen.add(key)
-                facts.append(L1LocationFact(
-                    mention=name,
-                    normalized_name=name,
-                    role="village",
-                    aliases=[name, f"{name}村"],
-                    spatial_hint=name,
-                    source_report_ref=report_id,
-                    dimension_key=dimension_key,
-                    source_span=sentence[:300],
-                    confidence=1.0,
-                ))
-
-    terms = _DIMENSION_TABLE_TERMS.get(dimension_key, ())
-    for header, rows in _iter_html_tables(display):
-        name_idx = next((i for i, h in enumerate(header) if "设施名称" in h or "项目名称" in h), None)
-        location_idx = next((i for i, h in enumerate(header) if "空间位置" in h or "所在位置" in h or h == "位置"), None)
-        if name_idx is None or location_idx is None:
-            continue
-        for row in rows:
-            if name_idx >= len(row) or location_idx >= len(row):
-                continue
-            name = row[name_idx].strip()
-            location = row[location_idx].strip()
-            if not name or not location or name in {"设施名称", "项目名称"}:
-                continue
-            row_text = " | ".join(row)
-            if terms and not any(term in row_text for term in terms):
-                continue
-            for place in _extract_places_from_cell(location):
-                role = "village" if place.endswith("村") or len(place) <= 4 else "unknown"
-                key = (place, role)
-                if key in seen:
-                    continue
-                seen.add(key)
-                facts.append(L1LocationFact(
-                    mention=place,
-                    normalized_name=place,
-                    role=role,
-                    aliases=[place],
-                    spatial_hint=place,
-                    source_report_ref=report_id,
-                    dimension_key=dimension_key,
-                    source_span=row_text[:400],
-                    confidence=0.95,
-                ))
-    return facts
 
 
 def _clean_model_text(text: str) -> str:
@@ -242,72 +84,6 @@ def _dedup_location_facts_local(facts: list[L1LocationFact]) -> list[L1LocationF
         seen.add(key)
         result.append(fact)
     return result
-
-
-def _extract_location_facts(
-    instruction: str,
-    *,
-    dimension_key: str,
-    report_id: str,
-) -> list[L1LocationFact]:
-    """Extract L1 place facts from the structured ``【INSTRUCTION】`` table.
-
-    The public report prose is intentionally not a location source here.  The
-    prompt contract requires the model to repeat only explicit objects and
-    locations in this private table, which keeps the PARSE/GROUND boundary
-    deterministic and auditable.
-    """
-    facts: list[L1LocationFact] = []
-    seen: set[str] = set()
-    tables = parse_instruction_tables(instruction or "")
-    for row in tables.get("l1_rows", []):
-        name = str(row.get("名称", "") or "").strip()
-        location = str(row.get("位置", "") or "").strip()
-        kind = str(row.get("类型", "") or "").strip()
-        description = str(row.get("描述", "") or "").strip()
-        if not name and not location:
-            continue
-        candidate_text = f"{name} {location} {description}"
-        role = "village" if name.endswith("村") else "unknown"
-        if "道路" in kind or "道路" in candidate_text or re.search(r"[YX]\d{3}乡道", candidate_text):
-            role = "road"
-        elif "河" in candidate_text or "水" in kind:
-            role = "water"
-        elif "分区" in kind:
-            role = "area"
-        elif "设施" in kind or "设施" in candidate_text or "点" in kind:
-            role = "facility"
-        location_parts = _split_explicit_places(location) if location else []
-        if not location_parts:
-            location_parts = [location] if location else [""]
-        source_span = " | ".join(x for x in (kind, name, location, description) if x)
-        parts_to_emit: list[tuple[str, str, str]] = []
-        # Preserve the named object itself (facility/road/water/area) and its
-        # explicit location as separate typed facts.  Previously the location
-        # value replaced the object name, so facilities disappeared before KG.
-        if name and role != "village":
-            parts_to_emit.append((name, role, name))
-        for location_part in location_parts:
-            part_role = "village" if location_part.endswith(("村", "自然村")) or location_part in _known_village_names() else role
-            parts_to_emit.append((location_part or name, part_role, location_part or description))
-        for normalized, part_role, spatial_hint in parts_to_emit:
-            aliases = list(dict.fromkeys(x for x in (name, normalized) if x))
-            key = f"{normalized}|{part_role}|{dimension_key}|{report_id}"
-            if key in seen:
-                continue
-            seen.add(key)
-            facts.append(L1LocationFact(
-                mention=name or location_part,
-                normalized_name=normalized,
-                role=part_role,
-                aliases=aliases,
-                spatial_hint=spatial_hint,
-                source_report_ref=report_id,
-                dimension_key=dimension_key,
-                source_span=source_span,
-                confidence=0.95 if location_part else 0.8,
-            ))
-    return facts
 
 
 def _iter_chapters(content: str) -> list[tuple[str, str]]:
@@ -351,6 +127,132 @@ def _parse_land_use_table(chapter_body: str) -> list[dict[str, str]]:
     return rows
 
 
+_OBSERVATION_TYPE_ROLES = {
+    "现状设施": "facility",
+    "设施": "facility",
+    "现状项目": "project",
+    "项目": "project",
+    "现状分区": "area",
+    "分区": "area",
+    "道路": "road",
+    "水系": "water",
+    "水体": "water",
+    "地物": "landmark",
+}
+
+
+def _observation_role(entity_type: str, name: str, location: str, description: str) -> str:
+    et = (entity_type or "").strip()
+    if et:
+        mapped = _OBSERVATION_TYPE_ROLES.get(et)
+        if mapped:
+            return mapped
+    text = f"{name} {location} {description}"
+    for key, role in _OBSERVATION_TYPE_ROLES.items():
+        if key in text:
+            return role
+    if name.endswith("村"):
+        return "village"
+    return "unknown"
+
+
+def _extract_location_facts_from_observations(
+    instruction: str,
+    *,
+    dimension_key: str,
+    report_id: str,
+) -> list[L1LocationFact]:
+    """Compile dual-response observations JSON into typed L1LocationFacts.
+
+    The structured observations JSON is the single location-fact source since
+    the dual-response migration; invalid/empty JSON yields zero facts (never a
+    markdown-table fallback).
+    """
+    if not instruction:
+        return []
+    try:
+        payload = json.loads(instruction)
+    except (json.JSONDecodeError, TypeError):
+        return []
+    if isinstance(payload, dict):
+        payload = payload.get("observations") or []
+    if not isinstance(payload, list):
+        return []
+    facts: list[L1LocationFact] = []
+    seen: set[str] = set()
+    for item in payload:
+        if isinstance(item, dict):
+            obs = item
+        elif hasattr(item, "model_dump"):
+            obs = item.model_dump(mode="json")
+        else:
+            continue
+        name = str(obs.get("name") or "").strip()
+        location = str(obs.get("location") or "").strip()
+        entity_type = str(obs.get("entity_type") or "").strip()
+        description = str(obs.get("description") or "").strip()
+        if not name and not location:
+            continue
+        role = _observation_role(entity_type, name, location, description)
+        source_span = " | ".join(x for x in (entity_type, name, location, description) if x)
+        parts_to_emit: list[tuple[str, str, str]] = []
+        if name and role != "village":
+            parts_to_emit.append((name, role, name))
+        location_parts = _split_explicit_places(location) if location else []
+        if not location_parts:
+            location_parts = [location] if location else [""]
+        for location_part in location_parts:
+            part_role = (
+                "village"
+                if location_part.endswith(("村", "自然村"))
+                or location_part in _known_village_names()
+                else role
+            )
+            parts_to_emit.append((location_part or name, part_role, location_part or description))
+        for normalized, part_role, spatial_hint in parts_to_emit:
+            aliases = list(dict.fromkeys(x for x in (name, normalized) if x))
+            key = f"{normalized}|{part_role}|{dimension_key}|{report_id}"
+            if key in seen:
+                continue
+            seen.add(key)
+            facts.append(L1LocationFact(
+                mention=name or location_part,
+                normalized_name=normalized,
+                role=part_role,
+                aliases=aliases,
+                spatial_hint=spatial_hint,
+                source_report_ref=report_id,
+                dimension_key=dimension_key,
+                source_span=source_span,
+                confidence=0.95 if location_part else 0.8,
+            ))
+    return facts
+
+
+def _spatial_facts_from_observations(instruction: str) -> list[str]:
+    """Derive facility spatial facts from the structured observations JSON."""
+    if not instruction:
+        return []
+    try:
+        payload = json.loads(instruction)
+    except (json.JSONDecodeError, TypeError):
+        return []
+    if isinstance(payload, dict):
+        payload = payload.get("observations") or []
+    if not isinstance(payload, list):
+        return []
+    out: list[str] = []
+    for item in payload:
+        if not isinstance(item, dict):
+            continue
+        entity_type = str(item.get("entity_type") or "").strip()
+        name = str(item.get("name") or "").strip()
+        location = str(item.get("location") or "").strip()
+        if "设施" in entity_type and name:
+            out.append(f"设施 {name}，位置 {location}".strip())
+    return out
+
+
 def compile_l1_observation(
     *,
     dimension_key: str,
@@ -361,29 +263,25 @@ def compile_l1_observation(
     run_id: str = "",
 ) -> L1DimensionFragment:
     steps: list[str] = []
-    display, instr_from_content = split_content_instruction(content or "")
-    # Keep the original report for source-span extraction, but never promote
-    # model reasoning/protocol chatter into the human fact inventory.
-    source_display = display
-    display = _clean_model_text(display)
-    instr = instruction or instr_from_content
+    # L1 dual-response: ``content`` is the report body (no 【INSTRUCTION】
+    # marker); ``instruction`` is the structured observations JSON - the only
+    # location-fact source.  No markdown-table fallback is kept.
+    display = _clean_model_text(content or "")
+    instr = instruction or ""
 
     facts: list[str] = []
     constraints: list[str] = []
     evidence_gaps: list[EvidenceGap] = []
     classification_refs: list[ClassificationRef] = []
     spatial_facts: list[str] = []
-    location_facts = _extract_location_facts(
+    location_facts = _extract_location_facts_from_observations(
         instr,
         dimension_key=dimension_key,
         report_id=report_id,
     )
-    # The uploaded report is raw input, not an L1 intermediate artifact.  It
-    # may be retained as an audit/source reference, but it must never be
-    # promoted directly into ``location_facts``.  Location facts cross the
-    # PARSE boundary only through the model's structured INSTRUCTION table;
-    # otherwise a malformed L1 response would appear valid and GROUND would
-    # consume facts the model never actually produced.
+    # Location facts cross the PARSE boundary only through the model's
+    # structured observations JSON; a malformed L1 response yields zero facts
+    # and GROUND never consumes facts the model did not actually produce.
     location_facts = _dedup_location_facts_local(location_facts)
     section_locators: list[str] = []
 
@@ -456,12 +354,7 @@ def compile_l1_observation(
                     marked_facts.append(f"[{dimension_key}] 现状事实: {value[:240]}")
         facts = list(dict.fromkeys([*facts, *marked_facts]))
 
-    tables = parse_instruction_tables(instr)
-    for row in tables.get("facility_rows", []):
-        loc = row.get("位置", "")
-        name = row.get("设施类型", "")
-        qty = row.get("数量", "")
-        spatial_facts.append(f"设施 {name} {qty} 处，位置 {loc}".strip())
+    spatial_facts = _spatial_facts_from_observations(instr)
 
     diagnostics = collect_diagnostics(dimension_key, display, instr)
     steps.append(f"diagnostics: {len(diagnostics)}")
