@@ -22,6 +22,7 @@ from shapely.geometry import LineString, MultiPoint, Point, mapping, shape
 from shapely.ops import transform as transform_geometry, unary_union
 
 from .schemas import RoadPlanningConfig, RoadPlanningResult
+from .road_land_cost import road_land_weight
 from .terrain_router import (
     TerrainContext,
     generate_least_cost_routes,
@@ -594,31 +595,7 @@ def _route_family(start: Point, end: Point, config: RoadPlanningConfig) -> List[
 
 
 def _land_weight(value: Any, code: Any = None) -> float:
-    code_text = str(code or "")
-    if code_text == "2126" or code_text.startswith("22"):
-        return 0.5
-    if code_text.startswith("31"):
-        return 50.0
-    if code_text in {"2121", "2122", "2124", "2125"}:
-        return 10.0
-    if code_text.startswith(("11", "12")):
-        return 6.0
-    if code_text.startswith("13"):
-        return 3.0
-    if code_text.startswith("14"):
-        return 2.5
-    text = str(value or "")
-    if "道路" in text or "交通" in text:
-        return 0.5
-    if "水域" in text:
-        return 50.0
-    if any(token in text for token in ("宅基地", "住宅", "商业", "工矿", "工业", "公共管理")):
-        return 10.0
-    if any(token in text for token in ("耕地", "园地")):
-        return 6.0
-    if any(token in text for token in ("林地", "草地")):
-        return 3.0
-    return 2.0
+    return road_land_weight(value, code)
 
 
 def _line_land_cost(line: LineString, landuse: gpd.GeoDataFrame) -> float:

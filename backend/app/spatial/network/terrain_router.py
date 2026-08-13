@@ -275,8 +275,17 @@ def _line_is_valid(line: LineString, context: TerrainContext, start: Point, end:
     return True
 
 
-def _minimum_curve_radius(line: LineString) -> Optional[float]:
-    coordinates = list(line.coords)
+def _minimum_curve_radius(
+    line: LineString,
+    *,
+    resolution_m: float = 0.0,
+) -> Optional[float]:
+    evaluated = (
+        line.simplify(resolution_m * 0.2, preserve_topology=False)
+        if resolution_m > 0.0
+        else line
+    )
+    coordinates = list(evaluated.coords)
     radii: List[float] = []
     for left, middle, right in zip(coordinates, coordinates[1:], coordinates[2:]):
         a = math.dist(middle, right)
@@ -313,7 +322,11 @@ def _engineering_metrics(path: Sequence[Tuple[int, int]], line: LineString, cont
             "mean_grade_percent": None,
             "maximum_cross_slope_deg": None,
             "mean_cross_slope_deg": None,
-            "minimum_curve_radius_m": _minimum_curve_radius(line),
+            "minimum_curve_radius_m": _minimum_curve_radius(
+                line,
+                resolution_m=context.cell_size,
+            ),
+            "curve_radius_evaluation_resolution_m": context.cell_size,
             "terrain_sample_count": len(path),
         }
     for (left_row, left_col), (right_row, right_col), left_z, right_z in zip(path, path[1:], elevations, elevations[1:]):
@@ -324,7 +337,7 @@ def _engineering_metrics(path: Sequence[Tuple[int, int]], line: LineString, cont
         )
         if distance > 0 and not uses_existing_road:
             grades.append(abs(right_z - left_z) / distance * 100.0)
-    radius = _minimum_curve_radius(line)
+    radius = _minimum_curve_radius(line, resolution_m=context.cell_size)
     return {
         "terrain_data_complete": True,
         "elevation_start_m": round(elevations[0], 3),
@@ -336,6 +349,7 @@ def _engineering_metrics(path: Sequence[Tuple[int, int]], line: LineString, cont
         "maximum_cross_slope_deg": round(max(new_slopes, default=0.0), 3),
         "mean_cross_slope_deg": round(float(np.mean(new_slopes)) if new_slopes else 0.0, 3),
         "minimum_curve_radius_m": round(radius, 3) if radius is not None else None,
+        "curve_radius_evaluation_resolution_m": context.cell_size,
         "terrain_sample_count": len(path),
         "new_terrain_sample_count": len(new_slopes),
     }

@@ -11,9 +11,21 @@ only invokes Stage 4 when the inputs are confirmed enough for automatic routing.
 from __future__ import annotations
 
 import json
+import hashlib
 import re
 from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
+from urllib.parse import unquote, urlparse
+
+from app.contracts.domain.road_planning import (
+    ExistingRoadPlanningInput,
+    NewCorridorPlanningInput,
+    RoadArtifactEvidence,
+    RoadRoutingEvidence,
+)
+from app.domain.materialization.existing_road_materializer import (
+    materialize_existing_road_interventions,
+)
 
 from app.spatial.network import (
     NetworkBuildConfig,
@@ -29,6 +41,15 @@ from app.spatial.network import (
     run_stage4_road_planning,
 )
 from app.infrastructure.logging import get_logger
+from app.spatial.network.road_candidate_preparation import (
+    build_road_evidence_catalog,
+    new_corridor_inputs_to_stage2_targets,
+    prepare_road_candidates,
+)
+from app.spatial.network.terrain_grid_preparation import (
+    TerrainGridPreparationError,
+    prepare_terrain_friction_grid,
+)
 
 
 logger = get_logger(__name__)
@@ -147,7 +168,14 @@ def _road_targets_to_stage2(
     projects: List[Dict[str, Any]] = []
     seen_demands: set[str] = set()
 
-    def add_demand(name: str, geometry: Optional[Dict[str, Any]], project_id: str, role: str, evidence: str) -> str:
+    def add_demand(
+        name: str,
+        geometry: Optional[Dict[str, Any]],
+        project_id: str,
+        role: str,
+        evidence: str,
+        endpoint_evidence: Optional[Mapping[str, Any]] = None,
+    ) -> str:
         key = _normalise(name) or f"{project_id}-{role}"
         demand_id = f"D{len(seen_demands) + 1:04d}"
         if key in seen_demands:
@@ -176,6 +204,16 @@ def _road_targets_to_stage2(
                         "source_kind": "parse_agent_road_target",
                         "source_text": evidence,
                         "requires_human_confirmation": geometry is None,
+                        **(
+                            {
+                                "endpoint_entity_ref": endpoint_evidence.get("entity_ref"),
+                                "source_artifact_ref": endpoint_evidence.get("source_artifact_ref"),
+                                "source_feature_id": endpoint_evidence.get("source_feature_id"),
+                                "evidence_refs": endpoint_evidence.get("evidence_refs") or [],
+                            }
+                            if endpoint_evidence
+                            else {}
+                        ),
                     },
                 },
             }
@@ -189,33 +227,79 @@ def _road_targets_to_stage2(
             or target.get("source_instruction_id")
             or f"RP-TARGET-{index:04d}"
         )
+        typed_contract = target.get("typed_contract_version") == "road-planning-input-v1"
         connects = [str(item) for item in target.get("connects") or [] if str(item or "").strip()]
         path_bsms = [str(item) for item in target.get("path_bsms") or [] if str(item or "").strip()]
         candidate_bsms = [str(item) for item in target.get("candidate_bsms") or [] if str(item or "").strip()]
         candidate_bbox = target.get("candidate_bbox") or target.get("bbox")
-        start_name = connects[0] if connects else f"{project_id}-start"
-        end_name = connects[1] if len(connects) > 1 else f"{project_id}-end"
+        start_endpoint = target.get("start_endpoint") if typed_contract else None
+        end_endpoint = target.get("end_endpoint") if typed_contract else None
+        if typed_contract:
+            if not isinstance(start_endpoint, Mapping) or not isinstance(end_endpoint, Mapping):
+                raise ValueError("typed new-corridor input requires endpoint evidence")
+            start_name = str(
+                start_endpoint.get("entity_ref")
+                or start_endpoint.get("source_feature_id")
+                or ""
+            ).strip()
+            end_name = str(
+                end_endpoint.get("entity_ref")
+                or end_endpoint.get("source_feature_id")
+                or ""
+            ).strip()
+            if not start_name or not end_name:
+                raise ValueError("typed new-corridor endpoint is missing an auditable id")
+        else:
+            start_name = connects[0] if connects else f"{project_id}-start"
+            end_name = connects[1] if len(connects) > 1 else f"{project_id}-end"
         start_geometry = _point_geometry(target.get("start_anchor"))
         end_geometry = _point_geometry(target.get("end_anchor"))
         evidence = _semantic_text(target)
-        action = _infer_action(evidence)
-        start_demand_id = add_demand(start_name, start_geometry, project_id, "start", evidence)
-        end_demand_id = add_demand(end_name, end_geometry, project_id, "end", evidence)
+        action = str(target.get("action") or "").strip() or _infer_action(evidence)
+        if typed_contract and not (start_geometry and end_geometry):
+            raise ValueError("typed new-corridor input requires two resolved coordinates")
+        start_demand_id = add_demand(
+            start_name,
+            start_geometry,
+            project_id,
+            "start",
+            evidence,
+            start_endpoint if isinstance(start_endpoint, Mapping) else None,
+        )
+        end_demand_id = add_demand(
+            end_name,
+            end_geometry,
+            project_id,
+            "end",
+            evidence,
+            end_endpoint if isinstance(end_endpoint, Mapping) else None,
+        )
         projects.append(
             {
                 "project_id": project_id,
                 "target_id": target.get("target_id") or project_id,
+                "typed_contract_version": target.get("typed_contract_version"),
+                "road_planning_kind": target.get("road_planning_kind"),
                 "name": evidence or f"{start_name}-{end_name}",
                 "action": action,
                 "road_class": target.get("road_level") or "village_road",
                 "recommended_road_class": target.get("road_level") or "village_road",
-                "recommended_width_m": float(target.get("width_m") or 0) or None,
+                "recommended_width_m": float(
+                    target.get("pavement_width_m")
+                    or target.get("roadbed_width_m")
+                    or target.get("width_m")
+                    or 0
+                ) or None,
+                "planned_length_m": target.get("length_m"),
                 "start_place": start_name,
                 "end_place": end_name,
                 "start_demand_id": start_demand_id,
                 "end_demand_id": end_demand_id,
                 "start_geometry": start_geometry,
                 "end_geometry": end_geometry,
+                "start_endpoint_evidence": start_endpoint,
+                "end_endpoint_evidence": end_endpoint,
+                "routing_evidence": target.get("routing_evidence") if typed_contract else None,
                 "service_places": connects,
                 "path_bsms": path_bsms,
                 "candidate_bsms": candidate_bsms,
@@ -235,9 +319,22 @@ def _road_targets_to_stage2(
         )
 
     _write_json(stage2_dir / "demand_points.geojson", _fc(demands, display_crs, "parse_road_demand_points"))
+    stage2_schema_version = (
+        "road-planning-input-v1"
+        if road_targets
+        and all(
+            target.get("typed_contract_version") == "road-planning-input-v1"
+            for target in road_targets
+        )
+        else "agent-parse-adapter-v1"
+    )
     _write_json(
         stage2_dir / "road_projects.json",
-        {"type": "RoadProjectCollection", "schema_version": "agent-parse-adapter-v1", "projects": projects},
+        {
+            "type": "RoadProjectCollection",
+            "schema_version": stage2_schema_version,
+            "projects": projects,
+        },
     )
     _write_json(
         stage2_dir / "road_constraints.json",
@@ -345,6 +442,208 @@ def _layer_config(layer_type: str, data: Dict[str, Any], color: str, visible: bo
     }
 
 
+def _partition_stage4_candidates(
+    payload: Mapping[str, Any],
+    target_ids: set[str],
+) -> Tuple[Dict[str, Any], Dict[str, Any], Dict[str, Any]]:
+    """Separate L3 target candidates from global network-repair diagnostics."""
+
+    target_features: List[Dict[str, Any]] = []
+    rejected_target_features: List[Dict[str, Any]] = []
+    network_features: List[Dict[str, Any]] = []
+    for feature in payload.get("features") or []:
+        if not isinstance(feature, Mapping):
+            continue
+        properties = feature.get("properties") or {}
+        feature_targets: set[str] = set()
+        if isinstance(properties, Mapping):
+            raw_targets = properties.get("target_ids")
+            if isinstance(raw_targets, (list, tuple, set)):
+                feature_targets.update(str(value) for value in raw_targets if str(value))
+            target_id = str(properties.get("target_id") or "")
+            if target_id:
+                feature_targets.add(target_id)
+        if feature_targets & target_ids:
+            destination = (
+                rejected_target_features
+                if str(properties.get("screening_status") or "")
+                == "rejected_hard_constraint"
+                else target_features
+            )
+        else:
+            destination = network_features
+        destination.append(dict(feature))
+
+    def collection(features: List[Dict[str, Any]], name: str) -> Dict[str, Any]:
+        result = dict(payload)
+        result["name"] = name
+        result["features"] = features
+        return result
+
+    return (
+        collection(target_features, "target_bound_road_candidates"),
+        collection(rejected_target_features, "rejected_target_road_candidates"),
+        collection(network_features, "network_improvement_diagnostics"),
+    )
+
+
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return "sha256:" + digest.hexdigest()
+
+
+def _workspace_dem_evidence(workspace: Any) -> Tuple[Optional[Path], Optional[RoadArtifactEvidence]]:
+    """Return only a real DEM exposed by the typed workspace."""
+
+    rasters = getattr(workspace, "rasters", None)
+    dem = getattr(rasters, "dem", None)
+    raw_path = dem.get("path") if isinstance(dem, Mapping) else getattr(dem, "path", "")
+    if not str(raw_path or "").strip():
+        return None, None
+    path = Path(str(raw_path)).expanduser().resolve()
+    if not path.is_file():
+        logger.warning("[road_execute] Workspace DEM does not exist: %s", path)
+        return None, None
+    try:
+        import rasterio
+
+        with rasterio.open(path) as dataset:
+            if dataset.count < 1 or dataset.crs is None or dataset.width < 2 or dataset.height < 2:
+                raise ValueError("DEM has no usable band, CRS, or grid")
+    except Exception as exc:
+        logger.warning("[road_execute] Workspace DEM is not a usable raster: %s", exc)
+        return None, None
+    return path, RoadArtifactEvidence(
+        role="dem",
+        artifact_ref=path.as_uri(),
+        checksum=_sha256_file(path),
+    )
+
+
+def _artifact_local_path(evidence: RoadArtifactEvidence) -> Optional[Path]:
+    value = evidence.artifact_ref.strip()
+    parsed = urlparse(value)
+    if parsed.scheme == "file":
+        raw_path = unquote(parsed.path)
+        if parsed.netloc:
+            raw_path = f"//{parsed.netloc}{raw_path}"
+        if re.fullmatch(r"/[A-Za-z]:/.*", raw_path):
+            raw_path = raw_path[1:]
+        path = Path(raw_path)
+    elif not parsed.scheme:
+        path = Path(value)
+    else:
+        return None
+    return path.expanduser().resolve()
+
+
+def _verified_terrain_grid_path(
+    planning_inputs: Sequence[NewCorridorPlanningInput],
+) -> Optional[Path]:
+    """Resolve a real Stage-4 NPZ cost grid from typed artifact evidence.
+
+    A raw GeoTIFF DEM is valid evidence but is not the combined terrain/friction
+    grid consumed by ``terrain_router``. It is therefore never passed through
+    this boundary unless the artifact itself has the required NPZ arrays.
+    """
+
+    import numpy as np
+
+    required = {
+        "elevation_m",
+        "slope_deg",
+        "land_cost",
+        "inside_boundary",
+        "x_min",
+        "y_max",
+        "cell_size_m",
+        "metric_crs",
+    }
+    verified: set[Path] = set()
+    for planning_input in planning_inputs:
+        routing = planning_input.routing_evidence
+        for evidence in (routing.land_friction, routing.dem):
+            if evidence is None:
+                continue
+            path = _artifact_local_path(evidence)
+            if path is None or not path.is_file():
+                continue
+            if _sha256_file(path) != evidence.checksum:
+                logger.warning(
+                    "[road_execute] Terrain-grid checksum mismatch: %s",
+                    path,
+                )
+                continue
+            try:
+                with np.load(path, allow_pickle=False) as payload:
+                    if not required.issubset(payload.files):
+                        continue
+                    elevation = payload["elevation_m"]
+                    if elevation.ndim != 2 or min(elevation.shape) < 2:
+                        continue
+                    if any(payload[name].shape != elevation.shape for name in (
+                        "slope_deg",
+                        "land_cost",
+                        "inside_boundary",
+                    )):
+                        continue
+            except Exception:
+                continue
+            verified.add(path)
+    if len(verified) == 1:
+        return next(iter(verified))
+    if len(verified) > 1:
+        logger.warning(
+            "[road_execute] Multiple incompatible terrain grids supplied; "
+            "Stage 4 will not guess one: %s",
+            sorted(str(path) for path in verified),
+        )
+    return None
+
+
+def _typed_unresolved_items(batch: Any) -> List[Dict[str, Any]]:
+    items: List[Dict[str, Any]] = []
+    for result in batch.results:
+        if result.status != "unresolved":
+            continue
+        diagnostics = [item.model_dump(mode="json") for item in result.diagnostics]
+        items.append(
+            {
+                "type": "RoadUnresolved",
+                "code": "road_unresolved",
+                "target_id": result.target_id,
+                "planning_kind": result.planning_kind,
+                "diagnostic_codes": [item["code"] for item in diagnostics],
+                "diagnostics": diagnostics,
+                "message": "Road planning input did not satisfy the evidence-complete contract.",
+            }
+        )
+    return items
+
+
+def _planning_input_evidence_refs(
+    planning_input: NewCorridorPlanningInput,
+) -> List[str]:
+    refs: set[str] = set()
+    for endpoint in (planning_input.start_endpoint, planning_input.end_endpoint):
+        refs.update(endpoint.evidence_refs)
+        refs.add(endpoint.source_artifact_ref)
+    routing = planning_input.routing_evidence
+    for evidence in (
+        routing.current_network,
+        routing.dem,
+        routing.land_friction,
+        routing.hazard,
+        routing.spatial_constraints,
+    ):
+        if evidence is not None:
+            refs.add(evidence.artifact_ref)
+    return sorted(ref for ref in refs if ref)
+
+
 def execute_road_planning_from_agent_state(state: Any) -> Dict[str, Any]:
     """Execute the road sub-task from the typed execution plan and workspace."""
 
@@ -434,102 +733,362 @@ def execute_road_planning_from_agent_state(state: Any) -> Dict[str, Any]:
         else None
     )
     bundle_geometry_sources = _write_bundle_layers(input_root / "bundle", gis_data)
-    stage2_dir = _road_targets_to_stage2(road_targets, output_root)
-
+    assert roads_path is not None
+    assert boundary_path is not None
     stage1_result = build_road_network(
         roads_path,
         output_root / "stage1",
         NetworkBuildConfig(display_crs="EPSG:4326"),
     )
-    point_sources = tuple(path for path in (annotation_path,) if path is not None)
-    stage2_6_config = PlanningNodeBuildConfig(
-        stage2_dir=stage2_dir,
-        output_dir=output_root / "stage2_6",
+    dem_path, dem_evidence = _workspace_dem_evidence(bundle)
+    routing_evidence = RoadRoutingEvidence(dem=dem_evidence)
+    catalog = build_road_evidence_catalog(
         road_edges_path=stage1_result.edges_path,
-        boundary_path=boundary_path,
-        point_sources=point_sources,
-        bundle_geometry_sources=bundle_geometry_sources,
-        bound_spatial_entities_path=(
-            Path(str(getattr(state, "bound_entities_artifact_path", "")))
-            if str(getattr(state, "bound_entities_artifact_path", "")) and Path(str(getattr(state, "bound_entities_artifact_path", ""))).exists()
-            else None
-        ),
-        manual_confirmation_path=manual_confirmation_path,
+        current_roads_path=roads_path,
+        routing_evidence=routing_evidence,
     )
-    if callable(kg_retry_adapter):
-        stage2_6_result = build_planning_nodes_with_kg_retry_adapter(
-            stage2_6_config,
-            kg_retry_adapter,
-        )
-    elif kg_retry_response_path is not None:
-        stage2_6_result = build_planning_nodes_with_kg_retry_response(
-            stage2_6_config,
-            kg_retry_response_path,
-        )
-    else:
-        stage2_6_result = build_planning_nodes(stage2_6_config)
-    stage3_result = bind_road_spatial_requirements(
-        SpatialBindingConfig(
-            stage2_dir=stage2_dir,
-            stage2_6_dir=stage2_6_result.output_dir,
-            road_edges_path=stage1_result.edges_path,
-            output_dir=output_root / "stage3",
-            point_sources=point_sources,
-        )
-    )
-
-    stage4_result = None
-    stage3_gate = stage3_result.report.get("planning_gate") or {}
-    if stage3_gate.get("automatic_route_generation_allowed") and landuse_path is not None:
-        stage4_result = run_stage4_road_planning(
-            RoadPlanningConfig(
-                road_nodes_path=stage1_result.nodes_path,
-                road_edges_path=stage1_result.edges_path,
-                stage3_dir=stage3_result.output_dir,
+    preparation = prepare_road_candidates(road_targets, catalog)
+    preliminary_new_inputs = [
+        item
+        for item in preparation.ready_inputs
+        if isinstance(item, NewCorridorPlanningInput)
+    ]
+    terrain_preparation_result = None
+    if preliminary_new_inputs and dem_path is not None and landuse_path is not None:
+        try:
+            terrain_preparation_result = prepare_terrain_friction_grid(
+                dem_path=dem_path,
                 boundary_path=boundary_path,
                 landuse_path=landuse_path,
-                hazard_points_path=hazard_path,
-                output_dir=output_root / "stage4",
+                output_dir=output_root / "terrain",
+            )
+            routing_evidence = RoadRoutingEvidence(
+                dem=dem_evidence,
+                land_friction=terrain_preparation_result.evidence,
+            )
+            catalog = build_road_evidence_catalog(
+                road_edges_path=stage1_result.edges_path,
+                current_roads_path=roads_path,
+                routing_evidence=routing_evidence,
+            )
+            preparation = prepare_road_candidates(road_targets, catalog)
+        except (TerrainGridPreparationError, OSError, ValueError) as exc:
+            logger.warning(
+                "[road_execute] Terrain/friction grid preparation unavailable: %s",
+                exc,
+            )
+    preparation_path = output_root / "road_candidate_preparation.json"
+    _write_json(preparation_path, preparation.model_dump(mode="json"))
+    unresolved_items = _typed_unresolved_items(preparation)
+    existing_inputs = [
+        item
+        for item in preparation.ready_inputs
+        if isinstance(item, ExistingRoadPlanningInput)
+    ]
+    new_inputs = [
+        item
+        for item in preparation.ready_inputs
+        if isinstance(item, NewCorridorPlanningInput)
+    ]
+    terrain_grid_path = _verified_terrain_grid_path(new_inputs)
+
+    existing_result = None
+    layers: List[Dict[str, Any]] = []
+    if existing_inputs:
+        existing_result = materialize_existing_road_interventions(
+            existing_inputs,
+            road_edges_path=stage1_result.edges_path,
+            current_roads_path=roads_path,
+            output_path=output_root / "existing" / "planned_existing_roads.geojson",
+        )
+        for item in existing_result.diagnostics:
+            unresolved_items.append(
+                {
+                    "type": "RoadUnresolved",
+                    "code": "road_unresolved",
+                    "target_id": item.get("target_id"),
+                    "planning_kind": "existing_road_intervention",
+                    "diagnostic_codes": [item.get("code")],
+                    "diagnostics": [item],
+                    "message": item.get("message"),
+                }
+            )
+        existing_payload = _read_json(existing_result.output_path)
+        if existing_payload.get("features"):
+            layers.append(
+                _layer_config("planned_road", existing_payload, "#dc2626", True)
+            )
+
+    stage2_dir = None
+    stage2_6_result = None
+    stage3_result = None
+    stage4_result = None
+    stage3_gate: Mapping[str, Any] = {}
+    point_sources = tuple(path for path in (annotation_path,) if path is not None)
+    if new_inputs:
+        stage2_targets = new_corridor_inputs_to_stage2_targets(new_inputs)
+        stage2_dir = _road_targets_to_stage2(stage2_targets, output_root)
+        stage2_6_config = PlanningNodeBuildConfig(
+            stage2_dir=stage2_dir,
+            output_dir=output_root / "stage2_6",
+            road_edges_path=stage1_result.edges_path,
+            boundary_path=boundary_path,
+            point_sources=point_sources,
+            bundle_geometry_sources=bundle_geometry_sources,
+            bound_spatial_entities_path=(
+                Path(str(getattr(state, "bound_entities_artifact_path", "")))
+                if str(getattr(state, "bound_entities_artifact_path", ""))
+                and Path(str(getattr(state, "bound_entities_artifact_path", ""))).exists()
+                else None
+            ),
+            manual_confirmation_path=manual_confirmation_path,
+        )
+        if callable(kg_retry_adapter):
+            stage2_6_result = build_planning_nodes_with_kg_retry_adapter(
+                stage2_6_config,
+                kg_retry_adapter,
+            )
+        elif kg_retry_response_path is not None:
+            stage2_6_result = build_planning_nodes_with_kg_retry_response(
+                stage2_6_config,
+                kg_retry_response_path,
+            )
+        else:
+            stage2_6_result = build_planning_nodes(stage2_6_config)
+        stage3_result = bind_road_spatial_requirements(
+            SpatialBindingConfig(
+                stage2_dir=stage2_dir,
+                stage2_6_dir=stage2_6_result.output_dir,
+                road_edges_path=stage1_result.edges_path,
+                output_dir=output_root / "stage3",
+                point_sources=point_sources,
             )
         )
+        stage3_gate = stage3_result.report.get("planning_gate") or {}
+        if stage3_gate.get("automatic_route_generation_allowed") and landuse_path is not None:
+            stage4_result = run_stage4_road_planning(
+                RoadPlanningConfig(
+                    road_nodes_path=stage1_result.nodes_path,
+                    road_edges_path=stage1_result.edges_path,
+                    stage3_dir=stage3_result.output_dir,
+                    boundary_path=boundary_path,
+                    landuse_path=landuse_path,
+                    hazard_points_path=hazard_path,
+                    dem_grid_path=terrain_grid_path,
+                    output_dir=output_root / "stage4",
+                )
+            )
 
-    layers = [
-        _layer_config("road_spatial_candidates", _read_json(stage2_6_result.spatial_candidates_path), "#a855f7", False),
-        _layer_config("road_planning_entities", _read_json(stage2_6_result.located_entities_path), "#f59e0b", False),
-        _layer_config("road_planning_nodes", _read_json(stage2_6_result.planning_nodes_path), "#2563eb", True),
-    ]
-    if stage4_result is not None:
-        layers.append(
-            _layer_config("planned_road_candidates", _read_json(stage4_result.candidates_path), "#ef4444", False)
+        layers.extend(
+            [
+                _layer_config(
+                    "road_spatial_candidates",
+                    _read_json(stage2_6_result.spatial_candidates_path),
+                    "#a855f7",
+                    False,
+                ),
+                _layer_config(
+                    "road_planning_entities",
+                    _read_json(stage2_6_result.located_entities_path),
+                    "#f59e0b",
+                    False,
+                ),
+                _layer_config(
+                    "road_planning_nodes",
+                    _read_json(stage2_6_result.planning_nodes_path),
+                    "#2563eb",
+                    True,
+                ),
+            ]
         )
+        if stage4_result is not None:
+            candidate_payload = _read_json(stage4_result.candidates_path)
+            target_payload, rejected_target_payload, network_payload = _partition_stage4_candidates(
+                candidate_payload,
+                {planning_input.target_id for planning_input in new_inputs},
+            )
+            if target_payload.get("features"):
+                layers.append(
+                    _layer_config(
+                        "planned_road_candidates",
+                        target_payload,
+                        "#ef4444",
+                        False,
+                    )
+                )
+            if network_payload.get("features"):
+                layers.append(
+                    _layer_config(
+                        "road_network_improvement_candidates",
+                        network_payload,
+                        "#64748b",
+                        False,
+                    )
+                )
+            if rejected_target_payload.get("features"):
+                layers.append(
+                    _layer_config(
+                        "road_rejected_target_candidates",
+                        rejected_target_payload,
+                        "#991b1b",
+                        False,
+                    )
+                )
+            produced_target_ids = {
+                str(target_id)
+                for feature in target_payload.get("features") or []
+                for properties in [feature.get("properties") or {}]
+                for target_id in (
+                    properties.get("target_ids")
+                    if isinstance(properties.get("target_ids"), list)
+                    else [properties.get("target_id")]
+                )
+                if str(target_id or "")
+            }
+            for planning_input in new_inputs:
+                if planning_input.target_id in produced_target_ids:
+                    continue
+                rejected = [
+                    feature
+                    for feature in rejected_target_payload.get("features") or []
+                    if str((feature.get("properties") or {}).get("target_id") or "")
+                    == planning_input.target_id
+                ]
+                diagnostic_code = (
+                    "ROAD_ALL_CANDIDATES_REJECTED"
+                    if rejected
+                    else "ROAD_CANDIDATE_NOT_GENERATED"
+                )
+                unresolved_items.append(
+                    {
+                        "type": "RoadUnresolved",
+                        "code": "road_unresolved",
+                        "target_id": planning_input.target_id,
+                        "planning_kind": planning_input.planning_kind,
+                        "diagnostic_codes": [diagnostic_code],
+                        "evidence_refs": _planning_input_evidence_refs(planning_input),
+                        "diagnostics": [
+                            {
+                                "candidate_id": (feature.get("properties") or {}).get("candidate_id"),
+                                "screening_status": (feature.get("properties") or {}).get("screening_status"),
+                                "hard_violations": (feature.get("properties") or {}).get("hard_violations") or [],
+                            }
+                            for feature in rejected
+                        ],
+                        "message": (
+                            "All target-bound Stage 4 candidates were rejected by hard constraints."
+                            if rejected
+                            else "Stage 4 produced no candidate for this typed new corridor."
+                        ),
+                    }
+                )
+        else:
+            for planning_input in new_inputs:
+                unresolved_items.append(
+                    {
+                        "type": "RoadUnresolved",
+                        "code": "road_unresolved",
+                        "target_id": planning_input.target_id,
+                        "planning_kind": planning_input.planning_kind,
+                        "diagnostic_codes": ["ROAD_STAGE3_GATE_BLOCKED"],
+                        "evidence_refs": _planning_input_evidence_refs(planning_input),
+                        "diagnostics": [],
+                        "message": str(
+                            stage3_gate.get("reason")
+                            or "Stage 3 did not authorize automatic corridor generation."
+                        ),
+                    }
+                )
 
     return {
         "ran": True,
+        "reason": (
+            None
+            if layers
+            else "No road target passed the evidence-complete road planning contract."
+        ),
         "output_dir": str(output_root),
         "road_target_count": len(road_targets),
-        "stage1_report": stage1_result.report,
-        "stage2_6_report": stage2_6_result.report,
-        "stage2_6_trace": _read_json(stage2_6_result.execute_trace_path),
-        "stage2_6_iteration_records": _read_json(stage2_6_result.iteration_records_path),
-        "stage2_6_quality_gates": _read_json(stage2_6_result.quality_gates_path),
-        "stage2_6_human_confirmation_template": _read_json(
-            stage2_6_result.human_confirmation_template_path
+        "ready_existing_target_count": len(existing_inputs),
+        "ready_new_corridor_target_count": len(new_inputs),
+        "unresolved_target_count": len(unresolved_items),
+        "unresolved_items": unresolved_items,
+        "road_candidate_preparation": preparation.model_dump(mode="json"),
+        "existing_road_materialization_report": (
+            existing_result.report if existing_result is not None else None
         ),
-        "stage2_6_kg_retry_requests": _read_json(stage2_6_result.kg_retry_requests_path),
-        "stage3_report": stage3_result.report,
+        "stage1_report": stage1_result.report,
+        "stage2_6_report": stage2_6_result.report if stage2_6_result else None,
+        "stage2_6_trace": (
+            _read_json(stage2_6_result.execute_trace_path) if stage2_6_result else None
+        ),
+        "stage2_6_iteration_records": (
+            _read_json(stage2_6_result.iteration_records_path)
+            if stage2_6_result
+            else None
+        ),
+        "stage2_6_quality_gates": (
+            _read_json(stage2_6_result.quality_gates_path) if stage2_6_result else None
+        ),
+        "stage2_6_human_confirmation_template": (
+            _read_json(stage2_6_result.human_confirmation_template_path)
+            if stage2_6_result
+            else None
+        ),
+        "stage2_6_kg_retry_requests": (
+            _read_json(stage2_6_result.kg_retry_requests_path)
+            if stage2_6_result
+            else None
+        ),
+        "stage3_report": stage3_result.report if stage3_result else None,
         "stage4_report": stage4_result.report if stage4_result is not None else None,
-        "automatic_route_generation_allowed": bool(stage3_gate.get("automatic_route_generation_allowed")),
-        "blocked_reason": None if stage3_gate.get("automatic_route_generation_allowed") else stage3_gate.get("reason"),
+        "automatic_route_generation_allowed": (
+            bool(stage3_gate.get("automatic_route_generation_allowed"))
+            if new_inputs
+            else None
+        ),
+        "blocked_reason": (
+            None
+            if not new_inputs or stage3_gate.get("automatic_route_generation_allowed")
+            else stage3_gate.get("reason")
+        ),
+        "routing_evidence": catalog.routing_evidence.model_dump(mode="json"),
+        "terrain_grid_preparation_report": (
+            terrain_preparation_result.report
+            if terrain_preparation_result is not None
+            else None
+        ),
         "artifacts": {
-            "stage2": str(stage2_dir),
+            "road_candidate_preparation": str(preparation_path),
             "stage1": str(stage1_result.output_dir),
-            "stage2_6": str(stage2_6_result.output_dir),
-            "spatial_candidates": str(stage2_6_result.spatial_candidates_path),
-            "spatial_quality_gates": str(stage2_6_result.quality_gates_path),
-            "human_confirmation_template": str(stage2_6_result.human_confirmation_template_path),
-            "iteration_records": str(stage2_6_result.iteration_records_path),
-            "kg_retry_requests": str(stage2_6_result.kg_retry_requests_path),
-            "spatial_preprocessing_trace": str(stage2_6_result.execute_trace_path),
+            "existing_road": (
+                str(existing_result.output_path) if existing_result is not None else None
+            ),
+            "existing_road_materialization_report": (
+                str(existing_result.report_path) if existing_result is not None else None
+            ),
+            "stage2": str(stage2_dir) if stage2_dir else None,
+            "stage2_6": str(stage2_6_result.output_dir) if stage2_6_result else None,
+            "spatial_candidates": (
+                str(stage2_6_result.spatial_candidates_path) if stage2_6_result else None
+            ),
+            "spatial_quality_gates": (
+                str(stage2_6_result.quality_gates_path) if stage2_6_result else None
+            ),
+            "human_confirmation_template": (
+                str(stage2_6_result.human_confirmation_template_path)
+                if stage2_6_result
+                else None
+            ),
+            "iteration_records": (
+                str(stage2_6_result.iteration_records_path) if stage2_6_result else None
+            ),
+            "kg_retry_requests": (
+                str(stage2_6_result.kg_retry_requests_path) if stage2_6_result else None
+            ),
+            "spatial_preprocessing_trace": (
+                str(stage2_6_result.execute_trace_path) if stage2_6_result else None
+            ),
             "manual_confirmation_path": str(
                 kg_retry_normalised_path or manual_confirmation_path
             )
@@ -541,8 +1100,17 @@ def execute_road_planning_from_agent_state(state: Any) -> Dict[str, Any]:
             "kg_retry_response_path": str(kg_retry_response_path) if kg_retry_response_path else None,
             "kg_retry_adapter_used": bool(callable(kg_retry_adapter)),
             "kg_retry_adapter_source": kg_retry_adapter_source,
-            "stage3": str(stage3_result.output_dir),
+            "stage3": str(stage3_result.output_dir) if stage3_result else None,
             "stage4": str(stage4_result.output_dir) if stage4_result is not None else None,
+            "dem": str(dem_path) if dem_path else None,
+            "terrain_routing_grid": (
+                str(terrain_grid_path) if terrain_grid_path else None
+            ),
+            "terrain_grid_preparation_report": (
+                str(terrain_preparation_result.report_path)
+                if terrain_preparation_result is not None
+                else None
+            ),
             "bundle_geometry_sources": [str(path) for path in bundle_geometry_sources],
         },
         "layout_layers": layers,

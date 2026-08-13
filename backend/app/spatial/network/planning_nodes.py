@@ -1233,27 +1233,56 @@ def _road_intents(stage2_dir: Path) -> List[Dict[str, Any]]:
         if not isinstance(project, Mapping):
             continue
         text = _evidence_text(project)
-        action = _action_from_text(text, project.get("action"))
+        typed_contract = project.get("typed_contract_version") == "road-planning-input-v1"
+        action = (
+            str(project.get("action") or "")
+            if typed_contract
+            else _action_from_text(text, project.get("action"))
+        )
         start_place = str(project.get("start_place") or "")
         end_place = str(project.get("end_place") or "")
         source_chunk_id = _source_chunk_id(project)
         section_title = _section_title(project)
         source_page = _source_page(project)
-        has_provenance = bool(text or source_chunk_id or section_title or source_page is not None)
+        start_endpoint = project.get("start_endpoint_evidence") or {}
+        end_endpoint = project.get("end_endpoint_evidence") or {}
+        routing_evidence = project.get("routing_evidence") or {}
+        typed_endpoint_provenance = bool(
+            typed_contract
+            and isinstance(start_endpoint, Mapping)
+            and isinstance(end_endpoint, Mapping)
+            and start_endpoint.get("resolution_status") == "resolved"
+            and end_endpoint.get("resolution_status") == "resolved"
+            and start_endpoint.get("source_artifact_ref")
+            and end_endpoint.get("source_artifact_ref")
+            and start_endpoint.get("evidence_refs")
+            and end_endpoint.get("evidence_refs")
+            and project.get("start_geometry")
+            and project.get("end_geometry")
+            and isinstance(routing_evidence, Mapping)
+            and any(
+                routing_evidence.get(name)
+                for name in ("current_network", "dem", "land_friction")
+            )
+        )
+        has_provenance = typed_endpoint_provenance or bool(
+            text or source_chunk_id or section_title or source_page is not None
+        )
+        project_name_mentions = [] if typed_contract else [str(project.get("name") or "")]
         mentioned = sorted(
             {
                 item
                 for item in [
                     start_place,
                     end_place,
-                    str(project.get("name") or ""),
+                    *project_name_mentions,
                     *_string_list(project.get("service_places")),
                     *_string_list(project.get("served_objects")),
                 ]
                 if item.strip()
             }
         )
-        confidence = float(project.get("confidence") or 0.82)
+        confidence = float(project.get("confidence") or (0.99 if typed_contract else 0.82))
         requires_review = (
             bool(project.get("requires_human_confirmation"))
             or confidence < 0.65
@@ -1287,7 +1316,9 @@ def _road_intents(stage2_dir: Path) -> List[Dict[str, Any]]:
                 "path_bsms": _string_list(project.get("path_bsms")),
                 "candidate_bsms": _string_list(project.get("candidate_bsms")),
                 "candidate_bbox": project.get("candidate_bbox") or project.get("bbox"),
-                "extraction_method": "stage2_project",
+                "extraction_method": (
+                    "typed_road_planning_input" if typed_contract else "stage2_project"
+                ),
             }
         )
     chunk_intents = _rule_intents_from_chunks(_load_chunks(stage2_dir))

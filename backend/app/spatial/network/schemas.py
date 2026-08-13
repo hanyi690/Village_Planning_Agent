@@ -77,7 +77,7 @@ class Stage2StructureConfig:
     constraint_documents: Tuple[Path, ...]
     location_sources: Tuple[Path, ...]
     output_dir: Path
-    village_name: str = "金田村"
+    village_name: str = ""
     display_crs: str = "EPSG:4326"
 
     def validate(self) -> None:

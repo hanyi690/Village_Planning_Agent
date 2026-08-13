@@ -49,7 +49,7 @@ def _fingerprint(payload: Any) -> str:
 
 def _is_generalized_or_route(place_name: str) -> bool:
     text = str(place_name or "").strip()
-    if text in {"", "全村", "各自然村", "金田村", "村内"}:
+    if text in {"", "全村", "各自然村", "村内"}:
         return True
     return any(token in text for token in ("-", "—", "–", "至", "到", "经过"))
 

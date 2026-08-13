@@ -65,6 +65,16 @@ def __getattr__(name: str) -> Any:
         from .stage2_6_validator import validate_stage2_6_outputs
 
         return validate_stage2_6_outputs
+    if name in {"prepare_road_candidate", "prepare_road_candidates"}:
+        from .road_candidate_preparation import (
+            prepare_road_candidate,
+            prepare_road_candidates,
+        )
+
+        return {
+            "prepare_road_candidate": prepare_road_candidate,
+            "prepare_road_candidates": prepare_road_candidates,
+        }[name]
     if name == "RDFLibKGSpatialRetryAdapter":
         from .kg_rdflib_adapter import RDFLibKGSpatialRetryAdapter
 
@@ -127,6 +137,8 @@ __all__ = [
     "bind_road_spatial_requirements",
     "build_planning_nodes",
     "validate_stage2_6_outputs",
+    "prepare_road_candidate",
+    "prepare_road_candidates",
     "RDFLibKGSpatialRetryAdapter",
     "build_planning_nodes_with_kg_retry_adapter",
     "build_planning_nodes_with_kg_retry_response",
