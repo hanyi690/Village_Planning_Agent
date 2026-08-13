@@ -1,7 +1,7 @@
 import { useEffect, useRef } from 'react';
 import { usePlanningStore } from '../store';
 import { planningApi } from '../api';
-import { normalizeV1MapLayers } from '../utils/gis-normalize';
+import { applyRenderLayerStyles, normalizeV1MapLayers } from '../utils/gis-normalize';
 
 /**
  * Fetches the authoritative v1 delivery + map-layers projections.
@@ -38,33 +38,39 @@ export function useDeliverySync() {
 
     (async () => {
       try {
-        const [delivery, mapLayers] = await Promise.all([
+        const [delivery, mapLayers, renderArtifact] = await Promise.all([
           planningApi.getDelivery(sessionId),
           planningApi.getRenderLayers(sessionId).catch(() => null),
+          // v1: 真实样式/配色来自 DELIVER 的 render_layers artifact（后端真实产出），
+          // 用于地图配色与图例；404 时优雅降级为默认样式。
+          planningApi.getArtifact(sessionId, 'render_layers').catch(() => null),
         ]);
         if (cancelled) return;
 
         store.setDelivery({
           available: delivery.available,
-          delivery_status: delivery.delivery_status,
+          delivery_status: delivery.delivery_status ?? null,
           statutory_complete: delivery.statutory_complete,
-          snapshot_checksum: delivery.snapshot_checksum,
-          deferral_summary: delivery.deferral_summary,
-          diagnostic_summary: delivery.diagnostic_summary,
-          deliverables: delivery.deliverables,
-          downloads: delivery.downloads,
+          snapshot_checksum: delivery.snapshot_checksum ?? '',
+          deferral_summary: delivery.deferral_summary ?? {},
+          diagnostic_summary: delivery.diagnostic_summary ?? {},
+          deliverables: delivery.deliverables ?? [],
+          downloads: delivery.downloads ?? [],
         });
 
         // Whole-snapshot replacement keyed by checksum.
         const checksum = delivery.snapshot_checksum || mapLayers?.snapshot_checksum || null;
         if (mapLayers?.layers?.length) {
-          const layers = normalizeV1MapLayers(
+          let layers = normalizeV1MapLayers(
             mapLayers.layers.map((layer) => ({
               layer_type: layer.layerType as 'current' | 'planned' | 'overlay' | 'constraint',
               layer_name: layer.layerName,
               geojson: layer.data,
             })),
           );
+          if (renderArtifact?.payload != null) {
+            layers = applyRenderLayerStyles(layers, renderArtifact.payload);
+          }
           if (layers.length > 0) {
             store.applyMapLayers(layers, checksum ?? undefined);
             lastChecksumRef.current = checksum;

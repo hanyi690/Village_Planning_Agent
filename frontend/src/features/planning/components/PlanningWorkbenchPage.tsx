@@ -38,7 +38,6 @@ import { createBaseMessage, createErrorMessage } from '@/features/planning/utils
 import { logger } from '@/features/planning/utils/logger';
 import { normalizeGisLayers } from '@/features/planning/utils/gis-normalize';
 import { fetchOfflineBasemap } from '@/features/planning/utils/offline-basemap';
-import { loadSessionReports, applySessionReportsToStore } from '@/features/planning/utils/session-report-loader';
 import { getSessionIdFromUrl } from '@/features/planning/utils/session-url';
 import {
   getWorkbenchNavFromUrl,
@@ -49,6 +48,7 @@ import {
 } from '@/features/planning/utils/workbench-nav';
 import LlmStatusBanner from '@/features/planning/components/LlmStatusBanner';
 import DeliveryStatusBanner from '@/features/planning/components/DeliveryStatusBanner';
+import { IntermediateArtifactsPanel } from '@/features/planning/components/IntermediateArtifactsPanel';
 import ExportDialog from '@/features/planning/components/ExportDialog';
 import QualityEvaluationPanel from '@/features/evaluation/components/QualityEvaluationPanel';
 import { useQualityEvaluation } from '@/features/evaluation/hooks/useQualityEvaluation';
@@ -1334,16 +1334,9 @@ function UnifiedPlanningWorkbench() {
         try {
           const backendStatus = await planningApi.getStatus(sessionId);
           if (!disposed) {
+            // v1: 报告/进度由 SSE dimension_complete 事件累积（含刷新后事件重放），
+            // 轮询只负责恢复状态投影，不再调用已删除的 /layer/reports 端点。
             syncBackendState(backendStatus);
-            const completed = backendStatus.completed_dimensions;
-            if (completed && Object.values(completed).some((items) => items.length > 0)) {
-              const key = JSON.stringify(completed);
-              if (key !== hydratedReportKey.current) {
-                hydratedReportKey.current = key;
-                const loaded = await loadSessionReports(sessionId, completed);
-                if (!disposed) applySessionReportsToStore(loaded.allReports, loaded.allProgress, loaded.allRagSources);
-              }
-            }
           }
       } catch {
         // SSE reconnect remains the primary channel; polling is only a
@@ -2224,6 +2217,8 @@ function UnifiedPlanningWorkbench() {
                     ))}
                   </div>
                 </div>
+
+                <IntermediateArtifactsPanel sessionId={sessionId} />
 
                 <div className="overflow-hidden rounded-2xl border border-[#dcebe4] bg-white shadow-[0_7px_24px_rgba(42,102,79,0.04)]">
                   <PanelTitle title="空间关系" note="点击上方关系切换" />

@@ -212,12 +212,14 @@ const ReportViewer = memo(function ReportViewer({
   const dimensionProgress = useDimensionProgressAll();
   const { approve, isSubmitting } = useApprovalActions();
   const projectName = useProjectName();
-  const expectedGisGenerationIdRef = useRef<string | null>(null);
   const gisPollingRunRef = useRef(0);
 
-  // GIS is generated after the main planning workflow has completed. SSE is the
-  // fast path, while status polling guarantees recovery after a dropped event,
-  // a reconnect, or a page refresh.
+  // GIS is generated after the main planning workflow has completed. The v1
+  // backend produces the spatial layout inside the workflow (DELIVER -> map-layers);
+  // there is no separate GIS generation endpoint. SSE is the fast path, while
+  // status polling guarantees recovery after a dropped event, a reconnect, or a
+  // page refresh: once /state exposes a delivery_status, useDeliverySync fetches
+  // the authoritative /map-layers snapshot (whole-snapshot replacement).
   useEffect(() => {
     if (!sessionId || !gisGenerating) return;
 
@@ -232,36 +234,12 @@ const ReportViewer = memo(function ReportViewer({
       ) {
         try {
           const sessionStatus = await planningApi.getStatus(sessionId);
-          const expectedId = expectedGisGenerationIdRef.current;
-          const generationMatches =
-            !expectedId ||
-            !sessionStatus.gis_generation_id ||
-            sessionStatus.gis_generation_id === expectedId;
-
-          if (
-            generationMatches &&
-            sessionStatus.gis_generation_status === "failed"
-          ) {
+          usePlanningStore.getState().syncBackendState(sessionStatus);
+          if (sessionStatus.delivery_status) {
             usePlanningStore.setState({
               gisGenerating: false,
               gisTriggerPending: false,
             });
-            usePlanningStore.getState().addMessage(
-              createErrorMessage(
-                `空间布局生成失败：${sessionStatus.gis_generation_error || "后端未返回具体原因"}`,
-              ),
-            );
-            return;
-          }
-
-          const layers = sessionStatus.gis_layout_configs || [];
-          const resultReady =
-            generationMatches &&
-            layers.length > 0 &&
-            sessionStatus.gis_generation_status !== "running";
-          if (resultReady) {
-            usePlanningStore.getState().addGisLayersFromUpload(layers);
-            expectedGisGenerationIdRef.current = null;
             return;
           }
           lastError = null;
@@ -590,27 +568,14 @@ const ReportViewer = memo(function ReportViewer({
 
   const handleTriggerGIS = useCallback(async () => {
     if (!sessionId || gisTriggerPending || gisGenerating) return;
-    try {
-      usePlanningStore.setState({ gisTriggerPending: true });
-      const result = await planningApi.generateGIS(sessionId);
-      expectedGisGenerationIdRef.current = result.generation_id || null;
-      usePlanningStore.setState({
-        gisTriggerPending: false,
-        gisGenerating: true,
-        isRightPanelExpanded: true,
-        processPanelTab: "map",
-      });
-    } catch (error) {
-      console.error("GIS trigger failed:", error);
-      expectedGisGenerationIdRef.current = null;
-      usePlanningStore.setState({
-        gisTriggerPending: false,
-        gisGenerating: false,
-      });
-      usePlanningStore.getState().addMessage(
-        createErrorMessage(`空间布局生成请求失败: ${error instanceof Error ? error.message : "未知错误"}`)
-      );
-    }
+    // v1: spatial layout is produced by the workflow itself; this just activates
+    // the polling wait for delivery_status (useDeliverySync fetches /map-layers).
+    usePlanningStore.setState({
+      gisTriggerPending: false,
+      gisGenerating: true,
+      isRightPanelExpanded: true,
+      processPanelTab: "map",
+    });
   }, [sessionId, gisTriggerPending, gisGenerating]);
 
   const handleRejectWithFeedback = useCallback(async () => {

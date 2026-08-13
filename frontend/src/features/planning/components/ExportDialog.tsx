@@ -139,8 +139,8 @@ const ExportDialog = memo(function ExportDialog({
 
     try {
       if (exportMode === 'planning_text') {
-        const filename = await planningApi.exportPlanningTextDocx(sessionId, '村庄规划').catch(() => {
-          failed.push('导出规划文本失败');
+        const filename = await planningApi.exportPlanningTextDocx(sessionId, '村庄规划').catch((err) => {
+          failed.push(err instanceof Error ? err.message : '导出规划文本失败');
           return '';
         });
         if (filename) succeeded.push(filename);
@@ -154,24 +154,24 @@ const ExportDialog = memo(function ExportDialog({
         for (const layer of layersToExport) {
           if (selectedFormats.includes('json')) {
             tasks.push(
-              planningApi.exportLayerJson(sessionId, layer).catch((_e) => {
-                failed.push(`导出 L${layer} JSON 失败`);
+              planningApi.exportLayerJson(sessionId, layer).catch((err) => {
+                failed.push(err instanceof Error ? err.message : `导出 L${layer} JSON 失败`);
                 return '';
               })
             );
           }
           if (selectedFormats.includes('md')) {
             tasks.push(
-              planningApi.exportLayerMd(sessionId, layer).catch(() => {
-                failed.push(`导出 L${layer} MD 失败`);
+              planningApi.exportLayerMd(sessionId, layer).catch((err) => {
+                failed.push(err instanceof Error ? err.message : `导出 L${layer} MD 失败`);
                 return '';
               })
             );
           }
           if (selectedFormats.includes('docx')) {
             tasks.push(
-              planningApi.exportLayerDocx(sessionId, layer, false).catch(() => {
-                failed.push(`导出 L${layer} DOCX 失败`);
+              planningApi.exportLayerDocx(sessionId, layer, false).catch((err) => {
+                failed.push(err instanceof Error ? err.message : `导出 L${layer} DOCX 失败`);
                 return '';
               })
             );
@@ -238,6 +238,11 @@ const ExportDialog = memo(function ExportDialog({
 
             {/* Content */}
             <div className="px-5 py-4 space-y-4">
+              {/* v1: export endpoints removed from the backend */}
+              <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-xs text-amber-700">
+                <b>导出功能暂不可用</b>：后端 v1 已下线 /api/sessions/{'{'}id{'}'}/export。
+                交付文件请等后端提供 /delivery.downloads 下载端点后启用。
+              </div>
               {/* Export Mode Selection */}
               <div>
                 <label className="text-sm font-medium text-slate-600 mb-2 block">导出类型</label>

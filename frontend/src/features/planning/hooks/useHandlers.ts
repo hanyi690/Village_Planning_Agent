@@ -11,7 +11,6 @@
 
 import { useRef, useCallback } from 'react';
 import { usePlanningStore } from '../store/planningStore';
-import { planningApi } from '../api';
 import { createBaseMessage } from '@/features/planning/utils';
 import { getDimensionName, getDimensionsByLayer } from '../config/dimensions';
 import { MIN_SSE_DATA_CHARS, LAYER_VALUE_MAP } from '@/features/planning/constants';
@@ -47,7 +46,6 @@ export function usePlanningHandlers({
   showViewer,
 }: UsePlanningHandlersOptions) {
   // Store access
-  const sessionId = usePlanningStore((state) => state.sessionId);
   const currentLayer = usePlanningStore((state) => state.currentLayer);
   const completedLayers = usePlanningStore((state) => state.completedLayers);
   const messages = usePlanningStore((state) => state.messages);
@@ -68,26 +66,30 @@ export function usePlanningHandlers({
   // Layer Reports Fetching (Signal-Fetch Pattern)
   // ============================================
 
+  // v1 对齐：/layer/reports 端点已从后端删除；报告内容由 SSE dimension_complete
+  // 事件累积在 store（含刷新后的事件重放），这里直接读 store，不发起网络请求。
   const fetchLayerReportsFromBackend = useCallback(
     async (layer: number): Promise<LayerReportData | null> => {
-      if (!sessionId) {
-        console.warn('[usePlanningHandlers] No sessionId, cannot fetch layer reports');
+      const reportsRaw =
+        (usePlanningStore.getState().reports as unknown as Record<
+          string,
+          Record<string, string>
+        >)[`layer${layer}`] || {};
+      const reports: Record<string, { content: string }> = {};
+      for (const [dimKey, content] of Object.entries(reportsRaw)) {
+        if (typeof content === 'string' && content.length > 0) {
+          reports[dimKey] = { content };
+        }
+      }
+      if (Object.keys(reports).length === 0) {
         return null;
       }
-
-      try {
-        const response = await planningApi.getLayerReports(sessionId, layer);
-
-        return {
-          reports: response.reports,
-          reportContent: response.report_content,
-        };
-      } catch (error) {
-        console.error(`[usePlanningHandlers] Failed to fetch layer ${layer} reports:`, error);
-        return null;
-      }
+      const reportContent = Object.entries(reports)
+        .map(([key, value]) => `## ${getDimensionName(key)}\n\n${value.content}`)
+        .join('\n\n---\n\n');
+      return { reports, reportContent };
     },
-    [sessionId]
+    []
   );
 
   // ============================================

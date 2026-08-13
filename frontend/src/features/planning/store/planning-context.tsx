@@ -16,7 +16,7 @@
 import { useEffect, useCallback, useMemo, ReactNode, Suspense } from 'react';
 import { usePlanningStore } from '../store/planningStore';
 import { useSSEConnection, useMessagePersistence, useSessionRestore, useDeliverySync } from '../hooks';
-import { planningApi, dataApi, VillageInfo, VillageSession, ImageData } from '../api';
+import { planningApi, VillageInfo, VillageSession, ImageData } from '../api';
 import { createSystemMessage, createErrorMessage, getErrorMessage } from '@/features/planning/utils';
 import { hydrateSessionSnapshot } from '@/features/planning/utils/session-hydrate';
 import { logger } from '@/features/planning/utils/logger';
@@ -130,25 +130,8 @@ Session ID: ${response.session_id.slice(0, 8)}...`;
 
         store.addMessage(createSystemMessage(initMessage));
 
-        // Auto-geocode village address (fire-and-forget, non-blocking)
-        const addressParts = [params.province, params.city, params.county, params.township, villageName].filter(Boolean);
-        if (addressParts.length > 0) {
-          planningApi.geocodeVillage(response.session_id, {
-            village_name: villageName,
-            province: params.province || undefined,
-            city: params.city || undefined,
-            county: params.county || undefined,
-            township: params.township || undefined,
-          }).then((geo) => {
-            if (geo.center) {
-              usePlanningStore.setState({
-                villageCenter: geo.center as [number, number],
-              });
-            }
-          }).catch((err) => {
-            logger.context.warn('Geocode failed (non-critical)', { error: getErrorMessage(err, '') });
-          });
-        }
+        // v1: 后端无 geocode 端点，村庄中心点不再自动请求。
+        // 页面刷新后地图中心由 /map-layers 权威快照决定。
       } catch (error: unknown) {
         const errorMessage = getErrorMessage(error, 'Unknown error');
         logger.context.error('Planning failed to start', { error: errorMessage });
@@ -259,32 +242,10 @@ Session ID: ${response.session_id.slice(0, 8)}...`;
     const state = usePlanningStore.getState();
     state.setHistoryLoading(true);
     state.setHistoryError(null);
-    try {
-      const projects = await dataApi.listVillages();
-      const villages: VillageInfo[] = await Promise.all(
-        projects.map(async (p) => {
-          const sessions = await dataApi.getVillageSessions(p.name);
-          return {
-            name: p.name,
-            display_name: p.display_name,
-            session_count: p.session_count,
-            sessions: sessions.map((s) => ({
-              session_id: s.session_id,
-              timestamp: s.created_at,
-              checkpoint_count: 0,
-              has_final_report: s.completed_at !== null,
-            })),
-          };
-        })
-      );
-      state.setVillages(villages);
-    } catch (error: unknown) {
-      const errorMessage = getErrorMessage(error, 'Failed to load history');
-      state.setHistoryError(errorMessage);
-      state.setVillages([]);
-    } finally {
-      state.setHistoryLoading(false);
-    }
+    // v1: 后端不再提供 /api/projects 历史列表；只保留本地会话历史
+    // （本会话内新建 + localStorage 删除标记）。
+    state.setVillages(state.villages);
+    state.setHistoryLoading(false);
   }, []);
 
   const selectVillage = useCallback(
@@ -343,18 +304,10 @@ Session ID: ${response.session_id.slice(0, 8)}...`;
       if (store.sessionId === sessionId) {
         clearSessionIdFromUrl();
       }
-      try {
-        await planningApi.deleteSession(sessionId);
-        return true;
-      } catch (error: unknown) {
-        store.unmarkSessionDeleted(sessionId);
-        const errorMessage = getErrorMessage(error, 'Failed to delete session');
-        store.setHistoryError(errorMessage);
-        await loadVillagesHistory();
-        return false;
-      }
+      // v1: 后端无 DELETE /sessions 端点，删除仅作用于本地历史。
+      return true;
     },
-    [loadVillagesHistory]
+    []
   );
 
   const clearAllHistory = useCallback(async (
@@ -375,16 +328,7 @@ Session ID: ${response.session_id.slice(0, 8)}...`;
     if (!knownSessionIds) {
       store.clearVillagesHistory();
     }
-
-    const results = await Promise.allSettled(
-      sessionIds.map((id) => planningApi.deleteSession(id)),
-    );
-    const failedCount = results.filter((result) => result.status === 'rejected').length;
-    if (failedCount > 0) {
-      store.setHistoryError(`有 ${failedCount} 条历史记录删除失败，已从列表隐藏`);
-      return { success: false, clearedActiveSession };
-    }
-
+    // v1: 后端无删除端点，清空仅作用于本地历史。
     return { success: true, clearedActiveSession };
   }, []);
 
@@ -417,10 +361,16 @@ Session ID: ${response.session_id.slice(0, 8)}...`;
   }, []);
 
   const sendChatMessage = useCallback(
-    async (message: string) => {
+    async (
+      _message: string,
+    ): Promise<{ status: string; reply?: string; draft_feedback?: string; dimensions?: string[] }> => {
       const sessionId = usePlanningStore.getState().sessionId;
       if (!sessionId) throw new Error('No session ID');
-      return planningApi.sendChatMessage(sessionId, message);
+      // v1: 后端未提供 chat 端点；本地回显并提示，避免调用已删除的 /feedback。
+      return {
+        status: 'unsupported',
+        reply: '对话功能在 v1 暂不可用（后端未提供 chat 端点）。你可以使用人工审核（批准/驳回）推进流程。',
+      };
     },
     []
   );

@@ -2,13 +2,15 @@ import { planningApi } from '../api/planning-api';
 import { DIMENSIONS_BY_LAYER } from '../config/dimensions';
 import { NAV_KEYS } from '../constants';
 import { usePlanningStore } from '../store/planningStore';
-import { loadSessionReports, applySessionReportsToStore } from './session-report-loader';
 import { normalizePlanningStatus } from '../constants';
 
 /**
  * Hydrate client state after a new session starts or SSE connects late.
- * Replays cached SSE events so layer/dimension progress is not lost —
- * unless history hydrate already advanced lastProcessedSeq (skip replay).
+ *
+ * v1 alignment: restores from /state (SessionProjection) + durable SSE event
+ * replay; the authoritative /delivery + /map-layers are fetched by
+ * useDeliverySync. No legacy endpoints (/layer/reports, /checkpoints,
+ * /projects) are consulted.
  */
 export async function bootstrapPlanningSession(sessionId: string): Promise<void> {
   const store = usePlanningStore.getState();
@@ -24,7 +26,7 @@ export async function bootstrapPlanningSession(sessionId: string): Promise<void>
   const terminal =
     normalizePlanningStatus(statusData.status) === 'completed' ||
     normalizePlanningStatus(statusData.status) === 'failed' ||
-    statusData.execution_complete === true;
+    statusData.delivery_status != null;
 
   // History / URL hydrate sets lastProcessedSeq to the tip before connecting.
   // Do not re-apply the full event stream (would wipe restored messages / status).
@@ -35,25 +37,6 @@ export async function bootstrapPlanningSession(sessionId: string): Promise<void>
     }
   } else if (typeof syncResult.last_seq === 'number') {
     store.setLastProcessedSeq(syncResult.last_seq);
-  }
-
-  const completed = statusData.completed_dimensions;
-  const reportsEmpty =
-    Object.keys(store.reports.layer1).length === 0 &&
-    Object.keys(store.reports.layer2).length === 0 &&
-    Object.keys(store.reports.layer3).length === 0;
-  if (completed && reportsEmpty && Object.values(completed).some((items) => items.length > 0)) {
-    const loaded = await loadSessionReports(sessionId, completed);
-    applySessionReportsToStore(loaded.allReports, loaded.allProgress, loaded.allRagSources);
-  }
-
-  if (Array.isArray(statusData.gis_layout_configs) && statusData.gis_layout_configs.length > 0) {
-    const hasGis = Object.keys(usePlanningStore.getState().gisLayers).length > 0;
-    if (!hasGis) {
-      store.hydrateFromStateSync({
-        gis_layout_configs: statusData.gis_layout_configs,
-      });
-    }
   }
 
   const firstLayer = statusData.phase?.startsWith('layer')
