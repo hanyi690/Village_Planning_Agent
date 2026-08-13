@@ -16,10 +16,14 @@ class SuitabilityCandidate(BaseModel):
     target_id: str = ""
     source_parcels: list[str] = Field(default_factory=list)
     score: float = 0.0
+    score_breakdown: dict[str, float] = Field(default_factory=dict)
     hard_feasible: bool = False
     exclusion_reasons: list[str] = Field(default_factory=list)
     evidence_refs: list[str] = Field(default_factory=list)
     available_geometry_wkt: str = ""
+    policy_ref: str = ""
+    feature_ref: str = ""
+    availability_diagnostics: list[dict[str, object]] = Field(default_factory=list)
 
 
 class SuitabilitySurface(ContractMeta):
