@@ -42,7 +42,7 @@ GeoAI 的可用形式是视觉感知、地理记忆、确定性空间工具和�
 |---|---|---|
 | 自动校验 | `backend/app/workflow/stages/validate.py` 与 `backend/app/domain/validation/` 有确定性 checks、`ValidationReport`、责任阶段和 gate | PARTIAL |
 | 自动回退 | 阶段路由已有 EXECUTE/SELECT/GROUND 等定向反馈，统一 adjustment executor 仍待完成 | PARTIAL |
-| 自动调整 | `ValidationReport.adjustments` 已存在，但各 worker 消费不完整 | PARTIAL |
+| 自动调整 | 已有目标级 typed directive compiler 与 artifact impact analyzer；hard constraint、overlap、road unresolved producer 已补 lineage，worker 消费仍未接线 | PARTIAL |
 | 无进展保护 | `issue_fingerprint`、`gate_progress_metadata` 会识别重复问题 | CURRENT / 语义不足 |
 | 自动修复闭环 | 同一问题通常转 HUMAN 或重复阶段，尚未统一执行 adjustment | GAP |
 | 修订 | `revision_impact_tree`、artifact revision/checksum、目标投影修订已有基础 | PARTIAL |
@@ -71,6 +71,12 @@ GeoAI 的可用形式是视觉感知、地理记忆、确定性空间工具和�
 - `ArtifactRef` revision/checksum：父版本与输入输出身份；
 - `ExecutionPlan`、`PlannedState`：修复后的权威产物；
 - `DeferralLedger`：无法证明的目标。
+
+`RepairDirectiveCompilation` 是 `ValidationReport` 到现有 adjustment 输入之间的内部、
+临时编译视图，不是新的 root artifact、State 业务对象或第二套 RepairPlan。它只允许
+`exclude_bsms / reallocate / rebuild_geometry / require_source_evidence` 四类闭集指令，
+每条必须绑定 target、源 violation 和源 artifact checksum；任一 finding 缺少可审计
+lineage 时整批 fail-closed，不允许用 `relax` 元数据伪装为已修复。
 
 只增加一个内部编排入口：
 
@@ -107,6 +113,13 @@ checksum、adjustments、受影响目标、检查前后结果和新产物 checks
 | 规划分类缺失 | 同一编码体系闭集决策 | TARGET_PROJECTION/EXECUTE |
 | 设施缓冲/面积错误 | 米制 CRS 确定性重算 | EXECUTE |
 | 道路/轴线无效 | 使用已确认锚点重建 | EXECUTE |
+| 道路源契约缺失 | 补齐道路模式、端点或现状路段证据 | TARGET_PROJECTION |
+| 道路锚点未接地 | 只重读目标级空间证据，不扩大候选池 | GROUND |
+
+最早失效阶段不能只信 finding 自报的 `responsible_stage`。impact analyzer 同时检查
+directive 类型、源 violation checksum、重放锚点和 `ArtifactRef.parent_digests`：父
+checksum 不一致时向上收缩到最早失效阶段；若连 L3 `planning_program` 都不可证明，
+则阻断 post-L3 resume，而不是猜测一个 checkpoint。
 
 禁止：补猜坐标、跨体系映射、默认 `0701`、扩大无证据候选池、修改现状源图层、
 用 LLM 自由文本覆盖 PlannedState。

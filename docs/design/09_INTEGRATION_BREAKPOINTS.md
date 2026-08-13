@@ -71,6 +71,9 @@
 - 用 `ResumePlan` 将 LangGraph cursor、pending interrupt、artifact refs、context fingerprint 和 Gate checksum 组合为一个可审计决策。
 - checkpoint API 只能恢复 `ResumePlan.mode` 为 `resume_checkpoint` 或 `rerun_from_stage` 的 checkpoint；HUMAN 必须走对应的 canonical interrupt resolve。
 - 通过 `artifact_refs` 的父版本与 checksum 计算最早失效阶段；仅重跑该阶段及其下游。
+- VALIDATE finding 先经目标级 typed directive 编译；`exclude_bsms / reallocate /
+  rebuild_geometry / require_source_evidence` 分别映射到最早安全阶段。缺 target lineage、
+  缺 BSM/evidence 或未知 finding 必须阻断自动重放，禁止退化为 `relax`。
 - 为每个阶段补充 replay contract test：输入 context/artifact 不变时必须复用；输入或父 artifact revision 变化时必须生成新的 plan。
 - 在 SELECT→EXECUTE→RenderLayers→VALIDATE→RECONCILE→DELIVER 完成一次无外部 provider 的闭环验收后，才能宣称 checkpoint resume planner 可用。
 
