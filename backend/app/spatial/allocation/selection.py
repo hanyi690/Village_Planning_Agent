@@ -282,9 +282,10 @@ def score_candidates(
     formula (``0.5*proximity + 0.3*construction + 0.2*area_fit``) is kept, so
     existing callers and ordering tests are byte-for-byte unchanged. When any
     new dict is present a ``PROJECT_WEIGHTS`` weighted blend of all nine
-    dimensions is used; each optional dimension defaults to 0.5 when its dict
-    is None or the bsm is absent. Dict values are pre-normalized to [0,1]
-    (higher = better; ``slope_hazard`` higher = safer).
+    dimensions is used. Missing optional evidence is omitted and the remaining
+    weights are renormalized; it is never replaced by a neutral 0.5. Dict
+    values are pre-normalized to [0,1] (higher = better;
+    ``slope_hazard`` higher = safer).
     """
     new_criteria = {
         "road_distance_m": road_distance_m,
@@ -326,15 +327,13 @@ def score_candidates(
             "construction": construction,
             "area_fit": area_fit,
         }
+        available_dimensions = {"proximity", "construction", "area_fit"}
         if road_distance_m is not None:
             d = road_distance_m.get(c.bsm)
             if d is not None:
                 dims["road_access"] = 1.0 / (1.0 + d / 300.0)
                 reasons.append(f"road_access:{dims['road_access']:.2f}")
-            else:
-                dims["road_access"] = 0.5
-        else:
-            dims["road_access"] = 0.5
+                available_dimensions.add("road_access")
         for key in (
             "service_coverage",
             "adjacency",
@@ -343,16 +342,13 @@ def score_candidates(
             "l2_structure_fit",
         ):
             data = new_criteria[key]
-            if data is None:
-                dims[key] = 0.5
-            else:
-                val = data.get(c.bsm, 0.5)
-                if val is None:
-                    val = 0.5
+            if data is not None and c.bsm in data and data[c.bsm] is not None:
+                val = float(data[c.bsm])
                 dims[key] = val
-                if c.bsm in data:
-                    reasons.append(f"{key}:{val:.2f}")
-        score = sum(weights[k] * dims[k] for k in _PROJECT_WEIGHT_KEYS)
+                available_dimensions.add(key)
+                reasons.append(f"{key}:{val:.2f}")
+        weight_total = sum(weights[key] for key in available_dimensions)
+        score = sum(weights[key] * dims[key] for key in available_dimensions) / weight_total
         scored.append(
             ScoredCandidate(
                 bsm=c.bsm, score=score, distance_m=c.distance_m, reasons=reasons
@@ -449,6 +445,13 @@ def select_parcel(
     cluster_centroid: Optional[Tuple[float, float]] = None,
     ranker: Optional[Ranker] = None,
     filter_cache: Optional[Dict[str, Tuple[Any, List[str]]]] = None,
+    road_distance_m: Optional[Dict[str, float]] = None,
+    service_coverage: Optional[Dict[str, float]] = None,
+    adjacency: Optional[Dict[str, float]] = None,
+    conversion_cost: Optional[Dict[str, float]] = None,
+    slope_hazard: Optional[Dict[str, float]] = None,
+    l2_structure_fit: Optional[Dict[str, float]] = None,
+    project_type: Optional[str] = None,
 ) -> PlacementDecision:
     target_ha = parse_scale_ha(target.scale_text)
     target_min_area = target_ha if target.category == "project" else 0.0
@@ -462,7 +465,17 @@ def select_parcel(
     )
     survivors = apply_scale_filter(survivors, allow_large_block=is_large_block_target(target))
     ranked = rank_candidates(
-        survivors, cluster_centroid=cluster_centroid, target_ha=target_ha, ranker=ranker,
+        survivors,
+        cluster_centroid=cluster_centroid,
+        target_ha=target_ha,
+        ranker=ranker,
+        road_distance_m=road_distance_m,
+        service_coverage=service_coverage,
+        adjacency=adjacency,
+        conversion_cost=conversion_cost,
+        slope_hazard=slope_hazard,
+        l2_structure_fit=l2_structure_fit,
+        project_type=project_type,
     )
     by_bsm = {c.bsm: c for c in survivors}
     for scored in ranked:

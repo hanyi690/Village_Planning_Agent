@@ -59,6 +59,49 @@ def _classification_ready(target: Any) -> bool:
     return decision is not None and getattr(decision, "status", "") == "resolved"
 
 
+def _road_contract_ready(target: Any) -> tuple[bool, str]:
+    """Validate minimum typed road evidence without inventing a catalog hit."""
+    from app.contracts.domain.road_planning import (
+        ExistingRoadPlanningInput,
+        NewCorridorPlanningInput,
+    )
+
+    payload = target.model_dump(mode="python") if hasattr(target, "model_dump") else dict(target)
+    kind = str(payload.get("road_planning_kind") or "")
+    fields = {
+        key: payload.get(key)
+        for key in (
+            "target_id",
+            "source_project_id",
+            "action",
+            "road_level",
+            "length_m",
+            "roadbed_width_m",
+            "pavement_width_m",
+            "routing_evidence",
+        )
+    }
+    try:
+        if kind == "existing_road_intervention":
+            ExistingRoadPlanningInput(
+                **fields,
+                existing_road_feature_ids=payload.get("existing_road_feature_ids") or [],
+                existing_road_segment_ids=payload.get("existing_road_segment_ids") or [],
+                road_evidence_refs=payload.get("road_evidence_refs") or [],
+            )
+        elif kind == "new_corridor":
+            NewCorridorPlanningInput(
+                **fields,
+                start_endpoint=payload.get("start_endpoint"),
+                end_endpoint=payload.get("end_endpoint"),
+            )
+        else:
+            return False, "road_planning_kind_unresolved"
+    except Exception as exc:
+        return False, f"road_contract_unresolved:{type(exc).__name__}"
+    return True, ""
+
+
 def _candidate_site_to_parcels(
     site: CandidateSite, parcel_by_bsm: dict[str, object]
 ) -> list[CandidateParcel]:
@@ -107,6 +150,44 @@ def _filter_parcels_for_target(
 ) -> list[CandidateParcel]:
     """Keep only parcels explicitly tagged for ``target_ref``."""
     return [p for p in parcels if p.target_ref == target_ref]
+
+
+def _target_suitability(
+    surface: Any,
+    target_id: str,
+) -> tuple[
+    set[str] | None,
+    Dict[str, float],
+    Dict[str, float],
+    Dict[str, float],
+]:
+    if surface is None:
+        return None, {}, {}, {}
+    rows = [
+        item
+        for item in list(getattr(surface, "candidates", None) or [])
+        if str(getattr(item, "target_id", "") or "") == target_id
+    ]
+    if not rows:
+        return set(), {}, {}, {}
+    feasible: set[str] = set()
+    slope_hazard: Dict[str, float] = {}
+    road_distance_m: Dict[str, float] = {}
+    service_coverage: Dict[str, float] = {}
+    for row in rows:
+        for bsm in list(getattr(row, "source_parcels", None) or []):
+            bsm = str(bsm)
+            if getattr(row, "hard_feasible", False):
+                feasible.add(bsm)
+            breakdown = dict(getattr(row, "score_breakdown", {}) or {})
+            value = breakdown.get("slope_hazard")
+            if value is not None:
+                slope_hazard[bsm] = float(value)
+            if breakdown.get("road_distance_m") is not None:
+                road_distance_m[bsm] = float(breakdown["road_distance_m"])
+            if breakdown.get("service_coverage") is not None:
+                service_coverage[bsm] = float(breakdown["service_coverage"])
+    return feasible, slope_hazard, road_distance_m, service_coverage
 
 
 def _breakdown_from_scored(scored: ScoredCandidate) -> Dict[str, float]:
@@ -340,6 +421,7 @@ def _place_facility(
     cluster_centroid: Optional[Tuple[float, float]],
     occupied: List[Tuple[float, float]],
     filter_cache: Optional[Dict[str, Tuple[Any, List[str]]]] = None,
+    suitability_surface: Any = None,
 ) -> Tuple[PlacementDecision, str]:
     """Place one facility: MCLP when a service radius is known, else select_parcel.
 
@@ -356,6 +438,12 @@ def _place_facility(
             "",
         )
     wanted = set(facility.candidate_bsms)
+    feasible, slope_hazard, road_distance_m, service_coverage = _target_suitability(
+        suitability_surface,
+        str(facility.target_id),
+    )
+    if feasible is not None:
+        wanted &= feasible
     pool = [p for p in parcels if p.bsm in wanted]
     facility_candidates: List[FacilityCandidate] = []
     by_bsm: Dict[str, CandidateParcel] = {}
@@ -405,6 +493,10 @@ def _place_facility(
         occupied=occupied,
         cluster_centroid=cluster_centroid,
         filter_cache=filter_cache,
+        slope_hazard=slope_hazard or None,
+        road_distance_m=road_distance_m or None,
+        service_coverage=service_coverage or None,
+        project_type="facility",
     )
     if decision.status == "placed" and decision.anchor_point is not None:
         facility.anchor_point = decision.anchor_point
@@ -415,18 +507,100 @@ def select_aggregate(
     result: GroundingResult,
     intent: Any,
     context: PlanningContext,
+    suitability_surface: Any = None,
+    zone_allocation: Any = None,
+    site_allocation: Any = None,
 ) -> Tuple[SiteSelectionDecision, List[LandDesignBrief]]:
     run_id = getattr(context, "session_id", "") or ""
     if context.workspace is None:
         empty = build_site_selection_decision([], run_id=run_id, session_id=run_id)
         return empty, []
     parcels = _grounding_to_candidate_parcels(result, context.workspace)
-    projects = list(getattr(intent, "project_targets", None) or [])
-    facilities = list(getattr(intent, "facilities", None) or [])
+    all_projects = list(getattr(intent, "project_targets", None) or [])
+    all_facilities = list(getattr(intent, "facilities", None) or [])
+    if suitability_surface is not None and site_allocation is None:
+        from app.domain.allocation.global_site_select import (
+            allocate_non_zone_for_select,
+        )
+
+        site_allocation = allocate_non_zone_for_select(
+            intent,
+            suitability_surface,
+            context,
+        )
+    global_site_assignments: list[TargetAssignment] = []
+    global_site_placements: list[PlacementDecision] = []
+    facility_placements: Dict[str, Dict[str, Any]] = {}
+    target_objects = {
+        str(getattr(target, "target_id", "") or ""): target
+        for target in [*all_projects, *all_facilities]
+        if str(getattr(target, "target_id", "") or "")
+    }
+    if site_allocation is not None:
+        for row in list(getattr(site_allocation, "assignments", None) or []):
+            target_id = str(getattr(row, "target_id", "") or "")
+            target = target_objects.get(target_id)
+            assigned = str(getattr(row, "status", "")) == "assigned"
+            target_type = str(getattr(row, "target_type", "") or "project")
+            anchor = getattr(row, "anchor_point", None)
+            bsm = str(getattr(row, "bsm", "") or "")
+            if target_type == "facility" and target is not None and assigned:
+                target.anchor_point = anchor
+            lineage = getattr(row, "lineage", None)
+            global_site_assignments.append(TargetAssignment(
+                target_id=target_id,
+                target_type=target_type,
+                status="placed" if assigned else "unplaced",
+                selected_bsm=bsm if assigned else "",
+                anchor_point=anchor if assigned else None,
+                expected_output_kind=str(
+                    getattr(row, "expected_output_kind", "point")
+                ),
+                target_binding=dict(getattr(row, "target_binding", {}) or {}),
+                reason="" if assigned else str(getattr(row, "reason", "") or "global_site_unplaced"),
+                score=float(getattr(row, "score", 0.0) or 0.0),
+                score_breakdown=dict(getattr(row, "score_breakdown", {}) or {}),
+                allocation_lineage_refs=(
+                    [str(getattr(lineage, "lineage_id", ""))]
+                    if lineage is not None
+                    else []
+                ),
+            ))
+            if target_type == "project":
+                global_site_placements.append(PlacementDecision(
+                    target_id=target_id,
+                    selected_bsm=bsm if assigned else "",
+                    anchor_point=anchor if assigned else None,
+                    status="placed" if assigned else "unplaced",
+                    reason="" if assigned else str(getattr(row, "reason", "") or "global_site_unplaced"),
+                    selected_score=float(getattr(row, "score", 0.0) or 0.0),
+                ))
+            elif target_type == "facility":
+                facility_placements[target_id] = {
+                    "bsm": bsm if assigned else "",
+                    "anchor_point": anchor if assigned else None,
+                    "status": "placed" if assigned else "unplaced",
+                    "facility_type": str(getattr(target, "type", "") or ""),
+                }
+    projects = (
+        [
+            project
+            for project in all_projects
+            if getattr(project, "materialization_role", None) in {
+                "functional_overlay",
+                "protection_overlay",
+                "restoration_overlay",
+            }
+        ]
+        if site_allocation is not None
+        else all_projects
+    )
+    facilities = [] if site_allocation is not None else all_facilities
     cluster_centroid = _cluster_centroid(context)
     occupied: List[Tuple[float, float]] = []
     filter_cache: Dict[str, Tuple[Any, List[str]]] = {}
     placements: List[PlacementDecision] = []
+    overlay_assignments: List[TargetAssignment] = []
     _t_projects = time.monotonic()
     for project in projects:
         # L3 may contain non-spatial programme actions (training, service
@@ -438,6 +612,38 @@ def select_aggregate(
             logger.info(
                 "select_aggregate: non-spatial project %s deferred to EXECUTE",
                 project.target_id,
+            )
+            continue
+        if getattr(project, "materialization_role", None) in {
+            "functional_overlay",
+            "protection_overlay",
+            "restoration_overlay",
+        }:
+            overlay_bsms = sorted(
+                {
+                    str(bsm)
+                    for site in list(getattr(result, "candidates", None) or [])
+                    if str(getattr(site, "target_ref", "") or "") == project.target_id
+                    for bsm in list(getattr(site, "source_parcels", None) or [])
+                    if str(bsm)
+                }
+                - set(getattr(project, "excluded_bsms", None) or [])
+            )
+            overlay_assignments.append(
+                TargetAssignment(
+                    target_id=project.target_id,
+                    target_type="project",
+                    status="placed" if overlay_bsms else "unplaced",
+                    selected_bsm=overlay_bsms[0] if overlay_bsms else "",
+                    selected_bsms=overlay_bsms,
+                    expected_output_kind=project.expected_output_kind,
+                    target_binding=project.model_dump(mode="json"),
+                    reason="" if overlay_bsms else "overlay_grounding_unresolved",
+                    allocation_lineage_refs=[
+                        f"grounding-overlay:{project.target_id}:{bsm}"
+                        for bsm in overlay_bsms
+                    ],
+                )
             )
             continue
         if (
@@ -460,6 +666,15 @@ def select_aggregate(
             scale_text=project.scale_text,
         )
         project_pool = _filter_parcels_for_target(parcels, project.target_id)
+        excluded_bsms = set(getattr(project, "excluded_bsms", None) or [])
+        if excluded_bsms:
+            project_pool = [parcel for parcel in project_pool if parcel.bsm not in excluded_bsms]
+        feasible_bsms, slope_hazard, road_distance_m, service_coverage = _target_suitability(
+            suitability_surface,
+            project.target_id,
+        )
+        if feasible_bsms is not None:
+            project_pool = [p for p in project_pool if p.bsm in feasible_bsms]
         if not project_pool:
             logger.warning(
                 "select_aggregate: no candidates for project %s; marking unplaced for human review",
@@ -482,6 +697,10 @@ def select_aggregate(
             occupied=occupied,
             cluster_centroid=cluster_centroid,
             filter_cache=filter_cache,
+            slope_hazard=slope_hazard or None,
+            road_distance_m=road_distance_m or None,
+            service_coverage=service_coverage or None,
+            project_type=str(getattr(project, "category", "") or "default"),
         )
         if placement.status == "placed" and placement.anchor_point is not None:
             occupied.append(placement.anchor_point)
@@ -501,6 +720,9 @@ def select_aggregate(
             for project in projects
         },
     )
+    decision.target_assignments.extend(overlay_assignments)
+    decision.target_assignments.extend(global_site_assignments)
+    placements.extend(global_site_placements)
     # Backfill facility candidate_bsms from grounding candidate sites so
     # placement honours the grounded direction (e.g. 南部) instead of falling
     # back to the global pool (which collapses all facilities onto one parcel).
@@ -528,7 +750,6 @@ def select_aggregate(
                 if site_bsms:
                     zone.candidate_bsms = site_bsms
                 break
-    facility_placements: Dict[str, Dict[str, Any]] = {}
     facility_rank = len(placements) + 1
     for i, facility in enumerate(facilities):
         if not _classification_ready(facility):
@@ -551,7 +772,13 @@ def select_aggregate(
             }
             continue
         decision_p, bsm = _place_facility(
-            facility, parcels, context, cluster_centroid, occupied, filter_cache
+            facility,
+            parcels,
+            context,
+            cluster_centroid,
+            occupied,
+            filter_cache,
+            suitability_surface,
         )
         if decision_p.status == "placed":
             decision.target_assignments.append(
@@ -597,15 +824,88 @@ def select_aggregate(
     if facilities:
         decision.decision_factors["facility_count"] = len(facilities)
         decision.decision_factors["facility_placements"] = facility_placements
+    elif all_facilities and site_allocation is not None:
+        decision.decision_factors["facility_count"] = len(all_facilities)
+        decision.decision_factors["facility_placements"] = facility_placements
+    decision.decision_factors["global_site_allocation"] = {
+        "status": str(getattr(site_allocation, "status", "missing")),
+        "complete": bool(getattr(site_allocation, "complete", False)),
+        "assignment_count": len(
+            list(getattr(site_allocation, "assignments", None) or [])
+        ),
+        "diagnostic_codes": [
+            str(getattr(item, "code", ""))
+            for item in list(getattr(site_allocation, "diagnostics", None) or [])
+        ],
+    }
     logger.info(
         "select_aggregate: facilities loop %.2fs (facilities=%d)",
         time.monotonic() - _t_facilities, len(facilities),
     )
     _t_zones = time.monotonic()
     assigned_ids = {assignment.target_id for assignment in decision.target_assignments}
+    zone_rows = list(getattr(zone_allocation, "assignments", None) or [])
+    zone_rows_by_target: Dict[str, List[Any]] = {}
+    for row in zone_rows:
+        zone_rows_by_target.setdefault(str(getattr(row, "target_id", "") or ""), []).append(row)
+    zone_balances = {
+        str(getattr(item, "target_id", "") or ""): item
+        for item in list(getattr(zone_allocation, "area_balances", None) or [])
+    }
+    allocation_ready = bool(
+        zone_allocation is not None
+        and getattr(zone_allocation, "status", "") == "OPTIMAL"
+        and getattr(zone_allocation, "complete", False)
+    )
+    for zone in list(getattr(intent, "zone_targets", None) or []):
+        target_id = str(getattr(zone, "target_id", "") or "")
+        if not target_id or target_id in assigned_ids:
+            continue
+        rows = sorted(zone_rows_by_target.get(target_id, []), key=lambda item: item.bsm)
+        bsms = [str(item.bsm) for item in rows]
+        binding = zone.model_dump(mode="json")
+        binding["authoritative_zone_assignments"] = [
+            item.model_dump(mode="json") for item in rows
+        ]
+        balance = zone_balances.get(target_id)
+        if balance is not None:
+            binding["zone_area_balance"] = balance.model_dump(mode="json")
+        decision.target_assignments.append(
+            TargetAssignment(
+                target_id=target_id,
+                target_type="zone",
+                status="placed" if allocation_ready and bsms else "unplaced",
+                selected_bsm=bsms[0] if allocation_ready and bsms else "",
+                selected_bsms=bsms if allocation_ready else [],
+                expected_output_kind=zone.expected_output_kind,
+                target_binding=binding,
+                reason=(
+                    ""
+                    if allocation_ready and bsms
+                    else f"global_zone_allocation_{str(getattr(zone_allocation, 'status', 'missing')).lower()}"
+                ),
+                score=(
+                    sum(float(item.suitability_score) for item in rows) / len(rows)
+                    if allocation_ready and rows
+                    else 0.0
+                ),
+                allocation_lineage_refs=[item.lineage.lineage_id for item in rows]
+                if allocation_ready
+                else [],
+            )
+        )
+        assigned_ids.add(target_id)
+    decision.decision_factors["global_zone_allocation"] = {
+        "status": str(getattr(zone_allocation, "status", "missing")),
+        "complete": bool(getattr(zone_allocation, "complete", False)),
+        "assignment_count": len(zone_rows),
+        "diagnostic_codes": [
+            str(getattr(item, "code", ""))
+            for item in list(getattr(zone_allocation, "diagnostics", None) or [])
+        ],
+    }
     for target_type, targets in (
-        ("project", projects),
-        ("zone", list(getattr(intent, "zone_targets", None) or [])),
+        ("project", all_projects),
         ("axis", list(getattr(intent, "development_axes", None) or [])),
         ("road", list(getattr(intent, "road_targets", None) or [])),
     ):
@@ -613,13 +913,25 @@ def select_aggregate(
             target_id = str(getattr(target, "target_id", "") or "")
             if not target_id or target_id in assigned_ids:
                 continue
+            status = "ready"
+            reason = ""
+            if target_type == "road":
+                road_ready, reason = _road_contract_ready(target)
+                status = "ready" if road_ready else "unplaced"
+            elif target_type == "axis" and not (
+                getattr(target, "start_anchor", None)
+                and getattr(target, "end_anchor", None)
+            ):
+                status = "unplaced"
+                reason = "axis_endpoints_unresolved"
             decision.target_assignments.append(
                 TargetAssignment(
                     target_id=target_id,
                     target_type=target_type,
-                    status="ready",
+                    status=status,
                     expected_output_kind=getattr(target, "expected_output_kind", "parcel"),
                     target_binding=target.model_dump(mode="json"),
+                    reason=reason,
                 )
             )
     decision.refresh_derived_summaries()
@@ -629,7 +941,7 @@ def select_aggregate(
         len(list(getattr(intent, "zone_targets", None) or [])),
     )
     _t_briefs = time.monotonic()
-    projects_by_target = {project.target_id: project for project in projects}
+    projects_by_target = {project.target_id: project for project in all_projects}
     briefs = [
         build_land_design_brief(projects_by_target[placement.target_id], placement, context)
         for placement in placements

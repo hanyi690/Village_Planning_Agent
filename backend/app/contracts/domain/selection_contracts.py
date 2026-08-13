@@ -30,6 +30,7 @@ class TargetAssignment(BaseModel):
     target_type: Literal["project", "zone", "facility", "axis", "road"]
     status: Literal["ready", "placed", "unplaced", "deferred"] = "ready"
     selected_bsm: str = ""
+    selected_bsms: list[str] = Field(default_factory=list)
     anchor_point: tuple[float, float] | None = None
     expected_output_kind: Literal["parcel", "polygon", "point", "line", "action"] = "parcel"
     target_binding: dict = Field(default_factory=dict)
@@ -37,6 +38,7 @@ class TargetAssignment(BaseModel):
     reason: str = ""
     score: float = 0.0
     score_breakdown: dict = Field(default_factory=dict)
+    allocation_lineage_refs: list[str] = Field(default_factory=list)
 
 
 class SiteSelectionDecision(ContractMeta):
@@ -58,7 +60,25 @@ class SiteSelectionDecision(ContractMeta):
     def refresh_derived_summaries(self) -> None:
         """Refresh legacy flat SELECT summaries from authoritative assignments."""
         placed = [item for item in self.target_assignments if item.status == "placed"]
-        self.selected_combination = [item.selected_bsm for item in placed if item.selected_bsm]
+        self.decision_factors["target_count"] = len(self.target_assignments)
+        self.decision_factors["placed_count"] = len(placed)
+        self.decision_factors["ready_count"] = sum(
+            item.status == "ready" for item in self.target_assignments
+        )
+        self.decision_factors["unplaced_count"] = sum(
+            item.status == "unplaced" for item in self.target_assignments
+        )
+        self.decision_factors["deferred_count"] = sum(
+            item.status == "deferred" for item in self.target_assignments
+        )
+        self.selected_combination = list(
+            dict.fromkeys(
+                bsm
+                for item in placed
+                for bsm in ([item.selected_bsm] if item.selected_bsm else []) + item.selected_bsms
+                if bsm
+            )
+        )
         self.full_ranking = [
             RankedCandidate(
                 candidate_id=item.selected_bsm,

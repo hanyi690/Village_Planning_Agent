@@ -33,6 +33,17 @@ def build_portfolio_decision(
     score = 0.0
     for item in demand.demands:
         selected = assignments_by_target.get(item.target_id)
+        if selected is None or selected.status == "unplaced":
+            unmet.append(item.demand_id)
+            output.append(
+                AllocationAssignment(
+                    demand_id=item.demand_id,
+                    target_id=item.target_id,
+                    status="unplaced",
+                    reason=str(getattr(selected, "reason", "no_target_assignment") or "no_target_assignment"),
+                )
+            )
+            continue
         if item.geometry_kind in {"action", "line"}:
             # Line targets (road network) and action targets (non-spatial)
             # are not parcel allocations; they are handed to EXECUTE workers
@@ -44,17 +55,6 @@ def build_portfolio_decision(
                     target_id=item.target_id,
                     status="assigned" if item.geometry_kind == "line" else "action",
                     reason="non_parcel_geometry" if item.geometry_kind == "line" else "non_spatial_action",
-                )
-            )
-            continue
-        if selected is None or selected.status == "unplaced":
-            unmet.append(item.demand_id)
-            output.append(
-                AllocationAssignment(
-                    demand_id=item.demand_id,
-                    target_id=item.target_id,
-                    status="unplaced",
-                    reason=str(getattr(selected, "reason", "no_target_assignment") or "no_target_assignment"),
                 )
             )
             continue
