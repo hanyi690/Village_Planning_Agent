@@ -149,7 +149,7 @@ def _road_connects(intervention: PlanningIntervention) -> list[str]:
         ]
         if matches:
             names = [
-                village if village.endswith("?") else village + "?"
+                village if village.endswith("村") else village + "村"
                 for _, village in sorted(matches, key=lambda item: item[0])
             ]
             return names[:2]

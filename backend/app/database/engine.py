@@ -66,6 +66,7 @@ async def get_async_engine() -> AsyncEngine:
             cursor.execute("PRAGMA journal_mode=WAL")
             cursor.execute("PRAGMA synchronous=NORMAL")
             cursor.execute("PRAGMA cache_size=-64000")
+            cursor.execute("PRAGMA busy_timeout=30000")
             cursor.execute("PRAGMA foreign_keys=ON")
             cursor.close()
 
@@ -325,12 +326,13 @@ async def get_global_checkpointer():
 
             # Create connection
             CHECKPOINT_DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-            conn = await aiosqlite.connect(CHECKPOINT_DB_PATH, check_same_thread=False)
+            conn = await aiosqlite.connect(CHECKPOINT_DB_PATH, check_same_thread=False, timeout=30)
 
             # Enable WAL mode for better concurrent write safety
             await conn.execute("PRAGMA journal_mode=WAL")
             await conn.execute("PRAGMA synchronous=NORMAL")
             await conn.execute("PRAGMA cache_size=-64000")  # 64MB cache
+            await conn.execute("PRAGMA busy_timeout=30000")  # wait up to 30s for a write lock
             logger.info("[Checkpointer] WAL mode enabled")
 
             saver = AsyncSqliteSaver(conn)

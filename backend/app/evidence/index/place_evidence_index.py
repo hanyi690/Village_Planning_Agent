@@ -334,7 +334,7 @@ class PlaceEvidenceIndex:
             seen[exact.canonical_name] = exact
             trace.append({"step": "exact", "matched": exact.canonical_name})
 
-        # Role-aware suffix tolerance: '?????' -> '???', '?????' -> '???'.
+        # Role-aware suffix tolerance (e.g. village-suffix normalization).
         alt = self.normalize_mention(mention)
         if alt and alt != mention:
             alt_norm = _normalize(alt)

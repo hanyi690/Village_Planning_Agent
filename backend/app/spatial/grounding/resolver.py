@@ -63,7 +63,7 @@ def _resolve_gazetteer_bsms(token: str, gazetteer: Any) -> List[str]:
 _VILLAGE_ALL_MARKER = "__VILLAGE_ALL__"
 
 
-_MENTION_SEPARATORS = ("?", "?", ",", "?", ";", "?", "?", "?")
+_MENTION_SEPARATORS = ("、", "，", ",", "；", ";", "及", "和", "与")
 
 
 _MENTION_SEPARATORS = ("、", "，", ",", "；", ";", "及", "和", "与")
@@ -267,7 +267,7 @@ class SpatialResolver:
                         provenance={"path": "bundle:village_all"},
                     )
                 if mention:
-                    # Combined cells ('??Y122?????X038??') are split and
+                    # Combined cells (e.g. 'Y122+X038') are split and
                     # each part resolved against the evidence index; BSMs are
                     # merged so partial matches still bind the spec.
                     evidence_bsms: list[str] = []
