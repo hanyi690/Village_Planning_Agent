@@ -116,6 +116,8 @@ def _village_cluster_for(
             "bsms": list(getattr(entry, "bsms", None) or []),
             "source": "gazetteer",
             "confidence": float(getattr(entry, "confidence", 0.0) or 0.0),
+            "entity_ref": str(getattr(entry, "entity_uri", "") or ""),
+            "provenance_refs": [f"gazetteer:{getattr(entry, 'source', 'unknown')}"],
         }
     if not village_cluster_map:
         return None
@@ -127,6 +129,11 @@ def _village_cluster_for(
                 "bsms": list(item.get("bsms") or []),
                 "source": "village_cluster",
                 "confidence": float(item.get("confidence", 0.4) or 0.4),
+                "entity_ref": str(item.get("entity_ref") or ""),
+                "provenance_refs": list(item.get("provenance_refs") or []),
+                "source_artifact_ref": str(item.get("source_artifact_ref") or ""),
+                "source_feature_id": str(item.get("source_feature_id") or ""),
+                "coordinate_crs": str(item.get("coordinate_crs") or "EPSG:4326"),
             }
     return None
 
@@ -181,32 +188,6 @@ def _normalize_spec_mention(label: str) -> str:
     ):
         return ""
     return token
-
-
-def _keyword_dlmc_bsms(context: Any, mention: str) -> list[str]:
-    """Fallback: long mentions containing transport/water/forest keywords bind
-    the corresponding DLMC parcel groups even when no typed fact matches."""
-    try:
-        parcels = list(context.current_parcels() or [])
-    except Exception:
-        return []
-    if not parcels:
-        return []
-    targets = []
-    if any(k in mention for k in ("村道", "乡道", "道路", "交通")):
-        targets.extend(["村内交通用地", "对外交通用地"])
-    if "河" in mention or "水域" in mention:
-        targets.append("水域")
-    if any(k in mention for k in ("林", "山", "生态", "绿")):
-        targets.extend(["生态林", "商品林"])
-    if not targets:
-        return []
-    bsms = [
-        str(p.bsm)
-        for p in parcels
-        if str(getattr(p, "name", "") or "") in targets and str(getattr(p, "bsm", "") or "")
-    ]
-    return list(dict.fromkeys(bsms))
 
 
 class SpatialResolver:
@@ -323,29 +304,25 @@ class SpatialResolver:
         candidates: CandidateSet = CandidateSet()
         reference = getattr(spec, "reference", None)
         if getattr(reference, "kind", "") == "village":
-            village_bsms = [
-                str(parcel.bsm)
-                for parcel in self.context.current_parcels()
-                if str(getattr(parcel, "bsm", "") or "")
-            ]
             return ResolvedSpatialRef(
-                final_bsms=list(dict.fromkeys(village_bsms)),
-                confidence=1.0 if village_bsms else 0.0,
-                provenance={"path": "bundle:village_boundary"},
+                final_bsms=[],
+                confidence=0.0,
+                provenance={
+                    "path": "unresolved:village_reference",
+                    "reason": "village boundary cannot become a parcel candidate pool",
+                },
             )
         try:
             if self.evidence_index is not None:
                 mention = self._spec_mention(spec)
                 if mention == _VILLAGE_ALL_MARKER:
-                    all_bsms = [
-                        str(parcel.bsm)
-                        for parcel in self.context.current_parcels()
-                        if str(getattr(parcel, "bsm", "") or "")
-                    ]
                     return ResolvedSpatialRef(
-                        final_bsms=list(dict.fromkeys(all_bsms)),
-                        confidence=1.0 if all_bsms else 0.0,
-                        provenance={"path": "bundle:village_all"},
+                        final_bsms=[],
+                        confidence=0.0,
+                        provenance={
+                            "path": "unresolved:village_all",
+                            "reason": "whole-village text is not target-bound parcel evidence",
+                        },
                     )
                 if mention:
                     # Combined cells (e.g. 'Y122+X038') are split and
@@ -356,15 +333,13 @@ class SpatialResolver:
                     for part in parts:
                         part_mention = _normalize_spec_mention(part)
                         if part_mention == _VILLAGE_ALL_MARKER:
-                            all_bsms = [
-                                str(parcel.bsm)
-                                for parcel in self.context.current_parcels()
-                                if str(getattr(parcel, "bsm", "") or "")
-                            ]
                             return ResolvedSpatialRef(
-                                final_bsms=list(dict.fromkeys(all_bsms)),
-                                confidence=1.0 if all_bsms else 0.0,
-                                provenance={"path": "bundle:village_all"},
+                                final_bsms=[],
+                                confidence=0.0,
+                                provenance={
+                                    "path": "unresolved:village_all",
+                                    "reason": "whole-village text is not target-bound parcel evidence",
+                                },
                             )
                         if not part_mention:
                             continue
@@ -375,10 +350,6 @@ class SpatialResolver:
                         candidates = CandidateSet(
                             bsms=list(dict.fromkeys(evidence_bsms))
                         )
-                    elif mention:
-                        keyword_bsms = _keyword_dlmc_bsms(self.context, mention)
-                        if keyword_bsms:
-                            candidates = CandidateSet(bsms=keyword_bsms)
                 # GROUND flash-LLM mention enhancement: when the primary
                 # mention cannot bind, try each enhanced sub-mention through
                 # the same evidence index.  The LLM only supplied text.
@@ -532,12 +503,16 @@ class SpatialResolver:
         village_cluster_map: Optional[Dict[str, Dict[str, Any]]] = None,
     ) -> int:
         """Fill intent target candidate_bsms / anchors from gazetteer + KG anchors."""
+        snapshot = getattr(getattr(self.context, "workspace", None), "snapshot", None)
         return resolve_intent_anchors(
             intent,
             gazetteer=self.gazetteer,
             village_anchors=self.context.village_anchors,
             village_name=self.context.village_name,
             village_cluster_map=village_cluster_map,
+            bundle_snapshot_ref=(
+                f"bundle-snapshot:{snapshot.snapshot_id}" if snapshot else ""
+            ),
         )
 
     # ── 4. Deterministic bundle binding (BSM-first) ────────────────
@@ -566,6 +541,7 @@ def resolve_intent_anchors(
     village_anchors: Optional[List[Dict[str, Any]]] = None,
     village_name: str = "",
     village_cluster_map: Optional[Dict[str, Dict[str, Any]]] = None,
+    bundle_snapshot_ref: str = "",
 ) -> int:
     """Resolve intent location hints into candidate BSMs / coordinate anchors.
 
@@ -639,6 +615,7 @@ def resolve_intent_anchors(
         connects = list(getattr(rt, "connects", None) or [])
         text = " ".join([str(location or ""), " ".join(connects)])
         anchors: List[tuple] = []
+        endpoint_hits: List[Dict[str, Any] | None] = []
         seen_tokens: set = set()
         for token in _extract_location_tokens(text):
             if token in seen_tokens:
@@ -657,6 +634,7 @@ def resolve_intent_anchors(
             centroid = hit.get("centroid")
             if centroid and len(anchors) < 2:
                 anchors.append((float(centroid[0]), float(centroid[1])))
+                endpoint_hits.append(hit)
         # Raw connect values may be numbered roads (122乡道) or natural
         # villages that token stripping removed; try them verbatim too.
         for conn in connects:
@@ -674,6 +652,7 @@ def resolve_intent_anchors(
             centroid = hit.get("centroid")
             if centroid and len(anchors) < 2:
                 anchors.append((float(centroid[0]), float(centroid[1])))
+                endpoint_hits.append(hit)
         center = _first_village_center(kg_anchors)
         if center is not None:
             for conn in connects:
@@ -686,12 +665,45 @@ def resolve_intent_anchors(
                 if bbox:
                     lon0, lat0, lon1, lat1 = bbox
                     anchors.append(((lon0 + lon1) / 2.0, (lat0 + lat1) / 2.0))
+                    endpoint_hits.append(None)
         if anchors and getattr(rt, "start_anchor", None) is None:
             rt.start_anchor = anchors[0]
             resolved += 1
         if len(anchors) > 1 and getattr(rt, "end_anchor", None) is None:
             rt.end_anchor = anchors[1]
             resolved += 1
+        if len(anchors) >= 2:
+            from app.contracts.domain.road_planning import RoadEndpointEvidence
+
+            for role, field_name, coordinate, hit in (
+                ("start", "start_endpoint", anchors[0], endpoint_hits[0]),
+                ("end", "end_endpoint", anchors[1], endpoint_hits[1]),
+            ):
+                if getattr(rt, field_name, None) is not None or hit is None:
+                    continue
+                bsms = list(hit.get("bsms") or [])
+                source_ref = str(hit.get("source_artifact_ref") or bundle_snapshot_ref)
+                feature_id = str(hit.get("source_feature_id") or (bsms[0] if bsms else ""))
+                evidence_refs = list(hit.get("provenance_refs") or [])
+                evidence_refs.extend(f"bundle-parcel:{bsm}" for bsm in bsms)
+                entity_ref = str(hit.get("entity_ref") or "")
+                if not source_ref or not (feature_id or entity_ref) or not evidence_refs:
+                    continue
+                setattr(
+                    rt,
+                    field_name,
+                    RoadEndpointEvidence(
+                        role=role,
+                        resolution_status="resolved",
+                        entity_ref=entity_ref or None,
+                        coordinate=coordinate,
+                        coordinate_crs=str(hit.get("coordinate_crs") or "EPSG:4326"),
+                        source_artifact_ref=source_ref,
+                        source_feature_id=feature_id,
+                        evidence_refs=list(dict.fromkeys(evidence_refs)),
+                    ),
+                )
+                resolved += 1
 
     for prj in (getattr(intent, "project_targets", None) or []):
         location = (getattr(prj, "location_hint", "")
@@ -709,7 +721,6 @@ def resolve_intent_anchors(
             )
             if matched:
                 prj.semantic.reasoning_trace = "KG village anchor matched by project location hint"
-                resolved += 1
 
     for rt in (getattr(intent, "road_targets", None) or []):
         if not kg_anchors:
@@ -719,8 +730,7 @@ def resolve_intent_anchors(
             str(getattr(rt, "connects", "") or ""),
             str(getattr(getattr(rt, "semantic", None), "natural_language_description", "") or ""),
         ])
-        named = [a for a in kg_anchors if a["name"] and a["name"] in text]
-        candidates = named if len(named) >= 2 else kg_anchors
+        candidates = [a for a in kg_anchors if a["name"] and a["name"] in text]
         if len(candidates) < 2:
             continue
         if "南北" in text:

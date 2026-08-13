@@ -149,7 +149,7 @@ def _semantic_location_reference(
     ])
     if not text.strip():
         return None
-    if any(token in text for token in ("全域", "全村域", "村域内", "村域范围", "各自然村", "金田村全域")):
+    if any(token in text for token in ("全域", "全村域", "村域内", "村域范围", "各自然村")):
         return SpatialReferenceSpec(
             type="topological",
             topo="sfWithin",

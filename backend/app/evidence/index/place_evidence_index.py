@@ -19,6 +19,9 @@ from app.evidence.index.evidence_scorer import (
     score_candidate,
     total,
 )
+from app.infrastructure.logging import get_logger
+
+logger = get_logger(__name__)
 
 _RESOLVED_THRESHOLD = 0.8
 _AMBIGUOUS_GAP = 0.15
@@ -47,6 +50,13 @@ class PlaceEvidenceIndex:
             for e in getattr(context.gazetteer, "entries", []) or []:
                 index._register_from_gazetteer(e)
 
+        # KG entity names carry authoritative BSM/geometry.  Register them
+        # before L1 facts so a fact with a matching name merges onto the entity
+        # (entity-level binding) instead of a whole-DLMC class fallback.
+        kg = getattr(context, "kg", None)
+        if kg is not None:
+            index._register_kg_names(kg)
+
         try:
             parcels = list(context.current_parcels() or [])
         except Exception:
@@ -64,10 +74,6 @@ class PlaceEvidenceIndex:
         if workspace is not None:
             pois = (workspace.points.get("annotations_current") or []) if getattr(workspace, "points", None) else []
             index._register_poi(pois, parcels, centroid_cache)
-
-        kg = getattr(context, "kg", None)
-        if kg is not None:
-            index._register_kg_names(kg)
 
         return index
 
@@ -142,11 +148,7 @@ class PlaceEvidenceIndex:
         self._add_entry(entry)
         self._bind_l1_fact_bsms(fact, entry, parcels, centroid_cache)
 
-    # L1 fact geometry binding (design §3.2: role-aware)
-
-    _WATER_DLMC = frozenset({"水域", "河流水面", "湖泊水面", "坑塘水面", "沟渠"})
-    _ROAD_DLMC = frozenset({"村内交通用地", "对外交通用地", "公路用地", "农村道路"})
-    _FACILITY_DLMC = frozenset({"公共服务设施用地", "公共管理与公共服务用地", "科教文卫用地"})
+    # L1 fact geometry binding (design §3.2: entity-level, never class-level)
 
     def _bind_l1_fact_bsms(
         self,
@@ -155,16 +157,20 @@ class PlaceEvidenceIndex:
         parcels: Optional[List[Any]] = None,
         centroid_cache: Optional[Dict[str, Any]] = None,
     ) -> None:
-        """Bind an L1 typed fact (water/road/area/facility) to real parcels.
+        """Bind an L1 typed fact to a specific entity, never a whole-DLMC class.
 
-        The L1 compiler extracts names but no geometry; this step reconnects
-        the name to bundle parcels through role-specific matches (DLMC groups,
-        facility points, water/road parcels) so GROUND can consume facilities,
-        roads, water bodies and areas - not just natural villages.
+        Entity-level binding happens in ``build``: KG entity names are registered
+        before L1 facts, so a fact with a matching name merges onto the entity's
+        authoritative BSM/geometry.  This method only keeps the specific
+        facility-point near-entity fallback for facilities that have a real point
+        but no named KG entity yet.  Unmatched facts stay with empty source_bsms
+        (typed unresolved), never a class-level parcel pool.
         """
         if entry.source_bsms:
             return
         role = str(getattr(fact, "role", "") or "")
+        if role != "facility":
+            return
         workspace = getattr(self.context, "workspace", None)
         if workspace is None:
             return
@@ -175,56 +181,34 @@ class PlaceEvidenceIndex:
                 return
         if not parcels:
             return
-
-        def _parcel_name(p: Any) -> str:
-            return str(getattr(p, "name", "") or "")
-
-        bsms: List[str] = []
+        points: List[Any] = []
         try:
-            if role == "water":
-                bsms = [str(p.bsm) for p in parcels if _parcel_name(p) in self._WATER_DLMC]
-            elif role == "road":
-                bsms = [str(p.bsm) for p in parcels if _parcel_name(p) in self._ROAD_DLMC]
-            elif role == "area":
-                target = str(getattr(fact, "normalized_name", "") or "")
-                bsms = [
-                    str(p.bsm) for p in parcels
-                    if target and target in _parcel_name(p)
-                ]
-            elif role == "facility":
-                bsms = [str(p.bsm) for p in parcels if _parcel_name(p) in self._FACILITY_DLMC]
-                # Prefer exact facility points (annotation single-char labels).
-                points = []
-                try:
-                    points = list((workspace.points.get("facilities_current") or []) or [])
-                except Exception:
-                    points = []
-                from app.spatial.grounding.grounding import query_parcels_near_entity
-                hit: List[str] = []
-                for pt in points:
-                    geom = getattr(pt, "geometry", None) or {}
-                    text = str(getattr(pt, "facility_name", "") or "")
-                    if not text:
-                        continue
-                    if text in entry.canonical_name or entry.canonical_name[0] == text:
-                        coords = geom.get("coordinates") if isinstance(geom, dict) else None
-                        if coords and len(coords) >= 2:
-                            hit.extend(query_parcels_near_entity(
-                                parcels,
-                                (float(coords[0]), float(coords[1])),
-                                max_distance_m=500,
-                                centroid_cache=centroid_cache,
-                            ))
-                if hit:
-                    bsms = list(dict.fromkeys(hit))
-        except Exception as exc:
-            logger.debug("[PlaceEvidenceIndex] L1 fact bind failed %s: %s", entry.canonical_name, exc)
-        bsms = [b for b in dict.fromkeys(bsms) if b]
+            points = list((workspace.points.get("facilities_current") or []) or [])
+        except Exception:
+            points = []
+        from app.spatial.grounding.grounding import query_parcels_near_entity
+
+        hit: List[str] = []
+        for pt in points:
+            geom = getattr(pt, "geometry", None) or {}
+            text = str(getattr(pt, "facility_name", "") or "")
+            if not text:
+                continue
+            if text in entry.canonical_name or entry.canonical_name[0] == text:
+                coords = geom.get("coordinates") if isinstance(geom, dict) else None
+                if coords and len(coords) >= 2:
+                    hit.extend(query_parcels_near_entity(
+                        parcels,
+                        (float(coords[0]), float(coords[1])),
+                        max_distance_m=500,
+                        centroid_cache=centroid_cache,
+                    ))
+        bsms = [b for b in dict.fromkeys(hit) if b]
         if bsms:
             entry.source_bsms = list(dict.fromkeys([*entry.source_bsms, *bsms]))
             entry.confidence = max(entry.confidence, 0.5)
             if not entry.geometry_ref:
-                entry.geometry_ref = f"bundled:{role}"
+                entry.geometry_ref = "bundled:facility"
 
     @staticmethod
     def normalize_mention(mention: str) -> str:
@@ -307,12 +291,14 @@ class PlaceEvidenceIndex:
     }
 
     def _register_kg_names(self, kg: Any) -> None:
-        graph = getattr(kg, "graph", None)
+        graph = getattr(kg, "g", None) or getattr(kg, "graph", None)
         if graph is None:
-            # Accept a raw rdflib Graph passed directly (test doubles and
-            # lightweight callers may not wrap it in a session object).
             graph = kg
-        if graph is None:
+        if graph is None or not hasattr(graph, "triples"):
+            logger.warning(
+                "[PlaceEvidenceIndex] cannot resolve KG RDF graph; "
+                "KG entity names will not be indexed"
+            )
             return
         try:
             from rdflib import RDF

@@ -95,36 +95,15 @@ def build_village_clusters(parcels: List[Any]) -> List[VillageCluster]:
     return clusters
 
 
-def _deterministic_map(
-    clusters: List[VillageCluster],
-    village_names: List[str],
-) -> Dict[str, Dict[str, Any]]:
-    """Size-ordered fallback: biggest settlement -> first village name."""
-    mapping: Dict[str, Dict[str, Any]] = {}
-    for i, name in enumerate(village_names):
-        if i >= len(clusters):
-            break
-        cluster = clusters[i]
-        mapping[name] = {
-            "centroid": list(cluster.centroid),
-            "bsms": list(cluster.bsms),
-            "cluster_index": cluster.index,
-            "confidence": 0.5,
-            "method": "deterministic_size_order",
-        }
-    return mapping
-
-
-_PROMPT_TEMPLATE = """你是村庄规划 GIS 助手。已知一个行政村的 {n} 个自然村：{villages}。
-该村有 {m} 个宅基地聚落（按面积从大到小编号 0..{m-1}），每个聚落有质心坐标与规模：
+_PROMPT_TEMPLATE = """你是村庄规划 GIS 证据编译器。待核对的聚落名称：{villages}。
+该村有 {m} 个宅基地聚落（编号 0..{max_index}），每个聚落有质心坐标与规模：
 {clusters}
 
-请把每个自然村名映射到最可能的聚落编号。依据：
-1. 报告称“园寨是行政村驻地/公共服务核心区”（通常面积最大、最居中）。
-2. 其它村按报告中的相对方位与聚落空间位置合理对应。
-3. 拿不准时选规模最接近的聚落；不要输出不存在的编号。
+只允许根据报告摘录中明确出现的名称、方位、坐标或可核对空间关系建立映射。
+禁止按名称顺序、聚落规模顺序、常识或猜测分配。证据不足的名称必须省略。
 
-只输出 JSON：{{"村名": 编号, ...}}，不要其它文字。"""
+只输出 JSON：{{"名称": {{"cluster_index": 编号, "evidence": "报告原文短句"}}, ...}}。
+evidence 必须是报告摘录中可以逐字找到的短句；不要输出其它文字。"""
 
 
 def _cache_path(run_root: Optional[Path]) -> Optional[Path]:
@@ -139,12 +118,17 @@ async def map_villages(
     report_text: str = "",
     cache: Optional[Path] = None,
     llm: Any = None,
+    source_artifact_ref: str = "",
+    source_artifact_digest: str = "",
 ) -> Dict[str, Dict[str, Any]]:
     """Map village names to clusters (flash-LLM enhanced, cached, fallback safe)."""
     if not clusters or not village_names:
         return {}
     cache_key = hashlib.sha256(
-        f"{report_text[:4000]}|{','.join(village_names)}".encode("utf-8")
+        (
+            f"v3|{report_text[:4000]}|{','.join(village_names)}|"
+            f"{source_artifact_ref}|{source_artifact_digest}"
+        ).encode("utf-8")
     ).hexdigest()
     if cache is not None and cache.exists():
         try:
@@ -154,17 +138,17 @@ async def map_villages(
         except Exception:
             pass
 
-    mapping = _deterministic_map(clusters, village_names)
-    if llm is not None:
+    mapping: Dict[str, Dict[str, Any]] = {}
+    if llm is not None and report_text.strip():
         try:
             cluster_lines = "\n".join(
                 f"{c.index}: 质心({c.centroid[0]:.5f},{c.centroid[1]:.5f}) 地块数{c.parcel_count} 面积{c.area_ha:.2f}ha"
                 for c in clusters
             )
             prompt = _PROMPT_TEMPLATE.format(
-                n=len(village_names),
                 villages="、".join(village_names),
                 m=len(clusters),
+                max_index=len(clusters) - 1,
                 clusters=cluster_lines,
             )
             if report_text:
@@ -181,7 +165,14 @@ async def map_villages(
                 raw_text = "".join(content) if isinstance(content, list) else str(content or "")
             else:
                 raw_text = str(response or "")
-            payload = _parse_mapping_json(raw_text, village_names, clusters)
+            payload = _parse_mapping_json(
+                raw_text,
+                village_names,
+                clusters,
+                report_text=report_text,
+                source_artifact_ref=source_artifact_ref,
+                source_artifact_digest=source_artifact_digest,
+            )
             if payload:
                 mapping = payload
         except Exception as exc:  # noqa: BLE001 - fallback is always safe
@@ -205,6 +196,10 @@ def _parse_mapping_json(
     raw: str,
     village_names: List[str],
     clusters: List[VillageCluster],
+    *,
+    report_text: str,
+    source_artifact_ref: str = "",
+    source_artifact_digest: str = "",
 ) -> Dict[str, Dict[str, Any]]:
     import re
 
@@ -217,10 +212,15 @@ def _parse_mapping_json(
         return {}
     result: Dict[str, Dict[str, Any]] = {}
     for name in village_names:
-        index = data.get(name)
-        if index is None:
-            # tolerate '园寨村' key
-            index = data.get(f"{name}村")
+        item = data.get(name)
+        if item is None:
+            item = data.get(f"{name}村")
+        if not isinstance(item, dict):
+            continue
+        index = item.get("cluster_index")
+        evidence = str(item.get("evidence") or "").strip()
+        if not evidence or evidence not in report_text:
+            continue
         try:
             index = int(index)
         except (TypeError, ValueError):
@@ -232,7 +232,16 @@ def _parse_mapping_json(
                 "bsms": list(cluster.bsms),
                 "cluster_index": index,
                 "confidence": 0.7,
-                "method": "flash_llm",
+                "method": "flash_llm_report_evidence",
+                "evidence": evidence,
+                "provenance_refs": [
+                    f"report-evidence:{hashlib.sha256(evidence.encode('utf-8')).hexdigest()}",
+                    *([f"bundle:{source_artifact_digest}"] if source_artifact_digest else []),
+                ],
+                "source_artifact_ref": source_artifact_ref,
+                "source_artifact_digest": source_artifact_digest,
+                "source_feature_id": f"residential-cluster:{index}",
+                "coordinate_crs": "EPSG:4326",
             }
     return result
 
