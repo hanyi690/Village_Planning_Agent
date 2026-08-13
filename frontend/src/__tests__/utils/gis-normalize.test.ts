@@ -1,5 +1,6 @@
 import { normalizeTileSource } from '@/features/planning/constants/gis';
 import {
+  applyRenderLayerStyles,
   normalizeGisLayer,
   normalizeV1MapLayer,
   normalizeV1MapLayers,
@@ -229,5 +230,50 @@ describe('normalizeV1MapLayers', () => {
       },
     ]);
     expect(layers.map((l) => l.metadata?.v1_layer_type)).toEqual(['current', 'planned', 'overlay']);
+  });
+});
+
+describe('applyRenderLayerStyles', () => {
+  const baseLayers = normalizeV1MapLayers([
+    {
+      layer_type: 'planned',
+      layer_name: 'complete_planned_landuse',
+      geojson: {
+        type: 'FeatureCollection',
+        features: [
+          { type: 'Feature', properties: {}, geometry: { type: 'Polygon', coordinates: [] } },
+        ],
+      },
+    },
+    {
+      layer_type: 'overlay',
+      layer_name: 'function_zone',
+      geojson: {
+        type: 'FeatureCollection',
+        features: [
+          { type: 'Feature', properties: {}, geometry: { type: 'Polygon', coordinates: [] } },
+        ],
+      },
+    },
+  ]);
+
+  const renderLayers = [
+    { layerType: 'function_zone', layerName: '功能分区', color: '#f59e0b', style: { 'fill-opacity': 0.1 }, default_visible: false },
+    { layerType: 'complete_planned_landuse', layerName: '规划用地', color: '#3b82f6', style: { 'fill-opacity': 0.45 } },
+  ];
+
+  it('merges backend color/style/default_visible by v1 layer_name', () => {
+    const merged = applyRenderLayerStyles(baseLayers, renderLayers);
+    const fz = merged.find((l) => l.metadata?.v1_layer_name === 'function_zone');
+    expect(fz?.color).toBe('#f59e0b');
+    expect((fz?.style as Record<string, unknown>)?.['fill-opacity']).toBe(0.1);
+    expect(fz?.visible).toBe(false);
+    const planned = merged.find((l) => l.metadata?.v1_layer_name === 'complete_planned_landuse');
+    expect(planned?.color).toBe('#3b82f6');
+  });
+
+  it('keeps layers untouched when renderLayers is empty', () => {
+    expect(applyRenderLayerStyles(baseLayers, [])).toEqual(baseLayers);
+    expect(applyRenderLayerStyles(baseLayers, null)).toEqual(baseLayers);
   });
 });

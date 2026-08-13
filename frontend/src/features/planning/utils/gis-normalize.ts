@@ -534,3 +534,51 @@ export function normalizeV1MapLayers(rawLayers: unknown): GISLayerConfig[] {
       return aOrder - bOrder;
     });
 }
+
+
+/**
+ * Merge real backend render-layer style metadata (from the render_layers
+ * artifact) into normalized v1 map layers.
+ *
+ * Colors/styles originate from the backend DELIVER output (render_layers.py);
+ * the frontend only passes them through. Match by the v1 layer_name which the
+ * /map-layers projection derives from the artifact layerType (e.g.
+ * "function_zone", "planned_project_point", "complete_planned_landuse").
+ */
+export function applyRenderLayerStyles(
+  layers: GISLayerConfig[],
+  renderLayers: unknown,
+): GISLayerConfig[] {
+  if (!Array.isArray(renderLayers) || renderLayers.length === 0) return layers;
+
+  const byName = new Map<string, Record<string, unknown>>();
+  for (const raw of renderLayers) {
+    if (!raw || typeof raw !== 'object') continue;
+    const rec = raw as Record<string, unknown>;
+    const name = String(rec.layerType ?? rec.layer_type ?? rec.layerName ?? '');
+    if (name) byName.set(name, rec);
+  }
+
+  return layers.map((layer) => {
+    const name = String(layer.metadata?.v1_layer_name ?? layer.layerName ?? '');
+    const meta = byName.get(name) ?? byName.get(String(layer.metadata?.v1_layer_type ?? ''));
+    if (!meta) return layer;
+
+    const nextStyle =
+      meta.style && typeof meta.style === 'object'
+        ? { ...(layer.style ?? {}), ...(meta.style as Record<string, unknown>) }
+        : layer.style;
+    return {
+      ...layer,
+      color: typeof meta.color === 'string' ? meta.color : layer.color,
+      style: nextStyle,
+      visible:
+        typeof meta.default_visible === 'boolean' ? meta.default_visible : layer.visible,
+      metadata: {
+        ...layer.metadata,
+        render_color: meta.color ?? null,
+        render_style: meta.style ?? null,
+      },
+    };
+  });
+}
