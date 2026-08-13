@@ -98,23 +98,51 @@ def resolve_directional_bbox(
 
 
 def _parcel_centroid(parcel) -> Optional[Tuple[float, float]]:
-    """Extract centroid from parcel geometry (GeoJSON geometry dict)."""
-    geom = parcel.geometry
+    """Extract a parcel centroid without rebuilding a one-feature GeoDataFrame."""
+    geom = getattr(parcel, "geometry", None)
     if not geom or not isinstance(geom, dict):
         return None
-    from app.spatial.model.geometry import _compute_centroid
     try:
-        fc = {"type": "FeatureCollection", "features": [
-            {"type": "Feature", "properties": {}, "geometry": geom}
-        ]}
-        return _compute_centroid(fc)
+        from shapely.geometry import shape
+
+        value = shape(geom)
+        if value.is_empty:
+            return None
+        centroid = value.centroid
+        return (round(float(centroid.x), 6), round(float(centroid.y), 6))
     except Exception:
         return None
+
+
+def build_parcel_centroid_cache(
+    parcels: list,
+) -> Dict[str, Optional[Tuple[float, float]]]:
+    """Materialize each parcel centroid once for a grounding/index lifecycle."""
+    cache: Dict[str, Optional[Tuple[float, float]]] = {}
+    for parcel in parcels or []:
+        bsm = str(getattr(parcel, "bsm", "") or "")
+        if not bsm or bsm in cache:
+            continue
+        cache[bsm] = _parcel_centroid(parcel)
+    return cache
+
+
+def _cached_parcel_centroid(
+    parcel: Any,
+    centroid_cache: Optional[Dict[str, Optional[Tuple[float, float]]]],
+) -> Optional[Tuple[float, float]]:
+    bsm = str(getattr(parcel, "bsm", "") or "")
+    if centroid_cache is None or not bsm:
+        return _parcel_centroid(parcel)
+    if bsm not in centroid_cache:
+        centroid_cache[bsm] = _parcel_centroid(parcel)
+    return centroid_cache[bsm]
 
 
 def query_parcels_in_bbox(
     parcels: list,
     bbox: Tuple[float, float, float, float],
+    centroid_cache: Optional[Dict[str, Optional[Tuple[float, float]]]] = None,
 ) -> List[str]:
     """返回质心在 BBox 内的地块 BSM 列表.
 
@@ -128,7 +156,7 @@ def query_parcels_in_bbox(
     min_lon, min_lat, max_lon, max_lat = bbox
     results = []
     for p in parcels:
-        centroid = _parcel_centroid(p)
+        centroid = _cached_parcel_centroid(p, centroid_cache)
         if centroid is None:
             continue
         clon, clat = centroid
@@ -142,6 +170,7 @@ def query_parcels_near_entity(
     parcels: list,
     entity_center: Tuple[float, float],
     max_distance_m: float = 500,
+    centroid_cache: Optional[Dict[str, Optional[Tuple[float, float]]]] = None,
 ) -> List[str]:
     """返回距实体中心指定距离内的地块 BSM 列表.
 
@@ -157,7 +186,7 @@ def query_parcels_near_entity(
 
     results = []
     for p in parcels:
-        centroid = _parcel_centroid(p)
+        centroid = _cached_parcel_centroid(p, centroid_cache)
         if centroid is None:
             continue
         dist = haversine_distance(entity_center, centroid)
@@ -207,6 +236,7 @@ def compute_proximity_weights(
     parcels: list,
     reference_center: Tuple[float, float],
     max_distance_m: float = 500,
+    centroid_cache: Optional[Dict[str, Optional[Tuple[float, float]]]] = None,
 ) -> Dict[str, float]:
     """计算地块到参考点的邻近度评分 (0.0-1.0).
 
@@ -227,7 +257,7 @@ def compute_proximity_weights(
     for p in parcels:
         if not p.bsm:
             continue
-        centroid = _parcel_centroid(p)
+        centroid = _cached_parcel_centroid(p, centroid_cache)
         if centroid is None:
             continue
         dist = haversine_distance(reference_center, centroid)

@@ -59,7 +59,9 @@ def score_candidate(
     role_match = role == "unknown" or entry.role == role
     evidence["entity_type_role"] = 0.5 if role_match else 0.0
 
-    evidence["relation_topology"] = 0.0
+    evidence["relation_topology"] = (
+        0.3 if getattr(entry, "relation_refs", None) else 0.0
+    )
 
     evidence["within_bundle"] = 0.5 if entry.source_bsms else 0.0
 

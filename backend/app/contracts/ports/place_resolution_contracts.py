@@ -102,6 +102,7 @@ class PlaceEvidenceEntry(BaseModel):
     geometry_ref: str | None = None
     provenance: list[str] = []
     confidence: float = 0.0
+    relation_refs: list[str] = []
 
 
 __all__ = [

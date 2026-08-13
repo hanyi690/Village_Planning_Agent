@@ -13,6 +13,7 @@ output is fully deterministic.
 from __future__ import annotations
 
 import logging
+import time
 from typing import Any, Dict, List, Optional, Tuple
 
 from app.infrastructure.context.planning_context import PlanningContext
@@ -338,6 +339,7 @@ def _place_facility(
     context: PlanningContext,
     cluster_centroid: Optional[Tuple[float, float]],
     occupied: List[Tuple[float, float]],
+    filter_cache: Optional[Dict[str, Tuple[Any, List[str]]]] = None,
 ) -> Tuple[PlacementDecision, str]:
     """Place one facility: MCLP when a service radius is known, else select_parcel.
 
@@ -402,6 +404,7 @@ def _place_facility(
         hazards=None,
         occupied=occupied,
         cluster_centroid=cluster_centroid,
+        filter_cache=filter_cache,
     )
     if decision.status == "placed" and decision.anchor_point is not None:
         facility.anchor_point = decision.anchor_point
@@ -422,7 +425,9 @@ def select_aggregate(
     facilities = list(getattr(intent, "facilities", None) or [])
     cluster_centroid = _cluster_centroid(context)
     occupied: List[Tuple[float, float]] = []
+    filter_cache: Dict[str, Tuple[Any, List[str]]] = {}
     placements: List[PlacementDecision] = []
+    _t_projects = time.monotonic()
     for project in projects:
         # L3 may contain non-spatial programme actions (training, service
         # operations, research, etc.). They remain execution tasks but do not
@@ -476,10 +481,17 @@ def select_aggregate(
             hazards=None,
             occupied=occupied,
             cluster_centroid=cluster_centroid,
+            filter_cache=filter_cache,
         )
         if placement.status == "placed" and placement.anchor_point is not None:
             occupied.append(placement.anchor_point)
         placements.append(placement)
+    logger.info(
+        "select_aggregate: projects loop %.2fs (projects=%d placed=%d)",
+        time.monotonic() - _t_projects, len(projects),
+        len([p for p in placements if p.status == "placed"]),
+    )
+    _t_facilities = time.monotonic()
     decision = build_site_selection_decision(
         placements,
         run_id=run_id,
@@ -539,7 +551,7 @@ def select_aggregate(
             }
             continue
         decision_p, bsm = _place_facility(
-            facility, parcels, context, cluster_centroid, occupied
+            facility, parcels, context, cluster_centroid, occupied, filter_cache
         )
         if decision_p.status == "placed":
             decision.target_assignments.append(
@@ -585,6 +597,11 @@ def select_aggregate(
     if facilities:
         decision.decision_factors["facility_count"] = len(facilities)
         decision.decision_factors["facility_placements"] = facility_placements
+    logger.info(
+        "select_aggregate: facilities loop %.2fs (facilities=%d)",
+        time.monotonic() - _t_facilities, len(facilities),
+    )
+    _t_zones = time.monotonic()
     assigned_ids = {assignment.target_id for assignment in decision.target_assignments}
     for target_type, targets in (
         ("project", projects),
@@ -606,12 +623,23 @@ def select_aggregate(
                 )
             )
     decision.refresh_derived_summaries()
+    logger.info(
+        "select_aggregate: zone/road assignments %.2fs (zones=%d)",
+        time.monotonic() - _t_zones,
+        len(list(getattr(intent, "zone_targets", None) or [])),
+    )
+    _t_briefs = time.monotonic()
     projects_by_target = {project.target_id: project for project in projects}
     briefs = [
         build_land_design_brief(projects_by_target[placement.target_id], placement, context)
         for placement in placements
         if placement.status == "placed" and placement.target_id in projects_by_target
     ]
+    logger.info(
+        "select_aggregate: decision/briefs %.2fs (assignments=%d placed=%d briefs=%d)",
+        time.monotonic() - _t_briefs, len(decision.target_assignments),
+        len([a for a in decision.target_assignments if a.status == "placed"]), len(briefs),
+    )
     return decision, briefs
 
 

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+import json
 from typing import Any, Dict
 
 from app.infrastructure.context.planning_context_factory import build_planning_context
@@ -8,32 +10,54 @@ from app.infrastructure.logging import get_logger
 logger = get_logger(__name__)
 
 
+def _jsonable(value: Any) -> Any:
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+    if hasattr(value, "model_dump"):
+        try:
+            return _jsonable(value.model_dump(mode="json"))
+        except Exception:
+            pass
+    if hasattr(value, "to_dict"):
+        try:
+            return _jsonable(value.to_dict())
+        except Exception:
+            pass
+    if isinstance(value, dict):
+        return {str(key): _jsonable(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple, set)):
+        return [_jsonable(item) for item in value]
+    return str(value)
+
+
+def _spatial_hydration_key(
+    state: Dict[str, Any],
+    context: Any,
+    facts: list[Any],
+    memory: Any,
+) -> str:
+    snapshot = getattr(context, "data_snapshot", None)
+    payload = {
+        "context_version": getattr(context, "version", 0),
+        "kg_version": getattr(context, "kg_version", 0),
+        "snapshot_digest": getattr(snapshot, "digest", ""),
+        "l1_snapshot_ref": _jsonable((state.get("artifact_refs") or {}).get("l1_snapshot")),
+        "facts": _jsonable(facts),
+        "memory": _jsonable(memory),
+    }
+    canonical = json.dumps(
+        payload,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        default=str,
+    )
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
 def _hydrate_l1_spatial_facts(state: Dict[str, Any], context: Any) -> None:
-    """Attach L1 location facts and materialize their GIS↔KG bindings."""
+    """Attach L1 facts and build the GIS/KG evidence index once per snapshot."""
     try:
-        # Context objects can survive in-process while the session KG memory
-        # is advanced by target projection/L1 enrichment.  Rebuild the semantic lookup
-        # from the persisted session memory before hydrating facts; otherwise
-        # the next stage sees the old village-only gazetteer and loses the
-        # facility/place bindings created by L1.
-        from app.infrastructure.kg.gazetteer import build_gazetteer
-        from app.infrastructure.context.planning_context_factory import _load_session_semantic_memory
-
-        session_id = str(state.get("session_id", "") or "")
-        kg = getattr(context, "kg", None)
-        if session_id and kg is not None:
-            restored_gazetteer = build_gazetteer(
-                kg,
-                getattr(context, "workspace", None),
-                _load_session_semantic_memory(session_id),
-            )
-            if restored_gazetteer.entries:
-                context.gazetteer = restored_gazetteer
-                if getattr(context, "ports", None) is not None:
-                    from app.infrastructure.kg.adapters.gazetteer_adapter import KGGazetteerAdapter
-
-                    context.ports.gazetteer = KGGazetteerAdapter(restored_gazetteer)
-
         from app.infrastructure.artifacts.runtime import load_artifact
         from app.contracts.domain.l1_contracts import L1Snapshot
 
@@ -42,6 +66,39 @@ def _hydrate_l1_spatial_facts(state: Dict[str, Any], context: Any) -> None:
             return
         facts = list(getattr(snapshot, "location_facts", []) or [])
         context.location_facts = facts
+
+        from app.infrastructure.context.planning_context_factory import _load_session_semantic_memory
+
+        session_id = str(state.get("session_id", "") or "")
+        memory = _load_session_semantic_memory(session_id) if session_id else None
+        hydration_key = _spatial_hydration_key(state, context, facts, memory)
+        if (
+            getattr(context, "evidence_index", None) is not None
+            and getattr(context, "evidence_index_key", "") == hydration_key
+        ):
+            logger.debug(
+                "[bootstrap] L1 spatial evidence already hydrated key=%s facts=%d",
+                hydration_key[:12],
+                len(facts),
+            )
+            return
+
+        # Context objects can survive in-process while semantic memory advances.
+        # Rebuild only when the deterministic hydration key changes.
+        from app.infrastructure.kg.gazetteer import build_gazetteer
+        from app.infrastructure.kg.adapters.gazetteer_adapter import KGGazetteerAdapter
+
+        kg = getattr(context, "kg", None)
+        if session_id and kg is not None:
+            restored_gazetteer = build_gazetteer(
+                kg,
+                getattr(context, "workspace", None),
+                memory,
+            )
+            if restored_gazetteer.entries:
+                context.gazetteer = restored_gazetteer
+                if getattr(context, "ports", None) is not None:
+                    context.ports.gazetteer = KGGazetteerAdapter(restored_gazetteer)
 
         from app.infrastructure.kg.enrichment.report_entity_enrichment import (
             _location_fact_mentions,
@@ -59,17 +116,20 @@ def _hydrate_l1_spatial_facts(state: Dict[str, Any], context: Any) -> None:
             bases,
         )
         if written and getattr(context, "ports", None) is not None:
-            from app.infrastructure.kg.adapters.gazetteer_adapter import KGGazetteerAdapter
-
             context.ports.gazetteer = KGGazetteerAdapter(context.gazetteer)
-        # L1 facts are the authoritative typed spatial evidence.  Rebuild the
-        # index after hydration so facilities, roads, water and areas are
-        # visible to GROUND in the same snapshot as village bindings.
+
+        # The index is the typed L1 -> GROUND boundary.  Geometry is materialized
+        # from the bundle once and reused for every POI/fact in this build.
         from app.evidence.index.place_evidence_index import PlaceEvidenceIndex
+
         context.evidence_index = PlaceEvidenceIndex.build(context)
+        context.evidence_index_key = hydration_key
         logger.info(
-            "[bootstrap] hydrated %d L1 location facts; GIS village bindings=%d; evidence entries=%d",
-            len(facts), written, len(getattr(context.evidence_index, "entries", []) or []),
+            "[bootstrap] hydrated %d L1 location facts; GIS village bindings=%d; evidence entries=%d; key=%s",
+            len(facts),
+            written,
+            len(getattr(context.evidence_index, "entries", []) or []),
+            hydration_key[:12],
         )
     except Exception as exc:
         logger.warning("[bootstrap] L1 spatial fact hydration failed: %s", exc)

@@ -73,6 +73,7 @@ class PlanningContext:
     l1_snapshot_ref: str = ""
     location_facts: List[Any] = field(default_factory=list)
     evidence_index: Any = None
+    evidence_index_key: str = ""
     ports: PlanningPorts = field(default_factory=PlanningPorts)
     content_hash: str = ""
     capabilities: Dict[str, bool] = field(default_factory=dict)
@@ -132,6 +133,7 @@ class PlanningContext:
             "has_gazetteer": self.gazetteer is not None,
             "has_constraint_index": self.constraint_index is not None,
             "has_evidence_index": self.evidence_index is not None,
+            "evidence_index_key": self.evidence_index_key,
             "report_count": len(self.reports),
             "location_fact_count": len(self.location_facts),
             "l1_snapshot_ref": self.l1_snapshot_ref,

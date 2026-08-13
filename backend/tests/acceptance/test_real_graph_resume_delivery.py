@@ -102,6 +102,12 @@ def _progress_fingerprint(state: dict) -> str:
     constant across a stall window therefore means the graph terminated
     without reaching a delivery terminal (or deadlocked), and polling longer
     only burns the deadline.
+
+    Note: LangGraph checkpoints once per superstep.  A layer's parallel
+    dimension workers share a single superstep (LLM slot-limited), so the
+    checkpoint fingerprint can legitimately stay frozen for 60-120s while the
+    real graph is mid-flight.  The stall guard must therefore pair this
+    fingerprint with the ``_graph_has_pending_tasks`` liveness probe.
     """
     completed = state.get("completed_dimensions") or {}
     return "|".join([
@@ -115,6 +121,28 @@ def _progress_fingerprint(state: dict) -> str:
             (str(k) + ":" + ",".join(sorted(v)) for k, v in completed.items())
         )),
     ])
+
+
+def _graph_has_pending_tasks(client, session_id: str) -> bool:
+    """Liveness probe: the LangGraph checkpointer has un-consumed tasks.
+
+    A checkpoint whose ``tasks`` is non-empty means a superstep is scheduled
+    or in flight (parallel dimension workers, advance-phase dispatch).  A real
+    graph therefore reports ``True`` across a long layer superstep even though
+    the persisted fingerprint is frozen; a terminated or deadlocked graph
+    reports ``False``.  Best-effort: a transient read error is treated as
+    "no liveness" so the stall guard stays conservative.
+    """
+    try:
+        from app.infrastructure.runtime.planning_runtime_service import PlanningRuntimeService
+
+        snapshot = client.portal.call(
+            PlanningRuntimeService.aget_state,
+            session_id,
+        )
+    except Exception:
+        return False
+    return bool(snapshot and getattr(snapshot, "tasks", None))
 
 
 pytestmark = [
@@ -297,7 +325,7 @@ def test_real_graph_resume_delivery(sqlite_db, pipeline_reset, monkeypatch):
                 current = get_state_values(session_id)
                 progress = _progress_fingerprint(current)
                 now = time.monotonic()
-                if progress != last_progress:
+                if progress != last_progress or _graph_has_pending_tasks(client, session_id):
                     last_progress = progress
                     last_progress_at = now
                 elif now - last_progress_at > 90.0:
@@ -481,7 +509,7 @@ def test_real_graph_resume_delivery(sqlite_db, pipeline_reset, monkeypatch):
                     break
                 progress = _progress_fingerprint(state)
                 now = time.monotonic()
-                if progress != last_progress:
+                if progress != last_progress or _graph_has_pending_tasks(client, session_id):
                     last_progress = progress
                     last_progress_at = now
                 elif now - last_progress_at > 120.0:

@@ -327,6 +327,7 @@ def test_real_graph_resume_delivery(sqlite_db, pipeline_reset, monkeypatch):
             state = {}
             terminal = False
             processed_event_ids: set[str] = set()
+            last_watchdog_report_at = 0.0
             while time.monotonic() < overall_deadline:
                 current = get_state_values(session_id)
                 state = current or state
@@ -335,7 +336,18 @@ def test_real_graph_resume_delivery(sqlite_db, pipeline_reset, monkeypatch):
                     break
                 progress = _progress_fingerprint(current)
                 now = time.monotonic()
-                if progress != last_progress or _graph_has_pending_tasks(client, session_id):
+                pending_tasks = _graph_has_pending_tasks(client, session_id)
+                if now - last_watchdog_report_at >= 10.0:
+                    print(
+                        "[REAL-WATCHDOG] "
+                        f"phase={current.get('phase')!r} "
+                        f"active_stage={current.get('active_stage')!r} "
+                        f"pending_tasks={pending_tasks} "
+                        f"delivery_status={current.get('delivery_status')!r}",
+                        flush=True,
+                    )
+                    last_watchdog_report_at = now
+                if progress != last_progress or pending_tasks:
                     last_progress = progress
                     last_progress_at = now
                 elif now - last_progress_at > 90.0:

@@ -257,3 +257,74 @@
 - exa/网络检索：SQLite checkpoint 并发写推荐 `busy_timeout` 30s + 指数退避重试。
 - 后续验证：重跑 `_run_acceptance.py` 确认 VALIDATE 多层 HUMAN 可连续推进直至 delivery。
 
+## 13. 第十轮迭代：GROUND 地名增强 + zone/road 执行链解锁（2026-08-13）
+
+### 13.1 现象与断点
+
+1. **代码编码损坏**：`spec_mapper.py` 的 feature-name 后缀元组被 PowerShell
+   中文编码破坏成 `"?"`，河流/道路后缀匹配完全失效；`place_evidence_index.py`
+   第 144 行注释同样损坏。已全局扫描 `backend/app` 并修复。
+2. **`_first_label` 解包 bug**：`graph.predicate_objects()` 返回二元组，原代码
+   `for _, predicate, obj in ...` 每次抛 `ValueError` 并被 `except: return`
+   吞掉 —— 这导致 **KG 实体名称从未进入 PlaceEvidenceIndex**（residential_cluster
+   的注册也一直静默失败），是“KG 语义增强实体没有落实”的根因之一。
+3. **GROUND 只注册自然村**：`_register_kg_names` 只处理 `residential_cluster`，
+   Facility/Road/WaterBody/AdministrativeVillage/PlaceRef/Zone 都没有注册。
+4. **deferral 自锁**：一旦 zone/road 被 HUMAN defer，`DeferralLedger` 永久保留，
+   `plan_builder` 无条件放进 `deferred_tasks`，即使后续 GROUND/SELECT 已有解决
+   证据也永不执行 → VALIDATE 反复 structural failure → 重复 defer 循环。
+5. **road 无锚点**：`resolve_intent_anchors` 不处理 `road_targets`，connects
+   （村北/村南）从不生成 start/end anchor，Stage 2.6 端点门控拒绝自动 route。
+6. **GROUND 重复几何计算**：`_parcel_centroid` 为每个地块反复构造单元素
+   GeoDataFrame，466 个地块 × 多个 POI 造成超长阻塞（曾被误判为 SQLite 死锁）。
+
+### 13.2 修复
+
+- **spec_mapper 精简 + 防假地名**：删除 40+ 硬编码后缀表，只保留自然村注册表
+  与极少数安全后缀；`利/建/新` 等单字假地名不再产生；“村内道路/现状机耕路”
+  等泛化词不会被当成地名（由 GROUND 证据索引 substring 匹配与 DLMC 兜底处理）。
+- **GROUND flash-LLM mention 增强器**（`spatial/grounding/flash_mention_extractor.py`）：
+  对 unresolved spec，用 flash 模型把原始散文拆成可定位地名列表（只输出文本，
+  不产出 BSM/坐标）；结果按 sha256 内容缓存到 run 目录，resume/replay 不重复
+  调用；模型不可用时回退确定性基线。
+- **KG 多类型实体注册**：Facility/Road/WaterBody/AdministrativeVillage/
+  ResidentialCluster/PlaceRef/Zone 全部注册，携带 BSM、WKT/POINT geometry、
+  facility_type 别名、relation_refs；`relation_topology` 评分维度启用。
+- **deferral 解锁**：`build_execution_plan` 对 ledger 中的 target，若本轮
+  已有解决证据（candidate_bsms / selected_bsm / anchor / road 端点）则提升回
+  `worker_tasks` 重新执行；无证据的仍保持 deferred。
+- **road 锚点解析**：`resolve_intent_anchors` 增加 road 分支 —— 命名 connects
+  解析 candidate_bsms，方位词 connects（村北/村南）用村中心 + 方向 bbox 生成
+  start_anchor/end_anchor。
+- **几何缓存**：`_parcel_centroid` 直连 Shapely；`build_parcel_centroid_cache`
+  在 GROUND/PlaceEvidenceIndex 生命周期内共享，避免重复 GeoDataFrame 构造。
+
+### 13.3 回归测试（54 passed）
+
+新增：`test_spec_mapper_location_refs`、`test_flash_mention_extractor`、
+`test_place_evidence_kg_types`、`test_plan_deferral_lift`、
+`test_road_anchor_resolution`；连同几何缓存/selection cache/L1 契约等 54 项全过。
+
+### 13.4 待验证（真实重跑）
+
+- GROUND unresolved 是否下降（自然村以外实体能否解析）。
+- zone 是否真正产出 parcel changeset 进入 planned_landuse。
+- road 是否有 planned_road 图层与端点。
+- 渲染 PNG 的道路连续性、分区差异、比例尺、点位重叠。
+
+### 13.5 第二轮修复（2026-08-13 续）
+
+1. **road 锚点链路补齐**：`resolve_intent_anchors` 此前在代码库中没有任何调用点，
+   已在 `ground_node` 接入（gazetteer/KG anchor 解析后回写 target_projection
+   artifact）。road 分支支持：命名 connects 解析 candidate_bsms、方位词
+   connects（村北/村南）用村中心 + 方向 bbox 生成 start/end anchor。
+2. **自然村→宅基地聚落映射**（`spatial/grounding/village_cluster_mapper.py`）：
+   fixture 无村级边界（admin_boundary_line 的 BSM 与 landuse 不对应），KG 无
+   12 自然村 ResidentialCluster；新增从 bundle DLBM=1340 宅基地 parcels 聚类的
+   聚落识别，flash LLM 映射村名（带缓存、确定性回退），road/facility/zone 的
+   村名 token 用 gazetteer 优先、聚落兜底。
+3. **执行结果趋势**（第二轮真实 run）：polygon（zone/project）53 succeeded
+   （较首轮 43 提升）、road 3 succeeded（较首轮 1 提升）、facility 32 succeeded。
+4. **仍待解决**：road 无 connects 且语义无村名的 target（如“提质改造Y122乡道、
+   各自然村”）端点缺失；VALIDATE 的 executor human_required（无 target_ids）
+   会直接 END_DIAGNOSTIC，测试因此未达 RECONCILE/DELIVER。

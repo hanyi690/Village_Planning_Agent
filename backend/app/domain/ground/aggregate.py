@@ -10,7 +10,7 @@ and context the output is fully deterministic.
 """
 from __future__ import annotations
 
-from typing import Any, List, Optional
+from typing import Any, Dict, List, Optional
 
 from shapely.geometry import shape
 from shapely.ops import unary_union
@@ -91,10 +91,14 @@ def build_candidate_site(
 def ground_aggregate(
     specs: list[SpatialReferenceSpec],
     context: PlanningContext,
+    mention_enhancements: Optional[Dict[str, List[str]]] = None,
 ) -> GroundingResult:
     """Resolve all specs through ``SpatialResolver`` into a ``GroundingResult``.
 
-    Deterministic: one resolver instance, ordered iteration, no LLM. Each spec
+    Deterministic over its inputs: one resolver instance, ordered iteration.
+    ``mention_enhancements`` (target_id -> [text mention, ...]) comes from the
+    GROUND flash-LLM mention enhancer and is treated as input data, so given
+    the same specs/context/enhancements the output is reproducible. Each spec
     contributes exactly one ``SpatialQueryEvidence`` row; specs with resolved
     bundle parcels contribute a ``CandidateSite``, the rest a ``StageIssue``.
     """
@@ -114,7 +118,10 @@ def ground_aggregate(
         # diagnostic, it must not skip resolution.  GROUND still attempts the
         # evidence index / gazetteer / directional fallbacks; specs that
         # cannot be bound stay unresolved and enter the HUMAN gate.
-        resolved = resolver.resolve_spec(spec)
+        resolved = resolver.resolve_spec(
+            spec,
+            mention_enhancements=mention_enhancements,
+        )
         spec_type = getattr(spec, "type", "")
         spatial_query_evidence.append(
             SpatialQueryEvidence(

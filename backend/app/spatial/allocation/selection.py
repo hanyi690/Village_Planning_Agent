@@ -104,31 +104,47 @@ def apply_hard_filters(
     hazards: Optional[List[Any]] = None,
     occupied: Optional[List[Tuple[float, float]]] = None,
     min_area_ha: float = 0.0,
+    filter_cache: Optional[Dict[str, Tuple[Any, List[str]]]] = None,
 ) -> Tuple[List[CandidateParcel], List[Rejection]]:
     from shapely.geometry import Point, shape
 
     survivors: List[CandidateParcel] = []
     rejected: List[Rejection] = []
     for cand in candidates:
-        try:
-            geom = shape(cand.geometry)
-        except Exception:
-            rejected.append(Rejection(cand.bsm, "invalid_geometry"))
-            continue
-        if geom.is_empty:
-            rejected.append(Rejection(cand.bsm, "empty_geometry"))
-            continue
-        detail: List[str] = []
-        if cand.dlmc in _NON_BUILDABLE_DLMC:
-            detail.append(f"landuse_not_suitable:{cand.dlmc}")
-        if constraint_index is not None:
-            overlaps = constraint_index.geometry_in_constraint(cand.geometry) or []
-            blocked = sorted({
-                ov.constraint_type for ov in overlaps
-                if ov.constraint_type in _PROHIBITED_CONSTRAINTS
-            })
-            if blocked:
-                detail.append(f"constraint:{','.join(blocked)}")
+        cache_key = str(cand.bsm)
+        cached = filter_cache.get(cache_key) if filter_cache is not None else None
+        if cached is None:
+            try:
+                geom = shape(cand.geometry)
+            except Exception:
+                if filter_cache is not None:
+                    filter_cache[cache_key] = (None, ["invalid_geometry"])
+                rejected.append(Rejection(cand.bsm, "invalid_geometry"))
+                continue
+            if geom.is_empty:
+                if filter_cache is not None:
+                    filter_cache[cache_key] = (None, ["empty_geometry"])
+                rejected.append(Rejection(cand.bsm, "empty_geometry"))
+                continue
+            static_detail: List[str] = []
+            if cand.dlmc in _NON_BUILDABLE_DLMC:
+                static_detail.append(f"landuse_not_suitable:{cand.dlmc}")
+            if constraint_index is not None:
+                overlaps = constraint_index.geometry_in_constraint(cand.geometry) or []
+                blocked = sorted({
+                    ov.constraint_type for ov in overlaps
+                    if ov.constraint_type in _PROHIBITED_CONSTRAINTS
+                })
+                if blocked:
+                    static_detail.append(f"constraint:{','.join(blocked)}")
+            if filter_cache is not None:
+                filter_cache[cache_key] = (geom, list(static_detail))
+        else:
+            geom, static_detail = cached
+            if geom is None:
+                rejected.append(Rejection(cand.bsm, static_detail[0]))
+                continue
+        detail = list(static_detail)
         if not detail:
             point = geom.representative_point()
             for hazard in hazards or []:
@@ -432,6 +448,7 @@ def select_parcel(
     occupied: Optional[List[Tuple[float, float]]] = None,
     cluster_centroid: Optional[Tuple[float, float]] = None,
     ranker: Optional[Ranker] = None,
+    filter_cache: Optional[Dict[str, Tuple[Any, List[str]]]] = None,
 ) -> PlacementDecision:
     target_ha = parse_scale_ha(target.scale_text)
     target_min_area = target_ha if target.category == "project" else 0.0
@@ -441,6 +458,7 @@ def select_parcel(
         hazards=hazards,
         occupied=occupied,
         min_area_ha=target_min_area or 0.0,
+        filter_cache=filter_cache,
     )
     survivors = apply_scale_filter(survivors, allow_large_block=is_large_block_target(target))
     ranked = rank_candidates(

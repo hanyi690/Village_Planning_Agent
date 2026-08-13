@@ -157,6 +157,30 @@ def _worker_type(target_type: str, target: Any) -> WorkerType:
     }[target_type]
 
 
+def _has_resolution_evidence(target: Any, assignment: Any) -> bool:
+    """True when a target now carries grounded placement evidence.
+
+    A HUMAN deferral is a point-in-time decision.  When a later GROUND/SELECT
+    revision resolves the spatial reference (candidate parcels, a selected
+    parcel, an anchor, or explicit road endpoints), the target must be lifted
+    back into ``worker_tasks`` so the worker can actually execute instead of
+    being locked out forever by an earlier deferral.
+    """
+    if assignment is not None:
+        status = getattr(assignment, "status", "")
+        if status in {"placed", "ready"}:
+            if getattr(assignment, "selected_bsm", None):
+                return True
+            if getattr(assignment, "anchor_point", None):
+                return True
+    if getattr(target, "candidate_bsms", None):
+        return True
+    for field in ("path_bsms", "connects", "start_anchor", "end_anchor"):
+        if getattr(target, field, None):
+            return True
+    return False
+
+
 def build_execution_plan(
     intent,
     site_selection,
@@ -223,8 +247,12 @@ def build_execution_plan(
                     deferred_tasks.append(task)
                 continue
             if target_id in deferred_ids:
-                deferred_tasks.append(task)
-                continue
+                # Re-execute a previously deferred target only when this
+                # revision actually resolves its placement; otherwise the
+                # deferral stays (and VALIDATE must not re-flag it).
+                if not _has_resolution_evidence(target, assignment):
+                    deferred_tasks.append(task)
+                    continue
             tasks.append(task)
             if target_type == "project":
                 project_task_ids.append(task_id)

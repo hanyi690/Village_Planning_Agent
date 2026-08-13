@@ -35,6 +35,11 @@ _VILLAGE_SCOPE_LOCATIONS = frozenset({
     "全村", "村域", "村域范围", "各自然村", "各村", "各组", "各村民小组",
 })
 
+_GENERIC_VILLAGE_WORDS = frozenset({
+    "全村", "村庄", "村域", "村内", "村组", "各村", "该村", "本村",
+    "村中", "村级", "村委会", "村民小组", "自然村",
+})
+
 
 def _explicit_village_names(intervention: PlanningIntervention) -> list[str]:
     """Extract only a village name explicitly present in the model text.
@@ -67,10 +72,12 @@ def _explicit_village_names(intervention: PlanningIntervention) -> list[str]:
     except Exception:
         pass
 
-    # Conservative fallback for a root-village name explicitly delimited by
-    # punctuation/whitespace. Never infer from an arbitrary long Chinese span.
-    match = re.search(r"(?:^|[，。；：、\s(（])([\u4e00-\u9fff]{2,4}村)(?=$|[，。；：、\s)）])", text)
-    if match and match.group(1) not in {"全村", "村庄", "村域"}:
+    # Conservative fallback for a root-village name: a Chinese span ending in
+    # 村 that is not a generic scope word.  The preceding known-village match
+    # already covers the 12 natural villages; this fallback only captures an
+    # explicit root village such as 金田村 in prose like 金田村文化活动中心.
+    match = re.search(r"([\u4e00-\u9fff]{1,6}村)", text)
+    if match and match.group(1) not in _GENERIC_VILLAGE_WORDS:
         return [match.group(1)]
     return []
 
@@ -174,17 +181,72 @@ def _semantic_location_reference(
                 filter={"label_contains": village_names[0]},
             ),
         )
-    river = re.search(r"([\u4e00-\u9fff]{1,6}?)", text)
-    if river:
+    # Do not turn an arbitrary first Chinese span into a place name.  That
+    # previous fallback produced one-character false mentions and polluted
+    # GROUND with candidates such as "?" or "?".  Only retain explicit
+    # feature-name suffixes that can be resolved by a session gazetteer/index,
+    # and clean the candidate so generic scope words never become place names.
+    for suffix in _FEATURE_NAME_SUFFIXES:
+        match = re.search(
+            rf"([\u4e00-\u9fff]{{1,10}}{suffix})",
+            text,
+        )
+        if not match:
+            continue
+        cleaned = _clean_feature_mention(match.group(1))
+        if not cleaned:
+            continue
         return SpatialReferenceSpec(
             type="topological",
             topo="nearby",
             reference=RefObject(
                 kind="place_name",
-                filter={"label_contains": river.group(1)},
+                filter={"label_contains": cleaned},
             ),
         )
     return None
+
+
+# Minimal deterministic feature-name suffixes.  Broad feature extraction is
+# delegated to the GROUND flash-LLM mention enhancer (see
+# ``app.spatial.grounding.flash_mention_extractor``); this table only keeps a
+# couple of extremely safe suffixes so a fully deterministic fallback still
+# works when the enhancer is disabled.
+_FEATURE_NAME_SUFFIXES = (
+    "河",
+)
+
+# Leading tokens that are positional words, not part of the feature name.
+_LOCATION_PREFIXES_TO_STRIP = (
+    "沿", "依", "临", "靠",
+    "村口", "村内", "村中", "村前", "村后", "村旁",
+    "村东", "村南", "村西", "村北",
+)
+
+# Whole-candidate strings that are generic scope words, never place names.
+_GENERIC_LOCATION_EXCLUSIONS = frozenset({
+    "全村", "村庄", "村域", "村内", "村组", "各村", "该村", "本村", "村中",
+})
+
+
+def _clean_feature_mention(candidate: str) -> str | None:
+    """Strip positional/action prefixes and reject generic scope words."""
+    token = (candidate or "").strip()
+    for prefix in _LOCATION_PREFIXES_TO_STRIP:
+        while token.startswith(prefix):
+            token = token[len(prefix):].strip()
+    if not token or len(token) < 2:
+        return None
+    if token in _GENERIC_LOCATION_EXCLUSIONS:
+        return None
+    # A candidate that is fully composed of generic scope words is not a
+    # locatable feature (e.g. 村内道路).  Keep only real feature names.
+    if all(
+        word in token
+        for word in ("村内", "道路", "现状", "机耕", "巷道", "村道", "乡道")
+    ) and len(token) <= 6:
+        return None
+    return token
 
 
 def _direction_from_requirements(intervention: PlanningIntervention) -> str:
