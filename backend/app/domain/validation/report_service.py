@@ -6,7 +6,6 @@ from typing import Any, List
 
 from app.contracts.artifacts.provenance import Provenance
 from app.contracts.artifacts.validation_report_contracts import (
-    ConstraintAdjustment,
     ValidationIssue,
     ValidationReport,
 )
@@ -29,13 +28,22 @@ def build_validation_report(
             getattr(check, "responsible_stage", responsible_stage) or responsible_stage
         )
         passed = bool(getattr(check, "passed", False))
-        check_id = str(getattr(check, "check_id", "") or "")
+        check_id = str(
+            getattr(check, "violation_id", "")
+            or getattr(check, "check_id", "")
+            or ""
+        )
+        code = str(
+            getattr(check, "code", "")
+            or getattr(check, "check_id", "")
+            or ""
+        )
         issues.append(
             ValidationIssue(
                 stage=stage,
                 severity="warning" if passed else "error",
-                code=check_id,
-                message=str(getattr(check, "check_name", "") or check_id or ""),
+                code=code,
+                message=str(getattr(check, "check_name", "") or code or ""),
                 detail=getattr(check, "fix_suggestion", None) or None,
                 check_id=check_id,
             )
@@ -45,22 +53,11 @@ def build_validation_report(
     for issue in issues:
         if issue.severity == "error":
             issues_by_stage.setdefault(issue.stage, []).append(issue)
-    adjustments = [
-        ConstraintAdjustment(
-            constraint_id=str(getattr(c, "check_id", "") or ""),
-            adjustment_type="relax",
-            original_value=getattr(c, "expected_value", None),
-            adjusted_value=getattr(c, "actual_value", None),
-            reason=str(getattr(c, "fix_suggestion", "") or ""),
-            source_check=str(getattr(c, "check_id", "") or ""),
-        )
-        for c in failed
-    ]
     return ValidationReport(
         checks=list(checks or []),
         overall_passed=not failed,
         issues_by_stage=issues_by_stage,
-        adjustments=adjustments,
+        adjustments=[],
         context_version=session_id,
         artifact_id="validation-report-" + session_id,
         provenance=Provenance(

@@ -19,6 +19,8 @@ class ConstraintAdjustment(BaseModel):
 
 class ValidationCheck(BaseModel):
     check_id: str
+    violation_id: str = ""
+    code: str = ""
     check_name: str = ""
     passed: bool = False
     actual_value: str = ""
@@ -26,6 +28,7 @@ class ValidationCheck(BaseModel):
     responsible_stage: Literal["L3", "TARGET_PROJECTION", "GROUND", "SELECT", "EXECUTE"] = "EXECUTE"
     affected_parcels: list[str] = Field(default_factory=list)
     affected_target_ids: list[str] = Field(default_factory=list)
+    evidence_refs: list[str] = Field(default_factory=list)
     fix_suggestion: str = ""
 
 

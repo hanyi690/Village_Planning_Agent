@@ -19,10 +19,10 @@ from app.domain.validation.validate_checks import (
     check_overlap,
     check_topology,
     check_traceability,
+    check_worker_failures,
 )
 from app.contracts.artifacts.provenance import Provenance
 from app.contracts.artifacts.validation_report_contracts import (
-    ConstraintAdjustment,
     ValidationCheck,
     ValidationIssue,
     ValidationReport,
@@ -59,6 +59,26 @@ def validate_aggregate(
 ) -> ValidationReport:
     """Validate typed execution outputs; render layers are not fact inputs."""
     if planned_state is None:
+        typed_worker_checks = check_worker_failures(execution_result)
+        if typed_worker_checks:
+            issues_by_stage: dict[str, list[ValidationIssue]] = {}
+            for check in typed_worker_checks:
+                issue = _check_to_issue(check)
+                issues_by_stage.setdefault(issue.stage, []).append(issue)
+            return ValidationReport(
+                checks=typed_worker_checks,
+                overall_passed=False,
+                issues_by_stage=issues_by_stage,
+                adjustments=[],
+                provenance=Provenance(
+                    source="validate_aggregate",
+                    run_id=run_id,
+                    module="app.domain.validation.validate",
+                    natural_language_description=(
+                        "planned_state blocked by target-bound worker failures"
+                    ),
+                ),
+            )
         missing_check = ValidationCheck(
             check_id="missing_planned_state",
             check_name="planned_state presence",
@@ -101,6 +121,7 @@ def validate_aggregate(
         execution_plan=execution_plan,
         execution_result=execution_result,
     ))
+    all_checks.extend(check_worker_failures(execution_result))
 
     overall_passed = all(c.passed for c in all_checks)
 
@@ -118,24 +139,11 @@ def validate_aggregate(
         natural_language_description=f"VALIDATE aggregate: {len(all_checks)} checks",
     )
 
-    adjustments = [
-        ConstraintAdjustment(
-            constraint_id=check.check_id,
-            adjustment_type="relax",
-            original_value=check.expected_value,
-            adjusted_value=check.actual_value,
-            reason=check.fix_suggestion or "",
-            source_check=check.check_id,
-        )
-        for check in all_checks
-        if not check.passed
-    ]
-
     return ValidationReport(
         checks=all_checks,
         overall_passed=overall_passed,
         issues_by_stage=issues_by_stage,
-        adjustments=adjustments,
+        adjustments=[],
         provenance=provenance,
     )
 

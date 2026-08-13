@@ -25,6 +25,7 @@ No LLM, no KG, no MIP — geometry math only (shapely imported lazily).
 
 from __future__ import annotations
 
+import hashlib
 from types import SimpleNamespace
 from typing import Any, List, Optional
 
@@ -45,10 +46,15 @@ def _check(
     expected: str = "",
     parcels: Optional[List[str]] = None,
     targets: Optional[List[str]] = None,
+    violation_id: str = "",
+    code: str = "",
+    evidence_refs: Optional[List[str]] = None,
     fix: str = "",
 ) -> ValidationCheck:
     return ValidationCheck(
         check_id=check_id,
+        violation_id=violation_id or check_id,
+        code=code or check_id,
         check_name=check_name,
         passed=passed,
         actual_value=actual,
@@ -56,6 +62,7 @@ def _check(
         responsible_stage=stage,
         affected_parcels=list(parcels or []),
         affected_target_ids=list(targets or []),
+        evidence_refs=sorted(set(evidence_refs or [])),
         fix_suggestion=fix,
     )
 
@@ -70,6 +77,20 @@ def _wkt_area(wkt: str) -> float:
         return geom.area if geom and not geom.is_empty else 0.0
     except Exception:
         return 0.0
+
+
+def _target_lineage(entry: Any) -> list[str]:
+    values = (
+        getattr(entry, "derived_from_zone_target", ""),
+        getattr(entry, "derived_from_target", ""),
+        getattr(entry, "project_ref", ""),
+    )
+    return sorted({str(value) for value in values if str(value).strip()})
+
+
+def _evidence_digest(*parts: Any) -> str:
+    payload = "\x1f".join(str(part) for part in parts)
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
 def check_hard_constraints(planned_state: Any, constraint_index: Any) -> List[ValidationCheck]:
@@ -88,21 +109,41 @@ def check_hard_constraints(planned_state: Any, constraint_index: Any) -> List[Va
     if constraint_index is None:
         return [
             _check(
-                "hard_constraints",
+                "constraint_index_unavailable",
                 "硬性约束核查",
                 False,
                 stage="SELECT",
+                code="constraint_index_unavailable",
+                violation_id="constraint_index_unavailable",
                 actual="constraint_index unavailable",
                 expected="constraint_index available",
+                evidence_refs=["constraint-index:missing"],
                 fix="提供约束图层后再放行硬约束核查",
             )
         ]
-    affected: List[str] = []
-    query_errors: List[str] = []
+    findings: list[ValidationCheck] = []
     for parcel in planned_state.parcels or []:
+        bsm = str(getattr(parcel, "bsm", "") or "")
+        targets = _target_lineage(parcel)
+        parcel_ref = f"planned-parcel:{bsm}" if bsm else "planned-parcel:unbound"
         wkt = (parcel.geometry or "").strip()
         if not wkt:
-            query_errors.append(parcel.bsm)
+            findings.append(
+                _check(
+                    "hard_constraint_query_failed",
+                    "硬性约束核查",
+                    False,
+                    stage="EXECUTE",
+                    code="hard_constraint_query_failed",
+                    violation_id=f"hard_constraint_query_failed:{bsm or 'unbound'}",
+                    actual="planned parcel geometry is empty",
+                    expected="parseable planned parcel geometry",
+                    parcels=[bsm] if bsm else [],
+                    targets=targets,
+                    evidence_refs=[parcel_ref],
+                    fix="修复目标地块几何后重新执行硬约束核查",
+                )
+            )
             continue
         try:
             from shapely import wkt as _wkt
@@ -111,23 +152,75 @@ def check_hard_constraints(planned_state: Any, constraint_index: Any) -> List[Va
             geojson = mapping(_wkt.loads(wkt))
             overlaps = constraint_index.geometry_in_constraint(geojson) or []
         except Exception as exc:
-            query_errors.append(f"{parcel.bsm}: {exc}")
+            findings.append(
+                _check(
+                    "hard_constraint_query_failed",
+                    "硬性约束核查",
+                    False,
+                    stage="EXECUTE",
+                    code="hard_constraint_query_failed",
+                    violation_id=f"hard_constraint_query_failed:{bsm or 'unbound'}",
+                    actual=f"constraint query failed: {exc}",
+                    expected="successful deterministic constraint query",
+                    parcels=[bsm] if bsm else [],
+                    targets=targets,
+                    evidence_refs=[parcel_ref],
+                    fix="修复目标地块几何或约束索引后重新核查",
+                )
+            )
             continue
-        for ov in overlaps:
-            if getattr(ov, "constraint_type", "") in _PROHIBITED_CONSTRAINTS:
-                affected.append(parcel.bsm)
-                break
-    passed = not affected and not query_errors
+        prohibited = {
+            str(getattr(overlap, "constraint_type", "") or ""): overlap
+            for overlap in overlaps
+            if str(getattr(overlap, "constraint_type", "") or "")
+            in _PROHIBITED_CONSTRAINTS
+        }
+        for constraint_type, overlap in sorted(prohibited.items()):
+            target_token = "+".join(targets) or "unbound"
+            evidence_id = _evidence_digest(
+                bsm,
+                target_token,
+                constraint_type,
+                getattr(overlap, "overlap_area_sqm", 0.0),
+                getattr(overlap, "overlap_pct", 0.0),
+            )
+            findings.append(
+                _check(
+                    "hard_constraints",
+                    "硬性约束核查",
+                    False,
+                    stage="SELECT",
+                    code="hard_constraints",
+                    violation_id=(
+                        f"hard_constraints:{target_token}:{bsm or 'unbound'}:"
+                        f"{constraint_type}"
+                    ),
+                    actual=(
+                        f"constraint={constraint_type}, "
+                        f"overlap_area_sqm={getattr(overlap, 'overlap_area_sqm', 0.0)}, "
+                        f"overlap_pct={getattr(overlap, 'overlap_pct', 0.0)}"
+                    ),
+                    expected="selected parcel does not overlap a prohibited constraint",
+                    parcels=[bsm] if bsm else [],
+                    targets=targets,
+                    evidence_refs=[
+                        parcel_ref,
+                        f"constraint:{constraint_type}",
+                        f"constraint-overlap:{evidence_id}",
+                    ],
+                    fix="从该目标候选集中排除违规 BSM 并重新执行全局分配",
+                )
+            )
+    if findings:
+        return sorted(findings, key=lambda item: item.violation_id)
     return [
         _check(
             "hard_constraints",
             "硬性约束核查",
-            passed,
+            True,
             stage="SELECT",
-            actual=f"affected={affected}, query_errors={query_errors}",
-            expected="no parcels violate prohibited constraints and no query failures",
-            parcels=affected,
-            fix="提供约束图层或修复几何解析后再放行硬约束核查",
+            actual="no prohibited constraint overlaps",
+            expected="selected parcels satisfy prohibited constraints",
         )
     ]
 
@@ -327,6 +420,87 @@ def check_traceability(
     ]
 
 
+def check_worker_failures(execution_result: Any) -> List[ValidationCheck]:
+    """Promote typed worker failures into the authoritative validation report."""
+    findings: dict[str, ValidationCheck] = {}
+    records: list[tuple[str, dict[str, Any]]] = []
+    for task in list(getattr(execution_result, "task_results", None) or []):
+        if str(getattr(task, "status", "")) != "failed":
+            continue
+        target_id = str(getattr(task, "target_id", "") or "")
+        records.extend(
+            (target_id, diagnostic)
+            for diagnostic in list(getattr(task, "diagnostics", None) or [])
+            if isinstance(diagnostic, dict)
+        )
+    records.extend(
+        ("", diagnostic)
+        for diagnostic in list(getattr(execution_result, "diagnostics", None) or [])
+        if isinstance(diagnostic, dict)
+    )
+    supported = {
+        "road_unresolved",
+        "road_anchor_unresolved",
+        "road_route_failed",
+        "geometry_invalid",
+        "worker_conflict",
+        "authoritative_land_use_conflict",
+    }
+    for index, (task_target_id, diagnostic) in enumerate(records):
+            code = str(diagnostic.get("code") or "").strip().lower()
+            if code not in supported:
+                continue
+            target_ids = sorted({
+                *([task_target_id] if task_target_id else []),
+                *[
+                    str(target_id)
+                    for target_id in list(diagnostic.get("target_ids") or [])
+                    if str(target_id)
+                ],
+                *([str(diagnostic.get("target_id"))] if diagnostic.get("target_id") else []),
+            })
+            violation_id = str(
+                diagnostic.get("violation_id")
+                or f"{code}:{':'.join(target_ids) or 'unbound'}:{index}"
+            )
+            bsms = sorted({
+                str(bsm)
+                for bsm in [
+                    *list(diagnostic.get("affected_bsms") or []),
+                    *([diagnostic.get("bsm")] if diagnostic.get("bsm") else []),
+                ]
+                if str(bsm)
+            })
+            evidence_refs = sorted({
+                str(ref)
+                for ref in list(diagnostic.get("evidence_refs") or [])
+                if str(ref)
+            })
+            findings[violation_id] = _check(
+                code,
+                "执行产物失败",
+                False,
+                stage=(
+                    "L3"
+                    if code == "road_unresolved"
+                    else "GROUND"
+                    if code == "road_anchor_unresolved"
+                    else "SELECT"
+                    if code in {"worker_conflict", "authoritative_land_use_conflict"}
+                    else "EXECUTE"
+                ),
+                code=code,
+                violation_id=violation_id,
+                actual=str(diagnostic.get("message") or diagnostic.get("reason_code") or code),
+                expected="worker produces the declared target output with source lineage",
+                parcels=bsms,
+                targets=target_ids,
+                evidence_refs=evidence_refs,
+                fix="按 typed repair directive 补证据、重选或重建目标几何",
+            )
+    return sorted(findings.values(), key=lambda finding: finding.violation_id)
+
+
 def _planned_geoms(planned_state: Any) -> tuple[List[tuple], List[tuple]]:
     """Collect (name, shapely geometry) pairs and (name, error) parse failures.
 
@@ -450,30 +624,101 @@ def check_topology(planned_state: Any) -> List[ValidationCheck]:
     return checks
 
 
-def check_overlap(planned_state: Any) -> List[ValidationCheck]:
-    """Check no pair of polygon geometries overlaps."""
-    items, errors = _planned_geoms(planned_state)
-    parse_failed = [name for name, _ in errors]
-    geoms: List[Any] = [g for _, g in items if g.geom_type in _POLYGON_TYPES]
-    pair_count = 0
-    for i in range(len(geoms)):
-        for j in range(i + 1, len(geoms)):
+def _planned_polygon_records(planned_state: Any) -> dict[str, list[SimpleNamespace]]:
+    from shapely import wkt as _wkt
+
+    groups: dict[str, list[SimpleNamespace]] = {"parcel": [], "zone": []}
+    for layer, entries in (
+        ("parcel", getattr(planned_state, "parcels", None) or []),
+        ("zone", getattr(planned_state, "zones", None) or []),
+    ):
+        for index, entry in enumerate(entries):
+            text = str(getattr(entry, "geometry", "") or "").strip()
+            if not text:
+                continue
             try:
-                inter = geoms[i].intersection(geoms[j])
-                if not inter.is_empty and inter.area > 1e-12:
-                    pair_count += 1
+                geometry = _wkt.loads(text)
             except Exception:
-                pair_count += 1
-    passed = pair_count == 0 and not parse_failed
+                continue
+            if geometry.geom_type not in _POLYGON_TYPES or geometry.is_empty:
+                continue
+            bsm = str(getattr(entry, "bsm", "") or "")
+            targets = _target_lineage(entry)
+            feature_id = bsm or str(getattr(entry, "name", "") or "") or f"{layer}-{index}"
+            geometry_digest = _evidence_digest(text)
+            groups[layer].append(
+                SimpleNamespace(
+                    layer=layer,
+                    feature_id=feature_id,
+                    bsm=bsm,
+                    target_ids=targets,
+                    geometry=geometry,
+                    evidence_ref=(
+                        f"planned-{layer}:{feature_id}:{geometry_digest[:16]}"
+                    ),
+                )
+            )
+    return groups
+
+
+def check_overlap(planned_state: Any) -> List[ValidationCheck]:
+    """Return one traceable finding per unique same-layer polygon overlap."""
+
+    findings: dict[tuple[Any, ...], ValidationCheck] = {}
+    groups = _planned_polygon_records(planned_state)
+    for layer, records in groups.items():
+        for index, left in enumerate(records):
+            for right in records[index + 1 :]:
+                try:
+                    intersection = left.geometry.intersection(right.geometry)
+                except Exception:
+                    continue
+                if intersection.is_empty or intersection.area <= 1e-12:
+                    continue
+                target_ids = sorted(set(left.target_ids + right.target_ids))
+                bsms = sorted({value for value in (left.bsm, right.bsm) if value})
+                feature_refs = sorted((left.evidence_ref, right.evidence_ref))
+                evidence_digest = _evidence_digest(
+                    layer,
+                    *feature_refs,
+                    intersection.wkb_hex,
+                )
+                evidence_ref = f"overlap-evidence:{evidence_digest}"
+                pair_key = (
+                    layer,
+                    tuple(target_ids),
+                    tuple(bsms),
+                    tuple(feature_refs),
+                    evidence_ref,
+                )
+                finding_id = f"overlap:{layer}:{evidence_digest[:20]}"
+                findings[pair_key] = _check(
+                    "overlap",
+                    "图层重叠",
+                    False,
+                    stage="SELECT",
+                    code="overlap",
+                    violation_id=finding_id,
+                    actual=(
+                        f"layer={layer}, left={left.feature_id}, "
+                        f"right={right.feature_id}, area={intersection.area:.12g}"
+                    ),
+                    expected="no authoritative polygons in the same layer overlap",
+                    parcels=bsms,
+                    targets=target_ids,
+                    evidence_refs=[*feature_refs, evidence_ref],
+                    fix="对冲突目标和 BSM 执行全局重新分配，不得继续合并冲突结果",
+                )
+    if findings:
+        return sorted(findings.values(), key=lambda item: item.violation_id)
     return [
         _check(
             "overlap",
             "图层重叠",
-            passed,
-            stage="EXECUTE",
-            actual=f"{pair_count} overlapping pairs, parse_errors={parse_failed}",
-            expected="no polygon pairs overlap and no unparseable geometries",
-            fix="消除地块/图斑之间的重叠区域或修复 WKT",
+            True,
+            stage="SELECT",
+            actual="no same-layer polygon overlaps",
+            expected="no authoritative polygons in the same layer overlap",
         )
     ]
 
@@ -734,4 +979,5 @@ __all__ = [
     "check_contract_completeness",
     "check_classification_missing",
     "check_traceability",
+    "check_worker_failures",
 ]
