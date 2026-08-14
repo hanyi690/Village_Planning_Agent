@@ -244,7 +244,7 @@ def _extract_location_facts_from_observations(
                 source_report_ref=report_id,
                 dimension_key=dimension_key,
                 source_span=source_span,
-                confidence=0.95 if location_part else 0.8,
+                confidence=0.95 if normalized in location_parts else 0.8,
             ))
     return facts
 
