@@ -1119,10 +1119,22 @@ async def apply_human_review_decision(state: Dict[str, Any]) -> Dict[str, Any]:
     ):
         # Acknowledgement is not permission to execute an invalid source
         # program.  In unattended/test operation, interpret approval as the
-        # safest autonomous choice: retry only the dimensions named by the L3
-        # validator while reusing immutable L1/L2 artifacts and valid siblings.
+        # safest autonomous choice: retry ONLY the dimensions named by the L3
+        # validator (single-dimension retry) while reusing immutable L1/L2
+        # artifacts and valid siblings.  Without the explicit dimension list
+        # the resume router returns "l3", which is not a routable stage and
+        # terminates the graph.
         action = "retry"
         result["autonomous_decision"] = "retry_invalid_l3_dimensions"
+        rework_dimensions = list(dict.fromkeys(
+            str((item.get("context") or {}).get("dimension_key") or "").strip()
+            for item in items
+            if isinstance(item, dict)
+            and str(item.get("request_type") or "") == "program_rework"
+            and str((item.get("context") or {}).get("dimension_key") or "").strip()
+        ))
+        if rework_dimensions:
+            result["provider_resume_dimensions"] = rework_dimensions
 
     deferral_patch = {}
     deferred_target_ids: list[str] = []

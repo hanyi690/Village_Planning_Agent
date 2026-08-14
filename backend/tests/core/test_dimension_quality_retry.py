@@ -89,3 +89,44 @@ def test_provider_resume_dispatch_carries_feedback():
     payload = command.goto[0].arg
     assert payload["dimension_key"] == "location"
     assert payload["quality_feedback"] == "???????"
+
+
+
+def test_l3_program_rework_approve_retries_only_failed_dimensions():
+    """L3 program_rework approval must resolve to a single-dimension retry
+    (provider_resume_dimensions), never to the unroutable stage 'l3'."""
+    import asyncio
+
+    from app.workflow.root_graph import apply_human_review_decision
+
+    state = {
+        "session_id": "s-rework",
+        "paused_stage": "l3",
+        "human_review_decisions": {"action": "approve", "feedback": "ok"},
+        "human_review_items": [
+            {"request_type": "program_rework", "context": {"dimension_key": "industry"}},
+            {"request_type": "program_rework", "context": {"dimension_key": "settlement_planning"}},
+            {"request_type": "other", "context": {}},
+        ],
+        "provider_failures": [],
+        "dimension_failures": [],
+        "fatal_error": None,
+        "dimension_retry_counts": {},
+        "phase": "layer3",
+        "retry_counts": {},
+    }
+    result = asyncio.run(apply_human_review_decision(state))
+    assert result["autonomous_decision"] == "retry_invalid_l3_dimensions"
+    assert result["provider_resume_dimensions"] == ["industry", "settlement_planning"]
+
+
+def test_l3_program_rework_route_goes_to_provider_resume_dispatch():
+    from app.workflow.root_graph import route_after_human_review
+
+    state = {
+        "paused_stage": "l3",
+        "human_review_decisions": {"action": "retry"},
+        "provider_resume_dimensions": ["industry"],
+    }
+    assert route_after_human_review(state) == "provider_resume_dispatch"
+
