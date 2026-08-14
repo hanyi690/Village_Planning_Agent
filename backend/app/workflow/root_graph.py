@@ -973,6 +973,7 @@ _TRANSIENT_PROVIDER_CODES = {
     "llm_timeout",
     "llm_provider_error",
     "llm_provider_circuit_open",
+    "dimension_quality_failed",
 }
 
 
@@ -987,6 +988,10 @@ def _provider_failure_dimensions(
         records.append(fatal)
     records.extend(
         item for item in (state.get("provider_failures") or [])
+        if isinstance(item, dict)
+    )
+    records.extend(
+        item for item in (state.get("dimension_failures") or [])
         if isinstance(item, dict)
     )
     for item in items:
@@ -1034,6 +1039,7 @@ def _provider_resume_patch(
     return {
         "provider_resume_dimensions": dimensions,
         "provider_failures": [],
+        "dimension_failures": [],
         "fatal_error": None,
         "human_review_items": [],
         "paused_stage": None,

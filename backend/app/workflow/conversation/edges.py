@@ -257,6 +257,7 @@ _TRANSIENT_LLM_CODES = frozenset({
     "llm_timeout",
     "llm_provider_error",
     "llm_provider_circuit_open",
+    "dimension_quality_failed",
 })
 
 
@@ -265,6 +266,10 @@ def _terminal_failure_route(state: Dict[str, Any]) -> Optional[str]:
     fatal_error = state.get("fatal_error")
     if not isinstance(fatal_error, dict):
         failures = state.get("provider_failures") or []
+        if failures and isinstance(failures[0], dict):
+            fatal_error = failures[0]
+    if not fatal_error:
+        failures = state.get("dimension_failures") or []
         if failures and isinstance(failures[0], dict):
             fatal_error = failures[0]
     if not fatal_error:

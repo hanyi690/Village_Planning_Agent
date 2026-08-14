@@ -276,6 +276,7 @@ async def analyze_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
         cfg, state, rag_context, deps, same_layer_contexts,
         professional_data_section=professional_data_section,
         explore_section=explore_section,
+        quality_feedback=state.get("quality_feedback", ""),
     )
     logger.info(f"[analyze_dimension] {dim_key}: Prompt length = {len(prompt)} chars")
 
@@ -415,6 +416,20 @@ async def analyze_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
         ],
         ensure_ascii=False,
     )
+    # 7.6 Observation quality validation (design: validation step after every
+    # LLM call).  A dimension whose observations mostly lack a spatial anchor
+    # is a quality defect: it must NOT be marked complete.  It is surfaced
+    # through dimension_failures and retried with corrective feedback instead
+    # of silently feeding incomplete facts downstream.
+    from app.domain.assessment.observation_quality import validate_observations
+
+    quality_report = validate_observations(
+        [
+            item.model_dump(mode="json") if hasattr(item, "model_dump") else item
+            for item in observations
+        ]
+    )
+
     await publish_dimension_delta(
         session_id, dim_key, dim_name, dim_layer, is_revision,
         llm_response, llm_response,
@@ -479,10 +494,20 @@ async def analyze_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
     # 11. State update - accumulate into pending_reports, reducer handles merge
     result = {
         "messages": [AIMessage(content=llm_response, metadata={"dimension_key": dim_key})],
-        "completed_dimensions": {phase_key: [dim_key]},
         "pending_reports": [pending_report],
         "layer_char_counts": {dim_layer: len(llm_response)},
     }
+    if quality_report.get("ok", True):
+        result["completed_dimensions"] = {phase_key: [dim_key]}
+    else:
+        result["dimension_retry_counts"] = dimension_failure_attempt(state, dim_key)
+        result["dimension_failures"] = [{
+            "stage": f"L{dim_layer}",
+            "dimension": dim_key,
+            "code": "dimension_quality_failed",
+            "message": quality_report.get("feedback", ""),
+            "feedback": quality_report.get("feedback", ""),
+        }]
 
     # 立即写入 DB，使并行节点可通过 DB 回退路径获取依赖报告
     await save_report_immediate(store, pending_report)
@@ -540,7 +565,7 @@ async def _generate_summary(dim_key: str, dim_layer: int, content: str, rag_log=
     return await generate_summary(dim_key, dim_layer, content)
 
 
-def _build_prompt(cfg, state, rag_context, deps: str = "", same_layer_contexts: str = "", professional_data_section: str = "", explore_section: str = "", explore_brief_section: str = "") -> str:
+def _build_prompt(cfg, state, rag_context, deps: str = "", same_layer_contexts: str = "", professional_data_section: str = "", explore_section: str = "", explore_brief_section: str = "", quality_feedback: str = "") -> str:
     """组装 Prompt - 使用 prompts 模块模板
 
     Args:
@@ -594,6 +619,21 @@ def _build_prompt(cfg, state, rag_context, deps: str = "", same_layer_contexts: 
 3. 修改后的报告应能体现出与修改前的明确差异
 4. 保留原有报告格式和结构框架
 5. 不要添加"修订摘要"章节，直接在正文中修改相关内容"""
+
+    # Quality-retry instruction: the previous run failed spatial-anchor
+    # validation; re-prompt with the exact defect so the LLM repairs its
+    # output instead of repeating it.
+    if quality_feedback:
+        quality_instruction = f'''?????? - ??????
+?????????????????????
+
+"{quality_feedback}"
+
+???
+1. ???????? name?
+2. ???????? location ? relation ?????
+3. ????????????????"????"???'''
+        revision_instruction = (revision_instruction + "\n\n" + quality_instruction) if revision_instruction else quality_instruction
 
     if layer == 1:
         prompt = get_layer1_prompt(

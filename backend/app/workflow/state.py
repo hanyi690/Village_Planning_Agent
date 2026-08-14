@@ -256,6 +256,7 @@ class WorkflowState(TypedDict, total=False):
     revision_feedback: Annotated[str | None, _merge_control]
     fatal_error: Annotated[dict[str, Any] | None, _merge_fatal_error]
     provider_failures: Annotated[list[dict[str, Any]], _merge_failure_events]
+    dimension_failures: Annotated[list[dict[str, Any]], _merge_failure_events]
     dimension_retry_counts: Annotated[dict[str, int], _merge_retry]
     runtime: Annotated[dict[str, Any], _merge_runtime]
     repair_directives: Annotated[dict[str, Any], _merge_control]
