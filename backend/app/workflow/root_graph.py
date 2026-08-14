@@ -502,17 +502,11 @@ def _approve_layer(state: Dict[str, Any], paused_stage: str) -> str:
 
 
 def _approve_select(state: Dict[str, Any], paused_stage: str) -> str:
-    decisions = state.get("human_review_decisions") or {}
-    if (
-        paused_stage == "select"
-        and isinstance(decisions, dict)
-        and decisions.get("defer_unresolved_spatial_references") is True
-    ):
-        return "execute" if state.get("human_deferred_select_revision") else "human_review"
     # Approval is an explicit human override of the SELECT gate. The
     # decision has already been recorded in the checkpoint; do not
     # re-enter HUMAN solely because stale unresolved-target metadata
-    # survived the gate revision.
+    # survived the gate revision.  Unplaced targets are deferred to the
+    # deferral ledger / diagnostic path, never looped back to HUMAN.
     return "execute"
 
 
@@ -525,9 +519,11 @@ def _approve_ground(state: Dict[str, Any], paused_stage: str) -> str:
         and isinstance(decisions, dict)
         and decisions.get("defer_unresolved_spatial_references") is True
     ):
-        if root_gate_route(state, "ground") == "PASS":
-            return "select"
-        return "human_review"
+        # The operator explicitly deferred the unresolved spatial references.
+        # That IS the authoritative human decision; the GROUND gate still
+        # carries its original HUMAN route, so re-checking it here would loop
+        # the session back into HUMAN forever.  Forward to SELECT.
+        return "select"
     return END
 
 

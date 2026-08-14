@@ -59,3 +59,34 @@ def test_stage_forward_target_l3():
     from app.workflow.stages.support import STAGE_FORWARD_TARGET
 
     assert STAGE_FORWARD_TARGET["l3"] == "target_projection"
+
+
+
+def _gate_state(paused_stage, **extra):
+    state = _state(paused_stage=paused_stage, action="approve")
+    state["human_review_decisions"].update(
+        {
+            "acknowledge_unresolved_spatial_references": True,
+            "defer_unresolved_spatial_references": True,
+            "deferred_target_ids": ["ecological:claim:EG-005"],
+        }
+    )
+    state.update(extra)
+    return state
+
+
+def test_ground_approve_with_defer_forwards_to_select():
+    """Operator defer is the authoritative decision; the stale HUMAN gate
+    must not loop the session back into HUMAN forever."""
+    from app.workflow.root_graph import _approve_ground
+
+    state = _gate_state("ground")
+    assert _approve_ground(state, "ground") == "select"
+
+
+def test_select_approve_with_defer_forwards_to_execute():
+    from app.workflow.root_graph import _approve_select
+
+    state = _gate_state("select")
+    assert _approve_select(state, "select") == "execute"
+

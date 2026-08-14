@@ -230,7 +230,9 @@ def test_resume_approve_select(monkeypatch) -> None:
         "action": "approve",
         "defer_unresolved_spatial_references": True,
     }
-    assert _resume(state) == "human_review"
+    # Approval is the authoritative operator decision; unplaced targets are
+    # deferred to the deferral/diagnostic path, never looped back to HUMAN.
+    assert _resume(state) == "execute"
     state["human_deferred_select_revision"] = True
     assert _resume(state) == "execute"
 
@@ -256,7 +258,9 @@ def test_resume_approve_ground_defer(monkeypatch) -> None:
     }
     assert _resume(state) == "select"
     _patch_gate_route(monkeypatch, "EXPLORE")
-    assert _resume(state) == "human_review"
+    # Operator defer is authoritative; the stale gate route must not loop
+    # the session back into HUMAN.
+    assert _resume(state) == "select"
 
 
 def test_resume_approve_default_ends() -> None:
