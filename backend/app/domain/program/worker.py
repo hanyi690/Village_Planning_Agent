@@ -714,6 +714,22 @@ def _build_prompt(
 4. 保留原有报告格式和结构框架
 5. 不要添加"修订摘要"章节，直接在正文中修改相关内容"""
 
+    # Quality-retry instruction: the previous run exhausted semantic repair;
+    # re-prompt with the exact validator errors so the LLM avoids them from
+    # the start instead of repeating the bad output.
+    quality_feedback = str(state.get("quality_feedback") or "").strip()
+    if quality_feedback:
+        quality_instruction = (
+            "???????????????????? schema ????????"
+            "????????????\n"
+            f"\"{quality_feedback}\""
+        )
+        revision_instruction = (
+            revision_instruction + "\n\n" + quality_instruction
+            if revision_instruction
+            else quality_instruction
+        )
+
     return get_layer3_prompt(
         dimension_key=dim_key,
         project_name=project_name,

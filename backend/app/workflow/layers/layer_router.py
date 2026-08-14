@@ -132,8 +132,9 @@ def provider_resume_dispatch_node(state: Dict[str, Any]) -> Command:
         worker,
     )
     # Carry the quality feedback so a retried dimension is re-prompted with
-    # the exact defect (missing spatial anchors) instead of repeating the
-    # same bad output.
+    # the exact defect (missing spatial anchors / validator errors) instead
+    # of repeating the same bad output.
+    global_feedback = str(state.get("quality_feedback") or "")
     failures = {
         str(item.get("dimension") or item.get("dimension_key") or ""): item
         for item in (state.get("dimension_failures") or [])
@@ -148,10 +149,13 @@ def provider_resume_dispatch_node(state: Dict[str, Any]) -> Command:
             provider_resume_dimensions=[],
         )
         failure = failures.get(dimension)
+        feedback = ""
         if failure is not None:
             feedback = str(failure.get("feedback") or failure.get("message") or "")
-            if feedback:
-                payload["quality_feedback"] = feedback
+        if not feedback:
+            feedback = global_feedback
+        if feedback:
+            payload["quality_feedback"] = feedback
         sends.append(_send_worker(worker, payload))
     return Command(
         update={"provider_resume_dimensions": []},

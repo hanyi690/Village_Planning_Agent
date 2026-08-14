@@ -104,8 +104,17 @@ def test_l3_program_rework_approve_retries_only_failed_dimensions():
         "paused_stage": "l3",
         "human_review_decisions": {"action": "approve", "feedback": "ok"},
         "human_review_items": [
-            {"request_type": "program_rework", "context": {"dimension_key": "industry"}},
-            {"request_type": "program_rework", "context": {"dimension_key": "settlement_planning"}},
+            {
+                "request_type": "program_rework",
+                "context": {
+                    "dimension_key": "industry",
+                    "message": "ERROR[unsupported_area_unit] IND-008: area_range unit not supported",
+                },
+            },
+            {
+                "request_type": "program_rework",
+                "context": {"dimension_key": "settlement_planning", "message": "ERROR[invalid_intervention_action] JT-002"},
+            },
             {"request_type": "other", "context": {}},
         ],
         "provider_failures": [],
@@ -118,6 +127,8 @@ def test_l3_program_rework_approve_retries_only_failed_dimensions():
     result = asyncio.run(apply_human_review_decision(state))
     assert result["autonomous_decision"] == "retry_invalid_l3_dimensions"
     assert result["provider_resume_dimensions"] == ["industry", "settlement_planning"]
+    assert "IND-008" in result["quality_feedback"]
+    assert "JT-002" in result["quality_feedback"]
 
 
 def test_l3_program_rework_route_goes_to_provider_resume_dispatch():

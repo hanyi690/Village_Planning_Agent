@@ -1135,6 +1135,21 @@ async def apply_human_review_decision(state: Dict[str, Any]) -> Dict[str, Any]:
         ))
         if rework_dimensions:
             result["provider_resume_dimensions"] = rework_dimensions
+            # Carry the exact validator errors as corrective feedback so the
+            # retried dimension is re-prompted with them instead of repeating
+            # the same bad output (semantic repair exhausted on the first run).
+            feedback_parts = []
+            for item in items:
+                if not isinstance(item, dict) or str(item.get("request_type") or "") != "program_rework":
+                    continue
+                ctx = item.get("context") or {}
+                if isinstance(ctx, dict):
+                    for key in ("message", "detail"):
+                        value = str(ctx.get(key) or "").strip()
+                        if value:
+                            feedback_parts.append(value)
+            if feedback_parts:
+                result["quality_feedback"] = "?".join(dict.fromkeys(feedback_parts))[:2000]
 
     deferral_patch = {}
     deferred_target_ids: list[str] = []
