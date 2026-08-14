@@ -85,12 +85,24 @@ class SpatialFactorIndex:
             _features(getattr(workspace, "points", None), "hazard_points"),
             self.project,
         )
+        self.farmland = _metric_union(
+            _features(getattr(workspace, "polygons", None), "farmland_protection"),
+            self.project,
+        )
+        self.ecological = _metric_union(
+            _features(getattr(workspace, "polygons", None), "ecological_redline"),
+            self.project,
+        )
         if self.roads is None:
             self.diagnostics.append("ROAD_ACCESS_SOURCE_MISSING")
         if self.facilities is None:
             self.diagnostics.append("FACILITY_COVERAGE_SOURCE_MISSING")
         if self.hazards is None:
             self.diagnostics.append("HAZARD_POINT_SOURCE_MISSING")
+        if self.farmland is None:
+            self.diagnostics.append("FARMLAND_SOURCE_MISSING")
+        if self.ecological is None:
+            self.diagnostics.append("ECOLOGICAL_SOURCE_MISSING")
 
     def evaluate(self, parcel: Any) -> ParcelSpatialFactors:
         bsm = str(getattr(parcel, "bsm", "") or "")
@@ -131,6 +143,23 @@ class SpatialFactorIndex:
         if hazard_distance is not None and hazard_distance < self.policy.hazard_min_distance_m:
             exclusions.append("HAZARD_POINT_BUFFER")
             evidence_refs.append("bundle:hazard_points")
+
+        overlap_fraction_threshold = float(
+            getattr(self.policy, "overlap_fraction_threshold", 1e-6) or 1e-6
+        )
+        for code, polygon, source_ref in (
+            ("FARMLAND_PROTECTION_OVERLAP", self.farmland, "bundle:farmland_protection"),
+            ("ECOLOGICAL_REDLINE_OVERLAP", self.ecological, "bundle:ecological_redline"),
+        ):
+            if polygon is None:
+                continue
+            intersection = metric.intersection(polygon)
+            if intersection.is_empty or intersection.area <= 0:
+                continue
+            fraction = intersection.area / max(metric.area, 1e-9)
+            if fraction > overlap_fraction_threshold:
+                exclusions.append(code)
+                evidence_refs.append(source_ref)
 
         constraint_index = getattr(self.context, "constraint_index", None)
         if constraint_index is not None:

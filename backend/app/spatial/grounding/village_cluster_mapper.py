@@ -1,18 +1,21 @@
-"""Natural-village -> residential-cluster mapping for GROUND anchor resolution.
+"""Natural-village -> residential-cluster(s) mapping for L1/GROUND resolution.
 
-The fixture bundle carries no named village boundaries, so named natural
-villages (园寨/田坑/...) cannot be resolved through the KG gazetteer.  This
-module derives *real* residential clusters from the bundle's 宅基地 (DLBM 1340)
-parcels and maps village names onto those clusters.  Geometry always comes from
-the bundle; the mapping itself is flagged low-confidence and may be routed to
-the Stage 2.6 human-confirmation queue when the planner is strict.
+A natural village is a first-class spatial anchor: it is NOT one-to-one with a
+residential cluster.  One village may span several 宅基地 clusters.  This module
+derives *real* residential clusters from the bundle's 宅基地 (DLBM 1340) parcels
+and lets the flash LLM decide which cluster(s) belong to each report-named
+natural village (many-to-one), using only report evidence + cluster geometry.
+
+Evidence-first / fail-closed:
+- Geometry and BSMs always come from the bundle clusters, never from the LLM.
+- A village is assigned only when the report provides a verifiable evidence
+  snippet (verbatim substring); villages without evidence stay unresolved.
+- The LLM only produces name -> cluster-index assignment text; no coordinates.
 
 Determinism & resume:
 - The cluster derivation is fully deterministic.
-- The village->cluster mapping uses the flash LLM only as a self-service
-  enhancer (cached by sha256 of the report excerpt + village order).  On any
-  failure it falls back to a deterministic size-ordered assignment, so GROUND
-  never blocks on the model.
+- The mapping is cached by sha256(report excerpt + village order) and can be
+  replayed on resume; llm=None or no report evidence yields an empty mapping.
 """
 from __future__ import annotations
 
@@ -38,21 +41,27 @@ class VillageCluster:
     bsms: List[str] = field(default_factory=list)
     parcel_count: int = 0
     area_ha: float = 0.0
+    features: Dict[str, Any] = field(default_factory=dict)
 
 
-def build_village_clusters(parcels: List[Any]) -> List[VillageCluster]:
-    """Cluster 宅基地 parcels into residential settlements (deterministic)."""
+def build_landuse_bodies(
+    parcels: List[Any],
+    markers: tuple,
+    distance_deg: float = _CLUSTER_DISTANCE_DEG,
+) -> List[VillageCluster]:
+    """Cluster landuse parcels whose DLBM/DLMC/name carries any marker into
+    deterministic spatial bodies (e.g. 宅基地 -> residential settlements,
+    水域/河流 -> water bodies).  Geometry always comes from the parcels.
+    """
     from app.spatial.grounding.grounding import build_parcel_centroid_cache
 
     cache = build_parcel_centroid_cache(parcels)
     selected = []
     for parcel in parcels:
-        name = str(getattr(parcel, "name", "") or "")
         code = str(getattr(parcel, "dlbm", "") or "") or str(getattr(parcel, "dlmc", "") or "")
-        is_residential = code in _RESIDENTIAL_DLMC or any(
-            token in name for token in ("宅基地", "村庄建设用地", "农村居民点")
-        )
-        if not is_residential:
+        name = str(getattr(parcel, "name", "") or "")
+        text = f"{code} {name}"
+        if not any(marker in text for marker in markers):
             continue
         bsm = str(getattr(parcel, "bsm", "") or "")
         centroid = cache.get(bsm) or cache.get(str(getattr(parcel, "bsm", None)))
@@ -64,20 +73,20 @@ def build_village_clusters(parcels: List[Any]) -> List[VillageCluster]:
         return []
 
     clusters: List[VillageCluster] = []
+    member_pts: List[List[tuple]] = []
     for bsm, centroid, area in selected:
         placed = False
         for cluster in clusters:
-            if math.hypot(centroid[0] - cluster.centroid[0], centroid[1] - cluster.centroid[1]) < _CLUSTER_DISTANCE_DEG:
+            if math.hypot(centroid[0] - cluster.centroid[0], centroid[1] - cluster.centroid[1]) < distance_deg:
                 cluster.bsms.append(bsm)
                 cluster.parcel_count += 1
                 cluster.area_ha += area
-                cx = sum(p[0] for p in [centroid] + [(c[0], c[1]) for c in []])  # placeholder
-                # recompute centroid incrementally
                 n = cluster.parcel_count
                 cluster.centroid = (
                     (cluster.centroid[0] * (n - 1) + centroid[0]) / n,
                     (cluster.centroid[1] * (n - 1) + centroid[1]) / n,
                 )
+                member_pts[clusters.index(cluster)].append(centroid)
                 placed = True
                 break
         if not placed:
@@ -88,21 +97,81 @@ def build_village_clusters(parcels: List[Any]) -> List[VillageCluster]:
                 parcel_count=1,
                 area_ha=area,
             ))
+            member_pts.append([centroid])
     # Stable ordering: largest settlement first, then west->east.
     clusters.sort(key=lambda c: (-c.parcel_count, c.centroid[0]))
     for i, cluster in enumerate(clusters):
         cluster.index = i
+    _attach_body_features(clusters, member_pts)
     return clusters
+
+
+def _relative_position(dx: float, dy: float) -> str:
+    """Map a vector from the village centre to a compass-ish label."""
+    ns = "北" if dy > 0 else ("南" if dy < 0 else "")
+    ew = "东" if dx > 0 else ("西" if dx < 0 else "")
+    if ns and ew:
+        # dominant axis decides 东北/东南/西北/西南 vs plain 北/东
+        return f"{ew}{ns}" if abs(dx) > abs(dy) else f"{ns}{ew}"
+    return f"{ns}{ew}" or "中部"
+
+
+def _attach_body_features(
+    clusters: List[VillageCluster],
+    member_pts: List[List[tuple]],
+) -> None:
+    """Give every body candidate semantic features the LLM can match report
+    clues to (GER-LLM featurizer): position relative to the village centre,
+    span (km) and shape (elongated vs compact)."""
+    pts = [p for group in member_pts for p in group]
+    if not pts:
+        return
+    cx = sum(p[0] for p in pts) / len(pts)
+    cy = sum(p[1] for p in pts) / len(pts)
+    for cluster, group in zip(clusters, member_pts):
+        if not group:
+            continue
+        rel = _relative_position(cluster.centroid[0] - cx, cluster.centroid[1] - cy)
+        xs = [p[0] for p in group]
+        ys = [p[1] for p in group]
+        dx = max(xs) - min(xs)
+        dy = max(ys) - min(ys)
+        span_km = max(math.hypot(dx * 102.0, dy * 111.0), 0.05)
+        shape = "长条" if (max(dx, dy) > 0 and max(dx, dy) > 3 * min(dx, dy) + 0.0005) else "面状"
+        cluster.features["方位"] = rel
+        cluster.features["跨度km"] = round(span_km, 2)
+        cluster.features["形态"] = shape
+
+
+def build_village_clusters(parcels: List[Any]) -> List[VillageCluster]:
+    """Cluster 宅基地 parcels into residential settlements (deterministic)."""
+    return build_landuse_bodies(
+        parcels,
+        (*_RESIDENTIAL_DLMC, "宅基地", "村庄建设用地", "农村居民点"),
+    )
 
 
 _PROMPT_TEMPLATE = """你是村庄规划 GIS 证据编译器。待核对的聚落名称：{villages}。
 该村有 {m} 个宅基地聚落（编号 0..{max_index}），每个聚落有质心坐标与规模：
 {clusters}
 
+一个自然村可能由多个聚落组成（多对一），同一个聚落只能属于一个自然村。
 只允许根据报告摘录中明确出现的名称、方位、坐标或可核对空间关系建立映射。
 禁止按名称顺序、聚落规模顺序、常识或猜测分配。证据不足的名称必须省略。
 
-只输出 JSON：{{"名称": {{"cluster_index": 编号, "evidence": "报告原文短句"}}, ...}}。
+只输出 JSON：{{"名称": {{"cluster_indexes": [编号, ...], "evidence": "报告原文短句"}}, ...}}。
+evidence 必须是报告摘录中可以逐字找到的短句；不要输出其它文字。"""
+
+
+_WATER_PROMPT_TEMPLATE = """你是村庄规划 GIS 证据编译器。待核对的水体名称：{villages}。
+该村有 {m} 个由水域/河流地块聚合而成的水体（编号 0..{max_index}），每个水体有质心坐标与规模：
+{clusters}
+
+一个水体可能由多个地块组成（多对一），同一组地块只能属于一个水体。
+只允许根据报告摘录中明确出现的名称、方位、流向或可核对空间关系建立映射。
+禁止按名称顺序、规模顺序、常识或猜测分配。证据不足的名称必须省略。
+
+只输出 JSON：{{"名称": {{"cluster_indexes": [编号, ...], "evidence": "报告原文短句"}}, ...}}。
 evidence 必须是报告摘录中可以逐字找到的短句；不要输出其它文字。"""
 
 
@@ -112,21 +181,26 @@ def _cache_path(run_root: Optional[Path]) -> Optional[Path]:
     return (run_root / "village-cluster-map.json").resolve()
 
 
-async def map_villages(
-    clusters: List[VillageCluster],
-    village_names: List[str],
+async def _map_bodies(
+    bodies: List[VillageCluster],
+    names: List[str],
+    *,
+    prompt_template: str,
+    cache_key_prefix: str,
+    prompt_kwargs: Optional[Dict[str, Any]] = None,
+    require_evidence: bool = True,
     report_text: str = "",
     cache: Optional[Path] = None,
     llm: Any = None,
     source_artifact_ref: str = "",
     source_artifact_digest: str = "",
 ) -> Dict[str, Dict[str, Any]]:
-    """Map village names to clusters (flash-LLM enhanced, cached, fallback safe)."""
-    if not clusters or not village_names:
+    """Core flash-LLM name -> body assignment (evidence-constrained, cached)."""
+    if not bodies or not names:
         return {}
     cache_key = hashlib.sha256(
         (
-            f"v3|{report_text[:4000]}|{','.join(village_names)}|"
+            f"{cache_key_prefix}|{report_text[:4000]}|{','.join(names)}|"
             f"{source_artifact_ref}|{source_artifact_digest}"
         ).encode("utf-8")
     ).hexdigest()
@@ -143,40 +217,55 @@ async def map_villages(
         try:
             cluster_lines = "\n".join(
                 f"{c.index}: 质心({c.centroid[0]:.5f},{c.centroid[1]:.5f}) 地块数{c.parcel_count} 面积{c.area_ha:.2f}ha"
-                for c in clusters
+                for c in bodies
             )
-            prompt = _PROMPT_TEMPLATE.format(
-                villages="、".join(village_names),
-                m=len(clusters),
-                max_index=len(clusters) - 1,
+            prompt = prompt_template.format(
+                villages="、".join(names),
+                m=len(bodies),
+                max_index=len(bodies) - 1,
                 clusters=cluster_lines,
+                **(prompt_kwargs or {}),
             )
             if report_text:
-                prompt += f"\n\n报告摘录（用于方位判断）:\n{report_text[:2500]}\n"
+                prompt += (
+                    f"\n\n报告摘录（用于方位判断，只含与待分配名称相关的段落）:\n"
+                    f"{_evidence_excerpt(report_text, names)}\n"
+                )
             import asyncio
 
-            if asyncio.iscoroutinefunction(llm.ainvoke):
-                response = await llm.ainvoke(prompt)
-            else:
-                response = await asyncio.to_thread(llm.invoke, prompt)
-            raw_text = ""
-            if hasattr(response, "content"):
-                content = response.content
-                raw_text = "".join(content) if isinstance(content, list) else str(content or "")
-            else:
-                raw_text = str(response or "")
-            payload = _parse_mapping_json(
-                raw_text,
-                village_names,
-                clusters,
-                report_text=report_text,
-                source_artifact_ref=source_artifact_ref,
-                source_artifact_digest=source_artifact_digest,
+            # Primary: structured output (constrains the real model to emit the
+            # mapping JSON directly instead of burning tokens on <think>
+            # reasoning).  Falls back to the text protocol when unavailable.
+            payload = await _structured_mapping(
+                llm,
+                prompt,
+                report_text,
+                require_evidence=require_evidence,
             )
+            if not payload:
+                if asyncio.iscoroutinefunction(getattr(llm, "ainvoke", None)):
+                    response = await llm.ainvoke(prompt)
+                else:
+                    response = await asyncio.to_thread(llm.invoke, prompt)
+                raw_text = ""
+                if hasattr(response, "content"):
+                    content = response.content
+                    raw_text = "".join(content) if isinstance(content, list) else str(content or "")
+                else:
+                    raw_text = str(response or "")
+                payload = _parse_mapping_json(
+                    raw_text,
+                    names,
+                    bodies,
+                    report_text=report_text,
+                    require_evidence=require_evidence,
+                    source_artifact_ref=source_artifact_ref,
+                    source_artifact_digest=source_artifact_digest,
+                )
             if payload:
-                mapping = payload
+                mapping = _resolve_cluster_conflicts(payload, bodies)
         except Exception as exc:  # noqa: BLE001 - fallback is always safe
-            logger.warning("[village-cluster] flash mapping failed: %s", exc)
+            logger.warning("[landuse-bodies] flash mapping failed: %s", exc)
 
     if cache is not None:
         try:
@@ -188,8 +277,210 @@ async def map_villages(
             )
             tmp.replace(cache)
         except Exception as exc:  # noqa: BLE001
-            logger.warning("[village-cluster] cache flush failed: %s", exc)
+            logger.warning("[landuse-bodies] cache flush failed: %s", exc)
     return mapping
+
+
+async def assign_names(
+    candidates: List[VillageCluster],
+    names: List[str],
+    *,
+    prompt_template: str,
+    cache_key_prefix: str,
+    prompt_kwargs: Optional[Dict[str, Any]] = None,
+    require_evidence: bool = True,
+    report_text: str = "",
+    cache: Optional[Path] = None,
+    llm: Any = None,
+    source_artifact_ref: str = "",
+    source_artifact_digest: str = "",
+) -> Dict[str, Dict[str, Any]]:
+    """Public generic entry: flash-LLM name -> candidate assignment for any
+    role (villages / water bodies / roads / facilities / landmarks).  The LLM
+    only decides with verbatim report evidence; geometry stays in the
+    candidates.  ``prompt_template`` must format {villages}/{m}/{max_index}/
+    {clusters}."""
+    return await _map_bodies(
+        candidates,
+        names,
+        prompt_template=prompt_template,
+        cache_key_prefix=cache_key_prefix,
+        prompt_kwargs=prompt_kwargs,
+        require_evidence=require_evidence,
+        report_text=report_text,
+        cache=cache,
+        llm=llm,
+        source_artifact_ref=source_artifact_ref,
+        source_artifact_digest=source_artifact_digest,
+    )
+
+
+async def map_villages(
+    clusters: List[VillageCluster],
+    village_names: List[str],
+    report_text: str = "",
+    cache: Optional[Path] = None,
+    llm: Any = None,
+    source_artifact_ref: str = "",
+    source_artifact_digest: str = "",
+) -> Dict[str, Dict[str, Any]]:
+    """Map village names to clusters (flash-LLM enhanced, cached, fallback safe)."""
+    return await _map_bodies(
+        clusters,
+        village_names,
+        prompt_template=_PROMPT_TEMPLATE,
+        cache_key_prefix="v3",
+        report_text=report_text,
+        cache=cache,
+        llm=llm,
+        source_artifact_ref=source_artifact_ref,
+        source_artifact_digest=source_artifact_digest,
+    )
+
+
+async def map_water_bodies(
+    bodies: List[VillageCluster],
+    water_names: List[str],
+    report_text: str = "",
+    cache: Optional[Path] = None,
+    llm: Any = None,
+    source_artifact_ref: str = "",
+    source_artifact_digest: str = "",
+) -> Dict[str, Dict[str, Any]]:
+    """Map report water-body names to landuse-derived water bodies."""
+    return await _map_bodies(
+        bodies,
+        water_names,
+        prompt_template=_WATER_PROMPT_TEMPLATE,
+        cache_key_prefix="water-v1",
+        report_text=report_text,
+        cache=cache,
+        llm=llm,
+        source_artifact_ref=source_artifact_ref,
+        source_artifact_digest=source_artifact_digest,
+    )
+
+
+from pydantic import BaseModel as _BaseModel, Field as _Field
+
+
+class _GMappingEntry(_BaseModel):
+    name: str = ""
+    candidate_indexes: list = _Field(default_factory=list)
+    evidence: str = ""
+
+
+class _GMappingSet(_BaseModel):
+    entries: list[_GMappingEntry] = _Field(default_factory=list)
+
+
+async def _structured_mapping(
+    model: Any,
+    prompt: str,
+    report_text: str,
+    *,
+    require_evidence: bool = True,
+) -> Optional[Dict[str, Dict[str, Any]]]:
+    """Structured-output mapping {name -> {candidate_indexes, evidence}}.
+
+    Returns None when the provider cannot do structured output or produced no
+    usable entries, so the caller falls back to the text protocol.
+    """
+    try:
+        structured = model.with_structured_output(_GMappingSet, method="function_calling")
+    except Exception:
+        return None
+    try:
+        import asyncio
+
+        if asyncio.iscoroutinefunction(getattr(structured, "ainvoke", None)):
+            response = await structured.ainvoke(prompt)
+        else:
+            response = await asyncio.to_thread(structured.invoke, prompt)
+    except Exception:
+        return None
+    entries = getattr(response, "entries", None)
+    if entries is None and isinstance(response, dict):
+        entries = response.get("entries")
+    if not entries:
+        return None
+    result: Dict[str, Dict[str, Any]] = {}
+    for e in entries:
+        name = str(getattr(e, "name", "") or "").strip()
+        evidence = str(getattr(e, "evidence", "") or "").strip()
+        if not name:
+            continue
+        if require_evidence and not _evidence_in_report(evidence, report_text):
+            continue
+        try:
+            idx = [int(i) for i in (getattr(e, "candidate_indexes", None) or [])]
+        except (TypeError, ValueError):
+            idx = []
+        if not idx:
+            continue
+        # Canonical mapping key is ``cluster_indexes`` (the text parser and the
+        # conflict resolver/aggregator both read it).
+        result[name] = {"cluster_indexes": idx, "evidence": evidence}
+    return result or None
+
+
+def _aggregate_clusters(member_clusters: List[VillageCluster]) -> Dict[str, Any]:
+    """Aggregate member clusters into a village-level extent (many-to-one).
+
+    BSMs are the deduplicated union; centroid is parcel-count-weighted.
+    Returns keys ``cluster_indexes`` / ``bsms`` / ``centroid``.
+    """
+    member_clusters = sorted(member_clusters, key=lambda c: c.index)
+    indexes = [c.index for c in member_clusters]
+    bsms = list(dict.fromkeys(b for c in member_clusters for b in c.bsms))
+    weights = [max(int(c.parcel_count or 0), 1) for c in member_clusters]
+    total = sum(weights)
+    centroid = (
+        sum(c.centroid[0] * w for c, w in zip(member_clusters, weights)) / total,
+        sum(c.centroid[1] * w for c, w in zip(member_clusters, weights)) / total,
+    )
+    return {
+        "cluster_indexes": indexes,
+        "bsms": bsms,
+        "centroid": [round(x, 6) for x in centroid],
+    }
+
+
+_EVIDENCE_STRIP = " \t\n\r，。、；：""（）()《》【】「」『』"
+
+
+def _evidence_excerpt(report_text: str, names: List[str], max_chars: int = 3000) -> str:
+    """Targeted report excerpt: keep only the segments that mention any of the
+    names being assigned.  A short focused excerpt lets the real model map
+    names to candidates instead of drowning in a 12k-char dump."""
+    import re
+
+    wanted = [str(n) for n in (names or []) if n]
+    if not wanted:
+        return (report_text or "")[:max_chars]
+    parts: List[str] = []
+    for seg in re.split(r"(?<=[。；\n])", report_text or ""):
+        if any(w in seg for w in wanted):
+            parts.append(seg)
+    out = "".join(parts).strip()
+    return (out or report_text or "")[:max_chars]
+
+
+def _evidence_in_report(evidence: str, report_text: str) -> bool:
+    """Evidence must literally appear in the report.  The real flash LLM often
+    re-quotes a span with surrounding punctuation/whitespace, so compare on a
+    normalized form (whitespace + common punctuation stripped) instead of a
+    brittle verbatim substring - fabrication is still impossible because the
+    normalized evidence must be a substring of the normalized report."""
+    ev = (evidence or "").strip()
+    if not ev:
+        return False
+    if ev in (report_text or ""):
+        return True
+    trans = str.maketrans("", "", _EVIDENCE_STRIP)
+    ev_norm = ev.translate(trans)
+    rep_norm = (report_text or "").translate(trans)
+    return bool(ev_norm) and ev_norm in rep_norm
 
 
 def _parse_mapping_json(
@@ -198,12 +489,15 @@ def _parse_mapping_json(
     clusters: List[VillageCluster],
     *,
     report_text: str,
+    require_evidence: bool = True,
     source_artifact_ref: str = "",
     source_artifact_digest: str = "",
 ) -> Dict[str, Dict[str, Any]]:
     import re
 
-    match = re.search(r"\{.*\}", raw or "", re.DOTALL)
+    text = re.sub(r"<think>.*?</think>", "", raw or "", flags=re.I | re.S)
+    text = re.sub(r"<think>.*$", "", text, flags=re.I | re.S)
+    match = re.search(r"\{.*\}", text, re.DOTALL)
     if not match:
         return {}
     try:
@@ -217,33 +511,271 @@ def _parse_mapping_json(
             item = data.get(f"{name}村")
         if not isinstance(item, dict):
             continue
-        index = item.get("cluster_index")
         evidence = str(item.get("evidence") or "").strip()
-        if not evidence or evidence not in report_text:
+        if require_evidence and not _evidence_in_report(evidence, report_text):
             continue
-        try:
-            index = int(index)
-        except (TypeError, ValueError):
+        indexes = item.get("cluster_indexes")
+        if indexes is None:
+            indexes = item.get("candidate_indexes")
+        if isinstance(indexes, list):
+            parsed: List[int] = []
+            for idx in indexes:
+                try:
+                    parsed.append(int(idx))
+                except (TypeError, ValueError):
+                    continue
+        else:
+            # Legacy single-candidate answer.
+            try:
+                parsed = [int(item.get("cluster_index") or item.get("candidate_index"))]
+            except (TypeError, ValueError):
+                parsed = []
+        member_clusters = [c for c in clusters if c.index in parsed]
+        if not member_clusters:
             continue
-        if 0 <= index < len(clusters):
-            cluster = clusters[index]
-            result[name] = {
-                "centroid": list(cluster.centroid),
-                "bsms": list(cluster.bsms),
-                "cluster_index": index,
-                "confidence": 0.7,
-                "method": "flash_llm_report_evidence",
-                "evidence": evidence,
-                "provenance_refs": [
-                    f"report-evidence:{hashlib.sha256(evidence.encode('utf-8')).hexdigest()}",
-                    *([f"bundle:{source_artifact_digest}"] if source_artifact_digest else []),
-                ],
-                "source_artifact_ref": source_artifact_ref,
-                "source_artifact_digest": source_artifact_digest,
-                "source_feature_id": f"residential-cluster:{index}",
-                "coordinate_crs": "EPSG:4326",
-            }
+        aggregate = _aggregate_clusters(member_clusters)
+        indexes = aggregate["cluster_indexes"]
+        is_multi = len(indexes) > 1 or isinstance(item.get("cluster_indexes"), list)
+        entry = {
+            **aggregate,
+            "confidence": 0.7,
+            "method": "flash_llm_report_evidence_multi" if is_multi else "flash_llm_report_evidence",
+            "evidence": evidence,
+            "provenance_refs": [
+                f"report-evidence:{hashlib.sha256(evidence.encode('utf-8')).hexdigest()}",
+                *([f"bundle:{source_artifact_digest}"] if source_artifact_digest else []),
+            ],
+            "source_artifact_ref": source_artifact_ref,
+            "source_artifact_digest": source_artifact_digest,
+            "source_feature_id": ",".join(f"residential-cluster:{i}" for i in indexes),
+            "coordinate_crs": "EPSG:4326",
+        }
+        if len(indexes) == 1:
+            entry["cluster_index"] = indexes[0]
+        result[name] = entry
     return result
 
 
-__all__ = ["VillageCluster", "build_village_clusters", "map_villages"]
+def _resolve_cluster_conflicts(
+    mapping: Dict[str, Dict[str, Any]],
+    clusters: List[VillageCluster],
+) -> Dict[str, Dict[str, Any]]:
+    """GER-LLM-style global consistency: one cluster belongs to at most one
+    village.  When the LLM assigns the same cluster to several villages, keep
+    the village with the longest evidence snippet (then earliest in input
+    order); the losing village keeps only its non-conflicting clusters, and is
+    dropped when it has none left.  Deterministic; never fabricates geometry.
+    """
+    if not mapping or not clusters:
+        return mapping
+    order = sorted(
+        mapping,
+        key=lambda n: -len(str(mapping[n].get("evidence") or "") or ""),
+    )
+    cluster_owner: Dict[int, str] = {}
+    for name in order:
+        for idx in mapping[name].get("cluster_indexes", []) or []:
+            cluster_owner.setdefault(int(idx), name)
+    out: Dict[str, Dict[str, Any]] = {}
+    for name, item in mapping.items():
+        kept = [
+            int(idx)
+            for idx in (item.get("cluster_indexes", []) or [])
+            if cluster_owner.get(int(idx)) == name
+        ]
+        if not kept:
+            logger.info(
+                "[village-cluster] %s lost all clusters to conflict; dropped",
+                name,
+            )
+            continue
+        member_clusters = [c for c in clusters if c.index in kept]
+        if not member_clusters:
+            continue
+        aggregate = _aggregate_clusters(member_clusters)
+        new_item = dict(item)
+        new_item.update(aggregate)
+        new_item["source_feature_id"] = ",".join(
+            f"residential-cluster:{i}" for i in aggregate["cluster_indexes"]
+        )
+        if len(aggregate["cluster_indexes"]) == 1:
+            new_item["cluster_index"] = aggregate["cluster_indexes"][0]
+        else:
+            new_item.pop("cluster_index", None)
+        out[name] = new_item
+    return out
+
+
+def village_gazetteer_entries(
+    mapping: Dict[str, Dict[str, Any]],
+    clusters: List[VillageCluster],
+    *,
+    canonical_suffix: str = "村",
+    uri_prefix: str = "pln:natural_village:",
+    source: str = "village_cluster_map",
+    kind_label: str = "自然村",
+    member_label: str = "宅基地聚落",
+) -> List["GazetteerEntry"]:
+    """Turn a many-to-one name->bodies mapping into aggregated gazetteer
+    entries (natural villages, water bodies, ...).
+
+    Each named body owns the union of its member clusters' BSMs and a
+    parcel-count-weighted centroid.  Geometry always comes from the bundle
+    clusters; the LLM only decided the assignment.  ``entity_uri`` is a
+    synthetic anchor because one named place spans several clusters.
+    """
+    from app.infrastructure.kg.gazetteer import GazetteerEntry
+
+    entries: List[GazetteerEntry] = []
+    for name in sorted(mapping):
+        item = mapping[name]
+        bsms = list(dict.fromkeys(item.get("bsms") or []))
+        if not bsms:
+            continue
+        centroid = list(item.get("centroid") or [])
+        indexes = list(item.get("cluster_indexes") or [])
+        raw = str(name).strip()
+        canonical = f"{raw}{canonical_suffix}" if canonical_suffix and not raw.endswith(canonical_suffix) else raw
+        aliases = [raw]
+        if raw.endswith(canonical_suffix) and len(raw) > len(canonical_suffix):
+            aliases.append(raw[: -len(canonical_suffix)])
+        entries.append(GazetteerEntry(
+            name=canonical,
+            aliases=aliases,
+            entity_uri=f"{uri_prefix}{raw}",
+            bsms=bsms,
+            centroid=centroid or None,
+            source=source,
+            confidence=float(item.get("confidence", 0.6) or 0.6),
+            description=(
+                f"{kind_label}「{raw}」：依据报告证据「{item.get('evidence', '')}」"
+                f"映射 {len(indexes)} 个{member_label}（{indexes}），BSM 并集 {len(bsms)} 个"
+            ),
+        ))
+    return entries
+
+
+def water_gazetteer_entries(
+    mapping: Dict[str, Dict[str, Any]],
+    bodies: List[VillageCluster],
+) -> List["GazetteerEntry"]:
+    """Aggregated gazetteer entries for LLM-named water bodies."""
+    return village_gazetteer_entries(
+        mapping,
+        bodies,
+        canonical_suffix="",
+        uri_prefix="pln:water_body:",
+        source="water_cluster_map",
+        kind_label="水体",
+        member_label="水域地块",
+    )
+
+
+async def assign_villages_to_clusters(
+    gazetteer: Any,
+    parcels: List[Any],
+    village_names: List[str],
+    report_text: str,
+    *,
+    llm: Any = None,
+    cache: Optional[Path] = None,
+    source_artifact_ref: str = "",
+    source_artifact_digest: str = "",
+) -> List["GazetteerEntry"]:
+    """LLM-decided many-to-one village assignment -> aggregated gazetteer entries.
+
+    Only villages that are still absent from ``gazetteer`` are considered.
+    Clusters are derived deterministically from the 宅基地 parcels.  A village
+    is assigned only when the report carries verifiable evidence; the rest stay
+    unresolved (fail-closed).  Callers upsert the returned entries.
+    """
+    clusters = build_village_clusters(parcels)
+    if not clusters or not village_names:
+        return []
+    names: List[str] = []
+    for v in village_names:
+        base = str(v or "").strip()
+        if base.endswith("自然村"):
+            base = base[:-3]
+        elif base.endswith("村"):
+            base = base[:-1]
+        base = base.strip()
+        if not base:
+            continue
+        if gazetteer is not None and gazetteer.resolve(f"{base}村", fuzzy=False) is not None:
+            continue
+        names.append(base)
+    names = list(dict.fromkeys(names))
+    if not names:
+        return []
+    mapping = await map_villages(
+        clusters,
+        names,
+        report_text=report_text,
+        cache=cache,
+        llm=llm,
+        source_artifact_ref=source_artifact_ref,
+        source_artifact_digest=source_artifact_digest,
+    )
+    return village_gazetteer_entries(mapping, clusters)
+
+
+_WATER_MARKERS = ("水域", "河流", "水库", "坑塘", "沟渠", "水利设施")
+
+
+async def assign_water_bodies(
+    gazetteer: Any,
+    parcels: List[Any],
+    water_names: List[str],
+    report_text: str,
+    *,
+    llm: Any = None,
+    cache: Optional[Path] = None,
+    source_artifact_ref: str = "",
+    source_artifact_digest: str = "",
+) -> List["GazetteerEntry"]:
+    """LLM-decided many-to-one water-name -> landuse water-body assignment.
+
+    Water bodies are derived deterministically from the landuse parcels whose
+    DLBM/DLMC marks them as water (水域/河流/水库/坑塘/沟渠/水利设施).  The LLM
+    only assigns names to bodies when the report carries verifiable evidence;
+    geometry and BSMs always come from the parcels.
+    """
+    bodies = build_landuse_bodies(parcels, _WATER_MARKERS)
+    if not bodies or not water_names:
+        return []
+    names: List[str] = []
+    for n in water_names:
+        base = str(n or "").strip()
+        if not base:
+            continue
+        if gazetteer is not None and gazetteer.resolve(base, fuzzy=False) is not None:
+            continue
+        names.append(base)
+    names = list(dict.fromkeys(names))
+    if not names:
+        return []
+    mapping = await map_water_bodies(
+        bodies,
+        names,
+        report_text=report_text,
+        cache=cache,
+        llm=llm,
+        source_artifact_ref=source_artifact_ref,
+        source_artifact_digest=source_artifact_digest,
+    )
+    return water_gazetteer_entries(mapping, bodies)
+
+
+__all__ = [
+    "VillageCluster",
+    "build_landuse_bodies",
+    "build_village_clusters",
+    "map_villages",
+    "map_water_bodies",
+    "village_gazetteer_entries",
+    "water_gazetteer_entries",
+    "assign_villages_to_clusters",
+    "assign_water_bodies",
+    "assign_names",
+]

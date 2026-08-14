@@ -53,7 +53,7 @@ flowchart TD
 
 EXPLORE 是横向能力，不是固定的“L3 后桥接节点”。L1、L2、L3、GROUND 和 VALIDATE 都可以提交
 `ExplorationRequest`。EXPLORE 的检索范围覆盖整个 session：`BaseFacts`、`DerivedRelations`、
-VillageBundle、各层 AnalysisReport、`【INSTRUCTION】`、typed artifacts、既有 EvidenceBundle、
+VillageBundle、各层 AnalysisReport（报告正文 + observations 结构化 JSON）、typed artifacts、既有 EvidenceBundle、
 用户修订记录和允许的外部来源。KG 只是其中一个来源，不是 EXPLORE 的全部输入。
 
 L1/L2/L3 都可以消费空间认知，但不直接持有 KG 实例或维护维度专属 KG 查询；它们按
@@ -66,29 +66,30 @@ Bootstrap 可以在 L1 前准备 KG、Bundle 和 artifact 的 evidence index，�
 
 ## 2. 三类权威产物
 
-| 产物                        | 生产者                 | 消费者                        | 语义                                                    |
-| --------------------------- | ---------------------- | ----------------------------- | ------------------------------------------------------- |
-| `L1Snapshot`              | L1 子图                | L2、L3、Explore               | 已核验的现状事实、约束、问题和证据缺口                  |
-| `L2Strategy`              | L2 子图                | L3、Select、Explore           | 目标、定位、策略和策略冲突                              |
-| `PlanningProgram`         | L3 子图                | TARGET_PROJECTION、L2、Explore | 项目、设施、道路、保护修复等规划干预及其依赖            |
-| `IntentCompilationResult` | TARGET_PROJECTION      | Ground、Select、Execute       | 从 PlanningProgram 确定性投影得到的类型化目标和空间引用 |
-| `GroundingResult`         | Ground 子图            | Select                        | 空间引用对应的实体、候选及查询证据                      |
-| `SiteSelectionDecision`   | Select 子图            | Execute                       | 经过硬约束、评分和冲突分配后的最终选址决定              |
-| `PlannedState`            | Execute 子图           | Validate、Reconcile、Delivery | 实际生成的规划图层和派生关系                            |
+| 产物                        | 生产者            | 消费者                         | 语义                                                    |
+| --------------------------- | ----------------- | ------------------------------ | ------------------------------------------------------- |
+| `L1Snapshot`              | L1 子图           | L2、L3、Explore                | 已核验的现状事实、约束、问题和证据缺口                  |
+| `L2Strategy`              | L2 子图           | L3、Select、Explore            | 目标、定位、策略和策略冲突                              |
+| `PlanningProgram`         | L3 子图           | TARGET_PROJECTION、L2、Explore | 项目、设施、道路、保护修复等规划干预及其依赖            |
+| `IntentCompilationResult` | TARGET_PROJECTION | Ground、Select、Execute        | 从 PlanningProgram 确定性投影得到的类型化目标和空间引用 |
+| `GroundingResult`         | Ground 子图       | Select                         | 空间引用对应的实体、候选及查询证据                      |
+| `SiteSelectionDecision`   | Select 子图       | Execute                        | 经过硬约束、评分和冲突分配后的最终选址决定              |
+| `PlannedState`            | Execute 子图      | Validate、Reconcile、Delivery  | 实际生成的规划图层和派生关系                            |
 
 Markdown 报告、SSE 事件和 UI 展示都是这些产物的视图，不是新的事实源。
 
+
 ## 3. Agent 与确定性子图边界
 
-| 能力                   | 目标形态                                  | 允许做什么                                                                             | 不允许做什么                       |
-| ---------------------- | ----------------------------------------- | -------------------------------------------------------------------------------------- | ---------------------------------- |
-| EXPLORE                | session evidence service / 工具调用 Agent | 按阶段和维度检索 KG、Bundle、报告、typed artifacts、RAG 和外部资料，整理证据与空间认知 | 生成候选 BSM、修改意图、选最终位置 |
-| L1/L2/L3 分析          | 专业分析 Agent                            | 解释事实、推导策略、生成规划文本草案                                                   | 绕过 Gate 直接写空间成果           |
-| TARGET_PROJECTION       | 确定性领域投影节点                        | `PlanningProgram` 转 typed target、`SpatialReferenceSpec`                             | 读取原文、查询地块或决定最终选址   |
-| GROUND                 | 确定性子图，可含歧义处理节点              | 实体解析、KG 候选、几何精化                                                            | 评价候选优劣                       |
-| SELECT                 | 混合决策子图                              | 硬过滤、评分、可选模型排序、冲突分配                                                   | 直接生成坐标或绕过约束             |
-| EXECUTE                | 算法 Worker 子图                          | MIP、设施、道路、分区和图层生成                                                        | 静默改变规划意图                   |
-| VALIDATE               | Evaluator 子图                            | 规则、几何、拓扑、文本/成果一致性校验                                                  | 把失败吞掉后继续交付               |
+| 能力              | 目标形态                                  | 允许做什么                                                                             | 不允许做什么                       |
+| ----------------- | ----------------------------------------- | -------------------------------------------------------------------------------------- | ---------------------------------- |
+| EXPLORE           | session evidence service / 工具调用 Agent | 按阶段和维度检索 KG、Bundle、报告、typed artifacts、RAG 和外部资料，整理证据与空间认知 | 生成候选 BSM、修改意图、选最终位置 |
+| L1/L2/L3 分析     | 专业分析 Agent                            | 解释事实、推导策略、生成规划文本草案                                                   | 绕过 Gate 直接写空间成果           |
+| TARGET_PROJECTION | 确定性领域投影节点                        | `PlanningProgram` 转 typed target、`SpatialReferenceSpec`                          | 读取原文、查询地块或决定最终选址   |
+| GROUND            | 确定性子图，可含歧义处理节点              | 实体解析、KG 候选、几何精化                                                            | 评价候选优劣                       |
+| SELECT            | 混合决策子图                              | 硬过滤、评分、可选模型排序、冲突分配                                                   | 直接生成坐标或绕过约束             |
+| EXECUTE           | 算法 Worker 子图                          | MIP、设施、道路、分区和图层生成                                                        | 静默改变规划意图                   |
+| VALIDATE          | Evaluator 子图                            | 规则、几何、拓扑、文本/成果一致性校验                                                  | 把失败吞掉后继续交付               |
 
 ## 4. 依赖方向
 

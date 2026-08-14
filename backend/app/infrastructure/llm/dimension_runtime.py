@@ -66,13 +66,10 @@ def dimension_failure_attempt(state: dict[str, Any], dimension_key: str) -> dict
 
 
 def _display_report(content: str | None) -> str:
-    """Return dependency report prose without the private INSTRUCTION block."""
+    """Return dependency report prose (report body; instruction stored separately)."""
     if not content:
         return ""
-    from app.infrastructure.reports.report_store import split_instruction
-
-    display, _ = split_instruction(content)
-    return strip_model_reasoning(display)
+    return strip_model_reasoning(content)
 
 
 def strip_model_reasoning(content: str) -> str:
@@ -554,20 +551,23 @@ async def save_step_report(
     layer: int,
     *,
     is_revision: bool = False,
+    inputs: Optional[Dict[str, Any]] = None,
     outputs: Optional[Dict[str, Any]] = None,
     diagnostics: Optional[Dict[str, Any]] = None,
 ) -> None:
     """Save a StepReport. Non-fatal on error."""
     from app.infrastructure.reports.step_report import save_step_report as _save_step_report
 
-    inputs = {"is_revision": is_revision}
+    merged_inputs = {"is_revision": is_revision}
+    if inputs:
+        merged_inputs.update(inputs)
     try:
         await _save_step_report(
             session_id, stage,
             step_name=step_name,
             dimension_key=dimension_key,
             layer=layer,
-            inputs=inputs,
+            inputs=merged_inputs,
             outputs=outputs,
             diagnostics=diagnostics,
         )

@@ -301,14 +301,17 @@ async def _extract_structured(
         roles="|".join(_ROLE_SET), text=key_text[:600]
     )
     try:
+        # MiniMax rejects a system-only request with error 2013
+        # ("chat content is empty"), so always pair the instructions with a
+        # non-empty user turn that carries the text to process.
+        messages = [
+            {"role": "system", "content": prompt},
+            {"role": "user", "content": "请从上述文本中提取地点实体。"},
+        ]
         if asyncio.iscoroutinefunction(getattr(structured, "ainvoke", None)):
-            response = await structured.ainvoke(
-                [{"role": "system", "content": prompt}]
-            )
+            response = await structured.ainvoke(messages)
         else:
-            response = await asyncio.to_thread(
-                structured.invoke, [{"role": "system", "content": prompt}]
-            )
+            response = await asyncio.to_thread(structured.invoke, messages)
     except Exception as exc:  # noqa: BLE001
         logger.warning("[flash-mention] structured call failed: %s", exc)
         return None

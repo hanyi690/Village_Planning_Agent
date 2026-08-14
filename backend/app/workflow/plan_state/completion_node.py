@@ -62,17 +62,6 @@ async def _maybe_extract_bindings(
         if not reports:
             logger.info("[layer_completion_check] No reports for L%d, skip extraction", layer)
             return
-        # P0: 读取同层报告的 INSTRUCTION 剥离段（L1 的'设施+位置'表格），
-        #     传给 KG enrichment 消费（组合名地点条目落地 gazetteer）。
-        instruction_texts: Dict[str, str] = {}
-        try:
-            reports_with_sources = await store.get_layer_reports_with_sources(session_id, layer)
-            for dk, rec in reports_with_sources.items():
-                instr = (rec or {}).get("instruction") or ""
-                if instr:
-                    instruction_texts[dk] = instr
-        except Exception as e:
-            logger.warning("[layer_completion_check] instruction read failed: %s", e)
 
         # KG 多级增强（enrichment）：L1 村名绑定 / L2/L3 实体注解 + 关系注记
         from app.infrastructure.kg.enrichment import run_wave
@@ -98,7 +87,6 @@ async def _maybe_extract_bindings(
                 logger.warning("[layer_completion_check] L1 location facts load failed: %s", exc)
         stats = await run_wave(
             session_id, wave=layer, reports=reports, bundle=_bundle,
-            instruction_texts=instruction_texts,
             location_facts=location_facts,
         )
         logger.info("[layer_completion_check] KG enrichment layer=%d stats=%s", layer, stats)
@@ -232,9 +220,33 @@ async def layer_completion_check(
         phase, layer, len(completed), len(total_dims),
     )
 
-    # Not complete yet — continue processing
+    # Not complete yet — continue processing, but NEVER stall forever.
+    # Set one absolute layer deadline at the boundary and force-complete when
+    # it expires so the layer always returns (partial snapshot + human review
+    # for the missing dimensions) instead of hanging the workflow (per-step
+    # timeouts sum up; only a layer deadline bounds the total).
     if not (len(total_dims) > 0 and set(completed) == set(total_dims)):
-        return {"layer_just_completed": None}
+        import time as _time
+
+        from app.core.settings import LAYER_TIMEOUT_S
+
+        layer_started = float(state.get("layer_started_at") or 0.0) or _time.time()
+        elapsed = _time.time() - layer_started
+        if elapsed > LAYER_TIMEOUT_S:
+            logger.warning(
+                "[layer_completion_check] layer=%d exceeded %ds budget (elapsed=%.0fs, completed=%d/%d); "
+                "forcing completion with a partial snapshot",
+                layer, LAYER_TIMEOUT_S, elapsed, len(completed), len(total_dims),
+            )
+            return {
+                "layer_just_completed": layer,
+                "layer_timed_out": True,
+                "layer_started_at": layer_started,
+            }
+        return {
+            "layer_just_completed": None,
+            "layer_started_at": layer_started,
+        }
 
     logger.info(
         "[layer_completion_check] Layer %d completed: %d dimensions",

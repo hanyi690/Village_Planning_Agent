@@ -44,6 +44,50 @@ logger = get_logger(__name__)
 DEFAULT_CONFIG_PATH = Path(__file__).parent / "sources.yaml"
 
 
+def _derive_water_bodies_from_landuse(bundle: "VillageBundle") -> int:
+    """从 DLBM=31xx 现状地块派生水体面（bundle.polygons["water_bodies"]）。
+
+    会话上传路径与同步 loader 共用；无 31xx 或已存在水体时 no-op。
+    """
+    polygons = getattr(bundle, "polygons", None)
+    if polygons is None:
+        return 0
+    if polygons.get("water_bodies"):
+        return 0
+    landuse = polygons.get("landuse_current") or []
+    if not landuse:
+        return 0
+    from app.data.model.spatial_types import WaterFeature
+
+    generated = 0
+    for p in landuse:
+        dlbm = str(getattr(p, "dlbm", "") or "")
+        if not dlbm.startswith("31"):
+            continue
+        wf = WaterFeature(
+            geometry=getattr(p, "geometry", None),
+            bsm=getattr(p, "bsm", "") or "",
+            ysdm=getattr(p, "ysdm", "") or "",
+            layer_type="water",
+            water_type={
+                "3101": "河流",
+                "3102": "湖泊",
+                "3103": "水库",
+                "3104": "坑塘",
+                "3105": "沟渠",
+            }.get(dlbm[:4], "坑塘"),
+            water_name=str(getattr(p, "name", "") or ""),
+        )
+        bundle.add(wf)
+        generated += 1
+    if generated:
+        logger.info(
+            "[DataCatalog] Derived %d water bodies from DLBM=31xx parcels",
+            generated,
+        )
+    return generated
+
+
 class DataCatalog:
     """Data catalog - manages all configured data sources.
 
@@ -131,14 +175,12 @@ class DataCatalog:
         from app.data.ingestion.connections import ConnectionRegistry
         from app.data.ingestion.connections.amap import AmapConnection
         from app.data.ingestion.connections.gd_tianditu import GDTiandituConnection
-        from app.data.ingestion.connections.osm import OSMConnection
         from app.data.ingestion.connections.tianditu import TiandituConnection
 
         _classes = {
             "tianditu": TiandituConnection,
             "amap": AmapConnection,
             "gd_tianditu": GDTiandituConnection,
-            "osm": OSMConnection,
         }
 
         for name, cfg in self._connections.items():
@@ -407,33 +449,7 @@ class DataCatalog:
 
         # Step 4b: Fallback — derive water bodies from DLBM=31xx parcels
         # when external water sources (upload / Tianditu API) are unavailable.
-        if not bundle.polygons.get("water_bodies") and bundle.polygons.get("landuse_current"):
-            from app.data.model.spatial_types import WaterFeature
-            generated = 0
-            for p in bundle.polygons.get("landuse_current"):
-                dlbm = p.dlbm or ""
-                if dlbm.startswith("31"):
-                    wf = WaterFeature(
-                        geometry=p.geometry,
-                        bsm=p.bsm,
-                        ysdm=p.ysdm,
-                        layer_type="water",
-                        water_type={
-                            "3101": "河流",
-                            "3102": "湖泊",
-                            "3103": "水库",
-                            "3104": "坑塘",
-                            "3105": "沟渠",
-                        }.get(dlbm[:4], "坑塘"),
-                        water_name=p.name or "",
-                    )
-                    bundle.add(wf)
-                    generated += 1
-            if generated:
-                logger.info(
-                    "[DataCatalog] Derived %d water bodies from DLBM=31xx parcels",
-                    generated,
-                )
+        _derive_water_bodies_from_landuse(bundle)
 
         bundle.metadata.provider_sources = [
             layer_type for layer_type, result in results.items() if result.success
@@ -848,6 +864,10 @@ class DataCatalog:
             if dtype in _DIRTY_LAYER_TYPES:
                 dtype = _infer_layer_key_from_upload(item) or dtype
             _merge_geojson_into_bundle(bundle, dtype, geojson)
+
+        # 会话上传路径同样派生水体（与同步 loader 一致）：KG 的 WaterBody 依赖
+        # bundle.polygons["water_bodies"]，缺失会让水体接地无实体可选。
+        _derive_water_bodies_from_landuse(bundle)
 
         try:
             from app.data.ingestion.documents.loader import list_available_documents, load_planning_text

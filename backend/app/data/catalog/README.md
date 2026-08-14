@@ -37,7 +37,7 @@
 |---|---|
 | `catalog.py` | `DataCatalog` 主类：加载配置 → 初始化 Driver/Connection → 查询 → bundle 组装（含 `_merge_geojson_into_bundle`） |
 | `config.py` | Pydantic 配置模型（支持 v1.0 / v2.0 YAML） |
-| `dedup.py` | 外源锚点去重（优先级：本地 → WFS → AMap POI → 百度；`(name_norm, lat_3, lon_3, type_key)` 唯一键） |
+| `dedup.py` | 外源锚点去重（优先级：本地 → WFS → AMap POI ；`(name_norm, lat_3, lon_3, type_key)` 唯一键） |
 | `external_anchors.py` | 4 阶段外源锚点管线：collect → normalize → dedup → inject（GCJ02/BD09 → WGS84 归一） |
 | `sources.yaml` | 数据源物理配置（连接 + 源声明） |
 

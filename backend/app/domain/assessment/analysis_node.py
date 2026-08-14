@@ -81,6 +81,40 @@ def _build_revision_completed(state: Dict[str, Any], dim_key: str) -> Dict[int, 
     return result
 
 
+def _parse_l1_dual_response(text: str):
+    """Tolerantly parse the L1 dual-response JSON from a model's text output.
+
+    Strips <think> reasoning, extracts the first JSON object, and validates
+    into L1DimensionOutput.  Returns None when no usable JSON is present.
+    """
+    import json as _json
+    import re as _re
+
+    from app.domain.assessment.observation_draft import L1DimensionOutput
+
+    cleaned = _re.sub(r"<think>.*?</think>", "", text or "", flags=_re.I | _re.S)
+    cleaned = _re.sub(r"<think>.*$", "", cleaned, flags=_re.I | _re.S)
+    match = _re.search(r"\{.*\}", cleaned, _re.DOTALL)
+    if not match:
+        return None
+    try:
+        data = _json.loads(match.group(0))
+    except Exception:
+        return None
+    if not isinstance(data, dict):
+        return None
+    try:
+        return L1DimensionOutput.model_validate(data)
+    except Exception:
+        return L1DimensionOutput(
+            report_body=str(data.get("report_body") or ""),
+            observations=[
+                item for item in (data.get("observations") or [])
+                if isinstance(item, dict)
+            ],
+        )
+
+
 async def analyze_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
     """
     维度分析节点 - 直接执行
@@ -135,7 +169,16 @@ async def analyze_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
     )
 
 
-    rag_context, rag_log = await run_rag(dim_key, cfg, state)
+    from app.core.settings import RAG_TIMEOUT_S
+
+    try:
+        async with asyncio.timeout(RAG_TIMEOUT_S):
+            rag_context, rag_log = await run_rag(dim_key, cfg, state)
+    except asyncio.TimeoutError:
+        logger.warning(
+            "[analyze_dimension] %s: RAG retrieval timed out after %ss", dim_key, RAG_TIMEOUT_S,
+        )
+        rag_context, rag_log = "", None
 
     # 4. 从数据库加载依赖报告（按配置过滤）
     store = ReportStore.get_instance()
@@ -261,30 +304,65 @@ async def analyze_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
         from app.domain.assessment.observation_draft import L1DimensionOutput
         from app.infrastructure.llm.factory import create_llm as _create_llm
 
-        structured = _create_llm(
-            temperature=0.3, max_tokens=MAX_TOKENS, streaming=False
-        ).with_structured_output(L1DimensionOutput, method="function_calling")
-        async with asyncio.timeout(LLM_STREAM_TIMEOUT):
-            output = await structured.ainvoke([
-                {
-                    "role": "system",
-                    "content": (
-                        "你是村庄规划 L1 现状观察节点。同时输出两部分："
-                        "report_body 写维度现状分析正文（用【主题】标记段落、以【事实】开头的可核验事实行、"
-                        "markdown 表格列清单）；observations 写正文明确出现的现状空间对象"
-                        "（entity_type 只能是 现状设施/现状项目/现状分区/道路/水系/地物），"
-                        "每个对象含 entity_type/name/location/description/scale。"
-                        "只摘录正文已出现的内容，不得编造；无对象则返回空数组。"
-                    ),
-                },
-                {"role": "user", "content": prompt},
-            ])
+        # MiniMax-M3 natively supports with_structured_output(function_calling)
+        # for the L1 dual response (report_body + observations), so the native
+        # structured path is primary.  The tolerant JSON parser is only a
+        # safety net if a provider cannot produce the structured envelope.
+        # Bounded retries ensure a transient failure never trips the provider
+        # circuit and kills the remaining L1 dimensions.
+        _L1_SYSTEM = (
+            "你是村庄规划 L1 现状观察节点。同时输出两部分："
+            "report_body 写维度现状分析正文（用【主题】标记段落、以【事实】开头的可核验事实行、"
+            "markdown 表格列清单）；observations 写正文明确出现的现状空间对象"
+            "（entity_type 只能是 现状设施/现状项目/现状分区/自然村/道路/水系/地物），"
+            "每个对象含 entity_type/name/location/relation/description/scale。"
+            "location 优先自然村名，道路给走向、水系给流向；relation 写空间关系。"
+            "只摘录正文已出现的内容，不得编造；无对象则返回空数组。"
+        )
+        # MiniMax-M3 natively supports the structured dual response, so try it
+        # first; fall back to a plain-JSON contract once if the provider cannot
+        # produce the structured envelope.  Fail FAST: a single LLM timeout or
+        # failure trips the provider circuit (the automatic return path) instead
+        # of stalling the whole L1 layer for minutes of retries.
+        output = None
+        try:
+            llm = _create_llm(temperature=0.3, max_tokens=MAX_TOKENS, streaming=False)
+            # Primary: native structured output (MiniMax-M3).
+            try:
+                structured = llm.with_structured_output(
+                    L1DimensionOutput, method="function_calling"
+                )
+                async with asyncio.timeout(LLM_STREAM_TIMEOUT):
+                    out = await structured.ainvoke([
+                        {"role": "system", "content": _L1_SYSTEM},
+                        {"role": "user", "content": prompt},
+                    ])
+                if out is not None:
+                    if isinstance(out, str):
+                        out = L1DimensionOutput.model_validate_json(out)
+                    elif not isinstance(out, L1DimensionOutput):
+                        out = L1DimensionOutput.model_validate(out)
+                    output = out
+            except Exception as exc:  # noqa: BLE001 - fall back to JSON contract
+                logger.warning(
+                    "[analyze_dimension] %s: structured output unavailable (%s), JSON fallback",
+                    dim_key, exc,
+                )
+            if output is None:
+                # Fallback: plain-text JSON contract (strip <think>, extract JSON).
+                async with asyncio.timeout(LLM_STREAM_TIMEOUT):
+                    resp = await llm.ainvoke([
+                        {"role": "system", "content": _L1_SYSTEM + " 只输出 JSON：{\"report_body\": \"...\", \"observations\": [{...}]}，不要输出其它文字。"},
+                        {"role": "user", "content": prompt},
+                    ])
+                raw = getattr(resp, "content", "") or ""
+                if isinstance(raw, list):
+                    raw = "".join(raw)
+                output = _parse_l1_dual_response(str(raw))
+        except asyncio.TimeoutError:
+            raise
         if output is None:
-            raise ValueError("L1 provider returned None")
-        if isinstance(output, str):
-            output = L1DimensionOutput.model_validate_json(output)
-        elif not isinstance(output, L1DimensionOutput):
-            output = L1DimensionOutput.model_validate(output)
+            raise ValueError("L1 provider returned unparseable dual response")
         report_body = (output.report_body or "").strip()
         observations = list(output.observations or [])
     except asyncio.TimeoutError:
@@ -461,27 +539,6 @@ async def _generate_summary(dim_key: str, dim_layer: int, content: str, rag_log=
     return await generate_summary(dim_key, dim_layer, content)
 
 
-_NATURAL_VILLAGE_RE = re.compile(r"[\u4e00-\u9fff]{2}")
-
-
-def _extract_natural_villages(text: str) -> str:
-    """从 L1 报告提取自然村名单（已知 12 村闭集过滤 → 顿号拼接）。
-
-    Location extraction for report evidence uses known natural-village names,
-    数据源 = L1 socio_economic 报告（"完整名单：田坑、黄竹、园寨…"）。
-    """
-    try:
-        from app.data.ingestion.natural_villages import _KNOWN_NATURAL_VILLAGES
-    except Exception:
-        _KNOWN_NATURAL_VILLAGES = set()
-    found: List[str] = []
-    for m in _NATURAL_VILLAGE_RE.finditer(text or ""):
-        name = m.group(0)
-        if name in _KNOWN_NATURAL_VILLAGES and name not in found:
-            found.append(name)
-    return "、".join(found)
-
-
 def _build_prompt(cfg, state, rag_context, deps: str = "", same_layer_contexts: str = "", professional_data_section: str = "", explore_section: str = "", explore_brief_section: str = "") -> str:
     """组装 Prompt - 使用 prompts 模块模板
 
@@ -569,7 +626,6 @@ def _build_prompt(cfg, state, rag_context, deps: str = "", same_layer_contexts: 
             professional_data=professional_data_section + explore_section,  # 注入工具计算结果 + EXPLORE 证据
         )
     elif layer == 3:
-        # P8: L1 自然村名单注入 INSTRUCTION 位置列引导（已知 12 村枚举）
         return get_layer3_prompt(
             dimension_key=dim_key,
             project_name=project_name,
@@ -579,7 +635,7 @@ def _build_prompt(cfg, state, rag_context, deps: str = "", same_layer_contexts: 
             knowledge_context=rag_context or "",
             revision_instruction=revision_instruction,
             professional_data_section=professional_data_section + explore_section,
-            natural_villages=_extract_natural_villages(deps),
+            natural_villages="",
         )
 
     # 默认通用模板

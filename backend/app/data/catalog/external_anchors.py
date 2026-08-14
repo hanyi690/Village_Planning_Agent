@@ -13,8 +13,8 @@ Pipeline:
   - 通过 _raw["anchor_source"] 记录来源, 下游消费者无感知
 
 Source priority (高 → 低, dedup 胜出):
-  tianditu_wfs > baidu_v3 > tencent_map > amap_poi > osm
-  本轮 OSM 0 数据, 跳过; 天地图 WFS 几何权威性最高
+  tianditu_wfs > tencent_map > amap_poi
+  天地图 WFS 几何权威性最高
 """
 from __future__ import annotations
 
@@ -54,7 +54,7 @@ class ExternalFeature:
     lat: float                      # WGS84 纬度
     coord_system: str               # "wgs84" | "gcj02" | "bd09"
     category: FeatureCategory
-    source: str                     # "amap_poi" | "baidu_v3" | "tencent_map" | "tianditu_wfs" | "osm"
+    source: str                     # "amap_poi" | "tencent_map" | "tianditu_wfs"
     raw: Dict[str, Any]             # 原始 API 数据
     geometry: Optional[Dict[str, Any]] = None  # 非 Point features
     provenance: Dict[str, Any] = field(default_factory=dict)
@@ -69,10 +69,8 @@ class ExternalFeature:
 
 SOURCE_PRIORITY: Dict[str, int] = {
     "tianditu_wfs": 1,    # 国家级矢量, 几何权威
-    "baidu_v3": 2,       # address 字段防误连强
     "tencent_map": 3,    # POI 覆盖广, 自然村本村命中 5/12
     "amap_poi": 4,       # typecode 精细
-    "osm": 5,            # 兜底 (本轮金田 0 数据)
 }
 
 # ==================== Category → 现有 sub-key 路由 ====================
@@ -125,9 +123,7 @@ def normalize_to_wgs84(lon: float, lat: float, coord_system: str) -> Tuple[float
 
     Notes:
         - AMap/Tencent 默认 GCJ02, 需转换
-        - 百度 coord_type=1 已直出 WGS84, 不需再转换
         - 天地图 ≈ WGS84 (CGCS2000), 不需转换
-        - OSM 直出 WGS84, 不需转换
     """
     if coord_system == "wgs84":
         return lon, lat, "wgs84"
@@ -135,9 +131,7 @@ def normalize_to_wgs84(lon: float, lat: float, coord_system: str) -> Tuple[float
         wlon, wlat = gcj02_to_wgs84(lon, lat)
         return wlon, wlat, "wgs84"
     elif coord_system == "bd09":
-        # 百度 API 设置 coord_type=1 应直出 WGS84,
-        # 但实测有 1000m+ 偏差 (百度 geocoding 的 "中心点" 误差), 此处不二次转换.
-        # 如果未来确认百度真返 BD09, 需要补 bd09 → gcj02 → wgs84 链路.
+        # 暂按 WGS84 处理 (BD09 数据需另补转换链路)
         return lon, lat, "wgs84"
     else:
         # 默认按 wgs84 处理
@@ -219,6 +213,12 @@ class ExternalAnchorPipeline:
 
     def __init__(self):
         self._lock = threading.Lock()
+        self._deadline = 0.0
+
+    def _within_budget(self) -> bool:
+        """True while the external-anchor total budget remains."""
+        import time
+        return time.monotonic() < self._deadline
 
     def run(self, bundle: Any, bbox: Optional[Any] = None,
             cfg: Optional[Dict[str, Any]] = None,
@@ -234,6 +234,11 @@ class ExternalAnchorPipeline:
         Returns:
             {sub_key: count} 注入统计
         """
+        import time as _t
+
+        from app.core.settings import EXTERNAL_ANCHOR_TIMEOUT_S
+
+        self._deadline = _t.monotonic() + EXTERNAL_ANCHOR_TIMEOUT_S
         cfg = cfg or {}
         bbox_tuple = None
         if bbox is not None:
@@ -292,47 +297,40 @@ class ExternalAnchorPipeline:
         natural_village_names = list(cfg.get("natural_village_names", []) or [])
 
         # 1a. 天地图 WFS (HYDA/HYDL/LRDL)
-        try:
-            features.extend(self._from_tianditu_wfs(bbox))
-        except Exception as e:
-            logger.warning("[Pipeline] Tianditu WFS failed: %s", e)
-
-        # 1b. 百度 v3 region — 优先中文名 (AK 额度有限)
-        try:
-            county = cfg.get("county", "")
-            city = cfg.get("city", "")
-            baidu_region = f"{city}{county}" if county else ""
-            if baidu_region:
-                features.extend(self._from_baidu(baidu_region, natural_village_names))
-        except Exception as e:
-            logger.warning("[Pipeline] Baidu failed: %s", e)
+        if self._within_budget():
+            try:
+                features.extend(self._from_tianditu_wfs(bbox))
+            except Exception as e:
+                logger.warning("[Pipeline] Tianditu WFS failed: %s", e)
+        else:
+            logger.warning("[Pipeline] Tianditu WFS skipped: external-anchor budget exhausted")
 
         # 1c. 腾讯 v1 region — 优先中文名 (12 位 adcode 不被 API 接受)
-        try:
-            county = cfg.get("county", "")
-            city = cfg.get("city", "")
-            tencent_region = f"{city}{county}" if county else ""
-            if not tencent_region:
-                # fallback 用 6 位县级 adcode (腾讯 API 接受)
-                adcode_12 = cfg.get("adcode", "")
-                if len(adcode_12) >= 6:
-                    tencent_region = adcode_12[:6]
-            if tencent_region:
-                features.extend(self._from_tencent(tencent_region, natural_village_names))
-        except Exception as e:
-            logger.warning("[Pipeline] Tencent failed: %s", e)
+        if self._within_budget():
+            try:
+                county = cfg.get("county", "")
+                city = cfg.get("city", "")
+                tencent_region = f"{city}{county}" if county else ""
+                if not tencent_region:
+                    # fallback 用 6 位县级 adcode (腾讯 API 接受)
+                    adcode_12 = cfg.get("adcode", "")
+                    if len(adcode_12) >= 6:
+                        tencent_region = adcode_12[:6]
+                if tencent_region:
+                    features.extend(self._from_tencent(tencent_region, natural_village_names))
+            except Exception as e:
+                logger.warning("[Pipeline] Tencent failed: %s", e)
+        else:
+            logger.warning("[Pipeline] Tencent skipped: external-anchor budget exhausted")
 
         # 1d. AMap POI (P5a 行政村 + P4 设施 + 道路名 + 水库)
-        try:
-            features.extend(self._from_amap(bbox, natural_village_names))
-        except Exception as e:
-            logger.warning("[Pipeline] AMap failed: %s", e)
-
-        # 1e. OSM (本轮 0 数据, 暂跳过)
-        # try:
-        #     features.extend(self._from_osm(bbox))
-        # except Exception as e:
-        #     logger.warning("[Pipeline] OSM failed: %s", e)
+        if self._within_budget():
+            try:
+                features.extend(self._from_amap(bbox, natural_village_names))
+            except Exception as e:
+                logger.warning("[Pipeline] AMap failed: %s", e)
+        else:
+            logger.warning("[Pipeline] AMap skipped: external-anchor budget exhausted")
 
         return features
 
@@ -379,76 +377,6 @@ class ExternalAnchorPipeline:
                 ))
         return feats
 
-    def _from_baidu(self, region: str,
-                    natural_village_names: List[str] = None) -> List[ExternalFeature]:
-        """百度 v3 region query=村 → ExternalFeature (BD09)."""
-        from app.data.ingestion.providers.baidu.provider import BaiduProvider
-        from app.core.settings import BAIDU_API_KEY, BAIDU_EXTERNAL_ANCHOR_ENABLED
-
-        if not (BAIDU_EXTERNAL_ANCHOR_ENABLED and BAIDU_API_KEY):
-            return []
-
-        baidu = BaiduProvider()
-        feats: List[ExternalFeature] = []
-
-        # A. 行政村 (query="村")
-        r = baidu.search_region(
-            query="村", region=region, region_limit=True, page_size=20,
-        )
-        if r.success:
-            results = r.data.get("results", [])
-            pois = BaiduProvider._parse_pois(results)
-            for p in pois:
-                name = p.get("name", "")
-                feats.append(ExternalFeature(
-                    name=name, name_norm=normalize_name(name),
-                    lon=p.get("lon", 0), lat=p.get("lat", 0),
-                    coord_system="bd09",
-                    category=FeatureCategory.VILLAGE_COMMITTEE,
-                    source="baidu_v3", raw=p,
-                    provenance={
-                        "address": p.get("address", ""),
-                        "province": p.get("province", ""),
-                        "city": p.get("city", ""),
-                        "area": p.get("area", ""),
-                    },
-                ))
-
-        # B. 自然村 (12 个名字 × region search)
-        if natural_village_names:
-            for vname in natural_village_names:
-                kw = str(vname).strip()
-                if not kw:
-                    continue
-                try:
-                    rn = baidu.search_region(
-                        query=kw, region=region, region_limit=True, page_size=5,
-                    )
-                except Exception as e:
-                    logger.debug("[Pipeline] Baidu natural_village search '%s' failed: %s", kw, e)
-                    continue
-                if not rn.success:
-                    continue
-                results = rn.data.get("results", [])
-                pois = BaiduProvider._parse_pois(results)
-                for p in pois:
-                    name = p.get("name", "")
-                    if not name or not (kw in name or name in kw):
-                        continue
-                    feats.append(ExternalFeature(
-                        name=name, name_norm=normalize_name(name),
-                        lon=p.get("lon", 0), lat=p.get("lat", 0),
-                        coord_system="bd09",
-                        category=FeatureCategory.NATURAL_VILLAGE,
-                        source="baidu_v3", raw=p,
-                        provenance={
-                            "keyword": kw, "address": p.get("address", ""),
-                            "city": p.get("city", ""), "area": p.get("area", ""),
-                        },
-                    ))
-
-        return feats
-
     def _from_tencent(self, region: str,
                       natural_village_names: List[str]) -> List[ExternalFeature]:
         """腾讯 v1 search region → ExternalFeature (GCJ02).
@@ -487,6 +415,8 @@ class ExternalAnchorPipeline:
         # 关键词 = 自然村名 + 村名组合设施锚点（提高命中率，如"园寨村委会"）
         if natural_village_names:
             for vname in natural_village_names:
+                if not self._within_budget():
+                    break
                 kw = str(vname).strip()
                 if not kw:
                     continue

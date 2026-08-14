@@ -156,7 +156,7 @@ class DimensionReport(SQLModel, table=True):
     instruction: Optional[str] = Field(
         default=None,
         sa_column=Column(Text)
-    )  # P8: INSTRUCTION 结构化段（剥离存储，不参与展示）
+    )  # instruction 列 = 结构化 JSON（observations/claims）
 
     # Metadata
     revision_trigger: Optional[str] = None

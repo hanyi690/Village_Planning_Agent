@@ -109,6 +109,10 @@ class ExecuteAgentState(BaseModel):
     validation_round: int = 0
     constraint_adjustments: List[Dict[str, Any]] = Field(default_factory=list)
 
+    # ── VALIDATE repair directives (REBUILD_GEOMETRY / REQUIRE_SOURCE_EVIDENCE) ──
+    repair_directives: Dict[str, Any] = Field(default_factory=dict)
+    required_source_evidence_target_ids: List[str] = Field(default_factory=list)
+
     # ── Sub-task routing ──
     tasks_to_run: List[str] = Field(default_factory=list)
 

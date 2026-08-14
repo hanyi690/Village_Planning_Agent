@@ -1,3 +1,4 @@
+import json
 import os
 from pathlib import Path
 from dotenv import load_dotenv
@@ -51,7 +52,44 @@ MAX_TOKENS = int(os.getenv("MAX_TOKENS", "8192"))
 
 # LLM Request Timeout (seconds)
 LLM_REQUEST_TIMEOUT = int(os.getenv("LLM_REQUEST_TIMEOUT", "180"))  # 3 minutes
-LLM_STREAM_TIMEOUT = int(os.getenv("LLM_STREAM_TIMEOUT", "300"))  # 5 minutes
+LLM_STREAM_TIMEOUT = int(os.getenv("LLM_STREAM_TIMEOUT", "120"))  # 2 minutes; keep the L1 layer fail-fast
+LAYER_TIMEOUT_S = int(os.getenv("LAYER_TIMEOUT_S", "600"))  # 10 min; a layer that exceeds this force-completes (partial snapshot + human review)
+RAG_TIMEOUT_S = int(os.getenv("RAG_TIMEOUT_S", "60"))  # per-dimension RAG retrieval cap
+TOOL_TIMEOUT_S = int(os.getenv("TOOL_TIMEOUT_S", "30"))  # per-tool call budget in DataPipeline
+EXTERNAL_ANCHOR_TIMEOUT_S = int(os.getenv("EXTERNAL_ANCHOR_TIMEOUT_S", "30"))  # 外源锚点总预算，超时跳过（绝不阻塞 L1 派发）
+
+def _parse_dimension_timeouts(raw: str) -> dict[str, float]:
+    """Parse the per-dimension idle-timeout map from ``DIMENSION_TIMEOUT_S``.
+
+    JSON object of ``{"<dimension_key>": seconds}``; any malformed value is
+    dropped so a bad config can never crash the workflow import.
+    """
+    if not str(raw or "").strip():
+        return {}
+    try:
+        payload = json.loads(str(raw))
+    except Exception:
+        return {}
+    if not isinstance(payload, dict):
+        return {}
+    timeouts: dict[str, float] = {}
+    for key, value in payload.items():
+        key = str(key or "").strip()
+        if not key:
+            continue
+        try:
+            timeout = float(value)
+        except (TypeError, ValueError):
+            continue
+        if timeout > 0:
+            timeouts[key] = timeout
+    return timeouts
+
+
+# A7: per-dispatch idle timeout for long-tail dimensions, keyed by dimension
+# key (LangGraph Send(timeout=TimeoutPolicy(idle_timeout=...))).  Empty by
+# default; long-tail dimensions keep the shared layer deadline otherwise.
+DIMENSION_TIMEOUT_S = _parse_dimension_timeouts(os.getenv("DIMENSION_TIMEOUT_S", "{}"))
 
 # LLM Max Concurrent Requests (for asyncio.gather + asyncio.Semaphore)
 # qwen3.7-plus hard limit: 500 RPS / 30,000 RPM. 50 is safe with monitoring.
@@ -74,6 +112,9 @@ KG_BUILD_TIMEOUT_SECONDS = float(os.getenv("KG_BUILD_TIMEOUT_SECONDS", "180"))
 BACKEND_STARTUP_TIMEOUT_SECONDS = float(os.getenv("BACKEND_STARTUP_TIMEOUT_SECONDS", "30"))
 GRAPH_RECURSION_LIMIT = int(os.getenv("GRAPH_RECURSION_LIMIT", "100"))
 BUSINESS_RETRY_LIMIT = int(os.getenv("BUSINESS_RETRY_LIMIT", "3"))
+# Per-dimension LLM failure retries before the run degrades to a diagnostic
+# terminal (provider resume re-dispatches ONLY the failed dimensions).
+DIMENSION_RETRY_LIMIT = int(os.getenv("DIMENSION_RETRY_LIMIT", "2"))
 
 # OpenAI-compatible API base URL (for DeepSeek, etc.)
 OPENAI_API_BASE = os.getenv("OPENAI_API_BASE")
@@ -213,7 +254,6 @@ DEFAULT_ENABLE_REVIEW: bool = os.getenv("DEFAULT_ENABLE_REVIEW", "false").lower(
 # Available options:
 # - "tianditu": 天地图 tiles (国内推荐)
 # - "geoq": GeoQ ArcGIS tiles (国内可用)
-# - "openstreetmap": OSM tiles (国内可能不稳定)
 GIS_TILE_SOURCE: str = os.getenv("GIS_TILE_SOURCE", "tianditu")
 
 # ==========================================
@@ -261,19 +301,6 @@ AMAP_RATE_LIMIT: float = float(os.getenv("AMAP_RATE_LIMIT", "30.0"))
 AMAP_MAX_RETRIES: int = int(os.getenv("AMAP_MAX_RETRIES", "3"))
 
 # ==========================================
-# 百度地图地理服务配置
-# ==========================================
-
-# 百度地图 API Key
-BAIDU_API_KEY: str = os.getenv("BAIDU_API_KEY", "")
-
-# 百度地图速率限制（每秒请求数，默认 10）
-BAIDU_RATE_LIMIT: float = float(os.getenv("BAIDU_RATE_LIMIT", "10.0"))
-
-# 百度地图最大重试次数
-BAIDU_MAX_RETRIES: int = int(os.getenv("BAIDU_MAX_RETRIES", "3"))
-
-# ==========================================
 # 腾讯地图地理服务配置
 # ==========================================
 
@@ -295,19 +322,15 @@ AMAP_EXTERNAL_ANCHOR_ENABLED: bool = os.getenv(
     "AMAP_EXTERNAL_ANCHOR_ENABLED", "false"
 ).lower() in ("1", "true", "yes")
 
-# 是否启用百度外源 POI 注入
-BAIDU_EXTERNAL_ANCHOR_ENABLED: bool = os.getenv(
-    "BAIDU_EXTERNAL_ANCHOR_ENABLED", "false"
-).lower() in ("1", "true", "yes")
 
 # 是否启用腾讯地图外源 POI 注入
 TECENT_MAP_EXTERNAL_ANCHOR_ENABLED: bool = os.getenv(
-    "TECENT_MAP_EXTERNAL_ANCHOR_ENABLED", "false"
+    "TECENT_MAP_EXTERNAL_ANCHOR_ENABLED", "true"
 ).lower() in ("1", "true", "yes")
 
 # 是否启用天地图 WFS 矢量数据注入
 TIANDITU_WFS_ANCHOR_ENABLED: bool = os.getenv(
-    "TIANDITU_WFS_ANCHOR_ENABLED", "false"
+    "TIANDITU_WFS_ANCHOR_ENABLED", "true"
 ).lower() in ("1", "true", "yes")
 
 # WFS 单 layer 最多 features（防大查询）

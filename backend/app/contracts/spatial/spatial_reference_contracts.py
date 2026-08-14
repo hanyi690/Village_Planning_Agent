@@ -86,6 +86,8 @@ class ResolvedSpatialRef:
     bbox: Optional[List[float]] = None
     reference_geometry_wkt: Optional[str] = None
     confidence: float = 0.0
+    uncertainty_radius_m: float = 0.0
+    uncertainty_reason: str = ""
     provenance: Dict[str, Any] = field(default_factory=dict)
 
 

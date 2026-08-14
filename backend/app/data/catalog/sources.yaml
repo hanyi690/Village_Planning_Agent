@@ -25,11 +25,6 @@ connections:
     rate_limit: 5.0  # 共享 tianditu 限流（同一服务族）
     timeout: 30
 
-  osm:
-    type: osm
-    rate_limit: 1.0
-    timeout: 60
-
 # ============================================================
 # 数据源声明
 # driver 字段对应 DriverRegistry 注册名。Phase 3 迁移具体 driver 后生效；

@@ -52,6 +52,7 @@ _KEY_BY_TYPE = {
     "RepairDirectiveCompilation": "repair_directives",
     "RepairImpactPlan": "repair_impact",
     "GlobalZoneAllocationResult": "global_zone_allocation",
+    "GlobalSiteAllocationResult": "global_site_allocation",
     "ExportResult": "export_result",
     "RenderArtifacts": "render_artifacts",
 }

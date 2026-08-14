@@ -10,7 +10,6 @@
 **负责**：
 - profile 分派：`compile_dimension_report(dimension_key, profile, ...)` 仅负责 L1/L2 报告投影
 - 诊断收集：确定性检测解析质量问题（`collect_diagnostics` → `ParseDiagnostic`）
-- L1/L2 历史报告的 `【INSTRUCTION】` 段切分（`split_content_instruction`）
 - fragment 溯源构建（`build_fragment_provenance` → `Provenance`）
 - 空间参考映射只由 target projection 的确定性入口调用；它不是 L3 claims 的生产路径。
 
@@ -33,7 +32,6 @@
 |---|---|
 | `core.py` | L1/L2 profile 分派核心 |
 | `diagnostics.py` | 确定性解析质量诊断（章节缺失 / 表格问题 → `ParseDiagnostic`） |
-| `instruction_parser.py` | L1/L2 历史报告投影所需的结构表提取 |
 | `provenance.py` | fragment 溯源构建（`source_module` 默认 `l1_observe`） |
 | `spec_mapper.py` | target projection 的确定性空间引用映射 |
 

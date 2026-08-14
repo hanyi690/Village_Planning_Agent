@@ -15,7 +15,6 @@ from langchain_core.messages import ToolMessage
 from app.infrastructure.logging import get_logger
 from app.infrastructure.events.sse_publisher import SSEPublisher
 from app.infrastructure.llm.tools.registry import ToolRegistry
-from app.infrastructure.llm.tools.tools import TOOL_REGISTRY
 from app.infrastructure.llm.tools.intent_tools import advance_planning_intent, gis_analysis
 
 logger = get_logger(__name__)
@@ -53,7 +52,7 @@ async def _invoke_single(
             tool_info["estimated_time"]
         )
 
-        base_tool = TOOL_REGISTRY.get(tool_name)
+        base_tool = ToolRegistry.get_tool(tool_name)
         if base_tool is None:
             raise ValueError(f"工具未注册: {tool_name}")
 

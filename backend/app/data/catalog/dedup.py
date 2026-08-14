@@ -5,7 +5,6 @@
   Priority 1: 本地 landuse parcels with BSM
   Priority 2: 天地图 WFS (HYDA/HYDL/LRDL, 国家级矢量, 含名字)
   Priority 3: AMap POI (P5a 村委会 + P4 设施 + 道路名 + 水库名)
-  Priority 4: 百度 (待 AK 验证)
 
 去重维度: (name_norm, lat_3, lon_3, type_key) → unique
   lat_3 / lon_3 = round(coord, 3) → ~100m 容差
@@ -27,8 +26,6 @@ SOURCE_PRIORITY: Dict[str, int] = {
     "local_parcel": 1,        # 本地地块 (BSM 关联)
     "tianditu_wfs": 2,        # 天地图 WFS 矢量
     "amap_poi": 3,            # 高德 POI
-    "baidu_v3": 4,            # 百度 v3 region
-    "baidu_v2": 5,            # 百度 v2 search
     "tencent_map": 6,         # 腾讯地图
 }
 

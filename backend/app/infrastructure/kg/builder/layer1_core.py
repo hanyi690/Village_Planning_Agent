@@ -207,7 +207,41 @@ def add_parcels(kg, features, *, gtype_ref: str, entry, ctx: BuildContext) -> di
     return {"count": len(features), "entity_type": "Parcel"}
 
 
+def _persist_feature_centroids(kg, features, entity_type) -> int:
+    """按 bsm 把 bundle feature 质心持久化到 KG 实体（geo:hasCentroid）。
+
+    原始几何留在 bundle（几何权威）；KG 存质心供拓扑推理（预计算拓扑模式）。
+    """
+    from app.infrastructure.kg.builder.geo_helpers import (
+        add_centroid,
+        feature_centroid,
+    )
+
+    written = 0
+    for feature in features:
+        bsm = str(getattr(feature, "bsm", "") or "").strip()
+        if not bsm:
+            continue
+        centroid = feature_centroid(getattr(feature, "geometry", None))
+        if centroid is None:
+            continue
+        for s in kg.g.subjects(PLN.bsm, Literal(bsm)):
+            if (s, RDF.type, entity_type) in kg.g:
+                add_centroid(kg.g, s, centroid[0], centroid[1])
+                written += 1
+                break
+    return written
+
+def _unique_water_name(w, bsm, i) -> str:
+    """水体唯一名：真实名非泛化时保留，否则 水体_{bsm}（否则索引按"水域"合并）。"""
+    raw = str(getattr(w, "water_name", "") or "").strip()
+    generic = raw in ("", "水域", "水体", "河流", "坑塘", "水")
+    if not generic:
+        return raw
+    return f"水体_{bsm or i}"
+
 @kg_builder("water", entity_type="WaterBody", layer=1, order=30)
+
 def add_water_bodies(kg, features, *, gtype_ref: str, entry, ctx: BuildContext) -> dict:
     water_overlap = ctx.provenance.get("water_overlap", {})
     covered_bsms = set()
@@ -246,7 +280,7 @@ def add_water_bodies(kg, features, *, gtype_ref: str, entry, ctx: BuildContext) 
             uri = EntityIdPolicy.uri("water", bsm or f"overlap_{i}")
             EntityIdPolicy.attach_bsm(kg.g, uri, bsm)
             kg.g.add((uri, RDF.type, EntityTypes.WaterBody))
-            name = getattr(w, "water_name", "") or f"水体_{bsm or i}"
+            name = _unique_water_name(w, bsm, i)
             kg.g.add((uri, PLN.name, Literal(name)))
             kg.g.add((uri, PLN.water_type, Literal(getattr(w, "water_type", "") or "水域")))
             kg.g.add((uri, Relations.sfWithin, PLN.village))
@@ -261,7 +295,7 @@ def add_water_bodies(kg, features, *, gtype_ref: str, entry, ctx: BuildContext) 
             uri = EntityIdPolicy.uri("water", bsm or f"indep_{i}")
             EntityIdPolicy.attach_bsm(kg.g, uri, bsm)
             kg.g.add((uri, RDF.type, EntityTypes.WaterBody))
-            name = getattr(w, "water_name", "") or f"水体_{bsm or i}"
+            name = _unique_water_name(w, bsm, i)
             kg.g.add((uri, PLN.name, Literal(name)))
             kg.g.add((uri, PLN.water_type, Literal(getattr(w, "water_type", "") or "水域")))
             kg.g.add((uri, Relations.sfWithin, PLN.village))
@@ -269,6 +303,7 @@ def add_water_bodies(kg, features, *, gtype_ref: str, entry, ctx: BuildContext) 
             add_geo_feature_type(kg.g, uri)
             count += 1
 
+    _persist_feature_centroids(kg, features, EntityTypes.WaterBody)
     if count:
         logger.info("Added %d water bodies (overlap: %d covered parcels)", count, len(covered_bsms))
     return {"count": count, "entity_type": "WaterBody"}
@@ -495,6 +530,7 @@ def add_roads(kg, features, *, gtype_ref: str, entry, ctx: BuildContext) -> dict
         kg.g.add((uri, semantic_group, Literal("transport")))
         add_geo_feature_type(kg.g, uri)
         count += 1
+    _persist_feature_centroids(kg, features, EntityTypes.Road)
     if count:
         logger.info("Added %d roads", count)
     return {"count": count, "entity_type": "Road"}
@@ -518,112 +554,35 @@ def add_terrain(kg, terrain_analysis=None):
 
 
 def add_residential_clusters_from_typed(kg, parcels, annotations=None) -> None:
-    import math
+    """宅基地聚落（村簇）——与 village_cluster_mapper 统一聚类（1340/0702 + 0.008）。
 
-    existing_clusters = []
-    for s in kg.g.subjects(RDF.type, EntityTypes.ResidentialCluster):
-        name_lit = None
-        lon_lit = None
-        lat_lit = None
-        for p, o in kg.g.predicate_objects(s):
-            pred = str(p).rsplit("/", 1)[-1] if "#" not in str(p) else str(p).split("#")[-1]
-            if pred == "name":
-                name_lit = str(o)
-            elif pred == "lon":
-                try:
-                    lon_lit = float(o)
-                except Exception:
-                    pass
-            elif pred == "lat":
-                try:
-                    lat_lit = float(o)
-                except Exception:
-                    pass
-        if lon_lit is not None and lat_lit is not None:
-            existing_clusters.append((name_lit or "", lon_lit, lat_lit))
+    空间推理一致性：村名映射（assign_villages_to_clusters）与设施/水体/道路的
+    serves/nearby 指向同一批簇，BSM 才能对齐。
+    """
+    from app.spatial.grounding.village_cluster_mapper import build_village_clusters
 
-    residential_codes = {"2121", "2122", "2123", "0702", "0701"}
-    residential = []
-    from app.data.model.spatial_types import CurrentLandUseParcel
-    for p in parcels:
-        if not isinstance(p, CurrentLandUseParcel):
-            continue
-        dlbm = p.dlbm or ""
-        if dlbm not in residential_codes:
-            continue
-        p_geom = p.geometry
-        p_bsm = p.bsm
-        if not p_geom or not p_bsm:
-            continue
-        c = _parcel_centroid(p_geom)
-        if c:
-            residential.append((p_bsm, c[0], c[1]))
-
-    if not residential:
-        logger.debug("No residential parcels found for settlement clustering")
+    clusters = build_village_clusters(list(parcels or []))
+    if not clusters:
+        logger.debug("No residential clusters derived from 宅基地 parcels")
         return
-
-    threshold = 0.0015
-    visited = [False] * len(residential)
-    clusters = []
-
-    for i in range(len(residential)):
-        if visited[i]:
-            continue
-        cluster = [residential[i]]
-        visited[i] = True
-        changed = True
-        while changed:
-            changed = False
-            for j in range(len(residential)):
-                if visited[j]:
-                    continue
-                for _, cx, cy in cluster:
-                    dx = residential[j][1] - cx
-                    dy = residential[j][2] - cy
-                    if dx * dx + dy * dy < threshold * threshold:
-                        cluster.append(residential[j])
-                        visited[j] = True
-                        changed = True
-                        break
-        clusters.append(cluster)
-
-    significant = [c for c in clusters if len(c) >= 3]
-
     seq = 0
-    for cluster in significant:
-        mean_lon = sum(m[1] for m in cluster) / len(cluster)
-        mean_lat = sum(m[2] for m in cluster) / len(cluster)
-
-        is_near_existing = False
-        for _, ex_lon, ex_lat in existing_clusters:
-            dx = mean_lon - ex_lon
-            dy = mean_lat - ex_lat
-            if dx * dx + dy * dy < threshold * threshold:
-                is_near_existing = True
-                break
-        if is_near_existing:
-            seq += 1
-            continue
-
+    for cluster in clusters:
         name = f"居民点{seq + 1}"
         uri = EntityIdPolicy.fallback_uri("settlement", name, seq)
         kg.g.add((uri, RDF.type, EntityTypes.ResidentialCluster))
         kg.g.add((uri, PLN.name, Literal(name)))
-        add_centroid(kg.g, uri, mean_lon, mean_lat)
+        if cluster.centroid:
+            add_centroid(kg.g, uri, cluster.centroid[0], cluster.centroid[1])
         kg.g.add((uri, Relations.sfWithin, PLN.village))
         add_geo_feature_type(kg.g, uri)
-
-        for bsm, _, _ in cluster:
+        for bsm in cluster.bsms:
             for s in kg.g.subjects(PLN.bsm, Literal(bsm)):
                 if (s, RDF.type, EntityTypes.Parcel) in kg.g:
                     kg.g.add((s, Relations.sfWithin, uri))
-
         seq += 1
-
     logger.info(
-        "Identified %d residential settlements from %d residential parcels (%d clusters total)",
-        len(significant), len(residential), len(clusters),
+        "Identified %d residential settlements (unified clustering)",
+        len(clusters),
     )
 
 

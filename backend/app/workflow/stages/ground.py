@@ -38,6 +38,45 @@ async def ground_node(state: Dict[str, Any]) -> Dict[str, Any]:
     retry_patch = _retry_patch(state, "ground")
     context = await _require_context(state)
     compilation = _load_ref_artifact(state, "target_projection", IntentCompilationResult)
+    report_result = None
+
+    # =====================================================================
+    # The complete GROUND flow: Phase 1 - L1 spatial inventory from the
+    # report (every place name + spatial cue + facility->village text +
+    # external neighbor POIs); Phase 2 - matching against KG geometry
+    # (collective village partition + per-role LLM evidence assignment).
+    # Every report-named entity that has any KG geometry is located here;
+    # the enriched gazetteer feeds the evidence index used by spec
+    # resolution below.  Nothing is ever fabricated; evidence-less names
+    # stay explicitly unresolved.
+    # =====================================================================
+    try:
+        from app.spatial.grounding.report_grounder import ground_report
+        from app.spatial.grounding.report_grounder import create_grounding_llm
+
+        facts = list(getattr(context, "location_facts", []) or [])
+        if facts and getattr(context, "gazetteer", None) is not None:
+            session_id = str(state.get("session_id", "") or "")
+            report_result = await ground_report(
+                context,
+                facts,
+                _context_report_text(context),
+                llm=create_grounding_llm(),
+                session_id=session_id,
+            )
+            if report_result.grounded:
+                from app.infrastructure.kg.adapters.gazetteer_adapter import KGGazetteerAdapter
+
+                if getattr(context, "ports", None) is not None:
+                    context.ports.gazetteer = KGGazetteerAdapter(context.gazetteer)
+                logger.info("[workflow:ground] %s", report_result.summary())
+            if getattr(report_result, "reviews", None):
+                logger.info(
+                    "[workflow:ground] %d low-confidence locations queued for human review",
+                    len(report_result.reviews),
+                )
+    except Exception as exc:  # noqa: BLE001 - grounding must never break GROUND
+        logger.warning("[workflow:ground] report grounding failed: %s", exc)
     projection_ref = (state.get("artifact_refs") or {}).get("target_projection")
     specs = [
         _to_typed(item, SpatialReferenceSpec)
@@ -124,7 +163,7 @@ async def ground_node(state: Dict[str, Any]) -> Dict[str, Any]:
     output_refs = {"grounding_result": ref}
     if projection_ref:
         output_refs["target_projection"] = projection_ref
-    return stage_completion_patch(
+    patch = stage_completion_patch(
         state,
         "ground",
         output_refs=output_refs,
@@ -132,6 +171,20 @@ async def ground_node(state: Dict[str, Any]) -> Dict[str, Any]:
         context_patch=_adopt_context(state, context),
         retry_patch=retry_patch,
     )
+    if report_result is not None and getattr(report_result, "reviews", None):
+        patch["ground_human_reviews"] = [
+            {
+                "name": r.name,
+                "role": r.role,
+                "recommended_bsms": list(r.recommended_bsms),
+                "recommended_geometry_ref": r.recommended_geometry_ref,
+                "confidence": r.confidence,
+                "reason": r.reason,
+                "status": r.status,
+            }
+            for r in report_result.reviews
+        ]
+    return patch
 
 
 async def _flash_enhance_unresolved(
@@ -205,7 +258,7 @@ async def _flash_enhance_unresolved(
     if not raw_by_target:
         return {}
 
-    from app.infrastructure.paths import session_run_dir
+    from app.infrastructure.paths import run_tmp_root, session_run_dir
     from app.spatial.grounding.flash_mention_extractor import MentionCache, extract_mentions
 
     run_root = None
@@ -257,7 +310,7 @@ async def _village_cluster_map_for_context(
         clusters = build_village_clusters(parcels)
         if not clusters:
             return {}
-        from app.infrastructure.paths import session_run_dir
+        from app.infrastructure.paths import run_tmp_root, session_run_dir
         from app.spatial.grounding.flash_mention_extractor import (
             create_flash_llm_safe,
         )
@@ -360,7 +413,7 @@ async def _settlement_mentions_for_cluster_mapping(
 
     combined = "\n".join(texts)[:5000]
     if combined:
-        from app.infrastructure.paths import session_run_dir
+        from app.infrastructure.paths import run_tmp_root, session_run_dir
         from app.spatial.grounding.flash_mention_extractor import MentionCache, extract_mentions
 
         cache = MentionCache(run_tmp_root() / "settlement-mention-cache.json")

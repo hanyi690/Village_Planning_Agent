@@ -147,8 +147,19 @@ class PlaceEvidenceIndex:
         )
         self._add_entry(entry)
         self._bind_l1_fact_bsms(fact, entry, parcels, centroid_cache)
+        # 实体级绑定（设施点/地标点 + 同坐标地块）优先；只有实体级缺失才用村锚点兜底
+        if not self._entity_level_bound(entry):
+            self._bind_village_anchor_bsms(fact, entry)
 
     # L1 fact geometry binding (design §3.2: entity-level, never class-level)
+
+    def _entity_level_bound(self, entry: "PlaceEvidenceEntry") -> bool:
+        """实体级绑定：真实 POINT 几何（非 village_anchor/bundled 占位）+ 地块。"""
+        if not entry.source_bsms:
+            return False
+        from app.spatial.grounding.coordinate_identity import point_xy
+
+        return point_xy(entry.geometry_ref) is not None
 
     def _bind_l1_fact_bsms(
         self,
@@ -166,10 +177,10 @@ class PlaceEvidenceIndex:
         but no named KG entity yet.  Unmatched facts stay with empty source_bsms
         (typed unresolved), never a class-level parcel pool.
         """
-        if entry.source_bsms:
+        if entry.source_bsms and self._entity_level_bound(entry):
             return
         role = str(getattr(fact, "role", "") or "")
-        if role != "facility":
+        if role not in ("facility", "landmark"):
             return
         workspace = getattr(self.context, "workspace", None)
         if workspace is None:
@@ -181,34 +192,162 @@ class PlaceEvidenceIndex:
                 return
         if not parcels:
             return
+        # 设施点/地标点可来自 facilities_current 或 annotations_current；
+        # 点标签可能是 text/注记/name/label/facility_name（"祠"对应"祠堂"）。
         points: List[Any] = []
         try:
             points = list((workspace.points.get("facilities_current") or []) or [])
         except Exception:
             points = []
+        if not points:
+            try:
+                points = list((workspace.points.get("annotations_current") or []) or [])
+            except Exception:
+                points = []
+        from app.spatial.grounding.coordinate_identity import point_xy
         from app.spatial.grounding.grounding import query_parcels_near_entity
+        from app.spatial.grounding.topology import hint_tokens
 
-        hit: List[str] = []
+        # 村 hint（如 社前村）：用于在多个同名/同类设施点里按空间拓扑消歧
+        village_bsms: set = set()
+        village_centroid = None
+        hint_text = str(getattr(fact, "spatial_hint", "") or getattr(fact, "source_span", "") or "")
+        gazetteer = getattr(self.context, "gazetteer", None)
+        if gazetteer is not None:
+            for token in hint_tokens(hint_text):
+                entry_g = gazetteer.resolve(token, fuzzy=False) or gazetteer.resolve(token, fuzzy=True)
+                if entry_g is None or not (entry_g.bsms or entry_g.centroid):
+                    continue
+                village_bsms.update(str(b) for b in (entry_g.bsms or []) if b)
+                if village_centroid is None and entry_g.centroid:
+                    village_centroid = tuple(float(x) for x in entry_g.centroid[:2])
+                break
+
+        # 收集所有匹配设施点 → (坐标, 邻近地块, 到村质心距离)
+        matches: List[tuple] = []
         for pt in points:
             geom = getattr(pt, "geometry", None) or {}
-            text = str(getattr(pt, "facility_name", "") or "")
+            text = ""
+            for attr in ("text", "name", "label", "facility_name", "注记"):
+                value = getattr(pt, attr, "") if hasattr(pt, attr) else ""
+                if not value and isinstance(getattr(pt, "properties", None), dict):
+                    value = pt.properties.get(attr, "")
+                if value:
+                    text = str(value).strip()
+                    break
             if not text:
                 continue
-            if text in entry.canonical_name or entry.canonical_name[0] == text:
-                coords = geom.get("coordinates") if isinstance(geom, dict) else None
-                if coords and len(coords) >= 2:
-                    hit.extend(query_parcels_near_entity(
-                        parcels,
-                        (float(coords[0]), float(coords[1])),
-                        max_distance_m=500,
-                        centroid_cache=centroid_cache,
-                    ))
+            name = entry.canonical_name or ""
+            if not (text in name or (name and name[0] == text) or text == name):
+                continue
+            coords = geom.get("coordinates") if isinstance(geom, dict) else None
+            if not coords or len(coords) < 2:
+                continue
+            try:
+                lon, lat = float(coords[0]), float(coords[1])
+            except (TypeError, ValueError):
+                continue
+            near = query_parcels_near_entity(
+                parcels,
+                (lon, lat),
+                max_distance_m=500,
+                centroid_cache=centroid_cache,
+            )
+            dist = float("inf")
+            if village_centroid is not None:
+                dist = ((lon - village_centroid[0]) ** 2 + (lat - village_centroid[1]) ** 2) ** 0.5
+            matches.append(((lon, lat), list(near), dist))
+
+        if not matches:
+            return
+        # 消歧：优先与 hint 村庄地块重叠的点，其次离村质心最近（同坐标=同实体）
+        if village_bsms:
+            matches.sort(
+                key=lambda m: (
+                    -len(set(m[1]) & village_bsms),
+                    m[2],
+                    m[0][0],
+                )
+            )
+        best = matches[0]
+        point_geometry = f"POINT({best[0][0]} {best[0][1]})"
+        hit = list(best[1])
+        if len(matches) > 1:
+            overlap = len(set(best[1]) & village_bsms) if village_bsms else 0
+            entry.provenance.append(
+                f"facility_point_disambiguated:{len(matches)}pts:overlap={overlap}"
+            )
         bsms = [b for b in dict.fromkeys(hit) if b]
         if bsms:
             entry.source_bsms = list(dict.fromkeys([*entry.source_bsms, *bsms]))
-            entry.confidence = max(entry.confidence, 0.5)
-            if not entry.geometry_ref:
-                entry.geometry_ref = "bundled:facility"
+            entry.confidence = max(entry.confidence, 0.7)
+            if point_geometry is not None:
+                entry.geometry_ref = point_geometry
+            provenance = f"facility_point:{point_geometry}" if point_geometry else "facility_point"
+            if provenance not in entry.provenance:
+                entry.provenance.append(provenance)
+
+    def _bind_village_anchor_bsms(
+        self,
+        fact: Any,
+        entry: "PlaceEvidenceEntry",
+    ) -> None:
+        """Bind a non-village L1 fact to a natural village it is reported at.
+
+        The observation ``source_span``/``spatial_hint`` names the village
+        (e.g. ``现状设施 | 供水点 | 园寨 | 5处供水点``).  When that village has
+        a gazetteer entry with a BSM set (LLM-decided many-to-one cluster
+        mapping or GIS name binding), the fact inherits those BSMs.  Village
+        names and BSMs both come from report+KG; nothing is fabricated, and a
+        fact that is itself a village role is never self-anchored.
+        """
+        if entry.source_bsms:
+            return
+        role = str(getattr(fact, "role", "") or "")
+        if role == "village":
+            return
+        gazetteer = getattr(self.context, "gazetteer", None)
+        if gazetteer is None:
+            return
+        span = " ".join(
+            str(x)
+            for x in (
+                getattr(fact, "source_span", "") or "",
+                getattr(fact, "spatial_hint", "") or "",
+                *[str(a) for a in (getattr(fact, "aliases", None) or [])],
+            )
+            if x
+        )
+        if not span:
+            return
+        # Longest village name first to avoid partial-name over-anchoring.
+        candidates = []
+        for ge in list(getattr(gazetteer, "entries", []) or []):
+            bsms = list(dict.fromkeys(getattr(ge, "bsms", None) or []))
+            if not bsms:
+                continue
+            for vn in [
+                str(getattr(ge, "name", "") or ""),
+                *[str(a) for a in (getattr(ge, "aliases", None) or [])],
+            ]:
+                vn = vn.strip()
+                if len(vn) >= 2 and vn in span:
+                    candidates.append((len(vn), vn, ge))
+        if not candidates:
+            return
+        candidates.sort(key=lambda item: -item[0])
+        _, vn, ge = candidates[0]
+        entry.source_bsms = list(dict.fromkeys([*entry.source_bsms, *ge.bsms]))
+        entry.entity_refs.append(
+            str(getattr(ge, "entity_uri", "") or f"gazetteer:{vn}")
+        )
+        entry.provenance.append(f"village_anchor:{vn}")
+        if not entry.geometry_ref:
+            entry.geometry_ref = f"village_anchor:{vn}"
+        entry.confidence = max(
+            entry.confidence,
+            float(getattr(ge, "confidence", 0.0) or 0.0),
+        )
 
     @staticmethod
     def normalize_mention(mention: str) -> str:
@@ -219,6 +358,17 @@ class PlaceEvidenceIndex:
                 token = token[: -len(suffix)].strip()
                 break
         return token
+
+    @staticmethod
+    def _point_xy(geometry_ref: Optional[str]) -> Optional[tuple]:
+        """Extract (lon, lat) from a POINT(...) geometry ref.
+
+        Delegates to ``app.spatial.grounding.coordinate_identity`` (ER
+        principle: 同一坐标 = 同一实体), format-independent.
+        """
+        from app.spatial.grounding.coordinate_identity import point_xy
+
+        return point_xy(geometry_ref)
 
     def _register_poi(
         self,
@@ -239,6 +389,43 @@ class PlaceEvidenceIndex:
                     geometry_ref = f"POINT({coords[0]} {coords[1]})"
             role = "facility" if category == "现状设施点" else "landmark"
             source_bsms = self._poi_source_bsms(geom, parcels, centroid_cache)
+
+            # General entity resolution (GER-LLM / ER pattern): a POI that
+            # shares its source point with an already-registered KG entity
+            # (same coordinates, same role) is the same real-world place.
+            # Merge the POI's near-parcel BSMs and raw label onto that entity
+            # instead of creating a duplicate name entry - no label/alias map.
+            if geometry_ref:
+                poi_xy = self._point_xy(geometry_ref)
+                target = None
+                if poi_xy is not None:
+                    for e in self.entries:
+                        if e.role != role:
+                            continue
+                        e_xy = self._point_xy(e.geometry_ref)
+                        if (
+                            e_xy is not None
+                            and abs(e_xy[0] - poi_xy[0]) < 1e-5
+                            and abs(e_xy[1] - poi_xy[1]) < 1e-5
+                        ):
+                            # Co-location = same real-world place (ER pattern):
+                            # merge regardless of whether the target is a KG
+                            # entity or another uploaded POI annotation.
+                            target = e
+                            break
+                if target is not None:
+                    target.source_bsms = list(
+                        dict.fromkeys([*target.source_bsms, *source_bsms])
+                    )
+                    if text not in target.aliases:
+                        target.aliases.append(text)
+                    if f"poi:{text}" not in target.entity_refs:
+                        target.entity_refs.append(f"poi:{text}")
+                    if "poi" not in target.provenance:
+                        target.provenance.append("poi")
+                    target.confidence = max(target.confidence, 0.5)
+                    continue
+
             self._add_entry(
                 PlaceEvidenceEntry(
                     canonical_name=text,
@@ -396,11 +583,18 @@ class PlaceEvidenceIndex:
         try:
             from app.infrastructure.kg.ontology import GeoPredicates
 
-            geometry_node = graph.value(subject, GeoPredicates.hasGeometry)
-            if geometry_node is not None:
-                wkt = graph.value(geometry_node, GeoPredicates.asWKT)
-                if wkt:
-                    return f"kg_wkt:{str(wkt)[:200]}"
+            # The builder stores point centroids under hasCentroid and full
+            # geometries under hasGeometry; read both so any KG entity with a
+            # locatable centre gets a geometry_ref.
+            for predicate in (
+                GeoPredicates.hasGeometry,
+                GeoPredicates.hasCentroid,
+            ):
+                geometry_node = graph.value(subject, predicate)
+                if geometry_node is not None:
+                    wkt = graph.value(geometry_node, GeoPredicates.asWKT)
+                    if wkt:
+                        return f"kg_wkt:{str(wkt)[:200]}"
         except Exception:
             pass
         return None
@@ -438,26 +632,88 @@ class PlaceEvidenceIndex:
         return None
 
     def _add_entry(self, entry: PlaceEvidenceEntry) -> None:
+        # 同一坐标 = 同一实体；同角色同名/别名重叠 = 同一实体（ER 原则）。
+        coord_target = self._coordinate_merge_target(entry)
+        if coord_target is not None:
+            self._merge_into(coord_target, entry)
+            return
+        name_target = self._name_merge_target(entry)
+        if name_target is not None:
+            self._merge_into(name_target, entry)
+            return
         key = _normalize(entry.canonical_name)
         existing = self._by_canonical.get(key)
         if existing is not None:
-            existing.aliases = list(dict.fromkeys([*existing.aliases, *entry.aliases]))
-            existing.entity_refs = list(dict.fromkeys([*existing.entity_refs, *entry.entity_refs]))
-            existing.entity_types = list(dict.fromkeys([*existing.entity_types, *entry.entity_types]))
-            existing.source_bsms = list(dict.fromkeys([*existing.source_bsms, *entry.source_bsms]))
-            existing.provenance = list(dict.fromkeys([*existing.provenance, *entry.provenance]))
-            existing.relation_refs = list(
-                dict.fromkeys([*existing.relation_refs, *entry.relation_refs])
-            )
-            if not existing.geometry_ref and entry.geometry_ref:
-                existing.geometry_ref = entry.geometry_ref
-            existing.confidence = max(existing.confidence, entry.confidence)
+            self._merge_into(existing, entry)
             entry = existing
         else:
             self.entries.append(entry)
             self._by_canonical[key] = entry
         for alias in entry.aliases:
             self._by_alias.setdefault(_normalize(alias), entry)
+
+    def _name_merge_target(
+        self, entry: PlaceEvidenceEntry
+    ) -> Optional[PlaceEvidenceEntry]:
+        """同角色 + 规范名/别名重叠 = 同一实体（例如 L1 fact「园寨」与
+        gazetteer「园寨村」(别名 园寨) 合并，BSM/几何流入同一条目）。"""
+        keys = {
+            _normalize(entry.canonical_name),
+            *(_normalize(str(a)) for a in entry.aliases if a),
+        }
+        keys.discard("")
+        if not keys:
+            return None
+        for existing in self.entries:
+            if existing.role != entry.role:
+                continue
+            existing_keys = {
+                _normalize(existing.canonical_name),
+                *(_normalize(str(a)) for a in existing.aliases if a),
+            }
+            existing_keys.discard("")
+            if existing_keys & keys:
+                return existing
+        return None
+
+    def _coordinate_merge_target(
+        self, entry: PlaceEvidenceEntry
+    ) -> Optional[PlaceEvidenceEntry]:
+        """同坐标 + 同角色 的既有条目视为同一真实实体（ER 原则）。"""
+        if not entry.geometry_ref:
+            return None
+        try:
+            from app.spatial.grounding.coordinate_identity import same_coordinate
+        except Exception:  # noqa: BLE001
+            return None
+        for existing in self.entries:
+            if existing.role != entry.role:
+                continue
+            if existing.geometry_ref and same_coordinate(
+                existing.geometry_ref, entry.geometry_ref, tol=1e-5
+            ):
+                return existing
+        return None
+
+    @staticmethod
+    def _merge_into(target: PlaceEvidenceEntry, source: PlaceEvidenceEntry) -> None:
+        """Merge ``source`` into ``target``, accumulating evidence (ER merge)."""
+        target.aliases = list(dict.fromkeys([*target.aliases, *source.aliases]))
+        target.entity_refs = list(dict.fromkeys([*target.entity_refs, *source.entity_refs]))
+        target.entity_types = list(dict.fromkeys([*target.entity_types, *source.entity_types]))
+        target.source_bsms = list(dict.fromkeys([*target.source_bsms, *source.source_bsms]))
+        target.provenance = list(dict.fromkeys([*target.provenance, *source.provenance]))
+        target.relation_refs = list(
+            dict.fromkeys([*target.relation_refs, *source.relation_refs])
+        )
+        if not target.geometry_ref and source.geometry_ref:
+            target.geometry_ref = source.geometry_ref
+        try:
+            target.confidence = max(
+                float(target.confidence or 0.0), float(source.confidence or 0.0)
+            )
+        except (TypeError, ValueError):
+            pass
 
     # ── Resolution ───────────────────────────────────────────────────
 
@@ -513,9 +769,7 @@ class PlaceEvidenceIndex:
             score = total(evidence)
             candidates.append(
                 PlaceResolutionCandidate(
-                    entity_ref=""
-                    if not entry.entity_refs
-                    else entry.entity_refs[0],
+                    entity_ref=_preferred_entity_ref(entry),
                     entity_type=entry.entity_types[0] if entry.entity_types else entry.role,
                     canonical_name=entry.canonical_name,
                     aliases=list(entry.aliases),
@@ -541,8 +795,13 @@ class PlaceEvidenceIndex:
         else:
             top = candidates[0]
             if top.score >= _RESOLVED_THRESHOLD:
-                status = "resolved"
-                selected_entity_ref = top.entity_ref
+                if _candidate_has_spatial(top):
+                    status = "resolved"
+                    selected_entity_ref = top.entity_ref
+                else:
+                    # 名字命中 ≠ 已解析：无 BSM/几何/KG 实体时不能算 resolved
+                    status = "ambiguous"
+                    unresolved_reason = "name-only match without spatial evidence"
             elif len(candidates) > 1 and (candidates[0].score - candidates[1].score) <= _AMBIGUOUS_GAP:
                 status = "ambiguous"
                 unresolved_reason = "multiple close candidates or weak evidence"
@@ -569,6 +828,31 @@ class PlaceEvidenceIndex:
         if result.status != "resolved" or not result.candidates:
             return []
         return list(result.candidates[0].source_bsms)
+
+
+def _preferred_entity_ref(entry: PlaceEvidenceEntry) -> str:
+    """优先真实 KG 实体 URI（http），其次 POI/gazetteer，最后合成 l1_fact。"""
+    refs = [str(r) for r in (getattr(entry, "entity_refs", None) or []) if r]
+    if not refs:
+        return ""
+    for r in refs:
+        if r.startswith("http"):
+            return r
+    for r in refs:
+        if r.startswith(("poi:", "gazetteer:")):
+            return r
+    return refs[0]
+
+
+def _candidate_has_spatial(candidate: PlaceResolutionCandidate) -> bool:
+    """候选是否有空间引用（BSM 集 / 几何 / 真实 KG 实体）。"""
+    if candidate.source_bsms:
+        return True
+    if candidate.geometry_ref:
+        return True
+    if str(candidate.entity_ref or "").startswith("http"):
+        return True
+    return False
 
 
 def _normalize(name: str) -> str:

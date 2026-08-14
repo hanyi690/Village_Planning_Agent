@@ -13,6 +13,8 @@ from app.contracts.artifacts import ArtifactRef
 from app.contracts.workflow.workflow_contracts import GateDecision
 
 
+# ``execute`` 是有意不在 GATE_STAGES 里的显式豁免（A4）：EXECUTE 阶段不
+# 产出 gate artifact，其路由只看 fatal_error（见 root_graph.route_after_execute）。
 GATE_STAGES = frozenset(
     {
         "l1",
@@ -258,6 +260,34 @@ class WorkflowState(TypedDict, total=False):
     runtime: Annotated[dict[str, Any], _merge_runtime]
     repair_directives: Annotated[dict[str, Any], _merge_control]
     repair_impact: Annotated[dict[str, Any], _merge_control]
+    # A5: 子图化入口提示 / 跨段并行派发载荷（瞬态，入口路由消费后清空）。
+    subgraph_entry: Annotated[str | None, _merge_control]
+    pending_dispatches: Annotated[list[dict[str, Any]], _merge_control]
+
+
+class WorkflowOutput(TypedDict, total=False):
+    """Application-facing output projection (A6).
+
+    Only these control keys are visible to a direct ``invoke`` caller; the
+    checkpoint keeps the full internal ``WorkflowState`` (including messages,
+    worker results and stage-local runtime).  Mirrors
+    :func:`project_workflow_state`.
+    """
+
+    run_id: str
+    session_id: str
+    branch_id: str
+    phase: str
+    active_stage: str
+    status: str
+    delivery_status: str
+    context_ref: dict[str, Any]
+    context_fingerprint: str
+    artifact_refs: dict[str, Any]
+    gate_ref: Any
+    retry: dict[str, Any]
+    interrupt_ref: Any
+    terminal_ref: Any
 
 
 def _active_stage(state: dict[str, Any]) -> str:
@@ -370,6 +400,7 @@ __all__ = [
     "GATE_LOAD_FAILED",
     "GATE_STAGES",
     "RootGateResolutionError",
+    "WorkflowOutput",
     "WorkflowState",
     "control_state_from_checkpoint",
     "load_root_gate",

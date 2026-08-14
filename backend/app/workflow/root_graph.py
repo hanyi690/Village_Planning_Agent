@@ -1,13 +1,9 @@
 """Main planning graph factory. Migrated from agent/graph.py per docs/architecture/agent-graph.md §5."""
 
-from typing import Dict, Any, List, Literal, Optional
+from typing import Any, Callable, Dict, List
 from langgraph.graph import StateGraph, END, START
 from langchain_core.messages import HumanMessage
 
-from app.workflow.layers.phase_machine import PlanningPhase, get_layer_dimensions
-from app.domain.assessment.analysis_node import analyze_dimension, DIMENSION_NAMES
-from app.workflow.plan_state.completion_node import layer_completion_check
-from app.workflow.layers.layer_aggregate_node import layer_aggregate_node
 from app.workflow.layers.layer_router import (
     l1_worker_node,
     l2_worker_node,
@@ -27,10 +23,15 @@ from app.workflow.stages.deliver import deliver_node as _deliver_stage
 from app.workflow.stage_audit import audited_stage
 from app.workflow.runtime_adapter import adapt_node, materialize_workflow_state
 from app.workflow.routing import authorize_route_result
+from app.workflow.gate_policy import (
+    DEFAULT_GATE_ROUTE_POLICY,
+    GATE_ROUTE_POLICY,
+)
 from app.workflow.terminal import diagnostic_terminal, terminal_patch
 from app.workflow.state import (
     GATE_LOAD_FAILED,
     GATE_STAGES,
+    WorkflowOutput,
     WorkflowState,
     load_root_gate,
     root_gate_route,
@@ -147,11 +148,6 @@ except ImportError:
     _TRANSIENT_RETRY_POLICY = None
 
 
-async def analyze_dimension_node(state: Dict[str, Any]) -> Dict[str, Any]:
-    """维度分析节点"""
-    return await analyze_dimension(state)
-
-
 async def _audited_dimension_worker(worker, state: Dict[str, Any]) -> Dict[str, Any]:
     """Preserve provider failures as a merge-safe parallel event channel."""
     patch = await worker(state)
@@ -189,6 +185,21 @@ _BUSINESS_RETRY_ROUTES = {
 def _retry_limit(state: Dict[str, Any]) -> int:
     configured = state.get("max_retries")
     return 3 if configured is None else max(0, int(configured))
+
+
+def _dimension_retry_limit(state: Dict[str, Any]) -> int:
+    """Per-dimension LLM failure budget before diagnostic degradation.
+
+    A failed dimension is resumed individually (provider_resume_dispatch re-
+    dispatches ONLY the failed dimensions); this bounds how many times that
+    single dimension may fail before the run degrades to a diagnostic terminal.
+    """
+    from app.core.settings import DIMENSION_RETRY_LIMIT
+
+    configured = state.get("dimension_retry_limit")
+    if configured is None:
+        return max(0, int(DIMENSION_RETRY_LIMIT))
+    return max(0, int(configured))
 
 
 def _exhausted_retry_stage(state: Dict[str, Any]) -> str | None:
@@ -278,91 +289,97 @@ def _retry_or_human(state: Dict[str, Any], stage: str, retry_target: str) -> str
     return retry_target
 
 
-def route_after_target_projection(state: Dict[str, Any]) -> str:
-    route = root_gate_route(state, "target_projection")
+# ── A1: post-L3 gate 路由统一走声明式策略表 ──────────────────────────
+# (source_stage, gate_route) -> (action, *args) 的映射定义在
+# ``app/workflow/gate_policy.py``。路由函数只做“查表 + 特例”；
+# GATE_LOAD_FAILED 由 ``normalize_gate_route`` 统一折叠成 END_DIAGNOSTIC
+# 哨兵（A3），不再逐函数重复判断。
+_GATE_ROUTE_TABLE = GATE_ROUTE_POLICY
+_GATE_ROUTE_DEFAULT = DEFAULT_GATE_ROUTE_POLICY
+
+
+def _retry_target_from_route(route: str) -> str:
+    """Derive the retry target from a ``RETRY_<TARGET>`` gate route suffix."""
+    return route.split("_", 1)[1].lower() if "_" in route else route.lower()
+
+
+def normalize_gate_route(state: Dict[str, Any], stage: str) -> str:
+    """All post-L3 gate routers read through this single entry point (A3).
+
+    ``root_gate_route`` 的 GATE_LOAD_FAILED 哨兵由 ``_evaluate_gate_policy``
+    统一折叠为 END_DIAGNOSTIC；此处保留原始值，因为 validate/reconcile 的
+    feedback_route 可能是字面量 ``END_DIAGNOSTIC``（重试耗尽后继续产出诊断
+    清单，是合法表项），与“加载失败”语义不同，不能折叠混淆。
+    """
+    return root_gate_route(state, stage)
+
+
+def _evaluate_gate_policy(state: Dict[str, Any], stage: str, route: str) -> str:
+    """查表求值一个 gate 路由；未命中表项时走该阶段兜底策略。
+
+    GATE_LOAD_FAILED（加载失败/拒绝结果）在任何阶段都 fail-closed 到
+    END_DIAGNOSTIC（A3）。字面量 ``END_DIAGNOSTIC`` feedback_route 对
+    validate/reconcile 是合法表项（forward 到下游产出诊断清单），由
+    策略表命中，不在这里被折叠。
+    """
     if route == GATE_LOAD_FAILED:
         return END_DIAGNOSTIC
-    if route == "PASS":
-        return "ground"
-    if route in ("REPAIR", "REVISE"):
-        return _retry_or_human(state, "target_projection", "target_projection")
-    return "human_review"
+    policy = _GATE_ROUTE_TABLE.get(stage, {}).get(route) or _GATE_ROUTE_DEFAULT[stage]
+    action = policy[0]
+    if action == "forward":
+        return policy[1]
+    if action == "retry":
+        return _retry_or_human(state, policy[1], policy[2])
+    if action == "retry_from_route":
+        return _retry_or_human(state, policy[1], _retry_target_from_route(route))
+    if action == "human":
+        return "human_review"
+    if action == "end":
+        return END
+    if action == "end_diagnostic":
+        return END_DIAGNOSTIC
+    if action == "revision_or_human":
+        if not state.get("revision_target_dimensions"):
+            return "human_review"
+        return _retry_or_human(state, "validate", "revision_dispatch")
+    raise ValueError(f"unknown gate policy action: {action!r}")
+
+
+def route_after_target_projection(state: Dict[str, Any]) -> str:
+    return _evaluate_gate_policy(state, "target_projection", normalize_gate_route(state, "target_projection"))
 
 
 def route_after_ground(state: Dict[str, Any]) -> str:
-    route = root_gate_route(state, "ground")
-    if route == GATE_LOAD_FAILED:
-        return END_DIAGNOSTIC
-    if route == "PASS":
-        return "select"
-    if route == "EXPLORE":
-        return _retry_or_human(state, "ground", "ground")
-    return "human_review"
+    return _evaluate_gate_policy(state, "ground", normalize_gate_route(state, "ground"))
 
 
 def route_after_select(state: Dict[str, Any]) -> str:
-    route = root_gate_route(state, "select")
-    if route == GATE_LOAD_FAILED:
-        return END_DIAGNOSTIC
-    if route == "PASS":
-        return "execute"
-    if route == "RETRY_GROUND":
-        return _retry_or_human(state, "select", "ground")
-    return "human_review"
+    return _evaluate_gate_policy(state, "select", normalize_gate_route(state, "select"))
 
 
 def route_after_execute(state: Dict[str, Any]) -> str:
+    """EXECUTE 是 gate 路由的显式豁免（A4），不是漏配。
+
+    ``GATE_STAGES``（state.py）与 ``GATE_ROUTED_STAGES``（gate_policy.py）
+    都没有 execute：EXECUTE 阶段内部自带失败边界（execute.py 里 GIS worker
+    子图超时/取消会写成 ``fatal_error``），所以这里不读 gate artifact，只在
+    fatal_error 时 fail-closed 到 END_DIAGNOSTIC，否则恒推进到 validate。
+    """
     if isinstance(state.get("fatal_error"), dict):
         return END_DIAGNOSTIC
     return "validate"
 
 
 def route_after_validate(state: Dict[str, Any]) -> str:
-    route = root_gate_route(state, "validate")
-    if route == GATE_LOAD_FAILED:
-        return END_DIAGNOSTIC
-    if route == "PASS":
-        return "reconcile"
-    if route == "END_DIAGNOSTIC":
-        return "reconcile"
-    if route in ("RETRY_EXECUTE", "RETRY_SELECT", "RETRY_GROUND", "RETRY_TARGET_PROJECTION"):
-        stage_map = {
-            "RETRY_EXECUTE": "validate",
-            "RETRY_SELECT": "validate",
-            "RETRY_GROUND": "validate",
-            "RETRY_TARGET_PROJECTION": "validate",
-        }
-        return _retry_or_human(state, stage_map.get(route, "validate"), route[6:].lower())
-    if route == "RETRY_L3":
-        if not state.get("revision_target_dimensions"):
-            return "human_review"
-        return _retry_or_human(state, "validate", "revision_dispatch")
-    return "human_review"
+    return _evaluate_gate_policy(state, "validate", normalize_gate_route(state, "validate"))
 
 
 def route_after_reconcile(state: Dict[str, Any]) -> str:
-    route = root_gate_route(state, "reconcile")
-    if route == GATE_LOAD_FAILED:
-        return END_DIAGNOSTIC
-    if route == "PASS":
-        return "deliver"
-    if route == "END_DIAGNOSTIC":
-        return "deliver"
-    if route == "RETRY_EXECUTE":
-        return _retry_or_human(state, "reconcile", "execute")
-    if route == "RETRY_L3":
-        return "human_review"
-    return "human_review"
+    return _evaluate_gate_policy(state, "reconcile", normalize_gate_route(state, "reconcile"))
 
 
 def route_after_deliver(state: Dict[str, Any]) -> str:
-    route = root_gate_route(state, "deliver")
-    if route == GATE_LOAD_FAILED:
-        return END_DIAGNOSTIC
-    if route == "PASS":
-        return END
-    return END_DIAGNOSTIC
-
+    return _evaluate_gate_policy(state, "deliver", normalize_gate_route(state, "deliver"))
 
 def _root_gate_payload(state: Dict[str, Any], stage: str) -> Dict[str, Any]:
     """Return a serialized, typed root gate; never fall back to inline data."""
@@ -427,18 +444,33 @@ def _remaining_unresolved_target_ids(state: Dict[str, Any]) -> list[str]:
     return list(dict.fromkeys(target_ids))
 
 
-def route_after_human_review(state: Dict[str, Any]) -> str:
-    """Route post-HITL resume: approve forwards, reject goes to conversation."""
-    paused_stage = _normalize_paused_stage(state.get("paused_stage"))
+# ── A2: HITL resume 路由表 ────────────────────────────────────────────
+# (paused_stage, action) -> 处理器。哨兵优先级最高（provider resume / gate
+# 加载失败 / diagnostic_only / fatal_error），随后才按 action 分派。
+_POST_L3_GATE_STAGES = frozenset(
+    {"target_projection", "ground", "select", "validate", "reconcile", "deliver"}
+)
+
+
+def _decision_action(state: Dict[str, Any]) -> str | None:
+    decisions = state.get("human_review_decisions") or {}
+    if isinstance(decisions, dict):
+        return decisions.get("action")
+    return None
+
+
+def _human_review_sentinel_route(state: Dict[str, Any]) -> str | None:
+    """Return a sentinel route, or None when the (stage, action) table applies."""
     if state.get("provider_resume_dimensions"):
         return "provider_resume_dispatch"
-    if paused_stage in {
-        "target_projection", "ground", "select", "validate", "reconcile", "deliver",
-    } and root_gate_route(state, paused_stage) == GATE_LOAD_FAILED:
+    paused_stage = _normalize_paused_stage(state.get("paused_stage"))
+    if (
+        paused_stage in _POST_L3_GATE_STAGES
+        and root_gate_route(state, paused_stage) == GATE_LOAD_FAILED
+    ):
         return END_DIAGNOSTIC
     if state.get("delivery_status") == "diagnostic_only":
-        decisions = state.get("human_review_decisions") or {}
-        action = decisions.get("action") if isinstance(decisions, dict) else None
+        action = _decision_action(state)
         if action in ("accept", "approve") and paused_stage in {"validate", "reconcile"}:
             return END_DIAGNOSTIC
         if paused_stage == "validate":
@@ -448,69 +480,115 @@ def route_after_human_review(state: Dict[str, Any]) -> str:
         return END_DIAGNOSTIC
     if state.get("fatal_error"):
         return END
+    return None
+
+
+def _approve_validate_reconcile(state: Dict[str, Any], paused_stage: str) -> str:
+    if state.get("delivery_status") == "diagnostic_only":
+        return END_DIAGNOSTIC
+    if state.get("structural_deferral_revision"):
+        return "execute"
+    return END_DIAGNOSTIC
+
+
+def _approve_layer(state: Dict[str, Any], paused_stage: str) -> str:
+    # Approving a layer gate means continue processing.  Unresolved
+    # spatial facts must remain unresolved and be handled by projection/GROUND;
+    # they must not send an approved L3 checkpoint back to HUMAN.
+    target = _STAGE_FORWARD_TARGET.get(paused_stage)
+    if target:
+        return END if target == "__end__" else target
+    return END
+
+
+def _approve_select(state: Dict[str, Any], paused_stage: str) -> str:
     decisions = state.get("human_review_decisions") or {}
-    action = decisions.get("action") if isinstance(decisions, dict) else None
+    if (
+        paused_stage == "select"
+        and isinstance(decisions, dict)
+        and decisions.get("defer_unresolved_spatial_references") is True
+    ):
+        return "execute" if state.get("human_deferred_select_revision") else "human_review"
+    # Approval is an explicit human override of the SELECT gate. The
+    # decision has already been recorded in the checkpoint; do not
+    # re-enter HUMAN solely because stale unresolved-target metadata
+    # survived the gate revision.
+    return "execute"
+
+
+def _approve_ground(state: Dict[str, Any], paused_stage: str) -> str:
+    if _remaining_unresolved_target_ids(state):
+        return "human_review"
+    decisions = state.get("human_review_decisions") or {}
+    if (
+        paused_stage == "ground"
+        and isinstance(decisions, dict)
+        and decisions.get("defer_unresolved_spatial_references") is True
+    ):
+        if root_gate_route(state, "ground") == "PASS":
+            return "select"
+        return "human_review"
+    return END
+
+
+def _approve_default(state: Dict[str, Any], paused_stage: str) -> str:
+    if _remaining_unresolved_target_ids(state):
+        return "human_review"
+    return END
+
+
+_APPROVE_ROUTE_HANDLERS: Dict[str, Callable[[Dict[str, Any], str], str]] = {
+    "l1": _approve_layer,
+    "l2": _approve_layer,
+    "l3": _approve_layer,
+    "validate": _approve_validate_reconcile,
+    "reconcile": _approve_validate_reconcile,
+    "select": _approve_select,
+    "ground": _approve_ground,
+}
+
+
+def _route_retry(state: Dict[str, Any], paused_stage: str) -> str:
+    if state.get("is_revision") and state.get("revision_target_dimensions"):
+        return "revision_dispatch"
+    retry_stage = paused_stage if paused_stage else "target_projection"
+    if retry_stage in {"validate", "reconcile"}:
+        try:
+            gate = load_root_gate(state, retry_stage)
+        except Exception:
+            return END_DIAGNOSTIC
+        if gate.progress_made is False or gate.inputs_changed is False:
+            return END_DIAGNOSTIC
+    configured_limit = state.get("max_retries")
+    max_retries = 3 if configured_limit is None else max(0, int(configured_limit))
+    current = int((state.get("retry_counts") or {}).get(retry_stage, 0))
+    if current >= max_retries:
+        return END_DIAGNOSTIC
+    return retry_stage
+
+
+def route_after_human_review(state: Dict[str, Any]) -> str:
+    """Route post-HITL resume: approve forwards, reject goes to conversation.
+
+    A2: (paused_stage, action) 分派表 + 显式哨兵，替代原先 12+ 目标的
+    手工 if-else。行为保持不变，分支可审。
+    """
+    sentinel = _human_review_sentinel_route(state)
+    if sentinel is not None:
+        return sentinel
+    paused_stage = _normalize_paused_stage(state.get("paused_stage"))
+    action = _decision_action(state)
     if action in ("accept", "approve"):
         if state.get("classification_revision"):
             return "target_projection"
-        if paused_stage in {"validate", "reconcile"}:
-            if state.get("delivery_status") == "diagnostic_only":
-                return END_DIAGNOSTIC
-            if state.get("structural_deferral_revision"):
-                return "execute"
-            return END_DIAGNOSTIC
-        # Approving a layer gate means continue processing.  Unresolved
-        # spatial facts must remain unresolved and be handled by projection/GROUND;
-        # they must not send an approved L3 checkpoint back to HUMAN.
-        if paused_stage in {"l1", "l2", "l3"}:
-            target = _STAGE_FORWARD_TARGET.get(paused_stage)
-            if target:
-                return END if target == "__end__" else target
-        if (
-            paused_stage == "select"
-            and isinstance(decisions, dict)
-            and decisions.get("defer_unresolved_spatial_references") is True
-        ):
-            return "execute" if state.get("human_deferred_select_revision") else "human_review"
-        if paused_stage == "select":
-            # Approval is an explicit human override of the SELECT gate. The
-            # decision has already been recorded in the checkpoint; do not
-            # re-enter HUMAN solely because stale unresolved-target metadata
-            # survived the gate revision.
-            return "execute"
-        if _remaining_unresolved_target_ids(state):
-            return "human_review"
-        if (
-            paused_stage == "ground"
-            and isinstance(decisions, dict)
-            and decisions.get("defer_unresolved_spatial_references") is True
-        ):
-            if root_gate_route(state, "ground") == "PASS":
-                return "select"
-            return "human_review"
-        return END
+        handler = _APPROVE_ROUTE_HANDLERS.get(paused_stage, _approve_default)
+        return handler(state, paused_stage)
     if action == "retry":
-        if state.get("is_revision") and state.get("revision_target_dimensions"):
-            return "revision_dispatch"
-        retry_stage = paused_stage if paused_stage else "target_projection"
-        if retry_stage in {"validate", "reconcile"}:
-            try:
-                gate = load_root_gate(state, retry_stage)
-            except Exception:
-                return END_DIAGNOSTIC
-            progress_made = gate.progress_made
-            inputs_changed = gate.inputs_changed
-            if progress_made is False or inputs_changed is False:
-                return END_DIAGNOSTIC
-        configured_limit = state.get("max_retries")
-        max_retries = 3 if configured_limit is None else max(0, int(configured_limit))
-        current = int((state.get("retry_counts") or {}).get(retry_stage, 0))
-        if current >= max_retries:
-            return END_DIAGNOSTIC
-        return retry_stage
+        return _route_retry(state, paused_stage)
     if action == "reject":
         return "conversation"
     return END
+
 
 
 def _normalize_paused_stage(value: Any) -> str | None:
@@ -615,107 +693,37 @@ def create_unified_planning_graph(checkpointer=None) -> StateGraph:
     Wave M: post-L3 链拆为主图独立节点 (projection/ground/select/execute/validate/
     reconcile/deliver/human_review），L3 gate PASS 后经 advance_phase 自动进入
     target projection，不再依赖 gis_agent 黑盒节点。
+    A5: 四段语义拆成子图 —— intent_loop / cognitive / spatial_chain / hitl，
+    见 app/workflow/segments.py。父图只保留 bootstrap_context + 四个段节点 +
+    end_diagnostic；跨段跳转统一走 Command(graph=Command.PARENT)。
     """
-    from app.workflow.conversation import after_conversation, after_analysis, conversation_node
+    from app.workflow.segments import build_segments
 
-    logger.info("[图构建] 构建规划图")
-    builder = StateGraph(WorkflowState)
+    logger.info("[图构建] 构建规划图（四段子图）")
+    segments = build_segments(checkpointer)
 
-    builder.add_node("conversation", adapt_node(conversation_node))
-    if _HAS_RETRY_POLICY:
-        builder.add_node("execute_tools", adapt_node(execute_tools_node), retry_policy=_TRANSIENT_RETRY_POLICY)
-    else:
-        builder.add_node("execute_tools", adapt_node(execute_tools_node))
-    builder.add_node("l1_worker", adapt_node(audited_l1_worker, worker=True))
-    builder.add_node("l2_worker", adapt_node(audited_l2_worker, worker=True))
-    builder.add_node("l3_worker", adapt_node(audited_l3_worker, worker=True))
-    builder.add_node("advance_phase", adapt_node(_authorized_advance_phase))
-    builder.add_node("revision_dispatch", adapt_node(_authorized_revision_dispatch))
-    builder.add_node("provider_resume_dispatch", adapt_node(_authorized_provider_resume_dispatch))
-    # Dynamic Send workers form one map super-step.  The completion barrier
-    # must run once only after every pending worker branch has finished;
-    # otherwise several completion/aggregate tasks can survive in the same
-    # checkpoint and race the post-L3 chain.
-    builder.add_node("layer_completion_check", adapt_node(layer_completion_check, worker=True), defer=True)
-    builder.add_node("layer_aggregate", adapt_node(layer_aggregate_node, worker=True))
+    # A6: 多 Schema 隔离 —— input 保留完整 WorkflowState（运行时会用
+    # aupdate_state(as_node="__start__") 写全量初始状态，input_schema 会过滤
+    # 该写入，因此不能收窄，已实测验证）；output 收敛到应用可见的控制投影
+    # WorkflowOutput，checkpoint 仍保留全量内部状态，values 流不受影响。
+    builder = StateGraph(
+        WorkflowState,
+        input_schema=WorkflowState,
+        output_schema=WorkflowOutput,
+    )
+
     builder.add_node("bootstrap_context", adapt_node(bootstrap_context_node))
-    # ── Wave M: post-L3 主图独立节点 ──
-    builder.add_node("target_projection", adapt_node(target_projection_node))
-    builder.add_node("ground", adapt_node(ground_node))
-    builder.add_node("select", adapt_node(select_node))
-    builder.add_node("execute", adapt_node(execute_node))
-    builder.add_node("validate", adapt_node(validate_node))
-    builder.add_node("reconcile", adapt_node(reconcile_node))
-    builder.add_node("deliver", adapt_node(deliver_node))
-    builder.add_node("human_review_prepare", adapt_node(prepare_human_review))
-    builder.add_node("human_review_publish", adapt_node(publish_human_review_pause))
-    builder.add_node("human_review_wait", adapt_node(await_human_review))
-    builder.add_node("human_review_apply", adapt_node(apply_human_review_decision))
+    builder.add_node("intent_loop", segments["intent_loop"])
+    builder.add_node("cognitive", segments["cognitive"])
+    builder.add_node("spatial_chain", segments["spatial_chain"])
+    builder.add_node("hitl", segments["hitl"])
     builder.add_node(END_DIAGNOSTIC, adapt_node(end_diagnostic_node))
 
     # Build the authoritative data context before any model or dimension
     # worker runs.  Raw documents stay in the data layer; the checkpoint only
     # carries the resulting context/artifact references.
     builder.add_edge(START, "bootstrap_context")
-    builder.add_conditional_edges("conversation", lambda state: _dispatch_route("conversation", after_conversation, state),
-        {"execute_tools": "execute_tools", "target_projection": "target_projection",
-         "l1_worker": "l1_worker", "l2_worker": "l2_worker", "l3_worker": "l3_worker",
-         END: END})
-    builder.add_conditional_edges("execute_tools", lambda state: _dispatch_fixed("execute_tools", "conversation", state),
-        {"conversation": "conversation", END_DIAGNOSTIC: END_DIAGNOSTIC})
-    builder.add_conditional_edges("bootstrap_context", lambda state: _dispatch_fixed("bootstrap_context", "conversation", state),
-        {"conversation": "conversation", END_DIAGNOSTIC: END_DIAGNOSTIC})
-    builder.add_conditional_edges("l1_worker", lambda state: _dispatch_fixed("l1_worker", "layer_completion_check", state),
-        {"layer_completion_check": "layer_completion_check", END_DIAGNOSTIC: END_DIAGNOSTIC})
-    builder.add_conditional_edges("l2_worker", lambda state: _dispatch_fixed("l2_worker", "layer_completion_check", state),
-        {"layer_completion_check": "layer_completion_check", END_DIAGNOSTIC: END_DIAGNOSTIC})
-    builder.add_conditional_edges("l3_worker", lambda state: _dispatch_fixed("l3_worker", "layer_completion_check", state),
-        {"layer_completion_check": "layer_completion_check", END_DIAGNOSTIC: END_DIAGNOSTIC})
-    builder.add_conditional_edges("layer_completion_check", lambda state: _dispatch_fixed("layer_completion_check", "layer_aggregate", state),
-        {"layer_aggregate": "layer_aggregate", END_DIAGNOSTIC: END_DIAGNOSTIC})
-    builder.add_conditional_edges("layer_aggregate", lambda state: _dispatch_route("layer_aggregate", after_analysis, state),
-        {"advance_phase": "advance_phase", "target_projection": "target_projection", "conversation": "conversation",
-         "l1_worker": "l1_worker", "l2_worker": "l2_worker", "l3_worker": "l3_worker",
-         "human_review": "human_review_prepare",
-         END: END})
-    # ── Wave M: post-L3 主图链条件边 ──
-    builder.add_conditional_edges("target_projection", lambda state: _dispatch_route("target_projection", route_after_target_projection, state),
-        {"ground": "ground", "target_projection": "target_projection", "human_review": "human_review_prepare",
-         END_DIAGNOSTIC: END_DIAGNOSTIC})
-    builder.add_conditional_edges("ground", lambda state: _dispatch_route("ground", route_after_ground, state),
-        {"select": "select", "ground": "ground", "human_review": "human_review_prepare",
-         END_DIAGNOSTIC: END_DIAGNOSTIC})
-    builder.add_conditional_edges("select", lambda state: _dispatch_route("select", route_after_select, state),
-        {"execute": "execute", "ground": "ground", "human_review": "human_review_prepare",
-         END_DIAGNOSTIC: END_DIAGNOSTIC})
-    builder.add_conditional_edges("execute", lambda state: _dispatch_route("execute", route_after_execute, state),
-        {"validate": "validate", END_DIAGNOSTIC: END_DIAGNOSTIC})
-    builder.add_conditional_edges("validate", lambda state: _dispatch_route("validate", route_after_validate, state),
-        {"reconcile": "reconcile", "execute": "execute", "select": "select",
-         "ground": "ground", "target_projection": "target_projection", "revision_dispatch": "revision_dispatch",
-         "human_review": "human_review_prepare",
-         END_DIAGNOSTIC: END_DIAGNOSTIC})
-    builder.add_conditional_edges("reconcile", lambda state: _dispatch_route("reconcile", route_after_reconcile, state),
-        {"deliver": "deliver", "execute": "execute", "human_review": "human_review_prepare",
-         END_DIAGNOSTIC: END_DIAGNOSTIC})
-    builder.add_conditional_edges("deliver", lambda state: _dispatch_route("deliver", route_after_deliver, state),
-        {END: END, END_DIAGNOSTIC: END_DIAGNOSTIC})
-    builder.add_conditional_edges("human_review_prepare", lambda state: _dispatch_fixed("human_review_prepare", "human_review_publish", state),
-        {"human_review_publish": "human_review_publish", END_DIAGNOSTIC: END_DIAGNOSTIC})
-    builder.add_conditional_edges("human_review_publish", lambda state: _dispatch_fixed("human_review_publish", "human_review_wait", state),
-        {"human_review_wait": "human_review_wait", END_DIAGNOSTIC: END_DIAGNOSTIC})
-    builder.add_conditional_edges("human_review_wait", lambda state: _dispatch_fixed("human_review_wait", "human_review_apply", state),
-        {"human_review_apply": "human_review_apply", END_DIAGNOSTIC: END_DIAGNOSTIC})
-    builder.add_conditional_edges("human_review_apply", lambda state: _dispatch_route("human_review_apply", route_after_human_review, state),
-        {"advance_phase": "advance_phase",
-         "revision_dispatch": "revision_dispatch",
-         "provider_resume_dispatch": "provider_resume_dispatch",
-         "l1_worker": "l1_worker", "l2_worker": "l2_worker", "l3_worker": "l3_worker",
-         "target_projection": "target_projection", "ground": "ground", "select": "select",
-         "execute": "execute", "validate": "validate", "reconcile": "reconcile",
-         "deliver": "deliver", "conversation": "conversation",
-         "human_review": "human_review_prepare",
-         END_DIAGNOSTIC: END_DIAGNOSTIC, END: END})
+    builder.add_edge("bootstrap_context", "intent_loop")
     builder.add_edge(END_DIAGNOSTIC, END)
 
     return builder.compile(checkpointer=checkpointer)
@@ -1008,7 +1016,7 @@ def _provider_resume_patch(
     if not dimensions:
         return None
     attempts = state.get("dimension_retry_counts") or {}
-    limit = max(0, int(state.get("dimension_retry_limit", 1)))
+    limit = _dimension_retry_limit(state)
     exhausted = [
         dimension for dimension in dimensions
         if int(attempts.get(dimension, 0)) > limit
@@ -1054,23 +1062,30 @@ async def apply_human_review_decision(state: Dict[str, Any]) -> Dict[str, Any]:
         "human_interrupt": None,
     }
     action = decisions.get("action") if isinstance(decisions, dict) else None
-    if action in ("accept", "approve", "retry"):
-        provider_patch = _provider_resume_patch(state, items)
-        if provider_patch is not None:
-            result.update(provider_patch)
-            return result
     classification_payload = (
         decisions.get("classification_decisions")
         if isinstance(decisions, dict)
         else None
     )
+    # An explicit approve carrying closed-set classification decisions is an
+    # authoritative boundary decision.  It must be applied before any transient
+    # provider-failure retry is considered: a mixed HUMAN pause (classification
+    # targets + a provider blip on an L3 dimension) must not silently discard
+    # the operator's decisions and re-loop the same L3 gate.
     if action in ("accept", "approve") and classification_payload is not None:
         classification_patch = await _apply_classification_revision(state, decisions)
         result.update(classification_patch)
         if classification_patch.get("fatal_error"):
             result["delivery_status"] = "diagnostic_only"
             return result
+        result["provider_failures"] = []
         return result
+
+    if action in ("accept", "approve", "retry"):
+        provider_patch = _provider_resume_patch(state, items)
+        if provider_patch is not None:
+            result.update(provider_patch)
+            return result
 
     if (
         action in ("accept", "approve")
@@ -1356,7 +1371,7 @@ async def apply_human_review_decision(state: Dict[str, Any]) -> Dict[str, Any]:
         ):
             dimension = str(state["fatal_error"].get("dimension") or "")
             attempts = int((state.get("dimension_retry_counts") or {}).get(dimension, 0))
-            limit = max(0, int(state.get("dimension_retry_limit", 1)))
+            limit = _dimension_retry_limit(state)
             if attempts <= limit:
                 # The retry action is an explicit operator decision.  Clear
                 # only this infrastructure failure; the worker will create
@@ -1380,7 +1395,7 @@ async def apply_human_review_decision(state: Dict[str, Any]) -> Dict[str, Any]:
         ):
             dimension = str(state["fatal_error"].get("dimension") or "")
             attempts = int((state.get("dimension_retry_counts") or {}).get(dimension, 0))
-            limit = max(0, int(state.get("dimension_retry_limit", 1)))
+            limit = _dimension_retry_limit(state)
             if attempts <= limit:
                 result["fatal_error"] = None
             else:
@@ -1916,6 +1931,6 @@ async def _apply_deferred_select_review(
 
 
 __all__ = [
-    "WorkflowState", "PlanningPhase",
+    "WorkflowState",
     "create_unified_planning_graph",
 ]

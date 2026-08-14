@@ -88,6 +88,30 @@ def _target_lineage(entry: Any) -> list[str]:
     return sorted({str(value) for value in values if str(value).strip()})
 
 
+def _entry_lineage(entry: Any) -> tuple[list[str], list[str], list[str]]:
+    """Return (bsms, target_ids, evidence_refs) for a planned parcel/zone entry."""
+    bsm = str(getattr(entry, "bsm", "") or "")
+    bsms = [bsm] if bsm else []
+    bsms.extend(
+        str(value)
+        for value in (getattr(entry, "parcel_bsms", None) or [])
+        if str(value) and str(value) != bsm
+    )
+    bsms = list(dict.fromkeys(bsms))
+    targets = _target_lineage(entry)
+    name = str(getattr(entry, "name", "") or bsm or "")
+    refs = [
+        f"planned-parcel:{bsm}" if bsm else "",
+        f"planned-zone:{name}" if name else "",
+    ]
+    refs.extend(str(value) for value in (getattr(entry, "lineage_ids", None) or []))
+    refs.extend(str(value) for value in (getattr(entry, "claim_refs", None) or []))
+    evidence_refs = sorted(
+        {str(value) for value in refs if str(value) and str(value).startswith("planned-")}
+    )
+    return bsms, targets, evidence_refs
+
+
 def _evidence_digest(*parts: Any) -> str:
     payload = "\x1f".join(str(part) for part in parts)
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
@@ -265,6 +289,18 @@ def check_area_conservation(changeset: Any) -> List[ValidationCheck]:
     drift_failed = total_before > 0 and drift >= _AREA_TOLERANCE
     pair_diffs.sort(reverse=True)
     offenders = [bsm for _, bsm in pair_diffs[:5]]
+    mismatched_targets = sorted(
+        {
+            str(value)
+            for change in changeset.changes or []
+            if change.bsm in set(mismatched + offenders)
+            for value in (
+                getattr(change, "project_ref", None) or "",
+                getattr(change, "intervention_id", None) or "",
+            )
+            if str(value)
+        }
+    )
 
     if drift_failed:
         return [
@@ -276,6 +312,8 @@ def check_area_conservation(changeset: Any) -> List[ValidationCheck]:
                 actual=f"drift={drift:.4f}",
                 expected="sum(after) ≈ sum(before) within 5%",
                 parcels=offenders,
+                targets=mismatched_targets,
+                evidence_refs=[f"parcel-change:{bsm}:area" for bsm in offenders],
                 fix="核对 split/merge/create 地块面积，避免面积损失或新增",
             )
         ]
@@ -289,6 +327,8 @@ def check_area_conservation(changeset: Any) -> List[ValidationCheck]:
                 actual=", ".join(mismatched),
                 expected="split parts sum to the source area within 5%",
                 parcels=mismatched,
+                targets=mismatched_targets,
+                evidence_refs=[f"parcel-change:{bsm}:area" for bsm in mismatched],
                 fix="核对 split/merge 地块面积，避免面积损失或新增",
             )
         ]
@@ -545,6 +585,38 @@ def check_topology(planned_state: Any) -> List[ValidationCheck]:
             invalid.append(name)
 
     validity_passed = not invalid and not empty and not parse_errors
+    identity_by_name: dict[str, tuple[list[str], list[str], list[str]]] = {}
+    for entry in (getattr(planned_state, "parcels", None) or []) + (
+        getattr(planned_state, "zones", None) or []
+    ):
+        name = str(getattr(entry, "name", "") or getattr(entry, "bsm", "") or "")
+        if name:
+            identity_by_name.setdefault(name, _entry_lineage(entry))
+    validity_names = [*invalid, *empty, *parse_errors]
+    validity_bsms = sorted(
+        {
+            bsm
+            for name in validity_names
+            for bsm in identity_by_name.get(name, ([], [], []))[0]
+            if bsm
+        }
+    )
+    validity_targets = sorted(
+        {
+            target
+            for name in validity_names
+            for target in identity_by_name.get(name, ([], [], []))[1]
+            if target
+        }
+    )
+    validity_evidence = sorted(
+        {
+            ref
+            for name in validity_names
+            for ref in identity_by_name.get(name, ([], [], []))[2]
+            if ref
+        }
+    )
     checks = [
         _check(
             "topology_validity",
@@ -553,6 +625,9 @@ def check_topology(planned_state: Any) -> List[ValidationCheck]:
             stage="EXECUTE",
             actual=f"invalid={invalid}, empty={empty}, parse_errors={parse_errors}",
             expected="no invalid, empty, or unparseable geometries",
+            parcels=validity_bsms,
+            targets=validity_targets,
+            evidence_refs=validity_evidence,
             fix="修复自相交、空几何或 WKT 解析错误",
         )
     ]
@@ -610,6 +685,29 @@ def check_topology(planned_state: Any) -> List[ValidationCheck]:
         except Exception as exc:
             gap_passed = False
             domain_results.append(f"{domain_id}:error={exc}")
+    zone_target_by_ref = {
+        str(getattr(zone, "name", "") or ""): str(
+            getattr(zone, "derived_from_zone_target", "")
+            or getattr(zone, "target_ref", "")
+            or ""
+        )
+        for zone in getattr(planned_state, "zones", None) or []
+    }
+    gap_targets = sorted(
+        {
+            str(target)
+            for domain in domains
+            for ref in list(getattr(domain, "zone_refs", None) or [])
+            for target in (zone_target_by_ref.get(str(ref), "") or ())
+            if str(target)
+        }
+    )
+    gap_evidence = sorted(
+        {
+            f"coverage-domain:{str(getattr(domain, 'domain_id', '') or 'unnamed')}"
+            for domain in domains
+        }
+    )
     checks.append(
         _check(
             "topology_gaps",
@@ -618,6 +716,8 @@ def check_topology(planned_state: Any) -> List[ValidationCheck]:
             stage="EXECUTE",
             actual=", ".join(domain_results),
             expected="declared partition/coverage boundaries contain no uncovered area",
+            targets=gap_targets,
+            evidence_refs=gap_evidence,
             fix="补充缺失图斑或调整边界",
         )
     )
@@ -758,6 +858,38 @@ def check_continuity(planned_state: Any) -> List[ValidationCheck]:
             fragmented.append(name)
     fragmented = sorted(set(fragmented))
     passed = not fragmented
+    zone_by_name: dict[str, Any] = {}
+    for zone in getattr(planned_state, "zones", None) or []:
+        name = str(getattr(zone, "name", "") or "")
+        if name:
+            zone_by_name.setdefault(name, zone)
+    fragmented_bsms = sorted(
+        {
+            bsm
+            for name in fragmented
+            if (zone := zone_by_name.get(name)) is not None
+            for bsm in _entry_lineage(zone)[0]
+            if bsm
+        }
+    )
+    fragmented_targets = sorted(
+        {
+            target
+            for name in fragmented
+            if (zone := zone_by_name.get(name)) is not None
+            for target in _entry_lineage(zone)[1]
+            if target
+        }
+    )
+    fragmented_evidence = sorted(
+        {
+            ref
+            for name in fragmented
+            if (zone := zone_by_name.get(name)) is not None
+            for ref in _entry_lineage(zone)[2]
+            if ref
+        }
+    )
     return [
         _check(
             "continuity",
@@ -766,6 +898,9 @@ def check_continuity(planned_state: Any) -> List[ValidationCheck]:
             stage="EXECUTE",
             actual=", ".join(fragmented),
             expected="each zone is a single contiguous geometry",
+            parcels=fragmented_bsms,
+            targets=fragmented_targets,
+            evidence_refs=fragmented_evidence,
             fix="合并同一用地的碎片图斑",
         )
     ]
@@ -828,10 +963,12 @@ def check_accessibility(planned_state: Any, intent: Any = None) -> List[Validati
         facilities = _facilities_from_intent(intent)
     center = _parcel_centroid_lonlat(planned_state)
     invalid: List[str] = []
+    by_name: dict[str, Any] = {}
     for fac in facilities:
+        name = str(getattr(fac, "name", "") or "facility")
+        by_name.setdefault(name, fac)
         lon = float(getattr(fac, "lon", 0.0) or 0.0)
         lat = float(getattr(fac, "lat", 0.0) or 0.0)
-        name = getattr(fac, "name", "") or "facility"
         if lon == 0.0 and lat == 0.0:
             invalid.append(name)
             continue
@@ -841,6 +978,16 @@ def check_accessibility(planned_state: Any, intent: Any = None) -> List[Validati
             if distance_km * 1000 > radius:
                 invalid.append(name)
     passed = not invalid
+    invalid_targets = sorted(
+        {
+            str(
+                getattr(by_name.get(name), "derived_from_target", "")
+                or name
+            )
+            for name in invalid
+            if name
+        }
+    )
     return [
         _check(
             "accessibility",
@@ -849,6 +996,8 @@ def check_accessibility(planned_state: Any, intent: Any = None) -> List[Validati
             stage="SELECT",
             actual=", ".join(invalid),
             expected="all facilities have valid coordinates within service radius",
+            targets=invalid_targets,
+            evidence_refs=sorted({f"planned-facility:{name}" for name in invalid}),
             fix="为设施提供有效坐标或调整服务半径",
         )
     ]
@@ -954,6 +1103,19 @@ def check_classification_missing(planned_state: Any) -> List[ValidationCheck]:
         for p in planned_state.parcels
         if p.operation != "preserve" and not (p.planning_land_use or "").strip()
     ]
+    by_bsm = {
+        str(getattr(parcel, "bsm", "") or ""): parcel
+        for parcel in planned_state.parcels
+    }
+    missing_targets = sorted(
+        {
+            target
+            for bsm in missing
+            if (parcel := by_bsm.get(bsm)) is not None
+            for target in _target_lineage(parcel)
+            if target
+        }
+    )
     passed = not missing
     return [
         _check(
@@ -964,6 +1126,8 @@ def check_classification_missing(planned_state: Any) -> List[ValidationCheck]:
             actual=", ".join(missing),
             expected="non-preserve parcels carry a planning_land_use",
             parcels=missing,
+            targets=missing_targets,
+            evidence_refs=sorted({f"planned-parcel:{bsm}" for bsm in missing}),
             fix="为地块补充规划分类编码（planning_land_use）",
         )
     ]

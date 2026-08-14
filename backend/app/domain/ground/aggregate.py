@@ -19,6 +19,7 @@ from app.infrastructure.context.planning_context import PlanningContext
 from app.contracts.artifacts.contract_meta import StageIssue
 from app.contracts.spatial.grounding_contracts import (
     CandidateSite,
+    CandidateUncertainty,
     GroundingResult,
     SpatialQueryEvidence,
 )
@@ -72,6 +73,15 @@ def build_candidate_site(
     geometry_wkt = resolved.reference_geometry_wkt or ""
     if not geometry_wkt and geometries:
         geometry_wkt = unary_union(geometries).wkt
+    uncertainty = None
+    uncertainty_reason = str(getattr(resolved, "uncertainty_reason", "") or "")
+    uncertainty_radius = float(getattr(resolved, "uncertainty_radius_m", 0.0) or 0.0)
+    if uncertainty_reason or uncertainty_radius > 0:
+        uncertainty = CandidateUncertainty(
+            radius_m=uncertainty_radius,
+            reason_code=uncertainty_reason,
+            source=str(resolved.provenance.get("path", "") or ""),
+        )
     return CandidateSite(
         site_id=site_id,
         source_parcels=source_parcels,
@@ -81,10 +91,13 @@ def build_candidate_site(
         metrics={
             "confidence": resolved.confidence,
             "spec_type": spec.type,
+            "uncertainty_reason": uncertainty_reason,
         },
         evidence_refs=list(source_parcels),
         target_ref=(getattr(spec, "target_id", None) or None),
         project_ref=(getattr(spec, "project_ref", None) or None),
+        confidence=resolved.confidence,
+        uncertainty=uncertainty,
     )
 
 

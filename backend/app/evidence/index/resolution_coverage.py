@@ -14,6 +14,7 @@ class ResolutionCoverage:
     entity_geometry: int = 0      # geometry_ref only (实体但未接地块)
     unresolved: int = 0
     by_role: Dict[str, Dict[str, int]] = field(default_factory=dict)
+    details: list = field(default_factory=list)
 
     @property
     def resolved(self) -> int:
@@ -71,23 +72,42 @@ def resolution_coverage(context: Any) -> ResolutionCoverage:
                 result = index.resolve_mention(name, role=role)
             except Exception:
                 result = None
+        status = "unresolved"
+        entity_ref = ""
+        bsms = 0
+        geometry = False
         if result is not None and result.status == "resolved" and result.candidates:
             candidate = result.candidates[0]
-            if candidate.source_bsms and candidate.entity_ref:
+            entity_ref = str(candidate.entity_ref or "")
+            bsms = len(candidate.source_bsms or [])
+            geometry = bool(candidate.geometry_ref)
+            if candidate.source_bsms and entity_ref:
+                status = "resolved_entity"
                 cov.resolved_entity += 1
                 bucket["resolved_entity"] += 1
             elif candidate.source_bsms:
+                status = "resolved_extent"
                 cov.resolved_extent += 1
                 bucket["resolved_extent"] += 1
-            elif candidate.geometry_ref:
+            elif geometry:
+                status = "entity_geometry"
                 cov.entity_geometry += 1
                 bucket["entity_geometry"] += 1
             else:
                 cov.unresolved += 1
                 bucket["unresolved"] += 1
-            continue
-        cov.unresolved += 1
-        bucket["unresolved"] += 1
+        else:
+            cov.unresolved += 1
+            bucket["unresolved"] += 1
+        cov.details.append({
+            "name": name,
+            "role": role,
+            "dimension_key": str(getattr(fact, "dimension_key", "") or ""),
+            "status": status,
+            "entity_ref": entity_ref,
+            "bsms": bsms,
+            "geometry": geometry,
+        })
     return cov
 
 

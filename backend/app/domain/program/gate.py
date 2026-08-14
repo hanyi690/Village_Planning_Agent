@@ -84,8 +84,18 @@ def evaluate_l3_gate(
     # multiply into thousands of spatial conflicts.  Semantic repair may
     # explicitly downgrade a resolved normalization/audit item; every error
     # that remains must route back to L3.
+    #
+    # ``classification_decision_required`` is deliberately excluded: it is a
+    # HUMAN-boundary decision (see below), not a contradiction of the source
+    # program.  The assembler records it at error severity so EXECUTE can never
+    # run an unclassified polygon target, but treating it as a rework
+    # contradiction would make the classification branch unreachable and loop
+    # the graph at L3 forever.
     contradictions = [
-        issue for issue in program.program_issues if issue.severity == "error"
+        issue
+        for issue in program.program_issues
+        if issue.severity == "error"
+        and issue.code != "classification_decision_required"
     ]
     if contradictions:
         return GateDecision(

@@ -30,11 +30,10 @@
 | 文件 | 连接 | 要点 |
 |---|---|---|
 | `base.py` | `Connection` ABC + `ConnectionRegistry` | 凭证/限速/重试/session/健康；参考 QGIS QgsConnectionPool |
-| `rate_limiter.py` | `RateLimiter` | 每服务全局单例（tianditu / amap / osm），线程安全 |
+| `rate_limiter.py` | `RateLimiter` | 每服务全局单例（tianditu / amap），线程安全 |
 | `tianditu.py` | `TiandituConnection` | 国家天地图 API（geocode / POI / 瓦片共享） |
 | `amap.py` | `AmapConnection` | 高德 API（返回 GCJ02，转换在驱动层） |
 | `gd_tianditu.py` | `GDTiandituConnection` | 广东省天地图专题服务（与 national 共享 'tianditu' 限速器） |
-| `osm.py` | `OSMConnection` | OSMnx / Overpass（免费无 key，保守限速） |
 
 ---
 

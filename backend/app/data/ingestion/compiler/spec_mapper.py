@@ -53,29 +53,8 @@ def _explicit_village_names(intervention: PlanningIntervention) -> list[str]:
         intervention.problem_addressed,
         *intervention.functions,
     ])
-    # Prefer the closed-set natural-village names produced by KG enrichment.
-    # This prevents a greedy regex from turning phrases such as
-    # “主要功能为村庄服务” into a fake place name.
-    try:
-        from app.data.ingestion.natural_villages import _KNOWN_NATURAL_VILLAGES
-
-        matches = [
-            (text.find(village), village)
-            for village in _KNOWN_NATURAL_VILLAGES
-            if village in text
-        ]
-        if matches:
-            return [
-                village if village.endswith("村") else village + "村"
-                for _, village in sorted(matches, key=lambda item: item[0])
-            ]
-    except Exception:
-        pass
-
     # Conservative fallback for a root-village name: a Chinese span ending in
-    # 村 that is not a generic scope word.  The preceding known-village match
-    # already covers the 12 natural villages; this fallback only captures an
-    # explicit root village such as 金田村 in prose like 金田村文化活动中心.
+    # 村 that is not a generic scope word.
     match = re.search(r"([\u4e00-\u9fff]{1,6}村)", text)
     if match and match.group(1) not in _GENERIC_VILLAGE_WORDS:
         return [match.group(1)]
@@ -83,15 +62,21 @@ def _explicit_village_names(intervention: PlanningIntervention) -> list[str]:
 
 
 def _location_reference(intervention: PlanningIntervention) -> SpatialReferenceSpec | None:
-    """Map the source-backed INSTRUCTION location cell without inventing a site."""
+    """Map the L3 claim's location evidence to a closed-set spatial reference.
+
+    The place names come from the L1-derived ``location_hints`` (all place
+    names, never a preset village list) or from the location cell itself.
+    Every explicit place token becomes its own resolvable reference.
+    """
     requirements = intervention.spatial_requirements
-    location_value = requirements.get("location")
-    if not location_value:
-        hints = requirements.get("location_hints")
-        if isinstance(hints, list):
-            location_value = "、".join(str(item).strip() for item in hints if str(item).strip())
-    location = str(location_value or "").strip()
-    if location in _UNKNOWN_LOCATIONS:
+    raw_hints = requirements.get("location_hints")
+    hints = [
+        str(item).strip()
+        for item in (raw_hints if isinstance(raw_hints, list) else [])
+        if str(item).strip()
+    ]
+    location = str(requirements.get("location") or "").strip()
+    if location in _UNKNOWN_LOCATIONS and not hints:
         return None
     normalized = re.sub(r"[\s，,、；;及和与]+", "", location)
     if normalized in _VILLAGE_SCOPE_LOCATIONS or any(
@@ -103,32 +88,29 @@ def _location_reference(intervention: PlanningIntervention) -> SpatialReferenceS
             reference=RefObject(kind="village"),
         )
 
-    village_names = _explicit_village_names(intervention)
-    if len(village_names) > 1:
-        return SpatialReferenceSpec(
-            type="composed",
-            op="or",
-            children=[
-                SpatialReferenceSpec(
-                    type="topological",
-                    topo="nearby",
-                    reference=RefObject(
-                        kind="place_name",
-                        filter={"label_contains": village_name},
-                    ),
-                )
-                for village_name in village_names
-            ],
+    tokens = list(dict.fromkeys(hints))
+    if not tokens:
+        tokens = [
+            tok.strip()
+            for tok in re.split(r"[、，,；;及和与]+", location)
+            if tok.strip() and tok.strip() not in _GENERIC_VILLAGE_WORDS
+        ]
+    if not tokens:
+        return None
+    refs = [
+        SpatialReferenceSpec(
+            type="topological",
+            topo="nearby",
+            reference=RefObject(
+                kind="place_name",
+                filter={"label_contains": token},
+            ),
         )
-    label = village_names[0] if village_names else location
-    return SpatialReferenceSpec(
-        type="topological",
-        topo="nearby",
-        reference=RefObject(
-            kind="place_name",
-            filter={"label_contains": label},
-        ),
-    )
+        for token in tokens
+    ]
+    if len(refs) == 1:
+        return refs[0]
+    return SpatialReferenceSpec(type="composed", op="or", children=refs)
 
 
 def _semantic_location_reference(
@@ -319,8 +301,8 @@ def _build_candidates(
                 )
             )
 
-    # Real L3 prose occasionally contains an explicit village name but omits
-    # the private INSTRUCTION table. Preserve that textual reference so the
+    # Real L3 prose occasionally contains an explicit village name but no
+    # structured location reference. Preserve that textual reference so the
     # normal resolver can locate the corresponding GIS feature. Do not invent
     # a location when the prose contains no named village.
     return candidates

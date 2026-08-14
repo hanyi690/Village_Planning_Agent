@@ -88,6 +88,22 @@ def _allocation_result_adapter(
         }
 
 
+def _repair_skip_bsms(state: ExecuteAgentState, target_id: str) -> set[str]:
+    """Return BSMs a VALIDATE repair directive asks zone materialization to drop.
+
+    ``rebuild_geometry`` / ``exclude_bsms`` directives for a zone target carry
+    the offending parcels; materializing them again would reproduce the same
+    invalid/overlapping geometry.  Skipped parcels stay preserved instead of
+    being silently merged, and are surfaced as explicit diagnostics.
+    """
+    entry = (state.repair_directives or {}).get(str(target_id))
+    if not entry:
+        return set()
+    skip = set(entry.get("affected_bsms") or [])
+    skip.update(entry.get("exclude_bsms") or [])
+    return skip
+
+
 def _custom_zone_targets_from_plan(
     state: ExecuteAgentState,
 ) -> tuple[List[Any], List[Any]]:
@@ -387,8 +403,35 @@ def _zone_worker(
                 for target_id in scheduled_ids:
                     task_statuses[target_id] = "failed"
             else:
+                repair_skip_by_target = {
+                    target_id: _repair_skip_bsms(state, target_id)
+                    for target_id in scheduled_ids
+                }
+                materialized_assignments: list[AuthoritativeZoneParcelAssignment] = []
+                skipped_repair_assignments: list[AuthoritativeZoneParcelAssignment] = []
+                for assignment in sorted(
+                    allocation.assignments,
+                    key=lambda item: (item.target_id, item.bsm),
+                ):
+                    if assignment.bsm in repair_skip_by_target.get(
+                        assignment.target_id, set()
+                    ):
+                        skipped_repair_assignments.append(assignment)
+                        continue
+                    materialized_assignments.append(assignment)
+                for assignment in skipped_repair_assignments:
+                    unresolved.append({
+                        "code": "assignment_skipped_by_repair",
+                        "target_id": assignment.target_id,
+                        "bsm": assignment.bsm,
+                        "lineage_id": assignment.lineage.lineage_id,
+                        "message": (
+                            "Assignment was not materialized because a VALIDATE "
+                            "repair directive marks this BSM as offending."
+                        ),
+                    })
                 assignment_target_ids = {
-                    assignment.target_id for assignment in allocation.assignments
+                    assignment.target_id for assignment in materialized_assignments
                 }
                 missing_target_ids = sorted(scheduled_ids - assignment_target_ids)
                 for target_id in missing_target_ids:
@@ -401,7 +444,7 @@ def _zone_worker(
                 pending_changes: list[ParcelChange] = []
                 failed_assignments: list[dict[str, Any]] = []
                 for assignment in sorted(
-                    allocation.assignments,
+                    materialized_assignments,
                     key=lambda item: (item.target_id, item.bsm),
                 ):
                     changes = design_zone_parcel(assignment, parcel_by_bsm)
@@ -423,7 +466,7 @@ def _zone_worker(
                     for target_id in assignment_target_ids:
                         task_statuses[target_id] = "succeeded"
                     assignment_layer = _authoritative_assignment_layer(
-                        list(allocation.assignments),
+                        list(materialized_assignments),
                         parcel_by_bsm,
                     )
                     if assignment_layer is not None:

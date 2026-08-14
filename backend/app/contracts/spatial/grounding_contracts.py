@@ -23,6 +23,20 @@ class SpatialQueryEvidence(BaseModel):
     spec_id: str = ""
 
 
+class CandidateUncertainty(BaseModel):
+    """Structured uncertainty for one grounded candidate.
+
+    ``radius_m`` bounds the spatial extent of the resolution (0 means the
+    candidate is exact parcel-bound); ``reason_code`` is a stable closed-set
+    reason (e.g. ``gazetteer_fuzzy`` / ``village_cluster`` / ``bbox_only``);
+    ``source`` names the provenance path that produced the candidate.
+    """
+
+    radius_m: float = 0.0
+    reason_code: str = ""
+    source: str = ""
+
+
 class CandidateSite(BaseModel):
     site_id: str
     source_parcels: list[str] = Field(default_factory=list)
@@ -33,6 +47,8 @@ class CandidateSite(BaseModel):
     evidence_refs: list[str] = Field(default_factory=list)
     target_ref: str | None = None
     project_ref: str | None = None
+    confidence: float = 0.0
+    uncertainty: CandidateUncertainty | None = None
 
 
 class GroundingResult(ContractMeta):
@@ -42,9 +58,37 @@ class GroundingResult(ContractMeta):
     spatial_query_evidence: list[SpatialQueryEvidence] = Field(default_factory=list)
     provenance: "Provenance | None" = None
 
+class GroundedAnchor(ContractMeta):
+    """L1 锚点接地产物：location_fact -> KG 实体/几何 + 拓扑证据（设计 §5.1/§6）。
+
+    ``coordinate_key`` 按"同一坐标 = 同一实体"原则生成；``best_effort`` 表示
+    该锚点是低置信推理兜底产物（仍带 KG/索引证据，几何永不来自 LLM）。
+    """
+
+    location_fact_ref: str = ""
+    mention: str = ""
+    normalized_name: str = ""
+    role: str = "unknown"
+    entity_ref: str = ""
+    entity_type: str = ""
+    geometry_ref: str | None = None
+    source_bsms: list[str] = Field(default_factory=list)
+    relation_refs: list[str] = Field(default_factory=list)
+    topology_evidence: list[str] = Field(default_factory=list)
+    coordinate_key: str = ""
+    confidence: float = 0.0
+    status: Literal["resolved", "ambiguous", "unresolved"] = "unresolved"
+    best_effort: bool = False
+    source_report_ref: str = ""
+    source_span: str = ""
+    query_trace: list[dict] = Field(default_factory=list)
+
+
 __all__ = [
     "HardConstraintResult",
     "SpatialQueryEvidence",
     "CandidateSite",
+    "CandidateUncertainty",
     "GroundingResult",
+    "GroundedAnchor",
 ]

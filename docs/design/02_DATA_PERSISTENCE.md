@@ -132,7 +132,7 @@ Markdown 不能作为规划程序的唯一输入；L1/L2/L3 与 TARGET_PROJECTIO
 | 对象 | 用途 | 权威性 |
 |---|---|---|
 | `content` | 完整人类可读报告 | 报告表达权威 |
-| `instruction` | 从 `【INSTRUCTION】` 剥离的机器提示 | 待验证输入 |
+| `instruction` | L1 dual-response 的 observations 结构化 JSON（历史列名，非表格） | 待验证输入 |
 | legacy `summary` | 兼容预览 | 非权威 |
 | typed artifact | fragment、snapshot、program、compilation result | 阶段机器消费权威 |
 

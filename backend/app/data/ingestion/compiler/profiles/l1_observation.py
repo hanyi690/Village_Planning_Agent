@@ -44,14 +44,6 @@ def _split_explicit_places(value: str) -> list[str]:
     return list(dict.fromkeys(result))
 
 
-def _known_village_names() -> tuple[str, ...]:
-    try:
-        from app.data.ingestion.natural_villages import _KNOWN_NATURAL_VILLAGES
-        return tuple(sorted((str(x).removesuffix("村") for x in _KNOWN_NATURAL_VILLAGES), key=len, reverse=True))
-    except Exception:
-        return ()
-
-
 def _clean_model_text(text: str) -> str:
     """Remove reasoning/protocol chatter before compiling human facts."""
     cleaned = re.sub(r"<think>.*?</think>", "", text or "", flags=re.I | re.S)
@@ -134,6 +126,8 @@ _OBSERVATION_TYPE_ROLES = {
     "项目": "project",
     "现状分区": "area",
     "分区": "area",
+    "自然村": "village",
+    "村庄": "village",
     "道路": "road",
     "水系": "water",
     "水体": "water",
@@ -154,6 +148,26 @@ def _observation_role(entity_type: str, name: str, location: str, description: s
     if name.endswith("村"):
         return "village"
     return "unknown"
+
+
+_DESCRIPTIVE_MARKERS = (
+    "至", "贯穿", "沿线", "两岸", "附近", "周边", "一带", "一段", "位于",
+    "汇入", "通往", "经过", "沿", "东北", "东南", "西北", "西南", "北部",
+    "南部", "东部", "西部", "中部", "村界", "全村", "境内",
+)
+
+
+def _is_place_like(token: str) -> bool:
+    """地点 token 判定（启发式，尽量保守）：短、无方位/描述/动词标记。
+
+    只有这类 token 才被编译为独立 location_fact；其余仅作 hint。
+    """
+    token = (token or "").strip()
+    if not token or len(token) > 6:
+        return False
+    if any(marker in token for marker in _DESCRIPTIVE_MARKERS):
+        return False
+    return True
 
 
 def _extract_location_facts_from_observations(
@@ -189,26 +203,32 @@ def _extract_location_facts_from_observations(
             continue
         name = str(obs.get("name") or "").strip()
         location = str(obs.get("location") or "").strip()
+        relation = str(obs.get("relation") or "").strip()
         entity_type = str(obs.get("entity_type") or "").strip()
         description = str(obs.get("description") or "").strip()
         if not name and not location:
             continue
         role = _observation_role(entity_type, name, location, description)
-        source_span = " | ".join(x for x in (entity_type, name, location, description) if x)
+        source_span = " | ".join(
+            x for x in (entity_type, name, location, relation, description) if x
+        )
+        # 主事实 = 观察对象的 name（L1 已产出干净地名；编译器信任 name）。
         parts_to_emit: list[tuple[str, str, str]] = []
-        if name and role != "village":
-            parts_to_emit.append((name, role, name))
+        if name:
+            parts_to_emit.append((name, role, location or relation or name))
+        # location 里只有"短地点 token"（如 社前村）才作为关联地点事实产出，
+        # 用于 facility@村 这类锚定；方位/描述串（如 西南至东北贯穿金田村）
+        # 一律不当地点，只作为主事实的 spatial_hint。
         location_parts = _split_explicit_places(location) if location else []
-        if not location_parts:
-            location_parts = [location] if location else [""]
         for location_part in location_parts:
+            if not location_part or not _is_place_like(location_part):
+                continue
             part_role = (
                 "village"
                 if location_part.endswith(("村", "自然村"))
-                or location_part in _known_village_names()
                 else role
             )
-            parts_to_emit.append((location_part or name, part_role, location_part or description))
+            parts_to_emit.append((location_part, part_role, location_part))
         for normalized, part_role, spatial_hint in parts_to_emit:
             aliases = list(dict.fromkeys(x for x in (name, normalized) if x))
             key = f"{normalized}|{part_role}|{dimension_key}|{report_id}"
@@ -216,7 +236,7 @@ def _extract_location_facts_from_observations(
                 continue
             seen.add(key)
             facts.append(L1LocationFact(
-                mention=name or location_part,
+                mention=name or normalized,
                 normalized_name=normalized,
                 role=part_role,
                 aliases=aliases,

@@ -6,7 +6,7 @@ Active submodules:
 - poi.py: Used by search_poi.py tool
 
 Removed modules (base.py, base_types.py, orchestrator.py, adapters,
-dem_provider.py, osm/) have been deleted. New data access should use
+dem_provider.py, osm/, baidu/) have been deleted. New data access should use
 app.data.catalog.DataCatalog.
 """
 

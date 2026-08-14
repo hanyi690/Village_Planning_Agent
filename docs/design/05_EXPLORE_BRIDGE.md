@@ -7,7 +7,7 @@ EXPLORE 回答：
 > “系统还需要知道什么，才能让当前阶段继续并且可解释？”
 
 EXPLORE 不是空间接地器，不是 TARGET_PROJECTION 的前置候选生成器，也不是 GIS 的桥接格式转换器。它是
-session-wide evidence service：统一搜索 KG、VillageBundle、各层报告、`【INSTRUCTION】`、typed
+session-wide evidence service：统一搜索 KG、VillageBundle、各层报告（正文 + observations JSON）、typed
 artifacts、已有证据、用户修订记录和允许的外部来源，生产 `EvidenceBundle`、`ExplorationResult`
 和 `ExplorationRequest` 的闭环记录。
 

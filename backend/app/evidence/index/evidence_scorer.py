@@ -11,6 +11,9 @@ from typing import Any, Dict
 from app.contracts.ports.place_resolution_contracts import (
     PlaceEvidenceEntry,
 )
+from app.infrastructure.logging import get_logger
+
+logger = get_logger(__name__)
 
 #: Per-dimension weights; "high"/"medium"/"low" map to numeric weights,
 #: "prohibited" contributes nothing to the total.
@@ -59,8 +62,8 @@ def score_candidate(
     role_match = role == "unknown" or entry.role == role
     evidence["entity_type_role"] = 0.5 if role_match else 0.0
 
-    evidence["relation_topology"] = (
-        0.3 if getattr(entry, "relation_refs", None) else 0.0
+    evidence["relation_topology"] = _relation_topology_score(
+        entry, hints=hints, context=context
     )
 
     evidence["within_bundle"] = 0.5 if entry.source_bsms else 0.0
@@ -73,6 +76,43 @@ def score_candidate(
     evidence["fuzzy_short_name"] = 0.0
 
     return evidence
+
+
+def _relation_topology_score(
+    entry: "PlaceEvidenceEntry",
+    *,
+    hints: str = "",
+    context: Any = None,
+) -> float:
+    """Real topology check (design §4.2): candidate's precomputed KG relations
+    must connect it to an entity named in the mention hints.
+
+    Fallback for legacy/context-less scoring keeps the historical "has
+    relation_refs" signal at reduced weight; the authoritative path uses the KG
+    graph via ``app.spatial.grounding.topology``.
+    """
+    kg = getattr(context, "kg", None) if context is not None else None
+    graph = None
+    if kg is not None:
+        graph = getattr(kg, "g", None) or getattr(kg, "graph", None) or kg
+    entity_uri = ""
+    if entry.entity_refs:
+        entity_uri = entry.entity_refs[0]
+    if hints and graph is not None and entity_uri:
+        try:
+            from app.spatial.grounding.topology import topology_evidence_for
+
+            hits = topology_evidence_for(
+                graph,
+                entity_uri,
+                hints=hints,
+                relation_refs=list(getattr(entry, "relation_refs", None) or []),
+            )
+            if hits:
+                return 0.5
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("[evidence_scorer] topology check failed: %s", exc)
+    return 0.3 if getattr(entry, "relation_refs", None) else 0.0
 
 
 def total(evidence: Dict[str, float]) -> float:

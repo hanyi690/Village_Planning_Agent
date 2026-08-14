@@ -1,6 +1,5 @@
 """自然村名注册表：从 data/gis/{village_key}/villages.yaml 动态加载自然村闭集。
 
-用于替换 report_entity_enrichment 中硬编码的 _KNOWN_NATURAL_VILLAGES。
 路径解析与 DataCatalog._load_village_yaml_meta 一致（相对 cwd 的 data/gis）。
 """
 

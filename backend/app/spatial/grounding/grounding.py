@@ -339,19 +339,7 @@ def ground_zone_spatial_preference(
                 ref_name = place_name
                 break
 
-    # 3. 如果没有地名匹配，用村庄整体中心
-    if ref_center is None and parcels:
-        try:
-            from app.spatial.model.geometry import _compute_centroid
-            all_geoms = [p.geometry for p in parcels if hasattr(p, "geometry")]
-            if all_geoms:
-                from app.spatial.model.geo_utils import safe_unary_union
-                from shapely.geometry import shape
-                union_geom = safe_unary_union([shape(g) for g in all_geoms])
-                ref_center = (union_geom.centroid.x, union_geom.centroid.y)
-        except Exception:
-            pass
-
+    # 3. 没有地名匹配时不使用村庄整体中心兜底（保持候选为空）
     if ref_center is None:
         return ZoneSpatialAnchor()
 
@@ -360,7 +348,7 @@ def ground_zone_spatial_preference(
     if direction:
         bbox = resolve_directional_bbox(ref_center, direction)
 
-    # 5. 查询候选地块：LLM 语义选定 vs 几何搜索
+    # 5. 查询候选地块：LLM 语义选定 vs 几何搜索（无匹配时候选为空，不扩全池）
     if preselected_bsms:
         candidate_bsms = [b for b in preselected_bsms if b]
     elif bbox:
@@ -368,7 +356,7 @@ def ground_zone_spatial_preference(
     elif ref_name:
         candidate_bsms = query_parcels_near_entity(parcels, ref_center, max_distance_m=500)
     else:
-        candidate_bsms = [p.bsm for p in parcels if p.bsm]
+        candidate_bsms = []
 
     # 6. 排除约束重叠（对所有候选都做，即使是 LLM 选定的）
     excluded_bsms = query_excluded_parcels(constraint_index, parcels)
@@ -428,18 +416,6 @@ def ground_facility_spatial_preference(
                 break
 
     if ref_center is None:
-        try:
-            from app.spatial.model.geometry import _compute_centroid
-            all_geoms = [p.geometry for p in parcels if hasattr(p, "geometry")]
-            if all_geoms:
-                from app.spatial.model.geo_utils import safe_unary_union
-                from shapely.geometry import shape
-                union_geom = safe_unary_union([shape(g) for g in all_geoms])
-                ref_center = (union_geom.centroid.x, union_geom.centroid.y)
-        except Exception:
-            pass
-
-    if ref_center is None:
         return ZoneSpatialAnchor()
 
     bbox = None
@@ -451,8 +427,6 @@ def ground_facility_spatial_preference(
         candidate_bsms = query_parcels_in_bbox(parcels, bbox)
     else:
         candidate_bsms = query_parcels_near_entity(parcels, ref_center, max_distance_m=300)
-    if not candidate_bsms:
-        candidate_bsms = [p.bsm for p in parcels if p.bsm]
 
     logger.info(
         "ground_facility_spatial_preference: hint=%s, direction=%s, candidates=%d",
@@ -511,27 +485,12 @@ def ground_linear_spatial_preference(
         ref_centers.append(end_anchor)
 
     if not ref_centers:
-        try:
-            from app.spatial.model.geometry import _compute_centroid
-            all_geoms = [p.geometry for p in parcels if hasattr(p, "geometry")]
-            if all_geoms:
-                from app.spatial.model.geo_utils import safe_unary_union
-                from shapely.geometry import shape
-                union_geom = safe_unary_union([shape(g) for g in all_geoms])
-                ref_centers = [(union_geom.centroid.x, union_geom.centroid.y)]
-        except Exception:
-            pass
-
-    if not ref_centers:
         return ZoneSpatialAnchor()
 
     candidate_set: Set[str] = set()
     for center in ref_centers:
         bsms = query_parcels_near_entity(parcels, center, max_distance_m=400)
         candidate_set.update(bsms)
-
-    if not candidate_set:
-        candidate_set = {p.bsm for p in parcels if p.bsm}
 
     logger.info(
         "ground_linear_spatial_preference: anchors=%d, candidates=%d",
@@ -742,15 +701,9 @@ def _resolve_toponym(
                                           unresolved_reason="no gazetteer")
     entry = gazetteer.resolve(desc, fuzzy=True)
     if entry is None or not getattr(entry, "bsms", None):
-        # 退化为村庄整体中心邻近
-        center = _village_center(parcels)
-        if center is None:
-            return ResolvedSpatialDescription(evidence_text=desc,
-                                              unresolved_reason="gazetteer miss")
-        bsms = query_parcels_near_entity(parcels, center, max_distance_m=500)
         return ResolvedSpatialDescription(
-            candidate_bsms=bsms, evidence_text=desc,
-            query_path="geometry:village_center", confidence=0.4,
+            evidence_text=desc,
+            unresolved_reason="gazetteer miss; no candidate (village-center fallback is forbidden)",
         )
     return ResolvedSpatialDescription(
         candidate_bsms=list(entry.bsms), evidence_text=desc,
@@ -759,43 +712,14 @@ def _resolve_toponym(
 
 
 def _resolve_directional(desc: str, parcels: list) -> ResolvedSpatialDescription:
-    """方位 → 村庄中心 BBox（几何兜底，方向无 KG 拓扑可查）。"""
-    center = _village_center(parcels)
-    if center is None:
-        return ResolvedSpatialDescription(evidence_text=desc,
-                                          unresolved_reason="no village center")
-    direction = ""
-    for kw, eng in _DIRECTION_KEYWORDS.items():
-        if kw in desc:
-            direction = eng
-            break
-    if direction in ("center",):
-        from app.spatial.model.crs_engine import (
-            meters_to_degrees_lat,
-            meters_to_degrees_lon,
-        )
+    """方位 → 需要已解析的地点中心（禁用村庄整体质心兜底）。
 
-        lon, lat = center
-        radius_m = 500
-        dx = meters_to_degrees_lon(radius_m, lat)
-        dy = meters_to_degrees_lat(radius_m)
-        bbox = (lon - dx, lat - dy, lon + dx, lat + dy)
-        bsms = query_parcels_in_bbox(parcels, bbox)
-        return ResolvedSpatialDescription(
-            candidate_bsms=bsms,
-            candidate_bbox=bbox,
-            evidence_text=desc,
-            query_path="geometry:center_bbox",
-            confidence=0.6,
-        )
-    bbox = resolve_directional_bbox(center, direction)
-    if bbox is None:
-        return ResolvedSpatialDescription(evidence_text=desc,
-                                          unresolved_reason=f"unknown dir {direction}")
-    bsms = query_parcels_in_bbox(parcels, bbox)
+    方向词只允许经 resolver 的 BSM-backed 结果；free-text 路径没有具体地点
+    中心时保持 typed ``unresolved``，不把全村地块池当作候选。
+    """
     return ResolvedSpatialDescription(
-        candidate_bsms=bsms, candidate_bbox=bbox, evidence_text=desc,
-        query_path="geometry:directional_bbox", confidence=0.6,
+        evidence_text=desc,
+        unresolved_reason="directional description requires a resolved place center",
     )
 
 
@@ -804,7 +728,7 @@ def _resolve_linear(
 ) -> ResolvedSpatialDescription:
     """线性描述 → 证据索引候选（road / water 提及）。
 
-    优先用注入的 evidence_index 解析提及；不可用或空时退化几何 buffer。
+    证据索引不可用或无候选时返回 typed ``unresolved``，不做村庄中心 buffer 兜底。
     """
     if evidence_index is not None:
         try:
@@ -820,15 +744,9 @@ def _resolve_linear(
         except Exception as e:
             logger.debug("[grounding:linear] evidence query failed: %s", e)
 
-    # 几何兜底：沿 village 整体中心 buffer
-    center = _village_center(parcels)
-    if center is None:
-        return ResolvedSpatialDescription(evidence_text=desc,
-                                          unresolved_reason="no center")
-    bsms = query_parcels_near_entity(parcels, center, max_distance_m=400)
     return ResolvedSpatialDescription(
-        candidate_bsms=bsms, evidence_text=desc,
-        query_path="geometry:center_buffer", confidence=0.4,
+        evidence_text=desc,
+        unresolved_reason="linear mention has no evidence-index candidate",
     )
 
 

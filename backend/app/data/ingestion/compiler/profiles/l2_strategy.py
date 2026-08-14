@@ -19,7 +19,6 @@ from app.contracts.domain.l2_contracts import (
 from app.contracts.workflow.parsing_contracts import CompilationProfile, CompilerTrace
 
 from ..diagnostics import collect_diagnostics
-from ..instruction_parser import split_content_instruction
 from ..provenance import build_fragment_provenance
 
 _CHAPTER_RE = re.compile(r"^#{1,3}\s+(\S.+)$", re.MULTILINE)
@@ -80,8 +79,8 @@ def compile_l2_strategy(
     run_id: str = "",
 ) -> L2StrategyFragment:
     steps: list[str] = []
-    display, instr_from_content = split_content_instruction(content or "")
-    instr = instruction or instr_from_content
+    display = content or ""
+    instr = instruction or ""
 
     goals: list[str] = []
     strategies: list[str] = []

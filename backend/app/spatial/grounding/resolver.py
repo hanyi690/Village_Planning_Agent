@@ -33,6 +33,24 @@ _LOCATION_SEP_RE = re.compile(r"[、，,；;/\s]+|至|和|与")
 _LOCATION_STRIP = ("自然村", "村", "组", "段", "沿", "线", "附近", "周边", "区域", "一带")
 
 
+def _bbox_radius_m(bbox) -> float:
+    """Approximate the half-diagonal radius of a (lon0,lat0,lon1,lat1) bbox."""
+    try:
+        lon0, lat0, lon1, lat1 = (float(value) for value in bbox[:4])
+    except (TypeError, ValueError, IndexError):
+        return 0.0
+    mid_lat = (lat0 + lat1) / 2.0
+    from app.spatial.model.crs_engine import meters_to_degrees_lat, meters_to_degrees_lon
+
+    dlon = abs(lon1 - lon0)
+    dlat = abs(lat1 - lat0)
+    if dlon == 0 and dlat == 0:
+        return 0.0
+    x_m = dlon / meters_to_degrees_lon(1.0, mid_lat) if dlon else 0.0
+    y_m = dlat / meters_to_degrees_lat(1.0) if dlat else 0.0
+    return round(((x_m ** 2 + y_m ** 2) ** 0.5) / 2.0, 1)
+
+
 def _extract_location_tokens(location: str) -> List[str]:
     """位置文本 → 候选 token：'肩丰、田坑' / '肩丰至炉池段' / '园寨自然村'。"""
     tokens = []
@@ -289,10 +307,25 @@ class SpatialResolver:
             else:
                 final = set.intersection(*child_sets)
             bboxes = [child.bbox for child in children if child.bbox]
+            min_child = min(
+                children,
+                key=lambda child: child.confidence,
+                default=None,
+            )
             return ResolvedSpatialRef(
                 final_bsms=sorted(final),
                 bbox=bboxes[0] if len(bboxes) == 1 else None,
                 confidence=min((child.confidence for child in children), default=0.0),
+                uncertainty_radius_m=(
+                    getattr(min_child, "uncertainty_radius_m", 0.0) or 0.0
+                    if min_child is not None
+                    else 0.0
+                ),
+                uncertainty_reason=(
+                    str(getattr(min_child, "uncertainty_reason", "") or "")
+                    if min_child is not None
+                    else ""
+                ),
                 provenance={
                     "path": f"composed:{op}",
                     "child_count": len(children),
@@ -307,6 +340,8 @@ class SpatialResolver:
             return ResolvedSpatialRef(
                 final_bsms=[],
                 confidence=0.0,
+                uncertainty_radius_m=0.0,
+                uncertainty_reason="unresolved",
                 provenance={
                     "path": "unresolved:village_reference",
                     "reason": "village boundary cannot become a parcel candidate pool",
@@ -319,6 +354,8 @@ class SpatialResolver:
                     return ResolvedSpatialRef(
                         final_bsms=[],
                         confidence=0.0,
+                        uncertainty_radius_m=0.0,
+                        uncertainty_reason="unresolved",
                         provenance={
                             "path": "unresolved:village_all",
                             "reason": "whole-village text is not target-bound parcel evidence",
@@ -336,6 +373,8 @@ class SpatialResolver:
                             return ResolvedSpatialRef(
                                 final_bsms=[],
                                 confidence=0.0,
+                                uncertainty_radius_m=0.0,
+                                uncertainty_reason="unresolved",
                                 provenance={
                                     "path": "unresolved:village_all",
                                     "reason": "whole-village text is not target-bound parcel evidence",
@@ -436,10 +475,22 @@ class SpatialResolver:
                 logger.warning("[SpatialResolver] directional bbox failed: %s", e)
 
         if not final_bsms and not bbox:
+            # 不允许留下不可解析的引用（目标 §"不能留又不能解析"）：在证据索引
+            # 候选内做有界 LLM best-effort 判别；几何/BSM 仍来自 bundle。失败
+            # 才保持 unresolved（绝不伪造几何）。
+            fallback = self._llm_reason_fallback(
+                spec,
+                self._spec_mention(spec),
+                mention_enhancements,
+            )
+            if fallback is not None:
+                return fallback
             return ResolvedSpatialRef(
                 final_bsms=[],
                 bbox=None,
                 confidence=0.0,
+                uncertainty_radius_m=0.0,
+                uncertainty_reason="unresolved",
                 provenance={"...": provenance},
             )
 
@@ -453,11 +504,105 @@ class SpatialResolver:
             provenance["path"] += "+geometry:bbox"
             confidence = 0.8
 
+        uncertainty_reason = ""
+        uncertainty_radius_m = 0.0
+        if not final_bsms:
+            uncertainty_reason = "unresolved"
+        else:
+            path = str(provenance.get("path", "") or "")
+            if "+geometry:bbox" in path or "+gazetteer:village" in path or "+flash_mention" in path:
+                uncertainty_reason = "coarse_reference"
+                uncertainty_radius_m = _bbox_radius_m(bbox) if bbox else 250.0
+
         return ResolvedSpatialRef(
             final_bsms=final_bsms,
             bbox=bbox,
             confidence=confidence,
+            uncertainty_radius_m=uncertainty_radius_m,
+            uncertainty_reason=uncertainty_reason,
             provenance=provenance,
+        )
+
+    def _llm_reason_fallback(
+        self,
+        spec: Any,
+        mention: str,
+        mention_enhancements: Optional[Dict[str, List[str]]] = None,
+    ) -> Optional["ResolvedSpatialRef"]:
+        """有界 LLM best-effort：从证据索引候选里为未绑定的引用选出可用结果。
+
+        LLM 只在 Recall 候选内判别，不新增 BSM/几何；置信度低（0.35）并标记
+        ``llm_best_effort`` 不确定原因。失败回退确定性首选，仍无法绑定才 None。
+        """
+        candidates: List[Any] = []
+        if self.evidence_index is not None:
+            sub_mentions = [mention]
+            for sub in (mention_enhancements or {}).get(getattr(spec, "target_id", ""), []) or []:
+                sub_mentions.append(_normalize_spec_mention(str(sub)))
+            for sub in sub_mentions:
+                if not sub:
+                    continue
+                try:
+                    result = self.evidence_index.resolve_mention(sub, hints="")
+                    candidates.extend(result.candidates)
+                except Exception:  # noqa: BLE001
+                    continue
+        if not candidates:
+            return None
+        by_ref: Dict[str, Any] = {}
+        for c in candidates:
+            key = str(c.entity_ref or c.canonical_name or "")
+            if not key:
+                continue
+            if key not in by_ref or c.score > by_ref[key].score:
+                by_ref[key] = c
+        ordered = sorted(by_ref.values(), key=lambda c: -c.score)[:8]
+        if not ordered:
+            return None
+        picked = None
+        try:
+            from app.infrastructure.llm.factory import create_flash_llm
+
+            llm = create_flash_llm(max_tokens=200, temperature=0.1)
+            lines = chr(10).join(
+                f"{i}. {c.canonical_name} 类型={c.entity_type} "
+                f"BSM={','.join(c.source_bsms[:4]) or '无'} 得分={c.score:.2f}"
+                for i, c in enumerate(ordered, 1)
+            )
+            prompt = (
+                f"空间引用「{mention}」的候选实体如下，选择最匹配的一个"
+                f"（只输出编号；都不合适输出 0）：{chr(10)}{lines}"
+            )
+            response = llm.invoke(prompt)
+            content = getattr(response, "content", "")
+            if isinstance(content, list):
+                content = "".join(content)
+            match = re.search(r"([0-9]+)", str(content or ""))
+            if match is not None:
+                index = int(match.group(1)) - 1
+                if 0 <= index < len(ordered):
+                    picked = ordered[index]
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("[SpatialResolver] llm fallback failed: %s", exc)
+        if picked is None:
+            picked = ordered[0]
+        bsms = self._filter_to_bundle(list(getattr(picked, "source_bsms", None) or []))
+        if not bsms:
+            return None
+        from app.contracts.spatial.spatial_reference_contracts import ResolvedSpatialRef
+
+        return ResolvedSpatialRef(
+            final_bsms=bsms,
+            bbox=None,
+            confidence=0.35,
+            uncertainty_radius_m=250.0,
+            uncertainty_reason="llm_best_effort",
+            provenance={
+                "path": "evidence:candidates+llm_best_effort",
+                "mention": mention,
+                "picked": str(getattr(picked, "canonical_name", "") or ""),
+                "candidate_count": len(ordered),
+            },
         )
 
     def _filter_to_bundle(self, bsms: List[str]) -> List[str]:

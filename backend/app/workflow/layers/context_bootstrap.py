@@ -55,6 +55,17 @@ def _spatial_hydration_key(
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
+def _context_reports_text(context: Any) -> str:
+    """Join the current-state report bodies into one evidence text."""
+    parts: list[str] = []
+    for payload in dict(getattr(context, "reports", {}) or {}).values():
+        if isinstance(payload, dict):
+            parts.append(str(payload.get("content") or payload.get("summary") or ""))
+        else:
+            parts.append(str(payload or ""))
+    return "\n".join(part for part in parts if part)[:12000]
+
+
 async def _hydrate_l1_spatial_facts(state: Dict[str, Any], context: Any) -> None:
     """Attach L1 facts and build the GIS/KG evidence index once per snapshot."""
     try:
@@ -83,98 +94,32 @@ async def _hydrate_l1_spatial_facts(state: Dict[str, Any], context: Any) -> None
             )
             return
 
-        # Context objects can survive in-process while semantic memory advances.
-        # Rebuild only when the deterministic hydration key changes.
-        from app.infrastructure.kg.gazetteer import build_gazetteer
-        from app.infrastructure.kg.adapters.gazetteer_adapter import KGGazetteerAdapter
+        # 统一接地核心（设计 §7）：回填/绑定/索引全部收敛到 domain/ground。
+        # 水合路径 bump=False（只准备证据，不写注解、不 bump kg_version）。
+        from app.domain.ground.anchors import ground_l1_anchors
+        from app.infrastructure.paths import session_run_dir
 
-        kg = getattr(context, "kg", None)
-        if session_id and kg is not None:
-            restored_gazetteer = build_gazetteer(
-                kg,
-                getattr(context, "workspace", None),
-                memory,
-            )
-            if restored_gazetteer.entries:
-                context.gazetteer = restored_gazetteer
-                if getattr(context, "ports", None) is not None:
-                    context.ports.gazetteer = KGGazetteerAdapter(restored_gazetteer)
-
-        from app.infrastructure.kg.enrichment.report_entity_enrichment import (
-            _location_fact_mentions,
-            _materialize_gis_village_entries,
-        )
-
-        bases = list(dict.fromkeys(
-            str(item.get("name", ""))[:-1]
-            for item in _location_fact_mentions(facts)
-            if str(item.get("name", "")).endswith("村")
-        ))
-        written = _materialize_gis_village_entries(
-            getattr(context, "gazetteer", None),
-            getattr(context, "workspace", None),
-            bases,
-        )
-        if written and getattr(context, "ports", None) is not None:
-            context.ports.gazetteer = KGGazetteerAdapter(context.gazetteer)
-
-        # Name backfill: use L1 report names to name nameless KG entities
-        # (roads/water/facilities/clusters) before the evidence index snapshots
-        # entity names, so GROUND can resolve real names to real entities.
-        # Ambiguous (multi-candidate) mentions go through a flash confirmation
-        # cached per session so resume does not repeat model calls.
-        if kg is not None and context.gazetteer is not None:
+        cache_path = None
+        if session_id:
             try:
-                from app.infrastructure.kg.enrichment.name_backfill import (
-                    NameMention,
-                    backfill_kg_names,
-                )
-
-                mentions = [
-                    NameMention(
-                        name=str(
-                            getattr(fact, "normalized_name", "")
-                            or getattr(fact, "mention", "")
-                            or ""
-                        ).strip(),
-                        role=str(getattr(fact, "role", "unknown") or "unknown"),
-                        location=str(getattr(fact, "spatial_hint", "") or "").strip(),
-                        source_dimension=str(getattr(fact, "dimension_key", "") or ""),
-                    )
-                    for fact in facts
-                    if str(
-                        getattr(fact, "normalized_name", "")
-                        or getattr(fact, "mention", "")
-                        or ""
-                    ).strip()
-                ]
-                if mentions:
-                    cache_path = None
-                    if session_id:
-                        try:
-                            from app.infrastructure.paths import session_run_dir
-
-                            cache_path = (
-                                session_run_dir(session_id) / "name-backfill-cache.json"
-                            )
-                        except Exception:
-                            cache_path = None
-                    await backfill_kg_names(
-                        kg, context.gazetteer, mentions, cache_path=cache_path
-                    )
-            except Exception as exc:
-                logger.warning("[bootstrap] name backfill failed: %s", exc)
-
-        # The index is the typed L1 -> GROUND boundary.  Geometry is materialized
-        # from the bundle once and reused for every POI/fact in this build.
-        from app.evidence.index.place_evidence_index import PlaceEvidenceIndex
-
-        context.evidence_index = PlaceEvidenceIndex.build(context)
+                cache_path = session_run_dir(session_id) / "grounded-anchor-cache.json"
+            except Exception:
+                cache_path = None
+        await ground_l1_anchors(
+            context,
+            session_id,
+            cache_path=cache_path,
+            llm=None,
+            bump=False,
+        )
         context.evidence_index_key = hydration_key
+        gazetteer_entries = len(
+            getattr(getattr(context, "gazetteer", None), "entries", []) or []
+        )
         logger.info(
-            "[bootstrap] hydrated %d L1 location facts; GIS village bindings=%d; evidence entries=%d; key=%s",
+            "[bootstrap] hydrated %d L1 location facts; gazetteer entries=%d; evidence entries=%d; key=%s",
             len(facts),
-            written,
+            gazetteer_entries,
             len(getattr(context.evidence_index, "entries", []) or []),
             hydration_key[:12],
         )

@@ -29,8 +29,8 @@ async def retrieve_evidence(
 ) -> ExplorationResult:
     """Retrieve evidence from all session sources for a planning stage.
 
-    Searches: session KG, VillageBundle, all AnalysisReports (content +
-    【INSTRUCTION】), typed artifacts (placeholder until Wave D/E).
+    Searches: session KG, VillageBundle, all AnalysisReports (content),
+    typed artifacts (placeholder until Wave D/E).
 
     Returns ExplorationResult with evidence_bundle and spatial_cognition.
     """
@@ -50,7 +50,6 @@ async def retrieve_evidence(
     from app.evidence.retrieval.retrievers.report_retriever import retrieve_from_reports
     from app.evidence.retrieval.retrievers.kg_retriever import retrieve_from_kg
     from app.evidence.retrieval.retrievers.bundle_retriever import retrieve_from_bundle
-    from app.evidence.retrieval.retrievers.instruction_retriever import retrieve_from_instructions
 
     all_facts: List[EvidenceFact] = []
     all_sources: List[EvidenceSource] = []
@@ -65,17 +64,7 @@ async def retrieve_evidence(
     except Exception as e:
         logger.warning("[retrieve_evidence] report retriever failed: %s", e)
 
-    # 2. Instructions
-    try:
-        i_facts, i_sources = await retrieve_from_instructions(
-            session_id, request.dimension_key, request.stage,
-        )
-        all_facts.extend(i_facts)
-        all_sources.extend(i_sources)
-    except Exception as e:
-        logger.warning("[retrieve_evidence] instruction retriever failed: %s", e)
-
-    # 3. KG
+    # 2. KG
     kg_facts: List[EvidenceFact] = []
     cognition = SpatialCognitionEvidence()
     try:

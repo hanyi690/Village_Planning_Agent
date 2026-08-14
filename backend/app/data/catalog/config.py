@@ -26,7 +26,7 @@ class ConnectionConfig(BaseModel):
     at connection instantiation time (Phase 2), not stored in YAML.
     """
 
-    type: str  # 'tianditu' | 'amap' | 'osm' | 'gd_tianditu'
+    type: str  # 'tianditu' | 'amap' | 'gd_tianditu'
     api_key_env: str = ""  # env var name, e.g. "TIANDITU_API_KEY"
     rate_limit: float = 5.0  # QPS
     timeout: int = 30

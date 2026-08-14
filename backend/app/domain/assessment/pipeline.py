@@ -26,8 +26,9 @@ class DataPipeline:
     """
 
     def __init__(self) -> None:
-        from app.infrastructure.llm.tools.tools import TOOL_REGISTRY
-        self._registry = TOOL_REGISTRY
+        from app.infrastructure.llm.tools.registry import ToolRegistry
+
+        self._registry = ToolRegistry.registered_tools()
 
     async def get_professional_data(
         self,
@@ -56,13 +57,22 @@ class DataPipeline:
         context = self._build_context(dimension_key, summary, state)
         professional_data: Dict[str, Any] = {}
 
+        from app.core.settings import TOOL_TIMEOUT_S
+
         for tool_name in implemented_tools:
             try:
                 tool_fn = self._registry[tool_name]
-                result = await asyncio.to_thread(tool_fn.invoke, context)
+                result = await asyncio.wait_for(
+                    asyncio.to_thread(tool_fn.invoke, context),
+                    timeout=TOOL_TIMEOUT_S,
+                )
                 professional_data[tool_name] = result
                 logger.info(
                     f"[DataPipeline] {dimension_key}/{tool_name}: success"
+                )
+            except asyncio.TimeoutError:
+                logger.warning(
+                    f"[DataPipeline] {dimension_key}/{tool_name}: timed out after {TOOL_TIMEOUT_S}s"
                 )
             except Exception as e:
                 logger.warning(
@@ -81,7 +91,7 @@ class DataPipeline:
             return []
 
     def _filter_implemented(self, tool_names: List[str]) -> List[str]:
-        """Keep only tools that exist in the TOOL_REGISTRY."""
+        """Keep only tools that exist in the unified ToolRegistry."""
         implemented = []
         for name in tool_names:
             if name in self._registry:

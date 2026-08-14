@@ -1,0 +1,84 @@
+"""P1: spatial_factors computes farmland / ecological overlap (not just audit)."""
+
+from __future__ import annotations
+
+from types import SimpleNamespace
+
+from app.domain.suitability.spatial_factors import SpatialFactorIndex
+
+
+def _feature(coords) -> SimpleNamespace:
+    return SimpleNamespace(
+        geometry={"type": "Polygon", "coordinates": [coords]}
+    )
+
+
+def _parcel(coords) -> SimpleNamespace:
+    return SimpleNamespace(
+        bsm="P1",
+        geometry={"type": "Polygon", "coordinates": [coords]},
+    )
+
+
+def _context(farmland: list | None = None, ecological: list | None = None) -> SimpleNamespace:
+    return SimpleNamespace(
+        workspace=SimpleNamespace(
+            metadata=SimpleNamespace(crs="EPSG:4326"),
+            lines={"roads_current": []},
+            points={
+                "facilities_current": [],
+                "hazard_points": [],
+            },
+            polygons={
+                "farmland_protection": farmland or [],
+                "ecological_redline": ecological or [],
+            },
+        ),
+        constraint_index=None,
+    )
+
+
+def _policy(**overrides) -> SimpleNamespace:
+    values = {
+        "hazard_min_distance_m": 100.0,
+        "road_preferred_distance_m": 500.0,
+        "facility_preferred_distance_m": 800.0,
+        "overlap_fraction_threshold": 1e-6,
+    }
+    values.update(overrides)
+    return SimpleNamespace(**values)
+
+
+# parcel: 0..10 x 0..10  (metric projected to EPSG:3857, still axis aligned)
+_PARCEL_COORDS = [[0, 0], [0, 10], [10, 10], [10, 0], [0, 0]]
+
+
+def test_farmland_overlap_excludes_candidate_with_stable_code() -> None:
+    farmland = [_feature([[0, 0], [0, 5], [5, 5], [5, 0], [0, 0]])]
+    index = SpatialFactorIndex(_context(farmland=farmland), _policy())
+
+    result = index.evaluate(_parcel(_PARCEL_COORDS))
+
+    assert result.hard_feasible is False
+    assert "FARMLAND_PROTECTION_OVERLAP" in result.exclusion_codes
+    assert "bundle:farmland_protection" in result.evidence_refs
+
+
+def test_ecological_overlap_excludes_candidate_with_stable_code() -> None:
+    ecological = [_feature([[2, 2], [2, 6], [6, 6], [6, 2], [2, 2]])]
+    index = SpatialFactorIndex(_context(ecological=ecological), _policy())
+
+    result = index.evaluate(_parcel(_PARCEL_COORDS))
+
+    assert result.hard_feasible is False
+    assert "ECOLOGICAL_REDLINE_OVERLAP" in result.exclusion_codes
+    assert "bundle:ecological_redline" in result.evidence_refs
+
+
+def test_no_overlap_keeps_candidate_feasible() -> None:
+    index = SpatialFactorIndex(_context(), _policy())
+
+    result = index.evaluate(_parcel(_PARCEL_COORDS))
+
+    assert result.hard_feasible is True
+    assert result.exclusion_codes == ()

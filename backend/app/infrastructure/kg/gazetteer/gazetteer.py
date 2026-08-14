@@ -194,7 +194,7 @@ def _external_anchors_from_bundle(bundle: Any) -> List[GazetteerEntry]:
     """从 bundle 多源 API 注入的自然村注记构建权威坐标条目。
 
     消费 DataCatalog Step 5 注入的 ``annotations_current`` 中
-    ``layer_type == "external_natural_village"`` 的注记（source: tencent/amap/baidu），
+    ``layer_type == "external_natural_village"`` 的注记（source: tencent/amap/tianditu），
     作为自然村名的权威坐标（gazetteer 金标准），解决"多村名绑同 cluster"。
     """
     if bundle is None:

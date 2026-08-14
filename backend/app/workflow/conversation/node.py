@@ -32,10 +32,17 @@ SYSTEM_TEMPLATE = """你是村庄规划助手，正在进行 {project_name} 的�
 可用工具：
 - advance_planning_intent: 推进规划流程
 - gis_analysis: GIS可视化分析
+- bundle_overview: 会话数据概览
+- spatial_context: 空间语义认知
+- spatial_features: 空间要素清单
+- layer_reports: 维度报告
+- knowledge_graph: 知识图谱查询
+- rag_search: 会话文本检索
 
 响应规则：
 - 用户说"继续规划"或"下一步" -> 调用 advance_planning_intent
 - 用户请求GIS分析或地图 -> 调用 gis_analysis
+- 用户询问现状数据、图层、报告或图谱 -> 调用对应的读取工具
 - 其他对话 -> 直接回复"""
 
 
@@ -43,17 +50,31 @@ SYSTEM_TEMPLATE = """你是村庄规划助手，正在进行 {project_name} 的�
 _llm_with_tools: Optional[Any] = None
 
 
-def _get_llm_with_tools() -> Any:
-    """Lazy-init the LLM+tools chain (cached across calls)."""
+def _bind_tool_list() -> list[Any]:
+    """Intent tools plus the EXPLORE access-tool scope."""
     from app.infrastructure.llm.tools.intent_tools import advance_planning_intent, gis_analysis
+    from app.infrastructure.llm.tools.registry import ToolRegistry
 
+    return [
+        advance_planning_intent,
+        gis_analysis,
+        *ToolRegistry.for_agent("explore"),
+    ]
+
+
+def _get_llm_with_tools() -> Any:
+    """Lazy-init the LLM+tools chain (cached across calls).
+
+    Binds the two intent tools plus the EXPLORE access-tool scope so the model
+    can both route planning intents and answer exploration questions by reading
+    session data (bundle / spatial / reports / KG / RAG).
+    """
     global _llm_with_tools
     if _llm_with_tools is None:
         # Do not pin the primary provider's model here: MiniMax and other
         # OpenAI-compatible providers have their own valid model ids.
         llm = create_llm(temperature=0.7, max_tokens=MAX_TOKENS)
-        bind_list = [advance_planning_intent, gis_analysis]
-        _llm_with_tools = llm.bind_tools(bind_list)
+        _llm_with_tools = llm.bind_tools(_bind_tool_list())
     return _llm_with_tools
 
 

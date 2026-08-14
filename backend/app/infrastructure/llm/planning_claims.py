@@ -57,7 +57,7 @@ class PlanningClaimGenerator:
                 L3DimensionOutput,
                 method="function_calling",
             )
-            retry_count = max(0, int(os.getenv("L3_PROVIDER_PARSE_RETRIES", "1")))
+            retry_count = max(0, int(os.getenv("L3_PROVIDER_PARSE_RETRIES", "2")))
             last_error: Exception | None = None
             for attempt in range(retry_count + 1):
                 try:

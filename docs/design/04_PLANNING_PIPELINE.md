@@ -38,7 +38,7 @@ L1 dimension dispatch
   → L1Snapshot
 ```
 
-`AnalysisReport` 保留当前报告正文和 `【INSTRUCTION】` 的表达能力，继续供 UI、SSE、KG enrichment、
+`AnalysisReport` 保留当前报告正文（report_body）和 observations 结构化 JSON（`instruction` 列）的表达能力，继续供 UI、SSE、KG enrichment、
 L2/L3 共享阅读和人工审查。ReportStore 落盘时将其拆为 `content`、`instruction` 和 provenance；
 报告不是要被结构化产物替代的临时文本。
 
@@ -68,7 +68,7 @@ L2/L3 共享阅读和人工审查。ReportStore 落盘时将其拆为 `content`�
 `EvidenceBundle` / `SpatialCognitionEvidence`，之后只重跑受影响维度。
 
 L1/L2/L3 的 prompt 可以使用空间认知，但空间认知的来源边界统一为 EXPLORE：维度 worker 不直接
-调用 KG 查询函数。KG、VillageBundle、报告正文、`【INSTRUCTION】`、typed artifacts、既有证据和
+调用 KG 查询函数。KG、VillageBundle、报告正文、observations 结构化 JSON、typed artifacts、既有证据和
 必要外部来源由 EXPLORE 按查询目的裁剪，避免把整个 session 原文一次性注入 prompt。
 
 L1 前允许执行 evidence index preparation，但它只准备 Bundle、KG 和 session artifact 索引。
@@ -117,7 +117,7 @@ PlanningProgram
 
 缺少规划内容或空间证据时进入 GROUND/VALIDATE 的人工审查路径；不再通过另一次模型调用修复规划事实。
 
-TARGET_PROJECTION 不读取 Markdown、`【INSTRUCTION】` 或原始 GeoJSON；它只加载
+TARGET_PROJECTION 不读取 Markdown 报告、observations JSON 或原始 GeoJSON；它只加载
 `artifact_refs.planning_program`，并输出可供 GROUND 消费的 typed artifact。
 
 ## 5. GROUND

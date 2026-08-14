@@ -67,7 +67,7 @@
 │  | remote_raster | document                              │
 ├─────────────────────────────────────────────────────────┤
 │  Layer 1: Connection (连接管理)                          │
-│  tianditu | amap | osm | gd_tianditu                     │
+│  tianditu | amap | gd_tianditu                           │
 └─────────────────────────────────────────────────────────┘
          │
          ▼  (DataResult -> ingest -> typed models)
@@ -129,7 +129,6 @@ backend/app/modules/data/
 │   ├── tianditu.py        # 天地图 API
 │   ├── amap.py            # 高德地图 API
 │   ├── gd_tianditu.py     # 广东省天地图专题服务
-│   └── osm.py             # OpenStreetMap (osmnx)
 ├── documents/
 │   └── loader.py          # 规划文本/L3 报告加载
 └── providers/             # 外部事实提供器，仅由 data/KG 按显式 capability 使用

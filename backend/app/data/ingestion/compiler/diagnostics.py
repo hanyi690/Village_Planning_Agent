@@ -34,7 +34,7 @@ def collect_diagnostics(
                 diagnostic_id=f"{dimension_key}-no-instruction",
                 severity="info",
                 code="NO_INSTRUCTION",
-                message="report has no INSTRUCTION segment",
+                message="report has no structured instruction segment",
                 field_path="instruction",
             )
         )

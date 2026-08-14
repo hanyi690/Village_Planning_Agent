@@ -23,7 +23,6 @@ async def test_retrieve_evidence_caches_same_session_request(monkeypatch):
         return [], SpatialCognitionEvidence()
 
     monkeypatch.setattr("app.evidence.retrieval.retrievers.report_retriever.retrieve_from_reports", reports)
-    monkeypatch.setattr("app.evidence.retrieval.retrievers.instruction_retriever.retrieve_from_instructions", empty)
     monkeypatch.setattr("app.evidence.retrieval.retrievers.kg_retriever.retrieve_from_kg", empty_kg)
     monkeypatch.setattr("app.evidence.retrieval.retrievers.bundle_retriever.retrieve_from_bundle", empty)
 

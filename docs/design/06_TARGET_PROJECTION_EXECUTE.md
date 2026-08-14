@@ -39,7 +39,7 @@ L1 调用 compiler core 不表示工作流进入 target projection。target proj
 
 - 从报告中编译事实、约束、问题、机会、分类引用和证据缺口。
 - 将每个字段追溯到 `source_report_ref`、来源段落和 evidence reference。
-- 保留报告正文和 `【INSTRUCTION】`，不重写现有 L1 报告。
+- 保留报告正文（report_body）和 observations 结构化 JSON（`instruction` 列），不重写现有 L1 报告。
 - 输出可独立审查的 `L1DimensionFragment`。
 
 `TARGET_PROJECTION` 负责：

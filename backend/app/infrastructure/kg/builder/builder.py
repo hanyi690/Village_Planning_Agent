@@ -39,6 +39,16 @@ class KGBuilder:
         self._build_relations(bundle, parcel_relations, cross_type_relations)
         self._build_enrichment()
 
+        # 空间推理地基：全部实体构建完成后，统一从 bundle 几何生成
+        # 聚落簇 + 地块→簇 + 设施/水体/道路→簇 拓扑（几何权威在 bundle，
+        # KG 存质心 + 预计算关系；避免分散构建不一致）。
+        try:
+            from .materialize_topology import materialize_kg_topology
+
+            materialize_kg_topology(self.kg, bundle)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("[KGBuilder] materialize_kg_topology failed: %s", exc)
+
         if intent is not None:
             self.build_intent_layer(intent)
 
@@ -82,11 +92,6 @@ class KGBuilder:
         add_annotations(self.kg, bundle.points.get("annotations_current"))
         add_control_lines_from_typed(self.kg, bundle.points, bundle.polygons)
         add_planning_elements_from_typed(self.kg, bundle.polygons)
-        add_residential_clusters_from_typed(
-            self.kg,
-            bundle.polygons.get("landuse_current"),
-            bundle.points.get("annotations_current"),
-        )
         add_terrain(self.kg, getattr(bundle.rasters, 'slope', None))
         add_protection_polygons(self.kg, bundle.polygons)
         add_terrain_entities(self.kg, bundle.lines, bundle.points)

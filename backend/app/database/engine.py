@@ -239,7 +239,7 @@ async def _run_migrations(engine) -> None:
             ("planning_period", "ALTER TABLE planning_sessions ADD COLUMN planning_period TEXT DEFAULT '2022-2035年'"),
         ],
         "dimension_reports": [
-            # P8: INSTRUCTION 结构化段独立列（剥离存储，不参与展示）
+            # instruction 列 = 结构化 JSON（observations/claims）
             ("instruction", "ALTER TABLE dimension_reports ADD COLUMN instruction TEXT"),
         ],
         "planning_bundles": [

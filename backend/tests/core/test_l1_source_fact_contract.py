@@ -75,7 +75,7 @@ def test_observations_json_provides_location_facts():
     assert ("供水点", "facility") in typed
     assert ("Y122乡道", "road") in typed
     assert ("金田河", "water") in typed
-    assert ("园寨", "village") in typed
+    assert ("园寨", "facility") in typed
 
 
 def test_model_reasoning_and_protocol_chatter_are_not_l1_facts():

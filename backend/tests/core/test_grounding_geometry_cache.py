@@ -73,5 +73,10 @@ def test_place_evidence_index_materializes_parcel_centroids_once(monkeypatch):
     monkeypatch.setattr(grounding, "_parcel_centroid", counted)
     index = PlaceEvidenceIndex.build(context)
 
-    assert len(index.entries) == len(pois)
+    # All 30 POIs share one point -> one co-located place (ER semantics).
+    assert len(index.entries) == 1
+    merged = index.entries[0]
+    assert merged.role == "facility"
+    assert len(merged.entity_refs) == len(pois)
+    assert merged.source_bsms  # near-parcel BSMs merged onto the point
     assert sorted(calls) == [f"bsm-{idx}" for idx in range(8)]

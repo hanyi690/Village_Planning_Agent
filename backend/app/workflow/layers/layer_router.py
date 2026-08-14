@@ -1,11 +1,8 @@
-"""Layer router + L1/L2/L3 dimension worker nodes for the unified planning graph.
+"""L1/L2/L3 dimension worker nodes + phase advance for the unified planning graph.
 
-Wave M3: ``after_conversation`` / ``after_analysis`` dispatch dimension work
-through ``layer_router``. LangGraph Send payloads do NOT survive a shared noop
-node (per-invocation fields like ``dimension_key`` are lost once the merged
-parent state is read), so ``layer_router`` is a forwarding node: it reads the
-phase from its input, picks the matching worker via ``route_by_phase``, and
-re-dispatches the full payload with ``Command(goto=[Send(...)])``.
+``after_conversation`` / ``after_analysis`` dispatch dimension work directly to
+``l1_worker``/``l2_worker``/``l3_worker`` via ``Send`` (the per-Send payload
+keeps ``dimension_key``/``phase``; a shared noop node would drop those fields).
 
 ``advance_phase`` performs the phase advance on gate PASS — conditional edges
 cannot return ``Command`` and Send payloads do not update the parent state, so
@@ -17,7 +14,7 @@ from __future__ import annotations
 from typing import Any, Dict, List
 
 from langgraph.graph import END
-from langgraph.types import Command, Send
+from langgraph.types import Command, Send, TimeoutPolicy
 
 from app.workflow.layers.phase_machine import _phase_to_layer, get_next_phase
 from app.domain.assessment.analysis_node import analyze_dimension
@@ -44,22 +41,6 @@ def _worker_for_phase(phase: str) -> str:
     return worker
 
 
-def route_by_phase(state: Dict[str, Any]) -> str:
-    """Return the worker node name matching ``state['phase']``.
-
-    ``layer1``/``layer2``/``layer3`` -> ``l1_worker``/``l2_worker``/``l3_worker``.
-    Any unexpected value (e.g. "completed") logs and falls back to ``l1_worker``;
-    this should not be reached because after_conversation / after_analysis gate
-    those cases before dispatching.
-    """
-    phase = state.get("phase", "layer1")
-    worker = _PHASE_TO_WORKER.get(phase)
-    if worker is None:
-        logger.warning("[route_by_phase] unexpected phase=%r, defaulting to l1_worker", phase)
-        return "l1_worker"
-    return worker
-
-
 def _dispatch_state(state: Dict[str, Any], **overrides: Any) -> Dict[str, Any]:
     """Build a worker Send payload without one-shot layer-control residue.
 
@@ -73,25 +54,36 @@ def _dispatch_state(state: Dict[str, Any], **overrides: Any) -> Dict[str, Any]:
     return payload
 
 
-def layer_router_noop(state: Dict[str, Any]) -> Dict[str, Any]:
-    """Pass-through noop node (kept for API compatibility).
 
-    NOTE: not used as the graph node — a shared noop would drop per-Send fields
-    (``dimension_key``) before the conditional edge reads the merged state. The
-    graph wires ``layer_router`` to :func:`layer_router_node` instead.
+def _dimension_idle_timeout(dimension_key: Any) -> float | None:
+    """Per-dispatch idle timeout for a long-tail dimension, if configured (A7)."""
+    key = str(dimension_key or "").strip()
+    if not key:
+        return None
+    try:
+        from app.core.settings import DIMENSION_TIMEOUT_S
+    except Exception:
+        return None
+    configured = DIMENSION_TIMEOUT_S.get(key)
+    if configured is None:
+        return None
+    try:
+        return max(0.0, float(configured))
+    except (TypeError, ValueError):
+        return None
+
+
+def _send_worker(worker: str, payload: Dict[str, Any]) -> Send:
+    """Build a dimension-worker Send with an optional per-dispatch timeout.
+
+    Official LangGraph API: ``Send(node, arg, timeout=TimeoutPolicy(...))``.
+    When no per-dimension timeout is configured the Send is byte-for-byte the
+    previous ``Send(worker, payload)``, so default behavior is unchanged.
     """
-    return {}
-
-
-def layer_router_node(state: Dict[str, Any]) -> Command:
-    """Forward a layer_router invocation to the worker matching ``phase``.
-
-    Preserves the full per-Send payload (including ``dimension_key``) by
-    re-dispatching it via ``Command(goto=[Send(worker, state)])``.
-    """
-    worker = route_by_phase(state)
-    return Command(goto=[Send(worker, state)])
-
+    timeout = _dimension_idle_timeout(payload.get("dimension_key"))
+    if timeout is None:
+        return Send(worker, payload)
+    return Send(worker, payload, timeout=TimeoutPolicy(idle_timeout=timeout))
 
 def revision_dispatch_node(state: Dict[str, Any]) -> Command:
     """Dispatch only the first pending wave of an explicit revision plan."""
@@ -112,7 +104,7 @@ def revision_dispatch_node(state: Dict[str, Any]) -> Command:
     worker = _worker_for_phase(state.get("phase", "layer3"))
     logger.info("[revision_dispatch] dimensions=%s worker=%s", dimensions, worker)
     return Command(goto=[
-        Send(worker, _dispatch_state(state, dimension_key=dimension, is_revision=True))
+        _send_worker(worker, _dispatch_state(state, dimension_key=dimension, is_revision=True))
         for dimension in dimensions
     ])
 
@@ -142,7 +134,7 @@ def provider_resume_dispatch_node(state: Dict[str, Any]) -> Command:
     return Command(
         update={"provider_resume_dimensions": []},
         goto=[
-            Send(
+            _send_worker(
                 worker,
                 _dispatch_state(
                     state,
@@ -199,7 +191,7 @@ def _ready_dispatch(state: Dict[str, Any], phase: str) -> List[Send]:
         len(ready),
         ready,
     )
-    return [Send(worker, _dispatch_state(state, phase=phase, dimension_key=d)) for d in ready]
+    return [_send_worker(worker, _dispatch_state(state, phase=phase, dimension_key=d)) for d in ready]
 
 
 def advance_phase_node(state: Dict[str, Any]) -> Command:
@@ -242,13 +234,11 @@ def advance_phase_node(state: Dict[str, Any]) -> Command:
 
 
 __all__ = [
-    "route_by_phase",
-    "layer_router_noop",
-    "layer_router_node",
     "revision_dispatch_node",
     "provider_resume_dispatch_node",
     "l1_worker_node",
     "l2_worker_node",
     "l3_worker_node",
     "advance_phase_node",
+    "_send_worker",
 ]

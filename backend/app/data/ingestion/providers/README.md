@@ -1,7 +1,7 @@
 # Data Providers — POI / 外源锚点搜索子模块
 
 > **定位**：地图 API 的**能力提供者**（Provider）子模块，供 POI 搜索、外源锚点补全与旧分析工具消费。每个 Provider 目录封装一家地图服务商的 HTTP API。
-> **Updated: 2026-08-05**（Batch B 复核：`base.py` / `base_types.py` / `orchestrator.py` / `adapters` / `dem_provider.py` / `osm/` 已删除）
+> **Updated: 2026-08-05**（Batch B 复核：`base.py` / `base_types.py` / `orchestrator.py` / `adapters` / `dem_provider.py` / `osm/` / `baidu/` 已删除）
 
 ---
 
@@ -9,7 +9,7 @@
 
 **负责**：
 - `poi.py`：POI 统一搜索接口（高德优先，失败回退天地图；批量公共设施类型码搜索）
-- `amap/` / `baidu/` / `tencent/` / `tianditu/`：各服务商核心 API 封装（POI / 地理编码 / 路线 / 瓦片 / WFS）
+- `amap/` / `tencent/` / `tianditu/`：各服务商核心 API 封装（POI / 地理编码 / 路线 / 瓦片 / WFS）
 
 **不负责**：
 - 不做连接/限速管理（那是 `connections/`）
@@ -29,7 +29,6 @@
 | 子目录 | Provider | 要点 |
 |---|---|---|
 | `amap/` | `AmapProvider` + `AnchorService` | POI 文本/周边/驾车/步行；外源锚点（村委会 + 设施 + 道路名 + 水库名）；GCJ02 |
-| `baidu/` | `BaiduProvider` | bd09ll，`coord_type=1` 强制 WGS84 |
 | `tencent/` | `TencentProvider` + `AnchorService` | GCJ02，`coord_type=wgs84` 可直接返 WGS84 |
 | `tianditu/` | `TiandituProvider` + `TileService` + `WFSService` + `GDService` | 搜索/地理编码/行政区；瓦片；WFS（HYDA/HYDL/LRDL）；广东省专题服务（WMS/WMTS/WFS） |
 

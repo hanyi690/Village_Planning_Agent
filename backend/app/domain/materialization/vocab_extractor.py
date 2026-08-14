@@ -48,14 +48,6 @@ def extract_vocabulary_deterministic(reports: Dict[str, str]) -> Vocabulary:
     seen = set()
     for content in (reports or {}).values():
         zone_targets = list(_extract_zone_tables(content))
-        try:
-            from app.data.ingestion.tables import extract_instruction_tables
-
-            zone_targets.extend(
-                (extract_instruction_tables(content).get("zones") or [])
-            )
-        except Exception:
-            pass
         for zt in zone_targets:
             name = zt.land_use
             if name in seen:

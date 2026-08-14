@@ -190,6 +190,77 @@ def _resolvable_places(session_id: str) -> str:
         return ""
 
 
+def _structural_repair_prompt(dimension_key: str, error: Any) -> str:
+    """Bounded repair prompt for a claim set that fails schema validation.
+
+    The provider's structured output sometimes violates a closed-set literal
+    (e.g. facility action ``upgrade``).  Instead of hard-failing the dimension,
+    the exact validation error is fed back so the provider can repair it.
+    """
+    return (
+        "你是 L3 Claim 结构修复器。上一轮结构化输出未通过 schema 校验。"
+        "按下列校验错误修复整个 claims 数组（report_body 留空），"
+        "不得新增 claim 或改写 claim_id，不得创建坐标/BSM/地块/几何；"
+        "枚举字段必须使用声明值。\n"
+        f"dimension={dimension_key}\n"
+        f"validation_error={str(error)[:3000]}"
+    )
+
+
+async def _normalize_with_structural_repair(
+    claim_generator: Any,
+    *,
+    session_id: str,
+    dimension_key: str,
+    output: Any,
+) -> tuple[Any, PlanningClaimSet]:
+    """Normalize a claim set, retrying with feedback on schema validation errors.
+
+    A structurally invalid provider response (closed-set literal violation) is
+    re-requested up to ``L3_STRUCTURAL_COMPILE_RETRIES`` times with the exact
+    error; only after the budget is exhausted does the exception propagate to
+    the caller's fatal-error path.  Single-candidate deterministic, no geometry
+    or BSM is ever created here.
+    """
+    from pydantic import ValidationError
+
+    from app.domain.program.claim_draft import (
+        PlanningClaimDraftSet,
+        normalize_claim_draft_set,
+    )
+
+    structural_retries = max(
+        0,
+        int(os.getenv("L3_STRUCTURAL_COMPILE_RETRIES", "2")),
+    )
+    current_output = output
+    for attempt in range(structural_retries + 1):
+        try:
+            draft_set = PlanningClaimDraftSet(
+                dimension_key=dimension_key,
+                claims=list(current_output.claims),
+            )
+            claim_set = normalize_claim_draft_set(draft_set, dimension_key=dimension_key)
+            return draft_set, claim_set
+        except (ValidationError, TypeError, ValueError) as exc:
+            if attempt >= structural_retries:
+                raise
+            logger.warning(
+                "[analyze_l3_dimension] %s: structural repair round %d: %s",
+                dimension_key,
+                attempt + 1,
+                str(exc)[:600],
+            )
+            current_output = await _cached_claim_generation(
+                claim_generator,
+                session_id=session_id,
+                dimension_key=dimension_key,
+                prompt=_structural_repair_prompt(dimension_key, exc),
+                validation_feedback=[str(exc)],
+            )
+    raise RuntimeError("unreachable: structural repair budget exhausted")
+
+
 async def analyze_l3_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
     """L3-only dimension analysis worker.
 
@@ -331,13 +402,14 @@ async def analyze_l3_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
             prompt=prompt,
         )
         report_body = (output.report_body or "").strip()
-        draft_set = PlanningClaimDraftSet(
+        draft_set, claim_set = await _normalize_with_structural_repair(
+            claim_generator,
+            session_id=session_id,
             dimension_key=dim_key,
-            claims=list(output.claims),
+            output=output,
         )
         if not draft_set.claims and not report_body:
             draft_set.diagnostics.append("provider returned no structured claim set")
-        claim_set = normalize_claim_draft_set(draft_set, dimension_key=dim_key)
         semantic_feedback = claim_set_semantic_errors(claim_set)
         semantic_retry_count = max(
             0,
@@ -417,7 +489,37 @@ async def analyze_l3_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
                 "message": f"LLM stream timeout ({LLM_STREAM_TIMEOUT}s)",
             },
         }
+    except (ValueError, TypeError, json.JSONDecodeError) as exc:
+        # LLM output quality failure: the provider returned malformed /
+        # truncated structured JSON (PlanningClaimGenerator retried with the
+        # parse error as feedback and exhausted its budget).  This is NOT a
+        # provider infrastructure failure: tripping the session circuit here
+        # would block every other dimension of the layer.  Keep the transient
+        # code ``llm_provider_error`` so the existing HUMAN/provider-resume
+        # path can retry exactly this one dimension with a bounded budget.
+        logger.error(
+            "[analyze_l3_dimension] %s: structured output failed to parse: %s",
+            dim_key,
+            str(exc)[:600],
+        )
+        await sse_manager.publish(session_id, {
+            "type": SSEEventType.DIMENSION_ERROR,
+            "dimension_key": dim_key,
+            "dimension_name": dim_name,
+            "layer": dim_layer,
+            "error": f"structured output failed to parse: {exc}",
+        })
+        return {
+            "messages": [AIMessage(content=f"[执行失败] 结构化输出解析失败: {exc}")],
+            "dimension_retry_counts": dimension_failure_attempt(state, dim_key),
+            "fatal_error": {
+                "stage": f"L{dim_layer}", "dimension": dim_key,
+                "code": "llm_provider_error",
+                "message": f"L3 structured output failed to parse: {exc}",
+            },
+        }
     except Exception as e:
+        # Genuine provider infrastructure failure (transport/HTTP/circuit).
         trip_provider_failure(session_id)
         logger.error(f"[analyze_l3_dimension] {dim_key}: LLM 失败: {e}")
         await sse_manager.publish(session_id, {

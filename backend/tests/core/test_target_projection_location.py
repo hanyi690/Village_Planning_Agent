@@ -33,5 +33,5 @@ def test_claim_location_hints_become_a_closed_set_spatial_reference():
     ]
     assert [
         child.reference.filter["label_contains"] for child in specs[0].children
-    ] == ["园寨村", "黄竹村"]
+    ] == ["园寨", "黄竹"]
     assert not diagnostics

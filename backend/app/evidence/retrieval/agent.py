@@ -159,14 +159,6 @@ class ExploreFlashAgent:
         # Require the current session KG before examining text.  This is both a
         # readiness check and a guard against a stale / most-recent graph.
         _ = self.kg_tools.kg
-        instructions = _instructions_from_l3_table(planning_text)
-        if instructions:
-            return ExplorationInstructionCollection(
-                session_id=self.session_id,
-                village_name=self.village_name,
-                kg_session_ref=self.session_id,
-                instructions=instructions,
-            )
         instructions = []
         for chunk in _chunks(planning_text):
             domain = _domain_for(chunk["text"])
@@ -199,75 +191,6 @@ class ExploreFlashAgent:
             kg_session_ref=self.session_id,
             instructions=instructions,
         )
-
-
-def _instructions_from_l3_table(text: str) -> List[ExplorationInstruction]:
-    """Convert every formal L3 row into one evidence-preserving instruction."""
-    if "【INSTRUCTION】" not in (text or ""):
-        return []
-    from app.data.ingestion.tables import extract_instruction_tables
-
-    extracted = extract_instruction_tables(text)
-    collections = (
-        ("project", extracted.get("projects") or []),
-        ("zone", extracted.get("zones") or []),
-        ("facility", extracted.get("facilities") or []),
-        ("axis", extracted.get("axes") or []),
-        ("road", extracted.get("roads") or []),
-    )
-    instructions = []
-    seen_ids = set()
-    for domain, targets in collections:
-        for target in targets:
-            instruction_id = str(
-                getattr(target, "source_instruction_id", "")
-                or f"EXP-{len(instructions) + 1:04d}"
-            )
-            if instruction_id in seen_ids:
-                continue
-            seen_ids.add(instruction_id)
-            semantic = getattr(target, "semantic", None)
-            evidence = str(
-                getattr(semantic, "raw_text", "")
-                or getattr(semantic, "natural_language_description", "")
-                or ""
-            )
-            name = str(
-                getattr(target, "name", "")
-                or getattr(target, "land_use", "")
-                or getattr(target, "type", "")
-                or getattr(target, "label", "")
-                or getattr(target, "road_level", "")
-            )
-            location = str(
-                getattr(target, "location_hint", "")
-                or getattr(target, "anchor_village", "")
-                or getattr(target, "reference_feature", "")
-                or getattr(semantic, "spatial_hint", "")
-                or ""
-            )
-            mentions = list(dict.fromkeys(
-                item for item in [name, location, *_mentions(evidence)] if item
-            ))
-            instructions.append(ExplorationInstruction(
-                instruction_id=instruction_id,
-                source_chunk_id=f"instruction-row-{len(instructions) + 1:04d}",
-                section_title="【INSTRUCTION】",
-                evidence_text=evidence or f"{name} {location}".strip(),
-                domain=domain,
-                action=str(getattr(target, "action", "") or "plan"),
-                entity_mentions=mentions,
-                entity_types=[domain],
-                requested_bundle_queries=[
-                    "entity_candidates",
-                    "bsm_geometry",
-                    "planning_zone",
-                    "construction_permission",
-                ],
-                confidence=0.7,
-                requires_human_confirmation=True,
-            ))
-    return instructions
 
 
 def explore_planning_text(

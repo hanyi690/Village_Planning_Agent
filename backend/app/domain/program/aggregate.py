@@ -2,8 +2,8 @@
 
 L3 reports are produced as evidence-bearing claims by the LLM worker. This
 node accepts only that typed contract and performs deterministic proposal
-adaptation, deduplication, provenance, persistence, and gating. Markdown and
-INSTRUCTION text are never executable inputs.
+adaptation, deduplication, provenance, persistence, and gating. Only
+PlanningClaimSet reports are executable inputs.
 """
 from __future__ import annotations
 
@@ -315,7 +315,7 @@ async def l3_aggregate(
             claim_set = PlanningClaimSet.model_validate_json(content)
         except Exception as exc:
             raise ValueError(
-                f"L3 report {dim_key} is not a PlanningClaimSet; Markdown/INSTRUCTION is not executable"
+                f"L3 report {dim_key} is not a PlanningClaimSet; expected PlanningClaimSet JSON"
             ) from exc
         claims = [
             claim.model_copy(update={"dimension_key": claim.dimension_key or dim_key})
@@ -397,7 +397,10 @@ async def l3_aggregate(
     )
 
     blocking_source_issues = [
-        issue for issue in program.program_issues if issue.severity == "error"
+        issue
+        for issue in program.program_issues
+        if issue.severity == "error"
+        and issue.code != "classification_decision_required"
     ]
 
     # LLM-assisted closed-set classification: polygon/parcel targets get a

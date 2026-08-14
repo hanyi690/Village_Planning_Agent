@@ -1,7 +1,7 @@
 """Rate limiter - thread-safe singleton per service name.
 
 Migrated from gis/data/providers/rate_limiter.py. Each service (tianditu,
-amap, osm) has one global RateLimiter shared by all connections and drivers
+amap) has one global RateLimiter shared by all connections and drivers
 targeting that service, ensuring aggregate QPS stays within provider limits.
 """
 
@@ -24,7 +24,7 @@ class RateLimiter:
     limiter so the combined request rate respects the provider's QPS cap.
 
     Attributes:
-        name: service name ('tianditu', 'amap', 'osm')
+        name: service name ('tianditu', 'amap')
         rate_limit: max requests per second (QPS)
         min_interval: minimum seconds between requests
     """

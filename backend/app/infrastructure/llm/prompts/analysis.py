@@ -28,26 +28,32 @@ ANALYSIS_RULES = """
 """
 
 # ==========================================
-# INSTRUCTION 段（P8：文末结构化定位指令 — L1 现状层）
-# LLM 在报告正文后输出固定列 markdown 表格，供下游空间定位消费。
-# 保存时剥离，不参与展示。
+# observations 段（P8：文末结构化观察契约 — L1 现状层）
+# L1 双响应输出：report_body（现状分析正文）+ observations（结构化现状对象数组，机器消费）。
+# observations 是下游空间定位/地名解析的唯一结构化来源；保存时写入 instruction 列，不参与展示。
 # ==========================================
 
-INSTRUCTION_OUTPUT_GUIDE = """
+OBSERVATIONS_OUTPUT_GUIDE = """
 【现状对象 observations 契约】
 你的输出包含两部分：report_body（现状分析正文）和 observations（结构化现状对象数组，机器消费）。
 observations 每个对象包含：
-- entity_type：只能是 现状设施 / 现状项目 / 现状分区 / 道路 / 水系 / 地物
+- entity_type：只能是 现状设施 / 现状项目 / 现状分区 / 自然村 / 道路 / 水系 / 地物
 - name：与正文完全一致的名称
-- location：优先自然村名{nv_suffix}；无村名用方位描述（村北部、沿河段）；无位置留空
+- location：空间定位信息，按优先级填写（有具体地点时严禁留空）：
+    1) 所在自然村名，必须用报告原文村名{nv_suffix}（如 园寨/田坑，不加多余后缀）；
+    2) 无自然村时，用报告原文方位描述（村北部、沿河段、村驻地旁、村界南侧）；
+    3) 道路必须给走向（如 东西走向/南北走向/东北-西南走向），水系必须给流向或位置（如 西南至东北贯穿、沿石窟河、汇入石窟河）；
+    4) 确实无任何空间信息才留空，并在 description 注明"无空间信息"。
+- relation：与其他地点的空间关系（如 位于X村中部、沿石窟河、汇入石窟河、通往X村、位于X村与Y村之间）；无则留空
 - description：10-30 字概述
 - scale：正文数字规模（2处、40亩），无则留空
 
 本维度允许提取的现状对象范围：{dimension_focus}
 
 约束：
-- 位置必须与正文一致，禁止编造
+- location/relation 必须与正文一致，禁止编造
 - 只可摘录正文已出现的内容，不得新增对象
+- 凡正文给出具体地点/走向/流向的对象，location 必须填写，不得留空
 - 无对象时 observations 返回空数组
 """
 
@@ -402,7 +408,7 @@ ANALYSIS_DIMENSIONS = {
 # 辅助函数
 # ==========================================
 
-_L1_INSTRUCTION_FOCUS = {
+_L1_OBSERVATION_FOCUS = {
     "location": "自然村、现状道路、对外交通节点、现状交通设施",
     "socio_economic": "自然村、现状产业点、现状经营设施",
     "villager_wishes": "村民明确提到的现状设施、现状项目和所在自然村",
@@ -418,11 +424,11 @@ _L1_INSTRUCTION_FOCUS = {
 }
 
 
-def _instruction_output_guide(natural_villages: str = "", dimension_key: str = "") -> str:
+def _observations_output_guide(natural_villages: str = "", dimension_key: str = "") -> str:
     nv = (natural_villages or "").strip()
     nv_suffix = f"（如 {nv}）" if nv else ""
-    focus = _L1_INSTRUCTION_FOCUS.get(dimension_key, "本维度报告正文明确出现的现状对象")
-    return INSTRUCTION_OUTPUT_GUIDE.format(nv_suffix=nv_suffix, dimension_focus=focus)
+    focus = _L1_OBSERVATION_FOCUS.get(dimension_key, "本维度报告正文明确出现的现状对象")
+    return OBSERVATIONS_OUTPUT_GUIDE.format(nv_suffix=nv_suffix, dimension_focus=focus)
 
 
 def get_dimension_prompt(dimension_key: str, raw_data: str = "", village_name: str = "",
@@ -476,8 +482,8 @@ def get_dimension_prompt(dimension_key: str, raw_data: str = "", village_name: s
     if has_images:
         result += "\n\n**【上传图片分析指引】**：\n请结合上传的图片分析村庄现状。图片可能展示村庄实景、设施、环境、建筑等。"
 
-    # P8: 文末 INSTRUCTION 段引导（内部指令，保存时剥离不展示）
-    result += _instruction_output_guide(natural_villages, dimension_key=dimension_key)
+    # P8: 文末 observations 段引导（内部指令，保存时写入 instruction 列，不参与展示）
+    result += _observations_output_guide(natural_villages, dimension_key=dimension_key)
 
     return result
 
@@ -503,7 +509,7 @@ def list_dimensions():
 __all__ = [
     "ANALYSIS_DIMENSIONS",
     "ANALYSIS_RULES",
-    "INSTRUCTION_OUTPUT_GUIDE",
+    "OBSERVATIONS_OUTPUT_GUIDE",
     "get_dimension_prompt",
     "list_dimensions",
 ]

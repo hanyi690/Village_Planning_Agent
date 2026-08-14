@@ -333,9 +333,6 @@ async def analyze_l2_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
 
     # L2 维度步骤 Report（供 positioning-trace 面板定位）
     try:
-        from app.infrastructure.reports.report_store import split_instruction
-
-        _, instr = split_instruction(llm_response)
         await save_step_report(
             session_id, "L2",
             step_name=f"analyze_l2_dimension:{dim_key}",

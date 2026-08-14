@@ -40,6 +40,172 @@ def _to_typed(data: Any, cls: type) -> Any:
     return data
 
 
+def _build_exec_repair_payload(
+    compilation: Any,
+) -> tuple[dict[str, dict[str, Any]], list[str]]:
+    """Serialize VALIDATE repair directives for EXECUTE worker consumption.
+
+    Returns ``(payload, require_source_evidence_target_ids)``.  The payload maps
+    target_id -> closed directive fields so workers can honor
+    ``rebuild_strategy`` / ``affected_bsms`` instead of silently re-running.
+    Targets under ``REQUIRE_SOURCE_EVIDENCE`` are not re-dispatched (a worker
+    rerun cannot invent missing upstream evidence) and are returned separately
+    so EXECUTE records an explicit unresolved instead of a pointless rerun.
+    """
+    payload: dict[str, dict[str, Any]] = {}
+    require_evidence: list[str] = []
+    for directive in list(getattr(compilation, "directives", None) or []):
+        target_id = str(getattr(directive, "target_id", "") or "")
+        if not target_id:
+            continue
+        directive_type = getattr(directive, "directive_type", None)
+        type_value = (
+            directive_type.value
+            if hasattr(directive_type, "value")
+            else str(directive_type or "")
+        )
+        entry = {
+            "directive_id": str(getattr(directive, "directive_id", "") or ""),
+            "directive_type": type_value,
+            "affected_bsms": sorted(
+                {
+                    str(item)
+                    for item in (getattr(directive, "affected_bsms", None) or [])
+                    if str(item)
+                }
+            ),
+            "exclude_bsms": sorted(
+                {
+                    str(item)
+                    for item in (getattr(directive, "exclude_bsms", None) or [])
+                    if str(item)
+                }
+            ),
+            "rebuild_strategy": getattr(directive, "rebuild_strategy", None),
+            "evidence_scope": getattr(directive, "evidence_scope", None),
+            "required_evidence": sorted(
+                {
+                    str(item)
+                    for item in (getattr(directive, "required_evidence", None) or [])
+                    if str(item)
+                }
+            ),
+            "reason_code": str(getattr(directive, "reason_code", "") or ""),
+        }
+        if type_value == "require_source_evidence":
+            require_evidence.append(target_id)
+        payload[target_id] = entry
+    return payload, sorted(set(require_evidence))
+
+
+def _mark_require_evidence_unresolved(
+    outcome: Dict[str, Any],
+    execution_plan: Any,
+    require_evidence_target_ids: list[str],
+) -> Dict[str, Any]:
+    """Record targets blocked on missing upstream evidence as explicit unresolved.
+
+    These targets are not re-dispatched: a worker rerun cannot invent the
+    evidence the directive requires.  Every affected planned task receives a
+    stable ``require_source_evidence`` diagnostic so VALIDATE attributes the
+    finding to the responsible upstream stage instead of an EXECUTE rerun.
+    """
+    from app.contracts.workflow.execution_plan_contracts import TaskExecutionResult
+
+    target_ids = set(require_evidence_target_ids)
+    if not target_ids:
+        return outcome
+    existing = {
+        str(getattr(item, "target_id", "") if not isinstance(item, dict) else item.get("target_id", ""))
+        for item in list(outcome.get("task_results", []) or [])
+    }
+    task_by_target: Dict[str, Any] = {}
+    for task in list(getattr(execution_plan, "worker_tasks", None) or []) + list(
+        getattr(execution_plan, "deferred_tasks", None) or []
+    ):
+        target_id = str(getattr(task, "target_id", "") or "")
+        if target_id:
+            task_by_target.setdefault(target_id, task)
+    marked = 0
+    task_results = list(outcome.get("task_results", []) or [])
+    for target_id in sorted(target_ids - existing):
+        task = task_by_target.get(target_id)
+        task_results.append(
+            TaskExecutionResult(
+                task_id=str(getattr(task, "task_id", "") or "") or f"repair:{target_id}",
+                target_id=target_id,
+                status="failed",
+                expected_output_kind=str(
+                    getattr(task, "expected_output_kind", "line")
+                )
+                if task is not None
+                else "line",
+                output_artifacts=[],
+                errors=["require_source_evidence"],
+                diagnostics=[
+                    {
+                        "code": "require_source_evidence",
+                        "target_id": target_id,
+                        "message": (
+                            "EXECUTE did not dispatch this target: the typed repair "
+                            "directive requires upstream source evidence that is absent."
+                        ),
+                    }
+                ],
+            )
+        )
+        marked += 1
+    if marked:
+        outcome = dict(outcome)
+        outcome["task_results"] = task_results
+        outcome["diagnostics"] = list(outcome.get("diagnostics", []) or []) + [
+            {"code": "require_source_evidence", "target_ids": sorted(target_ids)}
+        ]
+    return outcome
+
+
+def _apply_execute_repair_to_intent(
+    plan_intent: Any,
+    exec_repair_payload: dict[str, dict[str, Any]],
+) -> tuple[Any, bool]:
+    """Fold EXECUTE-bound repair directives into the dispatch intent.
+
+    ``reroute_avoiding_bsms`` strips the offending parcels from a road target's
+    candidate/path set so the route generator re-plans around them.  Targets
+    under ``require_source_evidence`` are removed from the road dispatch set:
+    the generator must not re-run a corridor whose upstream evidence is absent.
+    Returns ``(revised_intent, changed)`` without mutating the caller object.
+    """
+    if not exec_repair_payload or plan_intent is None:
+        return plan_intent, False
+    if not hasattr(plan_intent, "model_copy"):
+        return plan_intent, False
+    revised = plan_intent.model_copy(deep=True)
+    changed = False
+
+    for road in list(getattr(revised, "road_targets", None) or []):
+        target_id = str(getattr(road, "target_id", "") or "")
+        entry = exec_repair_payload.get(target_id)
+        if entry is None:
+            continue
+        if entry.get("directive_type") == "require_source_evidence":
+            revised.road_targets.remove(road)
+            changed = True
+            continue
+        if entry.get("rebuild_strategy") != "reroute_avoiding_bsms":
+            continue
+        avoid = {str(item) for item in (entry.get("affected_bsms") or [])}
+        if not avoid:
+            continue
+        for field_name in ("path_bsms", "candidate_bsms"):
+            current = list(getattr(road, field_name, None) or [])
+            filtered = [item for item in current if str(item) not in avoid]
+            if filtered != current:
+                setattr(road, field_name, filtered)
+                changed = True
+    return revised, changed
+
+
 def _classification_diagnostic_result(
     state: Dict[str, Any], diagnostics: list[dict[str, Any]]
 ) -> Dict[str, Any]:
@@ -189,6 +355,39 @@ async def execute_node(state: Dict[str, Any]) -> Dict[str, Any]:
     )
     deferral_ledger = _load_ref_artifact(state, "deferral_ledger", DeferralLedger)
     execution_plan = _load_ref_artifact(state, "execution_plan", ExecutionPlan)
+    from app.contracts.workflow.repair_directive_contracts import (
+        RepairDirectiveCompilation,
+    )
+
+    repair_directives = _load_ref_artifact(
+        state,
+        "repair_directives",
+        RepairDirectiveCompilation,
+    )
+    exec_repair_payload, require_evidence_target_ids = _build_exec_repair_payload(
+        repair_directives
+    )
+    if exec_repair_payload:
+        logger.info(
+            "[workflow:execute] applying %d repair directives; %d targets require source evidence",
+            len(exec_repair_payload),
+            len(require_evidence_target_ids),
+        )
+        if plan_intent is not None:
+            plan_intent, intent_repaired = _apply_execute_repair_to_intent(
+                plan_intent,
+                exec_repair_payload,
+            )
+            if intent_repaired:
+                intent.typed_intent = plan_intent
+                execution_plan = build_execution_plan(
+                    intent,
+                    site_selection,
+                    [],
+                    run_id=_run_id(state),
+                    context_version=_context_version(state),
+                    deferral_ledger=deferral_ledger,
+                )
     if execution_plan is None and intent is not None and site_selection is not None:
         execution_plan = build_execution_plan(
             intent,
@@ -220,6 +419,8 @@ async def execute_node(state: Dict[str, Any]) -> Dict[str, Any]:
         kg_session_ref=getattr(context, "kg_session_ref", "") or "",
         kg_three_lines=list(state.get("kg_three_lines") or []),
         messages=list(state.get("messages") or []),
+        repair_directives=exec_repair_payload,
+        required_source_evidence_target_ids=require_evidence_target_ids,
     )
     from app.domain.materialization.nodes.worker_common import _execution_intent_from_plan
     execution_intent = _execution_intent_from_plan(exec_state)
@@ -257,6 +458,12 @@ async def execute_node(state: Dict[str, Any]) -> Dict[str, Any]:
             list(result.get("layout_configs", []) or []),
         )
     outcome = _task_results_from_execution(execution_plan, result)
+    if require_evidence_target_ids:
+        outcome = _mark_require_evidence_unresolved(
+            outcome,
+            execution_plan,
+            require_evidence_target_ids,
+        )
     l4_write_result: Dict[str, Any] = {}
     if planned_state is not None:
         from app.domain.materialization.nodes.write_l4 import _write_l4_node

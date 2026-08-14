@@ -42,6 +42,16 @@ _POLICIES: dict[str, _RepairPolicy] = {
         requires_bsms=True,
         rebuild_strategy="repair_invalid_geometry",
     ),
+    "topology_validity": _RepairPolicy(
+        RepairDirectiveType.REBUILD_GEOMETRY,
+        requires_bsms=True,
+        rebuild_strategy="repair_invalid_geometry",
+    ),
+    "topology_gaps": _RepairPolicy(
+        RepairDirectiveType.REBUILD_GEOMETRY,
+        requires_bsms=True,
+        rebuild_strategy="repair_invalid_geometry",
+    ),
     "geometry_invalid": _RepairPolicy(
         RepairDirectiveType.REBUILD_GEOMETRY,
         requires_bsms=True,

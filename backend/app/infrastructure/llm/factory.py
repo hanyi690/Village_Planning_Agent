@@ -241,6 +241,15 @@ def _create_minimax_llm(
     if metadata:
         kwargs["metadata"] = metadata
 
+    # MiniMax deprecated ``max_tokens`` in favour of ``max_completion_tokens``
+    # on its OpenAI-compatible endpoint (a small default output limit otherwise
+    # truncates long structured planning outputs mid-JSON).  Send the
+    # non-deprecated parameter alongside the existing ``max_tokens``; the
+    # endpoint accepts both (verified against the configured base).
+    model_kwargs = dict(kwargs.pop("model_kwargs", None) or {})
+    model_kwargs.setdefault("max_completion_tokens", max_tokens)
+    kwargs["model_kwargs"] = model_kwargs
+
     return ChatOpenAI(
         model=model,
         temperature=effective_temperature,

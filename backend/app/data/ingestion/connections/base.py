@@ -38,7 +38,7 @@ class Connection(ABC):
     @property
     @abstractmethod
     def name(self) -> str:
-        """Unique connection identifier: 'tianditu' | 'amap' | 'osm' | 'gd_tianditu'."""
+        """Unique connection identifier: 'tianditu' | 'amap' | 'gd_tianditu'."""
         ...
 
     @abstractmethod

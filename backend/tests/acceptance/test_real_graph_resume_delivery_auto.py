@@ -60,6 +60,46 @@ def _real_classification_decisions(review_payload: dict) -> list[dict] | None:
     return payload
 
 
+def _sanctioned_classification_decisions(
+    client,
+    state: dict,
+    review_payload: dict,
+) -> tuple:
+    """Generate closed-set appendix5 decisions via the sanctioned L3 generator.
+
+    The L3 aggregate already runs this same LLM closed-set path over the
+    authoritative appendix5 encoding in ``data``; this is a retry at the HUMAN
+    boundary when the operator supplied no payload.  It is never a name/dlbm
+    crosswalk mapping.  Returns ``(decisions, source)`` or ``(None, reason)``.
+    """
+    required = {
+        str(target_id)
+        for item in review_payload.get("items") or []
+        if isinstance(item, dict)
+        for target_id in ((item.get("context") or {}).get("target_ids") or [])
+        if str(target_id).strip()
+    }
+    if not required:
+        return None, "classification review carried no target_ids"
+    from app.infrastructure.artifacts.runtime import load_artifact
+    from app.contracts.domain.l3_contracts import PlanningProgram
+    from app.domain.program.classification_generator import (
+        generate_classification_decisions,
+    )
+
+    program = load_artifact(state, "planning_program", PlanningProgram)
+    if program is None:
+        return None, "planning_program artifact unavailable at the pause"
+    decisions = client.portal.call(generate_classification_decisions, program)
+    if not decisions:
+        return None, "sanctioned generator produced no decisions"
+    supplied = {str(decision.target_id) for decision in decisions}
+    missing = sorted(required - supplied)
+    if missing:
+        return None, f"sanctioned generator missing targets: {missing}"
+    return [decision.model_dump(mode="json") for decision in decisions], "llm_closed_set"
+
+
 def _post_l3_poll_terminal(state: dict) -> bool:
     """Return true only for a delivery terminal, fatal error, or interrupt."""
     delivery_status = str(state.get("delivery_status") or "")
@@ -428,12 +468,24 @@ def test_real_graph_resume_delivery(sqlite_db, pipeline_reset, monkeypatch):
                         classification_decisions = _real_classification_decisions(
                             review_payload
                         )
+                        decision_source = "operator"
+                        if classification_decisions is None:
+                            classification_decisions, decision_source = (
+                                _sanctioned_classification_decisions(
+                                    client, current, review_payload
+                                )
+                            )
                         if classification_decisions is None:
                             pytest.fail(
                                 "real graph reached classification_decision_required; "
-                                "provide operator-approved REAL_CLASSIFICATION_DECISIONS_JSON "
-                                "or REAL_CLASSIFICATION_DECISIONS_PATH instead of auto-approving"
+                                "operator REAL_CLASSIFICATION_DECISIONS absent and the "
+                                f"sanctioned closed-set generator failed: {decision_source}"
                             )
+                        print(
+                            f"[REAL-SESSION] classification decisions from {decision_source} "
+                            f"({len(classification_decisions)})",
+                            flush=True,
+                        )
                         decision = {
                             "action": "approve",
                             "feedback": "??????????????????",

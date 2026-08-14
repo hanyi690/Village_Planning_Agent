@@ -23,30 +23,6 @@ from app.infrastructure.logging import get_logger
 
 logger = get_logger(__name__)
 
-_INSTRUCTION_MARKER = "【INSTRUCTION】"
-
-
-def split_instruction(content: str) -> tuple:
-    """Split report content into (display_content, instruction_section).
-
-    L1/L2 report projections may carry a legacy 【INSTRUCTION】 markdown
-    section for their own evidence projection. L3 never uses this field.
-    展示文本与指令段分离存储：
-      - display_content: 标记行之前的所有内容（含标记行前导空行清理）
-      - instruction_section: 标记行起的全部（含标记行，PARSE 据此定位）
-    无标记时原样返回 (content, "")。
-    """
-    if not content:
-        return (content or "", "")
-    idx = content.find(_INSTRUCTION_MARKER)
-    if idx < 0:
-        from app.data.ingestion.compiler.instruction_parser import split_content_instruction
-
-        return split_content_instruction(content)
-    display = content[:idx].rstrip()
-    instruction = content[idx:].strip()
-    return (display, instruction)
-
 
 # ==========================================
 # TypedDict Definitions
@@ -116,8 +92,7 @@ class ReportStore:
             report_id: UUID for retrieving the report
         """
         report_id = str(uuid.uuid4())
-        # L1/L2 report projection: keep any legacy instruction section separate.
-        display_content, instruction = split_instruction(content)
+        display_content = content
         summary = await self._generate_summary(display_content, dim_key, layer)
 
         db_report = DimensionReport(
@@ -127,7 +102,7 @@ class ReportStore:
             version=version,
             report_id=report_id,
             content=display_content,
-            instruction=instruction or None,
+            instruction=None,
             summary=summary,
             revision_trigger=metadata.get("revision_reason") if metadata else None,
             knowledge_sources=knowledge_sources,
@@ -170,21 +145,6 @@ class ReportStore:
         """
         if not reports:
             return []
-
-        # P8: 文末 INSTRUCTION 段剥离存储（content 保持展示文本）。
-        # bulk_save() is called both by the immediate write and by the layer
-        # completion hook.  After the first call content is already split;
-        # never erase the independently persisted instruction on the second
-        # idempotent save.
-        for report_data in reports:
-            content = report_data.get("content", "") or ""
-            if _INSTRUCTION_MARKER in content:
-                display_content, instruction = split_instruction(content)
-                report_data["content"] = display_content
-                if instruction:
-                    report_data["instruction"] = instruction
-            elif not report_data.get("instruction"):
-                report_data["instruction"] = None
 
         async with get_async_session() as db:
             for report_data in reports:

@@ -16,6 +16,7 @@ class L1ObservationDraft(BaseModel):
     entity_type: str = ""  # 现状设施 / 现状项目 / 现状分区 / 道路 / 水系 / 地物
     name: str = ""
     location: str = ""
+    relation: str = ""  # 与其他地点的空间关系（位于X村中部/沿石窟河/汇入石窟河/通往X村）
     description: str = ""
     scale: str = ""
 

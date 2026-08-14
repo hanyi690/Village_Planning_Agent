@@ -1,5 +1,11 @@
 # L1 → KG Fact 流审计（2026-08-07）
 
+> **2026-08-14 修订**：本文原述的 `【INSTRUCTION】` 表格协议已被 L1
+> dual-response 结构化 JSON（`report_body` + `observations`）取代（提交
+> `24ab36d0`）。下文已按当前实现更新：`DimensionReport.content` = 报告正文，
+> `DimensionReport.instruction` 列 = observations JSON，保存时即分离，无
+> marker 可剥离；L1 编译器只从该 JSON 编译 `L1LocationFact`。
+
 ## 目的
 
 本审计确认真实 session 中，GIS 上传数据先进入 Session KG，KG 的事实被 L1 使用并提升为可恢复的 `L1Snapshot`，随后由 L2 通过 artifact ref 消费；不能只凭“调用过检索函数”认定链路完成。
@@ -31,13 +37,15 @@
 - 真实 session Markdown：`backend/.run-tmp/<session_id>/reports/stage-report.md`
 - L1Snapshot payload：`backend/.run-tmp/<session_id>/artifacts/l1_observe/`
 - L2Strategy payload：`backend/.run-tmp/<session_id>/artifacts/l2_strategize/`
-- 代码：`backend/app/agent/l1_observe/aggregate.py`、`backend/app/agent/l2_strategize/worker.py`
+- 代码：`backend/app/domain/assessment/aggregate.py`、`backend/app/domain/objectives/worker.py`
 ## Dependency report presentation boundary (2026-08-07)
 
 - L1/L2/L3 still receive the complete upstream report prose in their prompts.
-- Before prompt assembly, `split_instruction()` removes the private
-  `【INSTRUCTION】` block; the model therefore sees the report body, not the
-  machine-only location table.
+- L1 saves the dual response already split: `DimensionReport.content` is the
+  report body prose, `DimensionReport.instruction` holds the structured
+  observations JSON. There is no `【INSTRUCTION】` marker to strip at prompt
+  assembly, so downstream prompts see only the report body, never the
+  machine-only observations.
 - StepReport and `stage-report.md` persist only section names, character
   counts, and a short preview. This is an audit presentation boundary, not a
   reduction of the model input.
@@ -59,20 +67,22 @@ GROUND receives these facts through the versioned PlanningContext; they are
 place evidence only and never a direct candidate or coordinate decision.
 ### L1 location-fact source correction (2026-08-07)
 
-`L1LocationFact` 的机器来源固定为 L1 报告保存时拆出的 `instruction` 字段，
-即模型输出的 `【INSTRUCTION】` 表格（`类型/名称/位置/描述/规模`）。L1 正文不再
-被正则扫描生成地点事实，避免把叙述中的偶然地名误当成可定位证据。正文仍按维度
-prompt 编译为 `facts`、`constraints`、`evidence_gaps`，并可由 EXPLORE/KG 提供
-同维度证据；地点事实进入 `L1Snapshot.location_facts` 后，GROUND 通过
-`PlanningContext` 的 ref-only 加载路径消费。
+`L1LocationFact` 的机器来源固定为 L1 报告保存时写入 `instruction` 列的结构化
+observations JSON（`entity_type/name/location/relation/description/scale`），
+不再保留任何 markdown 表格或正则扫描路径；`l1_observation.py` 对非法 JSON
+返回零地点事实（fail-closed），避免把叙述中的偶然地名误当成可定位证据。正文
+仍按维度 prompt 编译为 `facts`、`constraints`、`evidence_gaps`，并可由
+EXPLORE/KG 提供同维度证据；地点事实进入 `L1Snapshot.location_facts` 后，
+GROUND 通过 `PlanningContext` 的 ref-only 加载路径消费。
 
-读取链核验：`ReportStore.bulk_save()` 将响应拆为 `DimensionReport.content` 与
-`DimensionReport.instruction`；`get_layer_reports_with_sources()` 已同时返回两列；
-`l1_aggregate()` 将 `rec["instruction"]` 传给 L1 compiler。此前真正的存储断点是
-`bulk_save()` 原地修改 pending dict：第一次立即保存后 `content` 已被拆开，第二次
-completion 保存又按空 marker 重置了 `instruction=None`。现已改为幂等保存，且不再
-发起结构化修复请求或系统伪造地点；如果仍缺 marker，StepReport 记录协议违例并
-fail-closed。
+读取链核验：`analysis_node.analyze_dimension()` 在写库前即完成双响应拆分
+（`content` = `report_body`，`instruction` = `observations_json`），
+`ReportStore.bulk_save()` 幂等保存两列；`get_layer_reports_with_sources()` 同时
+返回两列；`l1_aggregate()` 将 `rec["instruction"]` 传给 L1 compiler。此前的存储
+断点是 `bulk_save()` 原地修改 pending dict：第一次立即保存后 `content` 已被拆开，
+第二次 completion 保存又按空 marker 重置了 `instruction=None`。现已改为幂等保存，
+不再发起结构化修复请求或系统伪造地点；若 provider 返回无法解析的双响应，
+StepReport 记录协议违例并 fail-closed。
 
 ### P1 运行隔离与 L2 gate 断点
 

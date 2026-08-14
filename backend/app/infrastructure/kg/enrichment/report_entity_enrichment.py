@@ -13,202 +13,11 @@ import re
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
 
-from app.data.model.village_name_registry import load_all_village_names
 from app.infrastructure.logging import get_logger
 
 logger = get_logger(__name__)
 
 _BSM_NUM_RE = re.compile(r"(\d{15,25})")
-
-# The registry is the sole source of the closed set.  Load the configured
-# data set union so this module does not silently bind every session to a
-# hard-coded village key.
-_KNOWN_NATURAL_VILLAGES = set(load_all_village_names())
-
-
-# ── L1 INSTRUCTION 表 → LocationAnchor 提取 ─────────────────────────────
-
-_INSTRUCTION_TYPE_CELLS = {"现状设施", "现状项目", "现状分区", "设施", "项目", "分区"}
-_INSTRUCTION_NAME_HEADER_RE = re.compile(r"(名称|项目|工程|设施)")
-_INSTRUCTION_LOCATION_HEADER_RE = re.compile(r"(位置|选址|所在位置|方位|位于)")
-_INSTRUCTION_NAME_EXCLUDES = {"名称", "项目", "设施", "合计", "总数", "序号"}
-
-
-@dataclass
-class LocationAnchor:
-    """L1 报告提取的'设施+位置'结构化地点条目。
-
-    kind:
-      - "facility"    现状设施（村委会/小学/广场…）
-      - "project"     现状项目（种植基地/养殖基地…）
-      - "zone"        现状分区（居民点/建设区…）
-      - "landmark"    独立地物（古驿道/古檀树…）
-    location: INSTRUCTION 表"位置"列原始文本（自然村名 / 方位描述 / 空）。
-    """
-    name: str
-    kind: str = "facility"
-    location: str = ""
-    dim: str = ""
-    description: str = ""
-
-
-def _extract_instruction_anchors(instruction_texts: Dict[str, str]) -> List[LocationAnchor]:
-    """从 L1 INSTRUCTION 段解析'设施+位置'锚点（复用 parsing.tables._iter_tables）。
-
-    输入: {dim_key: instruction_section} — L1 各维度报告的【INSTRUCTION】剥离段。
-    输出: LocationAnchor 列表（按维度去重，INSTRUCTION 表"位置"列保留原始文本）。
-    """
-    from app.data.ingestion.tables import _iter_tables
-
-    anchors: List[LocationAnchor] = []
-    seen: set = set()
-    for dim_key, section in (instruction_texts or {}).items():
-        if not section:
-            continue
-        try:
-            tables = _iter_tables(section)
-        except Exception as e:
-            logger.debug("[Enrich:instruction] table parse failed for %s: %s", dim_key, e)
-            continue
-        for header, rows in tables:
-            if not rows:
-                continue
-            name_idx = None
-            loc_idx = None
-            type_idx = None
-            for idx, cell in enumerate(header):
-                cell_l = str(cell).strip()
-                if name_idx is None and _INSTRUCTION_NAME_HEADER_RE.search(cell_l):
-                    name_idx = idx
-                if loc_idx is None and _INSTRUCTION_LOCATION_HEADER_RE.search(cell_l):
-                    loc_idx = idx
-                if cell_l == "类型":
-                    type_idx = idx
-            if name_idx is None:
-                continue
-            for row in rows:
-                if name_idx >= len(row):
-                    continue
-                name = str(row[name_idx]).strip()
-                if not name or name in _INSTRUCTION_NAME_EXCLUDES or "|" in name:
-                    continue
-                if name in seen:
-                    continue
-                seen.add(name)
-                kind = "facility"
-                if type_idx is not None and type_idx < len(row):
-                    cell_type = str(row[type_idx]).strip()
-                    if "项目" in cell_type:
-                        kind = "project"
-                    elif "分区" in cell_type:
-                        kind = "zone"
-                location = ""
-                if loc_idx is not None and loc_idx < len(row):
-                    location = str(row[loc_idx]).strip()
-                anchors.append(LocationAnchor(
-                    name=name, kind=kind, location=location,
-                    dim=dim_key,
-                    description=f"{kind}「{name}」源自{dim_key}报告 INSTRUCTION 表",
-                ))
-    return anchors
-
-
-def _split_location_villages(location: str) -> List[str]:
-    """从 INSTRUCTION 位置列提取自然村名集合（顿号/逗号/空格分隔）。"""
-    if not location:
-        return []
-    out: List[str] = []
-    for tok in re.split(r"[、，,;/ 至和与]", location):
-        tok = tok.strip()
-        if not tok:
-            continue
-        base = tok
-        if base.endswith("自然村"):
-            base = base[:-3]
-        elif base.endswith("村"):
-            base = base[:-1]
-        if base in _KNOWN_NATURAL_VILLAGES and base not in out:
-            out.append(base)
-    return out
-
-
-def _commit_instruction_anchors(
-    session_id: str,
-    gazetteer: Any,
-    kg: Any,
-    instruction_texts: Optional[Dict[str, str]],
-    wave: int,
-) -> int:
-    """把 L1 INSTRUCTION 表提取的 LocationAnchor 写入 gazetteer（组合名条目）。
-
-    组合名 = f"{anchor.name}@{村名}"（如"村委会@园寨"），作为独立 gazetteer 条目，
-    坐标继承该村 gazetteer entry 的 centroid；无村名命中的 anchor 仅在描述中记录
-    方位文本（供 grounding 语义解析），不生成伪坐标条目。
-
-    返回写入的条目数。
-    """
-    from app.infrastructure.kg.gazetteer import GazetteerEntry
-
-    anchors = _extract_instruction_anchors(instruction_texts or {})
-    if not anchors:
-        return 0
-
-    written = 0
-    for anchor in anchors:
-        villages = _split_location_villages(anchor.location)
-        if not villages:
-            # 无自然村命中（方位描述等）→ 记入语义 memory 描述，不建组合名坐标
-            _get_semantic_memory().add_entity_annotation(
-                __import__("app.infrastructure.kg", fromlist=["EntityAnnotation"]).EntityAnnotation(
-                    entity_uri=f"pln:anchor_{anchor.kind}_{anchor.name}",
-                    entity_type="LocationAnchor",
-                    description=f"{anchor.description}；位置描述「{anchor.location}」（待 grounding 语义解析）",
-                    source_text_refs=[anchor.dim],
-                    round_added=wave,
-                    valid_from_round=wave,
-                    confidence=0.5,
-                )
-            )
-            continue
-        for v in villages:
-            entry = gazetteer.resolve(v, fuzzy=False)
-            base_centroid = list(entry.centroid) if entry and entry.centroid else None
-            # 组合名条目（独立地名锚点，供 API 精确搜索 / PARSE 落位）
-            combo_name = f"{anchor.name}@{v}"
-            combo = GazetteerEntry(
-                name=combo_name,
-                aliases=[anchor.name],
-                entity_uri=f"pln:anchor_{anchor.kind}_{anchor.name}_{v}",
-                bsms=list(entry.bsms) if entry else [],
-                centroid=base_centroid,
-                source="l1_instruction",
-                confidence=0.6,
-                description=f"{anchor.description}；位于{v}",
-            )
-            gazetteer.upsert(combo)
-            # Persist the geocoded facility/project/place binding.  The
-            # process gazetteer is rebuilt at stage boundaries, so keeping
-            # only the in-memory combo entry makes GROUND lose the exact
-            # target anchor after PARSE.  Reuse the real village BSMs; do not
-            # invent a point for a facility whose source row has no geometry.
-            _get_semantic_memory().add_entity_annotation(
-                __import__("app.infrastructure.kg", fromlist=["EntityAnnotation"]).EntityAnnotation(
-                    entity_uri=combo.entity_uri,
-                    entity_type="LocationAnchor",
-                    description=f"{combo_name}（{anchor.description}；位于{v}）",
-                    intent_refs=list(entry.bsms) if entry else [],
-                    source_text_refs=[anchor.dim, anchor.location],
-                    round_added=wave,
-                    valid_from_round=wave,
-                    confidence=0.6,
-                )
-            )
-            written += 1
-    logger.info(
-        "[Enrich:instruction] %d anchors -> %d combo entries",
-        len(anchors), written,
-    )
-    return written
 
 
 def _get_semantic_memory():
@@ -520,7 +329,7 @@ def _commit_village_binding(
     """绑定落库：空间校验双闸门 → gazetteer upsert（l1_enrichment）→ EntityAnnotation。
 
     闸门 1（特征词）：spatial_check(hints, cluster_dlbms) — 现状特征词与聚类地类匹配。
-    闸门 2（距离）：若 gazetteer 已有多源 API 提供的该村权威坐标（tencent/amap/baidu），
+    闸门 2（距离）：若 gazetteer 已有多源 API 提供的该村权威坐标（tencent/amap/tianditu），
         则校验候选 cluster 质心与该坐标距离 < 200m，防止"多村名绑同 cluster"。
     """
     from app.infrastructure.kg import EntityAnnotation
@@ -569,7 +378,7 @@ def _commit_village_binding(
 
 # 多源 API 权威来源（进入 bundle 前 enrichment 注入的自然村坐标）
 _AUTHORITATIVE_SOURCES = frozenset({
-    "tencent_map", "amap_poi", "baidu_v3", "tianditu_wfs",
+    "tencent_map", "amap_poi", "tianditu_wfs",
 })
 
 
@@ -593,7 +402,6 @@ async def extract_bindings(
     llm: Any = None,
     kg: Any = None,
     bundle: Any = None,
-    instruction_texts: Optional[Dict[str, str]] = None,
     location_facts: Optional[List[Any]] = None,
 ) -> Dict[str, Any]:
     """实体语义增强：村名→gazetteer 绑定（L1）+ 分区/项目实体注解（L2/L3）。
@@ -636,82 +444,10 @@ async def extract_bindings(
 
     bound_clusters = 0
     anchor_entries = 0
-    if wave in (1, 3):
-        bsm_to_dlbm = _build_bsm_to_dlbm(kg)
-        mentions: List[Dict[str, str]] = _location_fact_mentions(location_facts)
-        direct_picks = []          # 候选==1（gazetteer 命中）直接绑定
-        ambiguous = []             # 候选>1 → 批量 LLM 判定
-        unresolved_amb = []
-        for mention in mentions:
-            if mention.get("role", "village") not in _VILLAGE_ROLES:
-                continue
-            candidates = _gather_candidates(mention, gazetteer, bsm_to_dlbm)
-            if not candidates:
-                # Preserve the L1 fact in semantic KG even when GIS has no
-                # named geometry yet.  An empty binding is explicit and
-                # fail-closed; it must not be mistaken for a resolved parcel.
-                _get_semantic_memory().add_entity_annotation(
-                    __import__("app.infrastructure.kg", fromlist=["EntityAnnotation"]).EntityAnnotation(
-                        entity_uri=f"pln:l1_location_fact:{mention['name']}",
-                        entity_type="L1LocationFact",
-                        description=(
-                            f"{mention['name']}（L1 位置事实，尚无上传 GIS 要素完成空间绑定；"
-                            f"来源：{mention.get('dim', '')}）"
-                        ),
-                        source_text_refs=[mention.get("dim", "")],
-                        round_added=wave,
-                        valid_from_round=wave,
-                        confidence=0.5,
-                    )
-                )
-                continue
-            if len(candidates) == 1:
-                direct_picks.append((mention, candidates[0]))
-            else:
-                ambiguous.append((mention, candidates))
-
-        # 批量 Flash 判定（一次调用 N 对；失败/否决降级确定性裁决）
-        pairs = [
-            (mention["name"], e.name, e.description or e.name)
-            for mention, cands in ambiguous
-            for e in cands
-        ]
-        batch_results = await confirm_batch_with_llm(llm, pairs)
-
-        for mention, candidates in ambiguous:
-            chosen = None
-            for e in candidates:
-                if batch_results.get((mention["name"], e.name)):
-                    chosen = e
-                    break
-            if chosen is None:
-                chosen = _deterministic_pick(mention, candidates, bsm_to_dlbm)
-            if chosen is None:
-                logger.info(
-                    "[Enrich:L1] %s -> %d candidates unresolved",
-                    mention["name"], len(candidates),
-                )
-                unresolved_amb.append(mention["name"])
-                continue
-            uri = _commit_village_binding(mention, chosen, gazetteer, bsm_to_dlbm, wave)
-            if uri:
-                bound_clusters += 1
-
-        for mention, chosen in direct_picks:
-            uri = _commit_village_binding(mention, chosen, gazetteer, bsm_to_dlbm, wave)
-            if uri:
-                bound_clusters += 1
-        if unresolved_amb:
-            logger.info("[Enrich:L1] unresolved mentions: %s", unresolved_amb)
-
-        # P0: L1 INSTRUCTION 表 → LocationAnchor → gazetteer 组合名条目
-        # （消费 L1 各维度报告剥离的【INSTRUCTION】段，'设施+村名'结构化落地）
-        try:
-            anchor_entries = _commit_instruction_anchors(
-                session_id, gazetteer, kg, instruction_texts, wave,
-            )
-        except Exception as e:
-            logger.warning("[Enrich:L1] instruction anchors failed: %s", e)
+    # NOTE: L1 keeps its pure "discover + structure" role here.  Village ->
+    # residential-cluster, water-name -> water-body and every other report
+    # name -> KG geometry binding is owned by the post-L3 GROUND stage
+    # (ground_node -> ground_report).  Nothing is decided at wave end.
 
     # L2/L3：分区/项目实体语义注解（复用表格提取）
     from app.data.ingestion.tables import _extract_project_tables as _ept, _extract_zone_tables as _ezt
@@ -773,7 +509,6 @@ async def extract_bindings(
 
 
 async def run_wave(session_id: str, wave: int, reports: Dict[str, str], bundle: Any = None,
-                   instruction_texts: Optional[Dict[str, str]] = None,
                    location_facts: Optional[List[Any]] = None) -> Dict[str, Any]:
     """Wave 末尾入口（completion node 调用，bundle 由 agent 层传入）。"""
     from app.core.settings import GIS_EXPLORE_LLM_ENABLED
@@ -802,7 +537,6 @@ async def run_wave(session_id: str, wave: int, reports: Dict[str, str], bundle: 
         )
     return await extract_bindings(
         session_id, wave, reports, llm=llm, bundle=bundle,
-        instruction_texts=instruction_texts,
         location_facts=location_facts,
     )
 

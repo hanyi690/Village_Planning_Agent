@@ -14,13 +14,11 @@ Migrated from agent/routing.py per docs/architecture/agent-graph.md §5.
 from typing import Union, List, Dict, Any, Optional
 from langgraph.graph import END
 from langgraph.types import Send
-from langchain_core.messages import AIMessage
 
 from app.workflow.layers.phase_machine import PlanningPhase, get_layer_dimensions, _phase_to_layer
-from app.workflow.layers.layer_router import _worker_for_phase, _dispatch_state
+from app.workflow.layers.layer_router import _worker_for_phase, _dispatch_state, _send_worker
 from app.workflow.state import load_root_gate
-from app.config import get_dimension_layer
-from app.config.dependency import compute_impact_tree, get_next_revision_wave
+from app.config.dependency import compute_impact_tree
 from app.infrastructure.llm.tools.intent_tools import advance_planning_intent, gis_analysis
 from app.infrastructure.logging import get_logger
 
@@ -97,7 +95,7 @@ def after_conversation(
         for d in wave0_dims:
             logger.debug("[after_conversation] Sending dimension: %s", d)
         worker = _worker_for_phase(state.get("phase", "layer1"))
-        return [Send(worker, _dispatch_state(state,
+        return [_send_worker(worker, _dispatch_state(state,
             dimension_key=d,
             completed_dimensions=new_completed,
             is_revision=True,
@@ -137,246 +135,269 @@ def after_analysis(
     state: Dict[str, Any],
 ) -> Union[str, List[Send]]:
     """
-    分析后路由 - 波次推进逻辑
+    分析后路由 - 波次推进逻辑（B2：纯编排，分支语义抽到处理器）
 
-    处理：
-    1. completed -> END
-    2. interrupt -> END（等待审批）
-    3. 待处理维度 -> Send 分发（检查同层依赖）
+    处理顺序：
+    1. 级联修订（is_revision）-> ``_route_revision``
+    2. provider/fatal 失败 -> ``_terminal_failure_route``
+    3. post_l3 -> target_projection
+    4. 层 gate 路由 -> ``_route_layer_gate``（PASS/EXPLORE/HUMAN/L1/L2/L3）
+    5. 就绪维度派发 / 依赖死锁 -> ``_route_dimension_dispatch``
     """
-    is_revision = state.get("is_revision", False)
+    if state.get("is_revision", False):
+        return _route_revision(state)
+    fatal = _terminal_failure_route(state)
+    if fatal is not None:
+        return fatal
+    phase = state.get("phase", "layer1")
+    if phase == "post_l3":
+        # L3 is not a terminal state.  The post-L3 chain owns target projection
+        # through DELIVER and is entered only through advance_phase.
+        return "target_projection"
+    gate_route = _route_layer_gate(state, phase)
+    if gate_route is not None:
+        return gate_route
+    return _route_dimension_dispatch(state, phase)
 
-    # 级联修订：使用依赖检查逻辑，而非简单波次分发
-    if is_revision:
-        # need_revision=False 表示 layer_completion_check 已判定修订完成
-        if not state.get("need_revision", False):
-            logger.info("[after_analysis] Revision completed, END")
-            return END
 
-        impact_tree = state.get("revision_impact_tree") or {}
-        completed = state.get("revision_completed_dims", {})
-        all_revision_dims_set = {d for dims in impact_tree.values() for d in dims}
-        revision_completed = [d for dims in completed.values() for d in dims]
-        target_dims = state.get("revision_target_dimensions", [])
-
-        logger.info(
-            "[after_analysis] Revision state: impact_tree=%s, completed=%s, revision_completed=%s, target_dims=%s",
-            {w: len(d) for w, d in impact_tree.items()} if impact_tree else {},
-            completed,
-            revision_completed,
-            target_dims,
-        )
-
-        # 获取所有需要修订的维度（目标 + 下游）
-        # 注意：impact_tree 包含 Wave 0，所以不需要再加 target_dims
-        # all_revision_dims 已在上面计算并去重
-        all_revision_dims = list(all_revision_dims_set)
-
-        # 基线已完成的维度（不受修订影响的维度，作为依赖检查的基准）
-        baseline_completed = state.get("completed_dimensions", {})
-        logger.info("[after_analysis] baseline_completed type=%s, keys=%s", type(baseline_completed).__name__, list(baseline_completed.keys()) if isinstance(baseline_completed, dict) else "N/A")
-        baseline_dims = [d for dims in baseline_completed.values() for d in dims]
-
-        # 合并：基线完成 + 修订完成
-        all_completed = baseline_dims + revision_completed
-
-        # 检查哪些维度的依赖已完成
-        from app.config.loader import list_dimensions, get_dimension_layer
-
-        logger.info(
-            "[after_analysis] Checking deps: all_completed=%s",
-            all_completed,
-        )
-
-        ready_dims = []
-        for dim_key in all_revision_dims:
-            # 跳过已修订完成的维度（不是基线完成的维度！）
-            if dim_key in revision_completed:
-                logger.info("[after_analysis] %s already revision_completed, skipping", dim_key)
-                continue
-
-            # 获取维度配置
-            dim_layer = get_dimension_layer(dim_key)
-            dim_configs = list_dimensions(dim_layer)
-            dim_config = next((d for d in dim_configs if d.key == dim_key), None)
-
-            if not dim_config:
-                logger.info("[after_analysis] %s config not found", dim_key)
-                continue
-
-            # 检查同层依赖是否完成
-            same_layer_deps = dim_config.depends_on or []
-            cross_layer_deps = list(dim_config.layer_depends_on or []) + list(dim_config.phase_depends_on or [])
-
-            same_layer_ok = all(dep in all_completed for dep in same_layer_deps)
-            cross_layer_ok = all(dep in all_completed for dep in cross_layer_deps)
-
-            logger.info(
-                "[after_analysis] %s check: same_layer_deps=%s cross_layer_deps=%s, same_layer_ok=%s cross_layer_ok=%s",
-                dim_key, same_layer_deps, cross_layer_deps, same_layer_ok, cross_layer_ok,
-            )
-
-            if same_layer_ok and cross_layer_ok:
-                ready_dims.append(dim_key)
-            else:
-                # Debug: why not ready
-                missing_same = [d for d in same_layer_deps if d not in all_completed]
-                missing_cross = [d for d in cross_layer_deps if d not in all_completed]
-                if missing_same or missing_cross:
-                    logger.info(
-                        "[after_analysis] %s not ready: missing_same=%s missing_cross=%s",
-                        dim_key, missing_same, missing_cross,
-                    )
-
-        if ready_dims:
-            logger.info("[after_analysis] Revision ready dims (dependency-checked): %s", ready_dims)
-            worker = _worker_for_phase(state.get("phase", "layer1"))
-            return [Send(worker, _dispatch_state(state, dimension_key=d, is_revision=True, revision_impact_tree=impact_tree)) for d in ready_dims]
-
-        # 检查是否所有修订维度都已完成（只检查 revision_completed，不含基线）
-        if set(revision_completed) >= set(all_revision_dims):
-            logger.info("[after_analysis] All revision dims complete")
-            return END
-
-        # 还有维度未完成但依赖未就绪，等待
-        pending = [d for d in all_revision_dims if d not in revision_completed]
-        logger.info("[after_analysis] Revision waiting for deps: %s", pending)
+def _route_revision(state: Dict[str, Any]) -> Union[str, List[Send]]:
+    """级联修订：依赖检查驱动波次，直到全部修订维度完成。"""
+    # need_revision=False 表示 layer_completion_check 已判定修订完成
+    if not state.get("need_revision", False):
+        logger.info("[after_analysis] Revision completed, END")
         return END
 
+    impact_tree = state.get("revision_impact_tree") or {}
+    completed = state.get("revision_completed_dims", {})
+    all_revision_dims_set = {d for dims in impact_tree.values() for d in dims}
+    revision_completed = [d for dims in completed.values() for d in dims]
+    target_dims = state.get("revision_target_dimensions", [])
+
+    logger.info(
+        "[after_analysis] Revision state: impact_tree=%s, completed=%s, revision_completed=%s, target_dims=%s",
+        {w: len(d) for w, d in impact_tree.items()} if impact_tree else {},
+        completed,
+        revision_completed,
+        target_dims,
+    )
+
+    # 获取所有需要修订的维度（目标 + 下游；impact_tree 已含 Wave 0，去重）
+    all_revision_dims = list(all_revision_dims_set)
+
+    # 基线已完成的维度（不受修订影响的维度，作为依赖检查的基准）
+    baseline_completed = state.get("completed_dimensions", {})
+    logger.info("[after_analysis] baseline_completed type=%s, keys=%s", type(baseline_completed).__name__, list(baseline_completed.keys()) if isinstance(baseline_completed, dict) else "N/A")
+    baseline_dims = [d for dims in baseline_completed.values() for d in dims]
+
+    # 合并：基线完成 + 修订完成
+    all_completed = baseline_dims + revision_completed
+
+    from app.config.loader import list_dimensions, get_dimension_layer
+
+    logger.info(
+        "[after_analysis] Checking deps: all_completed=%s",
+        all_completed,
+    )
+
+    ready_dims = []
+    for dim_key in all_revision_dims:
+        # 跳过已修订完成的维度（不是基线完成的维度！）
+        if dim_key in revision_completed:
+            logger.info("[after_analysis] %s already revision_completed, skipping", dim_key)
+            continue
+
+        dim_layer = get_dimension_layer(dim_key)
+        dim_configs = list_dimensions(dim_layer)
+        dim_config = next((d for d in dim_configs if d.key == dim_key), None)
+
+        if not dim_config:
+            logger.info("[after_analysis] %s config not found", dim_key)
+            continue
+
+        same_layer_deps = dim_config.depends_on or []
+        cross_layer_deps = list(dim_config.layer_depends_on or []) + list(dim_config.phase_depends_on or [])
+
+        same_layer_ok = all(dep in all_completed for dep in same_layer_deps)
+        cross_layer_ok = all(dep in all_completed for dep in cross_layer_deps)
+
+        logger.info(
+            "[after_analysis] %s check: same_layer_deps=%s cross_layer_deps=%s, same_layer_ok=%s cross_layer_ok=%s",
+            dim_key, same_layer_deps, cross_layer_deps, same_layer_ok, cross_layer_ok,
+        )
+
+        if same_layer_ok and cross_layer_ok:
+            ready_dims.append(dim_key)
+        else:
+            missing_same = [d for d in same_layer_deps if d not in all_completed]
+            missing_cross = [d for d in cross_layer_deps if d not in all_completed]
+            if missing_same or missing_cross:
+                logger.info(
+                    "[after_analysis] %s not ready: missing_same=%s missing_cross=%s",
+                    dim_key, missing_same, missing_cross,
+                )
+
+    if ready_dims:
+        logger.info("[after_analysis] Revision ready dims (dependency-checked): %s", ready_dims)
+        worker = _worker_for_phase(state.get("phase", "layer1"))
+        return [_send_worker(worker, _dispatch_state(state, dimension_key=d, is_revision=True, revision_impact_tree=impact_tree)) for d in ready_dims]
+
+    # 检查是否所有修订维度都已完成（只检查 revision_completed，不含基线）
+    if set(revision_completed) >= set(all_revision_dims):
+        logger.info("[after_analysis] All revision dims complete")
+        return END
+
+    # 还有维度未完成但依赖未就绪，等待
+    pending = [d for d in all_revision_dims if d not in revision_completed]
+    logger.info("[after_analysis] Revision waiting for deps: %s", pending)
+    return END
+
+
+_TRANSIENT_LLM_CODES = frozenset({
+    "llm_stream_timeout",
+    "llm_timeout",
+    "llm_provider_error",
+    "llm_provider_circuit_open",
+})
+
+
+def _terminal_failure_route(state: Dict[str, Any]) -> Optional[str]:
+    """Provider 瞬态失败进入 HUMAN 断点，其余终止失败停止派发。"""
     fatal_error = state.get("fatal_error")
     if not isinstance(fatal_error, dict):
         failures = state.get("provider_failures") or []
         if failures and isinstance(failures[0], dict):
             fatal_error = failures[0]
-    if fatal_error:
-        # A provider stream timeout is a transient infrastructure breakpoint.
-        # Preserve the exact failed dimension in the checkpoint and enter the
-        # normal HUMAN interrupt so an operator can resume the pending L3
-        # worker without replaying completed dimensions.
-        if (
-            isinstance(fatal_error, dict)
-            and fatal_error.get("code") in {
-                "llm_stream_timeout",
-                "llm_timeout",
-                "llm_provider_error",
-                "llm_provider_circuit_open",
-            }
-            and str(state.get("phase", "")).lower() in {"layer1", "layer2", "layer3"}
-        ):
-            return "human_review"
-        logger.error("[after_analysis] terminal failure; stopping dispatch: %s", fatal_error)
-        return END
+    if not fatal_error:
+        return None
+    # A provider stream timeout is a transient infrastructure breakpoint.
+    # Preserve the exact failed dimension in the checkpoint and enter the
+    # normal HUMAN interrupt so an operator can resume the pending L3
+    # worker without replaying completed dimensions.
+    if (
+        isinstance(fatal_error, dict)
+        and fatal_error.get("code") in _TRANSIENT_LLM_CODES
+        and str(state.get("phase", "")).lower() in {"layer1", "layer2", "layer3"}
+    ):
+        return "human_review"
+    logger.error("[after_analysis] terminal failure; stopping dispatch: %s", fatal_error)
+    return END
 
-    phase = state.get("phase", "layer1")
-    if phase == "post_l3":
-        # L3 is not a terminal state.  The post-L3 chain owns target projection through
-        # DELIVER and is entered only through advance_phase.
-        return "target_projection"
 
-    # ── Wave M2: gate-aware routing ──
-    # If a layer gate is present, route accordingly before falling through to
-    # normal dimension dispatch. `layer_just_completed` is preferred (robust),
-    # falling back to phase — after the completion-node fix the two agree until
-    # the gate PASSES (phase is only advanced on PASS).  The gate is read
-    # through the CAS artifact ref; inline layer gate payloads no longer exist.
-    # phase is the authoritative cursor: a stale layer_just_completed from
-    # an earlier checkpoint must never route against an older layer gate.
+def _route_explore(state: Dict[str, Any], layer_num: int) -> Union[str, List[Send]]:
+    """EXPLORE：L3 直接 HUMAN；同层 EXPLORE 重试超 2 次也转 HUMAN。"""
+    # L3 evidence gaps are business review findings, not a license to replay
+    # all twelve expensive L3 workers.  The design contract requires an
+    # auditable HUMAN checkpoint so an operator can supply or defer the
+    # missing evidence.
+    if layer_num == 3:
+        logger.warning("[after_analysis] L3 EXPLORE gap -> HUMAN without full-layer replay")
+        return "human_review"
+    # 死循环防护：同一层 EXPLORE 重试超过 2 次 -> HUMAN（不再 re-dispatch）
+    counts = state.get("retry_counts") or {}
+    explore_count = counts.get(f"l{layer_num}_explore", 0)
+    if explore_count >= 2:
+        logger.warning("[after_analysis] EXPLORE retry exhausted for L%d -> HUMAN", layer_num)
+        # Convert exhaustion into an explicit business gate.  END loses the
+        # breakpoint and makes a real session look like a successful stop;
+        # the HITL path preserves the pending evidence requests and allows
+        # an operator to approve or reject the next revision.
+        return "human_review"
+    from app.config.loader import list_dimensions
+    dim_configs = list_dimensions(layer_num)
+    explore_dims = [d.key for d in dim_configs]
+    if explore_dims:
+        logger.info("[after_analysis] Gate EXPLORE (attempt %d): re-dispatching %s", explore_count + 1, explore_dims)
+        worker = _worker_for_phase(state.get("phase", "layer1"))
+        return [_send_worker(worker, _dispatch_state(state, dimension_key=d)) for d in explore_dims]
+    return END
+
+
+def _route_gate_rework(
+    state: Dict[str, Any],
+    layer_num: int,
+    gate_decision: Any,
+) -> Union[str, List[Send]]:
+    """L1/L2/L3 业务重试：预算内重派发本层维度，超预算/契约失败进 HUMAN。"""
+    counts = state.get("retry_counts") or {}
+    retry_count = int(counts.get(f"l{layer_num}_explore", 0))
+    retry_limit = int(state.get("max_retries") or 3)
+    # L3 protocol/spatial contract violations are not transient infrastructure
+    # failures. Re-running all 12 expensive L3 calls amplifies memory and can
+    # reproduce the same malformed output. Preserve the exact pending requests
+    # and enter HITL after the first failed aggregate.
+    pending = list(gate_decision.pending_requests or [])
+    hard_contract_failure = layer_num == 3 and any(
+        any(code in str(item) for code in ("missing_instruction_marker", "missing_spatial_instruction"))
+        for item in pending
+    )
+    if hard_contract_failure:
+        logger.warning("[after_analysis] L3 contract failure -> HUMAN without full-layer replay")
+        return "human_review"
+    # L3 gate failures are business/contract findings over a complete
+    # 12-dimension plan, not transient infrastructure errors.
+    if layer_num == 3:
+        logger.warning("[after_analysis] L3 business gate -> HUMAN without full-layer replay")
+        return "human_review"
+    if retry_count >= retry_limit:
+        logger.warning(
+            "[after_analysis] %s rework exhausted for L%d -> HUMAN",
+            gate_decision.feedback_route,
+            layer_num,
+        )
+        return "human_review"
+    # Rework: re-dispatch dimensions of this layer
+    from app.config.loader import list_dimensions
+    dim_configs = list_dimensions(layer_num)
+    rework_dims = [d.key for d in dim_configs]
+    if rework_dims:
+        logger.info("[after_analysis] Gate rework: re-dispatching %s", rework_dims)
+        worker = _worker_for_phase(state.get("phase", "layer1"))
+        return [_send_worker(worker, _dispatch_state(state, dimension_key=d)) for d in rework_dims]
+    return END
+
+
+def _route_layer_gate(
+    state: Dict[str, Any],
+    phase: str,
+) -> Optional[Union[str, List[Send]]]:
+    """Wave M2 gate-aware routing：PASS 推进、EXPLORE/L1/L2/L3/HUMAN 分派。
+
+    ``layer_just_completed`` 优先（robust），回退到 phase —— 完成节点修复后
+    二者在 gate PASS 前一致（phase 只在 PASS 时推进）。gate 通过 CAS artifact
+    ref 读取；内联 layer gate payload 已不存在。phase 是权威游标：旧 checkpoint
+    的过期 layer_just_completed 绝不能对着旧层 gate 路由。
+    """
     layer_num = _phase_to_layer(phase)
-    if layer_num is not None:
-        try:
-            gate_decision = load_root_gate(state, f"l{layer_num}")
-        except Exception:
-            gate_decision = None
-        if gate_decision is not None:
-            route = gate_decision.feedback_route
-            if route is None or route == "PASS":
-                # Gate PASS -> phase is advanced by the `advance_phase` node
-                # (it writes phase + dispatches the next layer's dimensions).
-                logger.info("[after_analysis] Gate l%d PASS -> advance_phase", layer_num)
-                return "advance_phase"
-            logger.info("[after_analysis] Gate l%d routed %s", layer_num, route)
-            if route == "EXPLORE":
-                # L3 evidence gaps are business review findings, not a
-                # license to replay all twelve expensive L3 workers.  The
-                # design contract requires an auditable HUMAN checkpoint so
-                # an operator can supply or defer the missing evidence.
-                if layer_num == 3:
-                    logger.warning("[after_analysis] L3 EXPLORE gap -> HUMAN without full-layer replay")
-                    return "human_review"
-                # 死循环防护：同一层 EXPLORE 重试超过 2 次 -> END（不再 re-dispatch）
-                counts = state.get("retry_counts") or {}
-                explore_count = counts.get(f"l{layer_num}_explore", 0)
-                if explore_count >= 2:
-                    logger.warning("[after_analysis] EXPLORE retry exhausted for L%d -> HUMAN", layer_num)
-                    # Convert exhaustion into an explicit business gate.  END
-                    # loses the breakpoint and makes a real session look like
-                    # a successful stop; the HITL path preserves the pending
-                    # evidence requests and allows an operator to approve or
-                    # reject the next revision.
-                    return "human_review"
-                from app.config.loader import list_dimensions
-                dim_configs = list_dimensions(layer_num)
-                explore_dims = [d.key for d in dim_configs]
-                if explore_dims:
-                    logger.info("[after_analysis] Gate EXPLORE (attempt %d): re-dispatching %s", explore_count + 1, explore_dims)
-                    worker = _worker_for_phase(state.get("phase", "layer1"))
-                    return [Send(worker, _dispatch_state(state, dimension_key=d)) for d in explore_dims]
-                return END
-            if route == "HUMAN":
-                # Always enter the persisted HITL checkpoint. Returning END
-                # here loses the gate route and leaves real sessions looking
-                # like an unexplained stop.
-                return "human_review"
-            if route in ("L1", "L2", "L3"):
-                # Rework is a business retry, not an unbounded graph loop.
-                # The aggregate node increments the per-layer counter for
-                # every non-PASS gate.  Once the configured budget is
-                # exhausted, preserve the exact gate diagnostics and enter
-                # the persisted HUMAN checkpoint instead of dispatching the
-                # same expensive LLM batch forever.
-                counts = state.get("retry_counts") or {}
-                retry_count = int(counts.get(f"l{layer_num}_explore", 0))
-                retry_limit = int(state.get("max_retries") or 3)
-                # L3 protocol/spatial contract violations are not transient
-                # infrastructure failures. Re-running all 12 expensive L3
-                # calls amplifies memory and can reproduce the same malformed
-                # output. Preserve the exact pending requests and enter HITL
-                # after the first failed aggregate; an operator can provide a
-                # targeted revision or reject the run.
-                pending = list(gate_decision.pending_requests or [])
-                hard_contract_failure = layer_num == 3 and any(
-                    any(code in str(item) for code in ("missing_instruction_marker", "missing_spatial_instruction"))
-                    for item in pending
-                )
-                if hard_contract_failure:
-                    logger.warning("[after_analysis] L3 contract failure -> HUMAN without full-layer replay")
-                    return "human_review"
-                # L3 gate failures are business/contract findings over a
-                # complete 12-dimension plan, not transient infrastructure
-                # errors. Re-running every L3 LLM worker can duplicate large
-                # prompts and amplify memory without changing the evidence.
-                # Preserve the exact pending requests and send them through
-                # the persisted HUMAN checkpoint for an explicit decision.
-                if layer_num == 3:
-                    logger.warning("[after_analysis] L3 business gate -> HUMAN without full-layer replay")
-                    return "human_review"
-                if retry_count >= retry_limit:
-                    logger.warning(
-                        "[after_analysis] %s rework exhausted for L%d -> HUMAN",
-                        route,
-                        layer_num,
-                    )
-                    return "human_review"
-                # Rework: re-dispatch dimensions of this layer
-                from app.config.loader import list_dimensions
-                dim_configs = list_dimensions(layer_num)
-                rework_dims = [d.key for d in dim_configs]
-                if rework_dims:
-                    logger.info("[after_analysis] Gate rework: re-dispatching %s", rework_dims)
-                    worker = _worker_for_phase(state.get("phase", "layer1"))
-                    return [Send(worker, _dispatch_state(state, dimension_key=d)) for d in rework_dims]
-                return END
+    if layer_num is None:
+        return None
+    try:
+        gate_decision = load_root_gate(state, f"l{layer_num}")
+    except Exception:
+        gate_decision = None
+    if gate_decision is None:
+        return None
+    route = gate_decision.feedback_route
+    if route is None or route == "PASS":
+        # Gate PASS -> phase is advanced by the `advance_phase` node
+        # (it writes phase + dispatches the next layer's dimensions).
+        logger.info("[after_analysis] Gate l%d PASS -> advance_phase", layer_num)
+        return "advance_phase"
+    logger.info("[after_analysis] Gate l%d routed %s", layer_num, route)
+    if route == "EXPLORE":
+        return _route_explore(state, layer_num)
+    if route == "HUMAN":
+        # Always enter the persisted HITL checkpoint. Returning END here
+        # loses the gate route and leaves real sessions looking like an
+        # unexplained stop.
+        return "human_review"
+    if route in ("L1", "L2", "L3"):
+        return _route_gate_rework(state, layer_num, gate_decision)
+    # 未识别的 feedback_route：不吞掉，落到就绪维度派发（与 gate 缺失一致）。
+    return None
 
+
+def _route_dimension_dispatch(state: Dict[str, Any], phase: str) -> Union[str, List[Send]]:
+    """就绪维度派发；部分完成且无就绪维度 = 依赖死锁 -> HUMAN。"""
     layer = _phase_to_layer(phase)
     if layer is None:
         return END
@@ -386,7 +407,7 @@ def after_analysis(
     sends = _ready_dispatch(state, phase)
     if sends:
         logger.info("[after_analysis] phase=%s layer=%s dispatching %d dim(s) is_revision=%s",
-                    phase, layer, len(sends), is_revision)
+                    phase, layer, len(sends), state.get("is_revision", False))
         return sends
 
     # A partially completed layer with no ready dimension is a dependency
@@ -461,7 +482,7 @@ def _dispatch_current(state: Dict[str, Any]) -> Union[List[Send], str]:
         return END
 
     worker = _worker_for_phase(phase)
-    return [Send(worker, _dispatch_state(state, dimension_key=d, phase=phase)) for d in ready]
+    return [_send_worker(worker, _dispatch_state(state, dimension_key=d, phase=phase)) for d in ready]
 
 
 __all__ = ["after_conversation", "after_analysis"]

@@ -102,15 +102,17 @@ async def layer_aggregate_node(state: Dict[str, Any]) -> Dict[str, Any]:
             patch = {**{k: aggregate_state[k] for k in ("context_version", "context_fingerprint", "context_ref", "bootstrap_context_done") if k in aggregate_state}, **patch}
         patch["layer_just_completed"] = None
         _update_explore_retry(state, patch, layer, "l1")
-        # Enrichment consumes the typed L1Snapshot; it must run after this
-        # aggregate persisted its artifact, not in layer_completion_check.
-        from app.workflow.plan_state.completion_node import _invoke_extraction
+        # 统一接地核心（设计 §5.1）：L1 后立即 ground_anchors——回填 KG 真名、
+        # 村名→地块绑定、锚点接地（mention→entity/BSM/geometry+拓扑证据）、
+        # 语义注解、重建证据索引。Enrichment 消费 typed L1Snapshot，必须在
+        # aggregate 持久化 artifact 之后运行（设计 §7：无新节点）。
+        try:
+            from app.domain.ground import ground_anchors
 
-        await _invoke_extraction(
-            session_id=state.get("session_id", ""),
-            layer=1,
-            state={**aggregate_state, **patch},
-        )
+            anchor_patch = await ground_anchors({**aggregate_state, **patch})
+            patch = {**patch, **anchor_patch}
+        except Exception as exc:  # noqa: BLE001 - 接地失败不阻塞 L2，但记录
+            logger.warning("[layer_aggregate] ground_anchors failed: %s", exc)
         return patch
 
     if layer == 2:

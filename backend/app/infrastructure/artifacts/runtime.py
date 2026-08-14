@@ -30,6 +30,7 @@ ARTIFACT_KEYS = (
     "layout_configs", "render_layers", "delivery_spatial_snapshot", "deferral_ledger",
     "export_result", "render_artifacts", "execution_diagnostics", "kg_layer1",
     "repair_directives", "repair_impact", "global_zone_allocation",
+    "global_site_allocation", "grounded_anchors",
 )
 
 
