@@ -411,6 +411,19 @@ async def analyze_l3_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
         )
         if not draft_set.claims and not report_body:
             draft_set.diagnostics.append("provider returned no structured claim set")
+        # Flash unit repair: unknown units (hm, ??, count-units-as-area) are
+        # cheap to fix with a flash LLM - no full re-generation needed.
+        try:
+            from app.domain.program.flash_unit_repair import flash_repair_units
+
+            repaired = await flash_repair_units(draft_set, session_id)
+            if repaired is not None and repaired is not draft_set:
+                draft_set = repaired
+            from app.domain.program.claim_draft import normalize_claim_draft_set
+
+            claim_set = normalize_claim_draft_set(draft_set, dimension_key=dim_key)
+        except Exception as exc:  # noqa: BLE001 - flash repair must never break L3
+            logger.warning("[analyze_l3_dimension] %s: flash unit repair failed: %s", dim_key, exc)
         semantic_feedback = claim_set_semantic_errors(claim_set)
         semantic_retry_count = max(
             0,
