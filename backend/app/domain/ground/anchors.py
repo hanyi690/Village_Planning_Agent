@@ -643,12 +643,15 @@ def _inject_anchors_into_kg(context: Any, kg: Any, anchors: list, session_id: st
                 continue
         # 设施/水/路：实体已有真实名（http entity_ref）时写名（占位名才写）
         if anchor.entity_ref and str(anchor.entity_ref).startswith("http"):
-            current = str(graph.value(anchor.entity_ref, PLN.name) or "")
+            from rdflib import URIRef as _URIRef
+
+            entity_ref_uri = _URIRef(anchor.entity_ref)
+            current = str(graph.value(entity_ref_uri, PLN.name) or "")
             if _is_placeholder_name(current, anchor.role):
-                graph.set((anchor.entity_ref, PLN.name, Literal(anchor.normalized_name)))
+                graph.set((entity_ref_uri, PLN.name, Literal(anchor.normalized_name)))
                 written += 1
             memory.add_entity_annotation(EntityAnnotation(
-                entity_uri=anchor.entity_ref,
+                entity_uri=entity_ref_uri,
                 entity_type=anchor.entity_type or anchor.role,
                 description=f"L1 锚点「{anchor.normalized_name}」（{anchor.role}）",
                 source_text_refs=[anchor.source_report_ref] if anchor.source_report_ref else [],
