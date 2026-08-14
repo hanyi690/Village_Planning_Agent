@@ -474,6 +474,20 @@ class SpatialResolver:
             except Exception as e:
                 logger.warning("[SpatialResolver] directional bbox failed: %s", e)
 
+        if final_bsms and not bbox:
+            # ?? §4.3?????? ambiguous??????/?????????
+            # ???? BSMs?????? LLM ???????? top ?????
+            try:
+                ambiguous = self._llm_resolve_ambiguous(
+                    spec,
+                    self._spec_mention(spec),
+                    mention_enhancements,
+                )
+                if ambiguous is not None:
+                    return ambiguous
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("[SpatialResolver] ambiguous llm resolution failed: %s", exc)
+
         if not final_bsms and not bbox:
             # 不允许留下不可解析的引用（目标 §"不能留又不能解析"）：在证据索引
             # 候选内做有界 LLM best-effort 判别；几何/BSM 仍来自 bundle。失败
@@ -528,64 +542,24 @@ class SpatialResolver:
         spec: Any,
         mention: str,
         mention_enhancements: Optional[Dict[str, List[str]]] = None,
+        extra_candidates: Optional[List[Any]] = None,
     ) -> Optional["ResolvedSpatialRef"]:
-        """有界 LLM best-effort：从证据索引候选里为未绑定的引用选出可用结果。
+        """?? LLM best-effort??? ?4.3??? Recall ????????? BSM/???
 
-        LLM 只在 Recall 候选内判别，不新增 BSM/几何；置信度低（0.35）并标记
-        ``llm_best_effort`` 不确定原因。失败回退确定性首选，仍无法绑定才 None。
+        LLM ???????????????????????? KG ?????
+        ????????????? arXiv 2505.17136?LLM ????????/
+        place-type ???????????????? None??? unresolved??
+        ??????????????????/BSM?
         """
-        candidates: List[Any] = []
-        if self.evidence_index is not None:
-            sub_mentions = [mention]
-            for sub in (mention_enhancements or {}).get(getattr(spec, "target_id", ""), []) or []:
-                sub_mentions.append(_normalize_spec_mention(str(sub)))
-            for sub in sub_mentions:
-                if not sub:
-                    continue
-                try:
-                    result = self.evidence_index.resolve_mention(sub, hints="")
-                    candidates.extend(result.candidates)
-                except Exception:  # noqa: BLE001
-                    continue
-        if not candidates:
-            return None
-        by_ref: Dict[str, Any] = {}
-        for c in candidates:
-            key = str(c.entity_ref or c.canonical_name or "")
-            if not key:
-                continue
-            if key not in by_ref or c.score > by_ref[key].score:
-                by_ref[key] = c
-        ordered = sorted(by_ref.values(), key=lambda c: -c.score)[:8]
+        ordered = extra_candidates or self._collect_llm_candidates(
+            spec, mention, mention_enhancements
+        )
         if not ordered:
             return None
-        picked = None
-        try:
-            from app.infrastructure.llm.factory import create_flash_llm
-
-            llm = create_flash_llm(max_tokens=200, temperature=0.1)
-            lines = chr(10).join(
-                f"{i}. {c.canonical_name} 类型={c.entity_type} "
-                f"BSM={','.join(c.source_bsms[:4]) or '无'} 得分={c.score:.2f}"
-                for i, c in enumerate(ordered, 1)
-            )
-            prompt = (
-                f"空间引用「{mention}」的候选实体如下，选择最匹配的一个"
-                f"（只输出编号；都不合适输出 0）：{chr(10)}{lines}"
-            )
-            response = llm.invoke(prompt)
-            content = getattr(response, "content", "")
-            if isinstance(content, list):
-                content = "".join(content)
-            match = re.search(r"([0-9]+)", str(content or ""))
-            if match is not None:
-                index = int(match.group(1)) - 1
-                if 0 <= index < len(ordered):
-                    picked = ordered[index]
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("[SpatialResolver] llm fallback failed: %s", exc)
+        picked = self._llm_pick_candidate(mention, self._spec_hints(spec), ordered)
         if picked is None:
-            picked = ordered[0]
+            # ?? ?4.3???/???? ambiguous????????????
+            return None
         bsms = self._filter_to_bundle(list(getattr(picked, "source_bsms", None) or []))
         if not bsms:
             return None
@@ -602,6 +576,157 @@ class SpatialResolver:
                 "mention": mention,
                 "picked": str(getattr(picked, "canonical_name", "") or ""),
                 "candidate_count": len(ordered),
+            },
+        )
+
+    def _collect_llm_candidates(
+        self,
+        spec: Any,
+        mention: str,
+        mention_enhancements: Optional[Dict[str, List[str]]] = None,
+    ) -> List[Any]:
+        """Deduped Top-8 evidence-index candidates for LLM discrimination."""
+        candidates: List[Any] = []
+        if self.evidence_index is None:
+            return []
+        sub_mentions = [mention]
+        for sub in (mention_enhancements or {}).get(getattr(spec, "target_id", ""), []) or []:
+            sub_mentions.append(_normalize_spec_mention(str(sub)))
+        hints = self._spec_hints(spec)
+        for sub in sub_mentions:
+            if not sub:
+                continue
+            try:
+                result = self.evidence_index.resolve_mention(sub, hints=hints)
+                candidates.extend(result.candidates)
+            except Exception:  # noqa: BLE001
+                continue
+        by_ref: Dict[str, Any] = {}
+        for c in candidates:
+            key = str(c.entity_ref or c.canonical_name or "")
+            if not key:
+                continue
+            if key not in by_ref or c.score > by_ref[key].score:
+                by_ref[key] = c
+        return sorted(by_ref.values(), key=lambda c: -c.score)[:8]
+
+    def _spec_hints(self, spec: Any) -> str:
+        """?? spec ???/????????? LLM ?????????"""
+        parts: List[str] = []
+        ref = getattr(spec, "reference", None)
+        if ref is not None:
+            filt = getattr(ref, "filter", None) or {}
+            for key in ("label_contains", "name", "near", "relation"):
+                value = filt.get(key)
+                if isinstance(value, str) and value.strip():
+                    parts.append(value.strip())
+        direction = getattr(spec, "direction", None)
+        if direction:
+            parts.append(str(direction))
+        topo = getattr(spec, "topo", None)
+        if topo:
+            parts.append(str(topo))
+        semantic = getattr(spec, "semantic", None)
+        raw = ""
+        try:
+            raw = getattr(semantic, "raw_text", "") or ""
+        except Exception:  # noqa: BLE001
+            raw = ""
+        if isinstance(raw, str) and raw.strip():
+            parts.append(raw.strip()[:160])
+        return "?".join(part for part in dict.fromkeys(parts) if part)
+
+    def _llm_pick_candidate(
+        self,
+        mention: str,
+        hints: str,
+        ordered: List[Any],
+    ) -> Optional[Any]:
+        """?????LLM ??????????/???? None??? ambiguous??"""
+        try:
+            from app.infrastructure.llm.factory import create_flash_llm
+
+            llm = create_flash_llm(max_tokens=200, temperature=0.1)
+            lines = chr(10).join(
+                self._candidate_line(i, c) for i, c in enumerate(ordered, 1)
+            )
+            hint_clause = f"《{hints}》" if hints else ""
+            prompt = (
+                f"?????{mention}?{hint_clause}?"
+                "???? KG/????????????????????"
+                "????????????????????????? 0?\n" + lines
+            )
+
+            response = llm.invoke(prompt)
+            content = getattr(response, "content", "")
+            if isinstance(content, list):
+                content = "".join(content)
+            match = re.search(r"\b([0-9]+)\b", str(content or ""))
+            if match is not None:
+                index = int(match.group(1)) - 1
+                if 0 <= index < len(ordered):
+                    return ordered[index]
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("[SpatialResolver] llm pick failed: %s", exc)
+        return None
+
+    def _candidate_line(self, index: int, c: Any) -> str:
+        """???????/??/BSM/??/????/???"""
+        rels: List[str] = []
+        for ref in list(getattr(c, "relation_refs", None) or [])[:5]:
+            text = str(ref)
+            rels.append(text.rsplit("#", 1)[-1].rsplit("/", 1)[-1])
+        geometry = str(getattr(c, "geometry_ref", "") or "")[:160]
+        return (
+            f"{index}. {c.canonical_name} ??={c.entity_type} "
+            f"BSM={','.join(c.source_bsms[:4]) or '?'} "
+            f"??={geometry or '?'} ??={','.join(rels) or '?'} ??={c.score:.2f}"
+        )
+
+    def _llm_resolve_ambiguous(
+        self,
+        spec: Any,
+        mention: str,
+        mention_enhancements: Optional[Dict[str, List[str]]] = None,
+    ) -> Optional["ResolvedSpatialRef"]:
+        """??????????? ?4.3??????? ambiguous ???????
+
+        ???? LLM ??????????????????? BSMs ????
+        """
+        if self.evidence_index is None or not mention:
+            return None
+        try:
+            result = self.evidence_index.resolve_mention(
+                mention, hints=self._spec_hints(spec)
+            )
+        except Exception:  # noqa: BLE001
+            return None
+        if str(getattr(result, "status", "") or "") != "ambiguous":
+            return None
+        candidates = list(getattr(result, "candidates", None) or [])
+        if not candidates:
+            return None
+        picked = self._llm_pick_candidate(
+            mention, self._spec_hints(spec), candidates
+        )
+        if picked is None:
+            return None
+        bsms = self._filter_to_bundle(list(getattr(picked, "source_bsms", None) or []))
+        if not bsms:
+            return None
+        from app.contracts.spatial.spatial_reference_contracts import ResolvedSpatialRef
+
+        return ResolvedSpatialRef(
+            final_bsms=bsms,
+            bbox=None,
+            confidence=0.5,
+            uncertainty_radius_m=250.0,
+            uncertainty_reason="llm_ambiguous_resolution",
+            provenance={
+                "path": "evidence:candidates+llm_ambiguous",
+                "mention": mention,
+                "picked": str(getattr(picked, "canonical_name", "") or ""),
+                "candidate_count": len(candidates),
             },
         )
 
