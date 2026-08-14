@@ -52,7 +52,7 @@ MAX_TOKENS = int(os.getenv("MAX_TOKENS", "8192"))
 
 # LLM Request Timeout (seconds)
 LLM_REQUEST_TIMEOUT = int(os.getenv("LLM_REQUEST_TIMEOUT", "180"))  # 3 minutes
-LLM_STREAM_TIMEOUT = int(os.getenv("LLM_STREAM_TIMEOUT", "120"))  # 2 minutes; keep the L1 layer fail-fast
+LLM_STREAM_TIMEOUT = int(os.getenv("LLM_STREAM_TIMEOUT", "600"))  # 10 minutes; real L3 dimensions take 228-483s, 120s caused spurious provider trips
 LAYER_TIMEOUT_S = int(os.getenv("LAYER_TIMEOUT_S", "600"))  # 10 min; a layer that exceeds this force-completes (partial snapshot + human review)
 RAG_TIMEOUT_S = int(os.getenv("RAG_TIMEOUT_S", "60"))  # per-dimension RAG retrieval cap
 TOOL_TIMEOUT_S = int(os.getenv("TOOL_TIMEOUT_S", "30"))  # per-tool call budget in DataPipeline

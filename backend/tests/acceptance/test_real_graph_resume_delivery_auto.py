@@ -311,6 +311,47 @@ def test_real_graph_resume_delivery(sqlite_db, pipeline_reset, monkeypatch):
                     session,
                 ) or {}
 
+            def dump_state_diagnostic(tag: str) -> None:
+                """Persist a full state snapshot for resume/post-resume diagnosis."""
+                import json as _json
+
+                try:
+                    vals = get_state_values(session_id) or {}
+                    from app.infrastructure.runtime.planning_runtime_service import PlanningRuntimeService
+
+                    snapshot = client.portal.call(
+                        PlanningRuntimeService.aget_state, session_id
+                    )
+                    tasks = getattr(snapshot, "tasks", None) or []
+                    summary = {
+                        "tag": tag,
+                        "phase": vals.get("phase"),
+                        "active_stage": vals.get("active_stage"),
+                        "current_stage": vals.get("current_stage"),
+                        "next_stage": vals.get("next_stage"),
+                        "paused_stage": vals.get("paused_stage"),
+                        "delivery_status": vals.get("delivery_status"),
+                        "human_review_event_id": vals.get("human_review_event_id"),
+                        "human_review_resume_consumed": vals.get("human_review_resume_consumed"),
+                        "human_review_generation": vals.get("human_review_generation"),
+                        "human_interrupt_keys": list((vals.get("human_interrupt") or {}).keys()),
+                        "pending_task_count": len(tasks),
+                        "pending_interrupt_ids": [
+                            [str(i) for i in (getattr(t, "interrupts", ()) or ())] for t in tasks
+                        ],
+                        "artifact_ref_keys": sorted((vals.get("artifact_refs") or {}).keys()),
+                    }
+                    diag = run_root / session_id / "resume-diagnostic.json"
+                    with diag.open("w", encoding="utf-8") as fh:
+                        _json.dump(summary, fh, ensure_ascii=False, indent=2)
+                    print(
+                        "[REAL-DIAG] " + tag + " " + _json.dumps(summary, ensure_ascii=False),
+                        flush=True,
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    print(f"[REAL-DIAG] dump failed for {tag}: {exc}", flush=True)
+
+
             async def close_and_reopen_runtime() -> None:
                 """Close and reopen the real checkpointer against the same DB."""
                 import app.database.engine as database_engine
@@ -391,6 +432,7 @@ def test_real_graph_resume_delivery(sqlite_db, pipeline_reset, monkeypatch):
                     last_progress = progress
                     last_progress_at = now
                 elif now - last_progress_at > 90.0:
+                    dump_state_diagnostic("stall")
                     pytest.fail(
                         "real graph stalled: state fingerprint unchanged for 90s "
                         f"phase={current.get('phase')!r}, "
@@ -508,6 +550,7 @@ def test_real_graph_resume_delivery(sqlite_db, pipeline_reset, monkeypatch):
                             )),
                         }
                     action = "approve"
+                dump_state_diagnostic("pre-resume")
                 resolved = client.post(
                     f"/api/v1/sessions/{session_id}/human-review",
                     json={
@@ -517,6 +560,7 @@ def test_real_graph_resume_delivery(sqlite_db, pipeline_reset, monkeypatch):
                     },
                 )
                 assert resolved.status_code == 200, resolved.text
+                dump_state_diagnostic("post-resume")
                 if event_id:
                     processed_event_ids.add(event_id)
                 human_resolutions.append({
