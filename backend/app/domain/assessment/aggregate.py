@@ -171,7 +171,8 @@ async def l1_aggregate(
         content = rec.get("content", "")
         summary = rec.get("summary", "") or ""
         report_id = rec.get("report_id", f"rpt-{dim_key}-v1")
-        frag = compile_dimension_report(
+        try:
+            frag = compile_dimension_report(
             CompilationProfile.L1_OBSERVATION,
             dimension_key=dim_key,
             content=content,
@@ -179,7 +180,10 @@ async def l1_aggregate(
             summary=summary,
             report_id=report_id,
             run_id=run_id,
-        )
+            )
+        except Exception as exc:  # noqa: BLE001 - one dimension must not break the aggregate
+            logger.warning("[l1_aggregate] compile failed for dim=%s: %s", dim_key, exc)
+            frag = None
         if frag is not None:
             fragments.append(frag)
 
