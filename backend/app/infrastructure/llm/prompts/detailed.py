@@ -73,6 +73,13 @@ suggested_output_kind 只能是 parcel/polygon/point/line/action。对有明确�
 - axis 使用 axis_parameters：action 只能是 preserve/new/upgrade；axis_type 只能是 primary/secondary/spatial_control；其余字段为 direction、reference_features、connects、corridor_width；不得把发展轴退化成普通道路。
 - zone/protection/restoration 以及 polygon/parcel project 使用 polygon_parameters。materialization_role 只能是 land_use_assignment/functional_overlay/protection_overlay/restoration_overlay/project_footprint。真正改变土地用途的 zone 才使用 land_use_assignment，并必须给 area_range（minimum、maximum、unit=m2|ha）；“一心一带多区”等功能结构使用 functional_overlay，不得伪装成地类重分类或虚构面积；保护和修复分别使用对应 overlay。
 - 普通 project 可使用 project_parameters：project_type、action、capacity、footprint_area；action 只能是 preserve/new/expand/relocate/upgrade/widen/harden/repair/demolish。点项目仍须保留 location_hints。
+单位必须使用以下闭集，禁止其他写法（禁止把数量/规模单位当作面积或长度单位）：
+- 面积：公顷/ha、亩、平方米/m2、㎡
+- 长度：米/m、千米/km
+- 容量/体积：立方米/m3、升/l、吨/t
+- 数量/规模：个、处、座、条、棵、株、人、户、间、栋、根、套
+- 功率/电量：千瓦/kw、千瓦时/kwh
+禁止写法：hm、hm²、km²、平方米的其它简写、"待定"、"无"；禁止用"处/户/座/人"作为 area_range 或 footprint_area 的面积单位。
 所有参数只表达规划语义和来源量值，不得填写坐标、BSM、候选地块或几何；单位换算由确定性编译器完成。
 report_body 写完整的法定文本报告正文（用【主题】标记段落、markdown 表格列清单）；claims 只写结构化判断，不要写解释文字。
 """
