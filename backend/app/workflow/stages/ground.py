@@ -40,6 +40,29 @@ async def ground_node(state: Dict[str, Any]) -> Dict[str, Any]:
     compilation = _load_ref_artifact(state, "target_projection", IntentCompilationResult)
     report_result = None
 
+    # L1 接地锚点显式消费（设计 §5.1）：grounded_anchors 是 L1 后接地推理产物，
+    # 挂到 context 供 ground_aggregate 做实体级候选/证据（同名同坐标=同实体）。
+    grounded_anchors = []
+    try:
+        if (state.get("artifact_refs") or {}).get("grounded_anchors"):
+            from app.contracts.spatial.grounding_contracts import GroundedAnchor
+            from app.infrastructure.artifacts.runtime import load_artifact
+
+            payload = load_artifact(state, "grounded_anchors")
+            if isinstance(payload, list):
+                grounded_anchors = [
+                    a if isinstance(a, GroundedAnchor) else GroundedAnchor(**a)
+                    for a in payload if isinstance(a, dict)
+                ]
+        if grounded_anchors:
+            context.grounded_anchors = grounded_anchors
+            logger.info(
+                "[workflow:ground] consuming %d L1 grounded anchors",
+                len(grounded_anchors),
+            )
+    except Exception as exc:  # noqa: BLE001 - 锚点缺失不阻断 GROUND
+        logger.warning("[workflow:ground] grounded anchors load failed: %s", exc)
+
     # =====================================================================
     # The complete GROUND flow: Phase 1 - L1 spatial inventory from the
     # report (every place name + spatial cue + facility->village text +

@@ -122,6 +122,16 @@ def ground_aggregate(
     )
     resolver = SpatialResolver(context)
 
+    # L1 接地锚点消费（设计 §5.1）：mention→锚点映射，未解析 spec 优先落锚点 BSM
+    anchors_by_name: Dict[str, Any] = {}
+    for anchor in getattr(context, "grounded_anchors", None) or []:
+        name = str(getattr(anchor, "normalized_name", "") or getattr(anchor, "mention", "") or "").strip()
+        if not name:
+            continue
+        anchors_by_name.setdefault(name, anchor)
+        if name.endswith("村"):
+            anchors_by_name.setdefault(name[:-1], anchor)
+
     candidates: List[CandidateSite] = []
     unresolved: List[StageIssue] = []
     spatial_query_evidence: List[SpatialQueryEvidence] = []
@@ -135,6 +145,28 @@ def ground_aggregate(
             spec,
             mention_enhancements=mention_enhancements,
         )
+        # 未解析且命中 L1 接地锚点 → 用锚点 BSM（实体级，同坐标=同实体），
+        # 显式 provenance grounded_anchor。
+        if not resolved.final_bsms:
+            mention = resolver._spec_mention(spec) or ""
+            anchor = anchors_by_name.get(mention) or anchors_by_name.get(mention.rstrip("村")) if mention else None
+            if anchor is not None:
+                anchor_bsms = list(getattr(anchor, "source_bsms", None) or [])
+                if anchor_bsms:
+                    from app.contracts.spatial.spatial_reference_contracts import ResolvedSpatialRef
+
+                    resolved = ResolvedSpatialRef(
+                        final_bsms=anchor_bsms,
+                        bbox=None,
+                        confidence=max(float(getattr(anchor, "confidence", 0.0) or 0.0), 0.35),
+                        uncertainty_radius_m=250.0,
+                        uncertainty_reason="grounded_anchor",
+                        provenance={
+                            "path": "grounded_anchor",
+                            "mention": mention,
+                            "entity_ref": str(getattr(anchor, "entity_ref", "") or ""),
+                        },
+                    )
         spec_type = getattr(spec, "type", "")
         spatial_query_evidence.append(
             SpatialQueryEvidence(
