@@ -290,11 +290,12 @@ async def analyze_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
     # 7. L1 dual-response: report body + structured observations (function calling)
     if provider_failure_open(session_id):
         return {
-            "fatal_error": {
+            "dimension_retry_counts": dimension_failure_attempt(state, dim_key),
+            "provider_failures": [{
                 "stage": f"L{dim_layer}", "dimension": dim_key,
                 "code": "llm_provider_circuit_open",
                 "message": "LLM provider circuit is open after a prior session failure",
-            }
+            }],
         }
     llm_start_time = time.time()
 
@@ -378,12 +379,12 @@ async def analyze_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
         return {
             "messages": [AIMessage(content=f"[执行失败] LLM流式超时({LLM_STREAM_TIMEOUT}s)")],
             "dimension_retry_counts": dimension_failure_attempt(state, dim_key),
-            "fatal_error": {
+            "provider_failures": [{
                 "stage": f"L{dim_layer}",
                 "dimension": dim_key,
                 "code": "llm_stream_timeout",
                 "message": f"LLM stream timeout ({LLM_STREAM_TIMEOUT}s)",
-            },
+            }],
         }
     except Exception as e:
         trip_provider_failure(session_id)
@@ -398,12 +399,12 @@ async def analyze_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
         return {
             "messages": [AIMessage(content=f"[执行失败] LLM错误: {e}")],
             "dimension_retry_counts": dimension_failure_attempt(state, dim_key),
-            "fatal_error": {
+            "provider_failures": [{
                 "stage": f"L{dim_layer}",
                 "dimension": dim_key,
                 "code": "llm_provider_error",
                 "message": str(e),
-            },
+            }],
         }
 
     llm_response = report_body

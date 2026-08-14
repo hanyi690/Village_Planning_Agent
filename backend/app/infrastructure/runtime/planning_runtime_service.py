@@ -469,7 +469,20 @@ class PlanningRuntimeService:
                 })
                 await cls._append_event(session_id, create_error_event(session_id, diagnostic["message"]))
                 return
+            still_paused = bool((final_state or {}).get("human_interrupt")) or bool(
+                (final_state or {}).get("paused_stage")
+            )
             fatal_error = (final_state or {}).get("fatal_error")
+            if fatal_error and still_paused:
+                # The graph advanced into a new HUMAN pause: the fatal_error is a
+                # transient worker failure (e.g. LLM circuit trip) that the
+                # operator is about to retry via provider-resume.  Keep the pause;
+                # do not turn it into a terminal failure.
+                logger.warning(
+                    "[PlanningRuntimeService] [%s] transient worker failure behind a new HUMAN pause; keeping pause instead of terminal: %s",
+                    session_id, fatal_error,
+                )
+                fatal_error = None
             if fatal_error:
                 message = fatal_error.get("message", "planning execution failed") if isinstance(fatal_error, dict) else str(fatal_error)
                 await update_planning_session_async(session_id, {
@@ -1010,6 +1023,15 @@ class PlanningRuntimeService:
                 ))
 
             logger.info(f"[PlanningRuntimeService] [{session_id}] Background execution completed")
+
+        except GraphInterrupt:
+            # A HUMAN review pause is not an execution failure.  The graph is
+            # parked at an interrupt checkpoint awaiting operator review; keep
+            # the session paused instead of persisting a terminal diagnostic.
+            logger.info(
+                "[PlanningRuntimeService] [%s] Background execution paused at a HUMAN interrupt",
+                session_id,
+            )
 
         except Exception as e:
             logger.error(f"[PlanningRuntimeService] [{session_id}] Execution failed: {e}", exc_info=True)

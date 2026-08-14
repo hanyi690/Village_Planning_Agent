@@ -380,11 +380,12 @@ async def analyze_l3_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
     if provider_failure_open(session_id):
         return {
             "dimension_retry_counts": dimension_failure_attempt(state, dim_key),
-            "fatal_error": {
+            "dimension_retry_counts": dimension_failure_attempt(state, dim_key),
+            "provider_failures": [{
                 "stage": f"L{dim_layer}", "dimension": dim_key,
                 "code": "llm_provider_circuit_open",
                 "message": "LLM provider circuit is open after a prior session failure",
-            }
+            }],
         }
     llm_start_time = time.time()
 
@@ -483,11 +484,11 @@ async def analyze_l3_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
         return {
             "messages": [AIMessage(content=f"[执行失败] LLM流式超时({LLM_STREAM_TIMEOUT}s)")],
             "dimension_retry_counts": dimension_failure_attempt(state, dim_key),
-            "fatal_error": {
+            "provider_failures": [{
                 "stage": f"L{dim_layer}", "dimension": dim_key,
                 "code": "llm_stream_timeout",
                 "message": f"LLM stream timeout ({LLM_STREAM_TIMEOUT}s)",
-            },
+            }],
         }
     except (ValueError, TypeError, json.JSONDecodeError) as exc:
         # LLM output quality failure: the provider returned malformed /
@@ -512,11 +513,11 @@ async def analyze_l3_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
         return {
             "messages": [AIMessage(content=f"[执行失败] 结构化输出解析失败: {exc}")],
             "dimension_retry_counts": dimension_failure_attempt(state, dim_key),
-            "fatal_error": {
+            "provider_failures": [{
                 "stage": f"L{dim_layer}", "dimension": dim_key,
                 "code": "llm_provider_error",
                 "message": f"L3 structured output failed to parse: {exc}",
-            },
+            }],
         }
     except Exception as e:
         # Genuine provider infrastructure failure (transport/HTTP/circuit).
@@ -532,10 +533,10 @@ async def analyze_l3_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
         return {
             "messages": [AIMessage(content=f"[执行失败] LLM错误: {e}")],
             "dimension_retry_counts": dimension_failure_attempt(state, dim_key),
-            "fatal_error": {
+            "provider_failures": [{
                 "stage": f"L{dim_layer}", "dimension": dim_key,
                 "code": "llm_provider_error", "message": str(e),
-            },
+            }],
         }
 
     if claim_set is None:
