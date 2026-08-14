@@ -151,6 +151,8 @@ def test_unit_normalization_handles_mojibake_and_aliases():
     assert normalize_unit("m²") == "m2"
     assert normalize_unit(" 亩 ") == "mu"
     assert normalize_unit("公顷") == "ha"
+    assert normalize_unit("hm²") == "ha"
+    assert normalize_unit("hm2") == "ha"
     assert normalize_action("新建") == "new"
     assert normalize_action("升级") == "upgrade"
     assert normalize_action("改扩建") == "expand"

@@ -27,6 +27,7 @@ _UNIT_ALIASES: dict[str, str] = {
     "mm": "mm", "millimeter": "mm", "毫米": "mm",
     # area
     "ha": "ha", "hectare": "ha", "hectares": "ha", "公顷": "ha",
+    "hm2": "ha", "hm²": "ha", "square hectometer": "ha", "平方百米": "ha",
     "亩": "mu", "mou": "mu",
     "m2": "m2", "m2": "m2", "sqm": "m2", "sq m": "m2", "square meter": "m2",
     "square meters": "m2", "square metre": "m2", "平方米": "m2", "平米": "m2",
