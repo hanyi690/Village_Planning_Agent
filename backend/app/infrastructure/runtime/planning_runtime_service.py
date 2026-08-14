@@ -254,6 +254,51 @@ class PlanningRuntimeService:
         async for snapshot in cls._graph.aget_state_history(config):
             yield snapshot
 
+    @staticmethod
+    async def _replay_l1_kg_enrichment(session_id: str, state: dict) -> None:
+        """Replay L1 KG enrichment (name backfill / entity names) on resume.
+
+        L1 ground_anchors mutates the in-memory session KG; resume's
+        ensure_session_kg(force=True) rebuilds the base KG from the bundle and
+        would lose those injected names.  Re-apply from the persisted
+        grounded_anchors artifact (idempotent: placeholders only, never
+        overwrites a real name).
+        """
+        try:
+            refs = dict((state or {}).get("artifact_refs") or {})
+            if not refs.get("grounded_anchors"):
+                return
+            from app.infrastructure.artifacts.runtime import load_artifact
+            from app.contracts.spatial.grounding_contracts import GroundedAnchor
+
+            payload = load_artifact(state, "grounded_anchors")
+            if not payload:
+                return
+            anchors = [
+                a if isinstance(a, GroundedAnchor) else GroundedAnchor(**a)
+                for a in payload
+                if isinstance(a, dict)
+            ] if isinstance(payload, list) else []
+            if not anchors:
+                return
+            from app.infrastructure.kg.manager import KGManager
+
+            kg = KGManager().get_session_kg(session_id)
+            if kg is None:
+                return
+            from app.domain.ground.anchors import _inject_anchors_into_kg
+
+            written = _inject_anchors_into_kg(None, kg, anchors, session_id)
+            logger.info(
+                "[PlanningRuntimeService] replayed %d L1 KG enrichments on resume for %s",
+                written, session_id,
+            )
+        except Exception as exc:  # noqa: BLE001 - replay must never block resume
+            logger.warning(
+                "[PlanningRuntimeService] L1 KG enrichment replay failed for %s: %s",
+                session_id, exc,
+            )
+
     @classmethod
     async def resume_from_interrupt(
         cls,
@@ -319,6 +364,7 @@ class PlanningRuntimeService:
                     raise RuntimeError(
                         f"cannot resume {paused_stage}: session data/KG restoration failed"
                     )
+                await cls._replay_l1_kg_enrichment(session_id, current)
 
             # A provider failure opens a session-scoped circuit breaker so a
             # parallel wave stops spending requests.  An explicit HUMAN
