@@ -491,7 +491,9 @@ def _measure_value(
 ) -> float | None:
     if measure is None or measure.value is None:
         return None
-    unit = _text(measure.unit).lower()
+    from app.domain.program.unit_normalization import normalize_unit
+
+    unit = normalize_unit(measure.unit)
     factor = factors.get(unit)
     if factor is None:
         _diagnostic(
@@ -512,7 +514,9 @@ def _normalized_action(
     diagnostics: list[str],
     allowed: set[str] | None = None,
 ) -> str:
-    action = _text(value).lower() or "new"
+    from app.domain.program.unit_normalization import normalize_action
+
+    action = normalize_action(value, allowed=allowed or _ACTION_SET) or "new"
     valid = allowed or _ACTION_SET
     if action not in valid:
         _diagnostic(

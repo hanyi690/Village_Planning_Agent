@@ -1,4 +1,4 @@
-"""Grounding LLM reason alignment (design 22 ?4.3).
+"""Grounding LLM reason alignment (design 22 §4.3).
 
 Covers the resolver-side bounded LLM discrimination contract:
 - failure keeps the reference unresolved (never degrades to candidate #1)
@@ -72,7 +72,7 @@ def _spec(mention):
 
 
 def test_llm_failure_keeps_unresolved(monkeypatch):
-    """Design ?4.3: failure/timeout keeps ambiguous - never degrade to first."""
+    """Design §4.3: failure/timeout keeps ambiguous - never degrade to first."""
     from app.infrastructure.llm import factory as llm_factory
 
     def _boom(*args, **kwargs):
@@ -82,11 +82,11 @@ def test_llm_failure_keeps_unresolved(monkeypatch):
     index = _FakeIndex(
         SimpleNamespace(
             status="ambiguous",
-            candidates=[_candidate("??", "bsm-1", "http://e/1", 0.8)],
+            candidates=[_candidate("甲村", "bsm-1", "http://e/1", 0.8)],
         )
     )
     resolver = SpatialResolver(_context(index))
-    result = resolver._llm_reason_fallback(_spec("??"), "??", None)
+    result = resolver._llm_reason_fallback(_spec("甲村"), "甲村", None)
     assert result is None, "LLM failure must keep the reference unresolved"
 
 
@@ -104,16 +104,16 @@ def test_llm_pick_success_binds_picked_bsm(monkeypatch):
         SimpleNamespace(
             status="ambiguous",
             candidates=[
-                _candidate("??", "bsm-1", "http://e/1", 0.8),
-                _candidate("??", "bsm-2", "http://e/2", 0.6),
+                _candidate("甲村", "bsm-1", "http://e/1", 0.8),
+                _candidate("乙村", "bsm-2", "http://e/2", 0.6),
             ],
         )
     )
     resolver = SpatialResolver(_context(index))
-    result = resolver._llm_reason_fallback(_spec("???"), "???", None)
+    result = resolver._llm_reason_fallback(_spec("模糊村"), "模糊村", None)
     assert result is not None
     assert result.final_bsms == ["bsm-2"]
-    assert result.provenance["picked"] == "??"
+    assert result.provenance["picked"] == "乙村"
 
 
 def test_ambiguous_with_bsms_enters_llm_discrimination(monkeypatch):
@@ -130,13 +130,13 @@ def test_ambiguous_with_bsms_enters_llm_discrimination(monkeypatch):
         SimpleNamespace(
             status="ambiguous",
             candidates=[
-                _candidate("??", "bsm-1", "http://e/1", 0.8),
-                _candidate("??", "bsm-2", "http://e/2", 0.7),
+                _candidate("甲村", "bsm-1", "http://e/1", 0.8),
+                _candidate("乙村", "bsm-2", "http://e/2", 0.7),
             ],
         )
     )
     resolver = SpatialResolver(_context(index))
-    result = resolver._llm_resolve_ambiguous(_spec("??"), "??", None)
+    result = resolver._llm_resolve_ambiguous(_spec("甲村"), "甲村", None)
     assert result is not None
     assert result.final_bsms == ["bsm-1"]
     assert result.uncertainty_reason == "llm_ambiguous_resolution"
@@ -147,7 +147,7 @@ def test_candidate_line_carries_geometry_and_topology():
     line = resolver._candidate_line(
         1,
         _candidate(
-            "??",
+            "祠堂",
             "bsm-1",
             "http://e/1",
             rels=[
@@ -159,3 +159,4 @@ def test_candidate_line_carries_geometry_and_topology():
     assert "POINT(1 1)" in line
     assert "serves" in line
     assert "nearby" in line
+    assert "拓扑" in line

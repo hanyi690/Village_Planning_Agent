@@ -1149,7 +1149,7 @@ async def apply_human_review_decision(state: Dict[str, Any]) -> Dict[str, Any]:
                         if value:
                             feedback_parts.append(value)
             if feedback_parts:
-                result["quality_feedback"] = "?".join(dict.fromkeys(feedback_parts))[:2000]
+                result["quality_feedback"] = "；".join(dict.fromkeys(feedback_parts))[:2000]
 
     deferral_patch = {}
     deferred_target_ids: list[str] = []

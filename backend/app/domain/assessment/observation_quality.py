@@ -42,9 +42,9 @@ def validate_observations(
     feedback = ""
     if ratio >= max_defect_ratio:
         feedback = (
-            f"????????? {total} ??{len(missing_name)} ?? name?"
-            f"{len(no_place)} ?? location ?? relation???????????? {ratio:.0%}?"
-            "???????????? name?????? location ? relation ?????"
+            f"观测质量不达标：共 {total} 条，{len(missing_name)} 条缺 name，"
+            f"{len(no_place)} 条缺 location 且缺 relation（无空间锚点），缺陷占比 {ratio:.0%}。"
+            "请重写观测：每条必须包含 name，并尽量给出 location 或 relation 空间锚点。"
         )
     return {
         "ok": ratio < max_defect_ratio,

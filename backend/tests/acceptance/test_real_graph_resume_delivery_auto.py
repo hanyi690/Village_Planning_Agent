@@ -496,7 +496,7 @@ def test_real_graph_resume_delivery(sqlite_db, pipeline_reset, monkeypatch):
                 if provider_failure:
                     decision = {
                         "action": "retry",
-                        "feedback": "????????????????????",
+                        "feedback": "provider retry",
                     }
                     action = "retry"
                 else:
@@ -530,15 +530,14 @@ def test_real_graph_resume_delivery(sqlite_db, pipeline_reset, monkeypatch):
                         )
                         decision = {
                             "action": "approve",
-                            "feedback": "??????????????????",
+                            "feedback": "classification approved",
                             "classification_decisions": classification_decisions,
                         }
                     else:
                         decision = {
                             "action": "approve",
                             "feedback": (
-                                "????????????????????????"
-                                "????????? BSM ???"
+                                "approve with unresolved spatial references deferred to GROUND/SELECT"
                             ),
                             "acknowledge_unresolved_spatial_references": True,
                             "defer_unresolved_spatial_references": True,

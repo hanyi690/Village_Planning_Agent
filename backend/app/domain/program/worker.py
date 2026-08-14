@@ -720,8 +720,8 @@ def _build_prompt(
     quality_feedback = str(state.get("quality_feedback") or "").strip()
     if quality_feedback:
         quality_instruction = (
-            "???????????????????? schema ????????"
-            "????????????\n"
+            "【编译修正指令】上次输出的干预项目未通过 schema 编译，错误如下，"
+            "请在本次生成中严格规避：\n"
             f"\"{quality_feedback}\""
         )
         revision_instruction = (

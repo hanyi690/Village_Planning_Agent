@@ -1,8 +1,9 @@
 """Observation quality retry loop (design: validation step + single-dimension
 retry with corrective feedback).
 
-Covers: quality validation, dimension_failures routing to HUMAN, and the
-resume dispatch carrying corrective feedback to the retried worker.
+Covers: quality validation, dimension_failures routing to HUMAN, resume
+dispatch carrying corrective feedback, and L3 program_rework single-dimension
+retry.
 """
 from __future__ import annotations
 
@@ -11,8 +12,8 @@ def test_validation_accepts_good_observations():
     from app.domain.assessment.observation_quality import validate_observations
 
     report = validate_observations([
-        {"name": "??", "location": "???", "relation": "?????"},
-        {"name": "??", "location": "??", "relation": ""},
+        {"name": "祠堂", "location": "社前村", "relation": "位于社前村"},
+        {"name": "园寨", "location": "园寨", "relation": ""},
     ])
     assert report["ok"] is True
     assert report["defect_ratio"] == 0.0
@@ -22,19 +23,19 @@ def test_validation_flags_missing_spatial_anchor():
     from app.domain.assessment.observation_quality import validate_observations
 
     report = validate_observations([
-        {"name": "???", "location": "", "relation": ""},
-        {"name": "???", "location": "??", "relation": ""},
+        {"name": "某设施", "location": "", "relation": ""},
+        {"name": "另一条", "location": "园寨", "relation": ""},
     ])
     assert report["ok"] is False
     assert report["no_place"] == 1
-    assert "????" in report["feedback"]
+    assert "空间锚点" in report["feedback"]
 
 
 def test_validation_flags_missing_name():
     from app.domain.assessment.observation_quality import validate_observations
 
     report = validate_observations([
-        {"name": "", "location": "???", "relation": ""},
+        {"name": "", "location": "社前村", "relation": ""},
     ])
     assert report["ok"] is False
     assert report["missing_name"] == 1
@@ -79,7 +80,7 @@ def test_provider_resume_dispatch_carries_feedback():
             {
                 "dimension": "location",
                 "code": "dimension_quality_failed",
-                "feedback": "???????",
+                "feedback": "请补全空间锚点",
             }
         ],
     }
@@ -88,8 +89,7 @@ def test_provider_resume_dispatch_carries_feedback():
     assert len(command.goto) == 1
     payload = command.goto[0].arg
     assert payload["dimension_key"] == "location"
-    assert payload["quality_feedback"] == "???????"
-
+    assert payload["quality_feedback"] == "请补全空间锚点"
 
 
 def test_l3_program_rework_approve_retries_only_failed_dimensions():
@@ -141,3 +141,18 @@ def test_l3_program_rework_route_goes_to_provider_resume_dispatch():
     }
     assert route_after_human_review(state) == "provider_resume_dispatch"
 
+
+def test_unit_normalization_handles_mojibake_and_aliases():
+    from app.domain.program.unit_normalization import normalize_action, normalize_unit
+
+    assert normalize_unit("平方米") == "m2"
+    assert normalize_unit("平米") == "m2"
+    assert normalize_unit("KM") == "km"
+    assert normalize_unit("m²") == "m2"
+    assert normalize_unit(" 亩 ") == "mu"
+    assert normalize_unit("公顷") == "ha"
+    assert normalize_action("新建") == "new"
+    assert normalize_action("升级") == "upgrade"
+    assert normalize_action("改扩建") == "expand"
+    assert normalize_action("修缮") == "repair"
+    assert normalize_action("UPGRADE") == "upgrade"

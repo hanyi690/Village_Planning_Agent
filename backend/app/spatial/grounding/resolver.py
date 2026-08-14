@@ -475,8 +475,8 @@ class SpatialResolver:
                 logger.warning("[SpatialResolver] directional bbox failed: %s", e)
 
         if final_bsms and not bbox:
-            # ?? §4.3?????? ambiguous??????/?????????
-            # ???? BSMs?????? LLM ???????? top ?????
+            # 设计 §4.3：证据索引判 ambiguous（多候选接近/弱证据）的引用即使
+            # 已有候选 BSMs，也进入有界 LLM 判别，避免直接取 top 造成误绑。
             try:
                 ambiguous = self._llm_resolve_ambiguous(
                     spec,
@@ -544,12 +544,12 @@ class SpatialResolver:
         mention_enhancements: Optional[Dict[str, List[str]]] = None,
         extra_candidates: Optional[List[Any]] = None,
     ) -> Optional["ResolvedSpatialRef"]:
-        """?? LLM best-effort??? ?4.3??? Recall ????????? BSM/???
+        """有界 LLM best-effort（设计 §4.3）：在 Recall 候选内判别，不新增 BSM/几何。
 
-        LLM ???????????????????????? KG ?????
-        ????????????? arXiv 2505.17136?LLM ????????/
-        place-type ???????????????? None??? unresolved??
-        ??????????????????/BSM?
+        LLM 只在证据索引召回的候选内选最优；候选行携带几何与 KG 拓扑关系，
+        让判别具备拓扑上下文（对齐 arXiv 2505.17136：LLM 拓扑推理需要几何/
+        place-type 上下文）。失败或没有可用候选返回 None，保持 unresolved——
+        绝不降级为第一个候选，也绝不伪造几何/BSM。
         """
         ordered = extra_candidates or self._collect_llm_candidates(
             spec, mention, mention_enhancements
@@ -558,7 +558,7 @@ class SpatialResolver:
             return None
         picked = self._llm_pick_candidate(mention, self._spec_hints(spec), ordered)
         if picked is None:
-            # ?? ?4.3???/???? ambiguous????????????
+            # 设计 §4.3：失败/超时保持 ambiguous，不得降级为第一个候选。
             return None
         bsms = self._filter_to_bundle(list(getattr(picked, "source_bsms", None) or []))
         if not bsms:
@@ -611,7 +611,7 @@ class SpatialResolver:
         return sorted(by_ref.values(), key=lambda c: -c.score)[:8]
 
     def _spec_hints(self, spec: Any) -> str:
-        """?? spec ???/????????? LLM ?????????"""
+        """提取 spec 的位置/关系提示文本，作为 LLM 判别的拓扑上下文。"""
         parts: List[str] = []
         ref = getattr(spec, "reference", None)
         if ref is not None:
@@ -634,7 +634,7 @@ class SpatialResolver:
             raw = ""
         if isinstance(raw, str) and raw.strip():
             parts.append(raw.strip()[:160])
-        return "?".join(part for part in dict.fromkeys(parts) if part)
+        return "、".join(part for part in dict.fromkeys(parts) if part)
 
     def _llm_pick_candidate(
         self,
@@ -642,7 +642,7 @@ class SpatialResolver:
         hints: str,
         ordered: List[Any],
     ) -> Optional[Any]:
-        """?????LLM ??????????/???? None??? ambiguous??"""
+        """有界判别：LLM 在候选内选编号；失败/超时返回 None（保持 ambiguous）。"""
         try:
             from app.infrastructure.llm.factory import create_flash_llm
 
@@ -652,9 +652,9 @@ class SpatialResolver:
             )
             hint_clause = f"《{hints}》" if hints else ""
             prompt = (
-                f"?????{mention}?{hint_clause}?"
-                "???? KG/????????????????????"
-                "????????????????????????? 0?\n" + lines
+                f"空间引用「{mention}」{hint_clause}。"
+                "以下是从 KG/索引召回的候选实体（含几何与拓扑关系），"
+                "请选择与引用最匹配的一个，只输出编号；都不合适输出 0：\n" + lines
             )
 
             response = llm.invoke(prompt)
@@ -671,16 +671,16 @@ class SpatialResolver:
         return None
 
     def _candidate_line(self, index: int, c: Any) -> str:
-        """???????/??/BSM/??/????/???"""
+        """一行候选：名称/类型/BSM/几何/拓扑关系/得分。"""
         rels: List[str] = []
         for ref in list(getattr(c, "relation_refs", None) or [])[:5]:
             text = str(ref)
             rels.append(text.rsplit("#", 1)[-1].rsplit("/", 1)[-1])
         geometry = str(getattr(c, "geometry_ref", "") or "")[:160]
         return (
-            f"{index}. {c.canonical_name} ??={c.entity_type} "
-            f"BSM={','.join(c.source_bsms[:4]) or '?'} "
-            f"??={geometry or '?'} ??={','.join(rels) or '?'} ??={c.score:.2f}"
+            f"{index}. {c.canonical_name} 类型={c.entity_type} "
+            f"BSM={','.join(c.source_bsms[:4]) or '无'} "
+            f"几何={geometry or '无'} 拓扑={','.join(rels) or '无'} 得分={c.score:.2f}"
         )
 
     def _llm_resolve_ambiguous(
@@ -689,9 +689,9 @@ class SpatialResolver:
         mention: str,
         mention_enhancements: Optional[Dict[str, List[str]]] = None,
     ) -> Optional["ResolvedSpatialRef"]:
-        """??????????? ?4.3??????? ambiguous ???????
+        """歧义引用有界判别（设计 §4.3）：证据索引判 ambiguous 时在候选内选。
 
-        ???? LLM ??????????????????? BSMs ????
+        成功返回 LLM 判别的落位；失败保持原确定性结果（已有 BSMs 不丢）。
         """
         if self.evidence_index is None or not mention:
             return None
