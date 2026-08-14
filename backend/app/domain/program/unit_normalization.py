@@ -27,7 +27,8 @@ _UNIT_ALIASES: dict[str, str] = {
     "mm": "mm", "millimeter": "mm", "毫米": "mm",
     # area
     "ha": "ha", "hectare": "ha", "hectares": "ha", "公顷": "ha",
-    "hm2": "ha", "hm²": "ha", "square hectometer": "ha", "平方百米": "ha",
+    "hm2": "ha", "hm²": "ha", "hm": "ha", "hectometer": "ha", "hectometre": "ha",
+    "square hectometer": "ha", "平方百米": "ha",
     "亩": "mu", "mou": "mu",
     "m2": "m2", "m2": "m2", "sqm": "m2", "sq m": "m2", "square meter": "m2",
     "square meters": "m2", "square metre": "m2", "平方米": "m2", "平米": "m2",
@@ -83,6 +84,12 @@ def normalize_unit(raw: str) -> str:
     if text in _UNIT_ALIASES:
         return _UNIT_ALIASES[text]
     stripped = text.strip(".,;:，；。:")
+    # semantic collapse: strip superscript ² and 'sq' prefixes so m²/hm²/㎡/sqm
+    # fall through to the same alias as m2/hm2 before the fuzzy match.
+    if stripped not in _UNIT_ALIASES:
+        collapsed = stripped.replace("²", "2").replace("㎡", "m2")
+        if collapsed in _UNIT_ALIASES:
+            return _UNIT_ALIASES[collapsed]
     if stripped and stripped in _UNIT_ALIASES:
         return _UNIT_ALIASES[stripped]
     close = get_close_matches(text, list(_UNIT_ALIASES.keys()), n=1, cutoff=0.82)
