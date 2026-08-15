@@ -311,23 +311,6 @@ def drive(client, session_id: str, deadline: float) -> dict:
             continue
         review_payload = review.json()
         has_review_items = bool(review_payload.get("items") or [])
-        if (
-            pending_tasks
-            and not has_review_items
-            and now - last_progress_change_at > 30.0
-            and now - last_resume_kick_at > 60.0
-        ):
-            # A previous process was killed mid-superstep: the checkpoint has
-            # un-consumed tasks but no HUMAN interrupt.  Restart the background
-            # execution from the persisted thread head (no L1-L3 rerun).
-            log("kicking resume_execution for stale mid-superstep checkpoint")
-            try:
-                client.portal.call(PlanningRuntimeService.resume_execution, session_id)
-            except Exception as exc:
-                log("resume_execution kick failed: %s" % exc)
-            last_resume_kick_at = now
-            time.sleep(1.0)
-            continue
         if not has_review_items:
             time.sleep(0.5)
             continue
@@ -510,6 +493,35 @@ def main() -> int:
             files, report, cfg = load_fixture()
             session_id = create_session(client, files, report, cfg)
             log("session created (fresh run): %s" % session_id)
+
+        # Resume-first recovery: if a previous process was killed mid-superstep
+        # (pending tasks, no HUMAN interrupt), kick the graph ONCE from the
+        # persisted thread head.  Never kick inside the poll loop - a healthy
+        # long LLM superstep also freezes the fingerprint, and kicking there
+        # re-runs L1/L3 (duplicate LLM work).
+        try:
+            from app.workflow.stages.support import _progress_fingerprint as _fp
+            start_vals = client.portal.call(
+                PlanningRuntimeService.aget_state_values, session_id
+            ) or {}
+            start_snap = client.portal.call(
+                PlanningRuntimeService.aget_state, session_id
+            )
+            has_interrupt = any(
+                getattr(t, "interrupts", None) or ()
+                for t in (getattr(start_snap, "tasks", None) or ())
+            )
+            if (
+                start_snap is not None
+                and (getattr(start_snap, "tasks", None) or [])
+                and not has_interrupt
+                and not _delivery_poll_terminal(start_vals)
+                and not start_vals.get("paused_stage")
+            ):
+                log("kick resume_execution once for stale mid-superstep checkpoint")
+                client.portal.call(PlanningRuntimeService.resume_execution, session_id)
+        except Exception as exc:
+            log("startup resume kick failed: %s" % exc)
 
         deadline = time.monotonic() + args.deadline_seconds
         result = drive(client, session_id, deadline)
