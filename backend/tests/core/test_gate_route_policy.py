@@ -204,8 +204,13 @@ def test_resume_approve_classification_revision() -> None:
 
 def test_resume_approve_validate_reconcile(monkeypatch) -> None:
     _patch_gate_route(monkeypatch, "PASS")
+    # Approving a passed VALIDATE/RECONCILE gate continues the pipeline.
     state = {"paused_stage": "validate", "human_review_decisions": {"action": "approve"}}
-    assert _resume(state) == END_DIAGNOSTIC
+    assert _resume(state) == "reconcile"
+    state = {"paused_stage": "reconcile", "human_review_decisions": {"action": "approve"}}
+    assert _resume(state) == "deliver"
+    # A structural deferral revision re-runs EXECUTE with the revised plan.
+    state = {"paused_stage": "reconcile", "human_review_decisions": {"action": "approve"}}
     state["structural_deferral_revision"] = True
     assert _resume(state) == "execute"
 

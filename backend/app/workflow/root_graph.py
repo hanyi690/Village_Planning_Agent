@@ -519,6 +519,12 @@ def _approve_validate_reconcile(state: Dict[str, Any], paused_stage: str) -> str
         return END_DIAGNOSTIC
     if state.get("structural_deferral_revision"):
         return "execute"
+    # Approving a VALIDATE/RECONCILE pause that the gate has passed (including
+    # the non-target-limitation approve) must keep the pipeline moving forward
+    # to DELIVER - never silently end the graph here.
+    target = _STAGE_FORWARD_TARGET.get(paused_stage)
+    if target:
+        return END if target == "__end__" else target
     return END_DIAGNOSTIC
 
 
