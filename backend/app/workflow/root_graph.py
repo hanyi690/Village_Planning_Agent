@@ -1194,24 +1194,12 @@ async def apply_human_review_decision(state: Dict[str, Any]) -> Dict[str, Any]:
         and decisions.get("defer_unresolved_spatial_references") is True
     ):
         raw_ids = decisions.get("deferred_target_ids")
-        if not isinstance(raw_ids, list) or not raw_ids:
-            result["fatal_error"] = {
-                "stage": paused_stage,
-                "code": "HUMAN_DEFER_TARGET_IDS_REQUIRED",
-                "message": "Explicit deferred_target_ids are required for spatial deferral.",
-            }
-            return result
         deferred_target_ids = list(dict.fromkeys(
-            str(target_id).strip() for target_id in raw_ids if str(target_id).strip()
+            str(target_id).strip()
+            for target_id in (raw_ids or [])
+            if isinstance(raw_ids, list) and str(target_id).strip()
         ))
-        if not deferred_target_ids:
-            result["fatal_error"] = {
-                "stage": paused_stage,
-                "code": "HUMAN_DEFER_TARGET_IDS_REQUIRED",
-                "message": "Explicit deferred_target_ids are required for spatial deferral.",
-            }
-            return result
-        if paused_stage == "select":
+        if deferred_target_ids and paused_stage == "select":
             # SELECT can be blocked even when GROUND produced a candidate:
             # the candidate may lack usable geometry/anchor or fail the
             # target-level assignment contract.  Such a target is a SELECT
@@ -1222,7 +1210,7 @@ async def apply_human_review_decision(state: Dict[str, Any]) -> Dict[str, Any]:
             deferral_patch = await _record_select_target_deferrals(
                 state, decisions, deferred_target_ids
             )
-        else:
+        elif deferred_target_ids:
             deferral_patch = await _record_target_deferrals(
                 state, decisions, deferred_target_ids
             )
@@ -1445,6 +1433,7 @@ async def apply_human_review_decision(state: Dict[str, Any]) -> Dict[str, Any]:
             result["provider_failures"] = []
         if (
             paused_stage in {"ground", "select"}
+            and deferred_target_ids
             and isinstance(decisions, dict)
             and decisions.get("defer_unresolved_spatial_references") is True
         ):
