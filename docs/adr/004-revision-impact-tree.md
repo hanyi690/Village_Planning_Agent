@@ -8,7 +8,7 @@ The revision impact tree — the wave-ordered set of dimensions that must be
 re-run when one dimension is revised — has two representations:
 
 - `revision_impact_tree` — a TypedDict-shaped `Dict[int, List[str]]` stored in
-  `AgentState` (`backend/app/agent/plan_state/state.py:190`), owned by the
+  `AgentState` (`backend/app/workflow/plan_state/state.py`), owned by the
   plan state reducer and consumed by `completion_node.py`, the worker modules
   (`l1_observe/analysis_node.py`, `l2_strategize/worker.py`,
   `l3_plan/worker.py`), and the conversation router (`edges.py`).

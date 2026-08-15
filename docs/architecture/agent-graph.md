@@ -1,102 +1,67 @@
-# 当前 LangGraph 主图
+# 当前 LangGraph 主图（四段子图）
 
-> 本文只描述 `backend/app/workflow/root_graph.py` 的当前接线。目标图和不变量见
-> [`../design/00_SYSTEM_DESIGN.md`](../design/00_SYSTEM_DESIGN.md)。阶段完成度见
-> [`../design/10_IMPLEMENTATION_STATUS.md`](../design/10_IMPLEMENTATION_STATUS.md)。
+> 本文只描述 `backend/app/workflow/root_graph.py` + `segments.py` 的当前接线。目标图和不变量
+> 见 [`../design/00_SYSTEM_DESIGN.md`](../design/00_SYSTEM_DESIGN.md)；完成度见
+> [`../design/10_IMPLEMENTATION_STATUS.md`](../design/10_IMPLEMENTATION_STATUS.md)；
+> 与旧“扁平线性链”表述的差异见 [`../design/27_IMPLEMENTATION_VS_DESIGN.md`](../design/27_IMPLEMENTATION_VS_DESIGN.md)。
 
-## 1. 根图入口
+## 1. 父图结构
 
-根图由 `create_unified_planning_graph()` 构建，运行时由
-`infrastructure/runtime/planning_runtime_service.py` 使用 checkpoint 启动或恢复。
-当前节点分为四组：
+`create_unified_planning_graph()`（`root_graph.py`）只保留 `bootstrap_context` + 四个段节点
++ `end_diagnostic`；段内成员由 `segments.py::build_segments` 定义。跨段跳转统一由路由节点发
+`Command(graph=Command.PARENT, goto=<segment>)`（`segments.py::_map_route_result`）。
 
 ```mermaid
 flowchart TD
-    Start([START]) --> Bootstrap[bootstrap_context]
-    Bootstrap --> Conversation[conversation]
-    Conversation -->|tool / dispatch| Tools[execute_tools]
-    Conversation -->|layer dispatch| L1[l1_worker]
-    Conversation -->|layer dispatch| L2[l2_worker]
-    Conversation -->|layer dispatch| L3[l3_worker]
-    L1 --> Complete[layer_completion_check]
-    L2 --> Complete
-    L3 --> Complete
-    Complete --> Aggregate[layer_aggregate]
-    Aggregate --> Advance[advance_phase]
-    Advance --> Conversation
-    Advance --> Projection[target_projection]
-    Projection --> Ground[ground]
-    Ground --> Select[select]
-    Select --> Execute[execute]
-    Execute --> Validate[validate]
-    Validate --> Reconcile[reconcile]
-    Reconcile --> Deliver[deliver]
-    Deliver --> End([END])
-    Projection -. retry / human .-> Human[human_review]
-    Ground -. retry / human .-> Human
-    Select -. retry / human .-> Human
-    Validate -. routed retry / human .-> Human
-    Reconcile -. retry / human .-> Human
-    Deliver -. retry / human .-> Human
-    Human -->|resume| Conversation
+    START --> bootstrap_context
+    bootstrap_context --> intent_loop
+    intent_loop -->|意图/工具| execute_tools
+    intent_loop -->|层派发 pending_dispatches| cognitive
+    cognitive -->|L3 gate PASS / advance_phase| spatial_chain
+    spatial_chain -->|retry / human| hitl
+    hitl -->|resume| intent_loop
+    hitl -->|advance / revision / provider| cognitive
+    hitl -->|ground/select/execute/validate/reconcile/deliver| spatial_chain
+    spatial_chain -->|deliver PASS| END
+    end_diagnostic --> END
 ```
 
-实际 conditional edges 会根据 gate artifact、retry budget、`paused_stage` 和 terminal
-状态回到上游阶段，或进入 `human_review_prepare → human_review_publish →
-human_review_wait → human_review_apply`。图中“顺序经过”不等于“阶段已完全闭环”。
+## 2. 段内成员（`segments.py`）
 
-## 2. 节点职责
+| 段 | 节点 |
+|---|---|
+| `intent_loop` | `conversation`、`execute_tools` |
+| `cognitive` | `l1_worker`、`l2_worker`、`l3_worker`、`layer_completion_check`（`defer=True` 屏障）、`layer_aggregate`、`advance_phase`、`revision_dispatch`、`provider_resume_dispatch` |
+| `spatial_chain` | `target_projection`、`ground`、`select`、`execute`、`validate`、`reconcile`、`deliver`（每个节点后挂 `{stage}_router`，gate 驱动） |
+| `hitl` | `human_review_prepare`、`human_review_publish`、`human_review_wait`、`human_review_apply` |
 
-| 节点组 | 当前入口 | 职责 |
-|---|---|---|
-| Bootstrap | `workflow/layers/context_bootstrap.py` | 建立运行所需上下文和引用 |
-| Conversation | `workflow/conversation/` | 识别用户意图、路由维度或空间流程 |
-| Tools | `workflow/tools/execute_node.py` | 执行非路由工具并回写 ToolMessage；当前注册表接线状态见 `design/17` |
-| L1/L2/L3 | `workflow/layers/`、`domain/assessment/` 等 | 并行或波次执行认知层 worker，生成报告和阶段产物 |
-| Layer control | `workflow/plan_state/`、`workflow/layers/` | 检查维度完成、聚合、推进阶段或触发审核 |
-| Post-L3 stages | `workflow/stages/*.py` | 依次调用 target projection、ground、select、execute、validate、reconcile、deliver |
-| Human review | `root_graph.py` + `application/interrupts.py` | 统一准备、发布、等待和应用人工决定 |
-| Terminal | `workflow/terminal.py` | 将重试耗尽或不可恢复情况落为显式诊断终态 |
+## 3. 阶段路由（gate 驱动）
 
-## 3. 控制状态与阶段结果
-
-`workflow/state.py` 中的 `WorkflowState` 是根图控制边界，保存会话/分支身份、阶段、
-状态、retry、interrupt、terminal 和 `artifact_refs` 等引用。完整业务对象不应写入根图 state；
-阶段节点通过 artifact runtime 读取 typed payload。
-
-阶段主链的当前节点名称是：
-
-```text
-TARGET_PROJECTION → GROUND → SELECT → EXECUTE
-  → VALIDATE → RECONCILE → DELIVER
-```
-
-其中 `TARGET_PROJECTION` 只把已组装的 `PlanningProgram` 投影为空间目标；它不应重新解析
-Markdown、猜分类或直接选地。`GROUND` 处理实体和几何接地，`SELECT` 处理候选评估，
-`EXECUTE` 生成空间变化，后续阶段负责校验、对账和交付。
+- `root_graph.py` 提供 `route_after_{target_projection,ground,select,execute,validate,reconcile,deliver}`；
+  gate 决策由 `workflow/stages/support.py::GATE_CHANNELS` 与各阶段 gate 产生。
+- `EXECUTE` 是显式豁免：`route_after_execute` 不读 gate artifact，仅在 `fatal_error` 时
+  fail-closed 到 `END_DIAGNOSTIC`，否则恒推进 `validate`。
+- retry 预算耗尽或 HUMAN 需要时进入 `hitl`；`application/interrupts.py::collect_human_review_items`
+  从 checkpoint gate channel 收集待审项。
+- `WorkflowState`（`workflow/state.py`）只保存控制字段与 artifact refs；阶段业务结果由
+  `workflow/stage_adapter.py` 持久化为 CAS artifact。
 
 ## 4. 恢复与人工审核
 
-LangGraph 的 interrupt 必须配合持久化 checkpointer 和相同 `thread_id` 使用。当前应用层
-通过 `application/commands/resume_*`、`application/recovery/resume_service.py` 和
-runtime service 组织恢复；API 不应自行拼装后续节点状态。
+LangGraph 的 interrupt 必须配合持久化 checkpointer 和相同 `thread_id` 使用。应用层通过
+`application/commands/resume_*`、`application/recovery/resume_service.py` 和 runtime service
+组织恢复；API 不应自行拼装后续节点状态。恢复前需辨别：当前是否存在真实 interrupt、请求
+是否指向正确事件/checkpoint、父 artifact 与 context fingerprint 是否匹配、是恢复当前分支
+还是从历史 checkpoint 创建新 branch、retry 耗尽是否应进入 `diagnostic_only` 或 HUMAN。
 
-恢复前需要辨别：
-
-- 当前是否存在真实 interrupt；
-- 请求是否指向正确的事件/ checkpoint；
-- 父 artifact 和 context fingerprint 是否仍匹配；
-- 是恢复当前分支，还是从历史 checkpoint 创建新 branch；
-- retry 已耗尽时是否应进入 `diagnostic_only` 或 HUMAN。
-
-中断点前的节点可能在恢复时重放，因此不可幂等副作用不能放在 interrupt 前。SSE 只发布
-可重放事件，详细 transport 字段以 [backend-api.md](backend-api.md) 为准。
+中断点前的节点可能在恢复时重放，因此不可幂等副作用不能放在 interrupt 前。SSE 只发布可
+重放事件，详细 transport 字段以 [backend-api.md](backend-api.md) 为准。
 
 ## 5. 当前与目标的区别
 
-当前根图已经有独立 post-L3 节点、统一控制 state 和真实 HUMAN/checkpoint 恢复路径；
-这只证明编排边界存在，不证明每个 worker 都已形成独立的 typed contract、真实规划内容
-和法定完整交付。任何“完整规划闭环”的表述都必须同时满足状态台账的真实验收条件。
+根图已有四段子图、独立 post-L3 阶段节点、统一控制 state 和真实 HUMAN/checkpoint 恢复路径；
+这只证明编排边界存在，不证明每个 worker 都已形成独立的 typed contract、真实规划内容和
+法定完整交付。任何“完整规划闭环”的表述都必须同时满足状态台账的真实验收条件。
 
 ## 6. 验证入口
 

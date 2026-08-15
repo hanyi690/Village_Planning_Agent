@@ -1,46 +1,51 @@
 # 文档中心
 
-本目录只解决两件事：说明系统应该怎样设计，以及说明当前代码实际上怎样运行。
-如果同一事实在多个文件出现，优先级按下面顺序处理：
+本目录解决两件事：说明系统应该怎样设计（`design/`），以及说明当前代码实际上怎样运行
+（`architecture/` + 各模块 README）。如果同一事实在多个文件出现，优先级如下：
 
 1. `backend/app/**`、`frontend/**` 和可重复的测试/运行结果；
-2. `design/10_IMPLEMENTATION_STATUS.md` 的状态台账；
-3. `architecture/` 的实现映射；
-4. `design/` 的目标设计；
-5. `audits/`、`superpowers/plans/` 和周报中的历史记录。
-
-历史审计和计划可以解释“为什么会这样”，但不能把旧路径或计划中的能力变成当前事实。
+2. `design/24_MODULE_OUTPUT_INVENTORY.md`、`design/25_VALIDATION_INVENTORY.md`、
+   `design/27_IMPLEMENTATION_VS_DESIGN.md`（以实际代码为准的台账）；
+3. `design/10_IMPLEMENTATION_STATUS.md` 的状态台账；
+4. `architecture/` 的实现映射；
+5. `design/` 的目标设计；
+6. `_archive/` 中的历史审计、计划与周报（只用于解释“为什么会这样”，不能把旧路径或计划中
+   的能力变成当前事实）。
 
 ## 先按问题找文档
 
 | 你想知道什么 | 入口 | 文档类型 |
 |---|---|---|
-| 系统的目标、边界和不变量 | [design/00_SYSTEM_DESIGN.md](design/00_SYSTEM_DESIGN.md) | 设计 / Explanation |
-| 后端目标模块如何划分 | [design/14_BACKEND_MODULE_BLUEPRINT.md](design/14_BACKEND_MODULE_BLUEPRINT.md) | 设计 / Explanation |
+| 系统的目标、边界和不变量 | [design/00_SYSTEM_DESIGN.md](design/00_SYSTEM_DESIGN.md) | 设计 / TARGET |
+| 后端目标模块如何划分 | [design/14_BACKEND_MODULE_BLUEPRINT.md](design/14_BACKEND_MODULE_BLUEPRINT.md) | 设计 / TARGET |
 | 某项能力现在到底完成没有 | [design/10_IMPLEMENTATION_STATUS.md](design/10_IMPLEMENTATION_STATUS.md) | 状态 / Reference |
+| 实际代码的模块级盘点 | [design/24_MODULE_OUTPUT_INVENTORY.md](design/24_MODULE_OUTPUT_INVENTORY.md) | 台账 / CURRENT |
+| 校验点盘点（死校验风险） | [design/25_VALIDATION_INVENTORY.md](design/25_VALIDATION_INVENTORY.md) | 台账 / CURRENT |
+| 设计文档与实现哪里不一致 | [design/27_IMPLEMENTATION_VS_DESIGN.md](design/27_IMPLEMENTATION_VS_DESIGN.md) | 差异 / CURRENT |
+| 按模块组织的专题设计 | [design/README.md](design/README.md) → `design/modules/<模块>/` | 设计 / TARGET |
 | 当前代码从哪里启动、怎样流转 | [architecture/structure.md](architecture/structure.md) 与 [architecture/agent-graph.md](architecture/agent-graph.md) | 实现 / Explanation |
+| 后端每个模块的详细说明 | [backend/app/README.md](../backend/app/README.md) → 各模块 `README.md`（[索引](architecture/README.md)） | 实现 / 模块级 |
 | 当前 API、SSE、恢复和交付接口 | [architecture/backend-api.md](architecture/backend-api.md) | 实现 / Reference |
 | 状态、artifact 和交付由谁拥有 | [architecture/backend-state-contract.md](architecture/backend-state-contract.md) | 实现 / Reference |
-| LLM 工具绑定现在到哪一步 | [design/17_LLM_TOOL_BINDING.md](design/17_LLM_TOOL_BINDING.md) | 设计 + 当前事实 |
 | 前端接入、断线同步和恢复 | [frontend/API_SSE_DEVELOPER_GUIDE.md](frontend/API_SSE_DEVELOPER_GUIDE.md) | 指南 / How-to |
-| RAG、KG、地点解析等专题 | [architecture/rag-system.md](architecture/rag-system.md)、[design/12_PLACE_NAME_RESOLUTION.md](design/12_PLACE_NAME_RESOLUTION.md) | 专题 |
-| 某次审计、真实运行或迁移决定 | [audits/](audits/) | 历史证据 |
+| 前端每个 feature 的详细说明 | [frontend/src/features/README.md](../frontend/src/features/README.md) | 实现 / 模块级 |
+| RAG、KG、地点解析等专题 | [architecture/rag-system.md](architecture/rag-system.md)、[design/12_PLACE_NAME_RESOLUTION.md](design/modules/kg-place/12_PLACE_NAME_RESOLUTION.md) | 专题 |
+| 历史审计、真实运行或迁移决定 | [_archive/](_archive/) | 历史证据 |
 
 ## 目录职责
 
 ```text
 docs/
-├── design/          目标设计、领域边界和未来约束；未实现内容必须标 TARGET/GAP
+├── design/          跨模块设计（00/01/14）+ 状态台账（10）+ 盘点（24/25/27）+ 按模块组织的 `modules/<模块>/` 专题设计
 ├── architecture/    当前实现映射；只写真实入口、调用链、状态和验证方式
-├── guides/           面向任务的操作步骤，例如接入图层或查看 KG
-├── reference/        术语、字段、外部规范和稳定查表信息
-├── data/             数据源和采集说明；与实现变更同步检查
-├── audits/           带日期的审计、真实运行、差距和迁移证据
-├── proposals/        提案；除非已明确迁移，否则不代表当前能力
-├── superpowers/      一次性执行计划；不作为架构事实源
-├── reports/          周报、专利和汇报材料
-├── references/       外部规划资料和样例数据，不是本项目实现文档
-└── _archive/         已退役文档
+├── guides/          面向任务的操作步骤（接入图层、查看 KG 等）
+├── reference/       术语、字段、外部规范和稳定查表信息
+├── data/            数据源和采集说明
+├── frontend/        前端接入手册
+├── contracts/       openapi-v1.json、sse-events-v1.schema.json（真实 API 契约）
+├── adr/             架构决策记录
+├── _archive/        已退役文档（审计、提案、计划、周报、PPT、迭代日志）
+└── （参考资料）RAG 知识库/、参考报告/、references/、*.pdf/*.mpk/*.docx/*.zip 为领域原始资料，不是维护性文档
 ```
 
 ## 状态标记
@@ -62,7 +67,7 @@ backend/app/main.py
   → api/routes.py → api/v1/routes/*
   → application/commands + application/queries
   → infrastructure/runtime/planning_runtime_service.py
-  → workflow/root_graph.py
+  → workflow/root_graph.py（四段子图）
   → workflow/stages/* + domain/* + contracts/*
   → infrastructure/artifacts + infrastructure/events + data/spatial
   → application projections → API/SSE/Delivery
@@ -74,14 +79,15 @@ artifact store 持有。目标设计中仍然保留 L1/L2/L3 认知视图，但�
 
 ## 维护规则
 
-新增文档前先回答“读者要做什么或查什么”。解释、参考、指南和教程不要混写在同一篇里；
-这是 Diátaxis 对文档内容和导航的基本分离原则。当前实现文档应优先描述 OpenAPI/Pydantic
-可观察契约、真实入口和验证命令；设计文档只描述目标边界、决策和不变量。
+新增文档前先回答“读者要做什么或查什么”。解释、参考、指南和教程不要混写在同一篇里。
+模块级细节写进对应模块的 `README.md`，`docs/architecture/` 只做索引和跨模块说明，不复制
+模块 README 的内容。当前实现文档应优先描述 OpenAPI/Pydantic 可观察契约、真实入口和验证
+命令；设计文档只描述目标边界、决策和不变量。
 
 每次架构迁移至少同步三处：
 
 - 当前代码入口和 `architecture/` 映射；
 - `design/10_IMPLEMENTATION_STATUS.md` 的状态与证据；
-- 本页或专题索引中的链接。
+- 本页或专题索引中的链接；差异登记到 `design/27_IMPLEMENTATION_VS_DESIGN.md`。
 
 不要在根 README、设计蓝图、审计报告和模块 README 中复制另一套目录树或迁移清单。

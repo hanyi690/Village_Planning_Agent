@@ -164,8 +164,8 @@ api / UI
 | 当前代码入口和文件位置 | `../architecture/` |
 | 详细持久化、KG、pipeline、地点和多模态设计 | `02`、`03`、`04`、`12`、`13` |
 | 工具绑定的 TARGET/CURRENT 对照 | `17_LLM_TOOL_BINDING.md` |
-| 带日期的审计和真实运行 | `../audits/` |
-| 一次性执行步骤 | `../superpowers/plans/` |
+| 带日期的审计和真实运行 | `../_archive/audits/` |
+| 一次性执行步骤 | `../_archive/superpowers/plans/` |
 
 专题文档不得复制本文件的完整目录树或迁移清单。若目标设计与当前代码冲突，保留冲突并
 在状态台账中标记 `PARTIAL/GAP`，不要修改设计文字来伪造完成。

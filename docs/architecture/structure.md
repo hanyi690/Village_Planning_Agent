@@ -1,7 +1,8 @@
 # 当前项目结构
 
 > 本文是实现映射，不是目标蓝图。状态以
-> [`../design/10_IMPLEMENTATION_STATUS.md`](../design/10_IMPLEMENTATION_STATUS.md) 为准。
+> [`../design/10_IMPLEMENTATION_STATUS.md`](../design/10_IMPLEMENTATION_STATUS.md) 为准；
+> 设计与实现差异见 [`../design/27_IMPLEMENTATION_VS_DESIGN.md`](../design/27_IMPLEMENTATION_VS_DESIGN.md)。
 
 ## 1. 启动与运行路径
 
@@ -14,10 +15,12 @@ uvicorn app.main:app
   → app.api.routes
       → app.api.v1.routes/*
   → application command/query/projection
-  → workflow.root_graph
-      → L1/L2/L3 workers
-      → TARGET_PROJECTION → GROUND → SELECT → EXECUTE
-      → VALIDATE → RECONCILE → DELIVER
+  → workflow.root_graph（四段子图）
+      → intent_loop（conversation / execute_tools）
+      → cognitive（l1/l2/l3_worker + layer_completion_check + layer_aggregate + advance_phase）
+      → spatial_chain（target_projection → ground → select → execute
+                       → validate → reconcile → deliver）
+      → hitl（human_review_prepare → publish → wait → apply）
 ```
 
 本地后端启动目录是 `backend/`，入口模块是 `app.main:app`。FastAPI 的 `/docs` 和 `/redoc`
@@ -30,17 +33,21 @@ backend/app/
 ├── api/              HTTP、SSE、v1 路由和 transport 适配
 ├── application/      command、query、projection、resume 和 session 用例
 ├── bootstrap/        FastAPI lifespan 与依赖组合根
-├── contracts/        artifact、domain、spatial、workflow 的类型契约
-├── core/             配置、LLM 基础设施和 tracing
-├── data/             上传、摄取、catalog、快照和外部数据适配
+├── contracts/        artifact、domain、spatial、workflow 的类型契约与 Ports
+├── core/             环境/运行参数（settings.py）
+├── data/             上传、摄取、catalog、编码、快照和外部数据适配
 ├── database/         数据库引擎、模型和持久化操作
 ├── domain/           assessment、objectives、program、ground、allocation、
 │                     materialization、validation、delivery 等业务决策
 ├── evidence/         证据索引、检索、KG-facing evidence 模型
 ├── infrastructure/   artifact、事件、runtime、LLM、KG、RAG、报告和 provider 适配
-├── spatial/          geometry、grounding、query、allocation、change、delivery、validation
-└── workflow/         根图、控制 state、L1/L2/L3 层编排、阶段节点、对话和工具节点
+├── spatial/          geometry、grounding、query、allocation、network、terrain、
+│                     delivery 辅助与空间校验
+└── workflow/         根图（四段子图）、控制 state、阶段节点、对话和工具节点
 ```
+
+每个模块的详细 README 见 [`backend/app/README.md`](../../backend/app/README.md) 及
+各子模块 `README.md`（由 [architecture/README.md](README.md) 索引）。
 
 ## 3. 依赖边界
 
@@ -65,11 +72,11 @@ api
 
 ```text
 SessionDataSnapshot / SpatialWorkspace
-  → L1/L2/L3 artifacts
+  → L1/L2/L3 artifacts（AnalysisReport / L2Strategy / PlanningClaimSet）
   → PlanningProgram
-  → IntentCompilationResult / SpatialReferenceSpec
+  → IntentCompilationResult / SpatialReferenceSpec（target_projection）
   → GroundingResult
-  → SiteSelectionDecision / PortfolioDecision
+  → DemandPortfolio / SuitabilitySurface / PortfolioDecision / SiteSelectionDecision
   → ExecutionPlan / ExecutionResult
   → ParcelChangeSet / PlannedState
   → ValidationReport / ReconciliationReport
@@ -77,7 +84,8 @@ SessionDataSnapshot / SpatialWorkspace
   → RenderLayers / DeliveryManifest / exports
 ```
 
-阶段是否形成完整闭环不能由目录或函数名推断；请同时查看状态台账和验收结果。
+产物 key 权威注册表：`workflow/stage_adapter.py::_KEY_BY_TYPE`（见
+[`../design/24_MODULE_OUTPUT_INVENTORY.md`](../design/24_MODULE_OUTPUT_INVENTORY.md)）。
 
 ## 5. 阅读与验证
 
@@ -90,6 +98,7 @@ SessionDataSnapshot / SpatialWorkspace
 
 ## 6. 迁移路径说明
 
-`app/agent`、`app/modules` 和 `app/services` 是旧架构路径。它们可以在审计或迁移计划中
-作为历史来源出现，但不再是当前目录、当前入口或新代码的落点。若文档需要解释迁移，
-请明确写成 `HISTORICAL`，并同时给出当前替代路径。
+`app/agent`、`app/modules`、`app/services`、`app/tools`、`app/schema`、`spatial_ops` 是
+旧架构路径。它们可以在审计或迁移计划中作为历史来源出现（见 `docs/_archive/`），但不再是
+当前目录、当前入口或新代码的落点。若文档需要解释迁移，请明确写成 `HISTORICAL`，并同时
+给出当前替代路径。

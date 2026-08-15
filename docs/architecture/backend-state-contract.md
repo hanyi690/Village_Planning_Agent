@@ -29,7 +29,8 @@ artifact refs、gate/interrupt/terminal refs、完成维度、retry 和必要的
   `ValidationReport` 等业务 payload；
 - 由多个阶段各自维护的 `latest`、隐式副本或第二套事件序号。
 
-阶段节点通过 `infrastructure/artifacts/runtime.py` 加载 typed artifact；根图只根据 gate
+阶段节点通过 `infrastructure/artifacts/runtime.py` 加载 typed artifact；产物 key → 契约类型的
+权威注册表是 `workflow/stage_adapter.py::_KEY_BY_TYPE`。根图只根据 gate
 artifact 和 refs 做路由。缺少或无法验证的 gate 必须 fail closed，不能默认 PASS。
 
 ## 3. 数据、证据和空间边界

@@ -5,6 +5,11 @@
 
 状态：`CURRENT` 当前生产路径有代码和证据；`PARTIAL` 有片段但闭环或验收不完整；`GAP` 目标要求尚未实现或接线断裂；`TARGET` 仅为设计；`HISTORICAL` 为带日期的历史证据；`DEPRECATED` 为兼容或迁移残留。
 
+> 2026-08-15 维护说明：本文的历史段落（§7/§8/§9）保留为审计证据。以实际代码为准的最新盘点见
+> [24_MODULE_OUTPUT_INVENTORY.md](24_MODULE_OUTPUT_INVENTORY.md)（模块与产物）、
+> [25_VALIDATION_INVENTORY.md](25_VALIDATION_INVENTORY.md)（校验点）、
+> [27_IMPLEMENTATION_VS_DESIGN.md](27_IMPLEMENTATION_VS_DESIGN.md)（设计差异）。
+
 > 2026-08-12 重构分支说明：下方 7.2/7.3 的历史运行数字只作为审计证据，不能替代当前
 > `tests/acceptance` 的真实图 resume 验收。当前代码已经切换到 CAS descriptor 和
 > `SessionDataSnapshot/SpatialWorkspace` 边界；真实 MiniMax checkpoint、实际 PNG/HTML
@@ -55,7 +60,7 @@
 | GROUND                        | CURRENT / PARTIAL | `ground_aggregate` 产出 `GroundingResult/CandidateSite` 和 gate；候选与 intervention 的强关联、约束证据完整性和真实 session 接线仍需验证。                                                                                                              |
 | SELECT                        | CURRENT / PARTIAL | `app/workflow/stages/select.py` 接到 `app/domain/{demand,suitability,allocation}`，使用硬约束、评分和冲突分配产出 `SiteSelectionDecision`；`PortfolioDecision` 未达 `OPTIMAL/FEASIBLE` 时 gate 强制 HUMAN，真实会话验收仍待完成。 |
 
-| LLM 调用 binding tool         | PARTIAL / GAP     | 详见 [17_LLM_TOOL_BINDING.md](17_LLM_TOOL_BINDING.md)。意图工具 `advance_planning_intent` / `gis_analysis` 由 `workflow/conversation/node.py` bind 并路由（CURRENT）；access 读路径工具（`bundle_overview` 等 6 个）已注册到 `ToolRegistry` 但无节点 bind（GAP）；`workflow/tools/execute_node.py` 读取遗留空 `tools.py:TOOL_REGISTRY`，通用执行路径无法执行已注册工具（GAP）；L3 结构化输出走 `with_structured_output(method="function_calling")`（CURRENT）。 |
+| LLM 调用 binding tool         | PARTIAL / GAP     | 详见 [17_LLM_TOOL_BINDING.md](modules/llm-tools/17_LLM_TOOL_BINDING.md)。意图工具 `advance_planning_intent` / `gis_analysis` 由 `workflow/conversation/node.py` bind 并路由（CURRENT）；access 读路径工具（`bundle_overview` 等 6 个）已注册到 `ToolRegistry` 但无节点 bind（GAP）；`workflow/tools/execute_node.py` 读取遗留空 `tools.py:TOOL_REGISTRY`，通用执行路径无法执行已注册工具（GAP）；L3 结构化输出走 `with_structured_output(method="function_calling")`（CURRENT）。 |
 
 ## 2. EXECUTE 与 GIS
 
@@ -64,7 +69,7 @@
 | EXECUTE 子图      | CURRENT / PARTIAL       | `execute_agent.py` 已重构为多 worker 子图：`route_tasks → prepare_inputs → project_worker → zone_worker → [facility_worker ‖ axis_worker] → road_worker → merge_worker_results → geometry_materialize → planned_state_builder → execution_review`；各 worker 返回统一 `WorkerResult`。 |
 | Project Worker    | CURRENT / PARTIAL       | `land_design_worker.py` 支持项目 footprint、OBB/split 相关操作；仍由集中式 execute_agent 调度，未形成独立 WorkerResult 契约。                                                                                                                                                                        |
 | Zone Worker / MIP | CURRENT / PARTIAL       | `workflow/stages/execute.py` 接入 zone worker 和 `ZoneAllocatorPort + PuLP adapter`，不可行显式 unresolved；其余 zone 仍使用确定性 reclassify。                                                                                                               |
-| Custom zoning     | PARTIAL                 | `custom_zone_contracts.py`、`custom_zone_generator.py` 和 `spatial_ops/custom_planning.py` 仍存在；当前主要是词汇/图层生成与规则路径，尚未成为由 L2/L3 目标驱动、经 MIP/约束求解的新规划分区。                                                                                                   |
+| Custom zoning     | PARTIAL                 | `custom_zone_contracts.py`、`custom_zone_generator.py` 和 `domain/materialization/zoning/custom_planning.py` 仍存在；当前主要是词汇/图层生成与规则路径，尚未成为由 L2/L3 目标驱动、经 MIP/约束求解的新规划分区。                                                                                                   |
 | Facility Worker   | CURRENT / PARTIAL       | `_execute_facility_node` 已改为决策驱动，不再默认从 KG POI 自行找点；尚未统一为独立 `FacilityWorkerResult` 并进入统一 ExecutionPlan。                                                                                                                                                              |
 | Road Worker       | CURRENT / PARTIAL       | staged road pipeline 位于 `app/spatial/` 与 `app/domain/materialization/`；简化 fallback 已删除，RoadPlannerPort 收敛仍属后续工作。                                                                                                        |
 | Axis Worker       | CURRENT / PARTIAL       | `_execute_axis_node` 和 AxisBuilder 存在，但与项目、分区、道路统一设计依赖尚未固化。                                                                                                                                                                                                                 |
@@ -88,8 +93,8 @@
 | ------------------------------------------- | -------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
 | `app/services/modules/gis/road/`          | 已删除               | 已迁移至`app/modules/spatial_ops/road/`，`services/modules` 目录已删除。                                                                 |
 | `app/modules/spatial_ops/road_planner.py` | DELETED              | 简化道路 fallback 已删除；road worker 无可用 plan 时显式 unresolved。                                                                        |
-| `app/tools/gis/_generation/`              | DELETED | 旧 dev layout pipeline 已删除；正式 EXECUTE/DELIVER 只走 `agent/execute` + `modules/spatial_ops`。 |
-| `app/agent/select/`                       | CURRENT              | 正式 SELECT 入口；空间候选只消费 `target_projection` artifact，不再承担文本解析 fallback。 |
+| `app/tools/gis/_generation/`              | DELETED | 旧 dev layout pipeline 已删除；正式 EXECUTE/DELIVER 只走 `workflow/stages/execute.py` + `domain/materialization` + `app/spatial`。 |
+| `app/domain/allocation/select_service.py` | CURRENT              | 正式 SELECT 入口；空间候选只消费 `target_projection` artifact，不再承担文本解析 fallback。 |
 | `layout_contracts.py`                     | DELETED              | 已删除；`ZoneIntent/UnifiedSpatialIntent/AllocationResult` 等旧 LAYOUT 契约不再由 schema 导出。                                            |
 | `parse_contracts.py`                      | PARTIAL              | 同时承载 intent target、spatial operation、constraint 和指标表；后续应拆为 intent/operation/indicator 三组，但不能在未迁移调用方前直接删除。 |
 | `contracts/__init__.py`                   | DEPRECATED TARGET    | wildcard 导出过多；已移除`layout_contracts` 导出，业务代码仍应从具体契约文件显式导入。                                                     |
@@ -132,7 +137,7 @@ changeset、planned state、validation、reconciliation 和 delivery 的版本�
 
 | 能力 | 状态 | 当前实现事实 |
 |---|---|---|
-| `ValidationReport` 检查与责任归因 | CURRENT / PARTIAL | `backend/app/agent/validate/` 已有 checks、issues_by_stage、GateDecision 和 issue fingerprint。 |
+| `ValidationReport` 检查与责任归因 | CURRENT / PARTIAL | `backend/app/domain/validation/` 已有 checks、issues_by_stage、GateDecision 和 issue fingerprint。 |
 | `ValidationReport.adjustments` | PARTIAL | 契约字段和部分调整逻辑存在，但尚未由统一执行器驱动 GROUND/SELECT/EXECUTE 的自动修复。 |
 | 产出驱动自动迭代 | GAP | 当前主要是 retry、HUMAN 或 diagnostic，尚未稳定形成“诊断→调整→受影响阶段重算→复验”闭环。 |
 | 自动迭代设计 | TARGET | 见 `docs/design/13_AUTOREPAIR_MULTIMODAL.md`；设计要求复用现有 adjustment/revision/artifact 体系。 |
@@ -177,7 +182,7 @@ changeset、planned state、validation、reconciliation 和 delivery 的版本�
 
 ### 0.2 2026-08-12 真实检查点续接与阶段迁移
 
-问题登记与迁移边界见 [backend-migration-issue-register-2026-08-12.md](../audits/backend-migration-issue-register-2026-08-12.md)。本轮核对确认真实运行产出了 17 个规划项目点和 16 个公共服务设施点，但 660 个期末地块全部 `preserved`，`ParcelChangeSet` 为 0；因此不能把点位存在解释为地类规划已落地。`workflow_progress` 已取消开放式顶层扩展，但旧阶段载荷和阶段 ad-hoc 出口仍是迁移项；SSE 进程内事实缓存已删除，跨进程 outbox/publisher 仍是迁移项。
+问题登记与迁移边界见 [backend-migration-issue-register-2026-08-12.md](../_archive/audits/backend-migration-issue-register-2026-08-12.md)。本轮核对确认真实运行产出了 17 个规划项目点和 16 个公共服务设施点，但 660 个期末地块全部 `preserved`，`ParcelChangeSet` 为 0；因此不能把点位存在解释为地类规划已落地。`workflow_progress` 已取消开放式顶层扩展，但旧阶段载荷和阶段 ad-hoc 出口仍是迁移项；SSE 进程内事实缓存已删除，跨进程 outbox/publisher 仍是迁移项。
 
 本轮代码迁移增量：`workflow_progress` 使用显式 `stage_payload`；TARGET_PROJECTION/GROUND/SELECT/VALIDATE/RECONCILE/DELIVER 六个新阶段统一通过 `StageCompletion` helper 持久化输出 refs 和 CAS `GateDecision` ref。当前非 E2E 回归为 `131 passed, 14 deselected`；真实 acceptance 因当前 shell 未配置 provider credential 为 `2 skipped`，不能替代新的真实 checkpoint resume。
 
@@ -261,4 +266,4 @@ Delivery snapshot 的几何/占位质量闸门。DELIVER 入口已迁移到 `bac
 `app/database/`（persistence adapter，作为 `infrastructure/persistence/` 的别名保留）。
 
 剩余项：真实 LLM acceptance 待验证（需配置 MINIMAX key）；DELIVER 规划文本组装器尚未实现（已确认设计方向，
-见 `docs/audits/round-3/storage-architecture.md` 与 DELIVER 导出集成计划）。
+见 `docs/_archive/audits/round-3/storage-architecture.md` 与 DELIVER 导出集成计划）。

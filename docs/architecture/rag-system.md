@@ -43,6 +43,6 @@ python -m app.infrastructure.rag.cli delete <source_name>
 
 ## 4. 相关文档
 
-- 目标证据边界：[design/05_EXPLORE_BRIDGE.md](../design/05_EXPLORE_BRIDGE.md)
-- KG 与空间桥接：[design/03_KG_SEMANTIC_BRIDGE.md](../design/03_KG_SEMANTIC_BRIDGE.md)
+- 目标证据边界：[design/05_EXPLORE_BRIDGE.md](../design/modules/explore/05_EXPLORE_BRIDGE.md)
+- KG 与空间桥接：[design/03_KG_SEMANTIC_BRIDGE.md](../design/modules/kg-place/03_KG_SEMANTIC_BRIDGE.md)
 - 当前证据状态：[design/10_IMPLEMENTATION_STATUS.md](../design/10_IMPLEMENTATION_STATUS.md)

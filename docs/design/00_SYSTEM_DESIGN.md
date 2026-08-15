@@ -136,7 +136,7 @@ TARGET_PROJECTION → GROUND → SELECT → EXECUTE → VALIDATE → RECONCILE �
 验收仍需配置 provider key，当前缺 key 时 acceptance 明确 skip，不把 fixture 运行当作真实证明。
 
 实现状态以 [10_IMPLEMENTATION_STATUS.md](10_IMPLEMENTATION_STATUS.md) 为准；目录迁移和重复实现清理记录在
-[09_INTEGRATION_BREAKPOINTS.md](09_INTEGRATION_BREAKPOINTS.md)。
+[09_INTEGRATION_BREAKPOINTS.md](../_archive/design/09_INTEGRATION_BREAKPOINTS.md)。
 
 ## 7. 理想运行时契约（优先于当前兼容实现）
 
@@ -170,18 +170,18 @@ step-mode 层完成审核和 post-L3 Gate 审核是两个业务频道，但必�
 - FastAPI 资源初始化和释放归属 `lifespan`；SSE 流在客户端断开后必须取消生产任务，并在 `finally` 中释放订阅。参考 [FastAPI lifespan](https://fastapi.tiangolo.com/advanced/events/) 和 [StreamingResponse](https://fastapi.tiangolo.com/advanced/stream-data)。
 - SQLAlchemy `AsyncSession` 是单并发任务边界内的工作单元；禁止在并发 worker 之间共享 session，提交由业务事务显式控制，释放由依赖作用域负责。参考 [SQLAlchemy asyncio ORM](https://docs.sqlalchemy.org/en/20/orm/extensions/asyncio.html)。
 
-这些是“闭环可用”的基础约束，而不是初期可牺牲项。当前实现的偏差、兼容字段和迁移顺序见 [10_IMPLEMENTATION_STATUS.md](10_IMPLEMENTATION_STATUS.md) 与 [backend-official-practice-2026-08-10.md](../audits/backend-official-practice-2026-08-10.md)。
+这些是“闭环可用”的基础约束，而不是初期可牺牲项。当前实现的偏差、兼容字段和迁移顺序见 [10_IMPLEMENTATION_STATUS.md](10_IMPLEMENTATION_STATUS.md) 与 [backend-official-practice-2026-08-10.md](../_archive/audits/backend-official-practice-2026-08-10.md)。
 
 ## 8. 相关文档
 
 - [01_LAYERED_ARCHITECTURE.md](01_LAYERED_ARCHITECTURE.md)：模块层和依赖规则
-- [02_DATA_PERSISTENCE.md](02_DATA_PERSISTENCE.md)：上下文、产物和版本持久化
-- [03_KG_SEMANTIC_BRIDGE.md](03_KG_SEMANTIC_BRIDGE.md)：KG 四类数据边界
-- [04_PLANNING_PIPELINE.md](04_PLANNING_PIPELINE.md)：L1/L2/L3 及空间子图
-- [05_EXPLORE_BRIDGE.md](05_EXPLORE_BRIDGE.md)：EXPLORE 证据探索能力
-- [06_TARGET_PROJECTION_EXECUTE.md](06_TARGET_PROJECTION_EXECUTE.md)：TARGET_PROJECTION、GROUND、SELECT、EXECUTE 契约
-- [07_VALIDATION_FEEDBACK.md](07_VALIDATION_FEEDBACK.md)：Gate 与定向反馈
+- [02_DATA_PERSISTENCE.md](modules/persistence/02_DATA_PERSISTENCE.md)：上下文、产物和版本持久化
+- [03_KG_SEMANTIC_BRIDGE.md](modules/kg-place/03_KG_SEMANTIC_BRIDGE.md)：KG 四类数据边界
+- [04_PLANNING_PIPELINE.md](modules/cognition/04_PLANNING_PIPELINE.md)：L1/L2/L3 及空间子图
+- [05_EXPLORE_BRIDGE.md](modules/explore/05_EXPLORE_BRIDGE.md)：EXPLORE 证据探索能力
+- [06_TARGET_PROJECTION_EXECUTE.md](modules/spatial-execution/06_TARGET_PROJECTION_EXECUTE.md)：TARGET_PROJECTION、GROUND、SELECT、EXECUTE 契约
+- [07_VALIDATION_FEEDBACK.md](modules/validation/07_VALIDATION_FEEDBACK.md)：Gate 与定向反馈
 - [10_IMPLEMENTATION_STATUS.md](10_IMPLEMENTATION_STATUS.md)：当前代码与目标态差距
-- [12_PLACE_NAME_RESOLUTION.md](12_PLACE_NAME_RESOLUTION.md)：地点证据与地名解析
-- [13_AUTOREPAIR_MULTIMODAL.md](13_AUTOREPAIR_MULTIMODAL.md)：自动修复与多模态证据
+- [12_PLACE_NAME_RESOLUTION.md](modules/kg-place/12_PLACE_NAME_RESOLUTION.md)：地点证据与地名解析
+- [13_AUTOREPAIR_MULTIMODAL.md](modules/validation/13_AUTOREPAIR_MULTIMODAL.md)：自动修复与多模态证据
 - [14_BACKEND_MODULE_BLUEPRINT.md](14_BACKEND_MODULE_BLUEPRINT.md)：后端模块、目录与并行落地总蓝图

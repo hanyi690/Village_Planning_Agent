@@ -7,17 +7,17 @@ Proposed
 Whenever a checkpoint is loaded into the runtime, legacy artifact references
 must be unified into a single canonical map. This is done by
 `migrate_legacy_artifacts(state)` in
-`backend/app/agent/bootstrap/artifact_runtime.py:138`, which builds a unified
+`backend/app/infrastructure/artifacts/runtime.py`, which builds a unified
 `artifact_refs` map by recognizing legacy field names (`l3_program_ref`,
 `grounding_result_ref`, `site_selection_ref`, `parcel_changeset_ref`,
 `planned_state_ref`, `validation_report_ref`, `reconciliation_report_ref`) and
 copying them into the canonical keys.
 
 It is currently called from multiple runtime node sites:
-- `backend/app/agent/bootstrap/post_l3_main_nodes.py:292` inside
+- `backend/app/workflow/root_graph.py` inside
   `_load_ref_artifact`, which itself is invoked from `post_l3_main_nodes` — a
   runtime node.
-- `backend/app/agent/bootstrap/context_bootstrap.py:19` inside
+- `backend/app/workflow/layers/context_bootstrap.py` inside
   `_hydrate_l1_spatial_facts`.
 
 Calling the migration inside runtime nodes means legacy conversion logic is

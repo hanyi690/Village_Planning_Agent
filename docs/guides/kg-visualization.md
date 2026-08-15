@@ -75,9 +75,9 @@ data/gis/jintian/
 
 DataCatalog
     ↓ VillageBundle (typed)
-spatial_ops.compute_context_blocks(bundle)
+`app/spatial/query/context.py::compute_context_blocks`
     → 8 ContextBlocks (VILLAGE_META, LANDUSE_DIST, NATURAL_VILLAGES, CONSTRAINTS, FACILITIES, ...)
-spatial_ops.compute_parcel_relations(parcels, roads)
+`app/spatial/model/geometry.py::compute_parcel_relations`
     → ParcelRelations (1549 touches, 4195 nearby, 207 connected)
     ↓
 PlanningKG.build_from_blocks(blocks, bundle, relations)

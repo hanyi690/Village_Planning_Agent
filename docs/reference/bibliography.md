@@ -129,11 +129,11 @@
 
 | #  | 项目           | 引用文档     | 关键特性                                              |
 | -- | -------------- | ------------ | ----------------------------------------------------- |
-| G1 | SuperMap CSPON | proposals/02 | 规划助手智能体、全流程"智能伴随"                      |
-| G2 | 规易AI         | proposals/02 | 3分钟生成结构化规划文档、2000+术语库                  |
-| G3 | 姑苏 SiteSeek  | proposals/02 | "1+1+1+1"体系、AI驱动项目选址                         |
-| G4 | GeoJSON Agents | proposals/02 | Function Calling (85.71%) vs Code Generation (97.14%) |
-| G5 | GeoAgentBench  | proposals/02 | Plan-and-React架构、117个原子GIS工具                  |
+| G1 | SuperMap CSPON | _archive/proposals/（已归档） | 规划助手智能体、全流程"智能伴随"                      |
+| G2 | 规易AI         | _archive/proposals/（已归档） | 3分钟生成结构化规划文档、2000+术语库                  |
+| G3 | 姑苏 SiteSeek  | _archive/proposals/（已归档） | "1+1+1+1"体系、AI驱动项目选址                         |
+| G4 | GeoJSON Agents | _archive/proposals/（已归档） | Function Calling (85.71%) vs Code Generation (97.14%) |
+| G5 | GeoAgentBench  | _archive/proposals/（已归档） | Plan-and-React架构、117个原子GIS工具                  |
 
 ---
 

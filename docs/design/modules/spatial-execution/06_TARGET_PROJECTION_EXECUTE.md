@@ -1,7 +1,7 @@
 # TARGET_PROJECTION、GROUND、SELECT 与 EXECUTE
 
 > 状态：`TARGET DESIGN`。第 6 节的旧实现表只用于迁移追溯；当前路径和完成度以
-> [`10_IMPLEMENTATION_STATUS.md`](10_IMPLEMENTATION_STATUS.md) 与 `docs/architecture/` 为准。
+> [`10_IMPLEMENTATION_STATUS.md`](../../10_IMPLEMENTATION_STATUS.md) 与 `docs/architecture/` 为准。
 
 ## 1. 四个阶段的边界
 
@@ -161,6 +161,6 @@ prepare_inputs → land_design / allocation → geometry_materialize
 | `agent/select/parse_agent.py` | 已删除；L1/L2 共享 compiler 位于 `app/modules/parsing/compiler/`，target projection 位于 `app/domain/program/target_projection/` |
 | `modules/spatial_ops/grounding.py` | Grounding domain service |
 | `modules/spatial_ops/bundle_binder.py` | 删除；改为 context-aware reference resolution |
-| `agent/gis/execute/agent.py` | 已迁移；当前实现仍集中在 `app/agent/execute/execute_agent.py` |
+| `agent/gis/execute/agent.py` | 已迁移；当前实现集中在 `app/domain/materialization/execute_agent.py` |
 | `tools/gis/_generation/*` | 已删除；正式链路由 `agent/execute` 与 `modules/spatial_ops` 提供 |
 | `services/modules/gis/road/*` 与 `spatial_ops/road_planner.py` | 历史重复实现；staged planner 是唯一正式 Road Worker，旧入口已删除或待清理以 `10_IMPLEMENTATION_STATUS.md` 为准 |

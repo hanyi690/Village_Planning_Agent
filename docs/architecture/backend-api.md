@@ -33,7 +33,8 @@ app.main:app
 | `GET` | `/api/v1/sessions/{session_id}/map-layers` | 读取由交付快照生成的地图图层 |
 | `GET` | `/api/v1/sessions/{session_id}/artifacts/{artifact_key}` | 按允许的 key 读取 artifact descriptor 和 payload |
 
-`artifact_key` 的允许集合由 `infrastructure/artifacts/runtime.py` 维护。前端不得根据文件名、
+`artifact_key` 的允许集合由 `infrastructure/artifacts/runtime.py` 的 `ARTIFACT_KEYS` 维护，
+产物 key → 契约类型的权威映射见 `workflow/stage_adapter.py::_KEY_BY_TYPE`。前端不得根据文件名、
 目录或隐式 `latest` 推断产物；身份字段使用 descriptor digest 和 payload digest。
 
 ## 3. SSE 与断线同步

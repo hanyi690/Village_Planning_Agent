@@ -1,8 +1,8 @@
 # 23. EXPLORE 检索体系重构：现状、设计、目标最佳
 
-> 状态：**设计稿（未实施）**。本文综合 `05_EXPLORE_BRIDGE.md` 的定位、代码真实调用链（逐行核实）、
+> 状态：`TARGET`（目标设计）。本文综合 `05_EXPLORE_BRIDGE.md` 的定位、代码真实调用链（逐行核实）、
 > Exa + Context7 调研结论，给出从现状到目标最佳的实施路径。
-> 相关：`05_EXPLORE_BRIDGE.md`（能力定位）、`20_WORKFLOW_ROUTING_TABLE.md`（路由）、`22_UNIFIED_GROUNDING_CORE.md`（接地核心）。
+> 相关：`05_EXPLORE_BRIDGE.md`（能力定位）。当前实现以 `backend/app/evidence/`、`backend/app/infrastructure/rag/` 为准。
 
 ---
 

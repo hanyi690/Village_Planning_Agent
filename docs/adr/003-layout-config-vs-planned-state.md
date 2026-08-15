@@ -7,7 +7,7 @@ Proposed
 The result of planning is represented in two ways:
 
 - `PlannedState` — a typed Pydantic contract in
-  `backend/app/modules/schema/contracts/planned_state_contracts.py:56`. It
+  `backend/app/contracts/spatial/planned_state_contracts.py`. It
   holds the authoritative planned outcome: `parcels`, `zones`, `facilities`,
   `roads`, `axes`, `source`, and `provenance`. It is the canonical planned
   result consumed across the pipeline.
@@ -15,7 +15,7 @@ The result of planning is represented in two ways:
   "FeatureCollection", "features": [...] } }`) that describe the same layers
   as GeoJSON FeatureCollections. It is read as a fact in business logic —
   notably `check_topology(layout_configs)` in
-  `backend/app/agent/validate/checks.py:269`, which walks the raw dicts to
+  `backend/app/domain/validation/validate_checks.py`, which walks the raw dicts to
   validate geometries and detect gaps.
 
 Having the planned outcome both as a typed `PlannedState` and as loose

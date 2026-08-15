@@ -16,7 +16,7 @@ artifacts、已有证据、用户修订记录和允许的外部来源，生产 `
 `context_injection` 查询，尚未普遍使用 intervention-specific、evidence-gap-specific 查询计划。
 因此 EXPLORE 当前是多源证据补充服务，不应描述为已经完成的规划空间认知 Agent。
 
-地名解析的目标方案见 [12_PLACE_NAME_RESOLUTION.md](12_PLACE_NAME_RESOLUTION.md)：EXPLORE 应将 KG
+地名解析的目标方案见 [12_PLACE_NAME_RESOLUTION.md](../kg-place/12_PLACE_NAME_RESOLUTION.md)：EXPLORE 应将 KG
 候选、L1 typed location facts、实体关系和 Bundle 几何组织为 `PlaceEvidenceIndex`，但不直接选择最终
 地块。当前 `PlaceNameResolver`/Gazetteer 仍以 KG 聚类、外部锚点和模糊匹配为主，L1 facts 尚未成为
 统一的候选评分输入。

@@ -134,7 +134,7 @@ PlanningContext
 3. 新增 import 边界检查，禁止出现 `modules → agent/services/api`。
 4. 每迁移一个子图，保留输入/输出快照测试。
 5. 目录重命名晚于职责切分，避免“换目录但耦合不变”。
-6. `modules/spatial_ops/road_planner.py` 与 `services/modules/gis/road/` 不得长期作为两个正式道路入口；
+6. `app/spatial/network/planner.py` 是道路规划唯一正式入口；任何新增局部 planner 只能显式标记为 degraded，不能成为第二正式入口。
    在收敛完成前必须明确 staged planner 是 canonical，local planner 只能显式标记为 degraded。
 7. `schema/contracts/__init__.py` 不再使用 wildcard 作为业务代码的主要导入入口；业务代码应从具体契约文件导入。
 
