@@ -556,7 +556,10 @@ async def execute_node(state: Dict[str, Any]) -> Dict[str, Any]:
                 "target_ids": [],
                 "diagnostics": payload["errors"],
             },
-            "artifact_refs": {"execution_diagnostics": diagnostic_ref} if diagnostic_ref else {},
+            "artifact_refs": {
+                **dict(state.get("artifact_refs") or {}),
+                **({"execution_diagnostics": diagnostic_ref} if diagnostic_ref else {}),
+            },
         }
 
     changeset = result.get("parcel_changeset")
@@ -637,6 +640,7 @@ async def execute_node(state: Dict[str, Any]) -> Dict[str, Any]:
     return {
         **({"fatal_error": fatal_error, "delivery_status": "diagnostic_only", "diagnostic_terminal": diagnostic_terminal} if l4_error else {}),
         "artifact_refs": {
+            **dict(state.get("artifact_refs") or {}),
             "execution_result": execution_result_ref,
             "parcel_changeset": parcel_changeset_ref,
             "planned_state": planned_state_ref,
