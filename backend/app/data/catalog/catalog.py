@@ -865,6 +865,30 @@ class DataCatalog:
                 dtype = _infer_layer_key_from_upload(item) or dtype
             _merge_geojson_into_bundle(bundle, dtype, geojson)
 
+        # 会话上传路径同样挂载 DEM（terrain 硬证据）。catalog dem_local 是配置源，
+        # 但会话有上传 GIS 时配置 demo 源被排除，导致 workspace.rasters.dem 为空、
+        # 适宜性地形硬证据缺失、所有候选 hard-infeasible（规划无法落位）。
+        # 这里显式把 catalog DEM 栅格挂到 bundle.rasters.dem（真实文件，不伪造）。
+        try:
+            from app.data.model.layer_registry import GIS_LAYER_REGISTRY
+            dem_source = self.find_source_by_layer_type("dem")
+            dem_entry = GIS_LAYER_REGISTRY.get("dem")
+            if (
+                dem_source is not None
+                and dem_entry is not None
+                and dem_entry.ingest is not None
+            ):
+                dem_result = dem_source.fetch()
+                if dem_result is not None and dem_result.success and dem_result.data:
+                    from app.data.ingestion.adapters import ADAPTERS
+                    adapter = ADAPTERS.get(dem_entry.ingest.adapter)
+                    if adapter is not None:
+                        adapter_result = adapter.load(dem_result.data, dem_entry)
+                        for feat in adapter_result.features:
+                            bundle.add(feat)
+        except Exception as exc:
+            logger.warning("[DataCatalog] Session DEM attach failed: %s", exc)
+
         # 会话上传路径同样派生水体（与同步 loader 一致）：KG 的 WaterBody 依赖
         # bundle.polygons["water_bodies"]，缺失会让水体接地无实体可选。
         _derive_water_bodies_from_landuse(bundle)
