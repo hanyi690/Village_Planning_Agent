@@ -366,23 +366,45 @@ def drive(client, session_id: str, deadline: float) -> dict:
                     "classification_decisions": decisions,
                 }
             else:
-                decision = {
-                    "action": "approve",
-                    "feedback": (
-                        "approve with unresolved spatial references deferred "
-                        "to GROUND/SELECT"
-                    ),
-                    "acknowledge_unresolved_spatial_references": True,
-                    "defer_unresolved_spatial_references": True,
-                    "deferred_target_ids": list(dict.fromkeys(
-                        str(target_id)
-                        for item in review_payload.get("items") or []
-                        for target_id in (
-                            (item.get("context") or {}).get("target_ids") or []
-                        )
-                        if str(target_id).strip()
-                    )),
-                }
+                paused_stage = str(review_payload.get("paused_stage") or "")
+                selection_no_candidate = any(
+                    str(item.get("request_type") or "")
+                    in {"selection_no_candidate", "portfolio_infeasible"}
+                    for item in review_payload.get("items") or []
+                    if isinstance(item, dict)
+                )
+                if paused_stage == "select" or selection_no_candidate:
+                    # SELECT could not place every target.  Accept the partial
+                    # selection so EXECUTE runs the placed targets; do NOT
+                    # defer the whole portfolio (that empties the execution
+                    # plan and forces diagnostic_only).
+                    decision = {
+                        "action": "approve",
+                        "feedback": (
+                            "accept partial selection; EXECUTE runs placed "
+                            "targets only, unplaced stay unplaced"
+                        ),
+                    }
+                else:
+                    # GROUND unresolved spatial references -> bounded deferral
+                    # of exactly the listed unresolved targets.
+                    decision = {
+                        "action": "approve",
+                        "feedback": (
+                            "approve with unresolved spatial references deferred "
+                            "to GROUND/SELECT"
+                        ),
+                        "acknowledge_unresolved_spatial_references": True,
+                        "defer_unresolved_spatial_references": True,
+                        "deferred_target_ids": list(dict.fromkeys(
+                            str(target_id)
+                            for item in review_payload.get("items") or []
+                            for target_id in (
+                                (item.get("context") or {}).get("target_ids") or []
+                            )
+                            if str(target_id).strip()
+                        )),
+                    }
             action = "approve"
         log(
             "human-review submit stage=%s items=%d action=%s event=%s"
