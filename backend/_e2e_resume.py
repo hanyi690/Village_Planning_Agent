@@ -391,24 +391,38 @@ def drive(client, session_id: str, deadline: float) -> dict:
                     }
                 else:
                     # GROUND unresolved spatial references -> bounded deferral
-                    # of exactly the listed unresolved targets.
-                    decision = {
-                        "action": "approve",
-                        "feedback": (
-                            "approve with unresolved spatial references deferred "
-                            "to GROUND/SELECT"
-                        ),
-                        "acknowledge_unresolved_spatial_references": True,
-                        "defer_unresolved_spatial_references": True,
-                        "deferred_target_ids": list(dict.fromkeys(
-                            str(target_id)
-                            for item in review_payload.get("items") or []
-                            for target_id in (
-                                (item.get("context") or {}).get("target_ids") or []
-                            )
-                            if str(target_id).strip()
-                        )),
-                    }
+                    # of exactly the listed unresolved targets.  Only set the
+                    # defer flag when there ARE target ids; an empty defer list
+                    # makes the app reject/end the gate (HUMAN_DEFER_TARGET_IDS
+                    # _REQUIRED).  A review item without target ids (generic
+                    # low-confidence review) gets a plain approve.
+                    deferred_ids = list(dict.fromkeys(
+                        str(target_id)
+                        for item in review_payload.get("items") or []
+                        for target_id in (
+                            (item.get("context") or {}).get("target_ids") or []
+                        )
+                        if str(target_id).strip()
+                    ))
+                    if deferred_ids:
+                        decision = {
+                            "action": "approve",
+                            "feedback": (
+                                "approve with unresolved spatial references deferred "
+                                "to GROUND/SELECT"
+                            ),
+                            "acknowledge_unresolved_spatial_references": True,
+                            "defer_unresolved_spatial_references": True,
+                            "deferred_target_ids": deferred_ids,
+                        }
+                    else:
+                        decision = {
+                            "action": "approve",
+                            "feedback": (
+                                "approve ground gate; no specific unresolved "
+                                "target ids in this review"
+                            ),
+                        }
             action = "approve"
         log(
             "human-review submit stage=%s items=%d action=%s event=%s"
@@ -500,7 +514,6 @@ def main() -> int:
         # long LLM superstep also freezes the fingerprint, and kicking there
         # re-runs L1/L3 (duplicate LLM work).
         try:
-            from app.workflow.stages.support import _progress_fingerprint as _fp
             start_vals = client.portal.call(
                 PlanningRuntimeService.aget_state_values, session_id
             ) or {}

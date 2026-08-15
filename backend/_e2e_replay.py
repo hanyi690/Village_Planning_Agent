@@ -227,17 +227,24 @@ def main() -> int:
                 decision = {"action": "approve", "feedback": "accept partial selection"}
                 action = "approve"
             else:
-                decision = {
-                    "action": "approve",
-                    "feedback": "approve with unresolved spatial references deferred",
-                    "acknowledge_unresolved_spatial_references": True,
-                    "defer_unresolved_spatial_references": True,
-                    "deferred_target_ids": list(dict.fromkeys(
-                        str(tid) for it in items
-                        for tid in ((it.get("context") or {}).get("target_ids") or [])
-                        if str(tid).strip()
-                    )),
-                }
+                deferred_ids = list(dict.fromkeys(
+                    str(tid) for it in items
+                    for tid in ((it.get("context") or {}).get("target_ids") or [])
+                    if str(tid).strip()
+                ))
+                if deferred_ids:
+                    decision = {
+                        "action": "approve",
+                        "feedback": "approve with unresolved spatial references deferred",
+                        "acknowledge_unresolved_spatial_references": True,
+                        "defer_unresolved_spatial_references": True,
+                        "deferred_target_ids": deferred_ids,
+                    }
+                else:
+                    decision = {
+                        "action": "approve",
+                        "feedback": "approve gate; no specific unresolved target ids",
+                    }
                 action = "approve"
             log("submit stage=%s items=%d action=%s event=%s" % (paused_stage, len(items), action, event_id))
             resp = client.post(
