@@ -272,3 +272,48 @@ async def test_select_approve_auto_defers_unplaced_targets(monkeypatch):
     assert [e.target_id for e in persisted["DeferralLedger"].entries] == [
         "unplaced-1", "unplaced-2",
     ]
+
+
+# ?? P0.6: EXECUTE auto-defers unclassified targets (no diagnostic fatal) ??
+def test_execute_defers_unclassified_targets(monkeypatch):
+    from app.workflow.stages import execute as ex
+    from app.contracts.workflow.execution_plan_contracts import (
+        ExecutionPlan,
+        TargetAssignment,
+        WorkerTask,
+        WorkerType,
+    )
+
+    tasks = [
+        WorkerTask(
+            task_id=f"parcel:{tid}",
+            worker_type=WorkerType.PARCEL_TRANSFORMATION,
+            target_id=tid,
+            target_type="project",
+            expected_output_kind="parcel",
+            assignment=TargetAssignment(
+                target_id=tid, target_type="project", status="placed",
+                expected_output_kind="parcel",
+            ),
+        )
+        for tid in ("a", "b", "c")
+    ]
+    plan = ExecutionPlan(plan_id="p", worker_tasks=tasks, deferred_tasks=[])
+    diags = [{"target_id": "a"}, {"target_id": "b"}]
+    persisted = {}
+    orig = ex.persist_stage_artifact
+    ex.persist_stage_artifact = lambda state, stage, schema_id, payload: (
+        persisted.__setitem__(schema_id, payload) or {"ref": schema_id}
+    )
+    try:
+        out = ex._defer_unclassified_targets({"artifact_refs": {}}, plan, None, diags)
+    finally:
+        ex.persist_stage_artifact = orig
+    assert out is not None
+    revised, ledger = out
+    assert [t.target_id for t in revised.worker_tasks] == ["c"]
+    assert len(revised.deferred_tasks) == 2
+    assert len(ledger.entries) == 2
+    assert {e.target_id for e in ledger.entries} == {"a", "b"}
+    assert persisted.get("DeferralLedger") is not None
+    assert persisted.get("ExecutionPlan") is not None

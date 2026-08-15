@@ -143,7 +143,10 @@ def test_resolved_polygon_enters_worker_tasks():
 
 
 @pytest.mark.asyncio
-async def test_execute_entry_returns_diagnostic_before_context_or_workers(monkeypatch):
+async def test_execute_entry_defers_unclassified_before_workers(monkeypatch):
+    # EXECUTE must never synthesize a planning classification; instead it
+    # auto-defers the unclassified targets (DeferralLedger + plan revision) so
+    # the run can deliver partial results rather than failing the whole run.
     target = _target("zone-1", output_kind="polygon")
     intent = _intent(("zone", target))
     selection = _selection(("zone", target))
@@ -162,21 +165,30 @@ async def test_execute_entry_returns_diagnostic_before_context_or_workers(monkey
     monkeypatch.setattr(
         execute_stage,
         "persist_stage_artifact",
-        lambda state, stage, schema_id, payload: {"digest": "diagnostic"},
+        lambda state, stage, schema_id, payload: {"digest": "deferred"},
     )
 
-    async def context_must_not_be_loaded(state):
-        raise AssertionError("classification failure must stop before context/workers")
+    called = {}
 
-    monkeypatch.setattr(execute_stage, "_require_context", context_must_not_be_loaded)
+    def fake_defer(state, plan, ledger, diags):
+        called["defer"] = True
+        return plan, None
 
-    result = await execute_stage.execute_node(
-        {"run_id": "run-1", "session_id": "run-1", "artifact_refs": {}}
-    )
+    monkeypatch.setattr(execute_stage, "_defer_unclassified_targets", fake_defer)
 
-    assert result["fatal_error"]["code"] == "classification_decision_required"
-    assert result["delivery_status"] == "diagnostic_only"
-    assert result["artifact_refs"] == {"execution_diagnostics": {"digest": "diagnostic"}}
+    async def context_loaded_after_deferral(state):
+        called["context"] = True
+        raise RuntimeError("stop-after-defer")
+
+    monkeypatch.setattr(execute_stage, "_require_context", context_loaded_after_deferral)
+
+    with pytest.raises(RuntimeError, match="stop-after-defer"):
+        await execute_stage.execute_node(
+            {"run_id": "run-1", "session_id": "run-1", "artifact_refs": {}}
+        )
+
+    assert called.get("defer") is True, "unclassified targets must be auto-deferred"
+    assert called.get("context") is True, "EXECUTE must continue after deferral"
 
 
 @pytest.mark.parametrize(

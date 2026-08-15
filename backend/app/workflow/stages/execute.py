@@ -252,6 +252,74 @@ def _classification_diagnostic_result(
     }
 
 
+def _defer_unclassified_targets(
+    state: Dict[str, Any],
+    execution_plan: Any,
+    deferral_ledger: Any,
+    classification_diagnostics: list[dict[str, Any]],
+) -> tuple[Any, Any] | None:
+    """Auto-defer targets blocked on unresolved classification decisions.
+
+    EXECUTE refuses to run parcel/polygon targets without an explicit
+    ClassificationDecision or a DeferralLedger entry.  Instead of failing the
+    whole run into a diagnostic terminal, record those targets as deferred
+    (partial delivery) so the remaining plan executes.  Deterministic only -
+    no LLM decision is invented here.
+    """
+    from app.contracts.artifacts.deferral_contracts import DeferralLedger
+    from app.domain.delivery.deferral_ledger import append_ledger, build_target_deferrals
+    from app.domain.materialization.plan_builder import defer_plan_tasks
+
+    target_ids = sorted({
+        str(item.get("target_id", ""))
+        for item in classification_diagnostics
+        if str(item.get("target_id", "")).strip()
+    })
+    if not target_ids:
+        return None
+    try:
+        revised_ledger = append_ledger(
+            deferral_ledger,
+            build_target_deferrals(
+                target_ids,
+                reason="classification_decision_required",
+                source_refs=("artifact:site_selection",),
+                decided_by="execute",
+                rationale="unresolved classification deferred for partial delivery",
+            ),
+        )
+        revised_plan = defer_plan_tasks(
+            execution_plan, target_ids, review_id="execute-classification-defer"
+        )
+    except Exception as exc:  # noqa: BLE001 - deferral must never break EXECUTE
+        logger.warning("[workflow:execute] classification deferral failed: %s", exc)
+        return None
+
+    working_state = {**state, "artifact_refs": dict(state.get("artifact_refs") or {})}
+    try:
+        ledger_ref = persist_stage_artifact(
+            working_state, "execute", "DeferralLedger", revised_ledger
+        )
+        if ledger_ref:
+            working_state["artifact_refs"]["deferral_ledger"] = ledger_ref
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("[workflow:execute] classification deferral ledger persist failed: %s", exc)
+    try:
+        plan_ref = persist_stage_artifact(
+            working_state, "execute", "ExecutionPlan", revised_plan
+        )
+        if plan_ref:
+            working_state["artifact_refs"]["execution_plan"] = plan_ref
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("[workflow:execute] classification deferral plan persist failed: %s", exc)
+    state["artifact_refs"] = working_state["artifact_refs"]
+    logger.info(
+        "[workflow:execute] auto-deferred %d unclassified targets for partial delivery",
+        len(target_ids),
+    )
+    return revised_plan, revised_ledger
+
+
 def _task_results_from_execution(execution_plan: Any, result: Dict[str, Any]) -> Any:
     """Classify every planned task from actual worker dispatch and output."""
     from app.contracts.workflow.execution_plan_contracts import ExecutionResult, TaskExecutionResult
@@ -404,7 +472,17 @@ async def execute_node(state: Dict[str, Any]) -> Dict[str, Any]:
             deferral_ledger=deferral_ledger,
         )
         if classification_diagnostics:
-            return _classification_diagnostic_result(state, classification_diagnostics)
+            deferral = _defer_unclassified_targets(
+                state,
+                execution_plan,
+                deferral_ledger,
+                classification_diagnostics,
+            )
+            if deferral is None:
+                return _classification_diagnostic_result(
+                    state, classification_diagnostics
+                )
+            execution_plan, deferral_ledger = deferral
 
     context = await _require_context(state)
     exec_state = ExecuteAgentState(
