@@ -401,7 +401,7 @@ def _normalize_category(raw: PlanningClaimDraft, diagnostics: list[str]) -> str:
         return category
     _diagnostic(
         diagnostics,
-        "error",
+        "warning",
         "unsupported_category",
         raw.claim_id or "claim",
         f"unsupported category {category!r}; kept as action",
@@ -420,7 +420,7 @@ def _normalize_output(
             return output
         _diagnostic(
             diagnostics,
-            "error",
+            "warning",
             "invalid_project_output",
             raw.claim_id or "claim",
             f"project output {output!r} is not executable; deferred as action",
@@ -524,7 +524,7 @@ def _normalized_action(
     if action not in valid:
         _diagnostic(
             diagnostics,
-            "error",
+            "warning",
             "invalid_intervention_action",
             claim_id,
             f"action {action!r} is outside the closed set",
@@ -686,14 +686,16 @@ def _normalize_polygon_parameters(
         "restoration": {"restoration_overlay"},
     }
     if role not in allowed_roles.get(category, set()):
+        # Structure is valid; the role is auto-corrected to the category's
+        # allowed role instead of dropping the polygon parameters.
         _diagnostic(
             diagnostics,
-            "error",
+            "warning",
             "materialization_role_mismatch",
             claim_id,
             f"role {role!r} is incompatible with category {category!r}",
         )
-        return None, None
+        role = next(iter(allowed_roles.get(category, set())), "project_footprint")
     area_range: tuple[float, float] | None = None
     if (
         source is not None

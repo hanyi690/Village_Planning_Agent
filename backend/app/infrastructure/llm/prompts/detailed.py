@@ -80,6 +80,12 @@ suggested_output_kind 只能是 parcel/polygon/point/line/action。对有明确�
 - 数量/规模：个、处、座、条、棵、株、人、户、间、栋、根、套
 - 功率/电量：千瓦/kw、千瓦时/kwh
 禁止写法：hm、hm²、km²、平方米的其它简写、"待定"、"无"；禁止用"处/户/座/人"作为 area_range 或 footprint_area 的面积单位。
+【高频错误规避】
+- 线性工程（供水/排水管线、道路、输电/通信线路、护岸、堤防、沟渠）必须用 road 或 axis，不得用 project。project 的 suggested_output_kind 只能是 parcel/polygon/point/action，绝不能是 line。
+- action 必须按 category 闭集选择，严禁跨 category 混用：facility/zone/project 不能用 upgrade；upgrade/widen 只用于 road；relocate 只用于 facility 或 project；preserve 用于保留类。
+- 面积/长度/数量数值必须使用上方单位闭集内的标准单位，禁止自造单位、简写变体或占位词；写不出明确数值时留空并说明 uncertainty，不要用"待定"当单位。
+- 空间 claim 必须填对应结构化参数（road_parameters/facility_parameters/polygon_parameters/project_parameters），禁止把关键尺度只写在 statement。
+
 所有参数只表达规划语义和来源量值，不得填写坐标、BSM、候选地块或几何；单位换算由确定性编译器完成。
 report_body 写完整的法定文本报告正文（用【主题】标记段落、markdown 表格列清单）；claims 只写结构化判断，不要写解释文字。
 """
