@@ -1275,6 +1275,12 @@ async def apply_human_review_decision(state: Dict[str, Any]) -> Dict[str, Any]:
             for target_id in (raw_ids or [])
             if str(target_id).strip()
         ))
+        if not deferred_target_ids:
+            # No explicit deferral: auto-defer every currently blocking target
+            # so an unattended approve yields partial delivery instead of a
+            # diagnostic terminal on non-deferred structural blockers.
+            blocking_ids, _ = _human_review_blocking_target_ids(state, paused_stage)
+            deferred_target_ids = sorted(blocking_ids)
         if deferred_target_ids:
             result.update(await _apply_structural_target_deferrals(
                 state,
@@ -1283,22 +1289,24 @@ async def apply_human_review_decision(state: Dict[str, Any]) -> Dict[str, Any]:
                 paused_stage,
             ))
             return result
+        # No deferrable target-level blockers remain: the finding is a
+        # non-target structural limitation (e.g. reconcile_retry_l3 with an
+        # empty intervention_id).  Approving it must keep the pipeline moving
+        # so DELIVER emits a partial manifest with the limitation recorded,
+        # instead of a diagnostic terminal on an undeferrable blocker.
         gate = _root_gate_payload(state, paused_stage)
         gate.update({
             "stage": paused_stage,
-            "passed": False,
-            "feedback_route": "END_DIAGNOSTIC",
-            "route_reason": "human_accept_cannot_override_structural_failure",
+            "passed": True,
+            "feedback_route": "PASS",
+            "route_reason": "approved_with_known_non_target_limitation",
+            "diagnostic_code": "HUMAN_APPROVED_NON_TARGET_LIMITATION",
+            "pending_requests": [],
         })
         result.update({
             **_gate_mutation_patch(state, paused_stage, gate),
-            "delivery_status": "diagnostic_only",
             "structural_deferral_revision": False,
-            "diagnostic_terminal": {
-                "stage": paused_stage,
-                "issue_fingerprint": str(gate.get("issue_fingerprint") or ""),
-                "reason": "remaining_non_deferred_structural_blockers",
-            },
+            "approved_non_target_limitation": True,
         })
         return result
     if (

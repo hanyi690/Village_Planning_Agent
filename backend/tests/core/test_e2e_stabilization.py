@@ -334,3 +334,38 @@ def test_human_review_apply_may_dispatch_provider_resume():
         {},
     )
     assert decision.accepted, decision.diagnostic
+
+
+# ?? P0.3: validate/reconcile approve with only non-target blockers -> PASS ??
+@pytest.mark.asyncio
+async def test_validate_approve_non_target_blocker_passes_not_diagnostic(monkeypatch):
+    state = {
+        "session_id": "s1",
+        "paused_stage": "reconcile",
+        "human_review_items": [{
+            "request_type": "reconcile_retry_l3",
+            "context": {"stage": "L3", "non_target_blocker_count": 1},
+        }],
+        "human_review_decisions": {"action": "approve"},
+    }
+
+    def fake_blocking(st, stage):
+        return set(), 1
+
+    monkeypatch.setattr(root_graph, "_human_review_blocking_target_ids", fake_blocking)
+    gate_patch = {}
+
+    def fake_gate_mutation(state, stage, gate, **kw):
+        gate_patch["gate"] = gate
+        return {"gate_ref": "g"}
+
+    monkeypatch.setattr(root_graph, "_gate_mutation_patch", fake_gate_mutation)
+    monkeypatch.setattr(
+        root_graph, "_root_gate_payload",
+        lambda state, stage: {"stage": stage, "passed": False, "pending_requests": []},
+    )
+    result = await root_graph.apply_human_review_decision(state)
+    assert "fatal_error" not in result
+    assert result.get("approved_non_target_limitation") is True
+    assert gate_patch["gate"]["passed"] is True
+    assert gate_patch["gate"]["feedback_route"] == "PASS"
