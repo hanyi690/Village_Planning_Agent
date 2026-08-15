@@ -112,6 +112,11 @@ KG_BUILD_TIMEOUT_SECONDS = float(os.getenv("KG_BUILD_TIMEOUT_SECONDS", "180"))
 BACKEND_STARTUP_TIMEOUT_SECONDS = float(os.getenv("BACKEND_STARTUP_TIMEOUT_SECONDS", "30"))
 GRAPH_RECURSION_LIMIT = int(os.getenv("GRAPH_RECURSION_LIMIT", "100"))
 BUSINESS_RETRY_LIMIT = int(os.getenv("BUSINESS_RETRY_LIMIT", "3"))
+# Per-session validation replay budget: total VALIDATE retries across the
+# whole session (safety net above the per-stage BUSINESS_RETRY_LIMIT, e.g.
+# interleaved EXECUTE/SELECT/L3 rework episodes).  Exhaustion degrades to a
+# diagnostic terminal instead of looping stages forever.
+VALIDATION_BUDGET_PER_SESSION = int(os.getenv("VALIDATION_BUDGET_PER_SESSION", "20"))
 # Per-dimension LLM failure retries before the run degrades to a diagnostic
 # terminal (provider resume re-dispatches ONLY the failed dimensions).
 DIMENSION_RETRY_LIMIT = int(os.getenv("DIMENSION_RETRY_LIMIT", "2"))

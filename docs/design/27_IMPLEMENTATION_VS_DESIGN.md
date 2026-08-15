@@ -114,3 +114,12 @@
 - 发现新的不一致：在对应小节追加一行（设计说法 / 实际实现 / 证据路径），不要在多个文档
   各写一套。
 - 归档文档（`docs/_archive/`）与审计历史中的旧路径只作为历史证据，不作为当前事实。
+
+
+## 14. 新增差异登记（2026-08-15，以代码为准）
+
+- 子图 checkpoint 实证：四段子图均带 checkpointer，`checkpoints.checkpoint_ns` 存在 `spatial_chain:<uuid>` / `cognitive:<uuid>` / `hitl:<uuid>`；父层 `aget_state_values` 在 spatial_chain 运行期间冻结，恢复必须用子图 ns checkpoint。
+- 崩溃恢复：新增 `PlanningRuntimeService.resume_from_deepest_checkpoint`（读 `aget_state(subgraphs=True)` 取最深 pending 子图 task config，按官方 time-travel 从该 checkpoint 续跑），driver startup kick 改用它；`resume_execution` 不再用于崩溃恢复。
+- `apply_human_review_decision`：空 `deferred_target_ids` + defer 标记 -> 纯 approve（不再 `HUMAN_DEFER_TARGET_IDS_REQUIRED` 死态）。
+- `_approve_ground` / `_approve_default`：审批后按 `STAGE_FORWARD_TARGET` 继续（ground->select），不再静默 END 或回环 HUMAN（修复 run#6 post_l3 死态）。
+- 校验预算：`validation_budget_used` 通道 + `VALIDATION_BUDGET_PER_SESSION`。

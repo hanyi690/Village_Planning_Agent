@@ -90,3 +90,18 @@
 
 - 处置设计：`docs/design/26_LLM_VALIDATION_ORCHESTRATION.md`
 - 模块/产物：`docs/design/24_MODULE_OUTPUT_INVENTORY.md`
+
+
+## 8. 已落地修复（2026-08-15，代码已实现并测试）
+
+以下条目已从“高/中风险死校验”降级为“有确定性处置”，无需再 HUMAN 卡死：
+
+- `unsupported_measure_unit` / `unsupported_area_unit` / `incomplete_area_range` / `invalid_area_range` / `invalid_*_parameters` / `missing_claim_identity`：由 ERROR 降为 WARNING + 丢弃该约束（raw 单位保留在诊断消息中审计）；`claim_set_semantic_errors` 只保留结构契约错误（缺必需参数对象）。
+- `constraint_index_unavailable`：无约束图层时直接跳过（not_applicable），不再产生不可修 blocker。
+- 无处置检查（`accessibility` / `parcels_present` / `parcel_fields` / `changeset_flags` / `traceability` / `worker_failures`）：`validate_node` 在 repair compilation blocked 且带 target_ids 时，自动把受影响目标写入 `DeferralLedger`（reason=validate_auto_defer:no_repair_policy）并修订 ExecutionPlan（worker_tasks -> deferred_tasks），gate 转 PASS -> partial delivery，不再 `typed_repair_blocked` HUMAN。
+- `target_projection` gate 的 `L3` 路由已加入 `GATE_ROUTE_POLICY`（有界重试，不再落默认 HUMAN）。
+- 相同 `issue_fingerprint` 的可执行修复只允许 1 次重放（第 2 次 -> HUMAN/defer）；新增 per-session `VALIDATION_BUDGET_PER_SESSION`（默认 20）兜底，超限 -> END_DIAGNOSTIC。
+- EXECUTE worker 子图超时不再硬抛异常，改为写 typed `execution_diagnostics` + fatal_error -> END_DIAGNOSTIC（避免 resume 循环吞掉真实原因）。
+- `_approve_ground` / `_approve_default`：审批 GROUND 等阶段评审后按 `STAGE_FORWARD_TARGET` 继续（ground->select），不再静默 END 或回环 HUMAN（修复 run#6 post_l3 死态）。
+
+关联：`docs/design/26_LLM_VALIDATION_ORCHESTRATION.md`（部分实施）、`docs/design/27_IMPLEMENTATION_VS_DESIGN.md`。

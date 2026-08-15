@@ -93,10 +93,17 @@ def _retry_patch(state: Dict[str, Any], stage: str) -> Dict[str, Any]:
         return {}
     counts = dict(state.get("retry_counts") or {})
     feedback = dict(state.get("error_feedback") or {})
-    return {
+    patch = {
         "retry_counts": {**counts, stage: counts.get(stage, 0) + 1},
         "error_feedback": {**feedback, stage: _gate_failure_context(gate)},
     }
+    if stage == "validate":
+        budgets = dict(state.get("validation_budget_used") or {})
+        patch["validation_budget_used"] = {
+            **budgets,
+            "validate": int(budgets.get("validate", 0)) + 1,
+        }
+    return patch
 
 
 def _accumulate_gate(gates: List[Any], gate: Any) -> List[Any]:

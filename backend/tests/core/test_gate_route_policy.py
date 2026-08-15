@@ -237,14 +237,18 @@ def test_resume_approve_select(monkeypatch) -> None:
     assert _resume(state) == "execute"
 
 
-def test_resume_approve_ground_unresolved_targets_stay_human(monkeypatch) -> None:
+def test_resume_approve_ground_continues_to_select(monkeypatch) -> None:
+    # Approving a GROUND review accepts the grounding as-is and must continue
+    # to SELECT.  Remaining unresolved references are handled by SELECT/EXECUTE
+    # deferral or partial delivery - re-looping to HUMAN here is the deadlock
+    # that left real runs parked in post_l3 with no tasks and no terminal.
     _patch_gate_route(monkeypatch, "PASS")
     state = {
         "paused_stage": "ground",
         "remaining_target_ids": ["target-1"],
         "human_review_decisions": {"action": "approve"},
     }
-    assert _resume(state) == "human_review"
+    assert _resume(state) == "select"
 
 
 def test_resume_approve_ground_defer(monkeypatch) -> None:

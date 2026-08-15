@@ -170,10 +170,21 @@ class PlanningRuntimeService:
         return {"configurable": configurable}
 
     @classmethod
-    async def aget_state(cls, session_id: str) -> Optional[Any]:
-        """Get checkpoint state snapshot for a session."""
+    async def aget_state(
+        cls, session_id: str, subgraphs: bool = False
+    ) -> Optional[Any]:
+        """Get checkpoint state snapshot for a session.
+
+        With ``subgraphs=True`` the snapshot's ``tasks`` carry sub-state
+        (``task.state.config``) for compiled subgraphs that checkpoint in
+        their own ``checkpoint_ns`` - required for crash recovery that
+        resumes inside a segment instead of restarting it from the parent
+        head.
+        """
         await cls.ensure_initialized()
         config = cls.get_thread_config(session_id)
+        if subgraphs:
+            return await cls._graph.aget_state(config, subgraphs=True)
         return await cls._graph.aget_state(config)
 
     @classmethod
@@ -780,6 +791,7 @@ class PlanningRuntimeService:
         state_values: Optional[Dict[str, Any]] = None,
         replay_from_stage: Optional[str] = None,
         branch_id: Optional[str] = None,
+        checkpoint_ns: Optional[str] = None,
     ) -> None:
         """
         Unified trigger for planning execution (skip conversation_node).
@@ -791,6 +803,10 @@ class PlanningRuntimeService:
             initial_state: Optional initial state (only for Layer 1 start)
             checkpoint_id: Optional checkpoint ID to resume from
             state_values: Optional pre-fetched state values (avoids redundant checkpoint read)
+            checkpoint_ns: Optional subgraph checkpoint namespace to resume
+                from (crash recovery inside a compiled segment).  When set with
+                ``checkpoint_id`` the graph resumes from that exact checkpoint
+                instead of the parent thread head.
         """
         await cls.ensure_initialized()
 
@@ -813,6 +829,7 @@ class PlanningRuntimeService:
                 state_values,
                 replay_from_stage,
                 branch_id,
+                checkpoint_ns,
             )
 
     @classmethod
@@ -824,6 +841,7 @@ class PlanningRuntimeService:
         state_values: Optional[Dict[str, Any]] = None,
         replay_from_stage: Optional[str] = None,
         branch_id: Optional[str] = None,
+        checkpoint_ns: Optional[str] = None,
     ) -> None:
         """Internal execution method called within the session lock."""
         from app.infrastructure.logging import set_session_id as _set_sid
@@ -937,6 +955,8 @@ class PlanningRuntimeService:
 
         # 4. Build config with max_concurrency + optional streaming callback
         config = cls.get_thread_config(session_id, checkpoint_id=checkpoint_id)
+        if checkpoint_ns:
+            config["configurable"]["checkpoint_ns"] = checkpoint_ns
         config["max_concurrency"] = GRAPH_MAX_CONCURRENCY
         config["recursion_limit"] = GRAPH_RECURSION_LIMIT
 
@@ -1101,6 +1121,68 @@ class PlanningRuntimeService:
         finally:
             # Clean up execution lock to prevent memory leak
             cls._execution_locks.pop(session_id, None)
+
+    @classmethod
+    async def resume_from_deepest_checkpoint(cls, session_id: str) -> Dict[str, Any]:
+        """Crash recovery: resume from the deepest pending subgraph checkpoint.
+
+        Official time-travel pattern (LangGraph): read the parent snapshot with
+        ``subgraphs=True``, pick the deepest interrupt-free subgraph task config
+        (``checkpoint_ns``), then resume from that exact checkpoint via
+        ``trigger_planning_execution(checkpoint_id=..., checkpoint_ns=...)``.
+        Completed super-steps inside the segment are reused (their writes are
+        persisted in the subgraph namespace); only the failed super-step
+        re-runs.  This replaces the old parent-head restart that re-ran the
+        whole spatial_chain and never surfaced SELECT/EXECUTE progress to the
+        parent state.
+        """
+        await cls.ensure_initialized()
+        parent = await cls.aget_state(session_id, subgraphs=True)
+        if parent is None or not getattr(parent, "tasks", None):
+            return {"resumed": False, "reason": "no_pending_tasks"}
+        if any(getattr(task, "interrupts", None) for task in parent.tasks or ()):
+            # A HUMAN pause is handled by the interrupt resume path.
+            return {"resumed": False, "reason": "human_interrupt"}
+
+        deepest_config = None
+        for task in parent.tasks or ():
+            sub_state = getattr(task, "state", None)
+            if sub_state is None:
+                continue
+            cfg = getattr(sub_state, "config", None) or {}
+            ns = str(((cfg.get("configurable") or {}).get("checkpoint_ns") or ""))
+            if not ns:
+                continue
+            deepest_config = cfg
+        if deepest_config is None:
+            return {"resumed": False, "reason": "no_subgraph_checkpoint"}
+
+        # Resolve the latest checkpoint in that namespace (the deepest one,
+        # carrying any pending writes from the crashed super-step).  The task
+        # config itself may point at the subgraph entry, not the deepest row.
+        resolved = await cls._graph.aget_state(deepest_config)
+        if resolved is None:
+            return {"resumed": False, "reason": "no_resolved_subgraph_checkpoint"}
+        configurable = dict((resolved.config or {}).get("configurable") or {})
+        checkpoint_id = str(configurable.get("checkpoint_id") or "")
+        checkpoint_ns = str(configurable.get("checkpoint_ns") or "")
+        if not checkpoint_id:
+            return {"resumed": False, "reason": "no_checkpoint_id"}
+
+        logger.info(
+            "[PlanningRuntimeService] [%s] crash resume from deepest checkpoint ns=%s id=%s",
+            session_id, checkpoint_ns, checkpoint_id,
+        )
+        await cls.trigger_planning_execution(
+            session_id,
+            checkpoint_id=checkpoint_id,
+            checkpoint_ns=checkpoint_ns,
+        )
+        return {
+            "resumed": True,
+            "checkpoint_id": checkpoint_id,
+            "checkpoint_ns": checkpoint_ns,
+        }
 
     @classmethod
     async def resume_execution(cls, session_id: str) -> Dict[str, Any]:

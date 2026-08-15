@@ -133,3 +133,8 @@ flowchart TD
 - 校验现状与死校验清单：`docs/design/25_VALIDATION_INVENTORY.md`
 - 模块/结构性产出：`docs/design/24_MODULE_OUTPUT_INVENTORY.md`
 - 既有 Exa 对齐结论：`docs/_archive/design/18_EXA_ARCHITECTURE_ALIGNMENT.md`
+
+
+## 7. 实施状态更新（2026-08-15）
+
+本设计“必要子集”已部分落地：目标级 defer（DeferralLedger + ExecutionPlan 修订）、进展护栏（identical issue_fingerprint 只允许 1 次重放 + per-session `VALIDATION_BUDGET_PER_SESSION` + inform->constrain->defer 阶梯）、单位/参数口径降级、无处置检查补确定性处置、gate L3 路由对齐、EXECUTE 错误显性化。完整 LLM triage 编排（`ValidationOrchestrationDecision` / `RepairPatch` / 预算内 triage 调用）仍为 Phase 2 未实施。

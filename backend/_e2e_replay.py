@@ -27,6 +27,7 @@ SESSION_FILE = BASE / "session_id.txt"
 ARTIFACT_ROOT = BASE / "artifacts"
 LOG_FILE = BASE / "replay.log"
 STALL_WAIT_S = 90.0
+STALL_HARD_S = 720.0
 
 
 def log(msg: str) -> None:
@@ -73,6 +74,26 @@ def _graph_has_pending_tasks(client, session_id: str) -> bool:
     except Exception:
         return False
     return bool(snapshot and getattr(snapshot, "tasks", None))
+
+
+def _checkpoint_progress(db_path: str) -> dict:
+    """External-fact progress: persisted checkpoint writes are monotonic."""
+    try:
+        import sqlite3
+        uri = "file:///%s?mode=ro" % Path(db_path).as_posix()
+        con = sqlite3.connect(uri, uri=True)
+        try:
+            total = con.execute("select count(*) from checkpoints").fetchone()[0]
+            row = con.execute(
+                "select checkpoint_id from checkpoints order by checkpoint_id desc limit 1"
+            ).fetchone()
+            latest = str(row[0]) if row else ""
+            reports = con.execute("select count(*) from step_reports").fetchone()[0]
+        finally:
+            con.close()
+        return {"total": int(total), "latest": latest, "reports": int(reports)}
+    except Exception:
+        return {}
 
 
 def setup_engine() -> None:
@@ -162,25 +183,42 @@ def main() -> int:
         processed = set()
         deadline = time.monotonic() + 1800.0
         terminal = False
+
+        def progress_snapshot(current: dict) -> str:
+            cp = _checkpoint_progress(PERSISTENT_DB)
+            return "|".join([
+                str(cp.get("total", "")),
+                str(cp.get("latest", "")),
+                str(cp.get("reports", "")),
+                str(current.get("phase") or ""),
+                str(current.get("paused_stage") or ""),
+                str(current.get("delivery_status") or ""),
+            ])
+
         while time.monotonic() < deadline:
             current = get_state_values(session_id)
             state = current or state
             if current and _delivery_poll_terminal(current):
                 terminal = True
                 break
-            progress = _progress_fingerprint(current)
+            progress = progress_snapshot(current)
             now = time.monotonic()
             pending_tasks = _graph_has_pending_tasks(client, session_id)
             if now - last_watchdog_at >= 10.0:
-                log("[WATCHDOG] phase=%r paused=%r delivery=%r tasks=%s"
+                log("[WATCHDOG] phase=%r paused=%r delivery=%r tasks=%s ckpt=%s"
                     % (current.get("phase"), current.get("paused_stage"),
-                       current.get("delivery_status"), pending_tasks))
+                       current.get("delivery_status"), pending_tasks, progress))
                 last_watchdog_at = now
-            if progress != last_progress or pending_tasks:
+            if progress != last_progress:
                 last_progress = progress
                 last_progress_at = now
-            elif now - last_progress_at > STALL_WAIT_S:
+                if deadline < now + STALL_WAIT_S * 2:
+                    deadline = now + STALL_WAIT_S * 2
+            if not pending_tasks and now - last_progress_at > STALL_WAIT_S:
                 log("STALL phase=%r paused=%r" % (current.get("phase"), current.get("paused_stage")))
+                break
+            if pending_tasks and now - last_progress_at > STALL_HARD_S:
+                log("STALL-HARD phase=%r paused=%r" % (current.get("phase"), current.get("paused_stage")))
                 break
             review = client.get("/api/v1/sessions/%s/human-review" % session_id)
             if review.status_code != 200:

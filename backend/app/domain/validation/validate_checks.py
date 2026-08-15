@@ -131,18 +131,17 @@ def check_hard_constraints(planned_state: Any, constraint_index: Any) -> List[Va
             )
         ]
     if constraint_index is None:
+        # No constraint layer was provided: hard-constraint checking is not
+        # applicable.  Skip (recorded) instead of producing an unrepairable
+        # blocker - the session simply has no constraint data to violate.
         return [
             _check(
-                "constraint_index_unavailable",
+                "hard_constraints",
                 "硬性约束核查",
-                False,
+                True,
                 stage="SELECT",
-                code="constraint_index_unavailable",
-                violation_id="constraint_index_unavailable",
-                actual="constraint_index unavailable",
-                expected="constraint_index available",
-                evidence_refs=["constraint-index:missing"],
-                fix="提供约束图层后再放行硬约束核查",
+                actual="not_applicable:no_constraint_index",
+                expected="constraint checks require a constraint index",
             )
         ]
     findings: list[ValidationCheck] = []

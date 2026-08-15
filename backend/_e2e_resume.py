@@ -38,6 +38,9 @@ ARTIFACT_ROOT = BASE / "artifacts"
 LOG_FILE = BASE / "run.log"
 
 STALL_WAIT_S = 90.0
+# Hard stall: no checkpoint progress at all for this long, even with pending
+# tasks (a deadlocked graph keeps pending tasks but never writes a checkpoint).
+STALL_HARD_S = 720.0
 
 
 def log(msg: str) -> None:
@@ -63,21 +66,6 @@ def _delivery_poll_terminal(state: dict) -> bool:
     return route in {"PASS", "END_DIAGNOSTIC"} or bool(state.get("fatal_error"))
 
 
-def _progress_fingerprint(state: dict) -> str:
-    completed = state.get("completed_dimensions") or {}
-    return "|".join([
-        str(state.get("phase") or ""),
-        str(state.get("active_stage") or ""),
-        str(state.get("delivery_status") or ""),
-        str(state.get("paused_stage") or ""),
-        str(bool(state.get("human_review_resume_consumed"))),
-        str(len(state.get("human_review_items") or [])),
-        str(sorted(
-            (str(k) + ":" + ",".join(sorted(v)) for k, v in completed.items())
-        )),
-    ])
-
-
 def _graph_has_pending_tasks(client, session_id: str) -> bool:
     try:
         from app.infrastructure.runtime.planning_runtime_service import (
@@ -90,6 +78,45 @@ def _graph_has_pending_tasks(client, session_id: str) -> bool:
     except Exception:
         return False
     return bool(snapshot and getattr(snapshot, "tasks", None))
+
+
+def _checkpoint_progress(db_path: str) -> dict:
+    """External-fact progress: persisted checkpoint writes are monotonic.
+
+    A healthy long LLM super-step still advances checkpoints (every super-step
+    boundary writes one, including subgraph ``checkpoint_ns`` rows), while a
+    stalled graph does not.  This replaces the old state-fingerprint watchdog
+    that mistook long LLM calls for stalls and stalls for long calls.
+    """
+    try:
+        import sqlite3
+
+        uri = "file:///%s?mode=ro" % Path(db_path).as_posix()
+        con = sqlite3.connect(uri, uri=True)
+        try:
+            total = con.execute(
+                "select count(*) from checkpoints"
+            ).fetchone()[0]
+            sub = con.execute(
+                "select count(*) from checkpoints where checkpoint_ns != ''"
+            ).fetchone()[0]
+            row = con.execute(
+                "select checkpoint_id from checkpoints order by checkpoint_id desc limit 1"
+            ).fetchone()
+            latest = str(row[0]) if row else ""
+            reports = con.execute(
+                "select count(*) from step_reports"
+            ).fetchone()[0]
+        finally:
+            con.close()
+        return {
+            "total": int(total),
+            "subgraph": int(sub),
+            "latest": latest,
+            "reports": int(reports),
+        }
+    except Exception:
+        return {}
 
 
 def _sanctioned_classification_decisions(client, session_id: str, review_payload: dict):
@@ -267,6 +294,19 @@ def drive(client, session_id: str, deadline: float) -> dict:
     last_resume_kick_at = 0.0
     terminal_state = {}
 
+    def progress_snapshot(current: dict) -> str:
+        cp = _checkpoint_progress(PERSISTENT_DB)
+        return "|".join([
+            str(cp.get("total", "")),
+            str(cp.get("subgraph", "")),
+            str(cp.get("latest", "")),
+            str(cp.get("reports", "")),
+            str(current.get("phase") or ""),
+            str(current.get("paused_stage") or ""),
+            str(current.get("delivery_status") or ""),
+            str(len((current.get("artifact_refs") or {}).keys())),
+        ])
+
     while time.monotonic() < deadline:
         current = get_state_values(session_id)
         state = current or state
@@ -274,19 +314,20 @@ def drive(client, session_id: str, deadline: float) -> dict:
             terminal = True
             terminal_state = current
             break
-        progress = _progress_fingerprint(current)
+        progress = progress_snapshot(current)
         now = time.monotonic()
         pending_tasks = _graph_has_pending_tasks(client, session_id)
         if now - last_watchdog_at >= 10.0:
             log(
                 "[WATCHDOG] phase=%r active_stage=%r pending_tasks=%s "
-                "delivery_status=%r paused_stage=%r"
+                "delivery_status=%r paused_stage=%r ckpt=%s"
                 % (
                     current.get("phase"),
                     current.get("active_stage"),
                     pending_tasks,
                     current.get("delivery_status"),
                     current.get("paused_stage"),
+                    progress,
                 )
             )
             last_watchdog_at = now
@@ -294,13 +335,22 @@ def drive(client, session_id: str, deadline: float) -> dict:
             last_progress = progress
             last_progress_at = now
             last_progress_change_at = now
-        if progress != last_progress or pending_tasks:
-            last_progress = progress
-            last_progress_at = now
-        elif now - last_progress_at > STALL_WAIT_S:
+            # ??????????????L1-L3 / EXECUTE???????????
+            if deadline < now + STALL_WAIT_S * 2:
+                deadline = now + STALL_WAIT_S * 2
+        if not pending_tasks and now - last_progress_at > STALL_WAIT_S:
             dump_diag(client, session_id, "stall")
-            log("STALL: fingerprint unchanged for %ss; phase=%r paused_stage=%r"
-                % (STALL_WAIT_S, current.get("phase"), current.get("paused_stage")))
+            log(
+                "STALL: no pending tasks and no progress for %ss; phase=%r paused_stage=%r"
+                % (STALL_WAIT_S, current.get("phase"), current.get("paused_stage"))
+            )
+            return {"stalled": True, "state": state}
+        if pending_tasks and now - last_progress_at > STALL_HARD_S:
+            dump_diag(client, session_id, "stall-hard")
+            log(
+                "STALL-HARD: pending tasks but no checkpoint progress for %ss; phase=%r paused_stage=%r"
+                % (STALL_HARD_S, current.get("phase"), current.get("paused_stage"))
+            )
             return {"stalled": True, "state": state}
 
         review = client.get(
@@ -531,8 +581,11 @@ def main() -> int:
                 and not _delivery_poll_terminal(start_vals)
                 and not start_vals.get("paused_stage")
             ):
-                log("kick resume_execution once for stale mid-superstep checkpoint")
-                client.portal.call(PlanningRuntimeService.resume_execution, session_id)
+                log("kick resume_from_deepest_checkpoint once for stale mid-superstep checkpoint")
+                client.portal.call(
+                    PlanningRuntimeService.resume_from_deepest_checkpoint,
+                    session_id,
+                )
         except Exception as exc:
             log("startup resume kick failed: %s" % exc)
 

@@ -442,7 +442,44 @@ async def execute_node(state: Dict[str, Any]) -> Dict[str, Any]:
             )
     except TimeoutError as exc:
         logger.error("[workflow:execute] subgraph timeout; failing closed")
-        raise RuntimeError("EXECUTE_TIMEOUT: GIS worker subgraph exceeded its cancellation boundary") from exc
+        # Surface a typed diagnostic instead of re-raising: a hard exception
+        # becomes a pending ERROR write that resume re-runs forever without
+        # ever recording the real failure.
+        payload = {
+            "code": "EXECUTE_TIMEOUT",
+            "message": "GIS worker subgraph exceeded its cancellation boundary",
+            "errors": [{"code": "EXECUTE_TIMEOUT", "message": str(exc)}],
+            "target_ids": [],
+        }
+        diagnostic_ref = None
+        try:
+            working_state = {**state, "artifact_refs": dict(state.get("artifact_refs") or {})}
+            diagnostic_ref = persist_stage_artifact(
+                working_state,
+                "execute",
+                "ExecutionDiagnostics",
+                payload,
+            )
+        except Exception as persist_exc:  # noqa: BLE001 - diagnostic must not mask the timeout
+            logger.error("[workflow:execute] failed to persist timeout diagnostic: %s", persist_exc)
+            payload["persistence_error"] = type(persist_exc).__name__
+        return {
+            "fatal_error": {
+                "stage": "EXECUTE",
+                "code": "EXECUTE_TIMEOUT",
+                "message": payload["message"],
+                "target_ids": [],
+                "diagnostics": payload["errors"],
+            },
+            "delivery_status": "diagnostic_only",
+            "diagnostic_terminal": {
+                "stage": "execute",
+                "reason": "EXECUTE_TIMEOUT",
+                "target_ids": [],
+                "diagnostics": payload["errors"],
+            },
+            "artifact_refs": {"execution_diagnostics": diagnostic_ref} if diagnostic_ref else {},
+        }
 
     changeset = result.get("parcel_changeset")
     planned_state = result.get("planned_state")

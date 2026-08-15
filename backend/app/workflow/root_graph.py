@@ -202,6 +202,16 @@ def _dimension_retry_limit(state: Dict[str, Any]) -> int:
     return max(0, int(configured))
 
 
+def _validation_budget_limit(state: Dict[str, Any]) -> int:
+    """Per-session VALIDATE replay budget before diagnostic degradation."""
+    from app.core.settings import VALIDATION_BUDGET_PER_SESSION
+
+    configured = state.get("validation_budget_per_session")
+    if configured is None:
+        return max(0, int(VALIDATION_BUDGET_PER_SESSION))
+    return max(0, int(configured))
+
+
 def _exhausted_retry_stage(state: Dict[str, Any]) -> str | None:
     """Find the downstream-most retry gate whose persisted budget is spent."""
     counts = state.get("retry_counts") or {}
@@ -274,6 +284,35 @@ def _retry_or_human(state: Dict[str, Any], stage: str, retry_target: str) -> str
             logger.warning(
                 "[main] VALIDATE repeated issue fingerprint %s -> HUMAN",
                 current_fingerprint,
+            )
+            return "human_review"
+        budget_used = int(
+            (state.get("validation_budget_used") or {}).get("validate", 0)
+        )
+        if budget_used >= _validation_budget_limit(state):
+            logger.warning(
+                "[main] VALIDATE session validation budget exhausted (%d) -> diagnostic",
+                budget_used,
+            )
+            return END_DIAGNOSTIC
+        if current >= max_retries:
+            logger.warning(
+                "[main] %s retry exceeded %d rounds -> diagnostic",
+                stage,
+                max_retries,
+            )
+            return END_DIAGNOSTIC
+        if (
+            executable_repair
+            and current >= 1
+            and current_fingerprint
+            and current_fingerprint == previous_fingerprint
+        ):
+            # One identical-fingerprint replay is allowed; a second identical
+            # replay cannot make progress, so route to HUMAN/defer with the
+            # evidence instead of re-running the full stage chain again.
+            logger.warning(
+                "[main] VALIDATE executable repair produced an identical issue fingerprint -> HUMAN",
             )
             return "human_review"
         if executable_repair:
@@ -511,24 +550,21 @@ def _approve_select(state: Dict[str, Any], paused_stage: str) -> str:
 
 
 def _approve_ground(state: Dict[str, Any], paused_stage: str) -> str:
-    decisions = state.get("human_review_decisions") or {}
-    deferring = (
-        paused_stage == "ground"
-        and isinstance(decisions, dict)
-        and decisions.get("defer_unresolved_spatial_references") is True
-    )
-    if deferring:
-        # The operator explicitly deferred the unresolved spatial references.
-        # That IS the authoritative human decision; the GROUND gate still
-        # carries its original HUMAN route, and stale remaining_target_ids
-        # must not loop the session back into HUMAN.  Forward to SELECT.
-        return "select"
-    if _remaining_unresolved_target_ids(state):
-        return "human_review"
-    return END
+    # An approved GROUND review accepts the grounding as-is.  The graph must
+    # continue to SELECT; remaining unresolved references are handled by
+    # SELECT/EXECUTE deferral or partial delivery, never looped to HUMAN or
+    # silently ended (a silent END left the run in a dead post_l3 state).
+    return "select"
 
 
 def _approve_default(state: Dict[str, Any], paused_stage: str) -> str:
+    # Approving a stage review must keep the pipeline moving forward: use the
+    # canonical stage-forward map so a known stage never silently ends the
+    # graph before DELIVER.  Only unknown stages with unresolved targets loop
+    # back to HUMAN; unknown stages without targets end.
+    target = _STAGE_FORWARD_TARGET.get(paused_stage)
+    if target:
+        return END if target == "__end__" else target
     if _remaining_unresolved_target_ids(state):
         return "human_review"
     return END

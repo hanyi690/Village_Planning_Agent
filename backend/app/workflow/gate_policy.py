@@ -27,6 +27,7 @@ GATE_ROUTE_POLICY: Dict[str, Dict[str, Tuple[str, ...]]] = {
         "PASS": ("forward", "ground"),
         "REPAIR": ("retry", "target_projection", "target_projection"),
         "REVISE": ("retry", "target_projection", "target_projection"),
+        "L3": ("retry", "target_projection", "target_projection"),
     },
     "ground": {
         "PASS": ("forward", "select"),

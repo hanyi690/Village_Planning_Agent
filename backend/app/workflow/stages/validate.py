@@ -9,6 +9,7 @@ from app.workflow.stages.support import (
     _adopt_context,
     _evaluate_progress_gate,
     _load_ref_artifact,
+    _pass_gate,
     _require_context,
     _retry_patch,
     _run_id,
@@ -109,6 +110,79 @@ def _l3_revision_patch(program: Any, target_ids: list[str]) -> Dict[str, Any] | 
         "layer_just_completed": None,
     }
 
+
+def _auto_defer_blocked_targets(
+    state: Dict[str, Any],
+    compilation: Any,
+    impact: Any,
+    working_state: Dict[str, Any],
+    *,
+    load_ref: Any = None,
+    persist: Any = None,
+) -> Dict[str, Any] | None:
+    """Auto-defer a blocked VALIDATE compilation to enable partial delivery.
+
+    No deterministic repair path exists for the findings: defer the affected
+    targets into a typed DeferralLedger and revise the ExecutionPlan so
+    RECONCILE/DELIVER treat them as deferred (partial delivery) instead of
+    blocking the whole run on HUMAN.  Returns None when there are no
+    deferrable target ids (integrity/lineage failures still fail closed).
+    """
+    if load_ref is None:
+        load_ref = _load_ref_artifact
+    if persist is None:
+        persist = persist_stage_artifact
+
+    reason = str(impact.reason or "validation repair is unresolved")
+    defer_ids = sorted({
+        str(target_id)
+        for item in compilation.unresolved
+        for target_id in item.target_ids
+        if str(target_id).strip()
+    })
+    if not defer_ids:
+        return None
+
+    from app.contracts.artifacts.deferral_contracts import DeferralLedger
+    from app.contracts.workflow.execution_plan_contracts import ExecutionPlan
+    from app.domain.delivery.deferral_ledger import append_ledger, build_target_deferrals
+    from app.domain.materialization.plan_builder import defer_plan_tasks
+
+    existing_ledger = load_ref(state, "deferral_ledger", DeferralLedger)
+    ledger = append_ledger(
+        existing_ledger,
+        build_target_deferrals(
+            defer_ids,
+            reason="validate_auto_defer:no_repair_policy",
+            source_refs=("artifact:validation_report",),
+            decided_by="validate",
+            rationale=reason,
+        ),
+    )
+    output_refs: Dict[str, Any] = {}
+    patch: Dict[str, Any] = {}
+    ledger_ref = persist(working_state, "validate", "DeferralLedger", ledger)
+    if ledger_ref:
+        output_refs["deferral_ledger"] = ledger_ref
+        patch["deferral_ledger"] = ledger.model_dump(mode="json")
+    plan = load_ref(state, "execution_plan", ExecutionPlan)
+    if plan is not None:
+        revised_plan = defer_plan_tasks(
+            plan, defer_ids, review_id="validate-auto-defer"
+        )
+        plan_ref = persist(working_state, "validate", "ExecutionPlan", revised_plan)
+        if plan_ref:
+            output_refs["execution_plan"] = plan_ref
+    patch["auto_deferred_target_ids"] = defer_ids
+    return {
+        "gate": _pass_gate("validate").model_copy(update={
+            "feedback_route": "PASS",
+            "route_reason": f"auto_deferred_targets:{len(defer_ids)}",
+        }),
+        "next_action": _next_action_forward("reconcile"),
+        "output_refs": output_refs,
+        "patch": patch,
+    }
 
 async def validate_node(state: Dict[str, Any]) -> Dict[str, Any]:
     """Validate the immutable EXECUTE outputs and emit a typed gate + next_action."""
@@ -227,9 +301,18 @@ async def validate_node(state: Dict[str, Any]) -> Dict[str, Any]:
     elif impact.status == "noop":
         next_action = _next_action_forward("reconcile")
     else:
-        reason = str(impact.reason or "validation repair is unresolved")
-        gate = _override_gate_route(gate, "HUMAN", reason="typed_repair_blocked")
-        next_action = _next_action_human("blocked", "typed_repair_blocked", reason)
+        auto = _auto_defer_blocked_targets(
+            state, compilation, impact, working_state
+        )
+        if auto is not None:
+            gate = auto["gate"]
+            next_action = auto["next_action"]
+            output_refs.update(auto["output_refs"])
+            patch.update(auto["patch"])
+        else:
+            reason = str(impact.reason or "validation repair is unresolved")
+            gate = _override_gate_route(gate, "HUMAN", reason="typed_repair_blocked")
+            next_action = _next_action_human("blocked", "typed_repair_blocked", reason)
 
     return {
         **stage_completion_patch(
