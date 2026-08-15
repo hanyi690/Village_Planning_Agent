@@ -512,10 +512,10 @@ def _measure_value(
     if factor is None:
         _diagnostic(
             diagnostics,
-            "error",
+            "warning",
             "unsupported_measure_unit",
             claim_id,
-            f"{field_name} unit {measure.unit!r} is not supported",
+            f"{field_name} unit {measure.unit!r} is not supported; measure dropped",
         )
         return None
     return float(measure.value) * factor
@@ -588,10 +588,10 @@ def _normalize_road_parameters(
     except ValueError as exc:
         _diagnostic(
             diagnostics,
-            "error",
+            "warning",
             "invalid_road_parameters",
             claim_id,
-            str(exc),
+            f"{exc}; road_parameters dropped",
         )
         return None
 
@@ -633,7 +633,7 @@ def _normalize_facility_parameters(
             ),
         )
     except ValueError as exc:
-        _diagnostic(diagnostics, "error", "invalid_facility_parameters", claim_id, str(exc))
+        _diagnostic(diagnostics, "warning", "invalid_facility_parameters", claim_id, f"{exc}; facility_parameters dropped")
         return None
 
 
@@ -666,7 +666,7 @@ def _normalize_axis_parameters(
             ),
         )
     except ValueError as exc:
-        _diagnostic(diagnostics, "error", "invalid_axis_parameters", claim_id, str(exc))
+        _diagnostic(diagnostics, "warning", "invalid_axis_parameters", claim_id, f"{exc}; axis_parameters dropped")
         return None
 
 
@@ -732,18 +732,18 @@ def _normalize_polygon_parameters(
         elif factor is None:
             _diagnostic(
                 diagnostics,
-                "error",
+                "warning",
                 "unsupported_area_unit",
                 claim_id,
-                f"area_range unit {area.unit!r} is not supported",
+                f"area_range unit {area.unit!r} is not supported; area constraint dropped",
             )
         elif area.minimum is None or area.maximum is None:
             _diagnostic(
                 diagnostics,
-                "error",
+                "warning",
                 "incomplete_area_range",
                 claim_id,
-                "area_range requires minimum and maximum",
+                "area_range missing minimum or maximum; area constraint dropped",
             )
         else:
             minimum = float(area.minimum) * factor
@@ -751,10 +751,10 @@ def _normalize_polygon_parameters(
             if minimum <= 0 or maximum < minimum:
                 _diagnostic(
                     diagnostics,
-                    "error",
+                    "warning",
                     "invalid_area_range",
                     claim_id,
-                    f"area range is invalid: {minimum}-{maximum}ha",
+                    f"area range is invalid: {minimum}-{maximum}ha; area constraint dropped",
                 )
             else:
                 area_range = (minimum, maximum)
@@ -773,7 +773,7 @@ def _normalize_polygon_parameters(
             land_use=_text(source.land_use) if source is not None else "",
         )
     except ValueError as exc:
-        _diagnostic(diagnostics, "error", "invalid_polygon_parameters", claim_id, str(exc))
+        _diagnostic(diagnostics, "warning", "invalid_polygon_parameters", claim_id, f"{exc}; polygon_parameters dropped")
         return None, area_range
     return parameters, area_range
 
@@ -807,7 +807,7 @@ def _normalize_project_parameters(
             ),
         )
     except ValueError as exc:
-        _diagnostic(diagnostics, "error", "invalid_project_parameters", claim_id, str(exc))
+        _diagnostic(diagnostics, "warning", "invalid_project_parameters", claim_id, f"{exc}; project_parameters dropped")
         return None
 
 
@@ -837,7 +837,7 @@ def normalize_claim_draft_set(
         if not claim_id or not statement:
             _diagnostic(
                 diagnostics,
-                "error",
+                "warning",
                 "missing_claim_identity",
                 claim_id or "claim",
                 "missing claim_id or statement; omitted",
