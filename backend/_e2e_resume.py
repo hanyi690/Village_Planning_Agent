@@ -581,8 +581,12 @@ def main() -> int:
                 and (getattr(start_snap, "tasks", None) or [])
                 and not has_interrupt
                 and not _delivery_poll_terminal(start_vals)
-                and not start_vals.get("paused_stage")
             ):
+                # A real HUMAN pause always carries an interrupt in the parent
+                # snapshot tasks (has_interrupt guards it).  A crashed
+                # mid-superstep checkpoint has pending tasks with NO interrupt
+                # and may leave a stale paused_stage channel - kick the
+                # subgraph-aware crash resume in that case.
                 log("kick resume_from_deepest_checkpoint once for stale mid-superstep checkpoint")
                 client.portal.call(
                     PlanningRuntimeService.resume_from_deepest_checkpoint,

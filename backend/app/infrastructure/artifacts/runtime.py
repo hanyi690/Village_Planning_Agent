@@ -135,10 +135,16 @@ def store_artifact(
             expected_descriptor_digest=expected,
         )
     except NamedRefConflict as exc:
-        # A stage may have committed the immutable blob and named ref before
-        # its LangGraph checkpoint was committed.  Retrying the same node must
-        # adopt that exact result; a different payload remains a real CAS
-        # conflict and fails closed.
+        # Two legitimate paths reach here:
+        # 1. A stage committed the blob + named ref before its LangGraph
+        #    checkpoint was committed; retrying the same node must adopt that
+        #    exact result (identical payload -> identical content digest).
+        # 2. A crash-replay re-executes a stage that already committed the key
+        #    and produces a NEW revision (e.g. deferral_ledger revised by
+        #    EXECUTE and VALIDATE, or a re-run of EXECUTE after a crash).  In a
+        #    single-process replay the named ref is only stale relative to the
+        #    checkpoint, so adopt the new descriptor as the latest revision via
+        #    a compare-and-set against the repository's current ref.
         existing = repository.get_named_ref(run_id, branch_id, key)
         if (
             existing is not None
@@ -148,6 +154,17 @@ def store_artifact(
             and repository.get_json(existing) == payload_json
         ):
             return existing.model_dump(mode="json")
+        if existing is not None:
+            try:
+                repository.compare_and_set_named_ref(
+                    run_id, branch_id, key, descriptor,
+                    expected_descriptor_digest=existing.descriptor_digest,
+                )
+            except NamedRefConflict:
+                raise ArtifactReplayError(
+                    f"artifact {key} named ref changed during replay"
+                ) from exc
+            return descriptor.model_dump(mode="json")
         raise ArtifactReplayError(f"artifact {key} named ref changed during replay") from exc
     return descriptor.model_dump(mode="json")
 
