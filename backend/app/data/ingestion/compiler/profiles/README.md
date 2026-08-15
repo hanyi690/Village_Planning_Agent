@@ -24,18 +24,18 @@
 | `l2_strategy.py` | L2 维度报告（定位/目标/策略文本） | `L2StrategyFragment`（goals / strategies / priorities / conflicts / evidence gaps） | 禁止自动推规划用途/分区/点位 |
 | `../agent/l3_plan/worker.py` | L3 维度 claims | `PlanningClaimSet` | 不产出 proposal、分类、BSM 或几何 |
 
-**注意**：`compiler/profiles/` 与 `parsing/compiler/profiles/` 同义——本目录是 `modules/parsing/compiler/profiles/`，是共享编译内核下的唯一 profile 集合。
+**注意**：`compiler/profiles/` 与 `parsing/compiler/profiles/` 同义——本目录是 `app/data/ingestion/compiler/profiles/`，是共享编译内核下的唯一 profile 集合。
 
 ---
 
 ## 依赖方向
 
 ```
-profiles/ → compiler/core.py（分派）、schema/contracts（l1/l2/l3、parsing、classification_ref）
+profiles/ → compiler/core.py（分派）、app/contracts（l1/l2/l3、parsing、classification_ref）
    ▲ 被 L1/L2 报告阶段按 CompilationProfile 选择调用
 ```
 
-- 允许：`compiler/`、`schema/contracts`、标准库（`re` 等）
+- 允许：`compiler/`、`app/contracts`、标准库（`re` 等）
 - 禁止：`advisory_crosswalks`（L1 profile 显式禁止）、`agent` / `services` / `api` / `tools`
 
 ---

@@ -45,7 +45,7 @@ dicts/
 ## Public API
 
 ```python
-from app.modules.schema.encodings import (
+from app.data.encodings import (
     # Code sets (module-level dicts)
     DLBM_TO_ZONE_TYPE, DLBM_TO_PLANNING_ZONE, DLBM_TO_PRIMARY_ZONE,
     GHYTBM_TO_GHYTMC, GHYTBM_TO_VNE, VNE_CODE_TO_NAME,

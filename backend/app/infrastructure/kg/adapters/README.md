@@ -1,18 +1,18 @@
 # KG Adapters — 端口实现适配器
 
-> **定位**：KG 侧对 `app.modules.ports` 各 Protocol 的**实现**。每个适配器把 KG 子模块包装在端口背后，使 agent / spatial_ops 层只依赖端口接口而非 KG 实现。
+> **定位**：KG 侧对 `app.contracts.ports` 各 Protocol 的**实现**。每个适配器把 KG 子模块包装在端口背后，使 agent / app.spatial 层只依赖端口接口而非 KG 实现。
 > **Updated: 2026-08-05**
 
 ---
 
 ## 职责边界
 
-**负责**：实现由 `modules/ports/` 定义的依赖倒置端口，桥接 KG 能力与消费方。
+**负责**：实现由 `app/contracts/ports/` 定义的依赖倒置端口，桥接 KG 能力与消费方。
 
 **不负责**：
 - 不定义端口（端口定义在 `ports/`）
 - 不做端口之外的业务逻辑（薄适配）
-- 不 import `app.agent` / `app.api` / `app.tools`
+- 不 import 上层编排（`app.workflow` / `app.api`）与业务算法
 
 ---
 
@@ -30,12 +30,12 @@
 ## 依赖方向
 
 ```
-kg/adapters/ → modules/ports（实现接口）、modules/kg（gazetteer / 会话 KG）、schema/contracts
-   ▲ 被 services/context 注入到 PlanningPorts，供 spatial_ops / agent 层消费
+kg/adapters/ → app/contracts/ports（实现接口）、app/infrastructure/kg（gazetteer / 会话 KG）、app/contracts
+   ▲ 被 app/application/context 注入到 PlanningPorts，供 app.spatial / app.workflow 层消费
 ```
 
-- 允许：`modules/ports`、`modules/kg` 内部、`schema/contracts`（`GazetteerEntryLike` / `SpatialReferenceSpec` / `CandidateSet`）
-- 禁止：`agent` / `services` / `api` / `tools`
+- 允许：`app/contracts/ports`、`app/infrastructure/kg` 内部、`app/contracts`（`GazetteerEntryLike` / `SpatialReferenceSpec` / `CandidateSet`）
+- 禁止：`app/workflow` / `app/api` / 业务算法
 
 ---
 

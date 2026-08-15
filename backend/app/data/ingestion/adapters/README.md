@@ -72,8 +72,8 @@ See [`docs/guides/how-to-add-layer.md`](../../../../../docs/guides/how-to-add-la
 
 ## Dependencies
 
-- `app.modules.schema.types.layer_registry` (`GisLayerTypeEntry`)
-- `app.modules.kg.dlq` (`DlqEntry` - shared dead-letter queue type)
+- `app.data.model.layer_registry` (`GisLayerTypeEntry`)
+- `app.infrastructure.kg.dlq` (`DlqEntry` - shared dead-letter queue type)
 - No deps on `catalog/`, `sources/`, or `connections/` (adapters are pure data transforms)
 
 ## How to extend

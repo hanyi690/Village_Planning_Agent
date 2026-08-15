@@ -46,18 +46,18 @@
 ## 依赖方向
 
 ```
-enrichment/ → modules/kg（memory / builder / gazetteer）、schema/contracts、app.utils
+enrichment/ → app/infrastructure/kg（memory / builder / gazetteer）、app/contracts、app.utils
    ▲ 被 KG builder / L1 回流节点 / agent 语义增强节点消费
 ```
 
-- 允许：`modules/kg` 内部、`schema/contracts`、`app.utils`
+- 允许：`app/infrastructure/kg` 内部、`app/contracts`、`app.utils`
 - 禁止：`agent` / `services` / `api` / `tools`（仅作为被调用方，不反向 import）
 
 ---
 
 ## 禁止行为
 
-- 在 enrichment 内做几何计算（算力在 `spatial_ops`，KG 只存结果）
+- 在 enrichment 内做几何计算（算力在 `app.spatial`，KG 只存结果）
 - 直接改 RDF 三元组承载量化属性（数值必须进 `SemanticMemoryStore`）
 - 新代码走 `bindings.py` 兼容路径（应使用 `report_entity_enrichment`）
 - LLM 判定（Flash）不配合空间校验即写入绑定（村名绑定必须双确认）

@@ -8,7 +8,7 @@
 ## 职责边界
 
 **负责**：
-- `document_loader.py`：shim，重导出 `app.utils.document_loader`（`FileTypeDetector` / `MarkItDownLoader` / `MarkdownCleaner` 等），供 rag 模块内部与旧 `services/modules/rag/service.py` 使用
+- `document_loader.py`：shim，重导出 `app.utils.document_loader`（`FileTypeDetector` / `MarkItDownLoader` / `MarkdownCleaner` 等），供 rag 模块内部与旧 `app/infrastructure/rag/service.py` 使用
 - `metadata_extractor.py`：从文件路径/文件名/内容提取元数据（目录分类、序号与标题、Markdown 解析器信息），并用 Flash LLM 推断 `doc_type`
 
 **不负责**：
@@ -43,5 +43,5 @@ rag/utils/ → app.utils.document_loader、app.core.settings、app.infrastructur
 ## 禁止行为
 
 - 在 rag/utils 内做向量检索 / 层级切片（那是 rag 根模块职责）
-- 新代码依赖 `document_loader.py` shim 指向已废弃的 `services/modules/rag/service.py` 路径（应直接使用 `app.utils.document_loader`）
+- 新代码依赖 `document_loader.py` shim 指向已废弃的 `app/infrastructure/rag/service.py` 路径（应直接使用 `app.utils.document_loader`）
 - 把业务逻辑塞进"工具"目录（保持薄工具）

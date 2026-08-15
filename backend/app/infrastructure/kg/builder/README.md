@@ -36,7 +36,7 @@
 `KGBuilder` is the composition orchestrator. `PlanningKG` holds only data (RDF graph + SemanticMemoryStore).
 
 ```python
-from app.modules.kg.builder import KGBuilder
+from app.infrastructure.kg.builder import KGBuilder
 
 kg = KGBuilder.build(
     "jintian", bundle,
@@ -49,7 +49,7 @@ kg = KGBuilder.build(
 
 The `kg_main` fixture in tests:
 ```python
-from app.modules.kg.builder import KGBuilder
+from app.infrastructure.kg.builder import KGBuilder
 kg = KGBuilder.build("jintian", bundle, parcel_relations=relations, constraint_index=constraint_index)
 ```
 
@@ -89,7 +89,7 @@ Current `@kg_builder` registrations (in layer1_core.py, layer1_extended.py):
 class BuildContext:
     village_name: str
     bbox: Optional[tuple[float, float, float, float]] = None
-    constraint_index: Any = None        # ConstraintIndex from spatial_ops.bridge
+    constraint_index: Any = None        # ConstraintIndex from app.spatial.bridge
     provenance: dict[str, Any] = field(default_factory=dict)
 ```
 
@@ -108,7 +108,7 @@ class BuilderSpec:
 ## Public API
 
 ```python
-from app.modules.kg.builder import (
+from app.infrastructure.kg.builder import (
     PlanningKG, KGInputParcels, KGBuilder,
     BuildContext, kg_builder, get_builder, BuilderSpec,
 )
@@ -138,7 +138,7 @@ kg.g.add((a, Relations.sfTouches, b))
 kg.memory.add_relation_annotation(RelationAnnotation(
     subject_uri=str(a), predicate=str(Relations.sfTouches),
     object_uri=str(b), description="",
-    derived_from="spatial_ops_computed",
+    derived_from="app.spatial_computed",
     quantitative_detail={"shared_boundary_m": t.shared_boundary_length_m},
 ))
 ```
@@ -146,11 +146,11 @@ kg.memory.add_relation_annotation(RelationAnnotation(
 ## Dependencies
 
 - `rdflib` (Graph, Literal, URIRef, RDF, XSD)
-- `app.modules.schema.types` (VillageBundle, feature classes)
-- `app.modules.kg.ontology` (PLN, GEO, EntityTypes, Relations, EntityIdPolicy)
-- `app.modules.kg.memory` (SemanticMemoryStore)
-- `app.modules.kg.dlq` (DlqEntry, DlqReport)
-- **No** deps on `data`, `spatial_ops`, `agent`, `tools` (KG receives spatial_ops outputs as injected params)
+- `app.data.model` (VillageBundle, feature classes)
+- `app.infrastructure.kg.ontology` (PLN, GEO, EntityTypes, Relations, EntityIdPolicy)
+- `app.infrastructure.kg.memory` (SemanticMemoryStore)
+- `app.infrastructure.kg.dlq` (DlqEntry, DlqReport)
+- **No** deps on `data`, `app.spatial`, `agent`, `tools` (KG receives app.spatial outputs as injected params)
 
 ## How to extend
 

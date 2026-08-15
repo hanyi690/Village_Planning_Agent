@@ -16,7 +16,7 @@
 **不负责**：
 - 不做具体连接/驱动实现（那是 `connections/` 与 `sources/`）
 - 不做类型定义（那是 `schema/`）
-- 不缓存 session 级 bundle（那是 `services/session_bundle.py`）
+- 不缓存 session 级 bundle（那是 `app/application/sessions/session_bundle.py`）
 
 ---
 
@@ -46,12 +46,12 @@
 ## 依赖方向
 
 ```
-catalog/ → data/connections（连接）、data/sources（驱动）、data/adapters（ingest 策略）
-        → modules/schema（VillageBundle / 类型）/ modules/schema.advisory_crosswalks
+catalog/ → app/data/ingestion（connections/sources/adapters）
+        → app/data/model（VillageBundle / 类型）、app/data/catalog/advisory_crosswalks
         → app.utils（logger 等）
 ```
 
-- 允许：`schema`、`data/` 内部各子包、`app.utils`
+- 允许：`app/contracts`、`app/data/` 内部各子包、`app.utils`
 - 禁止：`agent` / `services` / `api` / `tools`；反向被 `kg` 直接 import（kg 经 `BundleAssemblyPort` 注入）
 
 ---

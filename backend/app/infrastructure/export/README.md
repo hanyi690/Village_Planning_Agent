@@ -22,7 +22,7 @@
 ## 依赖方向
 
 - 依赖 `app.utils.sse_events.GISLayerConfig` 与
-  `app.modules.schema.output.gdb.GDB_LAYER_REGISTRY`。
+  `app.infrastructure.export.gdb.GDB_LAYER_REGISTRY`。
 - 不依赖 Agent / LangChain 工具封装。
 
 ## 禁止行为

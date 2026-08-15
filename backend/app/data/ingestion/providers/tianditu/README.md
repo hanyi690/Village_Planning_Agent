@@ -31,7 +31,7 @@
 
 - 依赖 `app.core.settings`（TIANDITU_API_KEY / GD_TIANDITU_TOKEN 等）、
   `app.data.ingestion.connections`（RateLimiter，key="tianditu"）。
-- 被 `app.data.ingestion.providers.poi`、`app.modules.parsing.gazetteer`
+- 被 `app.data.ingestion.providers.poi`、`app.data.ingestion.gazetteer`
   （地理编码）、`app.data.catalog.external_anchors`
   （source="tianditu_wfs"）、`app.data.ingestion.sources.api_vector` 与
   `sources.wmts_tile`（GDSpecializedService）

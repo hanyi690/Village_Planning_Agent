@@ -35,11 +35,11 @@
 ## 依赖方向
 
 ```
-access/ → services（session_bundle / BundleStore）、modules/kg.queries、infrastructure/rag、schema/contracts、app.utils
+access/ → app/application/sessions（session_bundle / BundleStore）、app/infrastructure/kg.queries、app/infrastructure/rag、app/contracts、app.utils
    ▲ 被 ToolRegistry.for_agent("explore") 绑定
 ```
 
-- 允许：`services`（读）、`modules/*`、`schema/contracts`、`app.utils`、LangChain
+- 允许：`app/application`（读）、`app/infrastructure/*`（读）、`app/contracts`、`app.utils`、LangChain
 - 禁止：写路径 / 几何计算 / 算法实现
 
 ---

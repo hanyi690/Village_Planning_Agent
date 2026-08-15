@@ -40,12 +40,12 @@
 ## 依赖方向
 
 ```
-compiler/ → schema/contracts（l1/l2/l3、parse_result、parsing、provenance、spatial_reference、classification_ref）
-          → modules/parsing（tables、spatial_language）
+compiler/ → app/contracts（l1/l2/l3、parse_result、parsing、provenance、spatial_reference、classification_ref）
+          → app/data/ingestion（tables、spatial_language）
    ▲ 被 L1/L2 profiles 与 target projection domain 消费
 ```
 
-- 允许：`schema/contracts`、`modules/parsing` 内部、`app.utils`
+- 允许：`app/contracts`、`app/data/ingestion` 内部、`app.utils`
 - 禁止：`agent` / `services` / `api` / `tools`；禁止空间计算
 
 ---

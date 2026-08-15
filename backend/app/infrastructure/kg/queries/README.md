@@ -26,7 +26,7 @@
 
 Usage:
 ```python
-from app.modules.kg.queries import analysis_queries, parse_queries
+from app.infrastructure.kg.queries import analysis_queries, parse_queries
 
 # Analysis: coarse semantic queries for report generation
 result = analysis_queries["get_village_cognition"]["func"](kg, village_name="金田村委会")
@@ -38,7 +38,7 @@ parcels = parse_queries["get_parcel_neighbors"]["func"](kg, bsm="001")
 ## SPARQL templates and `query_kg`
 
 ```python
-from app.modules.kg.queries import query_kg, QUERY_TEMPLATES
+from app.infrastructure.kg.queries import query_kg, QUERY_TEMPLATES
 
 # Named template + parameters
 result = query_kg(kg, "get_parcels_by_zone_type", zone_type_val="农业用地")
@@ -52,7 +52,7 @@ print(list(QUERY_TEMPLATES.keys()))
 ## Query functions (v5.0 - all module-level, take `kg` as first arg)
 
 ```python
-from app.modules.kg.queries import (
+from app.infrastructure.kg.queries import (
     query, get_adjacency_map,
     get_parcel_count, get_triple_count, serialize, to_turtle, from_turtle,
     get_parcels_within_distance_of_entity, get_adjacent_parcels_with_length,
@@ -91,7 +91,7 @@ zone_parcels = get_planned_parcels_in_zone(kg, "村庄建设区", "v1")
 ## Semantic queries (LLM-friendly)
 
 ```python
-from app.modules.kg.queries import (
+from app.infrastructure.kg.queries import (
     get_entity_context, get_entity_relations,
     get_parcel_semantic_context, get_village_semantic_summary,
     get_entity_by_bsm, get_parcels_by_planning_zone,
@@ -111,7 +111,7 @@ sem = get_entity_semantics(kg, entity_label="水田")
 ## Cognition queries (v4.8)
 
 ```python
-from app.modules.kg.queries import get_village_cognition
+from app.infrastructure.kg.queries import get_village_cognition
 
 payload = get_village_cognition(kg, "金田村委会")
 # payload.semantic = {
@@ -131,7 +131,7 @@ payload = get_village_cognition(kg, "金田村委会")
 ## `TOOL_META`
 
 ```python
-from app.modules.kg.queries import TOOL_META, TOOL_META_SEMANTIC
+from app.infrastructure.kg.queries import TOOL_META, TOOL_META_SEMANTIC
 
 # TOOL_META: metadata for wrapping query_kg as a LangGraph @tool
 # Describes available template names + parameter schema
@@ -141,8 +141,8 @@ from app.modules.kg.queries import TOOL_META, TOOL_META_SEMANTIC
 
 ```python
 # Import from builder subpackage
-from app.modules.kg.builder.layer3 import build_intent_layer, clear_intent_layer
-from app.modules.kg.builder.layer4 import apply_planned_state
+from app.infrastructure.kg.builder.layer3 import build_intent_layer, clear_intent_layer
+from app.infrastructure.kg.builder.layer4 import apply_planned_state
 
 # Build L3 intent
 build_intent_layer(kg, intent)
@@ -157,9 +157,9 @@ clear_intent_layer(kg)
 ## Dependencies
 
 - `rdflib` (SPARQL execution)
-- `app.modules.kg.ontology` (PLN, EntityTypes, Relations)
-- `app.modules.kg.memory` (SemanticMemoryStore for write-on-read annotations)
-- **No** deps on `data`, `spatial_ops`, `agent`, `tools`
+- `app.infrastructure.kg.ontology` (PLN, EntityTypes, Relations)
+- `app.infrastructure.kg.memory` (SemanticMemoryStore for write-on-read annotations)
+- **No** deps on `data`, `app.spatial`, `agent`, `tools`
 
 ## How to extend
 

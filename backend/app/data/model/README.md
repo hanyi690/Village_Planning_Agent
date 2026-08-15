@@ -40,7 +40,7 @@ The DU (discriminated union) discriminator is `layer_type` (embedded on each fea
 ## Public API
 
 ```python
-from app.modules.schema.types import (
+from app.data.model import (
     # Bases
     SpatialFeature, PointFeature, LineFeature, PolygonFeature, RasterDataset,
     TableDataset, Document,
@@ -66,7 +66,7 @@ from app.modules.schema.types import (
 
 ## How to extend
 
-See [`docs/guides/how-to-add-layer.md`](../../../../../docs/guides/how-to-add-layer.md) for the full guide. Short version:
+See [`docs/guides/how-to-add-layer.md`](../../../../docs/guides/how-to-add-layer.md) for the full guide. Short version:
 
 1. **New layer type**: add YAML entry to `gis_layer_registry.yaml`
 2. **New Python class**: define Pydantic v2 subclass in `spatial_types.py` / `raster_types.py` / `table_types.py`, export from `__init__.py`, add mapping in `data/ingest.py::_infer_model_class()`

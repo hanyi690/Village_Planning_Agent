@@ -129,12 +129,12 @@ python -m app.infrastructure.rag.cli status | delete <source> | reload <file.md>
 
 - 分析 Agent（各 dimension 节点）经 `get_context(dim_key, state, cfg)` 获取知识注入，属**可选增强**——检索失败/无结果返回空串，不阻断主流程。
 - CLI / API 层调用知识库管理方法（如文档上传、库状态查询）。
-- 与 `services/report_store.py`（依赖摘要来源）配合使用。
+- 与 `app/infrastructure/reports/report_store.py`（依赖摘要来源）配合使用。
 
 ---
 
 ## 八、相关文档
 
-- `app/modules/kg/README.md` — 与 KG（符号推理）互补：RAG 提供外部文档语义，KG 提供村庄实体关系。
+- `app/infrastructure/kg/README.md` — 与 KG（符号推理）互补：RAG 提供外部文档语义，KG 提供村庄实体关系。
 - `app/core/settings.py` — RAG 相关配置
-- `app/services/report_store.py` — Layer 报告/摘要存储（查询生成依赖）
+- `app/infrastructure/reports/report_store.py` — Layer 报告/摘要存储（查询生成依赖）

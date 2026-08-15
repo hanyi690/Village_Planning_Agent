@@ -13,7 +13,7 @@
 - 持久化：`data/gazetteer/{village}.json` 主文件 + 轮次增量写入 memory 轮次文件
 
 **不负责**：
-- 不解析一般自然语言空间描述（方向/BBox 接地是 `spatial_ops/grounding`）
+- 不解析一般自然语言空间描述（方向/BBox 接地是 `app/spatial/grounding`）
 - 不做 POI 地理编码（那是 `data/providers` / `data/catalog`）
 - 不构建 KG 实体（那是 `builder/`）
 
@@ -35,11 +35,11 @@
 ## 依赖方向
 
 ```
-gazetteer/ → modules/kg（queries.sparql / memory）、schema/contracts、app.utils
-   ▲ 被 services/context、kg/adapters、agent 消费
+gazetteer/ → app/infrastructure/kg（queries.sparql / memory）、app/contracts、app.utils
+   ▲ 被 app/application/context、kg/adapters、agent 消费
 ```
 
-- 允许：`modules/kg` 内部、`schema/contracts`、`app.utils`
+- 允许：`app/infrastructure/kg` 内部、`app/contracts`、`app.utils`
 - 禁止：`agent` / `services` / `api` / `tools`；不依赖外部地图 API
 
 ---

@@ -1,69 +1,32 @@
-# Tools 层 — 外部能力适配器
+# infrastructure/llm/tools 工具适配
 
-> **定位**：外部能力适配器层——把领域能力封装为 **LangChain `@tool`** 供 Agent 调用。`tools` **只能是外部能力适配器，不能成为规划算法的第二实现**（见 `docs/design/00_SYSTEM_DESIGN.md`：*"应用层可以调用领域层；领域层不能反向导入 Agent、Service、API 或 UI。`tools` 只能是外部能力适配器，不能成为规划算法的第二实现"*）。
-> **Updated: 2026-08-05**
+> 本 README 以 `backend/app/infrastructure/llm/tools/` 实际代码为准（核验日期 2026-08-15）。
+> 旧文档中的 `modules/*`、`tools/gis/*`（顶层）路径已不存在；工具已收敛到本包。
 
----
+## 定位
 
-## 职责边界
+LLM 可调用工具的外部能力适配器：把领域能力封装为 LangChain/LangGraph 工具，供
+conversation 节点 `bind_tools` 与 `workflow/tools/execute_node.py` 执行。工具只做外部
+能力适配，不实现规划算法。
 
-**负责**：
-- 把 `modules/` 领域能力包装为工具调用面（`tools/gis/*`、`tools/access/*`）
-- 统一工具返回协议（`helpers.py`：`make_result` / `to_tool_message`）
-- 工具注册与元数据（`registry.py`：`register()` / `for_agent()` / `ToolMetadata`）
-- 通用业务工具（`tools.py`：人口预测 / 知识检索 / 网络搜索；`intent_tools.py`：推进规划意图 / GIS 分析意图）
+## 文件职责
 
-**不负责**：
-- **不实现规划算法**（所有领域算法在 `modules/`：空间计算 → `spatial_ops`，文本提取 → `parsing`，语义 → `kg`）
-- 不做业务编排 / 会话生命周期（那是 `services/`）
-- 不反向 import Agent 作为业务依赖
-
----
-
-## 输入/输出契约
-
-**输出协议**（`helpers.py`）：
-
-```python
-make_result(success: bool, data=None, error="") -> dict   # {"success", "data"?, "error"?}
-to_tool_message(result, tool_call_id) -> ToolMessage
-```
-
-**注册入口**（`registry.py`）：`register(tool)` → `for_agent(scope)` 返回可绑定工具列表；`ToolMetadata` 供 SSE 事件 / UI 渲染。
-
-**子目录**：
-
-| 目录 | 职责 |
+| 文件/目录 | 职责 |
 |---|---|
-| `access/` | EXPLORE 会话统一读路径工具（bundle / knowledge / rag / reports / shared）—— 见 `access/README.md` |
-| `gis/` | GIS 工具集（conflict / export / extract / kg / lookup / render / validate）+ 内部子目录 —— 见 `gis/README.md` |
+| `registry.py` | `ToolRegistry` + `ToolMetadata`：工具注册、元数据与查找（`get_tool_info`/`get_tool`） |
+| `tools.py` | `get_tools_for_llm`：返回可绑定工具列表 |
+| `helpers.py` | `make_result` / `to_tool_message`：统一工具返回协议 |
+| `intent_tools.py` | 规划意图工具（`advance_planning_intent`、`gis_analysis`）与路由名 |
+| `access/` | 会话统一读路径工具：`bundle`/`knowledge`/`rag`/`reports`/`shared` |
 
----
+## 与 execute_node 的关系
 
-## 依赖方向
+`workflow/tools/execute_node.py` 通过 `ToolRegistry.get_tool_info/get_tool` 解析工具名并
+执行；`_ROUTING_NAMES` 中的 `advance_planning_intent`/`gis_analysis` 由路由节点处理，
+其余工具在此执行并回写 ToolMessage。
 
-```
-tools/ → modules/*（领域能力）、schema/contracts、app.utils
-       → langchain_core.tools / langgraph.prebuilt（@tool / InjectedState / InjectedToolCallId）
-   ▲ 被 agent 节点绑定调用（bind_tools）
-```
+## 边界规则
 
-- 允许：`modules`（只读消费领域能力）、`schema/contracts`、`app.utils`、LangChain
-- 禁止：反向 import `agent` 作为业务依赖；在工具内实现算法
-
----
-
-## 禁止行为
-
-- 在 tools 内**重写** `modules/` 已有的规划算法（如内联几何计算、内联冲突检测）
-- 让工具层成为第二实现并绕过领域模块（导致逻辑分叉、无法统一修复）
-- 工具返回非结构化裸数据给 LLM（应经 `make_result` + token 预算）
-- 新增工具不注册到 `registry.py`（Agent 无法绑定）
-
----
-
-## 相关文档
-
-- `access/README.md` — 读路径工具集
-- `gis/README.md` — GIS 工具集与内部子目录
-- `docs/design/00_SYSTEM_DESIGN.md` — 工具层边界（tools 只能是外部能力适配器）
+- 工具内不重写 `domain/`/`spatial/` 已有算法（几何、冲突检测、分类等）。
+- 工具返回必须走 `make_result` + token 预算，不给 LLM 裸大数据。
+- 不反向 import 上层作为业务依赖。
