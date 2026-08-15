@@ -903,7 +903,11 @@ def normalize_claim_draft_set(
                 materialization_role=(
                     polygon_parameters.materialization_role
                     if polygon_parameters is not None
-                    else None
+                    else (
+                        "project_footprint"
+                        if category == "project" and output in {"parcel", "polygon"}
+                        else None
+                    )
                 ),
                 road_parameters=road_parameters,
                 facility_parameters=facility_parameters,
@@ -941,55 +945,31 @@ def claim_set_semantic_errors(claim_set: PlanningClaimSet) -> list[str]:
         for item in claim_set.diagnostics
         if str(item).startswith("ERROR[")
     ]
+    # L3 is preference-level planning: it supplies the structured intent and a
+    # rough location preference (location_hints / statement).  Precise spatial
+    # evidence (road corridor alignment, axis direction, exact widths, area
+    # ranges) is GROUND's job to resolve from location hints + KG topology, so
+    # those are NOT compile errors here.  Only the structural contract matters:
+    # the parameter object must exist and carry its minimum typed fields.
     for claim in claim_set.claims:
         prefix = f"{claim.claim_id}:"
         if claim.suggested_category == "road":
-            parameters = claim.road_parameters
-            if parameters is None:
+            if claim.road_parameters is None:
                 errors.append(f"{prefix} road_parameters are required")
-            else:
-                if (
-                    parameters.roadbed_width_m is None
-                    and parameters.pavement_width_m is None
-                ):
-                    errors.append(f"{prefix} road width is unresolved")
-                # Road corridor alignment (alignment_refs/connects) is spatial
-                # evidence that GROUND resolves from location_hints / KG
-                # topology; missing it is NOT an L3 compile error.  Only the
-                # structure (road_parameters + a width) is required here.
         elif claim.suggested_category == "facility":
             if claim.facility_parameters is None:
                 errors.append(f"{prefix} facility_parameters are required")
             elif not claim.facility_parameters.facility_type:
                 errors.append(f"{prefix} facility_type is required")
         elif claim.suggested_category == "axis":
-            parameters = claim.axis_parameters
-            if parameters is None:
+            if claim.axis_parameters is None:
                 errors.append(f"{prefix} axis_parameters are required")
-            elif not (
-                parameters.reference_features
-                or parameters.connects
-                or parameters.direction
-            ):
-                errors.append(f"{prefix} axis reference/direction is unresolved")
         elif claim.suggested_category == "zone":
-            parameters = claim.polygon_parameters
-            if parameters is None:
+            if claim.polygon_parameters is None:
                 errors.append(f"{prefix} polygon_parameters are required for zone")
-            elif (
-                parameters.materialization_role == "land_use_assignment"
-                and claim.area_range_ha is None
-            ):
-                errors.append(f"{prefix} land-use assignment requires an area range")
         elif claim.suggested_category in {"protection", "restoration"}:
             if claim.polygon_parameters is None:
                 errors.append(f"{prefix} overlay materialization parameters are required")
-        elif (
-            claim.suggested_category == "project"
-            and claim.suggested_output_kind in {"parcel", "polygon"}
-            and claim.materialization_role != "project_footprint"
-        ):
-            errors.append(f"{prefix} spatial project requires project_footprint role")
     return list(dict.fromkeys(errors))
 
 

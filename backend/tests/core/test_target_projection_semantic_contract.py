@@ -96,11 +96,14 @@ def test_protection_and_restoration_are_overlays_not_land_use_assignments() -> N
     assert result.typed_intent.project_targets[1].materialization_role == "restoration_overlay"
 
 
-def test_projection_gate_fails_closed_on_unresolved_l3_semantics() -> None:
+def test_projection_gate_defers_unresolved_semantics() -> None:
+    """Structure-first: L3 supplies preference; missing params defer the
+    target instead of failing the whole program back to L3."""
     road = _intervention("road-1", category="road", output="line")
 
     result, _, gate = project_program(PlanningProgram(interventions=[road]))
 
-    assert any(item.severity == "error" for item in result.diagnostics)
-    assert gate.passed is False
-    assert gate.feedback_route == "L3"
+    # Missing road_parameters is a warning (deferred), not an L3 rework error.
+    assert not any(item.severity == "error" for item in result.diagnostics)
+    assert any(item.severity == "warning" for item in result.diagnostics)
+    assert gate.feedback_route != "L3"

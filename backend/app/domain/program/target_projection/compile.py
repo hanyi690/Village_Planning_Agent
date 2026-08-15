@@ -277,7 +277,7 @@ def _build_diagnostics(
             diagnostics.append(
                 ParseDiagnostic(
                     diagnostic_id=f"road-semantics-{intervention.target_id}",
-                    severity="error",
+                    severity="warning",
                     code="ROAD_SEMANTICS_UNRESOLVED",
                     message="Road length/width/action semantics were not resolved in L3",
                     field_path="road_parameters",
@@ -288,7 +288,7 @@ def _build_diagnostics(
             diagnostics.append(
                 ParseDiagnostic(
                     diagnostic_id=f"facility-semantics-{intervention.target_id}",
-                    severity="error",
+                    severity="warning",
                     code="FACILITY_SEMANTICS_UNRESOLVED",
                     message="Facility type/action/scale semantics were not resolved in L3",
                     field_path="facility_parameters",
@@ -299,7 +299,7 @@ def _build_diagnostics(
             diagnostics.append(
                 ParseDiagnostic(
                     diagnostic_id=f"axis-semantics-{intervention.target_id}",
-                    severity="error",
+                    severity="warning",
                     code="AXIS_SEMANTICS_UNRESOLVED",
                     message="Axis direction/reference semantics were not resolved in L3",
                     field_path="axis_parameters",
@@ -310,7 +310,7 @@ def _build_diagnostics(
             diagnostics.append(
                 ParseDiagnostic(
                     diagnostic_id=f"zone-role-{intervention.target_id}",
-                    severity="error",
+                    severity="warning",
                     code="ZONE_MATERIALIZATION_UNRESOLVED",
                     message="Zone versus overlay materialization was not resolved in L3",
                     field_path="materialization_role",
@@ -325,7 +325,7 @@ def _build_diagnostics(
             diagnostics.append(
                 ParseDiagnostic(
                     diagnostic_id=f"project-role-{intervention.target_id}",
-                    severity="error",
+                    severity="warning",
                     code="PROJECT_MATERIALIZATION_UNRESOLVED",
                     message="Spatial project footprint semantics were not resolved in L3",
                     field_path="materialization_role",
