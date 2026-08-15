@@ -378,12 +378,22 @@ def create_flash_llm(
     # the active provider is MiniMax, route through the same provider-aware
     # factory and let its configured default model be selected.
     if get_provider() == LLMProvider.MINIMAX:
+        # Flash tasks are lightweight discriminators/extractors (unit mapping,
+        # anchor picking, mention extraction).  The active model is MiniMax-M2.x
+        # (MiniMax-M2.7-highspeed), whose thinking cannot be turned off; set
+        # reasoning_split=true so thinking is returned in reasoning_content /
+        # reasoning_details instead of <think>...</think> inside content, keeping
+        # the parseable content clean (user-documented MiniMax control).
+        flash_model_kwargs = dict(kwargs.pop("model_kwargs", None) or {})
+        flash_model_kwargs["reasoning_split"] = True
+        flash_model_kwargs.setdefault("thinking", {"type": "disabled"})
         return create_llm(
             temperature=temperature if temperature is not None else 0.3,
             max_tokens=max_tokens if max_tokens is not None else 500,
             callbacks=callbacks,
             metadata=metadata,
             streaming=bool(kwargs.pop("streaming", False)),
+            model_kwargs=flash_model_kwargs,
             **kwargs,
         )
     try:

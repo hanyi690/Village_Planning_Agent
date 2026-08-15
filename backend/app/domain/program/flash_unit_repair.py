@@ -98,6 +98,12 @@ def _parse_mapping(content: Any) -> dict[str, str]:
     text = str(content or "")
     if isinstance(content, list):
         text = "".join(str(part) for part in content)
+    try:
+        from app.infrastructure.llm.dimension_runtime import strip_model_reasoning
+
+        text = strip_model_reasoning(text)
+    except Exception:  # noqa: BLE001
+        pass
     match = re.search(r"\{[^{}]*\}", text, re.S)
     if match:
         try:
@@ -132,7 +138,7 @@ async def flash_repair_units(draft_set: Any, session_id: str) -> Any:
         "以下是从村庄规划干预 claim 中提取的单位（可能是面积/长度/数量/容量单位，"
         "也可能写错或为占位词）。请把每个映射到标准单位闭集："
         "面积：ha/m2/亩；长度：m/km；数量：个/处/座/条/人/户；容量：m3/l/t；功率：kw/kwh。"
-        "只输出 JSON 对象 “原单位”→“标准单位”；无法判断的保持原值。\n"
+        "严格只输出一个 JSON 对象，形如 {\"原单位\": \"标准单位\"}，不要输出任何解释、思考、Markdown 或其它文字；无法判断的保持原值。\n"
         f"单位列表：{units}"
     )
     try:
