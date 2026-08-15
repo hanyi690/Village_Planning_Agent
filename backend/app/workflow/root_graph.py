@@ -1078,6 +1078,74 @@ def _provider_resume_patch(
     }
 
 
+
+async def _apply_select_auto_deferral(state: Dict[str, Any]) -> Dict[str, Any]:
+    """Auto-defer SELECT-unplaced targets after a partial-selection approval.
+
+    Accepting a partial SELECT leaves the unplaced targets in the
+    ExecutionPlan's ``deferred_tasks`` without a ``DeferralLedger`` entry,
+    which DELIVER flags as structural blockers and forces diagnostic_only.
+    Record them in a typed ledger and revise the plan so the run delivers
+    partial instead of terminating on non-deferred blockers.
+    """
+    try:
+        gate = load_root_gate(state, "select")
+    except Exception:
+        return {}
+    target_ids = sorted({
+        str(target_id)
+        for request in (gate.pending_requests or [])
+        for target_id in (request.get("context") or {}).get("target_ids") or []
+        if str(target_id).strip()
+    })
+    if not target_ids:
+        return {}
+
+    from app.contracts.artifacts.deferral_contracts import DeferralLedger
+    from app.contracts.workflow.execution_plan_contracts import ExecutionPlan
+    from app.domain.delivery.deferral_ledger import append_ledger, build_target_deferrals
+    from app.domain.materialization.plan_builder import defer_plan_tasks
+    from app.infrastructure.artifacts.runtime import load_artifact
+
+    existing = load_artifact(state, "deferral_ledger", DeferralLedger)
+    ledger = append_ledger(
+        existing,
+        build_target_deferrals(
+            target_ids,
+            reason="select_approve_unplaced",
+            source_refs=("artifact:site_selection",),
+            decided_by="select-approve",
+            rationale="partial selection approved; unplaced targets deferred",
+        ),
+    )
+    patch: Dict[str, Any] = {}
+    artifact_refs = dict(state.get("artifact_refs") or {})
+    try:
+        ledger_ref = persist_stage_artifact(
+            state, "human_review", "DeferralLedger", ledger
+        )
+        if ledger_ref:
+            artifact_refs["deferral_ledger"] = ledger_ref
+    except Exception as exc:  # noqa: BLE001 - deferral must never break the approve
+        logger.warning("[main] select auto-defer ledger persist failed: %s", exc)
+    plan = load_artifact(state, "execution_plan", ExecutionPlan)
+    if plan is not None:
+        try:
+            revised = defer_plan_tasks(plan, target_ids, review_id="select-approve")
+            plan_ref = persist_stage_artifact(
+                state, "human_review", "ExecutionPlan", revised
+            )
+            if plan_ref:
+                artifact_refs["execution_plan"] = plan_ref
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("[main] select auto-defer plan revision failed: %s", exc)
+    if artifact_refs != dict(state.get("artifact_refs") or {}):
+        patch["artifact_refs"] = artifact_refs
+    patch["human_deferred_targets"] = target_ids
+    patch["human_deferred_select_revision"] = True
+    return patch
+
+
 async def apply_human_review_decision(state: Dict[str, Any]) -> Dict[str, Any]:
     """Apply an already-resumed decision, creating a new gate revision."""
     items = state.get("human_review_items") or []
@@ -1430,6 +1498,16 @@ async def apply_human_review_decision(state: Dict[str, Any]) -> Dict[str, Any]:
                     "code": "LLM_DIMENSION_RETRY_EXHAUSTED",
                     "message": f"dimension {dimension} retry limit exhausted ({attempts}/{limit})",
                 }
+    if (
+        action in ("accept", "approve")
+        and paused_stage == "select"
+        and not deferred_target_ids
+    ):
+        # Approving a partial SELECT must back the unplaced targets with a
+        # DeferralLedger entry (and an ExecutionPlan revision); otherwise
+        # DELIVER flags deferred_tasks without ledger backing as structural
+        # blockers and the run ends diagnostic_only instead of partial.
+        result.update(await _apply_select_auto_deferral(state))
     if action in ("accept", "approve") and paused_stage:
         if (
             paused_stage == "l3"

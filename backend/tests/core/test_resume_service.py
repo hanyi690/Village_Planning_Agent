@@ -26,9 +26,17 @@ def test_interrupt_token_is_compare_and_set():
     with pytest.raises(ResumeConflictError):
         ResumeService.validate_interrupt(state, "old")
 
+    # A stale consumed flag (only reset inside the hitl subgraph) must not
+    # block a resume whose event_id matches a LIVE interrupt.
+    ResumeService.validate_interrupt(
+        {"human_review_resume_consumed": True, "human_interrupt": {"event_id": "new"}},
+        "new",
+    )
+
+    # A genuinely consumed checkpoint (no live interrupt) is never resumable.
     with pytest.raises(ResumeConflictError):
         ResumeService.validate_interrupt(
-            {"human_review_resume_consumed": True, "human_interrupt": {"event_id": "new"}},
+            {"human_review_resume_consumed": True},
             "new",
         )
 

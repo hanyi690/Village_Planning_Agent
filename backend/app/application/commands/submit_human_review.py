@@ -78,7 +78,7 @@ class SubmitHumanDecisionService:
         active_event_id = interrupt.get("event_id") if isinstance(interrupt, dict) else None
         if active_event_id != command.event_id:
             raise HumanDecisionConflictError("event_id does not match active checkpoint")
-        if current.get("human_review_resume_consumed"):
+        if current.get("human_review_resume_consumed") and not interrupt:
             raise HumanDecisionConflictError("checkpoint was already resumed")
         resume_data = dict(command.decisions)
         resume_data["action"] = command.action
@@ -141,7 +141,7 @@ async def resolve_human_review(
         current_interrupt = current.get("human_interrupt") or {}
         if request.event_id and request.event_id != current_interrupt.get("event_id"):
             raise HTTPException(status_code=409, detail="event_id does not match active checkpoint")
-        if current.get("human_review_resume_consumed"):
+        if current.get("human_review_resume_consumed") and not current_interrupt:
             raise HTTPException(status_code=409, detail="checkpoint was already resumed")
         await PlanningRuntimeService.resume_from_interrupt(
             session_id,

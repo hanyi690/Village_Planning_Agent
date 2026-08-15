@@ -94,7 +94,11 @@ class ResumeService:
     @staticmethod
     def validate_interrupt(state: Dict[str, Any], expected_event_id: str) -> None:
         interrupt = state.get("human_interrupt") or {}
-        if state.get("human_review_resume_consumed"):
+        # The consumed flag is stale once a NEW pause exists (it is only reset
+        # by prepare_human_review inside the hitl subgraph, which the parent
+        # checkpoint view does not see until the super-step completes).  Only
+        # reject a resume when there is no live interrupt at all.
+        if state.get("human_review_resume_consumed") and not interrupt:
             raise ResumeConflictError(
                 "human review checkpoint was already resumed; wait for a new HUMAN pause"
             )

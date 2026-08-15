@@ -14,7 +14,20 @@ def _project(state):
     return _interrupt_projection(state)
 
 
-def test_consumed_interrupt_is_filtered():
+def test_consumed_without_live_interrupt_is_filtered():
+    # A genuinely consumed checkpoint (resume cleared human_interrupt) must not
+    # be re-presented - resubmitting the same event_id would 409.
+    state = {
+        "human_review_resume_consumed": True,
+        "human_interrupt": None,
+    }
+    assert _project(state) is None
+
+
+def test_stale_consumed_flag_does_not_hide_live_interrupt():
+    # human_review_resume_consumed is only reset by prepare_human_review inside
+    # the hitl subgraph; the parent checkpoint view can still carry True when a
+    # NEW pause is created.  A live interrupt must always be presented.
     state = {
         "human_review_resume_consumed": True,
         "human_interrupt": {
@@ -22,8 +35,15 @@ def test_consumed_interrupt_is_filtered():
             "paused_stage": "select",
             "items": [{"request_id": "r1"}],
         },
+        "human_review_items": [{"request_id": "r1"}],
+        "human_review_event_id": "abc",
+        "paused_stage": "select",
     }
-    assert _project(state) is None
+    proj = _project(state)
+    assert proj is not None
+    assert proj.get("event_id") == "abc"
+    assert proj.get("paused_stage") == "select"
+    assert len(proj.get("items") or []) == 1
 
 
 def test_pending_interrupt_is_presented():

@@ -362,15 +362,34 @@ def _interrupt_projection(state: dict[str, Any]) -> ArtifactRef | dict[str, Any]
     """
 
     if state.get("human_review_resume_consumed"):
-        return None
+        # Suppress only when there is no live pending interrupt: the consumed
+        # flag is written by an earlier resume and can be stale by the time a
+        # NEW pause (e.g. a later gate HUMAN) is created.  A live interrupt
+        # must always be presented, otherwise /human-review reports an empty
+        # review and unattended drivers can never answer the pause.
+        if not (state.get("human_interrupt") or state.get("interrupt_ref")):
+            return None
     raw = state.get("interrupt_ref") or state.get("human_interrupt")
     if isinstance(raw, ArtifactRef):
-        return raw
-    interrupt = dict(raw) if isinstance(raw, dict) else {}
+        # The interrupt payload lives behind a CAS ref.  The runtime already
+        # merged the small projection fields (items / event_id / paused_stage)
+        # into the state channels from the pending task interrupts, so hydrate
+        # from those instead of returning a bare ref (which loses items and
+        # makes /human-review report an empty review).  When there is nothing
+        # to hydrate, preserve the canonical ref identity.
+        if not (
+            state.get("human_review_items")
+            or state.get("human_review_event_id")
+            or state.get("paused_stage")
+        ):
+            return raw
+        interrupt = {}
+    else:
+        interrupt = dict(raw) if isinstance(raw, dict) else {}
     items = list(interrupt.get("items") or state.get("human_review_items") or [])
     event_id = str(interrupt.get("event_id") or state.get("human_review_event_id") or "")
     paused_stage = str(interrupt.get("paused_stage") or state.get("paused_stage") or "")
-    if not interrupt and not items and not event_id and not paused_stage:
+    if not raw and not items and not event_id and not paused_stage:
         return None
     interrupt["event_id"] = event_id
     interrupt["items"] = items

@@ -237,3 +237,31 @@ def test_auto_defer_blocked_targets_fails_closed_on_non_target_findings():
         persist=lambda *a, **k: None,
     )
     assert decision is None
+
+
+# ?? P0.3: partial-SELECT approval auto-defers unplaced targets ??????????
+@pytest.mark.asyncio
+async def test_select_approve_auto_defers_unplaced_targets(monkeypatch):
+    gate = SimpleNamespace(
+        pending_requests=[{
+            "request_type": "selection_no_candidate",
+            "context": {"target_ids": ["t1", "t2"]},
+        }]
+    )
+    monkeypatch.setattr(root_graph, "load_root_gate", lambda state, stage: gate)
+    monkeypatch.setattr(
+        "app.infrastructure.artifacts.runtime.load_artifact",
+        lambda state, key, cls=None: None,
+    )
+    persisted = {}
+
+    def fake_persist(state, stage, schema_id, payload):
+        persisted[schema_id] = payload
+        return {"ref": schema_id}
+
+    monkeypatch.setattr(root_graph, "persist_stage_artifact", fake_persist)
+    patch = await root_graph._apply_select_auto_deferral({"session_id": "s1"})
+    assert patch["human_deferred_targets"] == ["t1", "t2"]
+    assert "DeferralLedger" in persisted
+    assert [e.target_id for e in persisted["DeferralLedger"].entries] == ["t1", "t2"]
+    assert "ExecutionPlan" not in persisted  # plan is None in this mock
