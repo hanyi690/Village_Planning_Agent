@@ -435,7 +435,7 @@ async def execute_node(state: Dict[str, Any]) -> Dict[str, Any]:
     import asyncio
     from app.core.settings import LLM_REQUEST_TIMEOUT
     try:
-        async with asyncio.timeout(max(30, int(LLM_REQUEST_TIMEOUT))):
+        async with asyncio.timeout(max(900, int(LLM_REQUEST_TIMEOUT) * 5)):
             result = await graph.ainvoke(
                 exec_state,
                 config={"configurable": {"thread_id": state.get("session_id", "")}},
