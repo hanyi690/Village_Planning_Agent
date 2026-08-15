@@ -317,3 +317,20 @@ def test_execute_defers_unclassified_targets(monkeypatch):
     assert {e.target_id for e in ledger.entries} == {"a", "b"}
     assert persisted.get("DeferralLedger") is not None
     assert persisted.get("ExecutionPlan") is not None
+
+
+# ?? P1.9: HITL approve may dispatch provider_resume_dispatch (allowlist) ??
+def test_human_review_apply_may_dispatch_provider_resume():
+    from app.workflow.dispatch import DispatchPolicy, DispatchProposal
+
+    policy = DispatchPolicy()
+    decision = policy.authorize(
+        DispatchProposal(
+            allowed_action="advance",
+            target_stage="provider_resume_dispatch",
+            reason="provider resume after HUMAN approve",
+            source_stage="human_review_apply",
+        ),
+        {},
+    )
+    assert decision.accepted, decision.diagnostic

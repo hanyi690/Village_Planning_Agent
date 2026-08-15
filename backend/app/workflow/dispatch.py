@@ -133,6 +133,7 @@ class DispatchPolicy(BaseModel):
         "bootstrap_context", "conversation", "execute_tools",
         "l1_worker", "l2_worker", "l3_worker", "layer_completion_check",
         "layer_aggregate", "advance_phase", "revision_dispatch",
+        "provider_resume_dispatch",
         "target_projection", "ground", "select", "execute", "validate",
         "reconcile", "deliver", "human_review_prepare", "human_review_publish",
         "human_review_wait", "human_review_apply", "end_diagnostic", "__end__",
@@ -172,7 +173,8 @@ class DispatchPolicy(BaseModel):
         "human_review_publish": frozenset({"human_review_wait", "end_diagnostic"}),
         "human_review_wait": frozenset({"human_review_apply", "end_diagnostic"}),
         "human_review_apply": frozenset({
-            "advance_phase", "revision_dispatch", "l1_worker", "l2_worker", "l3_worker",
+            "advance_phase", "revision_dispatch", "provider_resume_dispatch",
+            "l1_worker", "l2_worker", "l3_worker",
             "target_projection", "ground", "select", "execute", "validate", "reconcile",
             "deliver", "conversation", "human_review_prepare", "__end__", "end_diagnostic",
         }),
