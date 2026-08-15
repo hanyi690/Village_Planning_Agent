@@ -242,16 +242,22 @@ def test_auto_defer_blocked_targets_fails_closed_on_non_target_findings():
 # ?? P0.3: partial-SELECT approval auto-defers unplaced targets ??????????
 @pytest.mark.asyncio
 async def test_select_approve_auto_defers_unplaced_targets(monkeypatch):
-    gate = SimpleNamespace(
-        pending_requests=[{
-            "request_type": "selection_no_candidate",
-            "context": {"target_ids": ["t1", "t2"]},
-        }]
+    # Authoritative source: SiteSelectionDecision unplaced assignments.
+    decision = SimpleNamespace(
+        target_assignments=[
+            SimpleNamespace(target_id="placed-1", status="placed"),
+            SimpleNamespace(target_id="unplaced-1", status="unplaced"),
+            SimpleNamespace(target_id="unplaced-2", status="unplaced"),
+        ]
     )
-    monkeypatch.setattr(root_graph, "load_root_gate", lambda state, stage: gate)
+
+    def fake_load(state, key, cls=None):
+        if key == "site_selection":
+            return decision
+        return None
+
     monkeypatch.setattr(
-        "app.infrastructure.artifacts.runtime.load_artifact",
-        lambda state, key, cls=None: None,
+        "app.infrastructure.artifacts.runtime.load_artifact", fake_load
     )
     persisted = {}
 
@@ -261,7 +267,8 @@ async def test_select_approve_auto_defers_unplaced_targets(monkeypatch):
 
     monkeypatch.setattr(root_graph, "persist_stage_artifact", fake_persist)
     patch = await root_graph._apply_select_auto_deferral({"session_id": "s1"})
-    assert patch["human_deferred_targets"] == ["t1", "t2"]
+    assert patch["human_deferred_targets"] == ["unplaced-1", "unplaced-2"]
     assert "DeferralLedger" in persisted
-    assert [e.target_id for e in persisted["DeferralLedger"].entries] == ["t1", "t2"]
-    assert "ExecutionPlan" not in persisted  # plan is None in this mock
+    assert [e.target_id for e in persisted["DeferralLedger"].entries] == [
+        "unplaced-1", "unplaced-2",
+    ]

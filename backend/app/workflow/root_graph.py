@@ -1088,16 +1088,34 @@ async def _apply_select_auto_deferral(state: Dict[str, Any]) -> Dict[str, Any]:
     Record them in a typed ledger and revise the plan so the run delivers
     partial instead of terminating on non-deferred blockers.
     """
-    try:
-        gate = load_root_gate(state, "select")
-    except Exception:
-        return {}
+    from app.contracts.domain.selection_contracts import SiteSelectionDecision
+    from app.infrastructure.artifacts.runtime import load_artifact
+
+    # Authoritative source: the typed SiteSelectionDecision records every
+    # unplaced assignment.  Prefer it over the gate's pending_requests, which
+    # are empty by the time the approve node runs.
+    decision = load_artifact(state, "site_selection", SiteSelectionDecision)
     target_ids = sorted({
-        str(target_id)
-        for request in (gate.pending_requests or [])
-        for target_id in (request.get("context") or {}).get("target_ids") or []
-        if str(target_id).strip()
+        str(assignment.target_id)
+        for assignment in (getattr(decision, "target_assignments", None) or [])
+        if str(getattr(assignment, "status", "") or "") == "unplaced"
+        and str(getattr(assignment, "target_id", "") or "").strip()
     })
+    if not target_ids:
+        try:
+            gate = load_root_gate(state, "select")
+        except Exception:
+            return {}
+        target_ids = sorted({
+            str(target_id)
+            for request in (gate.pending_requests or [])
+            for context in [(
+                request.get("context") if isinstance(request, dict) else getattr(request, "context", None) or {}
+            )]
+            if isinstance(context, dict)
+            for target_id in context.get("target_ids") or []
+            if str(target_id).strip()
+        })
     if not target_ids:
         return {}
 
