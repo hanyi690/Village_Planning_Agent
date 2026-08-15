@@ -49,10 +49,14 @@ class VersionedSuitabilityPolicy(BaseModel):
     facility_preferred_distance_m: float = Field(gt=0)
 
     @model_validator(mode="after")
-    def terrain_must_fail_closed(self) -> "VersionedSuitabilityPolicy":
-        terrain = self.factors.terrain
-        if not terrain.required or terrain.on_unavailable != "block_candidate":
-            raise ValueError("terrain factor must be required and block when unavailable")
+    def terrain_must_be_required(self) -> "VersionedSuitabilityPolicy":
+        # Terrain must always contribute a score when measured, but its
+        # absence must not hard-exclude candidates: confirmed terrain
+        # violations (slope / elevation / relief beyond hard limits) are the
+        # hard exclusions, while a missing DEM or low valid fraction is a
+        # data gap that should be scored neutrally, not sterilize the parcel.
+        if not self.factors.terrain.required:
+            raise ValueError("terrain factor must be required")
         return self
 
     @property

@@ -377,3 +377,64 @@ def test_provider_resume_dispatch_may_redispatch_layer_workers():
     for target in ("l1_worker", "l2_worker", "l3_worker"):
         auth = authorize_route_result({}, "provider_resume_dispatch", target)
         assert auth.accepted, (target, auth.diagnostic)
+
+
+# ?? SELECT: terrain evidence gap is neutral, not a hard exclusion (exa) ??
+def _terrain_evidence(status, valid_fraction, slope_p90):
+    from app.contracts.spatial.terrain_evidence import (
+        TerrainEvidence,
+        TerrainEvidenceProvenance,
+        TerrainStatistics,
+    )
+
+    elev = TerrainStatistics(
+        unit="m", total_cell_count=10,
+        valid_cell_count=int(10 * valid_fraction),
+        valid_fraction=valid_fraction,
+        minimum=100, maximum=300, mean=200, median=200,
+        p10=120, p90=200, standard_deviation=10,
+    )
+    slope = TerrainStatistics(
+        unit="deg", total_cell_count=10,
+        valid_cell_count=int(10 * valid_fraction),
+        valid_fraction=valid_fraction,
+        mean=slope_p90 * 0.6, median=slope_p90 * 0.7,
+        p90=slope_p90, maximum=slope_p90 * 1.1,
+    )
+    provenance = TerrainEvidenceProvenance(
+        source_path="dem.tif", source_origin="catalog", source_sha256="sha256:" + "a" * 64,
+        raster_crs="EPSG:4326", geometry_crs="EPSG:4326", geometry_sha256="sha256:" + "b" * 64,
+        raster_transform=(1, 0, 0, 0, 1, 0), raster_nodata=-9999, raster_band=1,
+        window=(0, 0, 10, 10),
+        horizontal_scale_method="projected_axis_units",
+        horizontal_pixel_size_m=(1.0, 1.0),
+        cache_key="c1", cache_hit=False,
+    )
+    return TerrainEvidence(
+        evidence_id="e1", subject_id="s1", status=status,
+        elevation=elev, slope=slope, relief_m=50.0,
+        diagnostics=("no_valid_cells",), provenance=provenance,
+    )
+
+
+def test_terrain_evidence_gap_is_neutral_not_hard_exclusion():
+    from app.domain.suitability.terrain import assess_terrain_suitability
+    from app.domain.suitability.policy import load_suitability_policy
+
+    pol = load_suitability_policy()
+    # DEM read returned no valid cells: neutral score, still feasible.
+    a = assess_terrain_suitability(_terrain_evidence("no_valid_cells", 0.0, 0.0), pol.terrain)
+    assert a.hard_feasible is True, a
+    assert a.score == 0.5
+    # Confirmed steep slope beyond hard maximum: still hard infeasible.
+    a2 = assess_terrain_suitability(_terrain_evidence("ready", 1.0, 40.0), pol.terrain)
+    assert a2.hard_feasible is False, a2
+    assert "terrain_slope_exceeds_hard_maximum" in a2.reasons
+
+
+def test_suitability_policy_allows_terrain_report_only():
+    from app.domain.suitability.policy import load_suitability_policy
+
+    pol = load_suitability_policy()
+    assert pol.factors.terrain.on_unavailable == "report_only"
+    assert pol.factors.terrain.required is True

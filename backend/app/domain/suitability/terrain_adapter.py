@@ -526,7 +526,7 @@ class TerrainCandidateFeatureAdapter:
                     relief_m=evidence.relief_m,
                     valid_fraction=evidence.elevation.valid_fraction,
                     classification=assessment.classification,
-                    score=assessment.score if evidence_available else None,
+                    score=assessment.score,
                     hard_feasible=assessment.hard_feasible,
                     evidence_ref=evidence.evidence_id,
                     reason_codes=reasons,

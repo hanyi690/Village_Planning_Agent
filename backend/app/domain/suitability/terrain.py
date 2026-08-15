@@ -24,11 +24,17 @@ def assess_terrain_suitability(
     if slope_value is None:
         reasons.append("terrain_slope_statistic_unavailable")
     if reasons:
+        # Absence of measured evidence is NOT evidence of unsuitability (exa:
+        # a DEM coverage gap or low valid fraction must not sterilize usable
+        # land - only confirmed violations are hard exclusions).  Score the
+        # candidate neutrally so it can still be ranked against confirmed
+        # constraints (hazard / farmland / ecological / historical / steep
+        # slope) which remain hard.
         return TerrainSuitabilityAssessment(
             evidence_id=evidence.evidence_id,
             classification="unknown",
-            score=0.0,
-            hard_feasible=False,
+            score=0.5,
+            hard_feasible=True,
             evaluated_slope_degrees=slope_value,
             reasons=tuple(reasons),
             policy=policy,
