@@ -141,7 +141,7 @@ async def _require_context(state: Dict[str, Any]) -> Any:
     try:
         from app.workflow.layers.context_bootstrap import _hydrate_l1_spatial_facts
 
-        _hydrate_l1_spatial_facts(state, context)
+        await _hydrate_l1_spatial_facts(state, context)
     except Exception as exc:
         logger.warning("[workflow:stage-support] cached context hydration failed: %s", exc)
     expected = _context_version(state)
