@@ -953,12 +953,10 @@ def claim_set_semantic_errors(claim_set: PlanningClaimSet) -> list[str]:
                     and parameters.pavement_width_m is None
                 ):
                     errors.append(f"{prefix} road width is unresolved")
-                if not (
-                    parameters.alignment_refs
-                    or parameters.connects
-                    or claim.location_hints
-                ):
-                    errors.append(f"{prefix} road alignment evidence is unresolved")
+                # Road corridor alignment (alignment_refs/connects) is spatial
+                # evidence that GROUND resolves from location_hints / KG
+                # topology; missing it is NOT an L3 compile error.  Only the
+                # structure (road_parameters + a width) is required here.
         elif claim.suggested_category == "facility":
             if claim.facility_parameters is None:
                 errors.append(f"{prefix} facility_parameters are required")
