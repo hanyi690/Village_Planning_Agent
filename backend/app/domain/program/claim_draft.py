@@ -428,9 +428,12 @@ def _normalize_output(
         return "action"
     expected = _ALLOWED_OUTPUTS[category]
     if output != expected:
+        # Lossless normalization: the output kind is auto-corrected to the
+        # category-valid value.  This is a WARNING, not an error - the claim
+        # is fully usable and must not trigger a whole-dimension re-run.
         _diagnostic(
             diagnostics,
-            "error",
+            "warning",
             "category_output_mismatch",
             raw.claim_id or "claim",
             f"{category} output {output!r} normalized to {expected!r}",
