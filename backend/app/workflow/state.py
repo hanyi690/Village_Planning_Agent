@@ -353,8 +353,16 @@ def project_workflow_state(state: dict[str, Any]) -> WorkflowState:
 
 
 def _interrupt_projection(state: dict[str, Any]) -> ArtifactRef | dict[str, Any] | None:
-    """Normalize HUMAN and step-mode legacy channels into one small payload."""
+    """Normalize HUMAN and step-mode legacy channels into one small payload.
 
+    An already-resumed interrupt (human_review_resume_consumed=True) must not
+    be presented again: presenting it makes the operator/test resubmit the
+    same event_id and get a 409 conflict (idempotency: consumed checkpoints
+    are never re-shown; a fresh interrupt resets consumed=False).
+    """
+
+    if state.get("human_review_resume_consumed"):
+        return None
     raw = state.get("interrupt_ref") or state.get("human_interrupt")
     if isinstance(raw, ArtifactRef):
         return raw
