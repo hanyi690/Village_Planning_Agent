@@ -511,19 +511,20 @@ def _approve_select(state: Dict[str, Any], paused_stage: str) -> str:
 
 
 def _approve_ground(state: Dict[str, Any], paused_stage: str) -> str:
-    if _remaining_unresolved_target_ids(state):
-        return "human_review"
     decisions = state.get("human_review_decisions") or {}
-    if (
+    deferring = (
         paused_stage == "ground"
         and isinstance(decisions, dict)
         and decisions.get("defer_unresolved_spatial_references") is True
-    ):
+    )
+    if deferring:
         # The operator explicitly deferred the unresolved spatial references.
         # That IS the authoritative human decision; the GROUND gate still
-        # carries its original HUMAN route, so re-checking it here would loop
-        # the session back into HUMAN forever.  Forward to SELECT.
+        # carries its original HUMAN route, and stale remaining_target_ids
+        # must not loop the session back into HUMAN.  Forward to SELECT.
         return "select"
+    if _remaining_unresolved_target_ids(state):
+        return "human_review"
     return END
 
 
