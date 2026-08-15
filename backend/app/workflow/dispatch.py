@@ -159,6 +159,7 @@ class DispatchPolicy(BaseModel):
             "__end__", "end_diagnostic",
         }),
         "revision_dispatch": frozenset({"l1_worker", "l2_worker", "l3_worker", "__end__", "end_diagnostic"}),
+        "provider_resume_dispatch": frozenset({"l1_worker", "l2_worker", "l3_worker", "__end__", "end_diagnostic"}),
         "target_projection": frozenset({"target_projection", "ground", "human_review_prepare", "end_diagnostic"}),
         "ground": frozenset({"ground", "select", "human_review_prepare", "end_diagnostic"}),
         "select": frozenset({"ground", "execute", "human_review_prepare", "end_diagnostic"}),

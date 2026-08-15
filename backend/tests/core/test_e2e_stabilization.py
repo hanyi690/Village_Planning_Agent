@@ -369,3 +369,11 @@ async def test_validate_approve_non_target_blocker_passes_not_diagnostic(monkeyp
     assert result.get("approved_non_target_limitation") is True
     assert gate_patch["gate"]["passed"] is True
     assert gate_patch["gate"]["feedback_route"] == "PASS"
+
+
+def test_provider_resume_dispatch_may_redispatch_layer_workers():
+    from app.workflow.routing import authorize_route_result
+
+    for target in ("l1_worker", "l2_worker", "l3_worker"):
+        auth = authorize_route_result({}, "provider_resume_dispatch", target)
+        assert auth.accepted, (target, auth.diagnostic)
