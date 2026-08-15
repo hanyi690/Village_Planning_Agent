@@ -116,7 +116,7 @@ async def select_node(state: Dict[str, Any]) -> Dict[str, Any]:
     plan_intent = _apply_repair_directives(plan_intent, repair_directives)
     deferral_ledger = _load_ref_artifact(state, "deferral_ledger", DeferralLedger)
     try:
-        async with asyncio.timeout(max(30, int(GIS_TIMEOUT) * 4)):
+        async with asyncio.timeout(max(600, int(GIS_TIMEOUT) * 20)):
             from app.data.catalog import DataCatalog
             from app.infrastructure.paths import session_run_dir
 
