@@ -302,19 +302,11 @@ def _retry_or_human(state: Dict[str, Any], stage: str, retry_target: str) -> str
                 max_retries,
             )
             return END_DIAGNOSTIC
-        if (
-            executable_repair
-            and current >= 1
-            and current_fingerprint
-            and current_fingerprint == previous_fingerprint
-        ):
-            # One identical-fingerprint replay is allowed; a second identical
-            # replay cannot make progress, so route to HUMAN/defer with the
-            # evidence instead of re-running the full stage chain again.
-            logger.warning(
-                "[main] VALIDATE executable repair produced an identical issue fingerprint -> HUMAN",
-            )
-            return "human_review"
+        # NOTE: identical-fingerprint no-progress detection lives in
+        # ``evaluate_validate_gate`` (compares this gate against the previous
+        # gate artifact).  Do NOT re-derive it from ``stage_audit`` here: that
+        # records the same run's fingerprint and would truncate the repair
+        # budget after a single replay even when the repair made progress.
         if executable_repair:
             logger.info(
                 "[main] VALIDATE executable repair %s starts at %s; repeated issue fingerprint does not block replay",

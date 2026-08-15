@@ -142,6 +142,11 @@ def _auto_defer_blocked_targets(
     })
     if not defer_ids:
         return None
+    # Fail closed when any unresolved finding has no target lineage: auto-defer
+    # must never silently mask integrity/lineage failures by force-passing the
+    # gate while those blockers remain.
+    if any(not getattr(item, "target_ids", None) for item in compilation.unresolved):
+        return None
 
     from app.contracts.artifacts.deferral_contracts import DeferralLedger
     from app.contracts.workflow.execution_plan_contracts import ExecutionPlan

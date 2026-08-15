@@ -27,7 +27,7 @@ SESSION_FILE = BASE / "session_id.txt"
 ARTIFACT_ROOT = BASE / "artifacts"
 LOG_FILE = BASE / "replay.log"
 STALL_WAIT_S = 90.0
-STALL_HARD_S = 720.0
+STALL_HARD_S = 1200.0
 
 
 def log(msg: str) -> None:

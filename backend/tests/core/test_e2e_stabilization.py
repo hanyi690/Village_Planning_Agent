@@ -129,13 +129,7 @@ def test_validate_first_replay_allowed(monkeypatch):
     assert route == "execute"
 
 
-def test_validate_identical_fingerprint_replay_capped(monkeypatch):
-    monkeypatch.setattr(root_graph, "load_root_gate", lambda state, stage: _FakeGate())
-    route = root_graph._retry_or_human(_validate_state(1), "validate", "execute")
-    assert route == "human_review"
-
-
-def test_validate_retry_exhaustion_beats_fingerprint_cap(monkeypatch):
+def test_validate_retry_exhaustion_goes_diagnostic(monkeypatch):
     monkeypatch.setattr(root_graph, "load_root_gate", lambda state, stage: _FakeGate())
     route = root_graph._retry_or_human(_validate_state(3), "validate", "execute")
     assert route == root_graph.END_DIAGNOSTIC
@@ -224,3 +218,22 @@ def test_approve_default_continues_forward_for_known_stages():
     assert root_graph._approve_default({}, "target_projection") == "ground"
     assert root_graph._approve_default({}, "ground") == "select"
     assert root_graph._approve_default({}, "reconcile") == "deliver"
+
+
+def test_auto_defer_blocked_targets_fails_closed_on_non_target_findings():
+    compilation = SimpleNamespace(
+        unresolved=[
+            SimpleNamespace(target_ids=["t1"]),
+            SimpleNamespace(target_ids=[]),
+        ]
+    )
+    impact = SimpleNamespace(reason="mixed findings")
+    decision = validate_stage._auto_defer_blocked_targets(
+        {"session_id": "s1"},
+        compilation,
+        impact,
+        {"artifact_refs": {}},
+        load_ref=lambda *a, **k: None,
+        persist=lambda *a, **k: None,
+    )
+    assert decision is None

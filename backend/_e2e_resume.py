@@ -40,7 +40,9 @@ LOG_FILE = BASE / "run.log"
 STALL_WAIT_S = 90.0
 # Hard stall: no checkpoint progress at all for this long, even with pending
 # tasks (a deadlocked graph keeps pending tasks but never writes a checkpoint).
-STALL_HARD_S = 720.0
+# Must exceed the EXECUTE worker subgraph timeout floor (900s) and the L3
+# stream timeout (600s) so a healthy long super-step is never aborted early.
+STALL_HARD_S = 1200.0
 
 
 def log(msg: str) -> None:
