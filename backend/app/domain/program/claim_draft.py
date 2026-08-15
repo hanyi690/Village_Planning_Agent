@@ -462,6 +462,12 @@ _LENGTH_TO_M = {
     "kilometre": 1000.0,
     "公里": 1000.0,
 }
+# 计数单位若被 L3 误当作面积单位：不换算，丢弃面积约束（见 area_range 校验）。
+_COUNT_AS_AREA_UNITS = {
+    "个", "处", "座", "条", "棵", "株", "人", "户", "家", "间", "栋", "点", "处次", "人次",
+    "m", "km", "cm", "mm",  # 长度/距离被误填为面积：属面积数值口径错误，同样丢弃
+}
+
 _AREA_TO_HA = {
     "ha": 1.0,
     "hectare": 1.0,
@@ -471,6 +477,10 @@ _AREA_TO_HA = {
     "m²": 0.0001,
     "㎡": 0.0001,
     "平方米": 0.0001,
+    "km2": 100.0,
+    "km\u00b2": 100.0,
+    "平方公里": 100.0,
+    "平方千米": 100.0,
 }
 _AREA_TO_M2 = {unit: factor * 10000.0 for unit, factor in _AREA_TO_HA.items()}
 
@@ -706,7 +716,20 @@ def _normalize_polygon_parameters(
         area = source.area_range
         unit = _text(area.unit).lower()
         factor = _AREA_TO_HA.get(unit)
-        if factor is None:
+        if factor is None and unit in _COUNT_AS_AREA_UNITS:
+            # 计数单位（处/个/座/点…）作为 area_range：语义上是"数量"而非面积，
+            # 不是可换算的面积。丢弃面积约束（功能/点状项目本就不需要地块面积），
+            # 记 warning 而非 error，避免整个 program 被结构性阻断。
+            _diagnostic(
+                diagnostics,
+                "warning",
+                "count_unit_as_area_dropped",
+                claim_id,
+                f"area_range unit {area.unit!r} is a count, not an area; area constraint dropped",
+            )
+            source.area_range = None
+            area = None
+        elif factor is None:
             _diagnostic(
                 diagnostics,
                 "error",

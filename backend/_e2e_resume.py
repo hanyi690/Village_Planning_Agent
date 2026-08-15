@@ -351,7 +351,23 @@ def drive(client, session_id: str, deadline: float) -> dict:
                 for item in review_payload.get("items") or []
                 if isinstance(item, dict)
             )
-            if classification_required:
+            program_rework_dims = list(dict.fromkeys(
+                str((item.get("context") or {}).get("dimension_key") or "").strip()
+                for item in review_payload.get("items") or []
+                if isinstance(item, dict)
+                and str(item.get("request_type") or "") == "program_rework"
+                and str((item.get("context") or {}).get("dimension_key") or "").strip()
+            ))
+            if program_rework_dims:
+                # L3 claims with structural errors (e.g. bad area units) need a
+                # single-dimension rework with corrective feedback, not approve.
+                decision = {
+                    "action": "retry",
+                    "feedback": "rework invalid claims with corrective feedback",
+                    "dimensions": program_rework_dims,
+                }
+                action = "retry"
+            elif classification_required:
                 decisions, source = _sanctioned_classification_decisions(
                     client, session_id, review_payload
                 )
