@@ -186,8 +186,10 @@ def _normalize_spec_mention(label: str) -> str:
     token = (label or "").strip()
     if not token:
         return ""
-    if token in {"全村域", "全村", "村域"} or re.fullmatch(
-        r"(?:全村)?\d+个自然村", token
+    if (
+        token in {"全村域", "全村", "村域"}
+        or token.startswith("全村")
+        or re.fullmatch(r"(?:全村)?\d+个自然村", token)
     ):
         return _VILLAGE_ALL_MARKER
     for suffix in (
@@ -337,6 +339,25 @@ class SpatialResolver:
         candidates: CandidateSet = CandidateSet()
         reference = getattr(spec, "reference", None)
         if getattr(reference, "kind", "") == "village":
+            raw_label = (
+                str(getattr(reference, "name", "") or "")
+                or str((getattr(reference, "filter", None) or {}).get("label_contains") or "")
+            )
+            cluster = self._resolve_village_cluster(raw_label)
+            if cluster is not None:
+                cluster_bsms, village_token = cluster
+                return ResolvedSpatialRef(
+                    final_bsms=cluster_bsms,
+                    bbox=None,
+                    confidence=0.35,
+                    uncertainty_radius_m=250.0,
+                    uncertainty_reason="village_coarse",
+                    provenance={
+                        "path": "village_cluster:gazetteer",
+                        "village": village_token,
+                        "bsm_count": len(cluster_bsms),
+                    },
+                )
             return ResolvedSpatialRef(
                 final_bsms=[],
                 confidence=0.0,
@@ -351,6 +372,25 @@ class SpatialResolver:
             if self.evidence_index is not None:
                 mention = self._spec_mention(spec)
                 if mention == _VILLAGE_ALL_MARKER:
+                    raw_label = (
+                        str(getattr(reference, "name", "") or "")
+                        or str((getattr(reference, "filter", None) or {}).get("label_contains") or "")
+                    )
+                    cluster = self._resolve_village_cluster(raw_label)
+                    if cluster is not None:
+                        cluster_bsms, village_token = cluster
+                        return ResolvedSpatialRef(
+                            final_bsms=cluster_bsms,
+                            bbox=None,
+                            confidence=0.35,
+                            uncertainty_radius_m=250.0,
+                            uncertainty_reason="village_coarse",
+                            provenance={
+                                "path": "village_cluster:gazetteer",
+                                "village": village_token,
+                                "bsm_count": len(cluster_bsms),
+                            },
+                        )
                     return ResolvedSpatialRef(
                         final_bsms=[],
                         confidence=0.0,
@@ -370,16 +410,9 @@ class SpatialResolver:
                     for part in parts:
                         part_mention = _normalize_spec_mention(part)
                         if part_mention == _VILLAGE_ALL_MARKER:
-                            return ResolvedSpatialRef(
-                                final_bsms=[],
-                                confidence=0.0,
-                                uncertainty_radius_m=0.0,
-                                uncertainty_reason="unresolved",
-                                provenance={
-                                    "path": "unresolved:village_all",
-                                    "reason": "whole-village text is not target-bound parcel evidence",
-                                },
-                            )
+                            # A whole-village part inside a combined mention is
+                            # not itself parcel evidence; keep the other parts.
+                            continue
                         if not part_mention:
                             continue
                         evidence_bsms.extend(
@@ -499,6 +532,25 @@ class SpatialResolver:
             )
             if fallback is not None:
                 return fallback
+            # 最后一步：会话村地块簇粗兜底。只有模糊村/区域提示的目标不应被
+            # 直接丢弃：把会话村聚落地块集合作为有界候选池（带不确定性），由
+            # 适宜性/LLM 去判别。几何/BSM 仍只来自 bundle gazetteer。
+            cluster = self._resolve_village_cluster("")
+            if cluster is not None:
+                cluster_bsms, village_token = cluster
+                return ResolvedSpatialRef(
+                    final_bsms=cluster_bsms,
+                    bbox=None,
+                    confidence=0.3,
+                    uncertainty_radius_m=250.0,
+                    uncertainty_reason="village_coarse_fallback",
+                    provenance={
+                        "path": "village_cluster:gazetteer:coarse_fallback",
+                        "village": village_token,
+                        "bsm_count": len(cluster_bsms),
+                        "prior": provenance,
+                    },
+                )
             return ResolvedSpatialRef(
                 final_bsms=[],
                 bbox=None,
@@ -740,6 +792,45 @@ class SpatialResolver:
             if bsm:
                 by_bsm[bsm] = True
         return [b for b in bsms if b in by_bsm]
+
+
+    def _resolve_village_cluster(self, label: str):
+        """Village-level reference -> village parcel cluster via the gazetteer.
+
+        Design 4.3 / spatial reasoning: a target located only by its village
+        (kind==village, whole-village mention, or sfWithin the session village)
+        must not be dropped.  Resolve the named village to its parcel cluster
+        from the uploaded-bundle gazetteer as a coarse candidate pool; the
+        geometry/BSM are always real bundle parcels, never fabricated.  Falls
+        back to the session village when the spec carries no label.
+        """
+        if self.gazetteer is None:
+            return None
+
+        def _candidates_for(token: str):
+            if not token:
+                return None
+            bsms = _resolve_gazetteer_bsms(token, self.gazetteer)
+            if not bsms:
+                return None
+            final = self._filter_to_bundle(bsms)
+            if not final:
+                return None
+            return final, token
+
+        token = str(label or "").strip()
+        for suffix in ("\u81ea\u7136\u6751", "\u6751", "\u7ec4"):
+            token = token.rstrip(suffix)
+        result = _candidates_for(token)
+        if result is not None:
+            return result
+        # The label is often a whole-village phrase (e.g. "全村40处隐患点")
+        # that the gazetteer cannot name-match.  Fall back to the session
+        # village parcel cluster so the target still gets a bounded pool.
+        village = str(getattr(self.context, "village_name", "") or "").strip()
+        for suffix in ("\u81ea\u7136\u6751", "\u6751", "\u7ec4"):
+            village = village.rstrip(suffix)
+        return _candidates_for(village)
 
     def _spec_mention(self, spec: Any) -> str:
         ref = getattr(spec, "reference", None)
