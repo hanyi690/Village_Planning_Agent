@@ -268,6 +268,9 @@ class TerrainEvidenceService:
         self.cache_dir = Path(cache_dir).resolve() if cache_dir is not None else None
         if self.cache_dir is not None:
             self.cache_dir.mkdir(parents=True, exist_ok=True)
+        # 同一服务实例内按投影几何哈希预计算：一个地块被多个候选引用时只算一次
+        # （候选池是村簇，同一 parcel 会出现在大量候选里，避免重复 DEM 窗口读）。
+        self._geometry_memo: dict[str, TerrainEvidence] = {}
         self.metadata = self._inspect_source()
 
     @classmethod
@@ -453,8 +456,27 @@ class TerrainEvidenceService:
                     "config": self.config.model_dump(mode="json"),
                 }
             )
+            memo_hit = self._geometry_memo.get(geometry_digest)
+            if memo_hit is not None:
+                # 同一地块几何复用已计算的证据；只重绑 subject/evidence_id。
+                rebound = memo_hit.model_copy(update={
+                    "subject_id": str(subject_id),
+                    "evidence_id": f"terrain-{key.removeprefix('sha256:')[:24]}",
+                })
+                if rebound.provenance is not None:
+                    rebound = rebound.model_copy(update={
+                        "provenance": rebound.provenance.model_copy(update={
+                            "cache_key": key,
+                            "cache_hit": True,
+                        }),
+                    })
+                # 保留 subject 级内容寻址缓存（测试断言每 subject 一文件）；
+                # memo 只避免昂贵的 DEM 窗口读，不替代磁盘缓存。
+                self._write_cached(key, rebound)
+                return rebound
             cached = self._read_cached(key, TerrainEvidence)
             if cached is not None:
+                self._geometry_memo[geometry_digest] = cached
                 return cached
 
             raster_bounds = shape(
@@ -479,6 +501,8 @@ class TerrainEvidenceService:
                     cache_key=key,
                 )
                 self._write_cached(key, result)
+                if result.status in {"ready", "no_valid_cells"}:
+                    self._geometry_memo[geometry_digest] = result
                 return result
 
             clipped = projected_geometry.intersection(raster_bounds)

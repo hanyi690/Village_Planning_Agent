@@ -262,6 +262,7 @@ def drive(client, session_id: str, deadline: float) -> dict:
     processed_event_ids = set()
     last_progress = None
     last_progress_at = time.monotonic()
+    last_progress_change_at = time.monotonic()
     last_watchdog_at = 0.0
     last_resume_kick_at = 0.0
     terminal_state = {}
@@ -289,6 +290,10 @@ def drive(client, session_id: str, deadline: float) -> dict:
                 )
             )
             last_watchdog_at = now
+        if progress != last_progress:
+            last_progress = progress
+            last_progress_at = now
+            last_progress_change_at = now
         if progress != last_progress or pending_tasks:
             last_progress = progress
             last_progress_at = now
@@ -309,7 +314,7 @@ def drive(client, session_id: str, deadline: float) -> dict:
         if (
             pending_tasks
             and not has_review_items
-            and now - last_progress_at > 30.0
+            and now - last_progress_change_at > 30.0
             and now - last_resume_kick_at > 60.0
         ):
             # A previous process was killed mid-superstep: the checkpoint has
