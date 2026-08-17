@@ -12,6 +12,7 @@ from app.infrastructure.llm.tools.access.shared import resolve_bundle, group_sta
 from app.infrastructure.logging import get_logger
 
 logger = get_logger(__name__)
+RETRIEVER_VERSION = "bundle-v2"
 
 _SCOPE_TO_GROUPS = {
     "parcels": ["current_landuse"],
@@ -25,6 +26,8 @@ _SCOPE_TO_GROUPS = {
 async def retrieve_from_bundle(
     session_id: str,
     entity_scope: List[str],
+    query: str = "",
+    required_facts: List[str] | None = None,
 ) -> Tuple[List[EvidenceFact], List[EvidenceSource]]:
     """Retrieve spatial group statistics from the VillageBundle snapshot.
 

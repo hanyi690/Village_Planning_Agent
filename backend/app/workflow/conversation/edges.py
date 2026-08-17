@@ -149,6 +149,11 @@ def after_analysis(
     fatal = _terminal_failure_route(state)
     if fatal is not None:
         return fatal
+    if state.get("provider_resume_dimensions"):
+        # A resumed set may contain same-layer dependencies.  Dispatch one
+        # ready wave and leave blocked dimensions in the checkpoint until the
+        # completed reports make them eligible.
+        return "provider_resume_dispatch"
     phase = state.get("phase", "layer1")
     if phase == "post_l3":
         # L3 is not a terminal state.  The post-L3 chain owns target projection
@@ -289,7 +294,29 @@ def _terminal_failure_route(state: Dict[str, Any]) -> Optional[str]:
 
 
 def _route_explore(state: Dict[str, Any], layer_num: int) -> Union[str, List[Send]]:
-    """EXPLORE：L3 直接 HUMAN；同层 EXPLORE 重试超 2 次也转 HUMAN。"""
+    """Run bounded gate evidence retrieval, then dispatch only affected dims.
+
+    The graph keeps conditional edges synchronous, so the evidence service
+    exposes a small sync adapter.  Results are cached by the service and are
+    merged into the next canonical Explore context request; workers therefore
+    receive one unified evidence section instead of a second RAG prompt.
+    """
+    pending: list[Any] = []
+    try:
+        gate_decision = load_root_gate(state, f"l{layer_num}")
+        gate_payload = gate_decision.model_dump(mode="json")
+        pending = list(gate_payload.get("pending_requests") or [])
+        if pending:
+            from app.evidence.retrieval.evidence_service import retrieve_evidence_for_gate_sync
+
+            retrieve_evidence_for_gate_sync(
+                gate_payload,
+                str(state.get("session_id") or state.get("run_id") or ""),
+                str((state.get("config") or {}).get("village_name") or ""),
+            )
+    except Exception as exc:
+        logger.warning("[after_analysis] gate evidence retrieval failed: %s", exc)
+
     # L3 evidence gaps are business review findings, not a license to replay
     # all twelve expensive L3 workers.  The design contract requires an
     # auditable HUMAN checkpoint so an operator can supply or defer the
@@ -309,7 +336,19 @@ def _route_explore(state: Dict[str, Any], layer_num: int) -> Union[str, List[Sen
         return "human_review"
     from app.config.loader import list_dimensions
     dim_configs = list_dimensions(layer_num)
-    explore_dims = [d.key for d in dim_configs]
+    requested_dims = []
+    for pending_item in pending:
+        context = pending_item.get("context") or {} if isinstance(pending_item, dict) else getattr(pending_item, "context", {}) or {}
+        dimension = context.get("dimension") if isinstance(context, dict) else ""
+        if dimension and dimension not in requested_dims:
+            requested_dims.append(dimension)
+    configured_dims = {d.key for d in dim_configs}
+    explore_dims = [dimension for dimension in requested_dims if dimension in configured_dims]
+    # Legacy gates may not have emitted a dimension.  Preserve bounded
+    # behaviour by using the configured layer only in that case; a concrete
+    # dimension always wins and never expands to a full-layer replay.
+    if not explore_dims:
+        explore_dims = [d.key for d in dim_configs]
     if explore_dims:
         logger.info("[after_analysis] Gate EXPLORE (attempt %d): re-dispatching %s", explore_count + 1, explore_dims)
         worker = _worker_for_phase(state.get("phase", "layer1"))

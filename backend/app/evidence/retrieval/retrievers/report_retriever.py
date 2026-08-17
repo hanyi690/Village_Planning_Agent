@@ -12,6 +12,7 @@ from app.infrastructure.reports.report_store import ReportStore
 from app.infrastructure.logging import get_logger
 
 logger = get_logger(__name__)
+RETRIEVER_VERSION = "report-v2"
 
 _SPATIAL_KEYWORDS = (
     "公顷", "亩", "平方米", "km²", "面积", "占地", "位于", "沿",
@@ -20,13 +21,15 @@ _SPATIAL_KEYWORDS = (
 _SENTENCE_SPLIT = re.compile(r"[。；\n]+")
 
 
-def _extract_spatial_findings(content: str, limit: int = 6) -> List[str]:
+def _extract_spatial_findings(content: str, query: str = "", limit: int = 6) -> List[str]:
     findings = []
+    query_terms = [term.lower() for term in re.findall(r"[\w\u4e00-\u9fff]{2,}", query or "")]
     for sent in _SENTENCE_SPLIT.split(content or ""):
         sent = sent.strip()
         if len(sent) < 4:
             continue
-        if any(k in sent for k in _SPATIAL_KEYWORDS) and re.search(r"\d", sent):
+        relevant = not query_terms or any(term in sent.lower() for term in query_terms)
+        if relevant and any(k in sent for k in _SPATIAL_KEYWORDS) and re.search(r"\d", sent):
             findings.append(sent[:140])
         if len(findings) >= limit:
             break
@@ -37,6 +40,9 @@ async def retrieve_from_reports(
     session_id: str,
     dimension_key: str,
     stage: str,
+    query: str = "",
+    required_facts: List[str] | None = None,
+    entity_scope: List[str] | None = None,
 ) -> Tuple[List[EvidenceFact], List[EvidenceSource]]:
     """Search L1/L2/L3 reports for spatial findings relevant to the dimension.
 
@@ -63,8 +69,13 @@ async def retrieve_from_reports(
                 reference=f"L{layer}:{dk}",
                 confidence=0.9,
             ))
-            if dk == dimension_key:
-                for finding in _extract_spatial_findings(content):
+            dimension_match = dk == dimension_key
+            query_match = bool(query) and any(
+                term.lower() in f"{dk} {content}".lower()
+                for term in re.findall(r"[\w\u4e00-\u9fff]{2,}", query)
+            )
+            if dimension_match or query_match:
+                for finding in _extract_spatial_findings(content, query=query):
                     facts.append(EvidenceFact(
                         statement=finding,
                         confidence=0.8,

@@ -13,6 +13,7 @@ from app.infrastructure.kg.queries.sparql import query_kg
 from app.infrastructure.logging import get_logger
 
 logger = get_logger(__name__)
+RETRIEVER_VERSION = "kg-v2"
 
 
 async def retrieve_from_kg(
@@ -20,6 +21,9 @@ async def retrieve_from_kg(
     village_name: str,
     dimension_key: str,
     stage: str,
+    query: str = "",
+    required_facts: list[str] | None = None,
+    entity_scope: list[str] | None = None,
 ) -> Tuple[List[EvidenceFact], SpatialCognitionEvidence]:
     """Retrieve KG three-layer cognition + topology facts.
 
@@ -66,7 +70,11 @@ async def retrieve_from_kg(
             "location": ("boundary", "admin", "village", "location", "区位"),
             "socio_economic": ("village", "settlement", "residential", "村", "居民"),
         }
-        terms = terms_by_dimension.get(dimension_key, ())
+        query_terms = tuple(
+            token.lower() for token in (query or "").replace("；", " ").split()
+            if len(token.strip()) > 1
+        )
+        terms = tuple(dict.fromkeys((*terms_by_dimension.get(dimension_key, ()), *query_terms)))
         selected_cards = []
         for card in cards:
             haystack = " ".join(str(card.get(key, "")) for key in ("group", "dominant_label", "distribution", "description"))
