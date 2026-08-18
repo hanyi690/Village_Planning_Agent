@@ -17,6 +17,8 @@ pytest.importorskip("fastapi")
 
 from tests.fixtures.db import make_session_with_uploads  # noqa: E402
 
+pytestmark = [pytest.mark.e2e, pytest.mark.slow]
+
 FIXTURE = Path(__file__).parents[1] / "fixtures" / "mvp_village"
 
 _LAYER_TYPES = {

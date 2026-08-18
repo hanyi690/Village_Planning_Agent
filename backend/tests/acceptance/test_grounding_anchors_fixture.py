@@ -142,13 +142,27 @@ def _render(anchors, parcels, path: Path, bundle=None) -> None:
     import matplotlib.pyplot as plt
     import shapely.geometry as sg
 
-    # CJK 字体（Windows：微软雅黑/黑体），避免村名显示为方框
-    for font in ("Microsoft YaHei", "SimHei", "Noto Sans CJK SC", "WenQuanYi Zen Hei"):
-        try:
-            plt.rcParams["font.sans-serif"] = [font]
-            break
-        except Exception:
-            continue
+    # Register a real single-file CJK font; setting a family name alone can
+    # silently fall back to DejaVu Sans and render Chinese as tofu boxes.
+    import matplotlib.font_manager as fm
+
+    cjk_font_path = next(
+        (
+            candidate
+            for candidate in (
+                "C:/Windows/Fonts/simhei.ttf",
+                "C:/Windows/Fonts/NotoSansSC-VF.ttf",
+                "C:/Windows/Fonts/Deng.ttf",
+            )
+            if Path(candidate).exists()
+        ),
+        None,
+    )
+    if cjk_font_path:
+        fm.fontManager.addfont(cjk_font_path)
+        cjk_font_name = fm.FontProperties(fname=cjk_font_path).get_name()
+        plt.rcParams["font.family"] = cjk_font_name
+        plt.rcParams["font.sans-serif"] = [cjk_font_name]
     plt.rcParams["axes.unicode_minus"] = False
 
     fig, ax = plt.subplots(figsize=(13, 11))

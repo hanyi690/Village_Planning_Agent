@@ -7,6 +7,7 @@ from types import SimpleNamespace
 import pytest
 
 from app.domain.materialization.plan_builder import build_execution_plan
+from app.domain.materialization.plan_builder import classification_boundary_diagnostics
 from app.contracts.artifacts.classification_ref import (
     ClassificationDecision,
     ClassificationSystem,
@@ -26,12 +27,14 @@ def _target(
     output_kind: str,
     execution_mode: str = "spatial",
     classification_decision=None,
+    materialization_role: str = "",
 ):
     return SimpleNamespace(
         target_id=target_id,
         execution_mode=execution_mode,
         expected_output_kind=output_kind,
         classification_decision=classification_decision,
+        materialization_role=materialization_role,
     )
 
 
@@ -140,6 +143,23 @@ def test_resolved_polygon_enters_worker_tasks():
 
     assert [task.target_id for task in plan.worker_tasks] == [target.target_id]
     assert plan.deferred_tasks == []
+
+
+def test_overlay_polygon_does_not_require_land_use_classification():
+    target = _target(
+        "overlay-1",
+        output_kind="polygon",
+        materialization_role="protection_overlay",
+    )
+
+    plan = build_execution_plan(
+        _intent(("project", target)),
+        _selection(("project", target)),
+        [],
+    )
+
+    assert [task.target_id for task in plan.worker_tasks] == [target.target_id]
+    assert classification_boundary_diagnostics(_intent(("project", target)), plan) == []
 
 
 @pytest.mark.asyncio

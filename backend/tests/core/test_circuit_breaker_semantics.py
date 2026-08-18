@@ -48,3 +48,21 @@ def test_fatal_error_absent_returns_none():
     from app.workflow.conversation.edges import after_analysis
 
     assert after_analysis(_state()) is not None  # routes onward (dispatch or END)
+
+
+def test_provider_circuit_requires_consecutive_transport_failures(monkeypatch):
+    from app.infrastructure.llm import dimension_runtime
+
+    session_id = "circuit-threshold-test"
+    dimension_runtime.reset_provider_failure(session_id)
+    monkeypatch.setenv("LLM_PROVIDER_CIRCUIT_FAILURE_THRESHOLD", "3")
+
+    dimension_runtime.trip_provider_failure(session_id)
+    dimension_runtime.trip_provider_failure(session_id)
+    assert not dimension_runtime.provider_failure_open(session_id)
+
+    dimension_runtime.trip_provider_failure(session_id)
+    assert dimension_runtime.provider_failure_open(session_id)
+
+    dimension_runtime.reset_provider_failure(session_id)
+    assert not dimension_runtime.provider_failure_open(session_id)

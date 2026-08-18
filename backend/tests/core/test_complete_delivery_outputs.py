@@ -6,6 +6,7 @@ from app.infrastructure.export.export_package import export_delivery_package
 from app.infrastructure.rendering.html_render import render_interactive_map
 from app.infrastructure.rendering.static_render import render_map_preview
 from app.infrastructure.export.delivery_snapshot import build_delivery_spatial_snapshot_from_gis_data
+from app.domain.delivery.delivery_snapshot_builder import build_spatial_delivery_products
 
 
 def _polygon(x0, y0, x1, y1):
@@ -75,6 +76,47 @@ def test_delivery_layers_include_complete_planned_and_control_aliases(tmp_path):
     assert planned["layerName"] == "完整期末地类（含未修改地块）"
     assert planned["style"]["line-color"] == "#475569"
     assert planned["style"]["fill-opacity"] < 0.25
+
+
+def test_partial_action_only_delivery_still_builds_current_spatial_snapshot(
+    tmp_path, monkeypatch
+):
+    gis_data = {
+        "boundary_geojson": {
+            "type": "FeatureCollection",
+            "features": [_feature("boundary", _polygon(0, 0, 2, 1))],
+        },
+        "landuse_current_geojson": _current_landuse(),
+        "road_geojson": {"type": "FeatureCollection", "features": []},
+        "annotation_geojson": {"type": "FeatureCollection", "features": []},
+    }
+    workspace = SimpleNamespace(to_delivery_inputs=lambda: gis_data)
+    monkeypatch.setattr(
+        "app.infrastructure.paths.session_run_dir",
+        lambda _session_id: tmp_path,
+    )
+    monkeypatch.setattr(
+        "app.domain.delivery.delivery_exporter.export_delivery_products",
+        lambda *args, **kwargs: {
+            "planned_landuse_geojson": _current_landuse(),
+        },
+    )
+
+    products = build_spatial_delivery_products(
+        session_id="partial-action-only",
+        village_name="金田村",
+        workspace=workspace,
+        planned_changes=[],
+        planned_state=None,
+        validation_result={"passed": False},
+    )
+
+    assert products.error == ""
+    assert products.snapshot is not None
+    assert products.snapshot.delivery_status == "partial"
+    assert products.snapshot.complete_planned_landuse is not None
+    assert products.snapshot.complete_planned_landuse.feature_count == 2
+    assert products.render_layers
 
 
 def test_export_uses_the_same_complete_planned_snapshot_for_landuse_and_balance(tmp_path):

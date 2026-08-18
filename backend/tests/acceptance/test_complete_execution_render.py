@@ -64,12 +64,25 @@ def _render_execution(parcels, changed_bsms, path: Path, boundary=None, change_w
     import matplotlib.pyplot as plt
     import shapely.geometry as sg
 
-    for font in ("Microsoft YaHei", "SimHei", "Noto Sans CJK SC"):
-        try:
-            plt.rcParams["font.sans-serif"] = [font]
-            break
-        except Exception:
-            continue
+    import matplotlib.font_manager as fm
+
+    cjk_font_path = next(
+        (
+            candidate
+            for candidate in (
+                "C:/Windows/Fonts/simhei.ttf",
+                "C:/Windows/Fonts/NotoSansSC-VF.ttf",
+                "C:/Windows/Fonts/Deng.ttf",
+            )
+            if Path(candidate).exists()
+        ),
+        None,
+    )
+    if cjk_font_path:
+        fm.fontManager.addfont(cjk_font_path)
+        cjk_font_name = fm.FontProperties(fname=cjk_font_path).get_name()
+        plt.rcParams["font.family"] = cjk_font_name
+        plt.rcParams["font.sans-serif"] = [cjk_font_name]
     plt.rcParams["axes.unicode_minus"] = False
     fig, ax = plt.subplots(figsize=(13, 11))
     if boundary is not None:
@@ -161,7 +174,7 @@ def _render_execution(parcels, changed_bsms, path: Path, boundary=None, change_w
 
 
 @pytest.mark.asyncio
-async def test_complete_execution_and_render(sqlite_db, pipeline_reset):
+async def test_complete_execution_and_render(sqlite_db, pipeline_reset, monkeypatch):
     setup, teardown = sqlite_db
     await setup()
     try:
@@ -174,6 +187,14 @@ async def test_complete_execution_and_render(sqlite_db, pipeline_reset):
         from app.infrastructure.context.planning_context_factory import build_planning_context
         from app.domain.ground.anchors import ground_l1_anchors
         from app.domain.ground.aggregate import ground_aggregate
+        import app.core.settings as settings
+
+        # This acceptance test verifies deterministic GROUND -> EXECUTE
+        # materialization and rendering. Do not let an ambiguous resolver
+        # branch create a real provider request and turn a render test into a
+        # multi-minute network test; the production LLM path is covered by the
+        # provider integration tests.
+        monkeypatch.setattr(settings, "GROUND_MAX_LLM_CALLS", 0)
         from app.domain.allocation.select_service import select_aggregate
         from app.domain.materialization.plan_builder import build_execution_plan
         from app.domain.materialization.execute_state import ExecuteAgentState

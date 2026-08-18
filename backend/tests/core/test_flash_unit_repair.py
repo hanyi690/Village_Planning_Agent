@@ -7,16 +7,16 @@ from app.domain.program.claim_draft import (
     MeasureDraft,
     PlanningClaimDraft,
     PlanningClaimDraftSet,
-    ProjectPlanningParametersDraft,
+    SiteAreaPlanningParametersDraft,
 )
 
 
 def _draft_set(unit="待定", top_unit=None):
     claim = PlanningClaimDraft(
         claim_id="c1",
-        suggested_category="project",
+        suggested_category="site_area",
         suggested_output_kind="parcel",
-        project_parameters=ProjectPlanningParametersDraft(
+        site_area_parameters=SiteAreaPlanningParametersDraft(
             footprint_area=MeasureDraft(value=100, unit=unit),
         ),
     )
@@ -83,8 +83,8 @@ def test_flash_repair_units_applies_mapping(monkeypatch):
     print("DEBUG unknown:", collect_unknown_units(ds))
     print("DEBUG applied:", _apply_mapping(ds, m))
     result = asyncio.run(flash_repair_units(ds, "s-flash"))
-    print("DEBUG unit after:", result.claims[0].project_parameters.footprint_area.unit)
-    assert result.claims[0].project_parameters.footprint_area.unit == "ha"
+    print("DEBUG unit after:", result.claims[0].site_area_parameters.footprint_area.unit)
+    assert result.claims[0].site_area_parameters.footprint_area.unit == "ha"
 
 
 def test_flash_repair_noop_when_all_known():
@@ -94,4 +94,4 @@ def test_flash_repair_noop_when_all_known():
 
     ds = _draft_set("ha")
     result = asyncio.run(flash_repair_units(ds, "s-flash"))
-    assert result.claims[0].project_parameters.footprint_area.unit == "ha"
+    assert result.claims[0].site_area_parameters.footprint_area.unit == "ha"

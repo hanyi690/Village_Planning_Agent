@@ -2,7 +2,7 @@ import pytest
 from pydantic import ValidationError
 
 from app.domain.program.assembler import assemble_planning_program
-from app.domain.program.claim_adapter import proposals_from_claims
+from app.domain.program.claim_adapter import interventions_from_claims
 from app.domain.program.claim_draft import (
     PlanningClaimDraft,
     PlanningClaimDraftSet,
@@ -18,6 +18,7 @@ def test_road_dimensions_are_extracted_at_claim_source_and_normalized_to_metres(
         statement="Y122乡道路基宽7.5米、路面宽6米，全长8公里。",
         suggested_category="road",
         suggested_output_kind="line",
+        asset_kind="road",
         location_hints=["Y122乡道村内段"],
         road_parameters={
             "action": "upgrade",
@@ -50,6 +51,7 @@ def test_source_compiler_rejects_kilometres_used_as_road_width() -> None:
         statement="全长8公里，路面宽6米。",
         suggested_category="road",
         suggested_output_kind="line",
+        asset_kind="road",
         location_hints=["Y122乡道"],
         road_parameters={
             "action": "upgrade",
@@ -64,9 +66,87 @@ def test_source_compiler_rejects_kilometres_used_as_road_width() -> None:
         dimension_key="traffic_planning",
     )
 
-    assert claim_set.claims[0].road_parameters is None
+    assert claim_set.claims == []
     assert any("invalid_road_parameters" in item for item in claim_set.diagnostics)
-    assert any("road_parameters are required" in item for item in claim_set_semantic_errors(claim_set))
+    assert any("claim_contract_invalid" in item for item in claim_set.diagnostics)
+    assert any("claim_contract_invalid" in item for item in claim_set_semantic_errors(claim_set))
+
+
+def test_utility_pipe_diameter_is_not_treated_as_pavement_width() -> None:
+    draft = PlanningClaimDraft(
+        claim_id="INF-PIPE-1",
+        statement="更新供水管道，主管管径DN100，总长度6公里。",
+        suggested_category="road",
+        suggested_output_kind="line",
+        location_hints=["12个自然村"],
+        asset_kind="water_supply",
+        linear_parameters={
+            "action": "upgrade",
+            "length": {"value": 6, "unit": "km"},
+            "diameter": {"value": 100, "unit": "mm"},
+        },
+    )
+
+    claim_set = normalize_claim_draft_set(
+        PlanningClaimDraftSet(claims=[draft]),
+        dimension_key="project_bank",
+    )
+
+    linear = claim_set.claims[0].linear_parameters
+    assert linear is not None
+    assert linear.length_m == 6000
+    assert linear.diameter_mm == 100
+    assert claim_set.claims[0].road_parameters is None
+    assert claim_set_semantic_errors(claim_set) == []
+
+
+def test_utility_detection_survives_repair_normalizing_road_level() -> None:
+    draft = PlanningClaimDraft(
+        claim_id="INF-PIPE-2",
+        statement="新建污水管道管径DN300，总长度8公里。",
+        suggested_category="road",
+        suggested_output_kind="line",
+        asset_kind="sewer",
+        linear_parameters={
+            "action": "new",
+            "length": {"value": 8, "unit": "km"},
+            "diameter": {"value": 300, "unit": "mm"},
+        },
+    )
+
+    claim_set = normalize_claim_draft_set(
+        PlanningClaimDraftSet(claims=[draft]),
+        dimension_key="project_bank",
+    )
+
+    assert claim_set.claims[0].linear_parameters is not None
+    assert claim_set.claims[0].linear_parameters.diameter_mm == 300
+    assert claim_set.claims[0].road_parameters is None
+    assert claim_set_semantic_errors(claim_set) == []
+
+
+def test_drainage_channel_dimensions_are_not_treated_as_road_width() -> None:
+    draft = PlanningClaimDraft(
+        claim_id="DM-DRAIN-1",
+        statement="沿滑坡点布设截排水沟，沟底宽度0.6米、深度0.5米，总长3500米。",
+        suggested_category="road",
+        suggested_output_kind="line",
+        asset_kind="drainage_channel",
+        linear_parameters={
+            "action": "new",
+            "length": {"value": 3500, "unit": "m"},
+        },
+    )
+
+    claim_set = normalize_claim_draft_set(
+        PlanningClaimDraftSet(claims=[draft]),
+        dimension_key="disaster_prevention",
+    )
+
+    assert claim_set.claims[0].linear_parameters is not None
+    assert claim_set.claims[0].linear_parameters.length_m == 3500
+    assert claim_set.claims[0].road_parameters is None
+    assert claim_set_semantic_errors(claim_set) == []
 
 
 def test_facility_axis_and_zone_keep_their_own_typed_semantics() -> None:
@@ -155,6 +235,7 @@ def test_typed_semantics_survive_claim_proposal_program_boundaries() -> None:
         statement="村道硬化8公里，路面宽4.5米。",
         suggested_category="road",
         suggested_output_kind="line",
+        asset_kind="road",
         location_hints=["纵向村道"],
         road_parameters={
             "action": "harden",
@@ -167,11 +248,11 @@ def test_typed_semantics_survive_claim_proposal_program_boundaries() -> None:
         PlanningClaimDraftSet(claims=[draft]),
         dimension_key="traffic_planning",
     )
-    proposals = proposals_from_claims(
+    interventions = interventions_from_claims(
         claim_set.claims,
         dimension_key="traffic_planning",
     )
-    program = assemble_planning_program(proposals, [], claims=claim_set.claims)
+    program = assemble_planning_program(interventions, [], claims=claim_set.claims)
 
     intervention = program.interventions[0]
     assert intervention.intervention_action == "harden"
@@ -193,6 +274,7 @@ def test_local_repair_replaces_only_rejected_claims() -> None:
         statement="道路升级。",
         suggested_category="road",
         suggested_output_kind="line",
+        asset_kind="road",
     )
     original = PlanningClaimDraftSet(claims=[accepted, rejected])
     repaired = PlanningClaimDraftSet(
@@ -202,6 +284,7 @@ def test_local_repair_replaces_only_rejected_claims() -> None:
                 statement="道路升级。",
                 suggested_category="road",
                 suggested_output_kind="line",
+                asset_kind="road",
                 road_parameters={
                     "action": "upgrade",
                     "pavement_width": {"value": 4.5, "unit": "m"},
@@ -284,3 +367,65 @@ def test_functional_overlay_is_not_compiled_as_land_use_area_assignment() -> Non
         "functional_overlay_area_non_authoritative" in item
         for item in claim_set.diagnostics
     )
+
+
+@pytest.mark.parametrize(
+    ("category", "output", "asset_kind"),
+    [
+        ("facility", "point", "water_supply"),
+        ("project", "polygon", "power"),
+        ("protection", "polygon", "drainage_channel"),
+    ],
+)
+def test_mismatched_asset_kind_is_normalized_before_program_assembly(
+    category: str,
+    output: str,
+    asset_kind: str,
+) -> None:
+    draft = PlanningClaimDraft(
+        claim_id="BAD-ASSET-MIX",
+        statement="不兼容资产语义",
+        suggested_category=category,
+        suggested_output_kind=output,
+        asset_kind=asset_kind,
+        facility_parameters=(
+            {"facility_type": "供水设施"}
+            if category == "facility"
+            else None
+        ),
+        project_parameters=(
+            {"project_type": "变压器改造"}
+            if category == "project"
+            else None
+        ),
+        polygon_parameters=(
+            {"materialization_role": "protection_overlay"}
+            if category == "protection"
+            else None
+        ),
+    )
+
+    claim_set = normalize_claim_draft_set(PlanningClaimDraftSet(claims=[draft]))
+
+    assert len(claim_set.claims) == 1
+    assert claim_set.claims[0].asset_kind in {"facility", "project", "none"}
+    assert any(
+        "asset_kind_category_mismatch" in item for item in claim_set.diagnostics
+    )
+
+
+def test_site_project_point_without_typed_footprint_becomes_auditable_action() -> None:
+    draft = PlanningClaimDraft(
+        claim_id="PROJECT-POINT-1",
+        statement="新建综合服务中心，位置在村北入口。",
+        suggested_category="project",
+        suggested_output_kind="point",
+        project_parameters={"project_type": "综合服务中心"},
+    )
+
+    claim_set = normalize_claim_draft_set(PlanningClaimDraftSet(claims=[draft]))
+
+    assert len(claim_set.claims) == 1
+    assert claim_set.claims[0].suggested_category == "action"
+    assert claim_set.claims[0].suggested_output_kind == "action"
+    assert any("project_reclassified_to_action" in item for item in claim_set.diagnostics)

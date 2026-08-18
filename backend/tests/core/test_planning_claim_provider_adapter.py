@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import asyncio
 
+import pytest
+
 from app.infrastructure.llm.planning_claims import PlanningClaimGenerator
 
 
@@ -47,3 +49,21 @@ def test_provider_adapter_retries_malformed_nested_json(monkeypatch):
     assert invoker.calls == 2
     assert result.report_body == "Provide a small agricultural service point."
     assert result.claims[0].claim_id == "industry-1"
+
+
+def test_provider_adapter_queue_wait_is_bounded(monkeypatch):
+    import app.infrastructure.llm.planning_claims as planning_claims
+
+    generator = PlanningClaimGenerator()
+    generator._slots = asyncio.Semaphore(1)
+    monkeypatch.setattr(planning_claims, "LLM_STREAM_TIMEOUT", 0.01)
+
+    async def scenario():
+        await generator._slots.acquire()
+        try:
+            with pytest.raises(asyncio.TimeoutError):
+                await generator.generate("Generate one planning claim.")
+        finally:
+            generator._slots.release()
+
+    asyncio.run(scenario())

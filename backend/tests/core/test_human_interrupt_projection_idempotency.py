@@ -66,3 +66,37 @@ def test_pending_interrupt_is_presented():
 
 def test_consumed_false_with_clean_state_is_none():
     assert _project({"human_review_resume_consumed": False}) is None
+
+
+def test_pending_interrupt_projection_reads_nested_checkpoint_task():
+    from app.application.queries.workflow_state import _pending_interrupt_projection
+
+    class Pending:
+        value = {
+            "event_id": "nested-event",
+            "channel": "step_mode",
+            "reason": "human_review_required",
+            "paused_stage": "layer3",
+            "items": [{
+                "request_id": "layer-3-completion-review",
+                "stage": "layer3",
+                "request_type": "layer_completion_review",
+            }],
+        }
+
+    class Task:
+        interrupts = (Pending(),)
+
+    class Snapshot:
+        tasks = (Task(),)
+
+    projected = _pending_interrupt_projection(Snapshot())
+    assert projected is not None
+    assert projected["event_id"] == "nested-event"
+    assert projected["paused_stage"] == "layer3"
+    assert projected["items"] == [{
+        "request_id": "layer-3-completion-review",
+        "stage": "layer3",
+        "request_type": "layer_completion_review",
+        "context": {},
+    }]

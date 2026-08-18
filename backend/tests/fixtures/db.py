@@ -15,6 +15,8 @@ request the fixture by name.
 
 from __future__ import annotations
 
+import os
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 import pytest
@@ -43,7 +45,20 @@ def sqlite_db(tmp_path, monkeypatch):
     from sqlmodel import SQLModel
 
     state: Dict[str, Any] = {"engine": None}
-    db_path = tmp_path / "test.db"
+    persistent = os.getenv("REAL_RUN_PERSISTENT", "").lower() in {
+        "1", "true", "yes", "on"
+    }
+    if persistent:
+        persistent_root = Path(
+            os.getenv(
+                "REAL_RUN_DIR",
+                str(Path.cwd() / ".run-tmp" / "persistent-e2e"),
+            )
+        ).resolve()
+        persistent_root.mkdir(parents=True, exist_ok=True)
+        db_path = persistent_root / "test.db"
+    else:
+        db_path = tmp_path / "test.db"
 
     async def setup():
         engine = create_async_engine(
@@ -66,7 +81,8 @@ def sqlite_db(tmp_path, monkeypatch):
             "AsyncSessionLocal",
             async_sessionmaker(bind=engine, expire_on_commit=False),
         )
-        monkeypatch.setattr(eng, "CHECKPOINT_DB_PATH", tmp_path / "checkpoints.db")
+        checkpoint_path = db_path if persistent else tmp_path / "checkpoints.db"
+        monkeypatch.setattr(eng, "CHECKPOINT_DB_PATH", checkpoint_path)
         eng._checkpointer = None
         eng._checkpointer_initialized = False
         eng._checkpointers_by_loop.clear()

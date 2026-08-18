@@ -7,9 +7,6 @@ import asyncio
 import pytest
 
 
-pytestmark = pytest.mark.e2e
-
-
 def test_minimax_provider_uses_official_openai_endpoint(monkeypatch):
     from app.infrastructure.llm.factory import LLMProvider, create_llm, get_provider
 
@@ -35,6 +32,7 @@ def test_minimax_default_uses_highspeed_model(monkeypatch):
     assert llm.model_name == "MiniMax-M2.7-highspeed"
 
 
+@pytest.mark.slow
 def test_minimax_streaming_preflight():
     from app.infrastructure.llm.factory import create_llm
 

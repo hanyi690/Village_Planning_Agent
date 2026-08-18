@@ -140,6 +140,29 @@ def test_make_router_rejects_under_dispatch_audit(monkeypatch) -> None:
     assert command.update["delivery_status"] == TerminalStatus.DIAGNOSTIC_ONLY.value
 
 
+def test_make_router_preserves_child_artifact_refs_on_parent_terminal(monkeypatch) -> None:
+    from app.workflow.routing import RouteAuthorization
+
+    monkeypatch.setattr(
+        "app.workflow.routing.authorize_route_result",
+        lambda _state, _source, _result: RouteAuthorization(accepted=True),
+    )
+    refs = {"delivery_manifest": {"descriptor_digest": "manifest-ref"}}
+    router = _make_router(
+        "deliver",
+        lambda _state: END,
+        source_segment="spatial_chain",
+        internal_nodes=_SPATIAL_INTERNAL,
+        cross_map={},
+    )
+
+    command = router({"artifact_refs": refs})
+
+    assert command.graph == Command.PARENT
+    assert command.goto == END
+    assert command.update == {"artifact_refs": refs}
+
+
 def test_remap_command_cross_targets() -> None:
     internal = _COGNITIVE_INTERNAL
     # internal target unchanged

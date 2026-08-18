@@ -19,9 +19,11 @@ def _intervention(
         target_id=target_id,
         name=target_id,
         category=category,
+        asset_kind="road" if category == "road" else "none",
         execution_mode="spatial",
         expected_output_kind=output,
         materialization_role=role,
+        road_parameters=RoadPlanningParameters() if category == "road" else None,
     )
 
 

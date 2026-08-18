@@ -1,9 +1,16 @@
 """Location evidence must survive the claim-to-grounding boundary."""
 
+import pytest
+from pydantic import ValidationError
+
 from app.contracts.program import PlanningClaim
-from app.contracts.domain.planning_semantics import FacilityPlanningParameters
+from app.contracts.domain.l3_contracts import PlanningIntervention
+from app.contracts.domain.planning_semantics import (
+    FacilityPlanningParameters,
+    SiteAreaPlanningParameters,
+)
 from app.domain.program.assembler import assemble_planning_program
-from app.domain.program.claim_adapter import proposals_from_claims
+from app.domain.program.claim_adapter import interventions_from_claims
 from app.domain.program.target_projection.compile import compile_program_deterministic
 
 
@@ -20,8 +27,8 @@ def test_claim_location_hints_become_a_closed_set_spatial_reference():
             action="new",
         ),
     )
-    proposal = proposals_from_claims([claim], dimension_key="public_service")[0]
-    program = assemble_planning_program([proposal], [], claims=[claim])
+    intervention = interventions_from_claims([claim], dimension_key="public_service")[0]
+    program = assemble_planning_program([intervention], [], claims=[claim])
     compilation, specs, diagnostics = compile_program_deterministic(program)
 
     assert compilation.typed_intent.facilities[0].location_hint == "园寨、黄竹"
@@ -35,3 +42,55 @@ def test_claim_location_hints_become_a_closed_set_spatial_reference():
         child.reference.filter["label_contains"] for child in specs[0].children
     ] == ["园寨", "黄竹"]
     assert not diagnostics
+
+
+def test_facility_point_and_site_area_footprint_are_separate_targets() -> None:
+    facility = PlanningIntervention(
+        intervention_id="facility-1",
+        name="综合服务中心设施节点",
+        target_id="facility-1",
+        category="facility",
+        execution_mode="spatial",
+        expected_output_kind="point",
+        facility_parameters=FacilityPlanningParameters(
+            facility_type="综合服务中心",
+            action="new",
+        ),
+        claim_refs=["claim-facility-1"],
+    )
+    site_area = PlanningIntervention(
+        intervention_id="site-area-1",
+        name="村民活动场地用地范围",
+        target_id="site-area-1",
+        category="site_area",
+        execution_mode="spatial",
+        expected_output_kind="polygon",
+        materialization_role="site_footprint",
+        site_area_parameters=SiteAreaPlanningParameters(
+            site_type="活动场地",
+            footprint_area_m2=1200,
+        ),
+        claim_refs=["claim-site-area-1"],
+    )
+
+    program = assemble_planning_program([facility, site_area], [], claims=[])
+    compilation, _, diagnostics = compile_program_deterministic(program)
+
+    assert [item.target_id for item in compilation.typed_intent.facilities] == [
+        "facility-1"
+    ]
+    assert [item.target_id for item in compilation.typed_intent.site_area_targets] == [
+        "site-area-1"
+    ]
+    assert compilation.typed_intent.facilities[0].expected_output_kind == "point"
+    assert compilation.typed_intent.site_area_targets[0].expected_output_kind == "polygon"
+    assert not [item for item in diagnostics if item.code == "SITE_AREA_MATERIALIZATION_UNRESOLVED"]
+
+    with pytest.raises(ValidationError):
+        PlanningIntervention(
+            intervention_id="site-area-point-1",
+            name="错误的用地范围点位",
+            category="site_area",
+            execution_mode="spatial",
+            expected_output_kind="point",
+        )

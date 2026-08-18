@@ -299,8 +299,12 @@ def test_resolver_llm_fallback_picks_ambiguous_candidate(monkeypatch):
     ctx.ports = SimpleNamespace(spatial_query=None)
 
     class _FakeLLM:
-        def invoke(self, prompt):
-            return SimpleNamespace(content="1")
+        def with_structured_output(self, response_model, method="function_calling"):
+            class _Structured:
+                def invoke(self, prompt):
+                    return response_model(candidate_index=1)
+
+            return _Structured()
 
     import app.infrastructure.llm.factory as factory_mod
 

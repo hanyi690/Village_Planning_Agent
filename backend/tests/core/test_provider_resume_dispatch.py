@@ -7,6 +7,7 @@ from app.workflow.layers.layer_router import provider_resume_dispatch_node
 from app.workflow.root_graph import (
     _provider_resume_patch,
     apply_human_review_decision,
+    prepare_human_review,
     route_after_human_review,
 )
 
@@ -99,6 +100,32 @@ def test_single_dimension_failure_resumes_only_that_dimension() -> None:
     assert len(command.goto) == 1
 
 
+def test_provider_resume_dispatch_respects_same_layer_dependencies() -> None:
+    state = {
+        "phase": "layer3",
+        "completed_dimensions": {"layer3": []},
+        "provider_resume_dimensions": ["project_bank", "industry"],
+    }
+
+    command = provider_resume_dispatch_node(state)
+
+    assert command.update == {"provider_resume_dimensions": ["project_bank"]}
+    assert [item.arg["dimension_key"] for item in command.goto] == ["industry"]
+
+
+def test_provider_resume_dispatch_does_not_trust_stale_completed_dependency() -> None:
+    state = {
+        "phase": "layer3",
+        "completed_dimensions": {"layer3": ["industry"]},
+        "provider_resume_dimensions": ["project_bank", "industry"],
+    }
+
+    command = provider_resume_dispatch_node(state)
+
+    assert command.update == {"provider_resume_dimensions": ["project_bank"]}
+    assert [item.arg["dimension_key"] for item in command.goto] == ["industry"]
+
+
 def test_provider_resume_fails_closed_after_dimension_budget() -> None:
     state = _failed_state()
     state["dimension_retry_counts"]["industry"] = 2
@@ -109,6 +136,38 @@ def test_provider_resume_fails_closed_after_dimension_budget() -> None:
     assert patch["provider_resume_dimensions"] == []
     assert patch["delivery_status"] == "diagnostic_only"
     assert patch["diagnostic_terminal"]["dimensions"] == ["industry"]
+
+
+@pytest.mark.asyncio
+async def test_provider_failure_review_precedes_dependency_deadlock(monkeypatch) -> None:
+    """A transient LLM failure must resume the named dimensions only."""
+    import app.workflow.root_graph as root_graph
+
+    monkeypatch.setattr(root_graph, "collect_human_review_items", lambda state: (None, []))
+    monkeypatch.setattr(
+        root_graph,
+        "load_root_gate",
+        lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("no gate")),
+    )
+    monkeypatch.setattr(
+        root_graph,
+        "_root_gate_payload",
+        lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("no gate")),
+    )
+
+    prepared = await prepare_human_review({
+        "session_id": "provider-before-deadlock",
+        "phase": "layer1",
+        "completed_dimensions": {"layer1": ["location"]},
+        "provider_failures": [{
+            "stage": "L1",
+            "dimension": "land_use",
+            "code": "llm_stream_timeout",
+        }],
+    })
+
+    assert prepared["human_review_items"][0]["request_type"] == "transient_llm_failure"
+    assert prepared["human_review_items"][0]["context"]["dimension"] == "land_use"
 
 
 @pytest.mark.asyncio
@@ -194,7 +253,7 @@ async def test_mixed_pause_approve_with_classification_decisions_applies_revisio
 
 
 @pytest.mark.asyncio
-async def test_mixed_pause_approve_without_classification_decisions_still_provider_resumes(
+async def test_mixed_pause_explicit_retry_without_classification_decisions_resumes_provider(
     monkeypatch,
 ) -> None:
     state = {
@@ -203,7 +262,7 @@ async def test_mixed_pause_approve_without_classification_decisions_still_provid
         "paused_stage": "l3",
         "dimension_retry_limit": 1,
         "dimension_retry_counts": {"traffic_planning": 0},
-        "human_review_decisions": {"action": "approve", "feedback": "重试"},
+        "human_review_decisions": {"action": "retry", "feedback": "重试"},
         "human_review_items": [
             {
                 "request_type": "transient_llm_failure",
@@ -218,3 +277,30 @@ async def test_mixed_pause_approve_without_classification_decisions_still_provid
     assert patch["provider_resume_dimensions"] == ["traffic_planning"]
     assert not patch.get("classification_revision")
     assert route_after_human_review(patch) == "provider_resume_dispatch"
+
+
+@pytest.mark.asyncio
+async def test_provider_failure_reject_becomes_diagnostic_terminal() -> None:
+    state = {
+        "session_id": "provider-reject-terminal",
+        "phase": "layer3",
+        "paused_stage": "l3",
+        "human_review_decisions": {
+            "action": "reject",
+            "feedback": "不再重试",
+        },
+        "human_review_items": [{
+            "request_type": "transient_llm_failure",
+            "stage": "l3",
+            "context": {
+                "code": "llm_provider_error",
+                "dimension_key": "project_bank",
+            },
+        }],
+    }
+
+    patch = await apply_human_review_decision(state)
+
+    assert patch["delivery_status"] == "diagnostic_only"
+    assert patch["diagnostic_terminal"]["reason"] == "provider_retry_rejected"
+    assert route_after_human_review({**state, **patch}) == "end_diagnostic"

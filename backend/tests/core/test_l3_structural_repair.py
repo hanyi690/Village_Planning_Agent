@@ -52,6 +52,7 @@ def _good_output():
 def test_structural_repair_retries_with_validation_feedback(monkeypatch):
     seq = _SequentialOutput([_bad_output(), _good_output()])
     monkeypatch.setattr(worker, "_cached_claim_generation", seq)
+    monkeypatch.setenv("L3_STRUCTURAL_COMPILE_RETRIES", "2")
 
     draft_set, claim_set = asyncio.run(worker._normalize_with_structural_repair(
         object(),

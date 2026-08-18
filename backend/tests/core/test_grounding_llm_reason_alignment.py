@@ -9,6 +9,8 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
+import pytest
+
 from app.spatial.grounding.resolver import SpatialResolver
 
 
@@ -160,3 +162,33 @@ def test_candidate_line_carries_geometry_and_topology():
     assert "serves" in line
     assert "nearby" in line
     assert "拓扑" in line
+
+
+def test_sync_resolver_queue_wait_is_bounded(monkeypatch):
+    """The compatibility resolver must not wait forever behind its gate."""
+    from app.infrastructure.llm import factory as llm_factory
+    from app.spatial.grounding.call_budget import ground_llm_sync_semaphore
+
+    monkeypatch.setattr("app.core.settings.GROUND_LLM_CALL_TIMEOUT_S", 0.01)
+    monkeypatch.setattr("app.core.settings.GROUND_LLM_MAX_CONCURRENT", 1)
+    monkeypatch.setattr(
+        llm_factory,
+        "create_flash_llm",
+        lambda *a, **k: SimpleNamespace(
+            invoke=lambda _prompt: (_ for _ in ()).throw(
+                AssertionError("provider must not start while the queue is held")
+            )
+        ),
+    )
+    resolver = SpatialResolver(_context(None))
+    gate = ground_llm_sync_semaphore(resolver._ground_llm_budget)
+    assert gate.acquire(timeout=0.1)
+    try:
+        result = resolver._llm_pick_candidate(
+            "模糊村",
+            "",
+            [_candidate("甲村", "bsm-1", "http://e/1")],
+        )
+    finally:
+        gate.release()
+    assert result is None
