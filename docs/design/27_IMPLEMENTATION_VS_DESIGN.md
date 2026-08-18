@@ -1,6 +1,6 @@
 # 设计文档与当前实现差异对照（以实际代码为准）
 
-> 状态：`CURRENT`（事实台账）· 核验日期 2026-08-15
+> 状态：`CURRENT`（事实台账）· 核验日期 2026-08-17
 > 本文回答一个问题：**设计文档（`docs/design/`）里写的东西，和 `backend/app/`、`frontend/src/`
 > 的实际代码哪里不一致。** 凡是冲突，以实际代码为准；本文把这些差异固定下来，避免后续
 > 维护者被过时设计误导。差异的“现状/完成度”见
@@ -103,7 +103,8 @@
 
 - `13_AUTOREPAIR_MULTIMODAL.md`：多模态自动迭代设计（`TARGET`）。
 - `26_LLM_VALIDATION_ORCHESTRATION.md`：LLM 监督式校验编排（`TARGET`，本轮不实现）。
-- `23_EXPLORE_RETRIEVAL_REDESIGN.md`（已归档）：EXPLORE 检索体系重构（未实施）。
+- `23_EXPLORE_RETRIEVAL_REDESIGN.md`：当前仍是活跃设计；`retrieve_evidence()` 已有局部 producer，
+  但 router/query plan/sufficiency 和 gate-driven retrieval 未接入主图，不能按设计宣称已实施。
 - `05_EXPLORE_BRIDGE.md` / `07_VALIDATION_FEEDBACK.md` 中的部分目标：证据/反馈闭环仍 `PARTIAL`。
 - 前端 `compliance/evaluation/suitability/gis-test` 的评估类端点：后端无路由（`GAP`）。
 
@@ -123,3 +124,51 @@
 - `apply_human_review_decision`：空 `deferred_target_ids` + defer 标记 -> 纯 approve（不再 `HUMAN_DEFER_TARGET_IDS_REQUIRED` 死态）。
 - `_approve_ground` / `_approve_default`：审批后按 `STAGE_FORWARD_TARGET` 继续（ground->select），不再静默 END 或回环 HUMAN（修复 run#6 post_l3 死态）。
 - 校验预算：`validation_budget_used` 通道 + `VALIDATION_BUDGET_PER_SESSION`。
+
+## 15. 关系感知空间规划生成差异（2026-08-17）
+
+[28_RELATION_AWARE_SPATIAL_PLAN_GENERATION.md](modules/spatial-execution/28_RELATION_AWARE_SPATIAL_PLAN_GENERATION.md)
+是 TARGET / NORTH STAR，以下能力不得按文档宣称已经实现：
+
+| TARGET 设计 | 当前实现（证据） |
+|---|---|
+| L1 mention、PlaceIdentifier、canonical SpatialFeature 分层，并写入独立 KG overlay | domain/ground/anchors.py 的 _inject_anchors_into_kg 会把 anchor 增强重放到会话 KG；当前没有完整的 l1_observations / entity_bindings named graph 生命周期 |
+| 地名采用 mention graph + Top-K 联合消歧 | evidence/index/place_evidence_index.py 已有多来源候选、别名/类型/拓扑评分，但主要仍按单 mention 解析；LLM fallback 尚未形成关系组级闭集联合解析 |
+| 村级 anchor 只表示 village_scope | 当前 PlaceEvidenceIndex._bind_village_anchor_bsms 可把村庄 BSM 集绑定给未命中的非村级 L1 fact；契约尚无 geometry_granularity，下游可能误读为实体级候选 |
+| 现状关系、desired relation、constraint factor、satisfaction 分层 | v2 contracts、projection compiler、ScenarioSolver 和 final validator 已形成可测试闭环；SELECT 已持久化 `planning_scenario`，VALIDATE 已从最终 PlannedState/网络上下文计算并持久化 `final_relation_validation`，DELIVER 已读取该结果并在缺失/失败时降级 partial；当前活动 demo 尚无有效交付图层，因此真实主链 acceptance 仍为 `PARTIAL` |
+| 设施服务使用真实 demand–facility 网络阻抗和容量 | `NetworkGraphSnapshot`、`DemandSnapshot`、service-area evaluator 和 ScenarioSolver network subproblem 已实现，明确拒绝现状设施邻近代理；主链 demand/network artifact 与真实村庄验收仍待完成 |
+| 点、线、面分别生成 typed CandidateGeometry 并联合求解 | GROUND candidate-domain builder 与 ScenarioSolver 已保留 execution/candidate-only geometry role，并在统一 scenario ledger 中选择；KG L1 现已持久化 source-backed road line/facility point WKT，但 fresh 主链尚未证明这些 exact features 下沉到 map-layers |
+| KG 约束与精确空间查询可直接供约束编译和最终验证 | `KGSemanticQueryAdapter.get_constraints()` 会按 scope 查询实体并读取 `legal_constraint`/`allowed_operation` 谓词，找不到匹配实体或约束时才返回空列表；`resolve_ambiguous()` 会按实体名称/别名进行 exact/substring 评分，唯一最高分才返回 URI，空输入、无匹配或并列最高分返回 `None`；`KGSpatialQueryAdapter.compute_overlap()` 使用 Shapely WKT 几何计算交集面积与较小面积之比，零面积时返回 intersects 的 0/1，异常时返回 0，前提是输入几何有效，不是 bbox 面积近似。当前仍应视为 adapter 级能力，不能替代全链最终关系 acceptance |
+| 缺失 capability 的目标持久化 deferred，未来 resume | 当前部分路径能产出 deferred/diagnostic，但 typed capability registry、durable deferred ledger 与恢复后的目标重规划闭环尚未完整实现 |
+
+## 16. 关系感知规划当前验收门槛（2026-08-17）
+
+当前活动 demo 的有效规划图层为 0；默认 `.run-tmp/runs` 最近会话没有
+`render_layers`、`delivery_spatial_snapshot`、`planned_state` named ref。2026-08-12
+历史隔离运行的 660 个 `complete_planned_landuse` 是 baseline 延续，实际 `ParcelChange` 为 0，
+另有 17 个 project points、16 个 facilities；这些数字不得写进 CURRENT 规划产出。
+
+`scripts/render_integrated_map.py` 直接读取静态 current/planned 文件和报告，属于 standalone
+展示，不是 `DeliverySpatialSnapshot → RenderLayers → /map-layers` 主链证据。
+
+关系感知实现的五列台账见
+[`RELATION_AWARE_MODIFICATION_LEDGER.md`](RELATION_AWARE_MODIFICATION_LEDGER.md)。任何模块只有在
+schema、producer、consumer、validator、acceptance 五列同时有证据时，才可标记 `CURRENT`；其中
+acceptance 必须包含主 workflow 的非 baseline feature、稳定 lineage、最终关系重测量，以及 fresh/resume
+和 `/map-layers` 读取。
+
+### 2026-08-18 状态增量：clone-only replay28 已有 partial 非空产出
+
+上述“默认活动 demo 为零”的判断仍适用于尚未切换到 source-aware fresh bundle 的默认入口，
+但不能覆盖后续的 clone-only replay28 证据。该分支从 clean main cursor 完成了
+`TARGET_PROJECTION → GROUND → SELECT → EXECUTE → VALIDATE → RECONCILE → DELIVER`，
+产出 42 个 exact Point 候选、16 个 selected/final features、15 个 render layers，且独立
+final relation validation 为 0 findings；delivery 状态为 `partial`，154/170 个目标仍延期，
+道路/轴线 exact Line 仍为 0。因而当前五列表的 acceptance 应写成：模块级和隔离 replay 已有证据，
+默认 fresh live/resume acceptance 尚未完成，不得将 replay28 标为 `complete`。
+
+另一个已修复的入口问题：`scripts/run_pipeline_real_jintian.py` 现在先创建 planning session，再调用
+`ensure_session_kg()`。这样 KG 的 snapshot-first 逻辑可以读取该 session 的 bundle，而不是在 session
+尚未存在时退回 village-wide catalog；这只修正 source-aware bundle 的初始化顺序，不代表已经完成
+高内存 real graph acceptance。该入口仍应通过 `low_memory_spatial_acceptance.py` 的 clone/preflight
+约束运行，运行后检查无 Python/uvicorn 残留。

@@ -38,48 +38,20 @@ logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(name)s] %(levelname)s: %(message)s")
 
 
-async def _open_session_kg(session_id: str) -> None:
-    from app.modules.data.catalog import DataCatalog
-    from app.modules.kg import open_kg_session
+async def _create_planning_session(session_id: str) -> None:
+    """Create the session record before bundle/KG initialization.
 
-    village_name = JINTIAN_VILLAGE_DATA.get("village_name", "金田村")
-    bundle = await DataCatalog().load_village_bundle_async(village_name)
-    snapshot = open_kg_session(
-        session_id=session_id,
-        village_name=bundle.village_name or village_name,
-        bundle=bundle,
-    )
-    logger.info("[Runner] KG session opened: v%d (%d triples, cache_hit=%s)",
-                snapshot.version, snapshot.triple_count, snapshot.cache_hit)
-
-
-async def _run_graph(session_id: str, listener) -> None:
-    """Port of scripts/experiments/cascade/baseline.py:_run_graph."""
-    from app.agent.state import get_layer_dimensions, get_layer_name
+    ``ensure_session_kg`` is snapshot-first: when a session already has a
+    persisted bundle it restores that bundle, otherwise it builds one from the
+    session metadata.  The old runner opened the KG before creating the
+    session, which forced the first build through the village-wide catalog and
+    dropped source-aware session provenance.  Keeping this small initializer
+    separate also makes the ordering explicit for bounded acceptance tests.
+    """
     from app.database.operations import create_planning_session_async
-    from app.services.runtime import PlanningRuntimeService
-    from app.agent.plan_state.state_factory import StateFactory
-    from app.services.sse import sse_manager
-    from app.utils.sse_publisher import SSEPublisher
-    from app.utils.stats_collector import StatsCollector
 
     village_data = JINTIAN_VILLAGE_DATA.get("status_report", "")
     village_name = JINTIAN_VILLAGE_DATA.get("village_name", "金田村")
-
-    stats = StatsCollector.get_instance()
-    stats.start_session(session_id, "金田村规划")
-
-    initial_state = StateFactory.create(
-        project_name="金田村规划",
-        village_data=village_data,
-        village_name=village_name,
-        task_description=DEFAULT_TASK_DESCRIPTION,
-        constraints=DEFAULT_CONSTRAINTS,
-        session_id=session_id,
-        stream_mode=True,
-        step_mode=False,
-    )
-
     await create_planning_session_async({
         "session_id": session_id,
         "project_name": "金田村规划",
@@ -90,8 +62,35 @@ async def _run_graph(session_id: str, listener) -> None:
         "config": {"village_name": village_name},
     })
 
-    sse_manager.init_session(session_id, {"session_id": session_id, "project_name": "金田村规划"})
-    sse_manager.set_execution_active(session_id, True)
+
+async def _open_session_kg(session_id: str) -> None:
+    from app.infrastructure.kg.session_kg import ensure_session_kg
+
+    village_name = JINTIAN_VILLAGE_DATA.get("village_name", "金田村")
+    snapshot = await ensure_session_kg(session_id, village_name=village_name)
+    if snapshot is None:
+        raise RuntimeError(f"Unable to build a non-empty session KG for {village_name}")
+    logger.info("[Runner] KG session opened: v%s (%s triples, cache_hit=%s)",
+                snapshot.get("version"), snapshot.get("triple_count"), snapshot.get("cache_hit"))
+
+
+async def _run_graph(session_id: str, listener) -> None:
+    """Port of scripts/experiments/cascade/baseline.py:_run_graph."""
+    from app.workflow.layers.phase_machine import get_layer_dimensions, get_layer_name
+    from app.infrastructure.runtime.planning_runtime_service import PlanningRuntimeService
+    from app.workflow.plan_state.state_factory import StateFactory
+    from app.infrastructure.events.sse_publisher import SSEPublisher
+
+    village_name = JINTIAN_VILLAGE_DATA.get("village_name", "金田村")
+
+    initial_state = StateFactory.create(
+        project_name="金田村规划",
+        village_name=village_name,
+        session_id=session_id,
+        stream_mode=True,
+        step_mode=False,
+    )
+
     await listener.connect()
 
     SSEPublisher.send_layer_start(
@@ -101,7 +100,7 @@ async def _run_graph(session_id: str, listener) -> None:
     )
 
     task = asyncio.create_task(
-        PlanningRuntimeService._trigger_planning_execution(session_id, initial_state)
+        PlanningRuntimeService.trigger_planning_execution(session_id, initial_state)
     )
 
     for layer in [1, 2, 3]:
@@ -122,7 +121,7 @@ async def _run_graph(session_id: str, listener) -> None:
 
 
 async def _summarize(session_id: str) -> Dict[str, Any]:
-    from app.modules.kg.memory import load_memory_state
+    from app.infrastructure.kg.memory import load_memory_state
 
     summary: Dict[str, Any] = {"session_id": session_id, "rounds": {}}
     for round_num in [1, 2, 3]:
@@ -137,7 +136,9 @@ async def _summarize(session_id: str) -> Dict[str, Any]:
 
 
 async def main(session_id: str, skip_verify: bool) -> None:
-    from app.services.runtime import PlanningRuntimeService
+    from app.infrastructure.runtime.planning_runtime_service import PlanningRuntimeService
+    from app.infrastructure.paths import session_run_dir
+    from scripts.audit_planning_layer_quality import audit_planning_layer_quality
     from scripts.experiments.framework.sse_listener import InProcessEventListener
 
     ensure_cascade_dirs()
@@ -146,15 +147,22 @@ async def main(session_id: str, skip_verify: bool) -> None:
     session_id = session_id or f"explore_kgenrich_{uuid.uuid4().hex[:8]}"
     logger.info("[Runner] session_id=%s", session_id)
 
+    await _create_planning_session(session_id)
     await _open_session_kg(session_id)
     listener = InProcessEventListener(session_id)
     await _run_graph(session_id, listener)
     summary = await _summarize(session_id)
+    quality = audit_planning_layer_quality(session_run_dir(session_id))
 
     print("\n" + "=" * 60)
     print(f"[Runner] session={session_id}")
     for r, info in summary["rounds"].items():
         print(f"  round{r}: {info['annotations']} annotations {info['names']}")
+    print(f"  planning_status: {quality.status}")
+    print(f"  first_zero_stage: {quality.first_zero_stage}")
+    print(f"  non_baseline_feature_count: {quality.non_baseline_feature_count}")
+    print(f"  planning_overlay_feature_count: {quality.planning_overlay_feature_count}")
+    print(f"  artifact_files: {quality.artifact_files}")
     print("=" * 60)
 
     if not skip_verify:

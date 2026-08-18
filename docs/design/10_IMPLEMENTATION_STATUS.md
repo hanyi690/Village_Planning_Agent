@@ -18,13 +18,25 @@
 > 未配置任何 provider key；preflight 未能在超时窗口内完成，测试现已在无 key 时明确 skip，
 > 有 key 的环境才会执行真实调用。
 
-> 2026-08-12 最新真实验收已通过：`test_real_graph_resume_delivery` 为 `1 passed in 800.03s`。
-> 真实链使用配置的 provider，经历真实 LangGraph HUMAN interrupt/checkpoint reopen/resume，完成
-> post-L3 到 DELIVER；最新产物目录为
-> `.run-tmp/real-llm-41545f0093904940b7d0a47315103664/db6118ac-2efe-4cc5-9168-489444fb0f54/`。
-> 本次真实读取到 660 个 `complete_planned_landuse` 地块、17 个 `planned_project_point` 和 16 个
-> `planned_facility`；HTML 同时含 `current_landuse` 与 `complete_planned_landuse`，PNG 已实际查看为
-> 一张现状/规划双面板。该会话仍按 manifest/DeferralLedger 表达 `partial`，不宣称法定规划完整。
+> 2026-08-12 的 `test_real_graph_resume_delivery` 历史记录为 `1 passed in 800.03s`，只能证明当时的
+> checkpoint/reopen/resume 路径曾经走到 DELIVER，不能证明当前演示有可读取的规划图层，也不能证明
+> 产生了土地规划变化。该隔离运行目录为
+> `.run-tmp/real-llm-41545f0093904940b7d0a47315103664/db6118ac-2efe-4cc5-9168-489444fb0f54/`：
+> `complete_planned_landuse` 的 660 个要素是 current/baseline 延续，实际 `ParcelChange` 为 0；
+> 只有 17 个 `planned_project_point` 和 16 个 `planned_facility` overlay。它是 HISTORICAL/PARTIAL，
+> 不能作为 CURRENT demo 产出的证据。
+
+> **2026-08-17 当前状态纠正（P0）：当前活动 demo 的有效规划图层为 0。** 默认 `.run-tmp/runs`
+> 中最近活动会话没有 `render_layers`、`delivery_spatial_snapshot`、`planned_state` 的 named ref，
+> 因此前端 `/map-layers` 没有可读取的主链规划交付物。`integrated_planning_map.png` 由
+> `scripts/render_integrated_map.py` 直接读取静态 current/planned 数据和报告，不是主 workflow 的
+> `DeliverySpatialSnapshot` 证据。后续任何 CURRENT/COMPLETE 结论都必须同时通过：主链 artifact ref、
+> 非 baseline 的规划 feature、geometry/lineage 校验和前端 map-layers 读取四项验收。
+
+> **2026-08-17 关系感知补强进度：** v2 contracts、候选域、关系 evaluator、网络服务区、任务级
+> ExecutionDAG、单方案 `PlanningScenario`、最终几何 `FinalScenarioValidation` 以及 unified
+> Explore/RAG adapter 已实现并有 focused tests；SELECT/VALIDATE/DELIVER 的 artifact 接线正在收敛。
+> 这些模块测试通过不等于当前金田村演示已有非空图层；在真实运行审计通过前，上述 P0 状态保持不变。
 
 ## 0. 2026-08-11 阻断性纠正
 
@@ -53,14 +65,14 @@
 | L1 typed fragment / snapshot  | PARTIAL           | `L1_OBSERVATION` compiler profile、`L1DimensionFragment` 和 `l1_aggregate` 存在；aggregate 通过 ReportStore 读取报告并写入 CAS，已返回显式 `l1_snapshot` descriptor，但认知链尚未迁移为蓝图中的 ASSESS/OBJECTIVES。 |
 | DimensionReport.summary       | CURRENT / LEGACY  | summary_generator 可生成结构化预览字段；它不是权威事实，字段冲突时低于 evidence、正文和 instruction。                                                                                                                                                       |
 | L2 Strategy                   | CURRENT / PARTIAL | 独立`l2_strategize/worker.py`、`aggregate.py`、G2 gate 和 review package 存在；策略对 Grounding、Selection、ExecutionPlan 的输入约束尚未完整落地。                                                                                                      |
-| L3 PlanningProgram            | PARTIAL           | L3 worker 现在只通过 structured output 产生 `PlanningClaimSet`；aggregate 以确定性 adapter 生成非权威 `ProgramProposal`，再由 `domain/program/assembler.py` 唯一组装 `PlanningProgram`。`domain/program/classification.py` 为未决 polygon/parcel 生成显式 HUMAN 决策请求；闭集决定从真实 checkpoint 形成不可变 program revision，再重走空间阶段；未决定目标不得通过 EXECUTE。 |
+| L3 PlanningProgram            | PARTIAL           | L3 worker 现在只通过 structured output 产生 `PlanningClaimSet`；aggregate 以确定性 adapter 生成 canonical `PlanningIntervention`，再由 `domain/program/assembler.py` 唯一组装 `PlanningProgram`。设施点位只进入 `facility + point`，占地项目只进入 `project + parcel/polygon`，线性工程只进入 `road + line`；`domain/program/classification.py` 为未决 polygon/parcel 生成显式 HUMAN 决策请求；闭集决定从真实 checkpoint 形成不可变 program revision，再重走空间阶段；未决定目标不得通过 EXECUTE。 |
 | TARGET_PROJECTION            | CURRENT / PARTIAL | `app/workflow/stages/target_projection.py` 只对已组装 `PlanningProgram` 做确定性 spatial-reference projection；旧文本解析、LLM patch、merge/review 生产路径已删除，真实全链路仍需验收。 |
 | EXPLORE                       | PARTIAL           | `retrieve_evidence()` 已检索 KG、Bundle、报告和 observations 结构化 JSON；typed artifact、历史证据、修订记录和 intervention-specific 查询计划尚未完全接入。                                                                                                    |
 | 地名解析 / PlaceEvidenceIndex | PARTIAL / GAP     | `SpatialResolver` 已统一 KG/SpatialQueryPort、Gazetteer、Bundle 和方向 bbox 路径；`PlaceEvidenceIndex` 已纳入 L1 typed location facts（与 Gazetteer/KG 命名实体/POI 同池做 8 维确定性评分，`l1_fact_exact` 高权重，短名称 fuzzy 禁止自动通过）。设计见 `12_PLACE_NAME_RESOLUTION.md`。                                  |
 | GROUND                        | CURRENT / PARTIAL | `ground_aggregate` 产出 `GroundingResult/CandidateSite` 和 gate；候选与 intervention 的强关联、约束证据完整性和真实 session 接线仍需验证。                                                                                                              |
 | SELECT                        | CURRENT / PARTIAL | `app/workflow/stages/select.py` 接到 `app/domain/{demand,suitability,allocation}`，使用硬约束、评分和冲突分配产出 `SiteSelectionDecision`；`PortfolioDecision` 未达 `OPTIMAL/FEASIBLE` 时 gate 强制 HUMAN，真实会话验收仍待完成。 |
 
-| LLM 调用 binding tool         | PARTIAL / GAP     | 详见 [17_LLM_TOOL_BINDING.md](modules/llm-tools/17_LLM_TOOL_BINDING.md)。意图工具 `advance_planning_intent` / `gis_analysis` 由 `workflow/conversation/node.py` bind 并路由（CURRENT）；access 读路径工具（`bundle_overview` 等 6 个）已注册到 `ToolRegistry` 但无节点 bind（GAP）；`workflow/tools/execute_node.py` 读取遗留空 `tools.py:TOOL_REGISTRY`，通用执行路径无法执行已注册工具（GAP）；L3 结构化输出走 `with_structured_output(method="function_calling")`（CURRENT）。 |
+| LLM 调用 binding tool         | PARTIAL / GAP     | 详见 [17_LLM_TOOL_BINDING.md](modules/llm-tools/17_LLM_TOOL_BINDING.md)。意图工具 `advance_planning_intent` / `gis_analysis` 由 `workflow/conversation/node.py` bind 并路由（CURRENT）；access 读路径工具（`bundle_overview` 等 6 个）已注册到 `ToolRegistry` 但仍无专用节点 bind（GAP）；`workflow/tools/execute_node.py` 已通过 `ToolRegistry.get_tool_info()/get_tool()` 执行已注册工具（旧“读取空 TOOL_REGISTRY”诊断已过时）；L3 结构化输出走 `with_structured_output(method="function_calling")`（CURRENT）。 |
 
 ## 2. EXECUTE 与 GIS
 
@@ -83,7 +95,7 @@
 | -------------------- | ----------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | VALIDATE             | CURRENT / PARTIAL | `app/workflow/stages/validate.py` 与 `app/domain/validation/` 提供确定性检查、ValidationReport、责任阶段和 gate；必须以唯一 changeset→planned state 流程校验。 |
 | RECONCILE            | CURRENT / PARTIAL | 已有 coverage matrix、链路覆盖检查、责任归因和 gate；对 intervention/spec/candidate/selection/change/planned 的关联仍依赖 ID 与兼容对齐逻辑。              |
-| DELIVER              | CURRENT / PARTIAL | `DeliverySpatialSnapshot` 已成为 render/export/land-balance/map 的唯一输入；真实产物写出 660 current/planned features、17 个项目点、16 个设施点、双 panel PNG 和 HTML。无任何非 preserve/unchanged `ParcelChange` 时快照强制为 `partial`，PNG/HTML 明示“地类变更 0 个”，不能把现状复制图当作规划成果；法定完整规划仍受显式分类决定、延期和交付闸门约束。 |
+| DELIVER              | GAP / HISTORICAL PARTIAL | `DeliverySpatialSnapshot` 是 render/export/land-balance/map 的唯一输入，但当前活动 demo 没有 `render_layers` / `delivery_spatial_snapshot` named ref，前端规划图层为空。2026-08-12 历史隔离运行虽写出 660 个 current/baseline 延续要素、17 个项目点和 16 个设施点，但实际规划 `ParcelChange` 为 0，不能计为规划成果；必须先完成主链非空垂直切片，再恢复合理性验收。 |
 | Step report          | CURRENT / PARTIAL | `app/infrastructure/reports/step_report.py` 与 `app/infrastructure/reports/stage_report.py` 生成运行审计；是否覆盖所有 post-L3 节点需以实际接线为准，不应把它当 typed artifact。 |
 | Artifact persistence | CURRENT / MIGRATING | `artifact_schema_version=3` 的 `ArtifactDescriptor` 已接入 runtime、L1/L2/L3/target-projection、post-L3、v1 查询和 StepReport；blob/descriptor create-if-absent，named ref compare-and-set，parent digests 和 branch identity 可验证。旧 `FilesystemArtifactStore`、`ArtifactRef`、revision 路径已删除；EventRepository 已承接事件历史；根图已使用 `WorkflowState`，`workflow_progress` 已收紧为身份、refs 与显式 `stage_payload`，但其中的旧阶段载荷仍需继续拆成 typed artifacts。 |
 
@@ -226,7 +238,7 @@ Delivery snapshot 的几何/占位质量闸门。DELIVER 入口已迁移到 `bac
 | Resume 终态产出 | COMPLETE | `post_l3_resume` 返回 `delivery_spatial_snapshot`，终态缺 snapshot 或 PNG/HTML 时降级为 `diagnostic_only`。 |
 | DELIVER planned 输入 | COMPLETE | DELIVER 与 EXECUTE 状态均不再保存或读取 `allocated_geojson`；Snapshot 只接收 `ParcelChangeSet` 的 `planned_changes`。 |
 | HITL resume 路由 | COMPLETE | SELECT approve 直接继续 EXECUTE；显式 deferral 才生成新 revision，避免 checkpoint 元数据导致重复 HUMAN。 |
-| GIS checkpoint resume | CURRENT / PARTIAL | deterministic GIS E2E 已证明主图在 SELECT HUMAN 中断后可通过 SQLite checkpoint 关闭/重开并继续到 DELIVER，产出 660 个期末地块、项目面和定位点；这不是完整真实 LLM/L3 规划验收。当前 acceptance 在缺 provider key 时明确 skip，尚无本轮新真实空间规划 checkpoint。 |
+| GIS checkpoint resume | HISTORICAL / PARTIAL | 2026-08-12 deterministic/real checkpoint 记录曾证明可从 SELECT HUMAN 关闭/重开并走到 DELIVER，但历史结果只有 0 个实际土地变化、17 个项目点和 16 个设施点；当前活动 demo 没有可读取 delivery refs，不能把该记录当作当前图层验收。 |
 
 ## 8. 2026-08-12 收敛完成状态
 

@@ -23,6 +23,9 @@ services:
       - MINIMAX_API_KEY=${MINIMAX_API_KEY}
       - MINIMAX_API_BASE=${MINIMAX_API_BASE:-https://api.minimaxi.com/v1}
       - MINIMAX_MODEL=${MINIMAX_MODEL:-MiniMax-M2.7-highspeed}
+      - OPENCODE_GO_API_KEY=${OPENCODE_GO_API_KEY}
+      - OPENCODE_GO_API_BASE=${OPENCODE_GO_API_BASE:-https://opencode.ai/zen/go/v1}
+      - OPENCODE_GO_MODEL=${OPENCODE_GO_MODEL:-deepseek-v4-flash}
       - LLM_MODEL=${LLM_MODEL:-MiniMax-M2.7-highspeed}
       - LLM_PROVIDER=${LLM_PROVIDER:-minimax}
       - ALLOWED_ORIGINS=${ALLOWED_ORIGINS}

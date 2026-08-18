@@ -24,7 +24,7 @@
 | [cognition](modules/cognition/README.md)（L1/L2/L3 认知层） | 04 规划管线、11 EXPLORE-KG 富化 | `domain/{assessment,objectives,program}`、`workflow/layers/` |
 | [explore](modules/explore/README.md)（EXPLORE/证据检索） | 05 EXPLORE 桥、23 检索体系重构 | `evidence/`、`infrastructure/rag/` |
 | [kg-place](modules/kg-place/README.md)（KG/地名解析） | 03 KG 语义桥、12 地名解析 | `infrastructure/kg/`、`spatial/grounding/` |
-| [spatial-execution](modules/spatial-execution/README.md)（空间决策链） | 06 TARGET_PROJECTION/EXECUTE | `workflow/stages/`、`domain/{ground,allocation,materialization}`、`spatial/` |
+| [spatial-execution](modules/spatial-execution/README.md)（空间决策链） | 06 阶段边界、28 关系感知规划生成 | `workflow/stages/`、`domain/{ground,allocation,materialization}`、`spatial/` |
 | [validation](modules/validation/README.md)（校验/反馈/自动迭代） | 07、13、26 | `domain/validation/` |
 | [delivery](modules/delivery/README.md)（成果/合规/交付） | 08 | `domain/delivery/`、`infrastructure/{rendering,export}/` |
 | [persistence](modules/persistence/README.md)（持久化） | 02 | `database/`、`infrastructure/{artifacts,events}/` |

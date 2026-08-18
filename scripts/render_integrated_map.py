@@ -64,7 +64,9 @@ def _latest_session_id():
         cur = conn.cursor()
         cur.execute(
             "SELECT session_id, MAX(version) FROM dimension_reports "
-            "WHERE layer=3 GROUP BY session_id ORDER BY MAX(version) DESC, MAX(rowid) DESC LIMIT 1"
+            "WHERE layer=3 AND content LIKE '%金田村%' "
+            "GROUP BY session_id HAVING COUNT(DISTINCT dimension_key) >= 8 "
+            "ORDER BY MAX(rowid) DESC LIMIT 1"
         )
         row = cur.fetchone()
         conn.close()
@@ -116,6 +118,47 @@ def extract_project_locations():
         if not row:
             continue
         content = row[0]
+
+        # Current typed reports persist JSON claims rather than only legacy
+        # markdown tables.  Extract concrete interventions without inventing
+        # geometry; locate_projects still requires a real gazetteer match.
+        try:
+            payload = json.loads(content)
+        except (TypeError, ValueError):
+            payload = None
+        if isinstance(payload, dict) and isinstance(payload.get('claims'), list):
+            for claim in payload['claims']:
+                if not isinstance(claim, dict):
+                    continue
+                interventions = claim.get('suggested_interventions') or []
+                if isinstance(interventions, str):
+                    interventions = [interventions]
+                interventions = [
+                    str(item).strip() for item in interventions if str(item).strip()
+                ]
+                location_hints = claim.get('location_hints') or []
+                if isinstance(location_hints, str):
+                    location_hints = [location_hints]
+                location = '、'.join(
+                    str(item).strip() for item in location_hints if str(item).strip()
+                )
+                statement = str(claim.get('statement') or '').strip()
+                if not interventions and dk != 'project_bank':
+                    continue
+                name = interventions[0] if interventions else statement[:40]
+                if len(name) < 3 or name in seen:
+                    continue
+                seen.add(name)
+                projects.append({
+                    'name': name,
+                    'location': location,
+                    'scale': (
+                        f"{claim.get('quantity')} {claim.get('quantity_unit')}"
+                        if claim.get('quantity') is not None else ''
+                    ),
+                    'source_claim_id': str(claim.get('claim_id') or ''),
+                    'source_dimension': dk,
+                })
 
         sections = content.split('【')
         for sec in sections:
@@ -203,16 +246,40 @@ def _deduplicate_projects(projects):
 
 
 def load_gazetteer(village: str = "jintian"):
-    """Load village gazetteer (kg/gazetteer 产物): {name: {bsms, centroid, confidence}}."""
+    """Load the gazetteer as a name/alias -> entry mapping.
+
+    The persisted KG gazetteer is a typed document with an ``entries`` list,
+    while older callers used a direct name dictionary.  Normalize both shapes
+    here so rendering can place a project only at a real persisted centroid.
+    """
     path = os.path.join(os.path.dirname(__file__), "..", "data", "gazetteer", f"{village}.json")
     if not os.path.exists(path):
         return {}
     try:
         with open(path, encoding="utf-8") as f:
-            return json.load(f)
+            payload = json.load(f)
     except Exception as e:
         print(f"  [warn] gazetteer load failed: {e}")
         return {}
+
+    if isinstance(payload, dict) and isinstance(payload.get("entries"), list):
+        entries = [item for item in payload["entries"] if isinstance(item, dict)]
+        aliases: dict[str, dict] = {}
+        for entry in entries:
+            name = str(entry.get("name") or "").strip()
+            if not name:
+                continue
+            candidates = [name, *(str(x).strip() for x in entry.get("aliases") or [])]
+            if "@" in name:
+                candidates.append(name.rsplit("@", 1)[1].strip())
+            if name.endswith("村"):
+                candidates.append(name[:-1])
+            for alias in candidates:
+                if alias and alias not in aliases:
+                    aliases[alias] = entry
+        return aliases
+
+    return payload if isinstance(payload, dict) else {}
 
 
 def locate_projects(projects, gdf_4326, gazetteer):
@@ -222,20 +289,55 @@ def locate_projects(projects, gdf_4326, gazetteer):
     settlement centroid; unmatched projects are returned with located=False
     and rendered as a text list instead of fake points.
     """
+    parcel_geometries = {}
+    if gdf_4326 is not None and len(gdf_4326) > 0 and "BSM" in gdf_4326.columns:
+        parcel_geometries = {
+            str(row.BSM): row.geometry
+            for row in gdf_4326.itertuples()
+            if getattr(row, "BSM", None) and row.geometry is not None and not row.geometry.is_empty
+        }
+
+    def _entry_point(entry):
+        """Return a real gazetteer/bundle point, never a fabricated offset."""
+        bsms = [str(bsm) for bsm in entry.get("bsms") or []]
+        geometries = [parcel_geometries[bsm] for bsm in bsms if bsm in parcel_geometries]
+        if geometries:
+            return gpd.GeoSeries(geometries, crs="EPSG:4326").union_all().centroid
+        centroid = entry.get("centroid")
+        if isinstance(centroid, (list, tuple)) and len(centroid) >= 2:
+            return Point(float(centroid[0]), float(centroid[1]))
+        return None
+
+    def _matching_entries(location):
+        text = str(location or "")
+        keys = sorted((str(key) for key in gazetteer if str(key).strip()), key=len, reverse=True)
+        matches = []
+        seen_entries = set()
+        for key in keys:
+            if key not in text:
+                continue
+            entry = gazetteer[key]
+            marker = id(entry)
+            if marker in seen_entries:
+                continue
+            seen_entries.add(marker)
+            matches.append(entry)
+        return matches
+
     located = []
     for proj in projects:
         loc = str(proj.get("location") or "")
         name = str(proj.get("name") or "")
-        entry = None
-        for vn, v in gazetteer.items():
-            if vn and vn in loc:
-                entry = v
-                break
-        if entry and entry.get("centroid"):
-            lon, lat = entry["centroid"]
+        points = [
+            point
+            for point in (_entry_point(entry) for entry in _matching_entries(loc))
+            if point is not None
+        ]
+        if points:
+            representative = gpd.GeoSeries(points, crs="EPSG:4326").union_all().centroid
             located.append({
                 "name": name, "location": loc,
-                "lon": lon, "lat": lat,
+                "lon": representative.x, "lat": representative.y,
                 "located": True,
                 "category": _classify_project(name),
             })
@@ -271,6 +373,8 @@ def main():
     print("  Integrated Planning Map Renderer")
     print("=" * 60)
 
+    os.makedirs(OUT_DIR, exist_ok=True)
+
     # ---- Load all data ----
     print("\n[1/5] Loading GIS layers...")
     if not SID:
@@ -278,10 +382,10 @@ def main():
         print(f"  SID = {SID}")
     boundary = load_gdf('boundary.geojson', CURRENT_DIR)
     lu_curr = load_gdf('landuse.geojson', CURRENT_DIR)
-    farmland = load_gdf('farmland_protection.geojson', PLANNED_DIR)
-    eco = load_gdf('ecological_protection.geojson', PLANNED_DIR)
+    farmland = load_gdf('farmland_protection.geojson', CURRENT_DIR)
+    eco = load_gdf('ecological_protection.geojson', CURRENT_DIR)
     road = load_gdf('road.geojson', CURRENT_DIR)
-    hazard = load_gdf('geological_hazard_points.geojson', PLANNED_DIR)
+    hazard = load_gdf('geological_hazard_points.geojson', CURRENT_DIR)
     custom_zones = load_gdf('custom_functional_zone.geojson', OUT_DIR)
 
     # Project to Web Mercator
@@ -330,7 +434,7 @@ def main():
     if hazard_p is not None:
         hazard_p = _shift(hazard_p)
 
-    from app.modules.schema import dlbm_to_planning_zone
+    from app.data.catalog.advisory_crosswalks import dlbm_to_planning_zone
     lu_curr_p['zone_type'] = lu_curr_p['DLBM'].apply(
         lambda x: dlbm_to_planning_zone(str(x).strip()))
 
@@ -344,7 +448,10 @@ def main():
 
     # ---- Render map ----
     print("\n[4/5] Rendering integrated map...")
-    fig, ax = plt.subplots(1, 1, figsize=(24, 30))
+    # The boundary is close to square. A tall poster canvas leaves most of
+    # the page empty after GeoPandas enforces equal map aspect, so keep the
+    # rendered planning map readable at a single-page review size.
+    fig, ax = plt.subplots(1, 1, figsize=(24, 24))
 
     # Background: current landuse by DLBM category (清晰底图，淡化 + 淡描边)
     dlbm_bg = {
@@ -498,13 +605,21 @@ def main():
     boundary_p.boundary.plot(ax=ax, color='black', linewidth=2.5, label='村行政边界')
 
     # ---- Map decorations ----
+    # The map geometries were normalized to a 0-1 plot coordinate system;
+    # convert metric decoration lengths before adding them to the axes so a
+    # 500 m scale bar cannot expand the extent to hundreds of plot units.
+    _meters_to_plot = 1.0 / _SPAN
+
     # North arrow
     bbox = boundary_p.geometry.union_all().bounds
     north_x = bbox[0] + (bbox[2] - bbox[0]) * 0.92
     north_y = bbox[1] + (bbox[3] - bbox[1]) * 0.88
-    ax.annotate('N', xy=(north_x, north_y - 200), fontsize=20, ha='center',
+    ax.annotate('N', xy=(north_x, north_y - 200 * _meters_to_plot), fontsize=20, ha='center',
                 fontweight='bold')
-    ax.annotate('', xy=(north_x, north_y + 400), xytext=(north_x, north_y - 400),
+    ax.annotate(
+        '',
+        xy=(north_x, north_y + 400 * _meters_to_plot),
+        xytext=(north_x, north_y - 400 * _meters_to_plot),
                 arrowprops=dict(arrowstyle='->', lw=2, color='black'))
 
     # Scale bar
@@ -512,17 +627,20 @@ def main():
     scale_x = bbox[0] + (bbox[2] - bbox[0]) * 0.05
     scale_y = bbox[1] + (bbox[3] - bbox[1]) * 0.05
     scale_length_m = 500  # 500m scale bar
-    ax.plot([scale_x, scale_x + scale_length_m], [scale_y, scale_y],
+    scale_length_plot = scale_length_m * _meters_to_plot
+    tick_plot = 30 * _meters_to_plot
+    label_offset_plot = 60 * _meters_to_plot
+    ax.plot([scale_x, scale_x + scale_length_plot], [scale_y, scale_y],
             'k-', linewidth=3)
-    ax.plot([scale_x, scale_x], [scale_y - 30, scale_y + 30], 'k-', linewidth=1.5)
-    ax.plot([scale_x + scale_length_m, scale_x + scale_length_m],
-            [scale_y - 30, scale_y + 30], 'k-', linewidth=1.5)
-    ax.text(scale_x + scale_length_m / 2, scale_y - 60, '500m',
+    ax.plot([scale_x, scale_x], [scale_y - tick_plot, scale_y + tick_plot], 'k-', linewidth=1.5)
+    ax.plot([scale_x + scale_length_plot, scale_x + scale_length_plot],
+            [scale_y - tick_plot, scale_y + tick_plot], 'k-', linewidth=1.5)
+    ax.text(scale_x + scale_length_plot / 2, scale_y - label_offset_plot, '500m',
             ha='center', fontsize=10, fontweight='bold')
 
     # ---- 未定位项目文本列表（无 gazetteer 命中的项目，不画假点） ----
     if unlocated_projects:
-        list_text = "未定位项目（无村名匹配）：\n" + "\n".join(
+        list_text = "未落点项目（缺少可核验坐标/地块）：\n" + "\n".join(
             f"· {p['name']}" for p in unlocated_projects[:15]
         )
         ax.text(bbox[0] + (bbox[2] - bbox[0]) * 0.03,
@@ -589,7 +707,7 @@ def main():
 
     # Footer
     fig.text(0.5, 0.01,
-             '数据来源: dimension_reports (dc2a2e0e v14) + 三调 landuse_current (660块) + boundary (2353ha)  |  '
+             f'数据来源: dimension_reports ({SID[:8]}...) + 三调 landuse_current (660块) + boundary (2353ha)  |  '
              '制作工具: Village_Planning_Agent GIS Layout Engine',
              ha='center', fontsize=8, color='#888')
 
