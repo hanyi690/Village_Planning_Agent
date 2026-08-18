@@ -45,7 +45,7 @@ class CacheKey:
     """Composite cache key for Layer 1 static subgraph."""
 
     village_name: str
-    landuse_hash: str  # SHA256 of BSM:DLBM:SHAPE_Area for all features
+    landuse_hash: str  # SHA256 of the Layer-1 input manifest
 
     def __str__(self) -> str:
         return f"{self.village_name}:{self.landuse_hash[:16]}"
@@ -54,21 +54,87 @@ class CacheKey:
 def compute_layer1_cache_key(
     village_name: str,
     parcels: Optional[List[Any]],
+    *,
+    bundle: Any = None,
 ) -> Optional[CacheKey]:
-    """Compute cache key from typed parcel list.
+    """Compute a cache key from the complete Layer-1 input manifest.
 
-    Uses hash of BSM+DLBM+area_sqm for all features.
-    Accepts typed CurrentLandUseParcel list only (v4 path).
+    The historical key used only ``landuse_current`` parcels.  That allowed a
+    process-local KG containing old annotation/road source geometry to be
+    reused after those layers changed while the parcel inventory stayed the
+    same.  Callers that have the canonical bundle must pass it so every
+    geometry-bearing collection consumed by Layer-1 participates in the key.
+    The parcel-only form remains for legacy callers that do not own a bundle.
     """
-    if not parcels:
-        return None
-
     if isinstance(parcels, dict):
         raise TypeError(
             "parcels must be a list of typed parcels, not dict. Pass bundle= instead."
         )
 
+    # A canonical VillageBundle is the owner of every Layer-1 source
+    # collection.  Do not use ``to_geojson_dict`` here: that compatibility
+    # projection intentionally omits typed point/line groups such as
+    # ``facilities_current`` and therefore cannot invalidate a KG when one of
+    # those source features changes.
+    if bundle is not None:
+        try:
+            from app.data.model.canonical import to_bundle_dict
+
+            full = to_bundle_dict(bundle)
+            full_metadata = full.get("metadata", {}) or {}
+            manifest = {
+                "village_name": full.get("village_name", village_name),
+                "standard_version": full.get("standard_version", ""),
+                # Session identity/timestamps and report snapshots are not
+                # Layer-1 GIS inputs.  Keep only metadata that can change the
+                # graph's spatial scope or source lineage so equivalent
+                # bundles from two sessions share the process cache.
+                "metadata": {
+                    key: full_metadata.get(key)
+                    for key in (
+                        "bbox_wgs84",
+                        "crs",
+                        "provider_sources",
+                        "adcode_12",
+                    )
+                    if key in full_metadata
+                },
+                "points": full.get("points", {}),
+                "lines": full.get("lines", {}),
+                "polygons": full.get("polygons", {}),
+            }
+            canonical = json.dumps(
+                manifest,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+                default=str,
+            )
+            bundle_hash = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+            return CacheKey(village_name=village_name, landuse_hash=bundle_hash)
+        except Exception as exc:  # noqa: BLE001 - retain compatibility fallback
+            logger.warning("[KGManager] canonical bundle fingerprint failed: %s", exc)
+
+    # Legacy callers without a canonical bundle still need a parcel key, but
+    # an empty parcel list cannot identify a usable Layer-1 graph.
+    if not parcels:
+        return None
+
     hash_parts = []
+    if bundle is not None and hasattr(bundle, "to_geojson_dict"):
+        try:
+            payload = bundle.to_geojson_dict()
+            canonical = json.dumps(
+                payload,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+                default=str,
+            )
+            bundle_hash = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+            return CacheKey(village_name=village_name, landuse_hash=bundle_hash)
+        except Exception as exc:  # noqa: BLE001 - retain parcel fallback
+            logger.warning("[KGManager] bundle cache fingerprint failed: %s", exc)
     for p in parcels:
         bsm = str(p.bsm).strip()
         dlbm = str(p.dlbm).strip()
@@ -136,6 +202,7 @@ class KGManager:
                 instance = super().__new__(cls)
                 instance._layer1_cache = _LRUCache(maxsize=50)
                 instance._session_kgs: Dict[str, Any] = {}
+                instance._session_cache_keys: Dict[str, str] = {}
                 instance._query_cache: Dict[str, Tuple[int, Any]] = {}
                 instance._session_versions: Dict[str, int] = {}
                 instance._cache_enabled = True
@@ -181,7 +248,9 @@ class KGManager:
         with self._build_lock:
             # Use typed parcels for cache key when available
             parcels = bundle.polygons.get("landuse_current") if bundle else None
-            cache_key = compute_layer1_cache_key(village_name, parcels)
+            cache_key = compute_layer1_cache_key(
+                village_name, parcels, bundle=bundle
+            )
             key_str = str(cache_key) if cache_key else ""
 
             if self._cache_enabled and key_str and key_str in self._layer1_cache:
@@ -209,10 +278,18 @@ class KGManager:
 
     # ── Session management ─────────────────────────────────────────
 
-    def register_session(self, session_id: str, kg: Any) -> None:
-        """Register a KG instance for a session."""
+    def register_session(
+        self,
+        session_id: str,
+        kg: Any,
+        *,
+        layer1_cache_key: str = "",
+    ) -> None:
+        """Register a KG instance and the GIS snapshot it was built from."""
         with self._build_lock:
             self._session_kgs[session_id] = kg
+            if layer1_cache_key:
+                self._session_cache_keys[session_id] = layer1_cache_key
             self._session_versions.setdefault(session_id, 1)
         logger.debug("[KGManager] Session registered: %s", session_id)
 
@@ -220,6 +297,11 @@ class KGManager:
         """Get the KG instance for a session."""
         with self._build_lock:
             return self._session_kgs.get(session_id)
+
+    def get_session_cache_key(self, session_id: str) -> str:
+        """Return the GIS Layer-1 key bound to a session, if known."""
+        with self._build_lock:
+            return self._session_cache_keys.get(session_id, "")
 
     def require_session_kg(self, session_id: str) -> Any:
         """Return only ``session_id``'s KG or raise a clear isolation error.
@@ -242,6 +324,7 @@ class KGManager:
         """Remove a session and its associated data."""
         with self._build_lock:
             self._session_kgs.pop(session_id, None)
+            self._session_cache_keys.pop(session_id, None)
             self._session_versions.pop(session_id, None)
             # Clean query cache entries for this session
             prefix = f"{session_id}:"
@@ -338,7 +421,15 @@ class KGManager:
             from app.infrastructure.kg.builder.layer3 import build_intent_layer
             build_intent_layer(kg, intent)
         if session_id:
-            self.register_session(session_id, kg)
+            parcels = bundle.polygons.get("landuse_current") if bundle else None
+            cache_key = compute_layer1_cache_key(
+                village_name, parcels, bundle=bundle
+            )
+            self.register_session(
+                session_id,
+                kg,
+                layer1_cache_key=str(cache_key) if cache_key else "",
+            )
         return kg
 
     # ── Stats ──────────────────────────────────────────────────────

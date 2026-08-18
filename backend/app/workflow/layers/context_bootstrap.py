@@ -78,6 +78,23 @@ async def _hydrate_l1_spatial_facts(state: Dict[str, Any], context: Any) -> None
         facts = list(getattr(snapshot, "location_facts", []) or [])
         context.location_facts = facts
 
+        try:
+            from app.contracts.evidence.identity_contracts import GroundedEntityBindingSnapshot
+
+            binding_snapshot = load_artifact(
+                state,
+                "l1_bindings",
+                GroundedEntityBindingSnapshot,
+            )
+            if binding_snapshot is not None:
+                context.grounded_bindings = list(binding_snapshot.bindings)
+                logger.debug(
+                    "[bootstrap] restored %d persisted L1 entity bindings",
+                    len(context.grounded_bindings),
+                )
+        except Exception as exc:
+            logger.debug("[bootstrap] persisted L1 bindings unavailable: %s", exc)
+
         from app.infrastructure.context.planning_context_factory import _load_session_semantic_memory
 
         session_id = str(state.get("session_id", "") or "")
@@ -91,6 +108,46 @@ async def _hydrate_l1_spatial_facts(state: Dict[str, Any], context: Any) -> None
                 "[bootstrap] L1 spatial evidence already hydrated key=%s facts=%d",
                 hydration_key[:12],
                 len(facts),
+            )
+            return
+
+        # A completed L1 grounding wave is a durable artifact.  On resume or
+        # after a process restart, restore it before considering a new
+        # hydration pass; otherwise the same anchors are recomputed merely
+        # because the in-process PlanningContext cache was lost.
+        persisted_anchors = []
+        try:
+            from app.contracts.spatial.grounding_contracts import GroundedAnchor
+
+            payload = load_artifact(state, "grounded_anchors")
+            if isinstance(payload, list):
+                persisted_anchors = [
+                    item if isinstance(item, GroundedAnchor) else GroundedAnchor.model_validate(item)
+                    for item in payload
+                    if isinstance(item, (dict, GroundedAnchor))
+                ]
+        except Exception as exc:
+            logger.debug("[bootstrap] persisted grounded anchors unavailable: %s", exc)
+        if persisted_anchors:
+            context.grounded_anchors = persisted_anchors
+            kg = getattr(context, "kg", None)
+            if kg is not None:
+                try:
+                    from app.domain.ground.anchors import _inject_anchors_into_kg
+
+                    _inject_anchors_into_kg(context, kg, persisted_anchors, session_id)
+                except Exception as exc:
+                    logger.warning("[bootstrap] persisted anchor KG replay failed: %s", exc)
+            try:
+                from app.evidence.index.place_evidence_index import PlaceEvidenceIndex
+
+                context.evidence_index = PlaceEvidenceIndex.build(context)
+            except Exception as exc:
+                logger.warning("[bootstrap] persisted anchor evidence rebuild failed: %s", exc)
+            context.evidence_index_key = hydration_key
+            logger.info(
+                "[bootstrap] restored %d persisted L1 anchors; skipped recomputation",
+                len(persisted_anchors),
             )
             return
 
@@ -129,6 +186,12 @@ async def _hydrate_l1_spatial_facts(state: Dict[str, Any], context: Any) -> None
 
 async def bootstrap_context_node(state: Dict[str, Any]) -> Dict[str, Any]:
     session_id = state.get("session_id", "")
+    expected_context_ref = state.get("context_ref") or {}
+    expected_snapshot_digest = str(
+        expected_context_ref.get("snapshot_digest")
+        or expected_context_ref.get("data_snapshot_digest")
+        or ""
+    )
     if state.get("bootstrap_context_done") and state.get("context_version") and session_id:
         # A checkpoint may be resumed in a fresh worker process where the
         # in-process cache is empty.  The boolean is not proof that the
@@ -137,8 +200,19 @@ async def bootstrap_context_node(state: Dict[str, Any]) -> Dict[str, Any]:
         from app.infrastructure.context.planning_context_factory import get_cached_context
         cached = get_cached_context(session_id)
         if cached is not None:
-            await _hydrate_l1_spatial_facts(state, cached)
-            return {}
+            cached_snapshot_digest = str(
+                getattr(getattr(cached, "data_snapshot", None), "digest", "") or ""
+            )
+            if expected_snapshot_digest and cached_snapshot_digest != expected_snapshot_digest:
+                from app.infrastructure.context.planning_context_factory import invalidate_planning_context
+
+                invalidate_planning_context(session_id)
+                cached = None
+            if cached is None:
+                pass
+            else:
+                await _hydrate_l1_spatial_facts(state, cached)
+                return {}
     if not session_id:
         logger.warning("[bootstrap] no session_id; skipping context build")
         raise RuntimeError(
@@ -157,6 +231,7 @@ async def bootstrap_context_node(state: Dict[str, Any]) -> Dict[str, Any]:
             village_name=village_name or None,
             include_reports=not bool(expected_version),
             version=int(expected_version) if expected_version.isdigit() else None,
+            expected_snapshot_digest=expected_snapshot_digest or None,
         )
     except Exception as exc:
         logger.error("[bootstrap] context build failed: %s", exc)
@@ -188,10 +263,19 @@ async def bootstrap_context_node(state: Dict[str, Any]) -> Dict[str, Any]:
     except Exception as exc:
         logger.debug("[bootstrap] L1 location facts unavailable: %s", exc)
 
+    snapshot = getattr(context, "data_snapshot", None)
+    snapshot_ref = {
+        "snapshot_id": str(getattr(snapshot, "snapshot_id", "") or ""),
+        "snapshot_digest": str(getattr(snapshot, "digest", "") or ""),
+    }
     return {
         "context_version": version,
         "context_fingerprint": fingerprint,
-        "context_ref": {"session_id": session_id, "version": version},
+        "context_ref": {
+            "session_id": session_id,
+            "version": version,
+            **snapshot_ref,
+        },
         "bootstrap_context_done": True,
     }
 

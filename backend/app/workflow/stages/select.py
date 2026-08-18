@@ -49,11 +49,12 @@ def _apply_repair_directives(plan_intent: Any, compilation: Any) -> Any:
     targets = {
         str(getattr(target, "target_id", "")): target
         for field_name in (
-            "project_targets",
+            "site_area_targets",
             "zone_targets",
             "facilities",
             "development_axes",
             "road_targets",
+            "linear_targets",
         )
         for target in list(getattr(revised, field_name, None) or [])
         if str(getattr(target, "target_id", ""))
@@ -99,6 +100,7 @@ async def select_node(state: Dict[str, Any]) -> Dict[str, Any]:
     from app.contracts.workflow.parse_contracts import SpatialPlanningIntent
     from app.contracts.workflow.parse_result_contracts import IntentCompilationResult
     from app.contracts.workflow.repair_directive_contracts import RepairDirectiveCompilation
+    from app.contracts.planning.scenario import PlanningScenario, ScenarioFinding
 
     retry_patch = _retry_patch(state, "select")
     context = await _require_context(state)
@@ -175,6 +177,153 @@ async def select_node(state: Dict[str, Any]) -> Dict[str, Any]:
     output_refs: Dict[str, Any] = {}
     artifact_state = dict(state)
     artifact_state["artifact_refs"] = artifact_refs
+    problem = getattr(grounding, "problem", None)
+    if problem is not None:
+        # GROUND keeps recall geometry and provenance.  SELECT has already
+        # refined every source BSM into a parcel-level SuitabilityCandidate;
+        # feed those alternatives to the relation solver instead of asking it
+        # to choose from the original multi-parcel union geometry.
+        from app.domain.allocation.refined_candidate_catalog import (
+            refine_grounded_problem,
+        )
+
+        problem = refine_grounded_problem(problem, suitability_surface)
+    scenario = None
+    scenario_ref = None
+    if problem is not None:
+        from app.domain.allocation.scenario_solver import solve_scenario
+        from app.domain.relations.service import RelationEvaluationContext
+
+        scenario_id = f"scenario:{_run_id(state) or 'current'}"
+        networks = (
+            getattr(context, "networks", None)
+            or getattr(context, "network_snapshots", None)
+            or {}
+        )
+        evaluator_context = RelationEvaluationContext(
+            scenario_id=scenario_id,
+            metric_crs=str(
+                getattr(context, "metric_crs", None)
+                or getattr(context, "display_crs", None)
+                or "EPSG:3857"
+            ),
+            networks=networks,
+            demands=(
+                getattr(context, "demands", None)
+                or getattr(context, "demand_snapshots", None)
+                or {}
+            ),
+            execution_trace=getattr(context, "execution_trace", None),
+        )
+        try:
+            scenario = solve_scenario(
+                problem,
+                scenario_id=scenario_id,
+                evaluator_context=evaluator_context,
+            )
+        except Exception as exc:
+            logger.exception("[workflow:select] scenario solver failed closed")
+            from app.domain.allocation.scenario_builder import build_planning_scenario
+
+            scenario = build_planning_scenario(
+                scenario_id=scenario_id,
+                problem=problem,
+                selected_candidate_ids={},
+                relation_satisfactions=[],
+                features=[],
+                findings=[ScenarioFinding(
+                    code="SCENARIO_SOLVER_FAILED",
+                    severity="error",
+                    message=str(exc),
+                )],
+                metrics={"selected_candidate_count": 0.0},
+                status="failed",
+            )
+        scenario_ref = persist_stage_artifact(
+            artifact_state, "select", "PlanningScenario", scenario
+        )
+        if scenario_ref:
+            artifact_refs["planning_scenario"] = scenario_ref
+            output_refs["planning_scenario"] = scenario_ref
+        decision.scenario_id = scenario.scenario_id
+        decision.relation_satisfaction = list(scenario.relation_satisfactions or [])
+        selected_by_target = dict(scenario.selected_candidate_ids or {})
+        candidate_by_id = {
+            str(getattr(candidate, "candidate_id", "")): candidate
+            for candidate in list(getattr(problem, "candidate_geometries", None) or [])
+        }
+        non_spatial_target_ids = {
+            str(getattr(target, "target_id", "") or "")
+            for field_name in (
+                "site_area_targets",
+                "zone_targets",
+                "facilities",
+                "development_axes",
+                "road_targets",
+                "linear_targets",
+            )
+            for target in list(getattr(plan_intent, field_name, None) or [])
+            if not getattr(target, "requires_spatial", True)
+        }
+        scenario_is_executable = str(scenario.status) in {"complete", "partial"} and not any(
+            str(getattr(row, "criticality", "") or "") == "hard"
+            and str(getattr(row, "status", "") or "") != "satisfied"
+            for row in list(scenario.relation_satisfactions or [])
+        )
+        for assignment in list(decision.target_assignments or []):
+            target_id = str(getattr(assignment, "target_id", "") or "")
+            candidate_id = str(selected_by_target.get(target_id, "") or "")
+            candidate = candidate_by_id.get(candidate_id)
+            if scenario_is_executable and candidate is not None:
+                source_bsms = list(getattr(candidate, "source_bsms", None) or [])
+                binding = dict(getattr(assignment, "target_binding", None) or {})
+                binding.update({
+                    "scenario_id": scenario.scenario_id,
+                    "candidate_id": candidate_id,
+                })
+                assignment.target_binding = binding
+                if source_bsms:
+                    if getattr(assignment, "target_type", "") == "zone":
+                        assignment.selected_bsms = source_bsms
+                    else:
+                        assignment.selected_bsm = source_bsms[0]
+                assignment.status = "placed"
+            elif target_id not in non_spatial_target_ids:
+                assignment.status = "deferred"
+                assignment.reason = (
+                    "scenario_hard_relation_blocked"
+                    if not scenario_is_executable
+                    else "scenario_candidate_binding_missing"
+                )
+        if not scenario_is_executable:
+            decision.review_status = "pending_review"
+    if problem is not None:
+        decision.relation_satisfaction = list(
+            getattr(decision, "relation_satisfaction", None)
+            or getattr(problem, "relation_satisfaction", None)
+            or []
+        )
+        unresolved_relations = [
+            item
+            for item in decision.relation_satisfaction
+            if item.status in {"unknown", "deferred", "violated"}
+        ]
+        decision.decision_factors["relation_count"] = len(
+            decision.relation_satisfaction
+        )
+        decision.decision_factors["relation_unverified_count"] = len(
+            unresolved_relations
+        )
+        hard_factor_ids = {
+            str(getattr(factor, "factor_id", ""))
+            for factor in list(getattr(problem, "constraint_factors", None) or [])
+            if bool(getattr(factor, "hard", False))
+        }
+        if any(
+            set(getattr(item, "factor_ids", None) or []) & hard_factor_ids
+            for item in unresolved_relations
+        ):
+            decision.review_status = "pending_review"
     demand_ref = persist_stage_artifact(
         artifact_state, "select", "DemandPortfolio", demand_portfolio
     )
@@ -214,11 +363,12 @@ async def select_node(state: Dict[str, Any]) -> Dict[str, Any]:
     spatial_targets = [
         target
         for field_name in (
-            "project_targets",
+            "site_area_targets",
             "zone_targets",
             "facilities",
             "development_axes",
             "road_targets",
+            "linear_targets",
         )
         for target in (getattr(plan_intent, field_name, None) or [])
         if getattr(target, "requires_spatial", True)
@@ -239,6 +389,9 @@ async def select_node(state: Dict[str, Any]) -> Dict[str, Any]:
         deferral_ledger=deferral_ledger,
         portfolio_decision_ref=_ref_digest(portfolio_ref),
         global_zone_allocation_ref=_ref_digest(zone_allocation_ref),
+        scenario_selected_candidate_ids=(
+            dict(scenario.selected_candidate_ids or {}) if scenario is not None else {}
+        ),
     )
     ref = persist_stage_artifact(
         artifact_state, "select", "SiteSelectionDecision", decision

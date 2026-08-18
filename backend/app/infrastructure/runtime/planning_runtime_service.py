@@ -28,6 +28,7 @@ from langchain_core.messages import AIMessage, HumanMessage
 from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.graph import StateGraph
 
+from app.contracts.artifacts import ArtifactRef
 from app.database.engine import get_global_checkpointer
 from app.database.operations import (
     create_planning_session_async,
@@ -55,6 +56,24 @@ from app.infrastructure.events.event_factory import (
 
 logger = logging.getLogger(__name__)
 from app.application.recovery.resume_service import ResumeConflictError, ResumeService
+
+_SPATIAL_REPLAY_ENTRIES = frozenset({
+    "target_projection", "ground", "select", "execute",
+    "validate", "reconcile", "deliver",
+})
+
+
+def _spatial_replay_goto(state: Dict[str, Any], replay_from_stage: Optional[str]) -> Optional[str]:
+    """Return the parent graph segment for an explicit spatial replay.
+
+    Terminal checkpoints have no pending node, so an ordinary update would
+    silently terminate.  Only an explicit spatial stage may open the spatial
+    segment; all other resume paths keep LangGraph's historical cursor.
+    """
+    entry = str(state.get("subgraph_entry") or "")
+    if replay_from_stage and entry in _SPATIAL_REPLAY_ENTRIES:
+        return "spatial_chain"
+    return None
 
 # Known intent tool names that should not be overridden by synthetic messages
 _KNOWN_INTENT_NAMES = frozenset({"advance_planning_intent", "gis_analysis", "GISAnalysis"})
@@ -92,6 +111,49 @@ def _is_sqlite_locked(exc: BaseException) -> bool:
         or "database table is locked" in message
         or "sqlite_busy" in message
     )
+
+
+def _validated_artifact_ref(value: Any) -> Optional[ArtifactRef]:
+    """Return a canonical ref model, rejecting falsy or malformed values."""
+    if not value:
+        return None
+    try:
+        return value if isinstance(value, ArtifactRef) else ArtifactRef.model_validate(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _merge_nonempty_artifact_refs(*sources: Any) -> Dict[str, Any]:
+    """Union valid refs and keep the newest descriptor on key conflicts."""
+    merged: Dict[str, Any] = {}
+    validated: Dict[str, ArtifactRef] = {}
+    for source in sources:
+        if not isinstance(source, dict):
+            continue
+        for key, value in source.items():
+            candidate = _validated_artifact_ref(value)
+            if candidate is None:
+                continue
+            normalized_key = str(key)
+            previous = validated.get(normalized_key)
+            if previous is None or candidate.created_at >= previous.created_at:
+                validated[normalized_key] = candidate
+                merged[normalized_key] = value
+    return merged
+
+
+def _materialize_workflow_state_preserving_artifacts(state: Dict[str, Any]) -> Dict[str, Any]:
+    """Materialize stage state while unioning raw checkpoint ref locations."""
+    raw_state = dict(state or {})
+    materialized = materialize_workflow_state(raw_state)
+    runtime = raw_state.get("runtime")
+    materialized["artifact_refs"] = _merge_nonempty_artifact_refs(
+        runtime.get("artifact_refs") if isinstance(runtime, dict) else None,
+        raw_state.get("artifact_refs"),
+        materialized.get("artifact_refs"),
+    )
+    return materialized
+
 
 class PlanningRuntimeService:
     """
@@ -192,7 +254,9 @@ class PlanningRuntimeService:
         """Get checkpoint state values (convenience method)."""
         snapshot = await cls.aget_state(session_id)
         if snapshot:
-            values = materialize_workflow_state(dict(snapshot.values or {}))
+            values = _materialize_workflow_state_preserving_artifacts(
+                dict(snapshot.values or {})
+            )
             # During the first interrupt checkpoint LangGraph can expose the
             # resume payload on the pending task before it merges the waiting
             # node's values.  Surface the same HUMAN fields to internal
@@ -216,6 +280,30 @@ class PlanningRuntimeService:
                 return values
         return None
 
+    @staticmethod
+    def _pack_workflow_patch_preserving_artifacts(
+        state: Dict[str, Any], patch: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """Pack a patch while retaining refs from every state representation.
+
+        During the runtime-channel migration, a checkpoint can temporarily
+        expose refs in both the compact top-level channel and the stage-local
+        ``runtime`` carrier.  Diagnostic and resume patches often contain no
+        artifact refs (or only a subset), so packing them directly can make the
+        compact projection smaller than the successful delivery state.
+        """
+        current_runtime = state.get("runtime")
+        patch_runtime = patch.get("runtime")
+        artifact_refs = _merge_nonempty_artifact_refs(
+            current_runtime.get("artifact_refs") if isinstance(current_runtime, dict) else None,
+            state.get("artifact_refs"),
+            patch_runtime.get("artifact_refs") if isinstance(patch_runtime, dict) else None,
+            patch.get("artifact_refs"),
+        )
+        merged_patch = dict(patch)
+        merged_patch["artifact_refs"] = artifact_refs
+        return pack_workflow_patch(state, merged_patch)
+
     @classmethod
     async def aupdate_state(
         cls,
@@ -238,11 +326,13 @@ class PlanningRuntimeService:
             if isinstance(runtime_patch, dict):
                 merged_patch = dict(runtime_patch)
                 merged_patch.update(patch)
-                updates = pack_workflow_patch(raw_state, merged_patch)
+                updates = cls._pack_workflow_patch_preserving_artifacts(
+                    raw_state, merged_patch
+                )
             else:
-                updates = pack_workflow_patch(raw_state, patch)
+                updates = cls._pack_workflow_patch_preserving_artifacts(raw_state, patch)
         else:
-            updates = pack_workflow_patch(raw_state, updates)
+            updates = cls._pack_workflow_patch_preserving_artifacts(raw_state, updates)
 
         await cls._graph.aupdate_state(config, updates, as_node=as_node)
 
@@ -340,7 +430,7 @@ class PlanningRuntimeService:
             raw_state = dict(raw_snapshot.values or {}) if raw_snapshot else {}
             command = Command(
                 resume=resume_data,
-                update=pack_workflow_patch(raw_state, state_updates),
+                update=cls._pack_workflow_patch_preserving_artifacts(raw_state, state_updates),
             )
         else:
             command = Command(resume=resume_data)
@@ -366,9 +456,15 @@ class PlanningRuntimeService:
                     bundle_version = int(raw_version) if raw_version is not None else None
                 except (TypeError, ValueError):
                     bundle_version = None
+                # A checkpoint's context version identifies the persisted GIS
+                # snapshot to restore; it is not a rebuild request.  Forcing
+                # here rebuilt Layer 1 on every resume and made a stable
+                # session look like a new GIS import.  ``ensure_session_kg``
+                # already checks the live session binding, then falls back to
+                # the CAS snapshot when the process-local graph is absent.
                 restored = await ensure_session_kg(
                     session_id,
-                    force=bundle_version is not None,
+                    force=False,
                     bundle_version=bundle_version,
                 )
                 if restored is None:
@@ -415,7 +511,7 @@ class PlanningRuntimeService:
                 try:
                     async for part in stream_iterator:
                         if part.get("type") == 'values':
-                            state = materialize_workflow_state(part["data"])
+                            state = _materialize_workflow_state_preserving_artifacts(part["data"])
                             observed_signatures.append((
                                 state.get("phase"),
                                 state.get("current_stage"),
@@ -861,7 +957,7 @@ class PlanningRuntimeService:
             try:
                 from app.infrastructure.kg.session_kg import ensure_session_kg
 
-                initial_runtime = materialize_workflow_state(initial_state)
+                initial_runtime = _materialize_workflow_state_preserving_artifacts(initial_state)
                 vname = str((initial_runtime.get("config") or {}).get("village_name", ""))
                 from app.core.settings import KG_BUILD_TIMEOUT_SECONDS
                 logger.info(
@@ -897,7 +993,7 @@ class PlanningRuntimeService:
             reset_provider_failure(session_id)
             clean_state = {
                 k: v
-                for k, v in materialize_workflow_state(initial_state).items()
+                for k, v in _materialize_workflow_state_preserving_artifacts(initial_state).items()
                 if k != "messages"
             }
             clean_state["phase"] = "layer1"
@@ -951,7 +1047,16 @@ class PlanningRuntimeService:
             else:
                 raw_snapshot = await cls.aget_state(session_id)
                 raw_state = dict(raw_snapshot.values or {}) if raw_snapshot else {}
-            stream_input = Command(update=pack_workflow_patch(raw_state, updates))
+            # A terminal historical checkpoint has no pending LangGraph node,
+            # so a plain update would be accepted but never execute.  An
+            # explicit replay stage is an audited request to enter the
+            # spatial segment directly; it preserves the selected checkpoint
+            # as the parent and does not route through START/conversation.
+            replay_goto = _spatial_replay_goto(raw_state, replay_from_stage)
+            stream_input = Command(
+                update=cls._pack_workflow_patch_preserving_artifacts(raw_state, updates),
+                **({"goto": replay_goto} if replay_goto else {}),
+            )
 
         # 4. Build config with max_concurrency + optional streaming callback
         config = cls.get_thread_config(session_id, checkpoint_id=checkpoint_id)
@@ -960,7 +1065,11 @@ class PlanningRuntimeService:
         config["max_concurrency"] = GRAPH_MAX_CONCURRENCY
         config["recursion_limit"] = GRAPH_RECURSION_LIMIT
 
-        initial_runtime = materialize_workflow_state(initial_state) if initial_state else {}
+        initial_runtime = (
+            _materialize_workflow_state_preserving_artifacts(initial_state)
+            if initial_state
+            else {}
+        )
         streaming_enabled = initial_runtime.get("_streaming_enabled", True)
         if streaming_enabled:
             def token_callback_factory(layer: int, dimension: str):
@@ -999,7 +1108,7 @@ class PlanningRuntimeService:
 
             async for part in stream_iterator:
                 if part.get("type") == 'values':
-                    state = materialize_workflow_state(part["data"])
+                    state = _materialize_workflow_state_preserving_artifacts(part["data"])
 
                     # 级联修订完成检测（独立于正常层完成检测）
                     last_revised_dimensions = state.get('last_revised_dimensions', [])
@@ -1183,6 +1292,63 @@ class PlanningRuntimeService:
             "checkpoint_id": checkpoint_id,
             "checkpoint_ns": checkpoint_ns,
         }
+
+    @classmethod
+    async def resume_from_state_entry(
+        cls,
+        session_id: str,
+        *,
+        entry: str,
+        state_updates: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        """Resume a terminalized checkpoint at one explicit segment entry.
+
+        Crash recovery handles checkpoints with pending LangGraph tasks.  A
+        provider quota failure can instead be deliberately materialized as a
+        diagnostic terminal after all pending tasks have been consumed.  This
+        method creates one descendant checkpoint and enters the authorized
+        cognitive segment entry supplied by the caller; it never rewinds the
+        thread or reconstructs the initial state.
+        """
+        from langgraph.types import Command
+
+        await cls.ensure_initialized()
+        if entry not in {"provider_resume_dispatch", "l1_worker", "l2_worker", "l3_worker"}:
+            raise ValueError(f"unsupported state-entry resume: {entry!r}")
+        config = cls.get_thread_config(session_id)
+        config["max_concurrency"] = GRAPH_MAX_CONCURRENCY
+        config["recursion_limit"] = GRAPH_RECURSION_LIMIT
+        async with cls._execution_locks.setdefault(session_id, asyncio.Lock()):
+            snapshot = await cls.aget_state(session_id)
+            if snapshot is None:
+                return {"resumed": False, "reason": "no_checkpoint"}
+            raw_state = dict(snapshot.values or {})
+            updates = dict(state_updates or {})
+            updates["subgraph_entry"] = entry
+            command = Command(
+                update=cls._pack_workflow_patch_preserving_artifacts(raw_state, updates),
+                goto="cognitive",
+            )
+            logger.info(
+                "[PlanningRuntimeService] [%s] state-entry resume: entry=%s update_keys=%s",
+                session_id,
+                entry,
+                sorted(updates),
+            )
+            try:
+                async for _ in cls._graph.astream(
+                    command,
+                    config,
+                    stream_mode=["values", "checkpoints"],
+                    version="v2",
+                ):
+                    pass
+            except GraphInterrupt:
+                logger.info(
+                    "[PlanningRuntimeService] [%s] state-entry resume reached HUMAN",
+                    session_id,
+                )
+            return {"resumed": True, "entry": entry}
 
     @classmethod
     async def resume_execution(cls, session_id: str) -> Dict[str, Any]:

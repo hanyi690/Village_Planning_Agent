@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from typing import Any, Dict
 
 from app.infrastructure.logging import get_logger
@@ -15,6 +16,13 @@ from app.workflow.stages.support import (
 )
 
 logger = get_logger(__name__)
+
+
+def _ground_llm_disabled() -> bool:
+    return any(
+        str(os.getenv(name, "")).strip().lower() in {"1", "true", "yes", "on"}
+        for name in ("DISABLE_GROUND_LLM", "DISABLE_GROUND_REPORT_LLM")
+    )
 
 
 def _to_typed(data: Any, cls: type) -> Any:
@@ -63,6 +71,25 @@ async def ground_node(state: Dict[str, Any]) -> Dict[str, Any]:
     except Exception as exc:  # noqa: BLE001 - 锚点缺失不阻断 GROUND
         logger.warning("[workflow:ground] grounded anchors load failed: %s", exc)
 
+    try:
+        if (state.get("artifact_refs") or {}).get("l1_bindings"):
+            from app.contracts.evidence.identity_contracts import GroundedEntityBindingSnapshot
+            from app.infrastructure.artifacts.runtime import load_artifact
+
+            binding_snapshot = load_artifact(
+                state,
+                "l1_bindings",
+                GroundedEntityBindingSnapshot,
+            )
+            if binding_snapshot is not None:
+                context.grounded_bindings = list(binding_snapshot.bindings)
+                logger.info(
+                    "[workflow:ground] consuming %d L1 entity bindings",
+                    len(context.grounded_bindings),
+                )
+    except Exception as exc:  # noqa: BLE001 - binding absence must not block GROUND
+        logger.warning("[workflow:ground] L1 binding load failed: %s", exc)
+
     # =====================================================================
     # The complete GROUND flow: Phase 1 - L1 spatial inventory from the
     # report (every place name + spatial cue + facility->village text +
@@ -78,7 +105,12 @@ async def ground_node(state: Dict[str, Any]) -> Dict[str, Any]:
         from app.spatial.grounding.report_grounder import create_grounding_llm
 
         facts = list(getattr(context, "location_facts", []) or [])
-        if facts and getattr(context, "gazetteer", None) is not None:
+        disable_report_llm = _ground_llm_disabled()
+        if (
+            facts
+            and getattr(context, "gazetteer", None) is not None
+            and not disable_report_llm
+        ):
             session_id = str(state.get("session_id", "") or "")
             report_result = await ground_report(
                 context,
@@ -106,10 +138,9 @@ async def ground_node(state: Dict[str, Any]) -> Dict[str, Any]:
         for item in (getattr(compilation, "spatial_reference_specs", None) or [])
     ]
 
-    # GROUND owns gazetteer/KG anchor resolution for the typed intent.  Fill
-    # road candidate_bsms and start/end anchors from connects (村北/村南) so
-    # the road worker / Stage 2.6 has endpoints, then persist the enriched
-    # intent back into the target_projection artifact for SELECT/EXECUTE.
+    # GROUND may derive additional anchors for its local grounding computation,
+    # but TARGET_PROJECTION remains immutable.  Grounding facts belong in the
+    # GroundingResult/GroundedPlanningProblem artifact, not in the L3 intent.
     try:
         from app.contracts.workflow.parse_contracts import SpatialPlanningIntent
 
@@ -121,26 +152,18 @@ async def ground_node(state: Dict[str, Any]) -> Dict[str, Any]:
             from app.spatial.grounding.resolver import SpatialResolver
 
             resolver = SpatialResolver(context)
-            village_cluster_map = await _village_cluster_map_for_context(context, intent)
+            village_cluster_map = (
+                {}
+                if _ground_llm_disabled()
+                else await _village_cluster_map_for_context(context, intent)
+            )
             resolved_anchors = resolver.resolve_anchors(
                 intent,
                 village_cluster_map=village_cluster_map,
             )
             if resolved_anchors > 0:
-                working_compilation = compilation.model_copy(
-                    update={"typed_intent": intent}
-                )
-                ref = persist_stage_artifact(
-                    state,
-                    "target_projection",
-                    "IntentCompilationResult",
-                    working_compilation,
-                )
-                if ref:
-                    projection_ref = ref
-                    compilation = working_compilation
                 logger.info(
-                    "[workflow:ground] intent anchors resolved: %d entities",
+                    "[workflow:ground] local intent anchors resolved: %d entities; projection remains immutable",
                     resolved_anchors,
                 )
     except Exception as exc:  # noqa: BLE001 - anchor enrichment must not break GROUND
@@ -155,7 +178,14 @@ async def ground_node(state: Dict[str, Any]) -> Dict[str, Any]:
             evidence = await retrieve_evidence(context, requests or None)
         except Exception as exc:
             logger.warning("[workflow:ground] retrieve_evidence failed: %s", exc)
-    result = ground_aggregate(specs, context)
+    intent_graph = getattr(compilation, "intent_graph", None)
+    target_metadata = _target_metadata_from_compilation(compilation, intent_graph)
+    result = ground_aggregate(
+        specs,
+        context,
+        intent_graph=intent_graph,
+        target_metadata=target_metadata,
+    )
 
     # GROUND flash-LLM mention enhancement: for specs that could not bind any
     # BSM, ask the flash model to segment the raw prose into concrete locatable
@@ -164,9 +194,19 @@ async def ground_node(state: Dict[str, Any]) -> Dict[str, Any]:
     # Results are cached per content hash so resume/replay does not repeat the
     # call.  On any failure the deterministic result is kept unchanged.
     try:
-        enhanced = await _flash_enhance_unresolved(compilation, result, state)
+        enhanced = (
+            {}
+            if _ground_llm_disabled()
+            else await _flash_enhance_unresolved(compilation, result, state)
+        )
         if enhanced:
-            re_result = ground_aggregate(specs, context, mention_enhancements=enhanced)
+            re_result = ground_aggregate(
+                specs,
+                context,
+                mention_enhancements=enhanced,
+                intent_graph=intent_graph,
+                target_metadata=target_metadata,
+            )
             # Only adopt the enhanced result when it strictly reduces the
             # unresolved count; otherwise keep the deterministic baseline.
             if len(re_result.unresolved) < len(result.unresolved):
@@ -182,6 +222,12 @@ async def ground_node(state: Dict[str, Any]) -> Dict[str, Any]:
                 if hasattr(candidate, "evidence_refs"):
                     candidate.evidence_refs.extend(refs)
     gate = evaluate_ground_gate(result, expected_spec_count=len(specs))
+    candidate_domains = getattr(getattr(result, "problem", None), "candidate_domains", [])
+    logger.info(
+        "[workflow:ground] typed candidate domains=%d candidates=%d",
+        len(candidate_domains or []),
+        len(getattr(result, "candidates", None) or []),
+    )
     ref = persist_stage_artifact(state, "ground", "GroundingResult", result)
     output_refs = {"grounding_result": ref}
     if projection_ref:
@@ -240,7 +286,8 @@ async def _flash_enhance_unresolved(
             intent.get("facilities") or [],
             intent.get("development_axes") or [],
             intent.get("road_targets") or [],
-            intent.get("project_targets") or [],
+            intent.get("linear_targets") or [],
+            intent.get("site_area_targets") or [],
         ]
     else:
         target_lists = [
@@ -248,7 +295,8 @@ async def _flash_enhance_unresolved(
             getattr(intent, "facilities", None) or [],
             getattr(intent, "development_axes", None) or [],
             getattr(intent, "road_targets", None) or [],
-            getattr(intent, "project_targets", None) or [],
+            getattr(intent, "linear_targets", None) or [],
+            getattr(intent, "site_area_targets", None) or [],
         ]
     for target_list in target_lists:
         for target in target_list or []:
@@ -283,6 +331,7 @@ async def _flash_enhance_unresolved(
 
     from app.infrastructure.paths import run_tmp_root, session_run_dir
     from app.spatial.grounding.flash_mention_extractor import MentionCache, extract_mentions
+    from app.spatial.grounding.call_budget import new_ground_llm_budget
 
     run_root = None
     try:
@@ -293,10 +342,11 @@ async def _flash_enhance_unresolved(
     if run_root is not None:
         cache_path = (run_root / "ground-mention-cache.json").resolve()
     cache = MentionCache(cache_path)
+    budget = new_ground_llm_budget()
 
     enhanced: Dict[str, list[str]] = {}
     for target_id, raw in raw_by_target.items():
-        mentions = await extract_mentions(raw, cache=cache)
+        mentions = await extract_mentions(raw, cache=cache, budget=budget)
         candidates = [
             m.mention for m in mentions if m.mention and len(m.mention) >= 2
         ]
@@ -382,6 +432,62 @@ def _context_report_text(context: Any) -> str:
     return "\n".join(part for part in parts if part)[:12000]
 
 
+def _target_metadata_from_compilation(
+    compilation: Any,
+    intent_graph: Any,
+) -> Dict[str, Dict[str, str]]:
+    """Expose target output semantics to GROUND without parsing free text."""
+
+    metadata: Dict[str, Dict[str, str]] = {}
+    nodes = getattr(intent_graph, "nodes", None)
+    if nodes:
+        for node in nodes:
+            target_id = str(getattr(node, "target_id", "") or "")
+            target_kind = str(getattr(node, "target_kind", "unknown") or "unknown")
+            if target_id:
+                metadata[target_id] = {
+                    "target_kind": target_kind,
+                    "expected_output_kind": _expected_output_for_target_kind(target_kind),
+                }
+
+    intent = getattr(compilation, "typed_intent", None)
+    for field_name, target_kind, expected_output_kind in (
+        ("zone_targets", "zone", "polygon"),
+        ("facilities", "facility", "point"),
+        ("development_axes", "axis", "line"),
+        ("road_targets", "road", "line"),
+        ("linear_targets", "linear", "line"),
+        ("site_area_targets", "site_area", "polygon"),
+    ):
+        targets = intent.get(field_name, []) if isinstance(intent, dict) else getattr(intent, field_name, [])
+        for target in list(targets or []):
+            target_id = str(
+                target.get("target_id", "") if isinstance(target, dict)
+                else getattr(target, "target_id", "")
+            )
+            if target_id:
+                metadata.setdefault(
+                    target_id,
+                    {
+                        "target_kind": target_kind,
+                        "expected_output_kind": expected_output_kind,
+                    },
+                )
+    return metadata
+
+
+def _expected_output_for_target_kind(target_kind: str) -> str:
+    return {
+        "facility": "point",
+        "road": "line",
+        "linear": "line",
+        "axis": "line",
+        "zone": "polygon",
+        "site_area": "polygon",
+        "action": "action",
+    }.get(target_kind, "unknown")
+
+
 async def _settlement_mentions_for_cluster_mapping(
     context: Any,
     intent: Any,
@@ -417,7 +523,8 @@ async def _settlement_mentions_for_cluster_mapping(
         "facilities",
         "development_axes",
         "road_targets",
-        "project_targets",
+        "linear_targets",
+        "site_area_targets",
     )
     for field in fields:
         targets = intent.get(field, []) if isinstance(intent, dict) else getattr(intent, field, [])

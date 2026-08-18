@@ -84,6 +84,24 @@ def _kg_repo() -> ContentAddressedArtifactRepository:
 
 
 def _kg_layer1_parent(bundle: Any, session_id: str) -> str:
+    # The CAS parent must use the same complete Layer-1 source manifest as the
+    # process-local cache key.  SessionDataSnapshot intentionally projects a
+    # compatibility GeoJSON view and can omit typed point/line groups (for
+    # example ``facilities_current``), which would allow stale KG turtle to be
+    # restored after those source features changed.
+    from app.infrastructure.kg.manager import compute_layer1_cache_key
+
+    parcels = (getattr(bundle, "polygons", None) or {}).get("landuse_current")
+    key = compute_layer1_cache_key(
+        getattr(bundle, "village_name", ""),
+        parcels,
+        bundle=bundle,
+    )
+    if key is not None:
+        return f"sha256:{key.landuse_hash}"
+
+    # Keep a diagnostic fallback for malformed/non-canonical test callers;
+    # canonical VillageBundle callers always take the complete-manifest path.
     from app.data.model.snapshot import SessionDataSnapshot
 
     return SessionDataSnapshot.from_bundle(bundle, session_id=session_id).digest
@@ -91,6 +109,7 @@ def _kg_layer1_parent(bundle: Any, session_id: str) -> str:
 
 def _load_layer1_from_cas(session_id: str, bundle: Any) -> Optional[Dict[str, Any]]:
     from app.infrastructure.kg import PlanningKG, get_kg_manager
+    from app.infrastructure.kg.manager import compute_layer1_cache_key
 
     parent = _kg_layer1_parent(bundle, session_id)
     repo = _kg_repo()
@@ -100,7 +119,16 @@ def _load_layer1_from_cas(session_id: str, bundle: Any) -> Optional[Dict[str, An
     turtle = repo.get_json(ref)
     kg = PlanningKG.from_turtle(turtle, village_name=bundle.village_name)
     manager = get_kg_manager()
-    manager.register_session(session_id, kg)
+    cache_key = compute_layer1_cache_key(
+        bundle.village_name,
+        bundle.polygons.get("landuse_current"),
+        bundle=bundle,
+    )
+    manager.register_session(
+        session_id,
+        kg,
+        layer1_cache_key=str(cache_key) if cache_key else "",
+    )
     return {
         "session_id": session_id,
         "cache_hit": True,
@@ -129,10 +157,6 @@ async def ensure_session_kg(
 
     manager = get_kg_manager()
     async with _session_kg_lock(session_id):
-        with _SESSION_KG_BUILD_LOCK:
-            if not force and manager.get_session_kg(session_id) is not None:
-                return {"cache_hit": True, "session_id": session_id}
-
         try:
             from app.application.sessions.session_bundle import build_session_bundle, restore_session_bundle
             from app.spatial.model.geometry import compute_parcel_relations
@@ -158,6 +182,35 @@ async def ensure_session_kg(
 
                 invalidate_session_bundle(session_id)
                 return None
+
+            from app.infrastructure.kg.manager import compute_layer1_cache_key
+
+            requested_key = compute_layer1_cache_key(
+                bundle.village_name,
+                parcels,
+                bundle=bundle,
+            )
+            requested_key_text = str(requested_key) if requested_key else ""
+            with _SESSION_KG_BUILD_LOCK:
+                existing = manager.get_session_kg(session_id)
+                existing_key = manager.get_session_cache_key(session_id)
+                if (
+                    not force
+                    and existing is not None
+                    and existing_key
+                    and existing_key == requested_key_text
+                ):
+                    logger.info(
+                        "[SessionKG] Reusing session-bound Layer-1 for %s (key=%s)",
+                        session_id,
+                        requested_key_text,
+                    )
+                    return {
+                        "cache_hit": True,
+                        "session_id": session_id,
+                        "triple_count": existing.get_triple_count(),
+                        "version": manager.get_session_version(session_id),
+                    }
 
             if not force:
                 try:
@@ -187,11 +240,21 @@ async def ensure_session_kg(
 
             from app.infrastructure.kg import PlanningKG
             from app.infrastructure.kg.interface import KGSessionSnapshot
-            from app.infrastructure.kg.manager import compute_layer1_cache_key
-
             with _SESSION_KG_BUILD_LOCK:
-                if not force and manager.get_session_kg(session_id) is not None:
-                    return {"cache_hit": True, "session_id": session_id}
+                existing = manager.get_session_kg(session_id)
+                existing_key = manager.get_session_cache_key(session_id)
+                if (
+                    not force
+                    and existing is not None
+                    and existing_key
+                    and existing_key == requested_key_text
+                ):
+                    return {
+                        "cache_hit": True,
+                        "session_id": session_id,
+                        "triple_count": existing.get_triple_count(),
+                        "version": manager.get_session_version(session_id),
+                    }
                 isolated = os.getenv("KG_BUILD_ISOLATED_PROCESS", "true").lower() not in {
                     "0", "false", "no", "off"
                 }
@@ -230,10 +293,15 @@ async def ensure_session_kg(
                         worker_result["turtle"],
                         village_name=bundle.village_name,
                     )
-                    manager.register_session(session_id, kg)
+                    manager.register_session(
+                        session_id,
+                        kg,
+                        layer1_cache_key=requested_key_text,
+                    )
                     cache_key = compute_layer1_cache_key(
                         bundle.village_name,
                         bundle.polygons.get("landuse_current"),
+                        bundle=bundle,
                     )
                     snap = KGSessionSnapshot(
                         session_id=session_id,

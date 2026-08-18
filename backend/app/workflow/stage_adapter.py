@@ -43,6 +43,8 @@ _KEY_BY_TYPE = {
     "PlanningProgram": "planning_program",
     "IntentCompilationResult": "target_projection",
     "ExecutionPlan": "execution_plan",
+    "PlanningScenario": "planning_scenario",
+    "FinalRelationValidation": "final_relation_validation",
     "ExecutionResult": "execution_result",
     "RenderLayers": "render_layers",
     "DeliverySpatialSnapshot": "delivery_spatial_snapshot",
@@ -55,6 +57,8 @@ _KEY_BY_TYPE = {
     "GlobalSiteAllocationResult": "global_site_allocation",
     "ExportResult": "export_result",
     "RenderArtifacts": "render_artifacts",
+    "EvidenceObservationSnapshot": "l1_observations",
+    "GroundedEntityBindingSnapshot": "l1_bindings",
 }
 
 

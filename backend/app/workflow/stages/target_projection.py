@@ -77,16 +77,77 @@ async def target_projection_node(state: Dict[str, Any]) -> Dict[str, Any]:
     from app.domain.program.target_projection.aggregate import project_program_async
     from app.contracts.workflow.parse_result_contracts import ParseDiagnostic
     from app.contracts.domain.l3_contracts import PlanningProgram
+    from app.contracts.evidence.identity_contracts import (
+        EvidenceObservationSnapshot,
+        GroundedEntityBindingSnapshot,
+    )
 
     retry_patch = _retry_patch(state, "target_projection")
     program = _load_ref_artifact(state, "planning_program", PlanningProgram)
     if program is None:
         logger.warning("[workflow:target_projection] no planning_program")
     context = await _require_context(state)
+    observation_snapshot = _load_ref_artifact(
+        state,
+        "l1_observations",
+        EvidenceObservationSnapshot,
+    )
+    binding_snapshot = _load_ref_artifact(
+        state,
+        "l1_bindings",
+        GroundedEntityBindingSnapshot,
+    )
+    workspace = getattr(context, "workspace", None)
+    point_layers = getattr(workspace, "points", None)
+    line_layers = getattr(workspace, "lines", None)
+
+    def _all_layer_features(group: object, preferred: tuple[str, ...]) -> list[object]:
+        """Collect only explicitly authoritative source layers.
+
+        Planned annotations/roads, hazard points, and administrative lines
+        are not interchangeable with existing facilities/roads.  Including
+        every group made a strict quantity binding fail (for example 13
+        current shrines became 16 after planned annotations were appended),
+        or allowed a planned line layer to masquerade as an existing road.
+        The caller therefore supplies the small set of current source layers;
+        features without provenance remain candidate evidence and cannot
+        become exact.
+        """
+        get = getattr(group, "get", None)
+        layer_names = list(preferred)
+        result: list[object] = []
+        seen: set[str] = set()
+        for name in layer_names:
+            values = get(name) if callable(get) else []
+            for feature in values or []:
+                raw = getattr(feature, "_raw", {}) or {}
+                source_id = str(raw.get("source_feature_id") or "").strip()
+                identity = source_id or f"object:{id(feature)}"
+                if identity in seen:
+                    continue
+                seen.add(identity)
+                result.append(feature)
+        return result
+
+    source_features = {
+        "facility": _all_layer_features(point_layers, ("annotations_current", "facilities_current")),
+        "road": _all_layer_features(line_layers, ("roads_current",)),
+    }
     result, specs, gate = await project_program_async(
         program,
         run_id=_run_id(state),
         context_version=str(getattr(context, "version", "")),
+        observations=(
+            list(observation_snapshot.observations)
+            if observation_snapshot is not None
+            else []
+        ),
+        bindings=(
+            list(binding_snapshot.bindings)
+            if binding_snapshot is not None
+            else []
+        ),
+        source_features=source_features,
     )
     # Design 03: IntentGraph is written by the IntentCompiler (this stage),
     # not deferred to EXECUTE, so GROUND/EXECUTE route_prepare can read the

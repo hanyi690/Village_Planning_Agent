@@ -121,12 +121,17 @@ def _context_version(state: Dict[str, Any]) -> str:
 def _adopt_context(state: Dict[str, Any], context: Any) -> Dict[str, Any]:
     version = str(getattr(context, "version", "") or "")
     state["context_version"] = version
-    state["context_ref"] = {"session_id": state.get("session_id", ""), "version": version}
-    if not state.get("context_fingerprint"):
-        meta = context.snapshot_meta()
-        state["context_fingerprint"] = "sha256:" + hashlib.sha256(
-            repr(sorted(meta.items())).encode("utf-8")
-        ).hexdigest()[:16]
+    snapshot = getattr(context, "data_snapshot", None)
+    state["context_ref"] = {
+        "session_id": state.get("session_id", ""),
+        "version": version,
+        "snapshot_id": str(getattr(snapshot, "snapshot_id", "") or ""),
+        "snapshot_digest": str(getattr(snapshot, "digest", "") or ""),
+    }
+    meta = context.snapshot_meta()
+    state["context_fingerprint"] = "sha256:" + hashlib.sha256(
+        repr(sorted(meta.items())).encode("utf-8")
+    ).hexdigest()[:16]
     return {
         "context_version": state["context_version"],
         "context_ref": state["context_ref"],

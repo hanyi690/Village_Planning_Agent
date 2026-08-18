@@ -21,6 +21,7 @@ from app.database.operations import (
     list_planning_bundle_versions_async,
 )
 from app.data.model.canonical import VillageBundle, from_bundle_dict, to_bundle_dict
+from app.data.model.snapshot import SessionDataSnapshot
 from app.infrastructure.logging import get_logger
 
 logger = get_logger(__name__)
@@ -46,13 +47,34 @@ class BundleStore:
 
     @staticmethod
     def serialize(bundle: VillageBundle) -> str:
-        """Serialize a VillageBundle to a JSON string."""
-        return json.dumps(to_bundle_dict(bundle), ensure_ascii=False)
+        """Serialize a VillageBundle and its source manifest to JSON.
+
+        The bundle payload remains self-contained.  ``_source_snapshot`` is a
+        compact manifest (IDs, source URIs and content/geometry digests), not
+        a second copy of the feature payload.  Keeping it in the persisted
+        blob makes a restored bundle auditable even when the process-local
+        ``SessionDataSnapshot`` has been discarded.
+        """
+        payload = to_bundle_dict(bundle)
+        session_id = str(getattr(getattr(bundle, "metadata", None), "session_id", "") or "")
+        snapshot = SessionDataSnapshot.from_bundle(
+            bundle,
+            session_id=session_id,
+            source="data_catalog",
+        )
+        payload["_source_snapshot"] = snapshot.model_dump(mode="json")
+        return json.dumps(payload, ensure_ascii=False, sort_keys=True)
 
     @staticmethod
     def deserialize(bundle_json: str) -> VillageBundle:
-        """Rebuild a VillageBundle from a JSON string."""
-        return from_bundle_dict(json.loads(bundle_json))
+        """Rebuild a VillageBundle and restore its source manifest."""
+        payload = json.loads(bundle_json)
+        source_snapshot = payload.pop("_source_snapshot", None)
+        bundle = from_bundle_dict(payload)
+        if source_snapshot:
+            restored_snapshot = SessionDataSnapshot.model_validate(source_snapshot)
+            object.__setattr__(bundle, "source_snapshot", restored_snapshot)
+        return bundle
 
     @staticmethod
     def _sha256(bundle_json: str) -> str:

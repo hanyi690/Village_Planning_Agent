@@ -84,10 +84,15 @@ def open_kg_session(
         bundle=bundle,
         parcel_relations=parcel_relations,
     )
-    manager.register_session(session_id, kg)
     key = compute_layer1_cache_key(
         village_name,
-        getattr(getattr(bundle, "polygons", None), "landuse_current", None),
+        (getattr(bundle, "polygons", None) or {}).get("landuse_current"),
+        bundle=bundle,
+    )
+    manager.register_session(
+        session_id,
+        kg,
+        layer1_cache_key=str(key) if key else "",
     )
     return _snapshot(
         session_id,

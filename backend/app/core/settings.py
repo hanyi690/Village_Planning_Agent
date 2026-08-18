@@ -43,6 +43,14 @@ MINIMAX_API_KEY = os.getenv("MINIMAX_API_KEY")
 MINIMAX_API_BASE = os.getenv("MINIMAX_API_BASE", "https://api.minimaxi.com/v1")
 MINIMAX_MODEL = os.getenv("MINIMAX_MODEL", DEFAULT_LLM_MODEL)
 
+# OpenCode Go OpenAI-compatible provider.
+OPENCODE_GO_API_KEY = os.getenv("OPENCODE_GO_API_KEY")
+OPENCODE_GO_API_BASE = os.getenv(
+    "OPENCODE_GO_API_BASE",
+    "https://opencode.ai/zen/go/v1",
+)
+OPENCODE_GO_MODEL = os.getenv("OPENCODE_GO_MODEL", "deepseek-v4-flash")
+
 # LLM Configuration
 # MiniMax is the default provider; every model setting remains explicitly
 # overridable for controlled experiments and provider-specific deployments.
@@ -50,10 +58,45 @@ LLM_PROVIDER = os.getenv("LLM_PROVIDER", "minimax")
 LLM_MODEL = os.getenv("LLM_MODEL", DEFAULT_LLM_MODEL)
 MAX_TOKENS = int(os.getenv("MAX_TOKENS", "8192"))
 
+_PROVIDER_CONCURRENCY_DEFAULT = (
+    8
+    if LLM_PROVIDER.lower() in {"minimax", "minimaxai", "mini-max"}
+    else 12
+    if LLM_PROVIDER.lower() in {"opencode-go", "opencode_go", "opencodego"}
+    else 8
+)
+
+# L1 dimensions fan out concurrently and only need a bounded report plus a
+# small observation list.  Keep their request budget independent from the
+# longer L3 planning budget so one slow L1 dimension cannot consume the whole
+# provider transport window.  This is a request/output budget, not a model
+# context-window limit.
+L1_MAX_TOKENS = int(os.getenv("L1_MAX_TOKENS", "12288"))
+L1_LLM_TIMEOUT_S = float(os.getenv("L1_LLM_TIMEOUT_S", "480"))
+L1_LLM_MAX_CONCURRENT = int(
+    os.getenv("L1_LLM_MAX_CONCURRENT", str(_PROVIDER_CONCURRENCY_DEFAULT))
+)
+L1_TRANSIENT_RETRIES = int(os.getenv("L1_TRANSIENT_RETRIES", "1"))
+L1_TRANSIENT_RETRY_BACKOFF_S = float(
+    os.getenv(
+        "L1_TRANSIENT_RETRY_BACKOFF_S",
+        "8.0"
+        if LLM_PROVIDER.lower() in {"minimax", "minimaxai", "mini-max"}
+        else "3.0",
+    )
+)
+
 # LLM Request Timeout (seconds)
 LLM_REQUEST_TIMEOUT = int(os.getenv("LLM_REQUEST_TIMEOUT", "180"))  # 3 minutes
 LLM_STREAM_TIMEOUT = int(os.getenv("LLM_STREAM_TIMEOUT", "600"))  # 10 minutes; real L3 dimensions take 228-483s, 120s caused spurious provider trips
-LAYER_TIMEOUT_S = int(os.getenv("LAYER_TIMEOUT_S", "600"))  # 10 min; a layer that exceeds this force-completes (partial snapshot + human review)
+DIMENSION_EXECUTION_TIMEOUT_S = float(
+    os.getenv("DIMENSION_EXECUTION_TIMEOUT_S", str(min(1200, LLM_STREAM_TIMEOUT)))
+)  # includes provider queue wait plus one long real request
+LAYER_TIMEOUT_S = int(os.getenv("LAYER_TIMEOUT_S", "1800"))  # bounds a full provider wave set without allowing an unbounded fan-in
+GROUND_ANCHOR_TIMEOUT_S = float(os.getenv("GROUND_ANCHOR_TIMEOUT_S", "180"))  # optional L1 enrichment budget; never block L2 indefinitely
+GROUND_LLM_CALL_TIMEOUT_S = float(os.getenv("GROUND_LLM_CALL_TIMEOUT_S", "30"))  # best-effort per-fact grounding call
+GROUND_MAX_LLM_CALLS = int(os.getenv("GROUND_MAX_LLM_CALLS", "8"))  # total location-fallback call cap; deterministic resolution follows
+GROUND_LLM_MAX_CONCURRENT = int(os.getenv("GROUND_LLM_MAX_CONCURRENT", "4"))  # bounded location-level fan-out
 RAG_TIMEOUT_S = int(os.getenv("RAG_TIMEOUT_S", "60"))  # per-dimension RAG retrieval cap
 TOOL_TIMEOUT_S = int(os.getenv("TOOL_TIMEOUT_S", "30"))  # per-tool call budget in DataPipeline
 EXTERNAL_ANCHOR_TIMEOUT_S = int(os.getenv("EXTERNAL_ANCHOR_TIMEOUT_S", "30"))  # 外源锚点总预算，超时跳过（绝不阻塞 L1 派发）
@@ -91,10 +134,21 @@ def _parse_dimension_timeouts(raw: str) -> dict[str, float]:
 # default; long-tail dimensions keep the shared layer deadline otherwise.
 DIMENSION_TIMEOUT_S = _parse_dimension_timeouts(os.getenv("DIMENSION_TIMEOUT_S", "{}"))
 
-# LLM Max Concurrent Requests (for asyncio.gather + asyncio.Semaphore)
-# qwen3.7-plus hard limit: 500 RPS / 30,000 RPM. 50 is safe with monitoring.
-# Can be tuned up to 100 with cold start.
-LLM_MAX_CONCURRENT = int(os.getenv("LLM_MAX_CONCURRENT", "3"))
+# LLM Max Concurrent Requests.  This is the single default provider budget;
+# L2/L3 may override it explicitly for a provider-specific deployment.
+LLM_MAX_CONCURRENT = int(
+    os.getenv("LLM_MAX_CONCURRENT", str(_PROVIDER_CONCURRENCY_DEFAULT))
+)
+
+# Optional OpenAI-compatible reasoning control (for example DeepSeek V4
+# Flash through OpenCode Go).  Empty keeps the provider's native default.
+LLM_REASONING_EFFORT = os.getenv("LLM_REASONING_EFFORT", "").strip()
+
+# Consecutive transport failures required before opening the session circuit.
+# A single transient 5xx should not deadlock the whole fan-out layer.
+LLM_PROVIDER_CIRCUIT_FAILURE_THRESHOLD = int(
+    os.getenv("LLM_PROVIDER_CIRCUIT_FAILURE_THRESHOLD", "3")
+)
 
 # LLM Rate Limit (requests_per_second for InMemoryRateLimiter)
 LLM_RATE_LIMIT_RPS = float(os.getenv("LLM_RATE_LIMIT_RPS", "500"))
@@ -106,8 +160,9 @@ LLM_WARMUP_SECONDS = float(os.getenv("LLM_WARMUP_SECONDS", "5.0"))
 EMBEDDING_MAX_CONCURRENT = int(os.getenv("EMBEDDING_MAX_CONCURRENT", "10"))
 EMBEDDING_RATE_LIMIT_RPS = float(os.getenv("EMBEDDING_RATE_LIMIT_RPS", "25"))
 
-# LangGraph Send API parallel node limit (prevents 28-dimension full-parallel burst)
-GRAPH_MAX_CONCURRENCY = int(os.getenv("GRAPH_MAX_CONCURRENCY", "3"))
+# LangGraph Send API parallel node limit.  Keep it aligned with the provider
+# budget unless a deployment deliberately chooses a smaller graph fan-out.
+GRAPH_MAX_CONCURRENCY = int(os.getenv("GRAPH_MAX_CONCURRENCY", str(LLM_MAX_CONCURRENT)))
 KG_BUILD_TIMEOUT_SECONDS = float(os.getenv("KG_BUILD_TIMEOUT_SECONDS", "180"))
 BACKEND_STARTUP_TIMEOUT_SECONDS = float(os.getenv("BACKEND_STARTUP_TIMEOUT_SECONDS", "30"))
 GRAPH_RECURSION_LIMIT = int(os.getenv("GRAPH_RECURSION_LIMIT", "100"))

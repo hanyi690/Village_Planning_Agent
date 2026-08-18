@@ -34,8 +34,11 @@ class PlaceEvidenceIndex:
         self.context = context
         self.version = version
         self.entries: List[PlaceEvidenceEntry] = []
-        self._by_canonical: Dict[str, PlaceEvidenceEntry] = {}
-        self._by_alias: Dict[str, PlaceEvidenceEntry] = {}
+        # A name/alias is not an identity key.  Keep all entries so two
+        # source entities with the same label can remain independently
+        # auditable and can be returned as ambiguous candidates.
+        self._by_canonical: Dict[str, List[PlaceEvidenceEntry]] = {}
+        self._by_alias: Dict[str, List[PlaceEvidenceEntry]] = {}
 
     @classmethod
     def build(cls, context: Any) -> "PlaceEvidenceIndex":
@@ -632,7 +635,8 @@ class PlaceEvidenceIndex:
         return None
 
     def _add_entry(self, entry: PlaceEvidenceEntry) -> None:
-        # 同一坐标 = 同一实体；同角色同名/别名重叠 = 同一实体（ER 原则）。
+        # Same coordinates remain a safe co-location identity signal.  Names
+        # alone are not identity when source geometries disagree.
         coord_target = self._coordinate_merge_target(entry)
         if coord_target is not None:
             self._merge_into(coord_target, entry)
@@ -642,15 +646,70 @@ class PlaceEvidenceIndex:
             self._merge_into(name_target, entry)
             return
         key = _normalize(entry.canonical_name)
-        existing = self._by_canonical.get(key)
-        if existing is not None:
-            self._merge_into(existing, entry)
-            entry = existing
+        existing_entries = self._by_canonical.get(key, [])
+        merge_target = self._canonical_merge_target(entry, existing_entries)
+        if merge_target is not None:
+            self._merge_into(merge_target, entry)
+            entry = merge_target
         else:
             self.entries.append(entry)
-            self._by_canonical[key] = entry
+            self._by_canonical.setdefault(key, []).append(entry)
         for alias in entry.aliases:
-            self._by_alias.setdefault(_normalize(alias), entry)
+            alias_key = _normalize(alias)
+            if alias_key:
+                aliases = self._by_alias.setdefault(alias_key, [])
+                if entry not in aliases:
+                    aliases.append(entry)
+
+    @classmethod
+    def _canonical_merge_target(
+        cls,
+        entry: PlaceEvidenceEntry,
+        existing_entries: List[PlaceEvidenceEntry],
+    ) -> Optional[PlaceEvidenceEntry]:
+        """Return a safe same-canonical-name merge target, if one exists."""
+        entry_geometry = cls._authoritative_geometry_key(entry)
+        existing_geometries = {
+            cls._authoritative_geometry_key(existing) for existing in existing_entries
+        }
+        existing_geometries.discard(None)
+        # A geometry-less generic mention must not attach itself to one of
+        # several already-known source entities by list order.
+        if entry_geometry is None and len(existing_geometries) > 1:
+            return None
+        if entry_geometry is not None and existing_geometries:
+            for existing in existing_entries:
+                if cls._authoritative_geometry_key(existing) == entry_geometry:
+                    return existing
+            return None
+        if entry_geometry is not None and existing_entries:
+            # Do not let source arrival order decide which geometry inherits
+            # an earlier generic/name-only record.
+            return None
+        for existing in existing_entries:
+            left = cls._authoritative_geometry_key(existing)
+            if left is None or entry_geometry is None:
+                return existing
+        return None
+
+    @staticmethod
+    def _authoritative_geometry_key(geometry_or_entry: Any) -> Optional[str]:
+        """Canonicalize source WKT; coarse anchors are not source geometry."""
+        geometry_ref = getattr(geometry_or_entry, "geometry_ref", geometry_or_entry)
+        value = str(geometry_ref or "").strip()
+        if not value or value.startswith(("village_anchor:", "bundled:")):
+            return None
+        if value.startswith("kg_wkt:"):
+            value = value[len("kg_wkt:") :].strip()
+        try:
+            from shapely import wkt
+
+            geometry = wkt.loads(value)
+            if geometry.is_empty:
+                return None
+            return geometry.wkb_hex
+        except Exception:
+            return None
 
     def _name_merge_target(
         self, entry: PlaceEvidenceEntry
@@ -664,6 +723,8 @@ class PlaceEvidenceIndex:
         keys.discard("")
         if not keys:
             return None
+        entry_geometry = self._authoritative_geometry_key(entry)
+        matching: List[PlaceEvidenceEntry] = []
         for existing in self.entries:
             if existing.role != entry.role:
                 continue
@@ -673,8 +734,37 @@ class PlaceEvidenceIndex:
             }
             existing_keys.discard("")
             if existing_keys & keys:
-                return existing
-        return None
+                existing_geometry = self._authoritative_geometry_key(existing)
+                if (
+                    entry_geometry is not None
+                    and existing_geometry is not None
+                    and entry_geometry != existing_geometry
+                ):
+                    continue
+                matching.append(existing)
+        if entry_geometry is None:
+            source_geometries = {
+                self._authoritative_geometry_key(existing) for existing in matching
+            }
+            source_geometries.discard(None)
+            if len(source_geometries) > 1:
+                return None
+        else:
+            source_geometries = {
+                self._authoritative_geometry_key(existing) for existing in matching
+            }
+            source_geometries.discard(None)
+            if not source_geometries and matching:
+                return None
+            if source_geometries:
+                matching = [
+                    existing
+                    for existing in matching
+                    if self._authoritative_geometry_key(existing) == entry_geometry
+                ]
+                if not matching:
+                    return None
+        return matching[0] if matching else None
 
     def _coordinate_merge_target(
         self, entry: PlaceEvidenceEntry
@@ -726,43 +816,77 @@ class PlaceEvidenceIndex:
         trace.append({"step": "normalize", "input": mention, "normalized": norm})
 
         candidates: List[PlaceResolutionCandidate] = []
-        seen: Dict[str, PlaceEvidenceEntry] = {}
+        seen: Dict[int, PlaceEvidenceEntry] = {}
 
-        exact = self._by_canonical.get(norm) or self._by_alias.get(norm)
-        if exact is not None:
-            seen[exact.canonical_name] = exact
-            trace.append({"step": "exact", "matched": exact.canonical_name})
+        exact_entries = [
+            *self._by_canonical.get(norm, []),
+            *self._by_alias.get(norm, []),
+        ]
+        for exact in exact_entries:
+            if id(exact) not in seen:
+                seen[id(exact)] = exact
+        if exact_entries:
+            trace.append(
+                {
+                    "step": "exact",
+                    "matched": list(dict.fromkeys(e.canonical_name for e in exact_entries)),
+                    "candidate_count": len(seen),
+                }
+            )
 
         # Role-aware suffix tolerance (e.g. village-suffix normalization).
         alt = self.normalize_mention(mention)
         if alt and alt != mention:
             alt_norm = _normalize(alt)
-            alt_entry = self._by_canonical.get(alt_norm) or self._by_alias.get(alt_norm)
-            if alt_entry is not None and alt_entry.canonical_name not in seen:
-                seen[alt_entry.canonical_name] = alt_entry
-                trace.append({"step": "suffix_exact", "matched": alt_entry.canonical_name})
+            alt_entries = [
+                *self._by_canonical.get(alt_norm, []),
+                *self._by_alias.get(alt_norm, []),
+            ]
+            added = 0
+            for alt_entry in alt_entries:
+                if id(alt_entry) not in seen:
+                    seen[id(alt_entry)] = alt_entry
+                    added += 1
+            if added:
+                trace.append(
+                    {
+                        "step": "suffix_exact",
+                        "matched": list(dict.fromkeys(e.canonical_name for e in alt_entries)),
+                        "candidate_count": added,
+                    }
+                )
 
-        for key, entry in self._by_canonical.items():
-            if entry.canonical_name in seen:
-                continue
+        for key, entries in self._by_canonical.items():
             if norm and norm in key:
-                seen[entry.canonical_name] = entry
-                trace.append({"step": "substring", "matched": entry.canonical_name})
+                for entry in entries:
+                    seen[id(entry)] = entry
+                trace.append({"step": "substring", "matched": [e.canonical_name for e in entries]})
             elif norm and key and key in norm:
                 # Forward substring: a long mention such as
                 # '金田河沿线农业发展区' contains the entity '金田河'.
-                seen[entry.canonical_name] = entry
-                trace.append({"step": "mention_contains_entity", "matched": entry.canonical_name})
+                for entry in entries:
+                    seen[id(entry)] = entry
+                trace.append(
+                    {
+                        "step": "mention_contains_entity",
+                        "matched": [e.canonical_name for e in entries],
+                    }
+                )
 
-        for key, entry in self._by_alias.items():
-            if entry.canonical_name in seen:
-                continue
+        for key, entries in self._by_alias.items():
             if norm and norm in key:
-                seen[entry.canonical_name] = entry
-                trace.append({"step": "alias_substring", "matched": entry.canonical_name})
+                for entry in entries:
+                    seen[id(entry)] = entry
+                trace.append({"step": "alias_substring", "matched": [e.canonical_name for e in entries]})
             elif norm and key and key in norm:
-                seen[entry.canonical_name] = entry
-                trace.append({"step": "alias_contains_entity", "matched": entry.canonical_name})
+                for entry in entries:
+                    seen[id(entry)] = entry
+                trace.append(
+                    {
+                        "step": "alias_contains_entity",
+                        "matched": [e.canonical_name for e in entries],
+                    }
+                )
 
         for entry in seen.values():
             evidence = score_candidate(mention, entry, role=role, hints=hints, context=self.context)
@@ -794,7 +918,18 @@ class PlaceEvidenceIndex:
             unresolved_reason = "no candidate matched the mention"
         else:
             top = candidates[0]
-            if top.score >= _RESOLVED_THRESHOLD:
+            source_geometry_keys = {
+                self._authoritative_geometry_key(candidate.geometry_ref)
+                for candidate in candidates
+            }
+            source_geometry_keys.discard(None)
+            if len(source_geometry_keys) > 1:
+                # A generic mention cannot select one of several source
+                # geometries.  Explicit source IDs (handled upstream) are
+                # required to turn this into an exact feature.
+                status = "ambiguous"
+                unresolved_reason = "multiple source geometries for the same mention"
+            elif top.score >= _RESOLVED_THRESHOLD:
                 if _candidate_has_spatial(top):
                     status = "resolved"
                     selected_entity_ref = top.entity_ref

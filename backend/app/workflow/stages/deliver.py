@@ -12,7 +12,7 @@ from typing import Any, Dict
 from app.domain.delivery.aggregate import deliver_aggregate
 from app.domain.delivery.delivery_renderer import render_delivery_artifacts
 from app.domain.delivery.delivery_snapshot_builder import build_spatial_delivery_products
-from app.domain.delivery.gate import evaluate_deliver_gate
+from app.domain.delivery.gate import evaluate_deliver_gate, summarize_planning_output
 from app.contracts.artifacts.deferral_contracts import DeferralLedger
 from app.contracts.workflow.execution_plan_contracts import ExecutionPlan, ExecutionResult
 from app.contracts.spatial.parcel_change_contracts import ParcelChangeSet
@@ -30,6 +30,124 @@ from app.workflow.stages.support import (
 )
 
 
+def _artifact_digest(state: Dict[str, Any], key: str) -> str:
+    ref = (state.get("artifact_refs") or {}).get(key)
+    if not isinstance(ref, dict):
+        return ""
+    return str(ref.get("digest") or ref.get("descriptor_digest") or "")
+
+
+def _spatial_yield(
+    state: Dict[str, Any],
+    *,
+    program: Any = None,
+    projection: Any = None,
+    grounding: Any = None,
+    selection: Any = None,
+    execution_plan: Any = None,
+    execution_result: Any = None,
+    planned_state: Any = None,
+    render_layers: list[dict[str, Any]] | None = None,
+    planning_output: dict[str, Any] | None = None,
+) -> list[dict[str, Any]]:
+    """Record the spatial yield at every immutable stage boundary.
+
+    Counts are diagnostics only; the stage artifacts remain authoritative.
+    In particular, the delivery count is computed from the exact render input
+    after baseline layers have been excluded by ``summarize_planning_output``.
+    """
+    graph = getattr(projection, "intent_graph", None)
+    graph_nodes = (
+        graph.get("nodes", []) if isinstance(graph, dict)
+        else getattr(graph, "nodes", None) or []
+    )
+    target_count = len(getattr(program, "interventions", None) or [])
+    if graph is not None:
+        target_count = len(graph_nodes) or target_count
+    candidate_count = len(getattr(grounding, "candidates", None) or [])
+    selected_count = len(getattr(selection, "target_assignments", None) or [])
+    active_tasks = len(getattr(execution_plan, "worker_tasks", None) or [])
+    deferred_tasks = len(getattr(execution_plan, "deferred_tasks", None) or [])
+    task_results = list(getattr(execution_result, "task_results", None) or [])
+    succeeded_tasks = sum(
+        str(getattr(result, "status", "")) == "succeeded" for result in task_results
+    )
+    planned_feature_count = sum(
+        len(getattr(planned_state, field, None) or [])
+        for field in ("parcels", "zones", "overlays", "facilities", "roads", "axes")
+    )
+    render_output = planning_output or summarize_planning_output(render_layers or [])
+    return [
+        {
+            "stage": "PlanningProgram",
+            "input_count": 1 if program is not None else 0,
+            "output_count": target_count,
+            "deferred_count": len(getattr(program, "evidence_gaps", None) or []) if program is not None else 0,
+            "non_baseline_feature_count": 0,
+            "artifact_digest": _artifact_digest(state, "planning_program"),
+        },
+        {
+            "stage": "TargetProjection",
+            "input_count": target_count,
+            "output_count": len(graph_nodes) if graph is not None else 0,
+            "deferred_count": len(getattr(projection, "diagnostics", None) or []) if projection is not None else 0,
+            "non_baseline_feature_count": 0,
+            "artifact_digest": _artifact_digest(state, "target_projection"),
+        },
+        {
+            "stage": "Grounding",
+            "input_count": target_count,
+            "output_count": candidate_count,
+            "deferred_count": len(getattr(grounding, "unresolved", None) or []) if grounding is not None else 0,
+            "non_baseline_feature_count": 0,
+            "artifact_digest": _artifact_digest(state, "grounding_result"),
+        },
+        {
+            "stage": "Selection",
+            "input_count": candidate_count,
+            "output_count": selected_count,
+            "deferred_count": sum(
+                str(getattr(item, "status", "")) == "deferred"
+                for item in (getattr(selection, "target_assignments", None) or [])
+            ),
+            "non_baseline_feature_count": 0,
+            "artifact_digest": _artifact_digest(state, "site_selection"),
+        },
+        {
+            "stage": "Execution",
+            "input_count": active_tasks + deferred_tasks,
+            "output_count": succeeded_tasks,
+            "deferred_count": deferred_tasks,
+            "non_baseline_feature_count": 0,
+            "artifact_digest": _artifact_digest(state, "execution_result"),
+        },
+        {
+            "stage": "PlannedState",
+            "input_count": succeeded_tasks,
+            "output_count": planned_feature_count,
+            "deferred_count": deferred_tasks,
+            "non_baseline_feature_count": planned_feature_count,
+            "artifact_digest": _artifact_digest(state, "planned_state"),
+        },
+        {
+            "stage": "DeliverySnapshot",
+            "input_count": planned_feature_count,
+            "output_count": sum(render_output.get("layer_feature_counts", {}).values()),
+            "deferred_count": 0,
+            "non_baseline_feature_count": int(render_output.get("non_baseline_feature_count") or 0),
+            "artifact_digest": _artifact_digest(state, "delivery_spatial_snapshot"),
+        },
+        {
+            "stage": "RenderLayers",
+            "input_count": len(render_layers or []),
+            "output_count": sum(render_output.get("layer_feature_counts", {}).values()),
+            "deferred_count": 0,
+            "non_baseline_feature_count": int(render_output.get("non_baseline_feature_count") or 0),
+            "artifact_digest": _artifact_digest(state, "render_layers"),
+        },
+    ]
+
+
 async def deliver_node(state: Dict[str, Any]) -> Dict[str, Any]:
     """Build, validate, render, export, and persist delivery products."""
 
@@ -44,9 +162,28 @@ async def deliver_node(state: Dict[str, Any]) -> Dict[str, Any]:
         planned_state = _load_embedded_artifact(state, execution_result.planned_state_ref, PlannedState)
         changeset = _load_embedded_artifact(state, execution_result.parcel_changeset_ref, ParcelChangeSet)
     validation_report = _load_ref_artifact(state, "validation_report", ValidationReport)
+    from app.domain.validation.relation_validation import FinalScenarioValidation
+
+    final_relation_validation = _load_ref_artifact(
+        state,
+        "final_relation_validation",
+        FinalScenarioValidation,
+    )
+    scenario_required = bool(
+        (state.get("artifact_refs") or {}).get("planning_scenario")
+    )
     reconciliation_report = _load_ref_artifact(state, "reconciliation_report", ReconciliationReport)
     execution_plan = _load_ref_artifact(state, "execution_plan", ExecutionPlan)
     deferral_ledger = _load_ref_artifact(state, "deferral_ledger", DeferralLedger)
+    from app.contracts.domain.l3_contracts import PlanningProgram
+    from app.contracts.domain.selection_contracts import SiteSelectionDecision
+    from app.contracts.spatial.grounding_contracts import GroundingResult
+    from app.contracts.workflow.parse_result_contracts import IntentCompilationResult
+
+    program = _load_ref_artifact(state, "planning_program", PlanningProgram)
+    projection = _load_ref_artifact(state, "target_projection", IntentCompilationResult)
+    grounding = _load_ref_artifact(state, "grounding_result", GroundingResult)
+    selection = _load_ref_artifact(state, "site_selection", SiteSelectionDecision)
 
     ledger_ref = None
     if execution_plan is not None:
@@ -93,6 +230,13 @@ async def deliver_node(state: Dict[str, Any]) -> Dict[str, Any]:
         for task in (getattr(execution_plan, "worker_tasks", None) or [])
         if str(getattr(task, "expected_output_kind", "")) != "action"
     )
+    # DELIVER owns the authoritative spatial snapshot even for a partial
+    # execution.  When SELECT deferred every spatial target, the snapshot is
+    # still needed to render the real current GIS state and to make the
+    # deferred/planned distinction auditable.  Skipping this build based on
+    # worker-task count used to create a valid CAS ref whose JSON payload was
+    # null, contradicting the required DeliverySpatialSnapshot contract.
+    from app.domain.delivery.delivery_snapshot_builder import SpatialDeliveryProducts
     products = (
         build_spatial_delivery_products(
             session_id=str(state.get("session_id") or ""),
@@ -102,9 +246,14 @@ async def deliver_node(state: Dict[str, Any]) -> Dict[str, Any]:
             planned_state=planned_state,
             validation_result=validation_result,
         )
-        if expected_spatial_output_count > 0
-        else None
+        if workspace is not None
+        else SpatialDeliveryProducts(error="DELIVER requires a SpatialWorkspace")
     )
+    if products.snapshot is None:
+        raise RuntimeError(
+            "DELIVER could not build DeliverySpatialSnapshot: "
+            f"{products.error or 'unknown spatial snapshot error'}"
+        )
     delivery_snapshot = products.snapshot if products else None
     delivery_snapshot_error = products.error if products else ""
     render_result = products.render_layers if products else []
@@ -133,6 +282,19 @@ async def deliver_node(state: Dict[str, Any]) -> Dict[str, Any]:
             f"invalid={quality.get('invalid_geometry_count', 0)}, "
             f"placeholder={quality.get('placeholder_geometry_count', 0)}"
         )
+    planning_output = summarize_planning_output(render_result, delivery_snapshot)
+    spatial_yield = _spatial_yield(
+        state,
+        program=program,
+        projection=projection,
+        grounding=grounding,
+        selection=selection,
+        execution_plan=execution_plan,
+        execution_result=execution_result,
+        planned_state=planned_state,
+        render_layers=render_result,
+        planning_output=planning_output,
+    )
     manifest = deliver_aggregate(
         planned_state,
         validation_report,
@@ -148,6 +310,54 @@ async def deliver_node(state: Dict[str, Any]) -> Dict[str, Any]:
         render_layer_count=len(render_result),
         render_error=render_error,
     )
+    diagnostic_summary = dict(manifest.diagnostic_summary or {})
+    relation_source = final_relation_validation or validation_report
+    relation_rows = list(
+        getattr(relation_source, "satisfactions", None)
+        or getattr(relation_source, "relation_satisfactions", None)
+        or []
+    ) if relation_source is not None else []
+    final_relation_passed = (
+        bool(getattr(final_relation_validation, "passed", False))
+        if final_relation_validation is not None
+        else not scenario_required
+    )
+    hard_relation_failures = [
+        str(getattr(item, "relation_id", "") or "")
+        for item in relation_rows
+        if str(getattr(item, "criticality", "") or "") == "hard"
+        and str(getattr(item, "status", "") or "") != "satisfied"
+    ]
+    if scenario_required and final_relation_validation is None:
+        hard_relation_failures.append("final_relation_validation_missing")
+    diagnostic_summary.update({
+        "planning_output": planning_output,
+        "spatial_yield": spatial_yield,
+        "scenario": {
+            "scenario_id": str(getattr(execution_result, "scenario_id", "") or ""),
+            "scenario_ref": str(getattr(execution_result, "scenario_ref", "") or ""),
+            "execution_trace_refs": list(
+                getattr(execution_result, "execution_trace_refs", None) or []
+            ) if execution_result is not None else [],
+            "relation_validation_count": len(relation_rows),
+            "hard_relation_failures": sorted(item for item in hard_relation_failures if item),
+            "final_relation_validation_passed": final_relation_passed,
+        },
+    })
+    if (
+        planning_output["status"] == "no_planning_output"
+        or hard_relation_failures
+        or not final_relation_passed
+    ):
+        # The current/complete-planned baseline layers are still useful for a
+        # diagnostic map, but must never be advertised as a complete plan.
+        manifest = manifest.model_copy(update={
+            "delivery_status": "partial",
+            "statutory_complete": False,
+            "diagnostic_summary": diagnostic_summary,
+        })
+    else:
+        manifest = manifest.model_copy(update={"diagnostic_summary": diagnostic_summary})
     gate = evaluate_deliver_gate(
         manifest,
         input_artifact_refs=state.get("artifact_refs") or {},
@@ -177,6 +387,8 @@ async def deliver_node(state: Dict[str, Any]) -> Dict[str, Any]:
         **completion,
         "delivery_status": manifest.delivery_status,
         "render_quality": render_artifacts.get("quality", {}),
+        "planning_output": planning_output,
+        "spatial_yield": spatial_yield,
         "deferral_summary": manifest.deferral_summary,
         "diagnostic_terminal": (
             {

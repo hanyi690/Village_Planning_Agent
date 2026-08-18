@@ -176,7 +176,17 @@ def pack_workflow_patch(state: dict[str, Any], patch: dict[str, Any]) -> Workflo
     runtime = materialize_workflow_state(state)
     for key, value in patch.items():
         runtime[key] = _merge_value(key, runtime.get(key), value)
-    return {**_control_projection(runtime), "runtime": _carrier(runtime)}
+    projection = _control_projection(runtime)
+    # ``None`` is a meaningful clear operation for reducer channels such as
+    # ``layer_just_completed``.  The normal projection omits inherited
+    # ``None`` values so stage-local data stays compact, but that omission is
+    # wrong when the current node explicitly cleared a stale checkpoint
+    # value.  Re-emit explicit reducer writes, including ``None``, so the
+    # LangGraph reducer can actually apply the clear.
+    for key in _REDUCER_KEYS:
+        if key in patch and key not in projection:
+            projection[key] = runtime.get(key)
+    return {**projection, "runtime": _carrier(runtime)}
 
 
 def _adapt_command(state: dict[str, Any], command: Command) -> Command:
@@ -213,7 +223,17 @@ def adapt_node(node: Callable[..., Any], *, worker: bool = False) -> Callable[..
             runtime = materialize_workflow_state(state)
             for key, value in result.items():
                 runtime[key] = _merge_value(key, runtime.get(key), value)
-            return _control_projection(runtime)
+            projection = _control_projection(runtime)
+            # Do not let an inherited empty failure channel become a worker
+            # write.  In a Send fan-in, the failure reducer treats an explicit
+            # empty list as a clear operation; projecting the parent value
+            # from every successful worker can therefore erase a real failure
+            # emitted by a sibling worker in the same super-step.  Only a
+            # worker that explicitly returned the channel may update it.
+            for key in ("provider_failures", "dimension_failures"):
+                if key not in result:
+                    projection.pop(key, None)
+            return projection
         return pack_workflow_patch(state, result)
 
     return wrapped

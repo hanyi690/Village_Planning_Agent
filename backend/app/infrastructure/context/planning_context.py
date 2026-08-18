@@ -74,6 +74,7 @@ class PlanningContext:
     location_facts: List[Any] = field(default_factory=list)
     evidence_index: Any = None
     evidence_index_key: str = ""
+    grounded_bindings: List[Any] = field(default_factory=list)
     ports: PlanningPorts = field(default_factory=PlanningPorts)
     content_hash: str = ""
     capabilities: Dict[str, bool] = field(default_factory=dict)
@@ -122,6 +123,21 @@ class PlanningContext:
 
     def snapshot_meta(self) -> Dict[str, Any]:
         """Serializable metadata for logs / step reports (no geometry)."""
+        snapshot = self.data_snapshot
+        source_manifest = []
+        if snapshot is not None:
+            source_manifest = [
+                {
+                    "key": item.key,
+                    "feature_count": item.feature_count,
+                    "source_uris": list(item.source_uris),
+                    "source_feature_ids": list(item.source_feature_ids),
+                    "source_feature_count": item.source_feature_count,
+                    "source_feature_digest": item.source_feature_digest,
+                }
+                for item in snapshot.collections
+                if item.source_feature_count or item.source_feature_digest
+            ]
         return {
             "session_id": self.session_id,
             "village_name": self.village_name,
@@ -136,7 +152,11 @@ class PlanningContext:
             "evidence_index_key": self.evidence_index_key,
             "report_count": len(self.reports),
             "location_fact_count": len(self.location_facts),
+            "grounded_binding_count": len(self.grounded_bindings),
             "l1_snapshot_ref": self.l1_snapshot_ref,
+            "data_snapshot_id": snapshot.snapshot_id if snapshot is not None else "",
+            "data_snapshot_digest": snapshot.digest if snapshot is not None else "",
+            "source_feature_manifest": source_manifest,
             "content_hash": self.content_hash,
             "capabilities": dict(self.capabilities),
             "required_capabilities_missing": list(self.required_capabilities_missing),

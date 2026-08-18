@@ -191,12 +191,29 @@ def _make_router(
                 graph=Command.PARENT,
                 goto="end_diagnostic",
             )
-        return _map_route_result(
+        command = _map_route_result(
             result,
             source_segment=source_segment,
             internal_nodes=internal_nodes,
             cross_map=cross_map,
         )
+        if command.graph == Command.PARENT:
+            # A compiled subgraph does not reliably expose the final child
+            # channel write when it exits through Command(PARENT).  Carry the
+            # current immutable refs explicitly so the parent checkpoint keeps
+            # DELIVER products (and any earlier stage outputs) after a normal
+            # or diagnostic terminal exit.
+            update = dict(command.update or {})
+            refs = state.get("artifact_refs") or {}
+            if refs:
+                update["artifact_refs"] = dict(refs)
+            return Command(
+                graph=command.graph,
+                update=update,
+                resume=command.resume,
+                goto=command.goto,
+            )
+        return command
 
     return router
 
@@ -321,10 +338,18 @@ def _build_cognitive(checkpointer) -> StateGraph:
     #    真实节点完成。
     builder.add_node(
         "layer_completion_check",
-        rg.adapt_node(layer_completion_check, worker=True),
+        # This is the deferred serial barrier after Send fan-out, not another
+        # worker.  Keep the full patch/runtime channel so the following
+        # aggregate can checkpoint the completed layer and its gate refs.
+        rg.adapt_node(layer_completion_check),
         defer=True,
     )
-    builder.add_node("layer_aggregate", rg.adapt_node(layer_aggregate_node, worker=True))
+    # The aggregate is a single serial reducer after the deferred completion
+    # barrier.  It is not a Send worker: marking it as worker=True projects
+    # only the control view and can leave layer_just_completed/artifact refs
+    # stranded in the pre-aggregate checkpoint, preventing the next layer
+    # from being scheduled after an interrupt/resume.
+    builder.add_node("layer_aggregate", rg.adapt_node(layer_aggregate_node))
     builder.add_node(
         "advance_phase",
         rg.adapt_node(lambda state: _remap_command(rg._authorized_advance_phase(state), _COGNITIVE_INTERNAL)),

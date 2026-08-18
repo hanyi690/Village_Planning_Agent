@@ -1,5 +1,6 @@
 """Main planning graph factory. Migrated from agent/graph.py per docs/architecture/agent-graph.md §5."""
 
+import asyncio
 from typing import Any, Callable, Dict, List
 from langgraph.graph import StateGraph, END, START
 from langchain_core.messages import HumanMessage
@@ -149,8 +150,48 @@ except ImportError:
 
 
 async def _audited_dimension_worker(worker, state: Dict[str, Any]) -> Dict[str, Any]:
-    """Preserve provider failures as a merge-safe parallel event channel."""
-    patch = await worker(state)
+    """Bound a worker before fan-in and preserve failures as events.
+
+    ``layer_completion_check`` is downstream of the Send fan-in, so a
+    deadline checked there cannot cancel a still-running worker.  This
+    boundary converts a hard timeout into the same merge-safe provider
+    failure channel as a timeout caught inside the legacy worker.
+    """
+    dimension = str(state.get("dimension_key") or "unknown").strip()
+    try:
+        from app.core.settings import DIMENSION_EXECUTION_TIMEOUT_S, DIMENSION_TIMEOUT_S
+
+        configured = DIMENSION_TIMEOUT_S.get(dimension)
+        timeout = (
+            float(configured)
+            if configured is not None
+            else float(DIMENSION_EXECUTION_TIMEOUT_S)
+        )
+    except (TypeError, ValueError, ImportError):
+        timeout = 600.0
+    timeout = max(1.0, timeout)
+    try:
+        patch = await asyncio.wait_for(worker(state), timeout=timeout)
+    except asyncio.TimeoutError:
+        from app.infrastructure.llm.dimension_runtime import dimension_failure_attempt
+
+        phase = str(state.get("phase") or "layer1")
+        layer = phase.removeprefix("layer") or phase
+        logger.error(
+            "[dimension_worker] hard timeout: dimension=%s phase=%s timeout=%.1fs",
+            dimension,
+            phase,
+            timeout,
+        )
+        return {
+            "dimension_retry_counts": dimension_failure_attempt(state, dimension),
+            "provider_failures": [{
+                "stage": f"L{layer}",
+                "dimension": dimension,
+                "code": "llm_stream_timeout",
+                "message": f"dimension worker exceeded hard timeout ({timeout}s)",
+            }],
+        }
     if isinstance(patch, dict) and isinstance(patch.get("fatal_error"), dict):
         patch = dict(patch)
         patch["provider_failures"] = [dict(patch["fatal_error"])]
@@ -841,6 +882,31 @@ async def prepare_human_review(state: Dict[str, Any]) -> Dict[str, Any]:
             ]
             break
     if not items:
+        # Transient provider failures must take precedence over the generic
+        # dependency-deadlock diagnostic.  The resume handler uses this item
+        # to retry only the failed dimensions from the checkpoint.
+        failures = state.get("provider_failures") or []
+        failure = next(
+            (
+                item for item in failures
+                if isinstance(item, dict)
+                and item.get("code") in _TRANSIENT_PROVIDER_CODES
+            ),
+            None,
+        )
+        if failure:
+            paused_stage = str(failure.get("stage") or state.get("phase") or "layer3").lower()
+            if paused_stage.startswith("layer"):
+                paused_stage = paused_stage.replace("layer", "l")
+            items = [{
+                "request_id": f"{paused_stage}-provider-failure",
+                "stage": paused_stage,
+                "request_type": "transient_llm_failure",
+                "context": dict(failure),
+            }]
+            gate_patch["fatal_error"] = dict(failure)
+
+    if not items:
         # A layer can reach this branch when dependency scheduling has no
         # ready node but the layer is still incomplete. Do not let that
         # structural deadlock disappear as an unexplained END; expose the
@@ -874,20 +940,6 @@ async def prepare_human_review(state: Dict[str, Any]) -> Dict[str, Any]:
                     "pending_requests": items,
                 }))
 
-    if not items:
-        failures = state.get("provider_failures") or []
-        failure = failures[0] if failures and isinstance(failures[0], dict) else None
-        if failure:
-            paused_stage = str(failure.get("stage") or state.get("phase") or "layer3").lower()
-            if paused_stage.startswith("layer"):
-                paused_stage = paused_stage.replace("layer", "l")
-            items = [{
-                "request_id": f"{paused_stage}-provider-failure",
-                "stage": paused_stage,
-                "request_type": "transient_llm_failure",
-                "context": dict(failure),
-            }]
-            gate_patch["fatal_error"] = dict(failure)
     generation = int(state.get("human_review_generation") or 0)
     if state.get("human_review_resume_consumed") and state.get("human_review_event_id"):
         generation += 1
@@ -1095,18 +1147,38 @@ async def _apply_select_auto_deferral(state: Dict[str, Any]) -> Dict[str, Any]:
     partial instead of terminating on non-deferred blockers.
     """
     from app.contracts.domain.selection_contracts import SiteSelectionDecision
+    from app.contracts.planning.scenario import PlanningScenario
     from app.infrastructure.artifacts.runtime import load_artifact
 
     # Authoritative source: the typed SiteSelectionDecision records every
     # unplaced assignment.  Prefer it over the gate's pending_requests, which
     # are empty by the time the approve node runs.
     decision = load_artifact(state, "site_selection", SiteSelectionDecision)
-    target_ids = sorted({
-        str(assignment.target_id)
-        for assignment in (getattr(decision, "target_assignments", None) or [])
-        if str(getattr(assignment, "status", "") or "") == "unplaced"
-        and str(getattr(assignment, "target_id", "") or "").strip()
-    })
+    scenario = load_artifact(state, "planning_scenario", PlanningScenario)
+    selected_target_ids = {
+        str(target_id).strip()
+        for target_id in (getattr(scenario, "selected_candidate_ids", None) or {})
+        if str(target_id).strip()
+    }
+    assignments = list(getattr(decision, "target_assignments", None) or []) if decision else []
+    if selected_target_ids:
+        # The relation-aware ScenarioSolver is authoritative for the active
+        # subset.  Do not infer deferrals from a legacy allocator status: a
+        # replay can carry stale ``unplaced`` flags even when the scenario has
+        # selected a valid candidate for that target.
+        target_ids = sorted({
+            str(assignment.target_id)
+            for assignment in assignments
+            if str(assignment.target_id or "").strip()
+            and str(assignment.target_id) not in selected_target_ids
+        })
+    else:
+        target_ids = sorted({
+            str(assignment.target_id)
+            for assignment in assignments
+            if str(getattr(assignment, "status", "") or "") == "unplaced"
+            and str(getattr(assignment, "target_id", "") or "").strip()
+        })
     if not target_ids:
         try:
             gate = load_root_gate(state, "select")
@@ -1204,7 +1276,36 @@ async def apply_human_review_decision(state: Dict[str, Any]) -> Dict[str, Any]:
         result["provider_failures"] = []
         return result
 
-    if action in ("accept", "approve", "retry"):
+    provider_failure_dimensions = _provider_failure_dimensions(state, items)
+    if provider_failure_dimensions and action in ("accept", "approve"):
+        # Approval is not a transport retry.  Never erase a provider failure
+        # merely because a generic HITL approve arrived; the operator must
+        # choose retry explicitly or accept a diagnostic terminal.
+        result.update({
+            "delivery_status": "diagnostic_only",
+            "diagnostic_terminal": {
+                "stage": str(state.get("phase") or paused_stage or "layer1"),
+                "reason": "provider_retry_requires_explicit_retry",
+                "dimensions": provider_failure_dimensions,
+            },
+        })
+        return result
+
+    if provider_failure_dimensions and action == "reject":
+        # Rejecting a provider retry is an explicit terminal decision.  Do not
+        # send the graph back to conversation with the interrupt already
+        # cleared; that leaves a non-terminal checkpoint with no pending task.
+        result.update({
+            "delivery_status": "diagnostic_only",
+            "diagnostic_terminal": {
+                "stage": str(state.get("phase") or paused_stage or "layer1"),
+                "reason": "provider_retry_rejected",
+                "dimensions": provider_failure_dimensions,
+            },
+        })
+        return result
+
+    if action == "retry":
         provider_patch = _provider_resume_patch(state, items)
         if provider_patch is not None:
             result.update(provider_patch)

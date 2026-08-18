@@ -16,6 +16,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import os
 import re
 import threading
 import time
@@ -28,16 +29,32 @@ from app.infrastructure.logging import get_logger
 
 logger = get_logger(__name__)
 
-# Provider failures are session-scoped circuit-breaker events.  A LangGraph
-# layer fans out several dimensions concurrently; once the provider rejects
-# one request, later waves must not keep spending requests on the same outage.
+_PROVIDER_QUOTA_MARKERS = (
+    "gousagelimiterror",
+    "weekly usage limit",
+    "quota exceeded",
+    "insufficient balance",
+)
+
+
+def is_provider_quota_exhausted(exc: BaseException) -> bool:
+    """Return true when retrying cannot change the provider quota state."""
+    message = str(exc or "").lower()
+    return any(marker in message for marker in _PROVIDER_QUOTA_MARKERS)
+
+# Provider failures are session-scoped circuit-breaker events. A LangGraph
+# layer fans out several dimensions concurrently; consecutive transport
+# failures open the circuit so a sustained outage does not spend the whole
+# layer budget, while one transient 5xx can recover on the next call.
 _PROVIDER_FAILURE_LOCK = threading.Lock()
+_PROVIDER_FAILURE_COUNTS: dict[str, int] = {}
 _PROVIDER_FAILURE_SESSIONS: set[str] = set()
 
 
 def reset_provider_failure(session_id: str) -> None:
     if session_id:
         with _PROVIDER_FAILURE_LOCK:
+            _PROVIDER_FAILURE_COUNTS.pop(session_id, None)
             _PROVIDER_FAILURE_SESSIONS.discard(session_id)
 
 
@@ -51,7 +68,32 @@ def provider_failure_open(session_id: str) -> bool:
 def trip_provider_failure(session_id: str) -> None:
     if session_id:
         with _PROVIDER_FAILURE_LOCK:
-            _PROVIDER_FAILURE_SESSIONS.add(session_id)
+            count = _PROVIDER_FAILURE_COUNTS.get(session_id, 0) + 1
+            _PROVIDER_FAILURE_COUNTS[session_id] = count
+            try:
+                threshold = max(1, int(os.getenv("LLM_PROVIDER_CIRCUIT_FAILURE_THRESHOLD", "3")))
+            except (TypeError, ValueError):
+                threshold = 3
+            if count >= threshold:
+                _PROVIDER_FAILURE_SESSIONS.add(session_id)
+
+
+def is_provider_failure(exc: BaseException) -> bool:
+    """Return whether an exception is transport/provider infrastructure failure.
+
+    Instructor schema validation and max-token truncation are contract defects,
+    not evidence that the upstream service is unavailable. Only transport,
+    HTTP API, and asyncio timeout errors should advance the circuit breaker.
+    """
+    if isinstance(exc, asyncio.TimeoutError):
+        return True
+    try:
+        import httpx
+        from openai import APIError
+
+        return isinstance(exc, (APIError, httpx.HTTPError))
+    except ImportError:
+        return False
 
 
 def dimension_failure_attempt(state: dict[str, Any], dimension_key: str) -> dict[str, int]:
@@ -124,7 +166,7 @@ class DependencyError(Exception):
     pass
 
 
-async def run_rag(dimension_key: str, cfg: Any, state: Dict[str, Any]) -> tuple[str, Any | None]:
+async def _legacy_run_rag(dimension_key: str, cfg: Any, state: Dict[str, Any]) -> tuple[str, Any | None]:
     """Run RAG retrieval for a dimension. Returns (context_str, RAGRetrievalLog|None).
 
     Re-reads live config from the checkpoint so PATCH updates to
@@ -330,6 +372,48 @@ async def run_rag(dimension_key: str, cfg: Any, state: Dict[str, Any]) -> tuple[
             context_length=0, context_truncated=False, rag_enabled=False, skip_reason=str(e),
         )
         return ("", rlog)
+
+
+async def run_rag(dimension_key: str, cfg: Any, state: Dict[str, Any]) -> tuple[str, Any | None]:
+    """Compatibility adapter to the unified Explore evidence service.
+
+    The historical vector-RAG implementation remains available only as the
+    ``rag`` retriever adapter.  Dimension workers call this one entry point;
+    they must not append a second ``retrieve_evidence`` section themselves.
+    """
+    from app.contracts.evidence.evidence_contracts import ExplorationRequest
+    from app.evidence.retrieval.evidence_service import (
+        render_evidence_prompt_section,
+        retrieve_evidence,
+    )
+
+    session_id = str(state.get("session_id", "") or "")
+    request = ExplorationRequest(
+        run_id=f"{session_id}:{dimension_key}:adapter",
+        request_type="spatial_lookup",
+        query=str(getattr(cfg, "name", dimension_key) or dimension_key),
+        stage=f"L{getattr(cfg, 'layer', 3)}",
+        dimension_key=dimension_key,
+        query_purpose="context_injection",
+        entity_scope=["parcels", "facilities", "roads", "annotations"],
+        context_refs=["source:rag"],
+    )
+    result = await retrieve_evidence(
+        request,
+        session_id=session_id,
+        village_name=str((state.get("config", {}) or {}).get("village_name", "") or ""),
+    )
+    rag_log = None
+    try:
+        from app.evidence.retrieval.retrievers.rag_retriever import consume_rag_log
+
+        rag_log = consume_rag_log(session_id, dimension_key)
+    except Exception:
+        rag_log = None
+    return render_evidence_prompt_section(
+        result.evidence_bundle,
+        result.spatial_cognition,
+    ), rag_log
 
 
 async def load_dependency_reports(
@@ -658,6 +742,7 @@ __all__ = [
     "RetrievedChunk",
     "RAGRetrievalLog",
     "DependencyError",
+    "is_provider_quota_exhausted",
     "run_rag",
     "load_dependency_reports",
     "load_layered_dependency_reports",

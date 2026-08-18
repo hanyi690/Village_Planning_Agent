@@ -28,7 +28,7 @@ def compare_intent_to_layout(intent: Any, layout_configs: List[Dict[str, Any]]) 
             differences.append({"check": "zone_area", "name": name, "target_ha": target, "actual_ha": actual})
     consistent["zone_actual"] = zone_actual
 
-    projects = list(getattr(intent, "project_targets", None) or [])
+    projects = list(getattr(intent, "site_area_targets", None) or [])
     placed = 0
     for cfg in layout_configs:
         if (cfg.get("layerType") or cfg.get("layer_type")) in {"planned_project", "project_point"}:

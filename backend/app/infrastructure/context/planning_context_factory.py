@@ -120,6 +120,7 @@ async def build_planning_context(
     refresh: bool = False,
     include_reports: bool = True,
     version: int | None = None,
+    expected_snapshot_digest: str | None = None,
 ) -> PlanningContext:
     """Build (and cache) the authoritative PlanningContext for a session.
 
@@ -138,18 +139,50 @@ async def build_planning_context(
     if not refresh:
         cached = get_cached_context(session_id)
         if cached is not None:
-            return cached
+            cached_version_matches = (
+                version is None or str(getattr(cached, "version", "")) == str(version)
+            )
+            cached_snapshot = getattr(cached, "data_snapshot", None)
+            cached_snapshot_matches = (
+                not expected_snapshot_digest
+                or str(getattr(cached_snapshot, "digest", ""))
+                == str(expected_snapshot_digest)
+            )
+            if cached_version_matches and cached_snapshot_matches:
+                return cached
+            logger.info(
+                "[PlanningContext] invalidating cached context for %s "
+                "(version=%s/%s snapshot=%s/%s)",
+                session_id,
+                getattr(cached, "version", ""),
+                version,
+                getattr(cached_snapshot, "digest", ""),
+                expected_snapshot_digest,
+            )
 
     from app.application.sessions.session_bundle import build_session_bundle
     from app.infrastructure.kg.session_kg import ensure_session_kg
 
     version = version if version is not None else await _next_persisted_version(session_id)
 
-    # 1. Bundle (cached by session_bundle; village_name resolved there)
+    # 1. Bundle.  During checkpoint replay, prefer the persisted bundle that
+    # produced the checkpoint.  Rebuilding from the live catalog can reorder
+    # synthetic legacy features or otherwise produce a different snapshot
+    # digest even when the authoritative source files are unchanged.  The
+    # expected digest is still checked below, so this remains fail-closed.
     bundle = None
     bundle_error: Optional[str] = None
     try:
-        bundle = await build_session_bundle(session_id, village_name or None)
+        if expected_snapshot_digest:
+            from app.application.sessions.session_bundle import (
+                invalidate_session_bundle,
+                restore_session_bundle,
+            )
+
+            invalidate_session_bundle(session_id)
+            bundle = await restore_session_bundle(session_id)
+        if bundle is None:
+            bundle = await build_session_bundle(session_id, village_name or None)
     except Exception as e:
         bundle_error = str(e)
         logger.warning("[PlanningContext] bundle build failed: %s", e)
@@ -192,7 +225,12 @@ async def build_planning_context(
                 # any checkpoint replay; otherwise the same thread sees a
                 # different gazetteer after process restart.
                 memory = _load_session_semantic_memory(session_id)
-                gazetteer = build_gazetteer(kg, bundle, memory=memory)
+                gazetteer = build_gazetteer(
+                    kg,
+                    bundle,
+                    memory=memory,
+                    village_name=resolved_village,
+                )
         except Exception as e:
             logger.warning("[PlanningContext] gazetteer build failed: %s", e)
 
@@ -283,6 +321,11 @@ async def build_planning_context(
         session_id=session_id,
         source="data_catalog",
     )
+    if expected_snapshot_digest and data_snapshot.digest != expected_snapshot_digest:
+        raise ContextBuildError(
+            "context snapshot digest mismatch: "
+            f"expected={expected_snapshot_digest} actual={data_snapshot.digest}"
+        )
     workspace = SpatialWorkspace(data_snapshot, bundle)
     context = PlanningContext(
         session_id=session_id,

@@ -193,19 +193,31 @@ async def _llm_confirm(
     llm: Any,
     mention: NameMention,
     candidates: List[Dict[str, Any]],
+    *,
+    budget: Optional[Dict[str, Any]] = None,
 ) -> Optional[int]:
     """Ask the flash model to pick a candidate for an ambiguous mention.
 
     Returns the chosen candidate index or None (model unavailable / no pick).
     """
-    if llm is None:
-        try:
-            from app.infrastructure.llm.factory import create_flash_llm
+    from app.spatial.grounding.call_budget import (
+        reserve_ground_llm_call,
+        run_ground_llm_call,
+    )
 
-            llm = create_flash_llm(max_tokens=300, temperature=0.1)
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("[name-backfill] flash LLM unavailable: %s", exc)
-            return None
+    call_timeout = reserve_ground_llm_call(budget)
+    if call_timeout is None:
+        logger.info(
+            "[name-backfill] grounding LLM budget exhausted; keeping mention unresolved: %s",
+            mention.name,
+        )
+        return None
+    if llm is None:
+        logger.info(
+            "[name-backfill] no LLM supplied; leaving ambiguous name unresolved: %s",
+            mention.name,
+        )
+        return None
     lines = "\n".join(
         f"{i}. 类型={c['role']} 现名={c['current_name']!r} "
         f"BSM={c['bsm'] or '无'} 质心={c['centroid'] or '无'}"
@@ -216,10 +228,12 @@ async def _llm_confirm(
         f"下列是该区域候选 KG 实体，请选择最匹配的一个（只输出编号，无匹配输出 0）：\n{lines}"
     )
     try:
-        if asyncio.iscoroutinefunction(getattr(llm, "ainvoke", None)):
-            response = await llm.ainvoke(prompt)
-        else:
-            response = await asyncio.to_thread(llm.invoke, prompt)
+        async def _invoke():
+            if asyncio.iscoroutinefunction(getattr(llm, "ainvoke", None)):
+                return await llm.ainvoke(prompt)
+            return await asyncio.to_thread(llm.invoke, prompt)
+
+        response = await run_ground_llm_call(budget, call_timeout, _invoke)
     except Exception as exc:  # noqa: BLE001
         logger.warning("[name-backfill] LLM confirm failed: %s", exc)
         return None
@@ -240,6 +254,7 @@ async def backfill_kg_names(
     *,
     llm: Any = None,
     cache_path: Optional[Path] = None,
+    budget: Optional[Dict[str, Any]] = None,
 ) -> BackfillResult:
     """Match real names to nameless KG entities and write them back.
 
@@ -255,6 +270,7 @@ async def backfill_kg_names(
             logger.warning("[name-backfill] cache load failed: %s", exc)
 
     result = BackfillResult()
+    pending: List[tuple[int, NameMention, List[Dict[str, Any]], str]] = []
     for mention in mentions:
         key = hashlib.sha256(
             json.dumps(
@@ -278,11 +294,11 @@ async def backfill_kg_names(
                     None,
                 )
             if chosen is None:
-                index = await _llm_confirm(llm, mention, candidates)
-                if index is not None:
-                    chosen = candidates[index]
+                pending.append((len(pending), mention, candidates, key))
         if chosen is None:
-            result.unresolved.append(mention.name)
+            if len(candidates) <= 1:
+                result.unresolved.append(mention.name)
+                continue
             continue
         _write_name(kg, chosen["entity_uri"], mention.name)
         cache[key] = chosen["entity_uri"]
@@ -294,6 +310,29 @@ async def backfill_kg_names(
             "source_dimension": mention.source_dimension,
             "evidence": chosen.get("evidence", []),
         })
+
+    if pending:
+        decisions = await asyncio.gather(*(
+            _llm_confirm(llm, mention, candidates, budget=budget)
+            for _, mention, candidates, _ in pending
+        ))
+        # Commit in mention order.  Calls may run concurrently, but KG writes
+        # and cache updates stay deterministic and avoid shared-graph races.
+        for (_, mention, candidates, key), index in zip(pending, decisions):
+            chosen = candidates[index] if index is not None else None
+            if chosen is None:
+                result.unresolved.append(mention.name)
+                continue
+            _write_name(kg, chosen["entity_uri"], mention.name)
+            cache[key] = chosen["entity_uri"]
+            result.applied += 1
+            result.decisions.append({
+                "name": mention.name,
+                "role": mention.role,
+                "entity_uri": chosen["entity_uri"],
+                "source_dimension": mention.source_dimension,
+                "evidence": chosen.get("evidence", []),
+            })
 
     if cache_path is not None:
         try:

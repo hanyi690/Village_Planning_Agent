@@ -13,6 +13,7 @@ from app.contracts.evidence.evidence_contracts import ExplorationRequest
 
 
 class RetrieverKind(StrEnum):
+    RAG = "rag"
     REPORT = "report"
     KG = "kg"
     BUNDLE = "bundle"

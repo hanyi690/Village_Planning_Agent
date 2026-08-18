@@ -30,7 +30,8 @@ ARTIFACT_KEYS = (
     "layout_configs", "render_layers", "delivery_spatial_snapshot", "deferral_ledger",
     "export_result", "render_artifacts", "execution_diagnostics", "kg_layer1",
     "repair_directives", "repair_impact", "global_zone_allocation",
-    "global_site_allocation", "grounded_anchors",
+    "planning_scenario", "final_relation_validation",
+    "global_site_allocation", "grounded_anchors", "l1_observations", "l1_bindings",
 )
 
 
@@ -84,6 +85,45 @@ def _descriptor(ref: Any, key: str) -> ArtifactDescriptor:
         raise ArtifactReplayError(f"artifact {key} is not an ArtifactDescriptor") from exc
 
 
+def validate_artifact_refs_branch(state: dict[str, Any]) -> str:
+    """Fail closed when a checkpoint carries refs from mixed branches.
+
+    A checkpoint cursor and its artifact refs form one immutable replay input.
+    Copying blobs into a new branch is safe only after every referenced
+    descriptor has been proven to belong to the cursor's run and branch.
+    """
+
+    run_id = str(state.get("run_id") or state.get("session_id") or "")
+    expected_branch = str(state.get("branch_id") or "main")
+    refs = dict(state.get("artifact_refs") or {})
+    branches: dict[str, str] = {}
+    for key, raw_ref in refs.items():
+        ref = _descriptor(raw_ref, str(key))
+        if run_id and ref.run_id != run_id:
+            raise ArtifactReplayError(
+                f"artifact {key} belongs to a different run"
+            )
+        branch = str(ref.branch_id or "").strip()
+        if not branch:
+            raise ArtifactReplayError(
+                f"artifact {key} has no branch identity"
+            )
+        branches[str(key)] = branch
+
+    unique_branches = sorted(set(branches.values()))
+    if unique_branches and (
+        len(unique_branches) != 1 or unique_branches[0] != expected_branch
+    ):
+        details = ", ".join(
+            f"{key}={branch}" for key, branch in sorted(branches.items())
+        )
+        raise ArtifactReplayError(
+            "artifact refs span branches: "
+            f"state={expected_branch!r}; refs={details}"
+        )
+    return expected_branch
+
+
 def context_ref_for(state: dict[str, Any]) -> dict[str, Any]:
     """Return the stable context reference carried by a workflow state."""
     ref = state.get("context_ref")
@@ -107,7 +147,12 @@ def store_artifact(
         raise ArtifactReplayError("artifact state uses an unsupported schema version")
     context = context_ref_for(state)
     current_refs = dict(state.get("artifact_refs") or {})
+    validate_artifact_refs_branch(state)
     branch_id = str(state.get("branch_id") or "main")
+    if payload is None:
+        raise ArtifactReplayError(
+            f"artifact {key} cannot persist a null payload"
+        )
     payload_json = _jsonable(payload)
     parent_digests = _parent_digests(current_refs, exclude_key=key)
     repository = _repository(base_dir)
@@ -188,8 +233,18 @@ def load_artifact(
         raise ArtifactReplayError(f"artifact {key} has no schema identity")
     repository = _repository(base_dir)
     payload = repository.get_json(ref)
+    if payload is None:
+        raise ArtifactReplayError(
+            f"artifact {key} contains a null payload"
+        )
     if model is not None:
-        return model(**payload)
+        try:
+            return model.model_validate(payload)
+        except ValidationError:
+            # JSON artifacts encode datetimes and other standard scalar
+            # values as strings.  Preserve strict validation first, then use
+            # Pydantic's explicit non-strict coercion for durable replay.
+            return model.model_validate(payload, strict=False)
     return payload
 
 
@@ -206,6 +261,8 @@ def load_artifact_descriptor(
     if ref.run_id != run_id or ref.branch_id != str(state.get("branch_id") or "main"):
         raise ArtifactReplayError("embedded child artifact belongs to a different run or branch")
     payload = _repository(base_dir).get_json(ref)
+    if payload is None:
+        raise ArtifactReplayError("embedded child artifact contains a null payload")
     if model is not None:
         return model(**payload)
     return payload
@@ -221,6 +278,7 @@ def fork_artifact_refs(
     branch = str(branch_id or "").strip()
     if not branch:
         raise ValueError("branch_id is required for an artifact fork")
+    validate_artifact_refs_branch(state)
     run_id = state.get("run_id") or state.get("session_id", "")
     refs = dict(state.get("artifact_refs") or {})
     repository = _repository(base_dir)

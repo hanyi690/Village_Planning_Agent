@@ -73,17 +73,31 @@ def _dimension_idle_timeout(dimension_key: Any) -> float | None:
         return None
 
 
-def _send_worker(worker: str, payload: Dict[str, Any]) -> Send:
-    """Build a dimension-worker Send with an optional per-dispatch timeout.
+def _dimension_run_timeout() -> float:
+    """Return the shared hard wall-clock budget for one worker Send."""
+    try:
+        from app.core.settings import DIMENSION_EXECUTION_TIMEOUT_S
 
-    Official LangGraph API: ``Send(node, arg, timeout=TimeoutPolicy(...))``.
-    When no per-dimension timeout is configured the Send is byte-for-byte the
-    previous ``Send(worker, payload)``, so default behavior is unchanged.
+        return max(1.0, float(DIMENSION_EXECUTION_TIMEOUT_S))
+    except (TypeError, ValueError, ImportError):
+        return 600.0
+
+
+def _send_worker(worker: str, payload: Dict[str, Any]) -> Send:
+    """Build a dimension-worker Send with an official task timeout.
+
+    The per-dimension value is an idle timeout when configured.  The shared
+    execution budget is always a hard run timeout, so an empty
+    ``DIMENSION_TIMEOUT_S`` can no longer leave a Send without an official
+    cancellation boundary.  The audited worker wrapper remains responsible
+    for converting a timeout into a merge-safe provider failure patch.
     """
-    timeout = _dimension_idle_timeout(payload.get("dimension_key"))
-    if timeout is None:
-        return Send(worker, payload)
-    return Send(worker, payload, timeout=TimeoutPolicy(idle_timeout=timeout))
+    idle_timeout = _dimension_idle_timeout(payload.get("dimension_key"))
+    timeout = TimeoutPolicy(
+        run_timeout=_dimension_run_timeout(),
+        idle_timeout=idle_timeout,
+    )
+    return Send(worker, payload, timeout=timeout)
 
 def revision_dispatch_node(state: Dict[str, Any]) -> Command:
     """Dispatch only the first pending wave of an explicit revision plan."""
@@ -126,9 +140,36 @@ def provider_resume_dispatch_node(state: Dict[str, Any]) -> Command:
         logger.warning("[provider_resume_dispatch] empty dimension list")
         return Command(update={"provider_resume_dimensions": []}, goto=END)
     worker = _worker_for_phase(state.get("phase", "layer3"))
+    from app.config.loader import list_dimensions
+
+    phase = str(state.get("phase") or "layer1")
+    try:
+        layer = int(phase.removeprefix("layer"))
+    except ValueError:
+        layer = 1
+    configs = {item.key: item for item in list_dimensions(layer)}
+    completed = set(
+        (state.get("completed_dimensions") or {}).get(f"layer{layer}", [])
+    )
+    pending = set(dimensions)
+    ready = [
+        dimension
+        for dimension in dimensions
+        if all(
+            dependency not in pending and dependency in completed
+            for dependency in (getattr(configs.get(dimension), "depends_on", []) or [])
+        )
+    ]
+    blocked = [dimension for dimension in dimensions if dimension not in ready]
+    if not ready:
+        raise RuntimeError(
+            "provider resume dependency deadlock: "
+            f"phase={phase} dimensions={dimensions} completed={sorted(completed)}"
+        )
     logger.info(
-        "[provider_resume_dispatch] dimensions=%s worker=%s",
-        dimensions,
+        "[provider_resume_dispatch] dimensions=%s blocked=%s worker=%s",
+        ready,
+        blocked,
         worker,
     )
     # Carry the quality feedback so a retried dimension is re-prompted with
@@ -141,7 +182,7 @@ def provider_resume_dispatch_node(state: Dict[str, Any]) -> Command:
         if isinstance(item, dict)
     }
     sends = []
-    for dimension in dimensions:
+    for dimension in ready:
         payload = _dispatch_state(
             state,
             dimension_key=dimension,
@@ -158,7 +199,7 @@ def provider_resume_dispatch_node(state: Dict[str, Any]) -> Command:
             payload["quality_feedback"] = feedback
         sends.append(_send_worker(worker, payload))
     return Command(
-        update={"provider_resume_dimensions": []},
+        update={"provider_resume_dimensions": blocked},
         goto=sends,
     )
 

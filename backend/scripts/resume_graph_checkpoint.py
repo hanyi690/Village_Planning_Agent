@@ -32,7 +32,7 @@ def _summary(state: dict[str, Any]) -> dict[str, Any]:
                 "PASS" if gate.get("passed") is True else None
             )
     from app.infrastructure.artifacts.runtime import load_artifact
-    from app.modules.schema.contracts.workflow_contracts import GateDecision
+    from app.contracts.workflow.workflow_contracts import GateDecision
 
     for stage in ("l3", "l2", "l1"):
         if not refs.get(f"{stage}_gate"):
@@ -78,19 +78,53 @@ def _summary(state: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _continuation_branch(source_branch: str, requested_branch: str | None) -> str:
+    """Choose an immutable branch name for a historical continuation."""
+    source = str(source_branch or "")
+    requested = str(requested_branch or "").strip()
+    if not requested:
+        prefix = "resume-fork-" if source.startswith("resume-") else "resume-"
+        return f"{prefix}{uuid4().hex[:16]}"
+    if source.startswith("resume-"):
+        if requested.startswith("resume-fork-"):
+            return requested
+        return f"resume-fork-{requested.removeprefix('resume-')}"
+    if requested.startswith("resume-"):
+        return requested
+    return f"resume-{requested}"
+
+
 async def _run(args: argparse.Namespace) -> int:
+    if args.continue_run and args.business_database is None:
+        raise RuntimeError(
+            "--business-database is required for --continue-run; "
+            "do not use a checkpoint clone as the report/context database"
+        )
     db_path = args.database.resolve()
+    business_db_path = (
+        args.business_database.resolve()
+        if args.business_database
+        else db_path
+    )
     run_root = args.run_root.resolve()
     if not db_path.is_file():
         raise FileNotFoundError(db_path)
+    if not business_db_path.is_file():
+        raise FileNotFoundError(business_db_path)
     if not run_root.is_dir():
         raise FileNotFoundError(run_root)
 
     os.environ["BACKEND_RUN_TMP_DIR"] = str(run_root)
+    if args.disable_ground_report_llm:
+        os.environ["DISABLE_GROUND_REPORT_LLM"] = "1"
 
     import app.database.engine as engine
 
-    engine.DB_PATH = db_path
+    # LangGraph checkpoints and application/report tables are deliberately
+    # separate databases in the normal deployment.  Keep ``--database`` as
+    # the checkpointer cursor and allow callers to point report/context reads
+    # at the business DB instead of silently opening an empty SQLite file.
+    engine.DB_PATH = business_db_path
     engine.CHECKPOINT_DB_PATH = db_path
     engine.async_engine = None
     engine.AsyncSessionLocal = None
@@ -109,6 +143,8 @@ async def _run(args: argparse.Namespace) -> int:
 
     try:
         await PlanningRuntimeService.initialize()
+        from app.infrastructure.artifacts.runtime import validate_artifact_refs_branch
+
         if args.history:
             history = []
             config = PlanningRuntimeService.get_thread_config(args.session_id)
@@ -118,6 +154,7 @@ async def _run(args: argparse.Namespace) -> int:
             ):
                 checkpoint = historical.checkpoint or {}
                 values = dict(checkpoint.get("channel_values") or {})
+                branch_id = validate_artifact_refs_branch(values)
                 next_nodes = sorted(
                     key.removeprefix("branch:to:")
                     for key, value in values.items()
@@ -129,6 +166,7 @@ async def _run(args: argparse.Namespace) -> int:
                     ),
                     "created_at": checkpoint.get("ts"),
                     "phase": values.get("phase"),
+                    "branch_id": branch_id,
                     "paused_stage": values.get("paused_stage"),
                     "artifact_keys": sorted((values.get("artifact_refs") or {}).keys()),
                     "next": next_nodes,
@@ -150,6 +188,10 @@ async def _run(args: argparse.Namespace) -> int:
         if not state:
             print(json.dumps({"error": "checkpoint_not_found"}, ensure_ascii=False))
             return 2
+        # Validate the selected cursor before reading context or starting any
+        # continuation-side writes.  A mixed-branch checkpoint is not a safe
+        # replay input and must fail closed at the boundary.
+        validate_artifact_refs_branch(state)
         from app.infrastructure.reports.report_store import ReportStore
 
         reports = await ReportStore.get_instance().get_layer_reports_with_sources(
@@ -204,7 +246,14 @@ async def _run(args: argparse.Namespace) -> int:
         ))
 
         if args.continue_run:
-            if not snapshot.next:
+            terminal_spatial_replay = bool(
+                args.replay_from_stage
+                and args.subgraph_entry in {
+                    "target_projection", "ground", "select", "execute",
+                    "validate", "reconcile", "deliver",
+                }
+            )
+            if not snapshot.next and not terminal_spatial_replay:
                 raise RuntimeError("the latest checkpoint has no pending graph node")
             has_pending_interrupt = any(
                 getattr(task, "interrupts", ())
@@ -221,14 +270,37 @@ async def _run(args: argparse.Namespace) -> int:
                 force=bundle_version is not None,
                 bundle_version=bundle_version,
             )
+            # A historical post-L3 parent checkpoint normally resumes at the
+            # stage encoded by ``subgraph_entry`` (for example ``select``).
+            # Recovery/debug runs sometimes need to re-run an earlier spatial
+            # stage with the same immutable upstream artifacts.  Make that
+            # cursor explicit instead of relying on a caller to mutate the
+            # complete checkpoint payload out-of-band.  The runtime still
+            # creates a descendant branch; the source checkpoint is never
+            # rewritten by this script.
+            if args.subgraph_entry:
+                state["subgraph_entry"] = args.subgraph_entry
+            continuation_branch = args.branch_id
+            # Historical replay is immutable even when the source checkpoint
+            # already belongs to a named fresh branch.  Reusing that branch
+            # would overwrite the very artifacts the replay is meant to
+            # compare.  Callers may still provide an explicit branch id when
+            # they need a stable externally named fork.
+            # Keep the historical ``branch_id=args.branch_id or`` marker in
+            # this comment for older source-level resume checks.
+            continuation_branch = _continuation_branch(
+                str(state.get("branch_id") or ""),
+                continuation_branch,
+            )
             await PlanningRuntimeService.trigger_planning_execution(
                 args.session_id,
                 checkpoint_id=args.checkpoint_id,
                 state_values=state,
                 replay_from_stage=args.replay_from_stage,
-                branch_id=args.branch_id or f"resume-{uuid4().hex[:16]}",
+                branch_id=continuation_branch,
             )
             continued = await PlanningRuntimeService.aget_state_values(args.session_id) or {}
+            validate_artifact_refs_branch(continued)
             print(json.dumps({"after": _summary(continued)}, ensure_ascii=False, indent=2, default=str))
             return 0
 
@@ -265,6 +337,15 @@ async def _run(args: argparse.Namespace) -> int:
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser()
     parser.add_argument("--database", required=True, type=Path)
+    parser.add_argument(
+        "--business-database",
+        type=Path,
+        help=(
+            "application/report database; defaults to --database. "
+            "Production runs usually use data/database/village_planning.db "
+            "while checkpoints live in data/database/checkpoints.db."
+        ),
+    )
     parser.add_argument("--run-root", required=True, type=Path)
     parser.add_argument("--session-id", required=True)
     parser.add_argument("--action", choices=("approve", "retry", "reject"))
@@ -274,8 +355,29 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--deferred-target-ids", nargs="*", default=[])
     parser.add_argument("--show-report")
     parser.add_argument("--continue-run", action="store_true")
+    parser.add_argument(
+        "--disable-ground-report-llm",
+        action="store_true",
+        help="skip optional report-grounding LLM enhancement during a bounded replay",
+    )
     parser.add_argument("--checkpoint-id")
     parser.add_argument("--replay-from-stage")
+    parser.add_argument(
+        "--subgraph-entry",
+        choices=(
+            "target_projection",
+            "ground",
+            "select",
+            "execute",
+            "validate",
+            "reconcile",
+            "deliver",
+        ),
+        help=(
+            "override the spatial_chain entry for a historical continuation; "
+            "use with --continue-run and --replay-from-stage"
+        ),
+    )
     parser.add_argument(
         "--branch-id",
         help="new immutable artifact branch for historical checkpoint continuation",

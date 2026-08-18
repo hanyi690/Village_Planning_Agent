@@ -13,8 +13,10 @@ on resume, so aggregates must run in a different node to avoid double-execution.
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any, Dict
 
+from app.core.settings import GROUND_ANCHOR_TIMEOUT_S
 from app.infrastructure.logging import get_logger
 
 logger = get_logger(__name__)
@@ -109,8 +111,42 @@ async def layer_aggregate_node(state: Dict[str, Any]) -> Dict[str, Any]:
         try:
             from app.domain.ground import ground_anchors
 
-            anchor_patch = await ground_anchors({**aggregate_state, **patch})
-            patch = {**patch, **anchor_patch}
+            # Grounding enriches the frozen L1 snapshot but must not hold the
+            # cognitive graph forever.  It contains optional flash-LLM
+            # village/water mapping calls; bound the whole enrichment phase,
+            # not only individual provider requests, so the next layer can
+            # still run and the spatial chain can surface the missing anchor
+            # evidence as an auditable gate.
+            ground_timeout = max(1.0, float(GROUND_ANCHOR_TIMEOUT_S))
+            anchor_patch = await asyncio.wait_for(
+                ground_anchors({**aggregate_state, **patch}),
+                timeout=ground_timeout,
+            )
+            # ``artifact_refs`` is a reducer channel.  Grounding adds one
+            # descriptor after L1 aggregation; a shallow dict overlay would
+            # discard the already-persisted l1_snapshot/l1_gate refs and make
+            # the next gate route look like a dimension deadlock.
+            patch = {
+                **patch,
+                **anchor_patch,
+                "artifact_refs": {
+                    **dict(patch.get("artifact_refs") or {}),
+                    **dict(anchor_patch.get("artifact_refs") or {}),
+                },
+            }
+        except asyncio.TimeoutError:
+            logger.error(
+                "[layer_aggregate] ground_anchors timed out after %ss; "
+                "continuing to L2 with an explicit enrichment gap",
+                ground_timeout,
+            )
+            patch.setdefault("dimension_failures", []).append({
+                "stage": "L1",
+                "dimension": "ground_anchors",
+                "code": "ground_anchor_timeout",
+                "message": f"ground_anchors timed out after {ground_timeout}s",
+            })
+            patch["ground_anchor_deferred"] = True
         except Exception as exc:  # noqa: BLE001 - 接地失败不阻塞 L2，但记录
             logger.warning("[layer_aggregate] ground_anchors failed: %s", exc)
         return patch

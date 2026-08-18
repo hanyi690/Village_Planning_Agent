@@ -1,7 +1,7 @@
 """
 Unified LLM Factory for Village Planning Agent
 
-Supports OpenAI (including DeepSeek) and ZhipuAI (GLM) providers.
+Supports OpenAI (including DeepSeek), ZhipuAI (GLM), MiniMax, and OpenCode Go.
 Provider is determined by LLM_PROVIDER environment variable or explicit parameter.
 Includes automatic LangSmith tracing support.
 """
@@ -15,18 +15,76 @@ from app.infrastructure.logging import get_logger
 
 logger = get_logger(__name__)
 
-# Global LLM semaphore (lazy init)
+
+def _provider_http_clients() -> dict[str, Any]:
+    """Build the bounded official OpenAI transports used by ChatOpenAI.
+
+    LangChain accepts separate sync and async clients.  Reusing the same
+    transport policy as Instructor keeps connection limits, pool timeout, and
+    provider retry boundaries consistent across both call paths.
+    """
+    from app.infrastructure.llm.instructor_client import _http_client
+
+    return {
+        "http_client": _http_client(async_client=False),
+        "http_async_client": _http_client(async_client=True),
+    }
+
+# Global LLM semaphore (lazy init).
+#
+# LangGraph's ``max_concurrency`` limits graph task scheduling, but it is not
+# an HTTP boundary guarantee for every Send/resume path.  The structured
+# client therefore uses this single provider-call gate as the authoritative
+# in-flight request budget.  Keep the gate loop-local because test runners and
+# application reloads can create more than one asyncio event loop.
 _llm_semaphore: Optional[asyncio.Semaphore] = None
-_semaphore_lock = asyncio.Lock()
+_llm_semaphore_loop: Optional[asyncio.AbstractEventLoop] = None
+_llm_semaphore_budget: Optional[int] = None
+_scoped_llm_semaphores: dict[tuple[asyncio.AbstractEventLoop, str, int], asyncio.Semaphore] = {}
 
 
-async def get_llm_semaphore(max_concurrent: int = 20) -> asyncio.Semaphore:
-    global _llm_semaphore
-    if _llm_semaphore is None:
-        async with _semaphore_lock:
-            if _llm_semaphore is None:
-                _llm_semaphore = asyncio.Semaphore(max_concurrent)
-                logger.info(f"[LLM] Global semaphore created: max_concurrent={max_concurrent}")
+async def get_llm_semaphore(
+    max_concurrent: Optional[int] = None,
+    *,
+    scope: str = "default",
+) -> asyncio.Semaphore:
+    """Return the loop-local provider-call semaphore.
+
+    The function intentionally has no await before initialization.  A single
+    event-loop turn cannot interleave, so this avoids a second asyncio lock
+    whose ownership can become invalid after a loop replacement.  If the
+    configured budget changes, a new gate is created for subsequent calls;
+    already-running calls retain the old gate until they finish.
+    """
+    loop = asyncio.get_running_loop()
+    if max_concurrent is None:
+        from app.core.settings import LLM_MAX_CONCURRENT
+
+        max_concurrent = LLM_MAX_CONCURRENT
+    budget = max(1, int(max_concurrent))
+    if scope != "default":
+        key = (loop, str(scope), budget)
+        semaphore = _scoped_llm_semaphores.get(key)
+        if semaphore is None:
+            semaphore = asyncio.Semaphore(budget)
+            _scoped_llm_semaphores[key] = semaphore
+            logger.info(
+                "[LLM] Scoped provider-call semaphore created: scope=%s max_concurrent=%d",
+                scope,
+                budget,
+            )
+        return semaphore
+
+    global _llm_semaphore, _llm_semaphore_loop, _llm_semaphore_budget
+    if (
+        _llm_semaphore is None
+        or _llm_semaphore_loop is not loop
+        or _llm_semaphore_budget != budget
+    ):
+        _llm_semaphore = asyncio.Semaphore(budget)
+        _llm_semaphore_loop = loop
+        _llm_semaphore_budget = budget
+        logger.info("[LLM] Provider-call semaphore created: max_concurrent=%d", budget)
     return _llm_semaphore
 
 
@@ -35,6 +93,7 @@ class LLMProvider(Enum):
     OPENAI = "openai"
     ZHIPUAI = "zhipuai"
     MINIMAX = "minimax"
+    OPENCODE_GO = "opencode-go"
 
 
 def get_provider(explicit_provider: Optional[str] = None) -> LLMProvider:
@@ -51,6 +110,8 @@ def get_provider(explicit_provider: Optional[str] = None) -> LLMProvider:
         return LLMProvider.ZHIPUAI
     elif provider_name in ("minimax", "minimaxai", "mini-max"):
         return LLMProvider.MINIMAX
+    elif provider_name in ("opencode-go", "opencode_go", "opencodego"):
+        return LLMProvider.OPENCODE_GO
     else:
         logger.warning(f"Unknown provider '{provider_name}', falling back to OpenAI")
         return LLMProvider.OPENAI
@@ -67,6 +128,11 @@ def get_api_key(provider: LLMProvider) -> str:
         key = os.getenv("MINIMAX_API_KEY")
         if not key:
             raise ValueError("MINIMAX_API_KEY not found in environment.")
+        return key
+    elif provider == LLMProvider.OPENCODE_GO:
+        key = os.getenv("OPENCODE_GO_API_KEY")
+        if not key:
+            raise ValueError("OPENCODE_GO_API_KEY not found in environment.")
         return key
     else:
         key = os.getenv("OPENAI_API_KEY")
@@ -115,7 +181,9 @@ def _create_openai_llm(
     if OPENAI_API_BASE:
         kwargs['base_url'] = OPENAI_API_BASE
     kwargs.setdefault('request_timeout', LLM_REQUEST_TIMEOUT)
-    kwargs.setdefault('max_retries', max(0, int(os.getenv('LLM_PROVIDER_MAX_RETRIES', '1'))))
+    kwargs.setdefault('max_retries', max(0, int(os.getenv('LLM_PROVIDER_MAX_RETRIES', '0'))))
+    for key, value in _provider_http_clients().items():
+        kwargs.setdefault(key, value)
 
     all_callbacks = _merge_callbacks(callbacks)
     if all_callbacks:
@@ -233,7 +301,9 @@ def _create_minimax_llm(
     effective_temperature = min(1.0, max(0.01, float(temperature)))
     kwargs["base_url"] = MINIMAX_API_BASE
     kwargs.setdefault("request_timeout", LLM_REQUEST_TIMEOUT)
-    kwargs.setdefault("max_retries", max(0, int(os.getenv("LLM_PROVIDER_MAX_RETRIES", "1"))))
+    kwargs.setdefault("max_retries", max(0, int(os.getenv("LLM_PROVIDER_MAX_RETRIES", "0"))))
+    for key, value in _provider_http_clients().items():
+        kwargs.setdefault(key, value)
 
     all_callbacks = _merge_callbacks(callbacks)
     if all_callbacks:
@@ -260,6 +330,56 @@ def _create_minimax_llm(
     )
 
 
+def _create_opencode_go_llm(
+    model: str,
+    temperature: float = 0.7,
+    max_tokens: int = 2000,
+    callbacks: Optional[List[Any]] = None,
+    metadata: Optional[Dict[str, Any]] = None,
+    streaming: bool = False,
+    **kwargs,
+) -> Any:
+    """Create an OpenCode Go LLM through its OpenAI-compatible endpoint."""
+    try:
+        from langchain_openai import ChatOpenAI
+    except ImportError:
+        from langchain_community.chat_models import ChatOpenAI
+
+    from app.core.settings import OPENCODE_GO_API_BASE, LLM_REQUEST_TIMEOUT
+
+    api_key = get_api_key(LLMProvider.OPENCODE_GO)
+    kwargs["base_url"] = OPENCODE_GO_API_BASE
+    kwargs.setdefault("request_timeout", LLM_REQUEST_TIMEOUT)
+    kwargs.setdefault("max_retries", max(0, int(os.getenv("LLM_PROVIDER_MAX_RETRIES", "0"))))
+    # langchain-openai otherwise injects a socket-options transport that
+    # disables httpx proxy auto-detection.  OpenCode Go is reached through the
+    # deployment proxy in this environment, so keep the plain proxy-aware
+    # httpx clients supplied below.
+    kwargs.setdefault("http_socket_options", ())
+    for key, value in _provider_http_clients().items():
+        kwargs.setdefault(key, value)
+
+    all_callbacks = _merge_callbacks(callbacks)
+    if all_callbacks:
+        kwargs["callbacks"] = all_callbacks
+    if metadata:
+        kwargs["metadata"] = metadata
+
+    # OpenCode Go exposes the standard OpenAI Chat Completions contract.
+    # Accept the fully-qualified OpenCode config form as a convenience, but
+    # send only the provider's model id to the API.
+    model_id = model.removeprefix("opencode-go/")
+
+    return ChatOpenAI(
+        model=model_id,
+        temperature=temperature,
+        max_tokens=max_tokens,
+        api_key=api_key,
+        streaming=streaming,
+        **kwargs,
+    )
+
+
 def create_llm(
     model: Optional[str] = None,
     temperature: float = 0.7,
@@ -274,6 +394,7 @@ def create_llm(
     from app.core.settings import (
         LLM_MODEL,
         MINIMAX_MODEL,
+        OPENCODE_GO_MODEL,
         LANGCHAIN_TRACING_V2,
         LANGCHAIN_PROJECT,
     )
@@ -287,7 +408,12 @@ def create_llm(
     if selected_provider == LLMProvider.MINIMAX:
         max_tokens = min(int(max_tokens), 8192)
     if model is None:
-        model = MINIMAX_MODEL if selected_provider == LLMProvider.MINIMAX else LLM_MODEL
+        if selected_provider == LLMProvider.MINIMAX:
+            model = MINIMAX_MODEL
+        elif selected_provider == LLMProvider.OPENCODE_GO:
+            model = OPENCODE_GO_MODEL
+        else:
+            model = LLM_MODEL
 
     if LANGCHAIN_TRACING_V2:
         logger.debug(f"[LLM Factory] LangSmith tracing enabled (project: {LANGCHAIN_PROJECT})")
@@ -301,6 +427,11 @@ def create_llm(
         )
     elif selected_provider == LLMProvider.MINIMAX:
         return _create_minimax_llm(
+            model=model, temperature=temperature, max_tokens=max_tokens,
+            callbacks=callbacks, metadata=metadata, streaming=streaming, **kwargs
+        )
+    elif selected_provider == LLMProvider.OPENCODE_GO:
+        return _create_opencode_go_llm(
             model=model, temperature=temperature, max_tokens=max_tokens,
             callbacks=callbacks, metadata=metadata, streaming=streaming, **kwargs
         )
@@ -365,6 +496,23 @@ def get_minimax_llm(
     )
 
 
+def get_opencode_go_llm(
+    model: Optional[str] = None,
+    temperature: float = 0.7,
+    max_tokens: int = 2000,
+    callbacks: Optional[List[Any]] = None,
+    metadata: Optional[Dict[str, Any]] = None,
+    **kwargs,
+) -> Any:
+    """Get an OpenCode Go LLM explicitly."""
+    from app.core.settings import OPENCODE_GO_MODEL
+
+    return _create_opencode_go_llm(
+        model or OPENCODE_GO_MODEL, temperature, max_tokens,
+        callbacks=callbacks, metadata=metadata, **kwargs
+    )
+
+
 def create_flash_llm(
     model: Optional[str] = None,
     temperature: Optional[float] = None,
@@ -377,7 +525,7 @@ def create_flash_llm(
     # Flash callers historically supplied provider-specific model names. When
     # the active provider is MiniMax, route through the same provider-aware
     # factory and let its configured default model be selected.
-    if get_provider() == LLMProvider.MINIMAX:
+    if get_provider() in (LLMProvider.MINIMAX, LLMProvider.OPENCODE_GO):
         # Flash tasks are lightweight discriminators/extractors (unit mapping,
         # anchor picking, mention extraction).  MiniMax-M2.x thinking cannot be
         # turned off, and this langchain-openai version forwards model_kwargs
@@ -443,5 +591,6 @@ __all__ = [
     "get_openai_llm",
     "get_zhipuai_llm",
     "get_minimax_llm",
+    "get_opencode_go_llm",
     "create_flash_llm",
 ]

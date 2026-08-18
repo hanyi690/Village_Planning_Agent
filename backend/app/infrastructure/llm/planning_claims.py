@@ -16,10 +16,9 @@ from typing import Any
 
 from pydantic import ValidationError
 
-from app.infrastructure.llm.factory import create_llm
-from app.core.settings import MAX_TOKENS
-from app.core.settings import LLM_STREAM_TIMEOUT
+from app.core.settings import LLM_MAX_CONCURRENT, LLM_STREAM_TIMEOUT
 from app.domain.program.claim_draft import L3DimensionOutput
+from app.infrastructure.llm.structured import run_structured_output
 
 
 class PlanningClaimGenerator:
@@ -27,20 +26,16 @@ class PlanningClaimGenerator:
 
     def __init__(self) -> None:
         self._llm: Any | None = None
-        self._lock = threading.Lock()
-        self._slots = threading.BoundedSemaphore(
-            max(1, int(os.getenv("L3_LLM_MAX_CONCURRENT", "3")))
+        self._max_concurrent = max(
+            1,
+            int(os.getenv("L3_LLM_MAX_CONCURRENT", str(LLM_MAX_CONCURRENT))),
+        )
+        self._slots = asyncio.Semaphore(
+            self._max_concurrent
         )
 
-    def _get_llm(self) -> Any:
-        if self._llm is None:
-            with self._lock:
-                if self._llm is None:
-                    self._llm = create_llm(
-                        temperature=0.1,
-                        max_tokens=MAX_TOKENS,
-                        streaming=False,
-                    )
+    def _get_llm(self) -> Any | None:
+        """Return an injected adapter when tests or a controlled caller provide one."""
         return self._llm
 
     async def generate(
@@ -51,13 +46,12 @@ class PlanningClaimGenerator:
     ) -> L3DimensionOutput:
         """Call the provider and return the dual-response report + claims."""
 
-        await asyncio.to_thread(self._slots.acquire)
+        # Bound semaphore queueing as well as the provider request. LangGraph
+        # dispatches dimensions concurrently; waiting behind the local slot
+        # must not create an unbounded hidden retry/latency queue.
+        await asyncio.wait_for(self._slots.acquire(), timeout=LLM_STREAM_TIMEOUT)
         try:
-            structured = self._get_llm().with_structured_output(
-                L3DimensionOutput,
-                method="function_calling",
-            )
-            retry_count = max(0, int(os.getenv("L3_PROVIDER_PARSE_RETRIES", "2")))
+            retry_count = max(0, int(os.getenv("L3_PROVIDER_PARSE_RETRIES", "0")))
             last_error: Exception | None = None
             for attempt in range(retry_count + 1):
                 try:
@@ -75,8 +69,9 @@ class PlanningClaimGenerator:
                             "Correct the exact validation errors below; do not invent enum values:\n"
                             + str(last_error)[:6000]
                         )
-                    result = await asyncio.wait_for(
-                        structured.ainvoke([
+                    result = await run_structured_output(
+                        L3DimensionOutput,
+                        [
                             {"role": "system", "content": prompt},
                             {
                                 "role": "user",
@@ -92,17 +87,20 @@ class PlanningClaimGenerator:
                                     )
                                 ),
                             },
-                        ]),
+                        ],
+                        max_retries=1,
                         timeout=float(LLM_STREAM_TIMEOUT),
+                        temperature=0.1,
+                        llm=self._get_llm(),
+                        max_concurrent=self._max_concurrent,
+                        semaphore_scope="l3",
                     )
                     if result is None:
                         return L3DimensionOutput(report_body="", claims=[])
                     if isinstance(result, L3DimensionOutput):
                         return result
-                    if isinstance(result, str):
-                        result = json.loads(result)
                     return L3DimensionOutput.model_validate(result)
-                except (ValidationError, json.JSONDecodeError, TypeError, ValueError) as exc:
+                except (ValidationError, TypeError, ValueError) as exc:
                     last_error = exc
                     if attempt >= retry_count:
                         raise

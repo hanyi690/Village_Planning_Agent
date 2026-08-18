@@ -19,7 +19,7 @@ from .enrichment import (
     derive_legal_constraint, get_allowed_operations,
     get_gis_layer_group_info, get_all_gis_layer_groups,
 )
-from .geo_helpers import add_centroid, add_bbox, add_geo_feature_type
+from .geo_helpers import add_bbox, add_centroid, add_geo_feature_type, add_source_geometry
 
 from app.infrastructure.logging import get_logger
 
@@ -33,6 +33,38 @@ has_semantic_label = SemanticPredicates.has_semantic_label
 taxonomic_parent = SemanticPredicates.taxonomic_parent
 legal_constraint = SemanticPredicates.legal_constraint
 allowed_operations = SemanticPredicates.allowed_operations
+
+
+def _source_feature_provenance(feature: Any) -> dict[str, Any]:
+    raw = getattr(feature, "_raw", {}) or {}
+    source_feature_id = str(raw.get("source_feature_id") or "").strip()
+    if not source_feature_id:
+        return {}
+    return {
+        "source_feature_id": source_feature_id,
+        "source_uri": str(raw.get("source_uri") or "").strip(),
+        "source_content_digest": str(raw.get("source_content_digest") or "").strip(),
+        "source_feature_index": raw.get("source_feature_index"),
+        "source_geometry_digest": str(raw.get("source_geometry_digest") or "").strip(),
+    }
+
+
+def _attach_source_feature_provenance(graph: Any, uri: URIRef, feature: Any) -> None:
+    provenance = _source_feature_provenance(feature)
+    if not provenance:
+        return
+    graph.add((uri, PLN.source_feature_id, Literal(provenance["source_feature_id"])))
+    for key in (
+        "source_uri",
+        "source_content_digest",
+        "source_geometry_digest",
+    ):
+        value = provenance.get(key)
+        if value:
+            graph.add((uri, PLN[key], Literal(value)))
+    index = provenance.get("source_feature_index")
+    if isinstance(index, int):
+        graph.add((uri, PLN.source_feature_index, Literal(index, datatype=XSD.integer)))
 
 
 def add_village_entity(kg, village_name: str) -> None:
@@ -454,17 +486,27 @@ def add_annotations(kg, annotations: list):
                 )
             bsm = str(facility.bsm).strip()
             ysdm = str(facility.ysdm).strip()
+            source_feature_id = _source_feature_provenance(ann).get("source_feature_id")
             if bsm:
                 fac_uri = EntityIdPolicy.uri("facility", bsm)
+            elif source_feature_id:
+                fac_uri = URIRef(source_feature_id)
             else:
                 fac_uri = EntityIdPolicy.fallback_uri("facility", ysdm, fc)
             EntityIdPolicy.attach_bsm(kg.g, fac_uri, bsm)
+            _attach_source_feature_provenance(kg.g, fac_uri, ann)
             kg.g.add((fac_uri, RDF.type, EntityTypes.Facility))
             kg.g.add((fac_uri, PLN.name, Literal(facility.facility_name or "unknown")))
             kg.g.add((fac_uri, PLN.facility_type, Literal(facility.facility_type or "公共服务")))
             if hasattr(facility, "geometry"):
                 coords = facility.geometry.get("coordinates", [0, 0])
                 add_centroid(kg.g, fac_uri, coords[0], coords[1])
+                add_source_geometry(
+                    kg.g,
+                    fac_uri,
+                    facility.geometry,
+                    allowed_types=("Point",),
+                )
             kg.g.add((fac_uri, Relations.serves, Literal(facility.category or "public_service")))
             kg.g.add((fac_uri, Relations.sfWithin, PLN.village))
             kg.g.add((PLN.village, PLN.has_facility, fac_uri))
@@ -511,11 +553,15 @@ def add_roads(kg, features, *, gtype_ref: str, entry, ctx: BuildContext) -> dict
     for road in features:
         bsm = str(road.bsm).strip()
         ysdm = str(road.ysdm).strip()
+        source_feature_id = _source_feature_provenance(road).get("source_feature_id")
         if bsm:
             uri = EntityIdPolicy.uri("road", bsm)
+        elif source_feature_id:
+            uri = URIRef(source_feature_id)
         else:
             uri = EntityIdPolicy.fallback_uri("road", ysdm, count)
         EntityIdPolicy.attach_bsm(kg.g, uri, bsm)
+        _attach_source_feature_provenance(kg.g, uri, road)
         kg.g.add((uri, RDF.type, EntityTypes.Road))
         name = getattr(road, "road_name", "") or f"道路_{bsm or count}"
         kg.g.add((uri, PLN.name, Literal(name)))
@@ -528,6 +574,12 @@ def add_roads(kg, features, *, gtype_ref: str, entry, ctx: BuildContext) -> dict
         kg.g.add((uri, gis_type_ref, Literal("road")))
         kg.g.add((uri, geometry_kind, Literal(GEOMETRY_LINE)))
         kg.g.add((uri, semantic_group, Literal("transport")))
+        add_source_geometry(
+            kg.g,
+            uri,
+            getattr(road, "geometry", None),
+            allowed_types=("LineString", "MultiLineString"),
+        )
         add_geo_feature_type(kg.g, uri)
         count += 1
     _persist_feature_centroids(kg, features, EntityTypes.Road)
@@ -596,11 +648,15 @@ def add_facilities_from_typed(kg, features, *, gtype_ref: str, entry, ctx: Build
         name = getattr(f, "facility_name", "") or f"facility_{count}"
         bsm = str(f.bsm).strip()
         ysdm = str(f.ysdm).strip()
+        source_feature_id = _source_feature_provenance(f).get("source_feature_id")
         if bsm:
             uri = EntityIdPolicy.uri("facility", bsm)
+        elif source_feature_id:
+            uri = URIRef(source_feature_id)
         else:
             uri = EntityIdPolicy.fallback_uri("facility", ysdm, count)
         EntityIdPolicy.attach_bsm(kg.g, uri, bsm)
+        _attach_source_feature_provenance(kg.g, uri, f)
         kg.g.add((uri, RDF.type, EntityTypes.Facility))
         kg.g.add((uri, PLN.name, Literal(name)))
         ftype = getattr(f, "facility_type", "") or '公共服务'
@@ -609,6 +665,12 @@ def add_facilities_from_typed(kg, features, *, gtype_ref: str, entry, ctx: Build
         coords = geom.get('coordinates', [0, 0]) if isinstance(geom, dict) else [0, 0]
         if isinstance(coords, (list, tuple)) and len(coords) >= 2:
             add_centroid(kg.g, uri, coords[0], coords[1])
+        add_source_geometry(
+            kg.g,
+            uri,
+            geom,
+            allowed_types=("Point",),
+        )
         kg.g.add((uri, Relations.sfWithin, PLN.village))
         kg.g.add((PLN.village, PLN.has_facility, uri))
         kg.g.add((uri, gis_type_ref, Literal("current_facility")))
@@ -656,11 +718,23 @@ def add_facilities_from_annotations(kg, annotations) -> None:
             continue
 
         name, ftype = _FACILITY_TEXT_MAP.get(text, (text or f"设施_{i}", "公共服务"))
-        uri = EntityIdPolicy.fallback_uri("facility", text or str(i), i)
+        source_feature_id = _source_feature_provenance(ann).get("source_feature_id")
+        uri = (
+            URIRef(source_feature_id)
+            if source_feature_id
+            else EntityIdPolicy.fallback_uri("facility", text or str(i), i)
+        )
         kg.g.add((uri, RDF.type, EntityTypes.Facility))
+        _attach_source_feature_provenance(kg.g, uri, ann)
         kg.g.add((uri, PLN.name, Literal(name)))
         kg.g.add((uri, PLN.facility_type, Literal(ftype)))
         add_centroid(kg.g, uri, coords[0], coords[1])
+        add_source_geometry(
+            kg.g,
+            uri,
+            geom,
+            allowed_types=("Point",),
+        )
         kg.g.add((uri, Relations.sfWithin, PLN.village))
         kg.g.add((PLN.village, PLN.has_facility, uri))
         kg.g.add((uri, gis_type_ref, Literal("current_facility")))

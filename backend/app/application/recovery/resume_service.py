@@ -94,6 +94,14 @@ class ResumeService:
     @staticmethod
     def validate_interrupt(state: Dict[str, Any], expected_event_id: str) -> None:
         interrupt = state.get("human_interrupt") or {}
+        # A HUMAN pause emitted inside the spatial_chain subgraph may be
+        # represented in the parent checkpoint only as ``interrupt_ref``
+        # until the subgraph state is merged.  It is still a live interrupt,
+        # but only the exact persisted event token is resumable.
+        if not interrupt:
+            interrupt_ref = state.get("interrupt_ref") or {}
+            if isinstance(interrupt_ref, dict):
+                interrupt = interrupt_ref
         # The consumed flag is stale once a NEW pause exists (it is only reset
         # by prepare_human_review inside the hitl subgraph, which the parent
         # checkpoint view does not see until the super-step completes).  Only

@@ -108,6 +108,58 @@ def _merge_identity(current: Any, update: Any) -> Any:
     )
 
 
+def _replace_branch_id(current: Any, update: Any) -> str:
+    """Apply an explicit historical-fork branch transition.
+
+    A checkpoint fork deliberately changes ``main`` to a new immutable
+    artifact branch while the nested spatial subgraph may still emit one
+    pending write carrying the source branch.  Treating that transition as a
+    generic identity conflict terminalizes an otherwise valid replay.  Once a
+    non-main branch has been selected, a competing *different* non-main branch
+    remains an error so unrelated parallel writers cannot silently mix
+    artifacts.
+    """
+
+    current_branch = str(current or "")
+    update_branch = str(update or "")
+    if not current_branch:
+        return update_branch
+    if not update_branch or current_branch == update_branch:
+        return current_branch
+    if current_branch == "main" and update_branch != "main":
+        return update_branch
+    if update_branch == "main" and current_branch != "main":
+        return current_branch
+    # A replay of an already forked resume branch uses the explicit
+    # ``resume-fork-*`` namespace.  This is a controlled second fork, not an
+    # unrelated parallel writer.  Once active, stale writes from the parent
+    # ``resume-*`` branch are ignored by the symmetric rule below.
+    if (
+        update_branch.startswith("resume-fork-")
+        and current_branch.startswith("resume-")
+        and not current_branch.startswith("resume-fork-")
+    ):
+        return update_branch
+    if (
+        current_branch.startswith("resume-fork-")
+        and update_branch.startswith("resume-")
+        and not update_branch.startswith("resume-fork-")
+    ):
+        return current_branch
+    # A historical fork explicitly transitions an existing fresh/historical
+    # branch into a new immutable ``resume-*`` namespace.  Nested writers may
+    # still carry the source branch for one super-step; once the resume branch
+    # is active, those stale writes must be ignored rather than terminalizing
+    # the replay.
+    if update_branch.startswith("resume-") and not current_branch.startswith("resume-"):
+        return update_branch
+    if current_branch.startswith("resume-") and not update_branch.startswith("resume-"):
+        return current_branch
+    raise ValueError(
+        f"parallel writers disagree on branch identity: {current_branch!r} vs {update_branch!r}"
+    )
+
+
 def _merge_control(current: Any, update: Any) -> Any:
     """Merge non-identity control keys (phase/status/stage) across branches.
 
@@ -229,7 +281,7 @@ class WorkflowState(TypedDict, total=False):
 
     run_id: Annotated[str, _merge_identity]
     session_id: Annotated[str, _merge_identity]
-    branch_id: Annotated[str, _merge_identity]
+    branch_id: Annotated[str, _replace_branch_id]
     phase: Annotated[str, _merge_control]
     active_stage: Annotated[str, _merge_control]
     status: Annotated[str, _merge_control]

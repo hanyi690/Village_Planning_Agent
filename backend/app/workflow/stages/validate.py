@@ -199,6 +199,8 @@ async def validate_node(state: Dict[str, Any]) -> Dict[str, Any]:
     from app.contracts.workflow.parse_result_contracts import IntentCompilationResult
     from app.contracts.domain.selection_contracts import SiteSelectionDecision
     from app.contracts.workflow.execution_plan_contracts import ExecutionPlan, ExecutionResult
+    from app.contracts.planning.scenario import PlanningScenario
+    from app.contracts.spatial.grounding_contracts import GroundingResult
 
     retry_patch = _retry_patch(state, "validate")
     context = await _require_context(state)
@@ -209,6 +211,8 @@ async def validate_node(state: Dict[str, Any]) -> Dict[str, Any]:
     selection = _load_ref_artifact(state, "site_selection", SiteSelectionDecision)
     execution_plan = _load_ref_artifact(state, "execution_plan", ExecutionPlan)
     execution_result = _load_ref_artifact(state, "execution_result", ExecutionResult)
+    scenario = _load_ref_artifact(state, "planning_scenario", PlanningScenario)
+    grounding = _load_ref_artifact(state, "grounding_result", GroundingResult)
     if execution_result is not None:
         from app.workflow.stages.support import _load_embedded_artifact
 
@@ -224,6 +228,64 @@ async def validate_node(state: Dict[str, Any]) -> Dict[str, Any]:
         execution_plan=execution_plan,
         execution_result=execution_result,
     )
+    final_relation_validation = None
+    if scenario is not None and getattr(grounding, "problem", None) is not None:
+        from app.domain.relations.service import RelationEvaluationContext
+        from app.domain.validation.relation_validation import validate_final_scenario
+        from app.domain.validation.validate_checks import check_relation_validation
+
+        evaluator_context = RelationEvaluationContext(
+            scenario_id=str(getattr(scenario, "scenario_id", "") or ""),
+            metric_crs=str(
+                getattr(context, "metric_crs", None)
+                or getattr(context, "display_crs", None)
+                or "EPSG:3857"
+            ),
+            networks=(
+                getattr(context, "networks", None)
+                or getattr(context, "network_snapshots", None)
+                or {}
+            ),
+            demands=(
+                getattr(context, "demands", None)
+                or getattr(context, "demand_snapshots", None)
+                or {}
+            ),
+            execution_trace=getattr(context, "execution_trace", None),
+        )
+        if planned_state is None:
+            # Keep the final-validation artifact even when EXECUTE did not
+            # produce geometry.  validate_final_scenario emits an explicit
+            # missing_planned_state finding and fails closed for DELIVER.
+            from app.infrastructure.logging import get_logger
+
+            get_logger("workflow.validate").warning(
+                "final relation validation has no PlannedState; recording a failed result"
+            )
+        final_relation_validation = validate_final_scenario(
+            scenario,
+            planned_state,
+            grounding.problem,
+            evaluator_context,
+        )
+        relation_checks = check_relation_validation(final_relation_validation)
+        report.checks.extend(relation_checks)
+        from app.contracts.artifacts.validation_report_contracts import ValidationIssue
+
+        for check in relation_checks:
+            report.issues_by_stage.setdefault(check.responsible_stage, []).append(
+                ValidationIssue(
+                    stage=check.responsible_stage,
+                    severity="warning" if check.passed else "error",
+                    code=check.check_id,
+                    message=check.actual_value or check.check_name,
+                    detail=check.fix_suggestion,
+                    check_id=check.check_id,
+                )
+            )
+        report.overall_passed = bool(
+            report.overall_passed and all(check.passed for check in relation_checks)
+        )
     input_keys = {
         "target_projection", "site_selection", "execution_plan", "execution_result",
         "deferral_ledger",
@@ -269,6 +331,16 @@ async def validate_node(state: Dict[str, Any]) -> Dict[str, Any]:
         "repair_directives": directives_ref,
         "repair_impact": impact_ref,
     }
+    if final_relation_validation is not None:
+        final_relation_ref = persist_stage_artifact(
+            working_state,
+            "validate",
+            "FinalRelationValidation",
+            final_relation_validation,
+        )
+        if final_relation_ref:
+            working_state["artifact_refs"]["final_relation_validation"] = final_relation_ref
+            output_refs["final_relation_validation"] = final_relation_ref
     patch: Dict[str, Any] = {
         "repair_directives": compilation.model_dump(mode="json"),
         "repair_impact": impact.model_dump(mode="json"),

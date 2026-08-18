@@ -38,6 +38,14 @@ def _gate_evidence_digest(session_id: str) -> str:
             "facts": [fact.model_dump(mode="json") for fact in result.evidence_bundle.facts],
             "sources": [source.model_dump(mode="json") for source in result.evidence_bundle.sources],
         })
+    # Gate retrieval appends each attempt to the bounded session cache.  A
+    # cached retry therefore must not look like new evidence merely because
+    # the same typed result was appended a second time.  Canonicalize exact
+    # entries before hashing; changed facts/sources still produce a new digest.
+    entries = sorted({
+        json.dumps(entry, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        for entry in entries
+    })
     raw = json.dumps(entries, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
@@ -48,6 +56,7 @@ def _source_versions(session_id: str, supplied: Mapping[str, str] | None = None)
     from app.evidence.retrieval.retrievers.history_retriever import RETRIEVER_VERSION as history_version
     from app.evidence.retrieval.retrievers.integrity_retriever import RETRIEVER_VERSION as integrity_version
     from app.evidence.retrieval.retrievers.kg_retriever import RETRIEVER_VERSION as kg_version
+    from app.evidence.retrieval.retrievers.rag_retriever import RETRIEVER_VERSION as rag_version
     from app.evidence.retrieval.retrievers.report_retriever import RETRIEVER_VERSION as report_version
 
     versions: dict[str, str] = {
@@ -57,6 +66,7 @@ def _source_versions(session_id: str, supplied: Mapping[str, str] | None = None)
         "artifact": artifact_version,
         "history": history_version,
         "integrity": integrity_version,
+        "rag": rag_version,
     }
     if supplied:
         versions.update({str(key): str(value) for key, value in supplied.items()})
@@ -139,6 +149,18 @@ async def retrieve_evidence(
             if query.retriever is RetrieverKind.REPORT:
                 facts, sources = await _invoke(
                     retrieve_from_reports,
+                    session_id,
+                    request.dimension_key,
+                    request.stage,
+                    query=query.query,
+                    required_facts=list(query.required_facts),
+                    entity_scope=list(query.entity_scope),
+                )
+            elif query.retriever is RetrieverKind.RAG:
+                from app.evidence.retrieval.retrievers.rag_retriever import retrieve_from_rag
+
+                facts, sources = await _invoke(
+                    retrieve_from_rag,
                     session_id,
                     request.dimension_key,
                     request.stage,

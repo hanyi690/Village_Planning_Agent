@@ -159,7 +159,8 @@ class EntityTypes:
     FacilityTarget = PLN.FacilityTarget
     AxisTarget = PLN.AxisTarget
     RoadTarget = PLN.RoadTarget
-    ProjectTarget = PLN.ProjectTarget
+    LinearTarget = PLN.LinearTarget
+    SiteAreaTarget = PLN.SiteAreaTarget
     # L4: Planned state (规划成果)
     PlannedParcel = PLN.PlannedParcel
     PlannedZone = PLN.PlannedZone
@@ -175,7 +176,8 @@ class EntityTypes:
             cls.Parcel, cls.Zone, cls.Village, cls.Facility, cls.Road, cls.WaterBody,
             cls.AdministrativeVillage, cls.ResidentialCluster, cls.ControlLine, cls.GisLayerSet,
             cls.ZoneTarget, cls.FacilityTarget, cls.AxisTarget, cls.RoadTarget,
-            cls.ProjectTarget,
+            cls.LinearTarget,
+            cls.SiteAreaTarget,
             cls.PlannedParcel, cls.PlannedZone, cls.PlannedFacility,
             cls.PlannedRoad, cls.PlannedAxis, cls.FunctionalZone,
         ]

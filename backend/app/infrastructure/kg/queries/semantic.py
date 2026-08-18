@@ -130,7 +130,7 @@ def _generate_entity_description(entity_type: str, attrs: Dict[str, str]) -> str
         if code:
             parts.append(f"编码{code}")
 
-    elif entity_type in ("ZoneTarget", "FacilityTarget", "AxisTarget", "RoadTarget"):
+    elif entity_type in ("ZoneTarget", "FacilityTarget", "AxisTarget", "RoadTarget", "LinearAssetTarget"):
         name = attrs.get("name", "")
         desc = attrs.get("description", "")
         if name:

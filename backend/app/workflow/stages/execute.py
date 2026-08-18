@@ -378,6 +378,26 @@ def _task_results_from_execution(execution_plan: Any, result: Dict[str, Any]) ->
             status="failed" if failed else "succeeded",
             expected_output_kind=output_kind,
             output_artifacts=[] if failed else [output_kind],
+            feature_ids=(
+                list(getattr(task_records[-1], "feature_ids", []) or [])
+                if task_records and not isinstance(task_records[-1], dict)
+                else list((task_records[-1].get("feature_ids", []) if task_records else []) or [])
+            ),
+            scenario_id=(
+                str(getattr(task_records[-1], "scenario_id", "") or "")
+                if task_records and not isinstance(task_records[-1], dict)
+                else str((task_records[-1].get("scenario_id", "") if task_records else "") or "")
+            ),
+            candidate_id=(
+                str(getattr(task_records[-1], "candidate_id", "") or "")
+                if task_records and not isinstance(task_records[-1], dict)
+                else str((task_records[-1].get("candidate_id", "") if task_records else "") or "")
+            ),
+            relation_ids=(
+                list(getattr(task_records[-1], "relation_ids", []) or [])
+                if task_records and not isinstance(task_records[-1], dict)
+                else list((task_records[-1].get("relation_ids", []) if task_records else []) or [])
+            ),
             errors=[str(item) for item in task_errors] + (
                 list(getattr(task_records[-1], "errors", []) if not isinstance(task_records[-1], dict) else task_records[-1].get("errors", []))
                 if task_records else []
@@ -411,7 +431,9 @@ async def execute_node(state: Dict[str, Any]) -> Dict[str, Any]:
     from app.contracts.workflow.parse_result_contracts import IntentCompilationResult
     from app.contracts.domain.selection_contracts import SiteSelectionDecision
     from app.contracts.spatial.global_zone_allocation_contracts import GlobalZoneAllocationResult
+    from app.contracts.spatial.grounding_contracts import GroundingResult
     from app.contracts.workflow.execution_plan_contracts import ExecutionPlan, ExecutionResult
+    from app.domain.suitability.model import SuitabilitySurface
 
     intent = _load_ref_artifact(state, "target_projection", IntentCompilationResult)
     plan_intent = _to_typed(getattr(intent, "typed_intent", None) or intent, SpatialPlanningIntent)
@@ -420,6 +442,12 @@ async def execute_node(state: Dict[str, Any]) -> Dict[str, Any]:
         state,
         "global_zone_allocation",
         GlobalZoneAllocationResult,
+    )
+    grounding = _load_ref_artifact(state, "grounding_result", GroundingResult)
+    suitability_surface = _load_ref_artifact(
+        state,
+        "suitability_surface",
+        SuitabilitySurface,
     )
     deferral_ledger = _load_ref_artifact(state, "deferral_ledger", DeferralLedger)
     execution_plan = _load_ref_artifact(state, "execution_plan", ExecutionPlan)
@@ -485,11 +513,19 @@ async def execute_node(state: Dict[str, Any]) -> Dict[str, Any]:
             execution_plan, deferral_ledger = deferral
 
     context = await _require_context(state)
+    from app.domain.allocation.refined_candidate_catalog import (
+        build_refined_candidate_catalog,
+    )
+
+    candidate_catalog = build_refined_candidate_catalog(
+        getattr(grounding, "problem", None), suitability_surface
+    )
     exec_state = ExecuteAgentState(
         session_id=state.get("session_id", ""),
         village_name=state.get("config", {}).get("village_name", ""),
         spatial_workspace=getattr(context, "workspace", None),
         facility_anchors=getattr(context, "village_anchors", None),
+        candidate_geometry_by_id=candidate_catalog,
         site_selection=site_selection,
         global_zone_allocation_result=global_zone_allocation,
         land_design_briefs=list(getattr(execution_plan, "land_design_briefs", None) or []),
@@ -596,6 +632,57 @@ async def execute_node(state: Dict[str, Any]) -> Dict[str, Any]:
             logger.exception("[workflow:execute] L4 write failed")
             l4_write_result = {"l4_write_error": "l4_write_failed", "error_type": type(exc).__name__, "message": str(exc)}
     working_state = {**state, "artifact_refs": dict(state.get("artifact_refs") or {})}
+    scenario_ref = (
+        (state.get("artifact_refs") or {}).get("planning_scenario")
+        or (state.get("artifact_refs") or {}).get("scenario")
+        or ""
+    )
+    if isinstance(scenario_ref, dict):
+        scenario_ref = str(
+            scenario_ref.get("descriptor_digest")
+            or scenario_ref.get("digest")
+            or ""
+        )
+    from app.contracts.planning.scenario import PlanningScenario
+
+    selection_scenario_id = str(getattr(site_selection, "scenario_id", "") or "")
+    if not selection_scenario_id and isinstance(site_selection, dict):
+        selection_scenario_id = str(site_selection.get("scenario_id") or "")
+    scenario_artifact = (
+        _load_ref_artifact(
+            state,
+            "planning_scenario",
+            PlanningScenario,
+        )
+        if (state.get("artifact_refs") or {}).get("planning_scenario")
+        else None
+    )
+    if scenario_artifact is not None:
+        selection_scenario_id = str(
+            getattr(scenario_artifact, "scenario_id", "")
+            or (scenario_artifact.get("scenario_id", "") if isinstance(scenario_artifact, dict) else "")
+            or selection_scenario_id
+        )
+    scenario_id = str(
+        state.get("scenario_id")
+        or selection_scenario_id
+        or ""
+    )
+    if planned_state is not None and hasattr(planned_state, "model_copy"):
+        planned_state = planned_state.model_copy(update={
+            "scenario_id": scenario_id or getattr(planned_state, "scenario_id", ""),
+            "scenario_ref": scenario_ref,
+            "execution_trace_refs": list(
+                dict.fromkeys(
+                    list(getattr(planned_state, "execution_trace_refs", []) or [])
+                    + [
+                        f"trace:{item.get('task_id')}:{item.get('event')}"
+                        for item in list(result.get("execution_trace", []) or [])
+                        if item.get("task_id") and item.get("event")
+                    ]
+                )
+            ),
+        })
     parcel_changeset_ref = persist_stage_artifact(working_state, "execute", "ParcelChangeSet", changeset)
     working_state["artifact_refs"]["parcel_changeset"] = parcel_changeset_ref
     planned_state_ref = persist_stage_artifact(working_state, "execute", "PlannedState", planned_state)
@@ -632,6 +719,17 @@ async def execute_node(state: Dict[str, Any]) -> Dict[str, Any]:
         action_results=list(outcome.get("action_results", []) or []),
         diagnostics=list(outcome.get("diagnostics", []) or []) + (
             [{"l4_write": _jsonable(l4_write_result)}] if l4_write_result else []
+        ),
+        scenario_id=scenario_id,
+        scenario_ref=scenario_ref if isinstance(scenario_ref, str) else str(scenario_ref or ""),
+        execution_trace_refs=list(
+            dict.fromkeys(
+                [
+                    f"trace:{item.get('task_id')}:{item.get('event')}"
+                    for item in list(result.get("execution_trace", []) or [])
+                    if item.get("task_id") and item.get("event")
+                ]
+            )
         ),
     )
     execution_result_ref = persist_stage_artifact(

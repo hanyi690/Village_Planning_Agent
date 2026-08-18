@@ -4,7 +4,7 @@ Replaces custom pln:lon/pln:lat with geo:hasCentroid + geo:asWKT.
 Replaces pln:bbox_minx/miny/maxx/maxy with geo:hasBoundingBox + geo:asWKT.
 """
 import re
-from typing import Optional, Tuple, List
+from typing import Collection, List, Optional, Tuple
 
 from rdflib import BNode, Graph, Literal, URIRef
 from rdflib.namespace import RDF
@@ -65,6 +65,47 @@ def add_bbox(graph: Graph, entity_uri: URIRef, minx: float, miny: float, maxx: f
     geom = BNode()
     graph.add((entity_uri, GeoPredicates.hasBoundingBox, geom))
     graph.add((geom, GeoPredicates.asWKT, Literal(format_wkt_bbox(minx, miny, maxx, maxy), datatype=GeoPredicates.wktLiteral)))
+
+
+def add_source_geometry(
+    graph: Graph,
+    entity_uri: URIRef,
+    geometry: object,
+    *,
+    allowed_types: Optional[Collection[str]] = None,
+) -> Optional[str]:
+    """Persist a valid source GeoJSON geometry as authoritative GeoSPARQL WKT.
+
+    This helper only serializes the geometry supplied by the source feature. It
+    never derives a centroid, representative point, buffer, or union. Invalid,
+    empty, missing, and unexpected geometry types are left unmaterialized.
+    """
+    if not isinstance(geometry, dict):
+        return None
+
+    try:
+        from shapely.geometry import shape
+
+        parsed = shape(geometry)
+        if parsed.is_empty or not parsed.is_valid:
+            return None
+        if allowed_types is not None and parsed.geom_type not in set(allowed_types):
+            return None
+        wkt_value = parsed.wkt
+    except Exception:
+        # Shapely raises version-specific parse/GEOS exception classes for
+        # malformed coordinates. Source data must not abort the KG build.
+        return None
+    geom = BNode()
+    graph.add((entity_uri, GeoPredicates.hasGeometry, geom))
+    graph.add(
+        (
+            geom,
+            GeoPredicates.asWKT,
+            Literal(wkt_value, datatype=GeoPredicates.wktLiteral),
+        )
+    )
+    return wkt_value
 
 
 def add_geo_feature_type(graph: Graph, entity_uri: URIRef) -> None:

@@ -415,7 +415,12 @@ async def extract_bindings(
     kg = kg if kg is not None else require_session_kg(session_id)
 
     memory = _get_semantic_memory()
-    gazetteer = build_gazetteer(kg, bundle, memory)
+    gazetteer = build_gazetteer(
+        kg,
+        bundle,
+        memory,
+        village_name=str(getattr(bundle, "village_name", "") or ""),
+    )
     gis_village_entries = _materialize_gis_village_entries(
         gazetteer,
         bundle,

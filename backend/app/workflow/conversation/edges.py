@@ -301,19 +301,38 @@ def _route_explore(state: Dict[str, Any], layer_num: int) -> Union[str, List[Sen
     merged into the next canonical Explore context request; workers therefore
     receive one unified evidence section instead of a second RAG prompt.
     """
+    counts = state.get("retry_counts") or {}
+    explore_count = counts.get(f"l{layer_num}_explore", 0)
+    if explore_count >= 2:
+        logger.warning("[after_analysis] EXPLORE retry exhausted for L%d -> HUMAN", layer_num)
+        # Convert exhaustion into an explicit business gate.  END loses the
+        # breakpoint and makes a real session look like a successful stop;
+        # the HITL path preserves the pending evidence requests and allows
+        # an operator to approve or reject the next revision.
+        return "human_review"
+
     pending: list[Any] = []
     try:
         gate_decision = load_root_gate(state, f"l{layer_num}")
         gate_payload = gate_decision.model_dump(mode="json")
         pending = list(gate_payload.get("pending_requests") or [])
         if pending:
-            from app.evidence.retrieval.evidence_service import retrieve_evidence_for_gate_sync
+            from app.evidence.retrieval.evidence_service import (
+                _gate_evidence_digest,
+                retrieve_evidence_for_gate_sync,
+            )
 
+            session_id = str(state.get("session_id") or state.get("run_id") or "")
+            previous_digest = _gate_evidence_digest(session_id)
             retrieve_evidence_for_gate_sync(
                 gate_payload,
-                str(state.get("session_id") or state.get("run_id") or ""),
+                session_id,
                 str((state.get("config") or {}).get("village_name") or ""),
             )
+            current_digest = _gate_evidence_digest(session_id)
+            if previous_digest == current_digest:
+                logger.warning("[after_analysis] EXPLORE evidence unchanged for L%d -> HUMAN", layer_num)
+                return "human_review"
     except Exception as exc:
         logger.warning("[after_analysis] gate evidence retrieval failed: %s", exc)
 
@@ -323,16 +342,6 @@ def _route_explore(state: Dict[str, Any], layer_num: int) -> Union[str, List[Sen
     # missing evidence.
     if layer_num == 3:
         logger.warning("[after_analysis] L3 EXPLORE gap -> HUMAN without full-layer replay")
-        return "human_review"
-    # 死循环防护：同一层 EXPLORE 重试超过 2 次 -> HUMAN（不再 re-dispatch）
-    counts = state.get("retry_counts") or {}
-    explore_count = counts.get(f"l{layer_num}_explore", 0)
-    if explore_count >= 2:
-        logger.warning("[after_analysis] EXPLORE retry exhausted for L%d -> HUMAN", layer_num)
-        # Convert exhaustion into an explicit business gate.  END loses the
-        # breakpoint and makes a real session look like a successful stop;
-        # the HITL path preserves the pending evidence requests and allows
-        # an operator to approve or reject the next revision.
         return "human_review"
     from app.config.loader import list_dimensions
     dim_configs = list_dimensions(layer_num)

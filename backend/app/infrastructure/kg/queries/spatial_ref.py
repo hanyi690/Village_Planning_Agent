@@ -15,9 +15,9 @@ from typing import Any, Dict, List, Optional
 from rdflib import Literal, RDF, URIRef
 
 from app.infrastructure.logging import get_logger
-from ..ontology import PLN, PLN_NS, EntityTypes, Relations
+from ..ontology import PLN, PLN_NS, EntityTypes, GeoPredicates, Relations
 from app.contracts.spatial.spatial_reference_contracts import (
-    CandidateSet, SpatialReferenceSpec, RefObject,
+    CandidateSet, GeometryRef, SpatialReferenceSpec, RefObject,
 )
 
 logger = get_logger(__name__)
@@ -42,22 +42,160 @@ _RDF_TYPE_TO_PLN = {
 
 def resolve_candidates(kg, spec: SpatialReferenceSpec) -> CandidateSet:
     ref_ids: List[str] = []
+    ref_geometry_wkt: Optional[str] = None
+    ref_geometries: list[GeometryRef] = []
     if spec.reference is not None:
         ref_ids = _resolve_reference(kg, spec.reference)
+        ref_geometries = _resolve_exact_reference_geometries(
+            kg,
+            spec,
+            spec.reference,
+            ref_ids,
+        )
+        if len(ref_geometries) == 1:
+            ref_geometry_wkt = ref_geometries[0].wkt
 
     if spec.type == "topological":
-        return _resolve_topological(kg, spec, ref_ids)
+        result = _resolve_topological(kg, spec, ref_ids)
+        result.ref_geometry_wkt = ref_geometry_wkt
+        result.ref_geometries = ref_geometries
+        return result
 
     attr_bsms = _resolve_attr_filter(kg, spec.attr_filter)
     if not attr_bsms and spec.type == "attributive":
         attr_bsms = _all_parcel_bsms(kg)
 
-    return CandidateSet(bsms=attr_bsms, ref_bsms=ref_ids)
+    return CandidateSet(
+        bsms=attr_bsms,
+        ref_bsms=ref_ids,
+        ref_geometry_wkt=ref_geometry_wkt,
+        ref_geometries=ref_geometries,
+    )
+
+
+def _resolve_exact_reference_geometry(
+    kg,
+    spec: SpatialReferenceSpec,
+    ref: RefObject,
+    ref_ids: List[str],
+) -> Optional[str]:
+    """Backward-compatible singular source geometry lookup."""
+    geometries = _resolve_exact_reference_geometries(kg, spec, ref, ref_ids)
+    return geometries[0].wkt if len(geometries) == 1 else None
+
+
+def _resolve_exact_reference_geometries(
+    kg,
+    spec: SpatialReferenceSpec,
+    ref: RefObject,
+    ref_ids: List[str],
+) -> list[GeometryRef]:
+    """Return full source geometry for one explicitly named KG feature.
+
+    A unique result is not enough: an unconstrained entity-type query, a BSM,
+    or a layer group still describes a candidate domain.  Only a named entity
+    reference may cross the exact-feature boundary, and only through its
+    authoritative ``geo:hasGeometry`` value.  Centroids and bounding boxes are
+    intentionally excluded because they have different spatial semantics.
+    """
+    # Attributive/composed specs describe candidate domains, while
+    # topological/distance references are relation anchors.  Promoting those
+    # geometries would materialize the anchor as the target.  The current
+    # contract has no exact-feature flag, so retain only the narrow directional
+    # request shape with a uniquely and exactly named source feature.
+    if spec.type != "directional":
+        return []
+    if ref.kind not in {"entity_type", "place_name"}:
+        return []
+    filters = ref.filter or {}
+    label_contains = str(filters.get("label_contains") or "").strip()
+    explicit_ids = filters.get("source_feature_ids") or filters.get("exact_feature_ids")
+    explicit_id_list = (
+        [str(item).strip() for item in explicit_ids if str(item).strip()]
+        if isinstance(explicit_ids, (list, tuple, set))
+        else []
+    )
+    if isinstance(explicit_ids, set):
+        explicit_id_list = sorted(explicit_id_list)
+    if explicit_ids is not None:
+        if not isinstance(explicit_ids, (list, tuple, set)):
+            return []
+        requested = {str(item).strip() for item in explicit_ids if str(item).strip()}
+        if not requested or requested != {str(item) for item in ref_ids}:
+            return []
+    elif len(ref_ids) > 1 and not bool(filters.get("allow_multiple_exact")):
+        # A generic multi-match remains a recall domain.  It cannot cross the
+        # exact-feature boundary without an explicit source-backed opt-in.
+        return []
+    if not label_contains and explicit_ids is None:
+        return []
+
+    entity_uris = list(_ids_to_uris(kg, ref_ids))
+    if len(entity_uris) != len(set(entity_uris)) or len(entity_uris) != len(ref_ids):
+        return []
+    rdf_type = str(filters.get("rdf_type") or "").strip()
+    expected_type = _RDF_TYPE_TO_PLN.get(rdf_type) if rdf_type else None
+    records: list[GeometryRef] = []
+    for index, entity_uri in enumerate(entity_uris):
+        if expected_type is not None and (entity_uri, RDF.type, expected_type) not in kg.g:
+            return []
+        entity_name = str(kg.g.value(entity_uri, PLN.name) or "").strip()
+        if label_contains and len(ref_ids) == 1 and entity_name != label_contains:
+            return []
+        if label_contains and len(ref_ids) > 1 and bool(filters.get("allow_multiple_exact")):
+            # Explicit multi-feature mode still requires exact names; a
+            # substring query such as “道路” remains candidate-only.
+            if entity_name != label_contains:
+                return []
+        geometry_node = kg.g.value(entity_uri, GeoPredicates.hasGeometry)
+        literal = kg.g.value(geometry_node, GeoPredicates.asWKT) if geometry_node is not None else None
+        text = str(literal or "").strip()
+        if not text:
+            return []
+        try:
+            from shapely import wkt as shapely_wkt
+
+            geometry = shapely_wkt.loads(text)
+        except Exception:
+            return []
+        if geometry.is_empty or not geometry.is_valid:
+            return []
+        if geometry.geom_type not in {
+            "Point", "MultiPoint", "LineString", "MultiLineString",
+            "Polygon", "MultiPolygon",
+        }:
+            return []
+        source_bsms = [
+            str(value)
+            for value in kg.g.objects(entity_uri, PLN.bsm)
+            if str(value).strip()
+        ]
+        source_feature_id = (
+            explicit_id_list[index]
+            if explicit_id_list and index < len(explicit_id_list)
+            else str(entity_uri)
+        )
+        records.append(
+            GeometryRef(
+                wkt=geometry.wkt,
+                crs=str(filters.get("crs") or "EPSG:4326"),
+                source_ref=source_feature_id,
+                source_refs=[source_feature_id, str(entity_uri)],
+                source_bsms=source_bsms,
+                feature_kind=str(filters.get("rdf_type") or ""),
+            )
+        )
+    return records
 
 
 def _resolve_reference(kg, ref: RefObject) -> List[str]:
     if ref.kind in {"entity_type", "place_name"}:
         filt = ref.filter or {}
+        explicit_ids = filt.get("source_feature_ids") or filt.get("exact_feature_ids")
+        if explicit_ids is not None:
+            if not isinstance(explicit_ids, (list, tuple, set)):
+                return []
+            return [str(item).strip() for item in explicit_ids if str(item).strip()]
         rdf_type = filt.get("rdf_type", "")
         label_contains = filt.get("label_contains", "")
         if rdf_type and rdf_type in _RDF_TYPE_TO_PLN:
@@ -159,7 +297,16 @@ def _layer_group_member_ids(kg, group: str) -> List[str]:
 def _ids_to_uris(kg, ids: List[str]):
     for eid in ids:
         if eid.startswith("http"):
-            yield URIRef(eid)
+            direct = URIRef(eid)
+            if (direct, None, None) in kg.g:
+                yield direct
+                continue
+            matched = next(
+                kg.g.subjects(PLN.source_feature_id, Literal(eid)),
+                None,
+            )
+            if matched is not None:
+                yield matched
         elif eid.startswith("pln:"):
             yield URIRef(PLN_NS + eid[4:])
         else:

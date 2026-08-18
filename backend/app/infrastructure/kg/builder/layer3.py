@@ -22,7 +22,8 @@ logger = get_logger(__name__)
 # L3 entity types for clear_intent_layer
 _L3_TYPES = {
     EntityTypes.ZoneTarget, EntityTypes.FacilityTarget,
-    EntityTypes.AxisTarget, EntityTypes.RoadTarget, EntityTypes.ProjectTarget,
+    EntityTypes.AxisTarget, EntityTypes.RoadTarget, EntityTypes.SiteAreaTarget,
+    EntityTypes.LinearTarget,
 }
 
 
@@ -52,60 +53,61 @@ def _source_refs(target, intent) -> list[str]:
 def build_intent_layer(kg, intent: Any) -> None:
     """Build L3 intent virtual entities from SpatialPlanningIntent.
 
-    ZoneTarget, FacilityTarget, AxisTarget, RoadTarget enter KG with
+    ZoneTarget, FacilityTarget, AxisTarget, RoadTarget, LinearAssetTarget enter KG with
     spatial anchoring triples (candidate_bsm, excluded_bsm, candidate_bbox,
     spatial_hint, description). Semantic annotations in SemanticMemoryStore.
     """
     from app.contracts.workflow.parse_contracts import (
         SpatialPlanningIntent, ZoneTarget, FacilityTarget, AxisTarget, RoadTarget,
-        ProjectTarget,
+        LinearAssetTarget,
+        SiteAreaTarget,
     )
     if not isinstance(intent, SpatialPlanningIntent):
         logger.warning("build_intent_layer requires SpatialPlanningIntent, got %s", type(intent).__name__)
         return
 
-    zc = fc = ac = rc = pc = 0
+    zc = fc = ac = rc = lc = sc = 0
 
-    # ── Project targets (parents of facility/road/zone execution targets) ──
-    project_uris = {}
-    for project in intent.project_targets:
-        target_id = project.target_id
-        p_uri = EntityIdPolicy.uri("project_target", target_id)
-        project_uris[target_id] = p_uri
-        project_uris[project.project_id] = p_uri
-        kg.g.add((p_uri, RDF.type, EntityTypes.ProjectTarget))
+    # ── Site-area targets (land-consuming parcel/polygon interventions) ──
+    site_area_uris = {}
+    for site_area in intent.site_area_targets:
+        target_id = site_area.target_id
+        p_uri = EntityIdPolicy.uri("site_area_target", target_id)
+        site_area_uris[target_id] = p_uri
+        site_area_uris[site_area.site_area_id] = p_uri
+        kg.g.add((p_uri, RDF.type, EntityTypes.SiteAreaTarget))
         kg.g.add((p_uri, PLN.target_id, Literal(target_id)))
-        kg.g.add((p_uri, PLN.name, Literal(project.name)))
-        kg.g.add((p_uri, PLN.project_category, Literal(project.category)))
-        kg.g.add((p_uri, PLN.operation, Literal(project.action)))
-        if project.location_hint:
-            kg.g.add((p_uri, PLN.location_hint, Literal(project.location_hint)))
-        if project.scale_text:
-            kg.g.add((p_uri, PLN.scale_text, Literal(project.scale_text)))
-        if project.area_ha is not None:
-            kg.g.add((p_uri, PLN.target_area_ha, Literal(project.area_ha, datatype=XSD.double)))
-        if project.source_instruction_id:
-            kg.g.add((p_uri, PLN.source_instruction_id, Literal(project.source_instruction_id)))
-        if project.source_report_key:
-            kg.g.add((p_uri, PLN.source_report_key, Literal(project.source_report_key)))
-        for bsm in project.candidate_bsms:
+        kg.g.add((p_uri, PLN.name, Literal(site_area.name)))
+        kg.g.add((p_uri, PLN.project_category, Literal(site_area.category)))
+        kg.g.add((p_uri, PLN.operation, Literal(site_area.action)))
+        if site_area.location_hint:
+            kg.g.add((p_uri, PLN.location_hint, Literal(site_area.location_hint)))
+        if site_area.scale_text:
+            kg.g.add((p_uri, PLN.scale_text, Literal(site_area.scale_text)))
+        if site_area.area_ha is not None:
+            kg.g.add((p_uri, PLN.target_area_ha, Literal(site_area.area_ha, datatype=XSD.double)))
+        if site_area.source_instruction_id:
+            kg.g.add((p_uri, PLN.source_instruction_id, Literal(site_area.source_instruction_id)))
+        if site_area.source_report_key:
+            kg.g.add((p_uri, PLN.source_report_key, Literal(site_area.source_report_key)))
+        for bsm in site_area.candidate_bsms:
             kg.g.add((p_uri, PLN.candidate_bsm, PLN[f"parcel_{bsm}"]))
-        for bsm in project.excluded_bsms:
+        for bsm in site_area.excluded_bsms:
             kg.g.add((p_uri, PLN.excluded_bsm, PLN[f"parcel_{bsm}"]))
-        kg.g.add((PLN.village, PLN.has_project, p_uri))
+        kg.g.add((PLN.village, PLN.has_site_area, p_uri))
         kg.memory.add_entity_annotation(EntityAnnotation(
             entity_uri=str(p_uri),
-            entity_type="ProjectTarget",
-            description=f"规划项目: {project.name} ({project.category})",
+            entity_type="SiteAreaTarget",
+            description=f"空间用地对象: {site_area.name} ({site_area.category})",
             source_text_refs=[
                 value for value in (
-                    project.source_report_key,
-                    project.semantic.raw_text,
+                    site_area.source_report_key,
+                    site_area.semantic.raw_text,
                 ) if value
             ],
-            intent_refs=[project.source_instruction_id] if project.source_instruction_id else [],
+            intent_refs=[site_area.source_instruction_id] if site_area.source_instruction_id else [],
         ))
-        pc += 1
+        sc += 1
 
     # ── Zone targets ──
     for zt in intent.zone_targets:
@@ -183,8 +185,8 @@ def build_intent_layer(kg, intent: Any) -> None:
         if hint:
             kg.g.add((f_uri, PLN.spatial_hint, Literal(hint)))
         kg.g.add((PLN.village, PLN.has_facility, f_uri))
-        if ft.source_project_id in project_uris:
-            kg.g.add((project_uris[ft.source_project_id], PLN.has_facility, f_uri))
+        if ft.source_project_id in site_area_uris:
+            kg.g.add((site_area_uris[ft.source_project_id], PLN.has_facility, f_uri))
         if ft.source_instruction_id:
             kg.g.add((f_uri, PLN.source_instruction_id, Literal(ft.source_instruction_id)))
         if ft.source_report_key:
@@ -223,8 +225,8 @@ def build_intent_layer(kg, intent: Any) -> None:
         for bsm in ax.corridor_bsms:
             kg.g.add((a_uri, PLN.candidate_bsm, PLN[f"parcel_{bsm}"]))
         kg.g.add((PLN.village, PLN.has_axis, a_uri))
-        if ax.source_project_id in project_uris:
-            kg.g.add((project_uris[ax.source_project_id], PLN.has_axis, a_uri))
+        if ax.source_project_id in site_area_uris:
+            kg.g.add((site_area_uris[ax.source_project_id], PLN.has_axis, a_uri))
         if ax.source_instruction_id:
             kg.g.add((a_uri, PLN.source_instruction_id, Literal(ax.source_instruction_id)))
         if ax.source_report_key:
@@ -245,12 +247,18 @@ def build_intent_layer(kg, intent: Any) -> None:
         r_uri = EntityIdPolicy.uri("road_target", target_id)
         kg.g.add((r_uri, RDF.type, EntityTypes.RoadTarget))
         kg.g.add((r_uri, PLN.target_id, Literal(target_id)))
+        if getattr(rt, "asset_kind", ""):
+            kg.g.add((r_uri, PLN.asset_kind, Literal(rt.asset_kind)))
         if rt.road_level:
             kg.g.add((r_uri, PLN.road_level, Literal(rt.road_level)))
         if rt.width_m > 0:
             kg.g.add((r_uri, PLN.width_m, Literal(rt.width_m, datatype=XSD.double)))
         for conn in rt.connects:
             kg.g.add((r_uri, PLN.connects, Literal(conn)))
+        if getattr(rt, "linear_diameter_mm", None) is not None:
+            kg.g.add((r_uri, PLN.diameter_mm, Literal(rt.linear_diameter_mm, datatype=XSD.double)))
+        if getattr(rt, "linear_material", ""):
+            kg.g.add((r_uri, PLN.material, Literal(rt.linear_material)))
         # Spatial anchoring triples
         if rt.start_anchor:
             kg.g.add((r_uri, PLN.anchor_point, Literal(f"{rt.start_anchor[0]},{rt.start_anchor[1]}")))
@@ -262,8 +270,8 @@ def build_intent_layer(kg, intent: Any) -> None:
         if hint:
             kg.g.add((r_uri, PLN.spatial_hint, Literal(hint)))
         kg.g.add((PLN.village, PLN.has_road, r_uri))
-        if rt.source_project_id in project_uris:
-            kg.g.add((project_uris[rt.source_project_id], PLN.has_road, r_uri))
+        if rt.source_project_id in site_area_uris:
+            kg.g.add((site_area_uris[rt.source_project_id], PLN.has_road, r_uri))
         if rt.source_instruction_id:
             kg.g.add((r_uri, PLN.source_instruction_id, Literal(rt.source_instruction_id)))
         if rt.source_report_key:
@@ -278,13 +286,51 @@ def build_intent_layer(kg, intent: Any) -> None:
         ))
         rc += 1
 
+    # ── Non-road linear asset targets ───────────────────────────────
+    for lt in intent.linear_targets:
+        target_id = lt.target_id
+        l_uri = EntityIdPolicy.uri("linear_target", target_id)
+        kg.g.add((l_uri, RDF.type, EntityTypes.LinearTarget))
+        kg.g.add((l_uri, PLN.target_id, Literal(target_id)))
+        kg.g.add((l_uri, PLN.asset_kind, Literal(lt.asset_kind)))
+        kg.g.add((l_uri, PLN.operation, Literal(lt.action)))
+        for conn in lt.connects:
+            kg.g.add((l_uri, PLN.connects, Literal(conn)))
+        for ref in lt.candidate_corridor_refs:
+            kg.g.add((l_uri, PLN.candidate_corridor_ref, Literal(ref)))
+        for ref in lt.network_node_refs:
+            kg.g.add((l_uri, PLN.network_node_ref, Literal(ref)))
+        for bsm in lt.path_bsms or lt.candidate_bsms:
+            kg.g.add((l_uri, PLN.candidate_bsm, PLN[f"parcel_{bsm}"]))
+        if lt.diameter_mm is not None:
+            kg.g.add((l_uri, PLN.diameter_mm, Literal(lt.diameter_mm, datatype=XSD.double)))
+        if lt.material:
+            kg.g.add((l_uri, PLN.material, Literal(lt.material)))
+        if lt.start_anchor:
+            kg.g.add((l_uri, PLN.anchor_point, Literal(f"{lt.start_anchor[0]},{lt.start_anchor[1]}")))
+        if lt.end_anchor:
+            kg.g.add((l_uri, PLN.end_point, Literal(f"{lt.end_anchor[0]},{lt.end_anchor[1]}")))
+        if lt.semantic.spatial_hint:
+            kg.g.add((l_uri, PLN.spatial_hint, Literal(lt.semantic.spatial_hint)))
+        kg.g.add((PLN.village, PLN.has_linear_target, l_uri))
+        if lt.source_project_id in site_area_uris:
+            kg.g.add((site_area_uris[lt.source_project_id], PLN.has_linear_target, l_uri))
+        kg.memory.add_entity_annotation(EntityAnnotation(
+            entity_uri=str(l_uri),
+            entity_type="LinearAssetTarget",
+            description=f"规划线性资产: {lt.asset_kind}",
+            source_text_refs=_source_refs(lt, intent),
+            intent_refs=[lt.source_instruction_id] if lt.source_instruction_id else [],
+        ))
+        lc += 1
+
     # Raw planning text on village entity
     if intent.raw_text:
         kg.g.add((PLN.village, PLN.raw_planning_text, Literal(intent.raw_text)))
 
     logger.info(
-        "build_intent_layer: %d projects, %d zones, %d facilities, %d axes, %d roads",
-        pc, zc, fc, ac, rc,
+        "build_intent_layer: %d site areas, %d zones, %d facilities, %d axes, %d roads, %d linear",
+        sc, zc, fc, ac, rc, lc,
     )
 
 

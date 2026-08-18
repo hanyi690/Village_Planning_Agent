@@ -26,11 +26,18 @@ class KGSpatialQueryAdapter(SpatialQueryPort):
         return _query_entities_by_wkt(self._kg, wkt)
 
     def compute_overlap(self, run_id: str, wkt_a: str, wkt_b: str) -> float:
-        area_a = _geometry_area(wkt_a)
-        area_b = _geometry_area(wkt_b)
-        if area_a <= 0.0 or area_b <= 0.0:
+        try:
+            from shapely import wkt as shapely_wkt
+
+            geometry_a = shapely_wkt.loads(wkt_a)
+            geometry_b = shapely_wkt.loads(wkt_b)
+            area_a = float(geometry_a.area)
+            area_b = float(geometry_b.area)
+            if area_a > 0.0 and area_b > 0.0:
+                return float(geometry_a.intersection(geometry_b).area / min(area_a, area_b))
+            return 1.0 if geometry_a.intersects(geometry_b) else 0.0
+        except Exception:
             return 0.0
-        return min(area_a, area_b) / max(area_a, area_b)
 
     def nearest_features(self, run_id: str, wkt: str, layer: str, k: int = 5) -> list[dict[str, Any]]:
         return _nearest_features(self._kg, wkt, layer, k)
@@ -39,32 +46,52 @@ class KGSpatialQueryAdapter(SpatialQueryPort):
 def _query_entities_intersecting_bbox(kg, bbox: tuple[float, float, float, float]) -> list[dict[str, Any]]:
     from rdflib import RDF, URIRef
 
-    from app.infrastructure.kg.ontology import EntityTypes, GeoPredicates, PLN
+    from app.infrastructure.kg.ontology import EntityTypes
     from app.infrastructure.kg.builder.geo_helpers import parse_wkt_bbox
 
     if bbox is None or len(bbox) != 4:
         return []
     minx, miny, maxx, maxy = (float(v) for v in bbox)
     results = []
-    for subj in kg.g.subjects(RDF.type, EntityTypes.Parcel):
-        info = _entity_geometry(kg, subj)
-        if info is None:
-            continue
-        eb = parse_wkt_bbox(info["bbox"])
-        if eb is None:
-            continue
-        if not (eb[2] < minx or eb[0] > maxx or eb[3] < miny or eb[1] > maxy):
-            results.append(info)
+    seen = set()
+    entity_types = list(EntityTypes.spatial_l1())
+    for entity_type in entity_types:
+        for subj in kg.g.subjects(RDF.type, entity_type):
+            if str(subj) in seen:
+                continue
+            seen.add(str(subj))
+            info = _entity_geometry(kg, subj)
+            if info is None:
+                continue
+            eb = parse_wkt_bbox(info["bbox"])
+            if eb is None:
+                continue
+            if not (eb[2] < minx or eb[0] > maxx or eb[3] < miny or eb[1] > maxy):
+                results.append(info)
     return results
 
 
 def _query_entities_by_wkt(kg, wkt: str) -> list[dict[str, Any]]:
+    from shapely import wkt as shapely_wkt
     from app.infrastructure.kg.builder.geo_helpers import parse_wkt_bbox
 
     bbox = parse_wkt_bbox(wkt)
     if bbox is None:
         return []
-    return _query_entities_intersecting_bbox(kg, tuple(bbox))
+    candidates = _query_entities_intersecting_bbox(kg, tuple(bbox))
+    try:
+        query_geometry = shapely_wkt.loads(wkt)
+    except Exception:
+        return candidates
+    result = []
+    for info in candidates:
+        try:
+            geometry = shapely_wkt.loads(str(info.get("wkt") or ""))
+            if geometry.intersects(query_geometry):
+                result.append(info)
+        except Exception:
+            result.append(info)
+    return result
 
 
 def _nearest_features(kg, wkt: str, layer: str, k: int = 5) -> list[dict[str, Any]]:
@@ -100,6 +127,12 @@ def _layer_members(kg, layer: str) -> list[dict[str, Any]]:
 def _entity_geometry(kg, entity_ref):
     from app.infrastructure.kg.ontology import GeoPredicates, PLN
 
+    wkt = ""
+    geometry_node = kg.g.value(entity_ref, GeoPredicates.hasGeometry)
+    if geometry_node is not None:
+        wkt_literal = kg.g.value(geometry_node, GeoPredicates.asWKT)
+        if wkt_literal is not None:
+            wkt = str(wkt_literal)
     bbox_geom = kg.g.value(entity_ref, GeoPredicates.hasBoundingBox)
     bbox = ""
     if bbox_geom is not None:
@@ -110,7 +143,17 @@ def _entity_geometry(kg, entity_ref):
     for _, _, o in kg.g.triples((entity_ref, PLN.bsm, None)):
         bsm = str(o)
         break
-    return {"entity_ref": str(entity_ref), "bbox": bbox, "bsm": bsm}
+    if not bbox and wkt:
+        from app.infrastructure.kg.builder.geo_helpers import parse_wkt_bbox
+
+        parsed = parse_wkt_bbox(wkt)
+        bbox = f"POLYGON(({parsed[0]} {parsed[1]},{parsed[2]} {parsed[1]},{parsed[2]} {parsed[3]},{parsed[0]} {parsed[3]},{parsed[0]} {parsed[1]}))" if parsed else ""
+    return {
+        "entity_ref": str(entity_ref),
+        "bbox": bbox,
+        "bsm": bsm,
+        "wkt": wkt,
+    }
 
 
 def _entity_centroid(kg, entity_ref):
@@ -130,9 +173,10 @@ def _entity_centroid(kg, entity_ref):
 
 
 def _geometry_area(wkt: str) -> float:
-    from app.infrastructure.kg.builder.geo_helpers import parse_wkt_bbox
+    try:
+        from shapely import wkt as shapely_wkt
 
-    bbox = parse_wkt_bbox(wkt)
-    if bbox is None:
+        geometry = shapely_wkt.loads(wkt)
+    except Exception:
         return 0.0
-    return abs((bbox[2] - bbox[0]) * (bbox[3] - bbox[1]))
+    return float(geometry.area)

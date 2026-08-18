@@ -57,10 +57,51 @@ class KGSemanticQueryAdapter(SemanticQueryPort):
         ]
 
     def get_constraints(self, run_id: str, scope: str) -> list[dict[str, Any]]:
-        return []
+        from app.infrastructure.kg.ontology import SemanticPredicates
+
+        entities = self.query_entities(run_id, scope, limit=50)
+        rows: list[dict[str, Any]] = []
+        for entity in entities:
+            entity_ref = str(entity.get("entity_ref", "") or "")
+            if not entity_ref:
+                continue
+            uri = URIRef(entity_ref)
+            values: list[dict[str, str]] = []
+            for predicate, kind in (
+                (SemanticPredicates.legal_constraint, "legal_constraint"),
+                (SemanticPredicates.allowed_operations, "allowed_operation"),
+            ):
+                for value in self._kg.g.objects(uri, predicate):
+                    values.append({"kind": kind, "value": str(value)})
+            if values:
+                rows.append({"entity_ref": entity_ref, "constraints": values})
+        return rows
 
     def resolve_ambiguous(self, run_id: str, name: str, candidates: list[str]) -> str | None:
-        return None
+        normalized = str(name or "").strip().lower()
+        if not normalized or not candidates:
+            return None
+        scored: list[tuple[int, str]] = []
+        for candidate in candidates:
+            info = self._entity_info(str(candidate))
+            if info is None:
+                continue
+            labels = [str(info.get("name", "") or "").strip().lower()]
+            labels.extend(str(alias).strip().lower() for alias in info.get("aliases", []) or [])
+            score = 0
+            for label in labels:
+                if label and label == normalized:
+                    score = max(score, 3)
+                elif label and (label in normalized or normalized in label):
+                    score = max(score, 1)
+            if score:
+                scored.append((score, str(candidate)))
+        if not scored:
+            return None
+        scored.sort(key=lambda item: (-item[0], item[1]))
+        if len(scored) > 1 and scored[0][0] == scored[1][0]:
+            return None
+        return scored[0][1]
 
     def _entity_info(self, eid: str) -> dict[str, Any] | None:
         kg = self._kg

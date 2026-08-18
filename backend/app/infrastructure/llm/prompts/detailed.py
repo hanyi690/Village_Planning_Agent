@@ -64,15 +64,17 @@ CLAIMS_OUTPUT_GUIDE = """
 每条 claim 必须是带证据的规划判断，包含：claim_id、statement、suggested_category、suggested_output_kind、
 suggested_interventions、quantity/quantity_unit（若有）、implementation_phase、location_hints、
 constraint_refs、objective_refs、evidence_refs、uncertainty。没有证据支持的位置、面积、地块或项目不得编造，
-应留空并说明 uncertainty。suggested_category 只能是 project/facility/road/axis/restoration/protection/zone/action；
-suggested_output_kind 只能是 parcel/polygon/point/line/action。对有明确位置证据的具体 project（例如服务中心、广场、停车场、观景点），应使用 point 作为小型定位输出；只有没有任何空间落位含义的管理/政策/培训事项才使用 action。claim 不是执行目标，不得填写最终 BSM、几何或 ClassificationDecision。
+应留空并说明 uncertainty。suggested_category 只能是 site_area/facility/road/axis/restoration/protection/zone/action；
+线性 claim 还必须选择 asset_kind 闭集：road/water_supply/sewer/stormwater/power/communication/drainage_channel/revetment；非线性 claim 使用 none/facility/land_use/axis。asset_kind 是语义类型，不得根据宽度、文本关键词或几何类型在后续推断；
+suggested_output_kind 只能是 parcel/polygon/point/line/action。facility 表示可定位的服务节点，服务中心、广场、停车场、观景点、污水处理设施等设施必须使用 facility + point；site_area 只表示有明确范围、需要占用或改造地块的面状干预，必须使用 site_area + parcel/polygon。没有任何空间落位含义的管理/政策/培训事项才使用 action。claim 不是执行目标，不得填写最终 BSM、几何或 ClassificationDecision。
 
 每个空间 claim 必须在首次生成时给出与对象类型对应的结构化参数，禁止把关键尺度只写在 statement：
-- road 使用 road_parameters：action 只能是 preserve/new/upgrade/widen/harden/repair；其余字段为 road_level、length、roadbed_width、pavement_width、alignment_refs、connects；每个量值写成 {"value": 数值, "unit": "m|km"}。长度、路基宽、路面宽必须分开；connects 只写原文明确的两端对象，沿既有道路改造则把道路名写入 alignment_refs。缺少宽度标准且无证据时，不得编造，应改为非空间 action 或在 uncertainty 中说明无法形成可执行道路项目。
+- road asset_kind 使用 road_parameters：action 只能是 preserve/new/upgrade/widen/harden/repair；其余字段为 road_level、length、roadbed_width、pavement_width、alignment_refs、connects；每个量值写成 {"value": 数值, "unit": "m|km"}。长度、路基宽、路面宽必须分开；connects 只写原文明确的两端对象，沿既有道路改造则把道路名写入 alignment_refs。
+- water_supply/sewer/stormwater/power/communication/drainage_channel/revetment 使用 linear_parameters：action 只能是 preserve/new/upgrade/expand/repair；字段为 length、diameter、material、alignment_refs、connects。管径写入 diameter，绝不能写入 roadbed_width 或 pavement_width。asset_kind 与参数对象必须一一匹配；不能使用 road_parameters 表达非道路线性工程。
 - facility 使用 facility_parameters：action 只能是 preserve/new/expand/relocate/repair；其余字段为 facility_type、service_radius、capacity、footprint_area；服务半径用 m/km，占地用 m2/ha。保留、新建、扩建、迁建不得混淆。
 - axis 使用 axis_parameters：action 只能是 preserve/new/upgrade；axis_type 只能是 primary/secondary/spatial_control；其余字段为 direction、reference_features、connects、corridor_width；不得把发展轴退化成普通道路。
-- zone/protection/restoration 以及 polygon/parcel project 使用 polygon_parameters。materialization_role 只能是 land_use_assignment/functional_overlay/protection_overlay/restoration_overlay/project_footprint。真正改变土地用途的 zone 才使用 land_use_assignment，并必须给 area_range（minimum、maximum、unit=m2|ha）；“一心一带多区”等功能结构使用 functional_overlay，不得伪装成地类重分类或虚构面积；保护和修复分别使用对应 overlay。
-- 普通 project 可使用 project_parameters：project_type、action、capacity、footprint_area；action 只能是 preserve/new/expand/relocate/upgrade/widen/harden/repair/demolish。点项目仍须保留 location_hints。
+- zone/protection/restoration 以及 polygon/parcel site_area 使用 polygon_parameters。materialization_role 只能是 land_use_assignment/functional_overlay/protection_overlay/restoration_overlay/site_footprint。真正改变土地用途的 zone 才使用 land_use_assignment，并必须给 area_range（minimum、maximum、unit=m2|ha）；“一心一带多区”等功能结构使用 functional_overlay，不得伪装成地类重分类或虚构面积；保护和修复分别使用对应 overlay。
+- site_area 使用 site_area_parameters 表达 site_type、capacity、capacity_unit、footprint_area；site_area 必须输出 parcel/polygon 并保留 location_hints。设施点位不得写成 site_area；设施的类型、服务半径、容量和占地使用 facility_parameters。
 单位必须使用以下闭集，禁止其他写法（禁止把数量/规模单位当作面积或长度单位）：
 - 面积：公顷/ha、亩、平方米/m2、㎡
 - 长度：米/m、千米/km
@@ -81,12 +83,12 @@ suggested_output_kind 只能是 parcel/polygon/point/line/action。对有明确�
 - 功率/电量：千瓦/kw、千瓦时/kwh
 禁止写法：hm、hm²、km²、平方米的其它简写、"待定"、"无"；禁止用"处/户/座/人"作为 area_range 或 footprint_area 的面积单位。
 【高频错误规避】
-- 线性工程（供水/排水管线、道路、输电/通信线路、护岸、堤防、沟渠）必须用 road 或 axis，不得用 project。project 的 suggested_output_kind 只能是 parcel/polygon/point/action，绝不能是 line。
-- action 必须按 category 闭集选择，严禁跨 category 混用：facility/zone/project 不能用 upgrade；upgrade/widen 只用于 road；relocate 只用于 facility 或 project；preserve 用于保留类。
+- 线性工程（供水/排水管线、道路、输电/通信线路、护岸、堤防、沟渠）必须使用 category=road、suggested_output_kind=line，并通过 asset_kind 区分专业类型；不得用 site_area。site_area 的 suggested_output_kind 只能是 parcel/polygon，绝不能是 point、action 或 line。
+- action 必须按 category 闭集选择，严禁跨 category 混用：facility/zone/site_area 不能用 upgrade；upgrade/widen 只用于 road；relocate 只用于 facility 或 site_area；preserve 用于保留类。
 - 面积/长度/数量数值必须使用上方单位闭集内的标准单位，禁止自造单位、简写变体或占位词；写不出明确数值时留空并说明 uncertainty，不要用"待定"当单位。
-- 空间 claim 必须填对应结构化参数（road_parameters/facility_parameters/polygon_parameters/project_parameters），禁止把关键尺度只写在 statement。
+- 空间 claim 必须填对应结构化参数（road_parameters/linear_parameters/facility_parameters/polygon_parameters/site_area_parameters），禁止把关键尺度只写在 statement。
 
-所有参数只表达规划语义和来源量值，不得填写坐标、BSM、候选地块或几何；单位换算由确定性编译器完成。
+所有参数只表达规划语义和来源量值，不得填写坐标、BSM、候选地块、端点、网络拓扑或几何；单位换算由确定性编译器完成。LLM 只选择闭集 asset_kind 和 action；目标实体、拓扑关系、现状网络与候选走廊必须由已有 KG 和真实空间数据在 GROUND/SELECT 计算。
 report_body 写完整的法定文本报告正文（用【主题】标记段落、markdown 表格列清单）；claims 只写结构化判断，不要写解释文字。
 """
 

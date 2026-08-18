@@ -17,7 +17,9 @@ KG 子模块：地名解析是 KG 语义能力，agent 层（Binder/EXPLORE/渲�
 from __future__ import annotations
 
 import difflib
+import json
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from app.infrastructure.logging import get_logger
@@ -308,12 +310,66 @@ def _annotation_entries_from_memory(memory: Any, bundle: Any) -> List[GazetteerE
     return entries
 
 
-def build_gazetteer(kg: Any, bundle: Any, memory: Any = None) -> Gazetteer:
+def _persisted_entries(village_name: str) -> List[GazetteerEntry]:
+    """Load previously persisted spatial evidence for the same village.
+
+    The gazetteer README defines ``data/gazetteer/{village}.json`` as a
+    primary source, but the builder historically only queried the live KG and
+    memory.  Reusing entries is safe only when they carry actual BSMs or a
+    persisted centroid; instruction-only names with no spatial evidence must
+    never become grounding candidates.
+    """
+
+    if not str(village_name or "").strip():
+        return []
+    try:
+        from app.core.settings import DATA_DIR
+
+        path = Path(DATA_DIR) / "gazetteer" / f"{village_name}.json"
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, TypeError, ValueError):
+        return []
+    entries: List[GazetteerEntry] = []
+    for raw in payload.get("entries", []) if isinstance(payload, dict) else []:
+        if not isinstance(raw, dict):
+            continue
+        bsms = [str(item).strip() for item in raw.get("bsms", []) if str(item).strip()]
+        centroid = raw.get("centroid")
+        if not bsms and not (
+            isinstance(centroid, list)
+            and len(centroid) == 2
+            and all(isinstance(value, (int, float)) for value in centroid)
+        ):
+            continue
+        entries.append(GazetteerEntry(
+            name=str(raw.get("name") or "").strip(),
+            aliases=[str(item).strip() for item in raw.get("aliases", []) if str(item).strip()],
+            entity_uri=str(raw.get("entity_uri") or ""),
+            bsms=bsms,
+            centroid=list(centroid) if isinstance(centroid, list) else None,
+            source="persisted_gazetteer",
+            confidence=float(raw.get("confidence") or 0.0),
+            description=str(raw.get("description") or ""),
+        ))
+    return [entry for entry in entries if entry.name]
+
+
+def build_gazetteer(
+    kg: Any,
+    bundle: Any,
+    memory: Any = None,
+    village_name: str = "",
+) -> Gazetteer:
     """Build the village gazetteer from KG clusters + L1 enrichment memory.
 
     Non-fatal: KG query failures degrade to an empty gazetteer.
     """
     gazetteer = Gazetteer()
+    try:
+        for e in _persisted_entries(village_name):
+            gazetteer.upsert(e)
+    except Exception as e:
+        logger.warning("[Gazetteer] persisted entries load failed: %s", e)
     try:
         for e in _cluster_entries_from_kg(kg, bundle):
             gazetteer.upsert(e)
