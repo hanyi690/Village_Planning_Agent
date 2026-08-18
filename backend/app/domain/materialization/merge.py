@@ -23,7 +23,7 @@ from app.contracts.spatial.parcel_change_contracts import ParcelChange, ParcelCh
 
 # Later workers win when two workers emit the same layerType.
 _WORKER_PRIORITY: Dict[str, int] = {
-    "project": 0,
+    "site_area": 0,
     "zone": 1,
     "facility": 2,
     "axis": 3,
@@ -110,7 +110,14 @@ def _detect_bsm_conflicts(worker_results: List[Any]) -> List[Dict[str, Any]]:
 
 
 def _dedup_layout_configs(worker_results: List[Any]) -> List[Dict[str, Any]]:
-    """Dedup layout_configs by layerType; higher-priority (later) worker wins."""
+    """Merge layout configs by layer type without dropping task outputs.
+
+    EXECUTE now runs one immutable task per worker invocation.  Replacing a
+    same-typed layer with the last worker (the historical grouped-worker
+    behavior) silently discarded all but the final candidate and produced an
+    empty-looking delivery map.  Keep one deterministic layer per type while
+    concatenating its feature collections.
+    """
     merged: Dict[str, Dict[str, Any]] = {}
     ordered = sorted(
         worker_results or [],
@@ -125,7 +132,32 @@ def _dedup_layout_configs(worker_results: List[Any]) -> List[Dict[str, Any]]:
             ) or ""
             if not layer_type:
                 continue
-            merged[layer_type] = config
+            current = merged.get(layer_type)
+            if current is None:
+                merged[layer_type] = dict(config)
+                continue
+            current_data = current.setdefault("data", current.get("geojson") or {})
+            incoming_data = config.get("data") or config.get("geojson") or {}
+            current_features = list(current_data.get("features") or [])
+            incoming_features = list(incoming_data.get("features") or [])
+            seen = {
+                str((item.get("properties") or {}).get("feature_id") or "")
+                for item in current_features
+                if isinstance(item, dict)
+            }
+            for feature in incoming_features:
+                feature_id = str(
+                    (feature.get("properties") or {}).get("feature_id") or ""
+                ) if isinstance(feature, dict) else ""
+                if feature_id and feature_id in seen:
+                    continue
+                current_features.append(feature)
+                if feature_id:
+                    seen.add(feature_id)
+            current_data["type"] = incoming_data.get("type") or current_data.get("type") or "FeatureCollection"
+            current_data["features"] = current_features
+            current["data"] = current_data
+            current["geojson"] = current_data
     return list(merged.values())
 
 

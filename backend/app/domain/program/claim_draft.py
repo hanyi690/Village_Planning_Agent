@@ -10,14 +10,15 @@ from __future__ import annotations
 import json
 from typing import Any, Literal, TypeAlias
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import AliasChoices, BaseModel, Field, ValidationError, field_validator
 
 from app.contracts.program import PlanningClaim, PlanningClaimSet
 from app.contracts.domain.planning_semantics import (
     AxisPlanningParameters,
     FacilityPlanningParameters,
+    LinearAssetPlanningParameters,
     PolygonPlanningParameters,
-    ProjectPlanningParameters,
+    SiteAreaPlanningParameters,
     RoadPlanningParameters,
 )
 
@@ -36,6 +37,7 @@ class MeasureRangeDraft(BaseModel):
 
 
 PlanningCategoryDraft: TypeAlias = Literal[
+    "site_area",
     "project",
     "facility",
     "road",
@@ -89,6 +91,29 @@ class RoadPlanningParametersDraft(BaseModel):
         return value
 
 
+class LinearAssetPlanningParametersDraft(BaseModel):
+    action: Literal["preserve", "new", "upgrade", "expand", "repair"] = "new"
+    length: MeasureDraft | None = None
+    diameter: MeasureDraft | None = None
+    material: str = ""
+    alignment_refs: list[str] = Field(default_factory=list)
+    connects: list[str] = Field(default_factory=list)
+
+    @field_validator("alignment_refs", "connects", mode="before")
+    @classmethod
+    def decode_refs(cls, value: Any) -> Any:
+        if isinstance(value, str):
+            value = _decode_json_container(value)
+        return value
+
+    @field_validator("length", "diameter", mode="before")
+    @classmethod
+    def decode_measures(cls, value: Any) -> Any:
+        if isinstance(value, str):
+            value = _decode_json_container(value)
+        return value
+
+
 class FacilityPlanningParametersDraft(BaseModel):
     facility_type: str = ""
     action: PlanningActionDraft = "new"
@@ -133,11 +158,16 @@ class PolygonPlanningParametersDraft(BaseModel):
         "functional_overlay",
         "protection_overlay",
         "restoration_overlay",
-        "project_footprint",
+        "site_footprint",
     ] | None = None
     planning_zone: str = ""
     land_use: str = ""
     area_range: MeasureRangeDraft | None = None
+
+    @field_validator("materialization_role", mode="before")
+    @classmethod
+    def migrate_legacy_project_footprint(cls, value: Any) -> Any:
+        return "site_footprint" if value == "project_footprint" else value
 
     @field_validator("area_range", mode="before")
     @classmethod
@@ -147,8 +177,11 @@ class PolygonPlanningParametersDraft(BaseModel):
         return value
 
 
-class ProjectPlanningParametersDraft(BaseModel):
-    project_type: str = ""
+class SiteAreaPlanningParametersDraft(BaseModel):
+    site_type: str = Field(
+        default="",
+        validation_alias=AliasChoices("site_type", "project_type"),
+    )
     action: PlanningActionDraft = "new"
     capacity: MeasureDraft | None = None
     footprint_area: MeasureDraft | None = None
@@ -176,15 +209,24 @@ class PlanningClaimDraft(BaseModel):
     affected_parcel_refs: list[str] = Field(default_factory=list)
     suggested_category: PlanningCategoryDraft = "action"
     suggested_output_kind: PlanningOutputDraft = "action"
+    asset_kind: Literal[
+        "none", "facility", "project", "land_use", "axis", "road",
+        "water_supply", "sewer", "stormwater", "power", "communication",
+        "drainage_channel", "revetment",
+    ] = "none"
     suggested_interventions: list[str] = Field(default_factory=list)
     quantity: float | None = None
     quantity_unit: str | None = None
     intervention_action: PlanningActionDraft = "new"
     road_parameters: RoadPlanningParametersDraft | None = None
+    linear_parameters: LinearAssetPlanningParametersDraft | None = None
     facility_parameters: FacilityPlanningParametersDraft | None = None
     axis_parameters: AxisPlanningParametersDraft | None = None
     polygon_parameters: PolygonPlanningParametersDraft | None = None
-    project_parameters: ProjectPlanningParametersDraft | None = None
+    site_area_parameters: SiteAreaPlanningParametersDraft | None = Field(
+        default=None,
+        validation_alias=AliasChoices("site_area_parameters", "project_parameters"),
+    )
     implementation_phase: Literal["short", "medium", "long"] = "short"
     location_hints: list[str] = Field(default_factory=list)
     constraint_refs: list[str] = Field(default_factory=list)
@@ -193,6 +235,17 @@ class PlanningClaimDraft(BaseModel):
     source_refs: list[str] = Field(default_factory=list)
     confidence: float | None = None
     uncertainty: str = ""
+
+    @property
+    def project_parameters(self) -> SiteAreaPlanningParametersDraft | None:
+        """Read-only v1 alias for the canonical ``site_area_parameters``.
+
+        Provider payload migration already accepts ``project_parameters``;
+        retaining the accessor keeps old consumers from silently losing the
+        repaired measurement while all new serialization remains canonical.
+        """
+
+        return self.site_area_parameters
 
     @field_validator(
         "affected_parcel_refs",
@@ -218,7 +271,7 @@ class PlanningClaimDraft(BaseModel):
         "facility_parameters",
         "axis_parameters",
         "polygon_parameters",
-        "project_parameters",
+        "site_area_parameters",
         mode="before",
     )
     @classmethod
@@ -359,6 +412,7 @@ def _repair_unescaped_quotes(value: str) -> str:
 
 
 _CATEGORIES = {
+    "site_area",
     "project",
     "facility",
     "road",
@@ -377,7 +431,17 @@ _ALLOWED_OUTPUTS = {
     "zone": "polygon",
     "action": "action",
 }
-_PROJECT_OUTPUTS = {"parcel", "polygon", "point", "action"}
+_SITE_AREA_OUTPUTS = {"parcel", "polygon"}
+_LINEAR_ASSETS = {
+    "road",
+    "water_supply",
+    "sewer",
+    "stormwater",
+    "power",
+    "communication",
+    "drainage_channel",
+    "revetment",
+}
 _OUTPUT_ALIASES = {
     "zone": "polygon",
     "area": "polygon",
@@ -397,6 +461,15 @@ def _clean_refs(values: Any) -> list[str]:
 
 def _normalize_category(raw: PlanningClaimDraft, diagnostics: list[str]) -> str:
     category = _text(raw.suggested_category).lower()
+    if category == "project":
+        _diagnostic(
+            diagnostics,
+            "warning",
+            "legacy_project_category_migrated",
+            raw.claim_id or "claim",
+            "legacy project category normalized to site_area at the provider boundary",
+        )
+        return "site_area"
     if category in _CATEGORIES:
         return category
     _diagnostic(
@@ -409,21 +482,106 @@ def _normalize_category(raw: PlanningClaimDraft, diagnostics: list[str]) -> str:
     return "action"
 
 
+def _raw_output_kind(raw: PlanningClaimDraft) -> str:
+    return _OUTPUT_ALIASES.get(
+        _text(raw.suggested_output_kind).lower(),
+        _text(raw.suggested_output_kind).lower(),
+    )
+
+
+def _repair_site_area_namespace(
+    raw: PlanningClaimDraft,
+    category: str,
+    diagnostics: list[str],
+) -> tuple[str, str | None]:
+    """Repair a legacy project namespace only from typed fields.
+
+    Older provider responses used ``project`` as a catch-all. The repair is
+    structural: it may promote an explicitly typed facility, road/utility
+    line, or axis, and it may retain a project only when an explicit footprint
+    exists. It never searches names or statements for keywords. Ambiguous
+    spatial records are retained as action claims so they remain auditable
+    without entering GIS execution.
+    """
+    if category != "site_area":
+        return category, None
+    output = _raw_output_kind(raw)
+    if output in _SITE_AREA_OUTPUTS:
+        return category, output
+    if output == "point" and raw.facility_parameters is not None:
+        _diagnostic(
+            diagnostics,
+            "warning",
+            "project_reclassified_from_typed_facility",
+            raw.claim_id or "claim",
+            "project/point carried facility_parameters; normalized to facility/point",
+        )
+        return "facility", "point"
+    if output == "point" and raw.site_area_parameters is not None:
+        footprint = raw.site_area_parameters.footprint_area
+        if footprint is not None and footprint.value is not None and _text(footprint.unit):
+            _diagnostic(
+                diagnostics,
+                "warning",
+                "project_point_promoted_to_footprint",
+                raw.claim_id or "claim",
+                "project/point carried an explicit footprint; normalized to project/polygon",
+            )
+            return "site_area", "polygon"
+    if output == "line":
+        asset = _text(raw.asset_kind).lower()
+        if asset in _LINEAR_ASSETS and raw.linear_parameters is not None:
+            _diagnostic(
+                diagnostics,
+                "warning",
+                "project_reclassified_from_typed_linear_asset",
+                raw.claim_id or "claim",
+                f"project/line carried {asset} linear_parameters; normalized to road/line",
+            )
+            return "road", "line"
+        if asset == "road" and raw.road_parameters is not None:
+            _diagnostic(
+                diagnostics,
+                "warning",
+                "project_reclassified_from_typed_road",
+                raw.claim_id or "claim",
+                "project/line carried road_parameters; normalized to road/line",
+            )
+            return "road", "line"
+        if raw.axis_parameters is not None:
+            _diagnostic(
+                diagnostics,
+                "warning",
+                "project_reclassified_from_typed_axis",
+                raw.claim_id or "claim",
+                "project/line carried axis_parameters; normalized to axis/line",
+            )
+            return "axis", "line"
+    _diagnostic(
+        diagnostics,
+        "warning",
+        "project_reclassified_to_action",
+        raw.claim_id or "claim",
+            f"site_area/{output or 'unknown'} has no complete typed footprint or worker contract; retained as action",
+    )
+    return "action", "action"
+
+
 def _normalize_output(
     raw: PlanningClaimDraft,
     category: str,
     diagnostics: list[str],
 ) -> str:
-    output = _OUTPUT_ALIASES.get(_text(raw.suggested_output_kind).lower(), _text(raw.suggested_output_kind).lower())
-    if category == "project":
-        if output in _PROJECT_OUTPUTS:
+    output = _raw_output_kind(raw)
+    if category == "site_area":
+        if output in _SITE_AREA_OUTPUTS:
             return output
         _diagnostic(
             diagnostics,
             "warning",
-            "invalid_project_output",
+            "invalid_site_area_output",
             raw.claim_id or "claim",
-            f"project output {output!r} is not executable; deferred as action",
+            f"site_area output {output!r} is not executable; deferred as action",
         )
         return "action"
     expected = _ALLOWED_OUTPUTS[category]
@@ -439,6 +597,52 @@ def _normalize_output(
             f"{category} output {output!r} normalized to {expected!r}",
         )
     return expected
+
+
+def _normalize_asset_kind(
+    raw: PlanningClaimDraft,
+    category: str,
+    output: str,
+    diagnostics: list[str],
+) -> str:
+    """Keep asset/category compatibility deterministic before strict validation."""
+    asset = _text(raw.asset_kind).lower()
+    allowed = {
+        "facility": {"none", "facility"},
+        "site_area": {"none"},
+        "road": set(_LINEAR_ASSETS),
+        "axis": {"none", "axis"},
+        "restoration": {"none"},
+        "protection": {"none"},
+        "zone": {"none", "land_use"},
+        "action": {"none"},
+    }
+    if asset in allowed[category]:
+        return asset
+    if category == "road" and output == "line" and raw.road_parameters is not None:
+        # v1 drafts omitted asset_kind while carrying an explicit road
+        # parameter block; preserve that evidence during migration.
+        return "road"
+    fallback = {
+        "facility": "facility",
+        "site_area": "none",
+        "axis": "axis",
+        "zone": "none",
+        "restoration": "none",
+        "protection": "none",
+        "action": "none",
+    }.get(category, "none")
+    if category == "road" and output == "line":
+        fallback = "none"
+    _diagnostic(
+        diagnostics,
+        "warning",
+        "asset_kind_category_mismatch",
+        raw.claim_id or "claim",
+        f"asset_kind {asset!r} is incompatible with {category}/{output}; "
+        f"normalized to {fallback!r}",
+    )
+    return fallback
 
 
 _ACTION_SET = {
@@ -461,6 +665,14 @@ _LENGTH_TO_M = {
     "kilometer": 1000.0,
     "kilometre": 1000.0,
     "公里": 1000.0,
+}
+_DIAMETER_TO_MM = {
+    "mm": 1.0,
+    "毫米": 1.0,
+    "cm": 10.0,
+    "厘米": 10.0,
+    "m": 1000.0,
+    "米": 1000.0,
 }
 # 计数单位若被 L3 误当作面积单位：不换算，丢弃面积约束（见 area_range 校验）。
 _COUNT_AS_AREA_UNITS = {
@@ -553,6 +765,7 @@ def _normalize_road_parameters(
     if source is None:
         return None
     try:
+        road_level = _text(source.road_level)
         return RoadPlanningParameters(
             action=_normalized_action(
                 source.action,
@@ -560,7 +773,7 @@ def _normalize_road_parameters(
                 diagnostics=diagnostics,
                 allowed={"preserve", "new", "upgrade", "widen", "harden", "repair"},
             ),
-            road_level=_text(source.road_level),
+            road_level=road_level,
             length_m=_measure_value(
                 source.length,
                 _LENGTH_TO_M,
@@ -593,6 +806,33 @@ def _normalize_road_parameters(
             claim_id,
             f"{exc}; road_parameters dropped",
         )
+        return None
+
+
+def _normalize_linear_parameters(
+    raw: PlanningClaimDraft,
+    claim_id: str,
+    diagnostics: list[str],
+) -> LinearAssetPlanningParameters | None:
+    source = raw.linear_parameters
+    if source is None:
+        return None
+    try:
+        return LinearAssetPlanningParameters(
+            action=_normalized_action(
+                source.action,
+                claim_id=claim_id,
+                diagnostics=diagnostics,
+                allowed={"preserve", "new", "upgrade", "expand", "repair"},
+            ),
+            length_m=_measure_value(source.length, _LENGTH_TO_M, claim_id=claim_id, field_name="length", diagnostics=diagnostics),
+            diameter_mm=_measure_value(source.diameter, _DIAMETER_TO_MM, claim_id=claim_id, field_name="diameter", diagnostics=diagnostics),
+            material=_text(source.material),
+            alignment_refs=_clean_refs(source.alignment_refs),
+            connects=_clean_refs(source.connects),
+        )
+    except ValueError as exc:
+        _diagnostic(diagnostics, "warning", "invalid_linear_parameters", claim_id, f"{exc}; linear_parameters dropped")
         return None
 
 
@@ -685,13 +925,13 @@ def _normalize_polygon_parameters(
     if not role:
         return None, None
     allowed_roles = {
-        "project": {"project_footprint"},
+        "site_area": {"site_footprint"},
         "zone": {
             "land_use_assignment",
             "functional_overlay",
             "protection_overlay",
             "restoration_overlay",
-            "project_footprint",
+            "site_footprint",
         },
         "protection": {"protection_overlay"},
         "restoration": {"restoration_overlay"},
@@ -706,7 +946,7 @@ def _normalize_polygon_parameters(
             claim_id,
             f"role {role!r} is incompatible with category {category!r}",
         )
-        role = next(iter(allowed_roles.get(category, set())), "project_footprint")
+        role = next(iter(allowed_roles.get(category, set())), "site_footprint")
     area_range: tuple[float, float] | None = None
     if (
         source is not None
@@ -778,19 +1018,19 @@ def _normalize_polygon_parameters(
     return parameters, area_range
 
 
-def _normalize_project_parameters(
+def _normalize_site_area_parameters(
     raw: PlanningClaimDraft,
     claim_id: str,
     diagnostics: list[str],
-) -> ProjectPlanningParameters | None:
-    source = raw.project_parameters
+) -> SiteAreaPlanningParameters | None:
+    source = raw.site_area_parameters
     if source is None:
         return None
     capacity = source.capacity.value if source.capacity is not None else None
     capacity_unit = source.capacity.unit if source.capacity is not None else ""
     try:
-        return ProjectPlanningParameters(
-            project_type=_text(source.project_type),
+        return SiteAreaPlanningParameters(
+            site_type=_text(source.site_type),
             action=_normalized_action(
                 source.action,
                 claim_id=claim_id,
@@ -807,7 +1047,7 @@ def _normalize_project_parameters(
             ),
         )
     except ValueError as exc:
-        _diagnostic(diagnostics, "warning", "invalid_project_parameters", claim_id, f"{exc}; project_parameters dropped")
+        _diagnostic(diagnostics, "warning", "invalid_site_area_parameters", claim_id, f"{exc}; site_area_parameters dropped")
         return None
 
 
@@ -844,7 +1084,26 @@ def normalize_claim_draft_set(
             )
             continue
         category = _normalize_category(raw, diagnostics)
-        output = _normalize_output(raw, category, diagnostics)
+        repaired_category, repaired_output = _repair_site_area_namespace(
+            raw,
+            category,
+            diagnostics,
+        )
+        category = repaired_category
+        output = (
+            repaired_output
+            if repaired_output is not None
+            else _normalize_output(raw, category, diagnostics)
+        )
+        asset_kind = _normalize_asset_kind(raw, category, output, diagnostics)
+        if category == "road" and asset_kind == "none":
+            _diagnostic(
+                diagnostics,
+                "error",
+                "missing_asset_kind",
+                claim_id,
+                "line claim must select an asset_kind from the closed set",
+            )
         phase = _text(raw.implementation_phase).lower()
         if phase not in {"short", "medium", "long"}:
             _diagnostic(
@@ -868,7 +1127,12 @@ def normalize_claim_draft_set(
             uncertainty = "non-spatial action; no GIS placement is implied"
         road_parameters = (
             _normalize_road_parameters(raw, claim_id, diagnostics)
-            if category == "road"
+            if category == "road" and asset_kind == "road"
+            else None
+        )
+        linear_parameters = (
+            _normalize_linear_parameters(raw, claim_id, diagnostics)
+            if category == "road" and asset_kind not in {"none", "road"}
             else None
         )
         facility_parameters = (
@@ -881,7 +1145,7 @@ def normalize_claim_draft_set(
             if category == "axis"
             else None
         )
-        if category in {"project", "zone", "protection", "restoration"}:
+        if category in {"site_area", "zone", "protection", "restoration"}:
             polygon_parameters, area_range_ha = _normalize_polygon_parameters(
                 raw,
                 category,
@@ -890,27 +1154,29 @@ def normalize_claim_draft_set(
             )
         else:
             polygon_parameters, area_range_ha = None, None
-        project_parameters = (
-            _normalize_project_parameters(raw, claim_id, diagnostics)
-            if category == "project"
+        site_area_parameters = (
+            _normalize_site_area_parameters(raw, claim_id, diagnostics)
+            if category == "site_area"
             else None
         )
         action_source = raw.intervention_action
         if road_parameters is not None:
             action_source = road_parameters.action
+        elif linear_parameters is not None:
+            action_source = linear_parameters.action
         elif facility_parameters is not None:
             action_source = facility_parameters.action
         elif axis_parameters is not None:
             action_source = axis_parameters.action
-        elif raw.project_parameters is not None:
-            action_source = raw.project_parameters.action
+        elif raw.site_area_parameters is not None:
+            action_source = raw.site_area_parameters.action
         intervention_action = _normalized_action(
             action_source,
             claim_id=claim_id,
             diagnostics=diagnostics,
         )
-        claims.append(
-            PlanningClaim(
+        try:
+            claim = PlanningClaim(
                 claim_id=claim_id,
                 dimension_key=resolved_dimension or _text(raw.dimension_key),
                 statement=statement,
@@ -918,6 +1184,7 @@ def normalize_claim_draft_set(
                 affected_parcel_refs=_clean_refs(raw.affected_parcel_refs),
                 suggested_category=category,
                 suggested_output_kind=output,
+                asset_kind=asset_kind,
                 suggested_interventions=_clean_refs(raw.suggested_interventions),
                 quantity=raw.quantity,
                 quantity_unit=_text(raw.quantity_unit),
@@ -927,16 +1194,17 @@ def normalize_claim_draft_set(
                     polygon_parameters.materialization_role
                     if polygon_parameters is not None
                     else (
-                        "project_footprint"
-                        if category == "project" and output in {"parcel", "polygon"}
+                        "site_footprint"
+                        if category == "site_area" and output in {"parcel", "polygon"}
                         else None
                     )
                 ),
                 road_parameters=road_parameters,
+                linear_parameters=linear_parameters,
                 facility_parameters=facility_parameters,
                 axis_parameters=axis_parameters,
                 polygon_parameters=polygon_parameters,
-                project_parameters=project_parameters,
+                site_area_parameters=site_area_parameters,
                 implementation_phase=phase,
                 location_hints=_clean_refs(raw.location_hints),
                 constraint_refs=_clean_refs(raw.constraint_refs),
@@ -946,7 +1214,16 @@ def normalize_claim_draft_set(
                 confidence=raw.confidence,
                 uncertainty=uncertainty,
             )
-        )
+        except ValidationError as exc:
+            _diagnostic(
+                diagnostics,
+                "error",
+                "claim_contract_invalid",
+                claim_id,
+                f"strict claim contract rejected; claim quarantined: {exc}",
+            )
+            continue
+        claims.append(claim)
     return PlanningClaimSet(
         schema_version="2.0",
         dimension_key=resolved_dimension,
@@ -977,8 +1254,16 @@ def claim_set_semantic_errors(claim_set: PlanningClaimSet) -> list[str]:
     for claim in claim_set.claims:
         prefix = f"{claim.claim_id}:"
         if claim.suggested_category == "road":
-            if claim.road_parameters is None:
-                errors.append(f"{prefix} road_parameters are required")
+            if claim.asset_kind == "road":
+                if claim.road_parameters is None:
+                    errors.append(f"{prefix} road_parameters are required for road asset_kind")
+            elif claim.asset_kind not in {
+                "water_supply", "sewer", "stormwater", "power", "communication",
+                "drainage_channel", "revetment",
+            }:
+                errors.append(f"{prefix} asset_kind must be a supported closed-set linear asset")
+            elif claim.linear_parameters is None:
+                errors.append(f"{prefix} linear_parameters are required for {claim.asset_kind}")
         elif claim.suggested_category == "facility":
             if claim.facility_parameters is None:
                 errors.append(f"{prefix} facility_parameters are required")

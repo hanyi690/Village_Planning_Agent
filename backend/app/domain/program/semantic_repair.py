@@ -50,7 +50,7 @@ class InterventionSemanticPatch(BaseModel):
         "functional_overlay",
         "protection_overlay",
         "restoration_overlay",
-        "project_footprint",
+        "site_footprint",
     ] | None = None
     area_min_ha: float | None = None
     area_max_ha: float | None = None
@@ -448,6 +448,20 @@ def _coerce_candidate(value: Any) -> ProgramSemanticRepairCandidate:
     return ProgramSemanticRepairCandidate.model_validate(value)
 
 
+def _is_nonrecoverable_provider_quota(exc: BaseException) -> bool:
+    """Return true for provider quota states that cannot improve by retrying."""
+    text = str(exc or "").lower()
+    return any(
+        marker in text
+        for marker in (
+            "gousagelimiterror",
+            "weekly usage limit",
+            "quota exceeded",
+            "insufficient balance",
+        )
+    )
+
+
 async def repair_planning_program(
     program: PlanningProgram,
     *,
@@ -463,6 +477,7 @@ async def repair_planning_program(
         issue
         for issue in program.program_issues
         if issue.severity == "error"
+        and issue.code != "classification_decision_required"
     ]
     if source_errors:
         feedback = [
@@ -478,38 +493,13 @@ async def repair_planning_program(
             applied=False,
             validation_errors=feedback,
         )
-    model = llm
-    if model is None:
-        try:
-            from app.infrastructure.llm.factory import create_flash_llm
+    from app.infrastructure.llm.structured import run_structured_output
 
-            model = create_flash_llm(
-                temperature=0.1,
-                max_tokens=8192,
-                streaming=False,
-            )
-        except Exception as exc:  # noqa: BLE001
-            issue = ProgramIssue(
-                severity="error",
-                code="llm_semantic_repair_failed",
-                message="L3 semantic repair model is unavailable",
-                detail=str(exc),
-            )
-            return ProgramSemanticRepairResult(
-                program=program.model_copy(
-                    update={"program_issues": [*program.program_issues, issue]}, deep=True
-                ),
-                validation_errors=[str(exc)],
-            )
-
-    structured = model.with_structured_output(
-        ProgramSemanticRepairCandidate,
-        method="function_calling",
-    )
     cache = SemanticRepairCache(cache_path)
     feedback: list[str] = []
     cache_hits = 0
     attempts = 0
+    quota_exhausted = False
     for round_index in range(max_rounds):
         prompt = _build_prompt(program, feedback)
         cache_key = hashlib.sha256(
@@ -521,23 +511,35 @@ async def repair_planning_program(
         else:
             attempts += 1
             try:
-                raw = await asyncio.wait_for(
-                    structured.ainvoke(
-                        [
+                raw = await run_structured_output(
+                    ProgramSemanticRepairCandidate,
+                    [
                             {
                                 "role": "system",
                                 "content": "Return only the requested structured repair candidate.",
                             },
                             {"role": "user", "content": prompt},
-                        ]
-                    ),
+                    ],
+                    max_retries=1,
                     timeout=timeout_seconds,
+                    temperature=0.1,
+                    max_tokens=8192,
+                    llm=llm,
                 )
                 candidate = _coerce_candidate(raw)
                 cache.put(cache_key, candidate)
             except Exception as exc:  # noqa: BLE001
                 feedback = [f"round {round_index + 1} provider/schema failure: {exc}"]
-                logger.warning("[l3-semantic-repair] %s", feedback[0])
+                quota_exhausted = _is_nonrecoverable_provider_quota(exc)
+                logger.warning(
+                    "[l3-semantic-repair] %s%s",
+                    feedback[0],
+                    "; stopping because provider quota is exhausted"
+                    if quota_exhausted
+                    else "",
+                )
+                if quota_exhausted:
+                    break
                 continue
 
         feedback = validate_semantic_repair_candidate(program, candidate)
@@ -571,8 +573,16 @@ async def repair_planning_program(
 
     failure = ProgramIssue(
         severity="error",
-        code="llm_semantic_repair_failed",
-        message="L3 semantic repair exhausted its bounded retry budget",
+        code=(
+            "llm_provider_quota_exhausted"
+            if quota_exhausted
+            else "llm_semantic_repair_failed"
+        ),
+        message=(
+            "L3 semantic repair stopped because the provider quota is exhausted"
+            if quota_exhausted
+            else "L3 semantic repair exhausted its bounded retry budget"
+        ),
         detail="; ".join(feedback)[:2000],
     )
     return ProgramSemanticRepairResult(

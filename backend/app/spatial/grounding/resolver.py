@@ -20,11 +20,20 @@ or ``app.api``.
 from __future__ import annotations
 
 import re
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError
 from typing import Any, Dict, List, Optional
+
+from pydantic import BaseModel, Field
 
 from app.infrastructure.logging import get_logger
 
 logger = get_logger(__name__)
+
+
+class _CandidateChoice(BaseModel):
+    """Closed-set grounding choice; the provider never returns free text."""
+
+    candidate_index: int = Field(ge=0)
 
 # ── Location-token helpers (moved from parse/agent.py to keep GROUND
 #    inside grounding; parse/agent.py now delegates to this module). ──
@@ -49,6 +58,67 @@ def _bbox_radius_m(bbox) -> float:
     x_m = dlon / meters_to_degrees_lon(1.0, mid_lat) if dlon else 0.0
     y_m = dlat / meters_to_degrees_lat(1.0) if dlat else 0.0
     return round(((x_m ** 2 + y_m ** 2) ** 0.5) / 2.0, 1)
+
+
+def _authoritative_geometry_wkt(value: Any) -> str:
+    """Accept only a valid source geometry returned by a spatial adapter.
+
+    ``CandidateSet.ref_geometry_wkt`` is the escape hatch for exact point/line
+    evidence.  It must never be confused with a bbox or a geometry invented
+    from parcel centroids, so malformed/empty/unsupported values are dropped
+    before they reach GROUND.
+    """
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    try:
+        from shapely import wkt as shapely_wkt
+
+        geometry = shapely_wkt.loads(text)
+    except Exception:
+        return ""
+    if geometry.is_empty or not geometry.is_valid:
+        return ""
+    if geometry.geom_type not in {
+        "Point", "MultiPoint", "LineString", "MultiLineString",
+        "Polygon", "MultiPolygon",
+    }:
+        return ""
+    return geometry.wkt
+
+
+def _authoritative_geometry_refs(values: Any, singular: Any = None) -> list[Any]:
+    """Normalize source-backed geometry records without synthesizing geometry.
+
+    Spatial adapters may still return the legacy singular WKT.  New adapters
+    can return independent ``GeometryRef`` records; each record is validated
+    separately and retained with its source lineage.  Invalid records are
+    discarded rather than repaired or merged.
+    """
+    from app.contracts.spatial.spatial_reference_contracts import GeometryRef
+
+    raw_values = list(values or [])
+    if not raw_values and singular:
+        raw_values = [singular]
+    refs: list[GeometryRef] = []
+    for raw in raw_values:
+        if isinstance(raw, GeometryRef):
+            data = raw.model_dump()
+        elif isinstance(raw, dict):
+            data = dict(raw)
+        else:
+            data = {"wkt": str(raw or "")}
+        wkt = _authoritative_geometry_wkt(data.get("wkt"))
+        if not wkt:
+            continue
+        data["wkt"] = wkt
+        try:
+            refs.append(GeometryRef.model_validate(data))
+        except Exception:
+            # Keep the boundary fail-closed when an adapter sends malformed
+            # metadata, even if its WKT itself parses.
+            continue
+    return refs
 
 
 def _extract_location_tokens(location: str) -> List[str]:
@@ -220,6 +290,9 @@ class SpatialResolver:
         ):
             raise TypeError("SpatialResolver requires a PlanningContext")
         self.context = context
+        from app.spatial.grounding.call_budget import new_ground_llm_budget
+
+        self._ground_llm_budget = new_ground_llm_budget()
 
     @property
     def workspace(self):
@@ -463,6 +536,18 @@ class SpatialResolver:
 
         bsms = list(dict.fromkeys([*candidates.bsms, *candidates.ref_bsms]))
         final_bsms = self._filter_to_bundle(bsms)
+        reference_geometries = _authoritative_geometry_refs(
+            getattr(candidates, "ref_geometries", None),
+            getattr(candidates, "ref_geometry_wkt", None),
+        )
+        reference_geometry_wkt = (
+            reference_geometries[0].wkt
+            if len(reference_geometries) == 1
+            else None
+        )
+        if reference_geometries:
+            provenance["path"] += "+authoritative_geometry"
+            provenance["source_geometry_count"] = len(reference_geometries)
         provenance["kg_count"] = len(bsms)
         provenance["bundle_count"] = len(final_bsms)
 
@@ -507,7 +592,7 @@ class SpatialResolver:
             except Exception as e:
                 logger.warning("[SpatialResolver] directional bbox failed: %s", e)
 
-        if final_bsms and not bbox:
+        if final_bsms and not bbox and not reference_geometries:
             # 设计 §4.3：证据索引判 ambiguous（多候选接近/弱证据）的引用即使
             # 已有候选 BSMs，也进入有界 LLM 判别，避免直接取 top 造成误绑。
             try:
@@ -521,7 +606,7 @@ class SpatialResolver:
             except Exception as exc:  # noqa: BLE001
                 logger.warning("[SpatialResolver] ambiguous llm resolution failed: %s", exc)
 
-        if not final_bsms and not bbox:
+        if not final_bsms and not bbox and not reference_geometries:
             # 不允许留下不可解析的引用（目标 §"不能留又不能解析"）：在证据索引
             # 候选内做有界 LLM best-effort 判别；几何/BSM 仍来自 bundle。失败
             # 才保持 unresolved（绝不伪造几何）。
@@ -560,7 +645,7 @@ class SpatialResolver:
                 provenance={"...": provenance},
             )
 
-        confidence = 0.7 if final_bsms else 0.3
+        confidence = 0.9 if reference_geometries else (0.7 if final_bsms else 0.3)
         if not final_bsms and bbox:
             # Directional bbox with no KG match: fall back to geometry query.
             from .grounding import query_parcels_in_bbox
@@ -583,6 +668,8 @@ class SpatialResolver:
         return ResolvedSpatialRef(
             final_bsms=final_bsms,
             bbox=bbox,
+            reference_geometry_wkt=reference_geometry_wkt or None,
+            reference_geometries=reference_geometries,
             confidence=confidence,
             uncertainty_radius_m=uncertainty_radius_m,
             uncertainty_reason=uncertainty_reason,
@@ -695,6 +782,26 @@ class SpatialResolver:
         ordered: List[Any],
     ) -> Optional[Any]:
         """有界判别：LLM 在候选内选编号；失败/超时返回 None（保持 ambiguous）。"""
+        import os
+
+        if str(os.getenv("DISABLE_GROUND_LLM", "")).strip().lower() in {
+            "1", "true", "yes", "on",
+        } or str(os.getenv("DISABLE_GROUND_REPORT_LLM", "")).strip().lower() in {
+            "1", "true", "yes", "on",
+        }:
+            return None
+        from app.spatial.grounding.call_budget import (
+            ground_llm_sync_semaphore,
+            reserve_ground_llm_call,
+        )
+
+        call_timeout = reserve_ground_llm_call(self._ground_llm_budget)
+        if call_timeout is None:
+            logger.info(
+                "[SpatialResolver] grounding LLM budget exhausted; keeping deterministic resolution for %s",
+                mention,
+            )
+            return None
         try:
             from app.infrastructure.llm.factory import create_flash_llm
 
@@ -709,15 +816,76 @@ class SpatialResolver:
                 "请选择与引用最匹配的一个，只输出编号；都不合适输出 0：\n" + lines
             )
 
-            response = llm.invoke(prompt)
-            content = getattr(response, "content", "")
-            if isinstance(content, list):
-                content = "".join(content)
-            match = re.search(r"\b([0-9]+)\b", str(content or ""))
-            if match is not None:
-                index = int(match.group(1)) - 1
-                if 0 <= index < len(ordered):
-                    return ordered[index]
+            # The production adapter exposes structured output, while v1
+            # test/dry-run adapters may only expose ``invoke``.  Keep the
+            # closed candidate-index contract in both paths; the fallback
+            # parses an index only and never accepts a new BSM or geometry.
+            structured_factory = getattr(llm, "with_structured_output", None)
+            structured = (
+                structured_factory(_CandidateChoice, method="function_calling")
+                if callable(structured_factory)
+                else None
+            )
+
+            # This resolver is intentionally synchronous for compatibility
+            # with the spatial aggregate API.  Bound the provider call in a
+            # short-lived worker and keep the shared grounding gate around it;
+            # the async L1 fan-out is implemented in ground_l1_anchors.
+            executor = ThreadPoolExecutor(max_workers=1)
+            sync_gate = ground_llm_sync_semaphore(self._ground_llm_budget)
+
+            def _invoke_with_bounded_queue():
+                # The sync resolver is called by compatibility paths, so the
+                # semaphore wait must happen in the timed worker too.  Waiting
+                # in the caller thread used to serialize ambiguous references
+                # indefinitely before the provider timeout even started.
+                acquired = sync_gate.acquire(timeout=max(0.001, call_timeout))
+                if not acquired:
+                    raise TimeoutError("grounding LLM semaphore queue timeout")
+                try:
+                    if structured is not None:
+                        return structured.invoke(prompt)
+                    invoke = getattr(llm, "invoke", None)
+                    if not callable(invoke):
+                        raise TypeError("grounding LLM adapter has no invoke method")
+                    return invoke(prompt)
+                finally:
+                    sync_gate.release()
+
+            try:
+                response = executor.submit(_invoke_with_bounded_queue).result(
+                    timeout=call_timeout
+                )
+            finally:
+                executor.shutdown(wait=False, cancel_futures=True)
+            choice = response
+            if not isinstance(choice, _CandidateChoice):
+                content = getattr(choice, "content", choice)
+                if isinstance(content, (list, tuple)):
+                    content = "".join(str(item) for item in content)
+                if isinstance(content, dict):
+                    choice = _CandidateChoice.model_validate(content)
+                else:
+                    match = re.search(r"(?<!\d)(\d+)(?!\d)", str(content or ""))
+                    if match:
+                        choice = _CandidateChoice(candidate_index=int(match.group(1)))
+            if choice is None:
+                # Provider adapters may return an empty response when the
+                # optional grounding model is unavailable.  Keep the
+                # deterministic evidence result ambiguous instead of turning
+                # a normal provider miss into a schema-validation warning.
+                return None
+            if not isinstance(choice, _CandidateChoice):
+                choice = _CandidateChoice.model_validate(choice)
+            index = choice.candidate_index - 1
+            if 0 <= index < len(ordered):
+                return ordered[index]
+        except FutureTimeoutError:
+            logger.warning(
+                "[SpatialResolver] llm pick timed out after %.1fs: %s",
+                call_timeout,
+                mention,
+            )
         except Exception as exc:  # noqa: BLE001
             logger.warning("[SpatialResolver] llm pick failed: %s", exc)
         return None
@@ -968,7 +1136,10 @@ def resolve_intent_anchors(
                 ax.corridor_bsms.extend(bsms)
                 resolved += 1
 
-    for rt in (getattr(intent, "road_targets", None) or []):
+    for rt in [
+        *(getattr(intent, "road_targets", None) or []),
+        *(getattr(intent, "linear_targets", None) or []),
+    ]:
         location = (
             getattr(rt, "location_hint", "")
             or (getattr(getattr(rt, "semantic", None), "spatial_hint", "") or "")
@@ -1066,7 +1237,7 @@ def resolve_intent_anchors(
                 )
                 resolved += 1
 
-    for prj in (getattr(intent, "project_targets", None) or []):
+    for prj in (getattr(intent, "site_area_targets", None) or []):
         location = (getattr(prj, "location_hint", "")
                     or (getattr(getattr(prj, "semantic", None), "spatial_hint", "") or ""))
         for token in _extract_location_tokens(location):
@@ -1083,7 +1254,10 @@ def resolve_intent_anchors(
             if matched:
                 prj.semantic.reasoning_trace = "KG village anchor matched by project location hint"
 
-    for rt in (getattr(intent, "road_targets", None) or []):
+    for rt in [
+        *(getattr(intent, "road_targets", None) or []),
+        *(getattr(intent, "linear_targets", None) or []),
+    ]:
         if not kg_anchors:
             continue
         text = " ".join([

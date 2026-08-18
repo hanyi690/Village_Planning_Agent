@@ -32,6 +32,11 @@ def _upsert_worker_results(current: List[Any], updates: List[Any]) -> List[Any]:
             if isinstance(upd, dict)
             else getattr(upd, "worker_type", None)
         )
+        task_id = (
+            upd.get("task_id")
+            if isinstance(upd, dict)
+            else getattr(upd, "task_id", "")
+        ) or ""
         out = [
             r
             for r in out
@@ -41,6 +46,15 @@ def _upsert_worker_results(current: List[Any], updates: List[Any]) -> List[Any]:
                 else getattr(r, "worker_type", None)
             )
             != worker_type
+            or (
+                task_id
+                and (
+                    r.get("task_id")
+                    if isinstance(r, dict)
+                    else getattr(r, "task_id", "")
+                )
+                != task_id
+            )
         ]
         out.append(upd)
     return out
@@ -65,6 +79,10 @@ class ExecuteAgentState(BaseModel):
     operation_sequence: List[Any] = Field(default_factory=list)
     constraint_set: List[Any] = Field(default_factory=list)
     facility_anchors: Optional[List[Dict[str, Any]]] = None
+    # Grounded execution candidates keyed by stable candidate id.  Workers
+    # consume this immutable geometry instead of pretending every candidate
+    # is an existing cadastral parcel/BSM.
+    candidate_geometry_by_id: Dict[str, Any] = Field(default_factory=dict)
 
     # ── SELECT output (site selection + land design briefs) ──
     site_selection: Optional[Any] = None  # SiteSelectionDecision (typed) — SELECT subgraph output
@@ -96,6 +114,8 @@ class ExecuteAgentState(BaseModel):
     execution_plan: Optional[Any] = None  # ExecutionPlan — built upstream (post-L3 select)
     ports: Optional[Any] = None  # PlanningPorts — injected zone_allocator/road_planner
     worker_results: Annotated[List[Any], _upsert_worker_results] = Field(default_factory=list)  # list[WorkerResult]
+    task_schedule: Optional[Any] = None
+    execution_trace: List[Dict[str, Any]] = Field(default_factory=list)
     worker_conflict_diagnostics: List[Dict[str, Any]] = Field(default_factory=list)  # BSM conflicts from merge
     planned_state: Optional[Any] = None  # PlannedState — produced by planned_state_builder
     execution_review_report: Dict[str, Any] = Field(default_factory=dict)  # execution_review diagnostics

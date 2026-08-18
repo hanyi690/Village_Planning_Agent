@@ -2,10 +2,14 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from app.contracts.artifacts.contract_meta import ContractMeta, StageIssue
 from app.contracts.artifacts.provenance import Provenance
+from app.contracts.evidence.identity_contracts import infer_geometry_granularity
+from app.contracts.planning.constraint_factor import ConstraintFactor, RelationSatisfaction
+from app.contracts.spatial.candidate_geometry import CandidateGeometry
+from app.contracts.spatial.grounded_problem import GroundedPlanningProblem
 
 
 class HardConstraintResult(BaseModel):
@@ -39,6 +43,7 @@ class CandidateUncertainty(BaseModel):
 
 class CandidateSite(BaseModel):
     site_id: str
+    candidate_id: str = ""
     source_parcels: list[str] = Field(default_factory=list)
     available_geometry_wkt: str = ""
     available_area_ha: float = 0.0
@@ -49,6 +54,15 @@ class CandidateSite(BaseModel):
     project_ref: str | None = None
     confidence: float = 0.0
     uncertainty: CandidateUncertainty | None = None
+    target_kind: str = "unknown"
+    expected_output_kind: str = "unknown"
+    geometry: CandidateGeometry | None = None
+
+    @model_validator(mode="after")
+    def derive_candidate_id(self) -> "CandidateSite":
+        if self.geometry is not None:
+            self.candidate_id = self.geometry.candidate_id
+        return self
 
 
 class GroundingResult(ContractMeta):
@@ -56,6 +70,9 @@ class GroundingResult(ContractMeta):
     candidates: list[CandidateSite] = Field(default_factory=list)
     unresolved: list[StageIssue] = Field(default_factory=list)
     spatial_query_evidence: list[SpatialQueryEvidence] = Field(default_factory=list)
+    constraint_factors: list[ConstraintFactor] = Field(default_factory=list)
+    relation_satisfaction: list[RelationSatisfaction] = Field(default_factory=list)
+    problem: GroundedPlanningProblem | None = None
     provenance: "Provenance | None" = None
 
 class GroundedAnchor(ContractMeta):
@@ -82,6 +99,19 @@ class GroundedAnchor(ContractMeta):
     source_report_ref: str = ""
     source_span: str = ""
     query_trace: list[dict] = Field(default_factory=list)
+    geometry_granularity: Literal[
+        "exact_feature", "parcel_set", "settlement", "village_scope", "none"
+    ] = "none"
+
+    @model_validator(mode="after")
+    def derive_geometry_granularity(self) -> "GroundedAnchor":
+        if self.geometry_granularity == "none":
+            self.geometry_granularity = infer_geometry_granularity(
+                self.geometry_ref,
+                entity_ref=self.entity_ref,
+                source_bsms=self.source_bsms,
+            )
+        return self
 
 
 __all__ = [
@@ -89,6 +119,10 @@ __all__ = [
     "SpatialQueryEvidence",
     "CandidateSite",
     "CandidateUncertainty",
+    "CandidateGeometry",
+    "ConstraintFactor",
+    "RelationSatisfaction",
+    "GroundedPlanningProblem",
     "GroundingResult",
     "GroundedAnchor",
 ]

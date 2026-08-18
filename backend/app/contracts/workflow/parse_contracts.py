@@ -69,7 +69,7 @@ class TargetExecutionContract(BaseModel):
     @model_validator(mode="after")
     def validate_execution_contract(self) -> "TargetExecutionContract":
         if not self.target_id:
-            for field_name in ("project_id", "zone_id", "source_instruction_id", "source_project_id"):
+            for field_name in ("site_area_id", "zone_id", "source_instruction_id", "source_project_id"):
                 candidate = str(getattr(self, field_name, "") or "").strip()
                 if candidate:
                     self.target_id = candidate
@@ -192,6 +192,9 @@ class AxisTarget(TargetExecutionContract):
     start_anchor: Optional[Tuple[float, float]] = None
     end_anchor: Optional[Tuple[float, float]] = None
     corridor_bsms: List[str] = Field(default_factory=list)
+    # Exact line materialization is allowed only for these source-backed IDs.
+    # Parcel corridors and directional anchors remain candidate/deferred data.
+    source_feature_ids: List[str] = Field(default_factory=list)
     requires_human_confirmation: bool = False
     # Semantic anchors (human-readable, not stored as RDF)
     semantic: SemanticMetadata = Field(default_factory=SemanticMetadata)
@@ -206,6 +209,10 @@ class RoadTarget(TargetExecutionContract):
     """
 
     expected_output_kind: Literal["line", "action"] = "line"
+    asset_kind: Literal[
+        "road", "water_supply", "sewer", "stormwater", "power",
+        "communication", "drainage_channel", "revetment",
+    ] = "road"
     road_level: str = ""                         # "主干道"/"次干道"/"支路"/"村道"
     width_m: float = 0.0
     action: Literal["preserve", "new", "upgrade", "widen", "harden", "repair"] = "new"
@@ -232,21 +239,76 @@ class RoadTarget(TargetExecutionContract):
     path_bsms: List[str] = Field(default_factory=list)
     candidate_bsms: List[str] = Field(default_factory=list)
     candidate_bbox: Optional[Tuple[float, float, float, float]] = None
+    linear_diameter_mm: Optional[float] = None
+    linear_material: str = ""
     requires_human_confirmation: bool = False
     # Semantic anchors (human-readable, not stored as RDF)
     semantic: SemanticMetadata = Field(default_factory=SemanticMetadata)
 
 
-class ProjectTarget(TargetExecutionContract):
-    """L3 project-bank item preserved as the parent planning intent."""
+class LinearAssetTarget(TargetExecutionContract):
+    """Non-road linear asset target grounded against the existing KG/GIS.
 
-    project_id: str
+    A line geometry is not a road semantic.  This target deliberately has no
+    road width or road class fields; corridor and endpoint evidence are filled
+    by GROUND from KG/bundle facts.
+    """
+
+    expected_output_kind: Literal["line", "action"] = "line"
+    asset_kind: Literal[
+        "water_supply", "sewer", "stormwater", "power", "communication",
+        "drainage_channel", "revetment",
+    ]
+    action: Literal["preserve", "new", "upgrade", "expand", "repair"] = "new"
+    length_m: Optional[float] = None
+    diameter_mm: Optional[float] = None
+    material: str = ""
+    connects: List[str] = Field(default_factory=list)
+    alignment_refs: List[str] = Field(default_factory=list)
+    source_project_id: str = ""
+    source_instruction_id: str = ""
+    source_report_key: str = ""
+    start_anchor: Optional[Tuple[float, float]] = None
+    end_anchor: Optional[Tuple[float, float]] = None
+    start_entity_ref: str = ""
+    end_entity_ref: str = ""
+    start_endpoint: Optional[RoadEndpointEvidence] = None
+    end_endpoint: Optional[RoadEndpointEvidence] = None
+    candidate_corridor_refs: List[str] = Field(default_factory=list)
+    network_node_refs: List[str] = Field(default_factory=list)
+    connectivity_evidence: List[str] = Field(default_factory=list)
+    topology_status: Literal["unresolved", "candidate_only", "connected"] = "unresolved"
+    path_bsms: List[str] = Field(default_factory=list)
+    candidate_bsms: List[str] = Field(default_factory=list)
+    candidate_bbox: Optional[Tuple[float, float, float, float]] = None
+    requires_human_confirmation: bool = False
+    semantic: SemanticMetadata = Field(default_factory=SemanticMetadata)
+
+    @property
+    def linear_diameter_mm(self) -> Optional[float]:
+        """Compatibility view used by typed linear execution consumers."""
+        return self.diameter_mm
+
+
+class SiteAreaTarget(TargetExecutionContract):
+    """Land-consuming site area with a parcel/polygon execution footprint.
+
+    A site-area target is not a facility marker. If the planning intent is a
+    service node, public square, shelter, or another locatable facility, L3
+    must emit ``FacilityTarget`` with point output. A site-area intervention consumes
+    a selected parcel and produces a parcel/polygon footprint.
+    """
+
+    expected_output_kind: Literal["parcel", "polygon", "action"] = "parcel"
+
+    site_area_id: str
     name: str
     category: str = "other"
     materialization_role: Optional[Literal[
         "functional_overlay",
         "protection_overlay",
         "restoration_overlay",
+        "site_footprint",
         "project_footprint",
     ]] = None
     action: Literal[
@@ -269,10 +331,37 @@ class ProjectTarget(TargetExecutionContract):
     related_facility_types: List[str] = Field(default_factory=list)
     related_road_targets: List[str] = Field(default_factory=list)
     source_instruction_id: str = ""
+    source_project_ref: str = ""
     source_report_key: str = ""
     source_section: str = "INSTRUCTION"
     source_row: Optional[int] = None
     semantic: SemanticMetadata = Field(default_factory=SemanticMetadata)
+
+
+class ProjectTarget(SiteAreaTarget):
+    """Backward-compatible project-target spelling used by older fixtures.
+
+    ``site_area_targets`` is the canonical v2 container.  Older acceptance
+    fixtures and persisted callers still construct ``ProjectTarget`` with a
+    ``project_id``; normalize that identity before the shared execution
+    contract validator runs.
+    """
+
+    project_id: str = ""
+    site_area_id: str = ""
+
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_project_identity(cls, value: object) -> object:
+        if isinstance(value, dict):
+            payload = dict(value)
+            project_id = str(payload.get("project_id") or "").strip()
+            if project_id and not payload.get("site_area_id"):
+                payload["site_area_id"] = project_id
+            if project_id and not payload.get("target_id"):
+                payload["target_id"] = project_id
+            return payload
+        return value
 
 
 # ── Planning indicator table (附表1) ────────────────────────────────
@@ -512,11 +601,19 @@ class SpatialPlanningIntent(BaseModel):
     # Road targets (new — fills road sub-task gap)
     road_targets: List[RoadTarget] = Field(default_factory=list)
 
+    # Non-road linear assets use a separate semantic target container.
+    linear_targets: List[LinearAssetTarget] = Field(default_factory=list)
+
     # L3 project-bank parents. Facilities/roads/zones may derive from these.
-    project_targets: List[ProjectTarget] = Field(default_factory=list)
+    site_area_targets: List[SiteAreaTarget] = Field(default_factory=list)
 
     # Custom functional zone targets (P6 — from Explore/Binder project domain)
     custom_zone_targets: List["CustomZoneTarget"] = Field(default_factory=list)
+
+    @property
+    def project_targets(self) -> List[SiteAreaTarget]:
+        """Compatibility view for persisted callers; canonical field is site_area_targets."""
+        return self.site_area_targets
 
     # Session vocabulary name for custom zoning (P7 — LLM-extracted from L3 reports)
     vocabulary_name: str = ""
@@ -563,6 +660,8 @@ __all__ = [
     "FacilityTarget",
     "AxisTarget",
     "RoadTarget",
+    "LinearAssetTarget",
+    "SiteAreaTarget",
     "ProjectTarget",
     "SemanticMetadata",
     "PlanningIndicatorItem",

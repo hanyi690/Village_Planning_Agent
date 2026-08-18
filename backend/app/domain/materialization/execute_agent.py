@@ -44,6 +44,7 @@ from app.domain.materialization.nodes import (
     _road_worker,
     _road_worker_node,
     _route_tasks_node,
+    _task_level_execution_node,
     _write_l4_node,
     _zone_worker,
     _zone_worker_node,
@@ -56,8 +57,8 @@ logger = get_logger(__name__)
 
 def _route_after_execution_review(
     state: ExecuteAgentState,
-) -> Literal["pass", "retry", "human"]:
-    """Route after execution review: pass -> END, fail -> retry (max 3 rounds -> human)."""
+) -> Literal["pass", "retry", "retry_route", "human"]:
+    """Route after review, retrying route failures from the route boundary."""
     result = state.validation_result or {}
     if result.get("passed", False):
         return "pass"
@@ -67,6 +68,11 @@ def _route_after_execution_review(
             state.validation_round,
         )
         return "human"
+    if any(
+        str(item.get("stage", "")) == "route"
+        for item in (state.execution_errors or [])
+    ):
+        return "retry_route"
     return "retry"
 
 
@@ -89,6 +95,7 @@ def build_execute_agent_graph(checkpointer=None):
 
     graph.add_node("route_tasks", _checkpoint_safe_node(_route_tasks_node))
     graph.add_node("prepare_inputs", _checkpoint_safe_node(_prepare_inputs_node))
+    graph.add_node("task_scheduler", _checkpoint_safe_node(_task_level_execution_node))
     graph.add_node("project_worker", _checkpoint_safe_node(_project_worker_node))
     graph.add_node("zone_worker", _checkpoint_safe_node(_zone_worker_node))
     graph.add_node("facility_worker", _checkpoint_safe_node(_facility_worker_node))
@@ -102,16 +109,8 @@ def build_execute_agent_graph(checkpointer=None):
 
     graph.add_edge(START, "route_tasks")
     graph.add_edge("route_tasks", "prepare_inputs")
-    graph.add_edge("prepare_inputs", "project_worker")
-    graph.add_edge("project_worker", "zone_worker")
-    # Parallel fan-out: zone_worker -> [facility_worker || axis_worker]
-    graph.add_edge("zone_worker", "facility_worker")
-    graph.add_edge("zone_worker", "axis_worker")
-    # Fan-in: both workers join at road_worker
-    graph.add_edge("facility_worker", "road_worker")
-    graph.add_edge("axis_worker", "road_worker")
-    graph.add_edge("road_worker", "action_worker")
-    graph.add_edge("action_worker", "merge_worker_results")
+    graph.add_edge("prepare_inputs", "task_scheduler")
+    graph.add_edge("task_scheduler", "merge_worker_results")
     graph.add_edge("merge_worker_results", "geometry_materialize")
     graph.add_edge("geometry_materialize", "planned_state_builder")
     graph.add_edge("planned_state_builder", "execution_review")
@@ -119,7 +118,12 @@ def build_execute_agent_graph(checkpointer=None):
     graph.add_conditional_edges(
         "execution_review",
         _route_after_execution_review,
-        {"retry": "zone_worker", "pass": END, "human": END},
+        {
+            "retry": "task_scheduler",
+            "retry_route": "route_tasks",
+            "pass": END,
+            "human": END,
+        },
     )
 
     compile_kwargs = {}
@@ -140,6 +144,7 @@ __all__ = [
     "_execution_error",
     "_route_tasks_node",
     "_prepare_inputs_node",
+    "_task_level_execution_node",
     "_project_worker",
     "_project_worker_node",
     "_zone_worker",

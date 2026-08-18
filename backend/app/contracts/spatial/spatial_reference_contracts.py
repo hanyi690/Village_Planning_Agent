@@ -10,7 +10,7 @@ See docs/gis/integration/PARSE_SPATIAL_GROUNDING_DESIGN.md §2.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Literal
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -53,6 +53,17 @@ class SpatialReferenceSpec(BaseModel):
     spec_id: str = ""
     project_ref: Optional[str] = None
     unresolved_reason: str = ""
+    # Preserve target materialization semantics across the PARSE -> GROUND
+    # boundary.  Spatial resolution is geometry-only, but GROUND must not
+    # turn a protection/functional overlay into a land-use assignment merely
+    # because both happen to use polygon candidates.
+    materialization_role: Literal[
+        "land_use_assignment",
+        "functional_overlay",
+        "protection_overlay",
+        "restoration_overlay",
+        "site_footprint",
+    ] | None = None
 
     model_config = {"extra": "forbid"}
 
@@ -65,10 +76,29 @@ class SpatialReferenceSpec(BaseModel):
 
 
 class GeometryRef(BaseModel):
-    """Explicit geometry reference — raw WKT/CRS/bbox grounding artifact."""
+    """Explicit source-backed geometry reference.
+
+    A target may be backed by more than one source feature (for example a
+    retained set of bus stops or a set of existing road segments).  Each
+    member stays separate here; callers must not union the records into an
+    executable geometry.  ``source_ref`` is the stable feature/entity
+    lineage, while ``source_bsms`` is optional parcel evidence associated with
+    that feature.
+    """
     wkt: str = ""
     crs: str = ""
     bbox: tuple[float, float, float, float] | None = None
+    source_ref: str = ""
+    source_refs: list[str] = Field(default_factory=list)
+    source_bsms: list[str] = Field(default_factory=list)
+    feature_kind: str = ""
+
+    model_config = {"extra": "forbid"}
+
+    @field_validator("source_refs", "source_bsms")
+    @classmethod
+    def _clean_refs(cls, value: list[str]) -> list[str]:
+        return list(dict.fromkeys(str(item) for item in value if str(item).strip()))
 
 
 @dataclass
@@ -77,6 +107,10 @@ class CandidateSet:
     bsms: List[str] = field(default_factory=list)
     ref_bsms: List[str] = field(default_factory=list)
     ref_geometry_wkt: Optional[str] = None
+    # Source-backed geometries are deliberately a list of independent
+    # records.  ``ref_geometry_wkt`` remains for backwards compatibility
+    # with adapters that can only return one feature.
+    ref_geometries: List[GeometryRef] = field(default_factory=list)
 
 
 @dataclass
@@ -85,6 +119,7 @@ class ResolvedSpatialRef:
     final_bsms: List[str] = field(default_factory=list)
     bbox: Optional[List[float]] = None
     reference_geometry_wkt: Optional[str] = None
+    reference_geometries: List[GeometryRef] = field(default_factory=list)
     confidence: float = 0.0
     uncertainty_radius_m: float = 0.0
     uncertainty_reason: str = ""

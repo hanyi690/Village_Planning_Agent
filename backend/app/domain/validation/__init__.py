@@ -16,6 +16,21 @@ from app.domain.validation.validate_checks import (
     check_hard_constraints,
     check_overlap,
     check_topology,
+    check_cross_layer_topology,
+    check_relation_validation,
+)
+from app.domain.validation.relation_validation import (
+    FinalRelationFinding,
+    FinalRelationValidation,
+    FinalScenarioValidation,
+    validate_cross_layer_topology,
+    validate_final_scenario,
+)
+from app.domain.validation.scenario_reconciliation import (
+    ReconciliationFinding,
+    ScenarioReconciliation,
+    reconcile_scenario_relations,
+    reconcile_scenario_validation,
 )
 
 __all__ = [
@@ -33,4 +48,15 @@ __all__ = [
     "check_accessibility",
     "check_contract_completeness",
     "check_classification_missing",
+    "check_relation_validation",
+    "check_cross_layer_topology",
+    "FinalRelationFinding",
+    "FinalRelationValidation",
+    "FinalScenarioValidation",
+    "validate_cross_layer_topology",
+    "validate_final_scenario",
+    "ReconciliationFinding",
+    "ScenarioReconciliation",
+    "reconcile_scenario_relations",
+    "reconcile_scenario_validation",
 ]

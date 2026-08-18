@@ -580,6 +580,8 @@ def _compact_source_properties(props: Mapping[str, Any] | None) -> Dict[str, Any
 def ingest_feature(
     filepath: str,
     feature_type: str,
+    *,
+    source_uri: str | None = None,
 ) -> Tuple[List[SpatialFeature], List[str]]:
     """通用空间要素摄入 - 按 feature_type 选择对应的类型化模型。
 
@@ -614,6 +616,7 @@ def ingest_feature(
     warnings: List[str] = []
 
     _model_fields = set(model_cls.model_fields.keys())
+    from .source_identity import source_feature_identity
 
     for i, feat in enumerate(data.get("features", [])):
         props = feat.get("properties", {})
@@ -626,6 +629,15 @@ def ingest_feature(
             "geometry": geom,
             "_raw": _compact_source_properties(props),
         }
+        identity = source_feature_identity(
+            source_uri=source_uri,
+            feature_collection=data,
+            layer_type=feature_type,
+            feature_index=i,
+            feature=feat,
+        )
+        if identity is not None:
+            kwargs["_raw"].update(identity)
 
         for field_name in _model_fields:
             if field_name in ("geometry",):

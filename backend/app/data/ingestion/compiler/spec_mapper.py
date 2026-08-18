@@ -1,16 +1,27 @@
 """Deterministic rule-based mapper: PlanningIntervention -> SpatialReferenceSpec.
 
 This mapper bridges L3 planning output to the closed-set spatial reference DSL.
-It is fully deterministic: no LLM calls, no KG queries, and no geometry.
+It is fully deterministic: no LLM calls, no KG queries, and no geometry. When
+an existing asset has one audited L1 exact-feature binding, it emits only a
+named reference; the KG resolver remains responsible for uniqueness and WKT.
 Direction hints are extracted from spatial_requirements string values (falling
 back to problem_addressed and functions) via direction_from_location().
 """
 from __future__ import annotations
 
 import re
+from collections.abc import Sequence
 
 from app.data.ingestion.spatial_language import direction_from_location
+from app.evidence.identity.source_feature_binding import (
+    bind_existing_facility_source_features,
+    bind_existing_road_source_features,
+)
 from app.contracts.domain.l3_contracts import PlanningIntervention
+from app.contracts.evidence.identity_contracts import (
+    EvidenceObservation,
+    GroundedEntityBinding,
+)
 from app.contracts.workflow.parse_result_contracts import ParseDiagnostic
 from app.contracts.spatial.spatial_reference_contracts import (
     RefObject,
@@ -41,6 +52,38 @@ _GENERIC_VILLAGE_WORDS = frozenset({
 })
 
 
+def _materialization_role(intervention: PlanningIntervention) -> str | None:
+    """Return the L3 materialization role carried by a spatial spec.
+
+    Only categories with one unambiguous role receive a compatibility
+    default.  A zone without an explicit role remains unresolved because it
+    may be either an authoritative land-use assignment or a non-exclusive
+    functional/protection/restoration overlay.
+    """
+
+    if intervention.materialization_role:
+        return intervention.materialization_role
+    if intervention.category == "site_area":
+        return "site_footprint"
+    if intervention.category == "protection":
+        return "protection_overlay"
+    if intervention.category == "restoration":
+        return "restoration_overlay"
+    return None
+
+
+def _finalize_spec(
+    spec: SpatialReferenceSpec,
+    intervention: PlanningIntervention,
+) -> SpatialReferenceSpec:
+    spec.intervention_id = intervention.intervention_id
+    spec.target_id = intervention.target_id
+    spec.spec_id = f"spatial-ref:{intervention.target_id}"
+    spec.project_ref = intervention.intervention_id
+    spec.materialization_role = _materialization_role(intervention)
+    return spec
+
+
 def _explicit_village_names(intervention: PlanningIntervention) -> list[str]:
     """Extract only a village name explicitly present in the model text.
 
@@ -55,10 +98,18 @@ def _explicit_village_names(intervention: PlanningIntervention) -> list[str]:
     ])
     # Conservative fallback for a root-village name: a Chinese span ending in
     # 村 that is not a generic scope word.
-    match = re.search(r"([\u4e00-\u9fff]{1,6}村)", text)
-    if match and match.group(1) not in _GENERIC_VILLAGE_WORDS:
-        return [match.group(1)]
-    return []
+    matches: list[str] = []
+    for segment in re.split(r"[、，,；;和及与]", text):
+        match = re.search(r"([\u4e00-\u9fff]{1,6}村)", segment)
+        if not match:
+            continue
+        token = match.group(1)
+        for prefix in ("服务", "覆盖", "建设", "规划", "连接", "改善"):
+            if token.startswith(prefix) and len(token) > len(prefix) + 1:
+                token = token[len(prefix):]
+        if token not in _GENERIC_VILLAGE_WORDS:
+            matches.append(token)
+    return list(dict.fromkeys(matches))
 
 
 def _location_reference(intervention: PlanningIntervention) -> SpatialReferenceSpec | None:
@@ -246,10 +297,221 @@ def _direction_from_requirements(intervention: PlanningIntervention) -> str:
     return ""
 
 
+def _source_binding_reference(
+    intervention: PlanningIntervention,
+    observations: Sequence[EvidenceObservation],
+    bindings: Sequence[GroundedEntityBinding],
+) -> SpatialReferenceSpec | None:
+    """Project one audited existing-feature binding into the closed DSL.
+
+    A binding is only an eligibility hint here.  The KG resolver must still
+    find one entity with the exact label and authoritative ``geo:hasGeometry``
+    before geometry can become executable.  New/planned assets deliberately
+    do not consume existing-feature bindings.
+    """
+    if intervention.intervention_action not in {"preserve", "upgrade", "repair"}:
+        return None
+    if intervention.category not in {"facility", "road", "axis"}:
+        return None
+    observation_by_id = {item.observation_id: item for item in observations}
+    target_text = " ".join(
+        [
+            intervention.name,
+            str(intervention.spatial_requirements.get("location") or ""),
+            *[
+                str(value)
+                for value in intervention.spatial_requirements.get("location_hints", [])
+                if str(value).strip()
+            ],
+            *[
+                str(value)
+                for value in (
+                    intervention.road_parameters.alignment_refs
+                    if intervention.road_parameters is not None
+                    else []
+                )
+                if str(value).strip()
+            ],
+        ]
+    )
+    matches: list[tuple[GroundedEntityBinding, EvidenceObservation]] = []
+    expected_type = "facility" if intervention.category == "facility" else "road"
+    for binding in bindings:
+        if binding.status != "resolved" or binding.geometry_granularity != "exact_feature":
+            continue
+        if not str(binding.geometry_ref or "").strip():
+            continue
+        observation = observation_by_id.get(binding.mention_ref)
+        if observation is None or observation.observed_type != expected_type:
+            continue
+        mention = str(observation.normalized_name or observation.mention or "").strip()
+        if not mention or mention not in target_text:
+            continue
+        if not binding.canonical_entity_ref:
+            continue
+        matches.append((binding, observation))
+    if len(matches) != 1:
+        return None
+    _, observation = matches[0]
+    mention = str(observation.normalized_name or observation.mention).strip()
+    rdf_type = "Facility" if intervention.category == "facility" else "Road"
+    return SpatialReferenceSpec(
+        type="directional",
+        reference=RefObject(
+            kind="entity_type",
+            filter={"rdf_type": rdf_type, "label_contains": mention},
+        ),
+    )
+
+
+def _explicit_source_feature_reference(
+    intervention: PlanningIntervention,
+    *,
+    source_features: Sequence[object] | None = None,
+) -> SpatialReferenceSpec | None:
+    """Project explicitly supplied source feature IDs without text inference.
+
+    ``source_feature_ids`` is an auditable adapter field, not a free-text
+    location hint.  Only facility/road existing-asset actions consume it;
+    the KG resolver still verifies entity type and authoritative WKT.  Invalid
+    or absent values deliberately return ``None`` so no exact geometry claim
+    is manufactured here.
+    """
+    existing_actions = {"preserve", "upgrade", "widen", "harden", "repair"}
+    typed_parameters = (
+        intervention.road_parameters
+        if intervention.category == "road" and intervention.road_parameters is not None
+        else intervention.axis_parameters
+        if intervention.category == "axis" and intervention.axis_parameters is not None
+        else None
+    )
+    typed_action = str(getattr(typed_parameters, "action", "") or "")
+    if intervention.intervention_action not in existing_actions and typed_action not in existing_actions:
+        return None
+    if intervention.category not in {"facility", "road", "axis"}:
+        return None
+    requirements = intervention.spatial_requirements or {}
+    raw_ids = next(
+        (
+            requirements.get(key)
+            for key in (
+                "source_feature_ids",
+                "existing_road_feature_ids",
+                "road_feature_ids",
+            )
+            if key in requirements
+        ),
+        None,
+    )
+    if intervention.category in {"road", "axis"} and source_features:
+        # If the current-road layer is available, reject foreign/stale IDs
+        # before they cross the exact-line boundary. With no source layer,
+        # the explicit-ID contract remains auditable and the KG resolver is
+        # responsible for the authoritative geometry check.
+        source_ids = {
+            str((getattr(feature, "_raw", {}) or {}).get("source_feature_id") or "").strip()
+            for feature in source_features
+            if isinstance(getattr(feature, "geometry", None), dict)
+            and getattr(feature, "geometry", {}).get("type")
+            in {"LineString", "MultiLineString"}
+        }
+        requested = raw_ids if isinstance(raw_ids, (list, tuple, set)) else []
+        requested_ids = {str(item).strip() for item in requested if str(item).strip()}
+        if not requested_ids or not requested_ids.issubset(source_ids):
+            return None
+    if not isinstance(raw_ids, (list, tuple)):
+        return None
+    source_ids = list(
+        dict.fromkeys(
+            str(item).strip()
+            for item in raw_ids
+            if isinstance(item, str) and item.strip()
+        )
+    )
+    if not source_ids:
+        return None
+    rdf_type = "Facility" if intervention.category == "facility" else "Road"
+    return SpatialReferenceSpec(
+        type="directional",
+        reference=RefObject(
+            kind="entity_type",
+            filter={
+                "rdf_type": rdf_type,
+                "source_feature_ids": source_ids,
+                "allow_multiple_exact": len(source_ids) > 1,
+            },
+        ),
+    )
+
+
 def _build_candidates(
     intervention: PlanningIntervention,
+    *,
+    observations: Sequence[EvidenceObservation] = (),
+    bindings: Sequence[GroundedEntityBinding] = (),
+    source_features: dict[str, list[object]] | None = None,
 ) -> list[SpatialReferenceSpec]:
     candidates: list[SpatialReferenceSpec] = []
+
+    explicit_source = _explicit_source_feature_reference(
+        intervention,
+        source_features=(source_features or {}).get("road", ())
+        if intervention.category in {"road", "axis"}
+        else None,
+    )
+    if explicit_source is not None:
+        # Explicit source IDs are stronger than prose and must be the only
+        # location evidence used for this exact-feature path.
+        candidates.append(explicit_source)
+        return candidates
+
+    grouped_ids = bind_existing_facility_source_features(
+        intervention,
+        (source_features or {}).get("facility", ()),
+    )
+    if grouped_ids:
+        candidates.append(
+            SpatialReferenceSpec(
+                type="directional",
+                reference=RefObject(
+                    kind="entity_type",
+                    filter={
+                        "rdf_type": "Facility",
+                        "source_feature_ids": grouped_ids,
+                        "allow_multiple_exact": len(grouped_ids) > 1,
+                    },
+                ),
+            )
+        )
+        return candidates
+
+    road_ids = bind_existing_road_source_features(
+        intervention,
+        (source_features or {}).get("road", ()),
+    )
+    if road_ids:
+        candidates.append(
+            SpatialReferenceSpec(
+                type="directional",
+                reference=RefObject(
+                    kind="entity_type",
+                    filter={
+                        "rdf_type": "Road",
+                        "source_feature_ids": road_ids,
+                        "allow_multiple_exact": len(road_ids) > 1,
+                    },
+                ),
+            )
+        )
+        return candidates
+
+    source_binding = _source_binding_reference(intervention, observations, bindings)
+    if source_binding is not None:
+        # Existing-feature evidence is a stronger, auditable anchor than a
+        # broad prose location.  KG uniqueness/geometry checks remain the
+        # final authority; if they fail, GROUND stays candidate-only.
+        candidates.append(source_binding)
+        return candidates
 
     location_ref = _location_reference(intervention)
     if location_ref is None:
@@ -310,13 +572,22 @@ def _build_candidates(
 
 def map_intervention_to_spec(
     intervention: PlanningIntervention,
+    *,
+    observations: Sequence[EvidenceObservation] = (),
+    bindings: Sequence[GroundedEntityBinding] = (),
+    source_features: dict[str, list[object]] | None = None,
 ) -> SpatialReferenceSpec | None:
     """Deterministically map a spatial intervention to one linked spec."""
     if intervention.execution_mode == "non_spatial":
         return None
-    candidates = _build_candidates(intervention)
+    candidates = _build_candidates(
+        intervention,
+        observations=observations,
+        bindings=bindings,
+        source_features=source_features,
+    )
     if not candidates:
-        return SpatialReferenceSpec(
+        return _finalize_spec(SpatialReferenceSpec(
             type="composed",
             op="and",
             intervention_id=intervention.intervention_id,
@@ -324,30 +595,36 @@ def map_intervention_to_spec(
             spec_id=f"spatial-ref:{intervention.target_id}",
             project_ref=intervention.intervention_id,
             unresolved_reason="missing_location_evidence",
-        )
+        ), intervention)
     if len(candidates) == 1:
         spec = candidates[0]
-        spec.intervention_id = intervention.intervention_id
-        spec.target_id = intervention.target_id
-        spec.spec_id = f"spatial-ref:{intervention.target_id}"
-        spec.project_ref = intervention.intervention_id
-        return spec
-    spec = SpatialReferenceSpec(type="composed", op="or", children=candidates)
-    spec.intervention_id = intervention.intervention_id
-    spec.target_id = intervention.target_id
-    spec.spec_id = f"spatial-ref:{intervention.target_id}"
-    spec.project_ref = intervention.intervention_id
-    return spec
+        return _finalize_spec(spec, intervention)
+    # A target's independent spatial requirements are conjunctive by default:
+    # location, direction, allowed land-use and topology all constrain the
+    # same candidate domain.  Alternatives must be represented explicitly by
+    # the upstream typed contract; treating every extracted clue as OR makes a
+    # candidate pass when it satisfies only one weak hint.
+    spec = SpatialReferenceSpec(type="composed", op="and", children=candidates)
+    return _finalize_spec(spec, intervention)
 
 
 def map_interventions_to_specs(
     interventions: list[PlanningIntervention],
+    *,
+    observations: Sequence[EvidenceObservation] = (),
+    bindings: Sequence[GroundedEntityBinding] = (),
+    source_features: dict[str, list[object]] | None = None,
 ) -> tuple[list[SpatialReferenceSpec], list[ParseDiagnostic]]:
     """Batch map targets while retaining unresolved spatial requirements."""
     specs: list[SpatialReferenceSpec] = []
     diagnostics: list[ParseDiagnostic] = []
     for intervention in interventions:
-        spec = map_intervention_to_spec(intervention)
+        spec = map_intervention_to_spec(
+            intervention,
+            observations=observations,
+            bindings=bindings,
+            source_features=source_features,
+        )
         if spec is None:
             continue
         else:

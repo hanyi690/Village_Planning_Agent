@@ -61,10 +61,26 @@ async def _write_l4_node(state: ExecuteAgentState) -> dict:
         return {}
 
     outcome = getattr(state, "execution_result", None)
+    outcome_task_results = (
+        outcome.get("task_results", [])
+        if isinstance(outcome, dict)
+        else (getattr(outcome, "task_results", None) or [])
+    )
     outcome_targets = {
-        (str(getattr(item, "target_id", "")), str(getattr(item, "expected_output_kind", "")))
-        for item in (getattr(outcome, "task_results", None) or [])
-        if str(getattr(item, "status", "")) == "succeeded"
+        (
+            str(item.get("target_id", ""))
+            if isinstance(item, dict)
+            else str(getattr(item, "target_id", "")),
+            str(item.get("expected_output_kind", ""))
+            if isinstance(item, dict)
+            else str(getattr(item, "expected_output_kind", "")),
+        )
+        for item in outcome_task_results
+        if (
+            str(item.get("status", ""))
+            if isinstance(item, dict)
+            else str(getattr(item, "status", ""))
+        ) == "succeeded"
     }
     planned_targets = {
         (str(getattr(item, "derived_from_target", "")), "point")

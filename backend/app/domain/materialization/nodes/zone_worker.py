@@ -17,6 +17,7 @@ from app.domain.materialization.nodes.worker_common import (
     _execution_intent_from_plan,
     _intent_list,
     _resolve_parcel_by_bsm,
+    _scenario_features_for_layer,
     _task_enabled,
     _task_execution_result,
 )
@@ -334,11 +335,61 @@ def _zone_worker(
         for target in _intent_list(bound_intent, "zone_targets")
         if str(getattr(target, "target_id", "") or "") not in custom_ids
     ]
+    # A relation-aware zone may be backed by an execution polygon rather than
+    # an authoritative parcel allocation.  Materialize that typed geometry
+    # directly; leave parcel allocation for legacy zone targets.
+    direct_targets: list[Any] = []
+    direct_layers: list[dict[str, Any]] = []
+    direct_features: list[dict[str, Any]] = []
+    candidate_map = getattr(state, "candidate_geometry_by_id", {}) or {}
+    from shapely import wkt as shapely_wkt
+    from shapely.geometry import mapping as shapely_mapping
+    for task in list(getattr(state.execution_plan, "worker_tasks", None) or []):
+        if str(getattr(task, "target_type", "") or "") != "zone":
+            continue
+        candidate_id = str(getattr(task, "candidate_id", "") or "")
+        candidate = candidate_map.get(candidate_id)
+        if candidate is None or not str(getattr(candidate, "wkt", "") or ""):
+            continue
+        target = next((item for item in zone_targets if str(getattr(item, "target_id", "")) == str(getattr(task, "target_id", ""))), None)
+        if target is None:
+            continue
+        try:
+            geometry = shapely_mapping(shapely_wkt.loads(str(candidate.wkt)))
+        except Exception:
+            continue
+        direct_targets.append(target)
+        direct_features.append({
+            "type": "Feature",
+            "properties": {
+                "target_id": str(target.target_id),
+                "project_ref": str(target.target_id),
+                "candidate_id": candidate_id,
+                "scenario_id": str(getattr(task, "scenario_id", "") or ""),
+                "source_refs": list(getattr(candidate, "evidence_refs", None) or []) or [str(getattr(candidate, "source_ref", "") or "candidate_geometry")],
+                "generation_operation": "candidate_geometry_materialize",
+                "materialization_role": "land_use_assignment",
+                "hard_constraint_status": str(
+                    getattr(candidate, "hard_constraint_status", "") or ""
+                ),
+            },
+            "geometry": geometry,
+        })
+    if direct_features:
+        direct_layers.append({
+            "layerType": "planned_zone",
+            "layerName": "规划功能分区",
+            "data": {"type": "FeatureCollection", "features": direct_features},
+        })
+    direct_ids = {str(getattr(item, "target_id", "")) for item in direct_targets}
+    zone_targets = [item for item in zone_targets if str(getattr(item, "target_id", "")) not in direct_ids]
     parcel_by_bsm = _resolve_parcel_by_bsm(state)
     diagnostics: List[Dict[str, Any]] = []
     unresolved: List[Dict[str, Any]] = []
     task_statuses: Dict[str, str] = {}
-    layers: list[dict[str, Any]] = []
+    layers: list[dict[str, Any]] = list(direct_layers)
+    for target in direct_targets:
+        task_statuses[str(target.target_id)] = "succeeded"
 
     functional_layer, functional_unresolved, functional_succeeded = (
         _functional_overlay_layer(custom_targets, parcel_by_bsm)
@@ -374,6 +425,7 @@ def _zone_worker(
             unresolved,
             diagnostics,
             task_statuses,
+            direct_targets,
         )
 
     zone_changes: list[ParcelChange] = []
@@ -482,6 +534,7 @@ def _zone_worker(
         unresolved,
         diagnostics,
         task_statuses,
+        direct_targets,
     )
 
 
@@ -495,8 +548,9 @@ def _worker_result(
     unresolved: list[dict[str, Any]],
     diagnostics: list[dict[str, Any]],
     task_statuses: dict[str, str],
+    direct_targets: list[Any] | None = None,
 ) -> WorkerResult:
-    worker_targets = zone_targets + custom_targets + invalid_custom_tasks
+    worker_targets = list(direct_targets or []) + zone_targets + custom_targets + invalid_custom_tasks
     return WorkerResult(
         worker_type="zone",
         task_results=[
@@ -523,6 +577,18 @@ def _worker_result(
         parcel_changes=zone_changes,
         unresolved_items=unresolved,
         diagnostics=diagnostics,
+        scenario_features=[
+            item
+            for layer in layers
+            for item in _scenario_features_for_layer(
+                state, layer, generation_operation="zone_worker"
+            )
+        ],
+        task_id=(
+            str(getattr(state.execution_plan.worker_tasks[0], "task_id", ""))
+            if state.execution_plan and len(state.execution_plan.worker_tasks) == 1
+            else ""
+        ),
     )
 
 

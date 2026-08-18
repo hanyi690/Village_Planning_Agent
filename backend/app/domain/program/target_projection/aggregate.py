@@ -9,6 +9,10 @@ fail-closed gate.
 from __future__ import annotations
 
 from app.contracts.domain.l3_contracts import PlanningProgram
+from app.contracts.evidence.identity_contracts import (
+    EvidenceObservation,
+    GroundedEntityBinding,
+)
 from app.contracts.workflow.parse_result_contracts import (
     CompilationStatus,
     IntentCompilationResult,
@@ -25,12 +29,18 @@ def project_program(
     *,
     run_id: str = "",
     context_version: str = "",
+    observations: list[EvidenceObservation] | None = None,
+    bindings: list[GroundedEntityBinding] | None = None,
+    source_features: dict[str, list[object]] | None = None,
 ) -> tuple[IntentCompilationResult, list[SpatialReferenceSpec], GateDecision]:
     result, specs, diagnostics = compile_program_deterministic(
         program,
         run_id=run_id,
         context_version=context_version,
         program_ref=program.artifact_id,
+        observations=observations,
+        bindings=bindings,
+        source_features=source_features,
     )
     gate = evaluate_target_projection_gate(
         result,
@@ -49,12 +59,18 @@ async def project_program_async(
     *,
     run_id: str = "",
     context_version: str = "",
+    observations: list[EvidenceObservation] | None = None,
+    bindings: list[GroundedEntityBinding] | None = None,
+    source_features: dict[str, list[object]] | None = None,
 ) -> tuple[IntentCompilationResult, list[SpatialReferenceSpec], GateDecision]:
     """Async graph adapter; projection itself remains deterministic and pure."""
     return project_program(
         program,
         run_id=run_id,
         context_version=context_version,
+        observations=observations,
+        bindings=bindings,
+        source_features=source_features,
     )
 
 

@@ -19,6 +19,6 @@ __all__ = [
     "evaluate_l3_gate",
     "build_l3_review_package",
     "analyze_l3_dimension",
-    "proposals_from_claims",
+    "interventions_from_claims",
 ]
-from .claim_adapter import proposals_from_claims
+from .claim_adapter import interventions_from_claims

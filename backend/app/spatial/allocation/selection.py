@@ -55,7 +55,7 @@ _NON_BUILDABLE_DLMC = {"水域", "生态林"}
 class SelectionTarget:
     target_id: str
     name: str = ""
-    category: str = "project"  # project / facility / zone
+    category: str = "site_area"  # site_area / facility / zone
     scale_text: str = ""
 
 
@@ -454,7 +454,7 @@ def select_parcel(
     project_type: Optional[str] = None,
 ) -> PlacementDecision:
     target_ha = parse_scale_ha(target.scale_text)
-    target_min_area = target_ha if target.category == "project" else 0.0
+    target_min_area = target_ha if target.category == "site_area" else 0.0
     survivors, rejected = apply_hard_filters(
         candidates,
         constraint_index=constraint_index,

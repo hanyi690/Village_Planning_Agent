@@ -8,6 +8,7 @@ from app.domain.materialization.nodes.common import (
 from app.domain.materialization.nodes.route_prepare import (
     _prepare_inputs_node,
     _route_tasks_node,
+    _task_level_execution_node,
 )
 from app.domain.materialization.nodes.project_worker import _project_worker, _project_worker_node
 from app.domain.materialization.nodes.zone_worker import _zone_worker, _zone_worker_node
@@ -32,6 +33,7 @@ __all__ = [
     "_execution_error",
     "_route_tasks_node",
     "_prepare_inputs_node",
+    "_task_level_execution_node",
     "_project_worker",
     "_project_worker_node",
     "_zone_worker",

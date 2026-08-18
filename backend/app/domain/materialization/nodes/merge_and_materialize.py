@@ -289,6 +289,24 @@ def _enrich_planned_state(
         "protection_overlay",
         "restoration_overlay",
     }
+    # Global zone allocation also carries the complete protection/restoration
+    # constraint inventory.  Only overlays that were selected into the
+    # scenario's authoritative planned_project/planned_zone layers belong in
+    # PlannedState; the remaining constraint geometries stay upstream as
+    # suitability/constraint evidence and must not become orphan scenario
+    # features at VALIDATE.
+    selected_overlay_targets = {
+        str(value)
+        for overlay in (getattr(planned_state, "overlays", None) or [])
+        for value in (
+            getattr(overlay, "overlay_id", ""),
+            getattr(overlay, "target_ref", ""),
+            getattr(overlay, "project_ref", ""),
+            getattr(overlay, "feature_id", ""),
+            getattr(overlay, "candidate_id", ""),
+        )
+        if str(value or "").strip()
+    }
     overlay_groups: dict[tuple[str, str], list[tuple[str, dict[str, Any], Any]]] = (
         defaultdict(list)
     )
@@ -310,12 +328,28 @@ def _enrich_planned_state(
                 "bsm": bsm,
             })
             continue
+        feature_candidate_id = str(properties.get("candidate_id") or "")
+        if selected_overlay_targets and not (
+            target_id in selected_overlay_targets
+            or feature_candidate_id in selected_overlay_targets
+        ):
+            continue
         overlay_groups[(role, target_id)].append((bsm, properties, geometry))
     if diagnostics:
         return None, diagnostics
 
-    overlays = []
+    # Keep the selected candidate-backed overlays that were already produced
+    # from ``planned_project``.  The raw overlay layers are a constraint
+    # inventory, not an implicit selection source; they are only considered
+    # when a selected target explicitly exists in the authoritative state.
+    overlays = list(getattr(planned_state, "overlays", None) or [])
     for (role, target_id), entries in sorted(overlay_groups.items()):
+        if not selected_overlay_targets:
+            continue
+        if target_id in selected_overlay_targets:
+            # The selected candidate geometry already lives in planned_state;
+            # do not replace it with the broader baseline overlay union.
+            continue
         unioned = unary_union([entry[2] for entry in entries])
         first = entries[0][1]
         overlays.append(PlannedZoneOverlay(
@@ -370,6 +404,27 @@ async def _planned_state_builder_node(state: ExecuteAgentState) -> dict:
     )
     if diagnostics:
         return _planned_state_blocked_update(diagnostics)
+    scenario_features = [
+        feature
+        for result in list(state.worker_results or [])
+        for feature in list(_worker_result_get(result, "scenario_features") or [])
+    ]
+    scenario_id = ""
+    if state.site_selection is not None:
+        scenario_id = str(getattr(state.site_selection, "scenario_id", "") or "")
+    if not scenario_id and scenario_features:
+        scenario_id = str(getattr(scenario_features[0], "scenario_id", "") or "")
+    scenario_ref = str(getattr(state, "scenario_ref", "") or "")
+    trace_refs = [
+        f"trace:{item.get('task_id')}:{item.get('event')}"
+        for item in list(state.execution_trace or [])
+        if item.get("task_id") and item.get("event")
+    ]
+    enriched = enriched.model_copy(update={
+        "scenario_id": scenario_id,
+        "scenario_ref": scenario_ref,
+        "execution_trace_refs": list(dict.fromkeys(trace_refs)),
+    })
     return {"planned_state": enriched}
 
 

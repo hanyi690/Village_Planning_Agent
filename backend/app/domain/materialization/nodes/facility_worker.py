@@ -6,12 +6,66 @@ from typing import List
 
 from app.domain.materialization.execute_state import ExecuteAgentState
 from app.domain.materialization.nodes.common import _execution_error
-from app.domain.materialization.nodes.worker_common import _execution_intent_from_plan, _resolve_parcel_by_bsm, _task_enabled, _task_execution_result
+from app.domain.materialization.nodes.worker_common import _attach_feature_lineage, _execution_intent_from_plan, _resolve_parcel_by_bsm, _scenario_features_for_layer, _task_enabled, _task_execution_result
 from app.contracts.workflow.execution_plan_contracts import WorkerResult
 from app.contracts.spatial.parcel_change_contracts import ParcelChange
 from app.infrastructure.logging import get_logger
 
 logger = get_logger(__name__)
+
+
+def _task_value(task: object, name: str, default: object = None) -> object:
+    return task.get(name, default) if isinstance(task, dict) else getattr(task, name, default)
+
+
+def _candidate_value(candidate: object | None, name: str, default: object = None) -> object:
+    if isinstance(candidate, dict):
+        return candidate.get(name, default)
+    return getattr(candidate, name, default)
+
+
+def _facility_task_and_candidate(state: ExecuteAgentState, target_id: str) -> tuple[object | None, object | None]:
+    """Resolve the selected candidate without deriving a replacement point."""
+    for task in getattr(state.execution_plan, "worker_tasks", None) or []:
+        if str(_task_value(task, "target_id", "")) != str(target_id):
+            continue
+        assignment = _task_value(task, "assignment")
+        binding = _task_value(assignment, "target_binding", {}) or {}
+        candidate_id = str(
+            _task_value(task, "candidate_id", "")
+            or (binding.get("candidate_id", "") if isinstance(binding, dict) else "")
+            or ""
+        ).strip()
+        candidate = (state.candidate_geometry_by_id or {}).get(candidate_id) if candidate_id else None
+        return task, candidate
+    return None, None
+
+
+def _candidate_provenance(candidate: object | None) -> dict[str, object]:
+    """Expose only source-backed candidate metadata on the emitted feature."""
+    if candidate is None:
+        return {}
+    source_refs = [
+        str(value)
+        for value in (_candidate_value(candidate, "source_refs", []) or [])
+        if str(value).strip()
+    ]
+    source_ref = str(_candidate_value(candidate, "source_ref", "") or "").strip()
+    if source_ref and source_ref not in source_refs:
+        source_refs.append(source_ref)
+    return {
+        "candidate_id": str(_candidate_value(candidate, "candidate_id", "") or ""),
+        "source_refs": list(dict.fromkeys(source_refs)),
+        "source_bsms": [
+            str(value)
+            for value in (_candidate_value(candidate, "source_bsms", []) or [])
+            if str(value).strip()
+        ],
+        "geometry_ref": source_ref or str(_candidate_value(candidate, "candidate_id", "") or ""),
+        "candidate_geometry_role": str(_candidate_value(candidate, "role", "") or ""),
+        "candidate_geometry_granularity": str(_candidate_value(candidate, "granularity", "") or ""),
+        "crs": str(_candidate_value(candidate, "crs", "") or ""),
+    }
 
 
 def _facility_worker(state: ExecuteAgentState) -> WorkerResult:
@@ -32,6 +86,26 @@ def _facility_worker(state: ExecuteAgentState) -> WorkerResult:
     changes: List[ParcelChange] = []
     task_results = []
     for facility in facilities:
+        task, selected_candidate = _facility_task_and_candidate(state, facility.target_id)
+        candidate_provenance = _candidate_provenance(selected_candidate)
+        candidate_wkt = str(_candidate_value(selected_candidate, "wkt", "") or "").strip()
+        if candidate_wkt:
+            try:
+                from shapely import wkt as shapely_wkt
+
+                candidate_geometry = shapely_wkt.loads(candidate_wkt)
+                if candidate_geometry.geom_type == "Point":
+                    # The selected authoritative candidate is the only source
+                    # permitted to replace a stale target anchor.
+                    facility.anchor_point = (
+                        float(candidate_geometry.x),
+                        float(candidate_geometry.y),
+                    )
+            except Exception:
+                logger.warning(
+                    "[EXECUTE:facility] invalid selected candidate geometry for %s",
+                    facility.target_id,
+                )
         if facility.anchor_point is None and state.execution_plan is not None:
             for task in getattr(state.execution_plan, "worker_tasks", None) or []:
                 task_target_id = task.get("target_id", "") if isinstance(task, dict) else getattr(task, "target_id", "")
@@ -41,7 +115,35 @@ def _facility_worker(state: ExecuteAgentState) -> WorkerResult:
                 anchor = assignment.get("anchor_point") if isinstance(assignment, dict) else getattr(assignment, "anchor_point", None)
                 if anchor is not None:
                     facility.anchor_point = anchor
+                if facility.anchor_point is None:
+                    candidate_id = (
+                        task.get("candidate_id", "")
+                        if isinstance(task, dict)
+                        else getattr(task, "candidate_id", "")
+                    )
+                    candidate = (state.candidate_geometry_by_id or {}).get(str(candidate_id))
+                    candidate_wkt = (
+                        _candidate_value(candidate, "wkt", "")
+                        or _candidate_value(candidate, "geometry_wkt", "")
+                    )
+                    if str(candidate_wkt).strip():
+                        try:
+                            from shapely import wkt as shapely_wkt
+
+                            candidate_geometry = shapely_wkt.loads(str(candidate_wkt))
+                            if candidate_geometry.geom_type == "Point":
+                                facility.anchor_point = (
+                                    float(candidate_geometry.x),
+                                    float(candidate_geometry.y),
+                                )
+                        except Exception:
+                            logger.warning(
+                                "[EXECUTE:facility] invalid candidate point for %s",
+                                facility.target_id,
+                            )
                 break
+        if selected_candidate is not None:
+            candidate_provenance = _candidate_provenance(selected_candidate)
         change = design_facility_parcel(facility, parcel_by_bsm, None)
         if change is None:
             if facility.anchor_point is not None:
@@ -54,6 +156,7 @@ def _facility_worker(state: ExecuteAgentState) -> WorkerResult:
                         "status": "planned_new",
                         "source_bsm": "",
                         "change_action": "point_only",
+                        **candidate_provenance,
                     },
                     "geometry": {"type": "Point", "coordinates": list(facility.anchor_point)},
                 })
@@ -93,6 +196,7 @@ def _facility_worker(state: ExecuteAgentState) -> WorkerResult:
                 "status": "planned_new",
                 "source_bsm": change.bsm,
                 "change_action": change.action,
+                **candidate_provenance,
             },
             "geometry": geometry,
         })
@@ -118,6 +222,14 @@ def _facility_worker(state: ExecuteAgentState) -> WorkerResult:
             "code": "facility_output_empty",
             "message": "Facility targets exist but no facility layer was produced.",
         })
+    scenario_features = [
+        item
+        for layer in layers
+        for item in _scenario_features_for_layer(
+            state, layer, generation_operation="facility_worker"
+        )
+    ]
+    _attach_feature_lineage(task_results, scenario_features)
     return WorkerResult(
         worker_type="facility",
         task_results=task_results,
@@ -125,6 +237,12 @@ def _facility_worker(state: ExecuteAgentState) -> WorkerResult:
         parcel_changes=changes,
         unresolved_items=unresolved,
         diagnostics=[{"code": "facility_ok", "placed": len(features)}],
+        scenario_features=scenario_features,
+        task_id=(
+            str(getattr(state.execution_plan.worker_tasks[0], "task_id", ""))
+            if state.execution_plan and len(state.execution_plan.worker_tasks) == 1
+            else ""
+        ),
     )
 
 

@@ -15,11 +15,16 @@ from enum import Enum
 from typing import Dict, Any, List, Optional
 from langchain_core.messages import AIMessage
 from app.config import get_dimension_config, get_dimension_layer, list_dimensions
-from app.core.settings import MAX_TOKENS, LLM_STREAM_TIMEOUT, BACKGROUND_SUMMARY_ENRICHMENT
+from app.core.settings import (
+    BACKGROUND_SUMMARY_ENRICHMENT,
+    L1_LLM_MAX_CONCURRENT,
+    L1_LLM_TIMEOUT_S,
+    L1_MAX_TOKENS,
+    L1_TRANSIENT_RETRIES,
+    L1_TRANSIENT_RETRY_BACKOFF_S,
+)
 from app.contracts.events import SSEEventType
 from app.infrastructure.logging import get_logger
-from app.evidence.retrieval.evidence_service import retrieve_evidence, render_evidence_prompt_section
-from app.contracts.evidence.evidence_contracts import ExplorationRequest
 from app.infrastructure.llm.dimension_runtime import (
     enrich_summary_background,
     generate_summary,
@@ -113,6 +118,247 @@ def _parse_l1_dual_response(text: str):
                 if isinstance(item, dict)
             ],
         )
+
+
+def _completion_content(completion: Any) -> str | None:
+    """Read provider message content without assuming an SDK object shape."""
+    if isinstance(completion, str):
+        return completion
+    if isinstance(completion, dict):
+        choices = completion.get("choices")
+    else:
+        choices = getattr(completion, "choices", None)
+    if not isinstance(choices, (list, tuple)) or not choices:
+        return None
+    first = choices[0]
+    message = first.get("message") if isinstance(first, dict) else getattr(first, "message", None)
+    content = message.get("content") if isinstance(message, dict) else getattr(message, "content", None)
+    return content if isinstance(content, str) else None
+
+
+def _parse_l1_markdown_fallback_legacy(text: str):
+    """Convert one provider Markdown completion into the L1 dual contract.
+
+    MiniMax may return a complete human-readable L1 report in ``content`` while
+    omitting ``tool_calls``.  This is deliberately L1-only and best-effort:
+    narrative text is retained, while observations are extracted only from an
+    explicitly headed table with the six contract columns.  No provider call or
+    speculative fact is introduced.
+    """
+    from app.domain.assessment.observation_draft import (
+        L1DimensionOutput,
+        L1ObservationDraft,
+    )
+
+    if not isinstance(text, str) or not text.strip():
+        return None
+    cleaned = text.strip()
+    leading_think = re.match(
+        r"^<think\b[^>]*>.*?</think\s*>",
+        cleaned,
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+    if leading_think:
+        cleaned = cleaned[leading_think.end():].strip()
+    if not cleaned or re.search(r"</?think\b|<failed_attempts\b", cleaned, re.IGNORECASE):
+        return None
+    if len(cleaned) < 40 or cleaned.startswith(("Traceback", "InstructorRetryException")):
+        return None
+
+    observations = []
+    section = re.search(
+        r"^##+\s+observations\b[^\r\n]*",
+        cleaned,
+        flags=re.IGNORECASE | re.MULTILINE,
+    )
+    narrative = cleaned
+    if section:
+        narrative = cleaned[:section.start()].strip()
+        table_text = cleaned[section.end():]
+        lines = [line.strip() for line in table_text.splitlines()]
+        header_index = next(
+            (
+                index
+                for index, line in enumerate(lines)
+                if line.startswith("|")
+                and {cell.strip().lower() for cell in line.strip("|").split("|")}
+                >= {"entity_type", "name", "location", "relation", "description", "scale"}
+            ),
+            None,
+        )
+        if header_index is not None:
+            headers = [cell.strip().lower() for cell in lines[header_index].strip("|").split("|")]
+            required = ("entity_type", "name", "location", "relation", "description", "scale")
+            positions = {key: headers.index(key) for key in required}
+            for line in lines[header_index + 1:]:
+                if not line.startswith("|"):
+                    if observations:
+                        break
+                    continue
+                cells = [cell.strip() for cell in line.strip("|").split("|")]
+                if not cells or all(set(cell) <= {"-", ":", " "} for cell in cells):
+                    continue
+                if any(position >= len(cells) for position in positions.values()):
+                    continue
+                row = {key: cells[position] for key, position in positions.items()}
+                try:
+                    observations.append(L1ObservationDraft.model_validate(row))
+                except Exception:
+                    continue
+                if len(observations) >= 12:
+                    break
+
+    if len(narrative) < 40:
+        return None
+    return L1DimensionOutput(report_body=narrative, observations=observations)
+
+
+_L1_OBSERVATION_HEADERS = (
+    "entity_type",
+    "name",
+    "location",
+    "relation",
+    "description",
+    "scale",
+)
+_L1_OBSERVATIONS_HEADING_RE = re.compile(
+    r"^##\s+observations\b.*$", re.IGNORECASE,
+)
+_L1_HEADING_RE = re.compile(r"^##\s+")
+_L1_ERROR_PREFIX_RE = re.compile(
+    r"^\s*(?:error|exception|traceback|internal server error|bad gateway|"
+    r"service unavailable|gateway timeout|rate limit(?:ed)?|request failed|"
+    r"api error|instructorretryexception)(?:\s*[:：]|\s*$)",
+    re.IGNORECASE,
+)
+
+
+def _split_l1_markdown_row(line: str) -> Optional[list[str]]:
+    row = line.strip()
+    if "|" not in row:
+        return None
+    if row.startswith("|"):
+        row = row[1:]
+    if row.endswith("|") and not row.endswith("\\|"):
+        row = row[:-1]
+    cells = re.split(r"(?<!\\)\|", row)
+    return [cell.replace("\\|", "|").strip() for cell in cells]
+
+
+def _parse_l1_observation_table(section_lines: list[str]) -> Optional[list[Any]]:
+    table_start = next(
+        (index for index, line in enumerate(section_lines) if "|" in line),
+        None,
+    )
+    if table_start is None:
+        return []
+
+    headers = _split_l1_markdown_row(section_lines[table_start])
+    if headers != list(_L1_OBSERVATION_HEADERS):
+        return None
+    if table_start + 1 >= len(section_lines):
+        return None
+    separator = _split_l1_markdown_row(section_lines[table_start + 1])
+    if separator is None or len(separator) != len(_L1_OBSERVATION_HEADERS):
+        return None
+    if not all(re.fullmatch(r":?-{3,}:?", cell) for cell in separator):
+        return None
+
+    rows: list[dict[str, str]] = []
+    for line in section_lines[table_start + 2 :]:
+        if not line.strip():
+            break
+        values = _split_l1_markdown_row(line)
+        if values is None:
+            break
+        if len(values) != len(_L1_OBSERVATION_HEADERS):
+            return None
+        if len(rows) < 12:
+            rows.append(dict(zip(_L1_OBSERVATION_HEADERS, values)))
+
+    from app.domain.assessment.observation_draft import L1ObservationDraft
+
+    observations = []
+    try:
+        for row in rows:
+            observations.append(L1ObservationDraft.model_validate(row))
+    except Exception:
+        return None
+    return observations
+
+
+def _parse_l1_markdown_fallback(text: Any):
+    """Parse one valid natural-language L1 completion without a new call."""
+    from app.domain.assessment.observation_draft import L1DimensionOutput
+
+    if not isinstance(text, str) or not text.strip():
+        return None
+    cleaned = text.strip()
+    leading_think = re.match(
+        r"^<think\b[^>]*>.*?</think\s*>",
+        cleaned,
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+    if leading_think:
+        cleaned = cleaned[leading_think.end() :].strip()
+    elif cleaned.lower().startswith("<think"):
+        return None
+    if not cleaned or re.search(r"</?think\b|<failed_attempts\b", cleaned, re.IGNORECASE):
+        return None
+    if _L1_ERROR_PREFIX_RE.match(cleaned):
+        return None
+
+    lines = cleaned.splitlines()
+    observation_heading = next(
+        (
+            index
+            for index, line in enumerate(lines)
+            if _L1_OBSERVATIONS_HEADING_RE.match(line.strip())
+        ),
+        None,
+    )
+    observations: list[Any] = []
+    if observation_heading is None:
+        report_lines = lines
+    else:
+        section_end = next(
+            (
+                index
+                for index in range(observation_heading + 1, len(lines))
+                if _L1_HEADING_RE.match(lines[index].strip())
+            ),
+            len(lines),
+        )
+        observations = _parse_l1_observation_table(
+            lines[observation_heading + 1 : section_end],
+        )
+        if observations is None:
+            return None
+        report_lines = lines[:observation_heading] + lines[section_end:]
+
+    report_body = "\n".join(report_lines).strip()
+    if not report_body or not re.search(r"[A-Za-z\u3400-\u9fff]", report_body):
+        return None
+    return L1DimensionOutput(report_body=report_body, observations=observations)
+
+
+def _l1_text_fallback_from_retry(exc: Exception, dimension_key: str):
+    """Recover a valid L1 text completion or re-raise the original exception."""
+    result = _parse_l1_markdown_fallback(
+        _completion_content(getattr(exc, "last_completion", None)),
+    )
+    if result is None:
+        logger.warning(
+            "[analyze_dimension] %s: rejected L1 text fallback after InstructorRetryException",
+            dimension_key,
+        )
+        raise exc
+    logger.warning(
+        "[analyze_dimension] %s: accepted L1 text fallback after InstructorRetryException (observations=%d)",
+        dimension_key,
+        len(result.observations),
+    )
+    return result
 
 
 async def analyze_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
@@ -228,48 +474,15 @@ async def analyze_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
     except Exception as e:
         logger.warning(f"[analyze_dimension] {dim_key}: DataPipeline failed: {e}")
 
-    # 5.5 + 5.6: EXPLORE evidence service (replaces _optimize_semantics + _build_explore_brief)
+    # run_rag is the unified EvidenceBundle adapter; no second retrieval call.
     explore_section = ""
     explore_audit = {
         "fact_statements": [],
         "fact_count": 0,
-        "source_refs": [],
+        "source_refs": [f"evidence_adapter:{session_id}:{dim_key}"],
         "kg_confidence": 0.0,
         "kg_topology_facts": [],
     }
-    try:
-        explore_request = ExplorationRequest(
-            run_id=f"{session_id}:{dim_key}:L{dim_layer}",
-            request_type="spatial_lookup",
-            query=dim_name,
-            stage=f"L{dim_layer}",
-            dimension_key=dim_key,
-            query_purpose="context_injection",
-            entity_scope=["parcels", "facilities", "roads", "annotations"],
-        )
-        explore_result = await retrieve_evidence(
-            explore_request,
-            session_id=session_id,
-            village_name=state.get("config", {}).get("village_name", ""),
-        )
-        explore_section = render_evidence_prompt_section(
-            explore_result.evidence_bundle,
-            explore_result.spatial_cognition,
-        )
-        explore_audit = {
-            "fact_statements": [f.statement for f in explore_result.evidence_bundle.facts],
-            "fact_count": len(explore_result.evidence_bundle.facts),
-            "source_refs": [s.reference for s in explore_result.evidence_bundle.sources],
-            "kg_confidence": explore_result.spatial_cognition.kg_confidence,
-            "kg_topology_facts": list(explore_result.spatial_cognition.topology_facts),
-        }
-        if explore_section:
-            logger.info(
-                "[analyze_dimension] %s: EXPLORE evidence injected (%d chars, %d facts)",
-                dim_key, len(explore_section), len(explore_result.evidence_bundle.facts),
-            )
-    except Exception as e:
-        logger.warning("[analyze_dimension] %s: EXPLORE evidence failed: %s", dim_key, e)
 
     # 6. 组装 Prompt
     prompt = _build_prompt(
@@ -304,109 +517,119 @@ async def analyze_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
     observations: List[Any] = []
     try:
         from app.domain.assessment.observation_draft import L1DimensionOutput
-        from app.infrastructure.llm.factory import create_llm as _create_llm
+        from app.infrastructure.llm.structured import run_structured_output
 
-        # MiniMax-M3 natively supports with_structured_output(function_calling)
-        # for the L1 dual response (report_body + observations), so the native
-        # structured path is primary.  The tolerant JSON parser is only a
-        # safety net if a provider cannot produce the structured envelope.
-        # Bounded retries ensure a transient failure never trips the provider
-        # circuit and kills the remaining L1 dimensions.
+        # Instructor owns the L1 dual-response contract (report_body +
+        # observations). Bounded schema reasks keep malformed results out of
+        # downstream state.
         _L1_SYSTEM = (
             "你是村庄规划 L1 现状观察节点。同时输出两部分："
-            "report_body 写维度现状分析正文（用【主题】标记段落、以【事实】开头的可核验事实行、"
+            "report_body 写 800-1600 字的维度现状分析正文（用【主题】标记段落、以【事实】开头的可核验事实行、"
             "markdown 表格列清单）；observations 写正文明确出现的现状空间对象"
             "（entity_type 只能是 现状设施/现状项目/现状分区/自然村/道路/水系/地物），"
-            "每个对象含 entity_type/name/location/relation/description/scale。"
+            "最多 12 个对象，每个对象含 entity_type/name/location/relation/description/scale。"
             "location 优先自然村名，道路给走向、水系给流向；relation 写空间关系。"
             "只摘录正文已出现的内容，不得编造；无对象则返回空数组。"
+            "传输格式必须是一个且仅一个 JSON object："
+            "{\"report_body\":\"...\",\"observations\":[{\"entity_type\":\"...\",\"name\":\"...\",\"location\":\"...\",\"relation\":\"...\",\"description\":\"...\",\"scale\":\"...\"}]}。"
+            "禁止在 JSON object 外输出 Markdown、解释文字或代码 fence；report_body 字段内部可以包含 Markdown。"
         )
-        # MiniMax-M3 natively supports the structured dual response, so try it
-        # first; fall back to a plain-JSON contract once if the provider cannot
-        # produce the structured envelope.  Fail FAST: a single LLM timeout or
-        # failure trips the provider circuit (the automatic return path) instead
-        # of stalling the whole L1 layer for minutes of retries.
-        output = None
-        try:
-            llm = _create_llm(temperature=0.3, max_tokens=MAX_TOKENS, streaming=False)
-            # Primary: native structured output (MiniMax-M3).
-            try:
-                structured = llm.with_structured_output(
-                    L1DimensionOutput, method="function_calling"
-                )
-                async with asyncio.timeout(LLM_STREAM_TIMEOUT):
-                    out = await structured.ainvoke([
-                        {"role": "system", "content": _L1_SYSTEM},
-                        {"role": "user", "content": prompt},
-                    ])
-                if out is not None:
-                    if isinstance(out, str):
-                        out = L1DimensionOutput.model_validate_json(out)
-                    elif not isinstance(out, L1DimensionOutput):
-                        out = L1DimensionOutput.model_validate(out)
-                    output = out
-            except Exception as exc:  # noqa: BLE001 - fall back to JSON contract
-                logger.warning(
-                    "[analyze_dimension] %s: structured output unavailable (%s), JSON fallback",
-                    dim_key, exc,
-                )
-            if output is None:
-                # Fallback: plain-text JSON contract (strip <think>, extract JSON).
-                async with asyncio.timeout(LLM_STREAM_TIMEOUT):
-                    resp = await llm.ainvoke([
-                        {"role": "system", "content": _L1_SYSTEM + " 只输出 JSON：{\"report_body\": \"...\", \"observations\": [{...}]}，不要输出其它文字。"},
-                        {"role": "user", "content": prompt},
-                    ])
-                raw = getattr(resp, "content", "") or ""
-                if isinstance(raw, list):
-                    raw = "".join(raw)
-                output = _parse_l1_dual_response(str(raw))
-        except asyncio.TimeoutError:
-            raise
+        # Fail FAST on a bounded Instructor request: a timeout or provider
+        # failure trips the existing circuit path instead of stalling the whole
+        # L1 layer for unbounded retries.
+        output = await run_structured_output(
+            L1DimensionOutput,
+            [
+                {"role": "system", "content": _L1_SYSTEM},
+                {"role": "user", "content": prompt},
+            ],
+            max_retries=1,
+            timeout=L1_LLM_TIMEOUT_S,
+            temperature=0.3,
+            max_tokens=L1_MAX_TOKENS,
+            incomplete_output_max_tokens=L1_MAX_TOKENS,
+            max_concurrent=L1_LLM_MAX_CONCURRENT,
+            semaphore_scope="l1",
+            transient_retries=L1_TRANSIENT_RETRIES,
+            transient_retry_backoff_s=L1_TRANSIENT_RETRY_BACKOFF_S,
+        )
         if output is None:
             raise ValueError("L1 provider returned unparseable dual response")
         report_body = (output.report_body or "").strip()
         observations = list(output.observations or [])
     except asyncio.TimeoutError:
         trip_provider_failure(session_id)
-        logger.error(f"[analyze_dimension] {dim_key}: LLM stream timeout after {LLM_STREAM_TIMEOUT}s")
+        logger.error(f"[analyze_dimension] {dim_key}: L1 LLM timeout after {L1_LLM_TIMEOUT_S}s")
         await sse_manager.publish(session_id, {
             "type": SSEEventType.DIMENSION_ERROR,
             "dimension_key": dim_key,
             "dimension_name": dim_name,
             "layer": dim_layer,
-            "error": f"LLM stream timeout ({LLM_STREAM_TIMEOUT}s)",
+            "error": f"L1 LLM timeout ({L1_LLM_TIMEOUT_S}s)",
         })
         return {
-            "messages": [AIMessage(content=f"[执行失败] LLM流式超时({LLM_STREAM_TIMEOUT}s)")],
+            "messages": [AIMessage(content=f"[执行失败] L1 LLM超时({L1_LLM_TIMEOUT_S}s)")],
             "dimension_retry_counts": dimension_failure_attempt(state, dim_key),
             "provider_failures": [{
                 "stage": f"L{dim_layer}",
                 "dimension": dim_key,
                 "code": "llm_stream_timeout",
-                "message": f"LLM stream timeout ({LLM_STREAM_TIMEOUT}s)",
+                "message": f"L1 LLM timeout ({L1_LLM_TIMEOUT_S}s)",
             }],
         }
     except Exception as e:
-        trip_provider_failure(session_id)
-        logger.error(f"[analyze_dimension] {dim_key}: LLM 失败: {e}")
-        await sse_manager.publish(session_id, {
-            "type": SSEEventType.DIMENSION_ERROR,
-            "dimension_key": dim_key,
-            "dimension_name": dim_name,
-            "layer": dim_layer,
-            "error": str(e),
-        })
-        return {
-            "messages": [AIMessage(content=f"[执行失败] LLM错误: {e}")],
-            "dimension_retry_counts": dimension_failure_attempt(state, dim_key),
-            "provider_failures": [{
-                "stage": f"L{dim_layer}",
-                "dimension": dim_key,
-                "code": "llm_provider_error",
-                "message": str(e),
-            }],
-        }
+        fallback_output = None
+        is_retry = False
+        try:
+            from instructor.core import InstructorRetryException
+
+            is_retry = isinstance(e, InstructorRetryException)
+        except Exception:
+            pass
+
+        if dim_layer == 1 and is_retry:
+            try:
+                fallback_output = _l1_text_fallback_from_retry(e, dim_key)
+            except Exception:
+                fallback_output = None
+
+        if fallback_output is not None:
+            report_body = (fallback_output.report_body or "").strip()
+            observations = list(fallback_output.observations or [])
+            logger.warning(
+                "[analyze_dimension] %s: accepted bounded L1 text fallback (chars=%d, observations=%d)",
+                dim_key,
+                len(report_body),
+                len(observations),
+            )
+        else:
+            from app.infrastructure.llm.dimension_runtime import is_provider_failure
+
+            if is_provider_failure(e):
+                trip_provider_failure(session_id)
+            error_message = (
+                "InstructorRetryException: no usable L1 text fallback"
+                if is_retry
+                else str(e)
+            )
+            logger.error(f"[analyze_dimension] {dim_key}: LLM 失败: {error_message}")
+            await sse_manager.publish(session_id, {
+                "type": SSEEventType.DIMENSION_ERROR,
+                "dimension_key": dim_key,
+                "dimension_name": dim_name,
+                "layer": dim_layer,
+                "error": error_message,
+            })
+            return {
+                "messages": [AIMessage(content=f"[执行失败] LLM错误: {error_message}")],
+                "dimension_retry_counts": dimension_failure_attempt(state, dim_key),
+                "provider_failures": [{
+                    "stage": f"L{dim_layer}",
+                    "dimension": dim_key,
+                    "code": "llm_provider_error",
+                    "message": error_message,
+                }],
+            }
 
     llm_response = report_body
     observations_json = json.dumps(

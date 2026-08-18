@@ -283,7 +283,7 @@ def check_l3_l4_target_coverage(intent, planned_state, decision=None) -> list[Re
         for value in ((getattr(decision, "decision_factors", None) or {}).get("deferred_targets") or [])
     }
     project_targets = [
-        p for p in (getattr(intent, "project_targets", None) or [])
+        p for p in (getattr(intent, "site_area_targets", None) or [])
         if getattr(p, "requires_spatial", True)
         and str(getattr(p, "project_id", "")) not in deferred
     ]

@@ -12,6 +12,7 @@ domain/ground 唯一拥有"接地"：把 ``L1Snapshot.location_facts`` 编译为
 """
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -19,6 +20,20 @@ from app.contracts.spatial.grounding_contracts import GroundedAnchor
 from app.infrastructure.logging import get_logger
 
 logger = get_logger(__name__)
+
+
+def _new_ground_llm_budget() -> Dict[str, Any]:
+    """Create one bounded best-effort budget for grounding fallbacks."""
+    from app.spatial.grounding.call_budget import new_ground_llm_budget
+
+    return new_ground_llm_budget()
+
+
+def _reserve_ground_llm_call(budget: Optional[Dict[str, Any]]) -> float | None:
+    """Reserve one fallback call and return its remaining timeout."""
+    from app.spatial.grounding.call_budget import reserve_ground_llm_call
+
+    return reserve_ground_llm_call(budget)
 
 
 def _scope_names(village_name: str) -> set:
@@ -137,58 +152,30 @@ async def _llm_orientation_rebind(
     fact: Any,
     anchor: GroundedAnchor,
     llm: Any,
+    budget: Optional[Dict[str, Any]] = None,
 ) -> GroundedAnchor:
     """空间描述（如 西南至东北贯穿金田村）→ LLM 在同类候选里选实体级候选。
 
     触发：水/路/地标 且 hint 含方位/走向标记 且当前锚点是村锚点/粗绑定。
     LLM 只在索引候选内判别（几何/BSM 来自 KG/bundle），不新增几何。
     """
-    if anchor.role not in ("water", "road", "landmark", "facility"):
-        return anchor
-    if llm is None:
-        return anchor
-    hints = str(getattr(fact, "spatial_hint", "") or getattr(fact, "source_span", "") or "")
-    if not any(marker in hints for marker in _ORIENTATION_MARKERS):
-        return anchor
-    # 已实体级绑定（真实 POINT 几何）就不再重绑
-    if _has_point_geometry(anchor.geometry_ref):
-        return anchor
-    candidates = _index_role_candidates(context, anchor.role)
-    if len(candidates) < 2:
-        return anchor
-    picked = await _llm_reason_candidate(
-        llm,
-        str(anchor.normalized_name or anchor.mention or ""),
-        anchor.role,
-        hints,
-        candidates,
-    )
+    picked = await _llm_orientation_pick(context, fact, anchor, llm, budget=budget)
     if picked is None:
         return anchor
-    picked_bsms = list(getattr(picked, "source_bsms", None) or [])
-    if not picked_bsms or not _has_point_geometry(getattr(picked, "geometry_ref", None)):
-        return anchor
-    trace = list(getattr(anchor, "query_trace", None) or [])
-    trace.append({
-        "step": "llm_orientation_rebind",
-        "picked": getattr(picked, "canonical_name", ""),
-        "geometry": getattr(picked, "geometry_ref", ""),
-    })
-    rebound = _anchor_from_candidate(
-        fact,
-        picked,
-        best_effort=False,
-        topology_evidence=list(getattr(anchor, "topology_evidence", None) or []),
-        query_trace=trace,
-    )
-    rebound.confidence = max(rebound.confidence, 0.75)
-    return rebound
+    return _orientation_rebound_anchor(fact, anchor, picked)
 
 
 def _has_point_geometry(geometry_ref: Optional[str]) -> bool:
     from app.spatial.grounding.coordinate_identity import point_xy
 
     return point_xy(geometry_ref) is not None
+
+
+def _has_spatial_evidence(anchor: Optional[GroundedAnchor]) -> bool:
+    """Return whether an anchor has real KG/upload spatial evidence."""
+    if anchor is None:
+        return False
+    return bool(anchor.source_bsms or anchor.geometry_ref or anchor.entity_ref)
 
 
 def _index_role_candidates(context: Any, role: str) -> list:
@@ -216,6 +203,113 @@ def _index_role_candidates(context: Any, role: str) -> list:
             score=float(getattr(entry, "confidence", 0.0) or 0.0),
         ))
     return out
+
+
+def _candidate_fingerprint(candidates: list) -> tuple:
+    """Return a stable identity for the candidate set shown to the LLM.
+
+    A name is not sufficient to identify grounding work: two roles can share a
+    name, and the same role/name can resolve to different KG entities.  Keep
+    the ordered candidate payload in the key because the prompt uses the
+    candidate number, so changing either membership or order changes the work.
+    """
+    fingerprint = []
+    for candidate in candidates or []:
+        refs = tuple(str(ref) for ref in (getattr(candidate, "entity_refs", None) or []))
+        bsms = tuple(str(bsm) for bsm in (getattr(candidate, "source_bsms", None) or []))
+        relations = tuple(
+            str(ref) for ref in (getattr(candidate, "relation_refs", None) or [])
+        )
+        fingerprint.append(
+            (
+                str(getattr(candidate, "entity_ref", "") or ""),
+                refs,
+                str(getattr(candidate, "entity_type", "") or ""),
+                str(getattr(candidate, "role", "") or ""),
+                str(getattr(candidate, "canonical_name", "") or ""),
+                str(getattr(candidate, "geometry_ref", "") or ""),
+                bsms,
+                relations,
+                float(getattr(candidate, "score", 0.0) or 0.0),
+            )
+        )
+    return tuple(fingerprint)
+
+
+def _grounding_work_key(item: Dict[str, Any], kind: str, candidates: list) -> tuple:
+    """Key only work that has the same prompt semantics and candidate set."""
+    fact = item["fact"]
+    return (
+        kind,
+        item["role"],
+        item["mention"],
+        str(getattr(fact, "normalized_name", "") or ""),
+        item["hints"],
+        _candidate_fingerprint(candidates),
+    )
+
+
+def _orientation_candidates(context: Any, fact: Any, anchor: GroundedAnchor) -> list:
+    """Return the exact candidate set eligible for orientation rebinding."""
+    if anchor.role not in ("water", "road", "landmark", "facility"):
+        return []
+    hints = str(getattr(fact, "spatial_hint", "") or getattr(fact, "source_span", "") or "")
+    if not any(marker in hints for marker in _ORIENTATION_MARKERS):
+        return []
+    if _has_point_geometry(anchor.geometry_ref):
+        return []
+    candidates = _index_role_candidates(context, anchor.role)
+    return candidates if len(candidates) >= 2 else []
+
+
+async def _llm_orientation_pick(
+    context: Any,
+    fact: Any,
+    anchor: GroundedAnchor,
+    llm: Any,
+    budget: Optional[Dict[str, Any]] = None,
+) -> Optional[Any]:
+    """Resolve one orientation candidate; callers can fan it out per fact."""
+    if llm is None:
+        return None
+    candidates = _orientation_candidates(context, fact, anchor)
+    if not candidates:
+        return None
+    hints = str(getattr(fact, "spatial_hint", "") or getattr(fact, "source_span", "") or "")
+    return await _llm_reason_candidate(
+        llm,
+        str(anchor.normalized_name or anchor.mention or ""),
+        anchor.role,
+        hints,
+        candidates,
+        budget=budget,
+    )
+
+
+def _orientation_rebound_anchor(
+    fact: Any,
+    anchor: GroundedAnchor,
+    picked: Any,
+) -> GroundedAnchor:
+    """Build a fact-specific anchor from a shared orientation decision."""
+    picked_bsms = list(getattr(picked, "source_bsms", None) or [])
+    if not picked_bsms or not _has_point_geometry(getattr(picked, "geometry_ref", None)):
+        return anchor
+    trace = list(getattr(anchor, "query_trace", None) or [])
+    trace.append({
+        "step": "llm_orientation_rebind",
+        "picked": getattr(picked, "canonical_name", ""),
+        "geometry": getattr(picked, "geometry_ref", ""),
+    })
+    rebound = _anchor_from_candidate(
+        fact,
+        picked,
+        best_effort=False,
+        topology_evidence=list(getattr(anchor, "topology_evidence", None) or []),
+        query_trace=trace,
+    )
+    rebound.confidence = max(rebound.confidence, 0.75)
+    return rebound
 
 
 def _cluster_bsms_of(kg: Any, cluster_uri: str) -> set:
@@ -348,103 +442,169 @@ async def _village_spatial_fallback(
     anchor: GroundedAnchor,
     llm: Any,
     trace: List[dict],
+    budget: Optional[Dict[str, Any]] = None,
 ) -> GroundedAnchor:
-    """村锚点无空间引用时的兜底（不能留又不能解析）。
+    """Resolve one village fallback while committing ownership in order."""
+    plan = _village_spatial_fallback_plan(context, fact, anchor, trace)
+    picked = None
+    candidates = plan.get("candidates", [])
+    mention = str(getattr(anchor, "normalized_name", "") or getattr(anchor, "mention", ""))
+    hints = plan["hints"]
+    if candidates and llm is not None and mention:
+        picked = await _llm_reason_candidate(
+            llm, mention, "village", hints, candidates, budget=budget
+        )
+    return _commit_village_spatial_fallback(context, plan, picked)
 
-    顺序：① gazetteer 村条目 BSM（村映射已分配）；② 确定性分配到**未占用**聚落
-    （面积降序；已分配村名/已用聚落跨调用累积，避免多个村共占同一聚落），
-    best_effort + 低置信，可审计。
-    """
-    hints = str(getattr(fact, "spatial_hint", "") or getattr(fact, "source_span", "") or "")
-    village_bsms = _village_anchor_bsms(context, hints)
-    poi_bsms = _poi_anchor_bsms(context, fact)
-    if poi_bsms or village_bsms:
-        cand = _best_effort_candidate(fact, poi_bsms, village_bsms, trace)
-        trace.append({"step": "village_fallback:gazetteer_bsms", "count": len(cand.source_bsms)})
-        return _anchor_from_candidate(fact, cand, best_effort=True, query_trace=trace)
 
-    # 已占用 BSM：已分配村名的 gazetteer BSM + 本次兜底已用聚落 BSM
+def _village_fallback_occupied(context: Any, fact: Any) -> set:
+    """Snapshot occupied BSMs without mutating the ordered ownership state."""
     occupied: set = set()
     for other in getattr(context, "location_facts", []) or []:
         if other is fact:
             continue
         if str(getattr(other, "role", "") or "") != "village":
             continue
-        other_name = str(getattr(other, "normalized_name", "") or getattr(other, "mention", "") or "").strip()
+        other_name = str(
+            getattr(other, "normalized_name", "")
+            or getattr(other, "mention", "")
+            or ""
+        ).strip()
         if not other_name:
             continue
         entry = _resolve_gazetteer_entry_any(context, other_name)
         if entry is not None:
             occupied.update(str(b) for b in (entry.bsms or []))
-    used = set(getattr(context, "_grounding_used_cluster_bsms", set()) or set())
-    occupied |= used
+    occupied |= set(getattr(context, "_grounding_used_cluster_bsms", set()) or set())
+    return occupied
+
+
+def _village_spatial_fallback_plan(
+    context: Any,
+    fact: Any,
+    anchor: Optional[GroundedAnchor],
+    trace: List[dict],
+) -> Dict[str, Any]:
+    """Prepare village fallback candidates without changing shared occupancy."""
+    hints = str(
+        getattr(fact, "spatial_hint", "")
+        or getattr(fact, "source_span", "")
+        or ""
+    )
+    village_bsms = _village_anchor_bsms(context, hints)
+    poi_bsms = _poi_anchor_bsms(context, fact)
+    if poi_bsms or village_bsms:
+        candidate = _best_effort_candidate(fact, poi_bsms, village_bsms, trace)
+        trace.append({
+            "step": "village_fallback:gazetteer_bsms",
+            "count": len(candidate.source_bsms),
+        })
+        return {
+            "fact": fact,
+            "anchor": anchor,
+            "candidate": candidate,
+            "candidates": [],
+            "clusters": [],
+            "hints": hints,
+            "trace": trace,
+        }
 
     try:
         from types import SimpleNamespace
 
         from app.spatial.grounding.village_cluster_mapper import build_village_clusters
 
+        occupied = _village_fallback_occupied(context, fact)
         parcels = list(context.current_parcels() or [])
         clusters = sorted(build_village_clusters(parcels), key=lambda c: -c.area_ha)
-        unassigned = [
-            c for c in clusters if not (set(c.bsms) & occupied)
-        ]
-        mention = str(anchor.normalized_name or anchor.mention or "")
-        # ② 优先 LLM：在未占用聚落里按村名+hint+质心/面积判别（低置信 best_effort）
-        if unassigned and llm is not None and mention:
-            cand_list = [
-                SimpleNamespace(
-                    entity_ref=f"cluster:{c.index}",
-                    entity_type="village",
-                    canonical_name=f"聚落{c.index}",
-                    source_bsms=list(c.bsms),
-                    geometry_ref=(
-                        f"POINT({c.centroid[0]} {c.centroid[1]})"
-                        if c.centroid else None
-                    ),
-                    relation_refs=[],
-                    score=0.4,
-                )
-                for c in unassigned
-            ]
-            picked = await _llm_reason_candidate(
-                llm, mention, "village", hints, cand_list
+        unassigned = [c for c in clusters if not (set(c.bsms) & occupied)]
+        candidates = [
+            SimpleNamespace(
+                entity_ref=f"cluster:{cluster.index}",
+                entity_type="village",
+                canonical_name=f"聚落{cluster.index}",
+                source_bsms=list(cluster.bsms),
+                geometry_ref=(
+                    f"POINT({cluster.centroid[0]} {cluster.centroid[1]})"
+                    if cluster.centroid
+                    else None
+                ),
+                relation_refs=[],
+                score=0.4,
             )
-            if picked is not None:
-                picked_bsms = list(getattr(picked, "source_bsms", None) or [])
-                if picked_bsms:
-                    trace.append({
-                        "step": "village_fallback:llm_cluster_assign",
-                        "picked": getattr(picked, "canonical_name", ""),
-                        "geometry": getattr(picked, "geometry_ref", ""),
-                    })
-                    used |= set(picked_bsms)
-                    try:
-                        setattr(context, "_grounding_used_cluster_bsms", used)
-                    except Exception:
-                        pass
-                    return _anchor_from_candidate(
-                        fact, picked, best_effort=True, query_trace=trace
-                    )
-        # ③ 无 LLM/LLM 失败时才确定性分配（底线，显式标注 estimate）
-        for cluster in unassigned:
-            cluster_bsms = set(cluster.bsms)
-            cand = _best_effort_candidate(fact, [], list(cluster_bsms), trace)
-            trace.append({
-                "step": "village_fallback:deterministic_cluster",
-                "cluster_index": cluster.index,
-                "area_ha": round(cluster.area_ha, 2),
-                "estimate": True,
-            })
-            used |= cluster_bsms
-            try:
-                setattr(context, "_grounding_used_cluster_bsms", used)
-            except Exception:
-                pass
-            return _anchor_from_candidate(fact, cand, best_effort=True, query_trace=trace)
+            for cluster in unassigned
+        ]
+        return {
+            "fact": fact,
+            "anchor": anchor,
+            "candidate": None,
+            "candidates": candidates,
+            "clusters": unassigned,
+            "hints": hints,
+            "trace": trace,
+        }
     except Exception as exc:  # noqa: BLE001
-        logger.debug("[ground_anchors] cluster fallback failed: %s", exc)
-    return anchor
+        logger.debug("[ground_anchors] cluster fallback planning failed: %s", exc)
+        return {
+            "fact": fact,
+            "anchor": anchor,
+            "candidate": None,
+            "candidates": [],
+            "clusters": [],
+            "hints": hints,
+            "trace": trace,
+        }
+
+
+def _commit_village_spatial_fallback(
+    context: Any,
+    plan: Dict[str, Any],
+    picked: Optional[Any],
+) -> Optional[GroundedAnchor]:
+    """Commit one prepared village decision in original fact order."""
+    fact = plan.get("fact")
+    anchor = plan.get("anchor")
+    trace = plan["trace"]
+    direct = plan.get("candidate")
+    if direct is not None:
+        return _anchor_from_candidate(fact, direct, best_effort=True, query_trace=trace)
+
+    occupied = _village_fallback_occupied(context, fact)
+    available = [
+        cluster
+        for cluster in plan.get("clusters", [])
+        if not (set(cluster.bsms) & occupied)
+    ]
+    selected = None
+    if picked is not None:
+        picked_bsms = set(getattr(picked, "source_bsms", None) or [])
+        if picked_bsms and not (picked_bsms & occupied):
+            selected = picked
+    if selected is None and available:
+        cluster = available[0]
+        selected = _best_effort_candidate(fact, [], list(cluster.bsms), trace)
+        trace.append({
+            "step": "village_fallback:deterministic_cluster",
+            "cluster_index": cluster.index,
+            "area_ha": round(cluster.area_ha, 2),
+            "estimate": True,
+        })
+    elif selected is not None:
+        trace.append({
+            "step": "village_fallback:llm_cluster_assign",
+            "picked": getattr(selected, "canonical_name", ""),
+            "geometry": getattr(selected, "geometry_ref", ""),
+        })
+    if selected is None:
+        if anchor is not None:
+            return anchor.model_copy(update={"query_trace": list(trace)})
+        return None
+
+    picked_bsms = set(getattr(selected, "source_bsms", None) or [])
+    used = set(getattr(context, "_grounding_used_cluster_bsms", set()) or set())
+    used |= picked_bsms
+    setattr(context, "_grounding_used_cluster_bsms", used)
+    return _anchor_from_candidate(fact, selected, best_effort=True, query_trace=trace)
 
 
 def _village_used_tokens(context: Any) -> list:
@@ -685,14 +845,23 @@ def _fact_mentions(facts: List[Any]) -> list["NameMention"]:
     seen: set = set()
     for fact in facts or []:
         name = str(getattr(fact, "normalized_name", "") or getattr(fact, "mention", "") or "").strip()
-        if not name or name in seen:
+        if not name:
             continue
-        seen.add(name)
+        role = str(getattr(fact, "role", "unknown") or "unknown")
+        location = str(
+            getattr(fact, "spatial_hint", "")
+            or getattr(fact, "source_span", "")
+            or ""
+        ).strip()
+        mention_key = (name, role, location)
+        if mention_key in seen:
+            continue
+        seen.add(mention_key)
         mentions.append(
             NameMention(
                 name=name,
-                role=str(getattr(fact, "role", "unknown") or "unknown"),
-                location=str(getattr(fact, "spatial_hint", "") or getattr(fact, "source_span", "") or "").strip(),
+                role=role,
+                location=location,
                 source_dimension=str(getattr(fact, "dimension_key", "") or ""),
             )
         )
@@ -705,6 +874,8 @@ async def _llm_reason_candidate(
     role: str,
     hints: str,
     candidates: list,
+    *,
+    budget: Optional[Dict[str, Any]] = None,
 ) -> Optional[Any]:
     """有界 LLM 判别：只在候选内选最优（设计 §4.3）。返回候选或 None。
 
@@ -713,6 +884,13 @@ async def _llm_reason_candidate(
     if not candidates:
         return None
     if llm is None:
+        return None
+    call_timeout = _reserve_ground_llm_call(budget)
+    if call_timeout is None:
+        logger.info(
+            "[ground_anchors] LLM fallback budget exhausted; using deterministic candidate for %s",
+            mention,
+        )
         return None
     lines = "\n".join(
         f"{i}. 名称={c.canonical_name} 类型={c.entity_type} 角色={c.role if hasattr(c, 'role') else 'unknown'} "
@@ -726,10 +904,14 @@ async def _llm_reason_candidate(
     try:
         import asyncio
 
-        if asyncio.iscoroutinefunction(getattr(llm, "ainvoke", None)):
-            response = await llm.ainvoke(prompt)
-        else:
-            response = await asyncio.to_thread(llm.invoke, prompt)
+        async def _invoke():
+            if asyncio.iscoroutinefunction(getattr(llm, "ainvoke", None)):
+                return await llm.ainvoke(prompt)
+            return await asyncio.to_thread(llm.invoke, prompt)
+
+        from app.spatial.grounding.call_budget import run_ground_llm_call
+
+        response = await run_ground_llm_call(budget, call_timeout, _invoke)
     except Exception as exc:  # noqa: BLE001
         logger.warning("[ground_anchors] LLM reason failed: %s", exc)
         return None
@@ -822,6 +1004,13 @@ def _anchor_from_candidate(
     else:
         confidence = float(getattr(candidate, "score", 0.0) or 0.0)
     geometry_ref = getattr(candidate, "geometry_ref", None) or None
+    # Evidence-index KG candidates may carry the storage prefix
+    # ``kg_wkt:``.  The anchor contract exposes the canonical geometry form;
+    # keep the prefix-free POINT representation so downstream renderers and
+    # coordinate identity see the same value regardless of index construction
+    # order.
+    if isinstance(geometry_ref, str) and geometry_ref.startswith("kg_wkt:POINT("):
+        geometry_ref = geometry_ref[len("kg_wkt:"):]
     entity_ref = str(getattr(candidate, "entity_ref", "") or "")
     # 优先 KG 实体 URI；candidate 可能是索引/兜底/聚落等来源
     candidate_refs = list(getattr(candidate, "entity_refs", None) or []) or ([entity_ref] if entity_ref else [])
@@ -865,6 +1054,7 @@ async def ground_l1_anchors(
     if not facts:
         return []
     kg = getattr(context, "kg", None)
+    ground_llm_budget = _new_ground_llm_budget()
 
     # 1) 真名回填 KG 无名实体（确定性单候选；多候选 flash 消歧；缓存可重放）
     if kg is not None:
@@ -879,6 +1069,7 @@ async def ground_l1_anchors(
                     mentions,
                     llm=llm,
                     cache_path=cache_path,
+                    budget=ground_llm_budget,
                 )
             except Exception as exc:  # noqa: BLE001
                 logger.warning("[ground_anchors] name backfill failed: %s", exc)
@@ -900,6 +1091,7 @@ async def ground_l1_anchors(
             kg,
             getattr(context, "workspace", None),
             memory,
+            village_name=str(getattr(context, "village_name", "") or ""),
         )
         for name, entry in previous_entries.items():
             if gazetteer.resolve(name, fuzzy=False) is None:
@@ -963,6 +1155,7 @@ async def ground_l1_anchors(
                     report_text,
                     llm=llm,
                     cache=cache_path,
+                    budget=ground_llm_budget,
                 )
                 for entry in village_entries:
                     gazetteer.upsert(entry)
@@ -974,6 +1167,7 @@ async def ground_l1_anchors(
                     report_text,
                     llm=llm,
                     cache=cache_path,
+                    budget=ground_llm_budget,
                 )
                 for entry in water_entries:
                     gazetteer.upsert(entry)
@@ -984,8 +1178,10 @@ async def ground_l1_anchors(
 
     context.evidence_index = PlaceEvidenceIndex.build(context)
 
-    # 3) 逐 fact 解析（索引 → 拓扑评分 → LLM 兜底，不允许留空）
-    anchors: List[GroundedAnchor] = []
+    # 3) 先做确定性解析，再把相互独立的地点判别一次性有界并发。
+    #    最终锚点写入、村簇占用和 KG 注解仍按原始顺序串行提交，避免共享
+    #    ``_grounding_used_cluster_bsms`` 在并发兜底时发生竞态。
+    prepared: List[Dict[str, Any]] = []
     for fact in facts:
         mention = str(
             getattr(fact, "normalized_name", "")
@@ -997,89 +1193,300 @@ async def ground_l1_anchors(
         role = str(getattr(fact, "role", "unknown") or "unknown")
         hints = str(getattr(fact, "spatial_hint", "") or getattr(fact, "source_span", "") or "")
         trace: List[dict] = [{"step": "resolve", "mention": mention}]
+        item: Dict[str, Any] = {
+            "fact": fact,
+            "mention": mention,
+            "role": role,
+            "hints": hints,
+            "trace": trace,
+            "candidate": None,
+            "best_effort": False,
+            "llm_kind": None,
+        }
 
-        # 规划范围识别：village_name（如 金田村）是行政村/项目规划范围，不是
-        # 可落位的地点事实；作为 administrative_village 锚点记录，不进自然村池。
         if _is_scope_fact(fact, getattr(context, "village_name", "")):
-            scope = _scope_anchor(fact, context, trace)
-            if scope is not None:
-                anchors.append(scope)
-                continue
+            item["candidate"] = _scope_anchor(fact, context, trace)
+            item["scope"] = True
+            prepared.append(item)
+            continue
+
         try:
             result = context.evidence_index.resolve_mention(mention, role=role, hints=hints)
             trace.extend(result.query_trace)
         except Exception as exc:  # noqa: BLE001
             logger.debug("[ground_anchors] resolve failed %s: %s", mention, exc)
             result = None
+        item["result"] = result
 
-        candidate = None
-        topology_evidence: List[str] = []
-        best_effort = False
         if result is not None and result.candidates:
             if result.status == "resolved":
-                candidate = result.candidates[0]
+                item["candidate"] = result.candidates[0]
             else:
-                # 歧义/弱证据 → LLM 在候选内判别；失败回退确定性首选（best-effort）
-                candidate = await _llm_reason_candidate(llm, mention, role, hints, result.candidates)
-                if candidate is None:
-                    candidate = result.candidates[0]
-                best_effort = True
-                trace.append({"step": "llm_reason", "picked": candidate.canonical_name, "best_effort": True})
+                item["best_effort"] = True
+                item["llm_kind"] = "candidate"
+                item["llm_candidates"] = result.candidates
         else:
-            # 无索引候选 → 兜底：POI 点位 / 自然村 anchor / LLM 判别 gazetteer 候选
-            best_effort = True
+            item["best_effort"] = True
             poi_bsms = _poi_anchor_bsms(context, fact)
             village_bsms = _village_anchor_bsms(context, hints)
             if poi_bsms or village_bsms:
-                candidate = _best_effort_candidate(fact, poi_bsms, village_bsms, trace)
+                item["candidate"] = _best_effort_candidate(
+                    fact, poi_bsms, village_bsms, trace
+                )
             else:
-                candidate = await _llm_anchor_fallback(context, llm, fact, mention, role, hints, trace)
+                item["llm_kind"] = "fallback"
+                item["llm_candidates"] = _llm_anchor_candidates(context, hints)
+        prepared.append(item)
+
+    llm_groups: Dict[tuple, List[Dict[str, Any]]] = {}
+    for item in prepared:
+        kind = item.get("llm_kind")
+        candidates = item.get("llm_candidates", [])
+        if kind == "candidate":
+            key = _grounding_work_key(item, kind, candidates)
+            llm_groups.setdefault(key, []).append(item)
+        elif kind == "fallback":
+            key = _grounding_work_key(item, kind, candidates)
+            llm_groups.setdefault(key, []).append(item)
+
+    llm_tasks = []
+    llm_group_items = []
+    for group in llm_groups.values():
+        representative = group[0]
+        candidates = representative.get("llm_candidates", [])
+        llm_tasks.append(_llm_reason_candidate(
+            llm,
+            representative["mention"],
+            representative["role"],
+            representative["hints"],
+            candidates,
+            budget=ground_llm_budget,
+        ))
+        llm_group_items.append(group)
+    if llm_tasks:
+        logger.info(
+            "[ground_anchors] concurrent fact fallback groups=%d facts=%d max_concurrent=%d",
+            len(llm_tasks),
+            sum(len(group) for group in llm_group_items),
+            int(ground_llm_budget.get("max_concurrent", 1) or 1),
+        )
+        decisions = await asyncio.gather(*llm_tasks, return_exceptions=True)
+        for group, decision in zip(llm_group_items, decisions):
+            decision = None if isinstance(decision, Exception) else decision
+            representative = group[0]
+            if decision is None and representative.get("llm_kind") == "fallback":
+                candidates = representative.get("llm_candidates", [])
+                decision = candidates[0] if candidates else None
+            for item in group:
+                item["llm_decision"] = decision
+
+    # Orientation rebinding is also a per-location LLM fallback.  Keep it in
+    # the same bounded async wave as the initial candidate decisions.  Calling
+    # it from the commit loop made every directional road/water/facility
+    # mention wait for the previous one, which recreated the old tail latency
+    # even though the first candidate wave was concurrent.
+    orientation_groups: Dict[tuple, List[Dict[str, Any]]] = {}
+    for item in prepared:
+        fact = item["fact"]
+        hints = item["hints"]
+        trace = item["trace"]
+        candidate = item.get("candidate")
+        if item.get("scope"):
+            continue
+        if item.get("llm_kind") == "candidate":
+            candidate = item.get("llm_decision")
+            if candidate is None:
+                candidate = item["llm_candidates"][0]
+            trace.append({
+                "step": "llm_reason",
+                "picked": getattr(candidate, "canonical_name", ""),
+                "best_effort": True,
+            })
+        elif item.get("llm_kind") == "fallback":
+            candidate = item.get("llm_decision")
             trace.append({"step": "fallback", "best_effort": True})
 
-        if candidate is not None:
-            if kg is not None:
-                try:
-                    from app.spatial.grounding.topology import topology_evidence_for
+        if candidate is None:
+            if item.get("llm_kind") == "fallback" and item["role"] == "village":
+                item["village_fallback_pending"] = True
+            continue
+        topology_evidence: List[str] = []
+        if kg is not None:
+            try:
+                from app.spatial.grounding.topology import topology_evidence_for
 
-                    graph = getattr(kg, "g", None) or kg
-                    topology_evidence = topology_evidence_for(
-                        graph,
-                        str(getattr(candidate, "entity_ref", "") or ""),
-                        hints=hints,
-                    )
-                except Exception as exc:  # noqa: BLE001
-                    logger.debug("[ground_anchors] topology evidence failed: %s", exc)
-            anchor = _anchor_from_candidate(
-                fact,
-                candidate,
-                best_effort=best_effort,
-                topology_evidence=topology_evidence,
-                query_trace=trace,
-            )
-            # 复杂空间描述（贯穿/走向/汇入…）→ 让 LLM 在同类候选里按空间语义
-            # 挑实体级候选，避免都归并到村锚点（不靠正则解析方位）。
-            anchor = await _llm_orientation_rebind(context, fact, anchor, llm)
-            # 充分利用 KG 拓扑：设施@村（如 祠堂@社前村）用 serves/nearby +
-            # 村簇 BSM 重叠在多个同名设施点里消歧，不靠 bundle 近邻近似。
-            if anchor.role == "facility":
-                anchor = _topology_refine_facility(context, fact, anchor)
-            # 村锚点必须有空间引用：resolved 但 bsms=0 的村（如真实 LLM 未映射到
-            # 簇）强制走兜底——gazetteer 村条目 → LLM → 确定性分配到未占用聚落。
-            if (
-                anchor.role == "village"
-                and not anchor.source_bsms
-                and not anchor.geometry_ref
-            ):
-                anchor = await _village_spatial_fallback(
-                    context, fact, anchor, llm, trace
+                graph = getattr(kg, "g", None) or kg
+                topology_evidence = topology_evidence_for(
+                    graph,
+                    str(getattr(candidate, "entity_ref", "") or ""),
+                    hints=hints,
                 )
-            elif (
-                anchor.role in ("water", "road")
-                and not anchor.source_bsms
-                and not anchor.geometry_ref
-            ):
-                anchor = _linear_spatial_fallback(context, fact, anchor, trace)
-            anchors.append(anchor)
+            except Exception as exc:  # noqa: BLE001
+                logger.debug("[ground_anchors] topology evidence failed: %s", exc)
+        base_anchor = _anchor_from_candidate(
+            fact,
+            candidate,
+            best_effort=bool(item.get("best_effort")),
+            topology_evidence=topology_evidence,
+            query_trace=trace,
+        )
+        item["base_anchor"] = base_anchor
+        orientation_candidates = _orientation_candidates(context, fact, base_anchor)
+        if llm is None or not orientation_candidates:
+            item["orientation_anchor"] = base_anchor
+            continue
+        orientation_key = (
+            _grounding_work_key(item, "orientation", [candidate]),
+            _candidate_fingerprint(orientation_candidates),
+        )
+        item["orientation_candidates"] = orientation_candidates
+        orientation_groups.setdefault(orientation_key, []).append(item)
+
+    orientation_tasks = []
+    orientation_group_items = []
+    for group in orientation_groups.values():
+        representative = group[0]
+        orientation_tasks.append(_llm_orientation_pick(
+            context,
+            representative["fact"],
+            representative["base_anchor"],
+            llm,
+            budget=ground_llm_budget,
+        ))
+        orientation_group_items.append(group)
+    if orientation_tasks:
+        logger.info(
+            "[ground_anchors] concurrent orientation fallback groups=%d facts=%d max_concurrent=%d",
+            len(orientation_tasks),
+            sum(len(group) for group in orientation_group_items),
+            int(ground_llm_budget.get("max_concurrent", 1) or 1),
+        )
+        orientation_results = await asyncio.gather(
+            *orientation_tasks,
+            return_exceptions=True,
+        )
+        for group, result in zip(orientation_group_items, orientation_results):
+            if isinstance(result, Exception) or result is None:
+                for item in group:
+                    item["orientation_anchor"] = item["base_anchor"]
+                continue
+            for item in group:
+                item["orientation_anchor"] = _orientation_rebound_anchor(
+                    item["fact"], item["base_anchor"], result
+                )
+
+    # Village cluster fallback has ordered ownership state.  Prepare every
+    # candidate list from a read-only occupancy snapshot, run only the LLM
+    # decisions in a bounded/grouped wave, then commit picks in fact order.
+    village_groups: Dict[tuple, List[Dict[str, Any]]] = {}
+    for item in prepared:
+        if item.get("scope"):
+            continue
+        anchor = item.get("orientation_anchor") or item.get("base_anchor")
+        pending = item.get("village_fallback_pending")
+        needs_fallback = (
+            pending
+            or (
+                anchor is not None
+                and anchor.role == "village"
+                and not _has_spatial_evidence(anchor)
+            )
+        )
+        if not needs_fallback:
+            continue
+        plan = _village_spatial_fallback_plan(
+            context,
+            item["fact"],
+            anchor,
+            item["trace"],
+        )
+        item["village_fallback_plan"] = plan
+        candidates = plan.get("candidates", [])
+        if llm is not None and candidates:
+            key = _grounding_work_key(item, "village_fallback", candidates)
+            village_groups.setdefault(key, []).append(item)
+
+    village_tasks = []
+    village_group_items = []
+    for group in village_groups.values():
+        representative = group[0]
+        plan = representative["village_fallback_plan"]
+        village_tasks.append(_llm_reason_candidate(
+            llm,
+            representative["mention"],
+            "village",
+            plan["hints"],
+            plan["candidates"],
+            budget=ground_llm_budget,
+        ))
+        village_group_items.append(group)
+    if village_tasks:
+        logger.info(
+            "[ground_anchors] concurrent village fallback groups=%d facts=%d max_concurrent=%d",
+            len(village_tasks),
+            sum(len(group) for group in village_group_items),
+            int(ground_llm_budget.get("max_concurrent", 1) or 1),
+        )
+        village_results = await asyncio.gather(
+            *village_tasks,
+            return_exceptions=True,
+        )
+        for group, result in zip(village_group_items, village_results):
+            picked = None if isinstance(result, Exception) else result
+            for item in group:
+                item["village_fallback_pick"] = picked
+
+    anchors: List[GroundedAnchor] = []
+    for item in prepared:
+        fact = item["fact"]
+        trace = item["trace"]
+        if item.get("scope"):
+            if item.get("candidate") is not None:
+                anchors.append(item["candidate"])
+            continue
+        anchor = item.get("orientation_anchor") or item.get("base_anchor")
+        plan = item.get("village_fallback_plan")
+        if plan is not None:
+            anchor = _commit_village_spatial_fallback(
+                context,
+                plan,
+                item.get("village_fallback_pick"),
+            )
+        if anchor is None:
+            if item["role"] in ("village", "water", "road"):
+                trace.append({
+                    "step": "skip_no_spatial_evidence",
+                    "role": item["role"],
+                })
+                item["skip_trace"] = list(trace)
+                logger.info(
+                    "[ground_anchors] skipped anchor without spatial evidence mention=%s role=%s trace=%s",
+                    item["mention"],
+                    item["role"],
+                    item["skip_trace"],
+                )
+            continue
+        if anchor.role == "facility":
+            anchor = _topology_refine_facility(context, fact, anchor)
+        elif anchor.role in ("water", "road") and not _has_spatial_evidence(anchor):
+            anchor = _linear_spatial_fallback(context, fact, anchor, trace)
+        if (
+            anchor.role in ("village", "water", "road")
+            and not _has_spatial_evidence(anchor)
+        ):
+            trace.append({
+                "step": "skip_no_spatial_evidence",
+                "role": anchor.role,
+            })
+            item["skip_trace"] = list(trace)
+            logger.info(
+                "[ground_anchors] skipped anchor without spatial evidence mention=%s role=%s trace=%s",
+                item["mention"],
+                anchor.role,
+                item["skip_trace"],
+            )
+            continue
+        anchors.append(anchor)
 
     # 4) 同坐标 = 同实体：按坐标去重合并
     anchors = _dedupe_anchors_by_coordinate(anchors)
@@ -1153,39 +1560,52 @@ async def _llm_anchor_fallback(
     role: str,
     hints: str,
     trace: List[dict],
+    budget: Optional[Dict[str, Any]] = None,
+    candidates: Optional[List[Any]] = None,
 ) -> Optional[Any]:
     """索引无候选时：用 hint token 在 gazetteer 召回候选，LLM 判别（仍无几何则 0 分）。"""
-    candidates: List[Any] = []
-    if getattr(context, "gazetteer", None) is not None and hints:
-        from app.spatial.grounding.topology import hint_tokens
-
-        for token in hint_tokens(hints):
-            entry = context.gazetteer.resolve(token, fuzzy=True)
-            if entry is None or not (entry.bsms or []):
-                continue
-            from types import SimpleNamespace
-
-            candidates.append(
-                SimpleNamespace(
-                    entity_ref=str(getattr(entry, "entity_uri", "") or f"gazetteer:{token}"),
-                    entity_type="village",
-                    canonical_name=str(getattr(entry, "name", "") or token),
-                    source_bsms=list(entry.bsms or []),
-                    geometry_ref=(
-                        f"POINT({entry.centroid[0]} {entry.centroid[1]})"
-                        if getattr(entry, "centroid", None) and len(entry.centroid) >= 2
-                        else None
-                    ),
-                    relation_refs=[],
-                    score=0.4,
-                )
-            )
-    picked = await _llm_reason_candidate(llm, mention, role, hints, candidates)
+    candidates = list(candidates) if candidates is not None else _llm_anchor_candidates(
+        context, hints
+    )
+    picked = await _llm_reason_candidate(
+        llm, mention, role, hints, candidates, budget=budget
+    )
     if picked is None and candidates:
         picked = candidates[0]
     if picked is not None:
         trace.append({"step": "gazetteer_llm_fallback", "picked": picked.canonical_name})
     return picked
+
+
+def _llm_anchor_candidates(context: Any, hints: str) -> List[Any]:
+    """Build the deterministic gazetteer candidate list for fallback work."""
+    candidates: List[Any] = []
+    if getattr(context, "gazetteer", None) is None or not hints:
+        return candidates
+    from app.spatial.grounding.topology import hint_tokens
+
+    for token in hint_tokens(hints):
+        entry = context.gazetteer.resolve(token, fuzzy=True)
+        if entry is None or not (entry.bsms or []):
+            continue
+        from types import SimpleNamespace
+
+        candidates.append(
+            SimpleNamespace(
+                entity_ref=str(getattr(entry, "entity_uri", "") or f"gazetteer:{token}"),
+                entity_type="village",
+                canonical_name=str(getattr(entry, "name", "") or token),
+                source_bsms=list(entry.bsms or []),
+                geometry_ref=(
+                    f"POINT({entry.centroid[0]} {entry.centroid[1]})"
+                    if getattr(entry, "centroid", None) and len(entry.centroid) >= 2
+                    else None
+                ),
+                relation_refs=[],
+                score=0.4,
+            )
+        )
+    return candidates
 
 
 def _dedupe_anchors_by_coordinate(anchors: List[GroundedAnchor]) -> List[GroundedAnchor]:
@@ -1244,6 +1664,30 @@ async def ground_anchors(state: Dict[str, Any], *, base_dir: str = ".run-tmp") -
     if snapshot is not None and not getattr(context, "location_facts", None):
         context.location_facts = list(getattr(snapshot, "location_facts", []) or [])
 
+    observation_refs: dict[str, dict] = {}
+    try:
+        from app.evidence.identity.observation_store import ObservationStore
+
+        observations = ObservationStore.from_location_facts(
+            list(getattr(context, "location_facts", []) or [])
+        )
+        if observations:
+            observation_state = dict(state)
+            observation_state["artifact_refs"] = dict(state.get("artifact_refs") or {})
+            observation_ref = ObservationStore(base_dir=base_dir).put_snapshot(
+                observation_state,
+                observations,
+                parent_digest=str(getattr(snapshot, "artifact_id", "") or ""),
+            )
+            observation_refs["l1_observations"] = observation_ref.model_dump(mode="json")
+            logger.info(
+                "[ground_anchors] persisted l1 observations %s (%d observations)",
+                observation_ref.digest,
+                len(observations),
+            )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("[ground_anchors] l1 observation snapshot failed: %s", exc)
+
     from app.infrastructure.llm.factory import create_flash_llm
 
     llm = None
@@ -1267,12 +1711,48 @@ async def ground_anchors(state: Dict[str, Any], *, base_dir: str = ".run-tmp") -
         llm=llm,
         bump=True,
     )
+    try:
+        from app.evidence.identity.binding_store import BindingStore
+
+        bindings = BindingStore.from_context(context, anchors)
+        context.grounded_bindings = bindings
+        binding_state = dict(state)
+        binding_state["artifact_refs"] = {
+            **dict(state.get("artifact_refs") or {}),
+            **observation_refs,
+        }
+        binding_ref = BindingStore(base_dir=base_dir).put_snapshot(
+            binding_state,
+            bindings,
+            observation_snapshot_ref=str(
+                (observation_refs.get("l1_observations") or {}).get("digest", "")
+            ),
+            parent_digest=str(
+                (observation_refs.get("l1_observations") or {}).get("digest", "")
+            ),
+        )
+        observation_refs["l1_bindings"] = binding_ref.model_dump(mode="json")
+        logger.info(
+            "[ground_anchors] persisted l1 bindings %s (%d bindings)",
+            binding_ref.digest,
+            len(bindings),
+        )
+    except Exception as exc:  # noqa: BLE001 - binding persistence must not block grounding
+        logger.warning("[ground_anchors] l1 binding snapshot failed: %s", exc)
     if not anchors:
-        return {}
+        return {
+            "artifact_refs": observation_refs,
+            "grounded_anchor_count": 0,
+        }
 
     run_id = str(state.get("run_id", "") or session_id)
+    anchor_state = dict(state)
+    anchor_state["artifact_refs"] = {
+        **dict(state.get("artifact_refs") or {}),
+        **observation_refs,
+    }
     artifact = store_artifact(
-        state,
+        anchor_state,
         "grounded_anchors",
         "ground",
         "GroundedAnchorList",
@@ -1280,9 +1760,12 @@ async def ground_anchors(state: Dict[str, Any], *, base_dir: str = ".run-tmp") -
         base_dir=base_dir,
     )
     ref = ArtifactDescriptor.model_validate(artifact)
-    logger.info("[ground_anchors] persisted artifact %s (%d anchors)", ref.artifact_id, len(anchors))
+    logger.info("[ground_anchors] persisted artifact %s (%d anchors)", ref.digest, len(anchors))
     return {
-        "artifact_refs": {"grounded_anchors": ref.model_dump(mode="json")},
+        "artifact_refs": {
+            **observation_refs,
+            "grounded_anchors": ref.model_dump(mode="json"),
+        },
         "grounded_anchor_count": len(anchors),
     }
 

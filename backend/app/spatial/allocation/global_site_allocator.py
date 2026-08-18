@@ -77,7 +77,11 @@ def _quality(
         key: float(candidate.score_breakdown[key])
         for key in required_factors
     }
-    area_fit = min(1.0, required_area_m2 / capacity_area_m2)
+    area_fit = (
+        1.0
+        if required_area_m2 <= 0
+        else min(1.0, required_area_m2 / capacity_area_m2)
+    )
     breakdown["area_fit"] = area_fit
     breakdown["source_suitability"] = float(candidate.suitability_score)
     values = [*breakdown.values()]
@@ -86,6 +90,8 @@ def _quality(
 
 def allocate_global_sites(
     problem: GlobalSiteAllocationProblem,
+    *,
+    relation_scores: dict[tuple[str, str], float] | None = None,
 ) -> GlobalSiteAllocationResult:
     """Allocate every valid project/facility target in one deterministic MIP.
 
@@ -95,6 +101,10 @@ def allocate_global_sites(
     """
 
     targets = {item.target_id: item for item in sorted(problem.targets, key=lambda item: item.target_id)}
+    # ScenarioSolver owns hard relation feasibility.  This optional map is a
+    # narrow bridge for its measured soft terms when the legacy parcel master
+    # is used; missing measurements contribute zero and are never synthesized.
+    relation_scores = relation_scores or {}
     parcels = {item.bsm: item for item in sorted(problem.parcels, key=lambda item: item.bsm)}
     candidates_by_target: dict[str, list[SiteCandidateEvidence]] = defaultdict(list)
     for candidate in sorted(problem.candidates, key=lambda item: (item.target_id, item.bsm)):
@@ -105,7 +115,11 @@ def allocate_global_sites(
     effective: dict[tuple[str, str], tuple[SiteCandidateEvidence, float, dict[str, float]]] = {}
 
     for target_id, target in targets.items():
-        if target.required_area_m2 <= 0:
+        # Facilities are grounded as anchors and do not enter this parcel-area
+        # allocator. Every target that reaches the site allocator is a
+        # land-consuming parcel/polygon target and therefore needs a positive
+        # typed footprint.
+        if target.required_area_m2 <= 0 and target.target_type != "facility":
             invalid_reasons[target_id] = "target_area_capacity_unresolved"
             diagnostics.append(_diagnostic(
                 "TARGET_REQUIRED_AREA_MISSING",
@@ -196,6 +210,11 @@ def allocate_global_sites(
                 capacity_area_m2=parcel.capacity_area_m2,
                 required_factors=problem.required_score_factors,
             )
+            relation_score = float(relation_scores.get((target_id, candidate.candidate_id), 0.0))
+            if not math.isfinite(relation_score):
+                relation_score = 0.0
+            breakdown["relation_soft_score"] = relation_score
+            quality = max(0.0, min(1.0, quality + relation_score))
             effective[(target_id, candidate.bsm)] = (candidate, quality, breakdown)
 
         if not any(key[0] == target_id for key in effective):

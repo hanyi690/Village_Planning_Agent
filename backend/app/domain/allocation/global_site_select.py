@@ -81,7 +81,7 @@ def _target_refs(target: Any) -> list[str]:
 def _non_zone_targets(intent: Any) -> list[SiteTargetDemand]:
     demands: list[SiteTargetDemand] = []
     for target_type, field_name in (
-        ("project", "project_targets"),
+        ("site_area", "site_area_targets"),
         ("facility", "facilities"),
     ):
         for target in list(_value(intent, field_name, []) or []):
@@ -149,7 +149,7 @@ def build_global_site_problem(
     targets_by_id = {item.target_id: item for item in targets}
     target_objects = {
         str(_value(target, "target_id", "") or ""): target
-        for field in ("project_targets", "facilities")
+        for field in ("site_area_targets", "facilities")
         for target in list(_value(intent, field, []) or [])
     }
     workspace = getattr(context, "workspace", None)
@@ -235,13 +235,14 @@ def allocate_non_zone_for_select(
     context: Any,
     *,
     provenance_refs: list[str] | None = None,
+    relation_scores: dict[tuple[str, str], float] | None = None,
 ) -> GlobalSiteAllocationResult:
     return allocate_global_sites(build_global_site_problem(
         intent,
         suitability,
         context,
         provenance_refs=provenance_refs,
-    ))
+    ), relation_scores=relation_scores)
 
 
 __all__ = ["allocate_non_zone_for_select", "build_global_site_problem"]

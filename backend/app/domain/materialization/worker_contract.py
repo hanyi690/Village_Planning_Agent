@@ -29,7 +29,7 @@ STATUS_TO_TASK_STATUS: dict[str, str] = {
 }
 
 WORKER_MODULES: dict[str, str] = {
-    "project": "app.domain.materialization.project_worker",
+    "site_area": "app.domain.materialization.project_worker",
     "zone": "app.domain.materialization.zone_worker",
     "facility": "app.domain.materialization.facility_worker",
     "road": "app.domain.materialization.road_worker",
@@ -70,6 +70,11 @@ class WorkerInput(BaseModel):
     target_ref: str
     task_ref: str = ""
     input_refs: dict[str, str] = Field(default_factory=dict)
+    depends_on: list[str] = Field(default_factory=list)
+    scenario_id: str = ""
+    candidate_id: str = ""
+    relation_ids: list[str] = Field(default_factory=list)
+    target_binding: dict[str, Any] = Field(default_factory=dict)
 
 
 class WorkerResult(BaseModel):
@@ -87,6 +92,8 @@ class WorkerResult(BaseModel):
     change_refs: list[str] = Field(default_factory=list)
     diagnostics: dict[str, Any] = Field(default_factory=dict)
     provenance: dict[str, str] = Field(default_factory=dict)
+    scenario_features: list[dict[str, Any]] = Field(default_factory=list)
+    execution_events: list[dict[str, Any]] = Field(default_factory=list)
 
 
 def blocked_result(
@@ -191,6 +198,8 @@ def adapt_legacy_result(task: WorkerInput, legacy: Any) -> WorkerResult:
     unresolved = list(_legacy_value(legacy, "unresolved_items", None) or [])
     action_results = list(_legacy_value(legacy, "action_results", None) or [])
     diagnostics = list(_legacy_value(legacy, "diagnostics", None) or [])
+    scenario_features = list(_legacy_value(legacy, "scenario_features", None) or [])
+    execution_events = list(_legacy_value(legacy, "execution_events", None) or [])
 
     statuses = [str(_legacy_value(tr, "status", "")) for tr in task_results]
     if unresolved:
@@ -231,6 +240,11 @@ def adapt_legacy_result(task: WorkerInput, legacy: Any) -> WorkerResult:
             "unresolved_items": [_as_dict(item) for item in unresolved],
         },
         provenance={"source": "app.domain.materialization.nodes", "ref_kind": "bsm_and_layer_type"},
+        scenario_features=[
+            item.model_dump(mode="json") if hasattr(item, "model_dump") else dict(item)
+            for item in scenario_features
+        ],
+        execution_events=execution_events,
     )
 
 
@@ -243,6 +257,17 @@ def to_task_result(result: WorkerResult) -> TaskExecutionResult:
         output_artifacts=list(result.change_refs) if result.status == "succeeded" else [],
         errors=[] if result.status != "failed" else [result.code or "worker_failed"],
         diagnostics=[dict(result.diagnostics)] if result.diagnostics else [],
+        scenario_id=str(result.diagnostics.get("scenario_id", "") or "") if isinstance(result.diagnostics, dict) else "",
+        feature_ids=[
+            str(item.get("feature_id", ""))
+            for item in result.scenario_features
+            if isinstance(item, dict) and str(item.get("feature_id", ""))
+        ],
+        execution_trace_refs=[
+            str(item.get("trace_ref", ""))
+            for item in result.execution_events
+            if isinstance(item, dict) and str(item.get("trace_ref", ""))
+        ],
     )
 
 
@@ -288,37 +313,73 @@ async def run_workers(
     """
     deps = deps or {}
     _require_refs(deps)
-    pending: list[Any] = []
-    for task in inputs:
-        runner = _load_runner(task.worker)
-        if runner is None:
-            pending.append(_unknown_worker(task))
-        else:
-            pending.append(_invoke(runner, task, deps))
-    outcomes = await asyncio.gather(*pending, return_exceptions=True)
-
     results: list[WorkerResult] = []
-    for task, outcome in zip(inputs, outcomes):
-        if isinstance(outcome, BaseException):
-            results.append(
-                blocked_result(
+    from app.domain.materialization.task_scheduler import schedule_tasks
+
+    schedule = schedule_tasks(inputs)
+    by_id = {task.task_ref: task for task in inputs if task.task_ref}
+    if schedule.fail_closed:
+        for task in inputs:
+            results.append(blocked_result(
+                task,
+                task.worker,
+                "ExecutionDAG rejected: "
+                + "; ".join(
+                    str(item.get("code", "invalid_graph"))
+                    for item in schedule.diagnostics
+                ),
+                code="input_requirements_unmet",
+            ))
+    else:
+        sequence = 0
+        for batch in schedule.batches:
+            pending: list[Any] = []
+            batch_tasks = [by_id[task_id] for task_id in batch.task_ids if task_id in by_id]
+            for task in batch_tasks:
+                runner = _load_runner(task.worker)
+                if runner is None:
+                    pending.append(_unknown_worker(task))
+                else:
+                    pending.append(_invoke(runner, task, deps))
+            outcomes = await asyncio.gather(*pending, return_exceptions=True)
+            for task, outcome in zip(batch_tasks, outcomes):
+                sequence += 1
+                if isinstance(outcome, BaseException):
+                    result = blocked_result(
+                        task,
+                        task.worker,
+                        "worker raised: %s" % outcome,
+                        code="worker_raised",
+                    )
+                elif isinstance(outcome, WorkerResult):
+                    result = outcome
+                else:
+                    result = blocked_result(
+                        task,
+                        task.worker,
+                        "worker returned unexpected payload",
+                        code="unexpected_payload",
+                    )
+                result.execution_events.extend([
+                    {"task_id": task.task_ref, "event": "start", "sequence": sequence},
+                    {"task_id": task.task_ref, "event": "complete", "sequence": sequence},
+                ])
+                results.append(result)
+        for task in inputs:
+            if task.task_ref in schedule.deferred_task_ids:
+                results.append(blocked_result(
                     task,
                     task.worker,
-                    "worker raised: %s" % outcome,
-                    code="worker_raised",
-                )
-            )
-        elif isinstance(outcome, WorkerResult):
-            results.append(outcome)
-        else:
-            results.append(
-                blocked_result(
-                    task,
-                    task.worker,
-                    "worker returned unexpected payload",
-                    code="unexpected_payload",
-                )
-            )
+                    "task or dependency is durably deferred",
+                    code="input_requirements_unmet",
+                ))
+
+    trace_refs = [
+        f"trace:{event['task_id']}:{event['event']}"
+        for result in results
+        for event in result.execution_events
+        if event.get("task_id") and event.get("event")
+    ]
 
     return ExecutionResult(
         execution_plan_ref=deps.get("execution_plan_ref"),
@@ -327,6 +388,7 @@ async def run_workers(
         deferral_ledger_ref=deps.get("deferral_ledger_ref"),
         layout_configs_ref=deps["layout_configs_ref"],
         task_results=[to_task_result(result) for result in results],
+        execution_trace_refs=trace_refs,
         diagnostics=[
             {
                 "worker": result.worker,

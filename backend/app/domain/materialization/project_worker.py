@@ -19,7 +19,7 @@ async def run_worker(task: WorkerInput, *, deps: dict | None = None) -> WorkerRe
     """
     gate = gate_explicit_inputs(
         task,
-        "project",
+        "site_area",
         "parcel re-siting (selected_bsm join / full_ranking fallback)",
         deps=deps,
     )

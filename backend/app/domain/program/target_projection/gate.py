@@ -20,9 +20,10 @@ def _is_empty_intent(result: IntentCompilationResult) -> bool:
     if intent is None:
         return True
     return not (
-        intent.project_targets
+        intent.site_area_targets
         or intent.facilities
         or intent.road_targets
+        or intent.linear_targets
         or intent.zone_targets
     )
 

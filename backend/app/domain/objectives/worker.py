@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import asyncio
 import os
-import threading
 import time
 import uuid
 from dataclasses import asdict
@@ -23,7 +22,7 @@ from langchain_core.messages import AIMessage
 from app.config import get_dimension_config
 from app.contracts.events import SSEEventType
 from app.infrastructure.llm.factory import create_llm
-from app.core.settings import MAX_TOKENS, LLM_STREAM_TIMEOUT
+from app.core.settings import LLM_MAX_CONCURRENT, MAX_TOKENS, LLM_STREAM_TIMEOUT
 from app.infrastructure.logging import get_logger
 from app.infrastructure.llm.dimension_runtime import (
     enrich_summary_background,
@@ -35,15 +34,14 @@ from app.infrastructure.llm.dimension_runtime import (
     publish_dimension_start,
     provider_failure_open,
     trip_provider_failure,
+    is_provider_failure,
     dimension_failure_attempt,
     run_rag,
     save_report_immediate,
     save_step_report,
     strip_model_reasoning,
 )
-from app.evidence.retrieval.evidence_service import retrieve_evidence, render_evidence_prompt_section
 from app.infrastructure.llm.prompts.concept import get_dimension_prompt as get_layer2_prompt
-from app.contracts.evidence.evidence_contracts import ExplorationRequest
 from app.infrastructure.tasks.task_supervisor import build_summary_task_key
 
 logger = get_logger(__name__)
@@ -51,8 +49,8 @@ logger = get_logger(__name__)
 
 # Cached LLM instance — reused across all L2 dimension analyses
 _llm_cache: Optional[Any] = None
-_L2_LLM_SLOTS = threading.BoundedSemaphore(
-    max(1, int(os.getenv("L2_LLM_MAX_CONCURRENT", "3")))
+_L2_LLM_SLOTS = asyncio.Semaphore(
+    max(1, int(os.getenv("L2_LLM_MAX_CONCURRENT", str(LLM_MAX_CONCURRENT))))
 )
 
 
@@ -123,48 +121,16 @@ async def analyze_l2_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
         dim_key, cfg, dim_layer, session_id, is_revision,
     )
 
-    # 4. EXPLORE evidence service（L2 只注入证据，不调用 GIS/DataPipeline 工具）
+    # The run_rag adapter now retrieves and renders the unified EvidenceBundle;
+    # this worker must not issue a second retrieve_evidence call.
     explore_section = ""
     explore_audit = {
         "fact_statements": [],
         "fact_count": 0,
-        "source_refs": [],
+        "source_refs": [f"evidence_adapter:{session_id}:{dim_key}"],
         "kg_confidence": 0.0,
         "kg_topology_facts": [],
     }
-    try:
-        explore_request = ExplorationRequest(
-            run_id=f"{session_id}:{dim_key}:L{dim_layer}",
-            request_type="spatial_lookup",
-            query=dim_name,
-            stage=f"L{dim_layer}",
-            dimension_key=dim_key,
-            query_purpose="context_injection",
-            entity_scope=["parcels", "facilities", "roads", "annotations"],
-        )
-        explore_result = await retrieve_evidence(
-            explore_request,
-            session_id=session_id,
-            village_name=config.get("village_name", ""),
-        )
-        explore_section = render_evidence_prompt_section(
-            explore_result.evidence_bundle,
-            explore_result.spatial_cognition,
-        )
-        explore_audit = {
-            "fact_statements": [f.statement for f in explore_result.evidence_bundle.facts],
-            "fact_count": len(explore_result.evidence_bundle.facts),
-            "source_refs": [s.reference for s in explore_result.evidence_bundle.sources],
-            "kg_confidence": explore_result.spatial_cognition.kg_confidence,
-            "kg_topology_facts": list(explore_result.spatial_cognition.topology_facts),
-        }
-        if explore_section:
-            logger.info(
-                "[analyze_l2_dimension] %s: EXPLORE evidence injected (%d chars, %d facts)",
-                dim_key, len(explore_section), len(explore_result.evidence_bundle.facts),
-            )
-    except Exception as e:
-        logger.warning("[analyze_l2_dimension] %s: EXPLORE evidence failed: %s", dim_key, e)
 
     # L1 is an explicit upstream fact producer.  Load its persisted snapshot
     # by ref so L2 consumes the same versioned facts that L3 will later use;
@@ -209,7 +175,10 @@ async def analyze_l2_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
     _last_publish_time = 0.0
     _PUBLISH_INTERVAL = 0.1  # 100ms throttle
 
-    await asyncio.to_thread(_L2_LLM_SLOTS.acquire)
+    # Queue wait is part of the per-dimension budget. Otherwise a wave can
+    # spend the whole timeout waiting for a slot and then start a fresh
+    # provider request after its apparent deadline.
+    await asyncio.wait_for(_L2_LLM_SLOTS.acquire(), timeout=LLM_STREAM_TIMEOUT)
     try:
         try:
             async with asyncio.timeout(LLM_STREAM_TIMEOUT):
@@ -245,7 +214,8 @@ async def analyze_l2_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
             }],
         }
     except Exception as e:
-        trip_provider_failure(session_id)
+        if is_provider_failure(e):
+            trip_provider_failure(session_id)
         logger.error(f"[analyze_l2_dimension] {dim_key}: LLM 失败: {e}")
         await sse_manager.publish(session_id, {
             "type": SSEEventType.DIMENSION_ERROR,

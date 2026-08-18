@@ -11,12 +11,13 @@ from app.contracts.domain.selection_contracts import TargetAssignment
 
 _CLASSIFICATION_OUTPUT_KINDS = frozenset({"parcel", "polygon"})
 _TASK_SPECS = (
-    ("project", "project_targets"),
+    ("site_area", "site_area_targets"),
     ("zone", "zone_targets"),
     ("zone", "custom_zone_targets"),
     ("facility", "facilities"),
     ("axis", "development_axes"),
     ("road", "road_targets"),
+    ("linear", "linear_targets"),
 )
 
 
@@ -26,6 +27,10 @@ def _unwrap_intent(intent: Any) -> Any:
 
 def _items(intent: Any, name: str) -> list[Any]:
     value = intent.get(name) if isinstance(intent, dict) else getattr(intent, name, None)
+    if not value and name == "site_area_targets":
+        # v1 callers exposed project targets under ``project_targets``;
+        # canonical v2 storage remains site_area_targets.
+        value = intent.get("project_targets") if isinstance(intent, dict) else getattr(intent, "project_targets", None)
     return list(value or [])
 
 
@@ -48,7 +53,13 @@ def _classification_status(target: Any) -> str:
 
 
 def _classification_required(target: Any, assignment: Any) -> bool:
-    if _value(target, "materialization_role") in {
+    materialization_role = _value(target, "materialization_role")
+    if not materialization_role:
+        materialization_role = _value(assignment, "materialization_role")
+    if not materialization_role:
+        binding = _value(assignment, "target_binding", {}) or {}
+        materialization_role = _value(binding, "materialization_role")
+    if materialization_role in {
         "functional_overlay",
         "protection_overlay",
         "restoration_overlay",
@@ -93,18 +104,19 @@ def classification_boundary_diagnostics(
     diagnostics: list[dict[str, Any]] = []
 
     for target_id, target in targets.items():
-        assignment_kind = ""
+        assignment = None
         if execution_plan is not None:
-            assignment_kind = next(
+            assignment = next(
                 (
-                    str(_value(task, "expected_output_kind", "") or "")
+                    _value(task, "assignment")
                     for task in list(getattr(execution_plan, "worker_tasks", None) or [])
                     + list(getattr(execution_plan, "deferred_tasks", None) or [])
                     if str(_value(task, "target_id", "") or "") == target_id
                 ),
                 "",
             )
-        assignment = {"expected_output_kind": assignment_kind}
+        if assignment is None:
+            assignment = {"expected_output_kind": _value(target, "expected_output_kind", "")}
         if not _classification_required(target, assignment) or _classification_is_resolved(target):
             continue
         if target_id in deferred_ids:
@@ -133,7 +145,13 @@ def classification_boundary_diagnostics(
                 assignment = _value(task, "assignment")
                 binding = _value(assignment, "target_binding", {}) or {}
                 target = binding if isinstance(binding, dict) else None
-            if target is None or not _classification_is_resolved(target):
+            if target is None:
+                requires_classification = True
+            else:
+                requires_classification = _classification_required(target, task.assignment)
+            if requires_classification and (
+                target is None or not _classification_is_resolved(target)
+            ):
                 diagnostics.append(
                     {
                         "code": "worker_task_classification_boundary_violation",
@@ -154,8 +172,12 @@ def classification_boundary_diagnostics(
 def _worker_type(target_type: str, target: Any) -> WorkerType:
     if getattr(target, "execution_mode", "spatial") == "non_spatial":
         return WorkerType.NON_SPATIAL_ACTION
+    if target_type == "linear":
+        return WorkerType.UTILITY_NETWORK
+    if target_type == "road" and str(_value(target, "asset_kind", "road")) != "road":
+        return WorkerType.UTILITY_NETWORK
     return {
-        "project": WorkerType.PROJECT_FOOTPRINT,
+        "site_area": WorkerType.SITE_AREA_FOOTPRINT,
         "zone": WorkerType.PARCEL_TRANSFORMATION,
         "facility": WorkerType.FACILITY_PLACEMENT,
         "axis": WorkerType.AXIS_CONSTRUCTION,
@@ -208,6 +230,51 @@ def _has_resolution_evidence(target: Any, assignment: Any) -> bool:
     return False
 
 
+def _relation_dependencies(planning_graph: Any) -> dict[str, list[str]]:
+    """Compile only explicit ``precedes`` relations into execution edges."""
+
+    relations = getattr(planning_graph, "relations", None)
+    if relations is None and isinstance(planning_graph, dict):
+        relations = planning_graph.get("relations", [])
+    dependencies: dict[str, list[str]] = {}
+    for relation in list(relations or []):
+        if isinstance(relation, dict):
+            get = relation.get
+        else:
+            get = lambda key, default=None: getattr(relation, key, default)
+        if str(get("relation_template", "") or "") != "precedes":
+            continue
+        subject = str(get("subject_ref", "") or "")
+        object_ref = str(get("object_ref", "") or "")
+        if not subject or not object_ref or subject == object_ref:
+            continue
+        dependencies.setdefault(object_ref, []).append(subject)
+    return {
+        target_id: list(dict.fromkeys(subjects))
+        for target_id, subjects in dependencies.items()
+    }
+
+
+def _relation_ids_by_target(planning_graph: Any) -> dict[str, list[str]]:
+    """Return all declared relation ids touching each execution target."""
+    relations = getattr(planning_graph, "relations", None)
+    if relations is None and isinstance(planning_graph, dict):
+        relations = planning_graph.get("relations", [])
+    result: dict[str, list[str]] = {}
+    for relation in list(relations or []):
+        get = relation.get if isinstance(relation, dict) else lambda key, default=None: getattr(relation, key, default)
+        relation_id = str(get("relation_id", "") or "")
+        if not relation_id:
+            continue
+        for target_id in (
+            str(get("subject_ref", "") or ""),
+            str(get("object_ref", "") or ""),
+        ):
+            if target_id:
+                result.setdefault(target_id, []).append(relation_id)
+    return {key: list(dict.fromkeys(value)) for key, value in result.items()}
+
+
 def build_execution_plan(
     intent,
     site_selection,
@@ -218,17 +285,23 @@ def build_execution_plan(
     deferral_ledger: Any = None,
     portfolio_decision_ref: str = "",
     global_zone_allocation_ref: str = "",
+    scenario_selected_candidate_ids: dict[str, str] | None = None,
 ) -> ExecutionPlan:
     """Create self-contained worker tasks keyed only by stable target IDs."""
+    planning_graph = getattr(intent, "intent_graph", None)
     intent = _unwrap_intent(intent)
+    scenario_id = str(getattr(site_selection, "scenario_id", "") or "")
     assignments = {
         item.target_id: item for item in (getattr(site_selection, "target_assignments", None) or [])
     }
     deferred_ids = _deferred_target_ids(deferral_ledger)
+    scenario_selected_candidate_ids = {
+        str(target_id): str(candidate_id)
+        for target_id, candidate_id in (scenario_selected_candidate_ids or {}).items()
+        if str(target_id).strip() and str(candidate_id).strip()
+    }
     tasks: list[WorkerTask] = []
     deferred_tasks: list[WorkerTask] = []
-    project_task_ids: list[str] = []
-    facility_task_ids: list[str] = []
     for target_type, field_name in _TASK_SPECS:
         for target in _items(intent, field_name):
             target_id = str(getattr(target, "target_id", "") or "")
@@ -246,13 +319,28 @@ def build_execution_plan(
                 )
             elif not assignment.target_binding:
                 assignment = assignment.model_copy(update={"target_binding": target.model_dump(mode="json")})
+            selected_candidate_id = scenario_selected_candidate_ids.get(target_id)
+            if selected_candidate_id:
+                binding = dict(assignment.target_binding or {})
+                binding["candidate_id"] = selected_candidate_id
+                binding["scenario_id"] = scenario_id
+                assignment = assignment.model_copy(update={
+                    "status": "placed",
+                    "reason": "",
+                    "target_binding": binding,
+                })
             worker_type = _worker_type(target_type, target)
+            asset_kind = str(_value(target, "asset_kind", "none") or "none")
+            required_capability = (
+                f"linear.{asset_kind}"
+                if target_type == "linear"
+                else (
+                    f"linear.{asset_kind}"
+                    if target_type == "road" and asset_kind != "road"
+                    else worker_type.value
+                )
+            )
             task_id = f"{worker_type.value}:{target_id}"
-            depends_on = []
-            if target_type == "zone":
-                depends_on = list(project_task_ids)
-            elif target_type == "road":
-                depends_on = list(project_task_ids) + list(facility_task_ids)
             task = WorkerTask(
                 task_id=task_id,
                 worker_type=worker_type,
@@ -261,7 +349,7 @@ def build_execution_plan(
                 expected_output_kind=assignment.expected_output_kind,
                 assignment=assignment,
                 payload={"target_id": target_id},
-                depends_on=depends_on,
+                depends_on=[],
                 input_artifact_refs=[
                     "artifact:target_projection",
                     (
@@ -275,7 +363,30 @@ def build_execution_plan(
                         else []
                     ),
                 ],
+                required_capability=required_capability,
+                scenario_id=scenario_id,
+                candidate_id=str(
+                    _value(assignment, "target_binding", {}).get("candidate_id")
+                    if isinstance(_value(assignment, "target_binding", {}), dict)
+                    else ""
+                ) or str(_value(assignment, "selected_bsm", "") or ""),
+                relation_ids=[],
+                target_binding=dict(_value(assignment, "target_binding", {}) or {}),
+                defer_reason=(
+                    "unsupported_capability"
+                    if worker_type == WorkerType.UTILITY_NETWORK
+                    else ""
+                ),
             )
+            if worker_type == WorkerType.UTILITY_NETWORK:
+                deferred_tasks.append(
+                    task.model_copy(
+                        update={
+                            "assignment": assignment.model_copy(update={"status": "deferred"}),
+                        }
+                    )
+                )
+                continue
             if assignment.status in {"unplaced", "deferred"}:
                 deferred_tasks.append(
                     task.model_copy(
@@ -297,16 +408,51 @@ def build_execution_plan(
                     deferred_tasks.append(task)
                     continue
             tasks.append(task)
-            if target_type == "project":
-                project_task_ids.append(task_id)
-            elif target_type == "facility":
-                facility_task_ids.append(task_id)
+    task_id_by_target = {
+        task.target_id: task.task_id
+        for task in [*tasks, *deferred_tasks]
+    }
+    relation_dependencies = _relation_dependencies(planning_graph)
+    relation_ids_by_target = _relation_ids_by_target(planning_graph)
+    if scenario_id or relation_ids_by_target:
+        def _with_execution_metadata(task: WorkerTask) -> WorkerTask:
+            assignment = task.assignment
+            binding = dict(assignment.target_binding or {})
+            candidate_id = str(
+                binding.get("candidate_id")
+                or _value(assignment, "selected_bsm", "")
+                or ""
+            )
+            return task.model_copy(update={
+                "scenario_id": scenario_id,
+                "candidate_id": candidate_id,
+                "relation_ids": relation_ids_by_target.get(task.target_id, []),
+                "target_binding": binding,
+            })
+
+        tasks = [_with_execution_metadata(task) for task in tasks]
+        deferred_tasks = [_with_execution_metadata(task) for task in deferred_tasks]
+    if relation_dependencies:
+        def _with_relation_dependencies(task: WorkerTask) -> WorkerTask:
+            depends_on = [
+                task_id_by_target[subject]
+                for subject in relation_dependencies.get(task.target_id, [])
+                if subject in task_id_by_target and task_id_by_target[subject] != task.task_id
+            ]
+            return task.model_copy(update={"depends_on": list(dict.fromkeys(depends_on))})
+
+        tasks = [_with_relation_dependencies(task) for task in tasks]
+        deferred_tasks = [_with_relation_dependencies(task) for task in deferred_tasks]
     return ExecutionPlan(
         schema_version="2.0",
         plan_id=f"execute-{run_id or 'current'}",
         worker_tasks=tasks,
         deferred_tasks=deferred_tasks,
-        dependencies=[{"from": dependency, "to": task.task_id} for task in tasks for dependency in task.depends_on],
+        dependencies=[
+            {"from": dependency, "to": task.task_id}
+            for task in [*tasks, *deferred_tasks]
+            for dependency in task.depends_on
+        ],
         context_version=context_version,
         land_design_briefs=list(land_design_briefs or []),
         portfolio_decision_ref=portfolio_decision_ref,

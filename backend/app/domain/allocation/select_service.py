@@ -19,7 +19,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from app.infrastructure.context.planning_context import PlanningContext
 from app.contracts.spatial.grounding_contracts import CandidateSite, GroundingResult
 from app.contracts.artifacts.classification_ref import classification_code_names
-from app.contracts.workflow.parse_contracts import ProjectTarget
+from app.contracts.workflow.parse_contracts import SiteAreaTarget
 from app.contracts.artifacts.provenance import Provenance
 from app.contracts.domain.selection_contracts import (
     EliminatedCandidate,
@@ -213,7 +213,7 @@ def _setback_requirements(decision: PlacementDecision) -> List[str]:
 
 
 def build_land_design_brief(
-    project: ProjectTarget,
+    project: SiteAreaTarget,
     decision: PlacementDecision,
     context: Any,
 ) -> LandDesignBrief:
@@ -282,7 +282,7 @@ def build_site_selection_decision(
             assignments.append(
                 TargetAssignment(
                     target_id=placement.target_id,
-                    target_type="project",
+                    target_type="site_area",
                     status="placed",
                     selected_bsm=placement.selected_bsm,
                     anchor_point=placement.anchor_point,
@@ -298,7 +298,7 @@ def build_site_selection_decision(
             assignments.append(
                 TargetAssignment(
                     target_id=placement.target_id,
-                    target_type="project",
+                    target_type="site_area",
                     status="unplaced",
                     expected_output_kind=expected_output_kinds.get(
                         placement.target_id, "parcel"
@@ -516,7 +516,7 @@ def select_aggregate(
         empty = build_site_selection_decision([], run_id=run_id, session_id=run_id)
         return empty, []
     parcels = _grounding_to_candidate_parcels(result, context.workspace)
-    all_projects = list(getattr(intent, "project_targets", None) or [])
+    all_projects = list(getattr(intent, "site_area_targets", None) or [])
     all_facilities = list(getattr(intent, "facilities", None) or [])
     if suitability_surface is not None and site_allocation is None:
         from app.domain.allocation.global_site_select import (
@@ -541,7 +541,7 @@ def select_aggregate(
             target_id = str(getattr(row, "target_id", "") or "")
             target = target_objects.get(target_id)
             assigned = str(getattr(row, "status", "")) == "assigned"
-            target_type = str(getattr(row, "target_type", "") or "project")
+            target_type = str(getattr(row, "target_type", "") or "site_area")
             anchor = getattr(row, "anchor_point", None)
             bsm = str(getattr(row, "bsm", "") or "")
             if target_type == "facility" and target is not None and assigned:
@@ -566,7 +566,7 @@ def select_aggregate(
                     else []
                 ),
             ))
-            if target_type == "project":
+            if target_type == "site_area":
                 global_site_placements.append(PlacementDecision(
                     target_id=target_id,
                     selected_bsm=bsm if assigned else "",
@@ -632,7 +632,7 @@ def select_aggregate(
             overlay_assignments.append(
                 TargetAssignment(
                     target_id=project.target_id,
-                    target_type="project",
+                    target_type="site_area",
                     status="placed" if overlay_bsms else "unplaced",
                     selected_bsm=overlay_bsms[0] if overlay_bsms else "",
                     selected_bsms=overlay_bsms,
@@ -662,7 +662,7 @@ def select_aggregate(
         target = SelectionTarget(
             target_id=project.target_id,
             name=project.name,
-            category="project",
+            category="site_area",
             scale_text=project.scale_text,
         )
         project_pool = _filter_parcels_for_target(parcels, project.target_id)
@@ -905,9 +905,10 @@ def select_aggregate(
         ],
     }
     for target_type, targets in (
-        ("project", all_projects),
+        ("site_area", all_projects),
         ("axis", list(getattr(intent, "development_axes", None) or [])),
         ("road", list(getattr(intent, "road_targets", None) or [])),
+        ("linear", list(getattr(intent, "linear_targets", None) or [])),
     ):
         for target in targets:
             target_id = str(getattr(target, "target_id", "") or "")

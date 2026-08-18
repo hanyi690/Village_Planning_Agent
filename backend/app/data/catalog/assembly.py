@@ -19,6 +19,8 @@ def _merge_geojson_into_bundle(
     bundle: Any,
     layer_key: str,
     geojson: Dict[str, Any],
+    *,
+    source_uri: str | None = None,
 ) -> int:
     """Merge a user-uploaded GeoJSON FeatureCollection into a VillageBundle.
 
@@ -48,7 +50,10 @@ def _merge_geojson_into_bundle(
     if entry is not None and entry.ingest is not None:
         adapter = ADAPTERS.get(entry.ingest.adapter)
         if adapter is not None:
-            result = adapter.load(geojson, entry)
+            adapter_kwargs = {}
+            if entry.ingest.adapter == "features":
+                adapter_kwargs["source_uri"] = source_uri
+            result = adapter.load(geojson, entry, **adapter_kwargs)
             for feature in result.features:
                 bundle.add(feature)
             merged = len(result.features)

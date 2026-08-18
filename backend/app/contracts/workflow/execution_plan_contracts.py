@@ -10,13 +10,15 @@ from app.contracts.artifacts import ArtifactRef
 from app.contracts.artifacts.contract_meta import ContractMeta
 from app.contracts.artifacts.provenance import Provenance
 from app.contracts.domain.selection_contracts import TargetAssignment
+from app.contracts.planning.scenario import ScenarioFeature
 
 
 class WorkerType(str, Enum):
-    PROJECT_FOOTPRINT = "project_footprint"
+    SITE_AREA_FOOTPRINT = "site_area_footprint"
     PARCEL_TRANSFORMATION = "parcel_transformation"
     FACILITY_PLACEMENT = "facility_placement"
     ROAD_CONSTRUCTION = "road_construction"
+    UTILITY_NETWORK = "utility_network"
     RESTORATION = "restoration"
     ZONE_SYNTHESIS = "zone_synthesis"
     AXIS_CONSTRUCTION = "axis_construction"
@@ -33,6 +35,12 @@ class WorkerTask(BaseModel):
     payload: dict = Field(default_factory=dict)
     depends_on: list[str] = Field(default_factory=list)
     input_artifact_refs: list[str] = Field(default_factory=list)
+    required_capability: str = ""
+    defer_reason: str = ""
+    scenario_id: str = ""
+    candidate_id: str = ""
+    relation_ids: list[str] = Field(default_factory=list)
+    target_binding: dict[str, Any] = Field(default_factory=dict)
 
 
 class TaskExecutionResult(BaseModel):
@@ -45,6 +53,11 @@ class TaskExecutionResult(BaseModel):
     output_artifacts: list[str] = Field(default_factory=list)
     errors: list[str] = Field(default_factory=list)
     diagnostics: list[dict] = Field(default_factory=list)
+    scenario_id: str = ""
+    candidate_id: str = ""
+    relation_ids: list[str] = Field(default_factory=list)
+    feature_ids: list[str] = Field(default_factory=list)
+    execution_trace_refs: list[str] = Field(default_factory=list)
 
 
 class TypedActionResult(BaseModel):
@@ -74,6 +87,9 @@ class ExecutionResult(ContractMeta):
     task_results: list[TaskExecutionResult] = Field(default_factory=list)
     action_results: list[TypedActionResult] = Field(default_factory=list)
     diagnostics: list[dict] = Field(default_factory=list)
+    scenario_id: str = ""
+    scenario_ref: str = ""
+    execution_trace_refs: list[str] = Field(default_factory=list)
 
     @field_validator("execution_plan_ref", mode="before")
     @classmethod
@@ -143,6 +159,9 @@ class WorkerResult(BaseModel):
     unresolved_items: list[Any] = Field(default_factory=list)
     diagnostics: list[Any] = Field(default_factory=list)
     provenance: Any = None
+    scenario_features: list[ScenarioFeature] = Field(default_factory=list)
+    execution_events: list[dict[str, Any]] = Field(default_factory=list)
+    task_id: str = ""
 
 
 class RoadPlanResult(BaseModel):

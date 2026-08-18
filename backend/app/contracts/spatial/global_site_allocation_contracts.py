@@ -11,7 +11,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
-SiteTargetType = Literal["project", "facility"]
+SiteTargetType = Literal["site_area", "facility"]
 SiteOutputKind = Literal["parcel", "polygon", "point"]
 SiteAllocationStatus = Literal[
     "OPTIMAL",

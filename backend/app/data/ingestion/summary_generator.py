@@ -281,7 +281,7 @@ async def _instructor_generate(
             model=model,
             max_tokens=800,
             temperature=0.1,
-            max_retries=0,
+            max_retries=2,
             response_model=dim_schema,
             messages=[{"role": "user", "content": prompt}],
         )

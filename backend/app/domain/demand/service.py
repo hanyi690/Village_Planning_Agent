@@ -28,9 +28,10 @@ def derive_demand_portfolio(
     demands: list[DemandItem] = []
     seen: set[str] = set()
     for field, kind in (
-        ("project_targets", "project"),
+        ("site_area_targets", "site_area"),
         ("facilities", "facility"),
         ("road_targets", "road"),
+        ("linear_targets", "linear"),
         ("development_axes", "axis"),
         ("zone_targets", "zone"),
         ("custom_zone_targets", "zone"),

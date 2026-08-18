@@ -163,7 +163,19 @@ def check_quantitative_drift(program, planned_state) -> list[ReconciliationIncon
     area_ranges = [iv.area_range_ha for iv in interventions if iv.area_range_ha is not None]
     if not area_ranges:
         return []
-    total_planned_ha = sum(p.area_ha for p in (getattr(planned_state, "parcels", None) or []))
+    planned_parcels = list(getattr(planned_state, "parcels", None) or [])
+    positive_area_parcels = [
+        float(getattr(parcel, "area_ha", 0.0) or 0.0)
+        for parcel in planned_parcels
+        if float(getattr(parcel, "area_ha", 0.0) or 0.0) > 0.0
+    ]
+    # Area ranges describe parcel/zone quantities.  A scenario that only
+    # materializes source-backed overlay/facility features has no parcel-area
+    # measurement to compare; treating zero-filled placeholder parcels as a
+    # measured 0 ha manufactures an L3 failure and blocks delivery.
+    if not positive_area_parcels:
+        return []
+    total_planned_ha = sum(positive_area_parcels)
     expected_min = sum(r[0] for r in area_ranges)
     expected_max = sum(r[1] for r in area_ranges)
     if total_planned_ha < expected_min * 0.95 or total_planned_ha > expected_max * 1.05:

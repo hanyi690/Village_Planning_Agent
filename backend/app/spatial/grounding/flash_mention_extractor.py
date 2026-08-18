@@ -9,10 +9,10 @@ canonical_name / confidence).  The LLM only produces *semantic text and closed
 set labels* - it never invents BSMs, coordinates or geometry.  Final BSMs still
 come exclusively from the evidence index / gazetteer / bundle.
 
-The primary path uses ``with_structured_output(function_calling)`` so GROUND
+The primary path uses Instructor/Pydantic so GROUND
 receives typed entities it can match to specific named features (road/water/
-facility/village) instead of falling back to a whole-DLMC parcel class.  When
-the provider does not support structured output, the enhancer falls back to a
+facility/village) instead of falling back to a whole-DLMC parcel class. When
+the structured call fails, the enhancer falls back to a
 ``mention|role`` text-line protocol and parses it deterministically.
 
 Determinism & resume:
@@ -287,16 +287,12 @@ def _parse_structured_payload(payload: Any) -> List[MentionCandidate]:
 
 
 async def _extract_structured(
-    model: Any, key_text: str
+    model: Any,
+    key_text: str,
+    *,
+    budget: Optional[Dict[str, Any]] = None,
 ) -> Optional[List[MentionCandidate]]:
-    """Run structured output; return None when the provider can't do it."""
-    try:
-        structured = model.with_structured_output(
-            SemanticPlaceEntitySet, method="function_calling"
-        )
-    except Exception as exc:  # noqa: BLE001
-        logger.debug("[flash-mention] structured output unsupported: %s", exc)
-        return None
+    """Run the typed structured path; return None for best-effort fallback."""
     prompt = _STRUCTURED_SYSTEM.format(
         roles="|".join(_ROLE_SET), text=key_text[:600]
     )
@@ -308,10 +304,27 @@ async def _extract_structured(
             {"role": "system", "content": prompt},
             {"role": "user", "content": "请从上述文本中提取地点实体。"},
         ]
-        if asyncio.iscoroutinefunction(getattr(structured, "ainvoke", None)):
-            response = await structured.ainvoke(messages)
-        else:
-            response = await asyncio.to_thread(structured.invoke, messages)
+        from app.infrastructure.llm.structured import run_structured_output
+        from app.spatial.grounding.call_budget import (
+            reserve_ground_llm_call,
+            run_ground_llm_call,
+        )
+
+        timeout = reserve_ground_llm_call(budget)
+        if timeout is None:
+            return None
+        async def _invoke_structured():
+            return await run_structured_output(
+                SemanticPlaceEntitySet,
+                messages,
+                max_retries=1,
+                timeout=timeout,
+                temperature=0.1,
+                max_tokens=300,
+                llm=model,
+            )
+
+        response = await run_ground_llm_call(budget, timeout, _invoke_structured)
     except Exception as exc:  # noqa: BLE001
         logger.warning("[flash-mention] structured call failed: %s", exc)
         return None
@@ -322,6 +335,7 @@ async def extract_mentions(
     text: str,
     cache: Optional[MentionCache] = None,
     llm: Any = None,
+    budget: Optional[Dict[str, Any]] = None,
 ) -> List[MentionCandidate]:
     """Enhance raw prose into typed place entities (text + closed-set labels)."""
     if not text or not text.strip():
@@ -342,17 +356,27 @@ async def extract_mentions(
 
     # Primary: typed structured output.  Fall back to the text-line protocol
     # only when structured output is unsupported or produced nothing.
-    mentions = await _extract_structured(model, key_text)
+    mentions = await _extract_structured(model, key_text, budget=budget)
     if not mentions:
         prompt = _PROMPT_TEMPLATE.format(
             roles="|".join(_ROLE_SET),
             text=key_text[:600],
         )
         try:
-            if asyncio.iscoroutinefunction(model.ainvoke):
-                response = await model.ainvoke(prompt)
-            else:
-                response = await asyncio.to_thread(model.invoke, prompt)
+            from app.spatial.grounding.call_budget import (
+                reserve_ground_llm_call,
+                run_ground_llm_call,
+            )
+
+            timeout = reserve_ground_llm_call(budget)
+            if timeout is None:
+                return []
+            async def _invoke_text():
+                if asyncio.iscoroutinefunction(getattr(model, "ainvoke", None)):
+                    return await model.ainvoke(prompt)
+                return await asyncio.to_thread(model.invoke, prompt)
+
+            response = await run_ground_llm_call(budget, timeout, _invoke_text)
         except Exception as exc:  # noqa: BLE001
             logger.warning("[flash-mention] flash LLM call failed: %s", exc)
             return []

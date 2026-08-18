@@ -22,7 +22,7 @@ _MEASURE_FIELDS: dict[str, tuple[str, ...]] = {
     "facility_parameters": ("service_radius", "capacity", "footprint_area"),
     "axis_parameters": ("corridor_width",),
     "polygon_parameters": ("area_range",),
-    "project_parameters": ("capacity", "footprint_area"),
+    "site_area_parameters": ("capacity", "footprint_area"),
 }
 
 # Standard units the normalizer can actually consume (post-alias).

@@ -12,6 +12,7 @@ from typing import Any, List
 from app.domain.validation.validate_checks import (
     check_accessibility,
     check_area_conservation,
+    check_candidate_materialization,
     check_classification_missing,
     check_contract_completeness,
     check_continuity,
@@ -104,6 +105,7 @@ def validate_aggregate(
     all_checks.extend(check_hard_constraints(planned_state, constraint_index))
     all_checks.extend(check_area_conservation(changeset))
     all_checks.extend(check_topology(planned_state))
+    all_checks.extend(check_candidate_materialization(planned_state))
     all_checks.extend(check_overlap(planned_state))
     all_checks.extend(check_continuity(planned_state))
     all_checks.extend(check_accessibility(planned_state, intent))

@@ -8,20 +8,22 @@ from app.domain.materialization.execute_state import ExecuteAgentState
 
 
 WORKER_ROUTE_KEYS = {
-    "project_footprint": "project",
+    "site_area_footprint": "site_area",
     "parcel_transformation": "layout",
     "facility_placement": "facility",
     "axis_construction": "axis",
     "road_construction": "road",
+    "utility_network": "utility",
     "non_spatial_action": "action",
 }
 
 WORKER_RESULT_KEYS = {
-    "project_footprint": "project",
+    "site_area_footprint": "site_area",
     "parcel_transformation": "zone",
     "facility_placement": "facility",
     "axis_construction": "axis",
     "road_construction": "road",
+    "utility_network": "utility",
     "non_spatial_action": "action",
 }
 
@@ -79,6 +81,7 @@ def _task_execution_result(
     if task is None:
         return None
     output_kind = _task_value(task, "expected_output_kind", "parcel")
+    assignment = _task_value(task, "assignment")
     return TaskExecutionResult(
         task_id=str(_task_value(task, "task_id", "")),
         target_id=str(target_id),
@@ -87,7 +90,150 @@ def _task_execution_result(
         output_artifacts=[output_kind] if status == "succeeded" else [],
         diagnostics=list(diagnostics or []),
         errors=list(errors or []),
+        scenario_id=str(_task_value(task, "scenario_id", "") or ""),
+        candidate_id=str(
+            _task_value(task, "candidate_id", "")
+            or _task_value(assignment, "selected_bsm", "")
+            or ""
+        ),
+        relation_ids=list(_task_value(task, "relation_ids", []) or []),
     )
+
+
+def _task_for_target(state: ExecuteAgentState, target_id: str) -> Any:
+    """Resolve the authoritative task snapshot for lineage materialization."""
+    return next(
+        (
+            item
+            for item in _plan_tasks(state)
+            if str(_task_value(item, "target_id", "") or "") == str(target_id)
+        ),
+        None,
+    )
+
+
+def _scenario_features_for_layer(
+    state: ExecuteAgentState,
+    layer: dict[str, Any],
+    *,
+    generation_operation: str,
+) -> list[Any]:
+    """Convert worker GeoJSON into strict ScenarioFeature lineage rows.
+
+    A worker may only emit a feature when the layer property contains an
+    explicit target binding.  There is no single-target inference here: an
+    unbound feature is returned as a diagnostic and is excluded from the
+    scenario feature list.
+    """
+    from app.contracts.planning.scenario import ScenarioFeature
+
+    data = layer.get("data") or layer.get("geojson") or layer
+    features: list[Any] = []
+    for index, feature in enumerate(data.get("features") or []):
+        properties = dict(feature.get("properties") or {})
+        target_id = str(properties.get("target_id") or "").strip()
+        if not target_id:
+            continue
+        task = _task_for_target(state, target_id)
+        if task is None:
+            continue
+        assignment = _task_value(task, "assignment")
+        geometry = feature.get("geometry") or {}
+        geometry_type = str(geometry.get("type") or "").lower()
+        geometry_kind = {
+            "point": "point",
+            "linestring": "line",
+            "multilinestring": "line",
+            "polygon": "polygon",
+            "multipolygon": "polygon",
+            "multipatch": "multipatch",
+        }.get(geometry_type)
+        if geometry_kind is None:
+            continue
+        try:
+            from shapely.geometry import shape
+
+            geometry_wkt = shape(geometry).wkt
+        except Exception:
+            continue
+        if not geometry_wkt:
+            continue
+        candidate_id = str(
+            properties.get("candidate_id")
+            or _task_value(task, "candidate_id", "")
+            or _task_value(assignment, "selected_bsm", "")
+            or ""
+        ).strip()
+        if not candidate_id:
+            continue
+        scenario_id = str(
+            properties.get("scenario_id")
+            or _task_value(task, "scenario_id", "")
+            or getattr(state.site_selection, "scenario_id", "")
+            or "scenario:execution"
+        ).strip()
+        relation_ids = list(
+            properties.get("relation_ids")
+            or _task_value(task, "relation_ids", [])
+            or []
+        )
+        if not relation_ids:
+            relation_ids = [f"selection:{target_id}:{candidate_id}"]
+        source_refs = list(
+            properties.get("source_refs")
+            or _task_value(task, "input_artifact_refs", [])
+            or _task_value(assignment, "input_artifact_refs", [])
+            or []
+        )
+        source_refs = [str(ref) for ref in source_refs if str(ref).strip()]
+        if not source_refs:
+            source_refs = [f"task:{_task_value(task, 'task_id', target_id)}"]
+        feature_id = str(
+            properties.get("feature_id")
+            or f"feature:{scenario_id}:{target_id}:{index}"
+        )
+        properties.update({
+            "scenario_id": scenario_id,
+            "candidate_id": candidate_id,
+            "feature_id": feature_id,
+            "lineage_id": feature_id,
+            "relation_ids": [str(ref) for ref in relation_ids if str(ref).strip()],
+            "source_refs": source_refs,
+            "generation_operation": str(
+                properties.get("generation_operation") or generation_operation
+            ),
+        })
+        feature["properties"] = properties
+        features.append(ScenarioFeature(
+            feature_id=feature_id,
+            scenario_id=scenario_id,
+            target_id=target_id,
+            candidate_id=candidate_id,
+            geometry_kind=geometry_kind,
+            geometry_wkt=geometry_wkt,
+            crs=str(properties.get("crs") or "EPSG:4326"),
+            generation_operation=str(
+                properties.get("generation_operation") or generation_operation
+            ),
+            source_refs=source_refs,
+            relation_ids=[str(ref) for ref in relation_ids if str(ref).strip()],
+        ))
+    return features
+
+
+def _attach_feature_lineage(task_results: list[Any], features: list[Any]) -> list[Any]:
+    """Attach emitted feature ids to the corresponding task evidence row."""
+    by_target: dict[str, list[str]] = {}
+    for feature in features or []:
+        target_id = str(getattr(feature, "target_id", "") or "")
+        feature_id = str(getattr(feature, "feature_id", "") or "")
+        if target_id and feature_id:
+            by_target.setdefault(target_id, []).append(feature_id)
+    for result in task_results or []:
+        target_id = str(getattr(result, "target_id", "") or "")
+        if target_id in by_target:
+            result.feature_ids = list(dict.fromkeys(by_target[target_id]))
+    return task_results
 
 
 def _execution_intent_from_plan(state: ExecuteAgentState) -> Any:
@@ -97,18 +243,20 @@ def _execution_intent_from_plan(state: ExecuteAgentState) -> Any:
     from app.contracts.workflow.parse_contracts import (
         AxisTarget,
         FacilityTarget,
-        ProjectTarget,
+        LinearAssetTarget,
+        SiteAreaTarget,
         RoadTarget,
         SpatialPlanningIntent,
         ZoneTarget,
     )
 
     model_by_type = {
-        "project": ("project_targets", ProjectTarget),
+        "site_area": ("site_area_targets", SiteAreaTarget),
         "zone": ("zone_targets", ZoneTarget),
         "facility": ("facilities", FacilityTarget),
         "axis": ("development_axes", AxisTarget),
         "road": ("road_targets", RoadTarget),
+        "linear": ("linear_targets", LinearAssetTarget),
     }
     values: dict[str, list[Any]] = {field: [] for field, _ in model_by_type.values()}
     for task in _plan_tasks(state):

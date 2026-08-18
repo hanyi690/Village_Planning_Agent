@@ -22,6 +22,8 @@ import math
 from dataclasses import dataclass
 from typing import List, Sequence
 
+from app.spatial.network.network_graph import NetworkGraphSnapshot
+
 _EARTH_RADIUS_M = 6371000.0
 
 
@@ -57,14 +59,31 @@ def compute_coverage_matrix(
     candidates: Sequence[FacilityCandidate],
     demand_points: Sequence[DemandPoint],
     service_radius_m: float,
+    *,
+    network: NetworkGraphSnapshot | None = None,
+    max_travel_time_min: float | None = None,
+    allow_haversine_fallback: bool = False,
 ) -> List[List[bool]]:
-    """Return rows = demand points, cols = candidates boolean coverage matrix."""
+    """Return a demand/candidate matrix using network time when configured."""
     matrix = []
     for dp in demand_points:
-        row = [
-            haversine_m(dp.lon, dp.lat, c.lon, c.lat) <= service_radius_m
-            for c in candidates
-        ]
+        row = []
+        for c in candidates:
+            if network is None:
+                row.append(haversine_m(dp.lon, dp.lat, c.lon, c.lat) <= service_radius_m)
+                continue
+            route = network.route(
+                {"type": "Point", "coordinates": [dp.lon, dp.lat]},
+                {"type": "Point", "coordinates": [c.lon, c.lat]},
+            )
+            covered = bool(
+                route.reachable
+                and route.travel_time_min is not None
+                and (max_travel_time_min is None or route.travel_time_min <= max_travel_time_min)
+            )
+            if not covered and allow_haversine_fallback:
+                covered = haversine_m(dp.lon, dp.lat, c.lon, c.lat) <= service_radius_m
+            row.append(covered)
         matrix.append(row)
     return matrix
 
@@ -74,11 +93,22 @@ def greedy_maximal_covering(
     demand_points: Sequence[DemandPoint],
     service_radius_m: float,
     n_facilities: int = 1,
+    *,
+    network: NetworkGraphSnapshot | None = None,
+    max_travel_time_min: float | None = None,
+    allow_haversine_fallback: bool = False,
 ) -> List[str]:
     """Greedy fallback: pick candidate covering the most remaining demand."""
     if not candidates or not demand_points:
         return []
-    cover = compute_coverage_matrix(candidates, demand_points, service_radius_m)
+    cover = compute_coverage_matrix(
+        candidates,
+        demand_points,
+        service_radius_m,
+        network=network,
+        max_travel_time_min=max_travel_time_min,
+        allow_haversine_fallback=allow_haversine_fallback,
+    )
     remaining = [True] * len(demand_points)
     chosen: List[str] = []
     opened = 0
@@ -111,6 +141,10 @@ def solve_maximal_covering(
     demand_points: Sequence[DemandPoint],
     service_radius_m: float,
     n_facilities: int = 1,
+    *,
+    network: NetworkGraphSnapshot | None = None,
+    max_travel_time_min: float | None = None,
+    allow_haversine_fallback: bool = False,
 ) -> List[str]:
     """Solve MCLP exactly with pulp; fall back to greedy if pulp is missing."""
     if not candidates or not demand_points:
@@ -119,9 +153,22 @@ def solve_maximal_covering(
         import pulp
     except ImportError:
         return greedy_maximal_covering(
-            candidates, demand_points, service_radius_m, n_facilities=n_facilities
+            candidates,
+            demand_points,
+            service_radius_m,
+            n_facilities=n_facilities,
+            network=network,
+            max_travel_time_min=max_travel_time_min,
+            allow_haversine_fallback=allow_haversine_fallback,
         )
-    cover = compute_coverage_matrix(candidates, demand_points, service_radius_m)
+    cover = compute_coverage_matrix(
+        candidates,
+        demand_points,
+        service_radius_m,
+        network=network,
+        max_travel_time_min=max_travel_time_min,
+        allow_haversine_fallback=allow_haversine_fallback,
+    )
     n_d = len(demand_points)
     n_c = len(candidates)
     prob = pulp.LpProblem("maximal_covering", pulp.LpMaximize)
@@ -134,7 +181,13 @@ def solve_maximal_covering(
     prob.solve(pulp.PULP_CBC_CMD(msg=0))
     if pulp.LpStatus[prob.status] != "Optimal":
         return greedy_maximal_covering(
-            candidates, demand_points, service_radius_m, n_facilities=n_facilities
+            candidates,
+            demand_points,
+            service_radius_m,
+            n_facilities=n_facilities,
+            network=network,
+            max_travel_time_min=max_travel_time_min,
+            allow_haversine_fallback=allow_haversine_fallback,
         )
     chosen = [
         candidates[j].candidate_id
@@ -142,3 +195,54 @@ def solve_maximal_covering(
         if x[j].value() is not None and x[j].value() > 0.5
     ]
     return chosen
+
+
+def compute_network_coverage_matrix(
+    candidates: Sequence[FacilityCandidate],
+    demand_points: Sequence[DemandPoint],
+    network: NetworkGraphSnapshot,
+    *,
+    max_travel_time_min: float,
+) -> List[List[bool]]:
+    """Network-only coverage matrix; disconnected points are never covered."""
+
+    return compute_coverage_matrix(
+        candidates,
+        demand_points,
+        service_radius_m=0.0,
+        network=network,
+        max_travel_time_min=max_travel_time_min,
+        allow_haversine_fallback=False,
+    )
+
+
+def solve_network_maximal_covering(
+    candidates: Sequence[FacilityCandidate],
+    demand_points: Sequence[DemandPoint],
+    network: NetworkGraphSnapshot,
+    *,
+    max_travel_time_min: float,
+    n_facilities: int = 1,
+) -> List[str]:
+    """MCLP using routable travel time as the hard service impedance."""
+
+    return solve_maximal_covering(
+        candidates,
+        demand_points,
+        service_radius_m=0.0,
+        n_facilities=n_facilities,
+        network=network,
+        max_travel_time_min=max_travel_time_min,
+    )
+
+
+__all__ = [
+    "DemandPoint",
+    "FacilityCandidate",
+    "compute_coverage_matrix",
+    "compute_network_coverage_matrix",
+    "greedy_maximal_covering",
+    "haversine_m",
+    "solve_maximal_covering",
+    "solve_network_maximal_covering",
+]

@@ -13,29 +13,19 @@ from typing import Literal
 from pydantic import BaseModel, Field, model_validator
 
 from app.contracts.domain.planning_semantics import (
+    AssetKind,
     AxisPlanningParameters,
     FacilityPlanningParameters,
     InterventionAction,
+    LinearAssetPlanningParameters,
     MaterializationRole,
     PolygonPlanningParameters,
-    ProjectPlanningParameters,
+    SiteAreaPlanningParameters,
     RoadPlanningParameters,
+    LINEAR_ASSET_KINDS,
 )
-
-
-ProposalCategory = Literal[
-    "project",
-    "facility",
-    "road",
-    "axis",
-    "restoration",
-    "protection",
-    "zone",
-]
-ProposalOutputKind = Literal["parcel", "polygon", "point", "line", "action"]
-ProposalExecutionMode = Literal["spatial", "non_spatial"]
 ClaimCategory = Literal[
-    "project",
+    "site_area",
     "facility",
     "road",
     "axis",
@@ -57,6 +47,7 @@ class PlanningClaim(BaseModel):
     affected_parcel_refs: list[str] = Field(default_factory=list)
     suggested_category: ClaimCategory = "action"
     suggested_output_kind: ClaimOutputKind = "action"
+    asset_kind: AssetKind = "none"
     suggested_interventions: list[str] = Field(default_factory=list)
     quantity: float | None = None
     quantity_unit: str = ""
@@ -64,10 +55,11 @@ class PlanningClaim(BaseModel):
     intervention_action: InterventionAction = "new"
     materialization_role: MaterializationRole | None = None
     road_parameters: RoadPlanningParameters | None = None
+    linear_parameters: LinearAssetPlanningParameters | None = None
     facility_parameters: FacilityPlanningParameters | None = None
     axis_parameters: AxisPlanningParameters | None = None
     polygon_parameters: PolygonPlanningParameters | None = None
-    project_parameters: ProjectPlanningParameters | None = None
+    site_area_parameters: SiteAreaPlanningParameters | None = None
     implementation_phase: Literal["short", "medium", "long"] = "short"
     location_hints: list[str] = Field(default_factory=list)
     constraint_refs: list[str] = Field(default_factory=list)
@@ -86,7 +78,7 @@ class PlanningClaim(BaseModel):
             "restoration": {"polygon"},
             "protection": {"polygon"},
             "zone": {"polygon"},
-            "project": {"parcel", "polygon", "point", "action"},
+            "site_area": {"parcel", "polygon"},
             "action": {"action"},
         }
         if self.suggested_output_kind not in allowed[self.suggested_category]:
@@ -94,8 +86,31 @@ class PlanningClaim(BaseModel):
                 f"claim category={self.suggested_category} cannot suggest "
                 f"{self.suggested_output_kind}"
             )
+        allowed_assets = {
+            "facility": {"none", "facility"},
+            "site_area": {"none"},
+            "road": set(LINEAR_ASSET_KINDS),
+            "axis": {"none", "axis"},
+            "restoration": {"none"},
+            "protection": {"none"},
+            "zone": {"none", "land_use"},
+            "action": {"none"},
+        }
+        if self.asset_kind not in allowed_assets[self.suggested_category]:
+            raise ValueError(
+                f"asset_kind={self.asset_kind} is incompatible with "
+                f"category={self.suggested_category}"
+            )
         if self.road_parameters is not None and self.suggested_category != "road":
             raise ValueError("road_parameters may only appear on road claims")
+        if self.suggested_category == "road":
+            if self.asset_kind == "none":
+                raise ValueError("line claims require an explicit asset_kind")
+            if self.asset_kind == "road":
+                if self.road_parameters is None or self.linear_parameters is not None:
+                    raise ValueError("road asset_kind requires only road_parameters")
+            elif self.linear_parameters is None or self.road_parameters is not None:
+                raise ValueError("non-road linear assets require only linear_parameters")
         if self.facility_parameters is not None and self.suggested_category != "facility":
             raise ValueError("facility_parameters may only appear on facility claims")
         if self.axis_parameters is not None and self.suggested_category != "axis":
@@ -108,9 +123,9 @@ class PlanningClaim(BaseModel):
                 "functional_overlay",
                 "protection_overlay",
                 "restoration_overlay",
-                "project_footprint",
+                "site_footprint",
             },
-            "project": {"project_footprint"},
+            "site_area": {"site_footprint"},
         }
         if (
             self.materialization_role is not None
@@ -132,68 +147,9 @@ class PlanningClaimSet(BaseModel):
     diagnostics: list[str] = Field(default_factory=list)
 
 
-class ProgramProposal(BaseModel):
-    """Candidate intervention; never an executable planning program item."""
-
-    proposal_id: str
-    name: str
-    category: ProposalCategory
-    execution_mode: ProposalExecutionMode
-    expected_output_kind: ProposalOutputKind
-    problem_addressed: str = ""
-    scale: str = ""
-    area_range_ha: tuple[float, float] | None = None
-    intervention_action: InterventionAction = "new"
-    materialization_role: MaterializationRole | None = None
-    road_parameters: RoadPlanningParameters | None = None
-    facility_parameters: FacilityPlanningParameters | None = None
-    axis_parameters: AxisPlanningParameters | None = None
-    polygon_parameters: PolygonPlanningParameters | None = None
-    project_parameters: ProjectPlanningParameters | None = None
-    functions: list[str] = Field(default_factory=list)
-    service_population: str | None = None
-    implementation_phase: Literal["short", "medium", "long"] = "short"
-    spatial_requirements: dict = Field(default_factory=dict)
-    constraints: list[str] = Field(default_factory=list)
-    claim_refs: list[str] = Field(default_factory=list)
-    evidence_refs: list[str] = Field(default_factory=list)
-    source_ref: str = ""
-
-    @model_validator(mode="after")
-    def validate_output(self) -> "ProgramProposal":
-        if self.execution_mode == "non_spatial" and self.expected_output_kind != "action":
-            raise ValueError("non-spatial proposals must use action output")
-        if self.execution_mode == "spatial" and self.expected_output_kind == "action":
-            raise ValueError("spatial proposals cannot use action output")
-        allowed = {
-            "facility": {"point"},
-            "road": {"line"},
-            "axis": {"line"},
-            "restoration": {"polygon"},
-            "protection": {"polygon"},
-            "zone": {"polygon"},
-            "project": {"parcel", "polygon", "point", "action"},
-        }
-        if self.expected_output_kind not in allowed[self.category]:
-            raise ValueError(
-                f"category={self.category} cannot produce {self.expected_output_kind}"
-            )
-        if self.road_parameters is not None and self.category != "road":
-            raise ValueError("road_parameters may only appear on road proposals")
-        if self.facility_parameters is not None and self.category != "facility":
-            raise ValueError("facility_parameters may only appear on facility proposals")
-        if self.axis_parameters is not None and self.category != "axis":
-            raise ValueError("axis_parameters may only appear on axis proposals")
-        return self
-
-
 __all__ = [
     "PlanningClaim",
     "PlanningClaimSet",
-    "ProgramProposal",
-    "ProposalCategory",
-    "ProposalOutputKind",
-    "ProposalExecutionMode",
     "ClaimCategory",
     "ClaimOutputKind",
 ]

@@ -12,7 +12,7 @@ logger = get_logger(__name__)
 
 _TASK_WORKER_TYPE: Dict[str, str] = {
     "layout": "zone",
-    "project": "project",
+    "site_area": "site_area",
     "facility": "facility",
     "axis": "axis",
     "road": "road",
@@ -28,6 +28,58 @@ async def _execution_review_node(state: ExecuteAgentState) -> dict:
     """
     checks: List[Dict[str, Any]] = []
     violations: List[Dict[str, Any]] = []
+
+    # VALIDATE may provide the independent final relation report when the
+    # execution review is run as a post-materialization guard.  Keep this
+    # optional so older EXECUTE artifacts remain readable; when present it is
+    # authoritative and all unresolved relation states fail closed.
+    final_relation_validation = getattr(state, "final_relation_validation", None)
+    if final_relation_validation is None and isinstance(state.validation_result, dict):
+        final_relation_validation = state.validation_result.get("final_relation_validation")
+    if final_relation_validation is None:
+        execution_result = state.execution_result
+        final_relation_validation = getattr(execution_result, "final_relation_validation", None)
+        if final_relation_validation is None and isinstance(execution_result, dict):
+            final_relation_validation = execution_result.get("final_relation_validation")
+    if final_relation_validation is not None:
+        relation_rows = list(
+            getattr(final_relation_validation, "satisfactions", None)
+            or (final_relation_validation.get("satisfactions", []) if isinstance(final_relation_validation, dict) else [])
+            or []
+        )
+        relation_violations = []
+        for row in relation_rows:
+            status = str(
+                getattr(row, "status", "")
+                or (row.get("status", "unknown") if isinstance(row, dict) else "unknown")
+            )
+            relation_id = str(
+                getattr(row, "relation_id", "")
+                or (row.get("relation_id", "") if isinstance(row, dict) else "")
+            )
+            measurement = getattr(row, "measurement", None) if not isinstance(row, dict) else row.get("measurement")
+            trace = getattr(row, "evaluation_trace", None) if not isinstance(row, dict) else row.get("evaluation_trace")
+            evaluator_version = getattr(row, "evaluator_version", "") if not isinstance(row, dict) else row.get("evaluator_version", "")
+            criticality = str(getattr(row, "criticality", "hard") if not isinstance(row, dict) else row.get("criticality", "hard"))
+            if criticality == "hard" and (status != "satisfied" or measurement is None or not trace or not evaluator_version):
+                relation_violations.append({
+                    "relation_id": relation_id,
+                    "status": status,
+                    "message": "final relation is not measured satisfied",
+                })
+        report_passed = bool(
+            getattr(final_relation_validation, "passed", False)
+            if not isinstance(final_relation_validation, dict)
+            else final_relation_validation.get("passed", False)
+        )
+        relation_ok = report_passed and not relation_violations
+        for violation in relation_violations:
+            violations.append({"check": "final_relation", **violation})
+        checks.append({
+            "check": "final_relation_validation",
+            "passed": relation_ok,
+            "violations": relation_violations,
+        })
 
     plan_tasks = list(getattr(state.execution_plan, "worker_tasks", None) or [])
     action_only = bool(plan_tasks) and all(

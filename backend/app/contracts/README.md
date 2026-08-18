@@ -19,7 +19,7 @@ Protocol。`contracts/` 是底层的“共享语言”，不依赖 API、UI 或 
 | `evidence/` | `evidence_contracts`：EvidenceBundle/EvidenceSource/ExplorationRequest 等 |
 | `ports/` | 依赖倒置端口（Protocol）：`context`、`gazetteer`、`place_evidence`/`place_resolution`、`semantic_query`、`spatial`/`spatial_query`、`workers`、`zone_allocator`、`road_planner`、`external_search`、`media_evidence`、`bundle_assembly`、`nomenclature_registry`、`adjustment`、`planning_ports`、`context_ref_contracts` |
 | `events.py` | `SSEEventType`：SSE 事件类型唯一来源（全系统共享） |
-| `program.py` | `PlanningClaim`/`PlanningClaimSet`/`ProgramProposal`（顶层 re-export） |
+| `program.py` | `PlanningClaim`/`PlanningClaimSet`（L3 输入；空间目标统一由 `PlanningIntervention` 承载） |
 | `public/` | 公开 API 契约（当前由 `api/v1/contracts.py` 承载） |
 
 ## 关键约定

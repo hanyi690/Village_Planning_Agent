@@ -14,7 +14,8 @@ from app.contracts.domain.l3_contracts import PlanningIntervention, PlanningProg
 from app.contracts.workflow.parse_contracts import (
     FacilityTarget,
     AxisTarget,
-    ProjectTarget,
+    LinearAssetTarget,
+    SiteAreaTarget,
     RoadTarget,
     SpatialPlanningIntent,
     ZoneTarget,
@@ -25,7 +26,9 @@ from app.contracts.workflow.parse_result_contracts import (
     ParseDiagnostic,
 )
 from app.contracts.artifacts.provenance import Provenance, SemanticMetadata
+from app.contracts.evidence.identity_contracts import EvidenceObservation, GroundedEntityBinding
 from app.contracts.spatial.spatial_reference_contracts import SpatialReferenceSpec
+from app.domain.program.target_projection.intent_graph_compiler import compile_intent_graph_v2
 
 
 def _spatial_hint(intervention: PlanningIntervention) -> str:
@@ -67,19 +70,21 @@ def _project_action(intervention: PlanningIntervention) -> str:
     return action
 
 
-def _to_project_target(intervention: PlanningIntervention, index: int) -> ProjectTarget:
+def _to_site_area_target(intervention: PlanningIntervention, index: int) -> SiteAreaTarget:
     role = intervention.materialization_role
     project_role = role if role != "land_use_assignment" else None
-    parameters = intervention.project_parameters
+    parameters = intervention.site_area_parameters
     area_ha = intervention.area_range_ha[0] if intervention.area_range_ha else None
     if area_ha is None and parameters is not None and parameters.footprint_area_m2:
         area_ha = parameters.footprint_area_m2 / 10000.0
-    return ProjectTarget(
+    return SiteAreaTarget(
         target_id=intervention.target_id,
-        project_id=intervention.intervention_id,
+        site_area_id=intervention.intervention_id,
         name=intervention.name,
         category=intervention.category,
-        materialization_role=project_role,
+        materialization_role=(
+            "site_footprint" if project_role == "site_footprint" else project_role
+        ),
         execution_mode=intervention.execution_mode,
         expected_output_kind=intervention.expected_output_kind,
         action=_project_action(intervention),
@@ -152,31 +157,79 @@ def _road_width_m(intervention: PlanningIntervention) -> float:
 def _road_connects(intervention: PlanningIntervention) -> list[str]:
     """Project L3-owned endpoint semantics without reinterpreting prose."""
     parameters = intervention.road_parameters
-    return list(parameters.connects) if parameters is not None else []
+    if parameters is not None:
+        return list(parameters.connects)
+    linear = intervention.linear_parameters
+    return list(linear.connects) if linear is not None else []
 
 
 def _to_road_target(intervention: PlanningIntervention) -> RoadTarget:
     connects = _road_connects(intervention)
     parameters = intervention.road_parameters
+    linear = intervention.linear_parameters
+    requirements = intervention.spatial_requirements or {}
+    raw_source_ids = next(
+        (
+            requirements.get(key)
+            for key in (
+                "source_feature_ids",
+                "existing_road_feature_ids",
+                "road_feature_ids",
+            )
+            if key in requirements
+        ),
+        None,
+    )
+    raw_segment_ids = requirements.get("existing_road_segment_ids")
+    existing_road_feature_ids = (
+        list(dict.fromkeys(
+            str(item).strip()
+            for item in raw_source_ids
+            if str(item).strip()
+        ))
+        if isinstance(raw_source_ids, (list, tuple, set))
+        else []
+    )
+    existing_road_segment_ids = (
+        list(dict.fromkeys(
+            str(item).strip()
+            for item in raw_segment_ids
+            if str(item).strip()
+        ))
+        if isinstance(raw_segment_ids, (list, tuple, set))
+        else []
+    )
     return RoadTarget(
         target_id=intervention.target_id,
+        asset_kind=intervention.asset_kind,
         road_level=_road_level(intervention),
         execution_mode=intervention.execution_mode,
         expected_output_kind=intervention.expected_output_kind,
-        width_m=_road_width_m(intervention),
-        action=parameters.action if parameters is not None else "new",
+        width_m=_road_width_m(intervention) if intervention.asset_kind == "road" else 0.0,
+        action=(
+            parameters.action if parameters is not None
+            else (linear.action if linear is not None else "new")
+        ),
         road_planning_kind=(
             "new_corridor"
             if parameters is None or parameters.action == "new"
             else "existing_road_intervention"
         ),
-        length_m=parameters.length_m if parameters is not None else None,
+        length_m=(
+            parameters.length_m if parameters is not None
+            else (linear.length_m if linear is not None else None)
+        ),
         roadbed_width_m=parameters.roadbed_width_m if parameters is not None else None,
         pavement_width_m=parameters.pavement_width_m if parameters is not None else None,
         connects=connects,
         alignment_refs=(
-            list(parameters.alignment_refs) if parameters is not None else []
+            list(parameters.alignment_refs) if parameters is not None
+            else (list(linear.alignment_refs) if linear is not None else [])
         ),
+        existing_road_feature_ids=existing_road_feature_ids,
+        existing_road_segment_ids=existing_road_segment_ids,
+        linear_diameter_mm=linear.diameter_mm if linear is not None else None,
+        linear_material=linear.material if linear is not None else "",
         source_project_id=intervention.intervention_id,
         classification_decision=intervention.classification_decision,
         claim_refs=list(intervention.claim_refs),
@@ -184,8 +237,51 @@ def _to_road_target(intervention: PlanningIntervention) -> RoadTarget:
     )
 
 
+def _to_linear_target(intervention: PlanningIntervention) -> LinearAssetTarget:
+    parameters = intervention.linear_parameters
+    return LinearAssetTarget(
+        target_id=intervention.target_id,
+        asset_kind=intervention.asset_kind,
+        execution_mode=intervention.execution_mode,
+        expected_output_kind=intervention.expected_output_kind,
+        action=parameters.action if parameters is not None else "new",
+        length_m=parameters.length_m if parameters is not None else None,
+        diameter_mm=parameters.diameter_mm if parameters is not None else None,
+        material=parameters.material if parameters is not None else "",
+        connects=list(parameters.connects) if parameters is not None else [],
+        alignment_refs=list(parameters.alignment_refs) if parameters is not None else [],
+        source_project_id=intervention.intervention_id,
+        source_instruction_id=intervention.intervention_id,
+        claim_refs=list(intervention.claim_refs),
+        classification_decision=intervention.classification_decision,
+        semantic=_semantic(intervention),
+    )
+
+
 def _to_axis_target(intervention: PlanningIntervention) -> AxisTarget:
     parameters = intervention.axis_parameters
+    requirements = intervention.spatial_requirements or {}
+    raw_source_ids = next(
+        (
+            requirements.get(key)
+            for key in (
+                "source_feature_ids",
+                "existing_road_feature_ids",
+                "road_feature_ids",
+            )
+            if key in requirements
+        ),
+        None,
+    )
+    source_feature_ids = (
+        list(dict.fromkeys(
+            str(item).strip()
+            for item in raw_source_ids
+            if str(item).strip()
+        ))
+        if isinstance(raw_source_ids, (list, tuple, set))
+        else []
+    )
     return AxisTarget(
         target_id=intervention.target_id,
         label=intervention.name,
@@ -199,6 +295,7 @@ def _to_axis_target(intervention: PlanningIntervention) -> AxisTarget:
         corridor_width_m=(
             parameters.corridor_width_m if parameters is not None else None
         ),
+        source_feature_ids=source_feature_ids,
         execution_mode=intervention.execution_mode,
         expected_output_kind=intervention.expected_output_kind,
         source_project_id=intervention.intervention_id,
@@ -237,23 +334,26 @@ def _build_intent(program: PlanningProgram) -> SpatialPlanningIntent:
     intent = SpatialPlanningIntent(village_name="", planning_period="", raw_text="")
     for index, intervention in enumerate(program.interventions):
         category = intervention.category
-        if category == "project":
-            intent.project_targets.append(_to_project_target(intervention, index))
+        if category == "site_area":
+            intent.site_area_targets.append(_to_site_area_target(intervention, index))
         elif category == "facility":
             intent.facilities.append(_to_facility_target(intervention))
         elif category == "road":
-            intent.road_targets.append(_to_road_target(intervention))
+            if intervention.asset_kind == "road":
+                intent.road_targets.append(_to_road_target(intervention))
+            else:
+                intent.linear_targets.append(_to_linear_target(intervention))
         elif category == "axis":
             intent.development_axes.append(_to_axis_target(intervention))
         elif category in ("restoration", "protection"):
-            intent.project_targets.append(_to_project_target(intervention, index))
+            intent.site_area_targets.append(_to_site_area_target(intervention, index))
         elif category == "zone":
             if intervention.materialization_role == "land_use_assignment":
                 intent.zone_targets.append(_to_zone_target(intervention))
             else:
-                intent.project_targets.append(_to_project_target(intervention, index))
+                intent.site_area_targets.append(_to_site_area_target(intervention, index))
         else:
-            intent.project_targets.append(_to_project_target(intervention, index))
+            intent.site_area_targets.append(_to_site_area_target(intervention, index))
     return intent
 
 
@@ -273,7 +373,18 @@ def _build_diagnostics(
             )
         )
     for intervention in program.interventions:
-        if intervention.category == "road" and intervention.road_parameters is None:
+        if (
+            intervention.category == "road"
+            and intervention.asset_kind == "road"
+            and (
+                intervention.road_parameters is None
+                or (
+                    intervention.road_parameters.length_m is None
+                    and intervention.road_parameters.roadbed_width_m is None
+                    and intervention.road_parameters.pavement_width_m is None
+                )
+            )
+        ):
             diagnostics.append(
                 ParseDiagnostic(
                     diagnostic_id=f"road-semantics-{intervention.target_id}",
@@ -318,16 +429,16 @@ def _build_diagnostics(
                 )
             )
         if (
-            intervention.category == "project"
+            intervention.category == "site_area"
             and intervention.expected_output_kind in {"parcel", "polygon"}
-            and intervention.materialization_role != "project_footprint"
+            and intervention.materialization_role != "site_footprint"
         ):
             diagnostics.append(
                 ParseDiagnostic(
-                    diagnostic_id=f"project-role-{intervention.target_id}",
+                    diagnostic_id=f"site-area-role-{intervention.target_id}",
                     severity="warning",
-                    code="PROJECT_MATERIALIZATION_UNRESOLVED",
-                    message="Spatial project footprint semantics were not resolved in L3",
+                    code="SITE_AREA_MATERIALIZATION_UNRESOLVED",
+                    message="Site-area footprint semantics were not resolved in L3",
                     field_path="materialization_role",
                     target_id=intervention.target_id,
                 )
@@ -341,14 +452,47 @@ def compile_program_deterministic(
     run_id: str = "",
     context_version: str = "",
     program_ref: str = "",
+    observations: list[EvidenceObservation] | None = None,
+    bindings: list[GroundedEntityBinding] | None = None,
+    source_features: dict[str, list[object]] | None = None,
 ) -> tuple[IntentCompilationResult, list, list[ParseDiagnostic]]:
     """Deterministically extract a compile result from an L3 PlanningProgram.
 
     No LLM calls. Returns (IntentCompilationResult, SpatialReferenceSpec[], diagnostics).
     """
     intent = _build_intent(program)
-    specs, spec_diags = map_interventions_to_specs(program.interventions)
+    intent_graph = compile_intent_graph_v2(
+        program,
+        observations=observations,
+        bindings=bindings,
+    )
+    specs, spec_diags = map_interventions_to_specs(
+        program.interventions,
+        observations=observations or (),
+        bindings=bindings or (),
+        source_features=source_features or {},
+    )
     diagnostics = _build_diagnostics(program, spec_diags)
+    diagnostics.extend(
+        ParseDiagnostic(
+            diagnostic_id=f"intent-graph-{index}",
+            severity="error" if item.startswith((
+                "relation_subject_type_mismatch",
+                "relation_object_type_mismatch",
+                "relation_unknown_subject",
+                "relation_unknown_object",
+                "relation_parameters_invalid",
+                "relation_parameters_missing",
+                "relation_parameter_type_mismatch",
+                "relation_deferred",
+                "relation_missing_object",
+                "unsupported_relation_template",
+            )) else "warning",
+            code=item.split(":", 1)[0],
+            message=item,
+        )
+        for index, item in enumerate(intent_graph.diagnostics)
+    )
 
     provenance = Provenance(
         source="target_projection",
@@ -369,5 +513,6 @@ def compile_program_deterministic(
         diagnostics=diagnostics,
         compilation_status=CompilationStatus.DRAFT,
         provenance=provenance,
+        intent_graph=intent_graph,
     )
     return result, specs, diagnostics

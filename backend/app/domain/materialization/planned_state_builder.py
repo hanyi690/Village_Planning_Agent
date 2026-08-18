@@ -13,7 +13,7 @@ from app.contracts.spatial.planned_state_contracts import (
     PlannedAxis,
     PlannedFacility,
     PlannedParcel,
-    PlannedProjectPoint,
+    PlannedZoneOverlay,
     PlannedRoad,
     PlannedState,
 )
@@ -55,6 +55,38 @@ def _target_map(intent: Any, field: str) -> dict[str, Any]:
         for target in (getattr(intent, field, None) or [])
         if str(getattr(target, "target_id", ""))
     } if intent is not None else {}
+
+
+def _target_by_id(intent: Any) -> dict[str, Any]:
+    """Index typed targets so candidate roles survive materialization."""
+    if intent is None:
+        return {}
+    result: dict[str, Any] = {}
+    for field in (
+        "site_area_targets",
+        "project_targets",
+        "zone_targets",
+        "custom_zone_targets",
+        "facilities",
+        "road_targets",
+        "development_axes",
+        "linear_targets",
+    ):
+        items = (
+            intent.get(field)
+            if isinstance(intent, dict)
+            else getattr(intent, field, None)
+        )
+        for item in items or []:
+            target_id = str(
+                (item.get("target_id") if isinstance(item, dict) else getattr(item, "target_id", ""))
+                or (item.get("project_id") if isinstance(item, dict) else getattr(item, "project_id", ""))
+                or (item.get("zone_id") if isinstance(item, dict) else getattr(item, "zone_id", ""))
+                or ""
+            )
+            if target_id:
+                result[target_id] = item
+    return result
 
 
 def _layer_features(layout_configs: list[dict[str, Any]], layer_types: set[str]):
@@ -105,6 +137,12 @@ def _road_target_to_planned_road(target: Any, geometry: str, target_id: str, pro
         width_m=float(properties.get("width_m") or getattr(target, "width_m", 0.0) or 0.0),
         geometry=geometry,
         derived_from_target=target_id,
+        scenario_id=str(properties.get("scenario_id") or ""),
+        candidate_id=str(properties.get("candidate_id") or ""),
+        feature_id=str(properties.get("feature_id") or ""),
+        lineage_id=str(properties.get("lineage_id") or properties.get("feature_id") or ""),
+        relation_ids=[str(item) for item in properties.get("relation_ids") or []],
+        source_refs=[str(item) for item in properties.get("source_refs") or []],
     )
 
 
@@ -115,6 +153,12 @@ def _axis_target_to_planned_axis(target: Any, geometry: str, target_id: str, pro
         direction=str(properties.get("direction") or getattr(target, "direction", "") or ""),
         geometry=geometry,
         derived_from_target=target_id,
+        scenario_id=str(properties.get("scenario_id") or ""),
+        candidate_id=str(properties.get("candidate_id") or ""),
+        feature_id=str(properties.get("feature_id") or ""),
+        lineage_id=str(properties.get("lineage_id") or properties.get("feature_id") or ""),
+        relation_ids=[str(item) for item in properties.get("relation_ids") or []],
+        source_refs=[str(item) for item in properties.get("source_refs") or []],
     )
 
 
@@ -136,6 +180,14 @@ def _facility_target_to_planned_facility(target: Any, geometry: str, target_id: 
         service_radius=float(properties.get("service_radius") or getattr(target, "service_radius", 0.0) or 0.0),
         geometry=geometry,
         derived_from_target=target_id,
+        scenario_id=str(properties.get("scenario_id") or ""),
+        candidate_id=str(properties.get("candidate_id") or ""),
+        feature_id=str(properties.get("feature_id") or ""),
+        lineage_id=str(properties.get("lineage_id") or properties.get("feature_id") or ""),
+        relation_ids=[str(item) for item in properties.get("relation_ids") or []],
+        source_refs=[str(item) for item in properties.get("source_refs") or []],
+        source_bsms=[str(item) for item in properties.get("source_bsms") or []],
+        geometry_ref=str(properties.get("geometry_ref") or ""),
     )
 
 
@@ -146,25 +198,92 @@ def changeset_to_planned_state(
 ) -> PlannedState:
     """Build the authoritative PlannedState from changes and worker geometry."""
     parcels = [_change_to_planned_parcel(c) for c in changeset.changes]
+    overlays: list[PlannedZoneOverlay] = []
+    target_by_id = _target_by_id(intent)
+
+    # Relation-aware execution can materialize a grounded candidate that is
+    # not an existing BSM.  Preserve those immutable geometries in the
+    # authoritative PlannedState as candidate-backed parcels so DELIVER and
+    # final relation validation see the same target/candidate lineage.
+    for feature in _layer_features(
+        layout_configs or [], {"planned_project", "planned_zone"}
+    ):
+        properties = dict(feature.get("properties") or {})
+        geometry = _geojson_to_wkt(feature.get("geometry"))
+        target_id = str(properties.get("target_id") or properties.get("project_ref") or "")
+        candidate_id = str(properties.get("candidate_id") or "")
+        if not target_id or not candidate_id or not geometry:
+            continue
+        target = target_by_id.get(target_id)
+        role = str(properties.get("materialization_role") or "")
+        # Workers label direct candidate output as ``execution_geometry``;
+        # that is a transport role, not the semantic overlay/footprint role.
+        # Prefer the typed target role when the transport marker is present.
+        if not role or role == "execution_geometry":
+            role = str(getattr(target, "materialization_role", "") or role or "")
+        feature_id = str(properties.get("feature_id") or candidate_id)
+        scenario_id = str(properties.get("scenario_id") or "")
+        source_refs = [
+            str(ref)
+            for ref in properties.get("source_refs") or []
+            if str(ref).strip()
+        ]
+        if role in {
+            "functional_overlay",
+            "protection_overlay",
+            "restoration_overlay",
+        }:
+            overlays.append(PlannedZoneOverlay(
+                overlay_id=feature_id,
+                materialization_role=role,
+                name=str(properties.get("project_name") or target_id),
+                geometry=geometry,
+                target_ref=target_id,
+                project_ref=target_id,
+                candidate_id=candidate_id,
+                scenario_id=scenario_id,
+                feature_id=feature_id,
+                lineage_id=feature_id,
+                lineage_refs=source_refs,
+                provenance_refs=source_refs,
+            ))
+            continue
+        parcels.append(PlannedParcel(
+            # A candidate is not a cadastral parcel and must never be looked
+            # up as a BSM by legacy current-land-use consumers.
+            bsm="",
+            candidate_id=candidate_id,
+            project_ref=target_id,
+            planning_land_use=str(
+                properties.get("project_category") or role or "planned"
+            ),
+            zone_type=role or "planned",
+            geometry=geometry,
+            target_ref=target_id,
+            source_spec=str(
+                properties.get("generation_operation")
+                or "candidate_geometry_materialize"
+            ),
+            operation="create",
+            decided_by="relation_aware_scenario",
+            lineage_id=feature_id,
+            feature_id=feature_id,
+            scenario_id=scenario_id,
+            materialization_role=role,
+            source_refs=source_refs,
+            claim_refs=list(properties.get("claim_refs") or []),
+            source_instruction_id=str(
+                properties.get("source_instruction_id") or target_id
+            ),
+            geometry_ref=str(properties.get("source_ref") or candidate_id),
+        ))
 
     roads: list[PlannedRoad] = []
     axes: list[PlannedAxis] = []
     facilities: list[PlannedFacility] = []
-    project_points: list[PlannedProjectPoint] = []
     facility_targets = _target_map(intent, "facilities")
     road_targets = _target_map(intent, "road_targets")
     axis_targets = _target_map(intent, "development_axes")
-
-    for feature in _layer_features(layout_configs or [], {"planned_project_point"}):
-        properties = dict(feature.get("properties") or {})
-        geometry = _geojson_to_wkt(feature.get("geometry"))
-        if not geometry:
-            continue
-        project_points.append(PlannedProjectPoint(
-            project_ref=str(properties.get("project_ref") or properties.get("target_id") or ""),
-            name=str(properties.get("project_name") or properties.get("name") or ""),
-            geometry=geometry,
-        ))
 
     for feature in _layer_features(layout_configs or [], {"facility_point"}):
         properties = dict(feature.get("properties") or {})
@@ -172,8 +291,6 @@ def changeset_to_planned_state(
         if not geometry:
             continue
         target_ids = _feature_target_ids(properties)
-        if not target_ids and len(facility_targets) == 1:
-            target_ids = list(facility_targets)
         for target_id in target_ids:
             facilities.append(_facility_target_to_planned_facility(
                 facility_targets.get(target_id), geometry, target_id, properties
@@ -187,8 +304,6 @@ def changeset_to_planned_state(
         if not geometry:
             continue
         target_ids = _feature_target_ids(properties)
-        if not target_ids and len(road_targets) == 1:
-            target_ids = list(road_targets)
         for target_id in target_ids:
             roads.append(_road_target_to_planned_road(
                 road_targets.get(target_id), geometry, target_id, properties
@@ -200,8 +315,6 @@ def changeset_to_planned_state(
         if not geometry:
             continue
         target_ids = _feature_target_ids(properties)
-        if not target_ids and len(axis_targets) == 1:
-            target_ids = list(axis_targets)
         for target_id in target_ids:
             axes.append(_axis_target_to_planned_axis(
                 axis_targets.get(target_id), geometry, target_id, properties
@@ -213,8 +326,8 @@ def changeset_to_planned_state(
         version="v1",
         parcels=parcels,
         zones=[],
+        overlays=overlays,
         facilities=facilities,
-        project_points=project_points,
         roads=roads,
         axes=axes,
         source="parcel_change_set+worker_geometry",

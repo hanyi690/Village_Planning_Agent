@@ -37,15 +37,15 @@ from app.infrastructure.llm.dimension_runtime import (
     publish_dimension_start,
     provider_failure_open,
     trip_provider_failure,
+    is_provider_failure,
+    is_provider_quota_exhausted,
     dimension_failure_attempt,
     run_rag,
     save_report_immediate,
     save_step_report,
     strip_model_reasoning,
 )
-from app.evidence.retrieval.evidence_service import retrieve_evidence, render_evidence_prompt_section
 from app.infrastructure.llm.prompts.detailed import get_dimension_prompt as get_layer3_prompt
-from app.contracts.evidence.evidence_contracts import ExplorationRequest
 from app.contracts.program import PlanningClaimSet
 from app.infrastructure.tasks.task_supervisor import build_summary_task_key
 
@@ -231,7 +231,7 @@ async def _normalize_with_structural_repair(
 
     structural_retries = max(
         0,
-        int(os.getenv("L3_STRUCTURAL_COMPILE_RETRIES", "2")),
+        int(os.getenv("L3_STRUCTURAL_COMPILE_RETRIES", "0")),
     )
     current_output = output
     for attempt in range(structural_retries + 1):
@@ -311,34 +311,8 @@ async def analyze_l3_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
         dim_key, cfg, dim_layer, session_id, is_revision,
     )
 
-    # 4. EXPLORE evidence service（L3 只注入证据，不调用 GIS/DataPipeline 工具）
+    # run_rag is the unified EvidenceBundle adapter; no second retrieval call.
     explore_section = ""
-    try:
-        explore_request = ExplorationRequest(
-            run_id=f"{session_id}:{dim_key}:L{dim_layer}",
-            request_type="spatial_lookup",
-            query=dim_name,
-            stage=f"L{dim_layer}",
-            dimension_key=dim_key,
-            query_purpose="context_injection",
-            entity_scope=["parcels", "facilities", "roads", "annotations"],
-        )
-        explore_result = await retrieve_evidence(
-            explore_request,
-            session_id=session_id,
-            village_name=config.get("village_name", ""),
-        )
-        explore_section = render_evidence_prompt_section(
-            explore_result.evidence_bundle,
-            explore_result.spatial_cognition,
-        )
-        if explore_section:
-            logger.info(
-                "[analyze_l3_dimension] %s: EXPLORE evidence injected (%d chars, %d facts)",
-                dim_key, len(explore_section), len(explore_result.evidence_bundle.facts),
-            )
-    except Exception as e:
-        logger.warning("[analyze_l3_dimension] %s: EXPLORE evidence failed: %s", dim_key, e)
 
     # 5. 组装 L3 Prompt（detailed 模板）
     same_layer_prompt = same_layer_contexts
@@ -427,7 +401,7 @@ async def analyze_l3_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
         semantic_feedback = claim_set_semantic_errors(claim_set)
         semantic_retry_count = max(
             0,
-            int(os.getenv("L3_SEMANTIC_COMPILE_RETRIES", "2")),
+            int(os.getenv("L3_SEMANTIC_COMPILE_RETRIES", "1")),
         )
         for semantic_attempt in range(semantic_retry_count):
             if not semantic_feedback:
@@ -437,6 +411,11 @@ async def analyze_l3_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
                 item.model_dump(mode="json")
                 for item in draft_set.claims
                 if item.claim_id in set(rejected_ids)
+            ]
+            normalization_diagnostics = [
+                str(item)
+                for item in claim_set.diagnostics
+                if any(f" {claim_id}:" in str(item) for claim_id in rejected_ids)
             ]
             if not rejected:
                 break
@@ -456,6 +435,7 @@ async def analyze_l3_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
                 "只修改 validator_errors 明确指出的字段，其余字段保持原值。\n"
                 f"dimension={dim_key}\n"
                 f"validator_errors={json.dumps(semantic_feedback, ensure_ascii=False)}\n"
+                f"normalization_diagnostics={json.dumps(normalization_diagnostics, ensure_ascii=False)}\n"
                 f"rejected_claims={json.dumps(rejected, ensure_ascii=False)}"
             )
             repair_output = await _cached_claim_generation(
@@ -534,7 +514,9 @@ async def analyze_l3_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
         }
     except Exception as e:
         # Genuine provider infrastructure failure (transport/HTTP/circuit).
-        trip_provider_failure(session_id)
+        quota_exhausted = is_provider_quota_exhausted(e)
+        if is_provider_failure(e) and not quota_exhausted:
+            trip_provider_failure(session_id)
         logger.error(f"[analyze_l3_dimension] {dim_key}: LLM 失败: {e}")
         await sse_manager.publish(session_id, {
             "type": SSEEventType.DIMENSION_ERROR,
@@ -548,7 +530,12 @@ async def analyze_l3_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
             "dimension_retry_counts": dimension_failure_attempt(state, dim_key),
             "provider_failures": [{
                 "stage": f"L{dim_layer}", "dimension": dim_key,
-                "code": "llm_provider_error", "message": str(e),
+                "code": (
+                    "llm_provider_quota_exhausted"
+                    if quota_exhausted
+                    else "llm_provider_error"
+                ),
+                "message": str(e),
             }],
         }
 

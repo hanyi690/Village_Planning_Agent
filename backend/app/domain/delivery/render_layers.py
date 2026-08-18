@@ -51,6 +51,9 @@ def _function_zone_layer(planned_state: Any) -> Optional[Dict[str, Any]]:
     """Derive the function_zone layer from PlannedState parcels + zones."""
     features: List[Dict[str, Any]] = []
     for parcel in getattr(planned_state, "parcels", None) or []:
+        role = str(getattr(parcel, "materialization_role", "") or "")
+        if role and role != "land_use_assignment":
+            continue
         geometry = _wkt_to_geojson(getattr(parcel, "geometry", "") or "")
         if geometry is None:
             continue
@@ -96,6 +99,9 @@ def _project_layer(planned_state: Any) -> Optional[Dict[str, Any]]:
     features: List[Dict[str, Any]] = []
     for parcel in getattr(planned_state, "parcels", None) or []:
         project_ref = str(getattr(parcel, "project_ref", "") or "")
+        role = str(getattr(parcel, "materialization_role", "") or "")
+        if role and role not in {"site_footprint", "project_footprint"}:
+            continue
         geometry = _wkt_to_geojson(getattr(parcel, "geometry", "") or "")
         if not project_ref or geometry is None:
             continue
@@ -110,6 +116,43 @@ def _project_layer(planned_state: Any) -> Optional[Dict[str, Any]]:
             "geometry": geometry,
         })
     return _layer("planned_project", "规划项目落地", features)
+
+
+def _semantic_overlay_layers(planned_state: Any) -> List[Dict[str, Any]]:
+    """Expose non-exclusive candidate overlays without parcel semantics."""
+    by_type: dict[str, list[dict[str, Any]]] = {}
+    names = {
+        "functional_overlay": ("planning_zone", "规划功能叠加"),
+        "protection_overlay": ("protection_zone", "生态保护范围"),
+        "restoration_overlay": ("restoration_zone", "生态修复范围"),
+    }
+    for overlay in getattr(planned_state, "overlays", None) or []:
+        role = str(getattr(overlay, "materialization_role", "") or "")
+        layer_type, layer_name = names.get(role, ("planning_zone", "规划叠加"))
+        geometry = _wkt_to_geojson(getattr(overlay, "geometry", "") or "")
+        if geometry is None:
+            continue
+        by_type.setdefault(layer_type, []).append({
+            "type": "Feature",
+            "properties": {
+                "target_id": getattr(overlay, "target_ref", ""),
+                "project_ref": getattr(overlay, "project_ref", ""),
+                "candidate_id": getattr(overlay, "candidate_id", ""),
+                "feature_id": getattr(overlay, "feature_id", ""),
+                "materialization_role": role,
+            },
+            "geometry": geometry,
+        })
+    layer_names = {
+        "planning_zone": "规划功能叠加",
+        "protection_zone": "生态保护范围",
+        "restoration_zone": "生态修复范围",
+    }
+    return [
+        _layer(layer_type, layer_names.get(layer_type, "规划叠加"), features)
+        for layer_type, features in sorted(by_type.items())
+        if features
+    ]
 
 
 def _project_point_layer(planned_state: Any) -> Optional[Dict[str, Any]]:
@@ -168,6 +211,13 @@ def _facility_layer(planned_state: Any) -> Optional[Dict[str, Any]]:
                 "name": getattr(facility, "name", ""),
                 "facility_type": getattr(facility, "facility_type", ""),
                 "service_radius": getattr(facility, "service_radius", 0),
+                "candidate_id": getattr(facility, "candidate_id", ""),
+                "feature_id": getattr(facility, "feature_id", ""),
+                "lineage_id": getattr(facility, "lineage_id", ""),
+                "scenario_id": getattr(facility, "scenario_id", ""),
+                "source_refs": list(getattr(facility, "source_refs", None) or []),
+                "source_bsms": list(getattr(facility, "source_bsms", None) or []),
+                "geometry_ref": getattr(facility, "geometry_ref", ""),
             },
             "geometry": geometry,
         })
@@ -258,13 +308,16 @@ def build_planned_overlay_layers(
     for builder in (
         _function_zone_layer,
         _project_layer,
+        _semantic_overlay_layers,
         _project_point_layer,
         _facility_layer,
         _road_layer,
         _axis_layer,
     ):
         layer = builder(planned_state)
-        if layer is not None:
+        if isinstance(layer, list):
+            layers.extend(item for item in layer if item is not None)
+        elif layer is not None:
             layers.append(layer)
 
     return layers

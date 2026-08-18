@@ -118,7 +118,7 @@ def build_global_zone_problem(
         ],
         *[
             target
-            for target in list(_value(intent, "project_targets", []) or [])
+            for target in list(_value(intent, "site_area_targets", []) or [])
             if str(_value(target, "materialization_role", "")) in _OVERLAY_ROLES
         ],
     ]

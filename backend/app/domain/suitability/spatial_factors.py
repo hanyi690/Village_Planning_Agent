@@ -17,6 +17,7 @@ class ParcelSpatialFactors:
     road_access_score: float | None = None
     facility_distance_m: float | None = None
     facility_coverage_score: float | None = None
+    existing_redundancy_score: float | None = None
     hazard_distance_m: float | None = None
     hazard_safety_score: float | None = None
     exclusion_codes: tuple[str, ...] = ()
@@ -178,14 +179,20 @@ class SpatialFactorIndex:
             breakdown["road_access"] = road_score
             breakdown["road_distance_m"] = float(road_distance)
             evidence_refs.append("bundle:roads_current")
+        # Proximity to an existing facility is not service coverage.  Coverage
+        # requires typed demand, facility capacity/type, and a routable network
+        # and is evaluated by ``evaluate_facility_service``.  Keep this value
+        # only as a diagnostic that penalises redundant co-location.
         service_score = None
+        existing_redundancy_score = None
         if facility_distance is not None:
-            service_score = _distance_score(
+            proximity_score = _distance_score(
                 facility_distance,
                 self.policy.facility_preferred_distance_m,
             )
-            breakdown["service_coverage"] = service_score
-            breakdown["facility_distance_m"] = float(facility_distance)
+            existing_redundancy_score = 1.0 - proximity_score
+            breakdown["existing_redundancy"] = existing_redundancy_score
+            breakdown["existing_facility_distance_m"] = float(facility_distance)
             evidence_refs.append("bundle:facilities_current")
         hazard_score = None
         if hazard_distance is not None:
@@ -202,6 +209,7 @@ class SpatialFactorIndex:
                 float(facility_distance) if facility_distance is not None else None
             ),
             facility_coverage_score=service_score,
+            existing_redundancy_score=existing_redundancy_score,
             hazard_distance_m=(
                 float(hazard_distance) if hazard_distance is not None else None
             ),

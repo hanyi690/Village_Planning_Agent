@@ -7,12 +7,52 @@ from typing import Literal, TypeAlias
 from pydantic import BaseModel, Field, model_validator
 
 
+LinearAssetKind: TypeAlias = Literal[
+    "road",
+    "water_supply",
+    "sewer",
+    "stormwater",
+    "power",
+    "communication",
+    "drainage_channel",
+    "revetment",
+]
+
+LINEAR_ASSET_KINDS = frozenset(
+    {
+        "road",
+        "water_supply",
+        "sewer",
+        "stormwater",
+        "power",
+        "communication",
+        "drainage_channel",
+        "revetment",
+    }
+)
+
+AssetKind: TypeAlias = Literal[
+    "none",
+    "facility",
+    "land_use",
+    "axis",
+    "road",
+    "water_supply",
+    "sewer",
+    "stormwater",
+    "power",
+    "communication",
+    "drainage_channel",
+    "revetment",
+]
+
+
 MaterializationRole: TypeAlias = Literal[
     "land_use_assignment",
     "functional_overlay",
     "protection_overlay",
     "restoration_overlay",
-    "project_footprint",
+    "site_footprint",
 ]
 
 InterventionAction: TypeAlias = Literal[
@@ -63,6 +103,23 @@ class RoadPlanningParameters(BaseModel):
         return self
 
 
+class LinearAssetPlanningParameters(BaseModel):
+    """Typed semantics for non-road linear assets before spatial grounding."""
+
+    action: Literal["preserve", "new", "upgrade", "expand", "repair"] = "new"
+    length_m: float | None = Field(default=None, gt=0)
+    diameter_mm: float | None = Field(default=None, gt=0)
+    material: str = ""
+    alignment_refs: list[str] = Field(default_factory=list)
+    connects: list[str] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def normalize_refs(self) -> "LinearAssetPlanningParameters":
+        self.alignment_refs = list(dict.fromkeys(self.alignment_refs))
+        self.connects = list(dict.fromkeys(self.connects))
+        return self
+
+
 class FacilityPlanningParameters(BaseModel):
     """Normalized semantics for a facility point before spatial grounding."""
 
@@ -98,10 +155,10 @@ class PolygonPlanningParameters(BaseModel):
     land_use: str = ""
 
 
-class ProjectPlanningParameters(BaseModel):
-    """Optional scale semantics for generic point/polygon/parcel projects."""
+class SiteAreaPlanningParameters(BaseModel):
+    """Scale semantics for a land-consuming site-area intervention."""
 
-    project_type: str = ""
+    site_type: str = ""
     action: InterventionAction = "new"
     capacity: float | None = Field(default=None, gt=0)
     capacity_unit: str = ""
@@ -109,11 +166,15 @@ class ProjectPlanningParameters(BaseModel):
 
 
 __all__ = [
+    "AssetKind",
     "AxisPlanningParameters",
     "FacilityPlanningParameters",
     "InterventionAction",
+    "LINEAR_ASSET_KINDS",
+    "LinearAssetKind",
+    "LinearAssetPlanningParameters",
     "MaterializationRole",
     "PolygonPlanningParameters",
-    "ProjectPlanningParameters",
+    "SiteAreaPlanningParameters",
     "RoadPlanningParameters",
 ]

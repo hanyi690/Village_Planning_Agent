@@ -12,6 +12,9 @@ from app.domain.materialization.nodes.worker_common import (
     _task_value,
     _parcel_geometry,
     _resolve_parcel_by_bsm,
+    _scenario_features_for_layer,
+    _task_for_target,
+    _attach_feature_lineage,
     _task_enabled,
     _task_execution_result,
 )
@@ -30,14 +33,14 @@ def _project_worker(state: ExecuteAgentState) -> WorkerResult:
     """
     from app.domain.materialization.land_design_worker import design_project_footprint
 
-    if not _task_enabled(state, "project"):
-        return WorkerResult(worker_type="project")
+    if not _task_enabled(state, "site_area"):
+        return WorkerResult(worker_type="site_area")
 
-    projects = list(getattr(_execution_intent_from_plan(state), "project_targets", None) or [])
+    projects = list(getattr(_execution_intent_from_plan(state), "site_area_targets", None) or [])
     parcel_by_bsm = _resolve_parcel_by_bsm(state)
     selected_by_target = {
         str(_task_value(task, "target_id", "")): str(_task_value(_task_value(task, "assignment"), "selected_bsm", ""))
-        for task in _plan_tasks(state, {"project_footprint"})
+        for task in _plan_tasks(state, {"site_area_footprint"})
         if _task_value(_task_value(task, "assignment"), "selected_bsm", "")
     }
     if state.execution_plan is None:
@@ -57,7 +60,6 @@ def _project_worker(state: ExecuteAgentState) -> WorkerResult:
         if getattr(brief, "project_ref", "")
     }
     features = []
-    point_features = []
     changes: List[ParcelChange] = []
     completed_target_ids = set()
     action_results = [
@@ -70,31 +72,19 @@ def _project_worker(state: ExecuteAgentState) -> WorkerResult:
         if not getattr(project, "requires_spatial", True)
         or getattr(project, "expected_output_kind", "") == "action"
     ]
+    candidate_by_target = {
+        str(_task_value(task, "target_id", "")): str(
+            _task_value(task, "candidate_id", "") or ""
+        )
+        for task in _plan_tasks(state, {"site_area_footprint"})
+        if _task_value(task, "candidate_id", "")
+    }
     for target_id, bsm in selected_by_target.items():
         project = projects_by_target.get(target_id)
         if project is None or not getattr(project, "requires_spatial", True):
             continue
         parcel = parcel_by_bsm.get(str(bsm))
         if parcel is None or not _parcel_geometry(parcel):
-            continue
-        if getattr(project, "expected_output_kind", "") == "point":
-            try:
-                from shapely.geometry import mapping, shape
-
-                point = mapping(shape(_parcel_geometry(parcel)).representative_point())
-            except Exception:
-                continue
-            point_features.append({
-                "type": "Feature",
-                "properties": {
-                    "target_id": target_id,
-                    "project_ref": target_id,
-                    "project_name": getattr(project, "name", ""),
-                    "marker_size": "small",
-                },
-                "geometry": point,
-            })
-            completed_target_ids.add(target_id)
             continue
         if getattr(project, "expected_output_kind", "") == "action":
             continue
@@ -128,6 +118,50 @@ def _project_worker(state: ExecuteAgentState) -> WorkerResult:
             "geometry": _footprint_geometry(primary, _parcel_geometry(parcel)),
         })
 
+    # Relation-aware candidates are not necessarily cadastral parcels.  When
+    # a typed execution geometry is available, materialize it directly and
+    # keep the old BSM/land-design path as a compatibility fallback.
+    from shapely import wkt as shapely_wkt
+    from shapely.geometry import mapping as shapely_mapping
+    for target_id, candidate_id in candidate_by_target.items():
+        if target_id in completed_target_ids:
+            continue
+        candidate = (getattr(state, "candidate_geometry_by_id", {}) or {}).get(candidate_id)
+        geometry_wkt = str(getattr(candidate, "wkt", "") or "")
+        if candidate is None or not geometry_wkt:
+            continue
+        try:
+            geometry = shapely_mapping(shapely_wkt.loads(geometry_wkt))
+        except Exception:
+            continue
+        if not geometry or not geometry.get("type"):
+            continue
+        project = projects_by_target.get(target_id)
+        if project is None:
+            continue
+        features.append({
+            "type": "Feature",
+            "properties": {
+                "target_id": target_id,
+                "project_id": target_id,
+                "project_name": getattr(project, "name", ""),
+                "project_category": getattr(project, "category", "other"),
+                "candidate_id": candidate_id,
+                "scenario_id": str(_task_value(_task_for_target(state, target_id), "scenario_id", "") or ""),
+                "source_refs": list(getattr(candidate, "evidence_refs", None) or []) or [str(getattr(candidate, "source_ref", "") or "candidate_geometry")],
+                "generation_operation": "candidate_geometry_materialize",
+                "materialization_role": str(
+                    getattr(project, "materialization_role", "")
+                    or "project_footprint"
+                ),
+                "hard_constraint_status": str(
+                    getattr(candidate, "hard_constraint_status", "") or ""
+                ),
+            },
+            "geometry": geometry,
+        })
+        completed_target_ids.add(target_id)
+
     layers = []
     if features:
         layers.append({
@@ -135,14 +169,8 @@ def _project_worker(state: ExecuteAgentState) -> WorkerResult:
             "layerName": "规划项目",
             "data": {"type": "FeatureCollection", "features": features},
         })
-    if point_features:
-        layers.append({
-            "layerType": "planned_project_point",
-            "layerName": "规划项目定位点",
-            "data": {"type": "FeatureCollection", "features": point_features},
-        })
     unresolved = []
-    if projects_by_target and not features and not point_features and not action_results:
+    if projects_by_target and not features and not action_results:
         unresolved.append({
             "code": "project_output_empty",
             "message": "Project targets exist but none could be placed on a constraint-safe candidate parcel.",
@@ -151,7 +179,7 @@ def _project_worker(state: ExecuteAgentState) -> WorkerResult:
     for project in projects:
         task_result = _task_execution_result(
             state,
-            "project_footprint",
+            "site_area_footprint",
             project.target_id,
             status="succeeded" if project.target_id in completed_target_ids else "failed",
             diagnostics=[] if project.target_id in completed_target_ids else [{
@@ -161,8 +189,16 @@ def _project_worker(state: ExecuteAgentState) -> WorkerResult:
         )
         if task_result is not None:
             task_results.append(task_result)
+    scenario_features = [
+        item
+        for layer in layers
+        for item in _scenario_features_for_layer(
+            state, layer, generation_operation="project_worker"
+        )
+    ]
+    _attach_feature_lineage(task_results, scenario_features)
     return WorkerResult(
-        worker_type="project",
+        worker_type="site_area",
         task_results=task_results,
         layers=layers,
         parcel_changes=changes,
@@ -174,6 +210,12 @@ def _project_worker(state: ExecuteAgentState) -> WorkerResult:
             "changes": len(changes),
             "actions": len(action_results),
         }],
+        scenario_features=scenario_features,
+        task_id=(
+            str(getattr(state.execution_plan.worker_tasks[0], "task_id", ""))
+            if state.execution_plan and len(state.execution_plan.worker_tasks) == 1
+            else ""
+        ),
     )
 
 

@@ -10,9 +10,10 @@ from app.contracts.artifacts.contract_meta import ContractMeta
 
 
 DemandKind = Literal[
-    "project",
+    "site_area",
     "facility",
     "road",
+    "linear",
     "axis",
     "zone",
     "restoration",

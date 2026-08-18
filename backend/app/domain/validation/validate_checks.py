@@ -79,6 +79,19 @@ def _wkt_area(wkt: str) -> float:
         return 0.0
 
 
+def _wkt_is_valid(wkt: str) -> bool:
+    """Check candidate/legacy geometry without fabricating a fallback."""
+    if not str(wkt or "").strip():
+        return False
+    try:
+        from shapely import wkt as _wkt
+
+        geometry = _wkt.loads(str(wkt))
+        return bool(geometry is not None and not geometry.is_empty and geometry.is_valid)
+    except Exception:
+        return False
+
+
 def _target_lineage(entry: Any) -> list[str]:
     values = (
         getattr(entry, "derived_from_zone_target", ""),
@@ -88,8 +101,35 @@ def _target_lineage(entry: Any) -> list[str]:
     return sorted({str(value) for value in values if str(value).strip()})
 
 
+def _entry_identity(entry: Any) -> str:
+    """Return the output identity without conflating candidate ids and BSMs."""
+    return str(
+        getattr(entry, "bsm", "")
+        or getattr(entry, "candidate_id", "")
+        or getattr(entry, "feature_id", "")
+        or getattr(entry, "name", "")
+        or ""
+    ).strip()
+
+
+def _candidate_backed(entry: Any) -> bool:
+    """True only for immutable relation-aware candidate materialization."""
+    return bool(
+        str(getattr(entry, "candidate_id", "") or "").strip()
+        and not str(getattr(entry, "bsm", "") or "").strip()
+    ) or str(getattr(entry, "source_spec", "") or "").strip() == (
+        "candidate_geometry_materialize"
+    )
+
+
+def _materialization_role(entry: Any) -> str:
+    return str(getattr(entry, "materialization_role", "") or "").strip()
+
+
 def _entry_lineage(entry: Any) -> tuple[list[str], list[str], list[str]]:
     """Return (bsms, target_ids, evidence_refs) for a planned parcel/zone entry."""
+    # Candidate ids are intentionally kept out of ``bsms``.  They belong in
+    # evidence/source refs and are not valid current-land-use identifiers.
     bsm = str(getattr(entry, "bsm", "") or "")
     bsms = [bsm] if bsm else []
     bsms.extend(
@@ -104,10 +144,27 @@ def _entry_lineage(entry: Any) -> tuple[list[str], list[str], list[str]]:
         f"planned-parcel:{bsm}" if bsm else "",
         f"planned-zone:{name}" if name else "",
     ]
+    candidate_id = str(getattr(entry, "candidate_id", "") or "").strip()
+    if candidate_id:
+        refs.append(f"candidate:{candidate_id}")
+    refs.extend(
+        str(value)
+        for value in (getattr(entry, "source_refs", None) or [])
+        if str(value)
+    )
     refs.extend(str(value) for value in (getattr(entry, "lineage_ids", None) or []))
     refs.extend(str(value) for value in (getattr(entry, "claim_refs", None) or []))
     evidence_refs = sorted(
-        {str(value) for value in refs if str(value) and str(value).startswith("planned-")}
+        {
+            str(value)
+            for value in refs
+            if str(value)
+            and (
+                str(value).startswith("planned-")
+                or str(value).startswith("candidate:")
+                or str(value).startswith("artifact:")
+            )
+        }
     )
     return bsms, targets, evidence_refs
 
@@ -146,9 +203,28 @@ def check_hard_constraints(planned_state: Any, constraint_index: Any) -> List[Va
         ]
     findings: list[ValidationCheck] = []
     for parcel in planned_state.parcels or []:
+        # Overlay semantics are non-exclusive by contract.  A protection or
+        # restoration overlay may intentionally intersect a prohibited
+        # *land-use* constraint; its relation-specific hard factors are
+        # checked independently by FinalRelationValidation.  Keep this
+        # legacy parcel check for authoritative/site-footprint outputs only.
+        if _materialization_role(parcel) in {
+            "functional_overlay",
+            "protection_overlay",
+            "restoration_overlay",
+        }:
+            continue
         bsm = str(getattr(parcel, "bsm", "") or "")
+        candidate_id = str(getattr(parcel, "candidate_id", "") or "")
+        identity = bsm or candidate_id or "unbound"
         targets = _target_lineage(parcel)
-        parcel_ref = f"planned-parcel:{bsm}" if bsm else "planned-parcel:unbound"
+        parcel_ref = (
+            f"planned-parcel:{bsm}"
+            if bsm
+            else f"candidate:{candidate_id}"
+            if candidate_id
+            else "planned-parcel:unbound"
+        )
         wkt = (parcel.geometry or "").strip()
         if not wkt:
             findings.append(
@@ -158,7 +234,7 @@ def check_hard_constraints(planned_state: Any, constraint_index: Any) -> List[Va
                     False,
                     stage="EXECUTE",
                     code="hard_constraint_query_failed",
-                    violation_id=f"hard_constraint_query_failed:{bsm or 'unbound'}",
+                    violation_id=f"hard_constraint_query_failed:{identity}",
                     actual="planned parcel geometry is empty",
                     expected="parseable planned parcel geometry",
                     parcels=[bsm] if bsm else [],
@@ -182,7 +258,7 @@ def check_hard_constraints(planned_state: Any, constraint_index: Any) -> List[Va
                     False,
                     stage="EXECUTE",
                     code="hard_constraint_query_failed",
-                    violation_id=f"hard_constraint_query_failed:{bsm or 'unbound'}",
+                    violation_id=f"hard_constraint_query_failed:{identity}",
                     actual=f"constraint query failed: {exc}",
                     expected="successful deterministic constraint query",
                     parcels=[bsm] if bsm else [],
@@ -215,7 +291,7 @@ def check_hard_constraints(planned_state: Any, constraint_index: Any) -> List[Va
                     stage="SELECT",
                     code="hard_constraints",
                     violation_id=(
-                        f"hard_constraints:{target_token}:{bsm or 'unbound'}:"
+                        f"hard_constraints:{target_token}:{identity}:"
                         f"{constraint_type}"
                     ),
                     actual=(
@@ -421,9 +497,19 @@ def check_traceability(
         factors = {}
     deferred = {str(value) for value in (factors.get("deferred_targets") or [])}
     expected = [
-        p.project_id
-        for p in (getattr(intent, "project_targets", None) or [])
-        if str(getattr(p, "project_id", "")) not in deferred
+        str(
+            getattr(p, "project_id", "")
+            or getattr(p, "target_id", "")
+            or getattr(p, "site_area_id", "")
+            or ""
+        )
+        for p in (getattr(intent, "site_area_targets", None) or [])
+        if str(
+            getattr(p, "project_id", "")
+            or getattr(p, "target_id", "")
+            or getattr(p, "site_area_id", "")
+            or ""
+        ) not in deferred
     ]
     actual: List[str] = []
     for change in (parcel_changeset.changes if parcel_changeset is not None else None) or []:
@@ -550,11 +636,13 @@ def _planned_geoms(planned_state: Any) -> tuple[List[tuple], List[tuple]]:
 
     items: List[tuple] = []
     errors: List[tuple] = []
-    for entry in (getattr(planned_state, "parcels", None) or []) + (
-        getattr(planned_state, "zones", None) or []
+    for entry in (
+        (getattr(planned_state, "parcels", None) or [])
+        + (getattr(planned_state, "zones", None) or [])
+        + (getattr(planned_state, "overlays", None) or [])
     ):
         wkt = (getattr(entry, "geometry", "") or "").strip()
-        name = getattr(entry, "bsm", "") or getattr(entry, "name", "") or ""
+        name = _entry_identity(entry)
         if not wkt:
             errors.append((name, "empty geometry"))
             continue
@@ -585,10 +673,12 @@ def check_topology(planned_state: Any) -> List[ValidationCheck]:
 
     validity_passed = not invalid and not empty and not parse_errors
     identity_by_name: dict[str, tuple[list[str], list[str], list[str]]] = {}
-    for entry in (getattr(planned_state, "parcels", None) or []) + (
-        getattr(planned_state, "zones", None) or []
+    for entry in (
+        (getattr(planned_state, "parcels", None) or [])
+        + (getattr(planned_state, "zones", None) or [])
+        + (getattr(planned_state, "overlays", None) or [])
     ):
-        name = str(getattr(entry, "name", "") or getattr(entry, "bsm", "") or "")
+        name = _entry_identity(entry)
         if name:
             identity_by_name.setdefault(name, _entry_lineage(entry))
     validity_names = [*invalid, *empty, *parse_errors]
@@ -742,18 +832,27 @@ def _planned_polygon_records(planned_state: Any) -> dict[str, list[SimpleNamespa
             if geometry.geom_type not in _POLYGON_TYPES or geometry.is_empty:
                 continue
             bsm = str(getattr(entry, "bsm", "") or "")
+            candidate_id = str(getattr(entry, "candidate_id", "") or "")
             targets = _target_lineage(entry)
-            feature_id = bsm or str(getattr(entry, "name", "") or "") or f"{layer}-{index}"
+            feature_id = (
+                bsm
+                or candidate_id
+                or str(getattr(entry, "name", "") or "")
+                or f"{layer}-{index}"
+            )
             geometry_digest = _evidence_digest(text)
-            groups[layer].append(
+            role = str(getattr(entry, "materialization_role", "") or "")
+            group_key = f"{layer}:{role}" if role else layer
+            groups.setdefault(group_key, []).append(
                 SimpleNamespace(
-                    layer=layer,
+                    layer=group_key,
                     feature_id=feature_id,
                     bsm=bsm,
+                    candidate_id=candidate_id,
                     target_ids=targets,
                     geometry=geometry,
                     evidence_ref=(
-                        f"planned-{layer}:{feature_id}:{geometry_digest[:16]}"
+                        f"planned-{group_key}:{feature_id}:{geometry_digest[:16]}"
                     ),
                 )
             )
@@ -1010,8 +1109,8 @@ def check_contract_completeness(
 ) -> List[ValidationCheck]:
     """Check parcels are produced when targets exist and fields are complete."""
     if intent is None:
-        intent = SimpleNamespace(project_targets=[], zone_targets=[])
-    project_targets = list(getattr(intent, "project_targets", None) or [])
+        intent = SimpleNamespace(site_area_targets=[], zone_targets=[])
+    project_targets = list(getattr(intent, "site_area_targets", None) or [])
     zone_targets = list(getattr(intent, "zone_targets", None) or [])
     spatial_projects = [
         p for p in project_targets
@@ -1050,15 +1149,64 @@ def check_contract_completeness(
             need_parcels = False
             spatial_target_ids = []
     parcels_present = (not need_parcels) or bool(planned_state.parcels)
-    missing_bsm = [p.bsm for p in planned_state.parcels if not (p.bsm or "").strip()]
-    missing_geom = [p.bsm or "?" for p in planned_state.parcels if not (p.geometry or "").strip()]
-    parcel_fields_ok = not missing_bsm and not missing_geom
-    has_changes = bool(changeset and (getattr(changeset, "changes", None) or []))
-    flags_ok = (not need_parcels and not has_changes) or bool(
-        changeset
-        and changeset.area_conservation_verified
-        and changeset.geometry_validity_verified
+    candidate_entries = [
+        parcel for parcel in planned_state.parcels if _candidate_backed(parcel)
+    ]
+    legacy_entries = [
+        parcel for parcel in planned_state.parcels if not _candidate_backed(parcel)
+    ]
+    missing_identity = [
+        _entry_identity(parcel)
+        for parcel in legacy_entries
+        if not str(getattr(parcel, "bsm", "") or "").strip()
+    ]
+    missing_candidate = [
+        _entry_identity(parcel) or "?"
+        for parcel in candidate_entries
+        if not str(getattr(parcel, "candidate_id", "") or "").strip()
+    ]
+    missing_target = [
+        _entry_identity(parcel) or "?"
+        for parcel in candidate_entries
+        if not str(
+            getattr(parcel, "target_ref", "")
+            or getattr(parcel, "project_ref", "")
+            or getattr(parcel, "derived_from_zone_target", "")
+            or ""
+        ).strip()
+    ]
+    missing_geom = [
+        _entry_identity(parcel) or "?"
+        for parcel in planned_state.parcels
+        if not (getattr(parcel, "geometry", "") or "").strip()
+    ]
+    parcel_fields_ok = (
+        not missing_identity
+        and not missing_candidate
+        and not missing_target
+        and not missing_geom
     )
+    has_changes = bool(changeset and (getattr(changeset, "changes", None) or []))
+    candidate_backed = any(
+        str(getattr(parcel, "candidate_id", "") or "").strip()
+        or str(getattr(parcel, "bsm", "") or "").startswith("candidate:")
+        for parcel in planned_state.parcels
+    )
+    if candidate_entries and not has_changes:
+        # Candidate-backed execution is a direct geometry materialization, not
+        # a cadastral ParcelChangeSet.  Require parseable output geometry, but
+        # do not manufacture a false area-conservation claim for a non-BSM
+        # candidate.
+        flags_ok = parcel_fields_ok and all(
+            _wkt_is_valid(getattr(parcel, "geometry", ""))
+            for parcel in candidate_entries
+        )
+    else:
+        flags_ok = (not need_parcels and not has_changes) or bool(
+            changeset
+            and changeset.area_conservation_verified
+            and changeset.geometry_validity_verified
+        )
     return [
         _check(
             "parcels_present",
@@ -1075,8 +1223,15 @@ def check_contract_completeness(
             "地块字段完整",
             parcel_fields_ok,
             stage="EXECUTE",
-            actual=f"missing_bsm={missing_bsm}, missing_geom={missing_geom}",
-            expected="every planned parcel has bsm and geometry",
+            actual=(
+                f"missing_identity={missing_identity}, "
+                f"missing_candidate={missing_candidate}, "
+                f"missing_target={missing_target}, missing_geom={missing_geom}"
+            ),
+            expected=(
+                "every legacy output has bsm; every candidate-backed output has "
+                "candidate_id, target lineage and valid geometry"
+            ),
             fix="补齐地块 bsm 与 geometry",
         ),
         _check(
@@ -1086,9 +1241,13 @@ def check_contract_completeness(
             stage="EXECUTE",
             actual=(
                 f"conservation={bool(changeset and changeset.area_conservation_verified)}, "
-                f"validity={bool(changeset and changeset.geometry_validity_verified)}"
+                f"validity={bool(changeset and changeset.geometry_validity_verified)}, "
+                f"candidate_geometry={all(_wkt_is_valid(getattr(parcel, 'geometry', '')) for parcel in candidate_entries)}"
             ),
-            expected="area_conservation_verified and geometry_validity_verified recorded",
+            expected=(
+                "legacy changesets record conservation/validity, or candidate "
+                "geometry and lineage are independently verified"
+            ),
             targets=spatial_target_ids,
             fix="记录面积守恒与几何有效性校验结果",
         ),
@@ -1132,6 +1291,217 @@ def check_classification_missing(planned_state: Any) -> List[ValidationCheck]:
     ]
 
 
+def check_candidate_materialization(planned_state: Any) -> List[ValidationCheck]:
+    """Validate relation-aware candidate geometry and lineage independently.
+
+    Candidate-backed features are not ``ParcelChange`` rows and therefore do
+    not participate in BSM/area-conservation checks.  They still need a
+    parseable non-empty geometry, stable candidate identity, target lineage,
+    and at least one source reference before VALIDATE can proceed.
+    """
+    entries: list[Any] = []
+    for field in ("parcels", "zones", "overlays", "facilities", "roads", "axes"):
+        entries.extend(getattr(planned_state, field, None) or [])
+    candidates = [entry for entry in entries if _candidate_backed(entry)]
+    if not candidates:
+        return [
+            _check(
+                "candidate_materialization",
+                "候选几何物化契约",
+                True,
+                stage="EXECUTE",
+                actual="not_applicable:no_candidate_backed_features",
+                expected="candidate-backed features carry geometry and lineage",
+            )
+        ]
+
+    invalid: list[str] = []
+    affected_targets: set[str] = set()
+    evidence_refs: set[str] = set()
+    for entry in candidates:
+        candidate_id = str(getattr(entry, "candidate_id", "") or "").strip()
+        identity = candidate_id or _entry_identity(entry) or "unbound"
+        target_ids = _target_lineage(entry)
+        affected_targets.update(target_ids)
+        if candidate_id:
+            evidence_refs.add(f"candidate:{candidate_id}")
+        source_refs = {
+            str(ref)
+            for ref in (getattr(entry, "source_refs", None) or [])
+            if str(ref).strip()
+        }
+        source_refs.update(
+            str(ref)
+            for ref in (getattr(entry, "lineage_refs", None) or [])
+            if str(ref).strip()
+        )
+        evidence_refs.update(source_refs)
+        target_id = str(
+            getattr(entry, "target_ref", "")
+            or getattr(entry, "derived_from_target", "")
+            or getattr(entry, "derived_from_zone_target", "")
+            or getattr(entry, "project_ref", "")
+            or ""
+        ).strip()
+        geometry_ok = _wkt_is_valid(getattr(entry, "geometry", ""))
+        feature_id = str(getattr(entry, "feature_id", "") or "").strip()
+        if not candidate_id or not target_id or not feature_id or not source_refs or not geometry_ok:
+            invalid.append(
+                f"{identity}:candidate={bool(candidate_id)},target={bool(target_id)},"
+                f"feature={bool(feature_id)},source={bool(source_refs)},geometry={geometry_ok}"
+            )
+    passed = not invalid
+    return [
+        _check(
+            "candidate_materialization",
+            "候选几何物化契约",
+            passed,
+            stage="EXECUTE",
+            actual="; ".join(invalid) if invalid else f"validated={len(candidates)}",
+            expected=(
+                "every candidate-backed feature has candidate_id, target lineage, "
+                "feature_id, source refs and valid geometry"
+            ),
+            targets=sorted(affected_targets),
+            evidence_refs=sorted(evidence_refs),
+            fix="补齐候选几何的稳定身份、目标 lineage、来源引用和有效几何",
+        )
+    ]
+
+
+def check_relation_validation(final_validation: Any) -> List[ValidationCheck]:
+    """Adapt independent final relation validation into VALIDATE checks.
+
+    This adapter intentionally treats every non-``satisfied`` relation as a
+    failed check.  Delivery may still choose a partial package, but callers
+    cannot accidentally turn ``unknown``/``pending``/``deferred`` into a full
+    validation pass by looking only at a boolean scenario status.
+    """
+
+    if final_validation is None:
+        return [
+            _check(
+                "final_relation_validation_missing",
+                "最终关系复测",
+                False,
+                stage="EXECUTE",
+                actual="no FinalScenarioValidation supplied",
+                expected="independent final relation validation report",
+                fix="从最终 PlannedState 执行关系复测后再进入 DELIVERY",
+            )
+        ]
+    rows = list(getattr(final_validation, "satisfactions", None) or [])
+    if isinstance(final_validation, dict):
+        rows = list(final_validation.get("satisfactions", []) or final_validation.get("relation_satisfactions", []) or [])
+    checks: list[ValidationCheck] = []
+    for row in rows:
+        relation_id = str(getattr(row, "relation_id", "") or (row.get("relation_id", "") if isinstance(row, dict) else ""))
+        status = str(getattr(row, "status", "") or (row.get("status", "") if isinstance(row, dict) else "unknown"))
+        measurement = getattr(row, "measurement", None) if not isinstance(row, dict) else row.get("measurement")
+        trace = getattr(row, "evaluation_trace", None) if not isinstance(row, dict) else row.get("evaluation_trace")
+        version = getattr(row, "evaluator_version", "") if not isinstance(row, dict) else row.get("evaluator_version", "")
+        criticality = str(getattr(row, "criticality", "hard") if not isinstance(row, dict) else row.get("criticality", "hard"))
+        measured_satisfied = status == "satisfied" and measurement is not None and bool(trace) and bool(version)
+        # Soft relations remain visible as warnings but do not turn a
+        # hard-feasibility validation into a false blocker.
+        passed = measured_satisfied or criticality != "hard"
+        checks.append(
+            _check(
+                f"final_relation:{relation_id or 'unknown'}",
+                "最终关系复测",
+                passed,
+                stage="EXECUTE",
+                actual=f"status={status}, measurement={'present' if measurement is not None else 'missing'}, evaluator={version or 'missing'}",
+                expected="satisfied with measurement, evaluator version and trace",
+                targets=[relation_id] if relation_id else [],
+                evidence_refs=list(getattr(row, "evidence_refs", None) or (row.get("evidence_refs", []) if isinstance(row, dict) else [])),
+                fix="修复最终几何/网络/执行轨迹后重新复测关系",
+            )
+        )
+    findings = list(getattr(final_validation, "findings", None) or [])
+    if isinstance(final_validation, dict):
+        findings = list(final_validation.get("findings", []) or [])
+    for finding in findings:
+        code = str(getattr(finding, "code", "final_relation_finding") or (finding.get("code", "final_relation_finding") if isinstance(finding, dict) else "final_relation_finding"))
+        message = str(getattr(finding, "message", "") or (finding.get("message", "") if isinstance(finding, dict) else ""))
+        relation_id = str(getattr(finding, "relation_id", "") or (finding.get("relation_id", "") if isinstance(finding, dict) else ""))
+        severity = str(getattr(finding, "severity", "error") if not isinstance(finding, dict) else finding.get("severity", "error"))
+        checks.append(
+            _check(
+                f"relation_finding:{code}:{relation_id or 'global'}",
+                "最终关系复测发现",
+                severity != "error",
+                stage="EXECUTE",
+                actual=message or code,
+                expected="no final relation/topology findings",
+                targets=[relation_id] if relation_id else [],
+                evidence_refs=list(getattr(finding, "evidence_refs", None) or (finding.get("evidence_refs", []) if isinstance(finding, dict) else [])),
+                fix="处理关系复测 finding 后再生成完整交付包",
+            )
+        )
+    if not checks:
+        passed = bool(getattr(final_validation, "passed", False))
+        checks.append(
+            _check(
+                "final_relation_validation",
+                "最终关系复测",
+                passed,
+                stage="EXECUTE",
+                actual="no relation rows" if not passed else "passed",
+                expected="all final relations have measured satisfied status",
+            )
+        )
+    return checks
+
+
+def check_cross_layer_topology(planned_state: Any, scenario: Any = None) -> List[ValidationCheck]:
+    """Run the cross-layer topology adapter for direct VALIDATE callers."""
+
+    from app.domain.validation.relation_validation import (
+        _state_records,
+        validate_cross_layer_topology,
+    )
+    from app.contracts.planning.scenario import ScenarioFeature
+
+    if planned_state is None:
+        return [_check("cross_layer_topology", "跨层拓扑", False, stage="EXECUTE", actual="planned_state is missing")]
+    scenario_id = str(getattr(scenario, "scenario_id", "") or getattr(planned_state, "scenario_id", "") or "scenario:validation")
+    features = [
+        ScenarioFeature(
+            feature_id=item["feature_id"],
+            scenario_id=scenario_id,
+            target_id=item["target_id"] or item["identity"],
+            candidate_id=item["candidate_id"],
+            geometry_kind=item["geometry_kind"],
+            geometry_wkt=item["geometry"] or "GEOMETRYCOLLECTION EMPTY",
+            crs=item["crs"] or "EPSG:3857",
+            generation_operation=f"validate:{item['kind']}",
+            source_refs=item["source_refs"] or [f"planned-state:{item['identity']}"],
+            # Direct PlannedState callers predate scenario relation lineage.
+            # Put those unbound layers in one explicit topology scope so the
+            # cross-layer checker still detects a disconnected facility/road;
+            # selected features with real relation IDs retain their lineage.
+            relation_ids=item["relation_ids"] or [f"topology:{scenario_id}"],
+        )
+        for item in _state_records(planned_state)
+    ]
+    findings = validate_cross_layer_topology(features)
+    return [
+        _check(
+            f"cross_layer_topology:{finding.code}:{index}",
+            "跨层拓扑",
+            False,
+            stage="EXECUTE",
+            actual=finding.message,
+            expected=finding.expected or "all planned layers are topologically connected",
+            targets=[finding.target_id] if finding.target_id else [],
+            evidence_refs=finding.evidence_refs + finding.feature_refs,
+            fix="修复 facility/road/axis 与 parcel/zone 的跨层几何连接",
+        )
+        for index, finding in enumerate(findings)
+    ] or [_check("cross_layer_topology", "跨层拓扑", True, stage="EXECUTE", actual="no cross-layer topology findings")]
+
+
 __all__ = [
     "check_hard_constraints",
     "check_area_conservation",
@@ -1141,6 +1511,9 @@ __all__ = [
     "check_accessibility",
     "check_contract_completeness",
     "check_classification_missing",
+    "check_candidate_materialization",
     "check_traceability",
     "check_worker_failures",
+    "check_relation_validation",
+    "check_cross_layer_topology",
 ]

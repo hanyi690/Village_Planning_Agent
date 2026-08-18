@@ -19,6 +19,10 @@ class CollectionSnapshot(BaseModel):
     feature_count: int = 0
     digest: str
     source: str = ""
+    source_uris: tuple[str, ...] = ()
+    source_feature_ids: tuple[str, ...] = ()
+    source_feature_count: int = 0
+    source_feature_digest: str = ""
 
 
 class SessionDataSnapshot(BaseModel):
@@ -53,6 +57,45 @@ class SessionDataSnapshot(BaseModel):
             canonical = json.dumps(
                 value, ensure_ascii=False, sort_keys=True, separators=(",", ":")
             ).encode("utf-8")
+            source_features: list[dict[str, str]] = []
+            source_uris: set[str] = set()
+            source_feature_ids: list[str] = []
+            for index, feature in enumerate(features):
+                properties = feature.get("properties") or {}
+                raw = properties.get("_raw") if isinstance(properties, dict) else None
+                raw = raw if isinstance(raw, dict) else properties
+                source_feature_id = str(
+                    raw.get("source_feature_id") or ""
+                ).strip() if isinstance(raw, dict) else ""
+                if not source_feature_id:
+                    continue
+                source_features.append({
+                    "index": str(index),
+                    "source_feature_id": source_feature_id,
+                    "source_uri": str(
+                        raw.get("source_uri") or ""
+                    ).strip() if isinstance(raw, dict) else "",
+                    "source_content_digest": str(
+                        raw.get("source_content_digest") or ""
+                    ).strip() if isinstance(raw, dict) else "",
+                    "source_geometry_digest": str(
+                        raw.get("source_geometry_digest") or ""
+                    ).strip() if isinstance(raw, dict) else "",
+                })
+                source_feature_ids.append(source_feature_id)
+                source_uri = str(raw.get("source_uri") or "").strip() if isinstance(raw, dict) else ""
+                if source_uri:
+                    source_uris.add(source_uri)
+            source_feature_digest = ""
+            if source_features:
+                source_feature_digest = "sha256:" + hashlib.sha256(
+                    json.dumps(
+                        source_features,
+                        ensure_ascii=False,
+                        sort_keys=True,
+                        separators=(",", ":"),
+                    ).encode("utf-8")
+                ).hexdigest()
             collections.append(
                 CollectionSnapshot(
                     key=str(key),
@@ -60,6 +103,10 @@ class SessionDataSnapshot(BaseModel):
                     feature_count=len(features),
                     digest="sha256:" + hashlib.sha256(canonical).hexdigest(),
                     source=source,
+                    source_uris=tuple(sorted(source_uris)),
+                    source_feature_ids=tuple(source_feature_ids),
+                    source_feature_count=len(source_features),
+                    source_feature_digest=source_feature_digest,
                 )
             )
         manifest = [item.model_dump(mode="json") for item in collections]
@@ -73,7 +120,12 @@ class SessionDataSnapshot(BaseModel):
             session_id=session_id,
             village_name=village_name,
             collections=tuple(collections),
-            source_refs=(source,),
+            source_refs=tuple(
+                dict.fromkeys(
+                    [source]
+                    + [uri for item in collections for uri in item.source_uris]
+                )
+            ),
             digest=digest,
         )
 

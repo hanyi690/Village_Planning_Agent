@@ -24,7 +24,7 @@ from app.contracts.spatial.global_zone_allocation_contracts import (
 )
 from app.contracts.workflow.parse_contracts import (
     FacilityTarget,
-    ProjectTarget,
+    SiteAreaTarget,
     SpatialPlanningIntent,
 )
 from app.contracts.domain.selection_contracts import LandDesignBrief, SiteSelectionDecision
@@ -111,7 +111,7 @@ def _parcel_classification(
 
 
 def design_project_parcel(
-    project: ProjectTarget,
+    project: SiteAreaTarget,
     brief: Optional[LandDesignBrief],
     selected_bsm: str,
     parcel_by_bsm: Dict[str, Any],
@@ -141,8 +141,8 @@ def design_project_parcel(
             before_geometry_wkt=_geometry_to_wkt(_parcel_geometry(parcel)),
             after_geometry_wkt=_geometry_to_wkt(_parcel_geometry(parcel)),
             new_area_ha=_parcel_area_ha(parcel),
-            project_ref=project.project_id,
-            intervention_id=project.project_id,
+            project_ref=project.site_area_id,
+            intervention_id=project.site_area_id,
         )
 
     planned_classification = _classification_from_decision(
@@ -189,13 +189,13 @@ def design_project_parcel(
         before_geometry_wkt=before_wkt,
         after_geometry_wkt=_geometry_to_wkt(after_geom),
         new_area_ha=float(result.get("area_ha", 0.0) or 0.0),
-        project_ref=project.project_id,
-        intervention_id=project.project_id,
+        project_ref=project.site_area_id,
+        intervention_id=project.site_area_id,
     )
 
 
 def design_project_footprint(
-    project: ProjectTarget,
+    project: SiteAreaTarget,
     brief: Optional[LandDesignBrief],
     selected_bsm: str,
     parcel_by_bsm: Dict[str, Any],
@@ -279,8 +279,8 @@ def design_project_footprint(
         change = design_project_parcel(project, brief, selected_bsm, parcel_by_bsm)
         if change is None:
             return []
-        change.project_ref = project.project_id
-        change.intervention_id = project.project_id
+        change.project_ref = project.site_area_id
+        change.intervention_id = project.site_area_id
         return [change]
 
     if target_ha is None or target_ha <= 0:
@@ -304,28 +304,28 @@ def design_project_footprint(
     source_wkt = source_geom.wkt
     changes = [
         ParcelChange(
-            bsm=f"{project.project_id}_FP",
+            bsm=f"{project.site_area_id}_FP",
             action="create",
             derived_from_bsms=list(source_bsms),
             after_classification=planned_classification,
             before_geometry_wkt=source_wkt,
             after_geometry_wkt=footprint.wkt,
             new_area_ha=footprint.area / 10000.0,
-            project_ref=project.project_id,
-            intervention_id=project.project_id,
+            project_ref=project.site_area_id,
+            intervention_id=project.site_area_id,
         )
     ]
     for i, remainder in enumerate(remainders):
         changes.append(
             ParcelChange(
-                bsm=f"{project.project_id}_REM_{i}",
+                bsm=f"{project.site_area_id}_REM_{i}",
                 action="preserve",
                 derived_from_bsms=list(source_bsms),
                 before_geometry_wkt=source_wkt,
                 after_geometry_wkt=remainder.wkt,
                 new_area_ha=remainder.area / 10000.0,
-                project_ref=project.project_id,
-                intervention_id=project.project_id,
+                project_ref=project.site_area_id,
+                intervention_id=project.site_area_id,
             )
         )
     return changes
@@ -495,7 +495,7 @@ def design_all(
     zone_assignments: List[AuthoritativeZoneParcelAssignment] | None = None,
 ) -> ParcelChangeSet:
     """Produce changes without deriving zone ownership from intent candidates."""
-    projects = list(getattr(intent, "project_targets", None) or [])
+    projects = list(getattr(intent, "site_area_targets", None) or [])
     selected = list(getattr(site_selection, "selected_combination", None) or [])
     all_changes: List[ParcelChange] = []
 

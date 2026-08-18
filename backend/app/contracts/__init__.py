@@ -1,5 +1,5 @@
 """Stable cross-layer contracts owned by the application boundary."""
 
-from .program import PlanningClaim, PlanningClaimSet, ProgramProposal
+from .program import PlanningClaim, PlanningClaimSet
 
-__all__ = ["PlanningClaim", "PlanningClaimSet", "ProgramProposal"]
+__all__ = ["PlanningClaim", "PlanningClaimSet"]

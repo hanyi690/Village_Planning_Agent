@@ -12,8 +12,8 @@ from typing import Any
 
 from app.domain.common.context_guard import require_frozen_context
 from app.infrastructure.artifacts.runtime import store_artifact
-from app.contracts.program import PlanningClaimSet, ProgramProposal
-from app.domain.program.claim_adapter import proposals_from_claims
+from app.contracts.program import PlanningClaimSet
+from app.domain.program.claim_adapter import interventions_from_claims
 from app.domain.program.assembler import assemble_planning_program
 from app.infrastructure.artifacts import ContentAddressedArtifactRepository
 from app.contracts.artifacts.artifact_descriptor import ArtifactDescriptor
@@ -23,6 +23,7 @@ from app.contracts.domain.l2_contracts import L2Strategy
 from app.contracts.domain.l3_contracts import (
     InterventionDependency,
     L3ProgramFragment,
+    PlanningIntervention,
     PlanningProgram,
     ProgramIssue,
 )
@@ -144,7 +145,7 @@ def merge_program_fragments(
     fragments: list[L3ProgramFragment],
     run_id: str,
 ) -> PlanningProgram:
-    proposals: list[ProgramProposal] = []
+    interventions: list[PlanningIntervention] = []
     dependencies: list[InterventionDependency] = []
     omissions: list[str] = []
     evidence_gaps: list[EvidenceGap] = []
@@ -154,10 +155,10 @@ def merge_program_fragments(
 
     for frag in fragments:
         claims = list(frag.claims or [])
-        proposals.extend(
-            frag.proposals
-            if frag.proposals
-            else proposals_from_claims(claims, dimension_key=frag.dimension_key)
+        interventions.extend(
+            frag.interventions
+            if frag.interventions
+            else interventions_from_claims(claims, dimension_key=frag.dimension_key)
         )
         dependencies.extend(frag.dependencies)
         omissions.extend(frag.omissions)
@@ -177,7 +178,7 @@ def merge_program_fragments(
         )
 
     program = assemble_planning_program(
-        _dedup_by_id(proposals, id_attr="proposal_id", name_attr="name"),
+        _dedup_by_id(interventions, id_attr="intervention_id", name_attr="name"),
         _dedup_dependencies(dependencies),
         omissions=_dedup(omissions),
         evidence_gaps=_dedup_by_id(evidence_gaps, id_attr="gap_id"),
@@ -396,7 +397,7 @@ async def l3_aggregate(
         natural_language_description="L3 PLAN aggregated program from compiled dimension fragments.",
     )
 
-    blocking_source_issues = [
+    source_semantic_errors = [
         issue
         for issue in program.program_issues
         if issue.severity == "error"
@@ -417,15 +418,11 @@ async def l3_aggregate(
             generate_classification_decisions,
         )
 
-        pending = (
-            []
-            if blocking_source_issues
-            else classification_review_targets(program)
-        )
-        if blocking_source_issues:
+        pending = classification_review_targets(program)
+        if source_semantic_errors:
             logger.warning(
-                "[l3_aggregate] skipped classification because %d source errors block L3",
-                len(blocking_source_issues),
+                "[l3_aggregate] classification runs before routing %d source semantic errors to L3",
+                len(source_semantic_errors),
             )
         if pending:
             decisions = await generate_classification_decisions(program)

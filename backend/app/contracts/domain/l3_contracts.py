@@ -13,13 +13,16 @@ from .l1_contracts import EvidenceGap
 from app.contracts.workflow.parse_result_contracts import ParseDiagnostic
 from app.contracts.workflow.parsing_contracts import CompilerTrace
 from app.contracts.artifacts.provenance import Provenance
-from app.contracts.program import PlanningClaim, ProgramProposal
+from app.contracts.program import PlanningClaim
 from app.contracts.domain.planning_semantics import (
+    AssetKind,
     AxisPlanningParameters,
     FacilityPlanningParameters,
+    LinearAssetPlanningParameters,
     PolygonPlanningParameters,
-    ProjectPlanningParameters,
+    SiteAreaPlanningParameters,
     RoadPlanningParameters,
+    LINEAR_ASSET_KINDS,
 )
 
 
@@ -30,7 +33,7 @@ class PlanningIntervention(BaseModel):
     execution_mode: Literal["spatial", "non_spatial"]
     expected_output_kind: Literal["parcel", "polygon", "point", "line", "action"]
     category: Literal[
-        "project",
+        "site_area",
         "facility",
         "road",
         "axis",
@@ -38,6 +41,7 @@ class PlanningIntervention(BaseModel):
         "protection",
         "zone",
     ]
+    asset_kind: AssetKind = "none"
     problem_addressed: str = ""
     scale: str = ""
     area_range_ha: tuple[float, float] | None = None
@@ -68,13 +72,36 @@ class PlanningIntervention(BaseModel):
         "functional_overlay",
         "protection_overlay",
         "restoration_overlay",
-        "project_footprint",
+        "site_footprint",
     ] | None = None
     road_parameters: RoadPlanningParameters | None = None
+    linear_parameters: LinearAssetPlanningParameters | None = None
     facility_parameters: FacilityPlanningParameters | None = None
     axis_parameters: AxisPlanningParameters | None = None
     polygon_parameters: PolygonPlanningParameters | None = None
-    project_parameters: ProjectPlanningParameters | None = None
+    site_area_parameters: SiteAreaPlanningParameters | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def migrate_legacy_project_category(cls, value: object) -> object:
+        """Normalize the pre-v2 ``project`` category to ``site_area``."""
+        if isinstance(value, dict) and value.get("category") == "project":
+            payload = dict(value)
+            payload["category"] = "site_area"
+            value = payload
+        if isinstance(value, dict):
+            payload = dict(value)
+            if (
+                payload.get("category") == "road"
+                and not payload.get("asset_kind")
+                and payload.get("road_parameters") is not None
+            ):
+                # Explicit road parameters are the v1 evidence for this
+                # compatibility migration; new v2 producers must still emit
+                # asset_kind directly.
+                payload["asset_kind"] = "road"
+            return payload
+        return value
 
     @model_validator(mode="after")
     def validate_target_contract(self) -> "PlanningIntervention":
@@ -92,13 +119,37 @@ class PlanningIntervention(BaseModel):
             "restoration": {"polygon"},
             "protection": {"polygon"},
             "zone": {"polygon"},
-            "project": {"parcel", "polygon", "point", "action"},
+            "site_area": {"parcel", "polygon"},
         }
         if self.expected_output_kind not in expected_by_category[self.category]:
             raise ValueError(
                 f"category={self.category} cannot produce "
                 f"expected_output_kind={self.expected_output_kind}"
             )
+        allowed_assets = {
+            "facility": {"none", "facility"},
+            "site_area": {"none"},
+            "road": set(LINEAR_ASSET_KINDS),
+            "axis": {"none", "axis"},
+            "restoration": {"none"},
+            "protection": {"none"},
+            "zone": {"none", "land_use"},
+        }
+        if self.asset_kind not in allowed_assets[self.category]:
+            raise ValueError(
+                f"asset_kind={self.asset_kind} is incompatible with "
+                f"category={self.category}"
+            )
+        if self.expected_output_kind == "line" and self.category == "road":
+            if self.asset_kind == "none":
+                raise ValueError("line interventions require an explicit asset_kind")
+            if self.asset_kind == "road":
+                if self.road_parameters is None or self.linear_parameters is not None:
+                    raise ValueError("road asset_kind requires only road_parameters")
+            elif self.linear_parameters is None or self.road_parameters is not None:
+                raise ValueError("non-road linear assets require only linear_parameters")
+        elif self.asset_kind not in {"none", "facility", "land_use", "axis"}:
+            raise ValueError("linear asset_kind requires line output")
         return self
 
 
@@ -120,7 +171,7 @@ class ProgramIssue(BaseModel):
 
 
 class L3ProgramFragment(BaseModel):
-    """Per-dimension proposal output of the L3 planning profile.
+    """Per-dimension intervention output of the L3 planning profile.
 
     This is deliberately not an executable ``PlanningProgram``.  The domain
     program assembler is the only boundary that creates that authoritative
@@ -129,7 +180,7 @@ class L3ProgramFragment(BaseModel):
 
     dimension_key: str
     claims: list[PlanningClaim] = Field(default_factory=list)
-    proposals: list[ProgramProposal] = Field(default_factory=list)
+    interventions: list[PlanningIntervention] = Field(default_factory=list)
     dependencies: list[InterventionDependency] = Field(default_factory=list)
     evidence_gaps: list[EvidenceGap] = Field(default_factory=list)
     program_issues: list[ProgramIssue] = Field(default_factory=list)

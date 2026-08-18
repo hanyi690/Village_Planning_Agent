@@ -22,9 +22,14 @@ class FeaturesAdapter(IngestAdapter):
         entry: GisLayerTypeEntry,
         *,
         strict: bool = False,
+        source_uri: str | None = None,
     ) -> AdapterResult:
         feature_type = entry.ingest.feature_type if entry.ingest else ""
-        features, warnings = ingest_feature(data, feature_type)
+        features, warnings = ingest_feature(
+            data,
+            feature_type,
+            source_uri=source_uri,
+        )
         dlq_entries: list[DlqEntry] = []
         clean_warnings: list[str] = []
         for w in warnings:

@@ -441,7 +441,10 @@ class DataCatalog:
                     adapter_name, lt,
                 )
                 continue
-            adapter_result = adapter.load(result.data, entry)
+            adapter_kwargs = {}
+            if adapter_name == "features":
+                adapter_kwargs["source_uri"] = result.metadata.get("path") or result.metadata.get("source_url")
+            adapter_result = adapter.load(result.data, entry, **adapter_kwargs)
             if adapter_result.warnings:
                 bundle.metadata.crs_warnings.extend(adapter_result.warnings[:5])
             for feat in adapter_result.features:
@@ -863,7 +866,19 @@ class DataCatalog:
             dtype = item.get("gis_data_type") or ""
             if dtype in _DIRTY_LAYER_TYPES:
                 dtype = _infer_layer_key_from_upload(item) or dtype
-            _merge_geojson_into_bundle(bundle, dtype, geojson)
+            upload_id = str(item.get("id") or "").strip()
+            upload_name = str(item.get("original_filename") or item.get("filename") or "").strip()
+            source_uri = (
+                f"upload://{upload_id}/{upload_name}"
+                if upload_id or upload_name
+                else None
+            )
+            _merge_geojson_into_bundle(
+                bundle,
+                dtype,
+                geojson,
+                source_uri=source_uri,
+            )
 
         # 会话上传路径同样挂载 DEM（terrain 硬证据）。catalog dem_local 是配置源，
         # 但会话有上传 GIS 时配置 demo 源被排除，导致 workspace.rasters.dem 为空、

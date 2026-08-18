@@ -194,6 +194,7 @@ async def _map_bodies(
     llm: Any = None,
     source_artifact_ref: str = "",
     source_artifact_digest: str = "",
+    budget: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Dict[str, Any]]:
     """Core flash-LLM name -> body assignment (evidence-constrained, cached)."""
     if not bodies or not names:
@@ -215,6 +216,10 @@ async def _map_bodies(
     mapping: Dict[str, Dict[str, Any]] = {}
     if llm is not None and report_text.strip():
         try:
+            from app.spatial.grounding.call_budget import (
+                reserve_ground_llm_call,
+                run_ground_llm_call,
+            )
             cluster_lines = "\n".join(
                 f"{c.index}: 质心({c.centroid[0]:.5f},{c.centroid[1]:.5f}) 地块数{c.parcel_count} 面积{c.area_ha:.2f}ha"
                 for c in bodies
@@ -236,36 +241,51 @@ async def _map_bodies(
             # Primary: structured output (constrains the real model to emit the
             # mapping JSON directly instead of burning tokens on <think>
             # reasoning).  Falls back to the text protocol when unavailable.
-            payload = await _structured_mapping(
-                llm,
-                prompt,
-                report_text,
-                require_evidence=require_evidence,
-            )
-            if not payload:
-                if asyncio.iscoroutinefunction(getattr(llm, "ainvoke", None)):
-                    response = await llm.ainvoke(prompt)
-                else:
-                    response = await asyncio.to_thread(llm.invoke, prompt)
-                raw_text = ""
-                if hasattr(response, "content"):
-                    content = response.content
-                    raw_text = "".join(content) if isinstance(content, list) else str(content or "")
-                else:
-                    raw_text = str(response or "")
-                payload = _parse_mapping_json(
-                    raw_text,
-                    names,
-                    bodies,
-                    report_text=report_text,
-                    require_evidence=require_evidence,
-                    source_artifact_ref=source_artifact_ref,
-                    source_artifact_digest=source_artifact_digest,
+            structured_timeout = reserve_ground_llm_call(budget)
+            payload = None
+            if structured_timeout is not None:
+                async def _invoke_structured():
+                    return await _structured_mapping(
+                        llm,
+                        prompt,
+                        report_text,
+                        require_evidence=require_evidence,
+                        timeout=structured_timeout,
+                    )
+
+                payload = await run_ground_llm_call(
+                    budget, structured_timeout, _invoke_structured
                 )
+            if not payload:
+                text_timeout = reserve_ground_llm_call(budget)
+                if text_timeout is not None:
+                    async def _invoke_text():
+                        if asyncio.iscoroutinefunction(getattr(llm, "ainvoke", None)):
+                            return await llm.ainvoke(prompt)
+                        return await asyncio.to_thread(llm.invoke, prompt)
+
+                    response = await run_ground_llm_call(
+                        budget, text_timeout, _invoke_text
+                    )
+                    raw_text = ""
+                    if hasattr(response, "content"):
+                        content = response.content
+                        raw_text = "".join(content) if isinstance(content, list) else str(content or "")
+                    else:
+                        raw_text = str(response or "")
+                    payload = _parse_mapping_json(
+                        raw_text,
+                        names,
+                        bodies,
+                        report_text=report_text,
+                        require_evidence=require_evidence,
+                        source_artifact_ref=source_artifact_ref,
+                        source_artifact_digest=source_artifact_digest,
+                    )
             if payload:
                 mapping = _resolve_cluster_conflicts(payload, bodies)
-        except Exception as exc:  # noqa: BLE001 - fallback is always safe
-            logger.warning("[landuse-bodies] flash mapping failed: %s", exc)
+        except Exception as exc:  # noqa: BLE001 - fallback is always bounded
+            logger.warning("[landuse-bodies] flash mapping failed or timed out: %s", exc)
 
     if cache is not None:
         try:
@@ -294,6 +314,7 @@ async def assign_names(
     llm: Any = None,
     source_artifact_ref: str = "",
     source_artifact_digest: str = "",
+    budget: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Dict[str, Any]]:
     """Public generic entry: flash-LLM name -> candidate assignment for any
     role (villages / water bodies / roads / facilities / landmarks).  The LLM
@@ -312,6 +333,7 @@ async def assign_names(
         llm=llm,
         source_artifact_ref=source_artifact_ref,
         source_artifact_digest=source_artifact_digest,
+        budget=budget,
     )
 
 
@@ -323,6 +345,7 @@ async def map_villages(
     llm: Any = None,
     source_artifact_ref: str = "",
     source_artifact_digest: str = "",
+    budget: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Dict[str, Any]]:
     """Map village names to clusters (flash-LLM enhanced, cached, fallback safe)."""
     return await _map_bodies(
@@ -335,6 +358,7 @@ async def map_villages(
         llm=llm,
         source_artifact_ref=source_artifact_ref,
         source_artifact_digest=source_artifact_digest,
+        budget=budget,
     )
 
 
@@ -346,6 +370,7 @@ async def map_water_bodies(
     llm: Any = None,
     source_artifact_ref: str = "",
     source_artifact_digest: str = "",
+    budget: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Dict[str, Any]]:
     """Map report water-body names to landuse-derived water bodies."""
     return await _map_bodies(
@@ -358,6 +383,7 @@ async def map_water_bodies(
         llm=llm,
         source_artifact_ref=source_artifact_ref,
         source_artifact_digest=source_artifact_digest,
+        budget=budget,
     )
 
 
@@ -380,6 +406,7 @@ async def _structured_mapping(
     report_text: str,
     *,
     require_evidence: bool = True,
+    timeout: Optional[float] = None,
 ) -> Optional[Dict[str, Dict[str, Any]]]:
     """Structured-output mapping {name -> {candidate_indexes, evidence}}.
 
@@ -387,16 +414,16 @@ async def _structured_mapping(
     usable entries, so the caller falls back to the text protocol.
     """
     try:
-        structured = model.with_structured_output(_GMappingSet, method="function_calling")
-    except Exception:
-        return None
-    try:
-        import asyncio
-
-        if asyncio.iscoroutinefunction(getattr(structured, "ainvoke", None)):
-            response = await structured.ainvoke(prompt)
-        else:
-            response = await asyncio.to_thread(structured.invoke, prompt)
+        from app.infrastructure.llm.structured import run_structured_output
+        response = await run_structured_output(
+            _GMappingSet,
+            [{"role": "user", "content": prompt}],
+            max_retries=0,
+            timeout=timeout,
+            temperature=0.1,
+            max_tokens=1200,
+            llm=model,
+        )
     except Exception:
         return None
     entries = getattr(response, "entries", None)
@@ -681,6 +708,7 @@ async def assign_villages_to_clusters(
     cache: Optional[Path] = None,
     source_artifact_ref: str = "",
     source_artifact_digest: str = "",
+    budget: Optional[Dict[str, Any]] = None,
 ) -> List["GazetteerEntry"]:
     """LLM-decided many-to-one village assignment -> aggregated gazetteer entries.
 
@@ -716,6 +744,7 @@ async def assign_villages_to_clusters(
         llm=llm,
         source_artifact_ref=source_artifact_ref,
         source_artifact_digest=source_artifact_digest,
+        budget=budget,
     )
     return village_gazetteer_entries(mapping, clusters)
 
@@ -733,6 +762,7 @@ async def assign_water_bodies(
     cache: Optional[Path] = None,
     source_artifact_ref: str = "",
     source_artifact_digest: str = "",
+    budget: Optional[Dict[str, Any]] = None,
 ) -> List["GazetteerEntry"]:
     """LLM-decided many-to-one water-name -> landuse water-body assignment.
 
@@ -763,6 +793,7 @@ async def assign_water_bodies(
         llm=llm,
         source_artifact_ref=source_artifact_ref,
         source_artifact_digest=source_artifact_digest,
+        budget=budget,
     )
     return water_gazetteer_entries(mapping, bodies)
 

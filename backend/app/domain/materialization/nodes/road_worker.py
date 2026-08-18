@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from app.domain.materialization.execute_state import ExecuteAgentState
-from app.domain.materialization.nodes.worker_common import _execution_intent_from_plan, _intent_list, _task_enabled, _task_execution_result
+from app.domain.materialization.nodes.worker_common import _attach_feature_lineage, _execution_intent_from_plan, _intent_list, _scenario_features_for_layer, _task_enabled, _task_execution_result
 from app.contracts.workflow.execution_plan_contracts import WorkerResult
 from app.infrastructure.logging import get_logger
 
@@ -24,6 +24,20 @@ def _road_strings(value) -> list[str]:
         return []
     values = value if isinstance(value, (list, tuple, set)) else [value]
     return sorted({str(item).strip() for item in values if str(item).strip()})
+
+
+def _single_plan_task_id(state: ExecuteAgentState) -> str:
+    """Read both typed ExecutionPlan and explicit v1 dict snapshots."""
+
+    plan = getattr(state, "execution_plan", None)
+    if isinstance(plan, dict):
+        tasks = list(plan.get("worker_tasks") or [])
+    else:
+        tasks = list(getattr(plan, "worker_tasks", []) or [])
+    if len(tasks) != 1:
+        return ""
+    task = tasks[0]
+    return str(task.get("task_id", "") if isinstance(task, dict) else getattr(task, "task_id", ""))
 
 
 def _road_kind(target) -> str | None:
@@ -318,6 +332,19 @@ def _road_worker(state: ExecuteAgentState) -> WorkerResult:
                 results.append(result)
         return results
 
+    def scenario_features(layers):
+        return [
+            item
+            for layer in layers
+            for item in _scenario_features_for_layer(
+                state, layer, generation_operation="road_worker"
+            )
+        ]
+
+    def with_lineage(result, features):
+        _attach_feature_lineage(result, features)
+        return result
+
     ports = getattr(state, "ports", None)
     planner = getattr(ports, "road_planner", None) if ports is not None else None
     if planner is not None:
@@ -332,13 +359,16 @@ def _road_worker(state: ExecuteAgentState) -> WorkerResult:
                         getattr(plan_result, "unresolved_items", None) or []
                     ),
                 )
-                return WorkerResult(
+                features = scenario_features(layers)
+                return with_lineage(WorkerResult(
                     worker_type="road",
                     task_results=task_results(layers, unresolved_items),
                     layers=layers,
                     unresolved_items=unresolved_items,
                     diagnostics=[{"code": "road_planner_port", "available": True}],
-                )
+                    scenario_features=features,
+                    task_id=_single_plan_task_id(state),
+                ), features)
         except Exception as e:
             logger.warning("[EXECUTE:road] planner port failed: %s", e)
 
@@ -374,7 +404,8 @@ def _road_worker(state: ExecuteAgentState) -> WorkerResult:
                 produced_target_ids=layer_target_ids(formal_road_layers),
                 unresolved_items=generator_unresolved_items,
             )
-            return WorkerResult(
+            features = scenario_features(formal_road_layers)
+            return with_lineage(WorkerResult(
                 worker_type="road",
                 task_results=task_results(
                     formal_road_layers,
@@ -383,7 +414,9 @@ def _road_worker(state: ExecuteAgentState) -> WorkerResult:
                 layers=list(layers),
                 unresolved_items=normalized_unresolved,
                 diagnostics=[{"code": "road_stage_generator", "ran": bool(result.get("ran"))}],
-            )
+                scenario_features=features,
+                task_id=_single_plan_task_id(state),
+            ), features)
         logger.info("[EXECUTE:road] stage generator skipped: %s", result.get("reason"))
         if generator_unresolved_items:
             normalized_unresolved = _normalize_road_unresolved_findings(

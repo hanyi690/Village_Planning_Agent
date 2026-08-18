@@ -25,7 +25,6 @@ from typing import Any, Dict, List, Optional, Tuple
 from app.contracts.workflow.parse_contracts import (
     AxisTarget,
     FacilityTarget,
-    ProjectTarget,
     RoadTarget,
     SpatialPreference,
     ZoneTarget,

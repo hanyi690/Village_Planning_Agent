@@ -273,6 +273,7 @@ async def assign_role_names(
     *,
     llm: Any = None,
     cache: Optional[Path] = None,
+    budget: Optional[Dict[str, Any]] = None,
 ) -> List["GazetteerEntry"]:
     """One role-parameterized grounding pass: derive candidates, let the LLM
     assign report names with evidence, aggregate into gazetteer entries."""
@@ -306,6 +307,7 @@ async def assign_role_names(
         report_text=report_text,
         cache=cache,
         llm=llm,
+        budget=budget,
     )
     return village_gazetteer_entries(
         mapping,
@@ -326,6 +328,7 @@ async def ground_report_facts(
     *,
     llm: Any = None,
     session_id: str = "",
+    budget: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, int]:
     """The complete GROUND flow over typed L1 facts.
 
@@ -341,6 +344,10 @@ async def ground_report_facts(
     ``gazetteer`` (callers that keep a ports adapter should refresh it).
     """
     from app.infrastructure.paths import session_run_dir
+    if budget is None:
+        from app.spatial.grounding.call_budget import new_ground_llm_budget
+
+        budget = new_ground_llm_budget()
 
     inventory = extract_spatial_inventory(report_text, facts, workspace)
     if llm is None:
@@ -365,6 +372,7 @@ async def ground_report_facts(
                 report_text,
                 llm=llm,
                 cache=_cache("village"),
+                budget=budget,
             )
         except Exception as exc:  # noqa: BLE001
             logger.warning("[report-grounder] village partition failed: %s", exc)
@@ -388,6 +396,7 @@ async def ground_report_facts(
                 report_text,
                 llm=llm,
                 cache=_cache(role),
+                budget=budget,
             )
         except Exception as exc:  # noqa: BLE001
             logger.warning("[report-grounder] role=%s failed: %s", role, exc)
@@ -456,6 +465,7 @@ async def _infer_village_meta(
     village_names: List[str],
     llm: Any = None,
     cache: Optional[Path] = None,
+    budget: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """LLM 从现状报告推导村庄元信息：自然村总数 + 每村方位/分布线索。
 
@@ -489,11 +499,6 @@ async def _infer_village_meta(
             total_count: int = _Field(default=0, ge=0, le=200)
             positions: list[_Pos] = _Field(default_factory=list)
 
-        model = llm
-        try:
-            structured = model.with_structured_output(_Meta, method="function_calling")
-        except Exception:
-            structured = None
         prompt = (
             "你是村庄规划 GIS 证据编译器。下面是某行政村的现状报告摘录与报告提到的自然村名。"
             "请推导：1) 本村共有多少个自然村（total_count，依据报告表述如“全村共有12个自然村”，"
@@ -505,11 +510,39 @@ async def _infer_village_meta(
         )
         import asyncio
 
-        if structured is not None:
-            response = await asyncio.wait_for(structured.ainvoke(prompt), timeout=45)
-            meta = getattr(response, "model_dump", lambda: {})()
-        else:
-            raw = await asyncio.wait_for(model.ainvoke(prompt), timeout=45)
+        from app.infrastructure.llm.structured import run_structured_output
+        from app.spatial.grounding.call_budget import (
+            reserve_ground_llm_call,
+            run_ground_llm_call,
+        )
+
+        structured_timeout = reserve_ground_llm_call(budget)
+        if structured_timeout is None:
+            return fallback
+        try:
+            async def _invoke_structured():
+                return await run_structured_output(
+                    _Meta,
+                    [{"role": "user", "content": prompt}],
+                    max_retries=1,
+                    timeout=structured_timeout,
+                    temperature=0.1,
+                    max_tokens=600,
+                    llm=llm,
+                )
+
+            response = await run_ground_llm_call(
+                budget, structured_timeout, _invoke_structured
+            )
+            meta = response.model_dump()
+        except Exception:
+            text_timeout = reserve_ground_llm_call(budget)
+            if text_timeout is None:
+                return fallback
+            async def _invoke_text():
+                return await llm.ainvoke(prompt)
+
+            raw = await run_ground_llm_call(budget, text_timeout, _invoke_text)
             content = getattr(raw, "content", "") or ""
             if isinstance(content, list):
                 content = "".join(content)
@@ -838,6 +871,7 @@ async def ground_village_partition(
     *,
     llm: Any = None,
     cache: Optional[Path] = None,
+    budget: Optional[Dict[str, Any]] = None,
 ) -> List["GazetteerEntry"]:
     """Collective natural-village grounding: assign ALL residential clusters
     across ALL report-named villages (many-to-one partition).
@@ -875,7 +909,7 @@ async def ground_village_partition(
 
     # LLM-driven village meta: natural-village count + per-village position
     # clues derived from the report (regex only as fallback).
-    meta = await _infer_village_meta(report_text, bases, llm, cache)
+    meta = await _infer_village_meta(report_text, bases, llm, cache, budget)
     n = int(meta.get("total_count") or 0) or inventory.total_village_count or len(todo)
     clues = dict(inventory.clues)
     clues.update(meta.get("clues") or {})
@@ -910,6 +944,7 @@ async def ground_village_partition(
                 report_text=report_text,
                 cache=cache,
                 llm=llm,
+                budget=budget,
             )
             if llm_mapping:
                 merged = dict(llm_mapping)
