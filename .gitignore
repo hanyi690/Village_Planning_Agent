@@ -76,6 +76,8 @@ frontend/out/
 frontend/node_modules/
 frontend/.env.local
 frontend/.next.bak
+frontend/.next.failed*/
+frontend/.next.stale*/
 # Testing
 .pytest_cache/
 .pytest-cache/
