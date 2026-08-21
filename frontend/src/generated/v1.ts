@@ -141,6 +141,52 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/source-layers": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Current Source Layers
+         * @description Expose configured current vectors and raster manifests.
+         *
+         *     This is context data, not planning output. DELIVER remains the only source
+         *     for generated/planned layers.
+         */
+        get: operations["get_current_source_layers_api_v1_source_layers_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/sessions/{session_id}/artifacts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Artifacts
+         * @description List artifact references present in the current checkpoint.
+         *
+         *     The client uses this index before reading payloads, so an absent artifact
+         *     is represented as a normal state instead of a burst of expected 404s.
+         */
+        get: operations["list_artifacts_api_v1_sessions__session_id__artifacts_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/sessions/{session_id}/artifacts/{artifact_key}": {
         parameters: {
             query?: never;
@@ -150,6 +196,103 @@ export interface paths {
         };
         /** Get Artifact */
         get: operations["get_artifact_api_v1_sessions__session_id__artifacts__artifact_key__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/planning/dependency-graph": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Dependency Graph
+         * @description Return the declared topic dependency graph used by the planner.
+         *
+         *     This is configuration metadata only. It does not infer dependencies from
+         *     report text and it does not claim that any node has been executed.
+         */
+        get: operations["get_dependency_graph_api_v1_planning_dependency_graph_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/sessions/{session_id}/evidence/query": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Query Session Evidence
+         * @description Answer a spatial question through one bounded evidence boundary.
+         *
+         *     The endpoint is read-only from the user's perspective.  It may hydrate
+         *     the in-process session context, but the response is composed from the
+         *     report/L1, session KG, bundle and optional external retrieval pipeline;
+         *     geometry remains bundle-authoritative and is returned only as a feature
+         *     reference inside ``EvidencePacket``.
+         */
+        post: operations["query_session_evidence_api_v1_sessions__session_id__evidence_query_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List persisted planning projects and sessions
+         * @description Return small, restart-safe metadata for the planning history sidebar.
+         *
+         *     The database layer already owns session persistence. This endpoint only
+         *     exposes identifiers and timestamps; user-provided village text, task text,
+         *     constraints, and uploaded content remain server-side.
+         */
+        get: operations["list_projects_api_v1_projects_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/sessions/{session_id}/positioning-trace": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Positioning Trace
+         * @description Return persisted step reports and stage coverage for one session.
+         *
+         *     This is a read-only API projection. It exposes saved stage summaries and
+         *     artifact references; it does not expose hidden model reasoning or create
+         *     any fallback planning output.
+         */
+        get: operations["get_positioning_trace_api_v1_sessions__session_id__positioning_trace_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -230,6 +373,209 @@ export interface components {
             /** Constraint Files */
             constraint_files?: string[] | null;
         };
+        /**
+         * BundleFeatureIdentity
+         * @description Stable identity of one feature in one immutable bundle snapshot.
+         */
+        BundleFeatureIdentity: {
+            /** Bundle Feature Bsm */
+            bundle_feature_bsm: string;
+            /**
+             * Canonical Name
+             * @default
+             */
+            canonical_name: string;
+            /**
+             * Entity Type
+             * @default
+             */
+            entity_type: string;
+            /**
+             * Role
+             * @default
+             */
+            role: string;
+            /** Aliases */
+            aliases?: string[];
+            /**
+             * Admin Code 12
+             * @default
+             */
+            admin_code_12: string;
+            /**
+             * Sequence Code 8
+             * @default
+             */
+            sequence_code_8: string;
+            /**
+             * Source Feature Id
+             * @default
+             */
+            source_feature_id: string;
+            /**
+             * Source Layer
+             * @default
+             */
+            source_layer: string;
+            /** Source Bsm */
+            source_bsm?: string | null;
+            /**
+             * Bsm Kind
+             * @default unknown
+             * @enum {string}
+             */
+            bsm_kind: "source" | "synthetic" | "unknown";
+            /**
+             * Geometry Digest
+             * @default
+             */
+            geometry_digest: string;
+            /**
+             * Bundle Snapshot Digest
+             * @default
+             */
+            bundle_snapshot_digest: string;
+            /**
+             * Crs
+             * @default EPSG:4326
+             */
+            crs: string;
+        };
+        /**
+         * CurrentSourceLayer
+         * @description A configured, authoritative current-state vector source.
+         */
+        CurrentSourceLayer: {
+            /** Source Name */
+            source_name: string;
+            /** Source Layer Type */
+            source_layer_type: string;
+            /** Layer Type */
+            layer_type: string;
+            /** Layer Name */
+            layer_name: string;
+            /** Display Role */
+            display_role: string;
+            /**
+             * Data Authority
+             * @default authoritative_current
+             * @constant
+             */
+            data_authority: "authoritative_current";
+            /**
+             * Requirement
+             * @default baseline
+             * @enum {string}
+             */
+            requirement: "baseline" | "mandatory" | "conditional" | "reference";
+            /**
+             * Crs
+             * @default EPSG:4326
+             */
+            crs: string;
+            /**
+             * Feature Count
+             * @default 0
+             */
+            feature_count: number;
+            /** Geojson */
+            geojson: {
+                [key: string]: unknown;
+            };
+            /** Metadata */
+            metadata?: {
+                [key: string]: unknown;
+            };
+        };
+        /**
+         * CurrentSourceLayerCollection
+         * @description Catalog-backed current GIS context, separate from DELIVER output.
+         */
+        CurrentSourceLayerCollection: {
+            /**
+             * Schema Version
+             * @default 1.0
+             * @constant
+             */
+            schema_version: "1.0";
+            /** Village Name */
+            village_name: string;
+            /**
+             * Source
+             * @default data_catalog
+             * @constant
+             */
+            source: "data_catalog";
+            /** Center */
+            center?: number[] | null;
+            /** Layers */
+            layers?: components["schemas"]["CurrentSourceLayer"][];
+            /** Rasters */
+            rasters?: components["schemas"]["CurrentSourceRaster"][];
+            /** Diagnostics */
+            diagnostics?: string[];
+        };
+        /**
+         * CurrentSourceRaster
+         * @description Safe public manifest for a configured raster source.
+         *
+         *     The local filesystem path is intentionally not exposed. Consumers use the
+         *     manifest to explain availability while terrain analysis reads the raster
+         *     through the backend catalog.
+         */
+        CurrentSourceRaster: {
+            /** Source Name */
+            source_name: string;
+            /** Layer Name */
+            layer_name: string;
+            /**
+             * Layer Type
+             * @enum {string}
+             */
+            layer_type: "dem" | "dom";
+            /**
+             * Format
+             * @default
+             */
+            format: string;
+            /**
+             * Crs
+             * @default
+             */
+            crs: string;
+            /**
+             * Available
+             * @default false
+             */
+            available: boolean;
+            /** Resolution */
+            resolution?: number | null;
+            /** Width */
+            width?: number | null;
+            /** Height */
+            height?: number | null;
+            /** Bands */
+            bands?: number | null;
+            /**
+             * Dtype
+             * @default
+             */
+            dtype: string;
+            /** Bounds */
+            bounds?: {
+                [key: string]: number;
+            };
+            /**
+             * Source Ref
+             * @default
+             */
+            source_ref: string;
+            /**
+             * Reason
+             * @default
+             */
+            reason: string;
+        };
         /** DeliveryProjection */
         DeliveryProjection: {
             /**
@@ -243,7 +589,7 @@ export interface components {
             /** Available */
             available: boolean;
             /** Delivery Status */
-            delivery_status?: ("complete" | "partial" | "diagnostic_only") | null;
+            delivery_status?: ("complete" | "partial" | "diagnostic_only" | "no_planning_output") | null;
             /**
              * Statutory Complete
              * @default false
@@ -294,10 +640,518 @@ export interface components {
              */
             resync_required: boolean;
         };
+        /** EvidenceBundle */
+        EvidenceBundle: {
+            /**
+             * Schema Version
+             * @default 1.0
+             */
+            schema_version: string;
+            /**
+             * Context Version
+             * @default
+             */
+            context_version: string;
+            /**
+             * Context Fingerprint
+             * @default
+             */
+            context_fingerprint: string;
+            /**
+             * Artifact Id
+             * @default
+             */
+            artifact_id: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at?: string;
+            /** Request */
+            request: string;
+            /**
+             * Facts
+             * @default []
+             */
+            facts: components["schemas"]["EvidenceFact"][];
+            /**
+             * Sources
+             * @default []
+             */
+            sources: components["schemas"]["EvidenceSource"][];
+            /**
+             * Confidence
+             * @default 0
+             */
+            confidence: number;
+            /**
+             * Unresolved
+             * @default []
+             */
+            unresolved: string[];
+            /**
+             * Conflicts
+             * @default []
+             */
+            conflicts: components["schemas"]["EvidenceConflict"][];
+            provenance?: components["schemas"]["Provenance"] | null;
+        };
+        /**
+         * EvidenceConflict
+         * @description Auditable relationship between facts returned by different sources.
+         */
+        EvidenceConflict: {
+            /** Relation */
+            relation: string;
+            /**
+             * Fact Refs
+             * @default []
+             */
+            fact_refs: string[];
+            /** Reason */
+            reason: string;
+            /**
+             * Subject Scope
+             * @default
+             */
+            subject_scope: string;
+            /**
+             * Counting Bases
+             * @default []
+             */
+            counting_bases: string[];
+        };
+        /** EvidenceFact */
+        EvidenceFact: {
+            /** Statement */
+            statement: string;
+            /**
+             * Confidence
+             * @default 1
+             */
+            confidence: number;
+            /**
+             * Source Refs
+             * @default []
+             */
+            source_refs: string[];
+            /**
+             * Spatial Refs
+             * @default []
+             */
+            spatial_refs: string[];
+            /**
+             * Fact Type
+             * @default statement
+             */
+            fact_type: string;
+            /**
+             * Fields
+             * @default {}
+             */
+            fields: {
+                [key: string]: string;
+            };
+            /**
+             * Feature Bsm
+             * @default
+             */
+            feature_bsm: string;
+            /**
+             * Related Parcel Bsms
+             * @default []
+             */
+            related_parcel_bsms: string[];
+            /**
+             * Evidence Span
+             * @default
+             */
+            evidence_span: string;
+            /**
+             * Source Locator
+             * @default
+             */
+            source_locator: string;
+            /**
+             * Support Relation
+             * @default quotation
+             */
+            support_relation: string;
+            /**
+             * Support Relations
+             * @default []
+             */
+            support_relations: string[];
+            /**
+             * Related Fact Refs
+             * @default []
+             */
+            related_fact_refs: string[];
+            /**
+             * Status
+             * @default verified
+             */
+            status: string;
+            /**
+             * Evidence Role
+             * @default
+             */
+            evidence_role: string;
+            /**
+             * Source Kind
+             * @default
+             */
+            source_kind: string;
+            /**
+             * Spatial Granularity
+             * @default none
+             */
+            spatial_granularity: string;
+            /**
+             * Planning Use
+             * @default context
+             */
+            planning_use: string;
+        };
+        /**
+         * EvidencePacket
+         * @description Small, auditable retrieval result; full reports are excluded by default.
+         */
+        EvidencePacket: {
+            /**
+             * Schema Version
+             * @default 1.0
+             */
+            schema_version: string;
+            /**
+             * Context Version
+             * @default
+             */
+            context_version: string;
+            /**
+             * Context Fingerprint
+             * @default
+             */
+            context_fingerprint: string;
+            /**
+             * Artifact Id
+             * @default
+             */
+            artifact_id: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at?: string;
+            /** Request */
+            request: string;
+            /**
+             * Query Fingerprint
+             * @default
+             */
+            query_fingerprint: string;
+            /**
+             * Bundle Snapshot Digest
+             * @default
+             */
+            bundle_snapshot_digest: string;
+            /**
+             * Kg Version
+             * @default
+             */
+            kg_version: string;
+            /**
+             * L1 Snapshot Ref
+             * @default
+             */
+            l1_snapshot_ref: string;
+            /** L1 Scope Refs */
+            l1_scope_refs?: string[];
+            /** Candidate Refs */
+            candidate_refs?: components["schemas"]["FeatureEvidenceRef"][];
+            /**
+             * Candidate Total
+             * @default 0
+             */
+            candidate_total: number;
+            /**
+             * Candidate Offset
+             * @default 0
+             */
+            candidate_offset: number;
+            /**
+             * Candidate Limit
+             * @default 12
+             */
+            candidate_limit: number;
+            /**
+             * Candidates Truncated
+             * @default false
+             */
+            candidates_truncated: boolean;
+            /** Next Candidate Offset */
+            next_candidate_offset?: number | null;
+            /** Relation Evidence */
+            relation_evidence?: components["schemas"]["SpatialRelationEvidence"][];
+            /** Source Spans */
+            source_spans?: string[];
+            /** External Refs */
+            external_refs?: string[];
+            /**
+             * Ambiguity Status
+             * @default unresolved
+             * @enum {string}
+             */
+            ambiguity_status: "resolved" | "multiple" | "unresolved";
+            /**
+             * Sufficiency
+             * @default insufficient
+             * @enum {string}
+             */
+            sufficiency: "sufficient" | "partial" | "insufficient";
+            /** Missing Evidence */
+            missing_evidence?: string[];
+            /** Query Trace */
+            query_trace?: {
+                [key: string]: unknown;
+            }[];
+        };
+        /**
+         * EvidenceQueryRequest
+         * @description Frontend-safe request for the unified KG/bundle/L1 evidence path.
+         */
+        EvidenceQueryRequest: {
+            /** Query */
+            query: string;
+            /**
+             * Village Name
+             * @default
+             */
+            village_name: string;
+            /**
+             * Request Type
+             * @default spatial_lookup
+             * @enum {string}
+             */
+            request_type: "spatial_lookup" | "fact_check" | "evidence_gap";
+            /**
+             * Stage
+             * @default GROUND
+             */
+            stage: string;
+            /**
+             * Dimension Key
+             * @default
+             */
+            dimension_key: string;
+            /**
+             * Query Purpose
+             * @default fact_check
+             */
+            query_purpose: string;
+            /** Context Refs */
+            context_refs?: string[];
+            /** Questions */
+            questions?: string[];
+            /** Required Facts */
+            required_facts?: string[];
+            /** Entity Scope */
+            entity_scope?: string[];
+            /**
+             * Candidate Offset
+             * @default 0
+             */
+            candidate_offset: number;
+            /**
+             * Candidate Limit
+             * @default 12
+             */
+            candidate_limit: number;
+            /**
+             * Include External
+             * @default false
+             */
+            include_external: boolean;
+            /** External Categories */
+            external_categories?: string[];
+        };
+        /**
+         * EvidenceQueryResponse
+         * @description Bounded answer that can be rendered by the map and planning UI.
+         */
+        EvidenceQueryResponse: {
+            /**
+             * Schema Version
+             * @default 1.0
+             * @constant
+             */
+            schema_version: "1.0";
+            /** Session Id */
+            session_id: string;
+            /** Request */
+            request: string;
+            evidence_bundle: components["schemas"]["EvidenceBundle"];
+            spatial_cognition?: components["schemas"]["SpatialCognitionEvidence"] | null;
+            evidence_packet?: components["schemas"]["EvidencePacket"] | null;
+        };
+        /** EvidenceSource */
+        EvidenceSource: {
+            /** Source Type */
+            source_type: string;
+            /** Reference */
+            reference: string;
+            /**
+             * Retrieved At
+             * @default
+             */
+            retrieved_at: string;
+            /**
+             * Confidence
+             * @default 1
+             */
+            confidence: number;
+            /**
+             * Evidence Role
+             * @default context
+             */
+            evidence_role: string;
+            /**
+             * Authority
+             * @default advisory
+             */
+            authority: string;
+            /**
+             * Availability
+             * @default available
+             */
+            availability: string;
+            /**
+             * Supports
+             * @default []
+             */
+            supports: string[];
+            /**
+             * Snapshot Ref
+             * @default
+             */
+            snapshot_ref: string;
+        };
+        /**
+         * FeatureEvidenceRef
+         * @description A reference to a bundle/KG feature; it never embeds executable geometry.
+         */
+        FeatureEvidenceRef: {
+            identity: components["schemas"]["BundleFeatureIdentity"];
+            /** Entity Refs */
+            entity_refs?: string[];
+            /** Geometry Ref */
+            geometry_ref?: string | null;
+            /**
+             * Geometry Authority
+             * @default bundle
+             * @enum {string}
+             */
+            geometry_authority: "bundle" | "none";
+            /** Relation Refs */
+            relation_refs?: string[];
+            /** Related Parcel Bsms */
+            related_parcel_bsms?: string[];
+            /** Provenance Refs */
+            provenance_refs?: string[];
+            /** L1 Fact Refs */
+            l1_fact_refs?: string[];
+            /**
+             * L1 Snapshot Ref
+             * @default
+             */
+            l1_snapshot_ref: string;
+            /** Selection Evidence */
+            selection_evidence?: {
+                [key: string]: number;
+            };
+            /**
+             * Source Authority Score
+             * @default 0
+             */
+            source_authority_score: number;
+            /**
+             * Semantic Match Score
+             * @default 0
+             */
+            semantic_match_score: number;
+            /**
+             * Spatial Support Score
+             * @default 0
+             */
+            spatial_support_score: number;
+            /**
+             * External Support Score
+             * @default 0
+             */
+            external_support_score: number;
+            /**
+             * Retrieval Score
+             * @default 0
+             */
+            retrieval_score: number;
+            /** Selection Confidence */
+            selection_confidence?: number | null;
+        };
         /** HTTPValidationError */
         HTTPValidationError: {
             /** Detail */
             detail?: components["schemas"]["ValidationError"][];
+        };
+        /**
+         * HistoryProject
+         * @description A project grouped with its persisted planning sessions.
+         */
+        HistoryProject: {
+            /** Name */
+            name: string;
+            /** Display Name */
+            display_name: string;
+            /**
+             * Session Count
+             * @default 0
+             */
+            session_count: number;
+            /** Sessions */
+            sessions?: components["schemas"]["HistorySession"][];
+        };
+        /**
+         * HistoryProjectList
+         * @description Stable response for the restart-safe planning history list.
+         */
+        HistoryProjectList: {
+            /**
+             * Schema Version
+             * @default 1.0
+             * @constant
+             */
+            schema_version: "1.0";
+            /** Projects */
+            projects?: components["schemas"]["HistoryProject"][];
+        };
+        /**
+         * HistorySession
+         * @description Minimal persisted-session metadata exposed to the history sidebar.
+         */
+        HistorySession: {
+            /** Session Id */
+            session_id: string;
+            /** Timestamp */
+            timestamp: string;
+            /**
+             * Checkpoint Count
+             * @default 0
+             */
+            checkpoint_count: number;
+            /**
+             * Has Final Report
+             * @default false
+             */
+            has_final_report: boolean;
         };
         /** HumanReviewDecision */
         HumanReviewDecision: {
@@ -382,9 +1236,33 @@ export interface components {
              */
             snapshot_checksum: string;
             /** Delivery Status */
-            delivery_status?: ("complete" | "partial" | "diagnostic_only") | null;
+            delivery_status?: ("complete" | "partial" | "diagnostic_only" | "no_planning_output") | null;
             /** Layers */
             layers?: components["schemas"]["MapLayer"][];
+        };
+        /** Provenance */
+        Provenance: {
+            /** Source */
+            source: string;
+            /** Run Id */
+            run_id: string;
+            /** Module */
+            module: string;
+            /**
+             * Timestamp
+             * Format: date-time
+             */
+            timestamp?: string;
+            /** Trace */
+            trace?: string[];
+            /** Natural Language Description */
+            natural_language_description?: string | null;
+            /** Spatial Hint */
+            spatial_hint?: string | null;
+            /** Reasoning Trace */
+            reasoning_trace?: string | null;
+            /** Raw Text */
+            raw_text?: string | null;
         };
         /** ResourceLinks */
         ResourceLinks: {
@@ -509,7 +1387,7 @@ export interface components {
              */
             human_review_pending: boolean;
             /** Delivery Status */
-            delivery_status?: ("complete" | "partial" | "diagnostic_only") | null;
+            delivery_status?: ("complete" | "partial" | "diagnostic_only" | "no_planning_output") | null;
             /**
              * Statutory Complete
              * @default false
@@ -521,6 +1399,69 @@ export interface components {
              */
             last_event_seq: number;
             links: components["schemas"]["ResourceLinks"];
+        };
+        /**
+         * SpatialCognitionEvidence
+         * @description KG + bundle spatial cognition, separate from factual evidence.
+         */
+        SpatialCognitionEvidence: {
+            /**
+             * Village Overview
+             * @default
+             */
+            village_overview: string;
+            /**
+             * Spatial Pattern
+             * @default
+             */
+            spatial_pattern: string;
+            /**
+             * Constraint Coverage
+             * @default
+             */
+            constraint_coverage: string;
+            /**
+             * Topology Facts
+             * @default []
+             */
+            topology_facts: string[];
+            /**
+             * Entity Annotations
+             * @default []
+             */
+            entity_annotations: string[];
+            /**
+             * Kg Confidence
+             * @default 0
+             */
+            kg_confidence: number;
+        };
+        /** SpatialRelationEvidence */
+        SpatialRelationEvidence: {
+            /** Relation Id */
+            relation_id: string;
+            subject: components["schemas"]["FeatureEvidenceRef"];
+            /** Predicate */
+            predicate: string;
+            object: components["schemas"]["FeatureEvidenceRef"];
+            /** Metric Value */
+            metric_value?: number | null;
+            /** Metric Unit */
+            metric_unit?: string | null;
+            /** Tolerance */
+            tolerance?: number | null;
+            /**
+             * Crs
+             * @default EPSG:4326
+             */
+            crs: string;
+            /**
+             * Computation Method
+             * @default
+             */
+            computation_method: string;
+            /** Provenance Refs */
+            provenance_refs?: string[];
         };
         /** ValidationError */
         ValidationError: {
@@ -839,6 +1780,70 @@ export interface operations {
             };
         };
     };
+    get_current_source_layers_api_v1_source_layers_get: {
+        parameters: {
+            query?: {
+                village_name?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CurrentSourceLayerCollection"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_artifacts_api_v1_sessions__session_id__artifacts_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                session_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     get_artifact_api_v1_sessions__session_id__artifacts__artifact_key__get: {
         parameters: {
             query?: never;
@@ -846,6 +1851,116 @@ export interface operations {
             path: {
                 session_id: string;
                 artifact_key: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_dependency_graph_api_v1_planning_dependency_graph_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+        };
+    };
+    query_session_evidence_api_v1_sessions__session_id__evidence_query_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                session_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["EvidenceQueryRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EvidenceQueryResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_projects_api_v1_projects_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HistoryProjectList"];
+                };
+            };
+        };
+    };
+    get_positioning_trace_api_v1_sessions__session_id__positioning_trace_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                session_id: string;
             };
             cookie?: never;
         };

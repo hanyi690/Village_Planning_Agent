@@ -1,19 +1,23 @@
 import { classifyLanduseZone } from '@/features/planning/constants/gis';
 import { normalizeGisLayers } from '@/features/planning/utils/gis-normalize';
 import type { GISLayerConfig, GeoJsonFeatureCollection } from '@/types/message/message-types';
-
-interface OfflineBasemapPayload {
-  villageName?: string;
-  center?: [number, number];
-  layers?: Array<Record<string, unknown>>;
-}
+import { planningApi } from '@/features/planning/api';
+import type { CurrentSourceRaster } from '@/features/planning/api/types';
 
 let cachedLayers: GISLayerConfig[] | null = null;
 let cachedCenter: [number, number] | null = null;
-let request: Promise<{ layers: GISLayerConfig[]; center: [number, number] | null }> | null = null;
+let cachedRasters: CurrentSourceRaster[] = [];
+let cachedDiagnostics: string[] = [];
+let request: Promise<CurrentSourceLayersResult> | null = null;
 
-const OFFLINE_BASEMAP_URL = '/basemap/jintian-offline.json';
 const DEFAULT_CENTER: [number, number] = [116.0735, 24.8317];
+
+export interface CurrentSourceLayersResult {
+  layers: GISLayerConfig[];
+  center: [number, number] | null;
+  rasters: CurrentSourceRaster[];
+  diagnostics: string[];
+}
 
 const OFFLINE_LANDUSE_COLORS: Record<string, { color: string; stroke: string }> = {
   农业用地: { color: '#D9C84A', stroke: '#7A6A28' },
@@ -94,30 +98,28 @@ export function styleOfflineBasemapLayers(layers: GISLayerConfig[]): GISLayerCon
   return layers.map(styleOfflineBasemapLayer);
 }
 
-export async function fetchOfflineBasemap(): Promise<{
-  layers: GISLayerConfig[];
-  center: [number, number] | null;
-}> {
+export async function fetchCurrentSourceLayers(villageName = '金田村'): Promise<CurrentSourceLayersResult> {
   if (cachedLayers) {
-    return { layers: cachedLayers, center: cachedCenter };
+    return {
+      layers: cachedLayers,
+      center: cachedCenter,
+      rasters: cachedRasters,
+      diagnostics: cachedDiagnostics,
+    };
   }
   if (request) return request;
 
-  request = fetch(OFFLINE_BASEMAP_URL, { cache: 'force-cache' })
-    .then(async (response) => {
-      if (!response.ok) {
-        throw new Error(`离线底图返回 HTTP ${response.status}`);
-      }
-      return response.json() as Promise<OfflineBasemapPayload>;
-    })
+  request = planningApi.getCurrentSourceLayers(villageName)
     .then((payload) => {
-      const layers = styleOfflineBasemapLayers(normalizeGisLayers(payload.layers ?? []));
+      const layers = styleOfflineBasemapLayers(normalizeGisLayers(payload.layers));
       const center = Array.isArray(payload.center) && payload.center.length === 2
         ? [Number(payload.center[0]), Number(payload.center[1])] as [number, number]
         : DEFAULT_CENTER;
       cachedLayers = layers;
       cachedCenter = center;
-      return { layers, center };
+      cachedRasters = payload.rasters;
+      cachedDiagnostics = payload.diagnostics;
+      return { layers, center, rasters: payload.rasters, diagnostics: payload.diagnostics };
     })
     .finally(() => {
       request = null;

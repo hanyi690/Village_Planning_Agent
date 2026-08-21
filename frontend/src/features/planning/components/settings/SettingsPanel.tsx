@@ -90,25 +90,13 @@ export default function SettingsPanel() {
   const setStepMode = usePlanningStore((state) => state.setStepMode);
   const sessionId = usePlanningStore((state) => state.sessionId);
 
-  const [ragLoading, setRagLoading] = React.useState(false);
   const [stepLoading, setStepLoading] = React.useState(false);
 
-  const handleRagToggle = async (layer: number) => {
+  const handleRagToggle = (layer: number) => {
     toggleLayerRag(layer);
-
-    if (!sessionId) return;
-
-    const newConfig = { ...ragLayerConfig, [layer]: !ragLayerConfig[layer] };
-    setRagLoading(true);
-
-    try {
-      await planningApi.updateRagConfig(sessionId, { rag_layer_config: newConfig });
-    } catch (error) {
-      console.error('[Settings] Failed to sync RAG config:', error);
-      toggleLayerRag(layer);
-    } finally {
-      setRagLoading(false);
-    }
+    // v1: RAG layer toggles are local-only; backend runtime config endpoint was removed.
+    void layer;
+    void sessionId;
   };
 
   const handleStepModeToggle = async () => {
@@ -167,7 +155,7 @@ export default function SettingsPanel() {
                 label={LAYER_VALUE_MAP[layer]}
                 enabled={ragLayerConfig[layer] ?? true}
                 onToggle={() => handleRagToggle(layer)}
-                loading={ragLoading}
+                loading={false}
               />
             ))}
           </div>

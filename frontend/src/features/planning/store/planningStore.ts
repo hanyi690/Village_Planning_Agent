@@ -31,6 +31,12 @@ import type {
 import { createErrorMessage } from "../utils";
 import { normalizeGisLayers } from "../utils/gis-normalize";
 import {
+  isSpatialWorkflowPhase,
+  isL3HumanReview,
+  pausedStageToLayer,
+} from "../utils/spatial-phase";
+import type { HumanReviewItem, HumanReviewListResponse } from "../api/types";
+import {
   loadDeletedSessionIds,
   saveDeletedSessionIds,
 } from "@/features/planning/utils/deleted-sessions-storage";
@@ -205,6 +211,10 @@ import {
   getDimensionsByLayer,
   getDimensionLayer,
 } from "../config/dimensions";
+import {
+  getHighestActiveLayer,
+  layerHasActivity,
+} from "../utils/step-mode-review";
 
 // ============================================
 // State Types
@@ -285,6 +295,8 @@ export interface PlanningState {
   township?: string;
   planningPeriod?: string;
   status: Status;
+  /** Backend-authoritative active stage used to prevent stale event replay from claiming later layers are done. */
+  authoritativeActiveStage: string | null;
 
   // Agent State (Single Source of Truth)
   phase: string;
@@ -406,7 +418,7 @@ export interface PlanningState {
   /** Delivery projection: available, delivery_status, statutory_complete, snapshot_checksum */
   delivery: {
     available: boolean;
-    delivery_status: 'complete' | 'partial' | 'diagnostic_only' | null;
+    delivery_status: 'complete' | 'partial' | 'diagnostic_only' | 'no_planning_output' | null;
     statutory_complete: boolean;
     snapshot_checksum: string;
     deferral_summary: Record<string, unknown>;
@@ -420,7 +432,7 @@ export interface PlanningState {
   humanReview: {
     event_id: string | null;
     paused_stage: string;
-    items: Array<Record<string, unknown>>;
+    items: HumanReviewItem[];
   } | null;
 }
 
@@ -514,6 +526,7 @@ function createInitialState(conversationId: string): PlanningState {
     township: undefined,
     planningPeriod: undefined,
     status: "idle",
+    authoritativeActiveStage: null,
 
     // Agent State
     phase: "init",
@@ -800,6 +813,7 @@ export interface PlanningActions {
   setResyncRequired: (required: boolean) => void;
   setHumanReview: (review: PlanningState['humanReview']) => void;
   clearHumanReview: () => void;
+  refreshHumanReview: (sessionId?: string) => Promise<void>;
 
   /** Apply authoritative /map-layers layers into the map snapshot. */
   applyMapLayers: (layers: GISLayerConfig[], snapshotChecksum?: string) => void;
@@ -834,6 +848,66 @@ function restoreGisLayersFromStatus(
 // ============================================
 // SSE Event Handler
 // ============================================
+
+function applyHumanReviewResponse(
+  state: PlanningState,
+  review: HumanReviewListResponse,
+): void {
+  if (!review.event_id && review.pending_items.length === 0) {
+    // Clear an old optimistic lock when the backend reports no active review.
+    // Keeping it causes the next decision to target a stale checkpoint.
+    state.humanReview = null;
+    state.pendingReviewLayer = null;
+    return;
+  }
+  const pausedStage =
+    review.paused_stage
+    || review.interrupt_info?.paused_stage
+    || review.pending_items[0]?.stage
+    || '';
+  state.humanReview = {
+    event_id: review.event_id ?? null,
+    paused_stage: pausedStage,
+    items: review.pending_items,
+  };
+  const layer = pausedStageToLayer(pausedStage);
+  if (layer) {
+    state.pendingReviewLayer = layer;
+    state.lastPauseLayer = layer;
+  }
+  state.isPaused = true;
+  if (state.status !== 'revising' && state.status !== 'failed') {
+    state.status = 'paused';
+  }
+}
+
+function applyHumanReviewEventPayload(
+  state: PlanningState,
+  data: Record<string, unknown>,
+): void {
+  const items = Array.isArray(data.items)
+    ? (data.items as unknown as HumanReviewItem[])
+    : [];
+  const eventId = typeof data.event_id === 'string' ? data.event_id : null;
+  const pausedStage = typeof data.paused_stage === 'string' ? data.paused_stage : '';
+  if (!eventId && items.length === 0) {
+    return;
+  }
+  state.humanReview = {
+    event_id: eventId,
+    paused_stage: pausedStage,
+    items,
+  };
+  const layer = pausedStageToLayer(pausedStage);
+  if (layer) {
+    state.pendingReviewLayer = layer;
+    state.lastPauseLayer = layer;
+  }
+  state.isPaused = true;
+  if (state.status !== 'revising' && state.status !== 'failed') {
+    state.status = 'paused';
+  }
+}
 
 function handleSSEEventInStore(state: PlanningState, event: StoreEvent): void {
   const eventType = event.type;
@@ -889,10 +963,9 @@ function handleSSEEventInStore(state: PlanningState, event: StoreEvent): void {
 
     case "human_review":
     case "human_review_paused": {
-      // A HUMAN checkpoint is active. The UI should pull /human-review for the
-      // current event_id and items. We do not fabricate items from the payload.
       state.status = "paused";
       state.isPaused = true;
+      applyHumanReviewEventPayload(state, data);
       break;
     }
 
@@ -1097,10 +1170,10 @@ function handleSSEEventInStore(state: PlanningState, event: StoreEvent): void {
       const dimensionKey = dimData.dimension_key || "";
       const key = buildDimensionProgressKey(layer, dimensionKey);
 
-      // 获取内容：优先使用 full_content，否则从 reports 状态获取（dimension_delta 已累积）
+      // 获取内容：优先使用 full_content，否则保留已有累积内容（dimension_delta）
       const lk = `layer${layer}` as keyof Reports;
-      const content =
-        dimData.full_content || state.reports[lk]?.[dimensionKey] || "";
+      const existingContent = state.reports[lk]?.[dimensionKey] || "";
+      const content = dimData.full_content || existingContent;
 
       // Update dimensionProgress
       state.dimensionProgress[key] = {
@@ -1224,9 +1297,19 @@ function handleSSEEventInStore(state: PlanningState, event: StoreEvent): void {
         expectedCount > 0 &&
         state.status !== "paused"
       ) {
-        state.previous_layer = layer;
-        state.status = "paused";
-        deriveUIStateInStore(state); // 重新派生 isPaused / pendingReviewLayer
+        const phaseLayer = phaseToLayer(state.phase) ?? layer;
+        const highestActive = getHighestActiveLayer(
+          state.reports,
+          state.dimensionProgress,
+          state.executingDimensions || [],
+          phaseLayer,
+        );
+        // Ignore stale dimension_complete for a layer we've already advanced past.
+        if (layer >= phaseLayer && layer >= highestActive) {
+          state.previous_layer = layer;
+          state.status = "paused";
+          deriveUIStateInStore(state);
+        }
       }
       break;
     }
@@ -1966,34 +2049,44 @@ function handleSSEEventInStore(state: PlanningState, event: StoreEvent): void {
 function inferAwaitingReviewLayer(state: PlanningState): number | null {
   if (!state.step_mode) return null;
   if (state.status === "revising" || state.status === "completed" || state.status === "failed") return null;
+  // After approve the UI briefly shows planning while the backend resumes; do not
+  // re-infer L1/L2 pause until an explicit interrupt or dimension_complete pause.
+  if (state.status === "planning") return null;
 
-  const hasLayerReports = (layer: number) => {
-    const key = `layer${layer}` as keyof Reports;
-    return Object.keys(state.reports[key] || {}).length > 0;
-  };
+  const hasBackendInterrupt =
+    Boolean(state.humanReview?.event_id) ||
+    Boolean(state.interruptInfo?.layer);
+  const locallyPausedForReview =
+    state.status === "paused"
+    && (state.previous_layer > 0 || state.lastPauseLayer > 0);
+  if (!hasBackendInterrupt && !locallyPausedForReview) return null;
 
-  const hasLayerProgress = (layer: number) =>
-    Object.keys(state.dimensionProgress || {}).some((key) => key.startsWith(`${layer}_`));
+  const executingDimensions = state.executingDimensions || [];
+  if (executingDimensions.length > 0) return null;
 
-  const hasExecuting = (state.executingDimensions || []).length > 0;
   const phaseLayer = phaseToLayer(state.phase);
+  const highestActive = getHighestActiveLayer(
+    state.reports,
+    state.dimensionProgress,
+    executingDimensions,
+    phaseLayer,
+  );
 
-  // Highest completed layer that has not been approved into the next layer yet.
-  // This fixes cases where backend/local restore lost the explicit layer_paused event:
-  // e.g. Layer 2 is fully complete, Layer 3 has not started, but the review panel vanished.
   for (let layer = 3; layer >= 1; layer--) {
     if (!state.completedLayers[layer as 1 | 2 | 3]) continue;
 
-    const nextLayer = layer + 1;
-    const nextLayerAlreadyStarted =
-      nextLayer <= 3 &&
-      (hasLayerReports(nextLayer) ||
-        hasLayerProgress(nextLayer) ||
-        (phaseLayer !== null && phaseLayer > layer));
+    // Already working in a higher layer — do not re-prompt for L1/L2 review.
+    if (layer < highestActive) continue;
 
-    if (!nextLayerAlreadyStarted && !hasExecuting) {
-      return layer;
+    const nextLayer = layer + 1;
+    if (nextLayer <= 3) {
+      const nextStarted =
+        nextLayer <= highestActive
+        || layerHasActivity(nextLayer as 1 | 2 | 3, state.reports, state.dimensionProgress);
+      if (nextStarted) continue;
     }
+
+    return layer;
   }
 
   return null;
@@ -2026,6 +2119,17 @@ function deriveUIStateInStore(state: PlanningState): void {
     3: state.completedDimensions.layer3.length >= totalDims(3) && totalDims(3) > 0,
   };
 
+  // Durable event replay can contain optimistic/future progress from an old
+  // client. The backend /state projection is authoritative for the active
+  // stage, so later layers must not appear complete while l1/l2/l3 is active.
+  const activeStageMatch = state.authoritativeActiveStage?.match(/^l([1-3])$/i);
+  const activeStageLayer = activeStageMatch ? Number(activeStageMatch[1]) : null;
+  if (activeStageLayer && state.status !== "completed") {
+    for (let layer = activeStageLayer + 1; layer <= 3; layer += 1) {
+      state.completedLayers[layer as 1 | 2 | 3] = false;
+    }
+  }
+
   // Derive pause state from explicit backend interrupt OR robust local inference.
   // The inference is important when layer_paused/layer_completed SSE is missed or page state is restored:
   // if a layer is complete and the next layer has not started, step mode means the UI must show review controls.
@@ -2035,6 +2139,13 @@ function deriveUIStateInStore(state: PlanningState): void {
   const inferredPauseLayer = inferAwaitingReviewLayer(state);
 
   state.isPaused = state.status === "paused" || inferredPauseLayer !== null;
+  if (isL3HumanReview(state.humanReview)) {
+    state.isPaused = true;
+    state.pendingReviewLayer = 3;
+    if (state.status !== "revising" && state.status !== "failed") {
+      state.status = "paused";
+    }
+  }
   state.pendingReviewLayer =
     explicitPauseLayer && state.status === "paused"
       ? explicitPauseLayer
@@ -2255,6 +2366,7 @@ export const usePlanningStore = create<PlanningState & PlanningActions>()(
     // Backend sync
     syncBackendState: (backendData) =>
       set((state) => {
+        const hasAuthoritativeStage = backendData.active_stage !== undefined;
         const normalizedStatus = normalizePlanningStatus(backendData.status);
         const hasStatusChange =
           normalizedStatus !== undefined && normalizedStatus !== state.status;
@@ -2300,7 +2412,8 @@ export const usePlanningStore = create<PlanningState & PlanningActions>()(
           !hasStepModeChange &&
           !hasRagConfigChange &&
           !hasGisLayoutToRestore &&
-          !hasProjectContextChange
+          !hasProjectContextChange &&
+          !hasAuthoritativeStage
         ) {
           return;
         }
@@ -2310,6 +2423,9 @@ export const usePlanningStore = create<PlanningState & PlanningActions>()(
           state.status = normalizedStatus;
         }
         if (backendData.phase) state.phase = backendData.phase;
+        if (backendData.active_stage !== undefined) {
+          state.authoritativeActiveStage = backendData.active_stage || null;
+        }
         if (backendData.current_wave)
           state.currentWave = backendData.current_wave;
 
@@ -2327,8 +2443,18 @@ export const usePlanningStore = create<PlanningState & PlanningActions>()(
               downloads: [],
             };
           }
-          state.delivery.delivery_status = backendData.delivery_status;
-          state.delivery.available = backendData.delivery_status !== null;
+          const delivery = state.delivery;
+          delivery.delivery_status = backendData.delivery_status;
+          delivery.available = backendData.delivery_status !== null;
+          if (backendData.delivery_status === 'diagnostic_only') {
+            state.status = 'failed';
+            state.isPaused = false;
+            state.pendingReviewLayer = null;
+            state.executingDimensions = [];
+            state.gisGenerating = false;
+            state.gisTriggerPending = false;
+            state.delivery = null;
+          }
         }
         if (backendData.statutory_complete !== undefined && state.delivery) {
           state.delivery.statutory_complete = backendData.statutory_complete;
@@ -2338,6 +2464,12 @@ export const usePlanningStore = create<PlanningState & PlanningActions>()(
           if (backendData.human_review_pending && !state.humanReview) {
             state.humanReview = { event_id: null, paused_stage: '', items: [] };
           }
+        }
+        if (backendData.phase && isSpatialWorkflowPhase(backendData.phase)) {
+          // Entering a spatial phase should keep the map tab active, but it
+          // must not re-arm the one-shot GIS probe on every status poll.
+          state.isRightPanelExpanded = true;
+          state.processPanelTab = "map";
         }
         // Note: reports 不再从后端同步，前端通过 SSE 或 API 获取
         if (backendData.completed_dimensions) {
@@ -2652,10 +2784,22 @@ export const usePlanningStore = create<PlanningState & PlanningActions>()(
       }),
 
     // SSE Event handling
-    handleSSEEvent: (event) =>
+    handleSSEEvent: (event) => {
       set((state) => {
         handleSSEEventInStore(state, event);
-      }),
+      });
+      if (event.type === "human_review" || event.type === "human_review_paused") {
+        const data = (event.data as Record<string, unknown>) || {};
+        const hasItems = Array.isArray(data.items) && data.items.length > 0;
+        const hasEventId = typeof data.event_id === "string" && data.event_id.length > 0;
+        if (hasItems || hasEventId) {
+          void _get().refreshHumanReview();
+        }
+      }
+      if (event.type === "layer_paused") {
+        void _get().refreshHumanReview();
+      }
+    },
 
     // SSE Reconnect trigger - increment to trigger reconnect
     triggerSseReconnect: () =>
@@ -2793,6 +2937,16 @@ export const usePlanningStore = create<PlanningState & PlanningActions>()(
       set((state) => {
         state.humanReview = null;
       }),
+    refreshHumanReview: async (sessionId) => {
+      const targetSessionId = sessionId ?? _get().sessionId;
+      if (!targetSessionId) return;
+      const { planningApi } = await import("../api");
+      const review = await planningApi.getHumanReview(targetSessionId);
+      set((state) => {
+        applyHumanReviewResponse(state, review);
+        deriveUIStateInStore(state);
+      });
+    },
 
     applyMapLayers: (layers, snapshotChecksum) =>
       set((state) => {
@@ -2830,9 +2984,15 @@ export const usePlanningStore = create<PlanningState & PlanningActions>()(
   })),
 );
 
+declare global {
+  interface Window {
+    __PLANNING_STORE__?: typeof usePlanningStore;
+  }
+}
+
 // Expose store to window for Playwright E2E tests (dev/test only)
 if (typeof window !== 'undefined' && process.env.NODE_ENV !== 'production') {
-  (window as any).__PLANNING_STORE__ = usePlanningStore;
+  window.__PLANNING_STORE__ = usePlanningStore;
 }
 
 // ============================================

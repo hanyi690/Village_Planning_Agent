@@ -150,14 +150,8 @@ Session ID: ${response.session_id.slice(0, 8)}...`;
         sessionId, store.isPaused, store.status, store.interruptInfo);
     logger.context.info('Approving review', { sessionId });
     try {
-      // v1: resolve with the current event_id optimistic lock.
-      const review = store.humanReview
-        ?? (await planningApi.getHumanReview(sessionId));
-      if (!review.event_id) {
-        throw new Error('没有待审核的人工审核项（缺少 event_id）');
-      }
-      await planningApi.resolveHumanReview(sessionId, review.event_id, { action: 'approve' });
-      store.clearHumanReview();
+      const { resolveActiveInterrupt } = await import('../utils/interrupt-resume');
+      await resolveActiveInterrupt(sessionId, 'approve');
       store.setPaused(false);
       store.setPendingReviewLayer(null);
       store.setStatus('planning');
@@ -183,17 +177,8 @@ Session ID: ${response.session_id.slice(0, 8)}...`;
         hasImages: (images?.length ?? 0) > 0,
       });
       try {
-        // v1: reject with the current event_id optimistic lock.
-        const review = store.humanReview
-          ?? (await planningApi.getHumanReview(sessionId));
-        if (!review.event_id) {
-          throw new Error('没有待审核的人工审核项（缺少 event_id）');
-        }
-        await planningApi.resolveHumanReview(sessionId, review.event_id, {
-          action: 'reject',
-          feedback,
-        });
-        store.clearHumanReview();
+        const { resolveActiveInterrupt } = await import('../utils/interrupt-resume');
+        await resolveActiveInterrupt(sessionId, 'reject', { feedback });
         store.setPaused(false);
 
         // Use clearRevisionProgress to preserve other completed dimensions
@@ -242,10 +227,18 @@ Session ID: ${response.session_id.slice(0, 8)}...`;
     const state = usePlanningStore.getState();
     state.setHistoryLoading(true);
     state.setHistoryError(null);
-    // v1: 后端不再提供 /api/projects 历史列表；只保留本地会话历史
-    // （本会话内新建 + localStorage 删除标记）。
-    state.setVillages(state.villages);
-    state.setHistoryLoading(false);
+    try {
+      const persistedProjects = await planningApi.listProjects();
+      state.setVillages(persistedProjects);
+    } catch (error: unknown) {
+      const errorMessage = getErrorMessage(error, '历史会话加载失败');
+      logger.context.error('Failed to load persisted planning history', {
+        error: errorMessage,
+      });
+      state.setHistoryError(errorMessage);
+    } finally {
+      state.setHistoryLoading(false);
+    }
   }, []);
 
   const selectVillage = useCallback(

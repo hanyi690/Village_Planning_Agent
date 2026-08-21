@@ -27,6 +27,8 @@ export default function DeliveryStatusBanner() {
 
   const ds = delivery.delivery_status;
 
+  if (ds === "diagnostic_only") return null;
+
   // Only inspecting mode or terminal states show the conclusion banner.
   if (!ds && status !== "completed" && status !== "failed") return null;
 
@@ -94,19 +96,8 @@ export default function DeliveryStatusBanner() {
           )}
         </div>
       );
-    } else if (ds === "diagnostic_only") {
-      body = (
-        <div className="rounded-md border border-orange-200 bg-orange-50 px-4 py-3 text-sm text-orange-800">
-          当前交付仅为{" "}
-          <span className="font-semibold">诊断/人工处理（diagnostic_only）</span>，不构成正式规划成果。
-          {delivery.diagnostic_summary && Object.keys(delivery.diagnostic_summary).length > 0 && (
-            <span className="mt-1 block text-xs text-orange-700">
-              诊断摘要：{JSON.stringify(delivery.diagnostic_summary)}
-            </span>
-          )}
-        </div>
-      );
     }
+    // diagnostic_only: workflow terminal failure — do not surface raw JSON in the UI.
   }
 
   return (

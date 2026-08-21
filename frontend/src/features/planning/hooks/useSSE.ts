@@ -16,6 +16,7 @@ import { planningApi } from '../api';
 import { usePlanningStore } from '../store/planningStore';
 import { buildDimensionProgressKey } from '@/features/planning/utils/message-helpers';
 import { bootstrapPlanningSession } from '@/features/planning/utils/session-bootstrap';
+import { syncMissedPlanningEvents } from '@/features/planning/utils/event-sync';
 import type { PlanningSSEEvent } from '../api/types';
 
 // Internal batch event representation
@@ -109,13 +110,6 @@ export function useSSEConnection({
         // Critical events: send immediately, no merging
         criticalEvents.push(event);
 
-        // Override mechanism: mark dimension as completed when dimension_complete arrives
-        if (event.type === 'dimension_complete') {
-          const data = event.data as { layer?: number; dimension_key?: string };
-          const key = buildDimensionProgressKey(data.layer || 1, data.dimension_key || '');
-          completedKeys.add(key);
-        }
-
         // Override mechanism: clear all layer deltas when layer_completed arrives
         if (event.type === 'layer_completed') {
           const data = event.data as { layer?: number };
@@ -159,20 +153,24 @@ export function useSSEConnection({
       }
     }
 
-    // Dispatch critical events first (no delay)
-    for (const event of criticalEvents) {
-      handleSSEEvent(event);
-    }
-
-    // Dispatch dimension_delta events - use the latest one (has most accumulated content)
-    // Skip any delta events for dimensions that have received complete events
+    // Dispatch dimension_delta events first so accumulated content is available
+    // before dimension_complete (which may arrive in the same batch).
     for (const [key, deltaList] of dimensionDeltaMap) {
-      // Double-check: skip if dimension_complete was processed in this batch
       if (completedKeys.has(key)) {
         continue;
       }
       const latestDelta = deltaList[deltaList.length - 1];
       handleSSEEvent(latestDelta);
+    }
+
+    // Dispatch critical events (dimension_complete after deltas in same batch)
+    for (const event of criticalEvents) {
+      if (event.type === 'dimension_complete') {
+        const data = event.data as { layer?: number; dimension_key?: string };
+        const key = buildDimensionProgressKey(data.layer || 1, data.dimension_key || '');
+        completedKeys.add(key);
+      }
+      handleSSEEvent(event);
     }
 
     // Dispatch other events
@@ -244,23 +242,14 @@ export function useSSEConnection({
         () => {
           const currentSessionId = usePlanningStore.getState().sessionId;
           if (currentSessionId) {
-            // Serialize: 1) get baseline state, 2) catch up missed events
-            const lastSeq = usePlanningStore.getState().lastProcessedSeq;
             planningApi.getStatus(currentSessionId).then((statusData) => {
               syncBackendState(statusData);
-              return planningApi.syncEvents(currentSessionId, lastSeq);
+              return syncMissedPlanningEvents(currentSessionId);
             }).then((syncResult) => {
-              if (syncResult && syncResult.resync_required) {
-                // Full REST recovery: drop stale events, rebuild from /state.
-                usePlanningStore.getState().setResyncRequired(true);
+              if (syncResult?.resync_required) {
                 console.warn('[useSSEConnection] resync_required: full REST recovery needed');
-                return;
-              }
-              if (syncResult && syncResult.events.length > 0) {
-                console.log(`[useSSEConnection] Synced ${syncResult.events.length} missed events`);
-                for (const event of syncResult.events) {
-                  enqueueEvent({ type: event.type, data: event.data });
-                }
+              } else if (syncResult && syncResult.applied > 0) {
+                console.log(`[useSSEConnection] Synced ${syncResult.applied} missed events`);
               }
             }).catch((err) => {
               console.warn('[useSSEConnection] Reconnect sync failed:', err);

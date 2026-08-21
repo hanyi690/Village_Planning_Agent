@@ -8,11 +8,34 @@
  */
 
 import { useState } from 'react';
-import type {
-  LayoutValidationResult,
-  LayoutValidationCheck,
-  LayoutValidationViolation,
-} from '@/features/gis-test/api/gis-test-api';
+
+export interface LayoutValidationViolation {
+  check: string;
+  severity: 'error' | 'warning';
+  message: string;
+  details?: Record<string, unknown>;
+}
+
+export interface LayoutValidationCheck {
+  name: string;
+  passed: boolean;
+  violation_count: number;
+  violations: LayoutValidationViolation[];
+}
+
+export interface LayoutValidationResult {
+  success: boolean;
+  error?: string;
+  validation?: {
+    passed: boolean;
+    status: 'pass' | 'fail' | 'warning';
+    total_violations: number;
+    violations: LayoutValidationViolation[];
+    warnings: string[];
+  };
+  checks?: LayoutValidationCheck[];
+  zone_areas?: Record<string, number>;
+}
 
 // ============================================
 // Types

@@ -17,10 +17,8 @@ npm run test:e2e
 ## 入口与特性
 
 - `src/app/page.tsx`：主规划工作台。
-- `src/app/test-gis/page.tsx`：开发环境 GIS 集成测试页，生产环境显示不可访问提示。
 - `src/features/planning/`：会话、报告、SSE、人工审核、地图和 Zustand 状态。
-- `src/features/gis-test/`：GIS 测试 API 客户端。
-- `e2e/`：规划流程、日志、GIS 图层、导出和生成链路测试。
+- `e2e/`：规划流程、日志、真实 GIS 图层、导出和生成链路测试。
 
 前端状态是可丢弃的 UI 投影；断线重连必须使用后端 `sync`/status 接口恢复，不能把浏览器内存当作 SSOT。
 

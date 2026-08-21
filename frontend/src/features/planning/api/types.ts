@@ -3,7 +3,7 @@
 // ============================================
 
 // Import from existing message-types to avoid duplication
-import type { EmbeddedImage } from '@/types/message/message-types';
+import type { EmbeddedImage, GeoJsonFeatureCollection } from '@/types/message/message-types';
 
 export { EmbeddedImage };
 
@@ -90,6 +90,53 @@ export interface VillageSession {
   has_final_report: boolean;
 }
 
+export interface PersistedHistoryResponse {
+  schema_version: '1.0';
+  projects: VillageInfo[];
+}
+
+/** Catalog-backed current GIS context. Planned layers never use this DTO. */
+export interface CurrentSourceLayer {
+  source_name: string;
+  source_layer_type: string;
+  layer_type: string;
+  layer_name: string;
+  display_role: string;
+  data_authority: 'authoritative_current';
+  requirement: 'baseline' | 'mandatory' | 'conditional' | 'reference';
+  crs: string;
+  feature_count: number;
+  geojson: GeoJsonFeatureCollection;
+  metadata: Record<string, unknown>;
+}
+
+export interface CurrentSourceRaster {
+  source_name: string;
+  layer_name: string;
+  layer_type: 'dem' | 'dom';
+  format: string;
+  crs: string;
+  available: boolean;
+  resolution: number | null;
+  width: number | null;
+  height: number | null;
+  bands: number | null;
+  dtype: string;
+  bounds: Record<string, number>;
+  source_ref: string;
+  reason: string;
+}
+
+export interface CurrentSourceLayerCollection {
+  schema_version: '1.0';
+  village_name: string;
+  source: 'data_catalog';
+  center: number[] | null;
+  layers: CurrentSourceLayer[];
+  rasters: CurrentSourceRaster[];
+  diagnostics: string[];
+}
+
 export interface Checkpoint {
   checkpoint_id: string;
   description: string;
@@ -128,6 +175,7 @@ export type PlanningSSEEventType =
   | 'dimension_complete'
   | 'dimension_delta'
   // Progress Events
+  | 'resync_required'
   | 'checkpoint_saved'
   | 'pause'
   | 'resumed'
@@ -321,7 +369,7 @@ export interface SessionStatusResponse {
   phase: string;
   current_wave: number;
   // v1 SessionProjection fields (authoritative)
-  delivery_status?: 'complete' | 'partial' | 'diagnostic_only' | null;
+  delivery_status?: 'complete' | 'partial' | 'diagnostic_only' | 'no_planning_output' | null;
   statutory_complete?: boolean;
   human_review_pending?: boolean;
   last_event_seq?: number;
@@ -743,8 +791,59 @@ export interface RenderLayersResponse {
   session_id: string;
   layers: RenderLayer[];
   snapshot_checksum?: string;
-  delivery_status?: 'complete' | 'partial' | 'diagnostic_only' | null;
+  delivery_status?: 'complete' | 'partial' | 'diagnostic_only' | 'no_planning_output' | null;
 }
+
+export interface PositioningTraceStep {
+  id?: number | string;
+  session_id?: string;
+  stage: string;
+  step_name?: string;
+  dimension_key?: string;
+  layer?: number;
+  inputs?: Record<string, unknown>;
+  outputs?: Record<string, unknown>;
+  artifacts?: Array<Record<string, unknown>>;
+  diagnostics?: Record<string, unknown>;
+  timestamp?: string;
+}
+
+export interface PositioningTraceResponse {
+  session_id: string;
+  stages: string[];
+  stage_coverage: Record<string, boolean>;
+  complete: boolean;
+  by_dimension: Record<string, PositioningTraceStep[]>;
+  reports: PositioningTraceStep[];
+}
+
+export interface PlanningDependencyNode {
+  key: string;
+  name: string;
+  layer: 1 | 2 | 3;
+  wave: number;
+  depends_on: string[];
+}
+
+export interface PlanningDependencyEdge {
+  source: string;
+  target: string;
+  kind: 'same_layer' | 'layer' | 'phase';
+}
+
+export interface PlanningDependencyGraphResponse {
+  schema_version: string;
+  source: string;
+  dimensions: PlanningDependencyNode[];
+  edges: PlanningDependencyEdge[];
+}
+
+// Unified Evidence Query contracts are generated from the backend OpenAPI.
+export type {
+  EvidenceFeatureRef,
+  EvidenceQueryRequest,
+  EvidenceQueryResponse,
+} from './v1-types';
 
 // ============================================
 // Delivery Projection Types (v1)
@@ -770,6 +869,7 @@ export interface HumanReviewItem {
 export interface HumanReviewListResponse {
   session_id: string;
   post_l3_status: string;
+  paused_stage?: string;
   event_id?: string;
   interrupt_info?: {
     event_id?: string;

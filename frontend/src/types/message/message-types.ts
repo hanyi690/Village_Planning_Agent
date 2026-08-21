@@ -201,6 +201,7 @@ export interface GeoJsonGeometry {
  */
 export interface GeoJsonFeature {
   type: 'Feature';
+  id?: string | number;
   geometry: GeoJsonGeometry;
   properties?: Record<string, unknown>;
 }

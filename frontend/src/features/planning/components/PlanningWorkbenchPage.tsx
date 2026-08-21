@@ -2,7 +2,7 @@
 
 import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
-import MapView from '@/features/planning/components/gis/MapView';
+import MapView, { type MapFeatureFocus } from '@/features/planning/components/gis/MapView';
 import ChatInput from '@/features/planning/components/ChatInput';
 import MessageList from '@/features/planning/components/chat/MessageList';
 import PlanningTextViewer from '@/features/planning/components/PlanningTextViewer';
@@ -31,14 +31,15 @@ import {
 } from '@/features/planning/constants/workbench-icons';
 import { faRotateRight, faTrash } from '@fortawesome/free-solid-svg-icons';
 import type { IconDefinition } from '@fortawesome/fontawesome-svg-core';
-import { NAV_KEYS } from '@/features/planning/constants';
+import { FILE_ACCEPT, NAV_KEYS } from '@/features/planning/constants';
 import { PlanningProvider, usePlanningActions, usePlanningStore } from '@/features/planning/store';
 import { planningApi } from '@/features/planning/api';
 import { createBaseMessage, createErrorMessage } from '@/features/planning/utils/message-helpers';
 import { logger } from '@/features/planning/utils/logger';
 import { normalizeGisLayers } from '@/features/planning/utils/gis-normalize';
-import { fetchOfflineBasemap } from '@/features/planning/utils/offline-basemap';
+import { fetchCurrentSourceLayers, type CurrentSourceLayersResult } from '@/features/planning/utils/offline-basemap';
 import { getSessionIdFromUrl } from '@/features/planning/utils/session-url';
+import { syncIfEventSeqBehind } from '@/features/planning/utils/event-sync';
 import {
   getWorkbenchNavFromUrl,
   resolveDefaultWorkbenchNav,
@@ -49,14 +50,14 @@ import {
 import LlmStatusBanner from '@/features/planning/components/LlmStatusBanner';
 import DeliveryStatusBanner from '@/features/planning/components/DeliveryStatusBanner';
 import { IntermediateArtifactsPanel } from '@/features/planning/components/IntermediateArtifactsPanel';
+import EvidenceQueryPanel from '@/features/planning/components/EvidenceQueryPanel';
 import ExportDialog from '@/features/planning/components/ExportDialog';
-import QualityEvaluationPanel from '@/features/evaluation/components/QualityEvaluationPanel';
-import { useQualityEvaluation } from '@/features/evaluation/hooks/useQualityEvaluation';
-import CompliancePanel from '@/features/compliance/components/CompliancePanel';
-import SuitabilityPanel from '@/features/suitability/components/SuitabilityPanel';
+import DeliveryCompliancePanel from '@/features/planning/components/DeliveryCompliancePanel';
+import { isCapabilityEnabled, isNavItemEnabled } from '@/features/planning/config/v1-capabilities';
 import type { PlanningParams } from '@/features/planning/types';
 import type { Message } from '@/features/planning/types';
 import type { GISLayerConfig } from '@/types/message/message-types';
+import type { EvidenceFeatureRef, PositioningTraceResponse, PositioningTraceStep } from '@/features/planning/api/types';
 
 type WorkbenchBaseMap = 'general' | 'amap';
 
@@ -91,13 +92,345 @@ interface CompleteResultPayload {
   roadProjects?: RoadProject[];
 }
 
-let completeResultCache: CompleteResultPayload | null = null;
-let completeResultRequest: Promise<CompleteResultPayload> | null = null;
-
-export function invalidateCompleteResultCache(): void {
-  completeResultCache = null;
-  completeResultRequest = null;
+interface SpatialWorkflowStep {
+  label: string;
+  stage: string;
+  status: 'recorded' | 'pending';
+  value: string;
+  expectedArtifactKeys: string[];
+  registeredArtifactKeys: string[];
+  humanReports: HumanReadablePlanningReport[];
 }
+
+interface HumanReadablePlanningReport {
+  dimensionKey: string;
+  title: string;
+  statements: string[];
+  claimCount: number;
+  hasReportBody: boolean;
+  projectHints: IntentProjectHint[];
+}
+
+interface IntentProjectHint {
+  category: string;
+  dimensionTitle: string;
+  statement: string;
+}
+
+const SPATIAL_WORKFLOW_STAGES: Array<{ stages: string[]; label: string; artifactKeys: string[] }> = [
+  { stages: ['L3'], label: 'L3 规划意图', artifactKeys: ['l3_gate', 'planning_program'] },
+  { stages: ['TARGET_PROJECTION'], label: '目标投影', artifactKeys: ['target_projection'] },
+  { stages: ['GROUND'], label: '空间落位', artifactKeys: ['grounding_result'] },
+  { stages: ['SELECT'], label: '候选选址', artifactKeys: ['demand_portfolio', 'suitability_surface', 'portfolio_decision', 'site_selection'] },
+  { stages: ['EXECUTE'], label: '空间执行', artifactKeys: ['execution_plan', 'execution_result', 'parcel_changeset', 'planned_state', 'planning_scenario'] },
+  { stages: ['VALIDATE', 'RECONCILE'], label: '关系与几何校验', artifactKeys: ['validation_report', 'final_relation_validation', 'reconciliation_report'] },
+  { stages: ['DELIVER', 'RENDER'], label: '空间成果交付', artifactKeys: ['delivery_manifest', 'layout_configs', 'render_layers', 'delivery_spatial_snapshot', 'export_result', 'render_artifacts'] },
+];
+
+const SPATIAL_ARTIFACT_GROUPS: Array<{ label: string; keys: string[] }> = [
+  {
+    label: '目标与落地',
+    keys: ['target_projection', 'grounding_result', 'demand_portfolio', 'suitability_surface', 'portfolio_decision', 'site_selection'],
+  },
+  {
+    label: '空间执行',
+    keys: ['execution_plan', 'execution_result', 'parcel_changeset', 'planned_state', 'planning_scenario'],
+  },
+  {
+    label: '校验与交付',
+    keys: ['validation_report', 'final_relation_validation', 'reconciliation_report', 'delivery_manifest', 'layout_configs', 'render_layers', 'delivery_spatial_snapshot', 'export_result', 'render_artifacts'],
+  },
+];
+
+const SPATIAL_ARTIFACT_KEY_SET = new Set(SPATIAL_ARTIFACT_GROUPS.flatMap((group) => group.keys));
+
+const SPATIAL_ARTIFACT_LABELS: Record<string, string> = {
+  l3_gate: 'L3 规划闸门',
+  planning_program: '规划程序草案',
+  target_projection: '目标投影',
+  grounding_result: '空间落位结果',
+  demand_portfolio: '需求组合',
+  suitability_surface: '适宜性面',
+  portfolio_decision: '组合决策',
+  site_selection: '选址结果',
+  execution_plan: '执行计划',
+  execution_result: '执行结果',
+  parcel_changeset: '地块变更集',
+  planned_state: '规划状态',
+  planning_scenario: '规划情景',
+  validation_report: '校验报告',
+  final_relation_validation: '最终关系校验',
+  reconciliation_report: '一致性报告',
+  delivery_manifest: '交付清单',
+  layout_configs: '空间布局配置',
+  render_layers: '渲染图层',
+  delivery_spatial_snapshot: '交付空间快照',
+  export_result: '导出结果',
+  render_artifacts: '渲染产物',
+};
+
+function summarizeSpatialTraceStep(step: PositioningTraceStep | undefined): string {
+  if (!step) return '后端尚未到达该阶段';
+  const outputs = step.outputs || {};
+  const parts: string[] = [];
+  const labels: Record<string, string> = {
+    word_count: '正文',
+    claim_count: '判断',
+    claims_with_evidence: '有证据判断',
+    intervention_count: '干预事项',
+    semantic_repair_applied: '语义修复',
+    target_projection_node: '目标投影节点',
+    grounding_candidate_count: '落位候选',
+    candidate_count: '候选线',
+    recommended_segment_count: '推荐段',
+    road_target_count: '道路项目',
+  };
+  for (const [key, value] of Object.entries(outputs)) {
+    const label = labels[key];
+    if (!label || value == null || value === '') continue;
+    if (typeof value === 'object') {
+      parts.push(`${label}已登记`);
+    } else if (typeof value === 'boolean') {
+      parts.push(`${label}${value ? '已应用' : '未应用'}`);
+    } else {
+      parts.push(`${label} ${value}${key === 'word_count' ? ' 字' : ' 项'}`);
+    }
+    if (parts.length >= 2) break;
+  }
+  return parts.join(' · ') || `已记录 ${step.step_name || step.stage}`;
+}
+
+const INTENT_PROJECT_ACTIONS: Array<{ category: string; patterns: RegExp[] }> = [
+  { category: '改造提升', patterns: [/改造/, /整治/, /修缮/, /提升改造/, /扩建/, /更新/] },
+  { category: '完善补齐', patterns: [/完善(?:[^。；]*)(?:设施|配套|体系|覆盖|服务)/, /补齐/, /健全/] },
+  { category: '保护管控', patterns: [/保护/, /保育/, /生态修复/, /修复/, /管控/, /避让/, /划定[^。；]*(?:保护|红线|生态|农田|缓冲区|廊道)/] },
+  { category: '规划布局', patterns: [/布局/, /组团式/, /划定[^。；]*(?:建设区|发展区|分区)/, /确定为重点发展区/] },
+  { category: '建设配置', patterns: [/新建/, /(?<!划定)建设[^。；]*(?:设施|中心|道路|基地|园|站|工程|场所|厕所|广场|区|点|所|池|廊道|服务)/, /设置[^。；]*(?:处|座|点|中心|设施|基站|变压器)/, /建立[^。；]*(?:体系|平台|中心|设施)/] },
+];
+
+function extractIntentProjectHints(statements: string[], dimensionTitle: string): IntentProjectHint[] {
+  const seen = new Set<string>();
+  const hints: IntentProjectHint[] = [];
+  for (const statement of statements) {
+    const action = INTENT_PROJECT_ACTIONS.find(({ patterns }) => patterns.some((pattern) => pattern.test(statement)));
+    if (!action) continue;
+    const key = `${action.category}:${statement}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    hints.push({ category: action.category, dimensionTitle, statement });
+  }
+  return hints;
+}
+
+function parseHumanReadablePlanningReport(dimensionKey: string, content: string): HumanReadablePlanningReport | null {
+  const trimmed = content.trim();
+  if (!trimmed) return null;
+
+  const title = getDimensionName(dimensionKey) || dimensionKey;
+  if (!trimmed.startsWith('{')) {
+    return {
+      dimensionKey,
+      title,
+      statements: [],
+      claimCount: 0,
+      hasReportBody: true,
+      projectHints: [],
+    };
+  }
+
+  try {
+    const parsed = JSON.parse(trimmed) as Record<string, unknown>;
+    const reportBody = typeof parsed.report_body === 'string' ? parsed.report_body.trim() : '';
+    const claims = Array.isArray(parsed.claims) ? parsed.claims : [];
+    const statements = claims
+      .map((claim) => {
+        if (!claim || typeof claim !== 'object') return '';
+        const statement = (claim as { statement?: unknown }).statement;
+        return typeof statement === 'string' ? statement.trim() : '';
+      })
+      .filter(Boolean);
+    return {
+      dimensionKey,
+      title,
+      statements,
+      claimCount: statements.length,
+      hasReportBody: Boolean(reportBody),
+      projectHints: extractIntentProjectHints(statements, title),
+    };
+  } catch {
+    return null;
+  }
+}
+
+function buildHumanReadablePlanningReports(reports: Record<string, string>): HumanReadablePlanningReport[] {
+  return Object.entries(reports || {})
+    .map(([dimensionKey, content]) => parseHumanReadablePlanningReport(dimensionKey, content))
+    .filter((report): report is HumanReadablePlanningReport => Boolean(report))
+    .filter((report) => report.statements.length > 0 || report.hasReportBody);
+}
+
+function buildSpatialWorkflowSteps(
+  trace: PositioningTraceResponse | null,
+  artifactKeys: Set<string>,
+  layer3Reports: Record<string, string>,
+): SpatialWorkflowStep[] {
+  const reports = trace?.reports || [];
+  const humanReports = buildHumanReadablePlanningReports(layer3Reports);
+  return SPATIAL_WORKFLOW_STAGES.map(({ stages, label, artifactKeys: expectedArtifactKeys }) => {
+    const stageReports = reports.filter((report) => {
+      if (stages.includes('L3')) return report.stage === 'L3';
+      return stages.includes(report.stage);
+    });
+    const latest = stageReports[stageReports.length - 1];
+    return {
+      label,
+      stage: latest?.stage || stages.join(' / '),
+      status: latest ? 'recorded' : 'pending',
+      value: summarizeSpatialTraceStep(latest),
+      expectedArtifactKeys,
+      registeredArtifactKeys: expectedArtifactKeys.filter((key) => artifactKeys.has(key)),
+      humanReports: stages.includes('L3') ? humanReports : [],
+    };
+  });
+}
+
+function IntentProjectOverview({
+  projects,
+  claimCount,
+  dimensionCount,
+  workflowSteps,
+}: {
+  projects: IntentProjectHint[];
+  claimCount: number;
+  dimensionCount: number;
+  workflowSteps: SpatialWorkflowStep[];
+}) {
+  const [selectedIndex, setSelectedIndex] = useState(0);
+  const [listOpen, setListOpen] = useState(false);
+  const selectedProject = projects[selectedIndex] || projects[0];
+  const categoryCounts = Array.from(new Set(projects.map((project) => project.category))).map((category) => ({
+    category,
+    count: projects.filter((project) => project.category === category).length,
+  }));
+
+  useEffect(() => {
+    if (selectedIndex >= projects.length) setSelectedIndex(0);
+  }, [projects.length, selectedIndex]);
+
+  if (!selectedProject) {
+    return (
+      <div className="mt-2 rounded-xl border border-[#e5f0eb] bg-[#f8fcfa] px-3 py-2.5 text-[10px] leading-4 text-[#78968b]">
+        当前 claims 主要是现状判断或规划原则，尚未形成可归类的实施项目。
+      </div>
+    );
+  }
+
+  return (
+    <div className="mt-2 rounded-xl border border-[#cfe8dc] bg-[#f7fcf9] p-3">
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <div className="text-[11px] font-semibold text-[#2d7e61]">规划意图 · 实施项目</div>
+          <div className="mt-0.5 text-[10px] text-[#78968b]">{projects.length} 条真实项目线索 · {dimensionCount} 个维度 · {claimCount} 条结构化判断</div>
+        </div>
+        <button
+          type="button"
+          onClick={() => setListOpen(true)}
+          className="shrink-0 rounded-lg border border-[#bfe2d1] bg-white px-2 py-1 text-[10px] font-medium text-[#2d7e61] hover:bg-[#e8f6ef]"
+        >
+          查看全部
+        </button>
+      </div>
+      <div className="mt-2 flex flex-wrap gap-1">
+        {categoryCounts.map(({ category, count }) => (
+          <span key={category} className="rounded-full bg-white px-2 py-1 text-[9px] text-[#397b62] ring-1 ring-[#dceee5]">
+            {category} {count}
+          </span>
+        ))}
+      </div>
+      <div className="mt-3 rounded-xl border border-[#dceee5] bg-white p-3 shadow-sm">
+        <div className="flex flex-wrap items-center gap-1.5 text-[9px]">
+          <span className="rounded-full bg-[#e8f6ef] px-2 py-1 font-semibold text-[#2d7e61]">{selectedProject.category}</span>
+          <span className="rounded-full bg-[#f1f7f4] px-2 py-1 text-[#6e8d81]">来源 · {selectedProject.dimensionTitle}</span>
+        </div>
+        <p className="mt-2 break-words text-[12px] leading-6 text-[#3f6256]">{selectedProject.statement}</p>
+      </div>
+      <div className="mt-2 rounded-lg bg-white px-2.5 py-2 text-[10px] leading-4 text-[#78968b]">下方“空间链路”按真实后端阶段承接当前项目线索；未到达阶段不会显示示意结果。</div>
+
+      {listOpen && (
+        <div className="fixed inset-0 z-[75] flex items-center justify-center bg-[#17382d]/25 p-4 backdrop-blur-[1px]">
+          <div className="flex h-[min(780px,calc(100vh-32px))] w-[min(1040px,calc(100vw-32px))] flex-col overflow-hidden rounded-2xl border border-[#cfe8dc] bg-[#fbfefc] shadow-2xl">
+            <div className="flex shrink-0 items-center justify-between border-b border-[#e1eee8] bg-white px-5 py-3">
+              <div>
+                <div className="text-sm font-semibold text-[#2d6653]">规划意图 · 实施项目线索</div>
+                <div className="mt-0.5 text-[11px] text-[#78968b]">来自真实 L3 claims；左侧选择项目，右侧查看它与空间链路的关系</div>
+              </div>
+              <button type="button" onClick={() => setListOpen(false)} className="rounded-lg border border-[#d8e9e1] px-3 py-1.5 text-xs text-[#527467] hover:bg-[#eef8f3]">关闭</button>
+            </div>
+            <div className="grid min-h-0 flex-1 md:grid-cols-[340px_minmax(0,1fr)]">
+              <div className="min-h-0 overflow-y-auto border-b border-[#e1eee8] bg-[#f4faf7] p-3 md:border-b-0 md:border-r">
+                <div className="mb-2 flex flex-wrap gap-1">
+                  {categoryCounts.map(({ category, count }) => (
+                    <span key={category} className="rounded-full bg-white px-2 py-1 text-[10px] text-[#397b62] ring-1 ring-[#dceee5]">{category} {count}</span>
+                  ))}
+                </div>
+                <div className="space-y-1.5">
+                  {projects.map((project, index) => (
+                    <button
+                      key={`${project.dimensionTitle}-${index}`}
+                      type="button"
+                      onClick={() => setSelectedIndex(index)}
+                      className={`w-full rounded-xl border p-2.5 text-left transition ${selectedIndex === index ? 'border-[#78c7a5] bg-white shadow-sm' : 'border-transparent bg-white/65 hover:border-[#cfe8dc]'}`}
+                    >
+                      <div className="flex items-center gap-1.5">
+                        <span className="rounded-full bg-[#e8f6ef] px-1.5 py-0.5 text-[9px] text-[#397b62]">{project.category}</span>
+                        <span className="truncate text-[9px] text-[#8aa59a]">{project.dimensionTitle}</span>
+                      </div>
+                      <div className="mt-1 line-clamp-2 text-[11px] leading-5 text-[#55786b]">{project.statement}</div>
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <div className="min-h-0 overflow-y-auto p-5">
+                <div className="rounded-2xl border border-[#cfe8dc] bg-white p-4 shadow-sm">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="rounded-full bg-[#e8f6ef] px-2.5 py-1 text-[10px] font-semibold text-[#2d7e61]">{selectedProject.category}</span>
+                    <span className="text-[11px] text-[#78968b]">{selectedProject.dimensionTitle}</span>
+                  </div>
+                  <p className="mt-3 break-words text-[14px] leading-7 text-[#365b4e]">{selectedProject.statement}</p>
+                </div>
+                <div className="mt-4 rounded-2xl border border-[#dceee5] bg-white p-4">
+                  <div className="text-[12px] font-semibold text-[#315f50]">从意图到空间成果</div>
+                  <div className="mt-1 text-[11px] leading-5 text-[#78968b]">这里展示当前会话真实到达的阶段，不把尚未生成的空间结果填成示意数据。</div>
+                  <div className="mt-4 space-y-2">
+                    {workflowSteps.map((step, index) => {
+                      const ready = step.status === 'recorded' || step.registeredArtifactKeys.length > 0;
+                      return (
+                        <div key={step.label} className="flex items-center gap-3">
+                          <div className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-[10px] font-bold ${ready ? 'bg-[#42b48a] text-white' : 'bg-[#eef3f0] text-[#9aada6]'}`}>{ready ? '✓' : index + 1}</div>
+                          <div className="min-w-0 flex-1 rounded-xl border border-[#edf4f0] px-3 py-2">
+                            <div className="flex items-center justify-between gap-2">
+                              <span className="text-[11px] font-semibold text-[#527467]">{step.label}</span>
+                              <span className={`text-[10px] ${ready ? 'text-[#2d7e61]' : 'text-[#9aada6]'}`}>{ready ? '已记录' : '尚未到达'}</span>
+                            </div>
+                            <div className="mt-0.5 text-[10px] text-[#8aa59a]">{step.value}</div>
+                            {step.registeredArtifactKeys.length > 0 && <div className="mt-1 text-[10px] text-[#397b62]">artifact：{step.registeredArtifactKeys.map((key) => SPATIAL_ARTIFACT_LABELS[key] || key).join('、')}</div>}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+type SpatialSidebarTab = 'assistant' | 'spatial' | 'kg';
+type SpatialAssistantMode = 'locator' | 'chat';
 
 function layerMergeKey(layer: GISLayerConfig): string {
   const path = String(layer.metadata?.path ?? '');
@@ -116,53 +449,6 @@ function mergeGisLayerSources(staticLayers: GISLayerConfig[], liveLayers: GISLay
     merged.set(layerMergeKey(layer), layer);
   }
   return [...merged.values()];
-}
-
-async function fetchCompleteResult(force = false, attempt = 0): Promise<CompleteResultPayload> {
-  if (!force && completeResultCache) return Promise.resolve(completeResultCache);
-  if (!force && completeResultRequest) return completeResultRequest;
-
-  const controller = new AbortController();
-  const timeout = window.setTimeout(() => controller.abort(), 90000);
-  // Prefer the Next.js route (compact ~9 MB). Fall back to backend if needed.
-  const endpoints = [
-    '/api/dev/gis/complete-result',
-    `${process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8000'}/api/dev/gis/complete-result`,
-  ];
-
-  const tryFetch = async (url: string): Promise<CompleteResultPayload> => {
-    const response = await fetch(url, {
-      cache: force ? 'no-store' : 'default',
-      signal: controller.signal,
-    });
-    if (!response.ok) throw new Error(`成果接口返回 HTTP ${response.status}`);
-    return response.json() as Promise<CompleteResultPayload>;
-  };
-
-  completeResultRequest = (async () => {
-    let lastError: unknown;
-    for (const url of endpoints) {
-      try {
-        const result = await tryFetch(url);
-        completeResultCache = result;
-        return result;
-      } catch (error) {
-        lastError = error;
-        logger.context.warn('GIS complete-result fetch failed', { url, error: String(error), attempt });
-      }
-    }
-    if (attempt < 2) {
-      completeResultRequest = null;
-      return fetchCompleteResult(force, attempt + 1);
-    }
-    throw lastError instanceof Error ? lastError : new Error('完整成果加载失败');
-  })()
-    .finally(() => {
-      window.clearTimeout(timeout);
-      completeResultRequest = null;
-    });
-
-  return completeResultRequest;
 }
 
 const FILTERS: Array<{ key: LayerFilter; label: string }> = [
@@ -219,11 +505,12 @@ function matchesFilter(layer: GISLayerConfig, filter: LayerFilter): boolean {
   const role = layerRole(layer);
 
   if (filter === 'all') {
-    return !isReferenceDisplayRole(role);
+    return true;
   }
   if (filter === 'roads') {
     return layer.layerType === 'planned_road'
       || role.includes('road')
+      || role === 'stage5_full_network'
       || name === '现状道路'
       || name === 'road'
       || name === 'lines';
@@ -241,10 +528,11 @@ function matchesFilter(layer: GISLayerConfig, filter: LayerFilter): boolean {
       || (layer.dataAuthority === 'authoritative_current' && !name.includes('规划'));
   }
 
-  if (isReferenceDisplayRole(role)) return false;
   if (role === 'source_annotation') return false;
   if (name.includes('现状')) return false;
   if (role === 'control_reference' || layer.layerType === 'hazard_point') return false;
+
+  if (isReferenceDisplayRole(role)) return true;
 
   return layer.layerType === 'boundary'
     || name === '国土空间用途规划'
@@ -273,8 +561,8 @@ function matchesQuickLayer(layer: GISLayerConfig, key: string): boolean {
   const isProject = path.includes('/project/');
 
   switch (key) {
-    case 'current-landuse': return name.includes('现状用地') || (name === 'landuse' && isCurrent);
-    case 'current-roads': return name === '现状道路' || (name === 'road' && isCurrent);
+    case 'current-landuse': return role === 'current_landuse' || name === '现状地块' || name.includes('现状用地') || (name === 'landuse' && isCurrent);
+    case 'current-roads': return role === 'current_road' || name === '现状道路' || (name === 'road' && isCurrent);
     case 'facilities':
       return String(layer.layerType) === 'facility'
         || (layer.layerType === 'facility_point' && (role === 'source_annotation' || !role));
@@ -325,7 +613,7 @@ function SidebarNav({
     {
       title: '数据中心',
       items: [
-        { id: 'data-kg', label: '知识图谱检查', hint: '约束与道路流程' },
+        { id: 'data-kg', label: '知识图谱检查', hint: 'L1/L2 证据与空间链' },
         { id: 'data-metrics', label: '指标报表', hint: '实体统计与图层计数' },
         { id: 'data-compliance', label: '用地合规', hint: '平衡表与出口闸门' },
         { id: 'data-suitability', label: '双评价适宜性', hint: '生态/农业/建设适宜' },
@@ -339,7 +627,7 @@ function SidebarNav({
         <section key={group.title}>
           <div className="px-3 text-[12px] font-semibold text-[#244f43]">{group.title}</div>
           <div className="mt-1.5 space-y-1">
-            {group.items.map((item) => {
+            {group.items.filter((item) => isNavItemEnabled(item.id)).map((item) => {
               const active = item.id === activeId;
               const previewOnly = item.id === 'overview-analysis' || item.id === 'overview-document' || item.id === 'overview-evaluation';
               return (
@@ -382,9 +670,10 @@ function DataCenterPanel({
   projectName,
   payload,
   layers,
-  roadProcess,
   roadProjects,
-  roadSteps,
+  positioningTrace,
+  spatialWorkflowSteps,
+  spatialArtifactKeys,
   typeCount,
   totalFeatures,
   currentParcels,
@@ -397,9 +686,10 @@ function DataCenterPanel({
   projectName?: string;
   payload: CompleteResultPayload | null;
   layers: GISLayerConfig[];
-  roadProcess: RoadProcess;
   roadProjects: RoadProject[];
-  roadSteps: Array<{ label: string; value: string }>;
+  positioningTrace: PositioningTraceResponse | null;
+  spatialWorkflowSteps: SpatialWorkflowStep[];
+  spatialArtifactKeys: Set<string>;
   typeCount: number;
   totalFeatures: number;
   currentParcels: number;
@@ -407,8 +697,9 @@ function DataCenterPanel({
   constraints: number;
   onOpenDrawings: () => void;
 }) {
-  const kgConstraints = roadProcess.kg?.constraint_count ?? 0;
-  const validationPassed = roadProcess.validation?.passed ?? false;
+  const recordedSpatialSteps = spatialWorkflowSteps.filter((step) => step.status === 'recorded').length;
+  const l1L2Reports = positioningTrace?.reports.filter((report) => report.stage === 'L1' || report.stage === 'L2').length ?? 0;
+  const hasDeliverySnapshot = spatialArtifactKeys.has('delivery_spatial_snapshot');
 
   if (panel === 'compliance') {
     if (!sessionId) {
@@ -418,18 +709,15 @@ function DataCenterPanel({
         </section>
       );
     }
-    return <CompliancePanel sessionId={sessionId} projectName={projectName || payload?.villageName} />;
+    return <DeliveryCompliancePanel sessionId={sessionId} projectName={projectName || payload?.villageName} />;
   }
 
   if (panel === 'suitability') {
-    if (!sessionId) {
-      return (
-        <section className="min-h-[420px] rounded-2xl border border-dashed border-[#cfe4da] bg-[#f8fcf9] p-8 text-center text-[12px] text-[#8aa59a]">
-          请先启动规划会话后再运行双评价适宜性分析
-        </section>
-      );
-    }
-    return <SuitabilityPanel sessionId={sessionId} projectName={projectName || payload?.villageName} />;
+    return (
+      <section className="min-h-[420px] rounded-2xl border border-dashed border-[#cfe4da] bg-[#f8fcf9] p-8 text-center text-[12px] text-[#8aa59a]">
+        双评价适宜性分析在 v1 后端已下线；适宜性结果已内化到 SELECT/EXECUTE 空间决策链，请查看空间成果图与交付投影。
+      </section>
+    );
   }
 
   if (panel === 'metrics') {
@@ -457,28 +745,30 @@ function DataCenterPanel({
 
   return (
     <section className="min-h-[620px] overflow-hidden rounded-2xl border border-[#dcebe4] bg-white shadow-sm">
-        <PanelTitle title="知识图谱检查" note="约束闸门 · 道路流程" />
+        <PanelTitle title="知识图谱与空间链" note="L1/L2 证据 · 空间交付" />
         <div className="space-y-4 p-4 text-[12px] leading-6 text-[#4a6d61]">
-          <div className="grid gap-3 sm:grid-cols-3">
-            <MetricCard icon={WORKBENCH_METRIC_ICONS.kgConstraints} value={kgConstraints} label="图谱约束" note="KG 约束条目" />
-            <MetricCard icon={WORKBENCH_METRIC_ICONS.roadCandidates} value={roadProcess.candidate_count ?? 0} label="候选道路" note="Stage5 选线" />
-            <MetricCard icon={WORKBENCH_METRIC_ICONS.validation} value={validationPassed ? 1 : 0} label="校验通过" note={validationPassed ? '已通过' : '待复核'} />
+          <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+            <MetricCard icon={WORKBENCH_METRIC_ICONS.kgConstraints} value={l1L2Reports} label="L1/L2 记录" note="真实过程记录" />
+            <MetricCard icon={WORKBENCH_METRIC_ICONS.spatialFeatures} value={recordedSpatialSteps} label="空间阶段" note={`${spatialWorkflowSteps.length} 个阶段`} />
+            <MetricCard icon={WORKBENCH_METRIC_ICONS.plannedParcels} value={spatialArtifactKeys.size} label="空间产物" note="artifact 索引" />
+            <MetricCard icon={WORKBENCH_METRIC_ICONS.validation} value={hasDeliverySnapshot ? 1 : 0} label="DELIVER 快照" note={hasDeliverySnapshot ? '已登记' : '尚未到达'} />
           </div>
           <div className="rounded-xl border border-[#e1eee8] bg-[#f8fbf9] p-4">
-            <h4 className="text-[13px] font-semibold text-[#2d6f56]">道路规划流程</h4>
+            <h4 className="text-[13px] font-semibold text-[#2d6f56]">空间链实际记录</h4>
             <div className="mt-3 space-y-2">
-              {roadSteps.map((step, index) => (
+              {spatialWorkflowSteps.map((step, index) => (
                 <div key={step.label} className="flex items-center justify-between gap-3 rounded-lg bg-white px-3 py-2">
                   <span className="text-[#5f8174]">{index + 1}. {step.label}</span>
-                  <span className="font-semibold text-[#2d8c6d]">{step.value}</span>
+                  <span className={`text-right font-semibold ${step.status === 'recorded' ? 'text-[#2d8c6d]' : 'text-[#9aada6]'}`}>{step.status === 'recorded' ? step.value : '尚未到达'}</span>
                 </div>
               ))}
             </div>
+            <p className="mt-3 text-[11px] leading-5 text-[#8aa59a]">状态来自后端 positioning-trace；道路不是主流程，而是 EXECUTE 结果中的一个专题子项。</p>
           </div>
           <div className="rounded-xl border border-[#e1eee8] bg-[#f8fbf9] p-4">
-            <h4 className="text-[13px] font-semibold text-[#2d6f56]">道路项目结论</h4>
+            <h4 className="text-[13px] font-semibold text-[#2d6f56]">空间专题子项</h4>
             <div className="mt-3 space-y-2">
-              {roadProjects.length === 0 && <p className="text-[#8aa59a]">暂无道路项目结论，请先在规划中生成 L3 成果。</p>}
+              {roadProjects.length === 0 && <p className="text-[#8aa59a]">当前没有后端已交付的道路专题结果；这不代表整个空间链没有数据。</p>}
               {roadProjects.map((project) => (
                 <div key={project.projectId} className="rounded-lg border border-[#dcebe4] bg-white px-3 py-2">
                   <div className="font-semibold text-[#385e52]">{project.routeName}</div>
@@ -492,14 +782,14 @@ function DataCenterPanel({
   );
 }
 
-function MetricCard({ icon, value, label, note }: { icon: IconDefinition; value: number; label: string; note: string }) {
+function MetricCard({ icon, value, label, note }: { icon: IconDefinition; value: number | string; label: string; note: string }) {
   return (
     <div className="flex min-w-0 items-center gap-3 rounded-2xl border border-[#e1eee8] bg-white px-4 py-3 shadow-[0_8px_24px_rgba(46,104,82,0.05)]">
       <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-[#def3e9] text-lg text-[#258b69]">
         <WorkbenchIcon icon={icon} style={{ width: 18, height: 18 }} />
       </div>
       <div className="min-w-0">
-        <div className="truncate text-[22px] font-semibold leading-6 tabular-nums text-[#23875f]">{formatNumber(value)}</div>
+        <div className="truncate text-[22px] font-semibold leading-6 tabular-nums text-[#23875f]">{typeof value === 'number' ? formatNumber(value) : value}</div>
         <div className="mt-1 truncate text-[11px] text-[#718f83]">{label} · {note}</div>
       </div>
     </div>
@@ -587,8 +877,10 @@ const OVERVIEW_PANELS: Array<{
 }> = [
   { id: 'task', label: '任务设置', note: '村情与规划要求', icon: SIDEBAR_NAV_ICONS['overview-task'] },
   { id: 'analysis', label: '详细分析', note: '28 个专题维度', icon: SIDEBAR_NAV_ICONS['overview-analysis'] },
-  { id: 'document', label: '规划文本', note: '法定文档输出', icon: SIDEBAR_NAV_ICONS['overview-document'] },
-  { id: 'evaluation', label: '质量评估', note: '忠实度与引用', icon: SIDEBAR_NAV_ICONS['overview-evaluation'] },
+  { id: 'document', label: '规划文本', note: '专题报告汇编', icon: SIDEBAR_NAV_ICONS['overview-document'] },
+  ...(isCapabilityEnabled('qualityEvaluation')
+    ? [{ id: 'evaluation' as const, label: '质量评估', note: '忠实度与引用', icon: SIDEBAR_NAV_ICONS['overview-evaluation'] }]
+    : []),
 ];
 
 function statusLabel(status: string): string {
@@ -741,6 +1033,52 @@ interface PlanningTaskPanelProps {
   onStart: () => void;
   onStepModeChange: (enabled: boolean) => void;
   isStarting?: boolean;
+  villageDataFiles: File[];
+  taskFiles: File[];
+  constraintFiles: File[];
+  onFilesChange: (field: 'villageDataFiles' | 'taskFiles' | 'constraintFiles', files: File[]) => void;
+}
+
+function TaskFilePicker({
+  id,
+  files,
+  onChange,
+}: {
+  id: string;
+  files: File[];
+  onChange: (files: File[]) => void;
+}) {
+  return (
+    <div className="mt-2 rounded-lg border border-dashed border-[#cfe4da] bg-[#f8fcfa] px-3 py-2">
+      <div className="flex items-center justify-between gap-2">
+        <label htmlFor={id} className="cursor-pointer text-[11px] font-medium text-[#3a8f6f]">
+          上传附件
+          <input
+            id={id}
+            type="file"
+            multiple
+            accept={FILE_ACCEPT}
+            className="sr-only"
+            onChange={(event) => {
+              onChange([...files, ...Array.from(event.target.files || [])]);
+              event.currentTarget.value = '';
+            }}
+          />
+        </label>
+        <span className="text-[10px] text-[#8aa59a]">{files.length ? `${files.length} 个文件` : '可选 · 支持文档/表格/PDF'}</span>
+      </div>
+      {files.length > 0 && (
+        <div className="mt-1.5 space-y-1">
+          {files.map((file, index) => (
+            <div key={`${file.name}-${file.size}-${index}`} className="flex items-center justify-between gap-2 text-[10px] text-[#6d8c80]">
+              <span className="min-w-0 truncate">{file.name}</span>
+              <button type="button" onClick={() => onChange(files.filter((_, itemIndex) => itemIndex !== index))} className="shrink-0 text-[#b36a55] hover:underline">移除</button>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
 }
 
 function PlanningTaskPanel(props: PlanningTaskPanelProps) {
@@ -779,6 +1117,7 @@ function PlanningTaskPanel(props: PlanningTaskPanelProps) {
             村庄数据
           </h3>
           <label className="block text-[12px] font-semibold">村庄基础数据<span className="text-rose-500"> *</span><textarea value={props.villageData} onChange={(event) => props.onChange('villageData', event.target.value)} placeholder="请输入人口、面积、自然资源、产业基础、公共设施、历史文化等基础情况。" rows={8} className={`${fieldClass} resize-y leading-5`} /></label>
+          <TaskFilePicker id="village-data-file-upload" files={props.villageDataFiles} onChange={(files) => props.onFilesChange('villageDataFiles', files)} />
           <div className="mt-3 rounded-lg bg-[#eef8f3] px-3 py-2 text-[11px] leading-5 text-[#5f8174]">已连接 GIS 数据中心。文本用于补充地图难以表达的村情、产业和居民诉求。</div>
         </section>
         <section className="rounded-2xl border border-[#dcebe4] bg-white p-4 shadow-sm">
@@ -787,7 +1126,9 @@ function PlanningTaskPanel(props: PlanningTaskPanelProps) {
             规划要求
           </h3>
           <label className="block text-[12px] font-semibold">任务描述<span className="text-rose-500"> *</span><textarea value={props.taskDescription} onChange={(event) => props.onChange('taskDescription', event.target.value)} placeholder="请输入规划目标、重点任务和希望生成的成果。" rows={4} className={`${fieldClass} resize-y leading-5`} /></label>
+          <TaskFilePicker id="task-description-file-upload" files={props.taskFiles} onChange={(files) => props.onFilesChange('taskFiles', files)} />
           <label className="mt-3 block text-[12px] font-semibold">规划约束<textarea value={props.constraintsText} onChange={(event) => props.onChange('constraintsText', event.target.value)} placeholder="请输入农田、生态红线、历史保护、建设边界和灾害风险等约束。" rows={3} className={`${fieldClass} resize-y leading-5`} /></label>
+          <TaskFilePicker id="constraints-file-upload" files={props.constraintFiles} onChange={(files) => props.onFilesChange('constraintFiles', files)} />
         </section>
         </div>
         {props.planningError && <p className="mt-3 rounded-xl bg-red-50 p-3 text-xs text-red-600">{props.planningError}</p>}
@@ -1095,8 +1436,8 @@ function readInitialWorkbenchState(): { view: WorkbenchView; panel: OverviewPane
 function UnifiedPlanningWorkbench() {
   const { startPlanning, sendChatMessage, approve, resetConversation, loadVillagesHistory, loadHistoricalSession, deleteSession, clearAllHistory } = usePlanningActions();
   const sessionId = usePlanningStore((state) => state.sessionId);
+  const reports = usePlanningStore((state) => state.reports);
   const status = usePlanningStore((state) => state.status);
-  const evaluation = useQualityEvaluation(sessionId ?? '');
   const villages = usePlanningStore((state) => state.villages);
   const historyLoading = usePlanningStore((state) => state.historyLoading);
   const messages = usePlanningStore((state) => state.messages);
@@ -1119,29 +1460,38 @@ function UnifiedPlanningWorkbench() {
   const addMessage = usePlanningStore((state) => state.addMessage);
   const syncBackendState = usePlanningStore((state) => state.syncBackendState);
   const [payload, setPayload] = useState<CompleteResultPayload | null>(null);
+  const [positioningTrace, setPositioningTrace] = useState<PositioningTraceResponse | null>(null);
+  const [artifactKeys, setArtifactKeys] = useState<Set<string>>(() => new Set());
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(true);
-  const [filters, setFilters] = useState<Set<LayerFilter>>(() => new Set(['all']));
+  const [filters, setFilters] = useState<Set<LayerFilter>>(() => new Set(['current']));
   const [selectedLayerKeys, setSelectedLayerKeys] = useState<Set<string>>(() => new Set());
   const [activeRelation, setActiveRelation] = useState('相邻');
   const [baseMap, setBaseMap] = useState<WorkbenchBaseMap>('general');
-  const [offlineBasemap, setOfflineBasemap] = useState<{
-    layers: GISLayerConfig[];
-    center: [number, number] | null;
-  } | null>(null);
+  const [currentGisSource, setCurrentGisSource] = useState<CurrentSourceLayersResult | null>(null);
   const [workbenchView, setWorkbenchView] = useState<WorkbenchView>(() => readInitialWorkbenchState().view);
   const [overviewLevel, setOverviewLevel] = useState<OverviewLevel>('L1 现状分析');
   const [overviewPanel, setOverviewPanel] = useState<OverviewPanel>(() => readInitialWorkbenchState().panel);
   const [dataPanel, setDataPanel] = useState<DataPanel>('kg');
   const [showPlanningText, setShowPlanningText] = useState(false);
   const [showExportDialog, setShowExportDialog] = useState(false);
-  const [rightPanelWidth, setRightPanelWidth] = useState(310);
-  const [mapHeight, setMapHeight] = useState(650);
+  const [rightPanelWidth, setRightPanelWidth] = useState(460);
+  const [mapHeight, setMapHeight] = useState(720);
+  const [showMapDetails, setShowMapDetails] = useState(false);
   const [planningError, setPlanningError] = useState('');
+  const [evidenceFocus, setEvidenceFocus] = useState<MapFeatureFocus | null>(null);
+  const [evidenceFocuses, setEvidenceFocuses] = useState<MapFeatureFocus[]>([]);
+  const [spatialSidebarTab, setSpatialSidebarTab] = useState<SpatialSidebarTab>('assistant');
+  const [spatialAssistantMode, setSpatialAssistantMode] = useState<SpatialAssistantMode>('locator');
+  const [artifactDetailsOpen, setArtifactDetailsOpen] = useState(false);
+  const [focusedArtifactKey, setFocusedArtifactKey] = useState<string | null>(null);
   const [projectName, setProjectName] = useState('');
   const [villageData, setVillageData] = useState('');
+  const [villageDataFiles, setVillageDataFiles] = useState<File[]>([]);
   const [taskDescription, setTaskDescription] = useState('');
+  const [taskFiles, setTaskFiles] = useState<File[]>([]);
   const [constraintsText, setConstraintsText] = useState('');
+  const [constraintFiles, setConstraintFiles] = useState<File[]>([]);
   const [province, setProvince] = useState('');
   const [city, setCity] = useState('');
   const [county, setCounty] = useState('');
@@ -1277,55 +1627,97 @@ function UnifiedPlanningWorkbench() {
 
   const shouldLoadGisResult = workbenchView === 'drawings' || workbenchView === 'data';
   const hasSessionGisLayers = liveGisLayers.length > 0;
+  const spatialArtifactKeys = useMemo(
+    () => new Set([...artifactKeys].filter((key) => SPATIAL_ARTIFACT_KEY_SET.has(key))),
+    [artifactKeys],
+  );
+  const spatialWorkflowSteps = useMemo(
+    () => buildSpatialWorkflowSteps(positioningTrace, artifactKeys, reports.layer3),
+    [artifactKeys, positioningTrace, reports.layer3],
+  );
   // Load the Jintian reference package when there is no active session, or when the
   // session has not produced its own GIS layers yet (e.g. still in L1/L2 analysis).
-  const shouldLoadDemoCompleteResult = shouldLoadGisResult && (!sessionId || !hasSessionGisLayers);
-  const showingReferenceGis = Boolean(sessionId && !hasSessionGisLayers && payload?.layers?.length);
+  const shouldLoadCurrentSource = shouldLoadGisResult;
+  const showingReferenceGis = Boolean(sessionId && !hasSessionGisLayers && currentGisSource?.layers?.length);
 
   useEffect(() => {
-    if (!shouldLoadGisResult) return;
+    if (!sessionId || !shouldLoadGisResult) {
+      setPositioningTrace(null);
+      setArtifactKeys(new Set());
+      return undefined;
+    }
     let cancelled = false;
-    void fetchOfflineBasemap()
+    const loadTrace = async () => {
+      try {
+        const [trace, artifacts] = await Promise.all([
+          planningApi.getPositioningTrace(sessionId),
+          planningApi.listArtifacts(sessionId),
+        ]);
+        if (!cancelled) {
+          setPositioningTrace(trace);
+          setArtifactKeys(new Set(artifacts.artifacts.map((artifact) => artifact.artifact_key)));
+        }
+      } catch {
+        if (!cancelled) {
+          setPositioningTrace(null);
+          setArtifactKeys(new Set());
+        }
+      }
+    };
+    void loadTrace();
+    const timer = window.setInterval(() => void loadTrace(), 8000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [sessionId, shouldLoadGisResult]);
+
+  useEffect(() => {
+    if (!shouldLoadCurrentSource) return;
+    let cancelled = false;
+    void fetchCurrentSourceLayers()
       .then((result) => {
-        if (!cancelled) setOfflineBasemap(result);
+        if (!cancelled) setCurrentGisSource(result);
       })
       .catch((requestError) => {
-        logger.context.warn('Offline basemap fetch failed', { error: String(requestError) });
+        logger.context.warn('Current GIS source fetch failed', { error: String(requestError) });
       });
     return () => { cancelled = true; };
-  }, [shouldLoadGisResult]);
+  }, [shouldLoadCurrentSource]);
 
   const loadResult = useCallback(async (force = false) => {
+    void force;
     setLoading(true);
     setError('');
     try {
-      setPayload(await fetchCompleteResult(force));
+      const sourceLayers = await fetchCurrentSourceLayers();
+      setCurrentGisSource(sourceLayers);
+      setPayload(null);
     } catch (requestError) {
-      const message = requestError instanceof Error ? requestError.message : '完整成果加载失败';
-      setError(message === 'This operation was aborted' ? '成果读取超过 90 秒，请重新加载' : message);
+      const message = requestError instanceof Error ? requestError.message : '现状 GIS 数据源加载失败';
+      setError(`现状 GIS 数据源加载失败：${message}`);
     } finally {
       setLoading(false);
     }
   }, []);
 
   useEffect(() => {
-    if (!shouldLoadDemoCompleteResult) {
+    if (!shouldLoadCurrentSource) {
       setLoading(false);
       return;
     }
     void loadResult();
-  }, [shouldLoadDemoCompleteResult, loadResult]);
+  }, [shouldLoadCurrentSource, loadResult]);
 
   useEffect(() => {
-    invalidateCompleteResultCache();
     hydratedReportKey.current = '';
     setPayload(null);
-    if (!shouldLoadDemoCompleteResult) {
+    if (!shouldLoadCurrentSource) {
       setLoading(false);
       return;
     }
     void loadResult();
-  }, [sessionId, shouldLoadDemoCompleteResult, loadResult]);
+  }, [sessionId, shouldLoadCurrentSource, loadResult]);
 
   useEffect(() => {
     if (!sessionId || !['planning', 'revising', 'collecting', 'paused'].includes(status)) return;
@@ -1334,9 +1726,8 @@ function UnifiedPlanningWorkbench() {
         try {
           const backendStatus = await planningApi.getStatus(sessionId);
           if (!disposed) {
-            // v1: 报告/进度由 SSE dimension_complete 事件累积（含刷新后事件重放），
-            // 轮询只负责恢复状态投影，不再调用已删除的 /layer/reports 端点。
             syncBackendState(backendStatus);
+            await syncIfEventSeqBehind(sessionId, backendStatus.last_event_seq);
           }
       } catch {
         // SSE reconnect remains the primary channel; polling is only a
@@ -1350,17 +1741,12 @@ function UnifiedPlanningWorkbench() {
 
   const staticLayers = useMemo(
     () => {
-      // Once a session has its own GIS output, show only the offline basemap as
-      // context and let live session layers drive the planning overlays.
-      if (sessionId && hasSessionGisLayers) {
-        return offlineBasemap?.layers ?? [];
-      }
       if (payload?.layers?.length) {
         return normalizeGisLayers(payload.layers);
       }
-      return offlineBasemap?.layers ?? [];
+      return currentGisSource?.layers ?? [];
     },
-    [hasSessionGisLayers, offlineBasemap?.layers, payload?.layers, sessionId],
+    [currentGisSource?.layers, payload?.layers],
   );
   const sessionLayers = useMemo(
     () => normalizeGisLayers(liveGisLayers),
@@ -1380,7 +1766,6 @@ function UnifiedPlanningWorkbench() {
 
   const mapLayers = useMemo(
     () => layers
-      .filter((layer) => !isReferenceDisplayRole(layerRole(layer)))
       .filter((layer) => {
         if (layer.visible === false) return false;
         if (isLegacyCadArtifact(layer)) return false;
@@ -1390,7 +1775,8 @@ function UnifiedPlanningWorkbench() {
         if (layer.layerName === 'polygons' && String(path).includes('/project/') && !selectedLayerKeys.has('custom-zones')) return false;
         const base = layer.layerType === 'boundary' || layer.layerName === '现状用地（原版底图）';
         const chip = [...selectedLayerKeys].some((key) => matchesQuickLayer(layer, key));
-        const group = filters.has('all') || [...filters].some((key) => matchesFilter(layer, key));
+        const hasQuickSelection = selectedLayerKeys.size > 0;
+        const group = !hasQuickSelection && (filters.has('all') || [...filters].some((key) => matchesFilter(layer, key)));
         return layer !== fullRoadLayer || selectedLayerKeys.has('stage5-full')
           ? base || chip || group
           : false;
@@ -1407,6 +1793,12 @@ function UnifiedPlanningWorkbench() {
           return {
             ...layer,
             style: { ...layer.style, fillOpacity: 0.08, lineOpacity: 0.12, lineWidth: 0.2 },
+          };
+        }
+        if (layerRole(layer) === 'current_landuse' || layer.layerName === '现状地块') {
+          return {
+            ...layer,
+            style: { ...layer.style, fillOpacity: 0.78, lineOpacity: 0.95, lineWidth: 0.85 },
           };
         }
         if (layer.layerName === 'landuse') {
@@ -1435,9 +1827,9 @@ function UnifiedPlanningWorkbench() {
     [layers],
   );
 
-  const currentParcels = featureCount(getLayer((layer) => layer.layerName.includes('现状用地') || (layer.layerName === 'landuse' && !!layer.metadata?.path?.includes('current'))));
+  const currentParcels = featureCount(getLayer((layer) => layerRole(layer) === 'current_landuse' || layer.layerName.includes('现状用地') || (layer.layerName === 'landuse' && !!layer.metadata?.path?.includes('current'))));
   const plannedParcels = featureCount(getLayer((layer) => layer.layerName === '国土空间用途规划' || (layer.layerName === 'landuse' && !!layer.metadata?.path?.includes('planned'))));
-  const currentRoads = featureCount(getLayer((layer) => layer.layerName === '现状道路' || (layer.layerName === 'road' && !!layer.metadata?.path?.includes('current'))));
+  const currentRoads = featureCount(getLayer((layer) => layerRole(layer) === 'current_road' || layer.layerName === '现状道路' || (layer.layerName === 'road' && !!layer.metadata?.path?.includes('current'))));
   const referenceRoads = featureCount(getLayer((layer) => layerRole(layer) === 'historical_planned_road_reference' || (layer.layerName === 'road' && !!layer.metadata?.path?.includes('planned'))));
   const stage5Roads = roadProcess.recommended_segment_count_all ?? roadProcess.recommended_segment_count ?? 0;
   const finalRoads = roadProjects.filter((project) => project.status === 'recommended').length;
@@ -1462,10 +1854,10 @@ function UnifiedPlanningWorkbench() {
   const totalFeatures = layers.reduce((sum, layer) => sum + featureCount(layer), 0);
   const typeCount = new Set(layers.map((layer) => layer.layerType)).size;
 
-  const mapLayersLoading = loading && !offlineBasemap?.layers?.length;
+  const mapLayersLoading = loading && !currentGisSource?.layers?.length;
 
   const mapCenter = useMemo((): [number, number] => {
-    if (offlineBasemap?.center) return offlineBasemap.center;
+    if (currentGisSource?.center) return currentGisSource.center;
     const boundary = layers.find((layer) => layer.layerType === 'boundary' || layer.layerName === 'boundary');
     const geometry = boundary?.geojson?.features?.[0]?.geometry;
     if (geometry && (geometry.type === 'Polygon' || geometry.type === 'MultiPolygon')) {
@@ -1479,16 +1871,7 @@ function UnifiedPlanningWorkbench() {
       }
     }
     return [116.0735, 24.8317];
-  }, [layers, offlineBasemap?.center]);
-
-  const roadSteps = [
-    { label: '意图解析', value: `${roadProcess.road_target_count ?? 0} 个项目` },
-    { label: 'KG 实体定位', value: `${roadProcess.planning_node_count ?? 0} 个节点` },
-    { label: '三线约束闸门', value: `${roadProcess.kg?.constraint_count ?? 0} 项约束` },
-    { label: '候选选线', value: `${roadProcess.candidate_count ?? 0} 条` },
-    { label: 'Stage5 评分', value: `${roadProcess.recommended_segment_count_all ?? roadProcess.recommended_segment_count ?? 0} 段` },
-    { label: '布局校验', value: roadProcess.validation?.passed ? '通过' : '待复核' },
-  ];
+  }, [currentGisSource?.center, layers]);
 
   const quickGroups = [
     {
@@ -1522,12 +1905,14 @@ function UnifiedPlanningWorkbench() {
     },
   ] as const;
 
-  const toggleFilter = useCallback((key: LayerFilter) => setFilters((previous) => {
-    if (key === 'all') return new Set(['all']);
-    const next = new Set(previous); next.delete('all');
-    if (next.has(key)) next.delete(key); else next.add(key);
-    return next.size ? next : new Set(['all']);
-  }), []);
+  const selectFilter = useCallback((key: LayerFilter) => {
+    setFilters(new Set([key]));
+    setSelectedLayerKeys(new Set());
+  }, []);
+
+  const activeFilterLabel = selectedLayerKeys.size > 0
+    ? '自选图层'
+    : FILTERS.find((item) => filters.has(item.key))?.label || '全部成果';
 
   const toggleLayer = useCallback((key: string) => setSelectedLayerKeys((previous) => {
     const next = new Set(previous);
@@ -1538,7 +1923,7 @@ function UnifiedPlanningWorkbench() {
   const handleStartPlanning = useCallback(async () => {
     setPlanningError('');
     hydratedReportKey.current = '';
-    setFilters(new Set(['all']));
+    setFilters(new Set(['current']));
     setSelectedLayerKeys(new Set());
     setPayload(null);
     if (!projectName.trim() || !taskDescription.trim() || !villageData.trim()) {
@@ -1557,6 +1942,9 @@ function UnifiedPlanningWorkbench() {
         projectName: projectName.trim(), villageName: villageName.trim(),
         villageData: villageData.trim(), province: province.trim(), city: city.trim(), county: county.trim(), township: township.trim(),
         planningPeriod: planningPeriod.trim(), taskDescription, constraints: constraintsText, stepMode,
+        villageDataFiles: villageDataFiles.length ? villageDataFiles : undefined,
+        taskFiles: taskFiles.length ? taskFiles : undefined,
+        constraintFiles: constraintFiles.length ? constraintFiles : undefined,
       } satisfies PlanningParams);
     } catch (planningFailure) {
       setOverviewPanel('task');
@@ -1564,7 +1952,13 @@ function UnifiedPlanningWorkbench() {
     } finally {
       setIsStartingPlanning(false);
     }
-  }, [city, constraintsText, county, planningPeriod, projectName, province, startPlanning, stepMode, taskDescription, township, villageData, villageName]);
+  }, [city, constraintFiles, constraintsText, county, planningPeriod, projectName, province, startPlanning, stepMode, taskDescription, taskFiles, township, villageData, villageDataFiles, villageName]);
+
+  const handleTaskFilesChange = useCallback((field: 'villageDataFiles' | 'taskFiles' | 'constraintFiles', files: File[]) => {
+    if (field === 'villageDataFiles') setVillageDataFiles(files);
+    if (field === 'taskFiles') setTaskFiles(files);
+    if (field === 'constraintFiles') setConstraintFiles(files);
+  }, []);
 
   const handleStepModeChange = useCallback(async (enabled: boolean) => {
     setStepMode(enabled);
@@ -1604,18 +1998,17 @@ function UnifiedPlanningWorkbench() {
 
   const startBlankProject = useCallback(() => {
     resetConversation();
-    invalidateCompleteResultCache();
     hydratedReportKey.current = '';
     setPayload(null);
     setFilters(new Set(['all']));
     setSelectedLayerKeys(new Set());
     setProjectName(''); setVillageData(''); setTaskDescription(''); setConstraintsText(''); setPlanningError('');
+    setVillageDataFiles([]); setTaskFiles([]); setConstraintFiles([]);
     setProvince(''); setCity(''); setCounty(''); setTownship(''); setVillageName(''); setPlanningPeriod('');
     setOverviewLevel('L1 现状分析'); setWorkbenchView('overview'); setOverviewPanel('task');
   }, [resetConversation]);
 
   const openHistoricalSession = useCallback(async (projectName: string, historicalSessionId: string) => {
-    invalidateCompleteResultCache();
     hydratedReportKey.current = '';
     setPayload(null);
     setFilters(new Set(['all']));
@@ -1715,6 +2108,31 @@ function UnifiedPlanningWorkbench() {
     catch (chatFailure) { addMessage(createErrorMessage(chatFailure instanceof Error ? chatFailure.message : '消息发送失败')); }
   }, [addMessage, sendChatMessage, sessionId, setWorkbenchView, setOverviewPanel]);
 
+  const focusEvidenceFeatures = useCallback((features: EvidenceFeatureRef[]) => {
+    const mapped: MapFeatureFocus[] = [];
+    const seen = new Set<string>();
+    const addFocus = (focus: MapFeatureFocus) => {
+      const key = [focus.bundleFeatureBsm, focus.sourceFeatureId, focus.sourceBsm].filter(Boolean).join('|');
+      if (!key || seen.has(key)) return;
+      seen.add(key);
+      mapped.push(focus);
+    };
+    features.forEach((feature) => {
+        const identity = feature.identity;
+        if (!identity) return;
+        addFocus({
+          bundleFeatureBsm: identity.bundle_feature_bsm,
+          sourceFeatureId: identity.source_feature_id,
+          sourceBsm: identity.source_bsm || undefined,
+        });
+        (feature.related_parcel_bsms || []).slice(0, 6).forEach((parcelBsm) => {
+          addFocus({ bundleFeatureBsm: parcelBsm });
+        });
+      });
+    setEvidenceFocuses(mapped);
+    setEvidenceFocus(mapped[0] ?? null);
+  }, []);
+
   const beginResize = useCallback((kind: 'side' | 'map', event: React.PointerEvent<HTMLDivElement>) => {
     event.preventDefault();
     const handle = event.currentTarget;
@@ -1728,7 +2146,7 @@ function UnifiedPlanningWorkbench() {
     document.body.style.cursor = kind === 'map' ? 'row-resize' : 'col-resize';
     const move = (moveEvent: PointerEvent) => {
       const active = resizeState.current; if (!active) return;
-      if (active.kind === 'side') setRightPanelWidth(Math.max(260, Math.min(480, active.value - (moveEvent.clientX - active.start))));
+      if (active.kind === 'side') setRightPanelWidth(Math.max(380, Math.min(680, active.value - (moveEvent.clientX - active.start))));
       else setMapHeight(Math.max(420, Math.min(950, active.value + (moveEvent.clientY - active.start))));
     };
     const up = () => {
@@ -1824,7 +2242,7 @@ function UnifiedPlanningWorkbench() {
           </div>
         </aside>
 
-        <main className={`min-h-0 min-w-0 ${workbenchView === 'overview' ? 'flex h-full min-h-0 flex-col overflow-hidden p-2' : 'overflow-y-auto p-3 pb-6 lg:p-4 lg:pb-8'}`}>
+        <main className={`min-h-0 min-w-0 ${workbenchView === 'overview' ? 'flex h-full min-h-0 flex-col overflow-hidden p-2' : 'flex h-full min-h-0 flex-col overflow-y-auto p-3 pb-6 lg:p-4 lg:pb-8'}`}>
           <div className={`mx-auto flex w-full max-w-[1700px] flex-col gap-3 ${workbenchView === 'overview' ? 'min-h-0 flex-1' : 'min-h-full'}`}>
             <LlmStatusBanner />
             <DeliveryStatusBanner />
@@ -1896,11 +2314,26 @@ function UnifiedPlanningWorkbench() {
             </section>
 
             {workbenchView === 'drawings' && <section className="grid shrink-0 grid-cols-2 gap-2 xl:grid-cols-4">
-              <MetricCard icon={WORKBENCH_METRIC_ICONS.spatialFeatures} value={totalFeatures} label="空间要素" note={`${layers.length} 个图层`} />
-              <MetricCard icon={WORKBENCH_METRIC_ICONS.entityTypes} value={typeCount} label="实体类型" note="真实 GIS 分类" />
-              <MetricCard icon={WORKBENCH_METRIC_ICONS.plannedParcels} value={plannedParcels} label="规划地块" note="用途规划" />
-              <MetricCard icon={WORKBENCH_METRIC_ICONS.roads} value={currentRoads + referenceRoads + stage5Roads} label="道路要素" note="现状/参考/推荐" />
+              <MetricCard icon={WORKBENCH_METRIC_ICONS.spatialFeatures} value={totalFeatures} label="已加载现状数据" note={`${layers.length} 个真实图层`} />
+              <MetricCard icon={WORKBENCH_METRIC_ICONS.entityTypes} value={typeCount} label="底图分类" note="来自真实 GIS 图层" />
+              <MetricCard icon={WORKBENCH_METRIC_ICONS.plannedParcels} value={plannedParcels || '—'} label="规划成果" note={plannedParcels ? '已返回规划地块' : '等待 DELIVER 空间快照'} />
+              <MetricCard icon={WORKBENCH_METRIC_ICONS.roads} value={currentRoads + referenceRoads + stage5Roads || '—'} label="道路成果" note={stage5Roads || finalRoads ? '已有道路链记录' : '尚未产出道路结论'} />
             </section>}
+
+            {workbenchView === 'drawings' && currentGisSource && (
+              <section className="flex shrink-0 flex-wrap items-center gap-x-4 gap-y-1 rounded-xl border border-[#dcebe4] bg-[#f8fcf9] px-3 py-2 text-[11px] text-[#5f8174]">
+                <span className="font-semibold text-[#347b61]">现状数据源 · DataCatalog</span>
+                <span>{currentGisSource.layers.length} 个现状图层 · {totalFeatures.toLocaleString()} 个要素</span>
+                {currentGisSource.rasters.map((raster) => (
+                  <span key={raster.source_name} className={raster.available ? 'text-[#347b61]' : 'text-[#a66a4f]'}>
+                    DEM {raster.available ? `已接入 · ${raster.width ?? '—'}×${raster.height ?? '—'} · ${raster.crs || '未知坐标系'}` : `不可用 · ${raster.reason || '后端未提供'}`}
+                  </span>
+                ))}
+                {currentGisSource.diagnostics.map((diagnostic) => (
+                  <span key={diagnostic} className="text-[#a66a4f]">数据源提示：{diagnostic}</span>
+                ))}
+              </section>
+            )}
 
             {workbenchView === 'overview' && (
               <section className="grid min-h-0 flex-1 gap-0" style={{ gridTemplateColumns: 'minmax(0,1fr)' }}>
@@ -1914,16 +2347,7 @@ function UnifiedPlanningWorkbench() {
                     completedLayers={completedLayers}
                     onPanelChange={setOverviewPanel}
                     onStepModeChange={(enabled) => void handleStepModeChange(enabled)}
-                    evaluationActions={
-                      overviewPanel === 'evaluation' && sessionId
-                        ? {
-                            loading: evaluation.loading,
-                            hasResult: !!evaluation.result,
-                            onRun: () => void evaluation.runEvaluation(),
-                            onRefresh: () => void evaluation.loadExisting(),
-                          }
-                        : undefined
-                    }
+                    evaluationActions={undefined}
                   />
                   <div className="flex min-h-0 flex-1 flex-col overflow-hidden bg-[#fbfcfb]">
                     {overviewPanel === 'task' ? (
@@ -1948,6 +2372,10 @@ function UnifiedPlanningWorkbench() {
                         onStart={() => void handleStartPlanning()}
                         onStepModeChange={handleStepModeChange}
                         isStarting={isStartingPlanning}
+                        villageDataFiles={villageDataFiles}
+                        taskFiles={taskFiles}
+                        constraintFiles={constraintFiles}
+                        onFilesChange={handleTaskFilesChange}
                       />
                     ) : overviewPanel === 'analysis' ? (
                       planningBootstrap.isBootstrapping ? (
@@ -1980,19 +2408,9 @@ function UnifiedPlanningWorkbench() {
                         />
                       )
                     ) : overviewPanel === 'evaluation' ? (
-                      sessionId ? (
-                        <QualityEvaluationPanel
-                          sessionId={sessionId}
-                          projectName={projectName || payload?.villageName}
-                          embedded
-                          evaluation={evaluation}
-                        />
-                      ) : (
-                        <OverviewLockedPlaceholder
-                          variant="evaluation"
-                          onGoToTask={() => setOverviewPanel('task')}
-                        />
-                      )
+                      <section className="flex min-h-[320px] items-center justify-center rounded-2xl border border-dashed border-[#cfe4da] bg-[#f8fcf9] p-8 text-center text-[12px] text-[#8aa59a]">
+                        质量评估 API 在 v1 后端已下线；请通过分层分析报告与交付合规面板核查成果。
+                      </section>
                     ) : overviewPanel === 'document' ? (
                       sessionId ? (
                         <PlanningTextViewer sessionId={sessionId} embedded />
@@ -2015,9 +2433,10 @@ function UnifiedPlanningWorkbench() {
                 projectName={projectName || payload?.villageName}
                 payload={payload}
                 layers={layers}
-                roadProcess={roadProcess}
                 roadProjects={roadProjects}
-                roadSteps={roadSteps}
+                positioningTrace={positioningTrace}
+                spatialWorkflowSteps={spatialWorkflowSteps}
+                spatialArtifactKeys={spatialArtifactKeys}
                 typeCount={typeCount}
                 totalFeatures={totalFeatures}
                 currentParcels={currentParcels}
@@ -2046,7 +2465,7 @@ function UnifiedPlanningWorkbench() {
                 ))}
                 <span className="ml-3 mr-1 font-medium text-[#6f8f83]">综合视图</span>
                 {FILTERS.map((item) => (
-                  <button key={item.key} onClick={() => toggleFilter(item.key)} className={`inline-flex items-center gap-1.5 rounded-full border px-3 py-1.5 transition-colors ${filters.has(item.key) ? 'border-[#41b58a] bg-[#41b58a] font-semibold text-white' : 'border-[#d6e8df] bg-[#f8fbf9] text-[#648378] hover:border-[#79c8aa]'}`}>
+                  <button type="button" key={item.key} aria-pressed={filters.has(item.key)} onClick={() => selectFilter(item.key)} className={`inline-flex items-center gap-1.5 rounded-full border px-3 py-1.5 transition-colors ${filters.has(item.key) ? 'border-[#41b58a] bg-[#41b58a] font-semibold text-white' : 'border-[#d6e8df] bg-[#f8fbf9] text-[#648378] hover:border-[#79c8aa]'}`}>
                     <WorkbenchIcon icon={LAYER_FILTER_ICONS[item.key]} style={{ width: 11, height: 11 }} />
                     {item.label}
                   </button>
@@ -2055,8 +2474,7 @@ function UnifiedPlanningWorkbench() {
                   <button
                     type="button"
                     onClick={() => {
-                      setFilters(new Set(['all']));
-                      setSelectedLayerKeys(new Set(['planned-landuse', 'stage5-final', 'reference-roads']));
+                      selectFilter('planning');
                     }}
                     className="rounded-lg border border-[#b8e5d2] bg-[#edf9f3] px-2.5 py-1.5 text-[#1f8763] hover:bg-[#dff2e9]"
                   >
@@ -2065,18 +2483,28 @@ function UnifiedPlanningWorkbench() {
                   <button
                     type="button"
                     onClick={() => {
-                      setFilters(new Set(['roads']));
-                      setSelectedLayerKeys(new Set(['current-roads', 'reference-roads', 'stage5-final', 'stage5-full']));
+                      selectFilter('roads');
                     }}
                     className="rounded-lg border border-[#f0c987] bg-[#fff7e8] px-2.5 py-1.5 text-[#9a6418] hover:bg-[#ffefd4]"
                   >
                     显示道路样式
                   </button>
-                  <span className="rounded-lg bg-[#f1f7f4] px-2 py-1.5 text-[#6b897e]">当前显示 {displayMapLayers.length} 图层</span>
+                  <span className="rounded-lg bg-[#f1f7f4] px-2 py-1.5 text-[#6b897e]">当前显示 {displayMapLayers.length} 图层 · {activeFilterLabel}</span>
                 </span>
               </div>
               <div className="mt-2 space-y-1.5 text-[11px]">
-                {quickGroups.map((group) => (
+                <div className="flex flex-wrap items-center gap-1.5">
+                  <span className="font-medium text-[#78958a]">图层摘要</span>
+                  <span className="rounded-full bg-[#f1f7f4] px-2.5 py-1 text-[#648378]">现状：{currentParcels} 地块</span>
+                  <span className="rounded-full bg-[#f1f7f4] px-2.5 py-1 text-[#648378]">现状道路：{currentRoads}</span>
+                  <span className={`rounded-full px-2.5 py-1 ${plannedParcels || stage5Roads ? 'bg-[#e1f4eb] text-[#248865]' : 'bg-[#fff7e8] text-[#9a7428]'}`}>
+                    规划：{plannedParcels || stage5Roads ? `${plannedParcels + stage5Roads} 项已返回` : '尚未交付'}
+                  </span>
+                  <button type="button" onClick={() => setShowMapDetails((value) => !value)} className="rounded-full border border-[#dcebe4] px-2.5 py-1 text-[#6c887e] hover:bg-[#f4faf7]">
+                    {showMapDetails ? '收起分类' : '查看分类'}
+                  </button>
+                </div>
+                {showMapDetails && quickGroups.map((group) => (
                   <div key={group.label} className="flex flex-wrap items-center gap-1.5">
                     <span className="inline-flex w-12 shrink-0 items-center gap-1 font-medium text-[#78958a]">
                       <WorkbenchIcon icon={QUICK_LAYER_GROUP_ICONS[group.label]} style={{ width: 10, height: 10 }} />
@@ -2097,7 +2525,7 @@ function UnifiedPlanningWorkbench() {
                   </div>
                 ))}
                 <div className="flex flex-wrap items-center gap-1.5">
-                  <span className="w-12 shrink-0 font-medium text-[#78958a]">关系</span>
+                  <span className="w-12 shrink-0 font-medium text-[#78958a]">KG 拓扑</span>
                   {SPATIAL_RELATIONS.map((relation) => {
                     const active = activeRelation === relation.key;
                     return (
@@ -2117,18 +2545,28 @@ function UnifiedPlanningWorkbench() {
                       </button>
                     );
                   })}
-                  <span className="ml-1 text-[10px] text-[#9aada6]">点/线单击查名称；地块悬停看编号（BSM）</span>
+                  <span className="ml-1 text-[10px] text-[#9aada6]">地图检查模式；实体证据与关系结论由 KG 模块返回</span>
                 </div>
               </div>
             </section>
 
             <div className="flex h-8 shrink-0 items-center gap-2 rounded-lg bg-[#e5f1eb] px-2">
               <button type="button" onClick={() => setMapHeight((value) => Math.max(420, value - 80))} className="h-6 rounded-md bg-white px-2 text-[11px] text-[#39745f] shadow-sm" title="缩小地图">−</button>
-              <div onPointerDown={(event) => beginResize('map', event)} onDoubleClick={() => setMapHeight(650)} className="group flex h-full min-w-0 flex-1 touch-none cursor-row-resize items-center justify-center" title="上下拖动调整地图高度；双击复位"><span className="h-1 w-24 rounded-full bg-[#78a995] group-hover:bg-[#2da979]" /><span className="ml-2 text-[10px] text-[#527d6d]">上下拖动 · {mapHeight}px</span></div>
-              <button type="button" onClick={() => setMapHeight(650)} className="h-6 rounded-md bg-white px-2 text-[11px] text-[#39745f] shadow-sm" title="恢复默认高度">复位</button>
+              <div
+                onPointerDown={(event) => beginResize('map', event)}
+                onDoubleClick={() => setMapHeight(720)}
+                className="group flex h-full min-w-0 flex-1 touch-none cursor-row-resize items-center justify-center"
+                title="上下拖动调整地图高度；双击复位"
+                role="separator"
+                aria-orientation="horizontal"
+                aria-label="调整地图高度"
+                aria-valuenow={mapHeight}
+                tabIndex={0}
+              ><span className="h-1 w-24 rounded-full bg-[#78a995] group-hover:bg-[#2da979]" /><span className="ml-2 text-[10px] text-[#527d6d]">上下拖动 · {mapHeight}px</span></div>
+              <button type="button" onClick={() => setMapHeight(720)} className="h-6 rounded-md bg-white px-2 text-[11px] text-[#39745f] shadow-sm" title="恢复默认高度">复位</button>
               <button type="button" onClick={() => setMapHeight((value) => Math.min(950, value + 80))} className="h-6 rounded-md bg-white px-2 text-[11px] text-[#39745f] shadow-sm" title="放大地图">＋</button>
             </div>
-            <section className="grid min-h-[420px] flex-1 gap-0" style={{ gridTemplateColumns: `minmax(0,1fr) 8px ${rightPanelWidth}px` }}>
+            <section className="grid min-h-[560px] flex-1 gap-0" style={{ gridTemplateColumns: `minmax(0,1fr) 10px minmax(380px, ${rightPanelWidth}px)` }}>
               <div className="relative overflow-hidden rounded-2xl border border-[#dcebe4] bg-white shadow-[0_10px_32px_rgba(38,95,74,0.06)]" style={{ height: mapHeight }}>
                 {!error && (
                   <MapView
@@ -2143,6 +2581,8 @@ function UnifiedPlanningWorkbench() {
                     showLegend={!mapLayersLoading}
                     compactLegend
                     frameless
+                    focusFeature={evidenceFocus}
+                    focusFeatures={evidenceFocuses}
                   />
                 )}
                 {mapLayersLoading && (
@@ -2154,14 +2594,14 @@ function UnifiedPlanningWorkbench() {
                     </div>
                   </div>
                 )}
-                {loading && offlineBasemap?.layers?.length && !error && (
+                {loading && currentGisSource?.layers?.length && !error && (
                   <div className="pointer-events-none absolute inset-x-0 top-3 z-20 mx-auto w-fit rounded-full border border-[#d8e9e1] bg-white/90 px-4 py-1.5 text-[11px] text-[#33765f] shadow-sm">
-                    离线底图已显示，完整规划图层加载中…
+                    目录现状数据已显示，规划成果加载中…
                   </div>
                 )}
                 {showingReferenceGis && !mapLayersLoading && !error && (
                   <div className="pointer-events-none absolute inset-x-0 top-3 z-20 mx-auto w-fit rounded-full border border-[#d8e9e1] bg-white/90 px-4 py-1.5 text-[11px] text-[#33765f] shadow-sm">
-                    当前显示金田村参考成果图；完成「空间布局」分析后将切换为本会话 GIS 图层
+                    当前显示 DataCatalog 真实现状数据；本会话 DELIVER 空间快照尚未就绪，规划图层不会被伪造
                   </div>
                 )}
                 {error ? (
@@ -2181,10 +2621,91 @@ function UnifiedPlanningWorkbench() {
                   图谱空间联动模式
                 </div>
               </div>
-              <div onPointerDown={(event) => beginResize('side', event)} className="group relative cursor-col-resize touch-none"><span className="absolute inset-y-0 left-1/2 w-px bg-[#c9dfd5] group-hover:w-1 group-hover:bg-[#3fb288]" /></div>
-              <aside className="space-y-3 overflow-y-auto pr-1">
+              <div
+                onPointerDown={(event) => beginResize('side', event)}
+                className="group relative cursor-col-resize touch-none"
+                role="separator"
+                aria-orientation="vertical"
+                aria-label="调整空间侧栏宽度"
+                aria-valuenow={rightPanelWidth}
+                tabIndex={0}
+                title="左右拖动调整空间侧栏宽度"
+              ><span className="absolute inset-y-0 left-1/2 w-px bg-[#c9dfd5] group-hover:w-1 group-hover:bg-[#3fb288]" /></div>
+              <aside className="min-h-0 overflow-y-auto pr-1">
+                <div className="sticky top-0 z-30 mb-3 flex flex-wrap gap-1 rounded-2xl border border-[#dcebe4] bg-white/95 p-1.5 shadow-sm backdrop-blur">
+                  {([
+                    ['assistant', '空间助手'],
+                    ['spatial', '空间链路'],
+                    ['kg', 'KG 模块'],
+                  ] as Array<[SpatialSidebarTab, string]>).map(([tab, label]) => (
+                    <button
+                      key={tab}
+                      type="button"
+                      onClick={() => setSpatialSidebarTab(tab)}
+                      className={`rounded-xl px-2.5 py-1.5 text-[11px] transition ${spatialSidebarTab === tab ? 'bg-[#dff2e9] font-semibold text-[#2d7e61]' : 'text-[#78968b] hover:bg-[#f1f8f4]'}`}
+                    >
+                      {label}
+                    </button>
+                  ))}
+                </div>
+                {spatialSidebarTab === 'assistant' && (
+                  <div className="space-y-3">
+                    <div className="overflow-hidden rounded-2xl border border-[#cfe7db] bg-gradient-to-br from-[#f7fcf9] to-white shadow-[0_10px_28px_rgba(42,102,79,0.06)]">
+                      <div className="border-b border-[#e4f0ea] px-4 py-3">
+                        <div className="flex items-start justify-between gap-3">
+                          <div>
+                            <div className="text-[13px] font-semibold text-[#285e4b]">空间助手</div>
+                            <div className="mt-1 text-[10px] leading-4 text-[#78968b]">自然语言触发真实证据查询或规划对话，结果会联动地图。</div>
+                          </div>
+                          <span className="rounded-full bg-[#dff2e9] px-2 py-1 text-[10px] font-semibold text-[#2d7e61]">真实 API</span>
+                        </div>
+                        <div className="mt-3 flex rounded-xl bg-[#edf7f1] p-1">
+                          {([
+                            ['locator', '实体定位工具'],
+                            ['chat', '规划对话'],
+                          ] as Array<[SpatialAssistantMode, string]>).map(([mode, label]) => (
+                            <button
+                              key={mode}
+                              type="button"
+                              onClick={() => setSpatialAssistantMode(mode)}
+                              className={`flex-1 rounded-lg px-2 py-2 text-[11px] transition ${spatialAssistantMode === mode ? 'bg-white font-semibold text-[#2d7e61] shadow-sm' : 'text-[#78968b] hover:text-[#39745f]'}`}
+                            >
+                              {label}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                      {spatialAssistantMode === 'locator' ? (
+                        <div className="p-3">
+                          <EvidenceQueryPanel
+                            sessionId={sessionId}
+                            villageName={villageName || payload?.villageName || ''}
+                            onFocusFeatures={focusEvidenceFeatures}
+                            onFocusFeature={(feature) => focusEvidenceFeatures([feature])}
+                          />
+                        </div>
+                      ) : (
+                        <div className="flex min-h-[520px] flex-col bg-[#fcfdfc]">
+                          <div className="min-h-0 flex-1 overflow-y-auto px-1">
+                            <MessageList messages={messages} isTyping={status === 'planning'} />
+                          </div>
+                          <div className="shrink-0 border-t border-[#e5efe9] bg-white">
+                            <ChatInput disabled={!sessionId} onSend={handleChat} />
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                    {evidenceFocuses.length > 0 && spatialAssistantMode === 'locator' && (
+                      <div className="rounded-xl border border-[#bfe3d0] bg-[#effaf4] px-3 py-2.5 text-[11px] text-[#2d7e61]">
+                        <div className="font-semibold">地图已高亮 {evidenceFocuses.length} 个真实候选</div>
+                        <div className="mt-1 text-[10px] leading-4 text-[#5b8a78]">点击候选卡可缩小到单个实体；再次查询会替换本轮高亮。</div>
+                      </div>
+                    )}
+                  </div>
+                )}
+                {spatialSidebarTab === 'kg' && (
                 <div className="overflow-hidden rounded-2xl border border-[#dcebe4] bg-white shadow-[0_7px_24px_rgba(42,102,79,0.04)]">
-                  <PanelTitle title="实体浏览器" note="真实图层计数" />
+                  <PanelTitle title="KG 模块 · 实体" note="L1 / GIS 真实实体" />
                   <div className="px-3 py-3 text-[12px]">
                     <div className="mb-2 rounded-lg bg-[#dff2e9] px-3 py-1.5 font-semibold text-[#2d7e61]">现状实体</div>
                     {ENTITY_BROWSER_CURRENT.map((entry) => (
@@ -2217,11 +2738,29 @@ function UnifiedPlanningWorkbench() {
                     ))}
                   </div>
                 </div>
+                )}
 
-                <IntermediateArtifactsPanel sessionId={sessionId} />
+                {spatialSidebarTab === 'spatial' && (
+                  <details
+                    className="overflow-hidden rounded-2xl border border-[#dcebe4] bg-white shadow-[0_7px_24px_rgba(42,102,79,0.04)]"
+                    open={artifactDetailsOpen || Boolean(focusedArtifactKey)}
+                    onToggle={(event) => setArtifactDetailsOpen(event.currentTarget.open)}
+                  >
+                    <summary className="cursor-pointer list-none px-3 py-3 text-[12px] font-semibold text-[#315f50] marker:hidden">
+                      <span className="flex items-center justify-between gap-2">
+                        <span>中间产物详情</span>
+                        <span className="text-[10px] font-normal text-[#8aa59a]">按后端 artifact key 展开</span>
+                      </span>
+                    </summary>
+                    <div className="border-t border-[#edf4f0] p-2">
+                      <IntermediateArtifactsPanel sessionId={sessionId} focusKey={focusedArtifactKey} />
+                    </div>
+                  </details>
+                )}
 
+                {spatialSidebarTab === 'kg' && (
                 <div className="overflow-hidden rounded-2xl border border-[#dcebe4] bg-white shadow-[0_7px_24px_rgba(42,102,79,0.04)]">
-                  <PanelTitle title="空间关系" note="点击上方关系切换" />
+                  <PanelTitle title="KG 模块 · 拓扑" note="点击上方 KG 拓扑模式切换" />
                   <div className="p-3">
                     {(() => {
                       const relationMeta = getSpatialRelation(activeRelation);
@@ -2238,15 +2777,17 @@ function UnifiedPlanningWorkbench() {
                               <RelationDot color={relationMeta.color} />
                               {relationMeta.label}
                             </span>
-                            <span className="text-[10px] text-[#8da49b]">当前关系检查模式</span>
+                            <span className="text-[10px] text-[#8da49b]">当前 KG 拓扑检查模式</span>
                           </div>
                     <p className="mt-2 text-[11px] leading-5 text-[#607b71]">
                       {{
-                        邻近: '检查地块与设施、道路及项目点的近距离关联。',
-                        相邻: '检查地块之间是否共享边界，用于连片规划判断。',
-                        包含: '检查地块是否位于功能区或刚性管控范围内部。',
-                        相交: '检查道路、地块与生态红线等约束是否发生相交。',
-                        道路连接: `检查候选道路的网络连通关系，本轮共生成 ${roadProcess.candidate_count ?? 0} 条候选线。`,
+                        邻近: 'KG 拓扑检查地块与设施、道路及项目点的近距离关联。',
+                        相邻: 'KG 拓扑检查地块之间是否共享边界，用于连片规划判断。',
+                        包含: 'KG 拓扑检查地块是否位于功能区或刚性管控范围内部。',
+                        相交: 'KG 拓扑检查道路、地块与生态红线等约束是否发生相交。',
+                        道路连接: spatialArtifactKeys.has('execution_result')
+                          ? 'KG 拓扑检查后端 EXECUTE 结果中的道路网络连通关系。'
+                          : '道路执行结果尚未到达；当前仅选择拓扑检查模式，不生成候选线数量。',
                       }[activeRelation]}
                     </p>
                         </>
@@ -2254,35 +2795,62 @@ function UnifiedPlanningWorkbench() {
                     })()}
                   </div>
                 </div>
+                )}
 
+                {spatialSidebarTab === 'spatial' && (
+                <div className="space-y-3">
                 <div className="overflow-hidden rounded-2xl border border-[#dcebe4] bg-white shadow-[0_7px_24px_rgba(42,102,79,0.04)]">
-                  <PanelTitle title="道路规划步骤" note="按流程定位" />
+                  <PanelTitle title="空间链路" note={positioningTrace ? `${positioningTrace.reports.length} 条真实记录` : '等待后端过程'} />
                   <div className="px-4 py-3">
-                    {roadSteps.map((step, index) => (
+                    {spatialWorkflowSteps.map((step, index) => (
                       <div key={step.label} className="relative flex gap-3 pb-3 last:pb-0">
-                        {index < roadSteps.length - 1 && <span className="absolute left-[9px] top-5 h-full w-px bg-[#c9e6d9]" />}
-                        <span className="relative z-10 flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-[#42b48a] text-[10px] font-bold text-white">{index + 1}</span>
-                        <div className="flex min-w-0 flex-1 items-center justify-between gap-2"><span className="truncate text-[12px] font-medium text-[#3c6255]">{step.label}</span><span className="shrink-0 text-[10px] text-[#3c9b76]">{step.value}</span></div>
+                        {index < spatialWorkflowSteps.length - 1 && <span className="absolute left-[9px] top-5 h-full w-px bg-[#c9e6d9]" />}
+                        <span className={`relative z-10 flex h-5 w-5 shrink-0 items-center justify-center rounded-full text-[10px] font-bold ${step.status === 'recorded' || step.registeredArtifactKeys.length > 0 ? 'bg-[#42b48a] text-white' : 'bg-[#eef3f0] text-[#9aada6]'}`}>{step.status === 'recorded' ? '✓' : step.registeredArtifactKeys.length > 0 ? '•' : index + 1}</span>
+                        <div className="min-w-0 flex-1">
+                          <div className="flex items-center justify-between gap-2">
+                            <span className="truncate text-[12px] font-medium text-[#3c6255]">{step.label}</span>
+                            <span className={`shrink-0 text-[10px] ${step.status === 'recorded' || step.registeredArtifactKeys.length > 0 ? 'text-[#3c9b76]' : 'text-[#9aada6]'}`}>
+                              {step.status === 'recorded' ? '过程已记录' : step.registeredArtifactKeys.length > 0 ? '产物已登记' : '尚未到达'}
+                            </span>
+                          </div>
+                          <div className="mt-0.5 truncate text-[10px] text-[#8aa59a]">{step.value}</div>
+                          {step.humanReports.length > 0 && (
+                            <IntentProjectOverview
+                              projects={step.humanReports.flatMap((report) => report.projectHints)}
+                              claimCount={step.humanReports.reduce((count, report) => count + report.claimCount, 0)}
+                              dimensionCount={step.humanReports.length}
+                              workflowSteps={spatialWorkflowSteps}
+                            />
+                          )}
+                          {step.registeredArtifactKeys.length > 0 ? (
+                            <div className="mt-1 flex flex-wrap gap-1">
+                              {step.registeredArtifactKeys.map((key) => (
+                                <button
+                                  key={key}
+                                  type="button"
+                                  onClick={() => {
+                                    setFocusedArtifactKey(key);
+                                    setArtifactDetailsOpen(true);
+                                  }}
+                                  className="rounded-full bg-[#e8f6ef] px-1.5 py-0.5 text-[9px] text-[#2d7e61] transition hover:bg-[#cdeade] hover:text-[#1f6c51]"
+                                  title={`查看${SPATIAL_ARTIFACT_LABELS[key] || key}详情`}
+                                >
+                                  {SPATIAL_ARTIFACT_LABELS[key] || key}
+                                </button>
+                              ))}
+                            </div>
+                          ) : step.status === 'recorded' && step.expectedArtifactKeys.length > 0 ? (
+                            <div className="mt-1 text-[9px] text-[#a27a58]">阶段已记录 · 空间产物尚未登记</div>
+                          ) : null}
+                        </div>
                       </div>
                     ))}
+                    <div className="mt-1 rounded-lg bg-[#f5faf7] px-2.5 py-2 text-[10px] leading-4 text-[#78968b]">流程状态来自 positioning-trace；未到达阶段不会用 0 项或示意结果填充。</div>
                   </div>
                 </div>
 
-                <div className="overflow-hidden rounded-2xl border border-[#dcebe4] bg-white shadow-[0_7px_24px_rgba(42,102,79,0.04)]">
-                  <PanelTitle title="道路项目结论" note={`${roadProjects.length} 项`} />
-                  <div className="space-y-2 p-3">
-                    {roadProjects.map((project) => {
-                      const passed = project.status === 'recommended';
-                      const length = passed ? project.recommendedLengthM : project.reviewLengthM;
-                      return (
-                        <div key={project.projectId} className={`rounded-xl border p-3 ${passed ? 'border-[#bfe4d3] bg-[#f1faf6]' : 'border-[#f0d2bd] bg-[#fff8f1]'}`}>
-                          <div className="break-words text-[11px] font-semibold leading-5 text-[#385e52]">{project.routeName}</div>
-                          <div className="mt-1 flex flex-wrap gap-1.5 text-[10px]"><span className={`rounded-full px-2 py-0.5 ${passed ? 'bg-[#d9f1e6] text-[#278361]' : 'bg-[#fce6d5] text-[#b36a32]'}`}>{passed ? '推荐实施' : '待工程复核'}</span><span className="rounded-full bg-white px-2 py-0.5 text-[#69877c]">{project.plannedWidthM ?? 0}m</span><span className="rounded-full bg-white px-2 py-0.5 text-[#69877c]">{((length ?? 0) / 1000).toFixed(2)}km</span></div>
-                        </div>
-                      );
-                    })}
-                  </div>
                 </div>
+                )}
               </aside>
             </section>
             </>}

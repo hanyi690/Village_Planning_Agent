@@ -3,32 +3,39 @@
 // ============================================
 
 import { apiRequest, API_BASE_URL } from './client';
+import { usePlanningStore } from '../store/planningStore';
+import {
+  assemblePlanningTextDocument,
+} from '../utils/assemble-planning-text';
+import {
+  exportLayerJsonClient,
+  exportLayerMdClient,
+  exportPlanningTextMdClient,
+} from '../utils/export-reports';
 import type {
   StartPlanningRequest,
   StartPlanningResponse,
-  FeedbackRequest,
   SessionStatusResponse,
-  LayerReportsResponse,
-  DimensionReportResponse,
   PlanningSSEEvent,
   PlanningSSEEventType,
   PlanningSSEDataBase,
-  ImageData,
   PlanningTextDocument,
   PlanningTextVersionList,
   GeneratePlanningTextRequest,
   GeneratePlanningTextResponse,
-  RagConfigRequest,
-  RagConfigResponse,
   StepModeRequest,
   StepModeResponse,
-  GeocodeResponse,
-  GisDataUploadResponse,
   RenderLayersResponse,
+  PositioningTraceResponse,
   DeliveryProjection,
   HumanReviewListResponse,
   HumanReviewResolveRequest,
   HumanReviewResolveResponse,
+  EvidenceQueryRequest,
+  EvidenceQueryResponse,
+  PlanningDependencyGraphResponse,
+  PersistedHistoryResponse,
+  CurrentSourceLayerCollection,
 } from './types';
 
 // ============================================
@@ -108,7 +115,21 @@ export const planningApi = {
 
       try {
         const rawData = event.data;
-        const envelope = JSON.parse(rawData) as {
+        const parsedData = JSON.parse(rawData) as Record<string, unknown>;
+
+        // The local v1 backend emits resync_required as a control payload,
+        // not as the normal public-event envelope. Keep the recovery marker
+        // intact so the store can trigger the REST state recovery path.
+        if (type === 'resync_required') {
+          onEvent({
+            type,
+            data: parsedData as PlanningSSEDataBase,
+            session_id: sessionId,
+          });
+          return;
+        }
+
+        const envelope = parsedData as {
           type: string;
           seq: number;
           data: PlanningSSEDataBase & { type?: PlanningSSEEventType };
@@ -186,14 +207,10 @@ export const planningApi = {
       }
     }
 
-    // ⚠️ IMPORTANT: Every SSE event type MUST be listed here, otherwise the
-    // frontend will silently drop it (EventSource only fires for registered types).
-    // When adding a new SSE event:
-    //   1. Add the type constant in backend/app/core/events.py
-    //   2. Add cache config in backend/app/services/sse.py CACHE_CONFIG (if critical)
-    //   3. Add the handler in planningStore.ts handleSSEEvent switch
-    //   4. Add to useSSE.ts criticalEventTypes (if it should skip batch delay)
-    //   5. Add the type string HERE
+    // The local v1 backend projects dimension and GIS source events under the
+    // public `progress` event and keeps their source type in `data.type`.
+    // Register the public event names here; registering source event names
+    // would not make EventSource receive anything from this backend.
     const eventTypes = [
       'progress', 'human_review', 'delivery_ready', 'completed', 'failed',
       'resync_required',
@@ -278,37 +295,6 @@ export const planningApi = {
   },
 
   /**
-   * Submit feedback (unified endpoint for approve/reject/chat)
-   * POST /api/sessions/{session_id}/feedback
-   */
-  async submitFeedback(_sessionId: string, _request: FeedbackRequest): Promise<{
-    status: string;
-    reply?: string;
-    draft_feedback?: string;
-    dimensions?: string[];
-    layer?: number;
-    current_layer?: number;
-    review_layer?: number;
-    next_phase?: string;
-  }> {
-    // 该端点已从后端 v1 删除；此方法保留签名仅为类型兼容，运行时不再发起网络请求。
-    throw new Error('[v1] 对话/反馈端点已下线（POST /api/sessions/{id}/feedback）；人工审核请使用 POST /api/v1/sessions/{id}/human-review');
-  },
-
-  /**
-   * Send chat message to planning session
-   * POST /api/sessions/{session_id}/feedback
-   */
-  async sendChatMessage(
-    _sessionId: string,
-    _message: string,
-    _images?: ImageData[],
-  ): Promise<{ status: string; reply?: string; draft_feedback?: string; dimensions?: string[] }> {
-    // 该端点已从后端 v1 删除；此方法保留签名仅为类型兼容，运行时不再发起网络请求。
-    throw new Error('[v1] 对话端点已下线（POST /api/sessions/{id}/feedback）');
-  },
-
-  /**
    * Get session status
    * GET /api/v1/sessions/{session_id}/state
    */
@@ -348,53 +334,19 @@ export const planningApi = {
   },
 
   /**
-   * Get layer reports
-   * GET /api/sessions/{session_id}/layer/{layer}/reports
-   */
-  async getLayerReports(_sessionId: string, _layer: number): Promise<LayerReportsResponse> {
-    // 该端点已从后端 v1 删除；此方法保留签名仅为类型兼容，运行时不再发起网络请求。
-    throw new Error('[v1] 报告端点已下线（GET /api/sessions/{id}/layer/{layer}/reports）；报告由 SSE dimension_complete 事件提供');
-  },
-
-  /**
-   * Get dimension report (Signal-Fetch Pattern)
-   * GET /api/sessions/{session_id}/reports/{dim_key}
-   */
-  async getDimensionReport(_sessionId: string, _dimensionKey: string): Promise<DimensionReportResponse> {
-    // 该端点已从后端 v1 删除；此方法保留签名仅为类型兼容，运行时不再发起网络请求。
-    throw new Error('[v1] 报告端点已下线（GET /api/sessions/{id}/reports/{dim_key}）');
-  },
-
-  /**
-   * Delete session
-   * DELETE /api/sessions/{session_id}
-   */
-  async deleteSession(_sessionId: string): Promise<{ message: string }> {
-    // 该端点已从后端 v1 删除；此方法保留签名仅为类型兼容，运行时不再发起网络请求。
-    throw new Error('[v1] 删除会话端点已下线（DELETE /api/sessions/{id}），删除仅作用于本地历史');
-  },
-
-  /**
-   * Get checkpoints for a session
-   * GET /api/sessions/{session_id}/checkpoints
-   */
-  async getCheckpoints(_sessionId: string): Promise<{ session_id: string; checkpoints: { checkpoint_id: string; phase: string; layer: number }[]; count: number }> {
-    // 该端点已从后端 v1 删除；此方法保留签名仅为类型兼容，运行时不再发起网络请求。
-    throw new Error('[v1] 检查点端点已下线（GET /api/sessions/{id}/checkpoints）');
-  },
-
-  /**
    * Export layer report in a given format (direct file stream)
    * POST /api/sessions/{session_id}/export?layer=N&format=...
    */
   async exportLayerFormat(
-    _sessionId: string,
-    _layer: number,
-    _format: 'docx' | 'json' | 'md',
+    sessionId: string,
+    layer: number,
+    format: 'docx' | 'json' | 'md',
     _extraParams: string = '',
   ): Promise<string> {
-    // 该端点已从后端 v1 删除；此方法保留签名仅为类型兼容，运行时不再发起网络请求。
-    throw new Error('[v1] 导出端点已下线（POST /api/sessions/{id}/export）；下载请等后端提供 /delivery.downloads 服务');
+    const { reports } = usePlanningStore.getState();
+    if (format === 'json') return exportLayerJsonClient(sessionId, layer, reports);
+    if (format === 'md') return exportLayerMdClient(sessionId, layer, reports);
+    throw new Error('[v1] DOCX 导出暂由 Markdown 代替；请使用 MD 格式或等待 DELIVER 产物下载');
   },
 
   async exportLayerDocx(
@@ -414,11 +366,13 @@ export const planningApi = {
   },
 
   async exportPlanningTextDocx(
-    _sessionId: string,
-    _projectName: string = '村庄规划',
+    sessionId: string,
+    projectName: string = '村庄规划',
   ): Promise<string> {
-    // 该端点已从后端 v1 删除；此方法保留签名仅为类型兼容，运行时不再发起网络请求。
-    throw new Error('[v1] 导出端点已下线（POST /api/sessions/{id}/export）');
+    const state = usePlanningStore.getState();
+    const name = projectName || state.projectName || '村庄规划';
+    const doc = assemblePlanningTextDocument(sessionId, state.reports, name);
+    return exportPlanningTextMdClient(sessionId, doc.markdown_content, name);
   },
 
   /**
@@ -448,29 +402,32 @@ export const planningApi = {
    * GET /api/sessions/{session_id}/planning-text/versions/{version}
    */
   async getPlanningText(_sessionId: string, _version?: number): Promise<PlanningTextDocument | null> {
-    // 该端点已从后端 v1 删除；此方法保留签名仅为类型兼容，运行时不再发起网络请求。
-    throw new Error('[v1] 规划文本端点已下线（GET /api/sessions/{id}/planning-text）');
+    return null;
   },
 
-  /**
-   * Get all planning text versions
-   * GET /api/sessions/{session_id}/planning-text/versions
-   */
-  async getPlanningTextVersions(_sessionId: string, _limit?: number): Promise<PlanningTextVersionList> {
-    // 该端点已从后端 v1 删除；此方法保留签名仅为类型兼容，运行时不再发起网络请求。
-    throw new Error('[v1] 规划文本端点已下线（GET /api/sessions/{id}/planning-text/versions）');
+  async getPlanningTextVersions(sessionId: string, _limit?: number): Promise<PlanningTextVersionList> {
+    return {
+      session_id: sessionId,
+      versions: [],
+      total: 0,
+    };
   },
 
-  /**
-   * Generate planning text document
-   * POST /api/sessions/{session_id}/planning-text
-   */
   async generatePlanningText(
-    _sessionId: string,
-    _request?: GeneratePlanningTextRequest
+    sessionId: string,
+    request?: GeneratePlanningTextRequest,
   ): Promise<GeneratePlanningTextResponse> {
-    // 该端点已从后端 v1 删除；此方法保留签名仅为类型兼容，运行时不再发起网络请求。
-    throw new Error('[v1] 规划文本端点已下线（POST /api/sessions/{id}/planning-text）');
+    return {
+      session_id: sessionId,
+      version: 0,
+      document_id: '',
+      markdown_content: '',
+      article_count: 0,
+      generated_at: new Date().toISOString(),
+      generation_duration_seconds: 0,
+      status: 'empty',
+      trigger_reason: request?.trigger_reason || 'manual',
+    };
   },
 
   // ============================================
@@ -478,58 +435,16 @@ export const planningApi = {
   // ============================================
 
   /**
-   * Update RAG configuration (runtime)
-   * PATCH /api/sessions/{session_id}/rag-config
-   */
-  async updateRagConfig(
-    _sessionId: string,
-    _request: RagConfigRequest
-  ): Promise<RagConfigResponse> {
-    // 该端点已从后端 v1 删除；此方法保留签名仅为类型兼容，运行时不再发起网络请求。
-    throw new Error('[v1] RAG 配置端点已下线（PATCH /api/sessions/{id}/rag-config）');
-  },
-
-  /**
    * Update step mode (runtime)
    * PATCH /api/sessions/{session_id}/step-mode
    */
   async updateStepMode(
     _sessionId: string,
-    _request: StepModeRequest
+    request: StepModeRequest,
   ): Promise<StepModeResponse> {
-    // 该端点已从后端 v1 删除；此方法保留签名仅为类型兼容，运行时不再发起网络请求。
-    throw new Error('[v1] 分步模式端点已下线（PATCH /api/sessions/{id}/step-mode）');
-  },
-
-  /**
-   * Geocode village address to center coordinates + boundary
-   * GET /api/sessions/{session_id}/geocode
-   */
-  async geocodeVillage(
-    _sessionId: string,
-    _params: {
-      village_name?: string;
-      province?: string;
-      city?: string;
-      county?: string;
-      township?: string;
-    }
-  ): Promise<GeocodeResponse> {
-    // 该端点已从后端 v1 删除；此方法保留签名仅为类型兼容，运行时不再发起网络请求。
-    throw new Error('[v1] 地理编码端点已下线（GET /api/sessions/{id}/geocode）');
-  },
-
-  /**
-   * Upload GIS data (GeoJSON) to an existing session
-   * POST /api/sessions/{session_id}/gis-data
-   */
-  async uploadGisData(
-    _sessionId: string,
-    _file: File,
-    _dataType?: string,
-  ): Promise<GisDataUploadResponse> {
-    // 该端点已从后端 v1 删除；此方法保留签名仅为类型兼容，运行时不再发起网络请求。
-    throw new Error('[v1] GIS 上传端点已下线（POST /api/sessions/{id}/gis-data）');
+    // v1: step_mode 仅在创建会话时提交；会话进行中仅更新本地 store。
+    usePlanningStore.getState().setStepMode(Boolean(request.step_mode));
+    return { session_id: _sessionId, step_mode: Boolean(request.step_mode) };
   },
 
   /**
@@ -552,6 +467,33 @@ export const planningApi = {
         data: layer.geojson,
       })),
     };
+  },
+
+  /**
+   * Get the configured current GIS context from the backend DataCatalog.
+   * This endpoint is intentionally separate from DELIVER /map-layers.
+   */
+  async getCurrentSourceLayers(villageName = '金田村'): Promise<CurrentSourceLayerCollection> {
+    return apiRequest<CurrentSourceLayerCollection>(
+      `/api/v1/source-layers?village_name=${encodeURIComponent(villageName)}`,
+    );
+  },
+
+  /**
+   * Query the unified L1/KG/bundle evidence boundary.
+   * POST /api/v1/sessions/{session_id}/evidence/query
+   */
+  async queryEvidence(
+    sessionId: string,
+    request: EvidenceQueryRequest,
+  ): Promise<EvidenceQueryResponse> {
+    return apiRequest<EvidenceQueryResponse>(
+      `/api/v1/sessions/${sessionId}/evidence/query`,
+      {
+        method: 'POST',
+        body: JSON.stringify(request),
+      },
+    );
   },
 
   /**
@@ -581,7 +523,44 @@ export const planningApi = {
       artifact_key: string;
       artifact_ref: { digest: string; descriptor_digest: string };
       payload: Record<string, unknown>;
-    }>(`/api/v1/sessions/${sessionId}/artifacts/${artifactKey}`);
+  }>(`/api/v1/sessions/${sessionId}/artifacts/${artifactKey}`);
+  },
+
+  async listArtifacts(sessionId: string): Promise<{
+    session_id: string;
+    artifacts: Array<{ artifact_key: string; artifact_ref: Record<string, unknown> }>;
+  }> {
+    return apiRequest<{
+      session_id: string;
+      artifacts: Array<{ artifact_key: string; artifact_ref: Record<string, unknown> }>;
+    }>(`/api/v1/sessions/${sessionId}/artifacts`);
+  },
+
+  /**
+   * Read persisted stage summaries for the spatial planning chain.
+   * GET /api/v1/sessions/{session_id}/positioning-trace
+   */
+  async getPositioningTrace(sessionId: string): Promise<PositioningTraceResponse> {
+    return apiRequest<PositioningTraceResponse>(
+      `/api/v1/sessions/${sessionId}/positioning-trace`,
+    );
+  },
+
+  /**
+   * Read the backend-declared topic dependency graph.
+   * GET /api/v1/planning/dependency-graph
+   */
+  async getDependencyGraph(): Promise<PlanningDependencyGraphResponse> {
+    return apiRequest<PlanningDependencyGraphResponse>('/api/v1/planning/dependency-graph');
+  },
+
+  /**
+   * Read persisted project/session metadata for the restart-safe history sidebar.
+   * GET /api/v1/projects
+   */
+  async listProjects(): Promise<PersistedHistoryResponse['projects']> {
+    const response = await apiRequest<PersistedHistoryResponse>('/api/v1/projects');
+    return response.projects;
   },
 
   /**
@@ -598,6 +577,7 @@ export const planningApi = {
     return {
       session_id: sessionId,
       post_l3_status: response.pending ? 'paused' : 'running',
+      paused_stage: response.paused_stage,
       event_id: response.event_id,
       pending_items: response.items,
       count: response.items.length,

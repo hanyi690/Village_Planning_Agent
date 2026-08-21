@@ -10,6 +10,10 @@ export type {
   ApiError,
   VillageInfo,
   VillageSession,
+  PersistedHistoryResponse,
+  CurrentSourceLayer,
+  CurrentSourceRaster,
+  CurrentSourceLayerCollection,
   Checkpoint,
   LayerContent,
   PlanningSSEEventType,
@@ -42,6 +46,12 @@ export type {
   HumanReviewListResponse,
   HumanReviewResolveRequest,
   HumanReviewResolveResponse,
+  EvidenceQueryRequest,
+  EvidenceFeatureRef,
+  EvidenceQueryResponse,
+  PlanningDependencyNode,
+  PlanningDependencyEdge,
+  PlanningDependencyGraphResponse,
 } from './types';
 
 // Client

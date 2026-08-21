@@ -19,6 +19,9 @@ export type HumanReviewDecision = components['schemas']['HumanReviewDecision'];
 export type EventSyncResponse = components['schemas']['EventSyncResponse'];
 export type ResourceLinks = components['schemas']['ResourceLinks'];
 export type CreateSessionBody = components['schemas']['Body_create_session_api_v1_sessions_post'];
+export type EvidenceQueryRequest = components['schemas']['EvidenceQueryRequest'];
+export type EvidenceQueryResponse = components['schemas']['EvidenceQueryResponse'];
+export type EvidenceFeatureRef = components['schemas']['FeatureEvidenceRef'];
 
 export type SessionRunStatus = SessionProjection['status'];
 export type DeliveryStatus = NonNullable<DeliveryProjection['delivery_status']>;

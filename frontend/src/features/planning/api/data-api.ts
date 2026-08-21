@@ -7,9 +7,9 @@ import type { CrossSessionReport, DimensionVersion } from './types';
 // ============================================
 // Data API
 // ============================================
-// v1 对齐：/api/projects 与 /api/sessions/{id}/reports/* 端点已从后端删除。
-// 以下方法保留签名仅为类型兼容，运行时抛错，不再发起网络请求。
-// 历史/对比能力等后端提供 v1 资源（或 /delivery.downloads）后恢复。
+// Legacy cross-session report endpoints remain unavailable in v1.
+// Persisted planning history is provided by planningApi.listProjects()
+// through GET /api/v1/projects; these legacy methods remain for compatibility.
 
 export const dataApi = {
   /**

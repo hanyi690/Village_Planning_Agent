@@ -40,7 +40,9 @@ import type {
   CompareSession,
   KnowledgeSourceItem,
   DimensionVersion,
+  PlanningDependencyGraphResponse,
 } from "../../api/types";
+import type { LayerCompletedMessage } from "../../types";
 import VillageInputForm from "../VillageInputForm";
 import MarkdownRenderer from "../ui/MarkdownRenderer";
 import {
@@ -58,17 +60,267 @@ import CascadePanel from "../CascadePanel";
 import AnalysisSidePanel from "./AnalysisSidePanel";
 import AnalysisProgressBanner from "./AnalysisProgressBanner";
 import AnalysisNotStartedPlaceholder from "./AnalysisNotStartedPlaceholder";
+import { TopicDependencyGraph } from "./TopicDependencyGraph";
 import PlanningBootstrapPanel from "./PlanningBootstrapPanel";
 import { usePlanningBootstrapStage } from "../../hooks/usePlanningBootstrapStage";
 import { useActiveAnalysisFocus } from "../../hooks/useActiveAnalysisFocus";
 import { cn } from "../../utils/cn";
-import { createErrorMessage } from "../../utils";
+import { createErrorMessage, createWarningMessage } from "../../utils";
+import {
+  isL3HumanReview,
+  isSpatialWorkflowPhase,
+  shouldAutoStartSpatialPolling,
+} from "../../utils/spatial-phase";
 
 interface DimensionDisplayStatus {
   label: string;
   color: string;
   dotColor: string;
   pulse: boolean;
+}
+
+type StructuredClaim = Record<string, unknown>;
+
+interface L1FactRecord {
+  fact_id?: string;
+  dimension_key?: string;
+  fact_kind?: string;
+  semantic_type?: string;
+  statement?: string;
+  subject_scope?: string;
+  spatial_hint?: string;
+  source_span?: string;
+  confidence?: number;
+  source_refs?: string[];
+  attributes?: Record<string, unknown>;
+}
+
+interface RAGDisplayDocument {
+  title: string;
+  snippet: string;
+  source?: string;
+  score?: number;
+  matched_query?: string;
+}
+
+interface RAGDisplaySources {
+  query: string;
+  documents: RAGDisplayDocument[];
+}
+
+interface StructuredClaimReport {
+  schema_version?: string;
+  dimension_key?: string;
+  claims: StructuredClaim[];
+  diagnostics?: string[];
+}
+
+function parseStructuredClaimReport(content: string): StructuredClaimReport | null {
+  const trimmed = content.trim();
+  if (!trimmed.startsWith('{')) return null;
+  try {
+    const parsed = JSON.parse(trimmed) as Record<string, unknown>;
+    if (!Array.isArray(parsed.claims)) return null;
+    return {
+      schema_version: typeof parsed.schema_version === 'string' ? parsed.schema_version : undefined,
+      dimension_key: typeof parsed.dimension_key === 'string' ? parsed.dimension_key : undefined,
+      claims: parsed.claims.filter((claim): claim is StructuredClaim => Boolean(claim && typeof claim === 'object')),
+      diagnostics: Array.isArray(parsed.diagnostics)
+        ? parsed.diagnostics.filter((item): item is string => typeof item === 'string')
+        : [],
+    };
+  } catch {
+    return null;
+  }
+}
+
+function readableClaimValue(value: unknown): string {
+  if (Array.isArray(value)) return value.filter(Boolean).join('、') || '未提供';
+  if (value == null || value === '') return '未提供';
+  if (typeof value === 'object') return '已提供结构化参数';
+  return String(value);
+}
+
+function StructuredClaimReportView({ content }: { content: string }) {
+  const report = parseStructuredClaimReport(content);
+  if (!report) return <MarkdownRenderer content={content || '暂无内容'} />;
+
+  return (
+    <div className="space-y-3">
+      <div className="rounded-xl border border-[#cfe8dc] bg-[#f4fbf7] px-4 py-3">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div>
+            <div className="text-[11px] font-semibold uppercase tracking-wide text-[#3b9673]">结构化规划意图</div>
+            <div className="mt-1 text-[13px] font-semibold text-[#244c40]">
+              已生成 {report.claims.length} 条带证据的规划判断
+            </div>
+          </div>
+          <span className="rounded-full bg-white px-2.5 py-1 text-[10px] text-[#6f9385]">
+            {report.schema_version ? `Schema ${report.schema_version}` : '结构化结果'}
+          </span>
+        </div>
+        <p className="mt-2 text-[11px] leading-5 text-[#66867a]">
+          当前后端已返回可供空间编译使用的规划意图，但没有返回叙述性正文；以下内容按规划判断整理展示，未添加任何虚拟几何或成果图层。
+        </p>
+      </div>
+
+      {report.claims.map((claim, index) => {
+        const statement = readableClaimValue(claim.statement);
+        const locations = claim.location_hints ?? claim.locationHints;
+        const evidence = claim.evidence_refs ?? claim.evidenceRefs;
+        const category = claim.suggested_category ?? claim.suggestedCategory;
+        const outputKind = claim.suggested_output_kind ?? claim.suggestedOutputKind;
+        const action = claim.intervention_action ?? claim.interventionAction;
+        return (
+          <article key={String(claim.claim_id ?? index)} className="rounded-xl border border-[#e1eee8] bg-white p-3 shadow-[0_5px_18px_rgba(42,102,79,0.04)]">
+            <div className="flex items-start gap-2">
+              <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-[#e3f4ec] text-[11px] font-semibold text-[#2f8b69]">{index + 1}</span>
+              <div className="min-w-0 flex-1">
+                <div className="text-[12px] font-semibold leading-5 text-[#2d5d4e]">{statement}</div>
+                <div className="mt-2 flex flex-wrap gap-1.5 text-[10px]">
+                  <span className="rounded-full bg-[#eef7f2] px-2 py-1 text-[#397a61]">类别：{readableClaimValue(category)}</span>
+                  <span className="rounded-full bg-[#f5f4fb] px-2 py-1 text-[#706b91]">输出：{readableClaimValue(outputKind)}</span>
+                  <span className="rounded-full bg-[#fff7e8] px-2 py-1 text-[#9a7428]">动作：{readableClaimValue(action)}</span>
+                </div>
+              </div>
+            </div>
+            <dl className="mt-3 grid gap-x-4 gap-y-2 border-t border-[#edf4f0] pt-2 text-[11px] sm:grid-cols-2">
+              <div><dt className="text-[#9ab2a8]">空间提示</dt><dd className="mt-0.5 text-[#55786b]">{readableClaimValue(locations)}</dd></div>
+              <div><dt className="text-[#9ab2a8]">目标引用</dt><dd className="mt-0.5 text-[#55786b]">{readableClaimValue(claim.objective_refs ?? claim.objectiveRefs)}</dd></div>
+              <div><dt className="text-[#9ab2a8]">证据引用</dt><dd className="mt-0.5 text-[#55786b]">{readableClaimValue(evidence)}</dd></div>
+              <div><dt className="text-[#9ab2a8]">不确定性</dt><dd className="mt-0.5 text-[#55786b]">{readableClaimValue(claim.uncertainty)}</dd></div>
+            </dl>
+          </article>
+        );
+      })}
+
+      {report.diagnostics && report.diagnostics.length > 0 && (
+        <details className="rounded-xl border border-[#f0dfb7] bg-[#fffaf0] px-3 py-2">
+          <summary className="cursor-pointer text-[11px] font-semibold text-[#96722d]">
+            规范化诊断（{report.diagnostics.length} 条）
+          </summary>
+          <ul className="mt-2 space-y-1 text-[10px] leading-5 text-[#8c7446]">
+            {report.diagnostics.map((diagnostic, index) => <li key={`${diagnostic}-${index}`}>{diagnostic}</li>)}
+          </ul>
+        </details>
+      )}
+
+      <details className="rounded-xl border border-[#e5eee9] bg-[#fafcfb] px-3 py-2">
+        <summary className="cursor-pointer text-[11px] font-medium text-[#6d8c80]">查看原始结构（机器格式）</summary>
+        <pre className="mt-2 max-h-80 overflow-auto rounded-lg bg-[#f0f6f3] p-3 font-mono text-[10px] leading-relaxed text-[#4a6a5f]">{JSON.stringify(report, null, 2)}</pre>
+      </details>
+    </div>
+  );
+}
+
+function ReportContent({ content, fallback = '暂无内容' }: { content: string; fallback?: string }) {
+  if (!content.trim()) return <div className="py-8 text-center text-sm text-[#9ab2a8]">{fallback}</div>;
+  const parsed = parseStructuredClaimReport(content);
+  if (!parsed) return <MarkdownRenderer content={content} />;
+
+  let reportBody = '';
+  try {
+    const raw = JSON.parse(content) as Record<string, unknown>;
+    reportBody = typeof raw.report_body === 'string' ? raw.report_body.trim() : '';
+  } catch {
+    // parseStructuredClaimReport already validated the JSON shape.
+  }
+
+  if (reportBody) {
+    return (
+      <div className="space-y-3">
+        <MarkdownRenderer content={reportBody} />
+        <details className="rounded-xl border border-[#e5eee9] bg-[#fafcfb] px-3 py-2">
+          <summary className="cursor-pointer text-[11px] font-medium text-[#6d8c80]">查看内部结构化意图（不作为正文）</summary>
+          <div className="mt-3"><StructuredClaimReportView content={content} /></div>
+        </details>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-3">
+      <div className="rounded-xl border border-[#f0dfb7] bg-[#fffaf0] px-3 py-2 text-[11px] leading-5 text-[#8a6420]">
+        本维度没有返回可阅读的 report_body。下面仅展示后端返回的内部 claims，不能视为规划正文；待后端重新生成双通道结果后再显示正文。
+      </div>
+      <StructuredClaimReportView content={content} />
+    </div>
+  );
+}
+
+function GroundingEvidencePanel({
+  dimensionKey,
+  facts,
+  rag,
+}: {
+  dimensionKey: string;
+  facts: L1FactRecord[];
+  rag?: RAGDisplaySources;
+}) {
+  const dimensionFacts = facts.filter((fact) => fact.dimension_key === dimensionKey);
+  const visibleFacts = (dimensionFacts.length > 0 ? dimensionFacts : facts).slice(0, 10);
+  const hasDirectFacts = dimensionFacts.length > 0;
+
+  return (
+    <section className="rounded-2xl border border-[#dcebe4] bg-[#f8fcfa] p-4">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div>
+          <div className="text-[11px] font-semibold uppercase tracking-wide text-[#3b9673]">证据与事实</div>
+          <div className="mt-1 text-sm font-semibold text-[#315f50]">L1 fact 与 RAG 检索结果</div>
+        </div>
+        <div className="flex flex-wrap gap-1.5 text-[10px]">
+          <span className="rounded-full bg-white px-2 py-1 text-[#5e8778]">L1 fact {dimensionFacts.length} 条</span>
+          <span className="rounded-full bg-white px-2 py-1 text-[#5e8778]">RAG {rag?.documents.length ?? 0} 条</span>
+        </div>
+      </div>
+
+      <div className="mt-3 space-y-3">
+        <div className="rounded-xl border border-[#e2eee8] bg-white p-3">
+          <div className="flex items-center justify-between gap-2">
+            <div className="text-xs font-semibold text-[#477666]">L1 已审计事实</div>
+            {!hasDirectFacts && facts.length > 0 && <span className="text-[10px] text-[#a17c4c]">本维度无直接 fact，显示全局事实</span>}
+          </div>
+          {visibleFacts.length > 0 ? (
+            <div className="mt-2 space-y-2">
+              {visibleFacts.map((fact, index) => (
+                <div key={fact.fact_id || `${fact.dimension_key}-${index}`} className="rounded-lg bg-[#f5faf7] px-2.5 py-2 text-[11px] leading-5 text-[#55786b]">
+                  <div className="font-medium text-[#356c59]">{fact.statement || fact.subject_scope || '未命名事实'}</div>
+                  <div className="mt-0.5 flex flex-wrap gap-x-3 gap-y-0.5 text-[10px] text-[#829f93]">
+                    <span>来源维度：{fact.dimension_key || 'L1'}</span>
+                    {fact.spatial_hint && <span>空间提示：{fact.spatial_hint}</span>}
+                    {typeof fact.confidence === 'number' && <span>置信度：{Math.round(fact.confidence * 100)}%</span>}
+                  </div>
+                  {fact.source_span && <div className="mt-1 line-clamp-2 text-[10px] text-[#78968b]">原文：{fact.source_span}</div>}
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div className="mt-2 rounded-lg bg-[#fff8e8] px-2.5 py-2 text-[11px] leading-5 text-[#8a6420]">当前会话已返回 L1 快照，但没有可关联的 fact_records。</div>
+          )}
+        </div>
+
+        <div className="rounded-xl border border-[#e2eee8] bg-white p-3">
+          <div className="flex items-center justify-between gap-2">
+            <div className="text-xs font-semibold text-[#477666]">RAG 检索证据</div>
+            {rag?.query && <span className="max-w-[60%] truncate text-[10px] text-[#829f93]">检索词：{rag.query}</span>}
+          </div>
+          {rag && rag.documents.length > 0 ? (
+            <div className="mt-2 space-y-2">
+              {rag.documents.slice(0, 5).map((document, index) => (
+                <div key={`${document.title}-${index}`} className="rounded-lg bg-[#f5faf7] px-2.5 py-2 text-[11px] leading-5 text-[#55786b]">
+                  <div className="font-medium text-[#356c59]">{document.title || '未命名检索片段'}</div>
+                  {document.source && <div className="text-[10px] text-[#829f93]">来源：{document.source}</div>}
+                  {document.snippet && <div className="mt-1 line-clamp-3 text-[10px] text-[#78968b]">{document.snippet}</div>}
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div className="mt-2 rounded-lg bg-[#f1f6f4] px-2.5 py-2 text-[11px] leading-5 text-[#78968b]">当前维度没有 RAG 检索结果：可能未启用检索、知识库不可用，或历史事件没有返回结果。页面不补造检索内容。</div>
+          )}
+        </div>
+      </div>
+    </section>
+  );
 }
 
 function getDimensionDisplayStatus(opts: {
@@ -161,13 +413,6 @@ interface ReportViewerProps {
   onGoToTaskSettings?: () => void;
 }
 
-const GIS_STATUS_POLL_INTERVAL_MS = 2_000;
-const GIS_GENERATION_TIMEOUT_MS = 180_000;
-
-function waitFor(ms: number): Promise<void> {
-  return new Promise((resolve) => window.setTimeout(resolve, ms));
-}
-
 const ReportViewer = memo(function ReportViewer({
   onStartPlanning,
   onViewProcess,
@@ -204,6 +449,7 @@ const ReportViewer = memo(function ReportViewer({
   const hasGisLayers = useHasGisLayers();
   const gisGenerating = usePlanningStore((state) => state.gisGenerating);
   const gisTriggerPending = usePlanningStore((state) => state.gisTriggerPending);
+  const messages = usePlanningStore((state) => state.messages);
   const stepMode = usePlanningStore((state) => state.step_mode);
   const executingDimensions = useExecutingDimensions();
   const revisionDraft = usePlanningStore((state) => state.revisionDraft);
@@ -212,65 +458,97 @@ const ReportViewer = memo(function ReportViewer({
   const dimensionProgress = useDimensionProgressAll();
   const { approve, isSubmitting } = useApprovalActions();
   const projectName = useProjectName();
-  const gisPollingRunRef = useRef(0);
+  const gisProbeRunRef = useRef(0);
+  const [l1Facts, setL1Facts] = useState<L1FactRecord[]>([]);
+  const [directoryView, setDirectoryView] = useState<'list' | 'graph'>('list');
+  const [dependencyGraph, setDependencyGraph] = useState<PlanningDependencyGraphResponse | null>(null);
+  const [dependencyGraphStatus, setDependencyGraphStatus] = useState<'loading' | 'ready' | 'error'>('loading');
 
-  // GIS is generated after the main planning workflow has completed. The v1
-  // backend produces the spatial layout inside the workflow (DELIVER -> map-layers);
-  // there is no separate GIS generation endpoint. SSE is the fast path, while
-  // status polling guarantees recovery after a dropped event, a reconnect, or a
-  // page refresh: once /state exposes a delivery_status, useDeliverySync fetches
-  // the authoritative /map-layers snapshot (whole-snapshot replacement).
+  // Spatial output is produced by the backend workflow at DELIVER. There is no
+  // client-side generation job to poll: when DELIVER has not produced a
+  // snapshot, the UI must explain that state and keep the real basemap visible.
   useEffect(() => {
     if (!sessionId || !gisGenerating) return;
-
-    const pollingRun = ++gisPollingRunRef.current;
-    const deadline = Date.now() + GIS_GENERATION_TIMEOUT_MS;
-
-    const poll = async () => {
-      let lastError: unknown = null;
-      while (
-        gisPollingRunRef.current === pollingRun &&
-        usePlanningStore.getState().gisGenerating
-      ) {
-        try {
-          const sessionStatus = await planningApi.getStatus(sessionId);
-          usePlanningStore.getState().syncBackendState(sessionStatus);
-          if (sessionStatus.delivery_status) {
-            usePlanningStore.setState({
-              gisGenerating: false,
-              gisTriggerPending: false,
-            });
-            return;
-          }
-          lastError = null;
-        } catch (error) {
-          // A transient status request failure should not discard a GIS task that
-          // is still running on the backend.
-          lastError = error;
+    const probeRun = ++gisProbeRunRef.current;
+    const probe = async () => {
+      try {
+        const snapshot = await planningApi.getRenderLayers(sessionId);
+        if (gisProbeRunRef.current !== probeRun) return;
+        if (snapshot.layers.length > 0) {
+          usePlanningStore.getState().addMessage(
+            createWarningMessage(`空间成果快照已返回 ${snapshot.layers.length} 个真实图层，地图将按 DELIVER 快照展示。`),
+          );
+        } else {
+          usePlanningStore.getState().addMessage(
+            createWarningMessage(
+              "当前会话尚未产出 DELIVER 空间快照。地图保留真实现状底图；规划图层将在后端完成空间交付后显示。",
+            ),
+          );
         }
-
-        if (Date.now() >= deadline) {
+      } catch (error) {
+        if (gisProbeRunRef.current !== probeRun) return;
+        const detail = error instanceof Error ? `（${error.message}）` : "";
+        usePlanningStore.getState().addMessage(
+          createErrorMessage(`空间成果查询失败${detail}，当前仍显示真实现状底图。`),
+        );
+      } finally {
+        if (gisProbeRunRef.current === probeRun) {
           usePlanningStore.setState({
             gisGenerating: false,
             gisTriggerPending: false,
           });
-          const detail = lastError instanceof Error ? `（${lastError.message}）` : "";
-          usePlanningStore.getState().addMessage(
-            createErrorMessage(`空间布局生成超时${detail}，请重试。`),
-          );
-          return;
         }
-        await waitFor(GIS_STATUS_POLL_INTERVAL_MS);
       }
     };
 
-    void poll();
+    void probe();
     return () => {
-      if (gisPollingRunRef.current === pollingRun) {
-        gisPollingRunRef.current += 1;
+      if (gisProbeRunRef.current === probeRun) {
+        gisProbeRunRef.current += 1;
       }
     };
   }, [sessionId, gisGenerating]);
+
+  useEffect(() => {
+    let cancelled = false;
+    setL1Facts([]);
+    if (!sessionId) return undefined;
+    planningApi.getArtifact(sessionId, 'l1_snapshot')
+      .then((artifact) => {
+        if (cancelled) return;
+        const payload = artifact.payload as { fact_records?: unknown };
+        const records = Array.isArray(payload.fact_records)
+          ? payload.fact_records.filter((fact): fact is L1FactRecord => Boolean(fact && typeof fact === 'object'))
+          : [];
+        setL1Facts(records);
+      })
+      .catch(() => {
+        if (!cancelled) setL1Facts([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [sessionId]);
+
+  useEffect(() => {
+    let cancelled = false;
+    planningApi.getDependencyGraph()
+      .then((value) => {
+        if (!cancelled) {
+          setDependencyGraph(value);
+          setDependencyGraphStatus('ready');
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setDependencyGraph(null);
+          setDependencyGraphStatus('error');
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   // Compare mode state
   const [compareMode, setCompareMode] = useState(false);
@@ -355,6 +633,7 @@ const ReportViewer = memo(function ReportViewer({
     if (stepMode && executingDimensions.length === 0) {
       for (let l = 3; l >= 1; l--) {
         if (!completedLayers[l as 1 | 2 | 3]) continue;
+        if ((currentLayer ?? 0) > l) continue;
         const nextStarted = l < 3 && (hasLayerReports(l + 1) || (currentLayer ?? 0) > l);
         if (!nextStarted && hasLayerReports(l)) return l;
       }
@@ -392,6 +671,26 @@ const ReportViewer = memo(function ReportViewer({
     ? selectedNavigationKey.slice(4)
     : "";
   const ragSources = useDimensionRagSources(dimProgressKeyForRag);
+  const historicalRagSources = useMemo(() => {
+    const dimensionKey = dimProgressKeyForRag.split('_').slice(1).join('_');
+    if (!dimensionKey) return undefined;
+    const layerMessages = messages
+      .filter((message): message is LayerCompletedMessage => message.type === 'layer_completed')
+      .sort((left, right) => right.timestamp.getTime() - left.timestamp.getTime());
+    const sources = layerMessages.find((message) => message.dimensionKnowledgeSources?.[dimensionKey])?.dimensionKnowledgeSources?.[dimensionKey];
+    if (!sources || sources.length === 0) return undefined;
+    return {
+      query: '',
+      documents: sources.map((source) => ({
+        title: source.source || '知识库片段',
+        snippet: source.content || '',
+        source: source.source,
+      })),
+    };
+  }, [dimProgressKeyForRag, messages]);
+  const effectiveRagSources: RAGDisplaySources | undefined = ragSources
+    ? { query: ragSources.query, documents: ragSources.documents }
+    : historicalRagSources;
 
   // Fetch sessions when entering compare mode
   useEffect(() => {
@@ -581,7 +880,7 @@ const ReportViewer = memo(function ReportViewer({
   const handleRejectWithFeedback = useCallback(async () => {
     if (!sessionId || isSubmitting) return;
     try {
-      const { planningApi } = await import("../../api");
+      const { resolveActiveInterrupt } = await import('../../utils/interrupt-resume');
       const draft = usePlanningStore.getState().revisionDraft;
       const targetDims =
         selectedDimensions.length > 0
@@ -589,67 +888,48 @@ const ReportViewer = memo(function ReportViewer({
           : draft?.dimensions?.length
             ? draft.dimensions
             : undefined;
-      const result = await planningApi.submitFeedback(sessionId, {
-        approve: false,
-        feedback: feedback.trim() || draft?.feedback?.trim() || "需要修改",
-        dimensions: targetDims,
-      });
+      const feedbackText = feedback.trim() || draft?.feedback?.trim() || '需要修改';
 
-      if (result.status === "need_dimension") {
+      if (!targetDims?.length) {
         usePlanningStore.getState().addMessage(
-          createErrorMessage(result.reply || "请先选择需要重新生成的维度。")
+          createErrorMessage('请先选择需要重新生成的维度。'),
         );
-        usePlanningStore.getState().setStatus("paused");
+        usePlanningStore.getState().setStatus('paused');
         setShowDimensionSelector(true);
         return;
       }
 
-      if (result.status !== "revision_started") {
-        usePlanningStore.getState().addMessage(
-          createErrorMessage(`修订没有启动：${result.status}`)
-        );
-        usePlanningStore.getState().setStatus("paused");
-        return;
-      }
+      await resolveActiveInterrupt(sessionId, 'reject', {
+        feedback: feedbackText,
+        dimensions: targetDims,
+      });
 
-      const startedDims =
-        result.dimensions && result.dimensions.length > 0
-          ? result.dimensions
-          : targetDims;
-
-      // 即时反馈：跳转到第一个目标维度 + 批量清空旧内容
-      if (startedDims && startedDims.length > 0) {
-        const firstDim = startedDims[0];
-        const layer = getDimensionLayer(firstDim);
-        usePlanningStore.setState((state) => {
-          state.selectedNavigationKey = NAV_KEYS.dim(`${layer}_${firstDim}`);
-          for (const dim of startedDims) {
-            const dimLayer = getDimensionLayer(dim);
-            const layerKey = `layer${dimLayer}` as
-              | "layer1"
-              | "layer2"
-              | "layer3";
-            if (state.reports[layerKey]) {
-              delete state.reports[layerKey][dim];
-            }
-            delete state.streamingContent[`${dimLayer}_${dim}`];
+      const startedDims = targetDims;
+      const firstDim = startedDims[0];
+      const layer = getDimensionLayer(firstDim);
+      usePlanningStore.setState((state) => {
+        state.selectedNavigationKey = NAV_KEYS.dim(`${layer}_${firstDim}`);
+        for (const dim of startedDims) {
+          const dimLayer = getDimensionLayer(dim);
+          const layerKey = `layer${dimLayer}` as 'layer1' | 'layer2' | 'layer3';
+          if (state.reports[layerKey]) {
+            delete state.reports[layerKey][dim];
           }
-          state.status = "revising";
-        });
-      } else {
-        usePlanningStore.getState().setStatus("revising");
-      }
+          delete state.streamingContent[`${dimLayer}_${dim}`];
+        }
+        state.status = 'revising';
+      });
 
-      setFeedback("");
+      setFeedback('');
       setSelectedDimensions([]);
       setShowDimensionSelector(false);
       usePlanningStore.getState().triggerSseReconnect();
     } catch (error) {
-      console.error("Reject with feedback failed:", error);
+      console.error('Reject with feedback failed:', error);
       usePlanningStore.getState().addMessage(
-        createErrorMessage(`提交修订失败：${error instanceof Error ? error.message : "未知错误"}`)
+        createErrorMessage(`提交修订失败：${error instanceof Error ? error.message : '未知错误'}`),
       );
-      usePlanningStore.getState().setStatus("paused");
+      usePlanningStore.getState().setStatus('paused');
     }
   }, [sessionId, isSubmitting, feedback, selectedDimensions]);
 
@@ -679,12 +959,32 @@ const ReportViewer = memo(function ReportViewer({
     && (status as string) === 'idle'
     && completedDimsCount === 0;
 
-  const l3ReadyForGis = useMemo(() => {
-    if (completedLayers[3]) return true;
-    const layer3Reports = reports.layer3 || {};
-    const layer3Total = DIMENSIONS_BY_LAYER[3]?.length || 0;
-    return layer3Total > 0 && Object.keys(layer3Reports).length >= layer3Total;
-  }, [completedLayers, reports.layer3]);
+  const phase = usePlanningStore((state) => state.phase);
+  const humanReview = usePlanningStore((state) => state.humanReview);
+
+  const l3GateBlocked = useMemo(
+    () => isL3HumanReview(humanReview),
+    [humanReview],
+  );
+
+  const spatialLayoutActive = useMemo(
+    () => shouldAutoStartSpatialPolling({
+      phase,
+      hasGisLayers,
+      humanReviewPending: l3GateBlocked,
+    }),
+    [phase, hasGisLayers, l3GateBlocked],
+  );
+
+  useEffect(() => {
+    if (!spatialLayoutActive || hasGisLayers) return;
+    usePlanningStore.setState({
+      gisGenerating: false,
+      gisTriggerPending: false,
+      isRightPanelExpanded: true,
+      processPanelTab: "map",
+    });
+  }, [spatialLayoutActive, hasGisLayers]);
 
   const cascadeSet = useMemo(() => {
     const set = new Set<string>();
@@ -798,7 +1098,6 @@ const ReportViewer = memo(function ReportViewer({
     gisGenerating,
     completedDimsCount,
     totalDims,
-    reports,
     handleRejectWithFeedback,
     handleTriggerGIS,
     chatPanel,
@@ -955,10 +1254,10 @@ const ReportViewer = memo(function ReportViewer({
                 </div>
                 <div className="flex-1 overflow-y-auto p-4">
                   <div className="bg-white rounded-xl shadow-sm border border-slate-200/60 p-4">
-                    <MarkdownRenderer content={reportContent || "暂无内容"} />
+                    <ReportContent content={reportContent} />
                   </div>
                   {/* Current Knowledge Sources */}
-                  {ragSources && ragSources.documents.length > 0 && (
+                  {effectiveRagSources && effectiveRagSources.documents.length > 0 && (
                     <div className="mt-4 bg-white rounded-xl shadow-sm border border-slate-200/60 p-4">
                       <div className="flex items-center gap-2 mb-3">
                         <FontAwesomeIcon
@@ -967,11 +1266,11 @@ const ReportViewer = memo(function ReportViewer({
                           style={{ width: 12, height: 12 }}
                         />
                         <span className="text-sm font-medium text-slate-700">
-                          知识来源 ({ragSources.documents.length})
+                          知识来源 ({effectiveRagSources.documents.length})
                         </span>
                       </div>
                       <div className="space-y-2">
-                        {ragSources.documents.slice(0, 5).map((doc, idx) => (
+                        {effectiveRagSources.documents.slice(0, 5).map((doc, idx) => (
                           <div
                             key={idx}
                             className="text-xs text-slate-600 truncate"
@@ -1009,9 +1308,7 @@ const ReportViewer = memo(function ReportViewer({
                   ) : selectedSessionId ? (
                     <>
                       <div className="bg-white rounded-xl shadow-sm border border-slate-200/60 p-4">
-                        <MarkdownRenderer
-                          content={compareContent || "暂无内容"}
-                        />
+                        <ReportContent content={compareContent} />
                       </div>
                       {/* Compare Knowledge Sources */}
                       {compareKnowledgeSources.length > 0 && (
@@ -1073,7 +1370,7 @@ const ReportViewer = memo(function ReportViewer({
                 )}
                 {reportContent ? (
                   <div className={`bg-white border border-slate-200/60 ${isEmbedded ? "rounded-xl p-4" : "rounded-2xl shadow-sm p-6 lg:p-8"}`}>
-                    <MarkdownRenderer content={reportContent} />
+                    <ReportContent content={reportContent} />
                   </div>
                 ) : planningBootstrap.isBootstrapping ? (
                   <div className="-mx-3 -my-3">
@@ -1108,8 +1405,14 @@ const ReportViewer = memo(function ReportViewer({
                   </div>
                 )}
 
+                <GroundingEvidencePanel
+                  dimensionKey={dimKeyPart}
+                  facts={l1Facts}
+                  rag={effectiveRagSources}
+                />
+
                 {/* RAG Knowledge Sources Panel */}
-                {!isEmbedded && ragSources && ragSources.documents.length > 0 && (
+                {!isEmbedded && effectiveRagSources && effectiveRagSources.documents.length > 0 && (
                   <div className="bg-white rounded-2xl shadow-sm border border-slate-200/60 overflow-hidden">
                     <button
                       onClick={() => setRagExpanded((prev) => !prev)}
@@ -1127,7 +1430,7 @@ const ReportViewer = memo(function ReportViewer({
                           知识来源
                         </span>
                         <span className="text-xs text-slate-400 ml-2">
-                          ({ragSources.documents.length}条)
+                          ({effectiveRagSources.documents.length}条)
                         </span>
                       </div>
                       <FontAwesomeIcon
@@ -1152,11 +1455,11 @@ const ReportViewer = memo(function ReportViewer({
                                 检索词：
                               </span>
                               <span className="text-xs text-emerald-600 font-mono ml-1">
-                                {ragSources.query}
+                                {effectiveRagSources.query}
                               </span>
                             </div>
                             <div className="space-y-2">
-                              {ragSources.documents.map((doc, idx) => (
+                              {effectiveRagSources.documents.map((doc, idx) => (
                                 <button
                                   key={idx}
                                   onClick={() =>
@@ -1213,7 +1516,7 @@ const ReportViewer = memo(function ReportViewer({
         {/* Document Detail Drawer - right side (only in single report mode) */}
         {!compareMode && (
           <AnimatePresence>
-            {selectedDocIndex !== null && ragSources && (
+            {selectedDocIndex !== null && effectiveRagSources && (
               <motion.div
                 initial={{ width: 0, opacity: 0 }}
                 animate={{ width: 400, opacity: 1 }}
@@ -1238,20 +1541,20 @@ const ReportViewer = memo(function ReportViewer({
                   </div>
                   <div className="flex-1 overflow-y-auto p-5">
                     <div className="text-base font-medium text-slate-800 mb-3">
-                      {ragSources.documents[selectedDocIndex]?.title}
+                      {effectiveRagSources.documents[selectedDocIndex]?.title}
                     </div>
-                    {ragSources.documents[selectedDocIndex]?.snippet && (
+                    {effectiveRagSources.documents[selectedDocIndex]?.snippet && (
                       <div className="text-sm text-slate-600 leading-relaxed prose prose-sm max-w-none">
                         <MarkdownRenderer
                           content={
-                            ragSources.documents[selectedDocIndex].snippet || ""
+                            effectiveRagSources.documents[selectedDocIndex].snippet || ""
                           }
                         />
                       </div>
                     )}
-                    {ragSources.documents[selectedDocIndex]?.source && (
+                    {effectiveRagSources.documents[selectedDocIndex]?.source && (
                       <div className="mt-4 text-xs text-slate-400">
-                        来源：{ragSources.documents[selectedDocIndex].source}
+                        来源：{effectiveRagSources.documents[selectedDocIndex].source}
                       </div>
                     )}
                   </div>
@@ -1264,8 +1567,8 @@ const ReportViewer = memo(function ReportViewer({
         {renderEmbeddedSideRail({
           showCompare: !compareMode,
           onCompare: handleCompareClick,
-          ragDocuments: ragSources?.documents,
-          ragQuery: ragSources?.query,
+          ragDocuments: effectiveRagSources?.documents,
+          ragQuery: effectiveRagSources?.query,
           onOpenRagDoc: (index) => setSelectedDocIndex(index),
         })}
       </div>
@@ -1414,10 +1717,25 @@ const ReportViewer = memo(function ReportViewer({
               </div>
 
               <div className="rounded-2xl border border-[#dcebe4] bg-white p-3 shadow-sm">
-                <div className="mb-2 flex items-center justify-between">
-                  <div className="text-[12px] font-semibold text-[#244c40]">专题导航目录</div>
-                  <span className="text-[11px] text-[#9ab2a8]">点击跳转报告</span>
+                <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+                  <div>
+                    <div className="text-[12px] font-semibold text-[#244c40]">专题导航目录</div>
+                    <div className="mt-0.5 text-[10px] text-[#9ab2a8]">目录定位报告；依赖图查看执行关系</div>
+                  </div>
+                  <div className="flex items-center gap-1 rounded-lg bg-[#f3f8f5] p-0.5">
+                    {([['list', '目录'], ['graph', '依赖图']] as const).map(([view, label]) => (
+                      <button
+                        key={view}
+                        type="button"
+                        onClick={() => setDirectoryView(view)}
+                        className={`rounded-md px-2 py-1 text-[10px] transition ${directoryView === view ? 'bg-white font-semibold text-[#2d7e61] shadow-sm' : 'text-[#78968b] hover:text-[#2d7e61]'}`}
+                      >
+                        {label}
+                      </button>
+                    ))}
+                  </div>
                 </div>
+                {directoryView === 'list' ? (
                 <div className="space-y-2">
                   {LAYER_IDS.map((layer) => {
                     const allDims = DIMENSIONS_BY_LAYER[layer] || [];
@@ -1464,6 +1782,17 @@ const ReportViewer = memo(function ReportViewer({
                     );
                   })}
                 </div>
+                ) : (
+                  <TopicDependencyGraph
+                    graph={dependencyGraph}
+                    graphStatus={dependencyGraphStatus === 'error' ? 'error' : 'loading'}
+                    reports={reports}
+                    dimensionProgress={dimensionProgress}
+                    executingDimensions={executingSet}
+                    selectedNavigationKey={selectedNavigationKey || ''}
+                    onSelectDimension={(navigationKey) => usePlanningStore.getState().setSelectedNavigationKey(navigationKey as NonNullable<typeof selectedNavigationKey>)}
+                  />
+                )}
               </div>
 
               {cascadeChain && (
@@ -1509,37 +1838,71 @@ const ReportViewer = memo(function ReportViewer({
             </div>
           )}
 
-          {/* GIS trigger button: shown when L3 done but no GIS layers yet.
-              Do NOT hide it during step-mode pause; after Layer 3 completes the app may be paused
-              for review, but users still need an obvious entry to generate the spatial layout. */}
-          {!showInputForm && l3ReadyForGis && !hasGisLayers && !isEmbedded && (
-            <div className={`flex items-center gap-3 rounded-xl border px-4 py-3 border-cyan-200 bg-gradient-to-r from-cyan-50 to-teal-50`}>
-              <div className={`flex h-8 w-8 items-center justify-center rounded-lg ${
-                isEmbedded ? "bg-[#dff3ea] text-[#2d8c6d]" : "bg-cyan-100 text-cyan-600"
-              }`}>
+          {/* L3 gate blocked: program validation failed before spatial chain */}
+          {!showInputForm && l3GateBlocked && !isEmbedded && (
+            <div className="flex flex-col gap-3 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3">
+              <div className="flex items-start gap-3">
+                <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-amber-100 text-amber-700">
+                  <FontAwesomeIcon icon={faPauseCircle} style={{ width: 14, height: 14 }} />
+                </div>
+                <div className="min-w-0 flex-1">
+                  <p className="text-sm font-medium text-amber-900">
+                    L3 程序校验未通过，需确认后才能进入空间布局
+                  </p>
+                  <p className="mt-1 text-xs text-amber-800">
+                    系统检测到规划程序存在矛盾或需修订的维度。确认后将自动重试相关维度并继续空间链。
+                  </p>
+                  {humanReview?.items?.length ? (
+                    <ul className="mt-2 space-y-1 text-xs text-amber-900">
+                      {humanReview.items.slice(0, 4).map((item) => {
+                        const ctx = (item.context || {}) as Record<string, unknown>;
+                        const message = String(ctx.message || ctx.detail || item.request_type || "待处理项");
+                        return (
+                          <li key={String(item.request_id || message)} className="truncate">
+                            · {message}
+                          </li>
+                        );
+                      })}
+                      {humanReview.items.length > 4 ? (
+                        <li className="text-amber-700">… 另有 {humanReview.items.length - 4} 项</li>
+                      ) : null}
+                    </ul>
+                  ) : null}
+                </div>
+                <button
+                  type="button"
+                  onClick={() => void approve()}
+                  disabled={isSubmitting}
+                  className={`flex shrink-0 items-center gap-2 rounded-xl px-4 py-2 text-sm font-medium text-white transition-colors disabled:opacity-50 ${primaryBtnClass}`}
+                >
+                  {isSubmitting ? (
+                    <>
+                      <div className="h-4 w-4 animate-spin rounded-full border-2 border-white border-t-transparent" />
+                      <span>处理中...</span>
+                    </>
+                  ) : (
+                    <span>确认并继续</span>
+                  )}
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* Spatial chain running after L3 gate PASS */}
+          {!showInputForm && spatialLayoutActive && !hasGisLayers && !l3GateBlocked && !isEmbedded && (
+            <div className="flex items-center gap-3 rounded-xl border border-cyan-200 bg-gradient-to-r from-cyan-50 to-teal-50 px-4 py-3">
+              <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-cyan-100 text-cyan-600">
                 <FontAwesomeIcon icon={faMap} style={{ width: 14, height: 14 }} />
               </div>
-              <div className="flex-1 min-w-0">
-                <p className={`text-sm font-medium ${isEmbedded ? "text-[#244c40]" : "text-cyan-800"}`}>生成空间布局分析</p>
-                <p className={`text-xs ${isEmbedded ? "text-[#6d8f82]" : "text-cyan-600"}`}>L3 详细规划已完成，点击确认生成 GIS 空间布局</p>
+              <div className="min-w-0 flex-1">
+                <p className="text-sm font-medium text-cyan-800">正在生成空间布局</p>
+                <p className="text-xs text-cyan-600">
+                  L3 已通过校验，工作流已进入
+                  {isSpatialWorkflowPhase(phase) ? ` ${phase}` : " 空间链"}
+                  ，请稍候…
+                </p>
               </div>
-              <button
-                onClick={handleTriggerGIS}
-                disabled={gisTriggerPending || gisGenerating}
-                className={`flex shrink-0 items-center gap-2 rounded-xl px-4 py-2 text-sm font-medium text-white transition-colors disabled:opacity-50 ${primaryBtnClass}`}
-              >
-                {(gisTriggerPending || gisGenerating) ? (
-                  <>
-                    <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
-                    <span>生成中...</span>
-                  </>
-                ) : (
-                  <>
-                    <FontAwesomeIcon icon={faMap} style={{ width: 12, height: 12 }} />
-                    <span>确认生成</span>
-                  </>
-                )}
-              </button>
+              <div className="h-4 w-4 shrink-0 animate-spin rounded-full border-2 border-cyan-500 border-t-transparent" />
             </div>
           )}
 
@@ -1913,7 +2276,7 @@ const ReportViewer = memo(function ReportViewer({
         </div>
         </div>
         {isEmbedded && renderEmbeddedSideRail({
-          showGisTrigger: !showInputForm && l3ReadyForGis && !hasGisLayers,
+          showGisTrigger: !showInputForm && spatialLayoutActive && !hasGisLayers && !l3GateBlocked,
         })}
       </div>
     </div>

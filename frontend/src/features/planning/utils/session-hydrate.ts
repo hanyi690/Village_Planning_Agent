@@ -15,6 +15,7 @@ import { planningApi } from '../api';
 import { usePlanningStore } from '../store/planningStore';
 import type { SessionStatusResponse } from '../api/types';
 import { normalizePlanningStatus } from '../constants';
+import { applySyncedEvents } from './event-sync';
 
 function resolveUiStatus(backendStatus: string | undefined): void {
   const store = usePlanningStore.getState();
@@ -48,8 +49,8 @@ export interface HydrateSessionResult {
 
 /**
  * Fully hydrate store from a backend session WITHOUT setting sessionId.
- * Caller should set sessionId after this returns so SSE connects with
- * lastProcessedSeq already advanced past historical events.
+ * Caller should set sessionId after this returns so SSE connects without
+ * replaying the full historical stream again.
  */
 export async function hydrateSessionSnapshot(
   sessionId: string,
@@ -62,9 +63,9 @@ export async function hydrateSessionSnapshot(
     planningApi.syncEvents(sessionId, 0),
   ]);
 
-  // Advance seq before any SSE connection so bootstrap/reconnect skip replay.
-  const lastSeq = typeof syncResult.last_seq === 'number' ? syncResult.last_seq : 0;
-  store.setLastProcessedSeq(lastSeq);
+  // Replay from seq 0 so dimension/layer progress is rebuilt; advance the
+  // cursor only after events are applied (setting the tip first would skip all).
+  store.setLastProcessedSeq(0);
 
   store.syncBackendState(statusData);
   if (statusData.step_mode !== undefined) {
@@ -72,12 +73,21 @@ export async function hydrateSessionSnapshot(
   }
   resolveUiStatus(statusData.status);
 
-  // v1: rebuild dimension/layer reports and progress by replaying the durable
-  // SSE event stream (the real workflow outputs). No legacy report endpoints.
   if (Array.isArray(syncResult.events) && syncResult.events.length > 0) {
-    for (const event of syncResult.events) {
-      store.handleSSEEvent({ type: event.type, data: event.data });
-    }
+    applySyncedEvents(syncResult.events);
+  }
+
+  // Re-apply the REST projection after replay so stale historical events
+  // cannot make later layers appear complete on a refreshed page.
+  store.syncBackendState(statusData);
+
+  const lastSeq = typeof syncResult.last_seq === 'number' ? syncResult.last_seq : 0;
+  if (lastSeq > usePlanningStore.getState().lastProcessedSeq) {
+    store.setLastProcessedSeq(lastSeq);
+  }
+
+  if (statusData.human_review_pending) {
+    await store.refreshHumanReview(sessionId);
   }
 
   // Authoritative delivery + map-layers are fetched by useDeliverySync as soon

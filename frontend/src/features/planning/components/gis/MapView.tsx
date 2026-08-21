@@ -633,6 +633,14 @@ interface MapViewProps {
   tileSourceOverride?: 'amap' | 'tianditu' | 'geoq' | 'openstreetmap' | 'osm' | 'offline';
   fitPadding?: number; // Extra context around the fitted village boundary
   autoFitOnLayerChange?: boolean; // Refit camera when visible layers change (default false)
+  focusFeature?: MapFeatureFocus | null;
+  focusFeatures?: MapFeatureFocus[];
+}
+
+export interface MapFeatureFocus {
+  bundleFeatureBsm?: string;
+  sourceFeatureId?: string;
+  sourceBsm?: string;
 }
 
 // Layer rendering priority (numerical order, higher = top layer)
@@ -715,6 +723,8 @@ export default function MapView({
   tileSourceOverride,
   fitPadding = 36,
   autoFitOnLayerChange = false,
+  focusFeature = null,
+  focusFeatures = [],
 }: MapViewProps) {
   const resolvedTileSource = normalizeTileSource(
     tileSourceOverride || process.env.NEXT_PUBLIC_TILE_SOURCE || TILE_SOURCES.AMAP,
@@ -745,6 +755,10 @@ export default function MapView({
       ? normalizedLayers.filter((l) => visibleLayerTypes.has(l.layerType as LayerType))
       : normalizedLayers.filter((l) => l.visible !== false),
     [normalizedLayers, visibleLayerTypes],
+  );
+  const mapDataKey = useMemo(
+    () => filteredLayers.map((layer) => `${layer.layerName}:${String(layer.metadata?.path ?? '')}:${layer.featureCount ?? layer.geojson.features.length}`).join('|'),
+    [filteredLayers],
   );
   const primaryParcelLayer = useMemo(
     () => pickPrimaryParcelLayer(filteredLayers),
@@ -779,6 +793,19 @@ export default function MapView({
   // Keep a separate geometry overlay for hover.  A popup alone makes it hard
   // to tell which irregular parcel is being described on a dense village map.
   const [hoveredFeature, setHoveredFeature] = useState<Feature<Geometry, GeoJsonProperties> | null>(null);
+  const [focusedFeatures, setFocusedFeatures] = useState<Feature<Geometry, GeoJsonProperties>[]>([]);
+  const focusedAreaFeatures = useMemo(
+    () => focusedFeatures.filter((feature) => feature.geometry.type === 'Polygon' || feature.geometry.type === 'MultiPolygon'),
+    [focusedFeatures],
+  );
+  const focusedLineFeatures = useMemo(
+    () => focusedFeatures.filter((feature) => feature.geometry.type === 'LineString' || feature.geometry.type === 'MultiLineString'),
+    [focusedFeatures],
+  );
+  const focusedPointFeatures = useMemo(
+    () => focusedFeatures.filter((feature) => feature.geometry.type === 'Point' || feature.geometry.type === 'MultiPoint'),
+    [focusedFeatures],
+  );
   const [hoveredVector, setHoveredVector] = useState<{
     feature: Feature<Geometry, GeoJsonProperties>;
     layerName: string;
@@ -1046,7 +1073,7 @@ export default function MapView({
       easing: easeOutCubic,
       essential: true,
     });
-  }, [mounted, filteredLayers.length, displayCenter]);
+  }, [center, displayCenter, filteredLayers.length, mounted]);
 
   // Keep MapLibre canvas in sync with the animated/resizable side panel.
   useEffect(() => {
@@ -1121,7 +1148,85 @@ export default function MapView({
         },
       );
     }
-  }, [center, displayCenter, filteredLayers, fitPadding]);
+  }, [displayCenter, filteredLayers, fitPadding]);
+
+  useEffect(() => {
+    if (!mounted || !mapRef.current) return;
+    const requestedFocuses = focusFeatures?.length
+      ? focusFeatures
+      : focusFeature
+        ? [focusFeature]
+        : [];
+    if (requestedFocuses.length === 0) {
+      setFocusedFeatures([]);
+      return;
+    }
+
+    const readProperty = (properties: GeoJsonProperties | null | undefined, keys: string[]) => {
+      const values = properties || {};
+      for (const key of keys) {
+        const value = values[key];
+        if (value !== undefined && value !== null && String(value).trim()) return String(value).trim().toLowerCase();
+      }
+      return '';
+    };
+    const matched: Feature<Geometry, GeoJsonProperties>[] = [];
+    for (const wantedFocus of requestedFocuses) {
+      const wanted = [
+        wantedFocus.bundleFeatureBsm,
+        wantedFocus.sourceFeatureId,
+        wantedFocus.sourceBsm,
+      ].filter((value): value is string => Boolean(value?.trim()))
+        .map((value) => value.trim().toLowerCase());
+      if (wanted.length === 0) continue;
+      for (const layer of filteredLayers) {
+        const feature = layer.geojson.features.find((candidate) => {
+          const values = [
+            readProperty(candidate.properties, ['BSM', 'bsm', 'bundle_feature_bsm', 'bundleFeatureBsm']),
+            String(candidate.id ?? '').trim().toLowerCase(),
+            readProperty(candidate.properties, ['source_feature_id', 'sourceFeatureId', 'feature_id', 'id']),
+            readProperty(candidate.properties, ['source_bsm', 'sourceBsm']),
+          ];
+          return wanted.some((value) => values.includes(value));
+        });
+        if (feature) {
+          const typedFeature = feature as Feature<Geometry, GeoJsonProperties>;
+          if (!matched.includes(typedFeature)) matched.push(typedFeature);
+          break;
+        }
+      }
+    }
+    setFocusedFeatures(matched);
+    if (matched.length === 0) return;
+    const bounds = getBoundsFromGeoJSON({
+      type: 'FeatureCollection',
+      features: matched as GeoJsonFeatureCollection['features'],
+    });
+    if (!bounds) return;
+    const camera = getCameraForViewMode(viewModeRef.current);
+    const samePoint = Math.abs(bounds[1][0] - bounds[0][0]) < 1e-7
+      && Math.abs(bounds[1][1] - bounds[0][1]) < 1e-7;
+    if (samePoint) {
+      mapRef.current.easeTo({
+        center: [bounds[0][0], bounds[0][1]],
+        zoom: 17,
+        ...camera,
+        duration: MAP_EASE_MS,
+        essential: true,
+      });
+      return;
+    }
+    mapRef.current.fitBounds(expandBoundsForFit(
+      bounds[0][0], bounds[0][1], bounds[1][0], bounds[1][1], 0.35,
+    ), {
+      padding: fitPadding,
+      duration: MAP_EASE_MS,
+      maxZoom: 17,
+      pitch: camera.pitch,
+      bearing: camera.bearing,
+      essential: true,
+    });
+  }, [filteredLayers, fitPadding, focusFeature, focusFeatures, mounted]);
 
   const handleMapLoad = useCallback(() => {
     const map = mapRef.current?.getMap();
@@ -1157,6 +1262,8 @@ export default function MapView({
     if (!mounted) return;
     if (hasInitialFitRef.current && !autoFitOnLayerChange) return;
     if (filteredLayers.length === 0) return;
+    const map = mapRef.current?.getMap();
+    if (!map || !map.isStyleLoaded()) return;
     fitToLayers();
     hasInitialFitRef.current = true;
   }, [autoFitOnLayerChange, filteredLayers.length, fitToLayers, mounted]);
@@ -1407,7 +1514,7 @@ export default function MapView({
             'fill-color': useFeatureColors
               ? ['get', 'color'] as ExpressionSpecification
               : buildMatchExpression('sensitivity_level', PLANNING_COLORS.sensitivity_zone, DEFAULT_COLORS.fill),
-            'fill-opacity': 0.16,
+            'fill-opacity': styleNumber(layer, 'fillOpacity', 0.1),
           },
         };
         const lineLayer: LineLayerSpecification = {
@@ -1485,13 +1592,17 @@ export default function MapView({
           || layer.layerName === 'landuse'
           || layer.layerType === 'final_landuse'
         );
+        const isCurrentLanduse = String(layer.metadata?.displayRole || '') === 'current_landuse'
+          || layer.layerName === '现状地块';
         const defaultOpacity = layer.layerType === 'construction_control'
-          ? 0.12
+          ? 0.07
           : layer.layerType === 'land_use_zone'
             ? 0.18
             : layer.layerType === 'function_zone' ? 0.42 : 0.52;
         const opacity = isOfflineLanduse
-          ? Math.max(styleNumber(layer, 'fillOpacity', defaultOpacity), 0.85)
+          ? isCurrentLanduse
+            ? styleNumber(layer, 'fillOpacity', 0.78)
+            : Math.max(styleNumber(layer, 'fillOpacity', defaultOpacity), 0.85)
           : styleDriven
             ? styleNumber(layer, 'fillOpacity', defaultOpacity)
             : styleNumber(layer, 'fillOpacity', defaultOpacity);
@@ -1658,7 +1769,7 @@ export default function MapView({
         { id: 'annotation-tiles-layer', type: 'raster', source: 'annotation-tiles', paint: RASTER_LAYER_PAINT },
       ],
     } as StyleSpecification;
-  }, [baseMapType, offlineBaseMap, tileSourceOverride, mounted]);
+  }, [baseMapType, offlineBaseMap, tileSourceOverride]);
 
   const basemapKey = offlineBaseMap || tileSourceOverride === 'offline'
     ? 'offline'
@@ -1726,7 +1837,7 @@ export default function MapView({
         }}
       >
         <Map
-          key={basemapKey}
+          key={`${basemapKey}:${mapDataKey}`}
           ref={mapRef}
           reuseMaps={false}
           {...MAP_INTERACTION_OPTIONS}
@@ -1772,6 +1883,50 @@ export default function MapView({
               ))}
             </Source>
           ))}
+
+          {focusedFeatures.length > 0 && (
+            <Source
+              id="focused-features"
+              type="geojson"
+              data={{ type: 'FeatureCollection', features: focusedFeatures } as FeatureCollection<Geometry>}
+            >
+              {focusedAreaFeatures.length > 0 && (
+                <>
+                  <Layer
+                    id="focused-features-fill"
+                    type="fill"
+                    filter={['match', ['geometry-type'], ['Polygon', 'MultiPolygon'], true, false]}
+                    paint={{ 'fill-color': '#23a878', 'fill-opacity': 0.24 }}
+                    layout={{ 'fill-sort-key': 10000 }}
+                  />
+                  <Layer
+                    id="focused-features-outline"
+                    type="line"
+                    filter={['match', ['geometry-type'], ['Polygon', 'MultiPolygon'], true, false]}
+                    paint={{ 'line-color': '#087f5b', 'line-width': 3.2, 'line-opacity': 0.98 }}
+                    layout={{ 'line-sort-key': 10000 }}
+                  />
+                </>
+              )}
+              {focusedLineFeatures.length > 0 && (
+                <Layer
+                  id="focused-features-lines"
+                  type="line"
+                  filter={['match', ['geometry-type'], ['LineString', 'MultiLineString'], true, false]}
+                  paint={{ 'line-color': '#087f5b', 'line-width': 4, 'line-opacity': 0.98 }}
+                  layout={{ 'line-sort-key': 10000 }}
+                />
+              )}
+              {focusedPointFeatures.length > 0 && (
+                <Layer
+                  id="focused-features-points"
+                  type="circle"
+                  filter={['match', ['geometry-type'], ['Point', 'MultiPoint'], true, false]}
+                  paint={{ 'circle-color': '#23a878', 'circle-radius': 8, 'circle-stroke-color': '#087f5b', 'circle-stroke-width': 2.5, 'circle-opacity': 0.95 }}
+                />
+              )}
+            </Source>
+          )}
 
           {/* Subtle white veil on hover — matches kg_inspection_v2 deck.gl autoHighlight */}
           {hoverHighlightActive && hoveredFeature && (
