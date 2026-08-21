@@ -108,8 +108,8 @@ refresh_external_sources
 报告分为两种：
 
 1. `AnalysisReport`：供人阅读的分析结果，由 `content + instruction + provenance` 组成。
-2. `Typed PlanningArtifact`：供后续节点消费的结构化结果，例如 `L1DimensionFragment`、
-   `L1Snapshot`、`PlanningProgram` 和 `IntentCompilationResult`。
+2. `Typed PlanningArtifact`：供后续节点消费的结构化结果，例如 `L1Snapshot`、
+   `PlanningProgram` 和 `IntentCompilationResult`。
 
 Markdown 不能作为规划程序的唯一输入；L1/L2/L3 与 TARGET_PROJECTION 必须优先消费带 revision 和 provenance 的 typed artifact。
 

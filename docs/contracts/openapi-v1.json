@@ -443,6 +443,96 @@
         }
       }
     },
+    "/api/v1/source-layers": {
+      "get": {
+        "tags": [
+          "Stable v1"
+        ],
+        "summary": "Get Current Source Layers",
+        "description": "Expose configured current vectors and raster manifests.\n\nThis is context data, not planning output. DELIVER remains the only source\nfor generated/planned layers.",
+        "operationId": "get_current_source_layers_api_v1_source_layers_get",
+        "parameters": [
+          {
+            "name": "village_name",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "default": "金田村",
+              "title": "Village Name"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CurrentSourceLayerCollection"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/sessions/{session_id}/artifacts": {
+      "get": {
+        "tags": [
+          "Stable v1"
+        ],
+        "summary": "List Artifacts",
+        "description": "List artifact references present in the current checkpoint.\n\nThe client uses this index before reading payloads, so an absent artifact\nis represented as a normal state instead of a burst of expected 404s.",
+        "operationId": "list_artifacts_api_v1_sessions__session_id__artifacts_get",
+        "parameters": [
+          {
+            "name": "session_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Session Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response List Artifacts Api V1 Sessions  Session Id  Artifacts Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/sessions/{session_id}/artifacts/{artifact_key}": {
       "get": {
         "tags": [
@@ -479,6 +569,150 @@
                   "type": "object",
                   "additionalProperties": true,
                   "title": "Response Get Artifact Api V1 Sessions  Session Id  Artifacts  Artifact Key  Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/planning/dependency-graph": {
+      "get": {
+        "tags": [
+          "Stable v1"
+        ],
+        "summary": "Get Dependency Graph",
+        "description": "Return the declared topic dependency graph used by the planner.\n\nThis is configuration metadata only. It does not infer dependencies from\nreport text and it does not claim that any node has been executed.",
+        "operationId": "get_dependency_graph_api_v1_planning_dependency_graph_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Get Dependency Graph Api V1 Planning Dependency Graph Get"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/sessions/{session_id}/evidence/query": {
+      "post": {
+        "tags": [
+          "Stable v1"
+        ],
+        "summary": "Query Session Evidence",
+        "description": "Answer a spatial question through one bounded evidence boundary.\n\nThe endpoint is read-only from the user's perspective.  It may hydrate\nthe in-process session context, but the response is composed from the\nreport/L1, session KG, bundle and optional external retrieval pipeline;\ngeometry remains bundle-authoritative and is returned only as a feature\nreference inside ``EvidencePacket``.",
+        "operationId": "query_session_evidence_api_v1_sessions__session_id__evidence_query_post",
+        "parameters": [
+          {
+            "name": "session_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Session Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EvidenceQueryRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EvidenceQueryResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/projects": {
+      "get": {
+        "tags": [
+          "Stable v1"
+        ],
+        "summary": "List persisted planning projects and sessions",
+        "description": "Return small, restart-safe metadata for the planning history sidebar.\n\nThe database layer already owns session persistence. This endpoint only\nexposes identifiers and timestamps; user-provided village text, task text,\nconstraints, and uploaded content remain server-side.",
+        "operationId": "list_projects_api_v1_projects_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HistoryProjectList"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/sessions/{session_id}/positioning-trace": {
+      "get": {
+        "tags": [
+          "Stable v1"
+        ],
+        "summary": "Get Positioning Trace",
+        "description": "Return persisted step reports and stage coverage for one session.\n\nThis is a read-only API projection. It exposes saved stage summaries and\nartifact references; it does not expose hidden model reasoning or create\nany fallback planning output.",
+        "operationId": "get_positioning_trace_api_v1_sessions__session_id__positioning_trace_get",
+        "parameters": [
+          {
+            "name": "session_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Session Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Get Positioning Trace Api V1 Sessions  Session Id  Positioning Trace Get"
                 }
               }
             }
@@ -623,6 +857,344 @@
         ],
         "title": "Body_create_session_api_v1_sessions_post"
       },
+      "BundleFeatureIdentity": {
+        "properties": {
+          "bundle_feature_bsm": {
+            "type": "string",
+            "title": "Bundle Feature Bsm"
+          },
+          "canonical_name": {
+            "type": "string",
+            "title": "Canonical Name",
+            "default": ""
+          },
+          "entity_type": {
+            "type": "string",
+            "title": "Entity Type",
+            "default": ""
+          },
+          "role": {
+            "type": "string",
+            "title": "Role",
+            "default": ""
+          },
+          "aliases": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Aliases"
+          },
+          "admin_code_12": {
+            "type": "string",
+            "title": "Admin Code 12",
+            "default": ""
+          },
+          "sequence_code_8": {
+            "type": "string",
+            "title": "Sequence Code 8",
+            "default": ""
+          },
+          "source_feature_id": {
+            "type": "string",
+            "title": "Source Feature Id",
+            "default": ""
+          },
+          "source_layer": {
+            "type": "string",
+            "title": "Source Layer",
+            "default": ""
+          },
+          "source_bsm": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Bsm"
+          },
+          "bsm_kind": {
+            "type": "string",
+            "enum": [
+              "source",
+              "synthetic",
+              "unknown"
+            ],
+            "title": "Bsm Kind",
+            "default": "unknown"
+          },
+          "geometry_digest": {
+            "type": "string",
+            "title": "Geometry Digest",
+            "default": ""
+          },
+          "bundle_snapshot_digest": {
+            "type": "string",
+            "title": "Bundle Snapshot Digest",
+            "default": ""
+          },
+          "crs": {
+            "type": "string",
+            "title": "Crs",
+            "default": "EPSG:4326"
+          }
+        },
+        "type": "object",
+        "required": [
+          "bundle_feature_bsm"
+        ],
+        "title": "BundleFeatureIdentity",
+        "description": "Stable identity of one feature in one immutable bundle snapshot."
+      },
+      "CurrentSourceLayer": {
+        "properties": {
+          "source_name": {
+            "type": "string",
+            "title": "Source Name"
+          },
+          "source_layer_type": {
+            "type": "string",
+            "title": "Source Layer Type"
+          },
+          "layer_type": {
+            "type": "string",
+            "title": "Layer Type"
+          },
+          "layer_name": {
+            "type": "string",
+            "title": "Layer Name"
+          },
+          "display_role": {
+            "type": "string",
+            "title": "Display Role"
+          },
+          "data_authority": {
+            "type": "string",
+            "const": "authoritative_current",
+            "title": "Data Authority",
+            "default": "authoritative_current"
+          },
+          "requirement": {
+            "type": "string",
+            "enum": [
+              "baseline",
+              "mandatory",
+              "conditional",
+              "reference"
+            ],
+            "title": "Requirement",
+            "default": "baseline"
+          },
+          "crs": {
+            "type": "string",
+            "title": "Crs",
+            "default": "EPSG:4326"
+          },
+          "feature_count": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Feature Count",
+            "default": 0
+          },
+          "geojson": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Geojson"
+          },
+          "metadata": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Metadata"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "source_name",
+          "source_layer_type",
+          "layer_type",
+          "layer_name",
+          "display_role",
+          "geojson"
+        ],
+        "title": "CurrentSourceLayer",
+        "description": "A configured, authoritative current-state vector source."
+      },
+      "CurrentSourceLayerCollection": {
+        "properties": {
+          "schema_version": {
+            "type": "string",
+            "const": "1.0",
+            "title": "Schema Version",
+            "default": "1.0"
+          },
+          "village_name": {
+            "type": "string",
+            "title": "Village Name"
+          },
+          "source": {
+            "type": "string",
+            "const": "data_catalog",
+            "title": "Source",
+            "default": "data_catalog"
+          },
+          "center": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "number"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Center"
+          },
+          "layers": {
+            "items": {
+              "$ref": "#/components/schemas/CurrentSourceLayer"
+            },
+            "type": "array",
+            "title": "Layers"
+          },
+          "rasters": {
+            "items": {
+              "$ref": "#/components/schemas/CurrentSourceRaster"
+            },
+            "type": "array",
+            "title": "Rasters"
+          },
+          "diagnostics": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Diagnostics"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "village_name"
+        ],
+        "title": "CurrentSourceLayerCollection",
+        "description": "Catalog-backed current GIS context, separate from DELIVER output."
+      },
+      "CurrentSourceRaster": {
+        "properties": {
+          "source_name": {
+            "type": "string",
+            "title": "Source Name"
+          },
+          "layer_name": {
+            "type": "string",
+            "title": "Layer Name"
+          },
+          "layer_type": {
+            "type": "string",
+            "enum": [
+              "dem",
+              "dom"
+            ],
+            "title": "Layer Type"
+          },
+          "format": {
+            "type": "string",
+            "title": "Format",
+            "default": ""
+          },
+          "crs": {
+            "type": "string",
+            "title": "Crs",
+            "default": ""
+          },
+          "available": {
+            "type": "boolean",
+            "title": "Available",
+            "default": false
+          },
+          "resolution": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Resolution"
+          },
+          "width": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Width"
+          },
+          "height": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Height"
+          },
+          "bands": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Bands"
+          },
+          "dtype": {
+            "type": "string",
+            "title": "Dtype",
+            "default": ""
+          },
+          "bounds": {
+            "additionalProperties": {
+              "type": "number"
+            },
+            "type": "object",
+            "title": "Bounds"
+          },
+          "source_ref": {
+            "type": "string",
+            "title": "Source Ref",
+            "default": ""
+          },
+          "reason": {
+            "type": "string",
+            "title": "Reason",
+            "default": ""
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "source_name",
+          "layer_name",
+          "layer_type"
+        ],
+        "title": "CurrentSourceRaster",
+        "description": "Safe public manifest for a configured raster source.\n\nThe local filesystem path is intentionally not exposed. Consumers use the\nmanifest to explain availability while terrain analysis reads the raster\nthrough the backend catalog."
+      },
       "DeliveryProjection": {
         "properties": {
           "schema_version": {
@@ -646,7 +1218,8 @@
                 "enum": [
                   "complete",
                   "partial",
-                  "diagnostic_only"
+                  "diagnostic_only",
+                  "no_planning_output"
                 ]
               },
               {
@@ -738,6 +1311,746 @@
         ],
         "title": "EventSyncResponse"
       },
+      "EvidenceBundle": {
+        "properties": {
+          "schema_version": {
+            "type": "string",
+            "title": "Schema Version",
+            "default": "1.0"
+          },
+          "context_version": {
+            "type": "string",
+            "title": "Context Version",
+            "default": ""
+          },
+          "context_fingerprint": {
+            "type": "string",
+            "title": "Context Fingerprint",
+            "default": ""
+          },
+          "artifact_id": {
+            "type": "string",
+            "title": "Artifact Id",
+            "default": ""
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          },
+          "request": {
+            "type": "string",
+            "title": "Request"
+          },
+          "facts": {
+            "items": {
+              "$ref": "#/components/schemas/EvidenceFact"
+            },
+            "type": "array",
+            "title": "Facts",
+            "default": []
+          },
+          "sources": {
+            "items": {
+              "$ref": "#/components/schemas/EvidenceSource"
+            },
+            "type": "array",
+            "title": "Sources",
+            "default": []
+          },
+          "confidence": {
+            "type": "number",
+            "title": "Confidence",
+            "default": 0.0
+          },
+          "unresolved": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Unresolved",
+            "default": []
+          },
+          "conflicts": {
+            "items": {
+              "$ref": "#/components/schemas/EvidenceConflict"
+            },
+            "type": "array",
+            "title": "Conflicts",
+            "default": []
+          },
+          "provenance": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Provenance"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "type": "object",
+        "required": [
+          "request"
+        ],
+        "title": "EvidenceBundle"
+      },
+      "EvidenceConflict": {
+        "properties": {
+          "relation": {
+            "type": "string",
+            "title": "Relation"
+          },
+          "fact_refs": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Fact Refs",
+            "default": []
+          },
+          "reason": {
+            "type": "string",
+            "title": "Reason"
+          },
+          "subject_scope": {
+            "type": "string",
+            "title": "Subject Scope",
+            "default": ""
+          },
+          "counting_bases": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Counting Bases",
+            "default": []
+          }
+        },
+        "type": "object",
+        "required": [
+          "relation",
+          "reason"
+        ],
+        "title": "EvidenceConflict",
+        "description": "Auditable relationship between facts returned by different sources."
+      },
+      "EvidenceFact": {
+        "properties": {
+          "statement": {
+            "type": "string",
+            "title": "Statement"
+          },
+          "confidence": {
+            "type": "number",
+            "title": "Confidence",
+            "default": 1.0
+          },
+          "source_refs": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Source Refs",
+            "default": []
+          },
+          "spatial_refs": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Spatial Refs",
+            "default": []
+          },
+          "fact_type": {
+            "type": "string",
+            "title": "Fact Type",
+            "default": "statement"
+          },
+          "fields": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object",
+            "title": "Fields",
+            "default": {}
+          },
+          "feature_bsm": {
+            "type": "string",
+            "title": "Feature Bsm",
+            "default": ""
+          },
+          "related_parcel_bsms": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Related Parcel Bsms",
+            "default": []
+          },
+          "evidence_span": {
+            "type": "string",
+            "title": "Evidence Span",
+            "default": ""
+          },
+          "source_locator": {
+            "type": "string",
+            "title": "Source Locator",
+            "default": ""
+          },
+          "support_relation": {
+            "type": "string",
+            "title": "Support Relation",
+            "default": "quotation"
+          },
+          "support_relations": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Support Relations",
+            "default": []
+          },
+          "related_fact_refs": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Related Fact Refs",
+            "default": []
+          },
+          "status": {
+            "type": "string",
+            "title": "Status",
+            "default": "verified"
+          },
+          "evidence_role": {
+            "type": "string",
+            "title": "Evidence Role",
+            "default": ""
+          },
+          "source_kind": {
+            "type": "string",
+            "title": "Source Kind",
+            "default": ""
+          },
+          "spatial_granularity": {
+            "type": "string",
+            "title": "Spatial Granularity",
+            "default": "none"
+          },
+          "planning_use": {
+            "type": "string",
+            "title": "Planning Use",
+            "default": "context"
+          }
+        },
+        "type": "object",
+        "required": [
+          "statement"
+        ],
+        "title": "EvidenceFact"
+      },
+      "EvidencePacket": {
+        "properties": {
+          "schema_version": {
+            "type": "string",
+            "title": "Schema Version",
+            "default": "1.0"
+          },
+          "context_version": {
+            "type": "string",
+            "title": "Context Version",
+            "default": ""
+          },
+          "context_fingerprint": {
+            "type": "string",
+            "title": "Context Fingerprint",
+            "default": ""
+          },
+          "artifact_id": {
+            "type": "string",
+            "title": "Artifact Id",
+            "default": ""
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          },
+          "request": {
+            "type": "string",
+            "title": "Request"
+          },
+          "query_fingerprint": {
+            "type": "string",
+            "title": "Query Fingerprint",
+            "default": ""
+          },
+          "bundle_snapshot_digest": {
+            "type": "string",
+            "title": "Bundle Snapshot Digest",
+            "default": ""
+          },
+          "kg_version": {
+            "type": "string",
+            "title": "Kg Version",
+            "default": ""
+          },
+          "l1_snapshot_ref": {
+            "type": "string",
+            "title": "L1 Snapshot Ref",
+            "default": ""
+          },
+          "l1_scope_refs": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "L1 Scope Refs"
+          },
+          "candidate_refs": {
+            "items": {
+              "$ref": "#/components/schemas/FeatureEvidenceRef"
+            },
+            "type": "array",
+            "title": "Candidate Refs"
+          },
+          "candidate_total": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Candidate Total",
+            "default": 0
+          },
+          "candidate_offset": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Candidate Offset",
+            "default": 0
+          },
+          "candidate_limit": {
+            "type": "integer",
+            "minimum": 1.0,
+            "title": "Candidate Limit",
+            "default": 12
+          },
+          "candidates_truncated": {
+            "type": "boolean",
+            "title": "Candidates Truncated",
+            "default": false
+          },
+          "next_candidate_offset": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Candidate Offset"
+          },
+          "relation_evidence": {
+            "items": {
+              "$ref": "#/components/schemas/SpatialRelationEvidence"
+            },
+            "type": "array",
+            "title": "Relation Evidence"
+          },
+          "source_spans": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Source Spans"
+          },
+          "external_refs": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "External Refs"
+          },
+          "ambiguity_status": {
+            "type": "string",
+            "enum": [
+              "resolved",
+              "multiple",
+              "unresolved"
+            ],
+            "title": "Ambiguity Status",
+            "default": "unresolved"
+          },
+          "sufficiency": {
+            "type": "string",
+            "enum": [
+              "sufficient",
+              "partial",
+              "insufficient"
+            ],
+            "title": "Sufficiency",
+            "default": "insufficient"
+          },
+          "missing_evidence": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Missing Evidence"
+          },
+          "query_trace": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "type": "array",
+            "title": "Query Trace"
+          }
+        },
+        "type": "object",
+        "required": [
+          "request"
+        ],
+        "title": "EvidencePacket",
+        "description": "Small, auditable retrieval result; full reports are excluded by default."
+      },
+      "EvidenceQueryRequest": {
+        "properties": {
+          "query": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Query"
+          },
+          "village_name": {
+            "type": "string",
+            "title": "Village Name",
+            "default": ""
+          },
+          "request_type": {
+            "type": "string",
+            "enum": [
+              "spatial_lookup",
+              "fact_check",
+              "evidence_gap"
+            ],
+            "title": "Request Type",
+            "default": "spatial_lookup"
+          },
+          "stage": {
+            "type": "string",
+            "title": "Stage",
+            "default": "GROUND"
+          },
+          "dimension_key": {
+            "type": "string",
+            "title": "Dimension Key",
+            "default": ""
+          },
+          "query_purpose": {
+            "type": "string",
+            "title": "Query Purpose",
+            "default": "fact_check"
+          },
+          "context_refs": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Context Refs"
+          },
+          "questions": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Questions"
+          },
+          "required_facts": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Required Facts"
+          },
+          "entity_scope": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Entity Scope"
+          },
+          "candidate_offset": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Candidate Offset",
+            "default": 0
+          },
+          "candidate_limit": {
+            "type": "integer",
+            "maximum": 64.0,
+            "minimum": 1.0,
+            "title": "Candidate Limit",
+            "default": 12
+          },
+          "include_external": {
+            "type": "boolean",
+            "title": "Include External",
+            "default": false
+          },
+          "external_categories": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "maxItems": 8,
+            "title": "External Categories"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "query"
+        ],
+        "title": "EvidenceQueryRequest",
+        "description": "Frontend-safe request for the unified KG/bundle/L1 evidence path."
+      },
+      "EvidenceQueryResponse": {
+        "properties": {
+          "schema_version": {
+            "type": "string",
+            "const": "1.0",
+            "title": "Schema Version",
+            "default": "1.0"
+          },
+          "session_id": {
+            "type": "string",
+            "title": "Session Id"
+          },
+          "request": {
+            "type": "string",
+            "title": "Request"
+          },
+          "evidence_bundle": {
+            "$ref": "#/components/schemas/EvidenceBundle"
+          },
+          "spatial_cognition": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SpatialCognitionEvidence"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "evidence_packet": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/EvidencePacket"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "session_id",
+          "request",
+          "evidence_bundle"
+        ],
+        "title": "EvidenceQueryResponse",
+        "description": "Bounded answer that can be rendered by the map and planning UI."
+      },
+      "EvidenceSource": {
+        "properties": {
+          "source_type": {
+            "type": "string",
+            "title": "Source Type"
+          },
+          "reference": {
+            "type": "string",
+            "title": "Reference"
+          },
+          "retrieved_at": {
+            "type": "string",
+            "title": "Retrieved At",
+            "default": ""
+          },
+          "confidence": {
+            "type": "number",
+            "title": "Confidence",
+            "default": 1.0
+          },
+          "evidence_role": {
+            "type": "string",
+            "title": "Evidence Role",
+            "default": "context"
+          },
+          "authority": {
+            "type": "string",
+            "title": "Authority",
+            "default": "advisory"
+          },
+          "availability": {
+            "type": "string",
+            "title": "Availability",
+            "default": "available"
+          },
+          "supports": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Supports",
+            "default": []
+          },
+          "snapshot_ref": {
+            "type": "string",
+            "title": "Snapshot Ref",
+            "default": ""
+          }
+        },
+        "type": "object",
+        "required": [
+          "source_type",
+          "reference"
+        ],
+        "title": "EvidenceSource"
+      },
+      "FeatureEvidenceRef": {
+        "properties": {
+          "identity": {
+            "$ref": "#/components/schemas/BundleFeatureIdentity"
+          },
+          "entity_refs": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Entity Refs"
+          },
+          "geometry_ref": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Geometry Ref"
+          },
+          "geometry_authority": {
+            "type": "string",
+            "enum": [
+              "bundle",
+              "none"
+            ],
+            "title": "Geometry Authority",
+            "default": "bundle"
+          },
+          "relation_refs": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Relation Refs"
+          },
+          "related_parcel_bsms": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Related Parcel Bsms"
+          },
+          "provenance_refs": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Provenance Refs"
+          },
+          "l1_fact_refs": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "L1 Fact Refs"
+          },
+          "l1_snapshot_ref": {
+            "type": "string",
+            "title": "L1 Snapshot Ref",
+            "default": ""
+          },
+          "selection_evidence": {
+            "additionalProperties": {
+              "type": "number"
+            },
+            "type": "object",
+            "title": "Selection Evidence"
+          },
+          "source_authority_score": {
+            "type": "number",
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "Source Authority Score",
+            "default": 0.0
+          },
+          "semantic_match_score": {
+            "type": "number",
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "Semantic Match Score",
+            "default": 0.0
+          },
+          "spatial_support_score": {
+            "type": "number",
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "Spatial Support Score",
+            "default": 0.0
+          },
+          "external_support_score": {
+            "type": "number",
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "External Support Score",
+            "default": 0.0
+          },
+          "retrieval_score": {
+            "type": "number",
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "Retrieval Score",
+            "default": 0.0
+          },
+          "selection_confidence": {
+            "anyOf": [
+              {
+                "type": "number",
+                "maximum": 1.0,
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Selection Confidence"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "identity"
+        ],
+        "title": "FeatureEvidenceRef",
+        "description": "A reference to a bundle/KG feature; it never embeds executable geometry."
+      },
       "HTTPValidationError": {
         "properties": {
           "detail": {
@@ -750,6 +2063,91 @@
         },
         "type": "object",
         "title": "HTTPValidationError"
+      },
+      "HistoryProject": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "display_name": {
+            "type": "string",
+            "title": "Display Name"
+          },
+          "session_count": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Session Count",
+            "default": 0
+          },
+          "sessions": {
+            "items": {
+              "$ref": "#/components/schemas/HistorySession"
+            },
+            "type": "array",
+            "title": "Sessions"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "name",
+          "display_name"
+        ],
+        "title": "HistoryProject",
+        "description": "A project grouped with its persisted planning sessions."
+      },
+      "HistoryProjectList": {
+        "properties": {
+          "schema_version": {
+            "type": "string",
+            "const": "1.0",
+            "title": "Schema Version",
+            "default": "1.0"
+          },
+          "projects": {
+            "items": {
+              "$ref": "#/components/schemas/HistoryProject"
+            },
+            "type": "array",
+            "title": "Projects"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "HistoryProjectList",
+        "description": "Stable response for the restart-safe planning history list."
+      },
+      "HistorySession": {
+        "properties": {
+          "session_id": {
+            "type": "string",
+            "title": "Session Id"
+          },
+          "timestamp": {
+            "type": "string",
+            "title": "Timestamp"
+          },
+          "checkpoint_count": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Checkpoint Count",
+            "default": 0
+          },
+          "has_final_report": {
+            "type": "boolean",
+            "title": "Has Final Report",
+            "default": false
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "session_id",
+          "timestamp"
+        ],
+        "title": "HistorySession",
+        "description": "Minimal persisted-session metadata exposed to the history sidebar."
       },
       "HumanReviewDecision": {
         "properties": {
@@ -900,7 +2298,8 @@
                 "enum": [
                   "complete",
                   "partial",
-                  "diagnostic_only"
+                  "diagnostic_only",
+                  "no_planning_output"
                 ]
               },
               {
@@ -923,6 +2322,85 @@
           "session_id"
         ],
         "title": "MapLayerCollection"
+      },
+      "Provenance": {
+        "properties": {
+          "source": {
+            "type": "string",
+            "title": "Source"
+          },
+          "run_id": {
+            "type": "string",
+            "title": "Run Id"
+          },
+          "module": {
+            "type": "string",
+            "title": "Module"
+          },
+          "timestamp": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Timestamp"
+          },
+          "trace": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Trace"
+          },
+          "natural_language_description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Natural Language Description"
+          },
+          "spatial_hint": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Spatial Hint"
+          },
+          "reasoning_trace": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reasoning Trace"
+          },
+          "raw_text": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Raw Text"
+          }
+        },
+        "type": "object",
+        "required": [
+          "source",
+          "run_id",
+          "module"
+        ],
+        "title": "Provenance"
       },
       "ResourceLinks": {
         "properties": {
@@ -1168,7 +2646,8 @@
                 "enum": [
                   "complete",
                   "partial",
-                  "diagnostic_only"
+                  "diagnostic_only",
+                  "no_planning_output"
                 ]
               },
               {
@@ -1200,6 +2679,125 @@
           "links"
         ],
         "title": "SessionProjection"
+      },
+      "SpatialCognitionEvidence": {
+        "properties": {
+          "village_overview": {
+            "type": "string",
+            "title": "Village Overview",
+            "default": ""
+          },
+          "spatial_pattern": {
+            "type": "string",
+            "title": "Spatial Pattern",
+            "default": ""
+          },
+          "constraint_coverage": {
+            "type": "string",
+            "title": "Constraint Coverage",
+            "default": ""
+          },
+          "topology_facts": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Topology Facts",
+            "default": []
+          },
+          "entity_annotations": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Entity Annotations",
+            "default": []
+          },
+          "kg_confidence": {
+            "type": "number",
+            "title": "Kg Confidence",
+            "default": 0.0
+          }
+        },
+        "type": "object",
+        "title": "SpatialCognitionEvidence",
+        "description": "KG + bundle spatial cognition, separate from factual evidence."
+      },
+      "SpatialRelationEvidence": {
+        "properties": {
+          "relation_id": {
+            "type": "string",
+            "title": "Relation Id"
+          },
+          "subject": {
+            "$ref": "#/components/schemas/FeatureEvidenceRef"
+          },
+          "predicate": {
+            "type": "string",
+            "title": "Predicate"
+          },
+          "object": {
+            "$ref": "#/components/schemas/FeatureEvidenceRef"
+          },
+          "metric_value": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Metric Value"
+          },
+          "metric_unit": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Metric Unit"
+          },
+          "tolerance": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tolerance"
+          },
+          "crs": {
+            "type": "string",
+            "title": "Crs",
+            "default": "EPSG:4326"
+          },
+          "computation_method": {
+            "type": "string",
+            "title": "Computation Method",
+            "default": ""
+          },
+          "provenance_refs": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Provenance Refs"
+          }
+        },
+        "type": "object",
+        "required": [
+          "relation_id",
+          "subject",
+          "predicate",
+          "object"
+        ],
+        "title": "SpatialRelationEvidence"
       },
       "ValidationError": {
         "properties": {

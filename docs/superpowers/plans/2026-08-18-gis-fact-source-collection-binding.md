@@ -33,15 +33,44 @@
 
 ```text
 Task 1 KG types ──> Task 2 KG query/count semantics ──> Task 3 typed L1 contracts
-                                                        ├─> Task 4 evidence/gates
-                                                        └─> Task 5 L3 goal boundary
-Tasks 4 + 5 ──> Task 6 collection binding ──> Task 7 GROUND cardinality
+                                                        └─> Task 4 evidence/gates
+Task 4 ──> Task 4A L1-constrained Flash source semantics ──> Task 5 L3 goal boundary
+Tasks 4A + 5 ──> Task 6 collection binding ──> Task 7 GROUND cardinality
                                          └──> Task 8 SELECT multi-member scenario
 Task 8 ──> Task 9 operation-aware EXECUTE ──> Task 10 validation/delivery
-Tasks 1-10 ─────────────────────────────────> Task 11 fresh replay and docs
+Accepted T1-T10, including T4A ─────────────> Task 11 fresh replay and docs
 ```
 
-Tasks are independently assignable at the indicated dependency boundary. Each worker owns only the files listed in its task and must return test output plus a concise file-change ledger. If a worker encounters overlapping user changes, it stops editing the overlap and reports the exact hunk.
+Tasks are independently assignable at the indicated dependency boundary, but execution is **serial by default**. Each worker owns only the files listed in its task and must return test output plus a concise file-change ledger. If a worker encounters overlapping user changes, it stops editing the overlap and reports the exact hunk.
+
+## Subagent Dispatch and Reclamation Protocol
+
+- [ ] The root agent remains the reviewer/orchestrator. Run at most **one implementation subagent at a time**; do not let child agents spawn additional agents.
+- [ ] Before dispatch, run `list_agents`. If a previous implementation agent is still `running` or `waiting`, resume/review/reclaim it before creating the next one.
+- [ ] Give the worker exactly one Task ID and its `Owns` list. Files outside that list are read-only; expanding ownership requires root approval and a plan edit first.
+- [ ] The worker must return: changed files, public interfaces produced, focused test command/result, known gaps, `git diff --check` result, and Python/uvicorn cleanup result.
+- [ ] The root reviews the diff and reruns the task's focused tests. Task status changes to accepted only after this review.
+- [ ] For task-local defects, use `followup_task` on the same agent. After acceptance or terminal rejection, interrupt/reclaim that agent and confirm `list_agents` shows only `/root` before dispatching the next task.
+- [ ] Never leave a replay, pytest, FastAPI, uvicorn, KG rebuild, or model process running between tasks.
+
+## Exclusive File Ownership Matrix
+
+| Task | Exclusive write scope | Read-only upstream | Dispatch rule |
+|---|---|---|---|
+| T1 | KG ontology/layer semantic builders + its new test | registry, source bundle | fresh agent, then reclaim |
+| T2 | KG business queries + `kg_fact_contracts.py` + its test | T1 outputs | after T1 accepted |
+| T3 | L1 fact contracts/aggregation + its test | T2 contract | after T2 accepted |
+| T4 | Evidence contracts, three retrievers, L1 evidence gate + tests | T2/T3 contracts | after T3 accepted |
+| T4A | Flash source-semantic contracts/classifier/cache + ingestion hints + tests | T3/T4 verified facts | after T4 accepted |
+| T5 | Planning claim/draft/adapter/assembler only + tests | T3/T4A facts | after T4A accepted |
+| T6 | Identity/binding + target projection mapper/compiler/stage + tests | T4A/T5 outputs | after T5 accepted |
+| T7 | Grounded problem/resolver/ground candidate builder + tests | T6 binding | after T6 accepted |
+| T8 | Scenario contract/solver/builder/select stage/network context + tests | T7 domain | after T7 accepted |
+| T9 | Road operation factors and execution contracts/materializers + tests | T8 scenario | after T8 accepted |
+| T10 | Final validation/delivery/map-layer read side + tests | T9 results | after T9 accepted |
+| T11 | Replay evidence and documentation only | accepted T1-T10 | single replay owner |
+
+No two tasks share production-file write ownership. A later task may consume an earlier interface but must not reopen the earlier task's files. If integration proves an earlier interface insufficient, return an interface-change request to the root; do not patch the upstream file opportunistically.
 
 ---
 
@@ -55,6 +84,11 @@ Tasks are independently assignable at the indicated dependency boundary. Each wo
 - Modify: `backend/app/infrastructure/kg/builder/layer1_extended.py`
 - Verify: `backend/app/infrastructure/kg/builder/layer1_core.py`
 - Create: `backend/tests/core/test_kg_source_fact_type_boundaries.py`
+
+**Interfaces:**
+
+- Consumes: `GIS_LAYER_REGISTRY` entries and existing source provenance predicates.
+- Produces: a composite business-feature classification rule based on `gis_type_ref + semantic_group + geometry_kind + source provenance`; Task 2 must query through this rule.
 
 **Purpose:** Make the existing three-dimensional KG semantics authoritative for every business query. The repository already distinguishes `gis_type_ref`, `semantic_group`, `geometry_kind`, and `GisLayerSet`; P0 must stop consumers from discarding those dimensions. More specific RDF subclasses are an optional compatible refinement, not a prerequisite for correct counts or retrieval.
 
@@ -90,6 +124,11 @@ Get-Process -Name python,python3,uvicorn -ErrorAction SilentlyContinue
 - Modify: `backend/app/infrastructure/kg/queries/spatial_ref.py`
 - Create: `backend/app/contracts/evidence/kg_fact_contracts.py`
 - Create: `backend/tests/core/test_kg_typed_fact_queries.py`
+
+**Interfaces:**
+
+- Consumes: T1 composite business-feature classification.
+- Produces: `KGFactRecord` and snapshot-scoped KG query results; T3 and T4 consume these without parsing display strings.
 
 **Purpose:** Make KG results accurate evidence instead of presentation strings assembled from unqualified node counts.
 
@@ -127,6 +166,10 @@ Get-Process -Name python,python3,uvicorn -ErrorAction SilentlyContinue
 
 **Acceptance:** KG facts state both meaning and counting basis; no consumer can interpret a raw node count as a real-world road count.
 
+**Current implementation status (2026-08-19): PARTIAL.** `KGFactRecord`、完整 source identity
+过滤、current road/facility selector 事实和 typed retrieval 已落地并有回归测试；source
+collection 查询下沉到 `spatial_ref.py`、全量业务对象计数约束和所有拓扑查询仍待收敛。
+
 **Suggested commit:** `fix(kg): emit snapshot-scoped typed evidence facts`
 
 ---
@@ -139,9 +182,13 @@ Get-Process -Name python,python3,uvicorn -ErrorAction SilentlyContinue
 
 - Modify: `backend/app/contracts/domain/l1_contracts.py`
 - Modify: `backend/app/domain/assessment/aggregate.py`
-- Modify: `backend/app/infrastructure/context/planning_context.py`
-- Modify: `backend/app/ports/observation_store.py` if persistence adapters require the new field
+- Create: `backend/app/domain/assessment/l1_fact_projection.py`
 - Create: `backend/tests/core/test_l1_typed_fact_contract.py`
+
+**Interfaces:**
+
+- Consumes: `KGFactRecord` from T2 plus existing report/GIS EvidenceFact inputs.
+- Produces: authoritative `L1Fact` records and deterministic legacy string projections; T4 gates them and T5 cites `fact_id`.
 
 **Purpose:** Ensure L1 facts can prove their origin and semantics. Plain strings remain a compatibility projection, not the authoritative representation.
 
@@ -156,6 +203,8 @@ class L1Fact(BaseModel):
     ]
     dimension_key: str
     subject_scope: str
+    semantic_type: str = ""
+    attributes: dict[str, str] = Field(default_factory=dict)
     value: str | int | float | None = None
     unit: str = ""
     counting_basis: str = ""
@@ -166,11 +215,13 @@ class L1Fact(BaseModel):
     derivation: str = ""
 ```
 
-- [ ] Add `fact_records` to `L1DimensionFragment` and `L1Snapshot`. Keep `facts` and `facts_by_dimension` as deterministic legacy views generated from records.
+- [x] Add `fact_records` to `L1Snapshot`. Keep `facts` and `facts_by_dimension` as deterministic display projections generated from records.
 - [ ] Validate that document observations carry a report ref plus a non-empty locator/span; GIS and KG facts carry a snapshot ref; derived metrics carry their input fact IDs and derivation.
 - [ ] Deduplicate by stable fact fingerprint, not by statement text alone.
 - [ ] Aggregate typed records without stripping source spans, source IDs, units, or counting basis.
 - [ ] Serialize records into planning context so L2/L3 can cite fact IDs.
+- [ ] Store facility observations structurally: use `semantic_type="facility"`, preserve the exact L1 entity phrase in `attributes["entity_phrase"]` (for example `停车场` or `公交站点`), and add `attributes["entity_concept_ref"]` only when the current KG snapshot already resolves one. Do not require a global `parking_lot/bus_stop` business enum and do not recover authoritative facility types later by regex-parsing `statement`.
+- [ ] Preserve nested qualifiers from the report instead of flattening them into extra facility entities: `3 bus stops` and `1 parking lot` are four facility members; `only one bus stop has a shelter` is an attribute/subfact of the bus-stop set, not a fifth facility. Preserve the parking lot's village-committee location and underuse observation as separate linked attributes/facts.
 - [ ] Add migration tests that load legacy artifacts but label legacy strings `unverified_legacy` rather than silently treating them as authoritative facts.
 - [ ] Run:
 
@@ -181,6 +232,12 @@ Get-Process -Name python,python3,uvicorn -ErrorAction SilentlyContinue
 ```
 
 **Acceptance:** Every authoritative L1 fact is traceable to a report span, GIS snapshot, or canonical KG record; the 275 legacy string cannot pass as an authoritative fact.
+
+**Current implementation status (2026-08-19): PARTIAL.** `L1Snapshot.fact_records`、稳定 ID、
+来源投影、聚合去重、PlanningContext/L2/retriever 消费已落地；旧
+`L1DimensionFragment` 输入契约和兼容 adapter 已移除。旧 artifact 迁移标记和全部 nested
+qualifier 结构化校验仍不属于当前生产路径，历史 artifact 必须显式标记为
+`unverified_legacy`，不能静默升级为权威 fact。
 
 **Suggested commit:** `feat(l1): add typed provenance-rich fact records`
 
@@ -193,23 +250,29 @@ Get-Process -Name python,python3,uvicorn -ErrorAction SilentlyContinue
 **Owns:**
 
 - Modify: `backend/app/evidence/retrieval/retrievers/kg_retriever.py`
-- Modify: relevant report/GIS retrievers under `backend/app/evidence/retrieval/retrievers/`
+- Modify: `backend/app/evidence/retrieval/retrievers/report_retriever.py`
+- Modify: `backend/app/evidence/retrieval/retrievers/bundle_retriever.py`
 - Modify: `backend/app/domain/assessment/gate.py`
-- Modify: `backend/app/contracts/evidence/evidence_contracts.py` only if typed support relations are absent
+- Modify: `backend/app/contracts/evidence/evidence_contracts.py`
 - Create: `backend/tests/core/test_l1_fact_conflict_gate.py`
 - Create: `backend/tests/core/test_explore_typed_fact_evidence.py`
 
+**Interfaces:**
+
+- Consumes: T2 `KGFactRecord` and T3 `L1Fact` identity/provenance rules.
+- Produces: source-span/source-feature-aware `EvidenceFact` records and support relations; T5/T6 consume only verified refs.
+
 **Purpose:** Prevent Explore from promoting KG diagnostics, free-form summaries, or incomparable counts into facts.
 
-- [ ] Change `kg_retriever.py` to emit the typed records from Task 2 rather than constructing `EvidenceFact` from `entity_counts` strings.
-- [ ] Make report evidence include exact document refs and source spans for the traffic statements supplied in the baseline.
-- [ ] Make GIS evidence include source collection key, snapshot digest, geometry kind, feature IDs, and source-feature count.
+- [x] Change `kg_retriever.py` to emit the typed records from Task 2 rather than constructing `EvidenceFact` from `entity_counts` strings.
+- [x] Make report evidence include exact document refs and source spans for the traffic statements supplied in the baseline.
+- [x] Make GIS evidence include source collection key, snapshot digest, geometry kind, feature IDs, and source-feature count.
 - [ ] Reuse the actual `annotations_current` source for facility retrieval. A `facilities` scope must include the 30 current facility annotations and expose the three station features and one parking feature as typed source evidence, not merely a group-count string.
 - [ ] Return original report document refs and exact spans for the traffic-facility observations instead of using generated `L1:traffic` as the terminal source.
-- [ ] Add support relations: `supports`, `contradicts`, `refines`, `different_counting_basis`, and `unverified`.
-- [ ] Compare numbers only when subject scope, time/snapshot, unit, and counting basis are compatible.
-- [ ] Gate any quantitative fact without valid lineage; emit an evidence gap rather than guessing.
-- [ ] Add a regression test with the legacy 275 statement and the 131-feature collection. Expected result: 275 is `unsupported/type_pollution`; 131 remains a valid source-feature fact; the system does not call them a legitimate count mismatch.
+- [x] Add support relations: `supports`, `contradicts`, `different_counting_basis`, and `unverified` (the existing primary relation is preserved; quality relations are additive).
+- [x] Compare numbers only when subject scope, time/snapshot, unit, and counting basis are compatible.
+- [x] Gate any quantitative fact without valid lineage; emit an evidence gap rather than guessing.
+- [x] Add a regression test with the legacy 275 statement and the 131-feature collection. Expected result: 275 is `unverified`; 131 remains a valid source-feature fact; the system does not call them a legitimate count mismatch.
 - [ ] Run:
 
 ```powershell
@@ -224,17 +287,125 @@ Get-Process -Name python,python3,uvicorn -ErrorAction SilentlyContinue
 
 ---
 
-## Task 5: Keep L3 as Goals and Split Mixed Road Claims
+## Task 4A: Classify Ambiguous Source Vocabulary with L1-Constrained Flash Batches
 
 **Depends on:** Tasks 3 and 4
 
 **Owns:**
 
-- Modify: the planning-claim contract under `backend/app/contracts/`
-- Modify: L3 claim assembly/compiler under `backend/app/domain/` and its prompt/adapter boundary
-- Modify: `backend/app/data/ingestion/compiler/spec_mapper.py`
+- Create: `backend/app/contracts/evidence/source_semantic_contracts.py`
+- Create: `backend/app/evidence/identity/flash_source_semantic_classifier.py`
+- Create: `backend/app/evidence/identity/source_semantic_store.py`
+- Modify: `backend/app/data/ingestion/source_identity.py`
+- Modify: `backend/app/data/model/spatial_types.py`
+- Modify: `backend/app/infrastructure/llm/factory.py`
+- Create: `backend/tests/core/test_flash_source_semantic_classifier.py`
+- Create: `backend/tests/core/test_source_semantic_classification_replay.py`
+
+**Interfaces:**
+
+- Consumes: T3 structured `L1Fact` records, T4 verified evidence relations, and immutable GIS source descriptors (`source_feature_id`, snapshot digest, raw label, layer identity, geometry kind, and minimal source properties).
+- Produces: a persisted `SourceSemanticClassificationSnapshot`. T5 may cite its supporting L1 facts; T6 may consume only decisions whose status is `accepted`. Neither task may read raw model text as a binding input.
+
+**Purpose:** Replace brittle abbreviation tables and free-text regex guesses such as `停 -> 停车场` with a bounded semantic proposal step. The GIS feature ID, geometry, raw label, layer, and snapshot remain authoritative source facts. The expanded meaning of an abbreviated raw label is a snapshot-scoped inference constrained by L1, never a mutation of the source feature or an unqualified canonical KG fact.
+
+- [ ] Remove one-character abbreviation expansion from the authoritative identity path. Existing maps such as `站 -> 公交站`, `祠 -> 祠堂`, and `停 -> 停车场/停车` may remain only as explicitly named `legacy_semantic_hint` or UI-display compatibility data; binding code must not treat them as verified semantics.
+- [ ] Allow a deterministic fast path only for normalized exact equality with a canonical label that is present in the current KG/source snapshot or in the current L1 entity phrase, such as a source label already equal to `停车场`. Unicode/whitespace normalization is allowed; abbreviation expansion, substring rules, fuzzy matching, and regex-derived acceptance are not. No global string-to-type table is authoritative.
+- [ ] Materialize the candidate vocabulary per `(source_snapshot, L1 fingerprint, layer scope)` instead of loading a fixed business vocabulary. Each candidate must originate from an entity-denoting L1 fact or an already-resolved KG semantic reference in this snapshot, carry its exact display phrase, source fact refs, optional KG concept ref, geometry/layer compatibility, and counting basis. If no fact or KG concept supplies a candidate, Flash must abstain; it may not invent one.
+- [ ] Derive candidate refs deterministically: use `kg:<semantic-concept-uri>` when the current KG resolves the phrase, otherwise use `l1:<fact_id>:entity` (or another stable fact-derived ref). The model may select these refs but may never create a new ref. Thus the batch is operationally closed for safety while its business vocabulary remains data-driven and can change with each L1/KG snapshot.
+- [ ] Admit only entity-denoting facts into the candidate-type list. Qualifiers such as `has_shelter`, `underused`, `located_at_village_committee`, surface condition, or adequacy may constrain or annotate a matched feature but may not become extra source-feature classes.
+- [ ] Give Flash a small, canonical JSON context rather than the whole report:
+
+```text
+source items:  [{source_feature_id, raw_label, layer_key, geometry_kind, minimal_properties}]
+L1 context:    [{fact_id, statement, semantic_type, attributes, value, unit, counting_basis}]
+candidates:    [{candidate_ref, display_phrase, origin, supporting_fact_refs,
+                 optional_kg_concept_ref, compatible_layers, compatible_geometry_kinds}]
+instruction:  choose one candidate_ref or abstain for every source item; never invent a
+              candidate, label, feature ID, fact ref, coordinate, BSM, geometry, count,
+              or source property
+```
+
+- [ ] Sort source items, facts, candidates, and output fields before prompt hashing. Batch at most 32 ambiguous source features or vocabulary items per call; do not issue one model request per feature. The 30 current facility annotations must fit in one bounded batch.
+- [ ] Add strict typed contracts similar to:
+
+```python
+class SourceSemanticCandidate(BaseModel):
+    candidate_ref: str
+    display_phrase: str
+    origin: Literal["l1_fact", "kg_snapshot", "canonical_exact"]
+    supporting_fact_refs: list[str] = Field(min_length=1)
+    optional_kg_concept_ref: str = ""
+    compatible_layers: list[str] = Field(default_factory=list)
+    compatible_geometry_kinds: list[str] = Field(default_factory=list)
+
+class SourceFeatureSemanticProposal(BaseModel):
+    source_feature_id: str
+    candidate_ref: str | None = None  # None means abstain
+    supporting_fact_refs: list[str] = Field(default_factory=list)
+
+class SourceFeatureSemanticDecision(BaseModel):
+    source_feature_id: str
+    raw_label: str
+    semantic_type: str = ""  # copied from the accepted candidate, never model-authored
+    status: Literal["accepted", "ambiguous", "unresolved"]
+    authority: Literal["canonical_exact", "inferred_current"]
+    supporting_fact_refs: list[str] = Field(default_factory=list)
+    proposal_digests: list[str] = Field(default_factory=list)
+
+class SourceSemanticClassificationSnapshot(ContractMeta):
+    source_snapshot_ref: str
+    source_snapshot_digest: str
+    l1_fact_fingerprint: str
+    vocabulary_fingerprint: str
+    prompt_version: str
+    model_id: str
+    decisions: list[SourceFeatureSemanticDecision]
+    fingerprint: str
+```
+
+- [ ] Use Instructor/Pydantic structured output only. A parse failure, truncated output, free-form answer, or schema retry exhaustion yields `unresolved`; there is **no free-text/regex fallback** for an accepted decision. The permissive fallback in `flash_mention_extractor.py` may be studied for call-budget and cache integration only and must not be reused as the semantic authority path.
+- [ ] Fix `create_flash_llm()` so an explicit `temperature=0.0` is not replaced by `FLASH_MODEL_TEMPERATURE` through truthiness. Use the provider's lowest legal temperature where zero is unsupported, and record the effective value. Temperature and seed are reproducibility aids, not correctness guarantees.
+- [ ] Run two bounded proposal passes for each uncached fingerprint. Normalize both typed outputs and accept a model-assisted edge only when `candidate_ref` and supporting fact refs are identical in both passes. A disagreement, abstention mismatch, or changed membership is `ambiguous`.
+- [ ] Add a deterministic verifier after the model. Reject the whole affected batch, or mark affected members unresolved, for missing/duplicate/foreign feature IDs, omitted members, output-count mismatch, candidate refs outside the materialized per-batch set, foreign/missing fact refs, incompatible geometry/layer kind, or a candidate not backed by the current L1/KG snapshot.
+- [ ] Treat quantities as consistency constraints, never identity proofs. Where L1 says `3个公交站点` and `1个停车场` and the GIS source batch contains three raw `站` points and one raw `停` point, require the accepted assignments to satisfy those business cardinalities and the source snapshot. If multiple assignments satisfy all constraints, no unique classification exists: mark the competing members `ambiguous` rather than selecting one by confidence or model order.
+- [ ] Ignore model confidence for acceptance. Use a deterministic constraint/assignment check and accept only a unique evidence-compatible solution. An LLM answer that is fluent and repeated but violates source or L1 constraints is still rejected.
+- [ ] Cache and persist by `source_snapshot_digest + l1_fact_fingerprint + vocabulary_fingerprint + prompt_version + schema_version + model_id + effective_temperature`. A resume with the same key makes zero model calls; any source or L1 change invalidates the key. Persist normalized input digest, both raw-output digests, verifier findings, and final decisions for audit.
+- [ ] Store accepted inferred meanings as a semantic annotation overlay linked to source feature IDs and supporting L1 fact IDs. Do not change source IDs, WKT, raw labels, base KG layer/type assertions, or the original GIS snapshot. `inferred_current` must remain distinguishable from `canonical_exact` in KG/evidence queries.
+- [ ] If Flash is disabled, unavailable, times out, exceeds budget, disagrees with itself, or cannot prove a unique closed-set assignment, emit an auditable unresolved/ambiguous artifact. Preserve the existing safe deferral/HUMAN path.
+- [ ] Test all of the following with a fake model and no network: identical two-pass `3 x 站 + 1 x 停` proposals constrained by candidates dynamically materialized from the L1 phrases `公交站点` and `停车场` become three assignments to the former candidate and one to the latter; disagreement on `停` remains ambiguous; foreign candidate refs, duplicate features, missing fact refs, omitted output members, parse failure, and timeout never become accepted; cached replay makes zero additional calls; changed L1/source fingerprints force re-evaluation; and no regex fallback can accept `停`.
+- [ ] Run:
+
+```powershell
+Set-Location backend
+pytest -o addopts='' -p no:cacheprovider -q tests/core/test_flash_source_semantic_classifier.py tests/core/test_source_semantic_classification_replay.py tests/core/test_structured_output_runner.py tests/core/test_minimax_provider.py
+Get-Process -Name python,python3,uvicorn -ErrorAction SilentlyContinue
+```
+
+**Acceptance:** Ambiguous source abbreviations can be resolved in a bounded batch only when two typed proposals agree and a deterministic L1/source constraint check has a unique valid solution. Random, malformed, unsupported, or merely high-confidence output cannot enter binding, KG canonical facts, or geometry production.
+
+**Suggested commit:** `feat(evidence): add deterministic L1-constrained source semantic classification`
+
+---
+
+## Task 5: Keep L3 as Goals and Split Mixed Road Claims
+
+**Depends on:** Tasks 3, 4, and 4A
+
+**Owns:**
+
+- Modify: `backend/app/contracts/program.py`
+- Modify: `backend/app/domain/program/claim_draft.py`
+- Modify: `backend/app/domain/program/claim_adapter.py`
+- Modify: `backend/app/domain/program/assembler.py`
+- Create: `backend/app/domain/program/road_goal_splitter.py`
 - Create: `backend/tests/core/test_l3_goal_fact_boundary.py`
 - Create: `backend/tests/core/test_road_goal_operation_split.py`
+
+**Interfaces:**
+
+- Consumes: T3 `L1Fact.fact_id`, T4 verified support relations, and accepted T4A semantic decisions when a goal cites an abbreviated GIS facility label.
+- Produces: single-operation PlanningClaims/PlanningInterventions with `source_fact_refs`; T6 owns all spatial binding compilation.
 
 **Purpose:** L3 expresses desired change. It cites L1 but cannot copy an unsupported quantity into a goal or combine preservation, upgrading, and new construction into one target.
 
@@ -269,7 +440,7 @@ Get-Process -Name python,python3,uvicorn -ErrorAction SilentlyContinue
 
 ## Task 6: Replace Count-Equality Binding with Source-Collection Binding
 
-**Depends on:** Tasks 4 and 5
+**Depends on:** Tasks 4, 4A, and 5
 
 **Owns:**
 
@@ -278,8 +449,14 @@ Get-Process -Name python,python3,uvicorn -ErrorAction SilentlyContinue
 - Modify: `backend/app/evidence/identity/binding_store.py`
 - Modify: `backend/app/data/ingestion/compiler/spec_mapper.py`
 - Modify: `backend/app/domain/program/target_projection/compile.py`
+- Modify: `backend/app/workflow/stages/target_projection.py`
 - Create: `backend/tests/core/test_source_collection_binding.py`
 - Modify: `backend/tests/characterization/test_road_source_geometry_binding.py`
+
+**Interfaces:**
+
+- Consumes: T4 verified source evidence, T4A accepted `SourceSemanticClassificationSnapshot` decisions, and T5 single-operation goals.
+- Produces: `SourceFeatureSetBinding` plus source-scoped `SpatialReferenceSpec`; T7 must not infer membership again.
 
 **Purpose:** Bind by verified meaning and scope. Broad preservation binds the audited current-road collection; a partial intervention binds an explicit/audited subset; new construction does not bind existing geometry as its output.
 
@@ -297,10 +474,12 @@ class SourceFeatureSetBinding(BaseModel):
     membership: Literal["required", "alternative", "eligible_subset"]
     operation: Literal["preserve", "harden", "repair", "widen", "reference"]
     source_fact_refs: list[str] = Field(min_length=1)
+    source_semantic_decision_refs: list[str] = Field(default_factory=list)
 ```
 
 - [ ] Remove `_declared_road_quantity` as a binding gate and delete the `quantity == len(valid)` fallback.
-- [ ] Remove facility count equality as identity proof as well. Extend the existing source vocabulary with `停 -> 停车场`, keep `站 -> 公交站`, and bind supported facility subsets by semantic type plus snapshot-scoped feature IDs.
+- [ ] Remove facility count equality as identity proof as well. Delete authoritative dependence on static abbreviation vocabulary. Bind facility subsets only from canonical-exact semantics or T4A `accepted` decisions, together with snapshot-scoped feature IDs and supporting fact refs. `ambiguous`, `unresolved`, raw model output, and `legacy_semantic_hint` are never binding inputs.
+- [ ] Invoke/load T4A classification through the target-projection stage using the current source snapshot and L1 fingerprints. Persist the classification artifact reference in the stage output so resume reuses it and downstream lineage can audit it.
 - [ ] Reuse `EvidenceObservationSnapshot`, `GroundedEntityBindingSnapshot`, `PlaceEvidenceIndex`, and the KG spatial query adapter as binding inputs; do not create a parallel facility lookup store.
 - [ ] Bind `preserve_current_network` to all features in the verified `roads_current` snapshot using the collection digest and the cited collection fact.
 - [ ] Bind named roads or partial upgrades by explicit IDs or a deterministic KG query over source attributes. Persist the resolved membership and query fingerprint.
@@ -317,6 +496,11 @@ Get-Process -Name python,python3,uvicorn -ErrorAction SilentlyContinue
 
 **Acceptance:** A supported current-road goal binds its complete verified source collection without count comparison, and every member is snapshot-scoped and auditable.
 
+**Current implementation status (2026-08-19): PARTIAL.** `SourceFeatureSetBinding`、显式
+member subset/collection binding、单快照校验、digest 和 binding ref 到 GROUND/EXECUTE 的
+lineage 已落地；T4 verified source fact 注入、source semantic decision artifact 和所有
+road/axis operation 的统一入口仍待完成。
+
 **Suggested commit:** `feat(binding): add audited source feature set bindings`
 
 ---
@@ -330,9 +514,14 @@ Get-Process -Name python,python3,uvicorn -ErrorAction SilentlyContinue
 - Modify: `backend/app/contracts/spatial/grounded_problem.py`
 - Modify: `backend/app/domain/ground/aggregate.py`
 - Modify: `backend/app/spatial/grounding/resolver.py`
-- Modify: relevant candidate-domain builder under `backend/app/domain/ground/`
+- Modify: `backend/app/domain/ground/candidate_domain_builder.py`
 - Create: `backend/tests/core/test_grounded_candidate_cardinality.py`
 - Modify: `backend/tests/core/test_point_line_grounding_without_parcel_area.py`
+
+**Interfaces:**
+
+- Consumes: T6 `SourceFeatureSetBinding` and source-scoped spatial references.
+- Produces: `GroundedCandidateDomain(selection_mode, min_selected, max_selected, binding_ref)` and exact per-member CandidateGeometry records; T8 treats this as authoritative.
 
 **Purpose:** Represent a factual feature set as required members, while retaining choose-one alternatives for generated sites and routes.
 
@@ -360,6 +549,10 @@ Get-Process -Name python,python3,uvicorn -ErrorAction SilentlyContinue
 
 **Acceptance:** GROUND can carry all 131 exact source lines as one required set without interpreting them as 131 mutually exclusive alternatives.
 
+**Current implementation status (2026-08-19): PARTIAL.** `GroundedCandidateDomain`、
+`all_members`/`choose_one`、场景多成员选择已经实现并通过 3-member road regression；
+source binding 仍未统一注入 `binding_ref`，`choose_subset` 尚未由容量/目标显式驱动。
+
 **Suggested commit:** `feat(ground): model required and alternative candidate domains`
 
 ---
@@ -375,9 +568,17 @@ Get-Process -Name python,python3,uvicorn -ErrorAction SilentlyContinue
 - Modify: `backend/app/domain/allocation/scenario_builder.py`
 - Modify: `backend/app/domain/allocation/network_subproblem.py`
 - Modify: `backend/app/workflow/stages/select.py`
+- Modify: `backend/app/infrastructure/context/planning_context.py`
+- Modify: `backend/app/infrastructure/context/planning_context_factory.py`
+- Create: `backend/app/domain/allocation/scenario_context_builder.py`
 - Create: `backend/tests/core/test_multi_member_scenario_selection.py`
 - Modify: `backend/tests/core/test_relation_aware_scenario_solver.py`
 - Modify: `backend/tests/core/test_scenario_fingerprint_determinism.py`
+
+**Interfaces:**
+
+- Consumes: T7 cardinality-aware grounded domains plus existing source roads/settlements.
+- Produces: `ScenarioTargetSelection[]`, populated network/demand evaluator context, and multi-member `PlanningScenario`; T9 consumes scenario selections only.
 
 **Purpose:** Stop forcing exactly one candidate per target. Required sets are fixed scenario facts; only alternatives/subsets enter combinatorial search.
 
@@ -392,7 +593,7 @@ class ScenarioTargetSelection(BaseModel):
 ```
 
 - [ ] Add `target_selections` to `PlanningScenario` and include its sorted canonical representation in the fingerprint.
-- [ ] Retain `selected_candidate_ids: dict[str, str]` only as a compatibility view for `choose_one`; no consumer may use it as the authoritative selection after migration.
+- [x] Remove `selected_candidate_ids: dict[str, str]`; `ScenarioTargetSelection.candidate_ids` is the only selection contract for both `choose_one` and multi-member modes.
 - [ ] Refactor `_choices()` and the product search: inject `all_members` into every assignment, enumerate `choose_one`, and apply bounded subset optimization only for `choose_subset`.
 - [ ] Evaluate relations across all selected features for a target. Do not collapse a feature set to a union solely to satisfy the existing evaluator.
 - [ ] Build one `ScenarioFeature` for each selected member, each with its candidate/source lineage and common target/binding reference.
@@ -407,6 +608,10 @@ Get-Process -Name python,python3,uvicorn -ErrorAction SilentlyContinue
 
 **Acceptance:** SELECT preserves every required member and still solves alternatives deterministically within the configured search bound.
 
+**Current implementation status (2026-08-19): PARTIAL.** `ScenarioTargetSelection` 和全部
+成员场景特征已落地；网络/关系评估仍需继续审计“同一 target 的多个 feature”在全部 evaluator
+中的语义。旧单值 selection view 已从当前 SELECT/EXECUTE 主链移除，多成员计划按成员展开。
+
 **Suggested commit:** `feat(select): support multi-member target selections`
 
 ---
@@ -418,13 +623,19 @@ Get-Process -Name python,python3,uvicorn -ErrorAction SilentlyContinue
 **Owns:**
 
 - Modify: `backend/app/contracts/domain/road_planning.py`
-- Modify: constraint compilation/evaluation modules under `backend/app/domain/allocation/` and `backend/app/domain/validation/`
+- Modify: `backend/app/domain/ground/constraint_factors.py`
+- Create: `backend/app/domain/relations/road_operation_evaluator.py`
 - Modify: `backend/app/contracts/workflow/execution_plan_contracts.py`
 - Modify: `backend/app/domain/materialization/plan_builder.py`
 - Modify: `backend/app/domain/materialization/existing_road_materializer.py`
 - Modify: `backend/app/domain/materialization/nodes/road_worker.py`
 - Create: `backend/tests/core/test_road_operation_constraint_semantics.py`
 - Create: `backend/tests/core/test_multi_feature_road_execution.py`
+
+**Interfaces:**
+
+- Consumes: T8 `PlanningScenario.target_selections`, network/demand context, and ScenarioFeatures.
+- Produces: operation-aware WorkerTasks/TaskExecutionResults and traceable planning features; T10 validates and renders them without re-deriving assignments.
 
 **Purpose:** Apply the correct spatial algorithm and constraint footprint for each road operation, and carry feature sets into execution without losing members.
 
@@ -446,6 +657,10 @@ Get-Process -Name python,python3,uvicorn -ErrorAction SilentlyContinue
 
 **Acceptance:** Preserve/harden/widen/new operations have distinct constraint and materialization behavior; no selected member is dropped or relabeled.
 
+**Current implementation status (2026-08-19): PARTIAL.** `WorkerTask`/`TaskExecutionResult`
+已携带 `candidate_ids`，`all_members` 会被拆为稳定 member tasks 并保留 lineage；道路
+preserve/harden/widen/new 的完整 operation-aware evaluator 和 resume 后重建计划的多成员传递仍待完成。
+
 **Suggested commit:** `feat(execute): materialize operation-aware road feature sets`
 
 ---
@@ -460,9 +675,17 @@ Get-Process -Name python,python3,uvicorn -ErrorAction SilentlyContinue
 - Modify: `backend/app/domain/validation/relation_validation.py`
 - Modify: `backend/app/domain/validation/validate_checks.py`
 - Modify: `backend/app/infrastructure/export/delivery_snapshot.py`
-- Modify: the backend map-layer adapter used by `/map-layers`
+- Modify: `backend/app/domain/delivery/render_layers.py`
+- Modify: `backend/app/infrastructure/rendering/map_layers.py`
+- Modify: `backend/app/application/queries/map_layers.py`
+- Modify: `backend/app/application/projections/delivery.py`
 - Create: `backend/tests/acceptance/test_road_planning_layer_delivery.py`
 - Create: `backend/tests/core/test_source_set_member_completeness.py`
+
+**Interfaces:**
+
+- Consumes: T9 execution results and feature lineage.
+- Produces: final completeness/quality findings, separated planning render groups, and the `/map-layers` read model consumed by T11 acceptance.
 
 **Purpose:** Prove that planning output is complete, geometrically valid, semantically distinct from the baseline, and traceable to facts and decisions.
 
@@ -499,7 +722,7 @@ Get-Process -Name python,python3,uvicorn -ErrorAction SilentlyContinue
 
 ## Task 11: Rebuild, Run a Low-Memory Fresh Replay, and Reconcile Documents
 
-**Depends on:** Tasks 1-10
+**Depends on:** Accepted Tasks 1-10, including Task 4A
 
 **Owns:**
 
@@ -511,6 +734,11 @@ Get-Process -Name python,python3,uvicorn -ErrorAction SilentlyContinue
 - Modify: `docs/design/RELATION_AWARE_MODIFICATION_LEDGER.md`
 - Modify: the prior v2 plan only to label contradicted conclusions `DEPRECATED` or `HISTORICAL`
 - Create: one bounded replay report under the existing `.run-tmp/sdd/...` evidence directory
+
+**Interfaces:**
+
+- Consumes: accepted interfaces and focused-test evidence from T1-T10.
+- Produces: one default-live replay evidence pack, idempotent-resume proof, final process/memory audit, and reconciled status documents. It changes no production Python files.
 
 **Purpose:** Demonstrate the corrected design in the default live path, not merely in unit tests or a clone-only branch.
 
@@ -553,12 +781,33 @@ all source IDs and geometries round-trip GIS -> KG -> spatial query
 
 ---
 
-## Recommended Delegation Waves
+## Serial Delegation Queue
 
-1. **Wave A — fact correctness:** Task 1, then Task 2. Keep one worker on ontology/builder and the next on query semantics to minimize merge overlap.
-2. **Wave B — evidence contracts:** Task 3, then Tasks 4 and 5 may run in parallel after agreeing on the final `L1Fact` interface.
-3. **Wave C — spatial set semantics:** Task 6, then Task 7, then Task 8. These must be reviewed sequentially because each changes the next stage's contract.
-4. **Wave D — outputs:** Task 9, then Task 10.
-5. **Wave E — proof and documentation:** Task 11 only after focused suites pass. Use one replay owner to avoid checkpoint-branch pollution.
+1. `T1 -> review -> reclaim`
+2. `T2 -> review -> reclaim`
+3. `T3 -> review -> reclaim`
+4. `T4 -> review -> reclaim`
+5. `T4A -> review -> reclaim`
+6. `T5 -> review -> reclaim`
+7. `T6 -> review -> reclaim`
+8. `T7 -> review -> reclaim`
+9. `T8 -> review -> reclaim`
+10. `T9 -> review -> reclaim`
+11. `T10 -> review -> reclaim`
+12. `T11 -> review -> reclaim`
 
-At each handoff, the worker returns: changed files, contract/schema effects, focused test commands and results, known remaining gaps, process cleanup result, and whether any existing user hunk was left untouched.
+Do not dispatch a later task merely because its predecessor's agent says “done.” The root must first verify the interface, diff boundary, focused tests, and process cleanup. Use the same agent only for corrections inside its original ownership; use a fresh agent for the next Task ID.
+
+Every handoff must use this exact result envelope:
+
+```text
+TASK_ID:
+STATUS: passed | failed | blocked
+CHANGED_FILES:
+PRODUCED_INTERFACES:
+TEST_COMMANDS_AND_RESULTS:
+GIT_DIFF_CHECK:
+PROCESS_CLEANUP:
+KNOWN_GAPS:
+USER_HUNKS_LEFT_UNTOUCHED:
+```

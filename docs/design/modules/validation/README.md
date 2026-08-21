@@ -1,7 +1,7 @@
 # 校验 / 反馈 / 自动迭代设计
 
 > 模块：`backend/app/domain/validation/`
-> 校验点盘点：[25_VALIDATION_INVENTORY.md](../../25_VALIDATION_INVENTORY.md)
+> 当前校验与交付证据：[10_IMPLEMENTATION_STATUS_CURRENT_20260818.md](../../10_IMPLEMENTATION_STATUS_CURRENT_20260818.md)
 
 | 文档 | 内容 | 状态 |
 |---|---|---|

@@ -28,4 +28,4 @@
 - artifact contracts/runtime：`backend/app/contracts/artifacts/`、`backend/app/infrastructure/artifacts/`
 - 阶段节点：`backend/app/workflow/stages/`
 - 领域决定：`backend/app/domain/`
-- 当前状态：`docs/design/10_IMPLEMENTATION_STATUS.md`
+- 当前状态：`docs/design/10_IMPLEMENTATION_STATUS_CURRENT_20260818.md`

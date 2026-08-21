@@ -49,7 +49,8 @@ PlaceMention
 
 ### 3.1 L1 地点事实
 
-L1 compiler 应在 `L1DimensionFragment` 中输出可追溯的地点事实；不要只把地名留在 `facts: list[str]` 中。
+L1 compiler 应在 `L1Snapshot.location_facts` 和 `L1Snapshot.fact_records` 中输出可追溯的地点事实；
+不要只把地名留在 `facts: list[str]` 中。
 
 ```python
 class L1LocationFact(BaseModel):

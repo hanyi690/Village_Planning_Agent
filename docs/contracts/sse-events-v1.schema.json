@@ -110,7 +110,8 @@
               "enum": [
                 "complete",
                 "partial",
-                "diagnostic_only"
+                "diagnostic_only",
+                "no_planning_output"
               ],
               "type": "string"
             },

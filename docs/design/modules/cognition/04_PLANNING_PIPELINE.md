@@ -33,8 +33,8 @@ L1 dimension dispatch
   → 12 × parallel analysis workers
   → per-worker AnalysisReport(content + instruction + provenance)
   → per-worker L1_OBSERVATION compilation (parallel)
-  → 12 × L1DimensionFragment
-  → deterministic l1_aggregate
+  → 12 × partial L1Snapshot
+  → deterministic l1_aggregate merge
   → L1Snapshot
 ```
 
@@ -42,7 +42,7 @@ L1 dimension dispatch
 L2/L3 共享阅读和人工审查。ReportStore 落盘时将其拆为 `content`、`instruction` 和 provenance；
 报告不是要被结构化产物替代的临时文本。
 
-`L1DimensionFragment` 是机器消费的维度级权威产物，至少包含：
+每个维度 compiler 直接产生带 provenance 的 partial `L1Snapshot`。它至少包含：
 
 - `facts`、`constraints`、`issues`、`opportunities`
 - `evidence_gaps`
@@ -50,8 +50,8 @@ L2/L3 共享阅读和人工审查。ReportStore 落盘时将其拆为 `content`�
 - `source_report_ref`
 - `compilation_trace`
 
-每个维度报告完成后立即调用共享 compiler core 的 `L1_OBSERVATION` profile，不等待 12 份报告全部
-完成后再集中理解。它不是新增 12 个顶层图节点。唯一的 `l1_aggregate` 只做确定性合并、跨维冲突
+每个维度报告完成后调用共享 compiler core 的 `L1_OBSERVATION` profile，不产生额外的 fragment
+契约。它不是新增 12 个顶层图节点。唯一的 `l1_aggregate` 只做确定性合并、跨维冲突
 检查、证据缺口归并和 provenance 建立，不调用 LLM、不重复解析报告。
 
 `L1Snapshot` 至少包含：
@@ -168,7 +168,7 @@ Worker 只消费 `SiteSelectionDecision` 和 `ExecutionPlan`。不可在 Worker 
 
 当前实现仍未完全达到该目标。EXECUTE 的完整 `ExecutionPlan`、独立 WorkerResult、ZoneAllocatorPort 和
 RoadPlannerPort 闭环仍为 `PARTIAL`；staged road pipeline 已是 canonical，旧简化 road fallback 已删除。
-具体 CURRENT/PARTIAL/GAP 以 `10_IMPLEMENTATION_STATUS.md` 为准。
+具体 CURRENT/PARTIAL/GAP 以 `10_IMPLEMENTATION_STATUS_CURRENT_20260818.md` 为准。
 
 因此“Zone = MIP / zoning allocator”和“Road = 唯一正式 road planner”是目标设计，不应标记为 CURRENT。
 

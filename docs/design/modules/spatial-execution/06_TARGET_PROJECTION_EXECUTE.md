@@ -1,7 +1,7 @@
 # TARGET_PROJECTION、GROUND、SELECT 与 EXECUTE
 
 > 状态：`TARGET DESIGN`。第 6 节的旧实现表只用于迁移追溯；当前路径和完成度以
-> [`10_IMPLEMENTATION_STATUS.md`](../../10_IMPLEMENTATION_STATUS.md) 与 `docs/architecture/` 为准。
+> [`10_IMPLEMENTATION_STATUS_CURRENT_20260818.md`](../../10_IMPLEMENTATION_STATUS_CURRENT_20260818.md) 与 `docs/architecture/` 为准。
 
 > 2026-08-17 核验：`site_area` 命名、闭集 target projection、PlanningIntentGraph、
 > GroundedPlanningProblem、v2 relation contracts、单方案关系感知求解和逐关系最终复测已落地；
@@ -10,7 +10,7 @@
 
 > **2026-08-18 新鲜度纠正：** 上述“已落地”仅表示契约/模块路径和 focused tests；不表示真实金田
 > 主链已有 exact point/line、SELECT 通过或非 baseline planning layer。当前 fresh replay 仍可能
-> 只有 polygon/parcel-set candidate，必须以最新 `progress.md`、artifact 统计和 `10_IMPLEMENTATION_STATUS.md`
+> 只有 polygon/parcel-set candidate，必须以最新 `progress.md`、artifact 统计和 `10_IMPLEMENTATION_STATUS_CURRENT_20260818.md`
 > 为准。
 
 
@@ -696,13 +696,13 @@ fresh source-aware bundle/KG
 
 ```text
 shared compiler core
-    L1 report + evidence → L1DimensionFragment
+    L1 report + evidence → partial L1Snapshot
 
 TARGET_PROJECTION (deterministic domain boundary)
     PlanningProgram + evidence → IntentCompilationResult + SpatialReferenceSpec
 
 GROUND
-    SpatialReferenceSpec + PlaceEvidenceIndex + context → GroundingResult
+    SpatialReferenceSpec + EvidenceGraph + context → GroundingResult
 
 SELECT
     GroundingResult + requirements → SiteSelectionDecision
@@ -719,7 +719,7 @@ Target projection 是已组装规划程序的类型化空间投影，不是空�
 
 | Profile               | 调用位置             | 输入                                                        | 输出                                               |
 | --------------------- | -------------------- | ----------------------------------------------------------- | -------------------------------------------------- |
-| `L1_OBSERVATION`    | L1 worker 完成报告后 | `content`、独立 `instruction`、证据引用、legacy summary | `L1DimensionFragment`                            |
+| `L1_OBSERVATION`    | L1 worker 完成报告后 | `content`、独立 `instruction`、证据引用、legacy summary | partial `L1Snapshot`                            |
 | `TARGET_PROJECTION` | L3 Program Gate 之后 | `PlanningProgram`、证据引用                               | `IntentCompilationResult + SpatialReferenceSpec` |
 
 L1 调用 compiler core 不表示工作流进入 target projection。target projection 仍是 L3 后、GROUND 前的独立确定性边界。
@@ -729,7 +729,7 @@ L1 调用 compiler core 不表示工作流进入 target projection。target proj
 - 从报告中编译事实、约束、问题、机会、分类引用和证据缺口。
 - 将每个字段追溯到 `source_report_ref`、来源段落和 evidence reference。
 - 保留报告正文（report_body）和 observations 结构化 JSON（`instruction` 列），不重写现有 L1 报告。
-- 输出可独立审查的 `L1DimensionFragment`。
+- 输出可独立审查的 partial `L1Snapshot`，由唯一的 L1 aggregate 合并。
 
 `TARGET_PROJECTION` 负责：
 
@@ -832,7 +832,7 @@ EXECUTE 只接受 `SiteSelectionDecision` 和 `ExecutionPlan`。按目标类型�
 
 Worker 不得重新执行 target projection，也不得将第一个可用候选当作最终选址。
 
-上述是目标输入边界。当前实现已经把规划程序、目标投影和交付快照收敛到 typed artifact，但 EXECUTE 的完整 worker contract、统一 `ExecutionResult` 和真实链路仍是 `PARTIAL`；具体事实以 `10_IMPLEMENTATION_STATUS.md` 为准。迁移期的旧 `ExecuteAgentState`、集中式执行节点和 reports-derived 输入不得继续扩展。
+上述是目标输入边界。当前实现已经把规划程序、目标投影和交付快照收敛到 typed artifact，但 EXECUTE 的完整 worker contract、统一 `ExecutionResult` 和真实链路仍是 `PARTIAL`；具体事实以 `10_IMPLEMENTATION_STATUS_CURRENT_20260818.md` 为准。迁移期的旧 `ExecuteAgentState`、集中式执行节点和 reports-derived 输入不得继续扩展。
 
 目标重构应形成：
 
@@ -854,4 +854,4 @@ prepare_inputs → land_design / allocation → geometry_materialize
 | `modules/spatial_ops/bundle_binder.py`                           | 删除；改为 context-aware reference resolution                                                                                       |
 | `agent/gis/execute/agent.py`                                     | 已迁移；当前实现集中在`app/domain/materialization/execute_agent.py`                                                               |
 | `tools/gis/_generation/*`                                        | 已删除；正式链路由`agent/execute` 与 `modules/spatial_ops` 提供                                                                 |
-| `services/modules/gis/road/*` 与 `spatial_ops/road_planner.py` | 历史重复实现；staged planner 是唯一正式 Road Worker，旧入口已删除或待清理以`10_IMPLEMENTATION_STATUS.md` 为准                     |
+| `services/modules/gis/road/*` 与 `spatial_ops/road_planner.py` | 历史重复实现；staged planner 是唯一正式 Road Worker，旧入口已删除或待清理以`10_IMPLEMENTATION_STATUS_CURRENT_20260818.md` 为准                     |

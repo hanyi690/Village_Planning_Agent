@@ -138,7 +138,7 @@ L3 缓存中的 JTC-014 写成“275 条现状道路”，其 evidence refs 只�
 
 ### 5.1 L1 fact contract 无法证明事实
 
-`L1DimensionFragment.facts` 和 `L1Snapshot.facts` 都是字符串列表。原文事实、GIS 观测、KG 投影、
+`L1Snapshot.facts` 曾是字符串列表。原文事实、GIS 观测、KG 投影、
 模型摘要和派生指标在同一容器内，L2/L3 无法判断哪一项可作为硬事实。
 
 ### 5.2 L3 claim 没有强制绑定 source fact ID
@@ -161,17 +161,21 @@ L3 缓存中的 JTC-014 写成“275 条现状道路”，其 evidence refs 只�
 GROUND 已能把多个 source-backed line WKT 逐个生成 exact candidates，但
 `GroundedCandidateDomain` 没有 `all_members / choose_one / choose_subset` 基数语义。
 
-### 5.5 SELECT 只能一目标选一个 candidate
+当前已补齐 `ScenarioTargetSelection.selection_mode` 和 `candidate_ids`；多成员集合在
+SELECT/EXECUTE 中保留并按成员展开，不能被压成一个代表候选。
 
-`PlanningScenario.selected_candidate_ids` 是 `dict[str, str]`；ScenarioSolver 对每个 target 的候选域
-做笛卡尔积，并从每个域选择一个 candidate。因此 131 条现状线即使全部进入 GROUND，SELECT 也只会
-为该 target 选一条。
+### 5.5 SELECT 的选择必须使用 typed member set
 
-### 5.6 EXECUTE 也只有单 candidate binding
+`PlanningScenario` 现在只保留 `ScenarioTargetSelection`。`choose_one`、`all_members` 和
+`choose_subset` 都通过 `candidate_ids` 表达，ScenarioSolver 对候选域做笛卡尔积后保留完整
+成员集；没有单值 selection compatibility view。因此 131 条现状线可以作为一个显式
+`all_members` 选择进入后续计划。
+
+### 5.6 EXECUTE 按 typed member set 展开 candidate binding
 
 `WorkerTask.candidate_id`、`TaskExecutionResult.candidate_id` 和 plan builder 的
-`scenario_selected_candidate_ids: dict[str, str]` 延续了一目标一候选假设。现有道路 materializer 虽然
-能消费多个 `existing_road_feature_ids`，但 Scenario/ExecutionPlan 没有可靠地把整个集合传给它。
+单 candidate binding 只表示一个实际 worker task。计划 builder 同时携带完整 `candidate_ids`，
+多成员选择被展开成稳定的 `:member:N` worker tasks；没有 candidate geometry 时显式 deferred。
 
 ### 5.7 现状、改造和新建的约束语义没有彻底分开
 

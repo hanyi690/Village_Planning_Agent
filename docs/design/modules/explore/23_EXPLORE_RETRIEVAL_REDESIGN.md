@@ -10,8 +10,33 @@
 > 当前 gate 接线事实。当前 `run_rag()` 是 unified `retrieve_evidence()` 适配器；
 > `retrieve_evidence_for_gate_sync()` 已由 `workflow/conversation/edges.py` 的
 > `_route_explore()` 调用，并把 pending evidence 合并到下一次 canonical request。
-> 但 bundle retriever 当前仍主要返回分组统计，source-feature geometry/干预级证据和真实主链
-> 空间图层验收仍未完成。
+> bundle retriever 现已在有 scope/query 时返回有界的 feature identity facts（BSM、source layer、bundle
+> feature ref），并保留分组统计；source-feature geometry/干预级证据和真实主链空间图层验收仍未完成。
+> 外源 provider 现已有 fake、typed unavailable 和可配置的 Exa HTTP adapter；
+> 真实远程请求仍必须在部署环境用真实 key 做受控验收，模拟测试不等同于远程服务验收。
+
+> **2026-08-19 多源边界纠正：** `rag` 仅表示专业外部向量语料，不是本地会话文本的
+> 总索引，也不能在向量服务到期后伪装成 bundle/KG/L1/L2/L3 证据。会话内的确定性语义
+> 片段由独立的 `local_text` retriever 检索；两者都进入统一 EvidenceBundle，但必须保留
+> `source_kind`、`evidence_role`、`source_locator` 和 `retrieval_mode`，且只有 bundle
+> / EvidenceGraph 的验证引用才能产生空间定位或进入 GROUND。
+
+> **2026-08-19 bundle 检索边界收敛：** bundle 是唯一的 session retrieval projection，持有
+> 空间对象、L1 facts、KG/evidence 引用、输入文档引用和 `documents.report_refs` 报告清单；
+> 不再持有 `layer_reports`/`l3_reports` 全文。报告正文仍只有一个权威存储位置，由
+> `report_id` 显式展开；报告检索必须先从 bundle manifest 选出引用，不能绕过 bundle 直接
+> 扫描整个 ReportStore。这样统一了检索入口，同时避免每个空间快照复制长报告。
+
+> **2026-08-19 geometry authority 收紧：** `PlaceEvidenceIndex` 只负责语义候选和身份索引，
+> 只输出 BSM 与 `bundle://feature/<BSM>` opaque ref，不缓存 KG/annotation 的 WKT。对没有
+> 具体名称的“某村的道路/水体/设施”类 scope-only 查询，EvidenceGraph 可从 bundle-backed
+> semantic entries 返回有界候选；GROUND 再按 ref 回读 bundle 几何。KG 坐标只能参与语义/邻近
+> 绑定，不能直接成为执行几何。
+
+> **2026-08-19 村级使用边界：** 一个会话只有一个行政村/项目规划范围。报告中的园寨、社前、
+> 炉池等“自然村/聚落”是 L1 语义锚点，用于设施、道路、水体和地块的范围消歧，不建模为村内
+> 多级行政区划。`金田村祠堂` 的正确结果可以是多个祠堂 BSM 或明确 ambiguous；只有报告/L1/KG
+> 拓扑能把它约束到社前等具体语义锚点时，才可缩小候选，不能因行政层级假设直接选一个。
 
 ---
 
@@ -19,7 +44,7 @@
 
 - **历史断点（2026-08-17 前）**：EXPLORE 曾是 L1/L2/L3 worker 内部的确定性预取钩子；
   RAG（`run_rag`）与 EXPLORE（`retrieve_evidence`）曾是两套并行证据，gate 缺口曾被丢弃。以下第 1 节保留该断点作为审计记录。
-- **当前实现**：`run_rag` 已降为 unified EvidenceBundle adapter；router/query planner/sufficiency、RAG、typed artifact、历史和完整性 retriever 已接入，gate pending request 会触发 scoped retrieval。仍需真实运行验收，不能把模块测试当作空间规划图层证据。
+- **当前实现**：`run_rag` 已降为 unified EvidenceBundle adapter；router/query planner/sufficiency、RAG、typed artifact、历史和完整性 retriever 已接入，gate pending request 会触发 scoped retrieval。外源 provider 已通过 `ExternalSearchPort` 注入，fake provider 与“本地不足才外查”回归已通过；真实远程 provider 和真实空间规划图层仍需单独受控验收，不能把模块测试当作生产证据。
 - **目标**：单一 `retrieve_evidence()` 入口 = 确定性路由（D1）+ 缺口驱动多 query（D4）+ sufficiency 三态 +
   RAG / typed artifact / 历史修订 / bundle 实际数据校验全部作为"源"并入 + KG 查询 L0/L1/L2 阶梯 + 缺口闭环账本。
 - **原则**：确定性基线永不被破坏；LLM 全部走 flag；query 由证据缺口构造，不再"维度名 → 泛查"。
@@ -62,9 +87,11 @@ gate 则通过 `retrieve_evidence_for_gate_sync()` 做缺口驱动的有界补�
 
 ```text
 l1_worker → analyze_dimension (domain/assessment/analysis_node.py:120)
-  1. run_rag()                     → rag_context        ← RAG 向量库（独立于 EXPLORE）
-  2. retrieve_evidence()           → explore_section    ← EXPLORE（确定性，无 LLM）
-  3. _build_prompt(rag_context, deps, professional_data, explore_section)
+  1. run_rag()                     → unified EvidenceBundle
+       ├─ session-owned: local_text + report + KG + bundle
+       └─ optional external: professional RAG（显式 source:rag，服务不可用则 typed status）
+  2. render_evidence_prompt_section() → 按 evidence_role/source_kind 分栏的背景
+  3. _build_prompt(evidence_background, deps, professional_data)
   4. 单次 LLM 调用（report_body + observations）
   5. save_report_immediate / step report
 ```
@@ -99,8 +126,7 @@ dimension、entity scope 生成 `query_purpose="gap_resolution"` 的 scoped requ
 | 代码                                              | 位置                               | 现状                                |
 | ------------------------------------------------- | ---------------------------------- | ----------------------------------- |
 | `retrieve_evidence_for_gate`                    | evidence_service.py:319            | 当前由 conversation edge 同步调用，结果写入有界 gate cache |
-| `ExploreService`                                | explore_service.py                 | 零调用（本地索引 + 外部搜索增强层） |
-| `ExploreFlashAgent` / `explore_planning_text` | agent.py                           | 零调用（文本切分→领域分类 agent）  |
+| `ExploreService` / `ExploreFlashAgent` / `explore_planning_text` | 已删除（旧 `retrieval/explore_service.py`、`agent.py`） | 零调用的第二套检索/文本扫描路径，已从公共入口移除 |
 | `EvidenceGapResolution`                         | evidence_contracts.py              | 契约存在，无人使用                  |
 | Gate`pending_requests`                          | domain/*/gate.py + conversation/edges.py | 当前消费并驱动 scoped gap retrieval |
 | `query_session_sparql`                          | infrastructure/kg/interface.py     | 裸 SPARQL 逃生口，无校验            |
@@ -109,7 +135,9 @@ dimension、entity scope 生成 `query_purpose="gap_resolution"` 的 scoped requ
 ### 1.5 其他已核实事实
 
 1. **EvidenceFact 重复字段**：`fact_type/fields/evidence_span/source_locator/support_relation/status` 定义 3 遍（已修复，Pydantic 当前版本容忍了）。
-2. **bundle 只读计数**：`bundle_retriever` 只调 `group_stats()`（各分组 count + 标签 top-8），**读不到实际要素**；
+2. **bundle 实际要素已接入**：`bundle_retriever` 在设施、道路、水体、地块等 scope 下按 query 返回有界的
+   feature identity（BSM、source feature id、layer、bundle ref），同时保留 `group_stats()` 的分组统计；完整
+   geometry payload 仍不进入 LLM 背景，最终几何通过 bundle feature ref 读取；
    坐标系（CRS）声明错、地类码非法、几何损坏都不可见——"输入数据错了系统不知道"的根因。
 3. **KG 查询纯模板**：`sparql.py::QUERY_TEMPLATES` 注册表 + 填参，覆盖有限；裸 SPARQL 无校验。
 4. **向量库**：Chroma + 阿里云 `text-embedding-v4`（1024 维）；RAG 通过
@@ -131,7 +159,7 @@ dimension、entity scope 生成 `query_purpose="gap_resolution"` 的 scoped requ
 | 6  | history retriever 已接入；完整用户修订/业务内容覆盖仍需真实验收 | D3 |
 | 7  | bundle 实际数据不可读，CRS/地类/几何错误系统不可知                                 | D3      |
 | 8  | 向量库依赖远程 API，更新/重建成本高                                                | D3      |
-| 9  | `ExploreService` / `ExploreFlashAgent` 仍非主 workflow 必经路径；gate retriever 已接线 | D5 |
+| 9  | 旧 `ExploreService` / `ExploreFlashAgent` 已删除；gate retriever 直接接入统一 `retrieve_evidence()` | D5 |
 | 10 | KG 查询纯模板覆盖有限；裸 SPARQL 无校验                                            | KG 阶梯 |
 | 11 | 多源结果无合并/总结（只拼接前 12 条）                                              | D6      |
 
@@ -235,13 +263,14 @@ flowchart LR
         S4[bundle_integrity]
         S5[artifact]
         S6[history]
-        S7[rag]
-        S8[external · flag]
+        S7[local_text · session-owned]
+        S8[rag · professional vector corpus]
+        S9[external web · flag]
     end
     W --> R1
     G --> R1
     AGG --> R1
-    R4 --> S1 & S2 & S3 & S4 & S5 & S6 & S7 & S8
+    R4 --> S1 & S2 & S3 & S4 & S5 & S6 & S7 & S8 & S9
 ```
 
 ### 4.2 模块职责
@@ -254,10 +283,11 @@ flowchart LR
 | `artifact_retriever` | `retrievers/artifact_retriever.py` | 按 stage/dimension 读 typed artifacts 摘要（D2）                                   |
 | `history_retriever`  | `retrievers/history_retriever.py`  | ReportStore 历史版本 + revision_trigger（D3）                                      |
 | `bundle_integrity`   | `retrievers/bundle_integrity.py`   | 读实际要素：CRS drift / 几何 valid / 地类合法 / 缺 BSM → needs_review（D3）       |
-| `rag_retriever`      | `retrievers/rag_retriever.py`      | 向量库并入：吃 planner 的 query，产 EvidenceFact，兼容 RAG_RESULT SSE（D3）        |
+| `local_text_retriever` | `retrievers/local_text_retriever.py` | 检索 bundle 输入文本和 L1 source span；报告正文由 bundle manifest 驱动的 `report_retriever` 按需读取；不读向量、不产几何（D3） |
+| `rag_retriever`      | `retrievers/rag_retriever.py`      | 仅检索专业外部向量库 chunk；服务不可用时返回 typed unavailable，不回退伪装本地证据（D3） |
 | `kg_query_layer`     | `infrastructure/kg/query_layer.py` | L0 填参模板 / L1 LLM 选模板+填参 / L2 schema-grounded 生成+校验 / L2b 模板沉淀     |
 | `evidence_service`   | `retrieval/evidence_service.py`    | 编排上述模块；缓存 key 纳入新字段；`retrieve_evidence_for_gate` 接线             |
-| `explore_enhance`    | `retrieval/explore_service.py`     | D5 flag：ExploreService/FlashAgent 作为增强层                                      |
+| `explore_enhance`    | 已移除                           | 不再维护第二套 EXPLORE 增强编排；外源检索由 `evidence_service` 按策略显式执行 |
 | `merge`              | `retrieval/merge.py`               | D6 flag：LLM TreeSummarize 式合并；默认确定性排序+去重                             |
 
 ### 4.3 关键机制
@@ -281,16 +311,28 @@ entity_scope 派生确定性 KG 模板：roads→get_road_network；waters→get
 一个 gap 一条 query（并行），LLM 改写只在首轮全空/低分时兜底（flag）。
 ```
 
-**③ Router 决策表（D1，向后兼容）**
+**③ Router 决策表（D1，项目级查询优先）**
 
 ```text
-context_injection → report + kg + bundle（现状等价）
+未指定 entity_scope 的 fact_check / evidence_gap / spatial_lookup
+                  → local_text + report + kg + bundle + artifact + history
+                  （检索所有项目内证据族；各 retriever 仍按查询做有界相关性过滤）
+指定 entity_scope 或 source:<kind> → 按调用方明确范围路由，但不把报告/L1/KG 语义背景当几何
+context_injection → report + local_text + kg + bundle（会话内规划背景）
 spatial_lookup    → bundle + kg + integrity
 fact_check        → bundle + report + artifact + integrity
-gap_resolution / 有 required_facts / 有 evidence_gaps_to_resolve → + artifact + history + rag
-rag 源是否启用       → 按 request.stage 的 layer_rag_config（默认 L1/L3 开，L2 关）
+gap_resolution / 有 required_facts / 有 evidence_gaps_to_resolve → + local_text + artifact + history
+professional_reference / 显式 source:rag → + rag（只查专业外部向量语料）
+rag 源是否启用       → 按 request.stage 的 layer_rag_config；向量服务不可用则 typed unavailable
 bundle_integrity    → entity_scope 非空或 purpose 含校验意图时启用
 ```
+
+项目级查询的“全部”指覆盖项目内所有可携带相关证据的来源族，不是把 660 个地块、全部
+报告正文或全部历史版本一次性倾倒给 LLM。Bundle 无 scope 时在 points/lines/polygons 三类
+集合上做有界标签命中并返回 BSM/ref；EvidenceGraph 随后返回候选、关联地块和 KG 拓扑。
+Bundle 几何仍是唯一几何入口，KG 只提供实体身份/拓扑，报告和 L1 分别提供规划背景与空间
+语义锚点。RAG 与外源 provider 不属于项目内本地证据，必须由 `source:rag` 或显式 external
+开关启用，服务到期或额度耗尽时保留 typed unavailable/失败诊断。
 
 **④ Gap 闭环账本**
 
@@ -310,14 +352,59 @@ L2b LLM 新模板 → 语法 + allowlist + dry-run 三重校验 → 注册进 QU
 失败一律 fail-closed 回 L0；生成的 query/plan 必须落日志（最诊断性字段）
 ```
 
-**⑥ 本地 embedding provider**
+**⑥ RAG 向量服务与本地语义回退的边界**
 
 ```text
-EMBEDDING_PROVIDER = aliyun | ollama | sentence_transformers（默认 ollama/bge-m3）
-OllamaEmbeddings / SentenceTransformerEmbeddings 实现与 AliyunEmbeddings 相同接口
-换模型 = 换 CHROMA_COLLECTION_NAME（维度不同）
-混合检索：BM25 稀疏 + 向量稠密 + RRF（后续），session 证据不进向量库
+RAG 的 embedding/vector store 只服务专业外部语料；当前服务到期时保持 unavailable，
+不触发外部额度消耗。会话文本由 `local_text_retriever` 做有界的句段级确定性检索，
+不需要 embedding，也不把 session 文本写入专业向量库。未来若恢复 RAG，可在同一个
+EvidencePacket 中并列加入 `professional_text`，但不能覆盖本地权威来源。
 ```
+
+**⑦a 范围型空间查询的拓扑过滤**
+
+```text
+“甲村的道路/水体”不是把 session 内所有同类 feature 返回给 LLM。
+PlaceEvidenceIndex 构建期使用 bundle 地块 STRtree 将命名线/面映射为
+related_parcel_bsms；EvidenceGraph 再用 query 中的村庄 BSM 集过滤候选，
+没有地块拓扑时用同一 KG 的 feature→village 关系补充。两者都只产生身份引用，
+几何仍由 bundle bridge 在 GROUND 读取；若范围证据完全缺失，保留有界候选但不自动选中。
+```
+
+方向型范围（如“村西侧道路”“村北水体”）复用 `SpatialResolver` 已有的方向语义，
+由 EvidenceGraph 以 gazetteer/KG anchor 生成粗 bbox，再交给 bundle parcel STRtree
+返回 BSM 集。这个 bbox 只用于候选召回和排序，不是最终执行几何；大地块仍须在
+GROUND/子几何阶段读取 bundle geometry 后裁切。L1 的 `spatial_hint`、`related_mentions`
+和 `source_span` 与查询一并传给 KG topology scorer，用于同名对象的关系消歧。
+同名对象的合并键则固定优先使用 bundle/source BSM 或 source feature id；opaque geometry
+ref 不再被误当作“没有几何”，不同来源对象必须保留为 ambiguity candidates。
+
+### 4.3.1 复杂语义定位的当前闭环（2026-08-20）
+
+复杂空间查询不再由前端预先猜一个设施类别。HTTP、LLM tool 与 workflow 都调用同一个
+`retrieve_evidence()`，查询 LLM 只在现有 `SpatialReferenceSpec` 中填写两个受限字段：
+
+- `semantic_terms`：最多 8 个、必须逐字来自查询原文，只用于探测 L1 fact、KG 名称/别名、
+  Bundle 标签或地址；不能生成 BSM、坐标或几何；
+- `retrieval_scopes`：只能选 facilities/hazards/roads/waters/parcels/zones，可同时列出作为
+  定位锚点和作为规划对象的多种类型。例如“炉池”只出现在灾害点地址时，hazards 负责提供
+  语义锚点，Bundle/KG 的 related parcel topology 再扩展为 parcels。
+
+当用户只给出部分名称（例如“炉池自然村在哪里”），EvidenceGraph 通过索引内部已有的
+有界 n-gram 暴露 source-backed partial label probe，再沿同一 `query_facility_bsms` /
+`resolve_mention` 路径加入 KG relations、L1 fact refs 和 Bundle feature identity；这不是
+正则抽取，也不是按首候选回退。只读 HTTP 查询复用 session context，不强制每次刷新，避免
+重复构建 KG/Bundle/L1 索引；新数据提交时仍由 context version/snapshot 触发显式刷新。
+
+EvidenceGraph 对同名点先按 Bundle 代表点距离与相关地块重叠建立空间簇。只有一个簇时可形成
+明确标注为“推断范围、非自然村法定边界”的 `village_scope`；多个相离簇时必须把查询原文、
+报告/L1 source spans、KG relation、Bundle BSM/关联地块和分层检索评分交给闭集 LLM 选择。
+LLM 禁用、超时、拒绝或输出 0 都保持 unresolved，禁止按首候选、最高分或同名文本静默绑定。
+
+候选展示与接口不再使用一个混合 `confidence`。`FeatureEvidenceRef` 分别暴露
+`source_authority_score`、`semantic_match_score`、`spatial_support_score`、
+`external_support_score`、`retrieval_score`；`selection_confidence` 只有 GROUND 真正完成选择后
+才有资格赋值。Bundle 几何权威为 1.0 不再被界面误读成“定位答案 100% 确定”。
 
 **⑦ bundle_integrity（CRS drift 检测，来自 GIS 工程实践）**
 
@@ -334,7 +421,7 @@ OllamaEmbeddings / SentenceTransformerEmbeddings 实现与 AliyunEmbeddings 相�
 
 | 改造点       | 现状                                             | 目标                                                                                                           |
 | ------------ | ------------------------------------------------ | -------------------------------------------------------------------------------------------------------------- |
-| worker       | `run_rag()` + `retrieve_evidence()` 并行注入 | **CURRENT / PARTIAL**：`run_rag()` 仅作为 unified EvidenceBundle adapter，维度 worker 不再并列调用旧 RAG 与 `retrieve_evidence()`；真实 provider 运行仍待验收 |
+| worker       | `run_rag()` + `retrieve_evidence()` 并行注入 | **CURRENT / PARTIAL**：`run_rag()` 仅作为 unified EvidenceBundle adapter，维度 worker 不再并列调用旧 RAG 与 `retrieve_evidence()`；fake/provider-injected 外源路径已验证，真实远程 provider 运行仍待验收 |
 | gate         | `_route_explore` 重发全维度                    | **CURRENT / PARTIAL**：pending request 已按 scope 触发 scoped retrieval 并合并 gate evidence；主 workflow 的全量真实回放仍待核验 |
 | L1 aggregate | 二次调用提升 KG 事实                             | **PARTIAL**：同一 evidence service 可复用，但调用次数/缓存键/持久化账本还没有完整替代旧路径 |
 | GROUND       | 独立的轻量 retrieve_evidence                     | **CURRENT / PARTIAL**：GROUND 保留独立接地检索，并可消费目标化缺口；尚未把所有结果统一成 EvidenceBundle artifact |
@@ -350,10 +437,10 @@ OllamaEmbeddings / SentenceTransformerEmbeddings 实现与 AliyunEmbeddings 相�
 | P1（P1 项） | `artifact_retriever` 已接入 typed artifact 摘要                                   | stage/dimension scoped retrieval tests 已通过           |
 | P1（P1 项） | `history_retriever` / `bundle_integrity` 已成为统一证据链                               | 版本/修订证据 + integrity tests 已通过              |
 | P1（P1 项） | `retrieve_evidence_for_gate` 已接入 worker/gate 主流程                | gap→query、gate route/cache tests 已通过；真实回放仍待验收 |
-| P2（可选）  | `rag_retriever` 并入 + 本地 embedding provider（D3）                                          | RagService 走新 provider；worker 单入口                  |
-| P2（可选）  | ExploreService/FlashAgent 接入（D5）+ LLM merge（D6）                                           | flag 默认关；行为不变                                    |
+| P2（可选）  | `rag_retriever` 并入专业向量 corpus；`local_text_retriever` 作为无向量本地回退（D3）               | 两类 source 分栏、服务到期仍可用本地证据；worker 单入口 |
+| P2（可选）  | 多源证据语义合并（D6），在统一 `evidence_service` 内继续收敛                                      | 来源角色与未完成状态必须保留；不再新增独立 EXPLORE 兼容层 |
 | P2（可选）  | KG 查询 L1/L2/L2b 阶梯                                                                          | 校验器 + 模板沉淀测试                                    |
-| 收尾        | 更新`05_EXPLORE_BRIDGE.md` / retrievers README / RAG README / `10_IMPLEMENTATION_STATUS.md` | 文档与代码一致                                           |
+| 收尾        | 更新`05_EXPLORE_BRIDGE.md` / retrievers README / RAG README / `10_IMPLEMENTATION_STATUS_CURRENT_20260818.md` | 文档与代码一致                                           |
 
 **顺序原则**：先确定性可测的骨架（router/query_planner/sufficiency/artifact/history/integrity），
 再接 flag 增强（rag 并入 / LLM / 外部搜索 / KG 生成），最后接 gate 闭环。

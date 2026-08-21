@@ -130,8 +130,8 @@ flowchart TD
 
 ## 关联
 
-- 校验现状与死校验清单：`docs/design/25_VALIDATION_INVENTORY.md`
-- 模块/结构性产出：`docs/design/24_MODULE_OUTPUT_INVENTORY.md`
+- 校验现状与实现证据：`docs/design/10_IMPLEMENTATION_STATUS_CURRENT_20260818.md`
+- 总体边界与阶段产出：`docs/design/00_SYSTEM_DESIGN.md`
 - 既有 Exa 对齐结论：`docs/_archive/design/18_EXA_ARCHITECTURE_ALIGNMENT.md`
 
 

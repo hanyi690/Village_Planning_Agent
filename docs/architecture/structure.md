@@ -1,7 +1,7 @@
 # 当前项目结构
 
 > 本文是实现映射，不是目标蓝图。状态以
-> [`../design/10_IMPLEMENTATION_STATUS.md`](../design/10_IMPLEMENTATION_STATUS.md) 为准；
+> [`../design/10_IMPLEMENTATION_STATUS_CURRENT_20260818.md`](../design/10_IMPLEMENTATION_STATUS_CURRENT_20260818.md) 为准；
 > 设计与实现差异见 [`../design/27_IMPLEMENTATION_VS_DESIGN.md`](../design/27_IMPLEMENTATION_VS_DESIGN.md)。
 
 ## 1. 启动与运行路径
@@ -84,8 +84,8 @@ SessionDataSnapshot / SpatialWorkspace
   → RenderLayers / DeliveryManifest / exports
 ```
 
-产物 key 权威注册表：`workflow/stage_adapter.py::_KEY_BY_TYPE`（见
-[`../design/24_MODULE_OUTPUT_INVENTORY.md`](../design/24_MODULE_OUTPUT_INVENTORY.md)）。
+产物 key 权威注册表：`workflow/stage_adapter.py::_KEY_BY_TYPE`；总体边界见
+[`../design/00_SYSTEM_DESIGN.md`](../design/00_SYSTEM_DESIGN.md)。
 
 ## 5. 阅读与验证
 

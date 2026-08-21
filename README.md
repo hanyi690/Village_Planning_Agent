@@ -15,17 +15,16 @@
 ```
 
 根图入口是 `backend/app/workflow/root_graph.py`，FastAPI 入口是
-`backend/app/main.py`。当前实现、目标设计和未实现清单分开维护：
+`backend/app/main.py`。当前实现、总体设计和验收证据分开维护：
 
 - 当前代码入口和调用链：[docs/architecture/structure.md](docs/architecture/structure.md)
 - 当前主图（四段子图）：[docs/architecture/agent-graph.md](docs/architecture/agent-graph.md)
 - API/SSE/resume：[docs/architecture/backend-api.md](docs/architecture/backend-api.md)
 - 状态、artifact、交付边界：[docs/architecture/backend-state-contract.md](docs/architecture/backend-state-contract.md)
-- 目标设计：[docs/design/00_SYSTEM_DESIGN.md](docs/design/00_SYSTEM_DESIGN.md)
-- 后端蓝图：[docs/design/14_BACKEND_MODULE_BLUEPRINT.md](docs/design/14_BACKEND_MODULE_BLUEPRINT.md)
-- 实现状态：[docs/design/10_IMPLEMENTATION_STATUS.md](docs/design/10_IMPLEMENTATION_STATUS.md)
-- 模块级盘点（以代码为准）：[docs/design/24_MODULE_OUTPUT_INVENTORY.md](docs/design/24_MODULE_OUTPUT_INVENTORY.md)、[docs/design/25_VALIDATION_INVENTORY.md](docs/design/25_VALIDATION_INVENTORY.md)
-- 设计 vs 实现差异：[docs/design/27_IMPLEMENTATION_VS_DESIGN.md](docs/design/27_IMPLEMENTATION_VS_DESIGN.md)
+- 总体设计基线：[docs/design/00_SYSTEM_DESIGN.md](docs/design/00_SYSTEM_DESIGN.md)
+- 当前状态与验收证据：[docs/design/10_IMPLEMENTATION_STATUS_CURRENT_20260818.md](docs/design/10_IMPLEMENTATION_STATUS_CURRENT_20260818.md)
+- 设计/实现差异台账：[docs/design/27_IMPLEMENTATION_VS_DESIGN.md](docs/design/27_IMPLEMENTATION_VS_DESIGN.md)
+- 关系感知实施台账：[docs/design/RELATION_AWARE_MODIFICATION_LEDGER.md](docs/design/RELATION_AWARE_MODIFICATION_LEDGER.md)
 - 完整文档导航：[docs/README.md](docs/README.md)
 
 ## 快速开始

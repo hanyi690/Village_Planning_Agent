@@ -2,9 +2,8 @@
 
 本目录只描述已经存在于 `backend/app/` 或 `frontend/` 的实现：入口、调用链、状态边界、
 接口和验证方式。目标架构、未实现能力和未来迁移顺序见
-[`../design/00_SYSTEM_DESIGN.md`](../design/00_SYSTEM_DESIGN.md) 与
-[`../design/14_BACKEND_MODULE_BLUEPRINT.md`](../design/14_BACKEND_MODULE_BLUEPRINT.md)；
-完成度见 [`../design/10_IMPLEMENTATION_STATUS.md`](../design/10_IMPLEMENTATION_STATUS.md)；
+[`../design/00_SYSTEM_DESIGN.md`](../design/00_SYSTEM_DESIGN.md)；
+完成度见 [`../design/10_IMPLEMENTATION_STATUS_CURRENT_20260818.md`](../design/10_IMPLEMENTATION_STATUS_CURRENT_20260818.md)；
 设计与实现的差异见 [`../design/27_IMPLEMENTATION_VS_DESIGN.md`](../design/27_IMPLEMENTATION_VS_DESIGN.md)。
 
 ## 当前实现入口
@@ -39,7 +38,7 @@ backend/app/README.md                 应用根包总览（13 个模块一览）
 backend/app/{api,application,bootstrap,config,contracts,core,data,database,
             domain,evidence,infrastructure,spatial,workflow}/README.md    各模块详细说明
 frontend/src/features/README.md       feature 索引
-frontend/src/features/{planning,gis-test,compliance,evaluation,suitability}/README.md
+frontend/src/features/{planning,compliance,evaluation,suitability}/README.md
 frontend/src/{app,types,styles}/README.md
 ```
 

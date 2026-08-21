@@ -1,8 +1,8 @@
 # 当前状态、artifact 与交付边界
 
 > 本文描述当前实现。目标不变量见
-> [`../design/14_BACKEND_MODULE_BLUEPRINT.md`](../design/14_BACKEND_MODULE_BLUEPRINT.md)，
-> 完成度见 [`../design/10_IMPLEMENTATION_STATUS.md`](../design/10_IMPLEMENTATION_STATUS.md)。
+> [`../design/00_SYSTEM_DESIGN.md`](../design/00_SYSTEM_DESIGN.md)，
+> 完成度见 [`../design/10_IMPLEMENTATION_STATUS_CURRENT_20260818.md`](../design/10_IMPLEMENTATION_STATUS_CURRENT_20260818.md)。
 
 ## 1. Owner 表
 

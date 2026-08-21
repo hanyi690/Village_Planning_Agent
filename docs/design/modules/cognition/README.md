@@ -1,7 +1,7 @@
 # 认知层（L1/L2/L3）设计
 
 > 模块：`backend/app/domain/{assessment,objectives,program}`、`workflow/layers/`
-> 实现盘点：[24_MODULE_OUTPUT_INVENTORY.md](../../24_MODULE_OUTPUT_INVENTORY.md)
+> 当前实现证据：[10_IMPLEMENTATION_STATUS_CURRENT_20260818.md](../../10_IMPLEMENTATION_STATUS_CURRENT_20260818.md)
 
 | 文档 | 内容 | 状态 |
 |---|---|---|

@@ -1,12 +1,12 @@
 # 文档中心
 
-本目录解决两件事：说明系统应该怎样设计（`design/`），以及说明当前代码实际上怎样运行
-（`architecture/` + 各模块 README）。如果同一事实在多个文件出现，优先级如下：
+本目录只保留三类维护入口：总体设计（`design/00_SYSTEM_DESIGN.md`）、当前实现映射
+（`architecture/` + 各模块 README）和可复核状态/审计证据。如果同一事实在多个文件出现，优先级如下：
 
 1. `backend/app/**`、`frontend/**` 和可重复的测试/运行结果；
-2. `design/24_MODULE_OUTPUT_INVENTORY.md`、`design/25_VALIDATION_INVENTORY.md`、
-   `design/27_IMPLEMENTATION_VS_DESIGN.md`（以实际代码为准的台账）；
-3. `design/10_IMPLEMENTATION_STATUS.md` 的状态台账；
+2. `design/10_IMPLEMENTATION_STATUS_CURRENT_20260818.md`、
+   `design/27_IMPLEMENTATION_VS_DESIGN.md` 和 `design/RELATION_AWARE_MODIFICATION_LEDGER.md`；
+3. 最新专题审计和可重复运行证据；
 4. `architecture/` 的实现映射；
 5. `design/` 的目标设计；
 6. `_archive/` 中的历史审计、计划与周报（只用于解释“为什么会这样”，不能把旧路径或计划中
@@ -16,12 +16,10 @@
 
 | 你想知道什么 | 入口 | 文档类型 |
 |---|---|---|
-| 系统的目标、边界和不变量 | [design/00_SYSTEM_DESIGN.md](design/00_SYSTEM_DESIGN.md) | 设计 / TARGET |
-| 后端目标模块如何划分 | [design/14_BACKEND_MODULE_BLUEPRINT.md](design/14_BACKEND_MODULE_BLUEPRINT.md) | 设计 / TARGET |
-| 某项能力现在到底完成没有 | [design/10_IMPLEMENTATION_STATUS.md](design/10_IMPLEMENTATION_STATUS.md) | 状态 / Reference |
-| 实际代码的模块级盘点 | [design/24_MODULE_OUTPUT_INVENTORY.md](design/24_MODULE_OUTPUT_INVENTORY.md) | 台账 / CURRENT |
-| 校验点盘点（死校验风险） | [design/25_VALIDATION_INVENTORY.md](design/25_VALIDATION_INVENTORY.md) | 台账 / CURRENT |
+| 系统的目标、边界、不变量和完成门槛 | [design/00_SYSTEM_DESIGN.md](design/00_SYSTEM_DESIGN.md) | 总体设计 |
+| 某项能力现在到底完成没有 | [design/10_IMPLEMENTATION_STATUS_CURRENT_20260818.md](design/10_IMPLEMENTATION_STATUS_CURRENT_20260818.md) | 状态 / CURRENT |
 | 设计文档与实现哪里不一致 | [design/27_IMPLEMENTATION_VS_DESIGN.md](design/27_IMPLEMENTATION_VS_DESIGN.md) | 差异 / CURRENT |
+| 关系感知空间规划推进到哪一步 | [design/RELATION_AWARE_MODIFICATION_LEDGER.md](design/RELATION_AWARE_MODIFICATION_LEDGER.md) | 台账 / CURRENT |
 | 按模块组织的专题设计 | [design/README.md](design/README.md) → `design/modules/<模块>/` | 设计 / TARGET |
 | 当前代码从哪里启动、怎样流转 | [architecture/structure.md](architecture/structure.md) 与 [architecture/agent-graph.md](architecture/agent-graph.md) | 实现 / Explanation |
 | 后端每个模块的详细说明 | [backend/app/README.md](../backend/app/README.md) → 各模块 `README.md`（[索引](architecture/README.md)） | 实现 / 模块级 |
@@ -36,7 +34,7 @@
 
 ```text
 docs/
-├── design/          跨模块设计（00/01/14）+ 状态台账（10）+ 盘点（24/25/27）+ 按模块组织的 `modules/<模块>/` 专题设计
+├── design/          唯一总体设计（00）+ 当前状态/差异/实施台账 + 按模块组织的 `modules/<模块>/` 专题设计
 ├── architecture/    当前实现映射；只写真实入口、调用链、状态和验证方式
 ├── guides/          面向任务的操作步骤（接入图层、查看 KG 等）
 ├── reference/       术语、字段、外部规范和稳定查表信息
@@ -87,7 +85,7 @@ artifact store 持有。目标设计中仍然保留 L1/L2/L3 认知视图，但�
 每次架构迁移至少同步三处：
 
 - 当前代码入口和 `architecture/` 映射；
-- `design/10_IMPLEMENTATION_STATUS.md` 的状态与证据；
+- `design/10_IMPLEMENTATION_STATUS_CURRENT_20260818.md` 的状态与证据；
 - 本页或专题索引中的链接；差异登记到 `design/27_IMPLEMENTATION_VS_DESIGN.md`。
 
-不要在根 README、设计蓝图、审计报告和模块 README 中复制另一套目录树或迁移清单。
+不要在根 README、总体设计、审计报告和模块 README 中复制另一套目录树或迁移清单。

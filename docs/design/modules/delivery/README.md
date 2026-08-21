@@ -1,7 +1,7 @@
 # 成果 / 合规 / 交付设计
 
 > 模块：`backend/app/domain/delivery/`、`backend/app/spatial/delivery/`、`backend/app/infrastructure/{rendering,export}/`
-> 实现盘点：[24_MODULE_OUTPUT_INVENTORY.md](../../24_MODULE_OUTPUT_INVENTORY.md)
+> 当前实现证据：[10_IMPLEMENTATION_STATUS_CURRENT_20260818.md](../../10_IMPLEMENTATION_STATUS_CURRENT_20260818.md)
 
 | 文档 | 内容 | 状态 |
 |---|---|---|

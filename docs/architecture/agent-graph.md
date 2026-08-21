@@ -2,7 +2,7 @@
 
 > 本文只描述 `backend/app/workflow/root_graph.py` + `segments.py` 的当前接线。目标图和不变量
 > 见 [`../design/00_SYSTEM_DESIGN.md`](../design/00_SYSTEM_DESIGN.md)；完成度见
-> [`../design/10_IMPLEMENTATION_STATUS.md`](../design/10_IMPLEMENTATION_STATUS.md)；
+> [`../design/10_IMPLEMENTATION_STATUS_CURRENT_20260818.md`](../design/10_IMPLEMENTATION_STATUS_CURRENT_20260818.md)；
 > 与旧“扁平线性链”表述的差异见 [`../design/27_IMPLEMENTATION_VS_DESIGN.md`](../design/27_IMPLEMENTATION_VS_DESIGN.md)。
 
 ## 1. 父图结构

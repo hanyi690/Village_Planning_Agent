@@ -1,7 +1,7 @@
 # 自动迭代与多模态规划设计
 
 > 本文是设计规范，描述目标行为和边界；不等同于当前实现。
-> 当前实现状态以 `10_IMPLEMENTATION_STATUS.md` 和 `docs/architecture/` 为准。
+> 当前实现状态以 `10_IMPLEMENTATION_STATUS_CURRENT_20260818.md` 和 `docs/architecture/` 为准。
 
 ## 1. 设计目的
 

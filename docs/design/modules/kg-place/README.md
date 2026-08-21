@@ -1,7 +1,7 @@
 # KG 语义桥与地名解析设计
 
 > 模块：`backend/app/infrastructure/kg/`、`backend/app/spatial/grounding/`
-> 实现盘点：[24_MODULE_OUTPUT_INVENTORY.md](../../24_MODULE_OUTPUT_INVENTORY.md)
+> 当前实现证据：[10_IMPLEMENTATION_STATUS_CURRENT_20260818.md](../../10_IMPLEMENTATION_STATUS_CURRENT_20260818.md)
 
 | 文档 | 内容 | 状态 |
 |---|---|---|

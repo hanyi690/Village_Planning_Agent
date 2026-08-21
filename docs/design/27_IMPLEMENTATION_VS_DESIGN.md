@@ -4,8 +4,8 @@
 > 本文回答一个问题：**设计文档（`docs/design/`）里写的东西，和 `backend/app/`、`frontend/src/`
 > 的实际代码哪里不一致。** 凡是冲突，以实际代码为准；本文把这些差异固定下来，避免后续
 > 维护者被过时设计误导。差异的“现状/完成度”见
-> [10_IMPLEMENTATION_STATUS.md](10_IMPLEMENTATION_STATUS.md) 与
-> [24_MODULE_OUTPUT_INVENTORY.md](24_MODULE_OUTPUT_INVENTORY.md)。
+> [10_IMPLEMENTATION_STATUS_CURRENT_20260818.md](10_IMPLEMENTATION_STATUS_CURRENT_20260818.md)
+> 与 [00_SYSTEM_DESIGN.md](00_SYSTEM_DESIGN.md)。
 > 核验方式：逐文件读代码 + 全仓 grep；每条差异都带可复验的文件路径。
 
 ## 1. 图结构与节点组织
@@ -13,7 +13,7 @@
 | 设计文档的说法 | 实际实现（证据） |
 |---|---|
 | 主图是 L1/L2/L3 → TARGET_PROJECTION → GROUND → SELECT → EXECUTE → VALIDATE → RECONCILE → DELIVER 的**扁平线性链**（旧 `agent-graph.md`、`04_PLANNING_PIPELINE.md` 图示） | 实际是**四段子图**父图：`bootstrap_context` + `intent_loop` / `cognitive` / `spatial_chain` / `hitl` + `end_diagnostic`。跨段跳转统一由路由节点发 `Command(graph=Command.PARENT, goto=<segment>)`。证据：`workflow/root_graph.py::create_unified_planning_graph`、`workflow/segments.py::build_segments` |
-| EXPLORE 是一个独立图节点（旧 Wave M2 前） | EXPLORE 已移除为节点，变为 gate 驱动的水平检索服务（`evidence/retrieval/explore_service.py::ExploreService`）；`root_graph.py` 注释明确 `explore_node removed` |
+| EXPLORE 是一个独立图节点（旧 Wave M2 前） | EXPLORE 已移除为节点；当前由 gate 驱动的 `retrieve_evidence_for_gate()` 调用统一 `retrieve_evidence()`，`root_graph.py` 注释明确 `explore_node removed` |
 | 生产图仍为单层扁平 StateGraph、25 节点，子图化“建议最后做”（`21_WORKFLOW_SUBGRAPH_DESIGN.md`） | 四段子图已落地（`segments.py`），21 号文档已归档 |
 | 路由是散落的 if-else | `workflow/gate_policy.py` 已有声明式 `GATE_ROUTE_POLICY`（6 阶段 × gate route → action）与 `DEFAULT_GATE_ROUTE_POLICY`；`GATE_ROUTED_STAGES` 显式排除 `execute`（A4 豁免） |
 
@@ -30,7 +30,7 @@
 | 设计文档的说法 | 实际实现（证据） |
 |---|---|
 | `validate_checks.py` 文档字符串写 “Nine pure checks” | 实际导出并执行 **10** 个检查：`check_hard_constraints`、`check_area_conservation`、`check_traceability`、`check_worker_failures`、`check_topology`、`check_overlap`、`check_continuity`、`check_accessibility`、`check_contract_completeness`、`check_classification_missing`（`app/domain/validation/validate_checks.py`） |
-| 校验必须带完整 lineage（旧校验文档） | 并非所有检查都带完整 lineage；`repair_directives` 对缺失 lineage 的 finding 会整批 `blocked`（见 `25_VALIDATION_INVENTORY.md`） |
+| 校验必须带完整 lineage（旧校验文档） | 并非所有检查都带完整 lineage；`repair_directives` 对缺失 lineage 的 finding 会整批 `blocked`（见当前状态覆盖页） |
 
 ## 4. EXECUTE 与修复指令
 
@@ -65,9 +65,9 @@
 | 设计文档的说法 | 实际实现（证据） |
 |---|---|
 | 历史存在 `/api/sessions/*`、`/api/projects/*` 等遗留端点 | 已全部下线；唯一稳定面是 `/api/v1/*`（`api/v1/contracts.py`）。前端 `data-api.ts` 对已下线端点保留签名但运行时抛错 |
-| 后端提供 `evaluation` / `compliance` / `suitability` / `gis-test` 能力端点 | **后端没有任何这些路由**。全仓 grep `"/api/compliance|/api/evaluation|/api/suitability|/api/dev/gis|/api/gis-test` 零命中（`app/api/routes.py` 只有 v1 + `/api/health` + `/api/tiles/tianditu/*`）。前端 `features/{compliance,evaluation,suitability}/api.ts`、`gis-test/api/gis-test-api.ts` 调用的端点目前会 404（`GAP` / 开发占位） |
-| `/api/dev/gis/*` 由后端提供 | 仅 `/api/dev/gis/complete-result` 由 **Next.js 本地路由**（`frontend/src/app/api/dev/gis/complete-result/route.ts`）读取静态文件 `output/gis/jintian-complete-road-plan/frontend_layers.json` 提供；其余 `/api/dev/gis/*` 无后端路由（`GAP`，仅测试页使用） |
-| 真实 OpenAPI 路径 | `docs/contracts/openapi-v1.json` 实测只有 9 个 v1 操作（sessions 创建/resume、state、events、events/sync、human-review GET/POST、delivery、map-layers、artifacts） |
+| 后端提供 `evaluation` / `compliance` / `suitability` / `gis-test` 能力端点 | **后端没有这些旧评估端点**。当前空间现状由 `/api/v1/source-layers` 提供，规划结果由 `/api/v1/sessions/{id}/map-layers` 提供；`evaluation` / `compliance` / `suitability` 仍属于未接入的评估面板能力（`GAP`） |
+| `/api/dev/gis/*` 由后端提供 | 旧独立 GIS 测试页及其 `/api/dev/gis/*` 客户端已移除；GIS 验证统一在规划工作台走 DataCatalog、空间链路和 DELIVER API |
+| 真实 OpenAPI 路径 | `docs/contracts/openapi-v1.json` 实测有 10 个 v1 操作（sessions 创建/resume、state、events、events/sync、human-review GET/POST、delivery、map-layers、artifacts、evidence/query）。其中 `POST /api/v1/sessions/{session_id}/evidence/query` 是统一的村庄/设施/空间证据查询入口，返回受限的 `EvidenceBundle`、`SpatialCognitionEvidence` 和 `EvidencePacket`；几何仍只通过 feature ref 回到 bundle，不由 KG 直接下发。请求只有显式 `include_external=true` 才允许外源 provider 参与，本地不足时才调用；未配置 provider 返回 typed unavailable，配置 `EVIDENCE_EXTERNAL_PROVIDER=exa` 且提供 `EXA_API_KEY` 时走有界 Exa HTTP adapter，应用关闭时回收连接。前端 `EvidenceQueryPanel` 可点击候选 feature ref，按 BSM/source feature id 回地图缩放。 |
 
 ## 9. SSE 协议（重点：双重词汇表）
 
@@ -84,7 +84,7 @@
 | 设计文档的说法 | 实际实现（证据） |
 |---|---|
 | `evaluation`、`kg-inspection` 是独立页面 | 已改为重定向：`src/app/evaluation/page.tsx` → `/?view=overview&panel=evaluation`；`src/app/kg-inspection/page.tsx` → `/` |
-| `test-gis` 页面生产可用 | `src/app/test-gis/page.tsx` 有生产守卫（`NODE_ENV === 'production'` 显示“页面不可访问”），仅开发期可用 |
+| `test-gis` 页面生产可用 | 独立 `test-gis` 页面已移除；GIS 验证统一通过规划工作台的真实 DataCatalog、空间链路和 DELIVER 结果完成 |
 | 前端状态可持久化恢复 | `usePersistence`（localStorage）、`useSessionRestore`、`/events/sync?after=N` 补偿真实存在；前端状态是可丢弃 UI 投影，SSOT 在后端 |
 
 ## 11. 配置与数据库（与设计一致性确认）
@@ -106,11 +106,11 @@
 - `23_EXPLORE_RETRIEVAL_REDESIGN.md`：当前仍是活跃设计；`retrieve_evidence()` 已有局部 producer，
   但 router/query plan/sufficiency 和 gate-driven retrieval 未接入主图，不能按设计宣称已实施。
 - `05_EXPLORE_BRIDGE.md` / `07_VALIDATION_FEEDBACK.md` 中的部分目标：证据/反馈闭环仍 `PARTIAL`。
-- 前端 `compliance/evaluation/suitability/gis-test` 的评估类端点：后端无路由（`GAP`）。
+- 前端 `compliance/evaluation/suitability` 的评估类端点：后端无路由（`GAP`）；旧 `gis-test` 开发入口已移除。
 
 ## 13. 维护规则
 
-- 本文件与 `24_MODULE_OUTPUT_INVENTORY.md`、`25_VALIDATION_INVENTORY.md` 同属“以实际代码为准”
+- 本文件与当前状态覆盖页同属“以实际代码为准”的事实台账
   的台账；设计文档修改后，先在本文件登记差异再改设计。
 - 发现新的不一致：在对应小节追加一行（设计说法 / 实际实现 / 证据路径），不要在多个文档
   各写一套。

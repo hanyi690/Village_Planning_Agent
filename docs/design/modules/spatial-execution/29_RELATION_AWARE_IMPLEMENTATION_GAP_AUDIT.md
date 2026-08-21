@@ -26,7 +26,7 @@
 2. 这些关系目前只被一对一复制为扁平 factor；除 `precedes` 被先验标成 `satisfied` 外，其他关系通常只得到 `unknown` 或 `deferred`。
 3. SELECT 的全局 MIP 只优化“目标—地块”选择、面积容量和地块排他；没有 `near`、`serve`、`access_via`、`connect`、`co_locate` 等成对或网络关系变量。
 4. SELECT 完成后直接复制 GROUND 阶段的 `relation_satisfaction`，没有基于选中几何重新测量。
-5. `PlanningScenario` 尚不存在，`scenario_id="evidence_baseline"` 只是选择结果上的默认字符串，不是可比较、可重算、可审计的方案对象。
+5. **DEPRECATED:** `PlanningScenario` 尚不存在，`scenario_id="evidence_baseline"` 只是选择结果上的默认字符串，不是可比较、可重算、可审计的方案对象。该断言属于旧审计基线；typed `PlanningScenario` 已存在，当前缺口是 default-live acceptance。
 6. ExecutionPlan 能写出 `depends_on`，但实际执行图仍按 worker 类型静态并发，`run_workers` 不按 task dependency 拓扑调度。
 7. VALIDATE/DELIVER 没有消费 `PlanningIntentGraph`、`ConstraintFactor` 或 `RelationSatisfaction`；最终检查无法证明关系成立。
 8. 当前默认 `.run-tmp` 活动 CAS 没有 `render_layers` / `delivery_spatial_snapshot` 引用，最近会话只留下 L1/L2 review，前端演示没有可读取的规划交付图层。
@@ -136,7 +136,7 @@ VALIDATE → DELIVER
 | 文档 | 可继续采用的核心判断 | 已过时/矛盾处 | 使用方式 |
 |---|---|---|---|
 | 06 | TARGET_PROJECTION 应不可变；点线面候选应分型；选择应联合化；最终几何须保留目标 lineage | 后半段仍保留旧实现诊断，如多条件默认 OR、GROUND 修改投影、依赖按列表顺序推断 | 当作迁移历史和问题目录，不当作当前状态表 |
-| 23 | 当前 Explore 内联重复、无 router/query plan/sufficiency；gate 请求没有闭环；retriever 信息贫乏 | 对 `retrieve_evidence_for_gate` 有“无调用者”和“接线待核实”两种表述；目标架构仍未实现 | 当前状态大体可信，但每个“已实现”需查调用者 |
+| 23 | 当前 Explore 已有统一 evidence service、router/query plan/sufficiency 和 gate 检索闭环 | 仍需区分 provider-disabled、主图 live 回放和大规模容量验收；旧段落仍描述为未接线 | 以当前调用链和验收为准，历史差距只保留为背景 |
 | 28 | 三图分工、observation/binding/geometry 分离、方案账本、闭集关系、确定性 GIS 验证是正确北极星 | 容易把 P0 契约骨架误写成能力落地；部分类型定义不足以支撑文档承诺 | 作为目标架构使用，不作为完成度报告 |
 
 ### 3.2 06 文档中应撤销或改写的旧结论
@@ -149,11 +149,14 @@ VALIDATE → DELIVER
 
 ### 3.3 23 文档中应澄清的状态
 
-`retrieve_evidence_for_gate()` 确实存在，但仓库中没有主图调用者。`_route_explore()` 在 L1/L2 只决定重跑 dimension，在 L3 转人工，并不消费 pending request 来触发该函数。因此应该明确写成：
+`retrieve_evidence_for_gate()` 已由 `_route_explore()` 调用：先把 gate 的 pending request 转成带
+scope、required facts 和 source refs 的 `ExplorationRequest`，再把结果写入有界的 session evidence
+cache；下一次 canonical retrieval 会合并这些结果。L1/L2 会按具体 dimension 重派发，L3 在检索后进入
+HUMAN，避免无边界地重跑整层。主图的真实 provider 全量回放仍是独立的未完成验收项，不能与“未接线”混淆。
 
-> **适配函数已实现；gate-driven retrieval 未接线，生产能力等同于未完成。**
-
-另外，23 的“统一 evidence service”目标和当前 `run_rag()` + `retrieve_evidence()` 并行存在不一致。当前不是“统一后兼容旧 RAG”，而是两个上下文渠道并存，可能重复、冲突且无法统一审计。
+维度 worker 的 `run_rag()` 现在只是统一 EvidenceBundle 渲染入口；专业向量检索通过明确的
+`retrieve_vector_context()` 进入 `rag_retriever`，不再保留 `_legacy_run_rag` 兼容命名，也不把 RAG
+不可用静默成另一类本地证据。
 
 ### 3.4 28 文档中应降低的完成度表述
 
@@ -163,7 +166,7 @@ VALIDATE → DELIVER
 - `ConstraintFactor` 只是关系边的扁平复制，不是可被求解器和 evaluator 执行的 factor。
 - `RelationSatisfaction` 只有状态和说明，没有 measured value、threshold、unit、scenario、feature refs、evaluation trace。
 - `GroundedPlanningProblem` 没有 baseline snapshot、实体绑定、候选几何集合、共享资源、网络引用和版本指纹的完整账本。
-- `PlanningScenario`、`ScenarioFeature` 尚不存在。
+ - **DEPRECATED:** `PlanningScenario`、`ScenarioFeature` 尚不存在。该断言属于旧审计基线；两类 typed 对象已存在，但尚未完成默认 live 验收。
 
 因此，“P0 契约已落地”只能表述为**第一版 schema 骨架和局部传递已落地**，不能写成“关系感知生成主链已形成”。
 
@@ -184,16 +187,21 @@ VALIDATE → DELIVER
 
 ### 当前实现
 
-- L1/L2/L3 worker 内部先调用 `run_rag()`，再调用 `retrieve_evidence()`。
-- `retrieve_evidence()` 固定并行查询 report、KG、bundle 三个 retriever，没有 router 和 query planner。
-- report retriever 基本按 dimension 和含数字的空间句过滤，没有真正使用 query 进行相关性检索。
-- KG retriever返回固定的村庄认知与道路/水系模板，基本不使用 query 和 entity scope。
-- bundle retriever主要输出 group count/label，没有数据完整性、字段质量、CRS、覆盖范围和版本证据。
-- 缓存键包含 session、stage、dimension、query、entity scope、purpose，但不包含 questions、required facts、known gaps、上游 artifact digest 和数据源版本。
-- facts 用截断文本进行去重，存在不同事实误碰撞的风险。
-- `unresolved` 主要继承 request questions，不是 sufficiency evaluator 的判断。
-- `retrieve_evidence_for_gate()` 没有调用者。
-- 旧 `ExploreService` / `ExploreFlashAgent` 没有形成当前主路径。
+- L1/L2/L3 worker 通过 `run_rag()` 获取统一 EvidenceBundle prompt section；worker 不再追加第二份旧
+  `retrieve_evidence()` 文本。GROUND 和 gate 仍直接调用同一 `retrieve_evidence()`，但用途分别是定位
+  packet 和缺口检索。
+- `retrieve_evidence()` 通过 router/query planner 选择 report、KG、bundle、L1、local text、artifact、
+  history、integrity、RAG 和可选 external retriever；查询指纹、source version、context digest 和
+  spatial spec 都进入缓存身份。
+- report retriever 只输出有来源的 L1/L2/L3 规划背景；KG retriever 输出 typed fact/cognition/topology；
+  bundle retriever 输出 feature identity/layer statistics；EvidenceGraph 再负责候选、拓扑和 Bundle ref
+  的空间 join。
+- `sufficiency`、`ambiguity_status`、source role、authority、availability 和 unresolved gap 分开保留，
+  不再以“有一条文本事实”代替可执行的空间证据。
+- `retrieve_evidence_for_gate()` 已由 `_route_explore()` 接入；结果写入有界 session cache，进程重启时
+  可依据 checkpoint 中的 pending request 重新确定性检索，不把完整报告或几何复制进状态。
+- 旧 `ExploreService` / `ExploreFlashAgent` 已删除；RAG 只有显式 source route 且默认关闭，向量服务
+  不可用时保留 typed diagnostic，不静默改写 source role。
 
 ### 与 23 设计的差距
 
@@ -501,6 +509,27 @@ Scenario-aware Delivery
 
 ## 7. 文档维护建议
 
+> **状态校正（PARTIAL / CLONE_ONLY，2026-08-18）：** 本审计前文关于“所有主链都只有空产出”的
+> 结论是 **HISTORICAL**，仅适用于旧 test3/旧入口证据。不得删除该证据，但不得把它概括为当前
+> source-aware replay 的结果。`replay-sourceaware-replay28-report.json` 的 replay28 事实为：
+> 42 exact Point、1802 parcel candidates、329 corridor candidates，16 placed、154 deferred，
+> 16 worker tasks，15 render layers，122 non-baseline overlays，geometry-quality invalid/empty/
+> placeholder/duplicate 均为 0。该 run 仍是 clone-only partial，exact Line=0，不能标记默认 live `COMPLETE`。
+
+> **来源几何与绑定边界（PARTIAL）：** `F:/project/Village_Planning_Agent/.run-tmp/sdd/2026-08-17-relation-aware-spatial-planning-gap-closure-v2/task-f5-source-line-audit-report.md`、
+> `F:/project/Village_Planning_Agent/.run-tmp/sdd/2026-08-17-relation-aware-spatial-planning-gap-closure-v2/task-road-geometry-report.md`、
+> `F:/project/Village_Planning_Agent/.run-tmp/sdd/2026-08-17-relation-aware-spatial-planning-gap-closure-v2/task-wave3-geometry-persistence-report.md` 记录当前道路源层的
+> 131 个 `MultiLineString` GIS features，并证明显式 source ID、同快照 lineage 和权威 WKT 可使
+> source bundle → KG → spatial adapter → GROUND 产生 exact line。131 是 GIS feature 数，不是人工
+> 规划数量 275；“275 versus 131 proves binding is impossible”应标为 **DEPRECATED**，实际缺口是
+> source collection scope/feature IDs/lineage。任何旧的 “PlanningScenario does not exist” 断言也应标为
+> **DEPRECATED**：typed scenario 已存在，但 default-live acceptance 尚未完成。
+
+> **后续门禁：** 依 `docs/superpowers/plans/2026-08-18-gis-fact-source-collection-binding.md`
+> 从 T1 起串行执行；T4A 提供动态 L1-constrained source semantics，随后落实 required/alternative
+> cardinality、operation-aware EXECUTE、独立 VALIDATE/RECONCILE、`/map-layers`，并以 fresh
+> default-live replay + idempotent resume 作为唯一 `COMPLETE` 门槛。
+
 1. 将 06 标为“历史迁移设计 + 当前差距索引”，删除或加醒目标记说明 OR、GROUND mutation、列表依赖三条已过时。
 2. 将 23 的 gate 状态统一为“adapter exists / no production caller”。
 3. 在 28 增加实现状态图例：`schema`、`produced`、`consumed`、`validated`、`accepted`。
@@ -516,7 +545,7 @@ Scenario-aware Delivery
 
 当前实现已经跨过“自由文本直接驱动 worker”的危险阶段，但只完成了这条路线的前半段。最需要警惕的误判是：看到 PlanningIntentGraph、ConstraintFactor、RelationSatisfaction 类存在，就认为关系感知规划已经落地。实际数据流显示，它们目前主要是可传输的元数据，尚未成为求解、执行和验收的控制面。
 
-当前系统只能把内部 worker、历史 overlay 和独立展示脚本用于调试，不能声称当前 demo 已有规划图层产出。先完成 P0-0，证明主 workflow 能稳定交付非空且非 baseline 复制的 feature；再完成 P0-A～P0-G。此前任何空图层、静态 planned 输入、报告标记点或现状复制图都不应表述为已经满足设施服务、道路连接、空间关系和多目标一致性的规划方案。
+**HISTORICAL / PARTIAL（旧入口与 test3 语境）：** 当前系统只能把内部 worker、历史 overlay 和独立展示脚本用于调试，不能声称当前 demo 已有规划图层产出。该广泛断言不能覆盖 source-aware clone-only replay28；replay28 已产生 partial、非 baseline 的规划 overlays，但仍不是默认 live `COMPLETE`。先完成 P0-0，证明主 workflow 能稳定交付非空且非 baseline 复制的 feature；再完成 P0-A～P0-G。此前任何空图层、静态 planned 输入、报告标记点或现状复制图都不应表述为已经满足设施服务、道路连接、空间关系和多目标一致性的规划方案。
 
 ### 2026-08-18 后续复核（以新实现和 replay28 artifact 为准）
 

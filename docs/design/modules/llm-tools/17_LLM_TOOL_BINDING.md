@@ -6,14 +6,14 @@
 >
 > 更新时间：2026-08-12
 > 状态：TARGET DESIGN + CURRENT 事实并存
-> 当前实现状态台账：[10_IMPLEMENTATION_STATUS.md](../../10_IMPLEMENTATION_STATUS.md)
+> 当前实现状态台账：[10_IMPLEMENTATION_STATUS_CURRENT_20260818.md](../../10_IMPLEMENTATION_STATUS_CURRENT_20260818.md)
 
 ## 1. 目的
 
 本文回答一个问题：**当 LLM 需要调用一个绑定（binding）工具时，项目如何实现、当前已实现到哪一步、目标边界是什么。**
 
 工具层的定位在 [00_SYSTEM_DESIGN.md](../../00_SYSTEM_DESIGN.md) 与
-[14_BACKEND_MODULE_BLUEPRINT.md](../../14_BACKEND_MODULE_BLUEPRINT.md) M5/M10 中规定：
+[00_SYSTEM_DESIGN.md](../../00_SYSTEM_DESIGN.md) 中规定：
 **tools 只能是外部能力适配器，不能成为规划算法的第二实现。**
 
 ## 2. 设计目标（TARGET）
@@ -148,7 +148,7 @@ MiniMax M2.x 不暴露 `json_schema` response format，故用 function_calling �
 
 ## 5. 参考
 
-- [14_BACKEND_MODULE_BLUEPRINT.md](../../14_BACKEND_MODULE_BLUEPRINT.md) — M5 Workflow / M10 Infrastructure
+- [00_SYSTEM_DESIGN.md](../../00_SYSTEM_DESIGN.md) — Workflow、domain 和 infrastructure 边界
 - [00_SYSTEM_DESIGN.md](../../00_SYSTEM_DESIGN.md) — 工具层边界
-- [10_IMPLEMENTATION_STATUS.md](../../10_IMPLEMENTATION_STATUS.md) — 实现状态台账
+- [10_IMPLEMENTATION_STATUS_CURRENT_20260818.md](../../10_IMPLEMENTATION_STATUS_CURRENT_20260818.md) — 实现状态台账
 - [tools 层 README](../../../../backend/app/infrastructure/llm/tools/README.md) — 当前工具层职责说明
