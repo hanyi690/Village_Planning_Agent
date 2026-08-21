@@ -26,6 +26,13 @@ def _live_llm_configured() -> bool:
     return bool(os.getenv("OPENAI_API_KEY"))
 
 
+def _real_graph_run_enabled() -> bool:
+    """Require an explicit operator switch before spending live LLM quota."""
+    return os.getenv("RUN_REAL_GRAPH_RESUME", "").strip().lower() in {
+        "1", "true", "yes", "on"
+    }
+
+
 def _real_classification_decisions(review_payload: dict) -> list[dict] | None:
     """Load operator-approved closed-set decisions for a real HUMAN pause.
 
@@ -198,10 +205,6 @@ def _missing_l3_dimensions(state: dict) -> list[str]:
 pytestmark = [
     pytest.mark.e2e,
     pytest.mark.slow,
-    pytest.mark.skipif(
-        not _live_llm_configured(),
-        reason="live LLM credentials are not configured; set the provider API key to run this chain",
-    ),
 ]
 
 
@@ -219,6 +222,13 @@ def test_phase_completed_without_post_l3_delivery_is_not_terminal():
     })
 
 
+@pytest.mark.skipif(
+    not _real_graph_run_enabled() or not _live_llm_configured(),
+    reason=(
+        "live graph resume is quota-consuming and disabled by default; set "
+        "RUN_REAL_GRAPH_RESUME=true and configure the provider API key"
+    ),
+)
 @pytest.mark.timeout(7200)
 def test_real_graph_resume_delivery(sqlite_db, pipeline_reset, monkeypatch):
     setup, teardown = sqlite_db
@@ -923,4 +933,5 @@ def test_real_graph_resume_delivery(sqlite_db, pipeline_reset, monkeypatch):
                 assert preview.height >= 800
     finally:
         stop_memory_sampler.set()
+        memory_thread.join(timeout=5)
         asyncio.run(teardown())

@@ -27,6 +27,27 @@ def _geometry(candidate_id, target_id, point, score=0.5):
     )
 
 
+def _polygon_geometry(candidate_id, target_id, wkt, score=0.5, *, source_bsm=""):
+    return CandidateGeometry(
+        candidate_id=candidate_id,
+        target_id=target_id,
+        kind="polygon",
+        role="execution_geometry",
+        materialization_role="site_footprint",
+        wkt=wkt,
+        crs="EPSG:3857",
+        source_ref=f"source:{candidate_id}",
+        source_bsms=[source_bsm] if source_bsm else [],
+        l1_fact_refs=[f"l1:{candidate_id}"],
+        l1_snapshot_ref="l1:snapshot:test",
+        bundle_snapshot_digest="bundle:test",
+        generation_operation="select_planning_subgeometry",
+        hard_constraint_status="passed",
+        evidence_refs=[f"evidence:{candidate_id}"],
+        suitability_components={"suitability": score},
+    )
+
+
 def test_hard_relation_changes_feasible_set_and_soft_relation_changes_objective():
     geometries = [
         _geometry("a-near", "a", 0.0, 0.1),
@@ -56,7 +77,9 @@ def test_hard_relation_changes_feasible_set_and_soft_relation_changes_objective(
         evaluator_context=RelationEvaluationContext(scenario_id="scenario-hard"),
     )
     assert result.status == "complete"
-    assert result.selected_candidate_ids == {"a": "a-near", "b": "b"}
+    assert {item.target_id: item.candidate_ids for item in result.target_selections} == {
+        "a": ["a-near"], "b": ["b"]
+    }
     assert result.relation_satisfactions[0].status == "satisfied"
 
 
@@ -84,7 +107,7 @@ def test_no_hard_feasible_combination_fails_closed():
         evaluator_context=RelationEvaluationContext(scenario_id="scenario-failed"),
     )
     assert result.status == "failed"
-    assert result.selected_candidate_ids == {}
+    assert result.target_selections == []
     assert result.findings[0].code == "NO_HARD_FEASIBLE_SCENARIO"
 
 
@@ -117,5 +140,66 @@ def test_soft_relation_is_scored_without_blocking_the_scenario():
         evaluator_context=RelationEvaluationContext(scenario_id="scenario-soft"),
     )
     assert result.status == "complete"
-    assert result.selected_candidate_ids["a"] == "a-near"
+    selections = {item.target_id: item.candidate_ids for item in result.target_selections}
+    assert selections["a"] == ["a-near"]
     assert result.metrics["relation_objective"] == 10
+
+
+def test_relation_selection_measures_selected_subgeometry_and_keeps_lineage():
+    geometries = [
+        _polygon_geometry(
+            "a-near-slice",
+            "a",
+            "POLYGON ((90 0, 95 0, 95 5, 90 5, 90 0))",
+            score=0.1,
+            source_bsm="parcel:a",
+        ),
+        _polygon_geometry(
+            "a-far-source",
+            "a",
+            "POLYGON ((0 0, 5 0, 5 5, 0 5, 0 0))",
+            score=0.9,
+            source_bsm="parcel:a",
+        ),
+        _geometry("b", "b", 100.0, 0.5).model_copy(update={"crs": "EPSG:3857"}),
+    ]
+    hard_near = ConstraintFactor(
+        factor_id="factor:near-sliced-parcel",
+        kind="near",
+        evaluator_key="near",
+        subject_ref="a",
+        object_ref="b",
+        hard=True,
+        parameters=DistanceParameters(max_distance_m=10, metric="euclidean"),
+    )
+    result = solve_scenario(
+        _problem(
+            [hard_near],
+            geometries,
+            [
+                GroundedCandidateDomain(
+                    target_id="a",
+                    candidate_ids=["a-near-slice", "a-far-source"],
+                ),
+                GroundedCandidateDomain(target_id="b", candidate_ids=["b"]),
+            ],
+        ),
+        scenario_id="scenario-sliced-parcel",
+        evaluator_context=RelationEvaluationContext(scenario_id="scenario-sliced-parcel"),
+    )
+
+    assert result.status == "complete"
+    assert {item.target_id: item.candidate_ids for item in result.target_selections} == {
+        "a": ["a-near-slice"], "b": ["b"]
+    }
+    satisfaction = result.relation_satisfactions[0]
+    assert satisfaction.status == "satisfied"
+    assert satisfaction.measurement is not None
+    assert satisfaction.measurement.value == 5.0
+    selected = next(item for item in result.feature_intents if item.target_id == "a")
+    assert selected.geometry_wkt.startswith("POLYGON ((90 0")
+    assert selected.source_bsms == ["parcel:a"]
+    assert selected.l1_fact_refs == ["l1:a-near-slice"]
+    assert selected.l1_snapshot_ref == "l1:snapshot:test"
+    assert selected.bundle_snapshot_digest == "bundle:test"
+    assert selected.generation_operation == "select_planning_subgeometry"

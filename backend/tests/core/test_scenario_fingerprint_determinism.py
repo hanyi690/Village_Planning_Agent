@@ -21,5 +21,5 @@ def test_same_problem_and_inputs_have_same_scenario_fingerprint():
     context = RelationEvaluationContext(scenario_id="scenario-deterministic")
     first = solve_scenario(problem, scenario_id="scenario-deterministic", evaluator_context=context)
     second = solve_scenario(problem, scenario_id="scenario-deterministic", evaluator_context=context)
-    assert first.selected_candidate_ids == second.selected_candidate_ids
+    assert first.target_selections == second.target_selections
     assert first.fingerprint == second.fingerprint

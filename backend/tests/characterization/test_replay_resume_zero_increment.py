@@ -14,7 +14,7 @@ from types import SimpleNamespace
 import pytest
 
 from app.application.recovery.resume_service import ResumeService
-from app.contracts.planning.scenario import PlanningScenario, ScenarioFeature
+from app.contracts.planning.scenario import PlanningScenario, ScenarioFeature, ScenarioTargetSelection
 from app.domain.validation.relation_validation import FinalScenarioValidation
 
 
@@ -109,7 +109,11 @@ def _scenario() -> PlanningScenario:
         scenario_id="scenario:resume",
         baseline_ref="baseline:resume",
         problem_fingerprint="problem:resume",
-        selected_candidate_ids={"target:facility": "candidate:facility"},
+        target_selections=[ScenarioTargetSelection(
+            target_id="target:facility",
+            selection_mode="choose_one",
+            candidate_ids=["candidate:facility"],
+        )],
         feature_intents=[feature],
         status="partial",
     )

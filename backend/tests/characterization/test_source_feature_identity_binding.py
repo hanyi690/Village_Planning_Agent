@@ -1,3 +1,5 @@
+from unittest.mock import patch
+
 from rdflib import Graph, Literal, RDF
 
 from app.contracts.domain.l3_contracts import PlanningIntervention
@@ -60,12 +62,35 @@ def _ingested_features():
     return features
 
 
+def _accepted_semantic_decisions(features):
+    return {
+        str(feature._raw["source_feature_id"]): {
+            "status": "accepted",
+            "semantic_type": "公交站" if feature.text == "站" else "祠堂",
+        }
+        for feature in features
+    }
+
+
 def test_annotation_ingestion_assigns_stable_source_identity_groups():
     features = _ingested_features()
     raw = [feature._raw for feature in features]
 
     assert len({item["source_feature_id"] for item in raw}) == 16
     assert [item["source_feature_index"] for item in raw] == list(range(16))
+
+
+def test_annotation_ingestion_hashes_source_snapshot_once():
+    with patch(
+        "app.data.ingestion.source_identity.source_content_digest",
+        wraps=__import__(
+            "app.data.ingestion.source_identity",
+            fromlist=["source_content_digest"],
+        ).source_content_digest,
+    ) as digest:
+        _ingested_features()
+
+    assert digest.call_count == 1
 
 
 def test_add_facilities_from_annotations_preserves_source_ids_and_point_wkt():
@@ -95,6 +120,7 @@ def test_typed_existing_groups_bind_exactly_three_stations_and_thirteen_halls():
         expected_output_kind="point",
         intervention_action="upgrade",
         scale="3处",
+        spatial_requirements={"source_collection_key": "current_facility"},
         facility_parameters=FacilityPlanningParameters(
             facility_type="公交站亭",
             action="preserve",
@@ -109,6 +135,7 @@ def test_typed_existing_groups_bind_exactly_three_stations_and_thirteen_halls():
         expected_output_kind="point",
         intervention_action="preserve",
         scale="13处",
+        spatial_requirements={"source_collection_key": "current_facility"},
         facility_parameters=FacilityPlanningParameters(
             facility_type="文化展示设施",
             action="preserve",
@@ -116,15 +143,24 @@ def test_typed_existing_groups_bind_exactly_three_stations_and_thirteen_halls():
         ),
     )
 
-    station_ids = bind_existing_facility_source_features(station_target, stations)
-    hall_ids = bind_existing_facility_source_features(hall_target, halls)
+    hall_ids = bind_existing_facility_source_features(
+        hall_target,
+        halls,
+        _accepted_semantic_decisions(halls),
+    )
+
+    station_ids = bind_existing_facility_source_features(
+        station_target,
+        stations,
+        _accepted_semantic_decisions(stations),
+    )
 
     assert len(station_ids) == 3
     assert len(hall_ids) == 13
     assert len(set(station_ids + hall_ids)) == 16
 
 
-def test_typed_group_binding_fails_closed_on_quantity_mismatch_or_road_count():
+def test_collection_binding_does_not_use_quantity_as_identity_or_road_count():
     features = _ingested_features()
     bad_station_target = PlanningIntervention(
         intervention_id="bad-stations",
@@ -133,6 +169,7 @@ def test_typed_group_binding_fails_closed_on_quantity_mismatch_or_road_count():
         execution_mode="spatial",
         expected_output_kind="point",
         intervention_action="upgrade",
+        spatial_requirements={"source_collection_key": "current_facility"},
         facility_parameters=FacilityPlanningParameters(
             facility_type="公交站",
             action="preserve",
@@ -151,4 +188,9 @@ def test_typed_group_binding_fails_closed_on_quantity_mismatch_or_road_count():
     )
 
     assert bind_existing_facility_source_features(bad_station_target, features[:3]) == []
+    assert len(bind_existing_facility_source_features(
+        bad_station_target,
+        features[:3],
+        _accepted_semantic_decisions(features[:3]),
+    )) == 3
     assert bind_existing_facility_source_features(road_target, features) == []

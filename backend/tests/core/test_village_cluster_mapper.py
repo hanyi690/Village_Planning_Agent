@@ -55,7 +55,7 @@ def test_missing_report_evidence_keeps_names_unresolved():
     assert mapping == {}
 
 
-def test_flash_mapping_requires_verbatim_report_evidence():
+def test_untyped_flash_text_is_not_promoted_to_spatial_mapping():
     class FakeLLM:
         async def ainvoke(self, _prompt):
             return SimpleNamespace(
@@ -72,7 +72,4 @@ def test_flash_mapping_requires_verbatim_report_evidence():
         )
     )
 
-    assert set(mapping) == {"田坑"}
-    assert mapping["田坑"]["bsms"] == clusters[1].bsms
-    assert mapping["田坑"]["method"] == "flash_llm_report_evidence"
-    assert mapping["田坑"]["provenance_refs"]
+    assert mapping == {}

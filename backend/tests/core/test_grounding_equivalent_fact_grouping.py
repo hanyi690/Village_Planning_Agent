@@ -34,14 +34,18 @@ def _candidate(ref: str, bsm: str) -> SimpleNamespace:
         canonical_name="同名地点",
         role="facility",
         source_bsms=[bsm],
-        geometry_ref="bundled:coarse",
+        geometry_ref=f"bundle://feature/{bsm}",
+        feature_bsm=bsm,
+        source_feature_id=f"source:{bsm}",
         relation_refs=["relation:test"],
         score=0.6,
     )
 
 
 def _context(facts, results):
-    return SimpleNamespace(
+    from app.evidence.retrieval.evidence_graph import EvidenceGraph
+
+    context = SimpleNamespace(
         session_id="ground-grouping-test",
         version=1,
         kg_version=1,
@@ -53,8 +57,10 @@ def _context(facts, results):
             polygons={"landuse_current": []},
         ),
         current_parcels=lambda: [],
-        evidence_index=_Index(results),
+        evidence_graph=None,
     )
+    context.evidence_graph = EvidenceGraph(context, index=_Index(results))
+    return context
 
 
 def _village_base_candidate() -> SimpleNamespace:
@@ -117,19 +123,23 @@ async def test_equivalent_facts_share_llm_work_without_losing_fact_identity(monk
     calls = []
 
     class FakeLLM:
-        async def ainvoke(self, prompt):
-            calls.append(prompt)
-            return SimpleNamespace(content="1")
+        def with_structured_output(self, response_model, **_kwargs):
+            class _Structured:
+                async def ainvoke(self, prompt):
+                    calls.append(prompt)
+                    return response_model(candidate_index=1)
+
+            return _Structured()
 
     monkeypatch.setattr("app.core.settings.GROUND_MAX_LLM_CALLS", 4)
     monkeypatch.setattr("app.core.settings.GROUND_LLM_MAX_CONCURRENT", 2)
     monkeypatch.setattr("app.core.settings.GROUND_LLM_CALL_TIMEOUT_S", 5)
-    from app.evidence.index.place_evidence_index import PlaceEvidenceIndex
+    from app.evidence.retrieval.evidence_graph import EvidenceGraph
 
     monkeypatch.setattr(
-        PlaceEvidenceIndex,
+        EvidenceGraph,
         "build",
-        staticmethod(lambda current_context: current_context.evidence_index),
+        staticmethod(lambda current_context: current_context.evidence_graph),
     )
 
     result = await anchors.ground_l1_anchors(
@@ -142,7 +152,10 @@ async def test_equivalent_facts_share_llm_work_without_losing_fact_identity(monk
     assert len(calls) == 1
     assert [anchor.location_fact_ref for anchor in result] == ["report-1", "report-2"]
     assert all(anchor.source_bsms == ["bsm-1"] for anchor in result)
-    assert all(anchor.geometry_ref == "bundled:coarse" for anchor in result)
+    assert all(
+        str(anchor.geometry_ref or "").startswith("bundle://feature/")
+        for anchor in result
+    )
 
 
 @pytest.mark.asyncio
@@ -170,19 +183,23 @@ async def test_same_name_different_role_or_candidate_does_not_share_work(monkeyp
     calls = []
 
     class FakeLLM:
-        async def ainvoke(self, prompt):
-            calls.append(prompt)
-            return SimpleNamespace(content="1")
+        def with_structured_output(self, response_model, **_kwargs):
+            class _Structured:
+                async def ainvoke(self, prompt):
+                    calls.append(prompt)
+                    return response_model(candidate_index=1)
+
+            return _Structured()
 
     monkeypatch.setattr("app.core.settings.GROUND_MAX_LLM_CALLS", 8)
     monkeypatch.setattr("app.core.settings.GROUND_LLM_MAX_CONCURRENT", 2)
     monkeypatch.setattr("app.core.settings.GROUND_LLM_CALL_TIMEOUT_S", 5)
-    from app.evidence.index.place_evidence_index import PlaceEvidenceIndex
+    from app.evidence.retrieval.evidence_graph import EvidenceGraph
 
     monkeypatch.setattr(
-        PlaceEvidenceIndex,
+        EvidenceGraph,
         "build",
-        staticmethod(lambda current_context: current_context.evidence_index),
+        staticmethod(lambda current_context: current_context.evidence_graph),
     )
 
     result = await anchors.ground_l1_anchors(
@@ -210,7 +227,7 @@ async def test_same_name_different_role_or_candidate_does_not_share_work(monkeyp
 @pytest.mark.asyncio
 async def test_empty_village_water_road_candidates_are_skipped(monkeypatch):
     from app.domain.ground import anchors
-    from app.evidence.index.place_evidence_index import PlaceEvidenceIndex
+    from app.evidence.retrieval.evidence_graph import EvidenceGraph
 
     facts = [
         _fact("report-village", role="village"),
@@ -225,9 +242,9 @@ async def test_empty_village_water_road_candidates_are_skipped(monkeypatch):
         ],
     )
     monkeypatch.setattr(
-        PlaceEvidenceIndex,
+        EvidenceGraph,
         "build",
-        staticmethod(lambda current_context: current_context.evidence_index),
+        staticmethod(lambda current_context: current_context.evidence_graph),
     )
 
     result = await anchors.ground_l1_anchors(
@@ -243,7 +260,7 @@ async def test_empty_village_water_road_candidates_are_skipped(monkeypatch):
 @pytest.mark.asyncio
 async def test_village_fallback_wave_is_bounded_and_commits_ownership_in_order(monkeypatch):
     from app.domain.ground import anchors
-    from app.evidence.index.place_evidence_index import PlaceEvidenceIndex
+    from app.evidence.retrieval.evidence_graph import EvidenceGraph
 
     facts = [
         _fact("report-1", role="village"),
@@ -265,9 +282,9 @@ async def test_village_fallback_wave_is_bounded_and_commits_ownership_in_order(m
         ],
     )
     monkeypatch.setattr(
-        PlaceEvidenceIndex,
+        EvidenceGraph,
         "build",
-        staticmethod(lambda current_context: current_context.evidence_index),
+        staticmethod(lambda current_context: current_context.evidence_graph),
     )
     monkeypatch.setattr(anchors, "_village_spatial_fallback_plan", _village_fallback_plan)
     monkeypatch.setattr("app.core.settings.GROUND_MAX_LLM_CALLS", 8)
@@ -276,18 +293,23 @@ async def test_village_fallback_wave_is_bounded_and_commits_ownership_in_order(m
     active = 0
     peak = 0
     calls = 0
+    selections = iter([1, 2, 3])
 
     class FakeLLM:
-        async def ainvoke(self, _prompt):
-            nonlocal active, peak, calls
-            calls += 1
-            active += 1
-            peak = max(peak, active)
-            import asyncio
+        def with_structured_output(self, response_model, **_kwargs):
+            class _Structured:
+                async def ainvoke(self, _prompt):
+                    nonlocal active, peak, calls
+                    calls += 1
+                    active += 1
+                    peak = max(peak, active)
+                    import asyncio
 
-            await asyncio.sleep(0.02)
-            active -= 1
-            return SimpleNamespace(content="1")
+                    await asyncio.sleep(0.02)
+                    active -= 1
+                    return response_model(candidate_index=next(selections))
+
+            return _Structured()
 
     result = await anchors.ground_l1_anchors(
         context,
@@ -303,12 +325,13 @@ async def test_village_fallback_wave_is_bounded_and_commits_ownership_in_order(m
         ["cluster-2"],
         ["cluster-3"],
     ]
+    assert context.grounding_unresolved == []
 
 
 @pytest.mark.asyncio
 async def test_village_fallback_wave_respects_budget_before_ordered_commit(monkeypatch):
     from app.domain.ground import anchors
-    from app.evidence.index.place_evidence_index import PlaceEvidenceIndex
+    from app.evidence.retrieval.evidence_graph import EvidenceGraph
 
     facts = [_fact("report-1", role="village"), _fact("report-2", role="village")]
     for fact, name in zip(facts, ("村甲", "村乙")):
@@ -326,9 +349,9 @@ async def test_village_fallback_wave_respects_budget_before_ordered_commit(monke
         ],
     )
     monkeypatch.setattr(
-        PlaceEvidenceIndex,
+        EvidenceGraph,
         "build",
-        staticmethod(lambda current_context: current_context.evidence_index),
+        staticmethod(lambda current_context: current_context.evidence_graph),
     )
     monkeypatch.setattr(anchors, "_village_spatial_fallback_plan", _village_fallback_plan)
     monkeypatch.setattr("app.core.settings.GROUND_MAX_LLM_CALLS", 1)
@@ -337,10 +360,14 @@ async def test_village_fallback_wave_respects_budget_before_ordered_commit(monke
     calls = 0
 
     class FakeLLM:
-        async def ainvoke(self, _prompt):
-            nonlocal calls
-            calls += 1
-            return SimpleNamespace(content="1")
+        def with_structured_output(self, response_model, **_kwargs):
+            class _Structured:
+                async def ainvoke(self, _prompt):
+                    nonlocal calls
+                    calls += 1
+                    return response_model(candidate_index=1)
+
+            return _Structured()
 
     result = await anchors.ground_l1_anchors(
         context,
@@ -350,7 +377,5 @@ async def test_village_fallback_wave_respects_budget_before_ordered_commit(monke
     )
 
     assert calls == 1
-    assert [anchor.source_bsms for anchor in result] == [
-        ["cluster-1"],
-        ["cluster-2"],
-    ]
+    assert [anchor.source_bsms for anchor in result] == [["cluster-1"]]
+    assert len(context.grounding_unresolved) == 1

@@ -16,7 +16,14 @@ class _SequentialOutput:
         self.feedbacks = []
 
     async def __call__(
-        self, _generator, *, session_id, dimension_key, prompt, validation_feedback=None
+        self,
+        _generator,
+        *,
+        session_id,
+        dimension_key,
+        prompt,
+        validation_feedback=None,
+        require_report_body=True,
     ):
         self.feedbacks.append(list(validation_feedback or []))
         out = self.outputs[min(self.calls, len(self.outputs) - 1)]

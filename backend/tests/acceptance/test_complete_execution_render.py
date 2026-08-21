@@ -57,7 +57,24 @@ def _uploads() -> list[dict]:
     return ups
 
 
-def _render_execution(parcels, changed_bsms, path: Path, boundary=None, change_wkts=None) -> None:
+def _render_execution(
+    parcels,
+    changed_bsms,
+    path: Path,
+    boundary=None,
+    change_wkts=None,
+    planned_state=None,
+) -> dict | None:
+    if planned_state is not None:
+        return _render_authoritative_execution(
+            parcels,
+            changed_bsms,
+            path,
+            boundary=boundary,
+            change_wkts=change_wkts,
+            planned_state=planned_state,
+        )
+
     import matplotlib
 
     matplotlib.use("Agg")
@@ -173,6 +190,97 @@ def _render_execution(parcels, changed_bsms, path: Path, boundary=None, change_w
     plt.close(fig)
 
 
+def _render_authoritative_execution(
+    parcels,
+    changed_bsms,
+    path: Path,
+    *,
+    boundary=None,
+    change_wkts=None,
+    planned_state=None,
+) -> dict:
+    """Render the same typed overlays that DELIVER exposes to the frontend."""
+    from shutil import copyfile
+
+    from app.domain.delivery.render_layers import build_planned_overlay_layers
+    from app.infrastructure.rendering.static_render import render_comparison_preview
+    from shapely import wkt as shapely_wkt
+    from shapely.geometry import mapping
+
+    changed = {str(value) for value in changed_bsms if str(value).strip()}
+
+    def feature(geometry, **properties):
+        return {
+            "type": "Feature",
+            "properties": properties,
+            "geometry": geometry,
+        }
+
+    current_features = []
+    changed_features = []
+    for parcel in parcels:
+        geometry = getattr(parcel, "geometry", None) or {}
+        if not isinstance(geometry, dict):
+            continue
+        bsm = str(getattr(parcel, "bsm", "") or "")
+        properties = {
+            "bsm": bsm,
+            "change_status": "modified" if bsm in changed else "preserved",
+            "planning_land_use": "规划变更" if bsm in changed else "现状",
+        }
+        current_features.append(feature(geometry, **properties))
+        if bsm in changed:
+            changed_features.append(feature(geometry, **properties))
+
+    for raw_wkt in change_wkts or []:
+        try:
+            geometry = mapping(shapely_wkt.loads(raw_wkt))
+        except Exception:
+            continue
+        changed_features.append(
+            feature(geometry, change_status="modified", planning_land_use="规划变更")
+        )
+
+    layers = [
+        {
+            "layerType": "current_landuse",
+            "layerName": "现状地类",
+            "data": {"type": "FeatureCollection", "features": current_features},
+            "geojson": {"type": "FeatureCollection", "features": current_features},
+        },
+        {
+            "layerType": "complete_planned_landuse",
+            "layerName": "完整期末地类",
+            "data": {"type": "FeatureCollection", "features": current_features},
+            "geojson": {"type": "FeatureCollection", "features": current_features},
+        },
+    ]
+    if changed_features:
+        layers.append({
+            "layerType": "planned_changes",
+            "layerName": "规划变更地块",
+            "color": "#dc2626",
+            "data": {"type": "FeatureCollection", "features": changed_features},
+            "geojson": {"type": "FeatureCollection", "features": changed_features},
+        })
+    if boundary is not None:
+        geometry = getattr(boundary, "geometry", None) or {}
+        if isinstance(geometry, dict):
+            layers.append({
+                "layerType": "boundary",
+                "layerName": "村域边界",
+                "color": "#0f172a",
+                "data": {"type": "FeatureCollection", "features": [feature(geometry)]},
+                "geojson": {"type": "FeatureCollection", "features": [feature(geometry)]},
+            })
+    layers.extend(build_planned_overlay_layers(planned_state))
+    result = render_comparison_preview(layers, str(path.parent), "金田村")
+    if result.get("status") != "completed":
+        raise AssertionError(f"authoritative render failed: {result}")
+    copyfile(result["path"], path)
+    return result
+
+
 @pytest.mark.asyncio
 async def test_complete_execution_and_render(sqlite_db, pipeline_reset, monkeypatch):
     setup, teardown = sqlite_db
@@ -194,7 +302,10 @@ async def test_complete_execution_and_render(sqlite_db, pipeline_reset, monkeypa
         # branch create a real provider request and turn a render test into a
         # multi-minute network test; the production LLM path is covered by the
         # provider integration tests.
-        monkeypatch.setattr(settings, "GROUND_MAX_LLM_CALLS", 0)
+        # The injected typed stand-in is local and quota-free, but the
+        # production budget must still be nonzero for the report→cluster
+        # mapping to run.  Real provider calls remain disabled by injection.
+        monkeypatch.setattr(settings, "GROUND_MAX_LLM_CALLS", 20)
         from app.domain.allocation.select_service import select_aggregate
         from app.domain.materialization.plan_builder import build_execution_plan
         from app.domain.materialization.execute_state import ExecuteAgentState
@@ -222,15 +333,23 @@ async def test_complete_execution_and_render(sqlite_db, pipeline_reset, monkeypa
         )
 
         class _DispatchLLM:
-            async def ainvoke(self, prompt):
-                if "候选地块" in str(prompt) or "报告摘录" in str(prompt):
-                    from app.spatial.grounding.village_cluster_mapper import build_village_clusters
-                    clusters = build_village_clusters(parcels)
-                    return SimpleNamespace(content=json.dumps(
-                        {"园寨": {"cluster_indexes": [0], "evidence": "园寨"}},
-                        ensure_ascii=False,
-                    ))
-                return SimpleNamespace(content="1")
+            def with_structured_output(self, schema, **_kwargs):
+                class _Runner:
+                    async def ainvoke(self, _messages):
+                        if schema.__name__ == "_GMappingSet":
+                            from app.spatial.grounding.village_cluster_mapper import (
+                                build_village_clusters,
+                            )
+
+                            clusters = build_village_clusters(parcels)
+                            return schema(entries=[{
+                                "name": "园寨",
+                                "candidate_indexes": [clusters[0].index],
+                                "evidence": "园寨",
+                            }])
+                        return schema(candidate_index=1)
+
+                return _Runner()
 
         context = await build_planning_context(sid, village_name="金田村", include_reports=True)
         context.location_facts = facts
@@ -273,7 +392,7 @@ async def test_complete_execution_and_render(sqlite_db, pipeline_reset, monkeypa
 
         intent = SpatialPlanningIntent(
             facilities=[FacilityTarget(target_id="t-hall", type="公共服务设施", action="new", location_hint="社前村")],
-            project_targets=[
+            site_area_targets=[
                 ProjectTarget(
                     project_id="p-1",
                     name="高标准农田建设",
@@ -339,6 +458,282 @@ async def test_complete_execution_and_render(sqlite_db, pipeline_reset, monkeypa
         render_bsms = {str(getattr(p, "bsm", "")) for p in render_parcels}
         match = [b for b in changed_bsms if b in render_bsms]
         boundary = getattr(bundle, "boundary", None)
-        _render_execution(render_parcels, changed_bsms, OUTPUT, boundary=boundary, change_wkts=change_wkts)
+        render_result = _render_execution(
+            render_parcels,
+            changed_bsms,
+            OUTPUT,
+            boundary=boundary,
+            change_wkts=change_wkts,
+            planned_state=planned_state,
+        )
+        assert render_result["status"] == "completed"
+        assert render_result["planned_point_count"] >= 1
+        assert render_result["planned_road_count"] == 0
+        assert render_result["missing_outputs"] == ["规划道路"]
+    finally:
+        await teardown()
+
+
+@pytest.mark.asyncio
+async def test_real_evidence_graph_selects_subgeometry_near_scoped_facility(
+    sqlite_db, pipeline_reset
+):
+    """真实 bundle 上验证设施语义会进入关系选择，而不是只返回一个 BSM。"""
+    setup, teardown = sqlite_db
+    await setup()
+    try:
+        sid = "sess-real-evidence-relation-" + uuid.uuid4().hex[:6]
+        await make_session_with_uploads(sid, "金田村", uploads=_uploads())
+
+        from shapely.geometry import shape
+        from shapely.ops import transform
+        from pyproj import Transformer
+
+        from app.application.sessions.session_bundle import build_session_bundle
+        from app.contracts.domain.l1_contracts import L1LocationFact
+        from app.contracts.evidence.source_semantic_contracts import (
+            SourceFeatureSemanticDecision,
+        )
+        from app.contracts.planning.constraint_factor import ConstraintFactor
+        from app.contracts.planning.relation_parameters import DistanceParameters
+        from app.contracts.spatial.candidate_geometry import CandidateGeometry
+        from app.contracts.spatial.grounded_problem import (
+            GroundedCandidateDomain,
+            GroundedPlanningProblem,
+        )
+        from app.domain.allocation.scenario_solver import solve_scenario
+        from app.domain.relations.reference_features import (
+            resolve_relation_reference_features,
+        )
+        from app.domain.relations.service import RelationEvaluationContext
+        from app.evidence.index.place_evidence_index import PlaceEvidenceIndex
+        from app.evidence.retrieval.evidence_graph import EvidenceGraph
+        from app.infrastructure.kg.gazetteer import build_gazetteer
+        from app.infrastructure.kg.manager import KGManager
+        from app.spatial.grounding.village_cluster_mapper import (
+            assign_villages_to_clusters,
+            build_village_clusters,
+        )
+
+        bundle = await build_session_bundle(sid)
+        kg = KGManager().get_or_build_kg("金田村", bundle=bundle, session_id=sid)
+        gazetteer = build_gazetteer(kg, bundle)
+        parcels = list(bundle.polygons.get("landuse_current") or [])
+        assert len(parcels) >= 3
+
+        clusters = build_village_clusters(parcels)
+        assert clusters
+        report_text = (FIXTURE / "current_report.md").read_text(encoding="utf-8")
+
+        class _VillageBindingLLM:
+            def with_structured_output(self, schema, **_kwargs):
+                class _Runner:
+                    async def ainvoke(self, _prompt):
+                        return schema(entries=[{
+                            "name": "社前",
+                            "candidate_indexes": [clusters[min(1, len(clusters) - 1)].index],
+                            "evidence": "在金田村下属的社前村",
+                        }])
+
+                return _Runner()
+
+        village_entries = await assign_villages_to_clusters(
+            gazetteer,
+            parcels,
+            ["社前"],
+            report_text,
+            llm=_VillageBindingLLM(),
+        )
+        for entry in village_entries:
+            gazetteer.upsert(entry)
+
+        # 这条 L1 fact 是语义到行政/自然村范围的桥；设施 geometry 仍只从
+        # bundle 读取，EvidenceGraph 不持有可执行几何。
+        facts = [
+            L1LocationFact(
+                mention="祠堂",
+                normalized_name="祠堂",
+                role="facility",
+                aliases=["祠堂", "祠"],
+                spatial_hint="社前村",
+                source_span="现状设施 | 祠堂 | 社前村 | 三座祠堂",
+                source_report_ref="report:current",
+                dimension_key="historical_culture",
+                confidence=0.95,
+            )
+        ]
+        context = SimpleNamespace(
+            session_id=sid,
+            village_name="金田村",
+            version=1,
+            kg_version=1,
+            gazetteer=gazetteer,
+            kg=kg,
+            workspace=bundle,
+            location_facts=facts,
+            l1_snapshot_ref="artifact://l1/real-fixture",
+            data_snapshot=SimpleNamespace(digest=bundle.spatial_snapshot_digest()),
+        )
+        context.source_semantic_decisions = {
+            str((getattr(feature, "_raw", {}) or {}).get("source_feature_id")): SourceFeatureSemanticDecision(
+                source_feature_id=str((getattr(feature, "_raw", {}) or {}).get("source_feature_id")),
+                raw_label="祠",
+                semantic_type="祠堂",
+                status="accepted",
+                authority="inferred_current",
+                candidate_ref="l1:fixture:祠堂:entity",
+                supporting_fact_refs=["report:current"],
+            )
+            for feature in list(
+                (getattr(bundle, "points", {}) or {}).get("annotations_current") or []
+            )
+            if str(getattr(feature, "text", "") or "").strip() == "祠"
+            and str((getattr(feature, "_raw", {}) or {}).get("source_feature_id") or "").strip()
+        }
+        context.current_parcels = lambda: parcels
+        context.evidence_graph = EvidenceGraph(
+            context, index=PlaceEvidenceIndex.build(context)
+        )
+
+        scoped = context.evidence_graph.query_facility_bsms("社前村", "祠堂")
+        assert scoped.status == "resolved", scoped
+        assert scoped.candidates, scoped
+        facility = scoped.candidates[0]
+        assert facility.feature_bsm or facility.source_bsm
+        assert facility.related_parcel_bsms
+
+        # Relation object is an EvidenceGraph identity.  It must be resolved
+        # back to the exact bundle feature before geometry evaluation.
+        external_ref = facility.entity_ref or "祠堂"
+        factor = ConstraintFactor(
+            kind="near",
+            subject_ref="site-hall-buffer",
+            object_ref=external_ref,
+            object_ref_kind="entity",
+            hard=True,
+            evaluator_key="near",
+            evidence_refs=["l1:fact:祠堂", *facility.evidence_refs],
+            parameters=DistanceParameters(
+                max_distance_m=1.0,
+                metric="euclidean",
+            ),
+        )
+        resolution = resolve_relation_reference_features(
+            context, [factor], scenario_id="scenario:real-fixture"
+        )
+        assert not resolution.diagnostics, resolution.diagnostics
+        external = resolution.features.get(external_ref)
+        assert external is not None
+        assert external.generation_operation == "relation_bundle_reference"
+        assert external.entity_refs
+        assert external.feature_bsms or external.source_bsms
+        assert external.l1_fact_refs == ["report:current"]
+        assert external.bundle_snapshot_digest == bundle.spatial_snapshot_digest()
+
+        # 以真实设施点为参照，选出最近与最远的真实地块，并从各自地块
+        # 切一个小的规划子几何；选择只能使用这些子几何，不能回写整块面。
+        to_metric = Transformer.from_crs("EPSG:4326", "EPSG:3857", always_xy=True).transform
+        facility_geometry = __import__("shapely.wkt", fromlist=["loads"]).loads(
+            external.geometry_wkt
+        )
+        facility_metric = transform(to_metric, facility_geometry)
+        parcel_rows = []
+        for parcel in parcels:
+            geometry = shape(getattr(parcel, "geometry", None) or {})
+            if geometry.is_empty or not geometry.is_valid:
+                continue
+            metric = transform(to_metric, geometry)
+            parcel_rows.append((metric.distance(facility_metric), parcel, geometry))
+        parcel_rows.sort(key=lambda row: (row[0], str(getattr(row[1], "bsm", ""))))
+        near_distance, near_parcel, near_geometry = parcel_rows[0]
+        far_distance, far_parcel, far_geometry = parcel_rows[-1]
+        assert far_distance > near_distance
+
+        def _slice(geometry):
+            point = geometry.representative_point()
+            width = max(min(geometry.bounds[2] - geometry.bounds[0], geometry.bounds[3] - geometry.bounds[1]) * 0.2, 1e-6)
+            clipped = geometry.intersection(point.buffer(width))
+            return clipped if not clipped.is_empty else geometry
+
+        near_slice = _slice(near_geometry)
+        far_slice = _slice(far_geometry)
+        near_slice_distance = transform(to_metric, near_slice).distance(facility_metric)
+        far_slice_distance = transform(to_metric, far_slice).distance(facility_metric)
+        assert far_slice_distance > near_slice_distance
+        threshold = (near_slice_distance + far_slice_distance) / 2.0
+
+        def _candidate(target_id, parcel, geometry):
+            bsm = str(getattr(parcel, "bsm", "") or "")
+            return CandidateGeometry(
+                target_id=target_id,
+                kind="polygon",
+                role="execution_geometry",
+                materialization_role="site_footprint",
+                wkt=geometry.wkt,
+                crs="EPSG:4326",
+                granularity="parcel_extent",
+                spatial_domain_kind="parcel_extent",
+                source_ref=f"bundle:landuse_current:{bsm}",
+                source_bsms=[bsm],
+                feature_bsms=[bsm],
+                evidence_refs=[f"bundle:landuse_current:{bsm}"],
+                l1_fact_refs=["l1:fact:祠堂"],
+                l1_snapshot_ref="artifact://l1/real-fixture",
+                bundle_snapshot_digest=bundle.spatial_snapshot_digest(),
+                subgeometry_operation="fixture_centroid_slice",
+                generation_operation="select_planning_subgeometry",
+                confidence=0.8,
+                hard_constraint_status="passed",
+            )
+
+        near_candidate = _candidate("site-hall-buffer", near_parcel, near_slice)
+        far_candidate = _candidate("site-hall-buffer", far_parcel, far_slice)
+        problem = GroundedPlanningProblem(
+            baseline_ref="bundle:real-fixture",
+            candidate_domains=[
+                GroundedCandidateDomain(
+                    target_id="site-hall-buffer",
+                    candidate_ids=[near_candidate.candidate_id, far_candidate.candidate_id],
+                )
+            ],
+            candidate_geometries=[near_candidate, far_candidate],
+            constraint_factors=[
+                factor.model_copy(
+                    update={
+                        "parameters": DistanceParameters(
+                            max_distance_m=threshold,
+                            metric="euclidean",
+                        )
+                    }
+                )
+            ],
+            source_artifact_refs=["artifact://evidence/real-fixture"],
+        )
+        scenario = solve_scenario(
+            problem,
+            scenario_id="scenario:real-fixture",
+            evaluator_context=RelationEvaluationContext(
+                scenario_id="scenario:real-fixture",
+                reference_features=resolution.features,
+            ),
+        )
+        assert scenario.status == "complete", json.dumps({
+            "status": scenario.status,
+            "relations": [item.model_dump(mode="json") for item in scenario.relation_satisfactions],
+            "findings": [item.model_dump(mode="json") for item in scenario.findings],
+        }, ensure_ascii=False)
+        assert {
+            item.target_id: item.candidate_ids
+            for item in scenario.target_selections
+        }["site-hall-buffer"] == [near_candidate.candidate_id]
+        satisfaction = scenario.relation_satisfactions[0]
+        assert satisfaction.status == "satisfied", satisfaction
+        selected_feature = next(
+            item for item in scenario.feature_intents
+            if item.target_id == "site-hall-buffer"
+        )
+        assert selected_feature.subgeometry_operation == "fixture_centroid_slice"
+        assert selected_feature.source_bsms == [str(getattr(near_parcel, "bsm", ""))]
+        assert selected_feature.bundle_snapshot_digest == bundle.spatial_snapshot_digest()
     finally:
         await teardown()

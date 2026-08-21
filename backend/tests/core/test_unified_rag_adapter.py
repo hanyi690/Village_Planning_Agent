@@ -48,14 +48,41 @@ async def test_run_rag_is_the_single_unified_evidence_adapter(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_rag_retriever_adapts_legacy_vector_result(monkeypatch):
+async def test_legacy_rag_defaults_to_settings_disabled_and_reports_reason(monkeypatch):
+    from app.core import settings
+    from app.infrastructure.llm.dimension_runtime import retrieve_vector_context
+
+    monkeypatch.setattr(settings, "RAG_ENABLED", False)
+
+    async def state_values(cls, _session_id):
+        return {"config": {}}
+
+    monkeypatch.setattr(
+        "app.infrastructure.runtime.planning_runtime_service.PlanningRuntimeService.aget_state_values",
+        classmethod(state_values),
+    )
+
+    context, log = await retrieve_vector_context(
+        "traffic",
+        SimpleNamespace(layer=3, rag_query="道路专业规范"),
+        {"session_id": "session-rag-default-disabled", "config": {}},
+    )
+
+    assert context == ""
+    assert log is not None
+    assert log.rag_enabled is False
+    assert log.skip_reason == "disabled_by_config"
+
+
+@pytest.mark.asyncio
+async def test_rag_retriever_does_not_promote_text_without_vector_chunk(monkeypatch):
     from app.evidence.retrieval.retrievers import rag_retriever
 
     async def legacy(dimension_key, cfg, state):
         return "旧 RAG 片段", SimpleNamespace(retrieval_latency_ms=3, total_results=1)
 
     monkeypatch.setattr(
-        "app.infrastructure.llm.dimension_runtime._legacy_run_rag",
+        "app.infrastructure.llm.dimension_runtime.retrieve_vector_context",
         legacy,
     )
     async def state_values(cls, session_id):
@@ -70,8 +97,8 @@ async def test_rag_retriever_adapts_legacy_vector_result(monkeypatch):
         "session-rag", "traffic", "L3", query="交通"
     )
 
-    assert [fact.statement for fact in facts] == ["旧 RAG 片段"]
-    assert sources[0].reference == "rag:session-rag:traffic"
+    assert facts == []
+    assert sources == []
     assert rag_retriever.consume_rag_log("session-rag", "traffic").total_results == 1
 
 

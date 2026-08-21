@@ -90,8 +90,8 @@ async def test_runtime_pipeline_e2e(sqlite_db, pipeline_reset, monkeypatch):
         # instead of inventing a DEM or weakening vector assertions.
         assert isinstance(bundle.rasters.all_rasters, dict)
 
-        sources = [t["source"] for t in bundle.documents.input_documents]
-        assert "upload" in sources, f"uploads not merged into input_documents: {sources}"
+        sources = [ref["source"] for ref in bundle.documents.document_refs]
+        assert "upload" in sources, f"uploads not merged into document_refs: {sources}"
 
         upload_sources = [
             source for source in bundle.metadata.provider_sources
@@ -101,7 +101,6 @@ async def test_runtime_pipeline_e2e(sqlite_db, pipeline_reset, monkeypatch):
         assert len(bundle.polygons.get("landuse_current") or []) > 0
 
         # ── Stage 3: reports bulk_save + read-back ────────────────────────
-        from app.database.operations import get_session_reports_async
         from app.infrastructure.reports.report_store import ReportStore
 
         store = ReportStore()
@@ -117,8 +116,10 @@ async def test_runtime_pipeline_e2e(sqlite_db, pipeline_reset, monkeypatch):
                 "content": "## 用地结构\n以耕地为主。", "summary": "{}",
             },
         ])
-        by_layer = await get_session_reports_async(sid)
-        assert set(by_layer[1].keys()) == {"location", "land_use"}
+        manifest = await store.get_session_report_manifest(sid)
+        assert {
+            ref["dimension_key"] for ref in manifest if ref["layer"] == 1
+        } == {"location", "land_use"}
 
         # ── Stage 4: versioned snapshot → planning_bundles ───────────────
         from app.database.operations import get_planning_bundle_async
@@ -137,7 +138,10 @@ async def test_runtime_pipeline_e2e(sqlite_db, pipeline_reset, monkeypatch):
         restored = await BundleStore().load_bundle(sid)
         assert restored is not None
         assert restored.parcel_count == bundle.parcel_count
-        assert (restored.layer_reports or {}).get(1, {}).get("location", {}).get("content")
+        assert any(
+            ref["dimension_key"] == "location" and ref["layer"] == 1
+            for ref in restored.documents.report_refs
+        )
         assert any(
             str(source).startswith("upload:")
             for source in restored.metadata.provider_sources
@@ -166,10 +170,13 @@ async def test_runtime_pipeline_e2e(sqlite_db, pipeline_reset, monkeypatch):
         rb = await resolve_bundle(sid)
         assert rb is not None
         assert calls["n"] == 0
-        assert (rb.layer_reports or {}).get(1, {}).get("location", {}).get("content")
         assert any(
-            t.get("source") == "upload" for t in rb.documents.input_documents
-        ), "snapshot path lost uploaded text"
+            ref["dimension_key"] == "location" and ref["layer"] == 1
+            for ref in rb.documents.report_refs
+        )
+        assert any(
+            ref.get("source") == "upload" for ref in rb.documents.document_refs
+        ), "snapshot path lost uploaded document ref"
 
         # ── Stage 7: EXPLORE access tools (real calls) ───────────────────
         from app.infrastructure.llm.tools.access.bundle import (
@@ -182,7 +189,11 @@ async def test_runtime_pipeline_e2e(sqlite_db, pipeline_reset, monkeypatch):
         assert overview["village_name"] == "金田村"
         assert overview["parcel_count"] > 0
         assert overview["spatial_groups"]["lines"]["roads_current"]["count"] > 0
-        assert set(overview["layer_reports"]["1"]) == {"location", "land_use"}
+        assert {
+            ref["dimension_key"]
+            for ref in overview["report_manifest"]
+            if ref["layer"] == 1
+        } == {"location", "land_use"}
 
         ctx = await spatial_context_impl(sid)
         assert ctx["parcel_count"] > 0

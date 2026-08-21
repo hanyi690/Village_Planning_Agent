@@ -15,6 +15,7 @@ request the fixture by name.
 
 from __future__ import annotations
 
+import asyncio
 import os
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -89,9 +90,19 @@ def sqlite_db(tmp_path, monkeypatch):
         return engine
 
     async def teardown():
-        if state["engine"] is not None:
-            await state["engine"].dispose()
-            state["engine"] = None
+        from app.infrastructure.runtime.planning_runtime_service import (
+            PlanningRuntimeService,
+        )
+
+        await PlanningRuntimeService.shutdown()
+        await eng.shutdown_database()
+        state["engine"] = None
+        from app.infrastructure.llm.instructor_client import close_cached_clients
+
+        await close_cached_clients()
+        from app.infrastructure.kg.session_kg import shutdown_session_kg_process_pool
+
+        await asyncio.to_thread(shutdown_session_kg_process_pool)
 
     yield setup, teardown
 
@@ -105,6 +116,7 @@ def pipeline_reset():
       * ``app.infrastructure.kg.manager.KGManager._instance``
       * ``app.infrastructure.storage.bundle_store.BundleStore._instance``
       * ``app.data.ingestion.connections.base.ConnectionRegistry._connections``
+      * ``app.infrastructure.kg.memory._SEMANTIC_MEMORY``
     Clear them so a test observes a clean pipeline and does not leak state
     into the next one.
     """
@@ -113,11 +125,13 @@ def pipeline_reset():
         import app.infrastructure.kg.manager as kg_man
         import app.infrastructure.storage.bundle_store as bs
         import app.application.sessions.session_bundle as sb
+        import app.infrastructure.kg.memory as kg_memory
 
         sb._bundle_cache.clear()
         kg_man.KGManager._instance = None
         bs.BundleStore._instance = None
         conn_base.ConnectionRegistry._connections.clear()
+        kg_memory.reset_semantic_memory()
 
     _reset()
     yield

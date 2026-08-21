@@ -1,7 +1,7 @@
 # MVP 金田村固定回放夹具
 
 本目录是村庄规划 Agent 的 MVP 验收固定回放夹具（"fixed replay fixture"），
-对应 `docs/design/10_IMPLEMENTATION_STATUS.md` 第 5 节"当前可验证边界"及
+对应 `docs/design/10_IMPLEMENTATION_STATUS_CURRENT_20260818.md` 的当前可验证边界及
 MVP 场景（现状报告 + GIS → L1Snapshot → L2Strategy → PlanningProgram →
 IntentCompilationResult → GroundingResult → SiteSelectionDecision →
 ExecutionPlan → Project/Zone/Facility/Road Workers → ParcelChangeSet →

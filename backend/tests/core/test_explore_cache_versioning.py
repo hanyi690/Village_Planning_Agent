@@ -1,6 +1,41 @@
 import pytest
 
 
+def test_context_evidence_digest_changes_after_source_semantic_update(monkeypatch):
+    from types import SimpleNamespace
+
+    from app.evidence.retrieval import evidence_service as service
+    from app.infrastructure.context import planning_context_factory
+
+    context = SimpleNamespace(
+        version=3,
+        l1_snapshot_ref="artifact://l1/current",
+        source_semantic_fingerprint="",
+        source_semantic_decisions={},
+        location_facts=[],
+        l1_fact_records=[],
+    )
+    monkeypatch.setattr(
+        planning_context_factory,
+        "get_cached_context",
+        lambda _session_id: context,
+    )
+
+    before = service._context_evidence_digest("session-cache-semantic")
+    context.source_semantic_decisions = {
+        "source-feature-1": SimpleNamespace(
+            status="accepted",
+            semantic_type="祠堂",
+            source_feature_id="source-feature-1",
+        )
+    }
+    after = service._context_evidence_digest("session-cache-semantic")
+
+    assert before
+    assert after
+    assert before != after
+
+
 @pytest.mark.asyncio
 async def test_cache_includes_complete_request_and_source_versions(monkeypatch):
     from app.contracts.evidence.evidence_contracts import ExplorationRequest, SpatialCognitionEvidence

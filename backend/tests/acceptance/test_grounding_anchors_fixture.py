@@ -272,6 +272,14 @@ async def test_real_fixture_ground_anchors_and_render(sqlite_db, pipeline_reset)
         )
 
         bundle = await build_session_bundle(sid)
+        annotation_bsms = [
+            str(getattr(point, "bsm", "") or "")
+            for point in bundle.points.get("annotations_current") or []
+        ]
+        assert annotation_bsms and all(
+            len(bsm) == 20 and bsm.startswith("441426108004")
+            for bsm in annotation_bsms
+        ), annotation_bsms[:3]
         kg = KGManager().get_or_build_kg("金田村", bundle=bundle, session_id=sid)
         gazetteer = build_gazetteer(kg, bundle)
         parcels = list(bundle.polygons.get("landuse_current") or [])
@@ -344,41 +352,6 @@ async def test_real_fixture_ground_anchors_and_render(sqlite_db, pipeline_reset)
 
         anchors = await ground_l1_anchors(context, sid, llm=dispatch_llm, bump=False)
 
-        # ---- 探针 ----
-        from rdflib import RDF as _RDF, Literal as _Lit
-        from app.infrastructure.kg.ontology import EntityTypes as _ET, PLN as _PLN, Relations as _Rel
-        from app.domain.ground.anchors import _cluster_for_bsms
-        kg_g = getattr(kg, "g", None)
-        sf = list(kg_g.triples((None, _Rel.sfWithin, None)))
-        clusters = list(kg_g.subjects(_RDF.type, _ET.ResidentialCluster))
-        to_cluster = [t for t in sf if t[2] in set(clusters)]
-        print("PROBE sfWithin_total", len(sf), "clusters", len(clusters), "to_cluster", len(to_cluster))
-        yz = next((a for a in anchors if a.normalized_name == "园寨"), None)
-        print("PROBE yz bsms", (yz.source_bsms[:3] if yz else None))
-        print("PROBE cluster_for yz", _cluster_for_bsms(kg, set(yz.source_bsms[:3])) if yz else None)
-        from app.domain.ground.anchors import _cluster_bsms_of
-        for bsm in yz.source_bsms[:1]:
-            subs = list(kg_g.subjects(_PLN.bsm, _Lit(bsm)))
-            for s in subs:
-                for _, _, o in kg_g.triples((s, _Rel.sfWithin, None)):
-                    if "settlement" in str(o):
-                        cb = _cluster_bsms_of(kg, str(o))
-                        print("PROBE cluster_bsms_of", str(o)[-30:], "count", len(cb), "sample", list(cb)[:3])
-                        break
-        for bsm in yz.source_bsms[:3]:
-            subs = list(kg_g.subjects(_PLN.bsm, _Lit(bsm)))
-            objs = set()
-            for s in subs:
-                for _, _, o in kg_g.triples((s, _Rel.sfWithin, None)):
-                    objs.add(str(o).rsplit("#", 1)[-1][:40])
-            print("  BSM", bsm, "parcels", len(subs), "sfWithin", list(objs))
-        print("PROBE cluster names", [str(kg_g.value(s, _PLN.name) or "") for s in clusters][:16])
-        # ---- 探针结束 ----
-
-
-
-
-
         # 1) 不留下不可解析：每个锚点都有 BSM/几何/实体引用
         assert anchors, "anchors must be produced"
         by_name = {a.normalized_name: a for a in anchors}
@@ -394,13 +367,16 @@ async def test_real_fixture_ground_anchors_and_render(sqlite_db, pipeline_reset)
         assert scope and scope[0].normalized_name == "金田村", [a.normalized_name for a in anchors]
         assert scope[0].geometry_ref and scope[0].geometry_ref.startswith("boundary:"), scope[0]
 
-        # 实体级绑定优先：祠堂必须绑到设施点坐标 + 附近地块，而不是村锚点
+        # 实体级绑定优先：祠堂必须绑定到 bundle 设施点 + 附近地块。
+        # EvidenceGraph 只暴露不透明 geometry_ref，真实几何需通过 bundle
+        # geometry resolver 按 ref 获取，不能在这里断言 WKT。
         hall = by_name["祠堂"]
-        assert hall.geometry_ref and hall.geometry_ref.startswith("POINT("), hall
+        assert hall.geometry_ref and hall.geometry_ref.startswith("bundle://feature/"), hall
         assert hall.source_bsms, hall
         assert not str(hall.geometry_ref or "").startswith("village_anchor"), hall
-        # 同坐标 = 同一实体：祠堂锚点带真实坐标键
-        assert hall.coordinate_key, hall
+        # 不透明 geometry_ref 下，以 bundle feature BSM 作为点实体身份；
+        # 坐标键是可选的派生索引，不作为跨边界定位凭据。
+        assert hall.feature_bsm or hall.source_bsms, hall
         # 拓扑消歧检查必须执行（fixture 的祠点距社前≥1km，无精确命中点时
         # refined=False，仍保留实体级最近祠点，不归并到村质心）
         assert any(
@@ -410,7 +386,7 @@ async def test_real_fixture_ground_anchors_and_render(sqlite_db, pipeline_reset)
         # 祠堂必须绑定到设施点（同坐标=同实体），不是合成 l1_fact/村质心
         assert not hall.entity_ref.startswith("l1_fact"), hall.entity_ref
         assert hall.entity_ref in ("", "poi:祠") or hall.entity_ref.startswith(("poi:", "http")), hall.entity_ref
-        assert hall.geometry_ref and hall.geometry_ref.startswith("POINT("), hall
+        assert hall.geometry_ref and hall.geometry_ref.startswith("bundle://feature/"), hall
 
         # L1 后接地推理注入 KG：村名写在聚落簇实体上
         from rdflib import RDF as _RDF

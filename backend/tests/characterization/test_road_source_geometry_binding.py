@@ -84,10 +84,23 @@ def test_explicit_road_source_ids_promote_independent_line_specs():
     assert spec.reference.filter["source_feature_ids"] == source_ids
 
 
-def test_road_count_binds_only_when_declared_count_matches_source_lines():
+def test_road_count_never_proves_source_collection_identity():
     features = _roads(3)
     target = _existing_road_target(
         requirements={"source_feature_count": 3},
+    )
+
+    assert bind_existing_road_source_features(target, features) == []
+    spec = map_intervention_to_spec(target, source_features={"road": features})
+
+    assert spec is not None
+    assert spec.type != "directional"
+
+
+def test_explicit_current_road_collection_binds_all_members_without_count_equality():
+    features = _roads(3)
+    target = _existing_road_target(
+        requirements={"source_collection_key": "current_road"},
     )
 
     ids = bind_existing_road_source_features(target, features)
@@ -97,6 +110,8 @@ def test_road_count_binds_only_when_declared_count_matches_source_lines():
     assert spec is not None
     assert spec.type == "directional"
     assert spec.reference.filter["source_feature_ids"] == ids
+    assert spec.source_collection_key == "current_road"
+    assert spec.source_binding_ref.startswith("source-binding:")
 
 
 def test_road_count_mismatch_stays_candidate_only_not_exact_line():

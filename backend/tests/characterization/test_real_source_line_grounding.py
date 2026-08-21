@@ -140,3 +140,36 @@ def test_real_source_road_id_survives_target_projection_before_ground() -> None:
     assert len(specs) == 1
     assert specs[0].type == "directional"
     assert specs[0].reference.filter["source_feature_ids"] == [source_id]
+    assert specs[0].source_binding_ref.startswith("source-binding:")
+    assert specs[0].source_collection_key == "current_road"
+    assert specs[0].source_snapshot_ref
+    assert specs[0].source_feature_digest
+
+    kg = KGBuilder.build("金田", bundle)
+    workspace = SpatialWorkspace.from_bundle(
+        bundle,
+        session_id="real-source-line-binding",
+    )
+    context = PlanningContext(
+        session_id="real-source-line-binding",
+        village_name="金田",
+        workspace=workspace,
+        kg=kg,
+        kg_session_ref="real-source-line-binding",
+        ports=PlanningPorts(spatial_query=KGSpatialQueryAdapter(kg)),
+    )
+    resolved = SpatialResolver(context).resolve_spec(specs[0])
+    assert resolved.source_binding_ref == specs[0].source_binding_ref
+    grounded = ground_aggregate(
+        specs,
+        context,
+        target_metadata={
+            "road-existing-real-source": {
+                "target_kind": "road",
+                "expected_output_kind": "line",
+            }
+        },
+    )
+    assert grounded.problem is not None
+    assert grounded.problem.candidate_domains[0].binding_ref == specs[0].source_binding_ref
+    assert grounded.candidates[0].geometry.source_binding_ref == specs[0].source_binding_ref

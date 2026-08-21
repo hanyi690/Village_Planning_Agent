@@ -87,7 +87,7 @@ def test_kg_multi_type_entities_are_registered():
     fac = by_name["祠堂"]
     assert fac.role == "facility"
     assert fac.source_bsms == ["bsm-100"]
-    assert fac.geometry_ref == "POINT(113.1 23.1)"
+    assert fac.geometry_ref == "bundle://feature/bsm-100"
     assert fac.confidence >= 0.6
     assert any("serves" in r for r in fac.relation_refs)
 
@@ -123,4 +123,4 @@ def test_kg_names_registered_via_planning_kg():
     fac = by_name["祠堂"]
     assert fac.role == "facility"
     assert fac.source_bsms == ["bsm-100"]
-    assert fac.geometry_ref == "POINT(113.1 23.1)"
+    assert fac.geometry_ref == "bundle://feature/bsm-100"

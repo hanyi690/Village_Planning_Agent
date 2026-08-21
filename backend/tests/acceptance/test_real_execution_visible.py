@@ -125,7 +125,7 @@ async def test_real_execution_visible(sqlite_db, pipeline_reset):
         project_bsms = list(village_anchor.source_bsms[:8] if village_anchor else [])
         intent = SpatialPlanningIntent(
             facilities=[FacilityTarget(target_id="t-hall", type="公共服务设施", action="new", location_hint="社前村")],
-            project_targets=[
+            site_area_targets=[
                 ProjectTarget(
                     project_id="p-1", name="高标准农田建设", category="农田水利",
                     materialization_role="project_footprint", action="new", area_ha=0.2,
@@ -169,7 +169,13 @@ async def test_real_execution_visible(sqlite_db, pipeline_reset):
         print(f"[阶段5] 渲染执行结果...", flush=True)
         from test_complete_execution_render import _render_execution  # noqa: F401
         render_parcels = list(bundle.polygons.get("landuse_current") or [])
-        _render_execution(render_parcels, changed_bsms, OUTPUT, boundary=getattr(bundle, "boundary", None))
+        _render_execution(
+            render_parcels,
+            changed_bsms,
+            OUTPUT,
+            boundary=getattr(bundle, "boundary", None),
+            planned_state=result.get("planned_state"),
+        )
         print(f"[完成] 真实执行 + 渲染产出: {OUTPUT}（总耗时 {time.time()-t0:.0f}s）", flush=True)
     finally:
         await teardown()

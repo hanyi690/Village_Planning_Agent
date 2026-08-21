@@ -22,7 +22,12 @@ def test_router_selects_only_required_sources_for_spatial_context():
     from app.evidence.retrieval.router import RetrieverKind, route_request
 
     routed = route_request(_request(request_type="spatial_lookup", query_purpose="context_injection", required_facts=[]))
-    assert routed == [RetrieverKind.REPORT, RetrieverKind.KG, RetrieverKind.BUNDLE]
+    assert routed == [
+        RetrieverKind.LOCAL_TEXT,
+        RetrieverKind.REPORT,
+        RetrieverKind.KG,
+        RetrieverKind.BUNDLE,
+    ]
 
     gap_routed = route_request(_request())
     assert RetrieverKind.ARTIFACT in gap_routed

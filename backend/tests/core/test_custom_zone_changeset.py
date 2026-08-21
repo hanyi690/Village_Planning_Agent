@@ -17,6 +17,7 @@ from app.contracts.workflow.execution_plan_contracts import (
     WorkerType,
 )
 from app.contracts.workflow.parse_contracts import ZoneTarget
+from app.contracts.spatial.candidate_geometry import CandidateGeometry
 from app.contracts.domain.selection_contracts import TargetAssignment
 from app.contracts.domain.custom_zone_contracts import (
     CustomZoneTarget,
@@ -332,6 +333,52 @@ def test_zone_worker_never_calls_legacy_allocator_or_builds_full_parcel_pool():
         feature["properties"]["bsm"]
         for feature in functional["data"]["features"]
     } == {"P001", "P002"}
+
+
+def test_zone_worker_defers_scope_candidate_without_expanding_to_parcel():
+    target = ZoneTarget(
+        target_id="scope-zone",
+        zone_id="scope-zone",
+        land_use="生态控制范围",
+        classification_decision=_resolved_decision("scope-zone"),
+    )
+    candidate = CandidateGeometry(
+        candidate_id="candidate:scope-zone",
+        target_id="scope-zone",
+        kind="polygon",
+        role="scope_geometry",
+        wkt="POLYGON ((0 0, 2 0, 2 2, 0 2, 0 0))",
+        source_ref="l1:fact:scope-zone",
+    )
+    assignment = TargetAssignment(
+        target_id="scope-zone",
+        target_type="zone",
+        status="placed",
+        target_binding={"candidate_id": candidate.candidate_id},
+    )
+    plan = ExecutionPlan(worker_tasks=[WorkerTask(
+        task_id="parcel_transformation:scope-zone",
+        worker_type=WorkerType.PARCEL_TRANSFORMATION,
+        target_id="scope-zone",
+        target_type="zone",
+        expected_output_kind="polygon",
+        assignment=assignment,
+        candidate_id=candidate.candidate_id,
+    )])
+
+    result = _zone_worker(ExecuteAgentState(
+        execution_plan=plan,
+        candidate_geometry_by_id={candidate.candidate_id: candidate},
+        parcel_by_bsm=_parcels(),
+    ))
+
+    assert result.parcel_changes == []
+    assert result.layers == []
+    assert result.task_results[0].status == "deferred"
+    assert any(
+        item["code"] == "candidate_geometry_not_executable"
+        for item in result.unresolved_items
+    )
 
 
 def test_invalid_custom_task_binding_is_returned_as_a_failed_task():

@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
+from shapely.geometry import box
+
 from app.domain.suitability.spatial_factors import SpatialFactorIndex
 
 
@@ -79,6 +81,19 @@ def test_no_overlap_keeps_candidate_feasible() -> None:
     index = SpatialFactorIndex(_context(), _policy())
 
     result = index.evaluate(_parcel(_PARCEL_COORDS))
+
+    assert result.hard_feasible is True
+    assert result.exclusion_codes == ()
+
+
+def test_clipped_candidate_is_evaluated_instead_of_full_source_parcel() -> None:
+    farmland = [_feature([[0, 0], [0, 5], [5, 5], [5, 0], [0, 0]])]
+    index = SpatialFactorIndex(_context(farmland=farmland), _policy())
+
+    result = index.evaluate(
+        _parcel(_PARCEL_COORDS),
+        geometry=box(6, 1, 9, 9).wkt,
+    )
 
     assert result.hard_feasible is True
     assert result.exclusion_codes == ()

@@ -229,6 +229,35 @@ def test_build_catalog_uses_only_authoritative_feature_and_stage1_segment_ids(
     assert catalog.routing_evidence.dem is not None
 
 
+def test_build_catalog_accepts_bundle_source_feature_identity_when_nested_in_raw(
+    tmp_path: Path,
+) -> None:
+    source_feature_id = "bundle://current-road/source-feature-001"
+    roads = _write_feature_collection(
+        tmp_path / "current_roads.geojson",
+        [
+            _line_feature(
+                "road-index-0",
+                [[116.0, 24.8], [116.01, 24.81]],
+                bsm="ROAD-BSM-001",
+                _raw={"source_feature_id": source_feature_id},
+            )
+        ],
+    )
+    edges = _write_feature_collection(
+        tmp_path / "road_edges.geojson",
+        [_line_feature("edge-0", [[116.0, 24.8], [116.01, 24.81]], edge_id="E000001")],
+        crs="EPSG:4527",
+    )
+
+    catalog = build_road_evidence_catalog(
+        road_edges_path=edges,
+        current_roads_path=roads,
+    )
+
+    assert catalog.current_road_feature_ids == {source_feature_id}
+
+
 def test_existing_road_materialization_selects_exact_stage1_segments_with_lineage(
     tmp_path: Path,
 ) -> None:

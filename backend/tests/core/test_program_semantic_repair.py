@@ -243,6 +243,24 @@ async def test_program_critic_partitions_mixed_classification_and_source_errors(
 
 
 @pytest.mark.asyncio
+async def test_program_critic_provider_is_disabled_without_explicit_enablement(
+    monkeypatch,
+) -> None:
+    monkeypatch.delenv("L3_SEMANTIC_REPAIR_LLM_ENABLED", raising=False)
+
+    result = await repair_planning_program(
+        PlanningProgram(interventions=[_road("road-disabled")]),
+    )
+
+    assert result.applied is False
+    assert result.attempts == 0
+    assert [issue.code for issue in result.program.program_issues] == [
+        "llm_semantic_repair_disabled"
+    ]
+    assert result.validation_errors
+
+
+@pytest.mark.asyncio
 async def test_program_critic_stops_immediately_on_provider_quota_exhaustion() -> None:
     class _QuotaLLM:
         def __init__(self) -> None:

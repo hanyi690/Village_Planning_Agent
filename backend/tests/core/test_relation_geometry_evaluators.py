@@ -3,6 +3,7 @@ from __future__ import annotations
 from app.contracts.planning.constraint_factor import ConstraintFactor
 from app.contracts.planning.relation_parameters import (
     AccessParameters,
+    AvoidConstraintParameters,
     CoLocateParameters,
     ConnectParameters,
     DistanceParameters,
@@ -86,6 +87,43 @@ def test_missing_geometry_or_crs_never_satisfies_distance() -> None:
         RelationEvaluationContext(scenario_id="scenario-1"),
     )[0]
     assert result.status == "not_evaluable"
+
+
+def test_avoid_constraint_buffers_linear_geometry_in_metric_crs() -> None:
+    subject = _feature(
+        "subject",
+        "subject",
+        "POLYGON ((0 0, 5 0, 5 5, 0 5, 0 0))",
+    )
+    road = _feature(
+        "road",
+        "road",
+        "LINESTRING (10 -5, 10 10)",
+    )
+    factor = ConstraintFactor(
+        factor_id="factor:avoid-road-buffer",
+        kind="avoid_constraint",
+        evaluator_key="avoid_constraint",
+        subject_ref="subject",
+        object_ref="road",
+        object_ref_kind="constraint",
+        hard=True,
+        parameters=AvoidConstraintParameters(
+            constraint_refs=["road:main"],
+            buffer_m=6,
+        ),
+    )
+
+    result = evaluate_relations(
+        [factor],
+        [subject, road],
+        RelationEvaluationContext(scenario_id="scenario-1", metric_crs="EPSG:3857"),
+    )[0]
+
+    assert result.status == "violated"
+    assert result.measurement is not None
+    assert result.measurement.method == "disjoint_buffered_constraint"
+    assert result.measurement.crs == "EPSG:3857"
 
 
 def test_connect_and_access_via_fail_closed_without_network_artifacts() -> None:

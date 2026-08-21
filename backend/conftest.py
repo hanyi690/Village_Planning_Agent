@@ -1,5 +1,6 @@
 """Backend pytest bootstrap when tests run from the backend directory."""
 
+import asyncio
 import os
 import shutil
 import sys
@@ -45,7 +46,27 @@ def pytest_configure(config):
 
 
 def pytest_sessionfinish(session, exitstatus):
-    """Remove only successful session directories created by this bootstrap."""
+    """Release process-owned async resources, then remove successful temp data."""
+
+    async def _shutdown_runtime_resources() -> None:
+        from app.database.engine import shutdown_database
+        from app.infrastructure.llm.instructor_client import close_cached_clients
+        from app.infrastructure.runtime.planning_runtime_service import (
+            PlanningRuntimeService,
+        )
+
+        await PlanningRuntimeService.shutdown()
+        await shutdown_database()
+        await close_cached_clients()
+
+    try:
+        asyncio.run(_shutdown_runtime_resources())
+    except Exception as exc:
+        # A failed cleanup must stay visible, but pytest still needs to finish
+        # its own reporting and exact-PID recovery remains available to the
+        # caller.  Individual cleanup functions are idempotent and already
+        # contain their own bounded close paths.
+        print(f"pytest session resource cleanup failed: {type(exc).__name__}: {exc}")
     run_dir = getattr(session.config, "_village_owned_basetemp", None)
     if exitstatus == 0 and isinstance(run_dir, Path) and run_dir.name.startswith(_PYTEST_TEMP_PREFIX):
         shutil.rmtree(run_dir, ignore_errors=True)

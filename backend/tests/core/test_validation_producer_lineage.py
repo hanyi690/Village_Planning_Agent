@@ -100,6 +100,19 @@ def test_hard_constraint_finding_carries_target_bsm_and_evidence_lineage() -> No
     assert compiled.directives[0].exclude_bsms == ["BSM-1"]
 
 
+def test_hard_constraints_ignore_preserved_split_remainder() -> None:
+    parcel = PlannedParcel(
+        bsm="BSM-REMAINDER",
+        derived_from_zone_target="road-1",
+        geometry="POLYGON ((0 0, 0 1, 1 1, 1 0, 0 0))",
+        operation="preserve",
+    )
+
+    checks = check_hard_constraints(PlannedState(parcels=[parcel]), _ConstraintIndex())
+
+    assert checks[0].passed is True
+
+
 def test_hard_constraint_without_target_lineage_remains_blocked() -> None:
     parcel = PlannedParcel(
         bsm="BSM-ORPHAN",

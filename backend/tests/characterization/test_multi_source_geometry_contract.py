@@ -21,7 +21,7 @@ def _context(*, port=None):
         workspace=SimpleNamespace(),
         kg=SimpleNamespace(),
         gazetteer=None,
-        evidence_index=None,
+        evidence_graph=None,
         constraint_index=None,
         ports=SimpleNamespace(spatial_query=port),
         current_parcels=lambda: [

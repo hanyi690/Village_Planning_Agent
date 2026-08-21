@@ -127,7 +127,7 @@ def test_evidence_index_coordinate_merge_same_entity():
     assert "祠堂" in by_name
 
 
-def test_ground_l1_anchors_no_unresolved_left():
+def test_ground_l1_anchors_exposes_unresolved_without_silent_candidate_choice():
     import asyncio
 
     from app.contracts.domain.l1_contracts import L1LocationFact
@@ -155,7 +155,10 @@ def test_ground_l1_anchors_no_unresolved_left():
     anchors = asyncio.run(
         ground_l1_anchors(ctx, "s-core", llm=None, bump=False)
     )
-    assert len(anchors) == len(facts), anchors
+    unresolved = list(getattr(ctx, "grounding_unresolved", []) or [])
+    assert len(anchors) + len(unresolved) == len(facts), (anchors, unresolved)
+    assert unresolved
+    assert all(item.get("trace") for item in unresolved)
     for anchor in anchors:
         # 不允许留下不可解析：每个锚点要么有 BSM，要么有几何/实体引用
         assert anchor.source_bsms or anchor.geometry_ref or anchor.entity_ref, anchor
@@ -239,7 +242,12 @@ def test_topology_refine_facility_picks_village_serving_facility():
                         canonical_name="祠堂", source_bsms=["bsm-b"],
                         geometry_ref="POINT(113.5 23.5)", relation_refs=[], confidence=0.9),
     ]
-    context = SimpleNamespace(gazetteer=gazetteer, kg=kg, evidence_index=SimpleNamespace(entries=entries))
+    from app.evidence.retrieval.evidence_graph import EvidenceGraph
+
+    context = SimpleNamespace(gazetteer=gazetteer, kg=kg)
+    context.evidence_graph = EvidenceGraph(
+        context, index=SimpleNamespace(entries=entries)
+    )
     fact = L1LocationFact(
         mention="祠堂", normalized_name="祠堂", role="facility", aliases=["祠堂"],
         spatial_hint="社前村", source_span="现状设施 | 祠堂 | 社前村",
@@ -294,8 +302,11 @@ def test_resolver_llm_fallback_picks_ambiguous_candidate(monkeypatch):
         gazetteer=None, location_facts=[], kg=None,
         workspace=SimpleNamespace(points={}, polygons={"landuse_current": parcels}),
         current_parcels=lambda: parcels,
-        evidence_index=_StubIndex(),
+        evidence_graph=None,
     )
+    from app.evidence.retrieval.evidence_graph import EvidenceGraph
+
+    ctx.evidence_graph = EvidenceGraph(ctx, index=_StubIndex())
     ctx.ports = SimpleNamespace(spatial_query=None)
 
     class _FakeLLM:
@@ -308,6 +319,7 @@ def test_resolver_llm_fallback_picks_ambiguous_candidate(monkeypatch):
 
     import app.infrastructure.llm.factory as factory_mod
 
+    monkeypatch.setenv("GROUND_LLM_ENABLED", "true")
     monkeypatch.setattr(factory_mod, "create_flash_llm", lambda **kw: _FakeLLM())
 
     resolver = SpatialResolver(ctx)

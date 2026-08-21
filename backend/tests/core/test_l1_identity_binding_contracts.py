@@ -117,9 +117,15 @@ def test_binding_store_persists_resolution_without_repeating_llm(tmp_path):
         role="facility",
         source_report_ref="report-1",
     )
+    from app.evidence.retrieval.evidence_graph import EvidenceGraph
+
     context = SimpleNamespace(
         location_facts=[fact],
-        evidence_index=SimpleNamespace(resolve_mention=lambda *args, **kwargs: result),
+        evidence_graph=None,
+    )
+    context.evidence_graph = EvidenceGraph(
+        context,
+        index=SimpleNamespace(resolve_mention=lambda *args, **kwargs: result),
     )
     bindings = BindingStore.from_context(context)
     assert len(bindings) == 1

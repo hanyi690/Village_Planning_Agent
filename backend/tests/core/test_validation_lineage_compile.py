@@ -100,6 +100,34 @@ def test_area_conservation_lineage_compiles_to_rebuild_geometry() -> None:
     assert compiled.directives[0].directive_type == RepairDirectiveType.REBUILD_GEOMETRY
 
 
+def test_area_conservation_counts_split_remainder_lineage_once() -> None:
+    from app.contracts.spatial.parcel_change_contracts import ParcelChange, ParcelChangeSet
+
+    before = "POLYGON ((0 0, 0 10, 10 10, 10 0, 0 0))"
+    changeset = ParcelChangeSet(
+        changes=[
+            ParcelChange(
+                bsm="P1:road",
+                action="split",
+                derived_from_bsms=["P1"],
+                before_geometry_wkt=before,
+                after_geometry_wkt="POLYGON ((0 0, 0 10, 5 10, 5 0, 0 0))",
+            ),
+            ParcelChange(
+                bsm="P1:remainder",
+                action="preserve",
+                derived_from_bsms=["P1"],
+                before_geometry_wkt=before,
+                after_geometry_wkt="POLYGON ((5 0, 5 10, 10 10, 10 0, 5 0))",
+            ),
+        ]
+    )
+
+    checks = check_area_conservation(changeset)
+
+    assert checks[0].passed is True
+
+
 def test_topology_lineage_compiles_to_rebuild_geometry() -> None:
     state = PlannedState(
         parcels=[

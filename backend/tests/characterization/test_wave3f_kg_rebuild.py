@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import sys
 from types import SimpleNamespace
 
 from rdflib import Literal
@@ -12,7 +13,10 @@ from app.data.model.spatial_types import (
 )
 from app.infrastructure.kg.builder import KGBuilder
 from app.infrastructure.kg.manager import compute_layer1_cache_key, get_kg_manager
-from app.infrastructure.kg.session_kg import _kg_layer1_parent
+from app.infrastructure.kg.session_kg import (
+    _isolated_worker_is_spawnable,
+    _kg_layer1_parent,
+)
 from app.infrastructure.kg.ontology import GeoPredicates, PLN
 from app.infrastructure.kg.queries.spatial_ref import _resolve_exact_reference_geometries
 from app.contracts.spatial.spatial_reference_contracts import RefObject, SpatialReferenceSpec
@@ -167,6 +171,36 @@ def test_manager_rebuilds_when_canonical_source_digest_changes() -> None:
         manager.cache_enabled = previous
 
 
+def test_remove_session_releases_unreferenced_layer1_cache() -> None:
+    manager = get_kg_manager()
+    previous = manager.cache_enabled
+    first_session = "wave3f-release-first"
+    second_session = "wave3f-release-second"
+    bundle = _bundle(road_x=2.25)
+    cache_key = str(
+        compute_layer1_cache_key(
+            bundle.village_name,
+            bundle.polygons.get("landuse_current"),
+            bundle=bundle,
+        )
+    )
+    try:
+        manager.cache_enabled = True
+        kg, _ = manager.get_or_build_layer1(bundle.village_name, bundle=bundle)
+        manager.register_session(first_session, kg, layer1_cache_key=cache_key)
+        manager.register_session(second_session, kg.clone_static_layer(), layer1_cache_key=cache_key)
+
+        assert cache_key in manager._layer1_cache
+        manager.remove_session(first_session)
+        assert cache_key in manager._layer1_cache
+        manager.remove_session(second_session)
+        assert cache_key not in manager._layer1_cache
+    finally:
+        manager.remove_session(first_session)
+        manager.remove_session(second_session)
+        manager.cache_enabled = previous
+
+
 def test_bundle_without_parcels_still_has_deterministic_source_key() -> None:
     bundle = VillageBundle(village_name="point-only")
     bundle.add(
@@ -179,3 +213,8 @@ def test_bundle_without_parcels_still_has_deterministic_source_key() -> None:
     )
     key = compute_layer1_cache_key("point-only", [], bundle=bundle)
     assert key is not None
+
+
+def test_spawn_guard_rejects_stdin_launcher(monkeypatch) -> None:
+    monkeypatch.setattr(sys.modules["__main__"], "__file__", "<stdin>", raising=False)
+    assert _isolated_worker_is_spawnable() is False

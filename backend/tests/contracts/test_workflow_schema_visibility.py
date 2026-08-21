@@ -49,4 +49,5 @@ def test_workflow_output_matches_projection_shape() -> None:
         "retry",
         "interrupt_ref",
         "terminal_ref",
+        "validation_feedback",
     }

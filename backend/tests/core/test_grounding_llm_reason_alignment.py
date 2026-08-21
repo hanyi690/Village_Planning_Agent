@@ -37,11 +37,13 @@ class _FakeIndex:
     def __init__(self, result):
         self._result = result
 
-    def resolve_mention(self, mention, hints=""):
+    def resolve_mention(self, mention, role="unknown", hints=""):
         return self._result
 
 
 def _context(index):
+    from app.evidence.retrieval.evidence_graph import EvidenceGraph
+
     kg = SimpleNamespace(g=None)
     ctx = SimpleNamespace(
         session_id="s-llm-reason",
@@ -55,8 +57,9 @@ def _context(index):
             polygons={"landuse_current": []},
         ),
         current_parcels=lambda: [_parcel("bsm-1"), _parcel("bsm-2")],
-        evidence_index=index,
+        evidence_graph=None,
     )
+    ctx.evidence_graph = EvidenceGraph(ctx, index=index)
     return ctx
 
 
@@ -71,6 +74,15 @@ def _spec(mention):
             kind="place_name", filter={"label_contains": mention}
         ),
     )
+
+
+def _typed_llm(candidate_index):
+    def with_structured_output(response_model, **_kwargs):
+        return SimpleNamespace(
+            invoke=lambda _prompt: response_model(candidate_index=candidate_index)
+        )
+
+    return SimpleNamespace(with_structured_output=with_structured_output)
 
 
 def test_llm_failure_keeps_unresolved(monkeypatch):
@@ -95,12 +107,11 @@ def test_llm_failure_keeps_unresolved(monkeypatch):
 def test_llm_pick_success_binds_picked_bsm(monkeypatch):
     from app.infrastructure.llm import factory as llm_factory
 
+    monkeypatch.setenv("GROUND_LLM_ENABLED", "true")
     monkeypatch.setattr(
         llm_factory,
         "create_flash_llm",
-        lambda *a, **k: SimpleNamespace(
-            invoke=lambda prompt: SimpleNamespace(content="2")
-        ),
+        lambda *a, **k: _typed_llm(2),
     )
     index = _FakeIndex(
         SimpleNamespace(
@@ -118,15 +129,58 @@ def test_llm_pick_success_binds_picked_bsm(monkeypatch):
     assert result.provenance["picked"] == "乙村"
 
 
+def test_llm_ambiguous_pick_preserves_selected_bundle_feature_geometry(monkeypatch):
+    from app.spatial.grounding.resolver import SpatialResolver
+
+    feature_bsm = "00000000000000000001"
+    parcel_bsm = "00000000000000000002"
+    candidate = _candidate("下村吴德芳", parcel_bsm, "http://e/hazard")
+    candidate.role = "hazard"
+    candidate.feature_bsm = feature_bsm
+    candidate.geometry_ref = f"bundle://feature/{feature_bsm}"
+    candidate.source_feature_id = "source:hazard:1"
+    candidate.related_parcel_bsms = [parcel_bsm]
+    candidate.l1_fact_refs = ["l1:hazard:1"]
+    context = _context(
+        _FakeIndex(
+            SimpleNamespace(
+                status="ambiguous",
+                candidates=[candidate],
+            )
+        )
+    )
+    context.workspace.points = {
+        "facilities_current": [
+            SimpleNamespace(
+                bsm=feature_bsm,
+                geometry={"type": "Point", "coordinates": [116.0, 24.8]},
+            )
+        ],
+        "annotations_current": [],
+    }
+    context.current_parcels = lambda: [_parcel(parcel_bsm)]
+    resolver = SpatialResolver(context)
+    monkeypatch.setattr(resolver, "_llm_pick_candidate", lambda *_args: candidate)
+
+    result = resolver._llm_resolve_ambiguous(_spec("下村吴德芳"), "下村吴德芳")
+
+    assert result is not None
+    assert result.final_bsms == [parcel_bsm]
+    assert result.feature_bsms == [feature_bsm]
+    assert result.reference_geometries
+    assert result.reference_geometries[0].feature_bsms == [feature_bsm]
+    assert result.reference_geometry_wkt.startswith("POINT")
+    assert result.provenance["selected_feature_bsm"] == feature_bsm
+
+
 def test_ambiguous_with_bsms_enters_llm_discrimination(monkeypatch):
     from app.infrastructure.llm import factory as llm_factory
 
+    monkeypatch.setenv("GROUND_LLM_ENABLED", "true")
     monkeypatch.setattr(
         llm_factory,
         "create_flash_llm",
-        lambda *a, **k: SimpleNamespace(
-            invoke=lambda prompt: SimpleNamespace(content="1")
-        ),
+        lambda *a, **k: _typed_llm(1),
     )
     index = _FakeIndex(
         SimpleNamespace(
@@ -158,14 +212,65 @@ def test_candidate_line_carries_geometry_and_topology():
             ],
         ),
     )
-    assert "POINT(1 1)" in line
+    assert "bundle://feature/bsm-1" in line
     assert "serves" in line
     assert "nearby" in line
     assert "拓扑" in line
+    assert "别名" in line
+    assert "来源层" in line
+    assert "L1事实" in line
+
+
+@pytest.mark.asyncio
+async def test_async_candidate_selection_prompt_carries_full_evidence(monkeypatch):
+    from app.domain.ground import anchors
+    from app.spatial.grounding.call_budget import new_ground_llm_budget
+
+    prompts = []
+
+    class _Structured:
+        def invoke(self, prompt):
+            prompts.append(prompt)
+            return anchors._CandidateChoice(candidate_index=1)
+
+    class _LLM:
+        def with_structured_output(self, _model):
+            return _Structured()
+
+    candidate = _candidate("下村吴德芳", "00000000000000000001", "http://e/hazard")
+    candidate.role = "hazard"
+    candidate.aliases = ["金田村下村组吴德芳", "下村组"]
+    candidate.source_layer = "geological_hazard_point"
+    candidate.feature_bsm = "00000000000000000001"
+    candidate.related_parcel_bsms = ["00000000000000000002"]
+    candidate.l1_fact_refs = ["l1:hazard:1"]
+    candidate.evidence_refs = ["bundle:geological_hazard_point"]
+
+    selected = await anchors._llm_reason_candidate(
+        _LLM(),
+        "金田村下村组吴德芳地质灾害点",
+        "hazard",
+        "金田村",
+        [candidate],
+        budget=new_ground_llm_budget(),
+    )
+
+    assert selected is candidate
+    assert prompts
+    prompt = prompts[0]
+    for value in (
+        "金田村下村组吴德芳",
+        "geological_hazard_point",
+        "feature_BSM=00000000000000000001",
+        "关联地块=00000000000000000002",
+        "l1:hazard:1",
+        "bundle:geological_hazard_point",
+    ):
+        assert value in prompt
 
 
 def test_sync_resolver_queue_wait_is_bounded(monkeypatch):
-    """The compatibility resolver must not wait forever behind its gate."""
+    """The synchronous resolver must not wait forever behind its gate."""
     from app.infrastructure.llm import factory as llm_factory
     from app.spatial.grounding.call_budget import ground_llm_sync_semaphore
 
@@ -175,8 +280,10 @@ def test_sync_resolver_queue_wait_is_bounded(monkeypatch):
         llm_factory,
         "create_flash_llm",
         lambda *a, **k: SimpleNamespace(
-            invoke=lambda _prompt: (_ for _ in ()).throw(
-                AssertionError("provider must not start while the queue is held")
+            with_structured_output=lambda response_model, **_kwargs: SimpleNamespace(
+                invoke=lambda _prompt: (_ for _ in ()).throw(
+                    AssertionError("provider must not start while the queue is held")
+                )
             )
         ),
     )

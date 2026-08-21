@@ -1,7 +1,7 @@
 from app.contracts.planning.constraint_factor import ConstraintFactor, RelationSatisfaction
 from app.contracts.spatial.candidate_geometry import CandidateGeometry
 from app.contracts.spatial.grounded_problem import GroundedCandidateDomain, GroundedPlanningProblem
-from app.contracts.planning.scenario import PlanningScenario
+from app.contracts.planning.scenario import PlanningScenario, ScenarioTargetSelection
 from app.domain.allocation.network_subproblem import derive_network_cuts
 
 
@@ -29,7 +29,18 @@ def test_network_failure_produces_stable_replacement_cut():
         scenario_id="scenario-cut",
         baseline_ref="baseline:1",
         problem_fingerprint=problem.fingerprint,
-        selected_candidate_ids={"road-a": "road-candidate", "facility-b": "facility-candidate"},
+        target_selections=[
+            ScenarioTargetSelection(
+                target_id="road-a",
+                selection_mode="choose_one",
+                candidate_ids=["road-candidate"],
+            ),
+            ScenarioTargetSelection(
+                target_id="facility-b",
+                selection_mode="choose_one",
+                candidate_ids=["facility-candidate"],
+            ),
+        ],
         relation_satisfactions=[RelationSatisfaction(
             relation_id="connect-1",
             scenario_id="scenario-cut",

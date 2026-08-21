@@ -29,6 +29,8 @@ def test_v1_routes_are_in_openapi() -> None:
     assert '/api/v1/sessions/{session_id}/events' in paths
     assert '/api/v1/sessions/{session_id}/events/sync' in paths
     assert '/api/v1/sessions/{session_id}/human-review' in paths
+    assert '/api/v1/sessions/{session_id}/evidence/query' in paths
+    assert '/api/v1/projects' in paths
 
 
 def test_public_dtos_forbid_unknown_fields() -> None:

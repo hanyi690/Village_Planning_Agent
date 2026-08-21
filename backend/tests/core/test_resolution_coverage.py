@@ -10,7 +10,7 @@ def _fact(name: str, role: str = "village"):
 
 
 def test_empty_context_yields_zero_total():
-    cov = resolution_coverage(SimpleNamespace(evidence_index=None, location_facts=[]))
+    cov = resolution_coverage(SimpleNamespace(evidence_graph=None, location_facts=[]))
     assert cov.total == 0
     assert cov.rate == 0.0
     assert cov.extent_rate == 0.0
@@ -18,7 +18,7 @@ def test_empty_context_yields_zero_total():
 
 def test_unresolved_facts_tally_unresolved():
     cov = resolution_coverage(SimpleNamespace(
-        evidence_index=None,
+        evidence_graph=None,
         location_facts=[_fact("甲村"), _fact("乙村")],
     ))
     assert cov.total == 2
@@ -27,6 +27,8 @@ def test_unresolved_facts_tally_unresolved():
 
 
 def test_resolved_entity_extent_and_geometry_classification():
+    from app.evidence.retrieval.evidence_graph import EvidenceGraph
+
     class _Index:
         def __init__(self, results):
             self.results = results
@@ -55,18 +57,24 @@ def test_resolved_entity_extent_and_geometry_classification():
     unresolved = SimpleNamespace(status="unresolved", candidates=[])
 
     context = SimpleNamespace(
-        evidence_index=_Index({
-            "甲村": resolved_entity,
-            "乙村": resolved_extent,
-            "丙路": geometry_only,
-            "丁地": unresolved,
-        }),
+        evidence_graph=None,
         location_facts=[
             _fact("甲村"),
             _fact("乙村", "facility"),
             _fact("丙路", "road"),
             _fact("丁地"),
         ],
+    )
+    context.evidence_graph = EvidenceGraph(
+        context,
+        index=SimpleNamespace(
+            resolve_mention=lambda name, role="unknown", hints="": {
+                "甲村": resolved_entity,
+                "乙村": resolved_extent,
+                "丙路": geometry_only,
+                "丁地": unresolved,
+            }[name]
+        ),
     )
     cov = resolution_coverage(context)
     assert cov.total == 4
@@ -81,6 +89,8 @@ def test_resolved_entity_extent_and_geometry_classification():
 
 
 def test_ambiguous_result_counts_unresolved():
+    from app.evidence.retrieval.evidence_graph import EvidenceGraph
+
     ambiguous = SimpleNamespace(
         status="ambiguous",
         candidates=[SimpleNamespace(
@@ -88,8 +98,11 @@ def test_ambiguous_result_counts_unresolved():
         )],
     )
     cov = resolution_coverage(SimpleNamespace(
-        evidence_index=SimpleNamespace(
-            resolve_mention=lambda name, role="unknown": ambiguous
+        evidence_graph=EvidenceGraph(
+            SimpleNamespace(),
+            index=SimpleNamespace(
+                resolve_mention=lambda name, role="unknown": ambiguous
+            ),
         ),
         location_facts=[_fact("甲村")],
     ))

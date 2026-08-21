@@ -44,6 +44,22 @@ def test_grounding_fallback_budget_stops_serial_llm_calls(monkeypatch):
     assert anchors._reserve_ground_llm_call(budget) is None
 
 
+def test_grounding_budget_is_reused_within_scope_and_replaced_between_requests():
+    from types import SimpleNamespace
+
+    from app.spatial.grounding.call_budget import get_ground_llm_budget
+
+    owner = SimpleNamespace(session_id="budget-session")
+    first = get_ground_llm_budget(owner, scope_key="run:one")
+    same = get_ground_llm_budget(owner, scope_key="run:one")
+    next_request = get_ground_llm_budget(owner, scope_key="run:two")
+
+    assert same is first
+    assert next_request is not first
+    assert first["scope_key"] == "run:one"
+    assert next_request["scope_key"] == "run:two"
+
+
 def test_dimension_send_always_has_official_run_timeout(monkeypatch):
     from app.workflow.layers.layer_router import _send_worker
 
@@ -79,13 +95,17 @@ async def test_grounding_fallbacks_are_bounded_concurrent(monkeypatch):
     peak = 0
 
     class FakeLLM:
-        async def ainvoke(self, _prompt):
-            nonlocal active, peak
-            active += 1
-            peak = max(peak, active)
-            await asyncio.sleep(0.02)
-            active -= 1
-            return SimpleNamespace(content="1")
+        def with_structured_output(self, response_model, **_kwargs):
+            class _Structured:
+                async def ainvoke(self, _prompt):
+                    nonlocal active, peak
+                    active += 1
+                    peak = max(peak, active)
+                    await asyncio.sleep(0.02)
+                    active -= 1
+                    return response_model(candidate_index=1)
+
+            return _Structured()
 
     results = await asyncio.gather(*[
         anchors._llm_reason_candidate(

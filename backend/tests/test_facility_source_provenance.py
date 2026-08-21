@@ -19,8 +19,20 @@ def _state() -> tuple[ExecuteAgentState, str, str]:
         status="placed",
         expected_output_kind="point",
         anchor_point=(9.0, 9.0),
+        feature_bsm="44142621100000000123",
+        source_feature_id="bundle:annotations_current:facility-001",
+        evidence_refs=["l1:fact:facility-001"],
+        l1_snapshot_ref="artifact://l1/snapshot-1",
+        bundle_snapshot_digest="bundle-digest-1",
         target_binding={"candidate_id": candidate_id, **target.model_dump(mode="json")},
     )
+    assignment.target_binding.update({
+        "feature_bsms": ["44142621100000000123"],
+        "source_feature_ids": ["bundle:annotations_current:facility-001"],
+        "evidence_refs": ["l1:fact:facility-001"],
+        "l1_snapshot_ref": "artifact://l1/snapshot-1",
+        "bundle_snapshot_digest": "bundle-digest-1",
+    })
     task = WorkerTask(
         task_id=f"facility_placement:{target_id}",
         worker_type=WorkerType.FACILITY_PLACEMENT,
@@ -42,6 +54,12 @@ def _state() -> tuple[ExecuteAgentState, str, str]:
         source_ref="kg:facility:health:001",
         source_refs=["bundle:facility:health:001"],
         source_bsms=["P-001"],
+        feature_bsms=["44142621100000000123"],
+        source_feature_ids=["bundle:annotations_current:facility-001"],
+        entity_refs=["kg:entity:facility-001"],
+        evidence_refs=["l1:fact:facility-001"],
+        l1_snapshot_ref="artifact://l1/snapshot-1",
+        bundle_snapshot_digest="bundle-digest-1",
         hard_constraint_status="passed",
     )
     return (
@@ -71,6 +89,10 @@ def test_facility_worker_uses_selected_point_and_emits_candidate_provenance():
         "kg:facility:health:001",
     ]
     assert properties["source_bsms"] == ["P-001"]
+    assert properties["feature_bsms"] == ["44142621100000000123"]
+    assert properties["source_feature_ids"] == ["bundle:annotations_current:facility-001"]
+    assert properties["entity_refs"] == ["kg:entity:facility-001"]
+    assert properties["evidence_refs"] == ["l1:fact:facility-001"]
     assert properties["geometry_ref"] == "kg:facility:health:001"
     assert result.scenario_features[0].source_refs == properties["source_refs"]
     assert result.scenario_features[0].candidate_id == candidate_id
@@ -87,6 +109,12 @@ def test_planned_facility_and_render_layer_keep_candidate_provenance():
     facility = planned.facilities[0]
     assert facility.candidate_id == candidate_id
     assert facility.source_bsms == ["P-001"]
+    assert facility.feature_bsms == ["44142621100000000123"]
+    assert facility.source_feature_ids == ["bundle:annotations_current:facility-001"]
+    assert facility.entity_refs == ["kg:entity:facility-001"]
+    assert facility.evidence_refs == ["l1:fact:facility-001"]
+    assert facility.l1_snapshot_ref == "artifact://l1/snapshot-1"
+    assert facility.bundle_snapshot_digest == "bundle-digest-1"
     assert facility.source_refs == [
         "bundle:facility:health:001",
         "kg:facility:health:001",
@@ -100,5 +128,7 @@ def test_planned_facility_and_render_layer_keep_candidate_provenance():
     rendered = layer["data"]["features"][0]["properties"]
     assert rendered["candidate_id"] == candidate_id
     assert rendered["source_bsms"] == ["P-001"]
+    assert rendered["feature_bsms"] == ["44142621100000000123"]
+    assert rendered["source_feature_ids"] == ["bundle:annotations_current:facility-001"]
     assert rendered["source_refs"] == facility.source_refs
     assert rendered["geometry_ref"] == "kg:facility:health:001"

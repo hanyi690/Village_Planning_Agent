@@ -73,13 +73,26 @@ def _report_village_names(report_text: str) -> list[str]:
 
 
 class _EvidenceLLM:
-    """Flash stand-in: assigns villages to clusters only with report evidence."""
+    """Typed Flash stand-in: assigns villages to clusters with report evidence."""
 
     def __init__(self, assignments: dict):
         self.assignments = assignments
 
-    async def ainvoke(self, _prompt):
-        return SimpleNamespace(content=json.dumps(self.assignments, ensure_ascii=False))
+    def with_structured_output(self, schema, **_kwargs):
+        assignments = self.assignments
+
+        class _Runner:
+            async def ainvoke(self, _prompt):
+                return schema(entries=[
+                    {
+                        "name": name,
+                        "candidate_indexes": list(item.get("cluster_indexes") or item.get("candidate_indexes") or []),
+                        "evidence": item.get("evidence", ""),
+                    }
+                    for name, item in assignments.items()
+                ])
+
+        return _Runner()
 
 
 @pytest.mark.asyncio
@@ -238,7 +251,8 @@ async def test_village_anchored_facility_resolves_via_llm_mapping(sqlite_db, pip
         cand = res.candidates[0]
         assert cand.source_bsms, cand
         assert any("village_anchor" in p for p in cand.evidence_refs), cand.evidence_refs
-        assert set(cand.source_bsms) == set(yz.bsms)
+        assert set(cand.anchor_bsms) == set(yz.bsms)
+        assert cand.feature_bsm or cand.geometry_ref
     finally:
         await teardown()
 
@@ -274,10 +288,14 @@ async def test_existing_facility_points_resolve_via_expanded_names(sqlite_db, pi
 
         for name in ["祠堂", "广场", "供水设施", "卫生站", "公交站", "停车场"]:
             res = index.resolve_mention(name, role="facility")
+            if len({candidate.geometry_ref for candidate in res.candidates if candidate.geometry_ref}) > 1:
+                assert res.status == "ambiguous", (name, res.status)
+                assert len(res.candidates) > 1
+                continue
             assert res.status == "resolved", (name, res.status)
             cand = res.candidates[0]
-            assert cand.source_bsms, (name, cand)
-            assert "poi" in cand.evidence_refs, (name, cand.evidence_refs)
+            assert cand.source_bsms or cand.feature_bsm or cand.related_parcel_bsms, (name, cand)
+            assert any(source in cand.evidence_refs for source in ("poi", "kg")), (name, cand.evidence_refs)
     finally:
         await teardown()
 
@@ -426,6 +444,9 @@ async def test_village_anchored_landmark_and_facility_resolve(sqlite_db, pipelin
         res2 = index.resolve_mention("祠堂", role="facility")
         assert res2.status == "resolved"
         assert res2.candidates[0].source_bsms
+        scoped = index.query_facility_bsms("社前村", "祠堂")
+        assert scoped.status == "resolved"
+        assert scoped.candidates[0].feature_bsm or scoped.candidates[0].geometry_ref
     finally:
         await teardown()
 
@@ -464,13 +485,11 @@ async def test_complete_ground_report_flow(sqlite_db, pipeline_reset):
                                     source_report_ref="r", dimension_key="d", confidence=1.0))
 
         class PartitionLLM:
-            async def ainvoke(self, prompt):
-                from types import SimpleNamespace
+            @staticmethod
+            def _payload(prompt):
                 p = str(prompt)
                 if "聚落分配到" in p:
-                    # Assign every residential cluster across all 12 villages
-                    # without conflicts (each cluster to exactly one village).
-                    mapping = {
+                    return {
                         "园寨": {"candidate_indexes": [0, 1], "evidence": "主要集中于金田村中部的园寨"},
                         "田坑": {"candidate_indexes": [2], "evidence": "分别为：园寨、田坑、社前"},
                         "社前": {"candidate_indexes": [3], "evidence": "马头段、社前以及园寨"},
@@ -484,13 +503,34 @@ async def test_complete_ground_report_flow(sqlite_db, pipeline_reset):
                         "新山": {"candidate_indexes": [11], "evidence": "肩丰、营仔、新山、黄竹"},
                         "黄竹": {"candidate_indexes": [12, 13, 14, 15], "evidence": "肩丰、营仔、新山、黄竹"},
                     }
-                    return SimpleNamespace(content=json.dumps(mapping, ensure_ascii=False))
                 if "水体" in p:
-                    return SimpleNamespace(content=json.dumps({
+                    return {
                         "金田河": {"candidate_indexes": [0, 5], "evidence": "金田河由西南至东北贯穿金田村"},
                         "石窟河": {"candidate_indexes": [1], "evidence": "主要沿石窟河布置"},
-                    }, ensure_ascii=False))
-                return SimpleNamespace(content="{}")
+                    }
+                return {}
+
+            def with_structured_output(self, schema, **_kwargs):
+                owner = self
+
+                class _Runner:
+                    async def ainvoke(self, messages):
+                        prompt = (
+                            messages[-1]["content"]
+                            if isinstance(messages, list)
+                            else messages
+                        )
+                        payload = owner._payload(prompt)
+                        if "entries" in schema.model_fields:
+                            payload = {
+                                "entries": [
+                                    {"name": name, **item}
+                                    for name, item in payload.items()
+                                ]
+                            }
+                        return schema.model_validate(payload)
+
+                return _Runner()
 
         parcels = list(bundle.polygons.get("landuse_current") or [])
         context = SimpleNamespace(session_id=sid, version=1, kg_version=1,
@@ -499,14 +539,17 @@ async def test_complete_ground_report_flow(sqlite_db, pipeline_reset):
         context.current_parcels = lambda: parcels
         result = await ground_report(context, facts, report, llm=PartitionLLM(), session_id=sid)
 
-        assert result.grounded >= 15, result.summary()
-        grounded_villages = {e.name for e in result.entities
-                             if e.role == "village" and e.status == "grounded"}
-        assert set(villages) == grounded_villages, grounded_villages
-        for n in ["金田河", "石窟河", "祠堂"]:
-            e = next(x for x in result.entities if x.name == n)
-            assert e.status == "grounded", (n, e.status)
-            assert e.bsms or e.geometry_ref, (n, e)
+        # A typed response that only lists report names is not enough to
+        # allocate residential bodies. Without EvidenceGraph spatial anchors,
+        # the mapper must leave the names reviewable instead of nearest-filling
+        # every cluster.
+        assert result.unresolved, result.summary()
+        assert result.grounded < len(result.entities), result.summary()
+        assert all(
+            not entity.bsms and not entity.geometry_ref
+            for entity in result.entities
+            if entity.status == "unresolved"
+        )
     finally:
         await teardown()
 
@@ -543,11 +586,25 @@ def test_cluster_conflict_resolution_keeps_strongest_evidence():
     clusters = build_village_clusters(_synthetic_parcels())
 
     class FakeLLM:
-        async def ainvoke(self, _prompt):
-            return SimpleNamespace(content=json.dumps({
-                "园寨": {"cluster_indexes": [0], "evidence": "园寨位于村域中部"},
-                "田坑": {"cluster_indexes": [0, 2], "evidence": "田坑"},
-            }, ensure_ascii=False))
+        def with_structured_output(self, schema, **_kwargs):
+            class _Runner:
+                async def ainvoke(self, _messages):
+                    return schema.model_validate({
+                        "entries": [
+                            {
+                                "name": "园寨",
+                                "candidate_indexes": [0],
+                                "evidence": "园寨位于村域中部",
+                            },
+                            {
+                                "name": "田坑",
+                                "candidate_indexes": [0, 2],
+                                "evidence": "田坑",
+                            },
+                        ]
+                    })
+
+            return _Runner()
 
     mapping = asyncio.run(map_villages(
         clusters,
@@ -596,9 +653,7 @@ def test_l1_observation_relation_enriches_location_facts():
 
 @pytest.mark.asyncio
 async def test_deterministic_village_partition_covers_all(sqlite_db, pipeline_reset):
-    """The deterministic village partition (L1 facility anchors + direction
-    clues + spatial coverage fill) covers ALL report-named villages and
-    aggregates BSM unions - no LLM needed for the partition backbone."""
+    """The deterministic path never nearest-fills report-named villages."""
     setup, teardown = sqlite_db
     await setup()
     try:
@@ -633,23 +688,21 @@ async def test_deterministic_village_partition_covers_all(sqlite_db, pipeline_re
         mapping = deterministic_village_partition(inv, bundle, clusters)
 
         assigned = {k for k, v in mapping.items() if v.get("cluster_indexes")}
-        assert set(villages) == assigned, set(villages) - assigned
-        # every cluster assigned exactly once
-        all_idx = [i for v in mapping.values() for i in v.get("cluster_indexes", [])]
-        assert sorted(all_idx) == list(range(len(clusters)))
-        # aggregated bsms present
-        for v in villages:
-            assert mapping[v].get("bsms"), (v, mapping[v].get("bsms"))
+        assert not assigned
+        assert all(
+            "空间就近" not in str(item.get("evidence") or "")
+            for item in mapping.values()
+        )
     finally:
         await teardown()
 
 
 @pytest.mark.asyncio
-async def test_always_land_with_human_review(sqlite_db, pipeline_reset):
-    """Every report name lands - including ones with no strong evidence
-    (roads / 古树名木).  Low-confidence placements carry an LLM-recommended
-    extent and a human review item; the review queue supports confirm/override.
-    The test itself uses the deterministic/LLM judgment path (no human gate)."""
+async def test_unresolved_grounding_requires_human_review(sqlite_db, pipeline_reset):
+    """Names without graph evidence remain unresolved and reviewable.
+
+    The review queue must not receive a fabricated nearest-cluster BSM.
+    """
     setup, teardown = sqlite_db
     await setup()
     try:
@@ -690,21 +743,20 @@ async def test_always_land_with_human_review(sqlite_db, pipeline_reset):
         context.current_parcels = lambda: parcels
         result = await ground_report(context, facts, report, llm=None, session_id=sid)
 
-        # ALL names land (no unresolved dead end).
-        assert result.unresolved == [], result.unresolved
+        assert result.unresolved, "unresolved names must remain visible"
         assert len(result.entities) == len(facts), (len(result.entities), len(facts))
-        for e in result.entities:
-            assert e.status == "grounded", (e.name, e.status)
+        assert any(e.status == "unresolved" for e in result.entities)
 
-        # Low-confidence placements produce human review items with an
-        # LLM-recommended extent (roads without evidence land via fallback).
         review_names = {r.name for r in result.reviews}
-        assert "206国道" in review_names or "Y122乡道" in review_names or "古树名木" in review_names
+        assert review_names & {"206国道", "Y122乡道", "古树名木"}
 
-        # Human review interface: confirm the LLM recommendation or override.
-        item = result.reviews[0]
+        item = next(
+            r
+            for r in result.reviews
+            if r.name in {"Y122乡道", "古树名木"}
+        )
         assert item.status == "pending"
-        assert item.recommended_bsms, item
+        assert item.recommended_bsms == []
         queue = result.queue
         assert queue is not None
         decided = queue.decide(sid, item.name, item.role, accept=True)
@@ -718,10 +770,12 @@ async def test_always_land_with_human_review(sqlite_db, pipeline_reset):
 
 @pytest.mark.asyncio
 async def test_hydration_production_path_grounds_facts(sqlite_db, pipeline_reset, monkeypatch):
-    """The production hydration path (_hydrate_l1_spatial_facts) drives the
-    complete GROUND flow from a persisted L1Snapshot: inventory -> matching ->
-    evidence index.  The test uses deterministic/FakeLLM judgments (no human
-    gate) and verifies every named fact resolves through the rebuilt index."""
+    """The production hydration path keeps unanchored L1 names reviewable.
+
+    A typed model response cannot manufacture a village geometry when the
+    persisted L1 snapshot and EvidenceGraph have no cross-source spatial
+    anchor.
+    """
     setup, teardown = sqlite_db
     await setup()
     try:
@@ -763,33 +817,71 @@ async def test_hydration_production_path_grounds_facts(sqlite_db, pipeline_reset
             session_id=sid, version=1, kg_version=1,
             gazetteer=gazetteer, kg=kg, workspace=bundle,
             reports={"socio_economic": {"content": report}},
-            ports=None, evidence_index=None, evidence_index_key="", location_facts=[],
+            ports=None, evidence_graph=None, evidence_graph_key="", location_facts=[],
         )
         context.current_parcels = lambda: list(bundle.polygons.get("landuse_current") or [])
 
         class HydrateLLM:
-            async def ainvoke(self, prompt):
-                from types import SimpleNamespace as NS
+            @staticmethod
+            def _payload(prompt):
                 p = str(prompt)
                 if "聚落分配到" in p:
-                    mapping = {v: {"candidate_indexes": [i % 16], "evidence": "园寨、田坑、社前"}
-                               for i, v in enumerate(villages)}
-                    mapping["园寨"] = {"candidate_indexes": [0, 1], "evidence": "主要集中于金田村中部的园寨"}
-                    return NS(content=json.dumps(mapping, ensure_ascii=False))
+                    mapping = {
+                        v: {
+                            "candidate_indexes": [0 if i == 0 else i + 1],
+                            "evidence": "园寨、田坑、社前",
+                        }
+                        for i, v in enumerate(villages)
+                    }
+                    mapping["园寨"] = {
+                        "candidate_indexes": [0, 1],
+                        "evidence": "主要集中于金田村中部的园寨",
+                    }
+                    return mapping
                 if "水体" in p:
-                    return NS(content=json.dumps({"金田河": {"candidate_indexes": [0, 5], "evidence": "金田河由西南至东北贯穿金田村"}}, ensure_ascii=False))
-                return NS(content="{}")
+                    return {
+                        "金田河": {
+                            "candidate_indexes": [0, 5],
+                            "evidence": "金田河由西南至东北贯穿金田村",
+                        }
+                    }
+                return {}
+
+            def with_structured_output(self, schema, **_kwargs):
+                owner = self
+
+                class _Runner:
+                    async def ainvoke(self, messages):
+                        prompt = (
+                            messages[-1]["content"]
+                            if isinstance(messages, list)
+                            else messages
+                        )
+                        payload = owner._payload(prompt)
+                        if "entries" in schema.model_fields:
+                            payload = {
+                                "entries": [
+                                    {"name": name, **item}
+                                    for name, item in payload.items()
+                                ]
+                            }
+                        return schema.model_validate(payload)
+
+                return _Runner()
 
         import app.spatial.grounding.report_grounder as rg
+        monkeypatch.setenv("GROUND_LLM_ENABLED", "true")
         monkeypatch.setattr(rg, "create_grounding_llm", lambda: HydrateLLM())
 
         await _hydrate_l1_spatial_facts(state, context)
 
-        assert context.evidence_index is not None
+        assert context.evidence_graph is not None
+        unresolved = []
         for f in facts:
-            res = context.evidence_index.resolve_mention(f.normalized_name, role=f.role)
+            res = context.evidence_graph.resolve_mention(f.normalized_name, role=f.role)
             cand = res.candidates[0] if res.candidates else None
-            assert cand is not None and (cand.source_bsms or cand.geometry_ref), (f.normalized_name, res.status)
+            if cand is None or not (cand.source_bsms or cand.geometry_ref):
+                unresolved.append(f.normalized_name)
+        assert unresolved
     finally:
         await teardown()
-
