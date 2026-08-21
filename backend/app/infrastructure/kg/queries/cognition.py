@@ -17,6 +17,7 @@ Usage:
 from __future__ import annotations
 
 from collections import Counter
+import hashlib
 from typing import Any, Dict, List, Optional
 
 from rdflib import RDF, Literal, URIRef
@@ -24,6 +25,7 @@ from rdflib import RDF, Literal, URIRef
 from app.infrastructure.logging import get_logger
 from ..ontology import (
     PLN, EntityTypes, Relations, SemanticPredicates, GeoPredicates,
+    BusinessFeatureSelector, select_business_features,
     GEOMETRY_POLYGON,
 )
 from ..builder.geo_helpers import parse_wkt_bbox
@@ -41,6 +43,7 @@ taxonomic_parent = SemanticPredicates.taxonomic_parent
 legal_constraint = SemanticPredicates.legal_constraint
 allowed_operations = SemanticPredicates.allowed_operations
 from .contracts import DualPayload, TokenBudget, TopKSampler
+from app.contracts.evidence.kg_fact_contracts import KGFactRecord
 
 logger = get_logger(__name__)
 
@@ -102,8 +105,12 @@ def get_village_cognition(
     try:
         context_block = _build_context_block(kg, village_name)
         layer_cards = _build_layer_cards(kg)
+        fact_records = _build_kg_fact_records(kg, layer_cards)
         constraint_block = _build_constraint_block(kg)
         structured = _build_structured_payload(kg, layer_cards)
+        structured["fact_records"] = [
+            item.model_dump(mode="json") for item in fact_records
+        ]
 
         # Assemble semantic payload based on mode
         semantic: Dict[str, Any] = {}
@@ -202,6 +209,12 @@ def _build_context_block(kg, village_name: str) -> Dict[str, Any]:
         if t in ("LayerGroup",):
             continue
         entity_counts[t] = entity_counts.get(t, 0) + 1
+    entity_counts["Road"] = len(
+        select_business_features(kg.g, BusinessFeatureSelector.current_road())
+    )
+    entity_counts["Facility"] = len(
+        select_business_features(kg.g, BusinessFeatureSelector.current_facility())
+    )
 
     overview = (
         f"{name}，总面积{total_area_ha}公顷，"
@@ -320,6 +333,7 @@ def _build_layer_cards(kg) -> List[Dict[str, Any]]:
 
         cards.append({
             "group": group_name,
+            "semantic_group": group_name,
             "geometry": geom_kind,
             "count": count,
             "dominant_label": dom_label,
@@ -330,6 +344,147 @@ def _build_layer_cards(kg) -> List[Dict[str, Any]]:
     # Sort by count descending
     cards.sort(key=lambda c: c.get("count", 0), reverse=True)
     return cards
+
+
+def _source_identity_for_members(kg, members: List[Any]) -> Dict[str, Any]:
+    """Collect source identity without collapsing members into display counts."""
+    feature_ids: list[str] = []
+    snapshots: list[str] = []
+    source_refs: list[str] = []
+    for member in members:
+        source_id = str(kg.g.value(member, PLN.source_feature_id) or "").strip()
+        snapshot = str(kg.g.value(member, PLN.source_snapshot_ref) or "").strip()
+        source_ref = str(
+            kg.g.value(member, PLN.source_dataset)
+            or kg.g.value(member, PLN.source_uri)
+            or ""
+        ).strip()
+        if source_id and source_id not in feature_ids:
+            feature_ids.append(source_id)
+        if snapshot and snapshot not in snapshots:
+            snapshots.append(snapshot)
+        if source_ref and source_ref not in source_refs:
+            source_refs.append(source_ref)
+    return {
+        "feature_ids": sorted(feature_ids),
+        "snapshots": sorted(snapshots),
+        "source_refs": sorted(source_refs),
+    }
+
+
+def _kg_fact_id(
+    *,
+    source_collection_key: str,
+    source_snapshot_ref: str,
+    predicate: str,
+    source_feature_ids: list[str],
+) -> str:
+    payload = "|".join(
+        (
+            source_collection_key,
+            source_snapshot_ref,
+            predicate,
+            *source_feature_ids,
+        )
+    )
+    return f"kg:fact:{hashlib.sha256(payload.encode('utf-8')).hexdigest()[:24]}"
+
+
+def _build_kg_fact_records(
+    kg,
+    layer_cards: List[Dict[str, Any]],
+) -> List[KGFactRecord]:
+    """Build typed source-feature facts for collections with complete identity.
+
+    A layer card remains a semantic presentation object. This function is the
+    machine-facing boundary used by retrieval and L1 promotion. A collection
+    with missing or mixed snapshot identity is omitted instead of being emitted
+    as an apparently authoritative count.
+    """
+    records: list[KGFactRecord] = []
+    for layer_set in kg.g.subjects(RDF.type, EntityTypes.GisLayerSet):
+        group = str(kg.g.value(layer_set, semantic_group) or "").strip()
+        if not group:
+            continue
+        members = list(kg.g.objects(layer_set, contains_entity))
+        identity = _source_identity_for_members(kg, members)
+        feature_ids = identity["feature_ids"]
+        snapshots = identity["snapshots"]
+        if not feature_ids or len(snapshots) != 1:
+            continue
+        card = next((item for item in layer_cards if item.get("group") == group), {})
+        geometry = str(card.get("geometry") or "").strip()
+        snapshot = snapshots[0]
+        predicate = "source_feature_count"
+        records.append(KGFactRecord(
+            fact_id=_kg_fact_id(
+                source_collection_key=group,
+                source_snapshot_ref=snapshot,
+                predicate=predicate,
+                source_feature_ids=feature_ids,
+            ),
+            statement=(
+                f"KG源要素统计：{group} {len(feature_ids)} 个"
+                f"{geometry or '要素'}（快照 {snapshot}）"
+            ),
+            subject_scope=group,
+            predicate=predicate,
+            value=len(feature_ids),
+            unit="source_features",
+            counting_basis="source_feature",
+            semantic_group=group,
+            source_collection_key=group,
+            source_snapshot_ref=snapshot,
+            source_feature_ids=feature_ids,
+            source_refs=[
+                f"kg:collection:{group}:{snapshot}",
+                *[f"kg:source:{ref}" for ref in identity["source_refs"]],
+            ],
+            geometry_kind=geometry,
+            derivation="distinct source_feature_id members of one GisLayerSet",
+            confidence=0.95,
+        ))
+
+    # Business selectors are intentionally separate from raw rdf:type counts.
+    # They protect road/facility planning from co-typed admin/terrain features.
+    for collection_key, selector, label, geometry in (
+        ("current_road", BusinessFeatureSelector.current_road(), "道路", "line"),
+        ("current_facility", BusinessFeatureSelector.current_facility(), "设施", "point"),
+    ):
+        members = list(selector.select(kg.g))
+        identity = _source_identity_for_members(kg, members)
+        feature_ids = identity["feature_ids"]
+        snapshots = identity["snapshots"]
+        if not feature_ids or len(snapshots) != 1:
+            continue
+        snapshot = snapshots[0]
+        predicate = "business_source_feature_count"
+        records.append(KGFactRecord(
+            fact_id=_kg_fact_id(
+                source_collection_key=collection_key,
+                source_snapshot_ref=snapshot,
+                predicate=predicate,
+                source_feature_ids=feature_ids,
+            ),
+            statement=(
+                f"KG业务源要素统计：{label} {len(feature_ids)} 个{geometry}要素"
+                f"（快照 {snapshot}）"
+            ),
+            subject_scope=collection_key,
+            predicate=predicate,
+            value=len(feature_ids),
+            unit="source_features",
+            counting_basis="source_feature",
+            semantic_group="transport" if collection_key == "current_road" else "facility",
+            source_collection_key=collection_key,
+            source_snapshot_ref=snapshot,
+            source_feature_ids=feature_ids,
+            source_refs=[f"kg:collection:{collection_key}:{snapshot}"],
+            geometry_kind=geometry,
+            derivation="BusinessFeatureSelector with complete GIS/source identity",
+            confidence=0.98,
+        ))
+    return records
 
 
 # ============================================================

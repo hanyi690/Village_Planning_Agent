@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Sequence
 
 from app.contracts.artifacts.deferral_contracts import DeferralLedger
 from app.contracts.workflow.execution_plan_contracts import ExecutionPlan, WorkerTask, WorkerType
@@ -44,6 +44,21 @@ def _value(target: Any, name: str, default: Any = None) -> Any:
     if isinstance(target, dict):
         return target.get(name, default)
     return getattr(target, name, default)
+
+
+def _target_binding_payload(target: Any) -> dict[str, Any]:
+    """Serialize a target for task replay without requiring a Pydantic model."""
+    if isinstance(target, dict):
+        return dict(target)
+    dumper = getattr(target, "model_dump", None)
+    if callable(dumper):
+        return dict(dumper(mode="json"))
+    payload = dict(vars(target)) if hasattr(target, "__dict__") else {}
+    for name, value in vars(type(target)).items():
+        if name.startswith("_") or callable(value) or name in payload:
+            continue
+        payload[name] = value
+    return payload
 
 
 def _classification_status(target: Any) -> str:
@@ -285,7 +300,7 @@ def build_execution_plan(
     deferral_ledger: Any = None,
     portfolio_decision_ref: str = "",
     global_zone_allocation_ref: str = "",
-    scenario_selected_candidate_ids: dict[str, str] | None = None,
+    scenario_target_selections: dict[str, Sequence[str]] | None = None,
 ) -> ExecutionPlan:
     """Create self-contained worker tasks keyed only by stable target IDs."""
     planning_graph = getattr(intent, "intent_graph", None)
@@ -295,16 +310,17 @@ def build_execution_plan(
         item.target_id: item for item in (getattr(site_selection, "target_assignments", None) or [])
     }
     deferred_ids = _deferred_target_ids(deferral_ledger)
-    scenario_selected_candidate_ids = {
-        str(target_id): str(candidate_id)
-        for target_id, candidate_id in (scenario_selected_candidate_ids or {}).items()
-        if str(target_id).strip() and str(candidate_id).strip()
+    scenario_target_selections = {
+        str(target_id): [str(candidate_id) for candidate_id in candidate_ids if str(candidate_id).strip()]
+        for target_id, candidate_ids in (scenario_target_selections or {}).items()
+        if str(target_id).strip() and candidate_ids
     }
     tasks: list[WorkerTask] = []
     deferred_tasks: list[WorkerTask] = []
     for target_type, field_name in _TASK_SPECS:
         for target in _items(intent, field_name):
             target_id = str(getattr(target, "target_id", "") or "")
+            target_payload = _target_binding_payload(target)
             if not target_id:
                 continue
             assignment = assignments.get(target_id)
@@ -314,21 +330,69 @@ def build_execution_plan(
                     target_type=target_type,
                     status="unplaced",
                     expected_output_kind=getattr(target, "expected_output_kind", "parcel"),
-                    target_binding=target.model_dump(mode="json"),
+                    target_binding=target_payload,
                     reason="site_selection_assignment_missing",
                 )
-            elif not assignment.target_binding:
-                assignment = assignment.model_copy(update={"target_binding": target.model_dump(mode="json")})
-            selected_candidate_id = scenario_selected_candidate_ids.get(target_id)
-            if selected_candidate_id:
+            else:
+                existing_binding = dict(assignment.target_binding or {})
+                missing_target_fields = set(target_payload) - set(existing_binding)
+                if missing_target_fields:
+                    assignment = assignment.model_copy(update={
+                        "target_binding": {
+                            **target_payload,
+                            **existing_binding,
+                        },
+                    })
+            selected_member_ids = list(scenario_target_selections.get(target_id, []))
+            if selected_member_ids:
                 binding = dict(assignment.target_binding or {})
-                binding["candidate_id"] = selected_candidate_id
+                binding["candidate_ids"] = list(selected_member_ids)
+                if len(selected_member_ids) == 1:
+                    binding["candidate_id"] = selected_member_ids[0]
                 binding["scenario_id"] = scenario_id
                 assignment = assignment.model_copy(update={
                     "status": "placed",
                     "reason": "",
                     "target_binding": binding,
                 })
+            target_binding = dict(assignment.target_binding or {})
+            if target_type == "road":
+                for field_name in (
+                    "action",
+                    "road_planning_kind",
+                    "road_level",
+                    "length_m",
+                    "roadbed_width_m",
+                    "pavement_width_m",
+                    "routing_evidence",
+                    "road_evidence_refs",
+                ):
+                    current = target_binding.get(field_name)
+                    declared = target_payload.get(field_name)
+                    if (
+                        current in (None, "", [], {})
+                        and declared not in (None, "", [], {})
+                    ):
+                        target_binding[field_name] = declared
+            if (
+                target_type == "road"
+                and str(target_binding.get("road_planning_kind") or "")
+                == "existing_road_intervention"
+                and not target_binding.get("existing_road_feature_ids")
+                and not target_binding.get("existing_road_segment_ids")
+            ):
+                source_feature_ids = [
+                    str(value).strip()
+                    for value in (target_binding.get("source_feature_ids") or [])
+                    if str(value).strip()
+                ]
+                if source_feature_ids:
+                    target_binding["existing_road_feature_ids"] = list(
+                        dict.fromkeys(source_feature_ids)
+                    )
+                    assignment = assignment.model_copy(update={
+                        "target_binding": target_binding,
+                    })
             worker_type = _worker_type(target_type, target)
             asset_kind = str(_value(target, "asset_kind", "none") or "none")
             required_capability = (
@@ -366,12 +430,28 @@ def build_execution_plan(
                 required_capability=required_capability,
                 scenario_id=scenario_id,
                 candidate_id=str(
-                    _value(assignment, "target_binding", {}).get("candidate_id")
+                    (_value(assignment, "target_binding", {}).get("candidate_id") or "")
                     if isinstance(_value(assignment, "target_binding", {}), dict)
                     else ""
-                ) or str(_value(assignment, "selected_bsm", "") or ""),
-                relation_ids=[],
-                target_binding=dict(_value(assignment, "target_binding", {}) or {}),
+                ),
+                candidate_ids=list(selected_member_ids),
+                relation_ids=list(getattr(assignment, "relation_refs", None) or []),
+                target_binding=target_binding,
+                feature_bsms=(
+                    [str(getattr(assignment, "feature_bsm", ""))]
+                    if str(getattr(assignment, "feature_bsm", "") or "").strip()
+                    else []
+                ),
+                evidence_refs=list(getattr(assignment, "evidence_refs", None) or []),
+                l1_snapshot_ref=str(getattr(assignment, "l1_snapshot_ref", "") or ""),
+                bundle_snapshot_digest=str(
+                    getattr(assignment, "bundle_snapshot_digest", "") or ""
+                ),
+                source_binding_ref=str(
+                    _value(assignment, "target_binding", {}).get("source_binding_ref", "")
+                    if isinstance(_value(assignment, "target_binding", {}), dict)
+                    else ""
+                ),
                 defer_reason=(
                     "unsupported_capability"
                     if worker_type == WorkerType.UTILITY_NETWORK
@@ -408,6 +488,41 @@ def build_execution_plan(
                     deferred_tasks.append(task)
                     continue
             tasks.append(task)
+
+    # A required source collection is executed as one deterministic task per
+    # selected member.  Workers remain single-geometry by design, while the
+    # plan preserves the common target and complete member list in lineage.
+    def _expand_member_tasks(items: list[WorkerTask]) -> list[WorkerTask]:
+        expanded: list[WorkerTask] = []
+        for task in items:
+            member_ids = list(dict.fromkeys(task.candidate_ids or []))
+            if len(member_ids) <= 1:
+                expanded.append(task)
+                continue
+            all_ids = list(member_ids)
+            for index, member_id in enumerate(all_ids, start=1):
+                binding = dict(task.target_binding or {})
+                binding["candidate_id"] = member_id
+                binding["candidate_ids"] = all_ids
+                assignment = task.assignment.model_copy(update={
+                    "target_binding": binding,
+                })
+                expanded.append(task.model_copy(update={
+                    "task_id": f"{task.task_id}:member:{index}",
+                    "candidate_id": member_id,
+                    "candidate_ids": all_ids,
+                    "assignment": assignment,
+                    "target_binding": binding,
+                    "payload": {
+                        **dict(task.payload or {}),
+                        "candidate_id": member_id,
+                        "candidate_ids": all_ids,
+                    },
+                }))
+        return expanded
+
+    tasks = _expand_member_tasks(tasks)
+    deferred_tasks = _expand_member_tasks(deferred_tasks)
     task_id_by_target = {
         task.target_id: task.task_id
         for task in [*tasks, *deferred_tasks]
@@ -418,15 +533,17 @@ def build_execution_plan(
         def _with_execution_metadata(task: WorkerTask) -> WorkerTask:
             assignment = task.assignment
             binding = dict(assignment.target_binding or {})
-            candidate_id = str(
-                binding.get("candidate_id")
-                or _value(assignment, "selected_bsm", "")
-                or ""
-            )
+            candidate_id = str(binding.get("candidate_id") or "")
             return task.model_copy(update={
                 "scenario_id": scenario_id,
                 "candidate_id": candidate_id,
-                "relation_ids": relation_ids_by_target.get(task.target_id, []),
+                "source_binding_ref": str(
+                    binding.get("source_binding_ref", "") or ""
+                ),
+                "relation_ids": list(dict.fromkeys([
+                    *list(getattr(assignment, "relation_refs", None) or []),
+                    *relation_ids_by_target.get(task.target_id, []),
+                ])),
                 "target_binding": binding,
             })
 

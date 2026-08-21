@@ -5,7 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
-from shapely.geometry import shape
+from shapely.geometry import mapping, shape
+from shapely import wkt
 from shapely.ops import transform, unary_union
 
 
@@ -105,7 +106,17 @@ class SpatialFactorIndex:
         if self.ecological is None:
             self.diagnostics.append("ECOLOGICAL_SOURCE_MISSING")
 
-    def evaluate(self, parcel: Any) -> ParcelSpatialFactors:
+    def evaluate(
+        self,
+        parcel: Any,
+        geometry: Any = None,
+    ) -> ParcelSpatialFactors:
+        """Evaluate the selected geometry, falling back to the source parcel.
+
+        SELECT may operate on a clipped planning footprint inside a source
+        BSM.  Passing that footprint here prevents a full-parcel overlap or
+        distance from incorrectly deciding the subgeometry.
+        """
         bsm = str(getattr(parcel, "bsm", "") or "")
         exclusions: list[str] = []
         evidence_refs = [f"bundle:landuse_current:{bsm}"]
@@ -119,7 +130,15 @@ class SpatialFactorIndex:
                 diagnostics=tuple(diagnostics),
             )
         try:
-            parcel_geometry = shape(getattr(parcel, "geometry", None) or {})
+            raw_geometry = geometry
+            if raw_geometry is None:
+                raw_geometry = getattr(parcel, "geometry", None) or {}
+            if isinstance(raw_geometry, str):
+                parcel_geometry = wkt.loads(raw_geometry)
+            elif isinstance(raw_geometry, dict):
+                parcel_geometry = shape(raw_geometry)
+            else:
+                parcel_geometry = raw_geometry
             if parcel_geometry.is_empty or not parcel_geometry.is_valid:
                 raise ValueError("invalid parcel geometry")
             metric = transform(self.project, parcel_geometry)
@@ -166,7 +185,14 @@ class SpatialFactorIndex:
         if constraint_index is not None:
             from app.spatial.allocation.selection import _PROHIBITED_CONSTRAINTS
 
-            for overlap in constraint_index.geometry_in_constraint(parcel.geometry) or []:
+            constraint_geometry = (
+                parcel_geometry
+                if geometry is not None
+                else getattr(parcel, "geometry", None)
+            )
+            for overlap in constraint_index.geometry_in_constraint(
+                mapping(constraint_geometry)
+            ) or []:
                 code = str(getattr(overlap, "constraint_type", "") or "")
                 if code in _PROHIBITED_CONSTRAINTS:
                     exclusions.append(code)

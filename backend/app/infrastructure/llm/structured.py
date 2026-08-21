@@ -66,10 +66,12 @@ def _extract_content_json_object(content: Any) -> tuple[dict[str, Any] | None, s
     think_match = _THINK_PREFIX_RE.match(candidate)
     if think_match:
         candidate = candidate[think_match.end() :].strip()
-    else:
-        fence_match = _JSON_FENCE_RE.fullmatch(candidate)
-        if fence_match:
-            candidate = fence_match.group("body").strip()
+    fence_match = _JSON_FENCE_RE.fullmatch(candidate)
+    if fence_match:
+        # MiniMax may emit the typed JSON inside a standard JSON fence after
+        # its outer thinking block.  Both are complete, known wrappers; only
+        # the decoded object crosses the typed Pydantic boundary.
+        candidate = fence_match.group("body").strip()
 
     if re.search(r"</?think\b", candidate, re.IGNORECASE):
         return None, "content contains a non-wrapper think marker"
@@ -106,6 +108,7 @@ async def run_structured_output(
     incomplete_output_max_tokens: int | None = None,
     max_concurrent: int | None = None,
     semaphore_scope: str = "default",
+    allow_content_json_fallback: bool = True,
     transient_retries: int = 0,
     transient_retry_backoff_s: float = 2.0,
     **kwargs: Any,
@@ -169,6 +172,11 @@ async def run_structured_output(
         try:
             return await _call_once(request)
         except InstructorRetryException as exc:
+            if not allow_content_json_fallback:
+                logger.warning(
+                    "[structured] typed output failed; content fallback is disabled for this contract"
+                )
+                raise
             content = _completion_content(exc.last_completion)
             payload, reason = _extract_content_json_object(content)
             if payload is None:

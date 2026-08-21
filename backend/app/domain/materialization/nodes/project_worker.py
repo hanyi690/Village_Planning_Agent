@@ -59,6 +59,30 @@ def _project_worker(state: ExecuteAgentState) -> WorkerResult:
         for brief in briefs
         if getattr(brief, "project_ref", "")
     }
+    candidate_geometry_by_id = getattr(state, "candidate_geometry_by_id", {}) or {}
+    candidate_by_target = {
+        str(_task_value(task, "target_id", "")): str(
+            _task_value(task, "candidate_id", "") or ""
+        )
+        for task in _plan_tasks(state, {"site_area_footprint"})
+        if _task_value(task, "candidate_id", "")
+    }
+    direct_candidate_targets = {
+        target_id
+        for target_id, candidate_id in candidate_by_target.items()
+        if str(
+            getattr(candidate_geometry_by_id.get(candidate_id), "role", "") or ""
+        ) == "execution_geometry"
+        and str(
+            getattr(candidate_geometry_by_id.get(candidate_id), "wkt", "") or ""
+        ).strip()
+    }
+    non_executable_candidate_targets = {
+        target_id
+        for target_id, candidate_id in candidate_by_target.items()
+        if candidate_geometry_by_id.get(candidate_id) is not None
+        and target_id not in direct_candidate_targets
+    }
     features = []
     changes: List[ParcelChange] = []
     completed_target_ids = set()
@@ -72,14 +96,11 @@ def _project_worker(state: ExecuteAgentState) -> WorkerResult:
         if not getattr(project, "requires_spatial", True)
         or getattr(project, "expected_output_kind", "") == "action"
     ]
-    candidate_by_target = {
-        str(_task_value(task, "target_id", "")): str(
-            _task_value(task, "candidate_id", "") or ""
-        )
-        for task in _plan_tasks(state, {"site_area_footprint"})
-        if _task_value(task, "candidate_id", "")
-    }
     for target_id, bsm in selected_by_target.items():
+        # An executable SELECT geometry is already the planning subgeometry.
+        # Do not expand it back to the full source BSM through land design.
+        if target_id in direct_candidate_targets or target_id in non_executable_candidate_targets:
+            continue
         project = projects_by_target.get(target_id)
         if project is None or not getattr(project, "requires_spatial", True):
             continue
@@ -118,17 +139,20 @@ def _project_worker(state: ExecuteAgentState) -> WorkerResult:
             "geometry": _footprint_geometry(primary, _parcel_geometry(parcel)),
         })
 
-    # Relation-aware candidates are not necessarily cadastral parcels.  When
-    # a typed execution geometry is available, materialize it directly and
-    # keep the old BSM/land-design path as a compatibility fallback.
+    # Relation-aware candidates are not necessarily cadastral parcels.  A
+    # typed execution geometry is authoritative and is materialized directly;
+    # the parcel design branch above is used only when SELECT did not produce
+    # an executable candidate for that task.
     from shapely import wkt as shapely_wkt
     from shapely.geometry import mapping as shapely_mapping
     for target_id, candidate_id in candidate_by_target.items():
         if target_id in completed_target_ids:
             continue
-        candidate = (getattr(state, "candidate_geometry_by_id", {}) or {}).get(candidate_id)
+        candidate = candidate_geometry_by_id.get(candidate_id)
         geometry_wkt = str(getattr(candidate, "wkt", "") or "")
-        if candidate is None or not geometry_wkt:
+        if candidate is None or str(getattr(candidate, "role", "") or "") != "execution_geometry":
+            continue
+        if not geometry_wkt:
             continue
         try:
             geometry = shapely_mapping(shapely_wkt.loads(geometry_wkt))
@@ -147,8 +171,39 @@ def _project_worker(state: ExecuteAgentState) -> WorkerResult:
                 "project_name": getattr(project, "name", ""),
                 "project_category": getattr(project, "category", "other"),
                 "candidate_id": candidate_id,
+                "source_bsms": list(getattr(candidate, "source_bsms", None) or []),
+                "feature_bsms": list(getattr(candidate, "feature_bsms", None) or []),
+                "crs": str(getattr(candidate, "crs", "") or "EPSG:4326"),
+                "source_feature_ids": list(
+                    getattr(candidate, "source_feature_ids", None) or []
+                ),
+                "entity_refs": list(getattr(candidate, "entity_refs", None) or []),
+                "relation_refs": list(getattr(candidate, "relation_refs", None) or []),
+                "evidence_refs": list(getattr(candidate, "evidence_refs", None) or []),
+                "l1_snapshot_ref": str(
+                    getattr(candidate, "l1_snapshot_ref", "") or ""
+                ),
+                "bundle_snapshot_digest": str(
+                    getattr(candidate, "bundle_snapshot_digest", "") or ""
+                ),
+                "subgeometry_operation": str(
+                    getattr(candidate, "subgeometry_operation", "") or ""
+                ),
+                "subgeometry_diagnostics": list(
+                    getattr(candidate, "subgeometry_diagnostics", None) or []
+                ),
+                "spatial_domain_kind": str(
+                    getattr(candidate, "spatial_domain_kind", "") or ""
+                ),
+                "source_area_ha": getattr(candidate, "source_area_ha", None),
+                "planning_area_ha": getattr(candidate, "planning_area_ha", None),
+                "coverage_ratio": getattr(candidate, "coverage_ratio", None),
                 "scenario_id": str(_task_value(_task_for_target(state, target_id), "scenario_id", "") or ""),
-                "source_refs": list(getattr(candidate, "evidence_refs", None) or []) or [str(getattr(candidate, "source_ref", "") or "candidate_geometry")],
+                "source_refs": list(dict.fromkeys([
+                    *list(getattr(candidate, "source_refs", None) or []),
+                    *list(getattr(candidate, "evidence_refs", None) or []),
+                    str(getattr(candidate, "source_ref", "") or ""),
+                ])) or ["candidate_geometry"],
                 "generation_operation": "candidate_geometry_materialize",
                 "materialization_role": str(
                     getattr(project, "materialization_role", "")
@@ -177,15 +232,44 @@ def _project_worker(state: ExecuteAgentState) -> WorkerResult:
         })
     task_results = []
     for project in projects:
+        deferred_candidate = (
+            project.target_id in non_executable_candidate_targets
+            and project.target_id not in completed_target_ids
+        )
+        candidate = candidate_geometry_by_id.get(
+            candidate_by_target.get(project.target_id, "")
+        )
         task_result = _task_execution_result(
             state,
             "site_area_footprint",
             project.target_id,
-            status="succeeded" if project.target_id in completed_target_ids else "failed",
-            diagnostics=[] if project.target_id in completed_target_ids else [{
-                "code": "project_output_missing",
-                "target_id": project.target_id,
-            }],
+            status=(
+                "succeeded"
+                if project.target_id in completed_target_ids
+                else "deferred"
+                if deferred_candidate
+                else "failed"
+            ),
+            diagnostics=(
+                []
+                if project.target_id in completed_target_ids
+                else [{
+                    "code": (
+                        "candidate_geometry_not_executable"
+                        if deferred_candidate
+                        else "project_output_missing"
+                    ),
+                    "target_id": project.target_id,
+                    "candidate_id": str(getattr(candidate, "candidate_id", "") or ""),
+                    "geometry_role": str(getattr(candidate, "role", "") or ""),
+                    "subgeometry_operation": str(
+                        getattr(candidate, "subgeometry_operation", "") or ""
+                    ),
+                    "subgeometry_diagnostics": list(
+                        getattr(candidate, "subgeometry_diagnostics", None) or []
+                    ),
+                }]
+            ),
         )
         if task_result is not None:
             task_results.append(task_result)

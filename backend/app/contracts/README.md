@@ -17,7 +17,7 @@ Protocol。`contracts/` 是底层的“共享语言”，不依赖 API、UI 或 
 | `spatial/` | 空间契约：`constraint_contracts`、`context_contracts`、`grounding_contracts`、`parcel_change_contracts`、`planned_state_contracts`、`spatial_delivery_contracts`、`spatial_reference_contracts`、`global_zone/site_allocation_contracts`、`land_balance_contracts`、`terrain_evidence` |
 | `workflow/` | 工作流契约：`execution_plan_contracts`、`human_interrupt_contracts`、`parse_contracts`/`parse_result_contracts`/`parsing_contracts`、`repair`/`repair_directive_contracts`、`resume_contracts`、`review_contracts`、`target_binding_contracts`、`workflow_contracts`、`dispatch` |
 | `evidence/` | `evidence_contracts`：EvidenceBundle/EvidenceSource/ExplorationRequest 等 |
-| `ports/` | 依赖倒置端口（Protocol）：`context`、`gazetteer`、`place_evidence`/`place_resolution`、`semantic_query`、`spatial`/`spatial_query`、`workers`、`zone_allocator`、`road_planner`、`external_search`、`media_evidence`、`bundle_assembly`、`nomenclature_registry`、`adjustment`、`planning_ports`、`context_ref_contracts` |
+| `ports/` | 依赖倒置端口（Protocol）：`context`、`gazetteer`、`place_resolution`、`semantic_query`、`spatial`/`spatial_query`、`workers`、`zone_allocator`、`road_planner`、`external_search`、`media_evidence`、`bundle_assembly`、`nomenclature_registry`、`adjustment`、`planning_ports`、`context_ref_contracts` |
 | `events.py` | `SSEEventType`：SSE 事件类型唯一来源（全系统共享） |
 | `program.py` | `PlanningClaim`/`PlanningClaimSet`（L3 输入；空间目标统一由 `PlanningIntervention` 承载） |
 | `public/` | 公开 API 契约（当前由 `api/v1/contracts.py` 承载） |
@@ -27,6 +27,6 @@ Protocol。`contracts/` 是底层的“共享语言”，不依赖 API、UI 或 
 - `ContractMeta`（`artifacts/contract_meta.py`）给阶段产物提供 schema_version、artifact_id、
   producer、created_at 等公共元数据。
 - 产物 key 到契约类型的映射权威来源是
-  `workflow/stage_adapter.py::_KEY_BY_TYPE`（见 `docs/design/24_MODULE_OUTPUT_INVENTORY.md`）。
+  `workflow/stage_adapter.py::_KEY_BY_TYPE`（见 `docs/design/00_SYSTEM_DESIGN.md`）。
 - `contracts/ports/*` 是 Protocol 边界：实现方在 `infrastructure/` 或 `spatial/`，
   消费方在 `domain/`/`workflow/`，保证领域层不反向依赖外部系统。

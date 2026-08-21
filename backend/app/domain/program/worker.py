@@ -52,6 +52,20 @@ from app.infrastructure.tasks.task_supervisor import build_summary_task_key
 logger = get_logger(__name__)
 
 
+class L3ReportBodyEmptyError(ValueError):
+    """Provider returned executable claims but no human-facing report body."""
+
+
+def _require_l3_report_body(value: Any) -> str:
+    report_body = str(value or "").strip()
+    if not report_body:
+        raise L3ReportBodyEmptyError(
+            "L3_REPORT_BODY_EMPTY: provider returned structured claims without "
+            "the required human-readable report_body"
+        )
+    return report_body
+
+
 def _claim_cache_path(session_id: str, dimension_key: str, prompt: str) -> Path:
     """Return the content-addressed cache path for one provider invocation."""
     from app.infrastructure.paths import session_run_dir
@@ -72,6 +86,7 @@ async def _cached_claim_generation(
     dimension_key: str,
     prompt: str,
     validation_feedback: list[str] | None = None,
+    require_report_body: bool = True,
 ):
     """Generate a draft set once and replay it on checkpoint resume.
 
@@ -91,6 +106,8 @@ async def _cached_claim_generation(
             "prompt": prompt,
             "validation_feedback": validation_feedback or [],
             "schema_checksum": schema_checksum,
+            "cache_contract": "l3-dual-output-v2",
+            "require_report_body": require_report_body,
         },
         ensure_ascii=False,
         sort_keys=True,
@@ -106,7 +123,12 @@ async def _cached_claim_generation(
                 dimension_key,
                 path.name,
             )
-            return cached
+            if not require_report_body or cached.report_body.strip():
+                return cached
+            logger.warning(
+                "[analyze_l3_dimension] %s: ignoring cached L3 output without report_body",
+                dimension_key,
+            )
         except (OSError, ValueError):
             logger.warning(
                 "[analyze_l3_dimension] %s: ignoring invalid claim cache %s",
@@ -117,6 +139,7 @@ async def _cached_claim_generation(
     generated = await generator.generate(
         prompt,
         validation_feedback=validation_feedback,
+        require_report_body=require_report_body,
     )
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_suffix(f".{uuid.uuid4().hex}.tmp")
@@ -141,28 +164,164 @@ def _build_revision_completed(state: Dict[str, Any], dim_key: str) -> Dict[int, 
     return result
 
 
-def _location_evidence(text: str) -> str:
-    """Extract compact, source-backed location rows for the L3 prompt.
+def _typed_l1_fact_evidence(
+    state: Dict[str, Any],
+    dimension_key: str,
+    *,
+    location_only: bool = False,
+) -> str:
+    """Render bounded L1 spatial facts for the L3 prompt.
 
-    The complete dependency reports remain in the prompt.  This separate
-    block makes the spatial provenance decision explicit and prevents the
-    model from turning a village list into an unsupported project location.
+    L3 must not infer spatial relations by scanning prose for words such as
+    ``位于`` or ``布局``.  L1Fact/L1LocationFact already carry the spatial semantic
+    type, subject scope, source refs and (when available) source feature IDs;
+    those typed records are the only source used here.  The report body is a
+    human-readable projection and is intentionally not used as a location
+    index.
     """
-    rows: List[str] = []
-    seen: set[str] = set()
-    for raw_line in (text or "").splitlines():
-        line = raw_line.strip()
-        if not line:
+    try:
+        from app.infrastructure.context.planning_context_factory import get_cached_context
+
+        context = get_cached_context(str(state.get("session_id", "")))
+    except Exception:
+        context = None
+    if context is None:
+        return "（当前上下文没有可用的 L1 spatial evidence；不得据此创建空间 claim。）"
+
+    allowed_dimensions = {dimension_key, "location", "spatial", ""}
+    if location_only:
+        rows: list[dict[str, Any]] = []
+        for item in list(getattr(context, "location_facts", []) or []):
+            fact_dimension = str(getattr(item, "dimension_key", "") or "").strip()
+            if fact_dimension not in allowed_dimensions:
+                continue
+            mention = str(getattr(item, "mention", "") or "").strip()
+            normalized_name = str(getattr(item, "normalized_name", "") or "").strip()
+            if not mention and not normalized_name:
+                continue
+            rows.append({
+                "mention": mention,
+                "normalized_name": normalized_name,
+                "role": str(getattr(item, "role", "") or ""),
+                "spatial_hint": str(getattr(item, "spatial_hint", "") or ""),
+                "related_mentions": list(getattr(item, "related_mentions", []) or []),
+                "evidence_refs": list(getattr(item, "evidence_refs", []) or []),
+                "source_report_ref": str(getattr(item, "source_report_ref", "") or ""),
+            })
+            if len(rows) >= 24:
+                break
+        if not rows:
+            return "（当前 L1 没有带证据引用的 L1 spatial location facts；不得从地点名单推断对象位置。）"
+        return "【已审计 L1 spatial location facts】\n" + json.dumps(
+            rows, ensure_ascii=False, indent=2
+        )
+
+    facts: list[Any] = []
+    for fact in list(getattr(context, "l1_fact_records", []) or []):
+        fact_dimension = str(getattr(fact, "dimension_key", "") or "").strip()
+        if fact_dimension not in allowed_dimensions:
             continue
-        if not any(token in line for token in ("位于", "分布", "涉及", "集中", "位置", "布局")):
+        statement = str(getattr(fact, "statement", "") or "").strip()
+        fact_id = str(getattr(fact, "fact_id", "") or "").strip()
+        if not statement or not fact_id:
             continue
-        if line in seen:
+        facts.append(fact)
+
+    # Prefer facts that can be joined to bundle geometry, then facts in the
+    # current dimension.  This is a stable typed ordering, not a text score.
+    facts.sort(key=lambda fact: (
+        0 if list(getattr(fact, "source_feature_ids", []) or []) else 1,
+        0 if str(getattr(fact, "dimension_key", "") or "") == dimension_key else 1,
+        str(getattr(fact, "fact_id", "")),
+    ))
+    rows = []
+    for fact in facts[:48]:
+        rows.append({
+            "fact_id": str(getattr(fact, "fact_id", "") or ""),
+            "statement": str(getattr(fact, "statement", "") or "")[:360],
+            "fact_kind": str(getattr(fact, "fact_kind", "") or ""),
+            "dimension_key": str(getattr(fact, "dimension_key", "") or ""),
+            "semantic_type": str(getattr(fact, "semantic_type", "") or ""),
+            "subject_scope": str(getattr(fact, "subject_scope", "") or ""),
+            "attributes": dict(getattr(fact, "attributes", {}) or {}),
+            "source_refs": list(getattr(fact, "source_refs", []) or []),
+            "source_feature_ids": list(getattr(fact, "source_feature_ids", []) or []),
+            "source_snapshot_ref": str(getattr(fact, "source_snapshot_ref", "") or ""),
+        })
+    if not rows:
+        return "（当前上下文没有可用的 L1 spatial facts；不得据此创建空间 claim。）"
+    return (
+        "【已审计 L1 spatial facts】\n"
+        "这些记录是当前 L1 快照的权威事实。source_fact_refs 只能逐字引用 fact_id；"
+        "source_feature_ids 只用于说明可由后续 EvidenceGraph 继续连接，不能在 L3 直接当作几何。\n"
+        + json.dumps(rows, ensure_ascii=False, indent=2)
+    )
+
+
+def _spatial_claim_evidence_errors(
+    state: Dict[str, Any],
+    claim_set: PlanningClaimSet,
+) -> list[str]:
+    """Reject spatial claims that cite foreign L1 fact identities.
+
+    This is an exact identity check, not a name/regex matcher. A spatial claim
+    without source_fact_refs is a valid semantic candidate and must continue
+    to GROUND, where EvidenceGraph resolves its location. If the model does
+    provide source_fact_refs, every id must exist in the hydrated L1 context;
+    a foreign id enters the bounded repair loop. Whether a location hint
+    semantically matches a fact remains an LLM/EvidenceGraph responsibility.
+    """
+    spatial_kinds = {"parcel", "polygon", "point", "line"}
+    claims = list(getattr(claim_set, "claims", []) or [])
+    if not any(
+        getattr(claim, "suggested_output_kind", "") in spatial_kinds
+        for claim in claims
+    ):
+        return []
+    try:
+        from app.infrastructure.context.planning_context_factory import get_cached_context
+
+        context = get_cached_context(str(state.get("session_id", "")))
+    except Exception:
+        context = None
+    fact_ids = {
+        str(getattr(fact, "fact_id", "") or "")
+        for fact in (getattr(context, "l1_fact_records", []) or [])
+        if str(getattr(fact, "fact_id", "") or "")
+    }
+    errors: list[str] = []
+    for claim in claims:
+        if getattr(claim, "suggested_output_kind", "") not in spatial_kinds:
             continue
-        seen.add(line)
-        rows.append(line[:320])
-        if len(rows) >= 60:
-            break
-    return "\n".join(f"- {row}" for row in rows) or "（依赖报告未提供可核验的对象—地点位置关系）"
+        claim_id = str(getattr(claim, "claim_id", "") or "claim")
+        refs = [
+            str(ref).strip()
+            for ref in (getattr(claim, "source_fact_refs", []) or [])
+            if str(ref).strip()
+        ]
+        if not refs:
+            continue
+        unknown = sorted(set(refs) - fact_ids)
+        if unknown:
+            errors.append(
+                f"ERROR[spatial_claim_unknown_fact] {claim_id}: "
+                f"source_fact_refs are not present in the hydrated L1 snapshot: {unknown}"
+            )
+    return list(dict.fromkeys(errors))
+
+
+def _compact_prompt_background(text: str, limit: int, label: str) -> str:
+    """Bound report context without pretending truncation is evidence."""
+    value = str(text or "").strip()
+    if not value:
+        return f"（{label}没有可用正文；不得据此补造事实。）"
+    if len(value) <= limit:
+        return value
+    return (
+        value[:limit]
+        + f"\n\n【{label}已截断】仅保留前 {limit} 个字符作为背景；"
+        "被截断内容不是可引用的空间证据。"
+    )
 
 
 def _resolvable_places(session_id: str) -> str:
@@ -257,6 +416,7 @@ async def _normalize_with_structural_repair(
                 dimension_key=dimension_key,
                 prompt=_structural_repair_prompt(dimension_key, exc),
                 validation_feedback=[str(exc)],
+                require_report_body=False,
             )
     raise RuntimeError("unreachable: structural repair budget exhausted")
 
@@ -304,6 +464,15 @@ async def analyze_l3_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
 
     # 2. RAG
     rag_context, rag_log = await run_rag(dim_key, cfg, state)
+
+    # L3 prompts consume the same typed L1 snapshot that GROUND later uses.
+    # The root bootstrap runs before L1 exists, so hydrate the persisted
+    # snapshot at the first post-L1 worker boundary instead of relying on a
+    # stale process-local context cache.  This keeps source_fact_refs usable
+    # for the planning model without exposing geometry to the prompt.
+    from app.workflow.stages.support import _require_context
+
+    await _require_context(state)
 
     # 3. 从数据库加载分层依赖报告（同层 + L1/L2 跨层分开）
     store = ReportStore.get_instance()
@@ -376,15 +545,13 @@ async def analyze_l3_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
             dimension_key=dim_key,
             prompt=prompt,
         )
-        report_body = (output.report_body or "").strip()
+        report_body = _require_l3_report_body(output.report_body)
         draft_set, claim_set = await _normalize_with_structural_repair(
             claim_generator,
             session_id=session_id,
             dimension_key=dim_key,
             output=output,
         )
-        if not draft_set.claims and not report_body:
-            draft_set.diagnostics.append("provider returned no structured claim set")
         # Flash unit repair: unknown units (hm, ??, count-units-as-area) are
         # cheap to fix with a flash LLM - no full re-generation needed.
         try:
@@ -398,7 +565,10 @@ async def analyze_l3_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
             claim_set = normalize_claim_draft_set(draft_set, dimension_key=dim_key)
         except Exception as exc:  # noqa: BLE001 - flash repair must never break L3
             logger.warning("[analyze_l3_dimension] %s: flash unit repair failed: %s", dim_key, exc)
-        semantic_feedback = claim_set_semantic_errors(claim_set)
+        semantic_feedback = [
+            *claim_set_semantic_errors(claim_set),
+            *_spatial_claim_evidence_errors(state, claim_set),
+        ]
         semantic_retry_count = max(
             0,
             int(os.getenv("L3_SEMANTIC_COMPILE_RETRIES", "1")),
@@ -426,6 +596,7 @@ async def analyze_l3_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
                 rejected_ids,
                 semantic_feedback[:8],
             )
+            repair_evidence = _typed_l1_fact_evidence(state, dim_key)
             repair_prompt = (
                 "你是 L3 Claim 局部语义编译修复器。只返回下列失败 claim 的完整"
                 "claims 数组（report_body 留空），不得返回已通过 claim，不得新增、删除或改写 claim_id。"
@@ -436,7 +607,10 @@ async def analyze_l3_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
                 f"dimension={dim_key}\n"
                 f"validator_errors={json.dumps(semantic_feedback, ensure_ascii=False)}\n"
                 f"normalization_diagnostics={json.dumps(normalization_diagnostics, ensure_ascii=False)}\n"
-                f"rejected_claims={json.dumps(rejected, ensure_ascii=False)}"
+                f"rejected_claims={json.dumps(rejected, ensure_ascii=False)}\n"
+                "可使用的已审计 L1 spatial facts（source_fact_refs 只能逐字复制其中的 fact_id；"
+                "若没有 L1 fact，保留语义 location_hints 并交给 GROUND 检索，不得编造 fact_id）：\n"
+                f"{repair_evidence}"
             )
             repair_output = await _cached_claim_generation(
                 claim_generator,
@@ -444,6 +618,7 @@ async def analyze_l3_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
                 dimension_key=dim_key,
                 prompt=repair_prompt,
                 validation_feedback=semantic_feedback,
+                require_report_body=False,
             )
             draft_set = merge_repaired_claim_drafts(
                 draft_set,
@@ -457,7 +632,10 @@ async def analyze_l3_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
                 draft_set,
                 dimension_key=dim_key,
             )
-            semantic_feedback = claim_set_semantic_errors(claim_set)
+            semantic_feedback = [
+                *claim_set_semantic_errors(claim_set),
+                *_spatial_claim_evidence_errors(state, claim_set),
+            ]
         if claim_set is not None and semantic_feedback:
             claim_set.diagnostics.append(
                 "ERROR[semantic_compile_exhausted] "
@@ -481,6 +659,25 @@ async def analyze_l3_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
                 "stage": f"L{dim_layer}", "dimension": dim_key,
                 "code": "llm_stream_timeout",
                 "message": f"LLM stream timeout ({LLM_STREAM_TIMEOUT}s)",
+            }],
+        }
+    except L3ReportBodyEmptyError as exc:
+        logger.error("[analyze_l3_dimension] %s: %s", dim_key, str(exc))
+        await sse_manager.publish(session_id, {
+            "type": SSEEventType.DIMENSION_ERROR,
+            "dimension_key": dim_key,
+            "dimension_name": dim_name,
+            "layer": dim_layer,
+            "error": str(exc),
+        })
+        return {
+            "messages": [AIMessage(content=f"[执行失败] {exc}")],
+            "dimension_retry_counts": dimension_failure_attempt(state, dim_key),
+            "provider_failures": [{
+                "stage": f"L{dim_layer}",
+                "dimension": dim_key,
+                "code": "l3_report_body_empty",
+                "message": str(exc),
             }],
         }
     except (ValueError, TypeError, json.JSONDecodeError) as exc:
@@ -547,7 +744,7 @@ async def analyze_l3_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
         for claim in claim_set.claims
     ]
     claims_json = claim_set.model_dump_json(indent=2)
-    llm_response = report_body or claims_json
+    llm_response = report_body
     await publish_dimension_delta(
         session_id,
         dim_key,
@@ -730,18 +927,28 @@ def _build_prompt(
             else quality_instruction
         )
 
-    return get_layer3_prompt(
+    spatial_fact_evidence = _typed_l1_fact_evidence(state, dim_key)
+    spatial_location_evidence = _typed_l1_fact_evidence(
+        state, dim_key, location_only=True
+    )
+    return f"【dimension_key={dim_key}】\n" + get_layer3_prompt(
         dimension_key=dim_key,
         project_name=project_name,
-        analysis_report=l1_deps,
-        planning_concept=l2_deps,
+        # L1 report is the current-state analysis background.  L1 spatial
+        # facts are supplied separately for auditable spatial references.
+        analysis_report=_compact_prompt_background(l1_deps, 12000, "L1 现状分析"),
+        planning_concept=_compact_prompt_background(l2_deps, 8000, "L2 规划思路"),
         constraints=constraints,
         knowledge_context=rag_context or "",
         revision_instruction=revision_instruction,
         professional_data_section=professional_data_section + explore_section,
         natural_villages=resolvable_villages,
-        location_evidence=_location_evidence(l1_deps + "\n" + l2_deps),
-        dimension_plans=same_layer_contexts,
+        location_evidence=(
+            spatial_fact_evidence
+            + "\n\n"
+            + spatial_location_evidence
+        ),
+        dimension_plans=_compact_prompt_background(same_layer_contexts, 6000, "同层规划背景"),
     )
 
 

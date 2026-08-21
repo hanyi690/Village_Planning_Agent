@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class L1ObservationDraft(BaseModel):
@@ -24,8 +24,8 @@ class L1ObservationDraft(BaseModel):
 class L1DimensionOutput(BaseModel):
     """Dual-response L1 output: narrative report body + structured observations."""
 
-    report_body: str = ""
-    observations: list[L1ObservationDraft] = []
+    report_body: str = Field(min_length=1)
+    observations: list[L1ObservationDraft] = Field(default_factory=list)
 
 
 __all__ = ["L1DimensionOutput", "L1ObservationDraft"]

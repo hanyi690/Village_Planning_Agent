@@ -313,6 +313,7 @@ class WorkflowState(TypedDict, total=False):
     runtime: Annotated[dict[str, Any], _merge_runtime]
     repair_directives: Annotated[dict[str, Any], _merge_control]
     repair_impact: Annotated[dict[str, Any], _merge_control]
+    validation_feedback: Annotated[dict[str, Any], _merge_control]
     # A5: 子图化入口提示 / 跨段并行派发载荷（瞬态，入口路由消费后清空）。
     subgraph_entry: Annotated[str | None, _merge_control]
     pending_dispatches: Annotated[list[dict[str, Any]], _merge_control]
@@ -341,6 +342,7 @@ class WorkflowOutput(TypedDict, total=False):
     retry: dict[str, Any]
     interrupt_ref: Any
     terminal_ref: Any
+    validation_feedback: dict[str, Any]
 
 
 def _active_stage(state: dict[str, Any]) -> str:
@@ -401,6 +403,7 @@ def project_workflow_state(state: dict[str, Any]) -> WorkflowState:
         "retry": dict(state.get("retry") or state.get("retry_counts") or {}),
         "interrupt_ref": interrupt,
         "terminal_ref": state.get("terminal_ref") or state.get("diagnostic_terminal"),
+        "validation_feedback": dict(state.get("validation_feedback") or {}),
     }
 
 

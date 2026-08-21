@@ -180,6 +180,11 @@ def _resolve_exact_reference_geometries(
                 wkt=geometry.wkt,
                 crs=str(filters.get("crs") or "EPSG:4326"),
                 source_ref=source_feature_id,
+                source_feature_id=(
+                    explicit_id_list[index]
+                    if explicit_id_list and index < len(explicit_id_list)
+                    else ""
+                ),
                 source_refs=[source_feature_id, str(entity_uri)],
                 source_bsms=source_bsms,
                 feature_kind=str(filters.get("rdf_type") or ""),

@@ -16,6 +16,8 @@ import logging
 import time
 from typing import Any, Dict, List, Optional, Tuple
 
+from shapely import wkt as shapely_wkt
+
 from app.infrastructure.context.planning_context import PlanningContext
 from app.contracts.spatial.grounding_contracts import CandidateSite, GroundingResult
 from app.contracts.artifacts.classification_ref import classification_code_names
@@ -143,6 +145,117 @@ def _grounding_to_candidate_parcels(
     for site in result.candidates:
         parcels.extend(_candidate_site_to_parcels(site, parcel_by_bsm))
     return parcels
+
+
+def _attach_grounding_lineage_to_decision(
+    decision: SiteSelectionDecision,
+    grounding: GroundingResult,
+) -> SiteSelectionDecision:
+    """Copy selected candidate lineage into the authoritative SELECT binding.
+
+    SELECT may score a parcel candidate without retaining the full
+    ``CandidateSite`` object.  The target assignment is the only contract
+    EXECUTE receives, so selected BSMs must carry the evidence refs, KG
+    relation refs, L1 refs and snapshot identities across this boundary.
+    """
+    sites = list(getattr(grounding, "candidates", None) or [])
+    if not sites or not decision.target_assignments:
+        return decision
+    updates: list[TargetAssignment] = []
+    for assignment in decision.target_assignments:
+        selected = {
+            str(value).strip()
+            for value in [
+                getattr(assignment, "selected_bsm", ""),
+                *(getattr(assignment, "selected_bsms", None) or []),
+            ]
+            if str(value).strip()
+        }
+        if not selected:
+            updates.append(assignment)
+            continue
+        matches = [
+            site
+            for site in sites
+            if str(getattr(site, "target_ref", "") or "")
+            == str(getattr(assignment, "target_id", "") or "")
+            and selected.intersection(
+                str(value).strip()
+                for value in (getattr(site, "source_parcels", None) or [])
+                if str(value).strip()
+            )
+        ]
+        if not matches:
+            updates.append(assignment)
+            continue
+        evidence_refs: list[str] = []
+        relation_refs: list[str] = []
+        l1_fact_refs: list[str] = []
+        feature_bsms: list[str] = []
+        source_feature_ids: list[str] = []
+        entity_refs: list[str] = []
+        l1_snapshot_ref = str(getattr(assignment, "l1_snapshot_ref", "") or "")
+        bundle_snapshot_digest = str(
+            getattr(assignment, "bundle_snapshot_digest", "") or ""
+        )
+        candidate_ids: list[str] = []
+        for site in matches:
+            candidate_ids.append(str(getattr(site, "candidate_id", "") or ""))
+            geometry = getattr(site, "geometry", None)
+            evidence_refs.extend(getattr(site, "evidence_refs", None) or [])
+            if geometry is not None:
+                evidence_refs.extend(getattr(geometry, "evidence_refs", None) or [])
+                relation_refs.extend(getattr(geometry, "relation_refs", None) or [])
+                l1_fact_refs.extend(getattr(geometry, "l1_fact_refs", None) or [])
+                feature_bsms.extend(getattr(geometry, "feature_bsms", None) or [])
+                source_feature_ids.extend(
+                    getattr(geometry, "source_feature_ids", None) or []
+                )
+                entity_refs.extend(getattr(geometry, "entity_refs", None) or [])
+                l1_snapshot_ref = l1_snapshot_ref or str(
+                    getattr(geometry, "l1_snapshot_ref", "") or ""
+                )
+                bundle_snapshot_digest = bundle_snapshot_digest or str(
+                    getattr(geometry, "bundle_snapshot_digest", "") or ""
+                )
+        binding = dict(getattr(assignment, "target_binding", None) or {})
+        binding["grounding_lineage"] = {
+            "candidate_ids": list(dict.fromkeys(candidate_ids)),
+            "source_bsms": sorted(selected),
+            "evidence_refs": list(dict.fromkeys(str(value) for value in evidence_refs if str(value).strip())),
+            "relation_refs": list(dict.fromkeys(str(value) for value in relation_refs if str(value).strip())),
+            "l1_fact_refs": list(dict.fromkeys(str(value) for value in l1_fact_refs if str(value).strip())),
+        }
+        updates.append(
+            assignment.model_copy(
+                update={
+                    "target_binding": binding,
+                    "evidence_refs": list(dict.fromkeys([
+                        *(getattr(assignment, "evidence_refs", None) or []),
+                        *evidence_refs,
+                    ])),
+                    "relation_refs": list(dict.fromkeys([
+                        *(getattr(assignment, "relation_refs", None) or []),
+                        *relation_refs,
+                    ])),
+                    "feature_bsm": str(
+                        getattr(assignment, "feature_bsm", "")
+                        or (feature_bsms[0] if feature_bsms else "")
+                    ),
+                    "source_feature_id": str(
+                        getattr(assignment, "source_feature_id", "")
+                        or (source_feature_ids[0] if source_feature_ids else "")
+                    ),
+                    "entity_ref": str(
+                        getattr(assignment, "entity_ref", "")
+                        or (entity_refs[0] if entity_refs else "")
+                    ),
+                    "l1_snapshot_ref": l1_snapshot_ref,
+                    "bundle_snapshot_digest": bundle_snapshot_digest,
+                }
+            )
+        )
+    return decision.model_copy(update={"target_assignments": updates})
 
 
 def _filter_parcels_for_target(
@@ -503,6 +616,52 @@ def _place_facility(
     return decision, decision.selected_bsm
 
 
+def _exact_point_candidate_for_facility(
+    candidate_sites: list[CandidateSite],
+    target_id: str,
+) -> tuple[CandidateSite, tuple[float, float]] | None:
+    """Return a target-bound authoritative point without parcel fallback.
+
+    Existing facility points can be executable evidence even when the source
+    layer has no containing land-use parcel.  SELECT must preserve that exact
+    geometry; choosing a parcel centroid would replace source truth with a
+    synthetic location.
+    """
+    for site in candidate_sites:
+        if str(getattr(site, "target_ref", "") or "") != str(target_id):
+            continue
+        geometry = getattr(site, "geometry", None)
+        if geometry is None:
+            continue
+        is_execution_point = (
+            str(getattr(geometry, "role", "") or "") == "execution_geometry"
+            and bool(getattr(geometry, "is_executable", False))
+        )
+        is_exact_source_point = (
+            str(getattr(geometry, "granularity", "") or "") == "exact_feature"
+            and bool(
+                str(getattr(geometry, "source_ref", "") or "")
+                or list(getattr(geometry, "source_refs", None) or [])
+                or list(getattr(geometry, "feature_bsms", None) or [])
+                or list(getattr(geometry, "entity_refs", None) or [])
+                or list(getattr(geometry, "evidence_refs", None) or [])
+            )
+        )
+        if (
+            str(getattr(geometry, "kind", "") or "") != "point"
+            or not (is_execution_point or is_exact_source_point)
+        ):
+            continue
+        try:
+            point = shapely_wkt.loads(str(getattr(geometry, "wkt", "") or ""))
+        except Exception:
+            continue
+        if point.geom_type != "Point" or point.is_empty:
+            continue
+        return site, (float(point.x), float(point.y))
+    return None
+
+
 def select_aggregate(
     result: GroundingResult,
     intent: Any,
@@ -752,7 +911,11 @@ def select_aggregate(
                 break
     facility_rank = len(placements) + 1
     for i, facility in enumerate(facilities):
-        if not _classification_ready(facility):
+        exact_point = _exact_point_candidate_for_facility(
+            candidate_sites,
+            str(getattr(facility, "target_id", "") or ""),
+        )
+        if not _classification_ready(facility) and exact_point is None:
             decision.target_assignments.append(
                 TargetAssignment(
                     target_id=facility.target_id,
@@ -769,6 +932,80 @@ def select_aggregate(
                 "anchor_point": facility.anchor_point,
                 "status": "unplaced",
                 "facility_type": facility.type,
+            }
+            continue
+        if exact_point is not None:
+            site, anchor_point = exact_point
+            facility.anchor_point = anchor_point
+            geometry = getattr(site, "geometry", None)
+            binding = facility.model_dump(mode="json")
+            binding.update(
+                {
+                    "candidate_id": str(getattr(geometry, "candidate_id", "") or ""),
+                    "source_ref": str(getattr(geometry, "source_ref", "") or ""),
+                    "source_refs": list(getattr(geometry, "source_refs", None) or []),
+                    "evidence_refs": list(getattr(geometry, "evidence_refs", None) or []),
+                    "feature_bsms": list(getattr(geometry, "feature_bsms", None) or []),
+                    "source_feature_ids": list(
+                        getattr(geometry, "source_feature_ids", None) or []
+                    ),
+                    "entity_refs": list(getattr(geometry, "entity_refs", None) or []),
+                    "relation_refs": list(
+                        getattr(geometry, "relation_refs", None) or []
+                    ),
+                    "l1_fact_refs": list(
+                        getattr(geometry, "l1_fact_refs", None) or []
+                    ),
+                    "l1_snapshot_ref": str(
+                        getattr(geometry, "l1_snapshot_ref", "") or ""
+                    ),
+                    "bundle_snapshot_digest": str(
+                        getattr(geometry, "bundle_snapshot_digest", "") or ""
+                    ),
+                }
+            )
+            geometry_feature_bsms = list(
+                getattr(geometry, "feature_bsms", None) or []
+            )
+            geometry_source_feature_ids = list(
+                getattr(geometry, "source_feature_ids", None) or []
+            )
+            geometry_entity_refs = list(getattr(geometry, "entity_refs", None) or [])
+            decision.target_assignments.append(
+                TargetAssignment(
+                    target_id=facility.target_id,
+                    target_type="facility",
+                    status="placed",
+                    anchor_point=anchor_point,
+                    expected_output_kind=facility.expected_output_kind,
+                    target_binding=binding,
+                    feature_bsm=geometry_feature_bsms[0] if geometry_feature_bsms else "",
+                    source_feature_id=(
+                        geometry_source_feature_ids[0]
+                        if geometry_source_feature_ids
+                        else ""
+                    ),
+                    entity_ref=geometry_entity_refs[0] if geometry_entity_refs else "",
+                    relation_refs=list(getattr(geometry, "relation_refs", None) or []),
+                    evidence_refs=list(getattr(geometry, "evidence_refs", None) or []),
+                    l1_snapshot_ref=str(
+                        getattr(geometry, "l1_snapshot_ref", "") or ""
+                    ),
+                    bundle_snapshot_digest=str(
+                        getattr(geometry, "bundle_snapshot_digest", "") or ""
+                    ),
+                    score=1.0,
+                    score_breakdown={**_SCORE_BREAKDOWN_STUBS, "source_geometry": 1.0},
+                )
+            )
+            facility_rank += 1
+            occupied.append(anchor_point)
+            facility_placements[facility.target_id] = {
+                "bsm": "",
+                "anchor_point": anchor_point,
+                "status": "placed",
+                "facility_type": facility.type,
+                "candidate_id": str(getattr(geometry, "candidate_id", "") or ""),
             }
             continue
         decision_p, bsm = _place_facility(
@@ -935,6 +1172,7 @@ def select_aggregate(
                     reason=reason,
                 )
             )
+    decision = _attach_grounding_lineage_to_decision(decision, result)
     decision.refresh_derived_summaries()
     logger.info(
         "select_aggregate: zone/road assignments %.2fs (zones=%d)",

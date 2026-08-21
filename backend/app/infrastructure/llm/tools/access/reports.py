@@ -1,8 +1,8 @@
-"""layer_reports — L1/L2/L3 报告访问（summary 先行，全文按需）。
+"""layer_reports — bundle report-manifest access (summary first, body on demand).
 
-Follows progressive disclosure: the tool returns per-dimension summaries first
-(compact), and only materializes full ``content`` when ``include_content`` is
-explicitly requested. Reads the snapshot-first bundle path.
+The bundle is the only retrieval entry point. It stores report metadata and
+references; report bodies are fetched from the canonical report store only
+when ``include_content`` is explicitly requested.
 """
 
 from __future__ import annotations
@@ -36,57 +36,46 @@ async def layer_reports_impl(
     include_content: bool = False,
     max_summary_chars: int = 1200,
 ) -> Dict[str, Any]:
-    """Summary-first layer reports view from the session snapshot."""
+    """Return the report manifest carried by the resolved session bundle."""
     names = _dimension_names()
     bundle = await resolve_bundle(session_id)
-    layer_reports = bundle.layer_reports or {}
+    report_refs = list(getattr(bundle.documents, "report_refs", []) or [])
+    if layer is not None:
+        report_refs = [ref for ref in report_refs if ref.get("layer") == layer]
 
-    if layer is not None and layer in layer_reports:
-        layer_reports = {layer: layer_reports[layer]}
+    store = None
+    if include_content:
+        from app.infrastructure.reports.report_store import ReportStore
+
+        store = ReportStore.get_instance()
 
     result: Dict[str, Any] = {}
-    for l, dims in layer_reports.items():
-        for dk, rec in dims.items():
-            if dim_key and dk != dim_key:
-                continue
-            content = str(rec.get("content") or "")
-            entry: Dict[str, Any] = {
-                "dimension_key": dk,
-                "layer": l,
-                "dimension_name": names.get(dk, dk),
-                "version": rec.get("version"),
-                "generated_at": rec.get("generated_at"),
-                "summary": _truncate(str(rec.get("summary") or ""), max_summary_chars),
-                "report_available": bool(content),
-            }
-            if include_content:
-                entry["content"] = _truncate(content, max_summary_chars * 4)
-            result.setdefault(str(l), {})[dk] = entry
-
-    if not result:
-        # Snapshot has no reports — fall back to the live dimension_reports DB.
-        try:
-            from app.infrastructure.reports.report_store import ReportStore
-
-            store = ReportStore.get_instance()
-            layers = [layer] if layer is not None else [1, 2, 3]
-            for l in layers:
-                reports = await store.get_layer_reports_with_sources(session_id, l)
-                for dk, rec in reports.items():
-                    if dim_key and dk != dim_key:
-                        continue
-                    content = str(rec.get("content") or "")
-                    result.setdefault(str(l), {})[dk] = {
-                        "dimension_key": dk,
-                        "layer": l,
-                        "dimension_name": names.get(dk, dk),
-                        "version": None,
-                        "generated_at": None,
-                        "summary": _truncate(content, max_summary_chars),
-                        "report_available": bool(content),
-                    }
-        except Exception as e:
-            result["_fallback_error"] = str(e)
+    for ref in report_refs:
+        l = int(ref.get("layer") or 0)
+        dk = str(ref.get("dimension_key") or "")
+        if not dk or (dim_key and dk != dim_key):
+            continue
+        entry: Dict[str, Any] = {
+            "dimension_key": dk,
+            "layer": l,
+            "dimension_name": names.get(dk, dk),
+            "report_id": ref.get("report_id"),
+            "version": ref.get("version"),
+            "generated_at": ref.get("generated_at"),
+            "summary": _truncate(str(ref.get("summary") or ""), max_summary_chars),
+            "knowledge_sources": ref.get("knowledge_sources") or [],
+            "report_available": bool(ref.get("report_id")),
+        }
+        if include_content and store is not None:
+            report = await store.get_report(str(ref.get("report_id") or ""))
+            if report is None:
+                entry["report_available"] = False
+                entry["status"] = "missing_report_body"
+            else:
+                entry["content"] = _truncate(
+                    str(report.content or ""), max_summary_chars * 4
+                )
+        result.setdefault(str(l), {})[dk] = entry
 
     return budget_check(result)
 

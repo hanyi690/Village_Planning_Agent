@@ -99,14 +99,6 @@ class CurrentRoad(BaseRoad):
     layer_type: Literal["current_road"] = "current_road"
 
 
-ANNOTATION_LABEL_TYPE_MAP: Dict[str, str] = {
-    "篮": "体育", "健": "体育", "广": "广场", "停": "停车",
-    "电": "电力", "污": "排水", "水": "给水", "垃": "环卫",
-    "卫": "公厕", "祠": "文化", "村": "村委会", "站": "交通",
-    "小": "学校",
-}
-
-
 class BaseFacility(PointFeature):
     layer_type: str = ""
     facility_type: str = ""
@@ -127,9 +119,8 @@ class CurrentFacility(BaseFacility):
             return None
 
         text = props.get("注记", props.get("text", ""))
-        facility_type = ANNOTATION_LABEL_TYPE_MAP.get(text, "公共服务")
-        infra_types = {"电力", "排水", "给水", "环卫", "交通"}
-        cat = "infrastructure" if facility_type in infra_types else "public_service"
+        facility_type = text
+        cat = "unclassified"
 
         return cls(
             geometry=feature.get("geometry", {}),
@@ -378,5 +369,4 @@ __all__ = [
     "ContourLine", "ElevationPoint", "WaterFeature",
     "SoilType", "SoilErosion", "Watershed", "NatureReserve", "HydrogeologyZone",
     "GisFeature",
-    "ANNOTATION_LABEL_TYPE_MAP",
 ]

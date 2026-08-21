@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import logging
+import hashlib
+import json
 from enum import Enum
 from typing import Any, Dict, List, Optional
 
@@ -232,8 +234,12 @@ class TableLayerGroup(BaseModel):
 class DocumentGroup(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
-    input_documents: List[Any] = Field(default_factory=list)
-    l3_reports: List[Any] = Field(default_factory=list)
+    # Source metadata only. Bodies are loaded from PlanningSession/UploadedFile
+    # through the bundle retrieval resolver when a runtime query needs them.
+    document_refs: List[Dict[str, Any]] = Field(default_factory=list)
+    # Lightweight report manifest. Full report bodies remain in the report
+    # store and are opened only through an explicit report_id query.
+    report_refs: List[Dict[str, Any]] = Field(default_factory=list)
 
 
 class VillageMetadata(BaseModel):
@@ -270,15 +276,16 @@ class VillageBundle(BaseModel):
     metadata: VillageMetadata = Field(default_factory=VillageMetadata)
     standard_version: str = "4.4"
 
-    # L1/L2/L3 report snapshots (layer -> dim_key -> report record).
-    # Full report contents embedded for self-contained persistence.
-    layer_reports: Dict[int, Dict[str, Any]] = Field(default_factory=dict)
-
     def __init__(self, **data):
         super().__init__(**data)
         object.__setattr__(self, "_bsm_counter", {})
+        object.__setattr__(self, "_feature_bsm_index", None)
+        object.__setattr__(self, "_spatial_snapshot_digest", "")
+        object.__setattr__(self, "_spatial_snapshot_dirty", True)
 
     def add(self, feature: Any) -> None:
+        object.__setattr__(self, "_feature_bsm_index", None)
+        object.__setattr__(self, "_spatial_snapshot_dirty", True)
         self._assign_bsm(feature)
         group = _geometry_group_for(feature)
         if group == "points":
@@ -304,8 +311,6 @@ class VillageBundle(BaseModel):
         metadata_code = str(self.metadata.adcode_12 or "").strip()
         if len(metadata_code) == 12 and metadata_code.isdigit():
             return metadata_code
-        if self._bsm_counter:
-            return next(iter(self._bsm_counter))
         props = getattr(feature, "properties", {}) or {}
         xzqhdm = str(props.get("XZQHDM", "") or "").strip()
         if len(xzqhdm) == 12 and xzqhdm.isdigit():
@@ -314,6 +319,50 @@ class VillageBundle(BaseModel):
         if len(bsm) >= 12 and bsm.isdigit():
             return bsm[:12]
         return "000000000000"
+
+    def spatial_snapshot_digest(self) -> str:
+        """Return the cached digest for the bundle's geometry-bearing inputs.
+
+        Layer-1 KG cache keys are requested several times during one session
+        (build, registration, resume, and diagnostics).  Serializing the
+        complete bundle for every request is needlessly expensive for large
+        uploads.  ``add`` invalidates this value; callers that mutate a
+        feature in place must call :func:`invalidate_spatial_snapshot_digest`
+        after the mutation.
+        """
+        cached = str(getattr(self, "_spatial_snapshot_digest", "") or "")
+        if cached and not bool(getattr(self, "_spatial_snapshot_dirty", True)):
+            return cached
+        full = to_bundle_dict(self)
+        metadata = full.get("metadata", {}) or {}
+        manifest = {
+            "village_name": full.get("village_name", self.village_name),
+            "standard_version": full.get("standard_version", ""),
+            "metadata": {
+                key: metadata.get(key)
+                for key in ("bbox_wgs84", "crs", "provider_sources", "adcode_12")
+                if key in metadata
+            },
+            "points": full.get("points", {}),
+            "lines": full.get("lines", {}),
+            "polygons": full.get("polygons", {}),
+        }
+        canonical = json.dumps(
+            manifest,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+            default=str,
+        )
+        digest = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+        object.__setattr__(self, "_spatial_snapshot_digest", digest)
+        object.__setattr__(self, "_spatial_snapshot_dirty", False)
+        return digest
+
+    def invalidate_spatial_snapshot_digest(self) -> None:
+        """Invalidate the cached spatial fingerprint after in-place edits."""
+        object.__setattr__(self, "_feature_bsm_index", None)
+        object.__setattr__(self, "_spatial_snapshot_dirty", True)
 
     def _is_valid_source_bsm(self, bsm: str) -> bool:
         """Whether ``bsm`` is a plausible source BSM we should preserve.
@@ -334,6 +383,8 @@ class VillageBundle(BaseModel):
         """
         source_bsm = str(getattr(feature, "bsm", "") or "").strip()
         layer_type = str(getattr(feature, "layer_type", "") or "")
+        if len(source_bsm) == 20 and source_bsm.isdigit():
+            self._observe_synthetic_bsm(source_bsm)
         if source_bsm and layer_type not in {"landuse_current", "landuse_planned"}:
             return
         if self._is_valid_source_bsm(source_bsm):
@@ -352,6 +403,16 @@ class VillageBundle(BaseModel):
             )
         feature.bsm = synthetic
 
+    def _observe_synthetic_bsm(self, bsm: str) -> None:
+        """Advance the generated-code cursor past one persisted 12+8 BSM."""
+        if len(bsm) != 20 or not bsm.isdigit():
+            return
+        village_code = bsm[:12]
+        sequence = int(bsm[12:])
+        self._bsm_counter[village_code] = max(
+            self._bsm_counter.get(village_code, 1), sequence + 1
+        )
+
     @property
     def boundary(self) -> Any:
         admin = self.polygons.get("admin_areas")
@@ -369,6 +430,32 @@ class VillageBundle(BaseModel):
             *self.lines.all_features,
             *self.polygons.all_features,
         ]
+
+    def find_feature_by_bsm(self, bsm: str) -> Optional[tuple[str, str, Any]]:
+        """Return ``(geometry_group, layer_name, feature)`` by canonical BSM.
+
+        The index stores references to existing feature objects only. It is a
+        retrieval accelerator, not a second geometry store, and is invalidated
+        whenever a feature is added to the bundle.
+        """
+        key = str(bsm or "").strip()
+        if not key:
+            return None
+        index = getattr(self, "_feature_bsm_index", None)
+        if index is None:
+            index: Dict[str, tuple[str, str, Any]] = {}
+            for group_name, group in (
+                ("points", self.points),
+                ("lines", self.lines),
+                ("polygons", self.polygons),
+            ):
+                for layer_name in group.keys():
+                    for feature in list(group.get(layer_name) or []):
+                        feature_bsm = str(getattr(feature, "bsm", "") or "").strip()
+                        if feature_bsm and feature_bsm not in index:
+                            index[feature_bsm] = (group_name, str(layer_name), feature)
+            object.__setattr__(self, "_feature_bsm_index", index)
+        return index.get(key)
 
     @property
     def parcel_count(self) -> int:
@@ -409,6 +496,14 @@ class VillageBundle(BaseModel):
         all_roads = self.lines.get("roads_current") + self.lines.get("roads_planned")
         if all_roads:
             gis_data["road_geojson"] = _features_to_fc(all_roads)
+
+        external_roads = self.lines.get("external_roads")
+        if external_roads:
+            gis_data["external_road_geojson"] = _features_to_fc(external_roads)
+
+        water_lines = self.lines.get("water_lines")
+        if water_lines:
+            gis_data["water_line_geojson"] = _features_to_fc(water_lines)
 
         wb = self.polygons.get("water_bodies")
         if wb:
@@ -472,10 +567,9 @@ def to_bundle_dict(bundle: VillageBundle) -> Dict[str, Any]:
         "village_name": bundle.village_name,
         "standard_version": bundle.standard_version,
         "metadata": bundle.metadata.model_dump(mode="json"),
-        "layer_reports": _serialize_value(bundle.layer_reports),
         "documents": {
-            "input_documents": _serialize_value(bundle.documents.input_documents),
-            "l3_reports": _serialize_value(bundle.documents.l3_reports),
+            "document_refs": _serialize_value(bundle.documents.document_refs),
+            "report_refs": _serialize_value(bundle.documents.report_refs),
         },
         "rasters": _serialize_value(bundle.rasters.all_rasters),
         "tables": _serialize_value(bundle.tables.all_tables),
@@ -523,18 +617,11 @@ def from_bundle_dict(data: Dict[str, Any]) -> VillageBundle:
     if data.get("metadata"):
         bundle.metadata = VillageMetadata(**data["metadata"])
 
-    if data.get("layer_reports"):
-        bundle.layer_reports = {
-            int(layer): reports for layer, reports in data["layer_reports"].items()
-        }
-
     docs = data.get("documents", {}) or {}
-    if docs.get("input_documents"):
-        bundle.documents.input_documents = docs["input_documents"]
-    elif docs.get("planning_texts"):
-        bundle.documents.input_documents = docs["planning_texts"]
-    if docs.get("l3_reports"):
-        bundle.documents.l3_reports = docs["l3_reports"]
+    if docs.get("document_refs"):
+        bundle.documents.document_refs = docs["document_refs"]
+    if docs.get("report_refs"):
+        bundle.documents.report_refs = docs["report_refs"]
 
     rasters = data.get("rasters", {}) or {}
     for field_name in ("dem", "dom", "slope", "aspect", "suitability"):
@@ -562,15 +649,21 @@ def from_bundle_dict(data: Dict[str, Any]) -> VillageBundle:
     _restore_group(bundle.polygons, data.get("polygons"))
 
     counter: Dict[str, int] = {}
-    for feats in (data.get("polygons") or {}).values():
-        for f in feats:
-            bsm = str((f or {}).get("bsm", "") or "").strip()
-            if len(bsm) >= 12 and bsm.isdigit():
+    for groups in (
+        data.get("points") or {},
+        data.get("lines") or {},
+        data.get("polygons") or {},
+    ):
+        for feats in groups.values():
+            for f in feats:
+                bsm = str((f or {}).get("bsm", (f or {}).get("BSM", "")) or "").strip()
+                if len(bsm) != 20 or not bsm.isdigit():
+                    continue
                 village_code = bsm[:12]
-                tail = bsm[12:]
-                seq = int(tail) if tail.isdigit() else 0
-                if seq >= counter.get(village_code, 0):
-                    counter[village_code] = seq + 1
+                sequence = int(bsm[12:])
+                counter[village_code] = max(
+                    counter.get(village_code, 1), sequence + 1
+                )
     object.__setattr__(bundle, "_bsm_counter", counter)
 
     return bundle

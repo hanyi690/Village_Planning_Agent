@@ -739,9 +739,10 @@ class DataCatalog:
         (unchanged, reuse), then — when ``session_id`` is given — populates the
         session context onto the same bundle instance:
           * ``metadata``: session_id / planning_period / admin hierarchy
-          * ``documents.input_documents``: village_data text, task description,
-            constraints, uploaded file parsed text, project planning docs
-          * ``layer_reports``: full L1/L2/L3 report contents from the DB
+          * ``documents.document_refs``: source/record/URI/digest metadata for
+            village_data, task description, constraints, uploads and project docs
+          * ``documents.report_refs``: lightweight L1/L2/L3 report manifest
+            used by the unified bundle retrieval boundary
 
         Returns a session-scoped ``VillageBundle``.
         """
@@ -811,7 +812,6 @@ class DataCatalog:
 
         from app.database.operations import (
             get_planning_session_async,
-            get_session_reports_async,
             get_uploaded_files_by_session_async,
         )
 
@@ -823,32 +823,18 @@ class DataCatalog:
             bundle.metadata.city = session.get("city", "")
             bundle.metadata.county = session.get("county", "")
             bundle.metadata.township = session.get("township", "")
+            # Session uploads are merged below and receive generated feature
+            # BSMs during ``bundle.add``.  Resolve the 12-digit administrative
+            # prefix before that merge so uploaded points/lines do not fall
+            # back to the all-zero code.
+            self._auto_fill_admin_meta(bundle, bundle.village_name)
 
-            texts = [
-                {"source": "village_data", "name": "村庄基础数据", "content": session.get("village_data") or ""},
-                {"source": "task_description", "name": "任务描述", "content": session.get("task_description") or ""},
-                {"source": "constraints", "name": "约束条件", "content": session.get("constraints") or ""},
-            ]
-            bundle.documents.input_documents = [
-                t for t in texts if t["content"].strip()
-            ]
 
         try:
             uploaded = await get_uploaded_files_by_session_async(session_id)
         except Exception as e:
             logger.warning("[DataCatalog] Uploaded files load failed for %s: %s", session_id, e)
             uploaded = []
-        for f in uploaded:
-            text = f.get("parsed_text") or ""
-            if not text.strip():
-                continue
-            bundle.documents.input_documents.append({
-                "source": "upload",
-                "category": f.get("file_category", ""),
-                "name": f.get("original_filename") or f.get("filename", ""),
-                "content": text,
-            })
-
         # Merge uploaded GIS data (spatial) into the bundle groups so the
         # snapshot carries user uploads as features, not just parsed text.
         if uploaded_gis is None:
@@ -909,26 +895,35 @@ class DataCatalog:
         _derive_water_bodies_from_landuse(bundle)
 
         try:
-            from app.data.ingestion.documents.loader import list_available_documents, load_planning_text
-            from pathlib import Path
-            for doc in list_available_documents(bundle.village_name):
-                path = doc.get("path", "")
-                if not path:
-                    continue
-                try:
-                    content = Path(path).read_text(encoding="utf-8")
-                except Exception:
-                    continue
-                bundle.documents.input_documents.append({
-                    "source": "project_doc",
-                    "type": doc.get("type", "unknown"),
-                    "name": doc.get("name", ""),
-                    "content": content,
-                })
-        except Exception as e:
-            logger.debug("[DataCatalog] Project docs load skipped: %s", e)
+            from app.data.catalog.session_documents import (
+                load_session_documents,
+                to_document_refs,
+            )
 
-        bundle.layer_reports = await get_session_reports_async(session_id)
+            bundle.documents.document_refs = to_document_refs(
+                await load_session_documents(
+                    session_id,
+                    bundle.village_name,
+                    session=session,
+                    uploaded=uploaded,
+                )
+            )
+        except Exception as e:
+            logger.debug("[DataCatalog] Session document manifest load skipped: %s", e)
+            bundle.documents.document_refs = []
+
+        # Reports participate in bundle retrieval through a compact manifest.
+        # Their bodies remain owned by ReportStore and are fetched by report_id
+        # only when a caller explicitly requests content.
+        try:
+            from app.infrastructure.reports.report_store import ReportStore
+
+            bundle.documents.report_refs = (
+                await ReportStore.get_instance().get_session_report_manifest(session_id)
+            )
+        except Exception as exc:
+            logger.warning("[DataCatalog] Report manifest load failed for %s: %s", session_id, exc)
+            bundle.documents.report_refs = []
         bundle.metadata.bundle_version = "1.0"
         bundle.metadata.built_at = datetime.now().isoformat()
 

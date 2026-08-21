@@ -1,4 +1,4 @@
-"""L1 Observation profile - compile one L1 dimension report into a fragment.
+"""L1 Observation profile - normalize one L1 dimension into a snapshot.
 
 Enforces the roadmap constraint: 现状地类只提供分类代码与名称（ClassificationRef）；
 禁止从现状 DLBM 自动推出规划用途/规划分区/三生空间. Uses ONLY same-system
@@ -11,12 +11,17 @@ import re
 from typing import Any
 
 from app.contracts.artifacts.classification_ref import ClassificationRef
+from app.contracts.evidence.evidence_contracts import EvidenceSource
 from app.contracts.domain.l1_contracts import (
     EvidenceGap,
-    L1DimensionFragment,
     L1LocationFact,
+    L1Snapshot,
 )
 from app.contracts.workflow.parsing_contracts import CompilationProfile, CompilerTrace
+from app.domain.assessment.l1_fact_projection import (
+    location_fact_to_l1_fact,
+    make_l1_fact,
+)
 
 from ..diagnostics import collect_diagnostics
 from ..provenance import build_fragment_provenance
@@ -273,6 +278,39 @@ def _spatial_facts_from_observations(instruction: str) -> list[str]:
     return out
 
 
+def _build_fact_records(
+    *,
+    dimension_key: str,
+    report_id: str,
+    facts: list[str],
+    location_facts: list[L1LocationFact],
+    constraints: list[str],
+    classification_refs: list[ClassificationRef],
+) -> list[Any]:
+    """Create the authoritative typed L1 record set for one report."""
+    if not report_id:
+        # An unidentifiable report may still produce a display snapshot, but
+        # its claims cannot become authoritative evidence records.
+        return []
+    # L1Fact is the spatial-evidence boundary.  Report prose, constraints and
+    # current land-use classifications remain in their report/display fields;
+    # they are not promoted into a generic machine fact that later grounding
+    # could mistake for a place identity.
+    records: list[Any] = []
+    for fact in location_facts:
+        record = location_fact_to_l1_fact(fact)
+        if record is not None:
+            records.append(record)
+    seen: set[str] = set()
+    unique_records: list[Any] = []
+    for record in records:
+        if record.fact_id in seen:
+            continue
+        seen.add(record.fact_id)
+        unique_records.append(record)
+    return unique_records
+
+
 def compile_l1_observation(
     *,
     dimension_key: str,
@@ -281,7 +319,7 @@ def compile_l1_observation(
     summary: str = "",
     report_id: str = "",
     run_id: str = "",
-) -> L1DimensionFragment:
+) -> L1Snapshot:
     steps: list[str] = []
     # L1 dual-response: ``content`` is the report body (no 【INSTRUCTION】
     # marker); ``instruction`` is the structured observations JSON - the only
@@ -348,59 +386,60 @@ def compile_l1_observation(
         if first:
             facts.append(f"[{dimension_key}] {title}: {first}")
 
-    # Remote LLMs are not required to emit Markdown headings.  The previous
-    # compiler silently returned zero facts for valid prose, which made the
-    # L1 artifact look empty even though the model had observed the village.
-    # Preserve a bounded, human-readable paragraph fallback while keeping the
-    # KG promotion in l1_aggregate as the authoritative GIS fact source.
-    if not facts and display.strip():
-        for raw_line in display.splitlines():
-            line = re.sub(r"^\s*[-*\d.)]+\s*", "", raw_line).strip()
-            if not line or line.startswith(("#", "|", "```", "【", "---")):
-                continue
-            if len(line) < 12:
-                continue
-            facts.append(f"[{dimension_key}] 现状事实: {line[:240]}")
-            if len(facts) >= 12:
-                break
-        steps.append(f"fallback prose facts: {len(facts)}")
-    else:
-        marked_facts = []
-        for raw_line in display.splitlines():
-            line = raw_line.strip()
-            if line.startswith("【事实】"):
-                value = line[len("【事实】"):].strip()
-                if len(value) >= 4:
-                    marked_facts.append(f"[{dimension_key}] 现状事实: {value[:240]}")
-        facts = list(dict.fromkeys([*facts, *marked_facts]))
+    marked_facts = []
+    for raw_line in display.splitlines():
+        line = raw_line.strip()
+        if line.startswith("【事实】"):
+            value = line[len("【事实】"):].strip()
+            if len(value) >= 4:
+                marked_facts.append(f"[{dimension_key}] 现状事实: {value[:240]}")
+    facts = list(dict.fromkeys([*facts, *marked_facts]))
 
     spatial_facts = _spatial_facts_from_observations(instr)
+    fact_records = _build_fact_records(
+        dimension_key=dimension_key,
+        report_id=report_id,
+        facts=facts,
+        location_facts=location_facts,
+        constraints=constraints,
+        classification_refs=classification_refs,
+    )
 
     diagnostics = collect_diagnostics(dimension_key, display, instr)
     steps.append(f"diagnostics: {len(diagnostics)}")
 
-    return L1DimensionFragment(
-        dimension_key=dimension_key,
+    provenance = build_fragment_provenance(
+        dimension_key,
+        report_id,
+        run_id,
+        section_locators,
+        source_module="l1_observe",
+    )
+    return L1Snapshot(
+        context_version="",
+        artifact_id="",
+        fact_records=fact_records,
         facts=facts,
+        facts_by_dimension={dimension_key: list(facts)},
+        location_facts=location_facts,
         constraints=constraints,
-        issues=[],
-        opportunities=[],
         evidence_gaps=evidence_gaps,
         classification_refs=classification_refs,
-        spatial_facts=spatial_facts,
-        location_facts=location_facts,
-        diagnostics=diagnostics,
-        provenance=build_fragment_provenance(
-            dimension_key,
-            report_id,
-            run_id,
-            section_locators,
-            source_module="l1_observe",
+        sources=(
+            [EvidenceSource(source_type="report", reference=report_id)]
+            if report_id
+            else []
         ),
-        trace=CompilerTrace(
-            profile=CompilationProfile.L1_OBSERVATION,
-            steps=steps,
-        ),
+        dimension_provenance=[provenance],
+        spatial_facts_by_dimension={dimension_key: spatial_facts},
+        diagnostics_by_dimension={dimension_key: diagnostics},
+        traces_by_dimension={
+            dimension_key: CompilerTrace(
+                profile=CompilationProfile.L1_OBSERVATION,
+                steps=steps,
+            )
+        },
+        provenance=provenance,
     )
 
 

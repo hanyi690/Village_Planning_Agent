@@ -166,7 +166,7 @@ class DependencyError(Exception):
     pass
 
 
-async def _legacy_run_rag(dimension_key: str, cfg: Any, state: Dict[str, Any]) -> tuple[str, Any | None]:
+async def retrieve_vector_context(dimension_key: str, cfg: Any, state: Dict[str, Any]) -> tuple[str, Any | None]:
     """Run RAG retrieval for a dimension. Returns (context_str, RAGRetrievalLog|None).
 
     Re-reads live config from the checkpoint so PATCH updates to
@@ -199,14 +199,36 @@ async def _legacy_run_rag(dimension_key: str, cfg: Any, state: Dict[str, Any]) -
     _latest = await PlanningRuntimeService.aget_state_values(session_id)
     live_config = _latest.get("config", {}) if _latest else config
 
+    from app.core import settings
+
+    default_rag_enabled = bool(getattr(settings, "RAG_ENABLED", False))
     rag_layer_config = live_config.get("rag_layer_config", {})
-    layer_rag_enabled = rag_layer_config.get(dim_layer, True)
-    global_rag_enabled = live_config.get("rag_enabled", True)
+    global_rag_enabled = live_config.get("rag_enabled", default_rag_enabled)
+    layer_rag_enabled = rag_layer_config.get(dim_layer, global_rag_enabled)
     dim_rag_query = getattr(cfg, "rag_query", "")
     rag_enabled = layer_rag_enabled and global_rag_enabled
 
     if not rag_enabled or not dim_rag_query:
-        return ("", None)
+        skip_reason = (
+            "disabled_by_config"
+            if not rag_enabled
+            else "dimension_rag_query_missing"
+        )
+        return (
+            "",
+            RAGRetrievalLog(
+                dimension_key=dimension_key,
+                query="",
+                query_generation_method="disabled",
+                retrieved_chunks=[],
+                total_results=0,
+                retrieval_latency_ms=0,
+                context_length=0,
+                context_truncated=False,
+                rag_enabled=False,
+                skip_reason=skip_reason,
+            ),
+        )
 
     from app.infrastructure.events import event_hub as sse_manager
     from app.infrastructure.rag.service import RagService
@@ -374,6 +396,129 @@ async def _legacy_run_rag(dimension_key: str, cfg: Any, state: Dict[str, Any]) -
         return ("", rlog)
 
 
+def _compact_planning_query_text(value: Any, limit: int) -> str:
+    """Keep planning retrieval context bounded without classifying prose."""
+    if isinstance(value, (list, tuple, set)):
+        value = " ".join(str(item or "") for item in value)
+    if isinstance(value, dict):
+        value = " ".join(
+            f"{key} {item}" for key, item in value.items()
+        )
+    return " ".join(str(value or "").split()).strip()[:limit]
+
+
+def _planning_evidence_query(
+    dimension_key: str,
+    cfg: Any,
+    state: Dict[str, Any],
+) -> str:
+    """Build the bounded semantic query used by planning workers.
+
+    The query is only a retrieval input.  It does not resolve a name or
+    manufacture a spatial identity.  Typed L1 location facts add recall for
+    names that are absent from the KG/bundle labels; the EvidenceGraph still
+    decides which Bundle feature is authoritative.
+    """
+    config = state.get("config") or {}
+    session_id = str(state.get("session_id", "") or "").strip()
+    context = None
+    if session_id:
+        try:
+            from app.infrastructure.context.planning_context_factory import (
+                get_cached_context,
+            )
+
+            context = get_cached_context(session_id)
+        except Exception:
+            context = None
+
+    input_texts = {}
+    if context is not None:
+        try:
+            input_texts = context.input_texts()
+        except Exception:
+            input_texts = {}
+
+    values: list[str] = []
+    seen: set[str] = set()
+
+    def add(value: Any, limit: int) -> None:
+        text = _compact_planning_query_text(value, limit)
+        if not text:
+            return
+        key = text.casefold()
+        if key not in seen:
+            seen.add(key)
+            values.append(text)
+
+    add(
+        (
+            getattr(context, "village_name", "")
+            if context is not None
+            else ""
+        )
+        or config.get("village_name", ""),
+        120,
+    )
+    add(getattr(cfg, "name", "") or dimension_key, 160)
+    add(dimension_key, 120)
+    add(input_texts.get("task_description") or config.get("task_description", ""), 520)
+    add(input_texts.get("constraints") or config.get("constraints", ""), 420)
+
+    # Location mentions are compact semantic anchors, not an LLM-generated
+    # identity.  Keep them bounded so a large L1 snapshot cannot consume the
+    # planning prompt budget.
+    for fact in list(getattr(context, "location_facts", []) or [])[:24]:
+        add(
+            " ".join(
+                str(value or "")
+                for value in (
+                    getattr(fact, "mention", ""),
+                    getattr(fact, "normalized_name", ""),
+                    getattr(fact, "role", ""),
+                    getattr(fact, "spatial_hint", ""),
+                    " ".join(getattr(fact, "aliases", []) or []),
+                )
+            ),
+            220,
+        )
+
+    for record in list(getattr(context, "l1_fact_records", []) or [])[:24]:
+        semantic_type = str(getattr(record, "semantic_type", "") or "").strip()
+        attributes = getattr(record, "attributes", None) or {}
+        spatial_values = [
+            attributes.get(key, "")
+            for key in (
+                "location",
+                "spatial_hint",
+                "normalized_name",
+                "village",
+                "settlement",
+                "natural_village",
+            )
+        ]
+        if not any(str(value or "").strip() for value in spatial_values):
+            if semantic_type.casefold() not in {
+                "facility", "hazard", "landmark", "road", "water", "parcel",
+                "place", "settlement", "village", "zone", "infrastructure",
+            }:
+                continue
+        add(
+            " ".join(
+                str(value or "")
+                for value in (
+                    getattr(record, "subject_scope", ""),
+                    semantic_type,
+                    *spatial_values,
+                    getattr(record, "statement", ""),
+                )
+            ),
+            260,
+        )
+
+    return _compact_planning_query_text(" ".join(values), 1800)
+
+
 async def run_rag(dimension_key: str, cfg: Any, state: Dict[str, Any]) -> tuple[str, Any | None]:
     """Compatibility adapter to the unified Explore evidence service.
 
@@ -388,21 +533,87 @@ async def run_rag(dimension_key: str, cfg: Any, state: Dict[str, Any]) -> tuple[
     )
 
     session_id = str(state.get("session_id", "") or "")
+    config = state.get("config") or {}
+    external_enabled = str(
+        config.get(
+            "evidence_external_for_llm",
+            os.getenv("EVIDENCE_EXTERNAL_FOR_LLM", "false"),
+        )
+    ).strip().lower() in {"1", "true", "yes", "on"}
+    external_kwargs: dict[str, Any] = {}
+    owned_external_provider = False
+    context_refs = ["source:rag"]
+    if external_enabled:
+        # External evidence is deliberately an explicit planning opt-in.  In
+        # the normal application path the lifecycle-owned provider is reused;
+        # a typed unavailable adapter is used only for an explicit opt-in with
+        # no configured provider, so the LLM sees a diagnostic rather than a
+        # silent omission.  Neither path creates geometry or source identity.
+        try:
+            from app.application.queries.evidence import (
+                build_external_evidence_policy,
+                get_active_external_provider,
+                get_configured_external_provider,
+            )
+
+            external_port = get_active_external_provider()
+            if external_port is None:
+                external_port = get_configured_external_provider()
+                owned_external_provider = True
+            external_kwargs = {
+                "external_port": external_port,
+                "external_policy": build_external_evidence_policy(dimension_key),
+            }
+            context_refs.append("source:external")
+        except Exception as exc:  # noqa: BLE001 - explicit opt-in remains typed
+            logger.warning(
+                "[dimension_runtime] external evidence setup failed for %s: %s",
+                dimension_key,
+                exc,
+            )
+            from app.evidence.retrieval.external_search_policy import ExternalSearchPolicy
+            from app.infrastructure.search import UnavailableExternalSearchAdapter
+
+            external_kwargs = {
+                "external_port": UnavailableExternalSearchAdapter(),
+                "external_policy": ExternalSearchPolicy(
+                    allowed_dimensions=[dimension_key],
+                ),
+            }
+            context_refs.append("source:external")
     request = ExplorationRequest(
         run_id=f"{session_id}:{dimension_key}:adapter",
         request_type="spatial_lookup",
-        query=str(getattr(cfg, "name", dimension_key) or dimension_key),
+        query=_planning_evidence_query(dimension_key, cfg, state),
         stage=f"L{getattr(cfg, 'layer', 3)}",
         dimension_key=dimension_key,
         query_purpose="context_injection",
-        entity_scope=["parcels", "facilities", "roads", "annotations"],
-        context_refs=["source:rag"],
+        entity_scope=[
+            "parcels", "facilities", "roads", "annotations", "hazards",
+            "waters", "zones", "settlements",
+        ],
+        context_refs=context_refs,
     )
-    result = await retrieve_evidence(
-        request,
-        session_id=session_id,
-        village_name=str((state.get("config", {}) or {}).get("village_name", "") or ""),
-    )
+    try:
+        result = await retrieve_evidence(
+            request,
+            session_id=session_id,
+            village_name=str(config.get("village_name", "") or ""),
+            **external_kwargs,
+        )
+    finally:
+        if owned_external_provider:
+            close = getattr(external_kwargs.get("external_port"), "close", None)
+            if callable(close):
+                try:
+                    outcome = close()
+                    if hasattr(outcome, "__await__"):
+                        await outcome
+                except Exception as exc:  # noqa: BLE001 - cleanup is best effort
+                    logger.warning(
+                        "[dimension_runtime] external provider cleanup failed: %s",
+                        exc,
+                    )
     rag_log = None
     try:
         from app.evidence.retrieval.retrievers.rag_retriever import consume_rag_log
@@ -413,6 +624,7 @@ async def run_rag(dimension_key: str, cfg: Any, state: Dict[str, Any]) -> tuple[
     return render_evidence_prompt_section(
         result.evidence_bundle,
         result.spatial_cognition,
+        result.evidence_packet,
     ), rag_log
 
 
@@ -743,6 +955,7 @@ __all__ = [
     "RAGRetrievalLog",
     "DependencyError",
     "is_provider_quota_exhausted",
+    "retrieve_vector_context",
     "run_rag",
     "load_dependency_reports",
     "load_layered_dependency_reports",

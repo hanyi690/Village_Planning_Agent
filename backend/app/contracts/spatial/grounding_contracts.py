@@ -57,6 +57,9 @@ class CandidateSite(BaseModel):
     target_kind: str = "unknown"
     expected_output_kind: str = "unknown"
     geometry: CandidateGeometry | None = None
+    candidate_bbox: tuple[float, float, float, float] | None = None
+    source_area_ha: float = 0.0
+    coverage_ratio: float | None = None
 
     @model_validator(mode="after")
     def derive_candidate_id(self) -> "CandidateSite":
@@ -89,8 +92,15 @@ class GroundedAnchor(ContractMeta):
     entity_ref: str = ""
     entity_type: str = ""
     geometry_ref: str | None = None
+    feature_bsm: str | None = None
+    source_feature_id: str | None = None
+    source_layer: str | None = None
+    related_parcel_bsms: list[str] = Field(default_factory=list)
     source_bsms: list[str] = Field(default_factory=list)
     relation_refs: list[str] = Field(default_factory=list)
+    l1_fact_refs: list[str] = Field(default_factory=list)
+    l1_snapshot_ref: str = ""
+    bundle_snapshot_digest: str = ""
     topology_evidence: list[str] = Field(default_factory=list)
     coordinate_key: str = ""
     confidence: float = 0.0

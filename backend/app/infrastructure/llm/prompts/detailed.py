@@ -52,7 +52,7 @@ GIS_TOOL_GUIDE = """
 - 规划目标：农田保护区 {intent_targets_farmland} 公顷，村庄建设区 {intent_targets_construction} 公顷，生态保护区 {intent_targets_ecological} 公顷
 - 涉及空间布局的维度（产业/公共设施/生态/交通/空间结构/土地利用）必须引用上述数据
 - 生成设施清单时参考 facility_placer 服务半径标准：教育 500m、医疗 300m、养老 600m、村委会 500m、市场 1000m
-- 数值若为 N/A 表示 GIS 数据未注入，按常规规划经验给出合理数值并标注"待 GIS 校核"
+- N/A 表示该数据没有注入；不得用规划经验补造数值。只能保留为空并在正文或 uncertainty 中说明待核实。
 """
 
 CLAIMS_OUTPUT_GUIDE = """
@@ -61,15 +61,27 @@ CLAIMS_OUTPUT_GUIDE = """
 1. report_body：完整的规划报告正文（Markdown 散文 + 表格），用于组装村庄规划法定文本(.docx)；不得为空。
 2. claims：本维度所有带证据的规划判断（结构化 claims 数组）。
 
+【正文与 claims 的双通道交付协议】
+- 这是一个同时交付“人类可读正文”和“机器可编译 claims”的响应；两个字段都必须填写，不能只返回 claims。正文通常控制在 400—1200 个中文字符，证据不足时宁可精简。
+- report_body 必须是可以直接展示给规划人员的本维度正文，使用当前专业维度已经规定的【主题】小节、自然段和 Markdown 表格；至少说明已核验的现状依据、规划安排和实施重点。
+- report_body 不得是 JSON、Python 字典、claims 数组、schema_version 摘要、调试信息或“见 claims”；不得把机器字段名逐条罗列代替正文。
+- claims 只承担后续编译、GROUND、SELECT 和 EXECUTE 所需的结构化判断；不要把 report_body 填进 claims 字段，也不要在 report_body 中复制完整 claims JSON。
+- 正文与 claims 应引用同一批已给出的证据，但表达形式不同：正文面向人，claims 面向编译器。即使本维度没有空间干预，也必须提供正文，并将 claims 置为空数组而不是省略 report_body。
+- source_fact_refs 只能从“已审计 L1 spatial facts”区块逐字复制 fact_id；无法由该区块支持的空间事实不得填写。source_fact_refs 不是地点名、BSM、坐标或自由文本。
+- 空间 claim 的 location_hints 是交给 EvidenceGraph/GROUND 的语义检索线索，不等于已经定位。若“已审计 L1 spatial facts”有直接支持，逐字填写对应 source_fact_refs；若只有 L1 report、专业 RAG 或外源文本支持，可以保留 location_hints，但必须让 GROUND 继续检索并验证，不能在 L3 直接生成 BSM、坐标、地块或几何。不得从行政区划名单或模型常识补齐地点。
+- 不得返回 Markdown 代码围栏包裹的对象，不得返回仅包含 claims 的对象，不得以空字符串、null 或“待补充”代替 report_body。
+
 每条 claim 必须是带证据的规划判断，包含：claim_id、statement、suggested_category、suggested_output_kind、
 suggested_interventions、quantity/quantity_unit（若有）、implementation_phase、location_hints、
-constraint_refs、objective_refs、evidence_refs、uncertainty。没有证据支持的位置、面积、地块或项目不得编造，
+constraint_refs、objective_refs、evidence_refs、source_fact_refs、uncertainty。source_fact_refs 只能引用上游
+L1Fact.fact_id 或已审计的 typed source fact，不得填写自由字符串；没有证据支持的位置、面积、地块或项目不得编造，
 应留空并说明 uncertainty。suggested_category 只能是 site_area/facility/road/axis/restoration/protection/zone/action；
 线性 claim 还必须选择 asset_kind 闭集：road/water_supply/sewer/stormwater/power/communication/drainage_channel/revetment；非线性 claim 使用 none/facility/land_use/axis。asset_kind 是语义类型，不得根据宽度、文本关键词或几何类型在后续推断；
 suggested_output_kind 只能是 parcel/polygon/point/line/action。facility 表示可定位的服务节点，服务中心、广场、停车场、观景点、污水处理设施等设施必须使用 facility + point；site_area 只表示有明确范围、需要占用或改造地块的面状干预，必须使用 site_area + parcel/polygon。没有任何空间落位含义的管理/政策/培训事项才使用 action。claim 不是执行目标，不得填写最终 BSM、几何或 ClassificationDecision。
 
 每个空间 claim 必须在首次生成时给出与对象类型对应的结构化参数，禁止把关键尺度只写在 statement：
 - road asset_kind 使用 road_parameters：action 只能是 preserve/new/upgrade/widen/harden/repair；其余字段为 road_level、length、roadbed_width、pavement_width、alignment_refs、connects；每个量值写成 {"value": 数值, "unit": "m|km"}。长度、路基宽、路面宽必须分开；connects 只写原文明确的两端对象，沿既有道路改造则把道路名写入 alignment_refs。
+- 道路建设是“线性成果 + 地块用地变更”的双 worker 任务：road claim 只表达道路中心线/走廊及其道路参数，不能把道路写成 site_area，也不能在 claim 中填写 BSM、坐标、候选地块或几何。intervention_action=new 或 widen 时，后续 ROAD EXECUTE worker 会依据真实线与现状地块的相交结果，切出实际占用部分并将其规划用地性质写为交通运输用地，同时保留未占用的地块剩余面；upgrade/harden/repair 只产生线性改造成果，除非证据明确支持新增占地，不得自动改地块性质。不要为同一条道路再编造一个重复的 site_area claim。
 - water_supply/sewer/stormwater/power/communication/drainage_channel/revetment 使用 linear_parameters：action 只能是 preserve/new/upgrade/expand/repair；字段为 length、diameter、material、alignment_refs、connects。管径写入 diameter，绝不能写入 roadbed_width 或 pavement_width。asset_kind 与参数对象必须一一匹配；不能使用 road_parameters 表达非道路线性工程。
 - facility 使用 facility_parameters：action 只能是 preserve/new/expand/relocate/repair；其余字段为 facility_type、service_radius、capacity、footprint_area；服务半径用 m/km，占地用 m2/ha。保留、新建、扩建、迁建不得混淆。
 - axis 使用 axis_parameters：action 只能是 preserve/new/upgrade；axis_type 只能是 primary/secondary/spatial_control；其余字段为 direction、reference_features、connects、corridor_width；不得把发展轴退化成普通道路。
@@ -89,7 +101,15 @@ suggested_output_kind 只能是 parcel/polygon/point/line/action。facility 表�
 - 空间 claim 必须填对应结构化参数（road_parameters/linear_parameters/facility_parameters/polygon_parameters/site_area_parameters），禁止把关键尺度只写在 statement。
 
 所有参数只表达规划语义和来源量值，不得填写坐标、BSM、候选地块、端点、网络拓扑或几何；单位换算由确定性编译器完成。LLM 只选择闭集 asset_kind 和 action；目标实体、拓扑关系、现状网络与候选走廊必须由已有 KG 和真实空间数据在 GROUND/SELECT 计算。
-report_body 写完整的法定文本报告正文（用【主题】标记段落、markdown 表格列清单）；claims 只写结构化判断，不要写解释文字。
+report_body 写精炼的法定文本报告正文（用【主题】标记段落、Markdown 表格列清单）；claims 只写结构化判断，不要写解释文字。
+"""
+
+L3_EVIDENCE_PRIORITY_GUIDE = """
+【证据优先级与模板覆盖规则】
+1. L1 report 是现状分析背景；已审计的 L1 spatial facts、EvidenceGraph 的空间事实/候选/拓扑，以及本节明确标注的专业文本，才是对应判断的可用依据。来源标签和证据作用必须保持，不得把规划背景当成空间事实。
+2. 当前模板中的项目数量、示例地点、示例数值和“至少列出”等文字只是排版示例，不是生成数量要求；没有证据就不生成项目、地点、面积、长度或容量。
+3. LLM 只输出规划语义和来源 fact_id。不得从名称、BSM、坐标、几何类型或道路宽度推导另一个实体，也不得在 report_body 或 claims 中制造空间标识。
+4. 每条空间 claim 必须明确它是“L1 fact 已绑定”还是“语义候选、需要 GROUND 检索”。source_fact_refs 只在已审计 L1 spatial facts 直接支持时填写，填写后必须逐字匹配 fact_id；没有 L1 fact 不等于没有规划想法，但不得把 report/RAG/外源文本当作空间身份 authority。无法通过后续 EvidenceGraph 闭合的候选由 GROUND/VALIDATE 返回证据缺口，不能用“待定”、经验值或隐式回退掩盖。
 """
 
 LOCATION_EVIDENCE_GUIDE = """
@@ -921,49 +941,10 @@ def get_dimension_prompt(dimension_key: str, revision_instruction: str = "", **k
 
     # L3 emits evidence-bearing claims.  Spatial execution is decided later
     # by the domain engines and never by a report suffix or Markdown table.
+    result += L3_EVIDENCE_PRIORITY_GUIDE
     result += CLAIMS_OUTPUT_GUIDE
 
     return result
-
-
-
-    # 处理字符串输入
-    if isinstance(professional_data, str):
-        return f"\n**【专业数据】**：\n{professional_data}\n"
-
-    sections = []
-
-    # 道路交通规划维度的专业数据
-    if dimension_key in ["traffic", "traffic_planning"]:
-        if professional_data.get("connectivity_metrics"):
-            conn = professional_data["connectivity_metrics"]
-            sections.append(f"""
-**【专业数据 - 路网连通度分析】**：
-- 路网密度：{conn.get('network_density', 'N/A')} 公里/平方公里
-- 连通性指数：{conn.get('connectivity_index', 'N/A')}
-""")
-
-        if professional_data.get("accessibility_analysis"):
-            acc = professional_data["accessibility_analysis"]
-            sections.append(f"""
-**【专业数据 - 可达性分析】**：
-- 服务区域覆盖：{acc.get('coverage_ratio', 'N/A')}
-""")
-
-    # 公共服务设施规划维度的专业数据
-    elif dimension_key == "public_service":
-        if professional_data.get("population_structure"):
-            pop = professional_data["population_structure"]
-            sections.append(f"""
-**【专业数据 - 人口结构】**：
-- 预测人口：{pop.get('total_population', 'N/A')} 人
-""")
-
-    if sections:
-        return "\n".join(sections)
-
-    return ""
-
 
 
 
@@ -975,6 +956,7 @@ __all__ = [
     "WRITING_RULES",
     "GIS_TOOL_GUIDE",
     "CLAIMS_OUTPUT_GUIDE",
+    "L3_EVIDENCE_PRIORITY_GUIDE",
     "INDUSTRY_PLANNING_PROMPT",
     "TRAFFIC_PLANNING_PROMPT",
     "PUBLIC_SERVICE_PROMPT",

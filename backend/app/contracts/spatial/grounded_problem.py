@@ -28,6 +28,10 @@ class GroundedCandidateDomain(BaseModel):
     target_id: str
     candidate_ids: list[str] = Field(default_factory=list)
     candidate_geometry_refs: list[str] = Field(default_factory=list)
+    selection_mode: Literal["all_members", "choose_one", "choose_subset"] = "choose_one"
+    min_selected: int = Field(default=0, ge=0)
+    max_selected: int | None = Field(default=None, ge=0)
+    binding_ref: str = ""
     status: Literal["resolved", "candidate_only", "ambiguous", "unresolved"] = "unresolved"
     deferred_reason: str = ""
 
@@ -35,6 +39,14 @@ class GroundedCandidateDomain(BaseModel):
     def canonicalize_refs(self) -> "GroundedCandidateDomain":
         self.candidate_ids = _sorted_strings(self.candidate_ids)
         self.candidate_geometry_refs = _sorted_strings(self.candidate_geometry_refs)
+        if self.selection_mode == "all_members" and self.candidate_ids:
+            self.min_selected = len(self.candidate_ids)
+            self.max_selected = len(self.candidate_ids)
+        elif self.selection_mode == "choose_one" and self.candidate_ids:
+            self.min_selected = 1
+            self.max_selected = 1
+        elif self.max_selected is not None and self.max_selected < self.min_selected:
+            raise ValueError("max_selected must be >= min_selected")
         return self
 
 

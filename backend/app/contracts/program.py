@@ -65,6 +65,7 @@ class PlanningClaim(BaseModel):
     constraint_refs: list[str] = Field(default_factory=list)
     objective_refs: list[str] = Field(default_factory=list)
     evidence_refs: list[str] = Field(default_factory=list)
+    source_fact_refs: list[str] = Field(default_factory=list)
     source_refs: list[str] = Field(default_factory=list)
     confidence: float | None = None
     uncertainty: str = ""

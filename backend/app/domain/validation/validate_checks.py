@@ -203,6 +203,12 @@ def check_hard_constraints(planned_state: Any, constraint_index: Any) -> List[Va
         ]
     findings: list[ValidationCheck] = []
     for parcel in planned_state.parcels or []:
+        # A split remainder keeps the existing land use.  It is emitted so
+        # the parcel partition remains complete, but it is not a new planning
+        # decision and must not be rejected merely because the source parcel
+        # already overlaps a protected constraint.
+        if str(getattr(parcel, "operation", "") or "") == "preserve":
+            continue
         # Overlay semantics are non-exclusive by contract.  A protection or
         # restoration overlay may intentionally intersect a prohibited
         # *land-use* constraint; its relation-specific hard factors are
@@ -331,25 +337,35 @@ def check_area_conservation(changeset: Any) -> List[ValidationCheck]:
     total_before = 0.0
     total_after = 0.0
     pair_diffs: List[tuple] = []
+    conservation_groups: dict[tuple[str, ...], dict[str, float]] = {}
     for change in changeset.changes or []:
         before_area = _wkt_area(change.before_geometry_wkt)
         after_area = _wkt_area(change.after_geometry_wkt)
-        if before_area > 0 and after_area > 0:
+        lineage = tuple(sorted(str(value) for value in (change.derived_from_bsms or []) if str(value)))
+        if lineage:
+            group = conservation_groups.setdefault(lineage, {"before": 0.0, "after": 0.0})
+            if before_area > group["before"]:
+                group["before"] = before_area
+            group["after"] += after_area
+        elif before_area > 0 and after_area > 0:
             total_before += before_area
             total_after += after_area
+        if before_area > 0 and after_area > 0:
             pair_diffs.append((abs(after_area - before_area), change.bsm))
     split_groups: dict = {}
     for change in changeset.changes or []:
-        if change.action in ("split", "merge", "create"):
-            if change.action == "create" and not (change.derived_from_bsms or []):
-                continue
-            key = tuple(sorted(change.derived_from_bsms or [])) or (change.bsm,)
-            group = split_groups.setdefault(key, {"before": 0.0, "after": 0.0, "bsms": []})
-            before = _wkt_area(change.before_geometry_wkt)
-            if before > group["before"]:
-                group["before"] = before
-            group["after"] += _wkt_area(change.after_geometry_wkt)
-            group["bsms"].append(change.bsm)
+        lineage = tuple(sorted(str(value) for value in (change.derived_from_bsms or []) if str(value)))
+        if not lineage and change.action not in ("split", "merge", "create"):
+            continue
+        if change.action == "create" and not lineage:
+            continue
+        key = lineage or (change.bsm,)
+        group = split_groups.setdefault(key, {"before": 0.0, "after": 0.0, "bsms": []})
+        before = _wkt_area(change.before_geometry_wkt)
+        if before > group["before"]:
+            group["before"] = before
+        group["after"] += _wkt_area(change.after_geometry_wkt)
+        group["bsms"].append(change.bsm)
     mismatched: List[str] = []
     for key, group in split_groups.items():
         before = group["before"]
@@ -358,6 +374,9 @@ def check_area_conservation(changeset: Any) -> List[ValidationCheck]:
         ratio = abs(group["after"] - before) / max(before, 1e-9)
         if ratio >= _AREA_TOLERANCE:
             mismatched.extend(group["bsms"])
+    for group in conservation_groups.values():
+        total_before += group["before"]
+        total_after += group["after"]
     drift = 0.0
     if total_before > 0:
         drift = abs(total_after - total_before) / max(total_before, 1e-9)
@@ -624,6 +643,50 @@ def check_worker_failures(execution_result: Any) -> List[ValidationCheck]:
                 fix="按 typed repair directive 补证据、重选或重建目标几何",
             )
     return sorted(findings.values(), key=lambda finding: finding.violation_id)
+
+
+def check_bundle_snapshot_lineage(
+    planned_state: Any,
+    execution_plan: Any,
+    execution_result: Any,
+    current_bundle_digest: str = "",
+) -> List[ValidationCheck]:
+    """Reject outputs assembled from more than one bundle geometry snapshot."""
+    declared: set[str] = set()
+    for item in list(getattr(execution_result, "task_results", None) or []):
+        value = str(getattr(item, "bundle_snapshot_digest", "") or "").strip()
+        if value:
+            declared.add(value)
+    for item in list(getattr(execution_plan, "worker_tasks", None) or []) + list(
+        getattr(execution_plan, "deferred_tasks", None) or []
+    ):
+        value = str(getattr(item, "bundle_snapshot_digest", "") or "").strip()
+        if value:
+            declared.add(value)
+    result_digest = str(getattr(execution_result, "bundle_snapshot_digest", "") or "").strip()
+    if result_digest:
+        declared.add(result_digest)
+    current = str(current_bundle_digest or "").strip()
+    mixed = len(declared) > 1
+    mismatch = bool(current and declared and declared != {current})
+    passed = not mixed and not mismatch
+    actual = f"declared={sorted(declared)}, current={current or 'unknown'}"
+    return [
+        _check(
+            "bundle_snapshot_lineage",
+            "bundle 几何快照一致性",
+            passed,
+            stage="GROUND" if mismatch else "EXECUTE",
+            actual=actual,
+            expected="所有空间产物引用同一 bundle snapshot digest",
+            evidence_refs=sorted(declared),
+            fix=(
+                "重新从同一 bundle 快照执行 GROUND→SELECT→EXECUTE，禁止混用旧几何"
+                if not passed
+                else ""
+            ),
+        )
+    ]
 
 
 def _planned_geoms(planned_state: Any) -> tuple[List[tuple], List[tuple]]:

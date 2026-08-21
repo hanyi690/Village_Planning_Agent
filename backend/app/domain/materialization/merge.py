@@ -52,9 +52,24 @@ def _change_after_wkt(change: Any) -> str:
     return str(getattr(change, "after_geometry_wkt", None) or "")
 
 
+def _change_source_bsms(change: Any) -> set[str]:
+    values = getattr(change, "derived_from_bsms", None) or []
+    if isinstance(values, str):
+        values = [values]
+    return {str(value).strip() for value in values if str(value).strip()}
+
+
 def _detect_bsm_conflicts(worker_results: List[Any]) -> List[Dict[str, Any]]:
-    """Detect multiple authoritative writes to one BSM."""
+    """Detect conflicting authoritative writes to source parcels.
+
+    A worker may split a source parcel and therefore emit a derived BSM rather
+    than reusing the source BSM.  Result-BSM uniqueness alone would miss an
+    overlapping project/road write, so source lineage and resulting geometry
+    are checked together.  Disjoint sub-geometries from one source parcel are
+    valid and remain independently materializable.
+    """
     by_bsm: Dict[str, List[Tuple[Any, Any]]] = {}
+    authoritative: list[tuple[Any, Any]] = []
     for result in worker_results or []:
         for change in _result_get(result, "parcel_changes") or []:
             bsm = _change_bsm(change)
@@ -64,6 +79,7 @@ def _detect_bsm_conflicts(worker_results: List[Any]) -> List[Dict[str, Any]]:
             if not _change_after_code(change):
                 continue
             by_bsm.setdefault(bsm, []).append((result, change))
+            authoritative.append((result, change))
 
     conflicts: List[Dict[str, Any]] = []
     for bsm, entries in by_bsm.items():
@@ -106,6 +122,66 @@ def _detect_bsm_conflicts(worker_results: List[Any]) -> List[Dict[str, Any]]:
                     ],
                 }
             )
+
+    from shapely import wkt
+
+    parsed: list[tuple[Any, Any, Any]] = []
+    for result, change in authoritative:
+        source_bsms = _change_source_bsms(change)
+        geometry = None
+        try:
+            geometry = wkt.loads(_change_after_wkt(change))
+            if geometry.is_empty or not geometry.is_valid:
+                geometry = None
+        except Exception:
+            geometry = None
+        if source_bsms and geometry is not None:
+            parsed.append((result, change, geometry))
+    for index, (left_result, left_change, left_geometry) in enumerate(parsed):
+        for right_result, right_change, right_geometry in parsed[index + 1:]:
+            if not (_change_source_bsms(left_change) & _change_source_bsms(right_change)):
+                continue
+            if str(_result_get(left_result, "worker_type", "")) == str(
+                _result_get(right_result, "worker_type", "")
+            ) and str(getattr(left_change, "intervention_id", "") or "") == str(
+                getattr(right_change, "intervention_id", "") or ""
+            ):
+                continue
+            try:
+                overlap = left_geometry.intersection(right_geometry)
+                if overlap.is_empty or float(overlap.area) <= 1e-12:
+                    continue
+            except Exception:
+                continue
+            source_bsms = sorted(
+                _change_source_bsms(left_change) & _change_source_bsms(right_change)
+            )
+            target_ids = sorted({
+                str(getattr(left_change, "intervention_id", "") or ""),
+                str(getattr(right_change, "intervention_id", "") or ""),
+            } - {""})
+            conflicts.append({
+                "type": "source_parcel_overlap",
+                "code": "authoritative_source_geometry_overlap",
+                "blocking": True,
+                "source_bsms": source_bsms,
+                "target_ids": target_ids,
+                "overlap_area": float(overlap.area),
+                "workers": [
+                    {
+                        "worker_type": _result_get(left_result, "worker_type", ""),
+                        "bsm": _change_bsm(left_change),
+                        "action": getattr(left_change, "action", ""),
+                        "target_id": str(getattr(left_change, "intervention_id", "") or ""),
+                    },
+                    {
+                        "worker_type": _result_get(right_result, "worker_type", ""),
+                        "bsm": _change_bsm(right_change),
+                        "action": getattr(right_change, "action", ""),
+                        "target_id": str(getattr(right_change, "intervention_id", "") or ""),
+                    },
+                ],
+            })
     return conflicts
 
 

@@ -28,6 +28,11 @@ class RelationEvaluationContext:
     # service relation must consume this typed demand input rather than infer
     # demand from a parcel centroid or the nearest existing facility.
     demands: Mapping[str, object] = field(default_factory=dict)
+    # External entity/place-hint geometries are resolved from EvidenceGraph
+    # identities and read from bundle authority before relation evaluation.
+    # They are internal ScenarioFeature inputs, never EvidencePacket payloads.
+    reference_features: Mapping[str, ScenarioFeature] = field(default_factory=dict)
+    reference_diagnostics: tuple[str, ...] = ()
     execution_trace: ExecutionTrace | None = None
     evaluator_version: str = "relation-evaluator-v1"
 
@@ -142,10 +147,25 @@ def _network_measure(network, key: str, subject, object_, factor):
     return None
 
 
-def _feature_index(features: Sequence[ScenarioFeature]) -> dict[str, list[ScenarioFeature]]:
+def index_relation_features(
+    features: Sequence[ScenarioFeature],
+) -> dict[str, list[ScenarioFeature]]:
+    """Index planned and external features by every auditable identity key."""
+
     result: dict[str, list[ScenarioFeature]] = {}
     for feature in features:
-        for key in (feature.feature_id, feature.target_id, feature.candidate_id):
+        keys = (
+            feature.feature_id,
+            feature.target_id,
+            feature.candidate_id,
+            *list(getattr(feature, "entity_refs", None) or []),
+            *list(getattr(feature, "feature_bsms", None) or []),
+            *list(getattr(feature, "source_bsms", None) or []),
+            *list(getattr(feature, "source_feature_ids", None) or []),
+        )
+        for key in keys:
+            if not str(key or "").strip():
+                continue
             result.setdefault(key, []).append(feature)
     return result
 
@@ -180,7 +200,7 @@ def evaluate_relations(
             "co_locate",
         ):
             registry.register_alias(key, geometry_evaluator)
-    indexed = _feature_index(features)
+    indexed = index_relation_features(features)
     results: list[RelationSatisfaction] = []
     for factor in factors:
         if factor.evaluator_key == "precedes" or factor.kind == "precedes":
@@ -214,4 +234,8 @@ def evaluate_relations(
     return results
 
 
-__all__ = ["RelationEvaluationContext", "evaluate_relations"]
+__all__ = [
+    "RelationEvaluationContext",
+    "evaluate_relations",
+    "index_relation_features",
+]

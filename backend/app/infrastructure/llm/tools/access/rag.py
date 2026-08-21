@@ -1,7 +1,7 @@
 """rag_search / index_bundle_texts — 会话文本清单检索。
 
-文本源收口：bundle 快照的 ``documents.input_documents`` 是会话可检索文本的
-权威清单。检索时以清单为准：
+文本源收口：bundle 快照的 ``documents.document_refs`` 是会话可检索文本的
+权威清单，正文按 ref 从 PlanningSession/UploadedFile/项目文档源按需解析。检索时以清单为准：
   - 提供 source/name 过滤时，只在清单命中范围内做关键词检索；
   - 未过滤时，先尝试向量库语义检索（仅收进清单内已有同名文档的结果），
     再补关键词兜底，保证口径统一、无全库漂移。
@@ -39,6 +39,31 @@ def _indexed_sources() -> set:
 
 def _query_chars(query: str) -> List[str]:
     return [c for c in query if c.strip() and not c.isspace()]
+
+
+async def _bundle_documents(session_id: str, bundle: Any) -> List[Dict[str, Any]]:
+    from app.data.catalog.session_documents import load_session_documents
+
+    refs = list(getattr(bundle.documents, "document_refs", []) or [])
+    allowed = {
+        (
+            str(ref.get("source") or ""),
+            str(ref.get("name") or ""),
+            str(ref.get("content_digest") or ""),
+        )
+        for ref in refs
+    }
+    documents = await load_session_documents(
+        session_id, str(getattr(bundle, "village_name", "") or "")
+    )
+    return [
+        document for document in documents
+        if (
+            str(document.get("source") or ""),
+            str(document.get("name") or ""),
+            str(document.get("content_digest") or ""),
+        ) in allowed
+    ]
 
 
 def _snippet(content: str, query: str, width: int = 120) -> str:
@@ -91,7 +116,7 @@ async def rag_search_impl(
         return {"success": False, "error": "query 不能为空"}
 
     bundle = await resolve_bundle(session_id)
-    inventory = list(bundle.documents.input_documents or [])
+    inventory = await _bundle_documents(session_id, bundle)
 
     if source and source not in _SESSION_SOURCES:
         return {"success": False, "error": f"未知 source: {source}（可选: {'/'.join(sorted(_SESSION_SOURCES))}）"}
@@ -173,7 +198,7 @@ async def index_bundle_texts_impl(
 ) -> Dict[str, Any]:
     """将 bundle 清单中尚未进入向量库的文本补索引（渐进启用）。"""
     bundle = await resolve_bundle(session_id)
-    inventory = list(bundle.documents.input_documents or [])
+    inventory = await _bundle_documents(session_id, bundle)
     if source:
         inventory = [t for t in inventory if t.get("source") == source]
 

@@ -30,6 +30,41 @@ def _feature_collection(features: List[Dict[str, Any]]) -> Dict[str, Any]:
     return {"type": "FeatureCollection", "features": features}
 
 
+def _lineage_properties(item: Any) -> Dict[str, Any]:
+    """Expose bounded execution/evidence lineage for frontend drill-down."""
+    result: Dict[str, Any] = {}
+    for name in (
+        "source_bsms",
+        "feature_bsms",
+        "source_feature_ids",
+        "entity_refs",
+        "relation_refs",
+        "evidence_refs",
+    ):
+        values = getattr(item, name, None) or []
+        if isinstance(values, str):
+            values = [values]
+        result[name] = list(dict.fromkeys(str(value) for value in values if str(value).strip()))
+    for name in (
+        "l1_snapshot_ref",
+        "bundle_snapshot_digest",
+        "subgeometry_operation",
+    ):
+        result[name] = str(getattr(item, name, "") or "")
+    result["subgeometry_diagnostics"] = list(
+        dict.fromkeys(
+            str(value)
+            for value in (getattr(item, "subgeometry_diagnostics", None) or [])
+            if str(value).strip()
+        )
+    )
+    for name in ("source_area_ha", "coverage_ratio"):
+        value = getattr(item, name, None)
+        if value is not None:
+            result[name] = float(value)
+    return result
+
+
 def _delivery_gis_data(gis_data: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     """Normalize known bundle/control-layer aliases for delivery rendering."""
     current = dict(gis_data or {})
@@ -65,6 +100,7 @@ def _function_zone_layer(planned_state: Any) -> Optional[Dict[str, Any]]:
                 "zone_type": getattr(parcel, "zone_type", ""),
                 "operation": getattr(parcel, "operation", ""),
                 "area_ha": getattr(parcel, "area_ha", 0),
+                **_lineage_properties(parcel),
             },
             "geometry": geometry,
         })
@@ -112,6 +148,7 @@ def _project_layer(planned_state: Any) -> Optional[Dict[str, Any]]:
                 "bsm": getattr(parcel, "bsm", ""),
                 "planning_land_use": getattr(parcel, "planning_land_use", ""),
                 "operation": getattr(parcel, "operation", ""),
+                **_lineage_properties(parcel),
             },
             "geometry": geometry,
         })
@@ -140,6 +177,7 @@ def _semantic_overlay_layers(planned_state: Any) -> List[Dict[str, Any]]:
                 "candidate_id": getattr(overlay, "candidate_id", ""),
                 "feature_id": getattr(overlay, "feature_id", ""),
                 "materialization_role": role,
+                **_lineage_properties(overlay),
             },
             "geometry": geometry,
         })
@@ -218,6 +256,7 @@ def _facility_layer(planned_state: Any) -> Optional[Dict[str, Any]]:
                 "source_refs": list(getattr(facility, "source_refs", None) or []),
                 "source_bsms": list(getattr(facility, "source_bsms", None) or []),
                 "geometry_ref": getattr(facility, "geometry_ref", ""),
+                **_lineage_properties(facility),
             },
             "geometry": geometry,
         })
@@ -238,6 +277,7 @@ def _road_layer(planned_state: Any) -> Optional[Dict[str, Any]]:
                 "road_level": getattr(road, "road_level", ""),
                 "width_m": getattr(road, "width_m", 0),
                 "action": getattr(road, "action", ""),
+                **_lineage_properties(road),
             },
             "geometry": geometry,
         })
@@ -257,6 +297,7 @@ def _axis_layer(planned_state: Any) -> Optional[Dict[str, Any]]:
                 "name": getattr(axis, "name", ""),
                 "reference_feature": getattr(axis, "reference_feature", ""),
                 "direction": getattr(axis, "direction", ""),
+                **_lineage_properties(axis),
             },
             "geometry": geometry,
         })

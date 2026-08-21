@@ -72,6 +72,37 @@ def build_candidate_domains(
     for domain in grouped.values():
         domain.candidate_ids = list(dict.fromkeys(domain.candidate_ids))
         domain.candidate_geometry_refs = list(dict.fromkeys(domain.candidate_geometry_refs))
+        geometries_by_id = {
+            candidate_id_for_site(candidate): candidate.geometry
+            for candidate in candidates
+            if str(candidate.target_ref or "") == domain.target_id
+            and is_grounding_candidate(candidate)
+            and candidate.geometry is not None
+        }
+        binding_refs = sorted({
+            str(getattr(geometry, "source_binding_ref", "") or "")
+            for geometry in geometries_by_id.values()
+            if str(getattr(geometry, "source_binding_ref", "") or "").strip()
+        })
+        if len(binding_refs) == 1:
+            domain.binding_ref = binding_refs[0]
+        required_source_members = [
+            geometries_by_id[candidate_id]
+            for candidate_id in domain.candidate_ids
+            if candidate_id in geometries_by_id
+            and geometries_by_id[candidate_id].candidate_membership == "required_member"
+        ]
+        if (
+            len(required_source_members) == len(domain.candidate_ids)
+            and len(domain.candidate_ids) > 1
+        ):
+            domain.selection_mode = "all_members"
+            domain.min_selected = len(domain.candidate_ids)
+            domain.max_selected = len(domain.candidate_ids)
+        else:
+            domain.selection_mode = "choose_one"
+            domain.min_selected = 1 if domain.candidate_ids else 0
+            domain.max_selected = 1 if domain.candidate_ids else 0
     return list(grouped.values())
 
 

@@ -1,4 +1,4 @@
-"""Shared report compiler - text report -> typed stage fragments.
+"""Shared report compiler - text report -> typed stage snapshots.
 
 The compiler serves only L1/L2 report projection. L3 claims are produced by
 the L3 worker and target projection consumes the resulting PlanningProgram.

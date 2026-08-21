@@ -1,5 +1,13 @@
-"""External retrieval provider adapters; nothing here contacts the network."""
+"""External retrieval provider adapters."""
 
-from .exa_adapter import FakeExternalSearchAdapter
+from .exa_adapter import (
+    ExaHTTPExternalSearchAdapter,
+    FakeExternalSearchAdapter,
+    UnavailableExternalSearchAdapter,
+)
 
-__all__ = ["FakeExternalSearchAdapter"]
+__all__ = [
+    "ExaHTTPExternalSearchAdapter",
+    "FakeExternalSearchAdapter",
+    "UnavailableExternalSearchAdapter",
+]

@@ -1,9 +1,9 @@
-"""L1 aggregate node - merge 12 L1DimensionFragments into L1Snapshot.
+"""L1 aggregate node - merge normalized per-dimension snapshots.
 
-Wave B decision: l1_aggregate does ONLY merge/dedup/conflict/provenance +
-persist + gate + review. ALL extraction lives in the shared parse-compiler
-(parsing/compiler/profiles/l1_observation.py), which this node invokes per
-dimension. It does NOT re-parse report content.
+The L1 worker boundary is report body + structured observations. The L1
+profile normalizes one dimension directly into a partial ``L1Snapshot``; this
+node only merges, deduplicates, checks conflicts, persists provenance, and
+runs the gate/review path.
 """
 from __future__ import annotations
 
@@ -15,7 +15,11 @@ from app.contracts.artifacts.artifact_descriptor import ArtifactDescriptor
 from app.contracts.artifacts.classification_ref import ClassificationRef
 from app.contracts.artifacts.contract_meta import StageIssue
 from app.contracts.evidence.evidence_contracts import EvidenceSource
-from app.contracts.domain.l1_contracts import EvidenceGap, L1DimensionFragment, L1Snapshot
+from app.contracts.domain.l1_contracts import (
+    EvidenceGap,
+    L1Fact,
+    L1Snapshot,
+)
 from app.contracts.workflow.parsing_contracts import CompilationProfile
 from app.contracts.artifacts.provenance import Provenance
 from app.infrastructure.artifacts.fingerprint import semantic_checksum
@@ -65,11 +69,25 @@ def _dedup_location_facts(facts: list[Any]) -> list[Any]:
     return result
 
 
-def merge_fragments(
-    fragments: list[L1DimensionFragment],
+def _dedup_fact_records(records: list[L1Fact]) -> list[L1Fact]:
+    """Deduplicate typed facts by stable identity, not statement text."""
+    seen: set[str] = set()
+    result: list[L1Fact] = []
+    for record in records:
+        fact_id = str(getattr(record, "fact_id", "") or "")
+        if not fact_id or fact_id in seen:
+            continue
+        seen.add(fact_id)
+        result.append(record)
+    return result
+
+
+def merge_l1_snapshots(
+    snapshots: list[L1Snapshot],
     run_id: str,
 ) -> L1Snapshot:
     facts: list[str] = []
+    fact_records: list[L1Fact] = []
     constraints: list[str] = []
     issues: list[StageIssue] = []
     opportunities: list[str] = []
@@ -78,35 +96,40 @@ def merge_fragments(
     location_facts: list[Any] = []
     dimension_provenance: list[Provenance] = []
     source_refs: list[str] = []
+    facts_by_dimension: dict[str, list[str]] = {}
+    spatial_facts_by_dimension: dict[str, list[str]] = {}
+    diagnostics_by_dimension: dict[str, list[Any]] = {}
+    traces_by_dimension: dict[str, Any] = {}
 
-    for frag in fragments:
-        facts.extend(frag.facts)
-        constraints.extend(frag.constraints)
-        issues.extend(frag.issues)
-        opportunities.extend(frag.opportunities)
-        evidence_gaps.extend(frag.evidence_gaps)
-        classification_refs.extend(frag.classification_refs)
-        location_facts.extend(frag.location_facts)
-        dimension_provenance.append(
-            frag.provenance
-            if frag.provenance is not None
-            else Provenance(
-                source="l1_observe",
-                run_id=run_id,
-                module="l1_observe",
-                trace=[f"fragment:{frag.dimension_key}"],
-            )
-        )
-        if frag.provenance is not None and frag.provenance.source:
-            source_refs.append(frag.provenance.source)
+    for partial in snapshots:
+        facts.extend(partial.facts)
+        fact_records.extend(partial.fact_records)
+        constraints.extend(partial.constraints)
+        issues.extend(partial.issues)
+        opportunities.extend(partial.opportunities)
+        evidence_gaps.extend(partial.evidence_gaps)
+        classification_refs.extend(partial.classification_refs)
+        location_facts.extend(partial.location_facts)
+        for dimension, values in partial.facts_by_dimension.items():
+            facts_by_dimension.setdefault(dimension, []).extend(values)
+        for dimension, values in partial.spatial_facts_by_dimension.items():
+            spatial_facts_by_dimension.setdefault(dimension, []).extend(values)
+        for dimension, values in partial.diagnostics_by_dimension.items():
+            diagnostics_by_dimension.setdefault(dimension, []).extend(values)
+        traces_by_dimension.update(partial.traces_by_dimension)
+        dimension_provenance.extend(partial.dimension_provenance)
+        if not partial.dimension_provenance and partial.provenance is not None:
+            dimension_provenance.append(partial.provenance)
+        source_refs.extend(source.reference for source in partial.sources)
 
     snapshot = L1Snapshot(
         context_version="",
         artifact_id="",
+        fact_records=_dedup_fact_records(fact_records),
         facts=_dedup(facts),
         facts_by_dimension={
-            frag.dimension_key: _dedup(list(frag.facts))
-            for frag in fragments
+            dimension: _dedup(values)
+            for dimension, values in facts_by_dimension.items()
         },
         location_facts=_dedup_location_facts(location_facts),
         constraints=_dedup(constraints),
@@ -119,6 +142,12 @@ def merge_fragments(
         ],
         classification_refs=classification_refs,
         dimension_provenance=dimension_provenance,
+        spatial_facts_by_dimension={
+            dimension: _dedup(values)
+            for dimension, values in spatial_facts_by_dimension.items()
+        },
+        diagnostics_by_dimension=diagnostics_by_dimension,
+        traces_by_dimension=traces_by_dimension,
     )
 
     fact_keys: dict[str, list[str]] = {}
@@ -165,14 +194,14 @@ async def l1_aggregate(
 
     from app.data.ingestion.compiler.core import compile_dimension_report
 
-    fragments: list[L1DimensionFragment] = []
+    partial_snapshots: list[L1Snapshot] = []
     for dim_key, rec in raw_reports.items():
         rec = rec or {}
         content = rec.get("content", "")
         summary = rec.get("summary", "") or ""
         report_id = rec.get("report_id", f"rpt-{dim_key}-v1")
         try:
-            frag = compile_dimension_report(
+            partial = compile_dimension_report(
             CompilationProfile.L1_OBSERVATION,
             dimension_key=dim_key,
             content=content,
@@ -183,11 +212,11 @@ async def l1_aggregate(
             )
         except Exception as exc:  # noqa: BLE001 - one dimension must not break the aggregate
             logger.warning("[l1_aggregate] compile failed for dim=%s: %s", dim_key, exc)
-            frag = None
-        if frag is not None:
-            fragments.append(frag)
+            partial = None
+        if isinstance(partial, L1Snapshot):
+            partial_snapshots.append(partial)
 
-    snapshot = merge_fragments(fragments, run_id=run_id)
+    snapshot = merge_l1_snapshots(partial_snapshots, run_id=run_id)
     snapshot.context_version = context_version
     # Preserve the dimension that actually consumed each KG fact.  The
     # flattened ``facts`` list remains backwards compatible, while L2 reads
@@ -235,6 +264,23 @@ async def l1_aggregate(
             village_name=state.get("config", {}).get("village_name", ""),
         )
         kg_facts = [fact.statement for fact in evidence.evidence_bundle.facts]
+        from app.domain.assessment.l1_fact_projection import evidence_fact_to_l1_fact
+
+        snapshot.fact_records = _dedup_fact_records([
+            *snapshot.fact_records,
+            *[
+                record
+                for fact in evidence.evidence_bundle.facts
+                if (record := evidence_fact_to_l1_fact(
+                    fact,
+                    # Snapshot-wide KG/GIS facts have no single cognitive
+                    # dimension; an empty key deliberately makes them
+                    # available to any scoped L2/L3 consumer.
+                    dimension_key="",
+                    spatial_only=True,
+                )) is not None
+            ],
+        ])
         kg_fact_count = len(kg_facts)
         kg_source_refs = [s.reference for s in evidence.evidence_bundle.sources]
         snapshot.facts = _dedup([*snapshot.facts, *kg_facts])
@@ -252,7 +298,7 @@ async def l1_aggregate(
         run_id=run_id,
         module="l1_observe",
         trace=[f"aggregate:{artifact_id}"],
-        natural_language_description="L1 OBSERVE aggregated snapshot from compiled dimension fragments.",
+        natural_language_description="L1 OBSERVE aggregated normalized facts from dimension outputs.",
     )
 
     ref = ArtifactDescriptor.model_validate(
@@ -298,6 +344,7 @@ async def l1_aggregate(
             ),
             outputs={
                 "fact_count": len(snapshot.facts),
+                "fact_record_count": len(snapshot.fact_records),
                 "facts_produced": snapshot.facts,
                 "facts_by_dimension": snapshot.facts_by_dimension,
                 "location_facts": [fact.model_dump(mode="json") for fact in snapshot.location_facts],
@@ -328,4 +375,4 @@ async def l1_aggregate(
     }
 
 
-__all__ = ["l1_aggregate", "merge_fragments"]
+__all__ = ["l1_aggregate", "merge_l1_snapshots"]

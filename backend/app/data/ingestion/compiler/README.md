@@ -24,7 +24,7 @@
 
 **入口**：`compiler/__init__.py` 导出 `compile_dimension_report` + `CompilationProfile`。
 
-**输出 fragment**：`L1DimensionFragment` / `L2StrategyFragment`。
+**输出**：L1 使用 `L1Snapshot`，L2 使用 `L2StrategyFragment`。
 
 **文件清单**：
 

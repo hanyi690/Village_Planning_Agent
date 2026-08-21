@@ -17,6 +17,7 @@ from rdflib import RDF as RDF_TERM, Literal, URIRef
 
 from app.infrastructure.logging import get_logger
 from ..memory import EntityAnnotation, RelationAnnotation
+from ..ontology import BusinessFeatureSelector, select_business_features
 
 logger = get_logger(__name__)
 
@@ -391,6 +392,12 @@ def get_village_semantic_summary(kg) -> Dict[str, Any]:
         for s, _, o in kg.g.triples((None, RDF_TERM.type, None)):
             t = _obj_name(o)
             entity_counts[t] = entity_counts.get(t, 0) + 1
+        entity_counts["Road"] = len(
+            select_business_features(kg.g, BusinessFeatureSelector.current_road())
+        )
+        entity_counts["Facility"] = len(
+            select_business_features(kg.g, BusinessFeatureSelector.current_facility())
+        )
 
         relation_counts = {}
         for s, p, o in kg.g.triples((None, None, None)):

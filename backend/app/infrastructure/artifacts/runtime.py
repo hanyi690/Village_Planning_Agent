@@ -15,6 +15,7 @@ from typing import Any, TypeVar
 from pydantic import ValidationError
 
 from app.infrastructure.artifacts import ContentAddressedArtifactRepository, NamedRefConflict
+from app.infrastructure.artifacts.fingerprint import semantic_checksum
 from app.contracts.artifacts.artifact_descriptor import ArtifactDescriptor
 from app.infrastructure.paths import run_tmp_root
 
@@ -32,6 +33,7 @@ ARTIFACT_KEYS = (
     "repair_directives", "repair_impact", "global_zone_allocation",
     "planning_scenario", "final_relation_validation",
     "global_site_allocation", "grounded_anchors", "l1_observations", "l1_bindings",
+    "source_semantic_classification",
 )
 
 
@@ -60,10 +62,15 @@ def _ref_value(ref: Any, field: str, default: str = "") -> str:
     return str(getattr(ref, field, default) or default)
 
 
-def _parent_digests(refs: dict[str, Any], *, exclude_key: str) -> dict[str, str]:
+def _parent_digests(
+    refs: dict[str, Any],
+    *,
+    exclude_key: str,
+    exclude_keys: set[str] | frozenset[str] = frozenset(),
+) -> dict[str, str]:
     parents: dict[str, str] = {}
     for parent_key, parent_ref in refs.items():
-        if parent_key == exclude_key or not parent_ref:
+        if parent_key == exclude_key or parent_key in exclude_keys or not parent_ref:
             continue
         digest = _ref_value(parent_ref, "digest")
         if not digest:
@@ -154,8 +161,33 @@ def store_artifact(
             f"artifact {key} cannot persist a null payload"
         )
     payload_json = _jsonable(payload)
-    parent_digests = _parent_digests(current_refs, exclude_key=key)
+    parent_digests = _parent_digests(
+        current_refs,
+        exclude_key=key,
+        exclude_keys={f"{module}_gate"},
+    )
     repository = _repository(base_dir)
+    existing_ref = current_refs.get(key)
+    if existing_ref:
+        # ContractMeta/provenance timestamps are deliberately excluded by
+        # semantic_checksum. Replaying the same stage with an equivalent
+        # business payload must therefore reuse the existing immutable
+        # descriptor instead of creating a new blob solely because
+        # ``created_at`` or a provenance timestamp was regenerated.
+        try:
+            existing = _descriptor(existing_ref, key)
+            if (
+                existing.schema_id == artifact_type
+                and existing.schema_version == ARTIFACT_SCHEMA_VERSION
+                and existing.parent_digests == dict(sorted(parent_digests.items()))
+                and existing.semantic_digest
+                == f"sha256:{semantic_checksum(payload)}"
+            ):
+                return existing.model_dump(mode="json")
+        except (ArtifactReplayError, ValueError, TypeError):
+            # The normal CAS path below emits the precise replay error for a
+            # malformed or stale descriptor; do not silently adopt it here.
+            pass
     try:
         descriptor = repository.put_json(
             payload_json,

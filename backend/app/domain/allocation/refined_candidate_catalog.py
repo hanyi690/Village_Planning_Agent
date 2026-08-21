@@ -125,13 +125,60 @@ def build_refined_candidate_catalog(
         else:
             role = "parcel_candidate"
         materialization_role = str(source.materialization_role or "")
+        source_domain_kind = str(
+            getattr(source, "spatial_domain_kind", "") or "unknown"
+        )
+        if source_domain_kind == "unknown":
+            source_domain_kind = "parcel_set" if len(bsm_values) > 1 else "parcel_extent"
+        # The refined geometry is the planning domain.  Never keep the source
+        # parcel bbox here: a large BSM may contain a much smaller selected
+        # footprint, and relation/road workers use this bbox for candidate
+        # recall before they materialize the WKT from the candidate catalog.
+        try:
+            candidate_bbox = tuple(float(value) for value in wkt.loads(wkt_text).bounds)
+        except Exception:
+            candidate_bbox = None
+        source_area_ha = getattr(source, "source_area_ha", None)
+        if source_area_ha is None:
+            source_area_ha = _value(candidate, "source_area_ha", None)
+        planning_area_ha = _value(candidate, "available_area_ha", None)
+        coverage_ratio = None
+        if source_area_ha and planning_area_ha is not None:
+            coverage_ratio = max(
+                0.0,
+                min(1.0, float(planning_area_ha) / float(source_area_ha)),
+            )
         refined = CandidateGeometry(
             target_id=target_id,
             kind=kind,
             role=role,
             materialization_role=materialization_role,
             wkt=wkt_text,
-            granularity="exact_feature" if kind in {"point", "line"} else "parcel_set",
+            crs=str(
+                _value(candidate, "geometry_crs", "")
+                or getattr(source, "crs", "")
+                or "EPSG:4326"
+            ),
+            granularity=(
+                "exact_feature"
+                if kind in {"point", "line"}
+                else (
+                    source.granularity
+                    if source.granularity in {
+                        "parcel_extent", "parcel_set", "settlement", "village_scope", "bbox", "corridor"
+                    }
+                    else "parcel_set"
+                )
+            ),
+            spatial_domain_kind=source_domain_kind,
+            candidate_bbox=candidate_bbox,
+            source_area_ha=source_area_ha,
+            planning_area_ha=(
+                float(planning_area_ha)
+                if planning_area_ha is not None
+                else None
+            ),
+            coverage_ratio=coverage_ratio,
             source_ref=str(_value(candidate, "feature_ref", "") or source.source_ref),
             source_refs=list(dict.fromkeys([
                 *source.source_refs,
@@ -145,7 +192,26 @@ def build_refined_candidate_catalog(
             uncertainty_radius_m=source.uncertainty_radius_m,
             uncertainty_reason=source.uncertainty_reason,
             source_bsms=bsm_values,
-            generation_operation="select_parcel_refinement",
+            feature_bsms=list(source.feature_bsms or []),
+            source_feature_ids=list(source.source_feature_ids or []),
+            entity_refs=list(source.entity_refs or []),
+            relation_refs=list(source.relation_refs or []),
+            l1_fact_refs=list(source.l1_fact_refs or []),
+            l1_snapshot_ref=str(source.l1_snapshot_ref or ""),
+            bundle_snapshot_digest=str(source.bundle_snapshot_digest or ""),
+            subgeometry_operation=str(
+                _value(candidate, "geometry_operation", "")
+                or "bundle_extent"
+            ),
+            subgeometry_diagnostics=list(
+                _value(candidate, "geometry_diagnostics", None) or []
+            ),
+            generation_operation=(
+                "select_planning_subgeometry"
+                if str(_value(candidate, "geometry_operation", "") or "")
+                not in {"", "bundle_extent"}
+                else "select_parcel_refinement"
+            ),
             hard_constraint_status=hard_constraint_status,
             suitability_components=dict(_value(candidate, "score_breakdown", None) or {}),
         )

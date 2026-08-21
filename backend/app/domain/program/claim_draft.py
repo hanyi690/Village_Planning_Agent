@@ -232,6 +232,7 @@ class PlanningClaimDraft(BaseModel):
     constraint_refs: list[str] = Field(default_factory=list)
     objective_refs: list[str] = Field(default_factory=list)
     evidence_refs: list[str] = Field(default_factory=list)
+    source_fact_refs: list[str] = Field(default_factory=list)
     source_refs: list[str] = Field(default_factory=list)
     confidence: float | None = None
     uncertainty: str = ""
@@ -254,6 +255,7 @@ class PlanningClaimDraft(BaseModel):
         "constraint_refs",
         "objective_refs",
         "evidence_refs",
+        "source_fact_refs",
         "source_refs",
         mode="before",
     )
@@ -1210,6 +1212,7 @@ def normalize_claim_draft_set(
                 constraint_refs=_clean_refs(raw.constraint_refs),
                 objective_refs=_clean_refs(raw.objective_refs),
                 evidence_refs=_clean_refs(raw.evidence_refs),
+                source_fact_refs=_clean_refs(raw.source_fact_refs),
                 source_refs=_clean_refs(raw.source_refs),
                 confidence=raw.confidence,
                 uncertainty=uncertainty,

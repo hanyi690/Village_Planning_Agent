@@ -46,12 +46,20 @@ class PlanningContext:
         gazetteer: Village gazetteer (may be None when not resolvable).
         constraint_index: ``ConstraintIndex`` built from the bundle (may be None).
         village_anchors: Pre-computed ``get_village_anchors`` rows.
-        reports: Layer report content, ``{dim_key: {content, instruction, ...}}``.
-        report_summary_index: ``{dim_key: {summary, metrics, key_points, ...}}``.
-        location_facts: Typed L1 place mentions used by PlaceEvidenceIndex/
-            GROUND; these are not final candidate selections.
-        evidence_index: Pre-built ``PlaceEvidenceIndex`` snapshot (may be None
-            when the evidence module or its inputs are unavailable).
+        input_documents: Runtime text working set resolved from bundle document
+            refs; bodies are not persisted in the bundle snapshot.
+        reports: Bundle-owned report manifest, ``{dim_key: {summary,
+            instruction, report_id, layers: {L1/L2/L3: {...}}}}``. Report
+            bodies are opened through the evidence/report retrieval boundary.
+        report_summary_index: Layered report summaries keyed by dimension.
+        l1_fact_records: Authoritative typed L1 facts; string reports are only
+            a display projection and must not be the spatial source of truth.
+        location_facts: Typed L1 place mentions used by EvidenceGraph; these
+            are not final candidate selections.
+        evidence_graph: Session-scoped join boundary for L1, KG and bundle
+            identity (may be None while context hydration is incomplete).
+        external_search_port: Lifecycle-owned optional text evidence provider;
+            it is never a geometry, BSM, or KG authority.
         ports: Typed ``PlanningPorts`` bundle of injected dependency-inversion
         port implementations (semantic_query, spatial_query, gazetteer,
             nomenclature_registry, context_provider). May be empty.
@@ -68,12 +76,20 @@ class PlanningContext:
     gazetteer: Any = None
     constraint_index: Any = None
     village_anchors: List[Dict[str, Any]] = field(default_factory=list)
+    input_documents: List[Dict[str, Any]] = field(default_factory=list)
     reports: Dict[str, Dict[str, Any]] = field(default_factory=dict)
+    reports_loaded: bool = False
     report_summary_index: Dict[str, Dict[str, Any]] = field(default_factory=dict)
     l1_snapshot_ref: str = ""
+    l1_fact_records: List[Any] = field(default_factory=list)
     location_facts: List[Any] = field(default_factory=list)
-    evidence_index: Any = None
-    evidence_index_key: str = ""
+    source_semantic_decisions: Dict[str, Any] = field(default_factory=dict)
+    source_semantic_fingerprint: str = ""
+    source_semantic_diagnostics: List[Dict[str, Any]] = field(default_factory=list)
+    evidence_graph: Any = None
+    evidence_graph_key: str = ""
+    external_search_port: Any = None
+    grounded_anchors: List[Any] = field(default_factory=list)
     grounded_bindings: List[Any] = field(default_factory=list)
     ports: PlanningPorts = field(default_factory=PlanningPorts)
     content_hash: str = ""
@@ -105,7 +121,7 @@ class PlanningContext:
         """Read one planning input from the data-owned workspace."""
         if self.workspace is None:
             return default
-        for item in self.workspace.input_documents:
+        for item in self.input_documents:
             if str(item.get("source", "")) == source:
                 return str(item.get("content", "") or "")
         return default
@@ -115,7 +131,7 @@ class PlanningContext:
         if self.workspace is None:
             return {}
         result: Dict[str, str] = {}
-        for item in self.workspace.input_documents:
+        for item in self.input_documents:
             source = str(item.get("source", "") or "")
             if source and source not in result:
                 result[source] = str(item.get("content", "") or "")
@@ -148,10 +164,15 @@ class PlanningContext:
             "has_kg": self.has_kg,
             "has_gazetteer": self.gazetteer is not None,
             "has_constraint_index": self.constraint_index is not None,
-            "has_evidence_index": self.evidence_index is not None,
-            "evidence_index_key": self.evidence_index_key,
+            "has_evidence_graph": self.evidence_graph is not None,
+            "evidence_graph_key": self.evidence_graph_key,
             "report_count": len(self.reports),
+            "reports_loaded": self.reports_loaded,
             "location_fact_count": len(self.location_facts),
+            "l1_fact_record_count": len(self.l1_fact_records),
+            "source_semantic_decision_count": len(self.source_semantic_decisions),
+            "source_semantic_fingerprint": self.source_semantic_fingerprint,
+            "source_semantic_diagnostics": list(self.source_semantic_diagnostics),
             "grounded_binding_count": len(self.grounded_bindings),
             "l1_snapshot_ref": self.l1_snapshot_ref,
             "data_snapshot_id": snapshot.snapshot_id if snapshot is not None else "",

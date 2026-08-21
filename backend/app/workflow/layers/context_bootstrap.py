@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 from typing import Any, Dict
 
 from app.infrastructure.context.planning_context_factory import build_planning_context
@@ -67,7 +68,7 @@ def _context_reports_text(context: Any) -> str:
 
 
 async def _hydrate_l1_spatial_facts(state: Dict[str, Any], context: Any) -> None:
-    """Attach L1 facts and build the GIS/KG evidence index once per snapshot."""
+    """Attach L1 facts and build the GIS/KG EvidenceGraph once per snapshot."""
     try:
         from app.infrastructure.artifacts.runtime import load_artifact
         from app.contracts.domain.l1_contracts import L1Snapshot
@@ -75,7 +76,14 @@ async def _hydrate_l1_spatial_facts(state: Dict[str, Any], context: Any) -> None
         snapshot = load_artifact(state, "l1_snapshot", L1Snapshot)
         if snapshot is None:
             return
+        l1_ref = (state.get("artifact_refs") or {}).get("l1_snapshot")
+        if isinstance(l1_ref, dict):
+            context.l1_snapshot_ref = str(l1_ref.get("digest") or "")
+        else:
+            context.l1_snapshot_ref = str(getattr(l1_ref, "digest", "") or "")
+        fact_records = list(getattr(snapshot, "fact_records", []) or [])
         facts = list(getattr(snapshot, "location_facts", []) or [])
+        context.l1_fact_records = fact_records
         context.location_facts = facts
 
         try:
@@ -99,10 +107,15 @@ async def _hydrate_l1_spatial_facts(state: Dict[str, Any], context: Any) -> None
 
         session_id = str(state.get("session_id", "") or "")
         memory = _load_session_semantic_memory(session_id) if session_id else None
-        hydration_key = _spatial_hydration_key(state, context, facts, memory)
+        hydration_key = _spatial_hydration_key(
+            state,
+            context,
+            [*facts, *fact_records],
+            memory,
+        )
         if (
-            getattr(context, "evidence_index", None) is not None
-            and getattr(context, "evidence_index_key", "") == hydration_key
+            getattr(context, "evidence_graph", None) is not None
+            and getattr(context, "evidence_graph_key", "") == hydration_key
         ):
             logger.debug(
                 "[bootstrap] L1 spatial evidence already hydrated key=%s facts=%d",
@@ -139,12 +152,12 @@ async def _hydrate_l1_spatial_facts(state: Dict[str, Any], context: Any) -> None
                 except Exception as exc:
                     logger.warning("[bootstrap] persisted anchor KG replay failed: %s", exc)
             try:
-                from app.evidence.index.place_evidence_index import PlaceEvidenceIndex
+                from app.evidence.retrieval.evidence_graph import EvidenceGraph
 
-                context.evidence_index = PlaceEvidenceIndex.build(context)
+                context.evidence_graph = EvidenceGraph.build(context)
             except Exception as exc:
                 logger.warning("[bootstrap] persisted anchor evidence rebuild failed: %s", exc)
-            context.evidence_index_key = hydration_key
+            context.evidence_graph_key = hydration_key
             logger.info(
                 "[bootstrap] restored %d persisted L1 anchors; skipped recomputation",
                 len(persisted_anchors),
@@ -155,6 +168,7 @@ async def _hydrate_l1_spatial_facts(state: Dict[str, Any], context: Any) -> None
         # 水合路径 bump=False（只准备证据，不写注解、不 bump kg_version）。
         from app.domain.ground.anchors import ground_l1_anchors
         from app.infrastructure.paths import session_run_dir
+        from app.spatial.grounding.call_budget import get_ground_llm_budget
 
         cache_path = None
         if session_id:
@@ -162,14 +176,33 @@ async def _hydrate_l1_spatial_facts(state: Dict[str, Any], context: Any) -> None
                 cache_path = session_run_dir(session_id) / "grounded-anchor-cache.json"
             except Exception:
                 cache_path = None
+        grounding_llm = None
+        llm_disabled = str(os.getenv("GROUND_LLM_ENABLED", "false")).strip().lower() not in {
+            "1", "true", "yes", "on"
+        } or any(
+            str(os.getenv(name, "")).strip().lower() in {"1", "true", "yes", "on"}
+            for name in ("DISABLE_GROUND_LLM", "DISABLE_GROUND_REPORT_LLM")
+        )
+        if not llm_disabled:
+            try:
+                from app.spatial.grounding.report_grounder import create_grounding_llm
+
+                grounding_llm = create_grounding_llm()
+            except Exception as exc:
+                logger.debug("[bootstrap] grounding LLM unavailable: %s", exc)
+
         await ground_l1_anchors(
             context,
             session_id,
             cache_path=cache_path,
-            llm=None,
+            llm=grounding_llm,
             bump=False,
+            ground_llm_budget=get_ground_llm_budget(
+                context,
+                scope_key=f"workflow:{session_id}",
+            ),
         )
-        context.evidence_index_key = hydration_key
+        context.evidence_graph_key = hydration_key
         gazetteer_entries = len(
             getattr(getattr(context, "gazetteer", None), "entries", []) or []
         )
@@ -177,7 +210,7 @@ async def _hydrate_l1_spatial_facts(state: Dict[str, Any], context: Any) -> None
             "[bootstrap] hydrated %d L1 location facts; gazetteer entries=%d; evidence entries=%d; key=%s",
             len(facts),
             gazetteer_entries,
-            len(getattr(context.evidence_index, "entries", []) or []),
+            len(context.evidence_graph.iter_entries()) if context.evidence_graph is not None else 0,
             hydration_key[:12],
         )
     except Exception as exc:

@@ -7,7 +7,6 @@ dimensions; ``candidate_bsms`` returns the source BSM set for the resolver.
 """
 from __future__ import annotations
 
-import re
 from typing import Any, Dict, List, Optional
 
 from app.contracts.ports.place_resolution_contracts import (
@@ -26,6 +25,34 @@ logger = get_logger(__name__)
 _RESOLVED_THRESHOLD = 0.8
 _AMBIGUOUS_GAP = 0.15
 
+# A role supplied by the caller is a retrieval boundary, not merely a score
+# bonus.  Without this filter a village mention such as ``园寨村`` also
+# recalls every hazard point whose label starts with ``园寨``; the competing
+# source geometries then incorrectly turn an already resolved village scope
+# into ``ambiguous``.  Unknown-role queries intentionally keep all roles so
+# EvidenceGraph can return the cross-layer evidence set to its LLM selector.
+_ROLE_COMPATIBILITY: dict[str, frozenset[str]] = {
+    "village": frozenset({"village", "natural_village"}),
+    "natural_village": frozenset({"village", "natural_village"}),
+    "facility": frozenset({"facility", "landmark"}),
+    "landmark": frozenset({"landmark", "facility"}),
+    "road": frozenset({"road", "axis"}),
+    "axis": frozenset({"road", "axis"}),
+    "water": frozenset({"water"}),
+    "hazard": frozenset({"hazard"}),
+    "parcel": frozenset({"parcel"}),
+    "zone": frozenset({"zone", "parcel"}),
+}
+
+
+def _role_compatible(entry: PlaceEvidenceEntry, role: str) -> bool:
+    expected = str(role or "unknown").strip().lower()
+    if not expected or expected == "unknown":
+        return True
+    allowed = _ROLE_COMPATIBILITY.get(expected, frozenset({expected}))
+    actual = str(getattr(entry, "role", "") or "").strip().lower()
+    return actual in allowed
+
 
 class PlaceEvidenceIndex:
     """A versioned snapshot of place evidence derived from a context."""
@@ -39,15 +66,35 @@ class PlaceEvidenceIndex:
         # auditable and can be returned as ambiguous candidates.
         self._by_canonical: Dict[str, List[PlaceEvidenceEntry]] = {}
         self._by_alias: Dict[str, List[PlaceEvidenceEntry]] = {}
+        self._name_ngrams: Dict[str, set[tuple[str, str]]] = {}
+        self._short_name_keys: set[tuple[str, str]] = set()
+        self.semantic_scopes: list[Any] = []
+        self.source_semantic_decisions: dict[str, Any] = {}
+        # Shapes are parsed lazily only for spatial joins.  This avoids
+        # rebuilding a Shapely object for every POI while keeping the cache
+        # session-scoped and reclaimable with the index.
+        self._parcel_geometry_cache: Dict[str, Any] = {}
+        self._parcel_spatial_index: Any = None
+        # Build-time ER key only; coordinates are never exposed in entries.
+        self._point_identity_index: Dict[tuple[str, float, float], PlaceEvidenceEntry] = {}
 
     @classmethod
-    def build(cls, context: Any) -> "PlaceEvidenceIndex":
+    def build(
+        cls,
+        context: Any,
+        semantic_decisions: dict[str, Any] | None = None,
+    ) -> "PlaceEvidenceIndex":
         """Construct the index from a ``PlanningContext``."""
         version = (
             int(getattr(context, "version", 0) or 0),
             int(getattr(context, "kg_version", 0) or 0),
         )
         index = cls(context=context, version=version)
+        index.source_semantic_decisions = dict(
+            semantic_decisions
+            or getattr(context, "source_semantic_decisions", None)
+            or {}
+        )
 
         if getattr(context, "gazetteer", None) is not None:
             for e in getattr(context.gazetteer, "entries", []) or []:
@@ -64,23 +111,258 @@ class PlaceEvidenceIndex:
             parcels = list(context.current_parcels() or [])
         except Exception:
             workspace = getattr(context, "workspace", None)
-            parcels = list(
-                (getattr(workspace, "polygons", {}) or {}).get("landuse_current") or []
-            )
-        from app.spatial.grounding.grounding import build_parcel_centroid_cache
+            try:
+                parcels = list(workspace.current_parcels() or [])
+            except Exception:
+                parcels = list(
+                    (getattr(workspace, "polygons", {}) or {}).get("landuse_current") or []
+                )
+        from app.spatial.grounding.grounding import (
+            build_parcel_centroid_cache,
+            build_parcel_spatial_index,
+        )
 
         centroid_cache = build_parcel_centroid_cache(parcels)
+        index._parcel_spatial_index = build_parcel_spatial_index(parcels)
         for fact in getattr(context, "location_facts", []) or []:
-            index._register_from_l1_fact(fact, parcels, centroid_cache)
+            index._register_from_l1_fact(
+                fact, parcels, centroid_cache, index._parcel_spatial_index
+            )
+        for fact in getattr(context, "l1_fact_records", []) or []:
+            index._register_from_l1_fact(
+                fact, parcels, centroid_cache, index._parcel_spatial_index
+            )
+        try:
+            from app.evidence.retrieval.l1_scope import build_l1_semantic_scopes
+
+            typed_facts = list(getattr(context, "l1_fact_records", []) or [])
+            location_facts = list(getattr(context, "location_facts", []) or [])
+            # Typed L1 records are the authoritative semantic-to-place input.
+            # The location projection is retained for contexts produced before
+            # typed records existed, but must not shadow them when both are
+            # hydrated; otherwise the scope can silently lose fact IDs and
+            # source provenance at the retrieval boundary.
+            scope_facts = typed_facts or location_facts
+            index.semantic_scopes = build_l1_semantic_scopes(
+                scope_facts,
+                session_id=str(getattr(context, "session_id", "") or ""),
+                l1_snapshot_ref=str(getattr(context, "l1_snapshot_ref", "") or ""),
+            )
+        except Exception as exc:
+            logger.debug("[PlaceEvidenceIndex] L1 scope build skipped: %s", exc)
 
         workspace = getattr(context, "workspace", None)
         if workspace is not None:
-            pois = (workspace.points.get("annotations_current") or []) if getattr(workspace, "points", None) else []
-            index._register_poi(pois, parcels, centroid_cache)
+            points = getattr(workspace, "points", None)
+            if points is not None:
+                for layer_name in (
+                    "annotations_current",
+                    "facilities_current",
+                    "hazard_points",
+                    "geological_hazard_points",
+                    "geological_hazard_point",
+                ):
+                    index._register_poi(
+                        points.get(layer_name) or [],
+                        parcels,
+                        centroid_cache,
+                        source_layer=layer_name,
+                        spatial_index=index._parcel_spatial_index,
+                    )
+            index._register_named_bundle_features(
+                workspace,
+                parcels=parcels,
+                spatial_index=index._parcel_spatial_index,
+            )
 
         return index
 
     # ── Registration ─────────────────────────────────────────────────
+
+    def _register_named_bundle_features(
+        self,
+        workspace: Any,
+        *,
+        parcels: Optional[List[Any]] = None,
+        spatial_index: Any = None,
+    ) -> None:
+        """Index bounded named line/polygon features from the bundle.
+
+        Facilities were historically registered from point layers only.  A
+        road or water query therefore depended on a matching KG entity even
+        when the authoritative bundle feature was already present.  Register
+        non-parcel features here: indexing every land-use polygon would waste
+        memory and would turn unlabeled parcels into semantic candidates.
+        Unnamed roads/water features are retained with their role as a weak
+        bounded scope label, so an explicit ``道路``/``水体`` query can return
+        ambiguous bundle identities instead of dropping real geometries.
+        """
+        layer_specs = (
+            ("lines", ("roads_current", "current_road", "transport"), "road"),
+            ("polygons", ("water_current", "water", "water_bodies"), "water"),
+        )
+        for container_name, layer_names, role in layer_specs:
+            container = getattr(workspace, container_name, None)
+            if container is None or not hasattr(container, "get"):
+                continue
+            for layer_name in layer_names:
+                for feature in list(container.get(layer_name) or []):
+                    raw_label = ""
+                    for attr in (
+                        "text", "name", "label", "road_name", "water_name",
+                        "facility_name", "category",
+                    ):
+                        value = getattr(feature, attr, "")
+                        if not value and isinstance(getattr(feature, "properties", None), dict):
+                            value = feature.properties.get(attr, "")
+                        if str(value or "").strip():
+                            raw_label = str(value).strip()
+                            break
+                    bsm = str(getattr(feature, "bsm", "") or "").strip()
+                    if not bsm:
+                        continue
+                    geometry_ref = f"bundle://feature/{bsm}"
+                    raw = getattr(feature, "_raw", {}) or {}
+                    source_feature_id = str(
+                        raw.get("source_feature_id")
+                        if isinstance(raw, dict)
+                        else ""
+                    ).strip()
+                    semantic_label, semantic_aliases, semantic_fact_refs = (
+                        self._source_semantic_overlay(source_feature_id, raw_label)
+                    )
+                    canonical_name = semantic_label or raw_label or role
+                    related_parcel_bsms = self._feature_related_parcel_bsms(
+                        feature,
+                        parcels=parcels,
+                        spatial_index=spatial_index,
+                    )
+                    self._add_entry(
+                        PlaceEvidenceEntry(
+                            canonical_name=canonical_name,
+                            aliases=semantic_aliases,
+                            entity_refs=[f"bundle:{role}:{bsm}"],
+                            entity_types=[role],
+                            role=role,
+                            feature_bsm=bsm,
+                            source_feature_id=source_feature_id,
+                            source_layer=layer_name,
+                            source_bsm=bsm,
+                            source_bsms=[bsm],
+                            related_parcel_bsms=related_parcel_bsms,
+                            geometry_ref=geometry_ref,
+                            provenance=[
+                                f"bundle:{layer_name}",
+                                *(
+                                    ["source_semantic:accepted"]
+                                    if semantic_label
+                                    else []
+                                ),
+                            ],
+                            l1_fact_refs=semantic_fact_refs,
+                            l1_snapshot_ref=str(
+                                getattr(self.context, "l1_snapshot_ref", "") or ""
+                            ),
+                            confidence=(
+                                0.95
+                                if semantic_label
+                                else 0.8
+                                if raw_label
+                                else 0.6
+                            ),
+                            bundle_snapshot_digest=str(
+                                getattr(getattr(self.context, "data_snapshot", None), "digest", "")
+                                or ""
+                            ),
+                        )
+                    )
+
+    def _source_semantic_overlay(
+        self,
+        source_feature_id: str,
+        raw_label: str,
+    ) -> tuple[str, list[str], list[str]]:
+        """Return an accepted snapshot-local semantic overlay only.
+
+        Raw labels remain aliases and never become a verified semantic type.
+        An unresolved/ambiguous decision contributes nothing to identity.
+        """
+        decision = self.source_semantic_decisions.get(source_feature_id)
+        if decision is None:
+            return "", ([raw_label] if raw_label else []), []
+        status = (
+            str(getattr(decision, "status", "") or "").strip()
+            if not isinstance(decision, dict)
+            else str(decision.get("status", "") or "").strip()
+        )
+        if status != "accepted":
+            return "", ([raw_label] if raw_label else []), []
+        semantic_label = (
+            str(getattr(decision, "semantic_type", "") or "").strip()
+            if not isinstance(decision, dict)
+            else str(decision.get("semantic_type", "") or "").strip()
+        )
+        if not semantic_label:
+            return "", ([raw_label] if raw_label else []), []
+        fact_refs = (
+            list(getattr(decision, "supporting_fact_refs", []) or [])
+            if not isinstance(decision, dict)
+            else list(decision.get("supporting_fact_refs", []) or [])
+        )
+        aliases = [raw_label] if raw_label and raw_label != semantic_label else []
+        return semantic_label, list(dict.fromkeys(aliases)), list(
+            dict.fromkeys(str(value).strip() for value in fact_refs if str(value).strip())
+        )
+
+    @staticmethod
+    def _feature_related_parcel_bsms(
+        feature: Any,
+        *,
+        parcels: Optional[List[Any]],
+        spatial_index: Any,
+    ) -> List[str]:
+        """Project a named bundle feature to intersecting parcel BSM refs.
+
+        This is a build-time topology join.  The evidence entry receives only
+        parcel identities, while authoritative feature and parcel geometry
+        remain in the bundle for GROUND and later execution stages.
+        """
+        if not parcels or spatial_index is None:
+            return []
+        raw_geometry = getattr(feature, "geometry", None)
+        if raw_geometry is None and isinstance(getattr(feature, "properties", None), dict):
+            raw_geometry = feature.properties.get("geometry")
+        try:
+            from shapely.geometry import shape
+
+            geometry = shape(raw_geometry) if isinstance(raw_geometry, dict) else raw_geometry
+            if geometry is None or geometry.is_empty:
+                return []
+            query_geometry = getattr(spatial_index, "query_geometry", None)
+            if not callable(query_geometry):
+                return []
+            return list(dict.fromkeys(str(value) for value in query_geometry(geometry) if str(value).strip()))
+        except Exception:
+            return []
+
+    def query_parcel_bsms_in_bbox(
+        self,
+        bbox: tuple[float, float, float, float],
+    ) -> List[str]:
+        """Return bundle parcel BSMs intersecting a coarse query bbox."""
+        spatial_index = self._parcel_spatial_index
+        if spatial_index is None or not hasattr(spatial_index, "query_bbox"):
+            return []
+        try:
+            return list(
+                dict.fromkeys(
+                    str(value)
+                    for value in spatial_index.query_bbox(bbox)
+                    if str(value).strip()
+                )
+            )
+        except Exception:
+            return []
 
     def _register_from_gazetteer(self, entry: Any) -> None:
         name = getattr(entry, "name", "") or ""
@@ -90,8 +372,6 @@ class PlaceEvidenceIndex:
         entity_uri = getattr(entry, "entity_uri", "") or name
         centroid = getattr(entry, "centroid", None)
         geometry_ref = None
-        if centroid:
-            geometry_ref = f"POINT({centroid[0]} {centroid[1]})" if len(centroid) >= 2 else None
         aliases = [str(a) for a in (getattr(entry, "aliases", None) or []) if a]
         role, entity_types = self._gazetteer_role(entry)
         self._add_entry(
@@ -112,8 +392,20 @@ class PlaceEvidenceIndex:
     def _gazetteer_role(entry: Any) -> tuple[str, list[str]]:
         """Dispatch a gazetteer entry's role from its source and anchor URI kind."""
         source = str(getattr(entry, "source", "") or "")
+        entity_uri = str(getattr(entry, "entity_uri", "") or "")
+        for prefix, role in (
+            ("pln:water_body:", "water"),
+            ("pln:road:", "road"),
+            ("pln:facility:", "facility"),
+            ("pln:landmark:", "landmark"),
+            ("pln:area:", "zone"),
+        ):
+            if entity_uri.startswith(prefix):
+                return role, [role]
         if source == "kg_facility":
             return "facility", ["facility"]
+        if source == "water_cluster_map":
+            return "water", ["water"]
         if source == "l1_instruction":
             uri = str(getattr(entry, "entity_uri", "") or "")
             for kind in ("facility", "project", "zone", "landmark"):
@@ -127,16 +419,72 @@ class PlaceEvidenceIndex:
         fact: Any,
         parcels: Optional[List[Any]] = None,
         centroid_cache: Optional[Dict[str, Any]] = None,
+        spatial_index: Any = None,
     ) -> None:
-        norm = getattr(fact, "normalized_name", "") or ""
-        mention = getattr(fact, "normalized_name", "") or getattr(fact, "mention", "") or ""
+        attributes = getattr(fact, "attributes", None) or {}
+        if not isinstance(attributes, dict):
+            attributes = {}
+        norm = str(
+            getattr(fact, "normalized_name", "")
+            or attributes.get("normalized_name", "")
+            or ""
+        ).strip()
+        mention = str(
+            norm
+            or getattr(fact, "mention", "")
+            or attributes.get("mention", "")
+            or getattr(fact, "subject_scope", "")
+            or ""
+        ).strip()
         name = norm or mention
         if not name:
             return
-        role = getattr(fact, "role", "unknown") or "unknown"
+        role = str(
+            getattr(fact, "role", "")
+            or attributes.get("role", "")
+            or getattr(fact, "semantic_type", "")
+            or "unknown"
+        ).strip()
+        if role not in {
+            "facility",
+            "landmark",
+            "road",
+            "water",
+            "parcel",
+            "zone",
+            "village",
+            "natural_village",
+            "unknown",
+        } and not any(
+            str(attributes.get(key, "") or "").strip()
+            for key in ("location", "spatial_hint", "village", "settlement")
+        ):
+            return
         aliases = [str(a) for a in (getattr(fact, "aliases", None) or []) if a]
+        aliases.extend(
+            str(attributes.get(key, "")).strip()
+            for key in ("name", "display_name")
+            if str(attributes.get(key, "") or "").strip()
+        )
         if name not in aliases:
             aliases.append(name)
+        source_refs = [
+            str(value).strip()
+            for value in (getattr(fact, "source_refs", None) or [])
+            if str(value).strip()
+        ]
+        source_refs.extend(
+            str(getattr(fact, attribute, "") or "").strip()
+            for attribute in ("source_report_ref", "source_snapshot_ref")
+            if str(getattr(fact, attribute, "") or "").strip()
+        )
+        source_refs = list(dict.fromkeys(source_refs))
+        fact_id = str(getattr(fact, "fact_id", "") or "").strip()
+        l1_fact_refs = list(source_refs)
+        if fact_id:
+            l1_fact_refs.append(fact_id)
+        elif not l1_fact_refs:
+            l1_fact_refs.append(f"l1_fact:{name}")
         entry = PlaceEvidenceEntry(
             canonical_name=name,
             aliases=aliases,
@@ -146,23 +494,199 @@ class PlaceEvidenceIndex:
             source_bsms=[],
             geometry_ref=None,
             provenance=["l1_fact"],
+            l1_fact_refs=list(dict.fromkeys(l1_fact_refs)),
+            l1_snapshot_ref=str(getattr(self.context, "l1_snapshot_ref", "") or ""),
+            bundle_snapshot_digest=str(
+                getattr(getattr(self.context, "data_snapshot", None), "digest", "")
+                or ""
+            ),
             confidence=float(getattr(fact, "confidence", 0.0) or 0.0),
         )
+        if self._register_l1_source_features(
+            fact, entry, parcels, spatial_index
+        ):
+            return
+        self._bind_l1_fact_bsms(
+            fact, entry, parcels, centroid_cache, spatial_index
+        )
+        # 实体级绑定（设施点/地标点 + 同坐标地块）优先；村锚点同时作为
+        # 独立语义证据保留，即使实体级几何已经命中。
+        self._bind_village_anchor_bsms(fact, entry)
+        # Register only after all deterministic L1 bindings are complete so
+        # the normal same-coordinate/entity merge can see the final geometry.
         self._add_entry(entry)
-        self._bind_l1_fact_bsms(fact, entry, parcels, centroid_cache)
-        # 实体级绑定（设施点/地标点 + 同坐标地块）优先；只有实体级缺失才用村锚点兜底
-        if not self._entity_level_bound(entry):
+
+    def _register_l1_source_features(
+        self,
+        fact: Any,
+        entry: "PlaceEvidenceEntry",
+        parcels: Optional[List[Any]],
+        spatial_index: Any,
+    ) -> bool:
+        """Join typed L1 source IDs to Bundle/KG identities before name recall.
+
+        ``L1Fact.source_feature_ids`` is an exact provenance binding.  It may
+        identify points, lines, polygons, or a bounded collection of source
+        features.  The index stores only BSM/ref identity and nearby parcel
+        IDs; authoritative geometry remains in the Bundle.  If an explicit ID
+        cannot be found, retain an unresolved L1 entry and do not fall back to
+        name/coordinate matching, because that could bind the fact to a
+        different real-world feature.
+        """
+        source_ids = list(dict.fromkeys(
+            str(value).strip()
+            for value in (getattr(fact, "source_feature_ids", None) or [])
+            if str(value).strip()
+        ))
+        if not source_ids:
+            return False
+
+        workspace = getattr(self.context, "workspace", None)
+        matches: list[tuple[str, str, str, list[str]]] = []
+        if workspace is not None:
+            for group_name in ("points", "lines", "polygons"):
+                group = getattr(workspace, group_name, None)
+                if group is None or not callable(getattr(group, "get", None)):
+                    continue
+                layer_names = (
+                    list(group.keys())
+                    if callable(getattr(group, "keys", None))
+                    else {
+                        "points": (
+                            "annotations_current",
+                            "facilities_current",
+                            "hazard_points",
+                            "geological_hazard_points",
+                        ),
+                        "lines": (
+                            "roads_current",
+                            "current_road",
+                            "roads_planned",
+                            "planned_road",
+                        ),
+                        "polygons": (
+                            "landuse_current",
+                            "water_bodies",
+                            "water_current",
+                            "planning_scope",
+                        ),
+                    }[group_name]
+                )
+                for layer_name in layer_names:
+                    for feature in list(group.get(layer_name) or []):
+                        raw = getattr(feature, "_raw", {}) or {}
+                        raw_id = str(
+                            raw.get("source_feature_id")
+                            if isinstance(raw, dict)
+                            else ""
+                        ).strip()
+                        if not raw_id or raw_id not in source_ids:
+                            continue
+                        feature_bsm = str(getattr(feature, "bsm", "") or "").strip()
+                        if not feature_bsm:
+                            continue
+                        related = self._feature_related_parcel_bsms(
+                            feature,
+                            parcels=parcels,
+                            spatial_index=spatial_index,
+                        )
+                        matches.append((raw_id, str(layer_name), feature_bsm, related))
+
+        kg = getattr(self.context, "kg", None)
+        bundle_feature_finder = getattr(workspace, "find_feature_by_bsm", None)
+        if kg is not None and callable(getattr(kg, "find_entities", None)):
+            for source_id in source_ids:
+                try:
+                    entities = kg.find_entities(
+                        source_feature_id=source_id,
+                        limit=50,
+                    ) or []
+                except Exception:
+                    entities = []
+                for entity in entities:
+                    feature_bsm = str(getattr(entity, "feature_bsm", "") or "").strip()
+                    if not feature_bsm or not callable(bundle_feature_finder):
+                        continue
+                    try:
+                        bundle_match = bundle_feature_finder(feature_bsm)
+                    except Exception:
+                        bundle_match = None
+                    if not bundle_match or len(bundle_match) < 3:
+                        continue
+                    source_layer = str(bundle_match[0] or "").strip()
+                    bundle_feature = bundle_match[2]
+                    bundle_raw = getattr(bundle_feature, "_raw", {}) or {}
+                    bundle_source_id = str(
+                        bundle_raw.get("source_feature_id")
+                        if isinstance(bundle_raw, dict)
+                        else ""
+                    ).strip()
+                    if bundle_source_id != source_id:
+                        continue
+                    related = self._feature_related_parcel_bsms(
+                        bundle_feature,
+                        parcels=parcels,
+                        spatial_index=spatial_index,
+                    )
+                    matches.append((
+                        source_id,
+                        source_layer or str(getattr(entity, "source_layer", "") or "kg"),
+                        feature_bsm,
+                        related,
+                    ))
+
+        unique_matches: list[tuple[str, str, str, list[str]]] = []
+        seen_matches: set[tuple[str, str]] = set()
+        for match in matches:
+            key = (match[0], match[2])
+            if key in seen_matches:
+                continue
+            seen_matches.add(key)
+            unique_matches.append(match)
+
+        matched_ids = {item[0] for item in unique_matches}
+        unresolved_ids = [source_id for source_id in source_ids if source_id not in matched_ids]
+        if not unique_matches:
+            entry.provenance.extend(
+                f"l1_source_feature_unresolved:{source_id}"
+                for source_id in source_ids
+            )
             self._bind_village_anchor_bsms(fact, entry)
+            self._add_entry(entry)
+            return True
+
+        for source_id, source_layer, feature_bsm, related_parcels in unique_matches:
+            bound = entry.model_copy(deep=True)
+            bound.entity_refs = list(dict.fromkeys([
+                *bound.entity_refs,
+                f"l1_source_feature:{source_id}",
+            ]))
+            bound.feature_bsm = feature_bsm
+            bound.source_bsm = feature_bsm
+            bound.source_layer = source_layer or None
+            bound.source_bsms = list(dict.fromkeys(related_parcels))
+            bound.related_parcel_bsms = list(dict.fromkeys(related_parcels))
+            bound.geometry_ref = f"bundle://feature/{feature_bsm}"
+            bound.provenance.append(f"l1_source_feature:{source_id}")
+            bound.provenance.extend(
+                f"l1_source_feature_unresolved:{item}"
+                for item in unresolved_ids
+            )
+            self._bind_village_anchor_bsms(fact, bound)
+            self._add_entry(bound)
+        return True
 
     # L1 fact geometry binding (design §3.2: entity-level, never class-level)
 
     def _entity_level_bound(self, entry: "PlaceEvidenceEntry") -> bool:
-        """实体级绑定：真实 POINT 几何（非 village_anchor/bundled 占位）+ 地块。"""
-        if not entry.source_bsms:
-            return False
-        from app.spatial.grounding.coordinate_identity import point_xy
-
-        return point_xy(entry.geometry_ref) is not None
+        """实体级绑定：bundle feature identity + nearby parcel evidence."""
+        return bool(
+            entry.source_bsms
+            and (
+                str(entry.feature_bsm or "").strip()
+                or str(entry.source_bsm or "").strip()
+            )
+        )
 
     def _bind_l1_fact_bsms(
         self,
@@ -170,6 +694,7 @@ class PlaceEvidenceIndex:
         entry: "PlaceEvidenceEntry",
         parcels: Optional[List[Any]] = None,
         centroid_cache: Optional[Dict[str, Any]] = None,
+        spatial_index: Any = None,
     ) -> None:
         """Bind an L1 typed fact to a specific entity, never a whole-DLMC class.
 
@@ -182,7 +707,15 @@ class PlaceEvidenceIndex:
         """
         if entry.source_bsms and self._entity_level_bound(entry):
             return
-        role = str(getattr(fact, "role", "") or "")
+        attributes = getattr(fact, "attributes", None) or {}
+        if not isinstance(attributes, dict):
+            attributes = {}
+        role = str(
+            getattr(fact, "role", "")
+            or attributes.get("role", "")
+            or getattr(fact, "semantic_type", "")
+            or ""
+        ).strip()
         if role not in ("facility", "landmark"):
             return
         workspace = getattr(self.context, "workspace", None)
@@ -195,18 +728,16 @@ class PlaceEvidenceIndex:
                 return
         if not parcels:
             return
-        # 设施点/地标点可来自 facilities_current 或 annotations_current；
-        # 点标签可能是 text/注记/name/label/facility_name（"祠"对应"祠堂"）。
-        points: List[Any] = []
-        try:
-            points = list((workspace.points.get("facilities_current") or []) or [])
-        except Exception:
-            points = []
-        if not points:
+        # 设施点/地标点可来自 facilities_current 或 annotations_current。
+        points: List[tuple[Any, str]] = []
+        for layer_name in ("facilities_current", "annotations_current"):
             try:
-                points = list((workspace.points.get("annotations_current") or []) or [])
+                points.extend(
+                    (point, layer_name)
+                    for point in list((workspace.points.get(layer_name) or []) or [])
+                )
             except Exception:
-                points = []
+                continue
         from app.spatial.grounding.coordinate_identity import point_xy
         from app.spatial.grounding.grounding import query_parcels_near_entity
         from app.spatial.grounding.topology import hint_tokens
@@ -214,7 +745,14 @@ class PlaceEvidenceIndex:
         # 村 hint（如 社前村）：用于在多个同名/同类设施点里按空间拓扑消歧
         village_bsms: set = set()
         village_centroid = None
-        hint_text = str(getattr(fact, "spatial_hint", "") or getattr(fact, "source_span", "") or "")
+        hint_text = str(
+            getattr(fact, "spatial_hint", "")
+            or attributes.get("spatial_hint", "")
+            or attributes.get("location", "")
+            or attributes.get("village", "")
+            or getattr(fact, "source_span", "")
+            or ""
+        )
         gazetteer = getattr(self.context, "gazetteer", None)
         if gazetteer is not None:
             for token in hint_tokens(hint_text):
@@ -226,9 +764,9 @@ class PlaceEvidenceIndex:
                     village_centroid = tuple(float(x) for x in entry_g.centroid[:2])
                 break
 
-        # 收集所有匹配设施点 → (坐标, 邻近地块, 到村质心距离)
+        # 收集所有匹配设施点 → (坐标, 邻近地块, 到村质心距离, feature_bsm)
         matches: List[tuple] = []
-        for pt in points:
+        for pt, point_source_layer in points:
             geom = getattr(pt, "geometry", None) or {}
             text = ""
             for attr in ("text", "name", "label", "facility_name", "注记"):
@@ -241,7 +779,26 @@ class PlaceEvidenceIndex:
             if not text:
                 continue
             name = entry.canonical_name or ""
-            if not (text in name or (name and name[0] == text) or text == name):
+            raw = getattr(pt, "_raw", {}) or {}
+            source_feature_id = str(
+                raw.get("source_feature_id") if isinstance(raw, dict) else ""
+            ).strip()
+            decision = self.source_semantic_decisions.get(source_feature_id)
+            decision_status = (
+                getattr(decision, "status", "")
+                if decision is not None and not isinstance(decision, dict)
+                else str((decision or {}).get("status", ""))
+            )
+            decision_type = (
+                getattr(decision, "semantic_type", "")
+                if decision is not None and not isinstance(decision, dict)
+                else str((decision or {}).get("semantic_type", ""))
+            )
+            exact_raw_match = text == name
+            accepted_semantic_match = (
+                decision_status == "accepted" and decision_type == name
+            )
+            if not (exact_raw_match or accepted_semantic_match):
                 continue
             coords = geom.get("coordinates") if isinstance(geom, dict) else None
             if not coords or len(coords) < 2:
@@ -255,11 +812,14 @@ class PlaceEvidenceIndex:
                 (lon, lat),
                 max_distance_m=500,
                 centroid_cache=centroid_cache,
+                geometry_cache=self._parcel_geometry_cache,
+                spatial_index=spatial_index,
             )
             dist = float("inf")
             if village_centroid is not None:
                 dist = ((lon - village_centroid[0]) ** 2 + (lat - village_centroid[1]) ** 2) ** 0.5
-            matches.append(((lon, lat), list(near), dist))
+            point_bsm = str(getattr(pt, "bsm", "") or "").strip() or None
+            matches.append(((lon, lat), list(near), dist, point_bsm, point_source_layer))
 
         if not matches:
             return
@@ -273,22 +833,30 @@ class PlaceEvidenceIndex:
                 )
             )
         best = matches[0]
-        point_geometry = f"POINT({best[0][0]} {best[0][1]})"
         hit = list(best[1])
         if len(matches) > 1:
             overlap = len(set(best[1]) & village_bsms) if village_bsms else 0
             entry.provenance.append(
                 f"facility_point_disambiguated:{len(matches)}pts:overlap={overlap}"
             )
+        point_bsm = best[3]
+        point_source_layer = best[4]
+        if point_bsm:
+            entry.feature_bsm = point_bsm
+            entry.source_bsm = point_bsm
+            entry.source_layer = point_source_layer or None
         bsms = [b for b in dict.fromkeys(hit) if b]
+        if point_bsm:
+            entry.geometry_ref = f"bundle://feature/{point_bsm}"
+        provenance = "facility_point:bundle" if point_bsm else "facility_point:unbound"
+        if provenance not in entry.provenance:
+            entry.provenance.append(provenance)
         if bsms:
             entry.source_bsms = list(dict.fromkeys([*entry.source_bsms, *bsms]))
+            entry.related_parcel_bsms = list(
+                dict.fromkeys([*entry.related_parcel_bsms, *bsms])
+            )
             entry.confidence = max(entry.confidence, 0.7)
-            if point_geometry is not None:
-                entry.geometry_ref = point_geometry
-            provenance = f"facility_point:{point_geometry}" if point_geometry else "facility_point"
-            if provenance not in entry.provenance:
-                entry.provenance.append(provenance)
 
     def _bind_village_anchor_bsms(
         self,
@@ -304,13 +872,8 @@ class PlaceEvidenceIndex:
         names and BSMs both come from report+KG; nothing is fabricated, and a
         fact that is itself a village role is never self-anchored.
         """
-        if entry.source_bsms:
-            return
         role = str(getattr(fact, "role", "") or "")
         if role == "village":
-            return
-        gazetteer = getattr(self.context, "gazetteer", None)
-        if gazetteer is None:
             return
         span = " ".join(
             str(x)
@@ -322,6 +885,38 @@ class PlaceEvidenceIndex:
             if x
         )
         if not span:
+            return
+        explicit_village = ""
+        try:
+            from app.spatial.grounding.topology import hint_tokens
+
+            explicit_village = next(
+                (
+                    token
+                    for token in hint_tokens(
+                        str(getattr(fact, "spatial_hint", "") or "")
+                    )
+                    if token and "村" in token
+                ),
+                "",
+            )
+        except Exception:
+            explicit_village = ""
+        gazetteer = getattr(self.context, "gazetteer", None)
+        if gazetteer is None:
+            # An explicit L1 spatial hint is a semantic scope even when the
+            # gazetteer is unavailable.  It does not create anchor geometry
+            # or BSMs; it only lets a later exact bundle/KG candidate inherit
+            # the village scope.
+            context_village = str(
+                getattr(self.context, "village_name", "") or ""
+            ).strip()
+            scope = explicit_village or (
+                context_village if context_village and context_village in span else ""
+            )
+            if scope:
+                entry.provenance.append(f"village_anchor:{scope}")
+                entry.confidence = max(entry.confidence, 0.6)
             return
         # Longest village name first to avoid partial-name over-anchoring.
         candidates = []
@@ -337,10 +932,48 @@ class PlaceEvidenceIndex:
                 if len(vn) >= 2 and vn in span:
                     candidates.append((len(vn), vn, ge))
         if not candidates:
+            context_village = str(
+                getattr(self.context, "village_name", "") or ""
+            ).strip()
+            scope = explicit_village or (
+                context_village if context_village and context_village in span else ""
+            )
+            if scope:
+                entry.provenance.append(f"village_anchor:{scope}")
+                entry.confidence = max(entry.confidence, 0.6)
+            return
+        if explicit_village:
+            explicit_key = _normalize(explicit_village)
+            explicit_candidates = [
+                item
+                for item in candidates
+                if _normalize(item[1]) == explicit_key
+            ]
+            if explicit_candidates:
+                candidates = explicit_candidates
+        entity_keys = {
+            str(getattr(item[2], "entity_uri", "") or "")
+            or f"{item[1]}|{','.join(str(value) for value in getattr(item[2], 'bsms', []) or [])}"
+            for item in candidates
+        }
+        if len(entity_keys) > 1:
+            names = list(dict.fromkeys(item[1] for item in candidates))
+            entry.provenance.append(
+                "village_anchor_ambiguous:" + ",".join(names[:8])
+            )
+            entry.confidence = max(entry.confidence, 0.3)
             return
         candidates.sort(key=lambda item: -item[0])
         _, vn, ge = candidates[0]
-        entry.source_bsms = list(dict.fromkeys([*entry.source_bsms, *ge.bsms]))
+        entry.anchor_bsms = list(dict.fromkeys([*entry.anchor_bsms, *ge.bsms]))
+        if self._entity_level_bound(entry):
+            # Keep the legacy extent field scoped to the named village for an
+            # L1 facility mention, while the exact point's nearby parcels stay
+            # auditable in ``related_parcel_bsms`` and its own identity stays
+            # in ``feature_bsm``.
+            entry.source_bsms = list(dict.fromkeys(ge.bsms))
+        else:
+            entry.source_bsms = list(dict.fromkeys([*entry.source_bsms, *ge.bsms]))
         entry.entity_refs.append(
             str(getattr(ge, "entity_uri", "") or f"gazetteer:{vn}")
         )
@@ -362,92 +995,182 @@ class PlaceEvidenceIndex:
                 break
         return token
 
-    @staticmethod
-    def _point_xy(geometry_ref: Optional[str]) -> Optional[tuple]:
-        """Extract (lon, lat) from a POINT(...) geometry ref.
-
-        Delegates to ``app.spatial.grounding.coordinate_identity`` (ER
-        principle: 同一坐标 = 同一实体), format-independent.
-        """
-        from app.spatial.grounding.coordinate_identity import point_xy
-
-        return point_xy(geometry_ref)
-
     def _register_poi(
         self,
         pois: List[Any],
         parcels: Optional[List[Any]] = None,
         centroid_cache: Optional[Dict[str, Any]] = None,
+        source_layer: str = "annotations_current",
+        spatial_index: Any = None,
     ) -> None:
         for p in pois:
-            text = getattr(p, "text", "") or ""
+            raw = getattr(p, "_raw", {}) or {}
+            properties = getattr(p, "properties", {}) or {}
+            if not isinstance(raw, dict):
+                raw = {}
+            if not isinstance(properties, dict):
+                properties = {}
+            name_keys = (
+                "text", "name", "label", "facility_name", "注记", "名称",
+                "地质灾害点名称",
+            )
+            attribute_values: list[str] = []
+            for attr in (
+                *name_keys,
+                "address", "地址", "location", "位置", "village", "村",
+                "村名", "natural_village", "自然村", "settlement", "组",
+                "类型", "hazard_type", "大小", "scale",
+            ):
+                value = getattr(p, attr, "") if hasattr(p, attr) else ""
+                value = value or properties.get(attr) or raw.get(attr) or ""
+                if isinstance(value, (list, tuple, set)):
+                    values = [str(item).strip() for item in value if str(item).strip()]
+                else:
+                    values = [
+                        line.strip()
+                        for line in str(value or "").replace("\r\n", "\n").split("\n")
+                        if line.strip()
+                    ]
+                attribute_values.extend(values)
+            text = ""
+            for attr in name_keys:
+                for value in (
+                    getattr(p, attr, "") if hasattr(p, attr) else "",
+                    properties.get(attr),
+                    raw.get(attr),
+                ):
+                    for line in str(value or "").replace("\r\n", "\n").split("\n"):
+                        clean_line = line.strip()
+                        if clean_line:
+                            text = clean_line
+                            break
+                    if text:
+                        break
+                if text:
+                    break
             if not text:
                 continue
+            source_aliases = list(dict.fromkeys(attribute_values))
             category = getattr(p, "category", "") or ""
             geom = getattr(p, "geometry", None) or {}  # getattr intentional: heterogeneous feature objects
-            geometry_ref = None
-            if isinstance(geom, dict):
-                coords = geom.get("coordinates")
-                if coords and len(coords) >= 2:
-                    geometry_ref = f"POINT({coords[0]} {coords[1]})"
-            role = "facility" if category == "现状设施点" else "landmark"
-            source_bsms = self._poi_source_bsms(geom, parcels, centroid_cache)
-
-            # General entity resolution (GER-LLM / ER pattern): a POI that
-            # shares its source point with an already-registered KG entity
-            # (same coordinates, same role) is the same real-world place.
-            # Merge the POI's near-parcel BSMs and raw label onto that entity
-            # instead of creating a duplicate name entry - no label/alias map.
-            if geometry_ref:
-                poi_xy = self._point_xy(geometry_ref)
-                target = None
-                if poi_xy is not None:
-                    for e in self.entries:
-                        if e.role != role:
-                            continue
-                        e_xy = self._point_xy(e.geometry_ref)
-                        if (
-                            e_xy is not None
-                            and abs(e_xy[0] - poi_xy[0]) < 1e-5
-                            and abs(e_xy[1] - poi_xy[1]) < 1e-5
-                        ):
-                            # Co-location = same real-world place (ER pattern):
-                            # merge regardless of whether the target is a KG
-                            # entity or another uploaded POI annotation.
-                            target = e
-                            break
-                if target is not None:
-                    target.source_bsms = list(
-                        dict.fromkeys([*target.source_bsms, *source_bsms])
-                    )
-                    if text not in target.aliases:
-                        target.aliases.append(text)
-                    if f"poi:{text}" not in target.entity_refs:
-                        target.entity_refs.append(f"poi:{text}")
-                    if "poi" not in target.provenance:
-                        target.provenance.append("poi")
-                    target.confidence = max(target.confidence, 0.5)
-                    continue
-
-            self._add_entry(
-                PlaceEvidenceEntry(
-                    canonical_name=text,
-                    aliases=[],
-                    entity_refs=[f"poi:{text}"],
-                    entity_types=[role],
-                    role=role,
-                    source_bsms=source_bsms,
-                    geometry_ref=geometry_ref,
-                    provenance=["poi"],
-                    confidence=0.5,
-                )
+            feature_bsm = str(getattr(p, "bsm", "") or "").strip() or None
+            raw = getattr(p, "_raw", {}) or {}
+            source_feature_id = str(
+                raw.get("source_feature_id") if isinstance(raw, dict) else ""
+            ).strip()
+            semantic_label, semantic_aliases, semantic_fact_refs = (
+                self._source_semantic_overlay(source_feature_id, text)
             )
+            canonical_name = semantic_label or text
+            geometry_ref = f"bundle://feature/{feature_bsm}" if feature_bsm else None
+            role = (
+                "hazard"
+                if source_layer in {
+                    "hazard_points",
+                    "geological_hazard_points",
+                    "geological_hazard_point",
+                }
+                else "facility"
+                if source_layer == "facilities_current" or category == "现状设施点"
+                else "landmark"
+            )
+            source_bsms = self._poi_source_bsms(
+                geom,
+                parcels,
+                centroid_cache,
+                self._parcel_geometry_cache,
+                spatial_index,
+            )
+
+            # General entity resolution: a POI with the same bundle feature
+            # identity as an existing entity is the same real-world place.
+            # Geometry remains owned by the bundle and is never cached here.
+            point_key = self._point_identity_key(role, geom)
+            target = self._point_identity_index.get(point_key) if point_key else None
+            target = target or next(
+                (
+                    entry
+                    for entry in self.entries
+                    if feature_bsm
+                    and entry.role == role
+                    and str(entry.feature_bsm or "").strip() == feature_bsm
+                ),
+                None,
+            )
+            if target is not None:
+                target.source_bsms = list(
+                    dict.fromkeys([*target.source_bsms, *source_bsms])
+                )
+                target.feature_bsm = target.feature_bsm or feature_bsm
+                target.related_parcel_bsms = list(
+                    dict.fromkeys([*target.related_parcel_bsms, *source_bsms])
+                )
+                for alias in source_aliases:
+                    if alias and alias != target.canonical_name and alias not in target.aliases:
+                        target.aliases.append(alias)
+                for alias in semantic_aliases:
+                    if alias and alias != target.canonical_name and alias not in target.aliases:
+                        target.aliases.append(alias)
+                target.l1_fact_refs = list(
+                    dict.fromkeys([*target.l1_fact_refs, *semantic_fact_refs])
+                )
+                if semantic_label and "source_semantic:accepted" not in target.provenance:
+                    target.provenance.append("source_semantic:accepted")
+                if f"poi:{text}" not in target.entity_refs:
+                    target.entity_refs.append(f"poi:{text}")
+                if "poi" not in target.provenance:
+                    target.provenance.append("poi")
+                target.confidence = max(target.confidence, 0.5)
+                if point_key:
+                    self._point_identity_index[point_key] = target
+                continue
+
+            entry = PlaceEvidenceEntry(
+                canonical_name=canonical_name,
+                aliases=list(dict.fromkeys([*source_aliases, *semantic_aliases])),
+                entity_refs=[f"poi:{canonical_name}"],
+                entity_types=[role],
+                role=role,
+                feature_bsm=feature_bsm,
+                source_feature_id=source_feature_id or None,
+                source_layer=source_layer,
+                source_bsm=feature_bsm,
+                related_parcel_bsms=list(source_bsms),
+                source_bsms=source_bsms,
+                geometry_ref=geometry_ref,
+                provenance=[
+                    "poi",
+                    *( ["source_semantic:accepted"] if semantic_label else [] ),
+                ],
+                l1_fact_refs=semantic_fact_refs,
+                confidence=0.95 if semantic_label else 0.5,
+            )
+            self._add_entry(entry)
+            if point_key:
+                self._point_identity_index[point_key] = entry
+
+    @staticmethod
+    def _point_identity_key(
+        role: str,
+        geometry: Any,
+    ) -> tuple[str, float, float] | None:
+        if not isinstance(geometry, dict) or geometry.get("type") != "Point":
+            return None
+        coordinates = geometry.get("coordinates") or []
+        if len(coordinates) < 2:
+            return None
+        try:
+            return (str(role), round(float(coordinates[0]), 7), round(float(coordinates[1]), 7))
+        except (TypeError, ValueError):
+            return None
 
     def _poi_source_bsms(
         self,
         geometry: Any,
         parcels: Optional[List[Any]] = None,
         centroid_cache: Optional[Dict[str, Any]] = None,
+        geometry_cache: Optional[Dict[str, Any]] = None,
+        spatial_index: Any = None,
     ) -> List[str]:
         """Bind an uploaded point to nearby real parcels, without fabrication."""
         if not isinstance(geometry, dict):
@@ -465,6 +1188,8 @@ class PlaceEvidenceIndex:
                 (float(coords[0]), float(coords[1])),
                 max_distance_m=500,
                 centroid_cache=centroid_cache,
+                geometry_cache=geometry_cache,
+                spatial_index=spatial_index,
             )
         except Exception:
             return []
@@ -493,35 +1218,57 @@ class PlaceEvidenceIndex:
         try:
             from rdflib import RDF
 
-            from app.infrastructure.kg.ontology import PLN, GeoPredicates
+            from app.infrastructure.kg.ontology import PLN, GeoPredicates, SemanticPredicates
 
             for s, _, o in graph.triples((None, RDF.type, None)):
                 type_fragment = str(o).rsplit("#", 1)[-1].rsplit("/", 1)[-1]
-                role_key = re.sub(r"(?<!^)(?=[A-Z])", "_", type_fragment).lower()
+                role_key = "".join(
+                    ("_" if index and char.isupper() else "") + char.lower()
+                    for index, char in enumerate(type_fragment)
+                )
                 mapping = self._KG_NAMEABLE_TYPES.get(role_key)
                 if mapping is None:
                     continue
-                name = self._first_label(graph, s)
-                if not name:
-                    continue
+                raw_name = self._first_label(graph, s)
                 role, entity_types = mapping
+                source_feature_id = str(graph.value(s, PLN.source_feature_id) or "").strip()
+                decision = self.source_semantic_decisions.get(source_feature_id)
+                decision_status = (
+                    getattr(decision, "status", "")
+                    if decision is not None and not isinstance(decision, dict)
+                    else str((decision or {}).get("status", ""))
+                )
+                decision_type = (
+                    getattr(decision, "semantic_type", "")
+                    if decision is not None and not isinstance(decision, dict)
+                    else str((decision or {}).get("semantic_type", ""))
+                )
                 bsm = str(graph.value(s, PLN.bsm) or "").strip()
-                lon = graph.value(s, PLN.lon)
-                lat = graph.value(s, PLN.lat)
-                geometry_ref = None
+                if not raw_name and not bsm and not source_feature_id:
+                    # A nameless, geometry-less KG node has no bounded
+                    # identity that the evidence boundary can safely expose.
+                    continue
+                name = (
+                    decision_type.strip()
+                    if decision_status == "accepted" and decision_type.strip()
+                    else raw_name or role
+                )
                 centroid = None
-                if lon is not None and lat is not None:
-                    try:
+                try:
+                    lon = graph.value(s, PLN.lon)
+                    lat = graph.value(s, PLN.lat)
+                    if lon is not None and lat is not None:
                         centroid = (float(lon), float(lat))
-                        geometry_ref = (
-                            f"POINT({centroid[0]} {centroid[1]})"
-                        )
-                    except (TypeError, ValueError):
-                        centroid = None
-                        geometry_ref = None
-                if geometry_ref is None:
-                    geometry_ref = self._kg_wkt_ref(graph, s)
+                except (TypeError, ValueError):
+                    centroid = None
+                geometry_ref = (
+                    f"bundle://feature/{bsm}"
+                    if bsm
+                    else None
+                )
                 aliases: List[str] = []
+                if raw_name != name:
+                    aliases.append(raw_name)
                 try:
                     ft = graph.value(s, PLN.facility_type)
                     if ft:
@@ -531,6 +1278,24 @@ class PlaceEvidenceIndex:
                 except Exception:
                     pass
                 relation_refs = self._kg_relation_refs(graph, s)
+                source_feature_id = str(graph.value(s, PLN.source_feature_id) or "").strip() or None
+                source_layer = str(graph.value(s, SemanticPredicates.gis_type_ref) or "").strip() or None
+                if role == "road" and source_layer in {
+                    "admin_boundary_line",
+                    "contour_line",
+                }:
+                    # Boundary and contour lines are real KG spatial entities,
+                    # but they are not transport-road evidence. This is an
+                    # integrity diagnostic for legacy or externally supplied
+                    # KG data, not a semantic fallback.
+                    logger.warning(
+                        "[PlaceEvidenceIndex] rejected invalid Road typing: "
+                        "entity=%s source_layer=%s; rebuild the KG with the "
+                        "AdministrativeBoundary/ContourLine types",
+                        s,
+                        source_layer,
+                    )
+                    continue
                 confidence = 0.7 if bsm else (0.6 if centroid else 0.4)
                 entry = PlaceEvidenceEntry(
                     canonical_name=name,
@@ -538,12 +1303,53 @@ class PlaceEvidenceIndex:
                     entity_refs=[str(s)],
                     entity_types=list(entity_types),
                     role=role,
+                    feature_bsm=bsm or None,
+                    source_feature_id=source_feature_id,
+                    source_layer=source_layer,
+                    source_bsm=bsm or None,
                     source_bsms=[bsm] if bsm else [],
                     geometry_ref=geometry_ref,
                     provenance=["kg"],
                     confidence=confidence,
                     relation_refs=relation_refs,
+                    # L1 support is merged from the typed L1 entry below;
+                    # this KG projection only carries the source-semantic
+                    # decision marker and keeps topology/entity refs.
+                    l1_fact_refs=[],
+                    l1_snapshot_ref=str(
+                        getattr(self.context, "l1_snapshot_ref", "") or ""
+                    ),
                 )
+                if decision_status == "accepted" and decision_type.strip():
+                    entry.provenance.append("source_semantic:accepted")
+                if source_feature_id and not entry.feature_bsm:
+                    workspace = getattr(self.context, "workspace", None)
+                    for group_name in ("points", "lines", "polygons"):
+                        group = getattr(workspace, group_name, None) if workspace is not None else None
+                        if group is None or not hasattr(group, "keys"):
+                            continue
+                        found = False
+                        for layer_name in group.keys():
+                            for feature in group.get(layer_name) or []:
+                                raw = getattr(feature, "_raw", {}) or {}
+                                raw_id = str(
+                                    raw.get("source_feature_id")
+                                    or getattr(feature, "source_feature_id", "")
+                                    or ""
+                                ).strip()
+                                if raw_id != source_feature_id:
+                                    continue
+                                feature_bsm = str(getattr(feature, "bsm", "") or "").strip()
+                                if feature_bsm:
+                                    entry.feature_bsm = feature_bsm
+                                    entry.source_bsm = feature_bsm
+                                entry.source_layer = str(layer_name)
+                                found = True
+                                break
+                            if found:
+                                break
+                        if found:
+                            break
                 # A named KG facility with coordinates but no BSM is bound to
                 # real bundle parcels through the same near-entity query used
                 # for uploaded POIs (geometry still comes from the bundle).
@@ -566,6 +1372,8 @@ class PlaceEvidenceIndex:
                                 centroid,
                                 max_distance_m=500,
                                 centroid_cache=cache,
+                                geometry_cache=self._parcel_geometry_cache,
+                                spatial_index=self._parcel_spatial_index,
                             )
                             if near:
                                 entry.source_bsms = list(dict.fromkeys(near))
@@ -577,30 +1385,12 @@ class PlaceEvidenceIndex:
                             exc,
                         )
                 self._add_entry(entry)
-        except Exception:
-            return
-
-    @staticmethod
-    def _kg_wkt_ref(graph: Any, subject: Any) -> Optional[str]:
-        """Read a GeoSPARQL WKT geometry from a KG entity, if present."""
-        try:
-            from app.infrastructure.kg.ontology import GeoPredicates
-
-            # The builder stores point centroids under hasCentroid and full
-            # geometries under hasGeometry; read both so any KG entity with a
-            # locatable centre gets a geometry_ref.
-            for predicate in (
-                GeoPredicates.hasGeometry,
-                GeoPredicates.hasCentroid,
-            ):
-                geometry_node = graph.value(subject, predicate)
-                if geometry_node is not None:
-                    wkt = graph.value(geometry_node, GeoPredicates.asWKT)
-                    if wkt:
-                        return f"kg_wkt:{str(wkt)[:200]}"
-        except Exception:
-            pass
-        return None
+        except Exception as exc:
+            logger.warning(
+                "[PlaceEvidenceIndex] KG entity indexing failed: %s",
+                exc,
+                exc_info=True,
+            )
 
     @staticmethod
     def _kg_relation_refs(graph: Any, subject: Any) -> List[str]:
@@ -635,31 +1425,90 @@ class PlaceEvidenceIndex:
         return None
 
     def _add_entry(self, entry: PlaceEvidenceEntry) -> None:
+        def _index(indexed: PlaceEvidenceEntry) -> None:
+            key = _normalize(indexed.canonical_name)
+            if key:
+                entries = self._by_canonical.setdefault(key, [])
+                if indexed not in entries:
+                    entries.append(indexed)
+                self._index_name_key("canonical", key)
+            for alias in indexed.aliases:
+                alias_key = _normalize(alias)
+                if alias_key:
+                    aliases = self._by_alias.setdefault(alias_key, [])
+                    if indexed not in aliases:
+                        aliases.append(indexed)
+                    self._index_name_key("alias", alias_key)
+
+        # A shared feature BSM/source_feature_id is the strongest identity
+        # signal.  Semantic overlays are allowed to rename an entity, so this
+        # check must happen before name-based merging.
+        identity_target = self._identity_merge_target(entry)
+        if identity_target is not None:
+            self._merge_into(identity_target, entry)
+            _index(identity_target)
+            return
+
         # Same coordinates remain a safe co-location identity signal.  Names
         # alone are not identity when source geometries disagree.
         coord_target = self._coordinate_merge_target(entry)
         if coord_target is not None:
             self._merge_into(coord_target, entry)
+            _index(coord_target)
             return
         name_target = self._name_merge_target(entry)
         if name_target is not None:
             self._merge_into(name_target, entry)
+            _index(name_target)
             return
         key = _normalize(entry.canonical_name)
         existing_entries = self._by_canonical.get(key, [])
         merge_target = self._canonical_merge_target(entry, existing_entries)
         if merge_target is not None:
             self._merge_into(merge_target, entry)
-            entry = merge_target
+            _index(merge_target)
         else:
             self.entries.append(entry)
-            self._by_canonical.setdefault(key, []).append(entry)
-        for alias in entry.aliases:
-            alias_key = _normalize(alias)
-            if alias_key:
-                aliases = self._by_alias.setdefault(alias_key, [])
-                if entry not in aliases:
-                    aliases.append(entry)
+            _index(entry)
+
+    def _index_name_key(self, kind: str, key: str) -> None:
+        """Index name keys for bounded substring candidate recall."""
+        value = str(key or "").strip()
+        if not value:
+            return
+        marker = (str(kind), value)
+        if len(value) < 2:
+            self._short_name_keys.add(marker)
+            return
+        for index in range(len(value) - 1):
+            self._name_ngrams.setdefault(value[index:index + 2], set()).add(marker)
+
+    def _substring_name_keys(self, mention: str) -> set[tuple[str, str]]:
+        """Return only canonical/alias keys that can contain the mention."""
+        value = str(mention or "").strip()
+        if len(value) < 2:
+            return {
+                ("canonical", key) for key in self._by_canonical
+            } | {
+                ("alias", key) for key in self._by_alias
+            }
+        keys: set[tuple[str, str]] = set(self._short_name_keys)
+        for index in range(len(value) - 1):
+            keys.update(self._name_ngrams.get(value[index:index + 2], set()))
+        return keys
+
+    def _identity_merge_target(
+        self, entry: PlaceEvidenceEntry
+    ) -> Optional[PlaceEvidenceEntry]:
+        identity = self._source_identity_key(entry)
+        if not identity:
+            return None
+        for existing in self.entries:
+            if existing.role != entry.role:
+                continue
+            if self._source_identity_key(existing) == identity:
+                return existing
+        return None
 
     @classmethod
     def _canonical_merge_target(
@@ -673,6 +1522,19 @@ class PlaceEvidenceIndex:
             cls._authoritative_geometry_key(existing) for existing in existing_entries
         }
         existing_geometries.discard(None)
+        entry_identity = cls._source_identity_key(entry)
+        existing_identities = {
+            identity
+            for existing in existing_entries
+            if (identity := cls._source_identity_key(existing))
+        }
+        if entry_identity and existing_identities:
+            for existing in existing_entries:
+                if cls._source_identity_key(existing) == entry_identity:
+                    return existing
+            return None
+        if not entry_identity and len(existing_identities) > 1:
+            return None
         # A geometry-less generic mention must not attach itself to one of
         # several already-known source entities by list order.
         if entry_geometry is None and len(existing_geometries) > 1:
@@ -699,6 +1561,12 @@ class PlaceEvidenceIndex:
         value = str(geometry_ref or "").strip()
         if not value or value.startswith(("village_anchor:", "bundled:")):
             return None
+        # Geometry is intentionally opaque at the EvidenceGraph boundary.
+        # Keep bundle refs as distinct authoritative geometry identities for
+        # ambiguity checks; only WKT is parsed here when an older KG entry
+        # still carries source geometry internally.
+        if value.startswith("bundle://"):
+            return value
         if value.startswith("kg_wkt:"):
             value = value[len("kg_wkt:") :].strip()
         try:
@@ -710,6 +1578,19 @@ class PlaceEvidenceIndex:
             return geometry.wkb_hex
         except Exception:
             return None
+
+    @staticmethod
+    def _source_identity_key(entry: "PlaceEvidenceEntry") -> Optional[str]:
+        """Return an identity key without retaining source geometry in the index."""
+        for value in (
+            getattr(entry, "feature_bsm", ""),
+            getattr(entry, "source_bsm", ""),
+            getattr(entry, "source_feature_id", ""),
+        ):
+            normalized = str(value or "").strip()
+            if normalized:
+                return normalized
+        return None
 
     def _name_merge_target(
         self, entry: PlaceEvidenceEntry
@@ -734,6 +1615,14 @@ class PlaceEvidenceIndex:
             }
             existing_keys.discard("")
             if existing_keys & keys:
+                entry_identity = self._source_identity_key(entry)
+                existing_identity = self._source_identity_key(existing)
+                if (
+                    entry_identity
+                    and existing_identity
+                    and entry_identity != existing_identity
+                ):
+                    continue
                 existing_geometry = self._authoritative_geometry_key(existing)
                 if (
                     entry_geometry is not None
@@ -791,10 +1680,32 @@ class PlaceEvidenceIndex:
         target.aliases = list(dict.fromkeys([*target.aliases, *source.aliases]))
         target.entity_refs = list(dict.fromkeys([*target.entity_refs, *source.entity_refs]))
         target.entity_types = list(dict.fromkeys([*target.entity_types, *source.entity_types]))
-        target.source_bsms = list(dict.fromkeys([*target.source_bsms, *source.source_bsms]))
+        target.feature_bsm = target.feature_bsm or source.feature_bsm
+        target.source_feature_id = target.source_feature_id or source.source_feature_id
+        target.source_layer = target.source_layer or source.source_layer
+        target.source_bsm = target.source_bsm or source.source_bsm
+        target.anchor_bsms = list(
+            dict.fromkeys([*target.anchor_bsms, *source.anchor_bsms])
+        )
+        target.related_parcel_bsms = list(
+            dict.fromkeys([*target.related_parcel_bsms, *source.related_parcel_bsms])
+        )
+        if target.anchor_bsms and target.geometry_ref:
+            target.source_bsms = list(dict.fromkeys(target.anchor_bsms))
+        else:
+            target.source_bsms = list(
+                dict.fromkeys([*target.source_bsms, *source.source_bsms])
+            )
         target.provenance = list(dict.fromkeys([*target.provenance, *source.provenance]))
         target.relation_refs = list(
             dict.fromkeys([*target.relation_refs, *source.relation_refs])
+        )
+        target.l1_fact_refs = list(
+            dict.fromkeys([*target.l1_fact_refs, *source.l1_fact_refs])
+        )
+        target.l1_snapshot_ref = target.l1_snapshot_ref or source.l1_snapshot_ref
+        target.bundle_snapshot_digest = (
+            target.bundle_snapshot_digest or source.bundle_snapshot_digest
         )
         if not target.geometry_ref and source.geometry_ref:
             target.geometry_ref = source.geometry_ref
@@ -856,11 +1767,19 @@ class PlaceEvidenceIndex:
                     }
                 )
 
-        for key, entries in self._by_canonical.items():
+        for kind, key in sorted(self._substring_name_keys(norm)):
+            entries = (
+                self._by_canonical.get(key, [])
+                if kind == "canonical"
+                else self._by_alias.get(key, [])
+            )
             if norm and norm in key:
                 for entry in entries:
                     seen[id(entry)] = entry
-                trace.append({"step": "substring", "matched": [e.canonical_name for e in entries]})
+                trace.append({
+                    "step": "substring" if kind == "canonical" else "alias_substring",
+                    "matched": [e.canonical_name for e in entries],
+                })
             elif norm and key and key in norm:
                 # Forward substring: a long mention such as
                 # '金田河沿线农业发展区' contains the entity '金田河'.
@@ -868,22 +1787,11 @@ class PlaceEvidenceIndex:
                     seen[id(entry)] = entry
                 trace.append(
                     {
-                        "step": "mention_contains_entity",
-                        "matched": [e.canonical_name for e in entries],
-                    }
-                )
-
-        for key, entries in self._by_alias.items():
-            if norm and norm in key:
-                for entry in entries:
-                    seen[id(entry)] = entry
-                trace.append({"step": "alias_substring", "matched": [e.canonical_name for e in entries]})
-            elif norm and key and key in norm:
-                for entry in entries:
-                    seen[id(entry)] = entry
-                trace.append(
-                    {
-                        "step": "alias_contains_entity",
+                        "step": (
+                            "mention_contains_entity"
+                            if kind == "canonical"
+                            else "alias_contains_entity"
+                        ),
                         "matched": [e.canonical_name for e in entries],
                     }
                 )
@@ -891,20 +1799,88 @@ class PlaceEvidenceIndex:
         for entry in seen.values():
             evidence = score_candidate(mention, entry, role=role, hints=hints, context=self.context)
             score = total(evidence)
+            context_snapshot = str(
+                getattr(getattr(self.context, "data_snapshot", None), "digest", "")
+                or getattr(entry, "bundle_snapshot_digest", "")
+                or ""
+            )
             candidates.append(
                 PlaceResolutionCandidate(
                     entity_ref=_preferred_entity_ref(entry),
                     entity_type=entry.entity_types[0] if entry.entity_types else entry.role,
+                    role=entry.role,
                     canonical_name=entry.canonical_name,
                     aliases=list(entry.aliases),
                     geometry_ref=entry.geometry_ref,
+                    feature_bsm=entry.feature_bsm,
+                    source_feature_id=entry.source_feature_id,
+                    source_layer=entry.source_layer,
+                    source_bsm=entry.source_bsm,
+                    anchor_bsms=list(entry.anchor_bsms),
+                    related_parcel_bsms=list(entry.related_parcel_bsms),
                     source_bsms=list(entry.source_bsms),
                     score=round(score, 4),
                     evidence_refs=list(entry.provenance),
                     relation_refs=list(entry.relation_refs),
+                    l1_fact_refs=list(entry.l1_fact_refs),
+                    l1_snapshot_ref=str(
+                        entry.l1_snapshot_ref
+                        or getattr(self.context, "l1_snapshot_ref", "")
+                        or ""
+                    ),
+                    bundle_snapshot_digest=context_snapshot,
                     evidence=evidence,
                 )
             )
+
+        # A single report observation with an explicit village anchor is a
+        # semantic scope, not merely another score.  Use it to narrow global
+        # same-name bundle points; if several anchored observations survive,
+        # retain them as an explicit ambiguity set.
+        anchored = [
+            candidate
+            for candidate in candidates
+            if "l1_fact" in candidate.evidence_refs
+            and any(
+                str(ref).startswith("village_anchor:")
+                for ref in candidate.evidence_refs
+            )
+        ]
+        if anchored:
+            anchored_spatial = [
+                candidate for candidate in anchored if _candidate_has_spatial(candidate)
+            ]
+            if anchored_spatial:
+                candidates = anchored
+            else:
+                # Keep same-name spatial candidates only as a bounded join
+                # input.  They are not auto-selected here; the explicit
+                # village-scoped resolver below must validate the join.
+                companion_spatial = [
+                    candidate
+                    for candidate in candidates
+                    if candidate not in anchored and _candidate_has_spatial(candidate)
+                ]
+                candidates = [*anchored, *companion_spatial]
+            trace.append({
+                "step": "l1_scope_narrow",
+                "candidate_count": len(anchored),
+                "companion_spatial_count": max(0, len(candidates) - len(anchored)),
+            })
+
+        if str(role or "unknown").strip().lower() != "unknown":
+            before_role_filter = len(candidates)
+            candidates = [
+                candidate
+                for candidate in candidates
+                if _role_compatible(candidate, role)
+            ]
+            trace.append({
+                "step": "role_filter",
+                "role": str(role),
+                "before": before_role_filter,
+                "after": len(candidates),
+            })
 
         candidates.sort(key=lambda c: c.score, reverse=True)
         trace.append({"step": "score", "candidate_count": len(candidates)})
@@ -957,6 +1933,356 @@ class PlaceEvidenceIndex:
             context_fingerprint=f"{self.context.session_id}@{self.version[0]}:kg{self.version[1]}",
         )
 
+    def semantic_label_probes(
+        self,
+        mention: str,
+        *,
+        roles: set[str] | frozenset[str] | tuple[str, ...] = (),
+        max_probes: int = 12,
+    ) -> list[tuple[str, str]]:
+        """Return bounded source-backed partial-name probes.
+
+        A user query often contains a meaningful place prefix rather than a
+        complete source label: ``炉池自然村在哪里`` must expose ``炉池`` so
+        the indexed hazard labels ``炉池赖木生`` and friends can be inspected.
+        The n-gram index is the only recall mechanism here.  It returns
+        probes that are present in canonical names/aliases already registered
+        from KG, L1 and the Bundle; it never manufactures a name or a spatial
+        identity from query text.
+        """
+        normalized = _normalize(mention)
+        if len(normalized) < 2:
+            return []
+        allowed_roles = {
+            str(value).strip()
+            for value in roles
+            if str(value).strip()
+        }
+        ranked: dict[tuple[str, str], tuple[int, int]] = {}
+        seen_entries: dict[int, tuple[str, str, int]] = {}
+        for offset in range(len(normalized) - 1):
+            ngram = normalized[offset:offset + 2]
+            if not ngram.strip():
+                continue
+            for kind, key in self._name_ngrams.get(ngram, set()):
+                entries = (
+                    self._by_canonical.get(key, [])
+                    if kind == "canonical"
+                    else self._by_alias.get(key, [])
+                )
+                for entry in entries:
+                    role = str(getattr(entry, "role", "") or "").strip()
+                    if allowed_roles and role not in allowed_roles:
+                        continue
+                    overlap, probe = _longest_indexed_overlap(normalized, key)
+                    if overlap < 2 or not probe:
+                        continue
+                    entry_key = id(entry)
+                    previous = seen_entries.get(entry_key)
+                    current = (probe, role, overlap)
+                    if previous is None or current[2] > previous[2]:
+                        seen_entries[entry_key] = current
+
+        for probe, role, overlap in seen_entries.values():
+            key = (probe, role)
+            previous = ranked.get(key)
+            rank = (overlap, sum(1 for item in seen_entries.values() if item[0] == probe and item[1] == role))
+            if previous is None or rank > previous:
+                ranked[key] = rank
+        ordered = sorted(
+            ranked,
+            key=lambda item: (-ranked[item][0], -ranked[item][1], item[1], item[0]),
+        )
+        return ordered[: max(1, int(max_probes or 1))]
+
+    def query_facility_bsms(
+        self,
+        village_name: str,
+        label: str,
+        *,
+        role: str = "facility",
+        hints: str = "",
+    ) -> PlaceResolutionResult:
+        """Resolve ``village + facility`` without flattening feature identity.
+
+        The returned candidates expose ``feature_bsm`` for the actual point
+        and ``related_parcel_bsms``/``anchor_bsms`` for its spatial context.
+        A village-scoped query never falls back to a global same-name point;
+        it returns ``unresolved`` when no candidate carries the requested
+        village evidence and ``ambiguous`` when multiple source geometries
+        remain.
+        """
+        result = self.resolve_mention(
+            label,
+            role=role,
+            hints=" ".join(value for value in (village_name, hints) if value),
+        )
+        village_names = _scope_name_tokens(self.context, village_name)
+        village_keys = {_normalize(value) for value in village_names if _normalize(value)}
+        scoped = []
+        for candidate in result.candidates:
+            anchors = [
+                str(ref).split(":", 1)[1]
+                for ref in candidate.evidence_refs
+                if str(ref).startswith("village_anchor:")
+            ]
+            if any(_normalize(anchor) in village_keys for anchor in anchors):
+                scoped.append(candidate)
+        if not scoped:
+            scoped = [
+                candidate for candidate in result.candidates
+                if any(
+                    self._candidate_matches_village_scope(candidate, name)
+                    for name in village_names
+                )
+            ]
+        if not scoped:
+            label_key = _normalize(label)
+            typed_scope_refs: set[str] = set()
+            for fact in getattr(self.context, "l1_fact_records", []) or []:
+                attributes = getattr(fact, "attributes", None) or {}
+                if not isinstance(attributes, dict):
+                    attributes = {}
+                fact_label = _normalize(
+                    str(
+                        attributes.get("normalized_name", "")
+                        or getattr(fact, "subject_scope", "")
+                        or ""
+                    )
+                )
+                if not fact_label or not (
+                    fact_label == label_key
+                    or fact_label in label_key
+                    or label_key in fact_label
+                ):
+                    continue
+                scope_text = " ".join(
+                    str(attributes.get(key, "") or "").strip()
+                    for key in (
+                        "location",
+                        "spatial_hint",
+                        "village",
+                        "settlement",
+                        "natural_village",
+                        "related_place",
+                    )
+                    if str(attributes.get(key, "") or "").strip()
+                )
+                if not scope_text:
+                    continue
+                if any(
+                    _normalize(name) in _normalize(scope_text)
+                    for name in village_names
+                    if _normalize(name)
+                ):
+                    typed_scope_refs.update(
+                        str(value).strip()
+                        for value in (
+                            *(getattr(fact, "source_refs", None) or []),
+                            getattr(fact, "fact_id", ""),
+                        )
+                        if str(value).strip()
+                    )
+            if typed_scope_refs:
+                typed_semantic_candidates = [
+                    candidate
+                    for candidate in result.candidates
+                    if not (
+                        str(candidate.feature_bsm or "").strip()
+                        or str(candidate.source_bsm or "").strip()
+                        or str(candidate.geometry_ref or "").strip()
+                    )
+                    and typed_scope_refs.intersection(
+                        set(str(value).strip() for value in candidate.l1_fact_refs)
+                    )
+                ]
+                spatial_candidates = [
+                    candidate
+                    for candidate in result.candidates
+                    if (
+                        str(candidate.feature_bsm or "").strip()
+                        or str(candidate.source_bsm or "").strip()
+                        or str(candidate.geometry_ref or "").strip()
+                    )
+                ]
+                if typed_semantic_candidates and len(spatial_candidates) == 1:
+                    scoped = spatial_candidates
+        # L1 may carry the village scope while the actual bundle point is a
+        # separate same-name entry (we intentionally do not merge a
+        # geometry-less semantic entry into a source geometry).  Join the
+        # semantic scope onto the unique spatial candidates without changing
+        # their feature identity.
+        semantic_scope_candidates = [
+            candidate
+            for candidate in scoped
+            if not (
+                str(candidate.feature_bsm or "").strip()
+                or str(candidate.source_bsm or "").strip()
+                or str(candidate.geometry_ref or "").strip()
+            )
+        ]
+        spatial_candidates = [
+            candidate
+            for candidate in result.candidates
+            if (
+                str(candidate.feature_bsm or "").strip()
+                or str(candidate.source_bsm or "").strip()
+                or str(candidate.geometry_ref or "").strip()
+            )
+        ]
+        if semantic_scope_candidates and spatial_candidates:
+            scope_refs = list(
+                dict.fromkeys(
+                    ref
+                    for candidate in semantic_scope_candidates
+                    for ref in candidate.evidence_refs
+                )
+            )
+            l1_fact_refs = list(
+                dict.fromkeys(
+                    ref
+                    for candidate in semantic_scope_candidates
+                    for ref in candidate.l1_fact_refs
+                )
+            )
+            scoped = [
+                candidate.model_copy(
+                    update={
+                        "evidence_refs": list(
+                            dict.fromkeys(
+                                [*candidate.evidence_refs, *scope_refs]
+                            )
+                        ),
+                        "l1_fact_refs": list(
+                            dict.fromkeys(
+                                [*candidate.l1_fact_refs, *l1_fact_refs]
+                            )
+                        ),
+                        "l1_snapshot_ref": (
+                            candidate.l1_snapshot_ref
+                            or semantic_scope_candidates[0].l1_snapshot_ref
+                        ),
+                        "bundle_snapshot_digest": (
+                            candidate.bundle_snapshot_digest
+                            or semantic_scope_candidates[0].bundle_snapshot_digest
+                        ),
+                    }
+                )
+                for candidate in spatial_candidates
+            ]
+        trace = [*result.query_trace, {
+            "step": "village_scope",
+            "village": village_name,
+            "candidate_count": len(scoped),
+        }]
+        matching_scopes = [
+            scope.scope_id
+            for scope in self.semantic_scopes
+            if any(
+                _normalize(getattr(mention, "normalized_name", "")) in village_keys
+                for mention in getattr(scope, "village_mentions", [])
+            )
+        ]
+        trace.append({"step": "l1_semantic_scopes", "scope_refs": matching_scopes})
+        if not scoped:
+            return result.model_copy(update={
+                "status": "unresolved",
+                "selected_entity_ref": None,
+                "candidates": result.candidates,
+                "query_trace": trace,
+                "unresolved_reason": "no candidate carries the requested village scope",
+            })
+        if len(scoped) == 1:
+            selected = scoped[0]
+            status = "resolved" if _candidate_has_spatial(selected) else "ambiguous"
+            selected_ref = selected.entity_ref if status == "resolved" else None
+            reason = None if status == "resolved" else "scoped candidate has no spatial evidence"
+        else:
+            status = "ambiguous"
+            selected_ref = None
+            reason = "multiple facility features remain in the village scope"
+        return result.model_copy(update={
+            "status": status,
+            "selected_entity_ref": selected_ref,
+            "candidates": scoped,
+            "evidence_refs": [candidate.entity_ref for candidate in scoped],
+            "query_trace": trace,
+            "unresolved_reason": reason,
+        })
+
+    def _candidate_matches_village_scope(
+        self,
+        candidate: PlaceResolutionCandidate,
+        village_name: str,
+    ) -> bool:
+        """Verify facility→village scope from bundle or KG topology.
+
+        A point's nearby parcel BSMs are spatial evidence, not a guessed
+        village label. They can be intersected with the gazetteer village
+        parcel set. When that set is unavailable, the session KG may provide
+        an explicit facility-to-village relation. No global same-name result
+        is accepted without one of these source-backed joins.
+        """
+        village_names = _scope_name_tokens(self.context, village_name)
+        if not village_names:
+            return False
+        gazetteer = getattr(self.context, "gazetteer", None)
+        village_bsms: set[str] = set()
+        if gazetteer is not None:
+            for village in village_names:
+                for token in (village, f"{village}村", f"{village}自然村"):
+                    entry = gazetteer.resolve(token, fuzzy=False) or gazetteer.resolve(token, fuzzy=True)
+                    if entry is None:
+                        continue
+                    village_bsms.update(
+                        str(value).strip()
+                        for value in (getattr(entry, "bsms", None) or [])
+                        if str(value).strip()
+                    )
+        candidate_bsms = {
+            str(value).strip()
+            for value in (
+                *list(getattr(candidate, "anchor_bsms", None) or []),
+                *list(getattr(candidate, "related_parcel_bsms", None) or []),
+            )
+            if str(value).strip()
+        }
+        if village_bsms and candidate_bsms.intersection(village_bsms):
+            return True
+
+        kg = getattr(self.context, "kg", None)
+        if kg is None or not hasattr(kg, "find_entities") or not hasattr(kg, "find_relations"):
+            return False
+        village_entities = []
+        for village in village_names:
+            for token in (village, f"{village}村", f"{village}自然村"):
+                try:
+                    village_entities.extend(kg.find_entities(name=token, limit=12) or [])
+                except Exception:
+                    continue
+        village_refs = {
+            str(getattr(entity, "entity_ref", "") or "")
+            for entity in village_entities
+            if str(getattr(entity, "entity_ref", "") or "").strip()
+        }
+        if not village_refs:
+            return False
+        candidate_ref = str(getattr(candidate, "entity_ref", "") or "").strip()
+        if not candidate_ref:
+            return False
+        try:
+            relations = [
+                *list(kg.find_relations(subject_ref=candidate_ref, limit=40) or []),
+                *list(kg.find_relations(object_ref=candidate_ref, limit=40) or []),
+            ]
+        except Exception:
+            return False
+        return any(
+            str(getattr(relation, "subject_ref", "") or "") in village_refs
+            or str(getattr(relation, "object_ref", "") or "") in village_refs
+            for relation in relations
+        )
+
     def candidate_bsms(self, mention: str) -> List[str]:
         """Source BSM set of the resolved candidate (used by the resolver)."""
         result = self.resolve_mention(mention)
@@ -990,6 +2316,29 @@ def _candidate_has_spatial(candidate: PlaceResolutionCandidate) -> bool:
     return False
 
 
+def _longest_indexed_overlap(query: str, indexed_key: str) -> tuple[int, str]:
+    """Find the longest contiguous query fragment already in an index key."""
+    value = str(query or "")
+    key = str(indexed_key or "")
+    if len(value) < 2 or len(key) < 2:
+        return 0, ""
+    best_length = 0
+    best_probe = ""
+    for query_start in range(len(value)):
+        for key_start in range(len(key)):
+            length = 0
+            while (
+                query_start + length < len(value)
+                and key_start + length < len(key)
+                and value[query_start + length] == key[key_start + length]
+            ):
+                length += 1
+            if length > best_length:
+                best_length = length
+                best_probe = value[query_start:query_start + length]
+    return best_length, best_probe
+
+
 def _normalize(name: str) -> str:
     if not name:
         return ""
@@ -999,6 +2348,27 @@ def _normalize(name: str) -> str:
             cleaned = cleaned[: -len(suffix)].strip()
             break
     return cleaned
+
+
+def _scope_name_tokens(context: Any, text: str) -> List[str]:
+    """Extract all source-backed village names embedded in a scope string."""
+    raw = str(text or "").strip()
+    if not raw:
+        return []
+    folded = raw.casefold()
+    names: List[str] = []
+    gazetteer = getattr(context, "gazetteer", None)
+    for entry in getattr(gazetteer, "entries", []) or []:
+        canonical = str(getattr(entry, "name", "") or "").strip()
+        values = [canonical, *(str(value) for value in (getattr(entry, "aliases", None) or []))]
+        if any(value and value.casefold() in folded for value in values):
+            if canonical:
+                names.append(canonical)
+    if names:
+        return list(dict.fromkeys(names))
+    for delimiter in ("、", "，", ",", "；", ";", "和", "与", "及"):
+        raw = raw.replace(delimiter, "|")
+    return [part.strip() for part in raw.split("|") if part.strip()]
 
 
 __all__ = ["PlaceEvidenceIndex"]

@@ -749,6 +749,9 @@ async def end_diagnostic_node(state: Dict[str, Any]) -> Dict[str, Any]:
         else getattr(gate, "issue_fingerprint", ""),
     )
     terminal.setdefault("reason", "remaining_non_deferred_structural_blockers")
+    validation_feedback = state.get("validation_feedback")
+    if isinstance(validation_feedback, dict) and validation_feedback:
+        terminal.setdefault("validation_feedback", validation_feedback)
     return {
         **exhaustion_patch,
         "delivery_status": "diagnostic_only",
@@ -1156,9 +1159,10 @@ async def _apply_select_auto_deferral(state: Dict[str, Any]) -> Dict[str, Any]:
     decision = load_artifact(state, "site_selection", SiteSelectionDecision)
     scenario = load_artifact(state, "planning_scenario", PlanningScenario)
     selected_target_ids = {
-        str(target_id).strip()
-        for target_id in (getattr(scenario, "selected_candidate_ids", None) or {})
-        if str(target_id).strip()
+        str(item.target_id).strip()
+        for item in (getattr(scenario, "target_selections", None) or [])
+        if getattr(item, "candidate_ids", None)
+        if str(item.target_id).strip()
     }
     assignments = list(getattr(decision, "target_assignments", None) or []) if decision else []
     if selected_target_ids:

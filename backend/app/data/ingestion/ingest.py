@@ -616,7 +616,11 @@ def ingest_feature(
     warnings: List[str] = []
 
     _model_fields = set(model_cls.model_fields.keys())
-    from .source_identity import source_feature_identity
+    from .source_identity import source_content_digest, source_feature_identity
+
+    # The complete source snapshot is shared by every feature identity.  Do
+    # not serialize and hash the whole FeatureCollection once per feature.
+    content_digest = source_content_digest(data) if source_uri else None
 
     for i, feat in enumerate(data.get("features", [])):
         props = feat.get("properties", {})
@@ -635,6 +639,7 @@ def ingest_feature(
             layer_type=feature_type,
             feature_index=i,
             feature=feat,
+            content_digest=content_digest,
         )
         if identity is not None:
             kwargs["_raw"].update(identity)

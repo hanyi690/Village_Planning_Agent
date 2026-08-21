@@ -198,6 +198,7 @@ def _to_final_features(
     planned_state: PlannedState,
     *,
     crs: str,
+    external_feature_keys: set[str] | None = None,
 ) -> tuple[list[ScenarioFeature], list[FinalRelationFinding]]:
     records = _state_records(planned_state)
     intents = list(scenario.feature_intents)
@@ -273,8 +274,23 @@ def _to_final_features(
                     actual=record["geometry_kind"],
                 )
             )
+    external_keys = external_feature_keys or set()
     for intent in intents:
-        if intent.feature_id not in matched_intents:
+        is_external_reference = (
+            intent.generation_operation == "relation_bundle_reference"
+            or bool(
+                external_keys.intersection({
+                    intent.feature_id,
+                    intent.target_id,
+                    intent.candidate_id,
+                    *(getattr(intent, "entity_refs", None) or []),
+                    *(getattr(intent, "feature_bsms", None) or []),
+                    *(getattr(intent, "source_bsms", None) or []),
+                    *(getattr(intent, "source_feature_ids", None) or []),
+                })
+            )
+        )
+        if intent.feature_id not in matched_intents and not is_external_reference:
             findings.append(
                 FinalRelationFinding(
                     code="missing_final_feature",
@@ -485,14 +501,50 @@ def validate_final_scenario(
             trace=["final-feature-index:0", "planned-state:missing", f"fingerprint:{fingerprint}"],
             hard_blockers=["missing_planned_state"],
         )
+    external_features = list(
+        (getattr(context, "reference_features", {}) or {}).values()
+    )
+    external_feature_keys = {
+        str(value)
+        for feature in external_features
+        for value in (
+            getattr(feature, "feature_id", ""),
+            getattr(feature, "target_id", ""),
+            getattr(feature, "candidate_id", ""),
+            *(getattr(feature, "entity_refs", None) or []),
+            *(getattr(feature, "feature_bsms", None) or []),
+            *(getattr(feature, "source_bsms", None) or []),
+            *(getattr(feature, "source_feature_ids", None) or []),
+        )
+        if str(value or "").strip()
+    }
     final_features, identity_findings = _to_final_features(
-        scenario, planned_state, crs=metric_crs
+        scenario,
+        planned_state,
+        crs=metric_crs,
+        external_feature_keys=external_feature_keys,
     )
     final_features_index = {feature.feature_id: feature for feature in final_features}
     feature_keys: set[str] = set()
     for feature in final_features:
         feature_keys.update({feature.feature_id, feature.target_id, feature.candidate_id})
+        feature_keys.update(getattr(feature, "entity_refs", None) or [])
+        feature_keys.update(getattr(feature, "feature_bsms", None) or [])
+        feature_keys.update(getattr(feature, "source_bsms", None) or [])
+        feature_keys.update(getattr(feature, "source_feature_ids", None) or [])
     findings = list(identity_findings)
+    findings.extend(
+        FinalRelationFinding(
+            code="external_relation_reference_diagnostic",
+            severity="warning",
+            message="external relation reference resolution was incomplete",
+            actual=str(diagnostic),
+            expected="unique bundle-authoritative external feature",
+        )
+        for diagnostic in tuple(
+            getattr(context, "reference_diagnostics", ()) or ()
+        )
+    )
     for prior in scenario.relation_satisfactions:
         if prior.scenario_id and prior.scenario_id != scenario.scenario_id:
             findings.append(
@@ -527,9 +579,24 @@ def validate_final_scenario(
             evaluator_version=evaluator_version,
             networks=getattr(context, "networks", {}) or {},
             demands=getattr(context, "demands", {}) or {},
+            reference_features=getattr(context, "reference_features", {}) or {},
+            reference_diagnostics=getattr(context, "reference_diagnostics", ()) or (),
             execution_trace=getattr(context, "execution_trace", None),
         )
-    satisfactions = evaluate_relations(factors, final_features, final_context)
+    reference_features = list(
+        (getattr(final_context, "reference_features", {}) or {}).values()
+    )
+    for feature in reference_features:
+        feature_keys.update({feature.feature_id, feature.target_id, feature.candidate_id})
+        feature_keys.update(getattr(feature, "entity_refs", None) or [])
+        feature_keys.update(getattr(feature, "feature_bsms", None) or [])
+        feature_keys.update(getattr(feature, "source_bsms", None) or [])
+        feature_keys.update(getattr(feature, "source_feature_ids", None) or [])
+    satisfactions = evaluate_relations(
+        factors,
+        [*final_features, *reference_features],
+        final_context,
+    )
     # ``serve`` has stronger input requirements than generic connect/access:
     # it must consume a typed DemandSnapshot and the network service-area
     # evaluator.  A generic network ``coverage_ratio`` method is not enough;
@@ -645,6 +712,7 @@ def validate_final_scenario(
         topology_findings=topology_findings,
         trace=[
             f"final-feature-index:{len(final_features)}",
+            f"reference-feature-index:{len(reference_features)}",
             f"factor-evaluation:{len(satisfactions)}",
             f"topology-check:{len(topology_findings)}",
             f"fingerprint:{fingerprint}",

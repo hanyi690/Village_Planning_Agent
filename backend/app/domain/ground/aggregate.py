@@ -10,6 +10,7 @@ and context the output is fully deterministic.
 """
 from __future__ import annotations
 
+from dataclasses import replace
 from typing import Any, Dict, List, Optional
 
 from shapely import wkt as shapely_wkt
@@ -30,6 +31,7 @@ from app.contracts.spatial.grounded_problem import (
     GroundedTargetDomain,
 )
 from app.domain.ground.constraint_factors import (
+    attach_evidence_packet_relations,
     compile_constraint_factors,
     evaluate_relation_satisfaction,
 )
@@ -39,6 +41,7 @@ from app.domain.ground.candidate_domain_builder import (
 )
 from app.contracts.artifacts.provenance import Provenance
 from app.contracts.spatial.spatial_reference_contracts import (
+    GeometryRef,
     ResolvedSpatialRef,
     SpatialReferenceSpec,
 )
@@ -105,6 +108,17 @@ def build_candidate_site(
     geometry_source_refs = list(
         dict.fromkeys(str(item) for item in (source_refs_override or []) if str(item).strip())
     )
+    if not geometry_source_refs:
+        for geometry_ref in list(getattr(resolved, "reference_geometries", None) or []):
+            geometry_source_refs.extend(
+                str(item)
+                for item in [
+                    getattr(geometry_ref, "source_ref", ""),
+                    *(getattr(geometry_ref, "source_refs", None) or []),
+                ]
+                if str(item).strip()
+            )
+        geometry_source_refs = list(dict.fromkeys(geometry_source_refs))
     if not geometry_wkt and geometries:
         geometry_wkt = unary_union(geometries).wkt
     uncertainty = None
@@ -123,6 +137,10 @@ def build_candidate_site(
         expected_output_kind=expected_output_kind,
         has_source_parcels=bool(source_parcels),
         uncertainty_reason=uncertainty_reason,
+        spatial_domain_kind=str(
+            getattr(resolved, "spatial_domain_kind", "") or "unknown"
+        ),
+        source_parcel_count=len(source_parcels),
     )
     if candidate_variant == "parcel":
         geometry_role = (
@@ -148,10 +166,79 @@ def build_candidate_site(
             geometry_role = (
                 "parcel_candidate" if source_parcels else "scope_geometry"
             )
+    resolved_provenance = getattr(resolved, "provenance", {}) or {}
+    feature_bsms = list(
+        dict.fromkeys(
+            str(item)
+            for item in (
+                getattr(resolved, "feature_bsms", None)
+                or resolved_provenance.get("feature_bsms", [])
+            )
+            if str(item).strip()
+        )
+    )
+    source_feature_ids = list(
+        dict.fromkeys(
+            str(item)
+            for item in (
+                getattr(resolved, "source_feature_ids", None)
+                or resolved_provenance.get("source_feature_ids", [])
+            )
+            if str(item).strip()
+        )
+    )
+    entity_refs = list(
+        dict.fromkeys(
+            str(item)
+            for item in (
+                getattr(resolved, "entity_refs", None)
+                or resolved_provenance.get("entity_refs", [])
+            )
+            if str(item).strip()
+        )
+    )
+    relation_refs = list(
+        dict.fromkeys(
+            str(item)
+            for item in (
+                getattr(resolved, "relation_refs", None)
+                or resolved_provenance.get("relation_refs", [])
+            )
+            if str(item).strip()
+        )
+    )
+    l1_fact_refs = list(
+        dict.fromkeys(
+            str(item)
+            for item in (
+                getattr(resolved, "l1_fact_refs", None)
+                or resolved_provenance.get("l1_fact_refs", [])
+            )
+            if str(item).strip()
+        )
+    )
+    candidate_evidence_refs = list(
+        dict.fromkeys(
+            [
+                *source_parcels,
+                *geometry_source_refs,
+                *feature_bsms,
+                *source_feature_ids,
+                *entity_refs,
+                *relation_refs,
+                *l1_fact_refs,
+            ]
+        )
+    )
     geometry = CandidateGeometry(
         target_id=str(getattr(spec, "target_id", "") or ""),
         kind=geometry_kind,
         role=geometry_role,
+        candidate_membership=(
+            "required_member"
+            if _spec_declares_required_source_collection(spec)
+            else "alternative"
+        ),
         materialization_role=str(
             getattr(spec, "materialization_role", "")
             or ("site_footprint" if target_kind == "site_area" else "")
@@ -163,7 +250,31 @@ def build_candidate_site(
                 (resolved.reference_geometry_wkt or authoritative_geometry)
                 and geometry_kind in {"point", "line"}
             )
-            else ("parcel_set" if source_parcels else "none")
+            else (
+                str(getattr(resolved, "spatial_domain_kind", "") or "")
+                if str(getattr(resolved, "spatial_domain_kind", "") or "")
+                in {"parcel_extent", "bbox", "corridor", "village_scope"}
+                else (
+                    "parcel_extent"
+                    if len(source_parcels) == 1
+                    else ("parcel_set" if source_parcels else "none")
+                )
+            )
+        ),
+        spatial_domain_kind=str(
+            getattr(resolved, "spatial_domain_kind", "") or "unknown"
+        ),
+        source_area_ha=area_ha or None,
+        planning_area_ha=area_ha or None,
+        coverage_ratio=1.0 if area_ha > 0 and source_parcels else None,
+        candidate_bbox=(
+            tuple(float(value) for value in resolved.bbox[:4])
+            if getattr(resolved, "bbox", None)
+            else (
+                tuple(float(value) for value in shapely_wkt.loads(geometry_wkt).bounds)
+                if geometry_wkt
+                else None
+            )
         ),
         source_ref=(
             geometry_source_refs[0]
@@ -171,11 +282,31 @@ def build_candidate_site(
             else str(resolved.provenance.get("path", "") or "")
         ),
         source_refs=geometry_source_refs,
-        evidence_refs=list(dict.fromkeys([*source_parcels, *geometry_source_refs])),
+        evidence_refs=candidate_evidence_refs,
         confidence=float(resolved.confidence or 0.0),
         uncertainty_radius_m=uncertainty_radius,
         uncertainty_reason=uncertainty_reason,
         source_bsms=source_parcels,
+        feature_bsms=feature_bsms,
+        source_feature_ids=source_feature_ids,
+        entity_refs=entity_refs,
+        relation_refs=relation_refs,
+        l1_fact_refs=l1_fact_refs,
+        l1_snapshot_ref=str(
+            getattr(resolved, "l1_snapshot_ref", "")
+            or resolved_provenance.get("l1_snapshot_ref", "")
+            or ""
+        ),
+        bundle_snapshot_digest=str(
+            getattr(resolved, "bundle_snapshot_digest", "")
+            or resolved_provenance.get("bundle_snapshot_digest", "")
+            or ""
+        ),
+        source_binding_ref=str(
+            getattr(resolved, "source_binding_ref", "")
+            or resolved_provenance.get("source_binding_ref", "")
+            or ""
+        ),
         generation_operation=generation_operation,
         hard_constraint_status=hard_constraint_status,
     )
@@ -184,6 +315,8 @@ def build_candidate_site(
         source_parcels=source_parcels,
         available_geometry_wkt=geometry_wkt,
         available_area_ha=area_ha,
+        source_area_ha=area_ha,
+        coverage_ratio=1.0 if area_ha > 0 and source_parcels else None,
         candidate_id=geometry.candidate_id,
         hard_constraint_result={
             "constraint_id": "ground_geometry",
@@ -195,9 +328,20 @@ def build_candidate_site(
             "spec_type": spec.type,
             "uncertainty_reason": uncertainty_reason,
             "candidate_variant": candidate_variant,
+            "candidate_membership": (
+                "required_member"
+                if _spec_declares_required_source_collection(spec)
+                else "alternative"
+            ),
             "source_parcel_count": len(resolved.final_bsms),
+            "spatial_domain_kind": str(
+                getattr(resolved, "spatial_domain_kind", "") or "unknown"
+            ),
+            "candidate_bbox": (
+                list(resolved.bbox[:4]) if getattr(resolved, "bbox", None) else None
+            ),
         },
-        evidence_refs=list(source_parcels),
+        evidence_refs=candidate_evidence_refs,
         target_ref=(getattr(spec, "target_id", None) or None),
         project_ref=(getattr(spec, "project_ref", None) or None),
         confidence=resolved.confidence,
@@ -205,7 +349,143 @@ def build_candidate_site(
         target_kind=target_kind,
         expected_output_kind=expected_output_kind,
         geometry=geometry,
+        candidate_bbox=geometry.candidate_bbox,
     )
+
+
+def _spec_declares_required_source_collection(spec: Any) -> bool:
+    """Return whether typed projection bound a complete source collection.
+
+    A multi-feature Bundle result is normally a set of identity alternatives.
+    Only an explicit collection binding with more than one exact source
+    feature turns those records into jointly required members.  This keeps
+    same-name facilities and hazard points out of ``all_members`` without
+    relying on names, regexes, or geometry kinds.
+    """
+
+    collection_key = str(
+        getattr(spec, "source_collection_key", "") or ""
+    ).strip()
+    reference = getattr(spec, "reference", None)
+    filters = getattr(reference, "filter", None) or {}
+    source_feature_ids = [
+        str(value).strip()
+        for value in (
+            filters.get("source_feature_ids")
+            or filters.get("exact_feature_ids")
+            or []
+        )
+        if str(value).strip()
+    ]
+    if collection_key and len(set(source_feature_ids)) > 1:
+        return True
+    return any(
+        _spec_declares_required_source_collection(child)
+        for child in (getattr(spec, "children", None) or [])
+    )
+
+
+def _unique_evidence_geometry(context: Any, mention: str) -> Any:
+    """Return one source-backed point geometry for an unbound facility mention."""
+    graph = getattr(context, "evidence_graph", None)
+    if graph is None or not mention or not hasattr(graph, "resolve_mention"):
+        return None
+    normalized_mention = str(mention).strip()
+    facts = list(getattr(context, "location_facts", None) or [])
+    role_markers = {"facility", "设施", "现状设施", "公共服务设施", "landmark"}
+    has_facility_fact = any(
+        normalized_mention
+        in {
+            str(getattr(fact, "mention", "") or "").strip(),
+            str(getattr(fact, "normalized_name", "") or "").strip(),
+        }
+        and str(getattr(fact, "role", "") or "").strip() in role_markers
+        for fact in facts
+    )
+    if facts and not has_facility_fact:
+        return None
+    cache = getattr(context, "_facility_geometry_cache", None)
+    if cache is None:
+        cache = {}
+        setattr(context, "_facility_geometry_cache", cache)
+    if normalized_mention in cache:
+        return cache[normalized_mention]
+    try:
+        result = graph.resolve_mention(normalized_mention, role="facility")
+    except Exception:
+        return None
+    workspace = getattr(context, "workspace", None)
+    points = getattr(workspace, "points", None) if workspace is not None else None
+
+    def _bundle_point_for_bsm(bsm: str) -> Any | None:
+        if not bsm or points is None:
+            return None
+        for layer_name in ("facilities_current", "annotations_current"):
+            try:
+                layer = points.get(layer_name) if hasattr(points, "get") else None
+                for feature in list(layer or []):
+                    if str(getattr(feature, "bsm", "") or "").strip() != bsm:
+                        continue
+                    raw_geometry = getattr(feature, "geometry", None)
+                    geometry = shape(raw_geometry) if isinstance(raw_geometry, dict) else raw_geometry
+                    if geometry is not None and not geometry.is_empty and geometry.geom_type == "Point":
+                        return geometry
+            except Exception:
+                continue
+        return None
+
+    spatial = []
+    for candidate in list(getattr(result, "candidates", None) or []):
+        feature_bsm = str(
+            getattr(candidate, "feature_bsm", "")
+            or getattr(candidate, "source_bsm", "")
+            or ""
+        ).strip()
+        geometry = _bundle_point_for_bsm(feature_bsm)
+        if geometry is None:
+            continue
+        spatial.append((candidate, geometry))
+    if len(spatial) != 1:
+        if len(cache) >= 64:
+            cache.clear()
+        cache[normalized_mention] = None
+        return None
+    candidate, point_geometry = spatial[0]
+    feature_bsm = str(
+        getattr(candidate, "feature_bsm", "")
+        or getattr(candidate, "source_bsm", "")
+        or ""
+    ).strip()
+    geometry_ref = point_geometry.wkt
+    geometry = GeometryRef(
+        wkt=geometry_ref,
+        source_ref=str(getattr(candidate, "entity_ref", "") or feature_bsm),
+        source_refs=list(
+            dict.fromkeys(
+                [
+                    str(getattr(candidate, "entity_ref", "") or ""),
+                    *list(getattr(candidate, "evidence_refs", None) or []),
+                ]
+            )
+        ),
+        source_bsms=list(
+            dict.fromkeys(
+                str(item)
+                for item in (
+                    getattr(candidate, "related_parcel_bsms", None)
+                    or getattr(candidate, "source_bsms", None)
+                    or []
+                )
+                if str(item).strip()
+            )
+        ),
+        feature_bsms=[feature_bsm] if feature_bsm else [],
+        feature_kind="facility_point",
+    )
+    if len(cache) >= 64:
+        cache.clear()
+    cache[normalized_mention] = geometry
+    return geometry
 
 
 def _parcel_geometry_records(
@@ -323,7 +603,12 @@ def build_candidate_sites(
             )
         return candidates
 
-    if resolved.reference_geometry_wkt or len(source_parcels) <= 1:
+    if (
+        resolved.reference_geometry_wkt
+        or len(source_parcels) <= 1
+        or str(getattr(resolved, "spatial_domain_kind", "") or "")
+        in {"parcel_extent", "parcel_set", "bbox", "corridor", "village_scope"}
+    ):
         return [
             build_candidate_site(
                 spec,
@@ -419,6 +704,28 @@ def _geometry_kind(geometry_wkt: str) -> str:
     return "unknown"
 
 
+def _valid_anchor_geometry_wkt(value: Any) -> str | None:
+    """Return canonical WKT only for valid non-empty anchor geometry."""
+    raw = str(value or "").strip()
+    if not raw:
+        return None
+    try:
+        geometry = shapely_wkt.loads(raw)
+    except Exception:
+        return None
+    if geometry.is_empty or not geometry.is_valid:
+        return None
+    if geometry.geom_type not in {
+        "Point",
+        "LineString",
+        "MultiLineString",
+        "Polygon",
+        "MultiPolygon",
+    }:
+        return None
+    return geometry.wkt
+
+
 def _geometry_role(
     geometry_kind: str,
     *,
@@ -426,6 +733,8 @@ def _geometry_role(
     expected_output_kind: str,
     has_source_parcels: bool,
     uncertainty_reason: str = "",
+    spatial_domain_kind: str = "unknown",
+    source_parcel_count: int = 0,
 ) -> str:
     if (
         geometry_kind == "point"
@@ -443,7 +752,13 @@ def _geometry_role(
         # geometries so SELECT can retain an auditable candidate-only target,
         # but materialising the whole coarse parcel pool would create broad
         # overlaps and falsely pass it as a plan layer.
-        if "coarse" in str(uncertainty_reason or "").lower():
+        if (
+            "coarse" in str(uncertainty_reason or "").lower()
+            or spatial_domain_kind in {"bbox", "corridor", "village_scope"}
+            or (spatial_domain_kind == "parcel_set" and source_parcel_count > 1)
+        ):
+            if expected_output_kind == "line":
+                return "corridor_candidate"
             return "parcel_candidate" if has_source_parcels else "scope_geometry"
         if (
             expected_output_kind in {"polygon", "parcel"}
@@ -462,6 +777,8 @@ def ground_aggregate(
     mention_enhancements: Optional[Dict[str, List[str]]] = None,
     intent_graph: Any = None,
     target_metadata: Optional[Dict[str, Dict[str, str]]] = None,
+    evidence_packets: Optional[Dict[str, Any]] = None,
+    ground_llm_budget: Optional[Dict[str, Any]] = None,
 ) -> GroundingResult:
     """Resolve all specs through ``SpatialResolver`` into a ``GroundingResult``.
 
@@ -477,7 +794,11 @@ def ground_aggregate(
         or getattr(context, "session_id", None)
         or ""
     )
-    resolver = SpatialResolver(context)
+    resolver = (
+        SpatialResolver(context, ground_llm_budget=ground_llm_budget)
+        if ground_llm_budget is not None
+        else SpatialResolver(context)
+    )
 
     # L1 接地锚点消费（设计 §5.1）：mention→锚点映射，未解析 spec 优先落锚点 BSM
     anchors_by_name: Dict[str, Any] = {}
@@ -496,12 +817,44 @@ def ground_aggregate(
     for index, spec in enumerate(specs):
         # Design 06/12: TARGET_PROJECTION retains unresolved_reason as a
         # diagnostic, it must not skip resolution.  GROUND still attempts the
-        # evidence index / gazetteer / directional fallbacks; specs that
+        # EvidenceGraph / gazetteer / directional fallbacks; specs that
         # cannot be bound stay unresolved and enter the HUMAN gate.
-        resolved = resolver.resolve_spec(
-            spec,
-            mention_enhancements=mention_enhancements,
-        )
+        resolve_kwargs = {"mention_enhancements": mention_enhancements}
+        if evidence_packets is not None:
+            resolve_kwargs["evidence_packet"] = (evidence_packets or {}).get(
+                str(getattr(spec, "target_id", "") or "")
+            )
+        resolved = resolver.resolve_spec(spec, **resolve_kwargs)
+        mention = resolver._spec_mention(spec) or ""
+        evidence_geometry = _unique_evidence_geometry(context, mention)
+        if evidence_geometry is not None and not resolved.reference_geometries:
+            resolved = replace(
+                resolved,
+                final_bsms=list(resolved.final_bsms),
+                reference_geometry_wkt=evidence_geometry.wkt,
+                reference_geometries=[evidence_geometry],
+                feature_bsms=list(
+                    dict.fromkeys(
+                        [
+                            *list(getattr(resolved, "feature_bsms", None) or []),
+                            *list(getattr(evidence_geometry, "feature_bsms", None) or []),
+                        ]
+                    )
+                ),
+                source_feature_ids=list(getattr(resolved, "source_feature_ids", None) or []),
+                entity_refs=list(
+                    dict.fromkeys(
+                        [
+                            *list(getattr(resolved, "entity_refs", None) or []),
+                            *list(evidence_geometry.source_refs or []),
+                        ]
+                    )
+                ),
+                provenance={
+                    **dict(resolved.provenance or {}),
+                    "path": f"{str((resolved.provenance or {}).get('path', '') or 'resolve_spec')}+evidence_geometry",
+                },
+            )
         # 未解析且命中 L1 接地锚点 → 用锚点 BSM（实体级，同坐标=同实体），
         # 显式 provenance grounded_anchor。
         if not resolved.final_bsms:
@@ -509,12 +862,21 @@ def ground_aggregate(
             anchor = anchors_by_name.get(mention) or anchors_by_name.get(mention.rstrip("村")) if mention else None
             if anchor is not None:
                 anchor_bsms = list(getattr(anchor, "source_bsms", None) or [])
-                if anchor_bsms:
-                    from app.contracts.spatial.spatial_reference_contracts import ResolvedSpatialRef
-
-                    resolved = ResolvedSpatialRef(
+                anchor_geometry_wkt = _valid_anchor_geometry_wkt(
+                    getattr(anchor, "geometry_ref", "")
+                )
+                if anchor_bsms or anchor_geometry_wkt:
+                    resolved = replace(
+                        resolved,
                         final_bsms=anchor_bsms,
                         bbox=None,
+                        reference_geometry_wkt=anchor_geometry_wkt,
+                        reference_geometries=[],
+                        spatial_domain_kind=(
+                            "exact_feature"
+                            if anchor_geometry_wkt
+                            else ("parcel_extent" if len(anchor_bsms) == 1 else "parcel_set")
+                        ),
                         confidence=max(float(getattr(anchor, "confidence", 0.0) or 0.0), 0.35),
                         uncertainty_radius_m=250.0,
                         uncertainty_reason="grounded_anchor",
@@ -522,8 +884,53 @@ def ground_aggregate(
                             "path": "grounded_anchor",
                             "mention": mention,
                             "entity_ref": str(getattr(anchor, "entity_ref", "") or ""),
+                            "geometry_ref": anchor_geometry_wkt or "",
                         },
                     )
+        mention = resolver._spec_mention(spec) or ""
+        anchor = (
+            anchors_by_name.get(mention)
+            or anchors_by_name.get(mention.rstrip("村"))
+            if mention
+            else None
+        )
+        anchor_geometry_wkt = _valid_anchor_geometry_wkt(
+            getattr(anchor, "geometry_ref", "") if anchor is not None else ""
+        )
+        anchor_bsms = list(getattr(anchor, "source_bsms", None) or []) if anchor is not None else []
+        if (
+            not resolved.reference_geometry_wkt
+            and (anchor_geometry_wkt or anchor_bsms)
+        ):
+            resolved = replace(
+                resolved,
+                final_bsms=anchor_bsms or list(resolved.final_bsms),
+                bbox=resolved.bbox,
+                reference_geometry_wkt=anchor_geometry_wkt,
+                reference_geometries=list(resolved.reference_geometries or []),
+                spatial_domain_kind=(
+                    "exact_feature"
+                    if anchor_geometry_wkt
+                    else ("parcel_extent" if len(anchor_bsms) == 1 else "parcel_set")
+                ),
+                confidence=max(
+                    float(resolved.confidence or 0.0),
+                    float(getattr(anchor, "confidence", 0.0) or 0.0),
+                ),
+                uncertainty_radius_m=float(
+                    getattr(anchor, "uncertainty_radius_m", 0.0) or 0.0
+                ),
+                uncertainty_reason="grounded_anchor",
+                provenance={
+                    "path": "grounded_anchor",
+                    "mention": mention,
+                    "entity_ref": str(getattr(anchor, "entity_ref", "") or ""),
+                    "geometry_ref": anchor_geometry_wkt,
+                    "resolver_path": str(
+                        (resolved.provenance or {}).get("path", "")
+                    ),
+                },
+            )
         spec_type = getattr(spec, "type", "")
         spatial_query_evidence.append(
             SpatialQueryEvidence(
@@ -549,6 +956,12 @@ def ground_aggregate(
             or getattr(resolved, "reference_geometries", None)
         ):
             metadata = (target_metadata or {}).get(str(getattr(spec, "target_id", "")), {})
+            if (
+                str(metadata.get("expected_output_kind", "")) == "line"
+                and str(getattr(resolved, "spatial_domain_kind", "") or "unknown")
+                != "exact_feature"
+            ):
+                resolved = replace(resolved, spatial_domain_kind="corridor")
             candidate_sites = build_candidate_sites(
                 spec,
                 resolved,
@@ -594,6 +1007,44 @@ def ground_aggregate(
                 )
             )
 
+    if evidence_packets:
+        seen_packet_relation_ids: set[str] = set()
+        for target_id, packet in dict(evidence_packets or {}).items():
+            for relation in list(getattr(packet, "relation_evidence", None) or [])[:16]:
+                relation_id = str(getattr(relation, "relation_id", "") or "").strip()
+                if not relation_id or relation_id in seen_packet_relation_ids:
+                    continue
+                seen_packet_relation_ids.add(relation_id)
+                subject = getattr(relation, "subject", None)
+                object_ = getattr(relation, "object", None)
+                subject_identity = getattr(subject, "identity", None)
+                object_identity = getattr(object_, "identity", None)
+                relation_refs = [
+                    relation_id,
+                    str(getattr(subject_identity, "bundle_feature_bsm", "") or ""),
+                    str(getattr(object_identity, "bundle_feature_bsm", "") or ""),
+                    str(getattr(subject, "geometry_ref", "") or ""),
+                    str(getattr(object_, "geometry_ref", "") or ""),
+                    *(getattr(relation, "provenance_refs", None) or []),
+                ]
+                spatial_query_evidence.append(
+                    SpatialQueryEvidence(
+                        query_type="evidence_packet_relation",
+                        query_params={
+                            "target_id": str(target_id),
+                            "relation_id": relation_id,
+                            "predicate": str(getattr(relation, "predicate", "") or ""),
+                            "metric_value": getattr(relation, "metric_value", None),
+                            "metric_unit": str(getattr(relation, "metric_unit", "") or ""),
+                        },
+                        result_count=1,
+                        result_refs=list(dict.fromkeys(
+                            str(value) for value in relation_refs if str(value).strip()
+                        )),
+                        target_id=str(target_id),
+                    )
+                )
+
     provenance = Provenance(
         source="ground_aggregate",
         run_id=run_id,
@@ -605,6 +1056,7 @@ def ground_aggregate(
     )
 
     factors = compile_constraint_factors(intent_graph)
+    factors = attach_evidence_packet_relations(factors, evidence_packets)
     problem = _build_grounded_problem(
         candidates,
         unresolved,
@@ -707,22 +1159,103 @@ def _build_grounded_problem(
     )
 
 
+def _ground_external_policy(enabled: bool) -> Any | None:
+    if not enabled:
+        return None
+    from app.evidence.retrieval.external_search_policy import ExternalSearchPolicy
+
+    return ExternalSearchPolicy(allowed_dimensions=["location"])
+
+
 async def retrieve_evidence(
     context: Any,
     evidence_requests: Optional[List[str]] = None,
 ) -> List[SpatialQueryEvidence]:
-    """Lightweight evidence re-check for GROUND EXPLORE retries.
+    """Re-check GROUND gaps through the canonical EXPLORE evidence service.
 
-    Gathers a small, serializable set of evidence rows describing what was
-    re-checked against the current PlanningContext: bundle land-use layer
-    counts, resolved parcel count, village anchors and gazetteer coverage.
-    Never raises — any missing infrastructure simply yields fewer rows and a
-    fully absent context returns ``[]``.
+    The stage contract still exposes ``SpatialQueryEvidence`` rows, so this
+    adapter summarizes the bounded ``ExplorationResult`` without copying full
+    reports or geometry.  Bundle layer counts remain useful diagnostics, but
+    feature identities, L1 facts and KG topology now come from the same
+    evidence path used by the public query and LLM tools.
     """
     rows: List[SpatialQueryEvidence] = []
     try:
         if context is None:
             return rows
+
+        requests = [
+            " ".join(str(item).split())
+            for item in (evidence_requests or [])
+            if " ".join(str(item).split())
+        ]
+        session_id = str(getattr(context, "session_id", "") or "").strip()
+        if session_id and requests:
+            from app.contracts.evidence.evidence_contracts import ExplorationRequest
+            from app.evidence.retrieval.evidence_service import retrieve_evidence as retrieve
+
+            query = "；".join(requests)[:1200]
+            external_requested = any(
+                token in query.casefold()
+                for token in ("external", "外源", "网络", "web", "最新", "法规", "政策")
+            )
+            request = ExplorationRequest(
+                run_id=session_id,
+                request_type="evidence_gap",
+                query=query,
+                context_refs=["source:external"] if external_requested else [],
+                stage="GROUND",
+                dimension_key="location",
+                query_purpose="gap_resolution",
+                questions=requests[:8],
+                required_facts=requests[:8],
+                entity_scope=["facilities", "parcels", "roads", "waters"],
+            )
+            result = await retrieve(
+                request,
+                session_id,
+                village_name=str(getattr(context, "village_name", "") or ""),
+                external_port=getattr(context, "external_search_port", None),
+                external_policy=getattr(context, "external_search_policy", None)
+                or _ground_external_policy(external_requested),
+            )
+            packet = getattr(result, "evidence_packet", None)
+            bundle = getattr(result, "evidence_bundle", None)
+            packet_refs = []
+            if packet is not None:
+                for candidate in list(getattr(packet, "candidate_refs", None) or []):
+                    identity = getattr(candidate, "identity", None)
+                    for value in (
+                        getattr(candidate, "geometry_ref", None),
+                        getattr(identity, "bundle_feature_bsm", None),
+                        *(getattr(candidate, "entity_refs", None) or []),
+                    ):
+                        if str(value or "").strip():
+                            packet_refs.append(str(value))
+                for relation in list(getattr(packet, "relation_evidence", None) or []):
+                    if str(getattr(relation, "relation_id", "") or "").strip():
+                        packet_refs.append(str(relation.relation_id))
+            fact_refs = [
+                str(value)
+                for fact in list(getattr(bundle, "facts", None) or [])
+                for value in [*(getattr(fact, "spatial_refs", None) or []), *(getattr(fact, "source_refs", None) or [])]
+                if str(value or "").strip()
+            ]
+            refs = list(dict.fromkeys([*packet_refs, *fact_refs]))[:48]
+            facts = list(getattr(bundle, "facts", None) or [])
+            rows.append(
+                SpatialQueryEvidence(
+                    query_type="evidence:unified",
+                    query_params={
+                        "query": query,
+                        "sufficiency": str(getattr(packet, "sufficiency", "") or ""),
+                        "fact_count": len(facts),
+                        "candidate_count": len(getattr(packet, "candidate_refs", None) or []) if packet is not None else 0,
+                    },
+                    result_count=len(refs),
+                    result_refs=refs,
+                )
+            )
 
         workspace = getattr(context, "workspace", None)
         if workspace is not None:
@@ -784,13 +1317,13 @@ async def retrieve_evidence(
                 )
             )
 
-        if evidence_requests:
+        if requests:
             rows.append(
                 SpatialQueryEvidence(
                     query_type="retry:evidence_requests",
-                    query_params={"requests": list(evidence_requests)},
-                    result_count=len(evidence_requests),
-                    result_refs=list(evidence_requests),
+                    query_params={"requests": requests},
+                    result_count=len(requests),
+                    result_refs=requests,
                 )
             )
     except Exception:

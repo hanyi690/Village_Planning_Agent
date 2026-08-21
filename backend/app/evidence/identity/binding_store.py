@@ -49,7 +49,7 @@ class BindingStore:
             if name:
                 anchors_by_name.setdefault(name, anchor)
 
-        index = getattr(context, "evidence_index", None)
+        graph = getattr(context, "evidence_graph", None)
         bindings: list[GroundedEntityBinding] = []
         for fact in facts:
             name = str(
@@ -63,9 +63,9 @@ class BindingStore:
             observation_ref = observation.observation_id if observation else f"obs:{name}"
             anchor = anchors_by_name.get(name)
             result = None
-            if anchor is None and index is not None:
+            if anchor is None and graph is not None:
                 try:
-                    result = index.resolve_mention(
+                    result = graph.resolve_mention(
                         name,
                         role=str(getattr(fact, "role", "unknown") or "unknown"),
                         hints=str(
@@ -111,7 +111,7 @@ class BindingStore:
                 status = str(getattr(result, "status", "unresolved") or "unresolved") if result else "unresolved"
                 confidence = float(getattr(selected, "score", 0.0) or 0.0) if selected else 0.0
                 query_trace = list(getattr(result, "query_trace", []) or []) if result else []
-                uncertainty_reason = str(getattr(result, "unresolved_reason", "") or "") if result else "no_evidence_index"
+                uncertainty_reason = str(getattr(result, "unresolved_reason", "") or "") if result else "no_evidence_graph"
                 binding_source_feature_ids = source_feature_ids(
                     [entity_ref] if status == "resolved" else []
                 )

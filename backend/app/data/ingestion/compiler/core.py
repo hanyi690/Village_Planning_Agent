@@ -4,7 +4,7 @@ L3 is a typed claims boundary and deliberately does not use this parser.
 """
 from __future__ import annotations
 
-from app.contracts.domain.l1_contracts import L1DimensionFragment
+from app.contracts.domain.l1_contracts import L1Snapshot
 from app.contracts.domain.l2_contracts import L2StrategyFragment
 from app.contracts.workflow.parsing_contracts import CompilationProfile
 
@@ -21,8 +21,8 @@ def compile_dimension_report(
     summary: str = "",
     report_id: str = "",
     run_id: str = "",
-) -> L1DimensionFragment | L2StrategyFragment | None:
-    """Compile one dimension report into a typed fragment via the profile.
+) -> L1Snapshot | L2StrategyFragment | None:
+    """Compile one dimension report into a typed stage snapshot via the profile.
 
     Returns None if the profile produces no output (unsupported profile in
     this wave raises NotImplementedError instead).

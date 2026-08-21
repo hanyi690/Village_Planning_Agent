@@ -94,12 +94,12 @@ class PlanningIntervention(BaseModel):
             if (
                 payload.get("category") == "road"
                 and not payload.get("asset_kind")
-                and payload.get("road_parameters") is not None
             ):
-                # Explicit road parameters are the v1 evidence for this
-                # compatibility migration; new v2 producers must still emit
-                # asset_kind directly.
+                # Legacy L3 callers omitted the typed road block.  Preserve
+                # their meaning while making the migrated object auditable;
+                # new producers should still emit both fields directly.
                 payload["asset_kind"] = "road"
+                payload.setdefault("road_parameters", {})
             return payload
         return value
 

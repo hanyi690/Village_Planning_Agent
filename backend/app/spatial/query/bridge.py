@@ -583,6 +583,7 @@ _POLYGON_LAYERS = [
 
 _POINT_LAYERS = [
     ("facility",  "facilities_current"),
+    ("annotation", "annotations_current"),
     ("building",  "buildings"),
     ("hazard",    "hazard_points"),
     ("elevpt",    "elevation_points"),
@@ -614,7 +615,7 @@ def _collect_entities(bundle, layer_defs, geom_field="geometry"):
             container = points
         if container is None:
             continue
-        items = container.get(attr_name)
+        items = container.get(attr_name) or []
         for item in items:
             geom = getattr(item, geom_field, None)
             if geom is None:
@@ -626,8 +627,20 @@ def _collect_entities(bundle, layer_defs, geom_field="geometry"):
                 s = shape(geom)
                 if s.is_empty:
                     continue
-                uri = f"{_PLN_NS}{prefix}_{bsm}"
-                collected.append((prefix, uri, s))
+                effective_prefix = prefix
+                if attr_name == "annotations_current":
+                    raw = getattr(item, "_raw", {}) or {}
+                    category = str(
+                        getattr(item, "category", "")
+                        or raw.get("category", "")
+                        or ""
+                    )
+                    if category == "现状设施点":
+                        effective_prefix = "facility"
+                    elif category == "村名":
+                        effective_prefix = "village_ann"
+                uri = f"{_PLN_NS}{effective_prefix}_{bsm}"
+                collected.append((effective_prefix, uri, s))
             except Exception:
                 continue
     return collected
@@ -702,7 +715,20 @@ def compute_cross_layer_relations(bundle) -> Dict[str, list]:
         except Exception:
             return False
 
-    result: Dict[str, list] = {"located_in": [], "intersects": [], "contains": []}
+    result: Dict[str, list] = {
+        "located_in": [],
+        "intersects": [],
+        "contains": [],
+        "same_coordinate": [],
+        "co_located": [],
+        "near": [],
+        "touches": [],
+        "overlaps": [],
+        "_meta": {
+            "near": {"crs": "EPSG:3857", "tolerance": 50.0},
+            "same_coordinate": {"crs": "EPSG:3857", "tolerance": 0.01},
+        },
+    }
     poly_entries = [(_p, u, _safe_geom(s)) for _p, u, s in _collect_entities(bundle, _POLYGON_LAYERS)]
     poly_entries = [(p, u, s) for p, u, s in poly_entries if s is not None]
     point_entries = [(_p, u, _safe_geom(s)) for _p, u, s in _collect_entities(bundle, _POINT_LAYERS)]
@@ -727,6 +753,27 @@ def compute_cross_layer_relations(bundle) -> Dict[str, list]:
                     result["contains"].append((pu, pt_uri))
                     break
 
+    # Use one metric STRtree for bounded point proximity.  Same-coordinate
+    # points remain distinct source features and receive co-location edges.
+    metric_points = _indexed(point_entries)
+    point_tree = STRtree([s for _p, _u, s in metric_points]) if metric_points else None
+    if point_tree:
+        for point_index, (_prefix, point_uri, point_geom) in enumerate(metric_points):
+            for other_index in _indices(point_tree, point_geom.buffer(50.0)):
+                if other_index <= point_index:
+                    continue
+                _other_prefix, other_uri, other_geom = metric_points[other_index]
+                try:
+                    distance = float(point_geom.distance(other_geom))
+                except Exception:
+                    continue
+                if distance > 50.0:
+                    continue
+                result["near"].append((point_uri, other_uri, round(distance, 3)))
+                if distance <= 0.01:
+                    result["same_coordinate"].append((point_uri, other_uri))
+                    result["co_located"].append((point_uri, other_uri))
+
     protection_types = {"farmland_protection", "ecological_redline", "historical_protection", "zone_conditional"}
     parcel_rows = [(u, s) for p, u, s in metric_polys if p == "parcel"]
     prot_rows = [(u, s) for p, u, s in metric_polys if p in protection_types]
@@ -740,11 +787,30 @@ def compute_cross_layer_relations(bundle) -> Dict[str, list]:
                 try:
                     overlap = pa_geom.intersection(pc_geom)
                     if not overlap.is_empty and overlap.area:
-                        result["intersects"].append((pa_uri, pc_uri, round(overlap.area / pa_geom.area * 100, 1) if pa_geom.area else 0.0))
+                        overlap_pct = (
+                            round(overlap.area / pa_geom.area * 100, 1)
+                            if pa_geom.area else 0.0
+                        )
+                        result["intersects"].append((pa_uri, pc_uri, overlap_pct))
+                        if _predicate(pa_geom.overlaps, pc_geom):
+                            result["overlaps"].append((pa_uri, pc_uri, overlap_pct))
+                    elif _predicate(pa_geom.touches, pc_geom):
+                        result["touches"].append((pa_uri, pc_uri))
                 except Exception:
                     continue
 
     metric_lines = _indexed(line_entries)
+    # Roads are first-class source features.  Materialize their parcel
+    # intersections here as well as in the optional ParcelRelations path so a
+    # KG built directly from a bundle still has usable road topology.
+    parcel_tree = STRtree([s for _u, s in parcel_rows]) if parcel_rows else None
+    if parcel_tree:
+        for _prefix, road_uri, road_geom in metric_lines:
+            for i in _indices(parcel_tree, road_geom):
+                parcel_uri, parcel_geom = parcel_rows[i]
+                if _predicate(road_geom.intersects, parcel_geom):
+                    result["intersects"].append((road_uri, parcel_uri, 0.0))
+
     if prot_tree:
         for _prefix, li_uri, li_geom in metric_lines:
             for i in _indices(prot_tree, li_geom):
@@ -760,8 +826,17 @@ def compute_cross_layer_relations(bundle) -> Dict[str, list]:
                     result["located_in"].append((li_uri, admin_rows[i][0]))
                     break
 
-    total = len(result["located_in"]) + len(result["intersects"]) + len(result["contains"])
-    logger.info("[compute_cross_layer_relations] %d relations: %d located_in, %d intersects, %d contains", total, len(result["located_in"]), len(result["intersects"]), len(result["contains"]))
+    total = sum(
+        len(values) for key, values in result.items() if not key.startswith("_")
+    )
+    logger.info(
+        "[compute_cross_layer_relations] %d relations: %d located_in, %d intersects, %d contains, %d near",
+        total,
+        len(result["located_in"]),
+        len(result["intersects"]),
+        len(result["contains"]),
+        len(result["near"]),
+    )
     return result
 
     result: Dict[str, list] = {"located_in": [], "intersects": [], "contains": []}

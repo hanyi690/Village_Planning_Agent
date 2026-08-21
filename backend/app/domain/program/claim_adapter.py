@@ -34,6 +34,12 @@ def interventions_from_claims(
             "location": "、".join(claim.location_hints),
             "location_hints": list(claim.location_hints),
             "affected_parcel_refs": list(claim.affected_parcel_refs),
+            "source_fact_refs": list(claim.source_fact_refs),
+            "spatial_evidence_status": (
+                "l1_fact_bound"
+                if claim.source_fact_refs
+                else "semantic_candidate_needs_grounding"
+            ),
         }
         interventions.append(
             PlanningIntervention(

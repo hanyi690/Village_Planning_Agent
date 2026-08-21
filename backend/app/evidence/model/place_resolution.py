@@ -15,7 +15,7 @@ class PlaceResolutionStatus(StrEnum):
 
     The reused ``PlaceResolutionResult.status`` literal only carries
     resolved/ambiguous/unresolved; this enum keeps the finer distinctions
-    used by the evidence index so GROUND never guesses a candidate.
+    used by EvidenceGraph so GROUND never guesses a candidate.
     """
 
     EXACT = "exact"

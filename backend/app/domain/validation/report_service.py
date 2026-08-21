@@ -46,6 +46,12 @@ def build_validation_report(
                 message=str(getattr(check, "check_name", "") or code or ""),
                 detail=getattr(check, "fix_suggestion", None) or None,
                 check_id=check_id,
+                actual_value=str(getattr(check, "actual_value", "") or ""),
+                expected_value=str(getattr(check, "expected_value", "") or ""),
+                affected_parcels=list(getattr(check, "affected_parcels", None) or []),
+                affected_target_ids=list(getattr(check, "affected_target_ids", None) or []),
+                evidence_refs=list(getattr(check, "evidence_refs", None) or []),
+                fix_suggestion=str(getattr(check, "fix_suggestion", "") or ""),
             )
         )
     failed = [c for c in checks or [] if not getattr(c, "passed", False)]

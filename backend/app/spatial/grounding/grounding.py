@@ -35,6 +35,121 @@ class ZoneSpatialAnchor:
     proximity_weights: Dict[str, float] = field(default_factory=dict)
 
 
+@dataclass
+class ParcelSpatialIndex:
+    """Bundle-authoritative STRtree for bounded parcel candidate lookup.
+
+    The tree is only a broad-phase index. Every hit is still checked against
+    the original Shapely geometry, so a grid/index bucket can never become a
+    fabricated parcel identity or executable geometry.
+    """
+
+    bsms: List[str] = field(default_factory=list)
+    geometries: List[Any] = field(default_factory=list)
+    tree: Any = None
+
+    @classmethod
+    def build(cls, parcels: list) -> Optional["ParcelSpatialIndex"]:
+        try:
+            from shapely.strtree import STRtree
+        except Exception:
+            return None
+        bsms: List[str] = []
+        geometries: List[Any] = []
+        for parcel in parcels or []:
+            bsm = _parcel_bsm(parcel)
+            geometry = _parcel_geometry(parcel)
+            if not bsm or geometry is None:
+                continue
+            bsms.append(bsm)
+            geometries.append(geometry)
+        if not geometries:
+            return None
+        return cls(bsms=bsms, geometries=geometries, tree=STRtree(geometries))
+
+    def _query_geometries(self, query_geometry: Any) -> List[tuple[str, Any]]:
+        if self.tree is None:
+            return []
+        try:
+            hits = self.tree.query(query_geometry)
+        except Exception:
+            return []
+        results: List[tuple[str, Any]] = []
+        from numbers import Integral
+
+        for hit in list(hits):
+            if isinstance(hit, Integral):
+                index = int(hit)
+            else:
+                index = next(
+                    (idx for idx, geometry in enumerate(self.geometries) if geometry is hit),
+                    -1,
+                )
+            if 0 <= index < len(self.geometries):
+                results.append((self.bsms[index], self.geometries[index]))
+        return results
+
+    def query_bbox(self, bbox: Tuple[float, float, float, float]) -> List[str]:
+        from shapely.geometry import box
+
+        query_geometry = box(*bbox)
+        return list(dict.fromkeys(
+            bsm for bsm, geometry in self._query_geometries(query_geometry)
+            if geometry.intersects(query_geometry)
+        ))
+
+    def query_geometry(self, query_geometry: Any) -> List[str]:
+        """Return parcel BSMs intersecting a caller-owned geometry.
+
+        The geometry is used only during index construction/query execution;
+        no geometry is retained in the evidence entry.  This lets named
+        roads and water features inherit village parcel topology without
+        making the private evidence index a second geometry authority.
+        """
+        if query_geometry is None:
+            return []
+        return list(dict.fromkeys(
+            bsm for bsm, geometry in self._query_geometries(query_geometry)
+            if geometry.intersects(query_geometry)
+        ))
+
+    def query_near_entity(
+        self,
+        entity_center: Tuple[float, float],
+        max_distance_m: float,
+    ) -> List[str]:
+        from app.spatial.model.crs_engine import meters_to_degrees_lat, meters_to_degrees_lon
+        from app.spatial.model.geo_utils import haversine_distance
+        from shapely.geometry import Point, box
+        from shapely.ops import nearest_points
+
+        lon, lat = float(entity_center[0]), float(entity_center[1])
+        distance = max(float(max_distance_m), 0.0)
+        query_geometry = box(
+            lon - meters_to_degrees_lon(distance, lat),
+            lat - meters_to_degrees_lat(distance),
+            lon + meters_to_degrees_lon(distance, lat),
+            lat + meters_to_degrees_lat(distance),
+        )
+        point = Point(lon, lat)
+        results: List[str] = []
+        for bsm, geometry in self._query_geometries(query_geometry):
+            if geometry.covers(point):
+                results.append(bsm)
+                continue
+            try:
+                nearest = nearest_points(geometry, point)[0]
+                distance_m = haversine_distance(
+                    entity_center,
+                    (float(nearest.x), float(nearest.y)),
+                )
+            except Exception:
+                continue
+            if distance_m <= distance:
+                results.append(bsm)
+        return list(dict.fromkeys(results))
+
+
 # ── 方向接地 ──
 
 
@@ -99,19 +214,57 @@ def resolve_directional_bbox(
 
 def _parcel_centroid(parcel) -> Optional[Tuple[float, float]]:
     """Extract a parcel centroid without rebuilding a one-feature GeoDataFrame."""
-    geom = getattr(parcel, "geometry", None)
-    if not geom or not isinstance(geom, dict):
-        return None
     try:
-        from shapely.geometry import shape
-
-        value = shape(geom)
+        value = _parcel_geometry(parcel)
         if value.is_empty:
             return None
         centroid = value.centroid
         return (round(float(centroid.x), 6), round(float(centroid.y), 6))
     except Exception:
         return None
+
+
+def _parcel_geometry(parcel: Any) -> Any | None:
+    """Read one parcel geometry without changing the bundle authority boundary."""
+    raw = (
+        parcel.get("geometry")
+        if isinstance(parcel, dict)
+        else getattr(parcel, "geometry", None)
+    )
+    if raw is None:
+        return None
+    try:
+        from shapely.geometry import shape
+
+        geometry = shape(raw) if isinstance(raw, dict) else raw
+        if geometry is None or geometry.is_empty or not geometry.is_valid:
+            return None
+        return geometry
+    except Exception:
+        return None
+
+
+def build_parcel_geometry_cache(parcels: list) -> Dict[str, Any]:
+    """Materialize parcel shapes once for repeated topology queries."""
+    cache: Dict[str, Any] = {}
+    for parcel in parcels or []:
+        bsm = str(
+            parcel.get("bsm", "")
+            if isinstance(parcel, dict)
+            else getattr(parcel, "bsm", "")
+            or ""
+        )
+        if not bsm or bsm in cache:
+            continue
+        geometry = _parcel_geometry(parcel)
+        if geometry is not None:
+            cache[bsm] = geometry
+    return cache
+
+
+def build_parcel_spatial_index(parcels: list) -> Optional[ParcelSpatialIndex]:
+    """Build one reclaimable STRtree for repeated bundle parcel lookups."""
+    return ParcelSpatialIndex.build(parcels)
 
 
 def build_parcel_centroid_cache(
@@ -139,30 +292,110 @@ def _cached_parcel_centroid(
     return centroid_cache[bsm]
 
 
+def _cached_parcel_geometry(
+    parcel: Any,
+    geometry_cache: Optional[Dict[str, Any]],
+) -> Any | None:
+    bsm = str(
+        parcel.get("bsm", "")
+        if isinstance(parcel, dict)
+        else getattr(parcel, "bsm", "")
+        or ""
+    )
+    if geometry_cache is None or not bsm:
+        return _parcel_geometry(parcel)
+    if bsm not in geometry_cache:
+        geometry_cache[bsm] = _parcel_geometry(parcel)
+    return geometry_cache.get(bsm)
+
+
+def _parcel_bsm(parcel: Any) -> str:
+    return str(
+        parcel.get("bsm", "")
+        if isinstance(parcel, dict)
+        else getattr(parcel, "bsm", "")
+        or ""
+    ).strip()
+
+
+def _distance_to_parcel_m(
+    parcel: Any,
+    entity_center: Tuple[float, float],
+    *,
+    geometry_cache: Optional[Dict[str, Any]] = None,
+    centroid_cache: Optional[Dict[str, Optional[Tuple[float, float]]]] = None,
+) -> Optional[float]:
+    """Distance from a point to a parcel boundary/interior in meters.
+
+    A point covered by a parcel has distance zero even when the parcel's
+    centroid is very far away.  This is the essential distinction between a
+    large cadastral BSM and a point-like feature.
+    """
+    from app.spatial.model.geo_utils import haversine_distance
+
+    geometry = _cached_parcel_geometry(parcel, geometry_cache)
+    if geometry is not None:
+        try:
+            from shapely.geometry import Point
+            from shapely.ops import nearest_points
+
+            point = Point(float(entity_center[0]), float(entity_center[1]))
+            if geometry.covers(point):
+                return 0.0
+            nearest = nearest_points(geometry, point)[0]
+            return float(
+                haversine_distance(
+                    entity_center,
+                    (float(nearest.x), float(nearest.y)),
+                )
+            )
+        except Exception:
+            pass
+    centroid = _cached_parcel_centroid(parcel, centroid_cache)
+    if centroid is None:
+        return None
+    return float(haversine_distance(entity_center, centroid))
+
+
 def query_parcels_in_bbox(
     parcels: list,
     bbox: Tuple[float, float, float, float],
     centroid_cache: Optional[Dict[str, Optional[Tuple[float, float]]]] = None,
+    geometry_cache: Optional[Dict[str, Any]] = None,
+    spatial_index: Optional[ParcelSpatialIndex] = None,
 ) -> List[str]:
-    """返回质心在 BBox 内的地块 BSM 列表.
+    """返回与 BBox 相交的地块 BSM 列表.
 
     Args:
         parcels: List[CurrentLandUseParcel] 或任何有 .bsm + .geometry 的地块
         bbox: (min_lon, min_lat, max_lon, max_lat)
 
     Returns:
-        质心在 BBox 内的地块 BSM 列表
+        与 BBox 相交的地块 BSM 列表；只有几何缺失时才降级为质心判断
     """
+    if spatial_index is not None:
+        return spatial_index.query_bbox(bbox)
+
     min_lon, min_lat, max_lon, max_lat = bbox
+    from shapely.geometry import box
+
+    bbox_geometry = box(min_lon, min_lat, max_lon, max_lat)
     results = []
     for p in parcels:
-        centroid = _cached_parcel_centroid(p, centroid_cache)
-        if centroid is None:
-            continue
-        clon, clat = centroid
-        if min_lon <= clon <= max_lon and min_lat <= clat <= max_lat:
-            if p.bsm:
-                results.append(p.bsm)
+        geometry = _cached_parcel_geometry(p, geometry_cache)
+        hit = False
+        if geometry is not None:
+            try:
+                hit = bool(geometry.intersects(bbox_geometry))
+            except Exception:
+                hit = False
+        else:
+            centroid = _cached_parcel_centroid(p, centroid_cache)
+            if centroid is not None:
+                clon, clat = centroid
+                hit = min_lon <= clon <= max_lon and min_lat <= clat <= max_lat
+        if hit and _parcel_bsm(p):
+            results.append(_parcel_bsm(p))
     return results
 
 
@@ -171,8 +404,10 @@ def query_parcels_near_entity(
     entity_center: Tuple[float, float],
     max_distance_m: float = 500,
     centroid_cache: Optional[Dict[str, Optional[Tuple[float, float]]]] = None,
+    geometry_cache: Optional[Dict[str, Any]] = None,
+    spatial_index: Optional[ParcelSpatialIndex] = None,
 ) -> List[str]:
-    """返回距实体中心指定距离内的地块 BSM 列表.
+    """返回与实体点相交或在指定距离内的地块 BSM 列表.
 
     Args:
         parcels: List[CurrentLandUseParcel]
@@ -180,19 +415,23 @@ def query_parcels_near_entity(
         max_distance_m: 最大距离（米）
 
     Returns:
-        距离内的地块 BSM 列表
+        点在面内或距面边界指定距离内的地块 BSM 列表
     """
+    if spatial_index is not None:
+        return spatial_index.query_near_entity(entity_center, max_distance_m)
+
     from app.spatial.model.geo_utils import haversine_distance
 
     results = []
     for p in parcels:
-        centroid = _cached_parcel_centroid(p, centroid_cache)
-        if centroid is None:
-            continue
-        dist = haversine_distance(entity_center, centroid)
-        if dist <= max_distance_m:
-            if p.bsm:
-                results.append(p.bsm)
+        dist = _distance_to_parcel_m(
+            p,
+            entity_center,
+            geometry_cache=geometry_cache,
+            centroid_cache=centroid_cache,
+        )
+        if dist is not None and dist <= max_distance_m and _parcel_bsm(p):
+            results.append(_parcel_bsm(p))
     return results
 
 
@@ -237,6 +476,7 @@ def compute_proximity_weights(
     reference_center: Tuple[float, float],
     max_distance_m: float = 500,
     centroid_cache: Optional[Dict[str, Optional[Tuple[float, float]]]] = None,
+    geometry_cache: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, float]:
     """计算地块到参考点的邻近度评分 (0.0-1.0).
 
@@ -255,14 +495,19 @@ def compute_proximity_weights(
 
     weights = {}
     for p in parcels:
-        if not p.bsm:
+        bsm = _parcel_bsm(p)
+        if not bsm:
             continue
-        centroid = _cached_parcel_centroid(p, centroid_cache)
-        if centroid is None:
+        dist = _distance_to_parcel_m(
+            p,
+            reference_center,
+            geometry_cache=geometry_cache,
+            centroid_cache=centroid_cache,
+        )
+        if dist is None:
             continue
-        dist = haversine_distance(reference_center, centroid)
         weight = max(0.0, 1.0 - dist / max_distance_m)
-        weights[p.bsm] = round(weight, 4)
+        weights[bsm] = round(weight, 4)
     return weights
 
 
@@ -502,6 +747,8 @@ def ground_linear_spatial_preference(
 
 __all__ = [
     "ZoneSpatialAnchor",
+    "ParcelSpatialIndex",
+    "build_parcel_spatial_index",
     "resolve_directional_bbox",
     "query_parcels_in_bbox",
     "query_parcels_near_entity",
@@ -611,7 +858,7 @@ def resolve_spatial_description(
     kg: Any = None,
     gazetteer: Any = None,
     constraint_index: Any = None,
-    evidence_index: Any = None,
+    evidence_graph: Any = None,
 ) -> ResolvedSpatialDescription:
     """KG 拓扑优先的空间描述分派器 — 方位/描述 → 候选 BSM。
 
@@ -619,8 +866,8 @@ def resolve_spatial_description(
       toponym "园寨"         → gazetteer.resolve → entry.bsms（P0 多源坐标+组合名）
       directional "村北"     → resolve_directional_bbox + query_parcels_in_bbox（几何兜底）
       topology_adjacent "靠近园寨" → gazetteer.resolve → entry.bsms → KG sfTouches 邻居
-      linear_road "沿122乡道" → evidence_index.candidate_bsms（road 提及）
-      linear_water "沿金田河" → evidence_index.candidate_bsms（water 提及）
+      linear_road "沿122乡道" → EvidenceGraph.candidate_bsms（road 提及）
+      linear_water "沿金田河" → EvidenceGraph.candidate_bsms（water 提及）
       constraint_edge "生态边缘" → ConstraintIndex 约束重叠地块（几何）
       compound "村北靠近园寨"  → directional BBox ∩ topology_adjacent
 
@@ -630,7 +877,7 @@ def resolve_spatial_description(
         kg: 预留（调用方若想直接传 KG 实例）。
         gazetteer: 村庄地名册（P0 增强后含多源坐标+组合名）。
         constraint_index: ConstraintIndex（约束重叠检查）；为 None 时跳过约束过滤。
-        evidence_index: PlaceEvidenceIndex 快照；为 None 时线性/复合解析退化几何路径。
+        evidence_graph: EvidenceGraph 会话图；为 None 时线性/复合解析保持未解析。
 
     Returns:
         ResolvedSpatialDescription。
@@ -650,15 +897,15 @@ def resolve_spatial_description(
     logger.info("[grounding:resolve] desc='%s' type=%s", desc, dtype)
 
     if dtype == "toponym":
-        return _resolve_toponym(desc, gazetteer, parcels, evidence_index)
+        return _resolve_toponym(desc, gazetteer, parcels, evidence_graph)
     if dtype == "directional":
         return _resolve_directional(desc, parcels)
     if dtype in ("linear_road", "linear_water"):
-        return _resolve_linear(desc, dtype, evidence_index, parcels)
+        return _resolve_linear(desc, dtype, evidence_graph, parcels)
     if dtype == "constraint":
         return _resolve_constraint(desc, constraint_index, parcels, bundle)
     if dtype == "compound":
-        return _resolve_compound(desc, gazetteer, evidence_index, parcels, constraint_index)
+        return _resolve_compound(desc, gazetteer, evidence_graph, parcels, constraint_index)
     return ResolvedSpatialDescription(evidence_text=desc,
                                       unresolved_reason=f"unsupported type {dtype}")
 
@@ -672,12 +919,12 @@ def _default_gazetteer(bundle: Any):
 
 
 def _resolve_toponym(
-    desc: str, gazetteer: Any, parcels: list, evidence_index: Any = None,
+    desc: str, gazetteer: Any, parcels: list, evidence_graph: Any = None,
 ) -> ResolvedSpatialDescription:
     """地名 → gazetteer entry → entry.bsms（P0 多源坐标 + 组合名条目）。"""
-    if evidence_index is not None:
+    if evidence_graph is not None:
         try:
-            resolved = evidence_index.resolve_mention(desc)
+            resolved = evidence_graph.resolve_mention(desc)
             if resolved.status == "resolved" and resolved.candidates:
                 candidate = resolved.candidates[0]
                 if candidate.source_bsms:
@@ -724,17 +971,17 @@ def _resolve_directional(desc: str, parcels: list) -> ResolvedSpatialDescription
 
 
 def _resolve_linear(
-    desc: str, dtype: str, evidence_index: Any, parcels: list,
+    desc: str, dtype: str, evidence_graph: Any, parcels: list,
 ) -> ResolvedSpatialDescription:
-    """线性描述 → 证据索引候选（road / water 提及）。
+    """线性描述 → EvidenceGraph 候选（road / water 提及）。
 
-    证据索引不可用或无候选时返回 typed ``unresolved``，不做村庄中心 buffer 兜底。
+    EvidenceGraph 不可用或无候选时返回 typed ``unresolved``，不做村庄中心 buffer 兜底。
     """
-    if evidence_index is not None:
+    if evidence_graph is not None:
         try:
             mention = _extract_linear_mention(desc)
             if mention:
-                bsms = evidence_index.candidate_bsms(mention)
+                bsms = evidence_graph.candidate_bsms(mention)
                 path = "evidence:linear_touching"
                 if bsms:
                     return ResolvedSpatialDescription(
@@ -746,7 +993,7 @@ def _resolve_linear(
 
     return ResolvedSpatialDescription(
         evidence_text=desc,
-        unresolved_reason="linear mention has no evidence-index candidate",
+        unresolved_reason="linear mention has no evidence-graph candidate",
     )
 
 
@@ -778,7 +1025,7 @@ def _resolve_constraint(
 
 
 def _resolve_compound(
-    desc: str, gazetteer: Any, evidence_index: Any, parcels: list, constraint_index: Any,
+    desc: str, gazetteer: Any, evidence_graph: Any, parcels: list, constraint_index: Any,
 ) -> ResolvedSpatialDescription:
     """复合描述（方向+地名）→ 方向 BBox ∩ 地名拓扑邻居。"""
     dir_result = _resolve_directional(desc, parcels)
@@ -786,7 +1033,7 @@ def _resolve_compound(
         # 方向解析失败，退回地名
         for kw in _DIRECTION_KEYWORDS:
             desc = desc.replace(kw, "靠近")
-        return _resolve_toponym(desc, gazetteer, parcels, evidence_index)
+        return _resolve_toponym(desc, gazetteer, parcels, evidence_graph)
     # 地名部分：取包含的村名
     village_name = _extract_toponym(desc)
     if village_name and gazetteer is not None:

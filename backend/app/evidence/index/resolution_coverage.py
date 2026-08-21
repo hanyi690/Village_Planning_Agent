@@ -1,4 +1,4 @@
-"""Resolution coverage audit for typed L1 facts against the evidence index."""
+"""Resolution coverage audit for typed L1 facts against EvidenceGraph."""
 
 from __future__ import annotations
 
@@ -38,14 +38,14 @@ class ResolutionCoverage:
 
 
 def resolution_coverage(context: Any) -> ResolutionCoverage:
-    """Resolve every typed L1 fact through the evidence index and tally coverage.
+    """Resolve every typed L1 fact through EvidenceGraph and tally coverage.
 
     "resolved" means the mention binds to a KG entity with a spatial extent
     (source_bsms) and/or a geometry reference.  A location that only resolves to
     the village-centre geometric fallback still counts as extent when the index
     returns it.
     """
-    index = getattr(context, "evidence_index", None)
+    graph = getattr(context, "evidence_graph", None)
     cov = ResolutionCoverage()
     for fact in list(getattr(context, "location_facts", []) or []):
         name = str(
@@ -67,9 +67,9 @@ def resolution_coverage(context: Any) -> ResolutionCoverage:
             },
         )
         result = None
-        if index is not None:
+        if graph is not None:
             try:
-                result = index.resolve_mention(name, role=role)
+                result = graph.resolve_mention(name, role=role)
             except Exception:
                 result = None
         status = "unresolved"

@@ -312,13 +312,13 @@ def _create_minimax_llm(
         kwargs["metadata"] = metadata
 
     # MiniMax deprecated ``max_tokens`` in favour of ``max_completion_tokens``
-    # on its OpenAI-compatible endpoint (a small default output limit otherwise
-    # truncates long structured planning outputs mid-JSON).  Send the
-    # non-deprecated parameter alongside the existing ``max_tokens``; the
-    # endpoint accepts both (verified against the configured base).
+    # on its OpenAI-compatible endpoint.  Keep the completion limit as an
+    # explicit ChatOpenAI field so the provider adapter does not hide it in
+    # ``model_kwargs`` or emit a version-dependent warning.
     model_kwargs = dict(kwargs.pop("model_kwargs", None) or {})
-    model_kwargs.setdefault("max_completion_tokens", max_tokens)
-    kwargs["model_kwargs"] = model_kwargs
+    completion_limit = int(model_kwargs.pop("max_completion_tokens", max_tokens))
+    if model_kwargs:
+        kwargs["model_kwargs"] = model_kwargs
 
     return ChatOpenAI(
         model=model,
@@ -326,6 +326,7 @@ def _create_minimax_llm(
         max_tokens=max_tokens,
         api_key=api_key,
         streaming=streaming,
+        max_completion_tokens=completion_limit,
         **kwargs,
     )
 
@@ -555,8 +556,8 @@ def create_flash_llm(
     )
 
     model = model or FLASH_MODEL_NAME
-    temperature = temperature or FLASH_MODEL_TEMPERATURE
-    max_tokens = max_tokens or FLASH_MODEL_MAX_TOKENS
+    temperature = FLASH_MODEL_TEMPERATURE if temperature is None else temperature
+    max_tokens = FLASH_MODEL_MAX_TOKENS if max_tokens is None else max_tokens
 
     if not DASHSCOPE_API_KEY:
         raise ValueError("DASHSCOPE_API_KEY not found for Flash model.")

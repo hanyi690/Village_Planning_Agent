@@ -83,7 +83,7 @@ def build_trace_json(
         "dimension_reports": dimension_reports_meta or {},
         "extraction_steps": [
             "compile_l1_observation (per dimension)",
-            "merge_fragments",
+            "merge_l1_snapshots",
             "evaluate_l1_gate",
         ],
     }

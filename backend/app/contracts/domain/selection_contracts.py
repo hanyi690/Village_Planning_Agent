@@ -42,6 +42,13 @@ class TargetAssignment(BaseModel):
     status: Literal["ready", "placed", "unplaced", "deferred"] = "ready"
     selected_bsm: str = ""
     selected_bsms: list[str] = Field(default_factory=list)
+    feature_bsm: str = ""
+    source_feature_id: str = ""
+    entity_ref: str = ""
+    relation_refs: list[str] = Field(default_factory=list)
+    evidence_refs: list[str] = Field(default_factory=list)
+    l1_snapshot_ref: str = ""
+    bundle_snapshot_digest: str = ""
     anchor_point: tuple[float, float] | None = None
     expected_output_kind: Literal["parcel", "polygon", "point", "line", "action"] = "parcel"
     target_binding: dict = Field(default_factory=dict)

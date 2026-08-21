@@ -35,6 +35,7 @@ def source_feature_identity(
     layer_type: str,
     feature_index: int,
     feature: dict[str, Any],
+    content_digest: str | None = None,
 ) -> dict[str, Any] | None:
     """Build an auditable source feature key when provenance is available.
 
@@ -45,16 +46,10 @@ def source_feature_identity(
     uri = str(source_uri or "").strip()
     if not uri or feature_index < 0:
         return None
-    content_digest = source_content_digest(feature_collection)
+    content_digest = content_digest or source_content_digest(feature_collection)
     geometry_digest = _digest(feature.get("geometry"))
     properties = feature.get("properties") or {}
     raw_label = str(properties.get("注记") or properties.get("text") or "").strip()
-    semantic_type = {
-        # Controlled source-layer vocabulary; this is not inferred from the
-        # intervention prose.
-        "站": "公交站",
-        "祠": "祠堂",
-    }.get(raw_label, "")
     encoded_uri = quote(uri, safe="")
     feature_id = (
         "http://village-planning.org/source-feature/v1/"
@@ -69,7 +64,6 @@ def source_feature_identity(
         "source_feature_index": feature_index,
         "source_geometry_digest": geometry_digest,
         "source_label": raw_label,
-        "source_semantic_type": semantic_type,
     }
 
 

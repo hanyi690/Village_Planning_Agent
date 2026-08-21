@@ -157,10 +157,16 @@ def _current_feature_id(feature: Mapping[str, Any]) -> str:
     properties = feature.get("properties") or {}
     if not isinstance(properties, Mapping):
         properties = {}
+    raw = properties.get("_raw") or {}
+    if isinstance(raw, Mapping):
+        source_feature_id = str(raw.get("source_feature_id") or "").strip()
+        if source_feature_id:
+            return source_feature_id
     return str(
-        properties.get("bsm")
+        properties.get("feature_id")
+        or properties.get("source_feature_id")
+        or properties.get("bsm")
         or properties.get("BSM")
-        or properties.get("feature_id")
         or feature.get("id")
         or ""
     ).strip()

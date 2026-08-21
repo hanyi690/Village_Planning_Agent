@@ -20,6 +20,13 @@ class ParcelChange(BaseModel):
     new_area_ha: float = 0.0
     project_ref: str | None = None
     intervention_id: str | None = None
+    feature_bsms: list[str] = Field(default_factory=list)
+    source_feature_ids: list[str] = Field(default_factory=list)
+    entity_refs: list[str] = Field(default_factory=list)
+    relation_refs: list[str] = Field(default_factory=list)
+    evidence_refs: list[str] = Field(default_factory=list)
+    l1_snapshot_ref: str = ""
+    bundle_snapshot_digest: str = ""
 
 
 class FacilityChange(BaseModel):
@@ -29,6 +36,13 @@ class FacilityChange(BaseModel):
     area_sqm: float = 0.0
     center: tuple[float, float] | None = None
     derived_from_name: str = ""
+    feature_bsms: list[str] = Field(default_factory=list)
+    source_feature_ids: list[str] = Field(default_factory=list)
+    entity_refs: list[str] = Field(default_factory=list)
+    relation_refs: list[str] = Field(default_factory=list)
+    evidence_refs: list[str] = Field(default_factory=list)
+    l1_snapshot_ref: str = ""
+    bundle_snapshot_digest: str = ""
 
 
 class RoadChange(BaseModel):
@@ -38,6 +52,13 @@ class RoadChange(BaseModel):
     width_m: float = 0.0
     path: list[list[float]] = Field(default_factory=list)
     derived_from_name: str = ""
+    feature_bsms: list[str] = Field(default_factory=list)
+    source_feature_ids: list[str] = Field(default_factory=list)
+    entity_refs: list[str] = Field(default_factory=list)
+    relation_refs: list[str] = Field(default_factory=list)
+    evidence_refs: list[str] = Field(default_factory=list)
+    l1_snapshot_ref: str = ""
+    bundle_snapshot_digest: str = ""
 
 
 class SettlementChange(BaseModel):

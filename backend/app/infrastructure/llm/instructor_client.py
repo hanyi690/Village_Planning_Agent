@@ -5,6 +5,7 @@ from __future__ import annotations
 import instructor
 import httpx
 import os
+import inspect
 from openai import (
     AsyncOpenAI,
     OpenAI,
@@ -89,6 +90,41 @@ def get_async_instructor_client() -> instructor.AsyncInstructor:
         base_url,
     )
     return client
+
+
+async def close_cached_clients() -> None:
+    """Close and clear provider clients at application/test lifecycle end.
+
+    Instructor keeps the OpenAI transport on the wrapper and the wrapper's
+    ``close`` method owns the underlying HTTP connection pool.  Closing the
+    wrapper, rather than reaching into the transport, keeps this boundary
+    valid across Instructor versions and prevents provider pools from keeping
+    acceptance processes alive after the graph and database have shut down.
+    """
+    async_clients = list(_cached_async_clients.values())
+    sync_clients = list(_cached_clients.values())
+    _cached_async_clients.clear()
+    _cached_clients.clear()
+
+    for client in async_clients:
+        close = getattr(client, "close", None)
+        if not callable(close):
+            continue
+        try:
+            result = close()
+            if inspect.isawaitable(result):
+                await result
+        except Exception as exc:  # noqa: BLE001 - continue closing other pools
+            logger.warning("[Instructor] Async client close failed: %s", exc)
+
+    for client in sync_clients:
+        close = getattr(client, "close", None)
+        if not callable(close):
+            continue
+        try:
+            close()
+        except Exception as exc:  # noqa: BLE001 - continue closing other pools
+            logger.warning("[Instructor] Sync client close failed: %s", exc)
 
 
 def _provider_max_retries() -> int:

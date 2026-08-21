@@ -14,6 +14,7 @@ from app.contracts.planning.constraint_factor import (
     RelationSatisfaction,
 )
 from app.contracts.planning.relation_parameters import (
+    AvoidConstraintParameters,
     CoLocateParameters,
     DistanceParameters,
 )
@@ -155,6 +156,44 @@ class GeometryRelationEvaluator:
                 operator="contains",
             )
         if key in {"avoid", "avoid_constraint"}:
+            parameters = factor.parameters
+            buffer_m = (
+                float(getattr(parameters, "buffer_m", 0.0) or 0.0)
+                if isinstance(parameters, AvoidConstraintParameters)
+                else 0.0
+            )
+            if buffer_m > 0:
+                projected = _project_for_distance(
+                    left,
+                    right,
+                    left_crs,
+                    right_crs,
+                    str(getattr(context, "metric_crs", "EPSG:3857") or "EPSG:3857"),
+                )
+                if projected is None:
+                    return RelationSatisfaction(
+                        **base,
+                        status="not_evaluable",
+                        detail="buffered avoidance requires compatible/projectable CRS",
+                    )
+                projected_left, projected_right, metric_crs = projected
+                passed = projected_left.disjoint(projected_right.buffer(buffer_m))
+                status = "satisfied" if passed else "violated"
+                return RelationSatisfaction(
+                    **base,
+                    status=status,
+                    measurement=RelationMeasurement(
+                        value=passed,
+                        threshold=True,
+                        operator="eq",
+                        method="disjoint_buffered_constraint",
+                        crs=metric_crs,
+                    ),
+                    evaluation_trace=[
+                        f"avoid-buffer:{_feature_ref(subject)}:{_feature_ref(object_)}:{buffer_m:g}"
+                    ],
+                    score=1.0 if passed else 0.0,
+                )
             return self._boolean(
                 factor,
                 left.disjoint(right),

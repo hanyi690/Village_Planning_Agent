@@ -126,6 +126,7 @@ async def select_node(state: Dict[str, Any]) -> Dict[str, Any]:
                 build_suitability_surface,
                 grounding,
                 context,
+                plan_intent=plan_intent,
                 catalog=DataCatalog(),
                 cache_dir=session_run_dir(_run_id(state)) / "terrain-evidence",
             )
@@ -193,6 +194,9 @@ async def select_node(state: Dict[str, Any]) -> Dict[str, Any]:
     if problem is not None:
         from app.domain.allocation.scenario_solver import solve_scenario
         from app.domain.relations.service import RelationEvaluationContext
+        from app.domain.relations.reference_features import (
+            resolve_relation_reference_features,
+        )
 
         scenario_id = f"scenario:{_run_id(state) or 'current'}"
         networks = (
@@ -200,6 +204,16 @@ async def select_node(state: Dict[str, Any]) -> Dict[str, Any]:
             or getattr(context, "network_snapshots", None)
             or {}
         )
+        reference_resolution = resolve_relation_reference_features(
+            context,
+            list(getattr(problem, "constraint_factors", None) or []),
+            scenario_id=scenario_id,
+        )
+        if reference_resolution.diagnostics:
+            logger.info(
+                "[workflow:select] external relation references unresolved: %s",
+                list(reference_resolution.diagnostics),
+            )
         evaluator_context = RelationEvaluationContext(
             scenario_id=scenario_id,
             metric_crs=str(
@@ -213,6 +227,8 @@ async def select_node(state: Dict[str, Any]) -> Dict[str, Any]:
                 or getattr(context, "demand_snapshots", None)
                 or {}
             ),
+            reference_features=reference_resolution.features,
+            reference_diagnostics=reference_resolution.diagnostics,
             execution_trace=getattr(context, "execution_trace", None),
         )
         try:
@@ -228,7 +244,6 @@ async def select_node(state: Dict[str, Any]) -> Dict[str, Any]:
             scenario = build_planning_scenario(
                 scenario_id=scenario_id,
                 problem=problem,
-                selected_candidate_ids={},
                 relation_satisfactions=[],
                 features=[],
                 findings=[ScenarioFinding(
@@ -247,7 +262,10 @@ async def select_node(state: Dict[str, Any]) -> Dict[str, Any]:
             output_refs["planning_scenario"] = scenario_ref
         decision.scenario_id = scenario.scenario_id
         decision.relation_satisfaction = list(scenario.relation_satisfactions or [])
-        selected_by_target = dict(scenario.selected_candidate_ids or {})
+        selected_by_target = {
+            item.target_id: list(item.candidate_ids)
+            for item in (scenario.target_selections or [])
+        }
         candidate_by_id = {
             str(getattr(candidate, "candidate_id", "")): candidate
             for candidate in list(getattr(problem, "candidate_geometries", None) or [])
@@ -272,17 +290,80 @@ async def select_node(state: Dict[str, Any]) -> Dict[str, Any]:
         )
         for assignment in list(decision.target_assignments or []):
             target_id = str(getattr(assignment, "target_id", "") or "")
-            candidate_id = str(selected_by_target.get(target_id, "") or "")
-            candidate = candidate_by_id.get(candidate_id)
-            if scenario_is_executable and candidate is not None:
-                source_bsms = list(getattr(candidate, "source_bsms", None) or [])
+            selected_candidate_ids = list(selected_by_target.get(target_id, []))
+            selected_candidates = [
+                candidate_by_id[candidate_id]
+                for candidate_id in selected_candidate_ids
+                if candidate_id in candidate_by_id
+            ]
+            if scenario_is_executable and selected_candidate_ids and len(selected_candidates) == len(selected_candidate_ids):
+                candidate = selected_candidates[0] if len(selected_candidates) == 1 else None
+                source_bsms = [
+                    bsm
+                    for selected in selected_candidates
+                    for bsm in (getattr(selected, "source_bsms", None) or [])
+                ]
+                feature_bsms = [
+                    bsm
+                    for selected in selected_candidates
+                    for bsm in (getattr(selected, "feature_bsms", None) or [])
+                ]
+                source_feature_ids = [
+                    value
+                    for selected in selected_candidates
+                    for value in (getattr(selected, "source_feature_ids", None) or [])
+                ]
+                entity_refs = [
+                    value
+                    for selected in selected_candidates
+                    for value in (getattr(selected, "entity_refs", None) or [])
+                ]
+                relation_refs = [
+                    value
+                    for selected in selected_candidates
+                    for value in (getattr(selected, "relation_refs", None) or [])
+                ]
+                evidence_refs = [
+                    value
+                    for selected in selected_candidates
+                    for value in (getattr(selected, "evidence_refs", None) or [])
+                ]
                 binding = dict(getattr(assignment, "target_binding", None) or {})
                 binding.update({
                     "scenario_id": scenario.scenario_id,
-                    "candidate_id": candidate_id,
+                    "candidate_ids": selected_candidate_ids,
+                    "source_bsms": source_bsms,
+                    "feature_bsms": feature_bsms,
+                    "source_feature_ids": source_feature_ids,
+                    "entity_refs": entity_refs,
+                    "relation_refs": relation_refs,
+                    "evidence_refs": evidence_refs,
                 })
+                if candidate is not None:
+                    binding.update({
+                        "candidate_id": candidate.candidate_id,
+                        "candidate_geometry_wkt": str(getattr(candidate, "wkt", "") or ""),
+                        "spatial_domain_kind": str(getattr(candidate, "spatial_domain_kind", "") or ""),
+                        "source_area_ha": getattr(candidate, "source_area_ha", None),
+                        "planning_area_ha": getattr(candidate, "planning_area_ha", None),
+                        "coverage_ratio": getattr(candidate, "coverage_ratio", None),
+                        "l1_snapshot_ref": str(getattr(candidate, "l1_snapshot_ref", "") or ""),
+                        "bundle_snapshot_digest": str(getattr(candidate, "bundle_snapshot_digest", "") or ""),
+                        "source_binding_ref": str(getattr(candidate, "source_binding_ref", "") or ""),
+                    })
                 assignment.target_binding = binding
-                if source_bsms:
+                if len(feature_bsms) == 1:
+                    assignment.feature_bsm = feature_bsms[0]
+                if len(source_feature_ids) == 1:
+                    assignment.source_feature_id = source_feature_ids[0]
+                if len(entity_refs) == 1:
+                    assignment.entity_ref = entity_refs[0]
+                assignment.relation_refs = relation_refs
+                assignment.evidence_refs = evidence_refs
+                if candidate is not None:
+                    assignment.l1_snapshot_ref = str(getattr(candidate, "l1_snapshot_ref", "") or "")
+                    assignment.bundle_snapshot_digest = str(getattr(candidate, "bundle_snapshot_digest", "") or "")
+                if source_bsms and len(selected_candidates) == 1:
                     if getattr(assignment, "target_type", "") == "zone":
                         assignment.selected_bsms = source_bsms
                     else:
@@ -389,8 +470,13 @@ async def select_node(state: Dict[str, Any]) -> Dict[str, Any]:
         deferral_ledger=deferral_ledger,
         portfolio_decision_ref=_ref_digest(portfolio_ref),
         global_zone_allocation_ref=_ref_digest(zone_allocation_ref),
-        scenario_selected_candidate_ids=(
-            dict(scenario.selected_candidate_ids or {}) if scenario is not None else {}
+        scenario_target_selections=(
+            {
+                item.target_id: list(item.candidate_ids)
+                for item in (getattr(scenario, "target_selections", None) or [])
+            }
+            if scenario is not None
+            else {}
         ),
     )
     ref = persist_stage_artifact(

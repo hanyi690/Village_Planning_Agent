@@ -106,7 +106,7 @@ async def layer_aggregate_node(state: Dict[str, Any]) -> Dict[str, Any]:
         _update_explore_retry(state, patch, layer, "l1")
         # 统一接地核心（设计 §5.1）：L1 后立即 ground_anchors——回填 KG 真名、
         # 村名→地块绑定、锚点接地（mention→entity/BSM/geometry+拓扑证据）、
-        # 语义注解、重建证据索引。Enrichment 消费 typed L1Snapshot，必须在
+        # 语义注解、重建 EvidenceGraph。Enrichment 消费 typed L1Snapshot，必须在
         # aggregate 持久化 artifact 之后运行（设计 §7：无新节点）。
         try:
             from app.domain.ground import ground_anchors

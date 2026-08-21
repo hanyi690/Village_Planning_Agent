@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import os
-from typing import Any, Dict
+import asyncio
+from typing import Any, Dict, Optional
 
 from app.infrastructure.logging import get_logger
 from app.workflow.stage_adapter import persist_stage_artifact
@@ -19,7 +20,9 @@ logger = get_logger(__name__)
 
 
 def _ground_llm_disabled() -> bool:
-    return any(
+    return str(os.getenv("GROUND_LLM_ENABLED", "false")).strip().lower() not in {
+        "1", "true", "yes", "on"
+    } or any(
         str(os.getenv(name, "")).strip().lower() in {"1", "true", "yes", "on"}
         for name in ("DISABLE_GROUND_LLM", "DISABLE_GROUND_REPORT_LLM")
     )
@@ -36,6 +39,276 @@ def _to_typed(data: Any, cls: type) -> Any:
     return data
 
 
+def _ground_packet_query(context: Any, spec: Any) -> tuple[str, list[str]]:
+    labels: list[str] = []
+    semantic_terms: list[str] = []
+    requested_scopes: list[str] = []
+    kinds: set[str] = set()
+
+    def collect(node: Any) -> None:
+        reference = getattr(node, "reference", None)
+        if reference is not None:
+            filters = getattr(reference, "filter", None) or {}
+            label = str(
+                filters.get("label_contains")
+                or getattr(reference, "name", "")
+                or ""
+            ).strip()
+            if label and label not in {"全村", "全村域", "村域"}:
+                labels.append(label)
+            kind = str(getattr(reference, "kind", "") or "").strip()
+            if kind:
+                kinds.add(kind)
+        for value in getattr(node, "semantic_terms", None) or []:
+            term = str(value or "").strip()
+            if term:
+                semantic_terms.append(term)
+        for value in getattr(node, "retrieval_scopes", None) or []:
+            scope = str(value or "").strip().casefold()
+            if scope:
+                requested_scopes.append(scope)
+        for child in getattr(node, "children", None) or []:
+            collect(child)
+
+    collect(spec)
+    labels = list(dict.fromkeys(labels))
+    semantic_terms = list(dict.fromkeys(semantic_terms))
+    query_terms = list(dict.fromkeys([*labels, *semantic_terms]))
+    if not query_terms:
+        return "", []
+    village = str(getattr(context, "village_name", "") or "").strip()
+    query = " ".join(value for value in (village, *query_terms) if value)
+    scopes_by_kind = {
+        "entity_type": ["facilities", "roads", "waters", "parcels"],
+        "layer_group": ["facilities", "roads", "waters", "parcels"],
+        "place_name": ["facilities", "roads", "waters", "parcels"],
+        "bsm": ["parcels", "facilities", "roads", "waters"],
+        # A natural village may have no standalone polygon/name feature.  In
+        # that case address-bearing hazard/facility points are legitimate
+        # spatial anchors whose related Bundle parcels can seed a coarse
+        # village scope.  Retrieval keeps all of them; GROUND marks the result
+        # inferred rather than pretending the point is a village boundary.
+        "village": ["parcels", "hazards", "facilities", "annotations"],
+    }
+    scopes: list[str] = list(requested_scopes)
+    for kind in kinds:
+        scopes.extend(scopes_by_kind.get(
+            kind.casefold(),
+            ["facilities", "roads", "waters", "parcels"],
+        ))
+    return query, list(dict.fromkeys(scopes or [
+        "facilities", "hazards", "roads", "waters", "parcels", "zones",
+    ]))
+
+
+def _packet_ref_key(ref: Any) -> str:
+    identity = getattr(ref, "identity", None)
+    return str(
+        getattr(identity, "bundle_feature_bsm", "")
+        or getattr(identity, "source_feature_id", "")
+        or getattr(ref, "geometry_ref", "")
+        or "|".join(getattr(ref, "entity_refs", None) or [])
+    ).strip()
+
+
+def _merge_ground_evidence_packets(packets: list[Any], *, next_offset: int | None = None) -> Any:
+    """Merge retrieval pages without dropping semantic or topology evidence."""
+    if not packets:
+        return None
+    first = packets[0]
+    candidates: list[Any] = []
+    seen_candidates: set[str] = set()
+    relations: list[Any] = []
+    seen_relations: set[str] = set()
+    source_spans: list[str] = []
+    external_refs: list[str] = []
+    l1_scope_refs: list[str] = []
+    missing_evidence: list[str] = []
+    query_trace: list[dict[str, Any]] = []
+
+    def append_unique(values: list[Any], incoming: Any) -> None:
+        for value in incoming or []:
+            text = str(value).strip()
+            if text and text not in values:
+                values.append(text)
+
+    for packet in packets:
+        for ref in list(getattr(packet, "candidate_refs", None) or []):
+            key = _packet_ref_key(ref)
+            if key and key not in seen_candidates:
+                seen_candidates.add(key)
+                candidates.append(ref)
+        for relation in list(getattr(packet, "relation_evidence", None) or []):
+            key = str(getattr(relation, "relation_id", "") or "").strip()
+            if key and key not in seen_relations:
+                seen_relations.add(key)
+                relations.append(relation)
+        append_unique(source_spans, getattr(packet, "source_spans", None))
+        append_unique(external_refs, getattr(packet, "external_refs", None))
+        append_unique(l1_scope_refs, getattr(packet, "l1_scope_refs", None))
+        append_unique(missing_evidence, getattr(packet, "missing_evidence", None))
+        query_trace.extend(list(getattr(packet, "query_trace", None) or []))
+
+    candidate_total = max(
+        len(candidates),
+        *(int(getattr(packet, "candidate_total", 0) or 0) for packet in packets),
+    )
+    complete = next_offset is None
+    sufficiency_rank = {"insufficient": 0, "partial": 1, "sufficient": 2}
+    sufficiency = min(
+        (str(getattr(packet, "sufficiency", "insufficient") or "insufficient")
+         for packet in packets),
+        key=lambda value: sufficiency_rank.get(value, 0),
+    )
+    if len(candidates) > 1:
+        ambiguity_status = "multiple"
+    elif candidates and complete and sufficiency != "insufficient":
+        ambiguity_status = "resolved"
+    else:
+        ambiguity_status = str(
+            getattr(first, "ambiguity_status", "unresolved") or "unresolved"
+        )
+    return first.model_copy(
+        update={
+            "candidate_refs": candidates,
+            "candidate_total": candidate_total,
+            "candidate_offset": 0,
+            "candidate_limit": max(
+                int(getattr(packet, "candidate_limit", 12) or 12)
+                for packet in packets
+            ),
+            "candidates_truncated": not complete,
+            "next_candidate_offset": next_offset,
+            "relation_evidence": relations,
+            "source_spans": source_spans,
+            "external_refs": external_refs,
+            "l1_scope_refs": l1_scope_refs,
+            "ambiguity_status": ambiguity_status,
+            "sufficiency": sufficiency,
+            "missing_evidence": missing_evidence,
+            "query_trace": query_trace,
+        }
+    )
+
+
+async def _retrieve_ground_evidence_packets(
+    context: Any,
+    specs: list[Any],
+) -> tuple[dict[str, Any], list[dict[str, str]]]:
+    """Fetch bounded packets and retain every retrieval error.
+
+    The packet is a bounded EvidenceGraph view. The resolver remains the
+    single grounding authority when a packet is absent; absence is recorded
+    so a provider or graph error cannot disappear as an empty candidate set.
+    """
+    session_id = str(getattr(context, "session_id", "") or "").strip()
+    if not session_id or getattr(context, "evidence_graph", None) is None:
+        return {}, []
+    from app.contracts.evidence.evidence_contracts import ExplorationRequest
+    from app.evidence.retrieval.evidence_service import retrieve_evidence
+
+    work: list[tuple[str, Any, str, list[str]]] = []
+    for spec in list(specs or []):
+        target_id = str(getattr(spec, "target_id", "") or "").strip()
+        query, scopes = _ground_packet_query(context, spec)
+        if target_id and query:
+            work.append((target_id, spec, query, scopes))
+    if not work:
+        return {}, []
+
+    semaphore = asyncio.Semaphore(4)
+
+    async def retrieve_one(target_id: str, _spec: Any, query: str, scopes: list[str]):
+        async with semaphore:
+            packets: list[Any] = []
+            offset = 0
+            seen_offsets: set[int] = set()
+            try:
+                while True:
+                    if offset in seen_offsets:
+                        return target_id, _merge_ground_evidence_packets(
+                            packets, next_offset=offset
+                        ), {
+                            "target_id": target_id,
+                            "status": "failed",
+                            "error": "candidate_pagination_repeated_offset",
+                        }
+                    seen_offsets.add(offset)
+                    result = await retrieve_evidence(
+                        ExplorationRequest(
+                            run_id=session_id,
+                            request_type="spatial_lookup",
+                            query=query,
+                            stage="GROUND",
+                            dimension_key="location",
+                            query_purpose="gap_resolution",
+                            entity_scope=scopes,
+                            candidate_offset=offset,
+                            candidate_limit=64,
+                        ),
+                        session_id,
+                        village_name=str(getattr(context, "village_name", "") or ""),
+                        spatial_spec=_spec,
+                        # GROUND's packet prefetch is local-only.  External text
+                        # evidence remains an explicit EXPLORE decision.
+                        external_port=None,
+                    )
+                    packet = getattr(result, "evidence_packet", None)
+                    if packet is None:
+                        if packets:
+                            return target_id, _merge_ground_evidence_packets(
+                                packets, next_offset=offset
+                            ), {
+                                "target_id": target_id,
+                                "status": "failed",
+                                "error": "candidate_pagination_page_unavailable",
+                            }
+                        break
+                    packets.append(packet)
+                    next_page = getattr(packet, "next_candidate_offset", None)
+                    if next_page is None:
+                        return target_id, _merge_ground_evidence_packets(packets), {}
+                    offset = int(next_page)
+                    if len(packets) >= 16:
+                        return target_id, _merge_ground_evidence_packets(
+                            packets, next_offset=offset
+                        ), {
+                            "target_id": target_id,
+                            "status": "partial",
+                            "error": "candidate_pagination_safety_limit",
+                        }
+            except Exception as exc:  # noqa: BLE001 - preserve typed retrieval audit
+                logger.warning("[workflow:ground] packet prefetch failed: %s", exc)
+                return target_id, _merge_ground_evidence_packets(
+                    packets, next_offset=offset if packets else None
+                ), {
+                    "target_id": target_id,
+                    "status": "failed",
+                    "error": f"{type(exc).__name__}: {exc}",
+                }
+        if packets:
+            return target_id, _merge_ground_evidence_packets(packets), {
+                "target_id": target_id,
+                "status": "empty",
+                "error": "evidence_packet_has_no_candidate_refs",
+            }
+        return target_id, None, {
+            "target_id": target_id,
+            "status": "empty",
+            "error": "evidence_packet_unavailable",
+        }
+
+    pairs = await asyncio.gather(*(retrieve_one(*item) for item in work))
+    return (
+        {
+            target_id: packet
+            for target_id, packet, _diagnostic in pairs
+            if packet is not None
+        },
+        [diagnostic for _target_id, _packet, diagnostic in pairs if diagnostic],
+    )
+
+
 async def ground_node(state: Dict[str, Any]) -> Dict[str, Any]:
     """GROUND node: specs + context -> GroundingResult + gate."""
     from app.domain.ground.aggregate import ground_aggregate, retrieve_evidence
@@ -45,6 +318,12 @@ async def ground_node(state: Dict[str, Any]) -> Dict[str, Any]:
 
     retry_patch = _retry_patch(state, "ground")
     context = await _require_context(state)
+    from app.spatial.grounding.call_budget import get_ground_llm_budget
+
+    ground_llm_budget = get_ground_llm_budget(
+        context,
+        scope_key=f"workflow:{state.get('session_id') or ''}",
+    )
     compilation = _load_ref_artifact(state, "target_projection", IntentCompilationResult)
     report_result = None
 
@@ -96,7 +375,7 @@ async def ground_node(state: Dict[str, Any]) -> Dict[str, Any]:
     # external neighbor POIs); Phase 2 - matching against KG geometry
     # (collective village partition + per-role LLM evidence assignment).
     # Every report-named entity that has any KG geometry is located here;
-    # the enriched gazetteer feeds the evidence index used by spec
+    # the enriched gazetteer feeds EvidenceGraph used by spec
     # resolution below.  Nothing is ever fabricated; evidence-less names
     # stay explicitly unresolved.
     # =====================================================================
@@ -115,9 +394,10 @@ async def ground_node(state: Dict[str, Any]) -> Dict[str, Any]:
             report_result = await ground_report(
                 context,
                 facts,
-                _context_report_text(context),
+                await _context_report_text_async(context),
                 llm=create_grounding_llm(),
                 session_id=session_id,
+                budget=ground_llm_budget,
             )
             if report_result.grounded:
                 from app.infrastructure.kg.adapters.gazetteer_adapter import KGGazetteerAdapter
@@ -151,12 +431,26 @@ async def ground_node(state: Dict[str, Any]) -> Dict[str, Any]:
         if intent is not None:
             from app.spatial.grounding.resolver import SpatialResolver
 
-            resolver = SpatialResolver(context)
+            resolver = SpatialResolver(
+                context,
+                ground_llm_budget=ground_llm_budget,
+            )
             village_cluster_map = (
                 {}
                 if _ground_llm_disabled()
-                else await _village_cluster_map_for_context(context, intent)
+                else await _village_cluster_map_for_context(
+                    context,
+                    intent,
+                    budget=ground_llm_budget,
+                )
             )
+            # Keep the evidence-constrained village -> Bundle cluster mapping
+            # available to the spec resolver.  ``resolve_anchors`` mutates the
+            # typed intent for downstream consumers, but TARGET_PROJECTION is
+            # intentionally immutable and GROUND resolves the original specs;
+            # without this context bridge the mapping would never affect the
+            # actual spatial candidate search.
+            context.village_cluster_map = dict(village_cluster_map or {})
             resolved_anchors = resolver.resolve_anchors(
                 intent,
                 village_cluster_map=village_cluster_map,
@@ -180,16 +474,42 @@ async def ground_node(state: Dict[str, Any]) -> Dict[str, Any]:
             logger.warning("[workflow:ground] retrieve_evidence failed: %s", exc)
     intent_graph = getattr(compilation, "intent_graph", None)
     target_metadata = _target_metadata_from_compilation(compilation, intent_graph)
+    evidence_packets, packet_diagnostics = await _retrieve_ground_evidence_packets(
+        context, specs
+    )
+    if evidence_packets:
+        logger.info(
+            "[workflow:ground] canonical evidence packets=%d",
+            len(evidence_packets),
+        )
     result = ground_aggregate(
         specs,
         context,
         intent_graph=intent_graph,
         target_metadata=target_metadata,
+        evidence_packets=evidence_packets,
+        ground_llm_budget=ground_llm_budget,
     )
+    if packet_diagnostics:
+        from app.contracts.spatial.grounding_contracts import SpatialQueryEvidence
+
+        result.spatial_query_evidence.extend(
+            SpatialQueryEvidence(
+                query_type="evidence_packet_retrieval",
+                query_params={
+                    "status": diagnostic.get("status", "unknown"),
+                    "error": diagnostic.get("error", ""),
+                },
+                result_count=0,
+                result_refs=[],
+                target_id=diagnostic.get("target_id", ""),
+            )
+            for diagnostic in packet_diagnostics
+        )
 
     # GROUND flash-LLM mention enhancement: for specs that could not bind any
     # BSM, ask the flash model to segment the raw prose into concrete locatable
-    # mentions, then re-resolve through the same evidence index.  The model
+    # mentions, then re-resolve through the same EvidenceGraph.  The model
     # only supplies text; BSMs still come from the index/gazetteer/bundle.
     # Results are cached per content hash so resume/replay does not repeat the
     # call.  On any failure the deterministic result is kept unchanged.
@@ -197,7 +517,12 @@ async def ground_node(state: Dict[str, Any]) -> Dict[str, Any]:
         enhanced = (
             {}
             if _ground_llm_disabled()
-            else await _flash_enhance_unresolved(compilation, result, state)
+            else await _flash_enhance_unresolved(
+                compilation,
+                result,
+                state,
+                budget=ground_llm_budget,
+            )
         )
         if enhanced:
             re_result = ground_aggregate(
@@ -206,6 +531,8 @@ async def ground_node(state: Dict[str, Any]) -> Dict[str, Any]:
                 mention_enhancements=enhanced,
                 intent_graph=intent_graph,
                 target_metadata=target_metadata,
+                evidence_packets=evidence_packets,
+                ground_llm_budget=ground_llm_budget,
             )
             # Only adopt the enhanced result when it strictly reduces the
             # unresolved count; otherwise keep the deterministic baseline.
@@ -227,6 +554,14 @@ async def ground_node(state: Dict[str, Any]) -> Dict[str, Any]:
         "[workflow:ground] typed candidate domains=%d candidates=%d",
         len(candidate_domains or []),
         len(getattr(result, "candidates", None) or []),
+    )
+    logger.info(
+        "[workflow:ground] llm_budget scope=%s reserved=%d completed=%d failed=%d remaining=%d",
+        ground_llm_budget.get("scope_key", ""),
+        int(ground_llm_budget.get("reserved", 0) or 0),
+        int(ground_llm_budget.get("completed", 0) or 0),
+        int(ground_llm_budget.get("failed", 0) or 0),
+        int(ground_llm_budget.get("remaining", 0) or 0),
     )
     ref = persist_stage_artifact(state, "ground", "GroundingResult", result)
     output_refs = {"grounding_result": ref}
@@ -260,6 +595,8 @@ async def _flash_enhance_unresolved(
     compilation: Any,
     result: Any,
     state: Dict[str, Any],
+    *,
+    budget: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, list[str]]:
     """Ask the flash LLM to segment raw prose for unresolved specs.
 
@@ -331,7 +668,6 @@ async def _flash_enhance_unresolved(
 
     from app.infrastructure.paths import run_tmp_root, session_run_dir
     from app.spatial.grounding.flash_mention_extractor import MentionCache, extract_mentions
-    from app.spatial.grounding.call_budget import new_ground_llm_budget
 
     run_root = None
     try:
@@ -342,8 +678,6 @@ async def _flash_enhance_unresolved(
     if run_root is not None:
         cache_path = (run_root / "ground-mention-cache.json").resolve()
     cache = MentionCache(cache_path)
-    budget = new_ground_llm_budget()
-
     enhanced: Dict[str, list[str]] = {}
     for target_id, raw in raw_by_target.items():
         mentions = await extract_mentions(raw, cache=cache, budget=budget)
@@ -358,6 +692,8 @@ async def _flash_enhance_unresolved(
 async def _village_cluster_map_for_context(
     context: Any,
     intent: Any,
+    *,
+    budget: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """Pre-resolve natural-village -> residential-cluster mapping (cached).
 
@@ -377,6 +713,7 @@ async def _village_cluster_map_for_context(
             return {}
         from app.spatial.grounding.village_cluster_mapper import (
             build_village_clusters,
+            collect_spatial_anchor_evidence,
             map_villages,
         )
 
@@ -393,8 +730,9 @@ async def _village_cluster_map_for_context(
             cache = session_run_dir(str(getattr(context, "session_id", "") or "ground")) / "village-cluster-map.json"
         except Exception:
             cache = None
-        report_text = _context_report_text(context)
+        report_text = await _context_report_text_async(context)
         llm = create_flash_llm_safe()
+        spatial_evidence = collect_spatial_anchor_evidence(context, names)
         snapshot = getattr(workspace, "snapshot", None)
         landuse_collection = (
             snapshot.collection("landuse_current_geojson") if snapshot else None
@@ -416,20 +754,22 @@ async def _village_cluster_map_for_context(
                 if snapshot
                 else ""
             ),
+            budget=budget,
+            spatial_evidence=spatial_evidence,
         )
     except Exception as exc:  # noqa: BLE001 - cluster mapping must never break GROUND
         logger.warning("[workflow:ground] village cluster mapping failed: %s", exc)
         return {}
 
 
-def _context_report_text(context: Any) -> str:
-    parts: list[str] = []
-    for payload in dict(getattr(context, "reports", {}) or {}).values():
-        if isinstance(payload, dict):
-            parts.append(str(payload.get("content") or payload.get("summary") or ""))
-        else:
-            parts.append(str(payload or ""))
-    return "\n".join(part for part in parts if part)[:12000]
+async def _context_report_text_async(context: Any) -> str:
+    """Read report正文 through the evidence/report storage boundary."""
+    from app.evidence.retrieval.retrievers.report_retriever import load_report_corpus
+
+    return await load_report_corpus(
+        str(getattr(context, "session_id", "") or ""),
+        context=context,
+    )
 
 
 def _target_metadata_from_compilation(

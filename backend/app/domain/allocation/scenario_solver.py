@@ -15,9 +15,17 @@ from itertools import product
 from typing import Any
 
 from app.contracts.planning.constraint_factor import ConstraintFactor, RelationSatisfaction
-from app.contracts.planning.scenario import PlanningScenario, ScenarioFinding
+from app.contracts.planning.scenario import (
+    PlanningScenario,
+    ScenarioFinding,
+    ScenarioTargetSelection,
+)
 from app.contracts.spatial.grounded_problem import GroundedPlanningProblem
-from app.domain.relations.service import RelationEvaluationContext, evaluate_relations
+from app.domain.relations.service import (
+    RelationEvaluationContext,
+    evaluate_relations,
+    index_relation_features,
+)
 
 from .network_subproblem import ScenarioCut, derive_network_cuts, evaluate_network_subproblem
 from .relation_terms import hard_relation_blocked, relation_objective, satisfaction_score
@@ -55,10 +63,9 @@ def _factor_key(factor: ConstraintFactor) -> str:
 def _candidate_is_selectable(candidate: Any) -> bool:
     """Return whether a grounded geometry may enter scenario selection.
 
-    ``pending`` is retained for compatibility with pre-v2 fixtures: it means
-    that GROUND did not have a constraint index, not that a violation was
-    proven.  An explicit failed/deferred/unknown status, however, must never
-    be promoted into a final planning feature.
+    ``pending`` means that GROUND did not have a constraint index. It is not a
+    proof of feasibility. An explicit failed/deferred/unknown status must
+    never be promoted into a final planning feature.
     """
 
     if not bool(getattr(candidate, "is_executable", False)):
@@ -79,7 +86,7 @@ def _candidate_is_selectable(candidate: Any) -> bool:
         return False
     status = str(getattr(candidate, "hard_constraint_status", "pending") or "pending")
     # A typed candidate with an unresolved hard-constraint status is evidence
-    # only.  Legacy untyped fixtures keep the old pending compatibility path.
+    # only; it cannot enter a planning scenario.
     if status == "pending" and str(getattr(candidate, "materialization_role", "") or ""):
         return False
     return status not in {
@@ -91,7 +98,7 @@ def _candidate_is_selectable(candidate: Any) -> bool:
 
 def _evaluate_assignment(
     problem: GroundedPlanningProblem,
-    selected: Mapping[str, str],
+    selected: Mapping[str, Sequence[str]],
     *,
     scenario_id: str,
     evaluator_context: RelationEvaluationContext,
@@ -111,10 +118,16 @@ def _evaluate_assignment(
         factors=problem.constraint_factors,
         source_refs=problem.source_artifact_refs,
     )
-    feature_index: dict[str, list[Any]] = {}
-    for feature in features:
-        for key in (feature.feature_id, feature.target_id, feature.candidate_id):
-            feature_index.setdefault(key, []).append(feature)
+    reference_features = list(
+        (getattr(evaluator_context, "reference_features", {}) or {}).values()
+    )
+    features.extend(
+        feature
+        for feature in reference_features
+        if str(getattr(feature, "scenario_id", "") or "")
+        in {"", scenario_id}
+    )
+    feature_index = index_relation_features(features)
 
     generic_factors: list[ConstraintFactor] = []
     network_results: list[RelationSatisfaction] = []
@@ -159,10 +172,10 @@ def _evaluate_assignment(
 
 def _choices(
     problem: GroundedPlanningProblem,
-) -> tuple[list[str], list[list[str]], list[str]]:
+) -> tuple[list[str], list[list[tuple[str, ...]]], list[str]]:
     geometry = {item.candidate_id: item for item in problem.candidate_geometries}
     targets: list[str] = []
-    options: list[list[str]] = []
+    options: list[list[tuple[str, ...]]] = []
     unavailable: list[str] = []
     for domain in sorted(problem.candidate_domains, key=lambda item: item.target_id):
         ids = sorted({item for item in domain.candidate_ids if item in geometry})
@@ -171,7 +184,10 @@ def _choices(
         ids = [item for item in ids if _candidate_is_selectable(geometry[item])]
         if ids:
             targets.append(domain.target_id)
-            options.append(ids)
+            if domain.selection_mode == "all_members":
+                options.append([tuple(ids)])
+            else:
+                options.append([(candidate_id,) for candidate_id in ids])
         else:
             # Candidate-only/unresolved domains are valid grounding evidence,
             # but they must be deferred independently instead of poisoning an
@@ -181,9 +197,9 @@ def _choices(
 
 
 def _prune_spatial_conflicts(
-    selected: Mapping[str, str],
+    selected: Mapping[str, Sequence[str]],
     candidates: Mapping[str, Any],
-) -> tuple[dict[str, str], list[tuple[str, str, str]]]:
+) -> tuple[dict[str, tuple[str, ...]], list[tuple[str, str, str]]]:
     """Keep a deterministic non-overlapping subset of exclusive footprints.
 
     Protection/restoration/functional overlays are intentionally non-exclusive
@@ -194,15 +210,13 @@ def _prune_spatial_conflicts(
     materializing overlapping geometry.
     """
     rows = []
-    for target_id, candidate_id in selected.items():
-        candidate = candidates.get(candidate_id)
-        if candidate is None:
-            continue
-        role = _candidate_materialization_role(candidate)
-        if role not in _EXCLUSIVE_MATERIALIZATION_ROLES:
+    for target_id, candidate_ids in selected.items():
+        for candidate_id in candidate_ids:
+            candidate = candidates.get(candidate_id)
+            if candidate is None:
+                continue
+            role = _candidate_materialization_role(candidate)
             rows.append((target_id, candidate_id, candidate, role))
-            continue
-        rows.append((target_id, candidate_id, candidate, role))
     # Higher-confidence/suitability candidates win; target/candidate IDs break
     # ties and keep replay fingerprints stable.
     rows.sort(
@@ -228,6 +242,8 @@ def _prune_spatial_conflicts(
         conflict = None
         if geometry is not None and not geometry.is_empty:
             for other_target, _other_candidate, other, other_role, other_geometry in kept:
+                if other_target == target_id:
+                    continue
                 if (
                     other_role not in _EXCLUSIVE_MATERIALIZATION_ROLES
                     or other_geometry is None
@@ -243,7 +259,13 @@ def _prune_spatial_conflicts(
             dropped.append((target_id, candidate_id, conflict))
             continue
         kept.append((target_id, candidate_id, candidate, role, geometry))
-    return {target_id: candidate_id for target_id, candidate_id, *_ in kept}, dropped
+    grouped: dict[str, list[str]] = {}
+    for target_id, candidate_id, *_ in kept:
+        grouped.setdefault(target_id, []).append(candidate_id)
+    return {
+        target_id: tuple(sorted(candidate_ids))
+        for target_id, candidate_ids in grouped.items()
+    }, dropped
 
 
 def _candidate_materialization_role(candidate: Any) -> str:
@@ -285,7 +307,6 @@ def _empty_failed(
     return build_planning_scenario(
         scenario_id=scenario_id,
         problem=problem,
-        selected_candidate_ids={},
         relation_satisfactions=satisfactions,
         features=[],
         findings=findings,
@@ -339,7 +360,7 @@ def solve_scenario(
     # Keep the search bounded; deterministic candidate order makes replay and
     # idempotency stable even when a project contains a large domain.
     candidate_combinations = product(*option_lists)
-    best: tuple[tuple[int, float, float, tuple[str, ...]], dict[str, str], list[Any], list[Any], list[tuple[str, str, str]], bool] | None = None
+    best: tuple[tuple[int, float, float, tuple[str, ...]], dict[str, tuple[str, ...]], list[Any], list[Any], list[tuple[str, str, str]], bool] | None = None
     inspected = 0
     hard_feasible_count = 0
     for choice in candidate_combinations:
@@ -370,9 +391,14 @@ def solve_scenario(
         if not hard_unresolved:
             hard_feasible_count += 1
         relation_score = relation_objective(problem.constraint_factors, satisfactions)
+        selected_ids = [
+            candidate_id
+            for candidate_ids in selected.values()
+            for candidate_id in candidate_ids
+        ]
         candidate_score = sum(
             _candidate_score(next(item for item in problem.candidate_geometries if item.candidate_id == candidate_id))
-            for candidate_id in selected.values()
+            for candidate_id in selected_ids
         )
         # Strictly feasible combinations always outrank provisional ones.
         # Deferred/not-evaluable hard relations remain auditable as partial
@@ -381,7 +407,7 @@ def solve_scenario(
             0 if hard_unresolved else 1,
             relation_score,
             candidate_score,
-            tuple(sorted(selected.values())),
+            tuple(sorted(selected_ids)),
         )
         if best is None or score > best[0]:
             best = (
@@ -448,10 +474,24 @@ def solve_scenario(
         if not unavailable and not spatial_conflicts and not hard_unresolved
         else "partial"
     )
+    domain_by_target = {
+        item.target_id: item
+        for item in problem.candidate_domains
+    }
+    target_selections = [
+        ScenarioTargetSelection(
+            target_id=target_id,
+            selection_mode=domain_by_target[target_id].selection_mode,
+            candidate_ids=list(candidate_ids),
+            binding_ref=domain_by_target[target_id].binding_ref,
+        )
+        for target_id, candidate_ids in sorted(selected.items())
+        if target_id in domain_by_target and candidate_ids
+    ]
     scenario = build_planning_scenario(
         scenario_id=scenario_id,
         problem=problem,
-        selected_candidate_ids=selected,
+        target_selections=target_selections,
         relation_satisfactions=satisfactions,
         features=features,
         findings=findings,

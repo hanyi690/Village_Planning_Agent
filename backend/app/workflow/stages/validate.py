@@ -213,6 +213,14 @@ async def validate_node(state: Dict[str, Any]) -> Dict[str, Any]:
     execution_result = _load_ref_artifact(state, "execution_result", ExecutionResult)
     scenario = _load_ref_artifact(state, "planning_scenario", PlanningScenario)
     grounding = _load_ref_artifact(state, "grounding_result", GroundingResult)
+    bundle_snapshot_digest = ""
+    workspace = getattr(context, "workspace", None)
+    bundle = getattr(workspace, "_bundle", None)
+    if bundle is not None and hasattr(bundle, "spatial_snapshot_digest"):
+        try:
+            bundle_snapshot_digest = str(bundle.spatial_snapshot_digest() or "")
+        except Exception:
+            bundle_snapshot_digest = ""
     if execution_result is not None:
         from app.workflow.stages.support import _load_embedded_artifact
 
@@ -227,13 +235,22 @@ async def validate_node(state: Dict[str, Any]) -> Dict[str, Any]:
         decision=selection,
         execution_plan=execution_plan,
         execution_result=execution_result,
+        bundle_snapshot_digest=bundle_snapshot_digest,
     )
     final_relation_validation = None
     if scenario is not None and getattr(grounding, "problem", None) is not None:
         from app.domain.relations.service import RelationEvaluationContext
+        from app.domain.relations.reference_features import (
+            resolve_relation_reference_features,
+        )
         from app.domain.validation.relation_validation import validate_final_scenario
         from app.domain.validation.validate_checks import check_relation_validation
 
+        reference_resolution = resolve_relation_reference_features(
+            context,
+            list(getattr(grounding.problem, "constraint_factors", None) or []),
+            scenario_id=str(getattr(scenario, "scenario_id", "") or ""),
+        )
         evaluator_context = RelationEvaluationContext(
             scenario_id=str(getattr(scenario, "scenario_id", "") or ""),
             metric_crs=str(
@@ -251,6 +268,8 @@ async def validate_node(state: Dict[str, Any]) -> Dict[str, Any]:
                 or getattr(context, "demand_snapshots", None)
                 or {}
             ),
+            reference_features=reference_resolution.features,
+            reference_diagnostics=reference_resolution.diagnostics,
             execution_trace=getattr(context, "execution_trace", None),
         )
         if planned_state is None:
@@ -281,6 +300,12 @@ async def validate_node(state: Dict[str, Any]) -> Dict[str, Any]:
                     message=check.actual_value or check.check_name,
                     detail=check.fix_suggestion,
                     check_id=check.check_id,
+                    actual_value=check.actual_value,
+                    expected_value=check.expected_value,
+                    affected_parcels=list(check.affected_parcels),
+                    affected_target_ids=list(check.affected_target_ids),
+                    evidence_refs=list(check.evidence_refs),
+                    fix_suggestion=check.fix_suggestion,
                 )
             )
         report.overall_passed = bool(
@@ -391,6 +416,51 @@ async def validate_node(state: Dict[str, Any]) -> Dict[str, Any]:
             gate = _override_gate_route(gate, "HUMAN", reason="typed_repair_blocked")
             next_action = _next_action_human("blocked", "typed_repair_blocked", reason)
 
+    failed_checks = [
+        check.model_dump(mode="json")
+        for check in report.checks
+        if not check.passed
+    ]
+    next_action_type = str(next_action.get("type") or "")
+    if report.overall_passed:
+        feedback_status = "passed"
+    elif next_action_type == "recompute":
+        feedback_status = "iteration_required"
+    elif next_action_type == "forward":
+        feedback_status = "partial_delivery"
+    else:
+        feedback_status = "human_required"
+    validation_feedback = {
+        "status": feedback_status,
+        "failed_checks": failed_checks,
+        "failed_count": len(failed_checks),
+        "affected_target_ids": sorted({
+            target_id
+            for check in report.checks
+            if not check.passed
+            for target_id in check.affected_target_ids
+            if target_id
+        }),
+        "affected_parcels": sorted({
+            parcel
+            for check in report.checks
+            if not check.passed
+            for parcel in check.affected_parcels
+            if parcel
+        }),
+        "evidence_refs": sorted({
+            ref
+            for check in report.checks
+            if not check.passed
+            for ref in check.evidence_refs
+            if ref
+        }),
+        "repair_impact": impact.model_dump(mode="json"),
+        "next_action": dict(next_action),
+        "feedback_route": str(getattr(gate, "feedback_route", "") or ""),
+        "route_reason": str(getattr(gate, "route_reason", "") or ""),
+    }
+
     return {
         **stage_completion_patch(
             state,
@@ -401,6 +471,7 @@ async def validate_node(state: Dict[str, Any]) -> Dict[str, Any]:
             retry_patch=retry_patch,
         ),
         "next_action": next_action,
+        "validation_feedback": validation_feedback,
         **patch,
     }
 

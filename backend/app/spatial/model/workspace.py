@@ -41,13 +41,21 @@ class SpatialWorkspace:
         return self._bundle.metadata
 
     @property
-    def input_documents(self) -> list[dict[str, Any]]:
-        """Structured planning inputs owned by the data bundle.
+    def input_document_refs(self) -> list[dict[str, Any]]:
+        """Compact input-source refs owned by the data bundle."""
+        return list(getattr(self._bundle.documents, "document_refs", []) or [])
 
-        Text is exposed only through the data context.  It is never copied
-        into LangGraph checkpoint state.
-        """
-        return list(getattr(self._bundle.documents, "input_documents", []) or [])
+    @property
+    def report_refs(self) -> list[dict[str, Any]]:
+        """Report manifest owned by the unified bundle retrieval boundary."""
+        return list(getattr(self._bundle.documents, "report_refs", []) or [])
+
+    def find_feature_by_bsm(self, bsm: str) -> tuple[str, str, Any] | None:
+        """Resolve one bundle feature without scanning every geometry layer."""
+        finder = getattr(self._bundle, "find_feature_by_bsm", None)
+        if callable(finder):
+            return finder(bsm)
+        return None
 
     @property
     def points(self) -> Any:

@@ -12,6 +12,7 @@ from rdflib.namespace import XSD
 
 from ..ontology import PLN, GEO, EntityTypes, Relations, SemanticPredicates
 from ..memory import SemanticMemoryStore
+from ..spatial_store import RdfSpatialKGIndex, SpatialKGStore
 
 
 @dataclass
@@ -31,6 +32,8 @@ class PlanningKG:
         self._parcel_count = 0
         self._constraint_index = None
         self.memory = SemanticMemoryStore()
+        self.spatial_index = RdfSpatialKGIndex()
+        self.spatial_store: SpatialKGStore = self.spatial_index
 
     def _reset_graph(self, constraint_index=None):
         self.g = Graph()
@@ -38,6 +41,46 @@ class PlanningKG:
         self.g.bind("geo", GEO)
         self._parcel_count = 0
         self._constraint_index = constraint_index
+        self.spatial_index = RdfSpatialKGIndex()
+        self.spatial_store = self.spatial_index
+
+    def rebuild_spatial_index(self) -> None:
+        """Build the bounded local lookup projection after KG materialization."""
+        self.spatial_index.rebuild(self.g)
+
+    def attach_spatial_store(self, store: SpatialKGStore) -> None:
+        """Route indexed entity/relation reads through a KG storage adapter.
+
+        The RDF graph remains the construction source and the local index is
+        always rebuilt first.  A production adapter such as PostGIS can then
+        be attached by session lifecycle code without changing evidence or
+        planner callers.  The adapter owns its own connection/transaction;
+        this object never opens a hidden connection.
+        """
+        if not callable(getattr(store, "find_entities", None)):
+            raise TypeError("spatial KG store must implement find_entities")
+        if not callable(getattr(store, "find_relations", None)):
+            raise TypeError("spatial KG store must implement find_relations")
+        self.spatial_store = store
+
+    def detach_spatial_store(self) -> None:
+        """Return reads to the process-local indexed RDF projection."""
+        self.spatial_store = self.spatial_index
+
+    @property
+    def spatial_storage_backend(self) -> str:
+        """Return the active physical implementation for diagnostics."""
+        if self.spatial_store is self.spatial_index:
+            return "rdf_memory"
+        return self.spatial_store.__class__.__name__
+
+    def find_entities(self, **filters: Any) -> list[Any]:
+        """Indexed entity lookup; callers should not scan RDF triples."""
+        return self.spatial_store.find_entities(**filters)
+
+    def find_relations(self, **filters: Any) -> list[Any]:
+        """Indexed relation lookup over the same KG topology store."""
+        return self.spatial_store.find_relations(**filters)
 
     def query(self, sparql: str) -> List[Dict[str, Any]]:
         try:
@@ -71,6 +114,11 @@ class PlanningKG:
         kg = cls(village_name=village_name)
         kg.g.parse(data=turtle_str, format="turtle")
         kg._parcel_count = len(list(kg.g.subjects(RDF.type, EntityTypes.Parcel)))
+        # CAS/session restore must expose the same indexed query surface as a
+        # freshly materialized KG.  Without rebuilding here, EvidenceGraph
+        # sees an empty entity/relation index after resume even though the RDF
+        # graph contains the complete snapshot.
+        kg.rebuild_spatial_index()
         return kg
 
     def get_adjacency_map(self) -> Dict[str, set]:
@@ -117,6 +165,7 @@ class PlanningKG:
             if s in l1_subjects or p in clone_predicates:
                 new_kg.g.add((s, p, o))
         new_kg._parcel_count = self._parcel_count
+        new_kg.rebuild_spatial_index()
         return new_kg
 
     def print_summary(self):

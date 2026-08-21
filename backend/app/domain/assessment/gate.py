@@ -15,6 +15,17 @@ from app.contracts.domain.l1_contracts import L1Snapshot
 from app.contracts.workflow.workflow_contracts import GateDecision, PendingRequest
 
 
+def _unverified_quantitative_facts(snapshot: L1Snapshot) -> list[str]:
+    """Find source-feature counts that cannot identify their source snapshot."""
+    refs: list[str] = []
+    for fact in snapshot.fact_records:
+        if fact.counting_basis != "source_feature" or fact.value is None:
+            continue
+        if not fact.source_snapshot_ref or not fact.source_feature_ids:
+            refs.append(fact.fact_id)
+    return refs
+
+
 def evaluate_l1_gate(
     snapshot: L1Snapshot,
     *,
@@ -48,6 +59,30 @@ def evaluate_l1_gate(
                 for i in contradictions
             ],
             context_version=cv, artifact_id=gate_artifact_id,
+        )
+
+    unverified_counts = _unverified_quantitative_facts(snapshot)
+    if unverified_counts:
+        return GateDecision(
+            stage=stage,
+            passed=False,
+            feedback_route="EXPLORE",
+            evidence_requests=[
+                "补齐定量事实的 source collection、snapshot 和 source feature IDs",
+            ],
+            pending_requests=[
+                PendingRequest(
+                    request_id="pr-l1-quantitative-lineage",
+                    stage="explore",
+                    request_type="evidence_gap",
+                    context={
+                        "reason": "quantitative source-feature facts lack valid lineage",
+                        "fact_refs": unverified_counts[:12],
+                    },
+                )
+            ],
+            context_version=cv,
+            artifact_id=gate_artifact_id,
         )
 
     actionable_gaps = [g for g in snapshot.evidence_gaps if g.severity in ("warning", "error")]

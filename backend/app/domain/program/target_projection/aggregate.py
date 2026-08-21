@@ -8,6 +8,8 @@ fail-closed gate.
 
 from __future__ import annotations
 
+from typing import Any
+
 from app.contracts.domain.l3_contracts import PlanningProgram
 from app.contracts.evidence.identity_contracts import (
     EvidenceObservation,
@@ -32,6 +34,7 @@ def project_program(
     observations: list[EvidenceObservation] | None = None,
     bindings: list[GroundedEntityBinding] | None = None,
     source_features: dict[str, list[object]] | None = None,
+    source_semantic_decisions: dict[str, Any] | None = None,
 ) -> tuple[IntentCompilationResult, list[SpatialReferenceSpec], GateDecision]:
     result, specs, diagnostics = compile_program_deterministic(
         program,
@@ -41,6 +44,7 @@ def project_program(
         observations=observations,
         bindings=bindings,
         source_features=source_features,
+        source_semantic_decisions=source_semantic_decisions,
     )
     gate = evaluate_target_projection_gate(
         result,
@@ -62,6 +66,7 @@ async def project_program_async(
     observations: list[EvidenceObservation] | None = None,
     bindings: list[GroundedEntityBinding] | None = None,
     source_features: dict[str, list[object]] | None = None,
+    source_semantic_decisions: dict[str, Any] | None = None,
 ) -> tuple[IntentCompilationResult, list[SpatialReferenceSpec], GateDecision]:
     """Async graph adapter; projection itself remains deterministic and pure."""
     return project_program(
@@ -71,6 +76,7 @@ async def project_program_async(
         observations=observations,
         bindings=bindings,
         source_features=source_features,
+        source_semantic_decisions=source_semantic_decisions,
     )
 
 

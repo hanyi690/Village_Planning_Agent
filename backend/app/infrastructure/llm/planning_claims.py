@@ -43,6 +43,7 @@ class PlanningClaimGenerator:
         prompt: str,
         *,
         validation_feedback: list[str] | None = None,
+        require_report_body: bool = True,
     ) -> L3DimensionOutput:
         """Call the provider and return the dual-response report + claims."""
 
@@ -76,10 +77,21 @@ class PlanningClaimGenerator:
                             {
                                 "role": "user",
                                 "content": (
-                                    "Return the PlanningClaimSet only." + feedback_text
+                                    (
+                                        "Return both the complete human-readable report_body "
+                                        "and the structured claims in the declared response model."
+                                        if require_report_body
+                                        else "Return the structured claims in the declared response model; "
+                                        "report_body may be empty for this bounded repair."
+                                    ) + feedback_text
                                     if attempt == 0
                                     else (
-                                        "Return valid function arguments only. Use strict JSON: "
+                                        (
+                                            "Return valid function arguments containing both the complete "
+                                            "human-readable report_body and the structured claims. "
+                                            if require_report_body
+                                            else "Return valid function arguments for the structured claims. "
+                                        ) + "Use strict JSON: "
                                         "double-quote every key and string, encode nested arrays as "
                                         "arrays, and omit markdown, comments, and trailing commas."
                                         + provider_error_feedback
@@ -96,10 +108,12 @@ class PlanningClaimGenerator:
                         semaphore_scope="l3",
                     )
                     if result is None:
-                        return L3DimensionOutput(report_body="", claims=[])
-                    if isinstance(result, L3DimensionOutput):
-                        return result
-                    return L3DimensionOutput.model_validate(result)
+                        output = L3DimensionOutput(report_body="", claims=[])
+                    elif isinstance(result, L3DimensionOutput):
+                        output = result
+                    else:
+                        output = L3DimensionOutput.model_validate(result)
+                    return output
                 except (ValidationError, TypeError, ValueError) as exc:
                     last_error = exc
                     if attempt >= retry_count:

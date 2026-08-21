@@ -31,6 +31,9 @@ class AllowedAreaParameters(RelationParameterBase):
 class AvoidConstraintParameters(RelationParameterBase):
     parameter_type: Literal["avoid_constraint"] = "avoid_constraint"
     constraint_refs: list[str] = Field(min_length=1)
+    # Linear constraints such as roads, rivers and control lines are
+    # evaluated as a metric exclusion corridor when a setback is declared.
+    buffer_m: float = Field(default=0.0, ge=0)
 
 
 class DistanceParameters(RelationParameterBase):

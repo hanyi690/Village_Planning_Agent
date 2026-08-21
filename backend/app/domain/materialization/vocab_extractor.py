@@ -1,4 +1,4 @@
-"""L3 报告 → session 功能区词汇表提取器（LLM 自由给色，确定性 fallback）。
+"""L3 报告 → session 功能区词汇表提取器。
 
 Migrated from agent/gis/vocab_extractor.py per docs/architecture/agent-graph.md §5.
 
@@ -12,9 +12,10 @@ LLM 边界：LLM 只产"类别定义"（名称/颜色自由给/地类线索/依�
 
 from __future__ import annotations
 
-import json
-import re
+import asyncio
 from typing import Any, Dict, List
+
+from pydantic import BaseModel, Field
 
 from app.contracts.domain.custom_zone_contracts import (
     TypingRule,
@@ -31,9 +32,31 @@ _COLOR_POOL = [
     "#f2994a", "#adb5bd", "#e85d75", "#f2c94c",
 ]
 
-_HEX_RE = re.compile(r"^#[0-9a-fA-F]{6}$")
-
 _PROTECTION_KEYWORDS = ("生态", "保护", "农田", "基本农田", "保育")
+
+
+class _VocabularyRuleOutput(BaseModel):
+    kind: str
+    value: Any = None
+    children: list["_VocabularyRuleOutput"] = Field(default_factory=list)
+
+
+class _VocabularyCategoryOutput(BaseModel):
+    name_zh: str
+    color: str = ""
+    dlbm_hints: list[str] = Field(default_factory=list)
+    is_protection: bool = False
+    rules: list[_VocabularyRuleOutput] = Field(default_factory=list)
+
+
+class _VocabularyOutput(BaseModel):
+    categories: list[_VocabularyCategoryOutput] = Field(default_factory=list)
+
+
+def _is_hex_color(value: str) -> bool:
+    if len(value) != 7 or value[0] != "#":
+        return False
+    return all(char in "0123456789abcdefABCDEF" for char in value[1:])
 
 
 def _is_protection(name: str) -> bool:
@@ -96,31 +119,30 @@ async def _extract_vocabulary_llm(llm: Any, reports: Dict[str, str]) -> Vocabula
     reports_text = "\n\n".join(f"[{k}]\n{v[:3000]}" for k, v in (reports or {}).items())
     prompt = _VOCAB_PROMPT.format(reports=reports_text[:9000])
 
-    resp = await llm.ainvoke(prompt)
-    content = getattr(resp, "content", "") or ""
-    m = re.search(r"\{.*\}", content, re.DOTALL)
-    if not m:
-        logger.warning("[VocabExtractor] LLM output not JSON: %s", content[:200])
-        raise ValueError("LLM output not JSON")
-    data = json.loads(m.group(0))
+    structured = llm.with_structured_output(_VocabularyOutput)
+    invoke = getattr(structured, "ainvoke", None)
+    if callable(invoke):
+        response = await invoke(prompt)
+    else:
+        response = await asyncio.to_thread(structured.invoke, prompt)
+    data = response if isinstance(response, _VocabularyOutput) else _VocabularyOutput.model_validate(response)
 
     categories: List[VocabularyCategory] = []
-    for item in data.get("categories") or []:
-        name = str(item.get("name_zh", "")).strip()
-        color = str(item.get("color", "")).strip()
+    for item in data.categories:
+        name = str(item.name_zh or "").strip()
+        color = str(item.color or "").strip()
         if not name:
             continue
-        if not _HEX_RE.match(color):
+        if not _is_hex_color(color):
             color = _COLOR_POOL[len(categories) % len(_COLOR_POOL)]
-        hints = [str(c) for c in (item.get("dlbm_hints") or [])][:6]
-        rules = _parse_rules(item.get("rules"), hints)
+        rules = _parse_rules(item.rules)
         categories.append(
             VocabularyCategory(
                 code=f"FZ{len(categories) + 1:02d}",
                 name_zh=name,
                 color=color,
-            typing_rules=rules,
-                is_protection=bool(item.get("is_protection")) or _is_protection(name),
+                typing_rules=rules,
+                is_protection=bool(item.is_protection) or _is_protection(name),
             )
         )
     return Vocabulary(name="l3_extracted", categories=categories)
@@ -132,23 +154,21 @@ _ALLOWED_KINDS = {
 }
 
 
-def _parse_rules(raw: Any, fallback_hints: List[str]) -> List[TypingRule]:
-    """LLM 输出 rules → TypingRule（有界谓词白名单，非法谓词丢弃）。"""
+def _parse_rules(raw: list[_VocabularyRuleOutput]) -> List[TypingRule]:
+    """Convert the typed LLM rule tree through the predicate whitelist."""
     if not isinstance(raw, list):
         return []
     rules: List[TypingRule] = []
     for item in raw:
-        if not isinstance(item, dict):
-            continue
-        kind = str(item.get("kind", ""))
+        kind = str(item.kind or "")
         if kind not in _ALLOWED_KINDS:
             continue
         if kind in ("and", "any", "not"):
-            children = _parse_rules(item.get("children") or item.get("rules"), [])
+            children = _parse_rules(item.children)
             if children:
                 rules.append(TypingRule(kind=kind, children=children))
         else:
-            value = item.get("value")
+            value = item.value
             if value is not None:
                 rules.append(TypingRule(kind=kind, value=value))
     return rules
@@ -160,45 +180,33 @@ async def extract_vocabulary_from_reports(
 ) -> Vocabulary:
     """Extract a session vocabulary from L3 reports.
 
-    Flash LLM when available (GIS_EXPLORE_LLM_ENABLED); deterministic table
-    extraction as fallback.  Caller registers the result per session.
+    Use typed LLM output when the LLM path is enabled or injected.  The
+    deterministic table compiler is available only when LLM extraction is
+    explicitly disabled; a provider failure is raised to the caller.
     """
     if llm is None:
         from app.core.settings import GIS_EXPLORE_LLM_ENABLED
 
-        if GIS_EXPLORE_LLM_ENABLED:
-            from app.infrastructure.llm.factory import create_llm
-            from app.core.settings import (
-                GIS_EXPLORE_MAX_TOKENS,
-                GIS_EXPLORE_MODEL,
-                GIS_EXPLORE_TEMPERATURE,
-            )
+        if not GIS_EXPLORE_LLM_ENABLED:
+            return extract_vocabulary_deterministic(reports)
+        from app.infrastructure.llm.factory import create_llm
+        from app.core.settings import (
+            GIS_EXPLORE_MAX_TOKENS,
+            GIS_EXPLORE_TEMPERATURE,
+        )
 
-            llm = create_llm(
-                model=None,
-                temperature=GIS_EXPLORE_TEMPERATURE,
-                max_tokens=GIS_EXPLORE_MAX_TOKENS,
-                streaming=False,
-            )
+        llm = create_llm(
+            model=None,
+            temperature=GIS_EXPLORE_TEMPERATURE,
+            max_tokens=GIS_EXPLORE_MAX_TOKENS,
+            streaming=False,
+        )
 
-    if llm is not None:
-        try:
-            llm_vocab = await _extract_vocabulary_llm(llm, reports)
-            # v5: 表格闭集 — 分区类别以 L3 报告分区表为唯一来源（防 LLM 编造），
-            # LLM 只增强已存在类别的 color/dlbm_hints/is_protection
-            det = extract_vocabulary_deterministic(reports)
-            if det.categories:
-                by_name = {c.name_zh: c for c in det.categories}
-                for c in llm_vocab.categories:
-                    if c.name_zh in by_name:
-                        by_name[c.name_zh].color = c.color
-                        by_name[c.name_zh].typing_rules = c.typing_rules or by_name[c.name_zh].typing_rules
-                        by_name[c.name_zh].is_protection = c.is_protection or by_name[c.name_zh].is_protection
-                return Vocabulary(name="l3_extracted", categories=list(by_name.values()))
-            logger.info("[VocabExtractor] no table categories, falling back to deterministic")
-        except Exception as e:
-            logger.warning("[VocabExtractor] LLM extraction failed: %s", e)
-    return extract_vocabulary_deterministic(reports)
+    try:
+        return await _extract_vocabulary_llm(llm, reports)
+    except Exception as exc:
+        logger.error("[VocabExtractor] typed LLM extraction failed: %s", exc)
+        raise RuntimeError("typed_vocabulary_extraction_failed") from exc
 
 
 def register_session_vocabulary(session_id: str, vocab: Vocabulary) -> str:

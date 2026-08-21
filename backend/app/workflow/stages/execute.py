@@ -152,6 +152,10 @@ def _mark_require_evidence_unresolved(
                         ),
                     }
                 ],
+                feature_bsms=list(getattr(task, "feature_bsms", None) or []) if task is not None else [],
+                evidence_refs=list(getattr(task, "evidence_refs", None) or []) if task is not None else [],
+                l1_snapshot_ref=str(getattr(task, "l1_snapshot_ref", "") or "") if task is not None else "",
+                bundle_snapshot_digest=str(getattr(task, "bundle_snapshot_digest", "") or "") if task is not None else "",
             )
         )
         marked += 1
@@ -393,11 +397,17 @@ def _task_results_from_execution(execution_plan: Any, result: Dict[str, Any]) ->
                 if task_records and not isinstance(task_records[-1], dict)
                 else str((task_records[-1].get("candidate_id", "") if task_records else "") or "")
             ),
+            candidate_ids=list(getattr(task, "candidate_ids", None) or []),
             relation_ids=(
                 list(getattr(task_records[-1], "relation_ids", []) or [])
                 if task_records and not isinstance(task_records[-1], dict)
                 else list((task_records[-1].get("relation_ids", []) if task_records else []) or [])
             ),
+            feature_bsms=list(getattr(task, "feature_bsms", None) or []),
+            evidence_refs=list(getattr(task, "evidence_refs", None) or []),
+            l1_snapshot_ref=str(getattr(task, "l1_snapshot_ref", "") or ""),
+            bundle_snapshot_digest=str(getattr(task, "bundle_snapshot_digest", "") or ""),
+            source_binding_ref=str(getattr(task, "source_binding_ref", "") or ""),
             errors=[str(item) for item in task_errors] + (
                 list(getattr(task_records[-1], "errors", []) if not isinstance(task_records[-1], dict) else task_records[-1].get("errors", []))
                 if task_records else []
@@ -410,6 +420,13 @@ def _task_results_from_execution(execution_plan: Any, result: Dict[str, Any]) ->
             target_id=str(getattr(task, "target_id", "")),
             status="deferred",
             expected_output_kind=getattr(task, "expected_output_kind", "parcel"),
+            candidate_id=str(getattr(task, "candidate_id", "") or ""),
+            candidate_ids=list(getattr(task, "candidate_ids", None) or []),
+            feature_bsms=list(getattr(task, "feature_bsms", None) or []),
+            evidence_refs=list(getattr(task, "evidence_refs", None) or []),
+            l1_snapshot_ref=str(getattr(task, "l1_snapshot_ref", "") or ""),
+            bundle_snapshot_digest=str(getattr(task, "bundle_snapshot_digest", "") or ""),
+            source_binding_ref=str(getattr(task, "source_binding_ref", "") or ""),
         ))
     return {
         "task_results": task_results,
@@ -710,6 +727,39 @@ async def execute_node(state: Dict[str, Any]) -> Dict[str, Any]:
     )
     if diagnostics_ref:
         working_state["artifact_refs"]["execution_diagnostics"] = diagnostics_ref
+    task_result_records = list(outcome.get("task_results", []) or [])
+    bundle_snapshot_digests = sorted(
+        {
+            str(
+                getattr(item, "bundle_snapshot_digest", "")
+                if not isinstance(item, dict)
+                else item.get("bundle_snapshot_digest", "")
+            )
+            for item in task_result_records
+            if str(
+                getattr(item, "bundle_snapshot_digest", "")
+                if not isinstance(item, dict)
+                else item.get("bundle_snapshot_digest", "")
+            ).strip()
+        }
+    )
+    execution_evidence_refs = sorted(
+        {
+            str(ref)
+            for item in task_result_records
+            for ref in (
+                getattr(item, "evidence_refs", [])
+                if not isinstance(item, dict)
+                else item.get("evidence_refs", [])
+            )
+            if str(ref).strip()
+        }
+    )
+    lineage_diagnostics = (
+        [{"code": "mixed_bundle_snapshot", "digests": bundle_snapshot_digests}]
+        if len(bundle_snapshot_digests) > 1
+        else []
+    )
     execution_result = ExecutionResult(
         execution_plan_ref=(state.get("artifact_refs") or {}).get("execution_plan", {}),
         parcel_changeset_ref=parcel_changeset_ref,
@@ -717,7 +767,7 @@ async def execute_node(state: Dict[str, Any]) -> Dict[str, Any]:
         layout_configs_ref=layout_configs_ref,
         task_results=list(outcome.get("task_results", []) or []),
         action_results=list(outcome.get("action_results", []) or []),
-        diagnostics=list(outcome.get("diagnostics", []) or []) + (
+        diagnostics=list(outcome.get("diagnostics", []) or []) + lineage_diagnostics + (
             [{"l4_write": _jsonable(l4_write_result)}] if l4_write_result else []
         ),
         scenario_id=scenario_id,
@@ -731,6 +781,10 @@ async def execute_node(state: Dict[str, Any]) -> Dict[str, Any]:
                 ]
             )
         ),
+        bundle_snapshot_digest=(
+            bundle_snapshot_digests[0] if len(bundle_snapshot_digests) == 1 else ""
+        ),
+        evidence_refs=execution_evidence_refs,
     )
     execution_result_ref = persist_stage_artifact(
         working_state, "execute", "ExecutionResult", execution_result

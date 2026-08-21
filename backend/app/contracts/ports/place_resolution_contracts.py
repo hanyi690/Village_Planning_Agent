@@ -22,13 +22,23 @@ class PlaceResolutionCandidate(BaseModel):
 
     entity_ref: str
     entity_type: str
+    role: str = ""
     canonical_name: str
     aliases: list[str] = []
     geometry_ref: str | None = None
+    feature_bsm: str | None = None
+    source_feature_id: str | None = None
+    source_layer: str | None = None
+    source_bsm: str | None = None
+    anchor_bsms: list[str] = []
+    related_parcel_bsms: list[str] = []
     source_bsms: list[str] = []
     score: float
     evidence_refs: list[str] = []
     relation_refs: list[str] = []
+    l1_fact_refs: list[str] = []
+    l1_snapshot_ref: str = ""
+    bundle_snapshot_digest: str = ""
     evidence: dict[str, float] = {}
 
 
@@ -98,11 +108,20 @@ class PlaceEvidenceEntry(BaseModel):
     entity_refs: list[str] = []
     entity_types: list[str] = []
     role: str = "unknown"
+    feature_bsm: str | None = None
+    source_feature_id: str | None = None
+    source_layer: str | None = None
+    source_bsm: str | None = None
+    anchor_bsms: list[str] = []
+    related_parcel_bsms: list[str] = []
     source_bsms: list[str] = []
     geometry_ref: str | None = None
     provenance: list[str] = []
     confidence: float = 0.0
     relation_refs: list[str] = []
+    l1_fact_refs: list[str] = []
+    l1_snapshot_ref: str = ""
+    bundle_snapshot_digest: str = ""
 
 
 __all__ = [

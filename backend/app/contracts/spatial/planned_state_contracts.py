@@ -18,8 +18,12 @@ class PlannedParcel(BaseModel):
     planning_land_use: str = ""
     zone_type: str = ""
     area_ha: float = 0.0
+    source_area_ha: float = 0.0
+    coverage_ratio: float | None = None
     geometry: str = ""  # WKT
+    crs: str = ""
     derived_from_bsms: list[str] = Field(default_factory=list)
+    source_bsms: list[str] = Field(default_factory=list)
     derived_from_zone_target: str = ""
     source_spec: str = ""
     decided_by: str = ""
@@ -37,6 +41,15 @@ class PlannedParcel(BaseModel):
     feature_id: str = ""
     materialization_role: str = ""
     source_refs: list[str] = Field(default_factory=list)
+    feature_bsms: list[str] = Field(default_factory=list)
+    source_feature_ids: list[str] = Field(default_factory=list)
+    entity_refs: list[str] = Field(default_factory=list)
+    relation_refs: list[str] = Field(default_factory=list)
+    evidence_refs: list[str] = Field(default_factory=list)
+    l1_snapshot_ref: str = ""
+    bundle_snapshot_digest: str = ""
+    subgeometry_operation: str = "bundle_extent"
+    subgeometry_diagnostics: list[str] = Field(default_factory=list)
 
 
 class PlannedZone(BaseModel):
@@ -77,6 +90,13 @@ class PlannedZoneOverlay(BaseModel):
     scenario_id: str = ""
     feature_id: str = ""
     lineage_id: str = ""
+    feature_bsms: list[str] = Field(default_factory=list)
+    source_feature_ids: list[str] = Field(default_factory=list)
+    entity_refs: list[str] = Field(default_factory=list)
+    relation_refs: list[str] = Field(default_factory=list)
+    evidence_refs: list[str] = Field(default_factory=list)
+    l1_snapshot_ref: str = ""
+    bundle_snapshot_digest: str = ""
 
 
 class CoverageDomain(BaseModel):
@@ -104,6 +124,13 @@ class PlannedFacility(BaseModel):
     source_refs: list[str] = Field(default_factory=list)
     source_bsms: list[str] = Field(default_factory=list)
     geometry_ref: str = ""
+    feature_bsms: list[str] = Field(default_factory=list)
+    source_feature_ids: list[str] = Field(default_factory=list)
+    entity_refs: list[str] = Field(default_factory=list)
+    relation_refs: list[str] = Field(default_factory=list)
+    evidence_refs: list[str] = Field(default_factory=list)
+    l1_snapshot_ref: str = ""
+    bundle_snapshot_digest: str = ""
 
 
 class PlannedRoad(BaseModel):
@@ -118,6 +145,13 @@ class PlannedRoad(BaseModel):
     lineage_id: str = ""
     relation_ids: list[str] = Field(default_factory=list)
     source_refs: list[str] = Field(default_factory=list)
+    feature_bsms: list[str] = Field(default_factory=list)
+    source_feature_ids: list[str] = Field(default_factory=list)
+    entity_refs: list[str] = Field(default_factory=list)
+    relation_refs: list[str] = Field(default_factory=list)
+    evidence_refs: list[str] = Field(default_factory=list)
+    l1_snapshot_ref: str = ""
+    bundle_snapshot_digest: str = ""
 
 
 class PlannedAxis(BaseModel):
@@ -132,6 +166,13 @@ class PlannedAxis(BaseModel):
     lineage_id: str = ""
     relation_ids: list[str] = Field(default_factory=list)
     source_refs: list[str] = Field(default_factory=list)
+    feature_bsms: list[str] = Field(default_factory=list)
+    source_feature_ids: list[str] = Field(default_factory=list)
+    entity_refs: list[str] = Field(default_factory=list)
+    relation_refs: list[str] = Field(default_factory=list)
+    evidence_refs: list[str] = Field(default_factory=list)
+    l1_snapshot_ref: str = ""
+    bundle_snapshot_digest: str = ""
 
 
 class PlannedProjectPoint(BaseModel):

@@ -7,12 +7,18 @@ from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from app.contracts.evidence.evidence_contracts import (
+    EvidenceBundle,
+    SpatialCognitionEvidence,
+)
+from app.contracts.evidence.evidence_packet_contracts import EvidencePacket
+
 
 class PublicModel(BaseModel):
     model_config = ConfigDict(extra='forbid', strict=True)
 
 
-DeliveryStatus = Literal['complete', 'partial', 'diagnostic_only']
+DeliveryStatus = Literal['complete', 'partial', 'diagnostic_only', 'no_planning_output']
 SessionRunStatus = Literal[
     'pending', 'running', 'paused', 'reviewing', 'revising', 'completed', 'failed'
 ]
@@ -47,6 +53,31 @@ class SessionCreated(PublicModel):
     status: Literal['running'] = 'running'
 
 
+class HistorySession(PublicModel):
+    """Minimal persisted-session metadata exposed to the history sidebar."""
+
+    session_id: str
+    timestamp: str
+    checkpoint_count: int = Field(default=0, ge=0)
+    has_final_report: bool = False
+
+
+class HistoryProject(PublicModel):
+    """A project grouped with its persisted planning sessions."""
+
+    name: str
+    display_name: str
+    session_count: int = Field(default=0, ge=0)
+    sessions: list[HistorySession] = Field(default_factory=list)
+
+
+class HistoryProjectList(PublicModel):
+    """Stable response for the restart-safe planning history list."""
+
+    schema_version: Literal['1.0'] = '1.0'
+    projects: list[HistoryProject] = Field(default_factory=list)
+
+
 class DeliveryProjection(PublicModel):
     schema_version: Literal['1.0'] = '1.0'
     session_id: str
@@ -75,6 +106,58 @@ class MapLayerCollection(PublicModel):
     snapshot_checksum: str = ''
     delivery_status: DeliveryStatus | None = None
     layers: list[MapLayer] = Field(default_factory=list)
+
+
+class CurrentSourceLayer(PublicModel):
+    """A configured, authoritative current-state vector source."""
+
+    source_name: str
+    source_layer_type: str
+    layer_type: str
+    layer_name: str
+    display_role: str
+    data_authority: Literal['authoritative_current'] = 'authoritative_current'
+    requirement: Literal['baseline', 'mandatory', 'conditional', 'reference'] = 'baseline'
+    crs: str = 'EPSG:4326'
+    feature_count: int = Field(default=0, ge=0)
+    geojson: dict[str, Any]
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class CurrentSourceRaster(PublicModel):
+    """Safe public manifest for a configured raster source.
+
+    The local filesystem path is intentionally not exposed. Consumers use the
+    manifest to explain availability while terrain analysis reads the raster
+    through the backend catalog.
+    """
+
+    source_name: str
+    layer_name: str
+    layer_type: Literal['dem', 'dom']
+    format: str = ''
+    crs: str = ''
+    available: bool = False
+    resolution: float | None = None
+    width: int | None = None
+    height: int | None = None
+    bands: int | None = None
+    dtype: str = ''
+    bounds: dict[str, float] = Field(default_factory=dict)
+    source_ref: str = ''
+    reason: str = ''
+
+
+class CurrentSourceLayerCollection(PublicModel):
+    """Catalog-backed current GIS context, separate from DELIVER output."""
+
+    schema_version: Literal['1.0'] = '1.0'
+    village_name: str
+    source: Literal['data_catalog'] = 'data_catalog'
+    center: list[float] | None = None
+    layers: list[CurrentSourceLayer] = Field(default_factory=list)
+    rasters: list[CurrentSourceRaster] = Field(default_factory=list)
+    diagnostics: list[str] = Field(default_factory=list)
 
 
 class HumanReviewProjection(PublicModel):
@@ -179,8 +262,39 @@ class EventSyncResponse(PublicModel):
     resync_required: bool = False
 
 
+class EvidenceQueryRequest(PublicModel):
+    """Frontend-safe request for the unified KG/bundle/L1 evidence path."""
+
+    query: str = Field(min_length=1)
+    village_name: str = ""
+    request_type: Literal["spatial_lookup", "fact_check", "evidence_gap"] = "spatial_lookup"
+    stage: str = "GROUND"
+    dimension_key: str = ""
+    query_purpose: str = "fact_check"
+    context_refs: list[str] = Field(default_factory=list)
+    questions: list[str] = Field(default_factory=list)
+    required_facts: list[str] = Field(default_factory=list)
+    entity_scope: list[str] = Field(default_factory=list)
+    candidate_offset: int = Field(default=0, ge=0)
+    candidate_limit: int = Field(default=12, ge=1, le=64)
+    include_external: bool = False
+    external_categories: list[str] = Field(default_factory=list, max_length=8)
+
+
+class EvidenceQueryResponse(PublicModel):
+    """Bounded answer that can be rendered by the map and planning UI."""
+
+    schema_version: Literal["1.0"] = "1.0"
+    session_id: str
+    request: str
+    evidence_bundle: EvidenceBundle
+    spatial_cognition: SpatialCognitionEvidence | None = None
+    evidence_packet: EvidencePacket | None = None
+
+
 __all__ = [
     'ApiError', 'DeliveryProjection', 'EventSyncResponse', 'HumanReviewDecision',
     'HumanReviewProjection', 'MapLayer', 'MapLayerCollection', 'PublicEvent',
     'ResourceLinks', 'ResumeAccepted', 'ResumeRequest', 'SessionCreated', 'SessionProjection',
+    'EvidenceQueryRequest', 'EvidenceQueryResponse',
 ]

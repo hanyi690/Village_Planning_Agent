@@ -48,8 +48,8 @@ async def resume_session(session_id: str, request: ResumeRequest) -> ResumeAccep
     )
 
 
-from . import artifacts, delivery, events, human_review, map_layers, sessions, state  # noqa: E402,F401
-from .artifacts import get_artifact  # noqa: E402,F401
+from . import artifacts, dependency_graph, delivery, events, evidence, history, human_review, map_layers, sessions, source_layers, state, trace  # noqa: E402,F401
+from .artifacts import get_artifact, list_artifacts  # noqa: E402,F401
 from .delivery import get_delivery  # noqa: E402,F401
 from .events import stream_events, sync_events  # noqa: E402,F401
 from .human_review import get_review, submit_review  # noqa: E402,F401
@@ -75,7 +75,12 @@ router.include_router(events.router)
 router.include_router(human_review.router)
 router.include_router(delivery.router)
 router.include_router(map_layers.router)
+router.include_router(source_layers.router)
 router.include_router(artifacts.router)
+router.include_router(dependency_graph.router)
+router.include_router(evidence.router)
+router.include_router(history.router)
+router.include_router(trace.router)
 
 
 __all__ = [
@@ -83,6 +88,7 @@ __all__ = [
     "create_session",
     "delivery_projections",
     "get_artifact",
+    "list_artifacts",
     "get_delivery",
     "get_map_layers",
     "get_review",

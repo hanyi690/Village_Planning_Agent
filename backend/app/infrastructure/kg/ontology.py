@@ -34,19 +34,24 @@ controls_use, protects, adjacent_to, location_constraint.
           - EntityTypes.l1_static(), geo_feature_types(), geo_subclass_decls() for TBox grouping
           - Relations.spatial(), SemanticPredicates.cognition_predicates() for clone_static_layer
           - Entity types: 18 total (active)
-            L1: Parcel, Zone, Village, Facility, Road, WaterBody,
+    L1: Parcel, Zone, Village, Facility, Road, AdministrativeBoundary,
+                ContourLine, WaterBody,
                 AdministrativeVillage, ResidentialCluster, GisLayerSet, PlaceRef, RasterDataset
             L3: ZoneTarget, FacilityTarget, AxisTarget, RoadTarget
             L4: PlannedParcel, PlannedZone, PlannedFacility, PlannedRoad, PlannedAxis
 
 Relations: 8 total (v4.9 GeoSPARQL aligned)
-  Spatial: geo:sfTouches, pln:nearby, pln:connected_via_road, geo:sfWithin, geo:sfIntersects, geo:sfContains
+  Spatial: geo:sfTouches, pln:nearby, pln:near, pln:same_coordinate,
+           pln:co_located, pln:overlaps, pln:connected_via_road,
+           geo:sfWithin, geo:sfIntersects, geo:sfContains
   Semantic: pln:derived_from, pln:serves
   (within_zone, designated_as, connects, delineates kept for backward compat but not in active set)
 """
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+from typing import Iterable
 from urllib.parse import quote
 
 from rdflib import Literal, Namespace, URIRef
@@ -128,7 +133,7 @@ class EntityIdPolicy:
 
 
 class EntityTypes:
-    """20 active entity type URIs for the planning ontology (v6.0).
+    """Active entity type URIs for the planning ontology (v6.0).
 
     v4.6: removed Constraint, PlanningIndicator, ControlRule, LandUseCategory,
     PlanIntent, Axis (non-spatial). Added RoadTarget (L3), PlannedZone,
@@ -147,6 +152,8 @@ class EntityTypes:
     Village = PLN.Village
     Facility = PLN.Facility
     Road = PLN.Road
+    AdministrativeBoundary = PLN.AdministrativeBoundary
+    ContourLine = PLN.ContourLine
     WaterBody = PLN.WaterBody
     AdministrativeVillage = PLN.AdministrativeVillage
     ResidentialCluster = PLN.ResidentialCluster
@@ -171,10 +178,11 @@ class EntityTypes:
 
     @classmethod
     def all(cls) -> list:
-        """Active entity types (19)."""
+        """Return all active entity types, including spatial and planning types."""
         return [
             cls.Parcel, cls.Zone, cls.Village, cls.Facility, cls.Road, cls.WaterBody,
-            cls.AdministrativeVillage, cls.ResidentialCluster, cls.ControlLine, cls.GisLayerSet,
+            cls.AdministrativeVillage, cls.ResidentialCluster, cls.ControlLine,
+            cls.AdministrativeBoundary, cls.ContourLine, cls.GisLayerSet,
             cls.ZoneTarget, cls.FacilityTarget, cls.AxisTarget, cls.RoadTarget,
             cls.LinearTarget,
             cls.SiteAreaTarget,
@@ -186,7 +194,8 @@ class EntityTypes:
     def spatial_l1(cls) -> list:
         """L1 spatial entity types (have geometry, carry BSM). Excludes GisLayerSet."""
         return [
-            cls.Parcel, cls.Zone, cls.Village, cls.Facility, cls.Road, cls.WaterBody,
+            cls.Parcel, cls.Zone, cls.Village, cls.Facility, cls.Road,
+            cls.AdministrativeBoundary, cls.ContourLine, cls.WaterBody,
             cls.AdministrativeVillage, cls.ResidentialCluster, cls.ControlLine,
         ]
 
@@ -195,7 +204,8 @@ class EntityTypes:
         """L1 entity types that persist in the static (cacheable) layer."""
         return {
             cls.AdministrativeVillage, cls.Parcel, cls.Road,
-            cls.WaterBody, cls.Facility, cls.ControlLine,
+            cls.AdministrativeBoundary, cls.ContourLine, cls.WaterBody,
+            cls.Facility, cls.ControlLine,
             cls.ResidentialCluster, cls.Zone, cls.GisLayerSet,
             cls.PlaceRef, cls.RasterDataset,
         }
@@ -204,8 +214,9 @@ class EntityTypes:
     def geo_feature_types(cls) -> list:
         """L1 entity types that are geo:Feature subclasses (have real geometry)."""
         return [
-            cls.Parcel, cls.Road, cls.WaterBody, cls.Facility,
-            cls.ControlLine, cls.ResidentialCluster, cls.Zone,
+            cls.Parcel, cls.Road, cls.AdministrativeBoundary, cls.ContourLine,
+            cls.WaterBody, cls.Facility, cls.ControlLine,
+            cls.ResidentialCluster, cls.Zone,
             cls.PlaceRef,
         ]
 
@@ -230,6 +241,10 @@ class Relations:
     # Spatial topology (GeoSPARQL standard)
     sfTouches = GEO.sfTouches
     nearby = PLN.nearby
+    near = PLN.near
+    same_coordinate = PLN.same_coordinate
+    co_located = PLN.co_located
+    overlaps = PLN.overlaps
     connected_via_road = PLN.connected_via_road
     sfWithin = GEO.sfWithin
     sfIntersects = GEO.sfIntersects
@@ -244,7 +259,8 @@ class Relations:
     def all(cls) -> list:
         """Active relations (8)."""
         return [
-            cls.sfTouches, cls.nearby, cls.connected_via_road,
+            cls.sfTouches, cls.nearby, cls.near, cls.same_coordinate,
+            cls.co_located, cls.overlaps, cls.connected_via_road,
             cls.sfWithin, cls.sfIntersects, cls.sfContains,
             cls.derived_from, cls.serves,
         ]
@@ -253,7 +269,8 @@ class Relations:
     def spatial(cls) -> set:
         """Spatial relation predicates (used in clone_static_layer)."""
         return {
-            cls.sfTouches, cls.nearby, cls.connected_via_road,
+            cls.sfTouches, cls.nearby, cls.near, cls.same_coordinate,
+            cls.co_located, cls.overlaps, cls.connected_via_road,
             cls.sfWithin, cls.sfIntersects, cls.sfContains,
         }
 
@@ -308,6 +325,70 @@ class SemanticPredicates:
             cls.taxonomic_parent, cls.legal_constraint, cls.allowed_operations,
             cls.overlap_pct,
         }
+
+
+@dataclass(frozen=True)
+class BusinessFeatureSelector:
+    """Select source-backed business features by their complete GIS identity.
+
+    ``rdf:type`` intentionally remains a broad compatibility classification:
+    lines such as roads, administrative boundaries, and contours can share a
+    legacy type during migration. Business queries must use this selector so
+    that the registry type, semantic group, geometry kind, and source identity
+    are all part of the selection contract.
+    """
+
+    gis_type_ref: str
+    semantic_group: str
+    geometry_kind: str
+
+    @classmethod
+    def current_road(cls) -> "BusinessFeatureSelector":
+        """The authoritative selector for present-state transport roads."""
+        return cls("road", "transport", GEOMETRY_LINE)
+
+    @classmethod
+    def current_facility(cls) -> "BusinessFeatureSelector":
+        """The authoritative selector for present-state point facilities."""
+        return cls("current_facility", "facility", GEOMETRY_POINT)
+
+    def matches(self, graph, subject) -> bool:
+        """Return whether ``subject`` satisfies this complete feature contract."""
+        required_dimensions = (
+            (SemanticPredicates.gis_type_ref, self.gis_type_ref),
+            (SemanticPredicates.semantic_group, self.semantic_group),
+            (SemanticPredicates.geometry_kind, self.geometry_kind),
+        )
+        if any((subject, predicate, Literal(value)) not in graph for predicate, value in required_dimensions):
+            return False
+        def has_non_empty_value(predicate) -> bool:
+            return any(str(value).strip() for value in graph.objects(subject, predicate))
+
+        if not has_non_empty_value(PLN.source_feature_id):
+            return False
+        has_dataset = any(
+            has_non_empty_value(predicate)
+            for predicate in (PLN.source_dataset, PLN.source_uri)
+        )
+        has_snapshot = any(
+            has_non_empty_value(predicate)
+            for predicate in (PLN.source_snapshot_ref, PLN.source_content_digest)
+        )
+        return has_dataset and has_snapshot
+
+    def select(self, graph) -> Iterable[URIRef]:
+        """Yield every graph resource satisfying this selector exactly."""
+        for subject in graph.subjects(
+            SemanticPredicates.gis_type_ref,
+            Literal(self.gis_type_ref),
+        ):
+            if self.matches(graph, subject):
+                yield subject
+
+
+def select_business_features(graph, selector: BusinessFeatureSelector) -> list[URIRef]:
+    """Materialize a complete-GIS-identity selection for a business query."""
+    return list(selector.select(graph))
 
 
 class GeoPredicates:

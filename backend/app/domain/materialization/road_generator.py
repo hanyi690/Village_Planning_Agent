@@ -12,7 +12,6 @@ from __future__ import annotations
 
 import json
 import hashlib
-import re
 from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 from urllib.parse import unquote, urlparse
@@ -90,7 +89,12 @@ def _read_json(path: Path) -> Any:
 
 
 def _normalise(value: Any) -> str:
-    return re.sub(r"[\s_（）()、，,。；;:：\-—]+", "", str(value or "")).lower()
+    separators = set("_（）()、，,。；;:：-—")
+    return "".join(
+        char
+        for char in str(value or "")
+        if not char.isspace() and char not in separators
+    ).lower()
 
 
 def _fc(features: Sequence[Dict[str, Any]], crs: str = "EPSG:4326", name: str = "features") -> Dict[str, Any]:
@@ -369,13 +373,13 @@ def _write_optional_json_payload(root: Path, name: str, payload: Any) -> Optiona
     return path
 
 
-def _default_kg_retry_adapter(state: Any, gis_data: Mapping[str, Any]) -> Tuple[Optional[Any], Optional[str]]:
+def _kg_retry_adapter(state: Any, gis_data: Mapping[str, Any]) -> Tuple[Optional[Any], Optional[str]]:
     """Create the standard RDFLib retry adapter from the active planning KG.
 
-    A caller-supplied adapter remains the explicit integration point.  This
-    fallback makes the existing session KG useful without requiring the road
-    workflow to know the team's SPARQL service API.  It intentionally does not
-    deserialize ``kg_turtle``: only an already-built KG may confirm a target.
+    A caller-supplied adapter remains the explicit integration point.  The
+    session KG is resolved through its typed interface; raw ``kg_turtle`` is
+    never deserialized here because only an already-built KG may confirm a
+    target.
     """
 
     kg = (
@@ -530,7 +534,12 @@ def _artifact_local_path(evidence: RoadArtifactEvidence) -> Optional[Path]:
         raw_path = unquote(parsed.path)
         if parsed.netloc:
             raw_path = f"//{parsed.netloc}{raw_path}"
-        if re.fullmatch(r"/[A-Za-z]:/.*", raw_path):
+        if (
+            len(raw_path) >= 3
+            and raw_path[0] == "/"
+            and raw_path[1].isalpha()
+            and raw_path[2] == ":"
+        ):
             raw_path = raw_path[1:]
         path = Path(raw_path)
     elif not parsed.scheme:
@@ -724,7 +733,7 @@ def execute_road_planning_from_agent_state(state: Any) -> Dict[str, Any]:
         kg_retry_adapter = None
         kg_retry_adapter_source = None
     if kg_retry_adapter is None:
-        kg_retry_adapter, kg_retry_adapter_source = _default_kg_retry_adapter(state, gis_data)
+        kg_retry_adapter, kg_retry_adapter_source = _kg_retry_adapter(state, gis_data)
     if kg_retry_response_path is not None:
         manual_confirmation_path = None
     kg_retry_normalised_path = (

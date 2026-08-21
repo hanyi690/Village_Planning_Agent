@@ -484,6 +484,13 @@ def add_annotations(kg, annotations: list):
                     service_radius=0.0,
                     category="public_service",
                 )
+            # The annotation adapter may construct a typed facility from
+            # ``model_extra`` without carrying the canonical bundle identity.
+            # Bundle BSM is authoritative and must be restored before the KG
+            # URI/provenance is created; otherwise a real facility is left
+            # with only a source-feature URI and cannot answer a BSM query.
+            if not str(getattr(facility, "bsm", "") or "").strip():
+                facility.bsm = str(getattr(ann, "bsm", "") or "").strip()
             bsm = str(facility.bsm).strip()
             ysdm = str(facility.ysdm).strip()
             source_feature_id = _source_feature_provenance(ann).get("source_feature_id")
@@ -507,7 +514,7 @@ def add_annotations(kg, annotations: list):
                     facility.geometry,
                     allowed_types=("Point",),
                 )
-            kg.g.add((fac_uri, Relations.serves, Literal(facility.category or "public_service")))
+            kg.g.add((fac_uri, PLN.service_category, Literal(facility.category or "public_service")))
             kg.g.add((fac_uri, Relations.sfWithin, PLN.village))
             kg.g.add((PLN.village, PLN.has_facility, fac_uri))
             add_geo_feature_type(kg.g, fac_uri)
@@ -518,13 +525,18 @@ def add_annotations(kg, annotations: list):
             ysdm = str(ann.ysdm).strip()
             uri = EntityIdPolicy.fallback_uri("external_road", ysdm, vc)
             EntityIdPolicy.attach_bsm(kg.g, uri, bsm)
-            kg.g.add((uri, RDF.type, EntityTypes.Road))
+            # A named road POI is a point reference, not a current road
+            # geometry.  Keep it spatially queryable without promoting it to
+            # the executable Road business type.
+            kg.g.add((uri, RDF.type, EntityTypes.PlaceRef))
             kg.g.add((uri, PLN.name, Literal(name or f"道路_{bsm or vc}")))
-            kg.g.add((uri, PLN.road_level, Literal("村道")))
             coords = ann.geometry.get("coordinates", [0, 0])
             add_centroid(kg.g, uri, coords[0], coords[1])
             kg.g.add((uri, Relations.sfWithin, PLN.village))
-            kg.g.add((uri, gis_type_ref, Literal("road")))
+            kg.g.add((uri, gis_type_ref, Literal("external_road_name")))
+            kg.g.add((uri, geometry_kind, Literal(GEOMETRY_POINT)))
+            kg.g.add((uri, semantic_group, Literal("transport_reference")))
+            kg.g.add((uri, has_semantic_label, Literal("道路名称注记")))
             add_geo_feature_type(kg.g, uri)
             vc += 1
         elif lt == "external_water_label":
@@ -533,13 +545,17 @@ def add_annotations(kg, annotations: list):
             ysdm = str(ann.ysdm).strip()
             uri = EntityIdPolicy.fallback_uri("external_water", ysdm, fc)
             EntityIdPolicy.attach_bsm(kg.g, uri, bsm)
-            kg.g.add((uri, RDF.type, EntityTypes.WaterBody))
+            # A named water POI is likewise a point reference.  It does not
+            # prove that a water polygon or water line exists in the bundle.
+            kg.g.add((uri, RDF.type, EntityTypes.PlaceRef))
             kg.g.add((uri, PLN.name, Literal(name or f"水体_{bsm or fc}")))
-            kg.g.add((uri, PLN.water_type, Literal("水域")))
             coords = ann.geometry.get("coordinates", [0, 0])
             add_centroid(kg.g, uri, coords[0], coords[1])
             kg.g.add((uri, Relations.sfWithin, PLN.village))
-            kg.g.add((uri, gis_type_ref, Literal("water")))
+            kg.g.add((uri, gis_type_ref, Literal("external_water_name")))
+            kg.g.add((uri, geometry_kind, Literal(GEOMETRY_POINT)))
+            kg.g.add((uri, semantic_group, Literal("water_reference")))
+            kg.g.add((uri, has_semantic_label, Literal("水体名称注记")))
             add_geo_feature_type(kg.g, uri)
             fc += 1
     if fc or vc:
@@ -550,7 +566,17 @@ def add_annotations(kg, annotations: list):
 @kg_builder("current_road", entity_type="Road", layer=1, order=20)
 def add_roads(kg, features, *, gtype_ref: str, entry, ctx: BuildContext) -> dict:
     count = 0
+    skipped_invalid_geometry = 0
+    skipped_wrong_layer = 0
     for road in features:
+        if str(gtype_ref).strip() != "current_road":
+            skipped_wrong_layer += 1
+            continue
+        geometry = getattr(road, "geometry", None)
+        geometry_type = geometry.get("type") if isinstance(geometry, dict) else ""
+        if geometry_type not in ("LineString", "MultiLineString"):
+            skipped_invalid_geometry += 1
+            continue
         bsm = str(road.bsm).strip()
         ysdm = str(road.ysdm).strip()
         source_feature_id = _source_feature_provenance(road).get("source_feature_id")
@@ -585,7 +611,18 @@ def add_roads(kg, features, *, gtype_ref: str, entry, ctx: BuildContext) -> dict
     _persist_feature_centroids(kg, features, EntityTypes.Road)
     if count:
         logger.info("Added %d roads", count)
-    return {"count": count, "entity_type": "Road"}
+    if skipped_invalid_geometry or skipped_wrong_layer:
+        logger.warning(
+            "Skipped non-road source features: invalid_geometry=%d wrong_layer=%d",
+            skipped_invalid_geometry,
+            skipped_wrong_layer,
+        )
+    return {
+        "count": count,
+        "entity_type": "Road",
+        "skipped_invalid_geometry": skipped_invalid_geometry,
+        "skipped_wrong_layer": skipped_wrong_layer,
+    }
 
 
 def add_terrain(kg, terrain_analysis=None):
@@ -685,22 +722,6 @@ def add_facilities_from_typed(kg, features, *, gtype_ref: str, entry, ctx: Build
     return {"count": count, "entity_type": "Facility"}
 
 
-_FACILITY_TEXT_MAP = {
-    "篮": ("篮球场", "公共服务"),
-    "污": ("污水处理设施", "基础设施"),
-    "电": ("电力设施", "基础设施"),
-    "垃": ("垃圾收集点", "基础设施"),
-    "祠": ("祠堂", "公共服务"),
-    "卫": ("卫生站", "公共服务"),
-    "站": ("公交站", "基础设施"),
-    "广": ("广场", "公共服务"),
-    "健": ("健身设施", "公共服务"),
-    "停": ("停车场", "基础设施"),
-    "水": ("供水设施", "基础设施"),
-    "小": ("小型设施", "公共服务"),
-}
-
-
 def add_facilities_from_annotations(kg, annotations) -> None:
     count = 0
     for i, ann in enumerate(annotations):
@@ -717,14 +738,22 @@ def add_facilities_from_annotations(kg, annotations) -> None:
         if not coords or len(coords) < 2:
             continue
 
-        name, ftype = _FACILITY_TEXT_MAP.get(text, (text or f"设施_{i}", "公共服务"))
+        # Keep the source label verbatim.  A one-character annotation is not
+        # a canonical facility meaning; an accepted L1/KG semantic overlay
+        # may refine it later without mutating this source node.
+        name = text or f"设施_{i}"
+        ftype = "未分类设施"
+        bsm = str(getattr(ann, "bsm", "") or "").strip()
+        ysdm = str(getattr(ann, "ysdm", "") or "").strip()
         source_feature_id = _source_feature_provenance(ann).get("source_feature_id")
-        uri = (
-            URIRef(source_feature_id)
-            if source_feature_id
-            else EntityIdPolicy.fallback_uri("facility", text or str(i), i)
-        )
+        if bsm:
+            uri = EntityIdPolicy.uri("facility", bsm)
+        elif source_feature_id:
+            uri = URIRef(source_feature_id)
+        else:
+            uri = EntityIdPolicy.fallback_uri("facility", ysdm or text or str(i), i)
         kg.g.add((uri, RDF.type, EntityTypes.Facility))
+        EntityIdPolicy.attach_bsm(kg.g, uri, bsm)
         _attach_source_feature_provenance(kg.g, uri, ann)
         kg.g.add((uri, PLN.name, Literal(name)))
         kg.g.add((uri, PLN.facility_type, Literal(ftype)))

@@ -39,8 +39,14 @@ class WorkerTask(BaseModel):
     defer_reason: str = ""
     scenario_id: str = ""
     candidate_id: str = ""
+    candidate_ids: list[str] = Field(default_factory=list)
     relation_ids: list[str] = Field(default_factory=list)
     target_binding: dict[str, Any] = Field(default_factory=dict)
+    feature_bsms: list[str] = Field(default_factory=list)
+    evidence_refs: list[str] = Field(default_factory=list)
+    l1_snapshot_ref: str = ""
+    bundle_snapshot_digest: str = ""
+    source_binding_ref: str = ""
 
 
 class TaskExecutionResult(BaseModel):
@@ -55,9 +61,16 @@ class TaskExecutionResult(BaseModel):
     diagnostics: list[dict] = Field(default_factory=list)
     scenario_id: str = ""
     candidate_id: str = ""
+    candidate_ids: list[str] = Field(default_factory=list)
     relation_ids: list[str] = Field(default_factory=list)
     feature_ids: list[str] = Field(default_factory=list)
     execution_trace_refs: list[str] = Field(default_factory=list)
+    feature_bsms: list[str] = Field(default_factory=list)
+    source_feature_ids: list[str] = Field(default_factory=list)
+    evidence_refs: list[str] = Field(default_factory=list)
+    l1_snapshot_ref: str = ""
+    bundle_snapshot_digest: str = ""
+    source_binding_ref: str = ""
 
 
 class TypedActionResult(BaseModel):
@@ -90,6 +103,8 @@ class ExecutionResult(ContractMeta):
     scenario_id: str = ""
     scenario_ref: str = ""
     execution_trace_refs: list[str] = Field(default_factory=list)
+    bundle_snapshot_digest: str = ""
+    evidence_refs: list[str] = Field(default_factory=list)
 
     @field_validator("execution_plan_ref", mode="before")
     @classmethod

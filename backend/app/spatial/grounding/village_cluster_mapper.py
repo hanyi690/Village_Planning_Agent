@@ -24,7 +24,7 @@ import json
 import math
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Mapping, Optional
 
 from app.infrastructure.logging import get_logger
 
@@ -98,8 +98,20 @@ def build_landuse_bodies(
                 area_ha=area,
             ))
             member_pts.append([centroid])
-    # Stable ordering: largest settlement first, then west->east.
-    clusters.sort(key=lambda c: (-c.parcel_count, c.centroid[0]))
+    # Stable ordering: largest settlement first, then west->east, south->north
+    # and finally the sorted BSM set.  The final tie-breaker prevents source
+    # feature arrival order from changing LLM candidate indexes on resume.
+    ordered = sorted(
+        zip(clusters, member_pts),
+        key=lambda pair: (
+            -pair[0].parcel_count,
+            round(pair[0].centroid[0], 12),
+            round(pair[0].centroid[1], 12),
+            tuple(sorted(str(bsm) for bsm in pair[0].bsms)),
+        ),
+    )
+    clusters = [pair[0] for pair in ordered]
+    member_pts = [pair[1] for pair in ordered]
     for i, cluster in enumerate(clusters):
         cluster.index = i
     _attach_body_features(clusters, member_pts)
@@ -155,12 +167,13 @@ _PROMPT_TEMPLATE = """你是村庄规划 GIS 证据编译器。待核对的聚�
 该村有 {m} 个宅基地聚落（编号 0..{max_index}），每个聚落有质心坐标与规模：
 {clusters}
 
-一个自然村可能由多个聚落组成（多对一），同一个聚落只能属于一个自然村。
+任务：把聚落分配到自然村；一个自然村可能由多个聚落组成（多对一），同一个聚落只能属于一个自然村。
 只允许根据报告摘录中明确出现的名称、方位、坐标或可核对空间关系建立映射。
 禁止按名称顺序、聚落规模顺序、常识或猜测分配。证据不足的名称必须省略。
 
-只输出 JSON：{{"名称": {{"cluster_indexes": [编号, ...], "evidence": "报告原文短句"}}, ...}}。
-evidence 必须是报告摘录中可以逐字找到的短句；不要输出其它文字。"""
+只输出符合结构化合同的 JSON：
+{{"entries": [{{"name": "自然村名称", "candidate_indexes": [编号, ...], "evidence": "报告原文短句"}}]}}。
+每个待核对名称最多一个 entry；evidence 必须是报告摘录中可以逐字找到的短句；不要输出其它文字。"""
 
 
 _WATER_PROMPT_TEMPLATE = """你是村庄规划 GIS 证据编译器。待核对的水体名称：{villages}。
@@ -171,8 +184,9 @@ _WATER_PROMPT_TEMPLATE = """你是村庄规划 GIS 证据编译器。待核对�
 只允许根据报告摘录中明确出现的名称、方位、流向或可核对空间关系建立映射。
 禁止按名称顺序、规模顺序、常识或猜测分配。证据不足的名称必须省略。
 
-只输出 JSON：{{"名称": {{"cluster_indexes": [编号, ...], "evidence": "报告原文短句"}}, ...}}。
-evidence 必须是报告摘录中可以逐字找到的短句；不要输出其它文字。"""
+只输出符合结构化合同的 JSON：
+{{"entries": [{{"name": "水体名称", "candidate_indexes": [编号, ...], "evidence": "报告原文短句"}}]}}。
+每个待核对名称最多一个 entry；evidence 必须是报告摘录中可以逐字找到的短句；不要输出其它文字。"""
 
 
 def _cache_path(run_root: Optional[Path]) -> Optional[Path]:
@@ -195,6 +209,7 @@ async def _map_bodies(
     source_artifact_ref: str = "",
     source_artifact_digest: str = "",
     budget: Optional[Dict[str, Any]] = None,
+    spatial_evidence: Optional[Mapping[str, Any]] = None,
 ) -> Dict[str, Dict[str, Any]]:
     """Core flash-LLM name -> body assignment (evidence-constrained, cached)."""
     if not bodies or not names:
@@ -236,11 +251,18 @@ async def _map_bodies(
                     f"\n\n报告摘录（用于方位判断，只含与待分配名称相关的段落）:\n"
                     f"{_evidence_excerpt(report_text, names)}\n"
                 )
-            import asyncio
-
-            # Primary: structured output (constrains the real model to emit the
-            # mapping JSON directly instead of burning tokens on <think>
-            # reasoning).  Falls back to the text protocol when unavailable.
+            anchor_lines, allowed_anchor_indexes = _spatial_anchor_prompt(
+                names,
+                bodies,
+                spatial_evidence,
+            )
+            if spatial_evidence is None:
+                allowed_anchor_indexes = None
+            if anchor_lines:
+                prompt += f"\n\n跨源空间锚点证据（优先于村名清单）:\n{anchor_lines}\n"
+            # Only the typed mapping contract may cross this boundary.  A
+            # provider failure yields an empty mapping with a warning; raw
+            # model text is never parsed as spatial identity.
             structured_timeout = reserve_ground_llm_call(budget)
             payload = None
             if structured_timeout is not None:
@@ -251,40 +273,15 @@ async def _map_bodies(
                         report_text,
                         require_evidence=require_evidence,
                         timeout=structured_timeout,
+                        allowed_candidate_indexes=allowed_anchor_indexes,
                     )
 
                 payload = await run_ground_llm_call(
                     budget, structured_timeout, _invoke_structured
                 )
-            if not payload:
-                text_timeout = reserve_ground_llm_call(budget)
-                if text_timeout is not None:
-                    async def _invoke_text():
-                        if asyncio.iscoroutinefunction(getattr(llm, "ainvoke", None)):
-                            return await llm.ainvoke(prompt)
-                        return await asyncio.to_thread(llm.invoke, prompt)
-
-                    response = await run_ground_llm_call(
-                        budget, text_timeout, _invoke_text
-                    )
-                    raw_text = ""
-                    if hasattr(response, "content"):
-                        content = response.content
-                        raw_text = "".join(content) if isinstance(content, list) else str(content or "")
-                    else:
-                        raw_text = str(response or "")
-                    payload = _parse_mapping_json(
-                        raw_text,
-                        names,
-                        bodies,
-                        report_text=report_text,
-                        require_evidence=require_evidence,
-                        source_artifact_ref=source_artifact_ref,
-                        source_artifact_digest=source_artifact_digest,
-                    )
             if payload:
                 mapping = _resolve_cluster_conflicts(payload, bodies)
-        except Exception as exc:  # noqa: BLE001 - fallback is always bounded
+        except Exception as exc:  # noqa: BLE001 - typed failure is surfaced by the empty mapping
             logger.warning("[landuse-bodies] flash mapping failed or timed out: %s", exc)
 
     if cache is not None:
@@ -315,6 +312,7 @@ async def assign_names(
     source_artifact_ref: str = "",
     source_artifact_digest: str = "",
     budget: Optional[Dict[str, Any]] = None,
+    spatial_evidence: Optional[Mapping[str, Any]] = None,
 ) -> Dict[str, Dict[str, Any]]:
     """Public generic entry: flash-LLM name -> candidate assignment for any
     role (villages / water bodies / roads / facilities / landmarks).  The LLM
@@ -334,6 +332,7 @@ async def assign_names(
         source_artifact_ref=source_artifact_ref,
         source_artifact_digest=source_artifact_digest,
         budget=budget,
+        spatial_evidence=spatial_evidence,
     )
 
 
@@ -346,8 +345,9 @@ async def map_villages(
     source_artifact_ref: str = "",
     source_artifact_digest: str = "",
     budget: Optional[Dict[str, Any]] = None,
+    spatial_evidence: Optional[Mapping[str, Any]] = None,
 ) -> Dict[str, Dict[str, Any]]:
-    """Map village names to clusters (flash-LLM enhanced, cached, fallback safe)."""
+    """Map village names to clusters through the typed Flash contract."""
     return await _map_bodies(
         clusters,
         village_names,
@@ -359,6 +359,7 @@ async def map_villages(
         source_artifact_ref=source_artifact_ref,
         source_artifact_digest=source_artifact_digest,
         budget=budget,
+        spatial_evidence=spatial_evidence,
     )
 
 
@@ -371,6 +372,7 @@ async def map_water_bodies(
     source_artifact_ref: str = "",
     source_artifact_digest: str = "",
     budget: Optional[Dict[str, Any]] = None,
+    spatial_evidence: Optional[Mapping[str, Any]] = None,
 ) -> Dict[str, Dict[str, Any]]:
     """Map report water-body names to landuse-derived water bodies."""
     return await _map_bodies(
@@ -384,6 +386,7 @@ async def map_water_bodies(
         source_artifact_ref=source_artifact_ref,
         source_artifact_digest=source_artifact_digest,
         budget=budget,
+        spatial_evidence=spatial_evidence,
     )
 
 
@@ -407,14 +410,43 @@ async def _structured_mapping(
     *,
     require_evidence: bool = True,
     timeout: Optional[float] = None,
+    allowed_candidate_indexes: Optional[Mapping[str, set[int]]] = None,
 ) -> Optional[Dict[str, Dict[str, Any]]]:
     """Structured-output mapping {name -> {candidate_indexes, evidence}}.
 
-    Returns None when the provider cannot do structured output or produced no
-    usable entries, so the caller falls back to the text protocol.
+    Returns None when the provider cannot do structured output or produces no
+    usable entries; the caller records an unresolved mapping.
     """
     try:
         from app.infrastructure.llm.structured import run_structured_output
+        structured_llm = model
+        allow_provider_content_json = False
+        # MiniMax's LangChain adapter can complete a thinking response without
+        # producing the tool-call object expected by ``with_structured_output``
+        # (the observed result is ``None``).  The application already has an
+        # Instructor/TOOLS client for the same provider contract.  Use it only
+        # for the real provider adapter; deterministic injected test doubles
+        # continue through their supplied ``llm`` seam.
+        from app.infrastructure.llm.factory import LLMProvider, get_provider
+
+        provider = get_provider()
+        model_module = str(type(model).__module__ or "")
+        model_name = str(type(model).__name__ or "")
+        is_minimax_adapter = (
+            provider is LLMProvider.MINIMAX
+            and (
+                model_module.startswith("langchain_openai")
+                or model_name in {"ChatOpenAI", "AzureChatOpenAI"}
+            )
+        )
+        if is_minimax_adapter:
+            structured_llm = None
+            # MiniMax-M2 high-speed currently returns thinking text plus
+            # a JSON object, but no tool call.  This remains a typed
+            # provider channel: the shared strict JSON decoder and
+            # Pydantic response model must both accept it.  It never
+            # parses a name into a BSM or geometry.
+            allow_provider_content_json = True
         response = await run_structured_output(
             _GMappingSet,
             [{"role": "user", "content": prompt}],
@@ -422,9 +454,17 @@ async def _structured_mapping(
             timeout=timeout,
             temperature=0.1,
             max_tokens=1200,
-            llm=model,
+            llm=structured_llm,
+            allow_content_json_fallback=allow_provider_content_json,
         )
-    except Exception:
+        if response is None:
+            raise ValueError("structured_mapping_empty_response")
+    except Exception as exc:
+        logger.warning(
+            "[village-cluster] structured mapping rejected: %s: %s",
+            type(exc).__name__,
+            str(exc)[:500],
+        )
         return None
     entries = getattr(response, "entries", None)
     if entries is None and isinstance(response, dict):
@@ -445,6 +485,25 @@ async def _structured_mapping(
             idx = []
         if not idx:
             continue
+        if allowed_candidate_indexes is not None:
+            allowed = allowed_candidate_indexes.get(name)
+            if allowed is None:
+                base_name = name.removesuffix("自然村").removesuffix("村")
+                allowed = allowed_candidate_indexes.get(base_name)
+            if allowed is None:
+                logger.warning(
+                    "[village-cluster] %s has no cross-source spatial anchor; mapping rejected",
+                    name,
+                )
+                continue
+            if not set(idx).issubset(allowed):
+                logger.warning(
+                    "[village-cluster] %s selected clusters outside spatial evidence: selected=%s allowed=%s",
+                    name,
+                    sorted(set(idx)),
+                    sorted(allowed),
+                )
+                continue
         # Canonical mapping key is ``cluster_indexes`` (the text parser and the
         # conflict resolver/aggregator both read it).
         result[name] = {"cluster_indexes": idx, "evidence": evidence}
@@ -480,13 +539,20 @@ def _evidence_excerpt(report_text: str, names: List[str], max_chars: int = 3000)
     """Targeted report excerpt: keep only the segments that mention any of the
     names being assigned.  A short focused excerpt lets the real model map
     names to candidates instead of drowning in a 12k-char dump."""
-    import re
-
     wanted = [str(n) for n in (names or []) if n]
     if not wanted:
         return (report_text or "")[:max_chars]
     parts: List[str] = []
-    for seg in re.split(r"(?<=[。；\n])", report_text or ""):
+    segments: list[str] = []
+    current: list[str] = []
+    for char in report_text or "":
+        current.append(char)
+        if char in "。；\n":
+            segments.append("".join(current))
+            current.clear()
+    if current:
+        segments.append("".join(current))
+    for seg in segments:
         if any(w in seg for w in wanted):
             parts.append(seg)
     out = "".join(parts).strip()
@@ -510,76 +576,119 @@ def _evidence_in_report(evidence: str, report_text: str) -> bool:
     return bool(ev_norm) and ev_norm in rep_norm
 
 
-def _parse_mapping_json(
-    raw: str,
-    village_names: List[str],
-    clusters: List[VillageCluster],
-    *,
-    report_text: str,
-    require_evidence: bool = True,
-    source_artifact_ref: str = "",
-    source_artifact_digest: str = "",
-) -> Dict[str, Dict[str, Any]]:
-    import re
+def _spatial_anchor_prompt(
+    names: List[str],
+    bodies: List[VillageCluster],
+    spatial_evidence: Optional[Mapping[str, Any]],
+) -> tuple[str, Dict[str, set[int]]]:
+    """Describe source-backed spatial anchors and derive a hard candidate set.
 
-    text = re.sub(r"<think>.*?</think>", "", raw or "", flags=re.I | re.S)
-    text = re.sub(r"<think>.*$", "", text, flags=re.I | re.S)
-    match = re.search(r"\{.*\}", text, re.DOTALL)
-    if not match:
-        return {}
-    try:
-        data = json.loads(match.group(0))
-    except Exception:
-        return {}
-    result: Dict[str, Dict[str, Any]] = {}
-    for name in village_names:
-        item = data.get(name)
-        if item is None:
-            item = data.get(f"{name}村")
-        if not isinstance(item, dict):
+    ``spatial_evidence`` contains only identity/provenance and related Bundle
+    parcel BSMs supplied by EvidenceGraph.  The mapper joins those BSMs to
+    deterministic residential bodies; it never receives or parses geometry
+    from the model.  An anchor can therefore narrow the LLM's decision, but
+    cannot manufacture a new parcel or coordinate.
+    """
+    if not spatial_evidence:
+        return "", {}
+    body_bsms = {int(body.index): {str(bsm) for bsm in body.bsms} for body in bodies}
+    lines: List[str] = []
+    allowed: Dict[str, set[int]] = {}
+    for requested_name in names:
+        raw_anchors = spatial_evidence.get(requested_name)
+        if raw_anchors is None:
+            raw_anchors = spatial_evidence.get(
+                requested_name.removesuffix("自然村").removesuffix("村")
+            )
+        if not isinstance(raw_anchors, (list, tuple)):
             continue
-        evidence = str(item.get("evidence") or "").strip()
-        if require_evidence and not _evidence_in_report(evidence, report_text):
+        hits: Dict[int, int] = {}
+        anchor_labels: List[str] = []
+        anchor_related_bsms: set[str] = set()
+        for raw_anchor in raw_anchors:
+            if not isinstance(raw_anchor, Mapping):
+                continue
+            label = str(raw_anchor.get("canonical_name") or "").strip()
+            feature_bsm = str(raw_anchor.get("feature_bsm") or "").strip()
+            related_bsms = {
+                str(value).strip()
+                for value in (raw_anchor.get("related_parcel_bsms") or [])
+                if str(value).strip()
+            }
+            if label:
+                anchor_labels.append(label)
+            anchor_related_bsms.update(related_bsms)
+            for index, bsms in body_bsms.items():
+                overlap = len(related_bsms.intersection(bsms))
+                if overlap:
+                    hits[index] = hits.get(index, 0) + overlap
+        if not hits:
             continue
-        indexes = item.get("cluster_indexes")
-        if indexes is None:
-            indexes = item.get("candidate_indexes")
-        if isinstance(indexes, list):
-            parsed: List[int] = []
-            for idx in indexes:
-                try:
-                    parsed.append(int(idx))
-                except (TypeError, ValueError):
-                    continue
-        else:
-            # Legacy single-candidate answer.
-            try:
-                parsed = [int(item.get("cluster_index") or item.get("candidate_index"))]
-            except (TypeError, ValueError):
-                parsed = []
-        member_clusters = [c for c in clusters if c.index in parsed]
-        if not member_clusters:
+        ordered_hits = sorted(hits.items(), key=lambda item: (-item[1], item[0]))
+        allowed[requested_name] = {index for index, _count in ordered_hits}
+        labels = "、".join(list(dict.fromkeys(anchor_labels))[:6])
+        candidates = "；".join(
+            f"{index}(关联地块交集{count})" for index, count in ordered_hits
+        )
+        lines.append(
+            f"- {requested_name}: Bundle锚点={labels or '未命名空间特征'}，"
+            f"锚点关联地块数={len(anchor_related_bsms)}，支持的聚落候选={candidates}。"
+            "只能从这些候选中选择；村名列表本身不能证明聚落归属。"
+        )
+    return "\n".join(lines), allowed
+
+
+def collect_spatial_anchor_evidence(
+    context: Any,
+    names: List[str],
+    *,
+    max_candidates: int = 16,
+) -> Dict[str, List[Dict[str, Any]]]:
+    """Collect source-backed cross-layer anchors for village mapping.
+
+    This is intentionally a retrieval adapter, not a second index.  It asks
+    EvidenceGraph for all bounded candidates matching each name without a
+    caller-provided layer.  The returned payload contains Bundle identities,
+    related parcel BSMs, KG relation refs and L1 fact refs; authoritative
+    geometry remains behind ``bundle://feature/...`` and is never copied into
+    the prompt or into the mapper result.
+    """
+    graph = getattr(context, "evidence_graph", None)
+    if graph is None:
+        from app.evidence.retrieval.evidence_graph import EvidenceGraph
+
+        graph = EvidenceGraph.build(context)
+    result: Dict[str, List[Dict[str, Any]]] = {}
+    for name in names:
+        normalized = str(name or "").strip()
+        if not normalized:
             continue
-        aggregate = _aggregate_clusters(member_clusters)
-        indexes = aggregate["cluster_indexes"]
-        is_multi = len(indexes) > 1 or isinstance(item.get("cluster_indexes"), list)
-        entry = {
-            **aggregate,
-            "confidence": 0.7,
-            "method": "flash_llm_report_evidence_multi" if is_multi else "flash_llm_report_evidence",
-            "evidence": evidence,
-            "provenance_refs": [
-                f"report-evidence:{hashlib.sha256(evidence.encode('utf-8')).hexdigest()}",
-                *([f"bundle:{source_artifact_digest}"] if source_artifact_digest else []),
-            ],
-            "source_artifact_ref": source_artifact_ref,
-            "source_artifact_digest": source_artifact_digest,
-            "source_feature_id": ",".join(f"residential-cluster:{i}" for i in indexes),
-            "coordinate_crs": "EPSG:4326",
-        }
-        if len(indexes) == 1:
-            entry["cluster_index"] = indexes[0]
-        result[name] = entry
+        candidates = graph.query_scope_candidates(
+            normalized,
+            entity_scope=[],
+            max_candidates=max(1, int(max_candidates or 1)),
+        )
+        anchors = []
+        for candidate in candidates:
+            related = [
+                str(value).strip()
+                for value in (getattr(candidate, "related_parcel_bsms", None) or [])
+                if str(value).strip()
+            ]
+            feature_bsm = str(getattr(candidate, "feature_bsm", "") or "").strip()
+            if not related or not feature_bsm:
+                continue
+            anchors.append({
+                "canonical_name": str(getattr(candidate, "canonical_name", "") or ""),
+                "role": str(getattr(candidate, "role", "") or ""),
+                "feature_bsm": feature_bsm,
+                "related_parcel_bsms": list(dict.fromkeys(related)),
+                "relation_refs": list(getattr(candidate, "relation_refs", None) or []),
+                "l1_fact_refs": list(getattr(candidate, "l1_fact_refs", None) or []),
+                "evidence_refs": list(getattr(candidate, "evidence_refs", None) or []),
+            })
+        if anchors:
+            result[normalized] = anchors
     return result
 
 
@@ -704,6 +813,7 @@ async def assign_villages_to_clusters(
     village_names: List[str],
     report_text: str,
     *,
+    context: Any = None,
     llm: Any = None,
     cache: Optional[Path] = None,
     source_artifact_ref: str = "",
@@ -730,8 +840,12 @@ async def assign_villages_to_clusters(
         base = base.strip()
         if not base:
             continue
-        if gazetteer is not None and gazetteer.resolve(f"{base}村", fuzzy=False) is not None:
-            continue
+        if gazetteer is not None:
+            existing = gazetteer.resolve(f"{base}村", fuzzy=False)
+            # A name-only entry is semantic evidence, not spatial grounding.
+            # Keep it eligible for cluster mapping until it carries BSMs.
+            if existing is not None and getattr(existing, "bsms", None):
+                continue
         names.append(base)
     names = list(dict.fromkeys(names))
     if not names:
@@ -740,6 +854,11 @@ async def assign_villages_to_clusters(
         clusters,
         names,
         report_text=report_text,
+        spatial_evidence=(
+            collect_spatial_anchor_evidence(context, names)
+            if context is not None
+            else None
+        ),
         cache=cache,
         llm=llm,
         source_artifact_ref=source_artifact_ref,
@@ -802,6 +921,7 @@ __all__ = [
     "VillageCluster",
     "build_landuse_bodies",
     "build_village_clusters",
+    "collect_spatial_anchor_evidence",
     "map_villages",
     "map_water_bodies",
     "village_gazetteer_entries",

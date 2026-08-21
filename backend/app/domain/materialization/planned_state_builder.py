@@ -112,6 +112,33 @@ def _feature_target_ids(properties: dict[str, Any]) -> list[str]:
     return list(dict.fromkeys(str(value) for value in values if str(value)))
 
 
+def _lineage_kwargs(source: Any) -> dict[str, Any]:
+    """Copy bounded evidence lineage without copying geometry or raw reports."""
+    def values(name: str) -> list[str]:
+        value = source.get(name, []) if isinstance(source, dict) else getattr(source, name, [])
+        if isinstance(value, str):
+            value = [value]
+        return list(dict.fromkeys(str(item) for item in (value or []) if str(item).strip()))
+
+    return {
+        "feature_bsms": values("feature_bsms"),
+        "source_feature_ids": values("source_feature_ids"),
+        "entity_refs": values("entity_refs"),
+        "relation_refs": values("relation_refs"),
+        "evidence_refs": values("evidence_refs") or values("source_refs"),
+        "l1_snapshot_ref": str(
+            source.get("l1_snapshot_ref", "")
+            if isinstance(source, dict)
+            else getattr(source, "l1_snapshot_ref", "")
+        ) or "",
+        "bundle_snapshot_digest": str(
+            source.get("bundle_snapshot_digest", "")
+            if isinstance(source, dict)
+            else getattr(source, "bundle_snapshot_digest", "")
+        ) or "",
+    }
+
+
 def _change_to_planned_parcel(change: ParcelChange) -> PlannedParcel:
     after = change.after_classification
     before = change.before_classification
@@ -122,11 +149,16 @@ def _change_to_planned_parcel(change: ParcelChange) -> PlannedParcel:
         planning_land_use=code,
         zone_type=code,
         area_ha=change.new_area_ha,
+        source_area_ha=float(getattr(change, "source_area_ha", 0.0) or 0.0),
+        coverage_ratio=getattr(change, "coverage_ratio", None),
         geometry=change.after_geometry_wkt,
         derived_from_bsms=list(change.derived_from_bsms),
+        source_bsms=list(change.derived_from_bsms),
         operation=change.action,
         decided_by="rule",
         area_change_ha=change.new_area_ha - _geometry_area_ha(change.before_geometry_wkt),
+        source_refs=list(change.evidence_refs),
+        **_lineage_kwargs(change),
     )
 
 
@@ -143,6 +175,7 @@ def _road_target_to_planned_road(target: Any, geometry: str, target_id: str, pro
         lineage_id=str(properties.get("lineage_id") or properties.get("feature_id") or ""),
         relation_ids=[str(item) for item in properties.get("relation_ids") or []],
         source_refs=[str(item) for item in properties.get("source_refs") or []],
+        **_lineage_kwargs(properties),
     )
 
 
@@ -159,6 +192,7 @@ def _axis_target_to_planned_axis(target: Any, geometry: str, target_id: str, pro
         lineage_id=str(properties.get("lineage_id") or properties.get("feature_id") or ""),
         relation_ids=[str(item) for item in properties.get("relation_ids") or []],
         source_refs=[str(item) for item in properties.get("source_refs") or []],
+        **_lineage_kwargs(properties),
     )
 
 
@@ -188,6 +222,7 @@ def _facility_target_to_planned_facility(target: Any, geometry: str, target_id: 
         source_refs=[str(item) for item in properties.get("source_refs") or []],
         source_bsms=[str(item) for item in properties.get("source_bsms") or []],
         geometry_ref=str(properties.get("geometry_ref") or ""),
+        **_lineage_kwargs(properties),
     )
 
 
@@ -206,22 +241,35 @@ def changeset_to_planned_state(
     # authoritative PlannedState as candidate-backed parcels so DELIVER and
     # final relation validation see the same target/candidate lineage.
     for feature in _layer_features(
-        layout_configs or [], {"planned_project", "planned_zone"}
+        layout_configs or [], {
+            "planned_project",
+            "planned_zone",
+            "functional_overlay",
+            "protection_overlay",
+            "restoration_overlay",
+        }
     ):
         properties = dict(feature.get("properties") or {})
         geometry = _geojson_to_wkt(feature.get("geometry"))
         target_id = str(properties.get("target_id") or properties.get("project_ref") or "")
         candidate_id = str(properties.get("candidate_id") or "")
-        if not target_id or not candidate_id or not geometry:
+        role = str(properties.get("materialization_role") or "")
+        if not role or role == "execution_geometry":
+            target = target_by_id.get(target_id)
+            role = str(getattr(target, "materialization_role", "") or role or "")
+        if not target_id or not geometry:
+            continue
+        if not candidate_id and role not in {
+            "functional_overlay",
+            "protection_overlay",
+            "restoration_overlay",
+        }:
             continue
         target = target_by_id.get(target_id)
-        role = str(properties.get("materialization_role") or "")
         # Workers label direct candidate output as ``execution_geometry``;
         # that is a transport role, not the semantic overlay/footprint role.
         # Prefer the typed target role when the transport marker is present.
-        if not role or role == "execution_geometry":
-            role = str(getattr(target, "materialization_role", "") or role or "")
-        feature_id = str(properties.get("feature_id") or candidate_id)
+        feature_id = str(properties.get("feature_id") or candidate_id or target_id)
         scenario_id = str(properties.get("scenario_id") or "")
         source_refs = [
             str(ref)
@@ -233,6 +281,11 @@ def changeset_to_planned_state(
             "protection_overlay",
             "restoration_overlay",
         }:
+            derived_from_bsms = properties.get("derived_from_bsms") or properties.get("bsms")
+            if not derived_from_bsms and properties.get("bsm"):
+                derived_from_bsms = [properties["bsm"]]
+            if isinstance(derived_from_bsms, str):
+                derived_from_bsms = [derived_from_bsms]
             overlays.append(PlannedZoneOverlay(
                 overlay_id=feature_id,
                 materialization_role=role,
@@ -240,12 +293,16 @@ def changeset_to_planned_state(
                 geometry=geometry,
                 target_ref=target_id,
                 project_ref=target_id,
+                derived_from_bsms=list(dict.fromkeys(
+                    str(value) for value in (derived_from_bsms or []) if str(value).strip()
+                )),
                 candidate_id=candidate_id,
                 scenario_id=scenario_id,
                 feature_id=feature_id,
                 lineage_id=feature_id,
                 lineage_refs=source_refs,
                 provenance_refs=source_refs,
+                **_lineage_kwargs(properties),
             ))
             continue
         parcels.append(PlannedParcel(
@@ -258,7 +315,27 @@ def changeset_to_planned_state(
                 properties.get("project_category") or role or "planned"
             ),
             zone_type=role or "planned",
+            area_ha=float(properties.get("planning_area_ha") or 0.0),
+            source_area_ha=float(properties.get("source_area_ha") or 0.0),
+            coverage_ratio=properties.get("coverage_ratio"),
+            crs=str(properties.get("crs") or "EPSG:4326"),
+            subgeometry_operation=str(
+                properties.get("subgeometry_operation") or "bundle_extent"
+            ),
+            subgeometry_diagnostics=list(
+                properties.get("subgeometry_diagnostics") or []
+            ),
             geometry=geometry,
+            derived_from_bsms=[
+                str(value)
+                for value in (properties.get("source_bsms") or [])
+                if str(value).strip()
+            ],
+            source_bsms=[
+                str(value)
+                for value in (properties.get("source_bsms") or [])
+                if str(value).strip()
+            ],
             target_ref=target_id,
             source_spec=str(
                 properties.get("generation_operation")
@@ -276,6 +353,7 @@ def changeset_to_planned_state(
                 properties.get("source_instruction_id") or target_id
             ),
             geometry_ref=str(properties.get("source_ref") or candidate_id),
+            **_lineage_kwargs(properties),
         ))
 
     roads: list[PlannedRoad] = []

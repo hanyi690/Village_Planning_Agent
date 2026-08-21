@@ -2,9 +2,9 @@
 Session bundle orchestration - session-level VillageBundle build + cache.
 
 Thin wrapper over DataCatalog.load_village_bundle_async(). A VillageBundle is
-session-scoped: it carries the session's original input documents, spatial
-data and full L1/L2/L3 reports. Built once at session start and refreshed
-per layer completion.
+session-scoped: it carries the session's spatial data, input material and
+lightweight evidence/report references. Full report bodies are opened by
+reference and are not copied into every bundle snapshot.
 """
 
 from __future__ import annotations
@@ -47,7 +47,7 @@ async def build_session_bundle(
         refresh: Force a rebuild even when a cached bundle exists.
 
     Returns:
-        Session-scoped ``VillageBundle`` (input docs + spatial + reports).
+        Session-scoped ``VillageBundle`` (spatial data + evidence refs).
     """
     if not refresh:
         cached = get_cached_bundle(session_id)
@@ -120,8 +120,9 @@ async def snapshot_session_bundle(
     """Build (refresh) + persist a versioned bundle snapshot.
 
     Combines ``build_session_bundle(refresh=True)`` with ``BundleStore.save``
-    so the freshly completed layer's reports are captured. This is the graph
-    hook called from ``layer_completion_check`` at each layer boundary.
+    so the freshly completed layer's evidence manifest is captured. This is
+    the graph hook called from ``layer_completion_check`` at each layer
+    boundary.
 
     Args:
         session_id: Session identifier.

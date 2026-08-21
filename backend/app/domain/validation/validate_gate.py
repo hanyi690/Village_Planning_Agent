@@ -124,6 +124,20 @@ def evaluate_validate_gate(
             for check in report.checks
             if not check.passed and not check.affected_target_ids
         )
+        affected_parcels = sorted({
+            parcel
+            for check in report.checks
+            if not check.passed
+            for parcel in check.affected_parcels
+            if parcel
+        })
+        evidence_refs = sorted({
+            ref
+            for check in report.checks
+            if not check.passed
+            for ref in check.evidence_refs
+            if ref
+        })
         pending = [
             PendingRequest(
                 request_id="pr-validate-" + route.lower() + "-0",
@@ -134,8 +148,16 @@ def evaluate_validate_gate(
                     "stage": dominant,
                     "error_issue_count": error_count,
                     "target_ids": target_ids,
+                    "affected_parcels": affected_parcels,
+                    "evidence_refs": evidence_refs,
                     "non_target_blocker_count": non_target_blocker_count,
                     "issue_fingerprint": progress["issue_fingerprint"],
+                    # Preserve the complete typed failure payload at the
+                    # iteration boundary. The artifact remains authoritative;
+                    # this bounded copy lets HUMAN/LLM callers act without
+                    # guessing which target, parcel, or evidence caused the
+                    # route.
+                    "failed_checks": failed_checks,
                 },
             )
         ]
@@ -144,6 +166,7 @@ def evaluate_validate_gate(
             passed=False,
             feedback_route=route,
             pending_requests=pending,
+            evidence_requests=evidence_refs,
             context_version=report.context_version,
             artifact_id=gate_artifact_id,
             route_reason=route_reason,

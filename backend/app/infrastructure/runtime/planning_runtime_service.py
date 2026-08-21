@@ -216,11 +216,16 @@ class PlanningRuntimeService:
 
     @classmethod
     async def shutdown(cls) -> None:
-        """Cancel all tracked background tasks on application shutdown."""
+        """Cancel tasks and release runtime references on shutdown."""
         from app.bootstrap.composition import CompositionRoot
 
         sup = CompositionRoot.get_task_supervisor()
         await sup.cancel_all()
+        cls._graph = None
+        cls._checkpointer = None
+        cls._initialized = False
+        cls._lock = None
+        cls._execution_locks.clear()
         logger.info("[PlanningRuntimeService] All tracked tasks cancelled")
 
     @classmethod
@@ -279,6 +284,22 @@ class PlanningRuntimeService:
             if values or any(getattr(t, "interrupts", None) for t in snapshot.tasks or ()):
                 return values
         return None
+
+    @classmethod
+    async def aget_state_values_if_initialized(
+        cls,
+        session_id: str,
+    ) -> Optional[Dict[str, Any]]:
+        """Read state without acquiring the process-wide runtime resource.
+
+        Evidence-only CLI and test callers do not own the FastAPI lifespan,
+        so they must not lazily open the global aiosqlite checkpointer merely
+        to probe for optional checkpoint evidence.  Runtime commands that
+        require a checkpoint should continue to use ``aget_state_values``.
+        """
+        if not cls._initialized or cls._graph is None:
+            return None
+        return await cls.aget_state_values(session_id)
 
     @staticmethod
     def _pack_workflow_patch_preserving_artifacts(

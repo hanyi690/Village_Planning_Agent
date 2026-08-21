@@ -35,18 +35,34 @@ def _collect_gate_items(state: Dict[str, Any]) -> Tuple[Optional[str], List[Dict
 def _retry_exhaustion_items(state: Dict[str, Any]) -> List[Dict[str, Any]]:
     """Create a compact diagnostic review item when no gate has pending items."""
 
-    if not state.get("error_feedback"):
+    validation_feedback = state.get("validation_feedback") or {}
+    if not state.get("error_feedback") and not validation_feedback:
         return []
+    context = {
+        "message": "post-L3 retries exhausted; manual intervention required",
+        "detail": dict(state.get("error_feedback") or {}),
+        "retry_counts": dict(state.get("retry") or state.get("retry_counts") or {}),
+        "max_retries": state.get("max_retries", 3),
+    }
+    if isinstance(validation_feedback, dict) and validation_feedback:
+        context.update({
+            "validation_status": validation_feedback.get("status", ""),
+            "failed_checks": list(validation_feedback.get("failed_checks") or []),
+            "affected_target_ids": list(
+                validation_feedback.get("affected_target_ids") or []
+            ),
+            "affected_parcels": list(
+                validation_feedback.get("affected_parcels") or []
+            ),
+            "evidence_refs": list(validation_feedback.get("evidence_refs") or []),
+            "next_action": dict(validation_feedback.get("next_action") or {}),
+            "repair_impact": dict(validation_feedback.get("repair_impact") or {}),
+        })
     return [{
         "request_id": "post-l3-retry-exhausted",
         "stage": "post_l3",
         "request_type": "retry_exhausted",
-        "context": {
-            "message": "post-L3 retries exhausted; manual intervention required",
-            "detail": dict(state.get("error_feedback") or {}),
-            "retry_counts": dict(state.get("retry") or state.get("retry_counts") or {}),
-            "max_retries": state.get("max_retries", 3),
-        },
+        "context": context,
     }]
 
 

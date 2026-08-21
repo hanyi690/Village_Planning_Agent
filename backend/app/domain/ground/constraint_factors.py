@@ -81,6 +81,95 @@ def compile_constraint_factors(intent_graph: Any) -> list[ConstraintFactor]:
     return factors
 
 
+def attach_evidence_packet_relations(
+    factors: list[ConstraintFactor],
+    evidence_packets: Any,
+) -> list[ConstraintFactor]:
+    """Attach verified packet relations to already-declared planning factors.
+
+    A KG relation is current-state evidence, not an implicit planning order.
+    Therefore this function never creates a factor and never changes its
+    hard/soft/status fields.  It only adds the packet relation provenance when
+    the packet belongs to the factor subject target and its object reference
+    matches one side of the verified relation.
+    """
+    if not factors or not evidence_packets:
+        return factors
+
+    output: list[ConstraintFactor] = []
+    for factor in factors:
+        evidence_refs = list(factor.evidence_refs)
+        relation_details: list[str] = []
+        for target_id, packet in dict(evidence_packets or {}).items():
+            if str(getattr(factor, "subject_ref", "") or "") != str(target_id):
+                continue
+            object_ref = str(getattr(factor, "object_ref", "") or "").strip()
+            if not object_ref:
+                continue
+            for relation in list(getattr(packet, "relation_evidence", None) or []):
+                subject = getattr(relation, "subject", None)
+                object_ = getattr(relation, "object", None)
+                subject_tokens = _packet_relation_tokens(subject)
+                object_tokens = _packet_relation_tokens(object_)
+                if object_ref not in subject_tokens and object_ref not in object_tokens:
+                    continue
+                relation_id = str(getattr(relation, "relation_id", "") or "").strip()
+                if relation_id:
+                    evidence_refs.append(f"kg:relation:{relation_id}")
+                subject_l1_refs = list(
+                    getattr(subject, "l1_fact_refs", None) or []
+                ) if subject is not None else []
+                object_l1_refs = list(
+                    getattr(object_, "l1_fact_refs", None) or []
+                ) if object_ is not None else []
+                evidence_refs.extend(
+                    str(value)
+                    for value in [
+                        *(getattr(relation, "provenance_refs", None) or []),
+                        getattr(subject, "geometry_ref", "") if subject is not None else "",
+                        getattr(object_, "geometry_ref", "") if object_ is not None else "",
+                        *subject_l1_refs,
+                        *object_l1_refs,
+                    ]
+                    if str(value).strip()
+                )
+                predicate = str(getattr(relation, "predicate", "") or "").strip()
+                if relation_id and predicate:
+                    relation_details.append(f"{relation_id}:{predicate}")
+        if relation_details:
+            detail = str(getattr(factor, "detail", "") or "").strip()
+            packet_detail = "evidence_packet_relations=" + ",".join(
+                sorted(set(relation_details))
+            )
+            output.append(
+                factor.model_copy(update={
+                    "evidence_refs": list(dict.fromkeys(evidence_refs)),
+                    "detail": "; ".join(
+                        item for item in (detail, packet_detail) if item
+                    ),
+                })
+            )
+        else:
+            output.append(factor)
+    return output
+
+
+def _packet_relation_tokens(feature_ref: Any) -> set[str]:
+    if feature_ref is None:
+        return set()
+    identity = getattr(feature_ref, "identity", None)
+    return {
+        str(value).strip()
+        for value in [
+            getattr(identity, "bundle_feature_bsm", "") if identity is not None else "",
+            getattr(identity, "source_feature_id", "") if identity is not None else "",
+            getattr(identity, "source_bsm", "") if identity is not None else "",
+            *(getattr(feature_ref, "entity_refs", None) or []),
+        ]
+        if str(value).strip()
+    }
+
+
 def evaluate_relation_satisfaction(
     factors: list[ConstraintFactor], candidates: list[Any]
 ) -> list[RelationSatisfaction]:
@@ -112,4 +201,8 @@ def evaluate_relation_satisfaction(
     return result
 
 
-__all__ = ["compile_constraint_factors", "evaluate_relation_satisfaction"]
+__all__ = [
+    "attach_evidence_packet_relations",
+    "compile_constraint_factors",
+    "evaluate_relation_satisfaction",
+]

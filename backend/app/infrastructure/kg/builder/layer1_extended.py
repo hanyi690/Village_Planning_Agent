@@ -10,7 +10,7 @@ from ..ontology import (
     GEOMETRY_POLYGON, GEOMETRY_LINE, GEOMETRY_POINT, GEOMETRY_RASTER,
 )
 from .enrichment import derive_semantic_label, derive_legal_constraint
-from .geo_helpers import add_centroid, add_bbox, add_geo_feature_type
+from .geo_helpers import add_centroid, add_bbox, add_geo_feature_type, add_source_geometry
 
 from app.infrastructure.logging import get_logger
 
@@ -23,6 +23,52 @@ semantic_group = SemanticPredicates.semantic_group
 has_semantic_label = SemanticPredicates.has_semantic_label
 legal_constraint = SemanticPredicates.legal_constraint
 allowed_operations = SemanticPredicates.allowed_operations
+
+
+def _attach_source_feature_provenance(kg, uri: URIRef, feature: Any) -> None:
+    """Persist source identity for extended L1 features.
+
+    Extended layers are built outside the registered core builders, but their
+    source-backed features need the same auditable identity boundary as roads
+    and facilities. ``source_uri`` remains supported as the legacy dataset
+    reference while ``source_dataset`` is the explicit business-query field.
+    """
+    raw = getattr(feature, "_raw", {}) or {}
+    source_feature_id = str(raw.get("source_feature_id") or "").strip()
+    if not source_feature_id:
+        return
+    kg.g.add((uri, PLN.source_feature_id, Literal(source_feature_id)))
+
+    source_uri = str(raw.get("source_uri") or "").strip()
+    source_dataset = str(raw.get("source_dataset") or source_uri).strip()
+    if source_uri:
+        kg.g.add((uri, PLN.source_uri, Literal(source_uri)))
+    if source_dataset:
+        kg.g.add((uri, PLN.source_dataset, Literal(source_dataset)))
+
+    source_snapshot_ref = str(raw.get("source_snapshot_ref") or "").strip()
+    if source_snapshot_ref:
+        kg.g.add((uri, PLN.source_snapshot_ref, Literal(source_snapshot_ref)))
+    for key in ("source_content_digest", "source_geometry_digest"):
+        value = str(raw.get(key) or "").strip()
+        if value:
+            kg.g.add((uri, PLN[key], Literal(value)))
+    index = raw.get("source_feature_index")
+    if isinstance(index, int):
+        kg.g.add((uri, PLN.source_feature_index, Literal(index, datatype=XSD.integer)))
+
+
+def _attach_source_feature(kg, uri: URIRef, feature: Any, *, allowed_types: tuple[str, ...]) -> None:
+    """Persist source identity and authoritative WKT for a source-backed feature."""
+    _attach_source_feature_provenance(kg, uri, feature)
+    raw = getattr(feature, "_raw", {}) or {}
+    if str(raw.get("source_feature_id") or "").strip():
+        add_source_geometry(
+            kg.g,
+            uri,
+            getattr(feature, "geometry", None),
+            allowed_types=allowed_types,
+        )
 
 
 def add_protection_polygons(kg, polygons_layer) -> None:
@@ -47,6 +93,12 @@ def add_protection_polygons(kg, polygons_layer) -> None:
             else:
                 uri = EntityIdPolicy.fallback_uri(attr_name, ysdm, count)
             EntityIdPolicy.attach_bsm(kg.g, uri, bsm)
+            _attach_source_feature(
+                kg,
+                uri,
+                item,
+                allowed_types=("Polygon", "MultiPolygon"),
+            )
             kg.g.add((uri, RDF.type, EntityTypes.Zone))
             kg.g.add((uri, PLN.name, Literal(f"{label}_{bsm or count}")))
             kg.g.add((uri, Relations.sfWithin, PLN.village))
@@ -75,6 +127,12 @@ def add_buildings(kg, features, *, gtype_ref: str, entry, ctx: BuildContext) -> 
         else:
             uri = EntityIdPolicy.fallback_uri("building", ysdm, i)
         EntityIdPolicy.attach_bsm(kg.g, uri, bsm)
+        _attach_source_feature(
+            kg,
+            uri,
+            b,
+            allowed_types=("Point", "MultiPoint"),
+        )
         kg.g.add((uri, RDF.type, EntityTypes.Facility))
         kg.g.add((uri, PLN.name, Literal(name)))
         kg.g.add((uri, PLN.facility_type, Literal("建筑")))
@@ -105,7 +163,13 @@ def add_terrain_entities(kg, lines_layer, points_layer) -> None:
         else:
             uri = EntityIdPolicy.fallback_uri("contour", ysdm, i)
         EntityIdPolicy.attach_bsm(kg.g, uri, bsm)
-        kg.g.add((uri, RDF.type, EntityTypes.Road))
+        _attach_source_feature(
+            kg,
+            uri,
+            c,
+            allowed_types=("LineString", "MultiLineString"),
+        )
+        kg.g.add((uri, RDF.type, EntityTypes.ContourLine))
         kg.g.add((uri, PLN.name, Literal(f"等高线_{elev or bsm or i}")))
         if elev:
             kg.g.add((uri, PLN.elevation, Literal(str(elev))))
@@ -114,6 +178,7 @@ def add_terrain_entities(kg, lines_layer, points_layer) -> None:
         kg.g.add((uri, geometry_kind, Literal(GEOMETRY_LINE)))
         kg.g.add((uri, semantic_group, Literal("terrain")))
         kg.g.add((uri, has_semantic_label, Literal(f"等高线{elev}m")))
+        add_geo_feature_type(kg.g, uri)
         count += 1
 
     for i, ep in enumerate(points_layer.get("elevation_points") or []):
@@ -127,6 +192,12 @@ def add_terrain_entities(kg, lines_layer, points_layer) -> None:
         else:
             uri = EntityIdPolicy.fallback_uri("elevpt", ysdm, i)
         EntityIdPolicy.attach_bsm(kg.g, uri, bsm)
+        _attach_source_feature(
+            kg,
+            uri,
+            ep,
+            allowed_types=("Point", "MultiPoint"),
+        )
         kg.g.add((uri, RDF.type, EntityTypes.Facility))
         kg.g.add((uri, PLN.name, Literal(f"高程点_{elev or i}")))
         if elev:
@@ -156,6 +227,12 @@ def add_boundaries(kg, polygons_layer, lines_layer) -> None:
         else:
             uri = EntityIdPolicy.fallback_uri("admin", ysdm, i)
         EntityIdPolicy.attach_bsm(kg.g, uri, bsm)
+        _attach_source_feature(
+            kg,
+            uri,
+            a,
+            allowed_types=("Polygon", "MultiPolygon"),
+        )
         kg.g.add((uri, RDF.type, EntityTypes.AdministrativeVillage))
         kg.g.add((uri, PLN.name, Literal(name)))
         kg.g.add((uri, Relations.sfWithin, PLN.village))
@@ -172,6 +249,12 @@ def add_boundaries(kg, polygons_layer, lines_layer) -> None:
         else:
             uri = EntityIdPolicy.fallback_uri("scope", "scope", i)
         EntityIdPolicy.attach_bsm(kg.g, uri, bsm)
+        _attach_source_feature(
+            kg,
+            uri,
+            ps,
+            allowed_types=("Polygon", "MultiPolygon"),
+        )
         kg.g.add((uri, RDF.type, EntityTypes.Zone))
         kg.g.add((uri, PLN.name, Literal("规划范围")))
         kg.g.add((uri, Relations.sfWithin, PLN.village))
@@ -191,13 +274,20 @@ def add_boundaries(kg, polygons_layer, lines_layer) -> None:
         else:
             uri = EntityIdPolicy.fallback_uri("adminline", ysdm, i)
         EntityIdPolicy.attach_bsm(kg.g, uri, bsm)
-        kg.g.add((uri, RDF.type, EntityTypes.Road))
+        _attach_source_feature(
+            kg,
+            uri,
+            bl,
+            allowed_types=("LineString", "MultiLineString"),
+        )
+        kg.g.add((uri, RDF.type, EntityTypes.AdministrativeBoundary))
         kg.g.add((uri, PLN.name, Literal(f"行政界线_{bsm or i}")))
         kg.g.add((uri, Relations.sfWithin, PLN.village))
         kg.g.add((uri, gis_type_ref, Literal("admin_boundary_line")))
         kg.g.add((uri, geometry_kind, Literal(GEOMETRY_LINE)))
         kg.g.add((uri, semantic_group, Literal("admin")))
         kg.g.add((uri, has_semantic_label, Literal("行政界线")))
+        add_geo_feature_type(kg.g, uri)
         count += 1
 
     if count:
@@ -221,6 +311,12 @@ def add_natural_resource_zones(kg, polygons_layer) -> None:
             else:
                 uri = EntityIdPolicy.fallback_uri(attr_name, ysdm, i)
             EntityIdPolicy.attach_bsm(kg.g, uri, bsm)
+            _attach_source_feature(
+                kg,
+                uri,
+                item,
+                allowed_types=("Polygon", "MultiPolygon"),
+            )
             kg.g.add((uri, RDF.type, EntityTypes.Zone))
             kg.g.add((uri, PLN.name, Literal(f"{label}_{bsm or i}")))
             kg.g.add((uri, Relations.sfWithin, PLN.village))

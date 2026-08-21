@@ -144,7 +144,7 @@ async def analyze_l2_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
         explore_section = f"{l1_fact_section}\n\n{explore_section}".strip()
 
     # 5. 组装 L2 Prompt（concept 模板）
-    prompt = _build_prompt(
+    prompt = f"【dimension_key={dim_key}】\n" + _build_prompt(
         cfg, state, rag_context, deps, same_layer_contexts, explore_section,
     )
     logger.info(f"[analyze_l2_dimension] {dim_key}: Prompt length = {len(prompt)} chars")
@@ -407,10 +407,20 @@ def _load_l1_fact_section(
         if not isinstance(payload, dict):
             return "", audit
         by_dimension = payload.get("facts_by_dimension") or {}
+        fact_records = payload.get("fact_records") or []
         location_facts = payload.get("location_facts") or []
         selected_dimensions = list(source_dimensions or [])
         if dimension_key in by_dimension:
             selected_dimensions.insert(0, dimension_key)
+        scoped_records = [
+            item
+            for item in fact_records
+            if (
+                not selected_dimensions
+                or not item.get("dimension_key")
+                or item.get("dimension_key") in selected_dimensions
+            )
+        ]
         scoped = [
             str(item)
             for source_dimension in dict.fromkeys(selected_dimensions)
@@ -418,8 +428,13 @@ def _load_l1_fact_section(
         ]
         # A dimension with no exact L1 counterpart receives no unrelated L1
         # prose; the KG EXPLORE path remains available separately.
-        facts = scoped
+        facts = [
+            f"[{item.get('fact_id')}] {item.get('statement')}"
+            for item in scoped_records
+            if item.get("statement")
+        ] or scoped
         audit["fact_count"] = len(facts)
+        audit["fact_record_count"] = len(scoped_records)
         scoped_locations = [
             item for item in location_facts
             if not selected_dimensions or item.get("dimension_key") in selected_dimensions

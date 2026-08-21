@@ -47,6 +47,17 @@ def create_grounding_llm():
     village partition that must list every cluster and a verbatim evidence
     snippet per name; MiniMax reasoning also consumes budget on <think> blocks.
     """
+    import os
+
+    if str(os.getenv("GROUND_LLM_ENABLED", "false")).strip().lower() not in {
+        "1", "true", "yes", "on"
+    }:
+        return None
+    if any(
+        str(os.getenv(name, "")).strip().lower() in {"1", "true", "yes", "on"}
+        for name in ("DISABLE_GROUND_LLM", "DISABLE_GROUND_REPORT_LLM")
+    ):
+        return None
     try:
         from app.infrastructure.llm.factory import (
             LLMProvider,
@@ -274,6 +285,7 @@ async def assign_role_names(
     llm: Any = None,
     cache: Optional[Path] = None,
     budget: Optional[Dict[str, Any]] = None,
+    context: Any = None,
 ) -> List["GazetteerEntry"]:
     """One role-parameterized grounding pass: derive candidates, let the LLM
     assign report names with evidence, aggregate into gazetteer entries."""
@@ -295,6 +307,13 @@ async def assign_role_names(
     todo = list(dict.fromkeys(todo))
     if not todo:
         return []
+    spatial_evidence = None
+    if context is not None:
+        from app.spatial.grounding.village_cluster_mapper import (
+            collect_spatial_anchor_evidence,
+        )
+
+        spatial_evidence = collect_spatial_anchor_evidence(context, todo)
     mapping = await assign_names(
         candidates,
         todo,
@@ -308,6 +327,7 @@ async def assign_role_names(
         cache=cache,
         llm=llm,
         budget=budget,
+        spatial_evidence=spatial_evidence,
     )
     return village_gazetteer_entries(
         mapping,
@@ -329,6 +349,7 @@ async def ground_report_facts(
     llm: Any = None,
     session_id: str = "",
     budget: Optional[Dict[str, Any]] = None,
+    context: Any = None,
 ) -> Dict[str, int]:
     """The complete GROUND flow over typed L1 facts.
 
@@ -373,6 +394,7 @@ async def ground_report_facts(
                 llm=llm,
                 cache=_cache("village"),
                 budget=budget,
+                context=context,
             )
         except Exception as exc:  # noqa: BLE001
             logger.warning("[report-grounder] village partition failed: %s", exc)
@@ -397,6 +419,7 @@ async def ground_report_facts(
                 llm=llm,
                 cache=_cache(role),
                 budget=budget,
+                context=context,
             )
         except Exception as exc:  # noqa: BLE001
             logger.warning("[report-grounder] role=%s failed: %s", role, exc)
@@ -407,57 +430,6 @@ async def ground_report_facts(
         if entries:
             logger.info("[report-grounder] role=%s grounded %d entities", role, len(entries))
     return counts
-
-
-_VILLAGE_COUNT_RE = None  # compiled lazily
-_DIRECTION_PAT = None
-
-
-def _first_village_count(report_text: str) -> int:
-    global _VILLAGE_COUNT_RE
-    import re
-
-    if _VILLAGE_COUNT_RE is None:
-        _VILLAGE_COUNT_RE = re.compile(r"(\d+)\s*个自然村")
-    m = _VILLAGE_COUNT_RE.search(report_text or "")
-    if m:
-        try:
-            return int(m.group(1))
-        except (TypeError, ValueError):
-            return 0
-    return 0
-
-
-def _village_clue(report_text: str, base: str) -> str:
-    global _DIRECTION_PAT
-    import re
-
-    if _DIRECTION_PAT is None:
-        _DIRECTION_PAT = re.compile(
-            r"(东南|西南|东北|西北|中部|东部|西部|南部|北部|东侧|西侧|南侧|北侧|东|南|西|北)"
-        )
-    for m in re.finditer(re.escape(base), report_text or ""):
-        window = (report_text[max(0, m.start() - 45): m.end() + 45]).replace("\n", " ")
-        if _DIRECTION_PAT.search(window):
-            return window[:90]
-    return ""
-
-
-def _infer_village_meta_fallback(
-    report_text: str,
-    village_names: List[str],
-) -> Dict[str, Any]:
-    """Deterministic fallback for village meta: regex count + per-village
-    direction-clue window.  Never the primary source; used only when the LLM
-    is unavailable or fails."""
-    return {
-        "total_count": _first_village_count(report_text),
-        "clues": {
-            base: clue
-            for base in village_names
-            if (clue := _village_clue(report_text, base))
-        },
-    }
 
 
 async def _infer_village_meta(
@@ -471,13 +443,13 @@ async def _infer_village_meta(
 
     Returns ``{"total_count": int, "clues": {村名: 方位描述}}``.  The LLM only
     produces text semantics (count + position wording); geometry still comes
-    from the KG/bundle.  Falls back to the deterministic regex baseline when
-    the model is unavailable or returns nothing usable, so this never blocks
-    grounding.
+    from the KG/bundle.  If the typed call is unavailable or invalid, the
+    result is empty and the caller keeps the unresolved diagnostic.
     """
-    fallback = _infer_village_meta_fallback(report_text, village_names)
+    empty = {"total_count": 0, "clues": {}}
     if llm is None or not (report_text or "").strip() or not village_names:
-        return fallback
+        logger.warning("[report-grounder] typed village meta evidence unavailable")
+        return empty
     cache_key = hashlib.sha256(
         f"village-meta|{report_text[:4000]}|{','.join(village_names)}".encode("utf-8")
     ).hexdigest()
@@ -485,7 +457,7 @@ async def _infer_village_meta(
         try:
             raw = json.loads(cache.read_text(encoding="utf-8"))
             if raw.get("key") == cache_key:
-                return raw.get("value") or fallback
+                return raw.get("value") or empty
         except Exception:
             pass
     try:
@@ -501,8 +473,8 @@ async def _infer_village_meta(
 
         prompt = (
             "你是村庄规划 GIS 证据编译器。下面是某行政村的现状报告摘录与报告提到的自然村名。"
-            "请推导：1) 本村共有多少个自然村（total_count，依据报告表述如“全村共有12个自然村”，"
-            "无明确数字时按报告实际出现的自然村名数量估算）；"
+            "请提取：1) 本村共有多少个自然村（total_count，仅接受报告明确给出的数字，"
+            "没有明确数字时填 0，不要估算）；"
             "2) 每个自然村的方位/分布线索（positions，如「园寨位于村中部」「田坑在村东南部」），"
             "只写报告中可找到依据的方位描述，没有就留空字符串。\n"
             f"自然村名：{('、'.join(village_names))[:500]}\n"
@@ -518,35 +490,24 @@ async def _infer_village_meta(
 
         structured_timeout = reserve_ground_llm_call(budget)
         if structured_timeout is None:
-            return fallback
-        try:
-            async def _invoke_structured():
-                return await run_structured_output(
-                    _Meta,
-                    [{"role": "user", "content": prompt}],
-                    max_retries=1,
-                    timeout=structured_timeout,
-                    temperature=0.1,
-                    max_tokens=600,
-                    llm=llm,
-                )
-
-            response = await run_ground_llm_call(
-                budget, structured_timeout, _invoke_structured
+            logger.warning("[report-grounder] village meta call budget unavailable")
+            return empty
+        async def _invoke_structured():
+            return await run_structured_output(
+                _Meta,
+                [{"role": "user", "content": prompt}],
+                max_retries=1,
+                timeout=structured_timeout,
+                temperature=0.1,
+                max_tokens=600,
+                llm=llm,
+                allow_content_json_fallback=False,
             )
-            meta = response.model_dump()
-        except Exception:
-            text_timeout = reserve_ground_llm_call(budget)
-            if text_timeout is None:
-                return fallback
-            async def _invoke_text():
-                return await llm.ainvoke(prompt)
 
-            raw = await run_ground_llm_call(budget, text_timeout, _invoke_text)
-            content = getattr(raw, "content", "") or ""
-            if isinstance(content, list):
-                content = "".join(content)
-            meta = _parse_village_meta_json(str(content or ""))
+        response = await run_ground_llm_call(
+            budget, structured_timeout, _invoke_structured
+        )
+        meta = response.model_dump()
         total = int(meta.get("total_count") or 0)
         clues: Dict[str, str] = {}
         for pos in meta.get("positions") or []:
@@ -568,27 +529,9 @@ async def _infer_village_meta(
                 except Exception:
                     pass
             return value
-    except Exception as exc:  # noqa: BLE001 - fallback is always safe
+    except Exception as exc:  # noqa: BLE001 - typed failure is explicit
         logger.warning("[report-grounder] village meta LLM inference failed: %s", exc)
-    return fallback
-
-
-def _parse_village_meta_json(raw: str) -> Dict[str, Any]:
-    """Parse the text-protocol village-meta JSON (think-stripped)."""
-    import re as _re
-
-    text = _re.sub(r"<think>.*?</think>", "", raw or "", flags=_re.I | _re.S)
-    text = _re.sub(r"<think>.*$", "", text, flags=_re.I | _re.S)
-    match = _re.search("\\{.*\\}", text, _re.DOTALL)
-    if not match:
-        return {}
-    try:
-        data = json.loads(match.group(0))
-        if isinstance(data, dict):
-            return data
-    except Exception:
-        return {}
-    return {}
+    return empty
 
 
 @dataclass
@@ -629,7 +572,10 @@ def extract_spatial_inventory(
         inv.names_by_role[role] = list(dict.fromkeys(inv.names_by_role[role]))
     village_bases = list(dict.fromkeys(village_bases))
 
-    inv.total_village_count = _first_village_count(report_text)
+    # Report prose is not parsed for spatial identity or counts.  If a
+    # natural-village count is needed, the typed LLM meta contract supplies it;
+    # otherwise the explicitly extracted typed names define the query set.
+    inv.total_village_count = 0
 
     # facility/road/water/landmark -> village associations from the fact's
     # source span (e.g. ``现状设施 | 祠堂 | 社前村 | 三座祠堂``).
@@ -640,23 +586,32 @@ def extract_spatial_inventory(
         name = str(getattr(fact, "normalized_name", "") or "").strip()
         if not name:
             continue
-        span = " ".join(
-            str(x)
-            for x in (
-                getattr(fact, "source_span", "") or "",
-                getattr(fact, "spatial_hint", "") or "",
-            )
-            if x
-        )
-        for vb in village_bases:
-            if vb in span:
-                inv.facility_villages.append((name, vb))
+        references = [
+            str(getattr(fact, "spatial_hint", "") or "").strip(),
+            *[
+                str(value or "").strip()
+                for value in (getattr(fact, "related_mentions", None) or [])
+            ],
+        ]
+        for reference in references:
+            base = reference.removesuffix("村").removesuffix("自然村").strip()
+            if base in village_bases:
+                inv.facility_villages.append((name, base))
     inv.facility_villages = list(dict.fromkeys(inv.facility_villages))
 
-    for vb in village_bases:
-        clue = _village_clue(report_text, vb)
-        if clue:
-            inv.clues[vb] = clue
+    # A spatial hint carried by a typed village fact is safe context for the
+    # LLM prompt; it is not interpreted here into a geometry assignment.
+    for fact in facts or []:
+        if str(getattr(fact, "role", "") or "").strip().lower() != "village":
+            continue
+        name = str(
+            getattr(fact, "normalized_name", "")
+            or getattr(fact, "mention", "")
+            or ""
+        ).strip()
+        hint = str(getattr(fact, "spatial_hint", "") or "").strip()
+        if name and hint and hint != name:
+            inv.clues[name.removesuffix("村").removesuffix("自然村").strip()] = hint
 
     if workspace is not None:
         for p in list((getattr(workspace, "points", {}) or {}).get("annotations_current") or []):
@@ -672,11 +627,11 @@ def extract_spatial_inventory(
     return inv
 
 
-_PARTITION_PROMPT = """你是村庄规划 GIS 证据编译器。本村共有 {n} 个自然村：{{villages}}。
+_PARTITION_PROMPT = """你是村庄规划 GIS 证据编译器。待核对的自然村名称：{{villages}}。
 系统中有 {{m}} 个宅基地聚落（编号 0..{{max_index}}），每个聚落有质心坐标与规模：
 {{clusters}}
 
-任务：把全部 {{m}} 个聚落分配到 {n} 个自然村（多对一）。每个聚落只能属于一个自然村，每个自然村至少分配一个聚落。
+任务：只为有明确证据和跨源空间锚点支持的自然村选择 {{m}} 个候选聚落中的一个或多个。每个聚落最多属于一个自然村。
 允许依据（按优先级）：
 1. 报告推导的每村方位/分布线索：{clues}；
 2. 报告摘录中明确出现的方位/相对位置（如「园寨位于村中部」）；
@@ -685,24 +640,9 @@ _PARTITION_PROMPT = """你是村庄规划 GIS 证据编译器。本村共有 {n}
 5. 报告原文逐字证据。
 禁止按名称顺序、规模顺序或常识猜测。
 
-输出每个自然村对应的 candidate_indexes（候选编号列表）和 evidence。
-evidence 尽量填报告摘录中可逐字找到的短句；无明确原文证据时填最接近的推断依据。
-不要输出解释或思考过程，只输出结果。必须覆盖全部 {n} 个自然村和全部 {{m}} 个聚落，每个自然村至少一个聚落，每个聚落只能属于一个自然村。"""
-
-
-_CLUE_POS_WORDS = [
-    ("中部", "中部"), ("东部", "东"), ("西部", "西"), ("南部", "南"), ("北部", "北"),
-    ("东南", "东南"), ("西南", "西南"), ("东北", "东北"), ("西北", "西北"),
-    ("东侧", "东"), ("西侧", "西"), ("南侧", "南"), ("北侧", "北"),
-    ("东", "东"), ("南", "南"), ("西", "西"), ("北", "北"),
-]
-
-
-def _clue_position(clue: str) -> Optional[str]:
-    for word, pos in _CLUE_POS_WORDS:
-        if word in (clue or ""):
-            return pos
-    return None
+输出有明确报告证据和跨源空间锚点支持的自然村 candidate_indexes（候选编号列表）和 evidence。
+evidence 必须是报告摘录中可逐字找到的短句；没有明确证据的名称必须省略。
+不要输出解释或思考过程；不要求覆盖全部名称或聚落，禁止用空间就近、名称顺序、数量或常识补齐。"""
 
 
 def _centroid_dist(a: tuple, b: tuple) -> float:
@@ -714,17 +654,13 @@ def deterministic_village_partition(
     workspace: Any,
     clusters: List[VillageCluster],
 ) -> Dict[str, Dict[str, Any]]:
-    """Deterministic village -> clusters partition (no LLM).
+    """Return only explicitly anchored village clusters.
 
-    Uses ONLY report facts + KG geometry:
-      1. facility -> village associations: each matching facility point's
-         nearest residential cluster belongs to that village (L1 text anchor);
-      2. per-village direction clues: clusters at the matching relative
-         position (方位) belong to that village;
-      3. fill: every remaining cluster goes to the nearest anchored village;
-         villages with no anchor get the nearest remaining clusters so the
-         report's total village count is covered where geometry allows.
-    Global consistency holds by construction (one cluster <= one village).
+    A village-name point from the source bundle is a typed external spatial
+    anchor. It may bind the nearest residential body, but an unanchored body
+    is never assigned by distance, order, count coverage, or a guessed name.
+    All other village mappings must come from the typed LLM/EvidenceGraph
+    path; missing evidence stays unresolved.
     """
     mapping: Dict[str, Dict[str, Any]] = {}
 
@@ -738,6 +674,8 @@ def deterministic_village_partition(
         for v in inventory.names_by_role.get("village", [])
     ]
     report_bases = list(dict.fromkeys(report_bases))
+    if not clusters:
+        return mapping
 
     # 0) external-source authoritative coordinates (Tianditu / Tencent / AMap
     #    村名 annotations): a report village whose name matches an external POI
@@ -748,99 +686,13 @@ def deterministic_village_partition(
         if not ext_base or lon is None or lat is None:
             continue
         for base in report_bases:
-            if base == ext_base or base in ext_base or ext_base in base:
+            if base == ext_base:
                 best = min(clusters, key=lambda cl: _centroid_dist(cl.centroid, (lon, lat)))
                 _add(base, best.index, f"外源POI:{ext_name}")
                 break
 
-    # 1) facility -> village anchors: a facility reported at village V anchors
-    #    V to the SINGLE nearest cluster among all its matching points (the
-    #    facility's primary location).  Assigning every point would over-load
-    #    one village (e.g. 13 祠 points -> 13 clusters to one village).
-    for facility, village in inventory.facility_villages:
-        evidence = f"设施{facility}位于{village}"
-        best_cluster = None
-        best_dist = float("inf")
-        for c in derive_candidates(workspace, "facility"):
-            label = str(c.features.get("名称", "") or "")
-            if not label or not (label in facility or facility in label):
-                continue
-            if not c.centroid:
-                continue
-            cl = min(clusters, key=lambda x: _centroid_dist(x.centroid, c.centroid))
-            d = _centroid_dist(cl.centroid, c.centroid)
-            if d < best_dist:
-                best_dist = d
-                best_cluster = cl
-        if best_cluster is not None:
-            _add(village, best_cluster.index, evidence)
-
-    # 2) direction clues
-    for village, clue in inventory.clues.items():
-        pos = _clue_position(clue)
-        if pos:
-            for cl in clusters:
-                if cl.features.get("方位") == pos:
-                    _add(village, cl.index, clue[:80])
-
-    if not clusters:
-        return mapping
-
-    # 3) coverage fill: every report-named village gets at least one cluster
-    #    and every cluster lands somewhere, via spatial nearest - NEVER by
-    #    name order or by dumping everything on the first anchor.  Evidence
-    #    anchors (steps 1-2) always win; this only covers the rest.
-    report_bases = [
-        (v.removesuffix("村").removesuffix("自然村").strip() or v)
-        for v in inventory.names_by_role.get("village", [])
-    ]
-    report_bases = list(dict.fromkeys(report_bases))
-
-    def _used() -> set:
-        return {idx for item in mapping.values() for idx in item["cluster_indexes"]}
-
-    def _village_centroid(village: str) -> tuple:
-        idxs = mapping.get(village, {}).get("cluster_indexes", []) or []
-        pts = [c.centroid for c in clusters if c.index in idxs]
-        if not pts:
-            return (0.0, 0.0)
-        return (sum(p[0] for p in pts) / len(pts), sum(p[1] for p in pts) / len(pts))
-
-    # 3a) every village with no cluster yet takes its nearest free cluster
-    #     (spatial proximity, iterated so later villages stay spread out).
-    unassigned = [c for c in clusters if c.index not in _used()]
-    for village in report_bases:
-        if not unassigned:
-            break
-        if mapping.get(village, {}).get("cluster_indexes"):
-            continue
-        best = min(unassigned, key=lambda c: _centroid_dist(
-            c.centroid,
-            _village_centroid(village) if mapping.get(village, {}).get("cluster_indexes") else (
-                # no anchor yet: prefer the largest remaining settlement so the
-                # village gets a real 宅基地 core (coverage, not name mapping)
-                (0.0, 0.0)
-            ),
-        ))
-        _add(village, best.index, "空间就近覆盖")
-        unassigned = [c for c in clusters if c.index not in _used()]
-
-    # 3b) any remaining clusters -> nearest already-covered village.
-    for cl in clusters:
-        if cl.index in _used():
-            continue
-        covered = [v for v in report_bases if mapping.get(v, {}).get("cluster_indexes")]
-        if not covered:
-            break
-        nearest = min(covered, key=lambda v: _centroid_dist(
-            cl.centroid,
-            _village_centroid(v),
-        ))
-        _add(nearest, cl.index, "空间就近")
-
-    # 4) aggregate each village's BSM union + weighted centroid from its member
-    #    clusters (same shape the LLM partition produces), so downstream
-    #    gazetteer entries carry the spatial extent.
+    # Aggregate each explicitly anchored village's BSM union + weighted
+    # centroid. Unanchored clusters remain outside the mapping.
     from app.spatial.grounding.village_cluster_mapper import _aggregate_clusters
 
     for village, item in mapping.items():
@@ -872,18 +724,14 @@ async def ground_village_partition(
     llm: Any = None,
     cache: Optional[Path] = None,
     budget: Optional[Dict[str, Any]] = None,
+    context: Any = None,
 ) -> List["GazetteerEntry"]:
-    """Collective natural-village grounding: assign ALL residential clusters
-    across ALL report-named villages (many-to-one partition).
+    """Collective natural-village grounding over evidence-backed clusters.
 
-    LLM-driven: the model first derives the natural-village count and per
-    village position clues from the report (regex only as fallback), then
-    assigns ALL residential clusters to ALL report-named villages under a
-    many-to-one constraint (one cluster <= one village enforced by conflict
-    resolution).  The deterministic pass (facility->village anchors +
-    direction clues + nearest fill) remains as the LLM-free baseline and fills
-    villages the LLM leaves uncovered.  Geometry/BSMs always come from the
-    bundle clusters; the LLM never emits coordinates.
+    The typed LLM assigns only candidates supported by verbatim report
+    evidence and cross-source spatial anchors. A partial response is valid;
+    omitted names and clusters remain unresolved. Geometry/BSMs always come
+    from Bundle clusters; the LLM never emits coordinates.
     """
     from app.spatial.grounding.village_cluster_mapper import (
         assign_names,
@@ -908,21 +756,28 @@ async def ground_village_partition(
         return []
 
     # LLM-driven village meta: natural-village count + per-village position
-    # clues derived from the report (regex only as fallback).
+    # clues derived from the report.
     meta = await _infer_village_meta(report_text, bases, llm, cache, budget)
     n = int(meta.get("total_count") or 0) or inventory.total_village_count or len(todo)
     clues = dict(inventory.clues)
     clues.update(meta.get("clues") or {})
 
-    # Deterministic baseline: facility->village text anchors + direction clues
-    # + nearest fill.  It is the LLM-free path and fills villages the LLM
-    # leaves uncovered, so every report-named village is covered where the
-    # geometry allows.
+    # Deterministic baseline is limited to explicit external village-name
+    # point anchors.  It must never allocate an unanchored cluster by nearest
+    # distance or by report order.
     mapping = deterministic_village_partition(inventory, workspace, clusters)
 
-    # LLM-driven full partition: the model assigns ALL residential clusters to
-    # ALL report-named villages (many-to-one, one cluster <= one village via
-    # conflict resolution).  The deterministic result is only a fallback.
+    spatial_evidence = None
+    if context is not None:
+        from app.spatial.grounding.village_cluster_mapper import (
+            collect_spatial_anchor_evidence,
+        )
+
+        spatial_evidence = collect_spatial_anchor_evidence(context, todo)
+
+    # LLM-driven closed-set partition.  A partial typed result is accepted
+    # only for names backed by verbatim report evidence and spatial anchors;
+    # every omitted name remains unresolved.
     if llm is not None:
         try:
             cluster_lines = "\n".join(_candidate_line(c) for c in clusters)
@@ -932,19 +787,27 @@ async def ground_village_partition(
                 for nm, lon, lat in inventory.external_pois[:10]
             ) or "无"
             clue_lines = "；".join(f"{v}：{c}" for v, c in clues.items()) or "无"
-            prompt = _PARTITION_PROMPT.format(
-                n=n, clues=clue_lines, assocs=assocs, pois=pois,
-            )
             llm_mapping = await assign_names(
                 clusters,
                 todo,
-                prompt_template=prompt,
+                # Keep this template unrendered until the shared mapper adds
+                # the candidate list.  Rendering it here would turn escaped
+                # JSON braces into active format braces, and the second
+                # rendering in _map_bodies would fail with ``Single '}'``.
+                prompt_template=_PARTITION_PROMPT,
                 cache_key_prefix="village-partition-v4",
-                require_evidence=False,
+                prompt_kwargs={
+                    "n": n,
+                    "clues": clue_lines,
+                    "assocs": assocs,
+                    "pois": pois,
+                },
+                require_evidence=True,
                 report_text=report_text,
                 cache=cache,
                 llm=llm,
                 budget=budget,
+                spatial_evidence=spatial_evidence,
             )
             if llm_mapping:
                 merged = dict(llm_mapping)
@@ -970,8 +833,9 @@ async def ground_village_partition(
 class LocationReviewItem:
     """A low-confidence location that needs a human decision.
 
-    Always carries an LLM-recommended placement (bsms/geometry) so the human
-    can confirm or override; never an empty 'cannot locate' dead end.
+    It may carry no geometry at all.  A human can only override the location
+    with explicit BSMs; unresolved evidence is never converted into a nearby
+    parcel suggestion.
     """
     name: str
     role: str
@@ -984,8 +848,8 @@ class LocationReviewItem:
 
 class HumanReviewQueue:
     """In-memory per-session queue of low-confidence locations for human
-    confirmation.  The LLM recommendation is always present; the human only
-    arbitrates when confidence is insufficient."""
+    confirmation.  An item without recommended BSMs records an evidence gap;
+    it is not a geometric recommendation."""
 
     def __init__(self) -> None:
         self._items: Dict[str, List[LocationReviewItem]] = {}
@@ -1059,13 +923,13 @@ async def ground_report(
     *,
     llm: Any = None,
     session_id: str = "",
-    always_land: bool = True,
+    budget: Optional[Dict[str, Any]] = None,
 ) -> GroundReportResult:
     """The complete GROUND flow over a ``PlanningContext`` + typed L1 facts.
 
     Phase 1: spatial inventory from the report.  Phase 2: collective village
     partition + per-role LLM evidence assignment, upserted into the context
-    gazetteer.  Then the evidence index is rebuilt and every fact is audited
+    gazetteer.  Then the EvidenceGraph is rebuilt and every fact is audited
     through it - status is ``grounded`` only when the entity actually resolves
     to a spatial extent/geometry; everything else is explicitly unresolved.
     """
@@ -1078,28 +942,21 @@ async def ground_report(
         report_text,
         llm=llm,
         session_id=session_id,
+        budget=budget,
+        context=context,
     )
     try:
         context.location_facts = list(facts or [])
-        from app.evidence.index.place_evidence_index import PlaceEvidenceIndex
+        from app.evidence.retrieval.evidence_graph import EvidenceGraph
 
-        context.evidence_index = PlaceEvidenceIndex.build(context)
+        context.evidence_graph = EvidenceGraph.build(context)
     except Exception as exc:  # noqa: BLE001
-        logger.warning("[report-grounder] evidence index rebuild failed: %s", exc)
+        logger.warning("[report-grounder] evidence graph rebuild failed: %s", exc)
 
-    index = getattr(context, "evidence_index", None)
+    graph = getattr(context, "evidence_graph", None)
     queue = HumanReviewQueue()
     entities: List[GroundedEntity] = []
     seen = set()
-    # Fallback extent computed once and reused (cluster build is expensive).
-    _fallback_cache = {}
-
-
-    def _fallback(name: str, role: str) -> tuple:
-        key = "default"
-        if key not in _fallback_cache:
-            _fallback_cache[key] = _nearest_extent_fallback(context, name, role)
-        return _fallback_cache[key]
     for fact in facts or []:
         name = str(
             getattr(fact, "normalized_name", "")
@@ -1111,9 +968,9 @@ async def ground_report(
             continue
         seen.add((name, role))
         candidate = None
-        if index is not None:
+        if graph is not None:
             try:
-                res = index.resolve_mention(name, role=role)
+                res = graph.resolve_mention(name, role=role)
                 if res.status == "resolved" and res.candidates:
                     candidate = res.candidates[0]
             except Exception:
@@ -1129,37 +986,18 @@ async def ground_report(
                 bsms=list(getattr(candidate, "source_bsms", None) or []),
                 geometry_ref=str(getattr(candidate, "geometry_ref", "") or ""),
                 entity_uri=str(getattr(candidate, "entity_ref", "") or ""),
-                source="evidence_index",
+                source="evidence_graph",
             ))
         else:
-            # ALWAYS LAND: when the deterministic/LLM pass left a name without
-            # an extent, attach the nearest residential-cluster extent as an
-            # LLM-recommended placement and raise a human review item.  A name
-            # never ends as a dead "cannot locate"; it lands with a confidence
-            # and a human decision point.
-            fb_bsms, fb_geom, fb_conf = _fallback(name, role)
-            if always_land and fb_bsms:
-                entities.append(GroundedEntity(
+            entities.append(GroundedEntity(name=name, role=role, status="unresolved"))
+            queue.add(
+                session_id,
+                LocationReviewItem(
                     name=name,
                     role=role,
-                    status="grounded",
-                    bsms=fb_bsms,
-                    geometry_ref=fb_geom,
-                    source="llm_recommended_fallback",
-                ))
-                queue.add(
-                    session_id,
-                    LocationReviewItem(
-                        name=name,
-                        role=role,
-                        recommended_bsms=fb_bsms,
-                        recommended_geometry_ref=fb_geom,
-                        confidence=fb_conf,
-                        reason="置信度不足：确定性/LLM 未给出强证据，LLM 推荐落位至最近村落范围，需人工确认",
-                    ),
-                )
-            else:
-                entities.append(GroundedEntity(name=name, role=role, status="unresolved"))
+                    reason="EvidenceGraph 未解析出可验证空间范围；未生成候选几何，需要补充 L1/KG/bundle evidence",
+                ),
+            )
     result = GroundReportResult(
         entities=entities,
         counts=counts,
@@ -1169,35 +1007,6 @@ async def ground_report(
     )
     logger.info("[report-grounder] %s reviews=%d", result.summary(), len(result.reviews))
     return result
-
-
-def _nearest_extent_fallback(
-    context: Any,
-    name: str,
-    role: str,
-) -> tuple:
-    """LLM-recommended fallback extent for a name the evidence pass could not
-    place: the nearest residential cluster's BSM union (geometry from the KG,
-    never invented).  Confidence is intentionally low so it routes to human
-    review."""
-    from app.spatial.grounding.village_cluster_mapper import build_village_clusters
-
-    parcels = []
-    try:
-        workspace = getattr(context, "workspace", None)
-        parcels = list((getattr(workspace, "polygons", {}) or {}).get("landuse_current") or [])
-    except Exception:
-        parcels = []
-    clusters = build_village_clusters(parcels)
-    if not clusters:
-        return [], "", 0.0
-    # fallback to the village-centre cluster (largest settlement)
-    cluster = clusters[0]
-    return (
-        list(dict.fromkeys(cluster.bsms or [])),
-        f"residential-cluster:{cluster.index}",
-        round(0.25 + 0.05 * min(len(cluster.bsms or []), 10), 2),
-    )
 
 
 __all__ = [

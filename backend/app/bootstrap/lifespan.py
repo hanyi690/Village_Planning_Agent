@@ -80,6 +80,9 @@ async def lifespan(app):
         raise
     app.state.readiness = {"database": "ready", "checkpointer": "ready", "langgraph": "ready"}
 
+    from app.application.queries.evidence import configure_external_provider
+    configure_external_provider(app)
+
     from app.infrastructure.events import event_hub
     event_hub.save_event_loop(asyncio.get_running_loop())
     logger.info("SSE event loop saved")
@@ -99,10 +102,21 @@ async def lifespan(app):
 
     logger.info("Cleaning up resources...")
     try:
+        from app.application.queries.evidence import close_external_provider
+        await close_external_provider(app)
+    except Exception as exc:  # noqa: BLE001
+        logger.error("Failed to close external evidence provider: %s", exc, exc_info=True)
+    try:
         from app.infrastructure.runtime.planning_runtime_service import PlanningRuntimeService
         await PlanningRuntimeService.shutdown()
     except Exception as exc:  # noqa: BLE001
         logger.error("Failed to cancel runtime tasks: %s", exc, exc_info=True)
+    try:
+        from app.infrastructure.llm.instructor_client import close_cached_clients
+        await close_cached_clients()
+        logger.info("Structured LLM clients closed")
+    except Exception as exc:  # noqa: BLE001
+        logger.error("Failed to close structured LLM clients: %s", exc, exc_info=True)
     try:
         from app.database import dispose_async_engine
         async with asyncio.timeout(5):

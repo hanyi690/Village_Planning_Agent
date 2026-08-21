@@ -337,10 +337,13 @@ def _zone_worker(
     ]
     # A relation-aware zone may be backed by an execution polygon rather than
     # an authoritative parcel allocation.  Materialize that typed geometry
-    # directly; leave parcel allocation for legacy zone targets.
+    # directly.  A candidate-bound target that is not executable is deferred;
+    # it must never be widened into a whole BSM by the allocation branch.
     direct_targets: list[Any] = []
+    blocked_targets: list[Any] = []
     direct_layers: list[dict[str, Any]] = []
     direct_features: list[dict[str, Any]] = []
+    blocked_unresolved: list[dict[str, Any]] = []
     candidate_map = getattr(state, "candidate_geometry_by_id", {}) or {}
     from shapely import wkt as shapely_wkt
     from shapely.geometry import mapping as shapely_mapping
@@ -348,15 +351,47 @@ def _zone_worker(
         if str(getattr(task, "target_type", "") or "") != "zone":
             continue
         candidate_id = str(getattr(task, "candidate_id", "") or "")
-        candidate = candidate_map.get(candidate_id)
-        if candidate is None or not str(getattr(candidate, "wkt", "") or ""):
+        if not candidate_id:
             continue
+        candidate = candidate_map.get(candidate_id)
         target = next((item for item in zone_targets if str(getattr(item, "target_id", "")) == str(getattr(task, "target_id", ""))), None)
         if target is None:
             continue
+        if candidate is None:
+            blocked_targets.append(target)
+            blocked_unresolved.append({
+                "code": "candidate_geometry_missing",
+                "target_id": str(target.target_id),
+                "candidate_id": candidate_id,
+                "message": "Zone execution requires the selected candidate geometry artifact.",
+            })
+            continue
+        candidate_role = str(getattr(candidate, "role", "") or "")
+        candidate_wkt = str(getattr(candidate, "wkt", "") or "").strip()
+        if candidate_role != "execution_geometry" or not candidate_wkt:
+            blocked_targets.append(target)
+            blocked_unresolved.append({
+                "code": "candidate_geometry_not_executable",
+                "target_id": str(target.target_id),
+                "candidate_id": candidate_id,
+                "candidate_role": candidate_role,
+                "message": "Zone candidate is a scope/corridor/parcel candidate, not execution geometry.",
+            })
+            continue
         try:
-            geometry = shapely_mapping(shapely_wkt.loads(str(candidate.wkt)))
-        except Exception:
+            parsed_geometry = shapely_wkt.loads(candidate_wkt)
+            if parsed_geometry.is_empty or not parsed_geometry.is_valid:
+                raise ValueError("empty_or_invalid_geometry")
+            geometry = shapely_mapping(parsed_geometry)
+        except Exception as exc:
+            blocked_targets.append(target)
+            blocked_unresolved.append({
+                "code": "candidate_geometry_invalid",
+                "target_id": str(target.target_id),
+                "candidate_id": candidate_id,
+                "message": "Zone execution candidate geometry could not be parsed.",
+                "exception_type": type(exc).__name__,
+            })
             continue
         direct_targets.append(target)
         direct_features.append({
@@ -365,8 +400,35 @@ def _zone_worker(
                 "target_id": str(target.target_id),
                 "project_ref": str(target.target_id),
                 "candidate_id": candidate_id,
+                "source_bsms": list(getattr(candidate, "source_bsms", None) or []),
+                "feature_bsms": list(getattr(candidate, "feature_bsms", None) or []),
+                "source_feature_ids": list(
+                    getattr(candidate, "source_feature_ids", None) or []
+                ),
+                "entity_refs": list(getattr(candidate, "entity_refs", None) or []),
+                "relation_refs": list(getattr(candidate, "relation_refs", None) or []),
+                "evidence_refs": list(getattr(candidate, "evidence_refs", None) or []),
+                "l1_snapshot_ref": str(
+                    getattr(candidate, "l1_snapshot_ref", "") or ""
+                ),
+                "bundle_snapshot_digest": str(
+                    getattr(candidate, "bundle_snapshot_digest", "") or ""
+                ),
+                "subgeometry_operation": str(
+                    getattr(candidate, "subgeometry_operation", "") or ""
+                ),
+                "subgeometry_diagnostics": list(
+                    getattr(candidate, "subgeometry_diagnostics", None) or []
+                ),
+                "source_area_ha": getattr(candidate, "source_area_ha", None),
+                "planning_area_ha": getattr(candidate, "planning_area_ha", None),
+                "coverage_ratio": getattr(candidate, "coverage_ratio", None),
                 "scenario_id": str(getattr(task, "scenario_id", "") or ""),
-                "source_refs": list(getattr(candidate, "evidence_refs", None) or []) or [str(getattr(candidate, "source_ref", "") or "candidate_geometry")],
+                "source_refs": list(dict.fromkeys([
+                    *list(getattr(candidate, "source_refs", None) or []),
+                    *list(getattr(candidate, "evidence_refs", None) or []),
+                    str(getattr(candidate, "source_ref", "") or ""),
+                ])) or ["candidate_geometry"],
                 "generation_operation": "candidate_geometry_materialize",
                 "materialization_role": "land_use_assignment",
                 "hard_constraint_status": str(
@@ -382,14 +444,23 @@ def _zone_worker(
             "data": {"type": "FeatureCollection", "features": direct_features},
         })
     direct_ids = {str(getattr(item, "target_id", "")) for item in direct_targets}
-    zone_targets = [item for item in zone_targets if str(getattr(item, "target_id", "")) not in direct_ids]
+    blocked_ids = {str(getattr(item, "target_id", "")) for item in blocked_targets}
+    zone_targets = [
+        item
+        for item in zone_targets
+        if str(getattr(item, "target_id", "")) not in direct_ids
+        and str(getattr(item, "target_id", "")) not in blocked_ids
+    ]
     parcel_by_bsm = _resolve_parcel_by_bsm(state)
     diagnostics: List[Dict[str, Any]] = []
     unresolved: List[Dict[str, Any]] = []
     task_statuses: Dict[str, str] = {}
     layers: list[dict[str, Any]] = list(direct_layers)
+    unresolved.extend(blocked_unresolved)
     for target in direct_targets:
         task_statuses[str(target.target_id)] = "succeeded"
+    for target in blocked_targets:
+        task_statuses[str(target.target_id)] = "deferred"
 
     functional_layer, functional_unresolved, functional_succeeded = (
         _functional_overlay_layer(custom_targets, parcel_by_bsm)
@@ -426,6 +497,7 @@ def _zone_worker(
             diagnostics,
             task_statuses,
             direct_targets,
+            blocked_targets,
         )
 
     zone_changes: list[ParcelChange] = []
@@ -535,6 +607,7 @@ def _zone_worker(
         diagnostics,
         task_statuses,
         direct_targets,
+        blocked_targets,
     )
 
 
@@ -549,8 +622,15 @@ def _worker_result(
     diagnostics: list[dict[str, Any]],
     task_statuses: dict[str, str],
     direct_targets: list[Any] | None = None,
+    blocked_targets: list[Any] | None = None,
 ) -> WorkerResult:
-    worker_targets = list(direct_targets or []) + zone_targets + custom_targets + invalid_custom_tasks
+    worker_targets = (
+        list(direct_targets or [])
+        + list(blocked_targets or [])
+        + zone_targets
+        + custom_targets
+        + invalid_custom_tasks
+    )
     return WorkerResult(
         worker_type="zone",
         task_results=[

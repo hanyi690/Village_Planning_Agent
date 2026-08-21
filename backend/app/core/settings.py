@@ -94,9 +94,16 @@ DIMENSION_EXECUTION_TIMEOUT_S = float(
 )  # includes provider queue wait plus one long real request
 LAYER_TIMEOUT_S = int(os.getenv("LAYER_TIMEOUT_S", "1800"))  # bounds a full provider wave set without allowing an unbounded fan-in
 GROUND_ANCHOR_TIMEOUT_S = float(os.getenv("GROUND_ANCHOR_TIMEOUT_S", "180"))  # optional L1 enrichment budget; never block L2 indefinitely
-GROUND_LLM_CALL_TIMEOUT_S = float(os.getenv("GROUND_LLM_CALL_TIMEOUT_S", "30"))  # best-effort per-fact grounding call
-GROUND_MAX_LLM_CALLS = int(os.getenv("GROUND_MAX_LLM_CALLS", "8"))  # total location-fallback call cap; deterministic resolution follows
-GROUND_LLM_MAX_CONCURRENT = int(os.getenv("GROUND_LLM_MAX_CONCURRENT", "4"))  # bounded location-level fan-out
+# Spatial grounding is still opt-in below.  Once enabled, one run needs enough
+# time for grouped ambiguous mentions and typed topology-aware choices; the
+# deterministic candidate graph always runs first, so these are not blind calls.
+GROUND_LLM_CALL_TIMEOUT_S = float(os.getenv("GROUND_LLM_CALL_TIMEOUT_S", "60"))
+GROUND_MAX_LLM_CALLS = int(os.getenv("GROUND_MAX_LLM_CALLS", "16"))
+GROUND_LLM_MAX_CONCURRENT = int(os.getenv("GROUND_LLM_MAX_CONCURRENT", "4"))
+GROUND_QUERY_SPEC_MAX_TOKENS = int(
+    os.getenv("GROUND_QUERY_SPEC_MAX_TOKENS", "1200")
+)
+GROUND_LLM_ENABLED = os.getenv("GROUND_LLM_ENABLED", "false").lower() in {"1", "true", "yes", "on"}
 RAG_TIMEOUT_S = int(os.getenv("RAG_TIMEOUT_S", "60"))  # per-dimension RAG retrieval cap
 TOOL_TIMEOUT_S = int(os.getenv("TOOL_TIMEOUT_S", "30"))  # per-tool call budget in DataPipeline
 EXTERNAL_ANCHOR_TIMEOUT_S = int(os.getenv("EXTERNAL_ANCHOR_TIMEOUT_S", "30"))  # 外源锚点总预算，超时跳过（绝不阻塞 L1 派发）
@@ -164,6 +171,10 @@ EMBEDDING_RATE_LIMIT_RPS = float(os.getenv("EMBEDDING_RATE_LIMIT_RPS", "25"))
 # budget unless a deployment deliberately chooses a smaller graph fan-out.
 GRAPH_MAX_CONCURRENCY = int(os.getenv("GRAPH_MAX_CONCURRENCY", str(LLM_MAX_CONCURRENT)))
 KG_BUILD_TIMEOUT_SECONDS = float(os.getenv("KG_BUILD_TIMEOUT_SECONDS", "180"))
+KG_STORAGE_BACKEND = os.getenv("KG_STORAGE_BACKEND", "rdf_memory").strip().lower()
+KG_LAYER1_CACHE_MAXSIZE = int(os.getenv("KG_LAYER1_CACHE_MAXSIZE", "16"))
+KG_QUERY_CACHE_MAXSIZE = int(os.getenv("KG_QUERY_CACHE_MAXSIZE", "512"))
+EVIDENCE_CACHE_MAXSIZE = int(os.getenv("EVIDENCE_CACHE_MAXSIZE", "128"))
 BACKEND_STARTUP_TIMEOUT_SECONDS = float(os.getenv("BACKEND_STARTUP_TIMEOUT_SECONDS", "30"))
 GRAPH_RECURSION_LIMIT = int(os.getenv("GRAPH_RECURSION_LIMIT", "100"))
 BUSINESS_RETRY_LIMIT = int(os.getenv("BUSINESS_RETRY_LIMIT", "3"))
@@ -385,12 +396,12 @@ AMAP_EXTERNAL_ANCHOR_ENABLED: bool = os.getenv(
 
 # 是否启用腾讯地图外源 POI 注入
 TECENT_MAP_EXTERNAL_ANCHOR_ENABLED: bool = os.getenv(
-    "TECENT_MAP_EXTERNAL_ANCHOR_ENABLED", "true"
+    "TECENT_MAP_EXTERNAL_ANCHOR_ENABLED", "false"
 ).lower() in ("1", "true", "yes")
 
 # 是否启用天地图 WFS 矢量数据注入
 TIANDITU_WFS_ANCHOR_ENABLED: bool = os.getenv(
-    "TIANDITU_WFS_ANCHOR_ENABLED", "true"
+    "TIANDITU_WFS_ANCHOR_ENABLED", "false"
 ).lower() in ("1", "true", "yes")
 
 # WFS 单 layer 最多 features（防大查询）
@@ -460,21 +471,26 @@ FLASH_MODEL_MAX_TOKENS = int(os.getenv("FLASH_MODEL_MAX_TOKENS", "500"))
 FLASH_MODEL_TEMPERATURE = float(os.getenv("FLASH_MODEL_TEMPERATURE", "0.3"))
 
 # ==========================================
-# EXPLORE Agent Flash LLM Configuration
+# Semantic enrichment / vocabulary LLM configuration
 # ==========================================
-# Independent Flash model configuration for the EXPLORE agent.  Decoupled from
-# FLASH_MODEL_* (which other subsystems share) so EXPLORE can opt-in/out and
-# tune its own budget without touching RAG / metadata-extractor.
-#
-# - GIS_EXPLORE_LLM_ENABLED: master switch.  When False, ExploreFlashAgent
-#   falls back to its deterministic baseline (no LLM calls).
-# - GIS_EXPLORE_MODEL: dedicated Flash model name (MiniMax high-speed by
-#   default).
-# - GIS_EXPLORE_TEMPERATURE: lower than the main analysis LLM (0.1) so domain
-#   classification / BSM extraction stay reproducible.
-# - GIS_EXPLORE_MAX_TOKENS: budget for per-call Flash responses.
+# These settings are shared by source-semantic enrichment and vocabulary
+# extraction.  They are not a second retrieval path and must not be used as a
+# deterministic fallback for EvidenceGraph resolution.
 
-GIS_EXPLORE_LLM_ENABLED = os.getenv("GIS_EXPLORE_LLM_ENABLED", "true").lower() in {"1", "true", "yes"}
+GIS_EXPLORE_LLM_ENABLED = os.getenv("GIS_EXPLORE_LLM_ENABLED", "false").lower() in {"1", "true", "yes"}
 GIS_EXPLORE_MODEL = os.getenv("GIS_EXPLORE_MODEL", DEFAULT_LLM_MODEL)
 GIS_EXPLORE_MAX_TOKENS = int(os.getenv("GIS_EXPLORE_MAX_TOKENS", "1200"))
 GIS_EXPLORE_TEMPERATURE = float(os.getenv("GIS_EXPLORE_TEMPERATURE", "0.1"))
+
+# Source-label semantics are an explicit, quota-consuming Minimax step.  Keep
+# it off for local/demo runs; production enables it when the provider budget
+# and the current L1 snapshot are ready.  Disabled means unresolved/ambiguous,
+# never a deterministic label fallback.
+SOURCE_SEMANTIC_LLM_ENABLED = os.getenv("SOURCE_SEMANTIC_LLM_ENABLED", "false").lower() in {"1", "true", "yes", "on"}
+
+# L3 semantic repair is a quota-consuming planning step.  Local tests and
+# demos keep it disabled unless a typed test LLM is injected explicitly;
+# production enables it only after the provider budget is approved.
+L3_SEMANTIC_REPAIR_LLM_ENABLED = os.getenv(
+    "L3_SEMANTIC_REPAIR_LLM_ENABLED", "false"
+).lower() in {"1", "true", "yes", "on"}

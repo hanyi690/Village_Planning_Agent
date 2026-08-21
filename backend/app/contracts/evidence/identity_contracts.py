@@ -12,6 +12,14 @@ GeometryGranularity = Literal[
     "exact_feature", "parcel_set", "settlement", "village_scope", "none"
 ]
 ResolutionStatus = Literal["resolved", "ambiguous", "unresolved"]
+SourceBindingMode = Literal[
+    "all_in_scope",
+    "explicit_subset",
+    "query_subset",
+    "semantic_fact_subset",
+]
+SourceMembership = Literal["required", "alternative", "eligible_subset"]
+SourceOperation = Literal["preserve", "harden", "repair", "widen", "reference"]
 
 
 class EvidenceObservation(BaseModel):
@@ -74,6 +82,33 @@ class GroundedEntityBindingSnapshot(ContractMeta):
     parent_digest: str = ""
 
 
+class SourceFeatureSetBinding(BaseModel):
+    """Audited membership of one planning target in one source collection."""
+
+    binding_id: str
+    target_id: str
+    source_collection_key: str
+    source_snapshot_ref: str
+    source_feature_digest: str
+    source_feature_ids: list[str] = Field(min_length=1)
+    binding_mode: SourceBindingMode
+    membership: SourceMembership = "required"
+    operation: SourceOperation
+    source_fact_refs: list[str] = Field(min_length=1)
+    source_semantic_decision_refs: list[str] = Field(default_factory=list)
+
+    @classmethod
+    def canonical_ids(cls, values: list[str]) -> list[str]:
+        return sorted({str(item).strip() for item in values if str(item).strip()})
+
+    def model_post_init(self, __context: object) -> None:
+        self.source_feature_ids = self.canonical_ids(self.source_feature_ids)
+        self.source_fact_refs = self.canonical_ids(self.source_fact_refs)
+        self.source_semantic_decision_refs = self.canonical_ids(
+            self.source_semantic_decision_refs
+        )
+
+
 def infer_geometry_granularity(
     geometry_ref: str | None,
     *,
@@ -98,5 +133,7 @@ __all__ = [
     "GeometryGranularity", "ResolutionStatus", "EvidenceObservation",
     "GroundedEntityBinding", "EvidenceObservationSnapshot",
     "GroundedEntityBindingSnapshot",
+    "SourceBindingMode", "SourceMembership", "SourceOperation",
+    "SourceFeatureSetBinding",
     "infer_geometry_granularity",
 ]

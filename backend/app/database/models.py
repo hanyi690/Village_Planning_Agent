@@ -257,10 +257,10 @@ class PlanningBundle(SQLModel, table=True):
     Planning bundle snapshot table
     规划数据包快照表
 
-    Stores full session-level VillageBundle snapshots (including original
-    input documents, spatial features and embedded L1/L2/L3 reports).
-    Versioned — one snapshot per layer completion / manual trigger.
-    后续作为统一数据源替换 dimension_reports 存储。
+    Stores versioned session-level VillageBundle retrieval projections:
+    spatial features, input references and evidence/report manifests. Long
+    report bodies remain in their canonical source store and are not embedded
+    into every snapshot.
     """
     __tablename__ = "planning_bundles"
 

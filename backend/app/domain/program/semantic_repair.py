@@ -12,6 +12,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import os
 from difflib import SequenceMatcher
 from pathlib import Path
 from typing import Any, Literal
@@ -493,6 +494,33 @@ async def repair_planning_program(
             applied=False,
             validation_errors=feedback,
         )
+    if llm is None:
+        enabled = str(
+            os.getenv("L3_SEMANTIC_REPAIR_LLM_ENABLED", "false")
+        ).strip().lower() in {"1", "true", "yes", "on"}
+        if not enabled:
+            disabled_issue = ProgramIssue(
+                stage="l3",
+                severity="warning",
+                code="llm_semantic_repair_disabled",
+                message=(
+                    "L3 semantic repair provider is disabled; typed program was "
+                    "retained without provider interpretation"
+                ),
+            )
+            return ProgramSemanticRepairResult(
+                program=program.model_copy(
+                    update={
+                        "program_issues": [
+                            *program.program_issues,
+                            disabled_issue,
+                        ]
+                    },
+                    deep=True,
+                ),
+                applied=False,
+                validation_errors=[disabled_issue.message],
+            )
     from app.infrastructure.llm.structured import run_structured_output
 
     cache = SemanticRepairCache(cache_path)

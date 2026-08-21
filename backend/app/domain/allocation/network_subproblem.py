@@ -127,15 +127,16 @@ def evaluate_network_subproblem(
         network,
         parameters,
     )
-    value = getattr(measurement, "value", None)
     status = getattr(measurement, "status", "not_evaluable")
     if status == "not_reachable":
         status = "not_evaluable"
     if factor.evaluator_key in {"connect", "connect_network"}:
+        value = getattr(measurement, "connected", None)
         operator = "connected"
         threshold = True
         unit = "bool"
     else:
+        value = getattr(measurement, "travel_time_min", None)
         operator = "lte"
         threshold = getattr(parameters, "max_travel_time_min", None)
         unit = "min"
@@ -174,10 +175,14 @@ def derive_network_cuts(
             continue
         if satisfaction.status == "satisfied":
             continue
+        selection_by_target = {
+            item.target_id: list(item.candidate_ids)
+            for item in provisional.target_selections
+        }
         selected = [
-            provisional.selected_candidate_ids.get(ref, "")
+            candidate_id
             for ref in (factor.subject_ref, factor.object_ref)
-            if provisional.selected_candidate_ids.get(ref, "")
+            for candidate_id in selection_by_target.get(ref, [])
         ]
         cuts.append(ScenarioCut(
             relation_id=satisfaction.relation_id,

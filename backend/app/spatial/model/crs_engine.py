@@ -10,6 +10,7 @@ below 0.03% within each 3-degree zone.
 """
 
 import math
+from functools import lru_cache
 from typing import Optional, Tuple
 
 from app.infrastructure.logging import get_logger
@@ -116,10 +117,16 @@ def project_geometry(
     """
     from shapely.ops import transform as shapely_transform
 
-    transformer = pyproj.Transformer.from_crs(
-        from_crs, to_crs, always_xy=True
-    )
+    if str(from_crs).strip().casefold() == str(to_crs).strip().casefold():
+        return geom
+    transformer = _get_transformer(from_crs, to_crs)
     return shapely_transform(transformer.transform, geom)
+
+
+@lru_cache(maxsize=64)
+def _get_transformer(from_crs: str, to_crs: str):
+    """Reuse bounded CRS transformers across repeated planning operations."""
+    return pyproj.Transformer.from_crs(from_crs, to_crs, always_xy=True)
 
 
 def project_geometries_batch(

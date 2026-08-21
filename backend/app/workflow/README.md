@@ -49,4 +49,4 @@ LangGraph interrupt；resume 必须针对当前 checkpoint 的 event ID，不得
 materialized stage view 是迁移边界，不是公开状态；当前 view 由 `workflow_progress`
 artifact 单一持有，后续按阶段 contract 拆除其中的 legacy 字段。
 
-目标目录和完成标准见 [14_BACKEND_MODULE_BLUEPRINT.md](../../../docs/design/14_BACKEND_MODULE_BLUEPRINT.md)。
+目标目录和完成标准见 [00_SYSTEM_DESIGN.md](../../../docs/design/00_SYSTEM_DESIGN.md)。

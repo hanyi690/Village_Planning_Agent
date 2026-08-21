@@ -11,7 +11,7 @@ on PlanningKG methods not yet present on this branch):
     - ``open_kg_session(...)``: build or clone Layer 1, then register a session.
     - ``query_session_sparql(session_id, sparql)``: explicit SPARQL.
     - ``query_session_template(session_id, template_name, **params)``: cached
-      named-template queries (the path ExploreFlashAgent uses).
+      named-template queries used by typed KG consumers.
     - ``close_kg_session(session_id)``: release a session.
 
 Dropped from handoff branch (need PlanningKG methods that this branch lacks):

@@ -25,7 +25,6 @@ from app.contracts.spatial.context_contracts import (
     TerrainProfile,
 )
 from app.data.model.canonical import VillageBundle
-from app.data.model.spatial_types import ANNOTATION_LABEL_TYPE_MAP
 
 from app.spatial.model.geometry import (
     _compute_centroid,
@@ -565,7 +564,7 @@ def _build_facilities(bundle: VillageBundle) -> ContextBlock:
         text = a.text
         if not text:
             continue
-        facility_type = ANNOTATION_LABEL_TYPE_MAP.get(text, "公共服务")
+        facility_type = text
         geom = a.geometry
         center = [0.0, 0.0]
         if geom and isinstance(geom, dict):

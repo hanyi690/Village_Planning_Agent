@@ -10,6 +10,8 @@ from __future__ import annotations
 import sys
 from typing import Any, Optional
 
+from rdflib import Literal, RDF
+
 from app.infrastructure.logging import get_logger
 from ..ontology import PLN, GEO, EntityTypes, Relations, SemanticPredicates
 from ..memory import SemanticMemoryStore
@@ -35,6 +37,7 @@ class KGBuilder:
 
         self._build_village_entity(bundle)
         self._build_entities(bundle)
+        self._attach_bundle_feature_identity(bundle)
 
         self._build_relations(bundle, parcel_relations, cross_type_relations)
         self._build_enrichment()
@@ -55,9 +58,64 @@ class KGBuilder:
         if planned_state is not None:
             self.apply_planned_state(planned_state)
 
+        # Publish one indexed lookup projection after all entity and relation
+        # writes.  Evidence retrieval uses this projection instead of
+        # repeatedly scanning RDFLib triples on the hot path.
+        self.kg.rebuild_spatial_index()
+
         logger.info("[KGBuilder] Built: %d parcels, %d triples",
                     self.kg._parcel_count, len(self.kg.g))
         return self.kg
+
+    def _attach_bundle_feature_identity(self, bundle) -> None:
+        """Complete identity for bundle-backed entities before cognition/indexing.
+
+        A source adapter normally supplies ``source_feature_id`` and source
+        digests.  Synthetic/demo bundles still have authoritative generated
+        BSMs, however, and must not disappear from business-feature queries
+        merely because they lack an upstream file URI.  Use the immutable
+        bundle snapshot as their provenance boundary; never replace an
+        existing source identity.
+        """
+        digest = str(bundle.spatial_snapshot_digest() or "").strip()
+        if not digest:
+            return
+        for subject, _, bsm_literal in list(
+            self.kg.g.triples((None, PLN.bsm, None))
+        ):
+            bsm = str(bsm_literal or "").strip()
+            if not bsm:
+                continue
+            layer = str(
+                self.kg.g.value(subject, SemanticPredicates.gis_type_ref) or ""
+            ).strip()
+            if not layer:
+                layer = str(self.kg.g.value(subject, RDF.type) or "").rsplit("#", 1)[-1]
+            source_feature_id = str(
+                self.kg.g.value(subject, PLN.source_feature_id) or ""
+            ).strip()
+            if not source_feature_id:
+                source_feature_id = f"bundle:{layer or 'feature'}:{bsm}"
+                self.kg.g.add((subject, PLN.source_feature_id, Literal(source_feature_id)))
+            if not any(
+                str(value).strip()
+                for value in self.kg.g.objects(subject, PLN.source_dataset)
+            ) and not any(
+                str(value).strip() for value in self.kg.g.objects(subject, PLN.source_uri)
+            ):
+                self.kg.g.add((subject, PLN.source_dataset, Literal("village_bundle")))
+            if not any(
+                str(value).strip()
+                for value in self.kg.g.objects(subject, PLN.source_snapshot_ref)
+            ) and not any(
+                str(value).strip()
+                for value in self.kg.g.objects(subject, PLN.source_content_digest)
+            ):
+                self.kg.g.add((subject, PLN.source_snapshot_ref, Literal(digest)))
+            if layer and not any(
+                str(value).strip() for value in self.kg.g.objects(subject, PLN.source_layer)
+            ):
+                self.kg.g.add((subject, PLN.source_layer, Literal(layer)))
 
     def _make_ctx(self, bundle, constraint_index, water_overlap) -> BuildContext:
         bbox = None

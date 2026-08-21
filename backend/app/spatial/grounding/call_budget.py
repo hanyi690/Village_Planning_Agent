@@ -24,6 +24,9 @@ def new_ground_llm_budget() -> Dict[str, Any]:
     max_concurrent = max(1, int(GROUND_LLM_MAX_CONCURRENT))
     return {
         "remaining": max_calls,
+        "reserved": 0,
+        "completed": 0,
+        "failed": 0,
         "provider_unavailable": False,
         "deadline": time.monotonic() + call_timeout * max(1, max_calls),
         "call_timeout": call_timeout,
@@ -32,6 +35,33 @@ def new_ground_llm_budget() -> Dict[str, Any]:
         "sync_semaphore": threading.BoundedSemaphore(max_concurrent),
         "reservation_lock": threading.Lock(),
     }
+
+
+def get_ground_llm_budget(
+    owner: Any = None,
+    *,
+    scope_key: str = "default",
+) -> Dict[str, Any]:
+    """Return one transient budget for one owner and request scope.
+
+    The budget contains loop/thread synchronization primitives and therefore
+    must never be persisted in an artifact or workflow state.  A context can
+    be reused by multiple requests; changing ``scope_key`` replaces the old
+    transient budget so an exhausted request cannot poison the next one.
+    """
+    if owner is None:
+        budget = new_ground_llm_budget()
+        budget["scope_key"] = str(scope_key or "default")
+        return budget
+    normalized_scope = str(scope_key or "default")
+    current_scope = getattr(owner, "_ground_llm_budget_scope", "")
+    current = getattr(owner, "_ground_llm_budget", None)
+    if current is None or current_scope != normalized_scope:
+        current = new_ground_llm_budget()
+        current["scope_key"] = normalized_scope
+        setattr(owner, "_ground_llm_budget", current)
+        setattr(owner, "_ground_llm_budget_scope", normalized_scope)
+    return current
 
 
 def reserve_ground_llm_call(budget: Optional[Dict[str, Any]]) -> float | None:
@@ -59,6 +89,7 @@ def reserve_ground_llm_call(budget: Optional[Dict[str, Any]]) -> float | None:
         if remaining <= 0 or seconds <= 0:
             return None
         budget["remaining"] = remaining - 1
+        budget["reserved"] = int(budget.get("reserved", 0) or 0) + 1
         return seconds
 
 
@@ -132,8 +163,13 @@ async def run_ground_llm_call(
             return await operation()
 
     try:
-        return await asyncio.wait_for(_run(), timeout=max(0.001, float(timeout)))
+        result = await asyncio.wait_for(_run(), timeout=max(0.001, float(timeout)))
+        if budget is not None:
+            budget["completed"] = int(budget.get("completed", 0) or 0) + 1
+        return result
     except Exception as exc:
+        if budget is not None:
+            budget["failed"] = int(budget.get("failed", 0) or 0) + 1
         mark_ground_llm_provider_unavailable(budget, exc)
         raise
 
@@ -141,6 +177,7 @@ async def run_ground_llm_call(
 __all__ = [
     "ground_llm_semaphore",
     "ground_llm_sync_semaphore",
+    "get_ground_llm_budget",
     "new_ground_llm_budget",
     "mark_ground_llm_provider_unavailable",
     "reserve_ground_llm_call",

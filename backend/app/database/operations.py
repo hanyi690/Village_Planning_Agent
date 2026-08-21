@@ -18,7 +18,6 @@ from .models import (
     PlanningSession,
     UISession,
     UploadedFile,
-    DimensionReport,
     PlanningBundle,
 )
 
@@ -710,50 +709,6 @@ async def delete_uploaded_files_async(session_id: str) -> int:
     except Exception as e:
         logger.error(f"[Async DB] Failed to delete uploaded files: {e}", exc_info=True)
         return 0
-
-
-# ==========================================
-# Session Report Operations
-# ==========================================
-
-async def get_session_reports_async(
-    session_id: str,
-) -> Dict[int, Dict[str, Dict[str, Any]]]:
-    """
-    Get all dimension reports for a session grouped by layer (async).
-    获取会话的全部分维度报告，按层级分组（最新版本）。
-
-    Returns:
-        {layer: {dim_key: {report_id, content, summary, version, generated_at}}}
-    """
-    try:
-        async with get_async_session() as session:
-            query = (
-                select(DimensionReport)
-                .where(DimensionReport.session_id == session_id)
-                .order_by(DimensionReport.dimension_key, DimensionReport.version.desc())
-            )
-            result = await session.execute(query)
-            reports = result.scalars().all()
-
-            by_layer: Dict[int, Dict[str, Dict[str, Any]]] = {}
-            seen: set = set()
-            for r in reports:
-                key = (r.layer, r.dimension_key)
-                if key in seen:
-                    continue
-                seen.add(key)
-                by_layer.setdefault(r.layer, {})[r.dimension_key] = {
-                    "report_id": r.report_id,
-                    "content": r.content,
-                    "summary": r.summary,
-                    "version": r.version,
-                    "generated_at": r.generated_at.isoformat() if r.generated_at else None,
-                }
-            return by_layer
-    except Exception as e:
-        logger.error(f"[Async DB] Failed to get session reports: {e}", exc_info=True)
-        return {}
 
 
 # ==========================================

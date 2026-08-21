@@ -18,7 +18,6 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
-import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -44,6 +43,12 @@ class BackfillResult(BaseModel):
     applied: int = 0
     unresolved: list[str] = Field(default_factory=list)
     decisions: list[dict] = Field(default_factory=list)
+
+
+class CandidateChoice(BaseModel):
+    """Closed-set LLM choice; zero means no supplied candidate is valid."""
+
+    candidate_index: int = Field(default=0, ge=0)
 
 
 _ROLE_TO_ENTITY_TYPE = {
@@ -200,6 +205,12 @@ async def _llm_confirm(
 
     Returns the chosen candidate index or None (model unavailable / no pick).
     """
+    if llm is None:
+        logger.info(
+            "[name-backfill] no LLM supplied; leaving ambiguous name unresolved: %s",
+            mention.name,
+        )
+        return None
     from app.spatial.grounding.call_budget import (
         reserve_ground_llm_call,
         run_ground_llm_call,
@@ -212,12 +223,6 @@ async def _llm_confirm(
             mention.name,
         )
         return None
-    if llm is None:
-        logger.info(
-            "[name-backfill] no LLM supplied; leaving ambiguous name unresolved: %s",
-            mention.name,
-        )
-        return None
     lines = "\n".join(
         f"{i}. 类型={c['role']} 现名={c['current_name']!r} "
         f"BSM={c['bsm'] or '无'} 质心={c['centroid'] or '无'}"
@@ -225,25 +230,37 @@ async def _llm_confirm(
     )
     prompt = (
         f"地名「{mention.name}」（类型 {mention.role}）提到位于「{mention.location or '未知'}」。"
-        f"下列是该区域候选 KG 实体，请选择最匹配的一个（只输出编号，无匹配输出 0）：\n{lines}"
+        f"下列是该区域候选 KG 实体，请返回 CandidateChoice 结构；candidate_index 只能是候选编号，"
+        f"无匹配返回 0：\n{lines}"
     )
     try:
+        structured_factory = getattr(llm, "with_structured_output", None)
+        if not callable(structured_factory):
+            raise TypeError("name_backfill_llm_must_expose_typed_output")
+        structured = structured_factory(CandidateChoice)
+
         async def _invoke():
-            if asyncio.iscoroutinefunction(getattr(llm, "ainvoke", None)):
-                return await llm.ainvoke(prompt)
-            return await asyncio.to_thread(llm.invoke, prompt)
+            if asyncio.iscoroutinefunction(getattr(structured, "ainvoke", None)):
+                return await structured.ainvoke(prompt)
+            invoke = getattr(structured, "invoke", None)
+            if invoke is None:
+                raise TypeError("name_backfill_structured_selector_missing_invoke")
+            return await asyncio.to_thread(invoke, prompt)
 
         response = await run_ground_llm_call(budget, call_timeout, _invoke)
     except Exception as exc:  # noqa: BLE001
         logger.warning("[name-backfill] LLM confirm failed: %s", exc)
         return None
-    content = getattr(response, "content", "")
-    if isinstance(content, list):
-        content = "".join(content)
-    match = re.search(r"\b([0-9])\b", str(content or ""))
-    if match is None:
+    try:
+        choice = (
+            response
+            if isinstance(response, CandidateChoice)
+            else CandidateChoice.model_validate(response)
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("[name-backfill] typed candidate choice rejected: %s", exc)
         return None
-    index = int(match.group(1)) - 1
+    index = choice.candidate_index - 1
     return index if 0 <= index < len(candidates) else None
 
 
@@ -358,7 +375,7 @@ def backfill_kg_names_sync(
 ) -> BackfillResult:
     """Deterministic, synchronous single-candidate name backfill (no LLM).
 
-    Suitable for the context factory, which builds the evidence index
+    Suitable for the context factory, which builds the EvidenceGraph
     synchronously.  Only unique candidates are written; ambiguous mentions are
     left unresolved for the async LLM-confirmation path.
     """
@@ -389,6 +406,7 @@ def backfill_kg_names_sync(
 
 __all__ = [
     "BackfillResult",
+    "CandidateChoice",
     "NameMention",
     "backfill_kg_names",
     "backfill_kg_names_sync",

@@ -21,6 +21,16 @@ _VALID_KINDS = ("entity_type", "layer_group", "place_name", "bsm", "village")
 _VALID_DIRECTIONS = ("N", "NE", "E", "SE", "S", "SW", "W", "NW")
 _VALID_OPS = ("and", "or", "not")
 
+SpatialDomainKind = Literal[
+    "exact_feature",
+    "parcel_extent",
+    "parcel_set",
+    "bbox",
+    "corridor",
+    "village_scope",
+    "unknown",
+]
+
 
 class RefObject(BaseModel):
     """Reference object: resolves to a KG entity or layer group."""
@@ -46,6 +56,10 @@ class SpatialReferenceSpec(BaseModel):
     distance_m: Optional[float] = None
     topo: Optional[str] = Field(None, description="GeoSPARQL/pln relation: " + ", ".join(_VALID_TOPO))
     attr_filter: Optional[Dict[str, Any]] = None
+    semantic_terms: list[str] = Field(default_factory=list, max_length=8)
+    retrieval_scopes: list[
+        Literal["facilities", "hazards", "roads", "waters", "parcels", "zones"]
+    ] = Field(default_factory=list, max_length=6)
     op: Optional[str] = Field(None, description="and | or | not (for composed type)")
     children: List["SpatialReferenceSpec"] = Field(default_factory=list)
     intervention_id: Optional[str] = None
@@ -53,6 +67,11 @@ class SpatialReferenceSpec(BaseModel):
     spec_id: str = ""
     project_ref: Optional[str] = None
     unresolved_reason: str = ""
+    source_binding_ref: str = ""
+    source_collection_key: str = ""
+    source_snapshot_ref: str = ""
+    source_feature_digest: str = ""
+    l1_fact_refs: list[str] = Field(default_factory=list)
     # Preserve target materialization semantics across the PARSE -> GROUND
     # boundary.  Spatial resolution is geometry-only, but GROUND must not
     # turn a protection/functional overlay into a land-use assignment merely
@@ -74,6 +93,18 @@ class SpatialReferenceSpec(BaseModel):
             raise ValueError(f"topo must be one of {_VALID_TOPO}, got '{v}'")
         return v
 
+    def all_retrieval_scopes(self) -> list[str]:
+        """Return the closed candidate classes requested across a composed spec."""
+
+        return list(dict.fromkeys([
+            *self.retrieval_scopes,
+            *(
+                scope
+                for child in self.children
+                for scope in child.all_retrieval_scopes()
+            ),
+        ]))
+
 
 class GeometryRef(BaseModel):
     """Explicit source-backed geometry reference.
@@ -88,14 +119,17 @@ class GeometryRef(BaseModel):
     wkt: str = ""
     crs: str = ""
     bbox: tuple[float, float, float, float] | None = None
+    source_feature_id: str = ""
+    l1_fact_refs: list[str] = Field(default_factory=list)
     source_ref: str = ""
     source_refs: list[str] = Field(default_factory=list)
+    feature_bsms: list[str] = Field(default_factory=list)
     source_bsms: list[str] = Field(default_factory=list)
     feature_kind: str = ""
 
     model_config = {"extra": "forbid"}
 
-    @field_validator("source_refs", "source_bsms")
+    @field_validator("source_refs", "feature_bsms", "source_bsms")
     @classmethod
     def _clean_refs(cls, value: list[str]) -> list[str]:
         return list(dict.fromkeys(str(item) for item in value if str(item).strip()))
@@ -120,10 +154,29 @@ class ResolvedSpatialRef:
     bbox: Optional[List[float]] = None
     reference_geometry_wkt: Optional[str] = None
     reference_geometries: List[GeometryRef] = field(default_factory=list)
+    spatial_domain_kind: SpatialDomainKind = "unknown"
     confidence: float = 0.0
     uncertainty_radius_m: float = 0.0
     uncertainty_reason: str = ""
+    feature_bsms: List[str] = field(default_factory=list)
+    source_feature_ids: List[str] = field(default_factory=list)
+    entity_refs: List[str] = field(default_factory=list)
+    relation_refs: List[str] = field(default_factory=list)
+    l1_fact_refs: List[str] = field(default_factory=list)
+    l1_snapshot_ref: str = ""
+    bundle_snapshot_digest: str = ""
+    source_binding_ref: str = ""
+    source_collection_key: str = ""
+    source_snapshot_ref: str = ""
+    source_feature_digest: str = ""
     provenance: Dict[str, Any] = field(default_factory=dict)
 
 
-__all__ = ["RefObject", "SpatialReferenceSpec", "GeometryRef", "CandidateSet", "ResolvedSpatialRef"]
+__all__ = [
+    "RefObject",
+    "SpatialReferenceSpec",
+    "GeometryRef",
+    "CandidateSet",
+    "ResolvedSpatialRef",
+    "SpatialDomainKind",
+]

@@ -8,8 +8,7 @@ no MIP. All geometry mutations delegate to app.spatial.model.parcel_ops.
 from __future__ import annotations
 
 import json
-import re
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 
 from shapely.geometry import Point, shape
 
@@ -33,6 +32,28 @@ from app.spatial.allocation.selection import parse_scale_ha
 from app.spatial.model.subdivision import apply_setback, split_for_footprint
 
 FACILITY_BUFFER_RADIUS = 0.0002  # degrees, ~20 m at equator
+
+
+def _first_decimal(text: str) -> float | None:
+    """Read the first explicit decimal token without a text-pattern parser."""
+    token = ""
+    decimal_seen = False
+    for char in str(text or ""):
+        if char.isdigit():
+            token += char
+            continue
+        if char == "." and token and not decimal_seen:
+            decimal_seen = True
+            token += char
+            continue
+        if token:
+            break
+    if not token or token == ".":
+        return None
+    try:
+        return float(token)
+    except ValueError:
+        return None
 
 
 def _geometry_to_wkt(geometry: dict) -> str:
@@ -264,9 +285,8 @@ def design_project_footprint(
         target_ha = parse_scale_ha(project.scale_text)
 
     if brief.setback_requirements:
-        match = re.search(r"(\d+(?:\.\d+)?)", brief.setback_requirements[0])
-        if match:
-            setback_m = float(match.group(1))
+        setback_m = _first_decimal(brief.setback_requirements[0])
+        if setback_m is not None:
             if setback_m > 0:
                 setback_geom = apply_setback(source_geom, setback_m)
                 if setback_geom is not None and not setback_geom.is_empty and setback_geom.area > 0:
@@ -395,51 +415,19 @@ def design_zone_parcel(
 
 def design_facility_parcel(
     facility_target: FacilityTarget,
-    parcel_by_bsm: Dict[str, Any],
-    brief: Optional[LandDesignBrief],
 ) -> Optional[ParcelChange]:
-    """Place a facility on an existing parcel or create a small buffer footprint.
+    """Create a facility footprint around the authoritative facility anchor.
 
-    Returns None when the facility has no anchor_point (cannot be placed
-    deterministically). When exactly one parcel contains the anchor point, the
-    facility footprint is that parcel (reclassify, no new geometry). Otherwise a
-    circular buffer around the anchor is created; its radius is the facility's
-    ``service_radius`` (metres, converted via ~111 320 m/deg) when set, else the
-    module-level ``FACILITY_BUFFER_RADIUS`` (~20 m).
+    The source parcel index is intentionally not used to expand a point anchor
+    into a whole BSM.  A facility is a local planning footprint and therefore
+    gets an explicit buffer geometry; a later parcel split/overlay stage may
+    intersect that footprint with cadastral parcels.
     """
     anchor = facility_target.anchor_point
     if anchor is None:
         return None
     lon, lat = float(anchor[0]), float(anchor[1])
     anchor_pt = Point(lon, lat)
-
-    containing: List[Tuple[str, Any]] = []
-    for bsm, parcel in (parcel_by_bsm or {}).items():
-        try:
-            geom = shape(_parcel_geometry(parcel))
-        except Exception:
-            continue
-        if geom.is_empty:
-            continue
-        if geom.contains(anchor_pt):
-            containing.append((str(bsm), parcel, geom))
-    if len(containing) == 1:
-        bsm, parcel, parcel_geom = containing[0]
-        facility_classification = _classification_from_decision(
-            getattr(facility_target, "classification_decision", None)
-        )
-        if facility_classification is None:
-            return None
-        return ParcelChange(
-            bsm=bsm,
-            action="reclassify",
-            derived_from_bsms=[bsm],
-            after_classification=facility_classification,
-            before_geometry_wkt=parcel_geom.wkt,
-            after_geometry_wkt=parcel_geom.wkt,
-            new_area_ha=parcel_geom.area / 10000.0,
-            intervention_id=facility_target.source_project_id or facility_target.type,
-        )
 
     radius = FACILITY_BUFFER_RADIUS
     if facility_target.service_radius:
@@ -511,7 +499,7 @@ def design_all(
         all_changes.extend(design_zone_parcel(assignment, parcel_by_bsm))
 
     for facility in getattr(intent, "facilities", None) or []:
-        change = design_facility_parcel(facility, parcel_by_bsm, None)
+        change = design_facility_parcel(facility)
         if change is not None:
             all_changes.append(change)
 

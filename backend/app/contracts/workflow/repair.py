@@ -45,6 +45,8 @@ class SearchFailure(StrictContractModel):
         "empty",
         "provider_unavailable",
         "provider_timeout",
+        "provider_unauthorized",
+        "provider_rate_limited",
         "content_failed",
         "stale_source",
         "source_conflict",

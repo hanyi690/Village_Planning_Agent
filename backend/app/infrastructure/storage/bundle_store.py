@@ -1,12 +1,9 @@
 """
 Bundle Store - versioned persistence for session-level VillageBundle snapshots.
 
-Stores full JSON snapshots (original input documents + spatial features +
-embedded L1/L2/L3 reports) in the ``planning_bundles`` table. Versioned per
-layer completion / manual trigger.
-
-This is the future unified data source: ``get_layer_reports_from_bundle``
-provides the read path that will eventually replace ``dimension_reports``.
+Stores versioned retrieval projections (spatial features, input references and
+evidence/report manifests) in ``planning_bundles``. Long report bodies are
+owned by the report store and are never duplicated in a bundle snapshot.
 """
 
 from __future__ import annotations
@@ -57,9 +54,10 @@ class BundleStore:
         """
         payload = to_bundle_dict(bundle)
         session_id = str(getattr(getattr(bundle, "metadata", None), "session_id", "") or "")
-        snapshot = SessionDataSnapshot.from_bundle(
-            bundle,
+        snapshot = SessionDataSnapshot.from_canonical_payload(
+            payload,
             session_id=session_id,
+            village_name=str(getattr(bundle, "village_name", "") or ""),
             source="data_catalog",
         )
         payload["_source_snapshot"] = snapshot.model_dump(mode="json")
@@ -190,33 +188,5 @@ class BundleStore:
                 f"version {record.get('version')}"
             )
         return self.deserialize(bundle_json)
-
-    async def get_layer_reports_from_bundle(
-        self,
-        session_id: str,
-        layer: Optional[int] = None,
-        version: Optional[int] = None,
-    ) -> Dict[int, Dict[str, Any]]:
-        """Read layer reports from the latest (or given) snapshot.
-
-        Future replacement for ``dimension_reports`` reads: layer -> dim_key ->
-        {report_id, content, summary, version, generated_at}.
-
-        Args:
-            session_id: Session identifier.
-            layer: If set, return only this layer's reports.
-            version: Snapshot version; defaults to latest.
-
-        Returns:
-            {layer: {dim_key: report_record}} (filtered to ``layer`` if given).
-        """
-        bundle = await self.load_bundle(session_id, version=version)
-        if bundle is None:
-            return {}
-        layer_reports = bundle.layer_reports or {}
-        if layer is not None:
-            return {layer: layer_reports.get(layer, {})}
-        return layer_reports
-
 
 __all__ = ["BundleStore"]

@@ -64,6 +64,8 @@ async def _delete_session_kg(session_id: str) -> bool:
     try:
         from app.infrastructure.kg.manager import get_kg_manager
         get_kg_manager().remove_session(session_id)
+        from app.evidence.retrieval.evidence_service import clear_session_evidence_cache
+        clear_session_evidence_cache(session_id)
         return True
     except Exception as e:
         logger.warning(f"[SessionService] [{session_id}] KG delete failed: {e}")

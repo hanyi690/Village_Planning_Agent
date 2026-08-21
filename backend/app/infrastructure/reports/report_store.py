@@ -12,6 +12,8 @@ import uuid
 import asyncio
 import json
 import re
+import threading
+import weakref
 from datetime import datetime
 from typing import Any, Dict, List, Optional, TypedDict
 
@@ -22,6 +24,20 @@ from app.database.engine import get_async_session
 from app.infrastructure.logging import get_logger
 
 logger = get_logger(__name__)
+
+_REPORT_WRITE_LOCKS_GUARD = threading.Lock()
+_REPORT_WRITE_LOCKS: weakref.WeakKeyDictionary[object, asyncio.Lock] = weakref.WeakKeyDictionary()
+
+
+def _report_write_lock() -> asyncio.Lock:
+    """Serialize report writes per event loop without retaining dead loops."""
+    loop = asyncio.get_running_loop()
+    with _REPORT_WRITE_LOCKS_GUARD:
+        lock = _REPORT_WRITE_LOCKS.get(loop)
+        if lock is None:
+            lock = asyncio.Lock()
+            _REPORT_WRITE_LOCKS[loop] = lock
+        return lock
 
 
 # ==========================================
@@ -110,10 +126,11 @@ class ReportStore:
             generated_at=datetime.now(),
         )
 
-        async with get_async_session() as db:
-            db.add(db_report)
-            await db.commit()
-            await db.refresh(db_report)
+        async with _report_write_lock():
+            async with get_async_session() as db:
+                db.add(db_report)
+                await db.commit()
+                await db.refresh(db_report)
 
         logger.info(f"[ReportStore] Saved: {session_id}/{dim_key}/v{version} (id={report_id[:8]}...)")
         return report_id
@@ -146,47 +163,48 @@ class ReportStore:
         if not reports:
             return []
 
-        async with get_async_session() as db:
-            for report_data in reports:
-                # Check if report_id already exists
-                existing = await db.execute(
-                    select(DimensionReport).where(
-                        DimensionReport.report_id == report_data["report_id"]
+        async with _report_write_lock():
+            async with get_async_session() as db:
+                for report_data in reports:
+                    # Check if report_id already exists
+                    existing = await db.execute(
+                        select(DimensionReport).where(
+                            DimensionReport.report_id == report_data["report_id"]
+                        )
                     )
-                )
-                existing_report = existing.scalar_one_or_none()
+                    existing_report = existing.scalar_one_or_none()
 
-                if existing_report:
-                    # Update existing report
-                    existing_report.session_id = report_data["session_id"]
-                    existing_report.dimension_key = report_data["dimension_key"]
-                    existing_report.layer = report_data["layer"]
-                    existing_report.version = report_data["version"]
-                    existing_report.content = report_data["content"]
-                    existing_report.instruction = report_data.get("instruction")
-                    existing_report.summary = report_data.get("summary", "")
-                    existing_report.revision_trigger = report_data.get("revision_trigger")
-                    existing_report.knowledge_sources = report_data.get("knowledge_sources")
-                    existing_report.gis_data = report_data.get("gis_data")
-                    existing_report.generated_at = report_data.get("generated_at", datetime.now())
-                else:
-                    # Insert new report
-                    db_report = DimensionReport(
-                        session_id=report_data["session_id"],
-                        dimension_key=report_data["dimension_key"],
-                        layer=report_data["layer"],
-                        version=report_data["version"],
-                        report_id=report_data["report_id"],
-                        content=report_data["content"],
-                        instruction=report_data.get("instruction"),
-                        summary=report_data.get("summary", ""),
-                        revision_trigger=report_data.get("revision_trigger"),
-                        knowledge_sources=report_data.get("knowledge_sources"),
-                        gis_data=report_data.get("gis_data"),
-                        generated_at=report_data.get("generated_at", datetime.now()),
-                    )
-                    db.add(db_report)
-            await db.commit()
+                    if existing_report:
+                        # Update existing report
+                        existing_report.session_id = report_data["session_id"]
+                        existing_report.dimension_key = report_data["dimension_key"]
+                        existing_report.layer = report_data["layer"]
+                        existing_report.version = report_data["version"]
+                        existing_report.content = report_data["content"]
+                        existing_report.instruction = report_data.get("instruction")
+                        existing_report.summary = report_data.get("summary", "")
+                        existing_report.revision_trigger = report_data.get("revision_trigger")
+                        existing_report.knowledge_sources = report_data.get("knowledge_sources")
+                        existing_report.gis_data = report_data.get("gis_data")
+                        existing_report.generated_at = report_data.get("generated_at", datetime.now())
+                    else:
+                        # Insert new report
+                        db_report = DimensionReport(
+                            session_id=report_data["session_id"],
+                            dimension_key=report_data["dimension_key"],
+                            layer=report_data["layer"],
+                            version=report_data["version"],
+                            report_id=report_data["report_id"],
+                            content=report_data["content"],
+                            instruction=report_data.get("instruction"),
+                            summary=report_data.get("summary", ""),
+                            revision_trigger=report_data.get("revision_trigger"),
+                            knowledge_sources=report_data.get("knowledge_sources"),
+                            gis_data=report_data.get("gis_data"),
+                            generated_at=report_data.get("generated_at", datetime.now()),
+                        )
+                        db.add(db_report)
+                await db.commit()
 
         report_ids = [r["report_id"] for r in reports]
         logger.info(f"[ReportStore] Bulk saved {len(reports)} reports: {[r['dimension_key'] for r in reports]}")
@@ -197,20 +215,21 @@ class ReportStore:
 
         Returns True if updated, False if the report row was not found.
         """
-        async with get_async_session() as db:
-            result = await db.execute(
-                select(DimensionReport).where(
-                    DimensionReport.session_id == session_id,
-                    DimensionReport.dimension_key == dim_key,
-                    DimensionReport.version == version,
+        async with _report_write_lock():
+            async with get_async_session() as db:
+                result = await db.execute(
+                    select(DimensionReport).where(
+                        DimensionReport.session_id == session_id,
+                        DimensionReport.dimension_key == dim_key,
+                        DimensionReport.version == version,
+                    )
                 )
-            )
-            report = result.scalar_one_or_none()
-            if report is None:
-                return False
-            report.summary = summary
-            await db.commit()
-            return True
+                report = result.scalar_one_or_none()
+                if report is None:
+                    return False
+                report.summary = summary
+                await db.commit()
+                return True
 
     async def _generate_summary(self, content: str, dim_key: str = "", layer: int = 1) -> str:
         """Generate structured JSON summary preserving key data for downstream use.
@@ -289,6 +308,23 @@ class ReportStore:
             )
             result = await db.execute(statement)
             return result.scalar_one_or_none()
+
+    async def get_reports_by_ids(
+        self,
+        report_ids: List[str],
+    ) -> Dict[str, DimensionReport]:
+        """Load report bodies for a bundle-selected set of report references."""
+        ids = [str(report_id).strip() for report_id in report_ids if str(report_id).strip()]
+        if not ids:
+            return {}
+        async with get_async_session() as db:
+            result = await db.execute(
+                select(DimensionReport).where(DimensionReport.report_id.in_(ids))
+            )
+            return {
+                str(report.report_id): report
+                for report in result.scalars().all()
+            }
 
     async def get_by_version(
         self,
@@ -622,6 +658,55 @@ class ReportStore:
 
             return result_dict
 
+    async def get_session_report_manifest(
+        self,
+        session_id: str,
+        layers: tuple[int, ...] = (1, 2, 3),
+    ) -> List[Dict[str, Any]]:
+        """Return the latest report metadata without loading report bodies.
+
+        The manifest is the report portion of the session bundle's retrieval
+        projection.  ``content`` is deliberately excluded so persisted
+        spatial snapshots do not duplicate L1/L2/L3 report text.
+        """
+        async with get_async_session() as db:
+            statement = (
+                select(DimensionReport)
+                .where(
+                    DimensionReport.session_id == session_id,
+                    DimensionReport.layer.in_(layers),
+                )
+                .order_by(
+                    DimensionReport.layer,
+                    DimensionReport.dimension_key,
+                    DimensionReport.version.desc(),
+                )
+            )
+            result = await db.execute(statement)
+            reports = result.scalars().all()
+
+            manifest: List[Dict[str, Any]] = []
+            seen: set[tuple[int, str]] = set()
+            for report in reports:
+                key = (report.layer, report.dimension_key)
+                if key in seen:
+                    continue
+                seen.add(key)
+                manifest.append({
+                    "layer": report.layer,
+                    "dimension_key": report.dimension_key,
+                    "report_id": report.report_id,
+                    "version": report.version,
+                    "summary": report.summary or "",
+                    "instruction": report.instruction or "",
+                    "knowledge_sources": report.knowledge_sources or [],
+                    "generated_at": (
+                        report.generated_at.isoformat()
+                        if report.generated_at else None
+                    ),
+                })
+            return manifest
+
     async def get_layer_summaries(
         self,
         session_id: str,
@@ -665,21 +750,22 @@ class ReportStore:
         Returns:
             Number of deleted reports
         """
-        async with get_async_session() as db:
-            statement = select(DimensionReport).where(
-                DimensionReport.session_id == session_id
-            )
-            result = await db.execute(statement)
-            reports = result.scalars().all()
-            count = len(reports)
+        async with _report_write_lock():
+            async with get_async_session() as db:
+                statement = select(DimensionReport).where(
+                    DimensionReport.session_id == session_id
+                )
+                result = await db.execute(statement)
+                reports = result.scalars().all()
+                count = len(reports)
 
-            for r in reports:
-                await db.delete(r)
+                for r in reports:
+                    await db.delete(r)
 
-            await db.commit()
+                await db.commit()
 
-            logger.info(f"[ReportStore] Deleted {count} reports for session {session_id}")
-            return count
+                logger.info(f"[ReportStore] Deleted {count} reports for session {session_id}")
+                return count
 
 
 __all__ = ["ReportStore", "ReportVersion"]

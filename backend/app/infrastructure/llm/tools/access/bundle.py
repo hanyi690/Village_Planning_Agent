@@ -45,13 +45,26 @@ async def bundle_overview_impl(session_id: str) -> Dict[str, Any]:
         "rasters": list(bundle.rasters.all_rasters.keys()),
         "tables": list(bundle.tables.all_tables.keys()),
         "documents": [
-            {"source": t.get("source"), "name": t.get("name")}
-            for t in bundle.documents.input_documents
+            {
+                "source": ref.get("source"),
+                "name": ref.get("name"),
+                "record_id": ref.get("record_id"),
+                "locator": ref.get("locator"),
+                "content_digest": ref.get("content_digest"),
+                "char_count": ref.get("char_count", 0),
+            }
+            for ref in bundle.documents.document_refs
         ],
-        "layer_reports": {
-            str(layer): list(dims.keys())
-            for layer, dims in (bundle.layer_reports or {}).items()
-        },
+        "report_manifest": [
+            {
+                "layer": ref.get("layer"),
+                "dimension_key": ref.get("dimension_key"),
+                "report_id": ref.get("report_id"),
+                "version": ref.get("version"),
+                "summary_available": bool(ref.get("summary")),
+            }
+            for ref in (bundle.documents.report_refs or [])
+        ],
     }
     return budget_check(overview)
 
@@ -65,7 +78,7 @@ async def bundle_overview(
 
     包括村庄/行政区/规划期元数据、地块数、空间图层组清单（count/标签分布，
     不含原始坐标）、上传文档清单、L1/L2/L3 报告维度清单。用于了解会话里
-    有哪些数据可供后续查询。
+    有哪些空间数据、输入文档和报告引用可供后续查询。
     """
     if not session_id and state:
         session_id = state.get("session_id", "")

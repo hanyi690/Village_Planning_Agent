@@ -6,14 +6,13 @@ sfIntersects/sfContains/serves/derived_from），不调 LLM、不造几何。
 """
 from __future__ import annotations
 
-import re
 from typing import Any, Dict, List, Optional, Set
 
 from app.infrastructure.logging import get_logger
 
 logger = get_logger(__name__)
 
-_HINT_SEP_RE = re.compile(r"[、，,；;/\s]+|至|和|与")
+_HINT_SEPARATORS = frozenset("、，,；;/ \t\n\r")
 _HINT_SUFFIXES = ("自然村", "村", "组", "一带", "沿线", "两岸", "附近", "周边", "区域")
 
 
@@ -22,7 +21,23 @@ def hint_tokens(hints: str) -> List[str]:
     if not hints:
         return []
     tokens: List[str] = []
-    for part in _HINT_SEP_RE.split(hints):
+    parts: list[str] = []
+    current: list[str] = []
+    for char in hints:
+        if char in _HINT_SEPARATORS:
+            if current:
+                parts.append("".join(current))
+                current.clear()
+            continue
+        current.append(char)
+    if current:
+        parts.append("".join(current))
+    for connector in ("至", "和", "与"):
+        expanded: list[str] = []
+        for part in parts:
+            expanded.extend(part.split(connector))
+        parts = expanded
+    for part in parts:
         part = part.strip()
         if not part or len(part) < 2:
             continue

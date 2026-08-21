@@ -45,7 +45,11 @@ def _terms(request: ExplorationRequest) -> list[str]:
     return result[:8]
 
 
-def build_query_plan(request: ExplorationRequest) -> EvidenceQueryPlan:
+def build_query_plan(
+    request: ExplorationRequest,
+    *,
+    project_wide: bool = False,
+) -> EvidenceQueryPlan:
     """Create one bounded query per routed retriever.
 
     Every query carries the full scope and required facts.  This prevents the
@@ -65,7 +69,7 @@ def build_query_plan(request: ExplorationRequest) -> EvidenceQueryPlan:
             required_facts=required,
             source_refs=source_refs,
         )
-        for kind in route_request(request)
+        for kind in route_request(request, project_wide=project_wide)
     )
     return EvidenceQueryPlan(
         request_fingerprint=request_fingerprint(request),

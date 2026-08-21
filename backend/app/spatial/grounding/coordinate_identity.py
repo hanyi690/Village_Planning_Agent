@@ -5,10 +5,7 @@
 """
 from __future__ import annotations
 
-import re
 from typing import Any, Dict, Iterable, Optional, Tuple
-
-_POINT_RE = re.compile(r"POINT\(\s*([-\d.eE]+)\s+([-\d.eE]+)\s*\)")
 
 
 def point_xy(geometry_ref: Optional[str]) -> Optional[Tuple[float, float]]:
@@ -19,12 +16,18 @@ def point_xy(geometry_ref: Optional[str]) -> Optional[Tuple[float, float]]:
     """
     if not geometry_ref:
         return None
-    m = _POINT_RE.search(geometry_ref)
-    if not m:
-        return None
     try:
-        return (float(m.group(1)), float(m.group(2)))
-    except (TypeError, ValueError):
+        from shapely import wkt
+
+        value = str(geometry_ref)
+        marker = value.upper().find("POINT")
+        if marker < 0:
+            return None
+        geometry = wkt.loads(value[marker:])
+        if geometry.geom_type != "Point" or geometry.is_empty:
+            return None
+        return (float(geometry.x), float(geometry.y))
+    except (TypeError, ValueError, OSError):
         return None
 
 

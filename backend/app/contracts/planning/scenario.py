@@ -30,7 +30,18 @@ class ScenarioFeature(BaseModel):
     crs: str = Field(min_length=1)
     generation_operation: str = Field(min_length=1)
     source_refs: list[str] = Field(min_length=1)
-    relation_ids: list[str] = Field(min_length=1)
+    source_bsms: list[str] = Field(default_factory=list)
+    feature_bsms: list[str] = Field(default_factory=list)
+    source_feature_ids: list[str] = Field(default_factory=list)
+    entity_refs: list[str] = Field(default_factory=list)
+    evidence_refs: list[str] = Field(default_factory=list)
+    l1_fact_refs: list[str] = Field(default_factory=list)
+    l1_snapshot_ref: str = ""
+    bundle_snapshot_digest: str = ""
+    source_binding_ref: str = ""
+    subgeometry_operation: str = "bundle_extent"
+    subgeometry_diagnostics: list[str] = Field(default_factory=list)
+    relation_ids: list[str] = Field(default_factory=list)
 
     @field_validator("source_refs")
     @classmethod
@@ -46,6 +57,26 @@ class ScenarioFeature(BaseModel):
             raise ValueError("relation_ids must contain non-empty references")
         return _sorted_strings(value)
 
+    @field_validator(
+        "source_bsms",
+        "feature_bsms",
+        "source_feature_ids",
+        "entity_refs",
+        "evidence_refs",
+        "l1_fact_refs",
+    )
+    @classmethod
+    def normalize_lineage_refs(cls, value: list[str]) -> list[str]:
+        return _sorted_strings(value)
+
+    @model_validator(mode="after")
+    def migrate_legacy_relation_ids(self) -> "ScenarioFeature":
+        """Give pre-lineage fixtures a deterministic auditable relation ref."""
+        self.subgeometry_diagnostics = _sorted_strings(self.subgeometry_diagnostics)
+        if not self.relation_ids:
+            self.relation_ids = [f"feature:{self.feature_id}"]
+        return self
+
 
 class ScenarioFinding(BaseModel):
     code: str
@@ -55,13 +86,31 @@ class ScenarioFinding(BaseModel):
     target_id: str = ""
 
 
+class ScenarioTargetSelection(BaseModel):
+    """Authoritative selected members for one planning target."""
+
+    target_id: str = Field(min_length=1)
+    selection_mode: Literal["all_members", "choose_one", "choose_subset"]
+    candidate_ids: list[str] = Field(min_length=1)
+    binding_ref: str = ""
+
+    @model_validator(mode="after")
+    def canonicalize(self) -> "ScenarioTargetSelection":
+        self.candidate_ids = sorted(set(item for item in self.candidate_ids if item))
+        if not self.candidate_ids:
+            raise ValueError("candidate_ids must contain at least one member")
+        if self.selection_mode == "choose_one" and len(self.candidate_ids) != 1:
+            raise ValueError("choose_one selection must contain exactly one candidate")
+        return self
+
+
 class PlanningScenario(ContractMeta):
     schema_version: Literal["1.0"] = "1.0"
     scenario_id: str
     parent_scenario_id: str = ""
     baseline_ref: str
     problem_fingerprint: str
-    selected_candidate_ids: dict[str, str] = Field(default_factory=dict)
+    target_selections: list[ScenarioTargetSelection] = Field(default_factory=list)
     feature_intents: list[ScenarioFeature] = Field(default_factory=list)
     relation_satisfactions: list[RelationSatisfaction] = Field(default_factory=list)
     metrics: dict[str, float] = Field(default_factory=dict)
@@ -92,7 +141,13 @@ class PlanningScenario(ContractMeta):
                 "scenario feature belongs to a different scenario: "
                 + ", ".join(sorted(invalid_features))
             )
-        self.selected_candidate_ids = dict(sorted(self.selected_candidate_ids.items()))
+        self.target_selections = sorted(
+            self.target_selections,
+            key=lambda item: item.target_id,
+        )
+        selection_targets = [item.target_id for item in self.target_selections]
+        if len(selection_targets) != len(set(selection_targets)):
+            raise ValueError("target_selections must contain one row per target")
         self.feature_intents = sorted(self.feature_intents, key=lambda item: item.feature_id)
         self.relation_satisfactions = sorted(
             self.relation_satisfactions,
@@ -119,4 +174,9 @@ class PlanningScenario(ContractMeta):
         return self
 
 
-__all__ = ["ScenarioFeature", "ScenarioFinding", "PlanningScenario"]
+__all__ = [
+    "ScenarioFeature",
+    "ScenarioFinding",
+    "ScenarioTargetSelection",
+    "PlanningScenario",
+]

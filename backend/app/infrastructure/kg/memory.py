@@ -170,6 +170,12 @@ def get_semantic_memory() -> SemanticMemoryStore:
     return _SEMANTIC_MEMORY
 
 
+def reset_semantic_memory() -> None:
+    """Release the process singleton between isolated pipeline lifecycles."""
+    global _SEMANTIC_MEMORY
+    _SEMANTIC_MEMORY = None
+
+
 # ── Round persistence (data/kg_memory/{session_id}_round_{N}.json) ──
 
 
@@ -228,6 +234,6 @@ def diff_round(
 
 __all__ = [
     "EntityAnnotation", "RelationAnnotation", "SemanticMemoryStore",
-    "get_semantic_memory",
+    "get_semantic_memory", "reset_semantic_memory",
     "get_memory_dir", "memory_state_path", "save_memory_state", "load_memory_state", "diff_round",
 ]

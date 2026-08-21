@@ -68,7 +68,11 @@ def score_candidate(
 
     evidence["within_bundle"] = 0.5 if entry.source_bsms else 0.0
 
-    evidence["geometry_near_anchor"] = 0.0
+    evidence["geometry_near_anchor"] = _geometry_near_anchor_score(
+        entry,
+        hints=hints,
+        context=context,
+    )
 
     has_poi = "poi" in entry.provenance
     evidence["external_geocoder"] = 0.3 if has_poi else 0.0
@@ -113,6 +117,57 @@ def _relation_topology_score(
         except Exception as exc:  # noqa: BLE001
             logger.warning("[evidence_scorer] topology check failed: %s", exc)
     return 0.3 if getattr(entry, "relation_refs", None) else 0.0
+
+
+def _geometry_near_anchor_score(
+    entry: "PlaceEvidenceEntry",
+    *,
+    hints: str = "",
+    context: Any = None,
+) -> float:
+    """Score a real Bundle parcel overlap with a named village anchor.
+
+    The matched village names and parcel sets come from the session gazetteer;
+    no text heuristic manufactures a boundary.  Point features participate via
+    their Bundle-derived ``related_parcel_bsms``.  A future PostGIS adapter can
+    replace this overlap check with indexed distance without changing the
+    evidence dimension exposed to the LLM.
+    """
+
+    if context is None or not str(hints or "").strip():
+        return 0.0
+    candidate_bsms = {
+        str(value).strip()
+        for value in [
+            *(getattr(entry, "anchor_bsms", None) or []),
+            *(getattr(entry, "related_parcel_bsms", None) or []),
+            *(getattr(entry, "source_bsms", None) or []),
+        ]
+        if str(value).strip()
+    }
+    if not candidate_bsms:
+        return 0.0
+    folded_hints = str(hints).casefold()
+    gazetteer = getattr(context, "gazetteer", None)
+    for scope in getattr(gazetteer, "entries", None) or []:
+        names = [
+            str(getattr(scope, "name", "") or "").strip(),
+            *[
+                str(value).strip()
+                for value in (getattr(scope, "aliases", None) or [])
+                if str(value).strip()
+            ],
+        ]
+        if not any(name.casefold() in folded_hints for name in names if name):
+            continue
+        scope_bsms = {
+            str(value).strip()
+            for value in (getattr(scope, "bsms", None) or [])
+            if str(value).strip()
+        }
+        if scope_bsms.intersection(candidate_bsms):
+            return 0.5
+    return 0.0
 
 
 def total(evidence: Dict[str, float]) -> float:

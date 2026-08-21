@@ -1,4 +1,4 @@
-"""Typed L1 place mention feeding the PlaceEvidenceIndex."""
+"""Typed L1 place mention feeding EvidenceGraph."""
 
 from __future__ import annotations
 
@@ -10,7 +10,7 @@ from .base import StrictContractModel
 class L1LocationFact(StrictContractModel):
     """A typed L1 place mention; semantic evidence, never spatial truth.
 
-    Feeds ``PlaceEvidenceIndexService.resolve`` and maps onto
+    Feeds ``EvidenceGraph.resolve_mention`` and maps onto
     ``PlaceResolutionCandidate`` in the resolution chain.
     """
 

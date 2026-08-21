@@ -291,30 +291,67 @@ async def build_planning_context(
         except Exception as e:
             logger.warning("[PlanningContext] village anchors query failed: %s", e)
 
-    # 6. Reports + summary index (DB I/O, optional)
+    # 6. Report manifest + summary index (bundle-owned, no report bodies)
     reports: Dict[str, Dict[str, Any]] = {}
     report_summary_index: Dict[str, Dict[str, Any]] = {}
-    if include_reports and session_id:
-        try:
-            from app.infrastructure.reports.report_store import ReportStore
-
-            store = ReportStore.get_instance()
-            for layer in (1, 2, 3):
-                layer_reports = await store.get_layer_reports_with_sources(
-                    session_id, layer
-                )
-                if layer_reports:
-                    for dk, rec in layer_reports.items():
-                        reports.setdefault(dk, {}).update(
-                            {"content": rec.get("content", ""), "instruction": rec.get("instruction", "")}
-                        )
-        except Exception as e:
-            logger.warning("[PlanningContext] report load failed: %s", e)
+    if include_reports and session_id and bundle is not None:
+        for ref in list(getattr(bundle.documents, "report_refs", []) or []):
+            dk = str(ref.get("dimension_key") or "")
+            layer = int(ref.get("layer") or 0)
+            if not dk or layer not in (1, 2, 3):
+                continue
+            entry = reports.setdefault(dk, {})
+            entry.update({
+                "summary": ref.get("summary", ""),
+                "instruction": ref.get("instruction", ""),
+                "layer": layer,
+                "report_id": ref.get("report_id", ""),
+            })
+            entry.setdefault("layers", {})[f"L{layer}"] = {
+                "summary": ref.get("summary", ""),
+                "instruction": ref.get("instruction", ""),
+                "knowledge_sources": ref.get("knowledge_sources", []),
+                "report_id": ref.get("report_id", ""),
+                "version": ref.get("version", ""),
+            }
+            summary_entry = report_summary_index.setdefault(dk, {})
+            summary_entry.setdefault("layers", {})[f"L{layer}"] = {
+                "summary": ref.get("summary", ""),
+                "report_id": ref.get("report_id", ""),
+                "version": ref.get("version", ""),
+            }
 
     if bundle is None:
         raise ContextBuildError(
             f"required capability 'bundle' missing (bundle_error={bundle_error})"
         )
+
+    runtime_documents: list[Dict[str, Any]] = []
+    if session_id:
+        try:
+            from app.data.catalog.session_documents import load_session_documents
+
+            source_documents = await load_session_documents(
+                session_id, bundle.village_name
+            )
+            allowed_refs = {
+                (
+                    str(ref.get("source") or ""),
+                    str(ref.get("name") or ""),
+                    str(ref.get("content_digest") or ""),
+                )
+                for ref in list(getattr(bundle.documents, "document_refs", []) or [])
+            }
+            runtime_documents = [
+                document for document in source_documents
+                if (
+                    str(document.get("source") or ""),
+                    str(document.get("name") or ""),
+                    str(document.get("content_digest") or ""),
+                ) in allowed_refs
+            ]
+        except Exception as exc:
+            logger.warning("[PlanningContext] input document resolution failed: %s", exc)
 
     data_snapshot = SessionDataSnapshot.from_bundle(
         bundle,
@@ -327,6 +364,13 @@ async def build_planning_context(
             f"expected={expected_snapshot_digest} actual={data_snapshot.digest}"
         )
     workspace = SpatialWorkspace(data_snapshot, bundle)
+    external_search_port = None
+    try:
+        from app.application.queries.evidence import get_active_external_provider
+
+        external_search_port = get_active_external_provider()
+    except Exception as exc:
+        logger.debug("[PlanningContext] external provider unavailable: %s", exc)
     context = PlanningContext(
         session_id=session_id,
         village_name=resolved_village,
@@ -339,8 +383,11 @@ async def build_planning_context(
         gazetteer=gazetteer,
         constraint_index=constraint_index,
         village_anchors=village_anchors,
+        input_documents=runtime_documents,
         reports=reports,
+        reports_loaded=bool(include_reports and session_id and bundle is not None),
         report_summary_index=report_summary_index,
+        external_search_port=external_search_port,
         ports=ports,
     )
 
@@ -355,6 +402,7 @@ async def build_planning_context(
         "kg_version": kg_version,
         "has_constraint_index": constraint_index is not None,
         "report_count": len(reports),
+        "reports_loaded": context.reports_loaded,
         "report_keys": sorted(reports.keys()),
     }
     context._record_capabilities()
@@ -364,13 +412,14 @@ async def build_planning_context(
     ]
     context._recompute_hash()
 
-    # 6.5 PlaceEvidenceIndex (non-fatal; None on failure)
+    # 6.5 EvidenceGraph is the single spatial-evidence boundary.  Its
+    # deterministic index remains private to the graph implementation.
     try:
-        from app.evidence.index.place_evidence_index import PlaceEvidenceIndex
+        from app.evidence.retrieval.evidence_graph import EvidenceGraph
 
-        context.evidence_index = PlaceEvidenceIndex.build(context)
+        context.evidence_graph = EvidenceGraph.build(context)
     except Exception as e:
-        logger.warning("[PlanningContext] evidence index build failed: %s", e)
+        logger.warning("[PlanningContext] evidence graph build failed: %s", e)
     _context_cache[session_id] = context
     logger.info(
         "[PlanningContext] built v%d for %s (%s): snapshot=%s kg=%s gaz=%s cidx=%s reports=%d anchors=%d",

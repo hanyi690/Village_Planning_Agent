@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-from pydantic import BaseModel
+from typing import Literal
+
+from pydantic import BaseModel, Field
 
 from app.contracts.artifacts.classification_ref import ClassificationRef
 from app.contracts.artifacts.contract_meta import ContractMeta, StageIssue
@@ -28,6 +30,39 @@ class L1LocationFact(BaseModel):
     confidence: float = 0.0
 
 
+class L1Fact(BaseModel):
+    """Authoritative, provenance-rich fact consumed by later stages.
+
+    ``facts`` remains a deterministic human-readable projection for old
+    reports.  Retrieval, L2/L3 citation and spatial grounding should consume
+    this record instead, so source kind, counting basis and source span cannot
+    be lost in a display string.
+    """
+
+    fact_id: str
+    statement: str
+    confidence: float = 0.0
+    fact_kind: Literal[
+        "document_observation",
+        "spatial_observation",
+        "gis_observation",
+        "kg_canonical_fact",
+        "derived_metric",
+    ]
+    dimension_key: str = ""
+    subject_scope: str = ""
+    semantic_type: str = ""
+    attributes: dict[str, str] = Field(default_factory=dict)
+    value: str | int | float | None = None
+    unit: str = ""
+    counting_basis: str = ""
+    source_refs: list[str] = Field(default_factory=list, min_length=1)
+    source_span: str = ""
+    source_snapshot_ref: str = ""
+    source_feature_ids: list[str] = Field(default_factory=list)
+    derivation: str = ""
+
+
 class EvidenceGap(BaseModel):
     """Structured evidence gap emitted by L1, resolvable by EXPLORE.
 
@@ -42,28 +77,10 @@ class EvidenceGap(BaseModel):
     severity: str = "warning"  # "info" | "warning" | "error"
 
 
-class L1DimensionFragment(BaseModel):
-    """Per-dimension compiled output of the L1 Observation profile.
-
-    Produced in parallel by the shared parse-compiler for each L1 dimension;
-    consumed by l1_aggregate which merges fragments into L1Snapshot.
-    """
-
-    dimension_key: str
-    facts: list[str] = []
-    constraints: list[str] = []
-    issues: list[StageIssue] = []
-    opportunities: list[str] = []
-    evidence_gaps: list[EvidenceGap] = []
-    classification_refs: list[ClassificationRef] = []
-    spatial_facts: list[str] = []
-    location_facts: list[L1LocationFact] = []
-    diagnostics: list[ParseDiagnostic] = []
-    provenance: "Provenance | None" = None
-    trace: "CompilerTrace | None" = None
-
-
 class L1Snapshot(ContractMeta):
+    # Authoritative typed records.  ``facts`` below is a deterministic
+    # compatibility/display projection generated from these records.
+    fact_records: list[L1Fact] = Field(default_factory=list)
     facts: list[str] = []
     # Dimension-scoped facts are the auditable source for downstream strategy
     # prompts; ``facts`` remains the backward-compatible flattened view.
@@ -76,12 +93,15 @@ class L1Snapshot(ContractMeta):
     sources: list[EvidenceSource] = []
     classification_refs: list[ClassificationRef] = []
     dimension_provenance: list[Provenance] = []
+    spatial_facts_by_dimension: dict[str, list[str]] = {}
+    diagnostics_by_dimension: dict[str, list[ParseDiagnostic]] = {}
+    traces_by_dimension: dict[str, CompilerTrace] = {}
     provenance: "Provenance | None" = None
 
 
 __all__ = [
     "L1Snapshot",
-    "L1DimensionFragment",
     "L1LocationFact",
+    "L1Fact",
     "EvidenceGap",
 ]

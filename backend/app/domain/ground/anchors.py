@@ -2,7 +2,7 @@
 
 domain/ground 唯一拥有"接地"：把 ``L1Snapshot.location_facts`` 编译为
 ``GroundedAnchor[]``（mention → entity_ref/BSM/geometry + topology_evidence），
-并富化 KG（真名回填、语义注解、关系注记）与重建 ``PlaceEvidenceIndex``。
+并富化 KG（真名回填、语义注解、关系注记）与重建 ``EvidenceGraph``。
 
 原则：
 - 同一坐标 = 同一实体（``app.spatial.grounding.coordinate_identity``）。
@@ -16,17 +16,32 @@ import asyncio
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from pydantic import BaseModel, Field
+
 from app.contracts.spatial.grounding_contracts import GroundedAnchor
 from app.infrastructure.logging import get_logger
 
 logger = get_logger(__name__)
 
 
-def _new_ground_llm_budget() -> Dict[str, Any]:
-    """Create one bounded best-effort budget for grounding fallbacks."""
-    from app.spatial.grounding.call_budget import new_ground_llm_budget
+class _CandidateChoice(BaseModel):
+    """Closed-set LLM decision; geometry remains owned by the candidate list."""
 
-    return new_ground_llm_budget()
+    candidate_index: int = Field(default=0, ge=0)
+
+
+def _new_ground_llm_budget(
+    context: Any = None,
+    *,
+    scope_key: str = "anchors",
+) -> Dict[str, Any]:
+    """Return one bounded best-effort budget for this grounding scope."""
+    from app.spatial.grounding.call_budget import get_ground_llm_budget
+
+    return get_ground_llm_budget(
+        context,
+        scope_key=f"{scope_key}:{getattr(context, 'session_id', '')}",
+    )
 
 
 def _reserve_ground_llm_call(budget: Optional[Dict[str, Any]]) -> float | None:
@@ -175,18 +190,57 @@ def _has_spatial_evidence(anchor: Optional[GroundedAnchor]) -> bool:
     """Return whether an anchor has real KG/upload spatial evidence."""
     if anchor is None:
         return False
+    geometry_ref = str(anchor.geometry_ref or "").strip().lower()
+    if geometry_ref.startswith("bundled:") or geometry_ref in {"coarse", "approximate"}:
+        return False
+    if anchor.role in {"facility", "road", "water", "landmark", "axis"}:
+        return bool(
+            geometry_ref
+            or str(anchor.feature_bsm or "").strip()
+            or str(anchor.source_feature_id or "").strip()
+        )
     return bool(anchor.source_bsms or anchor.geometry_ref or anchor.entity_ref)
 
 
+def _candidate_has_authoritative_geometry(candidate: Any) -> bool:
+    """Only a bundle/source-feature candidate can become a resolved anchor."""
+    geometry_ref = str(getattr(candidate, "geometry_ref", "") or "").strip().lower()
+    if not geometry_ref or geometry_ref.startswith("bundled:"):
+        return bool(
+            str(getattr(candidate, "feature_bsm", "") or "").strip()
+            and str(getattr(candidate, "source_feature_id", "") or "").strip()
+        )
+    return bool(
+        geometry_ref.startswith("bundle://feature/")
+        or str(getattr(candidate, "feature_bsm", "") or "").strip()
+        or str(getattr(candidate, "source_feature_id", "") or "").strip()
+    )
+
+
+def _candidate_bundle_ref(candidate: Any) -> str:
+    """Return an opaque Bundle geometry ref for LLM-facing candidate text."""
+    bsm = str(
+        getattr(candidate, "feature_bsm", "")
+        or getattr(candidate, "source_bsm", "")
+        or (
+            getattr(candidate, "source_bsms", [])[0]
+            if len(getattr(candidate, "source_bsms", []) or []) == 1
+            else ""
+        )
+        or ""
+    ).strip()
+    return f"bundle://feature/{bsm}" if bsm else ""
+
+
 def _index_role_candidates(context: Any, role: str) -> list:
-    """从证据索引取同角色、有真实几何/地块的候选（供 LLM 判别）。"""
+    """从 EvidenceGraph 取同角色、有真实几何/地块的候选（供 LLM 判别）。"""
     from types import SimpleNamespace
 
-    index = getattr(context, "evidence_index", None)
-    if index is None:
+    graph = getattr(context, "evidence_graph", None)
+    if graph is None:
         return []
     out: list = []
-    for entry in getattr(index, "entries", []) or []:
+    for entry in graph.iter_entries():
         if getattr(entry, "role", "") != role:
             continue
         if not getattr(entry, "source_bsms", None) and not getattr(entry, "geometry_ref", None):
@@ -227,7 +281,7 @@ def _candidate_fingerprint(candidates: list) -> tuple:
                 str(getattr(candidate, "entity_type", "") or ""),
                 str(getattr(candidate, "role", "") or ""),
                 str(getattr(candidate, "canonical_name", "") or ""),
-                str(getattr(candidate, "geometry_ref", "") or ""),
+                _candidate_bundle_ref(candidate),
                 bsms,
                 relations,
                 float(getattr(candidate, "score", 0.0) or 0.0),
@@ -366,14 +420,14 @@ def _topology_refine_facility(
 
     from app.infrastructure.kg.ontology import Relations
 
-    index = getattr(context, "evidence_index", None)
-    if index is None:
+    evidence_graph = getattr(context, "evidence_graph", None)
+    if evidence_graph is None:
         return anchor
     # 候选：同角色、POINT 几何、带 KG 实体引用的索引条目
     best = None
     best_overlap = 0
     current_entity = str(getattr(anchor, "entity_ref", "") or "")
-    for entry in getattr(index, "entries", []) or []:
+    for entry in evidence_graph.iter_entries():
         if getattr(entry, "role", "") != "facility":
             continue
         entity_refs = list(getattr(entry, "entity_refs", None) or [])
@@ -404,6 +458,17 @@ def _topology_refine_facility(
         })
         anchor = anchor.model_copy(update={"query_trace": trace})
         return anchor
+    # Topology is only a disambiguation signal.  It must never downgrade an
+    # exact bundle POINT to a KG entry that only carries parcel context.
+    if not _has_point_geometry(getattr(best, "geometry_ref", None)):
+        trace = list(getattr(anchor, "query_trace", None) or [])
+        trace.append({
+            "step": "kg_topology_facility",
+            "refined": False,
+            "reason": "topology_candidate_without_point_geometry",
+            "overlap": best_overlap,
+        })
+        return anchor.model_copy(update={"query_trace": trace})
     from types import SimpleNamespace
 
     cand = SimpleNamespace(
@@ -412,6 +477,13 @@ def _topology_refine_facility(
         canonical_name=str(getattr(best, "canonical_name", "") or ""),
         source_bsms=list(getattr(best, "source_bsms", None) or []),
         geometry_ref=getattr(best, "geometry_ref", None),
+        feature_bsm=getattr(best, "feature_bsm", None),
+        source_feature_id=getattr(best, "source_feature_id", None),
+        source_layer=getattr(best, "source_layer", None),
+        related_parcel_bsms=list(getattr(best, "related_parcel_bsms", None) or []),
+        l1_fact_refs=list(getattr(best, "l1_fact_refs", None) or []),
+        l1_snapshot_ref=getattr(best, "l1_snapshot_ref", ""),
+        bundle_snapshot_digest=getattr(best, "bundle_snapshot_digest", ""),
         relation_refs=list(getattr(best, "relation_refs", None) or []),
         score=float(getattr(best, "confidence", 0.0) or 0.0),
     )
@@ -494,7 +566,7 @@ def _village_spatial_fallback_plan(
     village_bsms = _village_anchor_bsms(context, hints)
     poi_bsms = _poi_anchor_bsms(context, fact)
     if poi_bsms or village_bsms:
-        candidate = _best_effort_candidate(fact, poi_bsms, village_bsms, trace)
+        candidate = _scope_candidate(fact, poi_bsms, village_bsms, trace)
         trace.append({
             "step": "village_fallback:gazetteer_bsms",
             "count": len(candidate.source_bsms),
@@ -580,23 +652,19 @@ def _commit_village_spatial_fallback(
         picked_bsms = set(getattr(picked, "source_bsms", None) or [])
         if picked_bsms and not (picked_bsms & occupied):
             selected = picked
-    if selected is None and available:
-        cluster = available[0]
-        selected = _best_effort_candidate(fact, [], list(cluster.bsms), trace)
-        trace.append({
-            "step": "village_fallback:deterministic_cluster",
-            "cluster_index": cluster.index,
-            "area_ha": round(cluster.area_ha, 2),
-            "estimate": True,
-        })
-    elif selected is not None:
+    if selected is not None:
         trace.append({
             "step": "village_fallback:llm_cluster_assign",
             "picked": getattr(selected, "canonical_name", ""),
             "geometry": getattr(selected, "geometry_ref", ""),
         })
+    elif available:
+        trace.append({
+            "step": "village_fallback:llm_selection_unresolved",
+            "candidate_count": len(available),
+        })
     if selected is None:
-        if anchor is not None:
+        if anchor is not None and _has_spatial_evidence(anchor):
             return anchor.model_copy(update={"query_trace": list(trace)})
         return None
 
@@ -624,82 +692,6 @@ def _resolve_gazetteer_entry_any(context: Any, name: str):
     if gazetteer is None:
         return None
     return gazetteer.resolve(name, fuzzy=False) or gazetteer.resolve(name, fuzzy=True)
-
-
-def _linear_spatial_fallback(
-    context: Any,
-    fact: Any,
-    anchor: GroundedAnchor,
-    trace: List[dict],
-) -> GroundedAnchor:
-    """水/路无空间引用兜底：从 KG 同类实体里按 hint 村簇重叠/最近选一个。
-
-    水体/道路现已在 KG 存质心 + nearby 村簇；用 hint（如 金田村/社前村）的
-    gazetteer BSM 与该实体 nearby 簇的 BSM 求重叠，选重叠最大的（确定性，
-    不依赖 LLM 输出解析），best_effort + 低置信。
-    """
-    from types import SimpleNamespace
-
-    from app.infrastructure.kg.ontology import PLN, Relations
-
-    kg = getattr(context, "kg", None)
-    graph = getattr(kg, "g", None) if kg is not None else None
-    if graph is None:
-        return anchor
-    hints = str(getattr(fact, "spatial_hint", "") or getattr(fact, "source_span", "") or "")
-    village_bsms = _village_anchor_bsms(context, hints)
-    index = getattr(context, "evidence_index", None)
-    candidates = []
-    if index is not None:
-        for entry in getattr(index, "entries", []) or []:
-            if getattr(entry, "role", "") != anchor.role:
-                continue
-            refs = list(getattr(entry, "entity_refs", None) or [])
-            kg_uri = next((r for r in refs if str(r).startswith("http")), None)
-            if kg_uri is None:
-                continue
-            if not getattr(entry, "source_bsms", None) and not getattr(entry, "geometry_ref", None):
-                continue
-            candidates.append(entry)
-    if not candidates:
-        return anchor
-    best = None
-    best_overlap = -1
-    from rdflib import URIRef
-
-    for entry in candidates:
-        kg_uri = str(next((r for r in getattr(entry, "entity_refs", []) if str(r).startswith("http")), ""))
-        overlap = 0
-        try:
-            subj = URIRef(kg_uri)
-            for p, o in graph.predicate_objects(subj):
-                if str(p) in (str(Relations.nearby), str(Relations.sfWithin)) and str(o).startswith("http"):
-                    overlap = max(overlap, len(_cluster_bsms_of(kg, str(o)) & village_bsms))
-        except Exception:  # noqa: BLE001
-            continue
-        if overlap > best_overlap or (overlap == best_overlap and best is None):
-            best_overlap = overlap
-            best = entry
-    if best is None:
-        return anchor
-    cand = SimpleNamespace(
-        entity_ref=str((getattr(best, "entity_refs", None) or [""])[0]),
-        entity_type=str((getattr(best, "entity_types", None) or [anchor.role])[0]),
-        canonical_name=str(getattr(best, "canonical_name", "") or ""),
-        source_bsms=list(getattr(best, "source_bsms", None) or []),
-        geometry_ref=getattr(best, "geometry_ref", None),
-        relation_refs=list(getattr(best, "relation_refs", None) or []),
-        score=0.35,
-    )
-    if not cand.source_bsms:
-        return anchor
-    trace = list(getattr(anchor, "query_trace", None) or [])
-    trace.append({
-        "step": "linear_fallback:kg_topology",
-        "overlap": best_overlap,
-        "picked": cand.canonical_name,
-    })
-    return _anchor_from_candidate(fact, cand, best_effort=True, query_trace=trace)
 
 
 def _cluster_for_bsms(kg: Any, bsms: set) -> Optional[str]:
@@ -824,19 +816,6 @@ def _inject_anchors_into_kg(context: Any, kg: Any, anchors: list, session_id: st
     return written
 
 
-def _context_report_text(context: Any) -> str:
-    """报告正文（LLM 村庄/水系分配的证据来源），来自 context.reports。"""
-    parts: List[str] = []
-    reports = getattr(context, "reports", None) or {}
-    if isinstance(reports, dict):
-        for payload in reports.values():
-            if isinstance(payload, dict):
-                parts.append(str(payload.get("content") or payload.get("summary") or ""))
-            else:
-                parts.append(str(payload or ""))
-    return "\n".join(part for part in parts if part)[:12000]
-
-
 def _fact_mentions(facts: List[Any]) -> list["NameMention"]:
     """L1 location_facts → name_backfill mentions（名字回填 KG 无名实体）。"""
     from app.infrastructure.kg.enrichment.name_backfill import NameMention
@@ -877,10 +856,7 @@ async def _llm_reason_candidate(
     *,
     budget: Optional[Dict[str, Any]] = None,
 ) -> Optional[Any]:
-    """有界 LLM 判别：只在候选内选最优（设计 §4.3）。返回候选或 None。
-
-    失败返回 None（调用方回退到确定性首选，仍产出可用 best-effort 结果）。
-    """
+    """Use typed closed-set selection; failure remains unresolved."""
     if not candidates:
         return None
     if llm is None:
@@ -888,26 +864,36 @@ async def _llm_reason_candidate(
     call_timeout = _reserve_ground_llm_call(budget)
     if call_timeout is None:
         logger.info(
-            "[ground_anchors] LLM fallback budget exhausted; using deterministic candidate for %s",
+            "[ground_anchors] LLM selection budget exhausted; candidate remains unresolved for %s",
             mention,
         )
         return None
     lines = "\n".join(
-        f"{i}. 名称={c.canonical_name} 类型={c.entity_type} 角色={c.role if hasattr(c, 'role') else 'unknown'} "
-        f"BSM={','.join(c.source_bsms[:5]) or '无'} 几何={c.geometry_ref or '无'} 得分={c.score:.3f}"
-        for i, c in enumerate(candidates, 1)
+        _candidate_prompt_line(i, candidate)
+        for i, candidate in enumerate(candidates, 1)
     )
     prompt = (
-        f"地名「{mention}」（类型 {role}）位于「{hints or '未知'}」。以下是从 KG/索引召回"
+        f"地名「{mention}」（类型 {role}）位于「{hints or '未知'}」。以下是从 KG/EvidenceGraph 召回"
         f"的候选实体，请选择最匹配的一个（只输出编号；都不可用时输出 0）：\n{lines}"
     )
     try:
         import asyncio
 
+        structured_kwargs = {}
+        if getattr(llm, "model_name", None):
+            structured_kwargs["method"] = "function_calling"
+        structured = llm.with_structured_output(
+            _CandidateChoice,
+            **structured_kwargs,
+        )
+
         async def _invoke():
-            if asyncio.iscoroutinefunction(getattr(llm, "ainvoke", None)):
-                return await llm.ainvoke(prompt)
-            return await asyncio.to_thread(llm.invoke, prompt)
+            if asyncio.iscoroutinefunction(getattr(structured, "ainvoke", None)):
+                return await structured.ainvoke(prompt)
+            invoke = getattr(structured, "invoke", None)
+            if invoke is None:
+                raise TypeError("structured_candidate_selector_missing_invoke")
+            return await asyncio.to_thread(invoke, prompt)
 
         from app.spatial.grounding.call_budget import run_ground_llm_call
 
@@ -915,18 +901,114 @@ async def _llm_reason_candidate(
     except Exception as exc:  # noqa: BLE001
         logger.warning("[ground_anchors] LLM reason failed: %s", exc)
         return None
-    content = getattr(response, "content", "")
-    if isinstance(content, list):
-        content = "".join(content)
-    import re
-
-    match = re.search(r"\b([0-9]+)\b", str(content or ""))
-    if match is None:
-        return None
-    index = int(match.group(1)) - 1
+    raw_index = (
+        response.get("candidate_index")
+        if isinstance(response, dict)
+        else getattr(response, "candidate_index", 0)
+    )
+    index = int(raw_index or 0) - 1
     if 0 <= index < len(candidates):
         return candidates[index]
     return None
+
+
+def _candidate_prompt_line(index: int, candidate: Any) -> str:
+    """Render bounded candidate evidence for closed-set LLM selection.
+
+    The LLM receives identity and provenance clues, never executable geometry.
+    Every value is already attached to a bundle-backed candidate; the model
+    can only return the ordinal and cannot invent a BSM or coordinate.
+    """
+    identity = getattr(candidate, "identity", None)
+    canonical_name = str(
+        getattr(candidate, "canonical_name", "")
+        or getattr(identity, "canonical_name", "")
+        or "未命名"
+    ).strip()
+    entity_type = str(
+        getattr(candidate, "entity_type", "")
+        or getattr(identity, "entity_type", "")
+        or "unknown"
+    ).strip()
+    role = str(
+        getattr(candidate, "role", "")
+        or getattr(identity, "role", "")
+        or "unknown"
+    ).strip()
+    aliases = list(
+        dict.fromkeys(
+            str(value).strip()
+            for value in (
+                getattr(candidate, "aliases", None)
+                or getattr(identity, "aliases", None)
+                or []
+            )
+            if str(value).strip()
+        )
+    )[:8]
+    feature_bsm = str(
+        getattr(candidate, "feature_bsm", "")
+        or getattr(identity, "bundle_feature_bsm", "")
+        or ""
+    ).strip()
+    source_bsm = str(
+        getattr(candidate, "source_bsm", "")
+        or getattr(identity, "source_bsm", "")
+        or ""
+    ).strip()
+    source_bsms = list(
+        dict.fromkeys(
+            str(value).strip()
+            for value in (getattr(candidate, "source_bsms", None) or [])
+            if str(value).strip()
+        )
+    )[:8]
+    related_parcels = list(
+        dict.fromkeys(
+            str(value).strip()
+            for value in (getattr(candidate, "related_parcel_bsms", None) or [])
+            if str(value).strip()
+        )
+    )[:8]
+    relation_refs = list(
+        dict.fromkeys(
+            _short_evidence_ref(value)
+            for value in (getattr(candidate, "relation_refs", None) or [])
+            if str(value).strip()
+        )
+    )[:8]
+    l1_refs = list(
+        dict.fromkeys(
+            str(value).strip()
+            for value in (getattr(candidate, "l1_fact_refs", None) or [])
+            if str(value).strip()
+        )
+    )[:6]
+    provenance_refs = list(
+        dict.fromkeys(
+            _short_evidence_ref(value)
+            for value in (getattr(candidate, "evidence_refs", None) or [])
+            if str(value).strip()
+        )
+    )[:6]
+    score = float(getattr(candidate, "score", 0.0) or 0.0)
+    bundle_ref = _candidate_bundle_ref(candidate)
+    return (
+        f"{index}. 名称={canonical_name} 别名={'、'.join(aliases) or '无'} "
+        f"类型={entity_type} 角色={role} 来源层={getattr(candidate, 'source_layer', '') or getattr(identity, 'source_layer', '') or '未知'} "
+        f"feature_BSM={feature_bsm or '无'} source_BSM={source_bsm or '无'} "
+        f"来源BSM={','.join(source_bsms) or '无'} 关联地块={','.join(related_parcels) or '无'} "
+        f"bundle引用={bundle_ref or '无'} "
+        f"KG关系={','.join(relation_refs) or '无'} L1事实={','.join(l1_refs) or '无'} "
+        f"来源证据={','.join(provenance_refs) or '无'} 得分={score:.3f}"
+    )
+
+
+def _short_evidence_ref(value: Any) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    return text.rsplit("#", 1)[-1].rsplit("/", 1)[-1]
 
 
 def _village_anchor_bsms(context: Any, hints: str) -> List[str]:
@@ -1009,8 +1091,10 @@ def _anchor_from_candidate(
     # keep the prefix-free POINT representation so downstream renderers and
     # coordinate identity see the same value regardless of index construction
     # order.
-    if isinstance(geometry_ref, str) and geometry_ref.startswith("kg_wkt:POINT("):
-        geometry_ref = geometry_ref[len("kg_wkt:"):]
+    if isinstance(geometry_ref, str) and geometry_ref.startswith("kg_wkt:"):
+        geometry_ref = geometry_ref[len("kg_wkt:"):].strip()
+        if geometry_ref.startswith("POINT ("):
+            geometry_ref = "POINT(" + geometry_ref[len("POINT ("):]
     entity_ref = str(getattr(candidate, "entity_ref", "") or "")
     # 优先 KG 实体 URI；candidate 可能是索引/兜底/聚落等来源
     candidate_refs = list(getattr(candidate, "entity_refs", None) or []) or ([entity_ref] if entity_ref else [])
@@ -1025,8 +1109,19 @@ def _anchor_from_candidate(
         entity_ref=entity_ref,
         entity_type=str(getattr(candidate, "entity_type", "") or ""),
         geometry_ref=geometry_ref,
+        feature_bsm=getattr(candidate, "feature_bsm", None),
+        source_feature_id=getattr(candidate, "source_feature_id", None),
+        source_layer=getattr(candidate, "source_layer", None),
+        related_parcel_bsms=list(
+            getattr(candidate, "related_parcel_bsms", None) or []
+        ),
         source_bsms=list(getattr(candidate, "source_bsms", None) or []),
         relation_refs=list(getattr(candidate, "relation_refs", None) or []),
+        l1_fact_refs=list(getattr(candidate, "l1_fact_refs", None) or []),
+        l1_snapshot_ref=str(getattr(candidate, "l1_snapshot_ref", "") or ""),
+        bundle_snapshot_digest=str(
+            getattr(candidate, "bundle_snapshot_digest", "") or ""
+        ),
         topology_evidence=list(topology_evidence or []),
         coordinate_key=coordinate_key(geometry_ref),
         confidence=round(max(confidence, 0.0), 4),
@@ -1045,6 +1140,7 @@ async def ground_l1_anchors(
     cache_path: Optional[Path] = None,
     llm: Any = None,
     bump: bool = True,
+    ground_llm_budget: Optional[Dict[str, Any]] = None,
 ) -> List[GroundedAnchor]:
     """核心：L1 锚点接地（name_backfill → 索引 → 解析 → LLM 兜底 → 注解）。
 
@@ -1054,7 +1150,10 @@ async def ground_l1_anchors(
     if not facts:
         return []
     kg = getattr(context, "kg", None)
-    ground_llm_budget = _new_ground_llm_budget()
+    ground_llm_budget = ground_llm_budget or _new_ground_llm_budget(
+        context,
+        scope_key="anchors",
+    )
 
     # 1) 真名回填 KG 无名实体（确定性单候选；多候选 flash 消歧；缓存可重放）
     if kg is not None:
@@ -1074,7 +1173,7 @@ async def ground_l1_anchors(
             except Exception as exc:  # noqa: BLE001
                 logger.warning("[ground_anchors] name backfill failed: %s", exc)
 
-    # 2) 重建 gazetteer + 证据索引（同坐标=同实体在索引构建内生效）。
+    # 2) 重建 gazetteer + EvidenceGraph（同坐标=同实体在图构建内生效）。
     #    保留既有富化条目（村庄聚落映射等）——gazetteer 是累积证据，重建不丢弃。
     try:
         from app.infrastructure.kg.gazetteer import build_gazetteer
@@ -1135,7 +1234,12 @@ async def ground_l1_anchors(
         )
 
         parcels = list(context.current_parcels() or [])
-        report_text = _context_report_text(context)
+        from app.evidence.retrieval.retrievers.report_retriever import load_report_corpus
+
+        report_text = await load_report_corpus(
+            str(getattr(context, "session_id", "") or ""),
+            context=context,
+        )
         village_names = [
             str(getattr(f, "normalized_name", "") or "").strip()
             for f in facts
@@ -1153,6 +1257,7 @@ async def ground_l1_anchors(
                     parcels,
                     village_names,
                     report_text,
+                    context=context,
                     llm=llm,
                     cache=cache_path,
                     budget=ground_llm_budget,
@@ -1174,9 +1279,9 @@ async def ground_l1_anchors(
     except Exception as exc:  # noqa: BLE001
         logger.warning("[ground_anchors] village/water cluster mapping failed: %s", exc)
 
-    from app.evidence.index.place_evidence_index import PlaceEvidenceIndex
+    from app.evidence.retrieval.evidence_graph import EvidenceGraph
 
-    context.evidence_index = PlaceEvidenceIndex.build(context)
+    context.evidence_graph = EvidenceGraph.build(context)
 
     # 3) 先做确定性解析，再把相互独立的地点判别一次性有界并发。
     #    最终锚点写入、村簇占用和 KG 注解仍按原始顺序串行提交，避免共享
@@ -1211,7 +1316,7 @@ async def ground_l1_anchors(
             continue
 
         try:
-            result = context.evidence_index.resolve_mention(mention, role=role, hints=hints)
+            result = context.evidence_graph.resolve_mention(mention, role=role, hints=hints)
             trace.extend(result.query_trace)
         except Exception as exc:  # noqa: BLE001
             logger.debug("[ground_anchors] resolve failed %s: %s", mention, exc)
@@ -1229,13 +1334,25 @@ async def ground_l1_anchors(
             item["best_effort"] = True
             poi_bsms = _poi_anchor_bsms(context, fact)
             village_bsms = _village_anchor_bsms(context, hints)
-            if poi_bsms or village_bsms:
-                item["candidate"] = _best_effort_candidate(
+            if role == "village" and (poi_bsms or village_bsms):
+                item["candidate"] = _scope_candidate(
                     fact, poi_bsms, village_bsms, trace
                 )
+                trace.append({
+                    "step": "scope_only_candidate",
+                    "role": role,
+                    "spatial_identity": "unresolved",
+                })
             else:
-                item["llm_kind"] = "fallback"
-                item["llm_candidates"] = _llm_anchor_candidates(context, hints)
+                # A nearby parcel pool is not an identity for a road, water,
+                # or facility.  Keep the typed gap visible and require an
+                # EvidenceGraph/source-feature candidate instead of promoting
+                # a coarse BSM set through a fallback.
+                trace.append({
+                    "step": "identity_candidate_missing",
+                    "role": role,
+                    "spatial_identity": "unresolved",
+                })
         prepared.append(item)
 
     llm_groups: Dict[tuple, List[Dict[str, Any]]] = {}
@@ -1273,10 +1390,6 @@ async def ground_l1_anchors(
         decisions = await asyncio.gather(*llm_tasks, return_exceptions=True)
         for group, decision in zip(llm_group_items, decisions):
             decision = None if isinstance(decision, Exception) else decision
-            representative = group[0]
-            if decision is None and representative.get("llm_kind") == "fallback":
-                candidates = representative.get("llm_candidates", [])
-                decision = candidates[0] if candidates else None
             for item in group:
                 item["llm_decision"] = decision
 
@@ -1295,13 +1408,12 @@ async def ground_l1_anchors(
             continue
         if item.get("llm_kind") == "candidate":
             candidate = item.get("llm_decision")
-            if candidate is None:
-                candidate = item["llm_candidates"][0]
-            trace.append({
-                "step": "llm_reason",
-                "picked": getattr(candidate, "canonical_name", ""),
-                "best_effort": True,
-            })
+            if candidate is not None:
+                trace.append({
+                    "step": "llm_candidate_selection",
+                    "picked": getattr(candidate, "canonical_name", ""),
+                    "selection": "typed_closed_set",
+                })
         elif item.get("llm_kind") == "fallback":
             candidate = item.get("llm_decision")
             trace.append({"step": "fallback", "best_effort": True})
@@ -1326,7 +1438,12 @@ async def ground_l1_anchors(
         base_anchor = _anchor_from_candidate(
             fact,
             candidate,
-            best_effort=bool(item.get("best_effort")),
+            best_effort=(
+                False
+                if item.get("llm_kind") == "candidate"
+                and _candidate_has_authoritative_geometry(candidate)
+                else bool(item.get("best_effort"))
+            ),
             topology_evidence=topology_evidence,
             query_trace=trace,
         )
@@ -1437,6 +1554,7 @@ async def ground_l1_anchors(
                 item["village_fallback_pick"] = picked
 
     anchors: List[GroundedAnchor] = []
+    unresolved_items: List[dict] = []
     for item in prepared:
         fact = item["fact"]
         trace = item["trace"]
@@ -1453,6 +1571,13 @@ async def ground_l1_anchors(
                 item.get("village_fallback_pick"),
             )
         if anchor is None:
+            unresolved_items.append({
+                "code": "grounding_unresolved",
+                "mention": item["mention"],
+                "role": item["role"],
+                "reason": "typed_candidate_selection_or_spatial_evidence_missing",
+                "trace": list(trace),
+            })
             if item["role"] in ("village", "water", "road"):
                 trace.append({
                     "step": "skip_no_spatial_evidence",
@@ -1469,11 +1594,19 @@ async def ground_l1_anchors(
         if anchor.role == "facility":
             anchor = _topology_refine_facility(context, fact, anchor)
         elif anchor.role in ("water", "road") and not _has_spatial_evidence(anchor):
-            anchor = _linear_spatial_fallback(context, fact, anchor, trace)
-        if (
-            anchor.role in ("village", "water", "road")
-            and not _has_spatial_evidence(anchor)
-        ):
+            trace.append({
+                "step": "linear_fallback_disabled",
+                "role": anchor.role,
+                "reason": "requires_bundle_source_feature_geometry",
+            })
+        if anchor.role != "village" and not _has_spatial_evidence(anchor):
+            unresolved_items.append({
+                "code": "grounding_spatial_evidence_missing",
+                "mention": item["mention"],
+                "role": anchor.role,
+                "reason": "resolved_entity_has_no_bundle_geometry_or_bsm",
+                "trace": list(trace),
+            })
             trace.append({
                 "step": "skip_no_spatial_evidence",
                 "role": anchor.role,
@@ -1532,21 +1665,27 @@ async def ground_l1_anchors(
         len(anchors),
         sum(1 for a in anchors if a.best_effort),
     )
+    # Keep the typed evidence on the live context for callers that continue
+    # directly into GROUND/SELECT.  Workflow stages also persist the same
+    # value as the grounded_anchors artifact, so this is an in-memory bridge,
+    # not a second source of truth.
+    context.grounded_anchors = list(anchors)
+    context.grounding_unresolved = list(unresolved_items)
     return anchors
 
 
-def _best_effort_candidate(fact: Any, poi_bsms: List[str], village_bsms: List[str], trace: List[dict]) -> Any:
-    """构造 best-effort 候选（几何/BSM 全部来自 bundle/gazetteer）。"""
+def _scope_candidate(fact: Any, poi_bsms: List[str], village_bsms: List[str], trace: List[dict]) -> Any:
+    """构造仅用于村域筛选的 parcel scope，不伪造 feature geometry。"""
     from types import SimpleNamespace
 
     bsms = list(dict.fromkeys([*poi_bsms, *village_bsms]))
-    trace.append({"step": "best_effort_bsms", "count": len(bsms)})
+    trace.append({"step": "scope_candidate", "count": len(bsms)})
     return SimpleNamespace(
-        entity_ref="",
+        entity_ref=f"scope:village:{getattr(fact, 'normalized_name', '')}",
         entity_type=str(getattr(fact, "role", "unknown") or "unknown"),
         canonical_name=str(getattr(fact, "normalized_name", "") or ""),
         source_bsms=bsms,
-        geometry_ref="bundled:coarse" if bsms else None,
+        geometry_ref=None,
         relation_refs=[],
         score=0.35 if bsms else 0.0,
     )
@@ -1570,8 +1709,6 @@ async def _llm_anchor_fallback(
     picked = await _llm_reason_candidate(
         llm, mention, role, hints, candidates, budget=budget
     )
-    if picked is None and candidates:
-        picked = candidates[0]
     if picked is not None:
         trace.append({"step": "gazetteer_llm_fallback", "picked": picked.canonical_name})
     return picked
@@ -1692,7 +1829,7 @@ async def ground_anchors(state: Dict[str, Any], *, base_dir: str = ".run-tmp") -
 
     llm = None
     try:
-        llm = create_flash_llm(max_tokens=300, temperature=0.1)
+        llm = create_flash_llm(max_tokens=800, temperature=0.1)
     except Exception:  # noqa: BLE001
         llm = None
 

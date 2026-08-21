@@ -36,6 +36,12 @@ class ValidationIssue(StageIssue):
     check_id: str = ""
     deviation_pct: float = 0.0
     constraint_source: str = ""
+    actual_value: str = ""
+    expected_value: str = ""
+    affected_parcels: list[str] = Field(default_factory=list)
+    affected_target_ids: list[str] = Field(default_factory=list)
+    evidence_refs: list[str] = Field(default_factory=list)
+    fix_suggestion: str = ""
 
 
 class ValidationReport(ContractMeta):

@@ -13,6 +13,7 @@ from app.domain.validation.validate_checks import (
     check_accessibility,
     check_area_conservation,
     check_candidate_materialization,
+    check_bundle_snapshot_lineage,
     check_classification_missing,
     check_contract_completeness,
     check_continuity,
@@ -45,6 +46,12 @@ def _check_to_issue(check: ValidationCheck) -> ValidationIssue:
         message=message,
         detail=check.fix_suggestion or None,
         check_id=check.check_id,
+        actual_value=check.actual_value,
+        expected_value=check.expected_value,
+        affected_parcels=list(check.affected_parcels),
+        affected_target_ids=list(check.affected_target_ids),
+        evidence_refs=list(check.evidence_refs),
+        fix_suggestion=check.fix_suggestion,
     )
 
 
@@ -57,6 +64,7 @@ def validate_aggregate(
     decision: Any = None,
     execution_plan: Any = None,
     execution_result: Any = None,
+    bundle_snapshot_digest: str = "",
 ) -> ValidationReport:
     """Validate typed execution outputs; render layers are not fact inputs."""
     if planned_state is None:
@@ -124,6 +132,12 @@ def validate_aggregate(
         execution_result=execution_result,
     ))
     all_checks.extend(check_worker_failures(execution_result))
+    all_checks.extend(check_bundle_snapshot_lineage(
+        planned_state,
+        execution_plan,
+        execution_result,
+        bundle_snapshot_digest,
+    ))
 
     overall_passed = all(c.passed for c in all_checks)
 

@@ -39,6 +39,11 @@ from app.infrastructure.logging import get_logger
 
 logger = get_logger(__name__)
 
+# The RDF type split between transport roads and other spatial line entities
+# changes the meaning of a Layer-1 graph. Keep it in the cache fingerprint so
+# a graph built before the split cannot be reused silently.
+LAYER1_ONTOLOGY_SCHEMA = "spatial-entity-types-v2"
+
 
 @dataclass(frozen=True)
 class CacheKey:
@@ -78,40 +83,42 @@ def compute_layer1_cache_key(
     # those source features changes.
     if bundle is not None:
         try:
-            from app.data.model.canonical import to_bundle_dict
+            if hasattr(bundle, "spatial_snapshot_digest"):
+                bundle_hash = bundle.spatial_snapshot_digest()
+            else:
+                from app.data.model.canonical import to_bundle_dict
 
-            full = to_bundle_dict(bundle)
-            full_metadata = full.get("metadata", {}) or {}
-            manifest = {
-                "village_name": full.get("village_name", village_name),
-                "standard_version": full.get("standard_version", ""),
-                # Session identity/timestamps and report snapshots are not
-                # Layer-1 GIS inputs.  Keep only metadata that can change the
-                # graph's spatial scope or source lineage so equivalent
-                # bundles from two sessions share the process cache.
-                "metadata": {
-                    key: full_metadata.get(key)
-                    for key in (
-                        "bbox_wgs84",
-                        "crs",
-                        "provider_sources",
-                        "adcode_12",
-                    )
-                    if key in full_metadata
-                },
-                "points": full.get("points", {}),
-                "lines": full.get("lines", {}),
-                "polygons": full.get("polygons", {}),
-            }
-            canonical = json.dumps(
-                manifest,
-                ensure_ascii=False,
-                sort_keys=True,
-                separators=(",", ":"),
-                default=str,
-            )
-            bundle_hash = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
-            return CacheKey(village_name=village_name, landuse_hash=bundle_hash)
+                full = to_bundle_dict(bundle)
+                full_metadata = full.get("metadata", {}) or {}
+                manifest = {
+                    "village_name": full.get("village_name", village_name),
+                    "standard_version": full.get("standard_version", ""),
+                    "metadata": {
+                        key: full_metadata.get(key)
+                        for key in (
+                            "bbox_wgs84",
+                            "crs",
+                            "provider_sources",
+                            "adcode_12",
+                        )
+                        if key in full_metadata
+                    },
+                    "points": full.get("points", {}),
+                    "lines": full.get("lines", {}),
+                    "polygons": full.get("polygons", {}),
+                }
+                canonical = json.dumps(
+                    manifest,
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                    default=str,
+                )
+                bundle_hash = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+            cache_hash = hashlib.sha256(
+                f"{LAYER1_ONTOLOGY_SCHEMA}:{bundle_hash}".encode()
+            ).hexdigest()
+            return CacheKey(village_name=village_name, landuse_hash=cache_hash)
         except Exception as exc:  # noqa: BLE001 - retain compatibility fallback
             logger.warning("[KGManager] canonical bundle fingerprint failed: %s", exc)
 
@@ -120,7 +127,7 @@ def compute_layer1_cache_key(
     if not parcels:
         return None
 
-    hash_parts = []
+    hash_parts = [f"kg-schema:{LAYER1_ONTOLOGY_SCHEMA}"]
     if bundle is not None and hasattr(bundle, "to_geojson_dict"):
         try:
             payload = bundle.to_geojson_dict()
@@ -132,7 +139,10 @@ def compute_layer1_cache_key(
                 default=str,
             )
             bundle_hash = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
-            return CacheKey(village_name=village_name, landuse_hash=bundle_hash)
+            cache_hash = hashlib.sha256(
+                f"{LAYER1_ONTOLOGY_SCHEMA}:{bundle_hash}".encode()
+            ).hexdigest()
+            return CacheKey(village_name=village_name, landuse_hash=cache_hash)
         except Exception as exc:  # noqa: BLE001 - retain parcel fallback
             logger.warning("[KGManager] bundle cache fingerprint failed: %s", exc)
     for p in parcels:
@@ -170,6 +180,13 @@ class _LRUCache:
             evicted_key, _ = self._data.popitem(last=False)
             logger.debug("[KGManager] LRU evicted: %s", evicted_key)
 
+    def remove(self, key: str) -> bool:
+        """Drop one cached value and report whether it existed."""
+        if key not in self._data:
+            return False
+        self._data.pop(key, None)
+        return True
+
     def __contains__(self, key: str) -> bool:
         return key in self._data
 
@@ -200,10 +217,16 @@ class KGManager:
         with cls._lock:
             if cls._instance is None:
                 instance = super().__new__(cls)
-                instance._layer1_cache = _LRUCache(maxsize=50)
+                from app.core.settings import (
+                    KG_LAYER1_CACHE_MAXSIZE,
+                    KG_QUERY_CACHE_MAXSIZE,
+                )
+
+                instance._layer1_cache = _LRUCache(maxsize=KG_LAYER1_CACHE_MAXSIZE)
                 instance._session_kgs: Dict[str, Any] = {}
                 instance._session_cache_keys: Dict[str, str] = {}
-                instance._query_cache: Dict[str, Tuple[int, Any]] = {}
+                instance._query_cache: OrderedDict[str, Tuple[int, Any]] = OrderedDict()
+                instance._query_cache_maxsize = KG_QUERY_CACHE_MAXSIZE
                 instance._session_versions: Dict[str, int] = {}
                 instance._cache_enabled = True
                 instance._build_lock = RLock()
@@ -303,6 +326,28 @@ class KGManager:
         with self._build_lock:
             return self._session_cache_keys.get(session_id, "")
 
+    def attach_spatial_store(self, session_id: str, store: Any) -> None:
+        """Attach a caller-owned spatial KG adapter to one live session.
+
+        This is the explicit production seam for PostGIS.  It does not open
+        a connection and it does not create a second topology graph; the
+        adapter must expose the same indexed entity/relation methods as the
+        local RDF projection.  Session removal drops the KG reference so the
+        caller can close its connection/pool deterministically.
+        """
+        with self._build_lock:
+            kg = self._session_kgs.get(session_id)
+            if kg is None:
+                raise LookupError(
+                    f"KG is not initialized for session_id={session_id!r}"
+                )
+            kg.attach_spatial_store(store)
+        logger.info(
+            "[KGManager] Spatial KG store attached: session=%s backend=%s",
+            session_id,
+            kg.spatial_storage_backend,
+        )
+
     def require_session_kg(self, session_id: str) -> Any:
         """Return only ``session_id``'s KG or raise a clear isolation error.
 
@@ -324,8 +369,14 @@ class KGManager:
         """Remove a session and its associated data."""
         with self._build_lock:
             self._session_kgs.pop(session_id, None)
-            self._session_cache_keys.pop(session_id, None)
+            cache_key = self._session_cache_keys.pop(session_id, None)
             self._session_versions.pop(session_id, None)
+            if cache_key and cache_key not in self._session_cache_keys.values():
+                if self._layer1_cache.remove(cache_key):
+                    logger.debug(
+                        "[KGManager] released unreferenced Layer 1 cache: %s",
+                        cache_key,
+                    )
             # Clean query cache entries for this session
             prefix = f"{session_id}:"
             keys_to_remove = [k for k in self._query_cache if k.startswith(prefix)]
@@ -361,6 +412,7 @@ class KGManager:
 
             cached = self._query_cache.get(cache_key)
             if cached is not None and cached[0] == current_version:
+                self._query_cache.move_to_end(cache_key)
                 logger.debug("[KGManager] Query cache HIT: %s", template_name)
                 return cached[1]
 
@@ -368,6 +420,9 @@ class KGManager:
             # store does not provide a cross-thread safety contract.
             result = query_kg(kg, template_name, **params)
             self._query_cache[cache_key] = (current_version, result)
+            self._query_cache.move_to_end(cache_key)
+            while len(self._query_cache) > self._query_cache_maxsize:
+                self._query_cache.popitem(last=False)
             logger.debug(
                 "[KGManager] Query cached: %s (v=%d)", template_name, current_version
             )
@@ -442,6 +497,10 @@ class KGManager:
                 "session_count": len(self._session_kgs),
                 "query_cache_size": len(self._query_cache),
                 "cache_enabled": self._cache_enabled,
+                "spatial_storage_backends": {
+                    session_id: getattr(kg, "spatial_storage_backend", "unknown")
+                    for session_id, kg in self._session_kgs.items()
+                },
             }
 
 

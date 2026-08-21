@@ -59,6 +59,7 @@ _KEY_BY_TYPE = {
     "RenderArtifacts": "render_artifacts",
     "EvidenceObservationSnapshot": "l1_observations",
     "GroundedEntityBindingSnapshot": "l1_bindings",
+    "SourceSemanticClassificationSnapshot": "source_semantic_classification",
 }
 
 

@@ -9,7 +9,11 @@ import os
 from typing import Any, Dict, List, Optional
 
 from app.workflow.layers.phase_machine import PlanningPhase
-from app.core.settings import BUSINESS_RETRY_LIMIT, RAG_ENABLED
+from app.core import settings
+from app.core.settings import (
+    BUSINESS_RETRY_LIMIT,
+    RAG_ENABLED,
+)
 from app.workflow.runtime_adapter import initial_workflow_state
 
 
@@ -56,6 +60,7 @@ class StateFactory:
                 "planning_period": planning_period,
                 "rag_enabled": rag_enabled,
                 "rag_layer_config": rag_layer_config,
+                "source_semantic_llm_enabled": settings.SOURCE_SEMANTIC_LLM_ENABLED,
                 "knowledge_cache": {},
                 "input_owner": "data_context",
             },

@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import sys
 from concurrent.futures import ProcessPoolExecutor
 from multiprocessing import get_context
 from threading import RLock
@@ -47,6 +48,25 @@ def _kg_process_pool() -> ProcessPoolExecutor:
                 mp_context=get_context("spawn"),
             )
         return _KG_PROCESS_POOL
+
+
+def _isolated_worker_is_spawnable() -> bool:
+    """Return whether the current launcher can start a Windows spawn child.
+
+    ``python -`` and some embedded launchers expose ``<stdin>`` (or no file)
+    as ``__main__.__file__``.  A ProcessPoolExecutor created with the spawn
+    context cannot import that entry point, so creating the pool would only
+    turn an otherwise valid KG build into ``BrokenProcessPool``.  The
+    application uses an explicit thread-local build in that diagnostic mode;
+    normal file-backed servers and pytest workers still use process isolation.
+    """
+    if os.name != "nt":
+        return True
+    main_module = sys.modules.get("__main__")
+    main_file = str(getattr(main_module, "__file__", "") or "").strip()
+    if not main_file or main_file in {"<stdin>", "-"}:
+        return False
+    return os.path.isfile(main_file)
 
 
 def shutdown_session_kg_process_pool() -> None:
@@ -255,9 +275,16 @@ async def ensure_session_kg(
                         "triple_count": existing.get_triple_count(),
                         "version": manager.get_session_version(session_id),
                     }
-                isolated = os.getenv("KG_BUILD_ISOLATED_PROCESS", "true").lower() not in {
+                isolated_requested = os.getenv("KG_BUILD_ISOLATED_PROCESS", "true").lower() not in {
                     "0", "false", "no", "off"
                 }
+                isolated = isolated_requested and _isolated_worker_is_spawnable()
+                if isolated_requested and not isolated:
+                    logger.warning(
+                        "[SessionKG] KG_ISOLATED_WORKER_UNAVAILABLE: launcher has no "
+                        "file-backed __main__; building Layer-1 in the current process "
+                        "without creating a broken spawn pool"
+                    )
                 if isolated:
                     loop = asyncio.get_running_loop()
                     future = loop.run_in_executor(

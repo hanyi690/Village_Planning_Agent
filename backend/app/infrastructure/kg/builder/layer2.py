@@ -153,6 +153,49 @@ def add_cross_type_relations(kg, cross_type_relations) -> None:
         else:
             skipped += 1
 
+    # Additional bundle-backed topology predicates share the same KG relation
+    # store.  The tuple's optional third value is a metric (metres for ``near``
+    # and percentage for ``overlaps``); geometry itself is never copied into
+    # the RDF graph or invented by this layer.
+    generic_relations = {
+        "same_coordinate": Relations.same_coordinate,
+        "co_located": Relations.co_located,
+        "near": Relations.near,
+        "touches": Relations.sfTouches,
+        "overlaps": Relations.overlaps,
+    }
+    symmetric = set(generic_relations) - {"overlaps"}
+    relation_meta = cross_type_relations.get("_meta", {}) or {}
+    for key, predicate in generic_relations.items():
+        for item in cross_type_relations.get(key, []) or []:
+            if len(item) < 2:
+                continue
+            subj = _to_uri_safe(item[0])
+            obj = _to_uri_safe(item[1])
+            if not (subj and obj and _entity_in_graph(subj) and _entity_in_graph(obj)):
+                skipped += 1
+                continue
+            kg.g.add((subj, predicate, obj))
+            metric = item[2] if len(item) > 2 else None
+            detail = dict(relation_meta.get(key, {}) or {})
+            if metric is not None:
+                detail["metric"] = float(metric)
+                detail["metric_unit"] = "m" if key == "near" else "percent"
+            detail.setdefault("method", "bundle_geometry_strtree")
+            detail.setdefault("crs", "EPSG:3857")
+            detail.setdefault("tolerance", 0.01 if key == "same_coordinate" else 0.0)
+            kg.memory.add_relation_annotation(RelationAnnotation(
+                subject_uri=str(subj),
+                predicate=str(predicate),
+                object_uri=str(obj),
+                description="",
+                derived_from="spatial_ops_computed",
+                quantitative_detail=detail,
+            ))
+            if key in symmetric:
+                kg.g.add((obj, predicate, subj))
+            count += 1
+
     if count:
         logger.info("Added %d cross-type spatial relations (skipped %d)", count, skipped)
 

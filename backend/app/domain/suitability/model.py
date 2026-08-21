@@ -21,6 +21,12 @@ class SuitabilityCandidate(BaseModel):
     exclusion_reasons: list[str] = Field(default_factory=list)
     evidence_refs: list[str] = Field(default_factory=list)
     available_geometry_wkt: str = ""
+    available_area_ha: float = 0.0
+    source_area_ha: float = 0.0
+    coverage_ratio: float | None = Field(default=None, ge=0, le=1)
+    geometry_operation: str = "bundle_extent"
+    geometry_crs: str = "EPSG:4326"
+    geometry_diagnostics: list[str] = Field(default_factory=list)
     policy_ref: str = ""
     feature_ref: str = ""
     availability_diagnostics: list[dict[str, object]] = Field(default_factory=list)

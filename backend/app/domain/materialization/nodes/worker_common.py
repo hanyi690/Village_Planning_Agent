@@ -46,6 +46,12 @@ def _task_value(task: Any, name: str, default: Any = None) -> Any:
     return task.get(name, default) if isinstance(task, dict) else getattr(task, name, default)
 
 
+def _string_list(value: Any) -> list[str]:
+    if isinstance(value, str):
+        return [value] if value.strip() else []
+    return [str(item) for item in (value or []) if str(item).strip()]
+
+
 def _plan_tasks(state: ExecuteAgentState, worker_types: Iterable[str] | None = None) -> list[Any]:
     """Read dispatchable tasks only from the authoritative ExecutionPlan."""
     plan = state.execution_plan
@@ -82,6 +88,7 @@ def _task_execution_result(
         return None
     output_kind = _task_value(task, "expected_output_kind", "parcel")
     assignment = _task_value(task, "assignment")
+    binding = _task_value(assignment, "target_binding", {}) or {}
     return TaskExecutionResult(
         task_id=str(_task_value(task, "task_id", "")),
         target_id=str(target_id),
@@ -91,12 +98,34 @@ def _task_execution_result(
         diagnostics=list(diagnostics or []),
         errors=list(errors or []),
         scenario_id=str(_task_value(task, "scenario_id", "") or ""),
-        candidate_id=str(
-            _task_value(task, "candidate_id", "")
-            or _task_value(assignment, "selected_bsm", "")
+        candidate_id=str(_task_value(task, "candidate_id", "") or ""),
+        relation_ids=list(_task_value(task, "relation_ids", []) or []),
+        feature_bsms=_string_list(
+            _task_value(task, "feature_bsms", [])
+            or binding.get("feature_bsms", [])
+            or _task_value(assignment, "feature_bsm", "")
+        ),
+        source_feature_ids=_string_list(
+            binding.get("source_feature_ids", [])
+            or _task_value(assignment, "source_feature_id", "")
+        ),
+        evidence_refs=_string_list(
+            _task_value(task, "evidence_refs", [])
+            or binding.get("evidence_refs", [])
+            or _task_value(assignment, "evidence_refs", [])
+        ),
+        l1_snapshot_ref=str(
+            _task_value(task, "l1_snapshot_ref", "")
+            or binding.get("l1_snapshot_ref", "")
+            or _task_value(assignment, "l1_snapshot_ref", "")
             or ""
         ),
-        relation_ids=list(_task_value(task, "relation_ids", []) or []),
+        bundle_snapshot_digest=str(
+            _task_value(task, "bundle_snapshot_digest", "")
+            or binding.get("bundle_snapshot_digest", "")
+            or _task_value(assignment, "bundle_snapshot_digest", "")
+            or ""
+        ),
     )
 
 
@@ -188,6 +217,49 @@ def _scenario_features_for_layer(
         source_refs = [str(ref) for ref in source_refs if str(ref).strip()]
         if not source_refs:
             source_refs = [f"task:{_task_value(task, 'task_id', target_id)}"]
+        binding = _task_value(assignment, "target_binding", {}) or {}
+        assignment_feature_bsms = _string_list(
+            _task_value(assignment, "feature_bsms", [])
+            or binding.get("feature_bsms", [])
+        )
+        feature_bsms = _string_list(
+            properties.get("feature_bsms")
+            or _task_value(task, "feature_bsms", [])
+            or assignment_feature_bsms
+        )
+        source_feature_ids = _string_list(
+            properties.get("source_feature_ids")
+            or _task_value(task, "source_feature_ids", [])
+            or binding.get("source_feature_ids", [])
+            or _task_value(assignment, "source_feature_id", "")
+        )
+        entity_refs = _string_list(
+            properties.get("entity_refs")
+            or binding.get("entity_refs", [])
+            or _task_value(assignment, "entity_ref", "")
+        )
+        relation_refs = _string_list(
+            properties.get("relation_refs")
+            or _task_value(assignment, "relation_refs", [])
+        )
+        evidence_refs = _string_list(
+            properties.get("evidence_refs")
+            or _task_value(task, "evidence_refs", [])
+            or _task_value(assignment, "evidence_refs", [])
+            or source_refs
+        )
+        l1_snapshot_ref = str(
+            properties.get("l1_snapshot_ref")
+            or _task_value(task, "l1_snapshot_ref", "")
+            or _task_value(assignment, "l1_snapshot_ref", "")
+            or ""
+        )
+        bundle_snapshot_digest = str(
+            properties.get("bundle_snapshot_digest")
+            or _task_value(task, "bundle_snapshot_digest", "")
+            or _task_value(assignment, "bundle_snapshot_digest", "")
+            or ""
+        )
         feature_id = str(
             properties.get("feature_id")
             or f"feature:{scenario_id}:{target_id}:{index}"
@@ -199,6 +271,13 @@ def _scenario_features_for_layer(
             "lineage_id": feature_id,
             "relation_ids": [str(ref) for ref in relation_ids if str(ref).strip()],
             "source_refs": source_refs,
+            "feature_bsms": [str(ref) for ref in feature_bsms if str(ref).strip()],
+            "source_feature_ids": [str(ref) for ref in source_feature_ids if str(ref).strip()],
+            "entity_refs": [str(ref) for ref in entity_refs if str(ref).strip()],
+            "relation_refs": [str(ref) for ref in relation_refs if str(ref).strip()],
+            "evidence_refs": [str(ref) for ref in evidence_refs if str(ref).strip()],
+            "l1_snapshot_ref": l1_snapshot_ref,
+            "bundle_snapshot_digest": bundle_snapshot_digest,
             "generation_operation": str(
                 properties.get("generation_operation") or generation_operation
             ),
@@ -216,6 +295,11 @@ def _scenario_features_for_layer(
                 properties.get("generation_operation") or generation_operation
             ),
             source_refs=source_refs,
+            source_bsms=_string_list(properties.get("source_bsms", [])),
+            feature_bsms=_string_list(properties.get("feature_bsms", [])),
+            source_feature_ids=_string_list(properties.get("source_feature_ids", [])),
+            entity_refs=_string_list(properties.get("entity_refs", [])),
+            evidence_refs=_string_list(properties.get("evidence_refs", [])),
             relation_ids=[str(ref) for ref in relation_ids if str(ref).strip()],
         ))
     return features

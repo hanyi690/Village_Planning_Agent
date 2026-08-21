@@ -7,6 +7,7 @@ Provides SQLite connection and session factory for async operations.
 
 import asyncio
 import logging
+import os
 import threading
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -52,27 +53,37 @@ async def get_async_engine() -> AsyncEngine:
             return async_engine
 
         DATABASE_DIR.mkdir(parents=True, exist_ok=True)
+        database_url = os.getenv("DATABASE_URL", "").strip()
+        if not database_url:
+            database_url = f"sqlite+aiosqlite:///{DB_PATH}"
+        connect_args = (
+            {"check_same_thread": False}
+            if database_url.startswith("sqlite")
+            else {}
+        )
         engine = create_async_engine(
-            f"sqlite+aiosqlite:///{DB_PATH}",
-            connect_args={"check_same_thread": False},
+            database_url,
+            connect_args=connect_args,
             pool_pre_ping=True,
         )
 
-        from sqlalchemy import event
+        if database_url.startswith("sqlite"):
+            from sqlalchemy import event
 
-        @event.listens_for(engine.sync_engine, "connect")
-        def set_sqlite_pragma(dbapi_connection, connection_record):
-            cursor = dbapi_connection.cursor()
-            cursor.execute("PRAGMA journal_mode=WAL")
-            cursor.execute("PRAGMA synchronous=NORMAL")
-            cursor.execute("PRAGMA cache_size=-64000")
-            cursor.execute("PRAGMA busy_timeout=30000")
-            cursor.execute("PRAGMA foreign_keys=ON")
-            cursor.close()
+            @event.listens_for(engine.sync_engine, "connect")
+            def set_sqlite_pragma(dbapi_connection, connection_record):
+                cursor = dbapi_connection.cursor()
+                cursor.execute("PRAGMA journal_mode=WAL")
+                cursor.execute("PRAGMA synchronous=NORMAL")
+                cursor.execute("PRAGMA cache_size=-64000")
+                cursor.execute("PRAGMA busy_timeout=30000")
+                cursor.execute("PRAGMA foreign_keys=ON")
+                cursor.close()
 
         async_engine = engine
-        logger.info("[Async DB] WAL mode enabled")
-        logger.info("[Async DB] Async database engine created: %s", DB_PATH)
+        if database_url.startswith("sqlite"):
+            logger.info("[Async DB] WAL mode enabled")
+        logger.info("[Async DB] Async database engine created: %s", database_url)
 
     return async_engine
 

@@ -10,12 +10,12 @@ back to problem_addressed and functions) via direction_from_location().
 from __future__ import annotations
 
 import re
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 
 from app.data.ingestion.spatial_language import direction_from_location
 from app.evidence.identity.source_feature_binding import (
-    bind_existing_facility_source_features,
-    bind_existing_road_source_features,
+    build_existing_facility_source_binding,
+    build_existing_road_source_binding,
 )
 from app.contracts.domain.l3_contracts import PlanningIntervention
 from app.contracts.evidence.identity_contracts import (
@@ -50,6 +50,33 @@ _GENERIC_VILLAGE_WORDS = frozenset({
     "全村", "村庄", "村域", "村内", "村组", "各村", "该村", "本村",
     "村中", "村级", "村委会", "村民小组", "自然村",
 })
+
+
+def _attach_source_binding(
+    spec: SpatialReferenceSpec,
+    binding: object | None,
+) -> SpatialReferenceSpec:
+    if binding is None:
+        return spec
+    return spec.model_copy(update={
+        "source_binding_ref": str(getattr(binding, "binding_id", "") or ""),
+        "source_collection_key": str(
+            getattr(binding, "source_collection_key", "") or ""
+        ),
+        "source_snapshot_ref": str(
+            getattr(binding, "source_snapshot_ref", "") or ""
+        ),
+        "source_feature_digest": str(
+            getattr(binding, "source_feature_digest", "") or ""
+        ),
+        "l1_fact_refs": list(
+            dict.fromkeys(
+                str(value)
+                for value in (getattr(binding, "source_fact_refs", None) or [])
+                if str(value).strip()
+            )
+        ),
+    })
 
 
 def _materialization_role(intervention: PlanningIntervention) -> str | None:
@@ -164,6 +191,66 @@ def _location_reference(intervention: PlanningIntervention) -> SpatialReferenceS
     return SpatialReferenceSpec(type="composed", op="or", children=refs)
 
 
+def _facility_location_reference(
+    intervention: PlanningIntervention,
+) -> SpatialReferenceSpec | None:
+    """Bind a typed facility mention to its explicit place scope.
+
+    ``location_hints`` may contain both an administrative/place anchor and the
+    facility mention itself (for example ``社前村`` + ``祠堂``). Treating all
+    hints as alternatives loses that relation and lets the resolver search
+    the whole village or every matching facility independently. Only use this
+    stronger conjunction when L3 explicitly typed one hint as the facility
+    type; ambiguous hints retain the ordinary alternative semantics.
+    """
+    if intervention.category != "facility":
+        return None
+    parameters = intervention.facility_parameters
+    facility_type = str(
+        getattr(parameters, "facility_type", "") or ""
+    ).strip()
+    requirements = intervention.spatial_requirements or {}
+    raw_hints = requirements.get("location_hints")
+    if not facility_type or not isinstance(raw_hints, list):
+        return None
+    hints = list(dict.fromkeys(
+        str(item).strip() for item in raw_hints if str(item).strip()
+    ))
+    if facility_type not in hints:
+        return None
+    place_hints = [hint for hint in hints if hint != facility_type]
+    if not place_hints:
+        return None
+    place_refs = [
+        SpatialReferenceSpec(
+            type="topological",
+            topo="nearby",
+            reference=RefObject(
+                kind="place_name",
+                filter={"label_contains": hint},
+            ),
+        )
+        for hint in place_hints
+    ]
+    place_scope = place_refs[0] if len(place_refs) == 1 else SpatialReferenceSpec(
+        type="composed",
+        op="or",
+        children=place_refs,
+    )
+    facility_ref = SpatialReferenceSpec(
+        type="attributive",
+        reference=RefObject(
+            kind="entity_type",
+            filter={"label_contains": facility_type},
+        ),
+    )
+    return SpatialReferenceSpec(
+        type="composed",
+        op="and",
+        children=[place_scope, facility_ref],
+    )
+
+
 def _semantic_location_reference(
     intervention: PlanningIntervention,
 ) -> SpatialReferenceSpec | None:
@@ -172,7 +259,7 @@ def _semantic_location_reference(
     L3 claim compilation frequently leaves ``spatial_requirements.location``
     empty while ``problem_addressed``/``name`` carry explicit spatial scope
     (e.g. 金田村全域 / 沿石窟河沿岸 / 园宅村).  Mapping that prose into a
-    closed-set spec lets GROUND resolve it through the PlaceEvidenceIndex
+    closed-set spec lets GROUND resolve it through EvidenceGraph
     instead of deferring the target as unresolved.
     """
     text = " ".join([
@@ -403,17 +490,22 @@ def _explicit_source_feature_reference(
         ),
         None,
     )
-    if intervention.category in {"road", "axis"} and source_features:
-        # If the current-road layer is available, reject foreign/stale IDs
-        # before they cross the exact-line boundary. With no source layer,
+    if intervention.category in {"facility", "road", "axis"} and source_features:
+        # If the current source layer is available, reject foreign/stale IDs
+        # before they cross the exact-feature boundary. With no source layer,
         # the explicit-ID contract remains auditable and the KG resolver is
         # responsible for the authoritative geometry check.
+        expected_geometry = (
+            {"Point", "MultiPoint"}
+            if intervention.category == "facility"
+            else {"LineString", "MultiLineString"}
+        )
         source_ids = {
             str((getattr(feature, "_raw", {}) or {}).get("source_feature_id") or "").strip()
             for feature in source_features
             if isinstance(getattr(feature, "geometry", None), dict)
             and getattr(feature, "geometry", {}).get("type")
-            in {"LineString", "MultiLineString"}
+            in expected_geometry
         }
         requested = raw_ids if isinstance(raw_ids, (list, tuple, set)) else []
         requested_ids = {str(item).strip() for item in requested if str(item).strip()}
@@ -450,27 +542,50 @@ def _build_candidates(
     observations: Sequence[EvidenceObservation] = (),
     bindings: Sequence[GroundedEntityBinding] = (),
     source_features: dict[str, list[object]] | None = None,
+    source_semantic_decisions: Mapping[str, object] | None = None,
 ) -> list[SpatialReferenceSpec]:
     candidates: list[SpatialReferenceSpec] = []
 
+    source_map = source_features or {}
+    collection_binding = (
+        build_existing_facility_source_binding(
+            intervention,
+            source_map.get("facility", ()),
+            source_semantic_decisions,
+        )
+        if intervention.category == "facility"
+        else build_existing_road_source_binding(
+            intervention,
+            source_map.get("road", ()),
+            source_semantic_decisions,
+        )
+        if intervention.category in {"road", "axis"}
+        else None
+    )
     explicit_source = _explicit_source_feature_reference(
         intervention,
-        source_features=(source_features or {}).get("road", ())
-        if intervention.category in {"road", "axis"}
-        else None,
+        source_features=(
+            source_map.get("facility", ())
+            if intervention.category == "facility"
+            else source_map.get("road", ())
+            if intervention.category in {"road", "axis"}
+            else None
+        ),
     )
     if explicit_source is not None:
         # Explicit source IDs are stronger than prose and must be the only
         # location evidence used for this exact-feature path.
-        candidates.append(explicit_source)
+        candidates.append(_attach_source_binding(explicit_source, collection_binding))
         return candidates
 
-    grouped_ids = bind_existing_facility_source_features(
+    facility_binding = build_existing_facility_source_binding(
         intervention,
-        (source_features or {}).get("facility", ()),
+        source_map.get("facility", ()),
+        source_semantic_decisions,
     )
+    grouped_ids = list(facility_binding.source_feature_ids) if facility_binding else []
     if grouped_ids:
-        candidates.append(
+        candidates.append(_attach_source_binding(
             SpatialReferenceSpec(
                 type="directional",
                 reference=RefObject(
@@ -481,16 +596,19 @@ def _build_candidates(
                         "allow_multiple_exact": len(grouped_ids) > 1,
                     },
                 ),
-            )
-        )
+            ),
+            facility_binding,
+        ))
         return candidates
 
-    road_ids = bind_existing_road_source_features(
+    road_binding = build_existing_road_source_binding(
         intervention,
-        (source_features or {}).get("road", ()),
+        source_map.get("road", ()),
+        source_semantic_decisions,
     )
+    road_ids = list(road_binding.source_feature_ids) if road_binding else []
     if road_ids:
-        candidates.append(
+        candidates.append(_attach_source_binding(
             SpatialReferenceSpec(
                 type="directional",
                 reference=RefObject(
@@ -501,8 +619,9 @@ def _build_candidates(
                         "allow_multiple_exact": len(road_ids) > 1,
                     },
                 ),
-            )
-        )
+            ),
+            road_binding,
+        ))
         return candidates
 
     source_binding = _source_binding_reference(intervention, observations, bindings)
@@ -513,7 +632,9 @@ def _build_candidates(
         candidates.append(source_binding)
         return candidates
 
-    location_ref = _location_reference(intervention)
+    location_ref = _facility_location_reference(intervention)
+    if location_ref is None:
+        location_ref = _location_reference(intervention)
     if location_ref is None:
         location_ref = _semantic_location_reference(intervention)
     if location_ref is not None:
@@ -576,6 +697,7 @@ def map_intervention_to_spec(
     observations: Sequence[EvidenceObservation] = (),
     bindings: Sequence[GroundedEntityBinding] = (),
     source_features: dict[str, list[object]] | None = None,
+    source_semantic_decisions: Mapping[str, object] | None = None,
 ) -> SpatialReferenceSpec | None:
     """Deterministically map a spatial intervention to one linked spec."""
     if intervention.execution_mode == "non_spatial":
@@ -585,6 +707,7 @@ def map_intervention_to_spec(
         observations=observations,
         bindings=bindings,
         source_features=source_features,
+        source_semantic_decisions=source_semantic_decisions,
     )
     if not candidates:
         return _finalize_spec(SpatialReferenceSpec(
@@ -614,6 +737,7 @@ def map_interventions_to_specs(
     observations: Sequence[EvidenceObservation] = (),
     bindings: Sequence[GroundedEntityBinding] = (),
     source_features: dict[str, list[object]] | None = None,
+    source_semantic_decisions: Mapping[str, object] | None = None,
 ) -> tuple[list[SpatialReferenceSpec], list[ParseDiagnostic]]:
     """Batch map targets while retaining unresolved spatial requirements."""
     specs: list[SpatialReferenceSpec] = []
@@ -624,6 +748,7 @@ def map_interventions_to_specs(
             observations=observations,
             bindings=bindings,
             source_features=source_features,
+            source_semantic_decisions=source_semantic_decisions,
         )
         if spec is None:
             continue

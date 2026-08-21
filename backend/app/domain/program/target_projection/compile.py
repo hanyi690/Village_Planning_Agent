@@ -455,6 +455,7 @@ def compile_program_deterministic(
     observations: list[EvidenceObservation] | None = None,
     bindings: list[GroundedEntityBinding] | None = None,
     source_features: dict[str, list[object]] | None = None,
+    source_semantic_decisions: dict[str, object] | None = None,
 ) -> tuple[IntentCompilationResult, list, list[ParseDiagnostic]]:
     """Deterministically extract a compile result from an L3 PlanningProgram.
 
@@ -471,6 +472,7 @@ def compile_program_deterministic(
         observations=observations or (),
         bindings=bindings or (),
         source_features=source_features or {},
+        source_semantic_decisions=source_semantic_decisions or {},
     )
     diagnostics = _build_diagnostics(program, spec_diags)
     diagnostics.extend(

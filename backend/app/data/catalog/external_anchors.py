@@ -81,9 +81,9 @@ CATEGORY_ROUTING: Dict[FeatureCategory, Tuple[str, str, str]] = {
     FeatureCategory.NATURAL_VILLAGE: ("points", "annotations_current", "external_natural_village"),
     FeatureCategory.FACILITY: ("points", "annotations_current", "external_facility"),
     FeatureCategory.ROAD_NAMED: ("points", "annotations_current", "external_road_label"),
-    FeatureCategory.ROAD_LINE: ("lines", "roads_current", "external_road_line"),
+    FeatureCategory.ROAD_LINE: ("lines", "external_roads", "external_road_line"),
     FeatureCategory.WATER_NAMED: ("points", "annotations_current", "external_water_label"),
-    FeatureCategory.WATER_LINE: ("lines", "roads_current", "external_water_line"),
+    FeatureCategory.WATER_LINE: ("lines", "water_lines", "external_water_line"),
     FeatureCategory.WATER_POLYGON: ("polygons", "water_bodies", "external_water_polygon"),
     FeatureCategory.ADMIN_AREA: ("polygons", "admin_areas", "external_admin_area"),
 }
