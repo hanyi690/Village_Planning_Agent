@@ -1,91 +1,45 @@
-# 文档中心
+# Documentation center
 
-本目录只保留三类维护入口：总体设计（`design/00_SYSTEM_DESIGN.md`）、当前实现映射
-（`architecture/` + 各模块 README）和可复核状态/审计证据。如果同一事实在多个文件出现，优先级如下：
+本文档中心把“目标设计”和“当前实现”严格分开，避免旧状态页、模块蓝图和实现说明相互覆盖。
 
-1. `backend/app/**`、`frontend/**` 和可重复的测试/运行结果；
-2. `design/10_IMPLEMENTATION_STATUS_CURRENT_20260818.md`、
-   `design/27_IMPLEMENTATION_VS_DESIGN.md` 和 `design/RELATION_AWARE_MODIFICATION_LEDGER.md`；
-3. 最新专题审计和可重复运行证据；
-4. `architecture/` 的实现映射；
-5. `design/` 的目标设计；
-6. `_archive/` 中的历史审计、计划与周报（只用于解释“为什么会这样”，不能把旧路径或计划中
-   的能力变成当前事实）。
+## Canonical entry points
 
-## 先按问题找文档
+| 问题 | 权威入口 |
+|---|---|
+| 系统最终应该怎样工作 | [design/00_SYSTEM_DESIGN.md](design/00_SYSTEM_DESIGN.md) |
+| 契约和阶段不变量是什么 | [design/01_CONTRACTS_AND_INVARIANTS.md](design/01_CONTRACTS_AND_INVARIANTS.md) |
+| 检索、语义地点和 GROUND 怎样设计 | [design/02_EVIDENCE_AND_GROUNDING.md](design/02_EVIDENCE_AND_GROUNDING.md) |
+| ScenarioSet、审批、执行和验证怎样设计 | [design/03_PLANNING_EXECUTION.md](design/03_PLANNING_EXECUTION.md) |
+| 用什么指标判断完成 | [design/04_EVALUATION_AND_ACCEPTANCE.md](design/04_EVALUATION_AND_ACCEPTANCE.md) |
+| 当前到目标还差什么 | [design/05_MIGRATION.md](design/05_MIGRATION.md) |
+| 当前代码实际上怎样运行 | [architecture/CURRENT_RUNTIME.md](architecture/CURRENT_RUNTIME.md) |
+| 当前 API、SSE 和 state owner | [architecture/API_AND_STATE.md](architecture/API_AND_STATE.md) |
+| 当前怎样启动、退化和测试 | [architecture/OPERATIONS.md](architecture/OPERATIONS.md) |
+| 外部字段级契约 | [contracts/openapi-v1.json](contracts/openapi-v1.json) |
+| 稳定术语 | [reference/terminology.md](reference/terminology.md) |
 
-| 你想知道什么 | 入口 | 文档类型 |
-|---|---|---|
-| 系统的目标、边界、不变量和完成门槛 | [design/00_SYSTEM_DESIGN.md](design/00_SYSTEM_DESIGN.md) | 总体设计 |
-| 某项能力现在到底完成没有 | [design/10_IMPLEMENTATION_STATUS_CURRENT_20260818.md](design/10_IMPLEMENTATION_STATUS_CURRENT_20260818.md) | 状态 / CURRENT |
-| 设计文档与实现哪里不一致 | [design/27_IMPLEMENTATION_VS_DESIGN.md](design/27_IMPLEMENTATION_VS_DESIGN.md) | 差异 / CURRENT |
-| 关系感知空间规划推进到哪一步 | [design/RELATION_AWARE_MODIFICATION_LEDGER.md](design/RELATION_AWARE_MODIFICATION_LEDGER.md) | 台账 / CURRENT |
-| 按模块组织的专题设计 | [design/README.md](design/README.md) → `design/modules/<模块>/` | 设计 / TARGET |
-| 当前代码从哪里启动、怎样流转 | [architecture/structure.md](architecture/structure.md) 与 [architecture/agent-graph.md](architecture/agent-graph.md) | 实现 / Explanation |
-| 后端每个模块的详细说明 | [backend/app/README.md](../backend/app/README.md) → 各模块 `README.md`（[索引](architecture/README.md)） | 实现 / 模块级 |
-| 当前 API、SSE、恢复和交付接口 | [architecture/backend-api.md](architecture/backend-api.md) | 实现 / Reference |
-| 状态、artifact 和交付由谁拥有 | [architecture/backend-state-contract.md](architecture/backend-state-contract.md) | 实现 / Reference |
-| 前端接入、断线同步和恢复 | [frontend/API_SSE_DEVELOPER_GUIDE.md](frontend/API_SSE_DEVELOPER_GUIDE.md) | 指南 / How-to |
-| 前端每个 feature 的详细说明 | [frontend/src/features/README.md](../frontend/src/features/README.md) | 实现 / 模块级 |
-| RAG、KG、地点解析等专题 | [architecture/rag-system.md](architecture/rag-system.md)、[design/12_PLACE_NAME_RESOLUTION.md](design/modules/kg-place/12_PLACE_NAME_RESOLUTION.md) | 专题 |
-| 历史审计、真实运行或迁移决定 | [_archive/](_archive/) | 历史证据 |
+## Authority rules
 
-## 目录职责
+1. 当前实现事实：`backend/app/**`、`frontend/**`、Pydantic、生成契约和可重复测试。
+2. 目标行为与不变量：`design/00` 至 `design/04`。
+3. 当前到目标的唯一状态/迁移清单：`design/05_MIGRATION.md`。
+4. 当前运行映射：`architecture/`，每项 CURRENT 结论必须带代码或命令。
+5. ADR、guides 和 reference 只补充决定、操作或稳定查表信息，不重定义主链。
+6. `_archive/`、`superpowers/` 和历史报告用于追溯，不具有活动设计权威。
+
+## Directory responsibilities
 
 ```text
 docs/
-├── design/          唯一总体设计（00）+ 当前状态/差异/实施台账 + 按模块组织的 `modules/<模块>/` 专题设计
-├── architecture/    当前实现映射；只写真实入口、调用链、状态和验证方式
-├── guides/          面向任务的操作步骤（接入图层、查看 KG 等）
-├── reference/       术语、字段、外部规范和稳定查表信息
-├── data/            数据源和采集说明
-├── frontend/        前端接入手册
-├── contracts/       openapi-v1.json、sse-events-v1.schema.json（真实 API 契约）
+├── design/          六份规范目标文档和导航
+├── architecture/    三份当前实现文档和导航
+├── contracts/       生成的 OpenAPI/SSE 契约
 ├── adr/             架构决策记录
-├── _archive/        已退役文档（审计、提案、计划、周报、PPT、迭代日志）
-└── （参考资料）RAG 知识库/、参考报告/、references/、*.pdf/*.mpk/*.docx/*.zip 为领域原始资料，不是维护性文档
+├── guides/          面向任务的操作指南
+├── reference/       术语、字段和外部资料索引
+├── frontend/        前端接入指南
+├── superpowers/     实施计划和过程报告，不是设计权威
+└── _archive/        已退役设计、审计、台账和历史快照
 ```
 
-## 状态标记
-
-- `CURRENT`：当前生产路径存在，并有代码或可重复测试证据。
-- `PARTIAL`：有可运行片段，但闭环、边界、真实数据或验收仍不完整。
-- `GAP`：设计要求存在，但当前生产路径没有实现，或已知接线断裂。
-- `TARGET`：目标设计；不能用于证明功能已完成。
-- `HISTORICAL`：带日期的历史事实，只用于解释当时的状态。
-
-“文件存在”“单元测试通过”“能生成空集合或复制现状图”都不足以单独标记 `CURRENT`。
-涉及地图、规划结果或恢复的能力，还必须检查实际产物、来源引用、版本一致性和失败路径。
-
-## 当前实现的最短阅读路径
-
-```text
-backend/app/main.py
-  → bootstrap/lifespan.py + bootstrap/composition.py
-  → api/routes.py → api/v1/routes/*
-  → application/commands + application/queries
-  → infrastructure/runtime/planning_runtime_service.py
-  → workflow/root_graph.py（四段子图）
-  → workflow/stages/* + domain/* + contracts/*
-  → infrastructure/artifacts + infrastructure/events + data/spatial
-  → application projections → API/SSE/Delivery
-```
-
-LangGraph 的 `WorkflowState` 只承担控制字段和 artifact 引用；阶段业务结果由类型化契约和
-artifact store 持有。目标设计中仍然保留 L1/L2/L3 认知视图，但不能把它们与当前代码的
-目录名、阶段完成度或交付完整度混为一谈。
-
-## 维护规则
-
-新增文档前先回答“读者要做什么或查什么”。解释、参考、指南和教程不要混写在同一篇里。
-模块级细节写进对应模块的 `README.md`，`docs/architecture/` 只做索引和跨模块说明，不复制
-模块 README 的内容。当前实现文档应优先描述 OpenAPI/Pydantic 可观察契约、真实入口和验证
-命令；设计文档只描述目标边界、决策和不变量。
-
-每次架构迁移至少同步三处：
-
-- 当前代码入口和 `architecture/` 映射；
-- `design/10_IMPLEMENTATION_STATUS_CURRENT_20260818.md` 的状态与证据；
-- 本页或专题索引中的链接；差异登记到 `design/27_IMPLEMENTATION_VS_DESIGN.md`。
-
-不要在根 README、总体设计、审计报告和模块 README 中复制另一套目录树或迁移清单。
+活动设计文件必须声明 `Status:` 和 `Authority:`。不得在 `design/` 或 `architecture/` 根目录新增日期状态页、第二套总体蓝图或复制的 API schema。重大新设计写 ADR 或修改已有规范；实现完成度只更新迁移表和当前运行时映射。

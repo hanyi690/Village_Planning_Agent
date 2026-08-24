@@ -2604,6 +2604,16 @@
             "type": "string",
             "title": "Session Id"
           },
+          "project_name": {
+            "type": "string",
+            "title": "Project Name",
+            "default": ""
+          },
+          "village_name": {
+            "type": "string",
+            "title": "Village Name",
+            "default": ""
+          },
           "status": {
             "type": "string",
             "enum": [

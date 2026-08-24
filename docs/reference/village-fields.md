@@ -23,4 +23,4 @@
 - `artifact_id`、`digest`、`parents`：用于结果身份和血缘，不是 GIS 属性。
 
 成果图层、土地平衡和交付字段由 `DeliverySpatialSnapshot` 统一派生；相关设计见
-[design/08_DELIVERABLES_COMPLIANCE.md](../design/modules/delivery/08_DELIVERABLES_COMPLIANCE.md)。
+[Planning and Execution](../design/03_PLANNING_EXECUTION.md)。
