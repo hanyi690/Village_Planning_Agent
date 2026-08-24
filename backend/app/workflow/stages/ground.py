@@ -194,6 +194,7 @@ def _merge_ground_evidence_packets(packets: list[Any], *, next_offset: int | Non
 async def _retrieve_ground_evidence_packets(
     context: Any,
     specs: list[Any],
+    requirements_by_target: dict[str, list[Any]] | None = None,
 ) -> tuple[dict[str, Any], list[dict[str, str]]]:
     """Fetch bounded packets and retain every retrieval error.
 
@@ -245,6 +246,9 @@ async def _retrieve_ground_evidence_packets(
                             entity_scope=scopes,
                             candidate_offset=offset,
                             candidate_limit=64,
+                            requirements=list(
+                                (requirements_by_target or {}).get(target_id, [])
+                            ),
                         ),
                         session_id,
                         village_name=str(getattr(context, "village_name", "") or ""),
@@ -474,8 +478,16 @@ async def ground_node(state: Dict[str, Any]) -> Dict[str, Any]:
             logger.warning("[workflow:ground] retrieve_evidence failed: %s", exc)
     intent_graph = getattr(compilation, "intent_graph", None)
     target_metadata = _target_metadata_from_compilation(compilation, intent_graph)
+    from app.evidence.retrieval.requirements import requirements_from_target_projection
+
+    target_requirements = requirements_from_target_projection(compilation)
+    requirements_by_target: dict[str, list[Any]] = {}
+    for requirement in target_requirements:
+        target_id = str(requirement.metadata.get("target_id", "") or "").strip()
+        if target_id:
+            requirements_by_target.setdefault(target_id, []).append(requirement)
     evidence_packets, packet_diagnostics = await _retrieve_ground_evidence_packets(
-        context, specs
+        context, specs, requirements_by_target
     )
     if evidence_packets:
         logger.info(

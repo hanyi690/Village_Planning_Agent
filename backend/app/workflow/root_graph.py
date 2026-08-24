@@ -1,6 +1,7 @@
-"""Main planning graph factory. Migrated from agent/graph.py per docs/architecture/agent-graph.md §5."""
+"""Main planning graph factory; current behavior is documented in CURRENT_RUNTIME.md."""
 
 import asyncio
+import json
 from typing import Any, Callable, Dict, List
 from langgraph.graph import StateGraph, END, START
 from langchain_core.messages import HumanMessage
@@ -53,6 +54,7 @@ from app.contracts.workflow.human_interrupt_contracts import (
 )
 
 from app.infrastructure.logging import get_logger
+from app.workflow.failure_codes import TRANSIENT_LLM_FAILURE_CODES
 logger = get_logger(__name__)
 
 END_DIAGNOSTIC = "end_diagnostic"
@@ -558,6 +560,8 @@ def _human_review_sentinel_route(state: Dict[str, Any]) -> str | None:
 def _approve_validate_reconcile(state: Dict[str, Any], paused_stage: str) -> str:
     if state.get("delivery_status") == "diagnostic_only":
         return END_DIAGNOSTIC
+    if state.get("scoped_replan_required"):
+        return "select"
     if state.get("structural_deferral_revision"):
         return "execute"
     # Approving a VALIDATE/RECONCILE pause that the gate has passed (including
@@ -580,11 +584,13 @@ def _approve_layer(state: Dict[str, Any], paused_stage: str) -> str:
 
 
 def _approve_select(state: Dict[str, Any], paused_stage: str) -> str:
-    # Approval is an explicit human override of the SELECT gate. The
-    # decision has already been recorded in the checkpoint; do not
-    # re-enter HUMAN solely because stale unresolved-target metadata
-    # survived the gate revision.  Unplaced targets are deferred to the
-    # deferral ledger / diagnostic path, never looped back to HUMAN.
+    # An explicit target deferral changes the formal planning scope.  Re-enter
+    # SELECT once so it can derive a child GroundedPlanningProblem and a fresh
+    # ScenarioSet; routing straight to EXECUTE would leave the old provisional
+    # scenario as the execution boundary.
+    if state.get("scoped_replan_required"):
+        return "select"
+    # Otherwise approval is an explicit human override of the SELECT gate.
     return "execute"
 
 
@@ -624,6 +630,18 @@ def _route_retry(state: Dict[str, Any], paused_stage: str) -> str:
     if state.get("is_revision") and state.get("revision_target_dimensions"):
         return "revision_dispatch"
     retry_stage = paused_stage if paused_stage else "target_projection"
+    # An explicit VALIDATE/RECONCILE retry-execute decision is allowed to
+    # rebuild the materialization from the same immutable approval.  This is
+    # intentionally opt-in: ordinary retries with unchanged inputs remain
+    # fail-closed, while the operator can request a deterministic worker
+    # rerun after a code-level materializer fix.
+    decisions = state.get("human_review_decisions") or {}
+    if (
+        retry_stage in {"validate", "reconcile"}
+        and isinstance(decisions, dict)
+        and decisions.get("force_retry_execute") is True
+    ):
+        return "execute"
     if retry_stage in {"validate", "reconcile"}:
         try:
             gate = load_root_gate(state, retry_stage)
@@ -720,7 +738,7 @@ def _diagnostic_manifest_patch(
             "deferral_summary": deferral_summary,
         }
     except Exception as exc:
-        logger.warning("[main:end_diagnostic] manifest persistence failed: %s", exc)
+        logger.warning("[main:end_diagnostic] manifest persistence failed: %s", type(exc).__name__)
         return {}
 
 
@@ -993,7 +1011,7 @@ async def publish_human_review_pause(state: Dict[str, Any]) -> Dict[str, Any]:
                 "item_count": len(items),
             })
         except Exception as exc:
-            logger.warning("[main:human_review] SSE publish failed: %s", exc)
+            logger.warning("[main:human_review] SSE publish failed: %s", type(exc).__name__)
             return {"human_review_pause_published": False}
     return {"human_review_pause_published": True}
 
@@ -1058,13 +1076,7 @@ def _revision_feedback(items: List[Dict[str, Any]], supplied: str) -> str:
     return "\n".join(part for part in [supplied.strip(), *dict.fromkeys(findings), requirements] if part)
 
 
-_TRANSIENT_PROVIDER_CODES = {
-    "llm_stream_timeout",
-    "llm_timeout",
-    "llm_provider_error",
-    "llm_provider_circuit_open",
-    "dimension_quality_failed",
-}
+_TRANSIENT_PROVIDER_CODES = TRANSIENT_LLM_FAILURE_CODES
 
 
 def _provider_failure_dimensions(
@@ -1113,23 +1125,111 @@ def _provider_resume_patch(
         if int(attempts.get(dimension, 0)) > limit
     ]
     if exhausted:
+        terminal = {
+            "stage": str(state.get("phase") or "layer3"),
+            "code": "LLM_DIMENSION_RETRY_EXHAUSTED",
+            "reason": "provider_dimension_retry_exhausted",
+            "dimensions": exhausted,
+            "retry_limit": limit,
+            "message": (
+                "typed L1/L2/L3 output retry limit exhausted for: "
+                + ", ".join(exhausted)
+            ),
+        }
         return {
             "provider_resume_dimensions": [],
+            "provider_failures": [],
+            "dimension_failures": [],
+            "fatal_error": terminal,
             "delivery_status": "diagnostic_only",
-            "diagnostic_terminal": {
-                "stage": str(state.get("phase") or "layer3"),
-                "reason": "provider_dimension_retry_exhausted",
-                "dimensions": exhausted,
-                "retry_limit": limit,
-            },
+            "diagnostic_terminal": terminal,
+            "phase": "completed",
+            "current_stage": "TERMINAL",
+            "next_stage": "",
+            "status": "failed",
         }
     from app.infrastructure.llm.dimension_runtime import reset_provider_failure
 
     reset_provider_failure(str(state.get("session_id") or ""))
+    patch = {
+        "provider_resume_dimensions": dimensions,
+        "provider_failures": [],
+        "dimension_failures": [],
+        "fatal_error": None,
+        "human_review_items": [],
+        "paused_stage": None,
+        "layer_just_completed": None,
+        "is_revision": False,
+        "need_revision": False,
+    }
+    feedback = "；".join(dict.fromkeys(
+        str(item.get("feedback") or item.get("message") or "").strip()
+        for item in (state.get("dimension_failures") or [])
+        if isinstance(item, dict)
+        and str(item.get("code") or "") == "dimension_quality_failed"
+        and str(item.get("feedback") or item.get("message") or "").strip()
+    ))[:2000]
+    if feedback:
+        patch["quality_feedback"] = feedback
+    return patch
+
+
+def _quality_resume_patch(
+    state: Dict[str, Any],
+    items: List[Dict[str, Any]],
+    decisions: Dict[str, Any],
+) -> Dict[str, Any] | None:
+    """Resume dimensions rejected by the observation-quality gate.
+
+    A dependency-deadlock HUMAN item is a routing consequence, not a new
+    provider failure.  The operator's explicit dimensions (or the missing
+    dimensions listed by the deadlock item) therefore need to be converted
+    into the same bounded provider-resume dispatch used for transient LLM
+    failures.  Keep the validator feedback across the dispatch so the next
+    prompt actually addresses the spatial-anchor defect.
+    """
+    phase = str(state.get("phase") or "")
+    if phase not in {"layer1", "layer2", "layer3"}:
+        return None
+    failures = {
+        str(item.get("dimension") or item.get("dimension_key") or "").strip(): item
+        for item in (state.get("dimension_failures") or [])
+        if isinstance(item, dict)
+        and str(item.get("code") or "") == "dimension_quality_failed"
+        and str(item.get("dimension") or item.get("dimension_key") or "").strip()
+    }
+    requested = [
+        str(dimension).strip()
+        for dimension in (decisions.get("dimensions") or [])
+        if str(dimension).strip()
+    ]
+    if not requested:
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            context = item.get("context") or {}
+            if isinstance(context, dict):
+                requested.extend(
+                    str(dimension).strip()
+                    for dimension in (context.get("missing_dimensions") or [])
+                    if str(dimension).strip()
+                )
+    dimensions = list(dict.fromkeys(dimension for dimension in requested if dimension in failures))
+    if not dimensions:
+        dimensions = list(failures)
+    if not dimensions:
+        return None
+    feedback_parts = [
+        str(decisions.get("feedback") or "").strip(),
+        *(str(failures[dimension].get("feedback") or failures[dimension].get("message") or "").strip()
+          for dimension in dimensions),
+    ]
+    feedback = "；".join(dict.fromkeys(item for item in feedback_parts if item))[:2000]
     return {
         "provider_resume_dimensions": dimensions,
         "provider_failures": [],
         "dimension_failures": [],
+        "quality_feedback": feedback,
         "fatal_error": None,
         "human_review_items": [],
         "paused_stage": None,
@@ -1141,71 +1241,257 @@ def _provider_resume_patch(
 
 
 async def _apply_select_auto_deferral(state: Dict[str, Any]) -> Dict[str, Any]:
-    """Auto-defer SELECT-unplaced targets after a partial-selection approval.
-
-    Accepting a partial SELECT leaves the unplaced targets in the
-    ExecutionPlan's ``deferred_tasks`` without a ``DeferralLedger`` entry,
-    which DELIVER flags as structural blockers and forces diagnostic_only.
-    Record them in a typed ledger and revise the plan so the run delivers
-    partial instead of terminating on non-deferred blockers.
-    """
-    from app.contracts.domain.selection_contracts import SiteSelectionDecision
-    from app.contracts.planning.scenario import PlanningScenario
+    """Record deferral and force a fresh scoped SELECT solve."""
     from app.infrastructure.artifacts.runtime import load_artifact
+    from app.contracts.planning.scenario import PlanningScenario, ScenarioSet
+    from app.contracts.artifacts.ref import ArtifactRef
+    from app.contracts.spatial.grounded_problem import GroundedPlanningProblem
+    from app.contracts.spatial.grounding_contracts import GroundingResult
+    from app.domain.allocation.select_gate import _pending_target_ids
+    from app.domain.common.gate_progress import canonical_input_checksum, stable_artifact_refs
 
-    # Authoritative source: the typed SiteSelectionDecision records every
-    # unplaced assignment.  Prefer it over the gate's pending_requests, which
-    # are empty by the time the approve node runs.
-    decision = load_artifact(state, "site_selection", SiteSelectionDecision)
-    scenario = load_artifact(state, "planning_scenario", PlanningScenario)
-    selected_target_ids = {
-        str(item.target_id).strip()
-        for item in (getattr(scenario, "target_selections", None) or [])
-        if getattr(item, "candidate_ids", None)
-        if str(item.target_id).strip()
-    }
-    assignments = list(getattr(decision, "target_assignments", None) or []) if decision else []
-    if selected_target_ids:
-        # The relation-aware ScenarioSolver is authoritative for the active
-        # subset.  Do not infer deferrals from a legacy allocator status: a
-        # replay can carry stale ``unplaced`` flags even when the scenario has
-        # selected a valid candidate for that target.
-        target_ids = sorted({
-            str(assignment.target_id)
-            for assignment in assignments
-            if str(assignment.target_id or "").strip()
-            and str(assignment.target_id) not in selected_target_ids
-        })
-    else:
-        target_ids = sorted({
-            str(assignment.target_id)
-            for assignment in assignments
-            if str(getattr(assignment, "status", "") or "") == "unplaced"
-            and str(getattr(assignment, "target_id", "") or "").strip()
-        })
-    if not target_ids:
-        try:
-            gate = load_root_gate(state, "select")
-        except Exception:
-            return {}
-        target_ids = sorted({
-            str(target_id)
-            for request in (gate.pending_requests or [])
-            for context in [(
-                request.get("context") if isinstance(request, dict) else getattr(request, "context", None) or {}
-            )]
-            if isinstance(context, dict)
-            for target_id in context.get("target_ids") or []
-            if str(target_id).strip()
-        })
+    # A partial ScenarioSet has no executable plan.  Derive target scope only
+    # from the typed SELECT gate's pending request and send it to scoped
+    # re-planning; never inspect a legacy projection or mutate an approval.
+    try:
+        gate = load_root_gate(state, "select")
+    except Exception:
+        return {}
+    target_ids = sorted({
+        str(target_id)
+        for request in (gate.pending_requests or [])
+        for context in [(
+            request.get("context") if isinstance(request, dict) else getattr(request, "context", None) or {}
+        )]
+        if isinstance(context, dict)
+        for target_id in context.get("target_ids") or []
+        if str(target_id).strip()
+    })
     if not target_ids:
         return {}
+    raw_gate_refs = dict(getattr(gate, "input_artifact_refs", {}) or {})
+    raw_current_refs = dict(state.get("artifact_refs") or {})
+    gate_refs = stable_artifact_refs(raw_gate_refs)
+    current_refs = stable_artifact_refs(raw_current_refs)
+    stale_reasons: list[str] = []
+
+    def content_identity(ref: Any) -> str:
+        try:
+            canonical_ref = ArtifactRef.model_validate(ref)
+        except Exception:
+            return ""
+        return canonical_ref.descriptor_digest
+
+    def request_binding_key(item: Any) -> str:
+        """Canonical request identity shared by gate and interrupt payloads."""
+
+        if isinstance(item, dict):
+            payload = item
+        elif hasattr(item, "model_dump"):
+            payload = item.model_dump(mode="json")
+        else:
+            payload = {
+                "request_id": getattr(item, "request_id", ""),
+                "stage": getattr(item, "stage", ""),
+                "request_type": getattr(item, "request_type", ""),
+                "context": getattr(item, "context", {}) or {},
+                "created_at": getattr(item, "created_at", ""),
+            }
+        return json.dumps(
+            {
+                "request_id": str(payload.get("request_id") or ""),
+                "stage": str(payload.get("stage") or "").lower(),
+                "request_type": str(payload.get("request_type") or ""),
+                "created_at": str(payload.get("created_at") or ""),
+                "context": payload.get("context") or {},
+            },
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+            default=str,
+        )
+    gate_context_version = str(getattr(gate, "context_version", "") or "")
+    current_context_version = str(
+        state.get("context_version")
+        or (state.get("context_ref") or {}).get("version", "")
+        or ""
+    )
+    if not gate_context_version or not current_context_version:
+        stale_reasons.append("context_version_missing")
+    elif gate_context_version != current_context_version:
+        stale_reasons.append("context_version_changed")
+    for required_key in ("scenario_set", "planning_scenario", "scoped_grounding_problem"):
+        gate_identity = content_identity(raw_gate_refs.get(required_key))
+        current_identity = content_identity(raw_current_refs.get(required_key))
+        if not gate_identity or not current_identity:
+            stale_reasons.append(f"input_artifact_ref_missing:{required_key}")
+        elif gate_identity != current_identity:
+            stale_reasons.append(f"input_artifact_ref_changed:{required_key}")
+    # Every ref carried by the typed gate must remain a valid content-addressed
+    # ref in the current checkpoint.  Checking only descriptor/digest truthiness
+    # lets artifact-id-only or empty-digest dictionaries look present.
+    for key, gate_ref in raw_gate_refs.items():
+        if not gate_ref:
+            stale_reasons.append(f"input_artifact_ref_missing:{key}")
+            continue
+        gate_identity = content_identity(gate_ref)
+        current_ref = raw_current_refs.get(key)
+        current_identity = content_identity(current_ref)
+        if not gate_identity or not current_identity:
+            stale_reasons.append(f"input_artifact_ref_invalid:{key}")
+        elif gate_identity != current_identity:
+            stale_reasons.append(f"input_artifact_ref_changed:{key}")
+    gate_input_checksum = str(getattr(gate, "input_checksum", "") or "")
+    if not gate_input_checksum:
+        stale_reasons.append("input_checksum_missing")
+    elif canonical_input_checksum(gate_refs) != gate_input_checksum:
+        stale_reasons.append("input_checksum_changed")
+    interrupt_payload = state.get("human_interrupt") or {}
+    interrupt_items = (
+        list(interrupt_payload.get("items") or [])
+        if isinstance(interrupt_payload, dict)
+        else []
+    )
+    active_review_items = list(state.get("human_review_items") or interrupt_items)
+    pending_matches_scope = False
+    current_event_id = str(
+        state.get("human_review_event_id")
+        or (state.get("human_interrupt") or {}).get("event_id")
+        or ""
+    )
+    if not current_event_id:
+        stale_reasons.append("human_interrupt_event_missing")
+    interrupt_event_id = str(
+        interrupt_payload.get("event_id", "")
+        if isinstance(interrupt_payload, dict)
+        else ""
+    )
+    interrupt_channel = str(
+        interrupt_payload.get("channel", "")
+        if isinstance(interrupt_payload, dict)
+        else ""
+    )
+    interrupt_stage = str(
+        interrupt_payload.get("paused_stage", "")
+        if isinstance(interrupt_payload, dict)
+        else ""
+    ).lower()
+    state_stage = str(state.get("paused_stage") or "").lower()
+    if interrupt_event_id != current_event_id:
+        stale_reasons.append("human_interrupt_event_changed")
+    if interrupt_channel != HumanInterruptChannel.POST_L3_REVIEW.value:
+        stale_reasons.append("human_interrupt_channel_changed")
+    if interrupt_stage != "select" or state_stage != "select":
+        stale_reasons.append("human_interrupt_stage_changed")
+    expected_event_id = stable_human_interrupt_id(
+        str(state.get("session_id") or ""),
+        HumanInterruptChannel.POST_L3_REVIEW,
+        paused_stage="select",
+        items=interrupt_items,
+        retry_counts=state.get("retry_counts"),
+        generation=int(state.get("human_review_generation") or 0),
+    )
+    if not interrupt_items or current_event_id != expected_event_id:
+        stale_reasons.append("human_interrupt_identity_changed")
+    interrupt_request_keys = {
+        request_binding_key(item): item for item in interrupt_items
+    }
+    gate_request_keys = {
+        request_binding_key(request): request
+        for request in (gate.pending_requests or [])
+    }
+    active_bindings_valid = True
+    for item in active_review_items:
+        item_key = request_binding_key(item)
+        if item_key not in interrupt_request_keys or item_key not in gate_request_keys:
+            active_bindings_valid = False
+            break
+    if not active_bindings_valid:
+        stale_reasons.append("human_interrupt_request_binding_changed")
+    for item in active_review_items:
+        item_context = (
+            item.get("context") if isinstance(item, dict)
+            else getattr(item, "context", {})
+        ) or {}
+        item_ids = {str(value) for value in item_context.get("target_ids") or [] if str(value)}
+        item_request_id = str(
+            item.get("request_id") if isinstance(item, dict)
+            else getattr(item, "request_id", "")
+        )
+        item_stage = str(
+            item.get("stage") if isinstance(item, dict) else getattr(item, "stage", "")
+        ).lower()
+        item_type = str(
+            item.get("request_type")
+            if isinstance(item, dict)
+            else getattr(item, "request_type", "")
+        )
+        gate_requests = {
+            str(request.get("request_id") if isinstance(request, dict) else getattr(request, "request_id", "")): (
+                str(request.get("stage") if isinstance(request, dict) else getattr(request, "stage", "")).lower(),
+                str(request.get("request_type") if isinstance(request, dict) else getattr(request, "request_type", "")),
+            )
+            for request in (gate.pending_requests or [])
+        }
+        if not item_request_id:
+            continue
+        if (
+            gate_requests.get(item_request_id) == (item_stage, item_type)
+            and item_stage == "select"
+            and item_ids == set(target_ids)
+        ):
+            pending_matches_scope = True
+            break
+    if not pending_matches_scope:
+        stale_reasons.append("human_interrupt_scope_changed")
+    problem = load_artifact(state, "scoped_grounding_problem", GroundedPlanningProblem)
+    if problem is None:
+        grounding = load_artifact(state, "grounding_result", GroundingResult)
+        problem = getattr(grounding, "problem", None)
+    scenario_set = load_artifact(state, "scenario_set", ScenarioSet)
+    scenario = load_artifact(state, "planning_scenario", PlanningScenario)
+    problem_fingerprint = str(getattr(problem, "fingerprint", "") or getattr(problem, "problem_fingerprint", "") or "")
+    scenario_problem_fingerprint = str(getattr(scenario, "problem_fingerprint", "") or "")
+    scenario_set_problem_fingerprint = str(getattr(scenario_set, "problem_fingerprint", "") or "")
+    fingerprints = {
+        value for value in (
+            problem_fingerprint,
+            scenario_problem_fingerprint,
+            scenario_set_problem_fingerprint,
+        ) if value
+    }
+    if len(fingerprints) > 1:
+        stale_reasons.append("problem_fingerprint_changed")
+    if not problem_fingerprint:
+        stale_reasons.append("problem_fingerprint_missing")
+    if not scenario_problem_fingerprint:
+        stale_reasons.append("scenario_problem_fingerprint_missing")
+    if not scenario_set_problem_fingerprint:
+        stale_reasons.append("scenario_set_problem_fingerprint_missing")
+    if stale_reasons:
+        return {
+            "human_approval_diagnostic": {
+                "code": "SELECT_DEFERRAL_SCOPE_STALE",
+                "target_ids": target_ids,
+                "reasons": sorted(set(stale_reasons)),
+            }
+        }
+    allowed_ids = set(_pending_target_ids(problem, scenario))
+    if not allowed_ids or not set(target_ids).issubset(allowed_ids):
+        logger.warning(
+            "[main] refusing SELECT auto-deferral outside typed completeness scope: %s",
+            sorted(set(target_ids) - allowed_ids),
+        )
+        return {
+            "human_approval_diagnostic": {
+                "code": "SELECT_DEFERRAL_TARGET_SCOPE_INVALID",
+                "target_ids": target_ids,
+                "allowed_target_ids": sorted(allowed_ids),
+            }
+        }
 
     from app.contracts.artifacts.deferral_contracts import DeferralLedger
-    from app.contracts.workflow.execution_plan_contracts import ExecutionPlan
     from app.domain.delivery.deferral_ledger import append_ledger, build_target_deferrals
-    from app.domain.materialization.plan_builder import defer_plan_tasks
-    from app.infrastructure.artifacts.runtime import load_artifact
 
     existing = load_artifact(state, "deferral_ledger", DeferralLedger)
     ledger = append_ledger(
@@ -1213,9 +1499,9 @@ async def _apply_select_auto_deferral(state: Dict[str, Any]) -> Dict[str, Any]:
         build_target_deferrals(
             target_ids,
             reason="select_approve_unplaced",
-            source_refs=("artifact:site_selection",),
+            source_refs=("artifact:scenario_set",),
             decided_by="select-approve",
-            rationale="partial selection approved; unplaced targets deferred",
+            rationale="SELECT gate requested scoped re-planning for unresolved targets",
         ),
     )
     patch: Dict[str, Any] = {}
@@ -1227,23 +1513,177 @@ async def _apply_select_auto_deferral(state: Dict[str, Any]) -> Dict[str, Any]:
         if ledger_ref:
             artifact_refs["deferral_ledger"] = ledger_ref
     except Exception as exc:  # noqa: BLE001 - deferral must never break the approve
-        logger.warning("[main] select auto-defer ledger persist failed: %s", exc)
-    plan = load_artifact(state, "execution_plan", ExecutionPlan)
-    if plan is not None:
-        try:
-            revised = defer_plan_tasks(plan, target_ids, review_id="select-approve")
-            plan_ref = persist_stage_artifact(
-                state, "human_review", "ExecutionPlan", revised
-            )
-            if plan_ref:
-                artifact_refs["execution_plan"] = plan_ref
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("[main] select auto-defer plan revision failed: %s", exc)
+        logger.warning(
+            "[main] select auto-defer ledger persist failed (exception_type=%s)",
+            type(exc).__name__,
+        )
+        return {
+            "human_approval_diagnostic": {
+                "code": "SELECT_DEFERRAL_LEDGER_PERSIST_FAILED",
+                "exception_type": type(exc).__name__,
+                "target_ids": target_ids,
+            }
+        }
+    artifact_refs["approved_execution_input"] = None
+    artifact_refs["execution_plan"] = None
     if artifact_refs != dict(state.get("artifact_refs") or {}):
         patch["artifact_refs"] = artifact_refs
     patch["human_deferred_targets"] = target_ids
-    patch["human_deferred_select_revision"] = True
+    patch["scoped_replan_required"] = True
     return patch
+
+
+async def _persist_human_select_approval(
+    state: Dict[str, Any],
+    decisions: Dict[str, Any],
+    prior_patch: Dict[str, Any] | None = None,
+) -> Dict[str, Any]:
+    """Freeze the selected ScenarioSet member after a SELECT approval.
+
+    SELECT may pause before it can persist an auto approval. The HUMAN
+    boundary is the second and final place allowed to create an
+    ``ApprovedExecutionInput``. Missing or non-complete scenarios deliberately
+    return an empty patch; EXECUTE then fails closed with a typed diagnostic.
+    """
+
+    from app.contracts.planning.approval import ApprovedExecutionInput
+    from app.contracts.planning.scenario import PlanningScenario, ScenarioSet
+    from app.contracts.workflow.execution_plan_contracts import ExecutionPlan
+    from app.domain.allocation.approval_input import build_approved_execution_input
+    from app.domain.materialization.approved_plan_builder import bind_approved_execution_plan
+    from app.infrastructure.artifacts.runtime import load_artifact
+
+    refs = {
+        **dict(state.get("artifact_refs") or {}),
+        **dict((prior_patch or {}).get("artifact_refs") or {}),
+    }
+    if not refs.get("scenario_set") or not refs.get("planning_scenario"):
+        return {}
+    try:
+        scenario_set = load_artifact(
+            {**state, "artifact_refs": refs}, "scenario_set", ScenarioSet
+        )
+        scenario = load_artifact(
+            {**state, "artifact_refs": refs}, "planning_scenario", PlanningScenario
+        )
+        execution_plan = load_artifact(
+            {**state, "artifact_refs": refs}, "execution_plan", ExecutionPlan
+        )
+    except Exception as exc:  # noqa: BLE001 - approval must fail closed
+        logger.warning("[main] cannot load SELECT approval artifacts: %s", type(exc).__name__)
+        return {
+            "human_approval_diagnostic": {
+                "code": "SELECT_APPROVAL_ARTIFACT_UNAVAILABLE",
+                "message": "SELECT approval artifacts could not be loaded.",
+                "exception_type": type(exc).__name__,
+            }
+        }
+    if scenario_set is None or scenario is None or execution_plan is None:
+        return {}
+
+    context_ref = dict(state.get("context_ref") or {})
+    bundle_snapshot_digest = str(
+        context_ref.get("snapshot_digest")
+        or context_ref.get("bundle_snapshot_digest")
+        or ""
+    )
+    try:
+        from app.workflow.stages.support import _require_context
+
+        context = await _require_context(state)
+        bundle = getattr(getattr(context, "workspace", None), "_bundle", None)
+        if not bundle_snapshot_digest and bundle is not None and hasattr(bundle, "spatial_snapshot_digest"):
+            bundle_snapshot_digest = str(bundle.spatial_snapshot_digest() or "")
+        elif getattr(getattr(context, "data_snapshot", None), "digest", ""):
+            bundle_snapshot_digest = str(context.data_snapshot.digest)
+    except Exception as exc:  # noqa: BLE001 - retain checkpoint evidence
+        logger.warning("[main] SELECT approval context refresh unavailable: %s", type(exc).__name__)
+
+    existing = None
+    try:
+        existing = load_artifact(
+            {**state, "artifact_refs": refs},
+            "approved_execution_input",
+            ApprovedExecutionInput,
+        )
+    except Exception:
+        existing = None
+    event_id = str(state.get("human_review_event_id") or state.get("run_id") or "review")
+    approved_by = str(
+        decisions.get("approved_by")
+        or decisions.get("reviewer")
+        or decisions.get("decided_by")
+        or f"human-review:{event_id}"
+    )
+    approval = build_approved_execution_input(
+        scenario_set=scenario_set,
+        scenario=scenario,
+        scenario_set_ref=refs.get("scenario_set"),
+        scenario_ref=refs.get("planning_scenario"),
+        planning_program_ref=refs.get("planning_program"),
+        grounding_problem_ref=str(
+            getattr(scenario, "problem_fingerprint", "") or ""
+        ),
+        context_ref=context_ref,
+        bundle_snapshot_digest=bundle_snapshot_digest,
+        approval_id=f"approval:{scenario.scenario_id}:human:{event_id}",
+        approval_status="human_approved",
+        approved_by=approved_by,
+        approval_revision=(int(getattr(existing, "approval_revision", 0) or 0) + 1),
+        approval_reason=str(
+            decisions.get("approval_reason")
+            or decisions.get("feedback")
+            or "explicit human approval of SELECT scenario"
+        ),
+        execution_plan=execution_plan,
+    )
+    if approval is None:
+        return {
+            "human_approval_diagnostic": {
+                "code": "SELECT_APPROVAL_SCENARIO_NOT_EXECUTABLE",
+                "message": "human approval did not produce an executable complete scenario",
+            }
+        }
+    working_state = {**state, "artifact_refs": refs}
+    try:
+        bound_plan = bind_approved_execution_plan(
+            execution_plan,
+            approval,
+            scenario_set,
+            scenario,
+        )
+        plan_ref = persist_stage_artifact(
+            working_state,
+            "human_review",
+            "ExecutionPlan",
+            bound_plan,
+        )
+        approval_ref = persist_stage_artifact(
+            working_state,
+            "human_review",
+            "ApprovedExecutionInput",
+            approval,
+        )
+    except Exception as exc:  # noqa: BLE001 - never bypass the approval gate
+        logger.error(
+            "[main] failed to persist ApprovedExecutionInput (exception_type=%s)",
+            type(exc).__name__,
+        )
+        return {
+            "human_approval_diagnostic": {
+                "code": "SELECT_APPROVAL_PERSIST_FAILED",
+                "message": "SELECT approval artifacts could not be persisted.",
+                "exception_type": type(exc).__name__,
+            }
+        }
+    return {
+        "artifact_refs": {
+            "approved_execution_input": approval_ref,
+            "execution_plan": plan_ref,
+        },
+        "approved_input_status": "human_approved",
+        "approved_input_revision": approval.approval_revision,
+    }
 
 
 async def apply_human_review_decision(state: Dict[str, Any]) -> Dict[str, Any]:
@@ -1313,6 +1753,14 @@ async def apply_human_review_decision(state: Dict[str, Any]) -> Dict[str, Any]:
         provider_patch = _provider_resume_patch(state, items)
         if provider_patch is not None:
             result.update(provider_patch)
+            return result
+        quality_patch = _quality_resume_patch(
+            state,
+            items,
+            decisions if isinstance(decisions, dict) else {},
+        )
+        if quality_patch is not None:
+            result.update(quality_patch)
             return result
 
     if (
@@ -1476,7 +1924,6 @@ async def apply_human_review_decision(state: Dict[str, Any]) -> Dict[str, Any]:
                     artifact_refs=result_artifact_refs,
                 ),
                 "human_deferred_targets": deferred_target_ids,
-                "human_deferred_select_revision": False,
                 "remaining_target_ids": remaining_target_ids,
             })
             if paused_stage == "select":
@@ -1645,6 +2092,14 @@ async def apply_human_review_decision(state: Dict[str, Any]) -> Dict[str, Any]:
         # DELIVER flags deferred_tasks without ledger backing as structural
         # blockers and the run ends diagnostic_only instead of partial.
         result.update(await _apply_select_auto_deferral(state))
+    if action in ("accept", "approve") and paused_stage == "select":
+        result.update(
+            await _persist_human_select_approval(
+                state,
+                decisions if isinstance(decisions, dict) else {},
+                result,
+            )
+        )
     if action in ("accept", "approve") and paused_stage:
         if (
             paused_stage == "l3"
@@ -1670,6 +2125,11 @@ async def apply_human_review_decision(state: Dict[str, Any]) -> Dict[str, Any]:
                 state,
                 paused_stage,
                 _pass_gate(paused_stage),
+                artifact_refs=(
+                    result.get("artifact_refs")
+                    if isinstance(result.get("artifact_refs"), dict)
+                    else None
+                ),
             )
         )
         if isinstance(state.get("provider_failures"), list) and state.get("provider_failures"):
@@ -1680,16 +2140,11 @@ async def apply_human_review_decision(state: Dict[str, Any]) -> Dict[str, Any]:
             and isinstance(decisions, dict)
             and decisions.get("defer_unresolved_spatial_references") is True
         ):
-            # A human may explicitly defer targets for which the uploaded GIS
-            # has no authoritative geometry.  This is not a candidate
-            # fallback: create a new SELECT artifact revision that records the
-            # deferred target ids, then let EXECUTE consume only the proven
-            # selections.  The old failed artifact remains immutable.
-            if paused_stage == "select":
-                result.update(
-                    await _apply_deferred_select_review(state, deferred_target_ids)
-                )
-            else:
+            # GROUND deferrals are carried into SELECT, where the typed
+            # DeferralLedger is compiled into a scoped problem and fresh
+            # ScenarioSet. SELECT never rewrites a prior selection projection
+            # as a substitute for that re-solve.
+            if paused_stage == "ground":
                 # GROUND can pause before SELECT has emitted its typed
                 # decision. Preserve the stage boundary and let SELECT build
                 # its own artifact from the persisted GroundingResult.
@@ -1706,7 +2161,6 @@ async def apply_human_review_decision(state: Dict[str, Any]) -> Dict[str, Any]:
                 )
                 result.update({
                     "human_deferred_targets": deferred_target_ids,
-                    "human_deferred_select_revision": False,
                 })
             if deferral_patch.get("artifact_refs"):
                 result["artifact_refs"] = {
@@ -1801,7 +2255,8 @@ async def _apply_classification_revision(
             "fatal_error": {
                 "stage": "l3",
                 "code": "CLASSIFICATION_DECISION_INVALID",
-                "message": str(exc),
+                "message": "Classification decisions did not satisfy the typed contract.",
+                "exception_type": type(exc).__name__,
             }
         }
 
@@ -1829,17 +2284,14 @@ async def _apply_structural_target_deferrals(
     target_ids: list[str],
     stage: str,
 ) -> Dict[str, Any]:
-    """Persist target deferrals and a new immutable execution-plan revision."""
-    from app.domain.allocation.select_service import revise_site_selection_deferral
+    """Persist target deferrals and require a fresh scoped planning run."""
     from app.domain.delivery.deferral_ledger import append_ledger, build_target_deferrals
-    from app.domain.materialization.plan_builder import defer_plan_tasks
     from app.infrastructure.artifacts.runtime import load_artifact
     from app.contracts.artifacts.deferral_contracts import DeferralLedger
     from app.contracts.workflow.execution_plan_contracts import (
         ExecutionResult,
         ExecutionPlan,
     )
-    from app.contracts.domain.selection_contracts import SiteSelectionDecision
 
     plan = load_artifact(state, "execution_plan", ExecutionPlan)
     outcome = load_artifact(state, "execution_result", ExecutionResult)
@@ -1895,34 +2347,24 @@ async def _apply_structural_target_deferrals(
     )
     ledger = append_ledger(existing_ledger, new_entries)
 
-    deferred_set = set(target_ids)
-    revised_plan = defer_plan_tasks(plan, target_ids, review_id=review_id)
-    artifact_refs = {
-        "deferral_ledger": persist_stage_artifact(
-            state, "human_review", "DeferralLedger", ledger
-        ),
-    }
-
-    selection = load_artifact(state, "site_selection", SiteSelectionDecision)
-    if selection is not None:
-        revised_selection = revise_site_selection_deferral(selection, target_ids)
-        artifact_refs["site_selection"] = persist_stage_artifact(
-            state, "human_review", "SiteSelectionDecision", revised_selection
-        )
-    artifact_refs["execution_plan"] = persist_stage_artifact(
-        state, "human_review", "ExecutionPlan", revised_plan
+    artifact_refs = dict(state.get("artifact_refs") or {})
+    artifact_refs["deferral_ledger"] = persist_stage_artifact(
+        state, "human_review", "DeferralLedger", ledger
     )
+    artifact_refs["execution_plan"] = None
+    artifact_refs["approved_execution_input"] = None
 
+    deferred_set = set(target_ids)
     remaining = sorted(gate_ids - deferred_set)
     structurally_blocked = bool(remaining or non_target_blocker_count)
     revised_gate = dict(gate) if isinstance(gate, dict) else _dump(gate)
     revised_gate.update({
         "stage": stage,
         "passed": False,
-        "feedback_route": "END_DIAGNOSTIC" if structurally_blocked else "RETRY_EXECUTE",
+        "feedback_route": "END_DIAGNOSTIC" if structurally_blocked else "RETRY_SELECT",
         "route_reason": (
             "remaining_non_deferred_structural_blockers"
-            if structurally_blocked else "human_target_deferral_plan_revision"
+            if structurally_blocked else "human_target_deferral_requires_resolve"
         ),
         "pending_requests": [],
     })
@@ -1940,7 +2382,8 @@ async def _apply_structural_target_deferrals(
             "target_ids": [entry.target_id for entry in ledger.entries],
             "actions": [entry.decision.action for entry in ledger.entries],
         },
-        "structural_deferral_revision": not structurally_blocked,
+        "structural_deferral_revision": False,
+        "scoped_replan_required": not structurally_blocked,
         "remaining_target_ids": remaining,
     }
     if structurally_blocked:
@@ -2073,6 +2516,7 @@ async def _record_select_target_deferrals(
     from app.domain.delivery.deferral_ledger import append_ledger, build_target_deferrals
     from app.infrastructure.artifacts.runtime import load_artifact
     from app.contracts.artifacts.deferral_contracts import DeferralLedger
+    from app.contracts.spatial.grounded_problem import GroundedPlanningProblem
 
     try:
         gate = _root_gate_payload(state, "select")
@@ -2086,9 +2530,27 @@ async def _record_select_target_deferrals(
         }
     pending = gate.get("pending_requests", [])
     allowed: set[str] = set()
-    for request in pending:
-        context = request.get("context", {}) if isinstance(request, dict) else {}
-        allowed.update(str(item) for item in (context.get("target_ids") or []) if str(item))
+    # A SELECT retry can replace the scoped problem while the persisted gate's
+    # pending request still contains the previous attempt's target list.  The
+    # typed problem is the authoritative current blocker set; otherwise a
+    # valid deferral of the last unresolved target is incorrectly treated as
+    # leaving stale targets behind and the run terminates diagnostically.
+    current_problem = load_artifact(state, "scoped_grounding_problem", GroundedPlanningProblem)
+    if current_problem is not None:
+        allowed.update(
+            str(domain.target_id)
+            for domain in list(current_problem.candidate_domains or [])
+            if str(domain.status) != "resolved" and str(domain.target_id)
+        )
+        allowed.update(
+            str(domain.target_id)
+            for domain in list(current_problem.target_domains or [])
+            if str(domain.status) != "resolved" and str(domain.target_id)
+        )
+    if not allowed:
+        for request in pending:
+            context = request.get("context", {}) if isinstance(request, dict) else {}
+            allowed.update(str(item) for item in (context.get("target_ids") or []) if str(item))
     # When the select gate carries no pending requests (e.g. the pause was
     # routed from a ground-level unresolved reference), fall back to the
     # ground deferral path which validates against GroundingResult.unresolved.
@@ -2110,7 +2572,7 @@ async def _record_select_target_deferrals(
         target_ids,
         reason="selection_no_candidate",
         source_refs=lambda target_id: (
-            f"artifact:site_selection:{(refs.get('site_selection') or {}).get('descriptor_digest', 'site_selection')}",
+            f"artifact:approved_execution_input:{(refs.get('approved_execution_input') or {}).get('descriptor_digest', 'approved_execution_input')}",
             f"artifact:grounding_result:{(refs.get('grounding_result') or {}).get('descriptor_digest', 'grounding_result')}",
         ),
         review_id=str(state.get("human_review_event_id") or "human-review"),
@@ -2124,71 +2586,12 @@ async def _record_select_target_deferrals(
         "artifact_refs": {"deferral_ledger": ref},
         "human_deferred_targets": target_ids,
         "remaining_target_ids": remaining,
+        "scoped_replan_required": True,
         "deferral_summary": {
             "count": len(ledger.entries),
             "target_ids": [entry.target_id for entry in ledger.entries],
             "actions": [entry.decision.action for entry in ledger.entries],
         },
-    }
-
-
-async def _apply_deferred_select_review(
-    state: Dict[str, Any], deferred: list[str]
-) -> Dict[str, Any]:
-    """Create a traceable SELECT revision for explicit human deferrals."""
-    from app.domain.allocation.select_service import revise_site_selection_deferral
-    from app.infrastructure.artifacts.runtime import load_artifact
-    from app.contracts.workflow.execution_plan_contracts import ExecutionPlan
-    from app.contracts.workflow.parse_result_contracts import IntentCompilationResult
-    from app.contracts.domain.selection_contracts import SiteSelectionDecision
-
-    decision = load_artifact(state, "site_selection", SiteSelectionDecision)
-    intent_result = load_artifact(state, "target_projection", IntentCompilationResult)
-    if decision is None or intent_result is None:
-        return {
-            "fatal_error": {
-                "stage": "select",
-                "code": "HUMAN_DEFER_SELECTION_ARTIFACT_MISSING",
-                "message": "Cannot create a deferred SELECT revision without the original typed artifacts.",
-            }
-        }
-
-    if not deferred:
-        return {
-            "human_deferred_targets": [],
-            "human_deferred_select_revision": False,
-        }
-
-    revised = revise_site_selection_deferral(
-        decision, deferred, review_status="human_approved"
-    )
-    select_ref = persist_stage_artifact(
-        state,
-        "human_review",
-        "SiteSelectionDecision",
-        revised,
-    )
-
-    # EXECUTE consumes the canonical site_selection ref; the plan has no
-    # embedded selection snapshot to drift from that ref.
-    plan = load_artifact(state, "execution_plan", ExecutionPlan)
-    refs = {"site_selection": select_ref}
-    if plan is not None:
-        plan_revision = plan.model_copy(deep=True)
-        refs["execution_plan"] = persist_stage_artifact(
-            state, "human_review", "ExecutionPlan", plan_revision
-        )
-
-    gate = _pass_gate("select").model_dump(mode="json")
-    gate.update({
-        "feedback_route": "PASS",
-        "diagnostic_code": "HUMAN_DEFERRED_UNRESOLVED_SPATIAL",
-        "pending_requests": [],
-    })
-    return {
-        **_gate_mutation_patch(state, "select", gate, artifact_refs=refs),
-        "human_deferred_targets": deferred,
-        "human_deferred_select_revision": True,
     }
 
 

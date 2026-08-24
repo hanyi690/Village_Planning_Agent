@@ -164,14 +164,57 @@ def _cut_strip_from_edge(
     b: Tuple[float, float],
     interior_dir: Tuple[float, float],
     target_m2: float,
+    exact_search: bool = True,
 ) -> Tuple[Optional[Polygon], Optional[Polygon]]:
     frontage = _edge_length(a, b)
     if frontage <= 0.0:
         return None, None
-    return _split_strip(polygon, a, b, interior_dir, target_m2 / frontage)
+    direct = _split_strip(polygon, a, b, interior_dir, target_m2 / frontage)
+    if not exact_search:
+        return direct
+    if direct[0] is not None and direct[1] is not None:
+        direct_error = abs(direct[0].area - target_m2)
+        if direct_error <= max(target_m2 * 0.005, 1e-6):
+            return direct
+
+    # The OBB frontage is only an estimate for concave/irregular parcels.  A
+    # fixed depth can therefore produce a materially undersized first piece.
+    # Search the cut depth against the actual polygon area so the selected
+    # footprint is bounded by the requested tolerance rather than by the
+    # rectangle approximation.
+    coords = list(polygon.exterior.coords)
+    projections = [point[0] * interior_dir[0] + point[1] * interior_dir[1] for point in coords]
+    if not projections:
+        return direct
+    low = 0.0
+    high = max(projections) - min(projections)
+    best: Tuple[Optional[Polygon], Optional[Polygon]] = (None, None)
+    best_error = float("inf")
+    for _ in range(40):
+        depth = (low + high) / 2.0
+        candidate = _split_strip(polygon, a, b, interior_dir, depth)
+        front, rest = candidate
+        if front is None or rest is None:
+            high = depth
+            continue
+        error = abs(front.area - target_m2)
+        if error < best_error:
+            best = candidate
+            best_error = error
+        if front.area < target_m2:
+            low = depth
+        else:
+            high = depth
+    return best if best[0] is not None and best[1] is not None else direct
 
 
-def _cut_front(polygon: Polygon, target_m2: float, params, mode: str):
+def _cut_front(
+    polygon: Polygon,
+    target_m2: float,
+    params,
+    mode: str,
+    exact_search: bool = True,
+):
     """Cut a ``target_m2`` strip from the front of ``polygon``.
 
     ``mode == "long"`` cuts along the OBB long axis (frontage = short edge);
@@ -184,12 +227,16 @@ def _cut_front(polygon: Polygon, target_m2: float, params, mode: str):
         a = coords[(short_idx + 1) % 4]
         b = coords[(short_idx + 2) % 4]
         interior_dir = _unit(coords[short_idx][0] - a[0], coords[short_idx][1] - a[1])
-        return _cut_strip_from_edge(polygon, a, b, interior_dir, target_m2)
+        return _cut_strip_from_edge(
+            polygon, a, b, interior_dir, target_m2, exact_search=exact_search
+        )
     a = coords[short_idx]
     b = coords[(short_idx + 1) % 4]
     nxt = coords[(short_idx + 2) % 4]
     interior_dir = _unit(nxt[0] - b[0], nxt[1] - b[1])
-    return _cut_strip_from_edge(polygon, a, b, interior_dir, target_m2)
+    return _cut_strip_from_edge(
+        polygon, a, b, interior_dir, target_m2, exact_search=exact_search
+    )
 
 
 def _merge_slivers(fragments: List[Polygon], min_ha: Optional[float], target_m2: float) -> List[Polygon]:
@@ -237,6 +284,7 @@ def _subdivide(
     tolerance_pct: float,
     min_ha: Optional[float],
     depth: int,
+    exact_search: bool,
 ) -> List[Polygon]:
     area = polygon.area
     if area <= 0.0 or not polygon.is_valid:
@@ -250,12 +298,18 @@ def _subdivide(
     params = _obb_params(polygon)
     if params is None:
         return [polygon]
-    front, rest = _cut_front(polygon, target_m2, params, "long")
+    front, rest = _cut_front(
+        polygon, target_m2, params, "long", exact_search=exact_search
+    )
     if front is None or rest is None:
-        front, rest = _cut_front(polygon, target_m2, params, "width")
+        front, rest = _cut_front(
+            polygon, target_m2, params, "width", exact_search=exact_search
+        )
     if front is None or rest is None:
         return [polygon]
-    fragments = [front] + _subdivide(rest, target_m2, tolerance_pct, min_ha, depth - 1)
+    fragments = [front] + _subdivide(
+        rest, target_m2, tolerance_pct, min_ha, depth - 1, exact_search
+    )
     return _merge_slivers(fragments, min_ha, target_m2)
 
 
@@ -264,6 +318,7 @@ def obb_subdivide(
     target_area_ha: float,
     tolerance_pct: float = 5.0,
     min_area_ha: Optional[float] = None,
+    exact_search: bool = True,
 ) -> List[Polygon]:
     """Recursively split ``polygon`` into fragments near ``target_area_ha``.
 
@@ -279,13 +334,21 @@ def obb_subdivide(
     target_m2 = target_area_ha * _HA
     if target_m2 <= 0.0:
         return [poly]
-    return _subdivide(poly, target_m2, tolerance_pct, min_area_ha, _MAX_RECURSION_DEPTH)
+    return _subdivide(
+        poly,
+        target_m2,
+        tolerance_pct,
+        min_area_ha,
+        _MAX_RECURSION_DEPTH,
+        exact_search,
+    )
 
 
 def split_for_footprint(
     polygon: Polygon,
     target_area_ha: float,
     tolerance_pct: float = 5.0,
+    exact_search: bool = True,
 ) -> Tuple[Polygon, List[Polygon]]:
     """Split ``polygon`` into ``(project_footprint, remainders)``.
 
@@ -298,7 +361,31 @@ def split_for_footprint(
             f"parcel area {area_ha:.4f} ha is smaller than target footprint "
             f"{target_area_ha} ha"
         )
-    fragments = obb_subdivide(polygon, target_area_ha, tolerance_pct=tolerance_pct)
+    fragments = obb_subdivide(
+        polygon,
+        target_area_ha,
+        tolerance_pct=tolerance_pct,
+        exact_search=exact_search,
+    )
     if not fragments:
         return polygon, []
-    return fragments[0], fragments[1:]
+    # Recursive OBB splitting can encounter an irregular front edge where the
+    # first strip is a very small sliver even though a later fragment is much
+    # closer to the requested footprint.  The caller treats the first item as
+    # the executable footprint, so choosing by area is part of the contract;
+    # relying on traversal order would materialize an arbitrary sliver.
+    target_m2 = float(target_area_ha) * _HA
+    footprint_index = min(
+        range(len(fragments)),
+        key=lambda index: (
+            abs(float(fragments[index].area) - target_m2),
+            -float(fragments[index].area),
+            index,
+        ),
+    )
+    footprint = fragments[footprint_index]
+    remainders = [
+        fragment for index, fragment in enumerate(fragments)
+        if index != footprint_index
+    ]
+    return footprint, remainders

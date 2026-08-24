@@ -128,6 +128,8 @@ def _classification_properties(change: Any) -> dict[str, Any]:
 
 def _change_status(action: str) -> str:
     return {
+        "preserve": "preserved",
+        "unchanged": "preserved",
         "modify": "modified",
         "reclassify": "modified",
         "split": "split",
@@ -156,6 +158,46 @@ def _changed_feature(change: Any, base: Mapping[str, Any] | None) -> dict[str, A
     properties["change_status"] = _change_status(action)
     properties["provenance"] = "delivery_spatial_snapshot"
     properties.update(_classification_properties(change))
+
+    # Preserve the approved sub-parcel semantics at the delivery boundary.
+    # The source feature may carry the cadastral area's ``area_sqm``; that is
+    # not the area of a created footprint or preserved remainder.  Never make
+    # the frontend infer a split from geometry or silently present the source
+    # area as the planned piece's area.
+    for name in (
+        "candidate_id",
+        "feature_id",
+        "target_id",
+        "scenario_id",
+        "project_ref",
+        "availability_status",
+        "coverage_ratio",
+        "source_area_ha",
+        "eligible_area_ha",
+        "excluded_area_ha",
+        "subgeometry_operation",
+    ):
+        value = _value(change, name, None)
+        if value not in (None, ""):
+            properties[name] = value
+    for name in ("adjacent_parcel_bsms", "adjacency_evidence_refs"):
+        values = _value(change, name, None)
+        if isinstance(values, str):
+            values = [values]
+        if values:
+            properties[name] = list(dict.fromkeys(str(item) for item in values if str(item).strip()))
+    derived_from = _value(change, "derived_from_bsms", None)
+    if derived_from:
+        properties["derived_from_bsms"] = list(derived_from) if not isinstance(derived_from, str) else [derived_from]
+    new_area_ha = _value(change, "new_area_ha", None)
+    if new_area_ha not in (None, ""):
+        try:
+            new_area_ha = float(new_area_ha)
+        except (TypeError, ValueError):
+            new_area_ha = 0.0
+        if new_area_ha > 0:
+            properties["area_ha"] = new_area_ha
+            properties["area_sqm"] = new_area_ha * 10000.0
     feature["properties"] = properties
     geometry = _geometry_from_change(change)
     if geometry is not None:
@@ -441,7 +483,18 @@ def build_delivery_spatial_snapshot(
         action = str(_value(change, "action", "modify") or "modify").lower()
         source_bsms = _source_bsms(change)
         known_sources = [bsm for bsm in source_bsms if bsm in by_bsm]
-        if action == "preserve":
+        if action in {"preserve", "unchanged"}:
+            # A split/footprint materializer emits preserve changes for the
+            # remainder geometry.  Keep those explicit remainder features in
+            # the replacement group; silently dropping them would turn a
+            # valid split into an accidental parcel deletion.  A bare
+            # preserve without geometry remains a no-op.
+            if known_sources and _geometry_from_change(change) is not None:
+                changed = _changed_feature(change, by_bsm.get(known_sources[0]))
+                if changed is not None:
+                    touched_bsms.update(known_sources)
+                    features_by_source.setdefault(known_sources[0], []).append(changed)
+                    counts["preserved"] += 1
             continue
         touched_bsms.update(known_sources)
         base = by_bsm.get(known_sources[0]) if known_sources else None

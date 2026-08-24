@@ -142,7 +142,10 @@ async def retrieve_from_kg(
                 fields={
                     "evidence_role": "spatial_fact",
                     "source_kind": "kg",
-                    "counting_basis": "source_feature",
+                    # Layer cards aggregate a collection; they do not carry
+                    # the member feature IDs needed by the source-feature
+                    # lineage contract.
+                    "counting_basis": "layer_aggregate",
                     "subject_scope": group,
                     "semantic_group": str(card.get("semantic_group") or ""),
                     "geometry_kind": geometry,
@@ -165,7 +168,9 @@ async def retrieve_from_kg(
                 fields={
                     "evidence_role": "spatial_fact",
                     "source_kind": "kg",
-                    "counting_basis": "source_feature",
+                    # Entity totals are KG aggregates.  Feature-level facts
+                    # below retain the stricter source_feature basis.
+                    "counting_basis": "layer_aggregate",
                     "subject_scope": entity_type,
                     "value": str(int(entity_counts[entity_type])),
                     "unit": "source_features",

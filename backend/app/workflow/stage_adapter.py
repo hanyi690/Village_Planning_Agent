@@ -31,10 +31,10 @@ class StageCompletion(BaseModel):
 
 _KEY_BY_TYPE = {
     "GroundingResult": "grounding_result",
+    "GroundedPlanningProblem": "scoped_grounding_problem",
     "DemandPortfolio": "demand_portfolio",
     "SuitabilitySurface": "suitability_surface",
     "PortfolioDecision": "portfolio_decision",
-    "SiteSelectionDecision": "site_selection",
     "ParcelChangeSet": "parcel_changeset",
     "PlannedState": "planned_state",
     "ValidationReport": "validation_report",
@@ -44,8 +44,12 @@ _KEY_BY_TYPE = {
     "IntentCompilationResult": "target_projection",
     "ExecutionPlan": "execution_plan",
     "PlanningScenario": "planning_scenario",
+    "ScenarioSet": "scenario_set",
+    "ApprovedExecutionInput": "approved_execution_input",
+    "ValidationCertificate": "validation_certificate",
     "FinalRelationValidation": "final_relation_validation",
     "ExecutionResult": "execution_result",
+    "ExecutionStaging": "execution_staging",
     "RenderLayers": "render_layers",
     "DeliverySpatialSnapshot": "delivery_spatial_snapshot",
     "DeferralLedger": "deferral_ledger",
@@ -53,8 +57,6 @@ _KEY_BY_TYPE = {
     "ExecutionDiagnostics": "execution_diagnostics",
     "RepairDirectiveCompilation": "repair_directives",
     "RepairImpactPlan": "repair_impact",
-    "GlobalZoneAllocationResult": "global_zone_allocation",
-    "GlobalSiteAllocationResult": "global_site_allocation",
     "ExportResult": "export_result",
     "RenderArtifacts": "render_artifacts",
     "EvidenceObservationSnapshot": "l1_observations",
@@ -68,12 +70,14 @@ def persist_stage_artifact(
     stage: str,
     schema_id: str,
     payload: Any,
+    *,
+    artifact_key: str | None = None,
 ) -> dict[str, Any]:
     """Persist one stage result through the sole CAS boundary."""
 
     from app.infrastructure.artifacts.runtime import ArtifactReplayError, store_artifact
 
-    key = _KEY_BY_TYPE.get(schema_id, schema_id.lower())
+    key = artifact_key or _KEY_BY_TYPE.get(schema_id, schema_id.lower())
     retry = state.get("retry") or state.get("retry_counts") or {}
     attempt = int(retry.get(stage, 0)) + 1
     try:

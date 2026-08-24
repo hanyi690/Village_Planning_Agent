@@ -306,42 +306,23 @@ class RagService:
             location_parts = [province, city, county, township]
             village_context = ''.join(p for p in location_parts if p)
 
-            try:
-                from app.infrastructure.context.planning_context_factory import get_cached_context
-
-                planning_context = get_cached_context(session_id)
-                village_data = (
-                    planning_context.input_text("village_data")
-                    if planning_context is not None
-                    else ""
-                )
-            except Exception:
-                village_data = ""
-
-            # Fallback: regex extraction from the data-layer input snapshot
-            if not village_context:
-                if village_data:
-                    loc_match = re.search(r'([^\s]+省)([^\s]+市)([^\s]+县)([^\s]+镇)', village_data[:2000])
-                    if loc_match:
-                        village_context = f"{loc_match.group(1)}{loc_match.group(2)}{loc_match.group(3)}{loc_match.group(4)}"
-
             if not village_context:
                 village_name = state.get("village_name", "") or config.get("village_name", "")
                 village_context = village_name
 
-            # Flash LLM preprocessing: extract superior planning keywords
-            if village_data:
-                try:
-                    kw_prompt = f"""从以下村庄现状报告中提取所有涉及上位规划的文档名称和关键词。只输出名称，每行一个，不要解释。
+            # L1 is the only stage allowed to structure the raw input.  RAG
+            # query generation may consume the restored register, but it must
+            # never reopen or regex-scan the raw ``village_data`` document.
+            try:
+                from app.infrastructure.context.planning_context_factory import get_cached_context
+                from app.domain.assessment.input_register import render_l1_input_register
 
-{village_data[:2000]}
-
-上位规划文档名称和关键词："""
-                    flash_llm = create_flash_llm(max_tokens=150, temperature=0.1)
-                    kw_response = await flash_llm.ainvoke(kw_prompt)
-                    extra_keywords = kw_response.content.strip()[:300] if hasattr(kw_response, 'content') else ""
-                except Exception:
-                    pass
+                planning_context = get_cached_context(session_id)
+                register = getattr(planning_context, "l1_input_register", None)
+                if register is not None:
+                    extra_keywords = render_l1_input_register(register, max_rows=24)[:900]
+            except Exception:
+                extra_keywords = ""
 
         # 使用分 Layer Prompt
         prompt = self._build_query_prompt(dim_name, task_desc, dim_layer, dependency_summaries,

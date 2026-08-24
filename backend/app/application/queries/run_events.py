@@ -47,6 +47,12 @@ class RunEventQueryService:
     async def last_seq(self, session_id: str) -> int:
         return await EventRepository.last_seq(session_id)
 
+    async def latest(self, session_id: str) -> dict[str, Any] | None:
+        return await EventRepository.latest(session_id)
+
+    async def recent(self, session_id: str, limit: int = 512) -> list[dict[str, Any]]:
+        return await EventRepository.recent(session_id, limit=limit)
+
     async def open_stream(self, session_id: str, after: int = 0) -> EventStream:
         # Register before reading the log so events published during replay are
         # present in the live queue. The route filters queue events through the

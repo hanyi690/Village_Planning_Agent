@@ -8,7 +8,7 @@
 - after_conversation: 对话后路由（级联修订、推进意图）
 - after_analysis: 分析后路由（层级完成、波次推进）
 
-Migrated from agent/routing.py per docs/architecture/agent-graph.md §5.
+Conversation edges follow the current routing boundary in docs/architecture/CURRENT_RUNTIME.md.
 """
 
 from typing import Union, List, Dict, Any, Optional
@@ -21,6 +21,7 @@ from app.workflow.state import load_root_gate
 from app.config.dependency import compute_impact_tree
 from app.infrastructure.llm.tools.intent_tools import advance_planning_intent, gis_analysis
 from app.infrastructure.logging import get_logger
+from app.workflow.failure_codes import TRANSIENT_LLM_FAILURE_CODES
 
 
 logger = get_logger(__name__)
@@ -257,13 +258,7 @@ def _route_revision(state: Dict[str, Any]) -> Union[str, List[Send]]:
     return END
 
 
-_TRANSIENT_LLM_CODES = frozenset({
-    "llm_stream_timeout",
-    "llm_timeout",
-    "llm_provider_error",
-    "llm_provider_circuit_open",
-    "dimension_quality_failed",
-})
+_TRANSIENT_LLM_CODES = TRANSIENT_LLM_FAILURE_CODES
 
 
 def _terminal_failure_route(state: Dict[str, Any]) -> Optional[str]:
@@ -317,6 +312,19 @@ def _route_explore(state: Dict[str, Any], layer_num: int) -> Union[str, List[Sen
         gate_payload = gate_decision.model_dump(mode="json")
         pending = list(gate_payload.get("pending_requests") or [])
         if pending:
+            rag_enabled = (state.get("config") or {}).get("rag_enabled")
+            if rag_enabled is False:
+                # RAG-off runs already have the authoritative local Bundle,
+                # KG and typed snapshot.  Do not bridge a synchronous graph
+                # edge into a second event loop for artifact/history lookup;
+                # those retrievers share async locks and cannot safely be
+                # called from this conditional edge.  The unchanged gate is
+                # deliberately handled below as a bounded HUMAN breakpoint.
+                logger.info(
+                    "[after_analysis] RAG disabled; skipping cross-loop gate retrieval for L%d",
+                    layer_num,
+                )
+                return "human_review"
             from app.evidence.retrieval.evidence_service import (
                 _gate_evidence_digest,
                 retrieve_evidence_for_gate_sync,

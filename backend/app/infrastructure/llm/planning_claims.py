@@ -17,7 +17,6 @@ from typing import Any
 from pydantic import ValidationError
 
 from app.core.settings import LLM_MAX_CONCURRENT, LLM_STREAM_TIMEOUT
-from app.domain.program.claim_draft import L3DimensionOutput
 from app.infrastructure.llm.structured import run_structured_output
 
 
@@ -38,18 +37,17 @@ class PlanningClaimGenerator:
         """Return an injected adapter when tests or a controlled caller provide one."""
         return self._llm
 
-    async def generate(
+    async def _generate_projection(
         self,
+        response_model: Any,
         prompt: str,
         *,
+        instruction: str,
         validation_feedback: list[str] | None = None,
-        require_report_body: bool = True,
-    ) -> L3DimensionOutput:
-        """Call the provider and return the dual-response report + claims."""
+        content_fallback_mode: str = "strict",
+    ) -> Any:
+        """Run one bounded provider call for one semantic projection only."""
 
-        # Bound semaphore queueing as well as the provider request. LangGraph
-        # dispatches dimensions concurrently; waiting behind the local slot
-        # must not create an unbounded hidden retry/latency queue.
         await asyncio.wait_for(self._slots.acquire(), timeout=LLM_STREAM_TIMEOUT)
         try:
             retry_count = max(0, int(os.getenv("L3_PROVIDER_PARSE_RETRIES", "0")))
@@ -59,61 +57,36 @@ class PlanningClaimGenerator:
                     feedback_text = ""
                     if validation_feedback:
                         feedback_text = (
-                            "\nThe previous structured result failed deterministic domain validation. "
-                            "Repair only the listed claims and return the complete claim set again:\n- "
+                            "\nRepair only these deterministic validation findings; "
+                            "do not add new claims or report content:\n- "
                             + "\n- ".join(validation_feedback[:40])
                         )
-                    provider_error_feedback = ""
+                    retry_text = ""
                     if attempt > 0 and last_error is not None:
-                        provider_error_feedback = (
-                            "\nThe previous function arguments violated the declared JSON schema. "
-                            "Correct the exact validation errors below; do not invent enum values:\n"
+                        retry_text = (
+                            "\nThe previous structured arguments were invalid. Return only "
+                            "valid arguments for the declared response model:\n"
                             + str(last_error)[:6000]
                         )
                     result = await run_structured_output(
-                        L3DimensionOutput,
+                        response_model,
                         [
                             {"role": "system", "content": prompt},
-                            {
-                                "role": "user",
-                                "content": (
-                                    (
-                                        "Return both the complete human-readable report_body "
-                                        "and the structured claims in the declared response model."
-                                        if require_report_body
-                                        else "Return the structured claims in the declared response model; "
-                                        "report_body may be empty for this bounded repair."
-                                    ) + feedback_text
-                                    if attempt == 0
-                                    else (
-                                        (
-                                            "Return valid function arguments containing both the complete "
-                                            "human-readable report_body and the structured claims. "
-                                            if require_report_body
-                                            else "Return valid function arguments for the structured claims. "
-                                        ) + "Use strict JSON: "
-                                        "double-quote every key and string, encode nested arrays as "
-                                        "arrays, and omit markdown, comments, and trailing commas."
-                                        + provider_error_feedback
-                                        + feedback_text
-                                    )
-                                ),
-                            },
+                            {"role": "user", "content": instruction + retry_text + feedback_text},
                         ],
                         max_retries=1,
                         timeout=float(LLM_STREAM_TIMEOUT),
                         temperature=0.1,
                         llm=self._get_llm(),
+                        content_fallback_mode=content_fallback_mode,
                         max_concurrent=self._max_concurrent,
                         semaphore_scope="l3",
                     )
                     if result is None:
-                        output = L3DimensionOutput(report_body="", claims=[])
-                    elif isinstance(result, L3DimensionOutput):
-                        output = result
-                    else:
-                        output = L3DimensionOutput.model_validate(result)
-                    return output
+                        return response_model()
+                    if isinstance(result, response_model):
+                        return result
+                    return response_model.model_validate(result)
                 except (ValidationError, TypeError, ValueError) as exc:
                     last_error = exc
                     if attempt >= retry_count:
@@ -122,6 +95,48 @@ class PlanningClaimGenerator:
             raise last_error
         finally:
             self._slots.release()
+
+    async def generate_claims(
+        self,
+        prompt: str,
+        *,
+        validation_feedback: list[str] | None = None,
+    ) -> Any:
+        """Generate only typed L3 claims; report synthesis is a later call."""
+
+        from app.domain.program.claim_draft import L3ClaimOutput
+
+        return await self._generate_projection(
+            L3ClaimOutput,
+            prompt,
+            instruction=(
+                "Return only the complete structured claims array. Do not return "
+                "report_body, Markdown, explanations, coordinates, BSM IDs or geometry."
+            ),
+            validation_feedback=validation_feedback,
+        )
+
+    async def generate_report(
+        self,
+        prompt: str,
+        *,
+        validation_feedback: list[str] | None = None,
+    ) -> Any:
+        """Synthesize only the human L3 report from already validated claims."""
+
+        from app.domain.program.claim_draft import L3ReportOutput
+
+        return await self._generate_projection(
+            L3ReportOutput,
+            prompt,
+            instruction=(
+                "Return only report_body as a human-readable planning report. "
+                "Do not create or change claims, targets, locations, geometry, quantities "
+                "or source facts; do not return a claims array."
+            ),
+            validation_feedback=validation_feedback,
+            content_fallback_mode="report_text",
+        )
 
 
 _GENERATOR: PlanningClaimGenerator | None = None

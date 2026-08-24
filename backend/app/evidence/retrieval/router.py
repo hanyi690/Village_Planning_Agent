@@ -41,6 +41,7 @@ def route_request(
         + list(request.questions)
         + list(request.required_facts)
         + list(request.evidence_gaps_to_resolve)
+        + [item.statement for item in request.requirements if item.required]
     ).lower()
     explicit = {
         ref.split(":", 1)[1].strip().lower()

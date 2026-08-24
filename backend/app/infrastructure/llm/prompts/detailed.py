@@ -56,28 +56,34 @@ GIS_TOOL_GUIDE = """
 """
 
 CLAIMS_OUTPUT_GUIDE = """
-【L3 输出契约】
-你需要同时输出两部分（一次结构化返回）：
-1. report_body：完整的规划报告正文（Markdown 散文 + 表格），用于组装村庄规划法定文本(.docx)；不得为空。
-2. claims：本维度所有带证据的规划判断（结构化 claims 数组）。
+planning_role must be one of evidence_statement, indicator, constraint, objective,
+non_spatial_action, project_package, or spatial_intervention. Keep every claim in
+the claims array, but only spatial_intervention with a stable project_package_ref,
+typed parameters, a locator, and evidence lineage may become an executable target.
+project_package_ref is a cross-dimension management identity; project_package is
+not itself a spatial target. Preserve-only observations use evidence_statement.
+【L3 claims pass 输出契约】
+本次是 claims-only 的结构化 pass，只返回本维度所有带证据的规划判断（claims 数组）。
+不要返回 report_body、Markdown 正文、坐标、BSM、候选几何或调试对象。report_body
+会在 claims 通过 schema、source lineage 和语义校验后，由独立的 report-synthesis pass
+根据已确认 claims 生成；该 pass 不得新增目标、位置、关系、数量或来源事实。
 
-【正文与 claims 的双通道交付协议】
-- 这是一个同时交付“人类可读正文”和“机器可编译 claims”的响应；两个字段都必须填写，不能只返回 claims。正文通常控制在 400—1200 个中文字符，证据不足时宁可精简。
-- report_body 必须是可以直接展示给规划人员的本维度正文，使用当前专业维度已经规定的【主题】小节、自然段和 Markdown 表格；至少说明已核验的现状依据、规划安排和实施重点。
-- report_body 不得是 JSON、Python 字典、claims 数组、schema_version 摘要、调试信息或“见 claims”；不得把机器字段名逐条罗列代替正文。
-- claims 只承担后续编译、GROUND、SELECT 和 EXECUTE 所需的结构化判断；不要把 report_body 填进 claims 字段，也不要在 report_body 中复制完整 claims JSON。
-- 正文与 claims 应引用同一批已给出的证据，但表达形式不同：正文面向人，claims 面向编译器。即使本维度没有空间干预，也必须提供正文，并将 claims 置为空数组而不是省略 report_body。
+【claims 与 report 的分离协议】
+- claims 只承担后续编译、GROUND、SELECT 和 EXECUTE 所需的结构化判断。
+- report-synthesis 面向规划人员生成 400—1200 字的正文；它只能解释已验证 claims，不能反向修改 claims。
+- 本维度没有空间干预时，claims 返回空数组；报告 pass 仍会根据已验证材料写出正文或明确证据缺口。
+- source_fact_refs、location_hints 和空间关系仍按下列证据规则填写，不能因报告 pass 而放宽。
 - source_fact_refs 只能从“已审计 L1 spatial facts”区块逐字复制 fact_id；无法由该区块支持的空间事实不得填写。source_fact_refs 不是地点名、BSM、坐标或自由文本。
 - 空间 claim 的 location_hints 是交给 EvidenceGraph/GROUND 的语义检索线索，不等于已经定位。若“已审计 L1 spatial facts”有直接支持，逐字填写对应 source_fact_refs；若只有 L1 report、专业 RAG 或外源文本支持，可以保留 location_hints，但必须让 GROUND 继续检索并验证，不能在 L3 直接生成 BSM、坐标、地块或几何。不得从行政区划名单或模型常识补齐地点。
-- 不得返回 Markdown 代码围栏包裹的对象，不得返回仅包含 claims 的对象，不得以空字符串、null 或“待补充”代替 report_body。
+- claims pass 不得返回 Markdown 代码围栏包裹的对象或 report_body 字段；报告 pass 不得返回 claims 数组。
 
-每条 claim 必须是带证据的规划判断，包含：claim_id、statement、suggested_category、suggested_output_kind、
+每条 claim 必须是带证据的规划判断，包含：claim_id、statement、planning_role、project_package_ref、suggested_category、suggested_output_kind、
 suggested_interventions、quantity/quantity_unit（若有）、implementation_phase、location_hints、
-constraint_refs、objective_refs、evidence_refs、source_fact_refs、uncertainty。source_fact_refs 只能引用上游
+constraint_refs、objective_refs、evidence_refs、source_fact_refs、spatial_requirements、uncertainty。source_fact_refs 只能引用上游
 L1Fact.fact_id 或已审计的 typed source fact，不得填写自由字符串；没有证据支持的位置、面积、地块或项目不得编造，
 应留空并说明 uncertainty。suggested_category 只能是 site_area/facility/road/axis/restoration/protection/zone/action；
 线性 claim 还必须选择 asset_kind 闭集：road/water_supply/sewer/stormwater/power/communication/drainage_channel/revetment；非线性 claim 使用 none/facility/land_use/axis。asset_kind 是语义类型，不得根据宽度、文本关键词或几何类型在后续推断；
-suggested_output_kind 只能是 parcel/polygon/point/line/action。facility 表示可定位的服务节点，服务中心、广场、停车场、观景点、污水处理设施等设施必须使用 facility + point；site_area 只表示有明确范围、需要占用或改造地块的面状干预，必须使用 site_area + parcel/polygon。没有任何空间落位含义的管理/政策/培训事项才使用 action。claim 不是执行目标，不得填写最终 BSM、几何或 ClassificationDecision。
+suggested_output_kind 只能是 parcel/polygon/point/line/action。facility 表示可定位的服务节点，服务中心、广场、停车场、观景点、污水处理设施等设施必须使用 facility + point；site_area 只表示有明确范围、需要占用或改造地块的面状干预，必须使用 site_area + parcel/polygon。没有任何空间落位含义的管理/政策/培训事项才使用 action。claim 不是执行目标，不得填写最终 BSM、几何或 ClassificationDecision。spatial_requirements 只能表达 GROUND 继续核验的语义输入：relations（relation_template/object_ref/object_ref_kind/criticality/geometry_scope/parameters/evidence_refs）、shared_resource_refs、parcel_membership_refs、competing_parcel_refs、network_refs、required_input_refs 和 grounding_requirements（place_binding/candidate_geometry/demand_points/parcel_membership/network_snapshot/topology）。relation parameters 可以包含 distance/capacity/network_ref 等规划量，但不得包含坐标、BSM、WKT、GeoJSON、geometry 或候选地块对象。
 
 每个空间 claim 必须在首次生成时给出与对象类型对应的结构化参数，禁止把关键尺度只写在 statement：
 - road asset_kind 使用 road_parameters：action 只能是 preserve/new/upgrade/widen/harden/repair；其余字段为 road_level、length、roadbed_width、pavement_width、alignment_refs、connects；每个量值写成 {"value": 数值, "unit": "m|km"}。长度、路基宽、路面宽必须分开；connects 只写原文明确的两端对象，沿既有道路改造则把道路名写入 alignment_refs。
@@ -101,7 +107,7 @@ suggested_output_kind 只能是 parcel/polygon/point/line/action。facility 表�
 - 空间 claim 必须填对应结构化参数（road_parameters/linear_parameters/facility_parameters/polygon_parameters/site_area_parameters），禁止把关键尺度只写在 statement。
 
 所有参数只表达规划语义和来源量值，不得填写坐标、BSM、候选地块、端点、网络拓扑或几何；单位换算由确定性编译器完成。LLM 只选择闭集 asset_kind 和 action；目标实体、拓扑关系、现状网络与候选走廊必须由已有 KG 和真实空间数据在 GROUND/SELECT 计算。
-report_body 写精炼的法定文本报告正文（用【主题】标记段落、Markdown 表格列清单）；claims 只写结构化判断，不要写解释文字。
+claims pass 只写结构化判断，不要写解释文字；report-synthesis pass 再写精炼的法定文本报告正文（用【主题】标记段落、Markdown 表格列清单）。
 """
 
 L3_EVIDENCE_PRIORITY_GUIDE = """
@@ -650,6 +656,12 @@ PROJECT_BANK_PROMPT = """你是乡村规划专家，精通项目策划与实施�
 
 **现状分析报告**：
 {analysis_report}
+
+**L1原始输入登记（唯一结构化来源）**：
+以下登记由 L1 从原始输入表逐行结构化并保留 source_ref。它只表示输入观察，
+不是已选地块、不是规划结论。项目库只能引用其中已有的名称、数量、位置和来源；
+不得重新读取或解析原始 village_data，也不得把没有登记或没有来源的数字写成事实。
+{l1_input_register}
 
 **规划思路**：
 {planning_concept}

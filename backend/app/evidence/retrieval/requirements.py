@@ -1,0 +1,755 @@
+"""Compile stable evidence requirements from the current request boundary."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+from collections.abc import Iterable
+from typing import Any
+
+from app.contracts.evidence.evidence_contracts import ExplorationRequest
+from app.contracts.evidence.requirement_contracts import EvidenceRequirement
+from app.domain.program.claim_adapter import admission_reasons_for_intervention
+from app.evidence.retrieval.router import route_request
+
+
+def _normalized_values(request: ExplorationRequest) -> list[str]:
+    values = [*request.required_facts, *request.questions, *request.evidence_gaps_to_resolve]
+    if not values:
+        values = [request.query]
+    result: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        normalized = " ".join(str(value or "").split())
+        key = normalized.casefold()
+        if normalized and key not in seen:
+            result.append(normalized)
+            seen.add(key)
+    return result
+
+
+def _requirement_kind(request: ExplorationRequest, statement: str) -> str:
+    text = f"{request.request_type} {statement}".casefold()
+    if request.request_type == "spatial_lookup" or request.entity_scope:
+        return "spatial"
+    if any(token in text for token in ("bsm", "编码", "身份", "feature", "entity")):
+        return "identity"
+    if any(token in text for token in ("覆盖", "容量", "距离", "成本", "cost", "metric")):
+        return "metric"
+    return "claim"
+
+
+def _requirement_id(request: ExplorationRequest, index: int, statement: str) -> str:
+    payload = {
+        "request": request.model_dump(mode="json"),
+        "index": index,
+        "statement": statement,
+    }
+    raw = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return f"evidence-req-{hashlib.sha256(raw.encode('utf-8')).hexdigest()[:20]}"
+
+
+def _request_revision(request: ExplorationRequest) -> str:
+    raw = json.dumps(
+        request.model_dump(mode="json", exclude={"requirements"}),
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+def compile_requirements(request: ExplorationRequest) -> tuple[EvidenceRequirement, ...]:
+    """Compile the current request into stable, source-routed requirements."""
+
+    if request.requirements:
+        return _canonical_requirements(request.requirements)
+
+    families = tuple(kind.value for kind in route_request(request, project_wide=request.project_wide))
+    scope = tuple(dict.fromkeys(str(item).strip() for item in request.entity_scope if str(item).strip()))
+    granularity = "feature" if scope or request.request_type == "spatial_lookup" else "document"
+    return tuple(
+        EvidenceRequirement(
+            requirement_id=_requirement_id(request, index, statement),
+            request_id=request.run_id,
+            requesting_artifact_ref=request.run_id,
+            requesting_artifact_revision=_request_revision(request),
+            producer_stage=request.stage or "EXPLORE",
+            statement=statement,
+            kind=_requirement_kind(request, statement),
+            source_families=families,
+            scope=scope,
+            spatial_granularity=granularity,
+            allowed_inference="exact" if granularity == "feature" else "text_only",
+            evidence_role=("spatial_fact" if granularity == "feature" else "planning_background"),
+            success_condition="source-backed claim with locator and bounded coverage",
+            metadata={
+                "request_type": request.request_type,
+                "stage": request.stage,
+                "dimension_key": request.dimension_key,
+            },
+        )
+        for index, statement in enumerate(_normalized_values(request))
+    )
+
+
+def _canonical_requirements(
+    requirements: Iterable[EvidenceRequirement],
+) -> tuple[EvidenceRequirement, ...]:
+    """Deduplicate producer-owned requirements without changing their IDs."""
+
+    by_id: dict[str, EvidenceRequirement] = {}
+    for requirement in requirements:
+        current = requirement
+        if current.requirement_id not in by_id:
+            by_id[current.requirement_id] = current
+    return tuple(by_id[key] for key in sorted(by_id))
+
+
+def _artifact_identity(artifact: Any, *, stage: str) -> tuple[str, str]:
+    artifact_ref = str(
+        getattr(artifact, "artifact_id", "")
+        or getattr(artifact, "artifact_ref", "")
+        or getattr(artifact, "program_ref", "")
+        or ""
+    ).strip()
+    revision = str(
+        getattr(artifact, "context_fingerprint", "")
+        or getattr(artifact, "context_version", "")
+        or getattr(artifact, "schema_version", "")
+        or ""
+    ).strip()
+    return artifact_ref or f"{stage.lower()}-unpersisted", revision
+
+
+def _artifact_requirement(
+    *,
+    stage: str,
+    artifact: Any,
+    index: int,
+    statement: str,
+    kind: str = "claim",
+    required: bool = True,
+    source_families: Iterable[str] = (),
+    scope: Iterable[str] = (),
+    spatial_granularity: str = "none",
+    allowed_inference: str = "exact",
+    evidence_role: str = "planning_background",
+    success_condition: str = "",
+    source_artifact_refs: Iterable[str] = (),
+    metadata: dict[str, Any] | None = None,
+) -> EvidenceRequirement:
+    artifact_ref, revision = _artifact_identity(artifact, stage=stage)
+    normalized_statement = " ".join(str(statement or "").split())
+    payload = {
+        "stage": stage,
+        "artifact_ref": artifact_ref,
+        "revision": revision,
+        "index": index,
+        "statement": normalized_statement,
+    }
+    raw = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    requirement_id = f"evidence-req-{hashlib.sha256(raw.encode('utf-8')).hexdigest()[:20]}"
+    return EvidenceRequirement(
+        requirement_id=requirement_id,
+        request_id=str(getattr(artifact, "artifact_id", "") or ""),
+        requesting_artifact_ref=artifact_ref,
+        requesting_artifact_revision=revision,
+        producer_stage=stage,
+        statement=normalized_statement,
+        kind=kind,
+        required=required,
+        source_families=tuple(dict.fromkeys(str(item).strip() for item in source_families if str(item).strip())),
+        scope=tuple(dict.fromkeys(str(item).strip() for item in scope if str(item).strip())),
+        spatial_granularity=spatial_granularity,
+        allowed_inference=allowed_inference,
+        evidence_role=evidence_role,
+        success_condition=success_condition,
+        source_artifact_refs=tuple(dict.fromkeys(str(item).strip() for item in source_artifact_refs if str(item).strip())),
+        metadata=metadata or {},
+    )
+
+
+def _kind_for_statement(statement: str, *, spatial: bool = False) -> str:
+    text = str(statement or "").casefold()
+    if spatial or any(token in text for token in ("地点", "位置", "地块", "空间", "geometry", "bsm")):
+        return "spatial"
+    if any(token in text for token in ("身份", "实体", "feature", "entity", "编码")):
+        return "identity"
+    if any(token in text for token in ("数量", "容量", "距离", "面积", "成本", "metric")):
+        return "metric"
+    return "claim"
+
+
+def _as_mapping(value: Any) -> dict[str, Any]:
+    if isinstance(value, dict):
+        return value
+    model_dump = getattr(value, "model_dump", None)
+    if callable(model_dump):
+        try:
+            dumped = model_dump(mode="json", exclude_none=True)
+        except TypeError:
+            dumped = model_dump()
+        return dumped if isinstance(dumped, dict) else {}
+    return {}
+
+
+def _nonempty_strings(values: Any) -> tuple[str, ...]:
+    if isinstance(values, str):
+        values = [values]
+    if not isinstance(values, (list, tuple, set)):
+        return ()
+    return tuple(dict.fromkeys(
+        str(value).strip() for value in values if str(value).strip()
+    ))
+
+
+def _value_from_parameters(parameters: Any, key: str) -> str:
+    mapping = _as_mapping(parameters)
+    return str(mapping.get(key) or getattr(parameters, key, "") or "").strip()
+
+
+def _append_structured_requirement(
+    output: list[EvidenceRequirement],
+    seen: set[tuple[str, str, tuple[str, ...]]],
+    *,
+    stage: str = "L3",
+    artifact: Any,
+    statement: str,
+    kind: str,
+    source_families: tuple[str, ...],
+    scope: tuple[str, ...] = (),
+    spatial_granularity: str = "feature",
+    evidence_role: str,
+    success_condition: str,
+    source_artifact_refs: tuple[str, ...] = (),
+    metadata: dict[str, Any] | None = None,
+) -> None:
+    normalized = " ".join(str(statement or "").split())
+    normalized_scope = tuple(dict.fromkeys(item for item in scope if item))
+    key = (evidence_role, normalized, normalized_scope)
+    if not normalized or key in seen:
+        return
+    seen.add(key)
+    output.append(
+        _artifact_requirement(
+            stage=stage,
+            artifact=artifact,
+            index=len(output),
+            statement=normalized,
+            kind=kind,
+            required=True,
+            source_families=source_families,
+            scope=normalized_scope,
+            spatial_granularity=spatial_granularity,
+            allowed_inference="exact",
+            evidence_role=evidence_role,
+            success_condition=success_condition,
+            source_artifact_refs=source_artifact_refs,
+            metadata=metadata,
+        )
+    )
+
+
+def _append_spatial_requirement_inputs(
+    output: list[EvidenceRequirement],
+    seen: set[tuple[str, str, tuple[str, ...]]],
+    *,
+    stage: str = "L3",
+    artifact: Any,
+    target_id: str,
+    requirements: Any,
+    relation_context: str = "",
+) -> None:
+    spatial = _as_mapping(requirements)
+    if not spatial:
+        return
+    target_scope = (target_id,) if target_id else ()
+    source_ref_values = _nonempty_strings(spatial.get("required_input_refs"))
+    for ref in source_ref_values:
+        _append_structured_requirement(
+            output,
+            seen,
+            stage=stage,
+            artifact=artifact,
+            statement=f"Resolve required planning input {ref} for {target_id or 'target'}",
+            kind="source",
+            source_families=("artifact", "bundle", "kg"),
+            scope=(*target_scope, ref),
+            spatial_granularity="feature",
+            evidence_role="l3_required_input",
+            success_condition="required input is source-bound and available in the current snapshot",
+            source_artifact_refs=(ref,),
+            metadata={"target_id": target_id, "input_ref": ref},
+        )
+
+    ref_fields = (
+        ("shared_resource_refs", "shared_resource", "Resolve shared parcel/resource"),
+        ("parcel_membership_refs", "parcel_membership", "Resolve parcel membership"),
+        ("competing_parcel_refs", "parcel_membership", "Resolve competing parcel"),
+        ("network_refs", "network_snapshot", "Resolve network snapshot"),
+    )
+    for field, role, prefix in ref_fields:
+        for ref in _nonempty_strings(spatial.get(field)):
+            _append_structured_requirement(
+                output,
+                seen,
+                stage=stage,
+                artifact=artifact,
+                statement=f"{prefix} {ref} for {target_id or 'target'}",
+                kind="spatial",
+                source_families=("bundle", "artifact", "kg"),
+                scope=(*target_scope, ref),
+                spatial_granularity="feature" if role != "network_snapshot" else "network",
+                evidence_role=f"l3_{role}",
+                success_condition=(
+                    "source-backed parcel resource and eligible geometry are bound"
+                    if role in {"shared_resource", "parcel_membership"}
+                    else "canonical network snapshot is available and fingerprinted"
+                ),
+                source_artifact_refs=(ref,),
+                metadata={"target_id": target_id, "ref": ref, "relation": relation_context},
+            )
+
+    for grounding in _nonempty_strings(spatial.get("grounding_requirements")):
+        role_map = {
+            "place_binding": ("spatial", "l3_place_binding", "Resolve authoritative place identity and geometry"),
+            "candidate_geometry": ("spatial", "l3_candidate_geometry", "Resolve candidate geometry"),
+            "demand_points": ("metric", "l3_demand_points", "Resolve explicit demand points and units"),
+            "parcel_membership": ("spatial", "l3_parcel_membership", "Resolve source parcel membership and capacity"),
+            "network_snapshot": ("spatial", "l3_network_snapshot", "Resolve network graph snapshot"),
+            "topology": ("spatial", "l3_topology", "Resolve declared topology and adjacency evidence"),
+        }
+        kind, role, prefix = role_map.get(
+            grounding,
+            ("claim", "l3_grounding_input", "Resolve typed grounding input"),
+        )
+        _append_structured_requirement(
+            output,
+            seen,
+            stage=stage,
+            artifact=artifact,
+            statement=f"{prefix} for {target_id or 'target'}",
+            kind=kind,
+            source_families=("bundle", "artifact", "kg", "report"),
+            scope=target_scope,
+            spatial_granularity="feature" if grounding != "network_snapshot" else "network",
+            evidence_role=role,
+            success_condition="typed grounding input is available or explicitly routed to HUMAN",
+            source_artifact_refs=source_ref_values,
+            metadata={"target_id": target_id, "grounding_requirement": grounding},
+        )
+
+    for relation in spatial.get("relations", []) or []:
+        relation_map = _as_mapping(relation)
+        template = str(relation_map.get("relation_template") or "").strip()
+        relation_id = str(relation_map.get("relation_id") or "").strip()
+        relation_label = relation_id or template or "relation"
+        params = relation_map.get("parameters")
+        network_ref = _value_from_parameters(params, "network_ref")
+        demand_ref = _value_from_parameters(params, "demand_ref")
+        relation_scope = tuple(dict.fromkeys(
+            item for item in (
+                *target_scope,
+                str(relation_map.get("subject_ref") or "").strip(),
+                str(relation_map.get("object_ref") or "").strip(),
+            ) if item
+        ))
+        if network_ref:
+            _append_structured_requirement(
+                output,
+                seen,
+                stage=stage,
+                artifact=artifact,
+                statement=f"Resolve network snapshot {network_ref} for relation {relation_label}",
+                kind="spatial",
+                source_families=("bundle", "artifact", "kg"),
+                scope=(*relation_scope, network_ref),
+                spatial_granularity="network",
+                evidence_role="l3_relation_network",
+                success_condition="network snapshot and required endpoint/route inputs are bound",
+                source_artifact_refs=(network_ref,),
+                metadata={"target_id": target_id, "relation_id": relation_id, "template": template},
+            )
+        if demand_ref:
+            _append_structured_requirement(
+                output,
+                seen,
+                stage=stage,
+                artifact=artifact,
+                statement=f"Resolve explicit demand snapshot {demand_ref} for relation {relation_label}",
+                kind="metric",
+                source_families=("bundle", "artifact"),
+                scope=(*relation_scope, demand_ref),
+                spatial_granularity="feature",
+                evidence_role="l3_relation_demand",
+                success_condition="demand points have identity, value, unit and source geometry",
+                source_artifact_refs=(demand_ref,),
+                metadata={"target_id": target_id, "relation_id": relation_id, "template": template},
+            )
+        if template in {"part_of", "co_locate", "mutually_exclusive"}:
+            _append_structured_requirement(
+                output,
+                seen,
+                stage=stage,
+                artifact=artifact,
+                statement=f"Resolve topology evidence for relation {relation_label}",
+                kind="spatial",
+                source_families=("kg", "bundle", "artifact"),
+                scope=relation_scope,
+                spatial_granularity="feature",
+                evidence_role="l3_relation_topology",
+                success_condition="declared topology relation has source evidence and evaluable members",
+                source_artifact_refs=_nonempty_strings(relation_map.get("evidence_refs")),
+                metadata={"target_id": target_id, "relation_id": relation_id, "template": template},
+            )
+        if (
+            template in {"connect_network", "provide_access", "serve", "near"}
+            and not network_ref
+            and template != "near"
+        ):
+            _append_structured_requirement(
+                output,
+                seen,
+                stage=stage,
+                artifact=artifact,
+                statement=f"Resolve missing network input for relation {relation_label}",
+                kind="spatial",
+                source_families=("artifact", "bundle", "kg"),
+                scope=relation_scope,
+                spatial_granularity="network",
+                evidence_role="l3_relation_network_missing",
+                success_condition="network reference and typed endpoint/service parameters are supplied or routed to HUMAN",
+                source_artifact_refs=_nonempty_strings(relation_map.get("evidence_refs")),
+                metadata={"target_id": target_id, "relation_id": relation_id, "template": template},
+            )
+
+
+def _gap_text(gap: Any) -> str:
+    return str(
+        getattr(gap, "required_fact", "")
+        or getattr(gap, "description", "")
+        or getattr(gap, "message", "")
+        or ""
+    ).strip()
+
+
+def requirements_from_l1(snapshot: Any) -> tuple[EvidenceRequirement, ...]:
+    """Produce requirements for unresolved L1 observations and evidence gaps."""
+
+    output: list[EvidenceRequirement] = []
+    for index, gap in enumerate(getattr(snapshot, "evidence_gaps", None) or []):
+        statement = _gap_text(gap)
+        if not statement:
+            continue
+        dimension = str(getattr(gap, "dimension", "") or "").strip()
+        output.append(
+            _artifact_requirement(
+                stage="L1",
+                artifact=snapshot,
+                index=index,
+                statement=statement,
+                kind=_kind_for_statement(statement, spatial=dimension.casefold() in {"spatial", "location", "gis"}),
+                source_families=("report", "artifact", "kg", "bundle"),
+                scope=(dimension,),
+                spatial_granularity="feature" if dimension.casefold() in {"spatial", "location", "gis"} else "document",
+                allowed_inference="exact",
+                evidence_role="l1_gap",
+                success_condition="source-backed claim with locator and snapshot context",
+                source_artifact_refs=(str(getattr(gap, "gap_id", "") or ""),),
+                metadata={"gap_id": str(getattr(gap, "gap_id", "") or "")},
+            )
+        )
+    for offset, location in enumerate(getattr(snapshot, "location_facts", None) or [], start=len(output)):
+        if getattr(location, "evidence_refs", None) or getattr(location, "source_report_ref", ""):
+            continue
+        mention = str(getattr(location, "normalized_name", "") or getattr(location, "mention", "") or "").strip()
+        if not mention:
+            continue
+        output.append(
+            _artifact_requirement(
+                stage="L1",
+                artifact=snapshot,
+                index=offset,
+                statement=f"Resolve authoritative identity and geometry for {mention}",
+                kind="spatial",
+                source_families=("bundle", "kg", "artifact"),
+                scope=(mention,),
+                spatial_granularity="feature",
+                evidence_role="l1_location_identity",
+                success_condition="canonical entity and geometry reference are bound",
+                metadata={"mention": mention, "role": str(getattr(location, "role", "") or "")},
+            )
+        )
+    return _canonical_requirements(output)
+
+
+def requirements_from_l2(strategy: Any) -> tuple[EvidenceRequirement, ...]:
+    """Produce requirements for L2 goals without source-backed justification."""
+
+    output: list[EvidenceRequirement] = []
+    gaps = list(getattr(strategy, "evidence_gaps", None) or [])
+    for index, gap in enumerate(gaps):
+        statement = _gap_text(gap)
+        if not statement:
+            continue
+        output.append(
+            _artifact_requirement(
+                stage="L2",
+                artifact=strategy,
+                index=index,
+                statement=statement,
+                kind=_kind_for_statement(statement),
+                source_families=("report", "artifact", "external"),
+                scope=(str(getattr(gap, "dimension", "") or ""),),
+                evidence_role="l2_gap",
+                success_condition="strategy premise has source-backed support or explicit downgrade",
+                source_artifact_refs=(str(getattr(gap, "gap_id", "") or ""),),
+                metadata={"gap_id": str(getattr(gap, "gap_id", "") or "")},
+            )
+        )
+    for offset, goal in enumerate(getattr(strategy, "development_goals", None) or [], start=len(output)):
+        statement = str(goal or "").strip()
+        if not statement:
+            continue
+        output.append(
+            _artifact_requirement(
+                stage="L2",
+                artifact=strategy,
+                index=offset,
+                statement=statement,
+                required=not bool(getattr(strategy, "evidence_refs", None)),
+                source_families=("report", "artifact", "external"),
+                evidence_role="l2_goal",
+                success_condition="goal rationale is traceable to L1 or external evidence",
+                source_artifact_refs=getattr(strategy, "evidence_refs", None) or (),
+            )
+        )
+    return _canonical_requirements(output)
+
+
+def requirements_from_l3(program: Any) -> tuple[EvidenceRequirement, ...]:
+    """Produce requirements for L3 claims and typed intervention premises."""
+
+    output: list[EvidenceRequirement] = []
+    admitted_claim_ids = {
+        str(claim_id)
+        for intervention in getattr(program, "interventions", None) or []
+        if not admission_reasons_for_intervention(
+            intervention,
+            list(getattr(program, "claims", None) or []),
+        )
+        for claim_id in getattr(intervention, "claim_refs", None) or []
+    }
+    for index, claim in enumerate(getattr(program, "claims", None) or []):
+        statement = str(getattr(claim, "statement", "") or "").strip()
+        if not statement:
+            continue
+        spatial = str(getattr(claim, "claim_id", "") or "") in admitted_claim_ids
+        output.append(
+            _artifact_requirement(
+                stage="L3",
+                artifact=program,
+                index=index,
+                statement=statement,
+                kind=_kind_for_statement(statement, spatial=spatial),
+                required=True,
+                source_families=("artifact", "report", "bundle", "kg") if spatial else ("artifact", "report"),
+                scope=getattr(claim, "location_hints", None) or (),
+                spatial_granularity="feature" if spatial else "document",
+                allowed_inference="exact" if spatial else "text_only",
+                evidence_role="l3_claim",
+                success_condition="claim references authoritative source facts before target projection",
+                source_artifact_refs=(
+                    *list(getattr(claim, "source_fact_refs", None) or []),
+                    *list(getattr(claim, "source_refs", None) or []),
+                ),
+                metadata={"claim_id": str(getattr(claim, "claim_id", "") or "")},
+            )
+        )
+    # The authoritative spatial inputs are copied onto admitted interventions
+    # by claim_adapter.  Compile them into source-routed requirements here so
+    # RETRIEVE can resolve network, demand, parcel and topology inputs before
+    # TARGET/GROUND.  Do not infer these requirements from claim prose.
+    for intervention in getattr(program, "interventions", None) or []:
+        target_id = str(
+            getattr(intervention, "target_id", "")
+            or getattr(intervention, "intervention_id", "")
+            or ""
+        ).strip()
+        _append_spatial_requirement_inputs(
+            output,
+            seen={(item.evidence_role, item.statement, tuple(item.scope)) for item in output},
+            artifact=program,
+            target_id=target_id,
+            requirements=getattr(intervention, "spatial_requirements", None),
+            relation_context="l3_intervention",
+        )
+    for offset, gap in enumerate(getattr(program, "evidence_gaps", None) or [], start=len(output)):
+        statement = _gap_text(gap)
+        if statement:
+            output.append(
+                _artifact_requirement(
+                    stage="L3",
+                    artifact=program,
+                    index=offset,
+                    statement=statement,
+                    kind=_kind_for_statement(statement),
+                    source_families=("artifact", "report", "bundle", "kg"),
+                    evidence_role="l3_gap",
+                    success_condition="gap is resolved or explicitly routed to HUMAN",
+                    source_artifact_refs=(str(getattr(gap, "gap_id", "") or ""),),
+                    metadata={"gap_id": str(getattr(gap, "gap_id", "") or "")},
+                )
+            )
+    return _canonical_requirements(output)
+
+
+def requirements_from_target_projection(result: Any) -> tuple[EvidenceRequirement, ...]:
+    """Produce spatial requirements for typed TARGET_PROJECTION specs."""
+
+    output: list[EvidenceRequirement] = []
+    for index, spec in enumerate(getattr(result, "spatial_reference_specs", None) or []):
+        target_id = str(getattr(spec, "target_id", "") or getattr(spec, "intervention_id", "") or "").strip()
+        scopes = tuple(getattr(spec, "retrieval_scopes", None) or ())
+        terms = tuple(getattr(spec, "semantic_terms", None) or ())
+        reference = getattr(spec, "reference", None)
+        filter_values = getattr(reference, "filter", None) or {} if reference is not None else {}
+        label = str(filter_values.get("label_contains", "") or "").strip()
+        statement = "Resolve spatial target"
+        if target_id:
+            statement += f" {target_id}"
+        if label:
+            statement += f" near {label}"
+        elif terms:
+            statement += " " + " ".join(str(item) for item in terms[:4])
+        output.append(
+            _artifact_requirement(
+                stage="TARGET_PROJECTION",
+                artifact=result,
+                index=index,
+                statement=statement,
+                kind="spatial",
+                source_families=("bundle", "kg", "artifact"),
+                scope=(*scopes, label),
+                spatial_granularity="feature",
+                evidence_role="target_spatial_binding",
+                success_condition="typed spatial reference resolves to snapshot-bound entity/feature candidates",
+                source_artifact_refs=(
+                    str(getattr(result, "program_ref", "") or ""),
+                    str(getattr(spec, "l1_fact_refs", None) or ""),
+                ),
+                metadata={"target_id": target_id, "spec_id": str(getattr(spec, "spec_id", "") or "")},
+            )
+        )
+    for claim in getattr(result, "claims", None) or []:
+        claim_id = str(getattr(claim, "claim_id", "") or "").strip()
+        spatial_requirements = getattr(claim, "spatial_requirements", None)
+        if spatial_requirements is None:
+            continue
+        _append_spatial_requirement_inputs(
+            output,
+            seen={(item.evidence_role, item.statement, tuple(item.scope)) for item in output},
+            stage="TARGET_PROJECTION",
+            artifact=result,
+            target_id=claim_id,
+            requirements=spatial_requirements,
+            relation_context="target_claim",
+        )
+    graph = getattr(result, "intent_graph", None)
+    if graph is not None:
+        graph_shared_refs = _nonempty_strings(getattr(graph, "shared_resource_refs", None))
+        if graph_shared_refs:
+            _append_spatial_requirement_inputs(
+                output,
+                seen={(item.evidence_role, item.statement, tuple(item.scope)) for item in output},
+                stage="TARGET_PROJECTION",
+                artifact=result,
+                target_id="",
+                requirements={"shared_resource_refs": list(graph_shared_refs)},
+                relation_context="target_intent_graph",
+            )
+        for relation in getattr(graph, "relations", None) or []:
+            subject = str(getattr(relation, "subject_ref", "") or "").strip()
+            relation_payload = {
+                "relations": [
+                    relation.model_dump(mode="json")
+                    if hasattr(relation, "model_dump")
+                    else relation
+                ]
+            }
+            _append_spatial_requirement_inputs(
+                output,
+                seen={(item.evidence_role, item.statement, tuple(item.scope)) for item in output},
+                stage="TARGET_PROJECTION",
+                artifact=result,
+                target_id=subject,
+                requirements=relation_payload,
+                relation_context="target_intent_graph",
+            )
+    return _canonical_requirements(output)
+
+
+def requirements_from_ground(problem: Any) -> tuple[EvidenceRequirement, ...]:
+    """Produce requirements for unresolved GROUND candidate/geometry inputs."""
+
+    output: list[EvidenceRequirement] = []
+    for index, domain in enumerate(getattr(problem, "target_domains", None) or []):
+        target_id = str(getattr(domain, "target_id", "") or "").strip()
+        status = str(getattr(domain, "status", "") or "unresolved")
+        if status == "resolved" and getattr(domain, "candidate_site_refs", None) and getattr(domain, "geometry_roles", None):
+            continue
+        statement = f"Complete candidate identity and geometry for {target_id or 'target'}"
+        output.append(
+            _artifact_requirement(
+                stage="GROUND",
+                artifact=problem,
+                index=index,
+                statement=statement,
+                kind="spatial",
+                source_families=("bundle", "kg", "artifact"),
+                scope=(target_id,),
+                spatial_granularity="feature",
+                evidence_role="ground_candidate_completeness",
+                success_condition="candidate domain is resolved with geometry refs and uncertainty",
+                source_artifact_refs=getattr(domain, "evidence_refs", None) or (),
+                metadata={"target_id": target_id, "status": status},
+            )
+        )
+    for offset, finding in enumerate(getattr(problem, "unresolved", None) or [], start=len(output)):
+        statement = str(getattr(finding, "message", "") or getattr(finding, "code", "") or "").strip()
+        if not statement:
+            continue
+        output.append(
+            _artifact_requirement(
+                stage="GROUND",
+                artifact=problem,
+                index=offset,
+                statement=statement,
+                kind="spatial",
+                source_families=("bundle", "kg", "artifact"),
+                scope=(str(getattr(finding, "target_id", "") or ""),),
+                spatial_granularity="feature",
+                evidence_role="ground_unresolved",
+                success_condition="finding resolved or routed to HUMAN without fabrication",
+                metadata={"code": str(getattr(finding, "code", "") or "")},
+            )
+        )
+    return _canonical_requirements(output)
+
+
+def requirement_set_fingerprint(requirements: tuple[EvidenceRequirement, ...]) -> str:
+    payload = [item.model_dump(mode="json") for item in requirements]
+    raw = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+__all__ = [
+    "compile_requirements",
+    "requirement_set_fingerprint",
+    "requirements_from_l1",
+    "requirements_from_l2",
+    "requirements_from_l3",
+    "requirements_from_target_projection",
+    "requirements_from_ground",
+]

@@ -162,8 +162,12 @@ async def resolve_human_review(
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     except Exception as exc:  # noqa: BLE001
-        logger.exception("[human-review] resolve failed for %s: %s", session_id, exc)
-        raise HTTPException(status_code=500, detail=f"Resume failed: {exc}") from exc
+        logger.error(
+            "[human-review] resolve failed for %s (exception_type=%s)",
+            session_id,
+            type(exc).__name__,
+        )
+        raise HTTPException(status_code=500, detail="Resume failed") from exc
     return {"session_id": session_id, "resolved": True, "result": result}
 
 

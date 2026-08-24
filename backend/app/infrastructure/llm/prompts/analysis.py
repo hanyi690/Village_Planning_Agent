@@ -29,13 +29,16 @@ ANALYSIS_RULES = """
 
 # ==========================================
 # observations 段（P8：文末结构化观察契约 — L1 现状层）
-# L1 双响应输出：report_body（现状分析正文）+ observations（结构化现状对象数组，机器消费）。
+# L1 观测 pass 只输出 observations（以及可核验的登记/coverage）；report_body
+# 在 deterministic source validation 之后由独立的 report-synthesis pass 生成。
 # observations 是下游空间定位/地名解析的唯一结构化来源；保存时写入 instruction 列，不参与展示。
 # ==========================================
 
 OBSERVATIONS_OUTPUT_GUIDE = """
 【现状对象 observations 契约】
-你的输出包含两部分：report_body（现状分析正文）和 observations（结构化现状对象数组，机器消费）。
+本次是 L1 observe pass：只返回 observations（以及 schema 声明的登记/coverage），
+不要返回 report_body。正文会在 source segment、引用和状态通过校验后由独立的
+report-synthesis pass 生成，因此不能在本 pass 中用正文替代结构化观察。
 observations 每个对象包含：
 - entity_type：只能是 现状设施 / 现状项目 / 现状分区 / 自然村 / 道路 / 水系 / 地物
 - name：与正文完全一致的名称

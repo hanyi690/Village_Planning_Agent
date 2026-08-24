@@ -26,6 +26,118 @@ from app.infrastructure.logging import get_logger
 
 logger = get_logger(__name__)
 
+
+def _build_context_networks(workspace: SpatialWorkspace) -> dict[str, Any]:
+    """Build the canonical current-road snapshot for relation evaluation.
+
+    The snapshot is deliberately keyed by one stable semantic ref.  Typed
+    Connect/Access/Service parameters must name this ref explicitly; no
+    arbitrary network is inferred from a prose road count or a nearest line.
+    """
+
+    roads = list((getattr(workspace, "lines", {}) or {}).get("roads_current") or [])
+    if not roads:
+        return {}
+    try:
+        from app.spatial.network.network_graph import build_network_graph
+
+        source_crs = "EPSG:4326"
+        first = roads[0]
+        candidate_crs = getattr(first, "crs", None)
+        if candidate_crs is None and isinstance(first, dict):
+            candidate_crs = first.get("crs") or (first.get("properties") or {}).get("crs")
+        if candidate_crs:
+            source_crs = str(candidate_crs)
+        snapshot = build_network_graph(
+            roads,
+            impedance="travel_time_min",
+            network_ref="network:road:current",
+            source_crs=source_crs,
+            metric_crs="EPSG:3857",
+            snap_tolerance_m=5.0,
+        )
+        return {snapshot.network_ref: snapshot}
+    except Exception as exc:
+        logger.warning(
+            "[PlanningContext] current-road network snapshot unavailable: %s",
+            type(exc).__name__,
+        )
+        return {}
+
+
+def _build_context_demands(workspace: SpatialWorkspace) -> dict[str, Any]:
+    """Build demand snapshots only from an explicit typed demand layer.
+
+    Existing annotations, population tables and facility counts are not
+    demand points.  They remain available to evidence/grounding until a
+    producer supplies a layer with an explicit demand value and unit.
+    """
+
+    points_by_layer = getattr(workspace, "points", {}) or {}
+    for layer_key in ("demand_points", "population_demand"):
+        raw_points = list(points_by_layer.get(layer_key) or [])
+        if not raw_points:
+            continue
+        try:
+            from app.domain.demand.facility_demand_model import (
+                FacilityDemandPoint,
+                build_demand_snapshot,
+            )
+
+            points: list[FacilityDemandPoint] = []
+            for feature in raw_points:
+                properties = (
+                    feature.get("properties", {})
+                    if isinstance(feature, dict)
+                    else getattr(feature, "properties", {}) or {}
+                )
+                demand_id = str(
+                    properties.get("demand_id")
+                    or getattr(feature, "demand_id", "")
+                    or ""
+                ).strip()
+                demand_value = properties.get("demand_value")
+                demand_unit = str(properties.get("demand_unit") or "").strip()
+                if (
+                    not demand_id
+                    or not isinstance(demand_value, (int, float))
+                    or isinstance(demand_value, bool)
+                    or demand_value < 0
+                    or not demand_unit
+                ):
+                    continue
+                facility_types = properties.get("facility_types") or ()
+                if isinstance(facility_types, str):
+                    facility_types = (facility_types,)
+                points.append(
+                    FacilityDemandPoint.from_feature(
+                        feature,
+                        demand_id=demand_id,
+                        demand_value=float(demand_value),
+                        demand_unit=demand_unit,
+                        facility_types=facility_types,
+                    )
+                )
+            if not points:
+                continue
+            demand_ref = f"demand:{layer_key}"
+            snapshot_digest = str(getattr(getattr(workspace, "snapshot", None), "digest", "") or "")
+            snapshot = build_demand_snapshot(
+                demand_ref,
+                points,
+                source_refs=tuple(
+                    ref for ref in (f"data_snapshot:{snapshot_digest}" if snapshot_digest else "", layer_key)
+                    if ref
+                ),
+            )
+            return {demand_ref: snapshot}
+        except Exception as exc:
+            logger.warning(
+                "[PlanningContext] typed demand snapshot unavailable: %s",
+                type(exc).__name__,
+            )
+            continue
+    return {}
 # In-process cache: session_id -> PlanningContext
 _context_cache: Dict[str, PlanningContext] = {}
 # Monotonic build counter for version bumps
@@ -69,7 +181,10 @@ def _load_session_semantic_memory(session_id: str) -> Any:
             return SemanticMemoryStore()
         return load_memory_state(session_id, round_num)
     except Exception as exc:
-        logger.warning("[PlanningContext] semantic memory restore failed: %s", exc)
+        logger.warning(
+            "[PlanningContext] semantic memory restore failed: %s",
+            type(exc).__name__,
+        )
         try:
             from app.infrastructure.kg.memory import SemanticMemoryStore
 
@@ -105,7 +220,10 @@ async def _next_persisted_version(session_id: str) -> int:
                 row = await cur.fetchone()
                 return int(row[0]) if row else 1
     except Exception as e:
-        logger.warning("[PlanningContext] persisted version failed, using in-process fallback: %s", e)
+        logger.warning(
+            "[PlanningContext] persisted version failed, using in-process fallback: %s",
+            type(e).__name__,
+        )
         return _next_version(session_id)
 
 
@@ -184,8 +302,8 @@ async def build_planning_context(
         if bundle is None:
             bundle = await build_session_bundle(session_id, village_name or None)
     except Exception as e:
-        bundle_error = str(e)
-        logger.warning("[PlanningContext] bundle build failed: %s", e)
+        bundle_error = type(e).__name__
+        logger.warning("[PlanningContext] bundle build failed: %s", type(e).__name__)
 
     resolved_village = str(getattr(bundle, "village_name", "") or "") or village_name
 
@@ -210,8 +328,11 @@ async def build_planning_context(
                 except Exception:
                     pass
         except Exception as e:
-            kg_error = str(e)
-            logger.warning("[PlanningContext] session KG access failed: %s", e)
+            kg_error = type(e).__name__
+            logger.warning(
+                "[PlanningContext] session KG access failed: %s",
+                type(e).__name__,
+            )
 
     # 3. Gazetteer
     gazetteer = None
@@ -232,7 +353,10 @@ async def build_planning_context(
                     village_name=resolved_village,
                 )
         except Exception as e:
-            logger.warning("[PlanningContext] gazetteer build failed: %s", e)
+            logger.warning(
+                "[PlanningContext] gazetteer build failed: %s",
+                type(e).__name__,
+            )
 
     # 3.5 Injected ports (kg adapters: gazetteer + spatial_query)
     gazetteer_port = None
@@ -244,21 +368,30 @@ async def build_planning_context(
 
             gazetteer_port = KGGazetteerAdapter(gazetteer)
     except Exception as e:
-        logger.warning("[PlanningContext] gazetteer adapter build failed: %s", e)
+        logger.warning(
+            "[PlanningContext] gazetteer adapter build failed: %s",
+            type(e).__name__,
+        )
     try:
         if kg is not None:
             from app.infrastructure.kg.adapters.spatial_query_adapter import KGSpatialQueryAdapter
 
             spatial_query_port = KGSpatialQueryAdapter(kg)
     except Exception as e:
-        logger.warning("[PlanningContext] spatial_query adapter build failed: %s", e)
+        logger.warning(
+            "[PlanningContext] spatial_query adapter build failed: %s",
+            type(e).__name__,
+        )
     try:
         if kg is not None:
             from app.infrastructure.kg.adapters.semantic_query_adapter import KGSemanticQueryAdapter
 
             semantic_query_port = KGSemanticQueryAdapter(kg)
     except Exception as e:
-        logger.warning("[PlanningContext] semantic_query adapter build failed: %s", e)
+        logger.warning(
+            "[PlanningContext] semantic_query adapter build failed: %s",
+            type(e).__name__,
+        )
     ports = PlanningPorts(
         gazetteer=gazetteer_port,
         spatial_query=spatial_query_port,
@@ -269,7 +402,10 @@ async def build_planning_context(
 
         ports.bundle_assembly = DataBundleAssemblyAdapter()
     except Exception as e:
-        logger.warning("[PlanningContext] bundle_assembly adapter build failed: %s", e)
+        logger.warning(
+            "[PlanningContext] bundle_assembly adapter build failed: %s",
+            type(e).__name__,
+        )
 
     # 4. Constraint index
     constraint_index = None
@@ -279,7 +415,10 @@ async def build_planning_context(
 
             constraint_index = build_constraint_index(bundle)
         except Exception as e:
-            logger.warning("[PlanningContext] constraint index build failed: %s", e)
+            logger.warning(
+                "[PlanningContext] constraint index build failed: %s",
+                type(e).__name__,
+            )
 
     # 5. Village anchors (only when KG is live)
     village_anchors: list = []
@@ -289,7 +428,10 @@ async def build_planning_context(
 
             village_anchors = query_kg(kg, "get_village_anchors") or []
         except Exception as e:
-            logger.warning("[PlanningContext] village anchors query failed: %s", e)
+            logger.warning(
+                "[PlanningContext] village anchors query failed: %s",
+                type(e).__name__,
+            )
 
     # 6. Report manifest + summary index (bundle-owned, no report bodies)
     reports: Dict[str, Dict[str, Any]] = {}
@@ -351,7 +493,10 @@ async def build_planning_context(
                 ) in allowed_refs
             ]
         except Exception as exc:
-            logger.warning("[PlanningContext] input document resolution failed: %s", exc)
+            logger.warning(
+                "[PlanningContext] input document resolution failed: %s",
+                type(exc).__name__,
+            )
 
     data_snapshot = SessionDataSnapshot.from_bundle(
         bundle,
@@ -364,19 +509,26 @@ async def build_planning_context(
             f"expected={expected_snapshot_digest} actual={data_snapshot.digest}"
         )
     workspace = SpatialWorkspace(data_snapshot, bundle)
+    networks = _build_context_networks(workspace)
+    demands = _build_context_demands(workspace)
     external_search_port = None
     try:
         from app.application.queries.evidence import get_active_external_provider
 
         external_search_port = get_active_external_provider()
     except Exception as exc:
-        logger.debug("[PlanningContext] external provider unavailable: %s", exc)
+        logger.debug(
+            "[PlanningContext] external provider unavailable: %s",
+            type(exc).__name__,
+        )
     context = PlanningContext(
         session_id=session_id,
         village_name=resolved_village,
         version=version,
         workspace=workspace,
         data_snapshot=data_snapshot,
+        networks=networks,
+        demands=demands,
         kg=kg,
         kg_session_ref=kg_session_ref,
         kg_version=kg_version,
@@ -398,6 +550,16 @@ async def build_planning_context(
         "version": version,
         "parcel_count": parcel_count,
         "data_snapshot_digest": data_snapshot.digest,
+        "network_refs": sorted(networks),
+        "network_fingerprints": {
+            str(key): str(getattr(value, "fingerprint", "") or "")
+            for key, value in networks.items()
+        },
+        "demand_refs": sorted(demands),
+        "demand_fingerprints": {
+            str(key): str(getattr(value, "fingerprint", "") or "")
+            for key, value in demands.items()
+        },
         "kg_session_ref": kg_session_ref,
         "kg_version": kg_version,
         "has_constraint_index": constraint_index is not None,
@@ -419,7 +581,10 @@ async def build_planning_context(
 
         context.evidence_graph = EvidenceGraph.build(context)
     except Exception as e:
-        logger.warning("[PlanningContext] evidence graph build failed: %s", e)
+        logger.warning(
+            "[PlanningContext] evidence graph build failed: %s",
+            type(e).__name__,
+        )
     _context_cache[session_id] = context
     logger.info(
         "[PlanningContext] built v%d for %s (%s): snapshot=%s kg=%s gaz=%s cidx=%s reports=%d anchors=%d",

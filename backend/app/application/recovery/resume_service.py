@@ -25,6 +25,25 @@ from app.infrastructure.checkpoint.checkpoint_policy import (
 
 FORK_BRANCH_MARKER = "fork branch="
 
+_SPATIAL_REPLAY_STAGES = {
+    "target_projection": "TARGET_PROJECTION",
+    "ground": "GROUND",
+    "select": "SELECT",
+    "execute": "EXECUTE",
+    "validate": "VALIDATE",
+    "reconcile": "RECONCILE",
+    "deliver": "DELIVER",
+}
+_SPATIAL_REPLAY_PREREQUISITES = {
+    "target_projection": (),
+    "ground": ("target_projection",),
+    "select": ("target_projection", "grounding_result"),
+    "execute": ("target_projection", "grounding_result", "scenario_set", "approved_execution_input"),
+    "validate": ("execution_result",),
+    "reconcile": ("validation_certificate",),
+    "deliver": ("validation_certificate", "reconciliation_report"),
+}
+_SPATIAL_REPLAY_ORDER = tuple(_SPATIAL_REPLAY_STAGES.values())
 
 def mark_plan_fork(plan: ResumePlan, branch_id: str | None = None) -> ResumePlan:
     """Return a copy of the plan annotated with the required fork branch.
@@ -139,6 +158,66 @@ class ResumeService:
         checked = plan.model_copy(update={"artifact_integrity": integrity})
         invalid = [key for key, status in integrity.items() if status != "valid"]
         return repair_plan_for_integrity(checked, invalid)
+
+    @staticmethod
+    def explicit_spatial_replay_plan(
+        state: Dict[str, Any],
+        plan: ResumePlan,
+        replay_from_stage: str,
+    ) -> ResumePlan:
+        """Turn a stale diagnostic terminal into an explicit spatial rerun.
+
+        A terminal checkpoint has no executable LangGraph cursor and is not a
+        normal ``completed`` checkpoint.  The caller must name a spatial
+        entry explicitly; this method additionally checks that the persisted
+        artifact prefix can support that entry before the runtime opens the
+        spatial segment.
+        """
+        stage_key = str(replay_from_stage or "").strip().lower()
+        stage = _SPATIAL_REPLAY_STAGES.get(stage_key)
+        if not stage:
+            raise ResumeConflictError(
+                f"unsupported spatial replay stage: {replay_from_stage!r}"
+            )
+        diagnostic = state.get("diagnostic_terminal") or {}
+        if not diagnostic:
+            terminal_ref = state.get("terminal_ref") or {}
+            if isinstance(terminal_ref, dict):
+                diagnostic = terminal_ref.get("diagnostic") or terminal_ref
+        if not isinstance(diagnostic, dict) or diagnostic.get("code") not in {
+            "STALE_CHECKPOINT_NO_EXECUTABLE_CURSOR",
+            "UNAUTHORIZED_STAGE",
+        }:
+            raise ResumeConflictError(
+                "explicit spatial replay is only allowed for a replayable cursor diagnostic"
+            )
+        refs = dict(state.get("artifact_refs") or {})
+        missing = [
+            key
+            for key in _SPATIAL_REPLAY_PREREQUISITES[stage_key]
+            if key not in refs
+        ]
+        if missing:
+            raise ResumeConflictError(
+                f"spatial replay from {stage} requires artifacts: {', '.join(missing)}"
+            )
+        try:
+            start = _SPATIAL_REPLAY_ORDER.index(stage)
+        except ValueError as exc:  # pragma: no cover - guarded by the map above
+            raise ResumeConflictError(f"unsupported spatial replay stage: {stage}") from exc
+        rerun = list(_SPATIAL_REPLAY_ORDER[start:])
+        return plan.model_copy(
+            update={
+                "mode": ResumeMode.RERUN,
+                "resume_from": stage,
+                "checkpoint_kind": "revision",
+                "rerun": rerun,
+                "reason": (
+                    f"stale cursor explicitly replayed from {stage}; "
+                    "no historical task cursor was inferred"
+                ),
+            }
+        )
 
     @staticmethod
     def select_replay_snapshot(snapshots: list[Any], plan: ResumePlan) -> Any | None:

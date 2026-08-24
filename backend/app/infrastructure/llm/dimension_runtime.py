@@ -625,7 +625,111 @@ async def run_rag(dimension_key: str, cfg: Any, state: Dict[str, Any]) -> tuple[
         result.evidence_bundle,
         result.spatial_cognition,
         result.evidence_packet,
+        result.coverage,
     ), rag_log
+
+
+async def run_targeted_evidence(
+    dimension_key: str,
+    cfg: Any,
+    state: Dict[str, Any],
+    *,
+    query: str,
+    required_facts: list[str] | None = None,
+) -> tuple[str, list[dict[str, Any]]]:
+    """Run a bounded follow-up through the unified evidence router.
+
+    L1 repair passes reuse the same REPORT/KG/BUNDLE/LOCAL_TEXT/RAG adapters as
+    the normal dimension retrieval.  The result is context only; source-row
+    canonical values and spatial authority remain owned by L1/GROUND.
+    """
+
+    from app.contracts.evidence.evidence_contracts import ExplorationRequest
+    from app.evidence.retrieval.evidence_service import (
+        render_evidence_prompt_section,
+        retrieve_evidence,
+    )
+
+    session_id = str(state.get("session_id", "") or "")
+    config = state.get("config") or {}
+    request = ExplorationRequest(
+        run_id=f"{session_id}:{dimension_key}:l1-followup",
+        request_type="fact_check",
+        query=str(query or "").strip(),
+        context_refs=[
+            "source:local_text",
+            "source:report",
+            "source:kg",
+            "source:bundle",
+            "source:rag",
+        ],
+        stage=f"L{getattr(cfg, 'layer', 1)}",
+        dimension_key=dimension_key,
+        query_purpose="fact_check",
+        required_facts=list(required_facts or []),
+        entity_scope=[
+            "parcels", "facilities", "roads", "annotations", "hazards",
+            "waters", "zones", "settlements",
+        ],
+    )
+    try:
+        result = await retrieve_evidence(
+            request,
+            session_id=session_id,
+            village_name=str(config.get("village_name", "") or ""),
+        )
+        trace: list[dict[str, Any]] = []
+        if result.evidence_packet is not None:
+            trace = [
+                item for item in result.evidence_packet.query_trace
+                if isinstance(item, dict)
+            ][-12:]
+        # Query traces explain how the router ran; they do not by themselves
+        # preserve the exact evidence locator that the repair pass saw.  Keep
+        # a bounded, typed projection beside the trace so the L1 artifact can
+        # replay the evidence/fact → source/span relationship without
+        # treating retrieved prose as canonical input data.
+        trace.append({
+            "step": "l1_followup_evidence",
+            "status": "returned" if result.evidence_bundle.facts else "empty",
+            "fact_count": len(result.evidence_bundle.facts),
+            "source_count": len(result.evidence_bundle.sources),
+            "facts": [
+                {
+                    "statement": fact.statement[:600],
+                    "source_refs": list(fact.source_refs or [])[:8],
+                    "spatial_refs": list(fact.spatial_refs or [])[:8],
+                    "evidence_span": fact.evidence_span[:1200],
+                    "source_locator": fact.source_locator,
+                    "feature_bsm": fact.feature_bsm,
+                    "related_parcel_bsms": list(fact.related_parcel_bsms or [])[:8],
+                }
+                for fact in result.evidence_bundle.facts[:24]
+            ],
+            "sources": [
+                {
+                    "source_type": source.source_type,
+                    "reference": source.reference,
+                    "snapshot_ref": source.snapshot_ref,
+                    "authority": source.authority,
+                    "evidence_role": source.evidence_role,
+                }
+                for source in result.evidence_bundle.sources[:24]
+            ],
+            "unresolved": list(result.evidence_bundle.unresolved or [])[:16],
+        })
+        return render_evidence_prompt_section(
+            result.evidence_bundle,
+            result.spatial_cognition,
+            result.evidence_packet,
+            result.coverage,
+        ), trace
+    except Exception as exc:  # noqa: BLE001 - repair remains bounded
+        return "", [{
+            "step": "l1_followup_retrieval",
+            "status": "failed",
+            "error_code": type(exc).__name__,
+        }]
 
 
 async def load_dependency_reports(
@@ -957,6 +1061,7 @@ __all__ = [
     "is_provider_quota_exhausted",
     "retrieve_vector_context",
     "run_rag",
+    "run_targeted_evidence",
     "load_dependency_reports",
     "load_layered_dependency_reports",
     "strip_model_reasoning",

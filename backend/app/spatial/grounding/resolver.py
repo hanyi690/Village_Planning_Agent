@@ -555,6 +555,8 @@ class SpatialResolver:
             if str(fact_ref).strip()
         )
         reference = getattr(spec, "reference", None)
+        if getattr(reference, "kind", "") == "bsm":
+            return self._resolve_direct_bsm_reference(spec, reference)
         if getattr(reference, "kind", "") == "village":
             raw_label = (
                 str(getattr(reference, "name", "") or "")
@@ -1041,6 +1043,98 @@ class SpatialResolver:
                 evidence_lineage["bundle_snapshot_digest"] or ""
             ),
             provenance=provenance,
+        )
+
+    def _resolve_direct_bsm_reference(
+        self,
+        spec: Any,
+        reference: Any,
+    ) -> "ResolvedSpatialRef":
+        """Resolve an explicit parcel BSM without semantic-name lookup.
+
+        BSM is an identity hint, not geometry. Geometry records are collected
+        independently from the session bundle. A duplicated BSM is returned
+        as separate exact-feature alternatives and marked ambiguous; callers
+        must not silently union records from different source geometries.
+        """
+        from app.contracts.spatial.spatial_reference_contracts import (
+            GeometryRef,
+            ResolvedSpatialRef,
+        )
+
+        filters = getattr(reference, "filter", None) or {}
+        bsm = str(filters.get("bsm") or filters.get("label_contains") or "").strip()
+        if not bsm:
+            return ResolvedSpatialRef(
+                final_bsms=[],
+                confidence=0.0,
+                uncertainty_reason="bsm_reference_missing",
+                provenance={"path": "unresolved:bsm_reference_missing"},
+            )
+        refs: list[GeometryRef] = []
+        try:
+            parcels = list(self.context.current_parcels() or [])
+        except Exception:
+            parcels = []
+        from shapely.geometry import shape
+        import hashlib
+
+        for parcel in parcels:
+            parcel_bsm = str(
+                getattr(parcel, "bsm", "")
+                or (parcel.get("bsm", "") if isinstance(parcel, dict) else "")
+            ).strip()
+            if parcel_bsm != bsm:
+                continue
+            raw_geometry = (
+                parcel.get("geometry")
+                if isinstance(parcel, dict)
+                else getattr(parcel, "geometry", None)
+            )
+            try:
+                geometry = shape(raw_geometry) if isinstance(raw_geometry, dict) else raw_geometry
+                if geometry is None or geometry.is_empty or not geometry.is_valid:
+                    continue
+                wkt = geometry.wkt
+            except Exception:
+                continue
+            digest = hashlib.sha256(wkt.encode("utf-8")).hexdigest()[:16]
+            source_ref = f"bundle:parcel:{bsm}:geometry:{digest}"
+            refs.append(
+                GeometryRef(
+                    wkt=wkt,
+                    crs="EPSG:4326",
+                    source_feature_id=source_ref,
+                    source_ref=source_ref,
+                    source_refs=[source_ref],
+                    feature_bsms=[bsm],
+                    source_bsms=[bsm],
+                    feature_kind="parcel_polygon",
+                )
+            )
+        if not refs:
+            return ResolvedSpatialRef(
+                final_bsms=[],
+                confidence=0.0,
+                uncertainty_reason="bsm_not_found_in_bundle",
+                provenance={"path": "unresolved:bsm_not_found", "bsm": bsm},
+            )
+        duplicate = len(refs) > 1
+        return ResolvedSpatialRef(
+            final_bsms=[bsm],
+            reference_geometry_wkt=refs[0].wkt if len(refs) == 1 else None,
+            reference_geometries=refs,
+            spatial_domain_kind="exact_feature",
+            confidence=0.9 if not duplicate else 0.0,
+            uncertainty_reason="duplicate_bsm_geometry_identity" if duplicate else "",
+            feature_bsms=[bsm],
+            source_feature_ids=[ref.source_feature_id for ref in refs],
+            provenance={
+                "path": "bundle:explicit_bsm",
+                "bsm": bsm,
+                "geometry_count": len(refs),
+                "identity_status": "ambiguous" if duplicate else "unique",
+            },
         )
 
     def _selected_candidate_set_from_evidence_packet(

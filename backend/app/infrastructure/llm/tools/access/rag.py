@@ -1,7 +1,7 @@
 """rag_search / index_bundle_texts — 会话文本清单检索。
 
 文本源收口：bundle 快照的 ``documents.document_refs`` 是会话可检索文本的
-权威清单，正文按 ref 从 PlanningSession/UploadedFile/项目文档源按需解析。检索时以清单为准：
+权威清单，正文按 ref 从 PlanningSession/UploadedFile 按需解析。检索时以清单为准：
   - 提供 source/name 过滤时，只在清单命中范围内做关键词检索；
   - 未过滤时，先尝试向量库语义检索（仅收进清单内已有同名文档的结果），
     再补关键词兜底，保证口径统一、无全库漂移。
@@ -20,7 +20,7 @@ from langgraph.prebuilt import InjectedState
 
 from .shared import budget_check, resolve_bundle, tool_reply
 
-_SESSION_SOURCES = {"village_data", "task_description", "constraints", "upload", "project_doc"}
+_SESSION_SOURCES = {"village_data", "task_description", "constraints", "upload"}
 
 
 def _rag_service():
@@ -183,8 +183,8 @@ async def rag_search(
 ) -> str:
     """在会话文本清单内检索相关内容。
 
-    ``source`` 限定来源（village_data/task_description/constraints/upload/
-    project_doc），``name`` 限定文档名（子串）。未过滤时综合向量库语义检索
+    ``source`` 限定来源（village_data/task_description/constraints/upload），
+    ``name`` 限定文档名（子串）。未过滤时综合向量库语义检索
     与清单关键词兜底。返回带来源与摘要片段的结果列表。
     """
     if not session_id and state:

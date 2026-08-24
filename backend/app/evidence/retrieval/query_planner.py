@@ -36,7 +36,13 @@ def request_fingerprint(request: ExplorationRequest) -> str:
 
 
 def _terms(request: ExplorationRequest) -> list[str]:
-    values = [request.query.strip(), *request.questions, *request.required_facts, *request.evidence_gaps_to_resolve]
+    values = [
+        request.query.strip(),
+        *request.questions,
+        *request.required_facts,
+        *request.evidence_gaps_to_resolve,
+        *(item.statement for item in request.requirements if item.required),
+    ]
     result: list[str] = []
     for value in values:
         normalized = " ".join(str(value).split())
@@ -58,7 +64,11 @@ def build_query_plan(
     """
     terms = _terms(request)
     base_query = "；".join(terms) or request.dimension_key or request.request_type
-    required = tuple(dict.fromkeys([*request.required_facts, *request.questions]))
+    required = tuple(dict.fromkeys([
+        *request.required_facts,
+        *request.questions,
+        *(item.statement for item in request.requirements if item.required),
+    ]))
     scope = tuple(dict.fromkeys(request.entity_scope))
     source_refs = tuple(dict.fromkeys(request.context_refs))
     queries = tuple(

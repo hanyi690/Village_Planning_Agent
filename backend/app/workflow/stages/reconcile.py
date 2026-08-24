@@ -34,16 +34,18 @@ async def reconcile_node(state: Dict[str, Any]) -> Dict[str, Any]:
     from app.contracts.domain.l3_contracts import PlanningProgram
     from app.contracts.spatial.spatial_reference_contracts import SpatialReferenceSpec
     from app.contracts.spatial.grounding_contracts import GroundingResult
-    from app.contracts.domain.selection_contracts import SiteSelectionDecision
+    from app.contracts.spatial.grounded_problem import GroundedPlanningProblem
     from app.contracts.spatial.parcel_change_contracts import ParcelChangeSet
     from app.contracts.spatial.planned_state_contracts import PlannedState
     from app.contracts.workflow.parse_result_contracts import IntentCompilationResult
     from app.contracts.workflow.execution_plan_contracts import ExecutionPlan, ExecutionResult
+    from app.contracts.artifacts.validation_certificate_contracts import ValidationCertificate
     from app.contracts.artifacts.reconciliation_contracts import ReconciliationInconsistency, ReconciliationReport
 
     retry_patch = _retry_patch(state, "reconcile")
     context = await _require_context(state)
     program = _load_ref_artifact(state, "planning_program", PlanningProgram)
+    validation_certificate = None
     if program is None:
         report = ReconciliationReport(inconsistencies=[ReconciliationInconsistency(
             intervention_id="__missing_program__",
@@ -54,9 +56,20 @@ async def reconcile_node(state: Dict[str, Any]) -> Dict[str, Any]:
             responsible_stage="L3",
         )])
     else:
+        validation_certificate = _load_ref_artifact(
+            state, "validation_certificate", ValidationCertificate
+        )
         intent = _load_ref_artifact(state, "target_projection", IntentCompilationResult)
         specs = [_to_typed(item, SpatialReferenceSpec) for item in (getattr(intent, "spatial_reference_specs", None) or [])]
         execution_result = _load_ref_artifact(state, "execution_result", ExecutionResult)
+        grounding_result = _load_ref_artifact(state, "grounding_result", GroundingResult)
+        scoped_problem = _load_ref_artifact(
+            state, "scoped_grounding_problem", GroundedPlanningProblem
+        )
+        if scoped_problem is not None and grounding_result is not None:
+            grounding_result = grounding_result.model_copy(
+                update={"problem": scoped_problem}
+            )
         parcel_changeset = None
         planned_state = None
         if execution_result is not None:
@@ -64,21 +77,39 @@ async def reconcile_node(state: Dict[str, Any]) -> Dict[str, Any]:
             parcel_changeset = _load_embedded_artifact(state, execution_result.parcel_changeset_ref, ParcelChangeSet)
             planned_state = _load_embedded_artifact(state, execution_result.planned_state_ref, PlannedState)
         report = reconcile_aggregate(
-            program,
-            specs,
-            _load_ref_artifact(state, "grounding_result", GroundingResult),
-            _load_ref_artifact(state, "site_selection", SiteSelectionDecision),
-            parcel_changeset,
-            planned_state,
-            intent,
+            program=program,
+            specs=specs,
+            grounding_result=grounding_result,
+            changeset=parcel_changeset,
+            planned_state=planned_state,
+            intent=intent,
             execution_plan=_load_ref_artifact(state, "execution_plan", ExecutionPlan),
             execution_result=execution_result,
             run_id=_run_id(state),
         )
+        if validation_certificate is None or not validation_certificate.can_reconcile:
+            report = report.model_copy(update={
+                "inconsistencies": [
+                    *list(report.inconsistencies or []),
+                    ReconciliationInconsistency(
+                        intervention_id="__validation_certificate__",
+                        field="validation_certificate",
+                        expected="passed certificate with committed atomic execution",
+                        actual=(
+                            "missing"
+                            if validation_certificate is None
+                            else str(validation_certificate.status)
+                        ),
+                        severity="error",
+                        responsible_stage="VALIDATE",
+                    ),
+                ],
+            })
     input_keys = {
-        "planning_program", "target_projection", "grounding_result", "site_selection",
+        "planning_program", "target_projection", "grounding_result", "scenario_set", "planning_scenario", "approved_execution_input",
         "execution_plan", "execution_result",
-        "validation_report", "deferral_ledger",
+        "validation_report", "validation_certificate", "deferral_ledger",
+        "scoped_grounding_problem",
     }
     input_refs = {
         key: value for key, value in (state.get("artifact_refs") or {}).items() if key in input_keys

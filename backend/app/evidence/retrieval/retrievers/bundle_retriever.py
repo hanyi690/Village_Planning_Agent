@@ -277,7 +277,11 @@ async def retrieve_from_bundle(
                         "evidence_role": evidence_role,
                         "source_kind": source_kind,
                         "subject_scope": group_name,
-                        "counting_basis": "source_feature",
+                        # This is a deterministic layer aggregate, not a
+                        # claim about a specific feature set.  Requiring
+                        # feature IDs here would incorrectly turn every
+                        # layer summary into an L1 lineage gap.
+                        "counting_basis": "layer_aggregate",
                         "value": str(count),
                         "unit": "source_features",
                         **source_metadata,

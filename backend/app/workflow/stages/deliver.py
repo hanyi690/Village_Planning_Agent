@@ -19,6 +19,7 @@ from app.contracts.spatial.parcel_change_contracts import ParcelChangeSet
 from app.contracts.spatial.planned_state_contracts import PlannedState
 from app.contracts.artifacts.reconciliation_contracts import ReconciliationReport
 from app.contracts.artifacts.validation_report_contracts import ValidationReport
+from app.contracts.artifacts.validation_certificate_contracts import ValidationCertificate
 from app.workflow.stage_adapter import persist_stage_artifact
 from app.workflow.stages.support import (
     _adopt_context,
@@ -43,7 +44,7 @@ def _spatial_yield(
     program: Any = None,
     projection: Any = None,
     grounding: Any = None,
-    selection: Any = None,
+    approved_input: Any = None,
     execution_plan: Any = None,
     execution_result: Any = None,
     planned_state: Any = None,
@@ -65,7 +66,7 @@ def _spatial_yield(
     if graph is not None:
         target_count = len(graph_nodes) or target_count
     candidate_count = len(getattr(grounding, "candidates", None) or [])
-    selected_count = len(getattr(selection, "target_assignments", None) or [])
+    selected_count = len(getattr(approved_input, "target_ids", None) or [])
     active_tasks = len(getattr(execution_plan, "worker_tasks", None) or [])
     deferred_tasks = len(getattr(execution_plan, "deferred_tasks", None) or [])
     task_results = list(getattr(execution_result, "task_results", None) or [])
@@ -108,10 +109,10 @@ def _spatial_yield(
             "output_count": selected_count,
             "deferred_count": sum(
                 str(getattr(item, "status", "")) == "deferred"
-                for item in (getattr(selection, "target_assignments", None) or [])
+                for item in (getattr(approved_input, "target_ids", None) or [])
             ),
             "non_baseline_feature_count": 0,
-            "artifact_digest": _artifact_digest(state, "site_selection"),
+            "artifact_digest": _artifact_digest(state, "approved_execution_input"),
         },
         {
             "stage": "Execution",
@@ -162,6 +163,9 @@ async def deliver_node(state: Dict[str, Any]) -> Dict[str, Any]:
         planned_state = _load_embedded_artifact(state, execution_result.planned_state_ref, PlannedState)
         changeset = _load_embedded_artifact(state, execution_result.parcel_changeset_ref, ParcelChangeSet)
     validation_report = _load_ref_artifact(state, "validation_report", ValidationReport)
+    validation_certificate = _load_ref_artifact(
+        state, "validation_certificate", ValidationCertificate
+    )
     from app.domain.validation.relation_validation import FinalScenarioValidation
 
     final_relation_validation = _load_ref_artifact(
@@ -176,14 +180,16 @@ async def deliver_node(state: Dict[str, Any]) -> Dict[str, Any]:
     execution_plan = _load_ref_artifact(state, "execution_plan", ExecutionPlan)
     deferral_ledger = _load_ref_artifact(state, "deferral_ledger", DeferralLedger)
     from app.contracts.domain.l3_contracts import PlanningProgram
-    from app.contracts.domain.selection_contracts import SiteSelectionDecision
+    from app.contracts.planning.approval import ApprovedExecutionInput
     from app.contracts.spatial.grounding_contracts import GroundingResult
     from app.contracts.workflow.parse_result_contracts import IntentCompilationResult
 
     program = _load_ref_artifact(state, "planning_program", PlanningProgram)
     projection = _load_ref_artifact(state, "target_projection", IntentCompilationResult)
     grounding = _load_ref_artifact(state, "grounding_result", GroundingResult)
-    selection = _load_ref_artifact(state, "site_selection", SiteSelectionDecision)
+    approved_input = _load_ref_artifact(
+        state, "approved_execution_input", ApprovedExecutionInput
+    )
 
     ledger_ref = None
     if execution_plan is not None:
@@ -236,18 +242,13 @@ async def deliver_node(state: Dict[str, Any]) -> Dict[str, Any]:
     # deferred/planned distinction auditable.  Skipping this build based on
     # worker-task count used to create a valid CAS ref whose JSON payload was
     # null, contradicting the required DeliverySpatialSnapshot contract.
-    from app.domain.delivery.delivery_snapshot_builder import SpatialDeliveryProducts
-    products = (
-        build_spatial_delivery_products(
-            session_id=str(state.get("session_id") or ""),
-            village_name=str((state.get("config") or {}).get("village_name") or ""),
-            workspace=workspace,
-            planned_changes=list(getattr(changeset, "changes", None) or []),
-            planned_state=planned_state,
-            validation_result=validation_result,
-        )
-        if workspace is not None
-        else SpatialDeliveryProducts(error="DELIVER requires a SpatialWorkspace")
+    products = build_spatial_delivery_products(
+        session_id=str(state.get("session_id") or ""),
+        village_name=str((state.get("config") or {}).get("village_name") or ""),
+        workspace=workspace,
+        planned_changes=list(getattr(changeset, "changes", None) or []),
+        planned_state=planned_state,
+        validation_result=validation_result,
     )
     if products.snapshot is None:
         raise RuntimeError(
@@ -288,7 +289,7 @@ async def deliver_node(state: Dict[str, Any]) -> Dict[str, Any]:
         program=program,
         projection=projection,
         grounding=grounding,
-        selection=selection,
+        approved_input=approved_input,
         execution_plan=execution_plan,
         execution_result=execution_result,
         planned_state=planned_state,
@@ -311,6 +312,11 @@ async def deliver_node(state: Dict[str, Any]) -> Dict[str, Any]:
         render_error=render_error,
     )
     diagnostic_summary = dict(manifest.diagnostic_summary or {})
+    if products.spatial_context_unavailable:
+        diagnostic_summary["spatial_context"] = {
+            "status": "unavailable",
+            "reason": products.spatial_context_reason,
+        }
     relation_source = final_relation_validation or validation_report
     relation_rows = list(
         getattr(relation_source, "satisfactions", None)
@@ -343,7 +349,30 @@ async def deliver_node(state: Dict[str, Any]) -> Dict[str, Any]:
             "hard_relation_failures": sorted(item for item in hard_relation_failures if item),
             "final_relation_validation_passed": final_relation_passed,
         },
+        "validation_certificate": {
+            "certificate_id": str(getattr(validation_certificate, "certificate_id", "") or ""),
+            "status": str(getattr(validation_certificate, "status", "") or ""),
+            "can_reconcile": bool(
+                validation_certificate is not None
+                and validation_certificate.can_reconcile
+            ),
+        },
     })
+    certificate_blocked = scenario_required and (
+        validation_certificate is None
+        or not validation_certificate.can_reconcile
+    )
+    if certificate_blocked:
+        # The manifest may still carry a diagnostic map, but DELIVER must not
+        # advertise even partial scenario output as accepted without the
+        # immutable VALIDATE certificate.
+        diagnostic_summary["validation_certificate_gate"] = "blocked"
+    if certificate_blocked:
+        manifest = manifest.model_copy(update={
+            "delivery_status": "partial",
+            "statutory_complete": False,
+            "diagnostic_summary": diagnostic_summary,
+        })
     if (
         planning_output["status"] == "no_planning_output"
         or hard_relation_failures

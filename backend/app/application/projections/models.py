@@ -24,6 +24,8 @@ class ProjectionModel(BaseModel):
 
 class SessionView(ProjectionModel):
     session_id: str
+    project_name: str = ""
+    village_name: str = ""
     status: str
     active_stage: str = ""
     phase: str = ""

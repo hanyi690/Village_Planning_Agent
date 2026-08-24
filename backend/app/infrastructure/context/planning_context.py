@@ -54,6 +54,13 @@ class PlanningContext:
         report_summary_index: Layered report summaries keyed by dimension.
         l1_fact_records: Authoritative typed L1 facts; string reports are only
             a display projection and must not be the spatial source of truth.
+        l1_input_register: L1-owned structure of explicit source tables. It is
+            hydrated from the L1 artifact; no downstream stage parses raw
+            ``village_data``.
+        networks: Canonical typed network snapshots keyed by explicit relation
+            refs; the current-road snapshot is built when the layer is present.
+        demands: Typed demand snapshots keyed by explicit demand refs. An empty
+            mapping is intentional until a producer supplies real demand points.
         location_facts: Typed L1 place mentions used by EvidenceGraph; these
             are not final candidate selections.
         evidence_graph: Session-scoped join boundary for L1, KG and bundle
@@ -70,6 +77,10 @@ class PlanningContext:
     version: int = 1
     workspace: SpatialWorkspace | None = None
     data_snapshot: SessionDataSnapshot | None = None
+    # Typed relation inputs.  These are immutable-by-convention snapshots
+    # built from the authoritative workspace; prose counts never enter here.
+    networks: Dict[str, Any] = field(default_factory=dict)
+    demands: Dict[str, Any] = field(default_factory=dict)
     kg: Any = None
     kg_session_ref: str = ""
     kg_version: int = 0
@@ -82,6 +93,7 @@ class PlanningContext:
     report_summary_index: Dict[str, Dict[str, Any]] = field(default_factory=dict)
     l1_snapshot_ref: str = ""
     l1_fact_records: List[Any] = field(default_factory=list)
+    l1_input_register: Any = None
     location_facts: List[Any] = field(default_factory=list)
     source_semantic_decisions: Dict[str, Any] = field(default_factory=dict)
     source_semantic_fingerprint: str = ""
@@ -127,15 +139,27 @@ class PlanningContext:
         return default
 
     def input_texts(self) -> Dict[str, str]:
-        """Return a source-keyed view of planning inputs without mutating state."""
+        """Return deduplicated planning inputs keyed by source and document type."""
         if self.workspace is None:
             return {}
-        result: Dict[str, str] = {}
+        buckets: Dict[str, List[str]] = {}
         for item in self.input_documents:
             source = str(item.get("source", "") or "")
-            if source and source not in result:
-                result[source] = str(item.get("content", "") or "")
-        return result
+            content = str(item.get("content", "") or "").strip()
+            if not content:
+                continue
+            keys = [source]
+            for key in keys:
+                if not key:
+                    continue
+                values = buckets.setdefault(key, [])
+                if content not in values:
+                    values.append(content)
+        return {
+            key: "\n\n".join(values)
+            for key, values in buckets.items()
+            if values
+        }
 
     def snapshot_meta(self) -> Dict[str, Any]:
         """Serializable metadata for logs / step reports (no geometry)."""
@@ -161,6 +185,16 @@ class PlanningContext:
             "kg_session_ref": self.kg_session_ref,
             "kg_version": self.kg_version,
             "has_workspace": self.has_workspace,
+            "network_refs": sorted(str(key) for key in self.networks),
+            "network_fingerprints": {
+                str(key): str(getattr(value, "fingerprint", "") or "")
+                for key, value in self.networks.items()
+            },
+            "demand_refs": sorted(str(key) for key in self.demands),
+            "demand_fingerprints": {
+                str(key): str(getattr(value, "fingerprint", "") or "")
+                for key, value in self.demands.items()
+            },
             "has_kg": self.has_kg,
             "has_gazetteer": self.gazetteer is not None,
             "has_constraint_index": self.constraint_index is not None,
@@ -170,6 +204,15 @@ class PlanningContext:
             "reports_loaded": self.reports_loaded,
             "location_fact_count": len(self.location_facts),
             "l1_fact_record_count": len(self.l1_fact_records),
+            "l1_input_current_asset_count": len(
+                getattr(self.l1_input_register, "current_assets", []) or []
+            ),
+            "l1_input_demand_count": len(
+                getattr(self.l1_input_register, "demands", []) or []
+            ),
+            "l1_input_register_digest": str(
+                getattr(self.l1_input_register, "source_digest", "") or ""
+            ),
             "source_semantic_decision_count": len(self.source_semantic_decisions),
             "source_semantic_fingerprint": self.source_semantic_fingerprint,
             "source_semantic_diagnostics": list(self.source_semantic_diagnostics),

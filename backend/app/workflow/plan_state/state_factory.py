@@ -29,6 +29,7 @@ class StateFactory:
         county: str = "",
         township: str = "",
         planning_period: str = "2022-2035年",
+        task_description: str = "",
         enable_review: bool = False,
         stream_mode: bool = True,
         step_mode: bool = False,
@@ -48,6 +49,7 @@ class StateFactory:
         payload = {
             "session_id": session_id,
             "project_name": project_name,
+            "task_description": task_description,
             "messages": [],
             "phase": PlanningPhase.INIT.value,
             "current_wave": 1,
@@ -109,7 +111,7 @@ class StateFactory:
             "stage_audit": {},
             "retry_counts": {},
             "dimension_retry_counts": {},
-            "dimension_retry_limit": max(0, int(os.getenv("DIMENSION_RETRY_LIMIT", "1"))),
+            "dimension_retry_limit": max(0, int(settings.DIMENSION_RETRY_LIMIT)),
             "max_retries": BUSINESS_RETRY_LIMIT,
             "error_feedback": {},
             "human_interrupt": None,
@@ -120,7 +122,6 @@ class StateFactory:
             "human_review_pause_published": False,
             "human_review_resume_consumed": False,
             "human_deferred_targets": [],
-            "human_deferred_select_revision": False,
             "paused_stage": None,
             "fatal_error": None,
         }

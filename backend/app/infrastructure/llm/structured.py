@@ -27,6 +27,71 @@ _JSON_FENCE_RE = re.compile(
     r"^```json[ \t]*\r?\n(?P<body>.*?)\r?\n```$",
     re.IGNORECASE | re.DOTALL,
 )
+_CONTEXT_OVERFLOW_RE = re.compile(
+    r"(?:\bcontext_length_exceeded\b|"
+    r"\bmaximum context (?:length|window)\b|"
+    r"\bcontext window (?:was )?exceeded\b|"
+    r"\bprompt (?:is )?too long\b|"
+    r"\brequest too large\b|"
+    r"\btoo many tokens\b|"
+    r"\binput tokens? (?:count )?exceed(?:s|ed)? (?:the )?"
+    r"(?:model(?:'s)? )?(?:context )?limit\b)",
+    re.IGNORECASE,
+)
+
+STRUCTURED_FAILURE_CODES = frozenset(
+    {
+        "CONTEXT_OVERFLOW",
+        "OUTPUT_TRUNCATED",
+        "TOOL_CALL_MISSING",
+        "SCHEMA_INVALID",
+        "TIMEOUT",
+    }
+)
+
+
+def _set_failure_code(exc: BaseException, code: str) -> None:
+    """Attach a bounded classification without changing provider exception text."""
+    try:
+        setattr(exc, "structured_failure_code", code)
+    except Exception:
+        pass
+
+
+def _completion_finish_reason(completion: Any) -> str:
+    choices = _read_field(completion, "choices")
+    if not isinstance(choices, (list, tuple)) or not choices:
+        return ""
+    return str(_read_field(choices[0], "finish_reason") or "").strip().lower()
+
+
+def _classify_structured_failure(exc: BaseException, completion: Any = None) -> str | None:
+    """Classify a typed-output failure using provider metadata and safe markers."""
+    if isinstance(exc, (asyncio.TimeoutError, TimeoutError)):
+        return "TIMEOUT"
+    finish_reason = _completion_finish_reason(completion)
+    if finish_reason == "length":
+        return "OUTPUT_TRUNCATED"
+    message = str(exc or "").lower()
+    if _CONTEXT_OVERFLOW_RE.search(message):
+        return "CONTEXT_OVERFLOW"
+    if "no tool calls" in message or "function call found" in message:
+        return "TOOL_CALL_MISSING"
+    if "validation" in message or "schema" in message or "parse" in message:
+        return "SCHEMA_INVALID"
+    return None
+
+
+def structured_failure_code(exc: BaseException) -> str | None:
+    """Return the bounded typed-output code attached by this module."""
+    code = str(getattr(exc, "structured_failure_code", "") or "").strip()
+    return code if code in STRUCTURED_FAILURE_CODES else _classify_structured_failure(exc)
+
+
+def structured_failure_summary(exc: BaseException) -> str:
+    """Return a stable diagnostic that never embeds provider response text."""
+    code = structured_failure_code(exc) or "STRUCTURED_OUTPUT_ERROR"
+    return f"{code} ({type(exc).__name__})"
 
 
 def _read_field(value: Any, field: str) -> Any:
@@ -96,6 +161,27 @@ def _extract_content_json_object(content: Any) -> tuple[dict[str, Any] | None, s
     return value, "ok"
 
 
+def _extract_report_body_fallback(content: Any) -> tuple[dict[str, Any] | None, str]:
+    """Recover a bounded plain report when a provider omits the tool call."""
+    if not isinstance(content, str) or not content.strip():
+        return None, "content is not a non-empty string"
+    candidate = content.strip()
+    think_match = _THINK_PREFIX_RE.match(candidate)
+    if think_match:
+        candidate = candidate[think_match.end() :].strip()
+    if not candidate:
+        return None, "report body is empty after the outer think wrapper"
+    if re.search(r"</?think\b", candidate, re.IGNORECASE):
+        return None, "content contains a non-wrapper think marker"
+    if "```" in candidate:
+        return None, "content contains a code fence marker"
+    # Keep a small floor so provider refusals and truncated fragments do not
+    # become a typed report. The L2/L3 prompt asks for substantially more.
+    if len(candidate) < 80:
+        return None, "report body is below the minimum bounded length"
+    return {"report_body": candidate}, "ok"
+
+
 async def run_structured_output(
     response_model: type[ModelT],
     messages: list[dict[str, Any]],
@@ -109,6 +195,7 @@ async def run_structured_output(
     max_concurrent: int | None = None,
     semaphore_scope: str = "default",
     allow_content_json_fallback: bool = True,
+    content_fallback_mode: str = "strict",
     transient_retries: int = 0,
     transient_retry_backoff_s: float = 2.0,
     **kwargs: Any,
@@ -130,6 +217,13 @@ async def run_structured_output(
         **kwargs,
     }
     provider_name = os.getenv("LLM_PROVIDER", "").strip().lower()
+    if provider_name in {"minimax", "minimaxai", "mini-max"}:
+        # MiniMax M2.x may expose reasoning and final content separately when
+        # requested.  Keep this provider hint scoped to typed calls; free-form
+        # L3 generation remains responsible for its own reasoning policy.
+        extra_body = dict(request.get("extra_body") or {})
+        extra_body.setdefault("reasoning_split", True)
+        request["extra_body"] = extra_body
     if provider_name in {"opencode-go", "opencode_go", "opencodego"}:
         # Console Go currently rejects tool_choice when DeepSeek V4 is in
         # thinking mode.  Instructor's TOOLS mode necessarily sends
@@ -169,17 +263,58 @@ async def run_structured_output(
     async def _call() -> ModelT:
         from instructor.core import IncompleteOutputException, InstructorRetryException
 
+        async def _retry_after_truncation(exc: BaseException) -> ModelT:
+            current_tokens = request.get("max_tokens")
+            try:
+                current_tokens = int(current_tokens)
+            except (TypeError, ValueError):
+                current_tokens = 0
+            configured_ceiling = (
+                incomplete_output_max_tokens
+                if incomplete_output_max_tokens is not None
+                else int(os.getenv("LLM_INCOMPLETE_OUTPUT_MAX_TOKENS", "0"))
+            )
+            ceiling = max(current_tokens, int(configured_ceiling))
+            if current_tokens <= 0 or ceiling <= current_tokens:
+                raise exc
+            retry_request = dict(request)
+            retry_request["max_tokens"] = min(ceiling, current_tokens * 2)
+            logger.warning(
+                "[structured] incomplete output; retrying with max_tokens=%d",
+                retry_request["max_tokens"],
+            )
+            return await _call_once(retry_request)
+
         try:
             return await _call_once(request)
         except InstructorRetryException as exc:
+            completion = exc.last_completion
+            failure_code = _classify_structured_failure(exc, completion)
+            if failure_code == "OUTPUT_TRUNCATED":
+                try:
+                    return await _retry_after_truncation(exc)
+                except BaseException as retry_exc:
+                    retry_code = _classify_structured_failure(
+                        retry_exc, getattr(retry_exc, "last_completion", None)
+                    )
+                    _set_failure_code(retry_exc, retry_code or "OUTPUT_TRUNCATED")
+                    raise
             if not allow_content_json_fallback:
+                _set_failure_code(exc, failure_code or "SCHEMA_INVALID")
                 logger.warning(
                     "[structured] typed output failed; content fallback is disabled for this contract"
                 )
                 raise
-            content = _completion_content(exc.last_completion)
+            content = _completion_content(completion)
             payload, reason = _extract_content_json_object(content)
+            if (
+                payload is None
+                and content_fallback_mode == "report_text"
+                and failure_code == "TOOL_CALL_MISSING"
+            ):
+                payload, reason = _extract_report_body_fallback(content)
             if payload is None:
+                _set_failure_code(exc, failure_code or "SCHEMA_INVALID")
                 logger.warning(
                     "[structured] Instructor retry exhausted; content JSON fallback rejected (%s, reason=%s)",
                     _content_summary(content),
@@ -189,6 +324,7 @@ async def run_structured_output(
             try:
                 result = response_model.model_validate(payload)
             except Exception as validation_exc:
+                _set_failure_code(exc, "SCHEMA_INVALID")
                 logger.warning(
                     "[structured] content JSON fallback rejected by response model (%s, validation=%s)",
                     _content_summary(content),
@@ -206,26 +342,19 @@ async def run_structured_output(
             # reaches max_tokens before completing the declared tool call.
             # Retry only that condition, with an explicit ceiling; provider
             # 5xx/timeout retries remain owned by the OpenAI transport.
-            current_tokens = request.get("max_tokens")
-            try:
-                current_tokens = int(current_tokens)
-            except (TypeError, ValueError):
-                current_tokens = 0
-            configured_ceiling = (
-                incomplete_output_max_tokens
-                if incomplete_output_max_tokens is not None
-                else int(os.getenv("LLM_INCOMPLETE_OUTPUT_MAX_TOKENS", "0"))
-            )
-            ceiling = max(current_tokens, int(configured_ceiling))
-            if current_tokens <= 0 or ceiling <= current_tokens:
+            if _classify_structured_failure(
+                exc, getattr(exc, "last_completion", None)
+            ) != "OUTPUT_TRUNCATED":
+                _set_failure_code(exc, "SCHEMA_INVALID")
                 raise
-            retry_request = dict(request)
-            retry_request["max_tokens"] = min(ceiling, current_tokens * 2)
-            logger.warning(
-                "[structured] incomplete output; retrying with max_tokens=%d",
-                retry_request["max_tokens"],
-            )
-            return await _call_once(retry_request)
+            try:
+                return await _retry_after_truncation(exc)
+            except BaseException as retry_exc:
+                retry_code = _classify_structured_failure(
+                    retry_exc, getattr(retry_exc, "last_completion", None)
+                )
+                _set_failure_code(retry_exc, retry_code or "OUTPUT_TRUNCATED")
+                raise
 
     # LangGraph's graph-level max_concurrency is a scheduling hint and does
     # not reliably bound every Send/resume fan-out at the provider boundary.
@@ -287,4 +416,9 @@ async def run_structured_output(
     return await asyncio.wait_for(_call_with_gate(), timeout=float(timeout))
 
 
-__all__ = ["run_structured_output"]
+__all__ = [
+    "run_structured_output",
+    "structured_failure_code",
+    "structured_failure_summary",
+    "STRUCTURED_FAILURE_CODES",
+]

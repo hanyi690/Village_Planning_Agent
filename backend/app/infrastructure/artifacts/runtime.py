@@ -25,15 +25,16 @@ ARTIFACT_SCHEMA_VERSION = "3"
 
 ARTIFACT_KEYS = (
     "l1_snapshot", "l2_strategy", "planning_program", "target_projection",
-    "grounding_result", "demand_portfolio", "suitability_surface", "portfolio_decision",
-    "site_selection", "execution_plan", "execution_result", "parcel_changeset",
+    "grounding_result", "scoped_grounding_problem", "demand_portfolio", "suitability_surface", "portfolio_decision",
+    "execution_plan", "execution_result", "parcel_changeset",
     "planned_state", "validation_report", "reconciliation_report", "delivery_manifest",
     "layout_configs", "render_layers", "delivery_spatial_snapshot", "deferral_ledger",
     "export_result", "render_artifacts", "execution_diagnostics", "kg_layer1",
     "repair_directives", "repair_impact", "global_zone_allocation",
-    "planning_scenario", "final_relation_validation",
+    "planning_scenario", "scenario_set", "approved_execution_input", "validation_certificate", "final_relation_validation",
     "global_site_allocation", "grounded_anchors", "l1_observations", "l1_bindings",
-    "source_semantic_classification",
+    "source_semantic_classification", "l1_source_index", "execution_staging", "staged_parcel_changeset",
+    "staged_planned_state", "staged_layout_configs",
 )
 
 

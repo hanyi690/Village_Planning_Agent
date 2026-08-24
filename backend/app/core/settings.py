@@ -72,6 +72,11 @@ _PROVIDER_CONCURRENCY_DEFAULT = (
 # provider transport window.  This is a request/output budget, not a model
 # context-window limit.
 L1_MAX_TOKENS = int(os.getenv("L1_MAX_TOKENS", "12288"))
+# A length-retry is a separate, one-shot ceiling.  It is deliberately larger
+# than the normal L1 request but remains bounded and provider-configurable.
+LLM_INCOMPLETE_OUTPUT_MAX_TOKENS = int(
+    os.getenv("LLM_INCOMPLETE_OUTPUT_MAX_TOKENS", "16384")
+)
 L1_LLM_TIMEOUT_S = float(os.getenv("L1_LLM_TIMEOUT_S", "480"))
 L1_LLM_MAX_CONCURRENT = int(
     os.getenv("L1_LLM_MAX_CONCURRENT", str(_PROVIDER_CONCURRENCY_DEFAULT))
@@ -176,6 +181,11 @@ KG_LAYER1_CACHE_MAXSIZE = int(os.getenv("KG_LAYER1_CACHE_MAXSIZE", "16"))
 KG_QUERY_CACHE_MAXSIZE = int(os.getenv("KG_QUERY_CACHE_MAXSIZE", "512"))
 EVIDENCE_CACHE_MAXSIZE = int(os.getenv("EVIDENCE_CACHE_MAXSIZE", "128"))
 BACKEND_STARTUP_TIMEOUT_SECONDS = float(os.getenv("BACKEND_STARTUP_TIMEOUT_SECONDS", "30"))
+# On process restart, only recent non-terminal sessions are inspected for a
+# pending LangGraph checkpoint.  This is a recovery scan budget, not a graph
+# execution timeout; HUMAN interrupts are always left parked for the operator.
+RUNTIME_RECOVERY_MAX_SESSIONS = int(os.getenv("RUNTIME_RECOVERY_MAX_SESSIONS", "128"))
+RUNTIME_RECOVERY_MAX_AGE_HOURS = float(os.getenv("RUNTIME_RECOVERY_MAX_AGE_HOURS", "24"))
 GRAPH_RECURSION_LIMIT = int(os.getenv("GRAPH_RECURSION_LIMIT", "100"))
 BUSINESS_RETRY_LIMIT = int(os.getenv("BUSINESS_RETRY_LIMIT", "3"))
 # Per-session validation replay budget: total VALIDATE retries across the

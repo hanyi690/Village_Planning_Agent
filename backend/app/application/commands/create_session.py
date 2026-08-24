@@ -144,6 +144,7 @@ def _default_state(command: CreateSessionCommand) -> dict[str, object]:
         township=command.township,
         planning_period=command.planning_period,
         session_id=command.session_id,
+        task_description=command.task_description,
         stream_mode=True,
         step_mode=command.step_mode,
         rag_enabled=command.rag_enabled,

@@ -104,6 +104,37 @@ class EventRepository:
             return int(result.scalar_one() or 0)
 
     @staticmethod
+    async def latest(session_id: str) -> dict[str, Any] | None:
+        """Return only the newest durable event for a public status projection."""
+        async with get_async_session() as session:
+            result = await session.execute(
+                select(RunEvent)
+                .where(RunEvent.session_id == str(session_id))
+                .order_by(RunEvent.seq.desc())
+                .limit(1)
+            )
+            row = result.scalar_one_or_none()
+        if row is None:
+            return None
+        return {**dict(row.payload or {}), "seq": row.seq, "session_id": row.session_id}
+
+    @staticmethod
+    async def recent(session_id: str, limit: int = 512) -> list[dict[str, Any]]:
+        """Return a bounded ordered tail for race-safe stage projection."""
+
+        bounded_limit = max(1, min(int(limit), 2048))
+        async with get_async_session() as session:
+            result = await session.execute(
+                select(RunEvent)
+                .where(RunEvent.session_id == str(session_id))
+                .order_by(RunEvent.seq.desc())
+                .limit(bounded_limit)
+            )
+            rows = list(result.scalars().all())
+        rows.reverse()
+        return EventRepository._serialize_rows(rows)
+
+    @staticmethod
     async def clear(session_id: str) -> None:
         async with get_async_session() as session:
             await session.execute(delete(RunEvent).where(RunEvent.session_id == str(session_id)))

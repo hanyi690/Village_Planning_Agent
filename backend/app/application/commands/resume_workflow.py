@@ -233,7 +233,36 @@ class ResumeWorkflowService:
             command.session_id,
             snapshot,
         )
-        if not stable or kind in {"human", "completed"} or plan.mode is ResumeMode.BLOCKED:
+        diagnostic_code = None
+        if isinstance(snapshot.values, dict):
+            diagnostic = snapshot.values.get("diagnostic_terminal") or {}
+            terminal_ref = snapshot.values.get("terminal_ref") or {}
+            if isinstance(diagnostic, dict):
+                diagnostic_code = diagnostic.get("code")
+            if not diagnostic_code and isinstance(terminal_ref, dict):
+                nested = terminal_ref.get("diagnostic") or {}
+                diagnostic_code = (
+                    nested.get("code") if isinstance(nested, dict) else None
+                ) or terminal_ref.get("code")
+        replayable_diagnostic = diagnostic_code in {
+            "STALE_CHECKPOINT_NO_EXECUTABLE_CURSOR",
+            # Older runtime versions persisted an unauthorized transition as
+            # a terminal.  It has no executable cursor, but its upstream
+            # artifacts remain a valid explicit replay prefix.
+            "UNAUTHORIZED_STAGE",
+        }
+        stale_replay = bool(command.replay_from_stage) and replayable_diagnostic
+        if stale_replay:
+            plan = ResumeService.explicit_spatial_replay_plan(
+                dict(snapshot.values),
+                plan,
+                command.replay_from_stage or "",
+            )
+        if (
+            (not stable and not stale_replay)
+            or kind == "human"
+            or plan.mode is ResumeMode.BLOCKED
+        ):
             raise ResumeConflictError(
                 f"checkpoint cannot be forked: {plan.reason}"
             )

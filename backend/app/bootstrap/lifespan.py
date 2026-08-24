@@ -88,6 +88,13 @@ async def lifespan(app):
     logger.info("SSE event loop saved")
     logger.info("Backend service startup complete")
 
+    # A process restart drops asyncio background tasks, but LangGraph keeps
+    # pending cursors in checkpoints.db.  Scan and schedule only recoverable
+    # cursors after the core runtime is ready; HUMAN interrupts stay parked.
+    recovery_task = asyncio.create_task(
+        PlanningRuntimeService.recover_inflight_sessions()
+    )
+
     log_cleanup_task = asyncio.create_task(
         _log_cleanup_loop(log_dir, LOG_RETENTION_DAYS)
     )
@@ -97,6 +104,12 @@ async def lifespan(app):
     log_cleanup_task.cancel()
     try:
         await log_cleanup_task
+    except asyncio.CancelledError:
+        pass
+
+    recovery_task.cancel()
+    try:
+        await recovery_task
     except asyncio.CancelledError:
         pass
 

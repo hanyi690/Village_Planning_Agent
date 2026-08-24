@@ -151,7 +151,8 @@ class DispatchPolicy(BaseModel):
         "layer_completion_check": frozenset({"layer_aggregate", "end_diagnostic"}),
         "layer_aggregate": frozenset({
             "advance_phase", "target_projection", "conversation", "l1_worker",
-            "l2_worker", "l3_worker", "human_review_prepare", "__end__",
+            "l2_worker", "l3_worker", "provider_resume_dispatch",
+            "human_review_prepare", "__end__",
             "end_diagnostic",
         }),
         "advance_phase": frozenset({
@@ -184,10 +185,10 @@ class DispatchPolicy(BaseModel):
         "target_projection": ("planning_program",),
         "ground": ("target_projection",),
         "select": ("target_projection", "grounding_result"),
-        "execute": ("target_projection", "site_selection", "execution_plan"),
+        "execute": ("target_projection", "scenario_set", "planning_scenario", "approved_execution_input", "execution_plan"),
         "validate": ("execution_result",),
         "reconcile": (
-            "planning_program", "target_projection", "grounding_result", "site_selection",
+            "planning_program", "target_projection", "grounding_result", "scenario_set", "planning_scenario", "approved_execution_input",
             "execution_plan", "execution_result",
         ),
         "deliver": ("execution_result", "validation_report", "reconciliation_report", "execution_plan"),

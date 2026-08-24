@@ -31,6 +31,11 @@ _CURRENT_VECTOR_SOURCES: tuple[tuple[str, str, str, str, str], ...] = (
 )
 
 
+def _is_jintian_reference(village_name: str) -> bool:
+    normalized = str(village_name or '').strip().lower()
+    return normalized in {'金田', '金田村', 'jintian'}
+
+
 def _feature_count(geojson: dict[str, Any]) -> int:
     features = geojson.get('features')
     return len(features) if isinstance(features, list) else 0
@@ -118,6 +123,17 @@ def get_current_source_layers(
     This is context data, not planning output. DELIVER remains the only source
     for generated/planned layers.
     """
+
+    if not _is_jintian_reference(village_name):
+        return CurrentSourceLayerCollection(
+            village_name=village_name,
+            center=None,
+            layers=[],
+            rasters=[],
+            diagnostics=[
+                f'no catalog-backed current spatial source is configured for village {village_name!r}'
+            ],
+        )
 
     catalog = DataCatalog()
     layers: list[CurrentSourceLayer] = []

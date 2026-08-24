@@ -44,6 +44,17 @@ def _to_typed(data: Any, cls: type) -> Any:
     return data
 
 
+def _descriptor_digest(value: Any) -> str:
+    """Read an artifact descriptor digest from dict or typed refs."""
+    if isinstance(value, dict):
+        return str(value.get("descriptor_digest") or value.get("digest") or "")
+    return str(
+        getattr(value, "descriptor_digest", "")
+        or getattr(value, "digest", "")
+        or ""
+    )
+
+
 def _next_action_forward(target_stage: str) -> Dict[str, Any]:
     return {"type": "forward", "target_stage": target_stage}
 
@@ -120,14 +131,9 @@ def _auto_defer_blocked_targets(
     load_ref: Any = None,
     persist: Any = None,
 ) -> Dict[str, Any] | None:
-    """Auto-defer a blocked VALIDATE compilation to enable partial delivery.
-
-    No deterministic repair path exists for the findings: defer the affected
-    targets into a typed DeferralLedger and revise the ExecutionPlan so
-    RECONCILE/DELIVER treat them as deferred (partial delivery) instead of
-    blocking the whole run on HUMAN.  Returns None when there are no
-    deferrable target ids (integrity/lineage failures still fail closed).
-    """
+    """Retired compatibility hook; validation cannot mutate an approval plan."""
+    return None
+    # Kept below only as historical source context; unreachable by design.
     if load_ref is None:
         load_ref = _load_ref_artifact
     if persist is None:
@@ -151,7 +157,6 @@ def _auto_defer_blocked_targets(
     from app.contracts.artifacts.deferral_contracts import DeferralLedger
     from app.contracts.workflow.execution_plan_contracts import ExecutionPlan
     from app.domain.delivery.deferral_ledger import append_ledger, build_target_deferrals
-    from app.domain.materialization.plan_builder import defer_plan_tasks
 
     existing_ledger = load_ref(state, "deferral_ledger", DeferralLedger)
     ledger = append_ledger(
@@ -170,14 +175,6 @@ def _auto_defer_blocked_targets(
     if ledger_ref:
         output_refs["deferral_ledger"] = ledger_ref
         patch["deferral_ledger"] = ledger.model_dump(mode="json")
-    plan = load_ref(state, "execution_plan", ExecutionPlan)
-    if plan is not None:
-        revised_plan = defer_plan_tasks(
-            plan, defer_ids, review_id="validate-auto-defer"
-        )
-        plan_ref = persist(working_state, "validate", "ExecutionPlan", revised_plan)
-        if plan_ref:
-            output_refs["execution_plan"] = plan_ref
     patch["auto_deferred_target_ids"] = defer_ids
     return {
         "gate": _pass_gate("validate").model_copy(update={
@@ -197,10 +194,11 @@ async def validate_node(state: Dict[str, Any]) -> Dict[str, Any]:
     from app.contracts.spatial.planned_state_contracts import PlannedState
     from app.contracts.spatial.parcel_change_contracts import ParcelChangeSet
     from app.contracts.workflow.parse_result_contracts import IntentCompilationResult
-    from app.contracts.domain.selection_contracts import SiteSelectionDecision
     from app.contracts.workflow.execution_plan_contracts import ExecutionPlan, ExecutionResult
-    from app.contracts.planning.scenario import PlanningScenario
+    from app.contracts.planning.scenario import PlanningScenario, ScenarioSet
+    from app.contracts.artifacts.validation_certificate_contracts import ValidationCertificate
     from app.contracts.spatial.grounding_contracts import GroundingResult
+    from app.contracts.spatial.grounded_problem import GroundedPlanningProblem
 
     retry_patch = _retry_patch(state, "validate")
     context = await _require_context(state)
@@ -208,15 +206,24 @@ async def validate_node(state: Dict[str, Any]) -> Dict[str, Any]:
     changeset = None
     intent = _load_ref_artifact(state, "target_projection", IntentCompilationResult)
     plan_intent = _to_typed(getattr(intent, "typed_intent", None) or intent, SpatialPlanningIntent)
-    selection = _load_ref_artifact(state, "site_selection", SiteSelectionDecision)
     execution_plan = _load_ref_artifact(state, "execution_plan", ExecutionPlan)
     execution_result = _load_ref_artifact(state, "execution_result", ExecutionResult)
     scenario = _load_ref_artifact(state, "planning_scenario", PlanningScenario)
+    scenario_set = _load_ref_artifact(state, "scenario_set", ScenarioSet)
     grounding = _load_ref_artifact(state, "grounding_result", GroundingResult)
-    bundle_snapshot_digest = ""
+    scoped_problem = _load_ref_artifact(
+        state, "scoped_grounding_problem", GroundedPlanningProblem
+    )
+    planning_problem = scoped_problem or getattr(grounding, "problem", None)
+    context_ref = dict(state.get("context_ref") or {})
+    bundle_snapshot_digest = str(
+        context_ref.get("snapshot_digest")
+        or context_ref.get("bundle_snapshot_digest")
+        or ""
+    )
     workspace = getattr(context, "workspace", None)
     bundle = getattr(workspace, "_bundle", None)
-    if bundle is not None and hasattr(bundle, "spatial_snapshot_digest"):
+    if not bundle_snapshot_digest and bundle is not None and hasattr(bundle, "spatial_snapshot_digest"):
         try:
             bundle_snapshot_digest = str(bundle.spatial_snapshot_digest() or "")
         except Exception:
@@ -232,13 +239,12 @@ async def validate_node(state: Dict[str, Any]) -> Dict[str, Any]:
         plan_intent,
         getattr(context, "constraint_index", None),
         run_id=_run_id(state),
-        decision=selection,
         execution_plan=execution_plan,
         execution_result=execution_result,
         bundle_snapshot_digest=bundle_snapshot_digest,
     )
     final_relation_validation = None
-    if scenario is not None and getattr(grounding, "problem", None) is not None:
+    if scenario is not None and planning_problem is not None:
         from app.domain.relations.service import RelationEvaluationContext
         from app.domain.relations.reference_features import (
             resolve_relation_reference_features,
@@ -248,7 +254,7 @@ async def validate_node(state: Dict[str, Any]) -> Dict[str, Any]:
 
         reference_resolution = resolve_relation_reference_features(
             context,
-            list(getattr(grounding.problem, "constraint_factors", None) or []),
+            list(getattr(planning_problem, "constraint_factors", None) or []),
             scenario_id=str(getattr(scenario, "scenario_id", "") or ""),
         )
         evaluator_context = RelationEvaluationContext(
@@ -284,7 +290,7 @@ async def validate_node(state: Dict[str, Any]) -> Dict[str, Any]:
         final_relation_validation = validate_final_scenario(
             scenario,
             planned_state,
-            grounding.problem,
+            planning_problem,
             evaluator_context,
         )
         relation_checks = check_relation_validation(final_relation_validation)
@@ -312,7 +318,7 @@ async def validate_node(state: Dict[str, Any]) -> Dict[str, Any]:
             report.overall_passed and all(check.passed for check in relation_checks)
         )
     input_keys = {
-        "target_projection", "site_selection", "execution_plan", "execution_result",
+        "target_projection", "scenario_set", "planning_scenario", "approved_execution_input", "execution_plan", "execution_result",
         "deferral_ledger",
     }
     input_refs = {
@@ -366,6 +372,7 @@ async def validate_node(state: Dict[str, Any]) -> Dict[str, Any]:
         if final_relation_ref:
             working_state["artifact_refs"]["final_relation_validation"] = final_relation_ref
             output_refs["final_relation_validation"] = final_relation_ref
+
     patch: Dict[str, Any] = {
         "repair_directives": compilation.model_dump(mode="json"),
         "repair_impact": impact.model_dump(mode="json"),
@@ -403,18 +410,91 @@ async def validate_node(state: Dict[str, Any]) -> Dict[str, Any]:
     elif impact.status == "noop":
         next_action = _next_action_forward("reconcile")
     else:
-        auto = _auto_defer_blocked_targets(
-            state, compilation, impact, working_state
-        )
-        if auto is not None:
-            gate = auto["gate"]
-            next_action = auto["next_action"]
-            output_refs.update(auto["output_refs"])
-            patch.update(auto["patch"])
-        else:
-            reason = str(impact.reason or "validation repair is unresolved")
-            gate = _override_gate_route(gate, "HUMAN", reason="typed_repair_blocked")
-            next_action = _next_action_human("blocked", "typed_repair_blocked", reason)
+        # A reduced scope needs a new scoped planning problem, ScenarioSet,
+        # and approval.  VALIDATE must not auto-defer and forward the old
+        # approval as a partial formal execution.
+        reason = str(impact.reason or "validation repair is unresolved")
+        gate = _override_gate_route(gate, "HUMAN", reason="typed_repair_blocked")
+        next_action = _next_action_human("blocked", "typed_repair_blocked", reason)
+
+    certificate_failed_checks = [check for check in report.checks if not check.passed]
+    certificate_status = (
+        "passed"
+        if report.overall_passed
+        else ("partial" if str(next_action.get("type") or "") == "forward" else "blocked")
+    )
+    execution_result_ref = (state.get("artifact_refs") or {}).get("execution_result")
+    execution_result_digest = str(
+        execution_result_ref.get("descriptor_digest")
+        if isinstance(execution_result_ref, dict)
+        else getattr(execution_result_ref, "descriptor_digest", "")
+    )
+    approved_ref = (state.get("artifact_refs") or {}).get("approved_execution_input")
+    approved_digest = str(
+        approved_ref.get("descriptor_digest")
+        if isinstance(approved_ref, dict)
+        else getattr(approved_ref, "descriptor_digest", "")
+    )
+    certificate = ValidationCertificate(
+        certificate_id=f"validation-certificate:{_run_id(state)}:{getattr(execution_result, 'artifact_id', '') or 'current'}",
+        approved_input_ref=approved_digest,
+        execution_result_ref=execution_result_digest or "execution-result:missing",
+        planned_state_ref=_descriptor_digest(
+            getattr(execution_result, "planned_state_ref", None)
+        ),
+        parcel_changeset_ref=_descriptor_digest(
+            getattr(execution_result, "parcel_changeset_ref", None)
+        ),
+        planned_state_fingerprint=str(
+            getattr(planned_state, "fingerprint", "")
+            or getattr(planned_state, "artifact_id", "")
+            or ""
+        ),
+        scenario_id=str(getattr(scenario, "scenario_id", "") or ""),
+        scenario_fingerprint=str(getattr(scenario, "fingerprint", "") or ""),
+        scenario_set_fingerprint=str(getattr(scenario_set, "fingerprint", "") or ""),
+        baseline_ref=str(getattr(scenario, "baseline_ref", "") or ""),
+        selected_target_count=len(list(getattr(scenario, "target_selections", None) or [])),
+        materialized_target_count=len({
+            str(getattr(item, "target_id", "") or "")
+            for item in list(getattr(execution_result, "task_results", None) or [])
+            if str(getattr(item, "status", "") or "") == "succeeded"
+            and str(getattr(item, "target_id", "") or "")
+        }),
+        selected_target_ids=sorted({
+            str(getattr(item, "target_id", "") or "")
+            for item in list(getattr(scenario, "target_selections", None) or [])
+            if str(getattr(item, "target_id", "") or "")
+        }),
+        materialized_target_ids=sorted({
+            str(getattr(item, "target_id", "") or "")
+            for item in list(getattr(execution_result, "task_results", None) or [])
+            if str(getattr(item, "status", "") or "") == "succeeded"
+            and str(getattr(item, "target_id", "") or "")
+        }),
+        context_version=str(getattr(context, "version", "") or _context_version(state)),
+        bundle_snapshot_digest=bundle_snapshot_digest,
+        status=certificate_status,
+        check_ids=[str(check.check_id) for check in report.checks],
+        passed_check_ids=[str(check.check_id) for check in report.checks if check.passed],
+        blocking_issue_codes=[str(check.code or check.check_id) for check in certificate_failed_checks],
+        issue_count=len(certificate_failed_checks),
+        atomic_execution=(
+            execution_result is not None
+            and str(getattr(execution_result, "atomic_commit_status", "aborted")) == "committed"
+        ),
+        diagnostics=[
+            str(getattr(issue, "message", "") or "")
+            for issues in report.issues_by_stage.values()
+            for issue in issues
+            if getattr(issue, "message", "")
+        ],
+    )
+    certificate_ref = persist_stage_artifact(
+        working_state, "validate", "ValidationCertificate", certificate
+    )
+    working_state["artifact_refs"]["validation_certificate"] = certificate_ref
+    output_refs["validation_certificate"] = certificate_ref
 
     failed_checks = [
         check.model_dump(mode="json")

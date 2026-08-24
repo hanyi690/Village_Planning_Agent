@@ -180,13 +180,21 @@ def _merge_fatal_error(current: Any, update: Any) -> Any:
     """Preserve one parallel failure while allowing explicit recovery clear."""
     if update is None:
         return None
+    if isinstance(update, dict):
+        code = str(update.get("code") or "")
+        if code.endswith("_EXHAUSTED") or code.startswith("RUNTIME_"):
+            return update
     return current or update
 
 
 def _merge_artifact_refs(current: dict[str, Any], update: dict[str, Any]) -> dict[str, Any]:
     """Merge parallel worker artifact refs by key (last writer wins per key)."""
     merged = dict(current or {})
-    merged.update(dict(update or {}))
+    for key, value in dict(update or {}).items():
+        if value is None:
+            merged.pop(key, None)
+        else:
+            merged[key] = value
     return merged
 
 
@@ -364,6 +372,8 @@ def _status(state: dict[str, Any]) -> str:
         return "failed"
     if state.get("human_interrupt") or state.get("interrupt_ref") or state.get("paused_stage"):
         return "paused"
+    if str(state.get("status") or "") == "failed":
+        return "failed"
     if state.get("delivery_status"):
         return "completed"
     value = str(state.get("status") or "running")

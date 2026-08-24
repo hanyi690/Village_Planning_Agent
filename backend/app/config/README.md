@@ -54,13 +54,13 @@
 ## 四、依赖计算器（`dependency.py`）
 
 - **Wave 波次**：`calculate_waves(phase)` — `Wave = max(依赖维度 Wave) + 1`，无依赖为 Wave 1；`get_wave_dimensions(phase, wave)` / `get_total_waves(phase)`
-- **下游依赖**：`get_downstream_dependencies`（同层）+ `get_downstream_dependencies_compat`（跨层合流，修订用）
+- **下游依赖**：`get_downstream_dependencies`（阶段内查询）；修订影响树内部使用跨层遍历，不再暴露第二套 `*_compat` API。
 - **影响树**：`compute_impact_tree(dimension_key)` — 迭代稳定计算修订影响波次（处理跨层依赖与基线维度，ADR-004），`get_next_revision_wave` 取下一个待执行波次
 - **三层依赖链**：`get_full_dependency_chain()` 汇总所有维度 `{layer, layer_depends_on, phase_depends_on, depends_on_same_layer, wave}`
 - **修订序列**：`get_revision_wave_dimensions(target, completed)` — 对多目标维度取各波次并集
 - **就绪检查**：`check_detailed_dependencies_ready(dim, completed)` — L3 执行前校验跨层依赖完成
 
-> **两套依赖 API**：`*_compat`（修订/影响树路径）基于跨层 + 同层依赖合并遍历；非 compat 版（`calculate_waves`）基于同层 `depends_on`。L1 并行由 `execution: parallel` 声明。
+> `calculate_waves` 只按阶段内 `depends_on` 计算执行波次；修订影响树在模块内部合并同层、跨层和跨阶段依赖。L1 并行由 `execution: parallel` 声明。
 
 ---
 

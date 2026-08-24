@@ -8,7 +8,7 @@ Handles step_mode (pause via interrupt()) vs auto-advance (continuous) branching
 Key: interrupt() re-executes the entire node on resume, so SSE events
 must fire AFTER the interrupt point to avoid duplication.
 
-Migrated from agent/completion/node.py per docs/architecture/agent-graph.md §5.
+Stage completion lives in the current workflow graph described by docs/architecture/CURRENT_RUNTIME.md.
 """
 
 from typing import Any, Dict, Optional

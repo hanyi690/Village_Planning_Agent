@@ -122,8 +122,8 @@ def _human_artifact_detail(key: str, payload: Any) -> Dict[str, Any]:
     elif key == "grounding_result":
         for name in ("candidates", "unresolved", "unresolved_references", "spatial_query_evidence", "issues"):
             take(name, 12)
-    elif key == "site_selection":
-        for name in ("selections", "selected_sites", "unplaced_targets", "issues"):
+    elif key in {"scenario_set", "planning_scenario", "approved_execution_input"}:
+        for name in ("scenarios", "target_selections", "target_ids", "candidate_ids", "status", "issues"):
             take(name, 12)
     elif key == "execution_plan":
         for name in ("worker_tasks", "deferred_tasks", "dependencies", "provenance"):

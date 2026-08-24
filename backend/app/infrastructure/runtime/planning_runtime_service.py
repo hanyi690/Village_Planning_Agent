@@ -61,6 +61,26 @@ _SPATIAL_REPLAY_ENTRIES = frozenset({
     "target_projection", "ground", "select", "execute",
     "validate", "reconcile", "deliver",
 })
+_TERMINAL_DELIVERY_STATUSES = frozenset({"complete", "partial", "diagnostic_only"})
+
+
+def _has_terminal_delivery(values: Dict[str, Any] | None) -> bool:
+    """Recognize DELIVER's terminal projection independent of phase lag.
+
+    The graph can persist the terminal delivery manifest one checkpoint before
+    the public ``phase=completed`` projection.  Requiring both values turns a
+    valid DELIVER result into a spurious runtime failure.
+    """
+    if not values:
+        return False
+    gate = values.get("deliver_gate") or {}
+    route = (
+        gate.get("feedback_route")
+        if isinstance(gate, dict)
+        else getattr(gate, "feedback_route", None)
+    )
+    status = str(values.get("delivery_status") or "")
+    return route == "PASS" or status in _TERMINAL_DELIVERY_STATUSES
 
 
 def _spatial_replay_goto(state: Dict[str, Any], replay_from_stage: Optional[str]) -> Optional[str]:
@@ -70,8 +90,21 @@ def _spatial_replay_goto(state: Dict[str, Any], replay_from_stage: Optional[str]
     silently terminate.  Only an explicit spatial stage may open the spatial
     segment; all other resume paths keep LangGraph's historical cursor.
     """
-    entry = str(state.get("subgraph_entry") or "")
-    if replay_from_stage and entry in _SPATIAL_REPLAY_ENTRIES:
+    requested = str(replay_from_stage or "").strip().lower()
+    if requested not in _SPATIAL_REPLAY_ENTRIES:
+        return None
+    entry = str(state.get("subgraph_entry") or "").strip().lower()
+    if entry in _SPATIAL_REPLAY_ENTRIES:
+        return "spatial_chain" if entry == requested else None
+    diagnostic = state.get("diagnostic_terminal") or {}
+    if not diagnostic:
+        terminal_ref = state.get("terminal_ref") or {}
+        if isinstance(terminal_ref, dict):
+            diagnostic = terminal_ref.get("diagnostic") or terminal_ref
+    if isinstance(diagnostic, dict) and diagnostic.get("code") in {
+        "STALE_CHECKPOINT_NO_EXECUTABLE_CURSOR",
+        "UNAUTHORIZED_STAGE",
+    }:
         return "spatial_chain"
     return None
 
@@ -213,6 +246,234 @@ class PlanningRuntimeService:
         """Ensure the service is initialized (lazy initialization)."""
         if not cls._initialized or cls._graph is None:
             await cls.initialize()
+
+    @classmethod
+    async def _terminalize_stale_cursor(
+        cls,
+        session_id: str,
+        values: Dict[str, Any],
+    ) -> None:
+        """Persist an explicit diagnostic for a running row with no cursor.
+
+        A process restart can leave legacy graph versions with a non-terminal
+        phase but no LangGraph task to resume.  Replaying the parent head here
+        would guess at an execution point and can duplicate stage effects.  A
+        diagnostic terminal makes the boundary visible and leaves explicit
+        replay/rerun as the only way forward.
+        """
+
+        stage = str(values.get("active_stage") or values.get("phase") or "runtime")
+        message = (
+            "The persisted session is marked running, but its checkpoint has "
+            "no executable LangGraph task; explicit replay/rerun is required."
+        )
+        diagnostic = {
+            "stage": stage,
+            "code": "STALE_CHECKPOINT_NO_EXECUTABLE_CURSOR",
+            "reason": "no_executable_cursor",
+            "message": message,
+            "retryable": True,
+            "action": "explicit_replay_or_rerun",
+        }
+        await cls.aupdate_state(
+            session_id,
+            {
+                "fatal_error": diagnostic,
+                "delivery_status": "diagnostic_only",
+                "diagnostic_terminal": diagnostic,
+                "terminal_ref": diagnostic,
+                "phase": "completed",
+                "current_stage": "TERMINAL",
+                "next_stage": "",
+                "statutory_complete": False,
+                "status": "failed",
+            },
+            as_node="end_diagnostic",
+        )
+        await update_planning_session_async(
+            session_id,
+            {
+                "status": TaskStatus.failed,
+                "execution_error": message,
+            },
+        )
+        await cls._append_event(session_id, create_error_event(session_id, message))
+
+    @classmethod
+    async def _terminalize_unfinished_stream(
+        cls,
+        session_id: str,
+        values: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        """Close a normally-returned stream that has no pause or terminal.
+
+        A LangGraph stream can finish without raising when a conditional edge
+        returns ``END`` from an incomplete checkpoint.  Leaving the database
+        row as ``running`` makes the public projection lie forever, so convert
+        that impossible boundary into an explicit diagnostic terminal.
+        """
+
+        existing = values.get("fatal_error")
+        if isinstance(existing, dict):
+            diagnostic = dict(existing)
+            diagnostic.setdefault("stage", str(values.get("phase") or "runtime"))
+            diagnostic.setdefault("reason", "graph_stream_returned_without_terminal")
+            diagnostic.setdefault("message", "Graph stream returned without a terminal result.")
+        else:
+            diagnostic = {
+                "stage": str(values.get("active_stage") or values.get("phase") or "runtime"),
+                "code": "RUNTIME_STREAM_COMPLETED_WITHOUT_TERMINAL",
+                "reason": "graph_stream_returned_without_terminal",
+                "message": (
+                    "Graph stream completed without a HUMAN pause or an "
+                    "accepted/diagnostic terminal result."
+                ),
+                "retryable": True,
+                "action": "explicit_replay_or_rerun",
+            }
+        await cls.aupdate_state(
+            session_id,
+            {
+                "fatal_error": diagnostic,
+                "delivery_status": "diagnostic_only",
+                "diagnostic_terminal": diagnostic,
+                "phase": "completed",
+                "current_stage": "TERMINAL",
+                "next_stage": "",
+                "statutory_complete": False,
+                "status": "failed",
+            },
+            as_node="end_diagnostic",
+        )
+        message = str(diagnostic.get("message") or "planning execution failed")
+        await update_planning_session_async(
+            session_id,
+            {"status": TaskStatus.failed, "execution_error": message},
+        )
+        await cls._append_event(session_id, create_error_event(session_id, message))
+        return diagnostic
+
+    @classmethod
+    async def recover_inflight_sessions(cls) -> dict[str, int]:
+        """Schedule crash recovery for sessions with pending checkpoints.
+
+        The database row is only session metadata; the authoritative running
+        cursor is LangGraph's checkpoint tree.  On a process restart the old
+        background task is gone, so a ``running`` projection can otherwise
+        remain parked forever.  Recovery is deliberately conservative:
+        terminal rows, missing checkpoints, and HUMAN interrupts are skipped;
+        only a checkpoint with pending non-interrupt tasks is resumed through
+        ``resume_from_deepest_checkpoint``.  A non-init, non-terminal
+        checkpoint with no task is instead materialized as an auditable stale
+        cursor diagnostic; it is never guessed into a new graph execution.
+        """
+
+        await cls.ensure_initialized()
+        from app.bootstrap.composition import CompositionRoot
+        from app.core.settings import (
+            RUNTIME_RECOVERY_MAX_AGE_HOURS,
+            RUNTIME_RECOVERY_MAX_SESSIONS,
+        )
+        from app.database.operations import list_planning_sessions_async
+
+        sessions = await list_planning_sessions_async(
+            limit=max(1, int(RUNTIME_RECOVERY_MAX_SESSIONS))
+        )
+        cutoff = time.time() - max(0.0, float(RUNTIME_RECOVERY_MAX_AGE_HOURS)) * 3600.0
+        recent_sessions = []
+        for session in sessions:
+            stamp = session.get("updated_at") or session.get("created_at")
+            if not stamp:
+                recent_sessions.append(session)
+                continue
+            try:
+                parsed = datetime.fromisoformat(str(stamp).replace("Z", "+00:00"))
+                if parsed.timestamp() >= cutoff:
+                    recent_sessions.append(session)
+            except (TypeError, ValueError, OverflowError):
+                # An unparseable timestamp must not hide a potentially live
+                # checkpoint; the checkpoint/task gates below remain strict.
+                recent_sessions.append(session)
+        sessions = recent_sessions
+        scheduled = 0
+        skipped = 0
+        failed = 0
+        terminalized = 0
+        supervisor = CompositionRoot.get_task_supervisor()
+
+        for session in sessions:
+            session_id = str(session.get("session_id") or "").strip()
+            if not session_id or session.get("completed_at") or session.get("execution_error"):
+                skipped += 1
+                continue
+            try:
+                snapshot = await cls.aget_state(session_id, subgraphs=True)
+                tasks = list(getattr(snapshot, "tasks", None) or ()) if snapshot else []
+                if snapshot is None:
+                    logger.debug(
+                        "[PlanningRuntimeService] recovery skipped session %s: "
+                        "checkpoint has no pending task (next=%s)",
+                        session_id,
+                        [],
+                    )
+                    skipped += 1
+                    continue
+                if not tasks:
+                    values = _materialize_workflow_state_preserving_artifacts(
+                        dict(getattr(snapshot, "values", None) or {})
+                    )
+                    if (
+                        str(values.get("phase") or "") not in {"", "init", "completed"}
+                        and not values.get("delivery_status")
+                        and not values.get("fatal_error")
+                    ):
+                        await cls._terminalize_stale_cursor(session_id, values)
+                        terminalized += 1
+                    else:
+                        logger.debug(
+                            "[PlanningRuntimeService] recovery skipped session %s: "
+                            "checkpoint has no pending task (next=%s)",
+                            session_id,
+                            list(getattr(snapshot, "next", None) or []),
+                        )
+                        skipped += 1
+                    continue
+                if any(getattr(task, "interrupts", None) for task in tasks):
+                    skipped += 1
+                    continue
+                values = _materialize_workflow_state_preserving_artifacts(
+                    dict(getattr(snapshot, "values", None) or {})
+                )
+                if (
+                    values.get("delivery_status")
+                    or values.get("fatal_error")
+                    or str(values.get("phase") or "") == "completed"
+                ):
+                    skipped += 1
+                    continue
+                supervisor.create_task(
+                    f"{session_id}:recovery",
+                    cls.resume_from_deepest_checkpoint(session_id),
+                )
+                scheduled += 1
+            except Exception as exc:  # noqa: BLE001 - one stale row must not block startup
+                failed += 1
+                logger.warning(
+                    "[PlanningRuntimeService] recovery scan failed "
+                    "(session=%s, exception_type=%s)",
+                    session_id,
+                    type(exc).__name__,
+                )
+
+        summary = {
+            "scanned": len(sessions),
+            "scheduled": scheduled,
+            "terminalized": terminalized,
+            "skipped": skipped,
+            "failed": failed,
+        }
+        logger.info("[PlanningRuntimeService] inflight recovery scan: %s", summary)
+        return summary
 
     @classmethod
     async def shutdown(cls) -> None:
@@ -467,6 +728,48 @@ class PlanningRuntimeService:
             else:
                 current = await cls.aget_state_values(session_id) or {}
 
+            # HUMAN interrupts raised inside the compiled cognitive segment
+            # live in that segment's checkpoint namespace. Resuming from the
+            # parent thread head replays Layer 1 from the beginning and can
+            # expose the same event_id again. Resolve the deepest pending
+            # interrupt checkpoint before streaming the Command(resume=...).
+            resume_config = dict(config)
+            try:
+                parent_snapshot = await cls.aget_state(session_id, subgraphs=True)
+                for task in getattr(parent_snapshot, "tasks", ()) or ():
+                    if not getattr(task, "interrupts", None):
+                        continue
+                    sub_state = getattr(task, "state", None)
+                    sub_config = getattr(sub_state, "config", None) or {}
+                    sub_configurable = dict(sub_config.get("configurable") or {})
+                    checkpoint_ns = str(sub_configurable.get("checkpoint_ns") or "")
+                    checkpoint_id = str(sub_configurable.get("checkpoint_id") or "")
+                    if checkpoint_ns:
+                        resume_config["configurable"]["checkpoint_ns"] = checkpoint_ns
+                    if checkpoint_id:
+                        resume_config["configurable"]["checkpoint_id"] = checkpoint_id
+                    checkpoint_map = sub_configurable.get("checkpoint_map")
+                    if isinstance(checkpoint_map, dict):
+                        # Nested compiled segments use the map to resolve the
+                        # child checkpoint back to its parent thread.  Keeping
+                        # only namespace/id can reopen the parent head and
+                        # leave the same HUMAN interrupt pending (especially
+                        # for the post-L3 HITL segment).
+                        resume_config["configurable"]["checkpoint_map"] = dict(checkpoint_map)
+                    logger.info(
+                        "[PlanningRuntimeService] [%s] HUMAN resume target ns=%s checkpoint=%s",
+                        session_id,
+                        checkpoint_ns,
+                        checkpoint_id,
+                    )
+                    break
+            except Exception as exc:  # noqa: BLE001 - parent projection is advisory
+                logger.warning(
+                    "[PlanningRuntimeService] [%s] failed to resolve nested HUMAN checkpoint: %s",
+                    session_id,
+                    exc,
+                )
+
             paused_stage = str(current.get("paused_stage") or "").lower()
             if paused_stage in {"l1", "l2", "l3", "ground", "select"}:
                 from app.infrastructure.kg.session_kg import ensure_session_kg
@@ -489,9 +792,38 @@ class PlanningRuntimeService:
                     bundle_version=bundle_version,
                 )
                 if restored is None:
-                    raise RuntimeError(
-                        f"cannot resume {paused_stage}: session data/KG restoration failed"
-                    )
+                    # A text-only session legitimately has no
+                    # ``landuse_current`` parcels.  GROUND/SELECT must still
+                    # be resumable so the run can record an explicit partial
+                    # or deferred delivery; requiring an empty KG here made
+                    # an approved unresolved-spatial review fail with 500.
+                    # Rebuild the typed context and let the spatial stages
+                    # preserve the missing-geometry evidence themselves.
+                    if paused_stage in {"ground", "select"}:
+                        from app.workflow.layers.context_bootstrap import bootstrap_context_node
+                        from app.infrastructure.context.planning_context_factory import get_cached_context
+
+                        try:
+                            await bootstrap_context_node(current)
+                        except Exception as exc:  # noqa: BLE001 - report below
+                            logger.warning(
+                                "[PlanningRuntimeService] [%s] context-only resume bootstrap failed: %s",
+                                session_id,
+                                exc,
+                            )
+                        if get_cached_context(session_id) is None:
+                            raise RuntimeError(
+                                f"cannot resume {paused_stage}: planning context restoration failed"
+                            )
+                        logger.warning(
+                            "[PlanningRuntimeService] [%s] continuing %s without a KG parcel index; unresolved spatial references remain deferred",
+                            session_id,
+                            paused_stage,
+                        )
+                    else:
+                        raise RuntimeError(
+                            f"cannot resume {paused_stage}: session data/KG restoration failed"
+                        )
                 await cls._replay_l1_kg_enrichment(session_id, current)
 
             # A provider failure opens a session-scoped circuit breaker so a
@@ -525,7 +857,7 @@ class PlanningRuntimeService:
             # once is safe and bounded.
             for _resume_attempt in range(2):
                 stream_iterator = cls._graph.astream(
-                    command, config,
+                    command, resume_config,
                     stream_mode=['values', 'checkpoints'],
                     version="v2",
                 )
@@ -647,7 +979,14 @@ class PlanningRuntimeService:
                 (final_state or {}).get("paused_stage")
             )
             fatal_error = (final_state or {}).get("fatal_error")
-            if fatal_error and still_paused:
+            terminal_status = str((final_state or {}).get("delivery_status") or "")
+            phase = str((final_state or {}).get("phase") or "")
+            if (
+                fatal_error
+                and still_paused
+                and terminal_status not in {"diagnostic_only", "complete", "partial"}
+                and phase != "completed"
+            ):
                 # The graph advanced into a new HUMAN pause: the fatal_error is a
                 # transient worker failure (e.g. LLM circuit trip) that the
                 # operator is about to retry via provider-resume.  Keep the pause;
@@ -666,13 +1005,9 @@ class PlanningRuntimeService:
                 await cls._append_event(session_id, create_error_event(session_id, message))
                 logger.error("[PlanningRuntimeService] [%s] Terminal graph failure: %s", session_id, fatal_error)
                 return
-            deliver_gate = (final_state or {}).get("deliver_gate") or {}
-            deliver_route = deliver_gate.get("feedback_route") if isinstance(deliver_gate, dict) else getattr(deliver_gate, "feedback_route", None)
             delivery_status = str((final_state or {}).get("delivery_status") or "")
-            if final_state and final_state.get("phase") == "completed" and (
-                deliver_route == "PASS"
-                or delivery_status in {"complete", "partial", "diagnostic_only"}
-            ):
+            if final_state and _has_terminal_delivery(final_state):
+                await cls._mark_terminal_delivery(session_id)
                 await cls._append_event(session_id, create_completed_event(
                     session_id,
                     delivery_status=delivery_status,
@@ -899,6 +1234,26 @@ class PlanningRuntimeService:
             logger.warning(f"[PlanningRuntimeService] [{session_id}] event publish failed: {e}")
             return False
 
+    @staticmethod
+    async def _mark_terminal_delivery(session_id: str) -> None:
+        """Project a successful DELIVER terminal into persisted history metadata.
+
+        The workflow checkpoint is authoritative for the live state, while the
+        database row backs the restart-safe project/session list.  Keeping the
+        two projections in sync makes a completed session appear as completed
+        when it is reopened from history without changing the checkpoint
+        cursor or replay semantics.
+        """
+
+        await update_planning_session_async(
+            session_id,
+            {
+                "status": TaskStatus.completed,
+                "completed_at": datetime.now(),
+                "execution_error": None,
+            },
+        )
+
     @classmethod
     async def trigger_planning_execution(
         cls,
@@ -1074,6 +1429,8 @@ class PlanningRuntimeService:
             # spatial segment directly; it preserves the selected checkpoint
             # as the parent and does not route through START/conversation.
             replay_goto = _spatial_replay_goto(raw_state, replay_from_stage)
+            if replay_goto and replay_from_stage:
+                updates["subgraph_entry"] = str(replay_from_stage).strip().lower()
             stream_input = Command(
                 update=cls._pack_workflow_patch_preserving_artifacts(raw_state, updates),
                 **({"goto": replay_goto} if replay_goto else {}),
@@ -1204,19 +1561,17 @@ class PlanningRuntimeService:
 
             # Only send completed event when all 3 layers are done
             final_state = await cls.aget_state_values(session_id)
-            deliver_gate = (final_state or {}).get("deliver_gate") or {}
-            deliver_route = deliver_gate.get("feedback_route") if isinstance(deliver_gate, dict) else getattr(deliver_gate, "feedback_route", None)
             delivery_status = str((final_state or {}).get("delivery_status") or "")
-            if final_state and final_state.get("phase") == "completed" and (
-                deliver_route == "PASS"
-                or delivery_status in {"complete", "partial", "diagnostic_only"}
-            ):
+            if final_state and _has_terminal_delivery(final_state):
+                await cls._mark_terminal_delivery(session_id)
                 await cls._append_event(session_id, create_completed_event(
                     session_id,
                     delivery_status=delivery_status,
                     deferral_summary=final_state.get("deferral_summary") or {},
                     diagnostic_terminal=final_state.get("diagnostic_terminal") or {},
                 ))
+            elif final_state and not final_state.get("human_interrupt"):
+                await cls._terminalize_unfinished_stream(session_id, final_state)
 
             logger.info(f"[PlanningRuntimeService] [{session_id}] Background execution completed")
 
@@ -1247,6 +1602,10 @@ class PlanningRuntimeService:
                 }, as_node="end_diagnostic")
             except Exception as state_error:
                 logger.error("[PlanningRuntimeService] failed to persist terminal error: %s", state_error)
+            await update_planning_session_async(
+                session_id,
+                {"status": TaskStatus.failed, "execution_error": str(e)},
+            )
             await cls._append_event(session_id, create_error_event(session_id, str(e)))
         finally:
             # Clean up execution lock to prevent memory leak

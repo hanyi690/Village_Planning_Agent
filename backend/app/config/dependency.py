@@ -131,8 +131,13 @@ def _get_all_downstream(
     return downstream
 
 
-def get_downstream_dependencies_compat(dimension_key: str) -> List[str]:
-    """获取依赖指定维度的所有下游维度"""
+def _get_cross_scope_downstream(dimension_key: str) -> List[str]:
+    """Return all direct downstream dimensions across configured scopes.
+
+    Revision impact traversal is the only caller.  Keep this traversal
+    private so callers cannot accidentally treat it as a second dependency
+    API alongside the phase-scoped ``get_downstream_dependencies`` function.
+    """
     config = _get_cached_config()
     downstream = []
 
@@ -163,7 +168,7 @@ def compute_impact_tree(dimension_key: str) -> RevisionImpactTree:
 
     while queue:
         current = queue.pop(0)
-        downstream = get_downstream_dependencies_compat(current)
+        downstream = _get_cross_scope_downstream(current)
         for dep_dim in downstream:
             if dep_dim not in visited:
                 visited.add(dep_dim)

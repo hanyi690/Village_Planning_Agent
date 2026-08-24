@@ -84,6 +84,10 @@ async def _hydrate_l1_spatial_facts(state: Dict[str, Any], context: Any) -> None
         fact_records = list(getattr(snapshot, "fact_records", []) or [])
         facts = list(getattr(snapshot, "location_facts", []) or [])
         context.l1_fact_records = fact_records
+        # The raw-input register is produced only by L1 and is restored as an
+        # immutable downstream input.  Later stages must never re-parse the
+        # session's raw ``village_data`` document.
+        context.l1_input_register = getattr(snapshot, "input_register", None)
         context.location_facts = facts
 
         try:

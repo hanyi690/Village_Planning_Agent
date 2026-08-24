@@ -36,6 +36,8 @@ class ResourceLinks(PublicModel):
 class SessionProjection(PublicModel):
     schema_version: Literal['1.0'] = '1.0'
     session_id: str
+    project_name: str = ''
+    village_name: str = ''
     status: SessionRunStatus
     active_stage: str = ''
     phase: str = ''

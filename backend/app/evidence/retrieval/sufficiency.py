@@ -112,7 +112,11 @@ def evaluate_sufficiency(
     """Classify evidence without treating ``facts != empty`` as success."""
     facts = _fact_text(response)
     typed_facts = list(response.evidence_bundle.facts)
-    required = tuple(dict.fromkeys([*request.required_facts, *request.questions]))
+    required = tuple(dict.fromkeys([
+        *request.required_facts,
+        *request.questions,
+        *(item.statement for item in request.requirements if item.required),
+    ]))
     missing = tuple(
         item
         for item in required

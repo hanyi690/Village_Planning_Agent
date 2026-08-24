@@ -6,7 +6,7 @@ model can choose between routing intents and actual tool calls.
 System prompt is built via ChatPromptTemplate so the template is reusable,
 cacheable, and testable in isolation.
 
-Migrated from agent/conversation/node.py per docs/architecture/agent-graph.md §5.
+Conversation routing is part of the current workflow graph described by docs/architecture/CURRENT_RUNTIME.md.
 """
 
 from typing import Dict, Any, Optional, TYPE_CHECKING

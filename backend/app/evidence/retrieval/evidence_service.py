@@ -17,6 +17,7 @@ from typing import Any, List, Mapping
 from app.contracts.evidence.evidence_contracts import (
     ExplorationRequest,
     EvidenceBundle,
+    EvidenceCoverage,
     EvidenceFact,
     EvidenceSource,
     ExplorationResult,
@@ -24,6 +25,7 @@ from app.contracts.evidence.evidence_contracts import (
 )
 from app.contracts.evidence.evidence_packet_contracts import EvidencePacket
 from app.infrastructure.logging import get_logger
+from app.evidence.retrieval.coverage import build_evidence_coverage
 from app.evidence.retrieval.query_planner import build_query_plan, request_fingerprint
 from app.evidence.retrieval.router import RetrieverKind
 from app.evidence.retrieval.sufficiency import evaluate_sufficiency
@@ -32,6 +34,13 @@ from app.evidence.retrieval.fact_quality import apply_fact_quality
 logger = get_logger(__name__)
 _EVIDENCE_CACHE: OrderedDict[tuple, ExplorationResult] = OrderedDict()
 _GATE_EVIDENCE_CACHE: dict[str, list[ExplorationResult]] = {}
+
+# Gate-triggered retrieval is allowed to ask a bounded number of narrower
+# questions.  This is deliberately a small orchestration limit, not a hidden
+# retry policy: every follow-up is derived from an explicit unresolved
+# requirement and is visible in the returned query trace.
+_GATE_GAP_MAX_DEPTH = 2
+_GATE_GAP_MAX_REQUESTS = 8
 
 
 def _gate_evidence_digest(session_id: str) -> str:
@@ -1124,6 +1133,21 @@ async def retrieve_evidence(
     result = result.model_copy(update={
         "evidence_bundle": apply_fact_quality(result.evidence_bundle),
     })
+    coverage_decision = evaluate_sufficiency(request, result)
+    result = result.model_copy(update={
+        "coverage": build_evidence_coverage(
+            request,
+            result,
+            coverage_decision,
+            source_families_queried=tuple(item.value for item in plan.retrievers),
+            query_trace=tuple(
+                trace
+                for trace in [*retrieval_status, *external_trace]
+                if isinstance(trace, dict)
+            ),
+            source_scope="project_wide" if project_wide_query else "scoped",
+        ),
+    })
     _EVIDENCE_CACHE[cache_key] = result
     _EVIDENCE_CACHE.move_to_end(cache_key)
     try:
@@ -1141,6 +1165,7 @@ def render_evidence_prompt_section(
     bundle: EvidenceBundle,
     cognition: SpatialCognitionEvidence | None = None,
     packet: EvidencePacket | None = None,
+    coverage: EvidenceCoverage | None = None,
 ) -> str:
     """Render an ExplorationResult as a unified markdown prompt section.
 
@@ -1154,6 +1179,24 @@ def render_evidence_prompt_section(
         "- 只能使用下方已经返回的候选和 opaque bundle ref；禁止从名称、数量、道路宽度或报告文字自行生成 BSM、坐标、WKT、地块或关系。",
         "- ambiguity=multiple 或 unresolved 时不得写成唯一选址；必须保留候选/缺口并把定位交给 GROUND。",
     ]
+
+    if coverage is not None:
+        lines.append("")
+        lines.append(
+            f"**证据覆盖**: stop_reason={coverage.stop_reason}; "
+            f"sufficient={str(coverage.sufficient).lower()}; "
+            f"source_scope={coverage.source_scope}"
+        )
+        if coverage.unresolved_requirements:
+            lines.append(
+                "- 未解决 requirement IDs："
+                + "、".join(coverage.unresolved_requirements[:12])
+            )
+        for item in coverage.requirement_coverage[:12]:
+            lines.append(
+                f"- requirement={item.requirement_id}; status={item.status}; "
+                f"locator_complete={str(item.locators_complete).lower()}"
+            )
 
     if cognition and cognition.village_overview:
         lines.append(f"**村域概况**: {cognition.village_overview}")
@@ -1488,6 +1531,115 @@ def render_evidence_prompt_section(
     return "\n".join(lines)
 
 
+def _gate_request_from_pending(
+    pending_request: Any,
+    *,
+    session_id: str,
+    stage: str,
+) -> ExplorationRequest:
+    """Convert a gate-owned pending request without adding retrieval policy."""
+
+    if isinstance(pending_request, dict):
+        ctx = pending_request.get("context") or {}
+        required_fact = ctx.get("required_fact")
+        required_facts = (
+            required_fact
+            if isinstance(required_fact, list)
+            else [required_fact]
+            if required_fact
+            else []
+        )
+        return ExplorationRequest(
+            run_id=session_id,
+            request_type=pending_request.get("request_type", "evidence_gap"),
+            query=ctx.get("message", ctx.get("reason", "")),
+            context_refs=list(ctx.get("source_refs") or []),
+            evidence_gaps_to_resolve=list(ctx.get("gaps") or []),
+            dimension_key=ctx.get("dimension", ""),
+            stage=stage,
+            query_purpose="gap_resolution",
+            questions=list(ctx.get("questions") or []),
+            required_facts=required_facts,
+            entity_scope=list(ctx.get("entity_scope") or []),
+        )
+
+    ctx = getattr(pending_request, "context", {}) or {}
+    return ExplorationRequest(
+        run_id=session_id,
+        request_type=getattr(pending_request, "request_type", "evidence_gap"),
+        query=ctx.get("message", ctx.get("reason", "")),
+        context_refs=list(ctx.get("source_refs") or []),
+        evidence_gaps_to_resolve=list(ctx.get("gaps") or []),
+        dimension_key=ctx.get("dimension", ""),
+        stage=stage,
+        query_purpose="gap_resolution",
+        questions=list(ctx.get("questions") or []),
+        required_facts=list(ctx.get("required_facts") or []),
+        entity_scope=list(ctx.get("entity_scope") or []),
+    )
+
+
+def _gate_unresolved_statements(result: ExplorationResult) -> list[str]:
+    """Return only requirement statements that can become follow-up queries."""
+
+    coverage = result.coverage
+    statements: list[str] = []
+    if coverage is not None:
+        requirements_by_id = {
+            item.requirement_id: item.statement
+            for item in coverage.requirements
+        }
+        statements.extend(
+            requirements_by_id[item]
+            for item in coverage.unresolved_requirements
+            if item in requirements_by_id and str(requirements_by_id[item]).strip()
+        )
+    # Older/custom retrievers may not return coverage yet.  Packet missing
+    # evidence remains a diagnostic fallback, but opaque error codes are not
+    # promoted into natural-language subqueries.
+    if not statements and result.evidence_packet is not None:
+        statements.extend(
+            str(item).strip()
+            for item in result.evidence_packet.missing_evidence
+            if str(item).strip() and ":" not in str(item)
+        )
+    if not statements:
+        statements.extend(
+            str(item).strip()
+            for item in result.evidence_bundle.unresolved
+            if str(item).strip() and ":" not in str(item)
+        )
+    return list(dict.fromkeys(statements))
+
+
+def _append_gate_trace(
+    result: ExplorationResult,
+    trace: dict[str, Any],
+) -> ExplorationResult:
+    """Attach orchestration evidence to both packet and coverage traces."""
+
+    packet = result.evidence_packet
+    if packet is not None:
+        packet = packet.model_copy(update={
+            "query_trace": [*packet.query_trace, trace][-24:],
+        })
+    coverage = result.coverage
+    if coverage is not None:
+        coverage = coverage.model_copy(update={
+            "query_trace": [*coverage.query_trace, trace][-24:],
+        })
+    return result.model_copy(update={
+        "evidence_packet": packet,
+        "coverage": coverage,
+    })
+
+
+def _gate_request_key(request: ExplorationRequest) -> str:
+    """Stable key used to prevent a gap loop from repeating one subquery."""
+
+    return request_fingerprint(request)
+
+
 async def retrieve_evidence_for_gate(
     gate_decision: dict,
     session_id: str,
@@ -1538,41 +1690,24 @@ async def retrieve_evidence_for_gate(
             external_port = UnavailableExternalSearchAdapter()
             external_provider_owned = True
 
+    queue: list[tuple[ExplorationRequest, int]] = [
+        (
+            _gate_request_from_pending(
+                item,
+                session_id=session_id,
+                stage=gate_decision.get("stage", ""),
+            ),
+            0,
+        )
+        for item in pending
+    ]
+    queued_keys = {_gate_request_key(request) for request, _ in queue}
+    queue_index = 0
+
     try:
-        for pr in pending:
-            if isinstance(pr, dict):
-                ctx = pr.get("context") or {}
-                required_fact = ctx.get("required_fact")
-                required_facts = required_fact if isinstance(required_fact, list) else [required_fact] if required_fact else []
-                request = ExplorationRequest(
-                    run_id=session_id,
-                    request_type=pr.get("request_type", "evidence_gap"),
-                    query=ctx.get("message", ctx.get("reason", "")),
-                    context_refs=list(ctx.get("source_refs") or []),
-                    evidence_gaps_to_resolve=list(ctx.get("gaps") or []),
-                    dimension_key=ctx.get("dimension", ""),
-                    stage=gate_decision.get("stage", ""),
-                    query_purpose="gap_resolution",
-                    questions=list(ctx.get("questions") or []),
-                    required_facts=required_facts,
-                    entity_scope=list(ctx.get("entity_scope") or []),
-                )
-            else:
-                # PendingRequest Pydantic model
-                ctx = getattr(pr, "context", {}) or {}
-                request = ExplorationRequest(
-                    run_id=session_id,
-                    request_type=getattr(pr, "request_type", "evidence_gap"),
-                    query=ctx.get("message", ctx.get("reason", "")),
-                    context_refs=list(ctx.get("source_refs") or []),
-                    evidence_gaps_to_resolve=list(ctx.get("gaps") or []),
-                    dimension_key=ctx.get("dimension", ""),
-                    stage=gate_decision.get("stage", ""),
-                    query_purpose="gap_resolution",
-                    questions=list(ctx.get("questions") or []),
-                    required_facts=list(ctx.get("required_facts") or []),
-                    entity_scope=list(ctx.get("entity_scope") or []),
-                )
+        while queue_index < len(queue) and len(results) < _GATE_GAP_MAX_REQUESTS:
+            request, depth = queue[queue_index]
+            queue_index += 1
             try:
                 external_policy = None
                 if external_port is not None:
@@ -1590,6 +1725,57 @@ async def retrieve_evidence_for_gate(
                     external_port=external_port,
                     external_policy=external_policy,
                 )
+                unresolved = _gate_unresolved_statements(result)
+                coverage_stop = (
+                    str(result.coverage.stop_reason)
+                    if result.coverage is not None
+                    else ""
+                )
+                trace: dict[str, Any] = {
+                    "step": "evidence_gap_loop",
+                    "attempt": len(results) + 1,
+                    "depth": depth,
+                    "request": request.query,
+                }
+                if unresolved and coverage_stop not in {"budget_exhausted", "human_required"}:
+                    follow_up = request.model_copy(update={
+                        "request_type": "evidence_gap",
+                        "query": "；".join(unresolved),
+                        "query_purpose": "gap_resolution",
+                        "questions": [],
+                        "required_facts": unresolved,
+                        "evidence_gaps_to_resolve": unresolved,
+                        "requirements": [],
+                    })
+                    follow_up_key = _gate_request_key(follow_up)
+                    if depth < _GATE_GAP_MAX_DEPTH and follow_up_key not in queued_keys:
+                        queued_keys.add(follow_up_key)
+                        queue.append((follow_up, depth + 1))
+                        trace.update({
+                            "status": "follow_up_requested",
+                            "missing_subqueries": unresolved,
+                        })
+                    elif depth >= _GATE_GAP_MAX_DEPTH:
+                        trace.update({
+                            "status": "stopped",
+                            "reason": "bounded_depth",
+                            "missing_subqueries": unresolved,
+                        })
+                    else:
+                        trace.update({
+                            "status": "stopped",
+                            "reason": "repeated_request",
+                            "missing_subqueries": unresolved,
+                        })
+                elif unresolved:
+                    trace.update({
+                        "status": "stopped",
+                        "reason": coverage_stop or "terminal_coverage",
+                        "missing_subqueries": unresolved,
+                    })
+                else:
+                    trace.update({"status": "sufficient"})
+                result = _append_gate_trace(result, trace)
                 results.append(result)
             except Exception as e:
                 logger.warning("[retrieve_evidence_for_gate] failed for %s: %s", request.request_type, e)
@@ -1606,6 +1792,17 @@ async def retrieve_evidence_for_gate(
                         "[retrieve_evidence_for_gate] external provider cleanup failed: %s",
                         exc,
                     )
+
+    if results and queue_index < len(queue):
+        # Keep the request budget observable when multiple pending requests or
+        # chained gaps exceed the gate-level cap.
+        results[-1] = _append_gate_trace(results[-1], {
+            "step": "evidence_gap_loop",
+            "status": "stopped",
+            "reason": "request_budget",
+            "max_requests": _GATE_GAP_MAX_REQUESTS,
+            "remaining_requests": len(queue) - queue_index,
+        })
 
     if results:
         _GATE_EVIDENCE_CACHE.setdefault(session_id, []).extend(results)

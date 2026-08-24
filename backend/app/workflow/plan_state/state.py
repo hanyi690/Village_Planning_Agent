@@ -1,6 +1,6 @@
 """Run-time state: AgentState TypedDict, reducers, and UI status projection.
 
-Migrated from agent/state.py per docs/architecture/agent-graph.md §5.
+Workflow state follows the current artifact/state boundary in docs/architecture/API_AND_STATE.md.
 """
 
 import math
@@ -127,7 +127,13 @@ def _merge_artifact_refs(a: Dict[str, Any], b: Dict[str, Any]) -> Dict[str, Any]
     """Merge reference deltas without copying the referenced payloads."""
     if not b:
         return a
-    return {**(a or {}), **b}
+    merged = dict(a or {})
+    for key, value in dict(b).items():
+        if value is None:
+            merged.pop(key, None)
+        else:
+            merged[key] = value
+    return merged
 
 
 def _merge_retry_counts(a: Dict[str, int], b: Dict[str, int]) -> Dict[str, int]:
@@ -143,6 +149,10 @@ def _merge_retry_counts(a: Dict[str, int], b: Dict[str, int]) -> Dict[str, int]:
 
 def _preserve_fatal_error(a: Optional[Dict[str, Any]], b: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
     """Keep the first provider/config failure across parallel dimensions."""
+    if isinstance(b, dict):
+        code = str(b.get("code") or "")
+        if code.endswith("_EXHAUSTED") or code.startswith("RUNTIME_"):
+            return b
     return a or b
 
 
@@ -258,7 +268,6 @@ class AgentState(TypedDict, total=False):
     human_review_pause_published: bool
     human_review_resume_consumed: bool
     human_deferred_targets: List[str]
-    human_deferred_select_revision: bool
     structural_deferral_revision: bool
     delivery_status: str
     deferral_summary: Dict[str, Any]
@@ -319,6 +328,10 @@ def state_to_ui_status(state: Dict[str, Any], db_session: Optional[Dict] = None,
 
     if is_interrupted:
         status = "paused"
+    elif state.get("fatal_error"):
+        status = "failed"
+    elif str(state.get("status") or "") == "failed":
+        status = "failed"
     elif phase == "completed" and (deliver_pass or delivery_terminal):
         status = "completed"
     elif phase == "completed":

@@ -1,6 +1,6 @@
 """Phase machine: PlanningPhase enum + layer/phase/wave conversion helpers.
 
-Migrated from agent/state.py per docs/architecture/agent-graph.md §5.
+Phase transitions follow the current workflow/state boundary in docs/architecture/API_AND_STATE.md.
 """
 
 import operator
