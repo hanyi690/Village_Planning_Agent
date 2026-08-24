@@ -39,7 +39,9 @@ import { logger } from '@/features/planning/utils/logger';
 import { normalizeGisLayers } from '@/features/planning/utils/gis-normalize';
 import { fetchCurrentSourceLayers, type CurrentSourceLayersResult } from '@/features/planning/utils/offline-basemap';
 import { getSessionIdFromUrl } from '@/features/planning/utils/session-url';
+import { loadJintianDemoInput } from '@/features/planning/utils/demo-input';
 import { syncIfEventSeqBehind } from '@/features/planning/utils/event-sync';
+import { actionForHumanReview } from '@/features/planning/utils/interrupt-resume';
 import {
   getWorkbenchNavFromUrl,
   resolveDefaultWorkbenchNav,
@@ -461,8 +463,29 @@ const FILTERS: Array<{ key: LayerFilter; label: string }> = [
 
 const CONTROL_NAMES = ['永久基本农田', '生态保护红线', '历史文化保护', '村庄建设边界'];
 
+function isJintianReferenceVillage(villageName: string | undefined): boolean {
+  const normalized = String(villageName || '').trim().toLowerCase();
+  return normalized === '金田'
+    || normalized === '金田村'
+    || normalized === 'jintian';
+}
+
 function featureCount(layer?: GISLayerConfig): number {
   return layer ? (layer.featureCount ?? layer.geojson.features.length) : 0;
+}
+
+function v1LayerGroup(layer: GISLayerConfig): string {
+  return String(layer.metadata?.v1_layer_type ?? '').toLowerCase();
+}
+
+function v1LayerName(layer: GISLayerConfig): string {
+  return String(layer.metadata?.v1_layer_name ?? '').toLowerCase();
+}
+
+function isV1PlannedLanduse(layer: GISLayerConfig): boolean {
+  const name = v1LayerName(layer);
+  return v1LayerGroup(layer) === 'planned'
+    && (name === 'complete_planned_landuse' || name === 'planned_landuse');
 }
 
 function formatNumber(value: number): string {
@@ -528,6 +551,7 @@ function matchesFilter(layer: GISLayerConfig, filter: LayerFilter): boolean {
       || (layer.dataAuthority === 'authoritative_current' && !name.includes('规划'));
   }
 
+  if (v1LayerGroup(layer) === 'planned' || v1LayerGroup(layer) === 'overlay') return true;
   if (role === 'source_annotation') return false;
   if (name.includes('现状')) return false;
   if (role === 'control_reference' || layer.layerType === 'hazard_point') return false;
@@ -567,7 +591,9 @@ function matchesQuickLayer(layer: GISLayerConfig, key: string): boolean {
       return String(layer.layerType) === 'facility'
         || (layer.layerType === 'facility_point' && (role === 'source_annotation' || !role));
     case 'hazards': return layer.layerType === 'hazard_point';
-    case 'planned-landuse': return name === '国土空间用途规划' || (name === 'landuse' && isPlanned);
+    case 'planned-landuse': return isV1PlannedLanduse(layer)
+      || name === '国土空间用途规划'
+      || (name === 'landuse' && isPlanned);
     case 'custom-zones': return String(layer.layerType) === 'custom_functional_zone' || (name === 'polygons' && isProject);
     case 'structure': return role === 'spatial_structure' || (name === 'polygons' && isPlanned);
     case 'reference-roads': return role === 'historical_planned_road_reference' || (name === 'road' && path.includes('/planned/'));
@@ -864,7 +890,7 @@ type SidebarNavId =
 const EXAMPLE_TASKS: Record<OverviewLevel, string> = {
   'L1 现状分析': '分析金田村现状用地、道路、公共服务设施、居民点和产业基础，识别永久基本农田、生态保护红线、历史文化保护与地质灾害约束，形成现状问题清单。',
   'L2 规划思路': '结合现状分析和知识图谱，形成“一核引领、一带串联、三区协同”的空间结构，明确产业、生态、生活功能分区及项目布局原则。',
-  'L3 详细规划': '在现状分析和规划思路基础上生成规划地块、项目设施、用途指标和道路方案，按约束闸门、候选选线、评分与校验流程输出完整成果。',
+  'L3 详细规划': '在现状分析和规划思路基础上生成规划地块、项目设施、用途指标和道路方案，按约束闸门、候选选线、评分与校验流程输出完整成果。验收窄切片：在当前 GIS 已登记的 BSM=441426211000049280 宅基地内落地 300 平方米防灾疏散场地，保留未占用部分并记录邻接地块。[SPATIAL_DEMO_NARROW_SLICE source_parcel_bsm=441426211000049280;footprint_area_m2=300]',
 };
 
 const OVERVIEW_LEVELS: OverviewLevel[] = ['L1 现状分析', 'L2 规划思路', 'L3 详细规划'];
@@ -1029,7 +1055,7 @@ interface PlanningTaskPanelProps {
   stepMode: boolean;
   stepModeLoading: boolean;
   onChange: (field: string, value: string) => void;
-  onFillExample: () => void;
+  onFillExample: () => void | Promise<void>;
   onStart: () => void;
   onStepModeChange: (enabled: boolean) => void;
   isStarting?: boolean;
@@ -1090,14 +1116,14 @@ function PlanningTaskPanel(props: PlanningTaskPanelProps) {
           <div className="min-w-0">
             <div className="text-[12px] font-semibold text-[#2d7e61]">规划任务模板</div>
             <p className="mt-0.5 text-[11px] leading-5 text-[#718f83]">
-              选择阶段并填写项目信息，可一键填入示例数据。
+              一键加载完整现状报告 + 金田村 DataCatalog GIS 参考数据。
             </p>
             <div className="mt-2">
               <OverviewLevelTabs value={props.overviewLevel} onChange={props.onOverviewLevelChange} />
             </div>
           </div>
           <button type="button" onClick={props.onFillExample} className="shrink-0 rounded-lg bg-[#3fb288] px-3.5 py-2 text-[11px] font-semibold text-white shadow-sm hover:bg-[#359f7b]">
-            一键填写示例
+            一键加载完整示例
           </button>
         </div>
         <div className="grid gap-3 xl:grid-cols-3">
@@ -1118,7 +1144,7 @@ function PlanningTaskPanel(props: PlanningTaskPanelProps) {
           </h3>
           <label className="block text-[12px] font-semibold">村庄基础数据<span className="text-rose-500"> *</span><textarea value={props.villageData} onChange={(event) => props.onChange('villageData', event.target.value)} placeholder="请输入人口、面积、自然资源、产业基础、公共设施、历史文化等基础情况。" rows={8} className={`${fieldClass} resize-y leading-5`} /></label>
           <TaskFilePicker id="village-data-file-upload" files={props.villageDataFiles} onChange={(files) => props.onFilesChange('villageDataFiles', files)} />
-          <div className="mt-3 rounded-lg bg-[#eef8f3] px-3 py-2 text-[11px] leading-5 text-[#5f8174]">已连接 GIS 数据中心。文本用于补充地图难以表达的村情、产业和居民诉求。</div>
+          <div className="mt-3 rounded-lg bg-[#eef8f3] px-3 py-2 text-[11px] leading-5 text-[#5f8174]">村庄名称将绑定 DataCatalog GIS 参考数据；一键示例不会上传 GIS 文件。文本用于补充地图难以表达的村情、产业和居民诉求。</div>
         </section>
         <section className="rounded-2xl border border-[#dcebe4] bg-white p-4 shadow-sm">
           <h3 className="mb-3 flex items-center gap-2 text-[14px] font-bold text-[#284f43]">
@@ -1178,6 +1204,10 @@ function PlanningAnalysisWorkspace({
   const setSelectedNavigationKey = usePlanningStore((state) => state.setSelectedNavigationKey);
   const executingDimensions = usePlanningStore((state) => state.executingDimensions);
   const pendingReviewLayer = usePlanningStore((state) => state.pendingReviewLayer);
+  const humanReview = usePlanningStore((state) => state.humanReview);
+  const reviewActionLabel = actionForHumanReview({
+    pending_items: humanReview?.items ?? [],
+  }) === 'retry' ? '重试并继续' : '批准继续';
   const [activeLayer, setActiveLayer] = useState<1 | 2 | 3>(1);
   const [sidebarWidth, setSidebarWidth] = useState(212);
   const sidebarResizeRef = useRef<{ start: number; value: number } | null>(null);
@@ -1343,7 +1373,9 @@ function PlanningAnalysisWorkspace({
                   L{pendingReviewLayer || activeLayer} 已完成，正在等待审核
                 </div>
                 <div className="mt-0.5 text-[11px] text-[#a07a3a]">
-                  步骤模式开启时，需要点击「批准继续」才会生成下一层报告（L2/L3）。
+                  {reviewActionLabel === '重试并继续'
+                    ? '当前维度需要重新请求 provider；重试成功后会继续后续规划链。'
+                    : '步骤模式开启时，需要点击「批准继续」才会生成下一层报告（L2/L3）。'}
                 </div>
               </div>
               <button
@@ -1351,7 +1383,7 @@ function PlanningAnalysisWorkspace({
                 onClick={onApprove}
                 className="rounded-lg bg-[#3fb288] px-4 py-2 text-[12px] font-semibold text-white shadow-sm shadow-emerald-100 hover:bg-[#359f7b]"
               >
-                批准继续 → 生成下一层
+                {reviewActionLabel} → 继续
               </button>
             </div>
           )}
@@ -1436,6 +1468,7 @@ function readInitialWorkbenchState(): { view: WorkbenchView; panel: OverviewPane
 function UnifiedPlanningWorkbench() {
   const { startPlanning, sendChatMessage, approve, resetConversation, loadVillagesHistory, loadHistoricalSession, deleteSession, clearAllHistory } = usePlanningActions();
   const sessionId = usePlanningStore((state) => state.sessionId);
+  const sessionVillageName = usePlanningStore((state) => state.villageName);
   const reports = usePlanningStore((state) => state.reports);
   const status = usePlanningStore((state) => state.status);
   const villages = usePlanningStore((state) => state.villages);
@@ -1470,7 +1503,7 @@ function UnifiedPlanningWorkbench() {
   const [baseMap, setBaseMap] = useState<WorkbenchBaseMap>('general');
   const [currentGisSource, setCurrentGisSource] = useState<CurrentSourceLayersResult | null>(null);
   const [workbenchView, setWorkbenchView] = useState<WorkbenchView>(() => readInitialWorkbenchState().view);
-  const [overviewLevel, setOverviewLevel] = useState<OverviewLevel>('L1 现状分析');
+  const [overviewLevel, setOverviewLevel] = useState<OverviewLevel>('L3 详细规划');
   const [overviewPanel, setOverviewPanel] = useState<OverviewPanel>(() => readInitialWorkbenchState().panel);
   const [dataPanel, setDataPanel] = useState<DataPanel>('kg');
   const [showPlanningText, setShowPlanningText] = useState(false);
@@ -1504,6 +1537,14 @@ function UnifiedPlanningWorkbench() {
   const [deletingSessionId, setDeletingSessionId] = useState<string | null>(null);
   const resizeState = useRef<{ kind: 'side' | 'map'; start: number; value: number } | null>(null);
   const hydratedReportKey = useRef('');
+  const [navHydrated, setNavHydrated] = useState(false);
+
+  const activeVillageName = useMemo(() => {
+    if (!sessionId) return villageName;
+    const historyVillage = villages
+      .find((village) => village.sessions.some((session) => session.session_id === sessionId));
+    return sessionVillageName || historyVillage?.display_name || historyVillage?.name || villageName;
+  }, [sessionId, sessionVillageName, villageName, villages]);
 
   const activeNavId = useMemo<SidebarNavId>(() => {
     if (workbenchView === 'drawings') return 'drawings';
@@ -1587,6 +1628,7 @@ function UnifiedPlanningWorkbench() {
     const { view, panel } = resolveDefaultWorkbenchNav(getSessionIdFromUrl());
     setWorkbenchView(view);
     setOverviewPanel(panel);
+    setNavHydrated(true);
   }, []);
 
   useEffect(() => {
@@ -1597,12 +1639,13 @@ function UnifiedPlanningWorkbench() {
   }, [setSelectedNavigationKey]);
 
   useEffect(() => {
+    if (!navHydrated) return;
     setWorkbenchNavInUrl({
       view: workbenchView,
       panel: workbenchView === 'overview' ? overviewPanel : undefined,
       nav: selectedNavigationKey,
     });
-  }, [workbenchView, overviewPanel, selectedNavigationKey]);
+  }, [navHydrated, workbenchView, overviewPanel, selectedNavigationKey]);
 
   const prevSessionIdRef = useRef<string | null>(null);
   useEffect(() => {
@@ -1635,10 +1678,22 @@ function UnifiedPlanningWorkbench() {
     () => buildSpatialWorkflowSteps(positioningTrace, artifactKeys, reports.layer3),
     [artifactKeys, positioningTrace, reports.layer3],
   );
-  // Load the Jintian reference package when there is no active session, or when the
-  // session has not produced its own GIS layers yet (e.g. still in L1/L2 analysis).
-  const shouldLoadCurrentSource = shouldLoadGisResult;
-  const showingReferenceGis = Boolean(sessionId && !hasSessionGisLayers && currentGisSource?.layers?.length);
+  // The static package is a JinTian reference only.  Never inject it into a
+  // different session while that session is waiting for its own GIS upload or
+  // DELIVER snapshot.
+  // A new project defaults to the bundled JinTian reference only while the
+  // village field is still blank.  Once a different village is entered (or a
+  // session is restored), never reuse the reference source for that context.
+  const referenceVillageName = activeVillageName || (!sessionId ? '金田村' : '');
+  const shouldLoadCurrentSource = shouldLoadGisResult
+    && isJintianReferenceVillage(referenceVillageName);
+  const visibleCurrentGisSource = shouldLoadCurrentSource ? currentGisSource : null;
+  const showingReferenceGis = Boolean(
+    shouldLoadCurrentSource
+    && sessionId
+    && !hasSessionGisLayers
+    && currentGisSource?.layers?.length,
+  );
 
   useEffect(() => {
     if (!sessionId || !shouldLoadGisResult) {
@@ -1675,7 +1730,7 @@ function UnifiedPlanningWorkbench() {
   useEffect(() => {
     if (!shouldLoadCurrentSource) return;
     let cancelled = false;
-    void fetchCurrentSourceLayers()
+    void fetchCurrentSourceLayers(referenceVillageName)
       .then((result) => {
         if (!cancelled) setCurrentGisSource(result);
       })
@@ -1683,14 +1738,14 @@ function UnifiedPlanningWorkbench() {
         logger.context.warn('Current GIS source fetch failed', { error: String(requestError) });
       });
     return () => { cancelled = true; };
-  }, [shouldLoadCurrentSource]);
+  }, [referenceVillageName, shouldLoadCurrentSource]);
 
   const loadResult = useCallback(async (force = false) => {
     void force;
     setLoading(true);
     setError('');
     try {
-      const sourceLayers = await fetchCurrentSourceLayers();
+      const sourceLayers = await fetchCurrentSourceLayers(referenceVillageName || '金田村');
       setCurrentGisSource(sourceLayers);
       setPayload(null);
     } catch (requestError) {
@@ -1699,10 +1754,11 @@ function UnifiedPlanningWorkbench() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [referenceVillageName]);
 
   useEffect(() => {
     if (!shouldLoadCurrentSource) {
+      setCurrentGisSource(null);
       setLoading(false);
       return;
     }
@@ -1713,6 +1769,7 @@ function UnifiedPlanningWorkbench() {
     hydratedReportKey.current = '';
     setPayload(null);
     if (!shouldLoadCurrentSource) {
+      setCurrentGisSource(null);
       setLoading(false);
       return;
     }
@@ -1744,9 +1801,9 @@ function UnifiedPlanningWorkbench() {
       if (payload?.layers?.length) {
         return normalizeGisLayers(payload.layers);
       }
-      return currentGisSource?.layers ?? [];
+      return shouldLoadCurrentSource ? currentGisSource?.layers ?? [] : [];
     },
-    [currentGisSource?.layers, payload?.layers],
+    [currentGisSource?.layers, payload?.layers, shouldLoadCurrentSource],
   );
   const sessionLayers = useMemo(
     () => normalizeGisLayers(liveGisLayers),
@@ -1828,7 +1885,13 @@ function UnifiedPlanningWorkbench() {
   );
 
   const currentParcels = featureCount(getLayer((layer) => layerRole(layer) === 'current_landuse' || layer.layerName.includes('现状用地') || (layer.layerName === 'landuse' && !!layer.metadata?.path?.includes('current'))));
-  const plannedParcels = featureCount(getLayer((layer) => layer.layerName === '国土空间用途规划' || (layer.layerName === 'landuse' && !!layer.metadata?.path?.includes('planned'))));
+  const deliveryPlannedParcels = layers
+    .filter(isV1PlannedLanduse)
+    .reduce((sum, layer) => sum + featureCount(layer), 0);
+  const plannedParcels = deliveryPlannedParcels || featureCount(getLayer((layer) => layer.layerName === '国土空间用途规划' || (layer.layerName === 'landuse' && !!layer.metadata?.path?.includes('planned'))));
+  const plannedOverlayFeatures = layers
+    .filter((layer) => v1LayerGroup(layer) === 'overlay' && !isFacilityAnnotationLayer(layer))
+    .reduce((sum, layer) => sum + featureCount(layer), 0);
   const currentRoads = featureCount(getLayer((layer) => layerRole(layer) === 'current_road' || layer.layerName === '现状道路' || (layer.layerName === 'road' && !!layer.metadata?.path?.includes('current'))));
   const referenceRoads = featureCount(getLayer((layer) => layerRole(layer) === 'historical_planned_road_reference' || (layer.layerName === 'road' && !!layer.metadata?.path?.includes('planned'))));
   const stage5Roads = roadProcess.recommended_segment_count_all ?? roadProcess.recommended_segment_count ?? 0;
@@ -1854,10 +1917,10 @@ function UnifiedPlanningWorkbench() {
   const totalFeatures = layers.reduce((sum, layer) => sum + featureCount(layer), 0);
   const typeCount = new Set(layers.map((layer) => layer.layerType)).size;
 
-  const mapLayersLoading = loading && !currentGisSource?.layers?.length;
+  const mapLayersLoading = loading && !visibleCurrentGisSource?.layers?.length;
 
   const mapCenter = useMemo((): [number, number] => {
-    if (currentGisSource?.center) return currentGisSource.center;
+    if (visibleCurrentGisSource?.center) return visibleCurrentGisSource.center;
     const boundary = layers.find((layer) => layer.layerType === 'boundary' || layer.layerName === 'boundary');
     const geometry = boundary?.geojson?.features?.[0]?.geometry;
     if (geometry && (geometry.type === 'Polygon' || geometry.type === 'MultiPolygon')) {
@@ -1871,7 +1934,7 @@ function UnifiedPlanningWorkbench() {
       }
     }
     return [116.0735, 24.8317];
-  }, [currentGisSource?.center, layers]);
+  }, [visibleCurrentGisSource?.center, layers]);
 
   const quickGroups = [
     {
@@ -1981,19 +2044,23 @@ function UnifiedPlanningWorkbench() {
     }
   }, [setStepMode]);
 
-  const fillExample = useCallback(() => {
-    setProjectName('金田村产业空间规划');
-    setVillageData(`金田村位于广东省梅州市平远县泗水镇最北端，下辖12个自然村：园寨、田坑、社前、分水、清明、塘笃、长塘、炉池、肩丰、营仔、新山、黄竹。
-
-人口情况：全村325户，户籍人口1403人，常住人口约500人。青壮年多外出务工，人口流失与老龄化明显。
-
-产业构成：第一产业以水稻、药材（灵芝20亩）、烤烟（60亩）和养殖业为主；第二产业有小型杉木家具制造；第三产业薄弱。
-
-自然资源：林地占比约90%，耕地85.2公顷且较破碎，金田河贯穿全村，存在地质灾害隐患点。`);
-    setTaskDescription(EXAMPLE_TASKS[overviewLevel]);
-    setConstraintsText('严格保护永久基本农田、生态保护红线和历史文化保护要素；新增道路避让高地质灾害风险区。');
-    setProvince('广东省'); setCity('梅州市'); setCounty('平远县'); setTownship('泗水镇'); setVillageName('金田村'); setPlanningPeriod('2026—2035年');
-    setPlanningError('');
+  const fillExample = useCallback(async () => {
+    try {
+      const demo = await loadJintianDemoInput(EXAMPLE_TASKS[overviewLevel]);
+      setProjectName(demo.projectName);
+      setVillageData(demo.villageData);
+      setTaskDescription(demo.taskDescription);
+      setConstraintsText(demo.constraints);
+      setProvince(demo.province);
+      setCity(demo.city);
+      setCounty(demo.county);
+      setTownship(demo.township);
+      setVillageName(demo.villageName);
+      setPlanningPeriod(demo.planningPeriod);
+      setPlanningError('');
+    } catch (error) {
+      setPlanningError(error instanceof Error ? error.message : '完整金田村现状报告加载失败，请重试。');
+    }
   }, [overviewLevel]);
 
   const startBlankProject = useCallback(() => {
@@ -2005,7 +2072,7 @@ function UnifiedPlanningWorkbench() {
     setProjectName(''); setVillageData(''); setTaskDescription(''); setConstraintsText(''); setPlanningError('');
     setVillageDataFiles([]); setTaskFiles([]); setConstraintFiles([]);
     setProvince(''); setCity(''); setCounty(''); setTownship(''); setVillageName(''); setPlanningPeriod('');
-    setOverviewLevel('L1 现状分析'); setWorkbenchView('overview'); setOverviewPanel('task');
+    setOverviewLevel('L3 详细规划'); setWorkbenchView('overview'); setOverviewPanel('task');
   }, [resetConversation]);
 
   const openHistoricalSession = useCallback(async (projectName: string, historicalSessionId: string) => {
@@ -2269,7 +2336,7 @@ function UnifiedPlanningWorkbench() {
                             ? '双评价适宜性'
                             : '知识图谱检查'}
                   </h1>
-                  <p className={`truncate text-[#78968b] ${workbenchView === 'overview' && overviewPanel === 'analysis' ? 'hidden' : 'text-[11px]'}`}><b className="text-[#29906b]">{payload?.villageName ?? '金田村'}项目</b> · {sessionId ? `Agent ${sessionId.slice(0, 8)}` : '等待启动规划'} · {status}</p>
+                  <p className={`truncate text-[#78968b] ${workbenchView === 'overview' && overviewPanel === 'analysis' ? 'hidden' : 'text-[11px]'}`}><b className="text-[#29906b]">{activeVillageName || payload?.villageName || projectName || (sessionId ? '当前会话' : '金田村')}项目</b> · {sessionId ? `Agent ${sessionId.slice(0, 8)}` : '等待启动规划'} · {status}</p>
                 </div>
               </div>
               <div className="flex items-center gap-2">
@@ -2316,22 +2383,32 @@ function UnifiedPlanningWorkbench() {
             {workbenchView === 'drawings' && <section className="grid shrink-0 grid-cols-2 gap-2 xl:grid-cols-4">
               <MetricCard icon={WORKBENCH_METRIC_ICONS.spatialFeatures} value={totalFeatures} label="已加载现状数据" note={`${layers.length} 个真实图层`} />
               <MetricCard icon={WORKBENCH_METRIC_ICONS.entityTypes} value={typeCount} label="底图分类" note="来自真实 GIS 图层" />
-              <MetricCard icon={WORKBENCH_METRIC_ICONS.plannedParcels} value={plannedParcels || '—'} label="规划成果" note={plannedParcels ? '已返回规划地块' : '等待 DELIVER 空间快照'} />
+              <MetricCard icon={WORKBENCH_METRIC_ICONS.plannedParcels} value={plannedParcels || plannedOverlayFeatures || '—'} label="规划成果" note={plannedParcels || plannedOverlayFeatures ? '已返回 DELIVER 规划图层' : '等待 DELIVER 空间快照'} />
               <MetricCard icon={WORKBENCH_METRIC_ICONS.roads} value={currentRoads + referenceRoads + stage5Roads || '—'} label="道路成果" note={stage5Roads || finalRoads ? '已有道路链记录' : '尚未产出道路结论'} />
             </section>}
 
-            {workbenchView === 'drawings' && currentGisSource && (
+            {workbenchView === 'drawings' && visibleCurrentGisSource && (
               <section className="flex shrink-0 flex-wrap items-center gap-x-4 gap-y-1 rounded-xl border border-[#dcebe4] bg-[#f8fcf9] px-3 py-2 text-[11px] text-[#5f8174]">
                 <span className="font-semibold text-[#347b61]">现状数据源 · DataCatalog</span>
-                <span>{currentGisSource.layers.length} 个现状图层 · {totalFeatures.toLocaleString()} 个要素</span>
-                {currentGisSource.rasters.map((raster) => (
+                <span>{visibleCurrentGisSource.layers.length} 个现状图层 · {totalFeatures.toLocaleString()} 个要素</span>
+                {visibleCurrentGisSource.rasters.map((raster) => (
                   <span key={raster.source_name} className={raster.available ? 'text-[#347b61]' : 'text-[#a66a4f]'}>
                     DEM {raster.available ? `已接入 · ${raster.width ?? '—'}×${raster.height ?? '—'} · ${raster.crs || '未知坐标系'}` : `不可用 · ${raster.reason || '后端未提供'}`}
                   </span>
                 ))}
-                {currentGisSource.diagnostics.map((diagnostic) => (
+                {visibleCurrentGisSource.diagnostics.map((diagnostic) => (
                   <span key={diagnostic} className="text-[#a66a4f]">数据源提示：{diagnostic}</span>
                 ))}
+              </section>
+            )}
+
+            {workbenchView === 'drawings'
+              && !shouldLoadCurrentSource
+              && !hasSessionGisLayers
+              && referenceVillageName && (
+              <section className="shrink-0 rounded-xl border border-[#f0d9c7] bg-[#fffaf5] px-3 py-2 text-[11px] text-[#966b4f]">
+                当前村庄“{referenceVillageName}”未配置现状 DataCatalog 数据源；本页不会复用金田村参考图层，
+                规划图层须等待本会话 DELIVER 空间快照。
               </section>
             )}
 
@@ -2498,7 +2575,7 @@ function UnifiedPlanningWorkbench() {
                   <span className="rounded-full bg-[#f1f7f4] px-2.5 py-1 text-[#648378]">现状：{currentParcels} 地块</span>
                   <span className="rounded-full bg-[#f1f7f4] px-2.5 py-1 text-[#648378]">现状道路：{currentRoads}</span>
                   <span className={`rounded-full px-2.5 py-1 ${plannedParcels || stage5Roads ? 'bg-[#e1f4eb] text-[#248865]' : 'bg-[#fff7e8] text-[#9a7428]'}`}>
-                    规划：{plannedParcels || stage5Roads ? `${plannedParcels + stage5Roads} 项已返回` : '尚未交付'}
+                    规划：{plannedParcels || plannedOverlayFeatures || stage5Roads ? `${plannedParcels + plannedOverlayFeatures + stage5Roads} 项已返回` : '尚未交付'}
                   </span>
                   <button type="button" onClick={() => setShowMapDetails((value) => !value)} className="rounded-full border border-[#dcebe4] px-2.5 py-1 text-[#6c887e] hover:bg-[#f4faf7]">
                     {showMapDetails ? '收起分类' : '查看分类'}
@@ -2594,7 +2671,7 @@ function UnifiedPlanningWorkbench() {
                     </div>
                   </div>
                 )}
-                {loading && currentGisSource?.layers?.length && !error && (
+                {loading && visibleCurrentGisSource?.layers?.length && !error && (
                   <div className="pointer-events-none absolute inset-x-0 top-3 z-20 mx-auto w-fit rounded-full border border-[#d8e9e1] bg-white/90 px-4 py-1.5 text-[11px] text-[#33765f] shadow-sm">
                     目录现状数据已显示，规划成果加载中…
                   </div>

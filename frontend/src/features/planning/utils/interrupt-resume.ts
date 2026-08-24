@@ -6,6 +6,20 @@ export type InterruptDecisionOptions = {
   dimensions?: string[];
 };
 
+/**
+ * Provider failures are retry decisions, not approvals. Layer gates and
+ * ordinary review items keep the explicit approval action.
+ */
+export function actionForHumanReview(
+  review: Pick<HumanReviewListResponse, 'pending_items'>,
+): 'approve' | 'retry' {
+  return review.pending_items.some((item) => (
+    item.request_type === 'transient_llm_failure'
+    || item.request_type === 'provider_failure'
+    || item.request_type === 'llm_retry'
+  )) ? 'retry' : 'approve';
+}
+
 function isCheckpointConflict(error: unknown): boolean {
   if (!(error instanceof Error)) return false;
   const status = (error as Error & { status?: number }).status;
@@ -78,7 +92,11 @@ export async function resolveActiveInterrupt(
   const { usePlanningStore } = await import('../store/planningStore');
 
   let review = await loadActiveHumanReview(sessionId);
+  const store = usePlanningStore.getState();
   try {
+    if (review.event_id) {
+      store.beginHumanReviewResolution(review.event_id);
+    }
     try {
       await submitInterruptDecision(sessionId, review, action, options);
     } catch (retryError) {
@@ -88,6 +106,7 @@ export async function resolveActiveInterrupt(
       throw retryError;
     }
   } catch (error) {
+    store.clearHumanReviewResolution();
     if (!isCheckpointConflict(error)) {
       throw error;
     }

@@ -434,6 +434,8 @@ export interface PlanningState {
     paused_stage: string;
     items: HumanReviewItem[];
   } | null;
+  /** Event id currently being resolved; suppresses stale projection replay. */
+  humanReviewResolutionEventId: string | null;
 }
 
 // ============================================
@@ -619,6 +621,7 @@ function createInitialState(conversationId: string): PlanningState {
     delivery: null,
     resyncRequired: false,
     humanReview: null,
+    humanReviewResolutionEventId: null,
   };
 }
 
@@ -812,6 +815,8 @@ export interface PlanningActions {
   clearDelivery: () => void;
   setResyncRequired: (required: boolean) => void;
   setHumanReview: (review: PlanningState['humanReview']) => void;
+  beginHumanReviewResolution: (eventId: string) => void;
+  clearHumanReviewResolution: () => void;
   clearHumanReview: () => void;
   refreshHumanReview: (sessionId?: string) => Promise<void>;
 
@@ -858,7 +863,26 @@ function applyHumanReviewResponse(
     // Keeping it causes the next decision to target a stale checkpoint.
     state.humanReview = null;
     state.pendingReviewLayer = null;
+    state.humanReviewResolutionEventId = null;
     return;
+  }
+  // /state and /human-review can briefly expose the consumed checkpoint while
+  // the resumed graph is entering its next stage. Do not re-arm the same
+  // approval button during that transition; a genuinely new checkpoint has a
+  // different event_id and is accepted below.
+  if (
+    state.humanReviewResolutionEventId
+    && review.event_id === state.humanReviewResolutionEventId
+    && state.status !== 'failed'
+    && state.status !== 'completed'
+  ) {
+    state.humanReview = null;
+    state.isPaused = false;
+    state.pendingReviewLayer = null;
+    return;
+  }
+  if (review.event_id !== state.humanReviewResolutionEventId) {
+    state.humanReviewResolutionEventId = null;
   }
   const pausedStage =
     review.paused_stage
@@ -892,6 +916,21 @@ function applyHumanReviewEventPayload(
   const pausedStage = typeof data.paused_stage === 'string' ? data.paused_stage : '';
   if (!eventId && items.length === 0) {
     return;
+  }
+  if (
+    state.humanReviewResolutionEventId
+    && eventId
+    && eventId === state.humanReviewResolutionEventId
+    && state.status !== 'failed'
+    && state.status !== 'completed'
+  ) {
+    state.humanReview = null;
+    state.isPaused = false;
+    state.pendingReviewLayer = null;
+    return;
+  }
+  if (eventId && eventId !== state.humanReviewResolutionEventId) {
+    state.humanReviewResolutionEventId = null;
   }
   state.humanReview = {
     event_id: eventId,
@@ -2368,8 +2407,14 @@ export const usePlanningStore = create<PlanningState & PlanningActions>()(
       set((state) => {
         const hasAuthoritativeStage = backendData.active_stage !== undefined;
         const normalizedStatus = normalizePlanningStatus(backendData.status);
+        const staleReviewStatus = Boolean(
+          state.humanReviewResolutionEventId
+          && normalizedStatus === 'paused'
+          && backendData.human_review_pending,
+        );
+        const effectiveStatus = staleReviewStatus ? undefined : normalizedStatus;
         const hasStatusChange =
-          normalizedStatus !== undefined && normalizedStatus !== state.status;
+          effectiveStatus !== undefined && effectiveStatus !== state.status;
         const hasPhaseChange = backendData.phase !== state.phase;
         const hasInterruptInfoChange =
           backendData.interrupt_info !== undefined &&
@@ -2419,8 +2464,8 @@ export const usePlanningStore = create<PlanningState & PlanningActions>()(
         }
 
         // 使用后端 status（归一化 running/pending → planning）或从 phase 派生
-        if (normalizedStatus) {
-          state.status = normalizedStatus;
+        if (effectiveStatus) {
+          state.status = effectiveStatus;
         }
         if (backendData.phase) state.phase = backendData.phase;
         if (backendData.active_stage !== undefined) {
@@ -2447,22 +2492,29 @@ export const usePlanningStore = create<PlanningState & PlanningActions>()(
           delivery.delivery_status = backendData.delivery_status;
           delivery.available = backendData.delivery_status !== null;
           if (backendData.delivery_status === 'diagnostic_only') {
-            state.status = 'failed';
+            // diagnostic_only is a completed workflow with no executable
+            // planning output, not an infrastructure failure. Preserve the
+            // authoritative backend status and keep the delivery projection
+            // visible so the UI can explain the blocked boundary.
             state.isPaused = false;
             state.pendingReviewLayer = null;
             state.executingDimensions = [];
             state.gisGenerating = false;
             state.gisTriggerPending = false;
-            state.delivery = null;
           }
         }
         if (backendData.statutory_complete !== undefined && state.delivery) {
           state.delivery.statutory_complete = backendData.statutory_complete;
         }
         if (backendData.human_review_pending !== undefined) {
-          state.isPaused = backendData.human_review_pending;
-          if (backendData.human_review_pending && !state.humanReview) {
-            state.humanReview = { event_id: null, paused_stage: '', items: [] };
+          const staleReviewProjection = Boolean(
+            state.humanReviewResolutionEventId && backendData.human_review_pending,
+          );
+          if (!staleReviewProjection) {
+            state.isPaused = backendData.human_review_pending;
+            if (backendData.human_review_pending && !state.humanReview) {
+              state.humanReview = { event_id: null, paused_stage: '', items: [] };
+            }
           }
         }
         if (backendData.phase && isSpatialWorkflowPhase(backendData.phase)) {
@@ -2932,6 +2984,17 @@ export const usePlanningStore = create<PlanningState & PlanningActions>()(
     setHumanReview: (review) =>
       set((state) => {
         state.humanReview = review;
+      }),
+    beginHumanReviewResolution: (eventId) =>
+      set((state) => {
+        state.humanReviewResolutionEventId = eventId || null;
+        state.humanReview = null;
+        state.isPaused = false;
+        state.pendingReviewLayer = null;
+      }),
+    clearHumanReviewResolution: () =>
+      set((state) => {
+        state.humanReviewResolutionEventId = null;
       }),
     clearHumanReview: () =>
       set((state) => {

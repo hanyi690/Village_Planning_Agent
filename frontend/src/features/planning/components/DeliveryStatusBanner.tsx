@@ -27,12 +27,18 @@ export default function DeliveryStatusBanner() {
 
   const ds = delivery.delivery_status;
 
-  if (ds === "diagnostic_only") return null;
-
   // Only inspecting mode or terminal states show the conclusion banner.
   if (!ds && status !== "completed" && status !== "failed") return null;
 
   const deliverables = Array.isArray(delivery.deliverables) ? delivery.deliverables : [];
+  const spatialYield = delivery.diagnostic_summary?.spatial_yield;
+  const deferredSpatialCount = Array.isArray(spatialYield)
+    ? spatialYield.reduce((total, item) => {
+        if (!item || typeof item !== 'object') return total;
+        const count = (item as { deferred_count?: unknown }).deferred_count;
+        return total + (typeof count === 'number' && Number.isFinite(count) ? count : 0);
+      }, 0)
+    : 0;
   const filesBlock =
     deliverables.length > 0 ? (
       <div className="mt-3 border-t border-current/20 pt-2">
@@ -75,7 +81,12 @@ export default function DeliveryStatusBanner() {
     if (ds === "complete" && isStatutoryComplete) {
       body = (
         <div className="rounded-md border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800">
-          规划交付已完成，已通过法定完整性校验。
+          本批次规划交付已完成，已通过当前批次法定完整性校验。
+          {deferredSpatialCount > 0 && (
+            <span className="mt-1 block text-xs text-emerald-700">
+              本批次仅对具备完整空间输入的目标产出规划图层；空间链各阶段累计有 {deferredSpatialCount} 条诊断/未决记录（可能跨阶段重复），不能据此视为全村规划目标全部完成。
+            </span>
+          )}
         </div>
       );
     } else if (ds === "complete") {
@@ -96,8 +107,21 @@ export default function DeliveryStatusBanner() {
           )}
         </div>
       );
+    } else if (ds === "diagnostic_only") {
+      const diagnostic = delivery.diagnostic_summary?.diagnostic as
+        | Record<string, unknown>
+        | undefined;
+      const reason =
+        typeof diagnostic?.message === "string"
+          ? diagnostic.message
+          : "空间规划链已完成诊断，但没有形成可执行的批准输入。";
+      body = (
+        <div className="rounded-md border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">
+          当前流程已完成，但只有诊断结果（diagnostic_only），没有可交付的规划图层；系统未进入正式 EXECUTE。
+          <span className="mt-1 block text-xs text-red-700">阻断原因：{reason}</span>
+        </div>
+      );
     }
-    // diagnostic_only: workflow terminal failure — do not surface raw JSON in the UI.
   }
 
   return (

@@ -28,7 +28,29 @@ class MockEventSource {
   }
 }
 
-describe('planning text placeholder API', () => {
+describe('planning session creation', () => {
+  beforeEach(() => {
+    global.fetch = jest.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ session_id: 'session-new' }),
+    });
+  });
+
+  it('keeps RAG disabled when the caller omits the flag', async () => {
+    await planningApi.startPlanning({
+      project_name: '金田村规划',
+      village_name: '金田村',
+      village_data: '现状资料',
+      task_description: '生成规划方案',
+    });
+
+    const request = (global.fetch as jest.Mock).mock.calls[0][1] as RequestInit;
+    expect(request.body).toBeInstanceOf(FormData);
+    expect((request.body as FormData).get('rag_enabled')).toBe('false');
+  });
+});
+
+describe('local planning text projection', () => {
   beforeEach(() => {
     global.fetch = jest.fn();
     global.EventSource = MockEventSource as unknown as typeof EventSource;
@@ -55,7 +77,7 @@ describe('planning text placeholder API', () => {
       planningApi.generatePlanningText('session-1', { trigger_reason: 'manual' }),
     ).resolves.toMatchObject({
       session_id: 'session-1',
-      markdown_content: '',
+      markdown_content: expect.stringContaining('暂无可用报告内容'),
       article_count: 0,
       status: 'empty',
       trigger_reason: 'manual',

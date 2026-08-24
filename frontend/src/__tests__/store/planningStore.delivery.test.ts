@@ -37,6 +37,47 @@ describe('planning store v1 delivery / resync / human-review events', () => {
     expect(usePlanningStore.getState().isPaused).toBe(true);
   });
 
+  it('does not re-arm the exact human checkpoint while its resume is in flight', () => {
+    usePlanningStore.setState({ status: 'paused', isPaused: true });
+    usePlanningStore.getState().setHumanReview({
+      event_id: 'evt-1',
+      paused_stage: 'layer1',
+      items: [],
+    });
+    usePlanningStore.getState().beginHumanReviewResolution('evt-1');
+
+    usePlanningStore.getState().handleSSEEvent({
+      type: 'human_review_paused',
+      data: {
+        seq: 4,
+        event_id: 'evt-1',
+        paused_stage: 'layer1',
+        items: [{ request_id: 'review-1', stage: 'layer1', request_type: 'layer_completion_review', context: {} }],
+      },
+    });
+
+    expect(usePlanningStore.getState().humanReview).toBeNull();
+    expect(usePlanningStore.getState().isPaused).toBe(false);
+  });
+
+  it('accepts a new human checkpoint after the previous one resolves', () => {
+    usePlanningStore.setState({ status: 'planning', isPaused: false });
+    usePlanningStore.getState().beginHumanReviewResolution('evt-1');
+
+    usePlanningStore.getState().handleSSEEvent({
+      type: 'human_review_paused',
+      data: {
+        seq: 5,
+        event_id: 'evt-2',
+        paused_stage: 'layer2',
+        items: [{ request_id: 'review-2', stage: 'layer2', request_type: 'layer_completion_review', context: {} }],
+      },
+    });
+
+    expect(usePlanningStore.getState().humanReview?.event_id).toBe('evt-2');
+    expect(usePlanningStore.getState().pendingReviewLayer).toBe(2);
+  });
+
   it('setDelivery stores the authoritative projection incl. statutory_complete', () => {
     usePlanningStore.getState().setDelivery({
       available: true,
@@ -54,6 +95,26 @@ describe('planning store v1 delivery / resync / human-review events', () => {
       delivery_status: 'partial',
       statutory_complete: false,
       snapshot_checksum: 'sha256:abc',
+    });
+  });
+
+  it('keeps completed status and diagnostic delivery visible when no execution input exists', () => {
+    usePlanningStore.setState({ status: 'planning', delivery: null });
+
+    usePlanningStore.getState().syncBackendState({
+      status: 'completed',
+      phase: 'post_l3',
+      active_stage: 'deliver',
+      delivery_status: 'diagnostic_only',
+      statutory_complete: false,
+      completed_dimensions: { layer1: [], layer2: [], layer3: [] },
+    });
+
+    expect(usePlanningStore.getState().status).toBe('completed');
+    expect(usePlanningStore.getState().delivery).toMatchObject({
+      available: true,
+      delivery_status: 'diagnostic_only',
+      statutory_complete: false,
     });
   });
 

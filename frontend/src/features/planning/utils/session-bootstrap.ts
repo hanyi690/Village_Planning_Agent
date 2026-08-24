@@ -35,8 +35,13 @@ export async function bootstrapPlanningSession(sessionId: string): Promise<void>
     store.setLastProcessedSeq(syncResult.last_seq);
   }
 
-  // The REST projection wins over replayed optimistic events.
-  store.syncBackendState(statusData);
+  // A resumed child segment may have advanced the durable event stream while
+  // the parent checkpoint still exposes the original HUMAN boundary.  Do not
+  // let that stale REST projection roll the UI back after event replay; only
+  // terminal delivery/failure fields are merged authoritatively here.
+  if (terminal || syncResult.events.length === 0) {
+    store.syncBackendState(statusData);
+  }
 
   const firstLayer = statusData.phase?.startsWith('layer')
     ? Number.parseInt(statusData.phase.replace('layer', ''), 10)

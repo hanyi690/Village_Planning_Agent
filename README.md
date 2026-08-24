@@ -17,14 +17,13 @@
 根图入口是 `backend/app/workflow/root_graph.py`，FastAPI 入口是
 `backend/app/main.py`。当前实现、总体设计和验收证据分开维护：
 
-- 当前代码入口和调用链：[docs/architecture/structure.md](docs/architecture/structure.md)
-- 当前主图（四段子图）：[docs/architecture/agent-graph.md](docs/architecture/agent-graph.md)
-- API/SSE/resume：[docs/architecture/backend-api.md](docs/architecture/backend-api.md)
-- 状态、artifact、交付边界：[docs/architecture/backend-state-contract.md](docs/architecture/backend-state-contract.md)
+- 当前代码入口、四段主图和边界：[docs/architecture/CURRENT_RUNTIME.md](docs/architecture/CURRENT_RUNTIME.md)
+- API/SSE/resume/state：[docs/architecture/API_AND_STATE.md](docs/architecture/API_AND_STATE.md)
+- 启动、RAG/embedding 退化和测试：[docs/architecture/OPERATIONS.md](docs/architecture/OPERATIONS.md)
 - 总体设计基线：[docs/design/00_SYSTEM_DESIGN.md](docs/design/00_SYSTEM_DESIGN.md)
-- 当前状态与验收证据：[docs/design/10_IMPLEMENTATION_STATUS_CURRENT_20260818.md](docs/design/10_IMPLEMENTATION_STATUS_CURRENT_20260818.md)
-- 设计/实现差异台账：[docs/design/27_IMPLEMENTATION_VS_DESIGN.md](docs/design/27_IMPLEMENTATION_VS_DESIGN.md)
-- 关系感知实施台账：[docs/design/RELATION_AWARE_MODIFICATION_LEDGER.md](docs/design/RELATION_AWARE_MODIFICATION_LEDGER.md)
+- 当前到目标的唯一迁移清单：[docs/design/05_MIGRATION.md](docs/design/05_MIGRATION.md)
+- 生成的 API 契约：[docs/contracts/openapi-v1.json](docs/contracts/openapi-v1.json)
+- 稳定术语：[docs/reference/terminology.md](docs/reference/terminology.md)
 - 完整文档导航：[docs/README.md](docs/README.md)
 
 ## 快速开始
@@ -83,7 +82,7 @@ Docker 入口仍由 `docker-compose.yml` 提供，但具体端口和环境变量
 | 交付 / 图层 | `GET /api/v1/sessions/{id}/delivery`、`map-layers` |
 | artifact | `GET /api/v1/sessions/{id}/artifacts/{key}` |
 
-详细字段以 `backend/app/api/v1/contracts.py` 和运行中的 OpenAPI 为准。
+详细字段以 Pydantic contracts、[生成的 OpenAPI](docs/contracts/openapi-v1.json) 和运行中的 OpenAPI 为准。
 
 ## 项目结构
 
@@ -102,8 +101,7 @@ backend/app/
 ```
 
 `WorkflowState` 只保存控制字段和 artifact refs；完整业务结果由 typed contracts 和 CAS
-artifact 持有。旧的 `app/agent`、`app/modules`、`app/services` 路径只在迁移历史中出现，
-不是新代码入口。
+artifact 持有。已退役目录只保存在历史归档中，不是新代码入口。
 
 ## 验证
 

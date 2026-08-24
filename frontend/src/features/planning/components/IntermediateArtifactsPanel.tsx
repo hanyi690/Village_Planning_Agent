@@ -22,7 +22,7 @@ interface ArtifactView {
 }
 
 const STAGE_GROUPS: { stage: string; keys: ArtifactKey[] }[] = [
-  { stage: '事实与闸门', keys: ['l1_snapshot', 'l1_observations', 'l1_bindings', 'grounded_anchors', 'l1_gate'] },
+  { stage: '事实与闸门', keys: ['l1_source_index', 'l1_snapshot', 'l1_observations', 'l1_bindings', 'grounded_anchors', 'l1_gate'] },
   { stage: '策略与意图', keys: ['l2_strategy', 'l2_gate', 'planning_program', 'l3_gate'] },
   {
     stage: '目标与落地',
@@ -75,6 +75,7 @@ const DELIVERY_ARTIFACT_KEYS: ArtifactKey[] = [
 
 const ARTIFACT_LABELS: Record<string, string> = {
   l1_snapshot: 'L1 现状快照',
+  l1_source_index: 'L1 原始输入索引',
   l1_gate: 'L1 事实闸门',
   l1_observations: 'L1 观察记录',
   l1_bindings: 'L1 实体绑定',

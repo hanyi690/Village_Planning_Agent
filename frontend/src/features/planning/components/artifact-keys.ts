@@ -6,6 +6,7 @@
  */
 export const ARTIFACT_KEYS = [
   'l1_snapshot',
+  'l1_source_index',
   'l1_gate',
   'l1_observations',
   'l1_bindings',

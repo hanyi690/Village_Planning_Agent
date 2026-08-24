@@ -565,47 +565,6 @@ export interface ReviewData {
 }
 
 // ============================================
-// Report Comparison Types
-// ============================================
-
-/**
- * 维度版本历史项
- */
-export interface DimensionVersion {
-  version: number;
-  layer: number;
-  dimension_key: string;
-  report_id: string;
-  summary: string;
-  generated_at: string;
-  revision_trigger: string | null;
-}
-
-/**
- * 跨会话报告响应
- */
-export interface CrossSessionReport {
-  project_name: string;
-  session_id: string;
-  dimension_key: string;
-  layer: number;
-  content: string;
-  version?: number;
-  created_at?: string;
-  knowledge_sources?: KnowledgeSourceItem[];
-}
-
-/**
- * 对比会话信息
- */
-export interface CompareSession {
-  id: string;
-  name: string;
-  timestamp: string;
-  isCompleted: boolean;
-}
-
-// ============================================
 // Export Types
 // ============================================
 

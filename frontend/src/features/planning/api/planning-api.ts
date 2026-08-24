@@ -6,6 +6,7 @@ import { apiRequest, API_BASE_URL } from './client';
 import { usePlanningStore } from '../store/planningStore';
 import {
   assemblePlanningTextDocument,
+  assemblePlanningTextVersions,
 } from '../utils/assemble-planning-text';
 import {
   exportLayerJsonClient,
@@ -61,7 +62,7 @@ export const planningApi = {
     formData.append('constraints', request.constraints || '');
     formData.append('step_mode', String(request.step_mode || false));
     // RAG Configuration
-    formData.append('rag_enabled', String(request.rag_enabled ?? true));
+    formData.append('rag_enabled', String(request.rag_enabled ?? false));
     if (request.rag_layer_config) {
       formData.append('rag_layer_config', request.rag_layer_config);
     }
@@ -334,8 +335,7 @@ export const planningApi = {
   },
 
   /**
-   * Export layer report in a given format (direct file stream)
-   * POST /api/sessions/{session_id}/export?layer=N&format=...
+   * Export a layer report from the current v1 report projection.
    */
   async exportLayerFormat(
     sessionId: string,
@@ -397,35 +397,45 @@ export const planningApi = {
   // ============================================
 
   /**
-   * Get planning text document (latest or specific version)
-   * GET /api/sessions/{session_id}/planning-text
-   * GET /api/sessions/{session_id}/planning-text/versions/{version}
+   * Read the local v1 document projection assembled from authoritative report
+   * events.  The old server-side planning-text endpoint was removed with the
+   * legacy session API; DELIVER remains the legal artifact boundary.
    */
-  async getPlanningText(_sessionId: string, _version?: number): Promise<PlanningTextDocument | null> {
-    return null;
+  async getPlanningText(sessionId: string, version?: number): Promise<PlanningTextDocument | null> {
+    const state = usePlanningStore.getState();
+    const document = assemblePlanningTextDocument(
+      sessionId,
+      state.reports,
+      state.projectName || '村庄规划',
+    );
+    if (document.article_count === 0) return null;
+    return version === undefined || version === document.version ? document : null;
   },
 
   async getPlanningTextVersions(sessionId: string, _limit?: number): Promise<PlanningTextVersionList> {
-    return {
-      session_id: sessionId,
-      versions: [],
-      total: 0,
-    };
+    const document = await this.getPlanningText(sessionId);
+    return assemblePlanningTextVersions(sessionId, document);
   },
 
   async generatePlanningText(
     sessionId: string,
     request?: GeneratePlanningTextRequest,
   ): Promise<GeneratePlanningTextResponse> {
+    const document = assemblePlanningTextDocument(
+      sessionId,
+      usePlanningStore.getState().reports,
+      usePlanningStore.getState().projectName || '村庄规划',
+      request,
+    );
     return {
-      session_id: sessionId,
-      version: 0,
-      document_id: '',
-      markdown_content: '',
-      article_count: 0,
-      generated_at: new Date().toISOString(),
+      session_id: document.session_id,
+      version: document.version,
+      document_id: document.document_id,
+      markdown_content: document.markdown_content,
+      article_count: document.article_count,
+      generated_at: document.generated_at,
       generation_duration_seconds: 0,
-      status: 'empty',
+      status: document.article_count > 0 ? 'completed' : 'empty',
       trigger_reason: request?.trigger_reason || 'manual',
     };
   },
@@ -435,8 +445,7 @@ export const planningApi = {
   // ============================================
 
   /**
-   * Update step mode (runtime)
-   * PATCH /api/sessions/{session_id}/step-mode
+   * Update the local step-mode preference.  v1 accepts it only at creation.
    */
   async updateStepMode(
     _sessionId: string,

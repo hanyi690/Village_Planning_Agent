@@ -10,9 +10,9 @@
 
 | 目录 | 职责 | 关键文件 |
 |---|---|---|
-| `api/` | 后端 HTTP 客户端 | `client.ts`（`apiRequest`/`API_BASE_URL`）、`planning-api.ts`（`planningApi`：startPlanning/createStream/state/delivery/map-layers/human-review/resume/artifacts）、`data-api.ts`（已下线端点占位，运行时抛错）、`types.ts`、`v1-types.ts`、`index.ts` |
+| `api/` | 后端 HTTP 客户端 | `client.ts`（`apiRequest`/`API_BASE_URL`）、`planning-api.ts`（`planningApi`：startPlanning/createStream/state/delivery/map-layers/human-review/resume/artifacts）、`types.ts`、`v1-types.ts`、`index.ts` |
 | `store/` | 状态容器 | `planningStore.ts`（Zustand + Immer，约 93KB：消息/事件 reducer、SSE 事件处理、GIS 图层、报告、审核状态）、`planning-context.tsx`（`PlanningProvider`/`usePlanningActions`/`usePlanningStore`）、`index.ts` |
-| `hooks/` | 副作用 | `useSSE.ts`（SSE 连接/重连/batch，`Last-Event-ID` + `sync` 补偿）、`useSessionRestore.ts`、`usePersistence.ts`（localStorage 持久化）、`useStreaming.ts`/`utils/useStreamingRender.ts`（流式文本渲染）、`useHandlers.ts`、`useDelivery.ts`（delivery 同步）、`useApprovalActions.ts`（HITL）、`usePlanningBootstrapStage.ts`、`useSelectors.ts`、`useAnalysisCompletion.ts`、`useActiveAnalysisFocus.ts` |
+| `hooks/` | 副作用 | `useSSE.ts`（SSE 连接/重连/batch，`Last-Event-ID` + `sync` 补偿）、`useSessionRestore.ts`、`useStreaming.ts`/`utils/useStreamingRender.ts`（流式文本渲染）、`useHandlers.ts`、`useDelivery.ts`（delivery 同步）、`useApprovalActions.ts`（HITL）、`usePlanningBootstrapStage.ts`、`useSelectors.ts`、`useAnalysisCompletion.ts`、`useActiveAnalysisFocus.ts` |
 | `types/` | 消息/事件/状态类型与 guard | `messages.ts`、`events.ts`、`guards.ts`、`helpers.ts`、`base.ts`、`index.ts` |
 | `components/` | UI | `PlanningWorkbenchPage.tsx`（主工作台）、`chat/*`（MessageList/MessageBubble/MessageContent/ProgressPanel/ToolStatusPanel/StreamingText/CheckpointMarker/GisResultCard/KnowledgeSliceCard/FileViewerSidebar）、`gis/*`（MapView/LayerTogglePanel/LegendPanel/ValidationPanel）、`layout/*`（AnalysisSidePanel/ReportViewer/PlanningBootstrapPanel/OverviewGuidePanel）、`settings/SettingsPanel`、`ui/*`（MarkdownRenderer/ImagePreview）、`CascadePanel`/`CascadeNotificationBanner`、`IntermediateArtifactsPanel`、`DeliveryStatusBanner`、`ExportDialog`、`VillageInputForm`、`ChatInput`、`MessagePanel`、`PlanningTextViewer`、`DimensionCard`、`LlmStatusBanner`、`artifact-keys.ts` |
 | `config/` | 阶段/维度配置 | `phases.ts`、`planning.ts` |
@@ -38,6 +38,11 @@ Resume：POST /api/v1/sessions/{id}/resume（mode: interrupt | checkpoint）
   envelope（`schema_version=1.0`、`seq`、`type`、`data`）。
 - 地图图层以 `/map-layers` 的 `DeliverySpatialSnapshot` 投影为准；
   `utils/gis-normalize.ts` 做 v1 词汇 → 内部渲染词汇映射。
+- `/source-layers` 只提供已配置的金田村（`金田` / `金田村` / `jintian`）静态现状参考图层；
+  对未配置村庄后端返回空上下文和诊断，不得把金田村数据伪装成其他村庄数据。它不替代会话
+  交付，也不会被自动注入到其他村庄的会话。规划图层必须来自该会话的 `DeliverySpatialSnapshot`。
+- v1 只呈现当前会话的报告与证据；跨会话报告和版本历史没有前端兼容 API，避免把已下线
+  的端点伪装成可用能力。
 - `partial` / `diagnostic_only` / `statutory_complete=false` 由 `DeliveryStatusBanner`
   显著展示，不显示为法定完整成果。
 
@@ -46,4 +51,4 @@ Resume：POST /api/v1/sessions/{id}/resume（mode: interrupt | checkpoint）
 - `src/__tests__/store/planningStore.chat.test.ts`、`planningStore.delivery.test.ts`
 - `src/__tests__/hooks/useStreamingRender.test.ts`、`useStreamingText.test.ts`
 - `src/__tests__/api/client.test.ts`、`src/__tests__/components/*`、`src/__tests__/utils/*`
-- E2E：`frontend/e2e/planning-flow.spec.ts`、`v1-contract.spec.ts` 等（Playwright）
+- E2E：`frontend/e2e/v1-contract.spec.ts`（Playwright；只验证稳定 v1 契约）

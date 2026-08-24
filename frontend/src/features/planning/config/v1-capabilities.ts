@@ -20,7 +20,7 @@ export const V1_CAPABILITIES = {
   suitabilityPanel: false,
   /** Legacy /api/compliance run — backend removed. */
   complianceRunApi: false,
-  /** PATCH /api/sessions/{id}/step-mode — use create-session step_mode only. */
+  /** Step mode is submitted at session creation; runtime changes stay local. */
   stepModeMidSessionSync: false,
 } as const;
 

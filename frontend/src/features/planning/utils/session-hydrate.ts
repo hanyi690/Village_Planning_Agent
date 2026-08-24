@@ -77,9 +77,18 @@ export async function hydrateSessionSnapshot(
     applySyncedEvents(syncResult.events);
   }
 
-  // Re-apply the REST projection after replay so stale historical events
-  // cannot make later layers appear complete on a refreshed page.
-  store.syncBackendState(statusData);
+  // The durable event stream is the source of truth for live phase/report
+  // progress.  A parent checkpoint can legally remain on the first HUMAN
+  // boundary while a resumed child segment is already producing later-layer
+  // events; re-applying that stale projection here would roll the UI back to
+  // L1.  Only terminal REST fields need a final merge after replay.
+  const terminalProjection =
+    statusData.status === 'completed' ||
+    statusData.status === 'failed' ||
+    statusData.delivery_status != null;
+  if (terminalProjection || syncResult.events.length === 0) {
+    store.syncBackendState(statusData);
+  }
 
   const lastSeq = typeof syncResult.last_seq === 'number' ? syncResult.last_seq : 0;
   if (lastSeq > usePlanningStore.getState().lastProcessedSeq) {

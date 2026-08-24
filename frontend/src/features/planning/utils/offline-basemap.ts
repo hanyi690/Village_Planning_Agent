@@ -4,11 +4,8 @@ import type { GISLayerConfig, GeoJsonFeatureCollection } from '@/types/message/m
 import { planningApi } from '@/features/planning/api';
 import type { CurrentSourceRaster } from '@/features/planning/api/types';
 
-let cachedLayers: GISLayerConfig[] | null = null;
-let cachedCenter: [number, number] | null = null;
-let cachedRasters: CurrentSourceRaster[] = [];
-let cachedDiagnostics: string[] = [];
-let request: Promise<CurrentSourceLayersResult> | null = null;
+const cachedSources = new Map<string, CurrentSourceLayersResult>();
+const pendingSources = new Map<string, Promise<CurrentSourceLayersResult>>();
 
 const DEFAULT_CENTER: [number, number] = [116.0735, 24.8317];
 
@@ -99,31 +96,26 @@ export function styleOfflineBasemapLayers(layers: GISLayerConfig[]): GISLayerCon
 }
 
 export async function fetchCurrentSourceLayers(villageName = '金田村'): Promise<CurrentSourceLayersResult> {
-  if (cachedLayers) {
-    return {
-      layers: cachedLayers,
-      center: cachedCenter,
-      rasters: cachedRasters,
-      diagnostics: cachedDiagnostics,
-    };
-  }
-  if (request) return request;
+  const sourceKey = String(villageName || '金田村').trim().toLowerCase();
+  const cached = cachedSources.get(sourceKey);
+  if (cached) return cached;
+  const pending = pendingSources.get(sourceKey);
+  if (pending) return pending;
 
-  request = planningApi.getCurrentSourceLayers(villageName)
+  const sourceRequest = planningApi.getCurrentSourceLayers(villageName)
     .then((payload) => {
       const layers = styleOfflineBasemapLayers(normalizeGisLayers(payload.layers));
       const center = Array.isArray(payload.center) && payload.center.length === 2
         ? [Number(payload.center[0]), Number(payload.center[1])] as [number, number]
         : DEFAULT_CENTER;
-      cachedLayers = layers;
-      cachedCenter = center;
-      cachedRasters = payload.rasters;
-      cachedDiagnostics = payload.diagnostics;
-      return { layers, center, rasters: payload.rasters, diagnostics: payload.diagnostics };
+      const result = { layers, center, rasters: payload.rasters, diagnostics: payload.diagnostics };
+      cachedSources.set(sourceKey, result);
+      return result;
     })
     .finally(() => {
-      request = null;
+      pendingSources.delete(sourceKey);
     });
 
-  return request;
+  pendingSources.set(sourceKey, sourceRequest);
+  return sourceRequest;
 }

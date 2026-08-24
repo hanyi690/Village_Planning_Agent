@@ -59,15 +59,12 @@ export { apiRequest, API_BASE_URL, createApiError } from './client';
 
 // API modules
 export { planningApi } from './planning-api';
-export { dataApi } from './data-api';
 
 // Default export
 import { planningApi } from './planning-api';
-import { dataApi } from './data-api';
 
 const api = {
   planningApi,
-  dataApi,
 };
 
 export default api;

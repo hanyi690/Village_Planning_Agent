@@ -40,6 +40,7 @@ interface AnalysisSidePanelProps {
   onFeedbackChange: (value: string) => void;
   onFeedbackKeyDown: (event: React.KeyboardEvent<HTMLTextAreaElement>) => void;
   onApprove: () => void;
+  reviewActionLabel?: string;
   onSubmitRevision: () => void;
   isSubmitting: boolean;
   primaryBtnClass: string;
@@ -73,6 +74,7 @@ export default function AnalysisSidePanel({
   onFeedbackChange,
   onFeedbackKeyDown,
   onApprove,
+  reviewActionLabel = '批准继续',
   onSubmitRevision,
   isSubmitting,
   primaryBtnClass,
@@ -275,7 +277,7 @@ export default function AnalysisSidePanel({
                     )}
                   >
                     <FontAwesomeIcon icon={faCheck} style={{ width: 13, height: 13 }} />
-                    批准继续
+                    {reviewActionLabel}
                   </button>
                   <button
                     type="button"

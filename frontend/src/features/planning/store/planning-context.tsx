@@ -4,18 +4,17 @@
  * PlanningProvider - Simplified State Management
  *
  * Uses Zustand + Immer for state management.
- * SSE connection and message persistence are handled by dedicated hooks.
+ * SSE connection and authoritative delivery hydration are handled by dedicated hooks.
  *
  * This provider is now a thin wrapper that:
  * 1. Initializes the store with conversationId
  * 2. Manages SSE connection lifecycle
- * 3. Handles message persistence
- * 4. Provides high-level actions for planning workflow
+ * 3. Provides high-level actions for planning workflow
  */
 
 import { useEffect, useCallback, useMemo, ReactNode, Suspense } from 'react';
 import { usePlanningStore } from '../store/planningStore';
-import { useSSEConnection, useMessagePersistence, useSessionRestore, useDeliverySync } from '../hooks';
+import { useSSEConnection, useSessionRestore, useDeliverySync } from '../hooks';
 import { planningApi, VillageInfo, VillageSession, ImageData } from '../api';
 import { createSystemMessage, createErrorMessage, getErrorMessage } from '@/features/planning/utils';
 import { hydrateSessionSnapshot } from '@/features/planning/utils/session-hydrate';
@@ -72,7 +71,7 @@ export function usePlanningActions() {
           enable_review: params.enableReview ?? PLANNING_DEFAULTS.enableReview,
           step_mode: store.step_mode,
           stream_mode: PLANNING_DEFAULTS.streamMode,
-          rag_enabled: true,
+          rag_enabled: false,
           rag_layer_config: JSON.stringify(store.ragLayerConfig),
           images: params.images,
           villageDataFiles: params.villageDataFiles,
@@ -150,8 +149,9 @@ Session ID: ${response.session_id.slice(0, 8)}...`;
         sessionId, store.isPaused, store.status, store.interruptInfo);
     logger.context.info('Approving review', { sessionId });
     try {
-      const { resolveActiveInterrupt } = await import('../utils/interrupt-resume');
-      await resolveActiveInterrupt(sessionId, 'approve');
+      const { actionForHumanReview, resolveActiveInterrupt } = await import('../utils/interrupt-resume');
+      const action = actionForHumanReview({ pending_items: store.humanReview?.items ?? [] });
+      await resolveActiveInterrupt(sessionId, action);
       store.setPaused(false);
       store.setPendingReviewLayer(null);
       store.setStatus('planning');
@@ -441,9 +441,6 @@ export function PlanningProvider({ children, conversationId }: PlanningProviderP
 
   // Delivery + map-layers authoritative projection sync
   useDeliverySync();
-
-  // Message persistence
-  useMessagePersistence();
 
   // Checkpoint sync when paused
   useEffect(() => {

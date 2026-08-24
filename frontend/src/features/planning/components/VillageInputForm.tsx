@@ -13,6 +13,7 @@ import {
 } from '@fortawesome/free-solid-svg-icons';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { FILE_ACCEPT } from '@/features/planning/constants';
+import { loadJintianDemoInput } from '@/features/planning/utils/demo-input';
 
 export interface UploadedFileInfo {
   filename: string;
@@ -249,6 +250,7 @@ const VillageInputForm = memo(function VillageInputForm({ onSubmit, onLoadSessio
   const [villageData, setVillageData] = useState('');
   const [focusedField, setFocusedField] = useState<string | null>(null);
   const [isLoadingCompleteResult, setIsLoadingCompleteResult] = useState(false);
+  const [demoError, setDemoError] = useState('');
 
   const [taskFiles, setTaskFiles] = useState<File[]>([]);
   const [constraintFiles, setConstraintFiles] = useState<File[]>([]);
@@ -285,41 +287,37 @@ const VillageInputForm = memo(function VillageInputForm({ onSubmit, onLoadSessio
     });
   };
 
-  const handleLoadDemo = async () => {
-    setProjectName('金田村规划');
-    setProvince('广东省');
-    setCity('梅州市');
-    setCounty('平远县');
-    setTownship('泗水镇');
-    setVillageName('金田村');
-    setPlanningPeriod('2022-2035年');
-    setTaskDescription(
-      '编制梅州市金田村村庄规划，涵盖国土空间布局、产业发展、人居环境、设施配套、历史文化保护等方面。'
-    );
-    setConstraints(
-      '1. 耕地保有量不低于85.2公顷，永久基本农田78.83公顷；\n' +
-      '2. 生态保护红线362.02公顷；\n' +
-      '3. 村庄建设用地规模30.5公顷；\n' +
-      '4. 林地保有量不低于423.6公顷；\n' +
-      '5. 符合梅州市国土空间总体规划要求。'
-    );
+  const handleLoadDemo = async (): Promise<boolean> => {
     try {
-      const res = await fetch('/demo/jintian_village.md');
-      if (res.ok) {
-        const text = await res.text();
-        setVillageData(text);
-      }
-    } catch {}
+      const demo = await loadJintianDemoInput();
+      setProjectName(demo.projectName);
+      setProvince(demo.province);
+      setCity(demo.city);
+      setCounty(demo.county);
+      setTownship(demo.township);
+      setVillageName(demo.villageName);
+      setPlanningPeriod(demo.planningPeriod);
+      setTaskDescription(demo.taskDescription);
+      setConstraints(demo.constraints);
+      setVillageData(demo.villageData);
+      setDemoError('');
+      return true;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : '完整金田村现状报告加载失败，请重试。';
+      setDemoError(message);
+      return false;
+    }
   };
 
   const handleLoadCompleteResult = async () => {
     setIsLoadingCompleteResult(true);
     try {
-      await handleLoadDemo();
+      const loaded = await handleLoadDemo();
+      if (!loaded) return;
       window.location.assign('/');
     } catch (error) {
       console.error('Failed to load complete planning result:', error);
-      alert('完整成果加载失败，请先运行成果生成脚本，并确认后端 8000 端口已启动。');
+      alert(error instanceof Error ? error.message : '完整成果加载失败，请重试。');
     } finally {
       setIsLoadingCompleteResult(false);
     }
@@ -406,7 +404,7 @@ const VillageInputForm = memo(function VillageInputForm({ onSubmit, onLoadSessio
                   onClick={handleLoadDemo}
                   className="ml-1 px-2 py-0.5 text-xs font-medium bg-cyan-50 text-cyan-700 hover:bg-cyan-100 border border-cyan-200 rounded transition-colors"
                 >
-                  加载示例数据
+                  加载完整现状报告 + 金田村 GIS参考
                 </button>
                 <button
                   type="button"
@@ -418,6 +416,8 @@ const VillageInputForm = memo(function VillageInputForm({ onSubmit, onLoadSessio
                 </button>
                 <div className="flex-1 h-px bg-gradient-to-l from-amber-300 to-transparent" />
               </div>
+              {demoError && <p className="mb-3 rounded-lg bg-red-50 px-3 py-2 text-xs text-red-600">{demoError}</p>}
+              <p className="mb-3 rounded-lg bg-cyan-50 px-3 py-2 text-xs text-cyan-700">村庄名称“金田村”将绑定 DataCatalog GIS 参考数据；此按钮不会上传 GIS 文件。</p>
 
               <InputField
                 id="projectName"

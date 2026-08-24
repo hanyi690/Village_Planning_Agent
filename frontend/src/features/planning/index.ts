@@ -43,7 +43,6 @@ export {
   usePlanningHandlers,
   useStreamingText,
   useStreamingAccumulator,
-  useMessagePersistence,
   useSessionRestore,
   // NEW: RAG & Cascade Selectors
   useDimensionRagSources,
@@ -87,7 +86,7 @@ export {
 } from './config';
 
 // API
-export { planningApi, dataApi } from './api';
+export { planningApi } from './api';
 
 // Components (optional - usually imported directly)
 // export * from './components';

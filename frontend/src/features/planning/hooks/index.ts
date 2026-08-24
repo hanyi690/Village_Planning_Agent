@@ -69,8 +69,7 @@ export { useApprovalActions } from "./useApprovalActions";
 // Delivery & map-layers (v1 authoritative projection sync)
 export { useDeliverySync } from "./useDelivery";
 
-// Persistence & Session
-export { useMessagePersistence } from "./usePersistence";
+// Session restore
 export { useSessionRestore } from "./useSessionRestore";
 
 // Analysis progress

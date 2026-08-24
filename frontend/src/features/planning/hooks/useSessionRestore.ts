@@ -7,6 +7,7 @@
  */
 
 import { useEffect, useCallback, useRef } from 'react';
+import { useSearchParams } from 'next/navigation';
 import { usePlanningStore } from '../store/planningStore';
 import { logger } from '@/features/planning/utils/logger';
 import { hydrateSessionSnapshot } from '@/features/planning/utils/session-hydrate';
@@ -17,8 +18,11 @@ interface UseSessionRestoreOptions {
 }
 
 export function useSessionRestore({ enabled = true }: UseSessionRestoreOptions = {}) {
+  const searchParams = useSearchParams();
+  const urlSessionId = searchParams.get('sessionId');
   const sessionId = usePlanningStore((state) => state.sessionId);
   const setSessionId = usePlanningStore((state) => state.setSessionId);
+  const unmarkSessionDeleted = usePlanningStore((state) => state.unmarkSessionDeleted);
   const resetConversation = usePlanningStore((state) => state.resetConversation);
 
   const restoringRef = useRef(false);
@@ -27,9 +31,11 @@ export function useSessionRestore({ enabled = true }: UseSessionRestoreOptions =
   const restoreSession = useCallback(async (targetSessionId: string) => {
     if (restoringRef.current) return;
 
+    // A direct URL is an explicit request to reopen a persisted session.  The
+    // sidebar's local tombstone only hides deleted history; it must not make a
+    // valid shared/session URL unrecoverable.
     if (usePlanningStore.getState().deletedSessionIds[targetSessionId]) {
-      clearSessionIdFromUrl();
-      return;
+      unmarkSessionDeleted(targetSessionId);
     }
 
     const currentSessionId = usePlanningStore.getState().sessionId;
@@ -80,7 +86,7 @@ export function useSessionRestore({ enabled = true }: UseSessionRestoreOptions =
     } finally {
       restoringRef.current = false;
     }
-  }, [setSessionId, resetConversation]);
+  }, [setSessionId, unmarkSessionDeleted, resetConversation]);
 
   useEffect(() => {
     if (!enabled) return;
@@ -89,21 +95,21 @@ export function useSessionRestore({ enabled = true }: UseSessionRestoreOptions =
     if (pendingHistorical) return;
 
     // Always read the live URL; Next.js searchParams can lag behind replaceState.
-    const urlSessionId = getSessionIdFromUrl();
-    if (!urlSessionId || restoringRef.current) return;
+    const targetSessionId = urlSessionId || getSessionIdFromUrl();
+    if (!targetSessionId || restoringRef.current) return;
 
-    if (sessionId === urlSessionId) {
-      restoredSessionIdRef.current = urlSessionId;
+    if (sessionId === targetSessionId) {
+      restoredSessionIdRef.current = targetSessionId;
       return;
     }
 
     // Only auto-restore when the store has no active session.
     if (sessionId) return;
 
-    if (restoredSessionIdRef.current === urlSessionId) return;
+    if (restoredSessionIdRef.current === targetSessionId) return;
 
-    void restoreSession(urlSessionId);
-  }, [enabled, sessionId, restoreSession]);
+    void restoreSession(targetSessionId);
+  }, [enabled, sessionId, restoreSession, urlSessionId]);
 
   useEffect(() => {
     if (!sessionId) {
@@ -120,7 +126,7 @@ export function useSessionRestore({ enabled = true }: UseSessionRestoreOptions =
 
   return {
     isRestoring: restoringRef.current,
-    sessionIdFromUrl: getSessionIdFromUrl(),
+    sessionIdFromUrl: urlSessionId || getSessionIdFromUrl(),
     restoreSession,
   };
 }
