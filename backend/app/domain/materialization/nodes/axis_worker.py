@@ -1,4 +1,4 @@
-"""Axis worker node: development-axis layer (decision-driven from intent)."""
+"""Axis materializer: development-axis layer from approved intent."""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ from copy import deepcopy
 from typing import Any
 
 from app.domain.materialization.execute_state import ExecuteAgentState
-from app.domain.materialization.nodes.worker_common import _attach_feature_lineage, _execution_intent_from_plan, _intent_list, _scenario_features_for_layer, _task_enabled, _task_execution_result
+from app.domain.materialization.nodes.worker_common import _attach_feature_lineage, _execution_intent_from_plan, _intent_list, _plan_tasks, _scenario_features_for_layer, _task_enabled, _task_execution_result, _task_value
 from app.contracts.workflow.execution_plan_contracts import WorkerResult
 from app.infrastructure.logging import get_logger
 
@@ -129,8 +129,18 @@ def _axis_worker(state: ExecuteAgentState) -> WorkerResult:
     features = []
     unresolved = []
     task_results = []
+    axis_tasks_by_target: dict[str, list[Any]] = {}
+    for task in _plan_tasks(state, {"axis_construction"}):
+        axis_tasks_by_target.setdefault(
+            str(_task_value(task, "target_id", "") or ""), []
+        ).append(task)
+    occurrence_by_target: dict[str, int] = {}
     for axis in axes:
         target_id = str(axis.target_id)
+        occurrence = occurrence_by_target.get(target_id, 0)
+        occurrence_by_target[target_id] = occurrence + 1
+        matching_tasks = axis_tasks_by_target.get(target_id, [])
+        matching_task = matching_tasks[min(occurrence, len(matching_tasks) - 1)] if matching_tasks else None
         target_unresolved = []
         errors = []
         target_features = []
@@ -152,18 +162,21 @@ def _axis_worker(state: ExecuteAgentState) -> WorkerResult:
                     ),
                 })
         except Exception as e:
-            logger.error("[EXECUTE:axis] failed for %s: %s", target_id, e, exc_info=True)
-            errors.append(str(e))
+            logger.error("[EXECUTE:axis] failed for %s (exception_type=%s)", target_id, type(e).__name__)
+            errors.append(f"AXIS_FAILED:{type(e).__name__}")
             target_unresolved.append({
                 "code": "axis_failed",
                 "target_id": target_id,
-                "message": str(e),
+                "message": "Axis materialization failed.",
+                "exception_type": type(e).__name__,
             })
         unresolved.extend(target_unresolved)
         result = _task_execution_result(
             state,
             "axis_construction",
             target_id,
+            task_id=str(_task_value(matching_task, "task_id", "") or "") if matching_task else "",
+            candidate_id=str(_task_value(matching_task, "candidate_id", "") or "") if matching_task else "",
             status="succeeded" if target_features else "failed",
             diagnostics=target_unresolved,
             errors=errors,
@@ -197,8 +210,3 @@ def _axis_worker(state: ExecuteAgentState) -> WorkerResult:
             else ""
         ),
     )
-
-
-async def _axis_worker_node(state: ExecuteAgentState) -> dict:
-    result = _axis_worker(state)
-    return {"worker_results": [result]}

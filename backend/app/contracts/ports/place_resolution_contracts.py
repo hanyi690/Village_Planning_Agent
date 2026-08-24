@@ -5,7 +5,7 @@ Defines the contract between the place resolver and downstream consumers
 from candidate PlaceResolutionCandidate objects scored across eight evidence
 dimensions defined in EvidenceScore.
 
-See docs/design/12_PLACE_NAME_RESOLUTION.md §4-5.
+See docs/design/02_EVIDENCE_AND_GROUNDING.md for the current place-grounding boundary.
 """
 from __future__ import annotations
 

@@ -1,18 +1,19 @@
 """EXECUTE Agent - spatial execution subgraph.
 
-Migrated from agent/gis/execute/agent.py per docs/architecture/agent-graph.md §5.
+Execution orchestration follows the current EXECUTE boundary in docs/design/03_PLANNING_EXECUTION.md.
 
-Consumes target projection + SELECT SiteSelectionDecision, compiles them into a
-complete PlannedState via the multi-worker subgraph (Wave O):
+Consumes approval-bound scenario inputs and compiles them into a complete
+PlannedState via the task-scheduled worker boundary (Wave O):
 
-    route_tasks -> prepare_inputs -> project_worker -> zone_worker
-      -> [facility_worker || axis_worker]   (LangGraph parallel fan-out)
-      -> road_worker -> merge_worker_results -> geometry_materialize
-      -> planned_state_builder -> execution_review
+    approval_boundary -> route_tasks -> prepare_inputs -> task_scheduler
+      -> merge_worker_results -> geometry_materialize -> planned_state_builder
+      -> execution_review
 
-This module is now the graph builder only. The 11 node functions live in
-``app.domain.materialization.nodes`` (one module per responsibility); worker outputs
-cross the boundary through typed contracts.
+``task_scheduler`` dispatches typed worker functions and preserves each task's
+lineage. Worker-specific graph nodes are deliberately not registered: keeping
+the old per-worker nodes beside the scheduler created a second, unreachable
+execution surface and made the graph claim parallelism that production does
+not use.
 
 Nodes call domain services directly rather than LangChain tool wrappers.
 """
@@ -25,34 +26,34 @@ from langgraph.graph import StateGraph, END, START
 
 from app.domain.materialization.execute_state import ExecuteAgentState
 from app.domain.materialization.nodes import (
-    _axis_worker,
-    _axis_worker_node,
-    _action_worker,
-    _action_worker_node,
-    _checkpoint_safe,
     _checkpoint_safe_node,
-    _execution_error,
     _execution_review_node,
-    _facility_worker,
-    _facility_worker_node,
     _geometry_materialize_node,
     _merge_worker_results_node,
     _planned_state_builder_node,
     _prepare_inputs_node,
-    _project_worker,
-    _project_worker_node,
-    _road_worker,
-    _road_worker_node,
     _route_tasks_node,
     _task_level_execution_node,
-    _write_l4_node,
-    _zone_worker,
-    _zone_worker_node,
 )
-from app.domain.materialization.nodes.worker_common import _build_parcel_by_bsm
 from app.infrastructure.logging import get_logger
 
 logger = get_logger(__name__)
+
+
+async def _approval_boundary_node(state: ExecuteAgentState) -> dict:
+    """Reject direct graph callers that do not carry the immutable approval."""
+    approval = state.approved_execution_input
+    if approval is None:
+        raise ValueError("EXECUTE graph requires an ApprovedExecutionInput")
+    if not approval.can_execute:
+        raise ValueError("EXECUTE graph requires an executable ApprovedExecutionInput")
+    if not state.approved_input_fingerprint or state.approved_input_fingerprint != approval.fingerprint:
+        raise ValueError("EXECUTE graph approval fingerprint is stale")
+    try:
+        approval.assert_execution_plan_matches(state.execution_plan)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"EXECUTE graph plan is not derived from the approved input: {exc}") from exc
+    return {}
 
 
 def _route_after_execution_review(
@@ -79,35 +80,28 @@ def _route_after_execution_review(
 def build_execute_agent_graph(checkpointer=None):
     """Build the EXECUTE Agent StateGraph.
 
-    Wave O multi-worker subgraph:
-        route_tasks -> prepare_inputs -> project_worker -> zone_worker
-          -> [facility_worker || axis_worker]  (parallel fan-out diamond)
-          -> road_worker -> merge_worker_results -> geometry_materialize
+    Wave O task-scheduled worker boundary:
+        approval_boundary -> route_tasks -> prepare_inputs -> task_scheduler
+          -> merge_worker_results -> geometry_materialize
           -> planned_state_builder -> execution_review
-    Execution-review retry loop on failure (max 3 rounds -> human review).
 
-    Parallel implementation: a static fan-out diamond - ``zone_worker`` edges
-    to both ``facility_worker`` and ``axis_worker`` (LangGraph runs them
-    concurrently), which fan back in at ``road_worker``. ``worker_results`` uses
-    an upsert reducer so concurrent writes and retry re-runs merge correctly.
+    The scheduler invokes typed worker functions for each approved task; the
+    worker functions are not reachable graph nodes.
+    Execution-review retry loop on failure (max 3 rounds -> human review).
     """
     graph = StateGraph(ExecuteAgentState)
 
+    graph.add_node("approval_boundary", _checkpoint_safe_node(_approval_boundary_node))
     graph.add_node("route_tasks", _checkpoint_safe_node(_route_tasks_node))
     graph.add_node("prepare_inputs", _checkpoint_safe_node(_prepare_inputs_node))
     graph.add_node("task_scheduler", _checkpoint_safe_node(_task_level_execution_node))
-    graph.add_node("project_worker", _checkpoint_safe_node(_project_worker_node))
-    graph.add_node("zone_worker", _checkpoint_safe_node(_zone_worker_node))
-    graph.add_node("facility_worker", _checkpoint_safe_node(_facility_worker_node))
-    graph.add_node("axis_worker", _checkpoint_safe_node(_axis_worker_node))
-    graph.add_node("action_worker", _checkpoint_safe_node(_action_worker_node))
-    graph.add_node("road_worker", _checkpoint_safe_node(_road_worker_node))
     graph.add_node("merge_worker_results", _checkpoint_safe_node(_merge_worker_results_node))
     graph.add_node("geometry_materialize", _checkpoint_safe_node(_geometry_materialize_node))
     graph.add_node("planned_state_builder", _checkpoint_safe_node(_planned_state_builder_node))
     graph.add_node("execution_review", _checkpoint_safe_node(_execution_review_node))
 
-    graph.add_edge(START, "route_tasks")
+    graph.add_edge(START, "approval_boundary")
+    graph.add_edge("approval_boundary", "route_tasks")
     graph.add_edge("route_tasks", "prepare_inputs")
     graph.add_edge("prepare_inputs", "task_scheduler")
     graph.add_edge("task_scheduler", "merge_worker_results")
@@ -131,36 +125,13 @@ def build_execute_agent_graph(checkpointer=None):
         compile_kwargs["checkpointer"] = checkpointer
     compiled = graph.compile(**compile_kwargs)
     logger.info(
-        "[EXECUTE] Agent graph compiled: 11 nodes (multi-worker subgraph), 1 conditional edge"
+        "[EXECUTE] Agent graph compiled: 8 reachable nodes (task-scheduled workers), 1 conditional edge"
     )
     return compiled
 
 
 __all__ = [
     "build_execute_agent_graph",
+    "_approval_boundary_node",
     "_route_after_execution_review",
-    "_checkpoint_safe",
-    "_checkpoint_safe_node",
-    "_execution_error",
-    "_route_tasks_node",
-    "_prepare_inputs_node",
-    "_task_level_execution_node",
-    "_project_worker",
-    "_project_worker_node",
-    "_zone_worker",
-    "_zone_worker_node",
-    "_facility_worker",
-    "_facility_worker_node",
-    "_axis_worker",
-    "_axis_worker_node",
-    "_action_worker",
-    "_action_worker_node",
-    "_road_worker",
-    "_road_worker_node",
-    "_merge_worker_results_node",
-    "_geometry_materialize_node",
-    "_planned_state_builder_node",
-    "_execution_review_node",
-    "_write_l4_node",
-    "_build_parcel_by_bsm",
 ]

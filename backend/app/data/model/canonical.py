@@ -493,9 +493,17 @@ class VillageBundle(BaseModel):
         if lp:
             gis_data["landuse_planned_geojson"] = _features_to_fc(lp)
 
-        all_roads = self.lines.get("roads_current") + self.lines.get("roads_planned")
-        if all_roads:
-            gis_data["road_geojson"] = _features_to_fc(all_roads)
+        current_roads = self.lines.get("roads_current")
+        if current_roads:
+            gis_data["road_geojson"] = _features_to_fc(current_roads)
+
+        planned_roads = self.lines.get("roads_planned")
+        if planned_roads:
+            # Keep planned/reference roads separate from the authoritative
+            # current-road layer.  Delivery classifies this key as a planned
+            # overlay; combining it with road_geojson makes planned geometry
+            # appear as current infrastructure and corrupts layer counts.
+            gis_data["planned_road_geojson"] = _features_to_fc(planned_roads)
 
         external_roads = self.lines.get("external_roads")
         if external_roads:

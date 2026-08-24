@@ -309,7 +309,6 @@ class SiteAreaTarget(TargetExecutionContract):
         "protection_overlay",
         "restoration_overlay",
         "site_footprint",
-        "project_footprint",
     ]] = None
     action: Literal[
         "preserve",

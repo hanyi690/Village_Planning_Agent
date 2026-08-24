@@ -10,15 +10,14 @@ from app.domain.materialization.nodes.route_prepare import (
     _route_tasks_node,
     _task_level_execution_node,
 )
-from app.domain.materialization.nodes.project_worker import _project_worker, _project_worker_node
-from app.domain.materialization.nodes.zone_worker import _zone_worker, _zone_worker_node
+from app.domain.materialization.nodes.project_worker import _project_worker
+from app.domain.materialization.nodes.zone_worker import _zone_worker
 from app.domain.materialization.nodes.facility_worker import (
     _facility_worker,
-    _facility_worker_node,
 )
-from app.domain.materialization.nodes.axis_worker import _axis_worker, _axis_worker_node
-from app.domain.materialization.nodes.action_worker import _action_worker, _action_worker_node
-from app.domain.materialization.nodes.road_worker import _road_worker, _road_worker_node
+from app.domain.materialization.nodes.axis_worker import _axis_worker
+from app.domain.materialization.nodes.action_worker import _action_worker
+from app.domain.materialization.nodes.road_worker import _road_worker
 from app.domain.materialization.nodes.merge_and_materialize import (
     _geometry_materialize_node,
     _merge_worker_results_node,
@@ -35,17 +34,11 @@ __all__ = [
     "_prepare_inputs_node",
     "_task_level_execution_node",
     "_project_worker",
-    "_project_worker_node",
     "_zone_worker",
-    "_zone_worker_node",
     "_facility_worker",
-    "_facility_worker_node",
     "_axis_worker",
-    "_axis_worker_node",
     "_action_worker",
-    "_action_worker_node",
     "_road_worker",
-    "_road_worker_node",
     "_merge_worker_results_node",
     "_geometry_materialize_node",
     "_planned_state_builder_node",

@@ -1,6 +1,6 @@
 """L3 报告 → session 功能区词汇表提取器。
 
-Migrated from agent/gis/vocab_extractor.py per docs/architecture/agent-graph.md §5.
+Vocabulary extraction follows the current materialization boundary in docs/design/03_PLANNING_EXECUTION.md.
 
 v4 设计：功能区类别来自 DB L3 报告的【功能分区表】等章节（系统内闭环），
 每轮随报告变化；提取结果注册为 session 级 Vocabulary（轮内闭集），
@@ -205,7 +205,7 @@ async def extract_vocabulary_from_reports(
     try:
         return await _extract_vocabulary_llm(llm, reports)
     except Exception as exc:
-        logger.error("[VocabExtractor] typed LLM extraction failed: %s", exc)
+        logger.error("[VocabExtractor] typed LLM extraction failed: %s", type(exc).__name__)
         raise RuntimeError("typed_vocabulary_extraction_failed") from exc
 
 

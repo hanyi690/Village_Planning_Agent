@@ -52,12 +52,26 @@ def compact_claim_context(
                 continue
             category = str(claim.get("suggested_category") or "action")
             output = str(claim.get("suggested_output_kind") or "action")
+            role = str(claim.get("planning_role") or "evidence_statement")
+            package_ref = str(claim.get("project_package_ref") or "")
             evidence = ",".join(str(item) for item in claim.get("evidence_refs") or [])
             locations = ",".join(str(item) for item in claim.get("location_hints") or [])
+            spatial = claim.get("spatial_requirements") or {}
+            if isinstance(spatial, dict):
+                grounding = ",".join(str(item) for item in spatial.get("grounding_requirements") or [])
+                relations = ",".join(
+                    str(item.get("relation_template") or "")
+                    for item in spatial.get("relations") or []
+                    if isinstance(item, dict) and str(item.get("relation_template") or "").strip()
+                )
+            else:
+                grounding, relations = "", ""
             rows.append(
-                f"- {claim_id}: {statement[:240]} | category={category}; "
+                f"- {claim_id}: {statement[:240]} | role={role}; package={package_ref or 'none'}; "
+                f"category={category}; "
                 f"output={output}; locations={locations or 'unresolved'}; "
-                f"evidence={evidence or 'none'}"
+                f"evidence={evidence or 'none'}; "
+                f"grounding={grounding or 'unspecified'}; relations={relations or 'none'}"
             )
         parts.append("\n".join(rows))
     result = "\n\n".join(parts)

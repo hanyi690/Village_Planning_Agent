@@ -6,8 +6,12 @@ from typing import Any, Dict
 
 from app.domain.materialization.execute_state import ExecuteAgentState
 from app.domain.materialization.nodes.common import _execution_error
-from app.domain.materialization.nodes.constraints import _apply_constraint_adjustments
-from app.domain.materialization.nodes.worker_common import _build_parcel_by_bsm, _execution_intent_from_plan, _intent_list, _plan_tasks, worker_route_key
+from app.domain.materialization.nodes.worker_common import (
+    _build_parcel_by_bsm,
+    _execution_intent_from_plan,
+    _plan_tasks,
+    worker_route_key,
+)
 from app.infrastructure.logging import get_logger
 
 logger = get_logger(__name__)
@@ -117,30 +121,33 @@ async def _route_tasks_node(state: ExecuteAgentState) -> dict:
                 error_state,
                 "route",
                 "kg_l3_validation_failed",
-                str(e),
+                f"KG_L3_VALIDATION_FAILED:{type(e).__name__}",
             ) | result
     return {**result, "execution_errors": clean_execution_errors}
 
 
 async def _prepare_inputs_node(state: ExecuteAgentState) -> dict:
-    """Prepare execution inputs: parcel_by_bsm + constraint adjustments + ExecutionPlan.
+    """Prepare execution inputs: parcel index plus the immutable ExecutionPlan.
 
-    This is the single compile-entry point: it builds the parcel index once and
-    applies any constraint_adjustments to the zone targets (legacy retry-loop
-    shape) so the workers consume consistent inputs.
+    This is the single compile-entry point for the task-level worker graph.
+    Planning revisions must produce a new ExecutionPlan upstream; EXECUTE does
+    not mutate target intent while preparing inputs.
     """
-    # Action-only plans do not have a spatial parcel input.  Do not require a
-    # GIS bundle for a non-spatial execution branch; spatial workers validate
-    # the bundle when they are actually routed.
-    parcel_by_bsm = _build_parcel_by_bsm(state) if state.spatial_workspace is not None else {}
-    zone_targets = _intent_list(_execution_intent_from_plan(state), "zone_targets")
-    applied = _apply_constraint_adjustments(
-        zone_targets, list(state.constraint_adjustments or [])
+    # Action-only/empty plans do not have a spatial parcel input.  Do not
+    # require a GIS bundle when routing produced no spatial workers; a
+    # text-only session must be able to continue into an explicit partial
+    # delivery.  Spatial workers still validate the bundle when they are
+    # actually routed.
+    spatial_tasks = {"site_area", "layout", "facility", "axis", "road"}
+    needs_parcels = bool(spatial_tasks.intersection(state.tasks_to_run or []))
+    parcel_by_bsm = (
+        _build_parcel_by_bsm(state)
+        if needs_parcels and state.spatial_workspace is not None
+        else {}
     )
     execution_plan = state.execution_plan
     return {
         "parcel_by_bsm": parcel_by_bsm,
-        "constraint_adjustments": applied,
         "execution_plan": execution_plan,
     }
 
@@ -149,10 +156,12 @@ async def _task_level_execution_node(state: ExecuteAgentState) -> dict:
     """Execute the immutable plan in actual dependency batches.
 
     The surrounding LangGraph remains responsible for artifact boundaries;
-    this node owns task-level ordering.  A filtered plan is passed to each
-    worker invocation, so workers cannot accidentally consume a sibling task
-    from the same worker-type batch.  Unsupported utility tasks remain durable
-    deferred results and defer their descendants through the scheduler.
+    this node owns task-level ordering.  An isolation-group plan is passed to
+    each worker invocation: unrelated tasks stay isolated, while site
+    footprints that explicitly share one source BSM are sent together so the
+    worker can enforce one capacity/remainder ledger.  Unsupported utility
+    tasks remain durable deferred results and defer their descendants through
+    the scheduler.
     """
     from app.contracts.workflow.execution_plan_contracts import (
         TaskExecutionResult,
@@ -202,19 +211,66 @@ async def _task_level_execution_node(state: ExecuteAgentState) -> dict:
     outputs: list[Any] = []
     trace: list[dict[str, Any]] = []
     sequence = 0
-    for batch in schedule.batches:
-        for task_id in batch.task_ids:
+    candidate_geometry_by_id = getattr(state, "candidate_geometry_by_id", {}) or {}
+
+    def _candidate_value(candidate: Any, name: str, default: Any = None) -> Any:
+        if isinstance(candidate, dict):
+            return candidate.get(name, default)
+        return getattr(candidate, name, default)
+
+    def _task_groups(task_ids: list[str]) -> list[list[str]]:
+        """Keep same-source site footprints in one resource transaction.
+
+        The project worker emits one preserved remainder for a shared source
+        parcel.  Filtering every task to a singleton would make that worker
+        recreate the same source remainder once per target.  Only explicit
+        source-BSM site-footprint tasks are grouped; all other tasks retain
+        the scheduler's one-task isolation.
+        """
+        groups: list[list[str]] = []
+        shared: dict[tuple[str, str], list[str]] = {}
+        for task_id in task_ids:
             task = by_id[task_id]
+            worker_type = str(
+                getattr(getattr(task, "worker_type", ""), "value", getattr(task, "worker_type", ""))
+            )
+            candidate_id = str(getattr(task, "candidate_id", "") or "")
+            candidate = candidate_geometry_by_id.get(candidate_id)
+            source_bsms = [
+                str(item)
+                for item in (_candidate_value(candidate, "source_bsms", None) or [])
+                if str(item)
+            ]
+            materialization_role = str(
+                _candidate_value(candidate, "materialization_role", "") or ""
+            )
+            if (
+                worker_type == "site_area_footprint"
+                and materialization_role == "site_footprint"
+                and len(source_bsms) == 1
+            ):
+                shared.setdefault((worker_type, source_bsms[0]), []).append(task_id)
+            else:
+                groups.append([task_id])
+        groups.extend(shared.values())
+        return groups
+
+    for batch in schedule.batches:
+        for task_group in _task_groups(list(batch.task_ids)):
+            tasks = [by_id[task_id] for task_id in task_group]
             filtered_plan = plan.model_copy(update={
-                "worker_tasks": [task],
+                "worker_tasks": tasks,
                 "deferred_tasks": [],
             })
             task_state = state.model_copy(update={
                 "execution_plan": filtered_plan,
                 "worker_results": list(outputs),
             })
+            task = tasks[0]
+            task_id = task_group[0]
             worker_type = str(getattr(getattr(task, "worker_type", ""), "value", getattr(task, "worker_type", "")))
-            trace.append({"task_id": task_id, "event": "start", "sequence": sequence})
+            for grouped_task_id in task_group:
+                trace.append({"task_id": grouped_task_id, "event": "start", "sequence": sequence})
             runner = runners.get(worker_type)
             if runner is None:
                 result = WorkerResult(
@@ -233,7 +289,8 @@ async def _task_level_execution_node(state: ExecuteAgentState) -> dict:
             else:
                 try:
                     result = runner(task_state)
-                    result.task_id = task_id
+                    if len(task_group) == 1:
+                        result.task_id = task_id
                 except Exception as exc:
                     result = WorkerResult(
                         worker_type=worker_type,
@@ -243,12 +300,13 @@ async def _task_level_execution_node(state: ExecuteAgentState) -> dict:
                             target_id=str(getattr(task, "target_id", "")),
                             status="failed",
                             expected_output_kind=getattr(task, "expected_output_kind", "parcel"),
-                            errors=[str(exc)],
+                            errors=[f"WORKER_RAISED:{type(exc).__name__}"],
                         )],
-                        unresolved_items=[{"code": "worker_raised", "target_id": getattr(task, "target_id", ""), "message": str(exc)}],
+                        unresolved_items=[{"code": "worker_raised", "target_id": getattr(task, "target_id", ""), "exception_type": type(exc).__name__}],
                     )
             sequence += 1
-            trace.append({"task_id": task_id, "event": "complete", "sequence": sequence})
+            for grouped_task_id in task_group:
+                trace.append({"task_id": grouped_task_id, "event": "complete", "sequence": sequence})
             outputs.append(result)
 
     for task_id in schedule.deferred_task_ids:

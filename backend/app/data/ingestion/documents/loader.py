@@ -1,17 +1,14 @@
-"""Document loading helpers - planning markdown, L3 reports.
+"""Document loading helpers for explicitly configured legacy L3 reports.
 
-Provides high-level loaders for non-spatial documents that feed the
-PARSE/PLAN pipeline. Complements the document DataSourceDriver (low-level
-file access via Catalog) with parsed/structured output.
+Session-owned planning inputs are loaded by the session catalog boundary;
+this module intentionally does not search the repository for planning files.
 
-Migrated from gis/data/loader.py (L3 report section) and
-gis/data/text_loader.py (PlanningTextLoader). LLM/intent parsing logic
-stays in gis/data/loader.py pending migration to tools/gis/parse.
+The remaining helper is retained only for explicitly configured legacy L3
+report fixtures used by offline tooling.
 """
 
 from __future__ import annotations
 
-import glob
 import json
 import re
 from pathlib import Path
@@ -27,26 +24,6 @@ L3_REPORT_PATH = (
     PROJECT_ROOT / "output" / "experiments" / "rag" / "g1" / "iter0" / "layer3_reports.json"
 )
 L3_BASELINE_PATH = PROJECT_ROOT / "output" / "experiments" / "baseline" / "baseline_reports.json"
-
-# Planning document search patterns (ordered by priority)
-_PLANNING_PATTERNS: list[str] = [
-    "docs/MinerU_markdown_*村庄规划*文本*.md",
-    "docs/MinerU_markdown_*规划细化*.md",
-    "docs/MinerU_markdown_*规划思路*.md",
-    "docs/MinerU_markdown_*现状报告*.md",
-]
-
-def _village_aliases(village_name: str) -> list[str]:
-    """Derive filename aliases from a village name (no hard-coded table)."""
-    name = (village_name or "").strip()
-    if not name:
-        return []
-    aliases = {name}
-    for suffix in ("村委会", "村"):
-        if name.endswith(suffix) and len(name) > len(suffix):
-            aliases.add(name[: -len(suffix)])
-    return list(aliases)
-
 
 def load_l3_reports() -> Dict[str, Any]:
     """Load L3 reports from available paths.
@@ -115,94 +92,8 @@ def _extract_metrics_regex(content: str) -> Dict[str, Any]:
     return metrics
 
 
-def load_planning_text(village_name: str = "") -> str:
-    """Load planning markdown for a village.
-
-    Searches docs/ for MinerU-extracted markdown matching the village name.
-    Returns the highest-priority document.
-
-    Args:
-        village_name: Village name (e.g. "金田村", "金田村委会")
-
-    Returns:
-        Markdown text content.
-
-    Raises:
-        FileNotFoundError: If no planning markdown found.
-    """
-    aliases = _village_aliases(village_name)
-
-    for pattern in _PLANNING_PATTERNS:
-        full_pattern = str(PROJECT_ROOT / pattern)
-        matches = glob.glob(full_pattern)
-        for match_path in matches:
-            path = Path(match_path)
-            filename = path.name
-            if any(alias in filename for alias in aliases):
-                content = path.read_text(encoding="utf-8")
-                if content.strip():
-                    logger.info(
-                        "[documents.loader] Loaded: %s (%d chars)",
-                        path.name,
-                        len(content),
-                    )
-                    return content
-                logger.warning("[documents.loader] Empty file: %s", path)
-
-    raise FileNotFoundError(
-        f"No planning markdown found for village: {village_name}. "
-        f"Searched in: {PROJECT_ROOT / 'docs/'}"
-    )
-
-
-def list_available_documents(village_name: str = "") -> list[Dict[str, str]]:
-    """List all available planning documents for a village.
-
-    Returns:
-        List of {"path": str, "name": str, "type": str, "size_chars": int}
-    """
-    aliases = _village_aliases(village_name)
-    results = []
-
-    for pattern in _PLANNING_PATTERNS:
-        full_pattern = str(PROJECT_ROOT / pattern)
-        matches = glob.glob(full_pattern)
-        for match_path in matches:
-            path = Path(match_path)
-            filename = path.name
-
-            if aliases and not any(alias in filename for alias in aliases):
-                continue
-
-            doc_type = "unknown"
-            if "文本" in filename:
-                doc_type = "planning_text"
-            elif "规划细化" in filename:
-                doc_type = "planning_detail"
-            elif "规划思路" in filename:
-                doc_type = "planning_approach"
-            elif "现状报告" in filename:
-                doc_type = "current_status"
-
-            try:
-                size = len(path.read_text(encoding="utf-8"))
-            except Exception:
-                size = 0
-
-            results.append({
-                "path": str(path),
-                "name": filename,
-                "type": doc_type,
-                "size_chars": size,
-            })
-
-    return results
-
-
 __all__ = [
     "load_l3_reports",
-    "load_planning_text",
-    "list_available_documents",
     "L3_REPORT_PATH",
     "L3_BASELINE_PATH",
 ]

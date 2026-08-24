@@ -1118,11 +1118,18 @@ def _facilities_from_intent(intent: Any) -> List[SimpleNamespace]:
 
 
 def check_accessibility(planned_state: Any, intent: Any = None) -> List[ValidationCheck]:
-    """Check every facility has valid coordinates and is within service radius."""
+    """Check facility coordinates; evaluate coverage only with typed demands.
+
+    A facility service radius is a relation to demand/network inputs, not a
+    requirement that every facility be close to the village centroid.  The
+    latter was a false positive for real village plans whose facilities are
+    intentionally distributed across settlements.  Typed ``serve`` relations
+    are validated by the relation subsystem when demand and network snapshots
+    are present; this check remains responsible for malformed coordinates.
+    """
     facilities = list(getattr(planned_state, "facilities", None) or [])
     if not facilities and intent is not None:
         facilities = _facilities_from_intent(intent)
-    center = _parcel_centroid_lonlat(planned_state)
     invalid: List[str] = []
     by_name: dict[str, Any] = {}
     for fac in facilities:
@@ -1133,11 +1140,6 @@ def check_accessibility(planned_state: Any, intent: Any = None) -> List[Validati
         if lon == 0.0 and lat == 0.0:
             invalid.append(name)
             continue
-        radius = float(getattr(fac, "service_radius", 0.0) or 0.0)
-        if radius > 0 and center is not None:
-            distance_km = _haversine_km(lon, lat, center[0], center[1])
-            if distance_km * 1000 > radius:
-                invalid.append(name)
     passed = not invalid
     invalid_targets = sorted(
         {
@@ -1156,7 +1158,7 @@ def check_accessibility(planned_state: Any, intent: Any = None) -> List[Validati
             passed,
             stage="SELECT",
             actual=", ".join(invalid),
-            expected="all facilities have valid coordinates within service radius",
+            expected="all facilities have valid coordinates; typed coverage relations are validated separately",
             targets=invalid_targets,
             evidence_refs=sorted({f"planned-facility:{name}" for name in invalid}),
             fix="为设施提供有效坐标或调整服务半径",

@@ -13,7 +13,11 @@ from typing import Any
 from app.domain.common.context_guard import require_frozen_context
 from app.infrastructure.artifacts.runtime import store_artifact
 from app.contracts.program import PlanningClaimSet
-from app.domain.program.claim_adapter import interventions_from_claims
+from app.domain.program.claim_adapter import (
+    canonical_package_intervention_id,
+    compact_interventions,
+    interventions_from_claims,
+)
 from app.domain.program.assembler import assemble_planning_program
 from app.infrastructure.artifacts import ContentAddressedArtifactRepository
 from app.contracts.artifacts.artifact_descriptor import ArtifactDescriptor
@@ -155,10 +159,28 @@ def merge_program_fragments(
 
     for frag in fragments:
         claims = list(frag.claims or [])
+        if frag.interventions:
+            for direct in frag.interventions:
+                program_issues.append(
+                    ProgramIssue(
+                        stage="l3",
+                        dimension_key=frag.dimension_key,
+                        severity="error",
+                        code="direct_intervention_not_admitted",
+                        message=(
+                            "L3 fragment interventions are diagnostic-only; "
+                            "derive executable interventions from admitted claims"
+                        ),
+                        detail=direct.intervention_id,
+                        reason="direct intervention authority is disabled",
+                    )
+                )
         interventions.extend(
-            frag.interventions
-            if frag.interventions
-            else interventions_from_claims(claims, dimension_key=frag.dimension_key)
+            interventions_from_claims(
+                claims,
+                dimension_key=frag.dimension_key,
+                issues=program_issues,
+            )
         )
         dependencies.extend(frag.dependencies)
         omissions.extend(frag.omissions)
@@ -177,6 +199,38 @@ def merge_program_fragments(
             )
         )
 
+    original_ids = {
+        item.intervention_id: (
+            canonical_package_intervention_id(
+                item.project_package_ref,
+                item.category,
+                item.expected_output_kind,
+                item.asset_kind,
+                item.materialization_role or "",
+            )
+            if item.project_package_ref and item.planning_role == "spatial_intervention"
+            else item.intervention_id
+        )
+        for item in interventions
+    }
+    interventions, compaction_issues = compact_interventions(interventions)
+    program_issues.extend(compaction_issues)
+    dependencies = [
+        dependency.model_copy(
+            update={
+                "from_intervention_id": original_ids.get(
+                    dependency.from_intervention_id,
+                    dependency.from_intervention_id,
+                ),
+                "to_intervention_id": original_ids.get(
+                    dependency.to_intervention_id,
+                    dependency.to_intervention_id,
+                ),
+            }
+        )
+        for dependency in dependencies
+    ]
+
     program = assemble_planning_program(
         _dedup_by_id(interventions, id_attr="intervention_id", name_attr="name"),
         _dedup_dependencies(dependencies),
@@ -186,6 +240,9 @@ def merge_program_fragments(
         dimension_provenance=dimension_provenance,
         claims=[claim for frag in fragments for claim in (frag.claims or [])],
     )
+    from app.evidence.retrieval.requirements import requirements_from_l3
+
+    program.evidence_requirements = list(requirements_from_l3(program))
     program.sources = [
         EvidenceSource(source_type="report", reference=s)
         for s in _dedup(source_refs)
@@ -355,6 +412,39 @@ async def l3_aggregate(
             )
         )
 
+    # The frontend's explicit demo marker is the only path that may add this
+    # deterministic acceptance slice. It is still a normal PlanningClaim, so
+    # admission, TARGET_PROJECTION, GROUND, SELECT and EXECUTE all exercise
+    # their production contracts; no geometry is injected here.
+    from app.domain.program.demo_narrow_slice import (
+        build_demo_narrow_slice_claims,
+        task_description_from_state,
+    )
+
+    demo_task = task_description_from_state(state)
+    if "[SPATIAL_DEMO_NARROW_SLICE" not in demo_task:
+        try:
+            from app.database.operations import get_planning_session_async
+
+            session_record = await get_planning_session_async(session_id)
+            demo_task = str((session_record or {}).get("task_description") or "")
+        except Exception:
+            demo_task = ""
+    demo_claims = build_demo_narrow_slice_claims(demo_task)
+    if demo_claims:
+        fragments.append(
+            L3ProgramFragment(
+                dimension_key="implementation",
+                claims=demo_claims,
+                provenance=Provenance(
+                    source="demo:narrow_slice",
+                    run_id=run_id,
+                    module="demo_narrow_slice",
+                    trace=[f"claim:{claim.claim_id}" for claim in demo_claims],
+                ),
+            )
+        )
+
     program = merge_program_fragments(fragments, run_id=run_id)
     program.context_version = context_version
     branch_id = str(state.get("branch_id") or "main")
@@ -389,6 +479,9 @@ async def l3_aggregate(
     )
     artifact_id = f"l3-{run_id}-{branch_id}-{semantic_checksum(program)[:16]}"
     program.artifact_id = artifact_id
+    from app.evidence.retrieval.requirements import requirements_from_l3
+
+    program.evidence_requirements = list(requirements_from_l3(program))
     program.provenance = Provenance(
         source="l3_plan",
         run_id=run_id,

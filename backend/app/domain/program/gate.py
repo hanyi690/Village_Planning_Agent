@@ -3,7 +3,7 @@
 Pure function: PlanningProgram -> GateDecision. No I/O.
 Wave E delivers the evaluator; Wave M wires it into the main graph.
 
-Decision matrix (docs/design/04_PLANNING_PIPELINE.md §8 + 07_VALIDATION_FEEDBACK.md):
+Decision matrix (docs/design/01_CONTRACTS_AND_INVARIANTS.md gate semantics + docs/design/03_PLANNING_EXECUTION.md):
   PASS    -> TARGET_PROJECTION
   EXPLORE -> missing evidence / missing sources
   L3      -> program contradictions (rework L3)
@@ -41,6 +41,68 @@ def evaluate_l3_gate(
         and isinstance(getattr(l2_strategy, "spatial_structure", ""), str)
         and bool(l2_strategy.spatial_structure.strip())
     )
+
+    contradictions = [
+        issue
+        for issue in program.program_issues
+        if issue.severity == "error"
+        and issue.code != "classification_decision_required"
+    ]
+    # A program may contain both admitted spatial interventions and claims
+    # that are intentionally diagnostic-only (missing typed parameters,
+    # package identity, or evidence lineage).  Those rejected claims must
+    # remain visible in the gate diagnostics, but they must not suppress an
+    # independently admissible subset.  If there is no admissible subset,
+    # retain the strict L3 rework boundary.
+    blocking_contradictions = [
+        issue
+        for issue in contradictions
+        if not (
+            issue.code in {"claim_admission_incomplete", "claim_not_executable"}
+            and program.interventions
+        )
+    ]
+    if blocking_contradictions:
+        return GateDecision(
+            stage=stage, passed=False, feedback_route="L3",
+            pending_requests=[
+                PendingRequest(
+                    request_id=f"pr-l3-rework-{i.dimension_key or 'program'}-{i.code}",
+                    stage="l3",
+                    request_type="program_rework",
+                    context={
+                        "dimension_key": i.dimension_key,
+                        "claim_id": i.claim_id,
+                        "message": i.message,
+                        "detail": i.detail or "",
+                    },
+                )
+                for i in blocking_contradictions
+            ],
+            context_version=cv, artifact_id=gate_artifact_id,
+        )
+
+    if not program.interventions and program.claims and not has_spatial_strategy:
+        return GateDecision(
+            stage=stage,
+            passed=False,
+            feedback_route="HUMAN",
+            pending_requests=[
+                PendingRequest(
+                    request_id="pr-l3-claim-only-review",
+                    stage="l3",
+                    request_type="program_review",
+                    context={
+                        "message": "L3 claims were preserved but none were admitted as spatial interventions",
+                        "claim_count": len(program.claims),
+                        "reason_code": "zero_spatial_interventions",
+                    },
+                )
+            ],
+            route_reason="zero_spatial_interventions",
+            context_version=cv,
+            artifact_id=gate_artifact_id,
+        )
 
     if empty_program and not has_spatial_strategy:
         pending: list[PendingRequest] = []
@@ -91,13 +153,7 @@ def evaluate_l3_gate(
     # run an unclassified polygon target, but treating it as a rework
     # contradiction would make the classification branch unreachable and loop
     # the graph at L3 forever.
-    contradictions = [
-        issue
-        for issue in program.program_issues
-        if issue.severity == "error"
-        and issue.code != "classification_decision_required"
-    ]
-    if contradictions:
+    if blocking_contradictions:
         return GateDecision(
             stage=stage, passed=False, feedback_route="L3",
             pending_requests=[
@@ -111,7 +167,7 @@ def evaluate_l3_gate(
                         "detail": i.detail or "",
                     },
                 )
-                for i in contradictions
+                for i in blocking_contradictions
             ],
             context_version=cv, artifact_id=gate_artifact_id,
         )

@@ -73,6 +73,7 @@ def _build_evidence_suitability_surface(
 ) -> SuitabilitySurface:
     """Build parcel-granular terrain evidence before any allocation occurs."""
     from shapely.geometry import shape
+    from shapely.geometry.base import BaseGeometry
 
     from app.domain.suitability.policy import load_suitability_policy
     from app.domain.suitability.spatial_factors import SpatialFactorIndex
@@ -101,6 +102,64 @@ def _build_evidence_suitability_surface(
         or getattr(context, "geometry_crs", "")
         or "EPSG:4326"
     )
+
+    def adjacent_parcels(
+        candidate_wkt: str,
+        source_bsm: str,
+        source_wkt: str = "",
+    ) -> tuple[list[str], list[str]]:
+        if not candidate_wkt and not source_wkt:
+            return [], []
+        try:
+            from shapely import wkt as shapely_wkt
+
+            candidate_geometry = (
+                shapely_wkt.loads(candidate_wkt) if candidate_wkt else None
+            )
+            source_geometry = (
+                shapely_wkt.loads(source_wkt) if source_wkt else None
+            )
+        except Exception:
+            return [], []
+        adjacent: list[str] = []
+        refs: list[str] = []
+        for other_bsm, other in parcel_by_bsm.items():
+            if not other_bsm or other_bsm == source_bsm:
+                continue
+            try:
+                raw_geometry = getattr(other, "geometry", None)
+                if isinstance(raw_geometry, BaseGeometry):
+                    other_geometry = raw_geometry
+                else:
+                    other_geometry = shape(raw_geometry)
+                if other_geometry.is_empty:
+                    continue
+                # Touching parcels are the primary relation; a tiny tolerance
+                # covers floating-point seams introduced by clipping.
+                # A clipped footprint can sit wholly inside its source BSM,
+                # so adjacency must be evaluated against both the selected
+                # footprint and the full source extent.  This records a
+                # possible execution dependency without merging the parcels.
+                candidate_adjacent = bool(
+                    candidate_geometry is not None
+                    and (
+                        candidate_geometry.touches(other_geometry)
+                        or candidate_geometry.buffer(1e-9).intersects(other_geometry)
+                    )
+                )
+                source_adjacent = bool(
+                    source_geometry is not None
+                    and (
+                        source_geometry.touches(other_geometry)
+                        or source_geometry.buffer(1e-9).intersects(other_geometry)
+                    )
+                )
+                if candidate_adjacent or source_adjacent:
+                    adjacent.append(other_bsm)
+                    refs.append(f"bundle:landuse_current:{source_bsm}:adjacent:{other_bsm}")
+            except Exception:
+                continue
+        return sorted(set(adjacent)), sorted(set(refs))
     for source in tuple(getattr(grounding_result, "candidates", ()) or ()):
         target_id = str(
             getattr(source, "target_ref", None)
@@ -127,10 +186,12 @@ def _build_evidence_suitability_surface(
             target_area_ha = _target_area_ha(target_by_id.get(target_id))
             clip_result = None
             if parcel_wkt and _can_clip_target(target_by_id.get(target_id)):
+                prohibited_wkts = _constraint_avoid_wkts(context, parcel_wkt)
                 clip_result = derive_planning_subgeometry(
                     parcel_wkt,
                     source_crs=geometry_crs,
                     target_area_ha=target_area_ha,
+                    avoid_geometry_wkts=(prohibited_wkts if _can_clip_target(target_by_id.get(target_id)) else ()),
                     tolerance_pct=5.0,
                 )
             candidate_wkt = (
@@ -143,10 +204,16 @@ def _build_evidence_suitability_surface(
                 if clip_result is not None and clip_result.geometry_wkt
                 else parcel_area_ha
             )
+            # The source polygon is the geometric authority for availability
+            # and area ratios.  Catalog area attributes are retained for
+            # recall/provenance but can be stale or calculated in another CRS;
+            # using them here can turn a partially excluded parcel into a
+            # falsely fully-available one (or make eligible area exceed source
+            # area).  The clip result is measured in its metric CRS.
             source_area_ha = (
-                parcel_area_ha
-                if parcel_area_ha > 0
-                else float(clip_result.source_area_ha) if clip_result is not None else 0.0
+                float(clip_result.source_area_ha)
+                if clip_result is not None and float(clip_result.source_area_ha) > 0
+                else parcel_area_ha
             )
             raw_coverage_ratio = (
                 available_area_ha / source_area_ha
@@ -157,24 +224,67 @@ def _build_evidence_suitability_surface(
                 clip_result.operation if clip_result is not None else "bundle_extent"
             )
             geometry_diagnostics = list(clip_result.diagnostics) if clip_result is not None else []
+            availability_status = (
+                str(clip_result.availability_status)
+                if clip_result is not None
+                else "unknown"
+            )
+            eligible_area_ha = (
+                min(
+                    max(float(clip_result.eligible_area_ha), 0.0),
+                    source_area_ha,
+                )
+                if clip_result is not None
+                else None
+            )
+            # Keep availability a partition of the source extent.  A stale
+            # catalog area or a CRS conversion rounding difference must never
+            # produce ``eligible > source`` or an unrelated excluded area.
+            excluded_area_ha = (
+                max(source_area_ha - eligible_area_ha, 0.0)
+                if clip_result is not None and eligible_area_ha is not None
+                else None
+            )
+            adjacent_bsms, adjacency_refs = adjacent_parcels(
+                candidate_wkt, bsm, parcel_wkt
+            )
             coverage_ratio = raw_coverage_ratio
             if raw_coverage_ratio is not None and raw_coverage_ratio > 1.0:
                 coverage_ratio = 1.0
                 geometry_diagnostics.append("coverage_ratio_clamped_to_source_extent")
             candidate_id = f"{str(getattr(source, 'site_id', '') or '')}:{bsm or 'unbound'}"
-            typed_candidate = source.model_copy(
-                update={
-                    "site_id": candidate_id,
-                    "source_parcels": [bsm] if bsm else [],
-                    "available_geometry_wkt": candidate_wkt,
-                }
-            )
-            feature = adapter.build_candidate(typed_candidate)
             spatial = (
                 spatial_index.evaluate(parcel, geometry=candidate_wkt)
                 if parcel is not None
                 else None
             )
+            # GROUND evaluates the recall candidate as a union of all source
+            # parcels.  A prohibited overlap in that coarse union must not
+            # poison every parcel-level SELECT alternative: rebase the hard
+            # result on the exact refined geometry before terrain evaluation.
+            hard_result = getattr(source, "hard_constraint_result", None)
+            if (
+                bsm
+                and spatial is not None
+                and hard_result is not None
+                and not bool(getattr(hard_result, "passed", False))
+            ):
+                from app.contracts.spatial.grounding_contracts import HardConstraintResult
+
+                hard_result = HardConstraintResult(
+                    constraint_id="select_parcel_geometry",
+                    passed=bool(spatial.hard_feasible),
+                    violation_detail="|".join(spatial.exclusion_codes),
+                )
+            typed_candidate = source.model_copy(
+                update={
+                    "site_id": candidate_id,
+                    "source_parcels": [bsm] if bsm else [],
+                    "available_geometry_wkt": candidate_wkt,
+                    "hard_constraint_result": hard_result,
+                }
+            )
+            feature = adapter.build_candidate(typed_candidate)
             reasons = list(feature.blocking_codes)
             if spatial is not None:
                 reasons.extend(spatial.exclusion_codes)
@@ -226,12 +336,22 @@ def _build_evidence_suitability_surface(
                         )
                     ),
                     available_geometry_wkt=candidate_wkt,
+                    eligible_geometry_wkt=(
+                        str(getattr(clip_result, "eligible_geometry_wkt", "") or "")
+                        if clip_result is not None
+                        else ""
+                    ),
                     available_area_ha=available_area_ha,
                     source_area_ha=source_area_ha,
                     coverage_ratio=coverage_ratio,
                     geometry_operation=geometry_operation,
                     geometry_crs=geometry_crs,
                     geometry_diagnostics=geometry_diagnostics,
+                    availability_status=availability_status,
+                    eligible_area_ha=eligible_area_ha,
+                    excluded_area_ha=excluded_area_ha,
+                    adjacent_parcel_bsms=adjacent_bsms,
+                    adjacency_evidence_refs=adjacency_refs,
                     policy_ref=feature.policy_ref,
                     feature_ref=feature.feature_id,
                     availability_diagnostics=[
@@ -292,6 +412,44 @@ def _can_clip_target(target: Any) -> bool:
         "protection_overlay",
         "restoration_overlay",
     }
+
+
+def _constraint_avoid_wkts(context: Any, source_wkt: str = "") -> list[str]:
+    """Return prohibited source polygons for parcel-level clipping.
+
+    The constraint index already owns authoritative source geometry.  Reading
+    its rows here keeps clipping in the same CRS and avoids the old
+    all-or-nothing parcel rejection.  If the index is unavailable, the list
+    stays empty and the candidate remains explicitly deferred by suitability.
+    """
+
+    index = getattr(context, "constraint_index", None)
+    frame = getattr(index, "_gdf", None) if index is not None else None
+    if frame is None:
+        return []
+    try:
+        source_geometry = None
+        if source_wkt:
+            from shapely import wkt as shapely_wkt
+
+            source_geometry = shapely_wkt.loads(source_wkt)
+        from app.spatial.allocation.selection import _PROHIBITED_CONSTRAINTS
+
+        values = []
+        for _, row in frame.iterrows():
+            if str(row.get("constraint_type", "") or "") not in _PROHIBITED_CONSTRAINTS:
+                continue
+            geometry = row.get("geometry")
+            if geometry is not None and not geometry.is_empty:
+                if source_geometry is not None and not (
+                    geometry.intersects(source_geometry)
+                    or geometry.touches(source_geometry)
+                ):
+                    continue
+                values.append(geometry.wkt)
+        return list(dict.fromkeys(values))
+    except Exception:
+        return []
 
 
 __all__ = ["build_suitability_surface"]

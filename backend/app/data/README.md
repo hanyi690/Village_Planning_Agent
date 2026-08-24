@@ -1,8 +1,6 @@
 # Data 数据层
 
-> 本 README 以 `backend/app/data/` 实际代码为准（核验日期 2026-08-15）。
-> 注意：旧文档中 `app/modules/data`、`app/data/ingestion`、`app/contracts` 等路径已不存在，
-> 全部收敛到本包。
+> 本 README 以 `backend/app/data/` 实际代码为准；已退役路径只保存在历史归档中。
 
 ## 定位
 

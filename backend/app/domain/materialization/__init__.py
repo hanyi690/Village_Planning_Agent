@@ -1,38 +1,38 @@
 """Canonical materialization workers (blueprint M6)."""
 
-from .worker_contract import WorkerInput, WorkerResult, run_workers
 from .execute_agent import build_execute_agent_graph
 from .execute_state import ExecuteAgentState
 from .land_design_worker import (
     build_parcel_change_set,
-    design_all,
     design_facility_parcel,
     design_project_parcel,
-    design_zone_parcel,
 )
 from .planned_state_builder import changeset_to_planned_state
-from .plan_builder import (
-    build_execution_plan,
+from .execution_boundaries import (
+    candidate_geometry_drift_diagnostics,
     classification_boundary_diagnostics,
-    defer_plan_tasks,
+)
+from .approved_plan_builder import (
+    bind_approved_execution_plan,
+    build_execution_plan_draft,
 )
 from .review import build_before_after_geojson, build_execute_review_package
+from .atomic_commit import AtomicCommitResult, ExecutionBatch, commit_execution_batch
 
 __all__ = [
-    "WorkerInput",
-    "WorkerResult",
-    "run_workers",
     "build_execute_agent_graph",
     "ExecuteAgentState",
     "design_project_parcel",
-    "design_zone_parcel",
     "design_facility_parcel",
     "build_parcel_change_set",
-    "design_all",
     "changeset_to_planned_state",
-    "build_execution_plan",
+    "build_execution_plan_draft",
+    "bind_approved_execution_plan",
     "classification_boundary_diagnostics",
-    "defer_plan_tasks",
+    "candidate_geometry_drift_diagnostics",
     "build_execute_review_package",
     "build_before_after_geojson",
+    "ExecutionBatch",
+    "AtomicCommitResult",
+    "commit_execution_batch",
 ]

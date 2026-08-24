@@ -32,7 +32,9 @@ _ARTIFACT_STAGE: dict[str, str] = {
     "planning_program": "L3",
     "target_projection": "TARGET_PROJECTION",
     "grounding_result": "GROUND",
-    "site_selection": "SELECT",
+    "scenario_set": "SELECT",
+    "planning_scenario": "SELECT",
+    "approved_execution_input": "SELECT",
     "execution_plan": "EXECUTE",
     "execution_result": "EXECUTE",
     "parcel_changeset": "EXECUTE",
@@ -49,7 +51,7 @@ _UPSTREAM_ANCHOR = {
     "TARGET_PROJECTION": "planning_program",
     "GROUND": "target_projection",
     "SELECT": "grounding_result",
-    "EXECUTE": "site_selection",
+    "EXECUTE": "approved_execution_input",
 }
 
 
@@ -125,7 +127,9 @@ _CANONICAL_PARENT = {
     "planning_program": "l2_strategy",
     "target_projection": "planning_program",
     "grounding_result": "target_projection",
-    "site_selection": "grounding_result",
+    "scenario_set": "grounding_result",
+    "planning_scenario": "scenario_set",
+    "approved_execution_input": "planning_scenario",
 }
 
 

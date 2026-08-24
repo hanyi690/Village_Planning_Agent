@@ -1,6 +1,6 @@
 """地块多因子上下文构造（B3）— 供自定义功能区规则求值。
 
-Migrated from agent/gis/vocab/context.py per docs/architecture/agent-graph.md §5.
+Vocabulary context is used by the current materialization boundary in docs/design/03_PLANNING_EXECUTION.md.
 
 每地块：dlbm / area_ha / slope_deg(DEM) / road_distance_m / zone_membership / poi_hits
 因子缺失降级：slope 无 DEM → 999（slope_lt 视为通过）；
@@ -64,7 +64,7 @@ def _load_dem_slope(bundle: Any) -> Optional[Dict[str, float]]:
                         result[str(getattr(f, "bsm", ""))] = val  # getattr intentional: defensive over feature types
             return result
     except Exception as e:
-        logger.debug("[Context] DEM slope unavailable: %s", e)
+        logger.debug("[Context] DEM slope unavailable: %s", type(e).__name__)
         return None
 
 
@@ -91,7 +91,7 @@ def _road_distances(bundle: Any) -> Dict[str, float]:
             result[str(getattr(f, "bsm", ""))] = best * 111320.0  # getattr intentional: defensive over feature types; 度→米近似
         return result
     except Exception as e:
-        logger.debug("[Context] road distance unavailable: %s", e)
+        logger.debug("[Context] road distance unavailable: %s", type(e).__name__)
         return {}
 
 
@@ -117,7 +117,7 @@ def _zone_membership(bundle: Any) -> Dict[str, List[str]]:
                     membership.setdefault(str(getattr(f, "bsm", "")), []).append(label)  # getattr intentional: defensive over feature types
         return membership
     except Exception as e:
-        logger.debug("[Context] zone membership unavailable: %s", e)
+        logger.debug("[Context] zone membership unavailable: %s", type(e).__name__)
         return {}
 
 
@@ -140,7 +140,7 @@ def _poi_hits(bundle: Any) -> Dict[str, List[Dict[str, str]]]:
                     hits.setdefault(str(getattr(p, "bsm", "")), []).append({"name": name})  # getattr intentional: defensive over feature types
         return hits
     except Exception as e:
-        logger.debug("[Context] poi unavailable: %s", e)
+        logger.debug("[Context] poi unavailable: %s", type(e).__name__)
         return {}
 
 

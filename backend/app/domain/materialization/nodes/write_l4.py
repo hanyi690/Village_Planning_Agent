@@ -34,7 +34,7 @@ async def _write_l4_node(state: ExecuteAgentState) -> dict:
             logger.warning("[EXECUTE:l4_write] No KG for session %s", session_id)
             return {}
     except Exception as e:
-        logger.warning("[EXECUTE:l4_write] KG access failed: %s", e)
+        logger.warning("[EXECUTE:l4_write] KG access failed: %s", type(e).__name__)
         return {}
 
     from app.infrastructure.kg.builder.layer4 import apply_planned_state
@@ -103,7 +103,25 @@ async def _write_l4_node(state: ExecuteAgentState) -> dict:
         )
     )
     if written:
-        apply_planned_state(kg, planned_state)
+        # RDFLib has no transaction API.  Keep a graph snapshot around the
+        # single commit boundary so an exception during any entity write
+        # restores the pre-EXECUTE graph and cannot expose a half-materialized
+        # PlannedState.
+        graph_snapshot = list(kg.g)
+        try:
+            apply_planned_state(kg, planned_state)
+        except Exception as exc:
+            kg.g.remove((None, None, None))
+            for triple in graph_snapshot:
+                kg.g.add(triple)
+            logger.error(
+                "[EXECUTE:l4_write] atomic graph commit rolled back (exception_type=%s)",
+                type(exc).__name__,
+            )
+            return {
+                "l4_write_error": "atomic_commit_failed",
+                "error_type": type(exc).__name__,
+            }
         manager.bump_version(session_id)
         logger.info("[EXECUTE:l4_write] Wrote %d L4 entities to KG", written)
 

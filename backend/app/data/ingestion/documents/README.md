@@ -1,15 +1,16 @@
-# Data Documents — 非空间文档加载
+# Data Documents — 显式配置的遗留报告 fixture
 
-> **定位**：规划 Markdown / L3 报告等**非空间文档**的高层加载器，喂养 PARSE/PLAN 管线。是低层 `sources/document.py`（经 Catalog 的文件访问）的**结构化解析补充**。
+当前会话的原始输入由 session catalog 解析；本目录不再扫描仓库中的
+`docs/`、MinerU 或其他项目参考文件。L1 是唯一把会话输入结构化为事实、登记
+和证据定位的维度。
 
 ---
 
 ## 职责边界
 
 **负责**：
-- `load_planning_text()` / `load_l3_reports()`：加载规划文本与 L3 报告并返回结构化输出
-- `list_available_documents()`：枚举可用文档
-- 常量 `L3_BASELINE_PATH` / `L3_REPORT_PATH`：L3 报告路径约定
+- `load_l3_reports()`：读取离线工具显式配置的遗留 L3 report fixture
+- 常量 `L3_BASELINE_PATH` / `L3_REPORT_PATH`：遗留 fixture 路径约定
 
 **不负责**：
 - 不做 LLM / intent 解析（LLM 解析逻辑在 PARSE agent 侧）
@@ -20,17 +21,8 @@
 
 ## 输入/输出契约
 
-**输入**：文件系统路径（规划文本 / L3 报告目录）。
-
-**输出**：
-
-| 函数 | 输出 |
-|---|---|
-| `load_planning_text()` | 规划文本结构化内容 |
-| `load_l3_reports()` | L3 报告列表（解析后） |
-| `list_available_documents()` | 可用文档清单 |
-
-**历史**：自 `gis/data/loader.py`（L3 report 段）与 `gis/data/text_loader.py`（PlanningTextLoader）迁入。
+`load_l3_reports()` 只服务离线 fixture，不是 session 启动或 L1 输入来源。
+线上输入必须通过 session catalog 和显式 upload 进入 `L1InputRegister`。
 
 ---
 
@@ -38,10 +30,10 @@
 
 ```
 documents/ → app.infrastructure.logging 等
-   ▲ 被 PARSE/PLAN 管线与 report 消费方调用
+   ▲ 仅被离线 fixture/report 工具显式调用
 ```
 
-- 允许：`app.utils`、标准库（`glob` / `json` 等）
+- 允许：`app.utils`、标准库（`json` / `re` 等）
 - 禁止：`agent` / `services` / `api` / `tools`；不做任何空间计算
 
 ---
@@ -50,4 +42,4 @@ documents/ → app.infrastructure.logging 等
 
 - 在文档加载器内做 LLM 调用 / intent 解析（职责属于 PARSE agent 与 parsing 模块）
 - 直接内联文件访问绕过 `DataCatalog` 的 document 驱动（低层读取应走 Catalog 路径）
-- 返回非结构化原始文本给业务消费方（本层职责是"解析后结构化输出"）
+- 通过文件名猜测当前项目输入或向 session 注入仓库文档

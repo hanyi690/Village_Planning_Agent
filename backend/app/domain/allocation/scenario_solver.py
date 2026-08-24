@@ -1,35 +1,26 @@
-"""Deterministic relation-aware master solver for one PlanningScenario.
+"""Private search primitives shared by the authoritative ScenarioOptimizer.
 
-The first implementation intentionally solves one scenario.  Candidate
-domains are enumerated in stable order (with a bounded search budget), while
-geometry/network measurements remain in their dedicated evaluators.  This
-keeps the master auditable and prevents an unavailable network from becoming a
-false Euclidean success.
+Candidate domains are enumerated in stable order (with a bounded search
+budget), while geometry/network measurements remain in their dedicated
+evaluators.  This module has no public solver entry point; callers consume the
+``ScenarioSet`` produced by :mod:`scenario_optimizer`.
 """
 
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from dataclasses import replace
-from itertools import product
+from dataclasses import dataclass, replace
+from itertools import combinations
+from math import comb
 from typing import Any
 
 from app.contracts.planning.constraint_factor import ConstraintFactor, RelationSatisfaction
-from app.contracts.planning.scenario import (
-    PlanningScenario,
-    ScenarioFinding,
-    ScenarioTargetSelection,
-)
+from app.contracts.planning.scenario import ScenarioFinding
 from app.contracts.spatial.grounded_problem import GroundedPlanningProblem
-from app.domain.relations.service import (
-    RelationEvaluationContext,
-    evaluate_relations,
-    index_relation_features,
-)
+from app.domain.relations.service import RelationEvaluationContext, evaluate_relations, index_relation_features
 
-from .network_subproblem import ScenarioCut, derive_network_cuts, evaluate_network_subproblem
-from .relation_terms import hard_relation_blocked, relation_objective, satisfaction_score
-from .scenario_builder import build_planning_scenario, build_scenario_features
+from .network_subproblem import evaluate_network_subproblem
+from .scenario_builder import build_scenario_features
 
 
 _NETWORK_KEYS = frozenset({
@@ -39,8 +30,64 @@ _SEARCH_LIMIT = 20_000
 _EXCLUSIVE_MATERIALIZATION_ROLES = frozenset({
     "land_use_assignment",
     "site_footprint",
-    "project_footprint",
 })
+
+
+@dataclass(frozen=True)
+class _ChoiceOptions:
+    """A replayable lazy option domain with an exact combinatorial count."""
+
+    candidate_ids: tuple[str, ...]
+    min_selected: int
+    max_selected: int
+
+    @property
+    def count(self) -> int:
+        return sum(
+            comb(len(self.candidate_ids), size)
+            for size in range(self.min_selected, self.max_selected + 1)
+        )
+
+    def __iter__(self):
+        for size in range(self.min_selected, self.max_selected + 1):
+            yield from combinations(self.candidate_ids, size)
+
+
+def _bounded_choice_product(
+    option_domains: Sequence[_ChoiceOptions],
+    limit: int,
+):
+    """Yield at most ``limit`` rows without materializing any option pool.
+
+    ``itertools.product`` snapshots every input iterable before yielding.  A
+    subset domain such as C(100, 50) therefore cannot be passed to it even if
+    the global search budget is one.  This depth-first product replays each
+    small/lazy domain and stops consumption as soon as the global budget is
+    exhausted.
+    """
+
+    emitted = 0
+    prefix: list[tuple[str, ...]] = []
+
+    def visit(index: int):
+        nonlocal emitted
+        if emitted >= limit:
+            return
+        if index == len(option_domains):
+            emitted += 1
+            yield tuple(prefix)
+            return
+        iterator = iter(option_domains[index])
+        while emitted < limit:
+            try:
+                option = next(iterator)
+            except StopIteration:
+                break
+            prefix.append(option)
+            yield from visit(index + 1)
+            prefix.pop()
+
+    yield from visit(0)
 
 
 def _candidate_score(candidate: Any) -> float:
@@ -106,6 +153,7 @@ def _evaluate_assignment(
     # Scenario identity is owned by this solve invocation.  Rebind the
     # evaluator context for replay safety when a caller reuses a baseline
     # context with a different scenario id.
+    context_scenario_id = str(getattr(evaluator_context, "scenario_id", "") or "")
     try:
         evaluator_context = replace(evaluator_context, scenario_id=scenario_id)
     except TypeError:
@@ -121,12 +169,21 @@ def _evaluate_assignment(
     reference_features = list(
         (getattr(evaluator_context, "reference_features", {}) or {}).values()
     )
-    features.extend(
-        feature
-        for feature in reference_features
-        if str(getattr(feature, "scenario_id", "") or "")
-        in {"", scenario_id}
-    )
+    for feature in reference_features:
+        feature_scenario_id = str(getattr(feature, "scenario_id", "") or "")
+        belongs_to_context = bool(
+            context_scenario_id
+            and (
+                feature_scenario_id == context_scenario_id
+                or feature_scenario_id.startswith(f"{context_scenario_id}:")
+            )
+            and scenario_id.startswith(f"{context_scenario_id}:scenario:")
+        )
+        if feature_scenario_id not in {"", scenario_id} and not belongs_to_context:
+            continue
+        if feature_scenario_id != scenario_id and hasattr(feature, "model_copy"):
+            feature = feature.model_copy(update={"scenario_id": scenario_id})
+        features.append(feature)
     feature_index = index_relation_features(features)
 
     generic_factors: list[ConstraintFactor] = []
@@ -172,11 +229,33 @@ def _evaluate_assignment(
 
 def _choices(
     problem: GroundedPlanningProblem,
-) -> tuple[list[str], list[list[tuple[str, ...]]], list[str]]:
+) -> tuple[list[str], list[_ChoiceOptions], list[str]]:
+    """Build deterministic candidate options for the legacy 3-tuple callers.
+
+    The optimizer uses :func:`_choices_with_diagnostics` so malformed subset
+    domains cannot be silently interpreted as ``choose_one``.  Keeping this
+    small wrapper avoids widening the private helper's historical call shape
+    for diagnostics/tests while preserving the stricter implementation.
+    """
+    targets, options, unavailable, _errors = _choices_with_diagnostics(problem)
+    return targets, options, unavailable
+
+
+def _choices_with_diagnostics(
+    problem: GroundedPlanningProblem,
+) -> tuple[list[str], list[_ChoiceOptions], list[str], list[str]]:
+    """Return closed, deterministic selection options and cardinality errors.
+
+    ``choose_subset`` means an exact member-count range.  It is deliberately
+    not allowed to fall back to singleton choices: an omitted bound or a
+    bound outside the executable candidate set changes the planning meaning
+    and therefore fails closed with an auditable diagnostic.
+    """
     geometry = {item.candidate_id: item for item in problem.candidate_geometries}
     targets: list[str] = []
-    options: list[list[tuple[str, ...]]] = []
+    options: list[_ChoiceOptions] = []
     unavailable: list[str] = []
+    errors: list[str] = []
     for domain in sorted(problem.candidate_domains, key=lambda item: item.target_id):
         ids = sorted({item for item in domain.candidate_ids if item in geometry})
         # Candidate-only geometry is valid evidence for grounding but cannot
@@ -185,15 +264,50 @@ def _choices(
         if ids:
             targets.append(domain.target_id)
             if domain.selection_mode == "all_members":
-                options.append([tuple(ids)])
+                options.append(_ChoiceOptions(tuple(ids), len(ids), len(ids)))
+            elif domain.selection_mode == "choose_one":
+                options.append(_ChoiceOptions(tuple(ids), 1, 1))
             else:
-                options.append([(candidate_id,) for candidate_id in ids])
+                min_selected = domain.min_selected
+                max_selected = domain.max_selected
+                if min_selected < 1:
+                    errors.append(
+                        f"invalid cardinality for target {domain.target_id}: "
+                        "choose_subset requires min_selected >= 1"
+                    )
+                    options.append(_ChoiceOptions((), 1, 0))
+                    continue
+                if max_selected is None:
+                    errors.append(
+                        f"unbounded choose_subset for target {domain.target_id}: "
+                        "max_selected is required"
+                    )
+                    options.append(_ChoiceOptions((), 1, 0))
+                    continue
+                if max_selected < min_selected:
+                    errors.append(
+                        f"invalid cardinality for target {domain.target_id}: "
+                        "max_selected must be >= min_selected"
+                    )
+                    options.append(_ChoiceOptions((), 1, 0))
+                    continue
+                if max_selected > len(ids) or min_selected > len(ids):
+                    errors.append(
+                        f"invalid cardinality for target {domain.target_id}: "
+                        f"requested {min_selected}..{max_selected} members for "
+                        f"{len(ids)} executable candidates"
+                    )
+                    options.append(_ChoiceOptions((), 1, 0))
+                    continue
+                options.append(
+                    _ChoiceOptions(tuple(ids), min_selected, max_selected)
+                )
         else:
             # Candidate-only/unresolved domains are valid grounding evidence,
             # but they must be deferred independently instead of poisoning an
             # otherwise executable partial scenario.
             unavailable.append(domain.target_id)
-    return targets, options, unavailable
+    return targets, options, unavailable, errors
 
 
 def _prune_spatial_conflicts(
@@ -294,231 +408,3 @@ def _finding(code: str, message: str, *, severity: str = "error", relation_id: s
         relation_id=relation_id,
         target_id=target_id,
     )
-
-
-def _empty_failed(
-    problem: GroundedPlanningProblem,
-    *,
-    scenario_id: str,
-    findings: Sequence[ScenarioFinding],
-    satisfactions: Sequence[Any] = (),
-    metrics: Mapping[str, float] | None = None,
-) -> PlanningScenario:
-    return build_planning_scenario(
-        scenario_id=scenario_id,
-        problem=problem,
-        relation_satisfactions=satisfactions,
-        features=[],
-        findings=findings,
-        metrics=metrics or {"selected_candidate_count": 0.0},
-        status="failed",
-    )
-
-
-def solve_scenario(
-    problem: GroundedPlanningProblem,
-    *,
-    scenario_id: str,
-    evaluator_context: RelationEvaluationContext,
-    max_scenarios: int = 1,
-) -> PlanningScenario:
-    """Select one deterministic hard-feasible scenario from typed domains."""
-
-    if max_scenarios != 1:
-        return _empty_failed(
-            problem,
-            scenario_id=scenario_id,
-            findings=[_finding(
-                "UNSUPPORTED_MULTIPLE_SCENARIOS",
-                "ScenarioSolver currently emits exactly one scenario; max_scenarios > 1 is unsupported.",
-            )],
-        )
-    if not scenario_id.strip():
-        raise ValueError("scenario_id must be non-empty")
-    if not problem.candidate_domains or not problem.candidate_geometries:
-        return _empty_failed(
-            problem,
-            scenario_id=scenario_id,
-            findings=[_finding(
-                "NO_PLANNING_OUTPUT",
-                "No typed candidate domains/geometries are available for scenario solving.",
-            )],
-        )
-
-    targets, option_lists, unavailable = _choices(problem)
-    if not targets:
-        return _empty_failed(
-            problem,
-            scenario_id=scenario_id,
-            findings=[_finding(
-                "NO_PLANNING_OUTPUT",
-                "One or more targets have no executable candidate geometry.",
-                target_id=target,
-            ) for target in unavailable],
-        )
-
-    # Keep the search bounded; deterministic candidate order makes replay and
-    # idempotency stable even when a project contains a large domain.
-    candidate_combinations = product(*option_lists)
-    best: tuple[tuple[int, float, float, tuple[str, ...]], dict[str, tuple[str, ...]], list[Any], list[Any], list[tuple[str, str, str]], bool] | None = None
-    inspected = 0
-    hard_feasible_count = 0
-    for choice in candidate_combinations:
-        inspected += 1
-        if inspected > _SEARCH_LIMIT:
-            break
-        selected = dict(zip(targets, choice))
-        selected, spatial_conflicts = _prune_spatial_conflicts(
-            selected,
-            {item.candidate_id: item for item in problem.candidate_geometries},
-        )
-        if not selected:
-            continue
-        features, satisfactions = _evaluate_assignment(
-            problem,
-            selected,
-            scenario_id=scenario_id,
-            evaluator_context=evaluator_context,
-        )
-        hard_violated = any(
-            item.criticality == "hard" and item.status == "violated"
-            for item in satisfactions
-        )
-        if hard_violated:
-            # A measured hard violation is terminal for this combination.
-            continue
-        hard_unresolved = any(hard_relation_blocked(item) for item in satisfactions)
-        if not hard_unresolved:
-            hard_feasible_count += 1
-        relation_score = relation_objective(problem.constraint_factors, satisfactions)
-        selected_ids = [
-            candidate_id
-            for candidate_ids in selected.values()
-            for candidate_id in candidate_ids
-        ]
-        candidate_score = sum(
-            _candidate_score(next(item for item in problem.candidate_geometries if item.candidate_id == candidate_id))
-            for candidate_id in selected_ids
-        )
-        # Strictly feasible combinations always outrank provisional ones.
-        # Deferred/not-evaluable hard relations remain auditable as partial
-        # scenarios instead of being collapsed into a false violation.
-        score = (
-            0 if hard_unresolved else 1,
-            relation_score,
-            candidate_score,
-            tuple(sorted(selected_ids)),
-        )
-        if best is None or score > best[0]:
-            best = (
-                score,
-                selected,
-                features,
-                satisfactions,
-                spatial_conflicts,
-                hard_unresolved,
-            )
-
-    if best is None:
-        return _empty_failed(
-            problem,
-            scenario_id=scenario_id,
-            findings=[_finding(
-                "NO_HARD_FEASIBLE_SCENARIO",
-                "All candidate combinations were rejected by hard relations or network subproblems.",
-            )],
-            metrics={
-                "candidate_combinations_inspected": float(inspected),
-                "hard_feasible_scenarios": 0.0,
-                "selected_candidate_count": 0.0,
-            },
-        )
-
-    _, selected, features, satisfactions, spatial_conflicts, hard_unresolved = best
-    findings: list[ScenarioFinding] = [
-        _finding(
-            "NO_PLANNING_OUTPUT",
-            "Target has no executable candidate geometry and was deferred.",
-            severity="warning",
-            target_id=target,
-        )
-        for target in unavailable
-    ]
-    findings.extend(
-        _finding(
-            "SPATIAL_CANDIDATE_CONFLICT",
-            f"Candidate overlaps exclusive target {conflict_target}; target deferred.",
-            severity="warning",
-            target_id=target_id,
-        )
-        for target_id, _candidate_id, conflict_target in spatial_conflicts
-    )
-    findings.extend(
-        _finding(
-            "HARD_RELATION_UNRESOLVED",
-            f"Hard relation is {item.status}; scenario remains provisional.",
-            severity="warning",
-            relation_id=item.relation_id,
-        )
-        for item in satisfactions
-        if item.criticality == "hard" and item.status != "satisfied"
-    )
-    if inspected > _SEARCH_LIMIT:
-        findings.append(_finding(
-            "SCENARIO_SEARCH_BOUND_REACHED",
-            f"Scenario search was bounded at {_SEARCH_LIMIT} combinations.",
-            severity="warning",
-        ))
-    status = (
-        "complete"
-        if not unavailable and not spatial_conflicts and not hard_unresolved
-        else "partial"
-    )
-    domain_by_target = {
-        item.target_id: item
-        for item in problem.candidate_domains
-    }
-    target_selections = [
-        ScenarioTargetSelection(
-            target_id=target_id,
-            selection_mode=domain_by_target[target_id].selection_mode,
-            candidate_ids=list(candidate_ids),
-            binding_ref=domain_by_target[target_id].binding_ref,
-        )
-        for target_id, candidate_ids in sorted(selected.items())
-        if target_id in domain_by_target and candidate_ids
-    ]
-    scenario = build_planning_scenario(
-        scenario_id=scenario_id,
-        problem=problem,
-        target_selections=target_selections,
-        relation_satisfactions=satisfactions,
-        features=features,
-        findings=findings,
-        metrics={
-            "candidate_combinations_inspected": float(inspected),
-            "hard_feasible_scenarios": float(hard_feasible_count),
-            "selected_candidate_count": float(len(selected)),
-            "spatial_conflict_deferred_count": float(len(spatial_conflicts)),
-            "relation_objective": relation_objective(problem.constraint_factors, satisfactions),
-        },
-        status=status,
-    )
-    # Force construction of cuts here so callers can use derive_network_cuts
-    # immediately and diagnostics remain represented in the scenario ledger.
-    cuts = derive_network_cuts(scenario, problem)
-    if cuts:
-        scenario.findings.extend(
-            _finding(
-                "NETWORK_CUT_REQUIRED",
-                f"Network subproblem emitted cut {cut.cut_id}: {cut.reason}",
-                severity="warning",
-                relation_id=cut.relation_id,
-            )
-            for cut in cuts
-        )
-        scenario.metrics["network_cut_count"] = float(len(cuts))
-    return scenario
-
-
-__all__ = ["ScenarioCut", "derive_network_cuts", "solve_scenario"]

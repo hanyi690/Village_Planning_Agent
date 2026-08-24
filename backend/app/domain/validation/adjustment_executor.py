@@ -30,7 +30,7 @@ _AUTHORITATIVE_KEY = "parent_digests"
 _ARTIFACT_REFS_KEY = "artifact_refs"
 _VALIDATE_INPUT_KEYS = {
     "target_projection",
-    "site_selection",
+    "approved_execution_input",
     "execution_plan",
     "execution_result",
 }

@@ -58,10 +58,25 @@ def _lineage_properties(item: Any) -> Dict[str, Any]:
             if str(value).strip()
         )
     )
-    for name in ("source_area_ha", "coverage_ratio"):
+    for name in (
+        "source_area_ha",
+        "coverage_ratio",
+        "eligible_area_ha",
+        "excluded_area_ha",
+    ):
         value = getattr(item, name, None)
         if value is not None:
             result[name] = float(value)
+    result["availability_status"] = str(
+        getattr(item, "availability_status", "unknown") or "unknown"
+    )
+    for name in ("adjacent_parcel_bsms", "adjacency_evidence_refs"):
+        values = getattr(item, name, None) or []
+        if isinstance(values, str):
+            values = [values]
+        result[name] = list(
+            dict.fromkeys(str(value) for value in values if str(value).strip())
+        )
     return result
 
 
@@ -136,7 +151,7 @@ def _project_layer(planned_state: Any) -> Optional[Dict[str, Any]]:
     for parcel in getattr(planned_state, "parcels", None) or []:
         project_ref = str(getattr(parcel, "project_ref", "") or "")
         role = str(getattr(parcel, "materialization_role", "") or "")
-        if role and role not in {"site_footprint", "project_footprint"}:
+        if role and role != "site_footprint":
             continue
         geometry = _wkt_to_geojson(getattr(parcel, "geometry", "") or "")
         if not project_ref or geometry is None:

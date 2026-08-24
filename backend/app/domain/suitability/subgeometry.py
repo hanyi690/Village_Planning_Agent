@@ -35,13 +35,39 @@ class PlanningSubgeometryResult:
     metric_crs: str
     operation: str
     diagnostics: tuple[str, ...] = ()
+    # ``eligible_area_ha`` is measured after allowed/avoid clipping but before
+    # a requested planning footprint is carved out.  Keeping both areas lets
+    # callers distinguish a fully prohibited parcel from a partially usable
+    # one instead of treating every hard failure as all-or-nothing.
+    eligible_area_ha: float = 0.0
+    excluded_area_ha: float = 0.0
+    availability_status: str = "unknown"
+    remainder_geometry_wkts: tuple[str, ...] = ()
+    # Eligible geometry before a requested planning footprint is carved out.
+    # Keeping this parent extent is necessary when multiple targets share one
+    # source parcel: each target must be cut from the same usable extent, not
+    # from an already-sized footprint returned for another target.
+    eligible_geometry_wkt: str = ""
 
     @property
     def feasible(self) -> bool:
         return (
-            "planning_area_insufficient" not in self.diagnostics
+            self.availability_status != "fully_unavailable"
+            and bool(self.geometry_wkt)
+            and "planning_area_insufficient" not in self.diagnostics
             and "subdivision_failed" not in self.diagnostics
         )
+
+
+def _availability_status(source_area_ha: float, eligible_area_ha: float) -> str:
+    if source_area_ha <= 0.0:
+        return "unknown"
+    ratio = max(0.0, min(1.0, eligible_area_ha / source_area_ha))
+    if ratio <= 1e-9:
+        return "fully_unavailable"
+    if ratio < 1.0 - 1e-6:
+        return "partially_available"
+    return "fully_available"
 
 
 def _parse_geometry(value: str | BaseGeometry | None) -> BaseGeometry | None:
@@ -209,6 +235,7 @@ def derive_planning_subgeometry(
     if available is None:
         return PlanningSubgeometryResult(
             geometry_wkt="",
+            eligible_geometry_wkt="",
             source_area_ha=source_area_ha,
             planning_area_ha=0.0,
             coverage_ratio=0.0 if source_area_ha else None,
@@ -216,12 +243,18 @@ def derive_planning_subgeometry(
             metric_crs=metric_crs,
             operation="planning_clip_failed",
             diagnostics=tuple(diagnostics),
+            eligible_area_ha=0.0,
+            excluded_area_ha=source_area_ha,
+            availability_status="fully_unavailable",
         )
 
     available_area_ha = max(float(available.area) / _HA_M2, 0.0)
+    availability_status = _availability_status(source_area_ha, available_area_ha)
+    excluded_area_ha = max(source_area_ha - available_area_ha, 0.0)
     requested = float(target_area_ha or 0.0)
     footprint = available
     operation = "bundle_extent"
+    remainders: list[BaseGeometry] = []
     if requested > 0.0:
         if available_area_ha + 1e-9 < requested:
             diagnostics.append("planning_area_insufficient")
@@ -234,10 +267,11 @@ def derive_planning_subgeometry(
                 diagnostics.append("planning_area_insufficient")
             else:
                 try:
-                    footprint, _remainders = split_for_footprint(
+                    footprint, remainders = split_for_footprint(
                         polygon,
                         requested,
                         tolerance_pct=max(float(tolerance_pct), 0.0),
+                        exact_search=source_raw.geom_type == "Polygon",
                     )
                     operation = "obb_subdivide"
                 except (ValueError, TypeError, RuntimeError):
@@ -248,6 +282,7 @@ def derive_planning_subgeometry(
         diagnostics.append("subdivision_failed")
         return PlanningSubgeometryResult(
             geometry_wkt="",
+            eligible_geometry_wkt=_transform_back(available, normalized_source_crs, metric_crs).wkt,
             source_area_ha=source_area_ha,
             planning_area_ha=0.0,
             coverage_ratio=0.0 if source_area_ha else None,
@@ -255,12 +290,16 @@ def derive_planning_subgeometry(
             metric_crs=metric_crs,
             operation="planning_clip_failed",
             diagnostics=tuple(dict.fromkeys(diagnostics)),
+            eligible_area_ha=available_area_ha,
+            excluded_area_ha=excluded_area_ha,
+            availability_status=availability_status,
         )
     footprint = _polygonal(footprint)
     if footprint is None:
         diagnostics.append("subdivision_failed")
         return PlanningSubgeometryResult(
             geometry_wkt="",
+            eligible_geometry_wkt=_transform_back(available, normalized_source_crs, metric_crs).wkt,
             source_area_ha=source_area_ha,
             planning_area_ha=0.0,
             coverage_ratio=0.0 if source_area_ha else None,
@@ -268,11 +307,37 @@ def derive_planning_subgeometry(
             metric_crs=metric_crs,
             operation="planning_clip_failed",
             diagnostics=tuple(dict.fromkeys(diagnostics)),
+            eligible_area_ha=available_area_ha,
+            excluded_area_ha=excluded_area_ha,
+            availability_status=availability_status,
         )
-    output = _transform_back(footprint, normalized_source_crs, metric_crs)
     planning_area_ha = max(float(footprint.area) / _HA_M2, 0.0)
+    # Exact area alone is not enough for an executable planning footprint.
+    # A very thin sliver can be produced when an irregular/multipart parcel
+    # is cut along an OBB axis; reject that shape while preserving it for
+    # diagnostics and remainder lineage.
+    if footprint.geom_type == "Polygon" and footprint.length > 0.0:
+        compactness = (4.0 * 3.141592653589793 * float(footprint.area)) / (
+            float(footprint.length) ** 2
+        )
+        if compactness < 0.03:
+            diagnostics.append("subdivision_sliver")
+            diagnostics.append("subdivision_failed")
+    if requested > 0.0 and (
+        abs(planning_area_ha - requested) / max(requested, 1e-9)
+        > max(float(tolerance_pct), 0.0) / 100.0
+    ):
+        # A split operation is only executable when it actually satisfies the
+        # requested area tolerance.  OBB is a deterministic heuristic, not a
+        # proof that an irregular source polygon can yield the target size.
+        # Keep the source-backed geometry for diagnostics, but fail closed so
+        # SELECT cannot approve a materially undersized footprint.
+        diagnostics.append("planning_area_insufficient")
+    output = _transform_back(footprint, normalized_source_crs, metric_crs)
+    eligible_output = _transform_back(available, normalized_source_crs, metric_crs)
     return PlanningSubgeometryResult(
         geometry_wkt=output.wkt,
+        eligible_geometry_wkt=eligible_output.wkt,
         source_area_ha=source_area_ha,
         planning_area_ha=planning_area_ha,
         coverage_ratio=(planning_area_ha / source_area_ha) if source_area_ha else None,
@@ -280,6 +345,14 @@ def derive_planning_subgeometry(
         metric_crs=metric_crs,
         operation=operation,
         diagnostics=tuple(dict.fromkeys(diagnostics)),
+        eligible_area_ha=available_area_ha,
+        excluded_area_ha=excluded_area_ha,
+        availability_status=availability_status,
+        remainder_geometry_wkts=tuple(
+            _transform_back(item, normalized_source_crs, metric_crs).wkt
+            for item in remainders
+            if item is not None and not item.is_empty
+        ),
     )
 
 

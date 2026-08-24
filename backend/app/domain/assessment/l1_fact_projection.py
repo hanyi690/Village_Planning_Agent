@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from typing import Any, Iterable
 
 from app.contracts.domain.l1_contracts import L1Fact, L1LocationFact
@@ -159,6 +160,15 @@ def evidence_fact_to_l1_fact(
         _text(getattr(fact, "feature_bsm", "")),
         *_refs(getattr(fact, "related_parcel_bsms", None) or []),
     ]
+    # KG typed-count facts keep a bounded source-feature sample in fields;
+    # retain those IDs when promoting the fact into L1 so the lineage gate
+    # can distinguish a traceable aggregate from an unverified count.
+    for key in ("source_feature_id", "source_feature_ids", "source_feature_sample"):
+        value = fields.get(key)
+        if isinstance(value, (list, tuple, set)):
+            feature_ids.extend(value)
+        elif value:
+            feature_ids.extend(re.split(r"[,;]", str(value)))
     source_snapshot = _text(
         fields.get("bundle_snapshot_digest")
         or fields.get("source_snapshot_ref")

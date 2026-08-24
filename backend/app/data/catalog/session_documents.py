@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import hashlib
-from pathlib import Path
 from typing import Any
 
 
@@ -41,8 +40,12 @@ async def load_session_documents(
     """Load canonical session text sources for a runtime query.
 
     This is deliberately the only body-loading helper used by the bundle
-    retrieval adapters. Callers that persist a bundle must pass the returned
-    records through ``to_document_refs`` first.
+    retrieval adapters.  Only content owned by the current session (the
+    persisted request and explicit uploads) is included.  Repository-local
+    reference documents are never implicitly promoted to session input;
+    callers must explicitly ingest/bind one before it can enter the bundle.
+    Callers that persist a bundle must pass the returned records through
+    ``to_document_refs`` first.
     """
     from app.database.operations import (
         get_planning_session_async,
@@ -87,29 +90,6 @@ async def load_session_documents(
             locator=f"upload://{upload_id}/{name}" if upload_id or name else "",
             record_id=upload_id,
         ))
-
-    try:
-        from app.data.ingestion.documents.loader import list_available_documents
-
-        for item in list_available_documents(village_name):
-            path = str(item.get("path") or "")
-            if not path:
-                continue
-            try:
-                content = Path(path).read_text(encoding="utf-8")
-            except Exception:
-                continue
-            if not content.strip():
-                continue
-            documents.append(_document(
-                source="project_doc",
-                name=str(item.get("name") or ""),
-                content=content,
-                locator=path,
-                document_type=str(item.get("type") or "unknown"),
-            ))
-    except Exception:
-        pass
 
     return documents
 

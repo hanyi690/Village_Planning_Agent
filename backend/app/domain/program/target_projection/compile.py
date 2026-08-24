@@ -28,6 +28,7 @@ from app.contracts.workflow.parse_result_contracts import (
 from app.contracts.artifacts.provenance import Provenance, SemanticMetadata
 from app.contracts.evidence.identity_contracts import EvidenceObservation, GroundedEntityBinding
 from app.contracts.spatial.spatial_reference_contracts import SpatialReferenceSpec
+from app.domain.program.claim_adapter import admission_reasons_for_intervention
 from app.domain.program.target_projection.intent_graph_compiler import compile_intent_graph_v2
 
 
@@ -373,6 +374,49 @@ def _build_diagnostics(
             )
         )
     for intervention in program.interventions:
+        if intervention.planning_role != "spatial_intervention":
+            diagnostics.append(
+                ParseDiagnostic(
+                    diagnostic_id=f"admission-role-{intervention.target_id}",
+                    severity="error",
+                    code="INTERVENTION_NOT_ADMITTED",
+                    message="TARGET_PROJECTION requires an admitted spatial_intervention role",
+                    field_path="planning_role",
+                    target_id=intervention.target_id,
+                )
+            )
+        if not intervention.project_package_ref or not intervention.admission_reason:
+            diagnostics.append(
+                ParseDiagnostic(
+                    diagnostic_id=f"admission-lineage-{intervention.target_id}",
+                    severity="error",
+                    code="INTERVENTION_ADMISSION_LINEAGE_MISSING",
+                    message="TARGET_PROJECTION requires package and admission lineage",
+                    field_path="project_package_ref",
+                    target_id=intervention.target_id,
+                )
+            )
+        if (
+            intervention.admission_reason == "typed_spatial_claim_ready"
+            and not (
+                intervention.claim_refs
+                and (
+                    intervention.evidence_refs
+                    or intervention.source_fact_refs
+                    or intervention.source_refs
+                )
+            )
+        ):
+            diagnostics.append(
+                ParseDiagnostic(
+                    diagnostic_id=f"admission-evidence-{intervention.target_id}",
+                    severity="error",
+                    code="INTERVENTION_EVIDENCE_LINEAGE_MISSING",
+                    message="admitted intervention must retain claim and evidence/source lineage",
+                    field_path="claim_refs",
+                    target_id=intervention.target_id,
+                )
+            )
         if (
             intervention.category == "road"
             and intervention.asset_kind == "road"
@@ -461,20 +505,49 @@ def compile_program_deterministic(
 
     No LLM calls. Returns (IntentCompilationResult, SpatialReferenceSpec[], diagnostics).
     """
-    intent = _build_intent(program)
+    admission_failures = {
+        intervention.intervention_id: admission_reasons_for_intervention(
+            intervention,
+            list(program.claims),
+        )
+        for intervention in program.interventions
+    }
+    admitted_program = program.model_copy(
+        deep=True,
+        update={
+            "interventions": [
+                intervention
+                for intervention in program.interventions
+                if not admission_failures[intervention.intervention_id]
+            ]
+        },
+    )
+    intent = _build_intent(admitted_program)
     intent_graph = compile_intent_graph_v2(
-        program,
+        admitted_program,
         observations=observations,
         bindings=bindings,
     )
     specs, spec_diags = map_interventions_to_specs(
-        program.interventions,
+        admitted_program.interventions,
         observations=observations or (),
         bindings=bindings or (),
         source_features=source_features or {},
         source_semantic_decisions=source_semantic_decisions or {},
     )
     diagnostics = _build_diagnostics(program, spec_diags)
+    diagnostics.extend(
+        ParseDiagnostic(
+            diagnostic_id=f"admission-recompute-{intervention_id}",
+            severity="error",
+            code="INTERVENTION_ADMISSION_RECOMPUTE_FAILED",
+            message="; ".join(reasons),
+            field_path="interventions",
+            target_id=intervention_id,
+        )
+        for intervention_id, reasons in admission_failures.items()
+        if reasons
+    )
     diagnostics.extend(
         ParseDiagnostic(
             diagnostic_id=f"intent-graph-{index}",
@@ -517,4 +590,7 @@ def compile_program_deterministic(
         provenance=provenance,
         intent_graph=intent_graph,
     )
+    from app.evidence.retrieval.requirements import requirements_from_target_projection
+
+    result.evidence_requirements = list(requirements_from_target_projection(result))
     return result, specs, diagnostics

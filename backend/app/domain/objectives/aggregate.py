@@ -88,7 +88,7 @@ def merge_strategy_fragments(
                 )
             )
 
-    return L2Strategy(
+    strategy = L2Strategy(
         context_version="",
         artifact_id="",
         development_goals=_dedup(goals),
@@ -101,6 +101,10 @@ def merge_strategy_fragments(
         strategy_issues=strategy_issues,
         dimension_provenance=dimension_provenance,
     )
+    from app.evidence.retrieval.requirements import requirements_from_l2
+
+    strategy.evidence_requirements = list(requirements_from_l2(strategy))
+    return strategy
 
 
 async def l2_aggregate(
@@ -148,6 +152,9 @@ async def l2_aggregate(
     branch_id = str(state.get("branch_id") or "main")
     artifact_id = f"l2-{run_id}-{branch_id}-{semantic_checksum(strategy)[:16]}"
     strategy.artifact_id = artifact_id
+    from app.evidence.retrieval.requirements import requirements_from_l2
+
+    strategy.evidence_requirements = list(requirements_from_l2(strategy))
     strategy.provenance = Provenance(
         source="l2_observe",
         run_id=run_id,

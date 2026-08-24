@@ -1,8 +1,8 @@
 """Land Design Worker — deterministic parcel change production for projects/zones/facilities.
 
-Consumes SiteSelectionDecision + LandDesignBrief + SpatialPlanningIntent and
-produces a unified ParcelChangeSet. Pure deterministic logic: no LLM, no KG,
-no MIP. All geometry mutations delegate to app.spatial.model.parcel_ops.
+Consumes typed target/assignment inputs and produces deterministic parcel
+changes. Pure logic: no LLM, no KG, no MIP. All geometry mutations delegate to
+app.spatial.model.parcel_ops.
 """
 
 from __future__ import annotations
@@ -18,15 +18,11 @@ from app.contracts.artifacts.classification_ref import (
     classification_code_names,
 )
 from app.contracts.spatial.parcel_change_contracts import ParcelChange, ParcelChangeSet
-from app.contracts.spatial.global_zone_allocation_contracts import (
-    AuthoritativeZoneParcelAssignment,
-)
 from app.contracts.workflow.parse_contracts import (
     FacilityTarget,
     SiteAreaTarget,
-    SpatialPlanningIntent,
 )
-from app.contracts.domain.selection_contracts import LandDesignBrief, SiteSelectionDecision
+from app.contracts.workflow.materialization_contracts import LandDesignBrief
 from app.spatial.model.parcel_ops import create_parcel, merge_parcels, reclassify_parcel
 from app.spatial.allocation.selection import parse_scale_ha
 from app.spatial.model.subdivision import apply_setback, split_for_footprint
@@ -351,68 +347,6 @@ def design_project_footprint(
     return changes
 
 
-def design_zone_parcel(
-    assignment: AuthoritativeZoneParcelAssignment,
-    parcel_by_bsm: Dict[str, Any],
-) -> List[ParcelChange]:
-    """Materialize exactly one authoritative allocator assignment.
-
-    ZoneTarget candidates are deliberately not accepted here.  Site selection,
-    conflict resolution, and parcel ownership must already be represented by
-    ``AuthoritativeZoneParcelAssignment``.
-    """
-    if not isinstance(assignment, AuthoritativeZoneParcelAssignment):
-        return []
-    bsm = str(assignment.bsm)
-    parcel = parcel_by_bsm.get(bsm)
-    if parcel is None:
-        return []
-    names = classification_code_names(assignment.classification_system)
-    if names is None or assignment.classification_code not in names:
-        return []
-    actual_area_ha = _parcel_area_ha(parcel)
-    tolerance = max(1e-6, assignment.area_ha * 0.01)
-    if actual_area_ha <= 0 or abs(actual_area_ha - assignment.area_ha) > tolerance:
-        return []
-    geometry_wkt = _geometry_to_wkt(_parcel_geometry(parcel))
-    if not geometry_wkt:
-        return []
-    evidence_refs = sorted(set(
-        assignment.lineage.classification_evidence_refs
-        + assignment.lineage.candidate_provenance_refs
-        + assignment.lineage.parcel_provenance_refs
-    ))
-    try:
-        classification = ClassificationRef(
-            system=assignment.classification_system,
-            code=assignment.classification_code,
-            canonical_name=names[assignment.classification_code],
-            source="derived",
-            evidence_refs=evidence_refs,
-            decision_ref=assignment.lineage.lineage_id,
-        )
-    except ValueError:
-        return []
-    result = reclassify_parcel(
-        parcel,
-        classification.code,
-        classification.canonical_name,
-    )
-    return [
-        ParcelChange(
-            bsm=bsm,
-            action="reclassify",
-            derived_from_bsms=[bsm],
-            after_classification=classification,
-            before_geometry_wkt=geometry_wkt,
-            after_geometry_wkt=geometry_wkt,
-            new_area_ha=float(result.get("area_ha", actual_area_ha) or actual_area_ha),
-            project_ref=assignment.target_id,
-            intervention_id=assignment.target_id,
-        )
-    ]
-
-
 def design_facility_parcel(
     facility_target: FacilityTarget,
 ) -> Optional[ParcelChange]:
@@ -474,43 +408,9 @@ def build_parcel_change_set(
     )
 
 
-def design_all(
-    intent: SpatialPlanningIntent,
-    site_selection: SiteSelectionDecision,
-    briefs: List[LandDesignBrief],
-    parcel_by_bsm: Dict[str, Any],
-    *,
-    zone_assignments: List[AuthoritativeZoneParcelAssignment] | None = None,
-) -> ParcelChangeSet:
-    """Produce changes without deriving zone ownership from intent candidates."""
-    projects = list(getattr(intent, "site_area_targets", None) or [])
-    selected = list(getattr(site_selection, "selected_combination", None) or [])
-    all_changes: List[ParcelChange] = []
-
-    for i, project in enumerate(projects):
-        brief = briefs[i] if i < len(briefs) else None
-        bsm = selected[i] if i < len(selected) else None
-        if bsm:
-            all_changes.extend(
-                design_project_footprint(project, brief, bsm, parcel_by_bsm)
-            )
-
-    for assignment in zone_assignments or []:
-        all_changes.extend(design_zone_parcel(assignment, parcel_by_bsm))
-
-    for facility in getattr(intent, "facilities", None) or []:
-        change = design_facility_parcel(facility)
-        if change is not None:
-            all_changes.append(change)
-
-    return build_parcel_change_set(all_changes)
-
-
 __all__ = [
     "design_project_parcel",
     "design_project_footprint",
-    "design_zone_parcel",
     "design_facility_parcel",
     "build_parcel_change_set",
-    "design_all",
 ]

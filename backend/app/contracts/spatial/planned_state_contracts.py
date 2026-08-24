@@ -50,6 +50,20 @@ class PlannedParcel(BaseModel):
     bundle_snapshot_digest: str = ""
     subgeometry_operation: str = "bundle_extent"
     subgeometry_diagnostics: list[str] = Field(default_factory=list)
+    # Availability is not equivalent to hard-constraint status.  A source
+    # parcel may be only partly usable after exclusion clipping; EXECUTE must
+    # retain that fact instead of treating the whole cadastral parcel as
+    # unavailable or silently widening the selected footprint.
+    availability_status: Literal[
+        "fully_available",
+        "partially_available",
+        "fully_unavailable",
+        "unknown",
+    ] = "unknown"
+    eligible_area_ha: float | None = Field(default=None, ge=0)
+    excluded_area_ha: float | None = Field(default=None, ge=0)
+    adjacent_parcel_bsms: list[str] = Field(default_factory=list)
+    adjacency_evidence_refs: list[str] = Field(default_factory=list)
 
 
 class PlannedZone(BaseModel):
@@ -131,6 +145,16 @@ class PlannedFacility(BaseModel):
     evidence_refs: list[str] = Field(default_factory=list)
     l1_snapshot_ref: str = ""
     bundle_snapshot_digest: str = ""
+    availability_status: Literal[
+        "fully_available",
+        "partially_available",
+        "fully_unavailable",
+        "unknown",
+    ] = "unknown"
+    eligible_area_ha: float | None = Field(default=None, ge=0)
+    excluded_area_ha: float | None = Field(default=None, ge=0)
+    adjacent_parcel_bsms: list[str] = Field(default_factory=list)
+    adjacency_evidence_refs: list[str] = Field(default_factory=list)
 
 
 class PlannedRoad(BaseModel):

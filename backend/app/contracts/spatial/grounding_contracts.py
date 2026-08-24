@@ -7,6 +7,7 @@ from pydantic import BaseModel, Field, model_validator
 from app.contracts.artifacts.contract_meta import ContractMeta, StageIssue
 from app.contracts.artifacts.provenance import Provenance
 from app.contracts.evidence.identity_contracts import infer_geometry_granularity
+from app.contracts.evidence.requirement_contracts import EvidenceRequirement
 from app.contracts.planning.constraint_factor import ConstraintFactor, RelationSatisfaction
 from app.contracts.spatial.candidate_geometry import CandidateGeometry
 from app.contracts.spatial.grounded_problem import GroundedPlanningProblem
@@ -77,6 +78,7 @@ class GroundingResult(ContractMeta):
     relation_satisfaction: list[RelationSatisfaction] = Field(default_factory=list)
     problem: GroundedPlanningProblem | None = None
     provenance: "Provenance | None" = None
+    evidence_requirements: list[EvidenceRequirement] = Field(default_factory=list)
 
 class GroundedAnchor(ContractMeta):
     """L1 锚点接地产物：location_fact -> KG 实体/几何 + 拓扑证据（设计 §5.1/§6）。

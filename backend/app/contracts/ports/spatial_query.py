@@ -12,6 +12,7 @@ from typing import Any, Protocol
 from app.contracts.spatial.spatial_reference_contracts import (
     CandidateSet, SpatialReferenceSpec,
 )
+from app.contracts.spatial.query_ast import SpatialQuery
 
 
 class SpatialQueryPort(Protocol):
@@ -22,4 +23,10 @@ class SpatialQueryPort(Protocol):
     def resolve_candidates(self, run_id: str, spec: SpatialReferenceSpec) -> CandidateSet: ...
 
 
-__all__ = ["SpatialQueryPort"]
+class SpatialQueryExecutor(Protocol):
+    """Canonical AST execution boundary for snapshot-bound spatial reads."""
+
+    def execute(self, query: SpatialQuery) -> list[dict[str, Any]]: ...
+
+
+__all__ = ["SpatialQueryExecutor", "SpatialQueryPort"]

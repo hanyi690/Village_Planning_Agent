@@ -147,6 +147,38 @@ def _location_reference(intervention: PlanningIntervention) -> SpatialReferenceS
     Every explicit place token becomes its own resolvable reference.
     """
     requirements = intervention.spatial_requirements
+    raw_parcel_refs = requirements.get("affected_parcel_refs")
+    parcel_refs = list(dict.fromkeys(
+        str(item).strip()
+        for item in (raw_parcel_refs if isinstance(raw_parcel_refs, list) else [])
+        if str(item).strip()
+    ))
+    # An explicit parcel identity is stronger than a natural-language place
+    # hint. Keep it in the closed-set DSL so GROUND can bind exact source
+    # geometry and retain duplicate source records as separate alternatives.
+    bsm_refs = [item for item in parcel_refs if item.isdigit()]
+    if not bsm_refs:
+        hint_text = " ".join(
+            [
+                str(item).strip()
+                for item in (requirements.get("location_hints") or [])
+                if str(item).strip()
+            ]
+            + [str(requirements.get("location") or "").strip()]
+        )
+        bsm_refs = re.findall(r"(?:BSM|bsm)\s*[=:：]\s*(\d{6,})", hint_text)
+        bsm_refs = list(dict.fromkeys(bsm_refs))
+    if bsm_refs:
+        refs = [
+            SpatialReferenceSpec(
+                type="attributive",
+                reference=RefObject(kind="bsm", filter={"bsm": bsm}),
+            )
+            for bsm in bsm_refs
+        ]
+        if len(refs) == 1:
+            return refs[0]
+        return SpatialReferenceSpec(type="composed", op="or", children=refs)
     raw_hints = requirements.get("location_hints")
     hints = [
         str(item).strip()

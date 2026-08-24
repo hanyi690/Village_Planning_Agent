@@ -118,6 +118,13 @@ def _no_planning_output(manifest: DeliveryManifest) -> bool:
     return str(planning.get("status") or "") == "no_planning_output"
 
 
+def _validation_certificate_blocked(manifest: DeliveryManifest) -> bool:
+    """Keep a scenario delivery diagnostic until VALIDATE proves its input."""
+
+    summary = manifest.diagnostic_summary or {}
+    return str(summary.get("validation_certificate_gate") or "") == "blocked"
+
+
 def _blocking_categories(manifest: DeliveryManifest) -> set[str]:
     """Categorize blocking human items by their item_id prefix."""
     categories: set[str] = set()
@@ -139,6 +146,8 @@ def _blocking_categories(manifest: DeliveryManifest) -> set[str]:
 def deliver_gate_route(manifest: DeliveryManifest) -> str:
     """Return PASS for successful terminals, otherwise END_DIAGNOSTIC."""
     if _no_planning_output(manifest):
+        return "END_DIAGNOSTIC"
+    if _validation_certificate_blocked(manifest):
         return "END_DIAGNOSTIC"
     if manifest.delivery_status in {"complete", "partial"}:
         return "PASS"
@@ -173,6 +182,8 @@ def evaluate_deliver_gate(
     route_reason = (
         "no_planning_output"
         if _no_planning_output(manifest)
+        else "validation_certificate_blocked"
+        if _validation_certificate_blocked(manifest)
         else f"terminal_delivery:{manifest.delivery_status}"
         if route == "PASS"
         else "remaining_non_deferred_delivery_blockers"
@@ -193,6 +204,8 @@ def evaluate_deliver_gate(
                     "reason": (
                         "no_planning_output"
                         if _no_planning_output(manifest)
+                        else "validation_certificate_blocked"
+                        if _validation_certificate_blocked(manifest)
                         else route
                     ),
                     "blocking_categories": categories,

@@ -23,6 +23,7 @@ def _canonical_payload_from_geojson(payloads: dict[str, Any]) -> dict[str, Any]:
         "landuse_current_geojson": ("polygons", "landuse_current"),
         "landuse_planned_geojson": ("polygons", "landuse_planned"),
         "road_geojson": ("lines", "roads_current"),
+        "planned_road_geojson": ("lines", "roads_planned"),
         "external_road_geojson": ("lines", "external_roads"),
         "water_line_geojson": ("lines", "water_lines"),
         "water_geojson": ("polygons", "water_bodies"),
@@ -146,7 +147,8 @@ class SessionDataSnapshot(BaseModel):
             if values:
                 collection_features[f"{key}_geojson"] = values
         for output_key, input_keys in {
-            "road_geojson": ("roads_current", "roads_planned"),
+            "road_geojson": ("roads_current",),
+            "planned_road_geojson": ("roads_planned",),
             "external_road_geojson": ("external_roads",),
             "water_line_geojson": ("water_lines",),
             "annotation_geojson": ("annotations_current", "annotations_planned"),

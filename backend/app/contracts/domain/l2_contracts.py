@@ -6,6 +6,7 @@ from pydantic import BaseModel
 
 from app.contracts.artifacts.contract_meta import ContractMeta
 from app.contracts.evidence.evidence_contracts import EvidenceSource
+from app.contracts.evidence.requirement_contracts import EvidenceRequirement
 from .l1_contracts import EvidenceGap
 from app.contracts.workflow.parse_result_contracts import ParseDiagnostic
 from app.contracts.workflow.parsing_contracts import CompilerTrace
@@ -56,6 +57,7 @@ class L2Strategy(ContractMeta):
     strategy_issues: list[StrategyIssue] = []
     dimension_provenance: list[Provenance] = []
     provenance: "Provenance | None" = None
+    evidence_requirements: list[EvidenceRequirement] = []
 
 
 __all__ = [

@@ -18,6 +18,9 @@ from app.contracts.evidence.evidence_contracts import EvidenceSource
 from app.contracts.domain.l1_contracts import (
     EvidenceGap,
     L1Fact,
+    L1InputRegister,
+    L1RegisterRow,
+    L1SourceSegment,
     L1Snapshot,
 )
 from app.contracts.workflow.parsing_contracts import CompilationProfile
@@ -25,6 +28,7 @@ from app.contracts.artifacts.provenance import Provenance
 from app.infrastructure.artifacts.fingerprint import semantic_checksum
 from app.infrastructure.reports.review_package import write_review_package
 from app.infrastructure.logging import get_logger
+from app.evidence.retrieval.requirements import requirements_from_l1
 
 from .gate import evaluate_l1_gate
 from .review import build_l1_review_package
@@ -82,6 +86,64 @@ def _dedup_fact_records(records: list[L1Fact]) -> list[L1Fact]:
     return result
 
 
+def _merge_register_rows(
+    snapshots: list[L1Snapshot],
+) -> tuple[dict[str, list[L1RegisterRow]], dict[str, list[str]], L1InputRegister | None]:
+    """Merge dimension-owned rows and their L1 source metadata."""
+
+    by_dimension: dict[str, list[L1RegisterRow]] = {}
+    diagnostics: dict[str, list[str]] = {}
+    source_documents: list[str] = []
+    source_digests: set[str] = set()
+    source_segments_by_id: dict[str, L1SourceSegment] = {}
+    rows_by_id: dict[str, L1RegisterRow] = {}
+    for partial in snapshots:
+        for dimension, rows in (partial.register_rows_by_dimension or {}).items():
+            target = by_dimension.setdefault(dimension, [])
+            for row in rows or []:
+                existing = rows_by_id.get(row.row_id)
+                if existing is not None:
+                    if existing.model_dump(mode="json") != row.model_dump(mode="json"):
+                        diagnostics.setdefault(dimension, []).append(
+                            f"register_row_conflict:{row.row_id}"
+                        )
+                    continue
+                rows_by_id[row.row_id] = row
+                target.append(row)
+        for dimension, values in (partial.register_diagnostics_by_dimension or {}).items():
+            diagnostics.setdefault(dimension, []).extend(str(value) for value in values or [])
+        source_register = partial.input_register
+        if source_register is not None:
+            source_documents.extend(source_register.source_documents or [])
+            if source_register.source_digest:
+                source_digests.add(source_register.source_digest)
+            for row in [*(source_register.current_assets or []), *(source_register.demands or [])]:
+                rows_by_id.setdefault(row.row_id, row)
+            for segment in source_register.source_segments or []:
+                source_segments_by_id.setdefault(segment.segment_id, segment)
+
+    unique_documents = list(dict.fromkeys(source_documents))
+    if len(source_digests) > 1:
+        diagnostics.setdefault("__global__", []).append("source_digest_conflict")
+    source_digest = sorted(source_digests)[0] if source_digests else ""
+    all_rows = list(rows_by_id.values())
+    if not all_rows and not unique_documents and not source_digest:
+        return by_dimension, diagnostics, None
+    register = L1InputRegister(
+        source_documents=unique_documents,
+        source_digest=source_digest,
+        source_segments=list(source_segments_by_id.values()),
+        current_assets=[row for row in all_rows if row.ledger_kind == "current_asset"],
+        demands=[row for row in all_rows if row.ledger_kind == "demand"],
+        diagnostics=[
+            value
+            for values in diagnostics.values()
+            for value in values
+        ],
+    )
+    return by_dimension, diagnostics, register
+
+
 def merge_l1_snapshots(
     snapshots: list[L1Snapshot],
     run_id: str,
@@ -122,6 +184,10 @@ def merge_l1_snapshots(
             dimension_provenance.append(partial.provenance)
         source_refs.extend(source.reference for source in partial.sources)
 
+    register_rows_by_dimension, register_diagnostics_by_dimension, input_register = _merge_register_rows(
+        snapshots
+    )
+
     snapshot = L1Snapshot(
         context_version="",
         artifact_id="",
@@ -148,7 +214,13 @@ def merge_l1_snapshots(
         },
         diagnostics_by_dimension=diagnostics_by_dimension,
         traces_by_dimension=traces_by_dimension,
+        register_rows_by_dimension=register_rows_by_dimension,
+        register_diagnostics_by_dimension=register_diagnostics_by_dimension,
+        input_register=input_register,
     )
+    from app.evidence.retrieval.requirements import requirements_from_l1
+
+    snapshot.evidence_requirements = list(requirements_from_l1(snapshot))
 
     fact_keys: dict[str, list[str]] = {}
     for f in snapshot.facts:
@@ -218,6 +290,56 @@ async def l1_aggregate(
 
     snapshot = merge_l1_snapshots(partial_snapshots, run_id=run_id)
     snapshot.context_version = context_version
+
+    # The source index is an L1-owned artifact produced before/alongside the
+    # dimension passes.  It preserves generic segments even when a particular
+    # dimension has not yet confirmed any current/demand row; semantic
+    # ownership remains visible in register_rows_by_dimension.
+    try:
+        from app.infrastructure.artifacts.runtime import load_artifact
+
+        source_index = load_artifact(state, "l1_source_index", L1InputRegister)
+        if source_index is not None:
+            confirmations = {
+                row.row_id: row
+                for rows in snapshot.register_rows_by_dimension.values()
+                for row in rows
+            }
+            indexed_rows = [
+                row.model_copy(update={
+                    "status": confirmations[row.row_id].status,
+                    "dimension_key": confirmations[row.row_id].dimension_key,
+                    "evidence_note": confirmations[row.row_id].evidence_note,
+                })
+                if row.row_id in confirmations
+                else row
+                for row in [*(source_index.current_assets or []), *(source_index.demands or [])]
+            ]
+            snapshot.input_register = source_index.model_copy(update={
+                "current_assets": [
+                    row for row in indexed_rows if row.ledger_kind == "current_asset"
+                ],
+                "demands": [
+                    row for row in indexed_rows if row.ledger_kind == "demand"
+                ],
+                "diagnostics": list(dict.fromkeys([
+                    *(source_index.diagnostics or []),
+                    *(snapshot.input_register.diagnostics if snapshot.input_register else []),
+                ])),
+            })
+            missing_rows = [row.row_id for row in indexed_rows if row.row_id not in confirmations]
+            if missing_rows:
+                snapshot.register_diagnostics_by_dimension.setdefault("__global__", []).append(
+                    f"source_rows_without_dimension_confirmation:{len(missing_rows)}"
+                )
+    except Exception as exc:  # source index is optional during migration/replay
+        logger.warning("[l1_aggregate] source index artifact unavailable: %s", type(exc).__name__)
+    # Aggregate consumes only materialized rows from L1 dimension instructions.
+    # It deliberately does not reopen or parse the raw session document.
+    if snapshot.input_register is None:
+        snapshot.register_diagnostics_by_dimension.setdefault(
+            "__global__", []
+        ).append("l1_dimension_register_missing")
     # Preserve the dimension that actually consumed each KG fact.  The
     # flattened ``facts`` list remains backwards compatible, while L2 reads
     # this scoped map to avoid feeding unrelated evidence into a dimension.
@@ -259,6 +381,7 @@ async def l1_aggregate(
                 dimension_key="l1_snapshot",
                 query_purpose="snapshot_fact_production",
                 entity_scope=["parcels", "facilities", "roads", "annotations"],
+                requirements=list(snapshot.evidence_requirements),
             ),
             session_id=session_id,
             village_name=state.get("config", {}).get("village_name", ""),
@@ -293,6 +416,7 @@ async def l1_aggregate(
     branch_id = str(state.get("branch_id") or "main")
     artifact_id = f"l1-{run_id}-{branch_id}-{semantic_checksum(snapshot)[:16]}"
     snapshot.artifact_id = artifact_id
+    snapshot.evidence_requirements = list(requirements_from_l1(snapshot))
     snapshot.provenance = Provenance(
         source="l1_observe",
         run_id=run_id,
@@ -348,6 +472,28 @@ async def l1_aggregate(
                 "facts_produced": snapshot.facts,
                 "facts_by_dimension": snapshot.facts_by_dimension,
                 "location_facts": [fact.model_dump(mode="json") for fact in snapshot.location_facts],
+                "input_register": {
+                    "source_documents": list(
+                        getattr(snapshot.input_register, "source_documents", []) or []
+                    ),
+                    "source_digest": str(
+                        getattr(snapshot.input_register, "source_digest", "") or ""
+                    ),
+                    "current_asset_count": len(
+                        getattr(snapshot.input_register, "current_assets", []) or []
+                    ),
+                    "demand_count": len(
+                        getattr(snapshot.input_register, "demands", []) or []
+                    ),
+                    "diagnostics": list(
+                        getattr(snapshot.input_register, "diagnostics", []) or []
+                    ),
+                },
+                "register_rows_by_dimension": {
+                    key: [row.model_dump(mode="json") for row in rows]
+                    for key, rows in snapshot.register_rows_by_dimension.items()
+                },
+                "register_diagnostics_by_dimension": snapshot.register_diagnostics_by_dimension,
                 "kg_evidence_produced": {
                     "fact_count": kg_fact_count,
                     "fact_statements": kg_facts,

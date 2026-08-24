@@ -9,11 +9,12 @@ from pydantic import BaseModel, Field, model_validator
 from app.contracts.artifacts.contract_meta import ContractMeta
 from app.contracts.artifacts.classification_ref import ClassificationDecision
 from app.contracts.evidence.evidence_contracts import EvidenceSource
+from app.contracts.evidence.requirement_contracts import EvidenceRequirement
 from .l1_contracts import EvidenceGap
 from app.contracts.workflow.parse_result_contracts import ParseDiagnostic
 from app.contracts.workflow.parsing_contracts import CompilerTrace
 from app.contracts.artifacts.provenance import Provenance
-from app.contracts.program import PlanningClaim
+from app.contracts.program import PlanningClaim, PlanningRole
 from app.contracts.domain.planning_semantics import (
     AssetKind,
     AxisPlanningParameters,
@@ -30,6 +31,9 @@ class PlanningIntervention(BaseModel):
     intervention_id: str
     name: str
     target_id: str = ""
+    planning_role: PlanningRole = "evidence_statement"
+    project_package_ref: str = ""
+    admission_reason: str = ""
     execution_mode: Literal["spatial", "non_spatial"]
     expected_output_kind: Literal["parcel", "polygon", "point", "line", "action"]
     category: Literal[
@@ -52,6 +56,9 @@ class PlanningIntervention(BaseModel):
     constraints: list[str] = Field(default_factory=list)
     claim_refs: list[str] = Field(default_factory=list)
     evidence_refs: list[str] = Field(default_factory=list)
+    source_fact_refs: list[str] = Field(default_factory=list)
+    source_refs: list[str] = Field(default_factory=list)
+    objective_refs: list[str] = Field(default_factory=list)
     # A formal target classification must be selected in its own namespace.
     # Human-readable ``name``/``functions`` remain semantic context only.
     classification_decision: ClassificationDecision | None = None
@@ -80,28 +87,6 @@ class PlanningIntervention(BaseModel):
     axis_parameters: AxisPlanningParameters | None = None
     polygon_parameters: PolygonPlanningParameters | None = None
     site_area_parameters: SiteAreaPlanningParameters | None = None
-
-    @model_validator(mode="before")
-    @classmethod
-    def migrate_legacy_project_category(cls, value: object) -> object:
-        """Normalize the pre-v2 ``project`` category to ``site_area``."""
-        if isinstance(value, dict) and value.get("category") == "project":
-            payload = dict(value)
-            payload["category"] = "site_area"
-            value = payload
-        if isinstance(value, dict):
-            payload = dict(value)
-            if (
-                payload.get("category") == "road"
-                and not payload.get("asset_kind")
-            ):
-                # Legacy L3 callers omitted the typed road block.  Preserve
-                # their meaning while making the migrated object auditable;
-                # new producers should still emit both fields directly.
-                payload["asset_kind"] = "road"
-                payload.setdefault("road_parameters", {})
-            return payload
-        return value
 
     @model_validator(mode="after")
     def validate_target_contract(self) -> "PlanningIntervention":
@@ -164,10 +149,14 @@ class ProgramIssue(BaseModel):
 
     stage: str = "l3"
     dimension_key: str = ""
+    claim_id: str = ""
+    claim_ids: list[str] = Field(default_factory=list)
+    dimension_keys: list[str] = Field(default_factory=list)
     severity: str = "warning"  # "info" | "warning" | "error"
     code: str = ""
     message: str = ""
     detail: str = ""
+    reason: str = ""
 
 
 class L3ProgramFragment(BaseModel):
@@ -204,6 +193,7 @@ class PlanningProgram(ContractMeta):
     provenance: "Provenance | None" = None
     l1_snapshot_ref: str = ""
     l2_strategy_ref: str = ""
+    evidence_requirements: list[EvidenceRequirement] = Field(default_factory=list)
 
 __all__ = [
     "RoadPlanningParameters",

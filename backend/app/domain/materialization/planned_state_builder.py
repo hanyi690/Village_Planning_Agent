@@ -149,8 +149,17 @@ def _change_to_planned_parcel(change: ParcelChange) -> PlannedParcel:
         planning_land_use=code,
         zone_type=code,
         area_ha=change.new_area_ha,
-        source_area_ha=float(getattr(change, "source_area_ha", 0.0) or 0.0),
-        coverage_ratio=getattr(change, "coverage_ratio", None),
+        source_area_ha=float(change.source_area_ha or 0.0),
+        coverage_ratio=change.coverage_ratio,
+        availability_status=str(change.availability_status or "unknown"),
+        eligible_area_ha=change.eligible_area_ha,
+        excluded_area_ha=change.excluded_area_ha,
+        candidate_id=str(change.candidate_id or ""),
+        feature_id=str(change.feature_id or ""),
+        target_ref=str(change.target_id or change.project_ref or ""),
+        scenario_id=str(change.scenario_id or ""),
+        adjacent_parcel_bsms=list(change.adjacent_parcel_bsms or []),
+        adjacency_evidence_refs=list(change.adjacency_evidence_refs or []),
         geometry=change.after_geometry_wkt,
         derived_from_bsms=list(change.derived_from_bsms),
         source_bsms=list(change.derived_from_bsms),
@@ -222,6 +231,17 @@ def _facility_target_to_planned_facility(target: Any, geometry: str, target_id: 
         source_refs=[str(item) for item in properties.get("source_refs") or []],
         source_bsms=[str(item) for item in properties.get("source_bsms") or []],
         geometry_ref=str(properties.get("geometry_ref") or ""),
+        availability_status=str(
+            properties.get("availability_status") or "unknown"
+        ),
+        eligible_area_ha=properties.get("eligible_area_ha"),
+        excluded_area_ha=properties.get("excluded_area_ha"),
+        adjacent_parcel_bsms=[
+            str(item) for item in properties.get("adjacent_parcel_bsms") or []
+        ],
+        adjacency_evidence_refs=[
+            str(item) for item in properties.get("adjacency_evidence_refs") or []
+        ],
         **_lineage_kwargs(properties),
     )
 
@@ -258,6 +278,12 @@ def changeset_to_planned_state(
             target = target_by_id.get(target_id)
             role = str(getattr(target, "materialization_role", "") or role or "")
         if not target_id or not geometry:
+            continue
+        if properties.get("parcel_change_materialized"):
+            # The authoritative parcel geometry is already represented by the
+            # ParcelChangeSet.  Keep this feature in the worker layer for
+            # rendering/lineage, but do not duplicate it as a candidate parcel
+            # in PlannedState.
             continue
         if not candidate_id and role not in {
             "functional_overlay",
@@ -325,6 +351,21 @@ def changeset_to_planned_state(
             subgeometry_diagnostics=list(
                 properties.get("subgeometry_diagnostics") or []
             ),
+            availability_status=str(
+                properties.get("availability_status") or "unknown"
+            ),
+            eligible_area_ha=properties.get("eligible_area_ha"),
+            excluded_area_ha=properties.get("excluded_area_ha"),
+            adjacent_parcel_bsms=[
+                str(value)
+                for value in properties.get("adjacent_parcel_bsms") or []
+                if str(value).strip()
+            ],
+            adjacency_evidence_refs=[
+                str(value)
+                for value in properties.get("adjacency_evidence_refs") or []
+                if str(value).strip()
+            ],
             geometry=geometry,
             derived_from_bsms=[
                 str(value)

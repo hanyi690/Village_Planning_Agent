@@ -11,6 +11,7 @@ and context the output is fully deterministic.
 from __future__ import annotations
 
 from dataclasses import replace
+from types import SimpleNamespace
 from typing import Any, Dict, List, Optional
 
 from shapely import wkt as shapely_wkt
@@ -29,6 +30,7 @@ from app.contracts.spatial.candidate_geometry import CandidateGeometry
 from app.contracts.spatial.grounded_problem import (
     GroundedPlanningProblem,
     GroundedTargetDomain,
+    GroundingFinding,
 )
 from app.domain.ground.constraint_factors import (
     attach_evidence_packet_relations,
@@ -39,6 +41,7 @@ from app.domain.ground.candidate_domain_builder import (
     build_candidate_domains,
     is_grounding_candidate,
 )
+from app.domain.common.solver_kind import collect_network_refs, infer_problem_solver_kind
 from app.contracts.artifacts.provenance import Provenance
 from app.contracts.spatial.spatial_reference_contracts import (
     GeometryRef,
@@ -607,7 +610,7 @@ def build_candidate_sites(
         resolved.reference_geometry_wkt
         or len(source_parcels) <= 1
         or str(getattr(resolved, "spatial_domain_kind", "") or "")
-        in {"parcel_extent", "parcel_set", "bbox", "corridor", "village_scope"}
+        in {"bbox", "corridor", "village_scope"}
     ):
         return [
             build_candidate_site(
@@ -1055,7 +1058,17 @@ def ground_aggregate(
         ),
     )
 
-    factors = compile_constraint_factors(intent_graph)
+    network_snapshots = getattr(context, "networks", None) or {}
+    current_network = network_snapshots.get("network:road:current")
+    factors = compile_constraint_factors(
+        intent_graph,
+        default_network_ref=(
+            "network:road:current" if current_network is not None else ""
+        ),
+        default_endpoint_tolerance_m=float(
+            getattr(current_network, "snap_tolerance_m", 5.0) or 5.0
+        ),
+    )
     factors = attach_evidence_packet_relations(factors, evidence_packets)
     problem = _build_grounded_problem(
         candidates,
@@ -1064,6 +1077,9 @@ def ground_aggregate(
         evaluate_relation_satisfaction(factors, candidates),
         intent_graph,
     )
+    from app.evidence.retrieval.requirements import requirements_from_ground
+
+    problem.evidence_requirements = list(requirements_from_ground(problem))
     relation_satisfaction = problem.relation_satisfaction
     return GroundingResult(
         candidates=candidates,
@@ -1073,6 +1089,7 @@ def ground_aggregate(
         relation_satisfaction=relation_satisfaction,
         problem=problem,
         provenance=provenance,
+        evidence_requirements=list(problem.evidence_requirements),
     )
 
 
@@ -1144,18 +1161,73 @@ def _build_grounded_problem(
         for item in relation_satisfaction
         if item.status in {"deferred", "violated", "unknown"}
     )
+    grounding_findings = [
+        GroundingFinding(
+            code=str(issue.code or "grounding_unresolved"),
+            severity=(
+                "error"
+                if str(issue.severity or "warning") == "error"
+                else "warning"
+            ),
+            message=str(issue.message or issue.detail or issue.code or "grounding unresolved"),
+            target_id=str(issue.related_artifact_id or ""),
+        )
+        for issue in unresolved
+    ]
+    candidate_domains = build_candidate_domains(candidates)
+    candidate_geometries = [
+        candidate.geometry
+        for candidate in candidates
+        if candidate.geometry is not None
+    ]
+    upstream_solver_kind = str(
+        getattr(intent_graph, "solver_kind", "auto") or "auto"
+    )
+    shared_resource_refs = list(
+        getattr(intent_graph, "shared_resource_refs", None) or []
+    )
+    inferred_kind, solver_kind_reasons = infer_problem_solver_kind(SimpleNamespace(
+        solver_kind=upstream_solver_kind,
+        solver_kind_reasons=list(
+            getattr(intent_graph, "solver_kind_reasons", None) or []
+        ),
+        constraint_factors=factors,
+        shared_resource_refs=shared_resource_refs,
+        candidate_geometries=candidate_geometries,
+        target_domains=list(domains.values()),
+        candidate_domains=candidate_domains,
+    ))
+    solver_kind = (
+        inferred_kind
+        if inferred_kind in {
+            "coverage",
+            "parcel_assignment",
+            "network_path",
+            "topology_layout",
+        }
+        else "auto"
+    )
+    network_refs = collect_network_refs(SimpleNamespace(
+        network_refs=[],
+        constraint_factors=factors,
+    ))
+    diagnostics.extend(
+        f"solver_kind:{solver_kind}:{reason}"
+        for reason in solver_kind_reasons
+    )
     return GroundedPlanningProblem(
+        solver_kind=solver_kind,
+        solver_kind_reasons=solver_kind_reasons,
         target_domains=list(domains.values()),
         constraint_factors=factors,
         relation_satisfaction=relation_satisfaction,
         diagnostics=diagnostics,
         intent_graph_fingerprint=fingerprint,
-        candidate_domains=build_candidate_domains(candidates),
-        candidate_geometries=[
-            candidate.geometry
-            for candidate in candidates
-            if candidate.geometry is not None
-        ],
+        candidate_domains=candidate_domains,
+        candidate_geometries=candidate_geometries,
+        network_refs=network_refs,
+        shared_resource_refs=shared_resource_refs,
+        unresolved=grounding_findings,
     )
 
 

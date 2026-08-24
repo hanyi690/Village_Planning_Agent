@@ -15,10 +15,10 @@
 | `objectives/` | L2 规划思路：worker、聚合、gate | `aggregate.l2_aggregate` → `L2Strategy`/`StrategyConflict` |
 | `program/` | L3 详细规划：claim 生成/组装/语义修复/分类 | `worker.analyze_l3_dimension`、`assembler.assemble_planning_program`、`aggregate.l3_aggregate`、`classification_generator`、`semantic_repair`、`flash_unit_repair`、`unit_normalization`；`target_projection/` 子目录：`compile.py` 组装 SpatialReferenceSpec |
 | `ground/` | 接地聚合：把空间引用绑定到证据与候选 | `aggregate.ground_aggregate`、`anchors.py`（L1 锚点接地） |
-| `allocation/` | SELECT：需求→适宜性→选址决策 | `demand`（在 `demand/`）、`suitability`（在 `suitability/`）、`select_service`/`select_gate`/`service.build_portfolio_decision`、`global_zone_select`/`global_site_select` → `SiteSelectionDecision`/`PortfolioDecision` |
+| `allocation/` | SELECT：需求→适宜性→ScenarioSet/批准输入 | `demand`（在 `demand/`）、`suitability`（在 `suitability/`）、`scenario_optimizer`/`select_gate`/`approval_input` |
 | `suitability/` | 候选适宜性评估 | `service.build_suitability_surface`、`terrain`/`spatial_factors` → `SuitabilitySurface` |
 | `demand/` | 需求组合 | `service.derive_demand_portfolio` → `DemandPortfolio` |
-| `materialization/` | EXECUTE：执行计划物化为地块变更 | `execute_agent.build_execute_agent_graph`（worker 子图）、`plan_builder`、`merge`、`planned_state_builder`、`zone_worker`/`road_worker`/`facility_worker`/`project_worker`/`axis_worker`、`nodes/` 子图节点、`zoning/`（自定义分区变更）→ `ParcelChangeSet`/`PlannedState` |
+| `materialization/` | EXECUTE：执行计划物化为地块变更 | `execute_agent.build_execute_agent_graph`（worker 子图）、`approved_plan_builder`、`execution_boundaries`、`merge`、`planned_state_builder`、各类 materializer worker → `ParcelChangeSet`/`PlannedState` |
 | `validation/` | VALIDATE/RECONCILE：校验、对账、修复指令 | `validate.validate_aggregate`、`validate_checks`、`reconcile`、`reconcile_gate`、`repair_directives`、`repair_impact`、`adjustment_executor`、`report_service` → `ValidationReport`/`RepairDirectiveCompilation`/`ReconciliationReport` |
 | `delivery/` | DELIVER：交付聚合、快照构建、清单 | `aggregate.deliver_aggregate`、`delivery_snapshot_builder.build_spatial_delivery_products`、`delivery_validator`/`delivery_renderer`/`delivery_exporter`/`render_layers`/`deferral_ledger`/`checks`/`gate` → `DeliveryManifest`/`DeliverySpatialSnapshot`/`RenderLayers` |
 | `common/` | 跨领域辅助 | `context_guard`、`execution_evidence`、`gate_progress` |

@@ -26,15 +26,12 @@ def _action_worker(state: ExecuteAgentState) -> WorkerResult:
             state,
             "non_spatial_action",
             str(_task_value(task, "target_id", "")),
+            task_id=str(_task_value(task, "task_id", "") or ""),
+            candidate_id=str(_task_value(task, "candidate_id", "") or ""),
             status="succeeded",
         )
         if task_result is not None:
             task_results.append(task_result)
     return WorkerResult(worker_type="action", action_results=actions, task_results=task_results)
 
-
-async def _action_worker_node(state: ExecuteAgentState) -> dict:
-    return {"worker_results": [_action_worker(state)]}
-
-
-__all__ = ["_action_worker", "_action_worker_node"]
+__all__ = ["_action_worker"]

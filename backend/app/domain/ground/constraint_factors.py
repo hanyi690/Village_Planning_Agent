@@ -11,6 +11,7 @@ from app.contracts.planning.constraint_factor import (
     RelationSatisfaction,
 )
 from app.contracts.planning.relation_parameters import RelationParameters
+from app.contracts.planning.relation_parameters import ConnectParameters
 
 
 _RELATION_ALIASES = {
@@ -34,7 +35,12 @@ _PARAMETER_REQUIRED = {
 }
 
 
-def compile_constraint_factors(intent_graph: Any) -> list[ConstraintFactor]:
+def compile_constraint_factors(
+    intent_graph: Any,
+    *,
+    default_network_ref: str = "",
+    default_endpoint_tolerance_m: float = 5.0,
+) -> list[ConstraintFactor]:
     if intent_graph is None:
         return []
     relations = getattr(intent_graph, "relations", None)
@@ -55,6 +61,17 @@ def compile_constraint_factors(intent_graph: Any) -> list[ConstraintFactor]:
         if not relation_id or not subject_ref or not kind:
             continue
         raw_parameters = get("parameters")
+        if (
+            raw_parameters is None
+            and evaluator_key in {"connect", "connect_network"}
+            and str(get("source", "") or "") == "typed_road_endpoint"
+            and default_network_ref
+        ):
+            raw_parameters = ConnectParameters(
+                network_kind="road",
+                endpoint_tolerance_m=default_endpoint_tolerance_m,
+                network_ref=default_network_ref,
+            )
         factor_status = "pending" if evaluator_key == "precedes" else "unknown"
         if evaluator_key in _PARAMETER_REQUIRED and raw_parameters is None:
             factor_status = "deferred"

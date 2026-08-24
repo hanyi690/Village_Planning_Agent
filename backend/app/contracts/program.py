@@ -8,7 +8,7 @@ authoritative program contract.
 
 from __future__ import annotations
 
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field, model_validator
 
@@ -35,6 +35,91 @@ ClaimCategory = Literal[
     "action",
 ]
 ClaimOutputKind = Literal["parcel", "polygon", "point", "line", "action"]
+PlanningRole = Literal[
+    "evidence_statement",
+    "indicator",
+    "constraint",
+    "objective",
+    "non_spatial_action",
+    "project_package",
+    "spatial_intervention",
+]
+
+GroundingRequirement = Literal[
+    "place_binding",
+    "candidate_geometry",
+    "demand_points",
+    "parcel_membership",
+    "network_snapshot",
+    "topology",
+]
+
+
+class PlanningRelationRequirement(BaseModel):
+    """Semantic relation request passed from L3 to TARGET/GROUND.
+
+    Parameters are domain values such as a distance, capacity or network
+    reference.  Geometry, coordinates and BSM identities are intentionally
+    rejected here; they belong to the spatial evidence and grounding layers.
+    """
+
+    relation_template: Literal[
+        "within_allowed_area",
+        "avoid_constraint",
+        "near",
+        "serve",
+        "provide_access",
+        "connect_network",
+        "follow_alignment",
+        "preserve_existing",
+        "upgrade_existing",
+        "part_of",
+        "co_locate",
+        "mutually_exclusive",
+        "precedes",
+    ]
+    relation_id: str = ""
+    subject_ref: str = ""
+    object_ref: str = ""
+    object_ref_kind: Literal["target", "entity", "place_hint", "constraint"] = "entity"
+    criticality: Literal["hard", "soft", "informational"] = "soft"
+    geometry_scope: Literal["subject", "object", "pair", "network", "global"] = "pair"
+    parameters: dict[str, Any] = Field(default_factory=dict)
+    evidence_refs: list[str] = Field(default_factory=list)
+    source_claim_refs: list[str] = Field(default_factory=list)
+    weight: float = Field(default=1.0, ge=0)
+
+    @model_validator(mode="after")
+    def reject_spatial_payload(self) -> "PlanningRelationRequirement":
+        forbidden = {
+            "geometry", "coordinates", "coordinate", "wkt", "geojson",
+            "bsms", "bsm", "candidate_geometry", "parcel_geometry",
+        }
+
+        def walk(value: Any) -> bool:
+            if isinstance(value, dict):
+                if any(str(key).lower() in forbidden for key in value):
+                    return True
+                return any(walk(item) for item in value.values())
+            if isinstance(value, list):
+                return any(walk(item) for item in value)
+            return False
+
+        if walk(self.parameters):
+            raise ValueError("planning relation parameters cannot contain geometry or BSM payloads")
+        return self
+
+
+class PlanningSpatialRequirements(BaseModel):
+    """Typed semantic inputs that GROUND must still resolve against evidence."""
+
+    relations: list[PlanningRelationRequirement] = Field(default_factory=list)
+    shared_resource_refs: list[str] = Field(default_factory=list)
+    parcel_membership_refs: list[str] = Field(default_factory=list)
+    competing_parcel_refs: list[str] = Field(default_factory=list)
+    network_refs: list[str] = Field(default_factory=list)
+    required_input_refs: list[str] = Field(default_factory=list)
+    grounding_requirements: list[GroundingRequirement] = Field(default_factory=list)
 
 
 class PlanningClaim(BaseModel):
@@ -43,6 +128,8 @@ class PlanningClaim(BaseModel):
     claim_id: str
     dimension_key: str = ""
     statement: str
+    planning_role: PlanningRole = "evidence_statement"
+    project_package_ref: str = ""
     affected_population: float | None = None
     affected_parcel_refs: list[str] = Field(default_factory=list)
     suggested_category: ClaimCategory = "action"
@@ -67,6 +154,7 @@ class PlanningClaim(BaseModel):
     evidence_refs: list[str] = Field(default_factory=list)
     source_fact_refs: list[str] = Field(default_factory=list)
     source_refs: list[str] = Field(default_factory=list)
+    spatial_requirements: PlanningSpatialRequirements | None = None
     confidence: float | None = None
     uncertainty: str = ""
 
@@ -153,4 +241,8 @@ __all__ = [
     "PlanningClaimSet",
     "ClaimCategory",
     "ClaimOutputKind",
+    "PlanningRole",
+    "GroundingRequirement",
+    "PlanningRelationRequirement",
+    "PlanningSpatialRequirements",
 ]

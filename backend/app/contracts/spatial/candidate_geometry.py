@@ -18,6 +18,12 @@ GeometryRole = Literal[
     "scope_geometry",
     "unknown",
 ]
+AvailabilityStatus = Literal[
+    "fully_available",
+    "partially_available",
+    "fully_unavailable",
+    "unknown",
+]
 CandidateMembership = Literal["alternative", "required_member"]
 GeometryGranularity = Literal[
     "exact_feature", "parcel_extent", "parcel_set", "settlement", "village_scope", "bbox", "corridor", "none"
@@ -50,6 +56,9 @@ class CandidateGeometry(BaseModel):
     # and executability.
     materialization_role: str = ""
     wkt: str = ""
+    # Parent usable extent before a target-sized footprint is carved out.
+    # It is distinct from ``wkt`` when a large parcel is subdivided.
+    eligible_geometry_wkt: str = ""
     crs: str = "EPSG:4326"
     granularity: GeometryGranularity = "none"
     spatial_domain_kind: SpatialDomainKind = "unknown"
@@ -76,6 +85,14 @@ class CandidateGeometry(BaseModel):
     subgeometry_diagnostics: list[str] = Field(default_factory=list)
     generation_operation: str = "grounded_candidate"
     hard_constraint_status: Literal["pending", "passed", "failed", "deferred", "unknown"] = "pending"
+    # Availability is distinct from hard-constraint status.  A source parcel
+    # may contain both prohibited and usable subareas, so a failed whole-parcel
+    # probe must not erase a valid clipped footprint.
+    availability_status: AvailabilityStatus = "unknown"
+    eligible_area_ha: float | None = Field(default=None, ge=0)
+    excluded_area_ha: float | None = Field(default=None, ge=0)
+    adjacent_parcel_bsms: list[str] = Field(default_factory=list)
+    adjacency_evidence_refs: list[str] = Field(default_factory=list)
     suitability_components: dict[str, float] = Field(default_factory=dict)
 
     @model_validator(mode="after")
@@ -91,6 +108,8 @@ class CandidateGeometry(BaseModel):
         self.relation_refs = sorted({item for item in self.relation_refs if item})
         self.l1_fact_refs = sorted({item for item in self.l1_fact_refs if item})
         self.subgeometry_diagnostics = sorted({item for item in self.subgeometry_diagnostics if item})
+        self.adjacent_parcel_bsms = sorted({item for item in self.adjacent_parcel_bsms if item})
+        self.adjacency_evidence_refs = sorted({item for item in self.adjacency_evidence_refs if item})
         if not self.candidate_id:
             payload = {
                 "target_id": self.target_id,
@@ -99,6 +118,7 @@ class CandidateGeometry(BaseModel):
                 "candidate_membership": self.candidate_membership,
                 "materialization_role": self.materialization_role,
                 "wkt": self.wkt,
+                "eligible_geometry_wkt": self.eligible_geometry_wkt,
                 "crs": self.crs,
                 "granularity": self.granularity,
                 "spatial_domain_kind": self.spatial_domain_kind,
@@ -121,20 +141,73 @@ class CandidateGeometry(BaseModel):
                 "subgeometry_diagnostics": self.subgeometry_diagnostics,
                 "evidence_refs": self.evidence_refs,
                 "generation_operation": self.generation_operation,
+                "availability_status": self.availability_status,
+                "eligible_area_ha": self.eligible_area_ha,
+                "excluded_area_ha": self.excluded_area_ha,
+                "adjacent_parcel_bsms": self.adjacent_parcel_bsms,
+                "adjacency_evidence_refs": self.adjacency_evidence_refs,
             }
             raw = json.dumps(payload, sort_keys=True, ensure_ascii=False).encode("utf-8")
             self.candidate_id = f"candidate:{hashlib.sha256(raw).hexdigest()[:24]}"
         return self
 
+    @model_validator(mode="after")
+    def validate_availability_semantics(self) -> "CandidateGeometry":
+        """Reject contradictory whole-parcel/partial-availability claims."""
+        tolerance = 1e-9
+        source = float(self.source_area_ha or 0.0)
+        eligible = self.eligible_area_ha
+        excluded = self.excluded_area_ha
+        if source > tolerance:
+            if eligible is not None and float(eligible) > source + tolerance:
+                raise ValueError("eligible_area_ha cannot exceed source_area_ha")
+            if excluded is not None and float(excluded) > source + tolerance:
+                raise ValueError("excluded_area_ha cannot exceed source_area_ha")
+            if self.planning_area_ha is not None and float(self.planning_area_ha) > source + tolerance:
+                raise ValueError("planning_area_ha cannot exceed source_area_ha")
+        if (
+            eligible is not None
+            and self.planning_area_ha is not None
+            and float(self.planning_area_ha) > float(eligible) + tolerance
+        ):
+            raise ValueError("planning_area_ha cannot exceed eligible_area_ha")
+        if self.availability_status == "fully_unavailable":
+            if eligible is not None and float(eligible) > tolerance:
+                raise ValueError("fully_unavailable candidate cannot have eligible area")
+            if self.planning_area_ha is not None and float(self.planning_area_ha) > tolerance:
+                raise ValueError("fully_unavailable candidate cannot have planning area")
+        elif self.availability_status == "partially_available":
+            if eligible is not None and float(eligible) <= tolerance:
+                raise ValueError("partially_available candidate requires positive eligible area")
+        elif self.availability_status == "fully_available":
+            if excluded is not None and float(excluded) > tolerance:
+                raise ValueError("fully_available candidate cannot have excluded area")
+        return self
+
     @property
     def is_executable(self) -> bool:
-        return self.role == "execution_geometry" and bool(self.wkt)
+        return (
+            self.role == "execution_geometry"
+            and bool(self.wkt)
+            and self.availability_status != "fully_unavailable"
+            # A parcel candidate without an availability proof must not be
+            # widened back to its complete cadastral extent. Exact feature
+            # geometries may remain executable when availability is unknown;
+            # parcel extents/sets require explicit clipping or availability.
+            and not (
+                self.availability_status == "unknown"
+                and self.kind == "polygon"
+                and self.spatial_domain_kind in {"parcel_extent", "parcel_set"}
+            )
+            and not self.uncertainty_reason.startswith("duplicate_bsm_geometry_identity")
+        )
 
 
 __all__ = [
     "GeometryKind",
     "GeometryRole",
     "CandidateMembership",
+    "AvailabilityStatus",
     "GeometryGranularity",
     "SpatialDomainKind",
     "CandidateGeometry",

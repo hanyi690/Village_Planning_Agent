@@ -3,7 +3,7 @@
 Pure function: L1Snapshot -> GateDecision. No I/O.
 Wave B delivers the evaluator; Wave M wires it into the main graph.
 
-Decision matrix (docs/design/04_PLANNING_PIPELINE.md §8 + 07_VALIDATION_FEEDBACK.md):
+Decision matrix (docs/design/01_CONTRACTS_AND_INVARIANTS.md gate semantics + docs/design/02_EVIDENCE_AND_GROUNDING.md):
   PASS    -> L2 STRATEGIZE
   EXPLORE -> missing evidence / missing sources
   L1      -> fact contradictions (rework L1)

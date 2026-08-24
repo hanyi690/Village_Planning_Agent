@@ -1,4 +1,4 @@
-"""Road worker node: planned road network generation."""
+"""Road materializer: write approved route geometry only."""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ from app.domain.materialization.road_parcel_materializer import (
     _target_matches,
     materialize_road_parcel_changes,
 )
-from app.domain.materialization.nodes.worker_common import _attach_feature_lineage, _execution_intent_from_plan, _intent_list, _scenario_features_for_layer, _task_enabled, _task_execution_result
+from app.domain.materialization.nodes.worker_common import _attach_feature_lineage, _execution_intent_from_plan, _intent_list, _plan_tasks, _scenario_features_for_layer, _task_enabled, _task_execution_result, _task_value
 from app.contracts.workflow.execution_plan_contracts import WorkerResult
 from app.infrastructure.logging import get_logger
 
@@ -246,10 +246,10 @@ def _normalize_road_unresolved_findings(
 def _road_worker(state: ExecuteAgentState) -> WorkerResult:
     """Road worker: planned road network generation.
 
-    The injected ``RoadPlannerPort`` and the Stage 0-6 road generator are the
-    two explicit planning providers. If neither produces geometry for a
-    declared road target, the worker records a target-bound unresolved item;
-    there is no local name-only or parcel-expansion path.
+    EXECUTE only materializes an accepted, target-bound route.  Route search
+    and candidate filtering belong to the pre-approval planning provider.  A
+    task without an approved execution geometry therefore fails closed before
+    any planner or generator can be consulted.
     """
     if not _task_enabled(state, "road"):
         return WorkerResult(worker_type="road")
@@ -266,6 +266,11 @@ def _road_worker(state: ExecuteAgentState) -> WorkerResult:
         )
 
     target_ids = {str(road.target_id) for road in road_targets}
+    road_tasks_by_target: dict[str, list[object]] = {}
+    for task in _plan_tasks(state, {"road_construction"}):
+        road_tasks_by_target.setdefault(
+            str(_task_value(task, "target_id", "") or ""), []
+        ).append(task)
     provenance_keys = (
         "target_id", "target_ids", "project_id", "source_project_id",
         "source_id", "source_intent_ids", "grouped_source_ids",
@@ -307,8 +312,13 @@ def _road_worker(state: ExecuteAgentState) -> WorkerResult:
         unresolved_by_target = item_target_ids(list(unresolved_items or []))
         produced = layer_target_ids(layers)
         results = []
+        occurrence_by_target: dict[str, int] = {}
         for road in road_targets:
             target_id = str(road.target_id)
+            occurrence = occurrence_by_target.get(target_id, 0)
+            occurrence_by_target[target_id] = occurrence + 1
+            matching_tasks = road_tasks_by_target.get(target_id, [])
+            matching_task = matching_tasks[min(occurrence, len(matching_tasks) - 1)] if matching_tasks else None
             diagnostics = list(unresolved_by_target[target_id])
             succeeded = target_id in produced and not diagnostics and not error
             if not succeeded and not diagnostics:
@@ -324,6 +334,8 @@ def _road_worker(state: ExecuteAgentState) -> WorkerResult:
                 state,
                 "road_construction",
                 target_id,
+                task_id=str(_task_value(matching_task, "task_id", "") or "") if matching_task else "",
+                candidate_id=str(_task_value(matching_task, "candidate_id", "") or "") if matching_task else "",
                 status="succeeded" if succeeded else "failed",
                 diagnostics=diagnostics,
                 errors=[error] if error else [],
@@ -370,7 +382,8 @@ def _road_worker(state: ExecuteAgentState) -> WorkerResult:
             parcel_diagnostics.append({
                 "code": "road_landuse_source_unavailable",
                 "target_id": "",
-                "message": str(exc),
+                "message": "Current land-use source could not be loaded.",
+                "exception_type": type(exc).__name__,
             })
         if not landuse_payload.get("features"):
             parcel_diagnostics.append({
@@ -435,114 +448,82 @@ def _road_worker(state: ExecuteAgentState) -> WorkerResult:
         result.parcel_changes = list(result.parcel_changes or []) + changes
         return result
 
-    ports = getattr(state, "ports", None)
-    planner = getattr(ports, "road_planner", None) if ports is not None else None
-    if planner is not None:
+    # The only accepted route source is the frozen candidate geometry carried
+    # by the approval-bound task.  ``candidate_geometry_by_id`` is populated
+    # from the same grounded snapshot that produced the approval.
+    candidate_geometry_by_id = getattr(state, "candidate_geometry_by_id", {}) or {}
+    accepted_layers = []
+    for task in list(getattr(getattr(state, "execution_plan", None), "worker_tasks", None) or []):
+        if str(getattr(task, "target_type", "") or "") != "road":
+            continue
+        candidate_id = str(getattr(task, "candidate_id", "") or "")
+        candidate = candidate_geometry_by_id.get(candidate_id)
+        geometry_wkt = str(getattr(candidate, "wkt", "") or "")
+        if isinstance(candidate, dict):
+            geometry_wkt = str(candidate.get("wkt") or candidate.get("geometry_wkt") or "")
+        if not candidate_id or not geometry_wkt:
+            continue
+        role = str(
+            candidate.get("role", "") if isinstance(candidate, dict)
+            else getattr(candidate, "role", "")
+        )
+        if role != "execution_geometry":
+            continue
         try:
-            if planner.is_available():
-                plan_result = planner.plan(state)
-                layers = list(getattr(plan_result, "layers", None) or [])
-                unresolved_items = _normalize_road_unresolved_findings(
-                    road_targets,
-                    produced_target_ids=layer_target_ids(layers),
-                    unresolved_items=list(
-                        getattr(plan_result, "unresolved_items", None) or []
-                    ),
-                )
-                features = scenario_features(layers)
-                return with_lineage(with_parcel_changes(WorkerResult(
-                    worker_type="road",
-                    task_results=task_results(layers, unresolved_items),
-                    layers=layers,
-                    unresolved_items=unresolved_items,
-                    diagnostics=[{"code": "road_planner_port", "available": True}],
-                    scenario_features=features,
-                    task_id=_single_plan_task_id(state),
-                ), layers), features)
-        except Exception as e:
-            logger.warning("[EXECUTE:road] planner port failed: %s", e)
+            from shapely import wkt as shapely_wkt
+            from shapely.geometry import mapping as shapely_mapping
+            geometry = shapely_mapping(shapely_wkt.loads(geometry_wkt))
+        except Exception:
+            continue
+        target_id = str(getattr(task, "target_id", "") or "")
+        accepted_layers.append({
+            "layerType": "planned_road",
+            "layerName": "规划道路",
+            "data": {"type": "FeatureCollection", "features": [{
+                "type": "Feature",
+                "properties": {
+                    "target_id": target_id,
+                    "candidate_id": candidate_id,
+                    "scenario_id": str(getattr(task, "scenario_id", "") or ""),
+                    "source_feature_ids": list(getattr(task, "target_binding", {}).get("source_feature_ids", []) or []),
+                    "evidence_refs": list(getattr(task, "evidence_refs", []) or []),
+                    "roadbed_width_m": getattr(task, "target_binding", {}).get("roadbed_width_m", None),
+                    "pavement_width_m": getattr(task, "target_binding", {}).get("pavement_width_m", None),
+                    "materialization_role": "approved_route_materialize",
+                },
+                "geometry": geometry,
+            }]},
+        })
+    normalized_unresolved = _normalize_road_unresolved_findings(
+        road_targets,
+        produced_target_ids=layer_target_ids(accepted_layers),
+        unresolved_items=[] if accepted_layers else [{
+            "message": "Approved route geometry is missing; route planning is not available in EXECUTE.",
+        }],
+    )
+    if accepted_layers:
+        features = scenario_features(accepted_layers)
+        return with_lineage(with_parcel_changes(WorkerResult(
+            worker_type="road",
+            task_results=task_results(accepted_layers, normalized_unresolved),
+            layers=accepted_layers,
+            unresolved_items=normalized_unresolved,
+            diagnostics=[{"code": "approved_route_materializer", "candidate_count": len(accepted_layers)}],
+            scenario_features=features,
+            task_id=_single_plan_task_id(state),
+        ), accepted_layers), features)
 
-    generator_error = ""
-    generator_unresolved_items = []
-    try:
-        from app.domain.materialization.road_generator import (
-            execute_road_planning_from_agent_state,
-        )
-
-        result = execute_road_planning_from_agent_state(state)
-        layers = result.get("layout_layers") or []
-        generator_unresolved_items = list(result.get("unresolved_items") or [])
-        formal_road_layers = [
-            layer
-            for layer in layers
-            if (layer.get("layerType") or layer.get("layer_type"))
-            in {"planned_road", "planned_road_candidates"}
-            and ((layer.get("data") or {}).get("features") or layer.get("features"))
-        ]
-        if formal_road_layers:
-            for layer in formal_road_layers:
-                data = layer.get("data")
-                if isinstance(data, dict):
-                    data.pop("crs", None)
-                layer.pop("crs", None)
-            logger.info(
-                "[EXECUTE:road] stage generator: ran=%s targets=%d layers=%d",
-                result.get("ran"), result.get("road_target_count", 0), len(layers),
-            )
-            normalized_unresolved = _normalize_road_unresolved_findings(
-                road_targets,
-                produced_target_ids=layer_target_ids(formal_road_layers),
-                unresolved_items=generator_unresolved_items,
-            )
-            features = scenario_features(formal_road_layers)
-            return with_lineage(with_parcel_changes(WorkerResult(
-                worker_type="road",
-                task_results=task_results(
-                    formal_road_layers,
-                    normalized_unresolved,
-                ),
-                layers=list(layers),
-                unresolved_items=normalized_unresolved,
-                diagnostics=[{"code": "road_stage_generator", "ran": bool(result.get("ran"))}],
-                scenario_features=features,
-                task_id=_single_plan_task_id(state),
-            ), layers), features)
-        logger.info("[EXECUTE:road] stage generator skipped: %s", result.get("reason"))
-        if generator_unresolved_items:
-            normalized_unresolved = _normalize_road_unresolved_findings(
-                road_targets,
-                produced_target_ids=set(),
-                unresolved_items=generator_unresolved_items,
-            )
-            return WorkerResult(
-                worker_type="road",
-                task_results=task_results([], normalized_unresolved),
-                layers=list(layers),
-                unresolved_items=normalized_unresolved,
-                diagnostics=[{"code": "road_stage_generator", "ran": bool(result.get("ran"))}],
-            )
-    except Exception as e:
-        generator_error = str(e)
-        logger.warning(
-            "[EXECUTE:road] stage generator failed: %s", e
-        )
-
-    logger.warning("[EXECUTE:road] no usable road plan produced; road worker unresolved")
+    logger.warning("[EXECUTE:road] no approved route geometry; road worker unresolved")
     unresolved_items = _normalize_road_unresolved_findings(
         road_targets,
         produced_target_ids=set(),
         unresolved_items=[{
-            "message": "No road plan produced: stage generator unavailable or failed.",
+            "message": "No approved route geometry was provided by SELECT.",
         }],
-        error=generator_error,
     )
     return WorkerResult(
         worker_type="road",
-        task_results=task_results([], unresolved_items, generator_error),
+        task_results=task_results([], unresolved_items),
         unresolved_items=unresolved_items,
+        diagnostics=[{"code": "approved_route_missing", "materializer_only": True}],
     )
-
-
-async def _road_worker_node(state: ExecuteAgentState) -> dict:
-    result = _road_worker(state)
-    return {"worker_results": [result]}

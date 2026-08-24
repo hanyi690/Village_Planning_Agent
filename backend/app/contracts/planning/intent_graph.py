@@ -71,6 +71,9 @@ class PlanTargetNode(BaseModel):
     claim_refs: list[str] = Field(default_factory=list)
     required_capabilities: list[str] = Field(default_factory=list)
     uncompiled_constraints: list[str] = Field(default_factory=list)
+    # Explicit endpoint names from typed road/linear/axis parameters.  These
+    # are semantic refs only; GROUND must bind them to GIS features.
+    endpoint_refs: list[str] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def canonicalize_collections(self) -> "PlanTargetNode":
@@ -81,6 +84,7 @@ class PlanTargetNode(BaseModel):
             [item for item in self.uncompiled_constraints if item],
             key=lambda item: item,
         )
+        self.endpoint_refs = _sorted_strings(self.endpoint_refs)
         return self
 
 
@@ -127,6 +131,17 @@ class PlanningIntentGraph(ContractMeta):
     relations: list[PlanRelationIntent] = Field(default_factory=list)
     diagnostics: list[str] = Field(default_factory=list)
     source_program_ref: str = ""
+    solver_kind: Literal[
+        "auto",
+        "single_choice",
+        "coverage",
+        "parcel_assignment",
+        "network_path",
+        "topology_layout",
+        "bounded_multiobjective",
+    ] = "auto"
+    solver_kind_reasons: list[str] = Field(default_factory=list)
+    shared_resource_refs: list[str] = Field(default_factory=list)
     fingerprint: str = ""
 
     @model_validator(mode="after")
@@ -134,6 +149,8 @@ class PlanningIntentGraph(ContractMeta):
         self.nodes = sorted(self.nodes, key=lambda item: item.target_id)
         self.relations = sorted(self.relations, key=lambda item: item.relation_id)
         self.diagnostics = sorted([item for item in self.diagnostics if item], key=lambda item: item)
+        self.solver_kind_reasons = _sorted_strings(self.solver_kind_reasons)
+        self.shared_resource_refs = _sorted_strings(self.shared_resource_refs)
         if not self.fingerprint:
             payload = {
                 "schema_version": self.schema_version,
@@ -141,6 +158,9 @@ class PlanningIntentGraph(ContractMeta):
                 "relations": [_relation_payload(item) for item in self.relations],
                 "diagnostics": self.diagnostics,
                 "source_program_ref": self.source_program_ref,
+                "solver_kind": self.solver_kind,
+                "solver_kind_reasons": self.solver_kind_reasons,
+                "shared_resource_refs": self.shared_resource_refs,
             }
             raw = _canonical_json(payload).encode("utf-8")
             self.fingerprint = hashlib.sha256(raw).hexdigest()

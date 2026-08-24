@@ -8,6 +8,7 @@ from pydantic import BaseModel, Field
 from app.contracts.artifacts.contract_meta import ContractMeta
 from app.contracts.artifacts.provenance import Provenance
 from app.contracts.program import PlanningClaim
+from app.contracts.evidence.requirement_contracts import EvidenceRequirement
 from app.contracts.planning.intent_graph import PlanningIntentGraph
 from app.contracts.spatial.spatial_reference_contracts import SpatialReferenceSpec
 from app.contracts.workflow.parse_contracts import SpatialPlanningIntent
@@ -42,6 +43,7 @@ class IntentCompilationResult(ContractMeta):
     compilation_status: CompilationStatus = CompilationStatus.DRAFT
     provenance: Provenance | None = None
     intent_graph: PlanningIntentGraph | None = None
+    evidence_requirements: list[EvidenceRequirement] = Field(default_factory=list)
 
 
 __all__ = [

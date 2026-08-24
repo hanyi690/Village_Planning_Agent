@@ -325,7 +325,8 @@ def _feature_from_candidate(
             or getattr(getattr(context, "data_snapshot", None), "digest", "")
             or ""
         ),
-        relation_ids=sorted(set(str(item) for item in relation_ids if str(item))),
+        relation_ids=sorted(set(str(item) for item in relation_ids if str(item)))
+        or [f"reference:{reference}"],
     )
 
 

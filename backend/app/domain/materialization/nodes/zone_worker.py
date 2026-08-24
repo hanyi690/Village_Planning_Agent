@@ -4,27 +4,17 @@ from __future__ import annotations
 
 from typing import Any, Dict, List
 
-from app.contracts.spatial.global_zone_allocation_contracts import (
-    AuthoritativeZoneParcelAssignment,
-    GlobalZoneAllocationResult,
-    ZoneOverlayTargetRef,
-)
-from app.contracts.spatial.parcel_change_contracts import ParcelChange
 from app.contracts.workflow.execution_plan_contracts import WorkerResult
 from app.domain.materialization.execute_state import ExecuteAgentState
-from app.domain.materialization.nodes.common import _execution_error
 from app.domain.materialization.nodes.worker_common import (
     _execution_intent_from_plan,
     _intent_list,
     _resolve_parcel_by_bsm,
+    _candidate_availability_block,
     _scenario_features_for_layer,
     _task_enabled,
     _task_execution_result,
 )
-from app.infrastructure.logging import get_logger
-
-logger = get_logger(__name__)
-
 
 def _parcel_geometry(parcel: Any) -> dict:
     geometry = (
@@ -46,47 +36,6 @@ def _parcel_geometry(parcel: Any) -> dict:
         return dict(mapping(value))
     except Exception:
         return {}
-
-
-def _allocation_result_adapter(
-    state: ExecuteAgentState,
-    explicit: GlobalZoneAllocationResult | dict | None,
-) -> tuple[GlobalZoneAllocationResult | None, dict[str, Any] | None]:
-    """Read the typed artifact from an explicit dependency boundary.
-
-    ExecuteAgentState intentionally has no allocation-artifact slot yet.  The
-    canonical worker wrapper supplies ``explicit`` from deps; direct graph use
-    may inject it through ``state.ports.global_zone_allocation_result``.  No
-    execution-plan or parcel-pool fallback is allowed.
-    """
-    raw: Any = explicit
-    if raw is None:
-        raw = getattr(state, "global_zone_allocation_result", None)
-    if raw is None:
-        ports = getattr(state, "ports", None)
-        raw = (
-            getattr(ports, "global_zone_allocation_result", None)
-            if ports is not None
-            else None
-        )
-    if raw is None:
-        return None, {
-            "code": "global_zone_allocation_missing",
-            "message": (
-                "Zone materialization requires an explicit "
-                "GlobalZoneAllocationResult artifact."
-            ),
-        }
-    if isinstance(raw, GlobalZoneAllocationResult):
-        return raw, None
-    try:
-        return GlobalZoneAllocationResult.model_validate(raw), None
-    except (TypeError, ValueError) as exc:
-        return None, {
-            "code": "global_zone_allocation_invalid",
-            "message": "Global zone allocation artifact failed contract validation.",
-            "exception_type": type(exc).__name__,
-        }
 
 
 def _repair_skip_bsms(state: ExecuteAgentState, target_id: str) -> set[str]:
@@ -127,88 +76,6 @@ def _custom_zone_targets_from_plan(
         except (TypeError, ValueError):
             invalid_tasks.append(task)
     return targets, invalid_tasks
-
-
-def _authoritative_assignment_layer(
-    assignments: list[AuthoritativeZoneParcelAssignment],
-    parcel_by_bsm: Dict[str, Any],
-) -> dict | None:
-    features: list[dict[str, Any]] = []
-    for assignment in sorted(assignments, key=lambda item: (item.target_id, item.bsm)):
-        geometry = _parcel_geometry(parcel_by_bsm.get(assignment.bsm))
-        if not geometry:
-            continue
-        lineage = assignment.lineage
-        features.append({
-            "type": "Feature",
-            "properties": {
-                "bsm": assignment.bsm,
-                "target_id": assignment.target_id,
-                "zone_id": assignment.zone_id,
-                "project_ref": assignment.target_id,
-                "lineage_id": lineage.lineage_id,
-                "claim_refs": list(lineage.claim_refs),
-                "source_instruction_id": lineage.source_instruction_id,
-                "source_report_key": lineage.source_report_key,
-                "classification_system": assignment.classification_system,
-                "classification_code": assignment.classification_code,
-                "planning_land_use": assignment.land_use,
-                "geometry_ref": lineage.geometry_ref,
-                "materialization_role": assignment.materialization_role,
-                "area_ha": assignment.area_ha,
-                "candidate_provenance_refs": list(
-                    lineage.candidate_provenance_refs
-                ),
-                "parcel_provenance_refs": list(lineage.parcel_provenance_refs),
-            },
-            "geometry": geometry,
-        })
-    if not features:
-        return None
-    return {
-        "layerType": "authoritative_zone_assignment",
-        "layerName": "权威规划地类",
-        "data": {"type": "FeatureCollection", "features": features},
-    }
-
-
-def _overlay_layers(
-    overlays: list[ZoneOverlayTargetRef],
-    parcel_by_bsm: Dict[str, Any],
-) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-    features_by_role: dict[str, list[dict[str, Any]]] = {}
-    unresolved: list[dict[str, Any]] = []
-    for overlay in sorted(overlays, key=lambda item: item.target_id):
-        for bsm in sorted(set(overlay.candidate_bsms)):
-            geometry = _parcel_geometry(parcel_by_bsm.get(bsm))
-            if not geometry:
-                unresolved.append({
-                    "code": "overlay_parcel_missing",
-                    "target_id": overlay.target_id,
-                    "bsm": bsm,
-                    "materialization_role": overlay.materialization_role,
-                })
-                continue
-            features_by_role.setdefault(overlay.materialization_role, []).append({
-                "type": "Feature",
-                "properties": {
-                    "target_id": overlay.target_id,
-                    "project_ref": overlay.target_id,
-                    "bsm": bsm,
-                    "materialization_role": overlay.materialization_role,
-                    "provenance_refs": list(overlay.provenance_refs),
-                },
-                "geometry": geometry,
-            })
-    layers = [
-        {
-            "layerType": role,
-            "layerName": role,
-            "data": {"type": "FeatureCollection", "features": features},
-        }
-        for role, features in sorted(features_by_role.items())
-    ]
-    return layers, unresolved
 
 
 def _functional_overlay_layer(
@@ -269,44 +136,10 @@ def _functional_overlay_layer(
     return layer, unresolved, succeeded
 
 
-def _blocking_assignment_diagnostics(
-    allocation: GlobalZoneAllocationResult,
-    scheduled_target_ids: set[str],
-    parcel_by_bsm: Dict[str, Any],
-) -> list[dict[str, Any]]:
-    diagnostics: list[dict[str, Any]] = []
-    by_bsm: dict[str, list[str]] = {}
-    for assignment in allocation.assignments:
-        by_bsm.setdefault(assignment.bsm, []).append(assignment.target_id)
-        if assignment.target_id not in scheduled_target_ids:
-            diagnostics.append({
-                "code": "assignment_target_not_scheduled",
-                "target_id": assignment.target_id,
-                "bsm": assignment.bsm,
-            })
-        if assignment.bsm not in parcel_by_bsm:
-            diagnostics.append({
-                "code": "assignment_parcel_missing",
-                "target_id": assignment.target_id,
-                "bsm": assignment.bsm,
-            })
-    for bsm, target_ids in sorted(by_bsm.items()):
-        if len(target_ids) > 1:
-            diagnostics.append({
-                "code": "authoritative_assignment_duplicate_bsm",
-                "bsm": bsm,
-                "target_ids": sorted(target_ids),
-            })
-    return diagnostics
-
-
 def _zone_worker(
     state: ExecuteAgentState,
-    *,
-    allocation_result: GlobalZoneAllocationResult | dict | None = None,
 ) -> WorkerResult:
-    """Materialize only authoritative assignments; overlays remain non-exclusive."""
-    from app.domain.materialization.land_design_worker import design_zone_parcel
+    """Materialize only approval-bound task geometry and functional overlays."""
 
     if not _task_enabled(state, "layout"):
         return WorkerResult(worker_type="zone")
@@ -366,6 +199,16 @@ def _zone_worker(
                 "message": "Zone execution requires the selected candidate geometry artifact.",
             })
             continue
+        availability_block = _candidate_availability_block(candidate)
+        if availability_block:
+            blocked_targets.append(target)
+            blocked_unresolved.append({
+                "code": availability_block,
+                "target_id": str(target.target_id),
+                "candidate_id": candidate_id,
+                "message": "Zone execution candidate has no executable availability proof.",
+            })
+            continue
         candidate_role = str(getattr(candidate, "role", "") or "")
         candidate_wkt = str(getattr(candidate, "wkt", "") or "").strip()
         if candidate_role != "execution_geometry" or not candidate_wkt:
@@ -423,6 +266,17 @@ def _zone_worker(
                 "source_area_ha": getattr(candidate, "source_area_ha", None),
                 "planning_area_ha": getattr(candidate, "planning_area_ha", None),
                 "coverage_ratio": getattr(candidate, "coverage_ratio", None),
+                "availability_status": str(
+                    getattr(candidate, "availability_status", "unknown") or "unknown"
+                ),
+                "eligible_area_ha": getattr(candidate, "eligible_area_ha", None),
+                "excluded_area_ha": getattr(candidate, "excluded_area_ha", None),
+                "adjacent_parcel_bsms": list(
+                    getattr(candidate, "adjacent_parcel_bsms", None) or []
+                ),
+                "adjacency_evidence_refs": list(
+                    getattr(candidate, "adjacency_evidence_refs", None) or []
+                ),
                 "scenario_id": str(getattr(task, "scenario_id", "") or ""),
                 "source_refs": list(dict.fromkeys([
                     *list(getattr(candidate, "source_refs", None) or []),
@@ -481,121 +335,21 @@ def _zone_worker(
             "target_id": target_id,
         })
 
-    allocation, adapter_error = _allocation_result_adapter(state, allocation_result)
-    if zone_targets and adapter_error is not None:
-        unresolved.append(adapter_error)
-        for target in zone_targets:
-            task_statuses[str(target.target_id)] = "failed"
-        return _worker_result(
-            state,
-            zone_targets,
-            custom_targets,
-            invalid_custom_tasks,
-            [],
-            layers,
-            unresolved,
-            diagnostics,
-            task_statuses,
-            direct_targets,
-            blocked_targets,
-        )
-
-    zone_changes: list[ParcelChange] = []
-    if allocation is not None:
-        overlay_layers, overlay_unresolved = _overlay_layers(
-            list(allocation.overlay_targets),
-            parcel_by_bsm,
-        )
-        layers.extend(overlay_layers)
-        unresolved.extend(overlay_unresolved)
-        if allocation.status not in {"OPTIMAL", "PARTIAL"} or not allocation.feasible:
-            unresolved.append({
-                "code": "global_zone_allocation_not_materializable",
-                "status": allocation.status,
-            })
-            for target in zone_targets:
-                task_statuses[str(target.target_id)] = "failed"
-        else:
-            scheduled_ids = {str(target.target_id) for target in zone_targets}
-            blockers = _blocking_assignment_diagnostics(
-                allocation,
-                scheduled_ids,
-                parcel_by_bsm,
-            )
-            if blockers:
-                unresolved.extend(blockers)
-                for target_id in scheduled_ids:
-                    task_statuses[target_id] = "failed"
-            else:
-                repair_skip_by_target = {
-                    target_id: _repair_skip_bsms(state, target_id)
-                    for target_id in scheduled_ids
-                }
-                materialized_assignments: list[AuthoritativeZoneParcelAssignment] = []
-                skipped_repair_assignments: list[AuthoritativeZoneParcelAssignment] = []
-                for assignment in sorted(
-                    allocation.assignments,
-                    key=lambda item: (item.target_id, item.bsm),
-                ):
-                    if assignment.bsm in repair_skip_by_target.get(
-                        assignment.target_id, set()
-                    ):
-                        skipped_repair_assignments.append(assignment)
-                        continue
-                    materialized_assignments.append(assignment)
-                for assignment in skipped_repair_assignments:
-                    unresolved.append({
-                        "code": "assignment_skipped_by_repair",
-                        "target_id": assignment.target_id,
-                        "bsm": assignment.bsm,
-                        "lineage_id": assignment.lineage.lineage_id,
-                        "message": (
-                            "Assignment was not materialized because a VALIDATE "
-                            "repair directive marks this BSM as offending."
-                        ),
-                    })
-                assignment_target_ids = {
-                    assignment.target_id for assignment in materialized_assignments
-                }
-                missing_target_ids = sorted(scheduled_ids - assignment_target_ids)
-                for target_id in missing_target_ids:
-                    unresolved.append({
-                        "code": "authoritative_assignment_missing",
-                        "target_id": target_id,
-                    })
-                    task_statuses[target_id] = "failed"
-
-                pending_changes: list[ParcelChange] = []
-                failed_assignments: list[dict[str, Any]] = []
-                for assignment in sorted(
-                    materialized_assignments,
-                    key=lambda item: (item.target_id, item.bsm),
-                ):
-                    changes = design_zone_parcel(assignment, parcel_by_bsm)
-                    if len(changes) != 1:
-                        failed_assignments.append({
-                            "code": "assignment_materialization_failed",
-                            "target_id": assignment.target_id,
-                            "bsm": assignment.bsm,
-                            "lineage_id": assignment.lineage.lineage_id,
-                        })
-                        continue
-                    pending_changes.extend(changes)
-                if failed_assignments:
-                    unresolved.extend(failed_assignments)
-                    for target_id in scheduled_ids:
-                        task_statuses[target_id] = "failed"
-                else:
-                    zone_changes = pending_changes
-                    for target_id in assignment_target_ids:
-                        task_statuses[target_id] = "succeeded"
-                    assignment_layer = _authoritative_assignment_layer(
-                        list(materialized_assignments),
-                        parcel_by_bsm,
-                    )
-                    if assignment_layer is not None:
-                        layers.insert(0, assignment_layer)
-
+    zone_changes: list[Any] = []
+    scheduled_zone_ids = {
+        str(getattr(task, "target_id", "") or "")
+        for task in list(getattr(state.execution_plan, "worker_tasks", None) or [])
+        if str(getattr(task, "target_type", "") or "") == "zone"
+        and str(getattr(task, "target_id", "") or "") not in custom_task_ids
+    }
+    bound_zone_ids = direct_ids | blocked_ids
+    for target_id in sorted(scheduled_zone_ids - bound_zone_ids):
+        unresolved.append({
+            "code": "approved_zone_binding_missing",
+            "target_id": target_id,
+            "message": "Zone execution requires an approval-bound candidate geometry task.",
+        })
+        task_statuses[target_id] = "failed"
     return _worker_result(
         state,
         zone_targets,
@@ -616,7 +370,7 @@ def _worker_result(
     zone_targets: list[Any],
     custom_targets: list[Any],
     invalid_custom_tasks: list[Any],
-    zone_changes: list[ParcelChange],
+    zone_changes: list[Any],
     layers: list[dict[str, Any]],
     unresolved: list[dict[str, Any]],
     diagnostics: list[dict[str, Any]],
@@ -631,28 +385,30 @@ def _worker_result(
         + custom_targets
         + invalid_custom_tasks
     )
+    task_results = []
+    for task in list(getattr(state.execution_plan, "worker_tasks", None) or []):
+        worker_type = getattr(task, "worker_type", "")
+        worker_type = getattr(worker_type, "value", worker_type)
+        if str(worker_type) != "parcel_transformation":
+            continue
+        target_id = str(getattr(task, "target_id", "") or "")
+        result = _task_execution_result(
+            state,
+            "parcel_transformation",
+            target_id,
+            task_id=str(getattr(task, "task_id", "") or ""),
+            candidate_id=str(getattr(task, "candidate_id", "") or ""),
+            status=task_statuses.get(target_id, "failed"),
+            diagnostics=[
+                item for item in unresolved
+                if item.get("target_id") == target_id or not item.get("target_id")
+            ],
+        )
+        if result is not None:
+            task_results.append(result)
     return WorkerResult(
         worker_type="zone",
-        task_results=[
-            result
-            for target in worker_targets
-            if (result := _task_execution_result(
-                state,
-                "parcel_transformation",
-                str(getattr(target, "target_id", "") or ""),
-                status=task_statuses.get(
-                    str(getattr(target, "target_id", "") or ""),
-                    "failed",
-                ),
-                diagnostics=[
-                    item
-                    for item in unresolved
-                    if item.get("target_id")
-                    == str(getattr(target, "target_id", "") or "")
-                    or not item.get("target_id")
-                ],
-            )) is not None
-        ],
+        task_results=task_results,
         layers=layers,
         parcel_changes=zone_changes,
         unresolved_items=unresolved,
@@ -671,50 +427,4 @@ def _worker_result(
         ),
     )
 
-
-async def _zone_worker_node(state: ExecuteAgentState) -> dict:
-    if not _task_enabled(state, "layout"):
-        return {}
-    result = _zone_worker(state)
-    update: Dict[str, Any] = {"worker_results": [result]}
-    blocking_codes = {
-        "global_zone_allocation_missing",
-        "global_zone_allocation_invalid",
-        "authoritative_assignment_duplicate_bsm",
-        "assignment_parcel_missing",
-        "assignment_materialization_failed",
-    }
-    blocker = next(
-        (
-            item
-            for item in result.unresolved_items
-            if item.get("code") in blocking_codes
-        ),
-        None,
-    )
-    if blocker is not None:
-        update["execution_errors"] = _execution_error(
-            state,
-            "layout",
-            str(blocker.get("code")),
-            str(blocker.get("message") or "Zone materialization is blocked."),
-        )["execution_errors"]
-    if result.parcel_changes or result.layers:
-        update["allocation_summary"] = {
-            "mode": "global_authoritative_assignment",
-            "allocated_count": len(result.parcel_changes),
-            "overlay_feature_count": sum(
-                len((layer.get("data") or {}).get("features") or [])
-                for layer in result.layers
-                if str(layer.get("layerType") or "").endswith("overlay")
-            ),
-            "adjustments_applied": len(list(state.constraint_adjustments or [])),
-        }
-    return update
-
-
-__all__ = [
-    "_allocation_result_adapter",
-    "_zone_worker",
-    "_zone_worker_node",
-]
+__all__ = ["_zone_worker"]

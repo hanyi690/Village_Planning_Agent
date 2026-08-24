@@ -27,8 +27,6 @@ __all__ = [
     "SpatialQueryPort",
     "ValidationAdjustmentExecutor",
     "VisualEvidencePort",
-    "WorkerInput",
-    "WorkerResult",
     "ZoneAllocatorPort",
 ]
 
@@ -47,8 +45,6 @@ _MODULE_MAP = {
     "RoadPlannerPort": "road_planner",
     "SemanticQueryPort": "semantic_query",
     "SpatialQueryPort": "spatial",
-    "WorkerInput": "workers",
-    "WorkerResult": "workers",
     "ZoneAllocatorPort": "zone_allocator",
 }
 

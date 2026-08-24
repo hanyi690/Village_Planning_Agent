@@ -15,6 +15,8 @@ class SpatialDeliveryProducts:
     render_layers: list[dict[str, Any]] = field(default_factory=list)
     export_result: dict[str, Any] | None = None
     error: str = ""
+    spatial_context_unavailable: bool = False
+    spatial_context_reason: str = ""
 
 
 def build_spatial_delivery_products(
@@ -41,8 +43,43 @@ def build_spatial_delivery_products(
     from app.infrastructure.paths import session_run_dir
 
     products = SpatialDeliveryProducts()
+    workspace_unavailable = workspace is None
+    spatial_context_reason = (
+        "session has no materialized SpatialWorkspace; "
+        "no current GIS or planned geometry was fabricated"
+        if workspace_unavailable
+        else ""
+    )
     try:
-        effective_gis_data = canonical_gis_data_from_workspace(workspace)
+        if workspace_unavailable:
+            # A text-only/non-spatial session must terminate with a truthful
+            # diagnostic delivery instead of crashing DELIVER while trying to
+            # manufacture a current land-use layer.  The empty collection is
+            # an explicit absence marker; it is never presented as a real
+            # parcel layer and carries the limitation through provenance.
+            effective_gis_data = {
+                "landuse_current_geojson": {
+                    "type": "FeatureCollection",
+                    "features": [],
+                },
+            }
+        else:
+            try:
+                effective_gis_data = canonical_gis_data_from_workspace(workspace)
+            except ValueError as exc:
+                if str(exc) != "delivery bundle lacks landuse_current_geojson":
+                    raise
+                workspace_unavailable = True
+                spatial_context_reason = (
+                    "SpatialWorkspace has no materialized landuse_current layer; "
+                    "no current GIS or planned geometry was fabricated"
+                )
+                effective_gis_data = {
+                    "landuse_current_geojson": {
+                        "type": "FeatureCollection",
+                        "features": [],
+                    },
+                }
         overlay_payloads = build_planned_overlay_layers(planned_state)
         effective_gis_data = dict(effective_gis_data)
         overlay_key_by_type = {
@@ -66,10 +103,26 @@ def build_spatial_delivery_products(
             planned_changes=planned_changes,
             output_dir=session_run_dir(session_id) / "spatial_snapshot",
             output_artifact_ref=f"delivery-spatial-snapshot-{session_id}",
-            provenance={"stage": "DELIVER"},
+            provenance={
+                "stage": "DELIVER",
+                **(
+                    {
+                        "spatial_context": "unavailable",
+                        "spatial_context_reason": spatial_context_reason,
+                    }
+                    if workspace_unavailable
+                    else {}
+                ),
+            },
         )
         products.planned_geojson = load_complete_planned_geojson(products.snapshot)
         products.render_layers = build_delivery_render_layers(products.snapshot)
+        if workspace_unavailable:
+            # The renderer may emit an empty baseline layer for an empty
+            # FeatureCollection.  Do not expose that placeholder as a map
+            # layer: the public projection must say that no spatial output
+            # exists, rather than showing a zero-feature pseudo-layer.
+            products.render_layers = []
         from app.domain.delivery.delivery_validator import assess_render_quality
 
         quality_report = assess_render_quality(products.render_layers)
@@ -93,6 +146,13 @@ def build_spatial_delivery_products(
             validation_result=validation_result,
         )
         products.export_result["planned_landuse_source"] = "delivery_spatial_snapshot"
+        if workspace_unavailable:
+            products.error = (
+                "SpatialWorkspace unavailable; delivery contains no spatial "
+                "layers and remains diagnostic-only"
+            )
+        products.spatial_context_unavailable = workspace_unavailable
+        products.spatial_context_reason = spatial_context_reason
     except Exception as exc:
         products.error = f"{type(exc).__name__}: {exc}"
     return products

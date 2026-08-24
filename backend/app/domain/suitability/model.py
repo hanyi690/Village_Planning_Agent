@@ -21,12 +21,23 @@ class SuitabilityCandidate(BaseModel):
     exclusion_reasons: list[str] = Field(default_factory=list)
     evidence_refs: list[str] = Field(default_factory=list)
     available_geometry_wkt: str = ""
+    eligible_geometry_wkt: str = ""
     available_area_ha: float = 0.0
     source_area_ha: float = 0.0
     coverage_ratio: float | None = Field(default=None, ge=0, le=1)
     geometry_operation: str = "bundle_extent"
     geometry_crs: str = "EPSG:4326"
     geometry_diagnostics: list[str] = Field(default_factory=list)
+    availability_status: Literal[
+        "fully_available",
+        "partially_available",
+        "fully_unavailable",
+        "unknown",
+    ] = "unknown"
+    eligible_area_ha: float | None = Field(default=None, ge=0)
+    excluded_area_ha: float | None = Field(default=None, ge=0)
+    adjacent_parcel_bsms: list[str] = Field(default_factory=list)
+    adjacency_evidence_refs: list[str] = Field(default_factory=list)
     policy_ref: str = ""
     feature_ref: str = ""
     availability_diagnostics: list[dict[str, object]] = Field(default_factory=list)

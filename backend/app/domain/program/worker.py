@@ -3,7 +3,7 @@
 Independent L3-only dimension analysis worker (Wave E). Mirrors the shared
 L1/L2 dimension flow but is restricted to the L3 detail-planning layer and
 reuses the shared runtime helpers from ``app.infrastructure.llm.dimension_runtime``.
-Per docs/architecture/agent-graph.md the L3 subgraph is independent and must
+Per docs/architecture/CURRENT_RUNTIME.md the L3 subgraph is independent and must
 not reference the L1 analysis node implementation.
 """
 
@@ -66,92 +66,115 @@ def _require_l3_report_body(value: Any) -> str:
     return report_body
 
 
-def _claim_cache_path(session_id: str, dimension_key: str, prompt: str) -> Path:
-    """Return the content-addressed cache path for one provider invocation."""
+def _projection_cache_path(
+    session_id: str,
+    dimension_key: str,
+    prompt: str,
+    projection: str,
+) -> Path:
+    """Content-address one single-purpose L3 projection."""
+
     from app.infrastructure.paths import session_run_dir
 
     digest = hashlib.sha256(prompt.encode("utf-8")).hexdigest()
     return (
         session_run_dir(session_id)
-        / "l3-claim-cache"
+        / "l3-projection-cache"
+        / projection
         / dimension_key
         / f"{digest}.json"
     )
 
 
-async def _cached_claim_generation(
+async def _cached_claim_only_generation(
     generator: Any,
     *,
     session_id: str,
     dimension_key: str,
     prompt: str,
     validation_feedback: list[str] | None = None,
-    require_report_body: bool = True,
 ):
-    """Generate a draft set once and replay it on checkpoint resume.
+    """Generate or resume the claims-only L3 projection."""
 
-    The key contains the complete prompt, including validator feedback for a
-    local repair.  A valid provider response is persisted before downstream
-    compilation so an interrupted graph can resume L3 without paying for the
-    same model call again.
-    """
-    from app.domain.program.claim_draft import L3DimensionOutput
+    from app.domain.program.claim_draft import L3ClaimOutput
 
-    schema_payload = L3DimensionOutput.model_json_schema()
-    schema_checksum = hashlib.sha256(
-        json.dumps(schema_payload, ensure_ascii=False, sort_keys=True).encode("utf-8")
-    ).hexdigest()
     cache_key = json.dumps(
         {
             "prompt": prompt,
             "validation_feedback": validation_feedback or [],
-            "schema_checksum": schema_checksum,
-            "cache_contract": "l3-dual-output-v2",
-            "require_report_body": require_report_body,
+            "schema_checksum": hashlib.sha256(
+                json.dumps(
+                    L3ClaimOutput.model_json_schema(),
+                    ensure_ascii=False,
+                    sort_keys=True,
+                ).encode("utf-8")
+            ).hexdigest(),
+            "cache_contract": "l3-claims-only-v1",
         },
         ensure_ascii=False,
         sort_keys=True,
     )
-    path = _claim_cache_path(session_id, dimension_key, cache_key)
+    path = _projection_cache_path(session_id, dimension_key, cache_key, "claims")
     if path.exists():
         try:
-            cached = L3DimensionOutput.model_validate_json(
-                path.read_text(encoding="utf-8")
-            )
-            logger.info(
-                "[analyze_l3_dimension] %s: claim cache HIT %s",
-                dimension_key,
-                path.name,
-            )
-            if not require_report_body or cached.report_body.strip():
-                return cached
-            logger.warning(
-                "[analyze_l3_dimension] %s: ignoring cached L3 output without report_body",
-                dimension_key,
-            )
+            return L3ClaimOutput.model_validate_json(path.read_text(encoding="utf-8"))
         except (OSError, ValueError):
-            logger.warning(
-                "[analyze_l3_dimension] %s: ignoring invalid claim cache %s",
-                dimension_key,
-                path,
-            )
-
-    generated = await generator.generate(
+            logger.warning("[analyze_l3_dimension] ignoring invalid claims cache %s", path)
+    generate_claims = getattr(generator, "generate_claims", None)
+    if not callable(generate_claims):
+        raise TypeError("L3 claims generator must expose generate_claims()")
+    generated = await generate_claims(
         prompt,
         validation_feedback=validation_feedback,
-        require_report_body=require_report_body,
     )
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_suffix(f".{uuid.uuid4().hex}.tmp")
     temporary.write_text(generated.model_dump_json(indent=2), encoding="utf-8")
     os.replace(temporary, path)
-    logger.info(
-        "[analyze_l3_dimension] %s: claim cache WRITE %s",
-        dimension_key,
-        path.name,
-    )
     return generated
 
+
+async def _cached_report_generation(
+    generator: Any,
+    *,
+    session_id: str,
+    dimension_key: str,
+    prompt: str,
+):
+    """Generate or resume the report-only L3 projection."""
+
+    from app.domain.program.claim_draft import L3ReportOutput
+
+    cache_key = json.dumps(
+        {
+            "prompt": prompt,
+            "schema_checksum": hashlib.sha256(
+                json.dumps(
+                    L3ReportOutput.model_json_schema(),
+                    ensure_ascii=False,
+                    sort_keys=True,
+                ).encode("utf-8")
+            ).hexdigest(),
+            "cache_contract": "l3-report-only-v1",
+        },
+        ensure_ascii=False,
+        sort_keys=True,
+    )
+    path = _projection_cache_path(session_id, dimension_key, cache_key, "report")
+    if path.exists():
+        try:
+            return L3ReportOutput.model_validate_json(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            logger.warning("[analyze_l3_dimension] ignoring invalid report cache %s", path)
+    generate_report = getattr(generator, "generate_report", None)
+    if not callable(generate_report):
+        raise TypeError("L3 report generator must expose generate_report()")
+    generated = await generate_report(prompt)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_suffix(f".{uuid.uuid4().hex}.tmp")
+    temporary.write_text(generated.model_dump_json(indent=2), encoding="utf-8")
+    os.replace(temporary, path)
+    return generated
 
 # Cached LLM instance — reused across all L3 dimension analyses
 def _build_revision_completed(state: Dict[str, Any], dim_key: str) -> Dict[int, list]:
@@ -170,12 +193,12 @@ def _typed_l1_fact_evidence(
     *,
     location_only: bool = False,
 ) -> str:
-    """Render bounded L1 spatial facts for the L3 prompt.
+    """Render bounded typed L1 facts for the L3 prompt.
 
     L3 must not infer spatial relations by scanning prose for words such as
-    ``位于`` or ``布局``.  L1Fact/L1LocationFact already carry the spatial semantic
-    type, subject scope, source refs and (when available) source feature IDs;
-    those typed records are the only source used here.  The report body is a
+    ``位于`` or ``布局``.  L1Fact/L1LocationFact carry semantic type, subject
+    scope, source refs and (when available) source feature IDs; those typed
+    records are the only machine source used here.  The report body remains a
     human-readable projection and is intentionally not used as a location
     index.
     """
@@ -249,10 +272,11 @@ def _typed_l1_fact_evidence(
             "source_snapshot_ref": str(getattr(fact, "source_snapshot_ref", "") or ""),
         })
     if not rows:
-        return "（当前上下文没有可用的 L1 spatial facts；不得据此创建空间 claim。）"
+        return "（当前上下文没有可用的 L1 typed facts；不得据此创建空间 claim。）"
     return (
-        "【已审计 L1 spatial facts】\n"
-        "这些记录是当前 L1 快照的权威事实。source_fact_refs 只能逐字引用 fact_id；"
+        "【已审计 L1 planning facts】\n"
+        "这些记录是当前 L1 快照的权威结构化事实。非空间 claim 可引用对应 fact_id；"
+        "空间 claim 的 source_fact_refs 只能逐字引用 fact_kind=spatial_observation/gis_observation 的记录；"
         "source_feature_ids 只用于说明可由后续 EvidenceGraph 继续连接，不能在 L3 直接当作几何。\n"
         + json.dumps(rows, ensure_ascii=False, indent=2)
     )
@@ -288,6 +312,8 @@ def _spatial_claim_evidence_errors(
         str(getattr(fact, "fact_id", "") or "")
         for fact in (getattr(context, "l1_fact_records", []) or [])
         if str(getattr(fact, "fact_id", "") or "")
+        and str(getattr(fact, "fact_kind", "") or "")
+        in {"spatial_observation", "gis_observation", "kg_canonical_fact"}
     }
     errors: list[str] = []
     for claim in claims:
@@ -358,7 +384,7 @@ def _structural_repair_prompt(dimension_key: str, error: Any) -> str:
     """
     return (
         "你是 L3 Claim 结构修复器。上一轮结构化输出未通过 schema 校验。"
-        "按下列校验错误修复整个 claims 数组（report_body 留空），"
+        "按下列校验错误只修复整个 claims 数组，不返回 report_body，"
         "不得新增 claim 或改写 claim_id，不得创建坐标/BSM/地块/几何；"
         "枚举字段必须使用声明值。\n"
         f"dimension={dimension_key}\n"
@@ -410,15 +436,44 @@ async def _normalize_with_structural_repair(
                 attempt + 1,
                 str(exc)[:600],
             )
-            current_output = await _cached_claim_generation(
+            current_output = await _cached_claim_only_generation(
                 claim_generator,
                 session_id=session_id,
                 dimension_key=dimension_key,
                 prompt=_structural_repair_prompt(dimension_key, exc),
                 validation_feedback=[str(exc)],
-                require_report_body=False,
             )
     raise RuntimeError("unreachable: structural repair budget exhausted")
+
+
+def _build_l3_report_synthesis_prompt(
+    dimension_key: str,
+    planning_prompt: str,
+    claim_set: PlanningClaimSet,
+    semantic_feedback: list[str] | None = None,
+) -> str:
+    """Build a report-only prompt from claims that already passed validation."""
+
+    claims_payload = json.dumps(
+        [item.model_dump(mode="json") for item in claim_set.claims],
+        ensure_ascii=False,
+        sort_keys=True,
+    )
+    feedback = json.dumps(
+        list(semantic_feedback or []),
+        ensure_ascii=False,
+    )
+    return (
+        f"【L3 report synthesis; dimension_key={dimension_key}】\n"
+        "你只负责生成人类规划人员阅读的 report_body，不负责重新生成 claims。"
+        "正文只能解释已通过确定性 schema、source lineage 和语义校验的 claims；"
+        "不得新增目标、数量、位置、关系、地块、路线或来源事实。"
+        "被诊断或未通过的 claim 必须写成待核验/延期，不得把它写成已确定规划安排。"
+        "只返回 report_body 字段，不返回 claims 数组、JSON 调试对象或代码围栏。\n\n"
+        f"【validated claims】\n{claims_payload}\n"
+        f"【claim diagnostics】\n{feedback}\n"
+        f"【original evidence and planning context】\n{planning_prompt}"
+    )
 
 
 async def analyze_l3_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
@@ -539,13 +594,12 @@ async def analyze_l3_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
         # Queueing for the bounded provider semaphore is not an LLM stream
         # timeout.  Each actual provider invocation owns its timeout after it
         # acquires a slot inside PlanningClaimGenerator.
-        output = await _cached_claim_generation(
+        output = await _cached_claim_only_generation(
             claim_generator,
             session_id=session_id,
             dimension_key=dim_key,
             prompt=prompt,
         )
-        report_body = _require_l3_report_body(output.report_body)
         draft_set, claim_set = await _normalize_with_structural_repair(
             claim_generator,
             session_id=session_id,
@@ -599,7 +653,7 @@ async def analyze_l3_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
             repair_evidence = _typed_l1_fact_evidence(state, dim_key)
             repair_prompt = (
                 "你是 L3 Claim 局部语义编译修复器。只返回下列失败 claim 的完整"
-                "claims 数组（report_body 留空），不得返回已通过 claim，不得新增、删除或改写 claim_id。"
+                "claims 数组，不得返回 report_body、不得返回已通过 claim，不得新增、删除或改写 claim_id。"
                 "不得创建坐标、BSM、地块或几何。严格按对象参数 schema 修复。"
                 "category/output/phase、各对象 action、axis_type、materialization_role "
                 "必须从工具 schema 的 enum 中选择；不得发明同义词。"
@@ -612,13 +666,12 @@ async def analyze_l3_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
                 "若没有 L1 fact，保留语义 location_hints 并交给 GROUND 检索，不得编造 fact_id）：\n"
                 f"{repair_evidence}"
             )
-            repair_output = await _cached_claim_generation(
+            repair_output = await _cached_claim_only_generation(
                 claim_generator,
                 session_id=session_id,
                 dimension_key=dim_key,
                 prompt=repair_prompt,
                 validation_feedback=semantic_feedback,
-                require_report_body=False,
             )
             draft_set = merge_repaired_claim_drafts(
                 draft_set,
@@ -642,6 +695,20 @@ async def analyze_l3_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
                 f"{dim_key}: bounded local repair exhausted; "
                 + "; ".join(semantic_feedback[:20])
             )
+        if claim_set is None:
+            raise ValueError("L3 claim projection returned no validated claim set")
+        report_output = await _cached_report_generation(
+            claim_generator,
+            session_id=session_id,
+            dimension_key=dim_key,
+            prompt=_build_l3_report_synthesis_prompt(
+                dim_key,
+                prompt,
+                claim_set,
+                semantic_feedback,
+            ),
+        )
+        report_body = _require_l3_report_body(report_output.report_body)
     except asyncio.TimeoutError:
         trip_provider_failure(session_id)
         logger.error(f"[analyze_l3_dimension] {dim_key}: LLM stream timeout after {LLM_STREAM_TIMEOUT}s")
@@ -688,17 +755,20 @@ async def analyze_l3_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
         # would block every other dimension of the layer.  Keep the transient
         # code ``llm_provider_error`` so the existing HUMAN/provider-resume
         # path can retry exactly this one dimension with a bounded budget.
+        from app.infrastructure.llm.structured import structured_failure_summary
+
+        failure_summary = structured_failure_summary(exc)
         logger.error(
-            "[analyze_l3_dimension] %s: structured output failed to parse: %s",
+            "[analyze_l3_dimension] %s: structured output failed to parse (%s)",
             dim_key,
-            str(exc)[:600],
+            failure_summary,
         )
         await sse_manager.publish(session_id, {
             "type": SSEEventType.DIMENSION_ERROR,
             "dimension_key": dim_key,
             "dimension_name": dim_name,
             "layer": dim_layer,
-            "error": f"structured output failed to parse: {exc}",
+            "error": failure_summary,
         })
         return {
             "messages": [AIMessage(content=f"[执行失败] 结构化输出解析失败: {exc}")],
@@ -706,7 +776,7 @@ async def analyze_l3_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
             "provider_failures": [{
                 "stage": f"L{dim_layer}", "dimension": dim_key,
                 "code": "llm_provider_error",
-                "message": f"L3 structured output failed to parse: {exc}",
+                "message": failure_summary,
             }],
         }
     except Exception as e:
@@ -714,13 +784,20 @@ async def analyze_l3_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
         quota_exhausted = is_provider_quota_exhausted(e)
         if is_provider_failure(e) and not quota_exhausted:
             trip_provider_failure(session_id)
-        logger.error(f"[analyze_l3_dimension] {dim_key}: LLM 失败: {e}")
+        from app.infrastructure.llm.structured import structured_failure_summary
+
+        failure_summary = structured_failure_summary(e)
+        logger.error(
+            "[analyze_l3_dimension] %s: LLM provider failure (%s)",
+            dim_key,
+            failure_summary,
+        )
         await sse_manager.publish(session_id, {
             "type": SSEEventType.DIMENSION_ERROR,
             "dimension_key": dim_key,
             "dimension_name": dim_name,
             "layer": dim_layer,
-            "error": str(e),
+            "error": failure_summary,
         })
         return {
             "messages": [AIMessage(content=f"[执行失败] LLM错误: {e}")],
@@ -732,7 +809,7 @@ async def analyze_l3_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
                     if quota_exhausted
                     else "llm_provider_error"
                 ),
-                "message": str(e),
+                "message": failure_summary,
             }],
         }
 
@@ -870,6 +947,22 @@ def _dependency_summary(text: str) -> Dict[str, Any]:
     }
 
 
+def _l1_input_register_prompt(state: Dict[str, Any], dimension_key: str) -> str:
+    """Project the L1-owned input register without reopening raw documents."""
+    if dimension_key != "project_bank":
+        return ""
+    try:
+        from app.infrastructure.context.planning_context_factory import get_cached_context
+        from app.domain.assessment.input_register import render_l1_input_register
+
+        context = get_cached_context(str(state.get("session_id", "")))
+        return render_l1_input_register(
+            getattr(context, "l1_input_register", None) if context is not None else None
+        )
+    except Exception:
+        return "（L1 输入登记不可用；不得从其他报告或原文自行补造台账。）"
+
+
 def _build_prompt(
     cfg: Any,
     state: Dict[str, Any],
@@ -927,28 +1020,45 @@ def _build_prompt(
             else quality_instruction
         )
 
+    from app.domain.assessment.dimension_contracts import render_dimension_semantic_contract
+
     spatial_fact_evidence = _typed_l1_fact_evidence(state, dim_key)
     spatial_location_evidence = _typed_l1_fact_evidence(
         state, dim_key, location_only=True
     )
+    l1_input_register = _l1_input_register_prompt(state, dim_key)
     return f"【dimension_key={dim_key}】\n" + get_layer3_prompt(
         dimension_key=dim_key,
         project_name=project_name,
         # L1 report is the current-state analysis background.  L1 spatial
         # facts are supplied separately for auditable spatial references.
-        analysis_report=_compact_prompt_background(l1_deps, 12000, "L1 现状分析"),
-        planning_concept=_compact_prompt_background(l2_deps, 8000, "L2 规划思路"),
+        # The provider's structured-output request includes the full schema
+        # and the detailed professional template.  Keep upstream reports
+        # bounded here so the request remains inside the configured provider
+        # context window; GROUND receives the complete typed artifacts later.
+        analysis_report=_compact_prompt_background(l1_deps, 5200, "L1 现状分析"),
+        planning_concept=_compact_prompt_background(l2_deps, 3400, "L2 规划思路"),
         constraints=constraints,
         knowledge_context=rag_context or "",
         revision_instruction=revision_instruction,
-        professional_data_section=professional_data_section + explore_section,
+        professional_data_section=(
+            professional_data_section
+            + explore_section
+            + "\n\n"
+            + render_dimension_semantic_contract(dim_key, 3)
+        ),
         natural_villages=resolvable_villages,
         location_evidence=(
-            spatial_fact_evidence
+            _compact_prompt_background(spatial_fact_evidence, 3000, "已审计 L1 spatial facts")
             + "\n\n"
-            + spatial_location_evidence
+            + _compact_prompt_background(
+                spatial_location_evidence,
+                2200,
+                "已审计 L1 spatial location facts",
+            )
         ),
-        dimension_plans=_compact_prompt_background(same_layer_contexts, 6000, "同层规划背景"),
+        dimension_plans=_compact_prompt_background(same_layer_contexts, 2200, "同层规划背景"),
+        l1_input_register=l1_input_register,
     )
 
 

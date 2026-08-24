@@ -81,6 +81,11 @@ def build_scenario_features(
                 source_binding_ref=candidate.source_binding_ref,
                 subgeometry_operation=candidate.subgeometry_operation,
                 subgeometry_diagnostics=list(candidate.subgeometry_diagnostics),
+                availability_status=candidate.availability_status,
+                eligible_area_ha=candidate.eligible_area_ha,
+                excluded_area_ha=candidate.excluded_area_ha,
+                adjacent_parcel_bsms=list(candidate.adjacent_parcel_bsms),
+                adjacency_evidence_refs=list(candidate.adjacency_evidence_refs),
                 relation_ids=sorted(feature_relation_ids),
             )
             result.append(feature)
@@ -95,6 +100,7 @@ def build_planning_scenario(
     relation_satisfactions: Sequence[Any],
     features: Sequence[ScenarioFeature],
     metrics: Mapping[str, float] | None = None,
+    objective_vector: Mapping[str, float] | None = None,
     findings: Sequence[ScenarioFinding] = (),
     status: str = "draft",
 ) -> PlanningScenario:
@@ -106,6 +112,10 @@ def build_planning_scenario(
         feature_intents=sorted(features, key=lambda item: item.feature_id),
         relation_satisfactions=sorted(relation_satisfactions, key=lambda item: item.relation_id),
         metrics={str(key): float(value) for key, value in sorted((metrics or {}).items())},
+        objective_vector={
+            str(key): float(value)
+            for key, value in sorted((objective_vector or {}).items())
+        },
         findings=list(findings),
         status=status,
     )

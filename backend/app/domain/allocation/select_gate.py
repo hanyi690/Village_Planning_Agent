@@ -1,169 +1,115 @@
-"""SELECT gate evaluator - 3-route decision over a SiteSelectionDecision.
+"""Deterministic SELECT gate over ScenarioSet and approval facts."""
 
-Pure function: SiteSelectionDecision -> GateDecision. No I/O. Mirrors the gate
-convention in app.domain.ground.gate with stage="select".
-
-Routes (precedence high -> low):
-  HUMAN   -> one or more target assignments is unplaced; the target must be
-             explicitly deferred or reviewed rather than repeating GROUND
-  HUMAN   -> all targets placed but top-ranked score below
-             ``confidence_threshold`` (needs human review)
-  PASS    -> all targets placed and confidence acceptable
-
-Determinism: routing is a pure function of the decision fields, no RNG, no LLM.
-"""
 from __future__ import annotations
 
 from typing import Any
 
-from app.contracts.domain.selection_contracts import SiteSelectionDecision
+from app.contracts.planning.approval import ApprovedExecutionInput
+from app.contracts.planning.scenario import PlanningScenario, ScenarioSet
 from app.contracts.workflow.workflow_contracts import GateDecision, PendingRequest
-from app.domain.common.gate_progress import gate_progress_metadata
 
 STAGE = "select"
 
 
-def _top_score(decision: SiteSelectionDecision) -> float | None:
-    best_by_target = decision.decision_factors.get("best_score_by_target", {}) or {}
-    if best_by_target:
-        return max(best_by_target.values())
-    if decision.full_ranking:
-        return max(c.score for c in decision.full_ranking)
-    return None
+def _pending_target_ids(problem: Any, scenario: PlanningScenario | None) -> list[str]:
+    """Derive target scope from typed completeness/finding facts only."""
+    ids: set[str] = set()
+    if problem is not None:
+        completeness = getattr(problem, "candidate_completeness", None)
+        for name in (
+            "missing_candidate_target_ids",
+            "missing_geometry_target_ids",
+            "unresolved_target_ids",
+            "candidate_only_target_ids",
+            "ambiguous_target_ids",
+            "degraded_geometry_target_ids",
+        ):
+            ids.update(str(item) for item in (getattr(completeness, name, None) or []) if str(item).strip())
+        ids.update(
+            str(getattr(item, "target_id", ""))
+            for item in (getattr(problem, "unresolved", None) or []) + (getattr(problem, "deferred", None) or [])
+            if str(getattr(item, "target_id", "") or "").strip()
+        )
+        ids.update(
+            str(getattr(domain, "target_id", ""))
+            for domain in (getattr(problem, "target_domains", None) or [])
+            if str(getattr(domain, "status", "")) in {"unresolved", "ambiguous", "candidate_only"}
+            and str(getattr(domain, "target_id", "") or "").strip()
+        )
+    if scenario is not None:
+        ids.update(
+            str(getattr(item, "target_id", ""))
+            for item in (getattr(scenario, "findings", None) or [])
+            if str(getattr(item, "severity", "warning")) != "info"
+            and str(getattr(item, "target_id", "") or "").strip()
+        )
+    return sorted(ids)
 
 
-def select_gate_route(
-    decision: SiteSelectionDecision,
+def evaluate_scenario_select_gate(
+    scenario_set: ScenarioSet | None,
+    scenario: PlanningScenario | None,
+    problem: Any,
     *,
-    target_count: int,
-    confidence_threshold: float = 0.4,
-    portfolio_decision: Any = None,
-) -> str:
-    """Return the deterministic route: "PASS"|"HUMAN"."""
-    if portfolio_decision is not None and str(
-        getattr(portfolio_decision, "solver_status", "")
-    ) not in {"OPTIMAL", "FEASIBLE"}:
-        return "HUMAN"
-    unplaced = decision.decision_factors.get("unplaced_count", 0) or 0
-    if unplaced > 0:
-        return "HUMAN"
-    top = _top_score(decision)
-    if top is not None and top < confidence_threshold:
-        return "HUMAN"
-    return "PASS"
-
-
-def evaluate_select_gate(
-    decision: SiteSelectionDecision,
-    *,
-    target_count: int,
-    confidence_threshold: float = 0.4,
+    approved_input: ApprovedExecutionInput | None = None,
     input_artifact_refs: dict | None = None,
     previous_gate: Any = None,
-    portfolio_decision: Any = None,
+    context_version: str = "",
 ) -> GateDecision:
-    stage = STAGE
-    gate_artifact_id = "gate-select-" + (decision.artifact_id or "0")
-
-    route = select_gate_route(
-        decision,
-        target_count=target_count,
-        confidence_threshold=confidence_threshold,
-        portfolio_decision=portfolio_decision,
-    )
-
-    unplaced_target_ids = [
-        assignment.target_id
-        for assignment in (decision.target_assignments or [])
-        if assignment.status == "unplaced" and assignment.target_id
-    ]
-    portfolio_unmet_target_ids = [
-        str(item).removeprefix("demand:")
-        for item in (getattr(portfolio_decision, "unmet_demand", ()) or [])
-        if str(item)
-    ]
-    review_target_ids = sorted(set(unplaced_target_ids + portfolio_unmet_target_ids))
-    progress, identical = gate_progress_metadata(
-        input_artifact_refs=input_artifact_refs,
-        output={
-            "unplaced_count": decision.decision_factors.get("unplaced_count", 0) or 0,
-            "selected_combination": decision.selected_combination,
-            "best_score_by_target": decision.decision_factors.get("best_score_by_target", {}),
-            "portfolio_solver_status": getattr(portfolio_decision, "solver_status", ""),
-            "portfolio_unmet_demand": list(getattr(portfolio_decision, "unmet_demand", ()) or []),
-        },
-        issues=review_target_ids,
-        previous_gate=previous_gate,
-    )
-    route_reason = "all_placed" if route == "PASS" else "unplaced_or_low_confidence"
-    if route == "HUMAN" and portfolio_decision is not None and str(
-        getattr(portfolio_decision, "solver_status", "")
-    ) not in {"OPTIMAL", "FEASIBLE"}:
-        route_reason = "portfolio_infeasible"
-    if route == "HUMAN" and progress["inputs_changed"] is False:
-        route_reason = "inputs_unchanged"
-
-    if route == "HUMAN" and review_target_ids:
-        pending = [
-            PendingRequest(
-                request_id="pr-select-unplaced-targets",
-                stage=stage,
-                request_type="selection_no_candidate",
-                context={
-                    "reason": "portfolio_infeasible" if route_reason == "portfolio_infeasible" else "selection_no_candidate",
-                    "target_ids": review_target_ids,
-                    "target_count": target_count,
-                    "placed_count": len(decision.selected_combination),
-                    "issue_fingerprint": progress["issue_fingerprint"],
-                },
-            )
-        ]
+    """PASS only a complete feasible member with executable approval."""
+    issues: list[str] = []
+    if scenario_set is None:
+        issues.append("scenario_set_missing")
+    if scenario is None:
+        issues.append("planning_scenario_missing")
+    if problem is None or not bool(getattr(problem, "can_solve", False)):
+        issues.append("grounded_problem_incomplete")
+    if scenario_set is not None:
+        certificate = getattr(scenario_set, "solver_certificate", None)
+        if str(getattr(certificate, "status", "")) not in {"feasible", "bounded"}:
+            issues.append("solver_certificate_not_feasible")
+        if not str(getattr(scenario_set, "recommended_scenario_id", "") or ""):
+            issues.append("recommended_scenario_missing")
+    if scenario is not None:
+        if str(getattr(scenario, "status", "")) != "complete":
+            issues.append("scenario_not_complete")
+        if scenario_set is not None and str(getattr(scenario, "scenario_id", "")) not in {
+            str(item) for item in (getattr(scenario_set, "feasible_scenario_ids", None) or [])
+        }:
+            issues.append("scenario_not_feasible_member")
+    if approved_input is None or not approved_input.can_execute:
+        issues.append("approval_not_ready")
+    refs = dict(input_artifact_refs or {})
+    issue_fingerprint = "|".join(sorted(set(issues)))
+    if issues:
+        target_ids = _pending_target_ids(problem, scenario)
         return GateDecision(
-            stage=stage,
+            stage=STAGE,
             passed=False,
             feedback_route="HUMAN",
-            pending_requests=pending,
-            context_version=decision.context_version,
-            artifact_id=gate_artifact_id,
-            route_reason=route_reason,
-            **progress,
-        )
-
-    if route == "HUMAN":
-        pending = [
-            PendingRequest(
-                request_id="pr-select-low-confidence-0",
-                stage=stage,
-                request_type="selection_low_confidence",
+            pending_requests=[PendingRequest(
+                request_id="pr-select-scenario-approval",
+                stage=STAGE,
+                request_type="scenario_approval_required",
                 context={
-                    "reason": "selection_low_confidence",
-                    "target_count": target_count,
-                    "placed_count": len(decision.selected_combination),
-                    "confidence": _top_score(decision),
-                    "issue_fingerprint": progress["issue_fingerprint"],
+                    "reasons": sorted(set(issues)),
+                    "target_ids": target_ids,
                 },
-            )
-        ]
-        return GateDecision(
-            stage=stage,
-            passed=False,
-            feedback_route="HUMAN",
-            pending_requests=pending,
-            context_version=decision.context_version,
-            artifact_id=gate_artifact_id,
-            route_reason=route_reason,
-            **progress,
+            )],
+            context_version=context_version,
+            input_artifact_refs=refs,
+            issue_fingerprint=issue_fingerprint,
+            previous_issue_fingerprint=str(getattr(previous_gate, "issue_fingerprint", "") or ""),
+            route_reason="scenario_or_approval_incomplete",
         )
-
     return GateDecision(
-        stage=stage,
+        stage=STAGE,
         passed=True,
         feedback_route=None,
-        context_version=decision.context_version,
-        artifact_id=gate_artifact_id,
-        route_reason="all_placed",
-        **progress,
+        context_version=context_version,
+        input_artifact_refs=refs,
+        route_reason="scenario_complete_and_approved",
     )
 
 
-__all__ = ["evaluate_select_gate", "select_gate_route"]
+__all__ = ["evaluate_scenario_select_gate"]

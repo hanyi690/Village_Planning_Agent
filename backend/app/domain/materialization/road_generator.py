@@ -1,6 +1,6 @@
 """Road execution adapter for the GIS EXECUTE Agent.
 
-Migrated from agent/gis/execute/road/generator.py per docs/architecture/agent-graph.md §5.
+Road generation follows the current EXECUTE/materialization boundary in docs/design/03_PLANNING_EXECUTION.md.
 
 This module bridges the agent-layer ``RoadTarget`` intent contract to the
 deterministic road-planning services.  The agent does not draw road geometry
@@ -404,13 +404,13 @@ def _kg_retry_adapter(state: Any, gis_data: Mapping[str, Any]) -> Tuple[Optional
             except LookupError:
                 kg = None
             except Exception as exc:  # KG is optional at the road-execution boundary.
-                logger.warning("[road_execute] Could not access session PlanningKG: %s", exc)
+                logger.warning("[road_execute] Could not access session PlanningKG: %s", type(exc).__name__)
     if kg is None:
         return None, None
     try:
         return RDFLibKGSpatialRetryAdapter(kg), source
     except (TypeError, ValueError) as exc:
-        logger.warning("[road_execute] Ignoring incompatible PlanningKG: %s", exc)
+        logger.warning("[road_execute] Ignoring incompatible PlanningKG: %s", type(exc).__name__)
         return None, None
 
 
@@ -518,7 +518,7 @@ def _workspace_dem_evidence(workspace: Any) -> Tuple[Optional[Path], Optional[Ro
             if dataset.count < 1 or dataset.crs is None or dataset.width < 2 or dataset.height < 2:
                 raise ValueError("DEM has no usable band, CRS, or grid")
     except Exception as exc:
-        logger.warning("[road_execute] Workspace DEM is not a usable raster: %s", exc)
+        logger.warning("[road_execute] Workspace DEM is not a usable raster: %s", type(exc).__name__)
         return None, None
     return path, RoadArtifactEvidence(
         role="dem",

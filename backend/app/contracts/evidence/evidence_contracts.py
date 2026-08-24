@@ -7,6 +7,7 @@ from pydantic import BaseModel, Field
 from app.contracts.artifacts.contract_meta import ContractMeta
 from app.contracts.artifacts.provenance import Provenance
 from app.contracts.evidence.evidence_packet_contracts import EvidencePacket
+from app.contracts.evidence.requirement_contracts import EvidenceCoverage, EvidenceRequirement
 
 
 class ExplorationRequest(BaseModel):
@@ -28,6 +29,7 @@ class ExplorationRequest(BaseModel):
     project_wide: bool = False
     candidate_offset: int = Field(default=0, ge=0)
     candidate_limit: int = Field(default=12, ge=1, le=64)
+    requirements: list[EvidenceRequirement] = Field(default_factory=list)
 
 
 class EvidenceSource(BaseModel):
@@ -112,6 +114,7 @@ class ExplorationResult(BaseModel):
     evidence_bundle: "EvidenceBundle"
     spatial_cognition: "SpatialCognitionEvidence | None" = None
     evidence_packet: EvidencePacket | None = None
+    coverage: EvidenceCoverage | None = None
 
 
 __all__ = [

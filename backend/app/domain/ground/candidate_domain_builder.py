@@ -86,6 +86,28 @@ def build_candidate_domains(
         })
         if len(binding_refs) == 1:
             domain.binding_ref = binding_refs[0]
+        domain.geometry_granularities = list(dict.fromkeys(
+            str(getattr(geometry, "granularity", "") or "")
+            for geometry in geometries_by_id.values()
+            if str(getattr(geometry, "granularity", "") or "").strip()
+        ))
+        domain.geometry_uncertainty_radius_m = max(
+            [
+                float(getattr(geometry, "uncertainty_radius_m", 0.0) or 0.0)
+                for geometry in geometries_by_id.values()
+            ]
+            or [0.0]
+        )
+        domain.geometry_uncertainty_reasons = list(dict.fromkeys(
+            str(getattr(geometry, "uncertainty_reason", "") or "")
+            for geometry in geometries_by_id.values()
+            if str(getattr(geometry, "uncertainty_reason", "") or "").strip()
+            and not (
+                getattr(geometry, "source_feature_ids", None)
+                or getattr(geometry, "feature_bsms", None)
+                or getattr(geometry, "source_bsms", None)
+            )
+        ))
         required_source_members = [
             geometries_by_id[candidate_id]
             for candidate_id in domain.candidate_ids

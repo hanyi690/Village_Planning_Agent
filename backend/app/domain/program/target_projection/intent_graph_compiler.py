@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from typing import Any
+from types import SimpleNamespace
 
 from pydantic import TypeAdapter, ValidationError
 
@@ -13,6 +14,7 @@ from app.contracts.planning.intent_graph import PlanRelationIntent, PlanTargetNo
 from app.contracts.planning.relation_parameters import RelationParameters
 from .relation_catalog import relation_spec
 from .relation_validator import PlanningDiagnostic, validate_relation_intent
+from app.domain.common.solver_kind import infer_intent_solver_kind
 
 
 _RELATION_PARAMETERS = TypeAdapter(RelationParameters)
@@ -69,6 +71,11 @@ def _capabilities(intervention: PlanningIntervention) -> list[str]:
 
 
 def _node(intervention: PlanningIntervention) -> PlanTargetNode:
+    endpoint_parameters = (
+        intervention.road_parameters
+        or intervention.linear_parameters
+        or intervention.axis_parameters
+    )
     return PlanTargetNode(
         target_id=intervention.target_id or intervention.intervention_id,
         target_kind=_target_kind(intervention),
@@ -79,7 +86,29 @@ def _node(intervention: PlanningIntervention) -> PlanTargetNode:
         claim_refs=list(dict.fromkeys(intervention.claim_refs)),
         required_capabilities=_capabilities(intervention),
         uncompiled_constraints=list(intervention.constraints),
+        endpoint_refs=list(getattr(endpoint_parameters, "connects", None) or []),
     )
+
+
+def _shared_resource_refs(
+    interventions: Sequence[PlanningIntervention],
+) -> list[str]:
+    refs: list[str] = []
+    for intervention in interventions:
+        requirements = intervention.spatial_requirements
+        if not isinstance(requirements, Mapping):
+            continue
+        for key in (
+            "shared_resource_refs",
+            "parcel_membership_refs",
+            "competing_parcel_refs",
+        ):
+            values = requirements.get(key, [])
+            if isinstance(values, str):
+                values = [values]
+            if isinstance(values, Sequence):
+                refs.extend(str(value) for value in values if str(value).strip())
+    return list(dict.fromkeys(refs))
 
 
 def _raw_parameter_payload(template: str, item: Mapping[str, Any]) -> dict[str, Any] | None:
@@ -260,6 +289,55 @@ def _structured_relations(
     return result
 
 
+def _typed_endpoint_relations(
+    intervention: PlanningIntervention,
+    *,
+    valid_ids: set[str],
+    existing_relations: Sequence[PlanRelationIntent],
+) -> list[PlanRelationIntent]:
+    """Preserve explicit road endpoint semantics as typed relation intents.
+
+    ``connects`` names are not GIS identities.  The relation is therefore
+    emitted with missing parameters and must be bound by GROUND against an
+    authoritative network snapshot; it can never become a route by name
+    matching alone.
+    """
+
+    if intervention.category != "road" or intervention.asset_kind != "road":
+        return []
+    parameters = intervention.road_parameters
+    endpoint_refs = list(getattr(parameters, "connects", None) or [])
+    if not endpoint_refs:
+        return []
+    existing = {
+        (relation.subject_ref, relation.object_ref)
+        for relation in existing_relations
+        if relation.relation_template == "connect_network"
+    }
+    result: list[PlanRelationIntent] = []
+    for index, endpoint_ref in enumerate(endpoint_refs):
+        object_ref = str(endpoint_ref).strip()
+        if not object_ref or (intervention.target_id, object_ref) in existing:
+            continue
+        result.append(
+            PlanRelationIntent(
+                relation_id=f"relation:{intervention.target_id}:connect:{index}",
+                relation_template="connect_network",
+                subject_ref=intervention.target_id,
+                object_ref=object_ref,
+                object_ref_kind="target" if object_ref in valid_ids else "place_hint",
+                criticality="hard",
+                evidence_refs=list(intervention.evidence_refs),
+                claim_refs=list(intervention.claim_refs),
+                source="typed_road_endpoint",
+                parameter_status="missing",
+                source_claim_refs=list(intervention.claim_refs),
+                geometry_scope="network",
+            )
+        )
+    return result
+
+
 def compile_intent_graph_v2(
     program: PlanningProgram,
     *,
@@ -297,17 +375,44 @@ def compile_intent_graph_v2(
         relations.append(relation)
         diagnostics.extend(validate_relation_intent(relation, node_index))
     for intervention in program.interventions:
-        relations.extend(_structured_relations(
+        structured = _structured_relations(
             intervention, valid_ids, diagnostics,
             observations=observations, bindings=bindings,
-        ))
+        )
+        relations.extend(structured)
+        endpoint_relations = _typed_endpoint_relations(
+            intervention,
+            valid_ids=valid_ids,
+            existing_relations=structured,
+        )
+        relations.extend(endpoint_relations)
+        for relation in endpoint_relations:
+            diagnostics.append(PlanningDiagnostic(
+                "relation_parameters_pending_ground_binding",
+                "typed road endpoint will be bound to the authoritative network snapshot in GROUND",
+                "warning",
+                relation.relation_id,
+            ))
     for relation in relations:
+        if relation.source == "typed_road_endpoint" and relation.parameters is None:
+            continue
         diagnostics.extend(validate_relation_intent(relation, node_index))
+    shared_resource_refs = _shared_resource_refs(program.interventions)
+    solver_kind, solver_kind_reasons = infer_intent_solver_kind(
+        SimpleNamespace(
+            nodes=nodes,
+            relations=relations,
+            shared_resource_refs=shared_resource_refs,
+        )
+    )
     return PlanningIntentGraph(
         nodes=nodes,
         relations=relations,
         diagnostics=[str(item) for item in diagnostics],
         source_program_ref=str(program.artifact_id or ""),
+        solver_kind=solver_kind,
+        solver_kind_reasons=solver_kind_reasons,
+        shared_resource_refs=shared_resource_refs,
     )
 
 

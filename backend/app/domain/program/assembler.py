@@ -65,9 +65,7 @@ def assemble_planning_program(
                 deep=True,
                 update={
                     "claim_refs": _unique(candidate.claim_refs),
-                    "evidence_refs": _unique(
-                        candidate.evidence_refs + candidate.claim_refs
-                    ),
+                    "evidence_refs": _unique(candidate.evidence_refs),
                 },
             )
         )

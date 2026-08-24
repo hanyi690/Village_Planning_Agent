@@ -409,9 +409,11 @@ async def _planned_state_builder_node(state: ExecuteAgentState) -> dict:
         for result in list(state.worker_results or [])
         for feature in list(_worker_result_get(result, "scenario_features") or [])
     ]
-    scenario_id = ""
-    if state.site_selection is not None:
-        scenario_id = str(getattr(state.site_selection, "scenario_id", "") or "")
+    scenario_id = str(
+        getattr(getattr(state, "execution_plan", None), "scenario_id", "")
+        or getattr(getattr(state, "approved_execution_input", None), "scenario_id", "")
+        or ""
+    )
     if not scenario_id and scenario_features:
         scenario_id = str(getattr(scenario_features[0], "scenario_id", "") or "")
     scenario_ref = str(getattr(state, "scenario_ref", "") or "")

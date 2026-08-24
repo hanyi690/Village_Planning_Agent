@@ -1,6 +1,6 @@
 """词汇表规则 DSL — TypingRule ↔ expr_eval.Condition 统一。
 
-Migrated from agent/gis/vocab/rules.py per docs/architecture/agent-graph.md §5.
+Vocabulary rules are used by the current materialization boundary in docs/design/03_PLANNING_EXECUTION.md.
 
 消除双实现：generator 的 _eval_rule 删除，统一走 expr_eval 求值。
 """

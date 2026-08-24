@@ -1,6 +1,6 @@
 """EXECUTE Agent state - execution layer sub-state.
 
-Migrated from agent/gis/execute/state.py per docs/architecture/agent-graph.md §5.
+Execution state follows the current EXECUTE boundary in docs/design/03_PLANNING_EXECUTION.md.
 
 Constructed from the canonical planning bundle at the execute boundary.
 Focused on spatial result production (layout / facility / axis / road).
@@ -15,7 +15,8 @@ from typing import Annotated, Any, Dict, List, Optional
 
 from pydantic import BaseModel, Field
 
-from app.contracts.domain.selection_contracts import LandDesignBrief
+from app.contracts.workflow.materialization_contracts import LandDesignBrief
+from app.contracts.planning.approval import ApprovedExecutionInput
 
 
 def _upsert_worker_results(current: List[Any], updates: List[Any]) -> List[Any]:
@@ -84,9 +85,7 @@ class ExecuteAgentState(BaseModel):
     # is an existing cadastral parcel/BSM.
     candidate_geometry_by_id: Dict[str, Any] = Field(default_factory=dict)
 
-    # ── SELECT output (site selection + land design briefs) ──
-    site_selection: Optional[Any] = None  # SiteSelectionDecision (typed) — SELECT subgraph output
-    global_zone_allocation_result: Optional[Any] = None
+    # ── Approved SELECT output (scenario-bound materializer inputs) ──
     land_design_briefs: List[LandDesignBrief] = Field(default_factory=list)  # list[LandDesignBrief] — SELECT output
     parcel_changes: List[Any] = Field(default_factory=list)  # list[ParcelChange] — accumulated by Land Design Worker nodes
     parcel_changeset: Optional[Any] = None  # ParcelChangeSet — final aggregated changeset
@@ -112,6 +111,8 @@ class ExecuteAgentState(BaseModel):
     # ── Wave O: multi-worker subgraph ──
     parcel_by_bsm: Dict[str, Any] = Field(default_factory=dict)  # bsm -> parcel (prepared once)
     execution_plan: Optional[Any] = None  # ExecutionPlan — built upstream (post-L3 select)
+    approved_execution_input: Optional[ApprovedExecutionInput] = None
+    approved_input_fingerprint: str = ""
     ports: Optional[Any] = None  # PlanningPorts — injected zone_allocator/road_planner
     worker_results: Annotated[List[Any], _upsert_worker_results] = Field(default_factory=list)  # list[WorkerResult]
     task_schedule: Optional[Any] = None
@@ -127,7 +128,6 @@ class ExecuteAgentState(BaseModel):
     reconciliation_report: Optional[Any] = None  # ReconciliationReport — typed RECONCILE output (Wave M wires)
     delivery_manifest: Optional[Any] = None  # DeliveryManifest — DELIVER output (Wave M wires)
     validation_round: int = 0
-    constraint_adjustments: List[Dict[str, Any]] = Field(default_factory=list)
 
     # ── VALIDATE repair directives (REBUILD_GEOMETRY / REQUIRE_SOURCE_EVIDENCE) ──
     repair_directives: Dict[str, Any] = Field(default_factory=dict)

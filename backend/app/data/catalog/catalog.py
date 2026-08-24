@@ -740,7 +740,7 @@ class DataCatalog:
         session context onto the same bundle instance:
           * ``metadata``: session_id / planning_period / admin hierarchy
           * ``documents.document_refs``: source/record/URI/digest metadata for
-            village_data, task description, constraints, uploads and project docs
+            session-owned village_data, task description, constraints and explicit uploads
           * ``documents.report_refs``: lightweight L1/L2/L3 report manifest
             used by the unified bundle retrieval boundary
 

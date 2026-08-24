@@ -1,12 +1,11 @@
-"""Facility worker node: decision-driven facility footprint placement."""
+"""Facility materializer: approved point and footprint placement."""
 
 from __future__ import annotations
 
 from typing import List
 
 from app.domain.materialization.execute_state import ExecuteAgentState
-from app.domain.materialization.nodes.common import _execution_error
-from app.domain.materialization.nodes.worker_common import _attach_feature_lineage, _execution_intent_from_plan, _scenario_features_for_layer, _task_enabled, _task_execution_result
+from app.domain.materialization.nodes.worker_common import _attach_feature_lineage, _candidate_availability_block, _execution_intent_from_plan, _scenario_features_for_layer, _task_enabled, _task_execution_result
 from app.contracts.workflow.execution_plan_contracts import WorkerResult
 from app.contracts.spatial.parcel_change_contracts import ParcelChange
 from app.infrastructure.logging import get_logger
@@ -36,11 +35,19 @@ def _task_candidate_id(task: object | None) -> str:
     ).strip()
 
 
-def _facility_task_and_candidate(state: ExecuteAgentState, target_id: str) -> tuple[object | None, object | None]:
+def _facility_task_and_candidate(
+    state: ExecuteAgentState,
+    target_id: str,
+    occurrence: int = 0,
+) -> tuple[object | None, object | None]:
     """Resolve the selected candidate without deriving a replacement point."""
-    for task in getattr(state.execution_plan, "worker_tasks", None) or []:
-        if str(_task_value(task, "target_id", "")) != str(target_id):
-            continue
+    matches = [
+        task for task in getattr(state.execution_plan, "worker_tasks", None) or []
+        if str(_task_value(task, "target_id", "")) == str(target_id)
+        and str(getattr(_task_value(task, "worker_type", ""), "value", _task_value(task, "worker_type", ""))) == "facility_placement"
+    ]
+    if matches:
+        task = matches[min(occurrence, len(matches) - 1)]
         candidate_id = _task_candidate_id(task)
         candidate = (state.candidate_geometry_by_id or {}).get(candidate_id) if candidate_id else None
         return task, candidate
@@ -102,6 +109,23 @@ def _candidate_provenance(candidate: object | None) -> dict[str, object]:
         "candidate_geometry_role": str(_candidate_value(candidate, "role", "") or ""),
         "candidate_geometry_granularity": str(_candidate_value(candidate, "granularity", "") or ""),
         "crs": str(_candidate_value(candidate, "crs", "") or ""),
+        "availability_status": str(
+            _candidate_value(candidate, "availability_status", "unknown") or "unknown"
+        ),
+        "eligible_area_ha": _candidate_value(candidate, "eligible_area_ha", None),
+        "excluded_area_ha": _candidate_value(candidate, "excluded_area_ha", None),
+        "adjacent_parcel_bsms": [
+            str(value)
+            for value in (_candidate_value(candidate, "adjacent_parcel_bsms", []) or [])
+            if str(value).strip()
+        ],
+        "adjacency_evidence_refs": [
+            str(value)
+            for value in (
+                _candidate_value(candidate, "adjacency_evidence_refs", []) or []
+            )
+            if str(value).strip()
+        ],
     }
 
 
@@ -121,9 +145,19 @@ def _facility_worker(state: ExecuteAgentState) -> WorkerResult:
     changes: List[ParcelChange] = []
     task_results = []
     unresolved = []
+    occurrence_by_target: dict[str, int] = {}
     for facility in facilities:
-        task, selected_candidate = _facility_task_and_candidate(state, facility.target_id)
+        target_key = str(facility.target_id)
+        occurrence = occurrence_by_target.get(target_key, 0)
+        occurrence_by_target[target_key] = occurrence + 1
+        task, selected_candidate = _facility_task_and_candidate(
+            state, facility.target_id, occurrence
+        )
         candidate_id = _task_candidate_id(task)
+        task_result_kwargs = {
+            "task_id": str(_task_value(task, "task_id", "") or ""),
+            "candidate_id": candidate_id,
+        }
         if candidate_id and selected_candidate is None:
             diagnostic = {
                 "code": "candidate_geometry_missing",
@@ -136,6 +170,27 @@ def _facility_worker(state: ExecuteAgentState) -> WorkerResult:
                 state,
                 "facility_placement",
                 facility.target_id,
+                **task_result_kwargs,
+                status="deferred",
+                diagnostics=[diagnostic],
+            )
+            if task_result is not None:
+                task_results.append(task_result)
+            continue
+        availability_block = _candidate_availability_block(selected_candidate)
+        if candidate_id and availability_block:
+            diagnostic = {
+                "code": availability_block,
+                "target_id": str(facility.target_id),
+                "candidate_id": candidate_id,
+                "message": "Facility execution candidate has no executable availability proof.",
+            }
+            unresolved.append(diagnostic)
+            task_result = _task_execution_result(
+                state,
+                "facility_placement",
+                facility.target_id,
+                **task_result_kwargs,
                 status="deferred",
                 diagnostics=[diagnostic],
             )
@@ -161,6 +216,7 @@ def _facility_worker(state: ExecuteAgentState) -> WorkerResult:
                 state,
                 "facility_placement",
                 facility.target_id,
+                **task_result_kwargs,
                 status="deferred",
                 diagnostics=[diagnostic],
             )
@@ -197,6 +253,7 @@ def _facility_worker(state: ExecuteAgentState) -> WorkerResult:
                     state,
                     "facility_placement",
                     facility.target_id,
+                    **task_result_kwargs,
                     status="deferred",
                     diagnostics=[diagnostic],
                 )
@@ -235,6 +292,7 @@ def _facility_worker(state: ExecuteAgentState) -> WorkerResult:
                     state,
                     "facility_placement",
                     facility.target_id,
+                    **task_result_kwargs,
                     status="succeeded",
                 )
                 if task_result is not None:
@@ -248,6 +306,7 @@ def _facility_worker(state: ExecuteAgentState) -> WorkerResult:
                 state,
                 "facility_placement",
                 facility.target_id,
+                **task_result_kwargs,
                 status="failed",
                 diagnostics=[{"code": "facility_anchor_missing", "target_id": facility.target_id}],
             )
@@ -275,6 +334,7 @@ def _facility_worker(state: ExecuteAgentState) -> WorkerResult:
             state,
             "facility_placement",
             facility.target_id,
+            **task_result_kwargs,
             status="succeeded",
         )
         if task_result is not None:
@@ -314,12 +374,3 @@ def _facility_worker(state: ExecuteAgentState) -> WorkerResult:
             else ""
         ),
     )
-
-
-async def _facility_worker_node(state: ExecuteAgentState) -> dict:
-    try:
-        result = _facility_worker(state)
-        return {"worker_results": [result]}
-    except Exception as e:
-        logger.error("[EXECUTE:facility] failed: %s", e, exc_info=True)
-        return _execution_error(state, "facility", "facility_failed", str(e))

@@ -33,7 +33,7 @@ class ReconciliationInconsistency(BaseModel):
     expected: str = ""
     actual: str = ""
     severity: str = "warning"
-    responsible_stage: Literal["L3", "GROUND", "SELECT", "EXECUTE"] = "EXECUTE"
+    responsible_stage: Literal["L3", "GROUND", "SELECT", "EXECUTE", "VALIDATE"] = "EXECUTE"
 
 
 class ReconciliationReport(ContractMeta):

@@ -3,7 +3,7 @@
 Pure function: L2Strategy -> GateDecision. No I/O.
 Wave D delivers the evaluator; Wave M wires it into the main graph.
 
-Decision matrix (docs/design/04_PLANNING_PIPELINE.md §8 + 07_VALIDATION_FEEDBACK.md):
+Decision matrix (docs/design/01_CONTRACTS_AND_INVARIANTS.md gate semantics + docs/design/03_PLANNING_EXECUTION.md):
   PASS    -> L3
   EXPLORE -> missing evidence / missing sources
   L2      -> strategy contradictions (rework L2)

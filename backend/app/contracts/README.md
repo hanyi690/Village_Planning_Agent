@@ -1,6 +1,6 @@
 # Contracts 契约层
 
-> 本 README 以 `backend/app/contracts/` 实际代码为准（核验日期 2026-08-15）。
+> 本 README 以 `backend/app/contracts/` 实际代码为准（核验日期 2026-08-22）。
 
 ## 定位
 
@@ -12,12 +12,13 @@ Protocol。`contracts/` 是底层的“共享语言”，不依赖 API、UI 或 
 
 | 目录 | 内容 |
 |---|---|
-| `artifacts/` | `ArtifactDescriptor`、`ArtifactRef`、`ContractMeta`、`ClassificationRef`/`ClassificationDecision`、`DeliveryManifest`、`DeferralLedger`、`ReconciliationReport`、`ValidationReport`、`Provenance` 等 artifact 载荷契约 |
-| `domain/` | 认知层与领域决策契约：`l1_contracts`（L1Snapshot/AnalysisReport）、`l2_contracts`、`l3_contracts`（PlanningClaim/PlanningClaimSet）、`planning_semantics`、`road_planning`、`selection_contracts`（SiteSelectionDecision/PortfolioDecision）、`custom_zone_contracts` |
-| `spatial/` | 空间契约：`constraint_contracts`、`context_contracts`、`grounding_contracts`、`parcel_change_contracts`、`planned_state_contracts`、`spatial_delivery_contracts`、`spatial_reference_contracts`、`global_zone/site_allocation_contracts`、`land_balance_contracts`、`terrain_evidence` |
+| `artifacts/` | `ArtifactDescriptor`、`ArtifactRef`、`ContractMeta`、`ClassificationRef`/`ClassificationDecision`、`DeliveryManifest`、`DeferralLedger`、`ReconciliationReport`、`ValidationReport`、`ValidationCertificate`、`ExecutionStaging`、`Provenance` 等 artifact 载荷契约 |
+| `domain/` | 认知层与领域决策契约：`l1_contracts`（L1Snapshot/AnalysisReport）、`l2_contracts`、`l3_contracts`（PlanningClaim/PlanningClaimSet）、`planning_semantics`、`road_planning`、`planning/scenario`（ScenarioSet/PlanningScenario/ApprovedExecutionInput）、`custom_zone_contracts` |
+| `spatial/` | 空间契约：`constraint_contracts`、`context_contracts`、`grounding_contracts`、`grounded_problem`、`parcel_change_contracts`、`planned_state_contracts`、`spatial_delivery_contracts`、`spatial_reference_contracts`、`global_zone/site_allocation_contracts`、`land_balance_contracts`、`terrain_evidence` |
 | `workflow/` | 工作流契约：`execution_plan_contracts`、`human_interrupt_contracts`、`parse_contracts`/`parse_result_contracts`/`parsing_contracts`、`repair`/`repair_directive_contracts`、`resume_contracts`、`review_contracts`、`target_binding_contracts`、`workflow_contracts`、`dispatch` |
 | `evidence/` | `evidence_contracts`：EvidenceBundle/EvidenceSource/ExplorationRequest 等 |
-| `ports/` | 依赖倒置端口（Protocol）：`context`、`gazetteer`、`place_resolution`、`semantic_query`、`spatial`/`spatial_query`、`workers`、`zone_allocator`、`road_planner`、`external_search`、`media_evidence`、`bundle_assembly`、`nomenclature_registry`、`adjustment`、`planning_ports`、`context_ref_contracts` |
+| `planning/` | `PlanningScenario`、`ScenarioSet`、`SolverCertificate`、`ApprovedExecutionInput` 等规划边界契约；scoped problem 的 scope lineage 字段位于 `spatial/grounded_problem.py` |
+| `ports/` | 依赖倒置端口（Protocol）：`context`、`gazetteer`、`place_resolution`、`semantic_query`、`spatial`/`spatial_query`、`zone_allocator`、`road_planner`、`external_search`、`media_evidence`、`bundle_assembly`、`nomenclature_registry`、`adjustment`、`planning_ports`、`context_ref_contracts` |
 | `events.py` | `SSEEventType`：SSE 事件类型唯一来源（全系统共享） |
 | `program.py` | `PlanningClaim`/`PlanningClaimSet`（L3 输入；空间目标统一由 `PlanningIntervention` 承载） |
 | `public/` | 公开 API 契约（当前由 `api/v1/contracts.py` 承载） |
