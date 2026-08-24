@@ -66,4 +66,3 @@ def test_l3_relation_requirement_rejects_geometry_payload() -> None:
                 }
             ]
         )
-

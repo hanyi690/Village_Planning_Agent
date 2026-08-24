@@ -6,9 +6,9 @@ Production L1 requests observations/register material first and synthesizes
 
 from __future__ import annotations
 
-from typing import Literal
+from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 class L1ObservationDraft(BaseModel):
@@ -49,6 +49,19 @@ class L1ObservationDraft(BaseModel):
     source_refs: list[str] = Field(default_factory=list)
     confidence: float | None = None
     status: Literal["confirmed", "uncertain", "conflict", "source_exhausted"] = "confirmed"
+
+    @field_validator("attributes", mode="before")
+    @classmethod
+    def normalize_attribute_scalars(cls, value: Any) -> Any:
+        """Normalize provider JSON scalars without accepting nested payloads."""
+        if not isinstance(value, dict):
+            return value
+        normalized: dict[str, Any] = {}
+        for key, item in value.items():
+            normalized[str(key)] = (
+                str(item) if isinstance(item, (str, int, float, bool)) else item
+            )
+        return normalized
 
 
 class L1RegisterRowDraft(BaseModel):

@@ -21,4 +21,3 @@ def test_l3_contract_names_grounding_inputs_and_keeps_report_scope() -> None:
     assert "facility" in rendered
     assert "demand_points" in rendered
     assert "GROUND" in rendered
-
