@@ -2,7 +2,7 @@ from app.contracts.planning.constraint_factor import ConstraintFactor
 from app.contracts.planning.relation_parameters import DistanceParameters
 from app.contracts.spatial.candidate_geometry import CandidateGeometry
 from app.contracts.spatial.grounded_problem import GroundedCandidateDomain, GroundedPlanningProblem
-from app.domain.allocation.scenario_solver import solve_scenario
+from app.domain.allocation.scenario_optimizer import optimize_scenarios
 from app.domain.relations.service import RelationEvaluationContext
 
 
@@ -20,14 +20,15 @@ def test_candidate_only_geometry_is_never_materialized_as_execution_feature():
         candidate_domains=[GroundedCandidateDomain(target_id="zone", candidate_ids=["scope"], status="candidate_only")],
         candidate_geometries=[candidate],
     )
-    result = solve_scenario(
+    scenario_set = optimize_scenarios(
         problem,
-        scenario_id="scenario-scope",
+        set_id="scenario-scope",
         evaluator_context=RelationEvaluationContext(scenario_id="scenario-scope"),
+        max_scenarios=1,
     )
-    assert result.status == "failed"
-    assert result.feature_intents == []
-    assert result.findings[0].code == "NO_PLANNING_OUTPUT"
+    assert scenario_set.recommended is None
+    assert scenario_set.feasible_scenario_ids == []
+    assert scenario_set.solver_certificate.status == "infeasible"
 
 
 def test_hard_avoid_is_not_reinterpreted_as_soft_score():
@@ -43,16 +44,28 @@ def test_hard_avoid_is_not_reinterpreted_as_soft_score():
         object_ref="b",
         hard=True,
     )
-    result = solve_scenario(
+    scenario_set = optimize_scenarios(
         GroundedPlanningProblem(
             candidate_domains=[
-                GroundedCandidateDomain(target_id="a", candidate_ids=["a"]),
-                GroundedCandidateDomain(target_id="b", candidate_ids=["b"]),
+                GroundedCandidateDomain(
+                    target_id="a",
+                    candidate_ids=["a"],
+                    candidate_geometry_refs=["a"],
+                    status="resolved",
+                ),
+                GroundedCandidateDomain(
+                    target_id="b",
+                    candidate_ids=["b"],
+                    candidate_geometry_refs=["b"],
+                    status="resolved",
+                ),
             ],
             candidate_geometries=geometries,
             constraint_factors=[factor],
         ),
-        scenario_id="scenario-avoid",
+        set_id="scenario-avoid",
         evaluator_context=RelationEvaluationContext(scenario_id="scenario-avoid"),
+        max_scenarios=1,
     )
-    assert result.status == "failed"
+    assert scenario_set.recommended is None
+    assert scenario_set.feasible_scenario_ids == []

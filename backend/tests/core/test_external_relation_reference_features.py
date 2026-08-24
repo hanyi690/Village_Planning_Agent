@@ -17,7 +17,8 @@ from app.contracts.spatial.grounded_problem import (
 )
 from app.contracts.spatial.planned_state_contracts import PlannedState, PlannedZone
 from app.contracts.ports.place_resolution_contracts import PlaceResolutionCandidate
-from app.domain.allocation.scenario_solver import solve_scenario
+from app.domain.allocation.scenario_optimizer import optimize_scenarios
+from app.domain.allocation.scenario_solver import _evaluate_assignment
 from app.domain.relations.reference_features import (
     resolve_relation_reference_features,
 )
@@ -48,6 +49,17 @@ class _EvidenceGraph:
             status="resolved" if len(self.candidates) == 1 else "ambiguous",
             candidates=list(self.candidates),
         )
+
+
+def _recommended(problem, *, scenario_id: str, evaluator_context: RelationEvaluationContext):
+    scenario_set = optimize_scenarios(
+        problem,
+        set_id=scenario_id,
+        evaluator_context=evaluator_context,
+        max_scenarios=8,
+    )
+    assert scenario_set.recommended is not None, scenario_set.model_dump(mode="json")
+    return scenario_set.recommended
 
 
 def _context(candidates):
@@ -201,12 +213,14 @@ def test_external_reference_relation_changes_selection_using_bundle_geometry():
         candidate_domains=[GroundedCandidateDomain(
             target_id="target:site",
             candidate_ids=["site:near", "site:far"],
+            candidate_geometry_refs=["site:near", "site:far"],
+            status="resolved",
         )],
         candidate_geometries=geometries,
         constraint_factors=[factor],
     )
 
-    result = solve_scenario(
+    result = _recommended(
         problem,
         scenario_id="scenario:reference",
         evaluator_context=RelationEvaluationContext(
@@ -285,6 +299,8 @@ def test_external_reference_is_available_to_network_relation_subproblem():
         candidate_domains=[GroundedCandidateDomain(
             target_id="target:site",
             candidate_ids=[target.candidate_id],
+            candidate_geometry_refs=[target.candidate_id],
+            status="resolved",
         )],
         candidate_geometries=[target],
         constraint_factors=[factor],
@@ -301,8 +317,9 @@ def test_external_reference_is_available_to_network_relation_subproblem():
         def nearest_node(self, feature):
             return ("node:test", 0.0)
 
-    result = solve_scenario(
+    _features, satisfactions = _evaluate_assignment(
         problem,
+        {"target:site": ("site:point",)},
         scenario_id="scenario:network-reference",
         evaluator_context=RelationEvaluationContext(
             scenario_id="scenario:network-reference",
@@ -311,9 +328,8 @@ def test_external_reference_is_available_to_network_relation_subproblem():
         ),
     )
 
-    assert result.status == "complete"
-    assert result.relation_satisfactions[0].status == "satisfied"
-    assert result.relation_satisfactions[0].object_feature_refs
+    assert satisfactions[0].status == "satisfied"
+    assert satisfactions[0].object_feature_refs
 
 
 def test_external_reference_is_available_to_access_relation_subproblem():
@@ -349,6 +365,8 @@ def test_external_reference_is_available_to_access_relation_subproblem():
         candidate_domains=[GroundedCandidateDomain(
             target_id="target:site",
             candidate_ids=[target.candidate_id],
+            candidate_geometry_refs=[target.candidate_id],
+            status="resolved",
         )],
         candidate_geometries=[target],
         constraint_factors=[factor],
@@ -362,8 +380,9 @@ def test_external_reference_is_available_to_access_relation_subproblem():
 
             return NetworkRoute(True, distance_m=100.0, travel_time_min=2.0)
 
-    result = solve_scenario(
+    _features, satisfactions = _evaluate_assignment(
         problem,
+        {"target:site": ("site:point",)},
         scenario_id="scenario:access-reference",
         evaluator_context=RelationEvaluationContext(
             scenario_id="scenario:access-reference",
@@ -372,9 +391,8 @@ def test_external_reference_is_available_to_access_relation_subproblem():
         ),
     )
 
-    assert result.status == "complete"
-    assert result.relation_satisfactions[0].status == "satisfied"
-    assert result.relation_satisfactions[0].measurement.value == 2.0
+    assert satisfactions[0].status == "satisfied"
+    assert satisfactions[0].measurement.value == 2.0
 
 
 def test_final_validation_reuses_external_bundle_reference_without_orphan_finding():
@@ -490,12 +508,14 @@ def test_linear_constraint_buffer_changes_large_parcel_candidate_selection():
         candidate_domains=[GroundedCandidateDomain(
             target_id="target:site",
             candidate_ids=["site:inside-buffer", "site:outside-buffer"],
+            candidate_geometry_refs=["site:inside-buffer", "site:outside-buffer"],
+            status="resolved",
         )],
         candidate_geometries=geometries,
         constraint_factors=[factor],
     )
 
-    result = solve_scenario(
+    result = _recommended(
         problem,
         scenario_id="scenario:road-buffer",
         evaluator_context=RelationEvaluationContext(

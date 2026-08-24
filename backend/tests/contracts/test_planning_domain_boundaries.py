@@ -1,4 +1,4 @@
-from app.domain.allocation.select_gate import evaluate_select_gate
+from app.domain.allocation.select_gate import evaluate_scenario_select_gate
 from app.domain.allocation import build_portfolio_decision
 from app.domain.demand import derive_demand_portfolio
 from app.domain.suitability import build_suitability_surface
@@ -12,7 +12,9 @@ from app.contracts.workflow.parse_contracts import (
     SiteAreaTarget,
     SpatialPlanningIntent,
 )
-from app.contracts.domain.selection_contracts import SiteSelectionDecision, TargetAssignment
+from types import SimpleNamespace
+
+from app.contracts.workflow.materialization_contracts import TargetAssignment
 
 
 def _intent() -> SpatialPlanningIntent:
@@ -80,7 +82,7 @@ def test_suitability_exposes_grounding_evidence_without_allocating():
 def test_allocation_accepts_only_explicit_placed_selection():
     demand = derive_demand_portfolio(_intent())
     surface = build_suitability_surface(_grounding())
-    selection = SiteSelectionDecision(
+    selection = SimpleNamespace(
         target_assignments=[
             TargetAssignment(
                 target_id="site-area-1",
@@ -101,7 +103,7 @@ def test_allocation_accepts_only_explicit_placed_selection():
 def test_allocation_and_select_gate_fail_closed_when_hard_feasibility_is_unproven():
     demand = derive_demand_portfolio(_intent())
     surface = build_suitability_surface(_grounding(hard_passed=False))
-    selection = SiteSelectionDecision(
+    selection = SimpleNamespace(
         target_assignments=[
             TargetAssignment(
                 target_id="site-area-1",
@@ -113,14 +115,14 @@ def test_allocation_and_select_gate_fail_closed_when_hard_feasibility_is_unprove
     )
 
     decision = build_portfolio_decision(demand, surface, selection)
-    gate = evaluate_select_gate(
-        selection,
-        target_count=1,
-        portfolio_decision=decision,
+    gate = evaluate_scenario_select_gate(
+        None,
+        None,
+        None,
     )
 
     assert decision.solver_status == "INFEASIBLE"
     assert decision.unmet_demand == ["demand:site-area-1"]
     assert gate.passed is False
-    assert gate.route_reason == "portfolio_infeasible"
-    assert gate.pending_requests[0].context["target_ids"] == ["site-area-1"]
+    assert gate.route_reason == "scenario_or_approval_incomplete"
+    assert "scenario_set_missing" in gate.pending_requests[0].context["reasons"]

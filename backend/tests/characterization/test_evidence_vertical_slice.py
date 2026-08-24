@@ -105,6 +105,12 @@ async def test_real_retrieval_slice_answers_village_facility_bsm(monkeypatch) ->
     )
     packet = result.evidence_packet
 
+    assert result.coverage is not None
+    assert result.coverage.sufficient is True
+    assert any(
+        item.status == "supported"
+        for item in result.coverage.requirement_coverage
+    )
     assert any("设施 1 个" in fact.statement for fact in result.evidence_bundle.facts)
     assert any(
         fact.fact_type == "l1_fact" and "祠堂" in fact.statement
@@ -249,6 +255,8 @@ async def test_retrieval_slice_uses_simulated_minimax_for_raw_facility_label(mon
     )
 
     packet = result.evidence_packet
+    assert result.coverage is not None
+    assert result.coverage.sufficient is True
     assert simulated.calls == 2
     assert packet.candidate_refs
     assert packet.candidate_refs[0].identity.canonical_name == "祠堂"

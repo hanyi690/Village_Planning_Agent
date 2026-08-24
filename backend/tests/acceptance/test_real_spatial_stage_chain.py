@@ -16,7 +16,7 @@ import pytest
 
 pytest.importorskip("fastapi")
 
-from tests.acceptance.test_complete_execution_render import _uploads  # noqa: E402
+from tests.acceptance.test_upload_fixtures import _uploads  # noqa: E402
 from tests.fixtures.db import make_session_with_uploads  # noqa: E402
 
 

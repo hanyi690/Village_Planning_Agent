@@ -66,15 +66,25 @@ def _artifact_chain() -> dict[str, ArtifactRef]:
         "GROUND",
         parents={"target_projection": refs["target_projection"]},
     )
-    refs["site_selection"] = _ref(
-        "site_selection",
+    refs["scenario_set"] = _ref(
+        "scenario_set",
         "SELECT",
         parents={"grounding_result": refs["grounding_result"]},
+    )
+    refs["planning_scenario"] = _ref(
+        "planning_scenario",
+        "SELECT",
+        parents={"scenario_set": refs["scenario_set"]},
+    )
+    refs["approved_execution_input"] = _ref(
+        "approved_execution_input",
+        "SELECT",
+        parents={"planning_scenario": refs["planning_scenario"]},
     )
     refs["execution_plan"] = _ref(
         "execution_plan",
         "EXECUTE",
-        parents={"site_selection": refs["site_selection"]},
+        parents={"approved_execution_input": refs["approved_execution_input"]},
     )
     refs["planned_state"] = _ref(
         "planned_state",
@@ -331,8 +341,8 @@ def test_directive_type_sets_earliest_invalidation_stage(
 def test_stale_parent_checksum_moves_execute_repair_back_to_select() -> None:
     refs = _artifact_chain()
     stale_ground = _ref("stale-ground", "GROUND")
-    refs["site_selection"] = _ref(
-        "site_selection-stale",
+    refs["scenario_set"] = _ref(
+        "scenario_set-stale",
         "SELECT",
         parents={"grounding_result": stale_ground},
     )
@@ -353,7 +363,7 @@ def test_stale_parent_checksum_moves_execute_repair_back_to_select() -> None:
     assert impact.status == "ready"
     assert impact.earliest_invalid_stage == "SELECT"
     assert any(
-        issue.code == "parent_checksum_mismatch" and issue.artifact_key == "site_selection"
+        issue.code == "parent_checksum_mismatch" and issue.artifact_key == "planning_scenario"
         for issue in impact.integrity_issues
     )
 

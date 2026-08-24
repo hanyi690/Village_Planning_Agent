@@ -18,6 +18,7 @@ def _scenario() -> PlanningScenario:
         crs="EPSG:3857",
         generation_operation="select",
         source_refs=["candidate:candidate:zone"],
+        relation_ids=["selection:target:zone:candidate:zone"],
     )
     feature_b = ScenarioFeature(
         feature_id="feature:facility",
@@ -29,6 +30,7 @@ def _scenario() -> PlanningScenario:
         crs="EPSG:3857",
         generation_operation="select",
         source_refs=["candidate:candidate:facility"],
+        relation_ids=["selection:target:facility:candidate:facility"],
     )
     factor = ConstraintFactor(
         factor_id="factor:near-zone-facility",

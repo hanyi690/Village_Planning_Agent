@@ -67,6 +67,39 @@ def test_multi_parcel_resolution_exposes_independent_parcel_alternatives() -> No
     assert all(candidate.geometry.hard_constraint_status == "pending" for candidate in candidates)
 
 
+def test_parcel_set_domain_is_not_collapsed_before_constraint_evaluation() -> None:
+    """A parcel-set recall result must be evaluated one parcel at a time."""
+
+    class _Overlap:
+        constraint_type = "farmland_protection"
+
+    class _ConstraintIndex:
+        def geometry_in_constraint(self, geometry):
+            return [_Overlap()] if geometry["coordinates"][0][0][0] < 1.5 else []
+
+    context = _context()
+    context.constraint_index = _ConstraintIndex()
+    candidates = build_candidate_sites(
+        SpatialReferenceSpec(type="place_name", target_id="facility-2"),
+        ResolvedSpatialRef(
+            final_bsms=["P-1", "P-2"],
+            spatial_domain_kind="parcel_set",
+            confidence=0.7,
+            provenance={"path": "l1:parcel_set"},
+        ),
+        0,
+        context,
+        target_kind="facility",
+        expected_output_kind="point",
+    )
+
+    assert [candidate.source_parcels for candidate in candidates] == [["P-1"], ["P-2"]]
+    assert [candidate.geometry.hard_constraint_status for candidate in candidates] == [
+        "failed",
+        "passed",
+    ]
+
+
 def test_explicit_point_geometry_is_not_replaced_by_parcel_alternatives() -> None:
     candidates = build_candidate_sites(
         SpatialReferenceSpec(type="place_name", target_id="facility-1"),
@@ -104,6 +137,7 @@ def test_parcel_alternatives_keep_independent_hard_constraint_results() -> None:
         ResolvedSpatialRef(
             final_bsms=["P-1", "P-2"],
             confidence=0.7,
+            uncertainty_reason="grounded_anchor",
             provenance={"path": "evidence:candidates"},
         ),
         0,

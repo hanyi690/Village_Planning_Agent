@@ -30,19 +30,19 @@ def test_runtime_stores_descriptor_and_replays_from_same_descriptor(tmp_path) ->
     state = _state(tmp_path)
     payload = {'decisions': [{'id': 'site-1'}]}
 
-    first = store_artifact(state, 'site_selection', 'allocation', 'SiteSelectionDecision', payload, base_dir=tmp_path)
-    replay = store_artifact({**state, 'artifact_refs': {'site_selection': first}}, 'site_selection', 'allocation', 'SiteSelectionDecision', payload, base_dir=tmp_path)
+    first = store_artifact(state, 'scenario_set', 'allocation', 'ScenarioSet', payload, base_dir=tmp_path)
+    replay = store_artifact({**state, 'artifact_refs': {'scenario_set': first}}, 'scenario_set', 'allocation', 'ScenarioSet', payload, base_dir=tmp_path)
 
     assert set(('digest', 'descriptor_digest', 'parent_digests')).issubset(first)
     assert 'revision' not in first
     assert replay['descriptor_digest'] == first['descriptor_digest']
-    assert load_artifact({**state, 'artifact_refs': {'site_selection': first}}, 'site_selection', base_dir=tmp_path) == payload
+    assert load_artifact({**state, 'artifact_refs': {'scenario_set': first}}, 'scenario_set', base_dir=tmp_path) == payload
 
 
 def test_runtime_fork_reuses_blob_but_has_branch_descriptor(tmp_path) -> None:
     payload = {'decisions': [{'id': 'site-1'}]}
-    main = store_artifact(_state(tmp_path), 'site_selection', 'allocation', 'SiteSelectionDecision', payload, base_dir=tmp_path)
-    fork = store_artifact(_state(tmp_path, branch_id='fork-cp-1'), 'site_selection', 'allocation', 'SiteSelectionDecision', payload, base_dir=tmp_path)
+    main = store_artifact(_state(tmp_path), 'scenario_set', 'allocation', 'ScenarioSet', payload, base_dir=tmp_path)
+    fork = store_artifact(_state(tmp_path, branch_id='fork-cp-1'), 'scenario_set', 'allocation', 'ScenarioSet', payload, base_dir=tmp_path)
 
     assert fork['digest'] == main['digest']
     assert fork['descriptor_digest'] != main['descriptor_digest']
@@ -51,25 +51,25 @@ def test_runtime_fork_reuses_blob_but_has_branch_descriptor(tmp_path) -> None:
 
 def test_runtime_rejects_old_revision_reference(tmp_path) -> None:
     with pytest.raises(ValueError, match='ArtifactDescriptor'):
-        load_artifact({**_state(tmp_path), 'artifact_refs': {'site_selection': {'revision': 'v1'}}}, 'site_selection', base_dir=tmp_path)
+        load_artifact({**_state(tmp_path), 'artifact_refs': {'scenario_set': {'revision': 'v1'}}}, 'scenario_set', base_dir=tmp_path)
 
 
 def test_checkpoint_fork_clones_refs_and_reuses_payload_bytes(tmp_path) -> None:
     state = _state(tmp_path)
     original = store_artifact(
         state,
-        'site_selection',
+        'scenario_set',
         'allocation',
-        'SiteSelectionDecision',
+        'ScenarioSet',
         {'decisions': [{'id': 'site-1'}]},
         base_dir=tmp_path,
     )
     forked_refs = fork_artifact_refs(
-        {**state, 'artifact_refs': {'site_selection': original}},
+        {**state, 'artifact_refs': {'scenario_set': original}},
         'fork-checkpoint-1',
         base_dir=tmp_path,
     )
-    forked = forked_refs['site_selection']
+    forked = forked_refs['scenario_set']
 
     assert forked['digest'] == original['digest']
     assert forked['descriptor_digest'] != original['descriptor_digest']
@@ -80,6 +80,6 @@ def test_checkpoint_fork_clones_refs_and_reuses_payload_bytes(tmp_path) -> None:
             'branch_id': 'fork-checkpoint-1',
             'artifact_refs': forked_refs,
         },
-        'site_selection',
+        'scenario_set',
         base_dir=tmp_path,
     ) == {'decisions': [{'id': 'site-1'}]}

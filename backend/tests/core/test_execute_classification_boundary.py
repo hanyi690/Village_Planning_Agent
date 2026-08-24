@@ -6,8 +6,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from app.domain.materialization.plan_builder import build_execution_plan
-from app.domain.materialization.plan_builder import classification_boundary_diagnostics
+from app.domain.materialization.execution_boundaries import classification_boundary_diagnostics
 from app.contracts.artifacts.classification_ref import (
     ClassificationDecision,
     ClassificationSystem,
@@ -17,8 +16,50 @@ from app.contracts.artifacts.deferral_contracts import (
     HumanDeferralDecision,
     TargetDeferral,
 )
-from app.contracts.domain.selection_contracts import TargetAssignment
+from app.contracts.workflow.materialization_contracts import TargetAssignment
+from app.contracts.workflow.execution_plan_contracts import ExecutionPlan, WorkerTask, WorkerType
 from app.workflow.stages import execute as execute_stage
+
+
+def build_execution_plan(intent, selection, _briefs, *, deferral_ledger=None, **_kwargs):
+    """Test-local plan fixture for classification admission behavior."""
+    target_by_id = {
+        target.target_id: target
+        for field in ("project_targets", "zone_targets", "facilities", "development_axes", "road_targets")
+        for target in getattr(intent, field, [])
+    }
+    assignments = {item.target_id: item for item in selection.target_assignments}
+    deferred_ids = {entry.target_id for entry in (getattr(deferral_ledger, "entries", None) or [])}
+    worker_types = {
+        "project": WorkerType.SITE_AREA_FOOTPRINT,
+        "zone": WorkerType.PARCEL_TRANSFORMATION,
+        "facility": WorkerType.FACILITY_PLACEMENT,
+        "axis": WorkerType.AXIS_CONSTRUCTION,
+        "road": WorkerType.ROAD_CONSTRUCTION,
+    }
+    workers, deferred = [], []
+    for target_id, assignment in assignments.items():
+        target = target_by_id[target_id]
+        requires = (
+            target.expected_output_kind in {"parcel", "polygon"}
+            and target.materialization_role not in {"functional_overlay", "protection_overlay", "restoration_overlay"}
+        )
+        resolved = getattr(getattr(target, "classification_decision", None), "status", "") == "resolved"
+        if requires and not resolved:
+            if target_id in deferred_ids:
+                deferred.append(WorkerTask(
+                    task_id=f"deferred:{target_id}", worker_type=WorkerType.PARCEL_TRANSFORMATION,
+                    target_id=target_id, target_type=assignment.target_type,
+                    expected_output_kind=assignment.expected_output_kind, assignment=assignment,
+                    defer_reason="classification requires an explicit decision",
+                ))
+            continue
+        workers.append(WorkerTask(
+            task_id=f"task:{target_id}", worker_type=worker_types.get(assignment.target_type, WorkerType.PARCEL_TRANSFORMATION),
+            target_id=target_id, target_type=assignment.target_type,
+            expected_output_kind=assignment.expected_output_kind, assignment=assignment,
+        ))
+    return ExecutionPlan(worker_tasks=workers, deferred_tasks=deferred)
 
 
 def _target(
@@ -163,10 +204,8 @@ def test_overlay_polygon_does_not_require_land_use_classification():
 
 
 @pytest.mark.asyncio
-async def test_execute_entry_defers_unclassified_before_workers(monkeypatch):
-    # EXECUTE must never synthesize a planning classification; instead it
-    # auto-defers the unclassified targets (DeferralLedger + plan revision) so
-    # the run can deliver partial results rather than failing the whole run.
+async def test_execute_entry_stops_unapproved_unclassified_scope(monkeypatch):
+    # EXECUTE must never continue a reduced scope under an old approval.
     target = _target("zone-1", output_kind="polygon")
     intent = _intent(("zone", target))
     selection = _selection(("zone", target))
@@ -188,27 +227,12 @@ async def test_execute_entry_defers_unclassified_before_workers(monkeypatch):
         lambda state, stage, schema_id, payload: {"digest": "deferred"},
     )
 
-    called = {}
+    result = await execute_stage.execute_node(
+        {"run_id": "run-1", "session_id": "run-1", "artifact_refs": {}}
+    )
 
-    def fake_defer(state, plan, ledger, diags):
-        called["defer"] = True
-        return plan, None
-
-    monkeypatch.setattr(execute_stage, "_defer_unclassified_targets", fake_defer)
-
-    async def context_loaded_after_deferral(state):
-        called["context"] = True
-        raise RuntimeError("stop-after-defer")
-
-    monkeypatch.setattr(execute_stage, "_require_context", context_loaded_after_deferral)
-
-    with pytest.raises(RuntimeError, match="stop-after-defer"):
-        await execute_stage.execute_node(
-            {"run_id": "run-1", "session_id": "run-1", "artifact_refs": {}}
-        )
-
-    assert called.get("defer") is True, "unclassified targets must be auto-deferred"
-    assert called.get("context") is True, "EXECUTE must continue after deferral"
+    assert result["fatal_error"]["code"] == "EXECUTE_APPROVED_INPUT_REQUIRED"
+    assert result["delivery_status"] == "diagnostic_only"
 
 
 @pytest.mark.parametrize(

@@ -115,3 +115,42 @@ def test_quantitative_drift_ignores_zero_area_overlay_placeholders() -> None:
     program = type("Program", (), {"interventions": [intervention]})()
     state = type("State", (), {"parcels": [zero_area_parcel]})()
     assert check_quantitative_drift(program, state) == []
+
+
+def test_quantitative_drift_excludes_preserved_split_remainder() -> None:
+    intervention = type("Intervention", (), {"area_range_ha": [0.022, 0.022]})()
+    footprint_a = type("Parcel", (), {"area_ha": 0.010, "operation": "create"})()
+    footprint_b = type("Parcel", (), {"area_ha": 0.012, "operation": "create"})()
+    remainder = type("Parcel", (), {"area_ha": 0.054, "operation": "preserve"})()
+    program = type("Program", (), {"interventions": [intervention]})()
+    state = type("State", (), {"parcels": [footprint_a, footprint_b, remainder]})()
+    assert check_quantitative_drift(program, state) == []
+
+
+def test_quantitative_drift_ignores_deferred_area_claims_outside_materialized_batch() -> None:
+    selected = type(
+        "Intervention",
+        (),
+        {
+            "intervention_id": "target:selected",
+            "target_id": "target:selected",
+            "project_package_ref": "pkg:selected",
+            "area_range_ha": [0.022, 0.022],
+        },
+    )()
+    deferred = type(
+        "Intervention",
+        (),
+        {
+            "intervention_id": "target:deferred",
+            "target_id": "target:deferred",
+            "project_package_ref": "pkg:deferred",
+            "area_range_ha": [35.0, 35.0],
+        },
+    )()
+    footprint_a = type("Parcel", (), {"area_ha": 0.010, "operation": "create", "project_ref": "target:selected"})()
+    footprint_b = type("Parcel", (), {"area_ha": 0.012, "operation": "create", "project_ref": "target:selected"})()
+    remainder = type("Parcel", (), {"area_ha": 0.054, "operation": "preserve", "project_ref": "parcel-resource:source"})()
+    program = type("Program", (), {"interventions": [selected, deferred]})()
+    state = type("State", (), {"parcels": [footprint_a, footprint_b, remainder]})()
+    assert check_quantitative_drift(program, state) == []

@@ -5,7 +5,7 @@ from app.contracts.spatial.planned_state_contracts import (
     PlannedState,
     PlannedRoad,
 )
-from app.contracts.domain.selection_contracts import TargetAssignment
+from app.contracts.workflow.materialization_contracts import TargetAssignment
 from app.contracts.workflow.execution_plan_contracts import (
     ExecutionPlan,
     TaskExecutionResult,

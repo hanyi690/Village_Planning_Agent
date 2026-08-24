@@ -348,10 +348,22 @@ def _minimal_artifacts_for(stage: str, source: ArtifactRef) -> dict[str, Artifac
             "parent_digests": {"target_projection": target_projection.digest},
         }
     )
-    site_selection = ArtifactRef(
+    scenario_set = ArtifactRef(
         **{
-            **_ref("site_selection", "SELECT").model_dump(),
+            **_ref("scenario_set", "SELECT").model_dump(),
             "parent_digests": {"grounding_result": grounding_result.digest},
+        }
+    )
+    planning_scenario = ArtifactRef(
+        **{
+            **_ref("planning_scenario", "SELECT").model_dump(),
+            "parent_digests": {"scenario_set": scenario_set.digest},
+        }
+    )
+    approved_execution_input = ArtifactRef(
+        **{
+            **_ref("approved_execution_input", "SELECT").model_dump(),
+            "parent_digests": {"planning_scenario": planning_scenario.digest},
         }
     )
     refs = {
@@ -360,7 +372,9 @@ def _minimal_artifacts_for(stage: str, source: ArtifactRef) -> dict[str, Artifac
         "planning_program": planning_program,
         "target_projection": target_projection,
         "grounding_result": grounding_result,
-        "site_selection": site_selection,
+        "scenario_set": scenario_set,
+        "planning_scenario": planning_scenario,
+        "approved_execution_input": approved_execution_input,
         "validation_report": source,
     }
     return refs

@@ -1,4 +1,9 @@
 from app.workflow.state import control_state_from_checkpoint
+from app.application.projections.session import (
+    _latest_stage_transition,
+    _project_live_phase,
+    _project_live_stage,
+)
 
 
 def test_projection_drops_legacy_payloads_and_normalizes_control_fields():
@@ -66,3 +71,33 @@ def test_projection_keeps_step_mode_items_at_the_interrupt_boundary():
         "items": [{"id": "layer2-review"}],
         "paused_stage": "layer2",
     }
+
+
+def test_session_projection_advances_terminal_delivery_to_deliver():
+    assert _project_live_stage(
+        {"active_stage": "validate", "delivery_status": "partial"},
+        {},
+        None,
+    ) == "deliver"
+
+
+def test_session_projection_keeps_non_terminal_stage():
+    assert _project_live_stage(
+        {"active_stage": "validate", "status": "running"},
+        {},
+        None,
+    ) == "validate"
+
+
+def test_session_projection_ignores_stale_l1_report_after_l2_started():
+    events = [
+        {"seq": 51, "data": {"type": "layer_completed", "layer": 1}},
+        {"seq": 52, "data": {"type": "layer_started", "layer": 2}},
+        {"seq": 53, "data": {"type": "step_report", "stage": "L1"}},
+    ]
+
+    live = _latest_stage_transition(events, events[-1])
+
+    assert live == events[1]
+    assert _project_live_phase({"phase": "layer1"}, live) == "layer2"
+    assert _project_live_stage({"active_stage": "L1"}, {}, live) == "L2"

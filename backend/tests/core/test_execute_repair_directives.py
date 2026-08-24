@@ -2,13 +2,6 @@
 
 from __future__ import annotations
 
-from types import SimpleNamespace
-
-from app.contracts.spatial.global_zone_allocation_contracts import (
-    AuthoritativeZoneParcelAssignment,
-    GlobalZoneAllocationResult,
-    ZoneAssignmentLineage,
-)
 from app.contracts.workflow.execution_plan_contracts import (
     ExecutionPlan,
     TaskExecutionResult,
@@ -21,7 +14,6 @@ from app.contracts.workflow.repair_directive_contracts import (
     RepairDirectiveType,
     RepairEvidenceScope,
 )
-from app.domain.materialization.nodes.zone_worker import _repair_skip_bsms, _zone_worker
 from app.workflow.stages.execute import (
     _apply_execute_repair_to_intent,
     _build_exec_repair_payload,
@@ -130,7 +122,7 @@ def test_apply_execute_repair_to_intent_drops_require_evidence_roads() -> None:
 
 
 def test_mark_require_evidence_unresolved_appends_typed_failed_result() -> None:
-    from app.contracts.domain.selection_contracts import TargetAssignment
+    from app.contracts.workflow.materialization_contracts import TargetAssignment
 
     task = WorkerTask(
         task_id="road_construction:road-x",
@@ -156,90 +148,3 @@ def test_mark_require_evidence_unresolved_appends_typed_failed_result() -> None:
     assert marked.status == "failed"
     assert marked.task_id == "road_construction:road-x"
     assert any(item["code"] == "require_source_evidence" for item in marked.diagnostics)
-
-
-def test_zone_worker_skips_bsms_marked_by_repair_directive() -> None:
-    from app.contracts.domain.selection_contracts import TargetAssignment
-    from app.contracts.workflow.parse_contracts import ZoneTarget
-    from app.domain.materialization.execute_state import ExecuteAgentState
-    from shapely.geometry import Polygon, mapping
-
-    target = ZoneTarget(
-        target_id="zone-A",
-        zone_id="planning-zone-A",
-        land_use="设施农用地",
-        area_ha=1.0,
-        candidate_bsms=["P1", "P2"],
-    )
-    task = WorkerTask(
-        task_id="parcel_transformation:zone-A",
-        worker_type=WorkerType.PARCEL_TRANSFORMATION,
-        target_id="zone-A",
-        target_type="zone",
-        expected_output_kind="polygon",
-        assignment=TargetAssignment(
-            target_id="zone-A",
-            target_type="zone",
-            target_binding=target.model_dump(mode="json"),
-        ),
-    )
-
-    def assignment(bsm: str) -> AuthoritativeZoneParcelAssignment:
-        return AuthoritativeZoneParcelAssignment(
-            target_id="zone-A",
-            zone_id="planning-zone-A",
-            bsm=bsm,
-            land_use="设施农用地",
-            classification_system="gbt21010",
-            classification_code="1207",
-            area_ha=1.0,
-            suitability_score=0.9,
-            score_breakdown={},
-            lineage=ZoneAssignmentLineage(
-                lineage_id=f"lineage-{bsm}",
-                target_id="zone-A",
-                zone_id="planning-zone-A",
-                source_instruction_id="i1",
-                source_report_key="r1",
-                claim_refs=["c1"],
-                classification_evidence_refs=["cl1"],
-                candidate_provenance_refs=["cp1"],
-                parcel_provenance_refs=[f"parcel-{bsm}"],
-                geometry_ref=f"bundle://parcel/{bsm}",
-            ),
-        )
-
-    parcel = lambda bsm: {  # noqa: E731
-        "bsm": bsm,
-        "area_ha": 1.0,
-        "geometry": mapping(Polygon([(0, 0), (100, 0), (100, 100), (0, 100)])),
-    }
-    state = ExecuteAgentState(
-        execution_plan=ExecutionPlan(worker_tasks=[task]),
-        parcel_by_bsm={"P1": parcel("P1"), "P2": parcel("P2")},
-        repair_directives={
-            "zone-A": {
-                "directive_type": "rebuild_geometry",
-                "affected_bsms": ["P1"],
-                "exclude_bsms": [],
-                "rebuild_strategy": "repair_invalid_geometry",
-            }
-        },
-    )
-    allocation = GlobalZoneAllocationResult(
-        status="OPTIMAL",
-        feasible=True,
-        complete=True,
-        assignments=[assignment("P1"), assignment("P2")],
-        overlay_targets=[],
-    )
-
-    assert _repair_skip_bsms(state, "zone-A") == {"P1"}
-    result = _zone_worker(state, allocation_result=allocation)
-
-    assert [change.bsm for change in result.parcel_changes] == ["P2"]
-    assert any(
-        item["code"] == "assignment_skipped_by_repair" and item["bsm"] == "P1"
-        for item in result.unresolved_items
-    )
-    assert result.task_results[0].status == "succeeded"

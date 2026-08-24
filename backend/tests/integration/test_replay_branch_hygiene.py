@@ -24,9 +24,9 @@ def _state(branch_id: str = "main", refs: dict | None = None) -> dict:
 def test_mixed_checkpoint_refs_fail_before_store_or_fork(tmp_path):
     main_ref = store_artifact(
         _state(),
-        "site_selection",
+        "scenario_set",
         "select",
-        "SiteSelectionDecision",
+        "ScenarioSet",
         {"branch": "main"},
         base_dir=tmp_path,
     )
@@ -38,7 +38,7 @@ def test_mixed_checkpoint_refs_fail_before_store_or_fork(tmp_path):
         {"branch": "resume-fork-1"},
         base_dir=tmp_path,
     )
-    mixed = _state(refs={"site_selection": main_ref, "execution_plan": fork_ref})
+    mixed = _state(refs={"scenario_set": main_ref, "execution_plan": fork_ref})
 
     with pytest.raises(ArtifactReplayError, match="span branches"):
         validate_artifact_refs_branch(mixed)
@@ -61,10 +61,10 @@ def test_checkpoint_refs_from_one_branch_are_accepted(tmp_path):
     state = _state()
     ref = store_artifact(
         state,
-        "site_selection",
+        "scenario_set",
         "select",
-        "SiteSelectionDecision",
+        "ScenarioSet",
         {"branch": "main"},
         base_dir=tmp_path,
     )
-    assert validate_artifact_refs_branch(_state(refs={"site_selection": ref})) == "main"
+    assert validate_artifact_refs_branch(_state(refs={"scenario_set": ref})) == "main"

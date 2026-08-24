@@ -119,3 +119,33 @@ def test_ui_projection_exposes_canonical_interrupt_for_post_l3_pause():
     assert result["interrupt_info"]["event_id"] == "post-l3-1"
     assert result["interrupt_info"]["channel"] == "post_l3_review"
     assert result["interrupt_info"]["items"][0]["request_id"] == "validate-1"
+
+
+def test_ui_projection_prioritizes_fatal_diagnostic_over_completed_phase():
+    result = state_to_ui_status(
+        {
+            "session_id": "session-1",
+            "phase": "completed",
+            "delivery_status": "diagnostic_only",
+            "fatal_error": {
+                "code": "STALE_CHECKPOINT_NO_EXECUTABLE_CURSOR",
+            },
+            "metadata": {},
+        }
+    )
+
+    assert result["status"] == "failed"
+
+
+def test_ui_projection_keeps_explicit_failed_status_over_delivery_status():
+    result = state_to_ui_status(
+        {
+            "session_id": "session-1",
+            "phase": "completed",
+            "status": "failed",
+            "delivery_status": "diagnostic_only",
+            "metadata": {},
+        }
+    )
+
+    assert result["status"] == "failed"

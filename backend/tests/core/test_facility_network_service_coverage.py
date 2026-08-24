@@ -16,6 +16,7 @@ def _feature(feature_id: str, point: str) -> ScenarioFeature:
         crs="EPSG:4326",
         generation_operation="test",
         source_refs=[f"candidate:{feature_id}"],
+        relation_ids=[f"selection:{feature_id}:{feature_id}"],
     )
 
 

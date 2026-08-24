@@ -161,7 +161,7 @@ async def test_empty_spatial_defer_is_plain_approve(monkeypatch):
     assert result.get("human_review_resume_consumed") is True
 
 
-# ?? P0.3: blocked VALIDATE compilation auto-defers target-level findings ?
+# VALIDATE no longer mutates approval state through a compatibility hook.
 def test_auto_defer_blocked_targets_builds_ledger_and_passes(monkeypatch):
     compilation = SimpleNamespace(
         unresolved=[SimpleNamespace(target_ids=["t1", "t2"])]
@@ -184,13 +184,8 @@ def test_auto_defer_blocked_targets_builds_ledger_and_passes(monkeypatch):
         load_ref=lambda *a, **k: None,
         persist=fake_persist,
     )
-    assert decision is not None
-    assert decision["next_action"]["target_stage"] == "reconcile"
-    assert decision["gate"].feedback_route == "PASS"
-    assert decision["patch"]["auto_deferred_target_ids"] == ["t1", "t2"]
-    ledger = persisted.get("DeferralLedger")
-    assert ledger is not None
-    assert [e.target_id for e in ledger.entries] == ["t1", "t2"]
+    assert decision is None
+    assert persisted == {}
 
 
 def test_auto_defer_blocked_targets_none_without_ids():
@@ -239,26 +234,33 @@ def test_auto_defer_blocked_targets_fails_closed_on_non_target_findings():
     assert decision is None
 
 
-# ?? P0.3: partial-SELECT approval auto-defers unplaced targets ??????????
+# SELECT auto-deferral requires a complete typed gate and interrupt state.
 @pytest.mark.asyncio
 async def test_select_approve_auto_defers_unplaced_targets(monkeypatch):
-    # Authoritative source: SiteSelectionDecision unplaced assignments.
-    decision = SimpleNamespace(
-        target_assignments=[
-            SimpleNamespace(target_id="placed-1", status="placed"),
-            SimpleNamespace(target_id="unplaced-1", status="unplaced"),
-            SimpleNamespace(target_id="unplaced-2", status="unplaced"),
+    gate = SimpleNamespace(
+        pending_requests=[
+            SimpleNamespace(
+                context={"target_ids": ["unplaced-1", "unplaced-2"]}
+            )
         ]
     )
 
+    problem = SimpleNamespace(
+        candidate_completeness=SimpleNamespace(
+            unresolved_target_ids=("unplaced-1", "unplaced-2"),
+        )
+    )
+    scenario = SimpleNamespace(findings=[])
+
     def fake_load(state, key, cls=None):
-        if key == "site_selection":
-            return decision
+        if key == "scoped_grounding_problem":
+            return problem
+        if key == "planning_scenario":
+            return scenario
         return None
 
-    monkeypatch.setattr(
-        "app.infrastructure.artifacts.runtime.load_artifact", fake_load
-    )
+    monkeypatch.setattr(root_graph, "load_root_gate", lambda state, stage: gate)
+    monkeypatch.setattr("app.infrastructure.artifacts.runtime.load_artifact", fake_load)
     persisted = {}
 
     def fake_persist(state, stage, schema_id, payload):
@@ -267,14 +269,131 @@ async def test_select_approve_auto_defers_unplaced_targets(monkeypatch):
 
     monkeypatch.setattr(root_graph, "persist_stage_artifact", fake_persist)
     patch = await root_graph._apply_select_auto_deferral({"session_id": "s1"})
-    assert patch["human_deferred_targets"] == ["unplaced-1", "unplaced-2"]
-    assert "DeferralLedger" in persisted
-    assert [e.target_id for e in persisted["DeferralLedger"].entries] == [
-        "unplaced-1", "unplaced-2",
-    ]
+    assert patch["human_approval_diagnostic"]["code"] == "SELECT_DEFERRAL_SCOPE_STALE"
+    assert persisted == {}
 
 
-# ?? P0.6: EXECUTE auto-defers unclassified targets (no diagnostic fatal) ??
+@pytest.mark.asyncio
+async def test_select_human_approve_persists_approved_execution_input(monkeypatch):
+    from app.contracts.planning.scenario import (
+        BackendCertificatePayload,
+        PlanningScenario,
+        ScenarioSet,
+        SolverCertificate,
+        derive_backend_selection_digest,
+        derive_solver_model_digest,
+    )
+    from app.contracts.workflow.execution_plan_contracts import ExecutionPlan
+
+    scenario = PlanningScenario(
+        scenario_id="scenario:human-approve",
+        baseline_ref="baseline:1",
+        problem_fingerprint="problem:1",
+        status="complete",
+    )
+    proof = BackendCertificatePayload(
+        backend_id="test_backend",
+        backend_version="1.0",
+        problem_kind="single_choice",
+        problem_fingerprint="problem:1",
+        input_digest="input:human-approve",
+        solver_config={
+            "deterministic_seed": 0,
+            "search_limit": 0,
+            "time_limit_seconds": None,
+            "max_scenarios": 8,
+            "objective_definitions": [],
+            "backend_version": "1.0",
+            "replay_settings": {},
+        },
+        selection_digest=derive_backend_selection_digest({}, []),
+        status="feasible",
+    )
+    scenario_set = ScenarioSet(
+        set_id="set:human-approve",
+        problem_fingerprint="problem:1",
+        scenarios=[scenario],
+        feasible_scenario_ids=[scenario.scenario_id],
+        recommended_scenario_id=scenario.scenario_id,
+        solver_certificate=SolverCertificate(
+            problem_fingerprint="problem:1",
+            model_digest=derive_solver_model_digest(
+                proof,
+                deterministic_seed=0,
+                search_limit=0,
+            ),
+            solver_version="test_backend:1.0",
+            status="feasible",
+            feasible_scenario_count=1,
+            problem_kind="single_choice",
+            backend_id="test_backend",
+            backend_version="1.0",
+            backend_certificate=proof,
+        ),
+    )
+    execution_plan = ExecutionPlan(plan_id="plan:human-approve")
+
+    def fake_load(state, key, cls=None):
+        if key == "scenario_set":
+            return scenario_set
+        if key == "planning_scenario":
+            return scenario
+        if key == "execution_plan":
+            return execution_plan
+        if key == "approved_execution_input":
+            return None
+        return None
+
+    persisted = {}
+
+    def fake_persist(state, stage, schema_id, payload):
+        persisted[schema_id] = payload
+        return {"descriptor_digest": f"ref:{schema_id}"}
+
+    monkeypatch.setattr("app.infrastructure.artifacts.runtime.load_artifact", fake_load)
+    monkeypatch.setattr(root_graph, "persist_stage_artifact", fake_persist)
+    monkeypatch.setattr(
+        root_graph,
+        "_gate_mutation_patch",
+        lambda *args, **kwargs: {
+            "artifact_refs": {
+                **dict(kwargs.get("artifact_refs") or {}),
+                "select_gate": {"descriptor_digest": "gate-ref"},
+            }
+        },
+    )
+
+    async def no_context(state):
+        raise RuntimeError("context unavailable in unit test")
+
+    monkeypatch.setattr("app.workflow.stages.support._require_context", no_context)
+
+    result = await root_graph.apply_human_review_decision({
+        "run_id": "run:human-approve",
+        "session_id": "session:human-approve",
+        "paused_stage": "select",
+        "human_review_event_id": "event:human-approve",
+        "human_review_items": [{"request_type": "scenario_approval"}],
+        "human_review_decisions": {
+            "action": "approve",
+            "approved_by": "reviewer:1",
+        },
+        "artifact_refs": {
+            "scenario_set": {"descriptor_digest": "set-ref"},
+            "planning_scenario": {"descriptor_digest": "scenario-ref"},
+            "execution_plan": {"descriptor_digest": "plan-ref"},
+        },
+    })
+
+    assert result["approved_input_status"] == "human_approved"
+    assert "ApprovedExecutionInput" in persisted
+    assert persisted["ApprovedExecutionInput"].can_execute is True
+    assert result["artifact_refs"]["approved_execution_input"] == {
+        "descriptor_digest": "ref:ApprovedExecutionInput"
+    }
+
+
+# EXECUTE never mutates an approval plan to defer unresolved classification.
 def test_execute_defers_unclassified_targets(monkeypatch):
     from app.workflow.stages import execute as ex
     from app.contracts.workflow.execution_plan_contracts import (
@@ -289,10 +408,10 @@ def test_execute_defers_unclassified_targets(monkeypatch):
             task_id=f"parcel:{tid}",
             worker_type=WorkerType.PARCEL_TRANSFORMATION,
             target_id=tid,
-            target_type="project",
+            target_type="site_area",
             expected_output_kind="parcel",
             assignment=TargetAssignment(
-                target_id=tid, target_type="project", status="placed",
+                target_id=tid, target_type="site_area", status="placed",
                 expected_output_kind="parcel",
             ),
         )
@@ -300,23 +419,8 @@ def test_execute_defers_unclassified_targets(monkeypatch):
     ]
     plan = ExecutionPlan(plan_id="p", worker_tasks=tasks, deferred_tasks=[])
     diags = [{"target_id": "a"}, {"target_id": "b"}]
-    persisted = {}
-    orig = ex.persist_stage_artifact
-    ex.persist_stage_artifact = lambda state, stage, schema_id, payload: (
-        persisted.__setitem__(schema_id, payload) or {"ref": schema_id}
-    )
-    try:
-        out = ex._defer_unclassified_targets({"artifact_refs": {}}, plan, None, diags)
-    finally:
-        ex.persist_stage_artifact = orig
-    assert out is not None
-    revised, ledger = out
-    assert [t.target_id for t in revised.worker_tasks] == ["c"]
-    assert len(revised.deferred_tasks) == 2
-    assert len(ledger.entries) == 2
-    assert {e.target_id for e in ledger.entries} == {"a", "b"}
-    assert persisted.get("DeferralLedger") is not None
-    assert persisted.get("ExecutionPlan") is not None
+    out = ex._defer_unclassified_targets({"artifact_refs": {}}, plan, None, diags)
+    assert out is None
 
 
 # ?? P1.9: HITL approve may dispatch provider_resume_dispatch (allowlist) ??
@@ -377,6 +481,13 @@ def test_provider_resume_dispatch_may_redispatch_layer_workers():
     for target in ("l1_worker", "l2_worker", "l3_worker"):
         auth = authorize_route_result({}, "provider_resume_dispatch", target)
         assert auth.accepted, (target, auth.diagnostic)
+
+
+def test_layer_aggregate_may_continue_blocked_provider_resume_dimensions():
+    from app.workflow.routing import authorize_route_result
+
+    auth = authorize_route_result({}, "layer_aggregate", "provider_resume_dispatch")
+    assert auth.accepted, auth.diagnostic
 
 
 # ?? SELECT: terrain evidence gap is neutral, not a hard exclusion (exa) ??

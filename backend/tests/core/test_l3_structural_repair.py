@@ -6,7 +6,7 @@ from types import SimpleNamespace
 import pytest
 
 from app.domain.program import worker
-from app.domain.program.claim_draft import L3DimensionOutput
+from app.domain.program.claim_draft import L3ClaimOutput
 
 
 class _SequentialOutput:
@@ -45,7 +45,7 @@ def _bad_output():
 
 
 def _good_output():
-    return L3DimensionOutput(report_body="正文", claims=[
+    return L3ClaimOutput(claims=[
         {
             "claim_id": "C-1",
             "statement": "新建设施",
@@ -58,7 +58,7 @@ def _good_output():
 
 def test_structural_repair_retries_with_validation_feedback(monkeypatch):
     seq = _SequentialOutput([_bad_output(), _good_output()])
-    monkeypatch.setattr(worker, "_cached_claim_generation", seq)
+    monkeypatch.setattr(worker, "_cached_claim_only_generation", seq)
     monkeypatch.setenv("L3_STRUCTURAL_COMPILE_RETRIES", "2")
 
     draft_set, claim_set = asyncio.run(worker._normalize_with_structural_repair(
@@ -77,7 +77,7 @@ def test_structural_repair_retries_with_validation_feedback(monkeypatch):
 
 def test_structural_repair_exhausts_budget_and_raises(monkeypatch):
     seq = _SequentialOutput([_bad_output()])
-    monkeypatch.setattr(worker, "_cached_claim_generation", seq)
+    monkeypatch.setattr(worker, "_cached_claim_only_generation", seq)
     monkeypatch.setenv("L3_STRUCTURAL_COMPILE_RETRIES", "1")
 
     with pytest.raises(Exception):
@@ -92,7 +92,7 @@ def test_structural_repair_exhausts_budget_and_raises(monkeypatch):
 
 def test_valid_output_returns_without_extra_call(monkeypatch):
     seq = _SequentialOutput([_good_output()])
-    monkeypatch.setattr(worker, "_cached_claim_generation", seq)
+    monkeypatch.setattr(worker, "_cached_claim_only_generation", seq)
 
     draft_set, claim_set = asyncio.run(worker._normalize_with_structural_repair(
         object(),

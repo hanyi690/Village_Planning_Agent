@@ -29,14 +29,16 @@ async def test_simulated_l3_claim_survives_aggregate_cas_and_projection(
             PlanningClaim(
                 claim_id="simulated-facility-1",
                 dimension_key="public_service",
-                statement="社前村现状祠堂需要保留并作为公共文化设施维护。",
+                    statement="社前村现状祠堂需要保留并作为公共文化设施维护。",
+                    planning_role="spatial_intervention",
+                    project_package_ref="pkg-simulated-facility",
                 suggested_category="facility",
                 suggested_output_kind="point",
                 asset_kind="facility",
                 suggested_interventions=["祠堂维护"],
                 intervention_action="preserve",
                 location_hints=["社前村", "祠堂"],
-                evidence_refs=["l1:fact:祠堂:社前村"],
+                    evidence_refs=["l1:fact:祠堂:社前村"],
                 facility_parameters=FacilityPlanningParameters(
                     facility_type="祠堂",
                     action="preserve",

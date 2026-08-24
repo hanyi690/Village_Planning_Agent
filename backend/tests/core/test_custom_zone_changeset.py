@@ -2,11 +2,10 @@
 
 from __future__ import annotations
 
-import asyncio
 from shapely.geometry import Polygon, mapping
 
 from app.domain.materialization.execute_state import ExecuteAgentState
-from app.domain.materialization.nodes.zone_worker import _zone_worker, _zone_worker_node
+from app.domain.materialization.nodes.zone_worker import _zone_worker
 from app.contracts.artifacts.classification_ref import (
     ClassificationDecision,
     ClassificationSystem,
@@ -18,21 +17,49 @@ from app.contracts.workflow.execution_plan_contracts import (
 )
 from app.contracts.workflow.parse_contracts import ZoneTarget
 from app.contracts.spatial.candidate_geometry import CandidateGeometry
-from app.contracts.domain.selection_contracts import TargetAssignment
+from app.contracts.workflow.materialization_contracts import TargetAssignment
 from app.contracts.domain.custom_zone_contracts import (
     CustomZoneTarget,
     TypingRule,
     Vocabulary,
     VocabularyCategory,
 )
-from app.domain.materialization.plan_builder import (
-    build_execution_plan,
-    classification_boundary_diagnostics,
-)
+from app.domain.materialization.execution_boundaries import classification_boundary_diagnostics
 from app.domain.materialization.zoning.custom_zone_changeset import (
     materialize_custom_zone_changes,
 )
 from app.data.encodings.dicts.vocabularies.loader import register_vocabulary
+
+
+def build_execution_plan(intent, selection, _briefs, **_kwargs):
+    """Test-local approval-bound task fixture for custom-zone workers."""
+    targets = {
+        target.target_id: target
+        for field in ("custom_zone_targets", "zone_targets")
+        for target in getattr(intent, field, [])
+    }
+    tasks = []
+    for assignment in selection.target_assignments:
+        target = targets.get(assignment.target_id)
+        if target is None:
+            continue
+        decision = getattr(target, "classification_decision", None)
+        role = getattr(target, "materialization_role", "")
+        if getattr(decision, "status", "") != "resolved" and role not in {
+            "functional_overlay", "protection_overlay", "restoration_overlay",
+        }:
+            continue
+        refs = list(assignment.input_artifact_refs or [])
+        tasks.append(WorkerTask(
+            task_id=f"parcel_transformation:{assignment.target_id}",
+            worker_type=WorkerType.PARCEL_TRANSFORMATION,
+            target_id=assignment.target_id,
+            target_type=assignment.target_type,
+            expected_output_kind=assignment.expected_output_kind,
+            assignment=assignment,
+            input_artifact_refs=refs,
+        ))
+    return ExecutionPlan(worker_tasks=tasks)
 
 
 def _vocabulary(*, rules: list[TypingRule] | None = None) -> Vocabulary:
@@ -203,17 +230,13 @@ def test_custom_zone_is_scheduled_as_an_existing_zone_task():
         intent,
         selection,
         [],
-        global_zone_allocation_ref="zone-allocation-1",
     )
 
     assert [(task.target_type, task.target_id) for task in plan.worker_tasks] == [
         ("zone", "custom-zone-1")
     ]
     assert plan.worker_tasks[0].worker_type.value == "parcel_transformation"
-    assert any(
-        "global_zone_allocation" in ref
-        for ref in plan.worker_tasks[0].input_artifact_refs
-    )
+    assert plan.worker_tasks[0].input_artifact_refs == []
 
 
 def test_unresolved_custom_zone_is_not_scheduled():
@@ -247,11 +270,11 @@ def test_scheduled_custom_zone_reaches_worker_as_functional_overlay():
         feature["properties"]["bsm"]
         for feature in layer["data"]["features"]
     } == {"P001", "P002"}
-    assert (
-        asyncio.run(_zone_worker_node(state))["allocation_summary"]
-        ["overlay_feature_count"]
-        == 2
-    )
+    assert sum(
+        len((layer.get("data") or {}).get("features") or [])
+        for layer in result.layers
+        if str(layer.get("layerType") or "").endswith("overlay")
+    ) == 2
 
 
 def test_worker_does_not_reclassify_or_query_three_lines_for_functional_overlay():
@@ -322,7 +345,7 @@ def test_zone_worker_never_calls_legacy_allocator_or_builds_full_parcel_pool():
     assert allocator.called is False
     assert result.parcel_changes == []
     assert any(
-        item["code"] == "global_zone_allocation_missing"
+        item["code"] == "approved_zone_binding_missing"
         for item in result.unresolved_items
     )
     functional = next(

@@ -48,6 +48,57 @@ async def test_run_rag_is_the_single_unified_evidence_adapter(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_l1_followup_reuses_router_and_keeps_evidence_locators(monkeypatch):
+    from app.contracts.evidence.evidence_contracts import (
+        EvidenceBundle,
+        EvidenceFact,
+        EvidenceSource,
+        ExplorationResult,
+    )
+    from app.infrastructure.llm import dimension_runtime
+
+    async def retrieve(request, session_id, village_name="", source_versions=None):
+        assert request.request_type == "fact_check"
+        assert "source:local_text" in request.context_refs
+        assert "source:rag" in request.context_refs
+        return ExplorationResult(
+            evidence_bundle=EvidenceBundle(
+                request=request.query,
+                facts=[EvidenceFact(
+                    statement="村道位于东侧",
+                    source_refs=["local:report:1"],
+                    spatial_refs=["feature:road-1"],
+                    evidence_span="【交通现状】第 4 行",
+                    source_locator="input:village_data:line-4",
+                )],
+                sources=[EvidenceSource(
+                    source_type="local_text",
+                    reference="local:report:1",
+                    snapshot_ref="snapshot:l1:1",
+                )],
+            )
+        )
+
+    monkeypatch.setattr(
+        "app.evidence.retrieval.evidence_service.retrieve_evidence",
+        retrieve,
+    )
+
+    context, trace = await dimension_runtime.run_targeted_evidence(
+        "traffic",
+        type("Cfg", (), {"layer": 1})(),
+        {"session_id": "session-followup", "config": {"village_name": "金田村"}},
+        query="确认村道",
+        required_facts=["村道"],
+    )
+
+    assert "村道位于东侧" in context
+    evidence_trace = next(item for item in trace if item.get("step") == "l1_followup_evidence")
+    assert evidence_trace["facts"][0]["source_locator"] == "input:village_data:line-4"
+    assert evidence_trace["facts"][0]["spatial_refs"] == ["feature:road-1"]
+
+
+@pytest.mark.asyncio
 async def test_legacy_rag_defaults_to_settings_disabled_and_reports_reason(monkeypatch):
     from app.core import settings
     from app.infrastructure.llm.dimension_runtime import retrieve_vector_context

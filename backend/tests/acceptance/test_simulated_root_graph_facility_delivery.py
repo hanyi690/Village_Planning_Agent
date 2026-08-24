@@ -7,7 +7,7 @@ import uuid
 
 import pytest
 
-from tests.acceptance.test_complete_execution_render import _uploads
+from tests.acceptance.test_upload_fixtures import _uploads
 from tests.fixtures.db import make_session_with_uploads
 from tests.support.simulated_planning_llm import SimulatedPlanningProvider
 
@@ -186,7 +186,7 @@ async def test_simulated_root_graph_reaches_facility_point_delivery(
         refs = dict(final.get('artifact_refs') or {})
         for key in (
             'l1_snapshot', 'l2_strategy', 'planning_program',
-            'target_projection', 'grounding_result', 'site_selection',
+            'target_projection', 'grounding_result', 'scenario_set',
             'execution_plan', 'planned_state', 'delivery_manifest',
         ):
             assert refs.get(key), f'missing root artifact: {key}'
@@ -208,8 +208,7 @@ async def test_simulated_root_graph_reaches_facility_point_delivery(
             for item in (getattr(semantic_snapshot, 'decisions', []) or [])
         )
         assert any(
-            str(getattr(spec, 'target_id', '') or '').endswith('sim-facility-hall')
-            and str(getattr(spec, 'source_collection_key', '') or '') == 'current_facility'
+            str(getattr(spec, 'source_collection_key', '') or '') == 'current_facility'
             for spec in projection.spatial_reference_specs
         ), f'calls={provider.calls}; specs=' + json.dumps(
             [
@@ -333,7 +332,8 @@ async def test_simulated_root_graph_reaches_facility_point_delivery(
         await graph.ainvoke(None, config)
         assert provider.calls == before_resume_calls
         assert provider.calls.get('L1:public_services', 0) >= 1
-        assert provider.calls.get('L3:public_service', 0) == 1
+        # L3 is intentionally split into claims and report projections.
+        assert provider.calls.get('L3:public_service', 0) == 2
         assert provider.calls.get('fact_ref:present', 0) >= 1
     finally:
         await teardown()

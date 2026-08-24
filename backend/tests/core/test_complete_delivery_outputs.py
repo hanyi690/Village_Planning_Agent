@@ -119,6 +119,68 @@ def test_partial_action_only_delivery_still_builds_current_spatial_snapshot(
     assert products.render_layers
 
 
+def test_missing_spatial_workspace_is_an_explicit_diagnostic_snapshot(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(
+        "app.infrastructure.paths.session_run_dir",
+        lambda _session_id: tmp_path,
+    )
+    monkeypatch.setattr(
+        "app.domain.delivery.delivery_exporter.export_delivery_products",
+        lambda *args, **kwargs: {"planned_landuse_geojson": {"type": "FeatureCollection", "features": []}},
+    )
+
+    products = build_spatial_delivery_products(
+        session_id="missing-spatial-context",
+        village_name="文本村",
+        workspace=None,
+        planned_changes=[],
+        planned_state=None,
+        validation_result={"passed": False},
+    )
+
+    assert products.snapshot is not None
+    assert products.snapshot.complete_planned_landuse is not None
+    assert products.snapshot.complete_planned_landuse.feature_count == 0
+    assert products.render_layers == []
+    assert "SpatialWorkspace unavailable" in products.error
+    assert products.snapshot.provenance["spatial_context"] == "unavailable"
+
+
+def test_empty_spatial_workspace_is_an_explicit_diagnostic_snapshot(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(
+        "app.infrastructure.paths.session_run_dir",
+        lambda _session_id: tmp_path,
+    )
+    monkeypatch.setattr(
+        "app.domain.delivery.delivery_exporter.export_delivery_products",
+        lambda *args, **kwargs: {"planned_landuse_geojson": {"type": "FeatureCollection", "features": []}},
+    )
+    workspace = SimpleNamespace(
+        to_delivery_inputs=lambda: {
+            "landuse_current_geojson": {"type": "FeatureCollection", "features": []},
+        }
+    )
+
+    products = build_spatial_delivery_products(
+        session_id="empty-spatial-context",
+        village_name="冒烟村",
+        workspace=workspace,
+        planned_changes=[],
+        planned_state=None,
+        validation_result={"passed": False},
+    )
+
+    assert products.snapshot is not None
+    assert products.render_layers == []
+    assert products.spatial_context_unavailable is True
+    assert "landuse_current" in products.spatial_context_reason
+    assert products.snapshot.provenance["spatial_context"] == "unavailable"
+
+
 def test_export_uses_the_same_complete_planned_snapshot_for_landuse_and_balance(tmp_path):
     gis_data = {
         "boundary_geojson": {"type": "FeatureCollection", "features": []},

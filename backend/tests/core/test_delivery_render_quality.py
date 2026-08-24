@@ -103,6 +103,36 @@ def test_delivery_exposes_project_footprint_and_small_location_point():
     assert point["properties"]["marker_size"] == "small"
 
 
+def test_delivery_preserves_partial_availability_and_adjacent_parcels():
+    from app.domain.delivery.render_layers import build_planned_overlay_layers
+
+    parcel = _parcel(
+        "P001",
+        "产业用地",
+        "POLYGON ((0 0, 10 0, 10 10, 0 10, 0 0))",
+        project_ref="project-partial",
+    )
+    parcel.availability_status = "partially_available"
+    parcel.source_area_ha = 8.0
+    parcel.eligible_area_ha = 6.5
+    parcel.excluded_area_ha = 1.5
+    parcel.adjacent_parcel_bsms = ["P002"]
+    parcel.adjacency_evidence_refs = ["bundle:landuse_current:P001:adjacent:P002"]
+
+    layers = build_planned_overlay_layers(SimpleNamespace(parcels=[parcel]))
+    feature = next(
+        feature
+        for layer in layers
+        for feature in (layer.get("geojson") or {}).get("features", [])
+        if (feature.get("properties") or {}).get("project_ref") == "project-partial"
+    )
+    properties = feature["properties"]
+    assert properties["availability_status"] == "partially_available"
+    assert properties["eligible_area_ha"] == 6.5
+    assert properties["excluded_area_ha"] == 1.5
+    assert properties["adjacent_parcel_bsms"] == ["P002"]
+
+
 def test_delivery_rejects_placeholder_development_axis_geometry():
     layers = [
         {

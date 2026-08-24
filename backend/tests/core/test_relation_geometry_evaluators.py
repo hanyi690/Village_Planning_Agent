@@ -23,6 +23,7 @@ def _feature(feature_id: str, target_id: str, geometry_wkt: str, crs: str = "EPS
         crs=crs,
         generation_operation="test",
         source_refs=["fixture:test"],
+        relation_ids=[f"selection:{target_id}:{feature_id}"],
     )
 
 

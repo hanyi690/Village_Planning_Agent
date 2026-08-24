@@ -21,7 +21,6 @@ class _StructuredInvoker:
         if self.calls == 1:
             return {"claims": "[{claim_id: broken}]"}
         return {
-            "report_body": "Provide a small agricultural service point.",
             "claims": [
                 {
                     "claim_id": "industry-1",
@@ -47,12 +46,11 @@ def test_provider_adapter_retries_malformed_nested_json(monkeypatch):
     generator._llm = _FakeLLM(invoker)
     monkeypatch.setenv("L3_PROVIDER_PARSE_RETRIES", "1")
 
-    result = asyncio.run(generator.generate("Generate one planning claim."))
+    result = asyncio.run(generator.generate_claims("Generate one planning claim."))
 
     assert invoker.calls == 2
-    assert result.report_body == "Provide a small agricultural service point."
     assert result.claims[0].claim_id == "industry-1"
-    assert "Return both" in invoker.messages[0][1]["content"]
+    assert "claims" in invoker.messages[0][1]["content"]
     assert "PlanningClaimSet only" not in invoker.messages[0][1]["content"]
 
 
@@ -67,7 +65,7 @@ def test_provider_adapter_queue_wait_is_bounded(monkeypatch):
         await generator._slots.acquire()
         try:
             with pytest.raises(asyncio.TimeoutError):
-                await generator.generate("Generate one planning claim.")
+                await generator.generate_claims("Generate one planning claim.")
         finally:
             generator._slots.release()
 
@@ -82,7 +80,7 @@ def test_l3_worker_rejects_empty_human_report_body() -> None:
     assert _require_l3_report_body("【规划】正文") == "【规划】正文"
 
 
-def test_l3_prompt_exposes_dual_output_and_typed_fact_ids(monkeypatch) -> None:
+def test_l3_prompt_exposes_split_projections_and_typed_fact_ids(monkeypatch) -> None:
     from app.contracts.domain.l1_contracts import L1Fact
     from app.domain.program.worker import _build_prompt
 
@@ -112,9 +110,30 @@ def test_l3_prompt_exposes_dual_output_and_typed_fact_ids(monkeypatch) -> None:
     )
 
     assert "report_body" in prompt
-    assert "不能只返回 claims" in prompt
+    assert "claims pass 只写结构化判断" in prompt
+    assert "report-synthesis pass" in prompt
     assert "l1:road:one" in prompt
     assert "feature:road:one" in prompt
     assert "source_fact_refs" in prompt
     assert "现状道路分布于村庄主要居民点。" in prompt
     assert "当前模板中的项目数量" in prompt
+
+
+def test_l3_prompt_bounds_upstream_background_for_provider_context(monkeypatch) -> None:
+    from app.domain.program.worker import _build_prompt
+
+    monkeypatch.setattr(
+        "app.infrastructure.context.planning_context_factory.get_cached_context",
+        lambda _session_id: SimpleNamespace(input=lambda: {}, input_text=lambda _key, default: default),
+    )
+    prompt = _build_prompt(
+        SimpleNamespace(key="industry"),
+        {"session_id": "prompt-budget-test", "dimension_key": "industry"},
+        l1_deps="L1" * 10000,
+        l2_deps="L2" * 10000,
+        same_layer_contexts="same" * 10000,
+    )
+
+    assert len(prompt) < 24000
+    assert "【L1 现状分析已截断】" in prompt
+    assert "【L2 规划思路已截断】" in prompt

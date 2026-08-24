@@ -23,6 +23,23 @@ from app.infrastructure.export.delivery_snapshot import (
 )
 
 
+def test_parcel_change_rejects_unavailable_or_overflow_area() -> None:
+    with pytest.raises(ValueError, match="cannot create geometry"):
+        ParcelChange(
+            bsm="P-UNAVAILABLE",
+            availability_status="fully_unavailable",
+            new_area_ha=0.1,
+        )
+    with pytest.raises(ValueError, match="eligible_area_ha cannot exceed"):
+        ParcelChange(
+            bsm="P-OVERFLOW",
+            availability_status="partially_available",
+            source_area_ha=1.0,
+            eligible_area_ha=1.2,
+            new_area_ha=0.1,
+        )
+
+
 def _write_layer(path: Path) -> SpatialLayerRef:
     payload = {
         "type": "FeatureCollection",
@@ -159,6 +176,69 @@ def test_delivery_snapshot_without_material_changes_is_partial(tmp_path: Path) -
     assert snapshot.delivery_status == "partial"
     assert snapshot.statutory_complete is False
     assert snapshot.change_summary["preserved"] == 2
+
+
+def test_delivery_snapshot_keeps_source_backed_footprint_remainder(tmp_path: Path) -> None:
+    ref = _write_layer(tmp_path / "current.geojson")
+    footprint = ParcelChange(
+        bsm="P001:footprint",
+        action="create",
+        derived_from_bsms=["P001"],
+        after_geometry_wkt="POLYGON ((0 0, 0.5 0, 0.5 1, 0 1, 0 0))",
+        new_area_ha=0.5,
+        candidate_id="candidate:P001:footprint",
+        feature_id="feature:P001:footprint",
+        target_id="target:P001",
+        scenario_id="scenario:P001",
+        availability_status="partially_available",
+        coverage_ratio=0.5,
+        source_area_ha=1.0,
+        eligible_area_ha=0.5,
+        excluded_area_ha=0.5,
+        adjacent_parcel_bsms=["P002"],
+        adjacency_evidence_refs=["adj:P001:P002"],
+    )
+    remainder = ParcelChange(
+        bsm="P001:remainder",
+        action="preserve",
+        derived_from_bsms=["P001"],
+        after_geometry_wkt="POLYGON ((0.5 0, 1 0, 1 1, 0.5 1, 0.5 0))",
+        new_area_ha=0.5,
+        availability_status="partially_available",
+        coverage_ratio=0.5,
+        source_area_ha=1.0,
+        eligible_area_ha=0.5,
+        excluded_area_ha=0.5,
+        adjacent_parcel_bsms=["P002"],
+        adjacency_evidence_refs=["adj:P001:P002"],
+    )
+
+    snapshot = build_delivery_spatial_snapshot(
+        ref,
+        [footprint, remainder],
+        data_port=GeoJSONSpatialDataPort(),
+        output_path=tmp_path / "planned.geojson",
+    )
+
+    payload = json.loads((tmp_path / "planned.geojson").read_text(encoding="utf-8"))
+    features = payload["features"]
+    assert len(features) == 3
+    replacements = {
+        feature["properties"]["BSM"]: feature
+        for feature in features
+        if feature["properties"].get("source_bsms") == ["P001"]
+    }
+    assert replacements["P001:footprint"]["properties"]["change_status"] == "created"
+    assert replacements["P001:remainder"]["properties"]["change_status"] == "preserved"
+    footprint_properties = replacements["P001:footprint"]["properties"]
+    assert footprint_properties["candidate_id"] == "candidate:P001:footprint"
+    assert footprint_properties["availability_status"] == "partially_available"
+    assert footprint_properties["coverage_ratio"] == 0.5
+    assert footprint_properties["area_ha"] == 0.5
+    assert footprint_properties["area_sqm"] == 5000.0
+    assert footprint_properties["adjacent_parcel_bsms"] == ["P002"]
+    assert footprint_properties["adjacency_evidence_refs"] == ["adj:P001:P002"]
+    assert snapshot.change_summary["source_bsm_covered"] == 1
 
 
 def test_gis_data_delivery_integration_writes_and_reloads_complete_artifact(tmp_path: Path) -> None:

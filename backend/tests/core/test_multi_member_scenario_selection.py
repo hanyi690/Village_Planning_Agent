@@ -1,7 +1,7 @@
 from app.contracts.spatial.candidate_geometry import CandidateGeometry
 from app.contracts.spatial.grounding_contracts import CandidateSite
 from app.contracts.spatial.grounded_problem import GroundedPlanningProblem
-from app.domain.allocation.scenario_solver import solve_scenario
+from app.domain.allocation.scenario_optimizer import optimize_scenarios
 from app.domain.ground.candidate_domain_builder import build_candidate_domains
 from app.domain.relations.service import RelationEvaluationContext
 
@@ -44,11 +44,14 @@ def test_current_network_source_members_are_required_as_a_set() -> None:
         candidate_domains=domains,
         candidate_geometries=[item.geometry for item in candidates if item.geometry],
     )
-    scenario = solve_scenario(
+    scenario_set = optimize_scenarios(
         problem,
-        scenario_id="scenario:all-roads",
+        set_id="scenario:all-roads",
         evaluator_context=RelationEvaluationContext(scenario_id="scenario:all-roads"),
+        max_scenarios=1,
     )
+    scenario = scenario_set.recommended
+    assert scenario is not None, scenario_set.model_dump(mode="json")
 
     assert scenario.status == "complete"
     selection = scenario.target_selections[0]

@@ -72,6 +72,32 @@ def _checkpoint_values() -> dict:
     }
 
 
+def _stale_values() -> dict:
+    return {
+        "phase": "completed",
+        "delivery_status": "diagnostic_only",
+        "diagnostic_terminal": {
+            "code": "STALE_CHECKPOINT_NO_EXECUTABLE_CURSOR",
+        },
+        "fatal_error": {
+            "code": "STALE_CHECKPOINT_NO_EXECUTABLE_CURSOR",
+        },
+    }
+
+
+def _unauthorized_stage_values() -> dict:
+    return {
+        "phase": "layer3",
+        "delivery_status": "diagnostic_only",
+        "diagnostic_terminal": {
+            "code": "UNAUTHORIZED_STAGE",
+        },
+        "fatal_error": {
+            "code": "UNAUTHORIZED_STAGE",
+        },
+    }
+
+
 @pytest.mark.asyncio
 async def test_application_service_preserves_interrupt_checkpoint_and_cas_token():
     runtime = _Runtime(current=_snapshot(checkpoint_id="cp-human", values=_human_values()))
@@ -118,6 +144,60 @@ async def test_application_service_forks_historical_checkpoint_with_plan_and_bra
     assert runtime.fork_calls[0][0:2] == ("session-1", "cp-history")
     assert runtime.fork_calls[0][3] == "execute"
     assert runtime.fork_calls[0][4] == result.branch_id
+
+
+@pytest.mark.asyncio
+async def test_application_service_requires_explicit_replay_for_stale_terminal():
+    runtime = _Runtime(
+        historical=_snapshot(checkpoint_id="cp-stale", values=_stale_values())
+    )
+    service = ResumeWorkflowService(runtime)
+
+    with pytest.raises(ResumeConflictError, match="diagnostic terminal"):
+        await service.execute(
+            ResumeWorkflowCommand(
+                session_id="session-1",
+                mode="checkpoint",
+                checkpoint_id="cp-stale",
+            )
+        )
+
+    result = await service.execute(
+        ResumeWorkflowCommand(
+            session_id="session-1",
+            mode="checkpoint",
+            checkpoint_id="cp-stale",
+            replay_from_stage="target_projection",
+        )
+    )
+
+    assert result.resume_plan.mode is ResumeMode.RERUN
+    assert result.resume_plan.resume_from == "TARGET_PROJECTION"
+    assert runtime.fork_calls[-1][3] == "target_projection"
+
+
+@pytest.mark.asyncio
+async def test_application_service_replays_legacy_unauthorized_stage_terminal():
+    runtime = _Runtime(
+        historical=_snapshot(
+            checkpoint_id="cp-unauthorized",
+            values=_unauthorized_stage_values(),
+        )
+    )
+    service = ResumeWorkflowService(runtime)
+
+    result = await service.execute(
+        ResumeWorkflowCommand(
+            session_id="session-1",
+            mode="checkpoint",
+            checkpoint_id="cp-unauthorized",
+            replay_from_stage="target_projection",
+        )
+    )
+
+    assert result.resume_plan.mode is ResumeMode.RERUN
+    assert result.resume_plan.resume_from == "TARGET_PROJECTION"
+    assert runtime.fork_calls[-1][3] == "target_projection"
 
 
 @pytest.mark.asyncio

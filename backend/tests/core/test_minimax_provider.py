@@ -32,6 +32,15 @@ def test_minimax_default_uses_highspeed_model(monkeypatch):
     assert llm.model_name == "MiniMax-M2.7-highspeed"
 
 
+def test_minimax_factory_clamps_langchain_completion_budget(monkeypatch):
+    from app.infrastructure.llm.factory import create_llm
+
+    monkeypatch.setenv("MINIMAX_API_KEY", "test-minimax-key")
+    llm = create_llm(provider="minimax", model="MiniMax-M2.7-highspeed", max_tokens=16384)
+
+    assert llm.max_tokens == 8192
+
+
 @pytest.mark.slow
 def test_minimax_streaming_preflight():
     from app.infrastructure.llm.factory import create_llm

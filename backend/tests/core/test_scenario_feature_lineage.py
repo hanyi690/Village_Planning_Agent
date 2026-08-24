@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from app.contracts.domain.selection_contracts import TargetAssignment
+from app.contracts.workflow.materialization_contracts import TargetAssignment
 from app.contracts.workflow.execution_plan_contracts import ExecutionPlan, WorkerTask, WorkerType
 from app.domain.materialization.execute_state import ExecuteAgentState
 from app.domain.materialization.nodes.worker_common import _scenario_features_for_layer

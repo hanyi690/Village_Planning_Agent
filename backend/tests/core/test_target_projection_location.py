@@ -20,9 +20,12 @@ def test_claim_location_hints_become_a_closed_set_spatial_reference():
         claim_id="facility-1",
         dimension_key="public_service",
         statement="Add a small service facility.",
+        planning_role="spatial_intervention",
+        project_package_ref="pkg-facility-1",
         suggested_category="facility",
         suggested_output_kind="point",
         location_hints=["园寨", "黄竹"],
+        evidence_refs=["fact:facility-1"],
         facility_parameters=FacilityPlanningParameters(
             facility_type="service facility",
             action="new",
@@ -50,9 +53,12 @@ def test_typed_facility_hint_keeps_place_and_facility_semantics_conjunctive():
         claim_id="facility-place-1",
         dimension_key="public_service",
         statement="社前村祠堂维护。",
+        planning_role="spatial_intervention",
+        project_package_ref="pkg-facility-place-1",
         suggested_category="facility",
         suggested_output_kind="point",
         location_hints=["社前村", "祠堂"],
+        evidence_refs=["fact:facility-place-1"],
         facility_parameters=FacilityPlanningParameters(
             facility_type="祠堂",
             action="preserve",
@@ -75,9 +81,12 @@ def test_projection_source_support_check_ignores_facility_labels():
         claim_id="facility-place-2",
         dimension_key="public_service",
         statement="社前村祠堂维护。",
+        planning_role="spatial_intervention",
+        project_package_ref="pkg-facility-place-2",
         suggested_category="facility",
         suggested_output_kind="point",
         location_hints=["社前村", "祠堂"],
+        evidence_refs=["fact:facility-place-2"],
         facility_parameters=FacilityPlanningParameters(
             facility_type="祠堂",
             action="preserve",
@@ -95,14 +104,19 @@ def test_facility_point_and_site_area_footprint_are_separate_targets() -> None:
         intervention_id="facility-1",
         name="综合服务中心设施节点",
         target_id="facility-1",
+        planning_role="spatial_intervention",
+        project_package_ref="pkg-facility-1",
+        admission_reason="typed_spatial_claim_ready",
         category="facility",
         execution_mode="spatial",
         expected_output_kind="point",
+        asset_kind="facility",
         facility_parameters=FacilityPlanningParameters(
             facility_type="综合服务中心",
             action="new",
         ),
         claim_refs=["claim-facility-1"],
+        evidence_refs=["fact-facility-1"],
     )
     site_area = PlanningIntervention(
         intervention_id="site-area-1",
@@ -111,15 +125,45 @@ def test_facility_point_and_site_area_footprint_are_separate_targets() -> None:
         category="site_area",
         execution_mode="spatial",
         expected_output_kind="polygon",
+        planning_role="spatial_intervention",
+        project_package_ref="pkg-site-area-1",
+        admission_reason="typed_spatial_claim_ready",
         materialization_role="site_footprint",
         site_area_parameters=SiteAreaPlanningParameters(
             site_type="活动场地",
             footprint_area_m2=1200,
         ),
         claim_refs=["claim-site-area-1"],
+        evidence_refs=["fact-site-area-1"],
     )
 
-    program = assemble_planning_program([facility, site_area], [], claims=[])
+    claims = [
+        PlanningClaim(
+            claim_id="claim-facility-1",
+            statement=facility.name,
+            suggested_category="facility",
+            suggested_output_kind="point",
+            asset_kind="facility",
+            planning_role="spatial_intervention",
+            project_package_ref="pkg-facility-1",
+            location_hints=["社前村"],
+            evidence_refs=["fact-facility-1"],
+            facility_parameters=facility.facility_parameters,
+        ),
+        PlanningClaim(
+            claim_id="claim-site-area-1",
+            statement=site_area.name,
+            suggested_category="site_area",
+            suggested_output_kind="polygon",
+            planning_role="spatial_intervention",
+            project_package_ref="pkg-site-area-1",
+            materialization_role="site_footprint",
+            location_hints=["社前村"],
+            evidence_refs=["fact-site-area-1"],
+            site_area_parameters=site_area.site_area_parameters,
+        ),
+    ]
+    program = assemble_planning_program([facility, site_area], [], claims=claims)
     compilation, _, diagnostics = compile_program_deterministic(program)
 
     assert [item.target_id for item in compilation.typed_intent.facilities] == [

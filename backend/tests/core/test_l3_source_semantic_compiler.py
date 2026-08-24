@@ -233,10 +233,13 @@ def test_typed_semantics_survive_claim_proposal_program_boundaries() -> None:
     draft = PlanningClaimDraft(
         claim_id="TR003",
         statement="村道硬化8公里，路面宽4.5米。",
+        planning_role="spatial_intervention",
+        project_package_ref="pkg-tr003",
         suggested_category="road",
         suggested_output_kind="line",
         asset_kind="road",
         location_hints=["纵向村道"],
+        evidence_refs=["fact:tr003"],
         road_parameters={
             "action": "harden",
             "length": {"value": 8, "unit": "km"},
@@ -373,7 +376,7 @@ def test_functional_overlay_is_not_compiled_as_land_use_area_assignment() -> Non
     ("category", "output", "asset_kind"),
     [
         ("facility", "point", "water_supply"),
-        ("project", "polygon", "power"),
+        ("site_area", "polygon", "power"),
         ("protection", "polygon", "drainage_channel"),
     ],
 )
@@ -393,9 +396,9 @@ def test_mismatched_asset_kind_is_normalized_before_program_assembly(
             if category == "facility"
             else None
         ),
-        project_parameters=(
-            {"project_type": "变压器改造"}
-            if category == "project"
+        site_area_parameters=(
+            {"site_type": "变压器改造"}
+            if category == "site_area"
             else None
         ),
         polygon_parameters=(
@@ -408,24 +411,22 @@ def test_mismatched_asset_kind_is_normalized_before_program_assembly(
     claim_set = normalize_claim_draft_set(PlanningClaimDraftSet(claims=[draft]))
 
     assert len(claim_set.claims) == 1
-    assert claim_set.claims[0].asset_kind in {"facility", "project", "none"}
+    assert claim_set.claims[0].asset_kind in {"facility", "none"}
     assert any(
         "asset_kind_category_mismatch" in item for item in claim_set.diagnostics
     )
 
 
-def test_site_project_point_without_typed_footprint_becomes_auditable_action() -> None:
+def test_site_area_point_without_typed_footprint_is_quarantined() -> None:
     draft = PlanningClaimDraft(
         claim_id="PROJECT-POINT-1",
         statement="新建综合服务中心，位置在村北入口。",
-        suggested_category="project",
+        suggested_category="site_area",
         suggested_output_kind="point",
-        project_parameters={"project_type": "综合服务中心"},
+        site_area_parameters={"site_type": "综合服务中心"},
     )
 
     claim_set = normalize_claim_draft_set(PlanningClaimDraftSet(claims=[draft]))
 
-    assert len(claim_set.claims) == 1
-    assert claim_set.claims[0].suggested_category == "action"
-    assert claim_set.claims[0].suggested_output_kind == "action"
-    assert any("project_reclassified_to_action" in item for item in claim_set.diagnostics)
+    assert claim_set.claims == []
+    assert any("invalid_site_area_output" in item for item in claim_set.diagnostics)

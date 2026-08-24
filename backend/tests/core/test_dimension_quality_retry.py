@@ -92,6 +92,41 @@ def test_provider_resume_dispatch_carries_feedback():
     assert payload["quality_feedback"] == "请补全空间锚点"
 
 
+def test_quality_deadlock_retry_dispatches_failed_dimension_with_feedback():
+    import asyncio
+
+    from app.workflow.root_graph import apply_human_review_decision
+
+    state = {
+        "session_id": "s-quality-deadlock",
+        "paused_stage": "layer1",
+        "phase": "layer1",
+        "human_review_items": [{
+            "request_type": "dependency_deadlock_review",
+            "context": {"missing_dimensions": ["ecological_green"]},
+        }],
+        "human_review_decisions": {
+            "action": "retry",
+            "dimensions": ["ecological_green"],
+        },
+        "dimension_failures": [{
+            "stage": "L1",
+            "dimension": "ecological_green",
+            "code": "dimension_quality_failed",
+            "feedback": "请为每条观察补充空间锚点",
+        }],
+        "provider_failures": [],
+        "fatal_error": None,
+        "dimension_retry_counts": {},
+        "retry_counts": {},
+    }
+    result = asyncio.run(apply_human_review_decision(state))
+    assert result["provider_resume_dimensions"] == ["ecological_green"]
+    assert result["quality_feedback"] == "请为每条观察补充空间锚点"
+    assert result["dimension_failures"] == []
+    assert result["paused_stage"] is None
+
+
 def test_l3_program_rework_approve_retries_only_failed_dimensions():
     """L3 program_rework approval must resolve to a single-dimension retry
     (provider_resume_dimensions), never to the unroutable stage 'l3'."""

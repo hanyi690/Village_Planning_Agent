@@ -28,10 +28,13 @@ def _ref(schema_id: str) -> ArtifactRef:
 
 def test_execute_has_one_root_artifact_contract() -> None:
     result = ExecutionResult(
+        approved_input_ref=_ref("ApprovedExecutionInput"),
         execution_plan_ref=_ref("ExecutionPlan"),
         parcel_changeset_ref=_ref("ParcelChangeSet"),
         planned_state_ref=_ref("PlannedState"),
         layout_configs_ref=_ref("LayoutConfigs"),
+        atomic_commit_id="commit:execution-result",
+        atomic_commit_status="committed",
         task_results=[TaskExecutionResult(task_id="task-1", status="succeeded")],
     )
 

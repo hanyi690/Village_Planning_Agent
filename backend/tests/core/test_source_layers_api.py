@@ -31,3 +31,15 @@ def test_current_source_layers_expose_real_vectors_and_dem() -> None:
     assert response.rasters[0].height == 3601
     assert response.rasters[0].source_ref == 'catalog://dem_local'
     assert 'path' not in response.rasters[0].model_dump()
+
+
+def test_current_source_layers_do_not_return_jintian_for_another_village() -> None:
+    response = get_current_source_layers('青山村')
+
+    assert response.village_name == '青山村'
+    assert response.layers == []
+    assert response.rasters == []
+    assert response.center is None
+    assert response.diagnostics == [
+        "no catalog-backed current spatial source is configured for village '青山村'"
+    ]

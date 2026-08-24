@@ -3,7 +3,7 @@
 This module is test-only.  It implements the same three provider contracts
 used by production:
 
-* L1: ``L1DimensionOutput`` (report body + observations)
+* L1: separate observation and report projections
 * L2: streamed report text
 * L3/source semantics: typed structured responses
 
@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass, field
+from types import SimpleNamespace
 from typing import Any, Awaitable, Callable
 
 from langchain_core.messages import AIMessageChunk
@@ -38,7 +39,7 @@ class SimulatedPlanningProvider:
         self.calls[key] = self.calls.get(key, 0) + 1
 
     def l1_output(self, dimension_key: str) -> Any:
-        from app.domain.assessment.observation_draft import L1DimensionOutput
+        from app.domain.assessment.observation_draft import L1ObservationDraft
 
         self._count(f'L1:{dimension_key}')
         observations: list[dict[str, str]] = []
@@ -50,6 +51,9 @@ class SimulatedPlanningProvider:
                 'relation': '连接金田村现状居民点',
                 'description': '现状村道，需要形成可执行的道路建设或提升成果。',
                 'scale': '1条',
+                'observation_kind': 'current_asset',
+                'semantic_type': 'road',
+                'attributes': {'canonical_name': '村道'},
             })
         if self.facility_mode and dimension_key == 'public_services':
             observations.append({
@@ -59,8 +63,11 @@ class SimulatedPlanningProvider:
                 'relation': '位于社前村',
                 'description': '社前村现状祠堂，可作为公共文化服务设施定位依据。',
                 'scale': '1处',
+                'observation_kind': 'current_asset',
+                'semantic_type': 'facility',
+                'attributes': {'canonical_name': '祠堂'},
             })
-        return L1DimensionOutput(
+        return SimpleNamespace(
             report_body=(
                 f'【{dimension_key}现状】\n'
                 f'金田村{dimension_key}现状分析基于当前报告和已加载空间数据形成。\n'
@@ -68,8 +75,29 @@ class SimulatedPlanningProvider:
                 '【证据边界】\n'
                 '未由结构化观测确认的空间对象不作为后续定位依据。'
             ),
-            observations=observations,
+            observations=[L1ObservationDraft.model_validate(item) for item in observations],
         )
+
+    def l1_observation_output(self, dimension_key: str, prompt: str = "") -> Any:
+        from app.domain.assessment.observation_draft import L1ObservationPassOutput
+
+        legacy = self.l1_output(dimension_key)
+        segment_ids, quote = self._source_locator(prompt, dimension_key)
+        observations = [
+            item.model_copy(update={
+                "source_segment_ids": segment_ids,
+                "source_quote": quote,
+                "status": "confirmed" if segment_ids and quote else "uncertain",
+            })
+            for item in legacy.observations
+        ]
+        return L1ObservationPassOutput(observations=observations)
+
+    def l1_report_output(self, dimension_key: str) -> Any:
+        from app.domain.assessment.observation_draft import L1ReportOutput
+
+        legacy = self.l1_output(dimension_key)
+        return L1ReportOutput(report_body=legacy.report_body)
 
     def l2_text(self, dimension_key: str) -> str:
         self._count(f'L2:{dimension_key}')
@@ -90,15 +118,19 @@ class SimulatedPlanningProvider:
         )
 
     async def l3_payload(self, dimension_key: str) -> Any:
-        from app.domain.program.claim_draft import L3DimensionOutput, PlanningClaimDraft
+        from app.domain.program.claim_draft import PlanningClaimDraft
 
         self._count(f'L3:{dimension_key}')
         claims: list[Any] = []
-        if dimension_key == 'traffic_planning':
+        if dimension_key == 'traffic_planning' and (
+            not self.facility_mode or self.combined_mode
+        ):
             ref = await self._fact_id('road')
             claims.append(PlanningClaimDraft(
                 claim_id='sim-road-widen',
                 dimension_key=dimension_key,
+                planning_role='spatial_intervention',
+                project_package_ref='sim-package-road',
                 statement='金田村现状村道拓宽为规划道路并形成交通运输用地成果。',
                 suggested_category='road',
                 suggested_output_kind='line',
@@ -121,6 +153,8 @@ class SimulatedPlanningProvider:
             claims.append(PlanningClaimDraft(
                 claim_id='sim-facility-hall',
                 dimension_key=dimension_key,
+                planning_role='spatial_intervention',
+                project_package_ref='sim-package-facility',
                 statement='在社前村现状祠堂语义锚点附近配置公共文化服务设施点。',
                 suggested_category='facility',
                 suggested_output_kind='point',
@@ -136,7 +170,7 @@ class SimulatedPlanningProvider:
                     'service_radius': {'value': 30, 'unit': 'm'},
                 },
             ))
-        return L3DimensionOutput(
+        return SimpleNamespace(
             report_body=(
                 f'【{dimension_key}详细规划】\n'
                 '依据已审计 L1 空间事实和 L2 规划背景形成实施安排；具体空间身份由后续空间链路确定。'
@@ -146,14 +180,29 @@ class SimulatedPlanningProvider:
 
     async def structured_output(self, response_model: type[Any], messages: list[dict[str, Any]], **_: Any) -> Any:
         name = getattr(response_model, '__name__', '')
-        if name == 'L1DimensionOutput':
-            prompt = '\n'.join(str(item.get('content') or '') for item in messages)
+        prompt = '\n'.join(str(item.get('content') or '') for item in messages)
+        dimension_key = ''
+        if name in {
+            'L1ObservationPassOutput',
+            'L1ReportOutput',
+            'L3ClaimOutput',
+            'L3ReportOutput',
+        }:
             dimension_key = self._dimension_from_prompt(prompt)
-            return self.l1_output(dimension_key)
-        if name == 'L3DimensionOutput':
-            prompt = '\n'.join(str(item.get('content') or '') for item in messages)
-            dimension_key = self._dimension_from_prompt(prompt)
-            return await self.l3_payload(dimension_key)
+        if name == 'L1ObservationPassOutput':
+            return self.l1_observation_output(dimension_key, prompt)
+        if name == 'L1ReportOutput':
+            return self.l1_report_output(dimension_key)
+        if name == 'L3ClaimOutput':
+            from app.domain.program.claim_draft import L3ClaimOutput
+
+            payload = await self.l3_payload(dimension_key)
+            return L3ClaimOutput(claims=list(payload.claims))
+        if name == 'L3ReportOutput':
+            from app.domain.program.claim_draft import L3ReportOutput
+
+            payload = await self.l3_payload(dimension_key)
+            return L3ReportOutput(report_body=payload.report_body)
         if name == 'SourceFeatureSemanticProposalBatch':
             from app.contracts.evidence.source_semantic_contracts import (
                 SourceFeatureSemanticProposal,
@@ -299,12 +348,30 @@ class SimulatedPlanningProvider:
 
     @staticmethod
     def _dimension_from_prompt(prompt: str) -> str:
-        marker = '【dimension_key='
+        marker = 'dimension_key='
         start = prompt.find(marker)
         if start < 0:
             raise AssertionError('simulated prompt is missing its dimension contract marker')
         value = prompt[start + len(marker):]
-        return value.split('】', 1)[0].strip()
+        return value.split('】', 1)[0].split('\n', 1)[0].strip()
+
+    @staticmethod
+    def _source_locator(prompt: str, dimension_key: str) -> tuple[list[str], str]:
+        """Return a real source-index locator for simulated L1 observations."""
+
+        marker = '【L1 source index】'
+        source_text = prompt.split(marker, 1)[1] if marker in prompt else ''
+        keywords = ('祠堂', '祠') if dimension_key == 'public_services' else (
+            '村道', '道路'
+        ) if dimension_key == 'traffic' else ()
+        for line in source_text.splitlines():
+            parts = line.split(' | ', 4)
+            if len(parts) < 5 or not parts[0].startswith('l1:'):
+                continue
+            matched = next((word for word in keywords if word in parts[4]), '')
+            if matched:
+                return [parts[0]], matched
+        return [], ''
 
     async def astream(self, prompt: str):
         dimension_key = self._dimension_from_prompt(prompt)

@@ -64,10 +64,13 @@ def test_artifact_ref_rejects_invalid_digest_and_missing_identity() -> None:
 
 def test_execution_result_rejects_incomplete_child_ref_and_accepts_valid_refs() -> None:
     refs = {
+        "approved_input_ref": _ref_data(schema_id="ApprovedExecutionInput"),
         "execution_plan_ref": _ref_data(schema_id="ExecutionPlan"),
         "parcel_changeset_ref": _ref_data(schema_id="ParcelChangeSet"),
         "planned_state_ref": _ref_data(schema_id="PlannedState"),
         "layout_configs_ref": _ref_data(schema_id="LayoutConfigs"),
+        "atomic_commit_id": "commit:canonical",
+        "atomic_commit_status": "committed",
     }
 
     with pytest.raises(ValidationError):

@@ -45,7 +45,7 @@ def test_apply_mapping_updates_measure_unit():
 
     ds = _draft_set("待定")
     assert _apply_mapping(ds, {"待定": "ha"}) >= 1
-    assert ds.claims[0].project_parameters.footprint_area.unit == "ha"
+    assert ds.claims[0].site_area_parameters.footprint_area.unit == "ha"
 
 
 def test_parse_mapping_json():

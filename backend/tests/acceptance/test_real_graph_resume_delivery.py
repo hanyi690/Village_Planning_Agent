@@ -793,12 +793,12 @@ def test_real_graph_resume_delivery(sqlite_db, pipeline_reset, monkeypatch):
             from app.infrastructure.artifacts.runtime import load_artifact
             from app.contracts.artifacts.delivery_manifest_contracts import DeliveryManifest
             from app.contracts.workflow.execution_plan_contracts import ExecutionResult
-            from app.contracts.domain.selection_contracts import SiteSelectionDecision
+            from app.contracts.planning.approval import ApprovedExecutionInput
             from app.contracts.spatial.spatial_delivery_contracts import DeliverySpatialSnapshot
 
             manifest = load_artifact(state, "delivery_manifest", DeliveryManifest)
             outcome = load_artifact(state, "execution_result", ExecutionResult)
-            selection = load_artifact(state, "site_selection", SiteSelectionDecision)
+            approval = load_artifact(state, "approved_execution_input", ApprovedExecutionInput)
             spatial_snapshot = load_artifact(
                 state,
                 "delivery_spatial_snapshot",
@@ -830,11 +830,7 @@ def test_real_graph_resume_delivery(sqlite_db, pipeline_reset, monkeypatch):
                 item.target_id
                 for item in (manifest.deferral_ledger.entries if manifest.deferral_ledger else ())
             }
-            selected_facility_ids = {
-                item.target_id
-                for item in (selection.target_assignments if selection else [])
-                if item.target_type == "facility" and item.status == "placed"
-            }
+            selected_facility_ids = set(approval.target_ids if approval else [])
             assert selected_facility_ids <= outcome_target_ids | deferred_target_ids, (
                 "selected facilities are not fully accounted by execution/deferral; "
                 f"selected={sorted(selected_facility_ids)!r}, "
@@ -845,7 +841,7 @@ def test_real_graph_resume_delivery(sqlite_db, pipeline_reset, monkeypatch):
                 item.target_id
                 for item in (selection.target_assignments if selection else [])
                 if (
-                    item.target_type == "project"
+                    item.target_type == "site_area"
                     and item.status == "placed"
                     and item.expected_output_kind == "point"
                 )

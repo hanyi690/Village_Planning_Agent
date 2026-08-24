@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pytest
 
-from tests.acceptance.test_complete_execution_render import _uploads
+from tests.acceptance.test_upload_fixtures import _uploads
 from tests.fixtures.db import make_session_with_uploads
 from tests.support.simulated_planning_llm import SimulatedPlanningProvider
 
@@ -220,7 +220,7 @@ async def test_simulated_root_graph_reaches_road_line_and_transport_landuse(
         refs = dict(final.get('artifact_refs') or {})
         for key in (
             'l1_snapshot', 'l2_strategy', 'planning_program',
-            'target_projection', 'grounding_result', 'site_selection',
+            'target_projection', 'grounding_result', 'scenario_set',
             'execution_plan', 'parcel_changeset', 'planned_state',
             'delivery_manifest', 'delivery_spatial_snapshot', 'render_layers',
             'render_artifacts',
@@ -234,17 +234,21 @@ async def test_simulated_root_graph_reaches_road_line_and_transport_landuse(
 
         projection = load_artifact(final, 'target_projection', IntentCompilationResult)
         assert projection.spatial_reference_specs
-        assert any(
-            str(getattr(spec, 'target_id', '') or '').endswith('sim-road-widen')
-            and str(getattr(spec, 'source_collection_key', '') or '') == 'current_road'
-            for spec in projection.spatial_reference_specs
-        ), f'calls={provider.calls}; specs=' + json.dumps(
+        road_spec = next(
+            (
+                spec for spec in projection.spatial_reference_specs
+                if str(getattr(spec, 'source_collection_key', '') or '') == 'current_road'
+            ),
+            None,
+        )
+        assert road_spec is not None, f'calls={provider.calls}; specs=' + json.dumps(
             [
                 item.model_dump(mode='json') if hasattr(item, 'model_dump') else str(item)
                 for item in projection.spatial_reference_specs
             ],
             ensure_ascii=False,
         )
+        road_target_id = str(getattr(road_spec, 'target_id', '') or '')
 
         execution_plan = load_artifact(final, 'execution_plan', ExecutionPlan)
         road_tasks = [
@@ -268,7 +272,7 @@ async def test_simulated_root_graph_reaches_road_line_and_transport_landuse(
         planned = load_artifact(final, 'planned_state', PlannedState)
         assert any(
             getattr(road, 'geometry', '')
-            and str(getattr(road, 'derived_from_target', '') or '').endswith('sim-road-widen')
+            and str(getattr(road, 'derived_from_target', '') or '') == road_target_id
             for road in (getattr(planned, 'roads', []) or [])
         ), 'ROAD EXECUTE produced no planned linear geometry'
         assert any(
@@ -356,6 +360,7 @@ async def test_simulated_root_graph_reaches_road_line_and_transport_landuse(
 
         assert provider.calls.get('L1:traffic', 0) >= 1
         assert provider.calls.get('L2:resource_endowment', 0) == 1
-        assert provider.calls.get('L3:traffic_planning', 0) == 1
+        # L3 is intentionally split into claims and report projections.
+        assert provider.calls.get('L3:traffic_planning', 0) == 2
     finally:
         await teardown()

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from app.contracts.domain.l3_contracts import PlanningIntervention, PlanningProgram
+from app.contracts.program import PlanningClaim
 from app.contracts.domain.planning_semantics import FacilityPlanningParameters, LinearAssetPlanningParameters
 from app.contracts.evidence.identity_contracts import EvidenceObservation, GroundedEntityBinding
 from app.contracts.planning.relation_parameters import ConnectParameters, ServiceParameters
@@ -13,10 +14,15 @@ def _facility(target_id: str = "clinic-1") -> PlanningIntervention:
         intervention_id=target_id,
         target_id=target_id,
         name="卫生室",
+        planning_role="spatial_intervention",
+        project_package_ref=f"pkg-{target_id}",
+        admission_reason="typed_spatial_claim_ready",
         category="facility",
         asset_kind="facility",
         execution_mode="spatial",
         expected_output_kind="point",
+        claim_refs=[f"claim-{target_id}"],
+        evidence_refs=[f"fact-{target_id}"],
         facility_parameters=FacilityPlanningParameters(facility_type="clinic"),
     )
 
@@ -26,12 +32,39 @@ def _road(target_id: str = "road-1") -> PlanningIntervention:
         intervention_id=target_id,
         target_id=target_id,
         name="连接道路",
+        planning_role="spatial_intervention",
+        project_package_ref=f"pkg-{target_id}",
+        admission_reason="typed_spatial_claim_ready",
         category="road",
         asset_kind="road",
         execution_mode="spatial",
         expected_output_kind="line",
+        claim_refs=[f"claim-{target_id}"],
+        evidence_refs=[f"fact-{target_id}"],
         road_parameters={"action": "new", "length_m": 800, "pavement_width_m": 5},
     )
+
+
+def _program(*interventions: PlanningIntervention) -> PlanningProgram:
+    claims = []
+    for intervention in interventions:
+        claims.append(
+            PlanningClaim(
+                claim_id=intervention.claim_refs[0],
+                statement=intervention.name,
+                suggested_category=intervention.category,
+                suggested_output_kind=intervention.expected_output_kind,
+                asset_kind=intervention.asset_kind,
+                planning_role="spatial_intervention",
+                project_package_ref=intervention.project_package_ref,
+                location_hints=["社前村"],
+                evidence_refs=list(intervention.evidence_refs),
+                facility_parameters=intervention.facility_parameters,
+                road_parameters=intervention.road_parameters,
+                linear_parameters=intervention.linear_parameters,
+            )
+        )
+    return PlanningProgram(interventions=list(interventions), claims=claims)
 
 
 def test_compile_parameterized_serve_and_connect_relations() -> None:
@@ -69,7 +102,7 @@ def test_compile_parameterized_serve_and_connect_relations() -> None:
     }
 
     graph = compile_intent_graph_v2(
-        PlanningProgram(interventions=[clinic, road]),
+        _program(clinic, road),
         observations=[EvidenceObservation(
             observation_id="obs:settlement", mention="社前村", normalized_name="社前村",
             evidence_refs=["e:report:1"],
@@ -89,6 +122,8 @@ def test_compile_parameterized_serve_and_connect_relations() -> None:
     assert "e:binding:1" in serve.evidence_refs
     assert connect.parameter_status == "provided"
     assert not any("relation_parameters_missing" in item for item in graph.diagnostics)
+    assert graph.solver_kind == "coverage"
+    assert graph.solver_kind_reasons == ["typed_service_coverage_relation"]
 
 
 def test_missing_parameters_are_retained_as_deferred_diagnostic() -> None:
@@ -138,6 +173,6 @@ def test_compile_result_surfaces_graph_diagnostics() -> None:
             "criticality": "hard",
         }]
     }
-    result, _, diagnostics = compile_program_deterministic(PlanningProgram(interventions=[clinic]))
+    result, _, diagnostics = compile_program_deterministic(_program(clinic))
     assert result.intent_graph is not None
     assert any(item.code == "relation_parameters_missing" for item in diagnostics)

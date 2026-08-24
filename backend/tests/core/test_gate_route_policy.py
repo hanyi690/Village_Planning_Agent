@@ -111,6 +111,17 @@ def test_validate_retry_l3_needs_revision_dimensions(monkeypatch) -> None:
     )
 
 
+def test_explicit_retry_execute_can_rerun_materializer_after_unchanged_input() -> None:
+    state = {
+        "paused_stage": "validate",
+        "human_review_decisions": {
+            "action": "retry",
+            "force_retry_execute": True,
+        },
+    }
+    assert root_graph._route_retry(state, "validate") == "execute"
+
+
 def test_reconcile_policy(monkeypatch) -> None:
     cases = {
         "PASS": "deliver",
@@ -238,7 +249,6 @@ def test_resume_approve_select(monkeypatch) -> None:
     # Approval is the authoritative operator decision; unplaced targets are
     # deferred to the deferral/diagnostic path, never looped back to HUMAN.
     assert _resume(state) == "execute"
-    state["human_deferred_select_revision"] = True
     assert _resume(state) == "execute"
 
 

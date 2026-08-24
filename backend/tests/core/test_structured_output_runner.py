@@ -16,18 +16,36 @@ class _TextResult(BaseModel):
     value: str
 
 
-def _retry_exception_with_content(content: str):
+@pytest.mark.parametrize(
+    ("error", "expected"),
+    [
+        (asyncio.TimeoutError(), "TIMEOUT"),
+        (ValueError("context_length_exceeded"), "CONTEXT_OVERFLOW"),
+        (ValueError("maximum context length exceeded"), "CONTEXT_OVERFLOW"),
+        (ValueError("input tokens exceed the context limit"), "CONTEXT_OVERFLOW"),
+        (ValueError("schema validation failed for input token field"), "SCHEMA_INVALID"),
+        (ValueError("provider token mismatch"), None),
+    ],
+)
+def test_structured_failure_code_classifies_timeout_and_context_overflow(error, expected):
+    from app.infrastructure.llm.structured import structured_failure_code
+
+    assert structured_failure_code(error) == expected
+
+
+def _retry_exception_with_content(content: str, *, finish_reason: str | None = None, message: str = "No tool calls or function call found in response (mode: TOOLS)"):
     from instructor.core import InstructorRetryException
 
     completion = SimpleNamespace(
         choices=[
             SimpleNamespace(
                 message=SimpleNamespace(content=content, tool_calls=None),
+                finish_reason=finish_reason,
             )
         ]
     )
     return InstructorRetryException(
-        "No tool calls or function call found in response (mode: TOOLS)",
+        message,
         last_completion=completion,
         n_attempts=1,
         total_usage=0,
@@ -231,6 +249,271 @@ async def test_runner_rejects_non_standard_json_constants_without_extra_call(mon
 
 
 @pytest.mark.asyncio
+async def test_runner_recovers_strict_l1_observation_json(monkeypatch):
+    from app.domain.assessment.observation_draft import L1ObservationPassOutput
+    from app.infrastructure.llm import structured
+
+    content = '{"observations":[{"entity_type":"道路","name":"村道","location":"沿村","relation":"贯穿村庄","description":"现状道路","scale":"1条"}]}'
+
+    class _Completions:
+        async def create(self, **_kwargs):
+            raise _retry_exception_with_content(content)
+
+    class _Client:
+        chat = type("_Chat", (), {"completions": _Completions()})()
+
+    monkeypatch.setattr(structured, "get_async_instructor_client", lambda: _Client())
+    monkeypatch.setattr(structured, "get_structured_model", lambda model=None: "MiniMax-M2.7-highspeed")
+
+    result = await structured.run_structured_output(
+        L1ObservationPassOutput,
+        [{"role": "user", "content": "return the typed L1 output"}],
+        max_retries=1,
+        timeout=2,
+        content_fallback_mode="strict",
+    )
+
+    assert result.observations[0].name == "村道"
+
+
+@pytest.mark.asyncio
+async def test_runner_recovers_strict_l3_claim_json(monkeypatch):
+    from app.domain.program.claim_draft import L3ClaimOutput
+    from app.infrastructure.llm import structured
+
+    content = '{"claims":[{"claim_id":"land-use-1","statement":"保留现状生态与耕地格局"}]}'
+
+    class _Completions:
+        async def create(self, **_kwargs):
+            raise _retry_exception_with_content(content)
+
+    class _Client:
+        chat = type("_Chat", (), {"completions": _Completions()})()
+
+    monkeypatch.setattr(structured, "get_async_instructor_client", lambda: _Client())
+    monkeypatch.setattr(structured, "get_structured_model", lambda model=None: "MiniMax-M2.7-highspeed")
+
+    result = await structured.run_structured_output(
+        L3ClaimOutput,
+        [{"role": "user", "content": "return the typed L3 output"}],
+        max_retries=1,
+        timeout=2,
+        content_fallback_mode="strict",
+    )
+
+    assert result.claims[0].claim_id == "land-use-1"
+
+
+@pytest.mark.asyncio
+async def test_runner_classifies_plain_markdown_as_tool_call_missing(monkeypatch):
+    from instructor.core import InstructorRetryException
+    from app.infrastructure.llm import structured
+
+    class _Completions:
+        async def create(self, **_kwargs):
+            raise _retry_exception_with_content("这是一段没有结构化结果的普通说明。")
+
+    class _Client:
+        chat = type("_Chat", (), {"completions": _Completions()})()
+
+    monkeypatch.setattr(structured, "get_async_instructor_client", lambda: _Client())
+    monkeypatch.setattr(structured, "get_structured_model", lambda model=None: "MiniMax-M2.7-highspeed")
+
+    with pytest.raises(InstructorRetryException) as raised:
+        await structured.run_structured_output(
+            _Result,
+            [{"role": "user", "content": "return seven"}],
+            max_retries=1,
+            timeout=2,
+        )
+    assert structured.structured_failure_code(raised.value) == "TOOL_CALL_MISSING"
+
+
+@pytest.mark.asyncio
+async def test_runner_recovers_bounded_plain_report_only_for_explicit_report_mode(monkeypatch):
+    from app.domain.assessment.observation_draft import L1ReportOutput
+    from app.infrastructure.llm import structured
+
+    content = (
+        "【空间结构】金田村现状建设主要沿村道和河谷呈组团分布，公共服务设施集中在村委会周边。"
+        "现状交通联系依赖既有村道，部分自然村之间的步行和消防通行条件仍需进一步核验，"
+        "本段结论仅描述现状，不直接替代后续规划目标和空间候选。"
+    )
+
+    class _Completions:
+        async def create(self, **_kwargs):
+            raise _retry_exception_with_content(content)
+
+    class _Client:
+        chat = type("_Chat", (), {"completions": _Completions()})()
+
+    monkeypatch.setattr(structured, "get_async_instructor_client", lambda: _Client())
+    monkeypatch.setattr(structured, "get_structured_model", lambda model=None: "MiniMax-M2.7-highspeed")
+
+    result = await structured.run_structured_output(
+        L1ReportOutput,
+        [{"role": "user", "content": "return the typed report"}],
+        max_retries=1,
+        timeout=2,
+        content_fallback_mode="report_text",
+    )
+
+    assert result.report_body == content
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "content",
+    [
+        "这是一段过短的返回。",
+        "完整正文但含有 ```json\n未闭合的结构化尾巴。" + "补充说明" * 30,
+        "<think>reasoning</think>正文中途再次出现<think>" + "内容" * 30,
+    ],
+    ids=["short", "fence", "non-wrapper-think"],
+)
+async def test_runner_rejects_unsafe_plain_report_fallback(monkeypatch, content):
+    from instructor.core import InstructorRetryException
+    from app.domain.assessment.observation_draft import L1ReportOutput
+    from app.infrastructure.llm import structured
+
+    class _Completions:
+        async def create(self, **_kwargs):
+            raise _retry_exception_with_content(content)
+
+    class _Client:
+        chat = type("_Chat", (), {"completions": _Completions()})()
+
+    monkeypatch.setattr(structured, "get_async_instructor_client", lambda: _Client())
+    monkeypatch.setattr(structured, "get_structured_model", lambda model=None: "MiniMax-M2.7-highspeed")
+
+    with pytest.raises(InstructorRetryException):
+        await structured.run_structured_output(
+            L1ReportOutput,
+            [{"role": "user", "content": "return the typed report"}],
+            max_retries=1,
+            timeout=2,
+            content_fallback_mode="report_text",
+        )
+
+
+@pytest.mark.asyncio
+async def test_runner_classifies_finish_length_and_retries_once(monkeypatch):
+    from instructor.core import InstructorRetryException
+    from app.infrastructure.llm import structured
+
+    requests: list[dict] = []
+
+    class _Completions:
+        async def create(self, **kwargs):
+            requests.append(kwargs)
+            if len(requests) == 1:
+                raise _retry_exception_with_content("{\"value\":", finish_reason="length")
+            return _Result(value=7)
+
+    class _Client:
+        chat = type("_Chat", (), {"completions": _Completions()})()
+
+    monkeypatch.setattr(structured, "get_async_instructor_client", lambda: _Client())
+    monkeypatch.setattr(structured, "get_structured_model", lambda model=None: "MiniMax-M2.7-highspeed")
+
+    result = await structured.run_structured_output(
+        _Result,
+        [{"role": "user", "content": "return seven"}],
+        max_retries=1,
+        timeout=2,
+        max_tokens=300,
+        incomplete_output_max_tokens=8192,
+    )
+    assert result == _Result(value=7)
+    assert [request["max_tokens"] for request in requests] == [300, 600]
+
+
+@pytest.mark.asyncio
+async def test_runner_classifies_schema_invalid_without_logging_model_content(monkeypatch):
+    from instructor.core import InstructorRetryException
+    from app.infrastructure.llm import structured
+
+    warnings: list[tuple] = []
+
+    class _Completions:
+        async def create(self, **_kwargs):
+            raise _retry_exception_with_content('{"other":7}', message="schema validation failed")
+
+    class _Client:
+        chat = type("_Chat", (), {"completions": _Completions()})()
+
+    monkeypatch.setattr(structured, "get_async_instructor_client", lambda: _Client())
+    monkeypatch.setattr(structured, "get_structured_model", lambda model=None: "MiniMax-M2.7-highspeed")
+    monkeypatch.setattr(structured.logger, "warning", lambda *args, **_kwargs: warnings.append(args))
+
+    with pytest.raises(InstructorRetryException) as raised:
+        await structured.run_structured_output(
+            _Result,
+            [{"role": "user", "content": "return seven"}],
+            max_retries=1,
+            timeout=2,
+        )
+    assert structured.structured_failure_code(raised.value) == "SCHEMA_INVALID"
+    assert '"other":7' not in " ".join(str(item) for warning in warnings for item in warning)
+
+
+@pytest.mark.asyncio
+async def test_minimax_structured_request_enables_reasoning_split(monkeypatch):
+    from app.infrastructure.llm import structured
+
+    requests: list[dict] = []
+
+    class _Completions:
+        async def create(self, **kwargs):
+            requests.append(kwargs)
+            return _Result(value=7)
+
+    class _Client:
+        chat = type("_Chat", (), {"completions": _Completions()})()
+
+    monkeypatch.setenv("LLM_PROVIDER", "minimax")
+    monkeypatch.setattr(structured, "get_async_instructor_client", lambda: _Client())
+    monkeypatch.setattr(structured, "get_structured_model", lambda model=None: "MiniMax-M2.7-highspeed")
+
+    await structured.run_structured_output(
+        _Result,
+        [{"role": "user", "content": "return seven"}],
+        timeout=2,
+    )
+    assert requests[0]["extra_body"]["reasoning_split"] is True
+
+
+@pytest.mark.asyncio
+async def test_incomplete_exception_without_length_metadata_is_not_retried(monkeypatch):
+    from instructor.core import IncompleteOutputException
+    from app.infrastructure.llm import structured
+
+    requests: list[dict] = []
+
+    class _Completions:
+        async def create(self, **kwargs):
+            requests.append(kwargs)
+            raise IncompleteOutputException(last_completion=None)
+
+    class _Client:
+        chat = type("_Chat", (), {"completions": _Completions()})()
+
+    monkeypatch.setattr(structured, "get_async_instructor_client", lambda: _Client())
+    monkeypatch.setattr(structured, "get_structured_model", lambda model=None: "MiniMax-M2.7-highspeed")
+
+    with pytest.raises(IncompleteOutputException) as raised:
+        await structured.run_structured_output(
+            _Result,
+            [{"role": "user", "content": "return seven"}],
+            timeout=2,
+            max_tokens=300,
+            incomplete_output_max_tokens=8192,
+        )
+    assert len(requests) == 1
+    assert structured.structured_failure_code(raised.value) == "SCHEMA_INVALID"
+
+
+@pytest.mark.asyncio
 async def test_runner_passes_typed_contract_and_bounded_retry(monkeypatch):
     from app.infrastructure.llm import structured
 
@@ -317,7 +600,11 @@ async def test_runner_adapts_only_incomplete_output(monkeypatch):
         async def create(self, **kwargs):
             requests.append(kwargs)
             if len(requests) == 1:
-                raise IncompleteOutputException(last_completion=None)
+                raise IncompleteOutputException(
+                    last_completion=SimpleNamespace(
+                        choices=[SimpleNamespace(finish_reason="length")]
+                    )
+                )
             return _Result(value=7)
 
     class _Client:
@@ -348,7 +635,11 @@ async def test_runner_respects_per_call_incomplete_output_ceiling(monkeypatch):
     class _Completions:
         async def create(self, **kwargs):
             requests.append(kwargs)
-            raise IncompleteOutputException(last_completion=None)
+            raise IncompleteOutputException(
+                last_completion=SimpleNamespace(
+                    choices=[SimpleNamespace(finish_reason="length")]
+                )
+            )
 
     class _Client:
         chat = type("_Chat", (), {"completions": _Completions()})()

@@ -11,7 +11,7 @@ import pytest
 
 pytest.importorskip("fastapi")
 
-from tests.acceptance.test_complete_execution_render import _uploads
+from tests.acceptance.test_upload_fixtures import _uploads
 from tests.fixtures.db import make_session_with_uploads
 
 
@@ -300,11 +300,13 @@ async def test_simulated_l3_reaches_ground_without_manual_projection(
         claim_set = PlanningClaimSet(
             dimension_key="historical_culture",
             claims=[
-                PlanningClaim(
-                    claim_id="simulated-祠堂-maintenance",
-                    dimension_key="historical_culture",
-                    statement="社前村现状祠堂需要保留并作为公共文化设施维护。",
-                    suggested_category="facility",
+                    PlanningClaim(
+                        claim_id="simulated-祠堂-maintenance",
+                        dimension_key="historical_culture",
+                        statement="社前村现状祠堂需要保留并作为公共文化设施维护。",
+                        planning_role="spatial_intervention",
+                        project_package_ref="simulated:historical_culture:祠堂",
+                        suggested_category="facility",
                     suggested_output_kind="point",
                     asset_kind="facility",
                     suggested_interventions=["祠堂维护"],
@@ -316,11 +318,13 @@ async def test_simulated_l3_reaches_ground_without_manual_projection(
                         action="preserve",
                     ),
                 ),
-                PlanningClaim(
-                    claim_id="simulated-site-area-maintenance",
-                    dimension_key="historical_culture",
-                    statement="园寨需要一处小型公共服务用地作为规划实施地块。",
-                    suggested_category="site_area",
+                    PlanningClaim(
+                        claim_id="simulated-site-area-maintenance",
+                        dimension_key="historical_culture",
+                        statement="园寨需要一处小型公共服务用地作为规划实施地块。",
+                        planning_role="spatial_intervention",
+                        project_package_ref="simulated:historical_culture:public-service-site",
+                        suggested_category="site_area",
                     suggested_output_kind="polygon",
                     asset_kind="none",
                     suggested_interventions=["公共服务用地"],
@@ -338,11 +342,13 @@ async def test_simulated_l3_reaches_ground_without_manual_projection(
         )
         if not use_real_source_semantic:
             claim_set.claims.append(
-                PlanningClaim(
-                    claim_id="simulated-road-upgrade-from-l1-fact",
-                    dimension_key="historical_culture",
-                    statement="金田村现状村道需要提升。",
-                    suggested_category="road",
+                    PlanningClaim(
+                        claim_id="simulated-road-upgrade-from-l1-fact",
+                        dimension_key="historical_culture",
+                        statement="金田村现状村道需要提升。",
+                        planning_role="spatial_intervention",
+                        project_package_ref="simulated:historical_culture:village-road",
+                        suggested_category="road",
                     suggested_output_kind="line",
                     asset_kind="road",
                     suggested_interventions=["村道提升"],
@@ -421,23 +427,33 @@ async def test_simulated_l3_reaches_ground_without_manual_projection(
         assert projection["compilation_status"] == "validated", json.dumps(
             projection, ensure_ascii=False
         )
-        assert projection["spatial_reference_specs"][0]["op"] == "and"
-        assert (
-            projection["spatial_reference_specs"][0]["children"][0]["reference"]["filter"]
-            == {"label_contains": "社前村"}
+        shrine_spec = next(
+            (
+                item
+                for item in projection["spatial_reference_specs"]
+                if "祠堂" in json.dumps(item, ensure_ascii=False)
+            ),
+            None,
         )
-        assert (
-            projection["spatial_reference_specs"][0]["children"][1]["reference"]["filter"]
-            == {"label_contains": "祠堂"}
+        assert shrine_spec, json.dumps(
+            projection["spatial_reference_specs"], ensure_ascii=False
         )
+        shrine_json = json.dumps(shrine_spec, ensure_ascii=False)
+        assert "祠堂" in shrine_json
+        assert "社前村" in shrine_json
+        if shrine_spec["type"] == "directional":
+            shrine_filter = (shrine_spec.get("reference") or {}).get("filter") or {}
+            assert shrine_filter["rdf_type"] == "Facility"
+            assert shrine_filter["source_feature_ids"]
+            assert shrine_spec["source_binding_ref"]
+        else:
+            assert shrine_spec["type"] == "composed"
+            assert shrine_spec["op"] == "and"
         if not use_real_source_semantic:
-            road_target_id = (
-                "historical_culture:claim:simulated-road-upgrade-from-l1-fact"
-            )
             road_spec = next(
                 item
                 for item in projection["spatial_reference_specs"]
-                if item.get("target_id") == road_target_id
+                if target_road_source_id in json.dumps(item, ensure_ascii=False)
             )
             assert road_spec["reference"]["filter"]["source_feature_ids"] == [
                 target_road_source_id
@@ -465,8 +481,8 @@ async def test_simulated_l3_reaches_ground_without_manual_projection(
             road_candidates = [
                 item
                 for item in grounding["candidates"]
-                if item.get("target_ref")
-                == "historical_culture:claim:simulated-road-upgrade-from-l1-fact"
+                if item.get("target_kind") == "road"
+                and target_road_source_id in json.dumps(item, ensure_ascii=False)
             ]
             assert len(road_candidates) == 1, json.dumps(
                 grounding, ensure_ascii=False

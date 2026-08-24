@@ -1,7 +1,7 @@
 from app.contracts.spatial.candidate_geometry import CandidateGeometry
 from app.contracts.spatial.parcel_change_contracts import ParcelChangeSet
 from app.contracts.workflow.execution_plan_contracts import ExecutionPlan, WorkerTask, WorkerType
-from app.contracts.domain.selection_contracts import TargetAssignment
+from app.contracts.workflow.materialization_contracts import TargetAssignment
 from app.contracts.workflow.parse_contracts import FacilityTarget, SpatialPlanningIntent
 from app.domain.delivery.render_layers import build_planned_overlay_layers
 from app.domain.materialization.execute_state import ExecuteAgentState
@@ -132,3 +132,42 @@ def test_planned_facility_and_render_layer_keep_candidate_provenance():
     assert rendered["source_feature_ids"] == ["bundle:annotations_current:facility-001"]
     assert rendered["source_refs"] == facility.source_refs
     assert rendered["geometry_ref"] == "kg:facility:health:001"
+
+
+def test_facility_worker_resolves_two_same_target_candidates_by_task_identity():
+    state, target_id, candidate_id = _state()
+    first_task = state.execution_plan.worker_tasks[0]
+    second_id = "candidate:facility:health:002"
+    second_candidate = state.candidate_geometry_by_id[candidate_id].model_copy(update={
+        "candidate_id": second_id,
+        "wkt": "POINT (3 4)",
+        "source_refs": ["bundle:facility:health:002"],
+        "source_feature_ids": ["bundle:annotations_current:facility-002"],
+        "evidence_refs": ["l1:fact:facility-002"],
+    })
+    second_binding = dict(first_task.assignment.target_binding)
+    second_binding["candidate_id"] = second_id
+    second_task = first_task.model_copy(update={
+        "task_id": f"facility_placement:{target_id}:002",
+        "candidate_id": second_id,
+        "assignment": first_task.assignment.model_copy(update={"target_binding": second_binding}),
+    })
+    state.execution_plan = state.execution_plan.model_copy(update={
+        "worker_tasks": [first_task, second_task],
+    })
+    state.candidate_geometry_by_id[second_id] = second_candidate
+
+    result = _facility_worker(state)
+
+    assert {item.task_id for item in result.task_results} == {
+        first_task.task_id,
+        second_task.task_id,
+    }
+    assert {item.candidate_id for item in result.task_results} == {
+        candidate_id,
+        second_id,
+    }
+    assert {
+        tuple(feature["geometry"]["coordinates"])
+        for feature in result.layers[0]["data"]["features"]
+    } == {(1.0, 2.0), (3.0, 4.0)}

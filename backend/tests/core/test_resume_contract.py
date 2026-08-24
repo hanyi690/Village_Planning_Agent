@@ -66,7 +66,7 @@ def test_integrity_failure_selects_earliest_downstream_replay_stage():
         mode=ResumeMode.CHECKPOINT,
         resume_from="DELIVER",
         checkpoint_kind="layer",
-        reuse=["planning_program", "grounding_result", "site_selection", "delivery_manifest"],
+        reuse=["planning_program", "grounding_result", "scenario_set", "delivery_manifest"],
         reason="continue",
     )
 
