@@ -40,8 +40,8 @@ drainage_channel/revetment；不要输出未声明的字段。
 - materialization_role 只能是 land_use_assignment、functional_overlay、protection_overlay、restoration_overlay、site_footprint 或 null。avoid_constraint、near、serve、connect_network 等只属于 spatial_requirements.relations[].relation_template，绝不能写入 materialization_role。
 
 【跨字段硬约束；不能只满足单字段枚举】
-- planning_role=spatial_intervention 且 asset_kind=sewer/water_supply/stormwater/power/communication/drainage_channel/revetment 时，suggested_category 必须是 road，suggested_output_kind 必须是 line，必须填写 linear_parameters；road_parameters 必须为 null。
-- planning_role=spatial_intervention 且 asset_kind=road 时，suggested_category 必须是 road，suggested_output_kind 必须是 line，必须填写 road_parameters；linear_parameters 必须为 null。
+- planning_role=spatial_intervention 且 asset_kind=sewer/water_supply/stormwater/power/communication/drainage_channel/revetment 时，suggested_category=road，suggested_output_kind=line，必须填写 linear_parameters；road_parameters 必须为 null。
+- planning_role=spatial_intervention 且 asset_kind=road 时，suggested_category=road，suggested_output_kind=line，必须填写 road_parameters；linear_parameters 必须为 null。
 - suggested_category=action 只允许 suggested_output_kind=action、asset_kind=none、所有 typed parameter=null，且不能与 planning_role=spatial_intervention 同时出现。工程动作 new/upgrade/repair 等应填写 intervention_action 或对应参数块的 action，不能把工程类别写成 action。
 - 每条 spatial_intervention 只能填写一个与 category/asset_kind 对应的 typed parameter block；category、output、asset_kind、typed parameter block 不一致时，整条 claim 视为非法，不能通过把 output 改成 action 来修复。
 - 以下输出非法：action + line + sewer + linear_parameters。正确输出是：road + line + sewer + linear_parameters。

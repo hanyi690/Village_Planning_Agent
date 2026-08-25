@@ -648,6 +648,11 @@ def _claim_draft_semantic_errors(raw: PlanningClaimDraft) -> list[str]:
     reasons: list[str] = []
 
     if category == "action":
+        if asset in _LINEAR_ASSETS:
+            reasons.append(
+                f"asset_kind={asset} requires suggested_category=road, "
+                "suggested_output_kind=line, and linear_parameters"
+            )
         reasons.append(
             "spatial_intervention cannot use suggested_category=action; "
             "use a spatial category or planning_role=non_spatial_action"
