@@ -98,3 +98,24 @@ Fix Round 1 concerns
 
 - The repo still emits a pytest cache permission warning when targeted tests run because `backend/.pytest_cache` is not writable here, but the selected tests completed and passed.
 - I kept parcel-availability semantics unchanged, per instruction; the dormant hard-feasible/unknown-availability parcel test remains outside this round’s scope.
+
+Fix Round 2
+
+Changed files
+
+- `backend/app/contracts/spatial/grounded_problem.py`
+
+Behavior changes
+
+- Restored ordinary `missing_geometry` targets to the existing `incomplete` branch instead of escalating them into `unresolved` / `not_groundable`.
+- Kept the round-1 replay downgrade path intact: present-but-untrusted or compatibility-ambiguous `CandidateGeometry` still drives `human_required` and keeps `can_solve == False`.
+- Did not change parcel-availability semantics or undo any round-1 confidence/suitability fixes.
+
+Fix Round 2 verification
+
+- `pytest -o addopts='' backend/tests/contracts/test_grounded_problem_completeness.py::test_grounded_problem_stays_incomplete_when_geometry_is_missing backend/tests/contracts/test_grounded_problem_completeness.py::test_resolved_domains_are_downgraded_when_replayed_geometry_has_only_legacy_confidence backend/tests/core/test_artifact_runtime.py::test_load_artifact_roundtrip_preserves_legacy_confidence_compatibility backend/tests/contracts/test_planning_domain_boundaries.py::test_context_free_suitability_does_not_derive_score_from_grounding_confidence backend/tests/contracts/test_planning_domain_boundaries.py::test_context_free_suitability_respects_explicit_suitability_score backend/tests/test_ground_parcel_alternatives.py::test_select_refinement_does_not_promote_score_into_geometry_confidence backend/tests/test_ground_parcel_alternatives.py::test_high_suitability_does_not_close_incomplete_grounding -q`
+- `python -m py_compile backend/app/contracts/spatial/grounded_problem.py`
+
+Fix Round 2 concerns
+
+- Targeted pytest still emits the existing `.pytest_cache` permission warning in this environment, but the bounded regression set passed.

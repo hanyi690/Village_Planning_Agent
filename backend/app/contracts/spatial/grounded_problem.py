@@ -363,7 +363,6 @@ def _candidate_completeness(
             or any(ref not in geometry_map for ref in domain.candidate_geometry_refs)
         )
     }
-    unresolved_candidate_ids.update(missing_geometry)
     unresolved_ids = tuple(sorted(set(unresolved_ids).union(unresolved_candidate_ids)))
     replay_downgraded_ids = {
         target_id
