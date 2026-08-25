@@ -3,10 +3,10 @@ from __future__ import annotations
 import pytest
 
 from app.contracts.planning.constraint_factor import ConstraintFactor
-from app.contracts.planning.scenario import ScenarioFeature
+from app.contracts.planning.scenario import MasterCertificatePayload, ScenarioFeature
 from app.domain.allocation.master_coordinator import MasterCandidate, coordinate_master
 from app.domain.demand.facility_demand_model import FacilityDemandPoint, build_demand_snapshot
-from app.domain.network.snapshot import NetworkEdgeRef, NetworkNodeRef, build_network_snapshot
+from app.domain.network.snapshot import NetworkEdgeRef, NetworkNodeRef, build_network_snapshot, network_readiness
 from app.domain.relations.service import RelationEvaluationContext, evaluate_relations
 from app.domain.relations.registry import build_default_relation_registry
 
@@ -79,3 +79,81 @@ def test_incomplete_hard_relation_and_readiness_registry_fail_closed():
     assert {"contains", "within", "intersects", "overlaps", "access", "serve"}.issubset(
         set(build_default_relation_registry().keys())
     )
+
+
+def test_callable_only_network_is_not_typed_ready():
+    class CallableOnlyNetwork:
+        network_ref = "network:callable-only"
+
+        def route(self, _subject, _object):
+            return None
+
+    readiness, diagnostics = network_readiness(
+        CallableOnlyNetwork(),
+        "network:callable-only",
+    )
+    assert readiness == "blocked"
+    assert diagnostics == ("legacy_network_snapshot_incomplete",)
+
+
+def test_complete_legacy_network_is_still_pending_until_typed_binding():
+    class LegacyNetwork:
+        network_ref = "network:legacy"
+        nodes = (object(),)
+        edges = (object(),)
+        fingerprint = "legacy-fingerprint"
+
+        def is_connected(self, _left, _right):
+            return True
+
+        def travel_time_min(self, _left, _right):
+            return 1.0
+
+    readiness, diagnostics = network_readiness(LegacyNetwork(), "network:legacy")
+    assert readiness == "blocked"
+    assert diagnostics == ("legacy_network_snapshot_untyped",)
+
+
+def test_master_certificate_requires_nested_backend_binding():
+    from app.contracts.planning.scenario import (
+        BackendCertificatePayload,
+        SolverCertificate,
+        derive_backend_selection_digest,
+        derive_solver_model_digest,
+    )
+
+    master = MasterCertificatePayload(status="feasible", selected_candidate_ids={})
+    proof = BackendCertificatePayload(
+        backend_id="test-backend",
+        backend_version="1.0",
+        problem_kind="single_choice",
+        problem_fingerprint="problem:p2",
+        input_digest="input:p2",
+        solver_config={
+            "deterministic_seed": 0,
+            "search_limit": 0,
+            "time_limit_seconds": None,
+            "max_scenarios": 1,
+            "objective_definitions": [],
+            "backend_version": "1.0",
+            "replay_settings": {},
+        },
+        selection_digest=derive_backend_selection_digest({}, []),
+        status="feasible",
+    )
+    with pytest.raises(ValueError, match="not bound"):
+        SolverCertificate(
+            problem_fingerprint="problem:p2",
+            model_digest=derive_solver_model_digest(proof, deterministic_seed=0, search_limit=0),
+            solver_version="test-backend:1.0",
+            status="feasible",
+            problem_kind="single_choice",
+            backend_id="test-backend",
+            backend_version="1.0",
+            feasible_scenario_count=0,
+            backend_certificate=proof,
+            master_certificate=MasterCertificatePayload(
+                status="deferred",
+                blocker_refs=["different-master"],
+            ),
+        )

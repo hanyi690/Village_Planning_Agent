@@ -83,10 +83,7 @@ class ApprovedExecutionInput(ContractMeta):
         if self.scenario_id not in feasible_ids:
             raise ValueError("approved input scenario is not formally feasible")
         certificate = getattr(scenario_set, "solver_certificate", None)
-        if certificate is None or str(getattr(certificate, "status", "") or "") not in {
-            "feasible",
-            "bounded",
-        }:
+        if certificate is None or str(getattr(certificate, "status", "") or "") != "feasible":
             raise ValueError("approved input ScenarioSet has no feasible solver proof")
         if (
             not str(getattr(certificate, "backend_id", "") or "").strip()

@@ -87,7 +87,7 @@ def build_approved_execution_input(
     certificate = getattr(scenario_set, "solver_certificate", None)
     if certificate is None:
         return None
-    if str(getattr(certificate, "status", "") or "") not in {"feasible", "bounded"}:
+    if str(getattr(certificate, "status", "") or "") != "feasible":
         return None
     if not str(getattr(certificate, "backend_id", "") or "").strip():
         return None

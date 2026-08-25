@@ -486,8 +486,14 @@ async def select_node(state: Dict[str, Any]) -> Dict[str, Any]:
             )
             scenario_payload = scenario_set.model_dump(mode="json")
             certificate_payload = scenario_payload["solver_certificate"]
-            certificate_payload["master_certificate"] = master_certificate.model_dump(mode="json")
+            master_payload = master_certificate.model_dump(mode="json")
+            certificate_payload["master_certificate"] = master_payload
+            backend_payload = certificate_payload.get("backend_certificate")
+            if isinstance(backend_payload, dict):
+                backend_payload["master_certificate"] = master_payload
             if master_certificate.status != "feasible":
+                for scenario_row in scenario_payload.get("scenarios", []):
+                    scenario_row["status"] = "partial"
                 scenario_payload.update(
                     feasible_scenario_ids=[],
                     pareto_scenario_ids=[],

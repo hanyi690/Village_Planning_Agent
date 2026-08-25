@@ -3,6 +3,7 @@ from pydantic import ValidationError
 
 from app.contracts.planning.scenario import (
     BackendCertificatePayload,
+    MasterCertificatePayload,
     ObjectiveDefinition,
     PlanningScenario,
     ScenarioSet,
@@ -142,14 +143,8 @@ def test_certificate_status_and_count_match_formal_membership() -> None:
     with pytest.raises(ValidationError, match="feasible_scenario_count"):
         ScenarioSet(**common, solver_certificate=_certificate("feasible", 0))
 
-    with pytest.raises(ValidationError, match="feasible_scenario_count"):
+    with pytest.raises(ValidationError, match="bounded solver certificate"):
         ScenarioSet(**common, solver_certificate=_certificate("bounded", 0))
-
-    valid = ScenarioSet(
-        **common,
-        solver_certificate=_certificate("bounded", 1),
-    )
-    assert valid.solver_certificate.status == "bounded"
 
 
 def test_certificate_problem_fingerprint_must_match_scenario_set() -> None:
@@ -171,3 +166,35 @@ def test_certificate_problem_fingerprint_must_match_scenario_set() -> None:
                 feasible_scenario_count=1,
             ),
         )
+
+
+@pytest.mark.parametrize("master_status", ["bounded_infeasible", "deferred"])
+def test_non_feasible_master_clears_formal_ids_and_remains_constructible(master_status: str) -> None:
+    provisional = _scenario("partial")
+    master = MasterCertificatePayload(status=master_status, blocker_refs=["master:test"])
+    proof = _certificate("unknown")
+    backend = proof.backend_certificate.model_copy(update={"master_certificate": master})
+    certificate = proof.model_copy(
+        update={
+            "backend_certificate": backend,
+            "master_certificate": master,
+            "model_digest": derive_solver_model_digest(backend, deterministic_seed=0, search_limit=0),
+            "fingerprint": "",
+        }
+    )
+
+    scenario_set = ScenarioSet(
+        set_id=f"set:{master_status}",
+        problem_fingerprint="problem:test",
+        scenarios=[provisional],
+        feasible_scenario_ids=[],
+        pareto_scenario_ids=[],
+        recommended_scenario_id="",
+        solver_certificate=certificate,
+    )
+
+    assert scenario_set.feasible_scenario_ids == []
+    assert scenario_set.pareto_scenario_ids == []
+    assert scenario_set.recommended_scenario_id == ""
+    assert scenario_set.solver_certificate.master_certificate == master
+    assert scenario_set.solver_certificate.backend_certificate.master_certificate == master
