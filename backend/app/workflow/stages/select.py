@@ -392,7 +392,10 @@ async def select_node(state: Dict[str, Any]) -> Dict[str, Any]:
             reference_diagnostics=reference_resolution.diagnostics,
             execution_trace=getattr(context, "execution_trace", None),
         )
-        solver_subproblem_plan = compile_solver_subproblems(problem)
+        solver_subproblem_plan = compile_solver_subproblems(
+            problem,
+            readiness=readiness,
+        )
         target_subproblems = [
             item
             for item in solver_subproblem_plan.subproblems
@@ -430,7 +433,11 @@ async def select_node(state: Dict[str, Any]) -> Dict[str, Any]:
                     optimize_solver_subproblems,
                 )
 
-                scenario_set = optimize_solver_subproblems(problem, **scenario_kwargs)
+                scenario_set = optimize_solver_subproblems(
+                    problem,
+                    readiness=readiness,
+                    **scenario_kwargs,
+                )
             else:
                 scenario_set = optimize_scenarios(problem, **scenario_kwargs)
             # Retain a diagnostic ScenarioSet member when no feasible

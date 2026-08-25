@@ -12,7 +12,11 @@ from app.contracts.spatial.grounded_problem import (
     GroundedPlanningProblem,
     GroundedTargetDomain,
 )
-from app.domain.allocation.solver_portfolio import SolverBackendRegistry
+from app.domain.allocation.solver_portfolio import (
+    SolverBackendRegistry,
+    build_solver_problem_view,
+    default_solver_registry,
+)
 from app.domain.allocation.solver_readiness import build_solver_readiness
 
 
@@ -115,6 +119,139 @@ def test_hard_demand_or_network_gap_blocks_preflight(factor, context, expected_r
     assert readiness.ready is False
     assert readiness.status == "blocked"
     assert expected_ref in readiness.blocker_refs
+
+
+@pytest.mark.parametrize(
+    ("factor", "context", "dimension", "expected_refs"),
+    [
+        (
+            ConstraintFactor(
+                factor_id="factor:soft-access",
+                kind="provide_access",
+                evaluator_key="access_via",
+                subject_ref="parcel-target",
+                hard=False,
+                parameters=AccessParameters(
+                    network_ref="network:road",
+                    max_travel_time_min=20,
+                ),
+            ),
+            SimpleNamespace(networks={}, demands={}),
+            "network",
+            {"network:network:road"},
+        ),
+        (
+            ConstraintFactor(
+                factor_id="factor:soft-service",
+                kind="serve",
+                evaluator_key="serve",
+                subject_ref="parcel-target",
+                hard=False,
+                parameters=ServiceParameters(
+                    demand_ref="demand:clinic",
+                    facility_type="clinic",
+                    max_travel_time_min=20,
+                    min_coverage_ratio=0.8,
+                    capacity=10,
+                    capacity_unit="people",
+                    network_ref="network:road",
+                ),
+            ),
+            SimpleNamespace(networks={}, demands={}),
+            "demand",
+            {"demand:demand:clinic", "network:network:road"},
+        ),
+    ],
+)
+def test_soft_demand_or_network_gap_is_advisory_and_backend_resolves(
+    factor,
+    context,
+    dimension,
+    expected_refs,
+) -> None:
+    problem = _problem(factor=factor)
+    readiness = build_solver_readiness(problem, context=context)
+
+    assert readiness.ready is True
+    assert readiness.status == "ready"
+    assert readiness.blocker_refs == []
+    assert expected_refs.isdisjoint(readiness.blocker_refs)
+    dimension_readiness = getattr(readiness, dimension)
+    assert dimension_readiness.status == "pending"
+    assert all(reason.severity == "advisory" for reason in dimension_readiness.reasons)
+    assert expected_refs <= {
+        reason.ref
+        for reason in readiness.advisories
+        if reason.code in {"missing:demand", "missing:network"}
+    }
+
+    view = build_solver_problem_view(problem, evaluator_context=context)
+    assert view.input_complete is True
+    resolution = default_solver_registry().resolve(problem, view)
+    assert resolution.backend is not None
+
+
+def test_soft_unknown_relation_evaluator_is_typed_advisory() -> None:
+    factor = ConstraintFactor(
+        factor_id="factor:soft-unknown",
+        kind="near",
+        evaluator_key="unknown_relation",
+        subject_ref="parcel-target",
+        hard=False,
+    )
+
+    readiness = build_solver_readiness(_problem(factor=factor))
+
+    assert readiness.ready is True
+    assert readiness.relation.status == "pending"
+    reason = next(
+        item
+        for item in readiness.relation.reasons
+        if item.code == "missing:relation_evaluator"
+    )
+    assert reason.severity == "advisory"
+    assert reason.ref == "relation-evaluator:unknown_relation"
+    assert reason in readiness.advisories
+
+
+def test_solver_subproblem_plan_binds_readiness_lineage() -> None:
+    from app.domain.allocation.subproblem_compiler import compile_solver_subproblems
+
+    problem = _problem()
+    readiness = build_solver_readiness(problem)
+    plan = compile_solver_subproblems(problem, readiness=readiness)
+
+    assert plan.readiness_status == "ready"
+    assert plan.readiness_fingerprint == readiness.fingerprint
+    assert plan.readiness_blocker_refs == []
+
+
+def test_subproblem_optimizer_passes_readiness_to_duplicate_compile(monkeypatch) -> None:
+    from app.domain.allocation import subproblem_optimizer
+    from app.domain.relations.service import RelationEvaluationContext
+
+    problem = _problem()
+    readiness = build_solver_readiness(problem)
+    original_compile = subproblem_optimizer.compile_solver_subproblems
+    seen: list[object] = []
+
+    def capture_compile(problem, *, readiness=None):
+        seen.append(readiness)
+        return original_compile(problem, readiness=readiness)
+
+    monkeypatch.setattr(
+        subproblem_optimizer,
+        "compile_solver_subproblems",
+        capture_compile,
+    )
+    subproblem_optimizer.optimize_solver_subproblems(
+        problem,
+        set_id="readiness-lineage",
+        evaluator_context=RelationEvaluationContext(scenario_id="readiness-lineage"),
+        readiness=readiness,
+    )
+
+    assert seen == [readiness]
 
 
 def test_missing_backend_blocks_without_solver_fallback() -> None:

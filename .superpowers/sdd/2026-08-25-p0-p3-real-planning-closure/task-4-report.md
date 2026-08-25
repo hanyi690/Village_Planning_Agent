@@ -51,3 +51,18 @@
 - 本提交没有进行全仓 confidence 迁移；未触及 evidence/anchor 等独立语义，也没有迁移无关历史测试或 replay/support dirty files。
 - 旧 CandidateGeometry/CandidateSite artifact 现在按 schema-invalid 失败，缺字段新建对象按 pending 处理；后续阶段仍需按 artifact 生产链逐步迁移未纳入本闭环的历史 fixture/回放数据。
 - 当前 readiness 对可选 baseline、task graph、parcel-only demand 等软缺口保留 advisory；真实外部 backend/数据快照完整性仍由后续阶段和环境配置验证。
+
+## Fix Round 1
+
+- demand/network 缺口的 typed reason 现在继承关联 `ConstraintFactor.hard`：hard 关系为 blocker，soft 关系仅为 advisory；solver problem view 也只将 hard route 输入缺口置为 `input_complete=false`，避免 soft-only route 被 backend resolve 错误阻塞。
+- soft 且未知的 relation evaluator 现在生成带 relation/evaluator/source refs 的 typed advisory，不改变 overall ready 状态。
+- SELECT ready path 将同一份 readiness 传入 `compile_solver_subproblems`；`subproblem_optimizer` 的重复编译入口同步接收并传递 readiness，保留 plan fingerprint/status/blocker lineage。
+- 新增 soft demand/network backend resolve、soft unknown evaluator advisory、subproblem readiness lineage 回归测试。
+
+Fix Round 1 定向测试：
+
+```text
+38 passed, 1 warning in 8.32s
+```
+
+`compileall` 与 `git diff --check` 在提交前重新执行并通过。

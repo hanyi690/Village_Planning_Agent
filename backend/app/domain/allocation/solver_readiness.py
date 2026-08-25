@@ -278,11 +278,11 @@ def build_solver_readiness(
     }
     for factor in factors:
         key = _clean(factor.evaluator_key or factor.kind)
-        if key != "precedes" and relation_registry.get(key) is None and factor.hard:
+        if key != "precedes" and relation_registry.get(key) is None:
             relation_reasons.append(_reason(
                 "missing:relation_evaluator",
                 f"no relation evaluator is registered for {key}",
-                severity="hard",
+                severity="hard" if factor.hard else "advisory",
                 ref=f"relation-evaluator:{key}",
                 source_refs=set(factor.evidence_refs),
             ))
@@ -305,8 +305,10 @@ def build_solver_readiness(
                 ref=f"relation:{factor.factor_id}",
                 source_refs=set(factor.evidence_refs),
             ))
-    if relation_reasons:
+    if any(item.severity == "hard" for item in relation_reasons):
         relation_status = "blocked"
+    elif relation_reasons:
+        relation_status = "pending"
     else:
         relation_status = "ready"
     relation = _dimension(RelationReadiness, status=relation_status, reasons=relation_reasons, refs=source_refs, relation_refs=tuple(sorted(relation_ids)))
@@ -321,12 +323,21 @@ def build_solver_readiness(
         for item in list(getattr(demand_portfolio, "demands", None) or [])
         if _clean(getattr(item, "demand_id", ""))
     }
+    demand_criticality = {
+        _clean(getattr(factor.parameters, "demand_ref", "")): "hard" if factor.hard else "soft"
+        for factor in factors
+        if _clean(getattr(factor.parameters, "demand_ref", ""))
+    }
+    for factor in factors:
+        ref = _clean(getattr(factor.parameters, "demand_ref", ""))
+        if ref and factor.hard:
+            demand_criticality[ref] = "hard"
     for ref in sorted(demand_refs):
         if ref not in demands:
             demand_reasons.append(_reason(
                 "missing:demand",
                 f"demand artifact is missing {ref}",
-                severity="hard",
+                severity="hard" if demand_criticality.get(ref) == "hard" else "advisory",
                 ref=f"demand:{ref}",
             ))
     if not demand_refs and not demands:
@@ -345,15 +356,37 @@ def build_solver_readiness(
         if _clean(ref)
     )
     networks = _values(context, "networks") or _values(context, "network_snapshots")
+    network_criticality: dict[str, str] = {}
+    for factor in factors:
+        factor_refs = {
+            _clean(ref)
+            for ref in [*factor.network_refs, getattr(factor.parameters, "network_ref", "")]
+            if _clean(ref)
+        }
+        for ref in factor_refs:
+            if factor.hard or network_criticality.get(ref) != "hard":
+                network_criticality[ref] = "hard" if factor.hard else "soft"
     for ref in sorted(network_refs):
         if ref not in networks:
             network_reasons.append(_reason(
                 "missing:network",
                 f"network snapshot is missing {ref}",
-                severity="hard",
+                severity="hard" if network_criticality.get(ref) == "hard" else "advisory",
                 ref=f"network:{ref}",
             ))
-    network = _dimension(NetworkReadiness, status="blocked" if network_reasons else "ready", reasons=network_reasons, refs=source_refs, network_refs=tuple(sorted(network_refs)))
+    network = _dimension(
+        NetworkReadiness,
+        status=(
+            "blocked"
+            if any(item.severity == "hard" for item in network_reasons)
+            else "pending"
+            if network_reasons
+            else "ready"
+        ),
+        reasons=network_reasons,
+        refs=source_refs,
+        network_refs=tuple(sorted(network_refs)),
+    )
 
     effective_evaluator_context = evaluator_context or SimpleNamespace(
         networks=networks,

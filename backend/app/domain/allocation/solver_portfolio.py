@@ -76,6 +76,43 @@ def _typed_relation_refs(problem: GroundedPlanningProblem) -> tuple[list[str], l
     return sorted(network_refs), sorted(demand_refs)
 
 
+def _hard_relation_requirements(
+    problem: GroundedPlanningProblem,
+) -> tuple[set[str], set[str], bool, bool]:
+    """Return hard relation refs and whether hard routes require each input."""
+
+    hard_network_refs: set[str] = set()
+    hard_demand_refs: set[str] = set()
+    hard_network_required = False
+    hard_demand_required = False
+    network_keys = {"connect", "connect_network", "access_via", "provide_access", "network_path"}
+    demand_keys = {"serve", "service", "service_coverage", "coverage"}
+    for factor in list(getattr(problem, "constraint_factors", None) or []):
+        if not factor.hard:
+            continue
+        key = str(getattr(factor, "evaluator_key", "") or getattr(factor, "kind", "") or "")
+        parameter_type = str(
+            getattr(getattr(factor, "parameters", None), "parameter_type", "") or ""
+        )
+        factor_network_refs = {
+            str(ref).strip()
+            for ref in [
+                *list(getattr(factor, "network_refs", None) or []),
+                getattr(getattr(factor, "parameters", None), "network_ref", ""),
+            ]
+            if str(ref).strip()
+        }
+        hard_network_refs.update(factor_network_refs)
+        demand_ref = str(
+            getattr(getattr(factor, "parameters", None), "demand_ref", "") or ""
+        ).strip()
+        if demand_ref:
+            hard_demand_refs.add(demand_ref)
+        hard_network_required = hard_network_required or key in network_keys or parameter_type in {"access", "connect"}
+        hard_demand_required = hard_demand_required or key in demand_keys or parameter_type == "service"
+    return hard_network_refs, hard_demand_refs, hard_network_required, hard_demand_required
+
+
 def build_solver_problem_view(
     problem: GroundedPlanningProblem,
     *,
@@ -96,6 +133,12 @@ def build_solver_problem_view(
     network_refs = collect_network_refs(problem)
     typed_network_refs, demand_refs = _typed_relation_refs(problem)
     network_refs = sorted(set(network_refs).union(typed_network_refs))
+    (
+        hard_network_refs,
+        hard_demand_refs,
+        hard_network_required,
+        hard_demand_required,
+    ) = _hard_relation_requirements(problem)
     resource_refs: list[str] = []
     resource_pool = getattr(problem, "parcel_resource_pool", None)
     if resource_pool is not None:
@@ -142,18 +185,20 @@ def build_solver_problem_view(
     if kind in {"coverage", "network_path"}:
         context_networks = getattr(evaluator_context, "networks", None) or {}
         if not network_refs:
-            missing_input_refs.append("missing:network_ref")
+            if hard_network_required:
+                missing_input_refs.append("missing:network_ref")
         else:
             for network_ref in network_refs:
-                if network_ref not in context_networks:
+                if network_ref not in context_networks and network_ref in hard_network_refs:
                     missing_input_refs.append(f"missing:network:{network_ref}")
     if kind == "coverage":
         context_demands = getattr(evaluator_context, "demands", None) or {}
         if not demand_refs:
-            missing_input_refs.append("missing:demand_ref")
+            if hard_demand_required:
+                missing_input_refs.append("missing:demand_ref")
         else:
             for demand_ref in demand_refs:
-                if demand_ref not in context_demands:
+                if demand_ref not in context_demands and demand_ref in hard_demand_refs:
                     missing_input_refs.append(f"missing:demand:{demand_ref}")
     missing_input_refs = sorted(set(missing_input_refs))
     input_complete = input_complete and not missing_input_refs

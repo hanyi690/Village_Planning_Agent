@@ -23,6 +23,7 @@ from app.contracts.planning.scenario import (
     ScenarioTargetSelection,
 )
 from app.contracts.planning.solver import SolverConfig
+from app.contracts.planning.solver_readiness import SolverReadiness
 from app.contracts.spatial.grounded_problem import GroundedPlanningProblem
 from app.domain.relations.service import RelationEvaluationContext
 
@@ -602,11 +603,12 @@ def optimize_solver_subproblems(
     search_limit: int = 20_000,
     deterministic_seed: int = 0,
     objective_definitions: Sequence[ObjectiveDefinition] | None = None,
+    readiness: SolverReadiness | None = None,
 ) -> ScenarioSet:
     """Solve ready target subproblems and merge their formal alternatives."""
 
     definitions = _canonical_objective_definitions(objective_definitions)
-    plan = compile_solver_subproblems(problem)
+    plan = compile_solver_subproblems(problem, readiness=readiness)
     if not plan.subproblems:
         return _unsupported_composition(
             problem,
