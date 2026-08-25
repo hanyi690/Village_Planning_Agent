@@ -20,6 +20,8 @@ from app.contracts.spatial.spatial_reference_contracts import (
 from app.contracts.domain.planning_semantics import FacilityPlanningParameters
 from app.workflow.stages.target_projection import _filter_unsupported_spatial_specs
 from app.domain.program.target_projection.compile import compile_program_deterministic
+from app.domain.allocation.refined_candidate_catalog import build_refined_candidate_catalog
+from app.contracts.spatial.candidate_geometry import CandidateGeometry
 
 
 def _intervention(
@@ -61,6 +63,8 @@ def _spec(*, unresolved_reason: str = "") -> SpatialReferenceSpec:
         retrieval_scopes=["parcels"],
         source_collection_key="current_parcels",
         source_snapshot_ref="snapshot:1",
+        source_snapshot_digest="snapshot-digest:1",
+        source_feature_digest="feature-digest:1",
         source_binding_ref="binding:1",
     )
 
@@ -101,8 +105,8 @@ def test_target_projection_carries_physical_project_into_grounding_request():
     result, specs, _ = compile_program_deterministic(program)
     assert result.physical_projects is not None
     assert len(result.physical_projects.projects) == 1
-    assert specs[0].physical_project_ref == result.physical_projects.projects[0].project_id
-    assert result.grounding_requests[0].physical_project_ref == specs[0].physical_project_ref
+    assert result.pending_grounding_requests[0].physical_project_ref == result.physical_projects.projects[0].project_id
+    assert result.pending_grounding_requests[0].status == "pending"
 
 
 def test_grounding_request_is_stable_and_missing_authority_is_pending():
@@ -201,3 +205,66 @@ def test_human_decision_fingerprint_rejects_stale_snapshot_constraint_or_evaluat
     ):
         with pytest.raises(ValueError, match="stale"):
             record.assert_current(changed)
+
+
+def test_select_refinement_preserves_project_and_component_refs():
+    source = CandidateGeometry(
+        candidate_id="ground:candidate",
+        target_id="t-1",
+        physical_project_ref="physical-project:shared",
+        component_claim_refs=["claim:a"],
+        component_fact_refs=["fact:a"],
+        kind="polygon",
+        role="execution_geometry",
+        spatial_domain_kind="parcel_extent",
+        source_bsms=["bsm:1"],
+        source_ref="feature:1",
+        schema_status="valid",
+        wkt="POLYGON ((0 0, 2 0, 2 2, 0 0))",
+    )
+    problem = SimpleNamespace(
+        candidate_geometries=[source],
+        target_domains=[SimpleNamespace(target_id="t-1", expected_output_kind="polygon", target_kind="parcel")],
+    )
+    refined = build_refined_candidate_catalog(
+        problem,
+        SimpleNamespace(candidates=[SimpleNamespace(
+            target_id="t-1",
+            source_parcels=["bsm:1"],
+            available_geometry_wkt="POLYGON ((0 0, 1 0, 1 1, 0 0))",
+            hard_feasible=True,
+            score=0.8,
+        )]),
+    )
+    item = next(value for value in refined.values() if value.candidate_id != source.candidate_id)
+    assert item.physical_project_ref == source.physical_project_ref
+    assert item.component_claim_refs == source.component_claim_refs
+    assert item.component_fact_refs == source.component_fact_refs
+
+
+def test_stale_typed_human_decision_returns_new_pending_review():
+    import asyncio
+    from app.workflow.root_graph import apply_human_review_decision
+
+    current = build_decision_fingerprint(target_ref="t-1", source_snapshot_ref="snapshot:2")
+    old = build_decision_fingerprint(target_ref="t-1", source_snapshot_ref="snapshot:1")
+    record = HumanDecisionRecord(
+        decision_fingerprint=old,
+        action="approve",
+        decided_by="planner",
+    )
+    result = asyncio.run(apply_human_review_decision({
+        "paused_stage": "select",
+        "human_review_items": [{
+            "request_type": "scenario_approval_required",
+            "context": {"decision_fingerprint": current.model_dump(mode="json")},
+        }],
+        "human_review_decisions": {
+            "action": "approve",
+            "decision_record": record.model_dump(mode="json"),
+        },
+    }))
+    assert result["human_approval_diagnostic"]["code"] == "HUMAN_DECISION_STALE"
+    assert result["human_review_decisions"] == {}
+    assert result["human_review_resume_consumed"] is False
+    assert result["human_interrupt"]["reason"] == "stale_human_decision"

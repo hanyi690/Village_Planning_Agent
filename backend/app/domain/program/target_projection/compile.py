@@ -558,7 +558,7 @@ def compile_program_deterministic(
     )
     projects_by_component = physical_projects.component_project_refs
     enriched_specs = []
-    grounding_requests = []
+    all_grounding_requests = []
     for spec in specs:
         project_ref = projects_by_component.get(
             str(spec.intervention_id or spec.target_id or ""),
@@ -573,15 +573,47 @@ def compile_program_deterministic(
             "component_fact_refs": list(project.component_fact_refs) if project else [],
         })
         enriched_specs.append(enriched)
-        grounding_requests.append(build_grounding_request(
+        all_grounding_requests.append(build_grounding_request(
             enriched,
             physical_project_ref=project_ref,
             component_claim_refs=(project.component_claim_refs if project else ()),
             component_fact_refs=(project.component_fact_refs if project else ()),
             source_snapshot_ref=program.l1_snapshot_ref,
+            source_snapshot_digest=str(getattr(enriched, "source_snapshot_digest", "") or ""),
+            source_feature_digest=str(getattr(enriched, "source_feature_digest", "") or ""),
         ))
-    specs = enriched_specs
+    admitted_pairs = [
+        (spec, request)
+        for spec, request in zip(enriched_specs, all_grounding_requests)
+        if request.status == "ready"
+    ]
+    pending_pairs = [
+        (spec, request)
+        for spec, request in zip(enriched_specs, all_grounding_requests)
+        if request.status == "pending"
+    ]
+    specs = [spec for spec, _request in admitted_pairs]
+    grounding_requests = [request for _spec, request in admitted_pairs]
+    pending_grounding_requests = [request for _spec, request in pending_pairs]
     diagnostics = _build_diagnostics(program, spec_diags)
+    diagnostics.extend(
+        ParseDiagnostic(
+            diagnostic_id=f"grounding-request-pending-{request.request_id}",
+            severity="warning",
+            code="GROUNDING_REQUEST_PENDING",
+            message=(
+                "GroundingRequest is pending and was removed from formal "
+                "TARGET/GROUND admission: " + request.defer_reason
+            ),
+            field_path="spatial_reference_specs",
+            target_id=request.target_ref,
+        )
+        for _spec, request in pending_pairs
+    )
+    pending_specs = [
+        *pending_specs,
+        *[spec for spec, _request in pending_pairs],
+    ]
     diagnostics.extend(
         ParseDiagnostic(
             diagnostic_id=f"admission-recompute-{intervention_id}",
@@ -650,9 +682,7 @@ def compile_program_deterministic(
         pending_grounding_specs=pending_specs,
         physical_projects=physical_projects,
         grounding_requests=grounding_requests,
-        pending_grounding_requests=[
-            item for item in grounding_requests if item.status == "pending"
-        ],
+        pending_grounding_requests=pending_grounding_requests,
     )
     from app.evidence.retrieval.requirements import (
         requirements_from_l3,

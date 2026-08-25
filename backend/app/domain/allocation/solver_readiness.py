@@ -288,20 +288,19 @@ def build_solver_readiness(
                 ref=f"relation-evaluator:{key}",
                 source_refs=set(factor.evidence_refs),
             ))
-        if factor.required_refs or factor.source_snapshot_refs or factor.semantic_status != "valid" or factor.input_status != "ready" or factor.solver_supported is not None:
-            readiness = build_relation_readiness(
-                factor,
-                satisfaction_by_factor.get(_clean(factor.factor_id)),
-                evaluator_available=evaluator_available,
-            )
-            for reason in readiness.reasons:
-                relation_reasons.append(_reason(
-                    f"relation_readiness:{reason}",
-                    f"relation {factor.factor_id} readiness is {reason}",
-                    severity="hard" if factor.hard else "advisory",
-                    ref=f"relation:{factor.factor_id}",
-                    source_refs=set(readiness.evidence_refs) | set(readiness.source_snapshot_refs),
-                ))
+        readiness = build_relation_readiness(
+            factor,
+            satisfaction_by_factor.get(_clean(factor.factor_id)),
+            evaluator_available=evaluator_available,
+        )
+        for reason in readiness.reasons:
+            relation_reasons.append(_reason(
+                f"relation_readiness:{reason}",
+                f"relation {factor.factor_id} readiness is {reason}",
+                severity="hard" if factor.hard else "advisory",
+                ref=f"relation:{factor.factor_id}",
+                source_refs=set(readiness.evidence_refs) | set(readiness.source_snapshot_refs),
+            ))
         satisfaction = satisfaction_by_factor.get(_clean(factor.factor_id))
         if factor.hard and satisfaction is not None and satisfaction.status in {
             "pending", "deferred", "not_evaluable", "unknown",

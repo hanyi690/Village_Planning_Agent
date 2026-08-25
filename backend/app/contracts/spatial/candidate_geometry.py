@@ -139,6 +139,12 @@ class CandidateGeometry(BaseModel):
             self.source_refs = [*self.source_refs, self.source_ref]
         self.source_refs = sorted({item for item in self.source_refs if item})
         self.evidence_refs = sorted({item for item in self.evidence_refs if item})
+        self.component_claim_refs = sorted({
+            str(item) for item in self.component_claim_refs if str(item).strip()
+        })
+        self.component_fact_refs = sorted({
+            str(item) for item in self.component_fact_refs if str(item).strip()
+        })
         self.source_bsms = sorted({item for item in self.source_bsms if item})
         self.feature_bsms = sorted({item for item in self.feature_bsms if item})
         self.source_feature_ids = sorted({item for item in self.source_feature_ids if item})

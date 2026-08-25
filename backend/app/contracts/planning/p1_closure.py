@@ -187,6 +187,7 @@ class GroundingRequest(BaseModel):
     source_collection_key: str = ""
     source_snapshot_ref: str = ""
     source_snapshot_digest: str = ""
+    source_feature_digest: str = ""
     source_binding_ref: str = ""
     source_binding_fingerprint: str = ""
     requested_geometry_kind: Literal["parcel", "polygon", "point", "line", "action", "unknown"] = "unknown"
@@ -203,6 +204,7 @@ class GroundingRequest(BaseModel):
         self.source_collection_key = self.source_collection_key.strip()
         self.source_snapshot_ref = self.source_snapshot_ref.strip()
         self.source_snapshot_digest = self.source_snapshot_digest.strip()
+        self.source_feature_digest = self.source_feature_digest.strip()
         self.source_binding_ref = self.source_binding_ref.strip()
         self.materialization_role = self.materialization_role.strip()
         if self.source_binding_ref:
@@ -210,7 +212,8 @@ class GroundingRequest(BaseModel):
                 "binding_ref": self.source_binding_ref,
                 "collection": self.source_collection_key,
                 "snapshot": self.source_snapshot_ref,
-                "digest": self.source_snapshot_digest,
+                "snapshot_digest": self.source_snapshot_digest,
+                "feature_digest": self.source_feature_digest,
             }
             derived_binding = f"source-binding:{_digest(binding_payload)[:24]}"
             if self.source_binding_fingerprint and self.source_binding_fingerprint != derived_binding:
@@ -219,8 +222,12 @@ class GroundingRequest(BaseModel):
         reasons: list[str] = []
         if not self.source_snapshot_ref:
             reasons.append("source_snapshot_missing")
+        if not self.source_snapshot_digest:
+            reasons.append("source_snapshot_digest_missing")
         if not self.source_binding_ref:
             reasons.append("source_binding_missing")
+        elif not self.source_feature_digest:
+            reasons.append("source_feature_digest_missing")
         if self.semantic_spec.unresolved_reason:
             reasons.append(self.semantic_spec.unresolved_reason)
         if self.defer_reason:
@@ -247,6 +254,7 @@ def build_grounding_request(
     component_fact_refs: Sequence[str] = (),
     source_snapshot_ref: str = "",
     source_snapshot_digest: str = "",
+    source_feature_digest: str = "",
     defer_reason: str = "",
 ) -> GroundingRequest:
     reference_kind = str(spec.reference.kind if spec.reference is not None else "")
@@ -262,8 +270,9 @@ def build_grounding_request(
         semantic_spec=spec,
         retrieval_scopes=spec.all_retrieval_scopes(),
         source_collection_key=str(spec.source_collection_key or ""),
-        source_snapshot_ref=str(source_snapshot_ref or spec.source_snapshot_ref or ""),
+        source_snapshot_ref=str(spec.source_snapshot_ref or source_snapshot_ref or ""),
         source_snapshot_digest=str(source_snapshot_digest or spec.source_snapshot_digest or ""),
+        source_feature_digest=str(source_feature_digest or spec.source_feature_digest or ""),
         source_binding_ref=str(spec.source_binding_ref or ""),
         requested_geometry_kind=requested_geometry_kind,
         materialization_role=str(spec.materialization_role or ""),

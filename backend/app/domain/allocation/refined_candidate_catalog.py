@@ -250,6 +250,9 @@ def build_refined_candidate_catalog(
                 excluded_area_ha = 0.0
         refined = CandidateGeometry(
             target_id=target_id,
+            physical_project_ref=str(getattr(source, "physical_project_ref", "") or ""),
+            component_claim_refs=list(getattr(source, "component_claim_refs", None) or []),
+            component_fact_refs=list(getattr(source, "component_fact_refs", None) or []),
             kind=materialized_kind,
             role=role,
             materialization_role=materialization_role,

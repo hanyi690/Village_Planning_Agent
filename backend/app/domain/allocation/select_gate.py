@@ -151,6 +151,8 @@ def evaluate_scenario_select_gate(
     refs = dict(input_artifact_refs or {})
     issue_fingerprint = "|".join(sorted(set(issues)))
     if issues:
+        from app.contracts.planning.p1_closure import build_decision_fingerprint
+
         target_ids = _pending_target_ids(
             problem,
             scenario,
@@ -171,6 +173,10 @@ def evaluate_scenario_select_gate(
                     "readiness_status": readiness.status if readiness is not None else "",
                     "readiness_blocker_refs": list(readiness.blocker_refs) if readiness is not None else [],
                     "readiness_fingerprint": readiness.fingerprint if readiness is not None else "",
+                    "decision_fingerprint": build_decision_fingerprint(
+                        target_ref=target_ids[0] if target_ids else "select",
+                        constraint_fingerprint=(readiness.fingerprint if readiness is not None else ""),
+                    ).model_dump(mode="json"),
                 },
             )],
             context_version=context_version,

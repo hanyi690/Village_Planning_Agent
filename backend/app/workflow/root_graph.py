@@ -1701,6 +1701,46 @@ async def apply_human_review_decision(state: Dict[str, Any]) -> Dict[str, Any]:
         "human_interrupt": None,
     }
     action = decisions.get("action") if isinstance(decisions, dict) else None
+    typed_record = decisions.get("decision_record") if isinstance(decisions, dict) else None
+    current_payload = next(
+        (
+            item.get("context", {}).get("decision_fingerprint")
+            for item in items
+            if isinstance(item, dict)
+            and isinstance(item.get("context"), dict)
+            and item.get("context", {}).get("decision_fingerprint")
+        ),
+        None,
+    )
+    if typed_record is not None or current_payload is not None:
+        from app.contracts.planning.p1_closure import (
+            DecisionFingerprint,
+            HumanDecisionRecord,
+        )
+
+        try:
+            if typed_record is None:
+                raise ValueError("typed HUMAN decision record is required")
+            record = HumanDecisionRecord.model_validate(typed_record)
+            current = DecisionFingerprint.model_validate(current_payload)
+            record.assert_current(current)
+        except Exception as exc:  # stale/malformed typed decisions fail closed
+            return {
+                **result,
+                "human_interrupt": {
+                    "items": items,
+                    "paused_stage": paused_stage,
+                    "reason": "stale_human_decision",
+                },
+                "human_review_items": items,
+                "human_review_decisions": {},
+                "human_review_resume_consumed": False,
+                "human_approval_diagnostic": {
+                    "code": "HUMAN_DECISION_STALE",
+                    "message": "typed HUMAN decision no longer matches the current review fingerprint",
+                    "exception_type": type(exc).__name__,
+                },
+            }
     classification_payload = (
         decisions.get("classification_decisions")
         if isinstance(decisions, dict)

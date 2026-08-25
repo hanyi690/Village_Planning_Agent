@@ -72,3 +72,58 @@ passed
   `metrics["confidence"]` field and remains outside this phase.
 - User-owned dirty files were preserved and not staged: `.codex/config.toml`,
   `.analysis/`, recorded replay/support files, and the planning document.
+
+## Fix Round 1 — 2026-08-25
+
+### STATUS
+
+Implemented the production wiring findings from the independent P1 review.
+
+### FIXES
+
+- TARGET formal admission now retains only `GroundingRequest.status=ready`
+  requests; GROUND rechecks request status and all source snapshot/binding
+  authority fields before resolution. If no request is formally admitted,
+  GROUND does not call `ground_aggregate`, so pending requests cannot create
+  candidates.
+- Snapshot digest and source-feature digest are carried from the typed spatial
+  spec into the request. The previous `l1_snapshot_ref`-as-digest fallback was
+  removed; missing authority remains fail-closed. SELECT refined candidates
+  now preserve `physical_project_ref`, `component_claim_refs`, and
+  `component_fact_refs`.
+- Solver subproblem compilation now coalesces targets sharing one physical
+  project into one project coordination boundary while retaining target-keyed
+  candidate alternatives and relation evaluation references.
+- `build_solver_readiness` invokes `build_relation_readiness` for every factor;
+  hard satisfied relations without evidence block and soft issues remain
+  advisory.
+- Typed `HumanDecisionRecord`/`DecisionFingerprint` payloads are validated at
+  `apply_human_review_decision`; stale or malformed records produce a fresh
+  HUMAN pending result and cannot pass the generic approval gate.
+
+### REGRESSION TESTS
+
+- Added focused coverage for refined-candidate lineage preservation, hard
+  evidence-less relation blocking at the production readiness boundary, same
+  physical-project two-target solver coordination, and stale HUMAN resume.
+- Updated the target projection fixture to distinguish complete authority from
+  a pending request; the latter remains out of formal specs.
+
+### TESTS
+
+Passed:
+
+```text
+python -m pytest -c backend/pytest.ini -o addopts='' \
+  backend/tests/core/test_p1_closure_contracts.py \
+  backend/tests/core/test_l3_program_target_compaction.py \
+  backend/tests/core/test_solver_readiness.py \
+  backend/tests/core/test_relation_geometry_evaluators.py \
+  backend/tests/core/test_select_gate_deferred_targets.py -q --maxfail=1
+52 passed, 1 existing pytest cache permission warning
+```
+
+Changed-boundary `compileall` and `git diff --check` are recorded in the
+handoff. Full backend compile remains affected by the pre-existing invalid
+recorded scripts under `backend/.run-tmp/logs/` and the unwritable pytest
+cache directory.

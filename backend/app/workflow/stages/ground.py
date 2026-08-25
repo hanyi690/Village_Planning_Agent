@@ -421,9 +421,38 @@ async def ground_node(state: Dict[str, Any]) -> Dict[str, Any]:
         _to_typed(item, SpatialReferenceSpec)
         for item in (getattr(compilation, "spatial_reference_specs", None) or [])
     ]
+    # GroundingRequest is the formal admission authority.  Keep this check at
+    # the GROUND boundary as well as in TARGET compilation so replayed or
+    # hand-assembled artifacts cannot turn a pending request into a candidate.
+    requests_by_target = {
+        str(getattr(request, "target_ref", "") or ""): request
+        for request in (getattr(compilation, "grounding_requests", None) or [])
+        if str(getattr(request, "target_ref", "") or "").strip()
+    }
+    grounding_specs = []
+    for spec in specs:
+        request = requests_by_target.get(str(getattr(spec, "target_id", "") or ""))
+        if request is None or getattr(request, "status", "pending") != "ready":
+            continue
+        authority_fields = (
+            "source_snapshot_ref",
+            "source_snapshot_digest",
+            "source_binding_ref",
+            "source_feature_digest",
+        )
+        if any(
+            str(getattr(request, field, "") or "")
+            != str(getattr(spec, field, "") or "")
+            for field in authority_fields
+        ):
+            logger.warning(
+                "[workflow:ground] source authority mismatch; parking target=%s",
+                getattr(spec, "target_id", ""),
+            )
+            continue
+        grounding_specs.append(spec)
     # Pending requests remain audit/HUMAN work and never enter formal GROUND
-    # resolution, so they cannot create executable candidates.
-    grounding_specs = list(specs)
+    # resolution, so they cannot call ground_aggregate or create candidates.
     if getattr(compilation, "pending_grounding_requests", None):
         logger.info(
             "[workflow:ground] parked pending grounding requests=%d",
@@ -502,14 +531,19 @@ async def ground_node(state: Dict[str, Any]) -> Dict[str, Any]:
             "[workflow:ground] canonical evidence packets=%d",
             len(evidence_packets),
         )
-    result = ground_aggregate(
-        grounding_specs,
-        context,
-        intent_graph=intent_graph,
-        target_metadata=target_metadata,
-        evidence_packets=evidence_packets,
-        ground_llm_budget=ground_llm_budget,
-    )
+    if grounding_specs:
+        result = ground_aggregate(
+            grounding_specs,
+            context,
+            intent_graph=intent_graph,
+            target_metadata=target_metadata,
+            evidence_packets=evidence_packets,
+            ground_llm_budget=ground_llm_budget,
+        )
+    else:
+        from app.contracts.spatial.grounding_contracts import GroundingResult
+
+        result = GroundingResult()
     result.grounding_requests = list(
         getattr(compilation, "grounding_requests", None) or []
     )
@@ -550,7 +584,7 @@ async def ground_node(state: Dict[str, Any]) -> Dict[str, Any]:
                 budget=ground_llm_budget,
             )
         )
-        if enhanced:
+        if enhanced and grounding_specs:
             re_result = ground_aggregate(
                 grounding_specs,
                 context,

@@ -254,6 +254,67 @@ def test_subproblem_optimizer_passes_readiness_to_duplicate_compile(monkeypatch)
     assert seen == [readiness]
 
 
+def test_default_hard_satisfied_relation_without_evidence_blocks():
+    factor = ConstraintFactor(
+        factor_id="relation:no-evidence",
+        kind="near",
+        subject_ref="parcel-target",
+        hard=True,
+        evaluator_key="near",
+    )
+    from app.contracts.planning.constraint_factor import RelationSatisfaction
+
+    problem = _problem(factor=factor).model_copy(update={
+        "relation_satisfaction": [RelationSatisfaction(
+            relation_id=factor.factor_id,
+            factor_ids=[factor.factor_id],
+            subject_ref="parcel-target",
+            status="satisfied",
+            evidence_refs=[],
+        )],
+    })
+    readiness = build_solver_readiness(problem)
+    assert readiness.ready is False
+    assert readiness.status == "blocked"
+    assert any("relation" in item for item in readiness.blocker_refs)
+
+
+def test_same_physical_project_two_targets_share_one_solver_boundary():
+    from app.domain.allocation.subproblem_compiler import compile_solver_subproblems
+
+    base = _problem()
+    target = base.target_domains[0].model_copy(update={"target_id": "target-2"})
+    domain = base.candidate_domains[0].model_copy(update={
+        "target_id": "target-2",
+        "candidate_ids": ["candidate-2"],
+        "candidate_geometry_refs": ["candidate-2"],
+    })
+    second = base.candidate_geometries[0].model_copy(update={
+        "candidate_id": "candidate-2",
+        "target_id": "target-2",
+        "physical_project_ref": "physical-project:shared",
+    })
+    first = base.candidate_geometries[0].model_copy(update={
+        "physical_project_ref": "physical-project:shared",
+    })
+    problem = base.model_copy(update={
+        "target_domains": [base.target_domains[0].model_copy(update={"target_id": "parcel-target"}), target],
+        "candidate_domains": [base.candidate_domains[0], domain],
+        "candidate_geometries": [first, second],
+    })
+    plan = compile_solver_subproblems(problem)
+    project_units = [
+        item for item in plan.subproblems
+        if item.physical_project_ref == "physical-project:shared"
+    ]
+    assert len(project_units) == 1
+    assert set(project_units[0].target_refs) == {"parcel-target", "target-2"}
+    assert project_units[0].candidate_ids_by_target == {
+        "parcel-target": ("candidate-1",),
+        "target-2": ("candidate-2",),
+    }
+
+
 def test_missing_backend_blocks_without_solver_fallback() -> None:
     readiness = build_solver_readiness(
         _problem(),

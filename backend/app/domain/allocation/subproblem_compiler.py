@@ -310,9 +310,35 @@ def _compile_target_subproblem(
         f"target_problem_kind:{problem_kind}",
         *[f"missing_input:{ref}" for ref in missing],
     ]
+    target_candidates = [
+        item
+        for item in problem.candidate_geometries
+        if _clean(getattr(item, "target_id", "")) == target_id
+    ]
+    project_refs = sorted({
+        _clean(getattr(item, "physical_project_ref", ""))
+        for item in target_candidates
+        if _clean(getattr(item, "physical_project_ref", ""))
+    })
+    physical_project_ref = project_refs[0] if len(project_refs) == 1 else ""
+    component_claim_refs = sorted({
+        _clean(ref)
+        for item in target_candidates
+        for ref in (getattr(item, "component_claim_refs", None) or [])
+        if _clean(ref)
+    })
+    component_fact_refs = sorted({
+        _clean(ref)
+        for item in target_candidates
+        for ref in (getattr(item, "component_fact_refs", None) or [])
+        if _clean(ref)
+    })
     return SolverSubproblem(
         subproblem_id=f"target:{target_id}",
         target_refs=(target_id,),
+        physical_project_ref=physical_project_ref,
+        component_claim_refs=component_claim_refs,
+        component_fact_refs=component_fact_refs,
         relation_refs=tuple(
             _clean(getattr(factor, "factor_id", ""))
             for factor in factors
@@ -324,6 +350,78 @@ def _compile_target_subproblem(
         status="blocked" if missing else "ready",
         diagnostics=diagnostics,
     )
+
+
+def _coordinate_physical_project_subproblems(
+    target_subproblems: list[SolverSubproblem],
+) -> tuple[list[SolverSubproblem], list[str]]:
+    """Make one solver boundary for every canonical physical project.
+
+    Target refs remain on the grouped unit so relation evaluation and target
+    completeness are not collapsed.  The project is only the shared decision
+    boundary used to prevent two claims in one package from being solved as
+    independent interventions.
+    """
+
+    groups: dict[str, list[SolverSubproblem]] = {}
+    for item in target_subproblems:
+        if item.physical_project_ref:
+            groups.setdefault(item.physical_project_ref, []).append(item)
+    grouped_ids: set[str] = set()
+    coordinated: list[SolverSubproblem] = []
+    diagnostics: list[str] = []
+    for project_ref, members in sorted(groups.items()):
+        if len(members) < 2:
+            continue
+        member_ids = sorted(item.subproblem_id for item in members)
+        digest = hashlib.sha256(
+            json.dumps(
+                [project_ref, *member_ids],
+                ensure_ascii=False,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        ).hexdigest()[:20]
+        target_refs = sorted({ref for item in members for ref in item.target_refs})
+        relation_refs = sorted({ref for item in members for ref in item.relation_refs})
+        candidates: dict[str, tuple[str, ...]] = {}
+        for item in members:
+            candidates.update(item.candidate_ids_by_target)
+        required = sorted({ref for item in members for ref in item.required_input_refs})
+        dependencies = sorted({ref for item in members for ref in item.dependency_subproblem_ids})
+        statuses = {item.status for item in members}
+        status = "blocked" if "blocked" in statuses else (
+            "deferred" if "deferred" in statuses else "ready"
+        )
+        kinds = {item.problem_kind for item in members}
+        problem_kind = next(iter(kinds)) if len(kinds) == 1 else "bounded_multiobjective"
+        grouped = SolverSubproblem(
+            subproblem_id=f"project:{digest}",
+            target_refs=tuple(target_refs),
+            physical_project_ref=project_ref,
+            component_claim_refs=sorted({
+                ref for item in members for ref in item.component_claim_refs
+            }),
+            component_fact_refs=sorted({
+                ref for item in members for ref in item.component_fact_refs
+            }),
+            relation_refs=tuple(relation_refs),
+            problem_kind=problem_kind,
+            candidate_ids_by_target=candidates,
+            required_input_refs=required,
+            dependency_subproblem_ids=dependencies,
+            status=status,
+            diagnostics=[
+                *[diagnostic for item in members for diagnostic in item.diagnostics],
+                "physical_project_coordinator:joint_project_decision",
+            ],
+        )
+        coordinated.append(grouped)
+        grouped_ids.update(member_ids)
+        diagnostics.append(f"physical_project_coordinator:{project_ref}")
+    coordinated.extend(
+        item for item in target_subproblems if item.subproblem_id not in grouped_ids
+    )
+    return sorted(coordinated, key=lambda item: item.subproblem_id), diagnostics
 
 
 def _compile_topology_subproblem(
@@ -529,9 +627,12 @@ def compile_solver_subproblems(
         target_id: _compile_target_subproblem(problem, target_id, target_ids)
         for target_id in sorted(target_ids)
     }
+    project_targets, project_diagnostics = _coordinate_physical_project_subproblems(
+        list(target_subproblems.values()),
+    )
     coordinated_targets, coordination_diagnostics = _coordinate_shared_parcel_subproblems(
         problem,
-        list(target_subproblems.values()),
+        project_targets,
     )
     target_subproblem_by_target = {
         target_id: item
@@ -550,6 +651,7 @@ def compile_solver_subproblems(
         )
     ]
     diagnostics: list[str] = []
+    diagnostics.extend(project_diagnostics)
     diagnostics.extend(coordination_diagnostics)
     if relation_subproblems:
         diagnostics.append("topology_subproblems_require_explicit_backend")

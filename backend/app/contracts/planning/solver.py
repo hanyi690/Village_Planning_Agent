@@ -122,6 +122,9 @@ class SolverSubproblem(BaseModel):
     schema_version: Literal["1.0"] = "1.0"
     subproblem_id: str = Field(min_length=1)
     target_refs: tuple[str, ...] = Field(default_factory=tuple)
+    physical_project_ref: str = ""
+    component_claim_refs: list[str] = Field(default_factory=list)
+    component_fact_refs: list[str] = Field(default_factory=list)
     relation_refs: tuple[str, ...] = Field(default_factory=tuple)
     problem_kind: SolverProblemKind
     candidate_ids_by_target: dict[str, tuple[str, ...]] = Field(default_factory=dict)
@@ -134,6 +137,9 @@ class SolverSubproblem(BaseModel):
     @model_validator(mode="after")
     def canonicalize_and_fingerprint(self) -> "SolverSubproblem":
         self.target_refs = tuple(sorted(set(item for item in self.target_refs if item)))
+        self.physical_project_ref = str(self.physical_project_ref or "").strip()
+        self.component_claim_refs = _sorted_strings(self.component_claim_refs)
+        self.component_fact_refs = _sorted_strings(self.component_fact_refs)
         self.relation_refs = tuple(sorted(set(item for item in self.relation_refs if item)))
         self.candidate_ids_by_target = {
             str(target_id): tuple(sorted(set(candidate_ids)))
