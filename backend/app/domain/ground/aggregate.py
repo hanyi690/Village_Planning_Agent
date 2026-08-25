@@ -835,23 +835,32 @@ def _grounded_anchor_authority(anchor: Any) -> tuple[bool, dict[str, Any]]:
         ).strip(),
         "source_snapshot_ref": source_binding["source_snapshot_ref"],
     }
-    has_stable_identity = any(
-        identity[field] for field in ("entity_ref", "source_feature_id", "feature_bsm")
+    geometry_granularity = str(
+        getattr(anchor, "geometry_granularity", "") or ""
+    ).strip()
+    has_feature_identity = any(
+        identity[field] for field in ("source_feature_id", "feature_bsm")
     )
+    has_exact_granularity = geometry_granularity == "exact_feature"
     has_source_snapshot = any(snapshot.values())
     missing_requirements = []
-    if not has_stable_identity:
+    if not has_feature_identity:
         missing_requirements.append("explicit_feature_identity")
+    if not has_exact_granularity:
+        missing_requirements.append("exact_feature_granularity")
     if not has_source_snapshot:
         missing_requirements.append("source_snapshot")
-    if missing_requirements == ["explicit_feature_identity", "source_snapshot"]:
+    if not has_feature_identity and not has_source_snapshot:
         reason = "grounded_anchor_missing_authority"
-    elif missing_requirements == ["explicit_feature_identity"]:
+    elif not has_feature_identity:
         reason = "grounded_anchor_missing_identity"
+    elif not has_exact_granularity:
+        reason = "grounded_anchor_missing_granularity"
     elif missing_requirements == ["source_snapshot"]:
         reason = "grounded_anchor_missing_snapshot"
     else:
         reason = "grounded_anchor_authority_verified"
+    identity["geometry_granularity"] = geometry_granularity
     return not missing_requirements, {
         "reason": reason,
         "missing_requirements": missing_requirements,
@@ -931,9 +940,11 @@ def _grounded_anchor_provenance(
 ) -> dict[str, Any]:
     """Merge anchor audit data without discarding resolver lineage."""
     provenance = dict(getattr(resolved, "provenance", None) or {})
+    resolver_path = str(provenance.get("path", "") or "")
     lineage = _grounded_anchor_lineage_updates(resolved, anchor)
     provenance.update(
         {
+            "resolver_path": resolver_path,
             "path": "grounded_anchor",
             "mention": mention,
             "entity_ref": str(getattr(anchor, "entity_ref", "") or ""),

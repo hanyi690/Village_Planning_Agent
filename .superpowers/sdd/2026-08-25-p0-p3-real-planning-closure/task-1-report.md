@@ -270,3 +270,67 @@ regression): `26 passed` in `23.44s`.
   `backend/.pytest_cache`) remains environmental and did not affect results.
 - The unrelated TARGET_PROJECTION admission failure recorded in Fix Round 1
   remains outside P0-A scope; no new failure was observed in this fix round.
+
+## Fix Round 3 — Feature-Level Anchor Authority and Resolver Lineage
+
+Date: 2026-08-25
+
+### Changed Files
+
+- `backend/app/domain/ground/aggregate.py`
+- `backend/tests/core/test_grounding_search_scope_boundary.py`
+- `.superpowers/sdd/2026-08-25-p0-p3-real-planning-closure/task-1-report.md`
+
+### Reviewer Finding and Fix
+
+The Fix Round 2 authority predicate still treated a generic `entity_ref` as
+feature identity.  That allowed a coarse village anchor with a snapshot and
+valid WKT to pass even though its geometry granularity was `village_scope`.
+
+- `_grounded_anchor_authority` now requires a genuine feature-level identity
+  from `source_feature_id` or `feature_bsm`, explicit `exact_feature`
+  granularity, and an anchor-owned source snapshot.  `entity_ref` remains part
+  of the audit/lineage and does not get rejected when it is accompanied by
+  feature identity and exact granularity; it is simply not sufficient by
+  itself.  `source_layer` and optional source-binding fields remain auditable
+  but cannot substitute for feature identity or exact granularity.
+- Both legacy promotion paths continue to use the same fail-closed predicate.
+  Accepted promotions now store the incoming resolver provenance path as
+  `resolver_path` before setting `path="grounded_anchor"`, preserving lineage
+  for both fallback branches.
+- Search-scope blocking, downstream candidate-domain guards, exact sourced
+  anchors, and exact KG-topology parcel behavior from prior rounds remain
+  unchanged.
+
+### Regression Coverage
+
+- Retained the WKT-only negative and sourced exact-anchor positive tests.
+- Added a critical middle-case regression: a valid WKT anchor with
+  `entity_ref="entity:village:coarse"`, an L1 snapshot, no feature BSM/source
+  feature ID, and `geometry_granularity="village_scope"` produces no
+  executable candidate geometry or candidate domain and emits the missing
+  identity/granularity diagnostic.
+- Added a second-promotion-path regression asserting
+  `provenance["path"] == "grounded_anchor"` and
+  `provenance["resolver_path"] == "resolver:second-path"`.
+
+### Fix-Round Verification
+
+Focused boundary command:
+
+```text
+python -m pytest -o addopts='' tests/core/test_grounding_search_scope_boundary.py -q --maxfail=1
+```
+
+Result: `10 passed`.
+
+Combined bounded P0-A selection, including the exact KG-topology regression,
+search-scope and parcel safeguards, and the village-anchor contract test:
+`29 passed` in `23.61s`.
+
+### Concerns
+
+- The existing pytest cache warning (`WinError 5` while writing
+  `backend/.pytest_cache`) remains environmental and did not affect results.
+- The unrelated TARGET_PROJECTION admission failure recorded in Fix Round 1
+  remains outside P0-A scope.  User-owned dirty files were preserved.

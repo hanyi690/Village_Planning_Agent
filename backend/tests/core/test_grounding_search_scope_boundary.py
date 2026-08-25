@@ -166,6 +166,7 @@ def test_anchor_wkt_without_identity_or_snapshot_is_not_materialized(monkeypatch
             normalized_name="未绑定设施",
             mention="未绑定设施",
             geometry_ref="POINT (116.005 24.005)",
+            geometry_granularity="exact_feature",
             status="unresolved",
         )
     ]
@@ -206,6 +207,57 @@ def test_anchor_wkt_without_identity_or_snapshot_is_not_materialized(monkeypatch
         "source_snapshot",
     }
     assert "grounded_anchor_missing_authority" in result.unresolved[0].detail
+
+
+def test_coarse_entity_anchor_wkt_with_snapshot_is_not_materialized(monkeypatch) -> None:
+    context = _context([_parcel("P-1", 116.0, 24.0, 116.01, 24.01)])
+    context.grounded_anchors = [
+        GroundedAnchor(
+            normalized_name="粗粒度村",
+            mention="粗粒度村域",
+            entity_ref="entity:village:coarse",
+            l1_snapshot_ref="l1:coarse-anchor",
+            geometry_ref="POINT (116.005 24.005)",
+            geometry_granularity="village_scope",
+            status="resolved",
+        )
+    ]
+    spec = SpatialReferenceSpec(
+        type="place_name",
+        reference=RefObject(
+            kind="place_name",
+            filter={"label_contains": "粗粒度村域"},
+        ),
+        target_id="target-coarse-anchor",
+    )
+
+    monkeypatch.setattr(
+        SpatialResolver,
+        "resolve_spec",
+        lambda self, spec, **kwargs: ResolvedSpatialRef(),
+    )
+
+    result = ground_aggregate(
+        [spec],
+        context,
+        target_metadata={
+            "target-coarse-anchor": {
+                "target_kind": "facility",
+                "expected_output_kind": "point",
+            }
+        },
+    )
+
+    assert result.candidates == []
+    assert result.problem is not None
+    assert result.problem.candidate_domains == []
+    assert result.unresolved[0].code == "spatial_reference_unresolved"
+    authority = result.spatial_query_evidence[0].query_params["anchor_authority"]
+    assert authority["reason"] == "grounded_anchor_missing_identity"
+    assert "explicit_feature_identity" in authority["missing_requirements"]
+    assert "exact_feature_granularity" in authority["missing_requirements"]
+    assert "source_snapshot" not in authority["missing_requirements"]
+    assert authority["identity"]["entity_ref"] == "entity:village:coarse"
 
 
 def test_sourced_exact_anchor_wkt_preserves_authority_lineage(monkeypatch) -> None:
@@ -268,6 +320,71 @@ def test_sourced_exact_anchor_wkt_preserves_authority_lineage(monkeypatch) -> No
     authority = result.spatial_query_evidence[0].query_params["anchor_authority"]
     assert authority["reason"] == "grounded_anchor_authority_verified"
     assert authority["missing_requirements"] == []
+
+
+def test_second_anchor_promotion_preserves_resolver_path(monkeypatch) -> None:
+    import app.domain.ground.aggregate as aggregate_module
+
+    context = _context([_parcel("P-1", 116.0, 24.0, 116.01, 24.01)])
+    context.grounded_anchors = [
+        GroundedAnchor(
+            normalized_name="二次路径设施",
+            mention="二次路径设施",
+            entity_ref="entity:facility:second-path",
+            feature_bsm="FAC-2",
+            source_feature_id="facility-feature-2",
+            source_layer="facilities_current",
+            source_bsms=["P-1"],
+            l1_snapshot_ref="l1:anchor-second-path",
+            bundle_snapshot_digest="bundle:anchor-second-path",
+            geometry_ref="POINT (116.005 24.005)",
+            geometry_granularity="exact_feature",
+            status="resolved",
+        )
+    ]
+    spec = SpatialReferenceSpec(
+        type="place_name",
+        reference=RefObject(
+            kind="place_name",
+            filter={"label_contains": "二次路径设施"},
+        ),
+        target_id="target-second-anchor-path",
+    )
+    monkeypatch.setattr(
+        SpatialResolver,
+        "resolve_spec",
+        lambda self, spec, **kwargs: ResolvedSpatialRef(
+            final_bsms=["P-1"],
+            provenance={"path": "resolver:second-path"},
+        ),
+    )
+    captured: dict = {}
+    original_build_candidate_sites = aggregate_module.build_candidate_sites
+
+    def capture_resolved(*args, **kwargs):
+        captured["provenance"] = dict(args[1].provenance)
+        return original_build_candidate_sites(*args, **kwargs)
+
+    monkeypatch.setattr(
+        aggregate_module,
+        "build_candidate_sites",
+        capture_resolved,
+    )
+
+    result = ground_aggregate(
+        [spec],
+        context,
+        target_metadata={
+            "target-second-anchor-path": {
+                "target_kind": "facility",
+                "expected_output_kind": "point",
+            }
+        },
+    )
+
+    assert len(result.candidates) == 1
+    assert captured["provenance"]["path"] == "grounded_anchor"
+    assert captured["provenance"]["resolver_path"] == "resolver:second-path"
 
 
 def test_downstream_candidate_domain_rejects_blocked_materialization() -> None:
