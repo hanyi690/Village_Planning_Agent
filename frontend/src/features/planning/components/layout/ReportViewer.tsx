@@ -90,44 +90,6 @@ interface L1FactRecord {
   attributes?: Record<string, unknown>;
 }
 
-interface L1RegisterRow {
-  row_id?: string;
-  ledger_kind?: "current_asset" | "demand";
-  status?: "confirmed" | "not_applicable" | "uncertain" | "source_exhausted" | "conflict";
-  dimension_key?: string;
-  evidence_note?: string;
-  sequence?: string;
-  category?: string;
-  name?: string;
-  quantity_text?: string;
-  quantity_value?: number | null;
-  quantity_unit?: string;
-  land_area_or_length_text?: string;
-  land_area_or_length_value?: number | null;
-  land_area_or_length_unit?: string;
-  building_area_text?: string;
-  building_area_value?: number | null;
-  building_area_unit?: string;
-  independent_land_use?: string;
-  location_text?: string;
-  location_hints?: string[];
-  service_scope?: string;
-  coverage?: string;
-  notes?: string;
-  source_ref?: string;
-  source_span?: string;
-}
-
-interface L1InputRegister {
-  source_documents?: string[];
-  source_digest?: string;
-  current_assets?: L1RegisterRow[];
-  demands?: L1RegisterRow[];
-  diagnostics?: string[];
-}
-
-type L1RegisterRowsByDimension = Record<string, L1RegisterRow[]>;
-
 interface RAGDisplayDocument {
   title: string;
   snippet: string;
@@ -356,86 +318,6 @@ function GroundingEvidencePanel({
   );
 }
 
-function L1InputRegisterPanel({
-  register,
-  rowsByDimension,
-  diagnosticsByDimension,
-}: {
-  register: L1InputRegister | null;
-  rowsByDimension: L1RegisterRowsByDimension;
-  diagnosticsByDimension: Record<string, string[]>;
-}) {
-  if (!register) return null;
-  const currentAssets = Array.isArray(register.current_assets) ? register.current_assets : [];
-  const demands = Array.isArray(register.demands) ? register.demands : [];
-  const renderRows = (rows: L1RegisterRow[]) => rows.map((row, index) => (
-    <div key={row.row_id || `${row.ledger_kind}-${row.sequence}-${index}`} className="rounded-lg bg-[#f7fbf9] px-2.5 py-2 text-[11px] leading-5 text-[#55786b]">
-      <div className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
-        <span className="font-semibold text-[#356c59]">{row.sequence || index + 1}. {row.name || '未命名登记'}</span>
-        {row.category && <span className="text-[10px] text-[#829f93]">{row.category}</span>}
-        {row.status && row.status !== 'confirmed' && <span className="rounded-full bg-[#fff4dd] px-1.5 py-0.5 text-[9px] text-[#8a6420]">{row.status}</span>}
-        {row.dimension_key && <span className="text-[9px] text-[#829f93]">维度：{row.dimension_key}</span>}
-      </div>
-      <div className="mt-0.5 flex flex-wrap gap-x-3 gap-y-0.5 text-[10px] text-[#78968b]">
-        {(row.quantity_text || row.quantity_value != null) && <span>数量：{row.quantity_text || `${row.quantity_value}${row.quantity_unit || ''}`}</span>}
-        {(row.land_area_or_length_text || row.land_area_or_length_value != null) && <span>面积/长度：{row.land_area_or_length_text || `${row.land_area_or_length_value}${row.land_area_or_length_unit || ''}`}</span>}
-        {row.location_text && <span>位置：{row.location_text}</span>}
-      </div>
-      {row.source_ref && <div className="mt-1 break-all font-mono text-[9px] text-[#94aaa1]">定位：{row.source_ref}</div>}
-      {row.evidence_note && <div className="mt-1 text-[10px] text-[#78968b]">确认：{row.evidence_note}</div>}
-    </div>
-  ));
-
-  return (
-    <section className="rounded-2xl border border-[#d7e9df] bg-[#f8fcfa] p-4">
-      <div className="flex flex-wrap items-start justify-between gap-2">
-        <div>
-          <div className="text-[11px] font-semibold uppercase tracking-wide text-[#3b9673]">L1 原始输入登记</div>
-          <div className="mt-1 text-sm font-semibold text-[#315f50]">原始数据只在 L1 结构化</div>
-          <p className="mt-1 text-[10px] leading-5 text-[#78968b]">这是输入观察，不是规划成果、候选地块或执行决定；下游只消费这份登记，不重新解析原文。</p>
-        </div>
-        <div className="flex flex-wrap gap-1.5 text-[10px]">
-          <span className="rounded-full bg-white px-2 py-1 text-[#5e8778]">现状 {currentAssets.length} 条</span>
-          <span className="rounded-full bg-white px-2 py-1 text-[#5e8778]">需求 {demands.length} 条</span>
-        </div>
-      </div>
-      {register.source_digest && <div className="mt-2 break-all font-mono text-[9px] text-[#94aaa1]">source_digest：{register.source_digest}</div>}
-      <div className="mt-3 grid gap-3 lg:grid-cols-2">
-        <details open className="rounded-xl border border-[#e2eee8] bg-white p-3">
-          <summary className="cursor-pointer text-xs font-semibold text-[#477666]">现状资产（{currentAssets.length}）</summary>
-          <div className="mt-2 space-y-2">{renderRows(currentAssets)}</div>
-        </details>
-        <details open className="rounded-xl border border-[#e2eee8] bg-white p-3">
-          <summary className="cursor-pointer text-xs font-semibold text-[#477666]">需求登记（{demands.length}）</summary>
-          <div className="mt-2 space-y-2">{renderRows(demands)}</div>
-        </details>
-      </div>
-      {Object.keys(rowsByDimension).length > 0 && (
-        <div className="mt-3 rounded-lg border border-[#e2eee8] bg-white px-3 py-2 text-[10px] leading-5 text-[#78968b]">
-          <div className="font-semibold text-[#477666]">维度确认状态</div>
-          <div className="mt-1 flex flex-wrap gap-1.5">
-            {Object.entries(rowsByDimension).map(([dimension, rows]) => (
-              <span key={dimension} className="rounded-full bg-[#f1f7f3] px-2 py-1">
-                {dimension}：{rows.length} 条
-              </span>
-            ))}
-          </div>
-          {Object.entries(diagnosticsByDimension).flatMap(([dimension, diagnostics]) =>
-            diagnostics.map((diagnostic) => (
-              <div key={`${dimension}-${diagnostic}`} className="mt-1 text-[#8a6420]">
-                {dimension}：{diagnostic}
-              </div>
-            )),
-          )}
-        </div>
-      )}
-      {register.diagnostics && register.diagnostics.length > 0 && (
-        <div className="mt-3 rounded-lg bg-[#fff8e8] px-2.5 py-2 text-[10px] leading-5 text-[#8a6420]">L1 登记诊断：{register.diagnostics.join('；')}</div>
-      )}
-    </section>
-  );
-}
-
 function getDimensionDisplayStatus(opts: {
   isInCascade: boolean;
   isRevisionCompleted: boolean;
@@ -574,9 +456,6 @@ const ReportViewer = memo(function ReportViewer({
   const projectName = useProjectName();
   const gisProbeRunRef = useRef(0);
   const [l1Facts, setL1Facts] = useState<L1FactRecord[]>([]);
-  const [l1InputRegister, setL1InputRegister] = useState<L1InputRegister | null>(null);
-  const [l1RegisterRowsByDimension, setL1RegisterRowsByDimension] = useState<L1RegisterRowsByDimension>({});
-  const [l1RegisterDiagnosticsByDimension, setL1RegisterDiagnosticsByDimension] = useState<Record<string, string[]>>({});
   const [directoryView, setDirectoryView] = useState<'list' | 'graph'>('list');
   const [dependencyGraph, setDependencyGraph] = useState<PlanningDependencyGraphResponse | null>(null);
   const [dependencyGraphStatus, setDependencyGraphStatus] = useState<'loading' | 'ready' | 'error'>('loading');
@@ -629,39 +508,21 @@ const ReportViewer = memo(function ReportViewer({
   useEffect(() => {
     let cancelled = false;
     setL1Facts([]);
-    setL1InputRegister(null);
-    setL1RegisterRowsByDimension({});
-    setL1RegisterDiagnosticsByDimension({});
     if (!sessionId) return undefined;
     planningApi.getArtifact(sessionId, 'l1_snapshot')
       .then((artifact) => {
         if (cancelled) return;
         const payload = artifact.payload as {
           fact_records?: unknown;
-          input_register?: unknown;
-          register_rows_by_dimension?: unknown;
-          register_diagnostics_by_dimension?: unknown;
         };
         const records = Array.isArray(payload.fact_records)
           ? payload.fact_records.filter((fact): fact is L1FactRecord => Boolean(fact && typeof fact === 'object'))
           : [];
         setL1Facts(records);
-        if (payload.input_register && typeof payload.input_register === 'object') {
-          setL1InputRegister(payload.input_register as L1InputRegister);
-        }
-        if (payload.register_rows_by_dimension && typeof payload.register_rows_by_dimension === 'object') {
-          setL1RegisterRowsByDimension(payload.register_rows_by_dimension as L1RegisterRowsByDimension);
-        }
-        if (payload.register_diagnostics_by_dimension && typeof payload.register_diagnostics_by_dimension === 'object') {
-          setL1RegisterDiagnosticsByDimension(payload.register_diagnostics_by_dimension as Record<string, string[]>);
-        }
       })
       .catch(() => {
         if (!cancelled) {
           setL1Facts([]);
-          setL1InputRegister(null);
-          setL1RegisterRowsByDimension({});
-          setL1RegisterDiagnosticsByDimension({});
         }
       });
     return () => {
@@ -1185,12 +1046,6 @@ const ReportViewer = memo(function ReportViewer({
                     </div>
                   </div>
                 )}
-
-                <L1InputRegisterPanel
-                  register={l1InputRegister}
-                  rowsByDimension={l1RegisterRowsByDimension}
-                  diagnosticsByDimension={l1RegisterDiagnosticsByDimension}
-                />
 
                 <GroundingEvidencePanel
                   dimensionKey={dimKeyPart}

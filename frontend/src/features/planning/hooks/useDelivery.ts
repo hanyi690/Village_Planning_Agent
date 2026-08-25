@@ -60,9 +60,9 @@ export function useDeliverySync() {
 
         // Whole-snapshot replacement keyed by checksum.
         const checksum = delivery.snapshot_checksum || mapLayers?.snapshot_checksum || null;
-        if (mapLayers?.layers?.length) {
+        if (mapLayers) {
           let layers = normalizeV1MapLayers(
-            mapLayers.layers.map((layer) => ({
+            (mapLayers.layers ?? []).map((layer) => ({
               layer_type: layer.layerType as 'current' | 'planned' | 'overlay' | 'constraint',
               layer_name: layer.layerName,
               geojson: layer.data,
@@ -71,8 +71,8 @@ export function useDeliverySync() {
           if (renderArtifact?.payload != null) {
             layers = applyRenderLayerStyles(layers, renderArtifact.payload);
           }
+          store.applyMapLayers(layers, checksum ?? undefined);
           if (layers.length > 0) {
-            store.applyMapLayers(layers, checksum ?? undefined);
             lastChecksumRef.current = checksum;
           }
         }

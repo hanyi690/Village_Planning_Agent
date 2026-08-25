@@ -3013,7 +3013,6 @@ export const usePlanningStore = create<PlanningState & PlanningActions>()(
 
     applyMapLayers: (layers, snapshotChecksum) =>
       set((state) => {
-        if (layers.length === 0) return;
         // Replace the authoritative delivery snapshot wholesale keyed by checksum.
         // Do NOT merge with prior SSE deltas; a checksum change means a new snapshot.
         for (const key of Object.keys(state.gisLayers)) {
@@ -3025,6 +3024,11 @@ export const usePlanningStore = create<PlanningState & PlanningActions>()(
           ) {
             delete state.gisLayers[key];
           }
+        }
+        if (layers.length === 0) {
+          state.gisGenerating = false;
+          state.gisTriggerPending = false;
+          return;
         }
         state.gisLayers[`v1_${snapshotChecksum || Date.now()}`] = layers;
         state.gisGenerating = false;

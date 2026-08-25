@@ -1,4 +1,5 @@
 import { usePlanningStore } from '@/features/planning/store/planningStore';
+import type { GISLayerConfig } from '@/types/message/message-types';
 
 describe('planning store v1 delivery / resync / human-review events', () => {
   beforeEach(() => {
@@ -96,6 +97,28 @@ describe('planning store v1 delivery / resync / human-review events', () => {
       statutory_complete: false,
       snapshot_checksum: 'sha256:abc',
     });
+  });
+
+  it('clears stale authoritative layers when the delivery snapshot is empty', () => {
+    const emptyLayers: GISLayerConfig[] = [];
+    usePlanningStore.setState({
+      gisLayers: {
+        v1_old_snapshot: emptyLayers,
+        status_spatial_layout: emptyLayers,
+        result_spatial_layout: emptyLayers,
+        user_upload: emptyLayers,
+      },
+      gisGenerating: true,
+      gisTriggerPending: true,
+    });
+
+    usePlanningStore.getState().applyMapLayers([], 'sha256:empty');
+
+    expect(usePlanningStore.getState().gisLayers).toEqual({
+      user_upload: emptyLayers,
+    });
+    expect(usePlanningStore.getState().gisGenerating).toBe(false);
+    expect(usePlanningStore.getState().gisTriggerPending).toBe(false);
   });
 
   it('keeps completed status and diagnostic delivery visible when no execution input exists', () => {

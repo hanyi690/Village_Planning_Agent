@@ -29,6 +29,7 @@ const STAGE_GROUPS: { stage: string; keys: ArtifactKey[] }[] = [
     keys: [
       'target_projection',
       'grounding_result',
+      'planning_task_graph',
       'demand_portfolio',
       'suitability_surface',
       'portfolio_decision',
@@ -86,6 +87,7 @@ const ARTIFACT_LABELS: Record<string, string> = {
   l3_gate: 'L3 规划闸门',
   target_projection: '目标投影',
   grounding_result: '空间落位结果',
+  planning_task_graph: '空间任务执行图',
   demand_portfolio: '需求组合',
   suitability_surface: '适宜性面',
   portfolio_decision: '组合决策',

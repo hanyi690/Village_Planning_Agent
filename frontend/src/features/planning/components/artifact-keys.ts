@@ -17,6 +17,7 @@ export const ARTIFACT_KEYS = [
   'l3_gate',
   'target_projection',
   'grounding_result',
+  'planning_task_graph',
   'demand_portfolio',
   'suitability_surface',
   'portfolio_decision',
