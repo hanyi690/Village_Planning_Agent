@@ -628,6 +628,7 @@ async def analyze_l3_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
     # 6. 流式 LLM + SSE
     from app.domain.program.claim_draft import (
         PlanningClaimDraftSet,
+        claim_draft_semantic_errors,
         claim_set_semantic_errors,
         merge_repaired_claim_drafts,
         normalize_claim_draft_set,
@@ -681,6 +682,7 @@ async def analyze_l3_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
         except Exception as exc:  # noqa: BLE001 - flash repair must never break L3
             logger.warning("[analyze_l3_dimension] %s: flash unit repair failed: %s", dim_key, exc)
         semantic_feedback = [
+            *claim_draft_semantic_errors(draft_set),
             *claim_set_semantic_errors(claim_set),
             *_spatial_claim_evidence_errors(state, claim_set),
         ]
@@ -722,6 +724,10 @@ async def analyze_l3_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
                 "不得创建坐标、BSM、地块或几何。严格按对象参数 schema 修复。"
                 "category/output/phase、各对象 action、axis_type、materialization_role "
                 "必须从工具 schema 的 enum 中选择；不得发明同义词。"
+                "跨字段必须同时满足：sewer/water_supply/stormwater/power/communication/"
+                "drainage_channel/revetment 使用 road+line+linear_parameters，asset_kind=road "
+                "使用 road+line+road_parameters；action+line+sewer 是非法组合，不能把线性 claim "
+                "降级为 action。"
                 "只修改 validator_errors 明确指出的字段，其余字段保持原值。\n"
                 f"dimension={dim_key}\n"
                 f"validator_errors={json.dumps(semantic_feedback, ensure_ascii=False)}\n"
@@ -751,6 +757,7 @@ async def analyze_l3_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
                 dimension_key=dim_key,
             )
             semantic_feedback = [
+                *claim_draft_semantic_errors(draft_set),
                 *claim_set_semantic_errors(claim_set),
                 *_spatial_claim_evidence_errors(state, claim_set),
             ]

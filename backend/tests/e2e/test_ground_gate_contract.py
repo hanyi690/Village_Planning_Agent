@@ -27,14 +27,14 @@ def test_empty_grounding_without_target_issue_can_explore():
     assert ground_gate_route(GroundingResult()) == "EXPLORE"
 
 
-def test_legacy_multi_parcel_confidence_routes_to_human_conservatively():
+def test_multi_parcel_low_identity_confidence_routes_to_human_conservatively():
     result = GroundingResult(
         candidates=[
             CandidateSite(
                 site_id="legacy-multi",
                 target_ref="target-legacy",
                 source_parcels=["P-1", "P-2"],
-                metrics={"confidence": 0.95},
+                    metrics={"suitability_score": 0.95},
                 geometry=CandidateGeometry(
                     candidate_id="legacy-multi",
                     target_id="target-legacy",
@@ -44,7 +44,8 @@ def test_legacy_multi_parcel_confidence_routes_to_human_conservatively():
                     wkt="POLYGON ((0 0, 1 0, 1 1, 0 1, 0 0))",
                     source_ref="legacy:geometry",
                     evidence_refs=["legacy:geometry"],
-                    confidence=0.95,
+                        identity_confidence=0.4,
+                        geometry_confidence=0.4,
                     hard_constraint_status="passed",
                     availability_status="fully_available",
                 ),

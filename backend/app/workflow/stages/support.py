@@ -14,7 +14,7 @@ from app.workflow.stage_adapter import StageCompletion, persist_gate_decision
 logger = get_logger(__name__)
 
 _RETRY_ROUTES: Dict[str, frozenset[str]] = {
-    "target_projection": frozenset({"REPAIR", "REVISE"}),
+    "target_projection": frozenset({"REPAIR", "REVISE", "L3"}),
     "ground": frozenset({"EXPLORE"}),
     "select": frozenset({"RETRY_GROUND"}),
     "validate": frozenset({"RETRY_EXECUTE", "RETRY_SELECT", "RETRY_GROUND", "RETRY_TARGET_PROJECTION", "RETRY_L3"}),

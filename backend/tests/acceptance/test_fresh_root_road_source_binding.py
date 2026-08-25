@@ -36,6 +36,7 @@ async def test_fresh_target_projection_binds_one_real_road_line_from_l1_fact(
     from app.contracts.domain.l1_contracts import L1Fact
     from app.contracts.domain.l3_contracts import PlanningIntervention, PlanningProgram
     from app.contracts.domain.planning_semantics import RoadPlanningParameters
+    from app.contracts.program import PlanningClaim
     from app.contracts.workflow.parse_result_contracts import IntentCompilationResult
     from app.contracts.spatial.grounding_contracts import GroundingResult
     from app.contracts.evidence.source_semantic_contracts import (
@@ -140,6 +141,11 @@ async def test_fresh_target_projection_binds_one_real_road_line_from_l1_fact(
         intervention_id="fresh-root-road-upgrade",
         target_id="fresh-root-road-upgrade",
         name="村道提升",
+        planning_role="spatial_intervention",
+        project_package_ref="pkg:fresh-root-road",
+        admission_reason="typed_spatial_claim_ready",
+        claim_refs=["fresh-root-road-claim"],
+        source_fact_refs=[fact_id],
         category="road",
         asset_kind="road",
         execution_mode="spatial",
@@ -151,8 +157,23 @@ async def test_fresh_target_projection_binds_one_real_road_line_from_l1_fact(
         },
         road_parameters=RoadPlanningParameters(action="upgrade", length_m=100.0),
     )
+    claim = PlanningClaim(
+        claim_id="fresh-root-road-claim",
+        dimension_key="traffic",
+        statement="金田村现状有一条需要提升的村道",
+        planning_role="spatial_intervention",
+        project_package_ref="pkg:fresh-root-road",
+        suggested_category="road",
+        suggested_output_kind="line",
+        asset_kind="road",
+        intervention_action="upgrade",
+        road_parameters=RoadPlanningParameters(action="upgrade", length_m=100.0),
+        location_hints=["金田村"],
+        source_fact_refs=[fact_id],
+    )
     program = PlanningProgram(
         interventions=[intervention],
+        claims=[claim],
         l1_snapshot_ref=context.l1_snapshot_ref,
     )
 

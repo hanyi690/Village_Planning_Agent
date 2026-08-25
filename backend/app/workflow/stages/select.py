@@ -35,6 +35,24 @@ def _to_typed(data: Any, cls: type) -> Any:
     return data
 
 
+def _complete_select_stage(
+    state: Dict[str, Any],
+    *,
+    output_refs: Dict[str, Any],
+    gate: Any,
+    context_patch: Dict[str, Any],
+    retry_patch: Dict[str, Any] | None = None,
+) -> Dict[str, Any]:
+    return stage_completion_patch(
+        state,
+        "select",
+        output_refs=output_refs,
+        gate=gate,
+        context_patch=context_patch,
+        retry_patch=retry_patch,
+    )
+
+
 def _ref_digest(ref: Any) -> str:
     if isinstance(ref, dict):
         return str(ref.get("digest") or ref.get("descriptor_digest") or "")
@@ -223,9 +241,8 @@ async def select_node(state: Dict[str, Any]) -> Dict[str, Any]:
         )
         context_patch = _adopt_context(state, context)
         context_patch["scoped_replan_required"] = False
-        return stage_completion_patch(
+        return _complete_select_stage(
             state,
-            "select",
             output_refs=output_refs,
             gate=gate,
             context_patch=context_patch,
@@ -616,9 +633,8 @@ async def select_node(state: Dict[str, Any]) -> Dict[str, Any]:
     # SELECT has materialized the child problem/set; a later unrelated HUMAN
     # decision must not re-enter SELECT indefinitely.
     context_patch["scoped_replan_required"] = False
-    return stage_completion_patch(
+    return _complete_select_stage(
         state,
-        "select",
         output_refs=output_refs,
         gate=gate,
         context_patch=context_patch,

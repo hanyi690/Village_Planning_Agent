@@ -216,7 +216,7 @@ async def audited_l3_worker(state: Dict[str, Any]) -> Dict[str, Any]:
 
 
 _BUSINESS_RETRY_ROUTES = {
-    "target_projection": {"REPAIR", "REVISE"},
+    "target_projection": {"REPAIR", "REVISE", "L3"},
     "ground": {"EXPLORE"},
     "select": {"RETRY_GROUND"},
     "validate": {"RETRY_EXECUTE", "RETRY_SELECT", "RETRY_GROUND", "RETRY_TARGET_PROJECTION", "RETRY_L3"},
@@ -871,15 +871,24 @@ async def prepare_human_review(state: Dict[str, Any]) -> Dict[str, Any]:
             if not isinstance(gate, dict) or gate.get("feedback_route") != "HUMAN":
                 continue
             paused_stage = gate_stage
-            items = [{
-                "request_id": f"{paused_stage}-gate-review",
-                "stage": paused_stage,
-                "request_type": "gate_review",
-                "context": {
-                    "message": gate.get("diagnostic_code") or "Gate requires explicit human review",
-                    "evidence_requests": list(gate.get("evidence_requests") or []),
-                },
-            }]
+            pending = list(gate.get("pending_requests") or [])
+            if pending:
+                # Preserve the typed layer request (notably
+                # classification_decision_required) at the HUMAN boundary.
+                # Replacing it with a generic gate_review loses the decision
+                # contract and makes a resume indistinguishable from approval
+                # of the unresolved gate.
+                items = pending
+            else:
+                items = [{
+                    "request_id": f"{paused_stage}-gate-review",
+                    "stage": paused_stage,
+                    "request_type": "gate_review",
+                    "context": {
+                        "message": gate.get("diagnostic_code") or "Gate requires explicit human review",
+                        "evidence_requests": list(gate.get("evidence_requests") or []),
+                    },
+                }]
             break
     if not items:
         for gate_stage in ("deliver", "reconcile", "validate", "select", "ground", "target_projection"):

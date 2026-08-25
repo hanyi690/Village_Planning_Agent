@@ -39,6 +39,13 @@ drainage_channel/revetment；不要输出未声明的字段。
 - zone 使用 zone+polygon 并填写 polygon_parameters；site_area 只能使用 site_area+parcel 或 site_area+polygon，并填写 site_area_parameters。
 - materialization_role 只能是 land_use_assignment、functional_overlay、protection_overlay、restoration_overlay、site_footprint 或 null。avoid_constraint、near、serve、connect_network 等只属于 spatial_requirements.relations[].relation_template，绝不能写入 materialization_role。
 
+【跨字段硬约束；不能只满足单字段枚举】
+- planning_role=spatial_intervention 且 asset_kind=sewer/water_supply/stormwater/power/communication/drainage_channel/revetment 时，suggested_category 必须是 road，suggested_output_kind 必须是 line，必须填写 linear_parameters；road_parameters 必须为 null。
+- planning_role=spatial_intervention 且 asset_kind=road 时，suggested_category 必须是 road，suggested_output_kind 必须是 line，必须填写 road_parameters；linear_parameters 必须为 null。
+- suggested_category=action 只允许 suggested_output_kind=action、asset_kind=none、所有 typed parameter=null，且不能与 planning_role=spatial_intervention 同时出现。工程动作 new/upgrade/repair 等应填写 intervention_action 或对应参数块的 action，不能把工程类别写成 action。
+- 每条 spatial_intervention 只能填写一个与 category/asset_kind 对应的 typed parameter block；category、output、asset_kind、typed parameter block 不一致时，整条 claim 视为非法，不能通过把 output 改成 action 来修复。
+- 以下输出非法：action + line + sewer + linear_parameters。正确输出是：road + line + sewer + linear_parameters。
+
 每条 claim 至少包含 claim_id、statement、planning_role、project_package_ref、suggested_category、suggested_output_kind、suggested_interventions、quantity/quantity_unit（若有）、implementation_phase、location_hints、constraint_refs、objective_refs、evidence_refs、source_fact_refs、spatial_requirements 和 uncertainty。顶层 quantity 的类型只能是 JSON 数字或 null，quantity_unit 只能是字符串或 null；不得把 {"value": 数值, "unit": "..."} 放入顶层 quantity。只有 road_parameters、linear_parameters、facility_parameters、axis_parameters、polygon_parameters 或 site_area_parameters 内部的量值字段才使用各自 schema 声明的对象形式。implementation_phase 是必填闭集，只能是 "short"、"medium" 或 "long"，不得为 null、空字符串或其他值；无法判断时使用 "short"。空间目标即使没有 location_hints、evidence_refs 或 source_fact_refs，也必须保留完整的空间 category/output_kind；在 spatial_requirements.grounding_requirements 中列出需要 GROUND 补齐的前置条件。
 
 source_fact_refs 只能逐字复制“已审计 L1 spatial facts”区块中的 L1Fact.fact_id；不能填写地点名、BSM、坐标或自由字符串。只有 L1 typed fact 直接支持时才填写，不能把 report、RAG 或外源文本的段落 ID 当作 source_fact_refs。没有直接 fact 仍可生成需要 GROUND 的语义候选，但要保留 location_hints，并在 uncertainty 中说明待核验。

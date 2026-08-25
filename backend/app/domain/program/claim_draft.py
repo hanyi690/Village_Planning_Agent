@@ -615,6 +615,138 @@ def _diagnostic(
     diagnostics.append(f"{severity.upper()}[{code}] {claim_id}: {message}")
 
 
+_TYPED_PARAMETER_FIELDS = (
+    "road_parameters",
+    "linear_parameters",
+    "facility_parameters",
+    "axis_parameters",
+    "polygon_parameters",
+    "site_area_parameters",
+)
+
+
+def _claim_draft_semantic_errors(raw: PlanningClaimDraft) -> list[str]:
+    """Validate cross-field combinations before lossy normalization.
+
+    Provider-facing fields remain individually typed so a claim-local repair
+    can be requested without rejecting the entire response.  This function is
+    the executable cross-field contract for spatial interventions.
+    """
+
+    if raw.planning_role != "spatial_intervention":
+        return []
+
+    claim_id = _text(raw.claim_id) or "claim"
+    category = _text(raw.suggested_category).lower()
+    output = _raw_output_kind(raw)
+    asset = _text(raw.asset_kind).lower()
+    present = [
+        field
+        for field in _TYPED_PARAMETER_FIELDS
+        if getattr(raw, field, None) is not None
+    ]
+    reasons: list[str] = []
+
+    if category == "action":
+        reasons.append(
+            "spatial_intervention cannot use suggested_category=action; "
+            "use a spatial category or planning_role=non_spatial_action"
+        )
+        if output != "action":
+            reasons.append(
+                "suggested_category=action requires suggested_output_kind=action"
+            )
+        if asset != "none":
+            reasons.append(
+                "suggested_category=action requires asset_kind=none"
+            )
+        if present:
+            reasons.append(
+                "suggested_category=action requires all typed parameter blocks "
+                "to be null"
+            )
+    elif category == "road":
+        if output != "line":
+            reasons.append("suggested_category=road requires suggested_output_kind=line")
+        if asset == "road":
+            required = "road_parameters"
+        elif asset in _LINEAR_ASSETS:
+            required = "linear_parameters"
+        else:
+            required = ""
+            reasons.append(
+                "road spatial_intervention requires asset_kind=road or a "
+                "supported linear asset"
+            )
+        if required and present != [required]:
+            reasons.append(
+                f"asset_kind={asset} requires exactly {required} and all other "
+                "typed parameter blocks must be null"
+            )
+    else:
+        expected_output = (
+            next(iter(_SITE_AREA_OUTPUTS))
+            if category == "site_area" and output not in _SITE_AREA_OUTPUTS
+            else output
+        )
+        expected_output = {
+            "facility": "point",
+            "axis": "line",
+            "restoration": "polygon",
+            "protection": "polygon",
+            "zone": "polygon",
+        }.get(category, expected_output)
+        if output != expected_output:
+            reasons.append(
+                f"suggested_category={category} requires "
+                f"suggested_output_kind={expected_output}"
+            )
+        allowed_assets = {
+            "facility": {"none", "facility"},
+            "site_area": {"none"},
+            "axis": {"none", "axis"},
+            "restoration": {"none"},
+            "protection": {"none"},
+            "zone": {"none", "land_use"},
+        }
+        if category in allowed_assets and asset not in allowed_assets[category]:
+            reasons.append(
+                f"asset_kind={asset} is incompatible with suggested_category={category}"
+            )
+        required_by_category = {
+            "facility": "facility_parameters",
+            "axis": "axis_parameters",
+            "restoration": "polygon_parameters",
+            "protection": "polygon_parameters",
+            "zone": "polygon_parameters",
+            "site_area": "site_area_parameters",
+        }
+        required = required_by_category.get(category, "")
+        if required and present != [required]:
+            reasons.append(
+                f"suggested_category={category} requires exactly {required} "
+                "and all other typed parameter blocks must be null"
+            )
+
+    if not reasons:
+        return []
+    return [
+        f"ERROR[draft_contract_invalid] {claim_id}: "
+        + "; ".join(dict.fromkeys(reasons))
+    ]
+
+
+def claim_draft_semantic_errors(
+    draft_set: PlanningClaimDraftSet,
+) -> list[str]:
+    """Return claim-local cross-field contract errors from provider drafts."""
+
+    errors: list[str] = []
+    for raw in draft_set.claims:
+        errors.extend(_claim_draft_semantic_errors(raw))
+    return list(dict.fromkeys(errors))
+
+
 def _measure_value(
     measure: MeasureDraft | None,
     factors: dict[str, float],
@@ -991,6 +1123,10 @@ def normalize_claim_draft_set(
                 "missing claim_id or statement; omitted",
             )
             continue
+        draft_contract_errors = _claim_draft_semantic_errors(raw)
+        if draft_contract_errors:
+            diagnostics.extend(draft_contract_errors)
+            continue
         category = _normalize_category(raw, diagnostics)
         raw_asset_kind = _text(raw.asset_kind).lower()
         raw_output = _raw_output_kind(raw)
@@ -1281,6 +1417,7 @@ __all__ = [
     "L3ReportOutput",
     "PlanningClaimDraft",
     "PlanningClaimDraftSet",
+    "claim_draft_semantic_errors",
     "claim_set_semantic_errors",
     "merge_repaired_claim_drafts",
     "normalize_claim_draft_set",

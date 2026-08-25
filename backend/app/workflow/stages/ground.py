@@ -39,6 +39,39 @@ def _to_typed(data: Any, cls: type) -> Any:
     return data
 
 
+def _complete_ground_stage(
+    state: Dict[str, Any],
+    *,
+    output_refs: Dict[str, Any],
+    gate: Any,
+    context: Any,
+    retry_patch: Dict[str, Any] | None = None,
+    report_result: Any = None,
+) -> Dict[str, Any]:
+    patch = stage_completion_patch(
+        state,
+        "ground",
+        output_refs=output_refs,
+        gate=gate,
+        context_patch=_adopt_context(state, context),
+        retry_patch=retry_patch,
+    )
+    if report_result is not None and getattr(report_result, "reviews", None):
+        patch["ground_human_reviews"] = [
+            {
+                "name": review.name,
+                "role": review.role,
+                "recommended_bsms": list(review.recommended_bsms),
+                "recommended_geometry_ref": review.recommended_geometry_ref,
+                "confidence": review.confidence,
+                "reason": review.reason,
+                "status": review.status,
+            }
+            for review in report_result.reviews
+        ]
+    return patch
+
+
 def _ground_packet_query(context: Any, spec: Any) -> tuple[str, list[str]]:
     labels: list[str] = []
     semantic_terms: list[str] = []
@@ -330,6 +363,55 @@ async def ground_node(state: Dict[str, Any]) -> Dict[str, Any]:
     )
     compilation = _load_ref_artifact(state, "target_projection", IntentCompilationResult)
     report_result = None
+
+    # A checkpoint replay can re-enter GROUND after the stage already committed
+    # its immutable result.  Reusing that result is part of the replay
+    # contract: rerunning grounding would regenerate runtime timestamps and
+    # may repeat retrieval/LLM work even though the target projection is
+    # unchanged.  The parent-digest check keeps this optimization fail-closed
+    # when a new projection is present.
+    if not retry_patch and compilation is not None:
+        refs = dict(state.get("artifact_refs") or {})
+        cached_ref = refs.get("grounding_result")
+        projection_ref = refs.get("target_projection")
+        cached_parents = (
+            cached_ref.get("parent_digests", {})
+            if isinstance(cached_ref, dict)
+            else getattr(cached_ref, "parent_digests", {})
+        )
+        cached_projection_digest = (
+            projection_ref.get("digest")
+            if isinstance(projection_ref, dict)
+            else getattr(projection_ref, "digest", "")
+        )
+        if (
+            cached_ref
+            and cached_projection_digest
+            and cached_parents.get("target_projection") == cached_projection_digest
+        ):
+            from app.contracts.spatial.grounding_contracts import GroundingResult
+
+            cached_result = _load_ref_artifact(
+                state,
+                "grounding_result",
+                GroundingResult,
+            )
+            if cached_result is not None:
+                cached_gate = state.get("ground_gate")
+                if cached_gate is not None:
+                    output_refs = {"grounding_result": cached_ref}
+                    if refs.get("planning_task_graph"):
+                        output_refs["planning_task_graph"] = refs["planning_task_graph"]
+                    output_refs["target_projection"] = projection_ref
+                    logger.info(
+                        "[workflow:ground] reusing committed result for unchanged target projection"
+                    )
+                    return _complete_ground_stage(
+                        state,
+                        output_refs=output_refs,
+                        gate=cached_gate,
+                        context=context,
+                    )
 
     # L1 接地锚点显式消费（设计 §5.1）：grounded_anchors 是 L1 后接地推理产物，
     # 挂到 context 供 ground_aggregate 做实体级候选/证据（同名同坐标=同实体）。
@@ -657,27 +739,14 @@ async def ground_node(state: Dict[str, Any]) -> Dict[str, Any]:
         )
     if projection_ref:
         output_refs["target_projection"] = projection_ref
-    patch = stage_completion_patch(
+    patch = _complete_ground_stage(
         state,
-        "ground",
         output_refs=output_refs,
         gate=gate,
-        context_patch=_adopt_context(state, context),
+        context=context,
         retry_patch=retry_patch,
+        report_result=report_result,
     )
-    if report_result is not None and getattr(report_result, "reviews", None):
-        patch["ground_human_reviews"] = [
-            {
-                "name": r.name,
-                "role": r.role,
-                "recommended_bsms": list(r.recommended_bsms),
-                "recommended_geometry_ref": r.recommended_geometry_ref,
-                "confidence": r.confidence,
-                "reason": r.reason,
-                "status": r.status,
-            }
-            for r in report_result.reviews
-        ]
     return patch
 
 
