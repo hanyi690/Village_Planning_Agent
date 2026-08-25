@@ -1,0 +1,27 @@
+{
+  "manifest_version": "p3-golden-1",
+  "schema_version": "1.0",
+  "cases": [
+    {"id": "exact-parcel", "scope": "exact_parcel", "expected": "ready"},
+    {"id": "multi-parcel-ambiguity", "scope": "multi_parcel", "expected": "human_required"},
+    {"id": "coarse-search-scope", "scope": "coarse_search", "expected": "human_required"},
+    {"id": "overlay", "scope": "overlay", "expected": "ready"},
+    {"id": "network-coverage", "scope": "network_coverage", "expected": "ready"},
+    {"id": "human-decision", "scope": "human", "expected": "human_required"},
+    {"id": "not-groundable", "scope": "not_groundable", "expected": "incomplete"},
+    {"id": "solver-deferred", "scope": "solver_deferred", "expected": "deferred"}
+  ],
+  "acceptance_routes": [
+    {"id": "success", "route": "execute", "outcome": "success"},
+    {"id": "human", "route": "human", "outcome": "human_required"},
+    {"id": "not-groundable", "route": "ground", "outcome": "not_groundable"},
+    {"id": "solver-deferred", "route": "select", "outcome": "solver_deferred"}
+  ],
+  "thresholds": {
+    "source_binding_coverage": 1.0,
+    "candidate_completeness": 1.0,
+    "relation_readiness": 1.0,
+    "solver_readiness": 1.0,
+    "feasibility": 1.0
+  }
+}
