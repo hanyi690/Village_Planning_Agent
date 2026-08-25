@@ -21,7 +21,7 @@
 | profile 文件 | 输入报告 | 输出 fragment | 关键约束 |
 |---|---|---|---|
 | `l1_observation.py` | L1 维度报告（现状） | `L1Snapshot`（`L1Fact` / `L1LocationFact` / `ClassificationRef` / `EvidenceGap`） | 现状地类只提供分类代码与名称；禁止从现状 DLBM 自动推规划用途/分区/三生空间；只使用 same-system code→name，**不 import advisory_crosswalks** |
-| `l2_strategy.py` | L2 维度报告（定位/目标/策略文本） | `L2StrategyFragment`（goals / strategies / priorities / conflicts / evidence gaps） | 禁止自动推规划用途/分区/点位 |
+| （无 L2 prose profile） | L2 维度决策 | `L2DecisionSet`（typed objectives / metrics / strategies / prerequisites） | 由 L2 worker 直接 structured-output；禁止从文本猜规划语义 |
 | `../agent/l3_plan/worker.py` | L3 维度 claims | `PlanningClaimSet` | 不产出 proposal、分类、BSM 或几何 |
 
 **注意**：`compiler/profiles/` 与 `parsing/compiler/profiles/` 同义——本目录是 `app/data/ingestion/compiler/profiles/`，是共享编译内核下的唯一 profile 集合。

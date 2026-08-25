@@ -32,6 +32,11 @@ RelationTemplate = Literal[
     "co_locate",
     "mutually_exclusive",
     "precedes",
+    "contains",
+    "located_in",
+    "adjacent_to",
+    "intersects",
+    "overlaps",
 ]
 
 
@@ -74,6 +79,9 @@ class PlanTargetNode(BaseModel):
     # Explicit endpoint names from typed road/linear/axis parameters.  These
     # are semantic refs only; GROUND must bind them to GIS features.
     endpoint_refs: list[str] = Field(default_factory=list)
+    # Typed locator/source refs carried forward for grounding work.  These are
+    # hints or authoritative references, never resolved geometry identities.
+    locator_refs: list[str] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def canonicalize_collections(self) -> "PlanTargetNode":
@@ -85,6 +93,7 @@ class PlanTargetNode(BaseModel):
             key=lambda item: item,
         )
         self.endpoint_refs = _sorted_strings(self.endpoint_refs)
+        self.locator_refs = _sorted_strings(self.locator_refs)
         return self
 
 
@@ -113,6 +122,15 @@ class PlanRelationIntent(BaseModel):
         self.source_claim_refs = _sorted_strings(self.source_claim_refs)
         self.source_binding_refs = _sorted_strings(self.source_binding_refs)
         if self.parameters is None:
+            if self.relation_template in {
+                "contains",
+                "located_in",
+                "adjacent_to",
+                "intersects",
+                "overlaps",
+            }:
+                self.parameter_status = "not_required"
+                return self
             if self.parameter_status == "provided":
                 self.parameter_status = "missing"
             return self

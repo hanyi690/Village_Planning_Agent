@@ -78,50 +78,6 @@ class EvidenceGap(BaseModel):
     severity: str = "warning"  # "info" | "warning" | "error"
 
 
-class L1RegisterRow(BaseModel):
-    """One L1-verified current-asset or demand registration.
-
-    This is an input observation, not a planning decision, GIS candidate, or
-    execution task. Downstream stages consume it and must not re-parse the
-    raw ``village_data`` string.
-    """
-
-    row_id: str
-    ledger_kind: Literal["current_asset", "demand"]
-    status: Literal[
-        "confirmed",
-        "not_applicable",
-        "uncertain",
-        "source_exhausted",
-        "conflict",
-    ] = "confirmed"
-    dimension_key: str = ""
-    evidence_note: str = ""
-    source_digest: str = ""
-    sequence: str = ""
-    category: str = ""
-    name: str = ""
-    quantity_text: str = ""
-    quantity_value: float | None = None
-    quantity_unit: str = ""
-    independent_land_use: str = ""
-    land_area_or_length_text: str = ""
-    land_area_or_length_value: float | None = None
-    land_area_or_length_unit: str = ""
-    building_area_text: str = ""
-    building_area_value: float | None = None
-    building_area_unit: str = ""
-    location_text: str = ""
-    location_hints: list[str] = Field(default_factory=list)
-    service_scope: str = ""
-    coverage: str = ""
-    notes: str = ""
-    source_ref: str
-    source_span: str
-    raw_cells: list[str] = Field(default_factory=list)
-    diagnostics: list[str] = Field(default_factory=list)
-
-
 class L1SourceSegment(BaseModel):
     """Addressable raw-input segment exposed to the L1 extraction model.
 
@@ -143,23 +99,17 @@ class L1SourceSegment(BaseModel):
     section_path: list[str] = Field(default_factory=list)
 
 
-class L1InputRegister(ContractMeta):
-    """The sole L1-owned structure of raw village input material.
+class L1SourceIndex(ContractMeta):
+    """Addressable source segments supplied to L1 extraction.
 
-    ``source_segments`` is always populated for non-empty text and is the
-    generic input surface for L1.  ``current_assets`` and ``demands`` are
-    optional projections created only from an L1 typed draft that cites and
-    quotes one or more verified segments.  The source index itself never
-    interprets a table, heading, unit, or ledger kind.  This artifact records
-    what L1 has verified about the input; it does not imply grounding,
-    selection, or execution.
+    This transport artifact does not interpret source material or carry a
+    second asset/demand ledger. Semantic facts and their evidence references
+    live only in the typed L1 observation output.
     """
 
     source_documents: list[str] = Field(default_factory=list)
     source_digest: str = ""
     source_segments: list[L1SourceSegment] = Field(default_factory=list)
-    current_assets: list[L1RegisterRow] = Field(default_factory=list)
-    demands: list[L1RegisterRow] = Field(default_factory=list)
     diagnostics: list[str] = Field(default_factory=list)
 
 
@@ -170,19 +120,12 @@ class L1DimensionPassState(BaseModel):
     source_digest: str = ""
     pass_name: Literal[
         "observe",
-        "register",
-        "validate",
-        "repair",
-        "coverage",
         "report",
         "complete",
         "diagnostic",
     ] = "observe"
     attempt: int = 0
     max_attempts: int = 2
-    pending_row_ids: list[str] = Field(default_factory=list)
-    confirmed_row_ids: list[str] = Field(default_factory=list)
-    rejected_row_ids: list[str] = Field(default_factory=list)
     diagnostics: list[str] = Field(default_factory=list)
     calls_used: int = 0
     max_calls: int = 4
@@ -191,11 +134,11 @@ class L1DimensionPassState(BaseModel):
 
 class L1Snapshot(ContractMeta):
     # Authoritative typed records.  ``facts`` below is a deterministic
-    # compatibility/display projection generated from these records.
+    # display projection generated from these records.
     fact_records: list[L1Fact] = Field(default_factory=list)
     facts: list[str] = []
     # Dimension-scoped facts are the auditable source for downstream strategy
-    # prompts; ``facts`` remains the backward-compatible flattened view.
+    # prompts; ``facts`` remains the flattened view used by summaries.
     facts_by_dimension: dict[str, list[str]] = {}
     location_facts: list[L1LocationFact] = []
     constraints: list[str] = []
@@ -210,9 +153,6 @@ class L1Snapshot(ContractMeta):
     traces_by_dimension: dict[str, CompilerTrace] = {}
     provenance: "Provenance | None" = None
     evidence_requirements: list[EvidenceRequirement] = Field(default_factory=list)
-    register_rows_by_dimension: dict[str, list[L1RegisterRow]] = Field(default_factory=dict)
-    register_diagnostics_by_dimension: dict[str, list[str]] = Field(default_factory=dict)
-    input_register: L1InputRegister | None = None
 
 
 __all__ = [
@@ -220,8 +160,7 @@ __all__ = [
     "L1LocationFact",
     "L1Fact",
     "EvidenceGap",
-    "L1RegisterRow",
     "L1SourceSegment",
-    "L1InputRegister",
+    "L1SourceIndex",
     "L1DimensionPassState",
 ]

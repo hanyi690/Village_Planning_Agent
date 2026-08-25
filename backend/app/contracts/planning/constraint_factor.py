@@ -25,6 +25,11 @@ ConstraintFactorKind = Literal[
     "co_locate",
     "mutually_exclusive",
     "precedes",
+    "contains",
+    "located_in",
+    "adjacent_to",
+    "intersects",
+    "overlaps",
 ]
 ConstraintStatus = Literal[
     "pending",
@@ -178,15 +183,9 @@ class RelationSatisfaction(BaseModel):
         return self
 
 
-# Public v2 name; ``ConstraintStatus`` remains for compatibility with the
-# existing grounding contracts and persisted v1 rows.
-RelationStatus = ConstraintStatus
-
-
 __all__ = [
     "ConstraintFactorKind",
     "ConstraintStatus",
-    "RelationStatus",
     "ConstraintFactor",
     "RelationMeasurement",
     "RelationSatisfaction",

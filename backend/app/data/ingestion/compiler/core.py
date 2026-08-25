@@ -1,11 +1,11 @@
-"""Shared report projection compiler for L1 and L2 only.
+"""Shared report projection compiler for the L1 display snapshot only.
 
-L3 is a typed claims boundary and deliberately does not use this parser.
+L2 and L3 are typed model boundaries.  Their authoritative outputs are
+validated where they are generated and are never reconstructed from prose.
 """
 from __future__ import annotations
 
 from app.contracts.domain.l1_contracts import L1Snapshot
-from app.contracts.domain.l2_contracts import L2StrategyFragment
 from app.contracts.workflow.parsing_contracts import CompilationProfile
 
 from .diagnostics import collect_diagnostics
@@ -21,7 +21,7 @@ def compile_dimension_report(
     summary: str = "",
     report_id: str = "",
     run_id: str = "",
-) -> L1Snapshot | L2StrategyFragment | None:
+) -> L1Snapshot | None:
     """Compile one dimension report into a typed stage snapshot via the profile.
 
     Returns None if the profile produces no output (unsupported profile in
@@ -31,17 +31,6 @@ def compile_dimension_report(
         from .profiles.l1_observation import compile_l1_observation
 
         return compile_l1_observation(
-            dimension_key=dimension_key,
-            content=content,
-            instruction=instruction,
-            summary=summary,
-            report_id=report_id,
-            run_id=run_id,
-        )
-    if profile == CompilationProfile.L2_STRATEGY:
-        from .profiles.l2_strategy import compile_l2_strategy
-
-        return compile_l2_strategy(
             dimension_key=dimension_key,
             content=content,
             instruction=instruction,

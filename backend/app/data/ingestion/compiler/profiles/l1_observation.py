@@ -14,16 +14,13 @@ from app.contracts.artifacts.classification_ref import ClassificationRef
 from app.contracts.evidence.evidence_contracts import EvidenceSource
 from app.contracts.domain.l1_contracts import (
     EvidenceGap,
-    L1InputRegister,
     L1LocationFact,
-    L1RegisterRow,
     L1Snapshot,
 )
 from app.contracts.workflow.parsing_contracts import CompilationProfile, CompilerTrace
-from app.domain.assessment.l1_fact_projection import (
-    location_fact_to_l1_fact,
-    make_l1_fact,
-)
+from app.contracts.workflow.parse_result_contracts import ParseDiagnostic
+from app.domain.assessment.l1_fact_projection import make_l1_fact
+from app.domain.assessment.observation_draft import observation_to_compiler_payload
 
 from ..diagnostics import collect_diagnostics
 from ..provenance import build_fragment_provenance
@@ -185,9 +182,8 @@ def _extract_location_facts_from_observations(
 ) -> list[L1LocationFact]:
     """Compile the validated L1 observation projection into typed facts.
 
-    The structured observations JSON is the single location-fact source since
-    the split-projection migration; invalid/empty JSON yields zero facts (never a
-    markdown-table fallback).
+    The structured observations JSON is the single location-fact source;
+    invalid or empty JSON yields zero facts.
     """
     if not instruction:
         return []
@@ -202,18 +198,22 @@ def _extract_location_facts_from_observations(
     facts: list[L1LocationFact] = []
     seen: set[str] = set()
     for item in payload:
-        if isinstance(item, dict):
-            obs = item
-        elif hasattr(item, "model_dump"):
-            obs = item.model_dump(mode="json")
-        else:
+        try:
+            obs = observation_to_compiler_payload(item)
+        except Exception:
             continue
         name = str(obs.get("name") or "").strip()
         location = str(obs.get("location") or "").strip()
         relation = str(obs.get("relation") or "").strip()
         entity_type = str(obs.get("entity_type") or "").strip()
         description = str(obs.get("description") or "").strip()
+        kind = str(obs.get("fact_type") or "").strip()
         if str(obs.get("status") or "confirmed").strip() != "confirmed":
+            continue
+        spatial_observation = kind in {"spatial_entity", "spatial_relation"} or bool(
+            location or relation or obs.get("source_feature_ids")
+        )
+        if not spatial_observation:
             continue
         source_quote = str(obs.get("source_quote") or "").strip()
         source_segment_ids = [
@@ -235,9 +235,10 @@ def _extract_location_facts_from_observations(
         source_span = source_quote or " | ".join(
             x for x in (entity_type, name, location, relation, description) if x
         )
-        # 主事实 = 观察对象的 name（L1 已产出干净地名；编译器信任 name）。
+        # Only observations with an explicit spatial role/evidence can emit
+        # location facts. Non-spatial metric/demand names remain L1Fact rows.
         parts_to_emit: list[tuple[str, str, str]] = []
-        if name:
+        if name and kind in {"spatial_entity", "spatial_relation"}:
             parts_to_emit.append((name, role, location or relation or name))
         # location 里只有"短地点 token"（如 社前村）才作为关联地点事实产出，
         # 用于 facility@村 这类锚定；方位/描述串（如 西南至东北贯穿金田村）
@@ -291,7 +292,9 @@ def _spatial_facts_from_observations(instruction: str) -> list[str]:
         return []
     out: list[str] = []
     for item in payload:
-        if not isinstance(item, dict):
+        try:
+            item = observation_to_compiler_payload(item)
+        except Exception:
             continue
         entity_type = str(item.get("entity_type") or "").strip()
         name = str(item.get("name") or "").strip()
@@ -312,11 +315,35 @@ def _instruction_payload(instruction: str) -> dict[str, Any]:
         return {}
     if isinstance(payload, dict):
         return payload
-    # Existing observation-only fixtures are still readable during migration;
-    # new writes always use the object envelope.
     if isinstance(payload, list):
         return {"observations": payload}
     return {}
+
+
+def _instruction_diagnostics(
+    instruction: str,
+    *,
+    dimension_key: str,
+) -> list[ParseDiagnostic]:
+    payload = _instruction_payload(instruction)
+    diagnostics: list[ParseDiagnostic] = []
+    for index, raw in enumerate(payload.get("diagnostics") or []):
+        message = str(raw or "").strip()
+        if not message:
+            continue
+        severity = "warning"
+        if message.startswith("l1_dimension_fact_type_mismatch:"):
+            severity = "info"
+        diagnostics.append(
+            ParseDiagnostic(
+                diagnostic_id=f"{dimension_key}-instruction-diagnostic-{index}",
+                severity=severity,
+                code="INSTRUCTION_DIAGNOSTIC",
+                message=message,
+                field_path="instruction.diagnostics",
+            )
+        )
+    return diagnostics
 
 
 def _compile_typed_observation_facts(
@@ -338,8 +365,10 @@ def _compile_typed_observation_facts(
     if not isinstance(raw_observations, list):
         return []
     records: list[Any] = []
-    for raw in raw_observations:
-        if not isinstance(raw, dict):
+    for item in raw_observations:
+        try:
+            raw = observation_to_compiler_payload(item)
+        except Exception:
             continue
         if str(raw.get("status") or "confirmed").strip() != "confirmed":
             continue
@@ -348,15 +377,32 @@ def _compile_typed_observation_facts(
         location = str(raw.get("location") or "").strip()
         relation = str(raw.get("relation") or "").strip()
         description = str(raw.get("description") or "").strip()
-        kind = str(raw.get("observation_kind") or "place").strip()
+        kind = str(raw.get("fact_type") or "").strip()
         semantic_type = str(
             raw.get("semantic_type")
+            or raw.get("metric")
+            or raw.get("demand_type")
+            or raw.get("constraint_type")
+            or raw.get("subject")
             or _observation_role(entity_type, name, location, description)
             or kind
         ).strip()
-        if not any((name, entity_type, location, relation, description)):
+        value = raw.get("value")
+        if not any((
+            name,
+            entity_type,
+            location,
+            relation,
+            description,
+            semantic_type,
+            value is not None,
+        )):
             continue
         statement_parts = [value for value in (name, description, location, relation) if value]
+        if value is not None:
+            value_label = semantic_type or kind
+            unit = str(raw.get("unit") or "").strip()
+            statement_parts.append(f"{value_label}={value}{unit}")
         statement = "；".join(dict.fromkeys(statement_parts))
         source_refs = list(dict.fromkeys([
             *[
@@ -372,7 +418,9 @@ def _compile_typed_observation_facts(
             str(report_id or "").strip(),
         ]))
         source_span = str(raw.get("source_quote") or "").strip() or statement
-        spatial = kind in {"place", "current_asset", "demand", "relation"} or bool(location or relation)
+        spatial = kind in {"spatial_entity", "spatial_relation"} or bool(
+            location or relation or raw.get("source_feature_ids")
+        )
         fact_kind = "spatial_observation" if spatial else "document_observation"
         attributes = {
             str(key).strip(): str(value).strip()
@@ -380,9 +428,10 @@ def _compile_typed_observation_facts(
             if str(key).strip() and str(value).strip()
         }
         standard_attributes = {
-            "observation_kind": kind,
+            "fact_type": kind,
             "entity_type": entity_type,
             "name": name,
+            "metric": str(raw.get("metric") or "").strip(),
             "location": location,
             "relation": relation,
             "description": description,
@@ -398,17 +447,24 @@ def _compile_typed_observation_facts(
                 if str(value).strip()
             ),
         }
-        for key, value in standard_attributes.items():
-            if value and key not in attributes:
-                attributes[key] = value
+        for key, attribute_value in standard_attributes.items():
+            if attribute_value and key not in attributes:
+                attributes[key] = attribute_value
         record = make_l1_fact(
             statement=statement,
             fact_kind=fact_kind,
             dimension_key=dimension_key,
-            subject_scope=name or entity_type or location,
+            subject_scope=(
+                str(raw.get("scope") or raw.get("applies_to_scope") or "").strip()
+                or name
+                or entity_type
+                or location
+                or semantic_type
+                or dimension_key
+            ),
             semantic_type=semantic_type,
             attributes=attributes,
-            value=raw.get("value"),
+            value=value,
             unit=str(raw.get("unit") or "").strip(),
             counting_basis=str(raw.get("counting_basis") or "").strip(),
             source_refs=source_refs,
@@ -426,103 +482,20 @@ def _compile_typed_observation_facts(
 def _structured_constraints(instruction: str) -> list[str]:
     payload = _instruction_payload(instruction)
     constraints: list[str] = []
-    for raw in payload.get("observations") or []:
-        if not isinstance(raw, dict) or str(raw.get("status") or "confirmed") != "confirmed":
+    for item in payload.get("observations") or []:
+        try:
+            raw = observation_to_compiler_payload(item)
+        except Exception:
             continue
-        kind = str(raw.get("observation_kind") or "").strip()
+        if str(raw.get("status") or "confirmed") != "confirmed":
+            continue
+        kind = str(raw.get("fact_type") or "").strip()
         if kind not in {"constraint", "risk"}:
             continue
         text = str(raw.get("description") or raw.get("name") or "").strip()
         if text:
             constraints.append(text)
     return list(dict.fromkeys(constraints))
-
-
-def _compile_register_rows(
-    instruction: str,
-    *,
-    dimension_key: str,
-) -> tuple[dict[str, list[L1RegisterRow]], L1InputRegister | None, list[str]]:
-    """Read already-materialized L1 rows from a dimension instruction.
-
-    Canonical values and locators must have been materialized by the L1
-    worker against its source index.  The compiler only validates the shape
-    and projects the rows; it never reopens raw input.
-    """
-
-    payload = _instruction_payload(instruction)
-    raw_rows = payload.get("register_rows") or []
-    if not isinstance(raw_rows, list) or not raw_rows:
-        return {}, None, []
-    rows: list[L1RegisterRow] = []
-    diagnostics: list[str] = []
-    for raw in raw_rows:
-        try:
-            row = L1RegisterRow.model_validate(raw)
-        except Exception as exc:  # noqa: BLE001 - row-level diagnostic
-            diagnostics.append(f"register_row_compile_invalid:{type(exc).__name__}")
-            continue
-        if not row.dimension_key:
-            row = row.model_copy(update={"dimension_key": dimension_key})
-        elif row.dimension_key != dimension_key:
-            diagnostics.append(
-                f"register_row_dimension_mismatch:{row.row_id}:{row.dimension_key}!={dimension_key}"
-            )
-            continue
-        rows.append(row)
-    if not rows:
-        return {}, None, diagnostics
-    unique: dict[str, L1RegisterRow] = {}
-    for row in rows:
-        prior = unique.get(row.row_id)
-        if prior is not None and prior.model_dump(mode="json") != row.model_dump(mode="json"):
-            diagnostics.append(f"register_row_conflict:{row.row_id}")
-            continue
-        unique.setdefault(row.row_id, row)
-    materialized = list(unique.values())
-    source_documents = [str(value) for value in payload.get("source_documents", []) if str(value).strip()]
-    source_digest = str(payload.get("source_digest") or "")
-    register = L1InputRegister(
-        source_documents=source_documents,
-        source_digest=source_digest,
-        current_assets=[row for row in materialized if row.ledger_kind == "current_asset"],
-        demands=[row for row in materialized if row.ledger_kind == "demand"],
-        diagnostics=list(diagnostics),
-    )
-    return {dimension_key: materialized}, register, diagnostics
-
-
-def _build_fact_records(
-    *,
-    dimension_key: str,
-    report_id: str,
-    facts: list[str],
-    location_facts: list[L1LocationFact],
-    constraints: list[str],
-    classification_refs: list[ClassificationRef],
-) -> list[Any]:
-    """Create the authoritative typed L1 record set for one report."""
-    if not report_id:
-        # An unidentifiable report may still produce a display snapshot, but
-        # its claims cannot become authoritative evidence records.
-        return []
-    # L1Fact is the spatial-evidence boundary.  Report prose, constraints and
-    # current land-use classifications remain in their report/display fields;
-    # they are not promoted into a generic machine fact that later grounding
-    # could mistake for a place identity.
-    records: list[Any] = []
-    for fact in location_facts:
-        record = location_fact_to_l1_fact(fact)
-        if record is not None:
-            records.append(record)
-    seen: set[str] = set()
-    unique_records: list[Any] = []
-    for record in records:
-        if record.fact_id in seen:
-            continue
-        seen.add(record.fact_id)
-        unique_records.append(record)
-    return unique_records
 
 
 def compile_l1_observation(
@@ -537,7 +510,7 @@ def compile_l1_observation(
     steps: list[str] = []
     # L1 split projection: ``content`` is the persisted report body (no
     # 【INSTRUCTION】 marker); ``instruction`` is the validated observation JSON
-    # - the only location-fact source.  No markdown-table fallback is kept.
+    # and the only location-fact source.
     display = _clean_model_text(content or "")
     instr = instruction or ""
 
@@ -615,29 +588,21 @@ def compile_l1_observation(
     facts = list(dict.fromkeys([*facts, *marked_facts]))
 
     spatial_facts = _spatial_facts_from_observations(instr)
-    location_fact_records = _build_fact_records(
-        dimension_key=dimension_key,
-        report_id=report_id,
-        facts=facts,
-        location_facts=location_facts,
-        constraints=constraints,
-        classification_refs=classification_refs,
-    )
-    # Structured observations are the authoritative producer.  The legacy
-    # location projection remains a compatibility fallback for old fixtures,
-    # but is not duplicated when the new observation envelope is present.
-    fact_records = typed_observation_facts or location_fact_records
+    # Typed observations are the only producer of authoritative L1 records.
+    # Location facts are a separate mention index for spatial resolution and
+    # never synthesize a planning fact when the typed observation is absent.
+    fact_records = typed_observation_facts
     structured_constraints = _structured_constraints(instr)
     if structured_constraints:
         constraints = list(dict.fromkeys([*structured_constraints, *constraints]))
 
     diagnostics = collect_diagnostics(dimension_key, display, instr)
-    register_rows_by_dimension, input_register, register_diagnostics = _compile_register_rows(
-        instr,
-        dimension_key=dimension_key,
+    diagnostics.extend(
+        _instruction_diagnostics(
+            instr,
+            dimension_key=dimension_key,
+        )
     )
-    if register_diagnostics:
-        diagnostics.extend(register_diagnostics)
     steps.append(f"diagnostics: {len(diagnostics)}")
 
     provenance = build_fragment_provenance(
@@ -665,11 +630,6 @@ def compile_l1_observation(
         dimension_provenance=[provenance],
         spatial_facts_by_dimension={dimension_key: spatial_facts},
         diagnostics_by_dimension={dimension_key: diagnostics},
-        register_rows_by_dimension=register_rows_by_dimension,
-        register_diagnostics_by_dimension={
-            dimension_key: list(register_diagnostics),
-        },
-        input_register=input_register,
         traces_by_dimension={
             dimension_key: CompilerTrace(
                 profile=CompilationProfile.L1_OBSERVATION,

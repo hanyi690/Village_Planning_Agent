@@ -19,10 +19,8 @@ def _canonical_json(value: object) -> str:
 class ApprovedExecutionInput(ContractMeta):
     """Immutable binding between an approved scenario and EXECUTE inputs.
 
-    ``provisional`` is retained solely for the existing partial-delivery
-    compatibility path.  Such an input can be materialized for diagnostics,
-    but ``can_execute`` remains false until a human approves it or the
-    scenario is complete and auto-approval is explicitly allowed.
+    Diagnostic or incomplete scenarios never produce this contract.  A value
+    is therefore always an explicit executable approval.
     """
 
     schema_version: Literal["1.0"] = "1.0"
@@ -40,7 +38,7 @@ class ApprovedExecutionInput(ContractMeta):
     candidate_ids: list[str] = Field(default_factory=list)
     context_ref: dict[str, str] = Field(default_factory=dict)
     bundle_snapshot_digest: str = ""
-    approval_status: Literal["auto", "human_approved", "provisional", "revoked"] = "provisional"
+    approval_status: Literal["auto", "human_approved"]
     approved_by: str = ""
     approval_revision: int = Field(default=1, ge=1)
     approval_reason: str = ""
@@ -138,8 +136,6 @@ class ApprovedExecutionInput(ContractMeta):
         }
         if self.approval_status == "human_approved" and not self.approved_by.strip():
             raise ValueError("human_approved input requires approved_by")
-        if self.approval_status == "revoked":
-            raise ValueError("revoked input cannot be handed to EXECUTE")
         if self.can_execute and not self.execution_plan_digest.strip():
             raise ValueError("executable approval requires execution_plan_digest")
         if not self.fingerprint:

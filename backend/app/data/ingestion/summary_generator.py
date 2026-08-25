@@ -1,11 +1,12 @@
-"""Structured summary generator using Instructor + rule-first extraction.
+"""Structured display summary generator using Instructor + bounded extraction.
 
 Three-layer pipeline:
   Layer 1: Deterministic regex extraction (zero LLM)
   Layer 2: Instructor schema-enforced generation (Flash LLM, auto-retry)
   Layer 3: Fallback to regex-only on Instructor failure or empty content
 
-Returns a JSON string compatible with the dimension's Pydantic schema.
+The result is a display summary.  It is not an authoritative planning
+contract and never renames old field spellings into current semantics.
 """
 
 from __future__ import annotations
@@ -23,53 +24,6 @@ from .schemas import (
 )
 
 logger = get_logger(__name__)
-
-# Mapping from legacy field names (that LLM may output) to new
-# semantics-qualified field names.  When the LLM returns an old-style
-# key it is automatically renamed so conflict detection can find it.
-_LEGACY_FIELD_MAP: Dict[str, Dict[str, str]] = {
-    "land_use": {
-        "construction_area_ha": "current_construction_ha",
-        "farmland_area_ha": "current_farmland_ha",
-        "farmland_ha": "current_farmland_ha",
-        "construction_ha": "current_construction_ha",
-    },
-    "settlement_planning": {
-        "construction_area_ha": "current_construction_ha",
-        "planned_construction_area_ha": "planned_construction_ha",
-        "target_population": "planned_population",
-    },
-    "land_use_planning": {
-        "construction_area_ha": "current_construction_ha",
-        "planned_construction_area_ha": "planned_construction_ha",
-    },
-    "ecological_green": {
-        "ecological_redline_ha": "min_ecological_redline_ha",
-    },
-    "ecological": {
-        "ecological_redline_ha": "min_ecological_redline_ha",
-    },
-    "superior_planning": {
-        "ecological_redline_ha": "min_ecological_redline_ha",
-        "farmland_protection_ha": "min_farmland_protection_ha",
-        "construction_ha": "max_construction_ha",
-    },
-}
-
-
-def _normalize_metric_keys(
-    metrics: Dict[str, Any],
-    dimension_key: str,
-) -> Dict[str, Any]:
-    """Rename legacy field names to semantics-qualified names."""
-    dim_map = _LEGACY_FIELD_MAP.get(dimension_key, {})
-    if not dim_map:
-        return metrics
-    result = {}
-    for k, v in metrics.items():
-        result[dim_map.get(k, k)] = v
-    return result
-
 
 # ---------------------------------------------------------------------------
 # Dimension-specific regex extraction rules
@@ -246,11 +200,11 @@ async def _instructor_generate(
 
     Returns JSON string of dimension-specific Pydantic schema, or None on failure.
     """
-    from app.infrastructure.llm.instructor_client import get_instructor_client, get_flash_model
+    from app.infrastructure.llm.instructor_client import get_instructor_client, get_structured_model
 
     dim_schema = get_dimension_schema(dimension_key)
     client = get_instructor_client()
-    model = get_flash_model()
+    model = get_structured_model()
 
     metrics_desc = get_metrics_description(dimension_key)
     metrics_hint = "\n".join(f"  - {k}: {v}" for k, v in metrics_desc.items())
@@ -302,7 +256,6 @@ async def _instructor_generate(
         summary.key_points = summary.key_points[:5]
 
     # Normalize + merge + sync
-    summary.metrics = _normalize_metric_keys(summary.metrics, dimension_key)
     for k, v in seed_metrics.items():
         if k not in summary.metrics:
             summary.metrics[k] = v

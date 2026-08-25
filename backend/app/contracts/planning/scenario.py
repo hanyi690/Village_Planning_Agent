@@ -16,6 +16,19 @@ def _canonical_json(value: object) -> str:
     return json.dumps(value, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
 
 
+def _strip_runtime_timestamps(value: object) -> object:
+    """Remove ContractMeta timestamps from nested replay fingerprints."""
+    if isinstance(value, dict):
+        return {
+            key: _strip_runtime_timestamps(child)
+            for key, child in value.items()
+            if key != "created_at"
+        }
+    if isinstance(value, list):
+        return [_strip_runtime_timestamps(child) for child in value]
+    return value
+
+
 def _sorted_strings(values: list[str]) -> list[str]:
     return sorted({item for item in values if item})
 
@@ -194,7 +207,9 @@ class PlanningScenario(ContractMeta):
                 item.message,
             ),
         )
-        payload = self.model_dump(mode="json", exclude={"fingerprint", "created_at"})
+        payload = _strip_runtime_timestamps(
+            self.model_dump(mode="json", exclude={"fingerprint", "created_at"})
+        )
         raw = _canonical_json(payload).encode("utf-8")
         derived_fingerprint = hashlib.sha256(raw).hexdigest()
         if self.fingerprint and self.fingerprint != derived_fingerprint:
@@ -215,6 +230,19 @@ class ObjectiveDefinition(BaseModel):
     @model_validator(mode="after")
     def canonicalize(self) -> "ObjectiveDefinition":
         self.source_refs = _sorted_strings(self.source_refs)
+        return self
+
+
+class SolverConflictGroup(BaseModel):
+    """One interpretable group of assumptions that explains a proven conflict."""
+
+    group_id: str = Field(min_length=1)
+    assumption_refs: list[str] = Field(default_factory=list)
+    explanation: str = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def canonicalize(self) -> "SolverConflictGroup":
+        self.assumption_refs = _sorted_strings(self.assumption_refs)
         return self
 
 
@@ -242,6 +270,18 @@ class BackendCertificatePayload(BaseModel):
     selection_digest: str = Field(min_length=1)
     status: Literal["feasible", "infeasible", "bounded", "timeout", "unknown"]
     termination_reason: str = ""
+    proof_kind: Literal[
+        "feasible_witness",
+        "bounded_search",
+        "infeasibility_core",
+        "unknown",
+    ] = "unknown"
+    solver_invoked: bool = False
+    input_closed: bool = False
+    enumeration_complete: bool = False
+    assumption_refs: list[str] = Field(default_factory=list)
+    infeasibility_core_refs: list[str] = Field(default_factory=list)
+    conflict_groups: list[SolverConflictGroup] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def canonicalize(self) -> "BackendCertificatePayload":
@@ -285,6 +325,37 @@ class BackendCertificatePayload(BaseModel):
             for target_id, candidate_ids in sorted(self.selected_candidate_ids.items())
         }
         self.route_refs = _sorted_strings(self.route_refs)
+        self.assumption_refs = _sorted_strings(self.assumption_refs)
+        self.infeasibility_core_refs = _sorted_strings(self.infeasibility_core_refs)
+        self.conflict_groups = sorted(
+            [
+                SolverConflictGroup.model_validate(item.model_dump(mode="python"))
+                for item in self.conflict_groups
+            ],
+            key=lambda item: item.group_id,
+        )
+        assumption_refs = set(self.assumption_refs)
+        core_refs = set(self.infeasibility_core_refs)
+        grouped_refs = {
+            ref
+            for group in self.conflict_groups
+            for ref in group.assumption_refs
+        }
+        if not core_refs.issubset(assumption_refs):
+            raise ValueError("infeasibility core refs must be declared assumptions")
+        if not grouped_refs.issubset(assumption_refs):
+            raise ValueError("conflict group refs must be declared assumptions")
+        if self.status == "infeasible":
+            if not self.solver_invoked or not self.input_closed or not self.enumeration_complete:
+                raise ValueError(
+                    "infeasible backend certificate requires a closed, exhausted solver run"
+                )
+            if self.proof_kind != "infeasibility_core":
+                raise ValueError("infeasible backend certificate requires an infeasibility core")
+            if not core_refs:
+                raise ValueError("infeasible backend certificate requires core refs")
+            if not self.conflict_groups:
+                raise ValueError("infeasible backend certificate requires conflict groups")
         expected_selection_digest = derive_backend_selection_digest(
             self.selected_candidate_ids,
             self.route_refs,
@@ -348,6 +419,15 @@ class SolverCertificate(ContractMeta):
     backend_version: str = ""
     required_input_refs: list[str] = Field(default_factory=list)
     backend_certificate: BackendCertificatePayload | None = None
+    solver_invoked: bool = False
+    input_closed: bool = False
+    enumeration_complete: bool = False
+    proof_kind: Literal[
+        "feasible_witness",
+        "bounded_search",
+        "infeasibility_core",
+        "unknown",
+    ] = "unknown"
     fingerprint: str = ""
 
     @model_validator(mode="after")
@@ -380,6 +460,23 @@ class SolverCertificate(ContractMeta):
             )
             if self.model_digest != expected_digest:
                 raise ValueError("SolverCertificate model_digest does not match backend proof")
+            for field in (
+                "solver_invoked",
+                "input_closed",
+                "enumeration_complete",
+                "proof_kind",
+            ):
+                if getattr(self, field) != getattr(proof, field):
+                    raise ValueError(f"backend certificate {field} does not match SolverCertificate")
+        if self.status == "infeasible":
+            if proof is None:
+                raise ValueError("infeasible SolverCertificate requires a typed backend proof")
+            if proof.proof_kind != "infeasibility_core":
+                raise ValueError("infeasible SolverCertificate requires an infeasibility core")
+            if not self.solver_invoked or not self.input_closed or not self.enumeration_complete:
+                raise ValueError(
+                    "infeasible SolverCertificate requires a closed, exhausted solver run"
+                )
         if not self.fingerprint:
             payload = self.model_dump(mode="json", exclude={"fingerprint", "created_at"})
             self.fingerprint = hashlib.sha256(_canonical_json(payload).encode("utf-8")).hexdigest()
@@ -539,7 +636,9 @@ class ScenarioSet(ContractMeta):
                     + ", ".join(sorted(missing_projection))
                 )
         self.infeasibility_explanations = _sorted_strings(self.infeasibility_explanations)
-        payload = self.model_dump(mode="json", exclude={"fingerprint", "created_at"})
+        payload = _strip_runtime_timestamps(
+            self.model_dump(mode="json", exclude={"fingerprint", "created_at"})
+        )
         derived_fingerprint = hashlib.sha256(_canonical_json(payload).encode("utf-8")).hexdigest()
         if self.fingerprint and self.fingerprint != derived_fingerprint:
             raise ValueError("ScenarioSet fingerprint does not match canonical content")
@@ -599,6 +698,7 @@ __all__ = [
     "ScenarioTargetSelection",
     "PlanningScenario",
     "ObjectiveDefinition",
+    "SolverConflictGroup",
     "BackendCertificatePayload",
     "derive_backend_selection_digest",
     "derive_solver_model_digest",

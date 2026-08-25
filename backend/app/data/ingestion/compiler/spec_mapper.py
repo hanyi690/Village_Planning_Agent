@@ -1,18 +1,16 @@
-"""Deterministic rule-based mapper: PlanningIntervention -> SpatialReferenceSpec.
+"""Map typed L3 spatial intent to the closed-set spatial reference DSL.
 
-This mapper bridges L3 planning output to the closed-set spatial reference DSL.
-It is fully deterministic: no LLM calls, no KG queries, and no geometry. When
-an existing asset has one audited L1 exact-feature binding, it emits only a
-named reference; the KG resolver remains responsible for uniqueness and WKT.
-Direction hints are extracted from spatial_requirements string values (falling
-back to problem_addressed and functions) via direction_from_location().
+This boundary is deliberately narrow.  It consumes only typed location hints,
+parcel/source-feature references, audited bindings, and typed parameter blocks
+already present on ``PlanningIntervention``.  It does not reinterpret
+``name``/``problem_addressed``/``functions`` prose, infer a village or a
+direction from free text, or manufacture a geometry.  GROUND remains the
+authority for entity uniqueness and geometry.
 """
 from __future__ import annotations
 
-import re
 from collections.abc import Mapping, Sequence
 
-from app.data.ingestion.spatial_language import direction_from_location
 from app.evidence.identity.source_feature_binding import (
     build_existing_facility_source_binding,
     build_existing_road_source_binding,
@@ -28,20 +26,6 @@ from app.contracts.spatial.spatial_reference_contracts import (
     SpatialReferenceSpec,
 )
 
-_DIRECTION_TO_8WIND = {
-    "north": "N",
-    "south": "S",
-    "east": "E",
-    "west": "W",
-    "northeast": "NE",
-    "southeast": "SE",
-    "northwest": "NW",
-    "southwest": "SW",
-}
-
-_ATTR_KEYS = ("dlbm_in", "land_use")
-_TOPO_KEYS = ("adjacent_to", "near", "within")
-_UNKNOWN_LOCATIONS = frozenset({"", "待定", "待补充", "待 GIS 校核", "待GIS校核", "无"})
 _VILLAGE_SCOPE_LOCATIONS = frozenset({
     "全村", "村域", "村域范围", "各自然村", "各村", "各组", "各村民小组",
 })
@@ -82,8 +66,8 @@ def _attach_source_binding(
 def _materialization_role(intervention: PlanningIntervention) -> str | None:
     """Return the L3 materialization role carried by a spatial spec.
 
-    Only categories with one unambiguous role receive a compatibility
-    default.  A zone without an explicit role remains unresolved because it
+    Only categories with one unambiguous domain default receive a role.  A
+    zone without an explicit role remains unresolved because it
     may be either an authoritative land-use assignment or a non-exclusive
     functional/protection/restoration overlay.
     """
@@ -111,40 +95,12 @@ def _finalize_spec(
     return spec
 
 
-def _explicit_village_names(intervention: PlanningIntervention) -> list[str]:
-    """Extract only a village name explicitly present in the model text.
-
-    This is a textual reference, not a coordinate guess. Generic phrases
-    such as ``全村`` are ignored because they do not identify a GIS entity.
-    """
-    text = " ".join([
-        str(intervention.spatial_requirements.get("location") or ""),
-        intervention.name,
-        intervention.problem_addressed,
-        *intervention.functions,
-    ])
-    # Conservative fallback for a root-village name: a Chinese span ending in
-    # 村 that is not a generic scope word.
-    matches: list[str] = []
-    for segment in re.split(r"[、，,；;和及与]", text):
-        match = re.search(r"([\u4e00-\u9fff]{1,6}村)", segment)
-        if not match:
-            continue
-        token = match.group(1)
-        for prefix in ("服务", "覆盖", "建设", "规划", "连接", "改善"):
-            if token.startswith(prefix) and len(token) > len(prefix) + 1:
-                token = token[len(prefix):]
-        if token not in _GENERIC_VILLAGE_WORDS:
-            matches.append(token)
-    return list(dict.fromkeys(matches))
-
-
 def _location_reference(intervention: PlanningIntervention) -> SpatialReferenceSpec | None:
-    """Map the L3 claim's location evidence to a closed-set spatial reference.
+    """Map explicit typed location/parcel references to a spatial spec.
 
-    The place names come from the L1-derived ``location_hints`` (all place
-    names, never a preset village list) or from the location cell itself.
-    Every explicit place token becomes its own resolvable reference.
+    ``location_hints`` is an L3 semantic input, not a resolved geometry.  The
+    exact closed-set tokens below are the only scope interpretation performed
+    here; all other hints remain place-name queries for GROUND to resolve.
     """
     requirements = intervention.spatial_requirements
     raw_parcel_refs = requirements.get("affected_parcel_refs")
@@ -157,17 +113,6 @@ def _location_reference(intervention: PlanningIntervention) -> SpatialReferenceS
     # hint. Keep it in the closed-set DSL so GROUND can bind exact source
     # geometry and retain duplicate source records as separate alternatives.
     bsm_refs = [item for item in parcel_refs if item.isdigit()]
-    if not bsm_refs:
-        hint_text = " ".join(
-            [
-                str(item).strip()
-                for item in (requirements.get("location_hints") or [])
-                if str(item).strip()
-            ]
-            + [str(requirements.get("location") or "").strip()]
-        )
-        bsm_refs = re.findall(r"(?:BSM|bsm)\s*[=:：]\s*(\d{6,})", hint_text)
-        bsm_refs = list(dict.fromkeys(bsm_refs))
     if bsm_refs:
         refs = [
             SpatialReferenceSpec(
@@ -185,26 +130,22 @@ def _location_reference(intervention: PlanningIntervention) -> SpatialReferenceS
         for item in (raw_hints if isinstance(raw_hints, list) else [])
         if str(item).strip()
     ]
-    location = str(requirements.get("location") or "").strip()
-    if location in _UNKNOWN_LOCATIONS and not hints:
+    if not hints:
         return None
-    normalized = re.sub(r"[\s，,、；;及和与]+", "", location)
-    if normalized in _VILLAGE_SCOPE_LOCATIONS or any(
-        token in location for token in ("全村范围", "村域内", "全域", "各自然村")
-    ):
+    normalized_hints = {
+        "".join(str(item).split()) for item in hints
+    }
+    if normalized_hints.intersection(_VILLAGE_SCOPE_LOCATIONS):
         return SpatialReferenceSpec(
             type="topological",
             topo="sfWithin",
             reference=RefObject(kind="village"),
         )
 
-    tokens = list(dict.fromkeys(hints))
-    if not tokens:
-        tokens = [
-            tok.strip()
-            for tok in re.split(r"[、，,；;及和与]+", location)
-            if tok.strip() and tok.strip() not in _GENERIC_VILLAGE_WORDS
-        ]
+    tokens = [
+        token for token in hints
+        if token not in _GENERIC_VILLAGE_WORDS
+    ]
     if not tokens:
         return None
     refs = [
@@ -281,139 +222,6 @@ def _facility_location_reference(
         op="and",
         children=[place_scope, facility_ref],
     )
-
-
-def _semantic_location_reference(
-    intervention: PlanningIntervention,
-) -> SpatialReferenceSpec | None:
-    """Extract a location reference from prose when the location cell is empty.
-
-    L3 claim compilation frequently leaves ``spatial_requirements.location``
-    empty while ``problem_addressed``/``name`` carry explicit spatial scope
-    (e.g. 金田村全域 / 沿石窟河沿岸 / 园宅村).  Mapping that prose into a
-    closed-set spec lets GROUND resolve it through EvidenceGraph
-    instead of deferring the target as unresolved.
-    """
-    text = " ".join([
-        str(intervention.problem_addressed or ""),
-        intervention.name,
-        *intervention.functions,
-    ])
-    if not text.strip():
-        return None
-    if any(token in text for token in ("全域", "全村域", "村域内", "村域范围", "各自然村")):
-        return SpatialReferenceSpec(
-            type="topological",
-            topo="sfWithin",
-            reference=RefObject(kind="village"),
-        )
-    village_names = _explicit_village_names(intervention)
-    if len(village_names) > 1:
-        return SpatialReferenceSpec(
-            type="composed",
-            op="or",
-            children=[
-                SpatialReferenceSpec(
-                    type="topological",
-                    topo="nearby",
-                    reference=RefObject(
-                        kind="place_name",
-                        filter={"label_contains": village_name},
-                    ),
-                )
-                for village_name in village_names
-            ],
-        )
-    if village_names:
-        return SpatialReferenceSpec(
-            type="topological",
-            topo="nearby",
-            reference=RefObject(
-                kind="place_name",
-                filter={"label_contains": village_names[0]},
-            ),
-        )
-    # Do not turn an arbitrary first Chinese span into a place name.  That
-    # previous fallback produced one-character false mentions and polluted
-    # GROUND with candidates such as "?" or "?".  Only retain explicit
-    # feature-name suffixes that can be resolved by a session gazetteer/index,
-    # and clean the candidate so generic scope words never become place names.
-    for suffix in _FEATURE_NAME_SUFFIXES:
-        match = re.search(
-            rf"([\u4e00-\u9fff]{{1,10}}{suffix})",
-            text,
-        )
-        if not match:
-            continue
-        cleaned = _clean_feature_mention(match.group(1))
-        if not cleaned:
-            continue
-        return SpatialReferenceSpec(
-            type="topological",
-            topo="nearby",
-            reference=RefObject(
-                kind="place_name",
-                filter={"label_contains": cleaned},
-            ),
-        )
-    return None
-
-
-# Minimal deterministic feature-name suffixes.  Broad feature extraction is
-# delegated to the GROUND flash-LLM mention enhancer (see
-# ``app.spatial.grounding.flash_mention_extractor``); this table only keeps a
-# couple of extremely safe suffixes so a fully deterministic fallback still
-# works when the enhancer is disabled.
-_FEATURE_NAME_SUFFIXES = (
-    "河",
-)
-
-# Leading tokens that are positional words, not part of the feature name.
-_LOCATION_PREFIXES_TO_STRIP = (
-    "沿", "依", "临", "靠",
-    "村口", "村内", "村中", "村前", "村后", "村旁",
-    "村东", "村南", "村西", "村北",
-)
-
-# Whole-candidate strings that are generic scope words, never place names.
-_GENERIC_LOCATION_EXCLUSIONS = frozenset({
-    "全村", "村庄", "村域", "村内", "村组", "各村", "该村", "本村", "村中",
-})
-
-
-def _clean_feature_mention(candidate: str) -> str | None:
-    """Strip positional/action prefixes and reject generic scope words."""
-    token = (candidate or "").strip()
-    for prefix in _LOCATION_PREFIXES_TO_STRIP:
-        while token.startswith(prefix):
-            token = token[len(prefix):].strip()
-    if not token or len(token) < 2:
-        return None
-    if token in _GENERIC_LOCATION_EXCLUSIONS:
-        return None
-    # A candidate that is fully composed of generic scope words is not a
-    # locatable feature (e.g. 村内道路).  Keep only real feature names.
-    if all(
-        word in token
-        for word in ("村内", "道路", "现状", "机耕", "巷道", "村道", "乡道")
-    ) and len(token) <= 6:
-        return None
-    return token
-
-
-def _direction_from_requirements(intervention: PlanningIntervention) -> str:
-    """Return an 8-wind-mappable english direction or '' ('' = none)."""
-    for value in intervention.spatial_requirements.values():
-        if isinstance(value, str):
-            direction = direction_from_location(value)
-            if direction in _DIRECTION_TO_8WIND:
-                return direction
-    for text in [intervention.problem_addressed, *intervention.functions]:
-        if isinstance(text, str):
-            direction = direction_from_location(text)
-            if direction in _DIRECTION_TO_8WIND:
-                return direction
-    return ""
 
 
 def _source_binding_reference(
@@ -667,59 +475,12 @@ def _build_candidates(
     location_ref = _facility_location_reference(intervention)
     if location_ref is None:
         location_ref = _location_reference(intervention)
-    if location_ref is None:
-        location_ref = _semantic_location_reference(intervention)
     if location_ref is not None:
         candidates.append(location_ref)
 
-    direction = _direction_from_requirements(intervention)
-    if direction:
-        candidates.append(
-            SpatialReferenceSpec(
-                type="directional",
-                reference=RefObject(kind="village"),
-                direction=_DIRECTION_TO_8WIND[direction],
-            )
-        )
-
-    for key in _ATTR_KEYS:
-        if key not in intervention.spatial_requirements:
-            continue
-        value = intervention.spatial_requirements[key]
-        if key == "dlbm_in" and isinstance(value, list):
-            candidates.append(
-                SpatialReferenceSpec(type="attributive", attr_filter={"dlbm_in": value})
-            )
-        elif key == "land_use":
-            candidates.append(
-                SpatialReferenceSpec(type="attributive", attr_filter={"land_use": value})
-            )
-
-    for key in _TOPO_KEYS:
-        if key not in intervention.spatial_requirements:
-            continue
-        value = intervention.spatial_requirements[key]
-        if not isinstance(value, str):
-            continue
-        if key == "within":
-            candidates.append(SpatialReferenceSpec(type="topological", topo="sfWithin"))
-        else:
-            topo = "sfTouches" if key == "adjacent_to" else "nearby"
-            candidates.append(
-                SpatialReferenceSpec(
-                    type="topological",
-                    topo=topo,
-                    reference=RefObject(
-                        kind="entity_type",
-                        filter={"label_contains": value},
-                    ),
-                )
-            )
-
-    # Real L3 prose occasionally contains an explicit village name but no
-    # structured location reference. Preserve that textual reference so the
-    # normal resolver can locate the corresponding GIS feature. Do not invent
-    # a location when the prose contains no named village.
+    # Relations, attributes, and network prerequisites are already typed on
+    # ``PlanningSpatialRequirements`` and are compiled into the intent/task
+    # graph.  They must not be rediscovered from arbitrary mapping keys here.
     return candidates
 
 
@@ -810,4 +571,4 @@ def map_interventions_to_specs(
     return specs, diagnostics
 
 
-__all__ = ["_DIRECTION_TO_8WIND", "map_intervention_to_spec", "map_interventions_to_specs"]
+__all__ = ["map_intervention_to_spec", "map_interventions_to_specs"]

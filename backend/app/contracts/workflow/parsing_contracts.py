@@ -10,11 +10,11 @@ from pydantic import BaseModel, Field
 class CompilationProfile(str, Enum):
     """Stage-specific compilation profile for the shared parse-compiler.
 
-    L1_OBSERVATION and L2_STRATEGY are the only report projection profiles.
+    L1_OBSERVATION is the only report projection profile.  L2 emits typed
+    decision sets directly and is not reconstructed from report text.
     """
 
     L1_OBSERVATION = "l1_observation"
-    L2_STRATEGY = "l2_strategy"
 
 
 class CompilerTrace(BaseModel):

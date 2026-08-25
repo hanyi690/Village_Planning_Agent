@@ -1,1 +1,1 @@
-"""Explicit migrations for persisted planning contracts."""
+"""Reserved for database migrations; planning v1 payload migration is removed."""

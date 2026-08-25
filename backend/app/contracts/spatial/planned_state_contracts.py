@@ -11,8 +11,8 @@ from app.contracts.artifacts.provenance import Provenance
 class PlannedParcel(BaseModel):
     bsm: str = ""
     # Relation-aware candidates are immutable geometries, not cadastral BSMs.
-    # Keep the two identities separate so legacy parcel consumers cannot
-    # accidentally resolve a candidate through the current-land-use index.
+    # Keep the two identities separate so candidate geometry cannot be
+    # accidentally resolved through the current-land-use index.
     candidate_id: str = ""
     project_ref: str = ""
     planning_land_use: str = ""
@@ -199,20 +199,6 @@ class PlannedAxis(BaseModel):
     bundle_snapshot_digest: str = ""
 
 
-class PlannedProjectPoint(BaseModel):
-    """Legacy delivery marker retained for old artifacts.
-
-    New canonical planning never produces this object: point semantics belong
-    to ``PlannedFacility``. Keeping the reader field allows older delivery
-    snapshots to be rendered while preventing new project targets from using
-    it.
-    """
-
-    project_ref: str = ""
-    name: str = ""
-    geometry: str = ""
-
-
 class PlannedState(ContractMeta):
     version: str = "v1"
     parcels: list[PlannedParcel] = Field(default_factory=list)
@@ -220,8 +206,6 @@ class PlannedState(ContractMeta):
     overlays: list[PlannedZoneOverlay] = Field(default_factory=list)
     coverage_domains: list[CoverageDomain] = Field(default_factory=list)
     facilities: list[PlannedFacility] = Field(default_factory=list)
-    # Backward-compatible reader field; new EXECUTE writes facility points.
-    project_points: list[PlannedProjectPoint] = Field(default_factory=list)
     roads: list[PlannedRoad] = Field(default_factory=list)
     axes: list[PlannedAxis] = Field(default_factory=list)
     source: str = ""

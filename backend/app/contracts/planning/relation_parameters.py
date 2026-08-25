@@ -1,9 +1,8 @@
 """Typed parameters for the closed planning-relation vocabulary.
 
 Relation parameters are deliberately separate from relation declarations.  A
-relation without parameters can be transported while it is being migrated, but
-it is not executable until the migration or compiler supplies the matching
-typed model.
+relation without parameters can be carried as a pending grounding item, but it
+is not executable until a matching typed model is supplied.
 """
 
 from __future__ import annotations
@@ -139,6 +138,11 @@ _TEMPLATE_PARAMETER_TYPES: dict[str, frozenset[str]] = {
     "co_locate": frozenset({"co_locate", "distance"}),
     "mutually_exclusive": frozenset({"mutually_exclusive"}),
     "precedes": frozenset({"precedes"}),
+    "contains": frozenset({"empty"}),
+    "located_in": frozenset({"empty"}),
+    "adjacent_to": frozenset({"empty"}),
+    "intersects": frozenset({"empty"}),
+    "overlaps": frozenset({"empty"}),
 }
 
 

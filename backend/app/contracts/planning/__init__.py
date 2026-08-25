@@ -5,10 +5,12 @@ from .intent_graph import (
     PlanTargetNode,
     PlanningIntentGraph,
 )
+from .task_graph import PlanningTask, PlanningTaskGraph
 from .scenario import (
     ObjectiveDefinition,
     PlanningScenario,
     ScenarioSet,
+    SolverConflictGroup,
     SolverCertificate,
 )
 from .approval import ApprovedExecutionInput
@@ -18,15 +20,20 @@ from .solver import (
     BackendSupport,
     SolverConfig,
     SolverProblemView,
+    SolverSubproblem,
+    SolverSubproblemPlan,
 )
 
 __all__ = [
     "PlanRelationIntent",
     "PlanTargetNode",
     "PlanningIntentGraph",
+    "PlanningTask",
+    "PlanningTaskGraph",
     "ObjectiveDefinition",
     "PlanningScenario",
     "ScenarioSet",
+    "SolverConflictGroup",
     "SolverCertificate",
     "ApprovedExecutionInput",
     "BackendCertificatePayload",
@@ -34,4 +41,6 @@ __all__ = [
     "BackendSupport",
     "SolverConfig",
     "SolverProblemView",
+    "SolverSubproblem",
+    "SolverSubproblemPlan",
 ]

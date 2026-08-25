@@ -140,10 +140,8 @@ class CandidateSet:
     """KG-side candidate BSM set returned by resolve_candidates."""
     bsms: List[str] = field(default_factory=list)
     ref_bsms: List[str] = field(default_factory=list)
-    ref_geometry_wkt: Optional[str] = None
     # Source-backed geometries are deliberately a list of independent
-    # records.  ``ref_geometry_wkt`` remains for backwards compatibility
-    # with adapters that can only return one feature.
+    # records so a multi-feature reference cannot be collapsed to one WKT.
     ref_geometries: List[GeometryRef] = field(default_factory=list)
 
 

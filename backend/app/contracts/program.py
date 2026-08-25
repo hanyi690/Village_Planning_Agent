@@ -77,6 +77,11 @@ class PlanningRelationRequirement(BaseModel):
         "co_locate",
         "mutually_exclusive",
         "precedes",
+        "contains",
+        "located_in",
+        "adjacent_to",
+        "intersects",
+        "overlaps",
     ]
     relation_id: str = ""
     subject_ref: str = ""
@@ -230,7 +235,7 @@ class PlanningClaim(BaseModel):
 class PlanningClaimSet(BaseModel):
     """Non-executable, evidence-bearing output of one L3 dimension."""
 
-    schema_version: Literal["1.0", "2.0"] = "2.0"
+    schema_version: Literal["2.0"] = "2.0"
     dimension_key: str = ""
     claims: list[PlanningClaim] = Field(default_factory=list)
     diagnostics: list[str] = Field(default_factory=list)

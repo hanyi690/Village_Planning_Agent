@@ -22,7 +22,7 @@
 ## 输入/输出契约
 
 `load_l3_reports()` 只服务离线 fixture，不是 session 启动或 L1 输入来源。
-线上输入必须通过 session catalog 和显式 upload 进入 `L1InputRegister`。
+线上输入必须通过 session catalog 和显式 upload 进入 L1 `source_index`，再由 typed observations 引用原始 source segments。
 
 ---
 

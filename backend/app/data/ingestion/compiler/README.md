@@ -24,7 +24,8 @@
 
 **入口**：`compiler/__init__.py` 导出 `compile_dimension_report` + `CompilationProfile`。
 
-**输出**：L1 使用 `L1Snapshot`，L2 使用 `L2StrategyFragment`。
+**输出**：L1 使用 `L1Snapshot`。L2 由 worker 直接生成
+`L2DecisionSet`，不再从报告文本重建语义。
 
 **文件清单**：
 

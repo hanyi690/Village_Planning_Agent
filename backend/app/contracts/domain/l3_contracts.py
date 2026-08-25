@@ -159,6 +159,22 @@ class ProgramIssue(BaseModel):
     reason: str = ""
 
 
+class ClaimDisposition(BaseModel):
+    """Auditable L3 accounting result for one source planning claim."""
+
+    claim_id: str
+    dimension_key: str
+    status: Literal[
+        "admitted",
+        "pending_grounding",
+        "merged_duplicate",
+        "deferred",
+        "invalid",
+    ]
+    reason: str
+    missing_requirements: list[str] = Field(default_factory=list)
+
+
 class L3ProgramFragment(BaseModel):
     """Per-dimension intervention output of the L3 planning profile.
 
@@ -183,6 +199,8 @@ class PlanningProgram(ContractMeta):
     schema_version: Literal["4.0"] = "4.0"
     interventions: list[PlanningIntervention] = Field(default_factory=list)
     claims: list[PlanningClaim] = Field(default_factory=list)
+    pending_grounding_claims: list[PlanningClaim] = Field(default_factory=list)
+    claim_dispositions: list[ClaimDisposition] = Field(default_factory=list)
     dependencies: list[InterventionDependency] = Field(default_factory=list)
     omissions: list[str] = Field(default_factory=list)
     # Wave E enrichment
@@ -200,6 +218,7 @@ __all__ = [
     "PlanningIntervention",
     "InterventionDependency",
     "ProgramIssue",
+    "ClaimDisposition",
     "L3ProgramFragment",
     "PlanningProgram",
 ]

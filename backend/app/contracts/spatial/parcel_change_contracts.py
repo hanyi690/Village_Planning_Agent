@@ -37,7 +37,7 @@ class ParcelChange(BaseModel):
     intervention_id: str | None = None
     # Frozen SELECT identity carried through EXECUTE into PlannedState.  These
     # fields keep final relation validation bound to the approved candidate;
-    # they are empty for legacy/non-candidate parcel changes.
+    # source-parcel changes may leave candidate identity empty.
     candidate_id: str = ""
     feature_id: str = ""
     target_id: str = ""

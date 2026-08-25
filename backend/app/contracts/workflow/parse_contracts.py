@@ -5,8 +5,9 @@ These Pydantic models define the data contract between the PARSE Agent
 pure data models with no agent logic, so they live in schema rather than
 in the agent package.
 
-This breaks the reverse dependency where KG previously imported
-SpatialPlanningIntent from the legacy select parse_state.
+The target models are owned by the current planning contract.  KG and the
+stage services import these typed models directly; no retired parse-state
+carrier is part of the production boundary.
 
 EXECUTE sub-task field mapping:
   layout:   ZoneTarget.land_use/area_ratio/density/adjacency_rules/vne_code
@@ -337,32 +338,6 @@ class SiteAreaTarget(TargetExecutionContract):
     semantic: SemanticMetadata = Field(default_factory=SemanticMetadata)
 
 
-class ProjectTarget(SiteAreaTarget):
-    """Backward-compatible project-target spelling used by older fixtures.
-
-    ``site_area_targets`` is the canonical v2 container.  Older acceptance
-    fixtures and persisted callers still construct ``ProjectTarget`` with a
-    ``project_id``; normalize that identity before the shared execution
-    contract validator runs.
-    """
-
-    project_id: str = ""
-    site_area_id: str = ""
-
-    @model_validator(mode="before")
-    @classmethod
-    def normalize_project_identity(cls, value: object) -> object:
-        if isinstance(value, dict):
-            payload = dict(value)
-            project_id = str(payload.get("project_id") or "").strip()
-            if project_id and not payload.get("site_area_id"):
-                payload["site_area_id"] = project_id
-            if project_id and not payload.get("target_id"):
-                payload["target_id"] = project_id
-            return payload
-        return value
-
-
 # ── Planning indicator table (附表1) ────────────────────────────────
 
 
@@ -609,11 +584,6 @@ class SpatialPlanningIntent(BaseModel):
     # Custom functional zone targets (P6 — from Explore/Binder project domain)
     custom_zone_targets: List["CustomZoneTarget"] = Field(default_factory=list)
 
-    @property
-    def project_targets(self) -> List[SiteAreaTarget]:
-        """Compatibility view for persisted callers; canonical field is site_area_targets."""
-        return self.site_area_targets
-
     # Session vocabulary name for custom zoning (P7 — LLM-extracted from L3 reports)
     vocabulary_name: str = ""
     # Area constraints (preserved)
@@ -661,7 +631,6 @@ __all__ = [
     "RoadTarget",
     "LinearAssetTarget",
     "SiteAreaTarget",
-    "ProjectTarget",
     "SemanticMetadata",
     "PlanningIndicatorItem",
     "PlanningIndicatorTable",
