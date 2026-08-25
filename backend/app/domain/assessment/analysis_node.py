@@ -15,7 +15,6 @@ from typing import Dict, Any, List
 from langchain_core.messages import AIMessage
 from app.config import get_dimension_config, get_dimension_layer, list_dimensions
 from app.core.settings import (
-    BACKGROUND_SUMMARY_ENRICHMENT,
     LLM_INCOMPLETE_OUTPUT_MAX_TOKENS,
     L1_LLM_MAX_CONCURRENT,
     L1_LLM_TIMEOUT_S,
@@ -26,15 +25,11 @@ from app.core.settings import (
 from app.contracts.events import SSEEventType
 from app.infrastructure.logging import get_logger
 from app.infrastructure.llm.dimension_runtime import (
-    enrich_summary_background,
-    generate_summary,
-    generate_summary_regex,
     load_dependency_reports,
     publish_dimension_complete,
     publish_dimension_delta,
     publish_dimension_start,
     provider_failure_open,
-    reset_provider_failure,
     trip_provider_failure,
     dimension_failure_attempt,
     run_rag,
@@ -42,7 +37,6 @@ from app.infrastructure.llm.dimension_runtime import (
     save_report_immediate,
     save_step_report,
 )
-from app.infrastructure.tasks.task_supervisor import build_summary_task_key
 
 logger = get_logger(__name__)
 
@@ -146,11 +140,7 @@ async def analyze_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
     dim_layer = getattr(cfg, 'layer', get_dimension_layer(dim_key) or 3)
     source_index = _l1_source_index_for_state(state) if dim_layer == 1 else None
     source_index_ref = None
-    if source_index is not None and (
-        source_index.current_assets
-        or source_index.demands
-        or source_index.source_segments
-    ):
+    if source_index is not None and source_index.source_segments:
         try:
             from app.infrastructure.artifacts.runtime import store_artifact
 
@@ -158,7 +148,7 @@ async def analyze_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
                 state,
                 "l1_source_index",
                 "l1_source_index",
-                "L1InputRegister",
+                "L1SourceIndex",
                 source_index,
             )
         except Exception as exc:  # source index persistence is observable but non-fatal
@@ -277,14 +267,12 @@ async def analyze_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
 
     report_body = ""
     observations: List[Any] = []
-    materialized_register_rows: list[Any] = []
-    register_coverage: list[Any] = []
-    register_diagnostics: list[str] = []
+    l1_diagnostics: list[str] = []
     l1_pass_cursor: dict[str, Any] = {}
     l1_retrieval_trace: list[dict[str, Any]] = []
     try:
-        # L1 is exclusively implemented by the bounded observe/register/
-        # validate/report loop.  No combined report-plus-structure branch is
+        # L1 is exclusively implemented by the bounded observe/validate/report
+        # loop. No combined report-plus-structure branch is
         # allowed to enter the production worker.
         # Fail FAST on a bounded Instructor request: a timeout or provider
         # failure trips the existing circuit path instead of stalling the whole
@@ -329,9 +317,7 @@ async def analyze_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
                             resume_payload = {
                                 "report_body": outputs.get("report_body", ""),
                                 "observations": outputs.get("observations", []),
-                                "register_rows": outputs.get("register_rows", []),
-                                "coverage": outputs.get("register_coverage", []),
-                                "diagnostics": outputs.get("register_diagnostics", []),
+                                "diagnostics": outputs.get("l1_diagnostics", []),
                                 "cursor": cursor,
                             }
                         break
@@ -355,23 +341,11 @@ async def analyze_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
                     diagnostics={"pass": payload.get("pass", "")},
                 )
 
-            async def _followup_lookup(query: str, required: list[str]) -> str:
-                context, trace = await run_targeted_evidence(
-                    dim_key,
-                    cfg,
-                    state,
-                    query=query,
-                    required_facts=required,
-                )
-                l1_retrieval_trace.extend(trace)
-                return context
-
             loop_result = await run_l1_dimension_loop(
                 dimension_key=dim_key,
                 prompt=prompt,
                 source_index=source_index,
                 runner_kwargs=runner_kwargs,
-                evidence_lookup=_followup_lookup,
                 checkpoint_writer=_write_l1_cursor,
                 resume_payload=resume_payload,
                 max_attempts=max(1, int(state.get("l1_pass_max_attempts", 2) or 2)),
@@ -379,9 +353,7 @@ async def analyze_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
             )
             report_body = loop_result.report_body
             observations = list(loop_result.observations or [])
-            materialized_register_rows = list(loop_result.register_rows or [])
-            register_coverage = list(loop_result.coverage or [])
-            register_diagnostics = list(loop_result.diagnostics or [])
+            l1_diagnostics = list(loop_result.diagnostics or [])
             l1_pass_cursor = (
                 loop_result.cursor.model_dump(mode="json")
                 if loop_result.cursor is not None
@@ -417,54 +389,26 @@ async def analyze_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
 
         error_message = structured_failure_summary(e)
         typed_code = structured_failure_code(e)
-        # M2.7 occasionally returns a valid prose response without the
-        # requested Instructor tool wrapper.  This is a representation defect,
-        # not missing spatial evidence.  Keep the bounded diagnostic, but let
-        # L1 finish from the already loaded source document; GROUND/SELECT
-        # remain fail-closed and still require typed geometry later.
-        if dim_layer == 1 and typed_code == "TOOL_CALL_MISSING":
-            try:
-                from app.infrastructure.context.planning_context_factory import get_cached_context
-
-                context = get_cached_context(session_id)
-                input_texts = context.input_texts() if context is not None else {}
-            except Exception:
-                input_texts = {}
-            source_text = _l1_factual_input(input_texts)
-            report_body = (
-                f"【{dim_name}】\n"
-                "结构化工具输出缺失，本维度保留原始现状资料作为可审计降级正文；"
-                "未从该降级正文生成新的空间观测。\n\n"
-                f"{source_text[:6000]}"
-            ).strip()
-            observations = []
-            reset_provider_failure(session_id)
-            logger.warning(
-                "[analyze_dimension] %s: accepted bounded L1 prose fallback (code=%s)",
-                dim_key,
-                typed_code,
-            )
-        else:
-            if is_provider_failure(e):
-                trip_provider_failure(session_id)
-            logger.error(f"[analyze_dimension] {dim_key}: typed L1 output failed: {error_message}")
-            await sse_manager.publish(session_id, {
-                "type": SSEEventType.DIMENSION_ERROR,
-                "dimension_key": dim_key,
-                "dimension_name": dim_name,
-                "layer": dim_layer,
-                "error": error_message,
-            })
-            return {
-                "messages": [AIMessage(content=f"[执行失败] LLM结构化输出错误: {error_message}")],
-                "dimension_retry_counts": dimension_failure_attempt(state, dim_key),
-                "provider_failures": [{
-                    "stage": f"L{dim_layer}",
-                    "dimension": dim_key,
-                    "code": typed_code or "llm_typed_output_error",
-                    "message": error_message,
-                }],
-            }
+        if is_provider_failure(e):
+            trip_provider_failure(session_id)
+        logger.error(f"[analyze_dimension] {dim_key}: typed L1 output failed: {error_message}")
+        await sse_manager.publish(session_id, {
+            "type": SSEEventType.DIMENSION_ERROR,
+            "dimension_key": dim_key,
+            "dimension_name": dim_name,
+            "layer": dim_layer,
+            "error": error_message,
+        })
+        return {
+            "messages": [AIMessage(content=f"[执行失败] LLM结构化输出错误: {error_message}")],
+            "dimension_retry_counts": dimension_failure_attempt(state, dim_key),
+            "provider_failures": [{
+                "stage": f"L{dim_layer}",
+                "dimension": dim_key,
+                "code": typed_code or "llm_typed_output_error",
+                "message": error_message,
+            }],
+        }
 
     llm_response = report_body
     instruction_payload = {
@@ -472,33 +416,25 @@ async def analyze_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
             item.model_dump(mode="json") if hasattr(item, "model_dump") else item
             for item in observations
         ],
-        "register_rows": [
-            item.model_dump(mode="json") if hasattr(item, "model_dump") else item
-            for item in materialized_register_rows
-        ],
-        "coverage": [
-            item.model_dump(mode="json") if hasattr(item, "model_dump") else item
-            for item in register_coverage
-        ],
         "source_documents": list(getattr(source_index, "source_documents", []) or []),
         "source_digest": str(getattr(source_index, "source_digest", "") or ""),
         "pass_cursor": l1_pass_cursor,
-        "register_diagnostics": list(register_diagnostics),
+        "diagnostics": list(l1_diagnostics),
         "retrieval_trace": list(l1_retrieval_trace)[-24:],
     }
     observations_json = json.dumps(instruction_payload, ensure_ascii=False)
     # 7.6 Observation quality validation (design: validation step after every
-    # LLM call).  A dimension whose observations mostly lack a spatial anchor
-    # is a quality defect: it must NOT be marked complete.  It is surfaced
-    # through dimension_failures and retried with corrective feedback instead
-    # of silently feeding incomplete facts downstream.
+    # LLM call).  The validator checks evidence and typed observation shape;
+    # lack of a spatial anchor is allowed for non-spatial facts and is not a
+    # dimension-level failure by itself.
     from app.domain.assessment.observation_quality import validate_observations
 
     quality_report = validate_observations(
         [
             item.model_dump(mode="json") if hasattr(item, "model_dump") else item
             for item in observations
-        ]
+        ],
+        dimension_key=dim_key,
     )
 
     await publish_dimension_delta(
@@ -522,14 +458,12 @@ async def analyze_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
     report_id = str(uuid.uuid4())
 
     # 8. Generate structured summary (before SSE event so it can reference it)
-    structured_summary_str = generate_summary_regex(dim_key, dim_layer, llm_response)
-    from app.bootstrap.composition import CompositionRoot
-
-    if BACKGROUND_SUMMARY_ENRICHMENT:
-        CompositionRoot.get_task_supervisor().create_task(
-            build_summary_task_key(session_id, dim_layer, dim_key, next_version),
-            enrich_summary_background(dim_key, dim_layer, llm_response, session_id, next_version),
-        )
+    structured_summary_str = _l1_summary_json(
+        dim_key,
+        dim_layer,
+        observations,
+        llm_response,
+    )
 
     # 9. Prepare pending report data for batch write
     phase_key = f"layer{dim_layer}"
@@ -607,17 +541,6 @@ async def analyze_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
                         for item in observations
                     ],
                     "observation_count": len(observations),
-                    "register_row_count": len(materialized_register_rows),
-                    "register_rows": [
-                        row.model_dump(mode="json")
-                        if hasattr(row, "model_dump") else row
-                        for row in materialized_register_rows
-                    ],
-                    "register_coverage": [
-                        item.model_dump(mode="json")
-                        if hasattr(item, "model_dump") else item
-                        for item in register_coverage
-                    ],
                     "l1_pass_cursor": l1_pass_cursor,
                     "l1_pass_payload": {
                         "report_body": report_body,
@@ -626,20 +549,9 @@ async def analyze_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
                             if hasattr(item, "model_dump") else item
                             for item in observations
                         ],
-                        "register_rows": [
-                            row.model_dump(mode="json")
-                            if hasattr(row, "model_dump") else row
-                            for row in materialized_register_rows
-                        ],
-                        "coverage": [
-                            item.model_dump(mode="json")
-                            if hasattr(item, "model_dump") else item
-                            for item in register_coverage
-                        ],
-                        "diagnostics": register_diagnostics,
+                        "diagnostics": l1_diagnostics,
                         "cursor": l1_pass_cursor,
                     },
-                    "register_diagnostics": register_diagnostics,
                     "retrieval_followup_trace": l1_retrieval_trace[-24:],
                     "kg_evidence_consumed": explore_audit,
                 },
@@ -677,9 +589,45 @@ def _dependency_summary(text: str) -> Dict[str, Any]:
     }
 
 
-async def _generate_summary(dim_key: str, dim_layer: int, content: str, rag_log=None) -> str:
-    """Generate structured JSON summary for a dimension report (delegates to shared runtime)."""
-    return await generate_summary(dim_key, dim_layer, content)
+def _l1_summary_json(
+    dimension_key: str,
+    layer: int,
+    observations: list[Any],
+    report_body: str,
+) -> str:
+    """Project the validated L1 observation array into a display summary.
+
+    The summary is bookkeeping only.  It is derived from the typed output and
+    never reparses report prose with regexes or creates a second semantic
+    representation for downstream planning.
+    """
+
+    payload = [
+        item.model_dump(mode="json") if hasattr(item, "model_dump") else dict(item)
+        for item in observations
+    ]
+    evidence_refs = {
+        str(ref)
+        for item in payload
+        for ref in list(item.get("evidence_refs") or item.get("source_refs") or [])
+        if str(ref).strip()
+    }
+    spatial_count = sum(
+        str(item.get("observation_kind") or item.get("fact_kind") or "").lower()
+        in {"spatial", "spatial_observation", "gis_observation"}
+        for item in payload
+    )
+    return json.dumps(
+        {
+            "dimension_key": dimension_key,
+            "layer": layer,
+            "word_count": len(report_body),
+            "observation_count": len(payload),
+            "spatial_observation_count": spatial_count,
+            "evidence_ref_count": len(evidence_refs),
+        },
+        ensure_ascii=False,
+    )
 
 
 _L1_FACT_SOURCE_KEYS = {"village_data", "upload"}
@@ -714,8 +662,8 @@ def _l1_source_index_for_state(state: Dict[str, Any]):
     """Build the source index only while an L1 dimension is running."""
 
     try:
-        from app.domain.assessment.input_register import build_l1_source_index
-        from app.contracts.domain.l1_contracts import L1InputRegister
+        from app.domain.assessment.source_index import build_l1_source_index
+        from app.contracts.domain.l1_contracts import L1SourceIndex
         from app.infrastructure.artifacts.runtime import load_artifact
         from app.infrastructure.context.planning_context_factory import get_cached_context
 
@@ -723,7 +671,7 @@ def _l1_source_index_for_state(state: Dict[str, Any]):
         # index already produced by L1.  Rebuilding it from raw text is only
         # the cold-start path; this keeps resume deterministic and avoids one
         # parse per parallel dimension.
-        cached = load_artifact(state, "l1_source_index", L1InputRegister)
+        cached = load_artifact(state, "l1_source_index", L1SourceIndex)
         if cached is not None:
             return cached
 
@@ -806,21 +754,22 @@ def _build_prompt(cfg, state, rag_context, deps: str = "", same_layer_contexts: 
     # output instead of repeating it.
     if quality_feedback:
         quality_instruction = f'''质量修正指令 - 请严格执行。
-上次输出未通过空间锚点校验，请重写并修正：
+上次输出未通过观测语义校验，请重写并修正：
 
 "{quality_feedback}"
 
 要求：
-1. 每条观测必须包含 name；
-2. 每条观测尽量给出 location 或 relation 空间锚点；
-3. 保持原有报告格式与结构，不要新增"修订摘要"章节。'''
+1. 空间实体应填写 name，并仅在来源支持时填写 location 或 relation；
+2. 全村指标、诉求、政策和约束可以没有点位，但必须填写 semantic_type 及 description 或 value；
+3. 不得为通过校验而猜测或编造空间锚点；
+4. 保持原有报告格式与结构，不要新增"修订摘要"章节。'''
         revision_instruction = (revision_instruction + "\n\n" + quality_instruction) if revision_instruction else quality_instruction
 
     if layer == 1:
         if structured_pass == "l1_observe":
             return (
                 f"【L1 observe input; dimension_key={dim_key}】\n"
-                "以下内容仅作为原始资料和任务边界上下文。只抽取有来源的现状观察、登记行和 coverage；"
+                "以下内容仅作为原始资料和任务边界上下文。只抽取有来源的 typed 现状事实；"
                 "不要按上下文中的写作模板生成 report_body，不要输出规划建议，也不要从缺失内容推断位置或需求点。\n\n"
                 f"【原始资料】\n{village_data}\n\n"
                 f"【任务边界】\n{task_desc}\n\n"

@@ -10,6 +10,7 @@ not reference the L1 analysis node implementation.
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import time
 import uuid
@@ -21,13 +22,10 @@ from langchain_core.messages import AIMessage
 
 from app.config import get_dimension_config
 from app.contracts.events import SSEEventType
-from app.infrastructure.llm.factory import create_llm
 from app.core.settings import LLM_MAX_CONCURRENT, MAX_TOKENS, LLM_STREAM_TIMEOUT
+from app.contracts.domain.l2_contracts import L2DecisionSet
 from app.infrastructure.logging import get_logger
 from app.infrastructure.llm.dimension_runtime import (
-    enrich_summary_background,
-    generate_summary,
-    generate_summary_regex,
     load_dependency_reports,
     publish_dimension_complete,
     publish_dimension_delta,
@@ -42,23 +40,8 @@ from app.infrastructure.llm.dimension_runtime import (
     strip_model_reasoning,
 )
 from app.infrastructure.llm.prompts.concept import get_dimension_prompt as get_layer2_prompt
-from app.infrastructure.tasks.task_supervisor import build_summary_task_key
 
 logger = get_logger(__name__)
-
-
-# Cached LLM instance — reused across all L2 dimension analyses
-_llm_cache: Optional[Any] = None
-_L2_LLM_SLOTS = asyncio.Semaphore(
-    max(1, int(os.getenv("L2_LLM_MAX_CONCURRENT", str(LLM_MAX_CONCURRENT))))
-)
-
-
-def _get_llm():
-    global _llm_cache
-    if _llm_cache is None:
-        _llm_cache = create_llm(temperature=0.7, max_tokens=MAX_TOKENS, streaming=True)
-    return _llm_cache
 
 
 def _build_revision_completed(state: Dict[str, Any], dim_key: str) -> Dict[int, list]:
@@ -80,7 +63,7 @@ async def analyze_l2_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
     3. 加载依赖报告（同层 + 跨层）
     4. EXPLORE 证据注入
     5. 组装 L2 Prompt（concept 模板）
-    6. 流式 LLM + SSE
+    6. 结构化 LLM 决策集
     7. 保存版本
     8. 返回状态更新
     """
@@ -157,8 +140,8 @@ async def analyze_l2_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
     if rag_log:
         stats.record_rag_time(session_id, dim_key, rag_log.retrieval_latency_ms, rag_log.total_results)
 
-    # 6. 流式 LLM + SSE
-    llm = _get_llm()
+    # 6. Typed decision output.  The report body below is a deterministic
+    # display projection of this object; it is never reparsed as semantics.
     if provider_failure_open(session_id):
         return {
             "dimension_retry_counts": dimension_failure_attempt(state, dim_key),
@@ -170,79 +153,82 @@ async def analyze_l2_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
             }],
         }
     llm_start_time = time.time()
+    from app.infrastructure.llm.structured import run_structured_output
 
-    llm_response = ""
-    _last_publish_time = 0.0
-    _PUBLISH_INTERVAL = 0.1  # 100ms throttle
-
-    # Queue wait is part of the per-dimension budget. Otherwise a wave can
-    # spend the whole timeout waiting for a slot and then start a fresh
-    # provider request after its apparent deadline.
-    await asyncio.wait_for(_L2_LLM_SLOTS.acquire(), timeout=LLM_STREAM_TIMEOUT)
+    decision_system = (
+        f"【L2 typed decision pass; dimension_key={dim_key}】\n"
+        "你负责把给定的事实和规划背景转成 L2DecisionSet。只返回结构化 JSON，"
+        "不要返回 Markdown、标题、表格或 report_body。只写有依据的目标、指标、策略、"
+        "优先级、空间结构意图、冲突假设和证据缺口。空间结构只表达语义范围、关系和"
+        "GROUND 所需前置条件，不生成坐标、WKT、GeoJSON、BSM 或最终选址。\n"
+        "每个对象都应尽量给出稳定 ID、source_fact_refs 和 objective/strategy 引用；"
+        "没有证据时保留对象并标记 proposed/unknown，填写 evidence_gaps，不能猜测。"
+        "规划建议指标必须标记 proposed，不能伪装为现状事实。数组字段始终返回 JSON 数组；"
+        "没有内容时返回空数组。"
+    )
+    decision_messages = [
+        {"role": "system", "content": decision_system},
+        {"role": "user", "content": prompt},
+    ]
     try:
-        try:
-            async with asyncio.timeout(LLM_STREAM_TIMEOUT):
-                async for chunk in llm.astream(prompt):
-                    if hasattr(chunk, 'content') and chunk.content:
-                        llm_response += chunk.content
-                        now = time.time()
-                        if now - _last_publish_time >= _PUBLISH_INTERVAL:
-                            await publish_dimension_delta(
-                                session_id, dim_key, dim_name, dim_layer, is_revision,
-                                chunk.content, llm_response,
-                            )
-                            _last_publish_time = now
-        finally:
-            _L2_LLM_SLOTS.release()
+        decision_set = await run_structured_output(
+            L2DecisionSet,
+            decision_messages,
+            max_retries=2,
+            timeout=LLM_STREAM_TIMEOUT,
+            max_tokens=MAX_TOKENS,
+            max_concurrent=max(1, int(os.getenv("L2_LLM_MAX_CONCURRENT", str(LLM_MAX_CONCURRENT)))),
+            semaphore_scope="l2",
+            temperature=0.3,
+            context={"stage": "L2", "dimension_key": dim_key, "session_id": session_id},
+        )
     except asyncio.TimeoutError:
         trip_provider_failure(session_id)
-        logger.error(f"[analyze_l2_dimension] {dim_key}: LLM stream timeout after {LLM_STREAM_TIMEOUT}s")
+        logger.error(f"[analyze_l2_dimension] {dim_key}: typed LLM timeout after {LLM_STREAM_TIMEOUT}s")
         await sse_manager.publish(session_id, {
             "type": SSEEventType.DIMENSION_ERROR,
             "dimension_key": dim_key,
             "dimension_name": dim_name,
             "layer": dim_layer,
-            "error": f"LLM stream timeout ({LLM_STREAM_TIMEOUT}s)",
+            "error": f"L2 typed output timeout ({LLM_STREAM_TIMEOUT}s)",
         })
         return {
-            "messages": [AIMessage(content=f"[执行失败] LLM流式超时({LLM_STREAM_TIMEOUT}s)")],
+            "messages": [AIMessage(content=f"[执行失败] L2结构化输出超时({LLM_STREAM_TIMEOUT}s)")],
             "dimension_retry_counts": dimension_failure_attempt(state, dim_key),
             "provider_failures": [{
                 "stage": f"L{dim_layer}", "dimension": dim_key,
-                "code": "llm_stream_timeout",
-                "message": f"LLM stream timeout ({LLM_STREAM_TIMEOUT}s)",
+                "code": "llm_typed_timeout",
+                "message": f"L2 typed output timeout ({LLM_STREAM_TIMEOUT}s)",
             }],
         }
     except Exception as e:
         if is_provider_failure(e):
             trip_provider_failure(session_id)
-        logger.error(f"[analyze_l2_dimension] {dim_key}: LLM 失败: {e}")
+        from app.infrastructure.llm.structured import structured_failure_code, structured_failure_summary
+
+        error_message = structured_failure_summary(e)
+        logger.error(f"[analyze_l2_dimension] {dim_key}: typed LLM failed: {error_message}")
         await sse_manager.publish(session_id, {
             "type": SSEEventType.DIMENSION_ERROR,
             "dimension_key": dim_key,
             "dimension_name": dim_name,
             "layer": dim_layer,
-            "error": str(e),
+            "error": error_message,
         })
         return {
-            "messages": [AIMessage(content=f"[执行失败] LLM错误: {e}")],
+            "messages": [AIMessage(content=f"[执行失败] L2结构化输出错误: {error_message}")],
             "dimension_retry_counts": dimension_failure_attempt(state, dim_key),
             "provider_failures": [{
                 "stage": f"L{dim_layer}", "dimension": dim_key,
-                "code": "llm_provider_error", "message": str(e),
+                "code": structured_failure_code(e) or "llm_typed_output_error",
+                "message": error_message,
             }],
         }
 
-    # Flush remaining delta (throttle may have skipped the last chunk)
-    if llm_response and _last_publish_time > 0:
-        await publish_dimension_delta(
-            session_id, dim_key, dim_name, dim_layer, is_revision,
-            "", llm_response,
-        )
-
-    llm_response = strip_model_reasoning(llm_response)
+    decision_set = decision_set.model_copy(update={"dimension_key": dim_key})
+    llm_response = _render_decision_set(decision_set)
     llm_elapsed = time.time() - llm_start_time
-    logger.info(f"[analyze_l2_dimension] {dim_key}: LLM completed in {llm_elapsed:.1f}s, output = {len(llm_response)} chars")
+    logger.info(f"[analyze_l2_dimension] {dim_key}: typed LLM completed in {llm_elapsed:.1f}s, output = {len(llm_response)} chars")
 
     # 6.5 统计收集 - 记录 LLM 时间和输出
     stats.record_llm_time(session_id, dim_key, llm_elapsed, len(llm_response))
@@ -257,14 +243,9 @@ async def analyze_l2_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
     # Generate report_id for pending_reports
     report_id = str(uuid.uuid4())
 
-    # 7.5 生成结构化摘要
-    structured_summary_str = generate_summary_regex(dim_key, dim_layer, llm_response)
-    from app.bootstrap.composition import CompositionRoot
-
-    CompositionRoot.get_task_supervisor().create_task(
-        build_summary_task_key(session_id, dim_layer, dim_key, next_version),
-        enrich_summary_background(dim_key, dim_layer, llm_response, session_id, next_version),
-    )
+    # The summary is a projection of the validated decision set, not a
+    # regex/keyword interpretation of the report body.
+    structured_summary_str = _decision_summary_json(decision_set, llm_response)
 
     # 8. 准备 pending report 数据
     phase_key = f"layer{dim_layer}"
@@ -275,6 +256,7 @@ async def analyze_l2_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
         "version": next_version,
         "report_id": report_id,
         "content": llm_response,
+        "instruction": decision_set.model_dump_json(ensure_ascii=False),
         "summary": structured_summary_str,
         "revision_trigger": revision_reason,
         "knowledge_sources": asdict(rag_log) if rag_log and rag_log.rag_enabled else None,
@@ -312,13 +294,22 @@ async def analyze_l2_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
             inputs={
                 "dependency_reports_summary": _dependency_summary(deps),
                 "same_layer_dependency_reports_summary": _dependency_summary(same_layer_contexts),
-                "instruction_removed": True,
+                "typed_decision_set": True,
             },
             outputs={
                 "report_id": report_id,
                 "word_count": len(llm_response),
-                "instruction_len": len(instr),
-                "has_instruction": bool(instr),
+                "instruction_len": len(decision_set.model_dump_json()),
+                "has_instruction": True,
+                "decision_counts": {
+                    "objectives": len(decision_set.objectives),
+                    "metrics": len(decision_set.metrics),
+                    "strategies": len(decision_set.strategies),
+                    "priorities": len(decision_set.priorities),
+                    "spatial_structures": len(decision_set.spatial_structures),
+                    "conflicts": len(decision_set.conflicts),
+                    "evidence_gaps": len(decision_set.evidence_gaps),
+                },
                 "kg_evidence_consumed": explore_audit,
             },
             diagnostics={
@@ -470,4 +461,65 @@ def _dependency_summary(text: str) -> Dict[str, Any]:
     }
 
 
-__all__ = ["analyze_l2_dimension", "_get_llm"]
+def _render_decision_set(decision: L2DecisionSet) -> str:
+    """Render typed decisions for people and cross-layer prompt context."""
+
+    lines = [f"# L2 结构化决策 · {decision.dimension_key}", ""]
+    sections = [
+        ("发展目标", [item.statement for item in decision.objectives if item.statement.strip()]),
+        ("目标指标", [
+            " ".join(
+                part for part in (
+                    item.name,
+                    str(item.value) if item.value is not None else "",
+                    item.unit,
+                    f"[{item.status}]",
+                ) if part
+            )
+            for item in decision.metrics
+            if item.name.strip()
+        ]),
+        ("规划策略", [item.statement for item in decision.strategies if item.statement.strip()]),
+        ("实施优先级", [item.statement for item in decision.priorities if item.statement.strip()]),
+        ("空间结构意图", [item.statement for item in decision.spatial_structures if item.statement.strip()]),
+        ("冲突假设", [item.description for item in decision.conflicts if item.description.strip()]),
+        ("证据缺口", [item.description for item in decision.evidence_gaps if item.description.strip()]),
+    ]
+    for title, values in sections:
+        lines.append(f"## {title}")
+        lines.extend(f"- {value}" for value in values)
+        if not values:
+            lines.append("- （无）")
+        lines.append("")
+    return "\n".join(lines).strip()
+
+
+def _decision_summary_json(decision: L2DecisionSet, report_body: str) -> str:
+    payload = {
+        "dimension_key": decision.dimension_key,
+        "layer": 2,
+        "word_count": len(report_body),
+        "key_points": [
+            item.statement
+            for item in [*decision.objectives, *decision.strategies]
+            if str(getattr(item, "statement", "") or "").strip()
+        ][:8],
+        "metrics": {
+            item.name: {"value": item.value, "unit": item.unit, "status": item.status}
+            for item in decision.metrics
+            if item.name.strip()
+        },
+        "decision_counts": {
+            "objectives": len(decision.objectives),
+            "metrics": len(decision.metrics),
+            "strategies": len(decision.strategies),
+            "priorities": len(decision.priorities),
+            "spatial_structures": len(decision.spatial_structures),
+            "conflicts": len(decision.conflicts),
+            "evidence_gaps": len(decision.evidence_gaps),
+        },
+    }
+    return json.dumps(payload, ensure_ascii=False)
+
+
+__all__ = ["analyze_l2_dimension", "_render_decision_set", "_decision_summary_json"]

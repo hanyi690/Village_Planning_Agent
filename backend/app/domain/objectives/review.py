@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from app.contracts.artifacts.artifact_descriptor import ArtifactDescriptor
+from app.contracts.artifacts.ref import ArtifactRef as ArtifactDescriptor
 from app.contracts.domain.l2_contracts import L2Strategy
 from app.contracts.workflow.review_contracts import (
     ArtifactDescriptorProjection,
@@ -87,8 +87,8 @@ def build_trace_json(
         ],
         "dimension_reports": dimension_reports_meta or {},
         "extraction_steps": [
-            "compile_l2_strategy (per dimension)",
-            "merge_strategy_fragments",
+            "typed L2DecisionSet (per dimension)",
+            "merge_decision_sets",
             "evaluate_l2_gate",
         ],
     }

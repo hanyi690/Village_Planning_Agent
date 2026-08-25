@@ -6,7 +6,7 @@ from pathlib import Path
 import hashlib
 import json
 
-from app.contracts.artifacts.artifact_descriptor import ArtifactDescriptor
+from app.contracts.artifacts.ref import ArtifactRef as ArtifactDescriptor
 from app.contracts.evidence.identity_contracts import (
     EvidenceObservation,
     EvidenceObservationSnapshot,

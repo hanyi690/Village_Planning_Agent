@@ -7,20 +7,18 @@ runs the gate/review path.
 """
 from __future__ import annotations
 
+from decimal import Decimal, InvalidOperation
 from typing import Any
 
 from app.domain.common.context_guard import require_frozen_context
 from app.infrastructure.artifacts.runtime import store_artifact
-from app.contracts.artifacts.artifact_descriptor import ArtifactDescriptor
+from app.contracts.artifacts.ref import ArtifactRef as ArtifactDescriptor
 from app.contracts.artifacts.classification_ref import ClassificationRef
 from app.contracts.artifacts.contract_meta import StageIssue
 from app.contracts.evidence.evidence_contracts import EvidenceSource
 from app.contracts.domain.l1_contracts import (
     EvidenceGap,
     L1Fact,
-    L1InputRegister,
-    L1RegisterRow,
-    L1SourceSegment,
     L1Snapshot,
 )
 from app.contracts.workflow.parsing_contracts import CompilationProfile
@@ -86,62 +84,99 @@ def _dedup_fact_records(records: list[L1Fact]) -> list[L1Fact]:
     return result
 
 
-def _merge_register_rows(
-    snapshots: list[L1Snapshot],
-) -> tuple[dict[str, list[L1RegisterRow]], dict[str, list[str]], L1InputRegister | None]:
-    """Merge dimension-owned rows and their L1 source metadata."""
+_FACT_IDENTITY_TOKENS = frozenset(
+    {
+        "category",
+        "classification",
+        "class",
+        "code",
+        "kind",
+        "landuse",
+        "metric",
+        "subtype",
+        "type",
+    }
+)
+_FACT_IDENTITY_NAME_KEYS = frozenset(
+    {"entity_name", "label", "name", "normalized_label", "normalized_name"}
+)
+_FACT_IDENTITY_RELATION_TOKENS = frozenset(
+    {
+        "applies",
+        "destination",
+        "direction",
+        "endpoint",
+        "from",
+        "object",
+        "origin",
+        "predicate",
+        "scope",
+        "subject",
+        "target",
+        "to",
+    }
+)
 
-    by_dimension: dict[str, list[L1RegisterRow]] = {}
-    diagnostics: dict[str, list[str]] = {}
-    source_documents: list[str] = []
-    source_digests: set[str] = set()
-    source_segments_by_id: dict[str, L1SourceSegment] = {}
-    rows_by_id: dict[str, L1RegisterRow] = {}
-    for partial in snapshots:
-        for dimension, rows in (partial.register_rows_by_dimension or {}).items():
-            target = by_dimension.setdefault(dimension, [])
-            for row in rows or []:
-                existing = rows_by_id.get(row.row_id)
-                if existing is not None:
-                    if existing.model_dump(mode="json") != row.model_dump(mode="json"):
-                        diagnostics.setdefault(dimension, []).append(
-                            f"register_row_conflict:{row.row_id}"
-                        )
-                    continue
-                rows_by_id[row.row_id] = row
-                target.append(row)
-        for dimension, values in (partial.register_diagnostics_by_dimension or {}).items():
-            diagnostics.setdefault(dimension, []).extend(str(value) for value in values or [])
-        source_register = partial.input_register
-        if source_register is not None:
-            source_documents.extend(source_register.source_documents or [])
-            if source_register.source_digest:
-                source_digests.add(source_register.source_digest)
-            for row in [*(source_register.current_assets or []), *(source_register.demands or [])]:
-                rows_by_id.setdefault(row.row_id, row)
-            for segment in source_register.source_segments or []:
-                source_segments_by_id.setdefault(segment.segment_id, segment)
 
-    unique_documents = list(dict.fromkeys(source_documents))
-    if len(source_digests) > 1:
-        diagnostics.setdefault("__global__", []).append("source_digest_conflict")
-    source_digest = sorted(source_digests)[0] if source_digests else ""
-    all_rows = list(rows_by_id.values())
-    if not all_rows and not unique_documents and not source_digest:
-        return by_dimension, diagnostics, None
-    register = L1InputRegister(
-        source_documents=unique_documents,
-        source_digest=source_digest,
-        source_segments=list(source_segments_by_id.values()),
-        current_assets=[row for row in all_rows if row.ledger_kind == "current_asset"],
-        demands=[row for row in all_rows if row.ledger_kind == "demand"],
-        diagnostics=[
-            value
-            for values in diagnostics.values()
-            for value in values
-        ],
+def _fact_comparable_identity(fact: L1Fact) -> str:
+    """Build a typed identity without treating prose or provenance as meaning.
+
+    L1 models are allowed to introduce domain-specific attribute names.  The
+    identity therefore comes from the semantic type plus attributes whose
+    *shape* declares a classification (``*_type``, ``*_code``, ``metric``,
+    etc.) or a stable entity name.  Descriptions, locations, source fields,
+    and other narrative attributes stay out of the identity, so a second
+    source can still corroborate the same fact.
+    """
+
+    semantic_type = str(fact.semantic_type or "").strip()
+    discriminators: dict[str, str] = {}
+    for raw_key, raw_value in (fact.attributes or {}).items():
+        key = str(raw_key or "").strip().casefold()
+        value = " ".join(str(raw_value or "").strip().split())
+        if not key or not value:
+            continue
+        tokens = {
+            token for token in key.replace("-", "_").split("_") if token
+        }
+        if (
+            tokens & _FACT_IDENTITY_TOKENS
+            or tokens & _FACT_IDENTITY_RELATION_TOKENS
+            or key in _FACT_IDENTITY_NAME_KEYS
+        ):
+            discriminators[key] = value
+
+    suffix = ":".join(
+        f"{key}={discriminators[key]}"
+        for key in sorted(discriminators)
     )
-    return by_dimension, diagnostics, register
+    return f"{semantic_type}:{suffix}" if suffix else semantic_type
+
+
+def _typed_numeric_value(value: object) -> Decimal | None:
+    """Return a number only when the producer supplied typed numeric data.
+
+    Constraint/category prose is intentionally not coerced into a number.  A
+    model may describe the same hazard as “易发生区” and “中易发生区”; that is
+    a variant requiring traceability, not a quantitative contradiction that
+    should send the whole L1 layer back to rework.
+    """
+    if isinstance(value, bool) or value is None:
+        return None
+    if isinstance(value, (int, float, Decimal)):
+        try:
+            return Decimal(str(value))
+        except (InvalidOperation, ValueError):
+            return None
+    if isinstance(value, str):
+        text = value.strip().replace(",", "")
+        if not text:
+            return None
+        try:
+            return Decimal(text)
+        except (InvalidOperation, ValueError):
+            return None
+    return None
 
 
 def merge_l1_snapshots(
@@ -184,10 +219,6 @@ def merge_l1_snapshots(
             dimension_provenance.append(partial.provenance)
         source_refs.extend(source.reference for source in partial.sources)
 
-    register_rows_by_dimension, register_diagnostics_by_dimension, input_register = _merge_register_rows(
-        snapshots
-    )
-
     snapshot = L1Snapshot(
         context_version="",
         artifact_id="",
@@ -214,34 +245,45 @@ def merge_l1_snapshots(
         },
         diagnostics_by_dimension=diagnostics_by_dimension,
         traces_by_dimension=traces_by_dimension,
-        register_rows_by_dimension=register_rows_by_dimension,
-        register_diagnostics_by_dimension=register_diagnostics_by_dimension,
-        input_register=input_register,
     )
     from app.evidence.retrieval.requirements import requirements_from_l1
 
     snapshot.evidence_requirements = list(requirements_from_l1(snapshot))
 
-    fact_keys: dict[str, list[str]] = {}
-    for f in snapshot.facts:
-        # Free-form model observations are independent facts, not variants of
-        # one field.  Only structured ``key: value`` facts participate in the
-        # contradiction check; otherwise 12 valid observations would trigger
-        # an L1 rework loop merely because they share the fallback label.
-        if "模型观察:" in f or "事实:" in f:
+    comparable: dict[tuple[str, str, str, str, str], list[L1Fact]] = {}
+    for fact in snapshot.fact_records:
+        if fact.value is None or not fact.semantic_type:
             continue
-        key = f.split(":")[0] if ":" in f else f
-        fact_keys.setdefault(key, []).append(f)
-    for key, variants in fact_keys.items():
-        unique = set(variants)
-        if len(unique) > 1:
+        comparable_identity = _fact_comparable_identity(fact)
+        key = (
+            fact.dimension_key,
+            fact.subject_scope,
+            comparable_identity,
+            fact.unit,
+            fact.counting_basis,
+        )
+        comparable.setdefault(key, []).append(fact)
+    for key, variants in comparable.items():
+        typed_values = {
+            _typed_numeric_value(fact.value)
+            for fact in variants
+        }
+        typed_values.discard(None)
+        if len(typed_values) > 1:
+            dimension, scope, semantic_type, unit, basis = key
             snapshot.issues.append(
                 StageIssue(
                     stage="l1",
                     severity="error",
                     code="fact_contradiction",
-                    message=f"维度事实冲突: {key}",
-                    detail="; ".join(sorted(unique)),
+                    message=(
+                        f"维度事实冲突: {dimension}/{scope}/{semantic_type}"
+                    ),
+                    detail="; ".join(
+                        f"{fact.fact_id}={fact.value}{unit}"
+                        f" (counting_basis={basis})"
+                        for fact in variants
+                    ),
                 )
             )
 
@@ -291,57 +333,8 @@ async def l1_aggregate(
     snapshot = merge_l1_snapshots(partial_snapshots, run_id=run_id)
     snapshot.context_version = context_version
 
-    # The source index is an L1-owned artifact produced before/alongside the
-    # dimension passes.  It preserves generic segments even when a particular
-    # dimension has not yet confirmed any current/demand row; semantic
-    # ownership remains visible in register_rows_by_dimension.
-    try:
-        from app.infrastructure.artifacts.runtime import load_artifact
-
-        source_index = load_artifact(state, "l1_source_index", L1InputRegister)
-        if source_index is not None:
-            confirmations = {
-                row.row_id: row
-                for rows in snapshot.register_rows_by_dimension.values()
-                for row in rows
-            }
-            indexed_rows = [
-                row.model_copy(update={
-                    "status": confirmations[row.row_id].status,
-                    "dimension_key": confirmations[row.row_id].dimension_key,
-                    "evidence_note": confirmations[row.row_id].evidence_note,
-                })
-                if row.row_id in confirmations
-                else row
-                for row in [*(source_index.current_assets or []), *(source_index.demands or [])]
-            ]
-            snapshot.input_register = source_index.model_copy(update={
-                "current_assets": [
-                    row for row in indexed_rows if row.ledger_kind == "current_asset"
-                ],
-                "demands": [
-                    row for row in indexed_rows if row.ledger_kind == "demand"
-                ],
-                "diagnostics": list(dict.fromkeys([
-                    *(source_index.diagnostics or []),
-                    *(snapshot.input_register.diagnostics if snapshot.input_register else []),
-                ])),
-            })
-            missing_rows = [row.row_id for row in indexed_rows if row.row_id not in confirmations]
-            if missing_rows:
-                snapshot.register_diagnostics_by_dimension.setdefault("__global__", []).append(
-                    f"source_rows_without_dimension_confirmation:{len(missing_rows)}"
-                )
-    except Exception as exc:  # source index is optional during migration/replay
-        logger.warning("[l1_aggregate] source index artifact unavailable: %s", type(exc).__name__)
-    # Aggregate consumes only materialized rows from L1 dimension instructions.
-    # It deliberately does not reopen or parse the raw session document.
-    if snapshot.input_register is None:
-        snapshot.register_diagnostics_by_dimension.setdefault(
-            "__global__", []
-        ).append("l1_dimension_register_missing")
     # Preserve the dimension that actually consumed each KG fact.  The
-    # flattened ``facts`` list remains backwards compatible, while L2 reads
+    # The flattened ``facts`` list is a display projection, while L2 reads
     # this scoped map to avoid feeding unrelated evidence into a dimension.
     try:
         from app.infrastructure.reports.step_report import get_session_step_reports
@@ -472,28 +465,6 @@ async def l1_aggregate(
                 "facts_produced": snapshot.facts,
                 "facts_by_dimension": snapshot.facts_by_dimension,
                 "location_facts": [fact.model_dump(mode="json") for fact in snapshot.location_facts],
-                "input_register": {
-                    "source_documents": list(
-                        getattr(snapshot.input_register, "source_documents", []) or []
-                    ),
-                    "source_digest": str(
-                        getattr(snapshot.input_register, "source_digest", "") or ""
-                    ),
-                    "current_asset_count": len(
-                        getattr(snapshot.input_register, "current_assets", []) or []
-                    ),
-                    "demand_count": len(
-                        getattr(snapshot.input_register, "demands", []) or []
-                    ),
-                    "diagnostics": list(
-                        getattr(snapshot.input_register, "diagnostics", []) or []
-                    ),
-                },
-                "register_rows_by_dimension": {
-                    key: [row.model_dump(mode="json") for row in rows]
-                    for key, rows in snapshot.register_rows_by_dimension.items()
-                },
-                "register_diagnostics_by_dimension": snapshot.register_diagnostics_by_dimension,
                 "kg_evidence_produced": {
                     "fact_count": kg_fact_count,
                     "fact_statements": kg_facts,

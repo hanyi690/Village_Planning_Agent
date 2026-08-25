@@ -260,11 +260,16 @@ def _append_spatial_requirement_inputs(
     target_id: str,
     requirements: Any,
     relation_context: str = "",
+    metadata_context: dict[str, Any] | None = None,
+    scope_context: tuple[str, ...] = (),
 ) -> None:
     spatial = _as_mapping(requirements)
     if not spatial:
         return
-    target_scope = (target_id,) if target_id else ()
+    target_scope = tuple(dict.fromkeys(
+        item for item in ((target_id,) if target_id else ()) + scope_context if item
+    ))
+    metadata_context = metadata_context or {}
     source_ref_values = _nonempty_strings(spatial.get("required_input_refs"))
     for ref in source_ref_values:
         _append_structured_requirement(
@@ -280,7 +285,7 @@ def _append_spatial_requirement_inputs(
             evidence_role="l3_required_input",
             success_condition="required input is source-bound and available in the current snapshot",
             source_artifact_refs=(ref,),
-            metadata={"target_id": target_id, "input_ref": ref},
+            metadata={**metadata_context, "target_id": target_id, "input_ref": ref},
         )
 
     ref_fields = (
@@ -308,7 +313,12 @@ def _append_spatial_requirement_inputs(
                     else "canonical network snapshot is available and fingerprinted"
                 ),
                 source_artifact_refs=(ref,),
-                metadata={"target_id": target_id, "ref": ref, "relation": relation_context},
+                metadata={
+                    **metadata_context,
+                    "target_id": target_id,
+                    "ref": ref,
+                    "relation": relation_context,
+                },
             )
 
     for grounding in _nonempty_strings(spatial.get("grounding_requirements")):
@@ -337,7 +347,11 @@ def _append_spatial_requirement_inputs(
             evidence_role=role,
             success_condition="typed grounding input is available or explicitly routed to HUMAN",
             source_artifact_refs=source_ref_values,
-            metadata={"target_id": target_id, "grounding_requirement": grounding},
+            metadata={
+                **metadata_context,
+                "target_id": target_id,
+                "grounding_requirement": grounding,
+            },
         )
 
     for relation in spatial.get("relations", []) or []:
@@ -369,7 +383,12 @@ def _append_spatial_requirement_inputs(
                 evidence_role="l3_relation_network",
                 success_condition="network snapshot and required endpoint/route inputs are bound",
                 source_artifact_refs=(network_ref,),
-                metadata={"target_id": target_id, "relation_id": relation_id, "template": template},
+                metadata={
+                    **metadata_context,
+                    "target_id": target_id,
+                    "relation_id": relation_id,
+                    "template": template,
+                },
             )
         if demand_ref:
             _append_structured_requirement(
@@ -385,7 +404,12 @@ def _append_spatial_requirement_inputs(
                 evidence_role="l3_relation_demand",
                 success_condition="demand points have identity, value, unit and source geometry",
                 source_artifact_refs=(demand_ref,),
-                metadata={"target_id": target_id, "relation_id": relation_id, "template": template},
+                metadata={
+                    **metadata_context,
+                    "target_id": target_id,
+                    "relation_id": relation_id,
+                    "template": template,
+                },
             )
         if template in {"part_of", "co_locate", "mutually_exclusive"}:
             _append_structured_requirement(
@@ -401,7 +425,12 @@ def _append_spatial_requirement_inputs(
                 evidence_role="l3_relation_topology",
                 success_condition="declared topology relation has source evidence and evaluable members",
                 source_artifact_refs=_nonempty_strings(relation_map.get("evidence_refs")),
-                metadata={"target_id": target_id, "relation_id": relation_id, "template": template},
+                metadata={
+                    **metadata_context,
+                    "target_id": target_id,
+                    "relation_id": relation_id,
+                    "template": template,
+                },
             )
         if (
             template in {"connect_network", "provide_access", "serve", "near"}
@@ -421,7 +450,12 @@ def _append_spatial_requirement_inputs(
                 evidence_role="l3_relation_network_missing",
                 success_condition="network reference and typed endpoint/service parameters are supplied or routed to HUMAN",
                 source_artifact_refs=_nonempty_strings(relation_map.get("evidence_refs")),
-                metadata={"target_id": target_id, "relation_id": relation_id, "template": template},
+                metadata={
+                    **metadata_context,
+                    "target_id": target_id,
+                    "relation_id": relation_id,
+                    "template": template,
+                },
             )
 
 
@@ -541,11 +575,33 @@ def requirements_from_l3(program: Any) -> tuple[EvidenceRequirement, ...]:
         )
         for claim_id in getattr(intervention, "claim_refs", None) or []
     }
+    pending_claim_ids = {
+        str(getattr(claim, "claim_id", "") or "")
+        for claim in getattr(program, "pending_grounding_claims", None) or []
+    }
+    missing_by_claim_id = {
+        str(getattr(item, "claim_id", "") or ""): tuple(
+            _nonempty_strings(getattr(item, "missing_requirements", None))
+        )
+        for item in getattr(program, "claim_dispositions", None) or []
+        if str(getattr(item, "status", "") or "") == "pending_grounding"
+    }
     for index, claim in enumerate(getattr(program, "claims", None) or []):
         statement = str(getattr(claim, "statement", "") or "").strip()
         if not statement:
             continue
-        spatial = str(getattr(claim, "claim_id", "") or "") in admitted_claim_ids
+        claim_id = str(getattr(claim, "claim_id", "") or "")
+        pending = claim_id in pending_claim_ids
+        spatial = claim_id in admitted_claim_ids or pending
+        missing_requirements = missing_by_claim_id.get(claim_id, ())
+        metadata = {"claim_id": claim_id}
+        if pending:
+            metadata.update(
+                {
+                    "pending_grounding": True,
+                    "missing_requirements": list(missing_requirements),
+                }
+            )
         output.append(
             _artifact_requirement(
                 stage="L3",
@@ -564,9 +620,71 @@ def requirements_from_l3(program: Any) -> tuple[EvidenceRequirement, ...]:
                     *list(getattr(claim, "source_fact_refs", None) or []),
                     *list(getattr(claim, "source_refs", None) or []),
                 ),
-                metadata={"claim_id": str(getattr(claim, "claim_id", "") or "")},
+                metadata=metadata,
             )
         )
+        if not pending:
+            continue
+        spatial_inputs = _as_mapping(getattr(claim, "spatial_requirements", None))
+        grounding = list(_nonempty_strings(spatial_inputs.get("grounding_requirements")))
+        for requirement in ("place_binding", "candidate_geometry"):
+            if requirement not in grounding:
+                grounding.append(requirement)
+        output_kind = str(getattr(claim, "suggested_output_kind", "") or "")
+        category = str(getattr(claim, "suggested_category", "") or "")
+        if output_kind in {"parcel", "polygon"} and "parcel_membership" not in grounding:
+            grounding.append("parcel_membership")
+        if (output_kind == "line" or category in {"road", "axis"}) and "network_snapshot" not in grounding:
+            grounding.append("network_snapshot")
+        relations = spatial_inputs.get("relations", []) or []
+        if any(
+            str(_as_mapping(relation).get("relation_template") or "")
+            in {"part_of", "co_locate", "mutually_exclusive"}
+            for relation in relations
+        ) and "topology" not in grounding:
+            grounding.append("topology")
+        spatial_inputs["grounding_requirements"] = grounding
+        _append_spatial_requirement_inputs(
+            output,
+            seen={(item.evidence_role, item.statement, tuple(item.scope)) for item in output},
+            artifact=program,
+            target_id=claim_id,
+            requirements=spatial_inputs,
+            relation_context="pending_grounding_claim",
+            metadata_context={
+                **metadata,
+                "place_hints": list(_nonempty_strings(getattr(claim, "location_hints", None))),
+                "relation_context": "pending_grounding_claim",
+            },
+            scope_context=_nonempty_strings(getattr(claim, "location_hints", None)),
+        )
+        source_metadata = {**metadata, "requirement_scope": "source_lineage"}
+        if "project_package_ref" in missing_requirements:
+            _append_structured_requirement(
+                output,
+                {(item.evidence_role, item.statement, tuple(item.scope)) for item in output},
+                artifact=program,
+                statement=f"Resolve project package identity for {claim_id}",
+                kind="source",
+                source_families=("artifact", "report", "bundle", "kg"),
+                scope=(claim_id,),
+                evidence_role="l3_pending_package_identity",
+                success_condition="project package identity is source-bound before intervention admission",
+                metadata={**source_metadata, "missing_requirement": "project_package_ref"},
+            )
+        if "evidence_or_source_lineage" in missing_requirements:
+            _append_structured_requirement(
+                output,
+                {(item.evidence_role, item.statement, tuple(item.scope)) for item in output},
+                artifact=program,
+                statement=f"Resolve evidence and source lineage for {claim_id}",
+                kind="source",
+                source_families=("artifact", "report", "bundle", "kg"),
+                scope=(claim_id,),
+                evidence_role="l3_pending_source_lineage",
+                success_condition="claim evidence is source-bound before intervention admission",
+                metadata={**source_metadata, "missing_requirement": "evidence_or_source_lineage"},
+            )
     # The authoritative spatial inputs are copied onto admitted interventions
     # by claim_adapter.  Compile them into source-routed requirements here so
     # RETRIEVE can resolve network, demand, parcel and topology inputs before
@@ -642,8 +760,14 @@ def requirements_from_target_projection(result: Any) -> tuple[EvidenceRequiremen
                 metadata={"target_id": target_id, "spec_id": str(getattr(spec, "spec_id", "") or "")},
             )
         )
+    pending_claim_ids = {
+        str(getattr(claim, "claim_id", "") or "")
+        for claim in getattr(result, "pending_grounding_claims", None) or []
+    }
     for claim in getattr(result, "claims", None) or []:
         claim_id = str(getattr(claim, "claim_id", "") or "").strip()
+        if claim_id in pending_claim_ids:
+            continue
         spatial_requirements = getattr(claim, "spatial_requirements", None)
         if spatial_requirements is None:
             continue
@@ -670,6 +794,12 @@ def requirements_from_target_projection(result: Any) -> tuple[EvidenceRequiremen
                 relation_context="target_intent_graph",
             )
         for relation in getattr(graph, "relations", None) or []:
+            if str(getattr(relation, "source", "") or "") == "pending_grounding_claim":
+                # Pending-claim relation inputs are owned by the L3 claim
+                # requirement set.  The same relation is present in the
+                # GROUND-facing graph so it can become a deferred factor, but
+                # it must not be reclassified as a TARGET_PROJECTION source.
+                continue
             subject = str(getattr(relation, "subject_ref", "") or "").strip()
             relation_payload = {
                 "relations": [
@@ -686,6 +816,54 @@ def requirements_from_target_projection(result: Any) -> tuple[EvidenceRequiremen
                 target_id=subject,
                 requirements=relation_payload,
                 relation_context="target_intent_graph",
+            )
+    task_graph = getattr(result, "planning_task_graph", None)
+    if task_graph is not None:
+        task_role_map = {
+            "evidence": "planning_task_evidence",
+            "candidate_producer": "planning_task_candidate_producer",
+            "solver_subproblem": "planning_task_solver_subproblem",
+            "validation": "planning_task_validation",
+        }
+        task_kind_map = {
+            "evidence": "spatial",
+            "candidate_producer": "spatial",
+            "solver_subproblem": "spatial",
+            "validation": "constraint",
+        }
+        for index, task in enumerate(getattr(task_graph, "tasks", None) or [], start=len(output)):
+            task_id = str(getattr(task, "task_id", "") or "").strip()
+            task_kind = str(getattr(task, "task_kind", "") or "").strip()
+            if not task_id or task_kind not in task_role_map:
+                continue
+            target_refs = _nonempty_strings(getattr(task, "target_refs", None))
+            relation_refs = _nonempty_strings(getattr(task, "relation_refs", None))
+            required_inputs = _nonempty_strings(getattr(task, "required_inputs", None))
+            statement = f"Execute typed planning task {task_id}"
+            if required_inputs:
+                statement += " with inputs " + ", ".join(required_inputs)
+            _append_structured_requirement(
+                output,
+                {(item.evidence_role, item.statement, tuple(item.scope)) for item in output},
+                stage="TARGET_PROJECTION",
+                artifact=result,
+                statement=statement,
+                kind=task_kind_map[task_kind],
+                source_families=("bundle", "artifact", "kg", "report"),
+                scope=(*target_refs, *relation_refs, task_id),
+                spatial_granularity="network" if "network" in str(getattr(task, "capability", "")) else "feature",
+                evidence_role=task_role_map[task_kind],
+                success_condition="typed task inputs are source-bound and the task output is available to the next planning stage",
+                source_artifact_refs=(str(getattr(task_graph, "fingerprint", "") or ""),),
+                metadata={
+                    "task_id": task_id,
+                    "task_kind": task_kind,
+                    "capability": str(getattr(task, "capability", "") or ""),
+                    "required_inputs": list(required_inputs),
+                    "produced_artifact_refs": list(getattr(task, "produced_artifact_refs", None) or []),
+                    "dependency_task_ids": list(getattr(task, "dependency_task_ids", None) or []),
+                    "planning_task_graph_fingerprint": str(getattr(task_graph, "fingerprint", "") or ""),
+                },
             )
     return _canonical_requirements(output)
 

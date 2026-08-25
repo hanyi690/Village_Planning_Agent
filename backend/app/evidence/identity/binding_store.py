@@ -11,7 +11,7 @@ from app.contracts.evidence.identity_contracts import (
     GroundedEntityBindingSnapshot,
     infer_geometry_granularity,
 )
-from app.contracts.artifacts.artifact_descriptor import ArtifactDescriptor
+from app.contracts.artifacts.ref import ArtifactRef as ArtifactDescriptor
 from app.infrastructure.artifacts.runtime import load_artifact, store_artifact
 from app.evidence.identity.observation_store import ObservationStore
 

@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from app.contracts.artifacts.artifact_descriptor import ArtifactDescriptor
+from app.contracts.artifacts.ref import ArtifactRef as ArtifactDescriptor
 from app.contracts.domain.l1_contracts import L1Snapshot
 from app.contracts.workflow.review_contracts import (
     ArtifactDescriptorProjection,
