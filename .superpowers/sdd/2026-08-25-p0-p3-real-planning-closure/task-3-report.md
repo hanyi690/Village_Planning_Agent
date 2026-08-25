@@ -114,3 +114,10 @@ Also did not modify unrelated user-owned worktree entries.
 
 - No legacy compatibility shim was added for implicit/older suitability behavior.
 - The fixture updates in `test_scenario_hard_relation_feasibility.py` and the facility refinement test keep the new explicit confidence contract authoritative instead of relying on deprecated implicit executability.
+
+## Fix Round 1
+
+- Finalized the scoped P0-C role-aware suitability diff without touching unrelated dirty files.
+- Added centralized typed role aliases, context-free role-aware hard-feasibility handling, policy provenance, and fail-closed parcel diagnostics/traces.
+- Bounded verification was started with `python -m pytest -c backend/pytest.ini -o addopts='' --maxfail=1 backend/tests/core/test_planning_subgeometry_service.py backend/tests/core/test_spatial_factors_overlap.py`; it stopped after one focused assertion failure in the newly added matrix test (`test_role_policy_matrix_classifies_spatial_factors`).
+- Fix Round 1 corrected the chained boolean assertion while preserving the `result.hard_feasible` assertion; the same bounded command then passed: `43 passed`.

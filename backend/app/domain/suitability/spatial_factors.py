@@ -3,29 +3,18 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Literal
+from typing import Any
 
 from shapely.geometry import mapping, shape
 from shapely import wkt
 from shapely.ops import transform, unary_union
 
-from app.contracts.domain.planning_semantics import MaterializationRole
-
-
-RolePolicyDisposition = Literal[
-    "site_hard_exclusion",
-    "overlay_constraint",
-    "advisory",
-]
-
-SuitabilityMaterializationRole = Literal[
-    "land_use_assignment",
-    "functional_overlay",
-    "protection_overlay",
-    "restoration_overlay",
-    "site_footprint",
-    "unknown",
-]
+from app.contracts.domain.planning_semantics import (
+    RolePolicyFactorKey,
+    RolePolicyDisposition,
+    RolePolicyKey,
+    SuitabilityMaterializationRole,
+)
 
 SPATIAL_ROLE_POLICY_VERSION = "materialization_role_policy_v1"
 MATERIALIZATION_ROLE_POLICY_UNAVAILABLE = "MATERIALIZATION_ROLE_POLICY_UNAVAILABLE"
@@ -55,9 +44,9 @@ _KNOWN_MATERIALIZATION_ROLES = frozenset(
 
 @dataclass(frozen=True)
 class MaterializationRolePolicy:
-    role: MaterializationRole
-    policy_key: str
-    factor_policies: dict[str, RolePolicyDisposition]
+    role: SuitabilityMaterializationRole
+    policy_key: RolePolicyKey
+    factor_policies: dict[RolePolicyFactorKey, RolePolicyDisposition]
 
     def classify(self, factor_code: str) -> RolePolicyDisposition:
         factor_key = _factor_policy_key(factor_code)
@@ -111,8 +100,10 @@ class ParcelSpatialFactors:
     bsm: str
     hard_feasible: bool
     materialization_role: SuitabilityMaterializationRole = "unknown"
-    policy_key: str = ""
-    materialization_role_policy: dict[str, str] = field(default_factory=dict)
+    policy_key: RolePolicyKey = ""
+    materialization_role_policy: dict[RolePolicyFactorKey, RolePolicyDisposition] = field(
+        default_factory=dict
+    )
     road_distance_m: float | None = None
     road_access_score: float | None = None
     facility_distance_m: float | None = None
@@ -408,13 +399,8 @@ class SpatialFactorIndex:
         if constraint_index is not None:
             from app.spatial.allocation.selection import _PROHIBITED_CONSTRAINTS
 
-            constraint_geometry = (
-                parcel_geometry
-                if geometry is not None
-                else getattr(parcel, "geometry", None)
-            )
             for overlap in constraint_index.geometry_in_constraint(
-                mapping(constraint_geometry)
+                mapping(parcel_geometry)
             ) or []:
                 code = str(getattr(overlap, "constraint_type", "") or "")
                 if code in _PROHIBITED_CONSTRAINTS:
@@ -504,10 +490,12 @@ class SpatialFactorIndex:
 
 __all__ = [
     "MATERIALIZATION_ROLE_POLICY_UNAVAILABLE",
+    "RolePolicyDisposition",
     "SPATIAL_ROLE_POLICY_VERSION",
     "MaterializationRolePolicy",
     "ParcelSpatialFactors",
     "SpatialFactorIndex",
+    "SuitabilityMaterializationRole",
     "normalize_materialization_role",
     "resolve_materialization_role_policy",
 ]

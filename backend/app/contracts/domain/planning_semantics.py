@@ -55,6 +55,39 @@ MaterializationRole: TypeAlias = Literal[
     "site_footprint",
 ]
 
+SuitabilityMaterializationRole: TypeAlias = Literal[
+    "land_use_assignment",
+    "functional_overlay",
+    "protection_overlay",
+    "restoration_overlay",
+    "site_footprint",
+    "unknown",
+]
+
+RolePolicyKey: TypeAlias = Literal[
+    "",
+    "materialization_role_policy_v1:land_use_assignment",
+    "materialization_role_policy_v1:functional_overlay",
+    "materialization_role_policy_v1:protection_overlay",
+    "materialization_role_policy_v1:restoration_overlay",
+    "materialization_role_policy_v1:site_footprint",
+]
+
+RolePolicyFactorKey: TypeAlias = Literal[
+    "farmland_overlap",
+    "ecological_overlap",
+    "hazard_buffer",
+    "prohibited_constraint_overlap",
+    "road_access",
+    "existing_facility_proximity",
+]
+
+RolePolicyDisposition: TypeAlias = Literal[
+    "site_hard_exclusion",
+    "overlay_constraint",
+    "advisory",
+]
+
 InterventionAction: TypeAlias = Literal[
     "preserve",
     "new",
@@ -175,6 +208,10 @@ __all__ = [
     "LinearAssetPlanningParameters",
     "MaterializationRole",
     "PolygonPlanningParameters",
+    "RolePolicyFactorKey",
+    "RolePolicyDisposition",
+    "RolePolicyKey",
     "SiteAreaPlanningParameters",
     "RoadPlanningParameters",
+    "SuitabilityMaterializationRole",
 ]

@@ -7,6 +7,12 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.contracts.artifacts.contract_meta import ContractMeta
+from app.contracts.domain.planning_semantics import (
+    RolePolicyFactorKey,
+    RolePolicyDisposition,
+    RolePolicyKey,
+    SuitabilityMaterializationRole,
+)
 
 
 class SuitabilityCandidate(BaseModel):
@@ -15,9 +21,11 @@ class SuitabilityCandidate(BaseModel):
     candidate_id: str
     target_id: str = ""
     source_parcels: list[str] = Field(default_factory=list)
-    materialization_role: str = "unknown"
-    role_policy_key: str = ""
-    materialization_role_policy: dict[str, str] = Field(default_factory=dict)
+    materialization_role: SuitabilityMaterializationRole = "unknown"
+    role_policy_key: RolePolicyKey = ""
+    materialization_role_policy: dict[RolePolicyFactorKey, RolePolicyDisposition] = Field(
+        default_factory=dict
+    )
     score: float = 0.0
     score_breakdown: dict[str, float] = Field(default_factory=dict)
     hard_feasible: bool = False

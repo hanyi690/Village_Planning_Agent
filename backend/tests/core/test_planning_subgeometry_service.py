@@ -484,6 +484,156 @@ def test_suitability_fails_closed_when_materialization_role_is_missing() -> None
     assert candidate.evaluation_trace[0]["result"] == "fail_closed"
 
 
+def test_context_free_overlay_applies_role_policy_to_structured_failure() -> None:
+    grounding = GroundingResult(
+        candidates=[
+            CandidateSite(
+                site_id="site:context-free-overlay",
+                target_ref="T-CONTEXT-FREE-OVERLAY",
+                source_parcels=["P-CONTEXT-FREE-OVERLAY"],
+                metrics={
+                    "hard_constraint_factors": [
+                        {
+                            "factor_code": "FARMLAND_PROTECTION_OVERLAP",
+                            "triggered": True,
+                        }
+                    ]
+                },
+                hard_constraint_result=HardConstraintResult(
+                    passed=False,
+                    violation_detail="farmland protection overlap",
+                ),
+            )
+        ]
+    )
+    intent = SimpleNamespace(
+        site_area_targets=[
+            SimpleNamespace(
+                target_id="T-CONTEXT-FREE-OVERLAY",
+                materialization_role="functional_overlay",
+            )
+        ],
+        zone_targets=[],
+    )
+
+    surface = build_suitability_surface(grounding, plan_intent=intent)
+    candidate = surface.candidates[0]
+
+    assert candidate.materialization_role == "functional_overlay"
+    assert candidate.hard_feasible is True
+    assert "FARMLAND_PROTECTION_OVERLAP" not in candidate.exclusion_reasons
+    factor = next(
+        item
+        for item in candidate.hard_constraint_factors
+        if item["factor_code"] == "FARMLAND_PROTECTION_OVERLAP"
+    )
+    assert factor["policy"] == "overlay_constraint"
+    assert factor["hard_exclusion"] is False
+    assert surface.provenance == {
+        "materialization_role_policy_version": "materialization_role_policy_v1",
+        "evaluated_materialization_roles": ["functional_overlay"],
+    }
+
+
+def test_context_free_overlay_without_role_aware_factors_is_deferred() -> None:
+    grounding = GroundingResult(
+        candidates=[
+            CandidateSite(
+                site_id="site:context-free-deferred",
+                target_ref="T-CONTEXT-FREE-DEFERRED",
+                source_parcels=["P-CONTEXT-FREE-DEFERRED"],
+                hard_constraint_result=HardConstraintResult(
+                    passed=False,
+                    violation_detail="prohibited constraint overlap",
+                ),
+            )
+        ]
+    )
+    intent = SimpleNamespace(
+        site_area_targets=[
+            SimpleNamespace(
+                target_id="T-CONTEXT-FREE-DEFERRED",
+                materialization_role="restoration_overlay",
+            )
+        ],
+        zone_targets=[],
+    )
+
+    candidate = build_suitability_surface(
+        grounding, plan_intent=intent
+    ).candidates[0]
+
+    assert candidate.hard_feasible is False
+    assert "HARD_CONSTRAINT_EVALUATION_DEFERRED" in candidate.exclusion_reasons
+    assert "hard_constraints_not_proven" not in candidate.exclusion_reasons
+    deferred = next(
+        item
+        for item in candidate.hard_constraint_factors
+        if item["factor_code"] == "HARD_CONSTRAINT_EVALUATION_DEFERRED"
+    )
+    assert deferred["policy"] == "overlay_constraint"
+    assert deferred["hard_exclusion"] is False
+    assert candidate.evaluation_trace[-1]["result"] == "deferred"
+
+
+def test_context_backed_missing_parcel_keeps_role_failure_separate() -> None:
+    source = box(0.0, 0.0, 20.0, 20.0)
+
+    class Context:
+        workspace = SimpleNamespace(
+            metadata=SimpleNamespace(crs="EPSG:3857"),
+            lines={"roads_current": []},
+            points={"facilities_current": [], "hazard_points": []},
+            polygons={"farmland_protection": [], "ecological_redline": []},
+            tables=SimpleNamespace(population=None),
+            rasters={},
+        )
+        constraint_index = None
+
+        def current_parcels(self):
+            return []
+
+    grounding = GroundingResult(
+        candidates=[
+            CandidateSite(
+                site_id="site:missing-parcel",
+                target_ref="T-MISSING-PARCEL",
+                source_parcels=["P-MISSING-PARCEL"],
+                available_geometry_wkt=source.wkt,
+                hard_constraint_result=HardConstraintResult(passed=True),
+            )
+        ]
+    )
+    intent = SimpleNamespace(
+        site_area_targets=[
+            SimpleNamespace(
+                target_id="T-MISSING-PARCEL",
+                materialization_role="unknown_future_overlay",
+                expected_output_kind="polygon",
+            )
+        ],
+        zone_targets=[],
+    )
+
+    candidate = build_suitability_surface(
+        grounding, Context(), plan_intent=intent
+    ).candidates[0]
+
+    assert candidate.materialization_role == "unknown"
+    assert candidate.role_policy_key == ""
+    assert candidate.hard_feasible is False
+    assert "MATERIALIZATION_ROLE_POLICY_UNAVAILABLE" in candidate.exclusion_reasons
+    assert "CANDIDATE_SOURCE_PARCEL_NOT_FOUND:P-MISSING-PARCEL" in (
+        candidate.exclusion_reasons
+    )
+    assert any(
+        factor["factor_code"] == "MATERIALIZATION_ROLE_POLICY_UNAVAILABLE"
+        for factor in candidate.hard_constraint_factors
+    )
+    assert candidate.evaluation_trace[0]["result"] == "fail_closed"
+    assert candidate.evaluation_trace[-1]["result"] == "missing"
+
+
 def test_refinement_materializes_facility_parcel_as_executable_point() -> None:
     parcel = box(116.0, 23.0, 116.001, 23.001)
     problem = GroundedPlanningProblem(
