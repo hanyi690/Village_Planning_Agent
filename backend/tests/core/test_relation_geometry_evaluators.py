@@ -10,6 +10,7 @@ from app.contracts.planning.relation_parameters import (
 )
 from app.contracts.planning.scenario import ScenarioFeature
 from app.domain.relations.service import RelationEvaluationContext, evaluate_relations
+from app.spatial.network.network_graph import build_network_graph
 
 
 def _feature(feature_id: str, target_id: str, geometry_wkt: str, crs: str = "EPSG:3857"):
@@ -149,14 +150,6 @@ def test_connect_and_access_via_fail_closed_without_network_artifacts() -> None:
     assert [item.status for item in results] == ["not_evaluable", "not_evaluable"]
 
 
-class _Network:
-    def is_connected(self, subject, object_):
-        return True
-
-    def travel_time_min(self, subject, object_):
-        return 10
-
-
 def test_connect_and_access_via_use_network_measurements() -> None:
     features = [_feature("a", "a", "POINT (0 0)"), _feature("b", "b", "POINT (1 1)")]
     connect = ConstraintFactor(
@@ -172,11 +165,19 @@ def test_connect_and_access_via_use_network_measurements() -> None:
         ), hard=True,
     )
 
+    network = build_network_graph(
+        [{"geometry": {"type": "LineString", "coordinates": [[0, 0], [1, 1]]}, "crs": "EPSG:3857"}],
+        impedance="travel_time_min",
+        network_ref="network:road",
+        source_crs="EPSG:3857",
+        metric_crs="EPSG:3857",
+        snap_tolerance_m=0.1,
+    )
     results = evaluate_relations(
         [connect, access],
         features,
         RelationEvaluationContext(
-            scenario_id="scenario-1", networks={"network:road": _Network()}
+            scenario_id="scenario-1", networks={"network:road": network}
         ),
     )
 

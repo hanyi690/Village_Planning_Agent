@@ -874,7 +874,9 @@ async def _llm_reason_candidate(
     )
     prompt = (
         f"地名「{mention}」（类型 {role}）位于「{hints or '未知'}」。以下是从 KG/EvidenceGraph 召回"
-        f"的候选实体，请选择最匹配的一个（只输出编号；都不可用时输出 0）：\n{lines}"
+        f"的候选实体，请选择最匹配的一个。只返回 JSON 对象 "
+        f"{{\"candidate_index\": N}}；N 只能是 1..{len(candidates)} 中的候选序号，"
+        f"所有候选都不可靠时返回 0。不要返回候选名称、BSM、坐标、几何或其他字段。\n{lines}"
     )
     try:
         import asyncio

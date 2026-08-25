@@ -97,9 +97,11 @@ _VOCAB_PROMPT = """你是村庄规划功能区词汇提取助手。从下列 L3 
 {{"categories": [{{"name_zh": "林下开发区", "color": "#c9d67a", "dlbm_hints": ["1340", "1350"], "is_protection": false,
   "rules": [{{"kind": "dlbm_in", "value": ["1340", "1350"]}},
            {{"kind": "not_within_zone", "value": "in_ecological_redline"}},
-           {{"kind": "road_distance_lt", "value": 500}}],
-  "evidence": "报告原文依据句"}}]}}
+           {{"kind": "road_distance_lt", "value": 500}}]
+  }}]}}
 要求：
+- category 对象只能包含 name_zh、color、dlbm_hints、is_protection、rules；不要输出 evidence 或其他字段
+- rule 对象只能包含 kind、value、children；kind 必须来自下列谓词白名单
 - color 必须是合法的 hex 格式（#RRGGBB），由你自由选择
 - dlbm_hints 仅可作为 rules 中显式 dlbm_in 的候选值；它不是规划分类，也不能单独产生分类结果
 - is_protection: 生态/保护/农田类功能区为 true（与三线重合），建设/产业类为 false

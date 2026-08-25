@@ -286,14 +286,30 @@ def build_solver_readiness(
             relation_reasons.append(_reason(
                 f"relation_readiness:{reason}",
                 f"relation {factor.factor_id} readiness is {reason}",
-                severity="hard" if factor.hard else "advisory",
+                severity=(
+                    "hard"
+                    if factor.hard
+                    and readiness.evaluation_readiness != "pending_selection"
+                    else "advisory"
+                ),
+                ref=f"relation:{factor.factor_id}",
+                source_refs=set(readiness.evidence_refs) | set(readiness.source_snapshot_refs),
+            ))
+        if readiness.evaluation_readiness == "pending_selection":
+            relation_reasons.append(_reason(
+                "relation_pending_selection",
+                f"relation {factor.factor_id} awaits scenario candidate selection",
+                severity="advisory",
                 ref=f"relation:{factor.factor_id}",
                 source_refs=set(readiness.evidence_refs) | set(readiness.source_snapshot_refs),
             ))
         satisfaction = satisfaction_by_factor.get(_clean(factor.factor_id))
-        if factor.hard and satisfaction is not None and satisfaction.status in {
-            "pending", "deferred", "not_evaluable", "unknown",
-        }:
+        if (
+            factor.hard
+            and satisfaction is not None
+            and satisfaction.status in {"not_evaluable", "deferred"}
+            and readiness.evaluation_readiness != "pending_selection"
+        ):
             relation_reasons.append(_reason(
                 f"relation_satisfaction:{satisfaction.status}",
                 f"hard relation {factor.factor_id} is {satisfaction.status}",
@@ -301,7 +317,12 @@ def build_solver_readiness(
                 ref=f"relation:{factor.factor_id}",
                 source_refs=set(satisfaction.evidence_refs),
             ))
-        if factor.hard and factor.status in {"pending", "deferred", "not_evaluable"} and satisfaction is None:
+        if (
+            factor.hard
+            and factor.status in {"deferred", "not_evaluable"}
+            and satisfaction is None
+            and readiness.evaluation_readiness != "pending_selection"
+        ):
             relation_reasons.append(_reason(
                 f"relation_factor:{factor.status}",
                 f"hard relation factor {factor.factor_id} is {factor.status}",

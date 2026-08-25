@@ -249,8 +249,12 @@ def test_coverage_relation_backend_requires_typed_demand_snapshot():
             crs="EPSG:3857",
             demand_value=50,
             demand_unit="person",
-            facility_types=("clinic",),
-        )],
+                facility_types=("clinic",),
+            )],
+        source_refs=["source:demand:village"],
+        source_binding="binding:demand:village",
+        version="v1",
+        declared_total_demand=50,
     )
     context = RelationEvaluationContext(
         scenario_id="coverage-positive",
@@ -1096,6 +1100,9 @@ def _shared_parcel_problem(*, planning_area_ha: float) -> GroundedPlanningProble
             source_ref=f"parcel:P-SHARED:{index}",
             evidence_refs=[f"evidence:parcel:{index}"],
             hard_constraint_status="passed",
+            schema_status="valid",
+            identity_confidence=1.0,
+            geometry_confidence=1.0,
             suitability_components={"suitability": 0.8 - index * 0.1},
         ))
         domains.append(GroundedCandidateDomain(
@@ -1273,6 +1280,9 @@ def test_resource_pool_ignores_coarse_unknown_when_exact_bsm_member_is_proven():
         planning_area_ha=0.2,
         availability_status="fully_available",
         eligible_area_ha=1.0,
+        schema_status="valid",
+        identity_confidence=1.0,
+        geometry_confidence=1.0,
         hard_constraint_status="passed",
     )
     coarse = exact.model_copy(update={

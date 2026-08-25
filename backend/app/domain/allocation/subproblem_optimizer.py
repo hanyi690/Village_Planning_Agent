@@ -642,6 +642,17 @@ def optimize_solver_subproblems(
             max_scenarios=max_scenarios,
         )
     topology = [item for item in plan.subproblems if item.problem_kind == "topology_layout"]
+    if topology:
+        return optimize_scenarios(
+            problem,
+            set_id=set_id,
+            evaluator_context=evaluator_context,
+            baseline_ref=baseline_ref or problem.baseline_ref,
+            max_scenarios=max_scenarios,
+            search_limit=search_limit,
+            deterministic_seed=deterministic_seed,
+            objective_definitions=definitions,
+        )
     blocked = [
         item
         for item in plan.subproblems

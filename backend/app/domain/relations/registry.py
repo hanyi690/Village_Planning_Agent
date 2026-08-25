@@ -54,17 +54,26 @@ def build_default_relation_registry() -> RelationEvaluatorRegistry:
         "contains",
         "within",
         "within_allowed_area",
+        "located_in",
+        "part_of",
         "avoid",
         "avoid_constraint",
         "adjacent",
+        "adjacency",
+        "adjacent_to",
         "intersects",
         "overlaps",
+        "mutually_exclusive",
+        "topology_layout",
         "co_locate",
     ):
         registry.register_alias(key, geometry)
     registry.register_alias("connect_network", connect)
     registry.register_alias("provide_access", access_via)
     registry.register_alias("serve", serve)
+    registry.register_alias("service", serve)
+    registry.register_alias("service_coverage", serve)
+    registry.register_alias("coverage", serve)
     return registry
 
 

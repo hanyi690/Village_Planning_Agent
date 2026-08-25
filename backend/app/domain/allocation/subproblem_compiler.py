@@ -16,7 +16,9 @@ from app.contracts.planning.solver import (
     SolverSubproblem,
     SolverSubproblemPlan,
 )
+from app.contracts.planning.p1_closure import build_relation_readiness
 from app.contracts.spatial.grounded_problem import GroundedPlanningProblem
+from app.domain.relations.registry import build_default_relation_registry
 
 
 _NETWORK_KINDS = frozenset({"connect_network", "provide_access"})
@@ -125,19 +127,26 @@ def _relation_input_gaps(
             if _clean(factor_id) in factor_ids:
                 satisfaction_by_factor[_clean(factor_id)] = satisfaction
     gaps: list[str] = []
+    relation_registry = build_default_relation_registry()
     for factor in factors:
         factor_id = _clean(getattr(factor, "factor_id", ""))
         if not factor_id or not bool(getattr(factor, "hard", False)):
             continue
         satisfaction = satisfaction_by_factor.get(factor_id)
-        if satisfaction is not None:
-            status = _clean(getattr(satisfaction, "status", "unknown")) or "unknown"
-            if status in {"pending", "deferred", "not_evaluable", "unknown"}:
-                gaps.append(f"missing:relation_satisfaction:{factor_id}:{status}")
-            continue
-        factor_status = _clean(getattr(factor, "status", "unknown")) or "unknown"
-        if factor_status in {"deferred", "not_evaluable"}:
-            gaps.append(f"missing:relation_factor:{factor_id}:{factor_status}")
+        evaluator_key = _clean(getattr(factor, "evaluator_key", "") or getattr(factor, "kind", ""))
+        evaluator_available = evaluator_key == "precedes" or relation_registry.get(evaluator_key) is not None
+        readiness = build_relation_readiness(
+            factor,
+            satisfaction,
+            evaluator_available=evaluator_available,
+        )
+        if readiness.evaluation_readiness not in {"ready", "pending_selection"}:
+            gaps.append(
+                f"missing:relation_readiness:{factor_id}:"
+                f"{readiness.evaluation_readiness}"
+            )
+        elif readiness.status == "blocked":
+            gaps.append(f"missing:relation_readiness:{factor_id}:blocked")
     return sorted(set(gaps))
 
 
@@ -448,6 +457,18 @@ def _compile_topology_subproblem(
     ]
     if any(target_subproblems[target_id].status != "ready" for target_id in endpoints if target_id in target_subproblems):
         missing.append("blocked:dependent_target_subproblem")
+    if _clean(getattr(factor, "semantic_status", "valid")) != "valid":
+        missing.append(
+            f"missing:relation_semantic_status:{factor_id or 'unknown'}:"
+            f"{_clean(getattr(factor, 'semantic_status', 'unknown')) or 'unknown'}"
+        )
+    if _clean(getattr(factor, "input_status", "ready")) != "ready":
+        missing.append(
+            f"missing:relation_input_status:{factor_id or 'unknown'}:"
+            f"{_clean(getattr(factor, 'input_status', 'unknown')) or 'unknown'}"
+        )
+    if getattr(factor, "solver_supported", None) is False:
+        missing.append(f"missing:topology_solver_support:{factor_id or 'unknown'}")
     required = [factor_id]
     required.extend(
         _clean(ref)
@@ -456,16 +477,25 @@ def _compile_topology_subproblem(
     )
     required.extend(_factor_network_refs([factor]))
     missing = sorted(set(missing))
+    candidate_ids_by_target = {
+        target_id: tuple(
+            getattr(target_subproblems[target_id], "candidate_ids_by_target", {})
+            .get(target_id, ())
+        )
+        for target_id in endpoints
+        if target_id in target_subproblems
+    }
     return SolverSubproblem(
         subproblem_id=f"relation:{factor_id or 'unknown'}",
         target_refs=endpoints,
         relation_refs=(factor_id,) if factor_id else (),
         problem_kind="topology_layout",
+        candidate_ids_by_target=candidate_ids_by_target,
         dependency_subproblem_ids=dependencies,
         required_input_refs=[*required, *missing],
         status="blocked" if missing else "ready",
         diagnostics=[
-            "topology_relation_requires_relation_backend",
+            "topology_relation_typed_backend",
             *[f"missing_input:{ref}" for ref in missing],
         ],
     )
@@ -654,7 +684,7 @@ def compile_solver_subproblems(
     diagnostics.extend(project_diagnostics)
     diagnostics.extend(coordination_diagnostics)
     if relation_subproblems:
-        diagnostics.append("topology_subproblems_require_explicit_backend")
+        diagnostics.append("topology_subproblems_use_typed_backend")
     if not target_subproblems:
         diagnostics.append("no_target_level_solver_subproblems")
     readiness_status = str(getattr(readiness, "status", "unverified") or "unverified")

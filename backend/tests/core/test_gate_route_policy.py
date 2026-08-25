@@ -49,6 +49,7 @@ def test_target_projection_policy(monkeypatch) -> None:
         "PASS": "ground",
         "REPAIR": "target_projection",
         "REVISE": "target_projection",
+        "L3": "target_projection",
         "HUMAN": "human_review",
         "EXPLORE": "human_review",
         GATE_LOAD_FAILED: END_DIAGNOSTIC,
@@ -155,6 +156,10 @@ def test_gate_retry_budget_exhaustion_fails_closed(monkeypatch) -> None:
     assert route_after_ground(exhausted) == END_DIAGNOSTIC
     _patch_gate_route(monkeypatch, "RETRY_EXECUTE")
     assert route_after_validate({**_base_state(), "retry_counts": {"validate": 3}}) == END_DIAGNOSTIC
+    _patch_gate_route(monkeypatch, "L3")
+    assert route_after_target_projection(
+        {**_base_state(), "retry_counts": {"target_projection": 3}}
+    ) == END_DIAGNOSTIC
 
 
 # ── A2: HITL resume router ───────────────────────────────────────────

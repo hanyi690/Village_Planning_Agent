@@ -149,6 +149,8 @@ class GeometryRelationEvaluator:
             )
 
         key = factor.evaluator_key or factor.kind
+        if key == "topology_layout":
+            key = factor.kind
         left_crs = _feature_crs(subject)
         right_crs = _feature_crs(object_)
         if not left_crs or not right_crs:
@@ -165,7 +167,7 @@ class GeometryRelationEvaluator:
             )
         if key in {"near", "far", "co_locate"}:
             return self._distance(key, factor, subject, object_, left, right, base, context)
-        if key in {"contain", "contains", "within_allowed_area"}:
+        if key in {"contain", "contains", "within_allowed_area", "located_in"}:
             return self._boolean(
                 factor,
                 left.contains(right),
@@ -174,7 +176,7 @@ class GeometryRelationEvaluator:
                 value=left.contains(right),
                 operator="contains",
             )
-        if key == "within":
+        if key in {"within", "part_of"}:
             return self._boolean(factor, left.within(right), base, "within", value=left.within(right), operator="eq")
         if key == "intersects":
             return self._boolean(factor, left.intersects(right), base, "intersects", value=left.intersects(right), operator="eq")
@@ -227,13 +229,22 @@ class GeometryRelationEvaluator:
                 value=left.disjoint(right),
                 operator="eq",
             )
-        if key in {"adjacent"}:
+        if key in {"adjacent", "adjacency", "adjacent_to"}:
             return self._boolean(
                 factor,
                 left.touches(right),
                 base,
                 "touches",
                 value=left.touches(right),
+                operator="eq",
+            )
+        if key in {"mutually_exclusive", "disjoint"}:
+            return self._boolean(
+                factor,
+                left.disjoint(right),
+                base,
+                "disjoint",
+                value=left.disjoint(right),
                 operator="eq",
             )
         return RelationSatisfaction(

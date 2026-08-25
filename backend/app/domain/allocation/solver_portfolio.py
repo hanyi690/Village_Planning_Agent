@@ -21,7 +21,9 @@ from app.contracts.planning.solver import (
     backend_input_digest,
 )
 from app.contracts.spatial.grounded_problem import GroundedPlanningProblem
+from app.contracts.planning.p1_closure import build_relation_readiness
 from app.domain.relations.service import RelationEvaluationContext
+from app.domain.relations.registry import build_default_relation_registry
 from app.domain.common.solver_kind import (
     collect_network_refs,
     infer_problem_solver_kind,
@@ -171,16 +173,40 @@ def build_solver_problem_view(
         required_refs.extend(target.evidence_refs)
 
     missing_input_refs = list(missing_input_refs)
+    relation_registry = build_default_relation_registry()
+    satisfaction_by_factor: dict[str, object] = {}
     for satisfaction in list(getattr(problem, "relation_satisfaction", None) or []):
-        status = str(getattr(satisfaction, "status", "unknown") or "unknown").strip()
-        criticality = str(getattr(satisfaction, "criticality", "soft") or "soft").strip()
-        relation_id = str(getattr(satisfaction, "relation_id", "") or "").strip()
-        if (
-            criticality == "hard"
-            and status in {"pending", "deferred", "not_evaluable", "unknown"}
-        ):
+        for relation_ref in [
+            *list(getattr(satisfaction, "factor_ids", None) or []),
+            str(getattr(satisfaction, "relation_id", "") or ""),
+        ]:
+            if str(relation_ref).strip():
+                satisfaction_by_factor[str(relation_ref).strip()] = satisfaction
+    for factor in list(getattr(problem, "constraint_factors", None) or []):
+        if not bool(getattr(factor, "hard", False)):
+            continue
+        factor_id = str(getattr(factor, "factor_id", "") or "").strip()
+        evaluator_key = str(
+            getattr(factor, "evaluator_key", "")
+            or getattr(factor, "kind", "")
+            or ""
+        ).strip()
+        readiness = build_relation_readiness(
+            factor,
+            satisfaction_by_factor.get(factor_id),
+            evaluator_available=(
+                evaluator_key == "precedes"
+                or relation_registry.get(evaluator_key) is not None
+            ),
+        )
+        if readiness.evaluation_readiness not in {"ready", "pending_selection"}:
             missing_input_refs.append(
-                f"missing:relation_satisfaction:{relation_id or 'unknown'}:{status}"
+                f"missing:relation_readiness:{factor_id or 'unknown'}:"
+                f"{readiness.evaluation_readiness}"
+            )
+        elif readiness.status == "blocked":
+            missing_input_refs.append(
+                f"missing:relation_readiness:{factor_id or 'unknown'}:blocked"
             )
     if kind in {"coverage", "network_path"}:
         context_networks = getattr(evaluator_context, "networks", None) or {}
@@ -428,6 +454,99 @@ class NetworkRelationBackend:
         )
 
 
+class TopologyLayoutBackend:
+    """Deterministic backend for typed topology relation constraints."""
+
+    backend_id = "topology_layout_bounded"
+    backend_version = "1.0"
+    supported_kinds = frozenset({"topology_layout"})
+
+    def supports(
+        self,
+        problem: GroundedPlanningProblem,
+        view: SolverProblemView,
+    ) -> BackendSupport:
+        reasons: list[str] = []
+        if view.problem_kind not in self.supported_kinds:
+            reasons.append("UNSUPPORTED_SOLVER_KIND")
+        if not view.input_complete:
+            reasons.append("SOLVER_INPUT_INCOMPLETE")
+        if not problem.can_solve:
+            reasons.append("GROUNDING_INCOMPLETE")
+        return BackendSupport(
+            supported=not reasons,
+            reason_codes=reasons,
+            required_input_refs=[*view.required_input_refs, *view.missing_input_refs],
+            input_complete=problem.can_solve and view.input_complete,
+        )
+
+    def solve(
+        self,
+        problem: GroundedPlanningProblem,
+        view: SolverProblemView,
+        *,
+        config: SolverConfig,
+        evaluator_context: RelationEvaluationContext | None = None,
+        set_id: str = "",
+        baseline_ref: str = "",
+    ) -> BackendResult:
+        support = self.supports(problem, view)
+        if not support.supported:
+            raise ValueError("backend is not supported: " + ", ".join(support.reason_codes))
+        from .scenario_optimizer import _optimize_scenarios_enumeration
+
+        effective_config = config.model_copy(update={"backend_version": self.backend_version})
+        effective_set_id = set_id or f"solver:{problem.fingerprint[:12]}"
+        input_digest = backend_input_digest(view, effective_config)
+        scenario_set = _optimize_scenarios_enumeration(
+            problem,
+            set_id=effective_set_id,
+            evaluator_context=evaluator_context or RelationEvaluationContext(scenario_id=effective_set_id),
+            baseline_ref=baseline_ref,
+            max_scenarios=effective_config.max_scenarios,
+            search_limit=effective_config.search_limit,
+            deterministic_seed=effective_config.deterministic_seed,
+            objective_definitions=effective_config.objective_definitions or None,
+            backend_route={
+                "backend_id": self.backend_id,
+                "backend_version": self.backend_version,
+                "problem_kind": view.problem_kind,
+                "input_digest": input_digest,
+                "required_input_refs": list(view.required_input_refs),
+                "deterministic_settings": {
+                    "deterministic_seed": effective_config.deterministic_seed,
+                    "search_limit": effective_config.search_limit,
+                    "max_scenarios": effective_config.max_scenarios,
+                    **effective_config.replay_settings,
+                },
+                "solver_config": effective_config.model_dump(mode="json"),
+            },
+        )
+        certificate = scenario_set.solver_certificate.backend_certificate
+        if certificate is None:
+            raise ValueError("topology backend produced no typed backend certificate")
+        recommended = scenario_set.recommended
+        selected = (
+            {
+                item.target_id: list(item.candidate_ids)
+                for item in recommended.target_selections
+            }
+            if recommended is not None
+            else {}
+        )
+        return BackendResult(
+            problem_kind=view.problem_kind,
+            selected_candidate_ids=selected,
+            route_refs=list(certificate.route_refs),
+            objective_vectors=scenario_set.objective_vectors,
+            scenarios=scenario_set.scenarios,
+            findings=[finding for scenario in scenario_set.scenarios for finding in scenario.findings],
+            infeasibility_explanations=scenario_set.infeasibility_explanations,
+            certificate=certificate,
+            scenario_set=scenario_set,
+        )
+
+
 class SolverBackendRegistry:
     """Ordered registry with explicit fail-closed resolution."""
 
@@ -496,6 +615,7 @@ def default_solver_registry() -> SolverBackendRegistry:
     return SolverBackendRegistry([
         ParcelAssignmentBackend(),
         NetworkRelationBackend(),
+        TopologyLayoutBackend(),
         DeterministicChoiceBackend(),
     ])
 
@@ -504,6 +624,7 @@ __all__ = [
     "BackendResolution",
     "DeterministicChoiceBackend",
     "NetworkRelationBackend",
+    "TopologyLayoutBackend",
     "ParcelAssignmentBackend",
     "SolverBackend",
     "SolverBackendRegistry",

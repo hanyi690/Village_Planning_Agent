@@ -100,6 +100,10 @@ class NetworkGraphSnapshot:
     nodes: tuple[NetworkNode, ...]
     edges: tuple[NetworkEdge, ...]
     fingerprint: str
+    source_binding: str
+    version: str
+    digest: str
+    source_refs: tuple[str, ...]
     _graph: Any = field(repr=False, compare=False, default=None)
     _node_points: Mapping[str, Point] = field(repr=False, compare=False, default_factory=dict)
 
@@ -186,6 +190,9 @@ def build_network_graph(
     metric_crs: str = "EPSG:3857",
     snap_tolerance_m: float = 5.0,
     default_speed_kmh: float = 30.0,
+    source_binding: str = "",
+    version: str = "",
+    source_refs: Sequence[str] = (),
 ) -> NetworkGraphSnapshot:
     """Build a reproducible graph from line features.
 
@@ -295,6 +302,13 @@ def build_network_graph(
         "edges": [edge.__dict__ for edge in edges],
     }
     fingerprint = hashlib.sha256(json.dumps(payload, sort_keys=True).encode("utf-8")).hexdigest()
+    effective_source_binding = str(source_binding or network_ref).strip()
+    effective_version = str(version or "network-graph-v1").strip()
+    effective_source_refs = tuple(sorted({
+        str(item).strip()
+        for item in (source_refs or (network_ref,))
+        if str(item).strip()
+    }))
     return NetworkGraphSnapshot(
         network_ref=network_ref,
         impedance=impedance,
@@ -305,6 +319,10 @@ def build_network_graph(
         nodes=nodes,
         edges=tuple(edges),
         fingerprint=fingerprint,
+        source_binding=effective_source_binding,
+        version=effective_version,
+        digest=f"sha256:{fingerprint}",
+        source_refs=effective_source_refs,
         _graph=graph,
         _node_points=node_points,
     )

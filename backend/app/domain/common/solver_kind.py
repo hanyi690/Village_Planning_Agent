@@ -15,7 +15,30 @@ _NETWORK_EVALUATORS = frozenset({
 })
 _COVERAGE_KINDS = frozenset({"serve"})
 _COVERAGE_EVALUATORS = frozenset({"serve", "service", "service_coverage", "coverage"})
-_TOPOLOGY_KINDS = frozenset({"mutually_exclusive", "co_locate", "part_of"})
+_TOPOLOGY_KINDS = frozenset({
+    "adjacent_to",
+    "contains",
+    "co_locate",
+    "intersects",
+    "located_in",
+    "mutually_exclusive",
+    "overlaps",
+    "part_of",
+})
+_TOPOLOGY_EVALUATORS = frozenset({
+    "adjacency",
+    "adjacent",
+    "adjacent_to",
+    "co_locate",
+    "contains",
+    "intersects",
+    "located_in",
+    "mutually_exclusive",
+    "overlaps",
+    "part_of",
+    "topology",
+    "topology_layout",
+})
 _SPECIALIZED_KINDS = frozenset({
     "coverage",
     "parcel_assignment",
@@ -43,7 +66,9 @@ def _relation_facts(items: list[Any]) -> tuple[set[str], set[str], set[str], boo
         evaluators.add(evaluator)
         parameter_types.add(parameter_type)
         topology_scope = topology_scope or (
-            scope == "global" and kind in _TOPOLOGY_KINDS
+            kind in _TOPOLOGY_KINDS
+            or evaluator in _TOPOLOGY_EVALUATORS
+            or (scope == "global" and kind in _TOPOLOGY_KINDS)
         )
     return kinds, evaluators, parameter_types, topology_scope
 
@@ -124,7 +149,7 @@ def _parcel_coupling_reason(problem: Any) -> str:
 def _typed_specialized_problem_kind(problem: Any) -> tuple[str, list[str]]:
     factors = list(getattr(problem, "constraint_factors", None) or [])
     kinds, evaluators, parameter_types, topology_scope = _relation_facts(factors)
-    if topology_scope or any("topology" in key or "adjacency" in key for key in evaluators):
+    if topology_scope or evaluators & _TOPOLOGY_EVALUATORS:
         return "topology_layout", ["typed_topology_factor"]
     if kinds & _COVERAGE_KINDS or evaluators & _COVERAGE_EVALUATORS or "service" in parameter_types:
         return "coverage", ["typed_service_coverage_factor"]
@@ -183,8 +208,72 @@ def solver_kind_input_gate(
                             f"missing:parcel_candidate:{domain.target_id}:{candidate_id}:planning_area"
                         )
             return not missing, sorted(set(missing))
+        if problem_kind == "topology_layout":
+            topology_factors = [
+                factor
+                for factor in list(getattr(problem, "constraint_factors", None) or [])
+                if str(getattr(factor, "kind", "") or "") in _TOPOLOGY_KINDS
+                or str(getattr(factor, "evaluator_key", "") or "") in _TOPOLOGY_EVALUATORS
+            ]
+            if not topology_factors:
+                missing.append("missing:topology_relation_factor")
+                return False, sorted(set(missing))
+            target_domains = {
+                str(getattr(domain, "target_id", "") or ""): domain
+                for domain in list(getattr(problem, "candidate_domains", None) or [])
+                if str(getattr(domain, "target_id", "") or "").strip()
+            }
+            candidates = {
+                str(getattr(candidate, "candidate_id", "") or ""): candidate
+                for candidate in list(getattr(problem, "candidate_geometries", None) or [])
+                if str(getattr(candidate, "candidate_id", "") or "").strip()
+            }
+            for factor in topology_factors:
+                factor_id = str(getattr(factor, "factor_id", "") or "unknown")
+                subject_ref = str(getattr(factor, "subject_ref", "") or "").strip()
+                object_ref = str(getattr(factor, "object_ref", "") or "").strip()
+                if not subject_ref or not object_ref:
+                    missing.append(f"missing:topology_endpoint:{factor_id}")
+                    continue
+                evaluator = str(getattr(factor, "evaluator_key", "") or "").strip()
+                kind = str(getattr(factor, "kind", "") or "").strip()
+                if evaluator and evaluator not in _TOPOLOGY_EVALUATORS and kind not in _TOPOLOGY_KINDS:
+                    missing.append(f"missing:topology_evaluator:{factor_id}:{evaluator}")
+                for endpoint in (subject_ref, object_ref):
+                    domain = target_domains.get(endpoint)
+                    if domain is None:
+                        # Non-target endpoints require an independently bound
+                        # feature reference; this route does not invent one.
+                        if endpoint == object_ref and str(getattr(factor, "object_ref_kind", "target")) != "target":
+                            if not list(getattr(factor, "required_refs", None) or []):
+                                missing.append(f"missing:topology_reference:{factor_id}:{endpoint}")
+                            continue
+                        missing.append(f"missing:topology_target:{factor_id}:{endpoint}")
+                        continue
+                    if str(getattr(domain, "status", "unresolved")) != "resolved":
+                        missing.append(f"missing:topology_domain:{endpoint}")
+                    candidate_ids = list(getattr(domain, "candidate_ids", None) or [])
+                    if not candidate_ids:
+                        missing.append(f"missing:topology_candidates:{endpoint}")
+                    for candidate_id in candidate_ids:
+                        candidate = candidates.get(str(candidate_id))
+                        if candidate is None:
+                            missing.append(f"missing:topology_geometry:{endpoint}:{candidate_id}")
+                            continue
+                        if not str(getattr(candidate, "wkt", "") or "").strip():
+                            missing.append(f"missing:topology_wkt:{candidate_id}")
+                        if not str(getattr(candidate, "crs", "") or "").strip():
+                            missing.append(f"missing:topology_crs:{candidate_id}")
+                        if str(getattr(candidate, "role", "")) != "execution_geometry":
+                            missing.append(f"missing:topology_execution_geometry:{candidate_id}")
+            return not missing, sorted(set(missing))
         return True, []
-    return False, [f"missing:typed_solver_fact:{problem_kind}"]
+    missing = [f"missing:typed_solver_fact:{problem_kind}"]
+    if problem_kind in {"network_path", "coverage"}:
+        missing.append("missing:network_ref")
+    if problem_kind == "coverage":
+        missing.append("missing:demand_ref")
+    return False, missing
 
 
 def collect_network_refs(problem: Any) -> list[str]:
