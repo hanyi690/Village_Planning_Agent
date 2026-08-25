@@ -159,6 +159,117 @@ def test_matching_village_scope_anchor_cannot_rematerialize_search_scope() -> No
     assert result.unresolved[0].code == "search_scope_not_materialized"
 
 
+def test_anchor_wkt_without_identity_or_snapshot_is_not_materialized(monkeypatch) -> None:
+    context = _context([_parcel("P-1", 116.0, 24.0, 116.01, 24.01)])
+    context.grounded_anchors = [
+        GroundedAnchor(
+            normalized_name="未绑定设施",
+            mention="未绑定设施",
+            geometry_ref="POINT (116.005 24.005)",
+            status="unresolved",
+        )
+    ]
+    spec = SpatialReferenceSpec(
+        type="place_name",
+        reference=RefObject(
+            kind="place_name",
+            filter={"label_contains": "未绑定设施"},
+        ),
+        target_id="target-anchor-authority",
+    )
+
+    monkeypatch.setattr(
+        SpatialResolver,
+        "resolve_spec",
+        lambda self, spec, **kwargs: ResolvedSpatialRef(),
+    )
+
+    result = ground_aggregate(
+        [spec],
+        context,
+        target_metadata={
+            "target-anchor-authority": {
+                "target_kind": "facility",
+                "expected_output_kind": "point",
+            }
+        },
+    )
+
+    assert result.candidates == []
+    assert result.problem is not None
+    assert result.problem.candidate_domains == []
+    assert result.unresolved[0].code == "spatial_reference_unresolved"
+    authority = result.spatial_query_evidence[0].query_params["anchor_authority"]
+    assert authority["reason"] == "grounded_anchor_missing_authority"
+    assert set(authority["missing_requirements"]) == {
+        "explicit_feature_identity",
+        "source_snapshot",
+    }
+    assert "grounded_anchor_missing_authority" in result.unresolved[0].detail
+
+
+def test_sourced_exact_anchor_wkt_preserves_authority_lineage(monkeypatch) -> None:
+    context = _context([_parcel("P-1", 116.0, 24.0, 116.01, 24.01)])
+    context.grounded_anchors = [
+        GroundedAnchor(
+            normalized_name="已绑定设施",
+            mention="已绑定设施",
+            entity_ref="entity:facility:exact",
+            feature_bsm="FAC-1",
+            source_feature_id="facility-feature-1",
+            source_layer="facilities_current",
+            source_bsms=["P-1"],
+            l1_fact_refs=["fact:facility:exact"],
+            relation_refs=["relation:facility:parcel"],
+            l1_snapshot_ref="l1:anchor-exact",
+            bundle_snapshot_digest="bundle:anchor-exact",
+            geometry_ref="POINT (116.005 24.005)",
+            geometry_granularity="exact_feature",
+            status="resolved",
+        )
+    ]
+    spec = SpatialReferenceSpec(
+        type="place_name",
+        reference=RefObject(
+            kind="place_name",
+            filter={"label_contains": "已绑定设施"},
+        ),
+        target_id="target-sourced-anchor",
+    )
+
+    monkeypatch.setattr(
+        SpatialResolver,
+        "resolve_spec",
+        lambda self, spec, **kwargs: ResolvedSpatialRef(),
+    )
+
+    result = ground_aggregate(
+        [spec],
+        context,
+        target_metadata={
+            "target-sourced-anchor": {
+                "target_kind": "facility",
+                "expected_output_kind": "point",
+            }
+        },
+    )
+
+    assert len(result.candidates) == 1
+    geometry = result.candidates[0].geometry
+    assert geometry is not None
+    assert geometry.wkt == "POINT (116.005 24.005)"
+    assert geometry.feature_bsms == ["FAC-1"]
+    assert geometry.source_feature_ids == ["facility-feature-1"]
+    assert geometry.entity_refs == ["entity:facility:exact"]
+    assert geometry.relation_refs == ["relation:facility:parcel"]
+    assert geometry.l1_fact_refs == ["fact:facility:exact"]
+    assert geometry.l1_snapshot_ref == "l1:anchor-exact"
+    assert geometry.bundle_snapshot_digest == "bundle:anchor-exact"
+    authority = result.spatial_query_evidence[0].query_params["anchor_authority"]
+    assert authority["reason"] == "grounded_anchor_authority_verified"
+    assert authority["missing_requirements"] == []
+
+
 def test_downstream_candidate_domain_rejects_blocked_materialization() -> None:
     from app.contracts.spatial.candidate_geometry import CandidateGeometry
     from app.contracts.spatial.grounding_contracts import CandidateSite

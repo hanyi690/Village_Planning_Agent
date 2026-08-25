@@ -805,6 +805,189 @@ def _valid_anchor_geometry_wkt(value: Any) -> str | None:
     return geometry.wkt
 
 
+def _grounded_anchor_authority(anchor: Any) -> tuple[bool, dict[str, Any]]:
+    """Require stable anchor identity and an anchor-owned source snapshot."""
+    identity = {
+        "entity_ref": str(getattr(anchor, "entity_ref", "") or "").strip(),
+        "source_feature_id": str(
+            getattr(anchor, "source_feature_id", "") or ""
+        ).strip(),
+        "source_layer": str(getattr(anchor, "source_layer", "") or "").strip(),
+        "feature_bsm": str(getattr(anchor, "feature_bsm", "") or "").strip(),
+    }
+    source_binding = {
+        "source_binding_ref": str(
+            getattr(anchor, "source_binding_ref", "") or ""
+        ).strip(),
+        "source_snapshot_ref": str(
+            getattr(anchor, "source_snapshot_ref", "") or ""
+        ).strip(),
+        "source_feature_digest": str(
+            getattr(anchor, "source_feature_digest", "") or ""
+        ).strip(),
+    }
+    snapshot = {
+        "l1_snapshot_ref": str(
+            getattr(anchor, "l1_snapshot_ref", "") or ""
+        ).strip(),
+        "bundle_snapshot_digest": str(
+            getattr(anchor, "bundle_snapshot_digest", "") or ""
+        ).strip(),
+        "source_snapshot_ref": source_binding["source_snapshot_ref"],
+    }
+    has_stable_identity = any(
+        identity[field] for field in ("entity_ref", "source_feature_id", "feature_bsm")
+    )
+    has_source_snapshot = any(snapshot.values())
+    missing_requirements = []
+    if not has_stable_identity:
+        missing_requirements.append("explicit_feature_identity")
+    if not has_source_snapshot:
+        missing_requirements.append("source_snapshot")
+    if missing_requirements == ["explicit_feature_identity", "source_snapshot"]:
+        reason = "grounded_anchor_missing_authority"
+    elif missing_requirements == ["explicit_feature_identity"]:
+        reason = "grounded_anchor_missing_identity"
+    elif missing_requirements == ["source_snapshot"]:
+        reason = "grounded_anchor_missing_snapshot"
+    else:
+        reason = "grounded_anchor_authority_verified"
+    return not missing_requirements, {
+        "reason": reason,
+        "missing_requirements": missing_requirements,
+        "identity": identity,
+        "snapshot": snapshot,
+        "source_binding": source_binding,
+    }
+
+
+def _grounded_anchor_lineage_updates(
+    resolved: ResolvedSpatialRef,
+    anchor: Any,
+) -> dict[str, Any]:
+    """Carry accepted anchor lineage into the executable geometry contract."""
+    anchor_feature_bsm = str(getattr(anchor, "feature_bsm", "") or "").strip()
+    anchor_source_feature_id = str(
+        getattr(anchor, "source_feature_id", "") or ""
+    ).strip()
+    anchor_entity_ref = str(getattr(anchor, "entity_ref", "") or "").strip()
+
+    def merged_list(field: str, values: list[str]) -> list[str]:
+        return list(
+            dict.fromkeys(
+                [
+                    *list(getattr(resolved, field, None) or []),
+                    *[str(value) for value in values if str(value).strip()],
+                ]
+            )
+        )
+
+    def carried_scalar(field: str, anchor_field: str) -> str:
+        return str(
+            getattr(anchor, anchor_field, "")
+            or getattr(resolved, field, "")
+            or ""
+        ).strip()
+
+    return {
+        "feature_bsms": merged_list(
+            "feature_bsms", [anchor_feature_bsm] if anchor_feature_bsm else []
+        ),
+        "source_feature_ids": merged_list(
+            "source_feature_ids",
+            [anchor_source_feature_id] if anchor_source_feature_id else [],
+        ),
+        "entity_refs": merged_list(
+            "entity_refs", [anchor_entity_ref] if anchor_entity_ref else []
+        ),
+        "relation_refs": merged_list(
+            "relation_refs", list(getattr(anchor, "relation_refs", None) or [])
+        ),
+        "l1_fact_refs": merged_list(
+            "l1_fact_refs", list(getattr(anchor, "l1_fact_refs", None) or [])
+        ),
+        "l1_snapshot_ref": carried_scalar("l1_snapshot_ref", "l1_snapshot_ref"),
+        "bundle_snapshot_digest": carried_scalar(
+            "bundle_snapshot_digest", "bundle_snapshot_digest"
+        ),
+        "source_binding_ref": carried_scalar(
+            "source_binding_ref", "source_binding_ref"
+        ),
+        "source_snapshot_ref": carried_scalar(
+            "source_snapshot_ref", "source_snapshot_ref"
+        ),
+        "source_feature_digest": carried_scalar(
+            "source_feature_digest", "source_feature_digest"
+        ),
+    }
+
+
+def _grounded_anchor_provenance(
+    resolved: ResolvedSpatialRef,
+    anchor: Any,
+    mention: str,
+    geometry_wkt: str,
+    authority: dict[str, Any],
+) -> dict[str, Any]:
+    """Merge anchor audit data without discarding resolver lineage."""
+    provenance = dict(getattr(resolved, "provenance", None) or {})
+    lineage = _grounded_anchor_lineage_updates(resolved, anchor)
+    provenance.update(
+        {
+            "path": "grounded_anchor",
+            "mention": mention,
+            "entity_ref": str(getattr(anchor, "entity_ref", "") or ""),
+            "source_feature_id": str(
+                getattr(anchor, "source_feature_id", "") or ""
+            ),
+            "source_layer": str(getattr(anchor, "source_layer", "") or ""),
+            "feature_bsm": str(getattr(anchor, "feature_bsm", "") or ""),
+            "source_bsms": list(getattr(anchor, "source_bsms", None) or []),
+            "geometry_ref": geometry_wkt,
+            "grounded_anchor_authority": authority,
+            "grounded_anchor_source_report_ref": str(
+                getattr(anchor, "source_report_ref", "") or ""
+            ),
+        }
+    )
+    for field in (
+        "feature_bsms",
+        "source_feature_ids",
+        "entity_refs",
+        "relation_refs",
+        "l1_fact_refs",
+        "l1_snapshot_ref",
+        "bundle_snapshot_digest",
+        "source_binding_ref",
+        "source_snapshot_ref",
+        "source_feature_digest",
+    ):
+        value = lineage[field]
+        if value:
+            provenance[field] = value
+    return provenance
+
+
+def _record_grounded_anchor_authority_failure(
+    resolved: ResolvedSpatialRef,
+    anchor: Any,
+    mention: str,
+    authority: dict[str, Any],
+) -> ResolvedSpatialRef:
+    """Keep an untrusted anchor diagnostic while refusing its materialization."""
+    provenance = dict(getattr(resolved, "provenance", None) or {})
+    provenance["grounded_anchor_authority"] = authority
+    provenance["grounded_anchor_mention"] = mention
+    provenance["grounded_anchor_geometry_ref"] = str(
+        getattr(anchor, "geometry_ref", "") or ""
+    )
+    return replace(
+        resolved,
+        uncertainty_reason="grounded_anchor_missing_authority",
+        provenance=provenance,
+    )
+
+
 def _search_scope_blocks_materialization(resolved: Any) -> bool:
     search_scope = getattr(resolved, "search_scope", None)
     if search_scope is None:
@@ -980,28 +1163,45 @@ def ground_aggregate(
                 anchor_geometry_wkt = _valid_anchor_geometry_wkt(
                     getattr(anchor, "geometry_ref", "")
                 )
+                anchor_authority_ok, anchor_authority = _grounded_anchor_authority(
+                    anchor
+                )
                 if anchor_bsms or anchor_geometry_wkt:
-                    resolved = replace(
-                        resolved,
-                        final_bsms=anchor_bsms,
-                        bbox=None,
-                        reference_geometry_wkt=anchor_geometry_wkt,
-                        reference_geometries=[],
-                        spatial_domain_kind=(
-                            "exact_feature"
-                            if anchor_geometry_wkt
-                            else ("parcel_extent" if len(anchor_bsms) == 1 else "parcel_set")
-                        ),
-                        confidence=max(float(getattr(anchor, "confidence", 0.0) or 0.0), 0.35),
-                        uncertainty_radius_m=250.0,
-                        uncertainty_reason="grounded_anchor",
-                        provenance={
-                            "path": "grounded_anchor",
-                            "mention": mention,
-                            "entity_ref": str(getattr(anchor, "entity_ref", "") or ""),
-                            "geometry_ref": anchor_geometry_wkt or "",
-                        },
-                    )
+                    if anchor_authority_ok:
+                        resolved = replace(
+                            resolved,
+                            final_bsms=anchor_bsms,
+                            bbox=None,
+                            reference_geometry_wkt=anchor_geometry_wkt,
+                            reference_geometries=[],
+                            spatial_domain_kind=(
+                                "exact_feature"
+                                if anchor_geometry_wkt
+                                else (
+                                    "parcel_extent"
+                                    if len(anchor_bsms) == 1
+                                    else "parcel_set"
+                                )
+                            ),
+                            confidence=max(
+                                float(getattr(anchor, "confidence", 0.0) or 0.0),
+                                0.35,
+                            ),
+                            uncertainty_radius_m=250.0,
+                            uncertainty_reason="grounded_anchor",
+                            **_grounded_anchor_lineage_updates(resolved, anchor),
+                            provenance=_grounded_anchor_provenance(
+                                resolved,
+                                anchor,
+                                mention,
+                                anchor_geometry_wkt or "",
+                                anchor_authority,
+                            ),
+                        )
+                    else:
+                        resolved = _record_grounded_anchor_authority_failure(
+                            resolved, anchor, mention, anchor_authority
+                        )
         mention = resolver._spec_mention(spec) or ""
         anchor = (
             anchors_by_name.get(mention)
@@ -1013,43 +1213,55 @@ def ground_aggregate(
             getattr(anchor, "geometry_ref", "") if anchor is not None else ""
         )
         anchor_bsms = list(getattr(anchor, "source_bsms", None) or []) if anchor is not None else []
+        anchor_authority_ok, anchor_authority = _grounded_anchor_authority(anchor)
         if (
             not resolved.reference_geometry_wkt
             and (anchor_geometry_wkt or anchor_bsms)
             and not _search_scope_blocks_materialization(resolved)
         ):
-            resolved = replace(
-                resolved,
-                final_bsms=anchor_bsms or list(resolved.final_bsms),
-                bbox=resolved.bbox,
-                reference_geometry_wkt=anchor_geometry_wkt,
-                reference_geometries=list(resolved.reference_geometries or []),
-                spatial_domain_kind=(
-                    "exact_feature"
-                    if anchor_geometry_wkt
-                    else ("parcel_extent" if len(anchor_bsms) == 1 else "parcel_set")
-                ),
-                confidence=max(
-                    float(resolved.confidence or 0.0),
-                    float(getattr(anchor, "confidence", 0.0) or 0.0),
-                ),
-                uncertainty_radius_m=float(
-                    getattr(anchor, "uncertainty_radius_m", 0.0) or 0.0
-                ),
-                uncertainty_reason="grounded_anchor",
-                provenance={
-                    "path": "grounded_anchor",
-                    "mention": mention,
-                    "entity_ref": str(getattr(anchor, "entity_ref", "") or ""),
-                    "geometry_ref": anchor_geometry_wkt,
-                    "resolver_path": str(
-                        (resolved.provenance or {}).get("path", "")
+            if anchor_authority_ok:
+                resolved = replace(
+                    resolved,
+                    final_bsms=anchor_bsms or list(resolved.final_bsms),
+                    bbox=resolved.bbox,
+                    reference_geometry_wkt=anchor_geometry_wkt,
+                    reference_geometries=list(resolved.reference_geometries or []),
+                    spatial_domain_kind=(
+                        "exact_feature"
+                        if anchor_geometry_wkt
+                        else (
+                            "parcel_extent"
+                            if len(anchor_bsms) == 1
+                            else "parcel_set"
+                        )
                     ),
-                },
-            )
+                    confidence=max(
+                        float(resolved.confidence or 0.0),
+                        float(getattr(anchor, "confidence", 0.0) or 0.0),
+                    ),
+                    uncertainty_radius_m=float(
+                        getattr(anchor, "uncertainty_radius_m", 0.0) or 0.0
+                    ),
+                    uncertainty_reason="grounded_anchor",
+                    **_grounded_anchor_lineage_updates(resolved, anchor),
+                    provenance=_grounded_anchor_provenance(
+                        resolved,
+                        anchor,
+                        mention,
+                        anchor_geometry_wkt or "",
+                        anchor_authority,
+                    ),
+                )
+            else:
+                resolved = _record_grounded_anchor_authority_failure(
+                    resolved, anchor, mention, anchor_authority
+                )
         resolved = _enforce_search_scope_invariant(resolved)
         spec_type = getattr(spec, "type", "")
         search_scope_payload = _search_scope_payload(getattr(resolved, "search_scope", None))
+        anchor_authority_payload = (resolved.provenance or {}).get(
+            "grounded_anchor_authority"
+        )
         result_refs = list(resolved.final_bsms)
         if not result_refs and search_scope_payload is not None:
             result_refs = _search_scope_result_refs(getattr(resolved, "search_scope", None))
@@ -1067,6 +1279,11 @@ def ground_aggregate(
                     **(
                         {"search_scope": search_scope_payload}
                         if search_scope_payload is not None
+                        else {}
+                    ),
+                    **(
+                        {"anchor_authority": anchor_authority_payload}
+                        if anchor_authority_payload is not None
                         else {}
                     ),
                 },
@@ -1141,6 +1358,11 @@ def ground_aggregate(
                             f"target_id={getattr(spec, 'target_id', '')}; "
                             f"spec_id={getattr(spec, 'spec_id', '')}; "
                             f"reason={getattr(spec, 'unresolved_reason', '') or 'no_candidates'}"
+                            + (
+                                f"; authority={anchor_authority_payload}"
+                                if anchor_authority_payload is not None
+                                else ""
+                            )
                         ),
                         related_artifact_id=(getattr(spec, "target_id", "") or None),
                     )

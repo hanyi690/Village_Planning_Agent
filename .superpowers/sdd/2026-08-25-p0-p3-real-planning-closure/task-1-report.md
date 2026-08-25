@@ -200,3 +200,73 @@ not changed in this P0-A fix round.
 
 The focused runs also emitted the existing pytest cache warning (`WinError 5`
 when writing `backend/.pytest_cache`); it did not affect test execution.
+
+## Fix Round 2 — GroundedAnchor Authority Closure
+
+Date: 2026-08-25
+
+### Changed Files
+
+- `backend/app/domain/ground/aggregate.py`
+- `backend/tests/core/test_grounding_search_scope_boundary.py`
+- `.superpowers/sdd/2026-08-25-p0-p3-real-planning-closure/task-1-report.md`
+
+### Remaining Reviewer Finding
+
+The two legacy `GroundedAnchor` promotion paths in the aggregate could accept
+syntactically valid WKT directly, even when the anchor had no stable identity
+or source snapshot.  This allowed a resolver result with no authoritative
+geometry to become executable through the anchor fallback.
+
+### Fix and Behavior Decisions
+
+- Added one shared `_grounded_anchor_authority` predicate/diagnostic used by
+  both legacy promotion paths.  Acceptance requires stable anchor identity
+  from `entity_ref`, `source_feature_id`, or `feature_bsm`, and an anchor-owned
+  source snapshot from `l1_snapshot_ref`, `bundle_snapshot_digest`, or an
+  available explicit `source_snapshot_ref`.  `source_layer` and optional
+  source-binding fields are retained in the audit record but do not substitute
+  for feature identity or a snapshot.
+- An anchor with valid WKT, BSM evidence, or both but missing authority is
+  fail-closed: neither fallback promotes its geometry/BSMs.  The diagnostic is
+  retained in resolved provenance, `SpatialQueryEvidence.query_params`, and
+  the unresolved issue detail, including the missing requirements and supplied
+  identity/snapshot/source-binding values.
+- Accepted exact anchors carry their existing feature BSM, source feature ID,
+  entity, relation/fact references, L1 snapshot, bundle digest, and optional
+  source-binding fields into `ResolvedSpatialRef` and `CandidateGeometry`.
+- Search-scope blocking and the exact KG-topology parcel behavior from Fix
+  Round 1 remain unchanged.  User-owned dirty files were preserved.
+
+### Fix-Round Verification
+
+Focused boundary command:
+
+```text
+python -m pytest -o addopts='' tests/core/test_grounding_search_scope_boundary.py -q --maxfail=1
+```
+
+Result: `8 passed`.
+
+The new negative regression verifies that an unresolved, unblocked resolver
+result plus valid WKT with empty identity/snapshot creates no candidate
+geometry or candidate domain.  The companion compatibility regression verifies
+that a sourced exact anchor remains executable and preserves its lineage.
+
+Exact KG-topology regression:
+
+```text
+python -m pytest -o addopts='' tests/core/test_evidence_graph_join.py::test_ground_resolver_uses_kg_topology_result_before_anchor_bundle_associations -q --maxfail=1
+```
+
+Result: `1 passed`.
+
+Combined bounded P0-A selection (including the boundary file and exact KG
+regression): `26 passed` in `23.44s`.
+
+### Concerns
+
+- The existing pytest cache warning (`WinError 5` while writing
+  `backend/.pytest_cache`) remains environmental and did not affect results.
+- The unrelated TARGET_PROJECTION admission failure recorded in Fix Round 1
+  remains outside P0-A scope; no new failure was observed in this fix round.
