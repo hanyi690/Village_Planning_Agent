@@ -268,3 +268,107 @@ def test_stale_typed_human_decision_returns_new_pending_review():
     assert result["human_review_decisions"] == {}
     assert result["human_review_resume_consumed"] is False
     assert result["human_interrupt"]["reason"] == "stale_human_decision"
+
+
+@pytest.mark.parametrize("request_update", [
+    {"status": "pending"},
+    {"source_feature_digest": "feature-digest:mismatch"},
+])
+def test_ground_node_short_circuits_pending_or_mismatched_authority(
+    monkeypatch,
+    request_update,
+):
+    import asyncio
+
+    from app.workflow.stages import ground as ground_stage
+
+    spec = _spec()
+    request = build_grounding_request(spec)
+    request = request.model_copy(update=request_update)
+    compilation = SimpleNamespace(
+        spatial_reference_specs=[spec],
+        grounding_requests=[request],
+        pending_grounding_requests=[request],
+        typed_intent=None,
+        intent_graph=None,
+        planning_task_graph=None,
+        claims=[],
+        pending_grounding_claims=[],
+        program_ref="program:test",
+    )
+    context = SimpleNamespace(
+        workspace=SimpleNamespace(snapshot=None),
+        kg=SimpleNamespace(),
+        gazetteer=None,
+        village_anchors=[],
+        village_name="",
+        location_facts=[],
+    )
+    persisted = []
+
+    async def fake_context(_state):
+        return context
+
+    async def no_packets(*_args, **_kwargs):
+        return {}, []
+
+    def fail_ground_aggregate(*_args, **_kwargs):
+        raise AssertionError("pending or mismatched request reached ground_aggregate")
+
+    monkeypatch.setattr(ground_stage, "_require_context", fake_context)
+    monkeypatch.setattr(
+        ground_stage,
+        "_load_ref_artifact",
+        lambda _state, _key, _cls: compilation,
+    )
+    monkeypatch.setattr(ground_stage, "_ground_llm_disabled", lambda: True)
+    monkeypatch.setattr(ground_stage, "_retrieve_ground_evidence_packets", no_packets)
+    monkeypatch.setattr(ground_stage, "_target_metadata_from_compilation", lambda *_args: {})
+    monkeypatch.setattr(ground_stage, "_adopt_context", lambda *_args: {})
+    monkeypatch.setattr(
+        ground_stage,
+        "persist_stage_artifact",
+        lambda _state, _stage, _schema, payload: persisted.append(payload) or "ground-ref",
+    )
+    monkeypatch.setattr(
+        ground_stage,
+        "stage_completion_patch",
+        lambda *_args, **_kwargs: {"ground_completed": True},
+    )
+    monkeypatch.setattr(
+        "app.domain.ground.aggregate.ground_aggregate",
+        fail_ground_aggregate,
+    )
+
+    result = asyncio.run(ground_stage.ground_node({
+        "session_id": "session:test-ground-admission",
+        "artifact_refs": {"target_projection": "target-ref"},
+    }))
+
+    assert result["ground_completed"] is True
+    assert len(persisted) == 1
+    assert persisted[0].candidates == []
+
+
+def test_typed_human_review_without_decision_record_stays_pending():
+    import asyncio
+
+    from app.workflow.root_graph import apply_human_review_decision
+
+    current = build_decision_fingerprint(
+        target_ref="t-1",
+        source_snapshot_ref="snapshot:current",
+    )
+    result = asyncio.run(apply_human_review_decision({
+        "paused_stage": "select",
+        "human_review_items": [{
+            "request_type": "scenario_approval_required",
+            "context": {"decision_fingerprint": current.model_dump(mode="json")},
+        }],
+        "human_review_decisions": {"action": "approve"},
+    }))
+
+    assert result["human_approval_diagnostic"]["code"] == "HUMAN_DECISION_STALE"
+    assert result["human_review_decisions"] == {}
+    assert result["human_review_resume_consumed"] is False
+    assert result["human_interrupt"]["reason"] == "stale_human_decision"

@@ -127,3 +127,35 @@ Changed-boundary `compileall` and `git diff --check` are recorded in the
 handoff. Full backend compile remains affected by the pre-existing invalid
 recorded scripts under `backend/.run-tmp/logs/` and the unwritable pytest
 cache directory.
+
+## Fix Round 2 — 2026-08-25
+
+### STATUS
+
+Added the two narrow P2 coverage regressions from the review. Production
+logic was not changed in this round.
+
+### COVERAGE ADDED
+
+- `test_p1_closure_contracts.py` now invokes the production `ground_node` with
+  a pending request and an authority-mismatched request. Both cases monkeypatch
+  `ground_aggregate`, assert it is not called, and assert the persisted
+  `GroundingResult` has no candidates.
+- The same file now covers a typed HUMAN review context with a missing
+  `decision_record`; generic `approve` remains pending, returns
+  `HUMAN_DECISION_STALE`, and does not consume the HUMAN resume.
+
+### TESTS
+
+Passed:
+
+```text
+P1 focused + HUMAN/HITL/resume focused set: 139 passed, 1 existing pytest
+cache permission warning
+```
+
+The broader command including `test_e2e_stabilization.py` remains blocked by
+the pre-existing test `test_auto_defer_blocked_targets_builds_ledger_and_passes`,
+which calls the removed `validate_stage._auto_defer_blocked_targets` helper.
+That failure is outside this test-only round and no production workaround was
+added.
