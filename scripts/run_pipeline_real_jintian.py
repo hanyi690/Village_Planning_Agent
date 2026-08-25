@@ -74,7 +74,7 @@ async def _open_session_kg(session_id: str) -> None:
                 snapshot.get("version"), snapshot.get("triple_count"), snapshot.get("cache_hit"))
 
 
-async def _run_graph(session_id: str, listener) -> None:
+async def _run_graph(session_id: str, listener) -> Dict[str, Any]:
     """Port of scripts/experiments/cascade/baseline.py:_run_graph."""
     from app.workflow.layers.phase_machine import get_layer_dimensions, get_layer_name
     from app.infrastructure.runtime.planning_runtime_service import PlanningRuntimeService
@@ -103,21 +103,75 @@ async def _run_graph(session_id: str, listener) -> None:
         PlanningRuntimeService.trigger_planning_execution(session_id, initial_state)
     )
 
-    for layer in [1, 2, 3]:
-        event = await listener.wait_for_any_event(
-            event_types=["layer_completed", "error"],
-            timeout=1200,
-            filter_func=lambda e, l=layer: (
-                e.get("type") == "error"
-                or e.get("data", {}).get("layer") == l
-            ),
-        )
-        if event.get("type") == "error":
-            raise RuntimeError(f"Layer {layer} failed: {event.get('data', {}).get('message', 'unknown')}")
-        logger.info("[Runner] Layer %d completed", layer)
+    try:
+        for layer in [1, 2, 3]:
+            event = await listener.wait_for_any_event(
+                event_types=[
+                    "layer_completed",
+                    "error",
+                    "human_review_paused",
+                ],
+                timeout=1200,
+                filter_func=lambda e, l=layer: (
+                    e.get("type") in {"error", "human_review_paused"}
+                    or e.get("data", {}).get("layer") == l
+                ),
+            )
+            event_type = event.get("type")
+            if event_type == "error":
+                raise RuntimeError(
+                    f"Layer {layer} failed: "
+                    f"{event.get('data', {}).get('message', 'unknown')}"
+                )
+            if event_type == "human_review_paused":
+                data = event.get("data", {})
+                logger.warning(
+                    "[Runner] Planning paused for human review at %s",
+                    data.get("paused_stage") or data.get("stage") or f"layer{layer}",
+                )
+                return {
+                    "status": "paused",
+                    "paused_stage": data.get("paused_stage") or data.get("stage"),
+                    "event_id": data.get("event_id"),
+                    "item_count": data.get("item_count", len(data.get("items") or [])),
+                }
+            logger.info("[Runner] Layer %d completed", layer)
 
-    await task
-    await listener.disconnect()
+        await task
+        return {"status": "completed"}
+    finally:
+        if not task.done():
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+        await listener.disconnect()
+
+
+async def _shutdown_runtime() -> None:
+    """Release graph, provider, database, and KG resources before exit."""
+    from app.database import dispose_async_engine, shutdown_database
+    from app.infrastructure.kg.session_kg import shutdown_session_kg_process_pool
+    from app.infrastructure.llm.instructor_client import close_cached_clients
+    from app.infrastructure.runtime.planning_runtime_service import PlanningRuntimeService
+
+    cleanup_steps = (
+        ("runtime tasks", PlanningRuntimeService.shutdown),
+        ("provider clients", close_cached_clients),
+        ("database engine", dispose_async_engine),
+        ("database connections", shutdown_database),
+    )
+    for label, cleanup in cleanup_steps:
+        try:
+            await cleanup()
+        except Exception:  # noqa: BLE001 - continue releasing independent resources
+            logger.exception("[Runner] Failed to release %s", label)
+
+    try:
+        await asyncio.to_thread(shutdown_session_kg_process_pool)
+    except Exception:  # noqa: BLE001 - process cleanup must not hide the run result
+        logger.exception("[Runner] Failed to release Session KG worker pool")
 
 
 async def _summarize(session_id: str) -> Dict[str, Any]:
@@ -135,7 +189,7 @@ async def _summarize(session_id: str) -> Dict[str, Any]:
     return summary
 
 
-async def main(session_id: str, skip_verify: bool) -> None:
+async def _main_impl(session_id: str, skip_verify: bool) -> None:
     from app.infrastructure.runtime.planning_runtime_service import PlanningRuntimeService
     from app.infrastructure.paths import session_run_dir
     from scripts.audit_planning_layer_quality import audit_planning_layer_quality
@@ -150,14 +204,19 @@ async def main(session_id: str, skip_verify: bool) -> None:
     await _create_planning_session(session_id)
     await _open_session_kg(session_id)
     listener = InProcessEventListener(session_id)
-    await _run_graph(session_id, listener)
+    execution = await _run_graph(session_id, listener)
     summary = await _summarize(session_id)
+    summary["execution"] = execution
     quality = audit_planning_layer_quality(session_run_dir(session_id))
 
     print("\n" + "=" * 60)
     print(f"[Runner] session={session_id}")
     for r, info in summary["rounds"].items():
         print(f"  round{r}: {info['annotations']} annotations {info['names']}")
+    print(f"  execution_status: {execution['status']}")
+    if execution["status"] == "paused":
+        print(f"  paused_stage: {execution.get('paused_stage')}")
+        print(f"  human_review_items: {execution.get('item_count', 0)}")
     print(f"  planning_status: {quality.status}")
     print(f"  first_zero_stage: {quality.first_zero_stage}")
     print(f"  non_baseline_feature_count: {quality.non_baseline_feature_count}")
@@ -170,6 +229,13 @@ async def main(session_id: str, skip_verify: bool) -> None:
             [sys.executable, str(script_dir / "verify_explore_kgenrich.py"), "--session-id", session_id],
             check=False,
         )
+
+
+async def main(session_id: str, skip_verify: bool) -> None:
+    try:
+        await _main_impl(session_id, skip_verify)
+    finally:
+        await _shutdown_runtime()
 
 
 if __name__ == "__main__":

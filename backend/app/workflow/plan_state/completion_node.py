@@ -118,8 +118,8 @@ async def layer_completion_check(
     1. If layer NOT complete -> no-op, return {}
     2. If layer complete + step_mode=True -> interrupt() BEFORE any SSE events,
        then fire events based on resume action (approve/reject)
-    3. If layer complete + step_mode=False -> auto-advance phase,
-       send layer_completed + layer_started for next layer
+    3. If layer complete + step_mode=False -> record layer_completed;
+       the gate-advance node owns the next layer_started event
     """
     # Debug: log entry to confirm execution
     is_revision = state.get("is_revision", False)
@@ -130,7 +130,7 @@ async def layer_completion_check(
     )
 
     from app.workflow.layers.phase_machine import (
-        _phase_to_layer, get_layer_dimensions, get_next_phase,
+        _phase_to_layer, get_layer_dimensions,
         get_layer_name,
     )
     from app.infrastructure.events.sse_publisher import SSEPublisher
@@ -323,23 +323,16 @@ async def layer_completion_check(
                 session_id, "final" if layer >= 3 else f"layer{layer}",
             )
             if layer < 3:
-                next_phase = get_next_phase(phase)
-                next_layer = _phase_to_layer(next_phase) if next_phase else None
-                if next_phase and next_layer:
-                    SSEPublisher.send_layer_start(
-                        session_id=session_id,
-                        layer=next_layer,
-                        layer_name=get_layer_name(next_layer),
-                        dimension_count=len(get_layer_dimensions(next_layer)),
-                    )
-                    logger.info(
-                        "[layer_completion_check] Approved: advancing to layer %d", next_layer,
-                    )
-                    return {
-                        "previous_layer": layer,
-                        "pending_reports": [],
-                        "layer_just_completed": layer,
-                    }
+                logger.info(
+                    "[layer_completion_check] Approved completion for layer %d; "
+                    "waiting for the layer gate before announcing the next layer",
+                    layer,
+                )
+                return {
+                    "previous_layer": layer,
+                    "pending_reports": [],
+                    "layer_just_completed": layer,
+                }
             # Layer 3 complete after approval
             logger.info("[layer_completion_check] Layer 3 approved, all layers complete")
             return {"pending_reports": [], "layer_just_completed": layer}
@@ -367,7 +360,7 @@ async def layer_completion_check(
                 "pending_reports": [],
             }
 
-    # Auto mode: advance to next layer
+    # Auto mode: record completion; the layer gate owns phase advancement.
     SSEPublisher.send_layer_complete(
         session_id=session_id,
         layer=layer,
@@ -379,23 +372,16 @@ async def layer_completion_check(
         session_id, "final" if layer >= 3 else f"layer{layer}",
     )
     if layer < 3:
-        next_phase = get_next_phase(phase)
-        next_layer = _phase_to_layer(next_phase) if next_phase else None
-        if next_phase and next_layer:
-            SSEPublisher.send_layer_start(
-                session_id=session_id,
-                layer=next_layer,
-                layer_name=get_layer_name(next_layer),
-                dimension_count=len(get_layer_dimensions(next_layer)),
-            )
-            logger.info(
-                "[layer_completion_check] Auto-advancing to layer %d", next_layer,
-            )
-            return {
-                "previous_layer": layer,
-                "pending_reports": [],
-                "layer_just_completed": layer,
-            }
+        logger.info(
+            "[layer_completion_check] Layer %d dimensions complete; "
+            "the gate controls the next layer announcement",
+            layer,
+        )
+        return {
+            "previous_layer": layer,
+            "pending_reports": [],
+            "layer_just_completed": layer,
+        }
 
     # Layer 3 complete in auto mode -> mark completed
     logger.info("[layer_completion_check] All layers complete (auto mode)")

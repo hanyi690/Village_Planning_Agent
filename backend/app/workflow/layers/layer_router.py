@@ -16,7 +16,12 @@ from typing import Any, Dict, List
 from langgraph.graph import END
 from langgraph.types import Command, Send, TimeoutPolicy
 
-from app.workflow.layers.phase_machine import _phase_to_layer, get_next_phase
+from app.workflow.layers.phase_machine import (
+    _phase_to_layer,
+    get_layer_dimensions,
+    get_layer_name,
+    get_next_phase,
+)
 from app.domain.assessment.analysis_node import analyze_dimension
 from app.domain.objectives.worker import analyze_l2_dimension
 from app.domain.program.worker import analyze_l3_dimension
@@ -273,6 +278,16 @@ def advance_phase_node(state: Dict[str, Any]) -> Command:
     }
     sends = _ready_dispatch(state, next_phase)
     if sends:
+        next_layer = _phase_to_layer(next_phase)
+        if next_layer is not None:
+            from app.infrastructure.events.sse_publisher import SSEPublisher
+
+            SSEPublisher.send_layer_start(
+                session_id=str(state.get("session_id") or ""),
+                layer=next_layer,
+                layer_name=get_layer_name(next_layer),
+                dimension_count=len(get_layer_dimensions(next_layer)),
+            )
         logger.info("[advance_phase] %s -> %s, dispatching %d dim(s)", phase, next_phase, len(sends))
         return Command(update=update, goto=sends)
     if next_phase == "post_l3":
