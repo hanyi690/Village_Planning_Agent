@@ -2,18 +2,29 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, cast
 
+from app.contracts.domain.planning_semantics import (
+    RolePolicyDisposition,
+    SuitabilityEvaluationResult,
+    SuitabilityEvaluationTrace,
+    SuitabilityFactorCode,
+    SuitabilityFactorRecord,
+    SuitabilityMaterializationRole,
+)
+from app.contracts.spatial.grounding_contracts import CandidateSite
 from app.domain.suitability.model import SuitabilityCandidate, SuitabilitySurface
 from app.domain.suitability.spatial_factors import (
     MATERIALIZATION_ROLE_POLICY_UNAVAILABLE,
+    MaterializationRolePolicy,
     SPATIAL_ROLE_POLICY_VERSION,
     normalize_materialization_role,
+    normalize_suitability_factor_code,
     resolve_materialization_role_policy,
 )
 
 
-_CONTEXT_FREE_HARD_CONSTRAINT_EVALUATION_DEFERRED = (
+_CONTEXT_FREE_HARD_CONSTRAINT_EVALUATION_DEFERRED: SuitabilityFactorCode = (
     "HARD_CONSTRAINT_EVALUATION_DEFERRED"
 )
 _OVERLAY_ROLES = frozenset(
@@ -25,17 +36,36 @@ _OVERLAY_ROLES = frozenset(
 )
 
 
+def _factor_record(
+    factor_code: SuitabilityFactorCode,
+    *,
+    policy: RolePolicyDisposition,
+    triggered: bool,
+    hard_exclusion: bool,
+    evidence_ref: str = "",
+    detail: str = "",
+) -> SuitabilityFactorRecord:
+    return {
+        "factor_code": factor_code,
+        "policy": policy,
+        "triggered": triggered,
+        "hard_exclusion": hard_exclusion,
+        "evidence_ref": evidence_ref,
+        "detail": detail,
+    }
+
+
 def _role_policy_artifacts(
-    materialization_role: Any,
+    materialization_role: object,
 ) -> tuple[
-    str,
-    Any,
-    list[dict[str, object]],
-    list[dict[str, object]],
+    SuitabilityMaterializationRole,
+    MaterializationRolePolicy | None,
+    list[SuitabilityFactorRecord],
+    list[SuitabilityEvaluationTrace],
 ]:
     role_policy = resolve_materialization_role_policy(materialization_role)
     normalized_role = normalize_materialization_role(materialization_role)
-    evaluation_trace: list[dict[str, object]] = [
+    evaluation_trace: list[SuitabilityEvaluationTrace] = [
         {
             "step": "materialization_role_policy",
             "materialization_role": normalized_role,
@@ -46,148 +76,112 @@ def _role_policy_artifacts(
             "result": "resolved" if role_policy is not None else "fail_closed",
         }
     ]
-    hard_constraint_factors: list[dict[str, object]] = []
+    hard_constraint_factors: list[SuitabilityFactorRecord] = []
     if role_policy is None:
         hard_constraint_factors.append(
-            {
-                "factor_code": MATERIALIZATION_ROLE_POLICY_UNAVAILABLE,
-                "policy": "site_hard_exclusion",
-                "triggered": True,
-                "hard_exclusion": True,
-                "evidence_ref": "",
-                "detail": "materialization_role is missing or unknown",
-            }
+            _factor_record(
+                MATERIALIZATION_ROLE_POLICY_UNAVAILABLE,
+                policy="site_hard_exclusion",
+                triggered=True,
+                hard_exclusion=True,
+                detail="materialization_role is missing or unknown",
+            )
         )
-    return (
-        normalized_role,
-        role_policy,
-        hard_constraint_factors,
-        evaluation_trace,
-    )
+    return normalized_role, role_policy, hard_constraint_factors, evaluation_trace
 
 
 def _structured_role_factor_records(
-    candidate: Any,
-    role_policy: Any,
-) -> list[dict[str, object]]:
-    """Normalize optional role-aware factor evidence from a grounding result."""
+    candidate: CandidateSite,
+    role_policy: MaterializationRolePolicy | None,
+) -> list[SuitabilityFactorRecord]:
+    """Normalize explicit grounding factor evidence into a closed record."""
 
-    raw_factor_lists: list[Any] = []
-    for value in (
-        getattr(candidate, "hard_constraint_factors", None),
-        (
-            getattr(candidate, "metrics", {}).get("hard_constraint_factors")
-            if isinstance(getattr(candidate, "metrics", None), dict)
-            else None
-        ),
-        (
-            getattr(candidate, "metrics", {}).get(
-                "suitability_hard_constraint_factors"
-            )
-            if isinstance(getattr(candidate, "metrics", None), dict)
-            else None
-        ),
-        getattr(getattr(candidate, "hard_constraint_result", None), "hard_constraint_factors", None),
-        getattr(getattr(candidate, "hard_constraint_result", None), "factors", None),
-    ):
-        if value:
-            raw_factor_lists.append(value)
-    if not raw_factor_lists:
-        return []
+    raw_factors = list(candidate.hard_constraint_factors)
+    if candidate.hard_constraint_result is not None:
+        raw_factors.extend(candidate.hard_constraint_result.hard_constraint_factors)
 
-    records: list[dict[str, object]] = []
-    for raw_factors in raw_factor_lists:
-        if not isinstance(raw_factors, (list, tuple)):
-            continue
-        for raw_factor in raw_factors:
-            if isinstance(raw_factor, dict):
-                factor_code = str(
-                    raw_factor.get("factor_code") or raw_factor.get("code") or ""
-                ).strip()
-                triggered = bool(raw_factor.get("triggered", True))
-                evidence_ref = str(raw_factor.get("evidence_ref") or "")
-                detail = str(raw_factor.get("detail") or "")
-            else:
-                factor_code = str(
-                    getattr(raw_factor, "factor_code", None)
-                    or getattr(raw_factor, "code", None)
-                    or ""
-                ).strip()
-                triggered = bool(getattr(raw_factor, "triggered", True))
-                evidence_ref = str(getattr(raw_factor, "evidence_ref", "") or "")
-                detail = str(getattr(raw_factor, "detail", "") or "")
-            if not factor_code:
-                continue
-            disposition = role_policy.classify(factor_code)
-            records.append(
-                {
-                    "factor_code": factor_code,
-                    "policy": disposition,
-                    "triggered": triggered,
-                    "hard_exclusion": (
-                        triggered and disposition == "site_hard_exclusion"
-                    ),
-                    "evidence_ref": evidence_ref,
-                    "detail": detail,
-                }
+    records: list[SuitabilityFactorRecord] = []
+    for raw_factor in raw_factors:
+        raw_code = raw_factor.factor_code.strip()
+        factor_code = normalize_suitability_factor_code(raw_code)
+        disposition = (
+            role_policy.classify(factor_code) if role_policy is not None else None
+        )
+        if disposition is None:
+            disposition = "site_hard_exclusion"
+        detail = raw_factor.detail
+        if factor_code == "UNKNOWN_HARD_CONSTRAINT_FACTOR":
+            detail = "; ".join(
+                item
+                for item in (
+                    f"unrecognized_factor_code:{raw_code}" if raw_code else "missing_factor_code",
+                    raw_factor.detail,
+                )
+                if item
             )
+        records.append(
+            _factor_record(
+                factor_code,
+                policy=disposition,
+                triggered=raw_factor.triggered,
+                hard_exclusion=(
+                    raw_factor.triggered and disposition == "site_hard_exclusion"
+                ),
+                evidence_ref=raw_factor.evidence_ref,
+                detail=detail,
+            )
+        )
     return records
 
 
 def _context_free_hard_feasibility(
-    normalized_role: str,
-    role_policy: Any,
+    normalized_role: SuitabilityMaterializationRole,
+    role_policy: MaterializationRolePolicy | None,
     hard_constraint_passed: bool,
-    structured_factors: list[dict[str, object]],
-) -> tuple[bool, str, list[str], list[dict[str, object]]]:
+    structured_factors: list[SuitabilityFactorRecord],
+) -> tuple[
+    bool,
+    SuitabilityEvaluationResult,
+    list[str],
+    list[SuitabilityFactorRecord],
+]:
     if role_policy is None:
-        return (
-            False,
-            "fail_closed",
-            [MATERIALIZATION_ROLE_POLICY_UNAVAILABLE],
-            [],
-        )
+        return False, "fail_closed", [MATERIALIZATION_ROLE_POLICY_UNAVAILABLE], []
 
-    triggered_factors = [
-        factor for factor in structured_factors if bool(factor.get("triggered"))
-    ]
+    triggered_factors = [factor for factor in structured_factors if factor["triggered"]]
     hard_exclusions = [
-        str(factor["factor_code"])
+        factor["factor_code"]
         for factor in triggered_factors
-        if bool(factor.get("hard_exclusion"))
+        if factor["hard_exclusion"]
     ]
     if hard_exclusions:
-        return False, "failed", hard_exclusions, []
+        return False, "failed", list(hard_exclusions), []
     if hard_constraint_passed:
         return True, "passed", [], []
-    if triggered_factors:
-        triggered_hard_policies = [
-            factor
-            for factor in triggered_factors
-            if factor.get("policy") != "advisory"
-        ]
-        if triggered_hard_policies and all(
-            factor.get("policy") == "overlay_constraint"
-            for factor in triggered_hard_policies
-        ):
-            return True, "passed_by_role_policy", [], []
+    triggered_hard_policies = [
+        factor for factor in triggered_factors if factor["policy"] != "advisory"
+    ]
+    if triggered_hard_policies and all(
+        factor["policy"] == "overlay_constraint"
+        for factor in triggered_hard_policies
+    ):
+        return True, "passed_by_role_policy", [], []
     if normalized_role in _OVERLAY_ROLES:
         return (
             False,
             "deferred",
             [_CONTEXT_FREE_HARD_CONSTRAINT_EVALUATION_DEFERRED],
             [
-                {
-                    "factor_code": _CONTEXT_FREE_HARD_CONSTRAINT_EVALUATION_DEFERRED,
-                    "policy": "overlay_constraint",
-                    "triggered": True,
-                    "hard_exclusion": False,
-                    "evidence_ref": "",
-                    "detail": (
+                _factor_record(
+                    _CONTEXT_FREE_HARD_CONSTRAINT_EVALUATION_DEFERRED,
+                    policy="overlay_constraint",
+                    triggered=True,
+                    hard_exclusion=False,
+                    detail=(
                         "aggregate hard result failed without structured "
                         "site-hard exclusion evidence"
                     ),
-                }
+                )
             ],
         )
     return False, "failed", ["hard_constraints_not_proven"], []
@@ -217,12 +211,9 @@ def build_suitability_surface(
     candidates: list[SuitabilityCandidate] = []
     diagnostics: dict[str, list[str]] = {}
     target_by_id = _target_by_id(plan_intent)
-    for candidate in tuple(getattr(grounding_result, "candidates", ()) or ()):
-        target_id = str(
-            getattr(candidate, "target_ref", None)
-            or getattr(candidate, "project_ref", None)
-            or ""
-        )
+    for raw_candidate in tuple(getattr(grounding_result, "candidates", ()) or ()):
+        candidate = cast(CandidateSite, raw_candidate)
+        target_id = str(candidate.target_ref or candidate.project_ref or "")
         target = target_by_id.get(target_id)
         materialization_role = _candidate_materialization_role(candidate, target)
         (
@@ -231,29 +222,25 @@ def build_suitability_surface(
             hard_constraint_factors,
             evaluation_trace,
         ) = _role_policy_artifacts(materialization_role)
-        hard = getattr(candidate, "hard_constraint_result", None)
+        hard = candidate.hard_constraint_result
         hard_constraint_passed = (
-            bool(getattr(hard, "passed", False)) if hard is not None else False
+            bool(hard.passed) if hard is not None else False
         )
-        explicit_suitability = getattr(candidate, "suitability_score", None)
+        explicit_suitability = candidate.suitability_score
         evaluation_trace.append(
             {
                 "step": "context_free_grounding_result",
                 "hard_constraint_passed": hard_constraint_passed,
             }
         )
-        structured_factors = (
-            _structured_role_factor_records(candidate, role_policy)
-            if role_policy is not None
-            else []
-        )
+        structured_factors = _structured_role_factor_records(candidate, role_policy)
         hard_constraint_factors.extend(structured_factors)
         for factor in structured_factors:
             evaluation_trace.append(
                 {
                     "step": "context_free_spatial_factor",
                     "materialization_role": normalized_role,
-                    "policy_key": role_policy.policy_key,
+                    "policy_key": role_policy.policy_key if role_policy else "",
                     **factor,
                 }
             )
@@ -273,7 +260,7 @@ def build_suitability_surface(
         )
         reasons.extend(hard_reasons)
         hard_constraint_factors.extend(deferred_factors)
-        if not getattr(candidate, "source_parcels", None):
+        if not candidate.source_parcels:
             reasons.append("no_source_parcel")
         if explicit_suitability is None:
             diagnostics.setdefault(target_id or "__unbound__", []).append("no_suitability_evaluator")
@@ -291,7 +278,7 @@ def build_suitability_surface(
             diagnostics.setdefault(target_id or "__unbound__", []).extend(reasons)
         candidates.append(
             SuitabilityCandidate(
-                candidate_id=str(candidate.site_id),
+                candidate_id=candidate.site_id,
                 target_id=target_id,
                 source_parcels=list(candidate.source_parcels),
                 materialization_role=normalized_role,
@@ -305,7 +292,7 @@ def build_suitability_surface(
                 evidence_refs=list(candidate.evidence_refs),
                 hard_constraint_factors=hard_constraint_factors,
                 evaluation_trace=evaluation_trace,
-                available_geometry_wkt=str(getattr(candidate, "available_geometry_wkt", "") or ""),
+                available_geometry_wkt=candidate.available_geometry_wkt,
             )
         )
     for issue in tuple(getattr(grounding_result, "unresolved", ()) or ()):

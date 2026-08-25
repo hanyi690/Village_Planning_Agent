@@ -27,14 +27,16 @@ def _context(
     farmland: list | None = None,
     ecological: list | None = None,
     hazards: list | None = None,
+    roads: list | None = None,
+    facilities: list | None = None,
     constraint_index: object = None,
 ) -> SimpleNamespace:
     return SimpleNamespace(
         workspace=SimpleNamespace(
             metadata=SimpleNamespace(crs="EPSG:4326"),
-            lines={"roads_current": []},
+            lines={"roads_current": roads or []},
             points={
-                "facilities_current": [],
+                "facilities_current": facilities or [],
                 "hazard_points": hazards or [],
             },
             polygons={
@@ -236,3 +238,48 @@ def test_non_empty_unknown_materialization_role_fails_closed() -> None:
     assert result.materialization_role == "unknown"
     assert result.exclusion_codes == ("MATERIALIZATION_ROLE_POLICY_UNAVAILABLE",)
     assert result.evaluation_trace[0]["result"] == "fail_closed"
+
+
+@pytest.mark.parametrize("materialization_role", ["site_footprint", "functional_overlay"])
+@pytest.mark.parametrize(
+    ("factor_code", "feature"),
+    [
+        (
+            "ROAD_ACCESS_DISTANCE",
+            SimpleNamespace(
+                geometry={"type": "LineString", "coordinates": [[-1, 0], [-1, 10]]}
+            ),
+        ),
+        (
+            "EXISTING_FACILITY_PROXIMITY",
+            SimpleNamespace(
+                geometry={"type": "Point", "coordinates": [-1, 5]}
+            ),
+        ),
+    ],
+)
+def test_spatial_advisory_factors_are_recorded_without_exclusion(
+    materialization_role: str,
+    factor_code: str,
+    feature: SimpleNamespace,
+) -> None:
+    context_kwargs = (
+        {"roads": [feature]}
+        if factor_code == "ROAD_ACCESS_DISTANCE"
+        else {"facilities": [feature]}
+    )
+
+    result = SpatialFactorIndex(_context(**context_kwargs), _policy()).evaluate(
+        _parcel(_PARCEL_COORDS), materialization_role=materialization_role
+    )
+    factor = next(
+        item
+        for item in result.hard_constraint_factors
+        if item["factor_code"] == factor_code
+    )
+
+    assert result.hard_feasible is True
+    assert factor["policy"] == "advisory"
+    assert factor["triggered"] is True
+    assert factor["hard_exclusion"] is False
+    assert factor_code not in result.exclusion_codes

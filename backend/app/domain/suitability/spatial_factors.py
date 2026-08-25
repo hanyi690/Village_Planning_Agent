@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, cast
 
 from shapely.geometry import mapping, shape
 from shapely import wkt
@@ -13,11 +13,19 @@ from app.contracts.domain.planning_semantics import (
     RolePolicyFactorKey,
     RolePolicyDisposition,
     RolePolicyKey,
+    SuitabilityEvaluationTrace,
+    SuitabilityFactorCode,
+    SuitabilityFactorRecord,
     SuitabilityMaterializationRole,
 )
 
 SPATIAL_ROLE_POLICY_VERSION = "materialization_role_policy_v1"
-MATERIALIZATION_ROLE_POLICY_UNAVAILABLE = "MATERIALIZATION_ROLE_POLICY_UNAVAILABLE"
+MATERIALIZATION_ROLE_POLICY_UNAVAILABLE: SuitabilityFactorCode = (
+    "MATERIALIZATION_ROLE_POLICY_UNAVAILABLE"
+)
+_UNKNOWN_HARD_CONSTRAINT_FACTOR: SuitabilityFactorCode = (
+    "UNKNOWN_HARD_CONSTRAINT_FACTOR"
+)
 _OVERLAY_ROLES = frozenset(
     {
         "functional_overlay",
@@ -48,23 +56,45 @@ class MaterializationRolePolicy:
     policy_key: RolePolicyKey
     factor_policies: dict[RolePolicyFactorKey, RolePolicyDisposition]
 
-    def classify(self, factor_code: str) -> RolePolicyDisposition:
+    def classify(
+        self, factor_code: SuitabilityFactorCode
+    ) -> RolePolicyDisposition | None:
         factor_key = _factor_policy_key(factor_code)
-        return self.factor_policies.get(factor_key, "site_hard_exclusion")
+        return self.factor_policies.get(factor_key) if factor_key is not None else None
 
 
-def _factor_policy_key(factor_code: str) -> str:
-    if factor_code == "FARMLAND_PROTECTION_OVERLAP":
-        return "farmland_overlap"
-    if factor_code == "ECOLOGICAL_REDLINE_OVERLAP":
-        return "ecological_overlap"
-    if factor_code == "HAZARD_POINT_BUFFER":
-        return "hazard_buffer"
-    if factor_code == "ROAD_ACCESS_DISTANCE":
-        return "road_access"
-    if factor_code == "EXISTING_FACILITY_PROXIMITY":
-        return "existing_facility_proximity"
-    return "prohibited_constraint_overlap"
+_FACTOR_POLICY_KEYS: dict[SuitabilityFactorCode, RolePolicyFactorKey] = {
+    "FARMLAND_PROTECTION_OVERLAP": "farmland_overlap",
+    "ECOLOGICAL_REDLINE_OVERLAP": "ecological_overlap",
+    "HAZARD_POINT_BUFFER": "hazard_buffer",
+    "ROAD_ACCESS_DISTANCE": "road_access",
+    "EXISTING_FACILITY_PROXIMITY": "existing_facility_proximity",
+    "farmland_protection": "prohibited_constraint_overlap",
+    "ecological_redline": "prohibited_constraint_overlap",
+    "historical_protection": "prohibited_constraint_overlap",
+    "cultivated_land_target": "prohibited_constraint_overlap",
+    "hazard_control_line": "prohibited_constraint_overlap",
+    "flood_control_line": "prohibited_constraint_overlap",
+}
+
+
+def _factor_policy_key(
+    factor_code: SuitabilityFactorCode,
+) -> RolePolicyFactorKey | None:
+    return _FACTOR_POLICY_KEYS.get(factor_code)
+
+
+def normalize_suitability_factor_code(value: object) -> SuitabilityFactorCode:
+    raw_code = str(value or "").strip()
+    if raw_code in _FACTOR_POLICY_KEYS:
+        return cast(SuitabilityFactorCode, raw_code)
+    if raw_code in {
+        MATERIALIZATION_ROLE_POLICY_UNAVAILABLE,
+        "HARD_CONSTRAINT_EVALUATION_DEFERRED",
+        _UNKNOWN_HARD_CONSTRAINT_FACTOR,
+    }:
+        return cast(SuitabilityFactorCode, raw_code)
+    return _UNKNOWN_HARD_CONSTRAINT_FACTOR
 
 
 def normalize_materialization_role(value: Any) -> SuitabilityMaterializationRole:
@@ -115,8 +145,8 @@ class ParcelSpatialFactors:
     evidence_refs: tuple[str, ...] = ()
     diagnostics: tuple[str, ...] = ()
     score_breakdown: dict[str, float] = field(default_factory=dict)
-    hard_constraint_factors: tuple[dict[str, object], ...] = ()
-    evaluation_trace: tuple[dict[str, object], ...] = ()
+    hard_constraint_factors: tuple[SuitabilityFactorRecord, ...] = ()
+    evaluation_trace: tuple[SuitabilityEvaluationTrace, ...] = ()
 
 
 def _features(group: Any, key: str) -> list[Any]:
@@ -215,8 +245,8 @@ class SpatialFactorIndex:
         exclusions: list[str] = []
         evidence_refs = [f"bundle:landuse_current:{bsm}"]
         diagnostics = list(self.diagnostics)
-        factor_records: list[dict[str, object]] = []
-        evaluation_trace: list[dict[str, object]] = []
+        factor_records: list[SuitabilityFactorRecord] = []
+        evaluation_trace: list[SuitabilityEvaluationTrace] = []
         role_policy = resolve_materialization_role_policy(materialization_role)
         normalized_role = normalize_materialization_role(materialization_role)
         evaluation_trace.append(
@@ -310,13 +340,15 @@ class SpatialFactorIndex:
             )
 
         def _record_factor(
-            factor_code: str,
+            factor_code: SuitabilityFactorCode,
             *,
             triggered: bool,
             evidence_ref: str = "",
             detail: str = "",
         ) -> None:
             disposition = role_policy.classify(factor_code)
+            if disposition is None:
+                disposition = "site_hard_exclusion"
             hard_exclusion = triggered and disposition == "site_hard_exclusion"
             factor_records.append(
                 {
@@ -497,5 +529,6 @@ __all__ = [
     "SpatialFactorIndex",
     "SuitabilityMaterializationRole",
     "normalize_materialization_role",
+    "normalize_suitability_factor_code",
     "resolve_materialization_role_policy",
 ]

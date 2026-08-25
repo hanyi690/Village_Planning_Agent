@@ -491,14 +491,12 @@ def test_context_free_overlay_applies_role_policy_to_structured_failure() -> Non
                 site_id="site:context-free-overlay",
                 target_ref="T-CONTEXT-FREE-OVERLAY",
                 source_parcels=["P-CONTEXT-FREE-OVERLAY"],
-                metrics={
-                    "hard_constraint_factors": [
-                        {
-                            "factor_code": "FARMLAND_PROTECTION_OVERLAP",
-                            "triggered": True,
-                        }
-                    ]
-                },
+                hard_constraint_factors=[
+                    {
+                        "factor_code": "FARMLAND_PROTECTION_OVERLAP",
+                        "triggered": True,
+                    }
+                ],
                 hard_constraint_result=HardConstraintResult(
                     passed=False,
                     violation_detail="farmland protection overlap",
@@ -574,6 +572,148 @@ def test_context_free_overlay_without_role_aware_factors_is_deferred() -> None:
     assert deferred["policy"] == "overlay_constraint"
     assert deferred["hard_exclusion"] is False
     assert candidate.evaluation_trace[-1]["result"] == "deferred"
+
+
+@pytest.mark.parametrize(
+    "materialization_role",
+    [
+        "site_footprint",
+        "land_use_assignment",
+        "functional_overlay",
+        "protection_overlay",
+        "restoration_overlay",
+        "unknown",
+    ],
+)
+@pytest.mark.parametrize(
+    ("factor_code", "expected_policy"),
+    [
+        ("HAZARD_POINT_BUFFER", "overlay_constraint"),
+        ("farmland_protection", "overlay_constraint"),
+        ("ROAD_ACCESS_DISTANCE", "advisory"),
+        ("EXISTING_FACILITY_PROXIMITY", "advisory"),
+    ],
+)
+def test_context_free_role_factor_matrix_is_closed_and_fail_closed(
+    materialization_role: str,
+    factor_code: str,
+    expected_policy: str,
+) -> None:
+    grounding = GroundingResult(
+        candidates=[
+            CandidateSite(
+                site_id=f"site:matrix:{materialization_role}:{factor_code}",
+                target_ref="T-CONTEXT-FREE-MATRIX",
+                source_parcels=["P-CONTEXT-FREE-MATRIX"],
+                hard_constraint_factors=[
+                    {"factor_code": factor_code, "triggered": True}
+                ],
+                hard_constraint_result=HardConstraintResult(passed=False),
+            )
+        ]
+    )
+    role_value = (
+        materialization_role
+        if materialization_role != "unknown"
+        else "unknown_role_from_provider"
+    )
+    intent = SimpleNamespace(
+        site_area_targets=[
+            SimpleNamespace(
+                target_id="T-CONTEXT-FREE-MATRIX",
+                materialization_role=role_value,
+            )
+        ],
+        zone_targets=[],
+    )
+
+    candidate = build_suitability_surface(
+        grounding, plan_intent=intent
+    ).candidates[0]
+    factor = next(
+        item
+        for item in candidate.hard_constraint_factors
+        if item["factor_code"] == factor_code
+        or (
+            factor_code == "HAZARD_POINT_BUFFER"
+            and item["factor_code"] == "HAZARD_POINT_BUFFER"
+        )
+    )
+
+    if materialization_role == "unknown":
+        assert candidate.hard_feasible is False
+        assert factor["policy"] == "site_hard_exclusion"
+        assert factor["hard_exclusion"] is True
+        assert "MATERIALIZATION_ROLE_POLICY_UNAVAILABLE" in (
+            candidate.exclusion_reasons
+        )
+        assert candidate.evaluation_trace[-1]["result"] == "fail_closed"
+        return
+
+    expected_factor_policy = (
+        "site_hard_exclusion"
+        if expected_policy != "advisory"
+        and materialization_role in {"site_footprint", "land_use_assignment"}
+        else expected_policy
+    )
+    assert factor["policy"] == expected_factor_policy
+    if expected_policy == "advisory":
+        assert factor["hard_exclusion"] is False
+        assert candidate.hard_feasible is False
+        assert candidate.evaluation_trace[-1]["result"] == (
+            "deferred"
+            if materialization_role.endswith("overlay")
+            else "failed"
+        )
+    elif materialization_role.endswith("overlay"):
+        assert factor["hard_exclusion"] is False
+        assert candidate.hard_feasible is True
+        assert candidate.evaluation_trace[-1]["result"] == "passed_by_role_policy"
+    else:
+        assert factor["hard_exclusion"] is True
+        assert candidate.hard_feasible is False
+        assert factor_code in candidate.exclusion_reasons
+        assert candidate.evaluation_trace[-1]["result"] == "failed"
+
+
+def test_context_free_unknown_factor_never_uses_overlay_default() -> None:
+    grounding = GroundingResult(
+        candidates=[
+            CandidateSite(
+                site_id="site:context-free-unknown-factor",
+                target_ref="T-CONTEXT-FREE-UNKNOWN-FACTOR",
+                source_parcels=["P-CONTEXT-FREE-UNKNOWN-FACTOR"],
+                hard_constraint_factors=[
+                    {"factor_code": "UNRECOGNIZED_FACTOR", "triggered": True}
+                ],
+                hard_constraint_result=HardConstraintResult(passed=False),
+            )
+        ]
+    )
+    intent = SimpleNamespace(
+        site_area_targets=[
+            SimpleNamespace(
+                target_id="T-CONTEXT-FREE-UNKNOWN-FACTOR",
+                materialization_role="functional_overlay",
+            )
+        ],
+        zone_targets=[],
+    )
+
+    candidate = build_suitability_surface(
+        grounding, plan_intent=intent
+    ).candidates[0]
+    factor = next(
+        item
+        for item in candidate.hard_constraint_factors
+        if item["factor_code"] == "UNKNOWN_HARD_CONSTRAINT_FACTOR"
+    )
+
+    assert candidate.hard_feasible is False
+    assert factor["policy"] == "site_hard_exclusion"
+    assert factor["hard_exclusion"] is True
+    assert "UNKNOWN_HARD_CONSTRAINT_FACTOR" in candidate.exclusion_reasons
+    assert candidate.evaluation_trace[-1]["result"] == "failed"
 
 
 def test_context_backed_missing_parcel_keeps_role_failure_separate() -> None:

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Literal, TypeAlias
+from typing import Literal, TypeAlias, TypedDict
 
 from pydantic import BaseModel, Field, model_validator
 
@@ -87,6 +87,118 @@ RolePolicyDisposition: TypeAlias = Literal[
     "overlay_constraint",
     "advisory",
 ]
+
+SuitabilityFactorCode: TypeAlias = Literal[
+    "FARMLAND_PROTECTION_OVERLAP",
+    "ECOLOGICAL_REDLINE_OVERLAP",
+    "HAZARD_POINT_BUFFER",
+    "ROAD_ACCESS_DISTANCE",
+    "EXISTING_FACILITY_PROXIMITY",
+    "farmland_protection",
+    "ecological_redline",
+    "historical_protection",
+    "cultivated_land_target",
+    "hazard_control_line",
+    "flood_control_line",
+    "MATERIALIZATION_ROLE_POLICY_UNAVAILABLE",
+    "HARD_CONSTRAINT_EVALUATION_DEFERRED",
+    "UNKNOWN_HARD_CONSTRAINT_FACTOR",
+]
+
+SuitabilityEvaluationStep: TypeAlias = Literal[
+    "materialization_role_policy",
+    "context_free_grounding_result",
+    "context_free_spatial_factor",
+    "context_free_role_policy_result",
+    "geometry_prepared",
+    "spatial_factor",
+    "parcel_lookup",
+]
+
+SuitabilityEvaluationResult: TypeAlias = Literal[
+    "resolved",
+    "fail_closed",
+    "ok",
+    "invalid",
+    "missing",
+    "passed",
+    "passed_by_role_policy",
+    "failed",
+    "deferred",
+]
+
+SuitabilityGeometrySource: TypeAlias = Literal[
+    "candidate_geometry",
+    "parcel_geometry",
+]
+
+
+class SuitabilityFactorRecord(TypedDict):
+    factor_code: SuitabilityFactorCode
+    policy: RolePolicyDisposition
+    triggered: bool
+    hard_exclusion: bool
+    evidence_ref: str
+    detail: str
+
+
+class MaterializationRolePolicyTrace(TypedDict):
+    step: Literal["materialization_role_policy"]
+    materialization_role: SuitabilityMaterializationRole
+    policy_key: RolePolicyKey
+    policy: dict[RolePolicyFactorKey, RolePolicyDisposition]
+    result: Literal["resolved", "fail_closed"]
+
+
+class ContextFreeGroundingResultTrace(TypedDict):
+    step: Literal["context_free_grounding_result"]
+    hard_constraint_passed: bool
+
+
+class SuitabilityFactorTrace(TypedDict):
+    step: Literal["context_free_spatial_factor", "spatial_factor"]
+    materialization_role: SuitabilityMaterializationRole
+    policy_key: RolePolicyKey
+    factor_code: SuitabilityFactorCode
+    policy: RolePolicyDisposition
+    triggered: bool
+    hard_exclusion: bool
+    evidence_ref: str
+    detail: str
+
+
+class ContextFreeRolePolicyResultTrace(TypedDict):
+    step: Literal["context_free_role_policy_result"]
+    materialization_role: SuitabilityMaterializationRole
+    policy_key: RolePolicyKey
+    result: SuitabilityEvaluationResult
+    hard_feasible_before_candidate_requirements: bool
+
+
+class GeometryPreparedTrace(TypedDict):
+    step: Literal["geometry_prepared"]
+    materialization_role: SuitabilityMaterializationRole
+    geometry_source: SuitabilityGeometrySource
+    result: Literal["ok", "invalid"]
+
+
+class ParcelLookupTrace(TypedDict):
+    step: Literal["parcel_lookup"]
+    materialization_role: SuitabilityMaterializationRole
+    policy_key: RolePolicyKey
+    bsm: str
+    result: Literal["missing"]
+    diagnostic: str
+
+
+SuitabilityEvaluationTrace: TypeAlias = (
+    MaterializationRolePolicyTrace
+    | ContextFreeGroundingResultTrace
+    | SuitabilityFactorTrace
+    | ContextFreeRolePolicyResultTrace
+    | GeometryPreparedTrace
+    | ParcelLookupTrace
+)
 
 InterventionAction: TypeAlias = Literal[
     "preserve",
@@ -211,6 +323,12 @@ __all__ = [
     "RolePolicyFactorKey",
     "RolePolicyDisposition",
     "RolePolicyKey",
+    "SuitabilityEvaluationResult",
+    "SuitabilityEvaluationStep",
+    "SuitabilityEvaluationTrace",
+    "SuitabilityFactorCode",
+    "SuitabilityFactorRecord",
+    "SuitabilityGeometrySource",
     "SiteAreaPlanningParameters",
     "RoadPlanningParameters",
     "SuitabilityMaterializationRole",

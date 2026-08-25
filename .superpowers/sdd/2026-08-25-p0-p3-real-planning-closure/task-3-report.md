@@ -121,3 +121,17 @@ Also did not modify unrelated user-owned worktree entries.
 - Added centralized typed role aliases, context-free role-aware hard-feasibility handling, policy provenance, and fail-closed parcel diagnostics/traces.
 - Bounded verification was started with `python -m pytest -c backend/pytest.ini -o addopts='' --maxfail=1 backend/tests/core/test_planning_subgeometry_service.py backend/tests/core/test_spatial_factors_overlap.py`; it stopped after one focused assertion failure in the newly added matrix test (`test_role_policy_matrix_classifies_spatial_factors`).
 - Fix Round 1 corrected the chained boolean assertion while preserving the `result.hard_feasible` assertion; the same bounded command then passed: `43 passed`.
+
+## Fix Round 2
+
+- Applied the Round 1 review fixes without resetting or modifying unrelated user-owned dirty files.
+- Added a closed `SuitabilityFactorCode` set, closed factor records, typed evaluation-trace variants, and typed grounding factor evidence.
+- Unknown context-free factor codes now normalize to `UNKNOWN_HARD_CONSTRAINT_FACTOR` with `site_hard_exclusion`; unknown roles retain fail-closed policy evidence even when a triggered factor is present.
+- Removed context-free factor extraction from open metrics/dynamic dictionaries; the service now reads explicit typed grounding factor evidence and emits typed factor/trace records.
+- Added context-free six-role coverage for hazard, prohibited, road-access advisory, and existing-facility advisory factors, plus unknown-factor regression coverage and context-backed advisory assertions.
+
+Verification:
+
+- `python -m pytest -c backend/pytest.ini -o addopts='' --maxfail=1 backend/tests/core/test_planning_subgeometry_service.py backend/tests/core/test_spatial_factors_overlap.py` — `72 passed`.
+- Review regression slice with `test_service_coverage_not_existing_facility_proximity.py`, `test_planning_domain_boundaries.py`, `test_candidate_validation_boundary.py`, and `test_scenario_hard_relation_feasibility.py` — `87 passed`.
+- `python -m compileall -q backend/app/domain/suitability backend/app/contracts/domain/planning_semantics.py backend/app/contracts/spatial/grounding_contracts.py` — passed.

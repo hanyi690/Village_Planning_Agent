@@ -11,6 +11,8 @@ from app.contracts.domain.planning_semantics import (
     RolePolicyFactorKey,
     RolePolicyDisposition,
     RolePolicyKey,
+    SuitabilityEvaluationTrace,
+    SuitabilityFactorRecord,
     SuitabilityMaterializationRole,
 )
 
@@ -31,8 +33,8 @@ class SuitabilityCandidate(BaseModel):
     hard_feasible: bool = False
     exclusion_reasons: list[str] = Field(default_factory=list)
     evidence_refs: list[str] = Field(default_factory=list)
-    hard_constraint_factors: list[dict[str, object]] = Field(default_factory=list)
-    evaluation_trace: list[dict[str, object]] = Field(default_factory=list)
+    hard_constraint_factors: list[SuitabilityFactorRecord] = Field(default_factory=list)
+    evaluation_trace: list[SuitabilityEvaluationTrace] = Field(default_factory=list)
     available_geometry_wkt: str = ""
     eligible_geometry_wkt: str = ""
     available_area_ha: float = 0.0

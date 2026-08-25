@@ -13,10 +13,22 @@ from app.contracts.spatial.candidate_geometry import CandidateGeometry
 from app.contracts.spatial.grounded_problem import GroundedPlanningProblem
 
 
+class SuitabilityFactorEvidence(BaseModel):
+    """Typed factor evidence accepted from context-free grounding."""
+
+    factor_code: str
+    triggered: bool = True
+    evidence_ref: str = ""
+    detail: str = ""
+
+
 class HardConstraintResult(BaseModel):
     constraint_id: str = ""
     passed: bool = True
     violation_detail: str = ""
+    hard_constraint_factors: list[SuitabilityFactorEvidence] = Field(
+        default_factory=list
+    )
 
 
 class SpatialQueryEvidence(BaseModel):
@@ -49,6 +61,9 @@ class CandidateSite(BaseModel):
     available_geometry_wkt: str = ""
     available_area_ha: float = 0.0
     hard_constraint_result: HardConstraintResult | None = None
+    hard_constraint_factors: list[SuitabilityFactorEvidence] = Field(
+        default_factory=list
+    )
     metrics: dict = Field(default_factory=dict)
     evidence_refs: list[str] = Field(default_factory=list)
     target_ref: str | None = None
@@ -170,6 +185,7 @@ class GroundedAnchor(ContractMeta):
 
 __all__ = [
     "HardConstraintResult",
+    "SuitabilityFactorEvidence",
     "SpatialQueryEvidence",
     "CandidateSite",
     "CandidateUncertainty",
