@@ -136,12 +136,12 @@ def test_protection_and_restoration_are_overlays_not_land_use_assignments() -> N
     )
 
     assert [item.target_id for item in result.typed_intent.zone_targets] == ["zone-1"]
-    assert [item.target_id for item in result.typed_intent.project_targets] == [
+    assert [item.target_id for item in result.typed_intent.site_area_targets] == [
         "protect-1",
         "restore-1",
     ]
-    assert result.typed_intent.project_targets[0].materialization_role == "protection_overlay"
-    assert result.typed_intent.project_targets[1].materialization_role == "restoration_overlay"
+    assert result.typed_intent.site_area_targets[0].materialization_role == "protection_overlay"
+    assert result.typed_intent.site_area_targets[1].materialization_role == "restoration_overlay"
 
 
 def test_projection_gate_defers_unresolved_semantics() -> None:

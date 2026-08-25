@@ -18,7 +18,7 @@ from app.contracts.workflow.execution_plan_contracts import ExecutionPlan
 from app.domain.materialization.plan_digest import execution_plan_semantic_digest
 
 
-def test_approved_execution_input_is_bound_and_provisional_is_not_executable() -> None:
+def test_approved_execution_input_is_canonicalized_and_fingerprinted() -> None:
     item = ApprovedExecutionInput(
         approval_id="approval:1",
         scenario_set_ref="scenario-set:1",
@@ -26,13 +26,16 @@ def test_approved_execution_input_is_bound_and_provisional_is_not_executable() -
         scenario_ref="scenario-ref:1",
         scenario_fingerprint="scenario-fp",
         problem_fingerprint="problem-fp",
+        execution_plan_digest="plan:digest",
         target_ids=["b", "a", "a"],
         candidate_ids=["c2", "c1"],
+        approval_status="human_approved",
+        approved_by="operator",
     )
 
     assert item.target_ids == ["a", "b"]
     assert item.candidate_ids == ["c1", "c2"]
-    assert item.can_execute is False
+    assert item.can_execute is True
     assert item.fingerprint
 
 

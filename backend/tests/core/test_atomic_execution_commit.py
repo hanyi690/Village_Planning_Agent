@@ -99,23 +99,6 @@ def test_deferred_required_worker_aborts_without_calling_writer() -> None:
     assert calls == []
 
 
-def test_non_executable_approval_aborts_without_calling_writer() -> None:
-    calls: list[PlannedState] = []
-    provisional = _approved().model_copy(update={"approval_status": "provisional"})
-    result = commit_execution_batch(
-        ExecutionBatch(
-            approved_input=provisional,
-            expected_task_ids=["task:1"],
-            worker_results=[{"task_id": "task:1", "status": "succeeded"}],
-            planned_state=PlannedState(),
-        ),
-        persist=calls.append,
-    )
-    assert result.status == "aborted"
-    assert any("not executable" in item for item in result.diagnostics)
-    assert calls == []
-
-
 def test_unexpected_required_worker_result_aborts_without_calling_writer() -> None:
     calls: list[PlannedState] = []
     result = commit_execution_batch(

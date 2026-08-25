@@ -39,31 +39,35 @@ class SimulatedPlanningProvider:
         self.calls[key] = self.calls.get(key, 0) + 1
 
     def l1_output(self, dimension_key: str) -> Any:
-        from app.domain.assessment.observation_draft import L1ObservationDraft
+        from app.domain.assessment.observation_draft import L1SpatialEntityFact
 
         self._count(f'L1:{dimension_key}')
         observations: list[dict[str, str]] = []
         if dimension_key == 'traffic':
             observations.append({
+                'fact_type': 'spatial_entity',
                 'entity_type': '道路',
                 'name': '村道',
-                'location': '金田村',
-                'relation': '连接金田村现状居民点',
+                'locator': {
+                    'place_names': ['金田村'],
+                    'relation': '连接金田村现状居民点',
+                },
                 'description': '现状村道，需要形成可执行的道路建设或提升成果。',
                 'scale': '1条',
-                'observation_kind': 'current_asset',
                 'semantic_type': 'road',
                 'attributes': {'canonical_name': '村道'},
             })
         if self.facility_mode and dimension_key == 'public_services':
             observations.append({
+                'fact_type': 'spatial_entity',
                 'entity_type': '现状设施',
                 'name': '祠堂',
-                'location': '社前村',
-                'relation': '位于社前村',
+                'locator': {
+                    'place_names': ['社前村'],
+                    'relation': '位于社前村',
+                },
                 'description': '社前村现状祠堂，可作为公共文化服务设施定位依据。',
                 'scale': '1处',
-                'observation_kind': 'current_asset',
                 'semantic_type': 'facility',
                 'attributes': {'canonical_name': '祠堂'},
             })
@@ -75,7 +79,7 @@ class SimulatedPlanningProvider:
                 '【证据边界】\n'
                 '未由结构化观测确认的空间对象不作为后续定位依据。'
             ),
-            observations=[L1ObservationDraft.model_validate(item) for item in observations],
+            observations=[L1SpatialEntityFact.model_validate(item) for item in observations],
         )
 
     def l1_observation_output(self, dimension_key: str, prompt: str = "") -> Any:
@@ -182,15 +186,75 @@ class SimulatedPlanningProvider:
         name = getattr(response_model, '__name__', '')
         prompt = '\n'.join(str(item.get('content') or '') for item in messages)
         dimension_key = ''
+        from app.domain.assessment.observation_draft import L1ObservationPassOutput
+
+        is_l1_observation_model = (
+            isinstance(response_model, type)
+            and issubclass(response_model, L1ObservationPassOutput)
+        )
         if name in {
             'L1ObservationPassOutput',
             'L1ReportOutput',
             'L3ClaimOutput',
             'L3ReportOutput',
-        }:
+        } or is_l1_observation_model:
             dimension_key = self._dimension_from_prompt(prompt)
-        if name == 'L1ObservationPassOutput':
+        if is_l1_observation_model:
             return self.l1_observation_output(dimension_key, prompt)
+        if name == 'L2DecisionSet':
+            from app.contracts.domain.l2_contracts import (
+                L2DecisionSet,
+                PlanningObjective,
+                PriorityDecision,
+                SpatialStructureIntent,
+                StrategyRule,
+            )
+
+            fact_kind = (
+                'facility'
+                if dimension_key in {'public_service', 'public_services'}
+                else 'road'
+            )
+            fact_ref = await self._fact_id(fact_kind)
+            source_refs = [fact_ref] if fact_ref else []
+            objective_id = f'sim-objective-{dimension_key}'
+            strategy_id = f'sim-strategy-{dimension_key}'
+            return L2DecisionSet(
+                dimension_key=dimension_key,
+                objectives=[PlanningObjective(
+                    objective_id=objective_id,
+                    statement='形成基于现状证据的可执行村庄规划安排。',
+                    kind='goal',
+                    status='proposed',
+                    scope='金田村',
+                    source_fact_refs=source_refs,
+                )],
+                strategies=[StrategyRule(
+                    strategy_id=strategy_id,
+                    statement='优先利用已核验的现状空间对象，并将未闭合的定位交由 GROUND 解析。',
+                    action='evidence_bound_spatial_planning',
+                    objective_refs=[objective_id],
+                    strength='proposed',
+                    scope='金田村',
+                    source_fact_refs=source_refs,
+                )],
+                priorities=[PriorityDecision(
+                    priority_id=f'sim-priority-{dimension_key}',
+                    rank=1,
+                    strategy_refs=[strategy_id],
+                    statement='先完成有来源的道路与设施空间链路。',
+                )],
+                spatial_structures=[SpatialStructureIntent(
+                    structure_id=f'sim-structure-{dimension_key}',
+                    statement='现状对象与村庄服务网络保持可解释的空间联系。',
+                    scope='金田村',
+                    relation_kind='serve',
+                    objective_refs=[objective_id],
+                    source_fact_refs=source_refs,
+                    grounding_requirements=['candidate_geometry', 'network_context'],
+                )],
+                source_refs=source_refs,
+            )
         if name == 'L1ReportOutput':
             return self.l1_report_output(dimension_key)
         if name == 'L3ClaimOutput':

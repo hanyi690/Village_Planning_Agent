@@ -3,8 +3,12 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 from app.contracts.ports.place_resolution_contracts import PlaceResolutionCandidate
+from app.contracts.program import PlanningClaim
 from app.contracts.spatial.spatial_reference_contracts import RefObject, SpatialReferenceSpec
 from app.domain.ground.aggregate import ground_aggregate
+from app.domain.program.target_projection.planning_task_graph_compiler import (
+    pending_claim_grounding_specs,
+)
 from app.evidence.retrieval.evidence_graph import EvidenceGraph
 
 
@@ -229,3 +233,55 @@ def test_facility_feature_bsm_does_not_replace_related_parcel_domain():
     assert candidate.source_parcels == ["P-1"]
     assert candidate.geometry.kind == "point"
     assert candidate.geometry.feature_bsms == ["F-1"]
+
+
+def test_pending_spatial_claim_is_consumed_by_ground_aggregate():
+    parcels = [_parcel("P-1", 116.0, 24.0, 116.01, 24.01)]
+
+    class _Index:
+        def resolve_mention(self, mention, role="unknown", hints=""):
+            return SimpleNamespace(
+                status="resolved",
+                candidates=[
+                    PlaceResolutionCandidate(
+                        entity_ref="entity:社前村文化设施候选",
+                        entity_type="facility",
+                        canonical_name="社前村",
+                        source_bsms=["P-1"],
+                        related_parcel_bsms=["P-1"],
+                        score=0.82,
+                    )
+                ],
+                query_trace=["typed_pending_claim"],
+            )
+
+    context = _context(_Index(), parcels)
+    context.evidence_graph = EvidenceGraph(context, index=_Index())
+    claim = PlanningClaim(
+        claim_id="pending-ground-facility",
+        dimension_key="public_service",
+        statement="新增文化设施",
+        planning_role="spatial_intervention",
+        suggested_category="facility",
+        suggested_output_kind="point",
+        asset_kind="facility",
+        facility_parameters={"facility_type": "文化设施", "action": "new"},
+        location_hints=["社前村"],
+    )
+    specs = pending_claim_grounding_specs([claim])
+
+    result = ground_aggregate(
+        specs,
+        context,
+        target_metadata={
+            claim.claim_id: {
+                "target_kind": "facility",
+                "expected_output_kind": "point",
+            }
+        },
+    )
+
+    assert result.spatial_query_evidence[0].target_id == claim.claim_id
+    assert result.candidates
+    assert result.candidates[0].target_ref == claim.claim_id
+    assert result.problem.target_domains[0].target_id == claim.claim_id

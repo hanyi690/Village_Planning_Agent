@@ -93,7 +93,7 @@ def test_optimizer_fails_closed_when_grounding_gate_is_incomplete() -> None:
         evaluator_context=RelationEvaluationContext(scenario_id="set-incomplete"),
     )
 
-    assert result.solver_certificate.status == "infeasible"
+    assert result.solver_certificate.status == "unknown"
     assert result.recommended_scenario_id == ""
     assert result.feasible_scenario_ids == []
     assert result.infeasibility_explanations
@@ -130,7 +130,7 @@ def test_optimizer_keeps_degraded_geometry_as_diagnostic_only() -> None:
     assert result.pareto_scenario_ids == []
     assert result.recommended_scenario_id == ""
     assert result.recommended is None
-    assert result.solver_certificate.status == "infeasible"
+    assert result.solver_certificate.status == "unknown"
     assert any(item.code == "GROUNDING_INCOMPLETE" for item in result.scenarios[0].findings)
 
 
@@ -221,7 +221,7 @@ def test_objective_definition_order_is_authoritative_and_missing_results_fail_cl
         evaluator_context=RelationEvaluationContext(scenario_id="set-objective-missing"),
         objective_definitions=[ObjectiveDefinition(objective_id="cost")],
     )
-    assert missing.solver_certificate.status == "infeasible"
+    assert missing.solver_certificate.status == "unknown"
     assert missing.feasible_scenario_ids == []
     assert all(item.status == "partial" for item in missing.scenarios)
 

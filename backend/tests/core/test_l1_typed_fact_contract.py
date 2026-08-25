@@ -1,3 +1,4 @@
+import json
 from types import SimpleNamespace
 
 from app.contracts.domain.l1_contracts import L1Fact
@@ -7,10 +8,23 @@ from app.evidence.retrieval.retrievers.l1_retriever import retrieve_from_l1_cont
 
 
 def test_l1_snapshot_emits_stable_typed_records_with_source_span() -> None:
-    instruction = (
-        '[{"entity_type":"现状设施","name":"祠堂",'
-        '"location":"社前村","relation":"位于社前村",'
-        '"description":"客家祠堂","scale":"3处"}]'
+    instruction = json.dumps(
+        {
+            "observations": [
+                {
+                    "fact_type": "spatial_entity",
+                    "entity_type": "现状设施",
+                    "name": "祠堂",
+                    "locator": {
+                        "place_names": ["社前村"],
+                        "relation": "位于社前村",
+                    },
+                    "description": "客家祠堂",
+                    "scale": "3处",
+                }
+            ]
+        },
+        ensure_ascii=False,
     )
     first = compile_l1_observation(
         dimension_key="socio_economic",

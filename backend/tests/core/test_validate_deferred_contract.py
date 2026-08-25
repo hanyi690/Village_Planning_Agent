@@ -5,7 +5,7 @@ from app.domain.validation.validate_checks import check_contract_completeness
 
 def test_all_spatial_tasks_deferred_do_not_require_planned_parcels():
     intent = SimpleNamespace(
-        project_targets=[SimpleNamespace(requires_spatial=True)],
+        site_area_targets=[SimpleNamespace(requires_spatial=True)],
         zone_targets=[],
     )
     planned_state = SimpleNamespace(parcels=[])
@@ -28,7 +28,7 @@ def test_all_spatial_tasks_deferred_do_not_require_planned_parcels():
 
 def test_missing_spatial_outputs_are_attributed_to_active_targets():
     intent = SimpleNamespace(
-        project_targets=[SimpleNamespace(requires_spatial=True, project_id="project-1")],
+        site_area_targets=[SimpleNamespace(requires_spatial=True, target_id="project-1")],
         zone_targets=[],
     )
     planned_state = SimpleNamespace(parcels=[])

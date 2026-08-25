@@ -12,6 +12,7 @@ async def test_run_rag_is_the_single_unified_evidence_adapter(monkeypatch):
         EvidenceFact,
         EvidenceSource,
         ExplorationResult,
+        SpatialCognitionEvidence,
     )
     from app.infrastructure.llm import dimension_runtime
 
@@ -24,7 +25,8 @@ async def test_run_rag_is_the_single_unified_evidence_adapter(monkeypatch):
                 request=request.query,
                 facts=[EvidenceFact(statement="统一证据")],
                 sources=[EvidenceSource(source_type="rag", reference="rag:test")],
-            )
+            ),
+            spatial_cognition=SpatialCognitionEvidence(kg_confidence=0.8),
         )
 
     monkeypatch.setattr(
@@ -36,15 +38,20 @@ async def test_run_rag_is_the_single_unified_evidence_adapter(monkeypatch):
         lambda session_id, dimension_key: None,
     )
 
+    trace: dict[str, object] = {}
     context, log = await dimension_runtime.run_rag(
         "traffic",
         SimpleNamespace(name="交通", layer=3),
         {"session_id": "session-adapter", "config": {"village_name": "金田村"}},
+        trace_sink=trace,
     )
 
     assert calls == [("traffic", "session-adapter")]
     assert "统一证据" in context
     assert log is None
+    assert trace["source_types"] == ["rag"]
+    assert trace["fact_count"] == 1
+    assert trace["kg_confidence"] == 0.8
 
 
 @pytest.mark.asyncio

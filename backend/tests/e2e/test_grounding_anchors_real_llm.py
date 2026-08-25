@@ -86,13 +86,41 @@ async def test_ground_anchors_real_llm(sqlite_db, pipeline_reset):
 
         villages = ["园寨", "田坑", "社前", "分水", "清明", "塘笃", "长塘", "炉池", "肩丰", "营仔", "新山", "黄竹"]
         obs = [
-            {"entity_type": "自然村", "name": v, "location": v, "relation": "自然村", "description": f"{v}自然村", "scale": ""}
+            {
+                "fact_type": "spatial_entity",
+                "entity_type": "自然村",
+                "name": v,
+                "locator": {"place_names": [v], "relation": "自然村"},
+                "description": f"{v}自然村",
+                "scale": "",
+            }
             for v in villages
         ]
         obs += [
-            {"entity_type": "现状设施", "name": "祠堂", "location": "社前村", "relation": "位于社前村", "description": "客家祠堂", "scale": "3处"},
-            {"entity_type": "水系", "name": "金田河", "location": "西南至东北贯穿金田村", "relation": "汇入石窟河", "description": "村内主要河流", "scale": ""},
-            {"entity_type": "道路", "name": "122乡道", "location": "园寨至田坑东西走向", "relation": "金田村唯一东西向道路", "description": "对外交通主要道路", "scale": ""},
+            {
+                "fact_type": "spatial_entity",
+                "entity_type": "现状设施",
+                "name": "祠堂",
+                "locator": {"place_names": ["社前村"], "relation": "位于社前村"},
+                "description": "客家祠堂",
+                "scale": "3处",
+            },
+            {
+                "fact_type": "spatial_entity",
+                "entity_type": "水系",
+                "name": "金田河",
+                "locator": {"place_names": ["金田村"], "relation": "西南至东北贯穿金田村；汇入石窟河"},
+                "description": "村内主要河流",
+                "scale": "",
+            },
+            {
+                "fact_type": "spatial_entity",
+                "entity_type": "道路",
+                "name": "122乡道",
+                "locator": {"place_names": ["园寨", "田坑"], "relation": "东西走向；金田村唯一东西向道路"},
+                "description": "对外交通主要道路",
+                "scale": "",
+            },
         ]
         facts = _extract_location_facts_from_observations(
             json.dumps(obs, ensure_ascii=False),

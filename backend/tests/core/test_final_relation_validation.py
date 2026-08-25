@@ -116,7 +116,7 @@ def test_final_geometry_recheck_catches_worker_drift() -> None:
 
 def test_final_satisfaction_is_backed_by_independent_measurement() -> None:
     scenario = _scenario().model_copy(update={
-        "relation_satisfactions": [
+        "satisfactions": [
             RelationSatisfaction(
                 relation_id="near-zone-facility",
                 scenario_id="scenario:test",

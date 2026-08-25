@@ -169,7 +169,6 @@ def test_kg_multi_feature_mode_requires_explicit_source_backed_opt_in():
     )
     result = resolve_candidates(kg, multi_spec)
 
-    assert result.ref_geometry_wkt is None
     assert [item.source_ref for item in result.ref_geometries] == [str(item) for item in entities]
     assert [item.source_bsms for item in result.ref_geometries] == [["P-1"], ["P-2"]]
 
@@ -179,7 +178,6 @@ def test_kg_multi_feature_mode_requires_explicit_source_backed_opt_in():
     generic_spec.reference.filter.pop("allow_multiple_exact", None)
     generic_result = resolve_candidates(kg, generic_spec)
     assert generic_result.ref_geometries == []
-    assert generic_result.ref_geometry_wkt is None
 
 
 def test_kg_explicit_source_feature_ids_are_resolved_without_label_guessing():

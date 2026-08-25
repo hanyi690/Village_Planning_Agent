@@ -79,7 +79,7 @@ def test_serve_requires_facility_subject_and_rejects_road_target() -> None:
     assert any("relation_object_type_mismatch:road-serve-invalid" in item for item in graph.diagnostics)
 
 
-def test_multiple_prose_village_names_are_preserved_as_explicit_alternatives() -> None:
+def test_multiple_prose_village_names_are_not_reinterpreted() -> None:
     from app.data.ingestion.compiler.spec_mapper import map_intervention_to_spec
 
     intervention = _facility()
@@ -87,5 +87,4 @@ def test_multiple_prose_village_names_are_preserved_as_explicit_alternatives() -
     spec = map_intervention_to_spec(intervention)
     assert spec is not None
     assert spec.type == "composed"
-    assert spec.op == "or"
-    assert [child.reference.filter["label_contains"] for child in spec.children] == ["甲村", "乙村"]
+    assert spec.unresolved_reason == "missing_location_evidence"

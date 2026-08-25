@@ -6,6 +6,7 @@ from app.contracts.planning.scenario import (
     ObjectiveDefinition,
     PlanningScenario,
     ScenarioSet,
+    SolverConflictGroup,
     SolverCertificate,
     derive_backend_selection_digest,
     derive_solver_model_digest,
@@ -40,6 +41,21 @@ def _certificate(status: str = "infeasible", count: int = 0) -> SolverCertificat
         },
         selection_digest=derive_backend_selection_digest({}, []),
         status=status,
+        proof_kind="infeasibility_core" if status == "infeasible" else "unknown",
+        solver_invoked=status == "infeasible",
+        input_closed=status == "infeasible",
+        enumeration_complete=status == "infeasible",
+        assumption_refs=["model:test"] if status == "infeasible" else [],
+        infeasibility_core_refs=["model:test"] if status == "infeasible" else [],
+        conflict_groups=(
+            [SolverConflictGroup(
+                group_id="complete_model",
+                assumption_refs=["model:test"],
+                explanation="test complete model conflict",
+            )]
+            if status == "infeasible"
+            else []
+        ),
     )
     return SolverCertificate(
         problem_fingerprint="problem:test",
@@ -54,6 +70,10 @@ def _certificate(status: str = "infeasible", count: int = 0) -> SolverCertificat
         problem_kind="single_choice",
         backend_id="test_backend",
         backend_version="1.0",
+        solver_invoked=status == "infeasible",
+        input_closed=status == "infeasible",
+        enumeration_complete=status == "infeasible",
+        proof_kind="infeasibility_core" if status == "infeasible" else "unknown",
         backend_certificate=proof,
     )
 
@@ -79,6 +99,15 @@ def test_partial_scenario_cannot_be_feasible_or_recommended() -> None:
             solver_certificate=_certificate(),
         )
 
+
+def test_infeasible_certificate_cannot_be_constructed_without_a_closed_proof() -> None:
+    with pytest.raises(ValidationError, match="typed backend proof"):
+        SolverCertificate(
+            problem_fingerprint="problem:test",
+            model_digest="model:test",
+            solver_version="test",
+            status="infeasible",
+        )
 
 def test_formal_scenario_requires_every_declared_objective_result() -> None:
     complete = _scenario("complete")

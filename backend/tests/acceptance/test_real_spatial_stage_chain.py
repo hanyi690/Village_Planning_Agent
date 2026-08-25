@@ -54,7 +54,7 @@ async def test_real_spatial_stage_chain_preserves_subgeometry_lineage(
         from app.contracts.spatial.grounding_contracts import (
             GroundingResult,
         )
-        from app.contracts.workflow.parse_contracts import ProjectTarget, SpatialPlanningIntent
+        from app.contracts.workflow.parse_contracts import SiteAreaTarget, SpatialPlanningIntent
         from app.contracts.workflow.parse_result_contracts import (
             CompilationStatus,
             IntentCompilationResult,
@@ -297,8 +297,9 @@ async def test_real_spatial_stage_chain_preserves_subgeometry_lineage(
         assert source_candidate.source_refs
         source_bsm = source_candidate.source_bsms[0]
         assert source_bsm in [str(getattr(item, "bsm", "")) for item in parcels]
-        target = ProjectTarget(
-            project_id=target_id,
+        target = SiteAreaTarget(
+            target_id=target_id,
+            site_area_id=target_id,
             name="社前村祠堂周边服务用地",
             category="公共服务",
             materialization_role="site_footprint",

@@ -625,14 +625,30 @@ def test_real_graph_resume_delivery(sqlite_db, pipeline_reset, monkeypatch):
                         "llm_stream_timeout",
                         "llm_timeout",
                         "llm_provider_circuit_open",
+                        "SCHEMA_INVALID",
+                        "TOOL_CALL_MISSING",
                     }
                     for item in review_payload.get("items") or []
                     if isinstance(item, dict)
                 )
+                quality_failure_dimensions = list(dict.fromkeys(
+                    str(item.get("dimension") or item.get("dimension_key") or "").strip()
+                    for item in (current.get("dimension_failures") or [])
+                    if isinstance(item, dict)
+                    and str(item.get("code") or "") == "dimension_quality_failed"
+                    and str(item.get("dimension") or item.get("dimension_key") or "").strip()
+                ))
                 auto_provider_retry = os.getenv(
                     "REAL_RUN_AUTO_PROVIDER_RETRY", "0"
                 ).lower() in {"1", "true", "yes", "on"}
-                if provider_failure and auto_provider_retry:
+                if quality_failure_dimensions:
+                    decision = {
+                        "action": "retry",
+                        "feedback": "repair failed L1 observation quality",
+                        "dimensions": quality_failure_dimensions,
+                    }
+                    action = "retry"
+                elif provider_failure and auto_provider_retry:
                     decision = {
                         "action": "retry",
                         "feedback": "provider retry",

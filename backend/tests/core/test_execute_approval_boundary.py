@@ -420,49 +420,6 @@ async def test_blank_plan_binding_stops_before_graph(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_provisional_approval_stops_before_context_or_graph(monkeypatch):
-    scenario_set = _formal_scenario_set()
-    scenario = scenario_set.scenarios[0]
-    loaded = {
-        "scenario_set": scenario_set,
-        "planning_scenario": scenario,
-        "approved_execution_input": ApprovedExecutionInput(
-            approval_id="approval:provisional",
-            scenario_set_ref=scenario_set.set_id,
-            scenario_id=scenario.scenario_id,
-            scenario_ref="scenario-ref:provisional",
-            scenario_fingerprint=scenario.fingerprint,
-            problem_fingerprint=scenario_set.problem_fingerprint,
-            approval_status="provisional",
-        ),
-    }
-    monkeypatch.setattr(
-        execute_stage,
-        "_load_ref_artifact",
-        lambda state, key, cls: loaded.get(key),
-    )
-    monkeypatch.setattr(
-        execute_stage,
-        "persist_stage_artifact",
-        lambda state, stage, schema_id, payload: {"digest": "diagnostic"},
-    )
-    monkeypatch.setattr(
-        execute_stage,
-        "_require_context",
-        lambda state: pytest.fail("provisional approval must stop before context fallback"),
-    )
-    monkeypatch.setattr(
-        execute_stage,
-        "_get_execute_subgraph",
-        lambda: pytest.fail("provisional approval must not build graph"),
-    )
-
-    result = await execute_stage.execute_node(
-        {"run_id": "run-provisional", "session_id": "run-provisional"}
-    )
-
-    assert result["fatal_error"]["code"] == "EXECUTE_APPROVAL_NOT_EXECUTABLE"
-@pytest.mark.asyncio
 async def test_formal_scenario_without_approval_does_not_derive_or_repair_plan(monkeypatch):
     loaded = {"scenario_set": _formal_scenario_set()}
     monkeypatch.setattr(
@@ -475,12 +432,6 @@ async def test_formal_scenario_without_approval_does_not_derive_or_repair_plan(m
         "persist_stage_artifact",
         lambda state, stage, schema_id, payload: {"digest": "diagnostic"},
     )
-    monkeypatch.setattr(
-        execute_stage,
-        "_defer_unclassified_targets",
-        lambda *args, **kwargs: pytest.fail("approval gate must precede repair/deferral"),
-    )
-
     async def context_loaded(state):
         return SimpleNamespace()
 

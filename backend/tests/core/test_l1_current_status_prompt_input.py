@@ -40,10 +40,10 @@ def test_l1_factual_input_includes_explicit_current_uploads() -> None:
 
 
 def test_l1_source_index_reuses_persisted_artifact_on_resume(monkeypatch) -> None:
-    from app.contracts.domain.l1_contracts import L1InputRegister
+    from app.contracts.domain.l1_contracts import L1SourceIndex
     from app.domain.assessment.analysis_node import _l1_source_index_for_state
 
-    cached = L1InputRegister(
+    cached = L1SourceIndex(
         source_documents=["input:village_data"],
         source_digest="sha256:cached",
     )
@@ -54,5 +54,5 @@ def test_l1_source_index_reuses_persisted_artifact_on_resume(monkeypatch) -> Non
 
     result = _l1_source_index_for_state({"session_id": "resume-session"})
 
-    assert isinstance(result, L1InputRegister)
+    assert isinstance(result, L1SourceIndex)
     assert result.source_digest == "sha256:cached"

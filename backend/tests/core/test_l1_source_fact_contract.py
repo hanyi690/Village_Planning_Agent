@@ -59,11 +59,34 @@ def test_observations_json_provides_location_facts():
     """Dual-response observations JSON compiles into typed location facts."""
     import json
 
-    instruction = json.dumps([
-        {"entity_type": "现状设施", "name": "供水点", "location": "园寨", "description": "5处供水点", "scale": "5处"},
-        {"entity_type": "道路", "name": "Y122乡道", "location": "村北", "description": "乡道", "scale": ""},
-        {"entity_type": "水系", "name": "金田河", "location": "", "description": "河流", "scale": ""},
-    ], ensure_ascii=False)
+    instruction = json.dumps({
+        "observations": [
+            {
+                "fact_type": "spatial_entity",
+                "entity_type": "现状设施",
+                "name": "供水点",
+                "locator": {"place_names": ["园寨"]},
+                "description": "5处供水点",
+                "scale": "5处",
+            },
+            {
+                "fact_type": "spatial_entity",
+                "entity_type": "道路",
+                "name": "Y122乡道",
+                "locator": {"place_names": ["村北"]},
+                "description": "乡道",
+                "scale": "",
+            },
+            {
+                "fact_type": "spatial_entity",
+                "entity_type": "水系",
+                "name": "金田河",
+                "locator": {},
+                "description": "河流",
+                "scale": "",
+            },
+        ]
+    }, ensure_ascii=False)
     fragment = compile_l1_observation(
         dimension_key="infrastructure",
         content="正文内容",

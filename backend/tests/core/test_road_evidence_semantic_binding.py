@@ -149,6 +149,8 @@ async def test_simulated_minimax_binds_unnamed_road_to_bundle_line() -> None:
         claim_id="road-upgrade-from-l1-fact",
         dimension_key="traffic",
         statement="金田村现状村道需要升级。",
+        planning_role="spatial_intervention",
+        project_package_ref="pkg-road-upgrade-from-l1-fact",
         suggested_category="road",
         suggested_output_kind="line",
         asset_kind="road",

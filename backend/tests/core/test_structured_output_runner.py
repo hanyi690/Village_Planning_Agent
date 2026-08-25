@@ -253,7 +253,12 @@ async def test_runner_recovers_strict_l1_observation_json(monkeypatch):
     from app.domain.assessment.observation_draft import L1ObservationPassOutput
     from app.infrastructure.llm import structured
 
-    content = '{"observations":[{"entity_type":"道路","name":"村道","location":"沿村","relation":"贯穿村庄","description":"现状道路","scale":"1条"}]}'
+    content = (
+        '{"observations":[{"fact_type":"spatial_entity",'
+        '"entity_type":"道路","name":"村道",'
+        '"locator":{"place_names":["沿村"],"relation":"贯穿村庄"},'
+        '"description":"现状道路","scale":"1条"}]}'
+    )
 
     class _Completions:
         async def create(self, **_kwargs):

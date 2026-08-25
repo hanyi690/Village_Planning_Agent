@@ -1,6 +1,6 @@
 from app.contracts.planning.relation_parameters import ServiceParameters
 from app.contracts.planning.scenario import ScenarioFeature
-from app.domain.demand.facility_demand_model import DemandPoint, DemandSnapshot
+from app.domain.demand.facility_demand_model import FacilityDemandPoint, DemandSnapshot
 from app.spatial.network.network_graph import build_network_graph
 from app.spatial.network.service_area import evaluate_facility_service
 
@@ -30,7 +30,7 @@ def test_network_service_is_capacity_limited() -> None:
     demand = DemandSnapshot(
         demand_ref="demand:clinic",
         points=(
-            DemandPoint(
+            FacilityDemandPoint(
                 demand_id="settlement-1",
                 geometry_wkt="POINT (0.01 0)",
                 demand_value=100,
@@ -68,7 +68,7 @@ def test_service_filters_demand_by_facility_type() -> None:
     demand = DemandSnapshot(
         demand_ref="demand:fire",
         points=(
-            DemandPoint(
+            FacilityDemandPoint(
                 demand_id="fire-1",
                 geometry_wkt="POINT (0.01 0)",
                 demand_value=20,
@@ -109,7 +109,7 @@ def test_disconnected_matching_demand_is_zero_coverage() -> None:
     demand = DemandSnapshot(
         demand_ref="demand:clinic",
         points=(
-            DemandPoint(
+            FacilityDemandPoint(
                 demand_id="isolated",
                 geometry_wkt="POINT (0.02 0)",
                 demand_value=20,

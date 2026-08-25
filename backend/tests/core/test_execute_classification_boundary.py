@@ -25,13 +25,13 @@ def build_execution_plan(intent, selection, _briefs, *, deferral_ledger=None, **
     """Test-local plan fixture for classification admission behavior."""
     target_by_id = {
         target.target_id: target
-        for field in ("project_targets", "zone_targets", "facilities", "development_axes", "road_targets")
+        for field in ("site_area_targets", "zone_targets", "facilities", "development_axes", "road_targets")
         for target in getattr(intent, field, [])
     }
     assignments = {item.target_id: item for item in selection.target_assignments}
     deferred_ids = {entry.target_id for entry in (getattr(deferral_ledger, "entries", None) or [])}
     worker_types = {
-        "project": WorkerType.SITE_AREA_FOOTPRINT,
+        "site_area": WorkerType.SITE_AREA_FOOTPRINT,
         "zone": WorkerType.PARCEL_TRANSFORMATION,
         "facility": WorkerType.FACILITY_PLACEMENT,
         "axis": WorkerType.AXIS_CONSTRUCTION,
@@ -81,7 +81,7 @@ def _target(
 
 def _intent(*targets):
     fields = {
-        "project_targets": [],
+        "site_area_targets": [],
         "zone_targets": [],
         "facilities": [],
         "development_axes": [],
@@ -90,7 +90,7 @@ def _intent(*targets):
     for target_type, target in targets:
         fields[
             {
-                "project": "project_targets",
+                "site_area": "site_area_targets",
                 "zone": "zone_targets",
                 "facility": "facilities",
                 "axis": "development_axes",
@@ -194,13 +194,13 @@ def test_overlay_polygon_does_not_require_land_use_classification():
     )
 
     plan = build_execution_plan(
-        _intent(("project", target)),
-        _selection(("project", target)),
+        _intent(("site_area", target)),
+        _selection(("site_area", target)),
         [],
     )
 
     assert [task.target_id for task in plan.worker_tasks] == [target.target_id]
-    assert classification_boundary_diagnostics(_intent(("project", target)), plan) == []
+    assert classification_boundary_diagnostics(_intent(("site_area", target)), plan) == []
 
 
 @pytest.mark.asyncio
@@ -238,8 +238,8 @@ async def test_execute_entry_stops_unapproved_unclassified_scope(monkeypatch):
 @pytest.mark.parametrize(
     ("target_type", "output_kind", "execution_mode"),
     [
-        ("project", "point", "spatial"),
-        ("project", "action", "non_spatial"),
+        ("site_area", "point", "spatial"),
+        ("site_area", "action", "non_spatial"),
         ("axis", "line", "spatial"),
     ],
 )

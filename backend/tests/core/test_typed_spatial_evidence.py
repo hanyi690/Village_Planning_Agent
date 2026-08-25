@@ -20,8 +20,22 @@ def test_facility_location_fact_keeps_facility_role():
     import json
 
     observations = json.dumps([
-        {"entity_type": "现状设施", "name": "祠堂", "location": "设施点", "description": "社前村祖祠", "scale": "1处"},
-        {"entity_type": "现状设施", "name": "停车场", "location": "设施点", "description": "停车", "scale": "1处"},
+        {
+            "fact_type": "spatial_entity",
+            "entity_type": "现状设施",
+            "name": "祠堂",
+            "locator": {"place_names": ["设施点"]},
+            "description": "社前村祖祠",
+            "scale": "1处",
+        },
+        {
+            "fact_type": "spatial_entity",
+            "entity_type": "现状设施",
+            "name": "停车场",
+            "locator": {"place_names": ["设施点"]},
+            "description": "停车",
+            "scale": "1处",
+        },
     ], ensure_ascii=False)
     facts = _extract_location_facts_from_observations(
         observations,

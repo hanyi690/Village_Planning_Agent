@@ -10,7 +10,7 @@ from app.contracts.domain.planning_semantics import (
     LinearAssetPlanningParameters,
     RoadPlanningParameters,
 )
-from app.contracts.program import PlanningClaim
+from app.contracts.program import PlanningClaim, PlanningRelationRequirement, PlanningSpatialRequirements
 from app.domain.program.aggregate import merge_program_fragments
 from app.contracts.domain.l3_contracts import PlanningIntervention
 from app.domain.program.gate import evaluate_l3_gate
@@ -59,6 +59,80 @@ def test_cross_dimension_package_members_compact_deterministically():
     assert intervention.evidence_refs == ["fact-a", "fact-b"]
     assert intervention.objective_refs == ["objective:a", "objective:b"]
     assert intervention.constraints == ["constraint:a", "constraint:b"]
+
+
+def test_compaction_rewrites_package_relation_endpoints_and_merges_members():
+    first = _claim("a", "public_service", "pkg-cultural", "fact-a").model_copy(
+        update={
+            "spatial_requirements": PlanningSpatialRequirements(
+                relations=[
+                    PlanningRelationRequirement(
+                        relation_id="co-locate-cultural",
+                        relation_template="co_locate",
+                        subject_ref="pkg-cultural",
+                        object_ref="b",
+                        object_ref_kind="entity",
+                        parameters={"max_distance_m": 100},
+                    )
+                ]
+            )
+        }
+    )
+    second = _claim("b", "culture", "pkg-cultural", "fact-b")
+
+    program = merge_program_fragments(
+        [
+            L3ProgramFragment(dimension_key="culture", claims=[second]),
+            L3ProgramFragment(dimension_key="public_service", claims=[first]),
+        ],
+        run_id="run-relation-compaction",
+    )
+
+    assert len(program.interventions) == 1
+    target_id = program.interventions[0].target_id
+    relations = program.interventions[0].spatial_requirements["relations"]
+    assert len(relations) == 1
+    assert relations[0]["subject_ref"] == target_id
+    assert relations[0]["object_ref"] == target_id
+    assert relations[0]["object_ref_kind"] == "target"
+
+
+def test_duplicate_claim_id_is_accounted_once_and_marked_merged():
+    claim = _claim("same", "public_service", "pkg-cultural", "fact-a")
+    duplicate = claim.model_copy(update={"dimension_key": "culture"})
+    program = merge_program_fragments(
+        [
+            L3ProgramFragment(dimension_key="public_service", claims=[claim]),
+            L3ProgramFragment(dimension_key="culture", claims=[duplicate]),
+        ],
+        run_id="run-duplicate",
+    )
+
+    assert [item.claim_id for item in program.claims] == ["same"]
+    assert len(program.claim_dispositions) == 1
+    assert program.claim_dispositions[0].status == "merged_duplicate"
+    assert any(issue.code == "duplicate_claim_id" for issue in program.program_issues)
+    assert "duplicate_claim:same:culture" in program.omissions
+
+
+def test_conflicting_duplicate_claim_id_is_not_silently_dropped():
+    first = _claim("same", "public_service", "pkg-cultural", "fact-a")
+    second = _claim("same", "culture", "pkg-other", "fact-b")
+    program = merge_program_fragments(
+        [
+            L3ProgramFragment(dimension_key="public_service", claims=[first]),
+            L3ProgramFragment(dimension_key="culture", claims=[second]),
+        ],
+        run_id="run-conflict-duplicate",
+    )
+
+    assert len(program.claim_dispositions) == 1
+    assert program.claim_dispositions[0].status == "merged_duplicate"
+    assert any(
+        issue.code == "conflicting_duplicate_claim_id"
+        and issue.severity == "error"
+        for issue in program.program_issues
+    )
 
 
 def test_incompatible_package_members_are_split_with_issue():

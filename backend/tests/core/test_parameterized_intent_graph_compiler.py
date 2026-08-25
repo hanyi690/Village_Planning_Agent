@@ -144,6 +144,27 @@ def test_missing_parameters_are_retained_as_deferred_diagnostic() -> None:
     assert any("relation_parameters_missing:serve-without-threshold" in item for item in graph.diagnostics)
 
 
+def test_empty_parameter_object_is_the_same_pending_boundary_as_omission() -> None:
+    clinic = _facility()
+    clinic.spatial_requirements = {
+        "relations": [{
+            "relation_id": "serve-empty-parameters",
+            "relation_template": "serve",
+            "object_ref": "settlement:社前村",
+            "object_ref_kind": "entity",
+            "criticality": "hard",
+            "parameters": {},
+        }]
+    }
+
+    graph = compile_intent_graph_v2(PlanningProgram(interventions=[clinic]))
+
+    relation = graph.relations[0]
+    assert relation.parameter_status == "missing"
+    assert relation.parameters is None
+    assert any("relation_parameters_missing:serve-empty-parameters" in item for item in graph.diagnostics)
+
+
 def test_dependency_keeps_explicit_source_and_is_not_inferred_from_list_order() -> None:
     clinic = _facility()
     road = _road()

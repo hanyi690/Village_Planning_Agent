@@ -42,7 +42,7 @@ def _digest(value: str) -> str:
 
 
 def _artifact_ref() -> object:
-    from app.contracts.artifacts.artifact_descriptor import ArtifactDescriptor
+    from app.contracts.artifacts.ref import ArtifactRef as ArtifactDescriptor
 
     return ArtifactDescriptor(
         digest=_digest("a"),

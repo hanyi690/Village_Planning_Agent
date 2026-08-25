@@ -36,12 +36,17 @@ def test_station_retrofit_promotes_all_three_source_points():
         category="facility",
         execution_mode="spatial",
         expected_output_kind="point",
-        intervention_action="new",
+        intervention_action="upgrade",
         problem_addressed="升级改造公交站亭3处，完善候车设施",
-        spatial_requirements={"location": "现状公交站3处位置"},
+        spatial_requirements={
+            "source_feature_ids": [
+                (getattr(feature, "_raw", {}) or {}).get("source_feature_id")
+                for feature in _features()[:3]
+            ]
+        },
         facility_parameters=FacilityPlanningParameters(
             facility_type="公交站亭",
-            action="new",
+            action="expand",
             capacity=3,
             capacity_unit="处",
         ),
@@ -63,7 +68,12 @@ def test_shrine_group_requires_declared_thirteen_count():
         execution_mode="spatial",
         expected_output_kind="point",
         intervention_action="preserve",
-        spatial_requirements={"location": "金田村域13处祠堂"},
+        spatial_requirements={
+            "source_feature_ids": [
+                (getattr(feature, "_raw", {}) or {}).get("source_feature_id")
+                for feature in _features()[3:]
+            ]
+        },
         facility_parameters=FacilityPlanningParameters(
             facility_type="文化活动中心",
             action="preserve",
@@ -87,7 +97,12 @@ def test_source_group_count_mismatch_remains_candidate_only():
         expected_output_kind="point",
         intervention_action="new",
         problem_addressed="升级改造公交站亭2处，完善候车设施",
-        spatial_requirements={"location": "现状公交站2处位置"},
+        spatial_requirements={
+            "source_feature_ids": [
+                (getattr(feature, "_raw", {}) or {}).get("source_feature_id")
+                for feature in _features()[:2]
+            ]
+        },
         facility_parameters=FacilityPlanningParameters(
             facility_type="公交站亭",
             action="new",

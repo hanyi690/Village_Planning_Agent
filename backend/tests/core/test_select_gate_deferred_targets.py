@@ -106,6 +106,56 @@ def test_select_gate_passes_only_executable_approved_complete_member() -> None:
     assert gate.feedback_route is None
 
 
+def test_select_gate_exposes_typed_solver_blockers_for_deferral() -> None:
+    problem = SimpleNamespace(
+        candidate_completeness=SimpleNamespace(),
+        unresolved=[],
+        deferred=[],
+        target_domains=[SimpleNamespace(target_id="hard-target", status="resolved")],
+        candidate_domains=[SimpleNamespace(target_id="coverage-target", status="resolved")],
+        constraint_factors=[SimpleNamespace(
+            hard=True,
+            status="deferred",
+            subject_ref="hard-target",
+            object_ref="",
+            object_ref_kind="entity",
+        )],
+    )
+    solver_plan = SimpleNamespace(subproblems=[SimpleNamespace(
+        status="blocked",
+        target_refs=("coverage-target",),
+    )])
+    gate = evaluate_scenario_select_gate(
+        SimpleNamespace(
+            recommended_scenario_id="",
+            feasible_scenario_ids=[],
+            solver_certificate=SimpleNamespace(status="infeasible"),
+        ),
+        None,
+        problem,
+        solver_subproblem_plan=solver_plan,
+    )
+
+    target_ids = gate.pending_requests[0].context["target_ids"]
+    assert target_ids == ["coverage-target", "hard-target"]
+
+
+def test_select_gate_blocks_a_source_blocked_task_target() -> None:
+    task_graph = SimpleNamespace(tasks=[SimpleNamespace(
+        status="blocked",
+        target_refs=["task-blocked-target"],
+    )])
+    gate = evaluate_scenario_select_gate(
+        None,
+        None,
+        SimpleNamespace(can_solve=False, candidate_completeness=SimpleNamespace(), unresolved=[], deferred=[], target_domains=[], candidate_domains=[], constraint_factors=[]),
+        planning_task_graph=task_graph,
+    )
+
+    assert "planning_task_prerequisites_incomplete" in gate.pending_requests[0].context["reasons"]
+    assert gate.pending_requests[0].context["target_ids"] == ["task-blocked-target"]
+
+
 @pytest.mark.asyncio
 async def test_real_gate_partial_approval_defers_only_typed_problem_targets(monkeypatch):
     from app.workflow import root_graph

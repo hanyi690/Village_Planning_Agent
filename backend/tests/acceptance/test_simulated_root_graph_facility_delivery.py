@@ -41,7 +41,6 @@ async def test_simulated_root_graph_reaches_facility_point_delivery(
         from app.infrastructure.llm import planning_claims
         from app.infrastructure.llm import structured
         from app.evidence.identity import flash_source_semantic_classifier as source_classifier
-        from app.domain.objectives import worker as l2_worker
         from app.domain.program import worker as l3_worker
         from app.infrastructure.llm.planning_claims import PlanningClaimGenerator
 
@@ -98,7 +97,6 @@ async def test_simulated_root_graph_reaches_facility_point_delivery(
         monkeypatch.setattr(structured, 'run_structured_output', provider.structured_output)
         monkeypatch.setattr(planning_claims, 'run_structured_output', provider.structured_output)
         monkeypatch.setattr(source_classifier, 'run_structured_output', provider.structured_output)
-        monkeypatch.setattr(l2_worker, '_get_llm', lambda: provider)
         monkeypatch.setattr(PlanningClaimGenerator, '_get_llm', lambda _self: provider)
 
         from app.evidence.identity.flash_source_semantic_classifier import SourceSemanticClassifier

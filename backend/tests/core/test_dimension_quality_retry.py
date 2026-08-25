@@ -12,33 +12,82 @@ def test_validation_accepts_good_observations():
     from app.domain.assessment.observation_quality import validate_observations
 
     report = validate_observations([
-        {"name": "祠堂", "location": "社前村", "relation": "位于社前村"},
-        {"name": "园寨", "location": "园寨", "relation": ""},
+        {
+            "fact_type": "spatial_entity",
+            "entity_type": "设施",
+            "name": "祠堂",
+            "locator": {"place_names": ["社前村"], "relation": "位于社前村"},
+        },
+        {
+            "fact_type": "spatial_entity",
+            "entity_type": "地物",
+            "name": "园寨",
+            "locator": {"place_names": ["园寨"]},
+        },
     ])
     assert report["ok"] is True
     assert report["defect_ratio"] == 0.0
 
 
-def test_validation_flags_missing_spatial_anchor():
+def test_validation_reports_missing_spatial_anchor_without_rejecting_scope_facts():
     from app.domain.assessment.observation_quality import validate_observations
 
     report = validate_observations([
-        {"name": "某设施", "location": "", "relation": ""},
-        {"name": "另一条", "location": "园寨", "relation": ""},
+        {
+            "fact_type": "scoped_metric",
+            "semantic_type": "population",
+            "metric": "常住人口",
+            "scope": "全村",
+            "value": 500,
+        },
+        {
+            "fact_type": "demand",
+            "demand_type": "tourism",
+            "scope": "全村",
+            "value": "发展旅游业",
+        },
     ])
-    assert report["ok"] is False
-    assert report["no_place"] == 1
-    assert "空间锚点" in report["feedback"]
+    assert report["ok"] is True
+    assert report["no_place"] == 2
+    assert report["defect_ratio"] == 0.0
 
 
-def test_validation_flags_missing_name():
+def test_validation_rejects_semantically_empty_observation():
     from app.domain.assessment.observation_quality import validate_observations
 
-    report = validate_observations([
-        {"name": "", "location": "社前村", "relation": ""},
-    ])
+    report = validate_observations([{"fact_type": "spatial_entity"}])
     assert report["ok"] is False
-    assert report["missing_name"] == 1
+    assert report["invalid_fact_type"] == 1
+    assert report["invalid_semantics"] == 1
+
+
+def test_validation_rejects_empty_relation_observation():
+    from app.domain.assessment.observation_quality import validate_observations
+
+    report = validate_observations([{
+        "fact_type": "spatial_relation",
+        "subject_ref": "金田河",
+        "predicate": "",
+        "object_ref": "",
+    }])
+    assert report["ok"] is False
+    assert report["invalid_relation"] == 1
+
+
+def test_validation_enforces_the_dimension_fact_vocabulary():
+    from app.domain.assessment.observation_quality import validate_observations
+
+    report = validate_observations(
+        [{
+            "fact_type": "demand",
+            "demand_type": "养老服务",
+            "scope": "全村",
+        }],
+        dimension_key="location",
+    )
+
+    assert report["ok"] is False
+    assert report["invalid_fact_type"] == 1
 
 
 def test_dimension_failures_route_to_human_review():

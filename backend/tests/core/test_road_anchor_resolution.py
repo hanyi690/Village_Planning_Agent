@@ -36,7 +36,7 @@ def test_road_named_connects_fill_candidate_bsms():
     road = _road(["园寨", "村南"], "园寨至村南段")
     intent = type("Intent", (), {
         "zone_targets": [], "facilities": [], "development_axes": [],
-        "project_targets": [], "road_targets": [road],
+        "site_area_targets": [], "road_targets": [road],
     })()
     resolved = resolve_intent_anchors(
         intent,
@@ -51,7 +51,7 @@ def test_road_directional_connects_fill_anchors():
     road = _road(["村北", "村南"])
     intent = type("Intent", (), {
         "zone_targets": [], "facilities": [], "development_axes": [],
-        "project_targets": [], "road_targets": [road],
+        "site_area_targets": [], "road_targets": [road],
     })()
     resolved = resolve_intent_anchors(
         intent,

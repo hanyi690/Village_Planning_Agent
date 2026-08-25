@@ -61,61 +61,61 @@ def _real_observations() -> list[dict]:
     villages = ["园寨", "田坑", "社前", "分水", "清明", "塘笃", "长塘", "炉池", "肩丰", "营仔", "新山", "黄竹"]
     obs = [
         {
+            "fact_type": "spatial_entity",
             "entity_type": "自然村",
             "name": v,
-            "location": v,
-            "relation": "自然村",
+            "locator": {"place_names": [v], "relation": "自然村"},
             "description": f"{v}自然村",
             "scale": "",
         }
         for v in villages
     ]
     obs.append({
+        "fact_type": "spatial_entity",
         "entity_type": "现状分区",
         "name": "金田村",
-        "location": "金田村",
-        "relation": "规划范围",
+        "locator": {"place_names": ["金田村"], "relation": "规划范围"},
         "description": "金田村村庄规划范围",
         "scale": "",
     })
     obs.append({
+        "fact_type": "spatial_entity",
         "entity_type": "地物",
         "name": "南粤古驿道",
-        "location": "肩丰至炉池段",
-        "relation": "沿古驿道",
+        "locator": {"place_names": ["肩丰", "炉池"], "relation": "沿古驿道"},
         "description": "南粤古驿道沿线保护",
         "scale": "1500m",
     })
     obs.extend([
         {
+            "fact_type": "spatial_entity",
             "entity_type": "道路",
             "name": "122乡道",
-            "location": "园寨至田坑东西走向",
-            "relation": "金田村唯一东西向道路",
+            "locator": {"place_names": ["园寨", "田坑"], "relation": "东西走向；金田村唯一东西向道路"},
             "description": "对外交通主要道路",
             "scale": "",
         },
         {
+            "fact_type": "spatial_entity",
             "entity_type": "水系",
             "name": "金田河",
-            "location": "西南至东北贯穿金田村",
-            "relation": "汇入石窟河",
+            "locator": {"place_names": ["金田村"], "relation": "西南至东北贯穿金田村；汇入石窟河"},
             "description": "村内主要河流",
             "scale": "",
         },
         {
+            "fact_type": "spatial_entity",
             "entity_type": "现状设施",
             "name": "祠堂",
-            "location": "社前村",
-            "relation": "位于社前村",
+            "locator": {"place_names": ["社前村"], "relation": "位于社前村"},
             "description": "客家祠堂",
             "scale": "3处",
         },
         {
+            "fact_type": "spatial_entity",
             "entity_type": "水系",
             "name": "石窟河",
-            "location": "村界西南",
-            "relation": "金田河汇入",
+            "locator": {"place_names": ["村界西南"], "relation": "金田河汇入"},
             "description": "镇域河流",
             "scale": "",
         },

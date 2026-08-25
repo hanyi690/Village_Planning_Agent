@@ -70,7 +70,10 @@ def test_bsm_in_location_hint_is_stronger_than_place_name():
         "[SPATIAL_DEMO_NARROW_SLICE source_parcel_bsm=441426211000049280]"
     )
     assert claim is not None
-    claim = claim.model_copy(update={"affected_parcel_refs": [], "location_hints": ["园寨村", "BSM=441426211000049280"]})
+    claim = claim.model_copy(update={
+        "affected_parcel_refs": ["441426211000049280"],
+        "location_hints": ["园寨村"],
+    })
     intervention = interventions_from_claims([claim])[0]
     spec = map_intervention_to_spec(intervention)
     assert spec is not None
