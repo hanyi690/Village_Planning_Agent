@@ -340,6 +340,9 @@ def build_candidate_site(
             "spatial_domain_kind": str(
                 getattr(resolved, "spatial_domain_kind", "") or "unknown"
             ),
+            "candidate_materialization_allowed": not _search_scope_blocks_materialization(
+                resolved
+            ),
             "candidate_bbox": (
                 list(resolved.bbox[:4]) if getattr(resolved, "bbox", None) else None
             ),
@@ -353,6 +356,9 @@ def build_candidate_site(
         expected_output_kind=expected_output_kind,
         geometry=geometry,
         candidate_bbox=geometry.candidate_bbox,
+        candidate_materialization_allowed=not _search_scope_blocks_materialization(
+            resolved
+        ),
     )
 
 
@@ -570,14 +576,7 @@ def build_candidate_sites(
     candidate is retained and remains fail-closed.
     """
 
-    search_scope = getattr(resolved, "search_scope", None)
-    if (
-        search_scope is not None
-        and not bool(getattr(search_scope, "candidate_materialization_allowed", False))
-        and not resolved.reference_geometry_wkt
-        and not getattr(resolved, "reference_geometries", None)
-        and not resolved.final_bsms
-    ):
+    if _search_scope_blocks_materialization(resolved):
         return []
 
     source_parcels = list(resolved.final_bsms)
@@ -806,6 +805,32 @@ def _valid_anchor_geometry_wkt(value: Any) -> str | None:
     return geometry.wkt
 
 
+def _search_scope_blocks_materialization(resolved: Any) -> bool:
+    search_scope = getattr(resolved, "search_scope", None)
+    if search_scope is None:
+        return False
+    if isinstance(search_scope, dict):
+        return search_scope.get("candidate_materialization_allowed") is not True
+    return not bool(getattr(search_scope, "candidate_materialization_allowed", False))
+
+
+def _enforce_search_scope_invariant(resolved: ResolvedSpatialRef) -> ResolvedSpatialRef:
+    """Keep a blocked retrieval scope from being rematerialized by fallbacks."""
+    if not _search_scope_blocks_materialization(resolved):
+        return resolved
+    provenance = dict(getattr(resolved, "provenance", None) or {})
+    provenance["search_scope_materialization_guard"] = "blocked"
+    return replace(
+        resolved,
+        final_bsms=[],
+        bbox=None,
+        reference_geometry_wkt=None,
+        reference_geometries=[],
+        feature_bsms=[],
+        provenance=provenance,
+    )
+
+
 def _geometry_role(
     geometry_kind: str,
     *,
@@ -905,10 +930,16 @@ def ground_aggregate(
             resolve_kwargs["evidence_packet"] = (evidence_packets or {}).get(
                 str(getattr(spec, "target_id", "") or "")
             )
-        resolved = resolver.resolve_spec(spec, **resolve_kwargs)
+        resolved = _enforce_search_scope_invariant(
+            resolver.resolve_spec(spec, **resolve_kwargs)
+        )
         mention = resolver._spec_mention(spec) or ""
         evidence_geometry = _unique_evidence_geometry(context, mention)
-        if evidence_geometry is not None and not resolved.reference_geometries:
+        if (
+            evidence_geometry is not None
+            and not resolved.reference_geometries
+            and not _search_scope_blocks_materialization(resolved)
+        ):
             resolved = replace(
                 resolved,
                 final_bsms=list(resolved.final_bsms),
@@ -938,7 +969,10 @@ def ground_aggregate(
             )
         # 未解析且命中 L1 接地锚点 → 用锚点 BSM（实体级，同坐标=同实体），
         # 显式 provenance grounded_anchor。
-        if not resolved.final_bsms:
+        if (
+            not resolved.final_bsms
+            and not _search_scope_blocks_materialization(resolved)
+        ):
             mention = resolver._spec_mention(spec) or ""
             anchor = anchors_by_name.get(mention) or anchors_by_name.get(mention.rstrip("村")) if mention else None
             if anchor is not None:
@@ -982,6 +1016,7 @@ def ground_aggregate(
         if (
             not resolved.reference_geometry_wkt
             and (anchor_geometry_wkt or anchor_bsms)
+            and not _search_scope_blocks_materialization(resolved)
         ):
             resolved = replace(
                 resolved,
@@ -1012,6 +1047,7 @@ def ground_aggregate(
                     ),
                 },
             )
+        resolved = _enforce_search_scope_invariant(resolved)
         spec_type = getattr(spec, "type", "")
         search_scope_payload = _search_scope_payload(getattr(resolved, "search_scope", None))
         result_refs = list(resolved.final_bsms)
@@ -1048,7 +1084,9 @@ def ground_aggregate(
                 f"{search_scope_payload.get('source', '')}:"
                 f"{search_scope_payload.get('reason', '')}"
             )
-        if (
+        if _search_scope_blocks_materialization(resolved):
+            unresolved.append(_search_scope_issue(spec, resolved))
+        elif (
             resolved.final_bsms
             or resolved.reference_geometry_wkt
             or getattr(resolved, "reference_geometries", None)

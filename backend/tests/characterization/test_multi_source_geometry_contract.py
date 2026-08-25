@@ -16,9 +16,11 @@ from app.infrastructure.kg.queries.spatial_ref import resolve_candidates
 from app.spatial.grounding.resolver import SpatialResolver
 
 
-def _context(*, port=None):
+def _context(*, port=None, snapshot_digest="geometry-fixture-snapshot"):
     return SimpleNamespace(
-        workspace=SimpleNamespace(),
+        workspace=SimpleNamespace(
+            snapshot=SimpleNamespace(digest=snapshot_digest),
+        ),
         kg=SimpleNamespace(),
         gazetteer=None,
         evidence_graph=None,
@@ -139,6 +141,27 @@ def test_resolver_preserves_source_geometry_list_and_does_not_pick_one():
         "kg:facility:2",
     ]
     assert resolved.provenance["source_geometry_count"] == 2
+
+
+def test_resolver_drops_wkt_without_feature_identity_or_source_snapshot():
+    class _Port:
+        def resolve_candidates(self, run_id, spec):
+            return CandidateSet(
+                ref_geometries=[GeometryRef(wkt="POINT (0.25 0.25)")],
+            )
+
+    spec = SpatialReferenceSpec(type="directional", target_id="untrusted-wkt")
+    resolved = SpatialResolver(
+        _context(port=_Port(), snapshot_digest="")
+    ).resolve_spec(spec)
+
+    assert resolved.reference_geometries == []
+    diagnostics = resolved.provenance["dropped_reference_geometries"]
+    assert diagnostics[0]["reason"] == "exact_geometry_missing_authority"
+    assert diagnostics[0]["missing_requirements"] == [
+        "explicit_feature_identity",
+        "source_snapshot",
+    ]
 
 
 def test_kg_multi_feature_mode_requires_explicit_source_backed_opt_in():

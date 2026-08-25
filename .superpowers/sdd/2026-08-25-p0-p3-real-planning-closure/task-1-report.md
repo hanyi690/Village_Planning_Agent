@@ -116,3 +116,87 @@ Result: `8 passed`
   - `.analysis/`
   - `backend/tests/acceptance/test_recorded_real_root_graph_replay.py`
   - `backend/tests/support/recorded_planning_provider.py`
+
+## Fix Round 1 — Reviewer Closure
+
+Date: 2026-08-25
+
+### Changed Files
+
+- `backend/app/spatial/grounding/resolver.py`
+- `backend/app/domain/ground/aggregate.py`
+- `backend/app/domain/ground/candidate_domain_builder.py`
+- `backend/app/contracts/spatial/grounding_contracts.py`
+- `backend/tests/core/test_grounding_search_scope_boundary.py`
+- `backend/tests/characterization/test_multi_source_geometry_contract.py`
+
+### Reviewer Fixes
+
+1. Search-scope fallback invariant
+
+   Added an aggregate invariant that treats a `SearchScopeRef` with
+   `candidate_materialization_allowed=False` as immutable retrieval-only state.
+   The invariant is applied immediately after resolver output, before legacy L1
+   anchor fallbacks, and again after those fallbacks.  Both anchor fallback paths
+   are skipped for a blocked scope, and any regressed materializable fields are
+   cleared before candidate processing.  The aggregate routes the result to the
+   existing `search_scope_not_materialized` issue, so matching village-scope
+   anchors cannot create a `CandidateSite` or candidate domain.
+
+2. Exact KG-topology parcel preservation
+
+   Removed the broad `final_bsms + parcel-derived bbox` conversion to
+   `directional_bbox_scope`.  Bboxes derived from identifiable final BSMs remain
+   refinement/provenance data; the final result retains `parcel_extent` or
+   `parcel_set` semantics, preserving single-parcel and multi-parcel behavior.
+   Bbox semantics are selected only when no final BSMs remain.
+
+3. Reference-geometry authority gate
+
+   `_authoritative_geometry_refs()` now rejects syntactically valid WKT unless
+   the record has stable feature identity (`source_ref`, `source_feature_id`,
+   `source_refs`, or `feature_bsms`) and a source snapshot from the explicit
+   source snapshot or bundle snapshot.  Rejected records carry a diagnostic with
+   the missing requirements, while legitimate source-backed fixtures retain
+   their exact geometry through bundle snapshot metadata.
+
+4. Downstream materialization guard
+
+   `CandidateSite` now carries a backward-compatible
+   `candidate_materialization_allowed` flag.  GROUND propagates the flag and
+   the existing candidate-domain boundary rejects blocked candidates both from
+   the typed field and from the serialized metrics fallback.  This keeps a
+   future upstream fallback regression from entering `GroundedCandidateDomain`.
+
+### Behavior Decisions
+
+- A blocked search scope wins over legacy anchor BSMs, valid-looking anchor WKT,
+  evidence geometry promotion, and any accidentally retained final fields.
+- Exact parcel BSMs and exact multi-parcel resolutions remain materializable as
+  parcel candidates; a derived bbox does not downgrade them to a directional
+  search scope.
+- Untrusted WKT is dropped with an auditable diagnostic rather than repaired or
+  converted into executable geometry.
+- No user-owned dirty files were modified or removed.
+
+### Fix-Round Verification
+
+Bounded focused command run from `backend/`:
+
+```text
+python -m pytest -o addopts='' tests/core/test_grounding_search_scope_boundary.py tests/core/test_evidence_graph_join.py::test_ground_resolver_uses_kg_topology_result_before_anchor_bundle_associations tests/characterization/test_multi_source_geometry_contract.py tests/core/test_ground_evidence_packet_bridge.py tests/core/test_evidence_packet_ground_selection.py::test_hazard_address_can_seed_natural_village_scope_from_related_parcel tests/core/test_evidence_packet_ground_selection.py::test_llm_selects_one_spatial_cluster_without_merging_distant_parcels tests/test_ground_parcel_alternatives.py::test_precise_multi_parcel_resolution_exposes_independent_parcel_alternatives tests/acceptance/test_real_spatial_stage_chain.py::test_real_spatial_stage_chain_preserves_subgeometry_lineage tests/characterization/test_real_source_line_grounding.py::test_real_source_road_line_reaches_ground_without_parcel_union -q --maxfail=1
+```
+
+Result: `24 passed`.
+
+The exact KG-topology regression was included explicitly and passed.  A separate
+bounded compatibility selection reached 9 passes before the unrelated
+`test_real_source_road_id_survives_target_projection_before_ground` assertion
+failed at TARGET_PROJECTION, before GROUND ran, with the existing admission
+diagnostics `INTERVENTION_NOT_ADMITTED`,
+`INTERVENTION_ADMISSION_LINEAGE_MISSING`, and
+`INTERVENTION_ADMISSION_RECOMPUTE_FAILED`.  That target-projection issue was
+not changed in this P0-A fix round.
+
+The focused runs also emitted the existing pytest cache warning (`WinError 5`
+when writing `backend/.pytest_cache`); it did not affect test execution.

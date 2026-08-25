@@ -23,6 +23,11 @@ def is_grounding_candidate(candidate: CandidateSite) -> bool:
     ``CandidateGeometry.is_executable`` only accepts the execution role.
     """
 
+    if not bool(getattr(candidate, "candidate_materialization_allowed", True)):
+        return False
+    metrics = getattr(candidate, "metrics", None) or {}
+    if metrics.get("candidate_materialization_allowed") is False:
+        return False
     geometry = candidate.geometry
     return bool(geometry is not None and geometry.wkt and geometry.kind != "unknown")
 

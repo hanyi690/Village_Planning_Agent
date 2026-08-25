@@ -61,6 +61,7 @@ class CandidateSite(BaseModel):
     candidate_bbox: tuple[float, float, float, float] | None = None
     source_area_ha: float = 0.0
     coverage_ratio: float | None = None
+    candidate_materialization_allowed: bool = True
 
     @model_validator(mode="after")
     def derive_candidate_id(self) -> "CandidateSite":

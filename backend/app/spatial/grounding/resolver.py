@@ -87,7 +87,15 @@ def _authoritative_geometry_wkt(value: Any) -> str:
     return geometry.wkt
 
 
-def _authoritative_geometry_refs(values: Any) -> list[Any]:
+def _authoritative_geometry_refs(
+    values: Any,
+    *,
+    source_snapshot_ref: str = "",
+    bundle_snapshot_digest: str = "",
+    source_binding_ref: str = "",
+    source_feature_digest: str = "",
+    diagnostics: Optional[List[Dict[str, Any]]] = None,
+) -> list[Any]:
     """Normalize source-backed geometry records without synthesizing geometry.
 
     Adapters return independent ``GeometryRef`` records; each record is
@@ -109,6 +117,44 @@ def _authoritative_geometry_refs(values: Any) -> list[Any]:
         if not wkt:
             continue
         data["wkt"] = wkt
+        has_stable_identity = any(
+            str(value).strip()
+            for value in [
+                data.get("source_ref"),
+                data.get("source_feature_id"),
+                *(data.get("source_refs") or []),
+                *(data.get("feature_bsms") or []),
+            ]
+        )
+        has_source_snapshot = any(
+            str(value).strip()
+            for value in [
+                source_snapshot_ref,
+                bundle_snapshot_digest,
+            ]
+        )
+        if not has_stable_identity or not has_source_snapshot:
+            if diagnostics is not None:
+                missing_requirements = []
+                if not has_stable_identity:
+                    missing_requirements.append("explicit_feature_identity")
+                if not has_source_snapshot:
+                    missing_requirements.append("source_snapshot")
+                diagnostics.append({
+                    "reason": (
+                        "exact_geometry_missing_authority"
+                        if not has_stable_identity and not has_source_snapshot
+                        else (
+                            "exact_geometry_missing_identity"
+                            if not has_stable_identity
+                            else "exact_geometry_missing_snapshot"
+                        )
+                    ),
+                    "source_ref": str(data.get("source_ref") or ""),
+                    "source_feature_id": str(data.get("source_feature_id") or ""),
+                    "missing_requirements": missing_requirements,
+                })
+            continue
         try:
             refs.append(GeometryRef.model_validate(data))
         except Exception:
@@ -946,8 +992,33 @@ class SpatialResolver:
 
         bsms = list(dict.fromkeys([*candidates.bsms, *candidates.ref_bsms]))
         final_bsms = self._filter_to_bundle(bsms)
+        bundle_snapshot_digest = str(
+            evidence_lineage.get("bundle_snapshot_digest", "")
+            or self._bundle_snapshot_digest()
+            or ""
+        )
+        dropped_reference_geometry_diagnostics: list[dict[str, Any]] = []
         reference_geometries = _authoritative_geometry_refs(
             getattr(candidates, "ref_geometries", None),
+            source_snapshot_ref=str(
+                getattr(spec, "source_snapshot_ref", "")
+                or evidence_lineage.get("l1_snapshot_ref", "")
+                or ""
+            ),
+            bundle_snapshot_digest=(
+                bundle_snapshot_digest
+            ),
+            source_binding_ref=str(
+                getattr(spec, "source_binding_ref", "") or ""
+            ),
+            source_feature_digest=str(
+                getattr(spec, "source_feature_digest", "") or ""
+            ),
+            diagnostics=dropped_reference_geometry_diagnostics,
+        )
+        evidence_lineage["bundle_snapshot_digest"] = (
+            evidence_lineage.get("bundle_snapshot_digest", "")
+            or bundle_snapshot_digest
         )
         evidence_lineage["source_feature_ids"].extend(
             str(getattr(reference, "source_feature_id", "") or "")
@@ -974,6 +1045,8 @@ class SpatialResolver:
         if reference_geometries:
             provenance["path"] += "+authoritative_geometry"
             provenance["source_geometry_count"] = len(reference_geometries)
+        elif dropped_reference_geometry_diagnostics:
+            provenance["dropped_reference_geometries"] = dropped_reference_geometry_diagnostics
         provenance["kg_count"] = len(bsms)
         provenance["bundle_count"] = len(final_bsms)
         for key, values in evidence_lineage.items():
@@ -1107,7 +1180,7 @@ class SpatialResolver:
                 confidence=0.0,
                 uncertainty_radius_m=0.0,
                 uncertainty_reason="unresolved",
-                provenance={"...": provenance},
+                provenance=provenance,
             )
 
         if not bbox and final_bsms and not reference_geometries:
@@ -1174,25 +1247,6 @@ class SpatialResolver:
                 },
             )
             final_bsms = []
-        elif not reference_geometries and final_bsms and bbox:
-            search_scope = self._build_search_scope(
-                scope_bsms=final_bsms,
-                bbox=bbox,
-                scope_type="bbox",
-                source="geometry:directional_bbox",
-                reason="directional_bbox_scope",
-                missing_requirements=self._search_scope_requirements(
-                    has_feature_identity=False,
-                    has_source_snapshot=bool(self._bundle_snapshot_digest()),
-                ),
-                bundle_snapshot_digest=self._bundle_snapshot_digest(),
-                diagnostics={
-                    "direction": str(direction or ""),
-                    "scope_seed_parcel_bsms": list(final_bsms),
-                },
-            )
-            final_bsms = []
-
         uncertainty_reason = ""
         uncertainty_radius_m = 0.0
         if not final_bsms and search_scope is not None and not reference_geometries:
@@ -1241,12 +1295,12 @@ class SpatialResolver:
                 if any("line" in value for value in geometry_types)
                 else "exact_feature"
             )
-        elif "+geometry:directional_bbox" in path or "+geometry:bbox" in path:
-            spatial_domain_kind = "bbox"
         elif "village_cluster" in path or "+gazetteer:village" in path:
             spatial_domain_kind = "village_scope"
         elif final_bsms:
             spatial_domain_kind = "parcel_extent" if len(final_bsms) == 1 else "parcel_set"
+        elif "+geometry:directional_bbox" in path or "+geometry:bbox" in path:
+            spatial_domain_kind = "bbox"
         else:
             spatial_domain_kind = "unknown"
 
@@ -2089,8 +2143,31 @@ class SpatialResolver:
             )
         )
         final_bsms = self._filter_to_bundle(bsms)
+        evidence_lineage["bundle_snapshot_digest"] = (
+            evidence_lineage.get("bundle_snapshot_digest", "")
+            or self._bundle_snapshot_digest()
+            or ""
+        )
+        dropped_reference_geometry_diagnostics: list[dict[str, Any]] = []
         references = _authoritative_geometry_refs(
             getattr(candidates, "ref_geometries", None),
+            source_snapshot_ref=str(
+                getattr(spec, "source_snapshot_ref", "")
+                or evidence_lineage.get("l1_snapshot_ref", "")
+                or ""
+            ),
+            bundle_snapshot_digest=str(
+                evidence_lineage.get("bundle_snapshot_digest", "")
+                or self._bundle_snapshot_digest()
+                or ""
+            ),
+            source_binding_ref=str(
+                getattr(spec, "source_binding_ref", "") or ""
+            ),
+            source_feature_digest=str(
+                getattr(spec, "source_feature_digest", "") or ""
+            ),
+            diagnostics=dropped_reference_geometry_diagnostics,
         )
         geometry_types = {
             str(getattr(ref, "feature_kind", "") or "").casefold()
@@ -2129,6 +2206,8 @@ class SpatialResolver:
                 )
             elif values:
                 provenance[key] = str(values)
+        if dropped_reference_geometry_diagnostics and not references:
+            provenance["dropped_reference_geometries"] = dropped_reference_geometry_diagnostics
         return ResolvedSpatialRef(
             final_bsms=final_bsms,
             reference_geometry_wkt=(

@@ -7,7 +7,9 @@ from app.contracts.spatial.spatial_reference_contracts import (
     ResolvedSpatialRef,
     SpatialReferenceSpec,
 )
+from app.contracts.spatial.grounding_contracts import GroundedAnchor
 from app.domain.ground.aggregate import build_candidate_sites, ground_aggregate
+from app.domain.ground.candidate_domain_builder import build_candidate_domains
 from app.spatial.grounding.resolver import SpatialResolver
 
 
@@ -114,6 +116,66 @@ def test_coarse_village_fallback_only_produces_search_scope() -> None:
         item.startswith("search_scope:target-village-scope:")
         for item in (result.provenance.trace if result.provenance is not None else [])
     )
+
+
+def test_matching_village_scope_anchor_cannot_rematerialize_search_scope() -> None:
+    parcels = [
+        _parcel("P-1", 116.0, 24.0, 116.01, 24.01),
+        _parcel("P-2", 116.01, 24.0, 116.02, 24.01),
+    ]
+    gazetteer = _Gazetteer({
+        "社前村": SimpleNamespace(
+            bsms=["P-1", "P-2"],
+            centroid=(116.01, 24.005),
+            source="fixture",
+            confidence=0.8,
+            entity_uri="entity:社前村",
+        )
+    })
+    context = _context(parcels, gazetteer=gazetteer)
+    context.grounded_anchors = [
+        GroundedAnchor(
+            normalized_name="社前村",
+            mention="社前村",
+            entity_ref="entity:社前村",
+            source_bsms=["P-1", "P-2"],
+            geometry_ref="village_anchor:社前村",
+            geometry_granularity="village_scope",
+            status="resolved",
+        )
+    ]
+    spec = SpatialReferenceSpec(
+        type="topological",
+        topo="sfWithin",
+        reference=RefObject(kind="village", filter={"label_contains": "社前"}),
+        target_id="target-village-anchor-scope",
+    )
+
+    result = ground_aggregate([spec], context)
+
+    assert result.candidates == []
+    assert result.problem is not None
+    assert result.problem.candidate_domains == []
+    assert result.unresolved[0].code == "search_scope_not_materialized"
+
+
+def test_downstream_candidate_domain_rejects_blocked_materialization() -> None:
+    from app.contracts.spatial.candidate_geometry import CandidateGeometry
+    from app.contracts.spatial.grounding_contracts import CandidateSite
+
+    candidate = CandidateSite(
+        site_id="blocked-site",
+        target_ref="target-blocked",
+        candidate_materialization_allowed=False,
+        geometry=CandidateGeometry(
+            target_id="target-blocked",
+            kind="point",
+            role="anchor_geometry",
+            wkt="POINT (116 24)",
+        ),
+    )
+
+    assert build_candidate_domains([candidate]) == []
 
 
 def test_exact_polygon_candidate_behavior_is_unchanged() -> None:
