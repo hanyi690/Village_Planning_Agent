@@ -117,7 +117,7 @@ L1 / L2 / L3
 
 | 阶段 | 权威职责 | 主要产物 | 明确禁止 |
 |---|---|---|---|
-| L1 | 唯一读取并分析原始输入；在每个维度内通过有界 observe→register→validate→repair/coverage 循环建立带 source span 的现状资产、需求登记、事实、问题和不确定性 | `L1Snapshot`（含 `L1InputRegister`、`register_rows_by_dimension`、typed facts、pass diagnostics） | 把推测写成空间事实，或让 L2/L3/Project Bank/GROUND 重新解析 `village_data` |
+| L1 | 唯一读取并分析原始输入；在每个维度内通过有界 observe→validate→report 循环建立带 source span 的 typed facts、问题和不确定性 | `L1Snapshot`（含 `L1SourceIndex`、typed facts、pass diagnostics） | 把推测写成空间事实，或让 L2/L3/Project Bank/GROUND 重新解析 `village_data` |
 | L2 | 形成策略、偏好、目标方向及其依据 | strategy/objective view | 直接选地点或创建约束计算结果 |
 | L3 | 将事实、指标、约束、目标、方案原型和项目包分层，定义“规划什么、为何规划、什么算好” | `PlanningProgram` / `PlanningProblemSpec` / project packages | 把每条规划主张自动变成空间任务，或决定最终候选成员/坐标 |
 | TARGET_PROJECTION | 只将通过执行准入的空间干预编译为原子、类型化、可接地目标 | admitted typed target specs / `IntentCompilationResult` | 把证据陈述、指标、目标或非空间行动机械投影为空间目标 |
@@ -155,7 +155,7 @@ PlanningProgram
 
 ### Raw input ownership
 
-`village_data` 和显式上传原始文档在输入层保持不透明，只保存内容、来源和 digest；任务描述与约束属于控制上下文，不是 L1 事实源。L1 是唯一允许读取并结构化其中表格/段落的阶段。L1 worker 先建立 source index，再由各维度通过有界多轮结构化调用确认本维度直接支持的行；模型不能覆盖 source index 的 canonical name、数值、单位、`source_ref` 或 `source_span`。最终输出 `L1InputRegister`（现状资产与需求分开、逐行保留原值、解析值、位置提示、诊断）以及 `register_rows_by_dimension`、pass cursor 和检索 trace。后续阶段只能消费 `L1Snapshot.input_register`、维度登记和 L1 typed facts；Project Bank/RAG 可以投影或检索这些登记，TARGET_PROJECTION/GROUND 只能使用其来源引用，前端只能展示 L1 artifact。任何下游重新扫描原文、从人口总数猜 demand point、从叙述恢复数量或位置，都属于越权并必须 fail-closed。旧 `current_status` 键不再是第二个事实源；若旧状态仍携带它，L1 source index 只记录忽略诊断而不进入 prompt 或 source segments。结构化调用的 schema 合法不等于来源语义正确，缺失/冲突必须通过 deterministic validator 和有界 repair 记录为诊断。
+`village_data` 和显式上传原始文档在输入层保持不透明，只保存内容、来源和 digest；任务描述与约束属于控制上下文，不是 L1 事实源。L1 是唯一允许读取并结构化其中表格/段落的阶段。L1 worker 先建立 source index，再由各维度通过有界结构化调用确认本维度直接支持的 typed facts；模型不能覆盖 source index 的 `source_ref` 或 `source_span`。最终输出 `L1SourceIndex`、typed observations、pass cursor 和检索 trace。后续阶段只能消费 `L1Snapshot.fact_records` 与 typed observations；Project Bank/RAG 可以检索这些 facts，TARGET_PROJECTION/GROUND 只能使用其来源引用，前端只展示 L1 facts。任何下游重新扫描原文、从人口总数猜 demand point、从叙述恢复数量或位置，都属于越权并必须 fail-closed。旧 `current_status` 键不再是第二个事实源；若旧状态仍携带它，L1 source index 只记录忽略诊断而不进入 prompt 或 source segments。结构化调用的 schema 合法不等于来源语义正确，缺失/冲突必须通过 deterministic validator 和有界 repair 记录为诊断。
 
 ### Algorithm and worker ownership
 

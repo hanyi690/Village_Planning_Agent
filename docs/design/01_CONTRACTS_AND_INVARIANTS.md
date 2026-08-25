@@ -20,7 +20,7 @@ PlanningProblemSpec / PlanningProgram {claims, objectives, project packages}
 → DeliveryManifest
 ```
 
-同一阶段可以生成诊断报告和只读定位视图，但生产链不再维护旧合并兼容对象；每个决策只能有一个权威产物。历史迁移只允许在隔离的离线工具中进行，不能反向覆盖权威产物。
+同一阶段可以生成诊断报告和只读定位视图，但生产链不再维护旧合并兼容对象；每个决策只能有一个权威产物。旧 planning payload 不再有官方迁移入口，也不能反向覆盖权威产物。
 
 ## 2. Contract ownership
 
@@ -76,22 +76,22 @@ INV-13 Formal execution is all-or-nothing. `partial` is a diagnostic staging out
 
 INV-14 Raw planning documents are opaque outside L1. Only L1 may read or
 structure session-owned `village_data` and explicit uploads; it must persist an
-`L1InputRegister` with separate current-asset and demand rows plus source
-locators. Each L1 dimension owns its semantic row confirmations; the
-aggregate only unions and validates those confirmations and may recover the
-L1-owned source-index artifact. L1 observe/register/repair passes are bounded
-and resume-keyed by `(session, dimension, input_digest, pass, attempt)`;
-completed passes are not rerun. L2/L3/Project Bank/TARGET_PROJECTION/GROUND/
-EXECUTE and the frontend must consume that artifact and must not reconstruct
-rows, quantities, demand points, locations, or geometry from raw input text.
+`L1SourceIndex` and typed observations with source segments and locators. Each
+L1 dimension owns its semantic observations; the aggregate only unions and
+validates those observations and may recover the L1-owned source-index
+artifact. L1 observe/validate/report passes are bounded and resume-keyed by
+`(session, dimension, input_digest, pass, attempt)`; completed passes are not
+rerun. L2/L3/Project Bank/TARGET_PROJECTION/GROUND/EXECUTE and the frontend
+must consume that artifact and must not reconstruct quantities, demand points,
+locations, or geometry from raw input text.
 
-INV-15 Structured-output shape is not semantic evidence. Every L1 row must be
-validated against the L1 source index for row ID, ledger kind, canonical values,
-source digest and source span. Follow-up retrieval may provide contextual
-evidence through the unified evidence router, but it cannot alter canonical
-source fields or create a spatial identity. A bounded call budget exhausted by
-invalid or unresolved rows produces diagnostics and a resumable cursor rather
-than fabricated completeness.
+INV-15 Structured-output shape is not semantic evidence. Every L1 observation
+must be validated against the L1 source index for source segment, digest and
+source span. Follow-up retrieval may provide contextual evidence through the
+unified evidence router, but it cannot alter canonical source fields or create
+a spatial identity. A bounded call budget exhausted by invalid or unresolved
+observations produces diagnostics and a resumable cursor rather than fabricated
+completeness.
 
 ## 3.1 L1/L3 双投影语义契约
 
@@ -101,7 +101,7 @@ LLM 调用同时生成正文和机器结构化结果；生产路径使用多个�
 
 | 层 | 允许读取的输入 | 面向人的产物 | 面向后续规划的权威产物 | 明确不产出 |
 |---|---|---|---|---|
-| L1 OBSERVE | 当前 session 持久化输入、显式上传、已声明的 GIS/KG 证据引用和本维度检索结果；不得读取仓库参考文档 | `report_body`：完整现状分析、表格/段落和缺口说明 | `L1InputRegister`、`L1ObservationDraft`、`L1Fact`、`L1LocationFact`、source segment/span、约束/冲突/不确定性和 pass cursor | 规划目标、候选地块、坐标、未来方案；不能把人口总数自动变成 demand point |
+| L1 OBSERVE | 当前 session 持久化输入、显式上传、已声明的 GIS/KG 证据引用和本维度检索结果；不得读取仓库参考文档 | `report_body`：完整现状分析、表格/段落和缺口说明 | `L1SourceIndex`、typed observations、`L1Fact`、`L1LocationFact`、source segment/span、约束/冲突/不确定性和 pass cursor | 规划目标、候选地块、坐标、未来方案；不能把人口总数自动变成 demand point |
 | L3 PLAN | L1 typed facts/register、L2 策略和目标、任务约束、已定位证据及维度语义契约 | `report_body`：完整规划分析/项目包说明 | `PlanningClaimSet`、项目包、typed parameters、objective/constraint refs、semantic relation、`grounding_requirements` 和 source lineage | WKT/GeoJSON/BSM/候选成员/最终路线或最终选址；不能把每条事实/指标机械升级为空间干预 |
 
 表中的“面向人的产物”指该层最终持久化的维度产物，不表示 OBSERVE/claims

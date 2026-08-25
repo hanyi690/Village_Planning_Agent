@@ -6,7 +6,7 @@
 | 术语 | 含义 |
 |---|---|
 | `WorkflowState` | 根图 checkpoint 中的控制状态和 artifact 引用，不是完整业务对象。 |
-| `ArtifactDescriptor` | 带 schema、digest、parents、producer 和 provenance 的不可变结果身份。 |
+| `ArtifactRef` | 带 schema、digest、parents、producer 和 provenance 的不可变结果身份。 |
 | `SessionDataSnapshot` | 一次会话输入资料及其来源、结构、CRS 和质量信息的冻结视图。 |
 | `SpatialWorkspace` | data-owned 的空间查询/几何工作边界；不等于 graph state。 |
 | `EvidenceBundle` | 带来源和 provenance 的证据集合；不直接等于规划决定。 |

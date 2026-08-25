@@ -20,7 +20,7 @@
 | 原位置 | 新位置 |
 |--------|--------|
 | `core/llm.py`（`create_llm` / `create_flash_llm` / `LLMProvider` / `get_provider`） | `infrastructure/llm/factory.py` |
-| `core/instructor_client.py`（`get_instructor_client` / `get_flash_model`） | `infrastructure/llm/instructor_client.py` |
+| `core/instructor_client.py`（`get_instructor_client` / `get_structured_model`） | `infrastructure/llm/instructor_client.py` |
 | `core/tracing.py`（LangSmith 单例 `get_langsmith_manager` / `create_run_metadata`） | `infrastructure/llm/tracing.py` |
 | `core/events.py`（`SSEEventType`，全系统唯一来源） | `contracts/events.py`（跨层共享契约，底层） |
 
