@@ -135,6 +135,29 @@ class GeometryRef(BaseModel):
         return list(dict.fromkeys(str(item) for item in value if str(item).strip()))
 
 
+class SearchScopeRef(BaseModel):
+    """Coarse retrieval scope that must not be materialized as a candidate."""
+
+    scope_bsms: list[str] = Field(default_factory=list)
+    bbox: tuple[float, float, float, float] | None = None
+    scope_type: SpatialDomainKind = "unknown"
+    source: str = ""
+    reason: str = ""
+    candidate_materialization_allowed: Literal[False] = False
+    provenance_refs: list[str] = Field(default_factory=list)
+    missing_requirements: list[str] = Field(default_factory=list)
+    source_snapshot_ref: str = ""
+    bundle_snapshot_digest: str = ""
+    diagnostics: Dict[str, Any] = Field(default_factory=dict)
+
+    model_config = {"extra": "forbid"}
+
+    @field_validator("scope_bsms", "provenance_refs", "missing_requirements")
+    @classmethod
+    def _clean_scope_lists(cls, value: list[str]) -> list[str]:
+        return list(dict.fromkeys(str(item) for item in value if str(item).strip()))
+
+
 @dataclass
 class CandidateSet:
     """KG-side candidate BSM set returned by resolve_candidates."""
@@ -152,6 +175,7 @@ class ResolvedSpatialRef:
     bbox: Optional[List[float]] = None
     reference_geometry_wkt: Optional[str] = None
     reference_geometries: List[GeometryRef] = field(default_factory=list)
+    search_scope: SearchScopeRef | None = None
     spatial_domain_kind: SpatialDomainKind = "unknown"
     confidence: float = 0.0
     uncertainty_radius_m: float = 0.0
@@ -174,6 +198,7 @@ __all__ = [
     "RefObject",
     "SpatialReferenceSpec",
     "GeometryRef",
+    "SearchScopeRef",
     "CandidateSet",
     "ResolvedSpatialRef",
     "SpatialDomainKind",

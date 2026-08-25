@@ -40,14 +40,14 @@ def _context() -> SimpleNamespace:
     )
 
 
-def test_multi_parcel_resolution_exposes_independent_parcel_alternatives() -> None:
+def test_precise_multi_parcel_resolution_exposes_independent_parcel_alternatives() -> None:
     candidates = build_candidate_sites(
         SpatialReferenceSpec(type="place_name", target_id="facility-1"),
         ResolvedSpatialRef(
             final_bsms=["P-1", "P-2"],
+            spatial_domain_kind="parcel_set",
             confidence=0.7,
-            uncertainty_reason="village_coarse",
-            provenance={"path": "gazetteer:village"},
+            provenance={"path": "evidence:candidates"},
         ),
         0,
         _context(),

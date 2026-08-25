@@ -313,13 +313,16 @@ def test_hazard_address_can_seed_natural_village_scope_from_related_parcel() -> 
         evidence_packet=packet,
     )
 
-    assert resolved.final_bsms == [parcel.bsm]
+    assert resolved.final_bsms == []
     assert resolved.reference_geometries == []
+    assert resolved.search_scope is not None
+    assert resolved.search_scope.scope_bsms == [parcel.bsm]
     assert resolved.spatial_domain_kind == "village_scope"
     assert resolved.uncertainty_reason == "evidence_derived_village_scope"
-    assert resolved.feature_bsms == [hazard.bsm]
+    assert resolved.feature_bsms == []
     assert resolved.provenance["not_exact_village_boundary"] is True
     assert resolved.provenance["scope_seed_parcel_bsms"] == [parcel.bsm]
+    assert resolved.search_scope.diagnostics["anchor_feature_bsms"] == [hazard.bsm]
 
     query, scopes = _ground_packet_query(context, spec)
     assert "炉池" in query
@@ -409,11 +412,14 @@ def test_llm_selects_one_spatial_cluster_without_merging_distant_parcels(
 
     resolved = SpatialResolver(context).resolve_spec(spec, evidence_packet=packet)
 
-    assert resolved.final_bsms == [parcels[1].bsm]
-    assert resolved.feature_bsms == [hazards[1].bsm]
+    assert resolved.final_bsms == []
+    assert resolved.feature_bsms == []
+    assert resolved.search_scope is not None
+    assert resolved.search_scope.scope_bsms == [parcels[1].bsm]
     assert resolved.provenance["anchor_cluster_count"] == 2
     assert resolved.provenance["selected_anchor_cluster_index"] == 2
     assert resolved.provenance["anchor_cluster_selection"] == "closed_set_llm_selected_cluster"
+    assert resolved.search_scope.diagnostics["anchor_feature_bsms"] == [hazards[1].bsm]
     assert prompts and hazards[0].bsm in prompts[0] and hazards[1].bsm in prompts[0]
     assert "规划对象位于炉池乙点附近" in prompts[0]
     assert "L1_facts=" in prompts[0]

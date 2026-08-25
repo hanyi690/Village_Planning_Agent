@@ -570,6 +570,16 @@ def build_candidate_sites(
     candidate is retained and remains fail-closed.
     """
 
+    search_scope = getattr(resolved, "search_scope", None)
+    if (
+        search_scope is not None
+        and not bool(getattr(search_scope, "candidate_materialization_allowed", False))
+        and not resolved.reference_geometry_wkt
+        and not getattr(resolved, "reference_geometries", None)
+        and not resolved.final_bsms
+    ):
+        return []
+
     source_parcels = list(resolved.final_bsms)
     reference_geometries = list(getattr(resolved, "reference_geometries", None) or [])
     if reference_geometries:
@@ -653,6 +663,73 @@ def build_candidate_sites(
             )
         )
     return alternatives
+
+
+def _search_scope_payload(search_scope: Any) -> dict[str, Any] | None:
+    if search_scope is None:
+        return None
+    if hasattr(search_scope, "model_dump"):
+        return search_scope.model_dump(mode="python")
+    if isinstance(search_scope, dict):
+        return dict(search_scope)
+    return None
+
+
+def _search_scope_result_refs(search_scope: Any) -> list[str]:
+    payload = _search_scope_payload(search_scope) or {}
+    result_refs = list(dict.fromkeys(
+        str(value).strip()
+        for value in payload.get("scope_bsms", [])
+        if str(value).strip()
+    ))
+    bbox = payload.get("bbox")
+    if bbox:
+        try:
+            result_refs.append(
+                "bbox:" + ",".join(f"{float(value):.6f}" for value in bbox[:4])
+            )
+        except (TypeError, ValueError, IndexError):
+            pass
+    return result_refs
+
+
+def _search_scope_issue(spec: SpatialReferenceSpec, resolved: ResolvedSpatialRef) -> StageIssue:
+    payload = _search_scope_payload(getattr(resolved, "search_scope", None)) or {}
+    missing = ",".join(payload.get("missing_requirements", []) or []) or "authoritative_geometry"
+    scope_type = str(payload.get("scope_type", "") or getattr(resolved, "spatial_domain_kind", "") or "unknown")
+    source = str(payload.get("source", "") or str((resolved.provenance or {}).get("path", "") or "search_scope"))
+    reason = str(payload.get("reason", "") or getattr(resolved, "uncertainty_reason", "") or "coarse_reference")
+    scope_bsms = list(dict.fromkeys(
+        str(value).strip()
+        for value in payload.get("scope_bsms", [])
+        if str(value).strip()
+    ))
+    bbox = payload.get("bbox")
+    bbox_text = ""
+    if bbox:
+        try:
+            bbox_text = ",".join(f"{float(value):.6f}" for value in bbox[:4])
+        except (TypeError, ValueError, IndexError):
+            bbox_text = ""
+    return StageIssue(
+        stage="ground",
+        severity="warning",
+        code="search_scope_not_materialized",
+        message=(
+            "coarse search scope retained for retrieval only; "
+            "candidate materialization remains disabled"
+        ),
+        detail=(
+            f"target_id={getattr(spec, 'target_id', '')}; "
+            f"scope_type={scope_type}; "
+            f"source={source}; "
+            f"reason={reason}; "
+            f"scope_bsms={scope_bsms}; "
+            f"bbox={bbox_text or 'none'}; "
+            f"missing_requirements={missing}"
+        ),
+        related_artifact_id=(getattr(spec, "target_id", "") or None),
+    )
 
 
 def _candidate_constraint_status(
@@ -816,6 +893,7 @@ def ground_aggregate(
     candidates: List[CandidateSite] = []
     unresolved: List[StageIssue] = []
     spatial_query_evidence: List[SpatialQueryEvidence] = []
+    search_scope_trace: list[str] = []
 
     for index, spec in enumerate(specs):
         # Design 06/12: TARGET_PROJECTION retains unresolved_reason as a
@@ -935,6 +1013,10 @@ def ground_aggregate(
                 },
             )
         spec_type = getattr(spec, "type", "")
+        search_scope_payload = _search_scope_payload(getattr(resolved, "search_scope", None))
+        result_refs = list(resolved.final_bsms)
+        if not result_refs and search_scope_payload is not None:
+            result_refs = _search_scope_result_refs(getattr(resolved, "search_scope", None))
         spatial_query_evidence.append(
             SpatialQueryEvidence(
                 query_type=f"resolve_spec:{spec_type}",
@@ -946,13 +1028,26 @@ def ground_aggregate(
                     "target_id": getattr(spec, "target_id", ""),
                     "spec_id": getattr(spec, "spec_id", ""),
                     "project_ref": getattr(spec, "project_ref", None),
+                    **(
+                        {"search_scope": search_scope_payload}
+                        if search_scope_payload is not None
+                        else {}
+                    ),
                 },
-                result_count=len(resolved.final_bsms),
-                result_refs=list(resolved.final_bsms),
+                result_count=len(result_refs),
+                result_refs=result_refs,
                 target_id=getattr(spec, "target_id", ""),
                 spec_id=getattr(spec, "spec_id", ""),
             )
         )
+        if search_scope_payload is not None:
+            search_scope_trace.append(
+                "search_scope:"
+                f"{getattr(spec, 'target_id', '') or getattr(spec, 'spec_id', '') or spec_type}:"
+                f"{search_scope_payload.get('scope_type', 'unknown')}:"
+                f"{search_scope_payload.get('source', '')}:"
+                f"{search_scope_payload.get('reason', '')}"
+            )
         if (
             resolved.final_bsms
             or resolved.reference_geometry_wkt
@@ -992,23 +1087,26 @@ def ground_aggregate(
                     )
                 )
         else:
-            unresolved.append(
-                StageIssue(
-                    stage="ground",
-                    severity="warning",
-                    code="spatial_reference_unresolved",
-                    message=(
-                        f"unresolved spec: no candidates resolved for "
-                        f"type={spec_type}"
-                    ),
-                    detail=(
-                        f"target_id={getattr(spec, 'target_id', '')}; "
-                        f"spec_id={getattr(spec, 'spec_id', '')}; "
-                        f"reason={getattr(spec, 'unresolved_reason', '') or 'no_candidates'}"
-                    ),
-                    related_artifact_id=(getattr(spec, "target_id", "") or None),
+            if search_scope_payload is not None:
+                unresolved.append(_search_scope_issue(spec, resolved))
+            else:
+                unresolved.append(
+                    StageIssue(
+                        stage="ground",
+                        severity="warning",
+                        code="spatial_reference_unresolved",
+                        message=(
+                            f"unresolved spec: no candidates resolved for "
+                            f"type={spec_type}"
+                        ),
+                        detail=(
+                            f"target_id={getattr(spec, 'target_id', '')}; "
+                            f"spec_id={getattr(spec, 'spec_id', '')}; "
+                            f"reason={getattr(spec, 'unresolved_reason', '') or 'no_candidates'}"
+                        ),
+                        related_artifact_id=(getattr(spec, "target_id", "") or None),
+                    )
                 )
-            )
 
     if evidence_packets:
         seen_packet_relation_ids: set[str] = set()
@@ -1052,7 +1150,7 @@ def ground_aggregate(
         source="ground_aggregate",
         run_id=run_id,
         module="ground",
-        trace=[f"specs:{len(specs)}"],
+        trace=[f"specs:{len(specs)}", *search_scope_trace],
         natural_language_description=(
             "GROUND grounding result produced by ground_aggregate via SpatialResolver."
         ),
@@ -1160,6 +1258,11 @@ def _build_grounded_problem(
         f"relation_{item.status}:{item.relation_id}"
         for item in relation_satisfaction
         if item.status in {"deferred", "violated", "unknown"}
+    )
+    diagnostics.extend(
+        f"search_scope:{str(issue.related_artifact_id or '')}:{str(issue.detail or '')}"
+        for issue in unresolved
+        if str(issue.code or "") == "search_scope_not_materialized"
     )
     grounding_findings = [
         GroundingFinding(

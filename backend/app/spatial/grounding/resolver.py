@@ -339,6 +339,130 @@ class SpatialResolver:
     def evidence_graph(self):
         return self.context.evidence_graph
 
+    def _bundle_snapshot_digest(self) -> str:
+        try:
+            snapshot = getattr(self.context.workspace, "snapshot", None)
+            digest = getattr(snapshot, "digest", "")
+            if digest:
+                return str(digest)
+        except Exception:
+            pass
+        return str(getattr(getattr(self.context, "data_snapshot", None), "digest", "") or "")
+
+    def _search_scope_requirements(
+        self,
+        *,
+        has_feature_identity: bool = False,
+        has_source_snapshot: bool = False,
+    ) -> list[str]:
+        requirements: list[str] = []
+        if not has_feature_identity:
+            requirements.append("explicit_feature_identity")
+        requirements.append("authoritative_geometry")
+        if not has_source_snapshot:
+            requirements.append("source_snapshot")
+        return requirements
+
+    def _build_search_scope(
+        self,
+        *,
+        scope_bsms: Optional[List[str]] = None,
+        bbox: Any = None,
+        scope_type: str,
+        source: str,
+        reason: str,
+        provenance_refs: Optional[List[str]] = None,
+        missing_requirements: Optional[List[str]] = None,
+        source_snapshot_ref: str = "",
+        bundle_snapshot_digest: str = "",
+        diagnostics: Optional[Dict[str, Any]] = None,
+    ):
+        from app.contracts.spatial.spatial_reference_contracts import SearchScopeRef
+
+        normalized_bsms = list(dict.fromkeys(
+            str(value).strip() for value in (scope_bsms or []) if str(value).strip()
+        ))
+        normalized_bbox = None
+        if bbox:
+            try:
+                normalized_bbox = tuple(float(value) for value in bbox[:4])
+            except (TypeError, ValueError, IndexError):
+                normalized_bbox = None
+        return SearchScopeRef(
+            scope_bsms=normalized_bsms,
+            bbox=normalized_bbox,
+            scope_type=scope_type,
+            source=source,
+            reason=reason,
+            provenance_refs=list(dict.fromkeys(
+                str(value).strip()
+                for value in (provenance_refs or [])
+                if str(value).strip()
+            )),
+            missing_requirements=list(dict.fromkeys(
+                str(value).strip()
+                for value in (
+                    missing_requirements
+                    or self._search_scope_requirements(
+                        has_feature_identity=False,
+                        has_source_snapshot=bool(
+                            str(source_snapshot_ref or bundle_snapshot_digest).strip()
+                        ),
+                    )
+                )
+                if str(value).strip()
+            )),
+            source_snapshot_ref=str(source_snapshot_ref or ""),
+            bundle_snapshot_digest=str(
+                bundle_snapshot_digest or self._bundle_snapshot_digest() or ""
+            ),
+            diagnostics=dict(diagnostics or {}),
+        )
+
+    def _coarse_scope_resolution(
+        self,
+        *,
+        scope_bsms: Optional[List[str]] = None,
+        bbox: Any = None,
+        scope_type: str,
+        source: str,
+        reason: str,
+        confidence: float,
+        uncertainty_radius_m: float,
+        provenance: Optional[Dict[str, Any]] = None,
+        provenance_refs: Optional[List[str]] = None,
+        missing_requirements: Optional[List[str]] = None,
+        source_snapshot_ref: str = "",
+        bundle_snapshot_digest: str = "",
+        diagnostics: Optional[Dict[str, Any]] = None,
+    ) -> "ResolvedSpatialRef":
+        from app.contracts.spatial.spatial_reference_contracts import ResolvedSpatialRef
+
+        scope = self._build_search_scope(
+            scope_bsms=scope_bsms,
+            bbox=bbox,
+            scope_type=scope_type,
+            source=source,
+            reason=reason,
+            provenance_refs=provenance_refs,
+            missing_requirements=missing_requirements,
+            source_snapshot_ref=source_snapshot_ref,
+            bundle_snapshot_digest=bundle_snapshot_digest,
+            diagnostics=diagnostics,
+        )
+        return ResolvedSpatialRef(
+            final_bsms=[],
+            bbox=None,
+            reference_geometry_wkt=None,
+            reference_geometries=[],
+            search_scope=scope,
+            spatial_domain_kind=scope_type,
+            confidence=confidence,
+            uncertainty_radius_m=uncertainty_radius_m,
+            uncertainty_reason=reason,
+            provenance=dict(provenance or {}),
+        )
+
     # ── 1. Free-text description (EXPLORE / GROUND) ────────────────
 
     def resolve_text(self, desc: str) -> "ResolvedSpatialDescription":
@@ -565,15 +689,20 @@ class SpatialResolver:
             )
             if cluster is not None:
                 cluster_bsms, village_token = cluster
-                return ResolvedSpatialRef(
-                    final_bsms=cluster_bsms,
-                    bbox=None,
-                    spatial_domain_kind="village_scope",
+                return self._coarse_scope_resolution(
+                    scope_bsms=cluster_bsms,
+                    bbox=self._parcel_bbox(cluster_bsms),
+                    scope_type="village_scope",
+                    source="village_cluster:gazetteer",
+                    reason="village_coarse",
                     confidence=0.35,
                     uncertainty_radius_m=250.0,
-                    uncertainty_reason="village_coarse",
                     provenance={
                         "path": "village_cluster:gazetteer",
+                        "village": village_token,
+                        "bsm_count": len(cluster_bsms),
+                    },
+                    diagnostics={
                         "village": village_token,
                         "bsm_count": len(cluster_bsms),
                     },
@@ -637,15 +766,20 @@ class SpatialResolver:
                     cluster = self._resolve_village_cluster(raw_label)
                     if cluster is not None:
                         cluster_bsms, village_token = cluster
-                        return ResolvedSpatialRef(
-                            final_bsms=cluster_bsms,
-                            bbox=None,
-                            spatial_domain_kind="village_scope",
+                        return self._coarse_scope_resolution(
+                            scope_bsms=cluster_bsms,
+                            bbox=self._parcel_bbox(cluster_bsms),
+                            scope_type="village_scope",
+                            source="village_cluster:gazetteer",
+                            reason="village_coarse",
                             confidence=0.35,
                             uncertainty_radius_m=250.0,
-                            uncertainty_reason="village_coarse",
                             provenance={
                                 "path": "village_cluster:gazetteer",
+                                "village": village_token,
+                                "bsm_count": len(cluster_bsms),
+                            },
+                            diagnostics={
                                 "village": village_token,
                                 "bsm_count": len(cluster_bsms),
                             },
@@ -848,6 +982,8 @@ class SpatialResolver:
             elif values:
                 provenance[key] = str(values)
 
+        search_scope = None
+
         # KG relation materialization does not always contain a nearby edge
         # from a named natural village to its parcels. When PARSE gives an
         # explicit village label, use the session gazetteer as the same
@@ -872,10 +1008,27 @@ class SpatialResolver:
                 if fact_match is not None:
                     provenance["path"] += "+l1_location_fact"
                 gazetteer_bsms = _resolve_gazetteer_bsms(token, self.gazetteer)
-                final_bsms = self._filter_to_bundle(gazetteer_bsms)
-                if final_bsms:
+                gazetteer_scope_bsms = self._filter_to_bundle(gazetteer_bsms)
+                if gazetteer_scope_bsms:
                     provenance["path"] += "+gazetteer:village"
-                    provenance["gazetteer_count"] = len(final_bsms)
+                    provenance["gazetteer_count"] = len(gazetteer_scope_bsms)
+                    search_scope = self._build_search_scope(
+                        scope_bsms=gazetteer_scope_bsms,
+                        bbox=self._parcel_bbox(gazetteer_scope_bsms),
+                        scope_type="village_scope",
+                        source="gazetteer:village",
+                        reason="gazetteer_village_scope",
+                        missing_requirements=self._search_scope_requirements(
+                            has_feature_identity=False,
+                            has_source_snapshot=bool(self._bundle_snapshot_digest()),
+                        ),
+                        bundle_snapshot_digest=self._bundle_snapshot_digest(),
+                        diagnostics={
+                            "scope_label": label,
+                            "gazetteer_scope_bsms": gazetteer_scope_bsms,
+                            "matched_location_fact": bool(fact_match is not None),
+                        },
+                    )
             except Exception as exc:
                 logger.debug("[SpatialResolver] gazetteer fallback failed: %s", exc)
 
@@ -928,18 +1081,24 @@ class SpatialResolver:
             cluster = self._resolve_village_cluster("")
             if cluster is not None:
                 cluster_bsms, village_token = cluster
-                return ResolvedSpatialRef(
-                    final_bsms=cluster_bsms,
-                    bbox=None,
-                    spatial_domain_kind="village_scope",
+                return self._coarse_scope_resolution(
+                    scope_bsms=cluster_bsms,
+                    bbox=self._parcel_bbox(cluster_bsms),
+                    scope_type="village_scope",
+                    source="village_cluster:gazetteer:coarse_fallback",
+                    reason="village_coarse_fallback",
                     confidence=0.3,
                     uncertainty_radius_m=250.0,
-                    uncertainty_reason="village_coarse_fallback",
                     provenance={
                         "path": "village_cluster:gazetteer:coarse_fallback",
                         "village": village_token,
                         "bsm_count": len(cluster_bsms),
                         "prior": provenance,
+                    },
+                    diagnostics={
+                        "village": village_token,
+                        "bsm_count": len(cluster_bsms),
+                        "prior_path": str(provenance.get("path", "") or ""),
                     },
                 )
             return ResolvedSpatialRef(
@@ -958,16 +1117,106 @@ class SpatialResolver:
 
         confidence = 0.9 if reference_geometries else (0.7 if final_bsms else 0.3)
         if not final_bsms and bbox:
-            # Directional bbox with no KG match: fall back to geometry query.
+            # Directional bbox with no KG match stays as retrieval scope only.
             from .grounding import query_parcels_in_bbox
 
             parcels = self.context.current_parcels()
-            final_bsms = query_parcels_in_bbox(parcels, bbox)
+            bbox_scope_bsms = query_parcels_in_bbox(parcels, bbox)
             provenance["path"] += "+geometry:bbox"
+            search_scope = self._build_search_scope(
+                scope_bsms=bbox_scope_bsms,
+                bbox=bbox,
+                scope_type="bbox",
+                source="geometry:bbox",
+                reason="bbox_search_scope",
+                provenance_refs=(
+                    list(getattr(search_scope, "provenance_refs", None) or [])
+                    if search_scope is not None
+                    else None
+                ),
+                missing_requirements=self._search_scope_requirements(
+                    has_feature_identity=False,
+                    has_source_snapshot=bool(self._bundle_snapshot_digest()),
+                ),
+                bundle_snapshot_digest=self._bundle_snapshot_digest(),
+                diagnostics={
+                    "bbox_scope_bsms": list(dict.fromkeys(str(value) for value in bbox_scope_bsms if str(value))),
+                    "seed_scope_type": (
+                        str(getattr(search_scope, "scope_type", "") or "")
+                        if search_scope is not None
+                        else ""
+                    ),
+                    "seed_scope_bsms": (
+                        list(getattr(search_scope, "scope_bsms", None) or [])
+                        if search_scope is not None
+                        else []
+                    ),
+                },
+            )
             confidence = 0.8
+
+        path = str(provenance.get("path", "") or "")
+        if not reference_geometries and final_bsms and "+flash_mention" in path:
+            search_scope = self._build_search_scope(
+                scope_bsms=final_bsms,
+                bbox=self._parcel_bbox(final_bsms),
+                scope_type="parcel_set" if len(final_bsms) > 1 else "parcel_extent",
+                source="flash_mention",
+                reason="flash_mention_scope",
+                missing_requirements=self._search_scope_requirements(
+                    has_feature_identity=False,
+                    has_source_snapshot=bool(self._bundle_snapshot_digest()),
+                ),
+                bundle_snapshot_digest=self._bundle_snapshot_digest(),
+                diagnostics={
+                    "enhanced_mentions": list(provenance.get("enhanced_mentions", []) or []),
+                    "scope_seed_parcel_bsms": list(final_bsms),
+                },
+            )
+            final_bsms = []
+        elif not reference_geometries and final_bsms and bbox:
+            search_scope = self._build_search_scope(
+                scope_bsms=final_bsms,
+                bbox=bbox,
+                scope_type="bbox",
+                source="geometry:directional_bbox",
+                reason="directional_bbox_scope",
+                missing_requirements=self._search_scope_requirements(
+                    has_feature_identity=False,
+                    has_source_snapshot=bool(self._bundle_snapshot_digest()),
+                ),
+                bundle_snapshot_digest=self._bundle_snapshot_digest(),
+                diagnostics={
+                    "direction": str(direction or ""),
+                    "scope_seed_parcel_bsms": list(final_bsms),
+                },
+            )
+            final_bsms = []
 
         uncertainty_reason = ""
         uncertainty_radius_m = 0.0
+        if not final_bsms and search_scope is not None and not reference_geometries:
+            provenance["search_scope"] = search_scope.model_dump(mode="python")
+            return ResolvedSpatialRef(
+                final_bsms=[],
+                bbox=None,
+                reference_geometry_wkt=None,
+                reference_geometries=[],
+                search_scope=search_scope,
+                spatial_domain_kind=str(search_scope.scope_type or "unknown"),
+                confidence=confidence,
+                uncertainty_radius_m=(
+                    _bbox_radius_m(search_scope.bbox)
+                    if getattr(search_scope, "bbox", None)
+                    else 250.0
+                ),
+                uncertainty_reason=str(search_scope.reason or "coarse_reference"),
+                source_binding_ref=str(provenance.get("source_binding_ref", "") or ""),
+                source_collection_key=str(provenance.get("source_collection_key", "") or ""),
+                source_snapshot_ref=str(provenance.get("source_snapshot_ref", "") or ""),
+                source_feature_digest=str(provenance.get("source_feature_digest", "") or ""),
+                provenance=provenance,
+            )
         if not final_bsms:
             uncertainty_reason = "unresolved"
         else:
@@ -982,7 +1231,6 @@ class SpatialResolver:
                 uncertainty_reason = "coarse_reference"
                 uncertainty_radius_m = _bbox_radius_m(bbox) if bbox else 250.0
 
-        path = str(provenance.get("path", "") or "")
         if reference_geometries:
             geometry_types = {
                 str(getattr(ref, "feature_kind", "") or "")
@@ -1686,28 +1934,51 @@ class SpatialResolver:
             ResolvedSpatialRef,
         )
 
-        return ResolvedSpatialRef(
-            final_bsms=final_bsms,
+        return self._coarse_scope_resolution(
+            scope_bsms=final_bsms,
             bbox=self._parcel_bbox(final_bsms),
-            spatial_domain_kind="village_scope",
+            scope_type="village_scope",
+            source="evidence_packet:anchor_to_village_scope",
+            reason="evidence_derived_village_scope",
             confidence=0.45,
             uncertainty_radius_m=250.0,
-            uncertainty_reason="evidence_derived_village_scope",
-            feature_bsms=list(dict.fromkeys(feature_bsms)),
-            source_feature_ids=list(dict.fromkeys(source_feature_ids)),
-            entity_refs=list(dict.fromkeys(str(value) for value in entity_refs if str(value))),
-            relation_refs=list(dict.fromkeys(str(value) for value in relation_refs if str(value))),
-            l1_fact_refs=list(dict.fromkeys(str(value) for value in l1_fact_refs if str(value))),
-            l1_snapshot_ref=str(getattr(packet, "l1_snapshot_ref", "") or ""),
-            bundle_snapshot_digest=str(
-                getattr(packet, "bundle_snapshot_digest", "") or ""
-            ),
             provenance={
                 "path": "evidence_packet:anchor_to_village_scope",
                 "scope_label": label,
                 "scope_seed_parcel_bsms": final_bsms,
                 "anchor_feature_bsms": list(dict.fromkeys(feature_bsms)),
                 "anchor_roles": list(dict.fromkeys(anchor_roles)),
+                "anchor_cluster_count": len(anchor_clusters),
+                "selected_anchor_cluster_index": selected_cluster_index + 1,
+                "anchor_cluster_selection": cluster_selection,
+                "scope_semantics": "inferred_from_spatial_evidence",
+                "not_exact_village_boundary": True,
+            },
+            provenance_refs=list(dict.fromkeys([
+                *[str(value) for value in entity_refs if str(value)],
+                *[str(value) for value in relation_refs if str(value)],
+                *[str(value) for value in l1_fact_refs if str(value)],
+            ])),
+            missing_requirements=self._search_scope_requirements(
+                has_feature_identity=bool(feature_bsms or source_feature_ids or entity_refs),
+                has_source_snapshot=bool(
+                    str(getattr(packet, "l1_snapshot_ref", "") or "")
+                    or str(getattr(packet, "bundle_snapshot_digest", "") or "")
+                ),
+            ),
+            source_snapshot_ref=str(getattr(packet, "l1_snapshot_ref", "") or ""),
+            bundle_snapshot_digest=str(
+                getattr(packet, "bundle_snapshot_digest", "") or ""
+            ),
+            diagnostics={
+                "scope_label": label,
+                "scope_seed_parcel_bsms": final_bsms,
+                "anchor_feature_bsms": list(dict.fromkeys(feature_bsms)),
+                "anchor_source_feature_ids": list(dict.fromkeys(source_feature_ids)),
+                "anchor_roles": list(dict.fromkeys(anchor_roles)),
+                "entity_refs": list(dict.fromkeys(str(value) for value in entity_refs if str(value))),
+                "relation_refs": list(dict.fromkeys(str(value) for value in relation_refs if str(value))),
+                "l1_fact_refs": list(dict.fromkeys(str(value) for value in l1_fact_refs if str(value))),
                 "anchor_cluster_count": len(anchor_clusters),
                 "selected_anchor_cluster_index": selected_cluster_index + 1,
                 "anchor_cluster_selection": cluster_selection,

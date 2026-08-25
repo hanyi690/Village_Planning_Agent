@@ -1,0 +1,188 @@
+from __future__ import annotations
+
+from types import SimpleNamespace
+
+from app.contracts.spatial.spatial_reference_contracts import (
+    RefObject,
+    ResolvedSpatialRef,
+    SpatialReferenceSpec,
+)
+from app.domain.ground.aggregate import build_candidate_sites, ground_aggregate
+from app.spatial.grounding.resolver import SpatialResolver
+
+
+def _parcel(bsm: str, west: float, south: float, east: float, north: float):
+    return SimpleNamespace(
+        bsm=bsm,
+        area_sqm=10000.0,
+        geometry={
+            "type": "Polygon",
+            "coordinates": [[
+                [west, south], [west, north], [east, north],
+                [east, south], [west, south],
+            ]],
+        },
+    )
+
+
+class _Gazetteer:
+    def __init__(self, entries: dict[str, SimpleNamespace]):
+        self._entries = entries
+
+    def resolve(self, token: str, fuzzy: bool = False):
+        if token in self._entries:
+            return self._entries[token]
+        if not fuzzy:
+            return None
+        normalized = token.rstrip("村自然组")
+        for key, entry in self._entries.items():
+            if normalized and normalized in key:
+                return entry
+        return None
+
+
+def _context(parcels, *, gazetteer=None):
+    return SimpleNamespace(
+        session_id="search-scope-boundary",
+        version=1,
+        kg=None,
+        gazetteer=gazetteer,
+        location_facts=[],
+        ports=SimpleNamespace(spatial_query=None),
+        workspace=SimpleNamespace(
+            points={},
+            polygons=SimpleNamespace(
+                get=lambda key: parcels if key == "landuse_current" else []
+            ),
+            snapshot=SimpleNamespace(digest="bundle-search-scope"),
+        ),
+        current_parcels=lambda: parcels,
+        evidence_graph=None,
+        grounded_anchors=[],
+        village_anchors=[],
+        village_name="测试村",
+        data_snapshot=SimpleNamespace(digest="bundle-search-scope"),
+        l1_snapshot_ref="l1:test",
+        constraint_index=None,
+    )
+
+
+def test_coarse_village_fallback_only_produces_search_scope() -> None:
+    parcels = [
+        _parcel("P-1", 116.0, 24.0, 116.01, 24.01),
+        _parcel("P-2", 116.01, 24.0, 116.02, 24.01),
+    ]
+    gazetteer = _Gazetteer({
+        "社前村": SimpleNamespace(
+            bsms=["P-1", "P-2"],
+            centroid=(116.01, 24.005),
+            source="fixture",
+            confidence=0.8,
+            entity_uri="entity:社前村",
+        )
+    })
+    context = _context(parcels, gazetteer=gazetteer)
+    spec = SpatialReferenceSpec(
+        type="topological",
+        topo="sfWithin",
+        reference=RefObject(kind="village", filter={"label_contains": "社前"}),
+        target_id="target-village-scope",
+    )
+
+    resolved = SpatialResolver(context).resolve_spec(spec)
+
+    assert resolved.final_bsms == []
+    assert resolved.reference_geometries == []
+    assert resolved.search_scope is not None
+    assert resolved.search_scope.scope_bsms == ["P-1", "P-2"]
+    assert resolved.search_scope.scope_type == "village_scope"
+    assert resolved.search_scope.candidate_materialization_allowed is False
+
+    result = ground_aggregate([spec], context)
+
+    assert result.candidates == []
+    assert result.unresolved[0].code == "search_scope_not_materialized"
+    assert result.problem is not None
+    assert result.problem.candidate_domains == []
+    assert result.problem.target_domains[0].target_id == "target-village-scope"
+    assert result.problem.target_domains[0].status == "unresolved"
+    assert result.spatial_query_evidence[0].query_params["search_scope"]["scope_bsms"] == [
+        "P-1",
+        "P-2",
+    ]
+    assert any(
+        item.startswith("search_scope:target-village-scope:")
+        for item in (result.provenance.trace if result.provenance is not None else [])
+    )
+
+
+def test_exact_polygon_candidate_behavior_is_unchanged() -> None:
+    parcels = [_parcel("P-1", 0.0, 0.0, 1.0, 1.0)]
+    candidates = build_candidate_sites(
+        SpatialReferenceSpec(type="place_name", target_id="site-1"),
+        ResolvedSpatialRef(
+            final_bsms=["P-1"],
+            reference_geometry_wkt="POLYGON ((0 0, 1 0, 1 1, 0 1, 0 0))",
+            spatial_domain_kind="exact_feature",
+            confidence=0.95,
+            provenance={"path": "kg:site"},
+        ),
+        0,
+        _context(parcels),
+        target_kind="site_area",
+        expected_output_kind="polygon",
+    )
+
+    assert len(candidates) == 1
+    assert candidates[0].source_parcels == ["P-1"]
+    assert candidates[0].geometry is not None
+    assert candidates[0].geometry.role == "execution_geometry"
+    assert candidates[0].geometry.kind == "polygon"
+
+
+def test_single_parcel_candidate_behavior_is_unchanged() -> None:
+    parcels = [_parcel("P-1", 0.0, 0.0, 1.0, 1.0)]
+    candidates = build_candidate_sites(
+        SpatialReferenceSpec(type="place_name", target_id="site-1"),
+        ResolvedSpatialRef(
+            final_bsms=["P-1"],
+            spatial_domain_kind="parcel_extent",
+            confidence=0.7,
+            provenance={"path": "evidence:candidates"},
+        ),
+        0,
+        _context(parcels),
+        target_kind="site_area",
+        expected_output_kind="polygon",
+    )
+
+    assert len(candidates) == 1
+    assert candidates[0].source_parcels == ["P-1"]
+    assert candidates[0].geometry is not None
+    assert candidates[0].geometry.generation_operation == "grounded_candidate"
+
+
+def test_multiple_identifiable_parcels_still_split_into_alternatives() -> None:
+    parcels = [
+        _parcel("P-1", 0.0, 0.0, 1.0, 1.0),
+        _parcel("P-2", 2.0, 0.0, 3.0, 1.0),
+    ]
+    candidates = build_candidate_sites(
+        SpatialReferenceSpec(type="place_name", target_id="site-2"),
+        ResolvedSpatialRef(
+            final_bsms=["P-1", "P-2"],
+            spatial_domain_kind="parcel_set",
+            confidence=0.7,
+            provenance={"path": "evidence:candidates"},
+        ),
+        0,
+        _context(parcels),
+        target_kind="site_area",
+        expected_output_kind="polygon",
+    )
+
+    assert [candidate.source_parcels for candidate in candidates] == [["P-1"], ["P-2"]]
+    assert [candidate.geometry.generation_operation for candidate in candidates] == [
+        "grounded_parcel_alternative",
+        "grounded_parcel_alternative",
+    ]

@@ -128,6 +128,22 @@ async def test_real_spatial_stage_chain_preserves_subgeometry_lineage(
             context,
             index=PlaceEvidenceIndex.build(context),
         )
+        coarse_scope_target = "coarse-village-scope"
+        coarse_scope_spec = SpatialReferenceSpec(
+            type="topological",
+            topo="sfWithin",
+            reference=RefObject(kind="village", filter={"label_contains": "社前"}),
+            target_id=coarse_scope_target,
+        )
+        coarse_scope_grounding = ground_aggregate([coarse_scope_spec], context)
+        assert coarse_scope_grounding.candidates == []
+        assert coarse_scope_grounding.unresolved
+        assert coarse_scope_grounding.unresolved[0].code == "search_scope_not_materialized"
+        assert (
+            coarse_scope_grounding.spatial_query_evidence[0]
+            .query_params["search_scope"]["scope_type"]
+            == "village_scope"
+        )
         raw_semantic_result = context.evidence_graph.query_facility_bsms(
             "社前村", "祠堂"
         )
