@@ -54,9 +54,6 @@ class PlanningContext:
         report_summary_index: Layered report summaries keyed by dimension.
         l1_fact_records: Authoritative typed L1 facts; string reports are only
             a display projection and must not be the spatial source of truth.
-        l1_input_register: L1-owned structure of explicit source tables. It is
-            hydrated from the L1 artifact; no downstream stage parses raw
-            ``village_data``.
         networks: Canonical typed network snapshots keyed by explicit relation
             refs; the current-road snapshot is built when the layer is present.
         demands: Typed demand snapshots keyed by explicit demand refs. An empty
@@ -93,7 +90,6 @@ class PlanningContext:
     report_summary_index: Dict[str, Dict[str, Any]] = field(default_factory=dict)
     l1_snapshot_ref: str = ""
     l1_fact_records: List[Any] = field(default_factory=list)
-    l1_input_register: Any = None
     location_facts: List[Any] = field(default_factory=list)
     source_semantic_decisions: Dict[str, Any] = field(default_factory=dict)
     source_semantic_fingerprint: str = ""
@@ -204,15 +200,6 @@ class PlanningContext:
             "reports_loaded": self.reports_loaded,
             "location_fact_count": len(self.location_facts),
             "l1_fact_record_count": len(self.l1_fact_records),
-            "l1_input_current_asset_count": len(
-                getattr(self.l1_input_register, "current_assets", []) or []
-            ),
-            "l1_input_demand_count": len(
-                getattr(self.l1_input_register, "demands", []) or []
-            ),
-            "l1_input_register_digest": str(
-                getattr(self.l1_input_register, "source_digest", "") or ""
-            ),
             "source_semantic_decision_count": len(self.source_semantic_decisions),
             "source_semantic_fingerprint": self.source_semantic_fingerprint,
             "source_semantic_diagnostics": list(self.source_semantic_diagnostics),

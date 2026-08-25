@@ -133,7 +133,7 @@ async def resolve_human_review(
     session_id: str,
     request: ResolveRequest,
 ) -> dict[str, object]:
-    """Submit the decision and resume the exact active checkpoint (legacy forward)."""
+    """Submit the decision and resume the exact active checkpoint."""
     try:
         from app.infrastructure.runtime.planning_runtime_service import PlanningRuntimeService
 

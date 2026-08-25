@@ -2517,6 +2517,8 @@ async def _record_select_target_deferrals(
     from app.infrastructure.artifacts.runtime import load_artifact
     from app.contracts.artifacts.deferral_contracts import DeferralLedger
     from app.contracts.spatial.grounded_problem import GroundedPlanningProblem
+    from app.contracts.planning.solver import SolverSubproblemPlan
+    from app.domain.allocation.select_gate import _pending_target_ids
 
     try:
         gate = _root_gate_payload(state, "select")
@@ -2541,6 +2543,18 @@ async def _record_select_target_deferrals(
             str(domain.target_id)
             for domain in list(current_problem.candidate_domains or [])
             if str(domain.status) != "resolved" and str(domain.target_id)
+        )
+        solver_plan = load_artifact(
+            state,
+            "solver_subproblem_plan",
+            SolverSubproblemPlan,
+        )
+        allowed.update(
+            _pending_target_ids(
+                current_problem,
+                None,
+                solver_plan,
+            )
         )
         allowed.update(
             str(domain.target_id)

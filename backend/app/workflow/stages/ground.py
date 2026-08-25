@@ -421,6 +421,14 @@ async def ground_node(state: Dict[str, Any]) -> Dict[str, Any]:
         _to_typed(item, SpatialReferenceSpec)
         for item in (getattr(compilation, "spatial_reference_specs", None) or [])
     ]
+    pending_grounding_specs = [
+        _to_typed(item, SpatialReferenceSpec)
+        for item in (getattr(compilation, "pending_grounding_specs", None) or [])
+    ]
+    # Pending spatial claims are not formal projection specs, but they are
+    # typed GROUND work items.  Keep them separate for audit while executing
+    # them through the same resolver/aggregate path exactly once.
+    grounding_specs = [*specs, *pending_grounding_specs]
 
     # GROUND may derive additional anchors for its local grounding computation,
     # but TARGET_PROJECTION remains immutable.  Grounding facts belong in the
@@ -487,7 +495,7 @@ async def ground_node(state: Dict[str, Any]) -> Dict[str, Any]:
         if target_id:
             requirements_by_target.setdefault(target_id, []).append(requirement)
     evidence_packets, packet_diagnostics = await _retrieve_ground_evidence_packets(
-        context, specs, requirements_by_target
+        context, grounding_specs, requirements_by_target
     )
     if evidence_packets:
         logger.info(
@@ -495,7 +503,7 @@ async def ground_node(state: Dict[str, Any]) -> Dict[str, Any]:
             len(evidence_packets),
         )
     result = ground_aggregate(
-        specs,
+        grounding_specs,
         context,
         intent_graph=intent_graph,
         target_metadata=target_metadata,
@@ -538,7 +546,7 @@ async def ground_node(state: Dict[str, Any]) -> Dict[str, Any]:
         )
         if enhanced:
             re_result = ground_aggregate(
-                specs,
+                grounding_specs,
                 context,
                 mention_enhancements=enhanced,
                 intent_graph=intent_graph,
@@ -560,7 +568,7 @@ async def ground_node(state: Dict[str, Any]) -> Dict[str, Any]:
             for candidate in (getattr(result, "candidates", None) or []):
                 if hasattr(candidate, "evidence_refs"):
                     candidate.evidence_refs.extend(refs)
-    gate = evaluate_ground_gate(result, expected_spec_count=len(specs))
+    gate = evaluate_ground_gate(result, expected_spec_count=len(grounding_specs))
     candidate_domains = getattr(getattr(result, "problem", None), "candidate_domains", [])
     logger.info(
         "[workflow:ground] typed candidate domains=%d candidates=%d",
@@ -577,6 +585,36 @@ async def ground_node(state: Dict[str, Any]) -> Dict[str, Any]:
     )
     ref = persist_stage_artifact(state, "ground", "GroundingResult", result)
     output_refs = {"grounding_result": ref}
+    task_graph = getattr(compilation, "planning_task_graph", None)
+    if task_graph is not None:
+        from app.domain.ground.task_graph_executor import execute_planning_task_graph
+
+        executed_task_graph = execute_planning_task_graph(
+            task_graph,
+            grounded_problem=getattr(result, "problem", None),
+            artifact_refs={
+                **dict(state.get("artifact_refs") or {}),
+                "grounding_result": ref,
+            },
+        )
+        task_graph_state = dict(state)
+        task_graph_state["artifact_refs"] = dict(state.get("artifact_refs") or {})
+        task_graph_state["artifact_refs"]["grounding_result"] = ref
+        task_graph_ref = persist_stage_artifact(
+            task_graph_state,
+            "ground",
+            "PlanningTaskGraph",
+            executed_task_graph,
+        )
+        output_refs["planning_task_graph"] = task_graph_ref
+        logger.info(
+            "[workflow:ground] executed planning tasks=%d statuses=%s",
+            len(executed_task_graph.tasks),
+            {
+                status: sum(1 for task in executed_task_graph.tasks if task.status == status)
+                for status in sorted({task.status for task in executed_task_graph.tasks})
+            },
+        )
     if projection_ref:
         output_refs["target_projection"] = projection_ref
     patch = stage_completion_patch(
@@ -825,6 +863,33 @@ def _target_metadata_from_compilation(
                         "expected_output_kind": expected_output_kind,
                     },
                 )
+    for claim in list(getattr(compilation, "pending_grounding_claims", None) or []):
+        category = str(getattr(claim, "suggested_category", "") or "")
+        target_kind = {
+            "facility": "facility",
+            "road": "road",
+            "axis": "axis",
+            "zone": (
+                "zone"
+                if str(getattr(claim, "materialization_role", "") or "")
+                == "land_use_assignment"
+                else "site_area"
+            ),
+            "site_area": "site_area",
+            "restoration": "site_area",
+            "protection": "site_area",
+        }.get(category, "action")
+        target_id = str(getattr(claim, "claim_id", "") or "").strip()
+        if target_id and target_kind != "action":
+            metadata.setdefault(
+                target_id,
+                {
+                    "target_kind": target_kind,
+                    "expected_output_kind": str(
+                        getattr(claim, "suggested_output_kind", "") or "unknown"
+                    ),
+                },
+            )
     return metadata
 
 

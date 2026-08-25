@@ -122,70 +122,6 @@ def _l3_revision_patch(program: Any, target_ids: list[str]) -> Dict[str, Any] | 
     }
 
 
-def _auto_defer_blocked_targets(
-    state: Dict[str, Any],
-    compilation: Any,
-    impact: Any,
-    working_state: Dict[str, Any],
-    *,
-    load_ref: Any = None,
-    persist: Any = None,
-) -> Dict[str, Any] | None:
-    """Retired compatibility hook; validation cannot mutate an approval plan."""
-    return None
-    # Kept below only as historical source context; unreachable by design.
-    if load_ref is None:
-        load_ref = _load_ref_artifact
-    if persist is None:
-        persist = persist_stage_artifact
-
-    reason = str(impact.reason or "validation repair is unresolved")
-    defer_ids = sorted({
-        str(target_id)
-        for item in compilation.unresolved
-        for target_id in item.target_ids
-        if str(target_id).strip()
-    })
-    if not defer_ids:
-        return None
-    # Fail closed when any unresolved finding has no target lineage: auto-defer
-    # must never silently mask integrity/lineage failures by force-passing the
-    # gate while those blockers remain.
-    if any(not getattr(item, "target_ids", None) for item in compilation.unresolved):
-        return None
-
-    from app.contracts.artifacts.deferral_contracts import DeferralLedger
-    from app.contracts.workflow.execution_plan_contracts import ExecutionPlan
-    from app.domain.delivery.deferral_ledger import append_ledger, build_target_deferrals
-
-    existing_ledger = load_ref(state, "deferral_ledger", DeferralLedger)
-    ledger = append_ledger(
-        existing_ledger,
-        build_target_deferrals(
-            defer_ids,
-            reason="validate_auto_defer:no_repair_policy",
-            source_refs=("artifact:validation_report",),
-            decided_by="validate",
-            rationale=reason,
-        ),
-    )
-    output_refs: Dict[str, Any] = {}
-    patch: Dict[str, Any] = {}
-    ledger_ref = persist(working_state, "validate", "DeferralLedger", ledger)
-    if ledger_ref:
-        output_refs["deferral_ledger"] = ledger_ref
-        patch["deferral_ledger"] = ledger.model_dump(mode="json")
-    patch["auto_deferred_target_ids"] = defer_ids
-    return {
-        "gate": _pass_gate("validate").model_copy(update={
-            "feedback_route": "PASS",
-            "route_reason": f"auto_deferred_targets:{len(defer_ids)}",
-        }),
-        "next_action": _next_action_forward("reconcile"),
-        "output_refs": output_refs,
-        "patch": patch,
-    }
-
 async def validate_node(state: Dict[str, Any]) -> Dict[str, Any]:
     """Validate the immutable EXECUTE outputs and emit a typed gate + next_action."""
     from app.domain.validation.validate import validate_aggregate
@@ -366,7 +302,7 @@ async def validate_node(state: Dict[str, Any]) -> Dict[str, Any]:
         final_relation_ref = persist_stage_artifact(
             working_state,
             "validate",
-            "FinalRelationValidation",
+            "FinalScenarioValidation",
             final_relation_validation,
         )
         if final_relation_ref:

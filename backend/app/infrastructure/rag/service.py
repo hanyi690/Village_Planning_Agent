@@ -310,20 +310,6 @@ class RagService:
                 village_name = state.get("village_name", "") or config.get("village_name", "")
                 village_context = village_name
 
-            # L1 is the only stage allowed to structure the raw input.  RAG
-            # query generation may consume the restored register, but it must
-            # never reopen or regex-scan the raw ``village_data`` document.
-            try:
-                from app.infrastructure.context.planning_context_factory import get_cached_context
-                from app.domain.assessment.input_register import render_l1_input_register
-
-                planning_context = get_cached_context(session_id)
-                register = getattr(planning_context, "l1_input_register", None)
-                if register is not None:
-                    extra_keywords = render_l1_input_register(register, max_rows=24)[:900]
-            except Exception:
-                extra_keywords = ""
-
         # 使用分 Layer Prompt
         prompt = self._build_query_prompt(dim_name, task_desc, dim_layer, dependency_summaries,
                                           dim_key=dim_key, village_context=village_context,

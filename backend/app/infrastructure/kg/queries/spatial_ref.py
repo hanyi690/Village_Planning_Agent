@@ -42,7 +42,6 @@ _RDF_TYPE_TO_PLN = {
 
 def resolve_candidates(kg, spec: SpatialReferenceSpec) -> CandidateSet:
     ref_ids: List[str] = []
-    ref_geometry_wkt: Optional[str] = None
     ref_geometries: list[GeometryRef] = []
     if spec.reference is not None:
         ref_ids = _resolve_reference(kg, spec.reference)
@@ -52,12 +51,8 @@ def resolve_candidates(kg, spec: SpatialReferenceSpec) -> CandidateSet:
             spec.reference,
             ref_ids,
         )
-        if len(ref_geometries) == 1:
-            ref_geometry_wkt = ref_geometries[0].wkt
-
     if spec.type == "topological":
         result = _resolve_topological(kg, spec, ref_ids)
-        result.ref_geometry_wkt = ref_geometry_wkt
         result.ref_geometries = ref_geometries
         return result
 
@@ -68,20 +63,8 @@ def resolve_candidates(kg, spec: SpatialReferenceSpec) -> CandidateSet:
     return CandidateSet(
         bsms=attr_bsms,
         ref_bsms=ref_ids,
-        ref_geometry_wkt=ref_geometry_wkt,
         ref_geometries=ref_geometries,
     )
-
-
-def _resolve_exact_reference_geometry(
-    kg,
-    spec: SpatialReferenceSpec,
-    ref: RefObject,
-    ref_ids: List[str],
-) -> Optional[str]:
-    """Backward-compatible singular source geometry lookup."""
-    geometries = _resolve_exact_reference_geometries(kg, spec, ref, ref_ids)
-    return geometries[0].wkt if len(geometries) == 1 else None
 
 
 def _resolve_exact_reference_geometries(

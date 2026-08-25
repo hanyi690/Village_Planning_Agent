@@ -211,19 +211,6 @@ def _semantic_overlay_layers(planned_state: Any) -> List[Dict[str, Any]]:
 def _project_point_layer(planned_state: Any) -> Optional[Dict[str, Any]]:
     """Expose a small centroid marker for every landed project footprint."""
     features: List[Dict[str, Any]] = []
-    for project in getattr(planned_state, "project_points", None) or []:
-        geometry = _wkt_to_geojson(getattr(project, "geometry", "") or "")
-        if geometry is None:
-            continue
-        features.append({
-            "type": "Feature",
-            "properties": {
-                "project_ref": getattr(project, "project_ref", ""),
-                "project_name": getattr(project, "name", ""),
-                "marker_size": "small",
-            },
-            "geometry": geometry,
-        })
     for parcel in getattr(planned_state, "parcels", None) or []:
         project_ref = str(getattr(parcel, "project_ref", "") or "")
         geometry = _wkt_to_geojson(getattr(parcel, "geometry", "") or "")

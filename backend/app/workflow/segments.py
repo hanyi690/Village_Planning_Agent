@@ -322,9 +322,31 @@ def _build_cognitive(checkpointer) -> StateGraph:
         )
 
     builder.add_node("cognitive_entry", rg.adapt_node(cognitive_entry))
-    builder.add_node("l1_worker", rg.adapt_node(rg.audited_l1_worker, worker=True))
-    builder.add_node("l2_worker", rg.adapt_node(rg.audited_l2_worker, worker=True))
-    builder.add_node("l3_worker", rg.adapt_node(rg.audited_l3_worker, worker=True))
+    if rg._HAS_RETRY_POLICY:
+        # Provider transport failures that escape the audited worker are
+        # retried at the LangGraph node boundary.  The retry is scoped to the
+        # failed dimension Send task; completed dimensions and checkpoints are
+        # not replayed.  Failures converted by the worker into the typed
+        # provider_failures channel still use the explicit HUMAN retry path.
+        builder.add_node(
+            "l1_worker",
+            rg.adapt_node(rg.audited_l1_worker, worker=True),
+            retry_policy=rg._TRANSIENT_RETRY_POLICY,
+        )
+        builder.add_node(
+            "l2_worker",
+            rg.adapt_node(rg.audited_l2_worker, worker=True),
+            retry_policy=rg._TRANSIENT_RETRY_POLICY,
+        )
+        builder.add_node(
+            "l3_worker",
+            rg.adapt_node(rg.audited_l3_worker, worker=True),
+            retry_policy=rg._TRANSIENT_RETRY_POLICY,
+        )
+    else:
+        builder.add_node("l1_worker", rg.adapt_node(rg.audited_l1_worker, worker=True))
+        builder.add_node("l2_worker", rg.adapt_node(rg.audited_l2_worker, worker=True))
+        builder.add_node("l3_worker", rg.adapt_node(rg.audited_l3_worker, worker=True))
     # ── B1: 为什么 layer_completion_check / layer_aggregate / advance_phase
     # 不能合并成一个节点 ──────────────────────────────────────────────
     # 1. layer_completion_check 是 defer=True 屏障：它必须在所有 Send worker

@@ -81,7 +81,7 @@ class SSEPublisher:
         _send_sse_event(session_id, event_data)
 
         # Log key event types (avoid high-frequency events like dimension_delta)
-        if event_type in [SSEEventType.TOOL_CALL, SSEEventType.TOOL_RESULT, SSEEventType.LAYER_STARTED, SSEEventType.LAYER_COMPLETED]:
+        if event_type in [SSEEventType.TOOL_STARTED, SSEEventType.TOOL_STATUS, SSEEventType.LAYER_STARTED, SSEEventType.LAYER_COMPLETED]:
             logger.info(f"[SSEPublisher] {session_id}: sent {event_type}")
 
     @staticmethod
@@ -219,32 +219,6 @@ class SSEPublisher:
             logger.debug(f"[SSEPublisher] sent dimension_complete with {len(knowledge_sources)} knowledge_sources for {dimension_key}")
 
     @staticmethod
-    def send_tool_call(session_id: str, tool_name: str, tool_display_name: str,
-                       description: str, estimated_time: Optional[float] = None) -> None:
-        """
-        发送工具调用开始事件 (Legacy - 使用 send_tool_started 替代)
-
-        Args:
-            session_id: 会话 ID
-            tool_name: 工具名称（内部标识）
-            tool_display_name: 工具显示名称（用户可见）
-            description: 工具描述
-            estimated_time: 预估执行时间（秒）
-        """
-        SSEPublisher.send_event(
-            session_id=session_id,
-            event_type=SSEEventType.TOOL_CALL,
-            tool_name=tool_name,
-            tool_display_name=tool_display_name,
-            description=description,
-            estimated_time=estimated_time
-        )
-
-    # ============================================
-    # New Unified Tool Events (simplified)
-    # ============================================
-
-    @staticmethod
     def send_tool_started(session_id: str, tool_name: str, tool_display_name: str,
                           description: str, estimated_time: Optional[float] = None) -> None:
         """
@@ -374,51 +348,6 @@ class SSEPublisher:
         logger.info(f"[SSEPublisher] sent gis_layer_update layer={layer} for {dimension_key}")
 
     @staticmethod
-    def send_tool_progress(session_id: str, tool_name: str, stage: str,
-                           progress: float, message: str) -> None:
-        """
-        发送工具执行进度事件
-
-        Args:
-            session_id: 会话 ID
-            tool_name: 工具名称
-            stage: 当前阶段（如 "initializing", "processing", "finalizing"）
-            progress: 进度值（0.0 - 1.0）
-            message: 进度消息
-        """
-        SSEPublisher.send_event(
-            session_id=session_id,
-            event_type=SSEEventType.TOOL_PROGRESS,
-            tool_name=tool_name,
-            stage=stage,
-            progress=progress,
-            message=message
-        )
-
-    @staticmethod
-    def send_tool_result(session_id: str, tool_name: str, status: str,
-                         result_preview: Optional[str] = None,
-                         error: Optional[str] = None) -> None:
-        """
-        发送工具执行结果事件
-
-        Args:
-            session_id: 会话 ID
-            tool_name: 工具名称
-            status: 执行状态（"success", "error"）
-            result_preview: 结果预览（截断）
-            error: 错误信息（如有）
-        """
-        SSEPublisher.send_event(
-            session_id=session_id,
-            event_type=SSEEventType.TOOL_RESULT,
-            tool_name=tool_name,
-            status=status,
-            result_preview=result_preview,
-            error=error
-        )
-
-    @staticmethod
     def create_token_callback(session_id: str, layer: int,
                                dimension_key: str, dimension_name: str,
                                is_revision: bool = False) -> Callable[[str, str], None]:
@@ -448,12 +377,13 @@ class SSEPublisher:
             回调函数，接受 (stage, progress, message) 参数
         """
         def on_progress(stage: str, progress: float, message: str) -> None:
-            SSEPublisher.send_tool_progress(
+            SSEPublisher.send_tool_status(
                 session_id=session_id,
                 tool_name=tool_name,
+                status="running",
                 stage=stage,
                 progress=progress,
-                message=message
+                stage_message=message,
             )
         return on_progress
 
@@ -464,120 +394,6 @@ def send_layer_event(session_id: str, layer: int, event_type: str, **kwargs) -> 
     from app.workflow.layers.phase_machine import get_layer_name
     kwargs.setdefault("layer_name", get_layer_name(layer))
     SSEPublisher.send_event(session_id, event_type, layer=layer, **kwargs)
-
-
-def append_dimension_complete_event(
-    session_id: str,
-    layer: int,
-    dimension_key: str,
-    dimension_name: str,
-    content: str
-) -> None:
-    """
-    发送维度完成事件 (兼容接口)
-
-    Args:
-        session_id: 会话ID
-        layer: 层级编号 (1/2/3)
-        dimension_key: 维度键名
-        dimension_name: 维度显示名称
-        content: 维度分析内容
-    """
-    SSEPublisher.send_dimension_complete(
-        session_id=session_id,
-        layer=layer,
-        dimension_key=dimension_key,
-        dimension_name=dimension_name,
-        full_content=content
-    )
-
-
-# 工具事件状态常量
-TOOL_STATUS_RUNNING = "running"
-TOOL_STATUS_SUCCESS = "success"
-TOOL_STATUS_ERROR = "error"
-
-
-def append_tool_call_event(
-    session_id: str,
-    tool_name: str,
-    tool_display_name: str,
-    description: str,
-    estimated_time: Optional[float] = None,
-    stage: str = "init"
-) -> None:
-    """
-    发送工具调用开始事件 (兼容接口)
-
-    Args:
-        session_id: 会话ID
-        tool_name: 工具名称（内部标识）
-        tool_display_name: 工具显示名称（用户可见）
-        description: 工具执行描述
-        estimated_time: 预估执行时间（秒）
-        stage: 当前阶段名称
-    """
-    SSEPublisher.send_tool_call(
-        session_id=session_id,
-        tool_name=tool_name,
-        tool_display_name=tool_display_name,
-        description=description,
-        estimated_time=estimated_time
-    )
-
-
-def append_tool_progress_event(
-    session_id: str,
-    tool_name: str,
-    stage: str,
-    progress: float,
-    message: str
-) -> None:
-    """
-    发送工具执行进度事件 (兼容接口)
-
-    Args:
-        session_id: 会话ID
-        tool_name: 工具名称
-        stage: 当前阶段名称
-        progress: 进度值 (0.0 - 1.0)
-        message: 进度消息
-    """
-    SSEPublisher.send_tool_progress(
-        session_id=session_id,
-        tool_name=tool_name,
-        stage=stage,
-        progress=progress,
-        message=message
-    )
-
-
-def append_tool_result_event(
-    session_id: str,
-    tool_name: str,
-    status: str,
-    summary: str,
-    display_hints: Optional[Dict[str, Any]] = None,
-    data_preview: Optional[str] = None
-) -> None:
-    """
-    发送工具执行结果事件 (兼容接口)
-
-    Args:
-        session_id: 会话ID
-        tool_name: 工具名称
-        status: 执行状态 ("success" / "error")
-        summary: 结果摘要
-        display_hints: 前端渲染提示
-        data_preview: 数据预览（可选）
-    """
-    SSEPublisher.send_tool_result(
-        session_id=session_id,
-        tool_name=tool_name,
-        status=status,
-        result_preview=data_preview or summary[:200] if summary else None,
-        error=None if status == "success" else summary
-    )
 
 
 # ============================================
@@ -680,14 +496,7 @@ def append_gis_result_event(
 __all__ = [
     "SSEPublisher",
     "send_layer_event",
-    "append_dimension_complete_event",
-    "append_tool_call_event",
-    "append_tool_progress_event",
-    "append_tool_result_event",
     "append_tool_started_event",
     "append_tool_status_event",
     "append_gis_result_event",
-    "TOOL_STATUS_RUNNING",
-    "TOOL_STATUS_SUCCESS",
-    "TOOL_STATUS_ERROR",
 ]

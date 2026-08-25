@@ -50,7 +50,7 @@ def _fmt(value: Any) -> str:
 def _artifact_payloads(reports: List[Dict[str, Any]]) -> Dict[str, Any]:
     """Load full persisted payloads for the report without changing checkpoint state."""
     from app.infrastructure.artifacts import ContentAddressedArtifactRepository
-    from app.contracts.artifacts.artifact_descriptor import ArtifactDescriptor
+    from app.contracts.artifacts.ref import ArtifactRef as ArtifactDescriptor
     from app.infrastructure.paths import run_tmp_root
 
     payloads: Dict[str, Any] = {}
@@ -117,7 +117,7 @@ def _human_artifact_detail(key: str, payload: Any) -> Dict[str, Any]:
         for name in ("development_goals", "implementation_priorities", "strategy_issues", "strategy_conflicts", "evidence_gaps"):
             take(name, 12)
     elif key in {"planning_program", "target_projection"}:
-        for name in ("typed_intent", "interventions", "spatial_specs", "project_targets", "zone_targets", "facility_targets", "development_axes"):
+        for name in ("typed_intent", "interventions", "spatial_specs", "site_area_targets", "zone_targets", "facility_targets", "development_axes"):
             take(name, 12)
     elif key == "grounding_result":
         for name in ("candidates", "unresolved", "unresolved_references", "spatial_query_evidence", "issues"):

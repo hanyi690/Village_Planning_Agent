@@ -6,6 +6,7 @@ import asyncio
 from typing import Any, Dict
 
 from app.core.settings import GIS_TIMEOUT
+from app.domain.allocation.approval_input import build_approved_execution_input
 from app.domain.demand import derive_demand_portfolio
 from app.domain.suitability import build_suitability_surface
 from app.infrastructure.logging import get_logger
@@ -109,11 +110,13 @@ async def select_node(state: Dict[str, Any]) -> Dict[str, Any]:
     from app.contracts.workflow.parse_result_contracts import IntentCompilationResult
     from app.contracts.workflow.repair_directive_contracts import RepairDirectiveCompilation
     from app.contracts.planning.scenario import ScenarioSet
+    from app.contracts.planning.task_graph import PlanningTaskGraph
 
     retry_patch = _retry_patch(state, "select")
     context = await _require_context(state)
     grounding = _load_ref_artifact(state, "grounding_result", GroundingResult)
     intent = _load_ref_artifact(state, "target_projection", IntentCompilationResult)
+    task_graph = _load_ref_artifact(state, "planning_task_graph", PlanningTaskGraph)
     plan_intent = _to_typed(
         getattr(intent, "typed_intent", None) or intent,
         SpatialPlanningIntent,
@@ -184,6 +187,14 @@ async def select_node(state: Dict[str, Any]) -> Dict[str, Any]:
     output_refs: Dict[str, Any] = {}
     artifact_state = dict(state)
     artifact_state["artifact_refs"] = artifact_refs
+    if task_graph is not None:
+        status_counts = {
+            status: sum(1 for task in task_graph.tasks if task.status == status)
+            for status in sorted({task.status for task in task_graph.tasks})
+        }
+        logger.info("[workflow:select] consumed planning task graph statuses=%s", status_counts)
+        if artifact_refs.get("planning_task_graph"):
+            output_refs["planning_task_graph"] = artifact_refs["planning_task_graph"]
     problem = getattr(grounding, "problem", None)
     if problem is not None:
         # GROUND keeps recall geometry and provenance.  SELECT has already
@@ -260,8 +271,13 @@ async def select_node(state: Dict[str, Any]) -> Dict[str, Any]:
     approved_input_ref = None
     approved_input_candidate = None
     approval_candidate_kwargs = None
+    solver_subproblem_plan = None
+    use_solver_subproblem_merge = False
     if problem is not None:
         from app.domain.allocation.scenario_optimizer import optimize_scenarios
+        from app.domain.allocation.subproblem_compiler import (
+            compile_solver_subproblems,
+        )
         from app.domain.relations.service import RelationEvaluationContext
         from app.domain.relations.reference_features import (
             resolve_relation_reference_features,
@@ -300,19 +316,50 @@ async def select_node(state: Dict[str, Any]) -> Dict[str, Any]:
             reference_diagnostics=reference_resolution.diagnostics,
             execution_trace=getattr(context, "execution_trace", None),
         )
+        solver_subproblem_plan = compile_solver_subproblems(problem)
+        target_subproblems = [
+            item
+            for item in solver_subproblem_plan.subproblems
+            if str(item.subproblem_id).startswith("target:")
+        ]
+        target_problem_kinds = {
+            str(item.problem_kind)
+            for item in target_subproblems
+            if str(item.problem_kind)
+        }
+        use_solver_subproblem_merge = (
+            len(target_subproblems) > 1 and len(target_problem_kinds) > 1
+        )
+        if use_solver_subproblem_merge:
+            plan_ref = persist_stage_artifact(
+                artifact_state,
+                "select",
+                "SolverSubproblemPlan",
+                solver_subproblem_plan,
+            )
+            if plan_ref:
+                artifact_refs["solver_subproblem_plan"] = plan_ref
+                output_refs["solver_subproblem_plan"] = plan_ref
         try:
-            scenario_set = optimize_scenarios(
-                problem,
-                set_id=scenario_id,
-                evaluator_context=evaluator_context,
-                baseline_ref=str(getattr(problem, "baseline_ref", "") or ""),
-                max_scenarios=int(
+            scenario_kwargs = {
+                "set_id": scenario_id,
+                "evaluator_context": evaluator_context,
+                "baseline_ref": str(getattr(problem, "baseline_ref", "") or ""),
+                "max_scenarios": int(
                     (state.get("config") or {}).get("max_scenarios", 8)
                 ),
-            )
-            # Persist a provisional ScenarioSet member when no feasible
+            }
+            if use_solver_subproblem_merge:
+                from app.domain.allocation.subproblem_optimizer import (
+                    optimize_solver_subproblems,
+                )
+
+                scenario_set = optimize_solver_subproblems(problem, **scenario_kwargs)
+            else:
+                scenario_set = optimize_scenarios(problem, **scenario_kwargs)
+            # Retain a diagnostic ScenarioSet member when no feasible
             # recommendation exists. It is never treated as approval; its
-            # status/findings remain the explicit partial-delivery boundary.
+            # status and findings remain a non-executable boundary.
             scenario = scenario_set.recommended or (
                 scenario_set.scenarios[0] if scenario_set.scenarios else None
             )
@@ -353,38 +400,28 @@ async def select_node(state: Dict[str, Any]) -> Dict[str, Any]:
             if scenario_ref:
                 artifact_refs["planning_scenario"] = scenario_ref
                 output_refs["planning_scenario"] = scenario_ref
-            approval_status = (
-                "auto" if str(scenario.status) == "complete" else "provisional"
-            )
-            from app.domain.allocation.approval_input import (
-                build_approved_execution_input,
-            )
-
-            context_ref = dict(state.get("context_ref") or {})
-            bundle_snapshot_digest = str(
-                context_ref.get("snapshot_digest")
-                or context_ref.get("bundle_snapshot_digest")
-                or getattr(getattr(context, "data_snapshot", None), "digest", "")
-                or ""
-            )
-            approval_candidate_kwargs = {
-                "scenario_set": scenario_set,
-                "scenario": scenario,
-                "scenario_set_ref": scenario_set_ref,
-                "scenario_ref": scenario_ref,
-                "planning_program_ref": artifact_refs.get("planning_program"),
-                "grounding_problem_ref": str(getattr(problem, "fingerprint", "") or ""),
-                "context_ref": state.get("context_ref"),
-                "bundle_snapshot_digest": bundle_snapshot_digest,
-                "approval_id": f"approval:{scenario.scenario_id}",
-                "approval_status": approval_status,
-                "approved_by": ("system:auto-select" if approval_status == "auto" else ""),
-                "approval_reason": (
-                    "complete ScenarioSet recommendation"
-                    if approval_status == "auto"
-                    else "explicit human approval"
-                ),
-            }
+            if str(scenario.status) == "complete":
+                context_ref = dict(state.get("context_ref") or {})
+                bundle_snapshot_digest = str(
+                    context_ref.get("snapshot_digest")
+                    or context_ref.get("bundle_snapshot_digest")
+                    or getattr(getattr(context, "data_snapshot", None), "digest", "")
+                    or ""
+                )
+                approval_candidate_kwargs = {
+                    "scenario_set": scenario_set,
+                    "scenario": scenario,
+                    "scenario_set_ref": scenario_set_ref,
+                    "scenario_ref": scenario_ref,
+                    "planning_program_ref": artifact_refs.get("planning_program"),
+                    "grounding_problem_ref": str(getattr(problem, "fingerprint", "") or ""),
+                    "context_ref": state.get("context_ref"),
+                    "bundle_snapshot_digest": bundle_snapshot_digest,
+                    "approval_id": f"approval:{scenario.scenario_id}",
+                    "approval_status": "auto",
+                    "approved_by": "system:auto-select",
+                    "approval_reason": "complete ScenarioSet recommendation",
+                }
     demand_ref = persist_stage_artifact(
         artifact_state, "select", "DemandPortfolio", demand_portfolio
     )
@@ -441,6 +478,8 @@ async def select_node(state: Dict[str, Any]) -> Dict[str, Any]:
         input_artifact_refs=artifact_refs,
         previous_gate=state.get("select_gate"),
         context_version=_context_version(state),
+        solver_subproblem_plan=solver_subproblem_plan,
+        planning_task_graph=task_graph,
     )
     if execution_plan is not None:
         plan_ref = persist_stage_artifact(

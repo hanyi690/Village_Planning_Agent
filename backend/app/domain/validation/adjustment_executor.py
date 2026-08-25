@@ -23,7 +23,7 @@ from app.contracts.workflow.repair import (
     IterationRecord,
     ValidationAdjustment,
 )
-from app.contracts.artifacts.artifact_descriptor import ArtifactDescriptor
+from app.contracts.artifacts.ref import ArtifactRef as ArtifactDescriptor
 
 _LEDGER_KEY = "validation_adjustment_log"
 _AUTHORITATIVE_KEY = "parent_digests"

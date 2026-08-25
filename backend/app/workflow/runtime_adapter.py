@@ -1,7 +1,8 @@
 """Adapter between the compact root checkpoint and stage-local runtime data.
 
-Stage-local keys travel as a first-class ``runtime`` channel on
-``WorkflowState``, replacing the retired ``workflow_progress`` artifact.
+Stage-local keys travel only through the first-class ``runtime`` channel on
+``WorkflowState``.  Historical checkpoint payloads are handled outside the
+production graph by an offline migration process.
 """
 
 from __future__ import annotations
@@ -80,30 +81,18 @@ def _restore_messages(messages: Any) -> Any:
 def materialize_workflow_state(state: dict[str, Any]) -> dict[str, Any]:
     """Expose stage-local data to one node without putting it in root channels.
 
-    Three shapes of input are handled:
+    Two shapes of input are handled:
 
     1. Compact root state carrying a ``runtime`` channel: use it directly.
-    2. Read-compat shim: compact root state referencing a legacy
-       ``workflow_progress`` artifact (pre-cutover checkpoints) hydrates the
-       stage-local view from that carrier without writing back to it.
-    3. A dynamic Send worker payload (has ``dimension_key``): the whole payload
+    2. A dynamic Send worker payload (has ``dimension_key``): the whole payload
        is the worker's task input, so it becomes the runtime view verbatim.
+
+    Checkpoints are required to use the current runtime channel; historical
+    payloads must be migrated offline before they are submitted to the graph.
     """
     runtime = dict(state.get("runtime") or {})
     if not runtime and state.get("dimension_key"):
         runtime = dict(state)
-    elif not runtime and (state.get("artifact_refs") or {}).get("workflow_progress"):
-        from app.infrastructure.artifacts.runtime import load_artifact
-
-        payload = load_artifact(state, "workflow_progress")
-        if payload is not None:
-            runtime = {
-                **dict(payload.get("stage_payload") or {}),
-                "session_id": payload.get("session_id", ""),
-                "run_id": payload.get("run_id", ""),
-                "branch_id": payload.get("branch_id", "main"),
-                "artifact_refs": dict(payload.get("artifact_refs") or {}),
-            }
     for key in _CONTROL_KEYS:
         if key in state and key not in {"retry", "interrupt_ref", "terminal_ref", "active_stage", "status"}:
             runtime[key] = state[key]
@@ -166,7 +155,7 @@ def _control_projection(runtime: dict[str, Any]) -> dict[str, Any]:
 
 
 def initial_workflow_state(runtime: dict[str, Any]) -> dict[str, Any]:
-    """Convert a newly-created legacy-shaped input into compact state."""
+    """Convert a newly-created stage-runtime payload into compact state."""
     payload = dict(runtime)
     return {"runtime": _carrier(payload), **_control_projection(payload)}
 
@@ -203,7 +192,7 @@ def _adapt_command(state: dict[str, Any], command: Command) -> Command:
 
 
 def adapt_node(node: Callable[..., Any], *, worker: bool = False) -> Callable[..., Any]:
-    """Run a legacy-shaped node behind the compact root state boundary.
+    """Run a stage node behind the compact root-state boundary.
 
     ``worker=True`` marks a parallel dimension worker.  Workers project shared
     keys to top-level reducer channels only, so concurrent Send branches do not

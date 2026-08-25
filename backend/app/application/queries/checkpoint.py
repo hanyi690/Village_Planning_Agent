@@ -1,8 +1,8 @@
 """Checkpoint-related application queries and write synchronization.
 
 The LangGraph runtime owns checkpoint execution and resume.  This module only
-provides small queries used by legacy report/session callers and the write
-barrier used while a checkpoint is being persisted.
+provides small application report/session queries and the write barrier used
+while a checkpoint is being persisted.
 """
 
 from __future__ import annotations

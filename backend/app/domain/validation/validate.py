@@ -125,11 +125,8 @@ def validate_aggregate(
     ))
     all_checks.extend(check_classification_missing(planned_state))
     all_checks.extend(check_traceability(
-        changeset,
-        intent,
-        decision=decision,
-        execution_plan=execution_plan,
-        execution_result=execution_result,
+        execution_plan,
+        execution_result,
     ))
     all_checks.extend(check_worker_failures(execution_result))
     all_checks.extend(check_bundle_snapshot_lineage(

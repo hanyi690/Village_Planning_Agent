@@ -354,7 +354,7 @@ def _execute_approval_error(
             state,
             code="EXECUTE_APPROVAL_NOT_EXECUTABLE",
             message=(
-                "ApprovedExecutionInput is provisional or revoked and "
+                "ApprovedExecutionInput is not executable or revoked and "
                 "cannot be handed to EXECUTE."
             ),
         )
@@ -390,16 +390,6 @@ def _execute_approval_error(
             message="ApprovedExecutionInput is stale or substituted.",
             diagnostics=[{"code": "EXECUTE_APPROVED_INPUT_MISMATCH", "exception_type": type(exc).__name__}],
         )
-    return None
-
-
-def _defer_unclassified_targets(
-    state: Dict[str, Any],
-    execution_plan: Any,
-    deferral_ledger: Any,
-    classification_diagnostics: list[dict[str, Any]],
-) -> tuple[Any, Any] | None:
-    """Retired compatibility hook; unresolved classification fails closed."""
     return None
 
 

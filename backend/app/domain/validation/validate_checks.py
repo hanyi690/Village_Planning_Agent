@@ -80,7 +80,7 @@ def _wkt_area(wkt: str) -> float:
 
 
 def _wkt_is_valid(wkt: str) -> bool:
-    """Check candidate/legacy geometry without fabricating a fallback."""
+    """Check candidate/source geometry without fabricating a fallback."""
     if not str(wkt or "").strip():
         return False
     try:
@@ -212,8 +212,8 @@ def check_hard_constraints(planned_state: Any, constraint_index: Any) -> List[Va
         # Overlay semantics are non-exclusive by contract.  A protection or
         # restoration overlay may intentionally intersect a prohibited
         # *land-use* constraint; its relation-specific hard factors are
-        # checked independently by FinalRelationValidation.  Keep this
-        # legacy parcel check for authoritative/site-footprint outputs only.
+        # checked independently by FinalScenarioValidation.  Keep this
+        # source-parcel check for authoritative/site-footprint outputs only.
         if _materialization_role(parcel) in {
             "functional_overlay",
             "protection_overlay",
@@ -439,12 +439,8 @@ def check_area_conservation(changeset: Any) -> List[ValidationCheck]:
 
 
 def check_traceability(
-    parcel_changeset: Any,
-    intent: Any = None,
-    decision: Any = None,
-    *,
-    execution_plan: Any = None,
-    execution_result: Any = None,
+    execution_plan: Any,
+    execution_result: Any,
 ) -> List[ValidationCheck]:
     """Trace each planned target to the output kind declared by EXECUTE."""
     if execution_plan is not None:
@@ -510,56 +506,15 @@ def check_traceability(
             )
         ]
 
-    # Legacy fallback for callers that have not loaded the authoritative plan.
-    factors = getattr(decision, "decision_factors", None) or {}
-    if not isinstance(factors, dict):
-        factors = {}
-    deferred = {str(value) for value in (factors.get("deferred_targets") or [])}
-    expected = [
-        str(
-            getattr(p, "project_id", "")
-            or getattr(p, "target_id", "")
-            or getattr(p, "site_area_id", "")
-            or ""
-        )
-        for p in (getattr(intent, "site_area_targets", None) or [])
-        if str(
-            getattr(p, "project_id", "")
-            or getattr(p, "target_id", "")
-            or getattr(p, "site_area_id", "")
-            or ""
-        ) not in deferred
-    ]
-    actual: List[str] = []
-    for change in (parcel_changeset.changes if parcel_changeset is not None else None) or []:
-        ref = getattr(change, "project_ref", None) or ""
-        if ref:
-            actual.append(ref)
-    actual = sorted(set(actual))
-    if not expected:
-        return [
-            _check(
-                "traceability",
-                "干预-地块追溯",
-                True,
-                stage="EXECUTE",
-                actual="no projects to verify",
-                expected="每个规划项目至少对应一个 ParcelChange，且所有 project_ref 可追溯",
-            )
-        ]
-    missing = [pid for pid in expected if pid not in actual]
-    orphan = [ref for ref in actual if ref not in expected]
-    passed = not missing and not orphan
     return [
         _check(
             "traceability",
-            "干预-地块追溯",
-            passed,
+            "目标-产物追溯",
+            False,
             stage="EXECUTE",
-            actual=f"missing={missing}, orphan={orphan}",
-            expected="每个规划项目至少对应一个 ParcelChange，且所有 project_ref 可追溯",
-            parcels=missing,
-            fix="补齐项目对应地块或修正 project_ref",
+            actual="execution_plan_missing",
+            expected="canonical ExecutionPlan is required for traceability",
+            fix="加载 SELECT 生成的 ExecutionPlan 后再运行 VALIDATE",
         )
     ]
 
@@ -1175,10 +1130,10 @@ def check_contract_completeness(
     """Check parcels are produced when targets exist and fields are complete."""
     if intent is None:
         intent = SimpleNamespace(site_area_targets=[], zone_targets=[])
-    project_targets = list(getattr(intent, "site_area_targets", None) or [])
+    site_area_targets = list(getattr(intent, "site_area_targets", None) or [])
     zone_targets = list(getattr(intent, "zone_targets", None) or [])
     spatial_projects = [
-        p for p in project_targets
+        p for p in site_area_targets
         if getattr(p, "requires_spatial", True)
         and str(getattr(p, "expected_output_kind", "")) in {"parcel", "polygon"}
     ]
@@ -1217,12 +1172,12 @@ def check_contract_completeness(
     candidate_entries = [
         parcel for parcel in planned_state.parcels if _candidate_backed(parcel)
     ]
-    legacy_entries = [
+    source_entries = [
         parcel for parcel in planned_state.parcels if not _candidate_backed(parcel)
     ]
     missing_identity = [
         _entry_identity(parcel)
-        for parcel in legacy_entries
+        for parcel in source_entries
         if not str(getattr(parcel, "bsm", "") or "").strip()
     ]
     missing_candidate = [
@@ -1294,7 +1249,7 @@ def check_contract_completeness(
                 f"missing_target={missing_target}, missing_geom={missing_geom}"
             ),
             expected=(
-                "every legacy output has bsm; every candidate-backed output has "
+                "every source-backed output has bsm; every candidate-backed output has "
                 "candidate_id, target lineage and valid geometry"
             ),
             fix="补齐地块 bsm 与 geometry",
@@ -1310,7 +1265,7 @@ def check_contract_completeness(
                 f"candidate_geometry={all(_wkt_is_valid(getattr(parcel, 'geometry', '')) for parcel in candidate_entries)}"
             ),
             expected=(
-                "legacy changesets record conservation/validity, or candidate "
+                "source changesets record conservation/validity, or candidate "
                 "geometry and lineage are independently verified"
             ),
             targets=spatial_target_ids,
@@ -1457,7 +1412,7 @@ def check_relation_validation(final_validation: Any) -> List[ValidationCheck]:
         ]
     rows = list(getattr(final_validation, "satisfactions", None) or [])
     if isinstance(final_validation, dict):
-        rows = list(final_validation.get("satisfactions", []) or final_validation.get("relation_satisfactions", []) or [])
+        rows = list(final_validation.get("satisfactions", []) or [])
     checks: list[ValidationCheck] = []
     for row in rows:
         relation_id = str(getattr(row, "relation_id", "") or (row.get("relation_id", "") if isinstance(row, dict) else ""))

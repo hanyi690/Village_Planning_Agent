@@ -6,7 +6,7 @@ import hashlib
 import inspect
 from typing import Any, Dict, List
 
-from app.contracts.artifacts.artifact_descriptor import ArtifactDescriptor
+from app.contracts.artifacts.ref import ArtifactRef as ArtifactDescriptor
 from app.contracts.workflow.workflow_contracts import GateDecision
 from app.infrastructure.logging import get_logger
 from app.workflow.stage_adapter import StageCompletion, persist_gate_decision
@@ -210,10 +210,10 @@ def _load_ref_artifact(state: Dict[str, Any], key: str, cls: type | None) -> Any
 
 
 def _load_embedded_artifact(state: Dict[str, Any], descriptor: Dict[str, Any], cls: type | None) -> Any:
-    from app.infrastructure.artifacts.runtime import ArtifactReplayError, load_artifact_descriptor
+    from app.infrastructure.artifacts.runtime import ArtifactReplayError, load_embedded_artifact
 
     try:
-        return load_artifact_descriptor(state, descriptor, cls)
+        return load_embedded_artifact(state, descriptor, cls)
     except ArtifactReplayError:
         raise
     except Exception as exc:

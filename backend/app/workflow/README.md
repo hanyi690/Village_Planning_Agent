@@ -16,8 +16,8 @@ interrupt 和 checkpoint 边界；数据层、空间层和交付 adapter 不反�
 - `stages/deliver.py`：唯一 DELIVER 阶段入口；从 typed artifacts 和 data-owned workspace 构建快照并持久化交付引用。
 - `stages/support.py`：阶段中立的 checkpoint/context/ref/gate 辅助函数；阶段 adapter 不互相导入。
 - `stage_adapter.py`：统一 `StageCommand`、`StageCompletion` 和 CAS artifact 持久化入口。
-- `state.py`：根图使用的 ref-only `WorkflowState`；阶段迁移载荷只能通过
-  `workflow_progress` artifact 读取，禁止新模块继续扩展 `AgentState`。
+- `state.py`：根图使用的 ref-only `WorkflowState`；阶段局部载荷只能通过
+  checkpoint 的 `runtime` channel 传递，禁止新模块继续扩展旧的并行状态模型。
 - `stage_audit.py`：阶段输入审计和 provenance。
 
 DELIVER 的空间质量规则由数据层和交付层共同执行：
@@ -45,8 +45,9 @@ LangGraph interrupt；resume 必须针对当前 checkpoint 的 event ID，不得
 根图和 CAS artifact runtime 已从 `agent/bootstrap` 迁入 `workflow` 与 `infrastructure/artifacts`，旧生产导入路径已删除。
 根图已将业务阶段拆分为独立 stage service；HUMAN projection 已迁入 application interrupt service，`stages/` 不再混入应用查询职责。
 
-根 checkpoint 只保存 `WorkflowState` 控制字段和 artifact refs。`runtime_adapter.py` 的
-materialized stage view 是迁移边界，不是公开状态；当前 view 由 `workflow_progress`
-artifact 单一持有，后续按阶段 contract 拆除其中的 legacy 字段。
+根 checkpoint 只保存 `WorkflowState` 控制字段、artifact refs 和当前的 `runtime`
+channel。`runtime_adapter.py` 的 materialized stage view 是内部调用边界，不是公开
+状态；旧阶段 carrier 不再由生产图读取，历史 checkpoint 必须先在
+离线迁移流程中转换为当前 runtime channel。
 
 目标目录和完成标准见 [00_SYSTEM_DESIGN.md](../../../docs/design/00_SYSTEM_DESIGN.md)。

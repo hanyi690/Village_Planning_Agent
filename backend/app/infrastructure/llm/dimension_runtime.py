@@ -519,7 +519,13 @@ def _planning_evidence_query(
     return _compact_planning_query_text(" ".join(values), 1800)
 
 
-async def run_rag(dimension_key: str, cfg: Any, state: Dict[str, Any]) -> tuple[str, Any | None]:
+async def run_rag(
+    dimension_key: str,
+    cfg: Any,
+    state: Dict[str, Any],
+    *,
+    trace_sink: dict[str, Any] | None = None,
+) -> tuple[str, Any | None]:
     """Compatibility adapter to the unified Explore evidence service.
 
     The historical vector-RAG implementation remains available only as the
@@ -614,6 +620,34 @@ async def run_rag(dimension_key: str, cfg: Any, state: Dict[str, Any]) -> tuple[
                         "[dimension_runtime] external provider cleanup failed: %s",
                         exc,
                     )
+    bundle = getattr(result, "evidence_bundle", None)
+    packet = getattr(result, "evidence_packet", None)
+    cognition = getattr(result, "spatial_cognition", None)
+    coverage = getattr(result, "coverage", None)
+    if trace_sink is not None:
+        sources = list(getattr(bundle, "sources", None) or [])
+        trace_sink.update({
+            "source_types": sorted({
+                str(getattr(source, "source_type", "") or "").strip()
+                for source in sources
+                if str(getattr(source, "source_type", "") or "").strip()
+            }),
+            "fact_count": len(getattr(bundle, "facts", None) or []),
+            "kg_confidence": float(
+                getattr(cognition, "kg_confidence", 0.0) or 0.0
+            ),
+            "candidate_count": len(getattr(packet, "candidate_refs", None) or []),
+            "relation_count": len(getattr(packet, "relation_evidence", None) or []),
+            "coverage_status": str(
+                getattr(coverage, "stop_reason", "") or ""
+            ),
+            "coverage_sufficient": bool(
+                getattr(coverage, "sufficient", False)
+            ),
+            "unresolved_count": len(
+                getattr(bundle, "unresolved", None) or []
+            ),
+        })
     rag_log = None
     try:
         from app.evidence.retrieval.retrievers.rag_retriever import consume_rag_log

@@ -36,8 +36,6 @@ def _unwrap_intent(intent: Any) -> Any:
 
 def _items(intent: Any, name: str) -> list[Any]:
     value = intent.get(name) if isinstance(intent, dict) else getattr(intent, name, None)
-    if not value and name == "site_area_targets":
-        value = intent.get("project_targets") if isinstance(intent, dict) else getattr(intent, "project_targets", None)
     return list(value or [])
 
 

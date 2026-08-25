@@ -57,9 +57,6 @@ class FacilityDemandPoint(BaseModel):
         )
 
 
-DemandPoint = FacilityDemandPoint
-
-
 class DemandSnapshot(BaseModel):
     """Versioned, immutable demand input for a facility-service relation."""
 
@@ -95,7 +92,6 @@ def build_demand_snapshot(
 
 
 __all__ = [
-    "DemandPoint",
     "DemandSnapshot",
     "FacilityDemandPoint",
     "build_demand_snapshot",

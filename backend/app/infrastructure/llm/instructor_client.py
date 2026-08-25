@@ -182,8 +182,3 @@ def get_structured_model(model: str | None = None) -> str:
     if provider is LLMProvider.OPENCODE_GO:
         return settings.OPENCODE_GO_MODEL.removeprefix("opencode-go/")
     return settings.FLASH_MODEL_NAME
-
-
-def get_flash_model() -> str:
-    """Backward-compatible alias for lightweight structured callers."""
-    return get_structured_model()

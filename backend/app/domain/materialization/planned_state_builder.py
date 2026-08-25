@@ -64,7 +64,6 @@ def _target_by_id(intent: Any) -> dict[str, Any]:
     result: dict[str, Any] = {}
     for field in (
         "site_area_targets",
-        "project_targets",
         "zone_targets",
         "custom_zone_targets",
         "facilities",

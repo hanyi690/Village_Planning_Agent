@@ -9,14 +9,7 @@ coverage as an additional check. No LLM, no KG, no MIP - deterministic only.
 
 from __future__ import annotations
 
-from app.domain.validation.checks import (
-    check_candidate_selection_coverage,
-    check_change_planned_coverage,
-    check_intervention_coverage,
-    check_quantitative_drift,
-    check_selection_change_coverage,
-    check_spec_candidate_coverage,
-)
+from app.domain.validation.checks import check_quantitative_drift
 from app.contracts.artifacts.provenance import Provenance
 from app.contracts.artifacts.reconciliation_contracts import (
     CoverageMatrix,
@@ -43,118 +36,12 @@ def _inc(
     )
 
 
-def _chain_status(spec_ok: bool, candidate_ok: bool, selection_ok: bool, change_ok: bool, planned_ok: bool) -> str:
-    links = [spec_ok, candidate_ok, selection_ok, change_ok, planned_ok]
-    if all(links):
-        return "covered"
-    if any(links):
-        return "partial"
-    return "missing"
-
-
-def _build_legacy_coverage_matrix(program, specs, grounding_result, decision, changeset, planned_state) -> CoverageMatrix:
-    interventions = list(getattr(program, "interventions", None) or [])
-    specs = list(specs or [])
-    candidates = list(getattr(grounding_result, "candidates", None) or [])
-    selected = list(getattr(decision, "selected_combination", None) or [])
-    changes = list(getattr(changeset, "changes", None) or [])
-    parcels = list(getattr(planned_state, "parcels", None) or [])
-    deferred = {
-        str(value)
-        for value in ((getattr(decision, "decision_factors", None) or {}).get("deferred_targets") or [])
-    }
-    rows: list[CoverageMatrixRow] = []
-    for intervention in interventions:
-        int_id = str(getattr(intervention, "intervention_id", ""))
-        target_id = str(getattr(intervention, "target_id", "") or int_id)
-        # intervention -> spec: resolve ONLY via semantic keys (intervention_id
-        # then target_id).  Positional pairing is intentionally removed: it
-        # silently mis-associates when PARSE/GROUND ordering changes, which is
-        # exactly the breakpoint this module exists to detect.
-        spec_index = None
-        for idx, spec in enumerate(specs):
-            spec_int = str(getattr(spec, "intervention_id", "") or "")
-            spec_tgt = str(getattr(spec, "target_id", "") or "")
-            if spec_int and spec_int == int_id:
-                spec_index = idx
-                break
-            if spec_tgt and spec_tgt == target_id:
-                spec_index = idx
-                break
-        linked_spec = specs[spec_index] if spec_index is not None else None
-        if str(int_id) in deferred:
-            rows.append(
-                CoverageMatrixRow(
-                    intervention_id=intervention.intervention_id,
-                    spec_index=spec_index,
-                    status="deferred",
-                )
-            )
-            continue
-        # spec -> candidate: resolve ONLY via candidate.target_ref == spec.target_id.
-        # Positional pairing is intentionally removed (see above).
-        candidate = None
-        if linked_spec is not None:
-            spec_tgt = str(getattr(linked_spec, "target_id", "") or "")
-            candidate = next(
-                (c for c in candidates if str(getattr(c, "target_ref", "") or "") == spec_tgt),
-                None,
-            )
-        # candidate -> selection: selected_combination holds bare BSM strings
-        # with no site ref; link semantically by BSM membership in the candidate's
-        # source parcels so this link is order-independent.
-        candidate_bsms = set(getattr(candidate, "source_parcels", None) or []) if candidate else set()
-        selected_bsm = next((b for b in selected if b in candidate_bsms), None)
-        change_bsm = None
-        if selected_bsm:
-            for change in changes:
-                if change.bsm == selected_bsm or selected_bsm in change.derived_from_bsms:
-                    change_bsm = change.bsm
-                    break
-        planned_parcel_bsm = None
-        if change_bsm:
-            for parcel in parcels:
-                if parcel.bsm == change_bsm or change_bsm in parcel.derived_from_bsms:
-                    planned_parcel_bsm = parcel.bsm
-                    break
-        status = _chain_status(
-            spec_index is not None,
-            candidate is not None,
-            selected_bsm is not None,
-            change_bsm is not None,
-            planned_parcel_bsm is not None,
-        )
-        rows.append(
-            CoverageMatrixRow(
-                intervention_id=intervention.intervention_id,
-                spec_index=spec_index,
-                candidate_site_id=candidate.site_id if candidate else "",
-                selected_bsm=selected_bsm or "",
-                change_bsm=change_bsm or "",
-                planned_parcel_bsm=planned_parcel_bsm or "",
-                status=status,
-            )
-        )
-    return CoverageMatrix(rows=rows)
-
-
 def build_coverage_matrix(
-    program=None,
-    specs=None,
-    grounding_result=None,
-    decision=None,
-    changeset=None,
-    planned_state=None,
     *,
-    execution_plan=None,
-    execution_result=None,
+    execution_plan,
+    execution_result,
 ) -> CoverageMatrix:
-    """Build v2 coverage from stable target IDs and declared output kinds."""
-    if execution_plan is None:
-        return _build_legacy_coverage_matrix(
-            program, specs, grounding_result, decision, changeset, planned_state
-        )
-
+    """Build coverage from the canonical execution plan and result."""
     from app.domain.common.execution_evidence import (
         active_output_covered,
         deferred_outcome_contradiction,
@@ -282,10 +169,10 @@ def check_l3_l4_target_coverage(intent, planned_state, decision=None) -> list[Re
         str(value)
         for value in ((getattr(decision, "decision_factors", None) or {}).get("deferred_targets") or [])
     }
-    project_targets = [
+    site_area_targets = [
         p for p in (getattr(intent, "site_area_targets", None) or [])
         if getattr(p, "requires_spatial", True)
-        and str(getattr(p, "project_id", "")) not in deferred
+        and str(getattr(p, "target_id", "")) not in deferred
     ]
     road_targets = list(getattr(intent, "road_targets", None) or [])
     zone_targets = list(getattr(intent, "zone_targets", None) or [])
@@ -293,12 +180,12 @@ def check_l3_l4_target_coverage(intent, planned_state, decision=None) -> list[Re
     roads = list(getattr(planned_state, "roads", None) or [])
     zones = list(getattr(planned_state, "zones", None) or [])
     inconsistencies: list[ReconciliationInconsistency] = []
-    if project_targets and not parcels:
+    if site_area_targets and not parcels:
         inconsistencies.append(
             _inc(
                 "",
                 "l3_l4_project",
-                f"{len(project_targets)} project target(s)",
+                f"{len(site_area_targets)} site-area target(s)",
                 "0 planned parcels",
             )
         )
@@ -341,27 +228,24 @@ def reconcile_aggregate(
     run_id: str = "",
 ) -> ReconciliationReport:
     all_inconsistencies: list[ReconciliationInconsistency] = []
-    if execution_plan is not None:
+    if execution_plan is None:
+        all_inconsistencies.append(
+            _inc(
+                "__missing_execution_plan__",
+                "execution_plan",
+                "canonical ExecutionPlan",
+                "None",
+                stage="EXECUTE",
+            )
+        )
+    else:
         all_inconsistencies.extend(
             check_target_execution_coverage(execution_plan, execution_result)
         )
         all_inconsistencies.extend(check_quantitative_drift(program, planned_state))
-    else:
-        all_inconsistencies.extend(check_intervention_coverage(program, specs, decision))
-        all_inconsistencies.extend(check_spec_candidate_coverage(specs, grounding_result, decision))
-        all_inconsistencies.extend(check_candidate_selection_coverage(grounding_result, decision))
-        all_inconsistencies.extend(check_selection_change_coverage(decision, changeset))
-        all_inconsistencies.extend(check_change_planned_coverage(changeset, planned_state))
-        all_inconsistencies.extend(check_quantitative_drift(program, planned_state))
         all_inconsistencies.extend(check_l3_l4_target_coverage(intent, planned_state, decision))
 
     coverage_matrix = build_coverage_matrix(
-        program,
-        specs,
-        grounding_result,
-        decision,
-        changeset,
-        planned_state,
         execution_plan=execution_plan,
         execution_result=execution_result,
     )

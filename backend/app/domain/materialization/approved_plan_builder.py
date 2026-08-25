@@ -48,8 +48,6 @@ def _dump(item: Any) -> dict[str, Any]:
 
 def _target_items(intent: Any, field_name: str) -> list[Any]:
     value = _value(intent, field_name, None)
-    if not value and field_name == "site_area_targets":
-        value = _value(intent, "project_targets", None)
     return list(value or [])
 
 

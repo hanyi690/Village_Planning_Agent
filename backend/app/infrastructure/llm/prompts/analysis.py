@@ -29,34 +29,38 @@ ANALYSIS_RULES = """
 
 # ==========================================
 # observations 段（P8：文末结构化观察契约 — L1 现状层）
-# L1 观测 pass 只输出 observations（以及可核验的登记/coverage）；report_body
-# 在 deterministic source validation 之后由独立的 report-synthesis pass 生成。
+# L1 观测 pass 只输出 typed observations；report_body 在 deterministic
+# source validation 之后由独立的 report-synthesis pass 生成。
 # observations 是下游空间定位/地名解析的唯一结构化来源；保存时写入 instruction 列，不参与展示。
 # ==========================================
 
 OBSERVATIONS_OUTPUT_GUIDE = """
-【现状对象 observations 契约】
-本次是 L1 observe pass：只返回 observations（以及 schema 声明的登记/coverage），
-不要返回 report_body。正文会在 source segment、引用和状态通过校验后由独立的
-report-synthesis pass 生成，因此不能在本 pass 中用正文替代结构化观察。
-observations 每个对象包含：
-- entity_type：只能是 现状设施 / 现状项目 / 现状分区 / 自然村 / 道路 / 水系 / 地物
-- name：与正文完全一致的名称
-- location：空间定位信息，按优先级填写（有具体地点时严禁留空）：
-    1) 所在自然村名，必须用报告原文村名{nv_suffix}（如 园寨/田坑，不加多余后缀）；
-    2) 无自然村时，用报告原文方位描述（村北部、沿河段、村驻地旁、村界南侧）；
-    3) 道路必须给走向（如 东西走向/南北走向/东北-西南走向），水系必须给流向或位置（如 西南至东北贯穿、沿石窟河、汇入石窟河）；
-    4) 确实无任何空间信息才留空，并在 description 注明"无空间信息"。
-- relation：与其他地点的空间关系（如 位于X村中部、沿石窟河、汇入石窟河、通往X村、位于X村与Y村之间）；无则留空
-- description：10-30 字概述
-- scale：正文数字规模（2处、40亩），无则留空
+【L1 typed observations 契约】
+本次是 L1 observe pass：只返回 observations，不返回 report_body，也不返回资产台账、
+需求台账、coverage 或处理状态。正文会在 source segment、引用和状态通过校验后由
+独立的 report-synthesis pass 生成，因此不能在本 pass 中用正文替代结构化观察。
 
-本维度允许提取的现状对象范围：{dimension_focus}
+每条 observation 必须先选择一个 fact_type，并且只能填写该类型的字段：
+- spatial_entity：entity_type、name、locator（place_names/relation）、scale
+- spatial_relation：subject_ref、predicate、object_ref
+- scoped_metric：metric、scope、value、unit、counting_basis
+- demand：demand_type、scope、beneficiary、spatial_requirement、locator
+- constraint：constraint_type、applies_to_scope、strength、locator
+- risk 或 opportunity：subject、scope、locator
+- document_observation：subject、scope
+
+所有类型都可填写 semantic_type、description、attributes、value、unit、
+counting_basis、source_segment_ids、source_quote、source_refs、confidence、status。
+空间 locator 只记录来源明确支持的粗粒度地点/关系线索，不填写坐标或几何；指标、全村
+需求和政策事实不需要为了格式强行添加点位。每条事实必须可回指 source_segment_ids
+与 source_quote；没有直接证据就标记 uncertain。
+
+本维度允许提取的 fact_type 范围：{dimension_focus}
 
 约束：
-- location/relation 必须与正文一致，禁止编造
-- 只可摘录正文已出现的内容，不得新增对象
-- 凡正文给出具体地点/走向/流向的对象，location 必须填写，不得留空
+- 只可摘录来源已出现的事实，不得新增对象、数量、地点或关系
+- 空间实体有明确地点时填写 locator；没有地点时保留为空并说明证据缺口
+- 非空间事实不得把名称、指标或需求类型伪装成地点
 - 无对象时 observations 返回空数组
 """
 
@@ -431,7 +435,15 @@ def _observations_output_guide(natural_villages: str = "", dimension_key: str = 
     nv = (natural_villages or "").strip()
     nv_suffix = f"（如 {nv}）" if nv else ""
     focus = _L1_OBSERVATION_FOCUS.get(dimension_key, "本维度报告正文明确出现的现状对象")
-    return OBSERVATIONS_OUTPUT_GUIDE.format(nv_suffix=nv_suffix, dimension_focus=focus)
+    from app.domain.assessment.dimension_contracts import get_dimension_semantic_contract
+
+    allowed = ", ".join(
+        get_dimension_semantic_contract(dimension_key, 1).get("l1_fact_types", [])
+    )
+    return OBSERVATIONS_OUTPUT_GUIDE.format(
+        nv_suffix=nv_suffix,
+        dimension_focus=f"{allowed}（关注：{focus}）",
+    )
 
 
 def get_dimension_prompt(dimension_key: str, raw_data: str = "", village_name: str = "",

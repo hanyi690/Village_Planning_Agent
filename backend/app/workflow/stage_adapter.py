@@ -47,7 +47,7 @@ _KEY_BY_TYPE = {
     "ScenarioSet": "scenario_set",
     "ApprovedExecutionInput": "approved_execution_input",
     "ValidationCertificate": "validation_certificate",
-    "FinalRelationValidation": "final_relation_validation",
+    "FinalScenarioValidation": "final_relation_validation",
     "ExecutionResult": "execution_result",
     "ExecutionStaging": "execution_staging",
     "RenderLayers": "render_layers",
@@ -62,6 +62,8 @@ _KEY_BY_TYPE = {
     "EvidenceObservationSnapshot": "l1_observations",
     "GroundedEntityBindingSnapshot": "l1_bindings",
     "SourceSemanticClassificationSnapshot": "source_semantic_classification",
+    "SolverSubproblemPlan": "solver_subproblem_plan",
+    "PlanningTaskGraph": "planning_task_graph",
 }
 
 

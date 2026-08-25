@@ -318,11 +318,11 @@ async def deliver_node(state: Dict[str, Any]) -> Dict[str, Any]:
             "reason": products.spatial_context_reason,
         }
     relation_source = final_relation_validation or validation_report
-    relation_rows = list(
-        getattr(relation_source, "satisfactions", None)
-        or getattr(relation_source, "relation_satisfactions", None)
-        or []
-    ) if relation_source is not None else []
+    relation_rows = (
+        list(getattr(relation_source, "satisfactions", None) or [])
+        if relation_source is not None
+        else []
+    )
     final_relation_passed = (
         bool(getattr(final_relation_validation, "passed", False))
         if final_relation_validation is not None

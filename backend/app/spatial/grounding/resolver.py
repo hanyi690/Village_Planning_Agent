@@ -63,10 +63,10 @@ def _bbox_radius_m(bbox) -> float:
 def _authoritative_geometry_wkt(value: Any) -> str:
     """Accept only a valid source geometry returned by a spatial adapter.
 
-    ``CandidateSet.ref_geometry_wkt`` is the escape hatch for exact point/line
-    evidence.  It must never be confused with a bbox or a geometry invented
-    from parcel centroids, so malformed/empty/unsupported values are dropped
-    before they reach GROUND.
+    ``CandidateSet.ref_geometries`` carries exact point/line evidence.  It
+    must never be confused with a bbox or a geometry invented from parcel
+    centroids, so malformed/empty/unsupported values are dropped before they
+    reach GROUND.
     """
     text = str(value or "").strip()
     if not text:
@@ -87,19 +87,16 @@ def _authoritative_geometry_wkt(value: Any) -> str:
     return geometry.wkt
 
 
-def _authoritative_geometry_refs(values: Any, singular: Any = None) -> list[Any]:
+def _authoritative_geometry_refs(values: Any) -> list[Any]:
     """Normalize source-backed geometry records without synthesizing geometry.
 
-    Spatial adapters may still return the legacy singular WKT.  New adapters
-    can return independent ``GeometryRef`` records; each record is validated
-    separately and retained with its source lineage.  Invalid records are
-    discarded rather than repaired or merged.
+    Adapters return independent ``GeometryRef`` records; each record is
+    validated separately and retained with its source lineage. Invalid
+    records are discarded rather than repaired or merged.
     """
     from app.contracts.spatial.spatial_reference_contracts import GeometryRef
 
     raw_values = list(values or [])
-    if not raw_values and singular:
-        raw_values = [singular]
     refs: list[GeometryRef] = []
     for raw in raw_values:
         if isinstance(raw, GeometryRef):
@@ -817,7 +814,6 @@ class SpatialResolver:
         final_bsms = self._filter_to_bundle(bsms)
         reference_geometries = _authoritative_geometry_refs(
             getattr(candidates, "ref_geometries", None),
-            getattr(candidates, "ref_geometry_wkt", None),
         )
         evidence_lineage["source_feature_ids"].extend(
             str(getattr(reference, "source_feature_id", "") or "")
@@ -1824,7 +1820,6 @@ class SpatialResolver:
         final_bsms = self._filter_to_bundle(bsms)
         references = _authoritative_geometry_refs(
             getattr(candidates, "ref_geometries", None),
-            getattr(candidates, "ref_geometry_wkt", None),
         )
         geometry_types = {
             str(getattr(ref, "feature_kind", "") or "").casefold()

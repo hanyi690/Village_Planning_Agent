@@ -21,7 +21,6 @@ from app.domain.validation.validate_checks import (
 )
 from app.domain.validation.relation_validation import (
     FinalRelationFinding,
-    FinalRelationValidation,
     FinalScenarioValidation,
     validate_cross_layer_topology,
     validate_final_scenario,
@@ -51,7 +50,6 @@ __all__ = [
     "check_relation_validation",
     "check_cross_layer_topology",
     "FinalRelationFinding",
-    "FinalRelationValidation",
     "FinalScenarioValidation",
     "validate_cross_layer_topology",
     "validate_final_scenario",

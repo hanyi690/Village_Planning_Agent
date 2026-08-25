@@ -16,7 +16,7 @@ from pydantic import ValidationError
 
 from app.infrastructure.artifacts import ContentAddressedArtifactRepository, NamedRefConflict
 from app.infrastructure.artifacts.fingerprint import semantic_checksum
-from app.contracts.artifacts.artifact_descriptor import ArtifactDescriptor
+from app.contracts.artifacts.ref import ArtifactRef as ArtifactDescriptor
 from app.infrastructure.paths import run_tmp_root
 
 T = TypeVar("T")
@@ -35,6 +35,8 @@ ARTIFACT_KEYS = (
     "global_site_allocation", "grounded_anchors", "l1_observations", "l1_bindings",
     "source_semantic_classification", "l1_source_index", "execution_staging", "staged_parcel_changeset",
     "staged_planned_state", "staged_layout_configs",
+    "solver_subproblem_plan",
+    "planning_task_graph",
 )
 
 
@@ -281,12 +283,12 @@ def load_artifact(
     return payload
 
 
-def load_artifact_descriptor(
+def load_embedded_artifact(
     state: dict[str, Any], descriptor_data: dict[str, Any] | None,
     model: type[T] | None = None,
     *, base_dir: str | Path | None = None,
 ) -> T | dict[str, Any] | None:
-    """Load an exact child artifact descriptor embedded in a root artifact."""
+    """Load an exact child artifact referenced by a root artifact."""
     if not descriptor_data:
         return None
     ref = _descriptor(descriptor_data, "embedded_child")

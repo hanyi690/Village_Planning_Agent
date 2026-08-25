@@ -1,4 +1,4 @@
-"""HUMAN review transport: projection read, decision submit, legacy forward."""
+"""HUMAN review transport: projection read and decision submit."""
 
 from __future__ import annotations
 

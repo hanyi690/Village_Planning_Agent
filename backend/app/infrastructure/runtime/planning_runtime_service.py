@@ -849,6 +849,7 @@ class PlanningRuntimeService:
             last_completed_layer = 0
             last_phase = ""
             observed_signatures = []
+            observed_checkpoint_count = 0
 
             # A HUMAN resume can advance straight into the next gate checkpoint
             # (GraphInterrupt), or hit a transient SQLite write-lock while the
@@ -889,6 +890,7 @@ class PlanningRuntimeService:
 
                         elif part.get("type") == 'checkpoints':
                             data = part["data"]
+                            observed_checkpoint_count += 1
                             await checkpoint_persistence_manager.mark_write_complete(session_id)
                             if last_completed_layer > 0:
                                 checkpoint_id = None
@@ -926,6 +928,7 @@ class PlanningRuntimeService:
                     last_completed_layer = 0
                     last_phase = ""
                     observed_signatures = []
+                    observed_checkpoint_count = 0
 
             final_state = await cls.aget_state_values(session_id)
             final_signature = (
@@ -945,6 +948,8 @@ class PlanningRuntimeService:
                 and still_paused
                 and terminal_status not in {"complete", "partial", "diagnostic_only"}
                 and not final_state.get("fatal_error")
+                and not observed_signatures
+                and observed_checkpoint_count == 0
             ):
                 diagnostic = {
                     "stage": (final_state.get("paused_stage") or final_state.get("phase") or "unknown"),

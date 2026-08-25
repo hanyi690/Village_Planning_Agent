@@ -21,7 +21,7 @@ from collections import defaultdict
 from dataclasses import replace
 from typing import Any, Iterable, Mapping, Sequence
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, Field
 
 from app.contracts.planning.constraint_factor import (
     ConstraintFactor,
@@ -54,8 +54,6 @@ class FinalRelationFinding(BaseModel):
 class FinalScenarioValidation(BaseModel):
     """Serializable result of independent final scenario validation."""
 
-    model_config = ConfigDict(populate_by_name=True)
-
     schema_version: str = "1.0"
     scenario_id: str
     problem_fingerprint: str = ""
@@ -64,20 +62,11 @@ class FinalScenarioValidation(BaseModel):
     passed: bool = False
     status: str = "failed"
     final_features: list[ScenarioFeature] = Field(default_factory=list)
-    satisfactions: list[RelationSatisfaction] = Field(
-        default_factory=list, alias="relation_satisfactions"
-    )
+    satisfactions: list[RelationSatisfaction] = Field(default_factory=list)
     findings: list[FinalRelationFinding] = Field(default_factory=list)
     topology_findings: list[FinalRelationFinding] = Field(default_factory=list)
     trace: list[str] = Field(default_factory=list)
     hard_blockers: list[str] = Field(default_factory=list)
-
-    @property
-    def relation_satisfactions(self) -> list[RelationSatisfaction]:
-        """Compatibility alias used by older validation consumers."""
-
-        return self.satisfactions
-
 
 def _text(value: Any) -> str:
     return str(value or "").strip()
@@ -724,11 +713,6 @@ def validate_final_scenario(
 __all__ = [
     "FinalRelationFinding",
     "FinalScenarioValidation",
-    "FinalRelationValidation",
     "validate_cross_layer_topology",
     "validate_final_scenario",
 ]
-
-# A descriptive alias used by a few stage adapters; both names are the same
-# serialisable contract and therefore cannot drift in their status semantics.
-FinalRelationValidation = FinalScenarioValidation
