@@ -6,6 +6,7 @@ from typing import Any
 
 from app.contracts.planning.approval import ApprovedExecutionInput
 from app.contracts.planning.scenario import PlanningScenario, ScenarioSet
+from app.contracts.planning.solver_readiness import SolverReadiness
 from app.contracts.workflow.workflow_contracts import GateDecision, PendingRequest
 
 STAGE = "select"
@@ -110,6 +111,7 @@ def evaluate_scenario_select_gate(
     context_version: str = "",
     solver_subproblem_plan: Any = None,
     planning_task_graph: Any = None,
+    readiness: SolverReadiness | None = None,
 ) -> GateDecision:
     """PASS only a complete feasible member with executable approval."""
     issues: list[str] = []
@@ -119,6 +121,8 @@ def evaluate_scenario_select_gate(
         issues.append("planning_scenario_missing")
     if problem is None or not bool(getattr(problem, "can_solve", False)):
         issues.append("grounded_problem_incomplete")
+    if readiness is not None and not readiness.ready:
+        issues.append(f"solver_readiness:{readiness.status}")
     if scenario_set is not None:
         certificate = getattr(scenario_set, "solver_certificate", None)
         certificate_status = str(getattr(certificate, "status", "") or "").strip()
@@ -164,6 +168,9 @@ def evaluate_scenario_select_gate(
                 context={
                     "reasons": sorted(set(issues)),
                     "target_ids": target_ids,
+                    "readiness_status": readiness.status if readiness is not None else "",
+                    "readiness_blocker_refs": list(readiness.blocker_refs) if readiness is not None else [],
+                    "readiness_fingerprint": readiness.fingerprint if readiness is not None else "",
                 },
             )],
             context_version=context_version,

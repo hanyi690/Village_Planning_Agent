@@ -428,12 +428,23 @@ class SolverCertificate(ContractMeta):
         "infeasibility_core",
         "unknown",
     ] = "unknown"
+    readiness_status: Literal[
+        "unverified",
+        "ready",
+        "pending",
+        "blocked",
+        "human_required",
+        "not_groundable",
+    ] = "unverified"
+    readiness_fingerprint: str = ""
+    readiness_blocker_refs: list[str] = Field(default_factory=list)
     fingerprint: str = ""
 
     @model_validator(mode="after")
     def derive_fingerprint(self) -> "SolverCertificate":
         self.conflict_explanations = _sorted_strings(self.conflict_explanations)
         self.required_input_refs = _sorted_strings(self.required_input_refs)
+        self.readiness_blocker_refs = _sorted_strings(self.readiness_blocker_refs)
         proof = self.backend_certificate
         if proof is not None:
             for field, top, nested in (
@@ -477,10 +488,28 @@ class SolverCertificate(ContractMeta):
                 raise ValueError(
                     "infeasible SolverCertificate requires a closed, exhausted solver run"
                 )
+        if self.status in {"feasible", "bounded"} and self.readiness_status not in {"unverified", "ready"}:
+            raise ValueError(
+                "formal SolverCertificate requires ready solver preflight"
+            )
+        if self.status in {"feasible", "bounded"} and self.readiness_status == "ready" and self.readiness_blocker_refs:
+            raise ValueError(
+                "ready SolverCertificate cannot carry readiness blockers"
+            )
         if not self.fingerprint:
             payload = self.model_dump(mode="json", exclude={"fingerprint", "created_at"})
             self.fingerprint = hashlib.sha256(_canonical_json(payload).encode("utf-8")).hexdigest()
         return self
+
+    def bind_readiness(self, readiness: object) -> "SolverCertificate":
+        """Bind SELECT preflight proof to the solver certificate."""
+
+        return self.model_copy(update={
+            "readiness_status": str(getattr(readiness, "status", "unverified") or "unverified"),
+            "readiness_fingerprint": str(getattr(readiness, "fingerprint", "") or ""),
+            "readiness_blocker_refs": list(getattr(readiness, "blocker_refs", None) or []),
+            "fingerprint": "",
+        })
 
 
 class ScenarioSet(ContractMeta):
@@ -656,6 +685,14 @@ class ScenarioSet(ContractMeta):
     def feasible(self) -> list[PlanningScenario]:
         ids = set(self.feasible_scenario_ids)
         return [item for item in self.scenarios if item.scenario_id in ids]
+
+    def bind_solver_readiness(self, readiness: object) -> "ScenarioSet":
+        """Return a revalidated ScenarioSet carrying SELECT readiness proof."""
+
+        payload = self.model_dump(mode="python")
+        payload["solver_certificate"] = self.solver_certificate.bind_readiness(readiness).model_dump(mode="python")
+        payload["fingerprint"] = ""
+        return ScenarioSet.model_validate(payload)
 
 
 def resolve_formal_scenario_member(

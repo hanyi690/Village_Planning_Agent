@@ -156,6 +156,9 @@ class SolverSubproblemPlan(BaseModel):
 
     schema_version: Literal["1.0"] = "1.0"
     problem_fingerprint: str = Field(min_length=1)
+    readiness_status: str = "unverified"
+    readiness_fingerprint: str = ""
+    readiness_blocker_refs: list[str] = Field(default_factory=list)
     subproblems: list[SolverSubproblem] = Field(default_factory=list)
     diagnostics: list[str] = Field(default_factory=list)
     fingerprint: str = ""
@@ -164,6 +167,7 @@ class SolverSubproblemPlan(BaseModel):
     def validate_graph_and_fingerprint(self) -> "SolverSubproblemPlan":
         self.subproblems = sorted(self.subproblems, key=lambda item: item.subproblem_id)
         self.diagnostics = _sorted_strings(self.diagnostics)
+        self.readiness_blocker_refs = _sorted_strings(self.readiness_blocker_refs)
         ids = [item.subproblem_id for item in self.subproblems]
         if len(ids) != len(set(ids)):
             raise ValueError("solver subproblem IDs must be unique")

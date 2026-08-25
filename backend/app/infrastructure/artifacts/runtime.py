@@ -35,7 +35,7 @@ ARTIFACT_KEYS = (
     "global_site_allocation", "grounded_anchors", "l1_observations", "l1_bindings",
     "source_semantic_classification", "l1_source_index", "execution_staging", "staged_parcel_changeset",
     "staged_planned_state", "staged_layout_configs",
-    "solver_subproblem_plan",
+    "solver_subproblem_plan", "solver_readiness",
     "planning_task_graph",
 )
 

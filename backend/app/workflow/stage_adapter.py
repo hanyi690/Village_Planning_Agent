@@ -63,6 +63,7 @@ _KEY_BY_TYPE = {
     "GroundedEntityBindingSnapshot": "l1_bindings",
     "SourceSemanticClassificationSnapshot": "source_semantic_classification",
     "SolverSubproblemPlan": "solver_subproblem_plan",
+    "SolverReadiness": "solver_readiness",
     "PlanningTaskGraph": "planning_task_graph",
 }
 

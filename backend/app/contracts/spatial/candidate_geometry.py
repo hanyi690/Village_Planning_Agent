@@ -7,7 +7,7 @@ import json
 import math
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 GeometryKind = Literal["point", "line", "polygon", "multipatch", "unknown"]
@@ -48,9 +48,18 @@ def _clamp_unit_interval(value: Any) -> float:
     return max(0.0, min(1.0, _finite_float(value, 0.0)))
 
 
-def _diagnostic_token(prefix: str, value: Any) -> str:
-    numeric = _finite_float(value, 0.0)
-    return f"{prefix}:{numeric:.6f}".rstrip("0").rstrip(".")
+class CandidateSchemaDiagnostic(BaseModel):
+    """Typed schema/readiness diagnostic for one candidate artifact."""
+
+    code: str
+    message: str
+    field: str = ""
+    refs: list[str] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def canonicalize(self) -> "CandidateSchemaDiagnostic":
+        self.refs = sorted({str(item) for item in self.refs if str(item).strip()})
+        return self
 
 
 class CandidateGeometry(BaseModel):
@@ -60,6 +69,8 @@ class CandidateGeometry(BaseModel):
     labelled as an execution line.  This prevents downstream workers from
     treating a recall geometry as a final GIS feature.
     """
+
+    model_config = ConfigDict(extra="forbid")
 
     candidate_id: str = ""
     target_id: str = ""
@@ -89,11 +100,11 @@ class CandidateGeometry(BaseModel):
     source_ref: str = ""
     source_refs: list[str] = Field(default_factory=list)
     evidence_refs: list[str] = Field(default_factory=list)
-    confidence: float = 0.0
-    identity_confidence: float = Field(default=0.0, ge=0, le=1)
-    geometry_confidence: float = Field(default=0.0, ge=0, le=1)
+    identity_confidence: float | None = Field(default=None, ge=0, le=1)
+    geometry_confidence: float | None = Field(default=None, ge=0, le=1)
     suitability_score: float | None = None
-    compatibility_diagnostics: list[str] = Field(default_factory=list)
+    schema_status: Literal["valid", "pending", "schema_invalid"] = "pending"
+    schema_diagnostics: list[CandidateSchemaDiagnostic] = Field(default_factory=list)
     uncertainty_radius_m: float = 0.0
     uncertainty_reason: str = ""
     source_bsms: list[str] = Field(default_factory=list)
@@ -118,33 +129,6 @@ class CandidateGeometry(BaseModel):
     adjacent_parcel_bsms: list[str] = Field(default_factory=list)
     adjacency_evidence_refs: list[str] = Field(default_factory=list)
     suitability_components: dict[str, float] = Field(default_factory=dict)
-
-    @model_validator(mode="before")
-    @classmethod
-    def normalize_confidence_accounting(cls, raw: Any) -> Any:
-        if not isinstance(raw, dict):
-            return raw
-        payload = dict(raw)
-        diagnostics = [
-            str(item)
-            for item in (payload.get("compatibility_diagnostics", None) or [])
-            if str(item).strip()
-        ]
-
-        def _add_diagnostic(message: str) -> None:
-            if message not in diagnostics:
-                diagnostics.append(message)
-
-        has_identity = payload.get("identity_confidence") is not None
-        has_geometry = payload.get("geometry_confidence") is not None
-        has_explicit_grounding = has_identity or has_geometry
-        has_legacy = payload.get("confidence") is not None
-        if not has_explicit_grounding:
-            _add_diagnostic("grounding_confidence_missing")
-        if has_legacy and not has_explicit_grounding:
-            _add_diagnostic(_diagnostic_token("legacy_confidence_untrusted", payload.get("confidence")))
-        payload["compatibility_diagnostics"] = diagnostics
-        return payload
 
     @model_validator(mode="after")
     def derive_stable_candidate_id(self) -> "CandidateGeometry":
@@ -203,20 +187,28 @@ class CandidateGeometry(BaseModel):
         return self
 
     @model_validator(mode="after")
-    def canonicalize_confidence_accounting(self) -> "CandidateGeometry":
-        self.identity_confidence = _clamp_unit_interval(self.identity_confidence)
-        self.geometry_confidence = _clamp_unit_interval(self.geometry_confidence)
+    def canonicalize_schema(self) -> "CandidateGeometry":
         if self.suitability_score is not None:
             self.suitability_score = _finite_float(self.suitability_score, 0.0)
-        self.compatibility_diagnostics = sorted({
-            str(item)
-            for item in self.compatibility_diagnostics
-            if str(item).strip()
-        })
-        if self.grounding_confidence_trusted:
-            self.confidence = self.geometry_confidence
-        else:
-            self.confidence = _finite_float(self.confidence, 0.0)
+        diagnostics = list(self.schema_diagnostics)
+        if self.identity_confidence is None:
+            diagnostics.append(CandidateSchemaDiagnostic(
+                code="grounding_identity_confidence_missing",
+                message="candidate geometry is missing explicit identity_confidence",
+                field="identity_confidence",
+            ))
+        if self.geometry_confidence is None:
+            diagnostics.append(CandidateSchemaDiagnostic(
+                code="grounding_geometry_confidence_missing",
+                message="candidate geometry is missing explicit geometry_confidence",
+                field="geometry_confidence",
+            ))
+        self.schema_diagnostics = sorted(
+            {item.model_dump_json(): item for item in diagnostics}.values(),
+            key=lambda item: (item.code, item.field, item.message),
+        )
+        if self.schema_status != "schema_invalid":
+            self.schema_status = "pending" if self.schema_diagnostics else "valid"
         return self
 
     @model_validator(mode="after")
@@ -277,20 +269,15 @@ class CandidateGeometry(BaseModel):
 
     @property
     def grounding_confidence_trusted(self) -> bool:
-        if "grounding_confidence_missing" in set(self.compatibility_diagnostics):
+        if self.schema_status != "valid":
             return False
-        if any(
-            str(item).startswith("legacy_confidence_untrusted:")
-            for item in self.compatibility_diagnostics
-        ):
+        if self.identity_confidence is None or self.geometry_confidence is None:
             return False
         return self.identity_confidence > 0.0 and self.geometry_confidence > 0.0
 
     @property
     def grounding_needs_review(self) -> bool:
-        if not self.grounding_confidence_trusted:
-            return True
-        return bool(self.compatibility_diagnostics)
+        return not self.grounding_confidence_trusted
 
 
 __all__ = [
@@ -300,5 +287,6 @@ __all__ = [
     "AvailabilityStatus",
     "GeometryGranularity",
     "SpatialDomainKind",
+    "CandidateSchemaDiagnostic",
     "CandidateGeometry",
 ]

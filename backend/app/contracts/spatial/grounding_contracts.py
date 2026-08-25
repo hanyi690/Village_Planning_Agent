@@ -2,14 +2,17 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.contracts.artifacts.contract_meta import ContractMeta, StageIssue
 from app.contracts.artifacts.provenance import Provenance
 from app.contracts.evidence.identity_contracts import infer_geometry_granularity
 from app.contracts.evidence.requirement_contracts import EvidenceRequirement
 from app.contracts.planning.constraint_factor import ConstraintFactor, RelationSatisfaction
-from app.contracts.spatial.candidate_geometry import CandidateGeometry
+from app.contracts.spatial.candidate_geometry import (
+    CandidateGeometry,
+    CandidateSchemaDiagnostic,
+)
 from app.contracts.spatial.grounded_problem import GroundedPlanningProblem
 
 
@@ -55,6 +58,8 @@ class CandidateUncertainty(BaseModel):
 
 
 class CandidateSite(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     site_id: str
     candidate_id: str = ""
     source_parcels: list[str] = Field(default_factory=list)
@@ -68,11 +73,11 @@ class CandidateSite(BaseModel):
     evidence_refs: list[str] = Field(default_factory=list)
     target_ref: str | None = None
     project_ref: str | None = None
-    confidence: float = 0.0
-    identity_confidence: float = Field(default=0.0, ge=0.0, le=1.0)
-    geometry_confidence: float = Field(default=0.0, ge=0.0, le=1.0)
+    identity_confidence: float | None = Field(default=None, ge=0.0, le=1.0)
+    geometry_confidence: float | None = Field(default=None, ge=0.0, le=1.0)
     suitability_score: float | None = None
-    compatibility_diagnostics: list[str] = Field(default_factory=list)
+    schema_status: Literal["valid", "pending", "schema_invalid"] = "pending"
+    schema_diagnostics: list[CandidateSchemaDiagnostic] = Field(default_factory=list)
     uncertainty: CandidateUncertainty | None = None
     target_kind: str = "unknown"
     expected_output_kind: str = "unknown"
@@ -84,45 +89,59 @@ class CandidateSite(BaseModel):
 
     @model_validator(mode="before")
     @classmethod
-    def normalize_confidence_accounting(cls, raw: Any) -> Any:
+    def reject_legacy_candidate_fields(cls, raw: Any) -> Any:
         if not isinstance(raw, dict):
             return raw
-        payload = dict(raw)
-        if payload.get("geometry") is not None:
-            return payload
-        if (
-            payload.get("identity_confidence") is None
-            and payload.get("geometry_confidence") is None
+        if "confidence" in raw or "compatibility_diagnostics" in raw:
+            raise ValueError(
+                "CandidateSite schema-invalid: legacy confidence fields are not supported"
+            )
+        metrics = raw.get("metrics")
+        if isinstance(metrics, dict) and (
+            "confidence" in metrics or "compatibility_diagnostics" in metrics
         ):
-            payload["compatibility_diagnostics"] = list(dict.fromkeys([
-                *list(payload.get("compatibility_diagnostics", None) or []),
-                "grounding_confidence_missing",
-            ]))
-            if payload.get("confidence") is not None:
-                payload["compatibility_diagnostics"] = list(dict.fromkeys([
-                    *list(payload.get("compatibility_diagnostics", None) or []),
-                    f"legacy_confidence_untrusted:{float(payload.get('confidence') or 0.0):.6f}".rstrip("0").rstrip("."),
-                ]))
-        return payload
+            raise ValueError(
+                "CandidateSite schema-invalid: legacy candidate metrics are not supported"
+            )
+        return raw
 
     @model_validator(mode="after")
     def derive_candidate_id(self) -> "CandidateSite":
         if self.geometry is not None:
             self.candidate_id = self.geometry.candidate_id
-            self.identity_confidence = float(self.geometry.identity_confidence or 0.0)
-            self.geometry_confidence = float(self.geometry.geometry_confidence or 0.0)
+            self.identity_confidence = self.geometry.identity_confidence
+            self.geometry_confidence = self.geometry.geometry_confidence
             self.suitability_score = self.geometry.suitability_score
-            self.compatibility_diagnostics = list(dict.fromkeys([
-                *self.compatibility_diagnostics,
-                *list(self.geometry.compatibility_diagnostics or []),
-            ]))
         else:
-            self.identity_confidence = max(0.0, min(1.0, float(self.identity_confidence or 0.0)))
-            self.geometry_confidence = max(0.0, min(1.0, float(self.geometry_confidence or 0.0)))
-        if self.geometry_confidence > 0.0 and self.identity_confidence > 0.0:
-            self.confidence = self.geometry_confidence
-        else:
-            self.confidence = float(self.confidence or 0.0)
+            self.identity_confidence = (
+                max(0.0, min(1.0, float(self.identity_confidence)))
+                if self.identity_confidence is not None
+                else None
+            )
+            self.geometry_confidence = (
+                max(0.0, min(1.0, float(self.geometry_confidence)))
+                if self.geometry_confidence is not None
+                else None
+            )
+        diagnostics = list(self.schema_diagnostics)
+        if self.identity_confidence is None:
+            diagnostics.append(CandidateSchemaDiagnostic(
+                code="grounding_identity_confidence_missing",
+                message="candidate site is missing explicit identity_confidence",
+                field="identity_confidence",
+            ))
+        if self.geometry_confidence is None:
+            diagnostics.append(CandidateSchemaDiagnostic(
+                code="grounding_geometry_confidence_missing",
+                message="candidate site is missing explicit geometry_confidence",
+                field="geometry_confidence",
+            ))
+        self.schema_diagnostics = sorted(
+            {item.model_dump_json(): item for item in diagnostics}.values(),
+            key=lambda item: (item.code, item.field, item.message),
+        )
+        if self.schema_status != "schema_invalid":
+            self.schema_status = "pending" if self.schema_diagnostics else "valid"
         return self
 
 

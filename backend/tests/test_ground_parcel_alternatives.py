@@ -317,7 +317,7 @@ def test_select_refinement_does_not_promote_score_into_geometry_confidence() -> 
 
     assert selected.identity_confidence == 0.45
     assert selected.geometry_confidence == 0.6
-    assert selected.confidence == 0.6
+    assert selected.schema_status == "valid"
     assert selected.suitability_score == 1.8
 
 

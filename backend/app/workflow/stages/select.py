@@ -134,6 +134,104 @@ async def select_node(state: Dict[str, Any]) -> Dict[str, Any]:
         if str(getattr(entry, "target_id", "") or "").strip()
     }
     demo_target_ids = _demo_narrow_slice_target_ids(plan_intent)
+    artifact_refs = dict(state.get("artifact_refs") or {})
+    output_refs: Dict[str, Any] = {}
+    artifact_state = dict(state)
+    artifact_state["artifact_refs"] = artifact_refs
+
+    problem = getattr(grounding, "problem", None)
+    if problem is not None and deferred_target_ids:
+        from app.domain.ground.scoped_problem import scope_grounded_problem
+
+        grounding_ref = artifact_refs.get("grounding_result") or {}
+        problem = scope_grounded_problem(
+            problem,
+            deferred_target_ids,
+            source_refs=(
+                f"artifact:grounding_result:{_ref_digest(grounding_ref)}",
+                f"artifact:deferral_ledger:{_ref_digest((artifact_refs.get('deferral_ledger') or {}))}",
+            ),
+            reason="explicit DeferralLedger target scope",
+        )
+    demand_portfolio = derive_demand_portfolio(
+        plan_intent,
+        claims=list(getattr(intent, "claims", None) or []),
+    )
+    preflight_problem = problem
+    if preflight_problem is not None and demo_target_ids:
+        all_target_ids = {
+            str(item.target_id)
+            for item in list(getattr(preflight_problem, "target_domains", None) or [])
+            if str(getattr(item, "target_id", "") or "")
+        }
+        demo_deferred = sorted(all_target_ids - demo_target_ids)
+        if demo_deferred:
+            from app.domain.ground.scoped_problem import scope_grounded_problem
+
+            preflight_problem = scope_grounded_problem(
+                preflight_problem,
+                demo_deferred,
+                source_refs=("demo:narrow_slice_scope",),
+                reason="explicit demo narrow-slice target scope",
+            )
+    from app.domain.allocation.solver_readiness import build_solver_readiness
+
+    readiness = build_solver_readiness(
+        preflight_problem,
+        demand_portfolio=demand_portfolio,
+        context=context,
+        task_graph=task_graph,
+    )
+    readiness_ref = persist_stage_artifact(
+        artifact_state,
+        "select",
+        "SolverReadiness",
+        readiness,
+    )
+    if readiness_ref:
+        artifact_refs["solver_readiness"] = readiness_ref
+        output_refs["solver_readiness"] = readiness_ref
+    if not readiness.ready:
+        if preflight_problem is not None:
+            problem_ref = persist_stage_artifact(
+                artifact_state,
+                "select",
+                "GroundedPlanningProblem",
+                preflight_problem,
+            )
+            if problem_ref:
+                artifact_refs["scoped_grounding_problem"] = problem_ref
+                output_refs["scoped_grounding_problem"] = problem_ref
+        demand_ref = persist_stage_artifact(
+            artifact_state,
+            "select",
+            "DemandPortfolio",
+            demand_portfolio,
+        )
+        if demand_ref:
+            artifact_refs["demand_portfolio"] = demand_ref
+            output_refs["demand_portfolio"] = demand_ref
+        gate = evaluate_scenario_select_gate(
+            None,
+            None,
+            preflight_problem,
+            input_artifact_refs=artifact_refs,
+            previous_gate=state.get("select_gate"),
+            context_version=_context_version(state),
+            planning_task_graph=task_graph,
+            readiness=readiness,
+        )
+        context_patch = _adopt_context(state, context)
+        context_patch["scoped_replan_required"] = False
+        return stage_completion_patch(
+            state,
+            "select",
+            output_refs=output_refs,
+            gate=gate,
+            context_patch=context_patch,
+            retry_patch=retry_patch,
+        )
+
     suitability_grounding = grounding
     if demo_target_ids and hasattr(grounding, "model_copy"):
         # Keep the complete GROUND artifact intact, but do not spend the
@@ -179,14 +277,6 @@ async def select_node(state: Dict[str, Any]) -> Dict[str, Any]:
             "SELECT_TIMEOUT: candidate selection exceeded its cancellation boundary"
         ) from exc
     intent.typed_intent = plan_intent
-    demand_portfolio = derive_demand_portfolio(
-        plan_intent,
-        claims=list(getattr(intent, "claims", None) or []),
-    )
-    artifact_refs = dict(state.get("artifact_refs") or {})
-    output_refs: Dict[str, Any] = {}
-    artifact_state = dict(state)
-    artifact_state["artifact_refs"] = artifact_refs
     if task_graph is not None:
         status_counts = {
             status: sum(1 for task in task_graph.tasks if task.status == status)
@@ -195,7 +285,6 @@ async def select_node(state: Dict[str, Any]) -> Dict[str, Any]:
         logger.info("[workflow:select] consumed planning task graph statuses=%s", status_counts)
         if artifact_refs.get("planning_task_graph"):
             output_refs["planning_task_graph"] = artifact_refs["planning_task_graph"]
-    problem = getattr(grounding, "problem", None)
     if problem is not None:
         # GROUND keeps recall geometry and provenance.  SELECT has already
         # refined every source BSM into a parcel-level SuitabilityCandidate;
@@ -205,19 +294,6 @@ async def select_node(state: Dict[str, Any]) -> Dict[str, Any]:
             refine_grounded_problem,
         )
 
-        if deferred_target_ids:
-            from app.domain.ground.scoped_problem import scope_grounded_problem
-
-            grounding_ref = (artifact_refs.get("grounding_result") or {})
-            problem = scope_grounded_problem(
-                problem,
-                deferred_target_ids,
-                source_refs=(
-                    f"artifact:grounding_result:{_ref_digest(grounding_ref)}",
-                    f"artifact:deferral_ledger:{_ref_digest((artifact_refs.get('deferral_ledger') or {}))}",
-                ),
-                reason="explicit DeferralLedger target scope",
-            )
         problem = refine_grounded_problem(problem, suitability_surface)
         # The opt-in demo is deliberately a one-target acceptance slice.  L3
         # still produces the complete program, but the fixture must not let
@@ -387,6 +463,11 @@ async def select_node(state: Dict[str, Any]) -> Dict[str, Any]:
                 ),
                 infeasibility_explanations=["scenario_optimizer_failed"],
             )
+        if scenario_set is not None:
+            scenario_set = scenario_set.bind_solver_readiness(readiness)
+            scenario = scenario_set.recommended or (
+                scenario_set.scenarios[0] if scenario_set.scenarios else None
+            )
         scenario_set_ref = persist_stage_artifact(
             artifact_state, "select", "ScenarioSet", scenario_set
         )
@@ -480,6 +561,7 @@ async def select_node(state: Dict[str, Any]) -> Dict[str, Any]:
         context_version=_context_version(state),
         solver_subproblem_plan=solver_subproblem_plan,
         planning_task_graph=task_graph,
+        readiness=readiness,
     )
     if execution_plan is not None:
         plan_ref = persist_stage_artifact(

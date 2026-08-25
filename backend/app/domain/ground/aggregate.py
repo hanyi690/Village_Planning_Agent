@@ -287,7 +287,6 @@ def build_candidate_site(
         ),
         source_refs=geometry_source_refs,
         evidence_refs=candidate_evidence_refs,
-        confidence=grounding_confidence,
         identity_confidence=grounding_confidence,
         geometry_confidence=grounding_confidence,
         uncertainty_radius_m=uncertainty_radius,
@@ -330,7 +329,6 @@ def build_candidate_site(
             "violation_detail": hard_constraint_detail,
         },
         metrics={
-            "confidence": resolved.confidence,
             "identity_confidence": grounding_confidence,
             "geometry_confidence": grounding_confidence,
             "spec_type": spec.type,
@@ -355,7 +353,6 @@ def build_candidate_site(
         evidence_refs=candidate_evidence_refs,
         target_ref=(getattr(spec, "target_id", None) or None),
         project_ref=(getattr(spec, "project_ref", None) or None),
-        confidence=grounding_confidence,
         identity_confidence=grounding_confidence,
         geometry_confidence=grounding_confidence,
         uncertainty=uncertainty,

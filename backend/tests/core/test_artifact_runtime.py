@@ -139,45 +139,10 @@ def test_load_artifact_roundtrip_preserves_legacy_confidence_compatibility(tmp_p
     )
     state["artifact_refs"]["scoped_grounding_problem"] = first
 
-    loaded = load_artifact(
-        state,
-        "scoped_grounding_problem",
-        GroundedPlanningProblem,
-        base_dir=tmp_path,
-    )
-    candidate = loaded.candidate_geometries[0]
-
-    assert candidate.geometry_confidence == 0.0
-    assert candidate.identity_confidence == 0.0
-    assert candidate.suitability_score is None
-    assert candidate.confidence == 0.9
-    assert candidate.grounding_ready is False
-    assert candidate.is_executable is False
-    assert any(
-        item.startswith("legacy_confidence_untrusted:")
-        for item in candidate.compatibility_diagnostics
-    )
-    assert loaded.candidate_domains[0].status == "resolved"
-    assert loaded.target_domains[0].status == "resolved"
-    assert loaded.candidate_completeness.status == "human_required"
-    assert loaded.can_solve is False
-
-    second = store_artifact(
-        state,
-        "scoped_grounding_problem",
-        "ground",
-        "GroundedPlanningProblem",
-        loaded,
-        base_dir=tmp_path,
-    )
-    state["artifact_refs"]["scoped_grounding_problem"] = second
-    reloaded = load_artifact(
-        state,
-        "scoped_grounding_problem",
-        GroundedPlanningProblem,
-        base_dir=tmp_path,
-    )
-
-    assert reloaded.candidate_geometries[0].suitability_score is None
-    assert reloaded.candidate_geometries[0].confidence == 0.9
-    assert reloaded.candidate_geometries[0].geometry_confidence == 0.0
+    with pytest.raises(Exception, match="confidence"):
+        load_artifact(
+            state,
+            "scoped_grounding_problem",
+            GroundedPlanningProblem,
+            base_dir=tmp_path,
+        )

@@ -27,13 +27,13 @@ def _confidence_fields(candidate: CandidateSite) -> tuple[float, float, list[str
         return (
             float(getattr(geometry, "identity_confidence", 0.0) or 0.0),
             float(getattr(geometry, "geometry_confidence", 0.0) or 0.0),
-            list(getattr(geometry, "compatibility_diagnostics", None) or []),
+            list(getattr(geometry, "schema_diagnostics", None) or []),
             bool(getattr(geometry, "grounding_confidence_trusted", False)),
         )
     return (
         float(getattr(candidate, "identity_confidence", 0.0) or 0.0),
         float(getattr(candidate, "geometry_confidence", 0.0) or 0.0),
-        list(getattr(candidate, "compatibility_diagnostics", None) or []),
+        list(getattr(candidate, "schema_diagnostics", None) or []),
         False,
     )
 

@@ -73,7 +73,7 @@ def test_ground_zone_preference_does_not_fallback_to_full_pool() -> None:
     assert anchor.candidate_bsms == []
 
 
-def test_build_candidate_site_carries_confidence_and_uncertainty() -> None:
+def test_build_candidate_site_carries_explicit_grounding_confidence_and_uncertainty() -> None:
     spec = SpatialReferenceSpec(
         type="directional",
         target_id="zone-1",
@@ -90,8 +90,9 @@ def test_build_candidate_site_carries_confidence_and_uncertainty() -> None:
     site = build_candidate_site(spec, resolved, 0)
 
     assert isinstance(site, CandidateSite)
-    assert site.confidence == 0.8
+    assert site.identity_confidence == 0.8
+    assert site.geometry_confidence == 0.8
     assert site.uncertainty is not None
     assert site.uncertainty.radius_m == 120.0
     assert site.uncertainty.reason_code == "coarse_reference"
-    assert site.metrics["confidence"] == 0.8
+    assert "confidence" not in site.metrics

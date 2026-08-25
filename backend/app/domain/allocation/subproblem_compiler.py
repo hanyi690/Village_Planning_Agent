@@ -515,6 +515,8 @@ def _coordinate_shared_parcel_subproblems(
 
 def compile_solver_subproblems(
     problem: GroundedPlanningProblem,
+    *,
+    readiness: object | None = None,
 ) -> SolverSubproblemPlan:
     """Compile a deterministic target/relation solver plan from GROUND."""
 
@@ -553,8 +555,40 @@ def compile_solver_subproblems(
         diagnostics.append("topology_subproblems_require_explicit_backend")
     if not target_subproblems:
         diagnostics.append("no_target_level_solver_subproblems")
+    readiness_status = str(getattr(readiness, "status", "unverified") or "unverified")
+    readiness_fingerprint = str(getattr(readiness, "fingerprint", "") or "")
+    readiness_blockers = sorted({
+        str(item)
+        for item in (getattr(readiness, "blocker_refs", None) or [])
+        if str(item).strip()
+    })
+    if readiness is not None and not bool(getattr(readiness, "ready", False)):
+        diagnostics.append(f"solver_readiness_not_ready:{readiness_status}")
+        blocked_subproblems: list[SolverSubproblem] = []
+        for item in [*coordinated_targets, *relation_subproblems]:
+            payload = item.model_dump(mode="python")
+            payload["status"] = "blocked"
+            payload["required_input_refs"] = [
+                *payload.get("required_input_refs", []),
+                *readiness_blockers,
+            ]
+            payload["diagnostics"] = [
+                *payload.get("diagnostics", []),
+                f"solver_readiness_not_ready:{readiness_status}",
+            ]
+            payload["fingerprint"] = ""
+            blocked_subproblems.append(SolverSubproblem.model_validate(payload))
+        coordinated_targets = [
+            item for item in blocked_subproblems if item.subproblem_id.startswith("target:")
+        ]
+        relation_subproblems = [
+            item for item in blocked_subproblems if item.subproblem_id.startswith("relation:")
+        ]
     return SolverSubproblemPlan(
         problem_fingerprint=problem.fingerprint,
+        readiness_status=readiness_status,
+        readiness_fingerprint=readiness_fingerprint,
+        readiness_blocker_refs=readiness_blockers,
         subproblems=[*coordinated_targets, *relation_subproblems],
         diagnostics=diagnostics,
     )

@@ -1,5 +1,7 @@
 from types import SimpleNamespace
 
+import pytest
+
 from app.contracts.planning.constraint_factor import ConstraintFactor
 from app.contracts.planning.intent_graph import PlanRelationIntent, PlanningIntentGraph
 from app.contracts.spatial.candidate_geometry import CandidateGeometry
@@ -97,7 +99,13 @@ def test_legacy_geometry_without_explicit_grounding_confidence_is_not_ready() ->
 
     assert candidate.grounding_ready is False
     assert candidate.is_executable is False
-    assert "grounding_confidence_missing" in candidate.compatibility_diagnostics
+    assert candidate.schema_status == "pending"
+    assert {
+        item.code for item in candidate.schema_diagnostics
+    } == {
+        "grounding_identity_confidence_missing",
+        "grounding_geometry_confidence_missing",
+    }
 
 
 def test_grounding_returns_unverified_relations_as_unknown_or_deferred():
