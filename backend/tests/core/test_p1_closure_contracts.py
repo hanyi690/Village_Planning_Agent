@@ -30,6 +30,7 @@ def _intervention(
     package: str = "pkg:shared",
     role: str = "site_footprint",
     variant: str = "facility-default",
+    object_refs: list[str] | None = None,
 ) -> PlanningIntervention:
     return PlanningIntervention(
         intervention_id=intervention_id,
@@ -44,7 +45,10 @@ def _intervention(
         category="facility",
         materialization_role=role or None,
         facility_parameters=FacilityPlanningParameters(facility_type="clinic"),
-        spatial_requirements={"location_hints": ["东村"]},
+        spatial_requirements={
+            "location_hints": ["东村"],
+            "source_feature_refs": list(object_refs or []),
+        },
         claim_refs=[f"claim:{intervention_id}"],
         source_fact_refs=[f"fact:{intervention_id}"],
         evidence_refs=[f"evidence:{intervention_id}"],
@@ -84,6 +88,19 @@ def test_same_package_claims_deduplicate_but_role_and_variant_split():
     ])
     assert len(split.projects) == 3
     assert len({item.project_id for item in split.projects}) == 3
+
+
+def test_same_package_different_typed_physical_objects_split_projects():
+    assembly = build_physical_project_assembly([
+        _intervention("i-1", object_refs=["parcel:A"]),
+        _intervention("i-2", object_refs=["parcel:B"]),
+    ])
+
+    assert len(assembly.projects) == 2
+    assert {
+        tuple(project.physical_object_refs)
+        for project in assembly.projects
+    } == {("parcel:A",), ("parcel:B",)}
 
 
 def test_target_projection_carries_physical_project_into_grounding_request():

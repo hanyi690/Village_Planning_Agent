@@ -124,7 +124,8 @@ async def generate_classification_decisions(
             "待分类项目：\n"
             f"{lines}\n\n"
             '只输出 JSON：{"results":[{"index":1,"selected_code":"1100","rationale":"..."}]} '
-            "（index 对应上面编号；selected_code 必须来自编码表；rationale 可省略或保持简短）"
+            "（index 对应上面编号；必须恰好返回每个 1..N 的 index 各一次，不得缺失、重复或新增；"
+            "selected_code 必须来自编码表；rationale 可省略或保持简短；只输出 results 根对象）"
         )
         items: list[Any] = []
         validation_feedback = ""

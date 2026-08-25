@@ -56,7 +56,7 @@ OPENCODE_GO_MODEL = os.getenv("OPENCODE_GO_MODEL", "deepseek-v4-flash")
 # overridable for controlled experiments and provider-specific deployments.
 LLM_PROVIDER = os.getenv("LLM_PROVIDER", "minimax")
 LLM_MODEL = os.getenv("LLM_MODEL", DEFAULT_LLM_MODEL)
-MAX_TOKENS = int(os.getenv("MAX_TOKENS", "8192"))
+MAX_TOKENS = int(os.getenv("MAX_TOKENS", "32768"))
 
 _PROVIDER_CONCURRENCY_DEFAULT = (
     8
@@ -66,16 +66,16 @@ _PROVIDER_CONCURRENCY_DEFAULT = (
     else 8
 )
 
-# L1 dimensions fan out concurrently and only need a bounded report plus a
-# small observation list.  Keep their request budget independent from the
-# longer L3 planning budget so one slow L1 dimension cannot consume the whole
-# provider transport window.  This is a request/output budget, not a model
-# context-window limit.
-L1_MAX_TOKENS = int(os.getenv("L1_MAX_TOKENS", "12288"))
+# L1 dimensions fan out concurrently, but each dimension still emits a
+# potentially large typed observation array before its separate report pass.
+# Keep a bounded per-request budget while leaving enough headroom for source
+# lineage and structured observations.  These are request/output budgets, not
+# model context-window limits.
+L1_MAX_TOKENS = int(os.getenv("L1_MAX_TOKENS", "32768"))
 # A length-retry is a separate, one-shot ceiling.  It is deliberately larger
 # than the normal L1 request but remains bounded and provider-configurable.
 LLM_INCOMPLETE_OUTPUT_MAX_TOKENS = int(
-    os.getenv("LLM_INCOMPLETE_OUTPUT_MAX_TOKENS", "16384")
+    os.getenv("LLM_INCOMPLETE_OUTPUT_MAX_TOKENS", "65536")
 )
 L1_LLM_TIMEOUT_S = float(os.getenv("L1_LLM_TIMEOUT_S", "480"))
 L1_LLM_MAX_CONCURRENT = int(

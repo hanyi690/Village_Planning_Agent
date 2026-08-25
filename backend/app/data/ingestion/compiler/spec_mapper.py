@@ -42,14 +42,27 @@ def _attach_source_binding(
 ) -> SpatialReferenceSpec:
     if binding is None:
         return spec
+    snapshot_ref = str(
+        getattr(binding, "source_snapshot_ref", "") or ""
+    ).strip()
+    snapshot_digest = str(
+        getattr(binding, "source_snapshot_digest", "") or ""
+    ).strip()
+    if not snapshot_digest:
+        raw_digest = snapshot_ref.removeprefix("sha256:")
+        if len(raw_digest) == 64 and all(
+            char in "0123456789abcdefABCDEF" for char in raw_digest
+        ):
+            snapshot_digest = snapshot_ref
     return spec.model_copy(update={
         "source_binding_ref": str(getattr(binding, "binding_id", "") or ""),
         "source_collection_key": str(
             getattr(binding, "source_collection_key", "") or ""
         ),
         "source_snapshot_ref": str(
-            getattr(binding, "source_snapshot_ref", "") or ""
+            snapshot_ref
         ),
+        "source_snapshot_digest": snapshot_digest,
         "source_feature_digest": str(
             getattr(binding, "source_feature_digest", "") or ""
         ),

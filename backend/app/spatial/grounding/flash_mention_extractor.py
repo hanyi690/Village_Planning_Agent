@@ -86,6 +86,11 @@ _STRUCTURED_SYSTEM = """你是村庄规划 GIS 地名实体提取器。请从给
 5. role 只能是：{roles}
 6. 提取不到时返回空列表。
 
+根对象只能是 {{"entities": [...]}}；每个实体只能包含 mention、entity_type、role、canonical_name、
+confidence。mention 必须是原文片段，canonical_name 只能是从 mention 去除前后缀后的原文核心名称，
+entity_type 和 role 使用已给出的语义类型；confidence 必须是 0 到 1 的数值。不要输出坐标、BSM、
+source_feature_id、几何、执行对象或其他字段。
+
 对每个实体，mention 保留规划文本原文片段，canonical_name 为去掉前后缀后的核心地名，confidence 为 0-1 的提取置信度。
 
 待提取文本：{text}"""
@@ -121,6 +126,11 @@ _QUERY_SPEC_SYSTEM = """你是村庄规划 GIS 查询语义解析器。
 9. 除 semantic_terms、retrieval_scopes 以及确实可验证的 direction/topo/reference
    外，其余字段必须保持默认空值：不要填写 target_id、spec_id、project_ref、
    intervention_id、source_*、l1_fact_refs 或任何执行对象信息。
+
+根对象只能使用 SpatialReferenceSpec 声明的字段；type 必须是
+directional/distance/topological/attributive/composed，direction 只能是 N/NE/E/SE/S/SW/W/NW，
+topo 只能是 sfTouches/sfWithin/sfIntersects/sfContains/nearby/connected_via_road，
+retrieval_scopes 只能是 facilities/hazards/roads/waters/parcels/zones。不要新增字段。
 
 例如对“请利用炉池地址相关的地质灾害点及其相邻地块，定位炉池自然村内适合建设文化服务设施的一小片用地”，
 必须使用 type=attributive 且 children=[]；semantic_terms 从原文逐字选择

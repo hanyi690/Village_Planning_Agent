@@ -14,6 +14,16 @@ GLOBAL_CONCEPT_RULES = """
 - 禁止使用："需要注意的是…""总体来看""应当""建议"等套话。
 - 语言简洁有力，每个定位/策略一行，用换行符分隔。
 - 所有数据必须具体，避免模糊表达（"约X人"→"X人"）。
+
+【L2 typed decision pass 覆盖规则】
+当调用方要求输出 L2DecisionSet 时，上述正文写作规则和各维度的文本输出骨架仅是背景，
+不得执行。只返回结构化 JSON 根对象：schema_version、dimension_key、objectives、metrics、
+strategies、priorities、spatial_structures、conflicts、evidence_gaps、source_refs、diagnostics。
+schema_version 固定为 "2.0"；objective.kind=goal|constraint|opportunity，
+objective.status=observed|proposed|required；metric.direction=increase|decrease|maintain|range|unknown，
+metric.status=observed|proposed|required；strategy.strength=hard|soft|proposed；
+conflict/evidence_gap.severity=info|warning|error。不要输出 Markdown、report_body 或额外根字段；
+没有内容时使用空数组，不能把 unknown 当作 objective/metric 的 status。
 """
 
 # ==========================================

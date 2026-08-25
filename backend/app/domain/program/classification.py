@@ -69,7 +69,14 @@ def classification_review_targets(program: PlanningProgram) -> list[dict[str, An
                 "category": intervention.category,
                 "expected_output_kind": intervention.expected_output_kind,
                 "claim_refs": list(intervention.claim_refs),
-                "evidence_refs": list(intervention.evidence_refs),
+                # Classification must carry auditable lineage even when the L3
+                # provider placed it in source_fact_refs/source_refs rather than
+                # the generic evidence_refs field.
+                "evidence_refs": list(dict.fromkeys([
+                    *intervention.evidence_refs,
+                    *intervention.source_fact_refs,
+                    *intervention.source_refs,
+                ])),
                 "decision_required": True,
                 "recommended_code_system": "ghytbm",
             }

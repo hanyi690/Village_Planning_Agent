@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import hashlib
 
+import pytest
+
 from app.contracts.domain.l3_contracts import (
     PlanningIntervention,
     PlanningProgram,
@@ -19,6 +21,7 @@ from app.domain.program.classification import (
     revise_program_with_decisions,
 )
 from app.domain.program.gate import evaluate_l3_gate
+from app.workflow.root_graph import prepare_human_review
 
 
 def _polygon_intervention(
@@ -99,6 +102,22 @@ def test_real_contradiction_still_routes_l3_even_with_classification_targets() -
     )
 
 
+def test_classification_targets_preserve_non_generic_lineage_as_evidence() -> None:
+    intervention = _polygon_intervention("land_use_planning:claim:FA-02").model_copy(
+        update={
+            "evidence_refs": [],
+            "source_fact_refs": ["l1:fact:FA-02"],
+            "source_refs": ["source:land-use:FA-02"],
+        }
+    )
+    targets = classification_review_targets(PlanningProgram(interventions=[intervention]))
+
+    assert targets[0]["evidence_refs"] == [
+        "l1:fact:FA-02",
+        "source:land-use:FA-02",
+    ]
+
+
 def test_complete_decisions_flip_gate_to_pass() -> None:
     program = PlanningProgram(
         interventions=[_polygon_intervention("land_use_planning:claim:FA-02")],
@@ -127,3 +146,26 @@ def test_complete_decisions_flip_gate_to_pass() -> None:
     gate = evaluate_l3_gate(revised)
     assert gate.passed is True
     assert gate.feedback_route is None
+
+
+@pytest.mark.asyncio
+async def test_prepare_human_review_keeps_typed_classification_request(monkeypatch) -> None:
+    program = PlanningProgram(
+        interventions=[_polygon_intervention("land_use_planning:claim:FA-02")],
+        program_issues=[_classification_issue("land_use_planning:claim:FA-02")],
+    )
+    gate = evaluate_l3_gate(program)
+    monkeypatch.setattr(
+        "app.workflow.root_graph.load_root_gate",
+        lambda _state, _stage: gate,
+    )
+
+    prepared = await prepare_human_review({
+        "phase": "layer3",
+        "l3_gate": gate.model_dump(mode="json"),
+    })
+
+    assert prepared["paused_stage"] == "l3"
+    assert [
+        item["request_type"] for item in prepared["human_review_items"]
+    ] == ["classification_decision_required"]

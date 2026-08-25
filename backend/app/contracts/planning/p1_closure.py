@@ -40,6 +40,9 @@ class PhysicalProject(BaseModel):
     variant_key: str = Field(min_length=1)
     materialization_role: str = ""
     assembly_mode: Literal["canonical", "split"] = "canonical"
+    physical_object_refs: list[str] = Field(default_factory=list)
+    implementation_phases: list[str] = Field(default_factory=list)
+    intervention_actions: list[str] = Field(default_factory=list)
     component_claim_refs: list[str] = Field(default_factory=list)
     component_fact_refs: list[str] = Field(default_factory=list)
     target_refs: list[str] = Field(default_factory=list)
@@ -52,6 +55,9 @@ class PhysicalProject(BaseModel):
         self.variant_key = self.variant_key.strip()
         self.materialization_role = self.materialization_role.strip()
         for name in (
+            "physical_object_refs",
+            "implementation_phases",
+            "intervention_actions",
             "component_claim_refs",
             "component_fact_refs",
             "target_refs",
@@ -110,6 +116,36 @@ def _intervention_variant(intervention: object) -> str:
     })
 
 
+def _intervention_physical_object_refs(intervention: object) -> list[str]:
+    """Read only typed object/resource identity from an intervention.
+
+    Human-readable location hints are deliberately excluded.  If a claim has
+    not supplied a typed parcel/entity/feature reference, the assembly may
+    still group it by package, but it cannot accidentally claim that two
+    explicitly different physical objects are one project.
+    """
+
+    requirements = getattr(intervention, "spatial_requirements", None)
+    if not isinstance(requirements, dict):
+        return []
+    refs: list[str] = []
+    for key in (
+        "physical_object_refs",
+        "entity_refs",
+        "source_feature_refs",
+        "affected_parcel_refs",
+        "parcel_membership_refs",
+        "shared_resource_refs",
+    ):
+        value = requirements.get(key, ())
+        if isinstance(value, str):
+            value = [value]
+        if isinstance(value, dict):
+            value = value.values()
+        refs.extend(str(item).strip() for item in (value or ()) if str(item).strip())
+    return _sorted_refs(refs)
+
+
 def build_physical_project_assembly(
     interventions: Sequence[object],
     claims: Sequence[object] = (),
@@ -121,7 +157,7 @@ def build_physical_project_assembly(
         for claim in claims
         if str(getattr(claim, "claim_id", "")).strip()
     }
-    groups: dict[tuple[str, str, str], list[object]] = {}
+    groups: dict[tuple[str, str, str, str], list[object]] = {}
     for intervention in interventions:
         package_ref = str(getattr(intervention, "project_package_ref", "") or "").strip()
         if not package_ref or str(getattr(intervention, "planning_role", "")) != "spatial_intervention":
@@ -130,6 +166,7 @@ def build_physical_project_assembly(
             package_ref,
             _intervention_variant(intervention),
             str(getattr(intervention, "materialization_role", "") or "").strip(),
+            "|".join(_intervention_physical_object_refs(intervention)),
         )
         groups.setdefault(key, []).append(intervention)
 
@@ -155,6 +192,21 @@ def build_physical_project_assembly(
             package_ref=key[0],
             variant_key=key[1],
             materialization_role=key[2],
+            physical_object_refs=[
+                ref
+                for member in members
+                for ref in _intervention_physical_object_refs(member)
+            ],
+            implementation_phases=[
+                str(getattr(member, "implementation_phase", "") or "")
+                for member in members
+                if str(getattr(member, "implementation_phase", "") or "").strip()
+            ],
+            intervention_actions=[
+                str(getattr(member, "intervention_action", "") or "")
+                for member in members
+                if str(getattr(member, "intervention_action", "") or "").strip()
+            ],
             component_claim_refs=claim_refs,
             component_fact_refs=fact_refs,
             target_refs=[str(getattr(item, "target_id", "")) for item in members],
@@ -362,6 +414,25 @@ class RelationReadiness(BaseModel):
     factor_id: str
     hard: bool
     status: Literal["ready", "blocked", "advisory", "pending"]
+    evaluation_readiness: Literal[
+        "ready",
+        "missing_object",
+        "missing_parameter",
+        "missing_snapshot",
+        "evaluator_missing",
+        "backend_unsupported",
+        "semantic_invalid",
+        "pending_selection",
+    ] = "ready"
+    satisfaction_status: Literal[
+        "pending",
+        "satisfied",
+        "partially_satisfied",
+        "violated",
+        "not_evaluable",
+        "deferred",
+        "unknown",
+    ] = "unknown"
     evaluator_key: str
     evaluator_version: str = ""
     required_refs: list[str] = Field(default_factory=list)
@@ -390,6 +461,48 @@ def build_relation_readiness(
     ])
     reasons: list[str] = []
     status = str(getattr(satisfaction, "status", "") or factor.status)
+    if status not in {
+        "pending",
+        "satisfied",
+        "partially_satisfied",
+        "violated",
+        "not_evaluable",
+        "deferred",
+        "unknown",
+    }:
+        status = "unknown"
+
+    object_required = factor.kind not in {
+        "within_allowed_area",
+        "preserve_existing",
+        "upgrade_existing",
+    }
+    if not factor.subject_ref:
+        evaluation_readiness = "missing_object"
+        reasons.append("subject_missing")
+    elif object_required and not factor.object_ref:
+        evaluation_readiness = "missing_object"
+        reasons.append("object_missing")
+    elif factor.semantic_status != "valid":
+        evaluation_readiness = "semantic_invalid"
+    elif factor.input_status in {"missing", "not_evaluable"}:
+        evaluation_readiness = "missing_parameter"
+    elif factor.solver_supported is False:
+        evaluation_readiness = "backend_unsupported"
+    elif not evaluator_available:
+        evaluation_readiness = "evaluator_missing"
+    elif "source_snapshot" in required_refs and not snapshots:
+        evaluation_readiness = "missing_snapshot"
+    elif status == "not_evaluable":
+        evaluation_readiness = "missing_parameter"
+    elif status in {"pending", "deferred", "unknown"}:
+        # A typed relation with a registered evaluator can remain unresolved
+        # until the scenario supplies the selected candidate geometries.  It
+        # is not the same as an uncomputable relation.
+        evaluation_readiness = "pending_selection"
+    else:
+        evaluation_readiness = "ready"
+
     if factor.semantic_status != "valid":
         reasons.append(f"semantic:{factor.semantic_status}")
     if factor.input_status != "ready":
@@ -400,20 +513,24 @@ def build_relation_readiness(
         reasons.append("evaluator_missing")
     if "source_snapshot" in required_refs and not snapshots:
         reasons.append("source_snapshot_missing")
-    if factor.hard and status in {"pending", "deferred", "not_evaluable", "unknown"}:
+    if factor.hard and evaluation_readiness not in {"ready", "pending_selection"}:
         reasons.append(f"evaluation:{status}")
     if factor.hard and status in {"satisfied", "violated", "partially_satisfied"} and not evidence:
         reasons.append("evaluation_evidence_missing")
     if reasons:
         readiness_status = "blocked" if factor.hard else "advisory"
     elif factor.hard:
-        readiness_status = "ready"
+        readiness_status = (
+            "pending" if evaluation_readiness == "pending_selection" else "ready"
+        )
     else:
         readiness_status = "ready" if status in {"satisfied", "violated", "partially_satisfied"} else "pending"
     return RelationReadiness(
         factor_id=factor.factor_id,
         hard=factor.hard,
         status=readiness_status,
+        evaluation_readiness=evaluation_readiness,
+        satisfaction_status=status,  # type: ignore[arg-type]
         evaluator_key=evaluator_key,
         evaluator_version=evaluator_version,
         required_refs=required_refs,

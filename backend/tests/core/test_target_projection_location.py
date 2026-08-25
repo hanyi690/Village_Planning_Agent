@@ -15,7 +15,7 @@ from app.domain.program.target_projection.compile import compile_program_determi
 from app.workflow.stages.target_projection import _spatial_spec_village_names
 
 
-def test_claim_location_hints_become_a_closed_set_spatial_reference():
+def test_unsupported_claim_location_hints_are_parked_before_formal_grounding():
     claim = PlanningClaim(
         claim_id="facility-1",
         dimension_key="public_service",
@@ -36,16 +36,9 @@ def test_claim_location_hints_become_a_closed_set_spatial_reference():
     compilation, specs, diagnostics = compile_program_deterministic(program)
 
     assert compilation.typed_intent.facilities[0].location_hint == "园寨、黄竹"
-    assert len(specs) == 1
-    assert specs[0].op == "or"
-    assert [child.reference.kind for child in specs[0].children] == [
-        "place_name",
-        "place_name",
-    ]
-    assert [
-        child.reference.filter["label_contains"] for child in specs[0].children
-    ] == ["园寨", "黄竹"]
-    assert not diagnostics
+    assert specs == []
+    assert len(compilation.pending_grounding_specs) == 1
+    assert any(item.code == "GROUNDING_REQUEST_PENDING" for item in diagnostics)
 
 
 def test_typed_facility_hint_keeps_place_and_facility_semantics_conjunctive():
@@ -69,11 +62,10 @@ def test_typed_facility_hint_keeps_place_and_facility_semantics_conjunctive():
     compilation, specs, diagnostics = compile_program_deterministic(program)
 
     assert compilation.typed_intent.facilities[0].location_hint == "社前村、祠堂"
-    assert len(specs) == 1
-    assert specs[0].op == "and"
-    assert specs[0].children[0].reference.filter == {"label_contains": "社前村"}
-    assert specs[0].children[1].reference.filter == {"label_contains": "祠堂"}
-    assert not diagnostics
+    assert specs == []
+    assert len(compilation.pending_grounding_specs) == 1
+    assert _spatial_spec_village_names(compilation.pending_grounding_specs[0]) == ["社前村"]
+    assert any(item.code == "GROUNDING_REQUEST_PENDING" for item in diagnostics)
 
 
 def test_projection_source_support_check_ignores_facility_labels():
@@ -96,7 +88,8 @@ def test_projection_source_support_check_ignores_facility_labels():
     program = assemble_planning_program([intervention], [], claims=[claim])
     compilation, specs, _ = compile_program_deterministic(program)
 
-    assert _spatial_spec_village_names(specs[0]) == ["社前村"]
+    assert specs == []
+    assert _spatial_spec_village_names(compilation.pending_grounding_specs[0]) == ["社前村"]
 
 
 def test_facility_point_and_site_area_footprint_are_separate_targets() -> None:

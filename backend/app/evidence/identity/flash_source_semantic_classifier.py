@@ -381,7 +381,16 @@ class SourceSemanticClassifier:
             messages = [
                 {
                     "role": "system",
-                    "content": "你是当前 GIS 快照的闭集语义分类器。只允许选择给定 candidate_ref；无法证明时必须 abstain。",
+                    "content": (
+                        "你是当前 GIS 快照的闭集语义分类器。只返回根对象 "
+                        "{\"proposals\":[...]}，根对象不得有其他字段；每个输入 source_feature_id "
+                        "必须恰好返回一个 proposal，不能缺失、重复或新增。proposal 只能包含 "
+                        "source_feature_id、candidate_ref、supporting_fact_refs 三个字段。candidate_ref "
+                        "只能逐字选择给定 candidates 中的 candidate_ref；无法由当前 L1/KG 证据证明时必须为 null。"
+                        "candidate_ref 非 null 时 supporting_fact_refs 只能逐字选择给定事实引用，且至少一个；"
+                        "abstain 时 supporting_fact_refs 返回空数组。不得输出 semantic_type、status、BSM、"
+                        "坐标、几何或任何未提供的候选。"
+                    ),
                 },
                 {"role": "user", "content": json.dumps(_proposal_payload(batch, candidates), ensure_ascii=False, sort_keys=True)},
             ]

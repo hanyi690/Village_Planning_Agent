@@ -36,6 +36,11 @@ ANALYSIS_RULES = """
 
 OBSERVATIONS_OUTPUT_GUIDE = """
 【L1 typed observations 契约】
+本段是当前 observe pass 的唯一输出契约，覆盖本 prompt 上方遗留的写作规则、Markdown
+表格、输出骨架、【事实】行和“请开始分析”等正文指令。当前 pass 不执行报告写作：根对象
+只能是 JSON `{{"observations": [...], "diagnostics": [...]}}`，不能输出自然语言正文、
+Markdown、表格或把正文塞进 observations；report_body 只由后续 report-synthesis pass 生成。
+
 本次是 L1 observe pass：只返回 observations，不返回 report_body，也不返回资产台账、
 需求台账、coverage 或处理状态。正文会在 source segment、引用和状态通过校验后由
 独立的 report-synthesis pass 生成，因此不能在本 pass 中用正文替代结构化观察。

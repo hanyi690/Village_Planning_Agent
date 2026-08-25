@@ -20,6 +20,15 @@ spatial_intervention，并让 GROUND 生成对应的 place/demand/network/parcel
 只是跨维度管理身份，不是空间目标。保留类现状事实使用 evidence_statement。
 
 【字段闭集与互斥关系；逐字段执行】
+claims 数组中的每个对象只能使用 PlanningClaimDraft 字段：claim_id、dimension_key、statement、
+planning_role、project_package_ref、affected_population、affected_parcel_refs、suggested_category、
+suggested_output_kind、asset_kind、suggested_interventions、quantity、quantity_unit、
+intervention_action、road_parameters、linear_parameters、facility_parameters、axis_parameters、
+polygon_parameters、site_area_parameters、implementation_phase、location_hints、constraint_refs、
+objective_refs、evidence_refs、source_fact_refs、source_refs、spatial_requirements、confidence、uncertainty。
+intervention_action 只能是 preserve/new/expand/relocate/upgrade/widen/harden/repair/demolish；
+asset_kind 只能是 none/facility/land_use/axis/road/water_supply/sewer/stormwater/power/communication/
+drainage_channel/revetment；不要输出未声明的字段。
 - suggested_category 只能是 site_area、facility、road、axis、restoration、protection、zone、action。
 - suggested_output_kind 只能是 parcel、polygon、point、line、action（suggested_output_kind 只能是 parcel/polygon/point/line/action），绝不能写 none。
 - asset_kind 的 none 只属于非线性或非空间 claim，不是 suggested_output_kind 的值。
@@ -30,7 +39,7 @@ spatial_intervention，并让 GROUND 生成对应的 place/demand/network/parcel
 - zone 使用 zone+polygon 并填写 polygon_parameters；site_area 只能使用 site_area+parcel 或 site_area+polygon，并填写 site_area_parameters。
 - materialization_role 只能是 land_use_assignment、functional_overlay、protection_overlay、restoration_overlay、site_footprint 或 null。avoid_constraint、near、serve、connect_network 等只属于 spatial_requirements.relations[].relation_template，绝不能写入 materialization_role。
 
-每条 claim 至少包含 claim_id、statement、planning_role、project_package_ref、suggested_category、suggested_output_kind、suggested_interventions、quantity/quantity_unit（若有）、implementation_phase、location_hints、constraint_refs、objective_refs、evidence_refs、source_fact_refs、spatial_requirements 和 uncertainty。空间目标即使没有 location_hints、evidence_refs 或 source_fact_refs，也必须保留完整的空间 category/output_kind；在 spatial_requirements.grounding_requirements 中列出需要 GROUND 补齐的前置条件。
+每条 claim 至少包含 claim_id、statement、planning_role、project_package_ref、suggested_category、suggested_output_kind、suggested_interventions、quantity/quantity_unit（若有）、implementation_phase、location_hints、constraint_refs、objective_refs、evidence_refs、source_fact_refs、spatial_requirements 和 uncertainty。顶层 quantity 的类型只能是 JSON 数字或 null，quantity_unit 只能是字符串或 null；不得把 {"value": 数值, "unit": "..."} 放入顶层 quantity。只有 road_parameters、linear_parameters、facility_parameters、axis_parameters、polygon_parameters 或 site_area_parameters 内部的量值字段才使用各自 schema 声明的对象形式。implementation_phase 是必填闭集，只能是 "short"、"medium" 或 "long"，不得为 null、空字符串或其他值；无法判断时使用 "short"。空间目标即使没有 location_hints、evidence_refs 或 source_fact_refs，也必须保留完整的空间 category/output_kind；在 spatial_requirements.grounding_requirements 中列出需要 GROUND 补齐的前置条件。
 
 source_fact_refs 只能逐字复制“已审计 L1 spatial facts”区块中的 L1Fact.fact_id；不能填写地点名、BSM、坐标或自由字符串。只有 L1 typed fact 直接支持时才填写，不能把 report、RAG 或外源文本的段落 ID 当作 source_fact_refs。没有直接 fact 仍可生成需要 GROUND 的语义候选，但要保留 location_hints，并在 uncertainty 中说明待核验。
 

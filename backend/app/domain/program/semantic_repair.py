@@ -190,6 +190,8 @@ def _build_prompt(program: PlanningProgram, feedback: list[str]) -> str:
         "你是村庄规划项目库的跨专题 Program Critic。每个项目的类型、尺度和动作已由"
         "所属 L3 专题完成结构化编译；你不得重新解释或修改这些对象字段。"
         "不得创建坐标、BSM、地块、几何或规划用地编码。\n"
+        "只返回 ProgramSemanticRepairCandidate 根对象，根键只能是 patches、duplicate_merges、"
+        "dependencies、diagnostic_dispositions；所有数组都必须是 JSON 数组。\n"
         "规则：\n"
         "1. patches 和 diagnostic_dispositions 必须为空；源头字段错误只能返回所属 L3 专题。\n"
         "2. duplicate_merges 只可从 duplicate_candidate_pairs 选择；专题总目标与其子工程不是重复，"
