@@ -14,10 +14,10 @@ from app.contracts.planning.relation_parameters import (
 )
 from app.contracts.planning.scenario import ScenarioFeature
 from app.domain.demand.facility_demand_model import DemandSnapshot
-from app.domain.network.snapshot import NetworkSnapshot, NetworkRef
+from app.domain.network.snapshot import NetworkSnapshot, NetworkRef, network_readiness
+from app.spatial.network.service_area import evaluate_facility_service
 
-from .geometry_evaluators import GeometryRelationEvaluator
-from .registry import RelationEvaluatorRegistry
+from .registry import RelationEvaluatorRegistry, build_default_relation_registry
 from .temporal_evaluator import ExecutionTrace, evaluate_precedes
 
 
@@ -31,6 +31,8 @@ class RelationEvaluationContext:
     # demand from a parcel centroid or the nearest existing facility.
     demands: Mapping[str, DemandSnapshot] = field(default_factory=dict)
     network_refs: Mapping[str, NetworkRef] = field(default_factory=dict)
+    network_capacities: Mapping[str, float] = field(default_factory=dict)
+    demand_capacities: Mapping[str, float] = field(default_factory=dict)
     # External entity/place-hint geometries are resolved from EvidenceGraph
     # identities and read from bundle authority before relation evaluation.
     # They are internal ScenarioFeature inputs, never EvidencePacket payloads.
@@ -62,6 +64,12 @@ class NetworkRelationEvaluator:
             input_status=factor.input_status,
         )
         parameters = factor.parameters
+        if factor.input_status != "ready":
+            return RelationSatisfaction(
+                **base,
+                status="deferred" if factor.input_status == "pending" else "not_evaluable",
+                detail=f"network relation input status is {factor.input_status}",
+            )
         network_ref = str(getattr(parameters, "network_ref", "") or "")
         if not network_ref:
             return RelationSatisfaction(
@@ -76,13 +84,72 @@ class NetworkRelationEvaluator:
                 status="not_evaluable",
                 detail=f"network artifact is unavailable: {network_ref}",
             )
+        readiness, readiness_diagnostics = network_readiness(network, network_ref)
+        if readiness != "ready":
+            return RelationSatisfaction(
+                **base,
+                status="deferred" if readiness == "pending" else "not_evaluable",
+                detail=";".join(readiness_diagnostics) or "network snapshot is not ready",
+            )
         subject = list(features.get(factor.subject_ref, ()))
         object_ = list(features.get(factor.object_ref, ()))
-        if not subject or not object_:
+        is_service = self.evaluator_key == "serve" or factor.kind == "serve"
+        if not subject or (not object_ and not is_service):
             return RelationSatisfaction(
                 **base,
                 status="not_evaluable",
                 detail="network relation lacks subject/object features",
+            )
+        if is_service:
+            if not isinstance(parameters, ServiceParameters):
+                return RelationSatisfaction(
+                    **base,
+                    status="deferred",
+                    detail="service parameters are not typed",
+                )
+            demand = (getattr(context, "demands", None) or {}).get(parameters.demand_ref)
+            if not isinstance(demand, DemandSnapshot):
+                return RelationSatisfaction(
+                    **base,
+                    status="not_evaluable",
+                    detail=f"demand snapshot is unavailable: {parameters.demand_ref}",
+                )
+            if demand.readiness != "ready":
+                return RelationSatisfaction(
+                    **base,
+                    status="deferred" if demand.readiness == "pending" else "not_evaluable",
+                    detail=";".join(demand.diagnostics) or "demand snapshot is not ready",
+                )
+            if not hasattr(network, "route"):
+                return RelationSatisfaction(
+                    **base,
+                    status="not_evaluable",
+                    detail="network snapshot has no routing backend",
+                )
+            measurement = evaluate_facility_service(subject[0], demand, network, parameters)
+            status = {
+                "satisfied": "satisfied",
+                "violated": "violated",
+                "not_reachable": "not_evaluable",
+                "not_evaluable": "not_evaluable",
+                "deferred": "deferred",
+            }[measurement.status]
+            return RelationSatisfaction(
+                **base,
+                status=status,
+                detail=";".join(measurement.diagnostics),
+                score=float(measurement.coverage_ratio or 0.0),
+                subject_feature_refs=[subject[0].feature_id],
+                object_feature_refs=[parameters.demand_ref],
+                measurement=RelationMeasurement(
+                    value=measurement.coverage_ratio,
+                    unit="ratio",
+                    threshold=parameters.min_coverage_ratio,
+                    operator="gte",
+                    method="network_service_area_capacity",
+                    network_ref=network_ref,
+                ),
+                evaluation_trace=[f"service:{network_ref}:{parameters.demand_ref}"],
             )
         result = _network_measure(network, self.evaluator_key, subject[0], object_[0], factor)
         if result is None:
@@ -186,33 +253,7 @@ def evaluate_relations(
     """Evaluate all factors using deterministic geometry/temporal evaluators."""
 
     if registry is None:
-        geometry_evaluator = GeometryRelationEvaluator()
-        registry = RelationEvaluatorRegistry(
-            [
-                geometry_evaluator,
-                NetworkRelationEvaluator("connect"),
-                NetworkRelationEvaluator("access"),
-                NetworkRelationEvaluator("access_via"),
-                NetworkRelationEvaluator("serve"),
-            ]
-        )
-        for key in (
-            "near",
-            "far",
-            "contain",
-            "contains",
-            "within",
-            "within_allowed_area",
-            "avoid",
-            "avoid_constraint",
-            "adjacent",
-            "intersects",
-            "overlaps",
-            "co_locate",
-        ):
-            registry.register_alias(key, geometry_evaluator)
-        registry.register_alias("connect_network", registry.get("connect"))
-        registry.register_alias("provide_access", registry.get("access_via"))
+        registry = build_default_relation_registry()
     indexed = index_relation_features(features)
     results: list[RelationSatisfaction] = []
     for factor in factors:

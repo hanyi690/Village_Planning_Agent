@@ -614,6 +614,27 @@ def validate_final_scenario(
                 })
             )
             continue
+        from app.domain.network.snapshot import network_readiness
+
+        network_status, network_diagnostics = network_readiness(network, params.network_ref)
+        demand_status = getattr(demand, "readiness", "blocked")
+        if network_status != "ready" or demand_status != "ready":
+            corrected.append(
+                row.model_copy(update={
+                    "status": (
+                        "deferred"
+                        if network_status == "pending" or demand_status == "pending"
+                        else "not_evaluable"
+                    ),
+                    "measurement": None,
+                    "detail": ";".join([
+                        *network_diagnostics,
+                        *list(getattr(demand, "diagnostics", None) or []),
+                    ]) or "typed service snapshots are not ready",
+                    "evaluation_trace": ["serve:typed_snapshot_not_ready"],
+                })
+            )
+            continue
         measurement = evaluate_network_relation("serve", subject, demand, network, params)
         status = getattr(measurement, "status", "not_evaluable")
         status = "violated" if status == "not_reachable" else status

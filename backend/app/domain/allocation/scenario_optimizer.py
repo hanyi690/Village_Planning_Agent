@@ -28,6 +28,7 @@ from app.contracts.planning.scenario import (
 )
 from app.contracts.spatial.grounded_problem import GroundedPlanningProblem
 from app.domain.relations.service import RelationEvaluationContext
+from app.domain.network.snapshot import network_readiness
 
 from .scenario_builder import build_planning_scenario, build_scenario_features
 from .scenario_solver import (
@@ -241,6 +242,27 @@ def _recommendation_policy(
     )
 
 
+def _network_path_input_closed(
+    problem: GroundedPlanningProblem,
+    view: object,
+    evaluator_context: RelationEvaluationContext,
+) -> bool:
+    if str(getattr(view, "problem_kind", "")) != "network_path":
+        return False
+    if not bool(getattr(view, "input_complete", False)):
+        return False
+    network_refs = {
+        str(ref).strip()
+        for ref in (getattr(problem, "network_refs", None) or ())
+        if str(ref).strip()
+    }
+    networks = getattr(evaluator_context, "networks", None) or {}
+    return bool(network_refs) and all(
+        network_readiness(networks.get(ref), ref)[0] == "ready"
+        for ref in sorted(network_refs)
+    )
+
+
 def _objective_rank(
     vector: dict[str, float],
     definitions: Sequence[ObjectiveDefinition],
@@ -309,6 +331,7 @@ def _make_scenario(
     inspected: int,
     spatial_conflicts: list[tuple[str, str, str]],
     objective_definitions: Sequence[ObjectiveDefinition],
+    grounding_complete_override: bool = False,
 ) -> tuple[PlanningScenario, dict[str, float], bool, bool]:
     candidates = {item.candidate_id: item for item in problem.candidate_geometries}
     features, satisfactions = _evaluate_assignment(
@@ -362,7 +385,7 @@ def _make_scenario(
         for item in satisfactions
         if item.criticality == "hard" and item.status != "satisfied"
     )
-    if not problem.can_solve:
+    if not problem.can_solve and not grounding_complete_override:
         grounding_targets = sorted({
             *problem.candidate_completeness.missing_candidate_target_ids,
             *problem.candidate_completeness.missing_geometry_target_ids,
@@ -411,7 +434,7 @@ def _make_scenario(
     ]
     status = (
         "complete"
-        if problem.can_solve
+        if (problem.can_solve or grounding_complete_override)
         and not unavailable
         and not spatial_conflicts
         and not hard_unresolved
@@ -552,6 +575,7 @@ def _build_solver_certificate(
     assumption_refs: list[str] | None = None,
     infeasibility_core_refs: list[str] | None = None,
     conflict_groups: list[SolverConflictGroup] | None = None,
+    master_certificate: object | None = None,
 ) -> SolverCertificate:
     payload: dict[str, Any] = {
         "problem_fingerprint": problem.fingerprint,
@@ -573,6 +597,8 @@ def _build_solver_certificate(
             "infeasible": "infeasibility_core",
         }.get(status, "unknown"),
     }
+    if master_certificate is not None:
+        payload["master_certificate"] = master_certificate
     if backend_route:
         effective_proof_kind = proof_kind or {
             "feasible": "feasible_witness",
@@ -600,6 +626,8 @@ def _build_solver_certificate(
                 dict(selected_candidate_ids or {}).items()
             )
         }
+        if status == "bounded":
+            selected_ids = {}
         canonical_route_refs = sorted(set(route_refs or []))
         proof = BackendCertificatePayload(
             **backend_route,
@@ -652,6 +680,7 @@ def _optimize_scenarios_enumeration(
     selection_validator: Callable[
         [dict[str, tuple[str, ...]], dict[str, Any]], tuple[bool, str]
     ] | None = None,
+    grounding_complete_override: bool = False,
 ) -> ScenarioSet:
     """Generate a bounded ScenarioSet from one grounded problem."""
 
@@ -665,7 +694,7 @@ def _optimize_scenarios_enumeration(
     # completeness gate authoritative: only complete rows become feasible or
     # recommended scenarios.
     grounding_incomplete = (
-        not problem.can_solve
+        (not problem.can_solve and not grounding_complete_override)
         or _selection_domain_is_uncertain(problem)
     )
 
@@ -764,6 +793,7 @@ def _optimize_scenarios_enumeration(
             inspected=inspected,
             spatial_conflicts=conflicts,
             objective_definitions=definitions,
+            grounding_complete_override=grounding_complete_override,
         )
         rows.append((scenario, vector, complete, relation_uncertain))
 
@@ -836,6 +866,24 @@ def _optimize_scenarios_enumeration(
             else ("feasible" if feasible_ids else "infeasible")
         )
     )
+    if status == "bounded":
+        # A bounded search is provisional evidence only; it cannot expose
+        # formal feasible, Pareto, or recommended scenario IDs.
+        feasible_ids = []
+        pareto_ids = []
+        recommended = ""
+        scenarios = [
+            PlanningScenario.model_validate(
+                {
+                    **item.model_dump(mode="json"),
+                    "status": "partial",
+                    "fingerprint": "",
+                }
+            )
+            if item.status == "complete"
+            else item
+            for item in scenarios
+        ]
     model_payload = {
         "problem_fingerprint": problem.fingerprint,
         "objective_definitions": _digest_objective_definitions(definitions),
@@ -1040,10 +1088,15 @@ def optimize_scenarios(
 
     view = build_solver_problem_view(problem, evaluator_context=evaluator_context)
     definitions = _canonical_objective_definitions(objective_definitions)
+    network_input_closed = _network_path_input_closed(
+        problem,
+        view,
+        evaluator_context,
+    )
     # Specialized routes require their typed input before any enumeration.
     # Never turn an incomplete network/coverage/parcel/topology problem into
     # provisional independent choices: that would produce a misleading plan.
-    if not problem.can_solve:
+    if not problem.can_solve and not network_input_closed:
         if view.problem_kind in {
             "coverage",
             "parcel_assignment",

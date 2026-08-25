@@ -246,6 +246,44 @@ class SolverConflictGroup(BaseModel):
         return self
 
 
+class MasterCertificatePayload(BaseModel):
+    """Typed global coordination proof bound to a solver certificate."""
+
+    status: Literal["feasible", "bounded_infeasible", "deferred"]
+    selected_candidate_ids: dict[str, str] = Field(default_factory=dict)
+    project_refs: list[str] = Field(default_factory=list)
+    parcel_refs: list[str] = Field(default_factory=list)
+    network_refs: list[str] = Field(default_factory=list)
+    demand_refs: list[str] = Field(default_factory=list)
+    conflict_refs: list[str] = Field(default_factory=list)
+    blocker_refs: list[str] = Field(default_factory=list)
+    combinations_inspected: int = Field(default=0, ge=0)
+    search_limit: int = Field(default=0, ge=0)
+    fingerprint: str = ""
+
+    @model_validator(mode="after")
+    def canonicalize_and_fingerprint(self) -> "MasterCertificatePayload":
+        self.selected_candidate_ids = {
+            str(target_id): str(candidate_id)
+            for target_id, candidate_id in sorted(self.selected_candidate_ids.items())
+        }
+        for field in (
+            "project_refs",
+            "parcel_refs",
+            "network_refs",
+            "demand_refs",
+            "conflict_refs",
+            "blocker_refs",
+        ):
+            setattr(self, field, _sorted_strings(getattr(self, field)))
+        payload = self.model_dump(mode="json", exclude={"fingerprint"})
+        derived = hashlib.sha256(_canonical_json(payload).encode("utf-8")).hexdigest()
+        if self.fingerprint and self.fingerprint != derived:
+            raise ValueError("master certificate fingerprint does not match canonical content")
+        self.fingerprint = derived
+        return self
+
+
 class BackendCertificatePayload(BaseModel):
     """Typed, replayable proof contributed by one solver backend."""
 
@@ -282,6 +320,7 @@ class BackendCertificatePayload(BaseModel):
     assumption_refs: list[str] = Field(default_factory=list)
     infeasibility_core_refs: list[str] = Field(default_factory=list)
     conflict_groups: list[SolverConflictGroup] = Field(default_factory=list)
+    master_certificate: MasterCertificatePayload | None = None
 
     @model_validator(mode="after")
     def canonicalize(self) -> "BackendCertificatePayload":
@@ -419,6 +458,7 @@ class SolverCertificate(ContractMeta):
     backend_version: str = ""
     required_input_refs: list[str] = Field(default_factory=list)
     backend_certificate: BackendCertificatePayload | None = None
+    master_certificate: MasterCertificatePayload | None = None
     solver_invoked: bool = False
     input_closed: bool = False
     enumeration_complete: bool = False
@@ -479,6 +519,13 @@ class SolverCertificate(ContractMeta):
             ):
                 if getattr(self, field) != getattr(proof, field):
                     raise ValueError(f"backend certificate {field} does not match SolverCertificate")
+            if self.master_certificate is not None and proof.master_certificate is None:
+                raise ValueError("SolverCertificate master certificate is not bound to backend proof")
+            if self.master_certificate is not None and proof.master_certificate is not None:
+                if self.master_certificate.model_dump(mode="json") != proof.master_certificate.model_dump(mode="json"):
+                    raise ValueError("SolverCertificate master certificate does not match backend proof")
+            if self.master_certificate is None and proof.master_certificate is not None:
+                self.master_certificate = proof.master_certificate
         if self.status == "infeasible":
             if proof is None:
                 raise ValueError("infeasible SolverCertificate requires a typed backend proof")
@@ -593,6 +640,12 @@ class ScenarioSet(ContractMeta):
             ),
         }
         certificate_status = self.solver_certificate.status
+        if certificate_status == "bounded" and formal_ids:
+            raise ValueError("bounded solver certificate cannot carry formal scenarios")
+        master = self.solver_certificate.master_certificate
+        if master is not None and master.status != "feasible":
+            if self.recommended_scenario_id or self.feasible_scenario_ids:
+                raise ValueError("non-feasible master certificate cannot carry formal scenarios")
         if formal_ids or certificate_status in {"feasible", "bounded"}:
             certificate = self.solver_certificate
             if not certificate.backend_id or not certificate.backend_version:
@@ -615,6 +668,18 @@ class ScenarioSet(ContractMeta):
                 raise ValueError(
                     "backend proof selected_candidate_ids must match recommended scenario"
                 )
+            if master is not None and master.status == "feasible" and recommended is not None:
+                expected_master = {
+                    item.target_id: item.candidate_ids[0]
+                    for item in recommended.target_selections
+                    if len(item.candidate_ids) == 1
+                }
+                if any(
+                    target_id not in expected_master
+                    or expected_master[target_id] != candidate_id
+                    for target_id, candidate_id in master.selected_candidate_ids.items()
+                ):
+                    raise ValueError("master certificate selected candidates do not match recommendation")
             if proof.route_refs:
                 if recommended is None:
                     raise ValueError("backend proof route_refs require a recommended scenario")
@@ -736,6 +801,7 @@ __all__ = [
     "PlanningScenario",
     "ObjectiveDefinition",
     "SolverConflictGroup",
+    "MasterCertificatePayload",
     "BackendCertificatePayload",
     "derive_backend_selection_digest",
     "derive_solver_model_digest",

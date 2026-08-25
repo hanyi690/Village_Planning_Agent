@@ -471,6 +471,35 @@ async def select_node(state: Dict[str, Any]) -> Dict[str, Any]:
                 infeasibility_explanations=["scenario_optimizer_failed"],
             )
         if scenario_set is not None:
+            from app.domain.allocation.master_coordinator import coordinate_master_plan
+
+            recommended_candidate_ids = {
+                candidate_id
+                for selection in list(getattr(scenario_set.recommended, "target_selections", None) or [])
+                for candidate_id in selection.candidate_ids
+            }
+            master_certificate = coordinate_master_plan(
+                problem,
+                solver_subproblem_plan,
+                evaluator_context,
+                allowed_candidate_ids=recommended_candidate_ids or None,
+            )
+            scenario_payload = scenario_set.model_dump(mode="json")
+            certificate_payload = scenario_payload["solver_certificate"]
+            certificate_payload["master_certificate"] = master_certificate.model_dump(mode="json")
+            if master_certificate.status != "feasible":
+                scenario_payload.update(
+                    feasible_scenario_ids=[],
+                    pareto_scenario_ids=[],
+                    recommended_scenario_id="",
+                    objective_vectors={},
+                )
+                certificate_payload["status"] = "unknown"
+                certificate_payload["termination_reason"] = (
+                    "master coordination did not produce a feasible global selection"
+                )
+                certificate_payload["feasible_scenario_count"] = 0
+            scenario_set = ScenarioSet.model_validate(scenario_payload)
             scenario_set = scenario_set.bind_solver_readiness(readiness)
             scenario = scenario_set.recommended or (
                 scenario_set.scenarios[0] if scenario_set.scenarios else None

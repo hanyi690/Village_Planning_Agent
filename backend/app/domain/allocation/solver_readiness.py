@@ -23,9 +23,10 @@ from app.domain.allocation.solver_portfolio import (
     build_solver_problem_view,
     default_solver_registry,
 )
-from app.domain.relations.geometry_evaluators import GeometryRelationEvaluator
-from app.domain.relations.registry import RelationEvaluatorRegistry
-from app.domain.relations.service import NetworkRelationEvaluator
+from app.domain.relations.registry import (
+    RelationEvaluatorRegistry,
+    build_default_relation_registry,
+)
 from app.contracts.planning.p1_closure import build_relation_readiness
 
 
@@ -44,21 +45,7 @@ def _refs(value: object, name: str) -> set[str]:
 
 
 def _default_relation_registry() -> RelationEvaluatorRegistry:
-    geometry = GeometryRelationEvaluator()
-    registry = RelationEvaluatorRegistry([
-        geometry,
-        NetworkRelationEvaluator("connect"),
-        NetworkRelationEvaluator("access_via"),
-        NetworkRelationEvaluator("serve"),
-    ])
-    for key in (
-        "near", "far", "contain", "within_allowed_area", "avoid",
-        "avoid_constraint", "adjacent", "co_locate",
-    ):
-        registry.register_alias(key, geometry)
-    registry.register_alias("connect_network", registry.get("connect"))
-    registry.register_alias("provide_access", registry.get("access_via"))
-    return registry
+    return build_default_relation_registry()
 
 
 def _reason(

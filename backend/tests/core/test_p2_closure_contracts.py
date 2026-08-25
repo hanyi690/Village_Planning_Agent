@@ -8,6 +8,7 @@ from app.domain.allocation.master_coordinator import MasterCandidate, coordinate
 from app.domain.demand.facility_demand_model import FacilityDemandPoint, build_demand_snapshot
 from app.domain.network.snapshot import NetworkEdgeRef, NetworkNodeRef, build_network_snapshot
 from app.domain.relations.service import RelationEvaluationContext, evaluate_relations
+from app.domain.relations.registry import build_default_relation_registry
 
 
 def _feature(ref: str, wkt: str) -> ScenarioFeature:
@@ -57,3 +58,24 @@ def test_master_blocks_shared_parcel_capacity_and_keeps_stable_ids():
     assert result.status == "bounded_infeasible"
     assert result.selected_candidate_ids == {}
     assert "parcel:p1" in result.conflict_refs
+
+
+def test_incomplete_hard_relation_and_readiness_registry_fail_closed():
+    factor = ConstraintFactor(
+        kind="intersects",
+        evaluator_key="intersects",
+        subject_ref="a",
+        object_ref="b",
+        hard=True,
+        input_status="missing",
+    )
+    result = evaluate_relations(
+        [factor],
+        [_feature("a", "POINT (0 0)"), _feature("b", "POINT (0 0)")],
+        RelationEvaluationContext(scenario_id="p2"),
+    )[0]
+    assert result.status in {"deferred", "not_evaluable"}
+    assert result.status != "satisfied"
+    assert {"contains", "within", "intersects", "overlaps", "access", "serve"}.issubset(
+        set(build_default_relation_registry().keys())
+    )

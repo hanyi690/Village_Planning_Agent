@@ -344,13 +344,18 @@ class NetworkRelationBackend:
             reasons.append("UNSUPPORTED_SOLVER_KIND")
         if not view.input_complete:
             reasons.append("SOLVER_INPUT_INCOMPLETE")
-        if not problem.can_solve:
+        if not problem.can_solve and not (
+            view.problem_kind == "network_path" and view.input_complete
+        ):
             reasons.append("GROUNDING_INCOMPLETE")
         return BackendSupport(
             supported=not reasons,
             reason_codes=reasons,
             required_input_refs=[*view.required_input_refs, *view.missing_input_refs],
-            input_complete=problem.can_solve and view.input_complete,
+            input_complete=(
+                problem.can_solve
+                or (view.problem_kind == "network_path" and view.input_complete)
+            ) and view.input_complete,
         )
 
     def solve(
@@ -394,6 +399,9 @@ class NetworkRelationBackend:
                 },
                 "solver_config": effective_config.model_dump(mode="json"),
             },
+            grounding_complete_override=(
+                view.problem_kind == "network_path" and view.input_complete
+            ),
         )
         certificate = scenario_set.solver_certificate.backend_certificate
         if certificate is None:
@@ -438,7 +446,9 @@ class SolverBackendRegistry:
         problem: GroundedPlanningProblem,
         view: SolverProblemView,
     ) -> BackendResolution:
-        if not problem.can_solve:
+        if not problem.can_solve and not (
+            view.problem_kind == "network_path" and view.input_complete
+        ):
             return BackendResolution(
                 backend=None,
                 support=BackendSupport(

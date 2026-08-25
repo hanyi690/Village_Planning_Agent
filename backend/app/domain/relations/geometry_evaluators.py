@@ -99,6 +99,22 @@ class GeometryRelationEvaluator:
         features: Mapping[str, Sequence[object]],
         context: object,
     ) -> RelationSatisfaction:
+        if factor.input_status != "ready":
+            return RelationSatisfaction(
+                relation_id=factor.factor_id.removeprefix("factor:"),
+                scenario_id=str(getattr(context, "scenario_id", "") or ""),
+                subject_ref=factor.subject_ref,
+                object_ref=factor.object_ref,
+                status="deferred" if factor.input_status == "pending" else "not_evaluable",
+                criticality="hard" if factor.hard else "soft",
+                factor_ids=[factor.factor_id],
+                evidence_refs=list(factor.evidence_refs),
+                evaluator_version=self.version,
+                evaluator_key=factor.evaluator_key or factor.kind,
+                source_snapshot_refs=list(factor.source_snapshot_refs),
+                input_status=factor.input_status,
+                detail=f"relation input status is {factor.input_status}",
+            )
         subjects = list(features.get(factor.subject_ref, ()))
         objects = list(features.get(factor.object_ref, ()))
         if not subjects or not objects:

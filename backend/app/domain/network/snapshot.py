@@ -12,6 +12,9 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 class NetworkRef(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
     network_id: str = Field(min_length=1)
+    source_binding: str = ""
+    crs: str = ""
+    metric_crs: str = ""
     version: str = ""
     digest: str = ""
     source_refs: tuple[str, ...] = ()
@@ -24,7 +27,14 @@ class NetworkRef(BaseModel):
 
     @property
     def readiness(self) -> Literal["ready", "pending", "blocked"]:
-        if not self.version or not self.digest or not self.source_refs:
+        if (
+            not self.source_binding
+            or not self.crs
+            or not self.metric_crs
+            or not self.version
+            or not self.digest
+            or not self.source_refs
+        ):
             return "blocked"
         return self.availability
 
@@ -62,8 +72,27 @@ class NetworkSnapshot(BaseModel):
             diagnostics.add("network_edges_missing")
         if not self.source_binding:
             diagnostics.add("network_source_binding_missing")
+        if self.network_ref.source_binding != self.source_binding:
+            diagnostics.add("network_source_binding_mismatch")
+        if self.network_ref.crs != self.crs or self.network_ref.metric_crs != self.metric_crs:
+            diagnostics.add("network_crs_mismatch")
         if self.network_ref.readiness != "ready":
             diagnostics.add("network_ref_incomplete")
+        node_ids = {item.node_id for item in self.nodes}
+        for edge in self.edges:
+            if edge.from_node not in node_ids:
+                diagnostics.add(f"network_edge_from_node_missing:{edge.edge_id}")
+            if edge.to_node not in node_ids:
+                diagnostics.add(f"network_edge_to_node_missing:{edge.edge_id}")
+        body = {
+            "nodes": [item.model_dump(mode="json") for item in self.nodes],
+            "edges": [item.model_dump(mode="json") for item in self.edges],
+        }
+        expected_digest = "sha256:" + hashlib.sha256(
+            json.dumps(body, sort_keys=True, separators=(",", ":")).encode()
+        ).hexdigest()
+        if self.network_ref.digest != expected_digest:
+            diagnostics.add("network_digest_mismatch")
         object.__setattr__(self, "diagnostics", tuple(sorted(diagnostics)))
         if self.availability == "ready" and diagnostics:
             object.__setattr__(self, "availability", "blocked")
@@ -95,5 +124,48 @@ def build_network_snapshot(
     edge_rows = tuple(sorted(edges, key=lambda item: item.edge_id))
     body = {"nodes": [item.model_dump(mode="json") for item in node_rows], "edges": [item.model_dump(mode="json") for item in edge_rows]}
     digest = "sha256:" + hashlib.sha256(json.dumps(body, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
-    ref = NetworkRef(network_id=network_id, version=version, digest=digest, source_refs=tuple(sorted(set(source_refs))), availability="ready")
+    refs = tuple(sorted(set(source_refs)))
+    ref = NetworkRef(
+        network_id=network_id,
+        source_binding=source_binding,
+        crs=crs,
+        metric_crs=metric_crs,
+        version=version,
+        digest=digest,
+        source_refs=refs,
+        availability="ready",
+    )
     return NetworkSnapshot(network_ref=ref, crs=crs, metric_crs=metric_crs, nodes=node_rows, edges=edge_rows, time_slice=time_slice, source_binding=source_binding, availability="ready")
+
+
+def network_readiness(value: object, expected_ref: str = "") -> tuple[str, tuple[str, ...]]:
+    """Return a fail-closed readiness result for typed or legacy graph inputs."""
+
+    if isinstance(value, NetworkSnapshot):
+        diagnostics = tuple(value.diagnostics)
+        network_id = value.network_ref.network_id
+        if expected_ref and network_id != expected_ref:
+            diagnostics = (*diagnostics, "network_ref_mismatch")
+        return value.readiness, tuple(sorted(set(diagnostics)))
+    network_id = str(getattr(value, "network_ref", "") or "")
+    nodes = tuple(getattr(value, "nodes", None) or ())
+    edges = tuple(getattr(value, "edges", None) or ())
+    if callable(getattr(value, "is_connected", None)) or callable(
+        getattr(value, "travel_time_min", None)
+    ) or callable(getattr(value, "route", None)):
+        return "ready", ()
+    if expected_ref and network_id != expected_ref:
+        return "blocked", ("network_ref_mismatch",)
+    if not network_id or not nodes or not edges or not str(getattr(value, "fingerprint", "") or ""):
+        return "blocked", ("legacy_network_snapshot_incomplete",)
+    return "ready", ()
+
+
+__all__ = [
+    "NetworkEdgeRef",
+    "NetworkNodeRef",
+    "NetworkRef",
+    "NetworkSnapshot",
+    "build_network_snapshot",
+    "network_readiness",
+]

@@ -35,4 +35,37 @@ class RelationEvaluatorRegistry:
         return tuple(sorted(self._evaluators))
 
 
-__all__ = ["RelationEvaluator", "RelationEvaluatorRegistry"]
+def build_default_relation_registry() -> RelationEvaluatorRegistry:
+    """Build the one closed evaluator registry used by runtime and preflight."""
+
+    from .geometry_evaluators import GeometryRelationEvaluator
+    from .service import NetworkRelationEvaluator
+
+    geometry = GeometryRelationEvaluator()
+    connect = NetworkRelationEvaluator("connect")
+    access = NetworkRelationEvaluator("access")
+    access_via = NetworkRelationEvaluator("access_via")
+    serve = NetworkRelationEvaluator("serve")
+    registry = RelationEvaluatorRegistry([geometry, connect, access, access_via, serve])
+    for key in (
+        "near",
+        "far",
+        "contain",
+        "contains",
+        "within",
+        "within_allowed_area",
+        "avoid",
+        "avoid_constraint",
+        "adjacent",
+        "intersects",
+        "overlaps",
+        "co_locate",
+    ):
+        registry.register_alias(key, geometry)
+    registry.register_alias("connect_network", connect)
+    registry.register_alias("provide_access", access_via)
+    registry.register_alias("serve", serve)
+    return registry
+
+
+__all__ = ["RelationEvaluator", "RelationEvaluatorRegistry", "build_default_relation_registry"]

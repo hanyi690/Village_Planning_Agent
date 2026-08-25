@@ -439,7 +439,11 @@ def _merge_scenario_sets(
     blocking_subproblems: Sequence[Any] = (),
 ) -> ScenarioSet:
     choices = [
-        sorted(child_set.feasible, key=lambda item: item.scenario_id)
+        sorted(
+            child_set.feasible
+            or list(child_set.scenarios),
+            key=lambda item: item.scenario_id,
+        )
         for child_set in child_sets
     ]
     if any(not values for values in choices):
@@ -540,6 +544,21 @@ def _merge_scenario_sets(
         if blocking_subproblems
         else ("bounded" if bounded else "feasible")
     )
+    if status == "bounded":
+        output = [
+            PlanningScenario.model_validate(
+                {
+                    **item.model_dump(mode="json"),
+                    "status": "partial",
+                    "fingerprint": "",
+                }
+            )
+            if item.status == "complete"
+            else item
+            for item in output
+        ]
+        feasible_ids = []
+        recommended_id = ""
     certificate = _build_solver_certificate(
         problem=problem,
         model_digest=route["input_digest"],
@@ -669,12 +688,15 @@ def optimize_solver_subproblems(
             set_id=f"{set_id}:{subproblem.subproblem_id}",
             evaluator_context=evaluator_context,
             baseline_ref=baseline_ref or problem.baseline_ref,
-            max_scenarios=max_scenarios,
+            max_scenarios=search_limit,
             search_limit=search_limit,
             deterministic_seed=deterministic_seed,
             objective_definitions=definitions,
         )
         if not child_set.feasible:
+            if child_set.scenarios and child_set.solver_certificate.status in {"bounded", "unknown"}:
+                child_sets.append(child_set)
+                continue
             if child_set.solver_certificate.status == "infeasible":
                 infeasible_children.append((subproblem, child_set))
             else:

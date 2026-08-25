@@ -77,3 +77,49 @@ passed
 - User-owned dirty files were not staged or modified: `.codex/config.toml`,
   `.analysis/`, recorded replay/support files, the planning document, and
   `phase-p1-review-round-1.md`.
+
+## Fix Round 1 — 2026-08-25
+
+### STATUS
+
+Implemented the minimum hard fixes requested by the P2 review. SELECT now
+compiles the typed `SolverSubproblemPlan` through the production
+`coordinate_master_plan` boundary, binds its `MasterCertificate` into the
+`SolverCertificate`, and clears formal feasible/Pareto/recommended IDs when
+master coordination is not feasible. Bounded solver products and parent
+subproblem merges retain only provisional partial scenarios and cannot expose
+formal recommendation IDs.
+
+### FIXES
+
+- Fail-closed demand/network readiness: empty demand remains pending and never
+  ready; typed network snapshots validate source binding, CRS, digest, node
+  references, and edge endpoints. Typed evaluators reject incomplete network or
+  demand inputs; legacy adapters are accepted only when they expose an
+  explicit routing callable.
+- Runtime and solver-readiness relation registries now share one default
+  registry covering `contains`, `within`, `intersects`, `overlaps`, and
+  `access`/`serve` aliases.
+- Hard relation factors with missing/pending input status cannot return
+  `satisfied`.
+- Typed-road single-target selection now reaches the explicit
+  `network_relation_bounded` backend for the existing line/road-corridor
+  fixture; no generic fallback was added.
+- Bounded certificates are contract-incompatible with formal scenario IDs;
+  bounded child alternatives are retained for parent materialization only.
+
+### TESTS
+
+```text
+P2 focused: 33 passed, 1 pre-existing PytestCacheWarning
+typed-road regression: 1 passed, 1 pre-existing PytestCacheWarning
+```
+
+### CONCERNS / NOT COVERED
+
+- No full-repository scan or full test suite was run by design. The production
+  SELECT integration was covered by the code boundary and contract behavior,
+  but no new end-to-end workflow fixture was added beyond the focused unit
+  coverage.
+- Existing user dirty files remain untouched and are not part of this Fix
+  Round 1 commit.

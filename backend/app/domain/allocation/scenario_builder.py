@@ -46,7 +46,15 @@ def build_scenario_features(
         candidate_ids = list(raw_candidate_ids)
         for candidate_id in sorted(set(candidate_ids)):
             candidate = candidates.get(candidate_id)
-            if candidate is None or not candidate.is_executable:
+            if candidate is None or (
+                not candidate.is_executable
+                and not (
+                    candidate.kind == "line"
+                    and candidate.materialization_role == "road_corridor"
+                    and candidate.hard_constraint_status == "passed"
+                    and candidate.availability_status == "fully_available"
+                )
+            ):
                 continue
             feature_relation_ids = set(relation_ids.get(target_id, []))
             if not feature_relation_ids:

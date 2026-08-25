@@ -118,7 +118,12 @@ def _candidate_is_selectable(candidate: Any) -> bool:
     never be promoted into a final planning feature.
     """
 
-    if not bool(getattr(candidate, "is_executable", False)):
+    if not bool(getattr(candidate, "is_executable", False)) and not (
+        str(getattr(candidate, "kind", "") or "") == "line"
+        and str(getattr(candidate, "materialization_role", "") or "") == "road_corridor"
+        and str(getattr(candidate, "hard_constraint_status", "") or "") == "passed"
+        and str(getattr(candidate, "availability_status", "") or "") == "fully_available"
+    ):
         return False
     # Polygon materialization is role-sensitive. A zone without an explicit
     # role must remain deferred: treating it as land-use assignment would

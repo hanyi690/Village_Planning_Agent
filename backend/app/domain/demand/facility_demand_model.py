@@ -82,6 +82,8 @@ class DemandSnapshot(BaseModel):
         ) > 1e-9:
             raise ValueError("declared_total_demand does not match demand points")
         diagnostics = set(self.diagnostics)
+        if not points:
+            diagnostics.add("demand_points_missing")
         if any(item.demand_value < 0 for item in points):
             diagnostics.add("negative_demand")
         if not self.source_binding or not self.source_refs:
@@ -105,7 +107,12 @@ class DemandSnapshot(BaseModel):
 
     @property
     def readiness(self) -> Literal["ready", "pending", "blocked"]:
-        return self.availability
+        if "demand_points_missing" in self.diagnostics and not any(
+            item not in {"demand_points_missing", "demand_source_binding_missing", "demand_version_missing"}
+            for item in self.diagnostics
+        ):
+            return "pending"
+        return "blocked" if self.diagnostics else self.availability
 
     @property
     def digest(self) -> str:
@@ -123,16 +130,22 @@ def build_demand_snapshot(
     version: str = "",
     declared_total_demand: float | None = None,
 ) -> DemandSnapshot:
+    normalized_points = tuple(sorted(points, key=lambda item: item.demand_id))
+    total = sum(item.demand_value for item in normalized_points)
     return DemandSnapshot(
         demand_ref=demand_ref,
-        points=tuple(sorted(points, key=lambda item: item.demand_id)),
+        points=normalized_points,
         source_refs=tuple(sorted({str(item) for item in source_refs if str(item)})),
         source_binding=source_binding,
         crs=crs,
         time_slice=time_slice,
         version=version,
-        declared_total_demand=declared_total_demand,
-        availability="ready" if source_binding and source_refs and version else "pending",
+        declared_total_demand=total if declared_total_demand is None and normalized_points else declared_total_demand,
+        availability=(
+            "ready"
+            if source_binding and source_refs and version and normalized_points
+            else "pending"
+        ),
     )
 
 

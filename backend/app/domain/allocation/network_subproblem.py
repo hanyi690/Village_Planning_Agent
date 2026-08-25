@@ -17,6 +17,7 @@ from app.contracts.planning.relation_parameters import ServiceParameters
 from app.contracts.planning.scenario import PlanningScenario, ScenarioFeature
 from app.domain.demand.facility_demand_model import DemandSnapshot
 from app.domain.relations.network_evaluators import evaluate_network_relation
+from app.domain.network.snapshot import network_readiness
 from app.spatial.network.service_area import evaluate_facility_service
 
 
@@ -77,7 +78,14 @@ def evaluate_network_subproblem(
         return RelationSatisfaction(**base, status="deferred", detail="network_ref_missing")
     network = networks.get(network_ref)
     if network is None:
-        return RelationSatisfaction(**base, status="not_evaluable", detail=f"network_unavailable:{network_ref}")
+            return RelationSatisfaction(**base, status="not_evaluable", detail=f"network_unavailable:{network_ref}")
+    readiness, readiness_diagnostics = network_readiness(network, network_ref)
+    if readiness != "ready":
+        return RelationSatisfaction(
+            **base,
+            status="deferred" if readiness == "pending" else "not_evaluable",
+            detail=";".join(readiness_diagnostics) or "network_snapshot_not_ready",
+        )
     subject = _feature(features, factor.subject_ref)
     object_feature = _feature(features, factor.object_ref)
     # A service relation's object is a demand snapshot, not a planned
@@ -94,6 +102,12 @@ def evaluate_network_subproblem(
         demand = demand_map.get(parameters.demand_ref)
         if demand is None:
             return RelationSatisfaction(**base, status="not_evaluable", detail=f"demand_unavailable:{parameters.demand_ref}")
+        if demand.readiness != "ready":
+            return RelationSatisfaction(
+                **base,
+                status="deferred" if demand.readiness == "pending" else "not_evaluable",
+                detail=";".join(demand.diagnostics) or "demand_snapshot_not_ready",
+            )
         measurement = evaluate_facility_service(subject, demand, network, parameters)
         status = {
             "satisfied": "satisfied",
