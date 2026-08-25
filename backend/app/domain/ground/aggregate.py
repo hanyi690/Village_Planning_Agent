@@ -236,6 +236,9 @@ def build_candidate_site(
     grounding_confidence = max(0.0, min(1.0, float(resolved.confidence or 0.0)))
     geometry = CandidateGeometry(
         target_id=str(getattr(spec, "target_id", "") or ""),
+        physical_project_ref=str(getattr(spec, "physical_project_ref", "") or ""),
+        component_claim_refs=list(getattr(spec, "component_claim_refs", None) or []),
+        component_fact_refs=list(getattr(spec, "component_fact_refs", None) or []),
         kind=geometry_kind,
         role=geometry_role,
         candidate_membership=(
@@ -353,6 +356,9 @@ def build_candidate_site(
         evidence_refs=candidate_evidence_refs,
         target_ref=(getattr(spec, "target_id", None) or None),
         project_ref=(getattr(spec, "project_ref", None) or None),
+        physical_project_ref=str(getattr(spec, "physical_project_ref", "") or ""),
+        component_claim_refs=list(getattr(spec, "component_claim_refs", None) or []),
+        component_fact_refs=list(getattr(spec, "component_fact_refs", None) or []),
         identity_confidence=grounding_confidence,
         geometry_confidence=grounding_confidence,
         uncertainty=uncertainty,

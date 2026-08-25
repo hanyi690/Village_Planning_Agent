@@ -24,6 +24,14 @@ from .solver import (
     SolverSubproblemPlan,
 )
 from .solver_readiness import SolverReadiness, SolverReadinessReport
+from .p1_closure import (
+    DecisionFingerprint,
+    GroundingRequest,
+    HumanDecisionRecord,
+    PhysicalProject,
+    PhysicalProjectAssembly,
+    RelationReadiness,
+)
 
 __all__ = [
     "PlanRelationIntent",
@@ -46,4 +54,10 @@ __all__ = [
     "SolverSubproblemPlan",
     "SolverReadiness",
     "SolverReadinessReport",
+    "DecisionFingerprint",
+    "GroundingRequest",
+    "HumanDecisionRecord",
+    "PhysicalProject",
+    "PhysicalProjectAssembly",
+    "RelationReadiness",
 ]

@@ -135,6 +135,7 @@ class PlanningClaim(BaseModel):
     statement: str
     planning_role: PlanningRole = "evidence_statement"
     project_package_ref: str = ""
+    variant_key: str = ""
     affected_population: float | None = None
     affected_parcel_refs: list[str] = Field(default_factory=list)
     suggested_category: ClaimCategory = "action"

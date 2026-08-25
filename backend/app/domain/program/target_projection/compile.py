@@ -36,6 +36,10 @@ from app.domain.program.target_projection.planning_task_graph_compiler import (
     intent_graph_with_pending_claims,
     pending_claim_grounding_specs,
 )
+from app.contracts.planning.p1_closure import (
+    build_grounding_request,
+    build_physical_project_assembly,
+)
 
 
 def _spatial_hint(intervention: PlanningIntervention) -> str:
@@ -548,6 +552,35 @@ def compile_program_deterministic(
         source_features=source_features or {},
         source_semantic_decisions=source_semantic_decisions or {},
     )
+    physical_projects = build_physical_project_assembly(
+        admitted_program.interventions,
+        program.claims,
+    )
+    projects_by_component = physical_projects.component_project_refs
+    enriched_specs = []
+    grounding_requests = []
+    for spec in specs:
+        project_ref = projects_by_component.get(
+            str(spec.intervention_id or spec.target_id or ""),
+            "",
+        )
+        project = physical_projects.project_for_component(
+            str(spec.intervention_id or spec.target_id or "")
+        )
+        enriched = spec.model_copy(update={
+            "physical_project_ref": project_ref,
+            "component_claim_refs": list(project.component_claim_refs) if project else [],
+            "component_fact_refs": list(project.component_fact_refs) if project else [],
+        })
+        enriched_specs.append(enriched)
+        grounding_requests.append(build_grounding_request(
+            enriched,
+            physical_project_ref=project_ref,
+            component_claim_refs=(project.component_claim_refs if project else ()),
+            component_fact_refs=(project.component_fact_refs if project else ()),
+            source_snapshot_ref=program.l1_snapshot_ref,
+        ))
+    specs = enriched_specs
     diagnostics = _build_diagnostics(program, spec_diags)
     diagnostics.extend(
         ParseDiagnostic(
@@ -615,6 +648,11 @@ def compile_program_deterministic(
         intent_graph=intent_graph,
         planning_task_graph=planning_task_graph,
         pending_grounding_specs=pending_specs,
+        physical_projects=physical_projects,
+        grounding_requests=grounding_requests,
+        pending_grounding_requests=[
+            item for item in grounding_requests if item.status == "pending"
+        ],
     )
     from app.evidence.retrieval.requirements import (
         requirements_from_l3,

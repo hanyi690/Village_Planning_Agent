@@ -26,6 +26,7 @@ from app.domain.allocation.solver_portfolio import (
 from app.domain.relations.geometry_evaluators import GeometryRelationEvaluator
 from app.domain.relations.registry import RelationEvaluatorRegistry
 from app.domain.relations.service import NetworkRelationEvaluator
+from app.contracts.planning.p1_closure import build_relation_readiness
 
 
 def _clean(value: object) -> str:
@@ -278,7 +279,8 @@ def build_solver_readiness(
     }
     for factor in factors:
         key = _clean(factor.evaluator_key or factor.kind)
-        if key != "precedes" and relation_registry.get(key) is None:
+        evaluator_available = key == "precedes" or relation_registry.get(key) is not None
+        if key != "precedes" and not evaluator_available:
             relation_reasons.append(_reason(
                 "missing:relation_evaluator",
                 f"no relation evaluator is registered for {key}",
@@ -286,6 +288,20 @@ def build_solver_readiness(
                 ref=f"relation-evaluator:{key}",
                 source_refs=set(factor.evidence_refs),
             ))
+        if factor.required_refs or factor.source_snapshot_refs or factor.semantic_status != "valid" or factor.input_status != "ready" or factor.solver_supported is not None:
+            readiness = build_relation_readiness(
+                factor,
+                satisfaction_by_factor.get(_clean(factor.factor_id)),
+                evaluator_available=evaluator_available,
+            )
+            for reason in readiness.reasons:
+                relation_reasons.append(_reason(
+                    f"relation_readiness:{reason}",
+                    f"relation {factor.factor_id} readiness is {reason}",
+                    severity="hard" if factor.hard else "advisory",
+                    ref=f"relation:{factor.factor_id}",
+                    source_refs=set(readiness.evidence_refs) | set(readiness.source_snapshot_refs),
+                ))
         satisfaction = satisfaction_by_factor.get(_clean(factor.factor_id))
         if factor.hard and satisfaction is not None and satisfaction.status in {
             "pending", "deferred", "not_evaluable", "unknown",

@@ -77,7 +77,14 @@ def _filter_unsupported_spatial_specs(
                 "source evidence; GROUND must resolve or route HUMAN"
             ),
         })
-    return list(specs), diagnostics
+    unsupported_ids = {
+        str(item.get("intervention_id") or "")
+        for item in diagnostics
+    }
+    return [
+        spec for spec in specs
+        if str(getattr(spec, "intervention_id", "") or "") not in unsupported_ids
+    ], diagnostics
 
 
 async def _classify_source_semantics(
@@ -244,15 +251,49 @@ async def target_projection_node(state: Dict[str, Any]) -> Dict[str, Any]:
             build_intent_layer(kg, intent)
         except Exception as exc:
             logger.warning("[workflow:target_projection] build_intent_layer failed: %s", exc)
+    original_specs = list(specs)
     specs, unsupported = _filter_unsupported_spatial_specs(specs, context)
     result.spatial_reference_specs = specs
+    unsupported_ids = {
+        str(item.get("intervention_id") or "")
+        for item in unsupported
+    }
+    if unsupported_ids:
+        from app.contracts.planning.p1_closure import build_grounding_request
+
+        parked_specs = [
+            spec.model_copy(update={"unresolved_reason": "unsupported_source"})
+            for spec in original_specs
+            if str(getattr(spec, "intervention_id", "") or "") in unsupported_ids
+        ]
+        result.pending_grounding_specs = [
+            *list(getattr(result, "pending_grounding_specs", None) or []),
+            *parked_specs,
+        ]
+        result.grounding_requests = [
+            item for item in (getattr(result, "grounding_requests", None) or [])
+            if item.target_ref not in unsupported_ids
+        ]
+        result.pending_grounding_requests = [
+            *list(getattr(result, "pending_grounding_requests", None) or []),
+            *[
+                build_grounding_request(
+                    spec,
+                    physical_project_ref=str(getattr(spec, "physical_project_ref", "") or ""),
+                    component_claim_refs=list(getattr(spec, "component_claim_refs", None) or []),
+                    component_fact_refs=list(getattr(spec, "component_fact_refs", None) or []),
+                    defer_reason="unsupported_spatial_reference",
+                )
+                for spec in parked_specs
+            ],
+        ]
     if unsupported:
         diagnostics = list(getattr(result, "diagnostics", []) or [])
         diagnostics.extend(ParseDiagnostic(**item) for item in unsupported)
         result.diagnostics = diagnostics
         result.compilation_status = CompilationStatus.NEEDS_REVIEW
         logger.warning(
-            "[workflow:target_projection] retained %d spatial refs with unsupported-source diagnostics",
+            "[workflow:target_projection] parked %d spatial refs as pending unsupported requests",
             len(unsupported),
         )
     # The compiler gate is evaluated before source-semantic and authoritative

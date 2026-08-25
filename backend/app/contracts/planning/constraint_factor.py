@@ -109,6 +109,12 @@ class ConstraintFactor(BaseModel):
     status: ConstraintStatus = "unknown"
     detail: str = ""
     evaluator_key: str = ""
+    evaluator_version: str = ""
+    required_refs: list[str] = Field(default_factory=list)
+    source_snapshot_refs: list[str] = Field(default_factory=list)
+    semantic_status: Literal["valid", "pending", "invalid"] = "valid"
+    input_status: Literal["ready", "pending", "missing", "not_evaluable"] = "ready"
+    solver_supported: bool | None = None
     parameters: RelationParameters | None = None
     subject_candidate_domain_refs: list[str] = Field(default_factory=list)
     object_candidate_domain_refs: list[str] = Field(default_factory=list)
@@ -130,6 +136,8 @@ class ConstraintFactor(BaseModel):
         )
         self.subject_candidate_refs = _sorted_strings(self.subject_candidate_refs)
         self.object_candidate_refs = _sorted_strings(self.object_candidate_refs)
+        self.required_refs = _sorted_strings(self.required_refs)
+        self.source_snapshot_refs = _sorted_strings(self.source_snapshot_refs)
 
         if not self.subject_candidate_domain_refs and self.subject_candidate_refs:
             self.subject_candidate_domain_refs = list(self.subject_candidate_refs)
@@ -169,6 +177,9 @@ class RelationSatisfaction(BaseModel):
     measurement: RelationMeasurement | None = None
     evaluation_trace: list[str] = Field(default_factory=list)
     evaluator_version: str = ""
+    evaluator_key: str = ""
+    source_snapshot_refs: list[str] = Field(default_factory=list)
+    input_status: Literal["ready", "pending", "missing", "not_evaluable"] = "ready"
 
     @model_validator(mode="after")
     def canonicalize_collections(self) -> "RelationSatisfaction":
@@ -180,6 +191,7 @@ class RelationSatisfaction(BaseModel):
             [item for item in self.evaluation_trace if item],
             key=lambda item: item,
         )
+        self.source_snapshot_refs = _sorted_strings(self.source_snapshot_refs)
         return self
 
 

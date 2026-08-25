@@ -436,6 +436,7 @@ def interventions_from_claims(
                 target_id=intervention_id,
                 planning_role="spatial_intervention",
                 project_package_ref=package_ref,
+                variant_key=str(claim.variant_key or ""),
                 admission_reason="typed_spatial_claim_ready",
                 category=claim.suggested_category,
                 execution_mode="spatial",

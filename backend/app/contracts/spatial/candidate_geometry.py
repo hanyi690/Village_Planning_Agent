@@ -74,6 +74,9 @@ class CandidateGeometry(BaseModel):
 
     candidate_id: str = ""
     target_id: str = ""
+    physical_project_ref: str = ""
+    component_claim_refs: list[str] = Field(default_factory=list)
+    component_fact_refs: list[str] = Field(default_factory=list)
     kind: GeometryKind = "unknown"
     role: GeometryRole = "unknown"
     # ``alternative`` means SELECT must choose among competing identities.

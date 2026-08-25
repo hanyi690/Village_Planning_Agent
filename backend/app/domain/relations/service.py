@@ -54,6 +54,9 @@ class NetworkRelationEvaluator:
             factor_ids=[factor.factor_id],
             evidence_refs=list(factor.evidence_refs),
             evaluator_version=context.evaluator_version,
+            evaluator_key=self.evaluator_key,
+            source_snapshot_refs=list(factor.source_snapshot_refs),
+            input_status=factor.input_status,
         )
         parameters = factor.parameters
         network_ref = str(getattr(parameters, "network_ref", "") or "")
@@ -210,6 +213,9 @@ def evaluate_relations(
                     context.execution_trace,
                     scenario_id=context.scenario_id,
                     evaluator_version=context.evaluator_version,
+                    evaluator_key=factor.evaluator_key or factor.kind,
+                    source_snapshot_refs=list(factor.source_snapshot_refs),
+                    input_status=factor.input_status,
                 )
             )
             continue

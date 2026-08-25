@@ -87,6 +87,12 @@ def compile_constraint_factors(
                 claim_refs=list(get("claim_refs", []) or []),
                 status=factor_status,
                 evaluator_key=evaluator_key,
+                evaluator_version=str(get("evaluator_version", "") or ""),
+                required_refs=list(get("required_refs", []) or []),
+                source_snapshot_refs=list(get("source_snapshot_refs", []) or []),
+                semantic_status=str(get("semantic_status", "valid") or "valid"),
+                input_status=str(get("input_status", "ready") or "ready"),
+                solver_supported=get("solver_supported"),
                 parameters=raw_parameters,
                 subject_candidate_refs=list(get("subject_candidate_refs", []) or []),
                 object_candidate_refs=list(get("object_candidate_refs", []) or []),
@@ -213,6 +219,9 @@ def evaluate_relation_satisfaction(
                 score=1.0 if status == "satisfied" else 0.0,
                 criticality="hard" if factor.hard else "soft",
                 evaluator_version="relation-evaluator-v1",
+                evaluator_key=factor.evaluator_key or factor.kind,
+                source_snapshot_refs=list(factor.source_snapshot_refs),
+                input_status=factor.input_status,
             )
         )
     return result

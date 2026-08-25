@@ -12,6 +12,7 @@ from app.contracts.evidence.requirement_contracts import EvidenceRequirement
 from app.contracts.planning.intent_graph import PlanningIntentGraph
 from app.contracts.planning.task_graph import PlanningTaskGraph
 from app.contracts.spatial.spatial_reference_contracts import SpatialReferenceSpec
+from app.contracts.planning.p1_closure import GroundingRequest, PhysicalProjectAssembly
 from app.contracts.workflow.parse_contracts import SpatialPlanningIntent
 
 
@@ -67,6 +68,9 @@ class IntentCompilationResult(ContractMeta):
     intent_graph: PlanningIntentGraph | None = None
     planning_task_graph: PlanningTaskGraph | None = None
     evidence_requirements: list[EvidenceRequirement] = Field(default_factory=list)
+    physical_projects: PhysicalProjectAssembly | None = None
+    grounding_requests: list[GroundingRequest] = Field(default_factory=list)
+    pending_grounding_requests: list[GroundingRequest] = Field(default_factory=list)
 
 
 __all__ = [

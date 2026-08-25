@@ -33,6 +33,7 @@ class PlanningIntervention(BaseModel):
     target_id: str = ""
     planning_role: PlanningRole = "evidence_statement"
     project_package_ref: str = ""
+    variant_key: str = ""
     admission_reason: str = ""
     execution_mode: Literal["spatial", "non_spatial"]
     expected_output_kind: Literal["parcel", "polygon", "point", "line", "action"]

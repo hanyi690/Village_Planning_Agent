@@ -421,14 +421,14 @@ async def ground_node(state: Dict[str, Any]) -> Dict[str, Any]:
         _to_typed(item, SpatialReferenceSpec)
         for item in (getattr(compilation, "spatial_reference_specs", None) or [])
     ]
-    pending_grounding_specs = [
-        _to_typed(item, SpatialReferenceSpec)
-        for item in (getattr(compilation, "pending_grounding_specs", None) or [])
-    ]
-    # Pending spatial claims are not formal projection specs, but they are
-    # typed GROUND work items.  Keep them separate for audit while executing
-    # them through the same resolver/aggregate path exactly once.
-    grounding_specs = [*specs, *pending_grounding_specs]
+    # Pending requests remain audit/HUMAN work and never enter formal GROUND
+    # resolution, so they cannot create executable candidates.
+    grounding_specs = list(specs)
+    if getattr(compilation, "pending_grounding_requests", None):
+        logger.info(
+            "[workflow:ground] parked pending grounding requests=%d",
+            len(compilation.pending_grounding_requests),
+        )
 
     # GROUND may derive additional anchors for its local grounding computation,
     # but TARGET_PROJECTION remains immutable.  Grounding facts belong in the
@@ -509,6 +509,12 @@ async def ground_node(state: Dict[str, Any]) -> Dict[str, Any]:
         target_metadata=target_metadata,
         evidence_packets=evidence_packets,
         ground_llm_budget=ground_llm_budget,
+    )
+    result.grounding_requests = list(
+        getattr(compilation, "grounding_requests", None) or []
+    )
+    result.pending_grounding_requests = list(
+        getattr(compilation, "pending_grounding_requests", None) or []
     )
     if packet_diagnostics:
         from app.contracts.spatial.grounding_contracts import SpatialQueryEvidence

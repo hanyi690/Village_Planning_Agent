@@ -66,11 +66,15 @@ class SpatialReferenceSpec(BaseModel):
     target_id: str = ""
     spec_id: str = ""
     project_ref: Optional[str] = None
+    physical_project_ref: str = ""
+    component_claim_refs: list[str] = Field(default_factory=list)
+    component_fact_refs: list[str] = Field(default_factory=list)
     unresolved_reason: str = ""
     source_binding_ref: str = ""
     source_collection_key: str = ""
     source_snapshot_ref: str = ""
     source_feature_digest: str = ""
+    source_snapshot_digest: str = ""
     l1_fact_refs: list[str] = Field(default_factory=list)
     # Preserve target materialization semantics across the PARSE -> GROUND
     # boundary.  Spatial resolution is geometry-only, but GROUND must not

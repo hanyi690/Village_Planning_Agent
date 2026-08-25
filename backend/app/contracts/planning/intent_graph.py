@@ -112,6 +112,10 @@ class PlanRelationIntent(BaseModel):
     parameter_status: Literal["provided", "missing", "invalid", "not_required"] = "missing"
     source_claim_refs: list[str] = Field(default_factory=list)
     source_binding_refs: list[str] = Field(default_factory=list)
+    source_snapshot_refs: list[str] = Field(default_factory=list)
+    evaluator_key: str = ""
+    evaluator_version: str = ""
+    required_refs: list[str] = Field(default_factory=list)
     geometry_scope: Literal["subject", "object", "pair", "network", "global"] = "pair"
     weight: float = Field(default=1.0, ge=0)
 
@@ -121,6 +125,8 @@ class PlanRelationIntent(BaseModel):
         self.claim_refs = _sorted_strings(self.claim_refs)
         self.source_claim_refs = _sorted_strings(self.source_claim_refs)
         self.source_binding_refs = _sorted_strings(self.source_binding_refs)
+        self.source_snapshot_refs = _sorted_strings(self.source_snapshot_refs)
+        self.required_refs = _sorted_strings(self.required_refs)
         if self.parameters is None:
             if self.relation_template in {
                 "contains",
