@@ -128,6 +128,17 @@ def build_solver_problem_view(
         required_refs.extend(target.evidence_refs)
 
     missing_input_refs = list(missing_input_refs)
+    for satisfaction in list(getattr(problem, "relation_satisfaction", None) or []):
+        status = str(getattr(satisfaction, "status", "unknown") or "unknown").strip()
+        criticality = str(getattr(satisfaction, "criticality", "soft") or "soft").strip()
+        relation_id = str(getattr(satisfaction, "relation_id", "") or "").strip()
+        if (
+            criticality == "hard"
+            and status in {"pending", "deferred", "not_evaluable", "unknown"}
+        ):
+            missing_input_refs.append(
+                f"missing:relation_satisfaction:{relation_id or 'unknown'}:{status}"
+            )
     if kind in {"coverage", "network_path"}:
         context_networks = getattr(evaluator_context, "networks", None) or {}
         if not network_refs:

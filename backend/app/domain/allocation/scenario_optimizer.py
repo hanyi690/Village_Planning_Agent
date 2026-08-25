@@ -21,6 +21,7 @@ from app.contracts.planning.scenario import (
     ScenarioFinding,
     ScenarioSet,
     ScenarioTargetSelection,
+    SolverConflictGroup,
     SolverCertificate,
     derive_backend_selection_digest,
     derive_solver_model_digest,
@@ -33,6 +34,7 @@ from .scenario_solver import (
     _SEARCH_LIMIT,
     _bounded_choice_product,
     _candidate_score,
+    _candidate_is_selectable,
     _choices_with_diagnostics,
     _evaluate_assignment,
     _finding,
@@ -119,6 +121,116 @@ def _grounding_explanations(problem: GroundedPlanningProblem) -> list[str]:
     return list(dict.fromkeys(explanations))
 
 
+def _solver_assumption_groups(
+    problem: GroundedPlanningProblem,
+    *,
+    explanation: str,
+) -> tuple[list[str], list[SolverConflictGroup]]:
+    """Build replayable typed assumptions for a complete-model proof.
+
+    These are deliberately derived from the closed GROUND model rather than
+    from diagnostic text.  A backend may return a sufficient core (not
+    necessarily a minimal core), but every member must still be a real model
+    reference that an independent verifier can replay.
+    """
+
+    groups: list[SolverConflictGroup] = []
+    for domain in sorted(problem.candidate_domains, key=lambda item: item.target_id):
+        refs = [
+            f"target:{domain.target_id}",
+            *list(domain.candidate_geometry_refs),
+            *list(domain.candidate_ids),
+        ]
+        groups.append(SolverConflictGroup(
+            group_id=f"selection_domain:{domain.target_id}",
+            assumption_refs=refs,
+            explanation=(
+                f"the complete candidate domain for {domain.target_id} was exhausted"
+            ),
+        ))
+    for factor in sorted(
+        problem.constraint_factors,
+        key=lambda item: str(getattr(item, "factor_id", "")),
+    ):
+        factor_id = str(getattr(factor, "factor_id", "") or "").strip()
+        if not factor_id:
+            continue
+        groups.append(SolverConflictGroup(
+            group_id=f"constraint:{factor_id}",
+            assumption_refs=[
+                factor_id,
+                *list(getattr(factor, "evidence_refs", None) or []),
+            ],
+            explanation=(
+                f"constraint {factor_id} rejected every enumerated assignment"
+            ),
+        ))
+    pool = getattr(problem, "parcel_resource_pool", None)
+    if pool is not None:
+        pool_refs = [str(getattr(pool, "pool_id", "") or "").strip()]
+        pool_refs.extend(
+            str(getattr(resource, field, "") or "").strip()
+            for resource in list(getattr(pool, "resources", None) or [])
+            for field in ("resource_id", "bsm", "geometry_ref")
+        )
+        groups.append(SolverConflictGroup(
+            group_id=f"resource_pool:{pool.pool_id}",
+            assumption_refs=pool_refs,
+            explanation="shared resource capacity rejected every enumerated assignment",
+        ))
+    groups = [
+        group
+        for group in groups
+        if group.assumption_refs
+    ]
+    assumptions = sorted({
+        ref
+        for group in groups
+        for ref in group.assumption_refs
+        if str(ref).strip()
+    })
+    if not groups:
+        fallback = f"model:{problem.fingerprint}"
+        assumptions = [fallback]
+        groups = [SolverConflictGroup(
+            group_id="complete_model",
+            assumption_refs=[fallback],
+            explanation=explanation or "the complete typed model has no feasible assignment",
+        )]
+    return assumptions, groups
+
+
+def _selection_domain_is_uncertain(problem: GroundedPlanningProblem) -> bool:
+    """Detect candidate rows that are not closed enough for an unsat claim."""
+
+    geometries = {
+        item.candidate_id: item
+        for item in problem.candidate_geometries
+    }
+    for domain in problem.candidate_domains:
+        candidates = [
+            geometries[candidate_id]
+            for candidate_id in domain.candidate_ids
+            if candidate_id in geometries
+        ]
+        if not candidates or any(_candidate_is_selectable(item) for item in candidates):
+            continue
+        for candidate in candidates:
+            hard_status = str(
+                getattr(candidate, "hard_constraint_status", "pending")
+                or "pending"
+            )
+            if hard_status in {"pending", "deferred", "unknown"}:
+                return True
+            if not bool(getattr(candidate, "is_executable", False)):
+                return True
+            if str(getattr(candidate, "role", "") or "") == "scope_geometry":
+                return True
+            if str(getattr(candidate, "uncertainty_reason", "") or "").strip():
+                return True
+    return False
+
+
 def _recommendation_policy(
     definitions: Sequence[ObjectiveDefinition],
 ) -> str:
@@ -197,7 +309,7 @@ def _make_scenario(
     inspected: int,
     spatial_conflicts: list[tuple[str, str, str]],
     objective_definitions: Sequence[ObjectiveDefinition],
-) -> tuple[PlanningScenario, dict[str, float], bool]:
+) -> tuple[PlanningScenario, dict[str, float], bool, bool]:
     candidates = {item.candidate_id: item for item in problem.candidate_geometries}
     features, satisfactions = _evaluate_assignment(
         problem,
@@ -207,6 +319,11 @@ def _make_scenario(
     )
     hard_violated = any(
         item.criticality == "hard" and item.status == "violated"
+        for item in satisfactions
+    )
+    hard_relation_uncertain = any(
+        item.criticality == "hard"
+        and item.status in {"pending", "deferred", "not_evaluable", "unknown"}
         for item in satisfactions
     )
     hard_unresolved = any(hard_relation_blocked(item) for item in satisfactions)
@@ -346,7 +463,12 @@ def _make_scenario(
         # and metrics instead of leaving a stale canonical digest.
         scenario_payload["fingerprint"] = ""
         scenario = PlanningScenario.model_validate(scenario_payload)
-    return scenario, objective_vector, status == "complete"
+    return (
+        scenario,
+        objective_vector,
+        status == "complete",
+        hard_relation_uncertain or bool(missing_objectives),
+    )
 
 
 def _dominates(
@@ -412,7 +534,7 @@ def _pareto_ids(
 def _build_solver_certificate(
     *,
     problem: GroundedPlanningProblem,
-    legacy_model_digest: str,
+    model_digest: str,
     deterministic_seed: int,
     search_limit: int,
     status: str,
@@ -423,10 +545,17 @@ def _build_solver_certificate(
     backend_route: dict[str, Any] | None = None,
     selected_candidate_ids: dict[str, list[str]] | None = None,
     route_refs: list[str] | None = None,
+    proof_kind: str | None = None,
+    solver_invoked: bool = False,
+    input_closed: bool = False,
+    enumeration_complete: bool = False,
+    assumption_refs: list[str] | None = None,
+    infeasibility_core_refs: list[str] | None = None,
+    conflict_groups: list[SolverConflictGroup] | None = None,
 ) -> SolverCertificate:
     payload: dict[str, Any] = {
         "problem_fingerprint": problem.fingerprint,
-        "model_digest": legacy_model_digest,
+        "model_digest": model_digest,
         "solver_version": "scenario-optimizer-v1",
         "deterministic_seed": deterministic_seed,
         "search_limit": search_limit,
@@ -435,8 +564,36 @@ def _build_solver_certificate(
         "status": status,
         "termination_reason": termination_reason,
         "conflict_explanations": list(conflict_explanations or []),
+        "solver_invoked": solver_invoked,
+        "input_closed": input_closed,
+        "enumeration_complete": enumeration_complete,
+        "proof_kind": proof_kind or {
+            "feasible": "feasible_witness",
+            "bounded": "bounded_search",
+            "infeasible": "infeasibility_core",
+        }.get(status, "unknown"),
     }
     if backend_route:
+        effective_proof_kind = proof_kind or {
+            "feasible": "feasible_witness",
+            "bounded": "bounded_search",
+            "infeasible": "infeasibility_core",
+        }.get(status, "unknown")
+        effective_assumptions = list(assumption_refs or [])
+        effective_core = list(infeasibility_core_refs or [])
+        effective_groups = list(conflict_groups or [])
+        if status == "infeasible":
+            if not problem.can_solve:
+                raise ValueError(
+                    "an incomplete grounded problem cannot produce an infeasibility proof"
+                )
+            if not effective_assumptions or not effective_groups:
+                effective_assumptions, effective_groups = _solver_assumption_groups(
+                    problem,
+                    explanation=termination_reason,
+                )
+            if not effective_core:
+                effective_core = list(effective_assumptions)
         selected_ids = {
             str(target_id): sorted(set(candidate_ids))
             for target_id, candidate_ids in sorted(
@@ -455,6 +612,13 @@ def _build_solver_certificate(
             ),
             status=status,
             termination_reason=termination_reason,
+            proof_kind=effective_proof_kind,
+            solver_invoked=solver_invoked,
+            input_closed=input_closed,
+            enumeration_complete=enumeration_complete,
+            assumption_refs=effective_assumptions,
+            infeasibility_core_refs=effective_core,
+            conflict_groups=effective_groups,
         )
         payload.update(
             {
@@ -500,7 +664,10 @@ def _optimize_scenarios_enumeration(
     # review and partial delivery.  Enumerate those rows, but keep the
     # completeness gate authoritative: only complete rows become feasible or
     # recommended scenarios.
-    grounding_incomplete = not problem.can_solve
+    grounding_incomplete = (
+        not problem.can_solve
+        or _selection_domain_is_uncertain(problem)
+    )
 
     if search_limit < 1:
         raise ValueError("search_limit must be >= 1")
@@ -523,12 +690,19 @@ def _optimize_scenarios_enumeration(
                 separators=(",", ":"),
             ).encode("utf-8")
         ).hexdigest()
+        certificate_status = "unknown" if grounding_incomplete else "infeasible"
+        backend_id = str((backend_route or {}).get("backend_id", "") or "")
+        solver_route_invoked = backend_id not in {
+            "",
+            "diagnostic_grounding_gate",
+            "unresolved",
+        }
         certificate = _build_solver_certificate(
             problem=problem,
-            legacy_model_digest=model_digest,
+            model_digest=model_digest,
             deterministic_seed=deterministic_seed,
             search_limit=search_limit,
-            status="infeasible",
+            status=certificate_status,
             termination_reason=reason,
             conflict_explanations=[
                 reason,
@@ -537,6 +711,12 @@ def _optimize_scenarios_enumeration(
                 *_grounding_explanations(problem),
             ],
             backend_route=backend_route,
+            solver_invoked=solver_route_invoked,
+            input_closed=not grounding_incomplete,
+            enumeration_complete=(
+                not grounding_incomplete
+                and certificate_status == "infeasible"
+            ),
         )
         return ScenarioSet(
             set_id=set_id,
@@ -554,7 +734,7 @@ def _optimize_scenarios_enumeration(
         )
 
     candidates = {item.candidate_id: item for item in problem.candidate_geometries}
-    rows: list[tuple[PlanningScenario, dict[str, float], bool]] = []
+    rows: list[tuple[PlanningScenario, dict[str, float], bool, bool]] = []
     selection_rejections: list[str] = []
     inspected = 0
     total_combinations = 1
@@ -575,7 +755,7 @@ def _optimize_scenarios_enumeration(
                 if rejection:
                     selection_rejections.append(str(rejection))
                 continue
-        scenario, vector, complete = _make_scenario(
+        scenario, vector, complete, relation_uncertain = _make_scenario(
             problem,
             selected,
             scenario_id=_scenario_id(set_id, selected),
@@ -585,7 +765,7 @@ def _optimize_scenarios_enumeration(
             spatial_conflicts=conflicts,
             objective_definitions=definitions,
         )
-        rows.append((scenario, vector, complete))
+        rows.append((scenario, vector, complete, relation_uncertain))
 
     ranked_rows = sorted(
         rows,
@@ -646,10 +826,15 @@ def _optimize_scenarios_enumeration(
             f"OUTPUT_SCENARIO_LIMIT: limited to max_scenarios={max_scenarios}; "
             f"non-Pareto alternatives omitted from returned set"
         )
+    relation_uncertain = any(row[3] for row in rows)
     status = (
-        "bounded"
-        if bounded or pareto_output_bounded or output_truncated
-        else ("feasible" if feasible_ids else "infeasible")
+        "unknown"
+        if grounding_incomplete or (relation_uncertain and not feasible_ids)
+        else (
+            "bounded"
+            if bounded or pareto_output_bounded or output_truncated
+            else ("feasible" if feasible_ids else "infeasible")
+        )
     )
     model_payload = {
         "problem_fingerprint": problem.fingerprint,
@@ -683,15 +868,19 @@ def _optimize_scenarios_enumeration(
             "grounding completeness gate did not pass; provisional scenarios only"
             if grounding_incomplete and not feasible_ids
             else (
-                "at least one hard-feasible scenario"
-                if feasible_ids
-                else "all combinations infeasible"
+                "hard relation evaluation remained deferred or not evaluable"
+                if relation_uncertain and not feasible_ids
+                else (
+                    "at least one hard-feasible scenario"
+                    if feasible_ids
+                    else "all combinations infeasible"
+                )
             )
         )
     )
     certificate = _build_solver_certificate(
         problem=problem,
-        legacy_model_digest=model_digest,
+        model_digest=model_digest,
         deterministic_seed=deterministic_seed,
         search_limit=search_limit,
         combinations_inspected=inspected,
@@ -700,6 +889,14 @@ def _optimize_scenarios_enumeration(
         termination_reason=termination_reason,
         conflict_explanations=conflict_explanations,
         backend_route=backend_route,
+        solver_invoked=str((backend_route or {}).get("backend_id", "") or "")
+        not in {"", "diagnostic_grounding_gate", "unresolved"},
+        input_closed=not grounding_incomplete,
+        enumeration_complete=(
+            not grounding_incomplete
+            and not relation_uncertain
+            and not (bounded or pareto_output_bounded or output_truncated)
+        ),
         selected_candidate_ids=(
             {
                 selection.target_id: list(selection.candidate_ids)
@@ -794,7 +991,7 @@ def _unsupported_backend_result(
     )
     certificate = _build_solver_certificate(
         problem=problem,
-        legacy_model_digest=model_digest,
+        model_digest=model_digest,
         deterministic_seed=deterministic_seed,
         search_limit=search_limit,
         status="unknown",

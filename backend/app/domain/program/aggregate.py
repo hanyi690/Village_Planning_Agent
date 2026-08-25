@@ -12,19 +12,20 @@ from typing import Any
 
 from app.domain.common.context_guard import require_frozen_context
 from app.infrastructure.artifacts.runtime import store_artifact
-from app.contracts.program import PlanningClaimSet
+from app.contracts.program import PlanningClaim, PlanningClaimSet
 from app.domain.program.claim_adapter import (
     canonical_package_intervention_id,
+    classify_claims,
     compact_interventions,
-    interventions_from_claims,
 )
 from app.domain.program.assembler import assemble_planning_program
 from app.infrastructure.artifacts import ContentAddressedArtifactRepository
-from app.contracts.artifacts.artifact_descriptor import ArtifactDescriptor
+from app.contracts.artifacts.ref import ArtifactRef as ArtifactDescriptor
 from app.contracts.evidence.evidence_contracts import EvidenceSource
 from app.contracts.domain.l1_contracts import EvidenceGap, L1Snapshot
 from app.contracts.domain.l2_contracts import L2Strategy
 from app.contracts.domain.l3_contracts import (
+    ClaimDisposition,
     InterventionDependency,
     L3ProgramFragment,
     PlanningIntervention,
@@ -44,7 +45,7 @@ logger = get_logger(__name__)
 
 
 def _claim_diagnostic_issue(dimension_key: str, diagnostic: Any) -> ProgramIssue:
-    """Preserve typed normalization severity; migrate legacy string reports."""
+    """Preserve the severity encoded by the current claim contract."""
     message = str(diagnostic or "").strip()
     severity = "info"
     code = "claim_set_diagnostic_audit"
@@ -60,16 +61,8 @@ def _claim_diagnostic_issue(dimension_key: str, diagnostic: Any) -> ProgramIssue
         severity = typed_severity
         break
     else:
-        # Compatibility for claim sets persisted before diagnostics became
-        # severity-prefixed.  Provider absence is a real missing dimension;
-        # free-form generation notes and successful normalizations are audit
-        # records, not execution blockers.
-        if message == "provider returned no structured claim set":
-            severity = "error"
-            code = "provider_structured_claim_set_missing"
-        else:
-            severity = "warning"
-            code = "legacy_claim_set_diagnostic"
+        severity = "warning"
+        code = "claim_set_diagnostic_untyped"
     return ProgramIssue(
         stage="l3",
         dimension_key=dimension_key,
@@ -145,11 +138,152 @@ def _dedup_program_issues(items: list[ProgramIssue]) -> list[ProgramIssue]:
     return out
 
 
+def _canonical_claims(
+    fragments: list[L3ProgramFragment],
+) -> tuple[list[PlanningClaim], list[ProgramIssue], list[str], set[str]]:
+    """Keep one authoritative occurrence for each claim id.
+
+    A claim id is the accounting key shared by L3, TARGET_PROJECTION and the
+    review UI.  Repeating it in two dimension reports must therefore be
+    visible as a merge decision rather than creating two competing
+    dispositions (or silently letting the last claim win in a dictionary).
+    The first occurrence remains authoritative; its full source lineage is
+    preserved and the duplicate is recorded as an auditable omission/issue.
+    """
+    claims: list[PlanningClaim] = []
+    by_id: dict[str, PlanningClaim] = {}
+    issues: list[ProgramIssue] = []
+    omissions: list[str] = []
+    duplicate_ids: set[str] = set()
+    for fragment in fragments:
+        for claim in fragment.claims or []:
+            claim_id = str(claim.claim_id or "").strip()
+            if not claim_id:
+                # PlanningClaim requires an id, but keep this guard at the
+                # aggregation boundary if a future adapter loosens that
+                # contract.
+                issues.append(
+                    ProgramIssue(
+                        stage="l3",
+                        dimension_key=fragment.dimension_key,
+                        severity="error",
+                        code="claim_id_missing",
+                        message="L3 claim has no stable claim_id and cannot be accounted for",
+                        reason="claim_id is the cross-stage accounting key",
+                    )
+                )
+                omissions.append(f"claim_without_id:{fragment.dimension_key}")
+                continue
+            previous = by_id.get(claim_id)
+            if previous is None:
+                by_id[claim_id] = claim
+                claims.append(claim)
+                continue
+            duplicate_ids.add(claim_id)
+            same_semantics = previous.model_dump(
+                mode="json", exclude={"dimension_key"}
+            ) == claim.model_dump(mode="json", exclude={"dimension_key"})
+            severity = "warning" if same_semantics else "error"
+            code = "duplicate_claim_id" if same_semantics else "conflicting_duplicate_claim_id"
+            message = (
+                f"claim {claim_id} appears in multiple L3 dimensions; "
+                "the first occurrence remains authoritative"
+            )
+            issues.append(
+                ProgramIssue(
+                    stage="l3",
+                    dimension_key=fragment.dimension_key,
+                    claim_id=claim_id,
+                    claim_ids=[claim_id],
+                    dimension_keys=sorted({previous.dimension_key, claim.dimension_key}),
+                    severity=severity,
+                    code=code,
+                    message=message,
+                    detail=(
+                        "duplicate has identical semantic payload"
+                        if same_semantics
+                        else "duplicate carries a conflicting semantic payload"
+                    ),
+                    reason="claim ids must be unique across dimension fragments",
+                )
+            )
+            omissions.append(f"duplicate_claim:{claim_id}:{fragment.dimension_key}")
+    return claims, issues, omissions, duplicate_ids
+
+
+def _canonical_dispositions(
+    claims: list[PlanningClaim],
+    dispositions: list[ClaimDisposition],
+    *,
+    duplicate_ids: set[str],
+) -> tuple[list[ClaimDisposition], list[ProgramIssue]]:
+    """Enforce exactly one disposition for every canonical claim occurrence."""
+    by_id: dict[str, ClaimDisposition] = {}
+    issues: list[ProgramIssue] = []
+    for disposition in dispositions:
+        claim_id = str(disposition.claim_id or "").strip()
+        if not claim_id:
+            continue
+        if claim_id in by_id:
+            issues.append(
+                ProgramIssue(
+                    stage="l3",
+                    dimension_key=disposition.dimension_key,
+                    claim_id=claim_id,
+                    claim_ids=[claim_id],
+                    severity="error",
+                    code="duplicate_claim_disposition",
+                    message=f"claim {claim_id} produced more than one disposition",
+                    reason="one disposition is required per canonical claim id",
+                )
+            )
+            continue
+        by_id[claim_id] = disposition
+
+    canonical: list[ClaimDisposition] = []
+    for claim in claims:
+        claim_id = str(claim.claim_id or "").strip()
+        disposition = by_id.get(claim_id)
+        if disposition is None:
+            disposition = ClaimDisposition(
+                claim_id=claim_id,
+                dimension_key=claim.dimension_key,
+                status="invalid",
+                reason="claim disposition was not produced by L3 accounting",
+            )
+            issues.append(
+                ProgramIssue(
+                    stage="l3",
+                    dimension_key=claim.dimension_key,
+                    claim_id=claim_id,
+                    claim_ids=[claim_id],
+                    severity="error",
+                    code="claim_disposition_missing",
+                    message=f"claim {claim_id} has no L3 disposition",
+                    reason="every canonical claim must be admitted, pending, deferred, merged, or invalid",
+                )
+            )
+        if claim_id in duplicate_ids:
+            disposition = disposition.model_copy(
+                update={
+                    "status": "merged_duplicate",
+                    "reason": (
+                        f"duplicate claim id merged; authoritative disposition was: "
+                        f"{disposition.reason}"
+                    ),
+                }
+            )
+        canonical.append(disposition)
+    return canonical, issues
+
+
 def merge_program_fragments(
     fragments: list[L3ProgramFragment],
     run_id: str,
 ) -> PlanningProgram:
     interventions: list[PlanningIntervention] = []
+    pending_grounding_claims: list[PlanningClaim] = []
+    claim_dispositions: list[ClaimDisposition] = []
     dependencies: list[InterventionDependency] = []
     omissions: list[str] = []
     evidence_gaps: list[EvidenceGap] = []
@@ -157,8 +291,14 @@ def merge_program_fragments(
     dimension_provenance: list[Provenance] = []
     source_refs: list[str] = []
 
+    canonical_claims, claim_identity_issues, claim_omissions, duplicate_ids = _canonical_claims(fragments)
+    canonical_claim_by_id = {claim.claim_id: claim for claim in canonical_claims}
     for frag in fragments:
-        claims = list(frag.claims or [])
+        claims = [
+            claim
+            for claim in (frag.claims or [])
+            if canonical_claim_by_id.get(claim.claim_id) is claim
+        ]
         if frag.interventions:
             for direct in frag.interventions:
                 program_issues.append(
@@ -175,13 +315,13 @@ def merge_program_fragments(
                         reason="direct intervention authority is disabled",
                     )
                 )
-        interventions.extend(
-            interventions_from_claims(
-                claims,
-                dimension_key=frag.dimension_key,
-                issues=program_issues,
-            )
+        classified_interventions, pending_claims, dispositions, classification_issues = (
+            classify_claims(claims, dimension_key=frag.dimension_key)
         )
+        interventions.extend(classified_interventions)
+        pending_grounding_claims.extend(pending_claims)
+        claim_dispositions.extend(dispositions)
+        program_issues.extend(classification_issues)
         dependencies.extend(frag.dependencies)
         omissions.extend(frag.omissions)
         evidence_gaps.extend(frag.evidence_gaps)
@@ -198,6 +338,15 @@ def merge_program_fragments(
                 trace=[f"fragment:{frag.dimension_key}"],
             )
         )
+
+    program_issues.extend(claim_identity_issues)
+    omissions.extend(claim_omissions)
+    claim_dispositions, disposition_issues = _canonical_dispositions(
+        canonical_claims,
+        claim_dispositions,
+        duplicate_ids=duplicate_ids,
+    )
+    program_issues.extend(disposition_issues)
 
     original_ids = {
         item.intervention_id: (
@@ -238,8 +387,10 @@ def merge_program_fragments(
         evidence_gaps=_dedup_by_id(evidence_gaps, id_attr="gap_id"),
         program_issues=_dedup_program_issues(program_issues),
         dimension_provenance=dimension_provenance,
-        claims=[claim for frag in fragments for claim in (frag.claims or [])],
+        claims=canonical_claims,
     )
+    program.pending_grounding_claims = pending_grounding_claims
+    program.claim_dispositions = claim_dispositions
     from app.evidence.retrieval.requirements import requirements_from_l3
 
     program.evidence_requirements = list(requirements_from_l3(program))
@@ -386,23 +537,7 @@ async def l3_aggregate(
                 program_issues=[
                     _claim_diagnostic_issue(dim_key, diagnostic)
                     for diagnostic in claim_set.diagnostics
-                ]
-                + (
-                    [
-                        ProgramIssue(
-                            stage="l3",
-                            dimension_key=dim_key,
-                            severity="error",
-                            code="legacy_claim_schema_requires_recompile",
-                            message=(
-                                "PlanningClaimSet v1 lacks typed object semantics; "
-                                "rerun this L3 dimension with schema v2"
-                            ),
-                        )
-                    ]
-                    if claim_set.schema_version == "1.0"
-                    else []
-                ),
+                ],
                 provenance=Provenance(
                     source=report_id,
                     run_id=run_id,

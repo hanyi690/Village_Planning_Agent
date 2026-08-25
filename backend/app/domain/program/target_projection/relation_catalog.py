@@ -98,6 +98,26 @@ RELATION_CATALOG: dict[str, RelationTemplateSpec] = {
         frozenset({"target"}), frozenset({"precedes"}),
         "execution.precedes", "hard", "global",
     ),
+    "contains": RelationTemplateSpec(
+        "contains", _SPATIAL_TARGETS, _SPATIAL_TARGETS,
+        _ANY_OBJECT, frozenset({"empty"}), "geometry.contains", "hard", "pair",
+    ),
+    "located_in": RelationTemplateSpec(
+        "located_in", _SPATIAL_TARGETS, _SPATIAL_TARGETS,
+        _ANY_OBJECT, frozenset({"empty"}), "geometry.within", "hard", "pair",
+    ),
+    "adjacent_to": RelationTemplateSpec(
+        "adjacent_to", _SPATIAL_TARGETS, _SPATIAL_TARGETS,
+        _ANY_OBJECT, frozenset({"empty"}), "geometry.adjacent", "soft", "pair",
+    ),
+    "intersects": RelationTemplateSpec(
+        "intersects", _SPATIAL_TARGETS, _SPATIAL_TARGETS,
+        _ANY_OBJECT, frozenset({"empty"}), "geometry.intersects", "hard", "pair",
+    ),
+    "overlaps": RelationTemplateSpec(
+        "overlaps", _SPATIAL_TARGETS, _SPATIAL_TARGETS,
+        _ANY_OBJECT, frozenset({"empty"}), "geometry.overlaps", "soft", "pair",
+    ),
 }
 
 

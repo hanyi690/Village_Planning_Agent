@@ -19,7 +19,7 @@ import uuid
 from dataclasses import asdict
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, Iterable, List
 
 from langchain_core.messages import AIMessage
 
@@ -28,9 +28,6 @@ from app.contracts.events import SSEEventType
 from app.core.settings import LLM_STREAM_TIMEOUT
 from app.infrastructure.logging import get_logger
 from app.infrastructure.llm.dimension_runtime import (
-    enrich_summary_background,
-    generate_summary,
-    generate_summary_regex,
     load_layered_dependency_reports,
     publish_dimension_complete,
     publish_dimension_delta,
@@ -47,13 +44,22 @@ from app.infrastructure.llm.dimension_runtime import (
 )
 from app.infrastructure.llm.prompts.detailed import get_dimension_prompt as get_layer3_prompt
 from app.contracts.program import PlanningClaimSet
-from app.infrastructure.tasks.task_supervisor import build_summary_task_key
 
 logger = get_logger(__name__)
 
 
 class L3ReportBodyEmptyError(ValueError):
     """Provider returned executable claims but no human-facing report body."""
+
+
+def _claim_lineage_present(claim: Any) -> bool:
+    """Return whether a claim carries any declared source lineage."""
+
+    return bool(
+        getattr(claim, "evidence_refs", None)
+        or getattr(claim, "source_fact_refs", None)
+        or getattr(claim, "source_refs", None)
+    )
 
 
 def _require_l3_report_body(value: Any) -> str:
@@ -187,11 +193,39 @@ def _build_revision_completed(state: Dict[str, Any], dim_key: str) -> Dict[int, 
     return result
 
 
+def _l3_source_dimensions(cfg: Any, dimension_key: str) -> set[str]:
+    """Return the typed L1 dimensions that may support one L3 dimension."""
+
+    configured = getattr(cfg, "layer_depends_on", ()) or ()
+    return {
+        str(value).strip()
+        for value in configured
+        if str(value).strip()
+    } | {str(dimension_key or "").strip(), "location", "spatial", ""}
+
+
+def _bounded_prompt_attributes(value: Any) -> dict[str, str]:
+    """Keep prompt attributes useful without letting one fact consume context."""
+
+    if not isinstance(value, dict):
+        return {}
+    rows: dict[str, str] = {}
+    for key in sorted(value, key=lambda item: str(item))[:8]:
+        item = value[key]
+        if isinstance(item, (dict, list, tuple, set)):
+            item = json.dumps(item, ensure_ascii=False, default=str)
+        text = str(item or "").strip()
+        if text:
+            rows[str(key)] = text[:180]
+    return rows
+
+
 def _typed_l1_fact_evidence(
     state: Dict[str, Any],
     dimension_key: str,
     *,
     location_only: bool = False,
+    source_dimensions: Iterable[str] | None = None,
 ) -> str:
     """Render bounded typed L1 facts for the L3 prompt.
 
@@ -211,7 +245,11 @@ def _typed_l1_fact_evidence(
     if context is None:
         return "（当前上下文没有可用的 L1 spatial evidence；不得据此创建空间 claim。）"
 
-    allowed_dimensions = {dimension_key, "location", "spatial", ""}
+    allowed_dimensions = {
+        str(value).strip()
+        for value in (source_dimensions or (dimension_key, "location", "spatial", ""))
+        if str(value).strip() or value == ""
+    }
     if location_only:
         rows: list[dict[str, Any]] = []
         for item in list(getattr(context, "location_facts", []) or []):
@@ -226,6 +264,7 @@ def _typed_l1_fact_evidence(
                 "mention": mention,
                 "normalized_name": normalized_name,
                 "role": str(getattr(item, "role", "") or ""),
+                "dimension_key": fact_dimension,
                 "spatial_hint": str(getattr(item, "spatial_hint", "") or ""),
                 "related_mentions": list(getattr(item, "related_mentions", []) or []),
                 "evidence_refs": list(getattr(item, "evidence_refs", []) or []),
@@ -250,11 +289,25 @@ def _typed_l1_fact_evidence(
             continue
         facts.append(fact)
 
-    # Prefer facts that can be joined to bundle geometry, then facts in the
-    # current dimension.  This is a stable typed ordering, not a text score.
+    source_dimension_order = {
+        str(value): index
+        for index, value in enumerate(
+            str(value).strip()
+            for value in (source_dimensions or (dimension_key,))
+            if str(value).strip()
+        )
+    }
+    spatial_kinds = {"spatial_observation", "gis_observation", "kg_canonical_fact"}
+
+    # Prefer identity-bearing spatial facts, then configured upstream facts.
+    # This is a stable typed ordering, not a text score.
     facts.sort(key=lambda fact: (
+        0 if str(getattr(fact, "fact_kind", "") or "") in spatial_kinds else 1,
+        source_dimension_order.get(
+            str(getattr(fact, "dimension_key", "") or ""),
+            len(source_dimension_order),
+        ),
         0 if list(getattr(fact, "source_feature_ids", []) or []) else 1,
-        0 if str(getattr(fact, "dimension_key", "") or "") == dimension_key else 1,
         str(getattr(fact, "fact_id", "")),
     ))
     rows = []
@@ -266,7 +319,9 @@ def _typed_l1_fact_evidence(
             "dimension_key": str(getattr(fact, "dimension_key", "") or ""),
             "semantic_type": str(getattr(fact, "semantic_type", "") or ""),
             "subject_scope": str(getattr(fact, "subject_scope", "") or ""),
-            "attributes": dict(getattr(fact, "attributes", {}) or {}),
+            "attributes": _bounded_prompt_attributes(
+                getattr(fact, "attributes", {})
+            ),
             "source_refs": list(getattr(fact, "source_refs", []) or []),
             "source_feature_ids": list(getattr(fact, "source_feature_ids", []) or []),
             "source_snapshot_ref": str(getattr(fact, "source_snapshot_ref", "") or ""),
@@ -517,17 +572,23 @@ async def analyze_l3_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
         dim_key, dim_name, dim_layer, is_revision,
     )
 
-    # 2. RAG
-    rag_context, rag_log = await run_rag(dim_key, cfg, state)
-
     # L3 prompts consume the same typed L1 snapshot that GROUND later uses.
-    # The root bootstrap runs before L1 exists, so hydrate the persisted
-    # snapshot at the first post-L1 worker boundary instead of relying on a
-    # stale process-local context cache.  This keeps source_fact_refs usable
-    # for the planning model without exposing geometry to the prompt.
+    # Hydrate it before retrieval so the unified Evidence service can join
+    # current L1 facts, KG topology and Bundle identity in this request.
+    # Running retrieval first could query an empty cold context and then
+    # report a misleading evidence-free L3 prompt.
     from app.workflow.stages.support import _require_context
 
     await _require_context(state)
+
+    # 2. Unified typed evidence retrieval (REPORT/L1/KG/BUNDLE/RAG adapters).
+    evidence_trace: dict[str, Any] = {}
+    rag_context, rag_log = await run_rag(
+        dim_key,
+        cfg,
+        state,
+        trace_sink=evidence_trace,
+    )
 
     # 3. 从数据库加载分层依赖报告（同层 + L1/L2 跨层分开）
     store = ReportStore.get_instance()
@@ -650,7 +711,11 @@ async def analyze_l3_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
                 rejected_ids,
                 semantic_feedback[:8],
             )
-            repair_evidence = _typed_l1_fact_evidence(state, dim_key)
+            repair_evidence = _typed_l1_fact_evidence(
+                state,
+                dim_key,
+                source_dimensions=_l3_source_dimensions(cfg, dim_key),
+            )
             repair_prompt = (
                 "你是 L3 Claim 局部语义编译修复器。只返回下列失败 claim 的完整"
                 "claims 数组，不得返回 report_body、不得返回已通过 claim，不得新增、删除或改写 claim_id。"
@@ -854,7 +919,9 @@ async def analyze_l3_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
             "dimension_key": dim_key,
             "layer": dim_layer,
             "claim_count": len(claim_set.claims),
-            "claims_with_evidence": sum(bool(claim.evidence_refs) for claim in claim_set.claims),
+            "claims_with_evidence": sum(
+                _claim_lineage_present(claim) for claim in claim_set.claims
+            ),
         },
         ensure_ascii=False,
     )
@@ -917,11 +984,22 @@ async def analyze_l3_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
                 "report_id": report_id,
                 "word_count": len(llm_response),
                 "claim_count": len(claim_set.claims),
-                "claims_with_evidence": sum(bool(claim.evidence_refs) for claim in claim_set.claims),
+                "claims_with_evidence": sum(
+                    _claim_lineage_present(claim) for claim in claim_set.claims
+                ),
             },
             diagnostics={
                 "rag_sources": len(rag_log.sources) if rag_log and rag_log.rag_enabled else 0,
-                "kg_cognition": bool(explore_section),
+                "evidence_source_types": list(evidence_trace.get("source_types", [])),
+                "evidence_fact_count": int(evidence_trace.get("fact_count", 0) or 0),
+                "evidence_candidate_count": int(evidence_trace.get("candidate_count", 0) or 0),
+                "evidence_relation_count": int(evidence_trace.get("relation_count", 0) or 0),
+                "evidence_coverage_status": str(
+                    evidence_trace.get("coverage_status", "") or ""
+                ),
+                "kg_cognition": float(
+                    evidence_trace.get("kg_confidence", 0.0) or 0.0
+                ) > 0,
             },
         )
     except Exception as e:
@@ -945,22 +1023,6 @@ def _dependency_summary(text: str) -> Dict[str, Any]:
         "chars": len(display),
         "preview": display[:500],
     }
-
-
-def _l1_input_register_prompt(state: Dict[str, Any], dimension_key: str) -> str:
-    """Project the L1-owned input register without reopening raw documents."""
-    if dimension_key != "project_bank":
-        return ""
-    try:
-        from app.infrastructure.context.planning_context_factory import get_cached_context
-        from app.domain.assessment.input_register import render_l1_input_register
-
-        context = get_cached_context(str(state.get("session_id", "")))
-        return render_l1_input_register(
-            getattr(context, "l1_input_register", None) if context is not None else None
-        )
-    except Exception:
-        return "（L1 输入登记不可用；不得从其他报告或原文自行补造台账。）"
 
 
 def _build_prompt(
@@ -1022,11 +1084,25 @@ def _build_prompt(
 
     from app.domain.assessment.dimension_contracts import render_dimension_semantic_contract
 
-    spatial_fact_evidence = _typed_l1_fact_evidence(state, dim_key)
-    spatial_location_evidence = _typed_l1_fact_evidence(
-        state, dim_key, location_only=True
+    source_dimensions = _l3_source_dimensions(cfg, dim_key)
+    spatial_fact_evidence = _typed_l1_fact_evidence(
+        state,
+        dim_key,
+        source_dimensions=source_dimensions,
     )
-    l1_input_register = _l1_input_register_prompt(state, dim_key)
+    spatial_location_evidence = _typed_l1_fact_evidence(
+        state,
+        dim_key,
+        location_only=True,
+        source_dimensions=source_dimensions,
+    )
+    semantic_contract = render_dimension_semantic_contract(
+        dim_key,
+        3,
+        upstream_source_dimensions=sorted(
+            value for value in source_dimensions if value not in {"", "location", "spatial", dim_key}
+        ),
+    )
     return f"【dimension_key={dim_key}】\n" + get_layer3_prompt(
         dimension_key=dim_key,
         project_name=project_name,
@@ -1041,11 +1117,14 @@ def _build_prompt(
         constraints=constraints,
         knowledge_context=rag_context or "",
         revision_instruction=revision_instruction,
-        professional_data_section=(
-            professional_data_section
-            + explore_section
-            + "\n\n"
-            + render_dimension_semantic_contract(dim_key, 3)
+        professional_data_section=professional_data_section + explore_section,
+        semantic_contract=semantic_contract,
+        upstream_source_dimensions=", ".join(
+            sorted(
+                value
+                for value in source_dimensions
+                if value not in {"", "location", "spatial", dim_key}
+            )
         ),
         natural_villages=resolvable_villages,
         location_evidence=(
@@ -1058,7 +1137,6 @@ def _build_prompt(
             )
         ),
         dimension_plans=_compact_prompt_background(same_layer_contexts, 2200, "同层规划背景"),
-        l1_input_register=l1_input_register,
     )
 
 

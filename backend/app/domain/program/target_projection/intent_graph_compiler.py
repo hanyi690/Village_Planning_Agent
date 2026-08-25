@@ -32,6 +32,11 @@ _PARAMETER_TYPE_BY_TEMPLATE = {
     "co_locate": "co_locate",
     "mutually_exclusive": "mutually_exclusive",
     "precedes": "precedes",
+    "contains": "empty",
+    "located_in": "empty",
+    "adjacent_to": "empty",
+    "intersects": "empty",
+    "overlaps": "empty",
 }
 
 
@@ -76,6 +81,20 @@ def _node(intervention: PlanningIntervention) -> PlanTargetNode:
         or intervention.linear_parameters
         or intervention.axis_parameters
     )
+    requirements = intervention.spatial_requirements
+    locator_refs: list[str] = []
+    if isinstance(requirements, dict):
+        for key in (
+            "location_hints",
+            "affected_parcel_refs",
+            "source_feature_refs",
+            "source_fact_refs",
+        ):
+            values = requirements.get(key, [])
+            if isinstance(values, str):
+                values = [values]
+            if isinstance(values, Sequence):
+                locator_refs.extend(str(value) for value in values if str(value).strip())
     return PlanTargetNode(
         target_id=intervention.target_id or intervention.intervention_id,
         target_kind=_target_kind(intervention),
@@ -87,6 +106,7 @@ def _node(intervention: PlanningIntervention) -> PlanTargetNode:
         required_capabilities=_capabilities(intervention),
         uncompiled_constraints=list(intervention.constraints),
         endpoint_refs=list(getattr(endpoint_parameters, "connects", None) or []),
+        locator_refs=locator_refs,
     )
 
 
@@ -114,26 +134,17 @@ def _shared_resource_refs(
 def _raw_parameter_payload(template: str, item: Mapping[str, Any]) -> dict[str, Any] | None:
     raw = item.get("parameters")
     if raw is None:
-        # Flat fields are accepted only as an explicit migration shape.  The
-        # compiler never supplies a missing distance, capacity or network.
-        fields = {
-            key: value
-            for key, value in item.items()
-            if key not in {
-                "relation_template", "template", "relation_id", "subject_ref", "object_ref",
-                "object_target_id", "object_ref_kind", "criticality", "evidence_refs",
-                "claim_refs", "source", "source_claim_refs", "source_binding_refs",
-                "geometry_scope", "weight",
-            }
-        }
-        if not fields:
-            return None
-        raw = fields
+        return None
     if hasattr(raw, "model_dump"):
         return raw.model_dump(mode="python")
     if not isinstance(raw, Mapping):
         return None
     payload = dict(raw)
+    if not payload:
+        # An explicitly empty parameter object is the provider's durable
+        # representation of "this relation still needs GROUND inputs".  It
+        # is missing, not a malformed typed value.
+        return None
     payload.setdefault("parameter_type", _PARAMETER_TYPE_BY_TEMPLATE.get(template, ""))
     return payload
 
@@ -147,6 +158,8 @@ def _parse_parameters(
         return None, "invalid", "unsupported_relation_template"
     payload = _raw_parameter_payload(template, item)
     if payload is None:
+        if template in {"contains", "located_in", "adjacent_to", "intersects", "overlaps"}:
+            return _RELATION_PARAMETERS.validate_python({"parameter_type": "empty"}), "not_required", None
         return None, "missing", None
     try:
         parameters = _RELATION_PARAMETERS.validate_python(payload)
@@ -165,12 +178,12 @@ def _provenance_refs(
 ) -> tuple[list[str], list[str], list[str]]:
     observation_refs = [
         str(value)
-        for value in item.get("observation_refs", item.get("source_observation_refs", []))
+        for value in item.get("observation_refs", [])
         if str(value).strip()
     ]
     binding_refs = [
         str(value)
-        for value in item.get("source_binding_refs", item.get("binding_refs", []))
+        for value in item.get("source_binding_refs", [])
         if str(value).strip()
     ]
     evidence_refs = [str(value) for value in item.get("evidence_refs", []) if str(value).strip()]
@@ -416,15 +429,4 @@ def compile_intent_graph_v2(
     )
 
 
-def compile_planning_intent(
-    program: PlanningProgram,
-    *,
-    observations: Sequence[EvidenceObservation] | None = None,
-    bindings: Sequence[GroundedEntityBinding] | None = None,
-) -> PlanningIntentGraph:
-    """Backward-compatible name for the v2 compiler."""
-
-    return compile_intent_graph_v2(program, observations=observations, bindings=bindings)
-
-
-__all__ = ["compile_intent_graph_v2", "compile_planning_intent"]
+__all__ = ["compile_intent_graph_v2"]

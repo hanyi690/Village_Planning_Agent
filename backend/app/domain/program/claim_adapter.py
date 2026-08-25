@@ -5,10 +5,15 @@ from __future__ import annotations
 from collections import defaultdict
 import hashlib
 import json
+from collections.abc import Mapping
 from typing import Iterable
 
 from app.contracts.program import PlanningClaim
-from app.contracts.domain.l3_contracts import PlanningIntervention, ProgramIssue
+from app.contracts.domain.l3_contracts import (
+    ClaimDisposition,
+    PlanningIntervention,
+    ProgramIssue,
+)
 
 
 _PARAMETER_FIELDS = {
@@ -215,6 +220,116 @@ def _admission_reasons(claim: PlanningClaim) -> list[str]:
     return reasons
 
 
+_PENDING_REQUIREMENTS_BY_REASON = {
+    "project_package_ref is required": "project_package_ref",
+    "locator, candidate, or source-feature reference is missing": (
+        "locator_or_candidate_or_source_feature_reference"
+    ),
+    "evidence/source-fact lineage is missing": "evidence_or_source_lineage",
+}
+
+
+def classify_claims(
+    claims: list[PlanningClaim],
+    *,
+    dimension_key: str = "",
+) -> tuple[
+    list[PlanningIntervention],
+    list[PlanningClaim],
+    list[ClaimDisposition],
+    list[ProgramIssue],
+]:
+    """Account for every L3 claim without weakening strict intervention admission."""
+    interventions: list[PlanningIntervention] = []
+    pending_claims: list[PlanningClaim] = []
+    dispositions: list[ClaimDisposition] = []
+    issues: list[ProgramIssue] = []
+
+    for claim in claims:
+        effective_dimension = dimension_key or claim.dimension_key
+        if claim.planning_role != "spatial_intervention":
+            reason = f"planning_role={claim.planning_role} is evidence-only"
+            interventions_from_claims(
+                [claim],
+                dimension_key=effective_dimension,
+                issues=issues,
+            )
+            dispositions.append(
+                ClaimDisposition(
+                    claim_id=claim.claim_id,
+                    dimension_key=effective_dimension,
+                    status="deferred",
+                    reason=reason,
+                )
+            )
+            continue
+
+        reasons = _admission_reasons(claim)
+        missing_requirements = [
+            _PENDING_REQUIREMENTS_BY_REASON[reason]
+            for reason in reasons
+            if reason in _PENDING_REQUIREMENTS_BY_REASON
+        ]
+        if reasons and len(missing_requirements) == len(reasons):
+            reason = "; ".join(reasons)
+            issue_reason = (
+                f"{reason}; missing_requirements={','.join(missing_requirements)}"
+            )
+            pending_claims.append(claim)
+            dispositions.append(
+                ClaimDisposition(
+                    claim_id=claim.claim_id,
+                    dimension_key=effective_dimension,
+                    status="pending_grounding",
+                    reason=reason,
+                    missing_requirements=missing_requirements,
+                )
+            )
+            issues.append(
+                _issue(
+                    claim,
+                    "claim_grounding_pending",
+                    issue_reason,
+                    severity="warning",
+                    dimension_key=effective_dimension,
+                )
+            )
+            continue
+
+        claim_issues: list[ProgramIssue] = []
+        admitted = interventions_from_claims(
+            [claim],
+            dimension_key=effective_dimension,
+            issues=claim_issues,
+        )
+        interventions.extend(admitted)
+        issues.extend(claim_issues)
+        if admitted:
+            dispositions.append(
+                ClaimDisposition(
+                    claim_id=claim.claim_id,
+                    dimension_key=effective_dimension,
+                    status="admitted",
+                    reason="typed_spatial_claim_ready",
+                )
+            )
+            continue
+
+        reason = "; ".join(reasons) or "; ".join(
+            issue.reason or issue.detail or issue.message for issue in claim_issues
+        )
+        dispositions.append(
+            ClaimDisposition(
+                claim_id=claim.claim_id,
+                dimension_key=effective_dimension,
+                status="invalid",
+                reason=reason,
+                missing_requirements=missing_requirements,
+            )
+        )
+    return interventions, pending_claims, dispositions, issues
+
+
 def interventions_from_claims(
     claims: list[PlanningClaim],
     *,
@@ -358,6 +473,134 @@ def _merge_values(first: list[str], second: Iterable[str]) -> list[str]:
     return list(dict.fromkeys([*first, *(item for item in second if item)]))
 
 
+def _intervention_target_id(intervention: PlanningIntervention) -> str:
+    if intervention.project_package_ref and intervention.planning_role == "spatial_intervention":
+        return canonical_package_intervention_id(
+            intervention.project_package_ref,
+            intervention.category,
+            intervention.expected_output_kind,
+            intervention.asset_kind,
+            intervention.materialization_role or "",
+        )
+    return intervention.target_id or intervention.intervention_id
+
+
+def _relation_endpoint_aliases(
+    interventions: Iterable[PlanningIntervention],
+) -> dict[str, set[str]]:
+    aliases: dict[str, set[str]] = defaultdict(set)
+    for intervention in interventions:
+        target_id = _intervention_target_id(intervention)
+        if not target_id:
+            continue
+        raw_aliases = [
+            intervention.intervention_id,
+            intervention.target_id,
+            intervention.project_package_ref,
+            intervention.name,
+            *intervention.claim_refs,
+        ]
+        dimension_key = str(
+            (intervention.spatial_requirements or {}).get("admitted_dimension", "")
+            if isinstance(intervention.spatial_requirements, dict)
+            else ""
+        ).strip()
+        raw_aliases.extend(
+            f"{dimension_key}:claim:{claim_id}"
+            for claim_id in intervention.claim_refs
+            if dimension_key and claim_id
+        )
+        for alias in raw_aliases:
+            value = str(alias or "").strip()
+            if value:
+                aliases[value].add(target_id)
+    return aliases
+
+
+def _rewrite_relation_endpoints(
+    relation: Mapping[str, object],
+    *,
+    canonical_target_id: str,
+    aliases: dict[str, set[str]],
+    issues: list[ProgramIssue],
+    claim_refs: list[str],
+) -> dict[str, object]:
+    rewritten = dict(relation)
+    subject_ref = str(rewritten.get("subject_ref") or "").strip()
+    subject_targets = aliases.get(subject_ref, set())
+    if not subject_ref or canonical_target_id in subject_targets or len(subject_targets) == 1:
+        rewritten["subject_ref"] = canonical_target_id
+    elif len(subject_targets) > 1:
+        issues.append(
+            ProgramIssue(
+                stage="l3",
+                severity="warning",
+                code="relation_endpoint_alias_ambiguous",
+                claim_ids=list(claim_refs),
+                message=f"relation subject alias {subject_ref!r} maps to multiple canonical targets",
+                detail=", ".join(sorted(subject_targets)),
+                reason="the relation remains unresolved until GROUND identifies the intended target",
+            )
+        )
+
+    object_ref = str(rewritten.get("object_ref") or "").strip()
+    object_targets = aliases.get(object_ref, set())
+    if len(object_targets) == 1:
+        rewritten["object_ref"] = next(iter(object_targets))
+        rewritten["object_ref_kind"] = "target"
+    elif len(object_targets) > 1:
+        issues.append(
+            ProgramIssue(
+                stage="l3",
+                severity="warning",
+                code="relation_endpoint_alias_ambiguous",
+                claim_ids=list(claim_refs),
+                message=f"relation object alias {object_ref!r} maps to multiple canonical targets",
+                detail=", ".join(sorted(object_targets)),
+                reason="the relation remains an explicit unresolved package reference",
+            )
+        )
+    return rewritten
+
+
+def _merged_spatial_relations(
+    members: Iterable[PlanningIntervention],
+    *,
+    canonical_target_id: str,
+    aliases: dict[str, set[str]],
+    issues: list[ProgramIssue],
+    claim_refs: list[str],
+) -> list[dict[str, object]]:
+    result: list[dict[str, object]] = []
+    seen: set[str] = set()
+    for member in members:
+        requirements = member.spatial_requirements
+        if not isinstance(requirements, dict):
+            continue
+        for relation in requirements.get("relations", []) or []:
+            if not isinstance(relation, Mapping):
+                continue
+            rewritten = _rewrite_relation_endpoints(
+                relation,
+                canonical_target_id=canonical_target_id,
+                aliases=aliases,
+                issues=issues,
+                claim_refs=claim_refs,
+            )
+            relation_id = str(rewritten.get("relation_id") or "").strip()
+            key = relation_id or json.dumps(
+                rewritten,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            )
+            if key in seen:
+                continue
+            seen.add(key)
+            result.append(rewritten)
+    return result
+
+
 def compact_interventions(interventions: list[PlanningIntervention]) -> tuple[list[PlanningIntervention], list[ProgramIssue]]:
     """Compact same-package compatible members with stable IDs."""
     admitted: list[PlanningIntervention] = []
@@ -377,6 +620,7 @@ def compact_interventions(interventions: list[PlanningIntervention]) -> tuple[li
             )
         )
     interventions = admitted
+    relation_aliases = _relation_endpoint_aliases(interventions)
     groups: dict[tuple[str, str, str, str, str], list[PlanningIntervention]] = defaultdict(list)
     for intervention in interventions:
         key = (
@@ -460,6 +704,17 @@ def compact_interventions(interventions: list[PlanningIntervention]) -> tuple[li
                     list(canonical.spatial_requirements.get(field, [])),
                     member.spatial_requirements.get(field, []),
                 )
+        canonical_target_id = canonical.intervention_id
+        merged_relations = _merged_spatial_relations(
+            members,
+            canonical_target_id=canonical_target_id,
+            aliases=relation_aliases,
+            issues=issues,
+            claim_refs=list(canonical.claim_refs),
+        )
+        if merged_relations:
+            canonical.spatial_requirements = dict(canonical.spatial_requirements or {})
+            canonical.spatial_requirements["relations"] = merged_relations
         compacted.append(canonical)
     return compacted, issues
 
@@ -469,5 +724,6 @@ __all__ = [
     "compact_interventions",
     "admission_reasons_for_intervention",
     "is_admitted_intervention",
+    "classify_claims",
     "interventions_from_claims",
 ]

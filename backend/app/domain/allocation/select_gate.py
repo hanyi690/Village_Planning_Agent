@@ -11,7 +11,12 @@ from app.contracts.workflow.workflow_contracts import GateDecision, PendingReque
 STAGE = "select"
 
 
-def _pending_target_ids(problem: Any, scenario: PlanningScenario | None) -> list[str]:
+def _pending_target_ids(
+    problem: Any,
+    scenario: PlanningScenario | None,
+    solver_subproblem_plan: Any = None,
+    planning_task_graph: Any = None,
+) -> list[str]:
     """Derive target scope from typed completeness/finding facts only."""
     ids: set[str] = set()
     if problem is not None:
@@ -43,6 +48,54 @@ def _pending_target_ids(problem: Any, scenario: PlanningScenario | None) -> list
             if str(getattr(item, "severity", "warning")) != "info"
             and str(getattr(item, "target_id", "") or "").strip()
         )
+    # A target can have a resolved candidate domain and still be blocked by a
+    # typed solver prerequisite (for example a missing demand/network input),
+    # or by a hard relation whose grounding status is deferred.  These are
+    # legitimate SELECT-level deferral candidates.  They must be exposed in
+    # the same typed target scope as unresolved geometries; otherwise an
+    # unattended HUMAN approval cannot produce an auditable partial delivery.
+    if solver_subproblem_plan is not None:
+        for subproblem in getattr(solver_subproblem_plan, "subproblems", None) or ():
+            if str(getattr(subproblem, "status", "ready")) != "ready":
+                ids.update(
+                    str(target_id)
+                    for target_id in (getattr(subproblem, "target_refs", None) or ())
+                    if str(target_id).strip()
+                )
+    if planning_task_graph is not None:
+        for task in getattr(planning_task_graph, "tasks", None) or ():
+            if str(getattr(task, "status", "") or "") not in {"blocked", "failed"}:
+                continue
+            ids.update(
+                str(target_id)
+                for target_id in (getattr(task, "target_refs", None) or ())
+                if str(target_id).strip()
+            )
+    if problem is not None:
+        target_ids = {
+            str(getattr(item, "target_id", "") or "").strip()
+            for item in (
+                list(getattr(problem, "target_domains", None) or [])
+                + list(getattr(problem, "candidate_domains", None) or [])
+            )
+            if str(getattr(item, "target_id", "") or "").strip()
+        }
+        for factor in getattr(problem, "constraint_factors", None) or ():
+            if not bool(getattr(factor, "hard", False)):
+                continue
+            status = str(getattr(factor, "status", "") or "").strip().lower()
+            if status in {"satisfied", "accepted", "pass", "passed"}:
+                continue
+            subject_ref = str(getattr(factor, "subject_ref", "") or "").strip()
+            if subject_ref in target_ids:
+                ids.add(subject_ref)
+            object_ref = str(getattr(factor, "object_ref", "") or "").strip()
+            if (
+                object_ref in target_ids
+                and str(getattr(factor, "object_ref_kind", "target") or "target")
+                == "target"
+            ):
+                ids.add(object_ref)
     return sorted(ids)
 
 
@@ -55,6 +108,8 @@ def evaluate_scenario_select_gate(
     input_artifact_refs: dict | None = None,
     previous_gate: Any = None,
     context_version: str = "",
+    solver_subproblem_plan: Any = None,
+    planning_task_graph: Any = None,
 ) -> GateDecision:
     """PASS only a complete feasible member with executable approval."""
     issues: list[str] = []
@@ -66,8 +121,13 @@ def evaluate_scenario_select_gate(
         issues.append("grounded_problem_incomplete")
     if scenario_set is not None:
         certificate = getattr(scenario_set, "solver_certificate", None)
-        if str(getattr(certificate, "status", "")) not in {"feasible", "bounded"}:
-            issues.append("solver_certificate_not_feasible")
+        certificate_status = str(getattr(certificate, "status", "") or "").strip()
+        if certificate_status not in {"feasible", "bounded"}:
+            issues.append({
+                "unknown": "solver_certificate_unknown",
+                "infeasible": "solver_certificate_infeasible",
+                "timeout": "solver_certificate_timeout",
+            }.get(certificate_status, "solver_certificate_not_ready"))
         if not str(getattr(scenario_set, "recommended_scenario_id", "") or ""):
             issues.append("recommended_scenario_missing")
     if scenario is not None:
@@ -79,10 +139,20 @@ def evaluate_scenario_select_gate(
             issues.append("scenario_not_feasible_member")
     if approved_input is None or not approved_input.can_execute:
         issues.append("approval_not_ready")
+    if planning_task_graph is not None and any(
+        str(getattr(task, "status", "") or "") in {"blocked", "failed"}
+        for task in (getattr(planning_task_graph, "tasks", None) or ())
+    ):
+        issues.append("planning_task_prerequisites_incomplete")
     refs = dict(input_artifact_refs or {})
     issue_fingerprint = "|".join(sorted(set(issues)))
     if issues:
-        target_ids = _pending_target_ids(problem, scenario)
+        target_ids = _pending_target_ids(
+            problem,
+            scenario,
+            solver_subproblem_plan,
+            planning_task_graph,
+        )
         return GateDecision(
             stage=STAGE,
             passed=False,

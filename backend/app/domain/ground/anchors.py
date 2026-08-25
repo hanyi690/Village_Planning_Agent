@@ -1782,7 +1782,7 @@ async def ground_anchors(state: Dict[str, Any], *, base_dir: str = ".run-tmp") -
     """
     from app.infrastructure.artifacts.runtime import store_artifact
     from app.contracts.domain.l1_contracts import L1Snapshot
-    from app.contracts.artifacts.artifact_descriptor import ArtifactDescriptor
+    from app.contracts.artifacts.ref import ArtifactRef as ArtifactDescriptor
 
     session_id = str(state.get("session_id", "") or state.get("run_id", ""))
     if not session_id:

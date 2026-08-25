@@ -566,8 +566,8 @@ def build_candidate_sites(
     independently against hard constraints.
 
     Explicit geometry remains one candidate because splitting it would discard
-    its source semantics. If parcel geometry is unavailable, the legacy
-    single candidate is retained and remains fail-closed.
+    its source semantics. If parcel geometry is unavailable, one unresolved
+    candidate is retained and remains fail-closed.
     """
 
     source_parcels = list(resolved.final_bsms)

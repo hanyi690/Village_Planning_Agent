@@ -15,11 +15,11 @@ def candidate_id_for_geometry(geometry: CandidateGeometry) -> str:
 
 
 def candidate_id_for_site(candidate: CandidateSite) -> str:
-    """Return a geometry-backed id, preserving the legacy site id as fallback."""
+    """Return the identity owned by a grounded candidate geometry."""
 
-    if candidate.geometry is not None:
-        return candidate_id_for_geometry(candidate.geometry)
-    return candidate.candidate_id or candidate.site_id
+    if candidate.geometry is None:
+        raise ValueError("grounded candidate geometry is required for candidate identity")
+    return candidate_id_for_geometry(candidate.geometry)
 
 
 __all__ = ["candidate_id_for_geometry", "candidate_id_for_site"]

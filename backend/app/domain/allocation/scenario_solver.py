@@ -227,20 +227,6 @@ def _evaluate_assignment(
     return features, results
 
 
-def _choices(
-    problem: GroundedPlanningProblem,
-) -> tuple[list[str], list[_ChoiceOptions], list[str]]:
-    """Build deterministic candidate options for the legacy 3-tuple callers.
-
-    The optimizer uses :func:`_choices_with_diagnostics` so malformed subset
-    domains cannot be silently interpreted as ``choose_one``.  Keeping this
-    small wrapper avoids widening the private helper's historical call shape
-    for diagnostics/tests while preserving the stricter implementation.
-    """
-    targets, options, unavailable, _errors = _choices_with_diagnostics(problem)
-    return targets, options, unavailable
-
-
 def _choices_with_diagnostics(
     problem: GroundedPlanningProblem,
 ) -> tuple[list[str], list[_ChoiceOptions], list[str], list[str]]:
@@ -383,21 +369,9 @@ def _prune_spatial_conflicts(
 
 
 def _candidate_materialization_role(candidate: Any) -> str:
-    """Resolve the exclusive/non-exclusive role for old untyped candidates."""
+    """Return the explicit target materialization role, if one is declared."""
 
-    explicit = str(getattr(candidate, "materialization_role", "") or "")
-    if explicit:
-        return explicit
-    legacy_role = str(getattr(candidate, "role", "") or "")
-    if legacy_role == "functional_overlay":
-        return "functional_overlay"
-    if legacy_role == "protection_overlay":
-        return "protection_overlay"
-    if legacy_role == "restoration_overlay":
-        return "restoration_overlay"
-    if legacy_role in {"execution_geometry", "parcel_candidate"}:
-        return "site_footprint"
-    return ""
+    return str(getattr(candidate, "materialization_role", "") or "").strip()
 
 
 def _finding(code: str, message: str, *, severity: str = "error", relation_id: str = "", target_id: str = "") -> ScenarioFinding:

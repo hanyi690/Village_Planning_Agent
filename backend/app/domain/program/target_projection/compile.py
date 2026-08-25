@@ -21,6 +21,7 @@ from app.contracts.workflow.parse_contracts import (
     ZoneTarget,
 )
 from app.contracts.workflow.parse_result_contracts import (
+    ClaimDispositionAudit,
     CompilationStatus,
     IntentCompilationResult,
     ParseDiagnostic,
@@ -30,6 +31,11 @@ from app.contracts.evidence.identity_contracts import EvidenceObservation, Groun
 from app.contracts.spatial.spatial_reference_contracts import SpatialReferenceSpec
 from app.domain.program.claim_adapter import admission_reasons_for_intervention
 from app.domain.program.target_projection.intent_graph_compiler import compile_intent_graph_v2
+from app.domain.program.target_projection.planning_task_graph_compiler import (
+    compile_planning_task_graph,
+    intent_graph_with_pending_claims,
+    pending_claim_grounding_specs,
+)
 
 
 def _spatial_hint(intervention: PlanningIntervention) -> str:
@@ -528,6 +534,13 @@ def compile_program_deterministic(
         observations=observations,
         bindings=bindings,
     )
+    pending_claims = list(program.pending_grounding_claims)
+    intent_graph = intent_graph_with_pending_claims(intent_graph, pending_claims)
+    planning_task_graph = compile_planning_task_graph(
+        intent_graph,
+        pending_claims=pending_claims,
+    )
+    pending_specs = pending_claim_grounding_specs(pending_claims)
     specs, spec_diags = map_interventions_to_specs(
         admitted_program.interventions,
         observations=observations or (),
@@ -583,14 +596,39 @@ def compile_program_deterministic(
     result = IntentCompilationResult(
         program_ref=program_ref or program.artifact_id,
         claims=list(program.claims),
+        pending_grounding_claims=list(program.pending_grounding_claims),
+        claim_dispositions=[
+            ClaimDispositionAudit(
+                claim_id=item.claim_id,
+                dimension_key=item.dimension_key,
+                status=item.status,
+                reason=item.reason,
+                missing_requirements=list(item.missing_requirements),
+            )
+            for item in program.claim_dispositions
+        ],
         typed_intent=intent,
         spatial_reference_specs=specs,
         diagnostics=diagnostics,
         compilation_status=CompilationStatus.DRAFT,
         provenance=provenance,
         intent_graph=intent_graph,
+        planning_task_graph=planning_task_graph,
+        pending_grounding_specs=pending_specs,
     )
-    from app.evidence.retrieval.requirements import requirements_from_target_projection
+    from app.evidence.retrieval.requirements import (
+        requirements_from_l3,
+        requirements_from_target_projection,
+    )
 
-    result.evidence_requirements = list(requirements_from_target_projection(result))
+    target_requirements = requirements_from_target_projection(result)
+    pending_requirements = tuple(
+        item
+        for item in requirements_from_l3(program)
+        if bool(item.metadata.get("pending_grounding"))
+    )
+    result.evidence_requirements = list({
+        item.requirement_id: item
+        for item in (*target_requirements, *pending_requirements)
+    }.values())
     return result, specs, diagnostics
