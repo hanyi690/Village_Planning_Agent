@@ -2,6 +2,7 @@ from types import SimpleNamespace
 
 from app.contracts.planning.constraint_factor import ConstraintFactor
 from app.contracts.planning.intent_graph import PlanRelationIntent, PlanningIntentGraph
+from app.contracts.spatial.candidate_geometry import CandidateGeometry
 from app.contracts.spatial.spatial_reference_contracts import (
     ResolvedSpatialRef,
     SpatialReferenceSpec,
@@ -79,6 +80,24 @@ def test_real_line_reference_can_be_an_execution_geometry():
     assert candidate.candidate_id == candidate.geometry.candidate_id
     assert candidate.geometry.role == "execution_geometry"
     assert candidate.geometry.is_executable is True
+
+
+def test_legacy_geometry_without_explicit_grounding_confidence_is_not_ready() -> None:
+    candidate = CandidateGeometry(
+        candidate_id="legacy-no-confidence",
+        target_id="road-legacy",
+        kind="line",
+        role="execution_geometry",
+        materialization_role="site_footprint",
+        wkt="LINESTRING(0 0,1 1)",
+        source_ref="legacy:line",
+        evidence_refs=["legacy:line"],
+        hard_constraint_status="passed",
+    )
+
+    assert candidate.grounding_ready is False
+    assert candidate.is_executable is False
+    assert "grounding_confidence_missing" in candidate.compatibility_diagnostics
 
 
 def test_grounding_returns_unverified_relations_as_unknown_or_deferred():

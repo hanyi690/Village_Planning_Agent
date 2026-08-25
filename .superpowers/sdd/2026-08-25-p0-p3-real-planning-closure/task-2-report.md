@@ -50,3 +50,51 @@ Concerns
 
 - A dormant non-default test, `backend/tests/test_ground_parcel_alternatives.py::test_select_refinement_only_promotes_hard_feasible_parcel_and_keeps_lineage`, still expects a hard-feasible parcel refinement with `availability_status="unknown"` to be executable. That behavior is outside this brief’s accounting boundary, and widening it would change parcel-availability semantics. I left it unchanged and did not include it in the bounded verification set.
 - Targeted pytest runs emit a cache warning because `backend/.pytest_cache` is not writable in this environment, but the selected tests still ran and passed.
+
+Fix Round 1
+
+Changed files
+
+- `backend/app/contracts/spatial/candidate_geometry.py`
+- `backend/app/contracts/spatial/grounded_problem.py`
+- `backend/app/contracts/spatial/grounding_contracts.py`
+- `backend/app/domain/ground/gate.py`
+- `backend/app/domain/suitability/service.py`
+- `backend/tests/contracts/test_grounded_problem_completeness.py`
+- `backend/tests/contracts/test_planning_domain_boundaries.py`
+- `backend/tests/core/test_artifact_runtime.py`
+- `backend/tests/core/test_scenario_optimizer.py`
+- `backend/tests/core/test_solver_portfolio_slice1.py`
+- `backend/tests/core/test_typed_candidate_geometry.py`
+- `backend/tests/e2e/test_ground_gate_contract.py`
+
+Behavior changes
+
+- Legacy-only `confidence` is no longer promoted into trusted `identity_confidence` or `geometry_confidence`, regardless of whether the numeric value is in-range.
+- Legacy geometries without explicit grounding confidence now fail closed:
+  - `grounding_ready` is `False`
+  - `is_executable` is `False`
+  - compatibility diagnostics preserve the ambiguity instead of inferring trust.
+- `GroundedPlanningProblem` now reconciles persisted resolved domains against actual candidate geometry readiness during replay. A replayed candidate geometry that is resolved-by-status but missing trusted grounding confidence downgrades completeness and keeps `can_solve == False`.
+- GROUND gate ambiguity routing now uses typed grounding readiness/confidence instead of `metrics["confidence"]`, and legacy/untrusted replayed candidates route conservatively to `HUMAN`.
+- Context-free suitability no longer synthesizes candidate score from grounding confidence. It returns a neutral score unless an explicit `suitability_score` is already present, and records `no_suitability_evaluator` in diagnostics.
+
+Fix Round 1 tests
+
+- `backend/tests/contracts/test_grounded_problem_completeness.py::test_resolved_domains_are_downgraded_when_replayed_geometry_has_only_legacy_confidence`
+- `backend/tests/core/test_artifact_runtime.py::test_load_artifact_roundtrip_preserves_legacy_confidence_compatibility`
+- `backend/tests/core/test_typed_candidate_geometry.py::test_legacy_geometry_without_explicit_grounding_confidence_is_not_ready`
+- `backend/tests/e2e/test_ground_gate_contract.py::test_legacy_multi_parcel_confidence_routes_to_human_conservatively`
+- `backend/tests/contracts/test_planning_domain_boundaries.py::test_context_free_suitability_does_not_derive_score_from_grounding_confidence`
+- `backend/tests/contracts/test_planning_domain_boundaries.py::test_context_free_suitability_respects_explicit_suitability_score`
+
+Fix Round 1 verification
+
+- `pytest -o addopts='' backend/tests/contracts/test_grounded_problem_completeness.py::test_grounded_problem_reports_candidate_complete_only_with_geometry backend/tests/contracts/test_grounded_problem_completeness.py::test_resolved_domains_are_downgraded_when_replayed_geometry_has_only_legacy_confidence backend/tests/core/test_artifact_runtime.py::test_load_artifact_roundtrip_preserves_legacy_confidence_compatibility backend/tests/core/test_typed_candidate_geometry.py::test_legacy_geometry_without_explicit_grounding_confidence_is_not_ready backend/tests/e2e/test_ground_gate_contract.py::test_legacy_multi_parcel_confidence_routes_to_human_conservatively backend/tests/contracts/test_planning_domain_boundaries.py::test_context_free_suitability_does_not_derive_score_from_grounding_confidence backend/tests/contracts/test_planning_domain_boundaries.py::test_context_free_suitability_respects_explicit_suitability_score backend/tests/core/test_scenario_optimizer.py::test_optimizer_preserves_alternatives_pareto_and_recommendation backend/tests/core/test_scenario_optimizer.py::test_objective_definition_order_is_authoritative_and_missing_results_fail_closed -q`
+- `pytest -o addopts='' backend/tests/contracts/test_planning_domain_boundaries.py::test_suitability_exposes_grounding_evidence_without_allocating backend/tests/core/test_grounding_fail_closed.py::test_build_candidate_site_carries_confidence_and_uncertainty backend/tests/core/test_solver_portfolio_slice1.py::test_view_derives_typed_single_choice_kind_and_required_refs -q`
+- `python -m py_compile backend/app/contracts/spatial/candidate_geometry.py backend/app/contracts/spatial/grounding_contracts.py backend/app/contracts/spatial/grounded_problem.py backend/app/domain/ground/gate.py backend/app/domain/suitability/service.py backend/tests/contracts/test_grounded_problem_completeness.py backend/tests/contracts/test_planning_domain_boundaries.py backend/tests/e2e/test_ground_gate_contract.py backend/tests/core/test_artifact_runtime.py backend/tests/core/test_typed_candidate_geometry.py backend/tests/core/test_scenario_optimizer.py backend/tests/core/test_solver_portfolio_slice1.py`
+
+Fix Round 1 concerns
+
+- The repo still emits a pytest cache permission warning when targeted tests run because `backend/.pytest_cache` is not writable here, but the selected tests completed and passed.
+- I kept parcel-availability semantics unchanged, per instruction; the dormant hard-feasible/unknown-availability parcel test remains outside this round’s scope.

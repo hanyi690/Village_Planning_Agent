@@ -100,13 +100,13 @@ def test_load_artifact_roundtrip_preserves_legacy_confidence_compatibility(tmp_p
             "expected_output_kind": "polygon",
             "candidate_site_refs": ["legacy-candidate"],
             "geometry_roles": ["execution_geometry"],
-            "status": "candidate_only",
+            "status": "resolved",
         }],
         "candidate_domains": [{
             "target_id": "legacy-site",
             "candidate_ids": ["legacy-candidate"],
             "candidate_geometry_refs": ["legacy-candidate"],
-            "status": "candidate_only",
+            "status": "resolved",
         }],
         "candidate_geometries": [{
             "candidate_id": "legacy-candidate",
@@ -125,7 +125,7 @@ def test_load_artifact_roundtrip_preserves_legacy_confidence_compatibility(tmp_p
             "source_ref": "ground:legacy",
             "evidence_refs": ["ground:legacy"],
             "hard_constraint_status": "passed",
-            "confidence": 1.8,
+            "confidence": 0.9,
         }],
     }
 
@@ -149,12 +149,18 @@ def test_load_artifact_roundtrip_preserves_legacy_confidence_compatibility(tmp_p
 
     assert candidate.geometry_confidence == 0.0
     assert candidate.identity_confidence == 0.0
-    assert candidate.suitability_score == 1.8
+    assert candidate.suitability_score is None
+    assert candidate.confidence == 0.9
+    assert candidate.grounding_ready is False
+    assert candidate.is_executable is False
     assert any(
-        item.startswith("legacy_confidence_overloaded:")
+        item.startswith("legacy_confidence_untrusted:")
         for item in candidate.compatibility_diagnostics
     )
+    assert loaded.candidate_domains[0].status == "resolved"
+    assert loaded.target_domains[0].status == "resolved"
     assert loaded.candidate_completeness.status == "human_required"
+    assert loaded.can_solve is False
 
     second = store_artifact(
         state,
@@ -172,5 +178,6 @@ def test_load_artifact_roundtrip_preserves_legacy_confidence_compatibility(tmp_p
         base_dir=tmp_path,
     )
 
-    assert reloaded.candidate_geometries[0].suitability_score == 1.8
+    assert reloaded.candidate_geometries[0].suitability_score is None
+    assert reloaded.candidate_geometries[0].confidence == 0.9
     assert reloaded.candidate_geometries[0].geometry_confidence == 0.0

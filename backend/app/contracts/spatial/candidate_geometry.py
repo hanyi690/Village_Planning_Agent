@@ -48,6 +48,11 @@ def _clamp_unit_interval(value: Any) -> float:
     return max(0.0, min(1.0, _finite_float(value, 0.0)))
 
 
+def _diagnostic_token(prefix: str, value: Any) -> str:
+    numeric = _finite_float(value, 0.0)
+    return f"{prefix}:{numeric:.6f}".rstrip("0").rstrip(".")
+
+
 class CandidateGeometry(BaseModel):
     """A geometry claim with an explicit semantic role.
 
@@ -132,28 +137,12 @@ class CandidateGeometry(BaseModel):
 
         has_identity = payload.get("identity_confidence") is not None
         has_geometry = payload.get("geometry_confidence") is not None
-        has_suitability = payload.get("suitability_score") is not None
+        has_explicit_grounding = has_identity or has_geometry
         has_legacy = payload.get("confidence") is not None
-        if not has_identity and not has_geometry and not has_legacy:
-            _add_diagnostic("grounding_confidence_unspecified")
-        legacy_confidence = payload.get("confidence") if has_legacy else None
-        if legacy_confidence is not None:
-            legacy_value = _finite_float(legacy_confidence, 0.0)
-            if 0.0 <= legacy_value <= 1.0:
-                if not has_identity:
-                    payload["identity_confidence"] = legacy_value
-                if not has_geometry:
-                    payload["geometry_confidence"] = legacy_value
-            else:
-                if not has_identity:
-                    payload["identity_confidence"] = 0.0
-                if not has_geometry:
-                    payload["geometry_confidence"] = 0.0
-                if not has_suitability:
-                    payload["suitability_score"] = legacy_value
-                _add_diagnostic(
-                    f"legacy_confidence_overloaded:{legacy_value:.6f}".rstrip("0").rstrip(".")
-                )
+        if not has_explicit_grounding:
+            _add_diagnostic("grounding_confidence_missing")
+        if has_legacy and not has_explicit_grounding:
+            _add_diagnostic(_diagnostic_token("legacy_confidence_untrusted", payload.get("confidence")))
         payload["compatibility_diagnostics"] = diagnostics
         return payload
 
@@ -219,12 +208,15 @@ class CandidateGeometry(BaseModel):
         self.geometry_confidence = _clamp_unit_interval(self.geometry_confidence)
         if self.suitability_score is not None:
             self.suitability_score = _finite_float(self.suitability_score, 0.0)
-        self.confidence = self.geometry_confidence
         self.compatibility_diagnostics = sorted({
             str(item)
             for item in self.compatibility_diagnostics
             if str(item).strip()
         })
+        if self.grounding_confidence_trusted:
+            self.confidence = self.geometry_confidence
+        else:
+            self.confidence = _finite_float(self.confidence, 0.0)
         return self
 
     @model_validator(mode="after")
@@ -281,14 +273,24 @@ class CandidateGeometry(BaseModel):
 
     @property
     def grounding_ready(self) -> bool:
+        return self.grounding_confidence_trusted
+
+    @property
+    def grounding_confidence_trusted(self) -> bool:
+        if "grounding_confidence_missing" in set(self.compatibility_diagnostics):
+            return False
         if any(
-            str(item).startswith("legacy_confidence_overloaded:")
+            str(item).startswith("legacy_confidence_untrusted:")
             for item in self.compatibility_diagnostics
         ):
             return False
-        if self.identity_confidence > 0.0 and self.geometry_confidence > 0.0:
+        return self.identity_confidence > 0.0 and self.geometry_confidence > 0.0
+
+    @property
+    def grounding_needs_review(self) -> bool:
+        if not self.grounding_confidence_trusted:
             return True
-        return "grounding_confidence_unspecified" in set(self.compatibility_diagnostics)
+        return bool(self.compatibility_diagnostics)
 
 
 __all__ = [

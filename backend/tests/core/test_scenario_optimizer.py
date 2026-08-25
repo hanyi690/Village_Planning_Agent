@@ -22,6 +22,8 @@ def _geometry(candidate_id: str, target_id: str, x: float, score: float) -> Cand
         source_ref=f"source:{candidate_id}",
         source_refs=[f"source:{candidate_id}"],
         evidence_refs=[f"evidence:{candidate_id}"],
+        identity_confidence=0.9,
+        geometry_confidence=0.9,
         hard_constraint_status="passed",
         suitability_components={"suitability": score},
     )

@@ -49,6 +49,8 @@ def _problem(*, solver_kind: str = "auto") -> GroundedPlanningProblem:
         crs="EPSG:3857",
         source_ref="source:site-a",
         evidence_refs=["evidence:site-a"],
+        identity_confidence=0.9,
+        geometry_confidence=0.9,
         hard_constraint_status="passed",
         suitability_components={"suitability": 0.8},
     )

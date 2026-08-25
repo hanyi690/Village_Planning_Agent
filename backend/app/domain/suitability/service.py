@@ -34,6 +34,7 @@ def build_suitability_surface(
         target_id = str(getattr(candidate, "target_ref", None) or getattr(candidate, "project_ref", None) or "")
         hard = getattr(candidate, "hard_constraint_result", None)
         hard_feasible = bool(getattr(hard, "passed", False)) if hard is not None else False
+        explicit_suitability = getattr(candidate, "suitability_score", None)
         reasons: list[str] = []
         if not target_id:
             reasons.append("candidate_not_target_bound")
@@ -41,6 +42,8 @@ def build_suitability_surface(
             reasons.append("hard_constraints_not_proven")
         if not getattr(candidate, "source_parcels", None):
             reasons.append("no_source_parcel")
+        if explicit_suitability is None:
+            diagnostics.setdefault(target_id or "__unbound__", []).append("no_suitability_evaluator")
         if reasons:
             diagnostics.setdefault(target_id or "__unbound__", []).extend(reasons)
         candidates.append(
@@ -48,7 +51,7 @@ def build_suitability_surface(
                 candidate_id=str(candidate.site_id),
                 target_id=target_id,
                 source_parcels=list(candidate.source_parcels),
-                score=float((candidate.metrics or {}).get("confidence", 0.0)),
+                score=float(explicit_suitability or 0.0),
                 hard_feasible=hard_feasible and not reasons,
                 exclusion_reasons=reasons,
                 evidence_refs=list(candidate.evidence_refs),

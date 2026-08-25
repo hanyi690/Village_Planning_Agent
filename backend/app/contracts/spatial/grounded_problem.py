@@ -292,11 +292,17 @@ def derive_parcel_resource_pool(
 def _candidate_completeness(
     target_domains: list[GroundedTargetDomain],
     candidate_domains: list[GroundedCandidateDomain],
+    candidate_geometries: list[CandidateGeometry],
     unresolved: list[GroundingFinding],
     deferred: list[GroundingFinding],
 ) -> CandidateCompleteness:
     target_map = {item.target_id: item for item in target_domains if item.target_id}
     candidate_map = {item.target_id: item for item in candidate_domains if item.target_id}
+    geometry_map = {
+        str(item.candidate_id): item
+        for item in candidate_geometries
+        if str(item.candidate_id or "").strip()
+    }
     target_ids = tuple(sorted(set(target_map).union(candidate_map)))
     unresolved_ids = tuple(
         sorted(
@@ -327,7 +333,6 @@ def _candidate_completeness(
         for item in candidate_domains
         if item.status == "ambiguous" and item.target_id
     }
-    unresolved_ids = tuple(sorted(set(unresolved_ids).union(unresolved_candidate_ids)))
     ambiguous_ids = {
         item.target_id
         for item in target_domains
@@ -352,13 +357,39 @@ def _candidate_completeness(
     missing_geometry = {
         target_id
         for target_id, domain in candidate_map.items()
-        if domain.candidate_ids and not domain.candidate_geometry_refs
+        if domain.candidate_ids
+        and (
+            not domain.candidate_geometry_refs
+            or any(ref not in geometry_map for ref in domain.candidate_geometry_refs)
+        )
+    }
+    unresolved_candidate_ids.update(missing_geometry)
+    unresolved_ids = tuple(sorted(set(unresolved_ids).union(unresolved_candidate_ids)))
+    replay_downgraded_ids = {
+        target_id
+        for target_id, domain in candidate_map.items()
+        if domain.status == "resolved"
+        and domain.candidate_geometry_refs
+        and any(
+            ref in geometry_map
+            and not geometry_map[ref].grounding_confidence_trusted
+            for ref in domain.candidate_geometry_refs
+        )
     }
     degraded_geometry = {
         target_id
         for target_id, domain in candidate_map.items()
         if domain.geometry_uncertainty_reasons
     }
+    degraded_geometry.update(
+        target_id
+        for target_id, domain in candidate_map.items()
+        if any(
+            ref in geometry_map
+            and geometry_map[ref].grounding_needs_review
+            for ref in domain.candidate_geometry_refs
+        )
+    )
     reasons: list[str] = []
     if unresolved_candidate_ids:
         reasons.append("one or more candidate domains remain unresolved")
@@ -378,12 +409,15 @@ def _candidate_completeness(
         reasons.append("one or more candidate members have no geometry reference")
     if degraded_geometry:
         reasons.append("one or more candidate geometries are degraded or uncertain and require policy review")
+    if replay_downgraded_ids:
+        reasons.append("one or more replayed candidate geometries are not trusted grounding evidence")
     if not target_ids:
         reasons.append("no grounded planning targets are available")
     if unresolved_ids:
         status = "not_groundable"
     elif (
-        ambiguous_ids
+        replay_downgraded_ids
+        or ambiguous_ids
         or deferred_ids
         or degraded_geometry
         or (candidate_only_ids - missing_geometry)
@@ -488,6 +522,7 @@ class GroundedPlanningProblem(ContractMeta):
         self.candidate_completeness = _candidate_completeness(
             self.target_domains,
             self.candidate_domains,
+            self.candidate_geometries,
             self.unresolved,
             self.deferred,
         )

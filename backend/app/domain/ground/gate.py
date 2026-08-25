@@ -21,10 +21,35 @@ from app.contracts.workflow.workflow_contracts import GateDecision, PendingReque
 STAGE = "ground"
 
 
+def _confidence_fields(candidate: CandidateSite) -> tuple[float, float, list[str], bool]:
+    geometry = getattr(candidate, "geometry", None)
+    if geometry is not None:
+        return (
+            float(getattr(geometry, "identity_confidence", 0.0) or 0.0),
+            float(getattr(geometry, "geometry_confidence", 0.0) or 0.0),
+            list(getattr(geometry, "compatibility_diagnostics", None) or []),
+            bool(getattr(geometry, "grounding_confidence_trusted", False)),
+        )
+    return (
+        float(getattr(candidate, "identity_confidence", 0.0) or 0.0),
+        float(getattr(candidate, "geometry_confidence", 0.0) or 0.0),
+        list(getattr(candidate, "compatibility_diagnostics", None) or []),
+        False,
+    )
+
+
 def _is_ambiguous(candidate: CandidateSite, ambiguity_threshold: float) -> bool:
+    geometry = getattr(candidate, "geometry", None)
+    identity_confidence, geometry_confidence, diagnostics, trusted = _confidence_fields(candidate)
+    if geometry is None:
+        return True
+    if not trusted:
+        return True
+    if diagnostics:
+        return True
     return (
         len(candidate.source_parcels) > 1
-        and candidate.metrics.get("confidence", 0.0) < ambiguity_threshold
+        and min(identity_confidence, geometry_confidence) < ambiguity_threshold
     )
 
 

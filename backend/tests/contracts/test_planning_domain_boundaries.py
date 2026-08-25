@@ -45,6 +45,27 @@ def _grounding(*, hard_passed: bool = True) -> GroundingResult:
     )
 
 
+def _grounding_with_scores(
+    *,
+    hard_passed: bool = True,
+    confidence: float = 0.9,
+    suitability_score: float | None = None,
+) -> GroundingResult:
+    return GroundingResult(
+        candidates=[
+            CandidateSite(
+                site_id="candidate-1",
+                target_ref="site-area-1",
+                source_parcels=["parcel-1"],
+                metrics={"confidence": confidence},
+                confidence=confidence,
+                suitability_score=suitability_score,
+                hard_constraint_result=HardConstraintResult(passed=hard_passed),
+            )
+        ]
+    )
+
+
 def test_demand_is_typed_and_does_not_contain_parcel_candidates():
     portfolio = derive_demand_portfolio(_intent())
 
@@ -77,6 +98,24 @@ def test_suitability_exposes_grounding_evidence_without_allocating():
     assert len(surface.candidates) == 1
     assert surface.candidates[0].source_parcels == ["parcel-1"]
     assert surface.candidates[0].hard_feasible is True
+    assert surface.candidates[0].score == 0.0
+    assert surface.target_diagnostics["site-area-1"] == ["no_suitability_evaluator"]
+
+
+def test_context_free_suitability_does_not_derive_score_from_grounding_confidence():
+    low = build_suitability_surface(_grounding_with_scores(confidence=0.2))
+    high = build_suitability_surface(_grounding_with_scores(confidence=0.95))
+
+    assert low.candidates[0].score == 0.0
+    assert high.candidates[0].score == 0.0
+
+
+def test_context_free_suitability_respects_explicit_suitability_score():
+    surface = build_suitability_surface(
+        _grounding_with_scores(confidence=0.2, suitability_score=0.65)
+    )
+
+    assert surface.candidates[0].score == 0.65
 
 
 def test_allocation_accepts_only_explicit_placed_selection():

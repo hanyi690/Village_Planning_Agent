@@ -75,20 +75,19 @@ class CandidateSite(BaseModel):
         payload = dict(raw)
         if payload.get("geometry") is not None:
             return payload
-        if payload.get("confidence") is not None:
-            value = max(0.0, min(1.0, float(payload.get("confidence") or 0.0)))
-            if payload.get("identity_confidence") is None:
-                payload["identity_confidence"] = value
-            if payload.get("geometry_confidence") is None:
-                payload["geometry_confidence"] = value
-        elif (
+        if (
             payload.get("identity_confidence") is None
             and payload.get("geometry_confidence") is None
         ):
             payload["compatibility_diagnostics"] = list(dict.fromkeys([
                 *list(payload.get("compatibility_diagnostics", None) or []),
-                "grounding_confidence_unspecified",
+                "grounding_confidence_missing",
             ]))
+            if payload.get("confidence") is not None:
+                payload["compatibility_diagnostics"] = list(dict.fromkeys([
+                    *list(payload.get("compatibility_diagnostics", None) or []),
+                    f"legacy_confidence_untrusted:{float(payload.get('confidence') or 0.0):.6f}".rstrip("0").rstrip("."),
+                ]))
         return payload
 
     @model_validator(mode="after")
@@ -105,7 +104,10 @@ class CandidateSite(BaseModel):
         else:
             self.identity_confidence = max(0.0, min(1.0, float(self.identity_confidence or 0.0)))
             self.geometry_confidence = max(0.0, min(1.0, float(self.geometry_confidence or 0.0)))
-        self.confidence = self.geometry_confidence
+        if self.geometry_confidence > 0.0 and self.identity_confidence > 0.0:
+            self.confidence = self.geometry_confidence
+        else:
+            self.confidence = float(self.confidence or 0.0)
         return self
 
 
