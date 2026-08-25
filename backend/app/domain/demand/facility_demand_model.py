@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import hashlib
 import json
-from typing import Any, Iterable
+from typing import Any, Iterable, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, computed_field
+from pydantic import BaseModel, ConfigDict, Field, computed_field, model_validator
 
 
 class FacilityDemandPoint(BaseModel):
@@ -65,7 +65,33 @@ class DemandSnapshot(BaseModel):
     demand_ref: str = Field(min_length=1)
     points: tuple[FacilityDemandPoint, ...] = ()
     source_refs: tuple[str, ...] = ()
+    source_binding: str = ""
+    crs: str = "EPSG:4326"
+    time_slice: str = ""
+    version: str = ""
+    declared_total_demand: float | None = Field(default=None, ge=0)
+    availability: Literal["ready", "pending", "blocked"] = "pending"
     diagnostics: tuple[str, ...] = ()
+
+    @model_validator(mode="after")
+    def validate_snapshot(self) -> "DemandSnapshot":
+        points = tuple(sorted(self.points, key=lambda item: item.demand_id))
+        object.__setattr__(self, "points", points)
+        if self.declared_total_demand is not None and abs(
+            self.declared_total_demand - sum(item.demand_value for item in points)
+        ) > 1e-9:
+            raise ValueError("declared_total_demand does not match demand points")
+        diagnostics = set(self.diagnostics)
+        if any(item.demand_value < 0 for item in points):
+            diagnostics.add("negative_demand")
+        if not self.source_binding or not self.source_refs:
+            diagnostics.add("demand_source_binding_missing")
+        if not self.version:
+            diagnostics.add("demand_version_missing")
+        object.__setattr__(self, "diagnostics", tuple(sorted(diagnostics)))
+        if self.availability == "ready" and diagnostics:
+            object.__setattr__(self, "availability", "blocked")
+        return self
 
     @computed_field
     @property
@@ -77,17 +103,36 @@ class DemandSnapshot(BaseModel):
     def total_demand(self) -> float:
         return sum(item.demand_value for item in self.points)
 
+    @property
+    def readiness(self) -> Literal["ready", "pending", "blocked"]:
+        return self.availability
+
+    @property
+    def digest(self) -> str:
+        return f"sha256:{self.fingerprint}"
+
 
 def build_demand_snapshot(
     demand_ref: str,
     points: Iterable[FacilityDemandPoint],
     *,
     source_refs: Iterable[str] = (),
+    source_binding: str = "",
+    crs: str = "EPSG:4326",
+    time_slice: str = "",
+    version: str = "",
+    declared_total_demand: float | None = None,
 ) -> DemandSnapshot:
     return DemandSnapshot(
         demand_ref=demand_ref,
         points=tuple(sorted(points, key=lambda item: item.demand_id)),
         source_refs=tuple(sorted({str(item) for item in source_refs if str(item)})),
+        source_binding=source_binding,
+        crs=crs,
+        time_slice=time_slice,
+        version=version,
+        declared_total_demand=declared_total_demand,
+        availability="ready" if source_binding and source_refs and version else "pending",
     )
 
 

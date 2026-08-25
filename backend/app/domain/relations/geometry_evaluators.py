@@ -83,6 +83,9 @@ def _base_satisfaction(
         factor_ids=[factor.factor_id],
         evidence_refs=list(factor.evidence_refs),
         evaluator_version=evaluator_version,
+        evaluator_key=factor.evaluator_key or factor.kind,
+        source_snapshot_refs=list(factor.source_snapshot_refs),
+        input_status=factor.input_status,
     )
 
 
@@ -146,7 +149,7 @@ class GeometryRelationEvaluator:
             )
         if key in {"near", "far", "co_locate"}:
             return self._distance(key, factor, subject, object_, left, right, base, context)
-        if key in {"contain", "within_allowed_area"}:
+        if key in {"contain", "contains", "within_allowed_area"}:
             return self._boolean(
                 factor,
                 left.contains(right),
@@ -155,6 +158,12 @@ class GeometryRelationEvaluator:
                 value=left.contains(right),
                 operator="contains",
             )
+        if key == "within":
+            return self._boolean(factor, left.within(right), base, "within", value=left.within(right), operator="eq")
+        if key == "intersects":
+            return self._boolean(factor, left.intersects(right), base, "intersects", value=left.intersects(right), operator="eq")
+        if key == "overlaps":
+            return self._boolean(factor, left.overlaps(right), base, "overlaps", value=left.overlaps(right), operator="eq")
         if key in {"avoid", "avoid_constraint"}:
             parameters = factor.parameters
             buffer_m = (

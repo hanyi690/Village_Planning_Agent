@@ -13,6 +13,8 @@ from app.contracts.planning.relation_parameters import (
     ServiceParameters,
 )
 from app.contracts.planning.scenario import ScenarioFeature
+from app.domain.demand.facility_demand_model import DemandSnapshot
+from app.domain.network.snapshot import NetworkSnapshot, NetworkRef
 
 from .geometry_evaluators import GeometryRelationEvaluator
 from .registry import RelationEvaluatorRegistry
@@ -23,11 +25,12 @@ from .temporal_evaluator import ExecutionTrace, evaluate_precedes
 class RelationEvaluationContext:
     scenario_id: str = ""
     metric_crs: str = "EPSG:3857"
-    networks: Mapping[str, object] = field(default_factory=dict)
+    networks: Mapping[str, NetworkSnapshot | object] = field(default_factory=dict)
     # Demand snapshots are deliberately separate from feature geometry.  A
     # service relation must consume this typed demand input rather than infer
     # demand from a parcel centroid or the nearest existing facility.
-    demands: Mapping[str, object] = field(default_factory=dict)
+    demands: Mapping[str, DemandSnapshot] = field(default_factory=dict)
+    network_refs: Mapping[str, NetworkRef] = field(default_factory=dict)
     # External entity/place-hint geometries are resolved from EvidenceGraph
     # identities and read from bundle authority before relation evaluation.
     # They are internal ScenarioFeature inputs, never EvidencePacket payloads.
@@ -98,7 +101,7 @@ class NetworkRelationEvaluator:
             object_feature_refs=[object_[0].feature_id],
             measurement=RelationMeasurement(
                 value=value,
-                unit="min" if self.evaluator_key in {"access_via", "serve"} else "bool",
+                unit="min" if self.evaluator_key in {"access", "access_via", "serve"} else "bool",
                 threshold=threshold,
                 operator=operator,
                 method=method,
@@ -127,7 +130,7 @@ def _network_measure(network, key: str, subject, object_, factor):
         value = method(key, subject, object_, factor)
     elif key == "connect" and callable(getattr(network, "is_connected", None)):
         value = network.is_connected(subject, object_)
-    elif key == "access_via" and callable(getattr(network, "travel_time_min", None)):
+    elif key in {"access", "access_via"} and callable(getattr(network, "travel_time_min", None)):
         value = network.travel_time_min(subject, object_)
     elif key == "serve" and callable(getattr(network, "coverage_ratio", None)):
         value = network.coverage_ratio(subject, object_)
@@ -137,7 +140,7 @@ def _network_measure(network, key: str, subject, object_, factor):
         value = value.get("value")
     if key == "connect":
         return value, True, "connected", "network_connectivity"
-    if key == "access_via":
+    if key in {"access", "access_via"}:
         threshold = getattr(factor.parameters, "max_travel_time_min", None)
         if threshold is None:
             return None
@@ -188,6 +191,7 @@ def evaluate_relations(
             [
                 geometry_evaluator,
                 NetworkRelationEvaluator("connect"),
+                NetworkRelationEvaluator("access"),
                 NetworkRelationEvaluator("access_via"),
                 NetworkRelationEvaluator("serve"),
             ]
@@ -196,13 +200,19 @@ def evaluate_relations(
             "near",
             "far",
             "contain",
+            "contains",
+            "within",
             "within_allowed_area",
             "avoid",
             "avoid_constraint",
             "adjacent",
+            "intersects",
+            "overlaps",
             "co_locate",
         ):
             registry.register_alias(key, geometry_evaluator)
+        registry.register_alias("connect_network", registry.get("connect"))
+        registry.register_alias("provide_access", registry.get("access_via"))
     indexed = index_relation_features(features)
     results: list[RelationSatisfaction] = []
     for factor in factors:

@@ -126,11 +126,12 @@ def evaluate_scenario_select_gate(
     if scenario_set is not None:
         certificate = getattr(scenario_set, "solver_certificate", None)
         certificate_status = str(getattr(certificate, "status", "") or "").strip()
-        if certificate_status not in {"feasible", "bounded"}:
+        if certificate_status not in {"feasible"}:
             issues.append({
                 "unknown": "solver_certificate_unknown",
                 "infeasible": "solver_certificate_infeasible",
                 "timeout": "solver_certificate_timeout",
+                "bounded": "solver_certificate_not_complete",
             }.get(certificate_status, "solver_certificate_not_ready"))
         if not str(getattr(scenario_set, "recommended_scenario_id", "") or ""):
             issues.append("recommended_scenario_missing")

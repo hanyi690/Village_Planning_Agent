@@ -56,6 +56,8 @@ def _default_relation_registry() -> RelationEvaluatorRegistry:
         "avoid_constraint", "adjacent", "co_locate",
     ):
         registry.register_alias(key, geometry)
+    registry.register_alias("connect_network", registry.get("connect"))
+    registry.register_alias("provide_access", registry.get("access_via"))
     return registry
 
 

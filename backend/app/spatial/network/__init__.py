@@ -28,6 +28,7 @@ from .schemas import (
 )
 
 from .network_index import NetworkIndex, build_network_from_workspace
+from app.domain.network.snapshot import NetworkEdgeRef, NetworkNodeRef, NetworkRef, NetworkSnapshot, build_network_snapshot
 
 
 def __getattr__(name: str) -> Any:
@@ -113,6 +114,11 @@ __all__ = [
     "NetworkBuildConfig",
     "NetworkBuildResult",
     "NetworkIndex",
+    "NetworkRef",
+    "NetworkSnapshot",
+    "NetworkNodeRef",
+    "NetworkEdgeRef",
+    "build_network_snapshot",
     "PlanComparisonConfig",
     "PlanComparisonResult",
     "LocationConfirmationConfig",
