@@ -291,7 +291,15 @@ def build_refined_candidate_catalog(
                 *source.evidence_refs,
                 *list(_value(candidate, "evidence_refs", None) or []),
             ])),
-            confidence=max(float(source.confidence or 0.0), float(_value(candidate, "score", 0.0) or 0.0)),
+            confidence=float(source.geometry_confidence or 0.0),
+            identity_confidence=float(source.identity_confidence or 0.0),
+            geometry_confidence=float(source.geometry_confidence or 0.0),
+            suitability_score=(
+                float(_value(candidate, "score", 0.0) or 0.0)
+                if _value(candidate, "score", None) is not None
+                else None
+            ),
+            compatibility_diagnostics=list(source.compatibility_diagnostics or []),
             uncertainty_radius_m=refined_uncertainty_radius,
             uncertainty_reason=refined_uncertainty_reason,
             source_bsms=bsm_values,

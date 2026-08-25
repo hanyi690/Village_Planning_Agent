@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field, model_validator
 
@@ -54,6 +54,10 @@ class CandidateSite(BaseModel):
     target_ref: str | None = None
     project_ref: str | None = None
     confidence: float = 0.0
+    identity_confidence: float = Field(default=0.0, ge=0.0, le=1.0)
+    geometry_confidence: float = Field(default=0.0, ge=0.0, le=1.0)
+    suitability_score: float | None = None
+    compatibility_diagnostics: list[str] = Field(default_factory=list)
     uncertainty: CandidateUncertainty | None = None
     target_kind: str = "unknown"
     expected_output_kind: str = "unknown"
@@ -63,10 +67,45 @@ class CandidateSite(BaseModel):
     coverage_ratio: float | None = None
     candidate_materialization_allowed: bool = True
 
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_confidence_accounting(cls, raw: Any) -> Any:
+        if not isinstance(raw, dict):
+            return raw
+        payload = dict(raw)
+        if payload.get("geometry") is not None:
+            return payload
+        if payload.get("confidence") is not None:
+            value = max(0.0, min(1.0, float(payload.get("confidence") or 0.0)))
+            if payload.get("identity_confidence") is None:
+                payload["identity_confidence"] = value
+            if payload.get("geometry_confidence") is None:
+                payload["geometry_confidence"] = value
+        elif (
+            payload.get("identity_confidence") is None
+            and payload.get("geometry_confidence") is None
+        ):
+            payload["compatibility_diagnostics"] = list(dict.fromkeys([
+                *list(payload.get("compatibility_diagnostics", None) or []),
+                "grounding_confidence_unspecified",
+            ]))
+        return payload
+
     @model_validator(mode="after")
     def derive_candidate_id(self) -> "CandidateSite":
         if self.geometry is not None:
             self.candidate_id = self.geometry.candidate_id
+            self.identity_confidence = float(self.geometry.identity_confidence or 0.0)
+            self.geometry_confidence = float(self.geometry.geometry_confidence or 0.0)
+            self.suitability_score = self.geometry.suitability_score
+            self.compatibility_diagnostics = list(dict.fromkeys([
+                *self.compatibility_diagnostics,
+                *list(self.geometry.compatibility_diagnostics or []),
+            ]))
+        else:
+            self.identity_confidence = max(0.0, min(1.0, float(self.identity_confidence or 0.0)))
+            self.geometry_confidence = max(0.0, min(1.0, float(self.geometry_confidence or 0.0)))
+        self.confidence = self.geometry_confidence
         return self
 
 

@@ -91,6 +91,9 @@ def _bounded_choice_product(
 
 
 def _candidate_score(candidate: Any) -> float:
+    suitability_score = getattr(candidate, "suitability_score", None)
+    if isinstance(suitability_score, (int, float)):
+        return float(suitability_score)
     components = getattr(candidate, "suitability_components", {}) or {}
     numeric = [
         float(value)
@@ -100,7 +103,7 @@ def _candidate_score(candidate: Any) -> float:
     ]
     if numeric:
         return sum(numeric) / len(numeric)
-    return max(0.0, min(1.0, float(getattr(candidate, "confidence", 0.0) or 0.0)))
+    return 0.0
 
 
 def _factor_key(factor: ConstraintFactor) -> str:

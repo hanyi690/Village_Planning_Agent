@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import hashlib
 import json
-from typing import Literal
+import math
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field, model_validator
 
@@ -31,6 +32,20 @@ GeometryGranularity = Literal[
 SpatialDomainKind = Literal[
     "exact_feature", "parcel_extent", "parcel_set", "bbox", "corridor", "village_scope", "unknown"
 ]
+
+
+def _finite_float(value: Any, default: float = 0.0) -> float:
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError):
+        return default
+    if not math.isfinite(numeric):
+        return default
+    return numeric
+
+
+def _clamp_unit_interval(value: Any) -> float:
+    return max(0.0, min(1.0, _finite_float(value, 0.0)))
 
 
 class CandidateGeometry(BaseModel):
@@ -70,6 +85,10 @@ class CandidateGeometry(BaseModel):
     source_refs: list[str] = Field(default_factory=list)
     evidence_refs: list[str] = Field(default_factory=list)
     confidence: float = 0.0
+    identity_confidence: float = Field(default=0.0, ge=0, le=1)
+    geometry_confidence: float = Field(default=0.0, ge=0, le=1)
+    suitability_score: float | None = None
+    compatibility_diagnostics: list[str] = Field(default_factory=list)
     uncertainty_radius_m: float = 0.0
     uncertainty_reason: str = ""
     source_bsms: list[str] = Field(default_factory=list)
@@ -94,6 +113,49 @@ class CandidateGeometry(BaseModel):
     adjacent_parcel_bsms: list[str] = Field(default_factory=list)
     adjacency_evidence_refs: list[str] = Field(default_factory=list)
     suitability_components: dict[str, float] = Field(default_factory=dict)
+
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_confidence_accounting(cls, raw: Any) -> Any:
+        if not isinstance(raw, dict):
+            return raw
+        payload = dict(raw)
+        diagnostics = [
+            str(item)
+            for item in (payload.get("compatibility_diagnostics", None) or [])
+            if str(item).strip()
+        ]
+
+        def _add_diagnostic(message: str) -> None:
+            if message not in diagnostics:
+                diagnostics.append(message)
+
+        has_identity = payload.get("identity_confidence") is not None
+        has_geometry = payload.get("geometry_confidence") is not None
+        has_suitability = payload.get("suitability_score") is not None
+        has_legacy = payload.get("confidence") is not None
+        if not has_identity and not has_geometry and not has_legacy:
+            _add_diagnostic("grounding_confidence_unspecified")
+        legacy_confidence = payload.get("confidence") if has_legacy else None
+        if legacy_confidence is not None:
+            legacy_value = _finite_float(legacy_confidence, 0.0)
+            if 0.0 <= legacy_value <= 1.0:
+                if not has_identity:
+                    payload["identity_confidence"] = legacy_value
+                if not has_geometry:
+                    payload["geometry_confidence"] = legacy_value
+            else:
+                if not has_identity:
+                    payload["identity_confidence"] = 0.0
+                if not has_geometry:
+                    payload["geometry_confidence"] = 0.0
+                if not has_suitability:
+                    payload["suitability_score"] = legacy_value
+                _add_diagnostic(
+                    f"legacy_confidence_overloaded:{legacy_value:.6f}".rstrip("0").rstrip(".")
+                )
+        payload["compatibility_diagnostics"] = diagnostics
+        return payload
 
     @model_validator(mode="after")
     def derive_stable_candidate_id(self) -> "CandidateGeometry":
@@ -152,6 +214,20 @@ class CandidateGeometry(BaseModel):
         return self
 
     @model_validator(mode="after")
+    def canonicalize_confidence_accounting(self) -> "CandidateGeometry":
+        self.identity_confidence = _clamp_unit_interval(self.identity_confidence)
+        self.geometry_confidence = _clamp_unit_interval(self.geometry_confidence)
+        if self.suitability_score is not None:
+            self.suitability_score = _finite_float(self.suitability_score, 0.0)
+        self.confidence = self.geometry_confidence
+        self.compatibility_diagnostics = sorted({
+            str(item)
+            for item in self.compatibility_diagnostics
+            if str(item).strip()
+        })
+        return self
+
+    @model_validator(mode="after")
     def validate_availability_semantics(self) -> "CandidateGeometry":
         """Reject contradictory whole-parcel/partial-availability claims."""
         tolerance = 1e-9
@@ -187,7 +263,8 @@ class CandidateGeometry(BaseModel):
     @property
     def is_executable(self) -> bool:
         return (
-            self.role == "execution_geometry"
+            self.grounding_ready
+            and self.role == "execution_geometry"
             and bool(self.wkt)
             and self.availability_status != "fully_unavailable"
             # A parcel candidate without an availability proof must not be
@@ -201,6 +278,17 @@ class CandidateGeometry(BaseModel):
             )
             and not self.uncertainty_reason.startswith("duplicate_bsm_geometry_identity")
         )
+
+    @property
+    def grounding_ready(self) -> bool:
+        if any(
+            str(item).startswith("legacy_confidence_overloaded:")
+            for item in self.compatibility_diagnostics
+        ):
+            return False
+        if self.identity_confidence > 0.0 and self.geometry_confidence > 0.0:
+            return True
+        return "grounding_confidence_unspecified" in set(self.compatibility_diagnostics)
 
 
 __all__ = [

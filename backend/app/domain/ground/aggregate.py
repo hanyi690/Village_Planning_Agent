@@ -233,6 +233,7 @@ def build_candidate_site(
             ]
         )
     )
+    grounding_confidence = max(0.0, min(1.0, float(resolved.confidence or 0.0)))
     geometry = CandidateGeometry(
         target_id=str(getattr(spec, "target_id", "") or ""),
         kind=geometry_kind,
@@ -286,7 +287,9 @@ def build_candidate_site(
         ),
         source_refs=geometry_source_refs,
         evidence_refs=candidate_evidence_refs,
-        confidence=float(resolved.confidence or 0.0),
+        confidence=grounding_confidence,
+        identity_confidence=grounding_confidence,
+        geometry_confidence=grounding_confidence,
         uncertainty_radius_m=uncertainty_radius,
         uncertainty_reason=uncertainty_reason,
         source_bsms=source_parcels,
@@ -328,6 +331,8 @@ def build_candidate_site(
         },
         metrics={
             "confidence": resolved.confidence,
+            "identity_confidence": grounding_confidence,
+            "geometry_confidence": grounding_confidence,
             "spec_type": spec.type,
             "uncertainty_reason": uncertainty_reason,
             "candidate_variant": candidate_variant,
@@ -350,7 +355,9 @@ def build_candidate_site(
         evidence_refs=candidate_evidence_refs,
         target_ref=(getattr(spec, "target_id", None) or None),
         project_ref=(getattr(spec, "project_ref", None) or None),
-        confidence=resolved.confidence,
+        confidence=grounding_confidence,
+        identity_confidence=grounding_confidence,
+        geometry_confidence=grounding_confidence,
         uncertainty=uncertainty,
         target_kind=target_kind,
         expected_output_kind=expected_output_kind,
