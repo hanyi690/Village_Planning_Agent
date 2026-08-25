@@ -5,6 +5,12 @@ from __future__ import annotations
 from typing import Any
 
 from app.domain.suitability.model import SuitabilityCandidate, SuitabilitySurface
+from app.domain.suitability.spatial_factors import (
+    MATERIALIZATION_ROLE_POLICY_UNAVAILABLE,
+    SPATIAL_ROLE_POLICY_VERSION,
+    normalize_materialization_role,
+    resolve_materialization_role_policy,
+)
 
 
 def build_suitability_surface(
@@ -30,14 +36,51 @@ def build_suitability_surface(
 
     candidates: list[SuitabilityCandidate] = []
     diagnostics: dict[str, list[str]] = {}
+    target_by_id = _target_by_id(plan_intent)
     for candidate in tuple(getattr(grounding_result, "candidates", ()) or ()):
-        target_id = str(getattr(candidate, "target_ref", None) or getattr(candidate, "project_ref", None) or "")
+        target_id = str(
+            getattr(candidate, "target_ref", None)
+            or getattr(candidate, "project_ref", None)
+            or ""
+        )
+        target = target_by_id.get(target_id)
+        materialization_role = _candidate_materialization_role(candidate, target)
+        role_policy = resolve_materialization_role_policy(materialization_role)
+        normalized_role = normalize_materialization_role(materialization_role)
         hard = getattr(candidate, "hard_constraint_result", None)
         hard_feasible = bool(getattr(hard, "passed", False)) if hard is not None else False
         explicit_suitability = getattr(candidate, "suitability_score", None)
+        evaluation_trace = [
+            {
+                "step": "materialization_role_policy",
+                "materialization_role": normalized_role,
+                "policy_key": role_policy.policy_key if role_policy is not None else "",
+                "policy": (
+                    dict(role_policy.factor_policies) if role_policy is not None else {}
+                ),
+                "result": "resolved" if role_policy is not None else "fail_closed",
+            },
+            {
+                "step": "context_free_grounding_result",
+                "hard_constraint_passed": hard_feasible,
+            },
+        ]
+        hard_constraint_factors = []
         reasons: list[str] = []
         if not target_id:
             reasons.append("candidate_not_target_bound")
+        if role_policy is None:
+            reasons.append(MATERIALIZATION_ROLE_POLICY_UNAVAILABLE)
+            hard_constraint_factors.append(
+                {
+                    "factor_code": MATERIALIZATION_ROLE_POLICY_UNAVAILABLE,
+                    "policy": "site_hard_exclusion",
+                    "triggered": True,
+                    "hard_exclusion": True,
+                    "evidence_ref": "",
+                    "detail": "materialization_role is missing or unknown",
+                }
+            )
         if not hard_feasible:
             reasons.append("hard_constraints_not_proven")
         if not getattr(candidate, "source_parcels", None):
@@ -51,10 +94,17 @@ def build_suitability_surface(
                 candidate_id=str(candidate.site_id),
                 target_id=target_id,
                 source_parcels=list(candidate.source_parcels),
+                materialization_role=normalized_role,
+                role_policy_key=role_policy.policy_key if role_policy is not None else "",
+                materialization_role_policy=(
+                    dict(role_policy.factor_policies) if role_policy is not None else {}
+                ),
                 score=float(explicit_suitability or 0.0),
                 hard_feasible=hard_feasible and not reasons,
                 exclusion_reasons=reasons,
                 evidence_refs=list(candidate.evidence_refs),
+                hard_constraint_factors=hard_constraint_factors,
+                evaluation_trace=evaluation_trace,
                 available_geometry_wkt=str(getattr(candidate, "available_geometry_wkt", "") or ""),
             )
         )
@@ -169,6 +219,8 @@ def _build_evidence_suitability_surface(
             or getattr(source, "project_ref", None)
             or ""
         )
+        target = target_by_id.get(target_id)
+        materialization_role = _candidate_materialization_role(source, target)
         source_bsms = list(getattr(source, "source_parcels", None) or [])
         if not source_bsms:
             source_bsms = [""]
@@ -257,7 +309,11 @@ def _build_evidence_suitability_surface(
                 geometry_diagnostics.append("coverage_ratio_clamped_to_source_extent")
             candidate_id = f"{str(getattr(source, 'site_id', '') or '')}:{bsm or 'unbound'}"
             spatial = (
-                spatial_index.evaluate(parcel, geometry=candidate_wkt)
+                spatial_index.evaluate(
+                    parcel,
+                    geometry=candidate_wkt,
+                    materialization_role=materialization_role,
+                )
                 if parcel is not None
                 else None
             )
@@ -323,6 +379,21 @@ def _build_evidence_suitability_surface(
                     candidate_id=candidate_id,
                     target_id=target_id,
                     source_parcels=[bsm] if bsm else [],
+                    materialization_role=(
+                        str(spatial.materialization_role)
+                        if spatial is not None
+                        else normalize_materialization_role(materialization_role)
+                    ),
+                    role_policy_key=(
+                        str(spatial.policy_key)
+                        if spatial is not None
+                        else ""
+                    ),
+                    materialization_role_policy=(
+                        dict(spatial.materialization_role_policy)
+                        if spatial is not None
+                        else {}
+                    ),
                     score=float(composite_score),
                     score_breakdown=score_breakdown,
                     hard_feasible=feature.hard_feasible and bool(
@@ -337,6 +408,16 @@ def _build_evidence_suitability_surface(
                             list(feature.evidence_refs)
                             + (list(spatial.evidence_refs) if spatial is not None else [])
                         )
+                    ),
+                    hard_constraint_factors=(
+                        list(spatial.hard_constraint_factors)
+                        if spatial is not None
+                        else []
+                    ),
+                    evaluation_trace=(
+                        list(spatial.evaluation_trace)
+                        if spatial is not None
+                        else []
                     ),
                     available_geometry_wkt=candidate_wkt,
                     eligible_geometry_wkt=(
@@ -376,6 +457,14 @@ def _build_evidence_suitability_surface(
         provenance={
             "policy_ref": active_policy.ref,
             "policy_digest": active_policy.digest,
+            "materialization_role_policy_version": SPATIAL_ROLE_POLICY_VERSION,
+            "evaluated_materialization_roles": sorted(
+                {
+                    str(candidate.materialization_role)
+                    for candidate in candidates
+                    if str(candidate.materialization_role)
+                }
+            ),
             "evidence_availability": adapter.availability.model_dump(mode="json"),
         },
     )
@@ -391,6 +480,19 @@ def _target_by_id(plan_intent: Any) -> dict[str, Any]:
             if target_id:
                 result[target_id] = target
     return result
+
+
+def _candidate_materialization_role(source: Any, target: Any = None) -> str:
+    geometry = getattr(source, "geometry", None)
+    for value in (
+        getattr(target, "materialization_role", None),
+        getattr(geometry, "materialization_role", None),
+        getattr(source, "materialization_role", None),
+    ):
+        text = str(value or "").strip()
+        if text:
+            return text
+    return ""
 
 
 def _target_area_ha(target: Any) -> float | None:

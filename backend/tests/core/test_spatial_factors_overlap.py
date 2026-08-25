@@ -59,9 +59,10 @@ def test_farmland_overlap_excludes_candidate_with_stable_code() -> None:
     farmland = [_feature([[0, 0], [0, 5], [5, 5], [5, 0], [0, 0]])]
     index = SpatialFactorIndex(_context(farmland=farmland), _policy())
 
-    result = index.evaluate(_parcel(_PARCEL_COORDS))
+    result = index.evaluate(_parcel(_PARCEL_COORDS), materialization_role="site_footprint")
 
     assert result.hard_feasible is False
+    assert result.materialization_role == "site_footprint"
     assert "FARMLAND_PROTECTION_OVERLAP" in result.exclusion_codes
     assert "bundle:farmland_protection" in result.evidence_refs
 
@@ -70,7 +71,7 @@ def test_ecological_overlap_excludes_candidate_with_stable_code() -> None:
     ecological = [_feature([[2, 2], [2, 6], [6, 6], [6, 2], [2, 2]])]
     index = SpatialFactorIndex(_context(ecological=ecological), _policy())
 
-    result = index.evaluate(_parcel(_PARCEL_COORDS))
+    result = index.evaluate(_parcel(_PARCEL_COORDS), materialization_role="site_footprint")
 
     assert result.hard_feasible is False
     assert "ECOLOGICAL_REDLINE_OVERLAP" in result.exclusion_codes
@@ -80,7 +81,7 @@ def test_ecological_overlap_excludes_candidate_with_stable_code() -> None:
 def test_no_overlap_keeps_candidate_feasible() -> None:
     index = SpatialFactorIndex(_context(), _policy())
 
-    result = index.evaluate(_parcel(_PARCEL_COORDS))
+    result = index.evaluate(_parcel(_PARCEL_COORDS), materialization_role="site_footprint")
 
     assert result.hard_feasible is True
     assert result.exclusion_codes == ()
@@ -93,7 +94,47 @@ def test_clipped_candidate_is_evaluated_instead_of_full_source_parcel() -> None:
     result = index.evaluate(
         _parcel(_PARCEL_COORDS),
         geometry=box(6, 1, 9, 9).wkt,
+        materialization_role="site_footprint",
     )
 
     assert result.hard_feasible is True
     assert result.exclusion_codes == ()
+
+
+def test_protection_overlay_overlap_is_recorded_but_not_hard_excluded() -> None:
+    farmland = [_feature([[0, 0], [0, 5], [5, 5], [5, 0], [0, 0]])]
+    index = SpatialFactorIndex(_context(farmland=farmland), _policy())
+
+    result = index.evaluate(
+        _parcel(_PARCEL_COORDS),
+        materialization_role="protection_overlay",
+    )
+
+    assert result.hard_feasible is True
+    assert result.exclusion_codes == ()
+    assert result.materialization_role == "protection_overlay"
+    assert result.policy_key == "materialization_role_policy_v1:protection_overlay"
+    factor = next(
+        item
+        for item in result.hard_constraint_factors
+        if item["factor_code"] == "FARMLAND_PROTECTION_OVERLAP"
+    )
+    assert factor["policy"] == "overlay_constraint"
+    assert factor["triggered"] is True
+    assert factor["hard_exclusion"] is False
+    assert any(
+        item.get("step") == "spatial_factor"
+        and item.get("factor_code") == "FARMLAND_PROTECTION_OVERLAP"
+        and item.get("policy") == "overlay_constraint"
+        for item in result.evaluation_trace
+    )
+
+
+def test_missing_materialization_role_fails_closed() -> None:
+    index = SpatialFactorIndex(_context(), _policy())
+
+    result = index.evaluate(_parcel(_PARCEL_COORDS))
+
+    assert result.hard_feasible is False
+    assert result.materialization_role == "unknown"
+    assert result.exclusion_codes == ("MATERIALIZATION_ROLE_POLICY_UNAVAILABLE",)

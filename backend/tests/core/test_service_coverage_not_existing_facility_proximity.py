@@ -32,7 +32,8 @@ def test_existing_facility_proximity_is_not_service_coverage() -> None:
                 "type": "Polygon",
                 "coordinates": [[[0, 0], [0, 0.001], [0.001, 0.001], [0.001, 0], [0, 0]]],
             },
-        )
+        ),
+        materialization_role="site_footprint",
     )
 
     assert "service_coverage" not in result.score_breakdown

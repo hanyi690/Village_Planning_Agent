@@ -319,6 +319,171 @@ def test_suitability_keeps_partial_parcel_availability_and_neighbor_refs() -> No
     ]
 
 
+def test_suitability_role_policy_distinguishes_site_footprint_from_overlay() -> None:
+    source = box(0.0, 0.0, 400.0, 200.0)
+    parcel = SimpleNamespace(
+        bsm="P-ROLE",
+        geometry=source,
+        area_sqm=80_000.0,
+    )
+
+    class Context:
+        workspace = SimpleNamespace(
+            metadata=SimpleNamespace(crs="EPSG:3857"),
+            lines={"roads_current": []},
+            points={"facilities_current": [], "hazard_points": []},
+            polygons={
+                "farmland_protection": [
+                    SimpleNamespace(
+                        geometry={
+                            "type": "Polygon",
+                            "coordinates": [list(box(0.0, 0.0, 150.0, 200.0).exterior.coords)],
+                        }
+                    )
+                ],
+                "ecological_redline": [],
+            },
+            tables=SimpleNamespace(population=None),
+            rasters={},
+        )
+        constraint_index = None
+
+        def current_parcels(self):
+            return [parcel]
+
+    grounding = GroundingResult(
+        candidates=[
+            CandidateSite(
+                site_id="site:overlay",
+                target_ref="T-OVERLAY",
+                source_parcels=["P-ROLE"],
+                available_geometry_wkt=source.wkt,
+                hard_constraint_result=HardConstraintResult(passed=True),
+            ),
+            CandidateSite(
+                site_id="site:footprint",
+                target_ref="T-SITE",
+                source_parcels=["P-ROLE"],
+                available_geometry_wkt=source.wkt,
+                hard_constraint_result=HardConstraintResult(passed=True),
+            ),
+        ]
+    )
+    intent = SimpleNamespace(
+        site_area_targets=[
+            SimpleNamespace(
+                target_id="T-OVERLAY",
+                expected_output_kind="polygon",
+                materialization_role="protection_overlay",
+                footprint_area_m2=None,
+                area_ha=None,
+            ),
+            SimpleNamespace(
+                target_id="T-SITE",
+                expected_output_kind="polygon",
+                materialization_role="site_footprint",
+                footprint_area_m2=6_000.0,
+                area_ha=None,
+            ),
+        ],
+        zone_targets=[],
+    )
+
+    surface = build_suitability_surface(grounding, Context(), plan_intent=intent)
+    by_target = {candidate.target_id: candidate for candidate in surface.candidates}
+
+    overlay = by_target["T-OVERLAY"]
+    site = by_target["T-SITE"]
+
+    assert overlay.materialization_role == "protection_overlay"
+    assert overlay.role_policy_key == "materialization_role_policy_v1:protection_overlay"
+    assert "FARMLAND_PROTECTION_OVERLAP" not in overlay.exclusion_reasons
+    assert any(
+        factor["factor_code"] == "FARMLAND_PROTECTION_OVERLAP"
+        and factor["policy"] == "overlay_constraint"
+        and factor["triggered"] is True
+        and factor["hard_exclusion"] is False
+        for factor in overlay.hard_constraint_factors
+    )
+
+    assert site.materialization_role == "site_footprint"
+    assert site.role_policy_key == "materialization_role_policy_v1:site_footprint"
+    assert site.hard_feasible is False
+    assert "FARMLAND_PROTECTION_OVERLAP" in site.exclusion_reasons
+    assert any(
+        factor["factor_code"] == "FARMLAND_PROTECTION_OVERLAP"
+        and factor["policy"] == "site_hard_exclusion"
+        and factor["triggered"] is True
+        and factor["hard_exclusion"] is True
+        for factor in site.hard_constraint_factors
+    )
+    assert surface.provenance["materialization_role_policy_version"] == (
+        "materialization_role_policy_v1"
+    )
+
+
+def test_suitability_fails_closed_when_materialization_role_is_missing() -> None:
+    source = box(0.0, 0.0, 200.0, 200.0)
+    parcel = SimpleNamespace(
+        bsm="P-UNKNOWN-ROLE",
+        geometry=source,
+        area_sqm=40_000.0,
+    )
+
+    class Context:
+        workspace = SimpleNamespace(
+            metadata=SimpleNamespace(crs="EPSG:3857"),
+            lines={"roads_current": []},
+            points={"facilities_current": [], "hazard_points": []},
+            polygons={"farmland_protection": [], "ecological_redline": []},
+            tables=SimpleNamespace(population=None),
+            rasters={},
+        )
+        constraint_index = None
+
+        def current_parcels(self):
+            return [parcel]
+
+    grounding = GroundingResult(
+        candidates=[
+            CandidateSite(
+                site_id="site:unknown-role",
+                target_ref="T-UNKNOWN",
+                source_parcels=["P-UNKNOWN-ROLE"],
+                available_geometry_wkt=source.wkt,
+                hard_constraint_result=HardConstraintResult(passed=True),
+            )
+        ]
+    )
+    intent = SimpleNamespace(
+        site_area_targets=[
+            SimpleNamespace(
+                target_id="T-UNKNOWN",
+                expected_output_kind="polygon",
+                materialization_role=None,
+                footprint_area_m2=6_000.0,
+                area_ha=None,
+            )
+        ],
+        zone_targets=[],
+    )
+
+    surface = build_suitability_surface(grounding, Context(), plan_intent=intent)
+    candidate = surface.candidates[0]
+
+    assert candidate.materialization_role == "unknown"
+    assert candidate.hard_feasible is False
+    assert "MATERIALIZATION_ROLE_POLICY_UNAVAILABLE" in candidate.exclusion_reasons
+    assert any(
+        factor["factor_code"] == "MATERIALIZATION_ROLE_POLICY_UNAVAILABLE"
+        and factor["policy"] == "site_hard_exclusion"
+        and factor["triggered"] is True
+        and factor["hard_exclusion"] is True
+        for factor in candidate.hard_constraint_factors
+    )
+    assert candidate.evaluation_trace[0]["result"] == "fail_closed"
+
+
 def test_refinement_materializes_facility_parcel_as_executable_point() -> None:
     parcel = box(116.0, 23.0, 116.001, 23.001)
     problem = GroundedPlanningProblem(
@@ -351,6 +516,8 @@ def test_refinement_materializes_facility_parcel_as_executable_point() -> None:
                 spatial_domain_kind="parcel_extent",
                 source_ref="source:parcel:P1",
                 source_bsms=["P1"],
+                identity_confidence=0.9,
+                geometry_confidence=0.9,
                 hard_constraint_status="pending",
             )
         ],

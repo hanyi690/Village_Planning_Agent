@@ -33,8 +33,28 @@ def test_candidate_only_geometry_is_never_materialized_as_execution_feature():
 
 def test_hard_avoid_is_not_reinterpreted_as_soft_score():
     geometries = [
-        CandidateGeometry(candidate_id="a", target_id="a", kind="point", role="execution_geometry", wkt="POINT (0 0)", source_ref="a", evidence_refs=["a"]),
-        CandidateGeometry(candidate_id="b", target_id="b", kind="point", role="execution_geometry", wkt="POINT (0 0)", source_ref="b", evidence_refs=["b"]),
+        CandidateGeometry(
+            candidate_id="a",
+            target_id="a",
+            kind="point",
+            role="execution_geometry",
+            wkt="POINT (0 0)",
+            source_ref="a",
+            evidence_refs=["a"],
+            identity_confidence=1.0,
+            geometry_confidence=1.0,
+        ),
+        CandidateGeometry(
+            candidate_id="b",
+            target_id="b",
+            kind="point",
+            role="execution_geometry",
+            wkt="POINT (0 0)",
+            source_ref="b",
+            evidence_refs=["b"],
+            identity_confidence=1.0,
+            geometry_confidence=1.0,
+        ),
     ]
     factor = ConstraintFactor(
         factor_id="factor:avoid",
@@ -87,6 +107,8 @@ def test_hard_unsupported_relation_is_unknown_not_infeasible():
             wkt="POINT (0 0)",
             source_ref="a",
             evidence_refs=["a"],
+            identity_confidence=1.0,
+            geometry_confidence=1.0,
         ),
         CandidateGeometry(
             candidate_id="b",
@@ -96,6 +118,8 @@ def test_hard_unsupported_relation_is_unknown_not_infeasible():
             wkt="POINT (1 1)",
             source_ref="b",
             evidence_refs=["b"],
+            identity_confidence=1.0,
+            geometry_confidence=1.0,
         ),
     ]
     factor = ConstraintFactor(

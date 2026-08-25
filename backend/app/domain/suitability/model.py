@@ -15,11 +15,16 @@ class SuitabilityCandidate(BaseModel):
     candidate_id: str
     target_id: str = ""
     source_parcels: list[str] = Field(default_factory=list)
+    materialization_role: str = "unknown"
+    role_policy_key: str = ""
+    materialization_role_policy: dict[str, str] = Field(default_factory=dict)
     score: float = 0.0
     score_breakdown: dict[str, float] = Field(default_factory=dict)
     hard_feasible: bool = False
     exclusion_reasons: list[str] = Field(default_factory=list)
     evidence_refs: list[str] = Field(default_factory=list)
+    hard_constraint_factors: list[dict[str, object]] = Field(default_factory=list)
+    evaluation_trace: list[dict[str, object]] = Field(default_factory=list)
     available_geometry_wkt: str = ""
     eligible_geometry_wkt: str = ""
     available_area_ha: float = 0.0

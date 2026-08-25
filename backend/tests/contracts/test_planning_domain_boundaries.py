@@ -26,6 +26,7 @@ def _intent() -> SpatialPlanningIntent:
                 target_id="site-area-1",
                 name="公共服务点",
                 area_ha=1.5,
+                materialization_role="site_footprint",
             )
         ],
     )
@@ -93,7 +94,7 @@ def test_linear_asset_demand_preserves_canonical_linear_kind():
 
 
 def test_suitability_exposes_grounding_evidence_without_allocating():
-    surface = build_suitability_surface(_grounding())
+    surface = build_suitability_surface(_grounding(), plan_intent=_intent())
 
     assert len(surface.candidates) == 1
     assert surface.candidates[0].source_parcels == ["parcel-1"]
@@ -103,8 +104,14 @@ def test_suitability_exposes_grounding_evidence_without_allocating():
 
 
 def test_context_free_suitability_does_not_derive_score_from_grounding_confidence():
-    low = build_suitability_surface(_grounding_with_scores(confidence=0.2))
-    high = build_suitability_surface(_grounding_with_scores(confidence=0.95))
+    low = build_suitability_surface(
+        _grounding_with_scores(confidence=0.2),
+        plan_intent=_intent(),
+    )
+    high = build_suitability_surface(
+        _grounding_with_scores(confidence=0.95),
+        plan_intent=_intent(),
+    )
 
     assert low.candidates[0].score == 0.0
     assert high.candidates[0].score == 0.0
@@ -112,7 +119,8 @@ def test_context_free_suitability_does_not_derive_score_from_grounding_confidenc
 
 def test_context_free_suitability_respects_explicit_suitability_score():
     surface = build_suitability_surface(
-        _grounding_with_scores(confidence=0.2, suitability_score=0.65)
+        _grounding_with_scores(confidence=0.2, suitability_score=0.65),
+        plan_intent=_intent(),
     )
 
     assert surface.candidates[0].score == 0.65
@@ -120,7 +128,7 @@ def test_context_free_suitability_respects_explicit_suitability_score():
 
 def test_allocation_accepts_only_explicit_placed_selection():
     demand = derive_demand_portfolio(_intent())
-    surface = build_suitability_surface(_grounding())
+    surface = build_suitability_surface(_grounding(), plan_intent=_intent())
     selection = SimpleNamespace(
         target_assignments=[
             TargetAssignment(
@@ -141,7 +149,10 @@ def test_allocation_accepts_only_explicit_placed_selection():
 
 def test_allocation_and_select_gate_fail_closed_when_hard_feasibility_is_unproven():
     demand = derive_demand_portfolio(_intent())
-    surface = build_suitability_surface(_grounding(hard_passed=False))
+    surface = build_suitability_surface(
+        _grounding(hard_passed=False),
+        plan_intent=_intent(),
+    )
     selection = SimpleNamespace(
         target_assignments=[
             TargetAssignment(
