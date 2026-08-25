@@ -940,7 +940,11 @@ def _grounded_anchor_provenance(
 ) -> dict[str, Any]:
     """Merge anchor audit data without discarding resolver lineage."""
     provenance = dict(getattr(resolved, "provenance", None) or {})
-    resolver_path = str(provenance.get("path", "") or "")
+    resolver_path = str(
+        provenance.get("resolver_path", "")
+        or provenance.get("path", "")
+        or ""
+    )
     lineage = _grounded_anchor_lineage_updates(resolved, anchor)
     provenance.update(
         {

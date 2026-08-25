@@ -387,6 +387,71 @@ def test_second_anchor_promotion_preserves_resolver_path(monkeypatch) -> None:
     assert captured["provenance"]["resolver_path"] == "resolver:second-path"
 
 
+def test_bsm_only_anchor_keeps_original_resolver_path_across_both_promotions(
+    monkeypatch,
+) -> None:
+    import app.domain.ground.aggregate as aggregate_module
+
+    context = _context([_parcel("P-1", 116.0, 24.0, 116.01, 24.01)])
+    context.grounded_anchors = [
+        GroundedAnchor(
+            normalized_name="仅有地块标识的设施",
+            mention="仅有地块标识的设施",
+            entity_ref="entity:facility:bsm-only",
+            feature_bsm="FAC-BSM-ONLY",
+            source_feature_id="facility-feature-bsm-only",
+            source_layer="facilities_current",
+            source_bsms=["P-1"],
+            l1_snapshot_ref="l1:anchor-bsm-only",
+            bundle_snapshot_digest="bundle:anchor-bsm-only",
+            geometry_granularity="exact_feature",
+            status="resolved",
+        )
+    ]
+    spec = SpatialReferenceSpec(
+        type="place_name",
+        reference=RefObject(
+            kind="place_name",
+            filter={"label_contains": "仅有地块标识的设施"},
+        ),
+        target_id="target-bsm-only-anchor",
+    )
+    monkeypatch.setattr(
+        SpatialResolver,
+        "resolve_spec",
+        lambda self, spec, **kwargs: ResolvedSpatialRef(
+            provenance={"path": "resolver:bsm-only"},
+        ),
+    )
+    captured: dict = {}
+    original_build_candidate_sites = aggregate_module.build_candidate_sites
+
+    def capture_resolved(*args, **kwargs):
+        captured["provenance"] = dict(args[1].provenance)
+        return original_build_candidate_sites(*args, **kwargs)
+
+    monkeypatch.setattr(
+        aggregate_module,
+        "build_candidate_sites",
+        capture_resolved,
+    )
+
+    result = ground_aggregate(
+        [spec],
+        context,
+        target_metadata={
+            "target-bsm-only-anchor": {
+                "target_kind": "site_area",
+                "expected_output_kind": "polygon",
+            }
+        },
+    )
+
+    assert len(result.candidates) == 1
+    assert captured["provenance"]["path"] == "grounded_anchor"
+    assert captured["provenance"]["resolver_path"] == "resolver:bsm-only"
+
+
 def test_downstream_candidate_domain_rejects_blocked_materialization() -> None:
     from app.contracts.spatial.candidate_geometry import CandidateGeometry
     from app.contracts.spatial.grounding_contracts import CandidateSite

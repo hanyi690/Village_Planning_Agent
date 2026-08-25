@@ -334,3 +334,61 @@ search-scope and parcel safeguards, and the village-anchor contract test:
   `backend/.pytest_cache`) remains environmental and did not affect results.
 - The unrelated TARGET_PROJECTION admission failure recorded in Fix Round 1
   remains outside P0-A scope.  User-owned dirty files were preserved.
+
+## Fix Round 4 — Resolver Provenance Idempotence
+
+Date: 2026-08-25
+
+### Changed Files
+
+- `backend/app/domain/ground/aggregate.py`
+- `backend/tests/core/test_grounding_search_scope_boundary.py`
+- `.superpowers/sdd/2026-08-25-p0-p3-real-planning-closure/task-1-report.md`
+
+### Reviewer Finding and Fix
+
+When an authoritative exact anchor had BSM evidence but no WKT, the first
+legacy promotion branch ran and set `path="grounded_anchor"` while retaining
+the original resolver path.  Because the second branch also runs for BSM-only
+anchors, the next provenance merge derived `resolver_path` from the already
+rewritten `path`, losing the original resolver lineage.
+
+- `_grounded_anchor_provenance` now preserves an existing non-empty
+  `provenance["resolver_path"]` and only falls back to the incoming
+  `provenance["path"]` when no resolver path is already present.
+- The final provenance can therefore retain
+  `resolver_path="resolver:bsm-only"` while the materialization path remains
+  `path="grounded_anchor"` after both promotion branches.
+- Coarse-anchor authority checks, sourced exact-anchor acceptance,
+  search-scope invariants, downstream materialization guards, and exact
+  KG-topology parcel behavior remain unchanged.
+
+### Regression Coverage
+
+Added a BSM-only exact-anchor regression with `feature_bsm`,
+`source_feature_id`, `exact_feature` granularity, source snapshots, no WKT,
+and resolver provenance `path="resolver:bsm-only"`.  The test captures the
+resolved object at candidate construction, confirms both promotion branches
+produce a candidate, and asserts that the final path is `grounded_anchor`
+while `resolver_path` remains `resolver:bsm-only`.
+
+### Fix-Round Verification
+
+Focused boundary command:
+
+```text
+python -m pytest -o addopts='' tests/core/test_grounding_search_scope_boundary.py -q --maxfail=1
+```
+
+Result: `11 passed`.
+
+Combined bounded P0-A selection, including the exact KG-topology regression,
+search-scope and parcel safeguards, the village-anchor contract test, and the
+new BSM-only provenance regression: `30 passed` in `25.20s`.
+
+### Concerns
+
+- The existing pytest cache warning (`WinError 5` while writing
+  `backend/.pytest_cache`) remains environmental and did not affect results.
+- The unrelated TARGET_PROJECTION admission failure recorded in Fix Round 1
+  remains outside P0-A scope.  User-owned dirty files were preserved.
