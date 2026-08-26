@@ -69,7 +69,9 @@ def _clean_model_text(text: str) -> str:
 
 def _dedup_location_facts_local(facts: list[L1LocationFact]) -> list[L1LocationFact]:
     result: list[L1LocationFact] = []
-    seen: set[tuple[str, str, str, tuple[str, ...], str]] = set()
+    seen: set[
+        tuple[str, str, str, tuple[str, ...], str, tuple[str, ...]]
+    ] = set()
     for fact in facts:
         key = (
             fact.normalized_name.strip(),
@@ -85,6 +87,13 @@ def _dedup_location_facts_local(facts: list[L1LocationFact]) -> list[L1LocationF
                 if str(value).strip()
             })),
             str(getattr(fact, "instance_label", "") or "").strip(),
+            tuple(sorted({
+                str(value).strip()
+                for value in (
+                    getattr(fact, "source_feature_ids", None) or []
+                )
+                if str(value).strip()
+            })),
         )
         if not key[0] or key in seen:
             continue
@@ -354,12 +363,7 @@ def _extract_location_facts_from_observations(
                         mention=target_name,
                         normalized_name=normalized_name,
                         target_name=target_name,
-                        role=(
-                            "village"
-                            if scope.endswith(("村", "自然村"))
-                            and mention_role == "unknown"
-                            else mention_role
-                        ),
+                        role=mention_role,
                         aliases=aliases,
                         spatial_hint=scope_hint,
                         related_mentions=[scope] if scope else [],
