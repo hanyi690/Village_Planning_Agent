@@ -881,6 +881,448 @@ class EvidenceGraph:
             )
         )[: max(1, int(max_probes or 1))]
 
+    def expand_supporting_evidence(
+        self,
+        mention: str,
+        *,
+        role: str = "unknown",
+        hints: str = "",
+        scope_names: list[str] | tuple[str, ...] = (),
+        source_feature_ids: list[str] | tuple[str, ...] = (),
+        max_candidates: int = _MAX_CANDIDATES,
+    ) -> dict[str, Any]:
+        """Expand one work item through bounded, source-backed joins.
+
+        Exact and scoped resolution is attempted first. Partial labels from
+        other indexed source roles are then resolved one by one. Cross-role
+        candidates can support only a coarse village/settlement scope; they
+        never become the requested facility, road, or water feature.
+        """
+        query = str(mention or "").strip()
+        expected_role = str(role or "unknown").strip().casefold() or "unknown"
+        explicit_scopes = list(dict.fromkeys(
+            str(value).strip()
+            for value in (scope_names or ())
+            if str(value).strip()
+        ))
+        if not explicit_scopes and hints:
+            folded_hints = _fold_query(hints)
+            gazetteer = getattr(self.context, "gazetteer", None)
+            for entry in getattr(gazetteer, "entries", []) or []:
+                values = [
+                    getattr(entry, "name", ""),
+                    *(getattr(entry, "aliases", None) or []),
+                ]
+                if any(
+                    _is_specific_scope_name(value)
+                    and "村" in str(value)
+                    and _fold_query(value) in folded_hints
+                    for value in values
+                ):
+                    name = str(getattr(entry, "name", "") or "").strip()
+                    if name:
+                        explicit_scopes.append(name)
+            explicit_scopes = list(dict.fromkeys(explicit_scopes))
+
+        trace: list[dict[str, Any]] = [{
+            "step": "supporting_evidence_start",
+            "mention": query,
+            "role": expected_role,
+            "scope_names": explicit_scopes,
+        }]
+        feature_id_filter = {
+            str(value).strip()
+            for value in (source_feature_ids or ())
+            if str(value).strip()
+        }
+
+        def candidate_key(candidate: Any) -> tuple[str, ...]:
+            return (
+                str(getattr(candidate, "entity_ref", "") or ""),
+                str(getattr(candidate, "feature_bsm", "") or ""),
+                str(getattr(candidate, "source_feature_id", "") or ""),
+                str(getattr(candidate, "geometry_ref", "") or ""),
+            )
+
+        def feature_id_matches(candidate: Any) -> bool:
+            if not feature_id_filter:
+                return True
+            values = {
+                str(getattr(candidate, "source_feature_id", "") or "").strip(),
+                str(getattr(candidate, "entity_ref", "") or "").strip(),
+                *(
+                    str(value).strip()
+                    for value in (getattr(candidate, "evidence_refs", None) or [])
+                    if str(value).strip()
+                ),
+            }
+            return bool(values.intersection(feature_id_filter))
+
+        def has_source(candidate: Any) -> bool:
+            return bool(
+                str(getattr(candidate, "feature_bsm", "") or "").strip()
+                or str(getattr(candidate, "source_feature_id", "") or "").strip()
+                or str(getattr(candidate, "geometry_ref", "") or "").strip()
+                or getattr(candidate, "source_bsms", None)
+                or getattr(candidate, "related_parcel_bsms", None)
+            )
+
+        def add_candidates(
+            target: dict[tuple[str, ...], Any],
+            values: list[Any],
+            *,
+            source_step: str,
+            probe: str = "",
+            probe_role: str = "",
+        ) -> None:
+            accepted = 0
+            for candidate in values:
+                if not feature_id_matches(candidate) or not has_source(candidate):
+                    continue
+                key = candidate_key(candidate)
+                if not any(key):
+                    continue
+                if key not in target:
+                    target[key] = candidate
+                    accepted += 1
+            trace.append({
+                "step": source_step,
+                "probe": probe,
+                "source_role": probe_role,
+                "candidate_count": len(values),
+                "accepted_count": accepted,
+                "candidate_refs": [
+                    str(getattr(candidate, "entity_ref", "") or "")
+                    for candidate in values[: max(1, int(max_candidates or 1))]
+                    if str(getattr(candidate, "entity_ref", "") or "").strip()
+                ],
+            })
+
+        strict_candidates: dict[tuple[str, ...], Any] = {}
+        if expected_role in {"facility", "landmark"} and explicit_scopes:
+            for scope in explicit_scopes:
+                try:
+                    scoped_result = self.query_facility_bsms(
+                        scope,
+                        query,
+                        role=expected_role,
+                        hints=hints,
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    trace.append({
+                        "step": "strict_facility_scope_error",
+                        "scope": scope,
+                        "error": type(exc).__name__,
+                    })
+                    continue
+                add_candidates(
+                    strict_candidates,
+                    (
+                        list(getattr(scoped_result, "candidates", []) or [])
+                        if getattr(scoped_result, "status", "unresolved")
+                        != "unresolved"
+                        else []
+                    ),
+                    source_step="strict_facility_scope",
+                    probe=query,
+                    probe_role=expected_role,
+                )
+            if strict_candidates:
+                candidates = list(strict_candidates.values())[
+                    : max(1, int(max_candidates or 1))
+                ]
+                trace.append({
+                    "step": "supporting_evidence_complete",
+                    "mode": "strict_scope",
+                    "candidate_count": len(candidates),
+                })
+                return {
+                    "candidates": candidates,
+                    "inferred_scope_candidate": None,
+                    "status": "resolved" if len(candidates) == 1 else "ambiguous",
+                    "query_trace": trace[-24:],
+                }
+
+        direct_candidates: dict[tuple[str, ...], Any] = {}
+        try:
+            direct_result = self.resolve_mention(
+                query,
+                role=expected_role,
+                hints=hints,
+            )
+            add_candidates(
+                direct_candidates,
+                list(getattr(direct_result, "candidates", []) or []),
+                source_step="direct_source_resolution",
+                probe=query,
+                probe_role=expected_role,
+            )
+        except Exception as exc:  # noqa: BLE001
+            trace.append({
+                "step": "direct_source_resolution_error",
+                "error": type(exc).__name__,
+            })
+
+        direct_values = list(direct_candidates.values())[
+            : max(1, int(max_candidates or 1))
+        ]
+        all_roles = (
+            "village", "natural_village", "facility", "landmark", "hazard",
+            "road", "axis", "water", "zone", "parcel",
+        )
+        role_probe_map = {
+            "facility": ("facility", "landmark"),
+            "landmark": ("landmark", "facility"),
+            "road": ("road", "axis"),
+            "axis": ("axis", "road"),
+            "water": ("water",),
+            "hazard": ("hazard",),
+            "village": all_roles,
+            "natural_village": all_roles,
+            "unknown": all_roles,
+        }
+        probe_roles = role_probe_map.get(expected_role, all_roles)
+        supporting_candidates: dict[tuple[str, ...], Any] = {}
+        probes = self.semantic_label_probes(
+            query,
+            roles=probe_roles,
+            max_probes=max(1, int(max_candidates or 1)),
+        )
+        trace.append({
+            "step": "semantic_label_probe_batch",
+            "probe_count": len(probes),
+            "roles": list(probe_roles),
+            "probes": [
+                {"label": label, "role": probe_role}
+                for label, probe_role in probes
+            ],
+        })
+        for probe, probe_role in probes:
+            if expected_role in {"facility", "landmark"} and explicit_scopes:
+                for scope in explicit_scopes:
+                    try:
+                        scoped_probe_result = self.query_facility_bsms(
+                            scope,
+                            probe,
+                            role=probe_role,
+                            hints=hints,
+                        )
+                    except Exception as exc:  # noqa: BLE001
+                        trace.append({
+                            "step": "strict_facility_probe_scope_error",
+                            "scope": scope,
+                            "probe": probe,
+                            "error": type(exc).__name__,
+                        })
+                        continue
+                    add_candidates(
+                        supporting_candidates,
+                        (
+                            list(
+                                getattr(scoped_probe_result, "candidates", [])
+                                or []
+                            )
+                            if getattr(
+                                scoped_probe_result,
+                                "status",
+                                "unresolved",
+                            )
+                            != "unresolved"
+                            else []
+                        ),
+                        source_step="strict_facility_probe_scope",
+                        probe=probe,
+                        probe_role=probe_role,
+                    )
+                continue
+            try:
+                probe_result = self.resolve_mention(
+                    probe,
+                    role=probe_role,
+                    hints=hints,
+                )
+            except Exception as exc:  # noqa: BLE001
+                trace.append({
+                    "step": "semantic_label_probe_error",
+                    "probe": probe,
+                    "source_role": probe_role,
+                    "error": type(exc).__name__,
+                })
+                continue
+            add_candidates(
+                supporting_candidates,
+                list(getattr(probe_result, "candidates", []) or []),
+                source_step="semantic_label_probe_resolution",
+                probe=probe,
+                probe_role=probe_role,
+            )
+
+        if expected_role in {"facility", "landmark"} and explicit_scopes:
+            scoped_values = list(supporting_candidates.values())[
+                : max(1, int(max_candidates or 1))
+            ]
+            if scoped_values:
+                trace.append({
+                    "step": "supporting_evidence_complete",
+                    "mode": "strict_scope_probe",
+                    "candidate_count": len(scoped_values),
+                })
+                return {
+                    "candidates": scoped_values,
+                    "inferred_scope_candidate": None,
+                    "status": (
+                        "resolved" if len(scoped_values) == 1 else "ambiguous"
+                    ),
+                    "query_trace": trace[-24:],
+                }
+            trace.append({
+                "step": "supporting_evidence_unresolved",
+                "reason": "strict facility scope has no source-backed candidate",
+            })
+            return {
+                "candidates": [],
+                "inferred_scope_candidate": None,
+                "status": "unresolved",
+                "query_trace": trace[-24:],
+            }
+
+        if direct_values and expected_role not in {
+            "village", "natural_village", "unknown"
+        }:
+            trace.append({
+                "step": "supporting_evidence_complete",
+                "mode": "direct_source",
+                "candidate_count": len(direct_values),
+            })
+            return {
+                "candidates": direct_values,
+                "inferred_scope_candidate": None,
+                "status": "resolved" if len(direct_values) == 1 else "ambiguous",
+                "query_trace": trace[-24:],
+            }
+
+        if expected_role in {"village", "natural_village", "unknown"}:
+            source_values = list(supporting_candidates.values()) or direct_values
+            parcel_bsms: set[str] = set()
+            support_refs: list[str] = []
+            relation_refs: list[str] = []
+            l1_refs: list[str] = []
+            source_roles: set[str] = set()
+            for candidate in source_values[: max(1, int(max_candidates or 1))]:
+                source_roles.add(
+                    str(getattr(candidate, "role", "") or "unknown")
+                )
+                support_refs.extend(
+                    getattr(candidate, "evidence_refs", None) or []
+                )
+                relation_refs.extend(
+                    getattr(candidate, "relation_refs", None) or []
+                )
+                l1_refs.extend(
+                    getattr(candidate, "l1_fact_refs", None) or []
+                )
+                related = list(
+                    getattr(candidate, "related_parcel_bsms", None) or []
+                )
+                if not related:
+                    feature_bsm = str(
+                        getattr(candidate, "feature_bsm", "") or ""
+                    ).strip()
+                    source_bsm = str(
+                        getattr(candidate, "source_bsm", "") or ""
+                    ).strip()
+                    related = [
+                        str(value).strip()
+                        for value in (
+                            getattr(candidate, "source_bsms", None) or []
+                        )
+                        if str(value).strip()
+                        and str(value).strip() not in {feature_bsm, source_bsm}
+                    ]
+                parcel_bsms.update(
+                    str(value).strip()
+                    for value in related
+                    if _is_bsm(value)
+                )
+            if parcel_bsms:
+                scope = explicit_scopes[0] if explicit_scopes else query
+                scope_candidate = PlaceResolutionCandidate(
+                    entity_ref=f"scope:village:{scope}",
+                    entity_type="residential_cluster",
+                    role="village",
+                    canonical_name=scope,
+                    aliases=[query] if query and query != scope else [],
+                    anchor_bsms=sorted(parcel_bsms),
+                    related_parcel_bsms=sorted(parcel_bsms),
+                    source_bsms=sorted(parcel_bsms),
+                    score=round(
+                        min(
+                            0.72,
+                            0.38
+                            + min(0.18, 0.03 * len(parcel_bsms))
+                            + min(0.12, 0.04 * len(source_roles)),
+                        ),
+                        4,
+                    ),
+                    evidence_refs=list(dict.fromkeys([
+                        "inferred:cross_role_scope",
+                        "bundle:related_parcels",
+                        *support_refs,
+                    ])),
+                    relation_refs=list(dict.fromkeys(relation_refs))[
+                        :_MAX_RELATIONS
+                    ],
+                    l1_fact_refs=list(dict.fromkeys(l1_refs)),
+                    l1_snapshot_ref=str(
+                        getattr(self.context, "l1_snapshot_ref", "") or ""
+                    ),
+                    bundle_snapshot_digest=str(
+                        getattr(
+                            getattr(self.context, "data_snapshot", None),
+                            "digest",
+                            "",
+                        )
+                        or ""
+                    ),
+                    evidence={
+                        "cross_role_support": min(
+                            1.0, 0.35 + 0.1 * len(source_roles)
+                        ),
+                        "related_parcel_support": 1.0,
+                    },
+                )
+                trace.append({
+                    "step": "cross_role_scope_inference",
+                    "scope": scope,
+                    "source_roles": sorted(source_roles),
+                    "source_candidate_count": len(source_values),
+                    "related_parcel_bsms": sorted(parcel_bsms),
+                    "geometry_granularity": "parcel_set",
+                    "best_effort": True,
+                })
+                trace.append({
+                    "step": "supporting_evidence_complete",
+                    "mode": "cross_role_scope",
+                    "candidate_count": 1,
+                })
+                return {
+                    "candidates": direct_values,
+                    "inferred_scope_candidate": scope_candidate,
+                    "status": "inferred",
+                    "query_trace": trace[-24:],
+                }
+
+        trace.append({
+            "step": "supporting_evidence_unresolved",
+            "reason": "no source-backed candidate or related parcel set",
+        })
+        return {
+            "candidates": direct_values,
+            "inferred_scope_candidate": None,
+            "status": "unresolved" if not direct_values else "ambiguous",
+            "query_trace": trace[-24:],
+        }
+
     def query_parcel_bsms_in_bbox(
         self,
         bbox: tuple[float, float, float, float],

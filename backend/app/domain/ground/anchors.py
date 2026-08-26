@@ -1328,6 +1328,14 @@ async def ground_l1_anchors(
             continue
         role = str(getattr(fact, "role", "unknown") or "unknown")
         hints = str(getattr(fact, "spatial_hint", "") or getattr(fact, "source_span", "") or "")
+        scope_names = list(dict.fromkeys([
+            str(value).strip()
+            for value in (
+                *(getattr(fact, "village_scopes", None) or []),
+                *(getattr(fact, "place_scopes", None) or []),
+            )
+            if str(value).strip()
+        ]))
         trace: List[dict] = [{"step": "resolve", "mention": mention}]
         item: Dict[str, Any] = {
             "fact": fact,
@@ -1354,8 +1362,64 @@ async def ground_l1_anchors(
             result = None
         item["result"] = result
 
+        expansion: Dict[str, Any] = {}
+        expand_support = getattr(
+            context.evidence_graph,
+            "expand_supporting_evidence",
+            None,
+        )
+        if callable(expand_support):
+            try:
+                expansion = expand_support(
+                    mention,
+                    role=role,
+                    hints=hints,
+                    scope_names=scope_names,
+                    source_feature_ids=list(
+                        getattr(fact, "source_feature_ids", None) or []
+                    ),
+                ) or {}
+                trace.extend(list(expansion.get("query_trace", []) or []))
+            except Exception as exc:  # noqa: BLE001
+                trace.append({
+                    "step": "supporting_evidence_error",
+                    "error": type(exc).__name__,
+                })
+
+        inferred_scope_candidate = expansion.get("inferred_scope_candidate")
+        supporting_candidates = list(expansion.get("candidates", []) or [])
+        strict_scope = expansion.get("status") in {"resolved", "ambiguous"} and any(
+            item.get("step") == "strict_facility_scope"
+            for item in (expansion.get("query_trace", []) or [])
+        )
         if result is not None and result.candidates:
             candidate_pool = list(result.candidates)
+        else:
+            candidate_pool = []
+        if strict_scope:
+            candidate_pool = supporting_candidates
+        elif not candidate_pool and supporting_candidates:
+            candidate_pool = supporting_candidates
+
+        candidate_has_spatial = any(
+            _has_spatial_evidence(candidate, role=role)
+            for candidate in candidate_pool
+        )
+        if inferred_scope_candidate is not None and (
+            not candidate_pool
+            or not candidate_has_spatial
+            or result is None
+            or result.status != "resolved"
+        ) and role in {"village", "natural_village", "unknown"}:
+            item["candidate"] = inferred_scope_candidate
+            item["best_effort"] = True
+            item["supporting_evidence_status"] = "inferred"
+            trace.append({
+                "step": "consume_inferred_scope_candidate",
+                "best_effort": True,
+                "geometry_granularity": "parcel_set",
+            })
+        elif candidate_pool:
             if role in {"facility", "road", "water", "landmark", "axis"}:
                 spatial_candidates = [
                     candidate
