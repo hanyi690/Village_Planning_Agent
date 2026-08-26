@@ -1401,9 +1401,10 @@ async def ground_l1_anchors(
             role in {"facility", "landmark"}
             and bool(scope_names or expansion_scope_names)
         )
-        strict_scope = expansion.get("status") in {"resolved", "ambiguous"} and any(
-            item.get("step") == "strict_facility_scope"
-            for item in (expansion.get("query_trace", []) or [])
+        strict_scope = (
+            expansion.get("status") in {"resolved", "ambiguous"}
+            and expansion.get("resolution_mode")
+            in {"strict_scope", "strict_scope_probe"}
         )
         if result is not None and result.candidates:
             candidate_pool = list(result.candidates)

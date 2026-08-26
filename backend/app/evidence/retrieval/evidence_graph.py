@@ -1067,6 +1067,7 @@ class EvidenceGraph:
                         and not any(status == "ambiguous" for status in strict_statuses)
                         else "ambiguous"
                     ),
+                    "resolution_mode": "strict_scope",
                     "query_trace": bounded_query_trace(),
                 }
 
@@ -1224,6 +1225,7 @@ class EvidenceGraph:
                         )
                         else "ambiguous"
                     ),
+                    "resolution_mode": "strict_scope_probe",
                     "query_trace": bounded_query_trace(),
                 }
             trace.append({

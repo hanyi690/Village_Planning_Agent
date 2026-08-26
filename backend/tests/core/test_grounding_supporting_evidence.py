@@ -320,6 +320,84 @@ def test_scoped_semantic_probe_keeps_scope_over_global_same_name(monkeypatch):
     )
 
 
+@pytest.mark.asyncio
+async def test_ground_uses_scoped_probe_mode_after_trace_truncation(monkeypatch):
+    from app.domain.ground import anchors as anchors_module
+    from app.evidence.retrieval import evidence_graph as evidence_graph_module
+
+    context = _context()
+    graph = EvidenceGraph(
+        context,
+        index=PlaceEvidenceIndex.build(context),
+    )
+    global_candidate = _candidate(
+        "http://example.test/facility/global",
+        "bsm-global",
+    )
+    scoped_candidate = _candidate(
+        "http://example.test/facility/scoped",
+        "bsm-scoped",
+    )
+    probes = [(f"别名{i}", "facility") for i in range(11)]
+    probes.append(("社前公祠", "facility"))
+    scopes = [f"村{i}" for i in range(12)]
+
+    def direct_resolve(_mention, **_kwargs):
+        return SimpleNamespace(
+            status="resolved",
+            candidates=[global_candidate],
+            query_trace=[],
+        )
+
+    def scoped_lookup(_scope, label, **_kwargs):
+        if label == "社前公祠":
+            return SimpleNamespace(
+                status="resolved",
+                candidates=[scoped_candidate],
+                query_trace=[],
+            )
+        return SimpleNamespace(
+            status="unresolved",
+            candidates=[],
+            query_trace=[],
+        )
+
+    monkeypatch.setattr(graph, "resolve_mention", direct_resolve)
+    monkeypatch.setattr(
+        graph,
+        "semantic_label_probes",
+        lambda *_args, **_kwargs: probes,
+    )
+    monkeypatch.setattr(graph, "query_facility_bsms", scoped_lookup)
+    monkeypatch.setattr(
+        evidence_graph_module.EvidenceGraph,
+        "build",
+        staticmethod(lambda _context: graph),
+    )
+    context.location_facts = [L1LocationFact(
+        mention="祠堂",
+        normalized_name="祠堂",
+        role="facility",
+        village_scopes=scopes,
+        spatial_hint="社前村",
+        source_report_ref="report:trace-truncation",
+        dimension_key="historical_culture",
+    )]
+
+    grounded = await anchors_module.ground_l1_anchors(
+        context,
+        "ground-strict-probe-truncation",
+        bump=False,
+    )
+
+    assert len(grounded) == 1
+    assert grounded[0].feature_bsm == "bsm-scoped"
+    assert any(
+        item.get("step") == "supporting_evidence_start"
+        for item in grounded[0].query_trace
+    )
+
+
 def test_direct_result_reuse_does_not_resolve_again():
     class _CountingIndex:
         def __init__(self):
