@@ -15,11 +15,11 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
-import json
 import os
 import re
 import threading
 import time
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
@@ -939,19 +939,24 @@ async def publish_dimension_complete(
     dimension_key: str,
     dimension_name: str,
     word_count: int,
-    structured_summary: str,
+    structured_summary: Any,
     report_id: str,
     version: int,
     layer: int,
     is_revision: bool,
 ) -> None:
-    """Publish DIMENSION_COMPLETE SSE event (parses structured_summary JSON)."""
+    """Publish a typed display-summary projection without reparsing text."""
     from app.infrastructure.events import event_hub as sse_manager
 
-    try:
-        structured_summary_obj = json.loads(structured_summary) if structured_summary else None
-    except json.JSONDecodeError:
-        structured_summary_obj = None
+    structured_summary_obj: Optional[Dict[str, Any]] = None
+    if hasattr(structured_summary, "model_dump"):
+        candidate = structured_summary.model_dump(mode="json")
+        if isinstance(candidate, dict) and candidate.get("authority") == "derived_summary":
+            structured_summary_obj = candidate
+    elif isinstance(structured_summary, Mapping):
+        candidate = dict(structured_summary)
+        if candidate.get("authority") == "derived_summary":
+            structured_summary_obj = candidate
 
     await sse_manager.publish(session_id, {
         "type": SSEEventType.DIMENSION_COMPLETE,
@@ -1010,60 +1015,37 @@ async def save_step_report(
 
 
 async def generate_summary(dimension_key: str, dim_layer: int, content: str) -> str:
-    """Generate structured summary JSON string with fallback."""
+    """Generate a typed summary and serialize it at the storage boundary."""
     from app.core.settings import BACKGROUND_SUMMARY_ENRICHMENT
     if not BACKGROUND_SUMMARY_ENRICHMENT:
         return generate_summary_regex(dimension_key, dim_layer, content)
-    from app.data.ingestion.summary_generator import generate_structured_summary
+    from app.data.ingestion.summary_generator import generate_summary_model
 
     try:
-        return await generate_structured_summary(dimension_key, dim_layer, content)
+        summary = await generate_summary_model(dimension_key, dim_layer, content)
+        return summary.model_dump_json(ensure_ascii=False)
     except Exception as e:
         logger.warning(f"[dimension_runtime] {dimension_key}: Summary generation failed: {e}")
-        from app.data.ingestion.schemas import BaseDimensionSummary
+        from app.data.ingestion.summary_generator import build_derived_summary
 
-        fallback = BaseDimensionSummary(
-            dimension_key=dimension_key, layer=dim_layer,
-            word_count=len(content), text_summary=content[:200],
-        )
-        return fallback.model_dump_json(ensure_ascii=False)
+        return build_derived_summary(
+            dimension_key,
+            dim_layer,
+            word_count=len(content or ""),
+            text_summary=str(content or "")[:200],
+            summary_status="pending",
+        ).model_dump_json(ensure_ascii=False)
 
 
 def generate_summary_regex(dimension_key: str, dim_layer: int, content: str) -> str:
-    """Layer-1 only: deterministic regex extraction (zero LLM, instant).
+    """Deterministic display projection; the old regex semantic path is gone."""
+    from app.data.ingestion.summary_generator import deterministic_summary_model
 
-    Returns the BaseDimensionSummary JSON used for the immediate DB write;
-    the Flash-LLM enrichment happens later in the background task.
-    """
-    from app.data.ingestion.schemas import BaseDimensionSummary
-    from app.data.ingestion.summary_generator import (
-        _extract_dimension_metrics,
-        _extract_key_points_regex,
-        _extract_metrics_regex,
-    )
-
-    if not content:
-        return BaseDimensionSummary(
-            dimension_key=dimension_key,
-            layer=dim_layer,
-            word_count=0,
-            text_summary="",
-            metrics={},
-        ).model_dump_json(ensure_ascii=False)
-
-    regex_metrics = _extract_metrics_regex(content)
-    dimension_metrics = _extract_dimension_metrics(dimension_key, content)
-    metrics = {**regex_metrics, **dimension_metrics}
-    key_points = _extract_key_points_regex(content)
-    summary = BaseDimensionSummary(
-        dimension_key=dimension_key,
-        layer=dim_layer,
-        word_count=len(content),
-        key_points=key_points[:5],
-        text_summary=content[:200],
-        metrics=metrics,
-    )
-    return summary.model_dump_json(ensure_ascii=False)
+    return deterministic_summary_model(
+        dimension_key,
+        dim_layer,
+        content,
+    ).model_dump_json(ensure_ascii=False)
 
 
 async def enrich_summary_background(
@@ -1075,15 +1057,20 @@ async def enrich_summary_background(
 ) -> None:
     """Background task: Flash-LLM summary enrichment + DB update. Non-fatal."""
     try:
-        from app.data.ingestion.summary_generator import generate_structured_summary
+        from app.data.ingestion.summary_generator import generate_summary_model
 
-        summary = await generate_structured_summary(dimension_key, dim_layer, content)
-        if not summary:
+        summary = await generate_summary_model(dimension_key, dim_layer, content)
+        if summary is None:
             return
         from app.infrastructure.reports.report_store import ReportStore
 
         store = ReportStore.get_instance()
-        await store.update_summary(session_id, dimension_key, version, summary)
+        await store.update_summary(
+            session_id,
+            dimension_key,
+            version,
+            summary.model_dump_json(ensure_ascii=False),
+        )
     except Exception as e:
         logger.warning(f"[dimension_runtime] background summary enrich failed for {dimension_key}: {e}")
 

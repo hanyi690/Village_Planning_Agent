@@ -1,22 +1,21 @@
-"""Structured display summary generator using Instructor + bounded extraction.
+"""Typed, display-only summary generation.
 
-Three-layer pipeline:
-  Layer 1: Deterministic regex extraction (zero LLM)
-  Layer 2: Instructor schema-enforced generation (Flash LLM, auto-retry)
-  Layer 3: Fallback to regex-only on Instructor failure or empty content
-
-The result is a display summary.  It is not an authoritative planning
-contract and never renames old field spellings into current semantics.
+The active path validates a dimension-specific Pydantic projection, overwrites
+code-owned fields, and marks provider failure as pending.  It never promotes
+summary content to planning semantics.  The private deterministic extraction
+helpers below remain importable for the separately scoped RAG formatter, but
+are not used by this summary path.
 """
 
 from __future__ import annotations
 
 import asyncio
-import json
 import re
-from typing import Any, Dict, List, Optional
+from functools import lru_cache
+from typing import Any, Dict, List, Literal, Optional
 
 from app.infrastructure.logging import get_logger
+from pydantic import ConfigDict, Field, create_model
 from .schemas import (
     BaseDimensionSummary,
     get_dimension_schema,
@@ -24,6 +23,91 @@ from .schemas import (
 )
 
 logger = get_logger(__name__)
+
+SUMMARY_AUTHORITY = "derived_summary"
+
+
+@lru_cache(maxsize=None)
+def derived_summary_schema(dimension_key: str) -> type[BaseDimensionSummary]:
+    """Build the strict, display-only summary model for one dimension.
+
+    The provider schema is still selected per dimension, but the authority
+    marker is owned by this code path.  ``extra='forbid'`` is applied both in
+    the model config and at each validation boundary so provider-only fields
+    cannot silently become summary data.
+    """
+
+    dimension_schema = get_dimension_schema(dimension_key)
+    return create_model(
+        f"{dimension_schema.__name__}DerivedSummary",
+        __base__=dimension_schema,
+        __config__=ConfigDict(extra="forbid"),
+        authority=(
+            Literal[SUMMARY_AUTHORITY],
+            Field(default=SUMMARY_AUTHORITY, frozen=True),
+        ),
+    )
+
+
+def build_derived_summary(
+    dimension_key: str,
+    layer: int,
+    *,
+    word_count: int,
+    key_points: Optional[List[str]] = None,
+    text_summary: str = "",
+    metrics: Optional[Dict[str, Any]] = None,
+    evidence_refs: Optional[List[str]] = None,
+    summary_status: str = "resolved",
+) -> BaseDimensionSummary:
+    """Create a display projection from already accepted typed data.
+
+    This helper intentionally has no report parser and no planning output
+    fields.  Callers supply only accepted, already-typed values; deterministic
+    identity/status fields are overwritten here before strict validation.
+    """
+
+    payload: Dict[str, Any] = {
+        "dimension_key": dimension_key,
+        "layer": layer,
+        "word_count": max(0, int(word_count)),
+        "key_points": list(key_points or [])[:5],
+        "text_summary": str(text_summary or "")[:200],
+        "metrics": dict(metrics or {}),
+        "evidence_refs": list(dict.fromkeys(str(ref) for ref in (evidence_refs or []) if str(ref).strip())),
+        "summary_source": SUMMARY_AUTHORITY,
+        "summary_status": summary_status,
+        "authority": SUMMARY_AUTHORITY,
+    }
+    return derived_summary_schema(dimension_key).model_validate(payload, extra="forbid")
+
+
+def _finalize_summary(
+    summary: BaseDimensionSummary,
+    dimension_key: str,
+    layer: int,
+    content: str,
+    *,
+    summary_status: str,
+) -> BaseDimensionSummary:
+    """Apply code-owned fields and revalidate the complete typed projection."""
+
+    payload = summary.model_dump(mode="python")
+    merged_metrics = dict(payload.get("metrics") or {})
+    payload.update(
+        {
+            "dimension_key": dimension_key,
+            "layer": layer,
+            "word_count": len(content or ""),
+            "key_points": list(payload.get("key_points") or [])[:5],
+            "text_summary": str(payload.get("text_summary") or "")[:200],
+            "metrics": merged_metrics,
+            "summary_source": SUMMARY_AUTHORITY,
+            "summary_status": summary_status,
+            "authority": SUMMARY_AUTHORITY,
+        }
+    )
+    return derived_summary_schema(dimension_key).model_validate(payload, extra="forbid")
 
 # ---------------------------------------------------------------------------
 # Dimension-specific regex extraction rules
@@ -116,115 +200,101 @@ def _extract_dimension_metrics(
     return metrics
 
 
+async def generate_summary_model(
+    dimension_key: str,
+    layer: int,
+    content: str,
+) -> BaseDimensionSummary:
+    """Generate a strict, display-only summary object.
+
+    The LLM may propose only fields from the dimension schema.  On provider
+    failure the result is explicitly pending and contains no guessed metrics,
+    key points, entities, or planning semantics.
+    """
+
+    from app.core.settings import BACKGROUND_SUMMARY_ENRICHMENT
+
+    if not BACKGROUND_SUMMARY_ENRICHMENT or not content:
+        return build_derived_summary(
+            dimension_key,
+            layer,
+            word_count=len(content or ""),
+            text_summary="" if not content else str(content)[:200],
+            summary_status="resolved" if not content else "deterministic",
+        )
+
+    try:
+        result = await _instructor_generate(dimension_key, layer, content)
+        if result is not None:
+            return result
+    except Exception as exc:
+        logger.warning("[summary] Instructor failed for %s: %s", dimension_key, exc)
+
+    return build_derived_summary(
+        dimension_key,
+        layer,
+        word_count=len(content),
+        text_summary=str(content)[:200],
+        summary_status="pending",
+    )
+
+
 async def generate_structured_summary(
     dimension_key: str,
     layer: int,
     content: str,
 ) -> str:
-    """Generate structured JSON summary for a dimension report.
+    """Serialize the typed summary at the report-storage boundary only."""
 
-    Three-layer pipeline:
-      Layer 1: Deterministic regex extraction (zero LLM)
-      Layer 2: Instructor schema-enforced generation (auto-retry)
-      Layer 3: Fallback to regex-only on Instructor failure
-
-    Returns JSON string compatible with the dimension's Pydantic schema.
-    """
-    # This is the hard boundary for the optional enrichment path.  Callers
-    # outside dimension_runtime/report_store also reach this function (notably
-    # background enrichment), so checking the setting only at those call sites
-    # still allowed Instructor requests when enrichment was disabled.
-    from app.core.settings import BACKGROUND_SUMMARY_ENRICHMENT
-    if not BACKGROUND_SUMMARY_ENRICHMENT:
-        return _deterministic_summary_json(dimension_key, layer, content)
-
-    if not content:
-        return _default_summary_json(dimension_key, layer)
-
-    # Layer 1: Deterministic rule extraction
-    regex_metrics = _extract_metrics_regex(content)
-    dimension_metrics = _extract_dimension_metrics(dimension_key, content)
-    seed_metrics = {**regex_metrics, **dimension_metrics}  # dimension-specific wins
-    regex_key_points = _extract_key_points_regex(content)
-
-    # Layer 2: Instructor schema-enforced generation
-    try:
-        result = await _instructor_generate(
-            dimension_key, layer, content, seed_metrics
-        )
-        if result:
-            return result
-    except Exception as e:
-        logger.warning(f"[summary] Instructor failed for {dimension_key}: {e}")
-
-    # Layer 3 fallback: regex-only structured summary
-    summary = BaseDimensionSummary(
-        dimension_key=dimension_key,
-        layer=layer,
-        word_count=len(content),
-        key_points=regex_key_points[:5],
-        text_summary=content[:200],
-        metrics=seed_metrics,
-    )
+    summary = await generate_summary_model(dimension_key, layer, content)
     return summary.model_dump_json(ensure_ascii=False)
 
 
-def _deterministic_summary_json(
+def deterministic_summary_model(
     dimension_key: str,
     layer: int,
     content: str,
-) -> str:
-    """Return the validated summary without creating an LLM client."""
-    if not content:
-        return _default_summary_json(dimension_key, layer)
-    regex_metrics = _extract_metrics_regex(content)
-    dimension_metrics = _extract_dimension_metrics(dimension_key, content)
-    summary = BaseDimensionSummary(
-        dimension_key=dimension_key,
-        layer=layer,
-        word_count=len(content),
-        key_points=_extract_key_points_regex(content)[:5],
-        text_summary=content[:200],
-        metrics={**regex_metrics, **dimension_metrics},
+) -> BaseDimensionSummary:
+    """Build a deterministic display projection without semantic parsing."""
+
+    return build_derived_summary(
+        dimension_key,
+        layer,
+        word_count=len(content or ""),
+        text_summary=str(content or "")[:200],
+        summary_status="deterministic",
     )
-    return summary.model_dump_json(ensure_ascii=False)
 
 
 async def _instructor_generate(
     dimension_key: str,
     layer: int,
     content: str,
-    seed_metrics: Dict[str, Any],
-) -> Optional[str]:
-    """Use Instructor for schema-enforced generation with auto-retry.
-
-    Returns JSON string of dimension-specific Pydantic schema, or None on failure.
-    """
+) -> Optional[BaseDimensionSummary]:
+    """Use the dimension-specific strict schema and return the typed object."""
     from app.infrastructure.llm.instructor_client import get_instructor_client, get_structured_model
 
-    dim_schema = get_dimension_schema(dimension_key)
+    dim_schema = derived_summary_schema(dimension_key)
     client = get_instructor_client()
     model = get_structured_model()
 
     metrics_desc = get_metrics_description(dimension_key)
     metrics_hint = "\n".join(f"  - {k}: {v}" for k, v in metrics_desc.items())
 
-    prompt = f"""分析以下规划报告，提取结构化摘要。
+    prompt = f"""分析以下规划报告，提取仅用于展示的结构化摘要。
 
 维度: {dimension_key} (Layer {layer})
 报告字数: {len(content)}
 
-规则提取已获得以下指标（请优先采用）:
-{json.dumps(seed_metrics, ensure_ascii=False, indent=2) if seed_metrics else "（无）"}
-
-还需提取的指标:
+可提取的维度字段:
 {metrics_hint}
 
 要求:
 - key_points: 3-5 条核心发现
 - text_summary: 200 字以内自然语言概述
-- metrics: 维度特定指标，无法提取用 null
+- metrics: 维度特定指标，无法从报告确认则留空
 - 维度专属字段: 从报告中提取，无法提取则 null/空
+- authority、dimension_key、layer、word_count、summary_source、summary_status 由代码校验并覆盖
 
 报告内容（前3000字）:
 {content[:3000]}"""
@@ -246,22 +316,21 @@ async def _instructor_generate(
     if not isinstance(summary, BaseDimensionSummary):
         return None
 
-    # Override the call-injected fields
-    summary.dimension_key = dimension_key
-    summary.layer = layer
-    summary.word_count = len(content)
-    if summary.text_summary and len(summary.text_summary) > 200:
-        summary.text_summary = summary.text_summary[:200]
-    if len(summary.key_points) > 5:
-        summary.key_points = summary.key_points[:5]
-
-    # Normalize + merge + sync
-    for k, v in seed_metrics.items():
-        if k not in summary.metrics:
-            summary.metrics[k] = v
+    summary = _finalize_summary(
+        summary,
+        dimension_key,
+        layer,
+        content,
+        summary_status="resolved",
+    )
     _sync_schema_fields_to_metrics(summary)
-
-    return summary.model_dump_json(ensure_ascii=False)
+    return _finalize_summary(
+        summary,
+        dimension_key,
+        layer,
+        content,
+        summary_status="resolved",
+    )
 
 
 def _sync_schema_fields_to_metrics(summary: BaseDimensionSummary) -> None:
@@ -271,8 +340,10 @@ def _sync_schema_fields_to_metrics(summary: BaseDimensionSummary) -> None:
     regardless of whether they came from LLM or schema defaults.
     """
     for field_name in type(summary).model_fields:
-        if field_name in ("dimension_key", "layer", "word_count",
-                          "key_points", "text_summary", "metrics"):
+        if field_name in (
+            "dimension_key", "layer", "word_count", "key_points", "text_summary",
+            "metrics", "evidence_refs", "summary_source", "summary_status", "authority",
+        ):
             continue
         value = getattr(summary, field_name, None)
         if value is not None and field_name not in summary.metrics:
@@ -322,14 +393,11 @@ def _extract_key_points_regex(content: str) -> List[str]:
     return points[:5]
 
 
-def _default_summary_json(dimension_key: str, layer: int) -> str:
-    """Return minimal valid summary JSON."""
-    summary = BaseDimensionSummary(
-        dimension_key=dimension_key,
-        layer=layer,
-        word_count=0,
-    )
-    return summary.model_dump_json(ensure_ascii=False)
-
-
-__all__ = ["generate_structured_summary"]
+__all__ = [
+    "SUMMARY_AUTHORITY",
+    "build_derived_summary",
+    "derived_summary_schema",
+    "deterministic_summary_model",
+    "generate_summary_model",
+    "generate_structured_summary",
+]

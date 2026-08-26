@@ -458,12 +458,13 @@ async def analyze_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
     report_id = str(uuid.uuid4())
 
     # 8. Generate structured summary (before SSE event so it can reference it)
-    structured_summary_str = _l1_summary_json(
+    structured_summary = _l1_summary_projection(
         dim_key,
         dim_layer,
         observations,
         llm_response,
     )
+    structured_summary_json = structured_summary.model_dump_json(ensure_ascii=False)
 
     # 9. Prepare pending report data for batch write
     phase_key = f"layer{dim_layer}"
@@ -475,21 +476,15 @@ async def analyze_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
         "report_id": report_id,
         "content": report_body,
         "instruction": observations_json,
-        "summary": structured_summary_str,
+        "summary": structured_summary_json,
         "revision_trigger": revision_reason,
         "knowledge_sources": asdict(rag_log) if rag_log and rag_log.rag_enabled else None,
         "generated_at": datetime.now(),
     }
 
-    # 10. Send completion event (with structured_summary)
-    try:
-        structured_summary_obj = json.loads(structured_summary_str) if structured_summary_str else None
-    except json.JSONDecodeError:
-        structured_summary_obj = None
-
     await publish_dimension_complete(
         session_id, dim_key, dim_name, len(llm_response),
-        structured_summary_str, report_id, next_version, dim_layer, is_revision,
+        structured_summary, report_id, next_version, dim_layer, is_revision,
     )
     logger.info(
         "[analyze_dimension] COMPLETE: dim=%s layer=%d words=%d version=%d revision=%s",
@@ -589,12 +584,12 @@ def _dependency_summary(text: str) -> Dict[str, Any]:
     }
 
 
-def _l1_summary_json(
+def _l1_summary_projection(
     dimension_key: str,
     layer: int,
     observations: list[Any],
     report_body: str,
-) -> str:
+) -> Any:
     """Project the validated L1 observation array into a display summary.
 
     The summary is bookkeeping only.  It is derived from the typed output and
@@ -617,16 +612,19 @@ def _l1_summary_json(
         in {"spatial", "spatial_observation", "gis_observation"}
         for item in payload
     )
-    return json.dumps(
-        {
-            "dimension_key": dimension_key,
-            "layer": layer,
-            "word_count": len(report_body),
+    from app.data.ingestion.summary_generator import build_derived_summary
+
+    return build_derived_summary(
+        dimension_key,
+        layer,
+        word_count=len(report_body),
+        metrics={
             "observation_count": len(payload),
             "spatial_observation_count": spatial_count,
             "evidence_ref_count": len(evidence_refs),
         },
-        ensure_ascii=False,
+        evidence_refs=sorted(evidence_refs),
+        summary_status="resolved",
     )
 
 

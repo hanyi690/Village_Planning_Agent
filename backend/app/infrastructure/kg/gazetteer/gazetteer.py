@@ -411,33 +411,6 @@ def build_gazetteer(
     return gazetteer
 
 
-async def confirm_with_llm(
-    llm: Any,
-    village_name: str,
-    cluster_name: str,
-    cluster_desc: str,
-) -> bool:
-    """Flash 双确认之一：LLM 判定村名与居民点聚类是否一致（有界：只返回判定）。"""
-    prompt = (
-        "你是村庄地名匹配助手。判断下列村名是否与该居民点的空间描述一致。\n"
-        f"村名：{village_name}\n"
-        f"居民点：{cluster_name}\n"
-        f"空间描述：{cluster_desc}\n"
-        "只输出 JSON：{\"match\": true} 或 {\"match\": false}\n"
-    )
-    try:
-        resp = await llm.ainvoke(prompt)
-        content = getattr(resp, "content", "") or ""
-        import re
-
-        m = re.search(r"\"match\"\s*:\s*(true|false)", content)
-        if m:
-            return m.group(1) == "true"
-    except Exception as e:
-        logger.warning("[Gazetteer] LLM confirm failed: %s", e)
-    return False
-
-
 def spatial_score(
     village_feature_hints: str,
     cluster_dlbms: List[str],
@@ -472,7 +445,6 @@ __all__ = [
     "Gazetteer",
     "GazetteerEntry",
     "build_gazetteer",
-    "confirm_with_llm",
     "spatial_check",
     "_external_anchors_from_bundle",
 ]
