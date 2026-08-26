@@ -889,6 +889,7 @@ class EvidenceGraph:
         hints: str = "",
         scope_names: list[str] | tuple[str, ...] = (),
         source_feature_ids: list[str] | tuple[str, ...] = (),
+        direct_result: Any | None = None,
         max_candidates: int = _MAX_CANDIDATES,
     ) -> dict[str, Any]:
         """Expand one work item through bounded, source-backed joins.
@@ -1044,15 +1045,21 @@ class EvidenceGraph:
                 }
 
         direct_candidates: dict[tuple[str, ...], Any] = {}
+        direct_status = "unresolved"
         try:
-            direct_result = self.resolve_mention(
-                query,
-                role=expected_role,
-                hints=hints,
+            resolved_result = direct_result
+            if resolved_result is None:
+                resolved_result = self.resolve_mention(
+                    query,
+                    role=expected_role,
+                    hints=hints,
+                )
+            direct_status = str(
+                getattr(resolved_result, "status", "unresolved") or "unresolved"
             )
             add_candidates(
                 direct_candidates,
-                list(getattr(direct_result, "candidates", []) or []),
+                list(getattr(resolved_result, "candidates", []) or []),
                 source_step="direct_source_resolution",
                 probe=query,
                 probe_role=expected_role,
@@ -1197,7 +1204,13 @@ class EvidenceGraph:
             return {
                 "candidates": direct_values,
                 "inferred_scope_candidate": None,
-                "status": "resolved" if len(direct_values) == 1 else "ambiguous",
+                "status": (
+                    "resolved"
+                    if direct_status == "resolved" and len(direct_values) == 1
+                    else "ambiguous"
+                    if direct_values
+                    else "unresolved"
+                ),
                 "query_trace": trace[-24:],
             }
 

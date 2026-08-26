@@ -1375,6 +1375,7 @@ async def ground_l1_anchors(
                     role=role,
                     hints=hints,
                     scope_names=scope_names,
+                    direct_result=result,
                     source_feature_ids=list(
                         getattr(fact, "source_feature_ids", None) or []
                     ),
