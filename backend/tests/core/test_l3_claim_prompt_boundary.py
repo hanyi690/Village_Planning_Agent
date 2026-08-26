@@ -110,3 +110,5 @@ def test_claims_prompt_has_reusable_package_typed_and_lineage_emit_checklist():
     assert "复用同一个 project_package_ref" in prompt
     assert "source_fact_refs 只能逐字复制" in prompt
     assert "没有合适身份就留空" in prompt
+    assert "connect_network" in prompt
+    assert "connects 不是 relation_template" in prompt

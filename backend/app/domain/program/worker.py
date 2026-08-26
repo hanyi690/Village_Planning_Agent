@@ -590,7 +590,9 @@ def _l3_candidate_context(
     source_dimension_values = tuple(source_dimensions)
     try:
         from app.domain.validation.l1_fact_catalog import SPATIAL_L1_FACT_KINDS
-        from app.domain.program.target_projection.relation_catalog import relation_options
+        from app.domain.program.target_projection.relation_catalog import (
+            relation_options_payload,
+        )
 
         catalog = _l3_fact_catalog(state, dimension_key, source_dimension_values)
         usable_candidates = (
@@ -602,10 +604,9 @@ def _l3_candidate_context(
             for item in usable_candidates
             if item.metadata.get("fact_kind") in SPATIAL_L1_FACT_KINDS
         ]
-        relation_candidates = {
-            kind: [item.template for item in relation_options(kind)]
-            for kind in ("facility", "road", "linear", "axis", "site_area", "zone")
-        }
+        relation_candidates = relation_options_payload(
+            ("facility", "road", "linear", "axis", "site_area", "zone")
+        )
         spatial_ids = set(spatial_source_options)
         source_catalog = [
             {

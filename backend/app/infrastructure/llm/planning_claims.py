@@ -226,15 +226,11 @@ class _L3SpatialRequirementsDraftBase(BaseModel):
 def _l3_relation_subject_kind(component_kind: str) -> str:
     """Map provider component names to the target relation vocabulary."""
 
-    normalized = str(component_kind or "").strip().lower()
-    return {
-        "restoration_overlay": "site_area",
-        "restorationoverlay": "site_area",
-        "protection_overlay": "site_area",
-        "protectionoverlay": "site_area",
-        "land_use_assignment": "zone",
-        "landuseassignment": "zone",
-    }.get(normalized, normalized)
+    from app.domain.program.target_projection.relation_catalog import (
+        normalize_relation_subject_kind,
+    )
+
+    return normalize_relation_subject_kind(component_kind)
 
 
 def _l3_relation_parameter_annotation(parameter_types: Sequence[str]) -> Any:
@@ -402,18 +398,15 @@ def _dynamic_claim_output_model(
     )
     def component_model(base: type[Any], allowed_ids: Sequence[str]) -> type[Any]:
         values = tuple(allowed_ids)
-        fact_id_type = (
-            Literal.__getitem__(values)
-            if values
-            else Literal[None]
-        )
+        fact_id_type = Literal.__getitem__(values) if values else None
         digest = hashlib.sha256(
             (base.__name__ + "\n" + "\n".join(values)).encode("utf-8")
         ).hexdigest()[:12]
         fields: dict[str, Any] = {
             "source_fact_refs": (
-                list[fact_id_type],
-                Field(default_factory=list, max_length=0) if not values
+                list[fact_id_type] if fact_id_type is not None else list[str],
+                Field(default_factory=list, max_length=0)
+                if not values
                 else Field(default_factory=list),
             ),
         }

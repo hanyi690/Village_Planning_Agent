@@ -168,6 +168,11 @@ def test_l3_candidate_context_exposes_exact_fact_catalog_and_spatial_subset(monk
     }
     assert payload["source_fact_catalog_status"] == "usable"
     assert payload["source_fact_catalog_digest"]
+    assert isinstance(payload["relation_options_by_subject_kind"]["road"][0], dict)
+    assert "connect_network" in {
+        item["relation_template"]
+        for item in payload["relation_options_by_subject_kind"]["road"]
+    }
 
 
 def test_l3_prompt_uses_the_persisted_snapshot_instead_of_a_stale_context_cache(monkeypatch) -> None:

@@ -41,6 +41,15 @@ L3_EMISSION_CHECKLIST = """
 """
 
 
+L3_DYNAMIC_CLOSED_SET_GUIDE = """
+【L3 动态闭集发射规则】
+1. source_fact_refs 只能逐字复制 candidate_context 的 source_fact_options；空间 claim 只能复制 spatial_source_fact_options。没有明确候选时使用 []，不得发明 l1:fact ID、把背景文本中的其他 ID 当作候选，或用 source_fact_catalog_digest 作为引用。
+2. relation_template 只能逐字复制 relation_options_by_subject_kind 中当前组件对应的 relation_template；object_ref_kind、参数类型和 criticality 也必须来自同一候选项。
+3. 网络连通关系的模板名是 connect_network；connects 不是关系模板，只能作为 road_parameters、linear_parameters 或 axis_parameters 中的端点/地点提示字段。
+4. 不要把关系参数字段名、旧版解析字段或自然语言同义词当作 relation_template。没有合法关系时输出空 relations 并保留 grounding requirement。
+"""
+
+
 LOCATION_EVIDENCE_GUIDE = """
 【空间证据】
 以下内容只提供可核验的上游证据和位置线索，不等于已经完成空间绑定：
@@ -104,6 +113,7 @@ def get_dimension_prompt(
     sections.extend([
         L3_EVIDENCE_PRIORITY_GUIDE,
         CLAIMS_OUTPUT_GUIDE,
+        L3_DYNAMIC_CLOSED_SET_GUIDE,
         L3_EMISSION_CHECKLIST,
     ])
     return "\n\n".join(sections)
@@ -113,6 +123,7 @@ __all__ = [
     "CLAIMS_OUTPUT_GUIDE",
     "L3_EVIDENCE_PRIORITY_GUIDE",
     "L3_EMISSION_CHECKLIST",
+    "L3_DYNAMIC_CLOSED_SET_GUIDE",
     "LOCATION_EVIDENCE_GUIDE",
     "get_dimension_prompt",
 ]
