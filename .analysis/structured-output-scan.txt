@@ -1,0 +1,356 @@
+backend/app\database\operations.py:50:        json.dumps(obj)
+backend/app\main.py:170:    m = re.search(r"/api/v1/sessions/([^/]+)", path)
+backend/app\workflow\tools\execute_node.py:97:        f"{_normalize_name(tc.get('name', ' unknown '))}({json.dumps(tc.get('args', {}), ensure_ascii=False)[:200]})"
+backend/app\workflow\stage_audit.py:33:    raw = json.dumps(_jsonable(value), sort_keys=True, ensure_ascii=False, separators=(",", ":"))
+backend/app\workflow\root_graph.py:1309:        return json.dumps(
+backend/app\infrastructure\storage\bundle_store.py:64:        return json.dumps(payload, ensure_ascii=False, sort_keys=True)
+backend/app\infrastructure\storage\bundle_store.py:69:        payload = json.loads(bundle_json)
+backend/app\infrastructure\storage\bundle_store.py:115:            bundle_ref = json.dumps(descriptor.model_dump(mode="json"))
+backend/app\infrastructure\storage\bundle_store.py:178:            descriptor = ArtifactDescriptor.model_validate(json.loads(bundle_ref))
+backend/app\api\v1\session_create.py:37:        raw_config = json.loads(rag_layer_config) if rag_layer_config.strip() else {}
+backend/app\contracts\domain\custom_zone_contracts.py:76:            json.dumps(identity, ensure_ascii=False, sort_keys=True).encode("utf-8")
+backend/app\workflow\layers\context_bootstrap.py:49:    canonical = json.dumps(
+backend/app\infrastructure\reports\stage_report.py:44:        return json.dumps(_summary(value), ensure_ascii=False, indent=2, sort_keys=True)
+backend/app\infrastructure\reports\stage_report.py:46:        return json.dumps({"chars": len(value), "preview": value[:800]}, ensure_ascii=False)
+backend/app\infrastructure\reports\stage_report.py:265:                    lines.append(json.dumps(detail, ensure_ascii=False, indent=2, sort_keys=True))
+backend/app\infrastructure\reports\stage_report.py:268:                lines.append(json.dumps(_summary(payload), ensure_ascii=False, indent=2, sort_keys=True))
+backend/app\infrastructure\reports\review_package.py:74:    _atomic_write_text(path, json.dumps(data, ensure_ascii=False, indent=2))
+backend/app\core\settings.py:125:        payload = json.loads(str(raw))
+backend/app\infrastructure\reports\report_store.py:268:                return json.loads(summary)
+backend/app\domain\allocation\network_subproblem.py:38:            digest = hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()
+backend/app\data\model\snapshot.py:199:                    json.dumps(
+backend/app\data\model\snapshot.py:235:                    json.dumps(
+backend/app\data\model\snapshot.py:257:            json.dumps(manifest, sort_keys=True, separators=(",", ":")).encode()
+backend/app\domain\allocation\master_coordinator.py:53:        json.dumps(
+backend/app\domain\allocation\global_zone_select.py:50:            json.dumps(mapping, ensure_ascii=False, sort_keys=True, default=str).encode()
+backend/app\domain\allocation\global_site_select.py:122:            json.dumps(mapping, ensure_ascii=False, sort_keys=True, default=str).encode()
+backend/app\infrastructure\rendering\static_render.py:703:            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+backend/app\infrastructure\rendering\static_render.py:706:            manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
+backend/app\evidence\identity\source_semantic_store.py:27:            raw = json.loads(self.path.read_text(encoding="utf-8"))
+backend/app\evidence\identity\source_semantic_store.py:41:            json.dumps(
+backend/app\domain\allocation\scenario_optimizer.py:49:    raw = json.dumps(
+backend/app\domain\allocation\scenario_optimizer.py:716:            json.dumps(
+backend/app\domain\allocation\scenario_optimizer.py:896:        json.dumps(model_payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+backend/app\domain\allocation\scenario_optimizer.py:1029:        json.dumps(model_payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+backend/app\infrastructure\rendering\html_render.py:220:    return json.dumps(selected, ensure_ascii=False, default=str)
+backend/app\infrastructure\rendering\html_render.py:613:            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+backend/app\infrastructure\rendering\html_render.py:621:                json.dumps(manifest, ensure_ascii=False, indent=2),
+backend/app\data\model\canonical.py:350:        canonical = json.dumps(
+backend/app\evidence\identity\source_feature_binding.py:235:        json.dumps(binding_seed, ensure_ascii=False, sort_keys=True).encode("utf-8")
+backend/app\domain\allocation\subproblem_compiler.py:387:            json.dumps(
+backend/app\domain\allocation\subproblem_compiler.py:604:            json.dumps(component_ids, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+backend/app\domain\allocation\subproblem_optimizer.py:236:            json.dumps(
+backend/app\domain\allocation\subproblem_optimizer.py:358:    raw = json.dumps(sorted(child_ids), ensure_ascii=False, separators=(",", ":"))
+backend/app\domain\allocation\subproblem_optimizer.py:518:            json.dumps(
+backend/app\contracts\artifacts\validation_certificate_contracts.py:15:    return json.dumps(value, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
+backend/app\evidence\identity\observation_store.py:92:                json.dumps(identity_payload, sort_keys=True, ensure_ascii=False).encode("utf-8")
+backend/app\domain\network\snapshot.py:26:        return hashlib.sha256(json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+backend/app\domain\network\snapshot.py:92:            json.dumps(body, sort_keys=True, separators=(",", ":")).encode()
+backend/app\domain\network\snapshot.py:108:        return hashlib.sha256(json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+backend/app\domain\network\snapshot.py:126:    digest = "sha256:" + hashlib.sha256(json.dumps(body, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+backend/app\contracts\artifacts\execution_staging_contracts.py:15:    return json.dumps(value, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
+backend/app\evidence\identity\flash_source_semantic_classifier.py:25:from app.infrastructure.llm.structured import run_structured_output
+backend/app\evidence\identity\flash_source_semantic_classifier.py:69:    raw = json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+backend/app\evidence\identity\flash_source_semantic_classifier.py:395:                {"role": "user", "content": json.dumps(_proposal_payload(batch, candidates), ensure_ascii=False, sort_keys=True)},
+backend/app\evidence\identity\flash_source_semantic_classifier.py:400:                    proposal = await run_structured_output(
+backend/app\acceptance\p3_benchmark.py:49:    return json.dumps(
+backend/app\acceptance\p3_benchmark.py:290:    manifest = json.loads(manifest_file.read_text(encoding="utf-8"))
+backend/app\acceptance\p3_benchmark.py:494:        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+backend/app\application\queries\evidence.py:186:        from app.infrastructure.search import FakeExternalSearchAdapter
+backend/app\application\queries\evidence.py:199:            from app.infrastructure.search import ExaHTTPExternalSearchAdapter
+backend/app\application\queries\evidence.py:210:    from app.infrastructure.search import UnavailableExternalSearchAdapter
+backend/app\infrastructure\rag\vector_store.py:229:        params_str = json.dumps(context_params, sort_keys=True)
+backend/app\infrastructure\rag\vector_store.py:300:                data = json.loads(index_file.read_text(encoding="utf-8"))
+backend/app\infrastructure\rag\vector_store.py:320:                data = json.loads(index_file.read_text(encoding="utf-8"))
+backend/app\infrastructure\rag\vector_store.py:383:            ancestors = json.loads(ancestors_str) if isinstance(ancestors_str, str) else ancestors_str
+backend/app\infrastructure\rag\vector_store.py:441:                    "ancestors": json.dumps(chunk.ancestors, ensure_ascii=False),
+backend/app\infrastructure\rag\vector_store.py:602:                    ancestors = json.loads(ancestors_str) if isinstance(ancestors_str, str) else ancestors_str
+backend/app\infrastructure\rag\vector_store.py:707:                            ancestors = json.loads(ancestors)
+backend/app\infrastructure\rag\vector_store.py:729:                    ancestors = json.loads(ancestors_str) if isinstance(ancestors_str, str) else ancestors_str
+backend/app\evidence\identity\binding_store.py:126:                json.dumps(binding_seed, ensure_ascii=False, sort_keys=True).encode("utf-8")
+backend/app\spatial\terrain\evidence.py:131:    return json.dumps(
+backend/app\spatial\terrain\evidence.py:436:                    json.loads(to_geojson(source_geometry)),
+backend/app\infrastructure\rag\utils\metadata_extractor.py:243:            json_match = re.search(r'\{[^}]+\}', result_text)
+backend/app\infrastructure\rag\utils\metadata_extractor.py:245:                result = json.loads(json_match.group())
+backend/app\evidence\retrieval\requirements.py:48:    raw = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+backend/app\evidence\retrieval\requirements.py:53:    raw = json.dumps(
+backend/app\evidence\retrieval\requirements.py:151:    raw = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+backend/app\evidence\retrieval\requirements.py:921:    raw = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+backend/app\contracts\llm\decision_contracts.py:23:    return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str)
+backend/app\infrastructure\rag\service.py:289:                    parts.append(f"关键指标: {json.dumps(metrics, ensure_ascii=False)}")
+backend/app\infrastructure\rag\service.py:847:        if content and re.search(r'第[一二三四五六七八九十\d]+章', content):
+backend/app\domain\suitability\terrain_adapter.py:584:            json.dumps(feature_payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+backend/app\infrastructure\rag\context.py:447:                    json_match = re.search(r"\[[\s\S]*\]", content)
+backend/app\infrastructure\rag\context.py:449:                        outline = json.loads(json_match.group())
+backend/app\evidence\retrieval\query_planner.py:34:    raw = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+backend/app\infrastructure\rag\cli.py:234:            data = json.loads(index_file.read_text(encoding="utf-8"))
+backend/app\infrastructure\rag\chunker.py:546:            elif "```" in chunk.content and len(re.findall(r'```[\s\S]*?```', chunk.content)) > 0:
+backend/app\infrastructure\rag\chunker.py:585:        header_match = re.search(r'<tr>(.*?)</tr>', table_content, re.DOTALL)
+backend/app\infrastructure\rag\chunker.py:589:        rows = re.findall(r'<tr>.*?</tr>', table_content, re.DOTALL)
+backend/app\infrastructure\rag\chunker.py:678:        code_blocks = re.findall(r'```[\s\S]*?```', content)
+backend/app\application\projections\delivery.py:27:    raw = json.dumps(data, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()
+backend/app\evidence\retrieval\l1_scope.py:88:    raw = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+backend/app\evidence\retrieval\l1_scope.py:177:    raw = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+backend/app\evidence\retrieval\fact_quality.py:35:    raw = json.dumps(
+backend/app\domain\suitability\policy.py:68:        payload = json.dumps(
+backend/app\data\ingestion\upload.py:94:            geojson = json.loads(content.decode("utf-8"))
+backend/app\domain\validation\scenario_reconciliation.py:205:        json.dumps(payload, sort_keys=True, ensure_ascii=False).encode("utf-8")
+backend/app\evidence\retrieval\evidence_service.py:59:        json.dumps(entry, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+backend/app\evidence\retrieval\evidence_service.py:62:    raw = json.dumps(entries, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+backend/app\evidence\retrieval\evidence_service.py:103:        json.dumps(
+backend/app\evidence\retrieval\evidence_service.py:142:        raw = json.dumps({"context": context_version, "refs": digest_payload}, sort_keys=True)
+backend/app\evidence\retrieval\evidence_service.py:206:    raw = json.dumps(
+backend/app\evidence\retrieval\evidence_service.py:227:    raw = json.dumps(
+backend/app\evidence\retrieval\evidence_service.py:568:                json.dumps(
+backend/app\evidence\retrieval\evidence_service.py:1688:            from app.infrastructure.search import UnavailableExternalSearchAdapter
+backend/app\contracts\workflow\human_interrupt_contracts.py:90:    encoded = json.dumps(
+backend/app\infrastructure\llm\verified_structured.py:23:from app.infrastructure.llm.structured import run_structured_output, structured_failure_code
+backend/app\infrastructure\llm\verified_structured.py:181:        proposal = await run_structured_output(
+backend/app\domain\validation\repair_directives.py:165:    encoded = json.dumps(
+backend/app\data\ingestion\summary_parser.py:30:            parsed = json.loads(summary)
+backend/app\domain\validation\relation_validation.py:479:            json.dumps(payload, sort_keys=True, ensure_ascii=False).encode("utf-8")
+backend/app\domain\validation\relation_validation.py:708:        json.dumps(payload, sort_keys=True, ensure_ascii=False).encode("utf-8")
+backend/app\contracts\spatial\grounded_problem.py:21:    return json.dumps(value, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
+backend/app\contracts\spatial\candidate_geometry.py:194:            raw = json.dumps(payload, sort_keys=True, ensure_ascii=False).encode("utf-8")
+backend/app\evidence\retrieval\coverage.py:36:    raw = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+backend/app\data\ingestion\summary_generator.py:111:            m = re.search(pattern, content)
+backend/app\data\ingestion\summary_generator.py:218:{json.dumps(seed_metrics, ensure_ascii=False, indent=2) if seed_metrics else "（无）"}
+backend/app\data\ingestion\summary_generator.py:298:        m = re.search(pat, content)
+backend/app\infrastructure\llm\dimension_runtime.py:581:            from app.infrastructure.search import UnavailableExternalSearchAdapter
+backend/app\infrastructure\llm\dimension_runtime.py:952:        structured_summary_obj = json.loads(structured_summary) if structured_summary else None
+backend/app\domain\validation\closed_set.py:49:    encoded = json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str)
+backend/app\spatial\network\text_structurer.py:56:        json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+backend/app\spatial\network\text_structurer.py:139:    if re.search(r"幼儿园|小学|学校|教育|研学", text):
+backend/app\spatial\network\text_structurer.py:141:    if re.search(r"卫生站|卫生室|医疗|诊所", text):
+backend/app\spatial\network\text_structurer.py:143:    if re.search(r"养老|敬老", text):
+backend/app\spatial\network\text_structurer.py:145:    if re.search(r"防震|避灾|疏散|消防|应急", text):
+backend/app\spatial\network\text_structurer.py:147:    if re.search(r"民宿|观景|旅游|体验园|公园|营地|采摘", text):
+backend/app\spatial\network\text_structurer.py:149:    if re.search(r"产业|加工|合作社|基地|农场|种植园|集市|养殖|药苗", text):
+backend/app\spatial\network\text_structurer.py:151:    if re.search(r"公交站|停车场", text):
+backend/app\spatial\network\text_structurer.py:153:    if re.search(r"服务中心|文化|文体|篮球|健身|活动场地|菜市场|广场", text):
+backend/app\spatial\network\text_structurer.py:155:    if re.search(r"污水|垃圾|公厕|供水|供电|变压器", text):
+backend/app\spatial\network\text_structurer.py:157:    if re.search(r"祠堂|古驿道|古茶亭|历史", text):
+backend/app\spatial\network\text_structurer.py:357:    route_piece = next((piece for piece in pieces if re.search(r"--?|—|–|至|到", piece)), None)
+backend/app\spatial\network\text_structurer.py:407:    widen = re.search(r"由\s*(\d+(?:\.\d+)?)\s*m?\s*拓宽到\s*(\d+(?:\.\d+)?)\s*m", text, re.I)
+backend/app\spatial\network\text_structurer.py:412:        width = re.search(r"(?:新增|新建|硬化|建设)?\s*(\d+(?:\.\d+)?)\s*m\s*宽", text, re.I)
+backend/app\spatial\network\text_structurer.py:415:    length_range = re.search(r"(\d+(?:\.\d+)?)\s*[~～-]\s*(\d+(?:\.\d+)?)\s*(km|千米|m|米)", text, re.I)
+backend/app\spatial\network\text_structurer.py:421:        length = re.search(r"(?:长|长度[:：]?)(?:约)?\s*(\d+(?:\.\d+)?)\s*(km|千米|m|米)", text, re.I)
+backend/app\spatial\network\text_structurer.py:423:            length = re.search(r"(\d+(?:\.\d+)?)\s*(km|千米|m|米)\s*长", text, re.I)
+backend/app\spatial\network\text_structurer.py:439:            payload = json.loads(path.read_text(encoding="utf-8-sig"))
+backend/app\spatial\network\text_structurer.py:463:            key = json.dumps(match["geometry"], sort_keys=True, ensure_ascii=False)
+backend/app\spatial\network\text_structurer.py:831:        if "地质灾害" in line and re.search(r"避免|避让", line):
+backend/app\spatial\network\text_structurer.py:857:        if "古树名木" in line and re.search(r"避让|禁止|不得", line):
+backend/app\spatial\network\text_structurer.py:871:        if ("禁堵河" in line or "不填湖" in line) and re.search(r"河|湖|水域", line):
+backend/app\spatial\network\text_structurer.py:895:            width = re.search(r"(?:道路宽度(?:控制为|不小于)|宽度为|巷道不小于)\s*(\d+(?:\.\d+)?)\s*米", line)
+backend/app\spatial\network\text_structurer.py:910:            setback = re.search(r"(?:建筑物?|两侧建筑)(?:应)?后退道路?不小于\s*(\d+(?:\.\d+)?)\s*米", line)
+backend/app\spatial\network\text_structurer.py:926:            radius = re.search(r"转弯半径不应小于\s*(\d+(?:\.\d+)?)\s*米", line)
+backend/app\spatial\network\text_structurer.py:948:        key = json.dumps(
+backend/app\domain\validation\adjustment_executor.py:75:    payload = json.dumps(
+backend/app\domain\validation\adjustment_executor.py:149:        parts.append([str(key), json.dumps(parent_digests, sort_keys=True, default=str)])
+backend/app\domain\validation\adjustment_executor.py:152:    raw = json.dumps(parts, sort_keys=True, ensure_ascii=False)
+backend/app\data\ingestion\source_identity.py:17:    payload = json.dumps(
+backend/app\contracts\spatial\query_ast.py:169:            raw = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+backend/app\domain\materialization\land_design_worker.py:197:        after_geom = json.loads(result.get("geometry", ""))
+backend/app\domain\materialization\land_design_worker.py:265:                merged_geom = shape(json.loads(merged.get("geometry", "")))
+backend/app\domain\materialization\land_design_worker.py:371:        geom_dict = json.loads(json.dumps(buffer_geom.__geo_interface__))
+backend/app\spatial\network\terrain_grid_preparation.py:52:    encoded = json.dumps(
+backend/app\spatial\network\terrain_grid_preparation.py:112:        json.dumps(
+backend/app\spatial\network\terrain_grid_preparation.py:197:        report = json.loads(report_path.read_text(encoding="utf-8"))
+backend/app\infrastructure\llm\tools\helpers.py:24:        content=json.dumps(result, ensure_ascii=False, default=str),
+backend/app\spatial\network\stage2_6_validator.py:107:    return json.loads(path.read_text(encoding="utf-8-sig"))
+backend/app\domain\materialization\existing_road_materializer.py:32:    payload = json.loads(path.read_text(encoding="utf-8-sig"))
+backend/app\domain\materialization\existing_road_materializer.py:228:        json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+backend/app\domain\materialization\existing_road_materializer.py:252:        json.dumps(
+backend/app\domain\materialization\vocab_extractor.py:683:    structured = llm.with_structured_output(_VocabularyOutput)
+backend/app\spatial\network\spatial_binder.py:31:    return json.loads(path.read_text(encoding="utf-8-sig"))
+backend/app\spatial\network\spatial_binder.py:37:        json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+backend/app\spatial\network\spatial_binder.py:185:            geometry_key = json.dumps(candidate["geometry"], sort_keys=True)
+backend/app\spatial\network\spatial_binder.py:569:        project = json.loads(json.dumps(source_project, ensure_ascii=False))
+backend/app\spatial\network\spatial_binder.py:785:        copied = json.loads(json.dumps(feature, ensure_ascii=False))
+backend/app\spatial\network\spatial_binder.py:789:        copied = json.loads(json.dumps(feature, ensure_ascii=False))
+backend/app\spatial\network\spatial_binder.py:793:        copied = json.loads(json.dumps(feature, ensure_ascii=False))
+backend/app\spatial\network\spatial_binder.py:797:        copied = json.loads(json.dumps(feature, ensure_ascii=False))
+backend/app\domain\materialization\plan_digest.py:44:    canonical = json.dumps(
+backend/app\domain\materialization\road_generator.py:82:        json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+backend/app\domain\materialization\road_generator.py:88:    return json.loads(path.read_text(encoding="utf-8-sig"))
+backend/app\spatial\network\road_candidate_preparation.py:147:    payload = json.loads(path.read_text(encoding="utf-8-sig"))
+backend/app\infrastructure\llm\tools\access\shared.py:83:    return json.dumps(make_result(True, data=data), ensure_ascii=False, default=str)
+backend/app\spatial\network\qgis_export.py:27:        return json.dumps(value, ensure_ascii=False, sort_keys=True)
+backend/app\spatial\network\qgis_export.py:32:    payload = json.loads(path.read_text(encoding="utf-8"))
+backend/app\spatial\network\qgis_export.py:34:        json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True, allow_nan=False) + "\n",
+backend/app\spatial\network\qgis_export.py:347:        json.dumps(manifest, ensure_ascii=False, indent=2, sort_keys=True, allow_nan=False) + "\n",
+backend/app\domain\program\failure_scope.py:135:    match = re.search(r"(?:ERROR|WARNING|INFO)\[([^\]]+)\]", text)
+backend/app\domain\program\failure_scope.py:149:    relation_match = re.search(r"relation[_ ](?:template=)?([a-z_]+)", text)
+backend/app\domain\program\failure_scope.py:152:    subject_match = re.search(r"subject(?: kind)?[= ]([a-z_]+)", text)
+backend/app\domain\program\failure_scope.py:155:    component_match = re.search(r"component[_ ]kind[= ]([a-z_]+)", text)
+backend/app\domain\program\claim_projection.py:37:            payload: Any = json.loads(body.strip())
+backend/app\spatial\network\planning_nodes.py:79:    return json.loads(path.read_text(encoding="utf-8-sig"))
+backend/app\spatial\network\planning_nodes.py:85:        json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+backend/app\spatial\network\planning_nodes.py:184:        json.dumps(value, ensure_ascii=False)
+backend/app\spatial\network\planning_nodes.py:1063:            candidate_key = json.dumps(
+backend/app\spatial\network\planning_nodes.py:1086:            json.loads(line)
+backend/app\spatial\network\planning_nodes.py:1441:            merged[key] = json.loads(json.dumps(entity, ensure_ascii=False))
+backend/app\spatial\network\planning_nodes.py:1489:        entity = json.loads(json.dumps(source_entity, ensure_ascii=False))
+backend/app\spatial\network\planning_nodes.py:2554:    payload = json.loads(json.dumps(base_payload, ensure_ascii=False))
+backend/app\domain\program\classification_generator.py:108:    from app.infrastructure.llm.structured import run_structured_output
+backend/app\domain\program\classification_generator.py:116:                f"依据={json.dumps((t.get('evidence_refs') or [])[:2], ensure_ascii=False)}"
+backend/app\domain\program\classification_generator.py:134:                result = await run_structured_output(
+backend/app\spatial\network\planner.py:46:    return json.loads(path.read_text(encoding="utf-8-sig"))
+backend/app\spatial\network\planner.py:52:        json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True, allow_nan=False) + "\n",
+backend/app\spatial\network\planner.py:1133:        copied = json.loads(json.dumps(feature, ensure_ascii=False))
+backend/app\spatial\network\planner.py:1137:        copied = json.loads(json.dumps(feature, ensure_ascii=False))
+backend/app\domain\program\claim_draft.py:525:        return json.loads(candidate)
+backend/app\domain\program\claim_draft.py:531:            return json.loads(repaired)
+backend/app\domain\program\claim_draft.py:546:    ``json.loads`` before it can reach the domain contract.
+backend/app\infrastructure\llm\structured.py:141:    if re.search(r"</?think\b", candidate, re.IGNORECASE):
+backend/app\infrastructure\llm\structured.py:174:    if re.search(r"</?think\b", candidate, re.IGNORECASE):
+backend/app\infrastructure\llm\structured.py:185:async def run_structured_output(
+backend/app\infrastructure\llm\structured.py:244:            structured = llm.with_structured_output(
+backend/app\infrastructure\llm\structured.py:420:    "run_structured_output",
+backend/app\infrastructure\llm\stats_collector.py:200:                json.dumps(asdict(stats), ensure_ascii=False, indent=2),
+backend/app\spatial\network\network_graph.py:304:    fingerprint = hashlib.sha256(json.dumps(payload, sort_keys=True).encode("utf-8")).hexdigest()
+backend/app\domain\program\worker.py:134:    cache_key = json.dumps(
+backend/app\domain\program\worker.py:139:                json.dumps(
+backend/app\domain\program\worker.py:181:    cache_key = json.dumps(
+backend/app\domain\program\worker.py:185:                json.dumps(
+backend/app\domain\program\worker.py:243:            item = json.dumps(item, ensure_ascii=False, default=str)
+backend/app\domain\program\worker.py:304:        return "【已审计 L1 spatial location facts】\n" + json.dumps(
+backend/app\domain\program\worker.py:363:        + json.dumps(rows, ensure_ascii=False, indent=2)
+backend/app\domain\program\worker.py:391:        return json.dumps(payload, ensure_ascii=False, sort_keys=True)
+backend/app\domain\program\worker.py:393:        return json.dumps({
+backend/app\domain\program\worker.py:530:    claims_payload = json.dumps(
+backend/app\domain\program\worker.py:535:    feedback = json.dumps(
+backend/app\domain\program\worker.py:734:                f"validator_errors={json.dumps(semantic_feedback, ensure_ascii=False)}\n"
+backend/app\domain\program\worker.py:735:                f"normalization_diagnostics={json.dumps(normalization_diagnostics, ensure_ascii=False)}\n"
+backend/app\domain\program\worker.py:736:                f"rejected_claims={json.dumps(rejected, ensure_ascii=False)}\n"
+backend/app\domain\program\worker.py:941:    structured_summary_str = json.dumps(
+backend/app\domain\program\worker.py:1044:    sections = re.findall(r"^#{1,6}\s+(.+)$", display, re.MULTILINE)
+backend/app\spatial\network\network_builder.py:64:        json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True),
+backend/app\spatial\network\network_builder.py:880:    print(json.dumps(summary, ensure_ascii=False, indent=2))
+backend/app\domain\ground\anchors.py:887:        structured = llm.with_structured_output(
+backend/app\spatial\network\location_confirmation.py:29:    return json.loads(path.read_text(encoding="utf-8-sig"))
+backend/app\spatial\network\location_confirmation.py:35:        json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+backend/app\spatial\network\location_confirmation.py:46:    encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True).encode("utf-8")
+backend/app\spatial\network\location_confirmation.py:178:    return json.dumps(payload, ensure_ascii=False).replace("</", "<\\/")
+backend/app\domain\program\claim_adapter.py:38:    variant = json.dumps(
+backend/app\domain\program\claim_adapter.py:592:            key = relation_id or json.dumps(
+backend/app\infrastructure\kg\spatial_store.py:268:                "aliases": json.dumps(list(entity.aliases), ensure_ascii=False),
+backend/app\infrastructure\kg\spatial_store.py:274:                "properties": json.dumps(properties or {}, ensure_ascii=False),
+backend/app\infrastructure\kg\spatial_store.py:311:                "provenance_refs": json.dumps(
+backend/app\infrastructure\kg\spatial_store.py:355:                aliases = json.loads(aliases)
+backend/app\infrastructure\kg\spatial_store.py:406:                refs = json.loads(refs)
+backend/app\domain\program\flash_unit_repair.py:414:        f"\n字段列表: {json.dumps(payload, ensure_ascii=False)}"
+backend/app\spatial\network\kg_retry.py:21:    return json.loads(path.read_text(encoding="utf-8-sig"))
+backend/app\spatial\network\kg_retry.py:27:        json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+backend/app\infrastructure\kg\service.py:131:            _m = re.findall(r"[-+]?\d*\.?\d+", _wkt)
+backend/app\domain\program\semantic_repair.py:91:            decoded = json.loads(value)
+backend/app\domain\program\semantic_repair.py:114:                loaded = json.loads(path.read_text(encoding="utf-8"))
+backend/app\domain\program\semantic_repair.py:138:                json.dumps(self._data, ensure_ascii=False, sort_keys=True),
+backend/app\domain\program\semantic_repair.py:200:        f"上轮确定性校验反馈：{json.dumps(feedback, ensure_ascii=False)}\n"
+backend/app\domain\program\semantic_repair.py:201:        f"输入：{json.dumps(payload, ensure_ascii=False, separators=(',', ':'))}"
+backend/app\domain\program\semantic_repair.py:526:    from app.infrastructure.llm.structured import run_structured_output
+backend/app\domain\program\semantic_repair.py:544:                raw = await run_structured_output(
+backend/app\spatial\network\evaluator.py:28:    return json.loads(path.read_text(encoding="utf-8-sig"))
+backend/app\spatial\network\evaluator.py:34:        json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True, allow_nan=False) + "\n",
+backend/app\spatial\network\evaluator.py:630:        copied = json.loads(json.dumps(feature, ensure_ascii=False))
+backend/app\domain\program\target_projection\compile.py:141:    trace = json.dumps(relation.model_dump(mode="json"), ensure_ascii=False, sort_keys=True)
+backend/app\spatial\network\comparison_evaluator.py:44:        json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+backend/app\domain\program\target_projection\planning_task_graph_compiler.py:264:    raw = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+backend/app\domain\demand\facility_demand_model.py:102:        return hashlib.sha256(json.dumps(payload, sort_keys=True, ensure_ascii=False).encode("utf-8")).hexdigest()
+backend/app\infrastructure\kg\queries\contracts.py:102:        return TokenBudget.estimate(json.dumps(d, ensure_ascii=False))
+backend/app\infrastructure\llm\planning_claims.py:20:from app.infrastructure.llm.structured import run_structured_output
+backend/app\infrastructure\llm\planning_claims.py:90:                    result = await run_structured_output(
+backend/app\infrastructure\kg\memory.py:201:    path.write_text(json.dumps(store.to_dict(), ensure_ascii=False, indent=2), encoding="utf-8")
+backend/app\infrastructure\kg\memory.py:209:    data = json.loads(path.read_text(encoding="utf-8"))
+backend/app\data\ingestion\compiler\profiles\l1_observation.py:191:        payload = json.loads(instruction)
+backend/app\data\ingestion\compiler\profiles\l1_observation.py:286:        payload = json.loads(instruction)
+backend/app\data\ingestion\compiler\profiles\l1_observation.py:313:        payload = json.loads(instruction)
+backend/app\domain\objectives\worker.py:156:    from app.infrastructure.llm.structured import run_structured_output
+backend/app\domain\objectives\worker.py:182:        decision_set = await run_structured_output(
+backend/app\domain\objectives\worker.py:494:        "sections": re.findall(r"【([^】]+)】", text or ""),
+backend/app\domain\objectives\worker.py:558:    return json.dumps(payload, ensure_ascii=False)
+backend/app\spatial\model\axis_builder.py:98:                    geoms.append(from_geojson(json.dumps(g)))
+backend/app\spatial\model\axis_builder.py:186:                    geoms.append(from_geojson(json.dumps(g)))
+backend/app\infrastructure\kg\manager.py:110:                canonical = json.dumps(
+backend/app\infrastructure\kg\manager.py:134:            canonical = json.dumps(
+backend/app\infrastructure\kg\manager.py:408:        params_key = hashlib.md5(json.dumps(params, sort_keys=True).encode()).hexdigest()
+backend/app\spatial\model\parcel_ops.py:58:    geom_str = json.dumps(geometry, ensure_ascii=False) if isinstance(geometry, dict) else str(geometry)
+backend/app\spatial\model\parcel_ops.py:85:    geom_str = json.dumps(geometry, ensure_ascii=False) if isinstance(geometry, dict) else str(geometry)
+backend/app\spatial\model\parcel_ops.py:159:        merged_geom = json.loads(json.dumps(merged.__geo_interface__))
+backend/app\spatial\model\parcel_ops.py:172:            "geometry": json.dumps(merged_geom, ensure_ascii=False),
+backend/app\spatial\model\parcel_ops.py:226:                part_geom = json.loads(json.dumps(part.__geo_interface__))
+backend/app\spatial\model\parcel_ops.py:232:                    "geometry": json.dumps(part_geom, ensure_ascii=False),
+backend/app\spatial\model\parcel_ops.py:282:        "geometry": json.dumps(geometry, ensure_ascii=False),
+backend/app\infrastructure\kg\gazetteer\gazetteer.py:133:                m = _re.findall(r"[\d.+-]+", str(o))
+backend/app\infrastructure\kg\gazetteer\gazetteer.py:329:        payload = json.loads(path.read_text(encoding="utf-8"))
+backend/app\infrastructure\kg\gazetteer\gazetteer.py:433:        m = re.search(r"\"match\"\s*:\s*(true|false)", content)
+backend/app\domain\delivery\delivery_validator.py:44:                    json.dumps(feature.get("geometry"), sort_keys=True).encode("utf-8")
+backend/app\domain\delivery\delivery_snapshot_builder.py:133:            json.dumps(
+backend/app\data\ingestion\providers\tianditu\provider.py:328:                coord_pairs = re.findall(
+backend/app\data\ingestion\providers\tianditu\provider.py:354:                    coord_pairs = re.findall(
+backend/app\infrastructure\kg\enrichment\report_entity_enrichment.py:310:            data = json.loads(stripped)
+backend/app\infrastructure\kg\enrichment\name_backfill.py:237:        structured_factory = getattr(llm, "with_structured_output", None)
+backend/app\infrastructure\kg\enrichment\name_backfill.py:285:            cache = json.loads(cache_path.read_text(encoding="utf-8"))
+backend/app\infrastructure\kg\enrichment\name_backfill.py:293:            json.dumps(
+backend/app\infrastructure\kg\enrichment\name_backfill.py:358:            tmp.write_text(json.dumps(cache, ensure_ascii=False, sort_keys=True), encoding="utf-8")
+backend/app\data\encodings\dicts\disambiguation.py:6:via ``with_structured_output()``.
+backend/app\data\encodings\dicts\disambiguation.py:39:    Designed as the input schema for ``with_structured_output(DisambiguationDecision)``.
+backend/app\infrastructure\kg\builder\geo_helpers.py:46:    match = re.findall(r"(-?[\d.]+)\s+(-?[\d.]+)", str(wkt_str))
+backend/app\domain\objectives\aggregate.py:286:            payload = instruction if isinstance(instruction, dict) else json.loads(instruction)
+backend/app\contracts\planning\task_graph.py:47:    return json.dumps(value, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
+backend/app\contracts\planning\solver_readiness.py:29:    return json.dumps(value, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
+backend/app\contracts\planning\solver.py:40:    return json.dumps(value, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
+backend/app\contracts\planning\solver.py:262:            key=lambda item: json.dumps(
+backend/app\contracts\planning\solver.py:300:                key=lambda item: json.dumps(
+backend/app\contracts\planning\solver.py:351:    raw = json.dumps(payload, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
+backend/app\contracts\planning\scenario.py:16:    return json.dumps(value, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
+backend/app\spatial\allocation\selection.py:33:        cn = re.search(r"占地\s*([一二三四五六七八九十]+)\s*亩", text)
+backend/app\spatial\grounding\village_cluster_mapper.py:225:            raw = json.loads(cache.read_text(encoding="utf-8"))
+backend/app\spatial\grounding\village_cluster_mapper.py:292:                json.dumps({"key": cache_key, "map": mapping}, ensure_ascii=False),
+backend/app\spatial\grounding\village_cluster_mapper.py:421:        from app.infrastructure.llm.structured import run_structured_output
+backend/app\spatial\grounding\village_cluster_mapper.py:425:        # producing the tool-call object expected by ``with_structured_output``
+backend/app\spatial\grounding\village_cluster_mapper.py:450:        response = await run_structured_output(
+backend/app\spatial\allocation\global_site_allocator.py:55:        json.dumps(canonical, ensure_ascii=False, sort_keys=True).encode("utf-8")
+backend/app\spatial\grounding\flash_mention_extractor.py:312:        from app.infrastructure.llm.structured import run_structured_output
+backend/app\spatial\grounding\flash_mention_extractor.py:328:            return await run_structured_output(
+backend/app\spatial\grounding\flash_mention_extractor.py:420:            loaded = json.loads(raw)
+backend/app\spatial\grounding\flash_mention_extractor.py:433:                json.dumps(self._data, ensure_ascii=False, sort_keys=True),
+backend/app\spatial\grounding\flash_mention_extractor.py:534:        from app.infrastructure.llm.structured import run_structured_output
+backend/app\spatial\grounding\flash_mention_extractor.py:544:            return await run_structured_output(
+backend/app\spatial\allocation\global_zone_parcel_allocator.py:110:        json.dumps(canonical, ensure_ascii=False, sort_keys=True).encode("utf-8")
+backend/app\spatial\grounding\bundle_binder.py:136:        output_path.write_text(json.dumps(result, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+backend/app\spatial\grounding\report_grounder.py:458:            raw = json.loads(cache.read_text(encoding="utf-8"))
+backend/app\spatial\grounding\report_grounder.py:485:        from app.infrastructure.llm.structured import run_structured_output
+backend/app\spatial\grounding\report_grounder.py:496:            return await run_structured_output(
+backend/app\spatial\grounding\report_grounder.py:525:                        json.dumps({"key": cache_key, "value": value}, ensure_ascii=False),
+backend/app\spatial\grounding\resolver.py:2557:            structured_factory = getattr(llm, "with_structured_output", None)
+backend/app\spatial\grounding\resolver.py:2560:                    "grounding LLM must expose typed with_structured_output"
+backend/app\infrastructure\artifacts\runtime.py:58:    raw = json.dumps(_jsonable(payload), sort_keys=True, ensure_ascii=False, separators=(",", ":"))
+backend/app\infrastructure\artifacts\repository.py:22:    return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+backend/app\infrastructure\artifacts\repository.py:147:        return json.loads(data)
+backend/app\infrastructure\artifacts\repository.py:206:        return json.loads(path.read_text(encoding="utf-8"))
+backend/app\domain\assessment\analysis_node.py:425:    observations_json = json.dumps(instruction_payload, ensure_ascii=False)
+backend/app\domain\assessment\analysis_node.py:486:        structured_summary_obj = json.loads(structured_summary_str) if structured_summary_str else None
+backend/app\domain\assessment\analysis_node.py:586:        "sections": re.findall(r"【([^】]+)】", text or ""),
+backend/app\domain\assessment\analysis_node.py:620:    return json.dumps(
+backend/app\infrastructure\export\delivery_snapshot.py:235:    raw = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+backend/app\infrastructure\export\delivery_snapshot.py:297:    raw = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+backend/app\infrastructure\export\delivery_snapshot.py:420:    payload = json.loads(Path(ref.path).read_text(encoding="utf-8"))
+backend/app\infrastructure\export\delivery_snapshot.py:431:        payload = json.loads(Path(ref.path).read_text(encoding="utf-8"))
+backend/app\infrastructure\export\delivery_snapshot.py:441:        payload = json.loads(Path(ref.path).read_text(encoding="utf-8"))
+backend/app\infrastructure\export\delivery_snapshot.py:585:        json.dumps(snapshot.model_dump(mode="json"), ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+backend/app\infrastructure\artifacts\fingerprint.py:58:    raw = json.dumps(
+backend/app\infrastructure\gis\spatial_data_port.py:68:    return json.loads(json.dumps(value, ensure_ascii=False, default=_json_default))
+backend/app\infrastructure\gis\spatial_data_port.py:204:            payload = json.loads(Path(ref.path).read_text(encoding="utf-8"))
+backend/app\contracts\planning\p1_closure.py:21:    return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+backend/app\domain\assessment\l1_fact_projection.py:40:        json.dumps(payload, ensure_ascii=False, sort_keys=True).encode("utf-8")
+backend/app\domain\assessment\l1_extraction_loop.py:187:    from app.infrastructure.llm.structured import run_structured_output
+backend/app\domain\assessment\l1_extraction_loop.py:282:        output = await run_structured_output(
+backend/app\domain\assessment\l1_extraction_loop.py:338:            report_material = json.dumps(
+backend/app\domain\assessment\l1_extraction_loop.py:362:            report_output = await run_structured_output(
+backend/app\contracts\planning\intent_graph.py:44:    return json.dumps(value, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
+backend/app\infrastructure\context\planning_context.py:217:        payload = json.dumps(self._content_inputs, sort_keys=True, default=str)
+backend/app\contracts\planning\constraint_factor.py:51:    return json.dumps(value, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
+backend/app\contracts\planning\approval.py:16:    return json.dumps(value, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
+backend/app\domain\assessment\observation_draft.py:192:    return json.loads(candidate)
+backend/app\domain\assessment\observation_draft.py:248:        json.dumps(

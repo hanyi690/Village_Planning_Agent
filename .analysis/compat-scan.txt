@@ -1,0 +1,572 @@
+backend/app/spatial\validation\detector.py:34:# Threshold for reporting a metric conflict (5% relative difference)
+backend/app/spatial\validation\detector.py:35:DEFAULT_RELATIVE_THRESHOLD = 0.05
+backend/app/spatial\validation\detector.py:145:    def __init__(self, relative_threshold: float = DEFAULT_RELATIVE_THRESHOLD):
+backend/app/spatial\validation\detector.py:146:        self.relative_threshold = relative_threshold
+backend/app/spatial\validation\detector.py:202:                        if rel_diff > self.relative_threshold:
+backend/app/spatial\validation\detector.py:336:            # Flat format fallback: dim_summary.metrics
+backend/app/spatial\query\bridge.py:657:    Returns dict compatible with PlanningKG._add_cross_type_relations:
+backend/app/spatial\model\subdivision.py:222:    as a fallback for non-convex parcels.
+backend/app/spatial\model\subdivision.py:243:    """Merge fragments below the sliver threshold into an adjacent fragment."""
+backend/app/spatial\model\subdivision.py:246:    threshold = min_ha * _HA
+backend/app/spatial\model\subdivision.py:249:        if frag.area >= threshold:
+backend/app/spatial\model\relations.py:36:        for i, v1 in enumerate(residential_clusters):
+backend/app/spatial\model\relations.py:41:                dx = v2.center[0] - v1.center[0]  # longitude diff
+backend/app/spatial\model\relations.py:42:                dy = v2.center[1] - v1.center[1]  # latitude diff
+backend/app/spatial\model\relations.py:74:                    object=v1.name,
+backend/app/spatial\model\relations.py:88:                    subject=v1.name,
+backend/app/spatial\model\parcel_ops.py:50:        PlannedParcel-compatible dict with derived_from_bsms populated
+backend/app/spatial\model\parcel_ops.py:115:        PlannedParcel-compatible dict, or None if merge fails
+backend/app/spatial\model\parcel_ops.py:200:        List of PlannedParcel-compatible dicts
+backend/app/spatial\model\parcel_ops.py:266:        PlannedParcel-compatible dict
+backend/app/spatial\model\parcel_ops.py:299:    Replaces the old _apply_operations (attribute-level fake operations).
+backend/app/spatial\model\area_engine.py:47:        lat: Latitude for fallback cos(lat) correction. If None, uses centroid.
+backend/app/spatial\model\area_engine.py:73:        logger.warning(f"[area_engine] Projected area failed, using fallback: {e}")
+backend/app/spatial\model\area_engine.py:75:    return _area_ha_fallback(geometry, lat=lat)
+backend/app/spatial\model\area_engine.py:88:        lat: Latitude for fallback correction.
+backend/app/spatial\model\area_engine.py:123:        logger.warning(f"[area_engine] Batch projection failed, using fallback: {e}")
+backend/app/spatial\model\area_engine.py:125:    return [_area_ha_fallback(g) for g in geometries]
+backend/app/spatial\model\area_engine.py:137:def _area_ha_fallback(
+backend/app/spatial\model\area_engine.py:141:    """Spherical approximation fallback with cos(lat) correction.
+backend/app/spatial\model\area_engine.py:144:    At lat 25N (southern China), cos(25°) = 0.906 → old method overestimates by 10%.
+backend/app/spatial\model\area_engine.py:145:    At lat 40N (northern China), cos(40°) = 0.766 → old method overestimates by 30%.
+backend/app/spatial\model\geometry.py:37:    """L2: proximity — parcels within centroid distance threshold."""
+backend/app/spatial\model\geometry.py:151:      L2 nearby:  parcels within area-weighted centroid distance threshold
+backend/app/spatial\model\geometry.py:169:    except ImportError:  # pragma: no cover - Shapely 1.x fallback
+backend/app/spatial\model\geometry.py:276:    # L2: nearby (area-weighted centroid distance threshold)
+backend/app/spatial\model\geometry.py:287:                threshold = min(500.0, max(200.0, (sqrt_areas[i] + sqrt_areas[j]) * 2))
+backend/app/spatial\model\geometry.py:288:                if dist <= threshold:
+backend/app/spatial\model\geometry.py:427:    """First village boundary polygon (admin_areas, fallback planning_scope)."""
+backend/app/data\ingestion\__init__.py:3:Folded from the former modules/data package (catalog / sources /
+backend/app/spatial\model\crs_engine.py:32:# Web Mercator (EPSG:3857) — kept as fallback only
+backend/app/spatial\model\crs_engine.py:87:            lon = 116.0  # fallback: central China
+backend/app/spatial\model\crs_engine.py:120:    if str(from_crs).strip().casefold() == str(to_crs).strip().casefold():
+backend/app/spatial\model\coord_transform.py:83:    (vs ~1-2cm for the old double-subtraction approximation).
+backend/app/data\ingestion\table_schema_inference.py:192:        "户均宅基地": "homestead_per_household_sqm",
+backend/app/data\ingestion\gazetteer.py:3:Two-tier fallback:
+backend/app/data\ingestion\gazetteer.py:7:Distance threshold: 5km — loose enough for rural village names with
+backend/app/data\ingestion\gazetteer.py:27:GEOCODE_DISTANCE_THRESHOLD_M = 5000  # 5 km max for geocode→village match
+backend/app/data\ingestion\gazetteer.py:73:                if dist < GEOCODE_DISTANCE_THRESHOLD_M:
+backend/app/data\ingestion\summary_parser.py:22:    otherwise a ``{"summary": ...}`` fallback for plain-text summaries.
+backend/app/data\ingestion\summary_generator.py:6:  Layer 3: Fallback to regex-only on Instructor failure or empty content
+backend/app/data\ingestion\summary_generator.py:9:contract and never renames old field spellings into current semantics.
+backend/app/data\ingestion\summary_generator.py:129:      Layer 3: Fallback to regex-only on Instructor failure
+backend/app/data\ingestion\summary_generator.py:131:    Returns JSON string compatible with the dimension's Pydantic schema.
+backend/app/data\ingestion\summary_generator.py:160:    # Layer 3 fallback: regex-only structured summary
+backend/app/data\ingestion\summary_generator.py:290:        (r'(\d+)\s*户', 'households'),
+backend/app/data\ingestion\summary_generator.py:307:    """Extract key points from markdown headings and bold text."""
+backend/app/data\ingestion\summary_generator.py:316:    # From **bold** text
+backend/app/spatial\grounding\village_cluster_mapper.py:382:        cache_key_prefix="water-v1",
+backend/app/spatial\grounding\village_cluster_mapper.py:458:            allow_content_json_fallback=allow_provider_content_json,
+backend/app/data\ingestion\source_identity.py:55:        "http://village-planning.org/source-feature/v1/"
+backend/app/data\ingestion\compiler\spec_mapper.py:85:    Only categories with one unambiguous role receive a compatibility
+backend/app/data\ingestion\compiler\spec_mapper.py:126:    # Conservative fallback for a root-village name: a Chinese span ending in
+backend/app/data\ingestion\compiler\spec_mapper.py:337:    # previous fallback produced one-character false mentions and polluted
+backend/app/data\ingestion\compiler\spec_mapper.py:365:# couple of extremely safe suffixes so a fully deterministic fallback still
+backend/app/data\ingestion\compiler\provenance.py:19:    ``"l1_observe"`` for backward compatibility.
+backend/app/spatial\grounding\resolver.py:13:gazetteer/KG/center fallback. Callers that only have a village name + anchors
+backend/app/spatial\grounding\resolver.py:194:    """Gazetteer entry first; bundle cluster fallback for a natural village."""
+backend/app/spatial\grounding\resolver.py:380:        (replacing the village-center bbox fallback used by EXPLORE grounding).
+backend/app/spatial\grounding\resolver.py:564:                allow_session_fallback=not bool(raw_label.strip()),
+backend/app/spatial\grounding\resolver.py:854:        # coarse-reference fallback; this still resolves only existing BSMs
+backend/app/spatial\grounding\resolver.py:880:                logger.debug("[SpatialResolver] gazetteer fallback failed: %s", exc)
+backend/app/spatial\grounding\resolver.py:918:            fallback = self._llm_reason_fallback(
+backend/app/spatial\grounding\resolver.py:923:            if fallback is not None:
+backend/app/spatial\grounding\resolver.py:924:                return fallback
+backend/app/spatial\grounding\resolver.py:937:                    uncertainty_reason="village_coarse_fallback",
+backend/app/spatial\grounding\resolver.py:939:                        "path": "village_cluster:gazetteer:coarse_fallback",
+backend/app/spatial\grounding\resolver.py:1149:        to a village-wide or first-candidate fallback.
+backend/app/spatial\grounding\resolver.py:1586:            role = str(getattr(identity, "role", "") or "").casefold()
+backend/app/spatial\grounding\resolver.py:1589:            ).casefold()
+backend/app/spatial\grounding\resolver.py:1592:            ).casefold()
+backend/app/spatial\grounding\resolver.py:1650:            role = str(getattr(identity, "role", "") or "").casefold()
+backend/app/spatial\grounding\resolver.py:1653:            ).casefold()
+backend/app/spatial\grounding\resolver.py:1656:            ).casefold()
+backend/app/spatial\grounding\resolver.py:1749:                entity_type = str(getattr(identity, "entity_type", "") or "").casefold()
+backend/app/spatial\grounding\resolver.py:1750:                role = str(getattr(identity, "role", "") or "").casefold()
+backend/app/spatial\grounding\resolver.py:1751:                source_layer = str(getattr(identity, "source_layer", "") or "").casefold()
+backend/app/spatial\grounding\resolver.py:1825:            str(getattr(ref, "feature_kind", "") or "").casefold()
+backend/app/spatial\grounding\resolver.py:1885:        meaningful: the caller may continue with EvidenceGraph fallback, but
+backend/app/spatial\grounding\resolver.py:2026:    def _llm_reason_fallback(
+backend/app/spatial\grounding\resolver.py:2544:        allow_session_fallback: bool = True,
+backend/app/spatial\grounding\resolver.py:2575:        if not allow_session_fallback:
+backend/app/spatial\grounding\resolver.py:2664:    fallback when the gazetteer lacks a named village entry.
+backend/app/spatial\grounding\resolver.py:2884:    Migrated from the legacy select parse agent's resolve_spatial_anchors (Wave M2).
+backend/app/domain\delivery\delivery_validator.py:17:    placeholder_geometry = 0
+backend/app/domain\delivery\delivery_validator.py:34:                        placeholder_geometry += 1
+backend/app/domain\delivery\delivery_validator.py:56:        and not placeholder_geometry
+backend/app/domain\delivery\delivery_validator.py:65:        "placeholder_geometry_count": placeholder_geometry,
+backend/app/domain\delivery\delivery_snapshot_builder.py:122:            # FeatureCollection.  Do not expose that placeholder as a map
+backend/app/data\ingestion\sources\api_vector.py:34:    geological hazard) as GeoJSON via MapServer REST or WFS fallback.
+backend/app/data\ingestion\sources\api_vector.py:105:        # Fallback to WFS
+backend/app/data\ingestion\sources\api_vector.py:116:        # WMS fallback - return URL for visualization only
+backend/app/spatial\grounding\report_grounder.py:321:        cache_key_prefix=f"ground-{role}-v1",
+backend/app/spatial\grounding\report_grounder.py:504:                allow_content_json_fallback=False,
+backend/app/data\ingestion\documents\__init__.py:1:"""Documents subpackage for explicitly configured legacy report fixtures.
+backend/app/workflow\tools\execute_node.py:24:# LLM may emit PascalCase names from old prompts; map them to snake_case
+backend/app/spatial\grounding\grounding.py:953:            unresolved_reason="gazetteer miss; no candidate (village-center fallback is forbidden)",
+backend/app/data\ingestion\schemas.py:147:    households: Annotated[
+backend/app/data\ingestion\schemas.py:660:    Replaces the old hardcoded METRICS_DESCRIPTIONS dict.
+backend/app/domain\validation\checks.py:50:    # measurement to compare; treating zero-filled placeholder parcels as a
+backend/app/data\ingestion\documents\pdf_fallback.py:2:PDF Fallback Parser - PDF 备用解析链
+backend/app/data\ingestion\documents\pdf_fallback.py:58:class PDFFallbackParser:
+backend/app/data\ingestion\documents\pdf_fallback.py:59:    """PDF fallback chain: try each parser in sequence"""
+backend/app/data\ingestion\documents\pdf_fallback.py:69:            logger.info(f"[PDFFallbackParser] Trying {name} for: {file_path.name}")
+backend/app/data\ingestion\documents\pdf_fallback.py:72:                logger.info(f"[PDFFallbackParser] {name} succeeded ({len(content)} chars)")
+backend/app/data\ingestion\documents\pdf_fallback.py:75:                logger.warning(f"[PDFFallbackParser] {name} content too short ({len(content)} chars)")
+backend/app/data\ingestion\documents\pdf_fallback.py:77:        logger.warning(f"[PDFFallbackParser] All parsers failed for: {file_path.name}")
+backend/app/data\ingestion\documents\pdf_fallback.py:81:def parse_pdf_with_fallback(file_path: Path) -> Optional[str]:
+backend/app/data\ingestion\documents\pdf_fallback.py:82:    """Convenience function for PDF fallback parsing"""
+backend/app/data\ingestion\documents\pdf_fallback.py:83:    return PDFFallbackParser.parse(file_path)
+backend/app/data\ingestion\documents\pdf_fallback.py:87:    "PDFFallbackParser",
+backend/app/data\ingestion\documents\pdf_fallback.py:90:    "parse_pdf_with_fallback",
+backend/app/spatial\grounding\flash_mention_extractor.py:148:    folded_term = "".join(str(term or "").casefold().split())
+backend/app/spatial\grounding\flash_mention_extractor.py:149:    folded_query = "".join(str(query or "").casefold().split())
+backend/app/spatial\grounding\flash_mention_extractor.py:150:    if not folded_term or folded_term in folded_query:
+backend/app/spatial\grounding\flash_mention_extractor.py:151:        return bool(folded_term)
+backend/app/spatial\grounding\flash_mention_extractor.py:153:        if folded_term.endswith(suffix) and folded_term[: -len(suffix)] in folded_query:
+backend/app/spatial\grounding\flash_mention_extractor.py:194:        key_text = str(key or "").casefold()
+backend/app/spatial\grounding\flash_mention_extractor.py:245:    fallback and preserve ambiguity.
+backend/app/spatial\grounding\flash_mention_extractor.py:298:                allow_content_json_fallback=False,
+backend/app/spatial\grounding\flash_mention_extractor.py:493:                allow_content_json_fallback=False,
+backend/app/spatial\grounding\flash_mention_extractor.py:535:            "[flash-mention] structured semantic extraction unresolved; no text fallback is permitted"
+backend/app/workflow\state.py:3:The legacy analysis channels are still being migrated stage by stage.  New
+backend/app/workflow\state.py:357:    """Derive one stage name without exposing legacy routing fields."""
+backend/app/workflow\state.py:394:    The graph still has legacy channels while the stage nodes are migrated.
+backend/app/workflow\state.py:421:    """Normalize HUMAN and step-mode legacy channels into one small payload.
+backend/app/spatial\grounding\call_budget.py:49:    be reused by multiple requests; changing ``scope_key`` replaces the old
+backend/app/spatial\grounding\call_budget.py:76:        # Compatibility for callers that construct a small test budget by
+backend/app/spatial\grounding\call_budget.py:139:    """Return the shared concurrency gate, or a serial compatibility gate."""
+backend/app/data\ingestion\documents\mineru_loader.py:31:MINERU_BASE_URL = "https://mineru.net/api/v1/agent"
+backend/app/data\ingestion\documents\mineru_loader.py:111:            return self._fallback_to_docling()
+backend/app/data\ingestion\documents\mineru_loader.py:214:            return self._fallback_to_docling()
+backend/app/data\ingestion\documents\mineru_loader.py:330:    def _fallback_to_docling(self) -> str:
+backend/app/data\ingestion\documents\mineru_loader.py:339:            return self._fallback_to_markitdown()
+backend/app/data\ingestion\documents\mineru_loader.py:341:    def _fallback_to_markitdown(self) -> str:
+backend/app/contracts\workflow\resume.py:5:depends on the legacy schema package directly.
+backend/app/spatial\delivery\style.py:36:# Display fallback only; this is not a planning crosswalk and is never
+backend/app/spatial\delivery\style.py:43:_FALLBACK_COLORS = ("#c6a0d9", "#e3a07d", "#91b7c7", "#d0b66f", "#87b58b", "#b3a6d1")
+backend/app/spatial\delivery\style.py:47:    folded = {str(key).casefold(): value for key, value in properties.items()}
+backend/app/spatial\delivery\style.py:49:        value = properties.get(name, folded.get(name.casefold()))
+backend/app/spatial\delivery\style.py:55:def classification_color(properties: Mapping[str, Any], fallback: str = "#cbd5e1") -> str:
+backend/app/spatial\delivery\style.py:69:        return _FALLBACK_COLORS[digest[0] % len(_FALLBACK_COLORS)]
+backend/app/spatial\delivery\style.py:70:    return fallback
+backend/app/data\ingestion\documents\loader.py:1:"""Document loading helpers for explicitly configured legacy L3 reports.
+backend/app/data\ingestion\documents\loader.py:6:The remaining helper is retained only for explicitly configured legacy L3
+backend/app/data\ingestion\documents\loader.py:31:    Tries RAG path first, then baseline fallback.
+backend/app/data\ingestion\documents\loader.py:67:        (r"(\d+)\s*户", "households"),
+backend/app/data\ingestion\providers\tianditu\wfs.py:130:                response_type = "non_json_fallback"
+backend/app/contracts\workflow\repair.py:61:    local_fallback_allowed: bool
+backend/app/domain\suitability\terrain.py:16:    """Evaluate measured evidence using caller-owned planning thresholds."""
+backend/app/data\ingestion\providers\tianditu\provider.py:298:        holes, and multi-part polygons — replacing the old regex approach
+backend/app/data\ingestion\providers\tianditu\provider.py:326:            # Fallback: if bracket parsing produced nothing, try regex
+backend/app/data\ingestion\documents\document_loader.py:5:Architecture: MarkItDown (primary) + fallback chain per format
+backend/app/data\ingestion\documents\document_loader.py:180:    """Unified document loader using MarkItDown + fallback chain"""
+backend/app/data\ingestion\documents\document_loader.py:214:        fallback = self._get_fallback()
+backend/app/data\ingestion\documents\document_loader.py:215:        if fallback:
+backend/app/data\ingestion\documents\document_loader.py:216:            return fallback()
+backend/app/data\ingestion\documents\document_loader.py:233:    def _get_fallback(self) -> Optional[Callable]:
+backend/app/data\ingestion\documents\document_loader.py:237:            return self._try_pdf_fallback
+backend/app/data\ingestion\documents\document_loader.py:239:            return self._try_docx_fallback
+backend/app/data\ingestion\documents\document_loader.py:241:            return self._try_doc_fallback
+backend/app/data\ingestion\documents\document_loader.py:243:            return self._try_html_fallback
+backend/app/data\ingestion\documents\document_loader.py:246:    def _try_pdf_fallback(self) -> Optional[str]:
+backend/app/data\ingestion\documents\document_loader.py:248:            from .pdf_fallback import parse_pdf_with_fallback
+backend/app/data\ingestion\documents\document_loader.py:249:            return parse_pdf_with_fallback(self.file_path)
+backend/app/data\ingestion\documents\document_loader.py:253:            logger.warning(f"[MarkItDownLoader] PDF fallback failed: {e}")
+backend/app/data\ingestion\documents\document_loader.py:256:    def _try_docx_fallback(self) -> str:
+backend/app/data\ingestion\documents\document_loader.py:272:            logger.warning(f"[MarkItDownLoader] docx fallback failed: {e}")
+backend/app/data\ingestion\documents\document_loader.py:275:    def _try_doc_fallback(self) -> Optional[str]:
+backend/app/data\ingestion\documents\document_loader.py:282:                return self._try_docx_fallback()
+backend/app/data\ingestion\documents\document_loader.py:287:    def _try_html_fallback(self) -> str:
+backend/app/data\ingestion\documents\document_loader.py:298:            logger.warning(f"[MarkItDownLoader] html fallback failed: {e}")
+backend/app/domain\suitability\spatial_factors.py:167:        overlap_fraction_threshold = float(
+backend/app/domain\suitability\spatial_factors.py:168:            getattr(self.policy, "overlap_fraction_threshold", 1e-6) or 1e-6
+backend/app/domain\suitability\spatial_factors.py:180:            if fraction > overlap_fraction_threshold:
+backend/app/contracts\workflow\parse_contracts.py:9:SpatialPlanningIntent from the legacy select parse_state.
+backend/app/contracts\workflow\parse_contracts.py:90:      V1=村民住宅用地, V11=住宅用地, V12=混合式住宅用地, ...
+backend/app/contracts\workflow\parse_contracts.py:99:      当 PARSE 未指定时，ConstraintCompiler 使用 LANDUSE_TO_ZONE 启发规则作为 fallback。
+backend/app/contracts\workflow\parse_contracts.py:112:    vne_code: Optional[str] = None               # e.g. "V11", "V21", "E1"
+backend/app/contracts\workflow\parse_contracts.py:289:        """Compatibility view used by typed linear execution consumers."""
+backend/app/contracts\workflow\parse_contracts.py:448:    # Free text fallback (only when spatial_anchor resolution fails)
+backend/app/domain\suitability\service.py:421:    its rows here keeps clipping in the same CRS and avoids the old
+backend/app/contracts\workflow\human_interrupt_contracts.py:4:interrupt protocol.  Legacy field names are accepted at the boundary, but
+backend/app/contracts\workflow\human_interrupt_contracts.py:62:        """Return a JSON-compatible payload for LangGraph/SSE/state."""
+backend/app/contracts\workflow\human_interrupt_contracts.py:123:    # Keep transport-only aliases for older clients and persisted checkpoints.
+backend/app/contracts\workflow\human_interrupt_contracts.py:131:    """Normalize old interrupt payloads at an API/checkpoint boundary.
+backend/app/contracts\workflow\human_interrupt_contracts.py:135:    those names only as transport compatibility aliases; new callers should
+backend/app/data\ingestion\documents\docling_loader.py:104:            return self._fallback_to_markitdown()
+backend/app/data\ingestion\documents\docling_loader.py:170:            return self._fallback_to_markitdown()
+backend/app/data\ingestion\documents\docling_loader.py:251:    def _fallback_to_markitdown(self) -> str:
+backend/app/domain\suitability\policy.py:88:    Policy thresholds are data, not hidden algorithm constants.  The default
+backend/app/domain\validation\validate_checks.py:83:    """Check candidate/source geometry without fabricating a fallback."""
+backend/app/domain\assessment\pipeline.py:3:The single entry point for all tool execution. Replaces the old dual-path
+backend/app/spatial\allocation\zone_allocator_adapter.py:12:``metadata["parcel_by_bsm"]`` map as fallback.
+backend/app/domain\relations\temporal_evaluator.py:47:    evaluator_version: str = "relation-evaluator-v1",
+backend/app/domain\relations\temporal_evaluator.py:92:            threshold=0,
+backend/app/domain\relations\service.py:37:    evaluator_version: str = "relation-evaluator-v1"
+backend/app/domain\relations\service.py:88:        value, threshold, operator, method = result
+backend/app/domain\relations\service.py:89:        passed = _compare(value, threshold, operator)
+backend/app/domain\relations\service.py:99:                threshold=threshold,
+backend/app/domain\relations\service.py:109:def _compare(value, threshold, operator: str) -> bool:
+backend/app/domain\relations\service.py:113:        return float(value) <= float(threshold)
+backend/app/domain\relations\service.py:115:        return float(value) >= float(threshold)
+backend/app/domain\relations\service.py:117:        return value == threshold
+backend/app/domain\relations\service.py:138:        threshold = getattr(factor.parameters, "max_travel_time_min", None)
+backend/app/domain\relations\service.py:139:        if threshold is None:
+backend/app/domain\relations\service.py:141:        return value, threshold, "lte", "network_travel_time"
+backend/app/domain\relations\service.py:143:        threshold = getattr(factor.parameters, "min_coverage_ratio", None)
+backend/app/domain\relations\service.py:144:        if threshold is None:
+backend/app/domain\relations\service.py:146:        return value, threshold, "gte", "network_service_coverage"
+backend/app/spatial\allocation\selection.py:281:    When none of the new per-criterion dicts is provided the exact legacy
+backend/app/domain\assessment\l1_fact_projection.py:143:    source_kind = _text(fields.get("source_kind")).casefold()
+backend/app/data\model\snapshot.py:93:        # both BundleStore serialization and the source manifest.  The old
+backend/app/domain\assessment\l1_extraction_loop.py:320:            report_kwargs["content_fallback_mode"] = "report_text"
+backend/app/spatial\allocation\global_zone_parcel_allocator.py:100:        "allocator_version": "global-zone-v1",
+backend/app/spatial\allocation\global_zone_parcel_allocator.py:251:                        "full-pool fallback is forbidden.",
+backend/app/domain\relations\network_evaluators.py:106:        diagnostics=() if status == "satisfied" else ("travel_time_exceeds_threshold",),
+backend/app/spatial\allocation\global_site_allocator.py:46:        "allocator": "global-site-v1",
+backend/app/spatial\allocation\global_site_allocator.py:105:    # narrow bridge for its measured soft terms when the legacy parcel master
+backend/app/spatial\allocation\global_site_allocator.py:137:                "No target-bound suitability candidate exists; global-pool fallback is forbidden.",
+backend/app/spatial\allocation\global_site_allocator.py:265:            "PuLP/CBC is unavailable; no sequential or greedy fallback is allowed.",
+backend/app/domain\relations\geometry_evaluators.py:91:    version = "relation-evaluator-v1"
+backend/app/domain\relations\geometry_evaluators.py:177:                        detail="buffered avoidance requires compatible/projectable CRS",
+backend/app/domain\relations\geometry_evaluators.py:187:                        threshold=True,
+backend/app/domain\relations\geometry_evaluators.py:222:        threshold = None
+backend/app/domain\relations\geometry_evaluators.py:224:            threshold = parameters.max_distance_m
+backend/app/domain\relations\geometry_evaluators.py:226:            threshold = parameters.max_distance_m
+backend/app/domain\relations\geometry_evaluators.py:227:        if threshold is None:
+backend/app/domain\relations\geometry_evaluators.py:231:                detail="distance relation is missing typed threshold parameters",
+backend/app/domain\relations\geometry_evaluators.py:244:                detail="distance relation requires compatible/projectable CRS",
+backend/app/domain\relations\geometry_evaluators.py:249:            status = "satisfied" if value > threshold else "violated"
+backend/app/domain\relations\geometry_evaluators.py:252:            status = "satisfied" if value <= threshold else "violated"
+backend/app/domain\relations\geometry_evaluators.py:260:                threshold=threshold,
+backend/app/domain\relations\geometry_evaluators.py:276:                threshold=True,
+backend/app/spatial\network\planner.py:794:        if maximum > config.long_unserved_threshold_m:
+backend/app/spatial\network\planner.py:1043:            "fallback": "allowed_for_legacy_stage3_output_without_gate"
+backend/app/spatial\network\planner.py:1068:            "long_unserved_threshold_m": config.long_unserved_threshold_m,
+backend/app/data\ingestion\providers\tencent\provider.py:9:    URL: https://apis.map.qq.com/ws/place/v1/search
+backend/app/spatial\allocation\facility_location.py:15:    Deterministic greedy fallback: repeatedly pick the candidate covering the
+backend/app/spatial\allocation\facility_location.py:65:    allow_haversine_fallback: bool = False,
+backend/app/spatial\allocation\facility_location.py:84:            if not covered and allow_haversine_fallback:
+backend/app/spatial\allocation\facility_location.py:99:    allow_haversine_fallback: bool = False,
+backend/app/spatial\allocation\facility_location.py:101:    """Greedy fallback: pick candidate covering the most remaining demand."""
+backend/app/spatial\allocation\facility_location.py:110:        allow_haversine_fallback=allow_haversine_fallback,
+backend/app/spatial\allocation\facility_location.py:147:    allow_haversine_fallback: bool = False,
+backend/app/spatial\allocation\facility_location.py:162:            allow_haversine_fallback=allow_haversine_fallback,
+backend/app/spatial\allocation\facility_location.py:170:        allow_haversine_fallback=allow_haversine_fallback,
+backend/app/spatial\allocation\facility_location.py:190:            allow_haversine_fallback=allow_haversine_fallback,
+backend/app/spatial\allocation\facility_location.py:215:        allow_haversine_fallback=False,
+backend/app/data\ingestion\providers\tencent\constants.py:6:# API Endpoints - 注意: 路径是 /ws/place/v1/search (无空格)
+backend/app/data\ingestion\providers\tencent\constants.py:7:SEARCH_URL = "https://apis.map.qq.com/ws/place/v1/search"
+backend/app/data\ingestion\providers\tencent\constants.py:8:SUGGESTION_URL = "https://apis.map.qq.com/ws/place/v1/suggestion"
+backend/app/data\ingestion\providers\tencent\constants.py:9:GEOCODER_URL = "https://apis.map.qq.com/ws/geocoder/v1"
+backend/app/data\ingestion\providers\tencent\constants.py:19:# 参考: https://lbs.qq.com/webservice_v1/guide-appendix.html
+backend/app/data\encodings\dicts\loader.py:118:    Replaces the old ProposalTable. YAML schema:
+backend/app/data\model\canonical.py:591:    """Fallback rebuild for features the ``GisFeature`` union cannot classify.
+backend/app/domain\assessment\formatters.py:56:    if tool_name == "population_model_v1":
+backend/app/data\encodings\code_sets.py:195:# advisory_crosswalks and is legacy-gated.
+backend/app/data\encodings\code_sets.py:203:# DLBM and zone_type are different namespaces.  The old implementation read
+backend/app/data\encodings\code_sets.py:205:# Keep compatibility symbols for offline callers, but make the default chain
+backend/app/domain\validation\relation_validation.py:93:    # fallback makes final validation work for old but otherwise typed output.
+backend/app/domain\validation\relation_validation.py:446:    evaluator_version = _text(getattr(context, "evaluator_version", "")) or "relation-evaluator-v1"
+backend/app/domain\validation\relation_validation.py:630:                        threshold=params.min_coverage_ratio,
+backend/app/data\encodings\code_lookup.py:11:  The legacy GIS LLM lookup tools were removed; code→name resolution now
+backend/app/domain\program\claim_adapter.py:476:    """Compact same-package compatible members with stable IDs."""
+backend/app/domain\program\claim_adapter.py:541:                    message=f"package {package_ref} contains incompatible spatial output members",
+backend/app/domain\program\claim_adapter.py:543:                    reason="compatible geometry/output semantics are required for compaction",
+backend/app/domain\assessment\analysis_node.py:295:            "content_fallback_mode": "strict",
+backend/app/domain\assessment\analysis_node.py:643:        # the cold-start path; this keeps resume deterministic and avoids one
+backend/app/spatial\network\text_structurer.py:94:        "extraction_method": "deterministic_rule_v1",
+backend/app/domain\program\assembler.py:73:    provisional_program = PlanningProgram(interventions=interventions)
+backend/app/domain\program\assembler.py:74:    issues.extend(classification_program_issues(provisional_program))
+backend/app/contracts\spatial\terrain_evidence.py:146:    """Caller-owned thresholds; the raster engine never invents them."""
+backend/app/data\encodings\dicts\candidate_engine.py:3:This engine replaces the old "resolve_mapping" concept. The key semantic difference:
+backend/app/contracts\spatial\constraint_contracts.py:6:v1.0 (2026-07-26):
+backend/app/spatial\network\terrain_grid_preparation.py:306:        "schema_version": "road-terrain-friction-grid-v1",
+backend/app/domain\program\aggregate.py:522:        report_id = rec.get("report_id", f"rpt-{dim_key}-v1")
+backend/app/domain\program\worker.py:122:            "cache_contract": "l3-claims-only-v1",
+backend/app/domain\program\worker.py:168:            "cache_contract": "l3-report-only-v1",
+backend/app/domain\program\worker.py:582:    # Running retrieval first could query an empty cold context and then
+backend/app/domain\program\unit_normalization.py:8:normalize compatibility chars, fuzzy-match enum fields).
+backend/app/domain\program\unit_normalization.py:80:    """Canonicalize a raw unit string (repair + alias + fuzzy fallback)."""
+backend/app/spatial\network\road_land_cost.py:8:ROAD_LAND_WEIGHT_RULE_VERSION = "road_land_weight_v1"
+backend/app/domain\assessment\aggregate.py:135:        key = str(raw_key or "").strip().casefold()
+backend/app/domain\assessment\aggregate.py:316:        report_id = rec.get("report_id", f"rpt-{dim_key}-v1")
+backend/app/spatial\network\evaluator.py:559:        "thresholds": {
+backend/app/contracts\spatial\query_ast.py:92:    threshold: float = Field(gt=0)
+backend/app/spatial\network\road_candidate_preparation.py:4:does not parse prose, choose a village-wide fallback, fabricate endpoints, or
+backend/app/spatial\network\road_candidate_preparation.py:245:    """Adapt validated new corridors to the legacy Stage-2 file boundary.
+backend/app/spatial\network\road_candidate_preparation.py:257:                "typed_contract_version": "road-planning-input-v1",
+backend/app/spatial\network\location_confirmation.py:173:        "cdn_fallback",
+backend/app/spatial\network\location_confirmation.py:213:  <label>确认人<input id="confirmedBy" placeholder="例如：规划人员张三" /></label>
+backend/app/spatial\network\location_confirmation.py:230:function renderConstraints(){const box=document.getElementById('constraintBox');box.innerHTML=constraintTasks.map(t=>{const v=saved.parameters[t.constraint_id]||{};return `<div class="task"><div class="task-name">${t.constraint_id} ${t.description}</div><label>缓冲距离（米）<input type="number" min="0" step="1" data-field="value" data-id="${t.constraint_id}" value="${v.value??''}"></label><label>依据<textarea data-field="basis" data-id="${t.constraint_id}" placeholder="法规、主管部门意见或技术标准">${v.basis||''}</textarea></label></div>`}).join('');box.querySelectorAll('[data-id]').forEach(el=>el.addEventListener('input',()=>{const id=el.dataset.id;saved.parameters[id]=saved.parameters[id]||{};saved.parameters[id][el.dataset.field]=el.dataset.field==='value'?(el.value===''?null:Number(el.value)):el.value;saved.parameters[id].confirmed_by=confirmedBy.value.trim();saved.parameters[id].confirmed_at=new Date().toISOString();persist()}))}
+backend/app/data\catalog\inference.py:3:Defensive fallback for rows persisted with a placeholder/empty ``gis_data_type``
+backend/app/data\catalog\inference.py:19:    Defensive fallback for rows persisted with a placeholder/empty
+backend/app/spatial\network\spatial_binder.py:103:    return config.stage2_dir, "stage2_fallback"
+backend/app/spatial\network\spatial_binder.py:109:    Older Stage-2.6 exports did not include a report, so their absence remains
+backend/app/spatial\network\spatial_binder.py:110:    compatible but is made explicit in the Stage-3 report.  A present, blocked
+backend/app/spatial\network\spatial_binder.py:111:    Stage-2.6 gate must never be bypassed simply because compatibility demand
+backend/app/spatial\network\spatial_binder.py:120:            "fallback": "not_using_stage2_6_input",
+backend/app/spatial\network\spatial_binder.py:128:            "fallback": "legacy_stage2_6_output_without_report",
+backend/app/spatial\network\spatial_binder.py:137:            "fallback": "stage2_6_report_without_planning_gate",
+backend/app/spatial\network\spatial_binder.py:143:        "fallback": None,
+backend/app/spatial\network\spatial_binder.py:223:    if distance_m <= config.connected_threshold_m:
+backend/app/spatial\network\spatial_binder.py:225:    if distance_m <= config.near_network_threshold_m:
+backend/app/spatial\network\spatial_binder.py:719:            "fallback_behavior": "Stage 2.6 planning nodes are preferred; otherwise Stage 2.5 resolved files or Stage 2 raw outputs are used.",
+backend/app/spatial\network\spatial_binder.py:726:        "thresholds_m": {
+backend/app/spatial\network\spatial_binder.py:727:            "connected": config.connected_threshold_m,
+backend/app/spatial\network\spatial_binder.py:728:            "near_network": config.near_network_threshold_m,
+backend/app/workflow\stages\validate.py:350:        # and approval.  VALIDATE must not auto-defer and forward the old
+backend/app/data\catalog\geometry_fallback.py:1:"""Legacy geometry fallback helpers for the data catalog.
+backend/app/contracts\spatial\planned_state_contracts.py:203:    version: str = "v1"
+backend/app/spatial\network\service_area.py:163:                        "travel_time_exceeds_threshold"
+backend/app/spatial\network\service_area.py:170:    # outside the network component or travel-time threshold is unserved, not
+backend/app/domain\allocation\global_site_select.py:146:    """Build a target-bound global problem without full-pool fallback."""
+backend/app/domain\objectives\gate.py:80:        # Legacy parsers may omit required_fact; retain explicit "missing"
+backend/app/domain\program\target_projection\relation_validator.py:107:            "hard relation is deferred until compatible grounded endpoints are available",
+backend/app/domain\program\target_projection\relation_catalog.py:6:thresholds.
+backend/app/data\catalog\external_anchors.py:308:        # 1c. 腾讯 v1 region — 优先中文名 (12 位 adcode 不被 API 接受)
+backend/app/data\catalog\external_anchors.py:315:                    # fallback 用 6 位县级 adcode (腾讯 API 接受)
+backend/app/data\catalog\external_anchors.py:382:        """腾讯 v1 search region → ExternalFeature (GCJ02).
+backend/app/spatial\network\schemas.py:172:    # it before its legacy KG/text candidates but keeps all existing gates.
+backend/app/spatial\network\schemas.py:178:    connected_threshold_m: float = 10.0
+backend/app/spatial\network\schemas.py:179:    near_network_threshold_m: float = 100.0
+backend/app/spatial\network\schemas.py:180:    low_confidence_threshold: float = 0.65
+backend/app/spatial\network\schemas.py:205:        if self.connected_threshold_m < 0:
+backend/app/spatial\network\schemas.py:206:            raise ValueError("connected_threshold_m must be >= 0")
+backend/app/spatial\network\schemas.py:207:        if self.near_network_threshold_m < self.connected_threshold_m:
+backend/app/spatial\network\schemas.py:208:            raise ValueError("near_network_threshold_m must be >= connected_threshold_m")
+backend/app/spatial\network\schemas.py:209:        if not 0 <= self.low_confidence_threshold <= 1:
+backend/app/spatial\network\schemas.py:210:            raise ValueError("low_confidence_threshold must be between 0 and 1")
+backend/app/spatial\network\schemas.py:259:    """Inputs and thresholds for Stage-3 demand/network spatial binding."""
+backend/app/spatial\network\schemas.py:273:    connected_threshold_m: float = 10.0
+backend/app/spatial\network\schemas.py:274:    near_network_threshold_m: float = 100.0
+backend/app/spatial\network\schemas.py:278:        if self.connected_threshold_m < 0:
+backend/app/spatial\network\schemas.py:279:            raise ValueError("connected_threshold_m must be >= 0")
+backend/app/spatial\network\schemas.py:280:        if self.near_network_threshold_m < self.connected_threshold_m:
+backend/app/spatial\network\schemas.py:282:                "near_network_threshold_m must be >= connected_threshold_m"
+backend/app/spatial\network\schemas.py:359:    long_unserved_threshold_m: float = 500.0
+backend/app/spatial\network\schemas.py:410:            "long_unserved_threshold_m": self.long_unserved_threshold_m,
+backend/app/spatial\network\schemas.py:525:            raise ValueError("Stage-5 thresholds must be > 0")
+backend/app/spatial\network\schemas.py:609:            raise ValueError("all Stage-6 thresholds and assumptions must be > 0")
+backend/app/contracts\spatial\land_balance_contracts.py:3:v1.0 (2026-07-26):
+backend/app/contracts\public\v1\__init__.py:1:"""Public v1 API DTO contracts (blueprint M9 boundary).
+backend/app/contracts\public\v1\__init__.py:3:Frozen public request/response DTOs for the stable ``/api/v1`` surface.
+backend/app/domain\program\flash_unit_repair.py:115:    # fallback: "原单位 -> 标准单位" lines
+backend/app/domain\allocation\parcel_assignment_backend.py:6:does not create geometry, choose a fallback parcel, or mutate neighboring
+backend/app/domain\allocation\network_subproblem.py:53:    evaluator_version: str = "relation-evaluator-v1",
+backend/app/domain\allocation\network_subproblem.py:115:                threshold=parameters.min_coverage_ratio,
+backend/app/domain\allocation\network_subproblem.py:136:        threshold = True
+backend/app/domain\allocation\network_subproblem.py:141:        threshold = getattr(parameters, "max_travel_time_min", None)
+backend/app/domain\allocation\network_subproblem.py:153:            threshold=threshold,
+backend/app/domain\allocation\network_subproblem.py:163:    provisional: PlanningScenario,
+backend/app/domain\allocation\network_subproblem.py:170:    for satisfaction in provisional.relation_satisfactions:
+backend/app/domain\allocation\network_subproblem.py:180:            for item in provisional.target_selections
+backend/app/domain\program\target_projection\intent_graph_compiler.py:132:        # Flat fields are accepted only as an explicit migration shape.  The
+backend/app/domain\allocation\scenario_solver.py:201:                evaluator_version=str(getattr(evaluator_context, "evaluator_version", "relation-evaluator-v1")),
+backend/app/domain\allocation\scenario_solver.py:233:    """Build deterministic candidate options for the legacy 3-tuple callers.
+backend/app/domain\allocation\scenario_solver.py:386:    """Resolve the exclusive/non-exclusive role for old untyped candidates."""
+backend/app/domain\allocation\scenario_solver.py:391:    legacy_role = str(getattr(candidate, "role", "") or "")
+backend/app/domain\allocation\scenario_solver.py:392:    if legacy_role == "functional_overlay":
+backend/app/domain\allocation\scenario_solver.py:394:    if legacy_role == "protection_overlay":
+backend/app/domain\allocation\scenario_solver.py:396:    if legacy_role == "restoration_overlay":
+backend/app/domain\allocation\scenario_solver.py:398:    if legacy_role in {"execution_geometry", "parcel_candidate"}:
+backend/app/data\catalog\config.py:4:Supports both v1.0 (sources only) and v2.0 (connections + sources) YAML.
+backend/app/contracts\program.py:190:                f"asset_kind={self.asset_kind} is incompatible with "
+backend/app/contracts\program.py:225:                "materialization_role is incompatible with suggested_category"
+backend/app/workflow\stages\select.py:215:        # scope decision derived from the demo claim, not a general fallback.
+backend/app/workflow\stages\select.py:370:                    solver_version="scenario-optimizer-v1",
+backend/app/domain\materialization\approved_plan_builder.py:4:and legacy decision contract.  Every spatial binding is copied from the
+backend/app/domain\allocation\subproblem_optimizer.py:467:            "one or more typed solver subproblems are blocked; target alternatives are provisional"
+backend/app/domain\allocation\subproblem_optimizer.py:501:                "SOLVER_SUBPROBLEM_BLOCKED: target alternatives retained provisionally",
+backend/app/domain\allocation\scenario_optimizer.py:241:            f"Hard relation is {item.status}; scenario remains provisional.",
+backend/app/domain\allocation\scenario_optimizer.py:430:        "solver_version": "scenario-optimizer-v1",
+backend/app/domain\allocation\scenario_optimizer.py:499:    # An incomplete GROUND problem may still have useful provisional rows for
+backend/app/domain\allocation\scenario_optimizer.py:683:            "grounding completeness gate did not pass; provisional scenarios only"
+backend/app/domain\allocation\scenario_optimizer.py:848:    # provisional independent choices: that would produce a misleading plan.
+backend/app/domain\allocation\scenario_optimizer.py:879:        provisional = _optimize_scenarios_enumeration(
+backend/app/domain\allocation\scenario_optimizer.py:902:        return provisional
+backend/app/domain\materialization\execution_boundaries.py:5:legacy plan-construction path.
+backend/app/data\catalog\catalog.py:32:    _merge_geojson_upload_fallback,
+backend/app/data\catalog\catalog.py:35:from .geometry_fallback import (
+backend/app/data\catalog\catalog.py:215:                    "Skipping (will be available after Phase 3 migration).",
+backend/app/data\catalog\catalog.py:292:        until one succeeds (implements priority/source-fallback).
+backend/app/data\catalog\catalog.py:368:          3. Fallback: geocode village_name if no boundary
+backend/app/data\catalog\catalog.py:373:            village_name: village name for metadata and geocode fallback.
+backend/app/data\catalog\catalog.py:403:        # Step 2b: Fallback — geocode if no boundary
+backend/app/data\catalog\catalog.py:453:        # Step 4b: Fallback — derive water bodies from DLBM=31xx parcels
+backend/app/data\catalog\catalog.py:950:        """Fallback: geocode village name to bbox (when no boundary data).
+backend/app/data\catalog\catalog.py:959:            logger.debug("[DataCatalog] No tianditu connection for geocode fallback")
+backend/app/data\catalog\catalog.py:986:            logger.warning("[DataCatalog] POI fallback failed: %s", e)
+backend/app/data\catalog\assembly.py:5:unregistered upload types fall back to the legacy geometry-based merge so
+backend/app/data\catalog\assembly.py:29:    Unregistered upload types (e.g. ``upload_roads``) fall back to the legacy
+backend/app/data\catalog\assembly.py:72:    # Fallback: unregistered upload type — store under upload_{layer_key}.
+backend/app/data\catalog\assembly.py:73:    return _merge_geojson_upload_fallback(bundle, layer_key, geojson)
+backend/app/data\catalog\assembly.py:76:def _merge_geojson_upload_fallback(
+backend/app/data\catalog\assembly.py:81:    """Legacy geometry-based merge for unregistered upload types.
+backend/app/data\catalog\assembly.py:125:    "_merge_geojson_upload_fallback",
+backend/app/domain\materialization\execute_agent.py:14:the old per-worker nodes beside the scheduler created a second, unreachable
+backend/app/contracts\spatial\global_zone_allocation_contracts.py:153:    allocator_version: Literal["global-zone-v1"] = "global-zone-v1"
+backend/app/spatial\network\planning_nodes.py:233:def _action_from_text(text: str, fallback: Any = None) -> str:
+backend/app/spatial\network\planning_nodes.py:234:    fallback_text = str(fallback or "").lower()
+backend/app/spatial\network\planning_nodes.py:236:        if fallback_text == action:
+backend/app/spatial\network\planning_nodes.py:456:    if distance_m <= config.connected_threshold_m:
+backend/app/spatial\network\planning_nodes.py:458:    if distance_m <= config.near_network_threshold_m:
+backend/app/spatial\network\planning_nodes.py:1236:        typed_contract = project.get("typed_contract_version") == "road-planning-input-v1"
+backend/app/spatial\network\planning_nodes.py:1666:            or confidence < config.low_confidence_threshold
+backend/app/spatial\network\planning_nodes.py:1920:        if confidence < config.low_confidence_threshold:
+backend/app/spatial\network\planning_nodes.py:2882:def _compatibility_demands(nodes: Sequence[Dict[str, Any]], display_crs: str) -> Dict[str, Any]:
+backend/app/spatial\network\planning_nodes.py:2927:def _compatibility_projects(requests: Sequence[Mapping[str, Any]]) -> Dict[str, Any]:
+backend/app/spatial\network\planning_nodes.py:3016:    # Binder candidates precede legacy candidates.  Ambiguous/bbox binder
+backend/app/spatial\network\planning_nodes.py:3089:        "thresholds_m": {
+backend/app/spatial\network\planning_nodes.py:3091:            "connected": config.connected_threshold_m,
+backend/app/spatial\network\planning_nodes.py:3092:            "near_network": config.near_network_threshold_m,
+backend/app/spatial\network\planning_nodes.py:3193:    _write_json(output_dir / "demand_points.geojson", _compatibility_demands(nodes, config.display_crs))
+backend/app/spatial\network\planning_nodes.py:3194:    _write_json(output_dir / "road_projects.json", _compatibility_projects(requests))
+backend/app/workflow\stages\ground.py:67:            scope = str(value or "").strip().casefold()
+backend/app/workflow\stages\ground.py:96:            kind.casefold(),
+backend/app/domain\program\claim_draft.py:298:        OpenAI-compatible providers are allowed to serialize a nested tool
+backend/app/domain\program\claim_draft.py:370:    Some OpenAI-compatible providers serialize a nested tool argument and fail
+backend/app/domain\program\claim_draft.py:516:    """Keep asset/category compatibility deterministic before strict validation."""
+backend/app/domain\program\claim_draft.py:534:    fallback = {
+backend/app/domain\program\claim_draft.py:544:        fallback = "none"
+backend/app/domain\program\claim_draft.py:550:        f"asset_kind {asset!r} is incompatible with {category}/{output}; "
+backend/app/domain\program\claim_draft.py:551:        f"normalized to {fallback!r}",
+backend/app/domain\program\claim_draft.py:553:    return fallback
+backend/app/domain\program\claim_draft.py:855:            f"role {role!r} is incompatible with category {category!r}",
+backend/app/domain\ground\constraint_factors.py:215:                evaluator_version="relation-evaluator-v1",
+backend/app/contracts\spatial\global_site_allocation_contracts.py:96:    allocator_version: Literal["global-site-v1"] = "global-site-v1"
+backend/app/domain\ground\gate.py:24:def _is_ambiguous(candidate: CandidateSite, ambiguity_threshold: float) -> bool:
+backend/app/domain\ground\gate.py:27:        and candidate.metrics.get("confidence", 0.0) < ambiguity_threshold
+backend/app/domain\ground\gate.py:34:    ambiguity_threshold: float = 0.6,
+backend/app/domain\ground\gate.py:44:    if any(_is_ambiguous(c, ambiguity_threshold) for c in result.candidates):
+backend/app/domain\ground\gate.py:52:    ambiguity_threshold: float = 0.6,
+backend/app/domain\ground\gate.py:61:        ambiguity_threshold=ambiguity_threshold,
+backend/app/domain\ground\aggregate.py:503:    cannot silently become an invented fallback polygon.
+backend/app/domain\ground\aggregate.py:823:        # EvidenceGraph / gazetteer / directional fallbacks; specs that
+backend/app/domain\ground\aggregate.py:1271:                token in query.casefold()
+backend/app/domain\ground\anchors.py:48:    """Reserve one fallback call and return its remaining timeout."""
+backend/app/domain\ground\anchors.py:511:async def _village_spatial_fallback(
+backend/app/domain\ground\anchors.py:519:    """Resolve one village fallback while committing ownership in order."""
+backend/app/domain\ground\anchors.py:520:    plan = _village_spatial_fallback_plan(context, fact, anchor, trace)
+backend/app/domain\ground\anchors.py:529:    return _commit_village_spatial_fallback(context, plan, picked)
+backend/app/domain\ground\anchors.py:532:def _village_fallback_occupied(context: Any, fact: Any) -> set:
+backend/app/domain\ground\anchors.py:554:def _village_spatial_fallback_plan(
+backend/app/domain\ground\anchors.py:560:    """Prepare village fallback candidates without changing shared occupancy."""
+backend/app/domain\ground\anchors.py:571:            "step": "village_fallback:gazetteer_bsms",
+backend/app/domain\ground\anchors.py:589:        occupied = _village_fallback_occupied(context, fact)
+backend/app/domain\ground\anchors.py:619:        logger.debug("[ground_anchors] cluster fallback planning failed: %s", exc)
+backend/app/domain\ground\anchors.py:631:def _commit_village_spatial_fallback(
+backend/app/domain\ground\anchors.py:644:    occupied = _village_fallback_occupied(context, fact)
+backend/app/domain\ground\anchors.py:657:            "step": "village_fallback:llm_cluster_assign",
+backend/app/domain\ground\anchors.py:663:            "step": "village_fallback:llm_selection_unresolved",
+backend/app/domain\ground\anchors.py:731:def _is_placeholder_name(name: str, role: str) -> bool:
+backend/app/domain\ground\anchors.py:778:                        if _is_placeholder_name(current, "village"):
+backend/app/domain\ground\anchors.py:802:            if _is_placeholder_name(current, anchor.role):
+backend/app/domain\ground\anchors.py:1350:                # a coarse BSM set through a fallback.
+backend/app/domain\ground\anchors.py:1365:        elif kind == "fallback":
+backend/app/domain\ground\anchors.py:1385:            "[ground_anchors] concurrent fact fallback groups=%d facts=%d max_concurrent=%d",
+backend/app/domain\ground\anchors.py:1396:    # Orientation rebinding is also a per-location LLM fallback.  Keep it in
+backend/app/domain\ground\anchors.py:1399:    # mention wait for the previous one, which recreated the old tail latency
+backend/app/domain\ground\anchors.py:1417:        elif item.get("llm_kind") == "fallback":
+backend/app/domain\ground\anchors.py:1419:            trace.append({"step": "fallback", "best_effort": True})
+backend/app/domain\ground\anchors.py:1422:            if item.get("llm_kind") == "fallback" and item["role"] == "village":
+backend/app/domain\ground\anchors.py:1423:                item["village_fallback_pending"] = True
+backend/app/domain\ground\anchors.py:1476:            "[ground_anchors] concurrent orientation fallback groups=%d facts=%d max_concurrent=%d",
+backend/app/domain\ground\anchors.py:1495:    # Village cluster fallback has ordered ownership state.  Prepare every
+backend/app/domain\ground\anchors.py:1503:        pending = item.get("village_fallback_pending")
+backend/app/domain\ground\anchors.py:1504:        needs_fallback = (
+backend/app/domain\ground\anchors.py:1512:        if not needs_fallback:
+backend/app/domain\ground\anchors.py:1514:        plan = _village_spatial_fallback_plan(
+backend/app/domain\ground\anchors.py:1520:        item["village_fallback_plan"] = plan
+backend/app/domain\ground\anchors.py:1523:            key = _grounding_work_key(item, "village_fallback", candidates)
+backend/app/domain\ground\anchors.py:1530:        plan = representative["village_fallback_plan"]
+backend/app/domain\ground\anchors.py:1542:            "[ground_anchors] concurrent village fallback groups=%d facts=%d max_concurrent=%d",
+backend/app/domain\ground\anchors.py:1554:                item["village_fallback_pick"] = picked
+backend/app/domain\ground\anchors.py:1566:        plan = item.get("village_fallback_plan")
+backend/app/domain\ground\anchors.py:1568:            anchor = _commit_village_spatial_fallback(
+backend/app/domain\ground\anchors.py:1571:                item.get("village_fallback_pick"),
+backend/app/domain\ground\anchors.py:1598:                "step": "linear_fallback_disabled",
+backend/app/domain\ground\anchors.py:1694:async def _llm_anchor_fallback(
+backend/app/domain\ground\anchors.py:1713:        trace.append({"step": "gazetteer_llm_fallback", "picked": picked.canonical_name})
+backend/app/domain\ground\anchors.py:1718:    """Build the deterministic gazetteer candidate list for fallback work."""
+backend/app/domain\program\semantic_repair.py:33:_PROMPT_VERSION = "l3-semantic-repair-v1"
+backend/app/domain\program\semantic_repair.py:269:                errors.append(f"incompatible duplicate merge: {duplicate_id}")
+backend/app/domain\materialization\existing_road_materializer.py:40:def _collection_crs(payload: Mapping[str, Any], fallback: str) -> str:
+backend/app/domain\materialization\existing_road_materializer.py:48:    return fallback
+backend/app/domain\materialization\existing_road_materializer.py:239:        "schema_version": "road-existing-materialization-v1",
+backend/app/domain\materialization\existing_road_materializer.py:248:        "rule": "exact verified segment ids, otherwise exact verified feature ids; no fallback",
+backend/app/domain\materialization\planned_state_builder.py:3:Replaces the old raw-GeoJSON _layout_configs_to_planned_state path for the
+backend/app/domain\materialization\planned_state_builder.py:335:            # up as a BSM by legacy current-land-use consumers.
+backend/app/domain\materialization\planned_state_builder.py:444:        version="v1",
+backend/app/workflow\stages\execute.py:185:    """Fold EXECUTE-bound repair directives into the dispatch intent.
+backend/app/workflow\stages\execute.py:357:                "ApprovedExecutionInput is not executable or revoked and "
+backend/app/data\catalog\advisory_crosswalks\crosswalks.py:60:# PARSE 应明确产出 planning_zone 判断；此映射仅作 ConstraintCompiler fallback。
+backend/app/data\catalog\advisory_crosswalks\crosswalks.py:77:def _zone_type_for_dlbm_with_fallback(dlbm: str) -> str:
+backend/app/data\catalog\advisory_crosswalks\crosswalks.py:97:    # Fallback if YAML missing (should not happen in production)
+backend/app/data\catalog\advisory_crosswalks\crosswalks.py:119:# ── GHYTBM -> Planning zone (from YAML, replaces old hardcoded _GHYTBM_TO_PLANNING_ZONE) ──
+backend/app/data\catalog\advisory_crosswalks\crosswalks.py:178:    return _zone_type_for_dlbm_with_fallback(dlbm)
+backend/app/data\catalog\advisory_crosswalks\crosswalks.py:185:    Moved from the legacy GIS zone_generator module - pure lookup,
+backend/app/data\catalog\advisory_crosswalks\crosswalks.py:220:    PARSE 应明确产出 planning_zone 判断，此函数仅作 fallback。
+backend/app/domain\materialization\review.py:149:    context may carry {"parcel_by_bsm": {...}} to supply fallback geometry
+backend/app/domain\materialization\zoning\custom_planning.py:38:    Every parcel is eligible for exactly one explicit fallback zone when it is
+backend/app/workflow\plan_state\state.py:344:    # Build one canonical interrupt projection from checkpoint state.  Older
+backend/app/workflow\plan_state\state.py:345:    # checkpoints only have the legacy HUMAN fields; normalize those at the
+backend/app/workflow\plan_state\state.py:359:            legacy_items = list(state.get("human_review_items") or [])
+backend/app/workflow\plan_state\state.py:362:                if legacy_items or state.get("paused_stage")
+backend/app/workflow\plan_state\state.py:372:                items=legacy_items,
+backend/app/workflow\stages\deliver.py:284:            f"placeholder={quality.get('placeholder_geometry_count', 0)}"
+backend/app/domain\materialization\task_scheduler.py:3:The old EXECUTE graph grouped work by worker type.  That made ``depends_on``
+backend/app/domain\materialization\nodes\axis_worker.py:76:    Returns ``([], reason)`` for an absent/foreign ID.  The old AxisBuilder
+backend/app/workflow\plan_state\completion_node.py:98:    """Invoke the enrichment hook while keeping older test/plugin hooks valid."""
+backend/app/domain\materialization\nodes\execution_review.py:34:    # optional so older EXECUTE artifacts remain readable; when present it is
+backend/app/contracts\domain\custom_zone_contracts.py:45:    incompatibilities: List[List[str]] = Field(default_factory=list)
+backend/app/contracts\planning\solver.py:208:    """Explicit support decision; unsupported is never an implicit fallback."""
+backend/app/domain\materialization\zoning\custom_zone_generator.py:122:        # takes precedence; YAML vocabulary_name remains the fallback.
+backend/app/contracts\domain\l1_contracts.py:37:    ``facts`` remains a deterministic human-readable projection for old
+backend/app/domain\materialization\road_generator.py:234:        typed_contract = target.get("typed_contract_version") == "road-planning-input-v1"
+backend/app/domain\materialization\road_generator.py:327:        "road-planning-input-v1"
+backend/app/domain\materialization\road_generator.py:330:            target.get("typed_contract_version") == "road-planning-input-v1"
+backend/app/domain\materialization\road_generator.py:333:        else "agent-parse-adapter-v1"
+backend/app/domain\materialization\road_generator.py:345:        {"type": "RoadConstraintCollection", "schema_version": "agent-parse-adapter-v1", "constraints": []},
+backend/app/domain\materialization\road_generator.py:413:        logger.warning("[road_execute] Ignoring incompatible PlanningKG: %s", type(exc).__name__)
+backend/app/domain\materialization\road_generator.py:609:            "[road_execute] Multiple incompatible terrain grids supplied; "
+backend/app/workflow\runtime_adapter.py:86:    2. Read-compat shim: compact root state referencing a legacy
+backend/app/workflow\runtime_adapter.py:169:    """Convert a newly-created legacy-shaped input into compact state."""
+backend/app/workflow\runtime_adapter.py:206:    """Run a legacy-shaped node behind the compact root state boundary.
+backend/app/contracts\domain\road_planning.py:5:no geometry fallback policy.  A candidate is executable only after the
+backend/app/domain\materialization\nodes\road_worker.py:34:    """Read both typed ExecutionPlan and explicit v1 dict snapshots."""
+backend/app/contracts\domain\l3_contracts.py:125:                f"asset_kind={self.asset_kind} is incompatible with "
+backend/app/contracts\migrations\__init__.py:1:"""Reserved for database migrations; planning v1 payload migration is removed."""
+backend/app/domain\materialization\nodes\worker_common.py:501:    Legacy nodes treated an empty ``tasks_to_run`` as "run everything"; the
+backend/app/domain\materialization\nodes\worker_common.py:585:def _footprint_geometry(change: Any, fallback_geometry: dict) -> dict:
+backend/app/domain\materialization\nodes\worker_common.py:602:    return fallback_geometry or {}
+backend/app/contracts\artifacts\delivery_manifest_contracts.py:3:v1.0 (2026-07-26):
+backend/app/contracts\artifacts\delivery_manifest_contracts.py:34:    changed_parcels_threshold: float | None = None
+backend/app/contracts\artifacts\delivery_manifest_contracts.py:39:        threshold_ok = (
+backend/app/contracts\artifacts\delivery_manifest_contracts.py:40:            self.changed_parcels_threshold is None
+backend/app/contracts\artifacts\delivery_manifest_contracts.py:41:            or self.changed_parcels_pct <= self.changed_parcels_threshold
+backend/app/contracts\artifacts\delivery_manifest_contracts.py:47:            and threshold_ok
+backend/app/contracts\artifacts\delivery_manifest_contracts.py:61:            self.changed_parcels_threshold is not None
+backend/app/contracts\artifacts\delivery_manifest_contracts.py:62:            and self.changed_parcels_pct > self.changed_parcels_threshold
+backend/app/contracts\artifacts\delivery_manifest_contracts.py:65:                f"变更比例 {self.changed_parcels_pct:.1f}% > 阈值 {self.changed_parcels_threshold}%"
+backend/app/contracts\planning\constraint_factor.py:85:    threshold: MeasurementScalar = None
+backend/app/domain\materialization\nodes\project_worker.py:165:    # for older candidates that did not carry the metrics.
+backend/app/contracts\artifacts\classification_ref.py:84:    # mapping-table fallback here: a code is valid only in the namespace that
+backend/app/contracts\evidence\source_semantic_contracts.py:34:    compatible_layers: list[str] = Field(default_factory=list)
+backend/app/contracts\evidence\source_semantic_contracts.py:35:    compatible_geometry_kinds: list[str] = Field(default_factory=list)
+backend/app/workflow\dispatch.py:3:The graph may still use legacy stage workers while the migration is in flight,
+backend/app/workflow\dispatch.py:114:        """Compatibility spelling for callers that call this an approval."""
+backend/app/workflow\layers\layer_aggregate_node.py:114:            # Grounding enriches the frozen L1 snapshot but must not hold the
+backend/app/workflow\conversation\edges.py:114:            # Normalize: LLM may emit PascalCase from old prompts
+backend/app/workflow\conversation\edges.py:364:    # Legacy gates may not have emitted a dimension.  Preserve bounded
+backend/app/workflow\conversation\node.py:82:        # OpenAI-compatible providers have their own valid model ids.
+backend/app/workflow\conversation\node.py:90:    from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
+backend/app/workflow\conversation\node.py:104:        MessagesPlaceholder("messages"),
+backend/app/workflow\root_graph.py:71:    """Authorize a legacy route result before LangGraph sees the jump."""
+backend/app/workflow\root_graph.py:90:    """Keep legacy phase advancement, but audit every resulting Command."""
+backend/app/workflow\root_graph.py:119:    """Return a terminal Command when a legacy Command contains an invalid jump."""
+backend/app/workflow\root_graph.py:141:# TimeoutPolicy + error_handler for node-level fault tolerance (LangGraph v1.2)
+backend/app/workflow\root_graph.py:160:    failure channel as a timeout caught inside the legacy worker.
+backend/app/workflow\root_graph.py:589:    # ScenarioSet; routing straight to EXECUTE would leave the old provisional
+backend/app/workflow\root_graph.py:1255:    # re-planning; never inspect a legacy projection or mutate an approval.

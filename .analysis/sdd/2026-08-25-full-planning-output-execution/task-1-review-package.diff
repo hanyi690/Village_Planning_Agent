@@ -1,0 +1,2459 @@
+diff --git a/backend/app/data/ingestion/compiler/profiles/l1_observation.py b/backend/app/data/ingestion/compiler/profiles/l1_observation.py
+index 6206c716..155e43e7 100644
+--- a/backend/app/data/ingestion/compiler/profiles/l1_observation.py
++++ b/backend/app/data/ingestion/compiler/profiles/l1_observation.py
+@@ -7,30 +7,27 @@ code->name; never imports advisory_crosswalks.
+ from __future__ import annotations
+ 
+ import json
+ import re
+ from typing import Any
+ 
+ from app.contracts.artifacts.classification_ref import ClassificationRef
+ from app.contracts.evidence.evidence_contracts import EvidenceSource
+ from app.contracts.domain.l1_contracts import (
+     EvidenceGap,
+-    L1InputRegister,
+     L1LocationFact,
+-    L1RegisterRow,
+     L1Snapshot,
+ )
+ from app.contracts.workflow.parsing_contracts import CompilationProfile, CompilerTrace
+-from app.domain.assessment.l1_fact_projection import (
+-    location_fact_to_l1_fact,
+-    make_l1_fact,
+-)
++from app.contracts.workflow.parse_result_contracts import ParseDiagnostic
++from app.domain.assessment.l1_fact_projection import make_l1_fact
++from app.domain.assessment.observation_draft import observation_to_compiler_payload
+ 
+ from ..diagnostics import collect_diagnostics
+ from ..provenance import build_fragment_provenance
+ 
+ _CHAPTER_RE = re.compile(r"^#{1,3}\s+(\S.+)$", re.MULTILINE)
+ _BULLET_RE = re.compile(r"^\s*[-*]\s+(.+)$", re.MULTILINE)
+ 
+ 
+ def _split_explicit_places(value: str) -> list[str]:
+     """Split a report location cell, preserving only explicit place tokens."""
+@@ -178,73 +175,77 @@ def _is_place_like(token: str) -> bool:
+ 
+ 
+ def _extract_location_facts_from_observations(
+     instruction: str,
+     *,
+     dimension_key: str,
+     report_id: str,
+ ) -> list[L1LocationFact]:
+     """Compile the validated L1 observation projection into typed facts.
+ 
+-    The structured observations JSON is the single location-fact source since
+-    the split-projection migration; invalid/empty JSON yields zero facts (never a
+-    markdown-table fallback).
++    The structured observations JSON is the single location-fact source;
++    invalid or empty JSON yields zero facts.
+     """
+     if not instruction:
+         return []
+     try:
+         payload = json.loads(instruction)
+     except (json.JSONDecodeError, TypeError):
+         return []
+     if isinstance(payload, dict):
+         payload = payload.get("observations") or []
+     if not isinstance(payload, list):
+         return []
+     facts: list[L1LocationFact] = []
+     seen: set[str] = set()
+     for item in payload:
+-        if isinstance(item, dict):
+-            obs = item
+-        elif hasattr(item, "model_dump"):
+-            obs = item.model_dump(mode="json")
+-        else:
++        try:
++            obs = observation_to_compiler_payload(item)
++        except Exception:
+             continue
+         name = str(obs.get("name") or "").strip()
+         location = str(obs.get("location") or "").strip()
+         relation = str(obs.get("relation") or "").strip()
+         entity_type = str(obs.get("entity_type") or "").strip()
+         description = str(obs.get("description") or "").strip()
++        kind = str(obs.get("fact_type") or "").strip()
+         if str(obs.get("status") or "confirmed").strip() != "confirmed":
+             continue
++        spatial_observation = kind in {"spatial_entity", "spatial_relation"} or bool(
++            location or relation or obs.get("source_feature_ids")
++        )
++        if not spatial_observation:
++            continue
+         source_quote = str(obs.get("source_quote") or "").strip()
+         source_segment_ids = [
+             str(value).strip()
+             for value in (obs.get("source_segment_ids") or [])
+             if str(value).strip()
+         ]
+         evidence_refs = list(dict.fromkeys([
+             *[
+                 str(value).strip()
+                 for value in (obs.get("source_refs") or [])
+                 if str(value).strip()
+             ],
+             *source_segment_ids,
+         ]))
+         if not name and not location:
+             continue
+         role = _observation_role(entity_type, name, location, description)
+         source_span = source_quote or " | ".join(
+             x for x in (entity_type, name, location, relation, description) if x
+         )
+-        # 主事实 = 观察对象的 name（L1 已产出干净地名；编译器信任 name）。
++        # Only observations with an explicit spatial role/evidence can emit
++        # location facts. Non-spatial metric/demand names remain L1Fact rows.
+         parts_to_emit: list[tuple[str, str, str]] = []
+-        if name:
++        if name and kind in {"spatial_entity", "spatial_relation"}:
+             parts_to_emit.append((name, role, location or relation or name))
+         # location 里只有"短地点 token"（如 社前村）才作为关联地点事实产出，
+         # 用于 facility@村 这类锚定；方位/描述串（如 西南至东北贯穿金田村）
+         # 一律不当地点，只作为主事实的 spatial_hint。
+         location_parts = _split_explicit_places(location) if location else []
+         for location_part in location_parts:
+             if not location_part or not _is_place_like(location_part):
+                 continue
+             part_role = (
+                 "village"
+@@ -284,267 +285,237 @@ def _spatial_facts_from_observations(instruction: str) -> list[str]:
+     try:
+         payload = json.loads(instruction)
+     except (json.JSONDecodeError, TypeError):
+         return []
+     if isinstance(payload, dict):
+         payload = payload.get("observations") or []
+     if not isinstance(payload, list):
+         return []
+     out: list[str] = []
+     for item in payload:
+-        if not isinstance(item, dict):
++        try:
++            item = observation_to_compiler_payload(item)
++        except Exception:
+             continue
+         entity_type = str(item.get("entity_type") or "").strip()
+         name = str(item.get("name") or "").strip()
+         location = str(item.get("location") or "").strip()
+         if "设施" in entity_type and name:
+             out.append(f"设施 {name}，位置 {location}".strip())
+     return out
+ 
+ 
+ def _instruction_payload(instruction: str) -> dict[str, Any]:
+     """Decode the object-shaped L1 instruction envelope."""
+ 
+     if not instruction:
+         return {}
+     try:
+         payload = json.loads(instruction)
+     except (json.JSONDecodeError, TypeError):
+         return {}
+     if isinstance(payload, dict):
+         return payload
+-    # Existing observation-only fixtures are still readable during migration;
+-    # new writes always use the object envelope.
+-    if isinstance(payload, list):
+-        return {"observations": payload}
+     return {}
+ 
+ 
++def _instruction_diagnostics(
++    instruction: str,
++    *,
++    dimension_key: str,
++) -> list[ParseDiagnostic]:
++    payload = _instruction_payload(instruction)
++    diagnostics: list[ParseDiagnostic] = []
++    for index, raw in enumerate(payload.get("diagnostics") or []):
++        message = str(raw or "").strip()
++        if not message:
++            continue
++        severity = "warning"
++        if message.startswith("l1_dimension_fact_type_mismatch:"):
++            severity = "info"
++        diagnostics.append(
++            ParseDiagnostic(
++                diagnostic_id=f"{dimension_key}-instruction-diagnostic-{index}",
++                severity=severity,
++                code="INSTRUCTION_DIAGNOSTIC",
++                message=message,
++                field_path="instruction.diagnostics",
++            )
++        )
++    return diagnostics
++
++
+ def _compile_typed_observation_facts(
+     instruction: str,
+     *,
+     dimension_key: str,
+     report_id: str,
+ ) -> list[Any]:
+     """Compile the L1 model's semantic observations into stable ``L1Fact`` records.
+ 
+     ``report_body`` is intentionally not parsed here.  A fact enters the
+     planning evidence surface only through the structured observation envelope
+     and its source lineage.  This keeps metrics, demands, constraints and
+     spatial objects distinct instead of treating every paragraph as a place.
+     """
+ 
+     payload = _instruction_payload(instruction)
+     raw_observations = payload.get("observations") or []
+     if not isinstance(raw_observations, list):
+         return []
+     records: list[Any] = []
+-    for raw in raw_observations:
+-        if not isinstance(raw, dict):
++    for item in raw_observations:
++        try:
++            raw = observation_to_compiler_payload(item)
++        except Exception:
+             continue
+         if str(raw.get("status") or "confirmed").strip() != "confirmed":
+             continue
+         name = str(raw.get("name") or "").strip()
+         entity_type = str(raw.get("entity_type") or "").strip()
+         location = str(raw.get("location") or "").strip()
+         relation = str(raw.get("relation") or "").strip()
+         description = str(raw.get("description") or "").strip()
+-        kind = str(raw.get("observation_kind") or "place").strip()
++        kind = str(raw.get("fact_type") or "").strip()
+         semantic_type = str(
+             raw.get("semantic_type")
++            or raw.get("metric")
++            or raw.get("demand_type")
++            or raw.get("constraint_type")
++            or raw.get("subject")
+             or _observation_role(entity_type, name, location, description)
+             or kind
+         ).strip()
+-        if not any((name, entity_type, location, relation, description)):
++        value = raw.get("value")
++        if not any((
++            name,
++            entity_type,
++            location,
++            relation,
++            description,
++            semantic_type,
++            value is not None,
++        )):
+             continue
+         statement_parts = [value for value in (name, description, location, relation) if value]
++        if value is not None:
++            value_label = semantic_type or kind
++            unit = str(raw.get("unit") or "").strip()
++            statement_parts.append(f"{value_label}={value}{unit}")
+         statement = "；".join(dict.fromkeys(statement_parts))
+         source_refs = list(dict.fromkeys([
+             *[
+                 str(value).strip()
+                 for value in (raw.get("source_refs") or [])
+                 if str(value).strip()
+             ],
+             *[
+                 str(value).strip()
+                 for value in (raw.get("source_segment_ids") or [])
+                 if str(value).strip()
+             ],
+             str(report_id or "").strip(),
+         ]))
+         source_span = str(raw.get("source_quote") or "").strip() or statement
+-        spatial = kind in {"place", "current_asset", "demand", "relation"} or bool(location or relation)
++        spatial = kind in {"spatial_entity", "spatial_relation"} or bool(
++            location or relation or raw.get("source_feature_ids")
++        )
+         fact_kind = "spatial_observation" if spatial else "document_observation"
+         attributes = {
+             str(key).strip(): str(value).strip()
+             for key, value in (raw.get("attributes") or {}).items()
+             if str(key).strip() and str(value).strip()
+         }
+         standard_attributes = {
+-            "observation_kind": kind,
++            "fact_type": kind,
+             "entity_type": entity_type,
+             "name": name,
++            "metric": str(raw.get("metric") or "").strip(),
+             "location": location,
+             "relation": relation,
+             "description": description,
+             "scale": str(raw.get("scale") or "").strip(),
+             "related_observation_ids": ",".join(
+                 str(value).strip()
+                 for value in (raw.get("related_observation_ids") or [])
+                 if str(value).strip()
+             ),
+             "constraint_refs": ",".join(
+                 str(value).strip()
+                 for value in (raw.get("constraint_refs") or [])
+                 if str(value).strip()
+             ),
+         }
+-        for key, value in standard_attributes.items():
+-            if value and key not in attributes:
+-                attributes[key] = value
++        for key, attribute_value in standard_attributes.items():
++            if attribute_value and key not in attributes:
++                attributes[key] = attribute_value
+         record = make_l1_fact(
+             statement=statement,
+             fact_kind=fact_kind,
+             dimension_key=dimension_key,
+-            subject_scope=name or entity_type or location,
++            subject_scope=(
++                str(raw.get("scope") or raw.get("applies_to_scope") or "").strip()
++                or name
++                or entity_type
++                or location
++                or semantic_type
++                or dimension_key
++            ),
+             semantic_type=semantic_type,
+             attributes=attributes,
+-            value=raw.get("value"),
++            value=value,
+             unit=str(raw.get("unit") or "").strip(),
+             counting_basis=str(raw.get("counting_basis") or "").strip(),
+             source_refs=source_refs,
+             source_span=source_span,
+             source_feature_ids=(raw.get("source_feature_ids") or []),
+         )
+         if record is not None:
+             records.append(record)
+     unique: dict[str, Any] = {}
+     for record in records:
+         unique.setdefault(record.fact_id, record)
+     return list(unique.values())
+ 
+ 
+ def _structured_constraints(instruction: str) -> list[str]:
+     payload = _instruction_payload(instruction)
+     constraints: list[str] = []
+-    for raw in payload.get("observations") or []:
+-        if not isinstance(raw, dict) or str(raw.get("status") or "confirmed") != "confirmed":
++    for item in payload.get("observations") or []:
++        try:
++            raw = observation_to_compiler_payload(item)
++        except Exception:
+             continue
+-        kind = str(raw.get("observation_kind") or "").strip()
++        if str(raw.get("status") or "confirmed") != "confirmed":
++            continue
++        kind = str(raw.get("fact_type") or "").strip()
+         if kind not in {"constraint", "risk"}:
+             continue
+         text = str(raw.get("description") or raw.get("name") or "").strip()
+         if text:
+             constraints.append(text)
+     return list(dict.fromkeys(constraints))
+ 
+ 
+-def _compile_register_rows(
+-    instruction: str,
+-    *,
+-    dimension_key: str,
+-) -> tuple[dict[str, list[L1RegisterRow]], L1InputRegister | None, list[str]]:
+-    """Read already-materialized L1 rows from a dimension instruction.
+-
+-    Canonical values and locators must have been materialized by the L1
+-    worker against its source index.  The compiler only validates the shape
+-    and projects the rows; it never reopens raw input.
+-    """
+-
+-    payload = _instruction_payload(instruction)
+-    raw_rows = payload.get("register_rows") or []
+-    if not isinstance(raw_rows, list) or not raw_rows:
+-        return {}, None, []
+-    rows: list[L1RegisterRow] = []
+-    diagnostics: list[str] = []
+-    for raw in raw_rows:
+-        try:
+-            row = L1RegisterRow.model_validate(raw)
+-        except Exception as exc:  # noqa: BLE001 - row-level diagnostic
+-            diagnostics.append(f"register_row_compile_invalid:{type(exc).__name__}")
+-            continue
+-        if not row.dimension_key:
+-            row = row.model_copy(update={"dimension_key": dimension_key})
+-        elif row.dimension_key != dimension_key:
+-            diagnostics.append(
+-                f"register_row_dimension_mismatch:{row.row_id}:{row.dimension_key}!={dimension_key}"
+-            )
+-            continue
+-        rows.append(row)
+-    if not rows:
+-        return {}, None, diagnostics
+-    unique: dict[str, L1RegisterRow] = {}
+-    for row in rows:
+-        prior = unique.get(row.row_id)
+-        if prior is not None and prior.model_dump(mode="json") != row.model_dump(mode="json"):
+-            diagnostics.append(f"register_row_conflict:{row.row_id}")
+-            continue
+-        unique.setdefault(row.row_id, row)
+-    materialized = list(unique.values())
+-    source_documents = [str(value) for value in payload.get("source_documents", []) if str(value).strip()]
+-    source_digest = str(payload.get("source_digest") or "")
+-    register = L1InputRegister(
+-        source_documents=source_documents,
+-        source_digest=source_digest,
+-        current_assets=[row for row in materialized if row.ledger_kind == "current_asset"],
+-        demands=[row for row in materialized if row.ledger_kind == "demand"],
+-        diagnostics=list(diagnostics),
+-    )
+-    return {dimension_key: materialized}, register, diagnostics
+-
+-
+-def _build_fact_records(
+-    *,
+-    dimension_key: str,
+-    report_id: str,
+-    facts: list[str],
+-    location_facts: list[L1LocationFact],
+-    constraints: list[str],
+-    classification_refs: list[ClassificationRef],
+-) -> list[Any]:
+-    """Create the authoritative typed L1 record set for one report."""
+-    if not report_id:
+-        # An unidentifiable report may still produce a display snapshot, but
+-        # its claims cannot become authoritative evidence records.
+-        return []
+-    # L1Fact is the spatial-evidence boundary.  Report prose, constraints and
+-    # current land-use classifications remain in their report/display fields;
+-    # they are not promoted into a generic machine fact that later grounding
+-    # could mistake for a place identity.
+-    records: list[Any] = []
+-    for fact in location_facts:
+-        record = location_fact_to_l1_fact(fact)
+-        if record is not None:
+-            records.append(record)
+-    seen: set[str] = set()
+-    unique_records: list[Any] = []
+-    for record in records:
+-        if record.fact_id in seen:
+-            continue
+-        seen.add(record.fact_id)
+-        unique_records.append(record)
+-    return unique_records
+-
+-
+ def compile_l1_observation(
+     *,
+     dimension_key: str,
+     content: str,
+     instruction: str,
+     summary: str = "",
+     report_id: str = "",
+     run_id: str = "",
+ ) -> L1Snapshot:
+     steps: list[str] = []
+     # L1 split projection: ``content`` is the persisted report body (no
+     # 【INSTRUCTION】 marker); ``instruction`` is the validated observation JSON
+-    # - the only location-fact source.  No markdown-table fallback is kept.
++    # and the only location-fact source.
+     display = _clean_model_text(content or "")
+     instr = instruction or ""
+ 
+     facts: list[str] = []
+     constraints: list[str] = []
+     evidence_gaps: list[EvidenceGap] = []
+     classification_refs: list[ClassificationRef] = []
+     spatial_facts: list[str] = []
+     location_facts = _extract_location_facts_from_observations(
+         instr,
+@@ -608,43 +579,35 @@ def compile_l1_observation(
+     marked_facts = []
+     for raw_line in display.splitlines():
+         line = raw_line.strip()
+         if line.startswith("【事实】"):
+             value = line[len("【事实】"):].strip()
+             if len(value) >= 4:
+                 marked_facts.append(f"[{dimension_key}] 现状事实: {value[:240]}")
+     facts = list(dict.fromkeys([*facts, *marked_facts]))
+ 
+     spatial_facts = _spatial_facts_from_observations(instr)
+-    location_fact_records = _build_fact_records(
+-        dimension_key=dimension_key,
+-        report_id=report_id,
+-        facts=facts,
+-        location_facts=location_facts,
+-        constraints=constraints,
+-        classification_refs=classification_refs,
+-    )
+-    # Structured observations are the authoritative producer.  The legacy
+-    # location projection remains a compatibility fallback for old fixtures,
+-    # but is not duplicated when the new observation envelope is present.
+-    fact_records = typed_observation_facts or location_fact_records
++    # Typed observations are the only producer of authoritative L1 records.
++    # Location facts are a separate mention index for spatial resolution and
++    # never synthesize a planning fact when the typed observation is absent.
++    fact_records = typed_observation_facts
+     structured_constraints = _structured_constraints(instr)
+     if structured_constraints:
+         constraints = list(dict.fromkeys([*structured_constraints, *constraints]))
+ 
+     diagnostics = collect_diagnostics(dimension_key, display, instr)
+-    register_rows_by_dimension, input_register, register_diagnostics = _compile_register_rows(
+-        instr,
+-        dimension_key=dimension_key,
++    diagnostics.extend(
++        _instruction_diagnostics(
++            instr,
++            dimension_key=dimension_key,
++        )
+     )
+-    if register_diagnostics:
+-        diagnostics.extend(register_diagnostics)
+     steps.append(f"diagnostics: {len(diagnostics)}")
+ 
+     provenance = build_fragment_provenance(
+         dimension_key,
+         report_id,
+         run_id,
+         section_locators,
+         source_module="l1_observe",
+     )
+     return L1Snapshot(
+@@ -658,25 +621,20 @@ def compile_l1_observation(
+         evidence_gaps=evidence_gaps,
+         classification_refs=classification_refs,
+         sources=(
+             [EvidenceSource(source_type="report", reference=report_id)]
+             if report_id
+             else []
+         ),
+         dimension_provenance=[provenance],
+         spatial_facts_by_dimension={dimension_key: spatial_facts},
+         diagnostics_by_dimension={dimension_key: diagnostics},
+-        register_rows_by_dimension=register_rows_by_dimension,
+-        register_diagnostics_by_dimension={
+-            dimension_key: list(register_diagnostics),
+-        },
+-        input_register=input_register,
+         traces_by_dimension={
+             dimension_key: CompilerTrace(
+                 profile=CompilationProfile.L1_OBSERVATION,
+                 steps=steps,
+             )
+         },
+         provenance=provenance,
+     )
+ 
+ 
+diff --git a/backend/app/domain/assessment/l1_extraction_loop.py b/backend/app/domain/assessment/l1_extraction_loop.py
+index 250cfc97..e878d006 100644
+--- a/backend/app/domain/assessment/l1_extraction_loop.py
++++ b/backend/app/domain/assessment/l1_extraction_loop.py
+@@ -1,631 +1,407 @@
+-"""Bounded L1 extract/register/repair loop.
+-
+-The loop is deliberately local to L1.  It reuses the existing structured
+-runner and optional evidence adapter, but owns a small pass cursor so an
+-interrupted dimension can continue from its last successful pass without
+-replaying the whole source document.
+-"""
++"""Bounded L1 observe/report loop with source-level evidence validation."""
+ 
+ from __future__ import annotations
+ 
+ import inspect
+ import json
+ import re
+ from dataclasses import dataclass, field
+ from typing import Any, Awaitable, Callable
+ 
+-from app.contracts.domain.l1_contracts import (
+-    L1DimensionPassState,
+-    L1InputRegister,
+-    L1RegisterRow,
+-)
+-from app.domain.assessment.input_register import (
+-    materialize_dimension_register_rows,
+-    render_l1_source_index,
+-)
++from pydantic import TypeAdapter
++
++from app.contracts.domain.l1_contracts import L1DimensionPassState, L1SourceIndex
++from app.domain.assessment.source_index import render_l1_source_index
+ from app.domain.assessment.observation_draft import (
+-    L1CoverageDecision,
+-    L1ObservationDraft,
+-    L1ObservationPassOutput,
++    L1PlanningFactDraft,
+     L1ReportOutput,
+-    L1RegisterPassOutput,
++    l1_observation_output_model_for_dimension,
+ )
+ 
+ 
+-EvidenceLookup = Callable[[str, list[str]], Awaitable[str] | str]
+ CheckpointWriter = Callable[[dict[str, Any]], Awaitable[None] | None]
++_FACT_ADAPTER = TypeAdapter(L1PlanningFactDraft)
+ 
+ 
+ @dataclass
+ class L1DimensionRunResult:
+-    """Final output of one dimension loop."""
++    """Final output of one L1 dimension."""
+ 
+     report_body: str
+     observations: list[Any]
+-    register_rows: list[L1RegisterRow] = field(default_factory=list)
+-    coverage: list[L1CoverageDecision] = field(default_factory=list)
+     diagnostics: list[str] = field(default_factory=list)
+     cursor: L1DimensionPassState | None = None
+     retrieval_trace: list[dict[str, Any]] = field(default_factory=list)
+ 
+ 
+ def _unique(values: list[str]) -> list[str]:
+     return list(dict.fromkeys(str(value) for value in values if str(value).strip()))
+ 
+ 
+-_FOLLOWUP_STATUSES = {"uncertain", "conflict"}
+-
+-
+-def _needs_followup(status: str) -> bool:
+-    """Return whether a row still needs a bounded repair/confirmation pass."""
+-
+-    return str(status or "").strip() in _FOLLOWUP_STATUSES
+-
+-
+-def _confirmed_ids(rows: list[L1RegisterRow]) -> list[str]:
+-    return _unique([
+-        row.row_id
+-        for row in rows
+-        if row.status == "confirmed"
+-    ])
+-
+-
+-def _merge_rows(
+-    existing: list[L1RegisterRow],
+-    incoming: list[L1RegisterRow],
+-) -> tuple[list[L1RegisterRow], list[str]]:
+-    by_id = {row.row_id: row for row in existing}
+-    diagnostics: list[str] = []
+-    for row in incoming:
+-        prior = by_id.get(row.row_id)
+-        if prior is None:
+-            by_id[row.row_id] = row
+-            continue
+-        if prior.status != "confirmed" and row.status == "confirmed":
+-            by_id[row.row_id] = row
+-            continue
+-        if prior.status == "confirmed" and row.status != "confirmed":
+-            continue
+-        if prior.model_dump(mode="json") != row.model_dump(mode="json"):
+-            diagnostics.append(f"register_row_conflict:{row.row_id}")
+-    return list(by_id.values()), diagnostics
+-
+-
+-def _source_index_with_rows(
+-    source_index: L1InputRegister | None,
+-    rows: list[L1RegisterRow],
+-) -> L1InputRegister | None:
+-    """Expose current-pass registrations to a targeted repair prompt.
+-
+-    A fresh source index intentionally contains only generic segments.  Once
+-    the observe pass has materialized a registration, a repair pass still
+-    needs to see that row's canonical evidence without reparsing the raw
+-    document.  Merge the typed rows into a prompt-only copy; the persisted
+-    source index remains segment-only until the dimension artifact is saved.
+-    """
+-
+-    if source_index is None or not rows:
+-        return source_index
+-    current = {
+-        row.row_id: row for row in (source_index.current_assets or [])
+-    }
+-    demands = {
+-        row.row_id: row for row in (source_index.demands or [])
+-    }
+-    for row in rows:
+-        target = current if row.ledger_kind == "current_asset" else demands
+-        target.setdefault(row.row_id, row)
+-    return source_index.model_copy(update={
+-        "current_assets": list(current.values()),
+-        "demands": list(demands.values()),
+-    })
+-
+-
+-async def _maybe_lookup(
+-    lookup: EvidenceLookup | None,
+-    query: str,
+-    required: list[str],
+-) -> str:
+-    if lookup is None:
+-        return ""
+-    result = lookup(query, required)
+-    if inspect.isawaitable(result):
+-        result = await result
+-    return str(result or "")
+-
+-
+-def _row_names(source_index: L1InputRegister | None, row_ids: list[str]) -> list[str]:
+-    if source_index is None:
+-        return []
+-    wanted = set(row_ids)
+-    return [
+-        row.name
+-        for row in [*(source_index.current_assets or []), *(source_index.demands or [])]
+-        if row.row_id in wanted and row.name
+-    ]
++def _observation_label(observation: Any) -> str:
++    for field_name in (
++        "name",
++        "metric",
++        "demand_type",
++        "constraint_type",
++        "subject",
++        "subject_ref",
++    ):
++        value = str(getattr(observation, field_name, "") or "").strip()
++        if value:
++            return value[:80]
++    return "observation"
+ 
+ 
+ def _validate_observation_sources(
+     observations: list[Any],
+-    source_index: L1InputRegister | None,
++    source_index: L1SourceIndex | None,
+ ) -> tuple[list[Any], list[str]]:
+-    """Verify LLM evidence locators against generic source segments.
+-
+-    L1 is allowed to discover arbitrary entities from narrative, OCR, tables,
+-    or mixed material.  The application therefore validates only the
+-    model-supplied segment identity and quote; it never infers a table row or
+-    a location from a fixed document format.
+-    """
++    """Verify fact evidence locators against generic source segments."""
+ 
+     segments = {
+         segment.segment_id: segment
+         for segment in (getattr(source_index, "source_segments", []) or [])
+     }
+     if not observations:
+         return observations, []
+     diagnostics: list[str] = []
+     validated: list[Any] = []
+     for item in observations:
+         try:
+             observation = (
+                 item
+-                if isinstance(item, L1ObservationDraft)
+-                else L1ObservationDraft.model_validate(item)
++                if hasattr(item, "fact_type")
++                else _FACT_ADAPTER.validate_python(item)
+             )
+         except Exception:
+             diagnostics.append("observation_source_invalid")
+-            validated.append(item)
+             continue
+-        ids = [str(value).strip() for value in observation.source_segment_ids if str(value).strip()]
++        ids = [
++            str(value).strip()
++            for value in observation.source_segment_ids
++            if str(value).strip()
++        ]
+         matched = [segments[value] for value in ids if value in segments]
+         unknown = [value for value in ids if value not in segments]
+-        if unknown:
+-            diagnostics.extend(
+-                f"observation_source_segment_unknown:{value}" for value in unknown
+-            )
++        diagnostics.extend(
++            f"observation_source_segment_unknown:{value}" for value in unknown
++        )
+         quote = str(observation.source_quote or "").strip()
+         quote_norm = re.sub(r"\s+", " ", quote)
+-        evidence_ok = bool(matched and quote_norm)
+-        if evidence_ok:
+-            evidence_ok = any(
+-                quote_norm in re.sub(r"\s+", " ", segment.text)
+-                for segment in matched
+-            )
++        evidence_ok = bool(matched and quote_norm) and any(
++            quote_norm in re.sub(r"\s+", " ", segment.text)
++            for segment in matched
++        )
+         if not evidence_ok:
+-            name = str(observation.name or observation.entity_type or "observation")[:80]
++            name = _observation_label(observation)
+             diagnostics.append(f"observation_source_unverified:{name}")
+             observation = observation.model_copy(update={"status": "uncertain"})
+-        elif matched:
+-            canonical_refs = list(dict.fromkeys(
+-                [*observation.source_refs, *(segment.source_ref for segment in matched)]
+-            ))
++        else:
++            canonical_refs = list(
++                dict.fromkeys(
++                    [
++                        *observation.source_refs,
++                        *(segment.source_ref for segment in matched),
++                    ]
++                )
++            )
+             observation = observation.model_copy(update={"source_refs": canonical_refs})
+         validated.append(observation)
+     return validated, diagnostics
+ 
+ 
++def _dimension_mismatch_diagnostics(
++    observations: list[Any],
++    *,
++    dimension_key: str,
++) -> list[str]:
++    """Flag globally valid facts that sit outside a dimension's preferred mix."""
++
++    from app.domain.assessment.dimension_contracts import get_dimension_semantic_contract
++
++    allowed_fact_types = {
++        str(value).strip()
++        for value in (
++            get_dimension_semantic_contract(dimension_key, 1).get("l1_fact_types", [])
++            or []
++        )
++        if str(value).strip()
++    }
++    if not allowed_fact_types:
++        return []
++    diagnostics: list[str] = []
++    for item in observations:
++        fact_type = str(getattr(item, "fact_type", "") or "").strip()
++        if fact_type and fact_type not in allowed_fact_types:
++            diagnostics.append(
++                f"l1_dimension_fact_type_mismatch:{dimension_key}:{fact_type}"
++            )
++    return diagnostics
++
++
++async def _write_checkpoint(
++    writer: CheckpointWriter | None,
++    *,
++    pass_name: str,
++    report_body: str,
++    observations: list[Any],
++    diagnostics: list[str],
++    cursor: L1DimensionPassState,
++) -> None:
++    if writer is None:
++        return
++    payload = {
++        "pass": pass_name,
++        "report_body": report_body,
++        "observations": [
++            item.model_dump(mode="json") if hasattr(item, "model_dump") else item
++            for item in observations
++        ],
++        "diagnostics": _unique(diagnostics),
++        "cursor": cursor.model_dump(mode="json"),
++    }
++    result = writer(payload)
++    if inspect.isawaitable(result):
++        await result
++
++
+ async def run_l1_dimension_loop(
+     *,
+     dimension_key: str,
+     prompt: str,
+-    source_index: L1InputRegister | None,
++    source_index: L1SourceIndex | None,
+     runner_kwargs: dict[str, Any] | None = None,
+-    evidence_lookup: EvidenceLookup | None = None,
+     checkpoint_writer: CheckpointWriter | None = None,
+     resume_payload: dict[str, Any] | None = None,
+     previous_cursor: L1DimensionPassState | None = None,
+     max_attempts: int = 2,
+     max_calls: int = 4,
+ ) -> L1DimensionRunResult:
+-    """Run a bounded observe → register → validate → repair loop.
++    """Run a bounded observe → report sequence.
+ 
+-    ``runner_kwargs`` is passed to the existing ``run_structured_output``
+-    adapter.  The model never writes canonical source fields: materialization
+-    always resolves returned row IDs against ``source_index``.
++    Semantic facts are produced once. Their own source IDs and quotes are the
++    evidence audit surface; no parallel asset/demand register is generated.
+     """
+ 
+     from app.infrastructure.llm.structured import run_structured_output
++    from app.domain.assessment.dimension_contracts import (
++        render_dimension_semantic_contract,
++    )
+ 
+     source_digest = str(getattr(source_index, "source_digest", "") or "")
+     resume_payload = resume_payload or {}
+     if previous_cursor is None and isinstance(resume_payload.get("cursor"), dict):
+         try:
+-            previous_cursor = L1DimensionPassState.model_validate(resume_payload["cursor"])
++            previous_cursor = L1DimensionPassState.model_validate(
++                resume_payload["cursor"]
++            )
+         except Exception:
+             previous_cursor = None
+-    # A cursor is content-addressed to one source index and one dimension.
+-    # Reusing it against another source would make a successful resume look
+-    # valid while confirming rows from the wrong document.  Drop the whole
+-    # resume payload at this boundary and leave a stable diagnostic.
++
+     resume_diagnostics: list[str] = []
+     if previous_cursor is not None and (
+         previous_cursor.dimension_key != dimension_key
+         or (
+             source_digest
+             and previous_cursor.source_digest
+             and previous_cursor.source_digest != source_digest
+         )
+     ):
+         previous_cursor = None
+         resume_payload = {}
+         resume_diagnostics.append("l1_resume_cursor_stale")
++
+     cursor = previous_cursor or L1DimensionPassState(
+         dimension_key=dimension_key,
+         source_digest=source_digest,
+         max_attempts=max_attempts,
+         max_calls=max_calls,
+     )
+-    diagnostics = [*resume_diagnostics, *list(cursor.diagnostics)]
++    diagnostics = [
++        *resume_diagnostics,
++        *list(cursor.diagnostics),
++        *[str(value) for value in resume_payload.get("diagnostics", []) or []],
++    ]
+     retrieval_trace: list[dict[str, Any]] = []
+     report_body = str(resume_payload.get("report_body") or "").strip()
+     observations: list[Any] = list(resume_payload.get("observations") or [])
+-    register_rows: list[L1RegisterRow] = []
+-    for raw_row in list(resume_payload.get("register_rows") or []):
+-        try:
+-            register_rows.append(L1RegisterRow.model_validate(raw_row))
+-        except Exception:
+-            diagnostics.append("resume_register_row_invalid")
+-    coverage: list[L1CoverageDecision] = []
+-    for raw_coverage in list(resume_payload.get("coverage") or []):
+-        try:
+-            coverage.append(L1CoverageDecision.model_validate(raw_coverage))
+-        except Exception:
+-            diagnostics.append("resume_coverage_invalid")
+-    diagnostics.extend(str(value) for value in resume_payload.get("diagnostics", []) or [])
+-    observations, observation_diagnostics = _validate_observation_sources(
++    observations, source_diagnostics = _validate_observation_sources(
+         observations,
+         source_index,
+     )
+-    diagnostics.extend(observation_diagnostics)
+-
+-    base_kwargs = dict(runner_kwargs or {})
+-    from app.domain.assessment.dimension_contracts import render_dimension_semantic_contract
+-
+-    observe_system = (
+-        f"【L1 observe pass; dimension_key={dimension_key}】\n"
+-        "你只负责本维度现状观察与原始资料结构化。"
+-        "只返回 observations/register_rows/coverage，不返回 report_body；"
+-        "observations 记录原始资料明确出现的空间对象；"
+-        "register_rows 只有在原始资料明确表达资产/需求登记时才填写；"
+-        "叙述、OCR、清单或混合资料不得为了填表而硬造 row_id。"
+-        "current_asset 与 demand 必须严格区分；不能把规划建议当成现状设施。"
+-        "每个 observation 尽量返回 source_segment_ids 和 source_quote；"
+-        "没有直接证据就标记 uncertain，不得猜测。"
+-        "observation_kind 必须区分 place/current_asset/demand/metric/constraint/relation/risk/opportunity/document_observation；"
+-        "semantic_type、attributes、value/unit/counting_basis、related_observation_ids 和 constraint_refs 只填来源明确支持的值。\n\n"
+-        f"{render_dimension_semantic_contract(dimension_key, 1)}\n\n"
+-        f"【L1 source index】\n{render_l1_source_index(source_index)}"
++    diagnostics.extend(source_diagnostics)
++    diagnostics.extend(
++        _dimension_mismatch_diagnostics(
++            observations,
++            dimension_key=dimension_key,
++        )
+     )
+ 
+     if cursor.status == "complete" and report_body:
+         return L1DimensionRunResult(
+             report_body=report_body,
+             observations=observations,
+-            register_rows=register_rows,
+-            coverage=coverage,
+             diagnostics=_unique(diagnostics),
+             cursor=cursor,
+             retrieval_trace=retrieval_trace,
+         )
+-    if cursor.status == "complete" and not report_body:
+-        cursor = cursor.model_copy(update={
+-            "pass_name": "report",
+-            "status": "running",
+-        })
++    if cursor.status == "complete":
++        cursor = cursor.model_copy(update={"pass_name": "report", "status": "running"})
++
++    base_kwargs = dict(runner_kwargs or {})
++    observe_system = (
++        f"【L1 observe pass; dimension_key={dimension_key}】\n"
++        "你只负责本维度现状事实结构化。只返回 observations，不返回 report_body；"
++        "每条 observation 必须先选择明确的 fact_type。"
++        "空间对象、指标、需求、约束、关系、风险和机会都直接写入 observations，"
++        "不得另造资产台账、需求台账、coverage 或处理状态。"
++        "每条 observation 尽量返回 source_segment_ids 和 source_quote；"
++        "没有直接证据就标记 uncertain，不得猜测。"
++        "location/relation 只填写来源明确支持的空间线索；"
++        "全村指标、全村诉求或政策事实不得为满足格式而编造点位。"
++        "同一语义族内的不同子类、指标或风险类型必须保留可区分的 identity；"
++        "当同一 scope 和 semantic_type 下出现多个不同量值时，必须在 attributes.metric "
++        "或 semantic_type 本身明确写出子类，不要只把区分写在 name/其他 attributes 字段；"
++        "例如 forest_area:commercial_forest 与 forest_area:ecological_forest、"
++        "cultivation_area:林芝 与 cultivation_area:烤烟、崩塌隐患点与滑坡隐患点，"
++        "不能把不同对象压成同一个泛化语义。"
++        "fact_type 必须从 spatial_entity/spatial_relation/scoped_metric/demand/"
++        "constraint/risk/opportunity/document_observation 中选择；"
++        "observations 必须是 JSON 数组；禁止把数组序列化成字符串，禁止把整段 JSON 文本放进 observations 字段；"
++        "semantic_type、attributes、value/unit/counting_basis、"
++        "related_observation_ids 和 constraint_refs 只填来源明确支持的值。\n\n"
++        f"{render_dimension_semantic_contract(dimension_key, 1)}\n\n"
++        f"【L1 source index】\n{render_l1_source_index(source_index)}"
++    )
+ 
+     if cursor.pass_name in {"observe", "diagnostic"}:
++        observe_response_model = l1_observation_output_model_for_dimension(
++            dimension_key
++        )
+         output = await run_structured_output(
+-            L1ObservationPassOutput,
++            observe_response_model,
+             [
+                 {"role": "system", "content": observe_system},
+                 {"role": "user", "content": prompt},
+             ],
+             **base_kwargs,
+         )
+         if output is None:
+             raise ValueError("L1 observe pass returned no structured output")
+-        diagnostics.extend(str(value) for value in (getattr(output, "diagnostics", []) or []) if str(value).strip())
+-        observations, observation_diagnostics = _validate_observation_sources(
++        diagnostics.extend(
++            str(value)
++            for value in (getattr(output, "diagnostics", []) or [])
++            if str(value).strip()
++        )
++        observations, source_diagnostics = _validate_observation_sources(
+             list(output.observations or []),
+             source_index,
+         )
+-        diagnostics.extend(observation_diagnostics)
+-        raw_drafts = list(output.register_rows or [])
+-        selected_ids = [str(row.row_id) for row in raw_drafts]
+-        cursor = cursor.model_copy(update={
+-            "pass_name": "register",
+-            "attempt": cursor.attempt + 1,
+-            "calls_used": cursor.calls_used + 1,
+-            "pending_row_ids": [],
+-            "status": "running",
+-        })
+-        materialized, row_diagnostics = materialize_dimension_register_rows(
+-            raw_drafts,
+-            source_index,
+-            dimension_key,
++        diagnostics.extend(source_diagnostics)
++        diagnostics.extend(
++            _dimension_mismatch_diagnostics(
++                observations,
++                dimension_key=dimension_key,
++            )
+         )
+-        register_rows, merge_diagnostics = _merge_rows(register_rows, materialized)
+-        diagnostics.extend(row_diagnostics)
+-        diagnostics.extend(merge_diagnostics)
+-        cursor = cursor.model_copy(update={
+-            "pending_row_ids": _unique([
+-                row.row_id
+-                for row in materialized
+-                if _needs_followup(row.status)
+-            ]),
+-            "confirmed_row_ids": _confirmed_ids(register_rows),
+-        })
+-        coverage = list(output.coverage or [])
+-        if checkpoint_writer is not None:
+-            checkpoint = {
+-                "pass": "observe",
+-                "report_body": report_body,
+-                "observations": [
+-                    item.model_dump(mode="json") if hasattr(item, "model_dump") else item
+-                    for item in observations
+-                ],
+-                "register_rows": [row.model_dump(mode="json") for row in register_rows],
+-                "coverage": [item.model_dump(mode="json") for item in coverage],
+-                "diagnostics": _unique(diagnostics),
+-                "cursor": cursor.model_dump(mode="json"),
++        cursor = cursor.model_copy(
++            update={
++                "pass_name": "report",
++                "attempt": cursor.attempt + 1,
++                "calls_used": cursor.calls_used + 1,
++                "status": "running",
+             }
+-            result = checkpoint_writer(checkpoint)
+-            if inspect.isawaitable(result):
+-                await result
+-
+-    pending_ids = _unique([
+-        *cursor.pending_row_ids,
+-        *[item.row_id for item in coverage if item.status in {"uncertain", "conflict"}],
+-    ])
+-    while (
+-        pending_ids
+-        and cursor.calls_used < cursor.max_calls
+-        and cursor.attempt < cursor.max_attempts
+-    ):
+-        prompt_index = _source_index_with_rows(source_index, register_rows)
+-        names = _row_names(prompt_index, pending_ids)
+-        required = [*names, *diagnostics[-8:]]
+-        evidence_context = await _maybe_lookup(
+-            evidence_lookup,
+-            f"L1 {dimension_key} source-row confirmation: {'、'.join(names)}",
+-            required,
+-        )
+-        if evidence_context:
+-            retrieval_trace.append({
+-                "pass": "register",
+-                "status": "retrieved",
+-                "row_ids": list(pending_ids),
+-                "context_chars": len(evidence_context),
+-            })
+-        elif evidence_lookup is not None:
+-            retrieval_trace.append({
+-                "pass": "register",
+-                "status": "unavailable_or_empty",
+-                "row_ids": list(pending_ids),
+-            })
+-        register_system = (
+-            f"【L1 register/repair pass; dimension_key={dimension_key}】\n"
+-            "只确认下面 pending row_id 的维度归属和不确定性。"
+-            "返回 register_rows 与 coverage；不得返回列表外的 row_id。"
+-            "source_index 的 canonical 字段由应用侧写入，模型只提供 status/evidence_note。\n\n"
+-            f"pending_row_ids={','.join(pending_ids)}\n"
+-            f"【L1 source index】\n{render_l1_source_index(prompt_index, row_ids=pending_ids)}\n"
+-            f"【已有校验诊断】\n{'; '.join(diagnostics[-8:]) or '无'}\n"
+-            f"【检索补充证据（仅作核验线索，不改变 source row）】\n{evidence_context or '无；如原文不足请返回 uncertain/source_exhausted'}"
+         )
+-        followup = await run_structured_output(
+-            L1RegisterPassOutput,
+-            [
+-                {"role": "system", "content": register_system},
+-                {"role": "user", "content": "请完成 pending row 的确认。"},
+-            ],
+-            **base_kwargs,
+-        )
+-        if followup is None:
+-            diagnostics.append("register_pass_empty_output")
+-            break
+-        cursor = cursor.model_copy(update={
+-            "pass_name": "validate",
+-            "attempt": cursor.attempt + 1,
+-            "calls_used": cursor.calls_used + 1,
+-        })
+-        if checkpoint_writer is not None:
+-            checkpoint = {
+-                "pass": "register",
+-                "report_body": report_body,
+-                "observations": [
+-                    item.model_dump(mode="json") if hasattr(item, "model_dump") else item
+-                    for item in observations
+-                ],
+-                "register_rows": [row.model_dump(mode="json") for row in register_rows],
+-                "coverage": [item.model_dump(mode="json") for item in coverage],
+-                "diagnostics": _unique(diagnostics),
+-                "cursor": cursor.model_dump(mode="json"),
+-            }
+-            result = checkpoint_writer(checkpoint)
+-            if inspect.isawaitable(result):
+-                await result
+-        followup_ids = [str(item.row_id) for item in followup.register_rows]
+-        pending_set = set(pending_ids)
+-        unknown_ids = [row_id for row_id in followup_ids if row_id not in pending_set]
+-        diagnostics.extend(f"register_row_out_of_scope:{row_id}" for row_id in unknown_ids)
+-        allowed_drafts = [item for item in followup.register_rows if item.row_id in pending_set]
+-        materialized, row_diagnostics = materialize_dimension_register_rows(
+-            allowed_drafts,
+-            prompt_index,
+-            dimension_key,
++        await _write_checkpoint(
++            checkpoint_writer,
++            pass_name="observe",
++            report_body=report_body,
++            observations=observations,
++            diagnostics=diagnostics,
++            cursor=cursor,
+         )
+-        register_rows, merge_diagnostics = _merge_rows(register_rows, materialized)
+-        diagnostics.extend(row_diagnostics)
+-        diagnostics.extend(merge_diagnostics)
+-        coverage.extend(list(followup.coverage or []))
+-        still_uncertain = {
+-            item.row_id
+-            for item in followup.coverage
+-            if item.row_id in pending_set and _needs_followup(item.status)
+-        }
+-        rejected_ids = {
+-            value.split(":", 1)[1]
+-            for value in [*row_diagnostics, *merge_diagnostics, *diagnostics]
+-            if value.startswith((
+-                "register_row_unknown:",
+-                "register_row_ledger_kind_mismatch:",
+-                "register_row_invalid:",
+-                "register_row_conflicting_status:",
+-                "register_row_out_of_scope:",
+-                "register_row_conflict:",
+-            ))
+-            and ":" in value
+-        }
+-        if not still_uncertain and not rejected_ids:
+-            pending_ids = []
+-        else:
+-            # A rejected row cannot be repaired by sending the same source
+-            # index forever.  Remove it from pending, but retain diagnostic
+-            # status so the dimension terminates fail-closed instead of
+-            # falsely claiming complete coverage.
+-            pending_ids = _unique([
+-                row_id
+-                for row_id in still_uncertain
+-                if row_id not in rejected_ids
+-            ])
+-        cursor = cursor.model_copy(update={
+-            "pending_row_ids": pending_ids,
+-            "confirmed_row_ids": _confirmed_ids(register_rows),
+-            "rejected_row_ids": _unique([
+-                item.split(":", 1)[-1]
+-                for item in diagnostics
+-                if item.startswith("register_row_")
+-            ]),
+-            "diagnostics": _unique(diagnostics),
+-        })
+-        if checkpoint_writer is not None:
+-            checkpoint = {
+-                "pass": "validate",
+-                "report_body": report_body,
+-                "observations": [
+-                    item.model_dump(mode="json") if hasattr(item, "model_dump") else item
+-                    for item in observations
+-                ],
+-                "register_rows": [row.model_dump(mode="json") for row in register_rows],
+-                "coverage": [item.model_dump(mode="json") for item in coverage],
+-                "diagnostics": _unique(diagnostics),
+-                "cursor": cursor.model_dump(mode="json"),
+-            }
+-            result = checkpoint_writer(checkpoint)
+-            if inspect.isawaitable(result):
+-                await result
+-        if not pending_ids:
+-            break
+-
+-    if (cursor.calls_used >= cursor.max_calls or cursor.attempt >= cursor.max_attempts) and pending_ids:
+-        diagnostics.append("l1_pass_call_budget_exhausted")
+-    structural_diagnostic = any(
+-        item.startswith((
+-            "register_row_",
+-            "l1_resume_",
+-            "structured_",
+-            "observation_source_",
+-        ))
+-        for item in diagnostics
+-    )
+-    final_status = "complete" if not pending_ids and not structural_diagnostic else "diagnostic"
++
++    final_status = "complete"
+     if not report_body:
+         if cursor.calls_used >= cursor.max_calls:
+             diagnostics.append("l1_report_synthesis_budget_exhausted")
+             final_status = "diagnostic"
+         else:
+-            cursor = cursor.model_copy(update={
+-                "pass_name": "report",
+-                "status": "running",
+-                "calls_used": cursor.calls_used + 1,
+-            })
++            cursor = cursor.model_copy(
++                update={
++                    "pass_name": "report",
++                    "status": "running",
++                    "calls_used": cursor.calls_used + 1,
++                }
++            )
+             report_material = json.dumps(
+                 {
+                     "observations": [
+                         item.model_dump(mode="json")
+                         if hasattr(item, "model_dump")
+                         else item
+                         for item in observations
+                     ],
+-                    "register_rows": [
+-                        row.model_dump(mode="json") for row in register_rows
+-                    ],
+-                    "coverage": [
+-                        item.model_dump(mode="json")
+-                        if hasattr(item, "model_dump")
+-                        else item
+-                        for item in coverage
+-                    ],
+                     "diagnostics": _unique(diagnostics),
+                 },
+                 ensure_ascii=False,
+                 sort_keys=True,
+             )
+             report_system = (
+                 f"【L1 report synthesis pass; dimension_key={dimension_key}】\n"
+                 "只生成面向规划人员的现状分析正文 report_body。"
+-                "正文必须只解释下面已经通过 source 校验的 observations、登记行和 coverage；"
+-                "不得新增事实、数量、位置、需求点、关系或规划建议；不返回 observations、register_rows、JSON 数组或代码。"
++                "正文只能解释下面已经通过结构和来源校验的 observations；"
++                "不得新增事实、数量、位置、需求点、关系或规划建议。"
+                 "不确定或缺失内容要明确写成证据缺口。\n\n"
+                 f"{render_dimension_semantic_contract(dimension_key, 1)}\n\n"
+                 f"【validated L1 material】\n{report_material}"
+             )
+             report_kwargs = dict(base_kwargs)
+             report_kwargs["content_fallback_mode"] = "report_text"
+             report_output = await run_structured_output(
+                 L1ReportOutput,
+                 [
+                     {"role": "system", "content": report_system},
+                     {"role": "user", "content": "请根据已验证材料生成现状正文。"},
+                 ],
+                 **report_kwargs,
+             )
+             if report_output is None or not str(report_output.report_body or "").strip():
+                 diagnostics.append("l1_report_synthesis_empty")
+                 final_status = "diagnostic"
+             else:
+                 report_body = str(report_output.report_body).strip()
+-                retrieval_trace.append({
+-                    "pass": "report",
+-                    "status": "synthesized_from_validated_material",
+-                    "observation_count": len(observations),
+-                    "register_row_count": len(register_rows),
+-                })
+-    if any(item.startswith("l1_report_synthesis_") for item in diagnostics):
+-        final_status = "diagnostic"
+-    cursor = cursor.model_copy(update={
+-        "pass_name": "complete" if final_status == "complete" else "diagnostic",
+-        "status": final_status,
+-        "pending_row_ids": pending_ids,
+-        "confirmed_row_ids": _confirmed_ids(register_rows),
+-        "diagnostics": _unique(diagnostics),
+-    })
+-    if checkpoint_writer is not None:
+-        checkpoint = {
+-            "pass": cursor.pass_name,
+-            "report_body": report_body,
+-            "observations": [
+-                item.model_dump(mode="json") if hasattr(item, "model_dump") else item
+-                for item in observations
+-            ],
+-            "register_rows": [row.model_dump(mode="json") for row in register_rows],
+-            "coverage": [item.model_dump(mode="json") for item in coverage],
++                retrieval_trace.append(
++                    {
++                        "pass": "report",
++                        "status": "synthesized_from_validated_material",
++                        "observation_count": len(observations),
++                    }
++                )
++
++    cursor = cursor.model_copy(
++        update={
++            "pass_name": "complete" if final_status == "complete" else "diagnostic",
++            "status": final_status,
+             "diagnostics": _unique(diagnostics),
+-            "cursor": cursor.model_dump(mode="json"),
+         }
+-        result = checkpoint_writer(checkpoint)
+-        if inspect.isawaitable(result):
+-            await result
++    )
++    await _write_checkpoint(
++        checkpoint_writer,
++        pass_name=cursor.pass_name,
++        report_body=report_body,
++        observations=observations,
++        diagnostics=diagnostics,
++        cursor=cursor,
++    )
+     return L1DimensionRunResult(
+         report_body=report_body,
+         observations=observations,
+-        register_rows=register_rows,
+-        coverage=coverage,
+         diagnostics=_unique(diagnostics),
+         cursor=cursor,
+         retrieval_trace=retrieval_trace,
+     )
+ 
+ 
+ __all__ = ["L1DimensionRunResult", "run_l1_dimension_loop"]
+diff --git a/backend/app/domain/assessment/observation_draft.py b/backend/app/domain/assessment/observation_draft.py
+index 02015453..34df1d48 100644
+--- a/backend/app/domain/assessment/observation_draft.py
++++ b/backend/app/domain/assessment/observation_draft.py
+@@ -1,142 +1,388 @@
+-"""Provider-facing L1 projection drafts (normalized into L1 contracts).
++"""Provider-facing L1 planning fact contracts.
+ 
+-Production L1 requests observations/register material first and synthesizes
+-``report_body`` in a later, report-only pass.
++The observe pass emits a discriminated union.  The fact category is selected
++at generation time and each category exposes only its own semantic fields.
++Spatial locators are coarse evidence hints; no coordinates or geometry are
++accepted at L1.
+ """
+ 
+ from __future__ import annotations
+ 
+-from typing import Any, Literal
++import json
++from functools import lru_cache
++from typing import Annotated, Any, Literal, Union
+ 
+-from pydantic import BaseModel, Field, field_validator
++from pydantic import (
++    BaseModel,
++    ConfigDict,
++    Field,
++    TypeAdapter,
++    create_model,
++    field_validator,
++    model_validator,
++)
+ 
+ 
+-class L1ObservationDraft(BaseModel):
+-    """Provider-facing L1 现状 observation before domain normalization.
++class L1SourceEvidence(BaseModel):
++    """Evidence lineage shared by every L1 planning fact."""
+ 
+-    The L1 observe pass returns these rows without a report body; they are
+-    compiled into ``L1LocationFact`` (with a typed role) by the observation
+-    profile, replacing the legacy markdown-table parsing.
+-    """
++    model_config = ConfigDict(extra="forbid")
+ 
+-    entity_type: str = ""  # 现状设施 / 现状项目 / 现状分区 / 道路 / 水系 / 地物
+-    name: str = ""
+-    location: str = ""
+-    relation: str = ""  # 与其他地点的空间关系（位于X村中部/沿石窟河/汇入石窟河/通往X村）
+-    description: str = ""
+-    scale: str = ""
+-    observation_kind: Literal[
+-        "place",
+-        "current_asset",
+-        "demand",
+-        "metric",
+-        "constraint",
+-        "relation",
+-        "risk",
+-        "opportunity",
+-        "document_observation",
+-    ] = "place"
+     semantic_type: str = ""
++    description: str = ""
+     attributes: dict[str, str] = Field(default_factory=dict)
+     value: str | int | float | None = None
+     unit: str = ""
+     counting_basis: str = ""
+     related_observation_ids: list[str] = Field(default_factory=list)
+     constraint_refs: list[str] = Field(default_factory=list)
+     source_feature_ids: list[str] = Field(default_factory=list)
+     source_segment_ids: list[str] = Field(default_factory=list)
+     source_quote: str = ""
+     source_refs: list[str] = Field(default_factory=list)
+     confidence: float | None = None
+     status: Literal["confirmed", "uncertain", "conflict", "source_exhausted"] = "confirmed"
+ 
+     @field_validator("attributes", mode="before")
+     @classmethod
+     def normalize_attribute_scalars(cls, value: Any) -> Any:
+-        """Normalize provider JSON scalars without accepting nested payloads."""
+         if not isinstance(value, dict):
+             return value
+         normalized: dict[str, Any] = {}
+         for key, item in value.items():
+             normalized[str(key)] = (
+                 str(item) if isinstance(item, (str, int, float, bool)) else item
+             )
+         return normalized
+ 
+ 
+-class L1RegisterRowDraft(BaseModel):
+-    """Provider-facing draft of one L1-owned input registration.
++class L1SpatialLocator(BaseModel):
++    """Coarse spatial evidence, never a coordinate or geometry."""
++
++    model_config = ConfigDict(extra="forbid")
++
++    place_names: list[str] = Field(default_factory=list)
++    relation: str = ""
++    source_feature_ids: list[str] = Field(default_factory=list)
++
++
++class L1SpatialEntityFact(L1SourceEvidence):
++    fact_type: Literal["spatial_entity"]
++    entity_type: str
++    name: str
++    locator: L1SpatialLocator = Field(default_factory=L1SpatialLocator)
++    scale: str = ""
++
++
++class L1SpatialRelationFact(L1SourceEvidence):
++    fact_type: Literal["spatial_relation"]
++    subject_ref: str
++    predicate: str
++    object_ref: str
++
++
++class L1ScopedMetricFact(L1SourceEvidence):
++    fact_type: Literal["scoped_metric"]
++    metric: str
++    scope: str
+ 
+-    The model may reference an already materialized row by ``row_id`` or
+-    describe a newly recognized registration by citing source segments.  The
+-    worker materializes canonical source locators from the L1 source index
+-    after validation.
++
++class L1DemandFact(L1SourceEvidence):
++    fact_type: Literal["demand"]
++    demand_type: str
++    scope: str
++    beneficiary: str = ""
++    spatial_requirement: Literal["none", "place_binding", "demand_points"] = "none"
++    locator: L1SpatialLocator = Field(default_factory=L1SpatialLocator)
++
++
++class L1ConstraintFact(L1SourceEvidence):
++    fact_type: Literal["constraint"]
++    constraint_type: str
++    applies_to_scope: str
++    strength: Literal["hard", "soft", "unknown"] = "unknown"
++    locator: L1SpatialLocator = Field(default_factory=L1SpatialLocator)
++
++
++class L1RiskOpportunityFact(L1SourceEvidence):
++    fact_type: Literal["risk", "opportunity"]
++    subject: str
++    scope: str
++    locator: L1SpatialLocator = Field(default_factory=L1SpatialLocator)
++
++
++class L1RiskFact(L1RiskOpportunityFact):
++    fact_type: Literal["risk"]
++
++
++class L1OpportunityFact(L1RiskOpportunityFact):
++    fact_type: Literal["opportunity"]
++
++
++class L1DocumentObservationFact(L1SourceEvidence):
++    fact_type: Literal["document_observation"]
++    subject: str
++    scope: str
++
++
++L1PlanningFactDraft = Annotated[
++    Union[
++        L1SpatialEntityFact,
++        L1SpatialRelationFact,
++        L1ScopedMetricFact,
++        L1DemandFact,
++        L1ConstraintFact,
++        L1RiskFact,
++        L1OpportunityFact,
++        L1DocumentObservationFact,
++    ],
++    Field(discriminator="fact_type"),
++]
++
++_FACT_ADAPTER = TypeAdapter(L1PlanningFactDraft)
++
++
++_FACT_TYPE_MODELS: dict[str, type[L1SourceEvidence]] = {
++    "spatial_entity": L1SpatialEntityFact,
++    "spatial_relation": L1SpatialRelationFact,
++    "scoped_metric": L1ScopedMetricFact,
++    "demand": L1DemandFact,
++    "constraint": L1ConstraintFact,
++    "risk": L1RiskFact,
++    "opportunity": L1OpportunityFact,
++    "document_observation": L1DocumentObservationFact,
++}
++
++
++def _decode_json_container(value: str) -> Any:
++    """Decode a provider JSON container without accepting executable text."""
++
++    candidate = value.strip()
++    if candidate.startswith("```") and candidate.endswith("```"):
++        candidate = candidate[3:-3].strip()
++        if candidate.startswith("json"):
++            candidate = candidate[4:].lstrip()
++    return json.loads(candidate)
++
++
++def _normalize_sequence_container(
++    value: Any,
++    *,
++    field_name: str,
++) -> list[Any]:
++    """Accept common provider list containers at the typed boundary."""
++
++    candidate = value
++    if isinstance(candidate, str):
++        candidate = _decode_json_container(candidate)
++    while isinstance(candidate, dict):
++        for key in (field_name, "items", "records", "values"):
++            nested = candidate.get(key)
++            if nested is not None:
++                candidate = nested
++                break
++        else:
++            break
++        if isinstance(candidate, str):
++            candidate = _decode_json_container(candidate)
++    if not isinstance(candidate, list):
++        raise TypeError(f"{field_name} must decode to a list")
++    return candidate
++
++
++def _normalize_string_list(value: Any, *, field_name: str) -> list[str]:
++    if value is None:
++        return []
++    candidate = value
++    if isinstance(candidate, str):
++        candidate = _decode_json_container(candidate)
++    if not isinstance(candidate, list):
++        raise TypeError(f"{field_name} must decode to a list")
++    return [str(item).strip() for item in candidate if str(item).strip()]
++
++
++@lru_cache(maxsize=None)
++def build_l1_observation_output_model(
++    allowed_fact_types: tuple[str, ...],
++) -> type["L1ObservationPassOutput"]:
++    """Build the smallest strict observe response model for one dimension.
++
++    The provider must choose from a discriminated union.  Sending seven
++    branches to every dimension needlessly increases the tool schema and makes
++    malformed envelopes (notably a JSON array serialized as a string) more
++    likely.  This factory keeps the same strict branch models while narrowing
++    the union to the dimension contract.
+     """
+ 
+-    row_id: str = ""
+-    ledger_kind: Literal["current_asset", "demand"] | None = None
+-    status: Literal[
+-        "confirmed",
+-        "not_applicable",
+-        "uncertain",
+-        "source_exhausted",
+-        "conflict",
+-    ] = "confirmed"
+-    evidence_note: str = ""
+-    source_quote: str = ""
+-    category: str = ""
+-    name: str = ""
+-    quantity_text: str = ""
+-    quantity_value: float | None = None
+-    quantity_unit: str = ""
+-    location_text: str = ""
+-    service_scope: str = ""
+-    coverage: str = ""
+-    notes: str = ""
+-    source_segment_ids: list[str] = Field(default_factory=list)
++    normalized = tuple(dict.fromkeys(str(value).strip() for value in allowed_fact_types))
++    if not normalized:
++        raise ValueError("at least one L1 fact_type is required")
++    selected = tuple(_FACT_TYPE_MODELS.get(value) for value in normalized)
++    if any(model is None for model in selected):
++        unknown = [value for value, model in zip(normalized, selected) if model is None]
++        raise ValueError(f"unknown L1 fact_type(s): {unknown}")
++    selected_models = tuple(model for model in selected if model is not None)
++    all_models = tuple(dict.fromkeys(_FACT_TYPE_MODELS.values()))
++    if set(selected_models) == set(all_models):
++        return L1ObservationPassOutput
++
++    union_type = Union.__getitem__(selected_models)
++    fact_type_union = Annotated[union_type, Field(discriminator="fact_type")]
++    suffix = "_" + "_".join(normalized)
++    model_name = f"L1ObservationPassOutput{suffix}"
++    return create_model(
++        model_name,
++        __base__=L1ObservationPassOutput,
++        __module__=__name__,
++        observations=(list[fact_type_union], Field(default_factory=list)),
++    )
++
++
++def l1_observation_output_model_for_dimension(
++    dimension_key: str,
++) -> type["L1ObservationPassOutput"]:
++    """Return the global L1 fact union; dimension scope stays diagnostic-only."""
++
++    _ = dimension_key
++    return L1ObservationPassOutput
++
+ 
++def observation_to_compiler_payload(raw: Any) -> dict[str, Any]:
++    """Project one typed fact into the compiler's stable semantic view."""
+ 
+-class L1CoverageDecision(BaseModel):
+-    """Explicit status for a source row considered by one dimension."""
++    from pydantic import TypeAdapter
+ 
+-    row_id: str = Field(min_length=1)
+-    status: Literal[
+-        "confirmed",
+-        "not_applicable",
+-        "uncertain",
+-        "source_exhausted",
+-        "conflict",
+-    ]
+-    reason: str = ""
++    adapter = TypeAdapter(L1PlanningFactDraft)
++    observation = adapter.validate_python(
++        raw.model_dump(mode="json") if hasattr(raw, "model_dump") else raw
++    )
++    payload = observation.model_dump(mode="json")
++    if isinstance(observation, L1SpatialEntityFact):
++        payload.update({
++            "entity_type": observation.entity_type,
++            "name": observation.name,
++            "location": "、".join(observation.locator.place_names),
++            "relation": observation.locator.relation,
++            "scale": observation.scale,
++            "source_feature_ids": observation.locator.source_feature_ids,
++        })
++    elif isinstance(observation, L1SpatialRelationFact):
++        payload.update({
++            "entity_type": "",
++            "name": observation.subject_ref,
++            "location": observation.object_ref,
++            "relation": observation.predicate,
++        })
++    elif isinstance(observation, L1ScopedMetricFact):
++        payload.update({
++            "name": observation.metric,
++            "location": "",
++            "relation": "",
++            "scope": observation.scope,
++        })
++    elif isinstance(observation, L1DemandFact):
++        payload.update({
++            "name": observation.demand_type,
++            "location": "、".join(observation.locator.place_names),
++            "relation": observation.locator.relation,
++            "scope": observation.scope,
++            "source_feature_ids": observation.locator.source_feature_ids,
++        })
++    elif isinstance(observation, L1ConstraintFact):
++        payload.update({
++            "name": observation.constraint_type,
++            "location": "、".join(observation.locator.place_names),
++            "relation": observation.locator.relation,
++            "scope": observation.applies_to_scope,
++            "source_feature_ids": observation.locator.source_feature_ids,
++        })
++    elif isinstance(observation, L1RiskOpportunityFact):
++        payload.update({
++            "name": observation.subject,
++            "location": "、".join(observation.locator.place_names),
++            "relation": observation.locator.relation,
++            "scope": observation.scope,
++            "source_feature_ids": observation.locator.source_feature_ids,
++        })
++    elif isinstance(observation, L1DocumentObservationFact):
++        payload.update({
++            "name": observation.subject,
++            "location": "",
++            "relation": "",
++            "scope": observation.scope,
++        })
++    return payload
+ 
+ 
+ class L1ObservationPassOutput(BaseModel):
+     """L1 semantic extraction pass without a human report projection."""
+ 
+-    observations: list[L1ObservationDraft] = Field(default_factory=list)
+-    register_rows: list[L1RegisterRowDraft] = Field(default_factory=list)
+-    coverage: list[L1CoverageDecision] = Field(default_factory=list)
++    model_config = ConfigDict(extra="forbid")
++
++    observations: list[L1PlanningFactDraft] = Field(default_factory=list)
+     diagnostics: list[str] = Field(default_factory=list)
+ 
++    @model_validator(mode="before")
++    @classmethod
++    def normalize_provider_payload(cls, data: Any) -> Any:
++        if not isinstance(data, dict):
++            return data
++        payload = dict(data)
++        diagnostics = _normalize_string_list(
++            payload.get("diagnostics", []),
++            field_name="diagnostics",
++        )
++        if "observations" not in payload:
++            payload["diagnostics"] = diagnostics
++            return payload
++        raw_observations = _normalize_sequence_container(
++            payload.get("observations", []),
++            field_name="observations",
++        )
++        recovered: list[dict[str, Any]] = []
++        for index, item in enumerate(raw_observations):
++            try:
++                fact = _FACT_ADAPTER.validate_python(item)
++            except Exception as exc:
++                issue_count = 1
++                errors = getattr(exc, "errors", None)
++                if callable(errors):
++                    try:
++                        issue_count = max(1, len(errors()))
++                    except Exception:
++                        issue_count = 1
++                diagnostics.append(
++                    f"l1_observation_record_invalid:{index}:{issue_count}"
++                )
++                continue
++            recovered.append(fact.model_dump(mode="json"))
++        payload["observations"] = recovered
++        payload["diagnostics"] = diagnostics
++        return payload
++
+ 
+ class L1ReportOutput(BaseModel):
+     """L1 human report synthesized from validated observations and evidence."""
+ 
+     report_body: str = Field(min_length=1)
+ 
+ 
+-class L1RegisterPassOutput(BaseModel):
+-    """Small follow-up response used to confirm or repair selected rows."""
+-
+-    register_rows: list[L1RegisterRowDraft] = Field(default_factory=list)
+-    coverage: list[L1CoverageDecision] = Field(default_factory=list)
+-
+-
+ __all__ = [
+-    "L1CoverageDecision",
++    "L1SourceEvidence",
++    "L1SpatialLocator",
++    "L1SpatialEntityFact",
++    "L1SpatialRelationFact",
++    "L1ScopedMetricFact",
++    "L1DemandFact",
++    "L1ConstraintFact",
++    "L1RiskOpportunityFact",
++    "L1RiskFact",
++    "L1OpportunityFact",
++    "L1DocumentObservationFact",
++    "L1PlanningFactDraft",
++    "build_l1_observation_output_model",
++    "l1_observation_output_model_for_dimension",
++    "observation_to_compiler_payload",
+     "L1ObservationPassOutput",
+     "L1ReportOutput",
+-    "L1ObservationDraft",
+-    "L1RegisterPassOutput",
+-    "L1RegisterRowDraft",
+ ]
+diff --git a/backend/app/domain/assessment/observation_quality.py b/backend/app/domain/assessment/observation_quality.py
+index 33c4284a..890016a5 100644
+--- a/backend/app/domain/assessment/observation_quality.py
++++ b/backend/app/domain/assessment/observation_quality.py
+@@ -1,65 +1,167 @@
+-"""Observation quality validation for L1/L2 structured LLM output.
+-
+-A dimension that returns observations with a high ratio of missing spatial
+-fields (location/relation) is a quality defect, not a valid completion: it
+-would feed incomplete facts downstream.  The worker validates before marking
+-the dimension complete; a defect is surfaced through ``dimension_failures``
+-and retried once with corrective feedback instead of silently consuming the
+-gap (design: validation step after every LLM call; quality failures retried
+-with feedback, per exa/LangGraph fault-tolerance guidance).
+-"""
++"""Type-aware quality validation for the L1 planning fact union."""
++
+ from __future__ import annotations
+ 
++from typing import Any
++
++from pydantic import TypeAdapter
++
++from app.domain.assessment.dimension_contracts import get_dimension_semantic_contract
++from app.domain.assessment.observation_draft import (
++    L1ConstraintFact,
++    L1DemandFact,
++    L1DocumentObservationFact,
++    L1PlanningFactDraft,
++    L1RiskOpportunityFact,
++    L1ScopedMetricFact,
++    L1SpatialEntityFact,
++    L1SpatialRelationFact,
++)
++
++
++_FACT_ADAPTER = TypeAdapter(L1PlanningFactDraft)
++
+ 
+ def validate_observations(
+     observations: list,
+     *,
++    dimension_key: str = "",
+     max_defect_ratio: float = 0.5,
+ ) -> dict:
+-    """Return a quality report for a list of observation rows.
++    """Validate typed completeness without requiring every fact to be spatial.
+ 
+-    A row is defective when it carries no name, or carries neither a
+-    ``location`` nor a ``relation`` (i.e. no spatial anchor at all).  Empty
+-    observation lists are allowed (the dimension simply observed no entities).
++    ``dimension_key`` makes the L1 fact vocabulary executable: the union
++    chooses the shape at generation time, while the dimension contract decides
++    whether that shape belongs in this pass.
+     """
++
++    contract = get_dimension_semantic_contract(dimension_key, 1)
++    allowed_fact_types = {
++        str(value).strip()
++        for value in contract.get("l1_fact_types", [])
++        if str(value).strip()
++    }
++
+     total = len(observations or [])
+     if total == 0:
+-        return {"ok": True, "total": 0, "missing_name": 0, "no_place": 0, "defect_ratio": 0.0, "feedback": ""}
+-
+-    missing_name: list[int] = []
+-    no_place: list[int] = []
+-    for index, item in enumerate(observations):
+-        name = _text(item.get("name"))
+-        location = _text(item.get("location"))
+-        relation = _text(item.get("relation"))
+-        if not name:
+-            missing_name.append(index)
+-        if not location and not relation:
+-            no_place.append(index)
+-
+-    defects = len(set(missing_name) | set(no_place))
++        return {
++            "ok": True,
++            "total": 0,
++            "missing_name": 0,
++            "no_place": 0,
++            "invalid_semantics": 0,
++            "invalid_relation": 0,
++            "invalid_fact_type": 0,
++            "dimension_mismatch": 0,
++            "defect_ratio": 0.0,
++            "feedback": "",
++        }
++
++    missing_name = 0
++    no_place = 0
++    invalid_semantics = 0
++    invalid_relation = 0
++    invalid_fact_type = 0
++    dimension_mismatch = 0
++    for raw in observations:
++        try:
++            fact = (
++                raw
++                if hasattr(raw, "fact_type")
++                else _FACT_ADAPTER.validate_python(raw)
++            )
++        except Exception:
++            invalid_fact_type += 1
++            invalid_semantics += 1
++            continue
++
++        fact_type = fact.fact_type
++        if allowed_fact_types and fact_type not in allowed_fact_types:
++            dimension_mismatch += 1
++        has_semantics = bool(
++            str(getattr(fact, "semantic_type", "") or "").strip()
++            or str(getattr(fact, "description", "") or "").strip()
++            or getattr(fact, "value", None) is not None
++        )
++        if isinstance(fact, L1SpatialEntityFact):
++            missing_name += not bool(fact.name.strip())
++            no_place += not bool(
++                fact.locator.place_names
++                or fact.locator.relation
++                or fact.locator.source_feature_ids
++            )
++            has_semantics = has_semantics or bool(
++                fact.name.strip() or fact.entity_type.strip()
++            )
++        elif isinstance(fact, L1SpatialRelationFact):
++            invalid_relation += not bool(
++                fact.subject_ref.strip()
++                and fact.predicate.strip()
++                and fact.object_ref.strip()
++            )
++            has_semantics = has_semantics or bool(
++                fact.subject_ref.strip() or fact.object_ref.strip()
++            )
++        elif isinstance(fact, L1ScopedMetricFact):
++            missing_name += not bool(fact.metric.strip())
++            no_place += 1
++            has_semantics = has_semantics or bool(fact.metric.strip())
++        elif isinstance(fact, L1DemandFact):
++            missing_name += not bool(fact.demand_type.strip())
++            no_place += not bool(
++                fact.locator.place_names
++                or fact.locator.relation
++                or fact.locator.source_feature_ids
++            )
++            has_semantics = has_semantics or bool(fact.demand_type.strip())
++        elif isinstance(fact, L1ConstraintFact):
++            missing_name += not bool(fact.constraint_type.strip())
++            no_place += not bool(
++                fact.locator.place_names
++                or fact.locator.relation
++                or fact.locator.source_feature_ids
++            )
++            has_semantics = has_semantics or bool(fact.constraint_type.strip())
++        elif isinstance(fact, L1RiskOpportunityFact):
++            missing_name += not bool(fact.subject.strip())
++            no_place += not bool(
++                fact.locator.place_names
++                or fact.locator.relation
++                or fact.locator.source_feature_ids
++            )
++            has_semantics = has_semantics or bool(fact.subject.strip())
++        elif isinstance(fact, L1DocumentObservationFact):
++            missing_name += not bool(fact.subject.strip())
++            no_place += 1
++            has_semantics = has_semantics or bool(fact.subject.strip())
++
++        if not has_semantics:
++            invalid_semantics += 1
++
++    defects = min(total, max(invalid_semantics, invalid_relation, invalid_fact_type))
+     ratio = round(defects / total, 3)
+     feedback = ""
+     if ratio >= max_defect_ratio:
+         feedback = (
+-            f"观测质量不达标：共 {total} 条，{len(missing_name)} 条缺 name，"
+-            f"{len(no_place)} 条缺 location 且缺 relation（无空间锚点），缺陷占比 {ratio:.0%}。"
+-            "请重写观测：每条必须包含 name，并尽量给出 location 或 relation 空间锚点。"
++            f"L1 事实质量不达标：共 {total} 条，"
++            f"{invalid_fact_type} 条 fact_type 无效，"
++            f"{invalid_semantics} 条事实缺少类型所需语义，"
++            f"{invalid_relation} 条空间关系缺少 subject/predicate/object，"
++            f"缺陷占比 {ratio:.0%}。请按 fact_type 重写；"
++            "非空间指标或全村诉求不得编造点位，且不得使用本维度未声明的 fact_type。"
+         )
+     return {
+         "ok": ratio < max_defect_ratio,
+         "total": total,
+-        "missing_name": len(missing_name),
+-        "no_place": len(no_place),
++        "missing_name": int(missing_name),
++        "no_place": int(no_place),
++        "invalid_semantics": invalid_semantics,
++        "invalid_relation": invalid_relation,
++        "invalid_fact_type": invalid_fact_type,
++        "dimension_mismatch": dimension_mismatch,
+         "defect_ratio": ratio,
+         "feedback": feedback,
+     }
+ 
+ 
+-def _text(value) -> str:
+-    if value is None:
+-        return ""
+-    return str(value).strip()
+-
+-
+ __all__ = ["validate_observations"]
+diff --git a/backend/tests/core/test_l1_typed_output_contract.py b/backend/tests/core/test_l1_typed_output_contract.py
+index 06f3f9ea..86414fcd 100644
+--- a/backend/tests/core/test_l1_typed_output_contract.py
++++ b/backend/tests/core/test_l1_typed_output_contract.py
+@@ -1,53 +1,147 @@
+ """L1 spatial observations require the typed dual-output contract."""
+ 
++import json
++
+ import pytest
+ from pydantic import ValidationError
+ 
+ from app.domain.assessment.observation_draft import (
++    L1DemandFact,
+     L1ObservationPassOutput,
+-    L1ObservationDraft,
++    L1ScopedMetricFact,
++    L1SpatialEntityFact,
++    L1SpatialLocator,
+     L1ReportOutput,
+ )
+ 
+ 
+ def test_l1_observe_and_report_outputs_are_separate_contracts() -> None:
+     output = L1ObservationPassOutput(
+         observations=[
+-            L1ObservationDraft(
++            L1SpatialEntityFact(
++                fact_type="spatial_entity",
+                 entity_type="道路",
+                 name="村道",
+-                location="金田村北部",
+-                relation="通往村委会",
++                locator=L1SpatialLocator(
++                    place_names=["金田村北部"],
++                    relation="通往村委会",
++                ),
+             )
+         ],
+     )
+ 
+     assert output.observations[0].name == "村道"
+     report = L1ReportOutput(report_body="交通现状分析正文。")
+     assert report.report_body == "交通现状分析正文。"
+ 
+ 
+ def test_l1_empty_report_body_is_not_a_valid_typed_result() -> None:
+     with pytest.raises(ValidationError):
+         L1ReportOutput(report_body="")
+ 
+ 
+ def test_l1_observation_attribute_scalars_are_normalized_to_strings() -> None:
+     output = L1ObservationPassOutput.model_validate(
+         {
+             "observations": [
+                 {
+-                    "name": "上位规划数据目录",
++                    "fact_type": "scoped_metric",
++                    "metric": "上位规划数据目录",
++                    "scope": "全村",
+                     "attributes": {
+                         "record_count": 25,
+                         "coverage_ratio": 0.8,
+                     },
+                 }
+             ]
+         }
+     )
+ 
+     assert output.observations[0].attributes == {
+         "record_count": "25",
+         "coverage_ratio": "0.8",
+     }
++
++
++def test_l1_observation_output_recovers_stringified_container_and_skips_bad_record() -> None:
++    output = L1ObservationPassOutput.model_validate(
++        {
++            "observations": json.dumps(
++                [
++                    {
++                        "fact_type": "spatial_entity",
++                        "entity_type": "道路",
++                        "name": "村道",
++                        "locator": {
++                            "place_names": ["金田村"],
++                            "relation": "贯穿村庄",
++                        },
++                        "source_quote": "现状村道贯穿村庄",
++                    },
++                    {
++                        "fact_type": "demand",
++                        "demand_type": "养老服务",
++                    },
++                ],
++                ensure_ascii=False,
++            )
++        }
++    )
++
++    assert len(output.observations) == 1
++    assert isinstance(output.observations[0], L1SpatialEntityFact)
++    assert output.observations[0].name == "村道"
++    assert any(
++        item.startswith("l1_observation_record_invalid:1:")
++        for item in output.diagnostics
++    )
++
++
++@pytest.mark.asyncio
++async def test_l1_loop_accepts_global_union_fact_with_soft_dimension_mismatch(
++    monkeypatch,
++) -> None:
++    from app.domain.assessment import l1_extraction_loop
++    from app.domain.assessment.source_index import build_l1_source_index
++
++    index = build_l1_source_index({"village_data": "村民提出养老服务需求。"})
++    segment = index.source_segments[0]
++
++    async def fake_runner(response_model, _messages, **_kwargs):
++        if isinstance(response_model, type) and issubclass(
++            response_model, L1ObservationPassOutput
++        ):
++            return response_model.model_validate(
++                {
++                    "observations": [
++                        {
++                            "fact_type": "demand",
++                            "demand_type": "养老服务",
++                            "scope": "全村",
++                            "spatial_requirement": "none",
++                            "source_segment_ids": [segment.segment_id],
++                            "source_quote": "村民提出养老服务需求。",
++                        }
++                    ]
++                }
++            )
++        return L1ReportOutput(report_body="村民提出养老服务需求。")
++
++    monkeypatch.setattr(
++        "app.infrastructure.llm.structured.run_structured_output",
++        fake_runner,
++    )
++    result = await l1_extraction_loop.run_l1_dimension_loop(
++        dimension_key="location",
++        prompt="地点现状",
++        source_index=index,
++        runner_kwargs={"max_retries": 0},
++    )
++
++    assert isinstance(result.observations[0], L1DemandFact)
++    assert result.cursor is not None
++    assert result.cursor.status == "complete"
++    assert any(
++        item.startswith("l1_dimension_fact_type_mismatch:location:demand")
++        for item in result.diagnostics
++    )
+diff --git a/backend/tests/core/test_l1_observe_report_contract.py b/backend/tests/core/test_l1_observe_report_contract.py
+new file mode 100644
+index 00000000..b211ebb4
+--- /dev/null
++++ b/backend/tests/core/test_l1_observe_report_contract.py
+@@ -0,0 +1,209 @@
++"""L1 produces typed facts once, then synthesizes a report from those facts."""
++
++import pytest
++from pydantic import ValidationError
++
++from app.contracts.domain.l1_contracts import (
++    L1DimensionPassState,
++    L1SourceIndex,
++)
++from app.domain.assessment.source_index import build_l1_source_index
++from app.domain.assessment.observation_draft import (
++    L1DemandFact,
++    L1ObservationPassOutput,
++    L1ReportOutput,
++)
++from app.domain.assessment.observation_quality import validate_observations
++
++
++def test_l1_models_do_not_expose_register_or_coverage_fields() -> None:
++    assert set(L1ObservationPassOutput.model_fields) == {
++        "observations",
++        "diagnostics",
++    }
++    assert "current_assets" not in L1SourceIndex.model_fields
++    assert "demands" not in L1SourceIndex.model_fields
++    assert "pending_row_ids" not in L1DimensionPassState.model_fields
++    assert "confirmed_row_ids" not in L1DimensionPassState.model_fields
++
++    with pytest.raises(ValidationError):
++        L1ObservationPassOutput.model_validate(
++            {"observations": [], "register_rows": [], "coverage": []}
++        )
++
++
++def test_source_index_is_transport_only() -> None:
++    index = build_l1_source_index(
++        {"village_data": "现有村道一条，村民反映雨季通行困难。"}
++    )
++
++    assert index.source_segments
++    dumped = index.model_dump(mode="json")
++    assert "current_assets" not in dumped
++    assert "demands" not in dumped
++
++
++def test_l1_fact_type_is_selected_by_the_union_and_old_shape_is_rejected() -> None:
++    output = L1ObservationPassOutput.model_validate(
++        {
++            "observations": [
++                {
++                    "fact_type": "demand",
++                    "demand_type": "养老服务",
++                    "scope": "全村",
++                    "spatial_requirement": "none",
++                }
++            ]
++        }
++    )
++    assert isinstance(output.observations[0], L1DemandFact)
++
++    recovered = L1ObservationPassOutput.model_validate(
++        {
++            "observations": [
++                {
++                    "entity_type": "现状设施",
++                    "name": "祠堂",
++                    "location": "社前村",
++                }
++            ]
++        }
++    )
++    assert recovered.observations == []
++    assert any(
++        item.startswith("l1_observation_record_invalid:0:")
++        for item in recovered.diagnostics
++    )
++
++    malformed_metric = L1ObservationPassOutput.model_validate(
++        {
++            "observations": [
++                {
++                    "fact_type": "scoped_metric",
++                    "metric": "常住人口",
++                    "scope": "全村",
++                    "locator": {"place_names": ["社前村"]},
++                }
++            ]
++        }
++    )
++    assert malformed_metric.observations == []
++    assert any(
++        item.startswith("l1_observation_record_invalid:0:")
++        for item in malformed_metric.diagnostics
++    )
++
++
++@pytest.mark.asyncio
++async def test_l1_loop_calls_only_observe_and_report(monkeypatch) -> None:
++    from app.domain.assessment import l1_extraction_loop
++
++    index = build_l1_source_index(
++        {"village_data": "现有村道一条，村民反映雨季通行困难。"}
++    )
++    segment = index.source_segments[0]
++    calls: list[type] = []
++    messages_seen: list[list[dict]] = []
++
++    async def fake_runner(response_model, messages, **_kwargs):
++        calls.append(response_model)
++        messages_seen.append(messages)
++        if isinstance(response_model, type) and issubclass(
++            response_model, L1ObservationPassOutput
++        ):
++            return response_model.model_validate(
++                {
++                    "observations": [
++                        {
++                            "fact_type": "spatial_entity",
++                            "entity_type": "road",
++                            "name": "村道",
++                            "locator": {},
++                            "description": "现有村道一条",
++                            "source_segment_ids": [segment.segment_id],
++                            "source_quote": "现有村道一条",
++                        }
++                    ]
++                }
++            )
++        return L1ReportOutput(report_body="现状村道一条，雨季通行存在困难。")
++
++    monkeypatch.setattr(
++        "app.infrastructure.llm.structured.run_structured_output",
++        fake_runner,
++    )
++    result = await l1_extraction_loop.run_l1_dimension_loop(
++        dimension_key="traffic",
++        prompt="交通现状",
++        source_index=index,
++        runner_kwargs={"max_retries": 0},
++    )
++
++    assert issubclass(calls[0], L1ObservationPassOutput)
++    assert calls[1] is L1ReportOutput
++    assert result.cursor is not None
++    assert result.cursor.status == "complete"
++    assert result.observations[0].source_refs == [segment.source_ref]
++    observe_prompt = str(messages_seen[0])
++    assert "不得另造资产台账、需求台账、coverage" in observe_prompt
++    assert "同一语义族内的不同子类" in observe_prompt
++    assert "attributes.metric" in observe_prompt
++    assert "attributes.metric 或 semantic_type 本身" in observe_prompt
++    assert "forest_area:commercial_forest" in observe_prompt
++
++
++@pytest.mark.asyncio
++async def test_completed_resume_does_not_repeat_model_calls(monkeypatch) -> None:
++    from app.domain.assessment import l1_extraction_loop
++
++    index = build_l1_source_index({"village_data": "现状资料"})
++
++    async def fail_runner(*_args, **_kwargs):
++        raise AssertionError("completed resume must not call provider")
++
++    monkeypatch.setattr(
++        "app.infrastructure.llm.structured.run_structured_output",
++        fail_runner,
++    )
++    cursor = L1DimensionPassState(
++        dimension_key="traffic",
++        source_digest=index.source_digest,
++        pass_name="complete",
++        calls_used=2,
++        status="complete",
++    )
++    result = await l1_extraction_loop.run_l1_dimension_loop(
++        dimension_key="traffic",
++        prompt="不会再次发送",
++        source_index=index,
++        previous_cursor=cursor,
++        resume_payload={
++            "report_body": "已完成正文。",
++            "observations": [],
++            "cursor": cursor.model_dump(mode="json"),
++        },
++    )
++
++    assert result.report_body == "已完成正文。"
++    assert result.cursor is not None
++    assert result.cursor.status == "complete"
++
++
++def test_observation_quality_treats_dimension_type_mismatch_as_soft_diagnostic() -> None:
++    report = validate_observations(
++        [
++            {
++                "fact_type": "demand",
++                "demand_type": "养老服务",
++                "scope": "全村",
++                "spatial_requirement": "none",
++                "semantic_type": "public_service_gap",
++                "description": "全村存在养老服务需求",
++            }
++        ],
++        dimension_key="location",
++    )
++
++    assert report["ok"] is True
++    assert report["invalid_fact_type"] == 0
++    assert report["dimension_mismatch"] == 1
