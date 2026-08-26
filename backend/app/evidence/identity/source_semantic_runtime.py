@@ -14,6 +14,7 @@ from app.contracts.evidence.source_semantic_contracts import (
     SourceSemanticCandidate,
     SourceSemanticClassificationSnapshot,
 )
+from app.domain.validation.l1_fact_catalog import is_canonical_l1_fact_id
 from app.infrastructure.kg.ontology import EntityTypes
 
 
@@ -161,6 +162,8 @@ def kg_semantic_candidates(
     query_cache: dict[tuple[str, str], list[Any]] = {}
     for fact in l1_facts:
         fact_id = str(getattr(fact, "fact_id", "") or "").strip()
+        if not is_canonical_l1_fact_id(fact_id):
+            continue
         attributes = getattr(fact, "attributes", None) or {}
         if not isinstance(attributes, dict):
             attributes = {}

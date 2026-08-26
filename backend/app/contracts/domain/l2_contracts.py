@@ -188,14 +188,14 @@ class StrictL2Model(BaseModel):
 class StrategyConflict(StrictL2Model):
     description: str
     between: list[str] = Field(default_factory=list)
-    severity: Severity = "warning"
+    severity: Severity
 
 
 class StrategyIssue(StrictL2Model):
     """Strategy-level issue for the G2 gate (mirrors StageIssue)."""
 
     stage: Literal["l2"] = "l2"
-    severity: Severity = "warning"
+    severity: Severity
     code: str = ""
     message: str = ""
     detail: str = ""
@@ -206,8 +206,8 @@ class PlanningObjective(StrictL2Model):
 
     objective_id: str = Field(min_length=1)
     statement: str = ""
-    kind: ObjectiveKind = "goal"
-    status: DecisionStatus = "proposed"
+    kind: ObjectiveKind
+    status: DecisionStatus
     scope: TypedScope | None = None
     target_year: str = ""
     source_fact_refs: list[L1FactRef] = Field(default_factory=list)
@@ -240,8 +240,8 @@ class TargetMetric(StrictL2Model):
     name: str = ""
     value: str | int | float | None = None
     unit: str = ""
-    direction: MetricDirection = "unknown"
-    status: DecisionStatus = "proposed"
+    direction: MetricDirection
+    status: DecisionStatus
     baseline_ref: str = ""
     objective_refs: list[str] = Field(default_factory=list)
     source_fact_refs: list[L1FactRef] = Field(default_factory=list)
@@ -264,7 +264,7 @@ class StrategyRule(StrictL2Model):
     action: TypedStrategyAction | None = None
     objective_refs: list[str] = Field(default_factory=list)
     target_refs: list[str] = Field(default_factory=list)
-    strength: StrategyStrength = "proposed"
+    strength: StrategyStrength
     scope: TypedScope | None = None
     phase: TypedPhase | None = None
     prerequisite_refs: list[str] = Field(default_factory=list)
@@ -369,7 +369,7 @@ class ConflictHypothesis(StrictL2Model):
     description: str = ""
     objective_refs: list[str] = Field(default_factory=list)
     strategy_refs: list[str] = Field(default_factory=list)
-    severity: Severity = "warning"
+    severity: Severity
     resolution: str = ""
 
     _validate_conflict_id = field_validator("conflict_id", mode="before")(_nonempty_id)
@@ -382,7 +382,7 @@ class L2EvidenceGap(StrictL2Model):
     dimension: str = ""
     description: str = ""
     required_fact: str = ""
-    severity: Severity = "warning"
+    severity: Severity
 
     _validate_gap_id = field_validator("gap_id", mode="before")(_nonempty_id)
 
@@ -401,6 +401,12 @@ class L2DecisionSet(StrictL2Model):
     evidence_gaps: list[L2EvidenceGap] = Field(default_factory=list)
     source_refs: list[str] = Field(default_factory=list)
     diagnostics: list[str] = Field(default_factory=list)
+
+
+class L2ReportOutput(StrictL2Model):
+    """Human-readable L2 report synthesized from one validated decision set."""
+
+    report_body: str = Field(min_length=1)
 
 
 class L2Strategy(ContractMeta):
@@ -437,6 +443,7 @@ __all__ = [
     "L1FactRef",
     "L2DecisionSet",
     "L2EvidenceGap",
+    "L2ReportOutput",
     "L2Strategy",
     "PlanningObjective",
     "PriorityDecision",

@@ -1,10 +1,11 @@
-"""Typed L1 location-fact projection for the unified evidence bundle."""
+"""Typed L1 fact projection for the unified evidence bundle."""
 
 from __future__ import annotations
 
 from typing import Any, Iterable
 
 from app.contracts.evidence.evidence_contracts import EvidenceFact, EvidenceSource
+from app.domain.validation.l1_fact_catalog import is_canonical_l1_fact_id
 
 
 RETRIEVER_VERSION = "l1-v2"
@@ -69,16 +70,6 @@ def _record_matches(record: Any, query: str, required_facts: Iterable[str]) -> b
     return not terms or any(term in haystack for term in terms)
 
 
-def _record_source_type(record: Any) -> str:
-    return {
-        "kg_canonical_fact": "kg",
-        "gis_observation": "gis_layer",
-        "spatial_observation": "l1",
-        "derived_metric": "l1",
-        "document_observation": "l1",
-    }.get(_text(getattr(record, "fact_kind", "")), "l1")
-
-
 def _record_to_evidence(record: Any, snapshot_ref: str) -> tuple[EvidenceFact, EvidenceSource]:
     dimension_key = _text(getattr(record, "dimension_key", ""))
     spatial_record = _is_spatial_record(record)
@@ -87,10 +78,11 @@ def _record_to_evidence(record: Any, snapshot_ref: str) -> tuple[EvidenceFact, E
         for value in (getattr(record, "source_refs", None) or [])
         if _text(value)
     ]
-    source_kind = _record_source_type(record)
+    fact_kind = _text(getattr(record, "fact_kind", ""))
     fields = {
         "fact_id": _text(getattr(record, "fact_id", "")),
-        "fact_kind": _text(getattr(record, "fact_kind", "")),
+        "fact_kind": fact_kind,
+        "origin_fact_kind": fact_kind,
         "dimension_key": _text(getattr(record, "dimension_key", "")),
         "subject_scope": _text(getattr(record, "subject_scope", "")),
         "semantic_type": _text(getattr(record, "semantic_type", "")),
@@ -128,7 +120,11 @@ def _record_to_evidence(record: Any, snapshot_ref: str) -> tuple[EvidenceFact, E
         planning_use="grounding" if spatial_record else "context",
     )
     source = EvidenceSource(
-        source_type=source_kind,
+        # This row is a projection of the authoritative L1 snapshot.  Its
+        # upstream fact_kind is retained in the EvidenceFact fields; exposing
+        # it as ``gis_layer`` or ``kg`` here would incorrectly grant the L1
+        # projection direct geometry/topology authority.
+        source_type="l1",
         reference=_text(getattr(record, "fact_id", "")),
         confidence=confidence,
     )
@@ -143,23 +139,36 @@ def retrieve_from_l1_context(
     dimension_key: str = "",
     strict_dimension: bool = False,
 ) -> tuple[list[EvidenceFact], list[EvidenceSource]]:
-    """Project bounded L1 location facts without resolving geometry.
+    """Project bounded typed L1 facts without resolving geometry.
 
     Spatial L1 facts are cross-dimension evidence.  A hazard address in a
     natural-environment report can be the only semantic anchor for a village
-    requested by a traffic or land-use worker.  The unified retrieval path
-    therefore searches all spatial records by default; callers that truly
-    need a dimension-local view can opt into ``strict_dimension`` explicitly.
+    requested by a traffic or land-use worker.  Non-spatial facts remain
+    dimension-local unless the caller explicitly requests a strict view.  This
+    makes every typed L1Fact a real member of the multi-source retrieval plane
+    while keeping geometry and topology authority at Bundle/KG.
     """
     facts: list[EvidenceFact] = []
     sources: list[EvidenceSource] = []
     snapshot_ref = _text(getattr(context, "l1_snapshot_ref", ""))
     typed_records = list(getattr(context, "l1_fact_records", None) or [])
     for record in typed_records:
-        if not _is_spatial_record(record):
+        # The L1 snapshot is authoritative, but only its canonical fact
+        # namespace is selectable downstream.  Do not leak legacy or missing
+        # IDs into the unified evidence plane where an LLM could copy them.
+        if not is_canonical_l1_fact_id(getattr(record, "fact_id", "")):
             continue
+        spatial_record = _is_spatial_record(record)
         dimension = _text(getattr(record, "dimension_key", ""))
         if strict_dimension and dimension_key and dimension and dimension != dimension_key:
+            continue
+        if (
+            not strict_dimension
+            and not spatial_record
+            and dimension_key
+            and dimension
+            and dimension != dimension_key
+        ):
             continue
         if not _record_matches(record, query, required_facts):
             continue

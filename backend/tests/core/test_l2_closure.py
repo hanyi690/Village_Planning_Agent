@@ -23,6 +23,7 @@ def _valid_decision_set() -> L2DecisionSet:
             PlanningObjective(
                 objective_id="obj-1",
                 statement="提升公共服务可达性",
+                kind="goal",
                 status="observed",
                 source_fact_refs=["l1:fact:fact-1"],
             )
@@ -33,6 +34,7 @@ def _valid_decision_set() -> L2DecisionSet:
                 name="公共服务覆盖率",
                 value=95,
                 unit="%",
+                direction="increase",
                 status="observed",
                 source_fact_refs=["l1:fact:fact-1"],
             )
@@ -42,6 +44,7 @@ def _valid_decision_set() -> L2DecisionSet:
                 strategy_id="strategy-1",
                 statement="优先补齐公共服务短板",
                 action="guide",
+                strength="proposed",
                 objective_refs=["obj-1"],
                 source_fact_refs=["l1:fact:fact-1"],
             )
@@ -125,6 +128,7 @@ def test_validate_l2_decision_set_accepts_closed_graph() -> None:
                             strategy_id="strategy-2",
                             statement="第二条策略",
                             action="guide",
+                            strength="proposed",
                             objective_refs=["obj-1"],
                             prerequisite_refs=["strategy-1"],
                             source_fact_refs=["l1:fact:fact-1"],
@@ -191,9 +195,10 @@ def test_validate_l2_decision_set_accepts_closed_graph() -> None:
                 update={
                     "conflicts": [
                         ConflictHypothesis(
-                            conflict_id="conf-1",
-                            description="孤立冲突",
-                            objective_refs=["obj-1"],
+                                conflict_id="conf-1",
+                                description="孤立冲突",
+                                severity="warning",
+                                objective_refs=["obj-1"],
                             strategy_refs=[],
                         )
                     ]

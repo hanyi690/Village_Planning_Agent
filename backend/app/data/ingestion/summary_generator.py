@@ -2,9 +2,9 @@
 
 The active path validates a dimension-specific Pydantic projection, overwrites
 code-owned fields, and marks provider failure as pending.  It never promotes
-summary content to planning semantics.  The private deterministic extraction
-helpers below remain importable for the separately scoped RAG formatter, but
-are not used by this summary path.
+summary content to planning semantics.  The two private regex helpers at the
+bottom are retained only for the RAG query-context formatter; their output is
+not a summary model and never becomes authoritative planning input.
 """
 
 from __future__ import annotations
@@ -109,96 +109,6 @@ def _finalize_summary(
     )
     return derived_summary_schema(dimension_key).model_validate(payload, extra="forbid")
 
-# ---------------------------------------------------------------------------
-# Dimension-specific regex extraction rules
-# ---------------------------------------------------------------------------
-# Each L3 dimension defines (Chinese metric key → [regex patterns]).
-# These Chinese keys match PlanningKG.CONSTRAINT_PATTERNS expected keys.
-# Extraction is deterministic — zero LLM calls.
-# ---------------------------------------------------------------------------
-
-DIMENSION_EXTRACTION_RULES: Dict[str, Dict[str, List[str]]] = {
-    "land_use_planning": {
-        "建设用地规模_公顷": [
-            r"建设用地.*?(\d+\.?\d*)\s*(?:公顷|ha)",
-            r"建设规模.*?(\d+\.?\d*)\s*(?:公顷|ha)",
-            r"村庄建设用地.*?(\d+\.?\d*)",
-        ],
-        "耕地保有量_公顷": [
-            r"耕地保有量.*?(\d+\.?\d*)\s*(?:公顷|ha)",
-            r"耕地保护.*?(\d+\.?\d*)\s*(?:公顷|ha)",
-        ],
-        "永久基本农田_公顷": [
-            r"永久基本农田.*?(\d+\.?\d*)\s*(?:公顷|ha)",
-            r"基本农田.*?(\d+\.?\d*)\s*(?:公顷|ha)",
-        ],
-        "生态保护红线面积": [
-            r"生态保护红线.*?(\d+\.?\d*)",
-            r"生态红线.*?(\d+\.?\d*)\s*(?:公顷|ha)",
-        ],
-        "新增建设用地_公顷": [
-            r"新增建设.*?(\d+\.?\d*)\s*(?:公顷|ha)",
-        ],
-    },
-    "ecological": {
-        "生态保护红线面积": [
-            r"生态保护红线.*?(\d+\.?\d*)",
-            r"生态红线.*?(\d+\.?\d*)\s*(?:公顷|ha)",
-        ],
-        "林地保有量_公顷": [
-            r"林地保有量.*?(\d+\.?\d*)\s*(?:公顷|ha)",
-        ],
-        "森林覆盖率_百分比": [
-            r"森林覆盖率.*?(\d+\.?\d*)\s*%",
-        ],
-    },
-    "settlement_planning": {
-        "建设用地规模_公顷": [
-            r"建设用地.*?(\d+\.?\d*)\s*(?:公顷|ha)",
-        ],
-        "规划期末人口": [
-            r"规划期末.*?人口.*?(\d+)",
-            r"规划人口.*?(\d+)",
-        ],
-        "人均建设用地": [
-            r"人均建设用地.*?(\d+\.?\d*)\s*m",
-        ],
-    },
-    "superior_planning": {
-        "生态保护红线面积": [
-            r"生态保护红线.*?(\d+\.?\d*)",
-        ],
-        "耕地保有量_公顷": [
-            r"耕地保有量.*?(\d+\.?\d*)\s*(?:公顷|ha)",
-            r"基本农田.*?(\d+\.?\d*)\s*(?:公顷|ha)",
-        ],
-        "建设用地规模_公顷": [
-            r"建设用地.*?(\d+\.?\d*)\s*(?:公顷|ha)",
-            r"城镇开发边界.*?(\d+\.?\d*)",
-        ],
-    },
-}
-
-
-def _extract_dimension_metrics(
-    dimension_key: str,
-    content: str,
-) -> Dict[str, Any]:
-    """Dimension-specific regex extraction — deterministic, zero LLM calls."""
-    rules = DIMENSION_EXTRACTION_RULES.get(dimension_key, {})
-    if not rules:
-        return {}
-
-    metrics: Dict[str, Any] = {}
-    for metric_key, patterns in rules.items():
-        for pattern in patterns:
-            m = re.search(pattern, content)
-            if m:
-                val = m.group(1)
-                metrics[metric_key] = float(val) if '.' in val else int(val)
-                break
-    return metrics
-
 
 async def generate_summary_model(
     dimension_key: str,
@@ -234,35 +144,8 @@ async def generate_summary_model(
         dimension_key,
         layer,
         word_count=len(content),
-        text_summary=str(content)[:200],
+        text_summary="",
         summary_status="pending",
-    )
-
-
-async def generate_structured_summary(
-    dimension_key: str,
-    layer: int,
-    content: str,
-) -> str:
-    """Serialize the typed summary at the report-storage boundary only."""
-
-    summary = await generate_summary_model(dimension_key, layer, content)
-    return summary.model_dump_json(ensure_ascii=False)
-
-
-def deterministic_summary_model(
-    dimension_key: str,
-    layer: int,
-    content: str,
-) -> BaseDimensionSummary:
-    """Build a deterministic display projection without semantic parsing."""
-
-    return build_derived_summary(
-        dimension_key,
-        layer,
-        word_count=len(content or ""),
-        text_summary=str(content or "")[:200],
-        summary_status="deterministic",
     )
 
 
@@ -290,10 +173,11 @@ async def _instructor_generate(
 {metrics_hint}
 
 要求:
-- key_points: 3-5 条核心发现
+- key_points: 最多 5 条核心发现，可以少于 3 条；禁止为了凑数编造或改写报告没有明确支持的内容
 - text_summary: 200 字以内自然语言概述
 - metrics: 维度特定指标，无法从报告确认则留空
 - 维度专属字段: 从报告中提取，无法提取则 null/空
+- 只使用报告原文明确支持的信息；不确定、未出现或无法确认的内容必须留空/null，不得补默认值或推断
 - authority、dimension_key、layer、word_count、summary_source、summary_status 由代码校验并覆盖
 
 报告内容（前3000字）:
@@ -316,14 +200,10 @@ async def _instructor_generate(
     if not isinstance(summary, BaseDimensionSummary):
         return None
 
-    summary = _finalize_summary(
+    _sync_schema_fields_to_metrics(
         summary,
-        dimension_key,
-        layer,
-        content,
-        summary_status="resolved",
+        fields_set=set(getattr(summary, "model_fields_set", set())),
     )
-    _sync_schema_fields_to_metrics(summary)
     return _finalize_summary(
         summary,
         dimension_key,
@@ -333,17 +213,29 @@ async def _instructor_generate(
     )
 
 
-def _sync_schema_fields_to_metrics(summary: BaseDimensionSummary) -> None:
-    """Copy dimension-specific schema field values into metrics dict.
+def _sync_schema_fields_to_metrics(
+    summary: BaseDimensionSummary,
+    *,
+    fields_set: set[str] | None = None,
+) -> None:
+    """Copy explicitly returned dimension fields into ``metrics``.
 
-    Ensures conflict_detector can find values via _get_metric_value()
-    regardless of whether they came from LLM or schema defaults.
+    ``model_fields_set`` is important here: Pydantic materializes optional and
+    list defaults during validation, but those defaults are not observations
+    and must not be projected as semantic metrics.
     """
+    provided_fields = (
+        set(fields_set)
+        if fields_set is not None
+        else set(getattr(summary, "model_fields_set", set()))
+    )
     for field_name in type(summary).model_fields:
         if field_name in (
             "dimension_key", "layer", "word_count", "key_points", "text_summary",
             "metrics", "evidence_refs", "summary_source", "summary_status", "authority",
         ):
+            continue
+        if field_name not in provided_fields:
             continue
         value = getattr(summary, field_name, None)
         if value is not None and field_name not in summary.metrics:
@@ -351,7 +243,7 @@ def _sync_schema_fields_to_metrics(summary: BaseDimensionSummary) -> None:
 
 
 def _extract_metrics_regex(content: str) -> Dict[str, Any]:
-    """Extract key numeric metrics via generic regex patterns."""
+    """Build a RAG-only context supplement; never build a summary model."""
     metrics: Dict[str, Any] = {}
 
     patterns = [
@@ -375,7 +267,7 @@ def _extract_metrics_regex(content: str) -> Dict[str, Any]:
 
 
 def _extract_key_points_regex(content: str) -> List[str]:
-    """Extract key points from markdown headings and bold text."""
+    """Build a RAG-only heading supplement; never build a summary model."""
     points = []
 
     # From ### headings
@@ -397,7 +289,5 @@ __all__ = [
     "SUMMARY_AUTHORITY",
     "build_derived_summary",
     "derived_summary_schema",
-    "deterministic_summary_model",
     "generate_summary_model",
-    "generate_structured_summary",
 ]

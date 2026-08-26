@@ -19,7 +19,6 @@ import os
 import re
 import threading
 import time
-from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
@@ -948,15 +947,11 @@ async def publish_dimension_complete(
     """Publish a typed display-summary projection without reparsing text."""
     from app.infrastructure.events import event_hub as sse_manager
 
-    structured_summary_obj: Optional[Dict[str, Any]] = None
-    if hasattr(structured_summary, "model_dump"):
-        candidate = structured_summary.model_dump(mode="json")
-        if isinstance(candidate, dict) and candidate.get("authority") == "derived_summary":
-            structured_summary_obj = candidate
-    elif isinstance(structured_summary, Mapping):
-        candidate = dict(structured_summary)
-        if candidate.get("authority") == "derived_summary":
-            structured_summary_obj = candidate
+    structured_summary_obj = _validated_summary_projection(
+        structured_summary,
+        dimension_key=dimension_key,
+        layer=layer,
+    )
 
     await sse_manager.publish(session_id, {
         "type": SSEEventType.DIMENSION_COMPLETE,
@@ -969,6 +964,47 @@ async def publish_dimension_complete(
         "layer": layer,
         "is_revision": is_revision,
     })
+
+
+def _validated_summary_projection(
+    structured_summary: Any,
+    *,
+    dimension_key: str,
+    layer: int,
+) -> Optional[Dict[str, Any]]:
+    """Return one schema-validated display projection, or ``None``.
+
+    The complete event is a presentation projection, not a second semantic
+    parser.  Only the already-typed derived-summary model is accepted here;
+    arbitrary mappings that merely carry an authority marker are rejected.
+    """
+
+    from pydantic import BaseModel
+
+    if not isinstance(structured_summary, BaseModel):
+        return None
+
+    candidate = structured_summary.model_dump(mode="python")
+    if not isinstance(candidate, dict):
+        return None
+
+    try:
+        from app.data.ingestion.summary_generator import derived_summary_schema
+
+        validated = derived_summary_schema(dimension_key).model_validate(
+            candidate,
+            extra="forbid",
+        )
+    except (KeyError, TypeError, ValueError):
+        return None
+
+    if (
+        validated.authority != "derived_summary"
+        or validated.dimension_key != dimension_key
+        or validated.layer != layer
+    ):
+        return None
+    return validated.model_dump(mode="json")
 
 
 async def save_report_immediate(store: Any, pending_report: Dict[str, Any]) -> None:
@@ -1016,63 +1052,10 @@ async def save_step_report(
 
 async def generate_summary(dimension_key: str, dim_layer: int, content: str) -> str:
     """Generate a typed summary and serialize it at the storage boundary."""
-    from app.core.settings import BACKGROUND_SUMMARY_ENRICHMENT
-    if not BACKGROUND_SUMMARY_ENRICHMENT:
-        return generate_summary_regex(dimension_key, dim_layer, content)
     from app.data.ingestion.summary_generator import generate_summary_model
 
-    try:
-        summary = await generate_summary_model(dimension_key, dim_layer, content)
-        return summary.model_dump_json(ensure_ascii=False)
-    except Exception as e:
-        logger.warning(f"[dimension_runtime] {dimension_key}: Summary generation failed: {e}")
-        from app.data.ingestion.summary_generator import build_derived_summary
-
-        return build_derived_summary(
-            dimension_key,
-            dim_layer,
-            word_count=len(content or ""),
-            text_summary=str(content or "")[:200],
-            summary_status="pending",
-        ).model_dump_json(ensure_ascii=False)
-
-
-def generate_summary_regex(dimension_key: str, dim_layer: int, content: str) -> str:
-    """Deterministic display projection; the old regex semantic path is gone."""
-    from app.data.ingestion.summary_generator import deterministic_summary_model
-
-    return deterministic_summary_model(
-        dimension_key,
-        dim_layer,
-        content,
-    ).model_dump_json(ensure_ascii=False)
-
-
-async def enrich_summary_background(
-    dimension_key: str,
-    dim_layer: int,
-    content: str,
-    session_id: str,
-    version: int,
-) -> None:
-    """Background task: Flash-LLM summary enrichment + DB update. Non-fatal."""
-    try:
-        from app.data.ingestion.summary_generator import generate_summary_model
-
-        summary = await generate_summary_model(dimension_key, dim_layer, content)
-        if summary is None:
-            return
-        from app.infrastructure.reports.report_store import ReportStore
-
-        store = ReportStore.get_instance()
-        await store.update_summary(
-            session_id,
-            dimension_key,
-            version,
-            summary.model_dump_json(ensure_ascii=False),
-        )
-    except Exception as e:
-        logger.warning(f"[dimension_runtime] background summary enrich failed for {dimension_key}: {e}")
+    summary = await generate_summary_model(dimension_key, dim_layer, content)
+    return summary.model_dump_json(ensure_ascii=False)
 
 
 __all__ = [
@@ -1092,6 +1075,4 @@ __all__ = [
     "save_report_immediate",
     "save_step_report",
     "generate_summary",
-    "generate_summary_regex",
-    "enrich_summary_background",
 ]

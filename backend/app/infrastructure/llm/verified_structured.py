@@ -187,7 +187,6 @@ async def run_verified_structured_decision(
             llm=llm,
             **kwargs,
         )
-        outcome = await _validate(semantic_validator, context, proposal)
     except Exception as exc:
         failure_code = structured_failure_code(exc) or "STRUCTURED_OUTPUT_ERROR"
         issue = SemanticIssue(
@@ -227,6 +226,31 @@ async def run_verified_structured_decision(
             issues=outcome.issues,
             certificate=certificate,
             retry_state=retry_state,
+        )
+
+    try:
+        outcome = await _validate(semantic_validator, context, proposal)
+    except Exception as exc:
+        issue = SemanticIssue(
+            stage=context.stage,
+            code="SEMANTIC_VALIDATOR_ERROR",
+            severity="error",
+            fatal_scope="stage",
+            object_ref=context.object_type,
+            retryable=False,
+            repair_kind="semantic_validation",
+            message="verified structured semantic validation failed unexpectedly",
+        )
+        outcome = SemanticValidationOutcome[ProposalT](
+            pending=[
+                PendingDecision(
+                    decision_ref=context.object_type,
+                    reason_code="semantic_validator_error",
+                    issue_fingerprints=[issue.fingerprint],
+                    requires_human_review=True,
+                )
+            ],
+            issues=[issue],
         )
 
     pending_from_policy = pending_repair_decisions(outcome.repair_operations)

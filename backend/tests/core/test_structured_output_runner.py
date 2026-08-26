@@ -62,9 +62,10 @@ def _retry_exception_with_content(content: str, *, finish_reason: str | None = N
     ],
     ids=["plain-json", "think-json", "fenced-json"],
 )
-async def test_runner_accepts_complete_content_json_after_instructor_retry(
+async def test_runner_rejects_complete_content_json_after_instructor_retry(
     monkeypatch, content
 ):
+    from instructor.core import InstructorRetryException
     from app.infrastructure.llm import structured
 
     calls = 0
@@ -81,14 +82,14 @@ async def test_runner_accepts_complete_content_json_after_instructor_retry(
     monkeypatch.setattr(structured, "get_async_instructor_client", lambda: _Client())
     monkeypatch.setattr(structured, "get_structured_model", lambda model=None: "deepseek-v4-flash")
 
-    result = await structured.run_structured_output(
-        _Result,
-        [{"role": "user", "content": "return seven"}],
-        max_retries=1,
-        timeout=2,
-    )
+    with pytest.raises(InstructorRetryException):
+        await structured.run_structured_output(
+            _Result,
+            [{"role": "user", "content": "return seven"}],
+            max_retries=1,
+            timeout=2,
+        )
 
-    assert result == _Result(value=7)
     assert calls == 1
 
 
@@ -249,7 +250,8 @@ async def test_runner_rejects_non_standard_json_constants_without_extra_call(mon
 
 
 @pytest.mark.asyncio
-async def test_runner_recovers_strict_l1_observation_json(monkeypatch):
+async def test_runner_rejects_untyped_l1_observation_json(monkeypatch):
+    from instructor.core import InstructorRetryException
     from app.domain.assessment.observation_draft import L1ObservationPassOutput
     from app.infrastructure.llm import structured
 
@@ -270,19 +272,18 @@ async def test_runner_recovers_strict_l1_observation_json(monkeypatch):
     monkeypatch.setattr(structured, "get_async_instructor_client", lambda: _Client())
     monkeypatch.setattr(structured, "get_structured_model", lambda model=None: "MiniMax-M2.7-highspeed")
 
-    result = await structured.run_structured_output(
-        L1ObservationPassOutput,
-        [{"role": "user", "content": "return the typed L1 output"}],
-        max_retries=1,
-        timeout=2,
-        content_fallback_mode="strict",
-    )
-
-    assert result.observations[0].name == "村道"
+    with pytest.raises(InstructorRetryException):
+        await structured.run_structured_output(
+            L1ObservationPassOutput,
+            [{"role": "user", "content": "return the typed L1 output"}],
+            max_retries=1,
+            timeout=2,
+        )
 
 
 @pytest.mark.asyncio
-async def test_runner_recovers_strict_l3_claim_json(monkeypatch):
+async def test_runner_rejects_untyped_l3_claim_json(monkeypatch):
+    from instructor.core import InstructorRetryException
     from app.domain.program.claim_draft import L3ClaimOutput
     from app.infrastructure.llm import structured
 
@@ -298,15 +299,13 @@ async def test_runner_recovers_strict_l3_claim_json(monkeypatch):
     monkeypatch.setattr(structured, "get_async_instructor_client", lambda: _Client())
     monkeypatch.setattr(structured, "get_structured_model", lambda model=None: "MiniMax-M2.7-highspeed")
 
-    result = await structured.run_structured_output(
-        L3ClaimOutput,
-        [{"role": "user", "content": "return the typed L3 output"}],
-        max_retries=1,
-        timeout=2,
-        content_fallback_mode="strict",
-    )
-
-    assert result.claims[0].claim_id == "land-use-1"
+    with pytest.raises(InstructorRetryException):
+        await structured.run_structured_output(
+            L3ClaimOutput,
+            [{"role": "user", "content": "return the typed L3 output"}],
+            max_retries=1,
+            timeout=2,
+        )
 
 
 @pytest.mark.asyncio
@@ -335,7 +334,8 @@ async def test_runner_classifies_plain_markdown_as_tool_call_missing(monkeypatch
 
 
 @pytest.mark.asyncio
-async def test_runner_recovers_bounded_plain_report_only_for_explicit_report_mode(monkeypatch):
+async def test_runner_rejects_untyped_plain_report(monkeypatch):
+    from instructor.core import InstructorRetryException
     from app.domain.assessment.observation_draft import L1ReportOutput
     from app.infrastructure.llm import structured
 
@@ -355,15 +355,13 @@ async def test_runner_recovers_bounded_plain_report_only_for_explicit_report_mod
     monkeypatch.setattr(structured, "get_async_instructor_client", lambda: _Client())
     monkeypatch.setattr(structured, "get_structured_model", lambda model=None: "MiniMax-M2.7-highspeed")
 
-    result = await structured.run_structured_output(
-        L1ReportOutput,
-        [{"role": "user", "content": "return the typed report"}],
-        max_retries=1,
-        timeout=2,
-        content_fallback_mode="report_text",
-    )
-
-    assert result.report_body == content
+    with pytest.raises(InstructorRetryException):
+        await structured.run_structured_output(
+            L1ReportOutput,
+            [{"role": "user", "content": "return the typed report"}],
+            max_retries=1,
+            timeout=2,
+        )
 
 
 @pytest.mark.asyncio
@@ -397,7 +395,6 @@ async def test_runner_rejects_unsafe_plain_report_fallback(monkeypatch, content)
             [{"role": "user", "content": "return the typed report"}],
             max_retries=1,
             timeout=2,
-            content_fallback_mode="report_text",
         )
 
 

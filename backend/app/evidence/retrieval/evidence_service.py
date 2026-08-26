@@ -1438,11 +1438,16 @@ def render_evidence_prompt_section(
                         if str(value).strip()
                     )
                 )[:12]
+                # Only canonical durable L1 fact identities belong in the
+                # L1_facts label.  Packet lineage may also contain report,
+                # source-feature, or legacy display refs; exposing those next
+                # to a selectable-looking label lets a planning model mistake
+                # provenance for source_fact_refs.
                 l1_refs = list(
                     dict.fromkeys(
                         str(value).strip()
                         for value in (ref.l1_fact_refs or [])
-                        if str(value).strip()
+                        if str(value).strip().startswith("l1:fact:")
                     )
                 )[:8]
                 provenance_refs = list(
@@ -1463,7 +1468,8 @@ def render_evidence_prompt_section(
                     f"related_parcels={','.join(related_parcels) or 'none'}; "
                     f"bundle_ref={ref.geometry_ref or 'none'}; "
                     f"KG_relations={','.join(relation_refs) or 'none'}; "
-                    f"L1_facts={','.join(l1_refs) or 'none'}; "
+                    f"L1_facts={','.join(l1_refs) or 'none'} "
+                    "(lineage-only; not selectable source_fact_refs); "
                     f"provenance={','.join(provenance_refs) or 'none'}; "
                     f"source_authority={float(ref.source_authority_score or 0.0):.4f}; "
                     f"semantic_match={float(ref.semantic_match_score or 0.0):.4f}; "

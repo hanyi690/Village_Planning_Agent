@@ -37,6 +37,8 @@ def test_l2_mutable_defaults_are_isolated() -> None:
         PlanningObjective(
             objective_id="obj-1",
             statement="提升公共服务可达性",
+            kind="goal",
+            status="proposed",
         )
     )
     first.diagnostics.append("diagnostic-1")
@@ -50,6 +52,8 @@ def test_l2_contract_rejects_extra_empty_id_and_confidence_range() -> None:
         PlanningObjective.model_validate({
             "objective_id": "obj-1",
             "statement": "提升公共服务可达性",
+            "kind": "goal",
+            "status": "proposed",
             "unexpected": True,
         })
 
@@ -57,12 +61,15 @@ def test_l2_contract_rejects_extra_empty_id_and_confidence_range() -> None:
         PlanningObjective.model_validate({
             "objective_id": " ",
             "statement": "提升公共服务可达性",
+            "kind": "goal",
+            "status": "proposed",
         })
 
     with pytest.raises(ValidationError, match="confidence_out_of_range"):
         StrategyRule.model_validate({
             "strategy_id": "strategy-1",
             "statement": "优先补齐公共服务短板",
+            "strength": "proposed",
             "confidence": 1.1,
         })
 
@@ -72,6 +79,8 @@ def test_l2_contract_closes_namespace_relation_and_grounding() -> None:
         PlanningObjective.model_validate({
             "objective_id": "obj-1",
             "statement": "保护文化资源",
+            "kind": "goal",
+            "status": "proposed",
             "source_fact_refs": ["bundle://feature/not-a-fact"],
         })
 

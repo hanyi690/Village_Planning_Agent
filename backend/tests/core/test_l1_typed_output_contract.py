@@ -24,6 +24,7 @@ def test_l1_observe_and_report_outputs_are_separate_contracts() -> None:
             "observations": [
                 {
                     "fact_type": "spatial_entity",
+                    "status": "confirmed",
                     "entity_type": "道路",
                     "name": "村道",
                     "locator": {
@@ -51,6 +52,7 @@ def test_l1_observation_attribute_scalars_are_normalized_to_strings() -> None:
             "observations": [
                 {
                     "fact_type": "scoped_metric",
+                    "status": "confirmed",
                     "metric": "上位规划数据目录",
                     "scope": "全村",
                     "attributes": {
@@ -115,6 +117,7 @@ def test_l1_observation_output_recovers_stringified_container_and_quarantines_ba
                 [
                     {
                         "fact_type": "spatial_entity",
+                        "status": "confirmed",
                         "entity_type": "道路",
                         "name": "村道",
                         "locator": {

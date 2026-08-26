@@ -28,7 +28,7 @@ def _retry_exception_with_content(content: str):
 
 
 @pytest.mark.asyncio
-async def test_l1_contract_recovers_schema_valid_content_json_without_tool_call(monkeypatch):
+async def test_l1_contract_rejects_content_json_without_tool_call(monkeypatch):
     from app.infrastructure.llm import structured
 
     class _Completions:
@@ -45,14 +45,13 @@ async def test_l1_contract_recovers_schema_valid_content_json_without_tool_call(
         structured, "get_structured_model", lambda model=None: "deepseek-v4-flash"
     )
 
-    result = await structured.run_structured_output(
-        L1ReportOutput,
-        [{"role": "user", "content": "return the typed L1 output"}],
-        max_retries=1,
-        timeout=2,
-    )
-
-    assert result.report_body == "道路现状清晰。"
+    with pytest.raises(Exception):
+        await structured.run_structured_output(
+            L1ReportOutput,
+            [{"role": "user", "content": "return the typed L1 output"}],
+            max_retries=1,
+            timeout=2,
+        )
 
 
 def test_malformed_l1_failure_keeps_exact_dimension_and_never_completes():

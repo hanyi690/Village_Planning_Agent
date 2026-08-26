@@ -15,6 +15,7 @@ def test_l2_decision_set_is_the_authoritative_semantic_input() -> None:
             PlanningObjective(
                 objective_id="obj-1",
                 statement="提升公共服务可达性",
+                kind="goal",
                 status="proposed",
             )
         ],
@@ -22,6 +23,7 @@ def test_l2_decision_set_is_the_authoritative_semantic_input() -> None:
             StrategyRule(
                 strategy_id="strategy-1",
                 statement="优先补齐公共服务短板",
+                strength="proposed",
                 objective_refs=["obj-1"],
             )
         ],
@@ -62,12 +64,15 @@ def test_l2_merge_does_not_infer_conflicts_from_prose() -> None:
             PlanningObjective(
                 objective_id="obj-1",
                 statement="兼顾产业发展与生态保护",
+                kind="goal",
+                status="proposed",
             )
         ],
         strategies=[
             StrategyRule(
                 strategy_id="strategy-1",
                 statement="产业与生态协同推进",
+                strength="proposed",
                 objective_refs=["obj-1"],
             )
         ],

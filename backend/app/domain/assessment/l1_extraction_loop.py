@@ -95,8 +95,8 @@ def _validate_observation_sources(
         )
         if not evidence_ok:
             name = _observation_label(observation)
-            diagnostics.append(f"observation_source_unverified:{name}")
-            observation = observation.model_copy(update={"status": "uncertain"})
+            diagnostics.append(f"observation_source_quarantined:{name}")
+            continue
         else:
             canonical_refs = list(
                 dict.fromkeys(
@@ -358,7 +358,6 @@ async def run_l1_dimension_loop(
                 f"【validated L1 material】\n{report_material}"
             )
             report_kwargs = dict(base_kwargs)
-            report_kwargs["content_fallback_mode"] = "report_text"
             report_output = await run_structured_output(
                 L1ReportOutput,
                 [

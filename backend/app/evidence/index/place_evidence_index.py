@@ -18,6 +18,7 @@ from app.evidence.index.evidence_scorer import (
     score_candidate,
     total,
 )
+from app.domain.validation.l1_fact_catalog import is_canonical_l1_fact_id
 from app.infrastructure.logging import get_logger
 
 logger = get_logger(__name__)
@@ -481,14 +482,12 @@ class PlaceEvidenceIndex:
         source_refs = list(dict.fromkeys(source_refs))
         fact_id = str(getattr(fact, "fact_id", "") or "").strip()
         l1_fact_refs = list(source_refs)
-        if fact_id:
+        if is_canonical_l1_fact_id(fact_id):
             l1_fact_refs.append(fact_id)
-        elif not l1_fact_refs:
-            l1_fact_refs.append(f"l1_fact:{name}")
         entry = PlaceEvidenceEntry(
             canonical_name=name,
             aliases=aliases,
-            entity_refs=[f"l1_fact:{name}"],
+            entity_refs=[],
             entity_types=[role],
             role=role,
             source_bsms=[],

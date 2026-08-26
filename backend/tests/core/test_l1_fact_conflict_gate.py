@@ -95,7 +95,7 @@ def test_l1_gate_routes_unverified_source_feature_counts_to_explore():
     snapshot = L1Snapshot(
         fact_records=[
             L1Fact(
-                fact_id="l1:road-count",
+                fact_id="l1:fact:road-count",
                 statement="道路 275 个",
                 fact_kind="kg_canonical_fact",
                 value=275,

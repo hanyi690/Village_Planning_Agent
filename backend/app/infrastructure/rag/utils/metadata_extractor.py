@@ -12,9 +12,12 @@ Features:
 
 import re
 import logging
+from typing import Literal
 from pathlib import Path
 from typing import Dict, List, Optional, Any
 from dataclasses import dataclass, field
+
+from pydantic import BaseModel, ConfigDict, Field
 
 logger = logging.getLogger(__name__)
 
@@ -31,6 +34,26 @@ CATEGORY_MAPPING = {
     "05_上位规划/01_广东省": ("上位规划", "", "广东省"),
     "06_相关案例": ("相关案例", "", ""),
 }
+
+
+class DocumentTypeProposal(BaseModel):
+    """Strict semantic proposal returned by the document classifier."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    doc_type: Literal["textbook", "guide", "policy", "standard", "case", "report"]
+    keywords: list[str] = Field(default_factory=list, max_length=24)
+
+
+def _pending_doc_type_result(reason: str) -> Dict[str, Any]:
+    """Return an explicit unresolved result; never invent a document type."""
+
+    return {
+        "status": "pending",
+        "reason": str(reason).strip() or "document_type_inference_pending",
+        "doc_type": "",
+        "keywords": [],
+    }
 
 
 @dataclass
@@ -220,7 +243,7 @@ Title: {title}
 
 Content sample: {content_sample}
 
-Output JSON format:
+Output the typed JSON object with exactly these fields:
 {{"doc_type": "textbook|guide|policy|standard|case|report", "keywords": ["keyword1", "keyword2"]}}
 
 Doc type rules:
@@ -231,64 +254,35 @@ Doc type rules:
 - case: Planning cases, design examples, project reports
 - report: General reports, analysis documents
 
-Output JSON only, no explanation."""
+Output the object only, no explanation."""
 
         try:
-            response = await llm.ainvoke(prompt)
-            result_text = response.content.strip()
+            from app.infrastructure.llm.structured import run_structured_output
 
-            # Parse JSON
-            import json
-            # Try to extract JSON from response
-            json_match = re.search(r'\{[^}]+\}', result_text)
-            if json_match:
-                result = json.loads(json_match.group())
-                return {
-                    "doc_type": result.get("doc_type", "report"),
-                    "keywords": result.get("keywords", []),
-                }
+            proposal = await run_structured_output(
+                DocumentTypeProposal,
+                [{"role": "user", "content": prompt}],
+                llm=llm,
+                max_retries=1,
+            )
+            keywords = list(dict.fromkeys(
+                str(keyword).strip()[:80]
+                for keyword in proposal.keywords
+                if str(keyword).strip()
+            ))
+            return {
+                "status": "accepted",
+                "doc_type": proposal.doc_type,
+                "keywords": keywords,
+            }
         except Exception as e:
             logger.warning(f"[MetadataExtractor] LLM inference failed: {e}")
-
-        # Fallback to rule-based inference
-        return cls._infer_doc_type_rules(title, content)
-
-    @classmethod
-    def _infer_doc_type_rules(cls, title: str, content: str = "") -> Dict[str, Any]:
-        """Rule-based doc_type inference"""
-        title_lower = title.lower()
-
-        # Standard number pattern
-        if cls.STANDARD_NO_PATTERN.search(title):
-            return {"doc_type": "standard", "keywords": []}
-
-        # Textbook keywords
-        textbook_kw = ["教材", "原理", "教程", "导论", "基础", "入门", "读本"]
-        if any(kw in title for kw in textbook_kw):
-            return {"doc_type": "textbook", "keywords": []}
-
-        # Guide keywords
-        guide_kw = ["指南", "手册", "指导", "操作", "规程"]
-        if any(kw in title for kw in guide_kw):
-            return {"doc_type": "guide", "keywords": []}
-
-        # Policy keywords
-        policy_kw = ["条例", "规定", "办法", "通知", "意见", "决定", "批复", "法"]
-        if any(kw in title for kw in policy_kw):
-            return {"doc_type": "policy", "keywords": []}
-
-        # Standard keywords
-        standard_kw = ["标准", "规范", "gb", "cjj", "cj", "hg", "jc", "jg", "jt"]
-        for kw in standard_kw:
-            if kw in title_lower:
-                return {"doc_type": "standard", "keywords": []}
-
-        # Case keywords
-        case_kw = ["规划", "设计", "方案", "案例", "实例", "工程"]
-        if any(kw in title for kw in case_kw):
-            return {"doc_type": "case", "keywords": []}
-
-        return {"doc_type": "report", "keywords": []}
+        return _pending_doc_type_result("structured_document_type_unavailable")
 
 
-__all__ = ["MetadataExtractor", "ExtractedMetadata", "CATEGORY_MAPPING"]
+__all__ = [
+    "MetadataExtractor",
+    "ExtractedMetadata",
+    "DocumentTypeProposal",
+    "CATEGORY_MAPPING",
+]

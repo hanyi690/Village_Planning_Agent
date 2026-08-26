@@ -287,7 +287,6 @@ async def analyze_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
             "semaphore_scope": "l1",
             "transient_retries": L1_TRANSIENT_RETRIES,
             "transient_retry_backoff_s": L1_TRANSIENT_RETRY_BACKOFF_S,
-            "content_fallback_mode": "strict",
         }
         if dim_layer == 1:
             from app.domain.assessment.l1_extraction_loop import run_l1_dimension_loop

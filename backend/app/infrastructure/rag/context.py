@@ -16,12 +16,32 @@ import re
 import hashlib
 import json
 from pathlib import Path
-from typing import List, Dict, Optional, Any
+from typing import List, Dict, Optional, Any, Literal
 from dataclasses import dataclass, field
+
+from pydantic import BaseModel, ConfigDict, Field
 
 from app.core.settings import OUTLINE_INDEX_DIR
 
 logger = logging.getLogger(__name__)
+
+
+class OutlineLevelItem(BaseModel):
+    """One typed heading-level proposal identified by a stable heading ID."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    heading_id: str = Field(min_length=1)
+    level: int = Field(ge=1, le=4)
+    heading_type: Literal["chapter", "section", "article", "item"]
+
+
+class OutlineLevelBatch(BaseModel):
+    """Strict batch returned by the outline corrector."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    items: list[OutlineLevelItem] = Field(min_length=1)
 
 
 @dataclass
@@ -248,11 +268,28 @@ class LLMOutlineCorrector:
             return content, headings
 
         logger.info(f"[LLMOutlineCorrector] 提取 {len(headings)} 个候选标题")
-        headings = self._infer_levels_with_llm(headings)
-        corrected_content = self._rewrite_headings(content, headings)
+        headings = self._attach_stable_heading_ids(content, headings)
+        inferred = self._infer_levels_with_llm(headings)
+        if inferred is None:
+            logger.warning("[LLMOutlineCorrector] typed outline proposal is pending")
+            return content, headings
+        corrected_content = self._rewrite_headings(content, inferred)
 
         logger.info(f"[LLMOutlineCorrector] 矫正完成")
-        return corrected_content, headings
+        return corrected_content, inferred
+
+    @staticmethod
+    def _attach_stable_heading_ids(content: str, headings: List[Dict]) -> List[Dict]:
+        content_digest = hashlib.sha256(content.encode("utf-8")).hexdigest()[:16]
+        result: list[dict] = []
+        for ordinal, heading in enumerate(headings):
+            item = dict(heading)
+            text_digest = hashlib.sha256(
+                str(item.get("clean_text", "")).encode("utf-8")
+            ).hexdigest()[:12]
+            item["heading_id"] = f"heading:{content_digest}:{ordinal}:{text_digest}"
+            result.append(item)
+        return result
 
     def _extract_headings(self, content: str) -> List[Dict]:
         """提取候选标题（增强版）"""
@@ -409,108 +446,56 @@ class LLMOutlineCorrector:
                 return True
         return False
 
-    def _infer_levels_with_llm(self, headings: List[Dict]) -> List[Dict]:
-        """使用 LLM 推断标题层级（带重试机制）"""
+    def _infer_levels_with_llm(self, headings: List[Dict]) -> Optional[List[Dict]]:
+        """Infer levels using one strict typed proposal per heading batch."""
         if len(headings) < 2:
             return headings
 
-        total = len(headings)
-        max_retries = 2  # 最大重试次数
+        inferred = [dict(item) for item in headings]
+        for batch_start in range(0, len(inferred), self.batch_size):
+            batch = inferred[batch_start:batch_start + self.batch_size]
+            heading_list = "\n".join(
+                f"heading_id={item['heading_id']} title={item['clean_text'][:80]}"
+                for item in batch
+            )
+            prompt = f"""你是文档结构分析专家。为每个给定标题提出层级。
 
-        for batch_start in range(0, total, self.batch_size):
-            batch_end = min(batch_start + self.batch_size, total)
-            batch = headings[batch_start:batch_end]
+只返回严格 typed JSON 对象：{{"items": [{{"heading_id": "...", "level": 1, "heading_type": "chapter"}}]}}。
+必须逐一返回本批次全部 heading_id，不能新增、遗漏、重复或改写 ID。
+level 只能是 1 到 4 的整数；heading_type 只能是 chapter、section、article、item。
+不能返回序号、候选位置、解释文本或其他字段。
 
-            heading_list = "\n".join([
-                f"[{idx}] {h['clean_text'][:80]}"
-                for idx, h in enumerate(batch)
-            ])
-
-            prompt = f"""你是文档结构分析专家。推断以下标题的层级关系。
-
-要求：
-1. 输出JSON数组，每个元素包含: index, level (1=最高层级), type
-2. type 可以是: chapter(章), section(节), article(条), item(项)
-3. 层级必须连续，不能跳跃
-
-候选标题：
+本批次标题：
 {heading_list}
+"""
+            try:
+                from app.infrastructure.llm.structured import run_structured_output_sync
 
-JSON:"""
-
-            # 重试机制
-            for retry in range(max_retries + 1):
-                try:
-                    response = self.llm.invoke(prompt)
-                    content = response.content
-
-                    json_match = re.search(r"\[[\s\S]*\]", content)
-                    if json_match:
-                        outline = json.loads(json_match.group())
-
-                        for item in outline:
-                            idx = item.get("index", 0)
-                            level = item.get("level", 1)
-
-                            try:
-                                level = int(level) if level is not None else 1
-                                level = max(1, min(level, 4))
-                            except (ValueError, TypeError):
-                                level = 1
-
-                            if isinstance(idx, int) and 0 <= idx < len(batch):
-                                global_idx = batch_start + idx
-                                headings[global_idx]["inferred_level"] = level
-                                headings[global_idx]["heading_type"] = item.get("type", "section")
-
-                        logger.debug(f"[LLMOutlineCorrector] 批次 {batch_start//self.batch_size + 1} 完成")
-                        break  # 成功，跳出重试循环
-
-                except json.JSONDecodeError as e:
-                    if retry < max_retries:
-                        logger.warning(f"[LLMOutlineCorrector] JSON 解析失败，重试 {retry + 1}/{max_retries}: {e}")
-                    else:
-                        logger.warning(f"[LLMOutlineCorrector] JSON 解析失败，已达最大重试次数: {e}")
-                        self._fallback_infer_batch(batch, headings, batch_start)
-                except Exception as e:
-                    if retry < max_retries:
-                        logger.warning(f"[LLMOutlineCorrector] LLM 调用失败，重试 {retry + 1}/{max_retries}: {e}")
-                    else:
-                        logger.warning(f"[LLMOutlineCorrector] LLM 调用失败，已达最大重试次数: {e}")
-                        self._fallback_infer_batch(batch, headings, batch_start)
-
-        # 最终回退：为未推断的标题设置默认值
-        for h in headings:
-            if "inferred_level" not in h:
-                h["inferred_level"] = self._smart_fallback_level(h)
-                h["heading_type"] = "section"
-
-        return headings
-
-    def _fallback_infer_batch(self, batch: List[Dict], headings: List[Dict], batch_start: int):
-        """批次失败时的回退推断"""
-        for idx, h in enumerate(batch):
-            global_idx = batch_start + idx
-            headings[global_idx]["inferred_level"] = self._smart_fallback_level(h)
-            headings[global_idx]["heading_type"] = "section"
-
-    def _smart_fallback_level(self, heading: Dict) -> int:
-        """智能回退：根据标题格式推断层级"""
-        text = heading.get("clean_text", "")
-        original_level = heading.get("original_level", 1) or 1
-
-        # 根据中文编号格式推断
-        if re.match(r'^第[一二三四五六七八九十]+[篇章]', text):
-            return 1  # 篇/章 -> 一级
-        if re.match(r'^第[一二三四五六七八九十]+[节条]', text):
-            return 2  # 节/条 -> 二级
-        if re.match(r'^[（(][一二三四五六七八九十]+[）)]', text):
-            return 3  # （一）-> 三级
-        if re.match(r'^\d+[\.、]', text):
-            return 2  # 1. -> 二级
-
-        # 回退到原始层级
-        return original_level
+                proposal = run_structured_output_sync(
+                    OutlineLevelBatch,
+                    [{"role": "user", "content": prompt}],
+                    llm=self.llm,
+                    max_retries=1,
+                )
+                expected_ids = [str(item["heading_id"]) for item in batch]
+                actual_ids = [item.heading_id for item in proposal.items]
+                if (
+                    len(actual_ids) != len(set(actual_ids))
+                    or set(actual_ids) != set(expected_ids)
+                ):
+                    raise ValueError("outline proposal does not cover the exact heading batch")
+                by_id = {item.heading_id: item for item in proposal.items}
+                for item in batch:
+                    selected = by_id[item["heading_id"]]
+                    item["inferred_level"] = selected.level
+                    item["heading_type"] = selected.heading_type
+            except Exception as exc:
+                logger.warning(
+                    "[LLMOutlineCorrector] typed outline proposal rejected: %s",
+                    type(exc).__name__,
+                )
+                return None
+        return inferred
 
     def _rewrite_headings(self, content: str, headings: List[Dict]) -> str:
         """重写 Markdown 标题"""
@@ -518,10 +503,8 @@ JSON:"""
 
         for h in headings:
             line_no = h["line_no"]
-            level = h.get("inferred_level", 1)
+            level = h["inferred_level"]
             clean_text = h["clean_text"]
-
-            level = min(level, 4)
             new_heading = "#" * level + " " + clean_text
             lines[line_no] = new_heading
 
@@ -643,6 +626,8 @@ def get_context_provider() -> DocumentContextProvider:
 __all__ = [
     "HierarchyTreeIndex",
     "OutlineIndexManager",
+    "OutlineLevelItem",
+    "OutlineLevelBatch",
     "LLMOutlineCorrector",
     "DocumentContextProvider",
     "get_context_provider",

@@ -208,7 +208,7 @@ def _extract_location_facts_from_observations(
         entity_type = str(obs.get("entity_type") or "").strip()
         description = str(obs.get("description") or "").strip()
         kind = str(obs.get("fact_type") or "").strip()
-        if str(obs.get("status") or "confirmed").strip() != "confirmed":
+        if str(obs.get("status") or "").strip() != "confirmed":
             continue
         spatial_observation = kind in {"spatial_entity", "spatial_relation"} or bool(
             location or relation or obs.get("source_feature_ids")
@@ -370,7 +370,7 @@ def _compile_typed_observation_facts(
             raw = observation_to_compiler_payload(item)
         except Exception:
             continue
-        if str(raw.get("status") or "confirmed").strip() != "confirmed":
+        if str(raw.get("status") or "").strip() != "confirmed":
             continue
         name = str(raw.get("name") or "").strip()
         entity_type = str(raw.get("entity_type") or "").strip()
@@ -487,7 +487,7 @@ def _structured_constraints(instruction: str) -> list[str]:
             raw = observation_to_compiler_payload(item)
         except Exception:
             continue
-        if str(raw.get("status") or "confirmed") != "confirmed":
+        if str(raw.get("status") or "") != "confirmed":
             continue
         kind = str(raw.get("fact_type") or "").strip()
         if kind not in {"constraint", "risk"}:

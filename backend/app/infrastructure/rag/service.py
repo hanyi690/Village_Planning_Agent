@@ -411,9 +411,10 @@ class RagService:
             content = result.get("content", "")
             metadata = result.get("metadata", {})
             source = metadata.get("source", "Unknown")
-            doc_type = metadata.get("doc_type", "法规")
+            doc_type = str(metadata.get("doc_type") or "").strip()
+            display_doc_type = doc_type or "unknown"
 
-            context_parts.append(f"【参考{i+1} - {doc_type}】\n来源: {source}\n内容:\n{content}\n")
+            context_parts.append(f"【参考{i+1} - {display_doc_type}】\n来源: {source}\n内容:\n{content}\n")
 
         return "\n".join(context_parts)
 
@@ -558,8 +559,8 @@ class RagService:
             full_content = "\n\n".join(doc.page_content for doc in documents)
 
             if doc_type is None:
-                doc_type = self._infer_doc_type(source_name, full_content)
-                logger.info(f"Inferred doc_type: {doc_type}")
+                doc_type = ""
+                logger.info("Document type inference is pending")
 
             # 将内容保存为临时 Markdown 文件以使用缓存
             # 注意：source_name 可能已经包含 .md 后缀，需要处理
@@ -671,13 +672,12 @@ class RagService:
                 inferred = await MetadataExtractor.infer_doc_type_with_llm(
                     extracted.title, content[:500]
                 )
-                extracted.doc_type = inferred.get("doc_type", "report")
-                extracted.keywords = inferred.get("keywords", [])
-                logger.info(f"LLM inferred doc_type: {extracted.doc_type}")
-            elif not extracted.doc_type:
-                # Fallback to rule-based inference
-                inferred = MetadataExtractor._infer_doc_type_rules(extracted.title, content[:500])
-                extracted.doc_type = inferred.get("doc_type", "report")
+                if inferred.get("status") == "accepted":
+                    extracted.doc_type = str(inferred["doc_type"])
+                    extracted.keywords = list(inferred.get("keywords") or [])
+                    logger.info(f"LLM inferred doc_type: {extracted.doc_type}")
+                else:
+                    logger.info("LLM document type inference is pending")
 
             # Hierarchy slicing with cache
             slicer = HierarchySlicer()
@@ -760,8 +760,8 @@ class RagService:
 
             progress_callback(30.0, "Inferring doc type")
             if doc_type is None:
-                doc_type = self._infer_doc_type(source_name, full_content)
-                logger.info(f"Inferred doc_type: {doc_type}")
+                doc_type = ""
+                logger.info("Document type inference is pending")
 
             progress_callback(40.0, "Hierarchy slicing")
             slicer = HierarchySlicer()
@@ -838,37 +838,6 @@ class RagService:
             return True  # 无哈希记录，需要更新
 
         return stored_hash != new_hash  # 哈希变化，需要更新
-
-    def _infer_doc_type(self, filename: str, content: str = "") -> str:
-        """Infer document type from filename keywords"""
-        import re
-        name_lower = filename.lower()
-
-        if content and re.search(r'第[一二三四五六七八九十\d]+章', content):
-            return "textbook"
-
-        textbook_kw = ["教材", "原理", "教程", "导论", "基础", "入门", "读本"]
-        if any(kw in filename for kw in textbook_kw):
-            return "textbook"
-
-        guide_kw = ["指南", "手册", "指导", "操作", "规程"]
-        if any(kw in filename for kw in guide_kw):
-            return "guide"
-
-        policy_kw = ["条例", "规定", "办法", "通知", "意见", "决定", "批复"]
-        if any(kw in filename for kw in policy_kw):
-            return "policy"
-
-        standard_kw = ["标准", "规范", "gb", "cjj", "cj", "hg", "jc", "jg", "jt"]
-        for kw in standard_kw:
-            if kw in name_lower:
-                return "standard"
-
-        case_kw = ["规划", "设计", "方案", "案例", "实例", "工程"]
-        if any(kw in filename for kw in case_kw):
-            return "case"
-
-        return "report"
 
     def _compute_file_hash(self, file_path: Path) -> str:
         """Compute file MD5 hash (full 32-char hexdigest)"""

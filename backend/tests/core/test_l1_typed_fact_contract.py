@@ -13,6 +13,7 @@ def test_l1_snapshot_emits_stable_typed_records_with_source_span() -> None:
             "observations": [
                 {
                     "fact_type": "spatial_entity",
+                    "status": "confirmed",
                     "entity_type": "现状设施",
                     "name": "祠堂",
                     "locator": {
@@ -99,3 +100,4 @@ def test_l1_retriever_projects_typed_records_with_fact_identity() -> None:
     assert facts[0].fields["fact_id"] == "l1:fact:hall"
     assert facts[0].source_refs == ["report-current#socio_economic"]
     assert sources[0].reference == "l1:fact:hall"
+    assert sources[0].source_type == "l1"

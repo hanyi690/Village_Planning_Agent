@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import os
 import re
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any, TypeVar
 
 from pydantic import BaseModel
@@ -20,13 +20,6 @@ from app.infrastructure.llm.instructor_client import (
 ModelT = TypeVar("ModelT", bound=BaseModel)
 logger = get_logger(__name__)
 
-_THINK_BLOCK_RE = re.compile(r"<think\b[^>]*>.*?</think\s*>", re.IGNORECASE | re.DOTALL)
-_THINK_PREFIX_RE = re.compile(r"^<think\b[^>]*>.*?</think\s*>", re.IGNORECASE | re.DOTALL)
-_FENCE_LINE_RE = re.compile(r"^\s*```(?:json)?\s*$", re.IGNORECASE | re.MULTILINE)
-_JSON_FENCE_RE = re.compile(
-    r"^```json[ \t]*\r?\n(?P<body>.*?)\r?\n```$",
-    re.IGNORECASE | re.DOTALL,
-)
 _CONTEXT_OVERFLOW_RE = re.compile(
     r"(?:\bcontext_length_exceeded\b|"
     r"\bmaximum context (?:length|window)\b|"
@@ -100,88 +93,6 @@ def _read_field(value: Any, field: str) -> Any:
     return getattr(value, field, None)
 
 
-def _completion_content(completion: Any) -> str | None:
-    if isinstance(completion, str):
-        return completion
-    choices = _read_field(completion, "choices")
-    if not isinstance(choices, (list, tuple)) or not choices:
-        return None
-    message = _read_field(choices[0], "message")
-    content = _read_field(message, "content")
-    return content if isinstance(content, str) else None
-
-
-def _content_summary(content: Any) -> str:
-    if content is None:
-        return "content=missing"
-    if not isinstance(content, str):
-        return f"content_type={type(content).__name__}"
-    return (
-        f"content_type=str length={len(content)} "
-        f"has_think={bool(_THINK_BLOCK_RE.search(content))} "
-        f"has_fence={bool(_FENCE_LINE_RE.search(content))}"
-    )
-
-
-def _extract_content_json_object(content: Any) -> tuple[dict[str, Any] | None, str]:
-    if not isinstance(content, str) or not content.strip():
-        return None, "content is not a non-empty string"
-
-    candidate = content.strip()
-    think_match = _THINK_PREFIX_RE.match(candidate)
-    if think_match:
-        candidate = candidate[think_match.end() :].strip()
-    fence_match = _JSON_FENCE_RE.fullmatch(candidate)
-    if fence_match:
-        # MiniMax may emit the typed JSON inside a standard JSON fence after
-        # its outer thinking block.  Both are complete, known wrappers; only
-        # the decoded object crosses the typed Pydantic boundary.
-        candidate = fence_match.group("body").strip()
-
-    if re.search(r"</?think\b", candidate, re.IGNORECASE):
-        return None, "content contains a non-wrapper think marker"
-    if "```" in candidate:
-        return None, "content contains a non-wrapper fence marker"
-    if not candidate.startswith("{"):
-        return None, "content does not start with a JSON object"
-
-    def _reject_json_constant(value: str) -> Any:
-        raise ValueError(f"non-standard JSON constant: {value}")
-
-    try:
-        value, end = json.JSONDecoder(parse_constant=_reject_json_constant).raw_decode(candidate)
-    except json.JSONDecodeError:
-        return None, "content is not complete strict JSON"
-    except ValueError:
-        return None, "content contains a non-standard JSON constant"
-    if not isinstance(value, dict):
-        return None, "content JSON is not an object"
-    if candidate[end:].strip():
-        return None, "content has non-JSON trailing text"
-    return value, "ok"
-
-
-def _extract_report_body_fallback(content: Any) -> tuple[dict[str, Any] | None, str]:
-    """Recover a bounded plain report when a provider omits the tool call."""
-    if not isinstance(content, str) or not content.strip():
-        return None, "content is not a non-empty string"
-    candidate = content.strip()
-    think_match = _THINK_PREFIX_RE.match(candidate)
-    if think_match:
-        candidate = candidate[think_match.end() :].strip()
-    if not candidate:
-        return None, "report body is empty after the outer think wrapper"
-    if re.search(r"</?think\b", candidate, re.IGNORECASE):
-        return None, "content contains a non-wrapper think marker"
-    if "```" in candidate:
-        return None, "content contains a code fence marker"
-    # Keep a small floor so provider refusals and truncated fragments do not
-    # become a typed report. The L2/L3 prompt asks for substantially more.
-    if len(candidate) < 80:
-        return None, "report body is below the minimum bounded length"
-    return {"report_body": candidate}, "ok"
-
-
 async def run_structured_output(
     response_model: type[ModelT],
     messages: list[dict[str, Any]],
@@ -194,8 +105,6 @@ async def run_structured_output(
     incomplete_output_max_tokens: int | None = None,
     max_concurrent: int | None = None,
     semaphore_scope: str = "default",
-    allow_content_json_fallback: bool = True,
-    content_fallback_mode: str = "strict",
     transient_retries: int = 0,
     transient_retry_backoff_s: float = 2.0,
     **kwargs: Any,
@@ -245,11 +154,14 @@ async def run_structured_output(
                 response_model,
                 method="function_calling",
             )
+            invoke_input: Any = messages
+            if len(messages) == 1 and messages[0].get("role") == "user":
+                invoke_input = messages[0].get("content", "")
             invoke = getattr(structured, "ainvoke", None)
             if callable(invoke):
-                result = await invoke(messages)
+                result = await invoke(invoke_input)
             else:
-                result = await asyncio.to_thread(structured.invoke, messages)
+                result = await asyncio.to_thread(structured.invoke, invoke_input)
             if isinstance(result, response_model):
                 return result
             return response_model.model_validate(result)
@@ -299,44 +211,11 @@ async def run_structured_output(
                     )
                     _set_failure_code(retry_exc, retry_code or "OUTPUT_TRUNCATED")
                     raise
-            if not allow_content_json_fallback:
-                _set_failure_code(exc, failure_code or "SCHEMA_INVALID")
-                logger.warning(
-                    "[structured] typed output failed; content fallback is disabled for this contract"
-                )
-                raise
-            content = _completion_content(completion)
-            payload, reason = _extract_content_json_object(content)
-            if (
-                payload is None
-                and content_fallback_mode == "report_text"
-                and failure_code == "TOOL_CALL_MISSING"
-            ):
-                payload, reason = _extract_report_body_fallback(content)
-            if payload is None:
-                _set_failure_code(exc, failure_code or "SCHEMA_INVALID")
-                logger.warning(
-                    "[structured] Instructor retry exhausted; content JSON fallback rejected (%s, reason=%s)",
-                    _content_summary(content),
-                    reason,
-                )
-                raise
-            try:
-                result = response_model.model_validate(payload)
-            except Exception as validation_exc:
-                _set_failure_code(exc, "SCHEMA_INVALID")
-                logger.warning(
-                    "[structured] content JSON fallback rejected by response model (%s, validation=%s)",
-                    _content_summary(content),
-                    type(validation_exc).__name__,
-                )
-                raise exc from validation_exc
+            _set_failure_code(exc, failure_code or "SCHEMA_INVALID")
             logger.warning(
-                "[structured] Instructor retry exhausted; accepted content JSON fallback (%s, keys=%s)",
-                _content_summary(content),
-                sorted(payload)[:20],
+                "[structured] typed output failed; untyped content is not accepted"
             )
-            return result
+            raise
         except IncompleteOutputException as exc:
             # Instructor raises this specific exception when the provider
             # reaches max_tokens before completing the declared tool call.
@@ -416,8 +295,45 @@ async def run_structured_output(
     return await asyncio.wait_for(_call_with_gate(), timeout=float(timeout))
 
 
+def run_structured_output_sync(
+    response_model: type[ModelT],
+    messages: list[dict[str, Any]],
+    *,
+    timeout: float | None = None,
+    **kwargs: Any,
+) -> ModelT:
+    """Synchronous bridge for legacy synchronous pipeline boundaries.
+
+    The bridge still executes the same typed runner, including the shared
+    semaphore, bounded retries, and fail-closed handling.  A worker thread is
+    used when the caller already owns an event loop, which keeps synchronous
+    document/spatial adapters from creating nested loops.
+    """
+
+    async def _run() -> ModelT:
+        return await run_structured_output(
+            response_model,
+            messages,
+            timeout=timeout,
+            **kwargs,
+        )
+
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return asyncio.run(_run())
+
+    executor = ThreadPoolExecutor(max_workers=1)
+    future = executor.submit(lambda: asyncio.run(_run()))
+    try:
+        return future.result(timeout=timeout)
+    finally:
+        executor.shutdown(wait=False, cancel_futures=True)
+
+
 __all__ = [
     "run_structured_output",
+    "run_structured_output_sync",
     "structured_failure_code",
     "structured_failure_summary",
     "STRUCTURED_FAILURE_CODES",

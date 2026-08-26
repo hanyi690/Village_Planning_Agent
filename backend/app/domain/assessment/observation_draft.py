@@ -42,7 +42,7 @@ class L1SourceEvidence(BaseModel):
     source_quote: str = ""
     source_refs: list[str] = Field(default_factory=list)
     confidence: float | None = None
-    status: Literal["confirmed", "uncertain", "conflict", "source_exhausted"] = "confirmed"
+    status: Literal["confirmed", "uncertain", "conflict", "source_exhausted"]
 
     @field_validator("attributes", mode="before")
     @classmethod
@@ -500,12 +500,12 @@ class L1ObservationPassOutput(BaseModel):
                 continue
             fact_payload = fact.model_dump(mode="json")
             recovered.append(fact_payload)
-            if str(fact_payload.get("status") or "confirmed").strip() != "confirmed":
+            if str(fact_payload.get("status") or "").strip() != "confirmed":
                 provisional.append(fact_payload)
         confirmed_fact_types = {
             str(item.get("fact_type") or "").strip()
             for item in recovered
-            if str(item.get("status") or "confirmed").strip() == "confirmed"
+            if str(item.get("status") or "").strip() == "confirmed"
         }
         for fact_type in required_fact_types:
             if fact_type not in confirmed_fact_types:

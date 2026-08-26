@@ -51,7 +51,7 @@ async def test_real_retrieval_slice_answers_village_facility_bsm(monkeypatch) ->
             )
         ],
         l1_fact_records=[L1Fact(
-            fact_id="l1:shrine",
+            fact_id="l1:fact:shrine",
             statement="现状有祠堂",
             fact_kind="document_observation",
             dimension_key="location",
@@ -159,8 +159,8 @@ async def test_retrieval_slice_uses_simulated_minimax_for_raw_facility_label(mon
     proposal_batch = SourceFeatureSemanticProposalBatch(
         proposals=[SourceFeatureSemanticProposal(
             source_feature_id=feature_id,
-            candidate_ref="l1:l1:shrine:entity",
-            supporting_fact_refs=["l1:shrine"],
+            candidate_ref="l1:l1:fact:shrine:entity",
+            supporting_fact_refs=["l1:fact:shrine"],
         )]
     )
 
@@ -201,7 +201,7 @@ async def test_retrieval_slice_uses_simulated_minimax_for_raw_facility_label(mon
             confidence=0.95,
         )],
         l1_fact_records=[L1Fact(
-            fact_id="l1:shrine",
+            fact_id="l1:fact:shrine",
             statement="现状有祠堂",
             fact_kind="document_observation",
             semantic_type="facility",
@@ -267,7 +267,7 @@ async def test_retrieval_slice_uses_simulated_minimax_for_raw_facility_label(mon
         "bundle://feature/44142611000000000001"
     )
     assert packet.ambiguity_status == "resolved"
-    assert "l1:shrine" in packet.candidate_refs[0].l1_fact_refs
+    assert "l1:fact:shrine" in packet.candidate_refs[0].l1_fact_refs
     assert any(
         item.get("step") == "source_semantic_runtime"
         and item.get("status") == "snapshot_ready"

@@ -148,13 +148,56 @@ PLANNING_STRATEGIES_PROMPT = """你是规划策略分析专家。
 # 获取维度 Prompt 的函数
 # ==========================================
 
+def _build_structured_l2_prompt(
+    *,
+    dimension_key: str,
+    analysis_report: str = "",
+    task_description: str = "",
+    constraints: str = "",
+    professional_data: str = "",
+    knowledge_context: str = "",
+    revision_instruction: str = "",
+    layer2_contexts: str = "",
+) -> str:
+    """Build the compact context used by the typed L2 decision pass.
+
+    The legacy L2 templates are intentionally not included here.  They are
+    prose/report skeletons and contain example values that compete with the
+    runtime evidence when the provider is asked for ``L2DecisionSet``.
+    """
+    def text(value: object) -> str:
+        return str(value or "").strip()
+
+    sections = [f"当前 L2 维度：{text(dimension_key)}"]
+    if text(task_description):
+        sections.append(f"规划任务：{text(task_description)}")
+    if text(constraints):
+        sections.append(f"约束条件：{text(constraints)}")
+    if text(analysis_report):
+        sections.append(f"【上游现状与依赖报告】\n{text(analysis_report)}")
+    if text(layer2_contexts):
+        sections.append(f"【同层已完成的规划背景】\n{text(layer2_contexts)}")
+    if text(professional_data):
+        sections.append(f"【运行时专业数据与 L1 事实】\n{text(professional_data)}")
+    if text(knowledge_context):
+        sections.append(f"【参考规范】\n{text(knowledge_context)}")
+    if text(revision_instruction):
+        sections.append(text(revision_instruction))
+    sections.append(
+        "只依据上述运行时材料形成当前维度的语义决策；不要生成坐标、WKT、GeoJSON、"
+        "最终选址或执行几何。"
+    )
+    return "\n\n".join(sections)
+
+
 def get_dimension_prompt(dimension_key: str, analysis_report: str = "",
                          task_description: str = "", constraints: str = "",
-                         professional_data: dict = None,
+                         professional_data: dict | str | None = None,
                          knowledge_context: str = "",
                          revision_instruction: str = "",
                          summary_context: str = "",
-                         layer2_contexts: str = "") -> str:
+                         layer2_contexts: str = "",
+                         structured: bool = False) -> str:
     """
     获取规划思路维度的 Prompt 模板
 
@@ -171,6 +214,20 @@ def get_dimension_prompt(dimension_key: str, analysis_report: str = "",
     Returns:
         格式化后的 Prompt 字符串
     """
+    if structured:
+        return _build_structured_l2_prompt(
+            dimension_key=dimension_key,
+            analysis_report=analysis_report,
+            task_description=task_description,
+            constraints=constraints,
+            professional_data=(
+                professional_data if isinstance(professional_data, str) else ""
+            ),
+            knowledge_context=knowledge_context,
+            revision_instruction=revision_instruction,
+            layer2_contexts=layer2_contexts,
+        )
+
     dimension_map = {
         "resource_endowment": RESOURCE_ENDOWMENT_PROMPT,
         "planning_positioning": PLANNING_POSITIONING_PROMPT,

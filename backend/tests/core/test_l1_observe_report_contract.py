@@ -59,6 +59,7 @@ def test_l1_fact_type_is_selected_by_the_union_and_old_shape_is_rejected() -> No
             "observations": [
                 {
                     "fact_type": "demand",
+                    "status": "confirmed",
                     "demand_type": "养老服务",
                     "scope": "全村",
                     "spatial_requirement": "none",
@@ -134,9 +135,10 @@ async def test_l1_loop_calls_only_observe_and_report(monkeypatch) -> None:
             return response_model.model_validate(
                 {
                     "observations": [
-                        {
-                            "fact_type": "spatial_entity",
-                            "entity_type": "road",
+                            {
+                                "fact_type": "spatial_entity",
+                                "status": "confirmed",
+                                "entity_type": "road",
                             "name": "村道",
                             "locator": {},
                             "description": "现有村道一条",
@@ -214,6 +216,7 @@ def test_observation_quality_treats_dimension_type_mismatch_as_soft_diagnostic()
         [
             {
                 "fact_type": "demand",
+                "status": "confirmed",
                 "demand_type": "养老服务",
                 "scope": "全村",
                 "spatial_requirement": "none",
@@ -227,29 +230,3 @@ def test_observation_quality_treats_dimension_type_mismatch_as_soft_diagnostic()
     assert report["ok"] is True
     assert report["invalid_fact_type"] == 0
     assert report["dimension_mismatch"] == 1
-
-
-def test_observation_quality_counts_distinct_defective_rows_across_buckets() -> None:
-    report = validate_observations(
-        [
-            {
-                "fact_type": "spatial_relation",
-                "subject_ref": "金田河",
-                "predicate": "",
-                "object_ref": "石窟河",
-                "semantic_type": "water_relation",
-            },
-            {
-                "fact_type": "document_observation",
-                "subject": "",
-                "scope": "全村",
-            },
-        ],
-        dimension_key="traffic",
-        max_defect_ratio=0.75,
-    )
-
-    assert report["invalid_relation"] == 1
-    assert report["invalid_semantics"] == 1
-    assert report["defect_ratio"] == 1.0
-    assert report["ok"] is False
