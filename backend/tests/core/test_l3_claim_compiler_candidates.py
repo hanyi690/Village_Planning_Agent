@@ -170,6 +170,56 @@ def test_l3_candidate_context_exposes_exact_fact_catalog_and_spatial_subset(monk
     assert payload["source_fact_catalog_digest"]
 
 
+def test_l3_prompt_uses_the_persisted_snapshot_instead_of_a_stale_context_cache(monkeypatch) -> None:
+    from app.contracts.domain.l1_contracts import L1Fact, L1Snapshot
+    from app.domain.program.worker import (
+        _l3_candidate_context,
+        _typed_l1_fact_evidence,
+    )
+
+    stale_context = SimpleNamespace(
+        l1_fact_records=[L1Fact(
+            fact_id="l1:fact:stale",
+            statement="过期上下文事实",
+            fact_kind="spatial_observation",
+            dimension_key="traffic",
+        )],
+        location_facts=[],
+    )
+    snapshot = L1Snapshot(fact_records=[L1Fact(
+        fact_id="l1:fact:current",
+        statement="当前快照事实",
+        fact_kind="spatial_observation",
+        dimension_key="traffic",
+    )])
+    monkeypatch.setattr(
+        "app.infrastructure.context.planning_context_factory.get_cached_context",
+        lambda _session_id: stale_context,
+    )
+    monkeypatch.setattr(
+        "app.infrastructure.artifacts.runtime.load_artifact",
+        lambda _state, _key: snapshot,
+    )
+    state = {
+        "session_id": "l3-snapshot-boundary",
+        "artifact_refs": {"l1_snapshot": {"digest": "snapshot-current"}},
+    }
+
+    candidate_payload = json.loads(
+        _l3_candidate_context(state, "traffic", ["traffic"])
+    )
+    evidence = _typed_l1_fact_evidence(
+        state,
+        "traffic",
+        source_dimensions=["traffic"],
+    )
+    evidence_payload = json.loads(evidence[evidence.index("["):])
+
+    assert candidate_payload["source_fact_options"] == ["l1:fact:current"]
+    assert [item["fact_id"] for item in evidence_payload] == ["l1:fact:current"]
+    assert "l1:fact:stale" not in evidence
+
+
 def test_l3_source_fact_validation_rejects_unknown_and_non_spatial_refs(monkeypatch) -> None:
     from app.contracts.domain.l1_contracts import L1Fact
     from app.contracts.program import PlanningClaimSet

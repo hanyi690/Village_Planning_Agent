@@ -46,8 +46,11 @@ def test_l2_fact_reference_rules_expose_only_the_runtime_closed_set() -> None:
         "fact_catalog": catalog,
     })
 
-    assert "- l1:fact:one" in prompt
-    assert "- l1:fact:two" in prompt
+    assert '"l1:fact:one"' in prompt
+    assert '"l1:fact:two"' in prompt
+    assert '"allowed_l1_facts":' in prompt
+    assert '"statement": "空间事实"' in prompt
+    assert 'EXPLORE 的 L1_facts' in prompt
     assert '"allowed_l1_fact_ids": ["l1:fact:one", "l1:fact:two"]' in prompt
     assert '"allowed_l1_spatial_fact_ids": ["l1:fact:one"]' in prompt
     assert "l1:legacy:three" not in prompt
@@ -64,7 +67,7 @@ def test_l2_fact_reference_rules_fail_closed_when_snapshot_has_no_fact_ids() -> 
     assert "source_fact_refs 必须为 []" in prompt
 
 
-def test_l2_snapshot_section_separates_fact_body_from_canonical_catalog(monkeypatch) -> None:
+def test_l2_snapshot_section_does_not_duplicate_catalog_fact_body(monkeypatch) -> None:
     from app.contracts.domain.l1_contracts import L1Fact, L1Snapshot
     from app.domain.objectives.worker import _load_l1_fact_section
     from app.domain.validation.l1_fact_catalog import validate_l1_fact_catalog
@@ -92,6 +95,13 @@ def test_l2_snapshot_section_separates_fact_body_from_canonical_catalog(monkeypa
                 dimension_key="traffic",
                 source_refs=["report:traffic"],
             ),
+            L1Fact(
+                fact_id="l1:fact:other-dimension",
+                statement="其他 L1 维度的事实也属于当前快照",
+                fact_kind="document_observation",
+                dimension_key="ecological_green",
+                source_refs=["report:ecological_green"],
+            ),
         ]
     )
     monkeypatch.setattr(
@@ -105,12 +115,14 @@ def test_l2_snapshot_section_separates_fact_body_from_canonical_catalog(monkeypa
         source_dimensions=["traffic"],
     )
 
-    assert "现状道路穿过村域" in section
-    assert "交通组织存在短板" in section
-    assert "l1:fact:road" not in section
-    assert "l1:legacy:unusable" not in section
-    assert audit["allowed_fact_ids"] == ["l1:fact:background", "l1:fact:road"]
+    assert section == ""
+    assert audit["allowed_fact_ids"] == [
+        "l1:fact:background",
+        "l1:fact:other-dimension",
+        "l1:fact:road",
+    ]
     assert audit["spatial_fact_ids"] == ["l1:fact:road"]
+    assert audit["catalog_record_count"] == 4
     assert audit["catalog_digest"] == audit["fact_catalog"].digest
     assert validate_l1_fact_catalog(audit["fact_catalog"]).accepted
 

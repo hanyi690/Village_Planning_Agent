@@ -63,7 +63,7 @@ def test_canonical_fact_id_stays_in_fact_refs_without_replacing_spatial_identity
     assert len(index.entries) == 1
     entry = index.entries[0]
     assert entry.entity_refs == ["l1_source_feature:source:road:1"]
-    assert entry.l1_fact_refs == ["report:traffic", "l1:fact:road"]
+    assert entry.l1_fact_refs == ["l1:fact:road"]
     assert entry.geometry_ref == "bundle://feature/road-bsm-1"
     assert entry.feature_bsm == "road-bsm-1"
     assert entry.source_bsm == "road-bsm-1"

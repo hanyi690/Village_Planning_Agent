@@ -92,6 +92,28 @@ def test_target_and_ground_producers_emit_spatial_requirements() -> None:
     assert ground_requirements[0].kind == "spatial"
 
 
+def test_target_fact_lineage_is_emitted_as_individual_source_refs() -> None:
+    target = IntentCompilationResult(
+        artifact_id="target-fact-lineage",
+        spatial_reference_specs=[
+            SpatialReferenceSpec(
+                spec_id="spec-fact-lineage",
+                target_id="facility-fact-lineage",
+                type="directional",
+                l1_fact_refs=["l1:fact:one", "l1:fact:two"],
+            )
+        ],
+    )
+
+    requirements = requirements_from_target_projection(target)
+
+    assert requirements[0].source_artifact_refs == (
+        "l1:fact:one",
+        "l1:fact:two",
+    )
+    assert "['l1:fact:one', 'l1:fact:two']" not in requirements[0].source_artifact_refs
+
+
 def test_exploration_request_preserves_producer_owned_requirement_set() -> None:
     source = requirements_from_l1(
         L1Snapshot(

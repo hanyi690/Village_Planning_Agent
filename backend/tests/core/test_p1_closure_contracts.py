@@ -152,6 +152,30 @@ def test_grounding_request_is_stable_and_missing_authority_is_pending():
     assert "source_binding_missing" in pending.defer_reason
 
 
+def test_grounding_rejects_l1_fact_refs_outside_current_snapshot():
+    from app.contracts.domain.l1_contracts import L1Fact
+    from app.domain.validation.l1_fact_catalog import build_l1_fact_catalog
+    from app.workflow.stages.ground import _ground_fact_reference_errors
+
+    request = build_grounding_request(
+        _spec().model_copy(update={"l1_fact_refs": ["l1:fact:stale"]})
+    )
+    catalog = build_l1_fact_catalog([
+        L1Fact(
+            fact_id="l1:fact:current",
+            statement="当前事实",
+            fact_kind="spatial_observation",
+            source_refs=["report:current"],
+        )
+    ])
+
+    errors = _ground_fact_reference_errors(request, fact_catalog=catalog)
+
+    assert errors == [
+        "semantic_spec.l1_fact_refs:unknown=l1:fact:stale",
+    ]
+
+
 def test_unsupported_named_village_is_parked_before_formal_grounding():
     context = SimpleNamespace(gazetteer=SimpleNamespace(entries=[]))
     formal, diagnostics = _filter_unsupported_spatial_specs([_spec()], context)

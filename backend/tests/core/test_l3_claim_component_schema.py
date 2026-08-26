@@ -7,6 +7,7 @@ from app.domain.program.claim_draft import (
     L3ClaimOutput,
     component_to_planning_claim_draft,
 )
+from app.infrastructure.llm.planning_claims import _dynamic_claim_output_model
 
 
 def test_l3_provider_schema_is_discriminated_and_componentized() -> None:
@@ -61,4 +62,72 @@ def test_linear_component_cannot_select_a_restoration_category() -> None:
             "statement": "建设污水管线",
             "suggested_category": "restoration",
             "asset_kind": "sewer",
+        }]})
+
+
+def test_dynamic_relation_schema_closes_template_object_kind_and_parameters() -> None:
+    model = _dynamic_claim_output_model(
+        ["l1:fact:facility"],
+        ["l1:fact:facility"],
+    )
+    valid = model.model_validate({"claims": [{
+        "component_kind": "facility",
+        "claim_id": "facility-1",
+        "statement": "建设公共服务设施",
+        "intervention_action": "new",
+        "spatial_requirements": {
+            "relations": [{
+                "relation_template": "near",
+                "object_ref": "现状公共服务点",
+                "object_ref_kind": "entity",
+                "parameters": {
+                    "parameter_type": "distance",
+                    "max_distance_m": 100,
+                    "metric": "euclidean",
+                },
+            }],
+        },
+    }]})
+
+    assert valid.claims[0].spatial_requirements is not None
+    assert valid.claims[0].spatial_requirements.relations[0].relation_template == "near"
+
+    with pytest.raises(ValidationError):
+        model.model_validate({"claims": [{
+            "component_kind": "facility",
+            "claim_id": "facility-1",
+            "statement": "建设公共服务设施",
+            "intervention_action": "new",
+            "spatial_requirements": {
+                "relations": [{
+                    "relation_template": "near",
+                    "object_ref": "灾害约束",
+                    "object_ref_kind": "constraint",
+                    "parameters": {
+                        "parameter_type": "distance",
+                        "max_distance_m": 100,
+                        "metric": "euclidean",
+                    },
+                }],
+            },
+        }]})
+
+    with pytest.raises(ValidationError):
+        model.model_validate({"claims": [{
+            "component_kind": "facility",
+            "claim_id": "facility-1",
+            "statement": "建设公共服务设施",
+            "intervention_action": "new",
+            "spatial_requirements": {
+                "relations": [{
+                    "relation_template": "near",
+                    "object_ref": "target:other",
+                    "object_ref_kind": "target",
+                    "parameters": {
+                        "parameter_type": "distance",
+                        "max_distance_m": 100,
+                        "metric": "euclidean",
+                    },
+                }],
+            },
         }]})

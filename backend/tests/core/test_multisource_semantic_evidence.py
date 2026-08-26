@@ -235,6 +235,34 @@ def test_evidence_prompt_separates_report_background_from_spatial_binding():
     assert "bundle://feature/892" in prompt
 
 
+def test_evidence_prompt_hides_l1_lineage_outside_current_catalog():
+    from app.contracts.evidence.evidence_contracts import (
+        EvidenceBundle,
+        EvidenceFact,
+        EvidenceSource,
+    )
+    from app.evidence.retrieval.evidence_service import render_evidence_prompt_section
+
+    prompt = render_evidence_prompt_section(
+        EvidenceBundle(
+            request="事实边界",
+            facts=[EvidenceFact(
+                statement="仅用于背景的事实",
+                source_refs=["l1:fact:outside"],
+                fact_type="planning_text",
+                evidence_role="planning_background",
+            )],
+            sources=[EvidenceSource(
+                source_type="l1",
+                reference="l1:fact:outside",
+            )],
+        ),
+        allowed_l1_fact_ids={"l1:fact:inside"},
+    )
+
+    assert "l1:fact:outside" not in prompt
+
+
 @pytest.mark.asyncio
 async def test_unified_retrieval_consumes_authoritative_l1_fact_records(monkeypatch):
     from app.contracts.domain.l1_contracts import L1Fact
@@ -422,7 +450,7 @@ def test_prompt_separates_report_background_from_l1_spatial_evidence():
         geometry_authority="bundle",
         related_parcel_bsms=["44142621100000000002"],
         relation_refs=["http://village-planning.org/ontology#nearby"],
-        l1_fact_refs=["l1:fact:hall"],
+        l1_fact_refs=["l1:fact:hall", "l1:fact:orphan"],
         provenance_refs=["bundle:facilities_current"],
         source_authority_score=1.0,
         semantic_match_score=0.72,
@@ -455,6 +483,7 @@ def test_prompt_separates_report_background_from_l1_spatial_evidence():
                 },
             ],
         ),
+        allowed_l1_fact_ids={"l1:fact:hall"},
     )
 
     assert "规划语义背景（仅辅助决策，不产生空间位置）" in prompt
@@ -467,6 +496,7 @@ def test_prompt_separates_report_background_from_l1_spatial_evidence():
     assert "related_parcels=44142621100000000002" in prompt
     assert "KG_relations=nearby" in prompt
     assert "L1_facts=l1:fact:hall" in prompt
+    assert "l1:fact:orphan" not in prompt
     assert "ambiguity=resolved" in prompt
     assert "typed L1 spatial fact" in prompt
     assert "SOURCE_SEMANTIC_LLM_DISABLED" in prompt

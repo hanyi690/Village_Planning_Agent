@@ -28,6 +28,35 @@ def _text(value: Any) -> str:
     return str(value or "").strip()
 
 
+def _claim_component_kind(claim: Any) -> str:
+    category = _text(getattr(claim, "suggested_category", ""))
+    if category in {"facility", "road", "axis", "site_area"}:
+        return category
+    if category == "restoration":
+        return "restoration_overlay"
+    if category == "protection":
+        return "protection_overlay"
+    if category == "zone":
+        parameters = getattr(claim, "polygon_parameters", None)
+        role = _text(getattr(parameters, "materialization_role", ""))
+        return {
+            "land_use_assignment": "land_use_assignment",
+            "protection_overlay": "protection_overlay",
+            "restoration_overlay": "restoration_overlay",
+            "site_footprint": "site_area",
+        }.get(role, "zone")
+    return "non_spatial_action"
+
+
+def _claims_as_provider_output(response_model: type[Any], claims: Iterable[Any]) -> Any:
+    rows = []
+    for claim in claims:
+        row = claim.model_dump(mode="python", exclude_none=True)
+        row["component_kind"] = _claim_component_kind(claim)
+        rows.append(row)
+    return response_model.model_validate({"claims": rows})
+
+
 def _as_list(value: Any) -> list[str]:
     if not isinstance(value, (list, tuple, set)):
         return []
@@ -510,12 +539,11 @@ class RecordedPlanningProvider:
                 if _text(item.get("dimension_key")) == dimension_key
             )
             return L2DecisionSet.model_validate(raw)
-        if name == "L3ClaimOutput":
-            from app.domain.program.claim_draft import L3ClaimOutput
-
+        if name.startswith("L3ClaimOutput"):
             self._count(f"L3:claims:{dimension_key}")
-            return L3ClaimOutput(
-                claims=list(self._claims_by_dimension.get(dimension_key) or [])
+            return _claims_as_provider_output(
+                response_model,
+                self._claims_by_dimension.get(dimension_key) or [],
             )
         if name == "L3ReportOutput":
             from app.domain.program.claim_draft import L3ReportOutput

@@ -167,11 +167,10 @@ async def test_l1_loop_calls_only_observe_and_report(monkeypatch) -> None:
     assert result.cursor.status == "complete"
     assert result.observations[0].source_refs == [segment.source_ref]
     observe_prompt = str(messages_seen[0])
-    assert "不得另造资产台账、需求台账、coverage" in observe_prompt
-    assert "同一语义族内的不同子类" in observe_prompt
-    assert "attributes.metric" in observe_prompt
-    assert "attributes.metric 或 semantic_type 本身" in observe_prompt
-    assert "forest_area:commercial_forest" in observe_prompt
+    assert '根对象只能包含 observations 和 diagnostics' in observe_prompt
+    assert '不能把单条 fact 直接作为根对象' in observe_prompt
+    assert '本维度闭集 ["spatial_entity","spatial_relation","scoped_metric","constraint","risk","document_observation"]' in observe_prompt
+    assert "同一语义族内不同子类" in observe_prompt
 
 
 @pytest.mark.asyncio

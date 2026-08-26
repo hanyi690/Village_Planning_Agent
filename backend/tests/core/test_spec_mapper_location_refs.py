@@ -88,3 +88,14 @@ def test_typed_village_scope_is_preserved():
     assert spec.topo == "sfWithin"
     assert spec.reference is not None
     assert spec.reference.kind == "village"
+
+
+def test_l3_source_fact_refs_survive_target_projection_mapping():
+    intervention = _site_area(name="有证据的公共空间", hints=[]).model_copy(update={
+        "source_fact_refs": ["l1:fact:current", "l1:fact:second"],
+    })
+
+    spec = map_intervention_to_spec(intervention)
+
+    assert spec is not None
+    assert spec.l1_fact_refs == ["l1:fact:current", "l1:fact:second"]

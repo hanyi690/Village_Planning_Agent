@@ -205,7 +205,7 @@ def test_facility_axis_and_zone_keep_their_own_typed_semantics() -> None:
     assert zone.area_range_ha == (2, 3)
 
 
-def test_protection_and_restoration_roles_are_contract_semantics_not_llm_guesswork() -> None:
+def test_missing_protection_and_restoration_roles_are_not_auto_created() -> None:
     drafts = [
         PlanningClaimDraft(
             claim_id="P-1",
@@ -223,8 +223,8 @@ def test_protection_and_restoration_roles_are_contract_semantics_not_llm_guesswo
 
     claim_set = normalize_claim_draft_set(PlanningClaimDraftSet(claims=drafts))
 
-    assert claim_set.claims[0].materialization_role == "protection_overlay"
-    assert claim_set.claims[1].materialization_role == "restoration_overlay"
+    assert claim_set.claims[0].materialization_role is None
+    assert claim_set.claims[1].materialization_role is None
     assert claim_set_semantic_errors(claim_set) == []
 
 

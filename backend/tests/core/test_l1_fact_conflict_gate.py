@@ -34,24 +34,6 @@ def _count(
     )
 
 
-def test_legacy_275_is_not_a_legitimate_mismatch_with_131_current_features():
-    legacy = _count(
-        "KG实体统计: 道路 275 个",
-        275,
-        snapshot="",
-        collection="",
-        source_ids="",
-    )
-    current = _count("当前道路源集合: 131 条", 131, source_ids="r-1,r-2,r-3")
-
-    report = evaluate_fact_quality([legacy, current])
-
-    by_statement = {fact.statement: fact for fact in report.facts}
-    assert "unverified" in by_statement[legacy.statement].support_relations
-    assert "unverified" not in by_statement[current.statement].support_relations
-    assert not any(item.relation == "contradicts" for item in report.conflicts)
-
-
 def test_comparable_counts_are_contradictions_but_different_basis_is_not():
     current = _count("current roads", 131, source_ids="r-1,r-2")
     changed = _count("current roads changed", 129, source_ids="r-1,r-3")

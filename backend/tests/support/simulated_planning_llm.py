@@ -22,6 +22,39 @@ from typing import Any, Awaitable, Callable
 from langchain_core.messages import AIMessageChunk
 
 
+def _text(value: Any) -> str:
+    return str(value or "").strip()
+
+
+def _claim_component_kind(claim: Any) -> str:
+    category = _text(getattr(claim, "suggested_category", ""))
+    if category in {"facility", "road", "axis", "site_area"}:
+        return category
+    if category == "restoration":
+        return "restoration_overlay"
+    if category == "protection":
+        return "protection_overlay"
+    if category == "zone":
+        parameters = getattr(claim, "polygon_parameters", None)
+        role = _text(getattr(parameters, "materialization_role", ""))
+        return {
+            "land_use_assignment": "land_use_assignment",
+            "protection_overlay": "protection_overlay",
+            "restoration_overlay": "restoration_overlay",
+            "site_footprint": "site_area",
+        }.get(role, "zone")
+    return "non_spatial_action"
+
+
+def _claims_as_provider_output(response_model: type[Any], claims: list[Any]) -> Any:
+    rows = []
+    for claim in claims:
+        row = claim.model_dump(mode="python", exclude_none=True)
+        row["component_kind"] = _claim_component_kind(claim)
+        rows.append(row)
+    return response_model.model_validate({"claims": rows})
+
+
 @dataclass
 class SimulatedPlanningProvider:
     """Deterministic, quota-free provider with auditable call counters."""
@@ -197,9 +230,8 @@ class SimulatedPlanningProvider:
         if name in {
             'L1ObservationPassOutput',
             'L1ReportOutput',
-            'L3ClaimOutput',
             'L3ReportOutput',
-        } or is_l1_observation_model:
+        } or name.startswith('L3ClaimOutput') or is_l1_observation_model:
             dimension_key = self._dimension_from_prompt(prompt)
         if is_l1_observation_model:
             return self.l1_observation_output(dimension_key, prompt)
@@ -228,42 +260,46 @@ class SimulatedPlanningProvider:
                     statement='形成基于现状证据的可执行村庄规划安排。',
                     kind='goal',
                     status='proposed',
-                    scope='金田村',
+                    scope='village',
                     source_fact_refs=source_refs,
                 )],
-                strategies=[StrategyRule(
-                    strategy_id=strategy_id,
-                    statement='优先利用已核验的现状空间对象，并将未闭合的定位交由 GROUND 解析。',
-                    action='evidence_bound_spatial_planning',
-                    objective_refs=[objective_id],
-                    strength='proposed',
-                    scope='金田村',
-                    source_fact_refs=source_refs,
-                )],
-                priorities=[PriorityDecision(
-                    priority_id=f'sim-priority-{dimension_key}',
-                    rank=1,
-                    strategy_refs=[strategy_id],
-                    statement='先完成有来源的道路与设施空间链路。',
-                )],
-                spatial_structures=[SpatialStructureIntent(
-                    structure_id=f'sim-structure-{dimension_key}',
-                    statement='现状对象与村庄服务网络保持可解释的空间联系。',
-                    scope='金田村',
-                    relation_kind='serve',
-                    objective_refs=[objective_id],
-                    source_fact_refs=source_refs,
-                    grounding_requirements=['candidate_geometry', 'network_context'],
-                )],
+                strategies=([
+                    StrategyRule(
+                        strategy_id=strategy_id,
+                        statement='优先利用已核验的现状空间对象，并将未闭合的定位交由 GROUND 解析。',
+                        action='evidence_bound_spatial_planning',
+                        objective_refs=[objective_id],
+                        strength='proposed',
+                        scope='village',
+                        source_fact_refs=source_refs,
+                    )
+                ] if source_refs else []),
+                priorities=([
+                    PriorityDecision(
+                        priority_id=f'sim-priority-{dimension_key}',
+                        rank=1,
+                        strategy_refs=[strategy_id],
+                        statement='先完成有来源的道路与设施空间链路。',
+                    )
+                ] if source_refs else []),
+                spatial_structures=([
+                    SpatialStructureIntent(
+                        structure_id=f'sim-structure-{dimension_key}',
+                        statement='现状对象与村庄服务网络保持可解释的空间联系。',
+                        scope='village',
+                        relation_kind='serve',
+                        objective_refs=[objective_id],
+                        source_fact_refs=source_refs,
+                        grounding_requirements=['candidate_geometry', 'network_context'],
+                    )
+                ] if source_refs else []),
                 source_refs=source_refs,
             )
         if name == 'L1ReportOutput':
             return self.l1_report_output(dimension_key)
-        if name == 'L3ClaimOutput':
-            from app.domain.program.claim_draft import L3ClaimOutput
-
+        if name.startswith('L3ClaimOutput'):
             payload = await self.l3_payload(dimension_key)
-            return L3ClaimOutput(claims=list(payload.claims))
+            return _claims_as_provider_output(response_model, payload.claims)
         if name == 'L3ReportOutput':
             from app.domain.program.claim_draft import L3ReportOutput
 

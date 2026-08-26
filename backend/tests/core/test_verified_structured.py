@@ -37,7 +37,7 @@ class _StructuredResult:
 
 class _Llm:
     def with_structured_output(self, _response_model, *, method):
-        assert method == "function_calling"
+        assert method == "json_mode"
         return _StructuredResult()
 
 

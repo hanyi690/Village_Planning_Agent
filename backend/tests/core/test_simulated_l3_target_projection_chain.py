@@ -98,7 +98,10 @@ async def test_simulated_l3_claim_survives_aggregate_cas_and_projection(
     assert result.typed_intent is not None
     assert result.typed_intent.facilities[0].location_hint == "社前村、祠堂"
     assert "l1:fact:祠堂:社前村" in program.interventions[0].evidence_refs
-    assert specs[0].op == "and"
-    assert specs[0].children[0].reference.filter == {"label_contains": "社前村"}
-    assert specs[0].children[1].reference.filter == {"label_contains": "祠堂"}
+    assert not specs
+    assert len(result.pending_grounding_specs) == 1
+    pending_spec = result.pending_grounding_specs[0]
+    assert pending_spec.op == "and"
+    assert pending_spec.children[0].reference.filter == {"label_contains": "社前村"}
+    assert pending_spec.children[1].reference.filter == {"label_contains": "祠堂"}
     assert gate.passed

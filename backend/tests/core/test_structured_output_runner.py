@@ -16,6 +16,63 @@ class _TextResult(BaseModel):
     value: str
 
 
+@pytest.mark.asyncio
+async def test_injected_minimax_llm_uses_json_mode(monkeypatch):
+    from app.infrastructure.llm import structured
+
+    calls: list[dict] = []
+
+    class _Runner:
+        async def ainvoke(self, _input):
+            return _Result(value=7)
+
+    class _LLM:
+        def with_structured_output(self, response_model, **kwargs):
+            calls.append({"response_model": response_model, **kwargs})
+            return _Runner()
+
+    monkeypatch.setenv("LLM_PROVIDER", "minimax")
+    result = await structured.run_structured_output(
+        _Result,
+        [{"role": "user", "content": "return seven"}],
+        llm=_LLM(),
+        max_retries=0,
+        timeout=2,
+    )
+
+    assert result == _Result(value=7)
+    assert calls[0]["method"] == "json_mode"
+
+
+@pytest.mark.asyncio
+async def test_runner_classifies_none_as_missing_typed_output_without_reask():
+    from app.infrastructure.llm import structured
+
+    calls = 0
+
+    class _Runner:
+        async def ainvoke(self, _input):
+            nonlocal calls
+            calls += 1
+            return None
+
+    class _LLM:
+        def with_structured_output(self, *_args, **_kwargs):
+            return _Runner()
+
+    with pytest.raises(ValueError, match="no typed output") as raised:
+        await structured.run_structured_output(
+            _Result,
+            [{"role": "user", "content": "return seven"}],
+            llm=_LLM(),
+            max_retries=0,
+            timeout=2,
+        )
+
+    assert calls == 1
+    assert structured.structured_failure_code(raised.value) == "TOOL_CALL_MISSING"
+
+
 @pytest.mark.parametrize(
     ("error", "expected"),
     [
@@ -732,6 +789,66 @@ async def test_runner_retries_only_bounded_transient_provider_status(monkeypatch
 
 
 @pytest.mark.asyncio
+async def test_sync_bridge_timeout_does_not_wait_for_provider_thread():
+    from app.infrastructure.llm.structured import run_structured_output_sync
+
+    class _Runner:
+        async def ainvoke(self, _input):
+            await asyncio.sleep(1)
+            return _Result(value=1)
+
+    class _LLM:
+        def with_structured_output(self, *_args, **_kwargs):
+            return _Runner()
+
+    with pytest.raises(TimeoutError):
+        run_structured_output_sync(
+            _Result,
+            [{"role": "user", "content": "return one"}],
+            llm=_LLM(),
+            max_retries=0,
+            timeout=0.03,
+        )
+
+
+@pytest.mark.asyncio
+async def test_runner_retries_connection_error_without_http_status(monkeypatch):
+    from app.infrastructure.llm import structured
+
+    calls = 0
+
+    class _Completions:
+        async def create(self, **_kwargs):
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                raise RuntimeError("Connection error")
+            return _Result(value=7)
+
+    class _Client:
+        chat = type("_Chat", (), {"completions": _Completions()})()
+
+    monkeypatch.setenv("LLM_PROVIDER", "minimax")
+    monkeypatch.setattr(structured, "get_async_instructor_client", lambda: _Client())
+    monkeypatch.setattr(
+        structured,
+        "get_structured_model",
+        lambda model=None: "MiniMax-M2.7-highspeed",
+    )
+
+    result = await structured.run_structured_output(
+        _Result,
+        [{"role": "user", "content": "return seven"}],
+        timeout=2,
+        transient_retries=1,
+        transient_retry_backoff_s=0,
+    )
+
+    assert result == _Result(value=7)
+    assert calls == 2
+
+
+@pytest.mark.asyncio
 async def test_runner_retries_minimax_overload_status(monkeypatch):
     from app.infrastructure.llm import structured
 
@@ -798,6 +915,35 @@ def test_instructor_client_uses_tools_mode_and_provider_scoped_cache(monkeypatch
     assert first is second
     assert created[0]["mode"] is instructor_client.instructor.Mode.TOOLS
     assert created[0]["client"]["base_url"] == "https://opencode.ai/zen/go/v1"
+
+
+def test_minimax_structured_client_defaults_to_json_mode(monkeypatch):
+    from app.infrastructure.llm import instructor_client
+
+    instructor_client._cached_clients.clear()
+    created: list[dict] = []
+
+    class _Wrapped:
+        pass
+
+    monkeypatch.delenv("LLM_STRUCTURED_MODE", raising=False)
+    monkeypatch.setattr(
+        instructor_client,
+        "_provider_connection",
+        lambda: ("minimax", "test-key", "https://api.minimaxi.com/v1"),
+    )
+    monkeypatch.setattr(instructor_client, "OpenAI", lambda **kwargs: kwargs)
+    monkeypatch.setattr(
+        instructor_client.instructor,
+        "from_openai",
+        lambda client, **kwargs: (
+            created.append({"client": client, **kwargs}) or _Wrapped()
+        ),
+    )
+
+    instructor_client.get_instructor_client()
+
+    assert created[0]["mode"] is instructor_client.instructor.Mode.MD_JSON
 
 
 def test_async_instructor_client_has_explicit_transport_budget(monkeypatch):

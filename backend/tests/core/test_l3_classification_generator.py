@@ -14,7 +14,7 @@ class _FakeStructuredLlm:
         self.messages: list[list[dict]] = []
 
     def with_structured_output(self, _schema, method: str):
-        assert method == "function_calling"
+        assert method == "json_mode"
         return self
 
     async def ainvoke(self, messages):
@@ -85,6 +85,7 @@ def test_empty_input_candidate_set_is_pending_without_provider_call(monkeypatch)
 
 def test_accepted_target_is_frozen_and_only_failed_target_is_retried(monkeypatch) -> None:
     monkeypatch.setattr(generator, "_targets_with_evidence", lambda _program: _targets())
+    monkeypatch.setenv("L3_CLASSIFICATION_RETRIES", "1")
     llm = _FakeStructuredLlm(
         [
             {
@@ -128,7 +129,7 @@ def test_batches_use_stable_ids_without_positional_indexes(monkeypatch) -> None:
     assert all("index" not in message[1]["content"] for message in llm.messages)
 
 
-def test_unknown_or_ambiguous_proposal_becomes_pending(monkeypatch) -> None:
+def test_unknown_or_ambiguous_proposal_becomes_pending_without_implicit_retries(monkeypatch) -> None:
     monkeypatch.setattr(generator, "_targets_with_evidence", lambda _program: _targets())
     llm = _FakeStructuredLlm(
         [
@@ -159,7 +160,7 @@ def test_unknown_or_ambiguous_proposal_becomes_pending(monkeypatch) -> None:
     assert [decision.target_id for decision in result] == ["target-1"]
     assert [item.reason_code for item in result.pending] == ["classification_ambiguous"]
     assert result.pending[0].decision_ref == "target-2"
-    assert llm.calls == 3
+    assert llm.calls == 1
 
 
 def test_dynamic_candidate_set_rejects_code_outside_this_input(monkeypatch) -> None:
@@ -174,7 +175,7 @@ def test_dynamic_candidate_set_rejects_code_outside_this_input(monkeypatch) -> N
 
     assert result == []
     assert result.pending[0].reason_code == "SCHEMA_INVALID"
-    assert llm.calls == 2
+    assert llm.calls == 1
 
 
 def test_content_json_string_is_rejected_without_semantic_regex_fallback(monkeypatch) -> None:
@@ -188,8 +189,9 @@ def test_content_json_string_is_rejected_without_semantic_regex_fallback(monkeyp
 
     result = asyncio.run(generator.generate_classification_decisions(object(), llm=llm))
 
-    assert [decision.target_id for decision in result] == ["target-1", "target-2"]
-    assert llm.calls == 2
+    assert result == []
+    assert result.pending[0].reason_code == "SCHEMA_INVALID"
+    assert llm.calls == 1
 
 
 def test_candidate_set_digest_changes_with_input_candidates(monkeypatch) -> None:

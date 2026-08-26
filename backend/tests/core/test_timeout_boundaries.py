@@ -32,6 +32,31 @@ async def test_dimension_worker_timeout_returns_merge_safe_provider_failure(monk
     assert result["dimension_retry_counts"] == {"natural_environment": 1}
 
 
+@pytest.mark.asyncio
+async def test_dimension_worker_transport_error_uses_provider_failure_channel():
+    from app.workflow import root_graph
+
+    async def failing_worker(_state):
+        raise ConnectionError("temporary provider disconnect")
+
+    result = await root_graph._audited_dimension_worker(
+        failing_worker,
+        {
+            "session_id": "transport-error-channel-test",
+            "phase": "layer3",
+            "dimension_key": "traffic",
+        },
+    )
+
+    assert result["provider_failures"] == [{
+        "stage": "L3",
+        "dimension": "traffic",
+        "code": "llm_provider_error",
+        "message": "dimension worker provider transport error (ConnectionError)",
+    }]
+    assert result["dimension_retry_counts"] == {"traffic": 1}
+
+
 def test_grounding_fallback_budget_stops_serial_llm_calls(monkeypatch):
     from app.domain.ground import anchors
 

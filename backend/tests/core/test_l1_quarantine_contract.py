@@ -15,6 +15,7 @@ def test_required_fact_type_missing_only_emits_dimension_local_diagnostic() -> N
             "observations": [
                 {
                     "fact_type": "constraint",
+                    "status": "confirmed",
                     "constraint_type": "河道缓冲带",
                     "applies_to_scope": "全村",
                 }
@@ -78,12 +79,14 @@ def test_quarantined_observation_keeps_safe_payload_copy_and_error_path() -> Non
                 [
                     {
                         "fact_type": "spatial_entity",
+                        "status": "confirmed",
                         "entity_type": "道路",
                         "name": "村道",
                         "locator": {"place_names": ["金田村"]},
                     },
                     {
                         "fact_type": "spatial_entity",
+                        "status": "confirmed",
                         "entity_type": "道路",
                         "locator": {"place_names": ["金田村"]},
                         "source_quote": "现状村道",
