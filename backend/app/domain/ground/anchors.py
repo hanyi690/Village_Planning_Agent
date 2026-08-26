@@ -1388,6 +1388,18 @@ async def ground_l1_anchors(
 
         inferred_scope_candidate = expansion.get("inferred_scope_candidate")
         supporting_candidates = list(expansion.get("candidates", []) or [])
+        expansion_scope_names = next(
+            (
+                item.get("scope_names", [])
+                for item in (expansion.get("query_trace", []) or [])
+                if item.get("step") == "supporting_evidence_start"
+            ),
+            [],
+        )
+        strict_scope_requested = (
+            role in {"facility", "landmark"}
+            and bool(scope_names or expansion_scope_names)
+        )
         strict_scope = expansion.get("status") in {"resolved", "ambiguous"} and any(
             item.get("step") == "strict_facility_scope"
             for item in (expansion.get("query_trace", []) or [])
@@ -1398,6 +1410,8 @@ async def ground_l1_anchors(
             candidate_pool = []
         if strict_scope:
             candidate_pool = supporting_candidates
+        elif strict_scope_requested and expansion.get("status") == "unresolved":
+            candidate_pool = []
         elif not candidate_pool and supporting_candidates:
             candidate_pool = supporting_candidates
 
@@ -1434,7 +1448,11 @@ async def ground_l1_anchors(
                         "after": len(spatial_candidates),
                     })
                     candidate_pool = spatial_candidates
-            if result.status == "resolved" and len(candidate_pool) == 1:
+            resolved = (
+                (result is not None and result.status == "resolved")
+                or expansion.get("status") == "resolved"
+            )
+            if resolved and len(candidate_pool) == 1:
                 item["candidate"] = next(iter(candidate_pool))
             else:
                 item["best_effort"] = True

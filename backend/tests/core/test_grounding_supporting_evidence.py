@@ -368,3 +368,84 @@ async def test_ground_consumes_inferred_scope_candidate_and_trace(monkeypatch):
         item.get("step") == "cross_role_scope_inference"
         for item in anchor.query_trace
     )
+
+
+@pytest.mark.asyncio
+async def test_ground_rejects_global_facility_when_scope_lookup_is_unresolved(
+    monkeypatch,
+):
+    from app.domain.ground import anchors as anchors_module
+    from app.evidence.retrieval import evidence_graph as evidence_graph_module
+
+    global_candidate = PlaceResolutionCandidate(
+        entity_ref="poi:祠堂:global",
+        entity_type="facility",
+        role="facility",
+        canonical_name="祠堂",
+        feature_bsm="44142621100000006001",
+        source_feature_id="facility:global",
+        geometry_ref="bundle://feature/44142621100000006001",
+        source_bsms=["44142621100000001001"],
+        score=0.95,
+    )
+
+    class _Graph:
+        def resolve_mention(self, mention, role="unknown", hints=""):
+            return SimpleNamespace(
+                mention=mention,
+                status="ambiguous",
+                candidates=[global_candidate],
+                query_trace=[],
+            )
+
+        def expand_supporting_evidence(self, *args, **kwargs):
+            return {
+                "candidates": [],
+                "inferred_scope_candidate": None,
+                "status": "unresolved",
+                "query_trace": [{
+                    "step": "supporting_evidence_start",
+                    "scope_names": ["社前村"],
+                }, {
+                    "step": "supporting_evidence_unresolved",
+                    "reason": "strict facility scope has no source-backed candidate",
+                }],
+            }
+
+    monkeypatch.setattr(
+        evidence_graph_module.EvidenceGraph,
+        "build",
+        classmethod(lambda cls, context: _Graph()),
+    )
+    context = SimpleNamespace(
+        session_id="ground-strict-scope",
+        village_name="金田村",
+        workspace=SimpleNamespace(
+            points={},
+            lines={},
+            polygons={},
+            boundary=None,
+        ),
+        current_parcels=lambda: [],
+        location_facts=[L1LocationFact(
+            mention="祠堂",
+            normalized_name="祠堂",
+            role="facility",
+            village_scopes=["社前村"],
+            spatial_hint="社前村",
+            source_report_ref="report:mvp",
+            dimension_key="historical_culture",
+        )],
+        gazetteer=None,
+        kg=None,
+        ports=None,
+    )
+
+    grounded = await anchors_module.ground_l1_anchors(
+        context,
+        "ground-strict-scope",
+        bump=False,
+    )
+
+    assert grounded == []
+    assert context.grounding_unresolved[0]["mention"] == "祠堂"
