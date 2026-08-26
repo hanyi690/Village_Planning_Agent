@@ -69,6 +69,41 @@ def _is_scope_fact(fact: Any, village_name: str) -> bool:
     return normalized in names or mention in names
 
 
+def _hint_scope_names(context: Any, hints: str) -> list[str]:
+    """Extract only source-known village scopes from a spatial hint."""
+    folded_hints = "".join(str(hints or "").casefold().split())
+    if not folded_hints:
+        return []
+    generic_names = {"村", "村庄", "行政村", "自然村"}
+    matched: list[str] = []
+
+    def consider(canonical: Any, aliases: Any = ()) -> None:
+        canonical_name = str(canonical or "").strip()
+        values = [canonical_name, *(aliases or [])]
+        for value in values:
+            text = str(value or "").strip()
+            folded = "".join(text.casefold().split())
+            if (
+                len(folded) < 2
+                or folded in generic_names
+                or folded not in folded_hints
+            ):
+                continue
+            matched.append(canonical_name or text)
+            return
+
+    gazetteer = getattr(context, "gazetteer", None)
+    for entry in getattr(gazetteer, "entries", []) or []:
+        consider(
+            getattr(entry, "name", ""),
+            getattr(entry, "aliases", None) or [],
+        )
+    graph = getattr(context, "evidence_graph", None)
+    for scope in getattr(graph, "semantic_scopes", []) or []:
+        consider("", getattr(scope, "village_mentions", None) or [])
+    return list(dict.fromkeys(value for value in matched if value))
+
+
 def _scope_anchor(fact: Any, context: Any, trace: List[dict]) -> Optional[GroundedAnchor]:
     """构造规划范围锚点（administrative_village）。
 
@@ -1336,6 +1371,8 @@ async def ground_l1_anchors(
             )
             if str(value).strip()
         ]))
+        if role in {"facility", "landmark"} and not scope_names:
+            scope_names = _hint_scope_names(context, hints)
         trace: List[dict] = [{"step": "resolve", "mention": mention}]
         item: Dict[str, Any] = {
             "fact": fact,

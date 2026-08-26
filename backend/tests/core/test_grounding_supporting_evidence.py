@@ -737,12 +737,14 @@ async def test_ground_rejects_global_facility_when_scope_expansion_raises(
             mention="祠堂",
             normalized_name="祠堂",
             role="facility",
-            village_scopes=["社前村"],
             spatial_hint="社前村",
             source_report_ref="report:mvp",
             dimension_key="historical_culture",
         )],
-        gazetteer=None,
+        gazetteer=SimpleNamespace(
+            entries=[SimpleNamespace(name="社前村", aliases=[], bsms=[])],
+            resolve=lambda *_args, **_kwargs: None,
+        ),
         kg=None,
         ports=None,
     )
