@@ -240,7 +240,7 @@ async def test_async_candidate_selection_prompt_carries_full_evidence(monkeypatc
         def invoke(self, prompt):
             prompts.append(prompt)
             candidate_id = prompt.split("candidate_id=", 1)[1].split()[0]
-            digest = prompt.split("input_digest=", 1)[1].splitlines()[0].strip()
+            digest = prompt.split("input_digest=", 1)[1].split(";", 1)[0].strip()
             return CandidateSelectionProposal(
                 status="selected",
                 selected_candidate_id=candidate_id,
@@ -284,6 +284,9 @@ async def test_async_candidate_selection_prompt_carries_full_evidence(monkeypatc
     assert "candidate_index" not in prompt
     assert "candidate_set_digest=" not in prompt
     assert "input_digest=" in prompt
+    assert "结构化闭集候选选择契约" in prompt
+    assert "allowed_candidate_ids" in prompt
+    assert "selected_candidate_id 必须逐字复制" in prompt
 
 
 def test_sync_resolver_queue_wait_is_bounded(monkeypatch):

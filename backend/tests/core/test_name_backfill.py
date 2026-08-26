@@ -64,6 +64,8 @@ def test_nameless_entities_filters_generic_names():
 
 
 def test_build_candidates_narrows_by_type_and_location():
+    assert NameMention(name="河流", role="water_body").role == "water"
+    assert NameMention(name="设施", role="transportation_facility").role == "facility"
     kg = _kg()
     gaz = _gazetteer()
     roads = build_candidates(kg, gaz, NameMention(name="Y122乡道", role="road", location="园寨村"))

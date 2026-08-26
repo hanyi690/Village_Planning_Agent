@@ -879,6 +879,26 @@ async def test_shared_context_recovery_retries_unresolved_location_for_three_rou
             class _Structured:
                 async def ainvoke(self, prompt):
                     calls.append(prompt)
+                    if response_model.__name__ == "CandidateSelectionBatchProposal":
+                        decisions = []
+                        for block in prompt.split("任务 decision_id=")[1:]:
+                            decision_id = block.splitlines()[0].strip()
+                            candidate_ids = re.findall(
+                                r"candidate_id=([^\s]+)",
+                                block,
+                            )
+                            digest = re.search(
+                                r"input_digest=([0-9a-f]+)",
+                                block,
+                            ).group(1)
+                            selected = len(calls) >= 3
+                            decisions.append({
+                                "decision_id": decision_id,
+                                "status": "selected" if selected else "abstain",
+                                "selected_candidate_id": candidate_ids[0] if selected else "",
+                                "input_digest": digest,
+                            })
+                        return response_model(decisions=decisions)
                     candidate_ids = re.findall(
                         r"candidate_id=([^\s]+)",
                         prompt,

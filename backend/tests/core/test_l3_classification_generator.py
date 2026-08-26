@@ -14,7 +14,7 @@ class _FakeStructuredLlm:
         self.messages: list[list[dict]] = []
 
     def with_structured_output(self, _schema, method: str):
-        assert method == "json_mode"
+        assert method == "function_calling"
         return self
 
     async def ainvoke(self, messages):

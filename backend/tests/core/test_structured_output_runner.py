@@ -17,7 +17,7 @@ class _TextResult(BaseModel):
 
 
 @pytest.mark.asyncio
-async def test_injected_minimax_llm_uses_json_mode(monkeypatch):
+async def test_injected_minimax_llm_uses_function_calling(monkeypatch):
     from app.infrastructure.llm import structured
 
     calls: list[dict] = []
@@ -41,7 +41,7 @@ async def test_injected_minimax_llm_uses_json_mode(monkeypatch):
     )
 
     assert result == _Result(value=7)
-    assert calls[0]["method"] == "json_mode"
+    assert calls[0]["method"] == "function_calling"
 
 
 @pytest.mark.asyncio
@@ -107,6 +107,75 @@ def _retry_exception_with_content(content: str, *, finish_reason: str | None = N
         n_attempts=1,
         total_usage=0,
     )
+
+
+def _retry_exception_with_provider_503():
+    import httpx
+    from instructor.core import FailedAttempt, InstructorRetryException
+
+    request = httpx.Request("POST", "https://provider.invalid/v1/chat/completions")
+    response = httpx.Response(
+        503,
+        request=request,
+        text="503 Service Temporarily Unavailable",
+    )
+    error = httpx.HTTPStatusError(
+        "provider returned HTTP 503",
+        request=request,
+        response=response,
+    )
+    return InstructorRetryException(
+        "provider request failed",
+        n_attempts=1,
+        total_usage=0,
+        failed_attempts=[FailedAttempt(1, error)],
+    )
+
+
+def test_wrapped_provider_503_is_not_classified_as_schema_invalid():
+    from app.infrastructure.llm import structured
+    from app.infrastructure.llm.dimension_runtime import is_provider_failure
+
+    error = _retry_exception_with_provider_503()
+
+    assert structured.provider_http_status(error) == 503
+    assert structured.structured_failure_code(error) == "PROVIDER_HTTP_5XX"
+    assert "http_status=503" in structured.structured_failure_summary(error)
+    assert "SCHEMA_INVALID" not in structured.structured_failure_summary(error)
+    assert is_provider_failure(error) is True
+
+
+@pytest.mark.asyncio
+async def test_transient_retry_unwraps_provider_503_from_instructor(monkeypatch):
+    from app.infrastructure.llm import structured
+
+    calls = 0
+
+    class _Completions:
+        async def create(self, **_kwargs):
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                raise _retry_exception_with_provider_503()
+            return _Result(value=7)
+
+    class _Client:
+        chat = type("_Chat", (), {"completions": _Completions()})()
+
+    monkeypatch.setattr(structured, "get_async_instructor_client", lambda: _Client())
+    monkeypatch.setattr(structured, "get_structured_model", lambda model=None: "test-model")
+
+    result = await structured.run_structured_output(
+        _Result,
+        [{"role": "user", "content": "return seven"}],
+        max_retries=0,
+        transient_retries=1,
+        transient_retry_backoff_s=0,
+        timeout=2,
+    )
+
+    assert result == _Result(value=7)
+    assert calls == 2
 
 
 @pytest.mark.asyncio
@@ -917,7 +986,7 @@ def test_instructor_client_uses_tools_mode_and_provider_scoped_cache(monkeypatch
     assert created[0]["client"]["base_url"] == "https://opencode.ai/zen/go/v1"
 
 
-def test_minimax_structured_client_defaults_to_json_mode(monkeypatch):
+def test_minimax_structured_client_defaults_to_tools_mode(monkeypatch):
     from app.infrastructure.llm import instructor_client
 
     instructor_client._cached_clients.clear()
@@ -943,7 +1012,7 @@ def test_minimax_structured_client_defaults_to_json_mode(monkeypatch):
 
     instructor_client.get_instructor_client()
 
-    assert created[0]["mode"] is instructor_client.instructor.Mode.MD_JSON
+    assert created[0]["mode"] is instructor_client.instructor.Mode.TOOLS
 
 
 def test_async_instructor_client_has_explicit_transport_budget(monkeypatch):

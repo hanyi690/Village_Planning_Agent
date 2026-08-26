@@ -25,6 +25,15 @@ _REPORT_FIXTURE = (
 )
 
 
+def test_l1_record_role_normalizes_live_provider_spatial_aliases() -> None:
+    from app.evidence.retrieval.evidence_graph import _l1_record_role
+
+    assert _l1_record_role(SimpleNamespace(attributes={"role": "transportation_facility"}), {}) == "facility"
+    assert _l1_record_role(SimpleNamespace(attributes={"role": "water_body"}), {}) == "water"
+    assert _l1_record_role(SimpleNamespace(attributes={"role": "river"}), {}) == "water"
+    assert _l1_record_role(SimpleNamespace(attributes={"role": "road_segment"}), {}) == "road"
+
+
 def _spatial_mention(
     scope: str,
     *,

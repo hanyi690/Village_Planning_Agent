@@ -9,6 +9,19 @@ import pytest
 
 
 def _selection_proposal(response_model, prompt, position=1):
+    if response_model.__name__ == "CandidateSelectionBatchProposal":
+        decisions = []
+        for block in prompt.split("任务 decision_id=")[1:]:
+            decision_id = block.splitlines()[0].strip()
+            ids = re.findall(r"candidate_id=([^\s]+)", block)
+            digest = re.search(r"input_digest=([0-9a-f]+)", block).group(1)
+            decisions.append({
+                "decision_id": decision_id,
+                "status": "selected",
+                "selected_candidate_id": ids[position - 1],
+                "input_digest": digest,
+            })
+        return response_model(decisions=decisions)
     ids = re.findall(r"candidate_id=([^\s]+)", prompt)
     digest = re.search(r"input_digest=([0-9a-f]+)", prompt).group(1)
     return response_model(
@@ -220,7 +233,7 @@ async def test_same_name_different_role_or_candidate_does_not_share_work(monkeyp
         bump=False,
     )
 
-    assert len(calls) == 3
+    assert len(calls) == 1
     assert [anchor.location_fact_ref for anchor in result] == [
         "report-1",
         "report-2",

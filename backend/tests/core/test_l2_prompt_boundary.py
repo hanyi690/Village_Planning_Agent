@@ -27,7 +27,10 @@ def test_structured_l2_prompt_uses_runtime_context_without_legacy_skeleton() -> 
 
 def test_l2_fact_reference_rules_expose_only_the_runtime_closed_set() -> None:
     from app.domain.validation.l1_fact_catalog import build_l1_fact_catalog
-    from app.domain.objectives.worker import _l2_fact_reference_rules
+    from app.domain.objectives.worker import (
+        _l2_fact_reference_final_guardrail,
+        _l2_fact_reference_rules,
+    )
 
     catalog = build_l1_fact_catalog([
         {
@@ -56,6 +59,10 @@ def test_l2_fact_reference_rules_expose_only_the_runtime_closed_set() -> None:
     assert "l1:legacy:three" not in prompt
     assert f"catalog_digest: {catalog.digest}" in prompt
     assert "使用 proposed 或省略对象" in prompt
+    guardrail = _l2_fact_reference_final_guardrail({"fact_catalog": catalog})
+    assert "L2 source_fact_refs 最终硬校验" in guardrail
+    assert "re-*、EXPLORE、lineage" in guardrail
+    assert "allowed_l1_fact_ids=[\"l1:fact:one\", \"l1:fact:two\"]" in guardrail
 
 
 def test_l2_fact_reference_rules_fail_closed_when_snapshot_has_no_fact_ids() -> None:

@@ -85,6 +85,17 @@ def test_grounding_budget_is_reused_within_scope_and_replaced_between_requests()
     assert next_request["scope_key"] == "run:two"
 
 
+def test_name_backfill_budget_is_independent_from_anchor_budget():
+    from app.domain.ground import anchors
+
+    anchor_budget = anchors._new_ground_llm_budget()
+    name_budget = anchors._new_name_backfill_budget()
+
+    assert name_budget is not anchor_budget
+    assert name_budget["remaining"] == anchor_budget["remaining"]
+    assert name_budget["scope_key"] == "name_backfill"
+
+
 def test_dimension_send_always_has_official_run_timeout(monkeypatch):
     from app.workflow.layers.layer_router import _send_worker
 
