@@ -654,12 +654,71 @@ async def run_rag(
         rag_log = consume_rag_log(session_id, dimension_key)
     except Exception:
         rag_log = None
+    # Use the same persisted L1Snapshot that the consuming worker uses to
+    # build its fact catalog.  Falling back to the context cache is only for
+    # stages that do not yet have an L1 artifact.
+    allowed_l1_fact_ids = _current_l1_fact_ids(session_id, state)
     return render_evidence_prompt_section(
         result.evidence_bundle,
         result.spatial_cognition,
         result.evidence_packet,
         result.coverage,
+        allowed_l1_fact_ids=allowed_l1_fact_ids,
     ), rag_log
+
+
+def _current_l1_fact_ids(
+    session_id: str,
+    state: Dict[str, Any] | None = None,
+) -> set[str] | None:
+    """Return the current snapshot's selectable L1 IDs, if hydrated.
+
+    Evidence lineage can contain refs from semantic overlays and source
+    annotations.  Only IDs present in the same frozen snapshot as the worker
+    may be shown in an LLM prompt as L1 lineage.  ``None`` is reserved for a
+    context that has no L1 field at all; an explicitly hydrated empty list
+    therefore remains an empty closed set.
+    """
+    try:
+        from app.domain.validation.l1_fact_catalog import build_l1_fact_catalog
+
+        artifact_ref = ((state or {}).get("artifact_refs") or {}).get("l1_snapshot")
+        if isinstance(artifact_ref, dict):
+            try:
+                from app.infrastructure.artifacts.runtime import load_artifact
+
+                payload = load_artifact(state or {}, "l1_snapshot")
+                if hasattr(payload, "model_dump"):
+                    payload = payload.model_dump(mode="json")
+                if isinstance(payload, dict) and "fact_records" in payload:
+                    return set(
+                        build_l1_fact_catalog(payload.get("fact_records") or [])
+                        .usable_allowed_fact_ids
+                    )
+            except Exception:
+                # An explicit snapshot reference with an unreadable artifact
+                # is an empty closed set, not permission to use cached or
+                # lineage-only IDs from another context version.
+                return set()
+            return set()
+
+        from app.infrastructure.context.planning_context_factory import (
+            get_cached_context,
+        )
+
+        context = get_cached_context(session_id) if session_id else None
+        if context is None or not hasattr(context, "l1_fact_records"):
+            return None
+        return set(
+            build_l1_fact_catalog(
+                getattr(context, "l1_fact_records", None) or []
+            ).usable_allowed_fact_ids
+        )
+    except Exception:
+        # Prompt rendering remains available when the optional context cache
+        # is cold; the evidence graph still applies the same filter whenever
+        # its PlanningContext carries the snapshot records.
+        return None
 
 
 async def run_targeted_evidence(
@@ -756,6 +815,7 @@ async def run_targeted_evidence(
             result.spatial_cognition,
             result.evidence_packet,
             result.coverage,
+            allowed_l1_fact_ids=_current_l1_fact_ids(session_id, state),
         ), trace
     except Exception as exc:  # noqa: BLE001 - repair remains bounded
         return "", [{
@@ -1007,15 +1067,17 @@ def _validated_summary_projection(
     return validated.model_dump(mode="json")
 
 
-async def save_report_immediate(store: Any, pending_report: Dict[str, Any]) -> None:
-    """Immediate DB save of a report so parallel nodes can read it. Non-fatal on error."""
+async def save_report_immediate(store: Any, pending_report: Dict[str, Any]) -> bool:
+    """Save a report before completion is exposed to parallel consumers."""
     dim_key = pending_report.get("dimension_key", "?")
     next_version = pending_report.get("version", "?")
     try:
         await store.bulk_save([pending_report])
         logger.info(f"[dimension_runtime] {dim_key}: Report saved to DB immediately (v{next_version})")
+        return True
     except Exception as e:
-        logger.warning(f"[dimension_runtime] {dim_key}: Immediate DB save failed (will retry in completion): {e}")
+        logger.warning(f"[dimension_runtime] {dim_key}: Immediate DB save failed: {e}")
+        return False
 
 
 async def save_step_report(

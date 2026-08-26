@@ -177,17 +177,19 @@ async def analyze_l2_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
         "hard/soft/proposed；conflicts 和 evidence_gaps 的 severity 只能是 info/warning/error。\n"
         "没有证据时不要把对象标记为 observed；规划结论标记 proposed，无法支持的对象省略，"
         "并可用 evidence_gaps 记录缺口。规划建议指标必须标记 proposed，不能伪装为现状事实。"
+        "TargetMetric.metric_id 是当前输出对象的本地 ID，不是 fact_id；TargetMetric.value 只能是"
+        "数值、数字字符串或空值，不能写指标名称、定性标签或单位。"
         "数组字段始终返回 JSON 数组；没有内容时返回空数组。"
     ) + "\n\n" + _l2_fact_reference_rules(l1_fact_audit)
     async def _run_decision(validation_feedback: str = "") -> L2DecisionSet:
         system_content = decision_system
-        max_retries = 2
+        max_retries = 1
         context_stage = "L2"
         if validation_feedback:
             system_content += (
                 "\n\n【上一轮 L2 闭集校验反馈】\n"
                 "只修正下列确定性校验问题；不得新增对象、改变语义或生成新的"
-                "source_fact_refs。所有引用必须从上面的 allowed_l1_fact_ids JSON 数组逐字复制；"
+                "source_fact_refs。所有引用必须从上面的 allowed_l1_facts JSON 行逐字复制；"
                 "无法引用时使用空数组并将对象标为 proposed、省略或写入 evidence_gaps。\n"
                 + validation_feedback[:2000]
             )
@@ -209,24 +211,7 @@ async def analyze_l2_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
         )
 
     try:
-        try:
-            decision_set = await _run_decision()
-        except Exception as first_error:
-            from app.infrastructure.llm.structured import structured_failure_code
-
-            failure_code = structured_failure_code(first_error)
-            if is_provider_failure(first_error) or failure_code not in {
-                "SCHEMA_INVALID",
-                "TOOL_CALL_MISSING",
-                "OUTPUT_TRUNCATED",
-            }:
-                raise
-            decision_set = await _run_decision(
-                "上一次结构化输出未通过响应 schema 校验（"
-                f"{failure_code or 'SCHEMA_INVALID'}）。"
-                "请严格返回 L2DecisionSet，并从 allowed_l1_fact_ids JSON 闭集逐字复制"
-                " source_fact_refs；不要使用维度名、UUID、报告引用或 l1_fact: 前缀。"
-            )
+        decision_set = await _run_decision()
         decision_set = decision_set.model_copy(update={"dimension_key": dim_key})
         decision_set, semantic_error = (
             await _validate_l2_decision_with_one_closed_set_reask(
@@ -295,11 +280,18 @@ async def analyze_l2_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
         return {
             "messages": [AIMessage(content="[执行失败] L2 结构化决策未通过语义闭合校验")],
             "dimension_retry_counts": dimension_failure_attempt(state, dim_key),
-            "semantic_failures": [{
+            "dimension_failures": [{
                 "stage": f"L{dim_layer}",
                 "dimension": dim_key,
-                "code": "l2_semantic_validation_error",
+                "code": "dimension_quality_failed",
                 "message": semantic_error,
+                "feedback": (
+                    "L2 typed decision failed semantic closed-set validation. "
+                    "Retry only after correcting the reported fields; copy source_fact_refs "
+                    "from the dynamic allowed_l1_facts rows exactly, keep each list unique, "
+                    "and do not use EXPLORE lineage refs as source_fact_refs. "
+                    + semantic_error
+                )[:4000],
             }],
         }
     report_prompt = _build_l2_report_synthesis_prompt(dim_key, decision_set)
@@ -600,7 +592,12 @@ def _load_l1_fact_section(
                 or item.get("dimension_key") in selected_dimensions
             )
         ]
-        catalog = build_l1_fact_catalog(scoped_records)
+        # Evidence/RAG is allowed to expose any fact from the current frozen
+        # snapshot because L1 facts are one of the multi-source inputs to L2.
+        # Build the authoritative closed set from that same complete snapshot;
+        # keeping only the prose body dimension-scoped would otherwise make a
+        # visible evidence fact ID fail the validator on the first pass.
+        catalog = build_l1_fact_catalog(fact_records)
         audit.update({
             "fact_catalog": catalog,
             "catalog": catalog,
@@ -612,8 +609,11 @@ def _load_l1_fact_section(
             # this value is now canonical-only and never admits legacy IDs.
             "fact_ids": catalog.usable_allowed_fact_ids,
         })
-        # The fact body is deliberately identity-free.  Only the catalog
-        # below the system prompt exposes copyable fact IDs.
+        audit["catalog_record_count"] = len(fact_records)
+        # Fact statements are rendered from the same catalog as the selectable
+        # IDs in the system prompt.  The worker does not create a second,
+        # identity-free fact projection that forces the model to re-match text
+        # to IDs.
         facts = [
             str(item.get("statement") or "").strip()
             for item in scoped_records
@@ -628,12 +628,12 @@ def _load_l1_fact_section(
         audit["location_fact_count"] = len(scoped_locations)
         if not facts and not scoped_locations:
             return "", audit
-        lines = [
-            f"【L1 对 {dimension_key} 的上游事实（来自 L1Snapshot artifact，必须在 L2 策略中消费）】"
-        ]
-        lines.extend(f"- {fact}" for fact in facts)
+        lines = []
         if scoped_locations:
-            lines.append("【L1 上游地点事实（仅作为地点证据，不是选址决定）】")
+            lines.append(
+                f"【L1 对 {dimension_key} 的上游地点事实（来自 L1Snapshot artifact；"
+                "可用于理解，不是选址决定）】"
+            )
             for fact in scoped_locations:
                 lines.append(
                     f"- {fact.get('normalized_name') or fact.get('mention')}: "
@@ -657,27 +657,45 @@ def _l2_fact_reference_rules(audit: Dict[str, Any]) -> str:
         )
     fact_ids = catalog.usable_allowed_fact_ids
     spatial_fact_ids = catalog.usable_spatial_fact_ids
+    selectable_ids = set(fact_ids)
+    selectable_facts = [
+        {
+            "fact_id": candidate.candidate_id,
+            "statement": candidate.label,
+            "fact_kind": str(candidate.metadata.get("fact_kind") or candidate.kind),
+            "dimension_key": str(candidate.metadata.get("dimension_key") or ""),
+            "spatial": bool(candidate.metadata.get("spatial", False)),
+        }
+        for candidate in catalog.candidates
+        if candidate.candidate_id in selectable_ids
+    ]
     lines = [
         "【source_fact_refs 运行时闭集】",
-        "source_fact_refs 只能逐字复制下面列出的 canonical L1Snapshot fact_id。",
-        "事实正文只用于理解内容，不是可复制身份；不得自行拼接维度名、UUID、报告引用、地点名或 source_refs。",
+        "source_fact_refs 只能逐字复制下面动态生成的 canonical L1Snapshot fact_id。",
+        "每个 fact_id 与 statement/kind/dimension 在同一 JSON 行中对应；不要从其他文本、"
+        "EXPLORE 的 L1_facts、source_refs、provenance、bundle ref、报告引用或地点名中复制身份。",
+        "source_fact_refs 的每个数组必须去重；不得拼接、改写、猜测或使用不在该表中的 l1:fact ID。",
         f"catalog_digest: {catalog.digest}",
     ]
     if fact_ids:
-        lines.append("允许值：")
-        lines.extend(f"- {fact_id}" for fact_id in fact_ids)
         lines.append(
-            "机器可复制的 JSON 闭集："
+            "机器可复制的 JSON 闭集（唯一允许复制的身份与语义映射）："
+            + json.dumps({"allowed_l1_facts": selectable_facts}, ensure_ascii=False)
+        )
+        lines.append(
+            "机器可复制的 ID 投影（用于逐字校验）："
             + json.dumps({"allowed_l1_fact_ids": fact_ids}, ensure_ascii=False)
         )
         lines.append(
-            "空间事实子集（仍属于上述闭集）："
+            "空间事实 JSON 子集（仍属于上述闭集）："
             + json.dumps({"allowed_l1_spatial_fact_ids": spatial_fact_ids}, ensure_ascii=False)
         )
         lines.extend([
             "PlanningObjective/TargetMetric 标记 observed 时至少引用一个允许值；",
             "StrategyRule 和 SpatialStructureIntent 只有在能引用允许值时才输出。",
-            "没有对应事实时使用 proposed 或省略对象，不要填入近似 ID。",
+            "TargetMetric.metric_id 是当前输出对象的本地 ID，不是 L1 fact_id；TargetMetric.value 只能是"
+            "数值、数字字符串或空值，不能把指标名称、定性标签或单位写进 value。",
+            "没有对应事实时使用 proposed 或省略对象，不要填入近似 ID；没有可引用事实的策略不要输出。",
         ])
     else:
         lines.append(
@@ -745,18 +763,25 @@ async def _validate_l2_decision_with_one_closed_set_reask(
                         f"{field_name}:{owner_id}:catalog_digest={catalog.digest}:"
                         f"extra={membership.extra_ids}:duplicates={membership.duplicate_ids}"
                     )
-        if reference_errors:
-            raise ValueError("\n".join(reference_errors))
-        validate_l2_decision_set(
-            value,
-            known_l1_fact_ids=set(catalog.usable_allowed_fact_ids),
-        )
+        validation_errors = list(reference_errors)
+        try:
+            # Exact catalog membership above owns the dynamic L1 ID boundary;
+            # do not repeat the same dangling-ID check in the generic L2
+            # semantic validator.  It still owns namespaces, object links,
+            # metric quantities, and strategy/spatial invariants.
+            validate_l2_decision_set(value, known_l1_fact_ids=None)
+        except ValueError as exc:
+            validation_errors.extend(
+                line for line in str(exc).splitlines() if line.strip()
+            )
+        if validation_errors:
+            raise ValueError("\n".join(dict.fromkeys(validation_errors)))
 
     try:
         _validate(decision_set)
         return decision_set, ""
     except ValueError as first_error:
-        first_message = str(first_error).splitlines()[0][:1000]
+        first_message = "\n".join(str(first_error).splitlines()[:12])[:4000]
 
     retried = await run_decision(
         "L2 fact catalog must remain unchanged for this reask. "
@@ -769,7 +794,7 @@ async def _validate_l2_decision_with_one_closed_set_reask(
     try:
         _validate(retried)
     except ValueError as second_error:
-        second_message = str(second_error).splitlines()[0][:1000]
+        second_message = "\n".join(str(second_error).splitlines()[:12])[:4000]
         return retried, (
             "L2_SOURCE_FACT_CLOSED_SET_FAILED: "
             f"first={first_message}; retry={second_message}"

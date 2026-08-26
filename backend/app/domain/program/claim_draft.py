@@ -495,6 +495,8 @@ class PlanningClaimDraftSet(BaseModel):
 class L3ClaimOutput(BaseModel):
     """L3 planning-intent pass; no human report field is requested."""
 
+    model_config = ConfigDict(extra="forbid")
+
     claims: list[ClaimComponentDraft] = Field(default_factory=list)
 
     @field_validator("claims", mode="before")
@@ -509,6 +511,8 @@ class L3ClaimOutput(BaseModel):
 
 class L3ReportOutput(BaseModel):
     """L3 human report synthesized after claim validation."""
+
+    model_config = ConfigDict(extra="forbid")
 
     report_body: str = ""
 
@@ -946,17 +950,17 @@ def _normalized_action(
 ) -> str:
     from app.domain.program.unit_normalization import normalize_action
 
-    action = normalize_action(value, allowed=allowed or _ACTION_SET) or "new"
     valid = allowed or _ACTION_SET
+    action = normalize_action(value, allowed=valid)
     if action not in valid:
         _diagnostic(
             diagnostics,
-            "warning",
+            "error",
             "invalid_intervention_action",
             claim_id,
-            f"action {action!r} is outside the closed set",
+            f"action {action!r} is unresolved and outside the closed set",
         )
-        return "new"
+        return ""
     return action
 
 
@@ -1122,10 +1126,6 @@ def _normalize_polygon_parameters(
 ) -> tuple[PolygonPlanningParameters | None, tuple[float, float] | None]:
     source = raw.polygon_parameters
     role = _text(source.materialization_role).lower() if source is not None else ""
-    if category == "protection":
-        role = "protection_overlay"
-    elif category == "restoration":
-        role = "restoration_overlay"
     if not role:
         return None, None
     allowed_roles = {
@@ -1141,16 +1141,15 @@ def _normalize_polygon_parameters(
         "restoration": {"restoration_overlay"},
     }
     if role not in allowed_roles.get(category, set()):
-        # Structure is valid; the role is auto-corrected to the category's
-        # allowed role instead of dropping the polygon parameters.
         _diagnostic(
             diagnostics,
-            "warning",
+            "error",
             "materialization_role_mismatch",
             claim_id,
-            f"role {role!r} is incompatible with category {category!r}",
+            f"role {role!r} is unresolved for category {category!r}; "
+            "polygon_parameters quarantined",
         )
-        role = next(iter(allowed_roles.get(category, set())), "site_footprint")
+        return None, None
     area_range: tuple[float, float] | None = None
     if (
         source is not None

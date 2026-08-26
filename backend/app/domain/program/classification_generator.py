@@ -10,6 +10,7 @@ target remains pending.
 from __future__ import annotations
 
 import json
+import os
 from collections.abc import Mapping, Sequence
 from typing import Any, Literal
 
@@ -33,8 +34,20 @@ from app.infrastructure.logging import get_logger
 logger = get_logger(__name__)
 
 _BATCH_SIZE = 6
-_MAX_ATTEMPTS = 3
 _PROMPT_VERSION = "l3-classification-verified-v2"
+
+
+def _classification_max_attempts() -> int:
+    """Return one attempt by default, with at most one explicit reask."""
+
+    try:
+        retries = min(
+            1,
+            max(0, int(os.getenv("L3_CLASSIFICATION_RETRIES", "0"))),
+        )
+    except (TypeError, ValueError):
+        retries = 0
+    return 1 + retries
 
 
 class PendingClassificationDecision(PendingDecision):
@@ -596,8 +609,9 @@ async def generate_classification_decisions(
     retry_states: dict[tuple[str, ...], Any] = {}
     feedback_by_key: dict[tuple[str, ...], list[str]] = {}
     attempts = 0
+    max_attempts = _classification_max_attempts()
 
-    for round_index in range(_MAX_ATTEMPTS):
+    for round_index in range(max_attempts):
         if not remaining:
             break
         next_remaining: list[_ClassificationTarget] = []
@@ -687,7 +701,11 @@ async def generate_classification_decisions(
                 "verified structured proposal did not produce an accepted item"
             ]
             failure_key = tuple(target.target_id for target in failed)
-            if round_index + 1 >= _MAX_ATTEMPTS or result.retry_state.should_stop:
+            if (
+                round_index + 1 >= max_attempts
+                or result.retry_state.should_stop
+                or result.retry_state.transport_failure_code
+            ):
                 issue_fingerprints = [issue.fingerprint for issue in result.issues]
                 for target in failed:
                     matching = next(

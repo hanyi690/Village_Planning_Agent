@@ -15,8 +15,8 @@ from app.infrastructure.logging import get_logger
 
 logger = get_logger(__name__)
 
-_cached_clients: dict[tuple[str, str], instructor.Instructor] = {}
-_cached_async_clients: dict[tuple[str, str], instructor.AsyncInstructor] = {}
+_cached_clients: dict[tuple[str, str, str], instructor.Instructor] = {}
+_cached_async_clients: dict[tuple[str, str, str], instructor.AsyncInstructor] = {}
 
 
 def _provider_connection() -> tuple[str, str, str]:
@@ -36,10 +36,35 @@ def _provider_connection() -> tuple[str, str, str]:
     return name, api_key, base_url
 
 
+def _structured_mode(provider_name: str) -> instructor.Mode:
+    """Choose the provider-compatible protocol for typed output.
+
+    MiniMax's current reasoning models can return valid JSON content without
+    emitting an OpenAI tool call, and may wrap that JSON in a markdown fence.
+    Instructor's TOOLS mode treats the former as a missing response, while
+    plain JSON mode rejects the latter before Pydantic can validate it.  The
+    markdown-JSON protocol accepts both representations without a regex or
+    semantic repair and keeps the same response-model validation boundary.
+    Deployments can opt back into tools explicitly for a provider that
+    requires it.
+    """
+    configured = os.getenv("LLM_STRUCTURED_MODE", "").strip().lower()
+    if configured in {"tools", "tool", "function", "function_call", "function_calling"}:
+        return instructor.Mode.TOOLS
+    if configured in {"json", "json_mode", "json-schema", "json_schema"}:
+        return instructor.Mode.JSON
+    if configured in {"md_json", "markdown_json", "markdown-json"}:
+        return instructor.Mode.MD_JSON
+    if provider_name in {"minimax", "minimaxai", "mini-max"}:
+        return instructor.Mode.MD_JSON
+    return instructor.Mode.TOOLS
+
+
 def get_instructor_client() -> instructor.Instructor:
     """Create or return the Instructor client for the active provider."""
     provider_name, api_key, base_url = _provider_connection()
-    cache_key = (provider_name, base_url)
+    mode = _structured_mode(provider_name)
+    cache_key = (provider_name, base_url, mode.value)
     cached = _cached_clients.get(cache_key)
     if cached is not None:
         return cached
@@ -51,11 +76,12 @@ def get_instructor_client() -> instructor.Instructor:
         timeout=_provider_timeout(),
         http_client=_http_client(async_client=False),
     )
-    client = instructor.from_openai(base_client, mode=instructor.Mode.TOOLS)
+    client = instructor.from_openai(base_client, mode=mode)
     _cached_clients[cache_key] = client
     logger.debug(
-        "[Instructor] Client created (provider=%s, base_url=%s)",
+        "[Instructor] Client created (provider=%s, mode=%s, base_url=%s)",
         provider_name,
+        mode.value,
         base_url,
     )
     return client
@@ -70,7 +96,8 @@ def get_async_instructor_client() -> instructor.AsyncInstructor:
     the actual HTTP boundary.
     """
     provider_name, api_key, base_url = _provider_connection()
-    cache_key = (provider_name, base_url)
+    mode = _structured_mode(provider_name)
+    cache_key = (provider_name, base_url, mode.value)
     cached = _cached_async_clients.get(cache_key)
     if cached is not None:
         return cached
@@ -82,11 +109,12 @@ def get_async_instructor_client() -> instructor.AsyncInstructor:
         timeout=_provider_timeout(),
         http_client=_http_client(async_client=True),
     )
-    client = instructor.from_openai(base_client, mode=instructor.Mode.TOOLS)
+    client = instructor.from_openai(base_client, mode=mode)
     _cached_async_clients[cache_key] = client
     logger.debug(
-        "[Instructor] Async client created (provider=%s, base_url=%s)",
+        "[Instructor] Async client created (provider=%s, mode=%s, base_url=%s)",
         provider_name,
+        mode.value,
         base_url,
     )
     return client
@@ -146,13 +174,26 @@ def _http_client(*, async_client: bool) -> httpx.Client | httpx.AsyncClient:
     from app.core.settings import LLM_MAX_CONCURRENT
 
     request_timeout = _provider_timeout()
+    budgets = [LLM_MAX_CONCURRENT]
+    for name in (
+        "L1_LLM_MAX_CONCURRENT",
+        "L2_LLM_MAX_CONCURRENT",
+        "L3_LLM_MAX_CONCURRENT",
+        "GROUND_LLM_MAX_CONCURRENT",
+    ):
+        try:
+            budgets.append(int(os.getenv(name, "0")))
+        except (TypeError, ValueError):
+            continue
+    provider_budget = max(1, max(budgets))
+    default_connections = max(8, provider_budget * 2 + 4)
     max_connections = max(
         4,
-        int(os.getenv("LLM_HTTP_MAX_CONNECTIONS", str(LLM_MAX_CONCURRENT + 2))),
+        int(os.getenv("LLM_HTTP_MAX_CONNECTIONS", str(default_connections))),
     )
     limits = httpx.Limits(
         max_connections=max_connections,
-        max_keepalive_connections=max(2, min(max_connections, LLM_MAX_CONCURRENT)),
+        max_keepalive_connections=max(2, min(max_connections, provider_budget)),
     )
     timeout = httpx.Timeout(
         request_timeout,

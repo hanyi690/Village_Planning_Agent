@@ -320,6 +320,14 @@ def _create_minimax_llm(
     if model_kwargs:
         kwargs["model_kwargs"] = model_kwargs
 
+    # MiniMax reasoning models otherwise place the reasoning trace and JSON
+    # answer in the same content string.  Structured LangChain JSON parsing
+    # must receive the provider's split response; this is a transport setting,
+    # not a local text extraction or semantic repair.
+    extra_body = dict(kwargs.pop("extra_body", None) or {})
+    extra_body.setdefault("reasoning_split", True)
+    kwargs["extra_body"] = extra_body
+
     return ChatOpenAI(
         model=model,
         temperature=effective_temperature,
@@ -528,11 +536,10 @@ def create_flash_llm(
     # factory and let its configured default model be selected.
     if get_provider() in (LLMProvider.MINIMAX, LLMProvider.OPENCODE_GO):
         # Flash tasks are lightweight discriminators/extractors (unit mapping,
-        # anchor picking, mention extraction).  MiniMax-M2.x thinking cannot be
-        # turned off, and this langchain-openai version forwards model_kwargs
-        # entries to AsyncCompletions.create() so both thinking and
-        # reasoning_split break the call.  Do NOT pass extra model kwargs;
-        # call sites strip <think> traces defensively instead.
+        # anchor picking, mention extraction).  MiniMax-M2.x reasoning is
+        # returned through the provider split-response transport configured in
+        # create_minimax_llm, so structured callers receive JSON content rather
+        # than needing local reasoning-text extraction.
         return create_llm(
             temperature=temperature if temperature is not None else 0.3,
             max_tokens=max_tokens if max_tokens is not None else 500,

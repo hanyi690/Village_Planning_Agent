@@ -5,7 +5,8 @@ from __future__ import annotations
 import asyncio
 import os
 import re
-from concurrent.futures import ThreadPoolExecutor
+import threading
+from queue import Empty, Queue
 from typing import Any, TypeVar
 
 from pydantic import BaseModel
@@ -93,6 +94,20 @@ def _read_field(value: Any, field: str) -> Any:
     return getattr(value, field, None)
 
 
+def _langchain_structured_method() -> str:
+    """Select the provider-compatible LangChain structured-output method."""
+
+    configured = os.getenv("LLM_STRUCTURED_MODE", "").strip().lower()
+    if configured in {"tools", "tool", "function", "function_call", "function_calling"}:
+        return "function_calling"
+    if configured in {"json", "json_mode", "json-schema", "json_schema", "md_json", "markdown_json", "markdown-json"}:
+        return "json_mode"
+    provider_name = os.getenv("LLM_PROVIDER", "").strip().lower()
+    if provider_name in {"minimax", "minimaxai", "mini-max"}:
+        return "json_mode"
+    return "function_calling"
+
+
 async def run_structured_output(
     response_model: type[ModelT],
     messages: list[dict[str, Any]],
@@ -115,7 +130,8 @@ async def run_structured_output(
     LangGraph event loop remains responsive.  The dependency-injection path
     keeps a synchronous fallback for deterministic test doubles.  ``timeout``
     bounds the caller's wait, while ``max_retries`` bounds schema-validation
-    reasks.  Transport retries remain controlled by the provider client itself.
+    reasks.  Transport retries are opt-in and only apply to classified
+    transient provider failures.
     """
     retry_budget = max(0, int(max_retries))
     request: dict[str, Any] = {
@@ -149,10 +165,12 @@ async def run_structured_output(
         if llm is not None:
             # Dependency-injection seam for existing deterministic tests and
             # controlled adapters. Production calls leave this unset and use
-            # the Instructor client below.
+            # the Instructor client below.  Ground/RAG callers may provide a
+            # provider-specific LangChain model; keep its wire protocol aligned
+            # with the direct Instructor client instead of forcing tool calls.
             structured = llm.with_structured_output(
                 response_model,
-                method="function_calling",
+                method=_langchain_structured_method(),
             )
             invoke_input: Any = messages
             if len(messages) == 1 and messages[0].get("role") == "user":
@@ -162,12 +180,20 @@ async def run_structured_output(
                 result = await invoke(invoke_input)
             else:
                 result = await asyncio.to_thread(structured.invoke, invoke_input)
+            if result is None:
+                error = ValueError("structured provider returned no typed output")
+                _set_failure_code(error, "TOOL_CALL_MISSING")
+                raise error
             if isinstance(result, response_model):
                 return result
             return response_model.model_validate(result)
 
         client = get_async_instructor_client()
         result = await client.chat.completions.create(**call_request)
+        if result is None:
+            error = ValueError("structured provider returned no typed output")
+            _set_failure_code(error, "TOOL_CALL_MISSING")
+            raise error
         if not isinstance(result, response_model):
             return response_model.model_validate(result)
         return result
@@ -256,14 +282,37 @@ async def run_structured_output(
 
         if is_provider_quota_exhausted(exc):
             return False
+        if isinstance(exc, (asyncio.TimeoutError, TimeoutError)):
+            return False
         status = getattr(exc, "status_code", None)
         if status is None:
             response = getattr(exc, "response", None)
             status = getattr(response, "status_code", None)
         try:
-            return int(status) in {429, 500, 502, 503, 504, 529}
+            if int(status) in {429, 500, 502, 503, 504, 529}:
+                return True
         except (TypeError, ValueError):
-            return False
+            pass
+
+        # OpenAI-compatible providers frequently surface a socket reset or a
+        # connect failure without an HTTP response/status code.  These are
+        # safe for one exact-call retry; schema and semantic failures are not.
+        if isinstance(exc, (ConnectionError, OSError)):
+            return True
+        message = str(exc or "").lower()
+        return any(
+            marker in message
+            for marker in (
+                "connection error",
+                "server disconnected",
+                "connection reset",
+                "remote protocol error",
+                "broken pipe",
+                "network is unreachable",
+                "temporarily unavailable",
+                "timed out",
+            )
+        )
 
     async def _call_with_gate() -> ModelT:
         attempt = 0
@@ -310,11 +359,11 @@ def run_structured_output_sync(
     document/spatial adapters from creating nested loops.
     """
 
-    async def _run() -> ModelT:
+    async def _run(call_timeout: float | None = timeout) -> ModelT:
         return await run_structured_output(
             response_model,
             messages,
-            timeout=timeout,
+            timeout=call_timeout,
             **kwargs,
         )
 
@@ -323,12 +372,38 @@ def run_structured_output_sync(
     except RuntimeError:
         return asyncio.run(_run())
 
-    executor = ThreadPoolExecutor(max_workers=1)
-    future = executor.submit(lambda: asyncio.run(_run()))
+    # A synchronous caller may already own an event loop.  Use a daemon
+    # bridge thread in that case; a timed-out provider coroutine must not leave
+    # a non-daemon executor worker keeping the process alive.  The inner typed
+    # runner receives a slightly shorter deadline so normal cancellation gets
+    # a chance to finish before the bridge's outer wait expires.
+    outer_timeout = None if timeout is None else max(0.001, float(timeout))
+    inner_timeout = (
+        None
+        if outer_timeout is None
+        else max(0.001, outer_timeout * 0.9)
+    )
+    outcome: Queue[tuple[bool, Any]] = Queue(maxsize=1)
+
+    def _run_in_thread() -> None:
+        try:
+            outcome.put((True, asyncio.run(_run(inner_timeout))))
+        except BaseException as exc:  # propagate the typed runner failure
+            outcome.put((False, exc))
+
+    thread = threading.Thread(
+        target=_run_in_thread,
+        name="structured-output-sync-bridge",
+        daemon=True,
+    )
+    thread.start()
     try:
-        return future.result(timeout=timeout)
-    finally:
-        executor.shutdown(wait=False, cancel_futures=True)
+        succeeded, value = outcome.get(timeout=outer_timeout)
+    except Empty as exc:
+        raise TimeoutError("structured output sync bridge timed out") from exc
+    if succeeded:
+        return value
+    raise value
 
 
 __all__ = [
