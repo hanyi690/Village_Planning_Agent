@@ -39,14 +39,11 @@ def _provider_connection() -> tuple[str, str, str]:
 def _structured_mode(provider_name: str) -> instructor.Mode:
     """Choose the provider-compatible protocol for typed output.
 
-    MiniMax's current reasoning models can return valid JSON content without
-    emitting an OpenAI tool call, and may wrap that JSON in a markdown fence.
-    Instructor's TOOLS mode treats the former as a missing response, while
-    plain JSON mode rejects the latter before Pydantic can validate it.  The
-    markdown-JSON protocol accepts both representations without a regex or
-    semantic repair and keeps the same response-model validation boundary.
-    Deployments can opt back into tools explicitly for a provider that
-    requires it.
+    MiniMax exposes function tools on its OpenAI-compatible API.  Prefer that
+    protocol for typed calls so the provider receives the response model as a
+    function-parameter schema instead of merely receiving a free-form JSON
+    instruction.  Deployments can still opt into JSON/markdown-JSON explicitly
+    for a model that does not support tool calls.
     """
     configured = os.getenv("LLM_STRUCTURED_MODE", "").strip().lower()
     if configured in {"tools", "tool", "function", "function_call", "function_calling"}:
@@ -56,7 +53,7 @@ def _structured_mode(provider_name: str) -> instructor.Mode:
     if configured in {"md_json", "markdown_json", "markdown-json"}:
         return instructor.Mode.MD_JSON
     if provider_name in {"minimax", "minimaxai", "mini-max"}:
-        return instructor.Mode.MD_JSON
+        return instructor.Mode.TOOLS
     return instructor.Mode.TOOLS
 
 

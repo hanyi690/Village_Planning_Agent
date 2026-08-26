@@ -86,6 +86,10 @@ def is_provider_failure(exc: BaseException) -> bool:
     """
     if isinstance(exc, asyncio.TimeoutError):
         return True
+    from app.infrastructure.llm.structured import provider_failure_code
+
+    if provider_failure_code(exc) is not None:
+        return True
     try:
         import httpx
         from openai import APIError

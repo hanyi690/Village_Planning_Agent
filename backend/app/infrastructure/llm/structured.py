@@ -40,8 +40,87 @@ STRUCTURED_FAILURE_CODES = frozenset(
         "TOOL_CALL_MISSING",
         "SCHEMA_INVALID",
         "TIMEOUT",
+        "PROVIDER_HTTP_4XX",
+        "PROVIDER_HTTP_5XX",
+        "PROVIDER_TRANSPORT",
     }
 )
+
+_PROVIDER_STATUS_TEXT_RE = re.compile(
+    r"\b(429|4\d{2}|5\d{2})\b\s+"
+    r"(?:service temporarily unavailable|bad gateway|gateway timeout|too many requests)",
+    re.IGNORECASE,
+)
+
+
+def _iter_nested_exceptions(exc: BaseException):
+    """Yield wrapper and provider exceptions without exposing response bodies."""
+
+    pending = [exc]
+    seen: set[int] = set()
+    while pending:
+        current = pending.pop(0)
+        if not isinstance(current, BaseException) or id(current) in seen:
+            continue
+        seen.add(id(current))
+        yield current
+        for attempt in getattr(current, "failed_attempts", ()) or ():
+            nested = getattr(attempt, "exception", None)
+            if isinstance(nested, BaseException):
+                pending.append(nested)
+        for attribute in ("__cause__", "__context__", "last_exception", "original_exception"):
+            nested = getattr(current, attribute, None)
+            if isinstance(nested, BaseException):
+                pending.append(nested)
+
+
+def _exception_status_code(exc: BaseException) -> int | None:
+    status = getattr(exc, "status_code", None)
+    if status is None:
+        response = getattr(exc, "response", None)
+        status = getattr(response, "status_code", None)
+    try:
+        status_int = int(status)
+    except (TypeError, ValueError):
+        status_int = 0
+    if 400 <= status_int <= 599:
+        return status_int
+    match = _PROVIDER_STATUS_TEXT_RE.search(str(exc or ""))
+    return int(match.group(1)) if match else None
+
+
+def provider_http_status(exc: BaseException) -> int | None:
+    """Return an HTTP status from a wrapped provider exception, if present."""
+
+    for nested in _iter_nested_exceptions(exc):
+        status = _exception_status_code(nested)
+        if status is not None:
+            return status
+    return None
+
+
+def provider_failure_code(exc: BaseException) -> str | None:
+    """Classify wrapped HTTP/transport failures before schema text matching."""
+
+    try:
+        import httpx
+        from openai import APIError
+
+        provider_error_types = (APIError, httpx.HTTPError)
+    except ImportError:
+        provider_error_types = ()
+    for nested in _iter_nested_exceptions(exc):
+        status = _exception_status_code(nested)
+        if status is not None:
+            if 500 <= status <= 599:
+                return "PROVIDER_HTTP_5XX"
+            return "PROVIDER_HTTP_4XX"
+        if isinstance(nested, provider_error_types) or (
+            isinstance(nested, (ConnectionError, OSError))
+            and not isinstance(nested, (asyncio.TimeoutError, TimeoutError))
+        ):
+            return "PROVIDER_TRANSPORT"
+    return None
 
 
 def _set_failure_code(exc: BaseException, code: str) -> None:
@@ -63,6 +142,9 @@ def _classify_structured_failure(exc: BaseException, completion: Any = None) -> 
     """Classify a typed-output failure using provider metadata and safe markers."""
     if isinstance(exc, (asyncio.TimeoutError, TimeoutError)):
         return "TIMEOUT"
+    provider_code = provider_failure_code(exc)
+    if provider_code is not None:
+        return provider_code
     finish_reason = _completion_finish_reason(completion)
     if finish_reason == "length":
         return "OUTPUT_TRUNCATED"
@@ -78,6 +160,9 @@ def _classify_structured_failure(exc: BaseException, completion: Any = None) -> 
 
 def structured_failure_code(exc: BaseException) -> str | None:
     """Return the bounded typed-output code attached by this module."""
+    provider_code = provider_failure_code(exc)
+    if provider_code is not None:
+        return provider_code
     code = str(getattr(exc, "structured_failure_code", "") or "").strip()
     return code if code in STRUCTURED_FAILURE_CODES else _classify_structured_failure(exc)
 
@@ -85,7 +170,9 @@ def structured_failure_code(exc: BaseException) -> str | None:
 def structured_failure_summary(exc: BaseException) -> str:
     """Return a stable diagnostic that never embeds provider response text."""
     code = structured_failure_code(exc) or "STRUCTURED_OUTPUT_ERROR"
-    return f"{code} ({type(exc).__name__})"
+    status = provider_http_status(exc)
+    status_suffix = f"; http_status={status}" if status is not None else ""
+    return f"{code} ({type(exc).__name__}{status_suffix})"
 
 
 def _read_field(value: Any, field: str) -> Any:
@@ -104,7 +191,7 @@ def _langchain_structured_method() -> str:
         return "json_mode"
     provider_name = os.getenv("LLM_PROVIDER", "").strip().lower()
     if provider_name in {"minimax", "minimaxai", "mini-max"}:
-        return "json_mode"
+        return "function_calling"
     return "function_calling"
 
 
@@ -167,7 +254,7 @@ async def run_structured_output(
             # controlled adapters. Production calls leave this unset and use
             # the Instructor client below.  Ground/RAG callers may provide a
             # provider-specific LangChain model; keep its wire protocol aligned
-            # with the direct Instructor client instead of forcing tool calls.
+            # with the direct Instructor client and provider mode selection.
             structured = llm.with_structured_output(
                 response_model,
                 method=_langchain_structured_method(),
@@ -284,15 +371,14 @@ async def run_structured_output(
             return False
         if isinstance(exc, (asyncio.TimeoutError, TimeoutError)):
             return False
-        status = getattr(exc, "status_code", None)
-        if status is None:
-            response = getattr(exc, "response", None)
-            status = getattr(response, "status_code", None)
+        status = provider_http_status(exc)
         try:
             if int(status) in {429, 500, 502, 503, 504, 529}:
                 return True
         except (TypeError, ValueError):
             pass
+        if provider_failure_code(exc) == "PROVIDER_TRANSPORT":
+            return True
 
         # OpenAI-compatible providers frequently surface a socket reset or a
         # connect failure without an HTTP response/status code.  These are

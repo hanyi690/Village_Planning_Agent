@@ -180,7 +180,9 @@ async def analyze_l2_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
         "TargetMetric.metric_id 是当前输出对象的本地 ID，不是 fact_id；TargetMetric.value 只能是"
         "数值、数字字符串或空值，不能写指标名称、定性标签或单位。"
         "数组字段始终返回 JSON 数组；没有内容时返回空数组。"
-    ) + "\n\n" + _l2_fact_reference_rules(l1_fact_audit)
+   ) + "\n\n" + _l2_fact_reference_rules(l1_fact_audit) + (
+        "\n\n" + _l2_fact_reference_final_guardrail(l1_fact_audit)
+    )
     async def _run_decision(validation_feedback: str = "") -> L2DecisionSet:
         system_content = decision_system
         max_retries = 1
@@ -703,6 +705,23 @@ def _l2_fact_reference_rules(audit: Dict[str, Any]) -> str:
             "只能输出不需要事实引用的 proposed 规划背景或 evidence_gaps。"
         )
     return "\n".join(lines)
+
+
+def _l2_fact_reference_final_guardrail(audit: Dict[str, Any]) -> str:
+    """Repeat the smallest hard boundary after all legacy L2 instructions."""
+
+    catalog = audit.get("fact_catalog") or audit.get("catalog")
+    if not isinstance(catalog, L1FactCatalog):
+        raw_ids = audit.get("allowed_fact_ids") or audit.get("fact_ids") or []
+        catalog = build_l1_fact_catalog({"fact_id": value} for value in raw_ids)
+    allowed_ids = catalog.usable_allowed_fact_ids
+    return "\n".join((
+        "【L2 source_fact_refs 最终硬校验】",
+        "返回 JSON 前逐个检查 source_fact_refs：只能逐字复制下面 allowed_l1_fact_ids，其他身份一律非法。",
+        "re-*、EXPLORE、lineage、source_refs、report、provenance、bundle ref、地点名和自造 ID 都不是允许值。",
+        "发现非法引用时必须将对应 source_fact_refs 改为 []，不得用近似值替代。",
+        "allowed_l1_fact_ids=" + json.dumps(allowed_ids, ensure_ascii=False),
+    ))
 
 
 async def _validate_l2_decision_with_one_closed_set_reask(
