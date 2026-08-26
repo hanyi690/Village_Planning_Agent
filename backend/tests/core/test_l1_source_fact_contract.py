@@ -63,6 +63,7 @@ def test_observations_json_provides_location_facts():
         "observations": [
             {
                 "fact_type": "spatial_entity",
+                "status": "confirmed",
                 "entity_type": "现状设施",
                 "name": "供水点",
                 "locator": {"place_names": ["园寨"]},
@@ -71,6 +72,7 @@ def test_observations_json_provides_location_facts():
             },
             {
                 "fact_type": "spatial_entity",
+                "status": "confirmed",
                 "entity_type": "道路",
                 "name": "Y122乡道",
                 "locator": {"place_names": ["村北"]},
@@ -79,6 +81,7 @@ def test_observations_json_provides_location_facts():
             },
             {
                 "fact_type": "spatial_entity",
+                "status": "confirmed",
                 "entity_type": "水系",
                 "name": "金田河",
                 "locator": {},

@@ -7,6 +7,7 @@ def test_l1_compiles_typed_metric_demand_and_constraint_without_parsing_report_b
         "observations": [
             {
                 "fact_type": "scoped_metric",
+                "status": "confirmed",
                 "semantic_type": "population",
                 "metric": "常住人口",
                 "scope": "全村",
@@ -19,6 +20,7 @@ def test_l1_compiles_typed_metric_demand_and_constraint_without_parsing_report_b
             },
             {
                 "fact_type": "demand",
+                "status": "confirmed",
                 "semantic_type": "public_service_gap",
                 "demand_type": "养老服务需求",
                 "scope": "社前村",
@@ -29,6 +31,7 @@ def test_l1_compiles_typed_metric_demand_and_constraint_without_parsing_report_b
             },
             {
                 "fact_type": "constraint",
+                "status": "confirmed",
                 "constraint_type": "河道缓冲带",
                 "applies_to_scope": "全村",
                 "description": "河道两侧需避让",
@@ -83,6 +86,7 @@ def test_village_wide_demand_without_locator_stays_non_spatial_and_is_preserved(
         content="村民诉求报告正文。",
         instruction=(
             '{"observations":[{"fact_type":"demand",'
+            '"status":"confirmed",'
             '"demand_type":"tourism","scope":"全村","value":"发展旅游业",'
             '"attributes":{"benefit_object":"全体村民"},'
             '"source_segment_ids":["l1:segment:1"],'

@@ -46,6 +46,7 @@ class SimulatedPlanningProvider:
         if dimension_key == 'traffic':
             observations.append({
                 'fact_type': 'spatial_entity',
+                'status': 'confirmed',
                 'entity_type': '道路',
                 'name': '村道',
                 'locator': {
@@ -60,6 +61,7 @@ class SimulatedPlanningProvider:
         if self.facility_mode and dimension_key == 'public_services':
             observations.append({
                 'fact_type': 'spatial_entity',
+                'status': 'confirmed',
                 'entity_type': '现状设施',
                 'name': '祠堂',
                 'locator': {
