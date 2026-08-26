@@ -98,6 +98,8 @@ class PlanningContext:
     evidence_graph_key: str = ""
     external_search_port: Any = None
     grounded_anchors: List[Any] = field(default_factory=list)
+    grounding_shared_context: Any = None
+    grounding_unresolved: List[Dict[str, Any]] = field(default_factory=list)
     grounded_bindings: List[Any] = field(default_factory=list)
     ports: PlanningPorts = field(default_factory=PlanningPorts)
     content_hash: str = ""

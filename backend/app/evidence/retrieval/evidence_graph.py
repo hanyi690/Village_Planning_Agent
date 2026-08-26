@@ -1232,10 +1232,27 @@ class EvidenceGraph:
                 "step": "supporting_evidence_unresolved",
                 "reason": "strict facility scope has no source-backed candidate",
             })
+            recovery_candidates, recovery_trace = self.recover_scoped_candidates(
+                query,
+                role=expected_role,
+                scope_names=explicit_scopes,
+                hints=hints,
+                source_feature_ids=source_feature_ids,
+                max_candidates=limit,
+            )
+            trace.extend(recovery_trace)
+            if recovery_candidates:
+                trace.append({
+                    "step": "scoped_candidate_recovery_ready",
+                    "role": expected_role,
+                    "candidate_count": len(recovery_candidates),
+                    "selection": "llm_closed_set",
+                })
             return {
                 "candidates": [],
                 "inferred_scope_candidate": None,
                 "status": "unresolved",
+                "scope_candidates": recovery_candidates,
                 "query_trace": bounded_query_trace(),
             }
 
@@ -1371,6 +1388,26 @@ class EvidenceGraph:
                     "query_trace": bounded_query_trace(),
                 }
 
+        scope_candidates: list[Any] = []
+        if explicit_scopes and expected_role not in {
+            "village", "natural_village", "unknown"
+        }:
+            scope_candidates, recovery_trace = self.recover_scoped_candidates(
+                query,
+                role=expected_role,
+                scope_names=explicit_scopes,
+                hints=hints,
+                source_feature_ids=source_feature_ids,
+                max_candidates=limit,
+            )
+            trace.extend(recovery_trace)
+            if scope_candidates:
+                trace.append({
+                    "step": "scoped_candidate_recovery_ready",
+                    "role": expected_role,
+                    "candidate_count": len(scope_candidates),
+                    "selection": "llm_closed_set",
+                })
         trace.append({
             "step": "supporting_evidence_unresolved",
             "reason": "no source-backed candidate or related parcel set",
@@ -1379,8 +1416,160 @@ class EvidenceGraph:
             "candidates": direct_values,
             "inferred_scope_candidate": None,
             "status": "unresolved" if not direct_values else "ambiguous",
+            "scope_candidates": scope_candidates,
             "query_trace": bounded_query_trace(),
         }
+
+    def recover_scoped_candidates(
+        self,
+        mention: str,
+        *,
+        role: str = "unknown",
+        scope_names: list[str] | tuple[str, ...] = (),
+        hints: str = "",
+        source_feature_ids: list[str] | tuple[str, ...] = (),
+        max_candidates: int = _MAX_CANDIDATES,
+    ) -> tuple[list[Any], list[dict[str, Any]]]:
+        """Find a bounded typed candidate pool inside known scopes.
+
+        This is a recovery query, not an exact resolution.  It lets the
+        grounding LLM reason over existing Bundle/GIS features after another
+        work item or the village mapper has established a scope.  A candidate
+        must still carry scope topology evidence; a project-wide first match
+        is never promoted into the pool.
+        """
+        query = str(mention or "").strip()
+        expected_role = str(role or "unknown").strip().casefold() or "unknown"
+        try:
+            limit = min(_MAX_CANDIDATES, max(1, int(max_candidates or 1)))
+        except (TypeError, ValueError):
+            limit = _MAX_CANDIDATES
+        scopes = list(dict.fromkeys(
+            str(value).strip()
+            for value in (scope_names or ())
+            if str(value).strip()
+        ))[:_MAX_CANDIDATES]
+        collection_by_role = {
+            "facility": "facilities",
+            "landmark": "facilities",
+            "hazard": "hazards",
+            "road": "roads",
+            "axis": "roads",
+            "water": "waters",
+            "parcel": "parcels",
+            "zone": "zones",
+        }
+        collection = collection_by_role.get(expected_role)
+        if not query or not scopes or not collection:
+            return [], []
+        allowed_roles = {
+            "facility": {"facility", "landmark", "project"},
+            "landmark": {"facility", "landmark"},
+            "hazard": {"hazard"},
+            "road": {"road", "axis"},
+            "axis": {"road", "axis"},
+            "water": {"water"},
+            "parcel": {"parcel"},
+            "zone": {"zone", "parcel"},
+        }.get(expected_role, {expected_role})
+        source_id_filter = {
+            str(value).strip()
+            for value in (source_feature_ids or ())
+            if str(value).strip()
+        }
+        collected: dict[tuple[str, ...], Any] = {}
+        trace: list[dict[str, Any]] = []
+        for scope in scopes:
+            scope_bsms = _query_scope_bsms(self.context, _fold_query(scope))
+            scope_refs = _kg_scope_refs(self.context, [scope])
+            if not scope_bsms and not scope_refs:
+                trace.append({
+                    "step": "scoped_candidate_recovery",
+                    "scope": scope,
+                    "role": expected_role,
+                    "status": "scope_unresolved",
+                    "candidate_count": 0,
+                })
+                continue
+            scoped_query = " ".join(value for value in (scope, query, hints) if value)
+            try:
+                values = self.query_scope_candidates(
+                    scoped_query,
+                    entity_scope=[collection],
+                    max_candidates=limit,
+                )
+            except Exception as exc:  # noqa: BLE001
+                trace.append({
+                    "step": "scoped_candidate_recovery_error",
+                    "scope": scope,
+                    "role": expected_role,
+                    "error": type(exc).__name__,
+                })
+                continue
+            accepted: list[str] = []
+            for candidate in values[:limit]:
+                candidate_role = str(
+                    getattr(candidate, "role", "") or ""
+                ).strip().casefold()
+                if candidate_role not in allowed_roles:
+                    continue
+                candidate_source_ids = {
+                    str(getattr(candidate, "source_feature_id", "") or "").strip(),
+                    str(getattr(candidate, "entity_ref", "") or "").strip(),
+                    *(
+                        str(value).strip()
+                        for value in (getattr(candidate, "evidence_refs", None) or [])
+                        if str(value).strip()
+                    ),
+                }
+                if source_id_filter and not candidate_source_ids.intersection(
+                    source_id_filter
+                ):
+                    continue
+                candidate_scope_bsms = {
+                    str(value).strip()
+                    for value in [
+                        *(getattr(candidate, "source_bsms", None) or []),
+                        *(getattr(candidate, "related_parcel_bsms", None) or []),
+                    ]
+                    if str(value).strip()
+                }
+                evidence = getattr(candidate, "evidence", None) or {}
+                scope_match = bool(
+                    float(evidence.get("scope_topology", 0.0) or 0.0) > 0.0
+                    or candidate_scope_bsms.intersection(scope_bsms)
+                    or (
+                        scope_refs
+                        and str(getattr(candidate, "entity_ref", "") or "")
+                        in scope_refs
+                    )
+                )
+                if not scope_match:
+                    continue
+                key = (
+                    str(getattr(candidate, "entity_ref", "") or ""),
+                    str(getattr(candidate, "feature_bsm", "") or ""),
+                    str(getattr(candidate, "source_feature_id", "") or ""),
+                    str(getattr(candidate, "geometry_ref", "") or ""),
+                )
+                if not any(key):
+                    continue
+                collected.setdefault(key, candidate)
+                accepted.append(str(getattr(candidate, "entity_ref", "") or ""))
+            trace.append({
+                "step": "scoped_candidate_recovery",
+                "scope": scope,
+                "role": expected_role,
+                "source_collection": collection,
+                "scope_bsm_count": len(scope_bsms),
+                "scope_entity_count": len(scope_refs),
+                "candidate_count": len(values),
+                "accepted_count": len(accepted),
+                "candidate_refs": accepted[:limit],
+            })
+            if len(collected) >= limit:
+                break
+        return list(collected.values())[:limit], trace
 
     def query_parcel_bsms_in_bbox(
         self,

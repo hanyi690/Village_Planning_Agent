@@ -50,6 +50,16 @@ def _reserve_ground_llm_call(budget: Optional[Dict[str, Any]]) -> float | None:
     return reserve_ground_llm_call(budget)
 
 
+def _grounding_round_limit() -> int:
+    """Return the bounded number of shared-context selector rounds."""
+    try:
+        from app.core.settings import GROUND_MAX_RECOVERY_ROUNDS
+
+        return max(1, min(3, int(GROUND_MAX_RECOVERY_ROUNDS)))
+    except (ImportError, TypeError, ValueError):
+        return 3
+
+
 def _scope_names(village_name: str) -> set:
     """规划范围名集合（行政村名及其去"村"基础名）。"""
     v = str(village_name or "").strip()
@@ -336,8 +346,343 @@ def _grounding_work_key(item: Dict[str, Any], kind: str, candidates: list) -> tu
         item["mention"],
         str(getattr(fact, "normalized_name", "") or ""),
         item["hints"],
+        item.get("shared_key", ""),
+        item.get("shared_prompt_context", ""),
         _candidate_fingerprint(candidates),
     )
+
+
+def _shared_grounding_prompt_context(
+    shared: Any,
+    fact: Any,
+    scope_names: Optional[List[str]] = None,
+) -> str:
+    """Render the collective grounding state for one selector call."""
+    prompt_view = getattr(shared, "prompt_view", None)
+    if not callable(prompt_view):
+        return ""
+    try:
+        return str(
+            prompt_view(
+                fact,
+                extra_scopes=list(scope_names or []),
+            )
+            or ""
+        )
+    except TypeError:
+        # Keep compatibility with a lightweight test/shared-context adapter
+        # that only implements the original one-argument view.
+        try:
+            return str(prompt_view(fact) or "")
+        except Exception:  # noqa: BLE001
+            return ""
+    except Exception:  # noqa: BLE001
+        return ""
+
+
+def _scope_support_record(context: Any, scope: str) -> dict[str, Any]:
+    """Resolve a named village to source-backed parcel scope evidence."""
+    name = str(scope or "").strip()
+    if not name:
+        return {"status": "unresolved", "scope": ""}
+    entry = None
+    gazetteer = getattr(context, "gazetteer", None)
+    if gazetteer is not None:
+        for token in (name, name.rstrip("村"), f"{name}村"):
+            try:
+                entry = gazetteer.resolve(token, fuzzy=False)
+            except Exception:  # noqa: BLE001
+                entry = None
+            if entry is not None:
+                break
+    source_bsms = list(dict.fromkeys(
+        str(value).strip()
+        for value in (getattr(entry, "bsms", None) or [])
+        if str(value).strip()
+    ))
+    entity_refs = []
+    entry_ref = str(getattr(entry, "entity_uri", "") or "").strip()
+    if entry_ref:
+        entity_refs.append(entry_ref)
+    kg = getattr(context, "kg", None)
+    find_entities = getattr(kg, "find_entities", None)
+    if callable(find_entities):
+        for token in (name, name.rstrip("村"), f"{name}自然村"):
+            try:
+                entities = find_entities(name=token, limit=8) or []
+            except Exception:  # noqa: BLE001
+                entities = []
+            for entity in entities:
+                ref = str(getattr(entity, "entity_ref", "") or "").strip()
+                if ref and ref not in entity_refs:
+                    entity_refs.append(ref)
+                bsm = str(
+                    getattr(entity, "feature_bsm", "")
+                    or getattr(entity, "source_bsm", "")
+                    or ""
+                ).strip()
+                if bsm and bsm not in source_bsms:
+                    source_bsms.append(bsm)
+    if not source_bsms:
+        return {
+            "status": "unresolved",
+            "scope": name,
+            "source_bsms": [],
+            "entity_refs": entity_refs[:8],
+            "evidence_refs": [],
+            "geometry_granularity": "none",
+        }
+    return {
+        "status": "inferred",
+        "scope": name,
+        "source_bsms": source_bsms[:8],
+        "entity_refs": entity_refs[:8],
+        "evidence_refs": [
+            f"gazetteer:scope:{name}",
+            "bundle:related_parcels",
+        ],
+        "geometry_granularity": "parcel_set",
+        "best_effort": True,
+    }
+
+
+def _candidate_matches_fact(candidate: Any, fact: Any) -> bool:
+    """Require semantic or explicit source identity before scope recovery closes."""
+    source_ids = {
+        str(value).strip()
+        for value in (getattr(fact, "source_feature_ids", None) or [])
+        if str(value).strip()
+    }
+    candidate_ids = {
+        str(getattr(candidate, "source_feature_id", "") or "").strip(),
+        str(getattr(candidate, "feature_bsm", "") or "").strip(),
+        str(getattr(candidate, "source_bsm", "") or "").strip(),
+        str(getattr(candidate, "entity_ref", "") or "").strip(),
+        *(
+            str(value).strip()
+            for value in (getattr(candidate, "evidence_refs", None) or [])
+            if str(value).strip()
+        ),
+    }
+    if source_ids and source_ids.intersection(candidate_ids):
+        return True
+    evidence = getattr(candidate, "evidence", None) or {}
+    if float(evidence.get("exact_canonical_alias", 0.0) or 0.0) > 0.0:
+        return True
+    query_values = [
+        getattr(fact, "normalized_name", ""),
+        getattr(fact, "mention", ""),
+        *(getattr(fact, "aliases", None) or []),
+    ]
+    candidate_values = [
+        getattr(candidate, "canonical_name", ""),
+        *(getattr(candidate, "aliases", None) or []),
+    ]
+
+    def fold(value: Any) -> str:
+        return "".join(str(value or "").casefold().split())
+
+    queries = [fold(value) for value in query_values if fold(value)]
+    labels = [fold(value) for value in candidate_values if fold(value)]
+    return any(
+        query == label or query in label or label in query
+        for query in queries
+        for label in labels
+        if len(query) >= 2 and len(label) >= 2
+    )
+
+
+def _shared_register_candidate(shared: Any, candidate: Any) -> None:
+    """Expose only source-backed candidates to later grounding decisions."""
+    if candidate is None:
+        return
+    if (
+        bool(getattr(candidate, "best_effort", False))
+        and not str(getattr(candidate, "feature_bsm", "") or "").strip()
+        and not str(getattr(candidate, "source_feature_id", "") or "").strip()
+    ):
+        return
+    role = str(getattr(candidate, "role", "") or "").strip().casefold()
+    if role not in {"village", "natural_village", "administrative_village"}:
+        if not _candidate_has_authoritative_geometry(candidate):
+            return
+    add_resolved = getattr(shared, "add_resolved", None)
+    if callable(add_resolved):
+        add_resolved(candidate)
+
+
+def _scoped_candidate_is_acceptable(candidate: Any, fact: Any) -> bool:
+    """A scope recovery closes only with semantic match plus source geometry."""
+    return bool(
+        candidate is not None
+        and _candidate_has_authoritative_geometry(candidate)
+        and _candidate_matches_fact(candidate, fact)
+    )
+
+
+def _shared_scope_candidates(
+    shared: Any,
+    fact: Any,
+    role: str,
+    current: list[Any],
+    scope_names: Optional[List[str]] = None,
+) -> list[Any]:
+    """Reuse same-scope source candidates discovered by sibling work items."""
+    scopes = {
+        str(value).strip()
+        for value in [
+            *(getattr(fact, "village_scopes", None) or []),
+            *(getattr(fact, "place_scopes", None) or []),
+            *(scope_names or []),
+        ]
+        if str(value).strip()
+    }
+    allowed_roles = {
+        "facility": {"facility", "landmark", "project"},
+        "landmark": {"facility", "landmark"},
+        "hazard": {"hazard"},
+        "road": {"road", "axis"},
+        "axis": {"road", "axis"},
+        "water": {"water"},
+        "parcel": {"parcel"},
+        "zone": {"zone", "parcel"},
+    }.get(
+        str(role or "").strip().casefold(),
+        {str(role or "").strip().casefold()},
+    )
+    candidates: list[Any] = []
+    seen: set[tuple[str, ...]] = set()
+
+    def add(candidate: Any) -> None:
+        candidate_role = str(
+            getattr(candidate, "role", "") or ""
+        ).strip().casefold()
+        if candidate_role not in allowed_roles:
+            return
+        if not _candidate_has_authoritative_geometry(candidate):
+            return
+        identity = (
+            str(getattr(candidate, "feature_bsm", "") or "").strip(),
+            str(getattr(candidate, "source_feature_id", "") or "").strip(),
+            str(getattr(candidate, "entity_ref", "") or "").strip(),
+            str(getattr(candidate, "geometry_ref", "") or "").strip(),
+        )
+        if not any(identity) or identity in seen:
+            return
+        seen.add(identity)
+        candidates.append(candidate)
+
+    for candidate in current:
+        add(candidate)
+    recovery_candidates = getattr(shared, "recovery_candidates", {}) or {}
+    for sibling in getattr(shared, "facts", []) or []:
+        if sibling is fact:
+            continue
+        sibling_key = shared.fact_key(sibling)
+        registered_scopes = (
+            getattr(shared, "fact_scopes", {}) or {}
+        ).get(sibling_key, [])
+        sibling_scopes = {
+            str(value).strip()
+            for value in [
+                *(getattr(sibling, "village_scopes", None) or []),
+                *(getattr(sibling, "place_scopes", None) or []),
+                *registered_scopes,
+            ]
+            if str(value).strip()
+        }
+        if not scopes or not scopes.intersection(sibling_scopes):
+            continue
+        for candidate in recovery_candidates.get(sibling_key, []) or []:
+            add(candidate)
+    return candidates[:12]
+
+
+def _candidate_recovery_payload(candidate: Any) -> dict[str, Any]:
+    """Keep recovery diagnostics serializable and source-identity focused."""
+    return {
+        "entity_ref": str(getattr(candidate, "entity_ref", "") or "").strip(),
+        "canonical_name": str(
+            getattr(candidate, "canonical_name", "") or ""
+        ).strip(),
+        "role": str(getattr(candidate, "role", "") or "unknown").strip(),
+        "feature_bsm": str(getattr(candidate, "feature_bsm", "") or "").strip(),
+        "source_feature_id": str(
+            getattr(candidate, "source_feature_id", "") or ""
+        ).strip(),
+        "geometry_ref": str(getattr(candidate, "geometry_ref", "") or "").strip(),
+    }
+
+
+def _unresolved_grounding_item(
+    item: Dict[str, Any],
+    *,
+    code: str,
+    reason: str,
+) -> dict[str, Any]:
+    """Build a diagnostic that retains scope and LLM recovery evidence."""
+    record: dict[str, Any] = {
+        "code": code,
+        "mention": item["mention"],
+        "role": item["role"],
+        "reason": reason,
+        "trace": list(item["trace"]),
+    }
+    scope_support = item.get("scope_support") or {}
+    if scope_support:
+        record["supporting_scope"] = scope_support
+    recovery_candidates = list(item.get("scope_candidates") or [])
+    if recovery_candidates:
+        record["recovery"] = {
+            "status": (
+                "selected_candidate_not_semantic"
+                if item.get("scoped_candidate_selected") is not None
+                else "candidate_only"
+            ),
+            "candidate_count": len(recovery_candidates),
+            "candidate_refs": [
+                _candidate_recovery_payload(candidate)
+                for candidate in recovery_candidates
+            ],
+        }
+    if item.get("scoped_candidate_selected") is not None:
+        record.setdefault("recovery", {})["selected"] = (
+            _candidate_recovery_payload(item["scoped_candidate_selected"])
+        )
+    record["shared_key"] = item.get("shared_key", "")
+    return record
+
+
+def _shared_mark_pending(
+    shared: Any,
+    item: Dict[str, Any],
+    reason: str,
+) -> None:
+    """Publish one unresolved work item to the next shared selector round."""
+    key = str(item.get("shared_key", "") or "")
+    pending = [
+        record
+        for record in (getattr(shared, "unresolved", []) or [])
+        if str(record.get("shared_key", "") or "") != key
+    ]
+    pending.append({
+        "shared_key": key,
+        "mention": item.get("mention", ""),
+        "role": item.get("role", "unknown"),
+        "reason": reason,
+        "supporting_scope": item.get("scope_support", {}),
+    })
+    shared.unresolved = pending[-24:]
+
+
+def _shared_clear_pending(shared: Any, item: Dict[str, Any]) -> None:
+    """Remove a work item from the pending view after a source-backed pick."""
+    key = str(item.get("shared_key", "") or "")
+    shared.unresolved = [
+        record
+        for record in (getattr(shared, "unresolved", []) or [])
+        if str(record.get("shared_key", "") or "") != key
+    ]
 
 
 def _orientation_candidates(context: Any, fact: Any, anchor: GroundedAnchor) -> list:
@@ -359,6 +704,7 @@ async def _llm_orientation_pick(
     anchor: GroundedAnchor,
     llm: Any,
     budget: Optional[Dict[str, Any]] = None,
+    shared_context: str = "",
 ) -> Optional[Any]:
     """Resolve one orientation candidate; callers can fan it out per fact."""
     if llm is None:
@@ -374,6 +720,7 @@ async def _llm_orientation_pick(
         hints,
         candidates,
         budget=budget,
+        shared_context=shared_context,
     )
 
 
@@ -895,6 +1242,8 @@ async def _llm_reason_candidate(
     candidates: list,
     *,
     budget: Optional[Dict[str, Any]] = None,
+    shared_context: str = "",
+    round_number: int = 1,
 ) -> Optional[Any]:
     """Use one strict stable-ID selector; failure remains unresolved."""
     if not candidates:
@@ -913,7 +1262,10 @@ async def _llm_reason_candidate(
         for candidate in candidates
     ]
     decision_id = f"ground-anchor:{role}:{mention}"
-    query_text = f"{mention}\n{role}\n{hints}"
+    query_text = (
+        f"{mention}\n{role}\n{hints}\nround={int(round_number or 1)}\n"
+        f"{shared_context}"
+    )
     input_digest = spatial_candidate_input_digest(
         decision_id=decision_id,
         query_text=query_text,
@@ -925,7 +1277,10 @@ async def _llm_reason_candidate(
     )
     prompt = (
         "根据报告证据，从下面这个运行时候选集合中做一次闭集选择。只返回 JSON 对象，不要解释。\n"
+        f"这是 grounding 第{int(round_number or 1)}轮；可以利用共享上下文重新判断此前未决地点，"
+        "但只能选择下面已有 candidate_id。\n"
         f"地名={mention}；类型={role}；空间提示={hints or '未知'}\n"
+        f"共享 grounding 上下文={shared_context or '无'}\n"
         "字段必须完整：status 为 selected、abstain 或 ambiguous；"
         "selected_candidate_id 在 selected 时原样填写候选 candidate_id，"
         "否则填写空字符串；input_digest 必须原样复制。"
@@ -1213,6 +1568,14 @@ async def ground_l1_anchors(
     facts = list(getattr(context, "location_facts", []) or [])
     if not facts:
         return []
+    from app.domain.ground.shared_context import GroundingSharedContext
+
+    shared_context = GroundingSharedContext(
+        session_id=session_id,
+        facts=facts,
+    )
+    context.grounding_shared_context = shared_context
+    context.grounding_unresolved = []
     kg = getattr(context, "kg", None)
     ground_llm_budget = ground_llm_budget or _new_ground_llm_budget(
         context,
@@ -1346,6 +1709,28 @@ async def ground_l1_anchors(
     from app.evidence.retrieval.evidence_graph import EvidenceGraph
 
     context.evidence_graph = EvidenceGraph.build(context)
+    all_scopes = list(dict.fromkeys(
+        str(value).strip()
+        for fact in facts
+        for value in [
+            *(getattr(fact, "village_scopes", None) or []),
+            *(getattr(fact, "place_scopes", None) or []),
+            *(
+                [
+                    getattr(fact, "normalized_name", "")
+                    or getattr(fact, "mention", "")
+                ]
+                if str(getattr(fact, "role", "") or "")
+                in {"village", "natural_village"}
+                else []
+            ),
+        ]
+        if str(value).strip()
+    ))
+    shared_context.scope_support = {
+        scope: _scope_support_record(context, scope)
+        for scope in all_scopes
+    }
 
     # 3) 先做确定性解析，再把相互独立的地点判别一次性有界并发。
     #    最终锚点写入、村簇占用和 KG 注解仍按原始顺序串行提交，避免共享
@@ -1371,21 +1756,43 @@ async def ground_l1_anchors(
         ]))
         if role in {"facility", "landmark"} and not scope_names:
             scope_names = _hint_scope_names(context, hints)
+        set_fact_scopes = getattr(shared_context, "set_fact_scopes", None)
+        if callable(set_fact_scopes):
+            set_fact_scopes(fact, scope_names)
+        for scope in scope_names:
+            if scope not in shared_context.scope_support:
+                shared_context.scope_support[scope] = _scope_support_record(
+                    context,
+                    scope,
+                )
         trace: List[dict] = [{"step": "resolve", "mention": mention}]
         item: Dict[str, Any] = {
             "fact": fact,
             "mention": mention,
             "role": role,
             "hints": hints,
+            "scope_names": scope_names,
             "trace": trace,
             "candidate": None,
             "best_effort": False,
             "llm_kind": None,
+            "shared_key": shared_context.fact_key(fact),
+            "shared_prompt_context": _shared_grounding_prompt_context(
+                shared_context,
+                fact,
+                scope_names,
+            ),
+            "scope_support": {
+                scope: shared_context.scope_support.get(scope, {})
+                for scope in scope_names
+                if shared_context.scope_support.get(scope)
+            },
         }
 
         if _is_scope_fact(fact, getattr(context, "village_name", "")):
             item["candidate"] = _scope_anchor(fact, context, trace)
             item["scope"] = True
+            _shared_register_candidate(shared_context, item["candidate"])
             prepared.append(item)
             continue
 
@@ -1424,6 +1831,12 @@ async def ground_l1_anchors(
 
         inferred_scope_candidate = expansion.get("inferred_scope_candidate")
         supporting_candidates = list(expansion.get("candidates", []) or [])
+        scoped_candidates = list(expansion.get("scope_candidates", []) or [])
+        item["scope_candidates"] = scoped_candidates
+        if scoped_candidates:
+            shared_context.recovery_candidates[item["shared_key"]] = (
+                scoped_candidates
+            )
         expansion_scope_names = next(
             (
                 item.get("scope_names", [])
@@ -1432,6 +1845,33 @@ async def ground_l1_anchors(
             ),
             [],
         )
+        if expansion_scope_names:
+            item["scope_names"] = list(dict.fromkeys([
+                *item.get("scope_names", []),
+                *[
+                    str(value).strip()
+                    for value in expansion_scope_names
+                    if str(value).strip()
+                ],
+            ]))
+            if callable(set_fact_scopes):
+                set_fact_scopes(fact, item["scope_names"])
+            for scope in item["scope_names"]:
+                if scope not in shared_context.scope_support:
+                    shared_context.scope_support[scope] = _scope_support_record(
+                        context,
+                        scope,
+                    )
+            item["scope_support"] = {
+                scope: shared_context.scope_support.get(scope, {})
+                for scope in item["scope_names"]
+                if shared_context.scope_support.get(scope)
+            }
+            item["shared_prompt_context"] = _shared_grounding_prompt_context(
+                shared_context,
+                fact,
+                item["scope_names"],
+            )
         strict_scope_requested = (
             role in {"facility", "landmark"}
             and bool(scope_names or expansion_scope_names)
@@ -1456,7 +1896,23 @@ async def ground_l1_anchors(
             _has_spatial_evidence(candidate, role=role)
             for candidate in candidate_pool
         )
-        if inferred_scope_candidate is not None and (
+        if (
+            not candidate_pool
+            and scoped_candidates
+            and role in {
+                "facility", "landmark", "hazard", "road", "axis", "water",
+                "parcel", "zone",
+            }
+        ):
+            item["llm_kind"] = "scoped_candidate"
+            item["llm_candidates"] = scoped_candidates
+            trace.append({
+                "step": "shared_scope_candidate_queue",
+                "role": role,
+                "candidate_count": len(scoped_candidates),
+                "selection": "llm_closed_set",
+            })
+        elif inferred_scope_candidate is not None and (
             not candidate_pool
             or not candidate_has_spatial
             or result is None
@@ -1518,6 +1974,8 @@ async def ground_l1_anchors(
                     "role": role,
                     "spatial_identity": "unresolved",
                 })
+        if item.get("candidate") is not None and not item.get("best_effort"):
+            _shared_register_candidate(shared_context, item["candidate"])
         prepared.append(item)
 
     llm_groups: Dict[tuple, List[Dict[str, Any]]] = {}
@@ -1527,7 +1985,7 @@ async def ground_l1_anchors(
         if kind == "candidate":
             key = _grounding_work_key(item, kind, candidates)
             llm_groups.setdefault(key, []).append(item)
-        elif kind == "fallback":
+        elif kind in {"fallback", "scoped_candidate"}:
             key = _grounding_work_key(item, kind, candidates)
             llm_groups.setdefault(key, []).append(item)
 
@@ -1543,6 +2001,7 @@ async def ground_l1_anchors(
             representative["hints"],
             candidates,
             budget=ground_llm_budget,
+            shared_context=representative.get("shared_prompt_context", ""),
         ))
         llm_group_items.append(group)
     if llm_tasks:
@@ -1557,6 +2016,223 @@ async def ground_l1_anchors(
             decision = None if isinstance(decision, Exception) else decision
             for item in group:
                 item["llm_decision"] = decision
+
+    # Register the first closed-set decisions before trying to recover older
+    # unresolved work.  The second wave can therefore use newly determined
+    # source features from sibling locations in the same village.
+    for item in prepared:
+        selected = item.get("llm_decision")
+        if selected is None:
+            if item.get("scope_names"):
+                _shared_mark_pending(
+                    shared_context,
+                    item,
+                    "initial_closed_set_no_selection",
+                )
+            continue
+        if item.get("llm_kind") == "scoped_candidate":
+            if _scoped_candidate_is_acceptable(selected, item["fact"]):
+                item["scoped_candidate_accepted"] = selected
+                _shared_register_candidate(shared_context, selected)
+                _shared_clear_pending(shared_context, item)
+            else:
+                item["scoped_candidate_selected"] = selected
+                _shared_mark_pending(
+                    shared_context,
+                    item,
+                    "initial_scope_candidate_not_semantically_confirmed",
+                )
+            continue
+        _shared_register_candidate(shared_context, selected)
+        if (
+            _candidate_has_authoritative_geometry(selected)
+            or str(item.get("role", "") or "").strip().casefold()
+            in {"village", "natural_village"}
+        ):
+            _shared_clear_pending(shared_context, item)
+        elif item.get("scope_names"):
+            _shared_mark_pending(
+                shared_context,
+                item,
+                "selected_candidate_lacks_authoritative_geometry",
+            )
+
+    # Shared-context recovery waves: an unresolved mention may become
+    # resolvable after another work item establishes the village/feature
+    # context.  Retrieval remains bounded and typed; the LLM only selects from
+    # the resulting Bundle/GIS closed set.
+    typed_recovery_roles = {
+        "facility", "landmark", "hazard", "road", "axis", "water",
+        "parcel", "zone",
+    }
+    for recovery_round in range(2, _grounding_round_limit() + 1):
+        if llm is None:
+            break
+        recovery_groups: Dict[tuple, List[Dict[str, Any]]] = {}
+        for item in prepared:
+            if item.get("scope") or item.get("candidate") is not None:
+                continue
+            role = str(item.get("role", "") or "").strip().casefold()
+            if role not in typed_recovery_roles:
+                continue
+            if not item.get("scope_names"):
+                continue
+            if item.get("scoped_candidate_accepted") is not None:
+                continue
+            current_candidates = list(item.get("scope_candidates") or [])
+            candidates = _shared_scope_candidates(
+                shared_context,
+                item["fact"],
+                role,
+                current_candidates,
+                item["scope_names"],
+            )
+            if not candidates:
+                recover = getattr(
+                    context.evidence_graph,
+                    "recover_scoped_candidates",
+                    None,
+                )
+                if callable(recover):
+                    try:
+                        recovered, recovery_trace = recover(
+                            item["mention"],
+                            role=role,
+                            scope_names=item["scope_names"],
+                            hints=item["hints"],
+                            source_feature_ids=list(
+                                getattr(item["fact"], "source_feature_ids", None)
+                                or []
+                            ),
+                        )
+                        item["trace"].extend(list(recovery_trace or []))
+                        candidates = _shared_scope_candidates(
+                            shared_context,
+                            item["fact"],
+                            role,
+                            list(recovered or []),
+                            item["scope_names"],
+                        )
+                    except Exception as exc:  # noqa: BLE001
+                        item["trace"].append({
+                            "step": "shared_scope_recovery_error",
+                            "round": recovery_round,
+                            "role": role,
+                            "error": type(exc).__name__,
+                        })
+            if not candidates:
+                item["trace"].append({
+                    "step": "shared_scope_recovery_empty",
+                    "round": recovery_round,
+                    "role": role,
+                })
+                _shared_mark_pending(
+                    shared_context,
+                    item,
+                    "no_source_candidate_in_scope",
+                )
+                continue
+            item["scope_candidates"] = candidates
+            shared_context.recovery_candidates[item["shared_key"]] = candidates
+            item["llm_kind"] = "scoped_recovery"
+            item["llm_candidates"] = candidates
+            item["shared_prompt_context"] = _shared_grounding_prompt_context(
+                shared_context,
+                item["fact"],
+                item["scope_names"],
+            )
+            item["trace"].append({
+                "step": "shared_scope_recovery_wave",
+                "round": recovery_round,
+                "role": role,
+                "candidate_count": len(candidates),
+                "selection": "llm_closed_set_with_shared_context",
+            })
+            key = _grounding_work_key(item, "scoped_recovery", candidates)
+            recovery_groups.setdefault(key, []).append(item)
+
+        recovery_tasks = []
+        recovery_group_items = []
+        for group in recovery_groups.values():
+            representative = group[0]
+            recovery_tasks.append(_llm_reason_candidate(
+                llm,
+                representative["mention"],
+                representative["role"],
+                representative["hints"],
+                representative["llm_candidates"],
+                budget=ground_llm_budget,
+                shared_context=representative.get(
+                    "shared_prompt_context",
+                    "",
+                ),
+                round_number=recovery_round,
+            ))
+            recovery_group_items.append(group)
+        if not recovery_tasks:
+            break
+        logger.info(
+            "[ground_anchors] concurrent shared recovery round=%d groups=%d facts=%d max_concurrent=%d",
+            recovery_round,
+            len(recovery_tasks),
+            sum(len(group) for group in recovery_group_items),
+            int(ground_llm_budget.get("max_concurrent", 1) or 1),
+        )
+        recovery_results = await asyncio.gather(
+            *recovery_tasks,
+            return_exceptions=True,
+        )
+        for group, decision in zip(recovery_group_items, recovery_results):
+            decision = None if isinstance(decision, Exception) else decision
+            for item in group:
+                item["llm_recovery_decision"] = decision
+                if decision is not None and _scoped_candidate_is_acceptable(
+                    decision,
+                    item["fact"],
+                ):
+                    item["scoped_candidate_accepted"] = decision
+                    _shared_register_candidate(shared_context, decision)
+                    _shared_clear_pending(shared_context, item)
+                    item["trace"].append({
+                        "step": "shared_scope_recovery_selected",
+                        "round": recovery_round,
+                        "picked": getattr(
+                            decision,
+                            "canonical_name",
+                            "",
+                        ),
+                    })
+                elif decision is not None:
+                    item["scoped_candidate_selected"] = decision
+                    _shared_mark_pending(
+                        shared_context,
+                        item,
+                        "scope_candidate_not_semantically_confirmed",
+                    )
+                    item["trace"].append({
+                        "step": "shared_scope_recovery_abstain",
+                        "round": recovery_round,
+                        "reason": "scope_only_or_semantic_evidence_insufficient",
+                        "picked": getattr(
+                            decision,
+                            "canonical_name",
+                            "",
+                        ),
+                    })
+                else:
+                    _shared_mark_pending(
+                        shared_context,
+                        item,
+                        "shared_scope_llm_no_selection",
+                    )
+                    item["trace"].append({
+                        "step": "shared_scope_recovery_abstain",
+                        "round": recovery_round,
+                        "reason": "llm_no_selection",
+                    })
+
+        if ground_llm_budget.get("provider_unavailable", False):
+            break
 
     # Orientation rebinding is also a per-location LLM fallback.  Keep it in
     # the same bounded async wave as the initial candidate decisions.  Calling
@@ -1579,6 +2255,29 @@ async def ground_l1_anchors(
                     "picked": getattr(candidate, "canonical_name", ""),
                     "selection": "typed_closed_set",
                 })
+        elif item.get("llm_kind") in {"scoped_candidate", "scoped_recovery"}:
+            selected = (
+                item.get("scoped_candidate_accepted")
+                or item.get("llm_recovery_decision")
+                or item.get("llm_decision")
+            )
+            if _scoped_candidate_is_acceptable(selected, fact):
+                candidate = selected
+                item["llm_kind"] = "candidate"
+                trace.append({
+                    "step": "llm_scoped_candidate_recovery",
+                    "picked": getattr(selected, "canonical_name", ""),
+                    "selection": "shared_scope_closed_set",
+                })
+            else:
+                candidate = None
+                if selected is not None:
+                    item["scoped_candidate_selected"] = selected
+                    trace.append({
+                        "step": "llm_scoped_candidate_abstain",
+                        "reason": "scope_only_or_semantic_evidence_insufficient",
+                        "picked": getattr(selected, "canonical_name", ""),
+                    })
         elif item.get("llm_kind") == "fallback":
             candidate = item.get("llm_decision")
             trace.append({"step": "fallback", "best_effort": True})
@@ -1634,6 +2333,11 @@ async def ground_l1_anchors(
             representative["base_anchor"],
             llm,
             budget=ground_llm_budget,
+            shared_context=_shared_grounding_prompt_context(
+                shared_context,
+                representative["fact"],
+                representative.get("scope_names", []),
+            ),
         ))
         orientation_group_items.append(group)
     if orientation_tasks:
@@ -1700,6 +2404,11 @@ async def ground_l1_anchors(
             plan["hints"],
             plan["candidates"],
             budget=ground_llm_budget,
+            shared_context=_shared_grounding_prompt_context(
+                shared_context,
+                representative["fact"],
+                representative.get("scope_names", []),
+            ),
         ))
         village_group_items.append(group)
     if village_tasks:
@@ -1726,6 +2435,7 @@ async def ground_l1_anchors(
         if item.get("scope"):
             if item.get("candidate") is not None:
                 anchors.append(item["candidate"])
+                _shared_register_candidate(shared_context, item["candidate"])
             continue
         anchor = item.get("orientation_anchor") or item.get("base_anchor")
         plan = item.get("village_fallback_plan")
@@ -1736,13 +2446,17 @@ async def ground_l1_anchors(
                 item.get("village_fallback_pick"),
             )
         if anchor is None:
-            unresolved_items.append({
-                "code": "grounding_unresolved",
-                "mention": item["mention"],
-                "role": item["role"],
-                "reason": "typed_candidate_selection_or_spatial_evidence_missing",
-                "trace": list(trace),
-            })
+            record = _unresolved_grounding_item(
+                item,
+                code="grounding_unresolved",
+                reason="typed_candidate_selection_or_spatial_evidence_missing",
+            )
+            unresolved_items.append(record)
+            _shared_mark_pending(
+                shared_context,
+                item,
+                "typed_candidate_selection_or_spatial_evidence_missing",
+            )
             if item["role"] in ("village", "water", "road"):
                 trace.append({
                     "step": "skip_no_spatial_evidence",
@@ -1765,13 +2479,18 @@ async def ground_l1_anchors(
                 "reason": "requires_bundle_source_feature_geometry",
             })
         if anchor.role != "village" and not _has_spatial_evidence(anchor):
-            unresolved_items.append({
-                "code": "grounding_spatial_evidence_missing",
-                "mention": item["mention"],
-                "role": anchor.role,
-                "reason": "resolved_entity_has_no_bundle_geometry_or_bsm",
-                "trace": list(trace),
-            })
+            record = _unresolved_grounding_item(
+                item,
+                code="grounding_spatial_evidence_missing",
+                reason="resolved_entity_has_no_bundle_geometry_or_bsm",
+            )
+            record["role"] = anchor.role
+            unresolved_items.append(record)
+            _shared_mark_pending(
+                shared_context,
+                item,
+                "resolved_entity_has_no_bundle_geometry_or_bsm",
+            )
             trace.append({
                 "step": "skip_no_spatial_evidence",
                 "role": anchor.role,
@@ -1785,6 +2504,8 @@ async def ground_l1_anchors(
             )
             continue
         anchors.append(anchor)
+        _shared_register_candidate(shared_context, anchor)
+        _shared_clear_pending(shared_context, item)
 
     # 4) 同坐标 = 同实体：按坐标去重合并
     anchors = _dedupe_anchors_by_coordinate(anchors)

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
+import re
 
 import pytest
 
@@ -757,3 +758,166 @@ async def test_ground_rejects_global_facility_when_scope_expansion_raises(
 
     assert grounded == []
     assert context.grounding_unresolved[0]["mention"] == "祠堂"
+
+
+@pytest.mark.asyncio
+async def test_shared_context_recovery_retries_unresolved_location_for_three_rounds(
+    monkeypatch,
+):
+    from app.domain.ground import anchors as anchors_module
+    from app.evidence.retrieval import evidence_graph as evidence_graph_module
+
+    known = _candidate(
+        "http://example.test/facility/known",
+        "bsm-known",
+    ).model_copy(update={
+        "canonical_name": "已知祠堂",
+        "source_feature_id": "facility:known",
+    })
+    unresolved = _candidate(
+        "http://example.test/facility/unresolved",
+        "bsm-unresolved",
+    ).model_copy(update={
+        "canonical_name": "祠堂",
+        "source_feature_id": "facility:unresolved",
+    })
+    facts = [
+        L1LocationFact(
+            mention="已知祠堂",
+            normalized_name="已知祠堂",
+            role="facility",
+            village_scopes=["甲村"],
+            spatial_hint="甲村",
+            source_span="已知祠堂 | 甲村",
+            source_report_ref="report:known",
+            dimension_key="history",
+        ),
+        L1LocationFact(
+            mention="祠堂",
+            normalized_name="祠堂",
+            role="facility",
+            village_scopes=["甲村"],
+            spatial_hint="甲村",
+            source_span="祠堂 | 甲村 | unresolved",
+            source_report_ref="report:unresolved",
+            dimension_key="history",
+        ),
+    ]
+    context = _context(
+        gazetteer_entries=[
+            SimpleNamespace(
+                name="甲村",
+                aliases=[],
+                bsms=["44142621100000001001"],
+                centroid=(116.073, 24.839),
+            ),
+        ],
+    )
+    context.location_facts = facts
+
+    class _Graph:
+        def resolve_mention(self, mention, role="unknown", hints=""):
+            del role, hints
+            if mention == "已知祠堂":
+                return SimpleNamespace(
+                    status="resolved",
+                    candidates=[known],
+                    query_trace=[],
+                )
+            return SimpleNamespace(
+                status="unresolved",
+                candidates=[],
+                query_trace=[],
+            )
+
+        def expand_supporting_evidence(self, mention, **_kwargs):
+            if mention == "已知祠堂":
+                return {
+                    "candidates": [known],
+                    "status": "resolved",
+                    "resolution_mode": "strict_scope",
+                    "query_trace": [{
+                        "step": "supporting_evidence_start",
+                        "scope_names": ["甲村"],
+                    }],
+                }
+            return {
+                "candidates": [],
+                "scope_candidates": [unresolved],
+                "status": "unresolved",
+                "query_trace": [{
+                    "step": "supporting_evidence_start",
+                    "scope_names": ["甲村"],
+                }],
+            }
+
+        def recover_scoped_candidates(self, *_args, **_kwargs):
+            return [unresolved], [{
+                "step": "scoped_candidate_recovery",
+                "scope": "甲村",
+                "accepted_count": 1,
+            }]
+
+    graph = _Graph()
+    monkeypatch.setattr(
+        evidence_graph_module.EvidenceGraph,
+        "build",
+        staticmethod(lambda _context: graph),
+    )
+    monkeypatch.setattr(
+        "app.core.settings.GROUND_MAX_RECOVERY_ROUNDS",
+        3,
+    )
+    monkeypatch.setattr(
+        "app.core.settings.GROUND_MAX_LLM_CALLS",
+        3,
+    )
+    calls = []
+
+    class _LLM:
+        def with_structured_output(self, response_model, **_kwargs):
+            class _Structured:
+                async def ainvoke(self, prompt):
+                    calls.append(prompt)
+                    candidate_ids = re.findall(
+                        r"candidate_id=([^\s]+)",
+                        prompt,
+                    )
+                    digest = re.search(
+                        r"input_digest=([0-9a-f]+)",
+                        prompt,
+                    ).group(1)
+                    if len(calls) < 3:
+                        return response_model(
+                            status="abstain",
+                            selected_candidate_id="",
+                            input_digest=digest,
+                        )
+                    return response_model(
+                        status="selected",
+                        selected_candidate_id=candidate_ids[0],
+                        input_digest=digest,
+                    )
+
+            return _Structured()
+
+    grounded = await anchors_module.ground_l1_anchors(
+        context,
+        "shared-context-three-rounds",
+        llm=_LLM(),
+        bump=False,
+    )
+
+    assert len(calls) == 3
+    assert "bsm-known" in calls[0]
+    assert "previous_unresolved" in calls[1]
+    assert [
+        anchor.source_feature_id
+        for anchor in grounded
+    ] == ["facility:known", "facility:unresolved"]
+    assert context.grounding_unresolved == []
+    assert any(
+        item.get("step") == "shared_scope_recovery_selected"
+        and item.get("round") == 3
+        for item in grounded[1].query_trace
+    )

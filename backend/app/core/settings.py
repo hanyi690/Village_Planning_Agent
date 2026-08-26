@@ -105,6 +105,9 @@ GROUND_ANCHOR_TIMEOUT_S = float(os.getenv("GROUND_ANCHOR_TIMEOUT_S", "180"))  # 
 GROUND_LLM_CALL_TIMEOUT_S = float(os.getenv("GROUND_LLM_CALL_TIMEOUT_S", "60"))
 GROUND_MAX_LLM_CALLS = int(os.getenv("GROUND_MAX_LLM_CALLS", "16"))
 GROUND_LLM_MAX_CONCURRENT = int(os.getenv("GROUND_LLM_MAX_CONCURRENT", "4"))
+# One initial selector wave plus at most two shared-context recovery waves.
+# The runtime clamps this to 1..3 so repeated provider calls stay bounded.
+GROUND_MAX_RECOVERY_ROUNDS = int(os.getenv("GROUND_MAX_RECOVERY_ROUNDS", "3"))
 GROUND_QUERY_SPEC_MAX_TOKENS = int(
     os.getenv("GROUND_QUERY_SPEC_MAX_TOKENS", "1200")
 )
