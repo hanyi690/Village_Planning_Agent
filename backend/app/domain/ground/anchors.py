@@ -1284,7 +1284,7 @@ async def _llm_reason_candidate(
         "字段必须完整：status 为 selected、abstain 或 ambiguous；"
         "selected_candidate_id 在 selected 时原样填写候选 candidate_id，"
         "否则填写空字符串；input_digest 必须原样复制。"
-        f"input_digest={input_digest}\n{lines}"
+        f"input_digest={input_digest};\n{lines}"
     )
     try:
         from app.infrastructure.llm.structured import (
