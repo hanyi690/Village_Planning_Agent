@@ -51,6 +51,21 @@ def _feature(
     )
 
 
+def _candidate(ref: str, bsm: str) -> PlaceResolutionCandidate:
+    return PlaceResolutionCandidate(
+        entity_ref=ref,
+        entity_type="facility",
+        canonical_name="祠堂",
+        role="facility",
+        source_bsms=[bsm],
+        geometry_ref=f"bundle://feature/{bsm}",
+        feature_bsm=bsm,
+        source_feature_id=f"facility:{bsm}",
+        relation_refs=["relation:test"],
+        score=0.6,
+    )
+
+
 def _context(
     *,
     points: dict[str, list] | None = None,
@@ -249,6 +264,146 @@ def test_scoped_same_name_facility_keeps_feature_identity():
     assert unsupported_scope["candidates"] == []
 
 
+def test_scoped_semantic_probe_keeps_scope_over_global_same_name(monkeypatch):
+    context = _context()
+    graph = EvidenceGraph(
+        context,
+        index=PlaceEvidenceIndex.build(context),
+    )
+    global_candidate = _candidate(
+        "http://example.test/facility/global",
+        "bsm-global",
+    )
+    scoped_candidate = _candidate(
+        "http://example.test/facility/scoped",
+        "bsm-scoped",
+    )
+
+    monkeypatch.setattr(
+        graph,
+        "semantic_label_probes",
+        lambda *_args, **_kwargs: [("社前公祠", "facility")],
+    )
+
+    def scoped_lookup(_scope, label, **_kwargs):
+        if label == "社前公祠":
+            return SimpleNamespace(
+                status="resolved",
+                candidates=[scoped_candidate],
+                query_trace=[],
+            )
+        return SimpleNamespace(
+            status="unresolved",
+            candidates=[],
+            query_trace=[],
+        )
+
+    monkeypatch.setattr(graph, "query_facility_bsms", scoped_lookup)
+    expansion = graph.expand_supporting_evidence(
+        "祠堂",
+        role="facility",
+        scope_names=["社前村"],
+        direct_result=SimpleNamespace(
+            status="ambiguous",
+            candidates=[global_candidate],
+            query_trace=[],
+        ),
+    )
+
+    assert expansion["status"] == "resolved"
+    assert expansion["candidates"] == [scoped_candidate]
+    assert global_candidate not in expansion["candidates"]
+    assert any(
+        item.get("step") == "strict_facility_probe_scope"
+        and item.get("probe") == "社前公祠"
+        for item in expansion["query_trace"]
+    )
+
+
+def test_direct_result_reuse_does_not_resolve_again():
+    class _CountingIndex:
+        def __init__(self):
+            self.calls = 0
+
+        def resolve_mention(self, _mention, *, role, hints):
+            del role, hints
+            self.calls += 1
+            return SimpleNamespace(
+                status="unresolved",
+                candidates=[],
+                query_trace=[],
+            )
+
+        def semantic_label_probes(self, *_args, **_kwargs):
+            return []
+
+    index = _CountingIndex()
+    context = _context()
+    graph = EvidenceGraph(context, index=index)
+    candidate = _candidate("http://example.test/facility/1", "bsm-1")
+    expansion = graph.expand_supporting_evidence(
+        "祠堂",
+        role="facility",
+        direct_result=SimpleNamespace(
+            status="ambiguous",
+            candidates=[candidate],
+            query_trace=[],
+        ),
+    )
+
+    assert index.calls == 0
+    assert expansion["candidates"] == [candidate]
+    assert expansion["status"] == "ambiguous"
+
+
+def test_supporting_evidence_caps_scope_and_probe_queries(monkeypatch):
+    context = _context()
+    graph = EvidenceGraph(
+        context,
+        index=PlaceEvidenceIndex.build(context),
+    )
+    scoped_calls = []
+
+    def scoped_lookup(scope, label, **_kwargs):
+        scoped_calls.append((scope, label))
+        return SimpleNamespace(
+            status="unresolved",
+            candidates=[],
+            query_trace=[],
+        )
+
+    monkeypatch.setattr(graph, "query_facility_bsms", scoped_lookup)
+    monkeypatch.setattr(
+        graph,
+        "semantic_label_probes",
+        lambda *_args, **_kwargs: [
+            (f"别名{i}", "facility")
+            for i in range(100)
+        ],
+    )
+    expansion = graph.expand_supporting_evidence(
+        "祠堂",
+        role="facility",
+        scope_names=[f"村{i}" for i in range(100)],
+        direct_result=SimpleNamespace(
+            status="unresolved",
+            candidates=[],
+            query_trace=[],
+        ),
+        max_candidates=999,
+    )
+    start = next(
+        item
+        for item in expansion["query_trace"]
+        if item.get("step") == "supporting_evidence_start"
+    )
+
+    assert len(start["scope_names"]) == 12
+    assert start["scope_truncated"] is True
+    assert start["candidate_limit"] == 12
+    assert len(scoped_calls) <= 12 * (1 + 12)
+
+
 def test_cross_role_point_does_not_become_a_road_or_line_candidate():
     hazard = _feature(
         bsm="44142621100000009003",
@@ -282,10 +437,20 @@ def test_cross_role_point_does_not_become_a_road_or_line_candidate():
     )
 
     assert expansion["inferred_scope_candidate"] is None
+    assert expansion["candidates"]
+    assert [candidate.feature_bsm for candidate in expansion["candidates"]] == [
+        road.bsm
+    ]
     assert all(
         getattr(candidate, "role", "") in {"road", "axis"}
+        and getattr(candidate, "source_layer", "") == "roads_current"
         for candidate in expansion["candidates"]
     )
+    water_expansion = graph.expand_supporting_evidence(
+        "炉池",
+        role="water",
+    )
+    assert water_expansion["candidates"] == []
 
 
 @pytest.mark.asyncio
@@ -444,6 +609,69 @@ async def test_ground_rejects_global_facility_when_scope_lookup_is_unresolved(
     grounded = await anchors_module.ground_l1_anchors(
         context,
         "ground-strict-scope",
+        bump=False,
+    )
+
+    assert grounded == []
+    assert context.grounding_unresolved[0]["mention"] == "祠堂"
+
+
+@pytest.mark.asyncio
+async def test_ground_rejects_global_facility_when_scope_expansion_raises(
+    monkeypatch,
+):
+    from app.domain.ground import anchors as anchors_module
+    from app.evidence.retrieval import evidence_graph as evidence_graph_module
+
+    global_candidate = _candidate(
+        "http://example.test/facility/global",
+        "bsm-global",
+    )
+
+    class _Graph:
+        def resolve_mention(self, mention, role="unknown", hints=""):
+            return SimpleNamespace(
+                mention=mention,
+                status="resolved",
+                candidates=[global_candidate],
+                query_trace=[],
+            )
+
+        def expand_supporting_evidence(self, *args, **kwargs):
+            raise RuntimeError("scoped lookup unavailable")
+
+    monkeypatch.setattr(
+        evidence_graph_module.EvidenceGraph,
+        "build",
+        classmethod(lambda cls, context: _Graph()),
+    )
+    context = SimpleNamespace(
+        session_id="ground-strict-scope-error",
+        village_name="金田村",
+        workspace=SimpleNamespace(
+            points={},
+            lines={},
+            polygons={},
+            boundary=None,
+        ),
+        current_parcels=lambda: [],
+        location_facts=[L1LocationFact(
+            mention="祠堂",
+            normalized_name="祠堂",
+            role="facility",
+            village_scopes=["社前村"],
+            spatial_hint="社前村",
+            source_report_ref="report:mvp",
+            dimension_key="historical_culture",
+        )],
+        gazetteer=None,
+        kg=None,
+        ports=None,
+    )
+
+    grounded = await anchors_module.ground_l1_anchors(
+        context,
+        "ground-strict-scope-error",
         bump=False,
     )
 

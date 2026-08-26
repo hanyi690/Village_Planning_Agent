@@ -1411,7 +1411,7 @@ async def ground_l1_anchors(
             candidate_pool = []
         if strict_scope:
             candidate_pool = supporting_candidates
-        elif strict_scope_requested and expansion.get("status") == "unresolved":
+        elif strict_scope_requested:
             candidate_pool = []
         elif not candidate_pool and supporting_candidates:
             candidate_pool = supporting_candidates

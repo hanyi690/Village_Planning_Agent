@@ -901,11 +901,17 @@ class EvidenceGraph:
         """
         query = str(mention or "").strip()
         expected_role = str(role or "unknown").strip().casefold() or "unknown"
+        try:
+            requested_limit = int(max_candidates or 1)
+        except (TypeError, ValueError):
+            requested_limit = _MAX_CANDIDATES
+        limit = min(_MAX_CANDIDATES, max(1, requested_limit))
         explicit_scopes = list(dict.fromkeys(
             str(value).strip()
             for value in (scope_names or ())
             if str(value).strip()
         ))
+        scope_truncated = len(explicit_scopes) > _MAX_CANDIDATES
         if not explicit_scopes and hints:
             folded_hints = _fold_query(hints)
             gazetteer = getattr(self.context, "gazetteer", None)
@@ -924,13 +930,24 @@ class EvidenceGraph:
                     if name:
                         explicit_scopes.append(name)
             explicit_scopes = list(dict.fromkeys(explicit_scopes))
+            scope_truncated = (
+                scope_truncated or len(explicit_scopes) > _MAX_CANDIDATES
+            )
+        explicit_scopes = explicit_scopes[:_MAX_CANDIDATES]
 
         trace: list[dict[str, Any]] = [{
             "step": "supporting_evidence_start",
             "mention": query,
             "role": expected_role,
             "scope_names": explicit_scopes,
+            "candidate_limit": limit,
+            "scope_truncated": scope_truncated,
         }]
+
+        def bounded_query_trace() -> list[dict[str, Any]]:
+            if len(trace) <= 24:
+                return list(trace)
+            return [trace[0], *trace[-23:]]
         feature_id_filter = {
             str(value).strip()
             for value in (source_feature_ids or ())
@@ -977,7 +994,7 @@ class EvidenceGraph:
             probe_role: str = "",
         ) -> None:
             accepted = 0
-            for candidate in values:
+            for candidate in values[:limit]:
                 if not feature_id_matches(candidate) or not has_source(candidate):
                     continue
                 key = candidate_key(candidate)
@@ -994,12 +1011,13 @@ class EvidenceGraph:
                 "accepted_count": accepted,
                 "candidate_refs": [
                     str(getattr(candidate, "entity_ref", "") or "")
-                    for candidate in values[: max(1, int(max_candidates or 1))]
+                    for candidate in values[:limit]
                     if str(getattr(candidate, "entity_ref", "") or "").strip()
                 ],
             })
 
         strict_candidates: dict[tuple[str, ...], Any] = {}
+        strict_statuses: list[str] = []
         if expected_role in {"facility", "landmark"} and explicit_scopes:
             for scope in explicit_scopes:
                 try:
@@ -1016,6 +1034,9 @@ class EvidenceGraph:
                         "error": type(exc).__name__,
                     })
                     continue
+                strict_statuses.append(
+                    str(getattr(scoped_result, "status", "unresolved") or "unresolved")
+                )
                 add_candidates(
                     strict_candidates,
                     (
@@ -1030,7 +1051,7 @@ class EvidenceGraph:
                 )
             if strict_candidates:
                 candidates = list(strict_candidates.values())[
-                    : max(1, int(max_candidates or 1))
+                    :limit
                 ]
                 trace.append({
                     "step": "supporting_evidence_complete",
@@ -1040,8 +1061,13 @@ class EvidenceGraph:
                 return {
                     "candidates": candidates,
                     "inferred_scope_candidate": None,
-                    "status": "resolved" if len(candidates) == 1 else "ambiguous",
-                    "query_trace": trace[-24:],
+                    "status": (
+                        "resolved"
+                        if len(candidates) == 1
+                        and not any(status == "ambiguous" for status in strict_statuses)
+                        else "ambiguous"
+                    ),
+                    "query_trace": bounded_query_trace(),
                 }
 
         direct_candidates: dict[tuple[str, ...], Any] = {}
@@ -1071,7 +1097,7 @@ class EvidenceGraph:
             })
 
         direct_values = list(direct_candidates.values())[
-            : max(1, int(max_candidates or 1))
+            :limit
         ]
         all_roles = (
             "village", "natural_village", "facility", "landmark", "hazard",
@@ -1093,8 +1119,9 @@ class EvidenceGraph:
         probes = self.semantic_label_probes(
             query,
             roles=probe_roles,
-            max_probes=max(1, int(max_candidates or 1)),
+            max_probes=limit,
         )
+        probes = list(probes)[:limit]
         trace.append({
             "step": "semantic_label_probe_batch",
             "probe_count": len(probes),
@@ -1104,6 +1131,7 @@ class EvidenceGraph:
                 for label, probe_role in probes
             ],
         })
+        strict_probe_statuses: list[str] = []
         for probe, probe_role in probes:
             if expected_role in {"facility", "landmark"} and explicit_scopes:
                 for scope in explicit_scopes:
@@ -1122,6 +1150,16 @@ class EvidenceGraph:
                             "error": type(exc).__name__,
                         })
                         continue
+                    strict_probe_statuses.append(
+                        str(
+                            getattr(
+                                scoped_probe_result,
+                                "status",
+                                "unresolved",
+                            )
+                            or "unresolved"
+                        )
+                    )
                     add_candidates(
                         supporting_candidates,
                         (
@@ -1166,7 +1204,7 @@ class EvidenceGraph:
 
         if expected_role in {"facility", "landmark"} and explicit_scopes:
             scoped_values = list(supporting_candidates.values())[
-                : max(1, int(max_candidates or 1))
+                :limit
             ]
             if scoped_values:
                 trace.append({
@@ -1178,9 +1216,15 @@ class EvidenceGraph:
                     "candidates": scoped_values,
                     "inferred_scope_candidate": None,
                     "status": (
-                        "resolved" if len(scoped_values) == 1 else "ambiguous"
+                        "resolved"
+                        if len(scoped_values) == 1
+                        and not any(
+                            status == "ambiguous"
+                            for status in strict_probe_statuses
+                        )
+                        else "ambiguous"
                     ),
-                    "query_trace": trace[-24:],
+                    "query_trace": bounded_query_trace(),
                 }
             trace.append({
                 "step": "supporting_evidence_unresolved",
@@ -1190,7 +1234,7 @@ class EvidenceGraph:
                 "candidates": [],
                 "inferred_scope_candidate": None,
                 "status": "unresolved",
-                "query_trace": trace[-24:],
+                "query_trace": bounded_query_trace(),
             }
 
         if direct_values and expected_role not in {
@@ -1211,7 +1255,7 @@ class EvidenceGraph:
                     if direct_values
                     else "unresolved"
                 ),
-                "query_trace": trace[-24:],
+                "query_trace": bounded_query_trace(),
             }
 
         if expected_role in {"village", "natural_village", "unknown"}:
@@ -1221,7 +1265,7 @@ class EvidenceGraph:
             relation_refs: list[str] = []
             l1_refs: list[str] = []
             source_roles: set[str] = set()
-            for candidate in source_values[: max(1, int(max_candidates or 1))]:
+            for candidate in source_values[:limit]:
                 source_roles.add(
                     str(getattr(candidate, "role", "") or "unknown")
                 )
@@ -1322,7 +1366,7 @@ class EvidenceGraph:
                     "candidates": direct_values,
                     "inferred_scope_candidate": scope_candidate,
                     "status": "inferred",
-                    "query_trace": trace[-24:],
+                    "query_trace": bounded_query_trace(),
                 }
 
         trace.append({
@@ -1333,7 +1377,7 @@ class EvidenceGraph:
             "candidates": direct_values,
             "inferred_scope_candidate": None,
             "status": "unresolved" if not direct_values else "ambiguous",
-            "query_trace": trace[-24:],
+            "query_trace": bounded_query_trace(),
         }
 
     def query_parcel_bsms_in_bbox(
