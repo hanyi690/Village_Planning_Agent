@@ -199,6 +199,32 @@ async def test_mvp_l1_grounding_coverage_audit(sqlite_db, pipeline_reset):
         )
 
         bundle = await build_session_bundle(session_id)
+        road_feature = next(
+            (
+                feature
+                for layer_name in bundle.lines.keys()
+                for feature in (bundle.lines.get(layer_name) or [])
+                if str(
+                    (getattr(feature, '_raw', {}) or {}).get('source_feature_id')
+                    or ''
+                ).strip()
+            ),
+            None,
+        )
+        assert road_feature is not None
+        road_source_feature_id = str(
+            (getattr(road_feature, '_raw', {}) or {}).get('source_feature_id')
+            or ''
+        ).strip()
+        assert (getattr(road_feature, 'geometry', {}) or {}).get('type') in {
+            'LineString', 'MultiLineString'
+        }
+        facts = [
+            fact.model_copy(update={'source_feature_ids': [road_source_feature_id]})
+            if fact.normalized_name == '122乡道'
+            else fact
+            for fact in facts
+        ]
         kg = KGManager().get_or_build_kg('金田村', bundle=bundle, session_id=session_id)
         gazetteer = build_gazetteer(kg, bundle)
         parcels = list(bundle.polygons.get('landuse_current') or [])
@@ -347,6 +373,7 @@ async def test_mvp_l1_grounding_coverage_audit(sqlite_db, pipeline_reset):
             for anchor in hall_anchors
             if anchor.geometry_granularity == 'exact_feature'
         ]
+        assert exact_halls
         assert len({anchor.feature_bsm for anchor in exact_halls}) == len(exact_halls)
         assert all(anchor.feature_bsm for anchor in exact_halls)
         assert all(len(trace_scope_names(anchor)) == 1 for anchor in hall_anchors)
@@ -376,7 +403,11 @@ async def test_mvp_l1_grounding_coverage_audit(sqlite_db, pipeline_reset):
                     'LineString', 'MultiLineString', 'Polygon', 'MultiPolygon'
                 }
 
-        assert any(item['role'] == 'road' for item in unresolved)
         assert any(item['role'] == 'water' for item in unresolved)
+        road_anchors = [anchor for anchor in anchors if anchor.role in {'road', 'axis'}]
+        assert len(road_anchors) == 1
+        assert _source_geometry_type(road_anchors[0], bundle) in {
+            'LineString', 'MultiLineString'
+        }
     finally:
         await teardown()
