@@ -10,7 +10,7 @@ Evidence-first / fail-closed:
 - Geometry and BSMs always come from the bundle clusters, never from the LLM.
 - A village is assigned only when the report provides a verifiable evidence
   snippet (verbatim substring); villages without evidence stay unresolved.
-- The LLM only produces name -> cluster-index assignment text; no coordinates.
+- The LLM only produces stable entity_ref -> candidate_id decisions; no coordinates.
 
 Determinism & resume:
 - The cluster derivation is fully deterministic.
@@ -22,16 +22,124 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+from collections import Counter
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Mapping, Optional
+from typing import Any, Dict, Iterable, List, Literal, Mapping, Optional
 
 from app.infrastructure.logging import get_logger
+from pydantic import BaseModel as _BaseModel
+from pydantic import ConfigDict as _ConfigDict
+from pydantic import Field as _Field
+from pydantic import model_validator as _model_validator
 
 logger = get_logger(__name__)
 
 _RESIDENTIAL_DLMC = ("1340", "0702")
 _CLUSTER_DISTANCE_DEG = 0.008  # ~800m at 24N
+_MAPPING_SCHEMA_VERSION = "grounding-stable-id-batch-v1"
+_REPORT_SEGMENT_ID = "report"
+
+
+def _canonical_json(value: Any) -> str:
+    return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str)
+
+
+def _stable_digest(value: Any) -> str:
+    return hashlib.sha256(_canonical_json(value).encode("utf-8")).hexdigest()
+
+
+def stable_entity_ref(kind: str, value: str) -> str:
+    """Build a stable input reference without exposing a positional ordinal."""
+    normalized_kind = str(kind or "entity").strip().lower() or "entity"
+    normalized_value = " ".join(str(value or "").split())
+    return f"{normalized_kind}:{_stable_digest(normalized_value)[:24]}"
+
+
+class SourceSpan(_BaseModel):
+    """A source-bound report span carried by every accepted place decision."""
+
+    model_config = _ConfigDict(extra="forbid")
+
+    segment_id: str = _Field(min_length=1)
+    start: int = _Field(ge=0)
+    end: int = _Field(gt=0)
+    quote_hash: str = _Field(min_length=1)
+
+    @_model_validator(mode="after")
+    def _valid_range(self) -> "SourceSpan":
+        if self.end <= self.start:
+            raise ValueError("source span end must be greater than start")
+        return self
+
+
+class _GMappingDecision(_BaseModel):
+    """The only proposal shape accepted from the grounding provider."""
+
+    model_config = _ConfigDict(extra="forbid")
+
+    entity_ref: str = _Field(min_length=1)
+    status: Literal["mapped", "unresolved", "pending"]
+    candidate_ids: list[str] = _Field(default_factory=list)
+    source_span: Optional[SourceSpan] = None
+    reason_code: str = ""
+
+    @_model_validator(mode="after")
+    def _shape_closed(self) -> "_GMappingDecision":
+        self.candidate_ids = [str(value).strip() for value in self.candidate_ids if str(value).strip()]
+        if len(self.candidate_ids) != len(set(self.candidate_ids)):
+            raise ValueError("candidate_ids must not contain duplicates")
+        if self.status == "mapped" and not self.candidate_ids:
+            raise ValueError("mapped decision requires candidate_ids")
+        if self.status == "mapped" and self.source_span is None:
+            raise ValueError("mapped decision requires source_span")
+        if self.status != "mapped" and self.candidate_ids:
+            raise ValueError("unresolved/pending decisions cannot cite candidates")
+        if self.status != "mapped" and not self.reason_code.strip():
+            raise ValueError("unresolved/pending decision requires reason_code")
+        return self
+
+
+class _GMappingSet(_BaseModel):
+    """Strict provider envelope; membership is checked after parsing."""
+
+    model_config = _ConfigDict(extra="forbid")
+
+    decisions: list[_GMappingDecision] = _Field(default_factory=list)
+
+
+class MappingResult(dict):
+    """Exact-batch mapping keyed only by stable input refs.
+
+    The dictionary contains one decision for every expected input ref.  Provider
+    refs outside that closed set are retained in ``unknown_refs`` for audit and
+    never converted into a candidate by guessing.
+    """
+
+    def __init__(
+        self,
+        decisions: Iterable[Mapping[str, Any]] = (),
+        *,
+        unknown_refs: Iterable[str] = (),
+        duplicate_refs: Iterable[str] = (),
+        schema_digest: str = "",
+        input_digest: str = "",
+        candidate_set_digest: str = "",
+    ) -> None:
+        super().__init__((str(item["entity_ref"]), dict(item)) for item in decisions)
+        self.unknown_refs = list(dict.fromkeys(str(value) for value in unknown_refs if str(value)))
+        self.duplicate_refs = list(dict.fromkeys(str(value) for value in duplicate_refs if str(value)))
+        self.schema_digest = schema_digest
+        self.input_digest = input_digest
+        self.candidate_set_digest = candidate_set_digest
+
+    @property
+    def pending(self) -> dict[str, dict[str, Any]]:
+        return {key: value for key, value in self.items() if value.get("status") == "pending"}
+
+    @property
+    def unresolved(self) -> dict[str, dict[str, Any]]:
+        return {key: value for key, value in self.items() if value.get("status") == "unresolved"}
 
 
 @dataclass
@@ -42,6 +150,40 @@ class VillageCluster:
     parcel_count: int = 0
     area_ha: float = 0.0
     features: Dict[str, Any] = field(default_factory=dict)
+    cluster_id: str = ""
+
+    @property
+    def entity_id(self) -> str:
+        return self.cluster_id
+
+
+def _candidate_identity(
+    *,
+    role: str,
+    bsms: Iterable[str],
+    centroid: Optional[tuple] = None,
+    source_identity: str = "",
+) -> str:
+    """Return an order-independent ID for one input candidate."""
+    normalized_bsms = sorted({str(value).strip() for value in bsms if str(value).strip()})
+    identity = {
+        "role": str(role or "candidate"),
+        "bsms": normalized_bsms,
+        "source_identity": str(source_identity or ""),
+        "centroid": [round(float(value), 12) for value in centroid] if centroid else None,
+    }
+    return f"cluster:{_stable_digest(identity)[:24]}"
+
+
+def _finalize_cluster_ids(clusters: List[VillageCluster], role: str) -> None:
+    for cluster in clusters:
+        if not cluster.cluster_id:
+            cluster.cluster_id = _candidate_identity(
+                role=role,
+                bsms=cluster.bsms,
+                centroid=cluster.centroid,
+                source_identity=str(cluster.features.get("source_identity") or ""),
+            )
 
 
 def build_landuse_bodies(
@@ -99,8 +241,8 @@ def build_landuse_bodies(
             ))
             member_pts.append([centroid])
     # Stable ordering: largest settlement first, then west->east, south->north
-    # and finally the sorted BSM set.  The final tie-breaker prevents source
-    # feature arrival order from changing LLM candidate indexes on resume.
+    # and finally the sorted BSM set.  Candidate identity is independent of
+    # the provider's response order.
     ordered = sorted(
         zip(clusters, member_pts),
         key=lambda pair: (
@@ -114,6 +256,7 @@ def build_landuse_bodies(
     member_pts = [pair[1] for pair in ordered]
     for i, cluster in enumerate(clusters):
         cluster.index = i
+    _finalize_cluster_ids(clusters, "landuse")
     _attach_body_features(clusters, member_pts)
     return clusters
 
@@ -163,36 +306,339 @@ def build_village_clusters(parcels: List[Any]) -> List[VillageCluster]:
     )
 
 
-_PROMPT_TEMPLATE = """你是村庄规划 GIS 证据编译器。待核对的聚落名称：{villages}。
-该村有 {m} 个宅基地聚落（编号 0..{max_index}），每个聚落有质心坐标与规模：
+_PROMPT_TEMPLATE = """你是村庄规划 GIS 证据编译器。只做闭集候选选择，不创造地点。
+待核对实体闭集（必须逐项返回 entity_ref）：
+{villages}
+
+候选闭集（只能引用 candidate_id）：
 {clusters}
 
-任务：把聚落分配到自然村；一个自然村可能由多个聚落组成（多对一），同一个聚落只能属于一个自然村。
+任务：把候选分配到输入实体；一个实体可以引用多个候选，但同一候选只能归属于一个实体。
 只允许根据报告摘录中明确出现的名称、方位、坐标或可核对空间关系建立映射。
-禁止按名称顺序、聚落规模顺序、常识或猜测分配。证据不足的名称必须省略。
+禁止按名称顺序、候选顺序、规模、常识或猜测分配；候选为空或多解时返回 pending 或 unresolved，不能默认选择。
 
-只输出符合结构化合同的 JSON：
-{{"entries": [{{"name": "自然村名称", "candidate_indexes": [编号, ...], "evidence": "报告原文短句"}}]}}。
-每个待核对名称最多一个 entry；evidence 必须是报告摘录中可以逐字找到的短句；不要输出其它文字。"""
+只输出严格 JSON：
+{{"decisions": [{{"entity_ref": "输入闭集中的 ref", "status": "mapped|unresolved|pending", "candidate_ids": ["候选闭集中的 candidate_id"], "source_span": {{"segment_id": "report", "start": 0, "end": 1, "quote_hash": "sha256"}}, "reason_code": ""}}]}}。
+mapped 必须有至少一个 candidate_id 和报告原文 source_span；unresolved/pending 不得携带候选，并填写 reason_code。
+必须对输入闭集每个 entity_ref 恰好返回一次；不要输出其它字段或文字。"""
 
 
-_WATER_PROMPT_TEMPLATE = """你是村庄规划 GIS 证据编译器。待核对的水体名称：{villages}。
-该村有 {m} 个由水域/河流地块聚合而成的水体（编号 0..{max_index}），每个水体有质心坐标与规模：
+_WATER_PROMPT_TEMPLATE = """你是村庄规划 GIS 证据编译器。只做闭集候选选择，不创造水体。
+待核对实体闭集（必须逐项返回 entity_ref）：
+{villages}
+
+候选闭集（只能引用 candidate_id）：
 {clusters}
 
-一个水体可能由多个地块组成（多对一），同一组地块只能属于一个水体。
+一个水体可能由多个地块组成；同一候选只能归属于一个实体。
 只允许根据报告摘录中明确出现的名称、方位、流向或可核对空间关系建立映射。
-禁止按名称顺序、规模顺序、常识或猜测分配。证据不足的名称必须省略。
+禁止按名称顺序、候选顺序、规模、常识或猜测分配；候选为空或多解时返回 pending 或 unresolved，不能默认选择。
 
-只输出符合结构化合同的 JSON：
-{{"entries": [{{"name": "水体名称", "candidate_indexes": [编号, ...], "evidence": "报告原文短句"}}]}}。
-每个待核对名称最多一个 entry；evidence 必须是报告摘录中可以逐字找到的短句；不要输出其它文字。"""
+只输出严格 JSON，字段与上面的 decisions 合同完全一致。
+必须对输入闭集每个 entity_ref 恰好返回一次；不要输出其它字段或文字。"""
 
 
 def _cache_path(run_root: Optional[Path]) -> Optional[Path]:
     if run_root is None:
         return None
     return (run_root / "village-cluster-map.json").resolve()
+
+
+def _candidate_line(candidate: VillageCluster) -> str:
+    features = dict(candidate.features or {})
+    features.pop("source_identity", None)
+    extra = " ".join(f"{key}={value}" for key, value in features.items())
+    return (
+        f"- candidate_id={candidate.cluster_id} "
+        f"centroid=({candidate.centroid[0]:.5f},{candidate.centroid[1]:.5f}) "
+        f"parcel_count={candidate.parcel_count} area_ha={candidate.area_ha:.2f} {extra}"
+    ).rstrip()
+
+
+def _expected_entities(names: Iterable[str], entity_kind: str) -> list[dict[str, str]]:
+    expected: list[dict[str, str]] = []
+    for name in names or []:
+        display_name = " ".join(str(name or "").split())
+        if not display_name:
+            continue
+        expected.append({
+            "entity_ref": stable_entity_ref(entity_kind, display_name),
+            "display_name": display_name,
+        })
+    return expected
+
+
+def _candidate_set_digest(bodies: Iterable[VillageCluster]) -> str:
+    descriptors = []
+    for candidate in bodies or []:
+        descriptors.append({
+            "candidate_id": candidate.cluster_id,
+            "bsms": sorted(str(value) for value in candidate.bsms),
+            "centroid": [round(float(value), 12) for value in candidate.centroid],
+            "parcel_count": int(candidate.parcel_count),
+            "area_ha": round(float(candidate.area_ha), 8),
+            "features": dict(candidate.features or {}),
+        })
+    return _stable_digest(sorted(descriptors, key=lambda item: item["candidate_id"]))
+
+
+def _mapping_input_digest(
+    *,
+    cache_key_prefix: str,
+    report_text: str,
+    expected: list[dict[str, str]],
+    prompt_kwargs: Optional[Dict[str, Any]],
+    source_artifact_ref: str,
+    source_artifact_digest: str,
+    spatial_evidence: Optional[Mapping[str, Any]],
+) -> str:
+    return _stable_digest({
+        "cache_key_prefix": cache_key_prefix,
+        "report_text": report_text,
+        "expected": expected,
+        "prompt_kwargs": prompt_kwargs or {},
+        "source_artifact_ref": source_artifact_ref,
+        "source_artifact_digest": source_artifact_digest,
+        "spatial_evidence": spatial_evidence or {},
+    })
+
+
+def _empty_decision(item: Mapping[str, str], status: str, reason_code: str) -> dict[str, Any]:
+    return {
+        "entity_ref": item["entity_ref"],
+        "display_name": item["display_name"],
+        "status": status,
+        "candidate_ids": [],
+        "source_span": None,
+        "reason_code": reason_code,
+    }
+
+
+def _pending_result(expected: list[dict[str, str]], reason_code: str) -> MappingResult:
+    return MappingResult(
+        [_empty_decision(item, "pending", reason_code) for item in expected]
+    )
+
+
+def _unresolved_result(expected: list[dict[str, str]], reason_code: str) -> MappingResult:
+    return MappingResult(
+        [_empty_decision(item, "unresolved", reason_code) for item in expected]
+    )
+
+
+def _annotate_result(
+    result: MappingResult,
+    *,
+    schema_digest: str,
+    input_digest: str,
+    candidate_set_digest: str,
+) -> MappingResult:
+    result.schema_digest = schema_digest
+    result.input_digest = input_digest
+    result.candidate_set_digest = candidate_set_digest
+    return result
+
+
+def _source_span_valid(span: Optional[SourceSpan], report_text: str, expected_name: str) -> bool:
+    if span is None or span.segment_id != _REPORT_SEGMENT_ID:
+        return False
+    if span.start < 0 or span.end > len(report_text) or span.end <= span.start:
+        return False
+    quote = report_text[span.start:span.end]
+    if not quote or hashlib.sha256(quote.encode("utf-8")).hexdigest() != span.quote_hash:
+        return False
+    return expected_name in quote or expected_name.removesuffix("村") in quote
+
+
+def _load_mapping_cache(
+    cache: Optional[Path],
+    *,
+    schema_digest: str,
+    input_digest: str,
+    candidate_digest: str,
+    expected: list[dict[str, str]],
+    report_text: str,
+    candidate_ids: set[str],
+) -> Optional[MappingResult]:
+    if cache is None or not cache.exists():
+        return None
+    try:
+        raw = json.loads(cache.read_text(encoding="utf-8"))
+        if not isinstance(raw, dict):
+            return None
+        if (
+            raw.get("schema_version") != _MAPPING_SCHEMA_VERSION
+            or raw.get("schema_digest") != schema_digest
+            or raw.get("input_digest") != input_digest
+            or raw.get("candidate_set_digest") != candidate_digest
+        ):
+            return None
+        result = _validate_mapping_batch(
+            _GMappingSet.model_validate(raw.get("value")),
+            expected,
+            [
+                VillageCluster(index=0, centroid=(0.0, 0.0), cluster_id=cid)
+                for cid in candidate_ids
+            ],
+            report_text,
+            allowed_candidate_ids=None,
+        )
+        if set(result) != {item["entity_ref"] for item in expected}:
+            return None
+        return _annotate_result(
+            result,
+            schema_digest=schema_digest,
+            input_digest=input_digest,
+            candidate_set_digest=candidate_digest,
+        )
+    except Exception as exc:  # noqa: BLE001 - malformed cache is a miss
+        logger.warning("[village-cluster] invalid cache treated as miss: %s", exc)
+        return None
+
+
+def _write_mapping_cache(
+    cache: Optional[Path],
+    schema_digest: str,
+    input_digest: str,
+    candidate_digest: str,
+    result: MappingResult,
+) -> None:
+    if cache is None:
+        return
+    try:
+        cache.parent.mkdir(parents=True, exist_ok=True)
+        tmp = cache.with_suffix(".tmp")
+        tmp.write_text(
+            json.dumps(
+                {
+                    "schema_version": _MAPPING_SCHEMA_VERSION,
+                    "schema_digest": schema_digest,
+                    "input_digest": input_digest,
+                    "candidate_set_digest": candidate_digest,
+                    "value": {
+                        "decisions": [
+                            {
+                                "entity_ref": item["entity_ref"],
+                                "status": item["status"],
+                                "candidate_ids": item.get("candidate_ids") or [],
+                                "source_span": item.get("source_span"),
+                                "reason_code": item.get("reason_code", ""),
+                            }
+                            for item in result.values()
+                        ]
+                    },
+                },
+                ensure_ascii=False,
+                sort_keys=True,
+            ),
+            encoding="utf-8",
+        )
+        tmp.replace(cache)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("[village-cluster] cache flush failed: %s", exc)
+
+
+def _validate_mapping_batch(
+    response: _GMappingSet | Mapping[str, Any],
+    expected: list[dict[str, str]],
+    bodies: list[VillageCluster],
+    report_text: str,
+    *,
+    allowed_candidate_ids: Optional[Mapping[str, set[str]]],
+) -> MappingResult:
+    """Validate exact membership and references without repairing semantics."""
+    try:
+        proposal = response if isinstance(response, _GMappingSet) else _GMappingSet.model_validate(response)
+    except Exception:
+        return _pending_result(expected, "proposal_schema_invalid")
+
+    expected_counts = Counter(item["entity_ref"] for item in expected)
+    expected_by_ref = {item["entity_ref"]: item for item in expected}
+    raw_decisions = list(proposal.decisions)
+    decision_counts = Counter(item.entity_ref for item in raw_decisions)
+    unknown_refs = [
+        ref for ref in decision_counts
+        if ref not in expected_by_ref
+    ]
+    known_candidate_ids = {candidate.cluster_id for candidate in bodies}
+    decisions: list[dict[str, Any]] = []
+    for item in expected:
+        ref = item["entity_ref"]
+        if expected_counts[ref] > 1:
+            decisions.append(_empty_decision(item, "pending", "duplicate_input_entity_ref"))
+            continue
+        matches = [decision for decision in raw_decisions if decision.entity_ref == ref]
+        if len(matches) == 0:
+            decisions.append(
+                _empty_decision(
+                    item,
+                    "pending" if unknown_refs else "unresolved",
+                    "unknown_entity_ref_in_batch" if unknown_refs else "missing_batch_member",
+                )
+            )
+            continue
+        if len(matches) != 1:
+            decisions.append(_empty_decision(item, "pending", "duplicate_entity_ref"))
+            continue
+
+        proposal_item = matches[0]
+        value = proposal_item.model_dump(mode="json")
+        value["display_name"] = item["display_name"]
+        if proposal_item.status != "mapped":
+            decisions.append(value)
+            continue
+        selected = list(proposal_item.candidate_ids)
+        if not selected or not set(selected).issubset(known_candidate_ids):
+            value["status"] = "pending"
+            value["candidate_ids"] = []
+            value["source_span"] = None
+            value["reason_code"] = "unknown_or_empty_candidate_id"
+            decisions.append(value)
+            continue
+        if allowed_candidate_ids is not None:
+            allowed = allowed_candidate_ids.get(ref, set())
+            if not set(selected).issubset(allowed):
+                value["status"] = "pending"
+                value["candidate_ids"] = []
+                value["source_span"] = None
+                value["reason_code"] = "candidate_outside_source_anchor"
+                decisions.append(value)
+                continue
+        if not _source_span_valid(proposal_item.source_span, report_text, item["display_name"]):
+            value["status"] = "pending"
+            value["candidate_ids"] = []
+            value["source_span"] = None
+            value["reason_code"] = "source_span_invalid"
+            decisions.append(value)
+            continue
+        decisions.append(value)
+
+    owner_by_candidate: dict[str, list[str]] = {}
+    for item in decisions:
+        if item.get("status") != "mapped":
+            continue
+        for candidate_id in item.get("candidate_ids") or []:
+            owner_by_candidate.setdefault(candidate_id, []).append(item["entity_ref"])
+    duplicate_candidate_refs: set[str] = set()
+    duplicate_refs: list[str] = []
+    for candidate_id, owners in owner_by_candidate.items():
+        unique_owners = list(dict.fromkeys(owners))
+        if len(unique_owners) <= 1:
+            continue
+        duplicate_refs.extend(unique_owners)
+        duplicate_candidate_refs.update(unique_owners)
+    if duplicate_candidate_refs:
+        for item in decisions:
+            if item["entity_ref"] in duplicate_candidate_refs:
+                item["status"] = "pending"
+                item["candidate_ids"] = []
+                item["source_span"] = None
+                item["reason_code"] = "duplicate_candidate_membership"
+    return MappingResult(
+        decisions,
+        unknown_refs=unknown_refs,
+        duplicate_refs=duplicate_refs,
+    )
 
 
 async def _map_bodies(
@@ -202,7 +648,6 @@ async def _map_bodies(
     prompt_template: str,
     cache_key_prefix: str,
     prompt_kwargs: Optional[Dict[str, Any]] = None,
-    require_evidence: bool = True,
     report_text: str = "",
     cache: Optional[Path] = None,
     llm: Any = None,
@@ -210,92 +655,102 @@ async def _map_bodies(
     source_artifact_digest: str = "",
     budget: Optional[Dict[str, Any]] = None,
     spatial_evidence: Optional[Mapping[str, Any]] = None,
-) -> Dict[str, Dict[str, Any]]:
-    """Core flash-LLM name -> body assignment (evidence-constrained, cached)."""
-    if not bodies or not names:
-        return {}
-    cache_key = hashlib.sha256(
-        (
-            f"{cache_key_prefix}|{report_text[:4000]}|{','.join(names)}|"
-            f"{source_artifact_ref}|{source_artifact_digest}"
-        ).encode("utf-8")
-    ).hexdigest()
-    if cache is not None and cache.exists():
-        try:
-            raw = json.loads(cache.read_text(encoding="utf-8"))
-            if raw.get("key") == cache_key and isinstance(raw.get("map"), dict):
-                return {str(k): v for k, v in raw["map"].items()}
-        except Exception:
-            pass
+    entity_kind: str = "entity",
+) -> MappingResult:
+    """Run one typed closed-set mapping and preserve every disposition."""
+    _finalize_cluster_ids(bodies, entity_kind)
+    expected = _expected_entities(names, entity_kind)
+    candidate_digest = _candidate_set_digest(bodies)
+    input_digest = _mapping_input_digest(
+        cache_key_prefix=cache_key_prefix,
+        report_text=report_text,
+        expected=expected,
+        prompt_kwargs=prompt_kwargs,
+        source_artifact_ref=source_artifact_ref,
+        source_artifact_digest=source_artifact_digest,
+        spatial_evidence=spatial_evidence,
+    )
+    schema_digest = _stable_digest(_GMappingSet.model_json_schema())
+    cached = _load_mapping_cache(
+        cache,
+        schema_digest=schema_digest,
+        input_digest=input_digest,
+        candidate_digest=candidate_digest,
+        expected=expected,
+        report_text=report_text,
+        candidate_ids={candidate.cluster_id for candidate in bodies},
+    )
+    if cached is not None:
+        return cached
 
-    mapping: Dict[str, Dict[str, Any]] = {}
-    if llm is not None and report_text.strip():
-        try:
-            from app.spatial.grounding.call_budget import (
-                reserve_ground_llm_call,
-                run_ground_llm_call,
-            )
-            cluster_lines = "\n".join(
-                f"{c.index}: 质心({c.centroid[0]:.5f},{c.centroid[1]:.5f}) 地块数{c.parcel_count} 面积{c.area_ha:.2f}ha"
-                for c in bodies
-            )
-            prompt = prompt_template.format(
-                villages="、".join(names),
-                m=len(bodies),
-                max_index=len(bodies) - 1,
-                clusters=cluster_lines,
-                **(prompt_kwargs or {}),
-            )
-            if report_text:
-                prompt += (
-                    f"\n\n报告摘录（用于方位判断，只含与待分配名称相关的段落）:\n"
-                    f"{_evidence_excerpt(report_text, names)}\n"
-                )
-            anchor_lines, allowed_anchor_indexes = _spatial_anchor_prompt(
-                names,
-                bodies,
-                spatial_evidence,
-            )
-            if spatial_evidence is None:
-                allowed_anchor_indexes = None
-            if anchor_lines:
-                prompt += f"\n\n跨源空间锚点证据（优先于村名清单）:\n{anchor_lines}\n"
-            # Only the typed mapping contract may cross this boundary.  A
-            # provider failure yields an empty mapping with a warning; raw
-            # model text is never parsed as spatial identity.
-            structured_timeout = reserve_ground_llm_call(budget)
-            payload = None
-            if structured_timeout is not None:
-                async def _invoke_structured():
-                    return await _structured_mapping(
-                        llm,
-                        prompt,
-                        report_text,
-                        require_evidence=require_evidence,
-                        timeout=structured_timeout,
-                        allowed_candidate_indexes=allowed_anchor_indexes,
-                    )
+    def _finish(result: MappingResult) -> MappingResult:
+        result = _annotate_result(
+            result,
+            schema_digest=schema_digest,
+            input_digest=input_digest,
+            candidate_set_digest=candidate_digest,
+        )
+        _write_mapping_cache(cache, schema_digest, input_digest, candidate_digest, result)
+        return result
 
-                payload = await run_ground_llm_call(
-                    budget, structured_timeout, _invoke_structured
-                )
-            if payload:
-                mapping = _resolve_cluster_conflicts(payload, bodies)
-        except Exception as exc:  # noqa: BLE001 - typed failure is surfaced by the empty mapping
-            logger.warning("[landuse-bodies] flash mapping failed or timed out: %s", exc)
+    if not expected:
+        return _finish(MappingResult())
+    if not bodies:
+        return _finish(_pending_result(expected, "candidate_set_empty"))
+    if not report_text.strip():
+        return _finish(_unresolved_result(expected, "report_evidence_missing"))
+    if llm is None:
+        return _finish(_pending_result(expected, "structured_provider_unavailable"))
 
-    if cache is not None:
-        try:
-            cache.parent.mkdir(parents=True, exist_ok=True)
-            tmp = cache.with_suffix(".tmp")
-            tmp.write_text(
-                json.dumps({"key": cache_key, "map": mapping}, ensure_ascii=False),
-                encoding="utf-8",
+    try:
+        from app.infrastructure.llm.call_budget import reserve_ground_llm_call, run_ground_llm_call
+    except ImportError:
+        from app.spatial.grounding.call_budget import reserve_ground_llm_call, run_ground_llm_call
+
+    cluster_lines = "\n".join(_candidate_line(c) for c in bodies)
+    entity_lines = "\n".join(
+        f"- entity_ref={item['entity_ref']} mention={item['display_name']}"
+        for item in expected
+    )
+    prompt = prompt_template.format(
+        villages=entity_lines,
+        clusters=cluster_lines,
+        **(prompt_kwargs or {}),
+    )
+    prompt += (
+        f"\n\ncandidate_set_digest={candidate_digest}"
+        f" schema_digest={schema_digest}"
+        f"\n报告原文（source_span 偏移相对于 segment_id=report）：\n{report_text}\n"
+    )
+    anchor_lines, allowed_candidate_ids = _spatial_anchor_prompt(
+        expected,
+        bodies,
+        spatial_evidence,
+    )
+    if anchor_lines:
+        prompt += f"\n\n跨源空间锚点（只能缩小候选闭集）：\n{anchor_lines}\n"
+    structured_timeout = reserve_ground_llm_call(budget)
+    response = None
+    if structured_timeout is not None:
+        async def _invoke_structured():
+            return await _structured_mapping(
+                llm,
+                prompt,
+                timeout=structured_timeout,
             )
-            tmp.replace(cache)
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("[landuse-bodies] cache flush failed: %s", exc)
-    return mapping
+
+        response = await run_ground_llm_call(budget, structured_timeout, _invoke_structured)
+    if response is None:
+        result = _pending_result(expected, "structured_output_unavailable")
+    else:
+        result = _validate_mapping_batch(
+            response,
+            expected,
+            bodies,
+            report_text,
+            allowed_candidate_ids=allowed_candidate_ids or None,
+        )
+    return _finish(result)
 
 
 async def assign_names(
@@ -305,7 +760,6 @@ async def assign_names(
     prompt_template: str,
     cache_key_prefix: str,
     prompt_kwargs: Optional[Dict[str, Any]] = None,
-    require_evidence: bool = True,
     report_text: str = "",
     cache: Optional[Path] = None,
     llm: Any = None,
@@ -313,19 +767,15 @@ async def assign_names(
     source_artifact_digest: str = "",
     budget: Optional[Dict[str, Any]] = None,
     spatial_evidence: Optional[Mapping[str, Any]] = None,
-) -> Dict[str, Dict[str, Any]]:
-    """Public generic entry: flash-LLM name -> candidate assignment for any
-    role (villages / water bodies / roads / facilities / landmarks).  The LLM
-    only decides with verbatim report evidence; geometry stays in the
-    candidates.  ``prompt_template`` must format {villages}/{m}/{max_index}/
-    {clusters}."""
+    entity_kind: str = "entity",
+) -> MappingResult:
+    """Map names through a dynamic stable-ID candidate set."""
     return await _map_bodies(
         candidates,
         names,
         prompt_template=prompt_template,
         cache_key_prefix=cache_key_prefix,
         prompt_kwargs=prompt_kwargs,
-        require_evidence=require_evidence,
         report_text=report_text,
         cache=cache,
         llm=llm,
@@ -333,6 +783,7 @@ async def assign_names(
         source_artifact_digest=source_artifact_digest,
         budget=budget,
         spatial_evidence=spatial_evidence,
+        entity_kind=entity_kind,
     )
 
 
@@ -346,13 +797,13 @@ async def map_villages(
     source_artifact_digest: str = "",
     budget: Optional[Dict[str, Any]] = None,
     spatial_evidence: Optional[Mapping[str, Any]] = None,
-) -> Dict[str, Dict[str, Any]]:
+) -> MappingResult:
     """Map village names to clusters through the typed Flash contract."""
     return await _map_bodies(
         clusters,
         village_names,
         prompt_template=_PROMPT_TEMPLATE,
-        cache_key_prefix="v3",
+        cache_key_prefix="village-stable-v1",
         report_text=report_text,
         cache=cache,
         llm=llm,
@@ -360,6 +811,7 @@ async def map_villages(
         source_artifact_digest=source_artifact_digest,
         budget=budget,
         spatial_evidence=spatial_evidence,
+        entity_kind="village",
     )
 
 
@@ -373,13 +825,13 @@ async def map_water_bodies(
     source_artifact_digest: str = "",
     budget: Optional[Dict[str, Any]] = None,
     spatial_evidence: Optional[Mapping[str, Any]] = None,
-) -> Dict[str, Dict[str, Any]]:
+) -> MappingResult:
     """Map report water-body names to landuse-derived water bodies."""
     return await _map_bodies(
         bodies,
         water_names,
         prompt_template=_WATER_PROMPT_TEMPLATE,
-        cache_key_prefix="water-v1",
+        cache_key_prefix="water-stable-v1",
         report_text=report_text,
         cache=cache,
         llm=llm,
@@ -387,66 +839,19 @@ async def map_water_bodies(
         source_artifact_digest=source_artifact_digest,
         budget=budget,
         spatial_evidence=spatial_evidence,
+        entity_kind="water",
     )
-
-
-from pydantic import BaseModel as _BaseModel, Field as _Field
-
-
-class _GMappingEntry(_BaseModel):
-    name: str = ""
-    candidate_indexes: list = _Field(default_factory=list)
-    evidence: str = ""
-
-
-class _GMappingSet(_BaseModel):
-    entries: list[_GMappingEntry] = _Field(default_factory=list)
 
 
 async def _structured_mapping(
     model: Any,
     prompt: str,
-    report_text: str,
     *,
-    require_evidence: bool = True,
     timeout: Optional[float] = None,
-    allowed_candidate_indexes: Optional[Mapping[str, set[int]]] = None,
-) -> Optional[Dict[str, Dict[str, Any]]]:
-    """Structured-output mapping {name -> {candidate_indexes, evidence}}.
-
-    Returns None when the provider cannot do structured output or produces no
-    usable entries; the caller records an unresolved mapping.
-    """
+) -> Optional[_GMappingSet]:
+    """Call the provider only through the strict typed mapping envelope."""
     try:
         from app.infrastructure.llm.structured import run_structured_output
-        structured_llm = model
-        allow_provider_content_json = False
-        # MiniMax's LangChain adapter can complete a thinking response without
-        # producing the tool-call object expected by ``with_structured_output``
-        # (the observed result is ``None``).  The application already has an
-        # Instructor/TOOLS client for the same provider contract.  Use it only
-        # for the real provider adapter; deterministic injected test doubles
-        # continue through their supplied ``llm`` seam.
-        from app.infrastructure.llm.factory import LLMProvider, get_provider
-
-        provider = get_provider()
-        model_module = str(type(model).__module__ or "")
-        model_name = str(type(model).__name__ or "")
-        is_minimax_adapter = (
-            provider is LLMProvider.MINIMAX
-            and (
-                model_module.startswith("langchain_openai")
-                or model_name in {"ChatOpenAI", "AzureChatOpenAI"}
-            )
-        )
-        if is_minimax_adapter:
-            structured_llm = None
-            # MiniMax-M2 high-speed currently returns thinking text plus
-            # a JSON object, but no tool call.  This remains a typed
-            # provider channel: the shared strict JSON decoder and
-            # Pydantic response model must both accept it.  It never
-            # parses a name into a BSM or geometry.
-            allow_provider_content_json = True
         response = await run_structured_output(
             _GMappingSet,
             [{"role": "user", "content": prompt}],
@@ -454,11 +859,12 @@ async def _structured_mapping(
             timeout=timeout,
             temperature=0.1,
             max_tokens=1200,
-            llm=structured_llm,
-            allow_content_json_fallback=allow_provider_content_json,
+            llm=model,
+            allow_content_json_fallback=False,
         )
         if response is None:
             raise ValueError("structured_mapping_empty_response")
+        return response if isinstance(response, _GMappingSet) else _GMappingSet.model_validate(response)
     except Exception as exc:
         logger.warning(
             "[village-cluster] structured mapping rejected: %s: %s",
@@ -466,58 +872,16 @@ async def _structured_mapping(
             str(exc)[:500],
         )
         return None
-    entries = getattr(response, "entries", None)
-    if entries is None and isinstance(response, dict):
-        entries = response.get("entries")
-    if not entries:
-        return None
-    result: Dict[str, Dict[str, Any]] = {}
-    for e in entries:
-        name = str(getattr(e, "name", "") or "").strip()
-        evidence = str(getattr(e, "evidence", "") or "").strip()
-        if not name:
-            continue
-        if require_evidence and not _evidence_in_report(evidence, report_text):
-            continue
-        try:
-            idx = [int(i) for i in (getattr(e, "candidate_indexes", None) or [])]
-        except (TypeError, ValueError):
-            idx = []
-        if not idx:
-            continue
-        if allowed_candidate_indexes is not None:
-            allowed = allowed_candidate_indexes.get(name)
-            if allowed is None:
-                base_name = name.removesuffix("自然村").removesuffix("村")
-                allowed = allowed_candidate_indexes.get(base_name)
-            if allowed is None:
-                logger.warning(
-                    "[village-cluster] %s has no cross-source spatial anchor; mapping rejected",
-                    name,
-                )
-                continue
-            if not set(idx).issubset(allowed):
-                logger.warning(
-                    "[village-cluster] %s selected clusters outside spatial evidence: selected=%s allowed=%s",
-                    name,
-                    sorted(set(idx)),
-                    sorted(allowed),
-                )
-                continue
-        # Canonical mapping key is ``cluster_indexes`` (the text parser and the
-        # conflict resolver/aggregator both read it).
-        result[name] = {"cluster_indexes": idx, "evidence": evidence}
-    return result or None
 
 
 def _aggregate_clusters(member_clusters: List[VillageCluster]) -> Dict[str, Any]:
     """Aggregate member clusters into a village-level extent (many-to-one).
 
     BSMs are the deduplicated union; centroid is parcel-count-weighted.
-    Returns keys ``cluster_indexes`` / ``bsms`` / ``centroid``.
+    Returns stable ``cluster_ids`` / ``bsms`` / ``centroid``.
     """
-    member_clusters = sorted(member_clusters, key=lambda c: c.index)
-    indexes = [c.index for c in member_clusters]
+    member_clusters = sorted(member_clusters, key=lambda c: c.cluster_id)
+    cluster_ids = [c.cluster_id for c in member_clusters]
     bsms = list(dict.fromkeys(b for c in member_clusters for b in c.bsms))
     weights = [max(int(c.parcel_count or 0), 1) for c in member_clusters]
     total = sum(weights)
@@ -526,61 +890,17 @@ def _aggregate_clusters(member_clusters: List[VillageCluster]) -> Dict[str, Any]
         sum(c.centroid[1] * w for c, w in zip(member_clusters, weights)) / total,
     )
     return {
-        "cluster_indexes": indexes,
+        "cluster_ids": cluster_ids,
         "bsms": bsms,
         "centroid": [round(x, 6) for x in centroid],
     }
 
 
-_EVIDENCE_STRIP = " \t\n\r，。、；：""（）()《》【】「」『』"
-
-
-def _evidence_excerpt(report_text: str, names: List[str], max_chars: int = 3000) -> str:
-    """Targeted report excerpt: keep only the segments that mention any of the
-    names being assigned.  A short focused excerpt lets the real model map
-    names to candidates instead of drowning in a 12k-char dump."""
-    wanted = [str(n) for n in (names or []) if n]
-    if not wanted:
-        return (report_text or "")[:max_chars]
-    parts: List[str] = []
-    segments: list[str] = []
-    current: list[str] = []
-    for char in report_text or "":
-        current.append(char)
-        if char in "。；\n":
-            segments.append("".join(current))
-            current.clear()
-    if current:
-        segments.append("".join(current))
-    for seg in segments:
-        if any(w in seg for w in wanted):
-            parts.append(seg)
-    out = "".join(parts).strip()
-    return (out or report_text or "")[:max_chars]
-
-
-def _evidence_in_report(evidence: str, report_text: str) -> bool:
-    """Evidence must literally appear in the report.  The real flash LLM often
-    re-quotes a span with surrounding punctuation/whitespace, so compare on a
-    normalized form (whitespace + common punctuation stripped) instead of a
-    brittle verbatim substring - fabrication is still impossible because the
-    normalized evidence must be a substring of the normalized report."""
-    ev = (evidence or "").strip()
-    if not ev:
-        return False
-    if ev in (report_text or ""):
-        return True
-    trans = str.maketrans("", "", _EVIDENCE_STRIP)
-    ev_norm = ev.translate(trans)
-    rep_norm = (report_text or "").translate(trans)
-    return bool(ev_norm) and ev_norm in rep_norm
-
-
 def _spatial_anchor_prompt(
-    names: List[str],
+    entities: list[dict[str, str]],
     bodies: List[VillageCluster],
     spatial_evidence: Optional[Mapping[str, Any]],
-) -> tuple[str, Dict[str, set[int]]]:
+) -> tuple[str, Dict[str, set[str]]]:
     """Describe source-backed spatial anchors and derive a hard candidate set.
 
     ``spatial_evidence`` contains only identity/provenance and related Bundle
@@ -591,18 +911,20 @@ def _spatial_anchor_prompt(
     """
     if not spatial_evidence:
         return "", {}
-    body_bsms = {int(body.index): {str(bsm) for bsm in body.bsms} for body in bodies}
+    body_bsms = {body.cluster_id: {str(bsm) for bsm in body.bsms} for body in bodies}
     lines: List[str] = []
-    allowed: Dict[str, set[int]] = {}
-    for requested_name in names:
-        raw_anchors = spatial_evidence.get(requested_name)
+    allowed: Dict[str, set[str]] = {}
+    for entity in entities:
+        entity_ref = entity["entity_ref"]
+        requested_name = entity["display_name"]
+        raw_anchors = spatial_evidence.get(entity_ref)
         if raw_anchors is None:
             raw_anchors = spatial_evidence.get(
                 requested_name.removesuffix("自然村").removesuffix("村")
             )
         if not isinstance(raw_anchors, (list, tuple)):
             continue
-        hits: Dict[int, int] = {}
+        hits: Dict[str, int] = {}
         anchor_labels: List[str] = []
         anchor_related_bsms: set[str] = set()
         for raw_anchor in raw_anchors:
@@ -618,20 +940,20 @@ def _spatial_anchor_prompt(
             if label:
                 anchor_labels.append(label)
             anchor_related_bsms.update(related_bsms)
-            for index, bsms in body_bsms.items():
+            for candidate_id, bsms in body_bsms.items():
                 overlap = len(related_bsms.intersection(bsms))
                 if overlap:
-                    hits[index] = hits.get(index, 0) + overlap
+                    hits[candidate_id] = hits.get(candidate_id, 0) + overlap
         if not hits:
             continue
         ordered_hits = sorted(hits.items(), key=lambda item: (-item[1], item[0]))
-        allowed[requested_name] = {index for index, _count in ordered_hits}
+        allowed[entity_ref] = {candidate_id for candidate_id, _count in ordered_hits}
         labels = "、".join(list(dict.fromkeys(anchor_labels))[:6])
         candidates = "；".join(
-            f"{index}(关联地块交集{count})" for index, count in ordered_hits
+            f"{candidate_id}(关联地块交集{count})" for candidate_id, count in ordered_hits
         )
         lines.append(
-            f"- {requested_name}: Bundle锚点={labels or '未命名空间特征'}，"
+            f"- {entity_ref}/{requested_name}: Bundle锚点={labels or '未命名空间特征'}，"
             f"锚点关联地块数={len(anchor_related_bsms)}，支持的聚落候选={candidates}。"
             "只能从这些候选中选择；村名列表本身不能证明聚落归属。"
         )
@@ -692,58 +1014,8 @@ def collect_spatial_anchor_evidence(
     return result
 
 
-def _resolve_cluster_conflicts(
-    mapping: Dict[str, Dict[str, Any]],
-    clusters: List[VillageCluster],
-) -> Dict[str, Dict[str, Any]]:
-    """GER-LLM-style global consistency: one cluster belongs to at most one
-    village.  When the LLM assigns the same cluster to several villages, keep
-    the village with the longest evidence snippet (then earliest in input
-    order); the losing village keeps only its non-conflicting clusters, and is
-    dropped when it has none left.  Deterministic; never fabricates geometry.
-    """
-    if not mapping or not clusters:
-        return mapping
-    order = sorted(
-        mapping,
-        key=lambda n: -len(str(mapping[n].get("evidence") or "") or ""),
-    )
-    cluster_owner: Dict[int, str] = {}
-    for name in order:
-        for idx in mapping[name].get("cluster_indexes", []) or []:
-            cluster_owner.setdefault(int(idx), name)
-    out: Dict[str, Dict[str, Any]] = {}
-    for name, item in mapping.items():
-        kept = [
-            int(idx)
-            for idx in (item.get("cluster_indexes", []) or [])
-            if cluster_owner.get(int(idx)) == name
-        ]
-        if not kept:
-            logger.info(
-                "[village-cluster] %s lost all clusters to conflict; dropped",
-                name,
-            )
-            continue
-        member_clusters = [c for c in clusters if c.index in kept]
-        if not member_clusters:
-            continue
-        aggregate = _aggregate_clusters(member_clusters)
-        new_item = dict(item)
-        new_item.update(aggregate)
-        new_item["source_feature_id"] = ",".join(
-            f"residential-cluster:{i}" for i in aggregate["cluster_indexes"]
-        )
-        if len(aggregate["cluster_indexes"]) == 1:
-            new_item["cluster_index"] = aggregate["cluster_indexes"][0]
-        else:
-            new_item.pop("cluster_index", None)
-        out[name] = new_item
-    return out
-
-
 def village_gazetteer_entries(
-    mapping: Dict[str, Dict[str, Any]],
+    mapping: Mapping[str, Mapping[str, Any]],
     clusters: List[VillageCluster],
     *,
     canonical_suffix: str = "村",
@@ -755,39 +1027,55 @@ def village_gazetteer_entries(
     """Turn a many-to-one name->bodies mapping into aggregated gazetteer
     entries (natural villages, water bodies, ...).
 
-    Each named body owns the union of its member clusters' BSMs and a
-    parcel-count-weighted centroid.  Geometry always comes from the bundle
-    clusters; the LLM only decided the assignment.  ``entity_uri`` is a
-    synthetic anchor because one named place spans several clusters.
+    Only ``status=mapped`` decisions are materialized.  Every input decision
+    remains available in the caller's ``MappingResult``; unresolved/pending
+    entries are never silently converted into a nearby cluster.
     """
     from app.infrastructure.kg.gazetteer import GazetteerEntry
 
     entries: List[GazetteerEntry] = []
-    for name in sorted(mapping):
-        item = mapping[name]
-        bsms = list(dict.fromkeys(item.get("bsms") or []))
+    by_id = {candidate.cluster_id: candidate for candidate in clusters}
+    for entity_ref in sorted(mapping):
+        item = mapping[entity_ref]
+        if item.get("status") != "mapped":
+            continue
+        candidate_ids = list(item.get("candidate_ids") or [])
+        member_clusters = [by_id[candidate_id] for candidate_id in candidate_ids if candidate_id in by_id]
+        if not member_clusters or len(member_clusters) != len(candidate_ids):
+            continue
+        aggregate = _aggregate_clusters(member_clusters)
+        bsms = list(aggregate["bsms"])
         if not bsms:
             continue
-        centroid = list(item.get("centroid") or [])
-        indexes = list(item.get("cluster_indexes") or [])
-        raw = str(name).strip()
+        raw = str(item.get("display_name") or "").strip()
+        if not raw:
+            continue
         canonical = f"{raw}{canonical_suffix}" if canonical_suffix and not raw.endswith(canonical_suffix) else raw
         aliases = [raw]
         if raw.endswith(canonical_suffix) and len(raw) > len(canonical_suffix):
             aliases.append(raw[: -len(canonical_suffix)])
-        entries.append(GazetteerEntry(
+        entry = GazetteerEntry(
             name=canonical,
             aliases=aliases,
-            entity_uri=f"{uri_prefix}{raw}",
+            entity_uri=f"{uri_prefix}{entity_ref}",
             bsms=bsms,
-            centroid=centroid or None,
+            centroid=aggregate["centroid"] or None,
             source=source,
-            confidence=float(item.get("confidence", 0.6) or 0.6),
+            confidence=float(item.get("confidence", 0.0) or 0.0),
             description=(
                 f"{kind_label}「{raw}」：依据报告证据「{item.get('evidence', '')}」"
-                f"映射 {len(indexes)} 个{member_label}（{indexes}），BSM 并集 {len(bsms)} 个"
+                f"映射 {len(candidate_ids)} 个{member_label}（{candidate_ids}），BSM 并集 {len(bsms)} 个"
             ),
-        ))
+        )
+        entry.entity_ref = entity_ref
+        entry.village_ref = entity_ref
+        entry.candidate_ids = candidate_ids
+        entry.cluster_ids = candidate_ids
+        entry.candidate_set_digest = getattr(mapping, "candidate_set_digest", "")
+        entry.input_digest = getattr(mapping, "input_digest", "")
+        entry.schema_digest = getattr(mapping, "schema_digest", "")
+        entry.source_span = item.get("source_span")
+        entries.append(entry)
     return entries
 
 
@@ -847,7 +1135,6 @@ async def assign_villages_to_clusters(
             if existing is not None and getattr(existing, "bsms", None):
                 continue
         names.append(base)
-    names = list(dict.fromkeys(names))
     if not names:
         return []
     mapping = await map_villages(
@@ -901,7 +1188,6 @@ async def assign_water_bodies(
         if gazetteer is not None and gazetteer.resolve(base, fuzzy=False) is not None:
             continue
         names.append(base)
-    names = list(dict.fromkeys(names))
     if not names:
         return []
     mapping = await map_water_bodies(
@@ -918,6 +1204,8 @@ async def assign_water_bodies(
 
 
 __all__ = [
+    "SourceSpan",
+    "MappingResult",
     "VillageCluster",
     "build_landuse_bodies",
     "build_village_clusters",
@@ -929,4 +1217,5 @@ __all__ = [
     "assign_villages_to_clusters",
     "assign_water_bodies",
     "assign_names",
+    "stable_entity_ref",
 ]

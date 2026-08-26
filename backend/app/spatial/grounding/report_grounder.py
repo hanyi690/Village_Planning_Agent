@@ -19,21 +19,33 @@ Anything without report evidence stays fail-closed.
 from __future__ import annotations
 
 import hashlib
-import json
+from collections import Counter
 import math
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Mapping, Optional
 
 from app.infrastructure.logging import get_logger
 from app.spatial.grounding.village_cluster_mapper import (
+    SourceSpan,
     VillageCluster,
     assign_names,
     build_landuse_bodies,
+    _finalize_cluster_ids,
+    _stable_digest,
+    stable_entity_ref,
     village_gazetteer_entries,
 )
 
 logger = get_logger(__name__)
+
+
+def _source_feature_identity(feature: Any, geometry: Any) -> str:
+    for attr in ("entity_uri", "feature_id", "id", "bsm", "source_id"):
+        value = str(getattr(feature, attr, "") or "").strip()
+        if value:
+            return value
+    return _stable_digest({"geometry": geometry, "text": getattr(feature, "text", "")})
 
 _VILLAGE_MARKERS = ("1340", "0702", "宅基地", "村庄建设用地", "农村居民点")
 _WATER_MARKERS = ("水域", "河流", "水库", "坑塘", "沟渠", "水利设施")
@@ -145,16 +157,19 @@ _ROLE_SPECS: Dict[str, RoleSpec] = {
     ),
 }
 
-_PROMPT_TEMPLATE = """你是村庄规划 GIS 证据编译器。待核对的{kind_label}名称：{villages}。
-系统中有 {m} 个候选{kind_label}（编号 0..{max_index}），每个候选的几何特征：
+_PROMPT_TEMPLATE = """你是村庄规划 GIS 证据编译器。只做动态闭集候选选择，不创造地点。
+待核对实体闭集：
+{villages}
+
+候选闭集（只能引用 candidate_id）：
 {clusters}
 
 {intro}
-只允许根据报告摘录中明确出现的名称、方位、走向或可核对空间关系建立映射。
-禁止按名称顺序、规模顺序、常识或猜测分配。证据不足的名称必须省略。
+只允许根据报告原文中明确出现的名称、方位、走向或可核对空间关系建立映射。
+候选为空或多解时返回 pending 或 unresolved，不能默认选项；禁止按名称顺序、候选顺序、规模或常识猜测。
 
-对每个名称给出：candidate_indexes（候选编号列表，可多个）和 evidence（必须是报告摘录中可以逐字找到的短句）。
-不要输出解释或思考过程，只输出结果。"""
+严格返回 decisions；每个 entity_ref 恰好一次。mapped 必须带 candidate_ids 和报告 source_span，unresolved/pending 不带候选并填写 reason_code。
+不要输出解释或思考过程，只输出 JSON。"""
 
 
 def _flatten(coords: Any) -> List[tuple]:
@@ -184,7 +199,7 @@ def _candidate_line(c: VillageCluster) -> str:
     feats = dict(getattr(c, "features", {}) or {})
     extra = " ".join(f"{k}={v}" for k, v in feats.items())
     return (
-        f"{c.index}: 质心({c.centroid[0]:.5f},{c.centroid[1]:.5f}) "
+        f"candidate_id={c.cluster_id}: 质心({c.centroid[0]:.5f},{c.centroid[1]:.5f}) "
         f"地块数{c.parcel_count} 面积{c.area_ha:.2f} {extra}".rstrip()
     )
 
@@ -220,7 +235,9 @@ def _line_candidates(lines: List[Any]) -> List[VillageCluster]:
             area_ha=round(length_m / 1000.0, 3),
         )
         c.features = {"走向": direction, "长度m": round(length_m, 0)}
+        c.features["source_identity"] = _source_feature_identity(line, coords)
         out.append(c)
+    _finalize_cluster_ids(out, "road")
     return out
 
 
@@ -252,8 +269,10 @@ def _point_candidates(points: List[Any], parcels: List[Any]) -> List[VillageClus
         c.features = {
             "名称": text or "无",
             "类型": str(getattr(p, "category", "") or "").strip() or "点",
+            "source_identity": _source_feature_identity(p, coords),
         }
         out.append(c)
+    _finalize_cluster_ids(out, "point")
     return out
 
 
@@ -304,7 +323,6 @@ async def assign_role_names(
         if gazetteer is not None and gazetteer.resolve(key, fuzzy=False) is not None:
             continue
         todo.append(base)
-    todo = list(dict.fromkeys(todo))
     if not todo:
         return []
     spatial_evidence = None
@@ -328,6 +346,7 @@ async def assign_role_names(
         llm=llm,
         budget=budget,
         spatial_evidence=spatial_evidence,
+        entity_kind=role,
     )
     return village_gazetteer_entries(
         mapping,
@@ -356,10 +375,9 @@ async def ground_report_facts(
     Phase 1: build the spatial inventory from the report (all place names,
     the total natural-village count, per-village direction clues, facility ->
     village text associations, external neighbor POIs).
-    Phase 2: ground every role against KG geometry - villages through a
-    collective many-to-one partition that covers ALL report-named villages
-    (respecting the total count), every other role through the same
-    evidence-constrained LLM assignment.
+    Phase 2: ground every role against the dynamic candidate set.  The mapper
+    returns an exact batch of stable-ID decisions; only mapped decisions are
+    materialized and all other dispositions remain explicit to the caller.
 
     Returns {role: entries_written} and upserts the entries into
     ``gazetteer`` (callers that keep a ports adapter should refresh it).
@@ -430,108 +448,6 @@ async def ground_report_facts(
         if entries:
             logger.info("[report-grounder] role=%s grounded %d entities", role, len(entries))
     return counts
-
-
-async def _infer_village_meta(
-    report_text: str,
-    village_names: List[str],
-    llm: Any = None,
-    cache: Optional[Path] = None,
-    budget: Optional[Dict[str, Any]] = None,
-) -> Dict[str, Any]:
-    """LLM 从现状报告推导村庄元信息：自然村总数 + 每村方位/分布线索。
-
-    Returns ``{"total_count": int, "clues": {村名: 方位描述}}``.  The LLM only
-    produces text semantics (count + position wording); geometry still comes
-    from the KG/bundle.  If the typed call is unavailable or invalid, the
-    result is empty and the caller keeps the unresolved diagnostic.
-    """
-    empty = {"total_count": 0, "clues": {}}
-    if llm is None or not (report_text or "").strip() or not village_names:
-        logger.warning("[report-grounder] typed village meta evidence unavailable")
-        return empty
-    cache_key = hashlib.sha256(
-        f"village-meta|{report_text[:4000]}|{','.join(village_names)}".encode("utf-8")
-    ).hexdigest()
-    if cache is not None and cache.exists():
-        try:
-            raw = json.loads(cache.read_text(encoding="utf-8"))
-            if raw.get("key") == cache_key:
-                return raw.get("value") or empty
-        except Exception:
-            pass
-    try:
-        from pydantic import BaseModel as _BM, Field as _Field
-
-        class _Pos(_BM):
-            name: str = ""
-            position: str = ""
-
-        class _Meta(_BM):
-            total_count: int = _Field(default=0, ge=0, le=200)
-            positions: list[_Pos] = _Field(default_factory=list)
-
-        prompt = (
-            "你是村庄规划 GIS 证据编译器。下面是某行政村的现状报告摘录与报告提到的自然村名。"
-            "请提取：1) 本村共有多少个自然村（total_count，仅接受报告明确给出的数字，"
-            "没有明确数字时填 0，不要估算）；"
-            "2) 每个自然村的方位/分布线索（positions，如「园寨位于村中部」「田坑在村东南部」），"
-            "只写报告中可找到依据的方位描述，没有就留空字符串。\n"
-            f"自然村名：{('、'.join(village_names))[:500]}\n"
-            f"报告摘录：\n{(report_text or '')[:6000]}"
-        )
-        import asyncio
-
-        from app.infrastructure.llm.structured import run_structured_output
-        from app.spatial.grounding.call_budget import (
-            reserve_ground_llm_call,
-            run_ground_llm_call,
-        )
-
-        structured_timeout = reserve_ground_llm_call(budget)
-        if structured_timeout is None:
-            logger.warning("[report-grounder] village meta call budget unavailable")
-            return empty
-        async def _invoke_structured():
-            return await run_structured_output(
-                _Meta,
-                [{"role": "user", "content": prompt}],
-                max_retries=1,
-                timeout=structured_timeout,
-                temperature=0.1,
-                max_tokens=600,
-                llm=llm,
-                allow_content_json_fallback=False,
-            )
-
-        response = await run_ground_llm_call(
-            budget, structured_timeout, _invoke_structured
-        )
-        meta = response.model_dump()
-        total = int(meta.get("total_count") or 0)
-        clues: Dict[str, str] = {}
-        for pos in meta.get("positions") or []:
-            name = str(pos.get("name") or "").strip()
-            position = str(pos.get("position") or "").strip()
-            if name and position:
-                clues[name] = position
-        if total > 0 or clues:
-            value = {"total_count": total, "clues": clues}
-            if cache is not None:
-                try:
-                    cache.parent.mkdir(parents=True, exist_ok=True)
-                    tmp = cache.with_suffix(".tmp")
-                    tmp.write_text(
-                        json.dumps({"key": cache_key, "value": value}, ensure_ascii=False),
-                        encoding="utf-8",
-                    )
-                    tmp.replace(cache)
-                except Exception:
-                    pass
-            return value
-    except Exception as exc:  # noqa: BLE001 - typed failure is explicit
-        logger.warning("[report-grounder] village meta LLM inference failed: %s", exc)
-    return empty
 
 
 @dataclass
@@ -627,22 +543,9 @@ def extract_spatial_inventory(
     return inv
 
 
-_PARTITION_PROMPT = """你是村庄规划 GIS 证据编译器。待核对的自然村名称：{{villages}}。
-系统中有 {{m}} 个宅基地聚落（编号 0..{{max_index}}），每个聚落有质心坐标与规模：
-{{clusters}}
-
-任务：只为有明确证据和跨源空间锚点支持的自然村选择 {{m}} 个候选聚落中的一个或多个。每个聚落最多属于一个自然村。
-允许依据（按优先级）：
-1. 报告推导的每村方位/分布线索：{clues}；
-2. 报告摘录中明确出现的方位/相对位置（如「园寨位于村中部」）；
-3. 已知设施/项目所在村（文本证据）：{assocs}；
-4. 邻村注记 POI（外源）相对方位：{pois}；
-5. 报告原文逐字证据。
-禁止按名称顺序、规模顺序或常识猜测。
-
-输出有明确报告证据和跨源空间锚点支持的自然村 candidate_indexes（候选编号列表）和 evidence。
-evidence 必须是报告摘录中可逐字找到的短句；没有明确证据的名称必须省略。
-不要输出解释或思考过程；不要求覆盖全部名称或聚落，禁止用空间就近、名称顺序、数量或常识补齐。"""
+_PARTITION_PROMPT = """这是自然村闭集映射任务。
+只引用输入 entity_ref 和候选 candidate_id；自然村可以明确引用多个候选聚落，但不能把不确定的候选当作确定结果。
+每个 entity_ref 必须返回一次；没有足够报告 source_span 或存在候选归属冲突时返回 pending。"""
 
 
 def _centroid_dist(a: tuple, b: tuple) -> float:
@@ -664,10 +567,22 @@ def deterministic_village_partition(
     """
     mapping: Dict[str, Dict[str, Any]] = {}
 
-    def _add(village: str, idx: int, evidence: str) -> None:
-        item = mapping.setdefault(village, {"cluster_indexes": [], "evidence": evidence})
-        if idx not in item["cluster_indexes"]:
-            item["cluster_indexes"].append(idx)
+    def _add(village: str, cluster_id: str, evidence: str) -> None:
+        entity_ref = stable_entity_ref("village", village)
+        item = mapping.setdefault(
+            entity_ref,
+            {
+                "entity_ref": entity_ref,
+                "display_name": village,
+                "status": "pending",
+                "candidate_ids": [],
+                "reason_code": "external_anchor_requires_report_span",
+                "evidence": evidence,
+                "recommended_candidate_ids": [],
+            },
+        )
+        if cluster_id not in item["recommended_candidate_ids"]:
+            item["recommended_candidate_ids"].append(cluster_id)
 
     report_bases = [
         (v.removesuffix("村").removesuffix("自然村").strip() or v)
@@ -687,19 +602,19 @@ def deterministic_village_partition(
             continue
         for base in report_bases:
             if base == ext_base:
-                best = min(clusters, key=lambda cl: _centroid_dist(cl.centroid, (lon, lat)))
-                _add(base, best.index, f"外源POI:{ext_name}")
+                ranked = sorted(
+                    (
+                        _centroid_dist(cluster.centroid, (lon, lat)),
+                        cluster.cluster_id,
+                        cluster,
+                    )
+                    for cluster in clusters
+                )
+                if len(ranked) > 1 and math.isclose(ranked[0][0], ranked[1][0], rel_tol=0.0, abs_tol=1e-12):
+                    _add(base, "", f"外源POI:{ext_name}:ambiguous")
+                else:
+                    _add(base, ranked[0][2].cluster_id, f"外源POI:{ext_name}")
                 break
-
-    # Aggregate each explicitly anchored village's BSM union + weighted
-    # centroid. Unanchored clusters remain outside the mapping.
-    from app.spatial.grounding.village_cluster_mapper import _aggregate_clusters
-
-    for village, item in mapping.items():
-        member = [c for c in clusters if c.index in (item.get("cluster_indexes") or [])]
-        if not member:
-            continue
-        item.update(_aggregate_clusters(member))
     return mapping
 
 
@@ -708,8 +623,9 @@ def mapping_village_centroid(
     village: str,
     clusters: List[VillageCluster],
 ) -> tuple:
-    idxs = mapping.get(village, {}).get("cluster_indexes", []) or []
-    pts = [c.centroid for c in clusters if c.index in idxs]
+    entity_ref = stable_entity_ref("village", village)
+    ids = mapping.get(entity_ref, {}).get("recommended_candidate_ids", []) or []
+    pts = [c.centroid for c in clusters if c.cluster_id in ids]
     if not pts:
         return (0.0, 0.0)
     return (sum(p[0] for p in pts) / len(pts), sum(p[1] for p in pts) / len(pts))
@@ -728,10 +644,9 @@ async def ground_village_partition(
 ) -> List["GazetteerEntry"]:
     """Collective natural-village grounding over evidence-backed clusters.
 
-    The typed LLM assigns only candidates supported by verbatim report
-    evidence and cross-source spatial anchors. A partial response is valid;
-    omitted names and clusters remain unresolved. Geometry/BSMs always come
-    from Bundle clusters; the LLM never emits coordinates.
+    The typed LLM assigns only stable candidate IDs supported by report spans
+    and optional cross-source spatial anchors. Omitted, duplicate, and unknown
+    decisions remain unresolved/pending and are never materialized.
     """
     from app.spatial.grounding.village_cluster_mapper import (
         assign_names,
@@ -755,18 +670,6 @@ async def ground_village_partition(
     if not clusters or not todo:
         return []
 
-    # LLM-driven village meta: natural-village count + per-village position
-    # clues derived from the report.
-    meta = await _infer_village_meta(report_text, bases, llm, cache, budget)
-    n = int(meta.get("total_count") or 0) or inventory.total_village_count or len(todo)
-    clues = dict(inventory.clues)
-    clues.update(meta.get("clues") or {})
-
-    # Deterministic baseline is limited to explicit external village-name
-    # point anchors.  It must never allocate an unanchored cluster by nearest
-    # distance or by report order.
-    mapping = deterministic_village_partition(inventory, workspace, clusters)
-
     spatial_evidence = None
     if context is not None:
         from app.spatial.grounding.village_cluster_mapper import (
@@ -775,48 +678,18 @@ async def ground_village_partition(
 
         spatial_evidence = collect_spatial_anchor_evidence(context, todo)
 
-    # LLM-driven closed-set partition.  A partial typed result is accepted
-    # only for names backed by verbatim report evidence and spatial anchors;
-    # every omitted name remains unresolved.
-    if llm is not None:
-        try:
-            cluster_lines = "\n".join(_candidate_line(c) for c in clusters)
-            assocs = "；".join(f"{f}@{v}" for f, v in inventory.facility_villages[:24]) or "无"
-            pois = "；".join(
-                f"{nm}({lon:.4f},{lat:.4f})"
-                for nm, lon, lat in inventory.external_pois[:10]
-            ) or "无"
-            clue_lines = "；".join(f"{v}：{c}" for v, c in clues.items()) or "无"
-            llm_mapping = await assign_names(
-                clusters,
-                todo,
-                # Keep this template unrendered until the shared mapper adds
-                # the candidate list.  Rendering it here would turn escaped
-                # JSON braces into active format braces, and the second
-                # rendering in _map_bodies would fail with ``Single '}'``.
-                prompt_template=_PARTITION_PROMPT,
-                cache_key_prefix="village-partition-v4",
-                prompt_kwargs={
-                    "n": n,
-                    "clues": clue_lines,
-                    "assocs": assocs,
-                    "pois": pois,
-                },
-                require_evidence=True,
-                report_text=report_text,
-                cache=cache,
-                llm=llm,
-                budget=budget,
-                spatial_evidence=spatial_evidence,
-            )
-            if llm_mapping:
-                merged = dict(llm_mapping)
-                for v, item in mapping.items():
-                    if v not in merged:
-                        merged[v] = item
-                mapping = merged
-        except Exception as exc:  # noqa: BLE001 - deterministic path always safe
-            logger.warning("[report-grounder] LLM village partition failed: %s", exc)
+    mapping = await assign_names(
+        clusters,
+        todo,
+        prompt_template=_PARTITION_PROMPT,
+        cache_key_prefix="village-partition-stable-v1",
+        report_text=report_text,
+        cache=cache,
+        llm=llm,
+        budget=budget,
+        spatial_evidence=spatial_evidence,
+        entity_kind="village",
+    )
 
     return village_gazetteer_entries(
         mapping,
@@ -839,6 +712,8 @@ class LocationReviewItem:
     """
     name: str
     role: str
+    entity_ref: str = ""
+    source_span: Optional[Dict[str, Any]] = None
     recommended_bsms: List[str] = field(default_factory=list)
     recommended_geometry_ref: str = ""
     confidence: float = 0.0
@@ -861,13 +736,19 @@ class HumanReviewQueue:
         return list(self._items.get(str(session_id or "default"), []))
 
     def decide(self, session_id: str, name: str, role: str, *, accept: bool = True,
-               override_bsms: Optional[List[str]] = None) -> Optional[LocationReviewItem]:
+               override_bsms: Optional[List[str]] = None,
+               entity_ref: str = "") -> Optional[LocationReviewItem]:
         """Human decision on one pending item: accept the LLM recommendation
         or override it with explicit BSMs (the only place a human can pin
         coordinates)."""
         items = self._items.get(str(session_id or "default"), [])
         for item in items:
-            if item.name == name and item.role == role and item.status == "pending":
+            if (
+                item.name == name
+                and item.role == role
+                and (not entity_ref or item.entity_ref == entity_ref)
+                and item.status == "pending"
+            ):
                 item.status = "confirmed" if accept else "overridden"
                 if override_bsms:
                     item.recommended_bsms = list(override_bsms)
@@ -881,7 +762,11 @@ class GroundedEntity:
     """One report-named entity and where GROUND located it."""
     name: str
     role: str
-    status: str  # grounded | unresolved
+    status: str  # grounded | unresolved | pending
+    entity_ref: str = ""
+    candidate_ids: List[str] = field(default_factory=list)
+    source_span: Optional[Dict[str, Any]] = None
+    reason: str = ""
     bsms: List[str] = field(default_factory=list)
     geometry_ref: str = ""
     entity_uri: str = ""
@@ -889,11 +774,75 @@ class GroundedEntity:
     source: str = ""
 
 
+def _fact_entity_ref(fact: Any, role: str, name: str) -> str:
+    for attr in ("entity_ref", "village_ref", "entity_id", "fact_id"):
+        value = str(getattr(fact, attr, "") or "").strip()
+        if value:
+            return value
+    return stable_entity_ref(role or "entity", name)
+
+
+def _fact_source_span(fact: Any, report_text: str, name: str) -> Optional[Dict[str, Any]]:
+    candidates = [
+        str(getattr(fact, "mention", "") or "").strip(),
+        str(getattr(fact, "normalized_name", "") or "").strip(),
+        name.removesuffix("自然村").removesuffix("村").strip(),
+    ]
+    raw_source_span = getattr(fact, "source_span", None)
+    if isinstance(raw_source_span, Mapping):
+        try:
+            span = SourceSpan.model_validate(raw_source_span)
+            if _span_matches_report(span, report_text, name):
+                return span.model_dump(mode="json")
+        except Exception:
+            pass
+    source_text = str(raw_source_span or "").strip()
+    if source_text and name in source_text:
+        candidates.insert(0, source_text)
+    for needle in candidates:
+        if not needle:
+            continue
+        start = report_text.find(needle)
+        if start < 0:
+            continue
+        end = start + len(needle)
+        quote = report_text[start:end]
+        return SourceSpan(
+            segment_id="report",
+            start=start,
+            end=end,
+            quote_hash=hashlib.sha256(quote.encode("utf-8")).hexdigest(),
+        ).model_dump(mode="json")
+    return None
+
+
+def _span_matches_report(span: SourceSpan, report_text: str, name: str) -> bool:
+    if span.segment_id != "report" or span.start < 0 or span.end > len(report_text):
+        return False
+    quote = report_text[span.start:span.end]
+    return (
+        span.end > span.start
+        and hashlib.sha256(quote.encode("utf-8")).hexdigest() == span.quote_hash
+        and (name in quote or name.removesuffix("村") in quote)
+    )
+
+
+def _candidate_entity_ref(candidate: Any) -> str:
+    for attr in ("entity_ref", "entity_uri", "candidate_id", "feature_id"):
+        value = str(getattr(candidate, attr, "") or "").strip()
+        if value:
+            return value
+    return ""
+
+
 @dataclass
 class GroundReportResult:
     entities: List[GroundedEntity] = field(default_factory=list)
     counts: Dict[str, int] = field(default_factory=dict)
     unresolved: List[str] = field(default_factory=list)
+    pending: List[str] = field(default_factory=list)
+    unresolved_refs: List[str] = field(default_factory=list)
+    pending_refs: List[str] = field(default_factory=list)
     reviews: List[LocationReviewItem] = field(default_factory=list)
     queue: Any = None
 
@@ -912,7 +861,8 @@ class GroundReportResult:
     def summary(self) -> str:
         return (
             f"grounded={self.grounded}/{self.total} ({self.rate:.1%}) "
-            f"by_role={self.counts} unresolved={self.unresolved[:8]}"
+            f"by_role={self.counts} unresolved={self.unresolved[:8]} "
+            f"pending={self.pending[:8]}"
         )
 
 
@@ -956,7 +906,19 @@ async def ground_report(
     graph = getattr(context, "evidence_graph", None)
     queue = HumanReviewQueue()
     entities: List[GroundedEntity] = []
-    seen = set()
+    refs = [
+        _fact_entity_ref(
+            fact,
+            str(getattr(fact, "role", "") or "").strip().lower(),
+            str(
+                getattr(fact, "normalized_name", "")
+                or getattr(fact, "mention", "")
+                or ""
+            ).strip(),
+        )
+        for fact in facts or []
+    ]
+    ref_counts = Counter(refs)
     for fact in facts or []:
         name = str(
             getattr(fact, "normalized_name", "")
@@ -964,44 +926,82 @@ async def ground_report(
             or ""
         ).strip()
         role = str(getattr(fact, "role", "") or "").strip().lower()
-        if not name or (name, role) in seen:
-            continue
-        seen.add((name, role))
+        entity_ref = _fact_entity_ref(fact, role, name)
+        source_span = _fact_source_span(fact, report_text, name) if name else None
+        status = "grounded"
+        reason = ""
         candidate = None
-        if graph is not None:
+        candidate_ids: List[str] = []
+        if not name:
+            status, reason = "pending", "input_entity_name_missing"
+        elif ref_counts[entity_ref] > 1:
+            status, reason = "pending", "duplicate_input_entity_ref"
+        elif source_span is None:
+            status, reason = "pending", "source_span_missing_or_invalid"
+        elif graph is None:
+            status, reason = "pending", "evidence_graph_unavailable"
+        else:
             try:
-                res = graph.resolve_mention(name, role=role)
-                if res.status == "resolved" and res.candidates:
-                    candidate = res.candidates[0]
+                resolution = graph.resolve_mention(name, role=role)
+                candidates = list(getattr(resolution, "candidates", None) or [])
+                if getattr(resolution, "status", "") != "resolved" or not candidates:
+                    status, reason = "unresolved", "evidence_graph_no_candidate"
+                elif len(candidates) != 1:
+                    status, reason = "pending", "ambiguous_candidate_set"
+                else:
+                    candidate = candidates[0]
+                    candidate_ref = _candidate_entity_ref(candidate)
+                    if not candidate_ref:
+                        status, reason = "pending", "candidate_identity_missing"
+                    elif not (
+                        getattr(candidate, "source_bsms", None)
+                        or getattr(candidate, "geometry_ref", None)
+                    ):
+                        status, reason = "unresolved", "candidate_has_no_spatial_extent"
+                    else:
+                        candidate_ids = [candidate_ref]
             except Exception:
-                candidate = None
-        if candidate is not None and (
-            getattr(candidate, "source_bsms", None)
-            or getattr(candidate, "geometry_ref", None)
-        ):
+                status, reason = "pending", "evidence_graph_resolution_failed"
+        if status == "grounded" and candidate is not None:
             entities.append(GroundedEntity(
                 name=name,
                 role=role,
-                status="grounded",
+                status=status,
+                entity_ref=entity_ref,
+                candidate_ids=candidate_ids,
+                source_span=source_span,
                 bsms=list(getattr(candidate, "source_bsms", None) or []),
                 geometry_ref=str(getattr(candidate, "geometry_ref", "") or ""),
-                entity_uri=str(getattr(candidate, "entity_ref", "") or ""),
+                entity_uri=_candidate_entity_ref(candidate),
                 source="evidence_graph",
             ))
         else:
-            entities.append(GroundedEntity(name=name, role=role, status="unresolved"))
+            entities.append(GroundedEntity(
+                name=name,
+                role=role,
+                status=status,
+                entity_ref=entity_ref,
+                candidate_ids=[],
+                source_span=source_span,
+                reason=reason,
+            ))
             queue.add(
                 session_id,
                 LocationReviewItem(
                     name=name,
                     role=role,
-                    reason="EvidenceGraph 未解析出可验证空间范围；未生成候选几何，需要补充 L1/KG/bundle evidence",
+                    entity_ref=entity_ref,
+                    source_span=source_span,
+                    reason=reason,
                 ),
             )
     result = GroundReportResult(
         entities=entities,
         counts=counts,
         unresolved=[e.name for e in entities if e.status == "unresolved"],
+        pending=[e.name for e in entities if e.status == "pending"],
+        unresolved_refs=[e.entity_ref for e in entities if e.status == "unresolved"],
+        pending_refs=[e.entity_ref for e in entities if e.status == "pending"],
         reviews=queue.pending(session_id),
         queue=queue,
     )
