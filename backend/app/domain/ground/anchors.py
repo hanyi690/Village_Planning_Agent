@@ -2715,7 +2715,7 @@ async def ground_anchors(state: Dict[str, Any], *, base_dir: str = ".run-tmp") -
 
     llm = None
     try:
-        llm = create_flash_llm(max_tokens=800, temperature=0.1)
+        llm = create_flash_llm(max_tokens=2000, temperature=0.1)
     except Exception:  # noqa: BLE001
         llm = None
 

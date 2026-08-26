@@ -18,7 +18,10 @@ from app.evidence.index.evidence_scorer import (
     score_candidate,
     total,
 )
-from app.domain.validation.l1_fact_catalog import is_canonical_l1_fact_id
+from app.domain.validation.l1_fact_catalog import (
+    build_l1_fact_catalog,
+    is_canonical_l1_fact_id,
+)
 from app.infrastructure.logging import get_logger
 
 logger = get_logger(__name__)
@@ -71,6 +74,12 @@ class PlaceEvidenceIndex:
         self._short_name_keys: set[tuple[str, str]] = set()
         self.semantic_scopes: list[Any] = []
         self.source_semantic_decisions: dict[str, Any] = {}
+        # ``None`` means that the injected context does not expose an L1
+        # snapshot (some narrow adapters intentionally do not).  Once a
+        # snapshot is present, only its canonical IDs may cross the evidence
+        # graph boundary; a canonical-looking ID from a semantic overlay is
+        # not evidence merely because it has the right prefix.
+        self._allowed_l1_fact_ids: frozenset[str] | None = None
         # Shapes are parsed lazily only for spatial joins.  This avoids
         # rebuilding a Shapely object for every POI while keeping the cache
         # session-scoped and reclaimable with the index.
@@ -91,6 +100,12 @@ class PlaceEvidenceIndex:
             int(getattr(context, "kg_version", 0) or 0),
         )
         index = cls(context=context, version=version)
+        if hasattr(context, "l1_fact_records"):
+            index._allowed_l1_fact_ids = frozenset(
+                build_l1_fact_catalog(
+                    getattr(context, "l1_fact_records", None) or []
+                ).usable_allowed_fact_ids
+            )
         index.source_semantic_decisions = dict(
             semantic_decisions
             or getattr(context, "source_semantic_decisions", None)
@@ -177,6 +192,18 @@ class PlaceEvidenceIndex:
             )
 
         return index
+
+    def _filter_l1_fact_refs(self, values: Any) -> list[str]:
+        """Keep only current-snapshot L1 identities for candidate lineage."""
+
+        refs = list(dict.fromkeys(
+            str(value).strip()
+            for value in (values or [])
+            if is_canonical_l1_fact_id(value)
+        ))
+        if self._allowed_l1_fact_ids is None:
+            return refs
+        return [value for value in refs if value in self._allowed_l1_fact_ids]
 
     # ── Registration ─────────────────────────────────────────────────
 
@@ -311,8 +338,8 @@ class PlaceEvidenceIndex:
             else list(decision.get("supporting_fact_refs", []) or [])
         )
         aliases = [raw_label] if raw_label and raw_label != semantic_label else []
-        return semantic_label, list(dict.fromkeys(aliases)), list(
-            dict.fromkeys(str(value).strip() for value in fact_refs if str(value).strip())
+        return semantic_label, list(dict.fromkeys(aliases)), self._filter_l1_fact_refs(
+            fact_refs
         )
 
     @staticmethod
@@ -481,9 +508,7 @@ class PlaceEvidenceIndex:
         )
         source_refs = list(dict.fromkeys(source_refs))
         fact_id = str(getattr(fact, "fact_id", "") or "").strip()
-        l1_fact_refs = list(source_refs)
-        if is_canonical_l1_fact_id(fact_id):
-            l1_fact_refs.append(fact_id)
+        l1_fact_refs = self._filter_l1_fact_refs([*source_refs, fact_id])
         entry = PlaceEvidenceEntry(
             canonical_name=name,
             aliases=aliases,

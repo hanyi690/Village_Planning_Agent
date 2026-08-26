@@ -1166,6 +1166,8 @@ def render_evidence_prompt_section(
     cognition: SpatialCognitionEvidence | None = None,
     packet: EvidencePacket | None = None,
     coverage: EvidenceCoverage | None = None,
+    *,
+    allowed_l1_fact_ids: set[str] | frozenset[str] | None = None,
 ) -> str:
     """Render an ExplorationResult as a unified markdown prompt section.
 
@@ -1177,8 +1179,16 @@ def render_evidence_prompt_section(
         "- report/L1-L2-L3 正文、专业 RAG 和外源文本只提供规划背景或待核实线索，不产生空间位置。",
         "- typed L1 spatial fact 只提供语义到地点的可审计绑定；KG 提供实体身份与拓扑；bundle feature ref 才是权威几何入口。",
         "- 只能使用下方已经返回的候选和 opaque bundle ref；禁止从名称、数量、道路宽度或报告文字自行生成 BSM、坐标、WKT、地块或关系。",
-        "- ambiguity=multiple 或 unresolved 时不得写成唯一选址；必须保留候选/缺口并把定位交给 GROUND。",
+    "- ambiguity=multiple 或 unresolved 时不得写成唯一选址；必须保留候选/缺口并把定位交给 GROUND。",
     ]
+
+    def _lineage_ref_allowed(value: object) -> bool:
+        ref = str(value or "").strip()
+        return (
+            not ref.startswith("l1:fact:")
+            or allowed_l1_fact_ids is None
+            or ref in allowed_l1_fact_ids
+        )
 
     if coverage is not None:
         lines.append("")
@@ -1231,7 +1241,14 @@ def render_evidence_prompt_section(
         lines.append("**规划语义背景（仅辅助决策，不产生空间位置）**:")
         for fact in planning_background[:8]:
             source_kind = fact.source_kind or fact.fields.get("source_kind", "")
-            source_ref = fact.source_refs[0] if fact.source_refs else ""
+            source_ref = next(
+                (
+                    str(ref).strip()
+                    for ref in (fact.source_refs or [])
+                    if _lineage_ref_allowed(ref)
+                ),
+                "",
+            )
             label = f"来源={source_kind}" if source_kind else "来源=未标注"
             label += f"; 作用={fact.evidence_role or fact.fields.get('evidence_role', 'planning_background')}"
             label += f"; 空间粒度={fact.spatial_granularity}"
@@ -1447,7 +1464,13 @@ def render_evidence_prompt_section(
                     dict.fromkeys(
                         str(value).strip()
                         for value in (ref.l1_fact_refs or [])
-                        if str(value).strip().startswith("l1:fact:")
+                        if (
+                            str(value).strip().startswith("l1:fact:")
+                            and (
+                                allowed_l1_fact_ids is None
+                                or str(value).strip() in allowed_l1_fact_ids
+                            )
+                        )
                     )
                 )[:8]
                 provenance_refs = list(
@@ -1509,7 +1532,8 @@ def render_evidence_prompt_section(
             references = ",".join(
                 str(source.reference or "未提供")
                 for source in sources[:4]
-            )
+                if _lineage_ref_allowed(source.reference)
+            ) or "未提供"
             if len(sources) > 4:
                 references += f",…共{len(sources)}条"
             supports = list(dict.fromkeys(

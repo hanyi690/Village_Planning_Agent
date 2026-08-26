@@ -198,7 +198,7 @@ BUSINESS_RETRY_LIMIT = int(os.getenv("BUSINESS_RETRY_LIMIT", "3"))
 VALIDATION_BUDGET_PER_SESSION = int(os.getenv("VALIDATION_BUDGET_PER_SESSION", "20"))
 # Per-dimension LLM failure retries before the run degrades to a diagnostic
 # terminal (provider resume re-dispatches ONLY the failed dimensions).
-DIMENSION_RETRY_LIMIT = int(os.getenv("DIMENSION_RETRY_LIMIT", "2"))
+DIMENSION_RETRY_LIMIT = int(os.getenv("DIMENSION_RETRY_LIMIT", "1"))
 
 # OpenAI-compatible API base URL (for DeepSeek, etc.)
 OPENAI_API_BASE = os.getenv("OPENAI_API_BASE")

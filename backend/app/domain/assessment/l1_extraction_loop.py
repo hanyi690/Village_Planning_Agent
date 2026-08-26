@@ -186,6 +186,7 @@ async def run_l1_dimension_loop(
 
     from app.infrastructure.llm.structured import run_structured_output
     from app.domain.assessment.dimension_contracts import (
+        get_dimension_semantic_contract,
         render_dimension_semantic_contract,
     )
 
@@ -250,27 +251,25 @@ async def run_l1_dimension_loop(
         cursor = cursor.model_copy(update={"pass_name": "report", "status": "running"})
 
     base_kwargs = dict(runner_kwargs or {})
+    semantic_contract = get_dimension_semantic_contract(dimension_key, 1)
+    allowed_fact_types = tuple(semantic_contract.get("l1_fact_types", []) or [])
+    allowed_fact_types_json = json.dumps(
+        list(allowed_fact_types), ensure_ascii=False, separators=(",", ":")
+    )
     observe_system = (
         f"【L1 observe pass; dimension_key={dimension_key}】\n"
-        "你只负责本维度现状事实结构化。只返回 observations，不返回 report_body；"
-        "每条 observation 必须先选择明确的 fact_type。"
-        "空间对象、指标、需求、约束、关系、风险和机会都直接写入 observations，"
-        "不得另造资产台账、需求台账、coverage 或处理状态。"
-        "每条 observation 尽量返回 source_segment_ids 和 source_quote；"
+        "只输出一个 JSON 对象，根对象只能包含 observations 和 diagnostics。"
+        '形状固定为 {"observations":[],"diagnostics":[]}；'
+        "observations 必须是 JSON 数组，不能把单条 fact 直接作为根对象，"
+        "不能把数组或 JSON 文本放进 observations 字段，不能返回 report_body、Markdown 或正文。"
+        f"每条 observation 的 fact_type 只能逐字选择本维度闭集 {allowed_fact_types_json}；"
+        "不同 fact_type 只填写其 schema 声明的专属字段，不要混用其他分支字段。"
+        "共享证据字段只填来源明确支持的值；尽量提供 source_segment_ids 和 source_quote，"
         "没有直接证据就标记 uncertain，不得猜测。"
-        "location/relation 只填写来源明确支持的空间线索；"
-        "全村指标、全村诉求或政策事实不得为满足格式而编造点位。"
-        "同一语义族内的不同子类、指标或风险类型必须保留可区分的 identity；"
-        "当同一 scope 和 semantic_type 下出现多个不同量值时，必须在 attributes.metric "
-        "或 semantic_type 本身明确写出子类，不要只把区分写在 name/其他 attributes 字段；"
-        "例如 forest_area:commercial_forest 与 forest_area:ecological_forest、"
-        "cultivation_area:林芝 与 cultivation_area:烤烟、崩塌隐患点与滑坡隐患点，"
-        "不能把不同对象压成同一个泛化语义。"
-        "fact_type 必须从 spatial_entity/spatial_relation/scoped_metric/demand/"
-        "constraint/risk/opportunity/document_observation 中选择；"
-        "observations 必须是 JSON 数组；禁止把数组序列化成字符串，禁止把整段 JSON 文本放进 observations 字段；"
-        "semantic_type、attributes、value/unit/counting_basis、"
-        "related_observation_ids 和 constraint_refs 只填来源明确支持的值。\n\n"
+        "空间 locator 只记录来源明确支持的粗粒度地点/关系，不填写坐标或几何；"
+        "全村指标、诉求或政策事实不需要为了格式强行添加点位。"
+        "同一语义族内不同子类或量值必须保留可区分的 semantic_type 或 attributes.metric，"
+        "不能压成泛化事实。\n\n"
         f"{render_dimension_semantic_contract(dimension_key, 1)}\n\n"
         f"【L1 source index】\n{render_l1_source_index(source_index)}"
     )

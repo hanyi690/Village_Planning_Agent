@@ -100,11 +100,20 @@ def _finalize_spec(
     spec: SpatialReferenceSpec,
     intervention: PlanningIntervention,
 ) -> SpatialReferenceSpec:
+    declared_fact_refs = [
+        str(value).strip()
+        for value in (getattr(intervention, "source_fact_refs", None) or [])
+        if str(value).strip()
+    ]
     spec.intervention_id = intervention.intervention_id
     spec.target_id = intervention.target_id
     spec.spec_id = f"spatial-ref:{intervention.target_id}"
     spec.project_ref = intervention.intervention_id
     spec.materialization_role = _materialization_role(intervention)
+    spec.l1_fact_refs = list(dict.fromkeys([
+        *spec.l1_fact_refs,
+        *declared_fact_refs,
+    ]))
     return spec
 
 

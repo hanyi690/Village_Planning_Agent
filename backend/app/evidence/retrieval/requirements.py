@@ -755,7 +755,7 @@ def requirements_from_target_projection(result: Any) -> tuple[EvidenceRequiremen
                 success_condition="typed spatial reference resolves to snapshot-bound entity/feature candidates",
                 source_artifact_refs=(
                     str(getattr(result, "program_ref", "") or ""),
-                    str(getattr(spec, "l1_fact_refs", None) or ""),
+                    *list(_nonempty_strings(getattr(spec, "l1_fact_refs", None))),
                 ),
                 metadata={"target_id": target_id, "spec_id": str(getattr(spec, "spec_id", "") or "")},
             )
