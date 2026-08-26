@@ -26,6 +26,7 @@ from typing import Any, Dict, List, Optional
 
 from app.contracts.spatial.spatial_reference_contracts import (
     CandidateSelectionProposal,
+    render_candidate_selection_contract,
     candidate_set_digest,
     spatial_candidate_descriptor,
     spatial_candidate_input_digest,
@@ -2645,6 +2646,10 @@ class SpatialResolver:
             lines = chr(10).join(candidate_lines)
             hint_clause = f"《{hints}》" if hints else ""
             prompt = (
+                render_candidate_selection_contract(
+                    descriptor.candidate_id for descriptor in descriptors
+                )
+                + "\n"
                 f"空间引用「{mention}」{hint_clause}。"
                 f"以下是从 EvidenceGraph 召回并由 Bundle/KG 拓扑组织的{candidate_kind}，"
                 "请只返回 selected/abstain/ambiguous；selected 时填写候选稳定 candidate_id，"

@@ -29,7 +29,7 @@ from app.contracts.evidence.feature_identity_contracts import (
     FeatureEvidenceRef,
 )
 from app.contracts.ports.place_resolution_contracts import PlaceResolutionCandidate
-from app.contracts.spatial.spatial_reference_contracts import GeometryRef
+from app.contracts.spatial.spatial_reference_contracts import GeometryRef, normalize_spatial_role
 from app.evidence.index.evidence_scorer import WEIGHTS
 from app.infrastructure.kg.ontology import EntityTypes
 from app.infrastructure.kg.spatial_store import SpatialKGEntity
@@ -2512,7 +2512,8 @@ def _l1_record_role(record: Any, values: dict[str, str]) -> str:
         (attributes.get("role", "") if isinstance(attributes, dict) else "")
         or getattr(record, "semantic_type", "")
         or ""
-    ).strip().casefold()
+    )
+    raw_role = normalize_spatial_role(raw_role)
     return _L1_SPATIAL_ROLES.get(raw_role, "unknown")
 
 

@@ -21,7 +21,7 @@ import json
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from rdflib import RDF, Literal, URIRef
 
 from app.infrastructure.kg.ontology import PLN, EntityTypes
@@ -30,6 +30,7 @@ from app.contracts.spatial.spatial_reference_contracts import (
     CandidateSelectionProposal,
     SpatialCandidateDecision,
     candidate_set_digest,
+    render_candidate_selection_contract,
     spatial_candidate_descriptor,
     spatial_candidate_input_digest,
     stable_spatial_candidate_id,
@@ -46,6 +47,13 @@ class NameMention(BaseModel):
     role: str = "unknown"  # water / road / facility / village / landmark
     location: str = ""     # 位置列原始文本（自然村名 / 方位描述 / 空）
     source_dimension: str = ""
+
+    @field_validator("role", mode="before")
+    @classmethod
+    def _normalize_role(cls, value: Any) -> str:
+        from app.contracts.spatial.spatial_reference_contracts import normalize_spatial_role
+
+        return normalize_spatial_role(value)
 
 
 class BackfillResult(BaseModel):
@@ -260,6 +268,10 @@ async def _llm_confirm(
         for candidate, descriptor in zip(candidates, descriptors)
     )
     prompt = (
+        render_candidate_selection_contract(
+            descriptor.candidate_id for descriptor in descriptors
+        )
+        + "\n"
         f"地名「{mention.name}」（类型 {mention.role}）提到位于「{mention.location or '未知'}」。"
         "下列是本次输入动态生成的候选 KG 实体。"
         "status 只能为 selected/abstain/ambiguous；selected 时填写稳定 candidate_id；"

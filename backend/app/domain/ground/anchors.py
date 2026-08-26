@@ -13,11 +13,16 @@ domain/ground 唯一拥有"接地"：把 ``L1Snapshot.location_facts`` 编译为
 from __future__ import annotations
 
 import asyncio
+import json
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from app.contracts.spatial.spatial_reference_contracts import (
+    CandidateSelectionBatchProposal,
     CandidateSelectionProposal,
+    normalize_spatial_role,
+    render_candidate_selection_batch_contract,
+    render_candidate_selection_contract,
     spatial_candidate_descriptor,
     spatial_candidate_input_digest,
     stable_spatial_candidate_id,
@@ -48,6 +53,15 @@ def _reserve_ground_llm_call(budget: Optional[Dict[str, Any]]) -> float | None:
     from app.spatial.grounding.call_budget import reserve_ground_llm_call
 
     return reserve_ground_llm_call(budget)
+
+
+def _new_name_backfill_budget() -> Dict[str, Any]:
+    """Keep optional KG name disambiguation from consuming anchor calls."""
+    from app.spatial.grounding.call_budget import new_ground_llm_budget
+
+    budget = new_ground_llm_budget()
+    budget["scope_key"] = "name_backfill"
+    return budget
 
 
 def _grounding_round_limit() -> int:
@@ -1276,6 +1290,10 @@ async def _llm_reason_candidate(
         for candidate, descriptor in zip(candidates, descriptors)
     )
     prompt = (
+        render_candidate_selection_contract(
+            descriptor.candidate_id for descriptor in descriptors
+        )
+        + "\n"
         "根据报告证据，从下面这个运行时候选集合中做一次闭集选择。只返回 JSON 对象，不要解释。\n"
         f"这是 grounding 第{int(round_number or 1)}轮；可以利用共享上下文重新判断此前未决地点，"
         "但只能选择下面已有 candidate_id。\n"
@@ -1328,6 +1346,141 @@ async def _llm_reason_candidate(
         mention,
     )
     return None
+
+
+async def _llm_reason_candidates_batch(
+    llm: Any,
+    entries: list[dict[str, Any]],
+    *,
+    budget: Optional[Dict[str, Any]] = None,
+    round_number: int = 1,
+) -> dict[str, Optional[Any]]:
+    """Resolve independent candidate sets in one typed provider call.
+
+    The batch envelope saves the grounding budget for shared recovery: the
+    provider still makes one closed-set decision per task, but the transport
+    sees one request and the runtime validates every returned item against its
+    own candidate set and digest.
+    """
+    if not entries or llm is None:
+        return {}
+    call_timeout = _reserve_ground_llm_call(budget)
+    if call_timeout is None:
+        logger.info(
+            "[ground_anchors] batched LLM selection budget exhausted; tasks=%d",
+            len(entries),
+        )
+        return {}
+
+    prepared: list[dict[str, Any]] = []
+    blocks: list[str] = []
+    for index, entry in enumerate(entries, start=1):
+        mention = str(entry.get("mention", "") or "")
+        role = str(entry.get("role", "") or "")
+        hints = str(entry.get("hints", "") or "")
+        candidates = list(entry.get("candidates") or [])
+        descriptors = [
+            spatial_candidate_descriptor(candidate, kind=role or "candidate")
+            for candidate in candidates
+        ]
+        decision_id = f"ground-anchor:{role}:{mention}"
+        if any(item.get("decision_id") == decision_id for item in prepared):
+            decision_id = f"{decision_id}:batch-{index}"
+        entry["decision_id"] = decision_id
+        query_text = (
+            f"{mention}\n{role}\n{hints}\nround={int(round_number or 1)}\n"
+            f"{entry.get('shared_context', '') or ''}"
+        )
+        input_digest = spatial_candidate_input_digest(
+            decision_id=decision_id,
+            query_text=query_text,
+            candidates=descriptors,
+        )
+        lines = "\n".join(
+            _candidate_prompt_line(candidate, descriptor.candidate_id)
+            for candidate, descriptor in zip(candidates, descriptors)
+        )
+        blocks.append(
+            "\n".join((
+                f"任务 decision_id={decision_id}",
+                f"地名={mention}；类型={role}；空间提示={hints or '未知'}",
+                f"共享 grounding 上下文={entry.get('shared_context', '') or '无'}",
+                "本任务允许选择的候选 ID 集合（仅供判断，不是输出字段）："
+                + json.dumps(
+                    [descriptor.candidate_id for descriptor in descriptors],
+                    ensure_ascii=False,
+                ),
+                f"input_digest={input_digest}",
+                "候选证据：",
+                lines,
+            ))
+        )
+        prepared.append({
+            **entry,
+            "decision_id": decision_id,
+            "descriptors": descriptors,
+            "query_text": query_text,
+            "input_digest": input_digest,
+        })
+
+    prompt = (
+        render_candidate_selection_batch_contract()
+        + "\n"
+        + f"这是 grounding 第{int(round_number or 1)}轮。请逐项处理以下 {len(prepared)} 个任务。\n"
+        + "\n\n".join(blocks)
+    )
+    try:
+        from app.infrastructure.llm.structured import (
+            run_structured_output,
+            structured_failure_summary,
+        )
+
+        async def _invoke():
+            return await run_structured_output(
+                CandidateSelectionBatchProposal,
+                [{"role": "user", "content": prompt}],
+                llm=llm,
+                max_retries=1,
+                timeout=call_timeout,
+            )
+
+        from app.spatial.grounding.call_budget import run_ground_llm_call
+
+        response = await run_ground_llm_call(budget, call_timeout, _invoke)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "[ground_anchors] batched LLM reason failed: %s",
+            structured_failure_summary(exc),
+        )
+        return {}
+
+    by_id = {item["decision_id"]: item for item in prepared}
+    result: dict[str, Optional[Any]] = {item["decision_id"]: None for item in prepared}
+    for proposal in list(getattr(response, "decisions", None) or []):
+        item = by_id.get(str(getattr(proposal, "decision_id", "") or ""))
+        if item is None:
+            logger.warning(
+                "[ground_anchors] batched selection returned unknown decision_id=%s",
+                getattr(proposal, "decision_id", ""),
+            )
+            continue
+        typed = CandidateSelectionProposal.model_validate(
+            proposal.model_dump(exclude={"decision_id"})
+        )
+        decision = validate_spatial_candidate_proposal(
+            decision_id=item["decision_id"],
+            query_text=item["query_text"],
+            candidates=item["descriptors"],
+            proposal=typed,
+        )
+        if decision.status != "selected":
+            continue
+        selected_id = decision.selected_candidate_id
+        for candidate, descriptor in zip(item["candidates"], item["descriptors"]):
+            if descriptor.candidate_id == selected_id:
+                result[item["decision_id"]] = candidate
+                break
+    return result
 
 
 def _candidate_prompt_line(candidate: Any, candidate_id: str | None = None) -> str:
@@ -1581,6 +1734,7 @@ async def ground_l1_anchors(
         context,
         scope_key="anchors",
     )
+    name_backfill_budget = _new_name_backfill_budget()
 
     # 0.5) 先将上传 GIS 中明确带村名的要素绑定到运行时村簇；名称回填
     #      需要这份空间证据来收窄设施/道路候选，不能在其生成之后才补写。
@@ -1615,9 +1769,9 @@ async def ground_l1_anchors(
                     kg,
                     getattr(context, "gazetteer", None),
                     mentions,
-                    llm=llm,
-                    cache_path=cache_path,
-                    budget=ground_llm_budget,
+                   llm=llm,
+                   cache_path=cache_path,
+                    budget=name_backfill_budget,
                 )
             except Exception as exc:  # noqa: BLE001
                 logger.warning("[ground_anchors] name backfill failed: %s", exc)
@@ -1744,7 +1898,7 @@ async def ground_l1_anchors(
         ).strip()
         if not mention:
             continue
-        role = str(getattr(fact, "role", "unknown") or "unknown")
+        role = normalize_spatial_role(getattr(fact, "role", "unknown"))
         hints = str(getattr(fact, "spatial_hint", "") or getattr(fact, "source_span", "") or "")
         scope_names = list(dict.fromkeys([
             str(value).strip()
@@ -1989,31 +2143,31 @@ async def ground_l1_anchors(
             key = _grounding_work_key(item, kind, candidates)
             llm_groups.setdefault(key, []).append(item)
 
-    llm_tasks = []
     llm_group_items = []
+    llm_entries = []
     for group in llm_groups.values():
         representative = group[0]
-        candidates = representative.get("llm_candidates", [])
-        llm_tasks.append(_llm_reason_candidate(
-            llm,
-            representative["mention"],
-            representative["role"],
-            representative["hints"],
-            candidates,
-            budget=ground_llm_budget,
-            shared_context=representative.get("shared_prompt_context", ""),
-        ))
+        llm_entries.append({
+            "mention": representative["mention"],
+            "role": representative["role"],
+            "hints": representative["hints"],
+            "candidates": representative.get("llm_candidates", []),
+            "shared_context": representative.get("shared_prompt_context", ""),
+        })
         llm_group_items.append(group)
-    if llm_tasks:
+    if llm_entries:
         logger.info(
-            "[ground_anchors] concurrent fact fallback groups=%d facts=%d max_concurrent=%d",
-            len(llm_tasks),
+            "[ground_anchors] batched fact fallback groups=%d facts=%d",
+            len(llm_entries),
             sum(len(group) for group in llm_group_items),
-            int(ground_llm_budget.get("max_concurrent", 1) or 1),
         )
-        decisions = await asyncio.gather(*llm_tasks, return_exceptions=True)
-        for group, decision in zip(llm_group_items, decisions):
-            decision = None if isinstance(decision, Exception) else decision
+        decisions = await _llm_reason_candidates_batch(
+            llm,
+            llm_entries,
+            budget=ground_llm_budget,
+        )
+        for group, entry in zip(llm_group_items, llm_entries):
+            decision = decisions.get(entry.get("decision_id", ""))
             for item in group:
                 item["llm_decision"] = decision
 
@@ -2151,39 +2305,37 @@ async def ground_l1_anchors(
             key = _grounding_work_key(item, "scoped_recovery", candidates)
             recovery_groups.setdefault(key, []).append(item)
 
-        recovery_tasks = []
         recovery_group_items = []
+        recovery_entries = []
         for group in recovery_groups.values():
             representative = group[0]
-            recovery_tasks.append(_llm_reason_candidate(
-                llm,
-                representative["mention"],
-                representative["role"],
-                representative["hints"],
-                representative["llm_candidates"],
-                budget=ground_llm_budget,
-                shared_context=representative.get(
+            recovery_entries.append({
+                "mention": representative["mention"],
+                "role": representative["role"],
+                "hints": representative["hints"],
+                "candidates": representative["llm_candidates"],
+                "shared_context": representative.get(
                     "shared_prompt_context",
                     "",
                 ),
-                round_number=recovery_round,
-            ))
+            })
             recovery_group_items.append(group)
-        if not recovery_tasks:
+        if not recovery_entries:
             break
         logger.info(
-            "[ground_anchors] concurrent shared recovery round=%d groups=%d facts=%d max_concurrent=%d",
+            "[ground_anchors] batched shared recovery round=%d groups=%d facts=%d",
             recovery_round,
-            len(recovery_tasks),
+            len(recovery_entries),
             sum(len(group) for group in recovery_group_items),
-            int(ground_llm_budget.get("max_concurrent", 1) or 1),
         )
-        recovery_results = await asyncio.gather(
-            *recovery_tasks,
-            return_exceptions=True,
+        recovery_results = await _llm_reason_candidates_batch(
+            llm,
+            recovery_entries,
+            budget=ground_llm_budget,
+            round_number=recovery_round,
         )
-        for group, decision in zip(recovery_group_items, recovery_results):
-            decision = None if isinstance(decision, Exception) else decision
+        for group, entry in zip(recovery_group_items, recovery_entries):
+            decision = recovery_results.get(entry.get("decision_id", ""))
             for item in group:
                 item["llm_recovery_decision"] = decision
                 if decision is not None and _scoped_candidate_is_acceptable(

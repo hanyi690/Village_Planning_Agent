@@ -31,6 +31,53 @@ _VALID_KINDS = ("entity_type", "layer_group", "place_name", "bsm", "village")
 _VALID_DIRECTIONS = ("N", "NE", "E", "SE", "S", "SW", "W", "NW")
 _VALID_OPS = ("and", "or", "not")
 
+_SPATIAL_ROLE_ALIASES: dict[str, str] = {
+    "transportation_facility": "facility",
+    "transport_facility": "facility",
+    "public_facility": "facility",
+    "facility_point": "facility",
+    "water_body": "water",
+    "water_facility": "water",
+    "river": "water",
+    "stream": "water",
+    "road_segment": "road",
+    "county_road": "road",
+    "hazard_point": "hazard",
+    "geological_hazard_point": "hazard",
+}
+
+
+def normalize_spatial_role(value: Any) -> str:
+    """Normalize provider and extractor role aliases to canonical spatial roles."""
+
+    raw = str(value or "").strip().casefold().replace("-", "_")
+    raw = "_".join(raw.split())
+    if not raw:
+        return "unknown"
+    return _SPATIAL_ROLE_ALIASES.get(raw, raw)
+
+
+def render_candidate_selection_contract(candidate_ids: Iterable[str]) -> str:
+    """Render the provider-facing closed-set contract for typed selection."""
+
+    ids = tuple(dict.fromkeys(str(value).strip() for value in candidate_ids if str(value).strip()))
+    allowed = json.dumps(list(ids), ensure_ascii=False)
+    return "\n".join((
+        "【结构化闭集候选选择契约】",
+        "候选 ID 集合是输入约束，不是输出字段；不要把它复制到 JSON 中。",
+        f"本次允许选择的候选 ID 集合（仅供判断）：{allowed}",
+        "输出 JSON 的键必须且只能是：status、selected_candidate_id、input_digest。",
+        "禁止输出 allowed_candidate_ids、candidate_ids、candidates 或任何其他键。",
+        "只返回一个 JSON 对象，不要输出 Markdown、解释、序号或额外字段。",
+        "status 只能是 selected、abstain 或 ambiguous。",
+        "selected_candidate_id 必须逐字复制上面集合中的一个 ID；",
+        "status 为 abstain 或 ambiguous 时 selected_candidate_id 必须是空字符串。",
+        "input_digest 必须逐字复制调用方给出的 input_digest。",
+        "不得创建、改写、截断或猜测候选 ID；无法确定时返回 abstain 或 ambiguous。",
+        '输出形状示例（示例值不可照抄）：{"status":"abstain","selected_candidate_id":"","input_digest":"<调用方给出的值>"}',
+    ))
+
+
 SpatialDomainKind = Literal[
     "exact_feature",
     "parcel_extent",
@@ -138,6 +185,35 @@ class CandidateSelectionProposal(BaseModel):
         if not self.input_digest.strip():
             raise ValueError("input_digest is required")
         return self
+
+
+class CandidateSelectionBatchDecision(CandidateSelectionProposal):
+    """One decision inside a bounded batch of independent selections."""
+
+    decision_id: str
+
+
+class CandidateSelectionBatchProposal(BaseModel):
+    """Strict batch envelope for several runtime-owned candidate sets."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    decisions: list[CandidateSelectionBatchDecision]
+
+
+def render_candidate_selection_batch_contract() -> str:
+    """Render the provider-facing contract for batched closed-set choices."""
+
+    return "\n".join((
+        "【结构化闭集批量候选选择契约】",
+        "每个 decision_id 都是相互独立的选择任务；候选集合只在对应任务中作为输入约束。",
+        "只返回一个 JSON 对象，顶层键必须且只能是 decisions。",
+        "decisions 必须是数组；每个数组项的键必须且只能是：decision_id、status、selected_candidate_id、input_digest。",
+        "禁止在顶层或数组项输出 allowed_candidate_ids、candidate_ids、candidates 或任何其他键。",
+        "每个 decision_id 必须逐字复制任务输入；每个 input_digest 必须逐字复制同一任务输入。",
+        "selected_candidate_id 只能逐字复制同一任务允许集合中的一个 ID；无法确定时 status=abstain 或 ambiguous，且 selected_candidate_id 为空字符串。",
+        '输出形状示例（示例值不可照抄）：{"decisions":[{"decision_id":"<任务 ID>","status":"abstain","selected_candidate_id":"","input_digest":"<任务 digest>"}]}',
+    ))
 
 
 class SpatialCandidateDecision(BaseModel):
