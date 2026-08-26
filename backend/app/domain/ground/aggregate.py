@@ -1115,13 +1115,43 @@ def ground_aggregate(
 
     # L1 接地锚点消费（设计 §5.1）：mention→锚点映射，未解析 spec 优先落锚点 BSM
     anchors_by_name: Dict[str, Any] = {}
+    ambiguous_anchor_names: set[str] = set()
+
+    def anchor_identity(anchor: Any) -> tuple[str, ...]:
+        return (
+            str(getattr(anchor, "feature_bsm", "") or "").strip(),
+            str(getattr(anchor, "source_feature_id", "") or "").strip(),
+            str(getattr(anchor, "entity_ref", "") or "").strip(),
+            str(getattr(anchor, "geometry_ref", "") or "").strip(),
+        )
+
+    def register_anchor_name(name: str, anchor: Any) -> None:
+        key = str(name or "").strip()
+        if not key or key in ambiguous_anchor_names:
+            return
+        existing = anchors_by_name.get(key)
+        if existing is None:
+            anchors_by_name[key] = anchor
+            return
+        if anchor_identity(existing) != anchor_identity(anchor):
+            anchors_by_name.pop(key, None)
+            ambiguous_anchor_names.add(key)
+
     for anchor in getattr(context, "grounded_anchors", None) or []:
         name = str(getattr(anchor, "normalized_name", "") or getattr(anchor, "mention", "") or "").strip()
         if not name:
             continue
-        anchors_by_name.setdefault(name, anchor)
+        register_anchor_name(name, anchor)
         if name.endswith("村"):
-            anchors_by_name.setdefault(name[:-1], anchor)
+            register_anchor_name(name[:-1], anchor)
+
+    def anchor_for_mention(mention: str) -> Any | None:
+        key = str(mention or "").strip()
+        if not key or key in ambiguous_anchor_names:
+            return None
+        if key.endswith("村") and key[:-1] in ambiguous_anchor_names:
+            return None
+        return anchors_by_name.get(key) or anchors_by_name.get(key.rstrip("村"))
 
     candidates: List[CandidateSite] = []
     unresolved: List[StageIssue] = []
@@ -1182,7 +1212,7 @@ def ground_aggregate(
             and not _search_scope_blocks_materialization(resolved)
         ):
             mention = resolver._spec_mention(spec) or ""
-            anchor = anchors_by_name.get(mention) or anchors_by_name.get(mention.rstrip("村")) if mention else None
+            anchor = anchor_for_mention(mention)
             if anchor is not None:
                 anchor_bsms = list(getattr(anchor, "source_bsms", None) or [])
                 anchor_geometry_wkt = _valid_anchor_geometry_wkt(
@@ -1228,12 +1258,7 @@ def ground_aggregate(
                             resolved, anchor, mention, anchor_authority
                         )
         mention = resolver._spec_mention(spec) or ""
-        anchor = (
-            anchors_by_name.get(mention)
-            or anchors_by_name.get(mention.rstrip("村"))
-            if mention
-            else None
-        )
+        anchor = anchor_for_mention(mention)
         anchor_geometry_wkt = _valid_anchor_geometry_wkt(
             getattr(anchor, "geometry_ref", "") if anchor is not None else ""
         )

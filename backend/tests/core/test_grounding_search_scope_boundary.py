@@ -495,6 +495,63 @@ def test_exact_polygon_candidate_behavior_is_unchanged() -> None:
     assert candidates[0].geometry.kind == "polygon"
 
 
+def test_bare_duplicate_anchor_name_does_not_select_the_first_village(
+    monkeypatch,
+) -> None:
+    context = _context([_parcel("P-1", 116.0, 24.0, 116.01, 24.01)])
+    context.grounded_anchors = [
+        GroundedAnchor(
+            normalized_name="祠堂",
+            mention="祠堂",
+            entity_ref="entity:祠堂:甲村",
+            feature_bsm="feature:hall:甲村",
+            source_feature_id="hall-甲村",
+            source_bsms=["P-1"],
+            geometry_ref="POINT (116.005 24.005)",
+            geometry_granularity="exact_feature",
+            l1_snapshot_ref="l1:duplicate-halls",
+            bundle_snapshot_digest="bundle:duplicate-halls",
+            status="resolved",
+        ),
+        GroundedAnchor(
+            normalized_name="祠堂",
+            mention="祠堂",
+            entity_ref="entity:祠堂:乙村",
+            feature_bsm="feature:hall:乙村",
+            source_feature_id="hall-乙村",
+            source_bsms=["P-1"],
+            geometry_ref="POINT (116.006 24.006)",
+            geometry_granularity="exact_feature",
+            l1_snapshot_ref="l1:duplicate-halls",
+            bundle_snapshot_digest="bundle:duplicate-halls",
+            status="resolved",
+        ),
+    ]
+    monkeypatch.setattr(
+        SpatialResolver,
+        "resolve_spec",
+        lambda self, spec, **kwargs: ResolvedSpatialRef(),
+    )
+    spec = SpatialReferenceSpec(
+        type="place_name",
+        reference=RefObject(
+            kind="place_name",
+            filter={"label_contains": "祠堂"},
+        ),
+        target_id="target-bare-duplicate-hall",
+    )
+
+    result = ground_aggregate([spec], context)
+
+    assert result.candidates == []
+    assert result.unresolved
+    assert result.spatial_query_evidence[0].result_refs == []
+    assert all(
+        "grounded_anchor" not in (issue.detail or "")
+        for issue in result.unresolved
+    )
+
+
 def test_single_parcel_candidate_behavior_is_unchanged() -> None:
     parcels = [_parcel("P-1", 0.0, 0.0, 1.0, 1.0)]
     candidates = build_candidate_sites(
