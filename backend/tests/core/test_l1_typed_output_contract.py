@@ -12,22 +12,27 @@ from app.domain.assessment.observation_draft import (
     L1SpatialEntityFact,
     L1SpatialLocator,
     L1ReportOutput,
+    build_l1_observation_output_model,
+    l1_observation_output_model_for_dimension,
 )
 
 
 def test_l1_observe_and_report_outputs_are_separate_contracts() -> None:
-    output = L1ObservationPassOutput(
-        observations=[
-            L1SpatialEntityFact(
-                fact_type="spatial_entity",
-                entity_type="道路",
-                name="村道",
-                locator=L1SpatialLocator(
-                    place_names=["金田村北部"],
-                    relation="通往村委会",
-                ),
-            )
-        ],
+    response_model = build_l1_observation_output_model(("spatial_entity",))
+    output = response_model.model_validate(
+        {
+            "observations": [
+                {
+                    "fact_type": "spatial_entity",
+                    "entity_type": "道路",
+                    "name": "村道",
+                    "locator": {
+                        "place_names": ["金田村北部"],
+                        "relation": "通往村委会",
+                    },
+                }
+            ]
+        }
     )
 
     assert output.observations[0].name == "村道"
@@ -41,7 +46,7 @@ def test_l1_empty_report_body_is_not_a_valid_typed_result() -> None:
 
 
 def test_l1_observation_attribute_scalars_are_normalized_to_strings() -> None:
-    output = L1ObservationPassOutput.model_validate(
+    output = build_l1_observation_output_model(("scoped_metric",)).model_validate(
         {
             "observations": [
                 {
@@ -63,8 +68,48 @@ def test_l1_observation_attribute_scalars_are_normalized_to_strings() -> None:
     }
 
 
-def test_l1_observation_output_recovers_stringified_container_and_skips_bad_record() -> None:
-    output = L1ObservationPassOutput.model_validate(
+def test_l1_dimension_output_model_uses_dimension_specific_union_schema() -> None:
+    response_model = l1_observation_output_model_for_dimension("location")
+
+    assert response_model is not L1ObservationPassOutput
+    assert issubclass(response_model, L1ObservationPassOutput)
+    schema = response_model.model_json_schema()
+    assert schema["properties"]["allowed_fact_types"]["default"] == [
+        "spatial_entity",
+        "spatial_relation",
+        "scoped_metric",
+        "document_observation",
+    ]
+
+    output = response_model.model_validate(
+        {
+            "observations": [
+                {
+                    "fact_type": "demand",
+                    "demand_type": "养老服务",
+                    "scope": "全村",
+                    "spatial_requirement": "none",
+                }
+            ]
+        }
+    )
+
+    assert output.observations == []
+    assert output.allowed_fact_types == (
+        "spatial_entity",
+        "spatial_relation",
+        "scoped_metric",
+        "document_observation",
+    )
+    assert len(output.quarantined_observations) == 1
+    assert any(
+        item.startswith("l1_observation_record_invalid:0:")
+        for item in output.diagnostics
+    )
+
+
+def test_l1_observation_output_recovers_stringified_container_and_quarantines_bad_record() -> None:
+    output = l1_observation_output_model_for_dimension("public_services").model_validate(
         {
             "observations": json.dumps(
                 [
@@ -81,24 +126,79 @@ def test_l1_observation_output_recovers_stringified_container_and_skips_bad_reco
                     {
                         "fact_type": "demand",
                         "demand_type": "养老服务",
+                        "scope": "全村",
+                        "spatial_requirement": "none",
+                        "status": "uncertain",
                     },
+                    {"fact_type": "document_observation", "scope": "全村"},
                 ],
                 ensure_ascii=False,
             )
         }
     )
 
-    assert len(output.observations) == 1
+    assert len(output.observations) == 2
     assert isinstance(output.observations[0], L1SpatialEntityFact)
     assert output.observations[0].name == "村道"
+    assert isinstance(output.observations[1], L1DemandFact)
+    assert len(output.provisional_fact_records) == 1
+    assert output.provisional_fact_records[0].fact_type == "demand"
+    assert len(output.quarantined_observations) == 1
+    assert output.quarantined_observations[0].ordinal == 2
     assert any(
-        item.startswith("l1_observation_record_invalid:1:")
+        item.startswith("l1_observation_record_invalid:2:")
         for item in output.diagnostics
     )
 
 
+def test_l1_observation_output_marks_non_confirmed_records_as_provisional() -> None:
+    response_model = build_l1_observation_output_model(
+        ("scoped_metric", "constraint"),
+    )
+
+    output = response_model.model_validate(
+        {
+            "observations": [
+                {
+                    "fact_type": "scoped_metric",
+                    "metric": "常住人口",
+                    "scope": "全村",
+                    "status": "uncertain",
+                    "source_quote": "无法核验",
+                }
+            ]
+        }
+    )
+
+    assert len(output.observations) == 1
+    assert output.observations[0].fact_type == "scoped_metric"
+    assert len(output.provisional_fact_records) == 1
+    assert output.provisional_fact_records[0].fact_type == "scoped_metric"
+    assert output.quarantined_observations == []
+
+
+def test_unconfigured_global_l1_output_model_fails_closed() -> None:
+    output = L1ObservationPassOutput.model_validate(
+        {
+            "observations": [
+                {
+                    "fact_type": "spatial_entity",
+                    "entity_type": "道路",
+                    "name": "村道",
+                    "locator": {},
+                }
+            ]
+        }
+    )
+
+    assert output.allowed_fact_types == ()
+    assert output.observations == []
+    assert len(output.quarantined_observations) == 1
+    assert output.quarantined_observations[0].error_paths == ["<model>"]
+
+
 @pytest.mark.asyncio
-async def test_l1_loop_accepts_global_union_fact_with_soft_dimension_mismatch(
+async def test_l1_loop_quarantines_dimension_disallowed_fact_type(
     monkeypatch,
 ) -> None:
     from app.domain.assessment import l1_extraction_loop
@@ -124,7 +224,7 @@ async def test_l1_loop_accepts_global_union_fact_with_soft_dimension_mismatch(
                         }
                     ]
                 }
-            )
+        )
         return L1ReportOutput(report_body="村民提出养老服务需求。")
 
     monkeypatch.setattr(
@@ -138,10 +238,10 @@ async def test_l1_loop_accepts_global_union_fact_with_soft_dimension_mismatch(
         runner_kwargs={"max_retries": 0},
     )
 
-    assert isinstance(result.observations[0], L1DemandFact)
+    assert result.observations == []
     assert result.cursor is not None
     assert result.cursor.status == "complete"
     assert any(
-        item.startswith("l1_dimension_fact_type_mismatch:location:demand")
+        item.startswith("l1_observation_record_invalid:0:")
         for item in result.diagnostics
     )

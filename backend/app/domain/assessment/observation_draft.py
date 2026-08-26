@@ -8,6 +8,7 @@ accepted at L1.
 
 from __future__ import annotations
 
+import hashlib
 import json
 from functools import lru_cache
 from typing import Annotated, Any, Literal, Union
@@ -154,6 +155,32 @@ _FACT_TYPE_MODELS: dict[str, type[L1SourceEvidence]] = {
 }
 
 
+def _normalize_fact_type_names(values: tuple[str, ...] | list[str] | None) -> tuple[str, ...]:
+    return tuple(
+        dict.fromkeys(str(value).strip() for value in (values or ()) if str(value).strip())
+    )
+
+
+@lru_cache(maxsize=None)
+def _fact_adapter_for_allowed_fact_types(
+    allowed_fact_types: tuple[str, ...],
+) -> TypeAdapter[Any]:
+    normalized = _normalize_fact_type_names(allowed_fact_types)
+    if not normalized:
+        return _FACT_ADAPTER
+    selected = tuple(_FACT_TYPE_MODELS.get(value) for value in normalized)
+    if any(model is None for model in selected):
+        unknown = [value for value, model in zip(normalized, selected) if model is None]
+        raise ValueError(f"unknown L1 fact_type(s): {unknown}")
+    selected_models = tuple(model for model in selected if model is not None)
+    all_models = tuple(dict.fromkeys(_FACT_TYPE_MODELS.values()))
+    if set(selected_models) == set(all_models):
+        return _FACT_ADAPTER
+    union_type = Union.__getitem__(selected_models)
+    fact_type_union = Annotated[union_type, Field(discriminator="fact_type")]
+    return TypeAdapter(fact_type_union)
+
+
 def _decode_json_container(value: str) -> Any:
     """Decode a provider JSON container without accepting executable text."""
 
@@ -201,119 +228,76 @@ def _normalize_string_list(value: Any, *, field_name: str) -> list[str]:
     return [str(item).strip() for item in candidate if str(item).strip()]
 
 
-def _legacy_compiler_payload(raw: dict[str, Any]) -> dict[str, Any]:
-    """Normalize pre-union persisted observations for compiler-only consumers."""
+def _safe_payload_copy(value: Any) -> Any:
+    if value is None or isinstance(value, (bool, int, float)):
+        return value
+    if isinstance(value, str):
+        return value[:2000]
+    if isinstance(value, dict):
+        sanitized: dict[str, Any] = {}
+        for key, item in list(value.items())[:64]:
+            sanitized[str(key)[:120]] = _safe_payload_copy(item)
+        return sanitized
+    if isinstance(value, (list, tuple, set)):
+        return [_safe_payload_copy(item) for item in list(value)[:64]]
+    return str(value)[:2000]
 
-    payload = dict(raw)
-    entity_type = str(payload.get("entity_type") or "").strip()
-    name = str(payload.get("name") or payload.get("subject") or "").strip()
-    location = str(payload.get("location") or "").strip()
-    relation = str(payload.get("relation") or "").strip()
-    if not str(payload.get("fact_type") or "").strip():
-        if all(
-            str(payload.get(field) or "").strip()
-            for field in ("subject_ref", "predicate", "object_ref")
-        ):
-            payload["fact_type"] = "spatial_relation"
-        elif str(payload.get("metric") or "").strip():
-            payload["fact_type"] = "scoped_metric"
-        elif str(payload.get("demand_type") or "").strip():
-            payload["fact_type"] = "demand"
-        elif str(payload.get("constraint_type") or "").strip():
-            payload["fact_type"] = "constraint"
-        elif str(payload.get("subject") or "").strip() and str(
-            payload.get("scope") or ""
-        ).strip() and not any((entity_type, location, relation)):
-            payload["fact_type"] = "document_observation"
-        else:
-            payload["fact_type"] = "spatial_entity"
-    payload.setdefault("semantic_type", str(payload.get("semantic_type") or "").strip())
-    payload.setdefault("description", str(payload.get("description") or "").strip())
-    payload.setdefault("attributes", payload.get("attributes") or {})
-    payload.setdefault("value", payload.get("value"))
-    payload.setdefault("unit", str(payload.get("unit") or "").strip())
-    payload.setdefault(
-        "counting_basis",
-        str(payload.get("counting_basis") or "").strip(),
-    )
-    payload["related_observation_ids"] = _normalize_string_list(
-        payload.get("related_observation_ids", []),
-        field_name="related_observation_ids",
-    )
-    payload["constraint_refs"] = _normalize_string_list(
-        payload.get("constraint_refs", []),
-        field_name="constraint_refs",
-    )
-    payload["source_feature_ids"] = _normalize_string_list(
-        payload.get("source_feature_ids", []),
-        field_name="source_feature_ids",
-    )
-    payload["source_segment_ids"] = _normalize_string_list(
-        payload.get("source_segment_ids", []),
-        field_name="source_segment_ids",
-    )
-    payload["source_refs"] = _normalize_string_list(
-        payload.get("source_refs", []),
-        field_name="source_refs",
-    )
-    payload["source_quote"] = str(payload.get("source_quote") or "").strip()
-    payload["status"] = str(payload.get("status") or "confirmed").strip()
-    payload["confidence"] = payload.get("confidence")
 
-    fact_type = str(payload.get("fact_type") or "").strip()
-    if fact_type == "spatial_entity":
-        payload["entity_type"] = entity_type
-        payload["name"] = name
-        payload["location"] = location
-        payload["relation"] = relation
-        payload["scale"] = str(payload.get("scale") or "").strip()
-    elif fact_type == "spatial_relation":
-        payload["subject_ref"] = str(payload.get("subject_ref") or name).strip()
-        payload["predicate"] = str(payload.get("predicate") or relation).strip()
-        payload["object_ref"] = str(payload.get("object_ref") or location).strip()
-        payload["name"] = payload["subject_ref"]
-        payload["location"] = payload["object_ref"]
-        payload["relation"] = payload["predicate"]
-    elif fact_type == "scoped_metric":
-        payload["metric"] = str(payload.get("metric") or name).strip()
-        payload["scope"] = str(payload.get("scope") or location or "全村").strip()
-        payload["name"] = payload["metric"]
-        payload["location"] = ""
-        payload["relation"] = ""
-    elif fact_type == "demand":
-        payload["demand_type"] = str(payload.get("demand_type") or name).strip()
-        payload["scope"] = str(payload.get("scope") or location or "全村").strip()
-        payload["name"] = payload["demand_type"]
-        payload["location"] = location
-        payload["relation"] = relation
-    elif fact_type == "constraint":
-        payload["constraint_type"] = str(
-            payload.get("constraint_type") or name
-        ).strip()
-        payload["applies_to_scope"] = str(
-            payload.get("applies_to_scope") or payload.get("scope") or location or "全村"
-        ).strip()
-        payload["name"] = payload["constraint_type"]
-        payload["location"] = location
-        payload["relation"] = relation
-    elif fact_type in {"risk", "opportunity"}:
-        payload["subject"] = str(payload.get("subject") or name).strip()
-        payload["scope"] = str(payload.get("scope") or location or "全村").strip()
-        payload["name"] = payload["subject"]
-        payload["location"] = location
-        payload["relation"] = relation
-    elif fact_type == "document_observation":
-        payload["subject"] = str(payload.get("subject") or name).strip()
-        payload["scope"] = str(payload.get("scope") or location or "全村").strip()
-        payload["name"] = payload["subject"]
-        payload["location"] = ""
-        payload["relation"] = ""
-    return payload
+def _payload_digest(value: Any) -> str:
+    return hashlib.sha256(
+        json.dumps(
+            _safe_payload_copy(value),
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
+
+
+def _error_paths(exc: Exception) -> list[str]:
+    errors = getattr(exc, "errors", None)
+    if not callable(errors):
+        return ["<model>"]
+    try:
+        rows = errors()
+    except Exception:
+        return ["<model>"]
+    paths: list[str] = []
+    for row in rows:
+        loc = row.get("loc") or ()
+        if not isinstance(loc, (list, tuple)) or not loc:
+            paths.append("<model>")
+            continue
+        parts: list[str] = []
+        for token in loc:
+            if isinstance(token, int):
+                if parts:
+                    parts[-1] = f"{parts[-1]}[{token}]"
+                else:
+                    parts.append(f"[{token}]")
+            else:
+                parts.append(str(token))
+        paths.append(".".join(part for part in parts if part) or "<model>")
+    return list(dict.fromkeys(paths or ["<model>"]))
+
+
+def _quarantine_error_paths(item: Any, exc: Exception) -> list[str]:
+    if isinstance(item, dict) and not str(item.get("fact_type") or "").strip():
+        return ["fact_type", "<union_discriminator>"]
+    raw_paths = _error_paths(exc)
+    leaf_paths = [
+        path.rsplit(".", 1)[-1].rsplit("[", 1)[0]
+        for path in raw_paths
+        if path not in {"<model>", "<union_discriminator>"}
+    ]
+    return list(dict.fromkeys([*raw_paths, *[path for path in leaf_paths if path]]))
 
 
 @lru_cache(maxsize=None)
 def build_l1_observation_output_model(
     allowed_fact_types: tuple[str, ...],
+    *,
+    required_fact_types: tuple[str, ...] = (),
 ) -> type["L1ObservationPassOutput"]:
     """Build the smallest strict observe response model for one dimension.
 
@@ -324,46 +308,54 @@ def build_l1_observation_output_model(
     the union to the dimension contract.
     """
 
-    normalized = tuple(dict.fromkeys(str(value).strip() for value in allowed_fact_types))
+    normalized = _normalize_fact_type_names(allowed_fact_types)
     if not normalized:
         raise ValueError("at least one L1 fact_type is required")
-    selected = tuple(_FACT_TYPE_MODELS.get(value) for value in normalized)
-    if any(model is None for model in selected):
-        unknown = [value for value, model in zip(normalized, selected) if model is None]
+    unknown = [value for value in normalized if value not in _FACT_TYPE_MODELS]
+    if unknown:
         raise ValueError(f"unknown L1 fact_type(s): {unknown}")
-    selected_models = tuple(model for model in selected if model is not None)
-    all_models = tuple(dict.fromkeys(_FACT_TYPE_MODELS.values()))
-    if set(selected_models) == set(all_models):
-        return L1ObservationPassOutput
+    selected_models = tuple(_FACT_TYPE_MODELS[value] for value in normalized)
+    required = tuple(
+        value for value in _normalize_fact_type_names(required_fact_types) if value in normalized
+    )
+    suffix = "_" + "_".join(normalized)
+    if required:
+        suffix += "_required_" + "_".join(required)
 
     union_type = Union.__getitem__(selected_models)
     fact_type_union = Annotated[union_type, Field(discriminator="fact_type")]
-    suffix = "_" + "_".join(normalized)
     model_name = f"L1ObservationPassOutput{suffix}"
     return create_model(
         model_name,
         __base__=L1ObservationPassOutput,
         __module__=__name__,
         observations=(list[fact_type_union], Field(default_factory=list)),
+        provisional_fact_records=(list[fact_type_union], Field(default_factory=list)),
+        allowed_fact_types=(tuple[str, ...], Field(default=normalized, frozen=True)),
+        required_fact_types=(tuple[str, ...], Field(default=required, frozen=True)),
     )
 
 
 def l1_observation_output_model_for_dimension(
     dimension_key: str,
 ) -> type["L1ObservationPassOutput"]:
-    """Return the global L1 fact union; dimension scope stays diagnostic-only."""
+    """Return the strict observe response model for one dimension."""
 
-    _ = dimension_key
-    return L1ObservationPassOutput
+    from app.domain.assessment.dimension_contracts import get_dimension_semantic_contract
+
+    contract = get_dimension_semantic_contract(dimension_key, 1)
+    allowed = tuple(contract.get("l1_fact_types", []) or [])
+    required = tuple(contract.get("l1_required_fact_types", []) or [])
+    return build_l1_observation_output_model(
+        allowed,
+        required_fact_types=required,
+    )
 
 
 def observation_to_compiler_payload(raw: Any) -> dict[str, Any]:
     """Project one typed fact into the compiler's stable semantic view."""
 
     from pydantic import TypeAdapter
-
-    if isinstance(raw, dict) and not str(raw.get("fact_type") or "").strip():
-        return _legacy_compiler_payload(raw)
 
     adapter = TypeAdapter(L1PlanningFactDraft)
     observation = adapter.validate_python(
@@ -433,7 +425,11 @@ class L1ObservationPassOutput(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     observations: list[L1PlanningFactDraft] = Field(default_factory=list)
+    provisional_fact_records: list[L1PlanningFactDraft] = Field(default_factory=list)
     diagnostics: list[str] = Field(default_factory=list)
+    quarantined_observations: list["QuarantinedObservation"] = Field(default_factory=list)
+    allowed_fact_types: tuple[str, ...] = ()
+    required_fact_types: tuple[str, ...] = ()
 
     @model_validator(mode="before")
     @classmethod
@@ -441,21 +437,47 @@ class L1ObservationPassOutput(BaseModel):
         if not isinstance(data, dict):
             return data
         payload = dict(data)
+        allowed_fact_types = _normalize_fact_type_names(
+            payload.get("allowed_fact_types")
+            or cls.model_fields["allowed_fact_types"].default
+            or ()
+        )
+        required_fact_types = tuple(
+            value
+            for value in _normalize_fact_type_names(
+                payload.get("required_fact_types")
+                or cls.model_fields["required_fact_types"].default
+                or ()
+            )
+            if value in allowed_fact_types
+        )
         diagnostics = _normalize_string_list(
             payload.get("diagnostics", []),
             field_name="diagnostics",
         )
+        quarantined = list(payload.get("quarantined_observations") or [])
         if "observations" not in payload:
             payload["diagnostics"] = diagnostics
+            payload["quarantined_observations"] = quarantined
+            payload["allowed_fact_types"] = allowed_fact_types
+            payload["required_fact_types"] = required_fact_types
             return payload
         raw_observations = _normalize_sequence_container(
             payload.get("observations", []),
             field_name="observations",
         )
         recovered: list[dict[str, Any]] = []
+        provisional: list[dict[str, Any]] = []
+        adapter = (
+            _fact_adapter_for_allowed_fact_types(allowed_fact_types)
+            if allowed_fact_types
+            else None
+        )
         for index, item in enumerate(raw_observations):
             try:
-                fact = _FACT_ADAPTER.validate_python(item)
+                if adapter is None:
+                    raise ValueError("unconfigured L1 observation contract")
+                fact = adapter.validate_python(item)
             except Exception as exc:
                 issue_count = 1
                 errors = getattr(exc, "errors", None)
@@ -467,11 +489,45 @@ class L1ObservationPassOutput(BaseModel):
                 diagnostics.append(
                     f"l1_observation_record_invalid:{index}:{issue_count}"
                 )
+                quarantined.append(
+                    QuarantinedObservation(
+                        ordinal=index,
+                        payload_digest=_payload_digest(item),
+                        error_paths=_quarantine_error_paths(item, exc),
+                        raw_payload=_safe_payload_copy(item),
+                    ).model_dump(mode="json")
+                )
                 continue
-            recovered.append(fact.model_dump(mode="json"))
+            fact_payload = fact.model_dump(mode="json")
+            recovered.append(fact_payload)
+            if str(fact_payload.get("status") or "confirmed").strip() != "confirmed":
+                provisional.append(fact_payload)
+        confirmed_fact_types = {
+            str(item.get("fact_type") or "").strip()
+            for item in recovered
+            if str(item.get("status") or "confirmed").strip() == "confirmed"
+        }
+        for fact_type in required_fact_types:
+            if fact_type not in confirmed_fact_types:
+                diagnostics.append(f"l1_required_fact_type_missing:{fact_type}")
         payload["observations"] = recovered
+        payload["provisional_fact_records"] = provisional
         payload["diagnostics"] = diagnostics
+        payload["quarantined_observations"] = quarantined
+        payload["allowed_fact_types"] = allowed_fact_types
+        payload["required_fact_types"] = required_fact_types
         return payload
+
+
+class QuarantinedObservation(BaseModel):
+    """A bad observation row captured without admitting it as a typed fact."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    ordinal: int
+    payload_digest: str
+    error_paths: list[str] = Field(default_factory=list)
+    raw_payload: dict[str, Any] | list[Any] | str | int | float | bool | None = None
 
 
 class L1ReportOutput(BaseModel):
@@ -497,5 +553,6 @@ __all__ = [
     "l1_observation_output_model_for_dimension",
     "observation_to_compiler_payload",
     "L1ObservationPassOutput",
+    "QuarantinedObservation",
     "L1ReportOutput",
 ]

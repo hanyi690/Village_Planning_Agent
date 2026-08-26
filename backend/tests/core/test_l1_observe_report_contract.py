@@ -12,6 +12,8 @@ from app.domain.assessment.observation_draft import (
     L1DemandFact,
     L1ObservationPassOutput,
     L1ReportOutput,
+    QuarantinedObservation,
+    build_l1_observation_output_model,
 )
 from app.domain.assessment.observation_quality import validate_observations
 
@@ -19,7 +21,11 @@ from app.domain.assessment.observation_quality import validate_observations
 def test_l1_models_do_not_expose_register_or_coverage_fields() -> None:
     assert set(L1ObservationPassOutput.model_fields) == {
         "observations",
+        "provisional_fact_records",
         "diagnostics",
+        "quarantined_observations",
+        "allowed_fact_types",
+        "required_fact_types",
     }
     assert "current_assets" not in L1SourceIndex.model_fields
     assert "demands" not in L1SourceIndex.model_fields
@@ -44,7 +50,11 @@ def test_source_index_is_transport_only() -> None:
 
 
 def test_l1_fact_type_is_selected_by_the_union_and_old_shape_is_rejected() -> None:
-    output = L1ObservationPassOutput.model_validate(
+    response_model = build_l1_observation_output_model(
+        ("demand", "document_observation"),
+    )
+
+    output = response_model.model_validate(
         {
             "observations": [
                 {
@@ -57,8 +67,9 @@ def test_l1_fact_type_is_selected_by_the_union_and_old_shape_is_rejected() -> No
         }
     )
     assert isinstance(output.observations[0], L1DemandFact)
+    assert output.quarantined_observations == []
 
-    recovered = L1ObservationPassOutput.model_validate(
+    recovered = response_model.model_validate(
         {
             "observations": [
                 {
@@ -70,12 +81,18 @@ def test_l1_fact_type_is_selected_by_the_union_and_old_shape_is_rejected() -> No
         }
     )
     assert recovered.observations == []
+    assert len(recovered.quarantined_observations) == 1
+    assert isinstance(recovered.quarantined_observations[0], QuarantinedObservation)
+    assert recovered.quarantined_observations[0].ordinal == 0
+    assert "fact_type" in recovered.quarantined_observations[0].error_paths
     assert any(
         item.startswith("l1_observation_record_invalid:0:")
         for item in recovered.diagnostics
     )
 
-    malformed_metric = L1ObservationPassOutput.model_validate(
+    malformed_metric = build_l1_observation_output_model(
+        ("scoped_metric",),
+    ).model_validate(
         {
             "observations": [
                 {
@@ -88,6 +105,9 @@ def test_l1_fact_type_is_selected_by_the_union_and_old_shape_is_rejected() -> No
         }
     )
     assert malformed_metric.observations == []
+    assert len(malformed_metric.quarantined_observations) == 1
+    assert malformed_metric.quarantined_observations[0].ordinal == 0
+    assert "locator" in malformed_metric.quarantined_observations[0].error_paths
     assert any(
         item.startswith("l1_observation_record_invalid:0:")
         for item in malformed_metric.diagnostics
