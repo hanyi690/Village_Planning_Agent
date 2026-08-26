@@ -58,3 +58,19 @@ __all__ = [
     "reconcile_scenario_relations",
     "reconcile_scenario_validation",
 ]
+"""Reusable deterministic validation primitives."""
+
+from app.domain.validation.reference_graph import ReferenceGraphNode, validate_reference_graph
+from app.domain.validation.repair_operations import (
+    RepairPolicyDecision,
+    evaluate_repair_policy,
+    pending_repair_decisions,
+)
+
+__all__ = [
+    "ReferenceGraphNode",
+    "RepairPolicyDecision",
+    "evaluate_repair_policy",
+    "pending_repair_decisions",
+    "validate_reference_graph",
+]
