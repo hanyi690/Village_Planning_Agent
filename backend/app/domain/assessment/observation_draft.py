@@ -23,6 +23,28 @@ from pydantic import (
     model_validator,
 )
 
+from app.contracts.domain.l1_contracts import L1SpatialMention
+
+
+_TARGET_ACTION_SUFFIXES = ("修缮", "修复", "维护", "保护", "整治")
+
+
+def _backfill_target_name(value: str) -> str:
+    """Recover a semantic target from a structured demand label.
+
+    This only strips a known action suffix.  It never creates a location or
+    geometry and remains a compatibility fallback for older providers that do
+    not emit the explicit ``target_name`` field.
+    """
+
+    text = str(value or "").strip()
+    if not text or any(token in text for token in ("、", "，", ",", "；", ";", " ")):
+        return ""
+    for suffix in _TARGET_ACTION_SUFFIXES:
+        if text.endswith(suffix) and len(text) > len(suffix):
+            return text[: -len(suffix)].strip()
+    return ""
+
 
 class L1SourceEvidence(BaseModel):
     """Evidence lineage shared by every L1 planning fact."""
@@ -31,6 +53,9 @@ class L1SourceEvidence(BaseModel):
 
     semantic_type: str = ""
     description: str = ""
+    target_name: str = ""
+    aliases: list[str] = Field(default_factory=list)
+    spatial_mentions: list[L1SpatialMention] = Field(default_factory=list)
     attributes: dict[str, str] = Field(default_factory=dict)
     value: str | int | float | None = None
     unit: str = ""
@@ -366,6 +391,7 @@ def observation_to_compiler_payload(raw: Any) -> dict[str, Any]:
         payload.update({
             "entity_type": observation.entity_type,
             "name": observation.name,
+            "target_name": observation.target_name or observation.name,
             "location": "、".join(observation.locator.place_names),
             "relation": observation.locator.relation,
             "scale": observation.scale,
@@ -375,12 +401,14 @@ def observation_to_compiler_payload(raw: Any) -> dict[str, Any]:
         payload.update({
             "entity_type": "",
             "name": observation.subject_ref,
+            "target_name": observation.target_name or observation.subject_ref,
             "location": observation.object_ref,
             "relation": observation.predicate,
         })
     elif isinstance(observation, L1ScopedMetricFact):
         payload.update({
             "name": observation.metric,
+            "target_name": observation.target_name or observation.metric,
             "location": "",
             "relation": "",
             "scope": observation.scope,
@@ -388,6 +416,7 @@ def observation_to_compiler_payload(raw: Any) -> dict[str, Any]:
     elif isinstance(observation, L1DemandFact):
         payload.update({
             "name": observation.demand_type,
+            "target_name": observation.target_name or _backfill_target_name(observation.demand_type),
             "location": "、".join(observation.locator.place_names),
             "relation": observation.locator.relation,
             "scope": observation.scope,
@@ -396,6 +425,7 @@ def observation_to_compiler_payload(raw: Any) -> dict[str, Any]:
     elif isinstance(observation, L1ConstraintFact):
         payload.update({
             "name": observation.constraint_type,
+            "target_name": observation.target_name or observation.constraint_type,
             "location": "、".join(observation.locator.place_names),
             "relation": observation.locator.relation,
             "scope": observation.applies_to_scope,
@@ -404,6 +434,7 @@ def observation_to_compiler_payload(raw: Any) -> dict[str, Any]:
     elif isinstance(observation, L1RiskOpportunityFact):
         payload.update({
             "name": observation.subject,
+            "target_name": observation.target_name or observation.subject,
             "location": "、".join(observation.locator.place_names),
             "relation": observation.locator.relation,
             "scope": observation.scope,
@@ -412,6 +443,7 @@ def observation_to_compiler_payload(raw: Any) -> dict[str, Any]:
     elif isinstance(observation, L1DocumentObservationFact):
         payload.update({
             "name": observation.subject,
+            "target_name": observation.target_name or observation.subject,
             "location": "",
             "relation": "",
             "scope": observation.scope,

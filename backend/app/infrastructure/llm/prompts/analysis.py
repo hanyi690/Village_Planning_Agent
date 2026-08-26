@@ -54,8 +54,9 @@ Markdown、表格或把正文塞进 observations；report_body 只由后续 repo
 - risk 或 opportunity：subject、scope、locator
 - document_observation：subject、scope
 
-所有类型都可填写 semantic_type、description、attributes、value、unit、
-counting_basis、source_segment_ids、source_quote、source_refs、confidence、status。
+所有类型都可填写 semantic_type、description、target_name、aliases、
+spatial_mentions、attributes、value、unit、counting_basis、source_segment_ids、
+source_quote、source_refs、confidence、status。
 空间 locator 只记录来源明确支持的粗粒度地点/关系线索，不填写坐标或几何；指标、全村
 需求和政策事实不需要为了格式强行添加点位。每条事实必须可回指 source_segment_ids
 与 source_quote；没有直接证据就标记 uncertain。
@@ -65,6 +66,13 @@ counting_basis、source_segment_ids、source_quote、source_refs、confidence、
 约束：
 - 只可摘录来源已出现的事实，不得新增对象、数量、地点或关系
 - 空间实体有明确地点时填写 locator；没有地点时保留为空并说明证据缺口
+- 只要事实、表格、描述或需求中明确出现了本维度相关的地点/对象，就在
+  spatial_mentions 中逐项记录 target_name、role、village_scopes/place_scopes 和来源；
+  这只是后续 grounding 的工作项，不是已经定位的几何
+- 证据不足时仍保留 spatial_mentions，并将 resolution_state 设为 needs_retrieval；
+  不要为了避免未定位而删除地点，也不要填写坐标、WKT、BSM 或推测的行政边界
+- 同名对象按 scope 或 instance_label 分开；数量事实与地点工作项同时保留，不能用一个
+  scale/description 字段代替多个地点工作项
 - 非空间事实不得把名称、指标或需求类型伪装成地点
 - 无对象时 observations 返回空数组
 """
@@ -451,6 +459,31 @@ def _observations_output_guide(natural_villages: str = "", dimension_key: str = 
     )
 
 
+def render_l1_spatial_coverage_contract(
+    dimension_key: str,
+    *,
+    natural_villages: str = "",
+) -> str:
+    """Render coverage rules for the production structured observe route."""
+
+    focus = _L1_OBSERVATION_FOCUS.get(
+        dimension_key,
+        "本维度输入中明确出现的现状地点、对象和范围",
+    )
+    villages = (natural_villages or "").strip()
+    village_hint = f"；自然村清单仅作为覆盖核对：{villages}" if villages else ""
+    return (
+        f"【L1 空间覆盖契约；dimension_key={dimension_key}】\n"
+        f"本维度只关注：{focus}{village_hint}。\n"
+        "对原始资料、表格行、事实 description 和 demand 中明确出现的相关地点/对象，"
+        "在对应 observation 中输出 spatial_mentions；每项填写 target_name、role、"
+        "village_scopes 或 place_scopes、instance_label/instance_count（若来源有）和来源字段。\n"
+        "spatial_mentions 是待 grounding 的语义工作项，不是坐标或几何。证据不足时保留该项，"
+        "resolution_state=needs_retrieval；禁止猜坐标、BSM、WKT、边界或把附近对象直接改名。\n"
+        "同一目标在不同村庄必须分开；数量事实必须保留，不能用 scale 代替按地点展开。"
+    )
+
+
 def get_dimension_prompt(dimension_key: str, raw_data: str = "", village_name: str = "",
                         professional_data: dict = None,
                         task_description: str = "", constraints: str = "",
@@ -531,5 +564,6 @@ __all__ = [
     "ANALYSIS_RULES",
     "OBSERVATIONS_OUTPUT_GUIDE",
     "get_dimension_prompt",
+    "render_l1_spatial_coverage_contract",
     "list_dimensions",
 ]

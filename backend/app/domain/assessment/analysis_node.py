@@ -701,7 +701,10 @@ def _build_prompt(cfg, state, rag_context, deps: str = "", same_layer_contexts: 
         deps: 前序依赖报告（从数据库加载）
         same_layer_contexts: 同层依赖报告
     """
-    from app.infrastructure.llm.prompts.analysis import get_dimension_prompt as get_layer1_prompt
+    from app.infrastructure.llm.prompts.analysis import (
+        get_dimension_prompt as get_layer1_prompt,
+        render_l1_spatial_coverage_contract,
+    )
     from app.infrastructure.llm.prompts.concept import get_dimension_prompt as get_layer2_prompt
     from app.infrastructure.llm.prompts.detailed import get_dimension_prompt as get_layer3_prompt
 
@@ -764,10 +767,14 @@ def _build_prompt(cfg, state, rag_context, deps: str = "", same_layer_contexts: 
 
     if layer == 1:
         if structured_pass == "l1_observe":
+            spatial_coverage_contract = render_l1_spatial_coverage_contract(
+                dim_key,
+            )
             return (
                 f"【L1 observe input; dimension_key={dim_key}】\n"
                 "以下内容仅作为原始资料和任务边界上下文。只抽取有来源的 typed 现状事实；"
                 "不要按上下文中的写作模板生成 report_body，不要输出规划建议，也不要从缺失内容推断位置或需求点。\n\n"
+                f"{spatial_coverage_contract}\n\n"
                 f"【原始资料】\n{village_data}\n\n"
                 f"【任务边界】\n{task_desc}\n\n"
                 f"【约束】\n{constraints}\n\n"

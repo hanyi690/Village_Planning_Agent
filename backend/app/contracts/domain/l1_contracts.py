@@ -15,19 +15,75 @@ from app.contracts.workflow.parsing_contracts import CompilerTrace
 from app.contracts.artifacts.provenance import Provenance
 
 
+class L1SpatialProvenance(BaseModel):
+    """Source lineage for one semantic-to-spatial projection."""
+
+    source_refs: list[str] = Field(default_factory=list)
+    source_segment_ids: list[str] = Field(default_factory=list)
+    source_quote: str = ""
+    observation_id: str = ""
+
+
+class L1SpatialMention(BaseModel):
+    """A named spatial work item emitted by the L1 observe pass.
+
+    This is deliberately semantic only: it carries no coordinate, WKT, BSM,
+    or geometry authority.  GROUND resolves it through EvidenceGraph.
+    """
+
+    mention_kind: Literal["target", "place", "anchor_request"] = "target"
+    mention: str = ""
+    normalized_name: str = ""
+    target_name: str = ""
+    role: str = "unknown"
+    village_scopes: list[str] = Field(default_factory=list)
+    place_scopes: list[str] = Field(default_factory=list)
+    relation: str = ""
+    instance_label: str = ""
+    instance_count: str = ""
+    resolution_state: Literal[
+        "resolved",
+        "needs_retrieval",
+        "conflict",
+        "source_exhausted",
+        "unknown",
+    ] = "needs_retrieval"
+    aliases: list[str] = Field(default_factory=list)
+    source_feature_ids: list[str] = Field(default_factory=list)
+    provenance: L1SpatialProvenance = Field(default_factory=L1SpatialProvenance)
+
+
 class L1LocationFact(BaseModel):
-    """A traceable place mention extracted from an L1 observation report."""
+    """A traceable place mention extracted from an L1 observation report.
+
+    ``target_name`` and the scope/instance fields form a grounding work-item
+    identity.  They do not claim that the target has already been located.
+    """
 
     mention: str
     normalized_name: str
     role: str = "unknown"
-    aliases: list[str] = []
+    target_name: str = ""
+    aliases: list[str] = Field(default_factory=list)
     spatial_hint: str = ""
-    related_mentions: list[str] = []
+    related_mentions: list[str] = Field(default_factory=list)
+    village_scopes: list[str] = Field(default_factory=list)
+    place_scopes: list[str] = Field(default_factory=list)
+    instance_label: str = ""
+    instance_count: str = ""
+    resolution_state: Literal[
+        "resolved",
+        "needs_retrieval",
+        "conflict",
+        "source_exhausted",
+        "unknown",
+    ] = "needs_retrieval"
+    provenance: L1SpatialProvenance = Field(default_factory=L1SpatialProvenance)
     source_report_ref: str = ""
     dimension_key: str = ""
     source_span: str = ""
-    evidence_refs: list[str] = []
+    evidence_refs: list[str] = Field(default_factory=list)
+    source_feature_ids: list[str] = Field(default_factory=list)
     confidence: float = 0.0
 
 
@@ -136,21 +192,21 @@ class L1Snapshot(ContractMeta):
     # Authoritative typed records.  ``facts`` below is a deterministic
     # display projection generated from these records.
     fact_records: list[L1Fact] = Field(default_factory=list)
-    facts: list[str] = []
+    facts: list[str] = Field(default_factory=list)
     # Dimension-scoped facts are the auditable source for downstream strategy
     # prompts; ``facts`` remains the flattened view used by summaries.
-    facts_by_dimension: dict[str, list[str]] = {}
-    location_facts: list[L1LocationFact] = []
-    constraints: list[str] = []
-    issues: list[StageIssue] = []
-    opportunities: list[str] = []
-    evidence_gaps: list[EvidenceGap] = []
-    sources: list[EvidenceSource] = []
-    classification_refs: list[ClassificationRef] = []
-    dimension_provenance: list[Provenance] = []
-    spatial_facts_by_dimension: dict[str, list[str]] = {}
-    diagnostics_by_dimension: dict[str, list[ParseDiagnostic]] = {}
-    traces_by_dimension: dict[str, CompilerTrace] = {}
+    facts_by_dimension: dict[str, list[str]] = Field(default_factory=dict)
+    location_facts: list[L1LocationFact] = Field(default_factory=list)
+    constraints: list[str] = Field(default_factory=list)
+    issues: list[StageIssue] = Field(default_factory=list)
+    opportunities: list[str] = Field(default_factory=list)
+    evidence_gaps: list[EvidenceGap] = Field(default_factory=list)
+    sources: list[EvidenceSource] = Field(default_factory=list)
+    classification_refs: list[ClassificationRef] = Field(default_factory=list)
+    dimension_provenance: list[Provenance] = Field(default_factory=list)
+    spatial_facts_by_dimension: dict[str, list[str]] = Field(default_factory=dict)
+    diagnostics_by_dimension: dict[str, list[ParseDiagnostic]] = Field(default_factory=dict)
+    traces_by_dimension: dict[str, CompilerTrace] = Field(default_factory=dict)
     provenance: "Provenance | None" = None
     evidence_requirements: list[EvidenceRequirement] = Field(default_factory=list)
 
@@ -158,6 +214,8 @@ class L1Snapshot(ContractMeta):
 __all__ = [
     "L1Snapshot",
     "L1LocationFact",
+    "L1SpatialMention",
+    "L1SpatialProvenance",
     "L1Fact",
     "EvidenceGap",
     "L1SourceSegment",

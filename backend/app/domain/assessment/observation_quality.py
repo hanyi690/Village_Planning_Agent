@@ -22,6 +22,34 @@ from app.domain.assessment.observation_draft import (
 _FACT_ADAPTER = TypeAdapter(L1PlanningFactDraft)
 
 
+def _has_structured_spatial_signal(fact: Any) -> bool:
+    """Return whether a fact carries an explicit spatial work-item signal."""
+
+    locator = getattr(fact, "locator", None)
+    if locator is not None and (
+        getattr(locator, "place_names", None)
+        or getattr(locator, "relation", "")
+        or getattr(locator, "source_feature_ids", None)
+    ):
+        return True
+    for mention in getattr(fact, "spatial_mentions", None) or []:
+        if (
+            getattr(mention, "village_scopes", None)
+            or getattr(mention, "place_scopes", None)
+            or getattr(mention, "relation", "")
+            or getattr(mention, "source_feature_ids", None)
+            or str(getattr(mention, "target_name", "") or "").strip()
+        ):
+            return True
+        if str(getattr(mention, "resolution_state", "") or "").strip() in {
+            "needs_retrieval",
+            "conflict",
+            "source_exhausted",
+        }:
+            return True
+    return False
+
+
 def validate_observations(
     observations: list,
     *,
@@ -88,11 +116,7 @@ def validate_observations(
         )
         if isinstance(fact, L1SpatialEntityFact):
             missing_name += not bool(fact.name.strip())
-            no_place += not bool(
-                fact.locator.place_names
-                or fact.locator.relation
-                or fact.locator.source_feature_ids
-            )
+            no_place += not _has_structured_spatial_signal(fact)
             has_semantics = has_semantics or bool(
                 fact.name.strip() or fact.entity_type.strip()
             )
@@ -113,27 +137,15 @@ def validate_observations(
             has_semantics = has_semantics or bool(fact.metric.strip())
         elif isinstance(fact, L1DemandFact):
             missing_name += not bool(fact.demand_type.strip())
-            no_place += not bool(
-                fact.locator.place_names
-                or fact.locator.relation
-                or fact.locator.source_feature_ids
-            )
+            no_place += not _has_structured_spatial_signal(fact)
             has_semantics = has_semantics or bool(fact.demand_type.strip())
         elif isinstance(fact, L1ConstraintFact):
             missing_name += not bool(fact.constraint_type.strip())
-            no_place += not bool(
-                fact.locator.place_names
-                or fact.locator.relation
-                or fact.locator.source_feature_ids
-            )
+            no_place += not _has_structured_spatial_signal(fact)
             has_semantics = has_semantics or bool(fact.constraint_type.strip())
         elif isinstance(fact, L1RiskOpportunityFact):
             missing_name += not bool(fact.subject.strip())
-            no_place += not bool(
-                fact.locator.place_names
-                or fact.locator.relation
-                or fact.locator.source_feature_ids
-            )
+            no_place += not _has_structured_spatial_signal(fact)
             has_semantics = has_semantics or bool(fact.subject.strip())
         elif isinstance(fact, L1DocumentObservationFact):
             missing_name += not bool(fact.subject.strip())

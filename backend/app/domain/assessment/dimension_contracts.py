@@ -188,7 +188,10 @@ def render_dimension_semantic_contract(
         f"允许的 L1 fact_type：{', '.join(contract['l1_fact_types'])}\n"
         f"允许的 L3 claim family：{', '.join(contract['l3_claim_families'])}\n"
         f"GROUND 必要输入：{', '.join(contract['l3_grounding_requirements'])}\n"
-        f"证据边界：{contract['spatial_authority']}"
+        f"证据边界：{contract['spatial_authority']}\n"
+        "地点覆盖：只抽取本维度相关且在输入中明确出现的空间对象；每个对象输出"
+        "独立的 spatial_mentions 工作项。工作项没有坐标权威时保留 needs_retrieval，"
+        "由 EvidenceGraph 使用 Bundle/KG 候选补足，不能在 L1 猜坐标或边界。"
     )
     if upstream_source_dimensions:
         rendered += "\n上游 source_dimensions：" + ", ".join(

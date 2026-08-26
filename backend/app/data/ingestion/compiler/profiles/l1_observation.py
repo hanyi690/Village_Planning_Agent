@@ -15,6 +15,7 @@ from app.contracts.evidence.evidence_contracts import EvidenceSource
 from app.contracts.domain.l1_contracts import (
     EvidenceGap,
     L1LocationFact,
+    L1SpatialProvenance,
     L1Snapshot,
 )
 from app.contracts.workflow.parsing_contracts import CompilationProfile, CompilerTrace
@@ -68,12 +69,22 @@ def _clean_model_text(text: str) -> str:
 
 def _dedup_location_facts_local(facts: list[L1LocationFact]) -> list[L1LocationFact]:
     result: list[L1LocationFact] = []
-    seen: set[tuple[str, str, str]] = set()
+    seen: set[tuple[str, str, str, tuple[str, ...], str]] = set()
     for fact in facts:
         key = (
             fact.normalized_name.strip(),
             fact.role.strip(),
             fact.dimension_key.strip(),
+            tuple(sorted({
+                str(value).strip()
+                for values in (
+                    getattr(fact, "village_scopes", None) or [],
+                    getattr(fact, "place_scopes", None) or [],
+                )
+                for value in values
+                if str(value).strip()
+            })),
+            str(getattr(fact, "instance_label", "") or "").strip(),
         )
         if not key[0] or key in seen:
             continue
@@ -174,6 +185,40 @@ def _is_place_like(token: str) -> bool:
     return True
 
 
+def _explicit_spatial_mentions(obs: dict[str, Any]) -> list[dict[str, Any]]:
+    """Return only provider-declared spatial work items.
+
+    The compiler intentionally does not mine arbitrary description prose for
+    geometry.  A provider must opt into the typed ``spatial_mentions`` field;
+    the resulting records remain semantic until EvidenceGraph resolves them.
+    """
+
+    mentions: list[dict[str, Any]] = []
+    for raw in obs.get("spatial_mentions") or []:
+        if not isinstance(raw, dict):
+            continue
+        target = str(
+            raw.get("target_name")
+            or raw.get("normalized_name")
+            or raw.get("mention")
+            or ""
+        ).strip()
+        if not target:
+            continue
+        scopes: list[str] = []
+        for key in ("village_scopes", "place_scopes"):
+            for value in raw.get(key) or []:
+                scopes.extend(_split_explicit_places(str(value)))
+        mentions.append({
+            **raw,
+            "target_name": target,
+            "normalized_name": str(raw.get("normalized_name") or target).strip(),
+            "mention": str(raw.get("mention") or target).strip(),
+            "scopes": list(dict.fromkeys(scopes)),
+        })
+    return mentions
+
+
 def _extract_location_facts_from_observations(
     instruction: str,
     *,
@@ -208,10 +253,11 @@ def _extract_location_facts_from_observations(
         entity_type = str(obs.get("entity_type") or "").strip()
         description = str(obs.get("description") or "").strip()
         kind = str(obs.get("fact_type") or "").strip()
+        explicit_mentions = _explicit_spatial_mentions(obs)
         if str(obs.get("status") or "").strip() != "confirmed":
             continue
         spatial_observation = kind in {"spatial_entity", "spatial_relation"} or bool(
-            location or relation or obs.get("source_feature_ids")
+            location or relation or obs.get("source_feature_ids") or explicit_mentions
         )
         if not spatial_observation:
             continue
@@ -229,12 +275,120 @@ def _extract_location_facts_from_observations(
             ],
             *source_segment_ids,
         ]))
-        if not name and not location:
+        if not name and not location and not explicit_mentions:
             continue
         role = _observation_role(entity_type, name, location, description)
+        base_role = role
         source_span = source_quote or " | ".join(
             x for x in (entity_type, name, location, relation, description) if x
         )
+        if explicit_mentions:
+            observation_source_refs = [
+                str(value).strip()
+                for value in (obs.get("source_refs") or [])
+                if str(value).strip()
+            ]
+            observation_feature_ids = [
+                str(value).strip()
+                for value in (obs.get("source_feature_ids") or [])
+                if str(value).strip()
+            ]
+            raw_confidence = obs.get("confidence")
+            for mention in explicit_mentions:
+                target_name = str(mention.get("target_name") or name).strip()
+                normalized_name = str(
+                    mention.get("normalized_name") or target_name
+                ).strip()
+                mention_role = str(mention.get("role") or "").strip()
+                mention_role = mention_role or base_role
+                scopes = list(mention.get("scopes") or [])
+                if not scopes:
+                    scopes = _split_explicit_places(location)
+                if not scopes:
+                    scopes = [""]
+                mention_relation = str(mention.get("relation") or relation).strip()
+                aliases = list(dict.fromkeys([
+                    *[
+                        str(value).strip()
+                        for value in (mention.get("aliases") or [])
+                        if str(value).strip()
+                    ],
+                    target_name,
+                    normalized_name,
+                ]))
+                mention_feature_ids = list(dict.fromkeys([
+                    *observation_feature_ids,
+                    *[
+                        str(value).strip()
+                        for value in (mention.get("source_feature_ids") or [])
+                        if str(value).strip()
+                    ],
+                ]))
+                resolution_state = str(
+                    mention.get("resolution_state") or "needs_retrieval"
+                ).strip()
+                if resolution_state not in {
+                    "resolved",
+                    "needs_retrieval",
+                    "conflict",
+                    "source_exhausted",
+                    "unknown",
+                }:
+                    resolution_state = "needs_retrieval"
+                provenance = L1SpatialProvenance(
+                    source_refs=observation_source_refs,
+                    source_segment_ids=source_segment_ids,
+                    source_quote=source_quote,
+                    observation_id=(
+                        str(mention.get("observation_id") or "").strip()
+                    ),
+                )
+                for scope in scopes:
+                    scope_hint = " ".join(
+                        value for value in (scope, mention_relation) if value
+                    )
+                    village_scopes = [
+                        scope
+                    ] if scope.endswith(("村", "自然村")) else []
+                    facts.append(L1LocationFact(
+                        mention=target_name,
+                        normalized_name=normalized_name,
+                        target_name=target_name,
+                        role=(
+                            "village"
+                            if scope.endswith(("村", "自然村"))
+                            and mention_role == "unknown"
+                            else mention_role
+                        ),
+                        aliases=aliases,
+                        spatial_hint=scope_hint,
+                        related_mentions=[scope] if scope else [],
+                        village_scopes=village_scopes,
+                        place_scopes=[scope] if scope and not village_scopes else [],
+                        instance_label=str(
+                            mention.get("instance_label") or ""
+                        ).strip(),
+                        instance_count=str(
+                            mention.get("instance_count")
+                            or obs.get("scale")
+                            or ""
+                        ).strip(),
+                        resolution_state=resolution_state,
+                        provenance=provenance,
+                        source_report_ref=report_id,
+                        dimension_key=dimension_key,
+                        source_span=source_span,
+                        evidence_refs=evidence_refs,
+                        source_feature_ids=mention_feature_ids,
+                        confidence=(
+                            float(raw_confidence)
+                            if isinstance(raw_confidence, (int, float))
+                            else 0.8
+                        ),
+                    ))
+            # Explicit work items are authoritative for the location index;
+            # do not add a second generic target by mining the description.
+            continue
         # Only observations with an explicit spatial role/evidence can emit
         # location facts. Non-spatial metric/demand names remain L1Fact rows.
         parts_to_emit: list[tuple[str, str, str]] = []
@@ -263,12 +417,27 @@ def _extract_location_facts_from_observations(
                 mention=name or normalized,
                 normalized_name=normalized,
                 role=part_role,
+                target_name=name or normalized,
                 aliases=aliases,
                 spatial_hint=spatial_hint,
                 source_report_ref=report_id,
                 dimension_key=dimension_key,
                 source_span=source_span,
                 evidence_refs=evidence_refs,
+                source_feature_ids=[
+                    str(value).strip()
+                    for value in (obs.get("source_feature_ids") or [])
+                    if str(value).strip()
+                ],
+                provenance=L1SpatialProvenance(
+                    source_refs=[
+                        str(value).strip()
+                        for value in (obs.get("source_refs") or [])
+                        if str(value).strip()
+                    ],
+                    source_segment_ids=source_segment_ids,
+                    source_quote=source_quote,
+                ),
                 confidence=(
                     float(obs.get("confidence"))
                     if isinstance(obs.get("confidence"), (int, float))
@@ -346,6 +515,49 @@ def _instruction_diagnostics(
     return diagnostics
 
 
+def _scope_conflict_diagnostics(
+    facts: list[L1LocationFact],
+    *,
+    dimension_key: str,
+) -> list[ParseDiagnostic]:
+    """Flag near-duplicate scope spellings without choosing a correction."""
+
+    scopes = sorted({
+        str(value).strip()
+        for fact in facts
+        for values in (
+            getattr(fact, "village_scopes", None) or [],
+            getattr(fact, "place_scopes", None) or [],
+        )
+        for value in values
+        if str(value).strip()
+    })
+    diagnostics: list[ParseDiagnostic] = []
+    for index, left in enumerate(scopes):
+        left_core = re.sub(r"(?:自然村|村)$", "", left)
+        for right in scopes[index + 1:]:
+            right_core = re.sub(r"(?:自然村|村)$", "", right)
+            if (
+                len(left_core) < 2
+                or len(left_core) != len(right_core)
+                or left_core[-1:] != right_core[-1:]
+                or sum(a != b for a, b in zip(left_core, right_core)) != 1
+            ):
+                continue
+            diagnostics.append(ParseDiagnostic(
+                diagnostic_id=f"{dimension_key}-scope-conflict-{left}-{right}",
+                severity="warning",
+                code="L1_SCOPE_CONFLICT_CANDIDATE",
+                message=(
+                    f"空间范围出现近似但不相同的名称：{left} / {right}；"
+                    "保留两者并交由证据或 HUMAN 确认，不自动归一化。"
+                ),
+                field_path="location_facts.village_scopes",
+                source_text_loc=f"{left}|{right}",
+            ))
+    return diagnostics
+
+
 def _compile_typed_observation_facts(
     instruction: str,
     *,
@@ -419,7 +631,10 @@ def _compile_typed_observation_facts(
         ]))
         source_span = str(raw.get("source_quote") or "").strip() or statement
         spatial = kind in {"spatial_entity", "spatial_relation"} or bool(
-            location or relation or raw.get("source_feature_ids")
+            location
+            or relation
+            or raw.get("source_feature_ids")
+            or raw.get("spatial_mentions")
         )
         fact_kind = "spatial_observation" if spatial else "document_observation"
         attributes = {
@@ -431,11 +646,15 @@ def _compile_typed_observation_facts(
             "fact_type": kind,
             "entity_type": entity_type,
             "name": name,
+            "target_name": str(raw.get("target_name") or "").strip(),
             "metric": str(raw.get("metric") or "").strip(),
             "location": location,
             "relation": relation,
             "description": description,
             "scale": str(raw.get("scale") or "").strip(),
+            "spatial_mention_count": str(
+                len(raw.get("spatial_mentions") or [])
+            ),
             "related_observation_ids": ",".join(
                 str(value).strip()
                 for value in (raw.get("related_observation_ids") or [])
@@ -600,6 +819,12 @@ def compile_l1_observation(
     diagnostics.extend(
         _instruction_diagnostics(
             instr,
+            dimension_key=dimension_key,
+        )
+    )
+    diagnostics.extend(
+        _scope_conflict_diagnostics(
+            location_facts,
             dimension_key=dimension_key,
         )
     )
