@@ -77,7 +77,7 @@ class _StructuredLLM:
     def __init__(self, payload: dict) -> None:
         self.payload = payload
 
-    def with_structured_output(self, _schema):
+    def with_structured_output(self, _schema, **_kwargs):
         return self
 
     async def ainvoke(self, _prompt: str) -> dict:
@@ -90,6 +90,7 @@ def test_compile_accepts_valid_typed_rules_and_runs_dry_run() -> None:
             {
                 "name_zh": "农业生产区",
                 "color": "#112233",
+                "is_protection": False,
                 "source_span": "功能分区表：农业生产区",
                 "rules": [
                     {
@@ -152,6 +153,7 @@ def test_compile_quarantines_unknown_bundle_ids() -> None:
             {
                 "name_zh": "产业区",
                 "color": "#445566",
+                "is_protection": False,
                 "source_span": "产业区原文",
                 "rules": [
                     {"rule": "near_poi", "poi_id": "poi-missing", "source_span": "靠近未知设施"},
@@ -175,6 +177,9 @@ def test_compile_quarantines_excessive_rule_depth() -> None:
         "categories": [
             {
                 "name_zh": "深层规则区",
+                "color": "#445566",
+                "is_protection": False,
+                "source_span": "深层规则区原文",
                 "rules": [
                     {
                         "rule": "not",
@@ -223,6 +228,9 @@ def test_compile_quarantines_excessive_rule_nodes() -> None:
         "categories": [
             {
                 "name_zh": "超节点规则区",
+                "color": "#445566",
+                "is_protection": False,
+                "source_span": "超节点规则区原文",
                 "rules": [
                     {
                         "rule": "all",
@@ -247,6 +255,9 @@ def test_compile_runs_dry_run_sanity_hook() -> None:
         "categories": [
             {
                 "name_zh": "农业生产区",
+                "color": "#112233",
+                "is_protection": False,
+                "source_span": "农业生产区原文",
                 "rules": [
                     {"rule": "dlbm_in", "dlbm_ids": ["0101"]},
                 ],
@@ -290,6 +301,7 @@ async def test_extract_vocabulary_from_reports_rejects_legacy_payload_and_keeps_
             {
                 "name_zh": "农业生产区",
                 "color": "#abcdef",
+                "is_protection": False,
                 "source_span": "功能分区表农业生产区",
                 "rules": [
                     {"rule": "dlbm_in", "dlbm_ids": ["0101"], "source_span": "耕地"},
@@ -298,6 +310,7 @@ async def test_extract_vocabulary_from_reports_rejects_legacy_payload_and_keeps_
             {
                 "name_zh": "无效产业区",
                 "color": "#123456",
+                "is_protection": False,
                 "source_span": "功能分区表无效产业区",
                 "rules": [
                     {"rule": "within_zone", "zone_id": "zone-missing", "source_span": "未知分区"},

@@ -23,7 +23,14 @@ from langchain_core.messages import AIMessage
 from app.config import get_dimension_config
 from app.contracts.events import SSEEventType
 from app.core.settings import LLM_MAX_CONCURRENT, MAX_TOKENS, LLM_STREAM_TIMEOUT
-from app.contracts.domain.l2_contracts import L2DecisionSet
+from app.contracts.domain.l2_contracts import L2DecisionSet, L2ReportOutput
+from app.domain.validation.l1_fact_catalog import (
+    L1FactCatalog,
+    build_l1_fact_catalog,
+    empty_l1_fact_catalog,
+    validate_l1_fact_catalog,
+    validate_l1_fact_references,
+)
 from app.infrastructure.logging import get_logger
 from app.infrastructure.llm.dimension_runtime import (
     load_dependency_reports,
@@ -145,7 +152,6 @@ async def analyze_l2_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
     if provider_failure_open(session_id):
         return {
             "dimension_retry_counts": dimension_failure_attempt(state, dim_key),
-            "dimension_retry_counts": dimension_failure_attempt(state, dim_key),
             "provider_failures": [{
                 "stage": f"L{dim_layer}", "dimension": dim_key,
                 "code": "llm_provider_circuit_open",
@@ -161,7 +167,7 @@ async def analyze_l2_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
         "不要返回 Markdown、标题、表格或 report_body。只写有依据的目标、指标、策略、"
         "优先级、空间结构意图、冲突假设和证据缺口。空间结构只表达语义范围、关系和"
         "GROUND 所需前置条件，不生成坐标、WKT、GeoJSON、BSM 或最终选址。\n"
-        "每个对象都应尽量给出稳定 ID、source_fact_refs 和 objective/strategy 引用；"
+        "各对象的 ID 必须在本次输出内唯一，引用只能指向本次输出内已经存在的对象 ID；"
         "根对象只能包含 schema_version、dimension_key、objectives、metrics、strategies、"
         "priorities、spatial_structures、conflicts、evidence_gaps、source_refs、diagnostics；"
         "schema_version 固定为 2.0，所有数组都必须是 JSON 数组。PlanningObjective.kind 只能是"
@@ -169,26 +175,66 @@ async def analyze_l2_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
         "TargetMetric.direction 只能是 increase/decrease/maintain/range/unknown，"
         "TargetMetric.status 只能是 observed/proposed/required；StrategyRule.strength 只能是"
         "hard/soft/proposed；conflicts 和 evidence_gaps 的 severity 只能是 info/warning/error。\n"
-        "没有证据时保留对象并标记 status=proposed，指标方向未知时才使用 direction=unknown，"
-        "填写 evidence_gaps，不能猜测。"
-        "规划建议指标必须标记 proposed，不能伪装为现状事实。数组字段始终返回 JSON 数组；"
-        "没有内容时返回空数组。"
-    )
-    decision_messages = [
-        {"role": "system", "content": decision_system},
-        {"role": "user", "content": prompt},
-    ]
-    try:
-        decision_set = await run_structured_output(
+        "没有证据时不要把对象标记为 observed；规划结论标记 proposed，无法支持的对象省略，"
+        "并可用 evidence_gaps 记录缺口。规划建议指标必须标记 proposed，不能伪装为现状事实。"
+        "数组字段始终返回 JSON 数组；没有内容时返回空数组。"
+    ) + "\n\n" + _l2_fact_reference_rules(l1_fact_audit)
+    async def _run_decision(validation_feedback: str = "") -> L2DecisionSet:
+        system_content = decision_system
+        max_retries = 2
+        context_stage = "L2"
+        if validation_feedback:
+            system_content += (
+                "\n\n【上一轮 L2 闭集校验反馈】\n"
+                "只修正下列确定性校验问题；不得新增对象、改变语义或生成新的"
+                "source_fact_refs。所有引用必须从上面的 allowed_l1_fact_ids JSON 数组逐字复制；"
+                "无法引用时使用空数组并将对象标为 proposed、省略或写入 evidence_gaps。\n"
+                + validation_feedback[:2000]
+            )
+            max_retries = 1
+            context_stage = "L2_CLOSED_SET_RETRY"
+        return await run_structured_output(
             L2DecisionSet,
-            decision_messages,
-            max_retries=2,
+            [
+                {"role": "system", "content": system_content},
+                {"role": "user", "content": prompt},
+            ],
+            max_retries=max_retries,
             timeout=LLM_STREAM_TIMEOUT,
             max_tokens=MAX_TOKENS,
             max_concurrent=max(1, int(os.getenv("L2_LLM_MAX_CONCURRENT", str(LLM_MAX_CONCURRENT)))),
             semaphore_scope="l2",
             temperature=0.3,
-            context={"stage": "L2", "dimension_key": dim_key, "session_id": session_id},
+            context={"stage": context_stage, "dimension_key": dim_key, "session_id": session_id},
+        )
+
+    try:
+        try:
+            decision_set = await _run_decision()
+        except Exception as first_error:
+            from app.infrastructure.llm.structured import structured_failure_code
+
+            failure_code = structured_failure_code(first_error)
+            if is_provider_failure(first_error) or failure_code not in {
+                "SCHEMA_INVALID",
+                "TOOL_CALL_MISSING",
+                "OUTPUT_TRUNCATED",
+            }:
+                raise
+            decision_set = await _run_decision(
+                "上一次结构化输出未通过响应 schema 校验（"
+                f"{failure_code or 'SCHEMA_INVALID'}）。"
+                "请严格返回 L2DecisionSet，并从 allowed_l1_fact_ids JSON 闭集逐字复制"
+                " source_fact_refs；不要使用维度名、UUID、报告引用或 l1_fact: 前缀。"
+            )
+        decision_set = decision_set.model_copy(update={"dimension_key": dim_key})
+        decision_set, semantic_error = (
+            await _validate_l2_decision_with_one_closed_set_reask(
+                decision_set,
+                catalog=l1_fact_audit.get("fact_catalog") or empty_l1_fact_catalog(),
+                catalog_digest=l1_fact_audit.get("catalog_digest", ""),
+                run_decision=_run_decision,
+            )
         )
     except asyncio.TimeoutError:
         trip_provider_failure(session_id)
@@ -233,10 +279,131 @@ async def analyze_l2_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
             }],
         }
 
-    decision_set = decision_set.model_copy(update={"dimension_key": dim_key})
-    llm_response = _render_decision_set(decision_set)
+    if semantic_error:
+        logger.error(
+            "[analyze_l2_dimension] %s: typed decision semantic validation failed: %s",
+            dim_key,
+            semantic_error,
+        )
+        await sse_manager.publish(session_id, {
+            "type": SSEEventType.DIMENSION_ERROR,
+            "dimension_key": dim_key,
+            "dimension_name": dim_name,
+            "layer": dim_layer,
+            "error": "L2 typed decision semantic validation failed",
+        })
+        return {
+            "messages": [AIMessage(content="[执行失败] L2 结构化决策未通过语义闭合校验")],
+            "dimension_retry_counts": dimension_failure_attempt(state, dim_key),
+            "semantic_failures": [{
+                "stage": f"L{dim_layer}",
+                "dimension": dim_key,
+                "code": "l2_semantic_validation_error",
+                "message": semantic_error,
+            }],
+        }
+    report_prompt = _build_l2_report_synthesis_prompt(dim_key, decision_set)
+    try:
+        report_output = await run_structured_output(
+            L2ReportOutput,
+            [
+                {
+                    "role": "system",
+                    "content": (
+                        "你正在执行 L2 report synthesis pass。只依据用户消息中的已验证"
+                        "L2DecisionSet 生成 L2ReportOutput，不得重新生成或修改结构化决策。"
+                    ),
+                },
+                {"role": "user", "content": report_prompt},
+            ],
+            max_retries=1,
+            timeout=LLM_STREAM_TIMEOUT,
+            max_tokens=max(
+                256,
+                int(os.getenv("L2_REPORT_MAX_TOKENS", str(min(MAX_TOKENS, 4096)))),
+            ),
+            max_concurrent=max(
+                1,
+                int(os.getenv("L2_LLM_MAX_CONCURRENT", str(LLM_MAX_CONCURRENT))),
+            ),
+            semaphore_scope="l2",
+            temperature=0.3,
+            context={
+                "stage": "L2_REPORT",
+                "dimension_key": dim_key,
+                "session_id": session_id,
+            },
+        )
+        llm_response = _require_l2_report_body(report_output.report_body)
+    except asyncio.TimeoutError:
+        trip_provider_failure(session_id)
+        logger.error(
+            "[analyze_l2_dimension] %s: report synthesis timeout after %ss",
+            dim_key,
+            LLM_STREAM_TIMEOUT,
+        )
+        await sse_manager.publish(session_id, {
+            "type": SSEEventType.DIMENSION_ERROR,
+            "dimension_key": dim_key,
+            "dimension_name": dim_name,
+            "layer": dim_layer,
+            "error": f"L2 report synthesis timeout ({LLM_STREAM_TIMEOUT}s)",
+        })
+        return {
+            "messages": [AIMessage(content=f"[执行失败] L2正文生成超时({LLM_STREAM_TIMEOUT}s)")],
+            "dimension_retry_counts": dimension_failure_attempt(state, dim_key),
+            "provider_failures": [{
+                "stage": f"L{dim_layer}",
+                "dimension": dim_key,
+                "code": "llm_report_timeout",
+                "message": f"L2 report synthesis timeout ({LLM_STREAM_TIMEOUT}s)",
+            }],
+        }
+    except Exception as exc:
+        if is_provider_failure(exc):
+            trip_provider_failure(session_id)
+        from app.infrastructure.llm.structured import structured_failure_code, structured_failure_summary
+
+        error_message = structured_failure_summary(exc)
+        logger.error(
+            "[analyze_l2_dimension] %s: report synthesis failed: %s",
+            dim_key,
+            error_message,
+        )
+        await sse_manager.publish(session_id, {
+            "type": SSEEventType.DIMENSION_ERROR,
+            "dimension_key": dim_key,
+            "dimension_name": dim_name,
+            "layer": dim_layer,
+            "error": error_message,
+        })
+        return {
+            "messages": [AIMessage(content=f"[执行失败] L2正文结构化输出错误: {error_message}")],
+            "dimension_retry_counts": dimension_failure_attempt(state, dim_key),
+            "provider_failures": [{
+                "stage": f"L{dim_layer}",
+                "dimension": dim_key,
+                "code": structured_failure_code(exc) or "llm_report_output_error",
+                "message": error_message,
+            }],
+        }
     llm_elapsed = time.time() - llm_start_time
-    logger.info(f"[analyze_l2_dimension] {dim_key}: typed LLM completed in {llm_elapsed:.1f}s, output = {len(llm_response)} chars")
+    logger.info(
+        "[analyze_l2_dimension] %s: typed decision + report synthesis completed in %.1fs, output=%d chars",
+        dim_key,
+        llm_elapsed,
+        len(llm_response),
+    )
+
+    await publish_dimension_delta(
+        session_id,
+        dim_key,
+        dim_name,
+        dim_layer,
+        is_revision,
+        llm_response,
+        llm_response,
+    )
 
     # 6.5 统计收集 - 记录 LLM 时间和输出
     stats.record_llm_time(session_id, dim_key, llm_elapsed, len(llm_response))
@@ -326,6 +493,8 @@ async def analyze_l2_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
                 "kg_cognition": bool(explore_section),
                 "kg_fact_count": explore_audit["fact_count"],
                 "l1_fact_count": l1_fact_audit["fact_count"],
+                "l1_fact_catalog_digest": l1_fact_audit["catalog_digest"],
+                "l1_allowed_fact_count": len(l1_fact_audit["allowed_fact_ids"]),
             },
         )
     except Exception as e:
@@ -382,6 +551,7 @@ def _build_prompt(
         revision_instruction=revision_instruction,
         layer2_contexts=same_layer_contexts,  # 传递同层依赖报告
         professional_data=explore_section,  # EXPLORE 证据作为专业数据
+        structured=True,
     )
 
 
@@ -391,9 +561,20 @@ def _load_l1_fact_section(
     dimension_key: str = "",
     source_dimensions: list[str] | None = None,
 ) -> tuple[str, Dict[str, Any]]:
-    """Load the canonical L1Snapshot facts for explicit L2 consumption."""
+    """Load L1 facts and build the one closed catalog used by L2."""
     ref_data = (state.get("artifact_refs") or {}).get("l1_snapshot")
-    audit: Dict[str, Any] = {"fact_count": 0, "snapshot_ref": ref_data}
+    empty_catalog = empty_l1_fact_catalog()
+    audit: Dict[str, Any] = {
+        "fact_count": 0,
+        "snapshot_ref": ref_data,
+        "fact_catalog": empty_catalog,
+        "catalog": empty_catalog,
+        "catalog_digest": empty_catalog.digest,
+        "fact_catalog_digest": empty_catalog.digest,
+        "allowed_fact_ids": [],
+        "spatial_fact_ids": [],
+        "fact_ids": [],
+    }
     if not isinstance(ref_data, dict):
         return "", audit
 
@@ -405,11 +586,10 @@ def _load_l1_fact_section(
             payload = payload.model_dump(mode="json")
         if not isinstance(payload, dict):
             return "", audit
-        by_dimension = payload.get("facts_by_dimension") or {}
         fact_records = payload.get("fact_records") or []
         location_facts = payload.get("location_facts") or []
         selected_dimensions = list(source_dimensions or [])
-        if dimension_key in by_dimension:
+        if dimension_key:
             selected_dimensions.insert(0, dimension_key)
         scoped_records = [
             item
@@ -420,18 +600,25 @@ def _load_l1_fact_section(
                 or item.get("dimension_key") in selected_dimensions
             )
         ]
-        scoped = [
-            str(item)
-            for source_dimension in dict.fromkeys(selected_dimensions)
-            for item in (by_dimension.get(source_dimension) or [])
-        ]
-        # A dimension with no exact L1 counterpart receives no unrelated L1
-        # prose; the KG EXPLORE path remains available separately.
+        catalog = build_l1_fact_catalog(scoped_records)
+        audit.update({
+            "fact_catalog": catalog,
+            "catalog": catalog,
+            "catalog_digest": catalog.digest,
+            "fact_catalog_digest": catalog.digest,
+            "allowed_fact_ids": catalog.usable_allowed_fact_ids,
+            "spatial_fact_ids": catalog.usable_spatial_fact_ids,
+            # Compatibility for callers that only inspect the audit mapping;
+            # this value is now canonical-only and never admits legacy IDs.
+            "fact_ids": catalog.usable_allowed_fact_ids,
+        })
+        # The fact body is deliberately identity-free.  Only the catalog
+        # below the system prompt exposes copyable fact IDs.
         facts = [
-            f"[{item.get('fact_id')}] {item.get('statement')}"
+            str(item.get("statement") or "").strip()
             for item in scoped_records
-            if item.get("statement")
-        ] or scoped
+            if str(item.get("statement") or "").strip()
+        ]
         audit["fact_count"] = len(facts)
         audit["fact_record_count"] = len(scoped_records)
         scoped_locations = [
@@ -458,6 +645,163 @@ def _load_l1_fact_section(
         return "", audit
 
 
+def _l2_fact_reference_rules(audit: Dict[str, Any]) -> str:
+    """Render the current L1 fact catalog as the runtime closed set."""
+    catalog = audit.get("fact_catalog") or audit.get("catalog")
+    if not isinstance(catalog, L1FactCatalog):
+        # Keep this helper deterministic for direct callers while accepting
+        # only caller-supplied canonical IDs; no ID is ever derived here.
+        raw_ids = audit.get("allowed_fact_ids") or audit.get("fact_ids") or []
+        catalog = build_l1_fact_catalog(
+            {"fact_id": value} for value in raw_ids
+        )
+    fact_ids = catalog.usable_allowed_fact_ids
+    spatial_fact_ids = catalog.usable_spatial_fact_ids
+    lines = [
+        "【source_fact_refs 运行时闭集】",
+        "source_fact_refs 只能逐字复制下面列出的 canonical L1Snapshot fact_id。",
+        "事实正文只用于理解内容，不是可复制身份；不得自行拼接维度名、UUID、报告引用、地点名或 source_refs。",
+        f"catalog_digest: {catalog.digest}",
+    ]
+    if fact_ids:
+        lines.append("允许值：")
+        lines.extend(f"- {fact_id}" for fact_id in fact_ids)
+        lines.append(
+            "机器可复制的 JSON 闭集："
+            + json.dumps({"allowed_l1_fact_ids": fact_ids}, ensure_ascii=False)
+        )
+        lines.append(
+            "空间事实子集（仍属于上述闭集）："
+            + json.dumps({"allowed_l1_spatial_fact_ids": spatial_fact_ids}, ensure_ascii=False)
+        )
+        lines.extend([
+            "PlanningObjective/TargetMetric 标记 observed 时至少引用一个允许值；",
+            "StrategyRule 和 SpatialStructureIntent 只有在能引用允许值时才输出。",
+            "没有对应事实时使用 proposed 或省略对象，不要填入近似 ID。",
+        ])
+    else:
+        lines.append(
+            "本维度没有可引用的 canonical L1 fact_id；所有 source_fact_refs 必须为 []，"
+            "只能输出不需要事实引用的 proposed 规划背景或 evidence_gaps。"
+        )
+    return "\n".join(lines)
+
+
+async def _validate_l2_decision_with_one_closed_set_reask(
+    decision_set: L2DecisionSet,
+    *,
+    catalog: L1FactCatalog | None = None,
+    catalog_digest: str = "",
+    known_l1_fact_ids: set[str] | None = None,
+    run_decision: Any,
+) -> tuple[L2DecisionSet, str]:
+    """Validate L2 once, then allow one exact-feedback provider reask.
+
+    The reask is a contract boundary, not a repair pass: no field is edited
+    locally and no reference is dropped.  A second failure is returned to the
+    dimension gate so the invalid decision cannot reach report synthesis.
+    """
+
+    from app.domain.validation.l2_closure import validate_l2_decision_set
+
+    if catalog is None:
+        # Backward-compatible direct-call support for older unit tests.  The
+        # production worker always passes the snapshot-derived catalog.
+        catalog = build_l1_fact_catalog(
+            {"fact_id": value} for value in (known_l1_fact_ids or set())
+        )
+    expected_catalog_digest = str(catalog_digest or catalog.digest)
+
+    def _validate(value: L2DecisionSet) -> None:
+        if expected_catalog_digest != catalog.digest:
+            raise ValueError(
+                "l1_fact_catalog_digest_mismatch:"
+                f"expected={expected_catalog_digest}:actual={catalog.digest}"
+            )
+        catalog_membership = validate_l1_fact_catalog(catalog)
+        if not catalog_membership.accepted:
+            raise ValueError(
+                "l1_fact_catalog_invalid:"
+                f"missing={catalog_membership.missing_ids}:"
+                f"extra={catalog_membership.extra_ids}:"
+                f"duplicates={catalog_membership.duplicate_ids}"
+            )
+        reference_errors: list[str] = []
+        for field_name in ("objectives", "metrics", "strategies", "spatial_structures"):
+            for item in list(getattr(value, field_name, []) or []):
+                membership = validate_l1_fact_references(
+                    getattr(item, "source_fact_refs", []) or [],
+                    catalog=catalog,
+                )
+                if not membership.accepted:
+                    owner_id = str(
+                        getattr(item, "objective_id", "")
+                        or getattr(item, "metric_id", "")
+                        or getattr(item, "strategy_id", "")
+                        or getattr(item, "structure_id", "")
+                        or "unknown"
+                    )
+                    reference_errors.append(
+                        f"{field_name}:{owner_id}:catalog_digest={catalog.digest}:"
+                        f"extra={membership.extra_ids}:duplicates={membership.duplicate_ids}"
+                    )
+        if reference_errors:
+            raise ValueError("\n".join(reference_errors))
+        validate_l2_decision_set(
+            value,
+            known_l1_fact_ids=set(catalog.usable_allowed_fact_ids),
+        )
+
+    try:
+        _validate(decision_set)
+        return decision_set, ""
+    except ValueError as first_error:
+        first_message = str(first_error).splitlines()[0][:1000]
+
+    retried = await run_decision(
+        "L2 fact catalog must remain unchanged for this reask. "
+        f"catalog_digest={catalog.digest}; "
+        "allowed_l1_fact_ids="
+        f"{json.dumps(catalog.usable_allowed_fact_ids, ensure_ascii=False)}\n"
+        + first_message
+    )
+    retried = retried.model_copy(update={"dimension_key": decision_set.dimension_key})
+    try:
+        _validate(retried)
+    except ValueError as second_error:
+        second_message = str(second_error).splitlines()[0][:1000]
+        return retried, (
+            "L2_SOURCE_FACT_CLOSED_SET_FAILED: "
+            f"first={first_message}; retry={second_message}"
+        )
+    return retried, ""
+
+
+def _build_l2_report_synthesis_prompt(
+    dimension_key: str,
+    decision_set: L2DecisionSet,
+) -> str:
+    """Build the independent human-report projection prompt for L2."""
+    decision_json = decision_set.model_dump_json(ensure_ascii=False)
+    return (
+        f"【L2 report synthesis pass; dimension_key={dimension_key}】\n"
+        "你只负责生成人类规划人员阅读的规划思路正文，输出 L2ReportOutput。"
+        "正文只能解释下面已经通过 L2DecisionSet 结构和语义闭合校验的决策；"
+        "不得新增目标、指标、数量、位置、关系、空间身份、来源事实或执行几何。"
+        "空数组表示本维度没有该类内容，不得用模板或常识补写。"
+        "只返回 report_body 字段，不返回决策 JSON、Markdown 代码围栏或其他根字段。\n\n"
+        f"【validated L2DecisionSet】\n{decision_json}\n\n"
+        "请将已验证的决策组织为连贯、简洁、可供人阅读的规划思路正文。"
+    )
+
+
+def _require_l2_report_body(value: Any) -> str:
+    report_body = str(value or "").strip()
+    if not report_body:
+        raise ValueError("L2_REPORT_BODY_EMPTY")
+    return report_body
+
+
 def _dependency_summary(text: str) -> Dict[str, Any]:
     """Compact audit view; the full dependency prose remains prompt input."""
     import re
@@ -467,39 +811,6 @@ def _dependency_summary(text: str) -> Dict[str, Any]:
         "chars": len(text or ""),
         "preview": (text or "")[:500],
     }
-
-
-def _render_decision_set(decision: L2DecisionSet) -> str:
-    """Render typed decisions for people and cross-layer prompt context."""
-
-    lines = [f"# L2 结构化决策 · {decision.dimension_key}", ""]
-    sections = [
-        ("发展目标", [item.statement for item in decision.objectives if item.statement.strip()]),
-        ("目标指标", [
-            " ".join(
-                part for part in (
-                    item.name,
-                    str(item.value) if item.value is not None else "",
-                    item.unit,
-                    f"[{item.status}]",
-                ) if part
-            )
-            for item in decision.metrics
-            if item.name.strip()
-        ]),
-        ("规划策略", [item.statement for item in decision.strategies if item.statement.strip()]),
-        ("实施优先级", [item.statement for item in decision.priorities if item.statement.strip()]),
-        ("空间结构意图", [item.statement for item in decision.spatial_structures if item.statement.strip()]),
-        ("冲突假设", [item.description for item in decision.conflicts if item.description.strip()]),
-        ("证据缺口", [item.description for item in decision.evidence_gaps if item.description.strip()]),
-    ]
-    for title, values in sections:
-        lines.append(f"## {title}")
-        lines.extend(f"- {value}" for value in values)
-        if not values:
-            lines.append("- （无）")
-        lines.append("")
-    return "\n".join(lines).strip()
 
 
 def _decision_summary_json(decision: L2DecisionSet, report_body: str) -> str:
@@ -530,4 +841,4 @@ def _decision_summary_json(decision: L2DecisionSet, report_body: str) -> str:
     return json.dumps(payload, ensure_ascii=False)
 
 
-__all__ = ["analyze_l2_dimension", "_render_decision_set", "_decision_summary_json"]
+__all__ = ["analyze_l2_dimension", "_decision_summary_json"]

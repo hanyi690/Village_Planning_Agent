@@ -59,6 +59,30 @@ def _ref_digest(ref: Any) -> str:
     return str(getattr(ref, "digest", "") or getattr(ref, "descriptor_digest", "") or "")
 
 
+def _bind_master_certificate_and_digest(
+    certificate_payload: dict[str, Any],
+    master_payload: dict[str, Any],
+) -> None:
+    """Bind the final master proof before strict ScenarioSet validation."""
+
+    from app.contracts.planning.scenario import (
+        BackendCertificatePayload,
+        derive_solver_model_digest,
+    )
+
+    certificate_payload["master_certificate"] = master_payload
+    backend_payload = certificate_payload.get("backend_certificate")
+    if not isinstance(backend_payload, dict):
+        return
+    backend_payload["master_certificate"] = master_payload
+    backend_proof = BackendCertificatePayload.model_validate(backend_payload)
+    certificate_payload["model_digest"] = derive_solver_model_digest(
+        backend_proof,
+        deterministic_seed=int(certificate_payload["deterministic_seed"]),
+        search_limit=int(certificate_payload["search_limit"]),
+    )
+
+
 def _demo_narrow_slice_target_ids(plan_intent: Any) -> set[str]:
     """Return the explicitly typed one-target demo scope, if present."""
     return {
@@ -504,10 +528,6 @@ async def select_node(state: Dict[str, Any]) -> Dict[str, Any]:
             scenario_payload = scenario_set.model_dump(mode="json")
             certificate_payload = scenario_payload["solver_certificate"]
             master_payload = master_certificate.model_dump(mode="json")
-            certificate_payload["master_certificate"] = master_payload
-            backend_payload = certificate_payload.get("backend_certificate")
-            if isinstance(backend_payload, dict):
-                backend_payload["master_certificate"] = master_payload
             if master_certificate.status != "feasible":
                 for scenario_row in scenario_payload.get("scenarios", []):
                     scenario_row["status"] = "partial"
@@ -522,6 +542,8 @@ async def select_node(state: Dict[str, Any]) -> Dict[str, Any]:
                     "master coordination did not produce a feasible global selection"
                 )
                 certificate_payload["feasible_scenario_count"] = 0
+            _bind_master_certificate_and_digest(certificate_payload, master_payload)
+            scenario_payload["fingerprint"] = ""
             scenario_set = ScenarioSet.model_validate(scenario_payload)
             scenario_set = scenario_set.bind_solver_readiness(readiness)
             scenario = scenario_set.recommended or (

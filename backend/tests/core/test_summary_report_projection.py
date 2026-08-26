@@ -37,10 +37,13 @@ def test_derived_summary_is_typed_closed_and_code_owned() -> None:
         )
 
 
-def test_deterministic_summary_does_not_extract_semantic_values_with_regex() -> None:
-    from app.data.ingestion.summary_generator import deterministic_summary_model
+@pytest.mark.asyncio
+async def test_configured_summary_path_keeps_plain_text_out_of_semantic_fields(monkeypatch) -> None:
+    import app.core.settings as settings
+    from app.data.ingestion.summary_generator import generate_summary_model
 
-    summary = deterministic_summary_model(
+    monkeypatch.setattr(settings, "BACKGROUND_SUMMARY_ENRICHMENT", False)
+    summary = await generate_summary_model(
         "land_use_planning",
         3,
         "建设用地 12 公顷，### 新增道路，森林覆盖率 40%",

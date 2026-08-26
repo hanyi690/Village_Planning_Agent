@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import threading
@@ -170,6 +171,49 @@ def _progress_fingerprint(state: dict) -> str:
             (str(k) + ":" + ",".join(sorted(v)) for k, v in completed.items())
         )),
     ])
+
+
+def _checkpoint_interrupt_signature(snapshot: object) -> str:
+    """Return a stable identity for the pending LangGraph HUMAN checkpoint."""
+    signatures = []
+    for task in getattr(snapshot, "tasks", ()) or ():
+        interrupts = getattr(task, "interrupts", ()) or ()
+        if not interrupts:
+            continue
+        signatures.append({
+            "task_id": str(getattr(task, "id", "")),
+            "interrupts": [repr(interrupt) for interrupt in interrupts],
+        })
+    return json.dumps(signatures, ensure_ascii=False, sort_keys=True)
+
+
+def _review_instance_fingerprint(
+    state: dict,
+    review_payload: dict,
+    interrupt_signature: str,
+) -> str:
+    """Distinguish an exact interrupt replay from a rework checkpoint refresh.
+
+    The graph can reuse ``event_id`` and ``human_review_generation`` when a
+    provider rework finishes and the same layer-completion review is rebuilt.
+    The pending task identity is therefore part of the key; the review payload
+    and artifact references provide a second stable signal without treating
+    transient state flags as progress.
+    """
+    material = {
+        "event_id": review_payload.get("event_id"),
+        "items": review_payload.get("items") or [],
+        "human_review_generation": state.get("human_review_generation"),
+        "artifact_refs": state.get("artifact_refs") or {},
+        "interrupt_signature": interrupt_signature,
+    }
+    encoded = json.dumps(
+        material,
+        ensure_ascii=False,
+        sort_keys=True,
+        default=str,
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
 
 
 def _graph_has_pending_tasks(client, session_id: str) -> bool:
@@ -517,7 +561,6 @@ def test_real_graph_resume_delivery(sqlite_db, pipeline_reset, monkeypatch):
             # explicitly close/reopen a live HUMAN interrupt below.
             checkpoint_reopened = resuming_existing
             interrupt_event_id = ""
-            last_processed_event_id = ""
             # L3 summary enrichment is supervised but may finish after the
             # worker checkpoint. Keep polling long enough for the official
             # interrupt payload to become visible before declaring a deadlock.
@@ -535,7 +578,7 @@ def test_real_graph_resume_delivery(sqlite_db, pipeline_reset, monkeypatch):
             overall_deadline = time.monotonic() + overall_deadline_seconds
             state = {}
             terminal = False
-            processed_event_ids: set[str] = set()
+            processed_review_keys: set[tuple[str, str, str]] = set()
             last_watchdog_report_at = 0.0
             while time.monotonic() < overall_deadline:
                 current = get_state_values(session_id)
@@ -563,7 +606,15 @@ def test_real_graph_resume_delivery(sqlite_db, pipeline_reset, monkeypatch):
                 if progress != last_progress:
                     last_progress = progress
                     last_progress_at = now
-                elif now - last_progress_at > stall_wait_seconds:
+                elif (
+                    now - last_progress_at > stall_wait_seconds
+                    and not (
+                        pending_tasks
+                        and not current.get("paused_stage")
+                        and not current.get("fatal_error")
+                        and not current.get("human_review_items")
+                    )
+                ):
                     dump_state_diagnostic("stall")
                     pytest.fail(
                         "real graph stalled: state fingerprint unchanged for 90s "
@@ -589,20 +640,25 @@ def test_real_graph_resume_delivery(sqlite_db, pipeline_reset, monkeypatch):
                     time.sleep(0.5)
                     continue
                 event_id = str(review_payload.get("event_id") or "")
-                if (
-                    event_id
-                    and event_id in processed_event_ids
-                    and event_id == last_processed_event_id
-                ):
+                review_generation = str(current.get("human_review_generation") or "0")
+                checkpoint_snapshot = client.portal.call(
+                    PlanningRuntimeService.aget_state,
+                    session_id,
+                )
+                interrupt_signature = _checkpoint_interrupt_signature(checkpoint_snapshot)
+                review_fingerprint = _review_instance_fingerprint(
+                    current,
+                    review_payload,
+                    interrupt_signature,
+                )
+                review_key = (event_id, review_generation, review_fingerprint)
+                if event_id and review_key in processed_review_keys:
                     # The graph is still replaying the exact interrupt after a
-                    # resume; do not submit the same decision twice.
+                    # resume.  A later rework may reuse both event id and
+                    # generation, so the checkpoint identity is part of the key.
                     time.sleep(0.5)
                     continue
                 if not checkpoint_reopened:
-                    checkpoint_snapshot = client.portal.call(
-                        PlanningRuntimeService.aget_state,
-                        session_id,
-                    )
                     assert checkpoint_snapshot is not None
                     assert checkpoint_snapshot.config["configurable"]["thread_id"] == session_id
                     assert any(
@@ -726,8 +782,7 @@ def test_real_graph_resume_delivery(sqlite_db, pipeline_reset, monkeypatch):
                 assert resolved.status_code == 200, resolved.text
                 dump_state_diagnostic("post-resume")
                 if event_id:
-                    processed_event_ids.add(event_id)
-                    last_processed_event_id = event_id
+                    processed_review_keys.add(review_key)
                 human_resolutions.append({
                     "stage": review_payload.get("paused_stage"),
                     "item_count": len(review_payload.get("items") or []),

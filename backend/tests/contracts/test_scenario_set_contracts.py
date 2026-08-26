@@ -198,3 +198,25 @@ def test_non_feasible_master_clears_formal_ids_and_remains_constructible(master_
     assert scenario_set.recommended_scenario_id == ""
     assert scenario_set.solver_certificate.master_certificate == master
     assert scenario_set.solver_certificate.backend_certificate.master_certificate == master
+
+
+def test_select_master_binding_recomputes_nested_backend_model_digest() -> None:
+    from app.workflow.stages.select import _bind_master_certificate_and_digest
+
+    master = MasterCertificatePayload(status="feasible", selected_candidate_ids={})
+    certificate = _certificate("unknown")
+    payload = certificate.model_dump(mode="json")
+
+    _bind_master_certificate_and_digest(payload, master.model_dump(mode="json"))
+
+    bound = SolverCertificate.model_validate(payload)
+
+    assert bound.model_digest != certificate.model_digest
+    assert bound.master_certificate == master
+    assert bound.backend_certificate is not None
+    assert bound.backend_certificate.master_certificate == master
+    assert bound.model_digest == derive_solver_model_digest(
+        bound.backend_certificate,
+        deterministic_seed=bound.deterministic_seed,
+        search_limit=bound.search_limit,
+    )

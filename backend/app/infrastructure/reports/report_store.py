@@ -232,31 +232,13 @@ class ReportStore:
                 return True
 
     async def _generate_summary(self, content: str, dim_key: str = "", layer: int = 1) -> str:
-        """Generate structured JSON summary preserving key data for downstream use.
-
-        Returns JSON string with: dimension_key, layer, word_count, key_points,
-        text_summary, metrics. Falls back to minimal summary on failure.
-        """
+        """Generate the single typed display-summary projection."""
         if not content:
             return ""
 
-        from app.core.settings import BACKGROUND_SUMMARY_ENRICHMENT
-        if not BACKGROUND_SUMMARY_ENRICHMENT:
-            from app.infrastructure.llm.dimension_runtime import generate_summary_regex
-            return generate_summary_regex(dim_key, layer, content)
+        from app.infrastructure.llm.dimension_runtime import generate_summary
 
-        from app.data.ingestion.summary_generator import generate_structured_summary
-        try:
-            return await generate_structured_summary(dim_key, layer, content)
-        except Exception as e:
-            logger.warning("[ReportStore] Structured summary failed: %s", e)
-            from app.data.ingestion.schemas import BaseDimensionSummary
-            summary = BaseDimensionSummary(
-                dimension_key=dim_key, layer=layer,
-                word_count=len(content), key_points=[],
-                text_summary=content[:200], metrics={},
-            )
-            return summary.model_dump_json(ensure_ascii=False)
+        return await generate_summary(dim_key, layer, content)
 
     @staticmethod
     def parse_summary(summary: str) -> Dict[str, Any]:

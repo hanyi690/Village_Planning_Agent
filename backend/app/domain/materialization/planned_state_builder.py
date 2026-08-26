@@ -166,6 +166,8 @@ def _change_to_planned_parcel(change: ParcelChange) -> PlannedParcel:
         decided_by="rule",
         area_change_ha=change.new_area_ha - _geometry_area_ha(change.before_geometry_wkt),
         source_refs=list(change.evidence_refs),
+        subgeometry_operation=str(change.subgeometry_operation or ""),
+        subgeometry_diagnostics=list(change.subgeometry_diagnostics),
         **_lineage_kwargs(change),
     )
 

@@ -268,7 +268,14 @@ def test_gis_data_delivery_integration_writes_and_reloads_complete_artifact(tmp_
         "features": [
             {
                 "type": "Feature",
-                "properties": {"BSM": "P001", "change_status": "modified"},
+                "properties": {
+                    "BSM": "P001",
+                    "change_status": "modified",
+                    "target_id": "target:P001",
+                    "source_bsms": ["P001"],
+                    "subgeometry_operation": "planning_clip",
+                    "subgeometry_diagnostics": ["eligible_extent_frozen"],
+                },
                 "geometry": {
                     "type": "Polygon",
                     "coordinates": [[[0, 0], [2, 0], [2, 2], [0, 2], [0, 0]]],
@@ -288,4 +295,10 @@ def test_gis_data_delivery_integration_writes_and_reloads_complete_artifact(tmp_
     assert snapshot.complete_planned_landuse.checksum
     assert len(complete["features"]) == 2
     assert by_bsm["P001"]["properties"]["change_status"] == "modified"
+    assert by_bsm["P001"]["properties"]["target_id"] == "target:P001"
+    assert by_bsm["P001"]["properties"]["source_bsms"] == ["P001"]
+    assert by_bsm["P001"]["properties"]["subgeometry_operation"] == "planning_clip"
+    assert by_bsm["P001"]["properties"]["subgeometry_diagnostics"] == [
+        "eligible_extent_frozen"
+    ]
     assert by_bsm["P002"]["properties"]["change_status"] == "preserved"

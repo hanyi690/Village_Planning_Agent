@@ -13,7 +13,8 @@ v5 设计：LLM 只产严格的 typed rule union；提取器负责：
 
 from __future__ import annotations
 
-import asyncio
+import hashlib
+import json
 from dataclasses import dataclass, field
 from typing import Annotated, Any, Callable, Dict, Literal, Union
 
@@ -29,12 +30,6 @@ from app.infrastructure.logging import get_logger
 
 logger = get_logger(__name__)
 
-_COLOR_POOL = [
-    "#2d6a4f", "#9b51e0", "#c9d67a", "#4ea8de",
-    "#f2994a", "#adb5bd", "#e85d75", "#f2c94c",
-]
-
-_PROTECTION_KEYWORDS = ("生态", "保护", "农田", "基本农田", "保育")
 _MAX_RULE_DEPTH = 6
 _MAX_RULE_NODES = 48
 _MAX_DLBM_IDS = 24
@@ -60,10 +55,6 @@ def _is_hex_color(value: str) -> bool:
     if len(value) != 7 or value[0] != "#":
         return False
     return all(char in "0123456789abcdefABCDEF" for char in value[1:])
-
-
-def _is_protection(name: str) -> bool:
-    return any(keyword in name for keyword in _PROTECTION_KEYWORDS)
 
 
 class _StrictBaseModel(BaseModel):
@@ -203,20 +194,20 @@ _RULE_ADAPTER = TypeAdapter(RuleNode)
 
 class _VocabularyCategoryOutput(_StrictBaseModel):
     name_zh: str
-    color: str = ""
-    dlbm_hints: list[str] = Field(default_factory=list, max_length=_MAX_DLBM_IDS)
-    is_protection: bool = False
-    source_span: str = ""
-    rules: list[RuleNode] = Field(default_factory=list, max_length=_MAX_RULE_NODES)
+    color: str
+    is_protection: bool
+    source_span: str
+    rules: list[RuleNode] = Field(min_length=1, max_length=_MAX_RULE_NODES)
 
     @model_validator(mode="after")
     def normalize_fields(self) -> "_VocabularyCategoryOutput":
         self.name_zh = _clean_text(self.name_zh, limit=_MAX_NAME_CHARS)
         self.color = _clean_text(self.color, limit=16)
-        self.dlbm_hints = [_clean_text(item, limit=32) for item in self.dlbm_hints if _clean_text(item, limit=32)]
         self.source_span = _clean_source_span(self.source_span)
         if not self.name_zh:
             raise ValueError("name_zh is required")
+        if not self.source_span:
+            raise ValueError("source_span is required")
         return self
 
 
@@ -511,6 +502,19 @@ def _run_deterministic_dry_run(
     return result
 
 
+def _category_code(item: _VocabularyCategoryOutput, rules: list[TypingRule]) -> str:
+    identity = {
+        "name_zh": item.name_zh,
+        "is_protection": item.is_protection,
+        "rules": [rule.model_dump(mode="json") for rule in rules],
+        "source_span": item.source_span,
+    }
+    digest = hashlib.sha256(
+        json.dumps(identity, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()[:16]
+    return f"FZ-{digest.upper()}"
+
+
 def _compile_vocabulary_output(
     data: _VocabularyOutput,
     *,
@@ -528,11 +532,26 @@ def _compile_vocabulary_output(
         if not item.name_zh:
             quarantine.append(VocabularyQuarantineItem(name_zh="", reason="category_name_missing"))
             continue
-        category_color = item.color if _is_hex_color(item.color) else _COLOR_POOL[len(categories) % len(_COLOR_POOL)]
+        if not _is_hex_color(item.color):
+            quarantine.append(
+                VocabularyQuarantineItem(
+                    name_zh=item.name_zh,
+                    reason="category_color_invalid",
+                    source_span=item.source_span,
+                )
+            )
+            continue
 
         rule_nodes = list(item.rules or [])
-        if item.dlbm_hints and not rule_nodes:
-            rule_nodes = [DlbmInRule(rule="dlbm_in", dlbm_ids=list(item.dlbm_hints), source_span=item.source_span)]
+        if not rule_nodes:
+            quarantine.append(
+                VocabularyQuarantineItem(
+                    name_zh=item.name_zh,
+                    reason="typed_rule_missing",
+                    source_span=item.source_span,
+                )
+            )
+            continue
 
         typed_rules: list[TypingRule] = []
         category_invalid_reason = ""
@@ -577,7 +596,7 @@ def _compile_vocabulary_output(
         if category_invalid_reason:
             continue
 
-        category_code = f"FZ{len(categories) + 1:02d}"
+        category_code = _category_code(item, typed_rules)
         dry_run_result = _run_deterministic_dry_run(
             category_code,
             item,
@@ -599,9 +618,9 @@ def _compile_vocabulary_output(
             VocabularyCategory(
                 code=category_code,
                 name_zh=item.name_zh,
-                color=category_color,
+                color=item.color,
                 typing_rules=typed_rules,
-                is_protection=bool(item.is_protection) or _is_protection(item.name_zh),
+                is_protection=item.is_protection,
             )
         )
 
@@ -612,56 +631,23 @@ def _compile_vocabulary_output(
     )
 
 
-def extract_vocabulary_deterministic(reports: Dict[str, str]) -> Vocabulary:
-    """无 LLM 兜底：从报告分区表提取类别，语义推断颜色与地类线索。"""
-    from app.data.ingestion.tables import _extract_zone_tables
-
-    categories: list[VocabularyCategory] = []
-    seen: set[str] = set()
-    for content in (reports or {}).values():
-        zone_targets = list(_extract_zone_tables(content))
-        for zone_target in zone_targets:
-            name = _clean_text(zone_target.land_use, limit=_MAX_NAME_CHARS)
-            if not name or name in seen:
-                continue
-            seen.add(name)
-            categories.append(
-                VocabularyCategory(
-                    code=f"FZ{len(categories) + 1:02d}",
-                    name_zh=name,
-                    color=_COLOR_POOL[len(categories) % len(_COLOR_POOL)],
-                    typing_rules=[],
-                    is_protection=_is_protection(name),
-                )
-            )
-    return Vocabulary(name="l3_extracted", categories=categories)
-
-
 _VOCAB_PROMPT = """你是村庄规划功能区词汇提取助手。从下列 L3 报告的功能分区内容中提取功能区类别定义。
 
 报告内容：
 {reports}
 
-只输出 JSON（不要任何其他文字）：
-{{"categories": [{{"name_zh": "林下开发区", "color": "#c9d67a", "source_span": "功能分区表：林下开发区",
-  "rules": [
-    {{"rule": "all", "children": [
-      {{"rule": "dlbm_in", "dlbm_ids": ["1340", "1350"], "source_span": "林地下开发"}},
-      {{"rule": "not_within_zone", "zone_id": "ecological_redline", "source_span": "避开生态红线"}}
-    ]}},
-    {{"rule": "road_distance_lt", "max_distance_m": 500, "road_id": "road-main", "source_span": "靠近现状道路"}}
-  ],
-  "dlbm_hints": ["1340", "1350"], "is_protection": false
-}}]}}
+当前运行时闭集（只能引用其中出现的 ID）：
+{closed_set}
+
 要求：
-- category 只能包含 name_zh、color、source_span、dlbm_hints、is_protection、rules
+- 每个 category 必须给出 name_zh、合法 hex color、source_span、is_protection 和至少一个 rules
 - rule 必须使用 discriminator 字段 `rule`，且只能来自：
   dlbm_in / within_zone / not_within_zone / slope_lt / road_distance_lt /
   near_poi / all / any / not
 - 各 rule 只能填写自己允许的 typed 字段；不要输出旧 `kind/value/children` 格式或其他杂项
 - source_span 保留原文依据短句
 - color 必须是合法 hex（#RRGGBB）
-- 若没有可提取功能区，输出 {{"categories": []}}
+- 没有直接原文依据或无法绑定到当前闭集 ID 的类别不要猜测
 """
 
 
@@ -678,15 +664,35 @@ async def _extract_vocabulary_llm(
         f"[{key}]\n{str(value or '')[:3000]}"
         for key, value in (reports or {}).items()
     )
-    prompt = _VOCAB_PROMPT.format(reports=reports_text[:_MAX_REPORT_CHARS])
+    closed_set = _build_bundle_closed_set(bundle)
+    prompt = _VOCAB_PROMPT.format(
+        reports=reports_text[:_MAX_REPORT_CHARS],
+        closed_set=json.dumps(
+            {
+                "dlbm_ids": sorted(closed_set.dlbm_ids),
+                "zone_ids": sorted(closed_set.zone_ids),
+                "poi_ids": sorted(closed_set.poi_ids),
+                "road_ids": sorted(closed_set.road_ids),
+            },
+            ensure_ascii=False,
+        ),
+    )
+    from app.infrastructure.llm.structured import run_structured_output
 
-    structured = llm.with_structured_output(_VocabularyOutput)
-    invoke = getattr(structured, "ainvoke", None)
-    if callable(invoke):
-        response = await invoke(prompt)
-    else:
-        response = await asyncio.to_thread(structured.invoke, prompt)
-    data = response if isinstance(response, _VocabularyOutput) else _VocabularyOutput.model_validate(response)
+    data = await run_structured_output(
+        _VocabularyOutput,
+        [{"role": "user", "content": prompt}],
+        llm=llm,
+        max_retries=2,
+        context={
+            "closed_set": {
+                "dlbm_ids": sorted(closed_set.dlbm_ids),
+                "zone_ids": sorted(closed_set.zone_ids),
+                "poi_ids": sorted(closed_set.poi_ids),
+                "road_ids": sorted(closed_set.road_ids),
+            }
+        },
+    )
     return _compile_vocabulary_output(
         data,
         bundle=bundle,
@@ -707,15 +713,14 @@ async def extract_vocabulary_from_reports(
 ) -> Vocabulary:
     """Extract a session vocabulary from L3 reports.
 
-    Legacy callers still receive only the validated ``Vocabulary``. Invalid
-    categories/rules are quarantined inside the compilation step and never
-    registered as executable typing rules.
+    Invalid categories/rules are quarantined inside the compilation step and
+    never registered as executable typing rules.
     """
     if llm is None:
         from app.core.settings import GIS_EXPLORE_LLM_ENABLED
 
         if not GIS_EXPLORE_LLM_ENABLED:
-            return extract_vocabulary_deterministic(reports)
+            raise RuntimeError("typed_vocabulary_extraction_unavailable")
         from app.core.settings import (
             GIS_EXPLORE_MAX_TOKENS,
             GIS_EXPLORE_TEMPERATURE,
@@ -775,6 +780,5 @@ __all__ = [
     "_VocabularyOutput",
     "_compile_vocabulary_output",
     "extract_vocabulary_from_reports",
-    "extract_vocabulary_deterministic",
     "register_session_vocabulary",
 ]

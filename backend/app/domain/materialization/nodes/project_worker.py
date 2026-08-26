@@ -173,6 +173,12 @@ def _candidate_site_footprint_changes(
         return []
     coverage_ratio = max(0.0, min(1.0, planning_area_ha / source_area_ha))
     source_wkt = source_geometry.wkt
+    subgeometry_operation = str(
+        getattr(candidate, "subgeometry_operation", "") or ""
+    )
+    subgeometry_diagnostics = list(
+        getattr(candidate, "subgeometry_diagnostics", None) or []
+    )
     changes = [
         ParcelChange(
             bsm=f"{project.target_id}:footprint",
@@ -218,6 +224,8 @@ def _candidate_site_footprint_changes(
             evidence_refs=list(getattr(candidate, "evidence_refs", None) or []),
             l1_snapshot_ref=str(getattr(candidate, "l1_snapshot_ref", "") or ""),
             bundle_snapshot_digest=str(getattr(candidate, "bundle_snapshot_digest", "") or ""),
+            subgeometry_operation=subgeometry_operation,
+            subgeometry_diagnostics=subgeometry_diagnostics,
         )
     ]
     remainder = source_geometry.difference(footprint)
@@ -340,6 +348,8 @@ def _candidate_site_footprint_changes(
                     bundle_snapshot_digest=str(
                         getattr(candidate, "bundle_snapshot_digest", "") or ""
                     ),
+                    subgeometry_operation=subgeometry_operation,
+                    subgeometry_diagnostics=subgeometry_diagnostics,
                 )
             )
     return changes

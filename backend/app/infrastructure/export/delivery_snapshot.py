@@ -180,6 +180,13 @@ def _changed_feature(change: Any, base: Mapping[str, Any] | None) -> dict[str, A
         value = _value(change, name, None)
         if value not in (None, ""):
             properties[name] = value
+    diagnostics = _value(change, "subgeometry_diagnostics", None)
+    if isinstance(diagnostics, str):
+        diagnostics = [diagnostics]
+    if diagnostics:
+        properties["subgeometry_diagnostics"] = list(
+            dict.fromkeys(str(item) for item in diagnostics if str(item).strip())
+        )
     for name in ("adjacent_parcel_bsms", "adjacency_evidence_refs"):
         values = _value(change, name, None)
         if isinstance(values, str):
@@ -273,12 +280,34 @@ def _geojson_change(feature: Mapping[str, Any]) -> dict[str, Any]:
         source_bsms = [source_bsms]
     if not source_bsms and action != "create" and properties.get("BSM"):
         source_bsms = [str(properties["BSM"])]
-    return {
+    change = {
         "bsm": str(properties.get("BSM") or properties.get("bsm") or ""),
         "action": action,
         "derived_from_bsms": list(source_bsms or []),
         "after_geometry": copy.deepcopy(feature.get("geometry")),
     }
+    for name in (
+        "candidate_id",
+        "feature_id",
+        "target_id",
+        "scenario_id",
+        "project_ref",
+        "availability_status",
+        "coverage_ratio",
+        "source_area_ha",
+        "eligible_area_ha",
+        "excluded_area_ha",
+        "subgeometry_operation",
+        "subgeometry_diagnostics",
+        "adjacent_parcel_bsms",
+        "adjacency_evidence_refs",
+    ):
+        value = properties.get(name)
+        if value not in (None, ""):
+            change[name] = copy.deepcopy(value)
+    if properties.get("area_ha") not in (None, ""):
+        change["new_area_ha"] = properties["area_ha"]
+    return change
 
 
 def _write_source_layer(

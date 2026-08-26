@@ -134,34 +134,7 @@ def _normalize_decision_set(
         )
     decision = decision.model_copy(update={"dimension_key": dimension_key, "diagnostics": diagnostics})
 
-    def _with_ids(items: list[Any], prefix: str, field: str) -> list[Any]:
-        output: list[Any] = []
-        for index, item in enumerate(items, start=1):
-            if str(getattr(item, field, "") or "").strip():
-                output.append(item)
-            else:
-                output.append(item.model_copy(update={field: f"{dimension_key}:{prefix}:{index}"}))
-        return output
-
-    gaps = []
-    for index, gap in enumerate(decision.evidence_gaps, start=1):
-        updates: dict[str, Any] = {}
-        if not str(gap.gap_id or "").strip():
-            updates["gap_id"] = f"{dimension_key}:evidence_gap:{index}"
-        if not str(gap.dimension or "").strip():
-            updates["dimension"] = dimension_key
-        gaps.append(gap.model_copy(update=updates) if updates else gap)
-    return decision.model_copy(
-        update={
-            "objectives": _with_ids(decision.objectives, "objective", "objective_id"),
-            "metrics": _with_ids(decision.metrics, "metric", "metric_id"),
-            "strategies": _with_ids(decision.strategies, "strategy", "strategy_id"),
-            "priorities": _with_ids(decision.priorities, "priority", "priority_id"),
-            "spatial_structures": _with_ids(decision.spatial_structures, "structure", "structure_id"),
-            "conflicts": _with_ids(decision.conflicts, "conflict", "conflict_id"),
-            "evidence_gaps": gaps,
-        }
-    )
+    return decision.model_copy(update={"dimension_key": dimension_key, "diagnostics": diagnostics})
 
 
 def merge_decision_sets(
@@ -302,6 +275,25 @@ async def l2_aggregate(
 
     require_frozen_context(state)
 
+    known_l1_fact_ids: set[str] = set()
+    try:
+        from app.infrastructure.artifacts.runtime import load_artifact
+
+        l1_snapshot = load_artifact(state, "l1_snapshot")
+        payload = (
+            l1_snapshot.model_dump(mode="json")
+            if hasattr(l1_snapshot, "model_dump")
+            else l1_snapshot
+        )
+        if isinstance(payload, dict):
+            known_l1_fact_ids = {
+                str(item.get("fact_id") or "").strip()
+                for item in (payload.get("fact_records") or [])
+                if isinstance(item, dict) and str(item.get("fact_id") or "").strip()
+            }
+    except Exception as exc:  # fail closed below when refs are present
+        logger.warning("[l2_aggregate] unable to load L1 fact identity set: %s", exc)
+
     store = ReportStore.get_instance()
     raw_reports = await store.get_layer_reports_with_sources(session_id, layer=2)
 
@@ -311,9 +303,20 @@ async def l2_aggregate(
         instruction = rec.get("instruction", "") or ""
         try:
             payload = instruction if isinstance(instruction, dict) else json.loads(instruction)
-            decision_sets.append(_normalize_decision_set(payload, dimension_key=dim_key))
+            decision = _normalize_decision_set(payload, dimension_key=dim_key)
+            from app.domain.validation.l2_closure import validate_l2_decision_set
+
+            validate_l2_decision_set(
+                decision,
+                known_l1_fact_ids=known_l1_fact_ids,
+            )
+            decision_sets.append(decision)
         except Exception as exc:  # noqa: BLE001 - one dimension must not break the aggregate
-            logger.warning("[l2_aggregate] typed decision load failed for dim=%s: %s", dim_key, exc)
+            logger.warning(
+                "[l2_aggregate] typed decision rejected for dim=%s: %s",
+                dim_key,
+                str(exc).splitlines()[0][:1000],
+            )
 
     strategy = merge_decision_sets(decision_sets, run_id=run_id)
     strategy.context_version = context_version
