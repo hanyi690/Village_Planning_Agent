@@ -46,7 +46,7 @@ def same_input_no_progress(
     """Detect an unchanged input replay with unchanged findings and output."""
     if previous_retry_state is None:
         return False
-    return (
+    return bool(current_issue_fingerprint) and (
         previous_retry_state.input_digest == decision_context.input_digest
         and previous_retry_state.issue_fingerprint == current_issue_fingerprint
         and previous_retry_state.accepted_digest == accepted_digest
