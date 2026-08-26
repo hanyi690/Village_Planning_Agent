@@ -860,7 +860,6 @@ async def _structured_mapping(
             temperature=0.1,
             max_tokens=1200,
             llm=model,
-            allow_content_json_fallback=False,
         )
         if response is None:
             raise ValueError("structured_mapping_empty_response")

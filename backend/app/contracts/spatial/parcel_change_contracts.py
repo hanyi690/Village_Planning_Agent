@@ -49,6 +49,8 @@ class ParcelChange(BaseModel):
     evidence_refs: list[str] = Field(default_factory=list)
     l1_snapshot_ref: str = ""
     bundle_snapshot_digest: str = ""
+    subgeometry_operation: str = ""
+    subgeometry_diagnostics: list[str] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def validate_availability_semantics(self) -> "ParcelChange":

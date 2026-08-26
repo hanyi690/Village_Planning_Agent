@@ -28,7 +28,7 @@ from app.workflow.stages.target_projection import _classify_source_semantics
 def _facts() -> list[L1Fact]:
     return [
         L1Fact(
-            fact_id="l1:bus",
+            fact_id="l1:fact:bus",
             statement="现状有3个公交站点",
             fact_kind="document_observation",
             semantic_type="facility",
@@ -38,7 +38,7 @@ def _facts() -> list[L1Fact]:
             source_refs=["report:traffic"],
         ),
         L1Fact(
-            fact_id="l1:parking",
+            fact_id="l1:fact:parking",
             statement="现状有1个停车场",
             fact_kind="document_observation",
             semantic_type="facility",
@@ -83,7 +83,7 @@ class _FakeLLM:
 
 
 def _candidate_refs() -> tuple[str, str]:
-    return "l1:l1:bus:entity", "l1:l1:parking:entity"
+    return "l1:l1:fact:bus:entity", "l1:l1:fact:parking:entity"
 
 
 def _batch(*, parking_on: str = "feature:4", foreign: bool = False) -> SourceFeatureSemanticProposalBatch:
@@ -95,7 +95,7 @@ def _batch(*, parking_on: str = "feature:4", foreign: bool = False) -> SourceFea
             SourceFeatureSemanticProposal(
                 source_feature_id=f"feature:{index}",
                 candidate_ref=parking_ref if f"feature:{index}" == parking_on else bus_ref,
-                supporting_fact_refs=["l1:parking"] if f"feature:{index}" == parking_on else ["l1:bus"],
+                supporting_fact_refs=["l1:fact:parking"] if f"feature:{index}" == parking_on else ["l1:fact:bus"],
             )
             for index in range(1, 5)
         ]
@@ -174,8 +174,8 @@ async def test_incompatible_source_items_do_not_consume_llm_batches():
             return SourceFeatureSemanticProposalBatch(proposals=[
                 SourceFeatureSemanticProposal(
                     source_feature_id="feature:point",
-                    candidate_ref="l1:l1:bus:entity",
-                    supporting_fact_refs=["l1:bus"],
+                    candidate_ref="l1:l1:fact:bus:entity",
+                    supporting_fact_refs=["l1:fact:bus"],
                 )
             ])
 
@@ -220,7 +220,7 @@ async def test_incompatible_source_items_do_not_consume_llm_batches():
 @pytest.mark.asyncio
 async def test_axis_fact_uses_current_road_line_compatibility_without_alias_mapping():
     fact = L1Fact(
-        fact_id="l1:axis",
+        fact_id="l1:fact:axis",
         statement="金田村现状有一条发展轴线",
         fact_kind="document_observation",
         semantic_type="axis",
@@ -238,8 +238,8 @@ async def test_axis_fact_uses_current_road_line_compatibility_without_alias_mapp
     proposal = SourceFeatureSemanticProposalBatch(
         proposals=[SourceFeatureSemanticProposal(
             source_feature_id="feature:axis-line",
-            candidate_ref="l1:l1:axis:entity",
-            supporting_fact_refs=["l1:axis"],
+            candidate_ref="l1:l1:fact:axis:entity",
+            supporting_fact_refs=["l1:fact:axis"],
         )]
     )
 
@@ -255,7 +255,7 @@ async def test_axis_fact_uses_current_road_line_compatibility_without_alias_mapp
     decision = result.decisions[0]
     assert decision.status == "accepted"
     assert decision.semantic_type == "发展轴线"
-    assert decision.supporting_fact_refs == ["l1:axis"]
+    assert decision.supporting_fact_refs == ["l1:fact:axis"]
 
 
 @pytest.mark.asyncio
@@ -265,8 +265,8 @@ async def test_target_projection_installs_only_accepted_overlay_into_evidence_gr
         proposals=[
             SourceFeatureSemanticProposal(
                 source_feature_id=feature_id,
-                candidate_ref="l1:l1:bus:entity",
-                supporting_fact_refs=["l1:bus"],
+                candidate_ref="l1:l1:fact:bus:entity",
+                supporting_fact_refs=["l1:fact:bus"],
             )
             for feature_id in feature_ids
         ]
@@ -334,14 +334,14 @@ async def test_query_runtime_uses_explicit_minimax_classifier_and_installs_overl
     proposal_batch = SourceFeatureSemanticProposalBatch(
         proposals=[SourceFeatureSemanticProposal(
             source_feature_id="feature:runtime:1",
-            candidate_ref="l1:l1:shrine:entity",
-            supporting_fact_refs=["l1:shrine"],
+            candidate_ref="l1:l1:fact:shrine:entity",
+            supporting_fact_refs=["l1:fact:shrine"],
         )]
     )
     llm = _FakeLLM([proposal_batch, proposal_batch])
     classifier = SourceSemanticClassifier(llm=llm)
     fact = L1Fact(
-        fact_id="l1:shrine",
+        fact_id="l1:fact:shrine",
         statement="现状有祠堂",
         fact_kind="document_observation",
         semantic_type="facility",
@@ -382,7 +382,7 @@ async def test_query_runtime_uses_explicit_minimax_classifier_and_installs_overl
 
 def test_kg_vocabulary_enriches_matching_l1_candidate_without_creating_duplicate_choice():
     fact = L1Fact(
-        fact_id="l1:shrine",
+        fact_id="l1:fact:shrine",
         statement="现状有祠堂",
         fact_kind="document_observation",
         semantic_type="facility",
@@ -408,7 +408,7 @@ def test_kg_vocabulary_enriches_matching_l1_candidate_without_creating_duplicate
 
     cached_candidates = kg_semantic_candidates(
         context,
-        [fact, fact.model_copy(update={"fact_id": "l1:shrine:duplicate"})],
+        [fact, fact.model_copy(update={"fact_id": "l1:fact:shrine:duplicate"})],
     )
     assert len(cached_candidates) == 2
     assert len(calls) == 1
@@ -420,9 +420,15 @@ def test_kg_vocabulary_enriches_matching_l1_candidate_without_creating_duplicate
 
     vocabulary = materialize_candidate_vocabulary([fact], kg_candidates)
     assert len(vocabulary) == 1
-    assert vocabulary[0].candidate_ref == "l1:l1:shrine:entity"
+    assert vocabulary[0].candidate_ref == "l1:l1:fact:shrine:entity"
     assert vocabulary[0].optional_kg_concept_ref == concept.entity_ref
-    assert vocabulary[0].supporting_fact_refs == ["l1:shrine"]
+    assert vocabulary[0].supporting_fact_refs == ["l1:fact:shrine"]
+
+
+def test_noncanonical_l1_fact_ids_never_enter_semantic_candidate_vocabulary():
+    legacy = _facts()[0].model_copy(update={"fact_id": "l1:legacy:bus"})
+
+    assert materialize_candidate_vocabulary([legacy]) == []
 
 
 @pytest.mark.asyncio

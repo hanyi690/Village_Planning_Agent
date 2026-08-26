@@ -18,7 +18,6 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 from app.domain.validation.closed_set import (
     CandidateDescriptor,
-    CandidateDecision,
     ExactBatchMembershipResult,
     candidate_set_digest,
     select_closed_set_candidate,
@@ -120,7 +119,11 @@ class CandidateSelectionProposal(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     status: Literal["selected", "abstain", "ambiguous"]
-    selected_candidate_id: str | None
+    # Keep the field required in the provider schema.  A nullable optional
+    # field was omitted by the live MiniMax tool call for selected decisions,
+    # making a semantically valid selection impossible to validate.  Empty
+    # string is the typed representation for abstain/ambiguous.
+    selected_candidate_id: str
     input_digest: str
 
     @model_validator(mode="after")
@@ -162,12 +165,14 @@ def _candidate_value(candidate: Any, name: str, default: Any = "") -> Any:
 def stable_spatial_candidate_id(candidate: Any, *, namespace: str = "candidate") -> str:
     """Return a deterministic ID from runtime identity, never from position."""
 
+    namespace = "-".join(str(namespace).split()) or "candidate"
     explicit = str(_candidate_value(candidate, "candidate_id", "") or "").strip()
-    if explicit:
+    if explicit and not any(char.isspace() for char in explicit):
         return explicit
     identity = _candidate_value(candidate, "identity", None)
     identity_fields = (
         "bundle_feature_bsm",
+        "feature_bsm",
         "source_feature_id",
         "source_bsm",
         "entity_ref",
@@ -187,6 +192,7 @@ def stable_spatial_candidate_id(candidate: Any, *, namespace: str = "candidate")
             str(value).strip()
             for value in (_candidate_value(candidate, field_name, None) or [])
             if str(value).strip()
+            and not any(char.isspace() for char in str(value).strip())
         ]
         if values:
             return f"{namespace}:{values[0]}"
@@ -199,6 +205,28 @@ def stable_spatial_candidate_id(candidate: Any, *, namespace: str = "candidate")
         ).strip(),
         "entity_type": str(_candidate_value(candidate, "entity_type", "") or "").strip(),
         "role": str(_candidate_value(candidate, "role", "") or "").strip(),
+        "identity": {
+            field_name: _candidate_value(identity, field_name, "")
+            if identity is not None
+            else _candidate_value(candidate, field_name, "")
+            for field_name in identity_fields
+        },
+        "candidate_identity": {
+            field_name: _candidate_value(candidate, field_name, "")
+            for field_name in identity_fields
+        },
+        "identity_label": str(
+            _candidate_value(identity, "canonical_name", "") or ""
+        ).strip(),
+        "identity_entity_type": str(
+            _candidate_value(identity, "entity_type", "") or ""
+        ).strip(),
+        "identity_role": str(_candidate_value(identity, "role", "") or "").strip(),
+        "entity_refs": list(_candidate_value(candidate, "entity_refs", None) or []),
+        "source_bsms": list(_candidate_value(candidate, "source_bsms", None) or []),
+        "related_parcel_bsms": list(
+            _candidate_value(candidate, "related_parcel_bsms", None) or []
+        ),
     }
     encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
     return f"{namespace}:sha256:{hashlib.sha256(encoded.encode('utf-8')).hexdigest()}"
@@ -320,7 +348,7 @@ def validate_spatial_candidate_proposal(
         reason = "candidate selection input digest mismatch"
     elif typed.status == "selected" and not typed.selected_candidate_id:
         reason = "selected proposal must include a candidate ID"
-    elif typed.status != "selected" and typed.selected_candidate_id is not None:
+    elif typed.status != "selected" and typed.selected_candidate_id:
         reason = "abstain or ambiguous proposal must not include a candidate ID"
     else:
         closed = select_closed_set_candidate(
@@ -333,6 +361,18 @@ def validate_spatial_candidate_proposal(
         )
         if typed.status == "selected" and closed.status != "selected":
             reason = closed.reason or "selected candidate is outside the closed set"
+        elif typed.status == "ambiguous":
+            return SpatialCandidateDecision(
+                decision_id=decision_id,
+                status="ambiguous",
+                selected_candidate_id=None,
+                candidate_ids=candidate_ids,
+                candidate_set_digest=set_digest,
+                input_digest=input_digest,
+                exact_membership=membership,
+                pending=True,
+                reason="model marked candidate set ambiguous",
+            )
         elif typed.status != closed.status:
             reason = "proposal status does not match closed-set decision"
         else:

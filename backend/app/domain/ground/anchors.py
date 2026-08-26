@@ -18,7 +18,6 @@ from typing import Any, Dict, List, Optional
 
 from app.contracts.spatial.spatial_reference_contracts import (
     CandidateSelectionProposal,
-    candidate_set_digest,
     spatial_candidate_descriptor,
     spatial_candidate_input_digest,
     stable_spatial_candidate_id,
@@ -186,18 +185,23 @@ def _has_point_geometry(geometry_ref: Optional[str]) -> bool:
     return point_xy(geometry_ref) is not None
 
 
-def _has_spatial_evidence(anchor: Optional[GroundedAnchor]) -> bool:
+def _has_spatial_evidence(anchor: Optional[Any], *, role: Optional[str] = None) -> bool:
     """Return whether an anchor has real KG/upload spatial evidence."""
     if anchor is None:
         return False
     geometry_ref = str(anchor.geometry_ref or "").strip().lower()
     if geometry_ref.startswith("bundled:") or geometry_ref in {"coarse", "approximate"}:
         return False
-    if anchor.role in {"facility", "road", "water", "landmark", "axis"}:
+    anchor_role = str(role or getattr(anchor, "role", "") or "").strip()
+    if anchor_role in {"facility", "road", "water", "landmark", "axis"}:
         return bool(
             geometry_ref
             or str(anchor.feature_bsm or "").strip()
             or str(anchor.source_feature_id or "").strip()
+            or (
+                anchor_role == "water"
+                and any(str(bsm).strip() for bsm in (anchor.source_bsms or []))
+            )
         )
     return bool(anchor.source_bsms or anchor.geometry_ref or anchor.entity_ref)
 
@@ -775,7 +779,10 @@ def _inject_anchors_into_kg(context: Any, kg: Any, anchors: list, session_id: st
                             continue
                         cref = _URIRef(cluster)
                         current = str(graph.value(cref, PLN.name) or "")
-                        if _is_placeholder_name(current, "village"):
+                        if (
+                            _is_placeholder_name(current, "village")
+                            or current == str(getattr(context, "village_name", "") or "")
+                        ):
                             graph.set((cref, PLN.name, _Lit(anchor.normalized_name)))
                             written += 1
                         memory.add_entity_annotation(EntityAnnotation(
@@ -879,41 +886,41 @@ async def _llm_reason_candidate(
         query_text=query_text,
         candidates=descriptors,
     )
-    set_digest = candidate_set_digest(descriptors)
     lines = "\n".join(
         _candidate_prompt_line(candidate, descriptor.candidate_id)
         for candidate, descriptor in zip(candidates, descriptors)
     )
     prompt = (
-        f"地名「{mention}」（类型 {role}）位于「{hints or '未知'}」。以下是从 KG/EvidenceGraph 召回"
-        "的候选实体。只允许返回 selected/abstain/ambiguous 之一；selected 时填写候选的稳定 candidate_id，"
-        f"本次 candidate_set_digest={set_digest}; input_digest={input_digest};"
-        f"不要返回候选名称、BSM、坐标、几何或其他字段。\n{lines}"
+        "根据报告证据，从下面这个运行时候选集合中做一次闭集选择。只返回 JSON 对象，不要解释。\n"
+        f"地名={mention}；类型={role}；空间提示={hints or '未知'}\n"
+        "字段必须完整：status 为 selected、abstain 或 ambiguous；"
+        "selected_candidate_id 在 selected 时原样填写候选 candidate_id，"
+        "否则填写空字符串；input_digest 必须原样复制。"
+        f"input_digest={input_digest}\n{lines}"
     )
     try:
-        import asyncio
-
-        structured_kwargs = {}
-        if getattr(llm, "model_name", None):
-            structured_kwargs["method"] = "function_calling"
-        structured = llm.with_structured_output(
-            CandidateSelectionProposal,
-            **structured_kwargs,
+        from app.infrastructure.llm.structured import (
+            run_structured_output,
+            structured_failure_summary,
         )
 
         async def _invoke():
-            if asyncio.iscoroutinefunction(getattr(structured, "ainvoke", None)):
-                return await structured.ainvoke(prompt)
-            invoke = getattr(structured, "invoke", None)
-            if invoke is None:
-                raise TypeError("structured_candidate_selector_missing_invoke")
-            return await asyncio.to_thread(invoke, prompt)
+            return await run_structured_output(
+                CandidateSelectionProposal,
+                [{"role": "user", "content": prompt}],
+                llm=llm,
+                max_retries=1,
+                timeout=call_timeout,
+            )
 
         from app.spatial.grounding.call_budget import run_ground_llm_call
 
         response = await run_ground_llm_call(budget, call_timeout, _invoke)
     except Exception as exc:  # noqa: BLE001
-        logger.warning("[ground_anchors] LLM reason failed: %s", exc)
+        logger.warning(
+            "[ground_anchors] LLM reason failed: %s",
+            structured_failure_summary(exc),
+        )
         return None
     decision = validate_spatial_candidate_proposal(
         decision_id=decision_id,
@@ -1179,6 +1186,28 @@ async def ground_l1_anchors(
         scope_key="anchors",
     )
 
+    # 0.5) 先将上传 GIS 中明确带村名的要素绑定到运行时村簇；名称回填
+    #      需要这份空间证据来收窄设施/道路候选，不能在其生成之后才补写。
+    try:
+        from app.infrastructure.kg.enrichment.report_entity_enrichment import (
+            _location_fact_mentions,
+            _materialize_gis_village_entries,
+        )
+
+        bases = list(dict.fromkeys(
+            str(item.get("name", ""))[:-1]
+            for item in _location_fact_mentions(facts)
+            if str(item.get("name", "")).endswith("村")
+        ))
+        if bases:
+            _materialize_gis_village_entries(
+                getattr(context, "gazetteer", None),
+                getattr(context, "workspace", None),
+                bases,
+            )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("[ground_anchors] GIS village binding failed: %s", exc)
+
     # 1) 真名回填 KG 无名实体（确定性单候选；多候选 flash 消歧；缓存可重放）
     if kg is not None:
         mentions = _fact_mentions(facts)
@@ -1226,28 +1255,6 @@ async def ground_l1_anchors(
             context.ports.gazetteer = KGGazetteerAdapter(gazetteer)
     except Exception as exc:  # noqa: BLE001
         logger.warning("[ground_anchors] gazetteer rebuild failed: %s", exc)
-
-    # 2.5) L1 村名 → GIS 地块绑定（复用既有村庄绑定，证据优先：bundle 内
-    #      含村名且几何可用的 feature 才建条目；BSM 来自 bundle）。
-    try:
-        from app.infrastructure.kg.enrichment.report_entity_enrichment import (
-            _location_fact_mentions,
-            _materialize_gis_village_entries,
-        )
-
-        bases = list(dict.fromkeys(
-            str(item.get("name", ""))[:-1]
-            for item in _location_fact_mentions(facts)
-            if str(item.get("name", "")).endswith("村")
-        ))
-        if bases:
-            _materialize_gis_village_entries(
-                gazetteer,
-                getattr(context, "workspace", None),
-                bases,
-            )
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("[ground_anchors] GIS village binding failed: %s", exc)
 
     # 2.6) 村/水系聚落映射（宅基地→聚落、水域→水体；LLM 只在报告证据内分配名字，
     #      fail-closed：无证据/无 LLM 时返回空，不伪造分配）。
@@ -1348,12 +1355,27 @@ async def ground_l1_anchors(
         item["result"] = result
 
         if result is not None and result.candidates:
-            if result.status == "resolved" and len(result.candidates) == 1:
-                item["candidate"] = next(iter(result.candidates))
+            candidate_pool = list(result.candidates)
+            if role in {"facility", "road", "water", "landmark", "axis"}:
+                spatial_candidates = [
+                    candidate
+                    for candidate in candidate_pool
+                    if _has_spatial_evidence(candidate, role=role)
+                ]
+                if spatial_candidates:
+                    trace.append({
+                        "step": "spatial_identity_filter",
+                        "role": role,
+                        "before": len(candidate_pool),
+                        "after": len(spatial_candidates),
+                    })
+                    candidate_pool = spatial_candidates
+            if result.status == "resolved" and len(candidate_pool) == 1:
+                item["candidate"] = next(iter(candidate_pool))
             else:
                 item["best_effort"] = True
                 item["llm_kind"] = "candidate"
-                item["llm_candidates"] = result.candidates
+                item["llm_candidates"] = candidate_pool
         else:
             item["best_effort"] = True
             poi_bsms = _poi_anchor_bsms(context, fact)

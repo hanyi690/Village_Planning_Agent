@@ -3,8 +3,19 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
+import re
 
 import pytest
+
+
+def _selection_proposal(response_model, prompt, position=1):
+    ids = re.findall(r"candidate_id=([^\s]+)", prompt)
+    digest = re.search(r"input_digest=([0-9a-f]+)", prompt).group(1)
+    return response_model(
+        status="selected",
+        selected_candidate_id=ids[position - 1],
+        input_digest=digest,
+    )
 
 
 class _Index:
@@ -127,7 +138,7 @@ async def test_equivalent_facts_share_llm_work_without_losing_fact_identity(monk
             class _Structured:
                 async def ainvoke(self, prompt):
                     calls.append(prompt)
-                    return response_model(candidate_index=1)
+                    return _selection_proposal(response_model, prompt)
 
             return _Structured()
 
@@ -187,7 +198,7 @@ async def test_same_name_different_role_or_candidate_does_not_share_work(monkeyp
             class _Structured:
                 async def ainvoke(self, prompt):
                     calls.append(prompt)
-                    return response_model(candidate_index=1)
+                    return _selection_proposal(response_model, prompt)
 
             return _Structured()
 
@@ -307,7 +318,7 @@ async def test_village_fallback_wave_is_bounded_and_commits_ownership_in_order(m
 
                     await asyncio.sleep(0.02)
                     active -= 1
-                    return response_model(candidate_index=next(selections))
+                    return _selection_proposal(response_model, _prompt, next(selections))
 
             return _Structured()
 
@@ -365,7 +376,7 @@ async def test_village_fallback_wave_respects_budget_before_ordered_commit(monke
                 async def ainvoke(self, _prompt):
                     nonlocal calls
                     calls += 1
-                    return response_model(candidate_index=1)
+                    return _selection_proposal(response_model, _prompt)
 
             return _Structured()
 

@@ -22,6 +22,7 @@ from app.contracts.evidence.source_semantic_contracts import (
     SourceSemanticClassificationSnapshot,
 )
 from app.evidence.identity.source_semantic_store import SourceSemanticStore
+from app.domain.validation.l1_fact_catalog import is_canonical_l1_fact_id
 from app.infrastructure.llm.structured import run_structured_output
 from app.infrastructure.logging import get_logger
 
@@ -88,6 +89,8 @@ def _fact_type(fact: L1Fact) -> str:
 
 
 def _candidate_from_l1(fact: L1Fact) -> SourceSemanticCandidate | None:
+    if not is_canonical_l1_fact_id(fact.fact_id):
+        return None
     semantic_type = _fact_type(fact)
     phrase = _fact_phrase(fact)
     if not phrase or semantic_type not in _ENTITY_TYPES:
@@ -404,7 +407,6 @@ class SourceSemanticClassifier:
                         timeout=self.timeout,
                         temperature=self.effective_temperature,
                         max_tokens=1800,
-                        allow_content_json_fallback=False,
                         llm=self.llm,
                         context={"pass": pass_number + 1, "fingerprint": fingerprint},
                     )

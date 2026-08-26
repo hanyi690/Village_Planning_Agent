@@ -67,6 +67,132 @@ def _location_fact_mentions(location_facts: Optional[List[Any]]) -> List[Dict[st
     return mentions
 
 
+def _feature_text(feature: Any) -> str:
+    """Read only source attributes when looking for a named GIS feature."""
+    raw = getattr(feature, "_raw", None)
+    if not isinstance(raw, dict):
+        raw = getattr(feature, "properties", None)
+    if (not isinstance(raw, dict) or not raw) and hasattr(feature, "model_dump"):
+        try:
+            raw = feature.model_dump(by_alias=True)
+        except Exception:
+            raw = None
+    if not isinstance(raw, dict):
+        raw = vars(feature) if hasattr(feature, "__dict__") else {}
+    values = [str(value) for value in raw.values() if value not in (None, "")]
+    for attr in ("name", "label", "description", "text", "category", "layer_type"):
+        value = getattr(feature, attr, None)
+        if value:
+            values.append(str(value))
+    return " ".join(values)
+
+
+def _feature_centroid(feature: Any) -> Optional[List[float]]:
+    geometry = getattr(feature, "geometry", None)
+    if not geometry:
+        return None
+    try:
+        from app.spatial.model.geometry import _compute_centroid
+
+        return _compute_centroid({
+            "type": "FeatureCollection",
+            "features": [{"type": "Feature", "properties": {}, "geometry": geometry}],
+        })
+    except Exception:
+        return None
+
+
+def _materialize_gis_village_entries(
+    gazetteer: Any,
+    bundle: Any,
+    village_bases: List[str],
+) -> int:
+    """Bind named uploaded GIS evidence to dynamic KG village candidates.
+
+    The feature name and geometry are source evidence.  The target BSM set is
+    copied from the runtime KG cluster nearest to the evidence centroid; no
+    coordinate, parcel, or candidate is invented when evidence is absent.
+    """
+    from app.infrastructure.kg import EntityAnnotation, get_semantic_memory
+    from app.infrastructure.kg.gazetteer import GazetteerEntry
+
+    if gazetteer is None or bundle is None:
+        return 0
+    clusters = [
+        entry
+        for entry in getattr(gazetteer, "entries", [])
+        if entry.source == "kg_cluster" and entry.bsms and entry.centroid
+    ]
+    if not clusters:
+        return 0
+    features: List[Any] = []
+    for group_name in ("points", "lines", "polygons"):
+        group = getattr(bundle, group_name, None)
+        if group is None:
+            continue
+        try:
+            features.extend(list(getattr(group, "all_features", []) or []))
+        except Exception:
+            continue
+
+    written = 0
+    for base in village_bases:
+        village_name = f"{base}村"
+        existing = gazetteer.resolve(village_name, fuzzy=False)
+        if existing is not None and existing.bsms:
+            continue
+        observations: List[List[float]] = []
+        for feature in features:
+            if base not in _feature_text(feature):
+                continue
+            point = _feature_centroid(feature)
+            if point and len(point) >= 2:
+                observations.append([float(point[0]), float(point[1])])
+        if not observations:
+            continue
+        evidence_centroid = [
+            sum(point[0] for point in observations) / len(observations),
+            sum(point[1] for point in observations) / len(observations),
+        ]
+        cluster = min(
+            clusters,
+            key=lambda entry: (
+                (float(entry.centroid[0]) - evidence_centroid[0]) ** 2
+                + (float(entry.centroid[1]) - evidence_centroid[1]) ** 2
+            ),
+        )
+        gazetteer.upsert(GazetteerEntry(
+            name=village_name,
+            aliases=[base, f"{base}自然村"],
+            entity_uri=cluster.entity_uri,
+            bsms=list(cluster.bsms),
+            centroid=list(cluster.centroid),
+            source="gis_name_binding",
+            confidence=0.8,
+            description=(
+                f"{village_name}：上传 GIS 属性名匹配 {len(observations)} 个真实要素，"
+                f"绑定运行时 KG 居民点 {cluster.name}。"
+            ),
+        ))
+        get_semantic_memory().add_entity_annotation(EntityAnnotation(
+            entity_uri=f"pln:gis_village_binding:{base}",
+            entity_type="GISVillageBinding",
+            description=(
+                f"{village_name}（GIS 属性名绑定，真实要素 {len(observations)} 个；"
+                f"KG 居民点 {cluster.name}）"
+            ),
+            intent_refs=list(cluster.bsms),
+            source_text_refs=["uploaded_gis_name_binding"],
+            round_added=1,
+            valid_from_round=1,
+            confidence=0.8,
+        ))
+        written += 1
+    if written:
+        logger.info("[Enrich:GIS] materialized %d named village bindings", written)
+    return written
+
+
 def project_report_entities(reports: Dict[str, str]) -> Dict[str, Any]:
     """Build a display-only report projection with conflict quarantine.
 

@@ -240,7 +240,7 @@ async def test_async_candidate_selection_prompt_carries_full_evidence(monkeypatc
         def invoke(self, prompt):
             prompts.append(prompt)
             candidate_id = prompt.split("candidate_id=", 1)[1].split()[0]
-            digest = prompt.split("input_digest=", 1)[1].split(";", 1)[0]
+            digest = prompt.split("input_digest=", 1)[1].splitlines()[0].strip()
             return CandidateSelectionProposal(
                 status="selected",
                 selected_candidate_id=candidate_id,
@@ -248,7 +248,7 @@ async def test_async_candidate_selection_prompt_carries_full_evidence(monkeypatc
             )
 
     class _LLM:
-        def with_structured_output(self, _model):
+        def with_structured_output(self, _model, **_kwargs):
             return _Structured()
 
     candidate = _candidate("下村吴德芳", "00000000000000000001", "http://e/hazard")
@@ -282,7 +282,8 @@ async def test_async_candidate_selection_prompt_carries_full_evidence(monkeypatc
     ):
         assert value in prompt
     assert "candidate_index" not in prompt
-    assert "candidate_set_digest=" in prompt
+    assert "candidate_set_digest=" not in prompt
+    assert "input_digest=" in prompt
 
 
 def test_sync_resolver_queue_wait_is_bounded(monkeypatch):

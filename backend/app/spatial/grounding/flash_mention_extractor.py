@@ -333,7 +333,6 @@ async def extract_spatial_reference_spec(
                 temperature=0.0,
                 max_tokens=GROUND_QUERY_SPEC_MAX_TOKENS,
                 llm=model,
-                allow_content_json_fallback=False,
             )
 
         response = await run_ground_llm_call(budget, timeout, _invoke)
@@ -549,7 +548,6 @@ async def _extract_structured(
                 temperature=0.1,
                 max_tokens=300,
                 llm=model,
-                allow_content_json_fallback=False,
             )
 
         response = await run_ground_llm_call(budget, timeout, _invoke_structured)

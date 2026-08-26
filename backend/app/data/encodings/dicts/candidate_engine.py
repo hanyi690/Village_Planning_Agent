@@ -5,7 +5,7 @@ This engine replaces the old "resolve_mapping" concept. The key semantic differe
   - "proposal" implies returning candidates for human decision
 
 Decision ladder (L0/L1/L3):
-  L0: targets list has single entry → auto (default)
+  L0: runtime candidate set has one unconditional entry → auto
   L1: Condition.evaluate() uniquely hits → rule_based
   L3: decision: manual → manual (all candidates returned)
 """
@@ -14,10 +14,11 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Literal, Optional
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, Field
 
 from .expr_eval import Condition, MappingContext, condition_from_yaml
 from .loader import MappingTable
+from app.domain.validation.closed_set import CandidateDescriptor, candidate_set_digest
 from app.infrastructure.logging import get_logger
 
 logger = get_logger(__name__)
@@ -29,14 +30,17 @@ class ClassificationProposal(BaseModel):
     NOT a mapping result — a list of suggestions for the planner to choose from.
     """
 
+    model_config = ConfigDict(extra="forbid")
+
     source_code: str = ""
     source_domain: str = ""
     target_domain: str = ""
     suggested_code: str = ""
     confidence: str = "exact"  # "exact" | "conditional" | "ambiguous"
-    alternatives: list[dict[str, Any]] = []
+    alternatives: list[dict[str, Any]] = Field(default_factory=list)
     needs_human_decision: bool = False
     rationale: str = ""
+    candidate_set_digest: str = ""
 
     def __str__(self) -> str:
         if self.confidence == "exact":
@@ -50,12 +54,15 @@ class ClassificationProposal(BaseModel):
 class Resolution(BaseModel):
     """Decision ladder result — L0/L1/L2/L3."""
 
+    model_config = ConfigDict(extra="forbid")
+
     kind: Literal["auto", "rule", "llm", "manual", "unmapped"] = "unmapped"
     chosen_code: str = ""
-    candidates: list[dict[str, Any]] = []
+    candidates: list[dict[str, Any]] = Field(default_factory=list)
     confidence: str = "exact"
     rationale: str = ""
     disambiguation_ctx: Optional[Dict[str, Any]] = None
+    candidate_set_digest: str = ""
 
     @classmethod
     def needs_llm(cls, ctx: "DisambiguationContext") -> "Resolution":
@@ -70,6 +77,7 @@ class Resolution(BaseModel):
             confidence="conditional",
             rationale=f"Multiple survivors ({len(ctx.candidates)}), LLM disambiguation required",
             disambiguation_ctx=ctx.model_dump(mode="json"),
+            candidate_set_digest=ctx.candidate_set_digest,
         )
 
 
@@ -117,31 +125,70 @@ class CandidateEngine:
                 rationale=f"No entry for '{source_code}' in {mapping_key}",
             )
 
-        decision = entry.get("decision", "auto")
-        targets = entry.get("targets", [])
-        default = entry.get("default", "")
+        decision = str(entry.get("decision") or "").strip()
+        targets = [
+            dict(target)
+            for target in (entry.get("targets") or [])
+            if isinstance(target, dict)
+        ]
+        candidates = [
+            {"code": str(target.get("code") or "").strip(), "when": target.get("when")}
+            for target in targets
+        ]
+        candidate_codes = [item["code"] for item in candidates]
+        if not decision:
+            return Resolution(
+                kind="unmapped",
+                candidates=candidates,
+                confidence="low",
+                rationale="Mapping decision mode is missing",
+            )
+        if (
+            not candidates
+            or any(not code for code in candidate_codes)
+            or len(set(candidate_codes)) != len(candidate_codes)
+        ):
+            return Resolution(
+                kind="unmapped",
+                candidates=candidates,
+                confidence="low",
+                rationale="Mapping candidate set is empty, duplicated, or contains an invalid code",
+            )
 
-        if decision == "auto" or len(targets) <= 1:
+        candidate_digest = candidate_set_digest(
+            [
+                CandidateDescriptor(
+                    candidate_id=item["code"],
+                    kind="classification_code",
+                    label=item["code"],
+                    metadata={"when": item["when"]},
+                )
+                for item in candidates
+            ]
+        )
+
+        if len(candidates) == 1 and candidates[0]["when"] is None:
             return Resolution(
                 kind="auto",
-                chosen_code=default,
-                candidates=targets,
+                chosen_code=candidates[0]["code"],
+                candidates=candidates,
                 confidence="exact",
-                rationale="Single target, auto-resolved",
+                rationale="Runtime candidate set contains one unconditional candidate",
+                candidate_set_digest=candidate_digest,
             )
 
         if ctx is None:
-            candidates = [{"code": t.get("code", ""), "when": t.get("when")} for t in targets]
             return Resolution(
                 kind="manual",
-                chosen_code=default,
+                chosen_code="",
                 candidates=candidates,
                 confidence="conditional",
                 rationale="No context provided, cannot disambiguate",
+                candidate_set_digest=candidate_digest,
             )
 
         hits = []
-        for t in targets:
+        for t in candidates:
             when_data = t.get("when")
             if when_data is None:
                 hits.append(t)
@@ -156,29 +203,32 @@ class CandidateEngine:
 
         if len(hits) == 0:
             return Resolution(
-                kind="auto",
-                chosen_code=default,
-                candidates=targets,
+                kind="manual",
+                chosen_code="",
+                candidates=candidates,
                 confidence="conditional",
-                rationale="No condition matched, using default",
+                rationale="No runtime condition matched; explicit decision required",
+                candidate_set_digest=candidate_digest,
             )
 
         if len(hits) == 1:
             return Resolution(
                 kind="rule",
-                chosen_code=str(hits[0].get("code", default)),
-                candidates=targets,
+                chosen_code=str(hits[0]["code"]),
+                candidates=candidates,
                 confidence="conditional",
                 rationale="Context uniquely matched",
+                candidate_set_digest=candidate_digest,
             )
 
         if decision == "manual":
             return Resolution(
                 kind="manual",
-                chosen_code=default,
+                chosen_code="",
                 candidates=hits,
                 confidence="conditional",
                 rationale=f"Multiple candidates ({len(hits)}), manual decision required",
+                candidate_set_digest=candidate_digest,
             )
 
         from .disambiguation import Candidate, DisambiguationContext
@@ -218,7 +268,7 @@ class CandidateEngine:
         for c in resolution.candidates:
             candidates_list.append({
                 "candidate": c.get("code", c.get("candidate", "")),
-                "when": str(c.get("when", "默认")),
+                "when": c.get("when"),
             })
 
         needs_decision = resolution.kind in ("manual", "unmapped")
@@ -231,6 +281,7 @@ class CandidateEngine:
             alternatives=candidates_list,
             needs_human_decision=needs_decision,
             rationale=resolution.rationale,
+            candidate_set_digest=resolution.candidate_set_digest,
         )
 
 

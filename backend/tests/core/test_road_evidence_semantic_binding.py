@@ -81,7 +81,7 @@ async def test_simulated_minimax_binds_unnamed_road_to_bundle_line() -> None:
         location_facts=[],
         l1_fact_records=[
             L1Fact(
-                fact_id="l1:road:one",
+                    fact_id="l1:fact:road-one",
                 statement="金田村现状有村道",
                 fact_kind="document_observation",
                 dimension_key="location",
@@ -107,8 +107,8 @@ async def test_simulated_minimax_binds_unnamed_road_to_bundle_line() -> None:
         proposals=[
             SourceFeatureSemanticProposal(
                 source_feature_id="feature:road:one",
-                candidate_ref="l1:l1:road:one:entity",
-                supporting_fact_refs=["l1:road:one"],
+                    candidate_ref="l1:l1:fact:road-one:entity",
+                    supporting_fact_refs=["l1:fact:road-one"],
             )
         ]
     )
@@ -157,14 +157,14 @@ async def test_simulated_minimax_binds_unnamed_road_to_bundle_line() -> None:
         intervention_action="upgrade",
         suggested_interventions=["村道升级"],
         location_hints=["金田村"],
-        source_fact_refs=["l1:road:one"],
+        source_fact_refs=["l1:fact:road-one"],
         road_parameters=RoadPlanningParameters(
             action="upgrade",
             length_m=100,
         ),
     )
     intervention = interventions_from_claims([claim], dimension_key="traffic")[0]
-    assert intervention.spatial_requirements["source_fact_refs"] == ["l1:road:one"]
+    assert intervention.spatial_requirements["source_fact_refs"] == ["l1:fact:road-one"]
     spec = map_intervention_to_spec(
         intervention,
         source_features={"road": [road]},
@@ -193,7 +193,7 @@ async def test_simulated_minimax_binds_unnamed_road_to_bundle_line() -> None:
     assert candidate.feature_bsm == road.bsm
     assert candidate.geometry_ref == f"bundle://feature/{road.bsm}"
     assert candidate.source_feature_id == "feature:road:one"
-    assert candidate.l1_fact_refs == ["report:traffic", "l1:road:one"]
+    assert candidate.l1_fact_refs == ["report:traffic", "l1:fact:road-one"]
 
     planning_context = PlanningContext(
         session_id="road-semantic-ground",

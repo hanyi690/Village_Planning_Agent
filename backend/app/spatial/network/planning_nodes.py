@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import re
 from collections import Counter, defaultdict, deque
 from pathlib import Path
@@ -64,15 +65,21 @@ ROAD_ACTION_KEYWORDS = {
         "\u6539\u5584",
     ),
 }
-ROAD_NOUN_PATTERN = (
-    r"(?:\u9053\u8def|\u6751\u9053|\u516c\u8def|\u8def\u7f51|\u673a\u8015\u8def|\u751f\u4ea7\u8def|\u6d88\u9632\u901a\u9053)"
-)
 REQUEST_BY_ACTION = {
     "new": "new_connection",
     "widen": "road_widening",
     "harden": "road_hardening",
     "repair": "road_repair",
 }
+
+
+def _stable_intent_id(prefix: str, *parts: Any) -> str:
+    payload = json.dumps(
+        [str(part or "").strip() for part in parts],
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
+    return f"{prefix}-{hashlib.sha256(payload.encode('utf-8')).hexdigest()[:16]}"
 
 
 def _read_json(path: Path) -> Any:
@@ -235,13 +242,14 @@ def _action_from_text(text: str, fallback: Any = None) -> str:
     for action in REQUEST_BY_ACTION:
         if fallback_text == action:
             return action
+    connector_only = {"至", "通往", "通达"}
     for action, keywords in ROAD_ACTION_KEYWORDS.items():
-        if any(keyword in text for keyword in keywords):
+        if any(keyword in text for keyword in keywords if keyword not in connector_only):
             return action
     for action, keywords in ROAD_ACTIONS.items():
-        if any(keyword in text for keyword in keywords):
+        if any(keyword in text for keyword in keywords if keyword not in connector_only):
             return action
-    return "new" if "至" in text or "连" in text else "repair"
+    return "manual_review"
 
 
 def _task_type(action: str) -> str:
@@ -250,23 +258,6 @@ def _task_type(action: str) -> str:
     if action in {"widen", "harden", "repair"}:
         return "road_upgrade"
     return "road_planning"
-
-
-def _has_road_action_text(text: str) -> bool:
-    return any(keyword in text for words in ROAD_ACTION_KEYWORDS.values() for keyword in words) or any(
-        keyword in text for words in ROAD_ACTIONS.values() for keyword in words
-    )
-
-
-def _clean_extracted_place(value: Any) -> str:
-    text = str(value or "")
-    text = re.sub(
-        r"^(?:\u89c4\u5212|\u65b0\u5efa|\u65b0\u589e|\u63a8\u8fdb|\u5b9e\u65bd|\u5b8c\u5584|\u63d0\u5347|\u6539\u9020|\u6253\u901a|\u8fde\u901a|\u8fde\u63a5|\u63a5\u5165)+",
-        "",
-        text,
-    )
-    text = re.sub(ROAD_NOUN_PATTERN + r"$", "", text)
-    return text.strip(" \t\r\n,，.。;；:：、（）()[]【】")
 
 
 def _priority(value: Mapping[str, Any], default: str = "medium") -> str:
@@ -1069,167 +1060,13 @@ def _match_candidates(index: Mapping[str, Sequence[Dict[str, Any]]], names: Iter
     return list(matches.values())
 
 
-def _load_chunks(stage2_dir: Path) -> List[Mapping[str, Any]]:
-    for name in ("text_chunks.json", "chunks.json", "document_chunks.json"):
-        path = stage2_dir / name
-        if not path.exists():
-            continue
-        payload = _read_json(path)
-        if isinstance(payload, list):
-            return [item for item in payload if isinstance(item, Mapping)]
-        if isinstance(payload, Mapping):
-            chunks = payload.get("chunks") or payload.get("items") or []
-            return [item for item in chunks if isinstance(item, Mapping)]
-    path = stage2_dir / "text_chunks.jsonl"
-    if path.exists():
-        return [
-            json.loads(line)
-            for line in path.read_text(encoding="utf-8-sig").splitlines()
-            if line.strip()
-        ]
-    return []
-
-
-def _rule_intents_from_chunks(chunks: Sequence[Mapping[str, Any]]) -> List[Dict[str, Any]]:
-    intents: List[Dict[str, Any]] = []
-    pattern = re.compile(
-        r"(?P<start>[\u4e00-\u9fa5A-Za-z0-9（）()]{2,30})\s*(?:至|到|连接|连通|接入)\s*"
-        r"(?P<end>[\u4e00-\u9fa5A-Za-z0-9（）()]{2,30})"
-    )
-    for chunk in chunks:
-        text = str(chunk.get("text") or chunk.get("content") or "")
-        if not any(keyword in text for words in ROAD_ACTIONS.values() for keyword in words):
-            continue
-        for match in pattern.finditer(text):
-            start = match.group("start").strip("，。；;:： ")
-            end = match.group("end").strip("，。；;:： ")
-            if not start or not end:
-                continue
-            intent_index = len(intents) + 1
-            intents.append(
-                {
-                    "intent_id": f"RI-C{intent_index:04d}",
-                    "task_type": "road_connection",
-                    "action": _action_from_text(text),
-                    "start_place": start,
-                    "end_place": end,
-                    "mentioned_places": sorted({start, end}),
-                    "served_objects": [],
-                    "constraints": [],
-                    "evidence_text": text,
-                    "source_chunk_id": str(chunk.get("chunk_id") or chunk.get("id") or ""),
-                    "section_title": chunk.get("section_title") or chunk.get("section"),
-                    "source_page": chunk.get("source_page") or chunk.get("page"),
-                    "confidence": 0.72,
-                    "requires_human_confirmation": False,
-                    "extraction_method": "rule_chunk",
-                }
-            )
-    return intents
-
-
-def _rule_intents_from_chunks(chunks: Sequence[Mapping[str, Any]]) -> List[Dict[str, Any]]:
-    intents: List[Dict[str, Any]] = []
-    place = r"[\u4e00-\u9fa5A-Za-z0-9_\u00b7\uff08\uff09()]{2,40}"
-    connection_patterns = [
-        re.compile(
-            rf"(?:\u89c4\u5212|\u65b0\u5efa|\u65b0\u589e|\u5b8c\u5584|\u6253\u901a|\u8fde\u901a|\u8fde\u63a5|\u63a5\u5165)?"
-            rf"(?P<start>{place})\s*(?:\u81f3|\u5230|\u901a\u5f80|\u8fde\u63a5|\u8fde\u901a|\u63a5\u5165|\u8d2f\u901a|[-\u2014~\uff5e])\s*"
-            rf"(?P<end>{place})(?:{ROAD_NOUN_PATTERN})?"
-        ),
-        re.compile(
-            rf"(?:\u6253\u901a|\u8fde\u901a|\u8fde\u63a5|\u63a5\u5165|\u8d2f\u901a|\u8054\u7cfb)"
-            rf"(?P<start>{place})\s*(?:\u4e0e|\u548c|\u53ca|\u81f3|\u5230)\s*"
-            rf"(?P<end>{place})(?:{ROAD_NOUN_PATTERN})?"
-        ),
-    ]
-    upgrade_patterns = [
-        re.compile(
-            rf"(?P<verb>\u62d3\u5bbd|\u6269\u5bbd|\u52a0\u5bbd|\u786c\u5316|\u9ed1\u5316|\u94fa\u88c5|\u4fee\u590d|\u4fee\u7f2e|\u6574\u6cbb|\u63d0\u5347|\u6539\u9020|\u5b8c\u5584)"
-            rf"(?P<target>{place})(?:{ROAD_NOUN_PATTERN})"
-        ),
-        re.compile(
-            rf"(?P<target>{place})(?:{ROAD_NOUN_PATTERN})"
-            rf"(?P<verb>\u62d3\u5bbd|\u6269\u5bbd|\u52a0\u5bbd|\u786c\u5316|\u9ed1\u5316|\u94fa\u88c5|\u4fee\u590d|\u4fee\u7f2e|\u6574\u6cbb|\u63d0\u5347|\u6539\u9020|\u5b8c\u5584)"
-        ),
-    ]
-    seen: set[Tuple[str, str, str]] = set()
-    for chunk in chunks:
-        text = str(chunk.get("text") or chunk.get("content") or "")
-        if not _has_road_action_text(text):
-            continue
-        for pattern in connection_patterns:
-            for match in pattern.finditer(text):
-                start = _clean_extracted_place(match.group("start"))
-                end = _clean_extracted_place(match.group("end"))
-                if not start or not end:
-                    continue
-                action = _action_from_text(text)
-                key = (_normalise_name(start), _normalise_name(end), action)
-                if key in seen:
-                    continue
-                seen.add(key)
-                intent_index = len(intents) + 1
-                intents.append(
-                    {
-                        "intent_id": f"RI-C{intent_index:04d}",
-                        "task_type": "road_connection",
-                        "action": action,
-                        "start_place": start,
-                        "end_place": end,
-                        "mentioned_places": sorted({start, end}),
-                        "served_objects": [],
-                        "constraints": [],
-                        "evidence_text": text,
-                        "source_chunk_id": str(chunk.get("chunk_id") or chunk.get("id") or ""),
-                        "section_title": chunk.get("section_title") or chunk.get("section"),
-                        "source_page": chunk.get("source_page") or chunk.get("page"),
-                        "confidence": 0.74,
-                        "requires_human_confirmation": False,
-                        "extraction_method": "rule_chunk",
-                    }
-                )
-        for pattern in upgrade_patterns:
-            for match in pattern.finditer(text):
-                target = _clean_extracted_place(match.group("target"))
-                verb = str(match.group("verb") or "")
-                if not target:
-                    continue
-                action = _action_from_text(verb)
-                if action == "new":
-                    continue
-                key = (_normalise_name(target), "", action)
-                if key in seen:
-                    continue
-                seen.add(key)
-                intent_index = len(intents) + 1
-                intents.append(
-                    {
-                        "intent_id": f"RI-C{intent_index:04d}",
-                        "task_type": _task_type(action),
-                        "action": action,
-                        "start_place": target,
-                        "end_place": "",
-                        "mentioned_places": [target],
-                        "served_objects": [],
-                        "constraints": [],
-                        "evidence_text": text,
-                        "source_chunk_id": str(chunk.get("chunk_id") or chunk.get("id") or ""),
-                        "section_title": chunk.get("section_title") or chunk.get("section"),
-                        "source_page": chunk.get("source_page") or chunk.get("page"),
-                        "confidence": 0.7,
-                        "requires_human_confirmation": False,
-                        "extraction_method": "rule_chunk",
-                    }
-                )
-    return intents
 
 
 def _road_intents(stage2_dir: Path) -> List[Dict[str, Any]]:
     projects_payload = _read_json(stage2_dir / "road_projects.json")
     projects = projects_payload.get("projects", []) if isinstance(projects_payload, Mapping) else []
     intents: List[Dict[str, Any]] = []
-    for index, project in enumerate(projects, start=1):
+    for project in projects:
         if not isinstance(project, Mapping):
             continue
         text = _evidence_text(project)
@@ -1287,6 +1124,8 @@ def _road_intents(stage2_dir: Path) -> List[Dict[str, Any]]:
             bool(project.get("requires_human_confirmation"))
             or confidence < 0.65
             or not has_provenance
+            or not action
+            or action == "manual_review"
         )
         if action == "new" and (not start_place or not end_place):
             requires_review = True
@@ -1295,7 +1134,18 @@ def _road_intents(stage2_dir: Path) -> List[Dict[str, Any]]:
             confidence = min(confidence, 0.6)
         intents.append(
             {
-                "intent_id": str(project.get("intent_id") or f"RI-P{index:04d}"),
+                "intent_id": str(
+                    project.get("intent_id")
+                    or _stable_intent_id(
+                        "RI-P",
+                        source_chunk_id,
+                        section_title,
+                        start_place,
+                        end_place,
+                        action,
+                        text,
+                    )
+                ),
                 "task_type": _task_type(action),
                 "action": action,
                 "start_place": start_place,
@@ -1321,20 +1171,8 @@ def _road_intents(stage2_dir: Path) -> List[Dict[str, Any]]:
                 ),
             }
         )
-    chunk_intents = _rule_intents_from_chunks(_load_chunks(stage2_dir))
-    existing_keys = {
-        (_normalise_name(item.get("start_place")), _normalise_name(item.get("end_place")), item.get("action"))
-        for item in intents
-    }
-    for intent in chunk_intents:
-        key = (
-            _normalise_name(intent.get("start_place")),
-            _normalise_name(intent.get("end_place")),
-            intent.get("action"),
-        )
-        if key not in existing_keys:
-            intents.append(intent)
-            existing_keys.add(key)
+    # Free-text chunks are evidence only.  They do not enter the semantic
+    # intent set until an upstream typed JSON proposal has been accepted.
     return intents
 
 

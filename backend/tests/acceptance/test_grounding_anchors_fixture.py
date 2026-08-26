@@ -5,6 +5,7 @@
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import uuid
 from pathlib import Path
@@ -59,65 +60,83 @@ def _uploads() -> list[dict]:
 def _real_observations() -> list[dict]:
     """从真实报告抽取的观察（村/路/水/设施）。"""
     villages = ["园寨", "田坑", "社前", "分水", "清明", "塘笃", "长塘", "炉池", "肩丰", "营仔", "新山", "黄竹"]
+    village_source_quote = (
+        "金田村隶属广东省梅州市平远县泗水镇，下辖 12 个自然村，分别为："
+        "园寨、田坑、社前、分水、清明、塘笃、长塘、炉池、肩丰、营仔、新山、黄竹。"
+    )
     obs = [
         {
             "fact_type": "spatial_entity",
+            "status": "confirmed",
             "entity_type": "自然村",
             "name": v,
             "locator": {"place_names": [v], "relation": "自然村"},
             "description": f"{v}自然村",
             "scale": "",
+            "source_quote": village_source_quote,
         }
         for v in villages
     ]
     obs.append({
         "fact_type": "spatial_entity",
+        "status": "confirmed",
         "entity_type": "现状分区",
         "name": "金田村",
         "locator": {"place_names": ["金田村"], "relation": "规划范围"},
         "description": "金田村村庄规划范围",
         "scale": "",
+        "source_quote": "金田村位于泗水镇北端，村驻地经 Y122 乡道——X038 县道与泗水镇中心连接。",
     })
     obs.append({
         "fact_type": "spatial_entity",
+        "status": "confirmed",
         "entity_type": "地物",
         "name": "南粤古驿道",
         "locator": {"place_names": ["肩丰", "炉池"], "relation": "沿古驿道"},
         "description": "南粤古驿道沿线保护",
         "scale": "1500m",
+        "source_quote": "在金田村下属的炉池村，现有南粤古驿道的古驿道遗存及相关节点。",
     })
     obs.extend([
         {
             "fact_type": "spatial_entity",
+            "status": "confirmed",
             "entity_type": "道路",
             "name": "122乡道",
             "locator": {"place_names": ["园寨", "田坑"], "relation": "东西走向；金田村唯一东西向道路"},
             "description": "对外交通主要道路",
             "scale": "",
+            "source_quote": "122 乡道是金田村主要的对外交通道路，也是金田与镇域相联系的主要通道。",
         },
         {
             "fact_type": "spatial_entity",
+            "status": "confirmed",
             "entity_type": "水系",
             "name": "金田河",
             "locator": {"place_names": ["金田村"], "relation": "西南至东北贯穿金田村；汇入石窟河"},
             "description": "村内主要河流",
             "scale": "",
+            "source_quote": "其中，金田河由西南至东北贯穿金田村，汇入石窟河。",
         },
         {
             "fact_type": "spatial_entity",
+            "status": "confirmed",
             "entity_type": "现状设施",
             "name": "祠堂",
             "locator": {"place_names": ["社前村"], "relation": "位于社前村"},
             "description": "客家祠堂",
             "scale": "3处",
+            "source_quote": "在金田村下属的社前村，黄竹村，田坑村具有三座祠堂。",
         },
         {
             "fact_type": "spatial_entity",
+            "status": "confirmed",
             "entity_type": "水系",
             "name": "石窟河",
             "locator": {"place_names": ["村界西南"], "relation": "金田河汇入"},
             "description": "镇域河流",
             "scale": "",
+            "source_quote": "其中，金田河由西南至东北贯穿金田村，汇入石窟河。",
         },
     ])
     return obs
@@ -307,19 +326,83 @@ async def test_real_fixture_ground_anchors_and_render(sqlite_db, pipeline_reset)
         verbatim = "分别为：园寨、田坑、社前、分水、清明、塘笃、长塘、炉池、肩丰、营仔、新山、黄竹"
 
         class _DispatchLLM:
-            """可调度 LLM 占位：聚落/水体映射 prompt → 逐字证据 JSON；其余编号判别 → '1'。"""
+            """Typed test provider for dynamic mapping and candidate selection."""
 
-            def __init__(self):
+            def __init__(self, source_text):
                 self.mapping = {}
+                self.source_text = source_text
 
-            async def ainvoke(self, prompt):
-                if "候选地块" in str(prompt) or "报告摘录" in str(prompt) or "cluster_indexes" in str(prompt):
-                    return SimpleNamespace(
-                        content=json.dumps(self.mapping, ensure_ascii=False)
-                    )
-                return SimpleNamespace(content="1")
+            def with_structured_output(self, response_model, **_kwargs):
+                provider = self
 
-        dispatch_llm = _DispatchLLM()
+                class _Structured:
+                    async def ainvoke(self, prompt):
+                        prompt = str(prompt)
+                        if response_model.__name__ == "CandidateSelectionProposal":
+                            if "地名=" in prompt:
+                                mention = prompt.split("地名=", 1)[1].split("；", 1)[0]
+                            else:
+                                mention = prompt.split("地名「", 1)[1].split("」", 1)[0]
+                            candidate_lines = [
+                                line.strip()
+                                for line in prompt.splitlines()
+                                if line.strip().startswith("candidate_id=")
+                            ]
+                            selected_line = next(
+                                (
+                                    line
+                                    for line in candidate_lines
+                                    if f"名称={mention}" in line
+                                ),
+                                candidate_lines[0],
+                            )
+                            candidate_id = selected_line.split("candidate_id=", 1)[1].split()[0]
+                            digest = prompt.split("input_digest=", 1)[1].splitlines()[0]
+                            digest = digest.split("；", 1)[0].strip()
+                            return response_model.model_validate({
+                                "status": "selected",
+                                "selected_candidate_id": candidate_id,
+                                "input_digest": digest,
+                            })
+
+                        entity_lines = [
+                            line.strip()
+                            for line in prompt.splitlines()
+                            if line.strip().startswith("- entity_ref=")
+                        ]
+                        candidate_ids = [
+                            line.split("candidate_id=", 1)[1].split()[0]
+                            for line in prompt.splitlines()
+                            if line.strip().startswith("- candidate_id=")
+                        ]
+                        decisions = []
+                        for line in entity_lines:
+                            entity_ref = line.split("entity_ref=", 1)[1].split()[0]
+                            name = line.split("mention=", 1)[1].strip()
+                            indexes = list(provider.mapping.get(name, {}).get("cluster_indexes", []))
+                            selected = [candidate_ids[index] for index in indexes]
+                            start = provider.source_text.find(name)
+                            if start < 0:
+                                start = provider.source_text.find(name.removesuffix("村"))
+                            end = start + len(name) if start >= 0 else 0
+                            quote = provider.source_text[start:end] if start >= 0 else ""
+                            decisions.append({
+                                "entity_ref": entity_ref,
+                                "status": "mapped" if selected and quote else "unresolved",
+                                "candidate_ids": selected,
+                                "source_span": ({
+                                    "segment_id": "report",
+                                    "start": start,
+                                    "end": end,
+                                    "quote_hash": hashlib.sha256(quote.encode("utf-8")).hexdigest(),
+                                } if selected and quote else None),
+                                "reason_code": "" if selected and quote else "source_span_invalid",
+                            })
+                        return response_model.model_validate({"decisions": decisions})
+
+                return _Structured()
+
+        dispatch_llm = _DispatchLLM(report_text)
 
         if clusters:
             dispatch_llm.mapping = {

@@ -7,6 +7,7 @@ terrain/suitability、scenario、EXECUTE、VALIDATE、RECONCILE、DELIVER 都走
 
 from __future__ import annotations
 
+import hashlib
 import json
 import uuid
 from pathlib import Path
@@ -50,8 +51,11 @@ async def test_real_spatial_stage_chain_preserves_subgeometry_lineage(
             SourceFeatureSemanticDecision,
         )
         from app.contracts.domain.l3_contracts import PlanningIntervention, PlanningProgram
+        from app.contracts.spatial.candidate_geometry import CandidateGeometry
+        from app.contracts.spatial.grounded_problem import GroundedPlanningProblem
         from app.contracts.spatial.spatial_reference_contracts import RefObject, SpatialReferenceSpec
         from app.contracts.spatial.grounding_contracts import (
+            CandidateSite,
             GroundingResult,
         )
         from app.contracts.workflow.parse_contracts import SiteAreaTarget, SpatialPlanningIntent
@@ -73,9 +77,11 @@ async def test_real_spatial_stage_chain_preserves_subgeometry_lineage(
         )
         from app.infrastructure.kg.gazetteer import build_gazetteer
         from app.infrastructure.kg.manager import KGManager
+        from app.domain.suitability.subgeometry import derive_planning_subgeometry
         from app.spatial.grounding.village_cluster_mapper import (
             assign_villages_to_clusters,
             build_village_clusters,
+            stable_entity_ref,
         )
         from app.workflow.stage_adapter import persist_stage_artifact
         from app.workflow.stages.deliver import deliver_node
@@ -107,10 +113,23 @@ async def test_real_spatial_stage_chain_preserves_subgeometry_lineage(
             def with_structured_output(self, response_model, **_kwargs):
                 class _Structured:
                     async def ainvoke(self, _prompt):
-                        return response_model(entries=[{
-                            "name": "社前",
-                            "candidate_indexes": [clusters[min(1, len(clusters) - 1)].index],
-                            "evidence": "在金田村下属的社前村",
+                        quote = "社前村"
+                        start = report_text.index(quote)
+                        return response_model(decisions=[{
+                            "entity_ref": stable_entity_ref("village", "社前"),
+                            "status": "mapped",
+                            "candidate_ids": [
+                                clusters[min(1, len(clusters) - 1)].cluster_id
+                            ],
+                            "source_span": {
+                                "segment_id": "report",
+                                "start": start,
+                                "end": start + len(quote),
+                                "quote_hash": hashlib.sha256(
+                                    quote.encode("utf-8")
+                                ).hexdigest(),
+                            },
+                            "reason_code": "",
                         }])
 
                 return _Structured()
@@ -306,13 +325,214 @@ async def test_real_spatial_stage_chain_preserves_subgeometry_lineage(
         grounding = GroundingResult.model_validate(grounding.model_dump(mode="python"))
         assert not grounding.unresolved, grounding.unresolved
         assert grounding.candidates
-        source_candidate = grounding.candidates[0].geometry
+        source_site = grounding.candidates[0]
+        source_candidate = source_site.geometry
         assert source_candidate is not None
         assert source_candidate.feature_bsms
         assert source_candidate.source_bsms
         assert source_candidate.source_refs
-        source_bsm = source_candidate.source_bsms[0]
-        assert source_bsm in [str(getattr(item, "bsm", "")) for item in parcels]
+        source_crs = str(
+            getattr(getattr(context.workspace, "metadata", None), "crs", "")
+            or getattr(context, "geometry_crs", "")
+            or "EPSG:4326"
+        )
+        from shapely import wkt as shapely_wkt
+        from shapely.geometry import shape
+
+        parcels_by_bsm = {
+            str(
+                getattr(item, "bsm", "")
+                or (item.get("bsm", "") if isinstance(item, dict) else "")
+            ): item
+            for item in parcels
+            if str(
+                getattr(item, "bsm", "")
+                or (item.get("bsm", "") if isinstance(item, dict) else "")
+            ).strip()
+        }
+        source_bsm = ""
+        source_parcel_geometry = None
+        planning_subgeometry = None
+        for candidate_bsm in sorted(set(source_candidate.source_bsms)):
+            parcel = parcels_by_bsm.get(candidate_bsm)
+            if parcel is None:
+                continue
+            raw_geometry = (
+                parcel.get("geometry")
+                if isinstance(parcel, dict)
+                else getattr(parcel, "geometry", None)
+            )
+            parcel_geometry = (
+                shape(raw_geometry) if isinstance(raw_geometry, dict) else raw_geometry
+            )
+            if (
+                parcel_geometry is None
+                or parcel_geometry.is_empty
+                or not parcel_geometry.is_valid
+            ):
+                continue
+            candidate_subgeometry = derive_planning_subgeometry(
+                parcel_geometry.wkt,
+                source_crs=source_crs,
+                target_area_ha=target_area_ha,
+                tolerance_pct=5.0,
+            )
+            if (
+                candidate_subgeometry is None
+                or not candidate_subgeometry.feasible
+                or candidate_subgeometry.operation
+                in {"bundle_extent", "bundle_extent_within_tolerance"}
+            ):
+                continue
+            source_bsm = candidate_bsm
+            source_parcel_geometry = parcel_geometry
+            planning_subgeometry = candidate_subgeometry
+            break
+        assert source_bsm
+        assert source_bsm in parcels_by_bsm
+        assert source_parcel_geometry is not None
+        assert planning_subgeometry is not None
+        assert planning_subgeometry.operation != "bundle_extent"
+
+        planning_geometry_payload = source_candidate.model_dump(mode="python")
+        planning_geometry_payload.update(
+            {
+                "candidate_id": "",
+                "target_id": target_id,
+                "kind": "polygon",
+                "role": "execution_geometry",
+                "candidate_membership": "alternative",
+                "materialization_role": "site_footprint",
+                "wkt": planning_subgeometry.geometry_wkt,
+                "eligible_geometry_wkt": planning_subgeometry.eligible_geometry_wkt,
+                "crs": source_crs,
+                "granularity": "parcel_extent",
+                "spatial_domain_kind": "parcel_extent",
+                "candidate_bbox": tuple(
+                    float(value)
+                    for value in shapely_wkt.loads(
+                        planning_subgeometry.geometry_wkt
+                    ).bounds
+                ),
+                "source_area_ha": planning_subgeometry.source_area_ha,
+                "planning_area_ha": planning_subgeometry.planning_area_ha,
+                "coverage_ratio": planning_subgeometry.coverage_ratio,
+                "source_ref": f"bundle:landuse_current:{source_bsm}",
+                "source_refs": [
+                    *source_candidate.source_refs,
+                    f"bundle:landuse_current:{source_bsm}",
+                ],
+                "evidence_refs": [
+                    *source_candidate.evidence_refs,
+                    source_bsm,
+                    f"bundle:landuse_current:{source_bsm}",
+                ],
+                "identity_confidence": source_candidate.identity_confidence or 0.9,
+                "geometry_confidence": source_candidate.geometry_confidence or 0.9,
+                "source_bsms": [source_bsm],
+                "l1_snapshot_ref": context.l1_snapshot_ref,
+                "bundle_snapshot_digest": str(context.data_snapshot.digest),
+                "subgeometry_operation": planning_subgeometry.operation,
+                "subgeometry_diagnostics": list(planning_subgeometry.diagnostics),
+                "generation_operation": "grounded_parcel_refinement_fixture",
+                "hard_constraint_status": "pending",
+                "availability_status": planning_subgeometry.availability_status,
+                "eligible_area_ha": planning_subgeometry.eligible_area_ha,
+                "excluded_area_ha": planning_subgeometry.excluded_area_ha,
+            }
+        )
+        planning_geometry = CandidateGeometry.model_validate(
+            planning_geometry_payload
+        )
+        assert planning_geometry.grounding_ready
+        assert planning_geometry.is_executable
+        assert planning_geometry.role == "execution_geometry"
+        assert planning_geometry.spatial_domain_kind == "parcel_extent"
+        assert planning_geometry.subgeometry_operation != "bundle_extent"
+        planning_site_payload = source_site.model_dump(mode="python")
+        planning_site_payload.update(
+            {
+                "site_id": f"{source_site.site_id}:subgeometry:{source_bsm}",
+                "candidate_id": planning_geometry.candidate_id,
+                "source_parcels": [source_bsm],
+                "available_geometry_wkt": planning_geometry.wkt,
+                "available_area_ha": planning_geometry.planning_area_ha or 0.0,
+                "source_area_ha": planning_geometry.source_area_ha or 0.0,
+                "coverage_ratio": planning_geometry.coverage_ratio,
+                "hard_constraint_result": {
+                    "constraint_id": "ground_geometry",
+                    "passed": True,
+                },
+                "target_ref": target_id,
+                "target_kind": "site_area",
+                "expected_output_kind": "polygon",
+                "geometry": planning_geometry,
+                "candidate_bbox": planning_geometry.candidate_bbox,
+                "identity_confidence": planning_geometry.identity_confidence,
+                "geometry_confidence": planning_geometry.geometry_confidence,
+                "schema_status": "valid",
+            }
+        )
+        planning_site = CandidateSite.model_validate(planning_site_payload)
+
+        target_domains = []
+        for domain in grounding.problem.target_domains:
+            if domain.target_id == target_id:
+                target_domains.append(
+                    domain.model_copy(
+                        update={
+                            "target_kind": "site_area",
+                            "expected_output_kind": "polygon",
+                            "candidate_site_refs": [planning_site.site_id],
+                            "geometry_roles": ["execution_geometry"],
+                            "status": "resolved",
+                            "evidence_refs": list(planning_geometry.evidence_refs),
+                        }
+                    )
+                )
+            else:
+                target_domains.append(domain)
+        candidate_domains = []
+        for domain in grounding.problem.candidate_domains:
+            if domain.target_id == target_id:
+                candidate_domains.append(
+                    domain.model_copy(
+                        update={
+                            "candidate_ids": [planning_geometry.candidate_id],
+                            "candidate_geometry_refs": [planning_geometry.candidate_id],
+                            "geometry_granularities": ["parcel_extent"],
+                            "geometry_uncertainty_radius_m": 0.0,
+                            "geometry_uncertainty_reasons": [],
+                            "status": "resolved",
+                            "deferred_reason": "",
+                        }
+                    )
+                )
+            else:
+                candidate_domains.append(domain)
+        planning_problem_payload = grounding.problem.model_dump(mode="python")
+        planning_problem_payload.update(
+            {
+                "target_domains": target_domains,
+                "candidate_domains": candidate_domains,
+                "candidate_geometries": [planning_geometry],
+                "parcel_resource_pool": None,
+                "unresolved": [],
+                "deferred": [],
+                "fingerprint": "",
+            }
+        )
+        planning_problem = GroundedPlanningProblem.model_validate(
+            planning_problem_payload
+        )
+        assert planning_problem.candidate_completeness.ready
+        grounding = grounding.model_copy(
+            update={
+                "candidates": [planning_site],
+                "unresolved": [],
+                "problem": planning_problem,
+            }
+        )
         target = SiteAreaTarget(
             target_id=target_id,
             site_area_id=target_id,
@@ -322,7 +542,7 @@ async def test_real_spatial_stage_chain_preserves_subgeometry_lineage(
             action="new",
             area_ha=target_area_ha,
             location_hint="社前村祠堂附近",
-            candidate_bsms=list(source_candidate.source_bsms),
+            candidate_bsms=[source_bsm],
             classification_decision=ClassificationDecision(
                 target_id=target_id,
                 code_system=ClassificationSystem.GBT21010,
@@ -420,10 +640,13 @@ async def test_real_spatial_stage_chain_preserves_subgeometry_lineage(
             item for item in scenario.feature_intents if item.target_id == target_id
         )
         assert selected_feature.subgeometry_operation != "bundle_extent"
+        assert selected_feature.subgeometry_operation == planning_subgeometry.operation
         assert selected_feature.source_bsms
+        assert selected_feature.source_bsms == [source_bsm]
         assert set(selected_feature.source_bsms).issubset(
             set(source_candidate.source_bsms)
         )
+        assert selected_feature.geometry_wkt != source_parcel_geometry.wkt
 
         state = await _run_stage(execute_node, state)
         assert state["artifact_refs"].get("execution_result")
@@ -513,6 +736,22 @@ async def test_real_spatial_stage_chain_preserves_subgeometry_lineage(
             and layer.feature_count > 0
             for layer in map_layers.layers
         )
+        planned_layer = next(
+            layer
+            for layer in map_layers.layers
+            if layer.layer_name == "complete_planned_landuse"
+        )
+        planned_feature = next(
+            feature
+            for feature in planned_layer.geojson["features"]
+            if feature.get("properties", {}).get("target_id") == target_id
+        )
+        planned_properties = planned_feature["properties"]
+        assert planned_properties["source_bsms"] == [source_bsm]
+        assert planned_properties["subgeometry_operation"] == (
+            planning_subgeometry.operation
+        )
+        assert planned_properties["subgeometry_operation"] != "bundle_extent"
         assert all(
             layer.geojson.get("type") == "FeatureCollection"
             and isinstance(layer.geojson.get("features"), list)

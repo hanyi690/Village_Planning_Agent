@@ -1509,7 +1509,7 @@ class SpatialResolver:
             "packet_ambiguity_status": packet_status,
             "packet_candidate_feature_bsms": candidate_feature_bsms,
             "candidate_ids": candidate_ids,
-            "candidate_set_digest": candidate_set_digest(descriptors),
+            "candidate_set_digest": set_digest,
             "input_digest": input_digest,
             "exact_membership": membership.model_dump(mode="json"),
         }
@@ -2626,7 +2626,6 @@ class SpatialResolver:
             query_text=query_text,
             candidates=descriptors,
         )
-        set_digest = candidate_set_digest(descriptors)
         from app.spatial.grounding.call_budget import (
             ground_llm_sync_semaphore,
             reserve_ground_llm_call,
@@ -2649,19 +2648,10 @@ class SpatialResolver:
                 f"空间引用「{mention}」{hint_clause}。"
                 f"以下是从 EvidenceGraph 召回并由 Bundle/KG 拓扑组织的{candidate_kind}，"
                 "请只返回 selected/abstain/ambiguous；selected 时填写候选稳定 candidate_id，"
-                f"本次 candidate_set_digest={set_digest}; input_digest={input_digest};"
+                f"本次 input_digest={input_digest};"
                 "不要输出序号或新 ID：\n" + lines
             )
-
-            structured_factory = getattr(llm, "with_structured_output", None)
-            if not callable(structured_factory):
-                raise TypeError(
-                    "grounding LLM must expose typed with_structured_output"
-                )
-            structured = structured_factory(
-                CandidateSelectionProposal,
-                method="function_calling",
-            )
+            from app.infrastructure.llm.structured import run_structured_output_sync
 
             # This resolver is intentionally synchronous at the spatial
             # aggregate boundary. Bound the typed provider call in a
@@ -2678,7 +2668,13 @@ class SpatialResolver:
                 if not acquired:
                     raise TimeoutError("grounding LLM semaphore queue timeout")
                 try:
-                    return structured.invoke(prompt)
+                    return run_structured_output_sync(
+                        CandidateSelectionProposal,
+                        [{"role": "user", "content": prompt}],
+                        llm=llm,
+                        max_retries=1,
+                        timeout=call_timeout,
+                    )
                 finally:
                     sync_gate.release()
 

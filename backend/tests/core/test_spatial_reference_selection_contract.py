@@ -145,11 +145,41 @@ def test_candidate_selection_supports_explicit_abstain():
         candidates=candidates,
         proposal=CandidateSelectionProposal(
             status="abstain",
-            selected_candidate_id=None,
+            selected_candidate_id="",
             input_digest=digest,
         ),
     )
     assert decision.status == "abstain"
+
+
+def test_candidate_selection_preserves_explicit_ambiguous_status():
+    candidates = _descriptors()
+    digest = spatial_candidate_input_digest(
+        decision_id="decision:ambiguous",
+        query_text="设施",
+        candidates=candidates,
+    )
+    decision = validate_spatial_candidate_proposal(
+        decision_id="decision:ambiguous",
+        query_text="设施",
+        candidates=candidates,
+        proposal=CandidateSelectionProposal(
+            status="ambiguous",
+            selected_candidate_id="",
+            input_digest=digest,
+        ),
+    )
+    assert decision.status == "ambiguous"
+    assert decision.pending
+
+
+def test_stable_candidate_id_never_exposes_whitespace():
+    descriptor = spatial_candidate_descriptor(
+        {"candidate_id": "POINT(1 1)", "canonical_name": "匿名设施"},
+        kind="facility",
+    )
+    assert descriptor.candidate_id
+    assert not any(char.isspace() for char in descriptor.candidate_id)
 
 
 def test_duplicate_runtime_candidate_ids_are_ambiguous():

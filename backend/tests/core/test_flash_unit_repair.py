@@ -22,6 +22,7 @@ def _build_draft_set() -> PlanningClaimDraftSet:
                 suggested_category="site_area",
                 suggested_output_kind="parcel",
                 site_area_parameters=SiteAreaPlanningParametersDraft(
+                    action="new",
                     footprint_area=MeasureDraft(value=100, unit="hm"),
                 ),
             ),
@@ -30,6 +31,7 @@ def _build_draft_set() -> PlanningClaimDraftSet:
                 suggested_category="road",
                 suggested_output_kind="line",
                 road_parameters=RoadPlanningParametersDraft(
+                    action="new",
                     length=MeasureDraft(value=10, unit="ha"),
                 ),
             ),
@@ -38,6 +40,7 @@ def _build_draft_set() -> PlanningClaimDraftSet:
                 suggested_category="facility",
                 suggested_output_kind="point",
                 facility_parameters=FacilityPlanningParametersDraft(
+                    action="new",
                     service_radius=MeasureDraft(value=500, unit="待定"),
                 ),
             ),
@@ -46,6 +49,7 @@ def _build_draft_set() -> PlanningClaimDraftSet:
                 suggested_category="site_area",
                 suggested_output_kind="parcel",
                 site_area_parameters=SiteAreaPlanningParametersDraft(
+                    action="new",
                     footprint_area=MeasureDraft(value=80, unit="待定"),
                 ),
             ),
@@ -54,6 +58,7 @@ def _build_draft_set() -> PlanningClaimDraftSet:
                 suggested_category="site_area",
                 suggested_output_kind="parcel",
                 site_area_parameters=SiteAreaPlanningParametersDraft(
+                    action="new",
                     capacity=MeasureDraft(value=20, unit="待定"),
                 ),
             ),

@@ -90,6 +90,17 @@ def _entity_bsm(kg: Any, subject: Any) -> str:
 
 
 def _entity_centroid(kg: Any, subject: Any) -> Optional[tuple[float, float]]:
+    try:
+        from app.infrastructure.kg.ontology import GeoPredicates
+        from app.spatial.grounding.coordinate_identity import point_xy
+
+        for geometry in kg.g.objects(subject, GeoPredicates.hasCentroid):
+            wkt = kg.g.value(geometry, GeoPredicates.asWKT)
+            point = point_xy(str(wkt or ""))
+            if point is not None:
+                return point
+    except Exception:
+        pass
     lon = kg.g.value(subject, PLN.lon)
     lat = kg.g.value(subject, PLN.lat)
     try:
@@ -242,7 +253,6 @@ async def _llm_confirm(
         query_text=query_text,
         candidates=descriptors,
     )
-    set_digest = candidate_set_digest(descriptors)
     lines = "\n".join(
         f"candidate_id={descriptor.candidate_id} 类型={candidate['role']} "
         f"现名={candidate['current_name']!r} BSM={candidate['bsm'] or '无'} "
@@ -251,24 +261,22 @@ async def _llm_confirm(
     )
     prompt = (
         f"地名「{mention.name}」（类型 {mention.role}）提到位于「{mention.location or '未知'}」。"
-        "下列是本次输入动态生成的候选 KG 实体。只返回严格 JSON："
-        "status 为 selected/abstain/ambiguous；selected 时填写稳定 candidate_id；"
-        f"candidate_set_digest={set_digest}；input_digest={input_digest}；"
+        "下列是本次输入动态生成的候选 KG 实体。"
+        "status 只能为 selected/abstain/ambiguous；selected 时填写稳定 candidate_id；"
+        f"input_digest={input_digest}；"
         f"不要输出序号、候选名称或新 ID。\n{lines}"
     )
     try:
-        structured_factory = getattr(llm, "with_structured_output", None)
-        if not callable(structured_factory):
-            raise TypeError("name_backfill_llm_must_expose_typed_output")
-        structured = structured_factory(CandidateSelectionProposal)
+        from app.infrastructure.llm.structured import run_structured_output
 
         async def _invoke():
-            if asyncio.iscoroutinefunction(getattr(structured, "ainvoke", None)):
-                return await structured.ainvoke(prompt)
-            invoke = getattr(structured, "invoke", None)
-            if invoke is None:
-                raise TypeError("name_backfill_structured_selector_missing_invoke")
-            return await asyncio.to_thread(invoke, prompt)
+            return await run_structured_output(
+                CandidateSelectionProposal,
+                [{"role": "user", "content": prompt}],
+                llm=llm,
+                max_retries=1,
+                timeout=call_timeout,
+            )
 
         response = await run_ground_llm_call(budget, call_timeout, _invoke)
     except Exception as exc:  # noqa: BLE001
@@ -481,7 +489,7 @@ def backfill_kg_names_sync(
             for candidate in candidates
         ]
         input_digest = spatial_candidate_input_digest(
-            decision_id=f"kg-name-backfill:{mention.role}:{mention.name}",
+            decision_id=f"kg-name-backfill:{mention.role}:{mention.name}:{mention.location}",
             query_text=f"{mention.name}\n{mention.role}\n{mention.location}",
             candidates=descriptors,
         )

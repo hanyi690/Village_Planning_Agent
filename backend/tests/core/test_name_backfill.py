@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 
 from rdflib import Literal, RDF, URIRef
 
@@ -117,7 +118,7 @@ class _TypedChoiceLLM:
     def __init__(self):
         self.calls = 0
 
-    def with_structured_output(self, schema):
+    def with_structured_output(self, schema, **_kwargs):
         assert schema is CandidateSelectionProposal
         return _TypedChoiceModel(self)
 
@@ -149,3 +150,26 @@ def test_backfill_ambiguous_name_requires_typed_llm_choice():
     assert str(kg.g.value(second, PLN.name)) == "Y122乡道"
     first = URIRef("pln:road_1")
     assert str(kg.g.value(first, PLN.name)) == "道路_1"
+
+
+def test_backfill_does_not_adapt_legacy_cache_payload(tmp_path):
+    kg = _kg()
+    second = URIRef("pln:road_2")
+    kg.g.add((second, RDF.type, EntityTypes.Road))
+    kg.g.add((second, PLN.name, Literal("道路_2")))
+    kg.g.add((second, PLN.bsm, Literal("bsm-100")))
+    kg.g.add((second, PLN.lon, Literal(113.1)))
+    kg.g.add((second, PLN.lat, Literal(23.1)))
+    cache_path = tmp_path / "name-cache.json"
+    cache_path.write_text(json.dumps({"legacy-key": "pln:road_2"}), encoding="utf-8")
+
+    result = asyncio.run(backfill_kg_names(
+        kg,
+        _gazetteer(),
+        [NameMention(name="Y122乡道", role="road", location="园寨村")],
+        cache_path=cache_path,
+    ))
+
+    assert result.applied == 0
+    assert result.pending == ["Y122乡道"]
+    assert str(kg.g.value(second, PLN.name)) == "道路_2"

@@ -86,7 +86,7 @@ async def test_real_minimax_accepts_l1_constrained_facility_binding():
         },
     )
     fact = L1Fact(
-        fact_id="l1:real-source-semantic:shrine",
+        fact_id="l1:fact:real-source-semantic-shrine",
         statement="社前村有祠堂设施",
         fact_kind="document_observation",
         semantic_type="facility",
@@ -152,7 +152,7 @@ async def test_real_minimax_accepts_l1_constrained_facility_binding():
         candidate = packet.candidate_refs[0]
         assert candidate.identity.canonical_name == "祠堂"
         assert candidate.identity.source_feature_id == "feature:real-source-semantic:shrine"
-        assert "l1:real-source-semantic:shrine" in candidate.l1_fact_refs
+        assert "l1:fact:real-source-semantic-shrine" in candidate.l1_fact_refs
     finally:
         await close_cached_clients()
 
@@ -177,7 +177,7 @@ async def test_real_minimax_accepts_one_real_jintian_road_binding():
     source_feature_id = str((road._raw or {}).get("source_feature_id") or "").strip()
     assert source_feature_id
     fact = L1Fact(
-        fact_id="l1:real-source-semantic:jintian-road",
+        fact_id="l1:fact:real-source-semantic-jintian-road",
         statement="金田村有现状村道",
         fact_kind="document_observation",
         semantic_type="road",
@@ -219,7 +219,7 @@ async def test_real_minimax_accepts_one_real_jintian_road_binding():
         decision = snapshot.decisions[0]
         assert decision.status == "accepted"
         assert decision.semantic_type == "村道"
-        assert decision.candidate_ref == "l1:l1:real-source-semantic:jintian-road:entity"
+        assert decision.candidate_ref == "l1:l1:fact:real-source-semantic-jintian-road:entity"
         assert decision.supporting_fact_refs == [fact.fact_id]
         assert len(decision.proposal_digests) == 2
         assert context.evidence_graph is not None
@@ -247,7 +247,7 @@ async def test_real_minimax_accepts_one_real_jintian_axis_binding():
     source_feature_id = str((road._raw or {}).get("source_feature_id") or "").strip()
     assert source_feature_id
     fact = L1Fact(
-        fact_id="l1:real-source-semantic:jintian-axis",
+        fact_id="l1:fact:real-source-semantic-jintian-axis",
         statement="金田村有现状发展轴线",
         fact_kind="document_observation",
         semantic_type="axis",
@@ -293,7 +293,7 @@ async def test_real_minimax_accepts_one_real_jintian_axis_binding():
         decision = snapshot.decisions[0]
         assert decision.status == "accepted"
         assert decision.semantic_type == "发展轴线"
-        assert decision.candidate_ref == "l1:l1:real-source-semantic:jintian-axis:entity"
+        assert decision.candidate_ref == "l1:l1:fact:real-source-semantic-jintian-axis:entity"
         assert decision.supporting_fact_refs == [fact.fact_id]
         assert len(decision.proposal_digests) == 2
         assert context.evidence_graph is not None
