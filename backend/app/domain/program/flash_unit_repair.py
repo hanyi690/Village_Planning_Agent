@@ -7,7 +7,6 @@ pair so the same raw unit can resolve differently across quantity kinds.
 from __future__ import annotations
 
 import json
-import re
 import unicodedata
 from dataclasses import dataclass
 from typing import Any, Literal
@@ -426,33 +425,12 @@ def _parse_resolution_batch_response(content: Any) -> UnitResolutionBatch:
         text = strip_model_reasoning(text)
     except Exception:  # noqa: BLE001
         pass
-    payload = _extract_json_payload(text)
-    if isinstance(payload, list):
-        payload = {"resolutions": payload}
-    if not isinstance(payload, dict):
+    if not isinstance(text, str) or not text.strip():
         return UnitResolutionBatch()
     try:
-        return UnitResolutionBatch.model_validate(payload)
+        return UnitResolutionBatch.model_validate_json(text)
     except ValidationError:
         return UnitResolutionBatch()
-
-
-def _extract_json_payload(text: str) -> Any:
-    stripped = text.strip()
-    for candidate in (stripped,):
-        try:
-            return json.loads(candidate)
-        except json.JSONDecodeError:
-            pass
-    for pattern in (r"\{[\s\S]*\}", r"\[[\s\S]*\]"):
-        match = re.search(pattern, stripped)
-        if match is None:
-            continue
-        try:
-            return json.loads(match.group(0))
-        except json.JSONDecodeError:
-            continue
-    return None
 
 
 async def flash_repair_units(draft_set: Any, session_id: str) -> Any:
