@@ -19,21 +19,24 @@ or ``app.api``.
 
 from __future__ import annotations
 
+import hashlib
 import os
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError
 from typing import Any, Dict, List, Optional
 
-from pydantic import BaseModel, Field
-
+from app.contracts.spatial.spatial_reference_contracts import (
+    CandidateSelectionProposal,
+    candidate_set_digest,
+    spatial_candidate_descriptor,
+    spatial_candidate_input_digest,
+    stable_spatial_candidate_id,
+    validate_spatial_candidate_proposal,
+)
+from app.domain.validation.closed_set import validate_exact_batch_membership
 from app.infrastructure.logging import get_logger
 
 logger = get_logger(__name__)
 
-
-class _CandidateChoice(BaseModel):
-    """Closed-set grounding choice; the provider never returns free text."""
-
-    candidate_index: int = Field(ge=0)
 
 # ── Location-token helpers (moved from parse/agent.py to keep GROUND
 #    inside grounding; parse/agent.py now delegates to this module). ──
@@ -1456,22 +1459,30 @@ class SpatialResolver:
         refs = list(getattr(packet, "candidate_refs", None) or [])
         if not refs:
             return None, "absent", {}
-        unique_refs: list[Any] = []
-        seen: set[str] = set()
-        for ref in refs:
-            identity = getattr(ref, "identity", None)
-            key = str(
-                getattr(identity, "bundle_feature_bsm", "")
-                or getattr(identity, "source_feature_id", "")
-                or getattr(ref, "geometry_ref", "")
-                or "|".join(getattr(ref, "entity_refs", None) or [])
-            ).strip()
-            if not key or key in seen:
-                continue
-            seen.add(key)
-            unique_refs.append(ref)
+        unique_refs: list[Any] = refs
         if not unique_refs:
             return None, "absent", {}
+
+        descriptors = [
+            spatial_candidate_descriptor(ref, kind="spatial_candidate")
+            for ref in unique_refs
+        ]
+        candidate_ids = [descriptor.candidate_id for descriptor in descriptors]
+        membership = validate_exact_batch_membership(candidate_ids, candidate_ids)
+        mention_text = str(
+            getattr(packet, "request", "") or self._spec_mention(spec)
+        )
+        decision_id = f"spatial-resolver:候选实体:{mention_text}"
+        query_text = (
+            f"{mention_text}\n"
+            f"{self._evidence_packet_selection_hints(spec, packet)}"
+        )
+        input_digest = spatial_candidate_input_digest(
+            decision_id=decision_id,
+            query_text=query_text,
+            candidates=descriptors,
+        )
+        set_digest = candidate_set_digest(descriptors)
 
         packet_status = str(
             getattr(packet, "ambiguity_status", "unresolved") or "unresolved"
@@ -1497,7 +1508,18 @@ class SpatialResolver:
             ),
             "packet_ambiguity_status": packet_status,
             "packet_candidate_feature_bsms": candidate_feature_bsms,
+            "candidate_ids": candidate_ids,
+            "candidate_set_digest": candidate_set_digest(descriptors),
+            "input_digest": input_digest,
+            "exact_membership": membership.model_dump(mode="json"),
         }
+        if not membership.accepted:
+            meta.update({
+                "packet_selection_status": "selection_unresolved",
+                "packet_selection_reason": "candidate_membership_not_exact",
+                "selection_contract_status": "ambiguous",
+            })
+            return CandidateSet(), "selection_unresolved", meta
 
         candidate_end = int(getattr(packet, "candidate_offset", 0) or 0) + len(unique_refs)
         packet_incomplete = bool(
@@ -1512,6 +1534,7 @@ class SpatialResolver:
             meta.update({
                 "packet_selection_status": "selection_unresolved",
                 "packet_selection_reason": "candidate_pagination_incomplete",
+                "selection_contract_status": "ambiguous",
                 "packet_next_candidate_offset": getattr(
                     packet, "next_candidate_offset", None
                 ),
@@ -1521,6 +1544,7 @@ class SpatialResolver:
         if self._spec_declares_required_source_collection(spec):
             selected_refs = unique_refs
             selection = "explicit_all_members"
+            meta["selection_contract_status"] = "selected"
         elif len(unique_refs) == 1:
             # Packet ambiguity also reflects non-spatial evidence gaps and
             # can remain ``multiple`` even after EvidenceGraph has narrowed
@@ -1530,6 +1554,7 @@ class SpatialResolver:
             # sole Bundle candidate deterministically.
             selected_refs = unique_refs
             selection = "single_packet_candidate"
+            meta["selection_contract_status"] = "selected"
         else:
             picked = self._llm_pick_candidate(
                 str(getattr(packet, "request", "") or self._spec_mention(spec)),
@@ -1549,6 +1574,7 @@ class SpatialResolver:
                 )
                 meta.update({
                     "packet_selection_status": "selection_unresolved",
+                    "selection_contract_status": "ambiguous",
                     "packet_selection_reason": (
                         "ground_llm_disabled"
                         if llm_disabled
@@ -1558,6 +1584,7 @@ class SpatialResolver:
                 return CandidateSet(), "selection_unresolved", meta
             selected_refs = [picked]
             selection = "closed_set_llm_selected"
+            meta["selection_contract_status"] = "selected"
 
         selected_packet = packet.model_copy(
             update={
@@ -1591,6 +1618,10 @@ class SpatialResolver:
         meta.update({
             "packet_selection_status": selection,
             "selected_feature_bsms": selected_feature_bsms,
+            "selected_candidate_ids": [
+                stable_spatial_candidate_id(ref, namespace="spatial_candidate")
+                for ref in selected_refs
+            ],
         })
         return candidates, selection, meta
 
@@ -1797,8 +1828,8 @@ class SpatialResolver:
 
     def _evidence_anchor_cluster_line(
         self,
-        index: int,
         cluster: List[Any],
+        cluster_id: str,
     ) -> str:
         names: list[str] = []
         roles: list[str] = []
@@ -1845,7 +1876,7 @@ class SpatialResolver:
                 f"{sum(value[1] for value in coordinates) / len(coordinates):.6f})"
             )
         return (
-            f"{index}. names={'、'.join(dict.fromkeys(value for value in names if value)) or 'unknown'}; "
+            f"candidate_id={cluster_id} names={'、'.join(dict.fromkeys(value for value in names if value)) or 'unknown'}; "
             f"roles={','.join(dict.fromkeys(value for value in roles if value)) or 'unknown'}; "
             f"aliases={'、'.join(list(dict.fromkeys(str(value) for value in aliases if str(value)))[:8]) or 'none'}; "
             f"source_layers={','.join(dict.fromkeys(value for value in source_layers if value)) or 'unknown'}; "
@@ -1858,6 +1889,15 @@ class SpatialResolver:
             f"retrieval:{max(retrieval_scores, default=0.0):.3f}; "
             f"anchor_count={len(cluster)}; centroid={centroid}"
         )
+
+    @staticmethod
+    def _anchor_cluster_id(cluster: List[Any]) -> str:
+        member_ids = sorted(
+            stable_spatial_candidate_id(ref, namespace="anchor")
+            for ref in cluster
+        )
+        encoded = "|".join(member_ids).encode("utf-8")
+        return f"anchor-cluster:sha256:{hashlib.sha256(encoded).hexdigest()}"
 
     def _village_scope_from_evidence_packet(
         self,
@@ -1899,16 +1939,29 @@ class SpatialResolver:
             semantic_anchor_refs.append(ref)
         anchor_refs = semantic_anchor_refs or refs[:8]
         anchor_clusters = self._cluster_evidence_anchor_refs(anchor_refs)
+        cluster_ids = [self._anchor_cluster_id(cluster) for cluster in anchor_clusters]
         cluster_lines = [
-            self._evidence_anchor_cluster_line(index, cluster)
-            for index, cluster in enumerate(anchor_clusters, 1)
+            self._evidence_anchor_cluster_line(cluster, cluster_id)
+            for cluster, cluster_id in zip(anchor_clusters, cluster_ids)
         ]
-        selected_cluster_index = 0
+        selected_cluster_id = next(iter(cluster_ids))
         cluster_selection = "single_spatial_cluster"
         if len(anchor_clusters) > 1:
-            selected = self._llm_pick_index(
-                str(getattr(packet, "request", "") or label),
-                self._evidence_packet_selection_hints(spec, packet),
+            cluster_mention = str(getattr(packet, "request", "") or label)
+            cluster_hints = self._evidence_packet_selection_hints(spec, packet)
+            cluster_decision_id = f"spatial-resolver:空间证据簇:{cluster_mention}"
+            cluster_query_text = f"{cluster_mention}\n{cluster_hints}"
+            cluster_descriptors = [
+                spatial_candidate_descriptor(
+                    {"candidate_id": cluster_id, "canonical_name": line},
+                    kind="spatial_anchor_cluster",
+                )
+                for cluster_id, line in zip(cluster_ids, cluster_lines)
+            ]
+            selected = self._llm_select_candidate_id(
+                cluster_mention,
+                cluster_hints,
+                cluster_descriptors,
                 cluster_lines,
                 candidate_kind="空间证据簇",
             )
@@ -1929,6 +1982,16 @@ class SpatialResolver:
                         "scope_label": label,
                         "anchor_cluster_count": len(anchor_clusters),
                         "anchor_cluster_candidates": cluster_lines,
+                        "candidate_set_digest": candidate_set_digest(cluster_descriptors),
+                        "input_digest": (
+                            spatial_candidate_input_digest(
+                                decision_id=cluster_decision_id,
+                                query_text=cluster_query_text,
+                                candidates=cluster_descriptors,
+                            )
+                            if len(anchor_clusters) > 1
+                            else ""
+                        ),
                         "cluster_selection_reason": (
                             "ground_llm_disabled"
                             if self._ground_llm_disabled()
@@ -1937,9 +2000,13 @@ class SpatialResolver:
                         "not_exact_village_boundary": True,
                     },
                 )
-            selected_cluster_index = selected
+            selected_cluster_id = selected
             cluster_selection = "closed_set_llm_selected_cluster"
-        refs = anchor_clusters[selected_cluster_index]
+        refs = next(
+            cluster
+            for cluster_id, cluster in zip(cluster_ids, anchor_clusters)
+            if cluster_id == selected_cluster_id
+        )
         parcel_bsms: list[str] = []
         feature_bsms: list[str] = []
         source_feature_ids: list[str] = []
@@ -2003,7 +2070,7 @@ class SpatialResolver:
                 "anchor_feature_bsms": list(dict.fromkeys(feature_bsms)),
                 "anchor_roles": list(dict.fromkeys(anchor_roles)),
                 "anchor_cluster_count": len(anchor_clusters),
-                "selected_anchor_cluster_index": selected_cluster_index + 1,
+                "selected_anchor_cluster_id": selected_cluster_id,
                 "anchor_cluster_selection": cluster_selection,
                 "scope_semantics": "inferred_from_spatial_evidence",
                 "not_exact_village_boundary": True,
@@ -2034,7 +2101,7 @@ class SpatialResolver:
                 "relation_refs": list(dict.fromkeys(str(value) for value in relation_refs if str(value))),
                 "l1_fact_refs": list(dict.fromkeys(str(value) for value in l1_fact_refs if str(value))),
                 "anchor_cluster_count": len(anchor_clusters),
-                "selected_anchor_cluster_index": selected_cluster_index + 1,
+                "selected_anchor_cluster_id": selected_cluster_id,
                 "anchor_cluster_selection": cluster_selection,
                 "scope_semantics": "inferred_from_spatial_evidence",
                 "not_exact_village_boundary": True,
@@ -2488,20 +2555,30 @@ class SpatialResolver:
         hints: str,
         ordered: List[Any],
     ) -> Optional[Any]:
-        """有界判别：LLM 在候选内选编号；失败/超时返回 None（保持 ambiguous）。"""
-        lines = [
-            self._candidate_line(index, candidate)
-            for index, candidate in enumerate(ordered, 1)
+        """有界判别：LLM 在候选内按稳定 ID 选择。"""
+        descriptors = [
+            spatial_candidate_descriptor(candidate, kind="spatial_candidate")
+            for candidate in ordered
         ]
-        index = self._llm_pick_index(
+        lines = [
+            self._candidate_line(candidate, descriptor.candidate_id)
+            for candidate, descriptor in zip(ordered, descriptors)
+        ]
+        selected_id = self._llm_select_candidate_id(
             mention,
             hints,
+            descriptors,
             lines,
             candidate_kind="候选实体",
         )
-        if index is None:
-            return None
-        return ordered[index]
+        return next(
+            (
+                candidate
+                for candidate, descriptor in zip(ordered, descriptors)
+                if descriptor.candidate_id == selected_id
+            ),
+            None,
+        )
 
     @staticmethod
     def _ground_llm_disabled() -> bool:
@@ -2518,18 +2595,38 @@ class SpatialResolver:
         )
         return not enabled or disabled
 
-    def _llm_pick_index(
+    def _llm_select_candidate_id(
         self,
         mention: str,
         hints: str,
+        candidates: List[Any],
         candidate_lines: List[str],
         *,
         candidate_kind: str,
-    ) -> Optional[int]:
-        """Select one zero-based index from a closed, Bundle-backed set."""
+    ) -> Optional[str]:
+        """Select one stable ID from a closed, runtime-owned candidate set."""
 
-        if not candidate_lines or self._ground_llm_disabled():
+        if (
+            not candidates
+            or not candidate_lines
+            or len(candidates) != len(candidate_lines)
+            or self._ground_llm_disabled()
+        ):
             return None
+        descriptors = [
+            item
+            if hasattr(item, "candidate_id")
+            else spatial_candidate_descriptor(item, kind="spatial_candidate")
+            for item in candidates
+        ]
+        decision_id = f"spatial-resolver:{candidate_kind}:{mention}"
+        query_text = f"{mention}\n{hints}"
+        input_digest = spatial_candidate_input_digest(
+            decision_id=decision_id,
+            query_text=query_text,
+            candidates=descriptors,
+        )
+        set_digest = candidate_set_digest(descriptors)
         from app.spatial.grounding.call_budget import (
             ground_llm_sync_semaphore,
             reserve_ground_llm_call,
@@ -2551,7 +2648,9 @@ class SpatialResolver:
             prompt = (
                 f"空间引用「{mention}」{hint_clause}。"
                 f"以下是从 EvidenceGraph 召回并由 Bundle/KG 拓扑组织的{candidate_kind}，"
-                "请选择与引用最匹配的一个，只输出编号；都不合适输出 0：\n" + lines
+                "请只返回 selected/abstain/ambiguous；selected 时填写候选稳定 candidate_id，"
+                f"本次 candidate_set_digest={set_digest}; input_digest={input_digest};"
+                "不要输出序号或新 ID：\n" + lines
             )
 
             structured_factory = getattr(llm, "with_structured_output", None)
@@ -2560,7 +2659,7 @@ class SpatialResolver:
                     "grounding LLM must expose typed with_structured_output"
                 )
             structured = structured_factory(
-                _CandidateChoice,
+                CandidateSelectionProposal,
                 method="function_calling",
             )
 
@@ -2589,14 +2688,20 @@ class SpatialResolver:
                 )
             finally:
                 executor.shutdown(wait=False, cancel_futures=True)
-            choice = response
-            if choice is None:
-                return None
-            if not isinstance(choice, _CandidateChoice):
-                choice = _CandidateChoice.model_validate(choice)
-            index = choice.candidate_index - 1
-            if 0 <= index < len(candidate_lines):
-                return index
+            decision = validate_spatial_candidate_proposal(
+                decision_id=decision_id,
+                query_text=query_text,
+                candidates=descriptors,
+                proposal=response,
+            )
+            if decision.status == "selected":
+                return decision.selected_candidate_id
+            logger.info(
+                "[SpatialResolver] candidate selection status=%s reason=%s mention=%s",
+                decision.status,
+                decision.reason,
+                mention,
+            )
         except FutureTimeoutError:
             logger.warning(
                 "[SpatialResolver] llm pick timed out after %.1fs: %s",
@@ -2607,7 +2712,7 @@ class SpatialResolver:
             logger.warning("[SpatialResolver] llm pick failed: %s", exc)
         return None
 
-    def _candidate_line(self, index: int, c: Any) -> str:
+    def _candidate_line(self, c: Any, candidate_id: str | None = None) -> str:
         """Render identity, address aliases, provenance and topology clues."""
         identity = getattr(c, "identity", None)
         rels: List[str] = []
@@ -2711,8 +2816,11 @@ class SpatialResolver:
             or getattr(c, "confidence", 0.0)
             or 0.0
         )
+        candidate_id = candidate_id or stable_spatial_candidate_id(
+            c, namespace="spatial"
+        )
         return (
-            f"{index}. {canonical_name or '未命名实体'} 类型={entity_type or 'unknown'} "
+            f"candidate_id={candidate_id} {canonical_name or '未命名实体'} 类型={entity_type or 'unknown'} "
             f"别名={'、'.join(aliases) or '无'} 角色={role} "
             f"来源层={source_layer} feature_BSM={feature_bsm or '无'} "
             f"来源BSM={','.join(source_bsms) or '无'} "

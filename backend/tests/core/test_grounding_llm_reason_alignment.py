@@ -12,6 +12,7 @@ from types import SimpleNamespace
 import pytest
 
 from app.spatial.grounding.resolver import SpatialResolver
+from app.contracts.spatial.spatial_reference_contracts import CandidateSelectionProposal
 
 
 def _parcel(bsm):
@@ -76,10 +77,18 @@ def _spec(mention):
     )
 
 
-def _typed_llm(candidate_index):
+def _typed_llm(selected_candidate_id):
     def with_structured_output(response_model, **_kwargs):
+        def invoke(prompt):
+            digest = prompt.split("input_digest=", 1)[1].split(";", 1)[0]
+            return response_model(
+                status="selected",
+                selected_candidate_id=selected_candidate_id,
+                input_digest=digest,
+            )
+
         return SimpleNamespace(
-            invoke=lambda _prompt: response_model(candidate_index=candidate_index)
+            invoke=invoke
         )
 
     return SimpleNamespace(with_structured_output=with_structured_output)
@@ -111,7 +120,7 @@ def test_llm_pick_success_binds_picked_bsm(monkeypatch):
     monkeypatch.setattr(
         llm_factory,
         "create_flash_llm",
-        lambda *a, **k: _typed_llm(2),
+        lambda *a, **k: _typed_llm("http://e/2"),
     )
     index = _FakeIndex(
         SimpleNamespace(
@@ -180,7 +189,7 @@ def test_ambiguous_with_bsms_enters_llm_discrimination(monkeypatch):
     monkeypatch.setattr(
         llm_factory,
         "create_flash_llm",
-        lambda *a, **k: _typed_llm(1),
+        lambda *a, **k: _typed_llm("http://e/1"),
     )
     index = _FakeIndex(
         SimpleNamespace(
@@ -201,7 +210,6 @@ def test_ambiguous_with_bsms_enters_llm_discrimination(monkeypatch):
 def test_candidate_line_carries_geometry_and_topology():
     resolver = SpatialResolver(_context(None))
     line = resolver._candidate_line(
-        1,
         _candidate(
             "祠堂",
             "bsm-1",
@@ -231,7 +239,13 @@ async def test_async_candidate_selection_prompt_carries_full_evidence(monkeypatc
     class _Structured:
         def invoke(self, prompt):
             prompts.append(prompt)
-            return anchors._CandidateChoice(candidate_index=1)
+            candidate_id = prompt.split("candidate_id=", 1)[1].split()[0]
+            digest = prompt.split("input_digest=", 1)[1].split(";", 1)[0]
+            return CandidateSelectionProposal(
+                status="selected",
+                selected_candidate_id=candidate_id,
+                input_digest=digest,
+            )
 
     class _LLM:
         def with_structured_output(self, _model):
@@ -267,6 +281,8 @@ async def test_async_candidate_selection_prompt_carries_full_evidence(monkeypatc
         "bundle:geological_hazard_point",
     ):
         assert value in prompt
+    assert "candidate_index" not in prompt
+    assert "candidate_set_digest=" in prompt
 
 
 def test_sync_resolver_queue_wait_is_bounded(monkeypatch):

@@ -26,6 +26,15 @@ from rdflib import RDF, Literal, URIRef
 
 from app.infrastructure.kg.ontology import PLN, EntityTypes
 from app.infrastructure.logging import get_logger
+from app.contracts.spatial.spatial_reference_contracts import (
+    CandidateSelectionProposal,
+    SpatialCandidateDecision,
+    candidate_set_digest,
+    spatial_candidate_descriptor,
+    spatial_candidate_input_digest,
+    stable_spatial_candidate_id,
+    validate_spatial_candidate_proposal,
+)
 
 logger = get_logger(__name__)
 
@@ -42,13 +51,8 @@ class NameMention(BaseModel):
 class BackfillResult(BaseModel):
     applied: int = 0
     unresolved: list[str] = Field(default_factory=list)
+    pending: list[str] = Field(default_factory=list)
     decisions: list[dict] = Field(default_factory=list)
-
-
-class CandidateChoice(BaseModel):
-    """Closed-set LLM choice; zero means no supplied candidate is valid."""
-
-    candidate_index: int = Field(default=0, ge=0)
 
 
 _ROLE_TO_ENTITY_TYPE = {
@@ -106,6 +110,9 @@ def nameless_entities(kg: Any, role: str) -> List[Dict[str, Any]]:
             continue
         out.append({
             "entity_uri": str(subject),
+            "candidate_id": stable_spatial_candidate_id(
+                {"entity_uri": str(subject)}, namespace="kg"
+            ),
             "role": role,
             "current_name": name,
             "bsm": _entity_bsm(kg, subject),
@@ -200,10 +207,11 @@ async def _llm_confirm(
     candidates: List[Dict[str, Any]],
     *,
     budget: Optional[Dict[str, Any]] = None,
-) -> Optional[int]:
+) -> Optional[SpatialCandidateDecision]:
     """Ask the flash model to pick a candidate for an ambiguous mention.
 
-    Returns the chosen candidate index or None (model unavailable / no pick).
+    Returns the validated selection decision or None when the provider is
+    unavailable.
     """
     if llm is None:
         logger.info(
@@ -223,21 +231,36 @@ async def _llm_confirm(
             mention.name,
         )
         return None
+    descriptors = [
+        spatial_candidate_descriptor(candidate, kind="kg_name_backfill")
+        for candidate in candidates
+    ]
+    decision_id = f"kg-name-backfill:{mention.role}:{mention.name}:{mention.location}"
+    query_text = f"{mention.name}\n{mention.role}\n{mention.location}"
+    input_digest = spatial_candidate_input_digest(
+        decision_id=decision_id,
+        query_text=query_text,
+        candidates=descriptors,
+    )
+    set_digest = candidate_set_digest(descriptors)
     lines = "\n".join(
-        f"{i}. 类型={c['role']} 现名={c['current_name']!r} "
-        f"BSM={c['bsm'] or '无'} 质心={c['centroid'] or '无'}"
-        for i, c in enumerate(candidates, 1)
+        f"candidate_id={descriptor.candidate_id} 类型={candidate['role']} "
+        f"现名={candidate['current_name']!r} BSM={candidate['bsm'] or '无'} "
+        f"质心={candidate['centroid'] or '无'}"
+        for candidate, descriptor in zip(candidates, descriptors)
     )
     prompt = (
         f"地名「{mention.name}」（类型 {mention.role}）提到位于「{mention.location or '未知'}」。"
-        f"下列是该区域候选 KG 实体，请返回 CandidateChoice 结构；candidate_index 只能是候选编号，"
-        f"无匹配返回 0：\n{lines}"
+        "下列是本次输入动态生成的候选 KG 实体。只返回严格 JSON："
+        "status 为 selected/abstain/ambiguous；selected 时填写稳定 candidate_id；"
+        f"candidate_set_digest={set_digest}；input_digest={input_digest}；"
+        f"不要输出序号、候选名称或新 ID。\n{lines}"
     )
     try:
         structured_factory = getattr(llm, "with_structured_output", None)
         if not callable(structured_factory):
             raise TypeError("name_backfill_llm_must_expose_typed_output")
-        structured = structured_factory(CandidateChoice)
+        structured = structured_factory(CandidateSelectionProposal)
 
         async def _invoke():
             if asyncio.iscoroutinefunction(getattr(structured, "ainvoke", None)):
@@ -252,16 +275,16 @@ async def _llm_confirm(
         logger.warning("[name-backfill] LLM confirm failed: %s", exc)
         return None
     try:
-        choice = (
-            response
-            if isinstance(response, CandidateChoice)
-            else CandidateChoice.model_validate(response)
+        decision = validate_spatial_candidate_proposal(
+            decision_id=decision_id,
+            query_text=query_text,
+            candidates=descriptors,
+            proposal=response,
         )
     except Exception as exc:  # noqa: BLE001
         logger.warning("[name-backfill] typed candidate choice rejected: %s", exc)
         return None
-    index = choice.candidate_index - 1
-    return index if 0 <= index < len(candidates) else None
+    return decision
 
 
 async def backfill_kg_names(
@@ -287,7 +310,16 @@ async def backfill_kg_names(
             logger.warning("[name-backfill] cache load failed: %s", exc)
 
     result = BackfillResult()
-    pending: List[tuple[int, NameMention, List[Dict[str, Any]], str]] = []
+    pending: List[
+        tuple[
+            NameMention,
+            List[Dict[str, Any]],
+            str,
+            str,
+            str,
+            str,
+        ]
+    ] = []
     for mention in mentions:
         key = hashlib.sha256(
             json.dumps(
@@ -301,54 +333,108 @@ async def backfill_kg_names(
             ).encode("utf-8")
         ).hexdigest()
         candidates = build_candidates(kg, gazetteer, mention)
+        descriptors = [
+            spatial_candidate_descriptor(candidate, kind="kg_name_backfill")
+            for candidate in candidates
+        ]
+        decision_id = f"kg-name-backfill:{mention.role}:{mention.name}:{mention.location}"
+        query_text = f"{mention.name}\n{mention.role}\n{mention.location}"
+        input_digest = spatial_candidate_input_digest(
+            decision_id=decision_id,
+            query_text=query_text,
+            candidates=descriptors,
+        )
+        set_digest = candidate_set_digest(descriptors)
         chosen: Optional[Dict[str, Any]] = None
         if len(candidates) == 1:
-            chosen = candidates[0]
+            chosen = next(iter(candidates))
         elif len(candidates) > 1:
-            if key in cache and cache[key]:
+            cache_entry = cache.get(key)
+            if (
+                isinstance(cache_entry, dict)
+                and cache_entry.get("candidate_set_digest") == set_digest
+                and cache_entry.get("input_digest") == input_digest
+            ):
                 chosen = next(
-                    (c for c in candidates if c["entity_uri"] == cache[key]),
+                    (
+                        c
+                        for c in candidates
+                        if c["candidate_id"] == cache_entry.get("candidate_id")
+                    ),
                     None,
                 )
             if chosen is None:
-                pending.append((len(pending), mention, candidates, key))
+                pending.append(
+                    (mention, candidates, key, input_digest, set_digest, decision_id)
+                )
         if chosen is None:
             if len(candidates) <= 1:
                 result.unresolved.append(mention.name)
                 continue
+            result.pending.append(mention.name)
             continue
         _write_name(kg, chosen["entity_uri"], mention.name)
-        cache[key] = chosen["entity_uri"]
+        cache[key] = {
+            "candidate_id": chosen["candidate_id"],
+            "candidate_set_digest": set_digest,
+            "input_digest": input_digest,
+        }
         result.applied += 1
         result.decisions.append({
             "name": mention.name,
             "role": mention.role,
             "entity_uri": chosen["entity_uri"],
+            "candidate_id": chosen["candidate_id"],
             "source_dimension": mention.source_dimension,
             "evidence": chosen.get("evidence", []),
+            "candidate_set_digest": set_digest,
+            "input_digest": input_digest,
         })
 
     if pending:
         decisions = await asyncio.gather(*(
             _llm_confirm(llm, mention, candidates, budget=budget)
-            for _, mention, candidates, _ in pending
+            for mention, candidates, _, _, _, _ in pending
         ))
         # Commit in mention order.  Calls may run concurrently, but KG writes
         # and cache updates stay deterministic and avoid shared-graph races.
-        for (_, mention, candidates, key), index in zip(pending, decisions):
-            chosen = candidates[index] if index is not None else None
+        for (
+            (mention, candidates, key, input_digest, set_digest, _decision_id),
+            decision,
+        ) in zip(pending, decisions):
+            selected_id = (
+                decision.selected_candidate_id
+                if decision is not None and decision.status == "selected"
+                else None
+            )
+            chosen = next(
+                (
+                    candidate
+                    for candidate in candidates
+                    if candidate["candidate_id"] == selected_id
+                ),
+                None,
+            )
             if chosen is None:
-                result.unresolved.append(mention.name)
+                if mention.name not in result.pending:
+                    result.pending.append(mention.name)
                 continue
             _write_name(kg, chosen["entity_uri"], mention.name)
-            cache[key] = chosen["entity_uri"]
+            cache[key] = {
+                "candidate_id": chosen["candidate_id"],
+                "candidate_set_digest": set_digest,
+                "input_digest": input_digest,
+            }
             result.applied += 1
             result.decisions.append({
                 "name": mention.name,
                 "role": mention.role,
                 "entity_uri": chosen["entity_uri"],
+                "candidate_id": chosen["candidate_id"],
                 "source_dimension": mention.source_dimension,
                 "evidence": chosen.get("evidence", []),
+                "candidate_set_digest": set_digest,
+                "input_digest": input_digest,
             })
 
     if cache_path is not None:
@@ -361,9 +447,10 @@ async def backfill_kg_names(
             logger.warning("[name-backfill] cache flush failed: %s", exc)
 
     logger.info(
-        "[name-backfill] applied=%d unresolved=%d",
+        "[name-backfill] applied=%d unresolved=%d pending=%d",
         result.applied,
         len(result.unresolved),
+        len(result.pending),
     )
     return result
 
@@ -383,30 +470,45 @@ def backfill_kg_names_sync(
     for mention in mentions:
         candidates = build_candidates(kg, gazetteer, mention)
         if len(candidates) != 1:
-            result.unresolved.append(mention.name)
+            if len(candidates) > 1:
+                result.pending.append(mention.name)
+            else:
+                result.unresolved.append(mention.name)
             continue
-        chosen = candidates[0]
+        chosen = next(iter(candidates))
+        descriptors = [
+            spatial_candidate_descriptor(candidate, kind="kg_name_backfill")
+            for candidate in candidates
+        ]
+        input_digest = spatial_candidate_input_digest(
+            decision_id=f"kg-name-backfill:{mention.role}:{mention.name}",
+            query_text=f"{mention.name}\n{mention.role}\n{mention.location}",
+            candidates=descriptors,
+        )
         _write_name(kg, chosen["entity_uri"], mention.name)
         result.applied += 1
         result.decisions.append({
             "name": mention.name,
             "role": mention.role,
             "entity_uri": chosen["entity_uri"],
+            "candidate_id": chosen["candidate_id"],
             "source_dimension": mention.source_dimension,
             "evidence": chosen.get("evidence", []),
+            "candidate_set_digest": candidate_set_digest(descriptors),
+            "input_digest": input_digest,
         })
-    if result.applied or result.unresolved:
+    if result.applied or result.unresolved or result.pending:
         logger.info(
-            "[name-backfill] sync applied=%d unresolved=%d",
+            "[name-backfill] sync applied=%d unresolved=%d pending=%d",
             result.applied,
             len(result.unresolved),
+            len(result.pending),
         )
     return result
 
 
 __all__ = [
     "BackfillResult",
-    "CandidateChoice",
     "NameMention",
     "backfill_kg_names",
     "backfill_kg_names_sync",

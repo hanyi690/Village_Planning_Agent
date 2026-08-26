@@ -16,18 +16,18 @@ import asyncio
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from pydantic import BaseModel, Field
-
+from app.contracts.spatial.spatial_reference_contracts import (
+    CandidateSelectionProposal,
+    candidate_set_digest,
+    spatial_candidate_descriptor,
+    spatial_candidate_input_digest,
+    stable_spatial_candidate_id,
+    validate_spatial_candidate_proposal,
+)
 from app.contracts.spatial.grounding_contracts import GroundedAnchor
 from app.infrastructure.logging import get_logger
 
 logger = get_logger(__name__)
-
-
-class _CandidateChoice(BaseModel):
-    """Closed-set LLM decision; geometry remains owned by the candidate list."""
-
-    candidate_index: int = Field(default=0, ge=0)
 
 
 def _new_ground_llm_budget(
@@ -856,7 +856,7 @@ async def _llm_reason_candidate(
     *,
     budget: Optional[Dict[str, Any]] = None,
 ) -> Optional[Any]:
-    """Use typed closed-set selection; failure remains unresolved."""
+    """Use one strict stable-ID selector; failure remains unresolved."""
     if not candidates:
         return None
     if llm is None:
@@ -868,15 +868,27 @@ async def _llm_reason_candidate(
             mention,
         )
         return None
+    descriptors = [
+        spatial_candidate_descriptor(candidate, kind=role or "candidate")
+        for candidate in candidates
+    ]
+    decision_id = f"ground-anchor:{role}:{mention}"
+    query_text = f"{mention}\n{role}\n{hints}"
+    input_digest = spatial_candidate_input_digest(
+        decision_id=decision_id,
+        query_text=query_text,
+        candidates=descriptors,
+    )
+    set_digest = candidate_set_digest(descriptors)
     lines = "\n".join(
-        _candidate_prompt_line(i, candidate)
-        for i, candidate in enumerate(candidates, 1)
+        _candidate_prompt_line(candidate, descriptor.candidate_id)
+        for candidate, descriptor in zip(candidates, descriptors)
     )
     prompt = (
         f"地名「{mention}」（类型 {role}）位于「{hints or '未知'}」。以下是从 KG/EvidenceGraph 召回"
-        f"的候选实体，请选择最匹配的一个。只返回 JSON 对象 "
-        f"{{\"candidate_index\": N}}；N 只能是 1..{len(candidates)} 中的候选序号，"
-        f"所有候选都不可靠时返回 0。不要返回候选名称、BSM、坐标、几何或其他字段。\n{lines}"
+        "的候选实体。只允许返回 selected/abstain/ambiguous 之一；selected 时填写候选的稳定 candidate_id，"
+        f"本次 candidate_set_digest={set_digest}; input_digest={input_digest};"
+        f"不要返回候选名称、BSM、坐标、几何或其他字段。\n{lines}"
     )
     try:
         import asyncio
@@ -885,7 +897,7 @@ async def _llm_reason_candidate(
         if getattr(llm, "model_name", None):
             structured_kwargs["method"] = "function_calling"
         structured = llm.with_structured_output(
-            _CandidateChoice,
+            CandidateSelectionProposal,
             **structured_kwargs,
         )
 
@@ -903,23 +915,32 @@ async def _llm_reason_candidate(
     except Exception as exc:  # noqa: BLE001
         logger.warning("[ground_anchors] LLM reason failed: %s", exc)
         return None
-    raw_index = (
-        response.get("candidate_index")
-        if isinstance(response, dict)
-        else getattr(response, "candidate_index", 0)
+    decision = validate_spatial_candidate_proposal(
+        decision_id=decision_id,
+        query_text=query_text,
+        candidates=descriptors,
+        proposal=response,
     )
-    index = int(raw_index or 0) - 1
-    if 0 <= index < len(candidates):
-        return candidates[index]
+    if decision.status == "selected":
+        selected_id = decision.selected_candidate_id
+        for candidate, descriptor in zip(candidates, descriptors):
+            if descriptor.candidate_id == selected_id:
+                return candidate
+    logger.info(
+        "[ground_anchors] candidate selection status=%s reason=%s mention=%s",
+        decision.status,
+        decision.reason,
+        mention,
+    )
     return None
 
 
-def _candidate_prompt_line(index: int, candidate: Any) -> str:
+def _candidate_prompt_line(candidate: Any, candidate_id: str | None = None) -> str:
     """Render bounded candidate evidence for closed-set LLM selection.
 
     The LLM receives identity and provenance clues, never executable geometry.
     Every value is already attached to a bundle-backed candidate; the model
-    can only return the ordinal and cannot invent a BSM or coordinate.
+    can only return the stable ID and cannot invent a BSM or coordinate.
     """
     identity = getattr(candidate, "identity", None)
     canonical_name = str(
@@ -995,8 +1016,9 @@ def _candidate_prompt_line(index: int, candidate: Any) -> str:
     )[:6]
     score = float(getattr(candidate, "score", 0.0) or 0.0)
     bundle_ref = _candidate_bundle_ref(candidate)
+    candidate_id = candidate_id or stable_spatial_candidate_id(candidate, namespace="ground")
     return (
-        f"{index}. 名称={canonical_name} 别名={'、'.join(aliases) or '无'} "
+        f"candidate_id={candidate_id} 名称={canonical_name} 别名={'、'.join(aliases) or '无'} "
         f"类型={entity_type} 角色={role} 来源层={getattr(candidate, 'source_layer', '') or getattr(identity, 'source_layer', '') or '未知'} "
         f"feature_BSM={feature_bsm or '无'} source_BSM={source_bsm or '无'} "
         f"来源BSM={','.join(source_bsms) or '无'} 关联地块={','.join(related_parcels) or '无'} "
@@ -1326,8 +1348,8 @@ async def ground_l1_anchors(
         item["result"] = result
 
         if result is not None and result.candidates:
-            if result.status == "resolved":
-                item["candidate"] = result.candidates[0]
+            if result.status == "resolved" and len(result.candidates) == 1:
+                item["candidate"] = next(iter(result.candidates))
             else:
                 item["best_effort"] = True
                 item["llm_kind"] = "candidate"

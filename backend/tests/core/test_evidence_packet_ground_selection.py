@@ -246,7 +246,15 @@ def test_ambiguous_packet_llm_choice_keeps_only_selected_bundle_identity(
 
         def invoke(self, prompt: str):
             prompts.append(prompt)
-            return self.response_model(candidate_index=2)
+            candidate_ids = [
+                part.split()[0]
+                for part in prompt.split("candidate_id=")[1:]
+            ]
+            return self.response_model(
+                status="selected",
+                selected_candidate_id=candidate_ids[1],
+                input_digest=prompt.split("input_digest=", 1)[1].split(";", 1)[0],
+            )
 
     class _LLM:
         def with_structured_output(self, response_model, **_kwargs):
@@ -398,7 +406,15 @@ def test_llm_selects_one_spatial_cluster_without_merging_distant_parcels(
 
         def invoke(self, prompt: str):
             prompts.append(prompt)
-            return self.response_model(candidate_index=2)
+            candidate_ids = [
+                part.split()[0]
+                for part in prompt.split("candidate_id=")[1:]
+            ]
+            return self.response_model(
+                status="selected",
+                selected_candidate_id=candidate_ids[1],
+                input_digest=prompt.split("input_digest=", 1)[1].split(";", 1)[0],
+            )
 
     class _LLM:
         def with_structured_output(self, response_model, **_kwargs):
@@ -417,7 +433,9 @@ def test_llm_selects_one_spatial_cluster_without_merging_distant_parcels(
     assert resolved.search_scope is not None
     assert resolved.search_scope.scope_bsms == [parcels[1].bsm]
     assert resolved.provenance["anchor_cluster_count"] == 2
-    assert resolved.provenance["selected_anchor_cluster_index"] == 2
+    assert resolved.provenance["selected_anchor_cluster_id"].startswith(
+        "anchor-cluster:sha256:"
+    )
     assert resolved.provenance["anchor_cluster_selection"] == "closed_set_llm_selected_cluster"
     assert resolved.search_scope.diagnostics["anchor_feature_bsms"] == [hazards[1].bsm]
     assert prompts and hazards[0].bsm in prompts[0] and hazards[1].bsm in prompts[0]

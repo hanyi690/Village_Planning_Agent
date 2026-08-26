@@ -313,7 +313,13 @@ def test_resolver_llm_fallback_picks_ambiguous_candidate(monkeypatch):
         def with_structured_output(self, response_model, method="function_calling"):
             class _Structured:
                 def invoke(self, prompt):
-                    return response_model(candidate_index=1)
+                    candidate_id = prompt.split("candidate_id=", 1)[1].split()[0]
+                    digest = prompt.split("input_digest=", 1)[1].split(";", 1)[0]
+                    return response_model(
+                        status="selected",
+                        selected_candidate_id=candidate_id,
+                        input_digest=digest,
+                    )
 
             return _Structured()
 

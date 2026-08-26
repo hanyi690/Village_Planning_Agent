@@ -10,11 +10,11 @@ from app.infrastructure.kg.ontology import PLN, EntityTypes
 from app.infrastructure.kg.builder.base import PlanningKG
 from app.infrastructure.kg.enrichment.name_backfill import (
     NameMention,
-    CandidateChoice,
     backfill_kg_names,
     build_candidates,
     nameless_entities,
 )
+from app.contracts.spatial.spatial_reference_contracts import CandidateSelectionProposal
 
 
 def _kg() -> PlanningKG:
@@ -103,8 +103,14 @@ class _TypedChoiceModel:
         self.owner = owner
 
     async def ainvoke(self, _prompt):
+        ids = [part.split()[0] for part in _prompt.split("candidate_id=")[1:]]
+        digest = _prompt.split("input_digest=", 1)[1].split("；", 1)[0]
         self.owner.calls += 1
-        return CandidateChoice(candidate_index=2)
+        return CandidateSelectionProposal(
+            status="selected",
+            selected_candidate_id=ids[1],
+            input_digest=digest,
+        )
 
 
 class _TypedChoiceLLM:
@@ -112,7 +118,7 @@ class _TypedChoiceLLM:
         self.calls = 0
 
     def with_structured_output(self, schema):
-        assert schema is CandidateChoice
+        assert schema is CandidateSelectionProposal
         return _TypedChoiceModel(self)
 
 
