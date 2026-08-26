@@ -1,0 +1,6142 @@
+{
+  "directed": true,
+  "multigraph": false,
+  "nodes": [
+    {
+      "id": "app/__init__.py"
+    },
+    {
+      "id": "app/agent/__init__.py"
+    },
+    {
+      "id": "app/agent/bootstrap/graph.py"
+    },
+    {
+      "id": "app/agent/bootstrap/layer_aggregate_node.py"
+    },
+    {
+      "id": "app/agent/bootstrap/layer_router.py"
+    },
+    {
+      "id": "app/agent/bootstrap/phase_machine.py"
+    },
+    {
+      "id": "app/agent/bootstrap/post_l3_main_nodes.py"
+    },
+    {
+      "id": "app/agent/common/__init__.py"
+    },
+    {
+      "id": "app/agent/common/dimension_runtime.py"
+    },
+    {
+      "id": "app/agent/conversation_router/edges.py"
+    },
+    {
+      "id": "app/agent/conversation_router/node.py"
+    },
+    {
+      "id": "app/agent/deliver/aggregate.py"
+    },
+    {
+      "id": "app/agent/deliver/checks.py"
+    },
+    {
+      "id": "app/agent/deliver/gate.py"
+    },
+    {
+      "id": "app/agent/deliver/gis_pipeline_state.py"
+    },
+    {
+      "id": "app/agent/deliver/render_layers.py"
+    },
+    {
+      "id": "app/agent/deliver/review.py"
+    },
+    {
+      "id": "app/agent/execute/__init__.py"
+    },
+    {
+      "id": "app/agent/execute/execute_agent.py"
+    },
+    {
+      "id": "app/agent/execute/execute_state.py"
+    },
+    {
+      "id": "app/agent/execute/land_design_worker.py"
+    },
+    {
+      "id": "app/agent/execute/merge.py"
+    },
+    {
+      "id": "app/agent/execute/plan_builder.py"
+    },
+    {
+      "id": "app/agent/execute/planned_state_builder.py"
+    },
+    {
+      "id": "app/agent/execute/review.py"
+    },
+    {
+      "id": "app/agent/execute/road_generator.py"
+    },
+    {
+      "id": "app/agent/execute/vocab_extractor.py"
+    },
+    {
+      "id": "app/agent/explore/__init__.py"
+    },
+    {
+      "id": "app/agent/explore/agent.py"
+    },
+    {
+      "id": "app/agent/explore/contracts.py"
+    },
+    {
+      "id": "app/agent/explore/retrievers/__init__.py"
+    },
+    {
+      "id": "app/agent/explore/retrievers/bundle_retriever.py"
+    },
+    {
+      "id": "app/agent/explore/retrievers/instruction_retriever.py"
+    },
+    {
+      "id": "app/agent/explore/retrievers/kg_retriever.py"
+    },
+    {
+      "id": "app/agent/explore/retrievers/report_retriever.py"
+    },
+    {
+      "id": "app/agent/explore/service.py"
+    },
+    {
+      "id": "app/agent/explore/verification.py"
+    },
+    {
+      "id": "app/agent/ground/aggregate.py"
+    },
+    {
+      "id": "app/agent/ground/format_bound_intent.py"
+    },
+    {
+      "id": "app/agent/ground/gate.py"
+    },
+    {
+      "id": "app/agent/ground/review.py"
+    },
+    {
+      "id": "app/agent/l1_observe/aggregate.py"
+    },
+    {
+      "id": "app/agent/l1_observe/analysis_node.py"
+    },
+    {
+      "id": "app/agent/l1_observe/formatters.py"
+    },
+    {
+      "id": "app/agent/l1_observe/gate.py"
+    },
+    {
+      "id": "app/agent/l1_observe/pipeline.py"
+    },
+    {
+      "id": "app/agent/l1_observe/review.py"
+    },
+    {
+      "id": "app/agent/l2_strategize/aggregate.py"
+    },
+    {
+      "id": "app/agent/l2_strategize/gate.py"
+    },
+    {
+      "id": "app/agent/l2_strategize/review.py"
+    },
+    {
+      "id": "app/agent/l2_strategize/worker.py"
+    },
+    {
+      "id": "app/agent/l3_plan/aggregate.py"
+    },
+    {
+      "id": "app/agent/l3_plan/gate.py"
+    },
+    {
+      "id": "app/agent/l3_plan/review.py"
+    },
+    {
+      "id": "app/agent/l3_plan/worker.py"
+    },
+    {
+      "id": "app/agent/parse/__init__.py"
+    },
+    {
+      "id": "app/agent/parse/aggregate.py"
+    },
+    {
+      "id": "app/agent/parse/compile_node.py"
+    },
+    {
+      "id": "app/agent/parse/gate_node.py"
+    },
+    {
+      "id": "app/agent/parse/llm_patch.py"
+    },
+    {
+      "id": "app/agent/parse/merge_node.py"
+    },
+    {
+      "id": "app/agent/parse/review.py"
+    },
+    {
+      "id": "app/agent/parse/route_node.py"
+    },
+    {
+      "id": "app/agent/plan_state/completion_node.py"
+    },
+    {
+      "id": "app/agent/plan_state/state.py"
+    },
+    {
+      "id": "app/agent/reconcile/__init__.py"
+    },
+    {
+      "id": "app/agent/reconcile/aggregate.py"
+    },
+    {
+      "id": "app/agent/reconcile/checks.py"
+    },
+    {
+      "id": "app/agent/reconcile/gate.py"
+    },
+    {
+      "id": "app/agent/reconcile/review.py"
+    },
+    {
+      "id": "app/agent/select/__init__.py"
+    },
+    {
+      "id": "app/agent/select/adapter.py"
+    },
+    {
+      "id": "app/agent/select/aggregate.py"
+    },
+    {
+      "id": "app/agent/select/gate.py"
+    },
+    {
+      "id": "app/agent/select/review.py"
+    },
+    {
+      "id": "app/agent/tools/__init__.py"
+    },
+    {
+      "id": "app/agent/tools/execute_node.py"
+    },
+    {
+      "id": "app/agent/validate/__init__.py"
+    },
+    {
+      "id": "app/agent/validate/aggregate.py"
+    },
+    {
+      "id": "app/agent/validate/checks.py"
+    },
+    {
+      "id": "app/agent/validate/gate.py"
+    },
+    {
+      "id": "app/agent/validate/review.py"
+    },
+    {
+      "id": "app/api/__init__.py"
+    },
+    {
+      "id": "app/api/artifact_routes.py"
+    },
+    {
+      "id": "app/api/gis_test_routes.py"
+    },
+    {
+      "id": "app/api/human_review_routes.py"
+    },
+    {
+      "id": "app/api/render_routes.py"
+    },
+    {
+      "id": "app/api/routes.py"
+    },
+    {
+      "id": "app/api/schemas.py"
+    },
+    {
+      "id": "app/api/session_routes.py"
+    },
+    {
+      "id": "app/config/__init__.py"
+    },
+    {
+      "id": "app/config/dependency.py"
+    },
+    {
+      "id": "app/config/loader.py"
+    },
+    {
+      "id": "app/core/__init__.py"
+    },
+    {
+      "id": "app/core/events.py"
+    },
+    {
+      "id": "app/core/instructor_client.py"
+    },
+    {
+      "id": "app/core/llm.py"
+    },
+    {
+      "id": "app/core/settings.py"
+    },
+    {
+      "id": "app/core/tracing.py"
+    },
+    {
+      "id": "app/database/__init__.py"
+    },
+    {
+      "id": "app/database/engine.py"
+    },
+    {
+      "id": "app/database/models.py"
+    },
+    {
+      "id": "app/database/operations.py"
+    },
+    {
+      "id": "app/main.py"
+    },
+    {
+      "id": "app/modules/__init__.py"
+    },
+    {
+      "id": "app/modules/context/__init__.py"
+    },
+    {
+      "id": "app/modules/context/planning_context.py"
+    },
+    {
+      "id": "app/modules/data/__init__.py"
+    },
+    {
+      "id": "app/modules/data/adapters/__init__.py"
+    },
+    {
+      "id": "app/modules/data/adapters/document.py"
+    },
+    {
+      "id": "app/modules/data/adapters/features.py"
+    },
+    {
+      "id": "app/modules/data/adapters/parcels.py"
+    },
+    {
+      "id": "app/modules/data/adapters/raster.py"
+    },
+    {
+      "id": "app/modules/data/adapters/table.py"
+    },
+    {
+      "id": "app/modules/data/base_conversion.py"
+    },
+    {
+      "id": "app/modules/data/bundle_assembly_adapter.py"
+    },
+    {
+      "id": "app/modules/data/catalog/__init__.py"
+    },
+    {
+      "id": "app/modules/data/catalog/catalog.py"
+    },
+    {
+      "id": "app/modules/data/catalog/config.py"
+    },
+    {
+      "id": "app/modules/data/catalog/dedup.py"
+    },
+    {
+      "id": "app/modules/data/catalog/external_anchors.py"
+    },
+    {
+      "id": "app/modules/data/connections/__init__.py"
+    },
+    {
+      "id": "app/modules/data/connections/amap.py"
+    },
+    {
+      "id": "app/modules/data/connections/base.py"
+    },
+    {
+      "id": "app/modules/data/connections/gd_tianditu.py"
+    },
+    {
+      "id": "app/modules/data/connections/osm.py"
+    },
+    {
+      "id": "app/modules/data/connections/rate_limiter.py"
+    },
+    {
+      "id": "app/modules/data/connections/tianditu.py"
+    },
+    {
+      "id": "app/modules/data/contracts.py"
+    },
+    {
+      "id": "app/modules/data/documents/__init__.py"
+    },
+    {
+      "id": "app/modules/data/documents/loader.py"
+    },
+    {
+      "id": "app/modules/data/encoding_detector.py"
+    },
+    {
+      "id": "app/modules/data/ingest.py"
+    },
+    {
+      "id": "app/modules/data/providers/__init__.py"
+    },
+    {
+      "id": "app/modules/data/providers/amap/__init__.py"
+    },
+    {
+      "id": "app/modules/data/providers/amap/anchor_service.py"
+    },
+    {
+      "id": "app/modules/data/providers/amap/constants.py"
+    },
+    {
+      "id": "app/modules/data/providers/amap/provider.py"
+    },
+    {
+      "id": "app/modules/data/providers/amap/types.py"
+    },
+    {
+      "id": "app/modules/data/providers/baidu/__init__.py"
+    },
+    {
+      "id": "app/modules/data/providers/baidu/constants.py"
+    },
+    {
+      "id": "app/modules/data/providers/baidu/provider.py"
+    },
+    {
+      "id": "app/modules/data/providers/baidu/types.py"
+    },
+    {
+      "id": "app/modules/data/providers/poi.py"
+    },
+    {
+      "id": "app/modules/data/providers/tencent/__init__.py"
+    },
+    {
+      "id": "app/modules/data/providers/tencent/anchor_service.py"
+    },
+    {
+      "id": "app/modules/data/providers/tencent/constants.py"
+    },
+    {
+      "id": "app/modules/data/providers/tencent/provider.py"
+    },
+    {
+      "id": "app/modules/data/providers/tencent/types.py"
+    },
+    {
+      "id": "app/modules/data/providers/tianditu/__init__.py"
+    },
+    {
+      "id": "app/modules/data/providers/tianditu/anchor_service.py"
+    },
+    {
+      "id": "app/modules/data/providers/tianditu/constants.py"
+    },
+    {
+      "id": "app/modules/data/providers/tianditu/gd_constants.py"
+    },
+    {
+      "id": "app/modules/data/providers/tianditu/gd_service.py"
+    },
+    {
+      "id": "app/modules/data/providers/tianditu/provider.py"
+    },
+    {
+      "id": "app/modules/data/providers/tianditu/tiles.py"
+    },
+    {
+      "id": "app/modules/data/providers/tianditu/types.py"
+    },
+    {
+      "id": "app/modules/data/providers/tianditu/wfs.py"
+    },
+    {
+      "id": "app/modules/data/sources/__init__.py"
+    },
+    {
+      "id": "app/modules/data/sources/api_vector.py"
+    },
+    {
+      "id": "app/modules/data/sources/base.py"
+    },
+    {
+      "id": "app/modules/data/sources/document.py"
+    },
+    {
+      "id": "app/modules/data/sources/file_vector.py"
+    },
+    {
+      "id": "app/modules/data/sources/local_raster.py"
+    },
+    {
+      "id": "app/modules/data/sources/registry.py"
+    },
+    {
+      "id": "app/modules/data/sources/remote_raster.py"
+    },
+    {
+      "id": "app/modules/data/sources/wmts_tile.py"
+    },
+    {
+      "id": "app/modules/kg/__init__.py"
+    },
+    {
+      "id": "app/modules/kg/adapters/__init__.py"
+    },
+    {
+      "id": "app/modules/kg/adapters/gazetteer_adapter.py"
+    },
+    {
+      "id": "app/modules/kg/adapters/spatial_query_adapter.py"
+    },
+    {
+      "id": "app/modules/kg/builder/__init__.py"
+    },
+    {
+      "id": "app/modules/kg/builder/base.py"
+    },
+    {
+      "id": "app/modules/kg/builder/builder.py"
+    },
+    {
+      "id": "app/modules/kg/builder/control_line_mapping.py"
+    },
+    {
+      "id": "app/modules/kg/builder/enrichment.py"
+    },
+    {
+      "id": "app/modules/kg/builder/geo_helpers.py"
+    },
+    {
+      "id": "app/modules/kg/builder/layer1.py"
+    },
+    {
+      "id": "app/modules/kg/builder/layer1_control_lines.py"
+    },
+    {
+      "id": "app/modules/kg/builder/layer1_core.py"
+    },
+    {
+      "id": "app/modules/kg/builder/layer1_extended.py"
+    },
+    {
+      "id": "app/modules/kg/builder/layer2.py"
+    },
+    {
+      "id": "app/modules/kg/builder/layer3.py"
+    },
+    {
+      "id": "app/modules/kg/builder/layer4.py"
+    },
+    {
+      "id": "app/modules/kg/builder/registry.py"
+    },
+    {
+      "id": "app/modules/kg/dlq.py"
+    },
+    {
+      "id": "app/modules/kg/enrichment/__init__.py"
+    },
+    {
+      "id": "app/modules/kg/enrichment/bindings.py"
+    },
+    {
+      "id": "app/modules/kg/enrichment/descriptions.py"
+    },
+    {
+      "id": "app/modules/kg/enrichment/relations.py"
+    },
+    {
+      "id": "app/modules/kg/enrichment/report_entity_enrichment.py"
+    },
+    {
+      "id": "app/modules/kg/gazetteer/__init__.py"
+    },
+    {
+      "id": "app/modules/kg/gazetteer/gazetteer.py"
+    },
+    {
+      "id": "app/modules/kg/interface.py"
+    },
+    {
+      "id": "app/modules/kg/manager.py"
+    },
+    {
+      "id": "app/modules/kg/memory.py"
+    },
+    {
+      "id": "app/modules/kg/ontology.py"
+    },
+    {
+      "id": "app/modules/kg/queries/__init__.py"
+    },
+    {
+      "id": "app/modules/kg/queries/cognition.py"
+    },
+    {
+      "id": "app/modules/kg/queries/contracts.py"
+    },
+    {
+      "id": "app/modules/kg/queries/execute_queries.py"
+    },
+    {
+      "id": "app/modules/kg/queries/semantic.py"
+    },
+    {
+      "id": "app/modules/kg/queries/sparql.py"
+    },
+    {
+      "id": "app/modules/kg/queries/spatial_ref.py"
+    },
+    {
+      "id": "app/modules/kg/service.py"
+    },
+    {
+      "id": "app/modules/parsing/__init__.py"
+    },
+    {
+      "id": "app/modules/parsing/admin_code_loader.py"
+    },
+    {
+      "id": "app/modules/parsing/compiler/__init__.py"
+    },
+    {
+      "id": "app/modules/parsing/compiler/core.py"
+    },
+    {
+      "id": "app/modules/parsing/compiler/diagnostics.py"
+    },
+    {
+      "id": "app/modules/parsing/compiler/instruction_parser.py"
+    },
+    {
+      "id": "app/modules/parsing/compiler/profiles/__init__.py"
+    },
+    {
+      "id": "app/modules/parsing/compiler/profiles/l1_observation.py"
+    },
+    {
+      "id": "app/modules/parsing/compiler/profiles/l2_strategy.py"
+    },
+    {
+      "id": "app/modules/parsing/compiler/profiles/l3_planning.py"
+    },
+    {
+      "id": "app/modules/parsing/compiler/profiles/revision.py"
+    },
+    {
+      "id": "app/modules/parsing/compiler/provenance.py"
+    },
+    {
+      "id": "app/modules/parsing/compiler/spec_mapper.py"
+    },
+    {
+      "id": "app/modules/parsing/gazetteer.py"
+    },
+    {
+      "id": "app/modules/parsing/schemas.py"
+    },
+    {
+      "id": "app/modules/parsing/semantics.py"
+    },
+    {
+      "id": "app/modules/parsing/spatial_language.py"
+    },
+    {
+      "id": "app/modules/parsing/summary_generator.py"
+    },
+    {
+      "id": "app/modules/parsing/summary_parser.py"
+    },
+    {
+      "id": "app/modules/parsing/table_schema_inference.py"
+    },
+    {
+      "id": "app/modules/parsing/tables.py"
+    },
+    {
+      "id": "app/modules/parsing/text_parser.py"
+    },
+    {
+      "id": "app/modules/planning_text/__init__.py"
+    },
+    {
+      "id": "app/modules/planning_text/config.py"
+    },
+    {
+      "id": "app/modules/planning_text/content_extractor.py"
+    },
+    {
+      "id": "app/modules/planning_text/docx_styles.py"
+    },
+    {
+      "id": "app/modules/planning_text/generator.py"
+    },
+    {
+      "id": "app/modules/planning_text/json_exporter.py"
+    },
+    {
+      "id": "app/modules/planning_text/layer_exporter.py"
+    },
+    {
+      "id": "app/modules/planning_text/llm_styler.py"
+    },
+    {
+      "id": "app/modules/planning_text/rag_appender.py"
+    },
+    {
+      "id": "app/modules/planning_text/section_builder.py"
+    },
+    {
+      "id": "app/modules/ports/__init__.py"
+    },
+    {
+      "id": "app/modules/ports/artifact_store.py"
+    },
+    {
+      "id": "app/modules/ports/bundle_assembly.py"
+    },
+    {
+      "id": "app/modules/ports/context_provider.py"
+    },
+    {
+      "id": "app/modules/ports/gazetteer.py"
+    },
+    {
+      "id": "app/modules/ports/nomenclature_registry.py"
+    },
+    {
+      "id": "app/modules/ports/planning_ports.py"
+    },
+    {
+      "id": "app/modules/ports/road_planner.py"
+    },
+    {
+      "id": "app/modules/ports/semantic_query.py"
+    },
+    {
+      "id": "app/modules/ports/spatial_query.py"
+    },
+    {
+      "id": "app/modules/ports/zone_allocator.py"
+    },
+    {
+      "id": "app/modules/prompts/__init__.py"
+    },
+    {
+      "id": "app/modules/prompts/analysis.py"
+    },
+    {
+      "id": "app/modules/prompts/concept.py"
+    },
+    {
+      "id": "app/modules/prompts/detailed.py"
+    },
+    {
+      "id": "app/modules/prompts/parse_prompts.py"
+    },
+    {
+      "id": "app/modules/rag/__init__.py"
+    },
+    {
+      "id": "app/modules/rag/chunker.py"
+    },
+    {
+      "id": "app/modules/rag/cli.py"
+    },
+    {
+      "id": "app/modules/rag/context.py"
+    },
+    {
+      "id": "app/modules/rag/service.py"
+    },
+    {
+      "id": "app/modules/rag/utils/__init__.py"
+    },
+    {
+      "id": "app/modules/rag/utils/document_loader.py"
+    },
+    {
+      "id": "app/modules/rag/utils/metadata_extractor.py"
+    },
+    {
+      "id": "app/modules/rag/vector_store.py"
+    },
+    {
+      "id": "app/modules/schema/__init__.py"
+    },
+    {
+      "id": "app/modules/schema/advisory_crosswalks/__init__.py"
+    },
+    {
+      "id": "app/modules/schema/advisory_crosswalks/crosswalks.py"
+    },
+    {
+      "id": "app/modules/schema/advisory_crosswalks/legacy.py"
+    },
+    {
+      "id": "app/modules/schema/advisory_crosswalks/registry.py"
+    },
+    {
+      "id": "app/modules/schema/contracts/__init__.py"
+    },
+    {
+      "id": "app/modules/schema/contracts/classification_ref.py"
+    },
+    {
+      "id": "app/modules/schema/contracts/constraint_contracts.py"
+    },
+    {
+      "id": "app/modules/schema/contracts/context_contracts.py"
+    },
+    {
+      "id": "app/modules/schema/contracts/context_ref_contracts.py"
+    },
+    {
+      "id": "app/modules/schema/contracts/contract_meta.py"
+    },
+    {
+      "id": "app/modules/schema/contracts/custom_zone_contracts.py"
+    },
+    {
+      "id": "app/modules/schema/contracts/delivery_manifest_contracts.py"
+    },
+    {
+      "id": "app/modules/schema/contracts/evidence_contracts.py"
+    },
+    {
+      "id": "app/modules/schema/contracts/execution_plan_contracts.py"
+    },
+    {
+      "id": "app/modules/schema/contracts/gazetteer_contracts.py"
+    },
+    {
+      "id": "app/modules/schema/contracts/grounding_contracts.py"
+    },
+    {
+      "id": "app/modules/schema/contracts/l1_contracts.py"
+    },
+    {
+      "id": "app/modules/schema/contracts/l2_contracts.py"
+    },
+    {
+      "id": "app/modules/schema/contracts/l3_contracts.py"
+    },
+    {
+      "id": "app/modules/schema/contracts/land_balance_contracts.py"
+    },
+    {
+      "id": "app/modules/schema/contracts/parcel_change_contracts.py"
+    },
+    {
+      "id": "app/modules/schema/contracts/parse_contracts.py"
+    },
+    {
+      "id": "app/modules/schema/contracts/parse_result_contracts.py"
+    },
+    {
+      "id": "app/modules/schema/contracts/parsing_contracts.py"
+    },
+    {
+      "id": "app/modules/schema/contracts/planned_state_contracts.py"
+    },
+    {
+      "id": "app/modules/schema/contracts/provenance.py"
+    },
+    {
+      "id": "app/modules/schema/contracts/reconciliation_contracts.py"
+    },
+    {
+      "id": "app/modules/schema/contracts/review_contracts.py"
+    },
+    {
+      "id": "app/modules/schema/contracts/selection_contracts.py"
+    },
+    {
+      "id": "app/modules/schema/contracts/spatial_reference_contracts.py"
+    },
+    {
+      "id": "app/modules/schema/contracts/validation_report_contracts.py"
+    },
+    {
+      "id": "app/modules/schema/contracts/workflow_contracts.py"
+    },
+    {
+      "id": "app/modules/schema/encodings/__init__.py"
+    },
+    {
+      "id": "app/modules/schema/encodings/classification.py"
+    },
+    {
+      "id": "app/modules/schema/encodings/code_sets.py"
+    },
+    {
+      "id": "app/modules/schema/encodings/dicts/__init__.py"
+    },
+    {
+      "id": "app/modules/schema/encodings/dicts/candidate_engine.py"
+    },
+    {
+      "id": "app/modules/schema/encodings/dicts/disambiguation.py"
+    },
+    {
+      "id": "app/modules/schema/encodings/dicts/expr_eval.py"
+    },
+    {
+      "id": "app/modules/schema/encodings/dicts/loader.py"
+    },
+    {
+      "id": "app/modules/schema/encodings/dicts/rule_loader.py"
+    },
+    {
+      "id": "app/modules/schema/encodings/dicts/vocabularies/loader.py"
+    },
+    {
+      "id": "app/modules/schema/layers.py"
+    },
+    {
+      "id": "app/modules/schema/output/__init__.py"
+    },
+    {
+      "id": "app/modules/schema/output/colors.py"
+    },
+    {
+      "id": "app/modules/schema/output/gdb.py"
+    },
+    {
+      "id": "app/modules/schema/output/tables.py"
+    },
+    {
+      "id": "app/modules/schema/provenance/__init__.py"
+    },
+    {
+      "id": "app/modules/schema/provenance/audit.py"
+    },
+    {
+      "id": "app/modules/schema/types/__init__.py"
+    },
+    {
+      "id": "app/modules/schema/types/base.py"
+    },
+    {
+      "id": "app/modules/schema/types/canonical.py"
+    },
+    {
+      "id": "app/modules/schema/types/document_types.py"
+    },
+    {
+      "id": "app/modules/schema/types/layer_registry.py"
+    },
+    {
+      "id": "app/modules/schema/types/raster_types.py"
+    },
+    {
+      "id": "app/modules/schema/types/spatial_types.py"
+    },
+    {
+      "id": "app/modules/schema/types/table_types.py"
+    },
+    {
+      "id": "app/modules/schema/utils/__init__.py"
+    },
+    {
+      "id": "app/modules/schema/utils/metrics.py"
+    },
+    {
+      "id": "app/modules/spatial_ops/__init__.py"
+    },
+    {
+      "id": "app/modules/spatial_ops/allocation/__init__.py"
+    },
+    {
+      "id": "app/modules/spatial_ops/allocation/zone_allocator_adapter.py"
+    },
+    {
+      "id": "app/modules/spatial_ops/conflict/__init__.py"
+    },
+    {
+      "id": "app/modules/spatial_ops/conflict/detector.py"
+    },
+    {
+      "id": "app/modules/spatial_ops/conflict/resolver.py"
+    },
+    {
+      "id": "app/modules/spatial_ops/context/__init__.py"
+    },
+    {
+      "id": "app/modules/spatial_ops/context/context.py"
+    },
+    {
+      "id": "app/modules/spatial_ops/geometry/__init__.py"
+    },
+    {
+      "id": "app/modules/spatial_ops/geometry/axis_builder.py"
+    },
+    {
+      "id": "app/modules/spatial_ops/geometry/geometry.py"
+    },
+    {
+      "id": "app/modules/spatial_ops/geometry/relations.py"
+    },
+    {
+      "id": "app/modules/spatial_ops/geometry/subdivision.py"
+    },
+    {
+      "id": "app/modules/spatial_ops/grounding/__init__.py"
+    },
+    {
+      "id": "app/modules/spatial_ops/grounding/bundle_binder.py"
+    },
+    {
+      "id": "app/modules/spatial_ops/grounding/grounding.py"
+    },
+    {
+      "id": "app/modules/spatial_ops/index/__init__.py"
+    },
+    {
+      "id": "app/modules/spatial_ops/index/bridge.py"
+    },
+    {
+      "id": "app/modules/spatial_ops/land_balance/__init__.py"
+    },
+    {
+      "id": "app/modules/spatial_ops/land_balance/land_balance.py"
+    },
+    {
+      "id": "app/modules/spatial_ops/output/__init__.py"
+    },
+    {
+      "id": "app/modules/spatial_ops/output/export_package.py"
+    },
+    {
+      "id": "app/modules/spatial_ops/output/map_layers.py"
+    },
+    {
+      "id": "app/modules/spatial_ops/parcel_ops/__init__.py"
+    },
+    {
+      "id": "app/modules/spatial_ops/parcel_ops/parcel_ops.py"
+    },
+    {
+      "id": "app/modules/spatial_ops/road/__init__.py"
+    },
+    {
+      "id": "app/modules/spatial_ops/road/comparison_evaluator.py"
+    },
+    {
+      "id": "app/modules/spatial_ops/road/evaluator.py"
+    },
+    {
+      "id": "app/modules/spatial_ops/road/kg_rdflib_adapter.py"
+    },
+    {
+      "id": "app/modules/spatial_ops/road/kg_retry.py"
+    },
+    {
+      "id": "app/modules/spatial_ops/road/location_confirmation.py"
+    },
+    {
+      "id": "app/modules/spatial_ops/road/network_builder.py"
+    },
+    {
+      "id": "app/modules/spatial_ops/road/planner.py"
+    },
+    {
+      "id": "app/modules/spatial_ops/road/planning_nodes.py"
+    },
+    {
+      "id": "app/modules/spatial_ops/road/qgis_export.py"
+    },
+    {
+      "id": "app/modules/spatial_ops/road/schemas.py"
+    },
+    {
+      "id": "app/modules/spatial_ops/road/spatial_binder.py"
+    },
+    {
+      "id": "app/modules/spatial_ops/road/stage2_6_validator.py"
+    },
+    {
+      "id": "app/modules/spatial_ops/road/terrain_router.py"
+    },
+    {
+      "id": "app/modules/spatial_ops/road/text_structurer.py"
+    },
+    {
+      "id": "app/modules/spatial_ops/selection/__init__.py"
+    },
+    {
+      "id": "app/modules/spatial_ops/selection/facility_location.py"
+    },
+    {
+      "id": "app/modules/spatial_ops/selection/selection.py"
+    },
+    {
+      "id": "app/modules/spatial_ops/zoning/__init__.py"
+    },
+    {
+      "id": "app/modules/spatial_ops/zoning/custom_planning.py"
+    },
+    {
+      "id": "app/modules/spatial_ops/zoning/custom_zone_generator.py"
+    },
+    {
+      "id": "app/modules/spatial_ops/zoning/vocab_context.py"
+    },
+    {
+      "id": "app/modules/spatial_ops/zoning/vocab_rules.py"
+    },
+    {
+      "id": "app/services/__init__.py"
+    },
+    {
+      "id": "app/services/artifact_store.py"
+    },
+    {
+      "id": "app/services/bundle_store.py"
+    },
+    {
+      "id": "app/services/checkpoint.py"
+    },
+    {
+      "id": "app/services/context/__init__.py"
+    },
+    {
+      "id": "app/services/context/planning_context.py"
+    },
+    {
+      "id": "app/services/post_l3_resume.py"
+    },
+    {
+      "id": "app/services/report_store.py"
+    },
+    {
+      "id": "app/services/review_package.py"
+    },
+    {
+      "id": "app/services/runtime.py"
+    },
+    {
+      "id": "app/services/session.py"
+    },
+    {
+      "id": "app/services/session_bundle.py"
+    },
+    {
+      "id": "app/services/session_kg.py"
+    },
+    {
+      "id": "app/services/sse.py"
+    },
+    {
+      "id": "app/services/stage_report.py"
+    },
+    {
+      "id": "app/services/step_report.py"
+    },
+    {
+      "id": "app/tools/__init__.py"
+    },
+    {
+      "id": "app/tools/access/__init__.py"
+    },
+    {
+      "id": "app/tools/access/bundle.py"
+    },
+    {
+      "id": "app/tools/access/knowledge.py"
+    },
+    {
+      "id": "app/tools/access/rag.py"
+    },
+    {
+      "id": "app/tools/access/reports.py"
+    },
+    {
+      "id": "app/tools/access/shared.py"
+    },
+    {
+      "id": "app/tools/gis/__init__.py"
+    },
+    {
+      "id": "app/tools/gis/_analytics/__init__.py"
+    },
+    {
+      "id": "app/tools/gis/_analytics/accessibility.py"
+    },
+    {
+      "id": "app/tools/gis/_analytics/coverage.py"
+    },
+    {
+      "id": "app/tools/gis/_analytics/isochrone.py"
+    },
+    {
+      "id": "app/tools/gis/_analytics/metrics_calculator.py"
+    },
+    {
+      "id": "app/tools/gis/_generation/__init__.py"
+    },
+    {
+      "id": "app/tools/gis/_generation/pipeline.py"
+    },
+    {
+      "id": "app/tools/gis/_rendering/__init__.py"
+    },
+    {
+      "id": "app/tools/gis/_validation/__init__.py"
+    },
+    {
+      "id": "app/tools/gis/_validation/facility_validator.py"
+    },
+    {
+      "id": "app/tools/gis/conflict.py"
+    },
+    {
+      "id": "app/tools/gis/export.py"
+    },
+    {
+      "id": "app/tools/gis/extract.py"
+    },
+    {
+      "id": "app/tools/gis/html_render.py"
+    },
+    {
+      "id": "app/tools/gis/kg.py"
+    },
+    {
+      "id": "app/tools/gis/lookup.py"
+    },
+    {
+      "id": "app/tools/gis/render.py"
+    },
+    {
+      "id": "app/tools/gis/static_render.py"
+    },
+    {
+      "id": "app/tools/gis/validate.py"
+    },
+    {
+      "id": "app/tools/helpers.py"
+    },
+    {
+      "id": "app/tools/intent_tools.py"
+    },
+    {
+      "id": "app/tools/registry.py"
+    },
+    {
+      "id": "app/tools/tools.py"
+    },
+    {
+      "id": "app/utils/__init__.py"
+    },
+    {
+      "id": "app/utils/area_engine.py"
+    },
+    {
+      "id": "app/utils/code_lookup.py"
+    },
+    {
+      "id": "app/utils/coord_transform.py"
+    },
+    {
+      "id": "app/utils/coord_utils.py"
+    },
+    {
+      "id": "app/utils/crs_engine.py"
+    },
+    {
+      "id": "app/utils/docling_loader.py"
+    },
+    {
+      "id": "app/utils/document_loader.py"
+    },
+    {
+      "id": "app/utils/event_factory.py"
+    },
+    {
+      "id": "app/utils/geo_utils.py"
+    },
+    {
+      "id": "app/utils/geojson_utils.py"
+    },
+    {
+      "id": "app/utils/location_parser.py"
+    },
+    {
+      "id": "app/utils/logger.py"
+    },
+    {
+      "id": "app/utils/mineru_loader.py"
+    },
+    {
+      "id": "app/utils/parse_reporter.py"
+    },
+    {
+      "id": "app/utils/pdf_fallback.py"
+    },
+    {
+      "id": "app/utils/rate_limiter.py"
+    },
+    {
+      "id": "app/utils/retry.py"
+    },
+    {
+      "id": "app/utils/sse_events.py"
+    },
+    {
+      "id": "app/utils/sse_publisher.py"
+    },
+    {
+      "id": "app/utils/stats_collector.py"
+    }
+  ],
+  "adjacency": {
+    "app/__init__.py": [],
+    "app/agent/__init__.py": [],
+    "app/agent/bootstrap/graph.py": [
+      {
+        "id": "app/agent/bootstrap/__init__.py"
+      },
+      {
+        "id": "app/agent/bootstrap/layer_aggregate_node.py"
+      },
+      {
+        "id": "app/agent/bootstrap/layer_router.py"
+      },
+      {
+        "id": "app/agent/bootstrap/phase_machine.py"
+      },
+      {
+        "id": "app/agent/conversation_router/__init__.py"
+      },
+      {
+        "id": "app/agent/l1_observe/__init__.py"
+      },
+      {
+        "id": "app/agent/plan_state/__init__.py"
+      },
+      {
+        "id": "app/agent/plan_state/state.py"
+      },
+      {
+        "id": "app/agent/tools/__init__.py"
+      },
+      {
+        "id": "app/utils/logger.py"
+      }
+    ],
+    "app/agent/bootstrap/layer_aggregate_node.py": [
+      {
+        "id": "app/agent/l1_observe/aggregate.py"
+      },
+      {
+        "id": "app/agent/l2_strategize/aggregate.py"
+      },
+      {
+        "id": "app/agent/l3_plan/aggregate.py"
+      },
+      {
+        "id": "app/utils/logger.py"
+      }
+    ],
+    "app/agent/bootstrap/layer_router.py": [
+      {
+        "id": "app/agent/bootstrap/phase_machine.py"
+      },
+      {
+        "id": "app/agent/l1_observe/analysis_node.py"
+      },
+      {
+        "id": "app/agent/l2_strategize/worker.py"
+      },
+      {
+        "id": "app/agent/l3_plan/worker.py"
+      },
+      {
+        "id": "app/config/loader.py"
+      },
+      {
+        "id": "app/utils/logger.py"
+      }
+    ],
+    "app/agent/bootstrap/phase_machine.py": [
+      {
+        "id": "app/config/__init__.py"
+      },
+      {
+        "id": "app/modules/schema/layers.py"
+      }
+    ],
+    "app/agent/bootstrap/post_l3_main_nodes.py": [
+      {
+        "id": "app/agent/deliver/aggregate.py"
+      },
+      {
+        "id": "app/agent/deliver/gate.py"
+      },
+      {
+        "id": "app/agent/deliver/render_layers.py"
+      },
+      {
+        "id": "app/agent/execute/execute_agent.py"
+      },
+      {
+        "id": "app/agent/execute/execute_state.py"
+      },
+      {
+        "id": "app/agent/execute/plan_builder.py"
+      },
+      {
+        "id": "app/agent/execute/planned_state_builder.py"
+      },
+      {
+        "id": "app/agent/ground/aggregate.py"
+      },
+      {
+        "id": "app/agent/ground/gate.py"
+      },
+      {
+        "id": "app/agent/parse/aggregate.py"
+      },
+      {
+        "id": "app/agent/reconcile/aggregate.py"
+      },
+      {
+        "id": "app/agent/reconcile/gate.py"
+      },
+      {
+        "id": "app/agent/select/aggregate.py"
+      },
+      {
+        "id": "app/agent/select/gate.py"
+      },
+      {
+        "id": "app/agent/validate/aggregate.py"
+      },
+      {
+        "id": "app/agent/validate/gate.py"
+      },
+      {
+        "id": "app/modules/kg/builder/layer3.py"
+      },
+      {
+        "id": "app/modules/ports/artifact_store.py"
+      },
+      {
+        "id": "app/modules/schema/contracts/execution_plan_contracts.py"
+      },
+      {
+        "id": "app/modules/schema/contracts/grounding_contracts.py"
+      },
+      {
+        "id": "app/modules/schema/contracts/l3_contracts.py"
+      },
+      {
+        "id": "app/modules/schema/contracts/parcel_change_contracts.py"
+      },
+      {
+        "id": "app/modules/schema/contracts/parse_contracts.py"
+      },
+      {
+        "id": "app/modules/schema/contracts/parse_result_contracts.py"
+      },
+      {
+        "id": "app/modules/schema/contracts/planned_state_contracts.py"
+      },
+      {
+        "id": "app/modules/schema/contracts/reconciliation_contracts.py"
+      },
+      {
+        "id": "app/modules/schema/contracts/selection_contracts.py"
+      },
+      {
+        "id": "app/modules/schema/contracts/spatial_reference_contracts.py"
+      },
+      {
+        "id": "app/modules/schema/contracts/validation_report_contracts.py"
+      },
+      {
+        "id": "app/modules/spatial_ops/output/export_package.py"
+      },
+      {
+        "id": "app/services/artifact_store.py"
+      },
+      {
+        "id": "app/services/context/planning_context.py"
+      },
+      {
+        "id": "app/utils/logger.py"
+      }
+    ],
+    "app/agent/common/__init__.py": [],
+    "app/agent/common/dimension_runtime.py": [
+      {
+        "id": "app/config/__init__.py"
+      },
+      {
+        "id": "app/core/events.py"
+      },
+      {
+        "id": "app/modules/parsing/schemas.py"
+      },
+      {
+        "id": "app/modules/parsing/summary_generator.py"
+      },
+      {
+        "id": "app/services/__init__.py"
+      },
+      {
+        "id": "app/services/report_store.py"
+      },
+      {
+        "id": "app/services/runtime.py"
+      },
+      {
+        "id": "app/services/sse.py"
+      },
+      {
+        "id": "app/services/step_report.py"
+      },
+      {
+        "id": "app/utils/logger.py"
+      }
+    ],
+    "app/agent/conversation_router/edges.py": [
+      {
+        "id": "app/agent/bootstrap/layer_router.py"
+      },
+      {
+        "id": "app/agent/bootstrap/phase_machine.py"
+      },
+      {
+        "id": "app/config/__init__.py"
+      },
+      {
+        "id": "app/config/dependency.py"
+      },
+      {
+        "id": "app/config/loader.py"
+      },
+      {
+        "id": "app/tools/intent_tools.py"
+      },
+      {
+        "id": "app/utils/logger.py"
+      }
+    ],
+    "app/agent/conversation_router/node.py": [
+      {
+        "id": "app/agent/bootstrap/phase_machine.py"
+      },
+      {
+        "id": "app/core/llm.py"
+      },
+      {
+        "id": "app/core/settings.py"
+      },
+      {
+        "id": "app/tools/intent_tools.py"
+      },
+      {
+        "id": "app/tools/tools.py"
+      },
+      {
+        "id": "app/utils/logger.py"
+      }
+    ],
+    "app/agent/deliver/aggregate.py": [
+      {
+        "id": "app/agent/deliver/checks.py"
+      },
+      {
+        "id": "app/modules/schema/contracts/delivery_manifest_contracts.py"
+      },
+      {
+        "id": "app/modules/schema/contracts/provenance.py"
+      },
+      {
+        "id": "app/modules/schema/contracts/reconciliation_contracts.py"
+      },
+      {
+        "id": "app/modules/spatial_ops/land_balance/__init__.py"
+      }
+    ],
+    "app/agent/deliver/checks.py": [
+      {
+        "id": "app/modules/schema/contracts/delivery_manifest_contracts.py"
+      },
+      {
+        "id": "app/modules/schema/contracts/reconciliation_contracts.py"
+      },
+      {
+        "id": "app/modules/schema/contracts/validation_report_contracts.py"
+      },
+      {
+        "id": "app/modules/schema/output/gdb.py"
+      }
+    ],
+    "app/agent/deliver/gate.py": [
+      {
+        "id": "app/modules/schema/contracts/delivery_manifest_contracts.py"
+      },
+      {
+        "id": "app/modules/schema/contracts/workflow_contracts.py"
+      }
+    ],
+    "app/agent/deliver/gis_pipeline_state.py": [],
+    "app/agent/deliver/render_layers.py": [],
+    "app/agent/deliver/review.py": [
+      {
+        "id": "app/modules/schema/contracts/delivery_manifest_contracts.py"
+      },
+      {
+        "id": "app/modules/schema/contracts/workflow_contracts.py"
+      }
+    ],
+    "app/agent/execute/__init__.py": [
+      {
+        "id": "app/agent/execute/execute_agent.py"
+      },
+      {
+        "id": "app/agent/execute/execute_state.py"
+      },
+      {
+        "id": "app/agent/execute/land_design_worker.py"
+      },
+      {
+        "id": "app/agent/execute/planned_state_builder.py"
+      },
+      {
+        "id": "app/agent/execute/review.py"
+      }
+    ],
+    "app/agent/execute/execute_agent.py": [
+      {
+        "id": "app/agent/execute/execute_state.py"
+      },
+      {
+        "id": "app/agent/execute/land_design_worker.py"
+      },
+      {
+        "id": "app/agent/execute/merge.py"
+      },
+      {
+        "id": "app/agent/execute/planned_state_builder.py"
+      },
+      {
+        "id": "app/agent/execute/road_generator.py"
+      },
+      {
+        "id": "app/modules/kg/builder/layer4.py"
+      },
+      {
+        "id": "app/modules/kg/manager.py"
+      },
+      {
+        "id": "app/modules/kg/ontology.py"
+      },
+      {
+        "id": "app/modules/schema/contracts/execution_plan_contracts.py"
+      },
+      {
+        "id": "app/modules/schema/contracts/parcel_change_contracts.py"
+      },
+      {
+        "id": "app/modules/spatial_ops/allocation/zone_allocator_adapter.py"
+      },
+      {
+        "id": "app/modules/spatial_ops/geometry/axis_builder.py"
+      },
+      {
+        "id": "app/modules/spatial_ops/zoning/custom_planning.py"
+      },
+      {
+        "id": "app/modules/spatial_ops/zoning/custom_zone_generator.py"
+      },
+      {
+        "id": "app/modules/spatial_ops/zoning/vocab_context.py"
+      },
+      {
+        "id": "app/utils/logger.py"
+      }
+    ],
+    "app/agent/execute/execute_state.py": [
+      {
+        "id": "app/modules/schema/contracts/selection_contracts.py"
+      }
+    ],
+    "app/agent/execute/land_design_worker.py": [
+      {
+        "id": "app/modules/schema/contracts/classification_ref.py"
+      },
+      {
+        "id": "app/modules/schema/contracts/parcel_change_contracts.py"
+      },
+      {
+        "id": "app/modules/schema/contracts/parse_contracts.py"
+      },
+      {
+        "id": "app/modules/schema/contracts/selection_contracts.py"
+      },
+      {
+        "id": "app/modules/spatial_ops/geometry/subdivision.py"
+      },
+      {
+        "id": "app/modules/spatial_ops/parcel_ops/__init__.py"
+      },
+      {
+        "id": "app/modules/spatial_ops/selection/__init__.py"
+      }
+    ],
+    "app/agent/execute/merge.py": [
+      {
+        "id": "app/agent/execute/land_design_worker.py"
+      },
+      {
+        "id": "app/modules/schema/contracts/parcel_change_contracts.py"
+      }
+    ],
+    "app/agent/execute/plan_builder.py": [
+      {
+        "id": "app/modules/schema/contracts/execution_plan_contracts.py"
+      },
+      {
+        "id": "app/utils/logger.py"
+      }
+    ],
+    "app/agent/execute/planned_state_builder.py": [
+      {
+        "id": "app/modules/schema/contracts/parcel_change_contracts.py"
+      },
+      {
+        "id": "app/modules/schema/contracts/planned_state_contracts.py"
+      }
+    ],
+    "app/agent/execute/review.py": [
+      {
+        "id": "app/modules/schema/contracts/parcel_change_contracts.py"
+      },
+      {
+        "id": "app/modules/schema/contracts/planned_state_contracts.py"
+      }
+    ],
+    "app/agent/execute/road_generator.py": [
+      {
+        "id": "app/modules/kg/__init__.py"
+      },
+      {
+        "id": "app/modules/spatial_ops/road/__init__.py"
+      },
+      {
+        "id": "app/utils/logger.py"
+      }
+    ],
+    "app/agent/execute/vocab_extractor.py": [
+      {
+        "id": "app/core/llm.py"
+      },
+      {
+        "id": "app/core/settings.py"
+      },
+      {
+        "id": "app/modules/parsing/tables.py"
+      },
+      {
+        "id": "app/modules/schema/contracts/custom_zone_contracts.py"
+      },
+      {
+        "id": "app/modules/schema/encodings/dicts/vocabularies/loader.py"
+      },
+      {
+        "id": "app/utils/logger.py"
+      }
+    ],
+    "app/agent/explore/__init__.py": [
+      {
+        "id": "app/agent/explore/agent.py"
+      },
+      {
+        "id": "app/agent/explore/contracts.py"
+      },
+      {
+        "id": "app/agent/explore/service.py"
+      }
+    ],
+    "app/agent/explore/agent.py": [
+      {
+        "id": "app/agent/explore/contracts.py"
+      },
+      {
+        "id": "app/core/llm.py"
+      },
+      {
+        "id": "app/core/settings.py"
+      },
+      {
+        "id": "app/modules/kg/__init__.py"
+      },
+      {
+        "id": "app/modules/parsing/tables.py"
+      },
+      {
+        "id": "app/utils/logger.py"
+      }
+    ],
+    "app/agent/explore/contracts.py": [],
+    "app/agent/explore/retrievers/__init__.py": [],
+    "app/agent/explore/retrievers/bundle_retriever.py": [
+      {
+        "id": "app/modules/schema/contracts/evidence_contracts.py"
+      },
+      {
+        "id": "app/tools/access/shared.py"
+      },
+      {
+        "id": "app/utils/logger.py"
+      }
+    ],
+    "app/agent/explore/retrievers/instruction_retriever.py": [
+      {
+        "id": "app/modules/schema/contracts/evidence_contracts.py"
+      },
+      {
+        "id": "app/services/report_store.py"
+      },
+      {
+        "id": "app/utils/logger.py"
+      }
+    ],
+    "app/agent/explore/retrievers/kg_retriever.py": [
+      {
+        "id": "app/modules/kg/__init__.py"
+      },
+      {
+        "id": "app/modules/kg/queries/cognition.py"
+      },
+      {
+        "id": "app/modules/kg/queries/sparql.py"
+      },
+      {
+        "id": "app/modules/schema/contracts/evidence_contracts.py"
+      },
+      {
+        "id": "app/tools/access/shared.py"
+      },
+      {
+        "id": "app/utils/logger.py"
+      }
+    ],
+    "app/agent/explore/retrievers/report_retriever.py": [
+      {
+        "id": "app/modules/schema/contracts/evidence_contracts.py"
+      },
+      {
+        "id": "app/services/report_store.py"
+      },
+      {
+        "id": "app/utils/logger.py"
+      }
+    ],
+    "app/agent/explore/service.py": [
+      {
+        "id": "app/agent/explore/retrievers/bundle_retriever.py"
+      },
+      {
+        "id": "app/agent/explore/retrievers/instruction_retriever.py"
+      },
+      {
+        "id": "app/agent/explore/retrievers/kg_retriever.py"
+      },
+      {
+        "id": "app/agent/explore/retrievers/report_retriever.py"
+      },
+      {
+        "id": "app/modules/schema/contracts/evidence_contracts.py"
+      },
+      {
+        "id": "app/utils/logger.py"
+      }
+    ],
+    "app/agent/explore/verification.py": [
+      {
+        "id": "app/services/step_report.py"
+      }
+    ],
+    "app/agent/ground/aggregate.py": [
+      {
+        "id": "app/modules/context/planning_context.py"
+      },
+      {
+        "id": "app/modules/schema/contracts/contract_meta.py"
+      },
+      {
+        "id": "app/modules/schema/contracts/grounding_contracts.py"
+      },
+      {
+        "id": "app/modules/schema/contracts/provenance.py"
+      },
+      {
+        "id": "app/modules/schema/contracts/spatial_reference_contracts.py"
+      },
+      {
+        "id": "app/modules/spatial_ops/grounding/resolver.py"
+      }
+    ],
+    "app/agent/ground/format_bound_intent.py": [
+      {
+        "id": "app/modules/schema/contracts/custom_zone_contracts.py"
+      },
+      {
+        "id": "app/modules/schema/contracts/parse_contracts.py"
+      },
+      {
+        "id": "app/modules/schema/contracts/provenance.py"
+      },
+      {
+        "id": "app/modules/schema/encodings/dicts/vocabularies/loader.py"
+      }
+    ],
+    "app/agent/ground/gate.py": [
+      {
+        "id": "app/modules/schema/contracts/grounding_contracts.py"
+      },
+      {
+        "id": "app/modules/schema/contracts/workflow_contracts.py"
+      }
+    ],
+    "app/agent/ground/review.py": [
+      {
+        "id": "app/modules/schema/contracts/grounding_contracts.py"
+      },
+      {
+        "id": "app/modules/schema/contracts/spatial_reference_contracts.py"
+      },
+      {
+        "id": "app/modules/schema/contracts/workflow_contracts.py"
+      }
+    ],
+    "app/agent/l1_observe/aggregate.py": [
+      {
+        "id": "app/agent/l1_observe/gate.py"
+      },
+      {
+        "id": "app/agent/l1_observe/review.py"
+      },
+      {
+        "id": "app/modules/parsing/compiler/core.py"
+      },
+      {
+        "id": "app/modules/ports/artifact_store.py"
+      },
+      {
+        "id": "app/modules/schema/contracts/classification_ref.py"
+      },
+      {
+        "id": "app/modules/schema/contracts/contract_meta.py"
+      },
+      {
+        "id": "app/modules/schema/contracts/evidence_contracts.py"
+      },
+      {
+        "id": "app/modules/schema/contracts/l1_contracts.py"
+      },
+      {
+        "id": "app/modules/schema/contracts/parsing_contracts.py"
+      },
+      {
+        "id": "app/modules/schema/contracts/provenance.py"
+      },
+      {
+        "id": "app/services/artifact_store.py"
+      },
+      {
+        "id": "app/services/report_store.py"
+      },
+      {
+        "id": "app/services/review_package.py"
+      },
+      {
+        "id": "app/utils/logger.py"
+      }
+    ],
+    "app/agent/l1_observe/analysis_node.py": [
+      {
+        "id": "app/agent/common/dimension_runtime.py"
+      },
+      {
+        "id": "app/agent/explore/service.py"
+      },
+      {
+        "id": "app/agent/l1_observe/formatters.py"
+      },
+      {
+        "id": "app/agent/l1_observe/pipeline.py"
+      },
+      {
+        "id": "app/config/__init__.py"
+      },
+      {
+        "id": "app/core/events.py"
+      },
+      {
+        "id": "app/core/llm.py"
+      },
+      {
+        "id": "app/core/settings.py"
+      },
+      {
+        "id": "app/modules/kg/enrichment/report_entity_enrichment.py"
+      },
+      {
+        "id": "app/modules/parsing/schemas.py"
+      },
+      {
+        "id": "app/modules/prompts/analysis.py"
+      },
+      {
+        "id": "app/modules/prompts/concept.py"
+      },
+      {
+        "id": "app/modules/prompts/detailed.py"
+      },
+      {
+        "id": "app/modules/schema/contracts/evidence_contracts.py"
+      },
+      {
+        "id": "app/services/report_store.py"
+      },
+      {
+        "id": "app/services/sse.py"
+      },
+      {
+        "id": "app/utils/logger.py"
+      },
+      {
+        "id": "app/utils/stats_collector.py"
+      }
+    ],
+    "app/agent/l1_observe/formatters.py": [],
+    "app/agent/l1_observe/gate.py": [
+      {
+        "id": "app/modules/schema/contracts/l1_contracts.py"
+      },
+      {
+        "id": "app/modules/schema/contracts/workflow_contracts.py"
+      }
+    ],
+    "app/agent/l1_observe/pipeline.py": [
+      {
+        "id": "app/config/__init__.py"
+      },
+      {
+        "id": "app/tools/tools.py"
+      },
+      {
+        "id": "app/utils/logger.py"
+      }
+    ],
+    "app/agent/l1_observe/review.py": [
+      {
+        "id": "app/modules/ports/artifact_store.py"
+      },
+      {
+        "id": "app/modules/schema/contracts/l1_contracts.py"
+      },
+      {
+        "id": "app/modules/schema/contracts/review_contracts.py"
+      },
+      {
+        "id": "app/modules/schema/contracts/workflow_contracts.py"
+      }
+    ],
+    "app/agent/l2_strategize/aggregate.py": [
+      {
+        "id": "app/agent/l2_strategize/gate.py"
+      },
+      {
+        "id": "app/agent/l2_strategize/review.py"
+      },
+      {
+        "id": "app/modules/parsing/compiler/core.py"
+      },
+      {
+        "id": "app/modules/ports/artifact_store.py"
+      },
+      {
+        "id": "app/modules/schema/contracts/evidence_contracts.py"
+      },
+      {
+        "id": "app/modules/schema/contracts/l1_contracts.py"
+      },
+      {
+        "id": "app/modules/schema/contracts/l2_contracts.py"
+      },
+      {
+        "id": "app/modules/schema/contracts/parsing_contracts.py"
+      },
+      {
+        "id": "app/modules/schema/contracts/provenance.py"
+      },
+      {
+        "id": "app/services/artifact_store.py"
+      },
+      {
+        "id": "app/services/report_store.py"
+      },
+      {
+        "id": "app/services/review_package.py"
+      },
+      {
+        "id": "app/utils/logger.py"
+      }
+    ],
+    "app/agent/l2_strategize/gate.py": [
+      {
+        "id": "app/modules/schema/contracts/l2_contracts.py"
+      },
+      {
+        "id": "app/modules/schema/contracts/workflow_contracts.py"
+      }
+    ],
+    "app/agent/l2_strategize/review.py": [
+      {
+        "id": "app/modules/ports/artifact_store.py"
+      },
+      {
+        "id": "app/modules/schema/contracts/l2_contracts.py"
+      },
+      {
+        "id": "app/modules/schema/contracts/review_contracts.py"
+      },
+      {
+        "id": "app/modules/schema/contracts/workflow_contracts.py"
+      }
+    ],
+    "app/agent/l2_strategize/worker.py": [
+      {
+        "id": "app/agent/common/dimension_runtime.py"
+      },
+      {
+        "id": "app/agent/explore/service.py"
+      },
+      {
+        "id": "app/config/__init__.py"
+      },
+      {
+        "id": "app/core/events.py"
+      },
+      {
+        "id": "app/core/llm.py"
+      },
+      {
+        "id": "app/core/settings.py"
+      },
+      {
+        "id": "app/modules/prompts/concept.py"
+      },
+      {
+        "id": "app/modules/schema/contracts/evidence_contracts.py"
+      },
+      {
+        "id": "app/services/report_store.py"
+      },
+      {
+        "id": "app/services/sse.py"
+      },
+      {
+        "id": "app/utils/logger.py"
+      },
+      {
+        "id": "app/utils/stats_collector.py"
+      }
+    ],
+    "app/agent/l3_plan/aggregate.py": [
+      {
+        "id": "app/agent/l3_plan/gate.py"
+      },
+      {
+        "id": "app/agent/l3_plan/review.py"
+      },
+      {
+        "id": "app/modules/parsing/compiler/core.py"
+      },
+      {
+        "id": "app/modules/ports/artifact_store.py"
+      },
+      {
+        "id": "app/modules/schema/contracts/evidence_contracts.py"
+      },
+      {
+        "id": "app/modules/schema/contracts/l1_contracts.py"
+      },
+      {
+        "id": "app/modules/schema/contracts/l2_contracts.py"
+      },
+      {
+        "id": "app/modules/schema/contracts/l3_contracts.py"
+      },
+      {
+        "id": "app/modules/schema/contracts/parsing_contracts.py"
+      },
+      {
+        "id": "app/modules/schema/contracts/provenance.py"
+      },
+      {
+        "id": "app/services/artifact_store.py"
+      },
+      {
+        "id": "app/services/report_store.py"
+      },
+      {
+        "id": "app/services/review_package.py"
+      },
+      {
+        "id": "app/utils/logger.py"
+      }
+    ],
+    "app/agent/l3_plan/gate.py": [
+      {
+        "id": "app/modules/schema/contracts/l3_contracts.py"
+      },
+      {
+        "id": "app/modules/schema/contracts/workflow_contracts.py"
+      }
+    ],
+    "app/agent/l3_plan/review.py": [
+      {
+        "id": "app/modules/ports/artifact_store.py"
+      },
+      {
+        "id": "app/modules/schema/contracts/l3_contracts.py"
+      },
+      {
+        "id": "app/modules/schema/contracts/review_contracts.py"
+      },
+      {
+        "id": "app/modules/schema/contracts/workflow_contracts.py"
+      }
+    ],
+    "app/agent/l3_plan/worker.py": [
+      {
+        "id": "app/agent/common/dimension_runtime.py"
+      },
+      {
+        "id": "app/agent/explore/service.py"
+      },
+      {
+        "id": "app/config/__init__.py"
+      },
+      {
+        "id": "app/core/events.py"
+      },
+      {
+        "id": "app/core/llm.py"
+      },
+      {
+        "id": "app/core/settings.py"
+      },
+      {
+        "id": "app/modules/kg/enrichment/report_entity_enrichment.py"
+      },
+      {
+        "id": "app/modules/prompts/detailed.py"
+      },
+      {
+        "id": "app/modules/schema/contracts/evidence_contracts.py"
+      },
+      {
+        "id": "app/services/report_store.py"
+      },
+      {
+        "id": "app/services/sse.py"
+      },
+      {
+        "id": "app/utils/logger.py"
+      },
+      {
+        "id": "app/utils/stats_collector.py"
+      }
+    ],
+    "app/agent/parse/__init__.py": [
+      {
+        "id": "app/agent/parse/aggregate.py"
+      },
+      {
+        "id": "app/agent/parse/compile_node.py"
+      },
+      {
+        "id": "app/agent/parse/gate_node.py"
+      },
+      {
+        "id": "app/agent/parse/llm_patch.py"
+      },
+      {
+        "id": "app/agent/parse/merge_node.py"
+      },
+      {
+        "id": "app/agent/parse/review.py"
+      },
+      {
+        "id": "app/agent/parse/route_node.py"
+      }
+    ],
+    "app/agent/parse/aggregate.py": [
+      {
+        "id": "app/agent/parse/compile_node.py"
+      },
+      {
+        "id": "app/agent/parse/gate_node.py"
+      },
+      {
+        "id": "app/agent/parse/llm_patch.py"
+      },
+      {
+        "id": "app/agent/parse/merge_node.py"
+      },
+      {
+        "id": "app/agent/parse/review.py"
+      },
+      {
+        "id": "app/agent/parse/route_node.py"
+      },
+      {
+        "id": "app/modules/ports/artifact_store.py"
+      },
+      {
+        "id": "app/modules/schema/contracts/l3_contracts.py"
+      },
+      {
+        "id": "app/modules/schema/contracts/parse_result_contracts.py"
+      },
+      {
+        "id": "app/modules/schema/contracts/review_contracts.py"
+      },
+      {
+        "id": "app/modules/schema/contracts/spatial_reference_contracts.py"
+      },
+      {
+        "id": "app/modules/schema/contracts/workflow_contracts.py"
+      },
+      {
+        "id": "app/services/artifact_store.py"
+      },
+      {
+        "id": "app/services/review_package.py"
+      },
+      {
+        "id": "app/utils/logger.py"
+      }
+    ],
+    "app/agent/parse/compile_node.py": [
+      {
+        "id": "app/modules/parsing/compiler/spec_mapper.py"
+      },
+      {
+        "id": "app/modules/schema/contracts/l3_contracts.py"
+      },
+      {
+        "id": "app/modules/schema/contracts/parse_contracts.py"
+      },
+      {
+        "id": "app/modules/schema/contracts/parse_result_contracts.py"
+      },
+      {
+        "id": "app/modules/schema/contracts/provenance.py"
+      }
+    ],
+    "app/agent/parse/gate_node.py": [
+      {
+        "id": "app/modules/schema/contracts/parse_result_contracts.py"
+      },
+      {
+        "id": "app/modules/schema/contracts/workflow_contracts.py"
+      }
+    ],
+    "app/agent/parse/llm_patch.py": [
+      {
+        "id": "app/core/instructor_client.py"
+      },
+      {
+        "id": "app/modules/schema/contracts/l3_contracts.py"
+      },
+      {
+        "id": "app/modules/schema/contracts/parse_result_contracts.py"
+      },
+      {
+        "id": "app/utils/logger.py"
+      }
+    ],
+    "app/agent/parse/merge_node.py": [
+      {
+        "id": "app/modules/schema/contracts/parse_result_contracts.py"
+      }
+    ],
+    "app/agent/parse/review.py": [
+      {
+        "id": "app/modules/parsing/spatial_language.py"
+      },
+      {
+        "id": "app/modules/ports/artifact_store.py"
+      },
+      {
+        "id": "app/modules/schema/contracts/parse_result_contracts.py"
+      },
+      {
+        "id": "app/modules/schema/contracts/spatial_reference_contracts.py"
+      },
+      {
+        "id": "app/modules/schema/contracts/workflow_contracts.py"
+      }
+    ],
+    "app/agent/parse/route_node.py": [
+      {
+        "id": "app/modules/schema/contracts/parse_result_contracts.py"
+      }
+    ],
+    "app/agent/plan_state/completion_node.py": [
+      {
+        "id": "app/agent/bootstrap/phase_machine.py"
+      },
+      {
+        "id": "app/modules/kg/enrichment/__init__.py"
+      },
+      {
+        "id": "app/services/report_store.py"
+      },
+      {
+        "id": "app/services/session_bundle.py"
+      },
+      {
+        "id": "app/tools/access/shared.py"
+      },
+      {
+        "id": "app/utils/logger.py"
+      },
+      {
+        "id": "app/utils/sse_publisher.py"
+      }
+    ],
+    "app/agent/plan_state/state.py": [
+      {
+        "id": "app/agent/bootstrap/phase_machine.py"
+      }
+    ],
+    "app/agent/reconcile/__init__.py": [
+      {
+        "id": "app/agent/reconcile/aggregate.py"
+      },
+      {
+        "id": "app/agent/reconcile/checks.py"
+      },
+      {
+        "id": "app/agent/reconcile/gate.py"
+      },
+      {
+        "id": "app/agent/reconcile/review.py"
+      }
+    ],
+    "app/agent/reconcile/aggregate.py": [
+      {
+        "id": "app/agent/reconcile/checks.py"
+      },
+      {
+        "id": "app/modules/schema/contracts/provenance.py"
+      },
+      {
+        "id": "app/modules/schema/contracts/reconciliation_contracts.py"
+      }
+    ],
+    "app/agent/reconcile/checks.py": [
+      {
+        "id": "app/modules/schema/contracts/reconciliation_contracts.py"
+      }
+    ],
+    "app/agent/reconcile/gate.py": [
+      {
+        "id": "app/modules/schema/contracts/reconciliation_contracts.py"
+      },
+      {
+        "id": "app/modules/schema/contracts/workflow_contracts.py"
+      }
+    ],
+    "app/agent/reconcile/review.py": [
+      {
+        "id": "app/modules/schema/contracts/reconciliation_contracts.py"
+      },
+      {
+        "id": "app/modules/schema/contracts/workflow_contracts.py"
+      }
+    ],
+    "app/agent/select/__init__.py": [
+      {
+        "id": "app/agent/select/adapter.py"
+      },
+      {
+        "id": "app/agent/select/aggregate.py"
+      },
+      {
+        "id": "app/agent/select/gate.py"
+      },
+      {
+        "id": "app/agent/select/review.py"
+      }
+    ],
+    "app/agent/select/adapter.py": [
+      {
+        "id": "app/modules/schema/__init__.py"
+      },
+      {
+        "id": "app/modules/schema/contracts/grounding_contracts.py"
+      },
+      {
+        "id": "app/modules/spatial_ops/selection/__init__.py"
+      }
+    ],
+    "app/agent/select/aggregate.py": [
+      {
+        "id": "app/agent/select/adapter.py"
+      },
+      {
+        "id": "app/modules/context/planning_context.py"
+      },
+      {
+        "id": "app/modules/schema/contracts/grounding_contracts.py"
+      },
+      {
+        "id": "app/modules/schema/contracts/parse_contracts.py"
+      },
+      {
+        "id": "app/modules/schema/contracts/provenance.py"
+      },
+      {
+        "id": "app/modules/schema/contracts/selection_contracts.py"
+      },
+      {
+        "id": "app/modules/spatial_ops/selection/__init__.py"
+      },
+      {
+        "id": "app/modules/spatial_ops/selection/facility_location.py"
+      }
+    ],
+    "app/agent/select/gate.py": [
+      {
+        "id": "app/modules/schema/contracts/selection_contracts.py"
+      },
+      {
+        "id": "app/modules/schema/contracts/workflow_contracts.py"
+      }
+    ],
+    "app/agent/select/review.py": [
+      {
+        "id": "app/agent/select/gate.py"
+      },
+      {
+        "id": "app/modules/schema/contracts/grounding_contracts.py"
+      },
+      {
+        "id": "app/modules/schema/contracts/selection_contracts.py"
+      },
+      {
+        "id": "app/modules/schema/contracts/workflow_contracts.py"
+      }
+    ],
+    "app/agent/tools/__init__.py": [
+      {
+        "id": "app/agent/tools/execute_node.py"
+      }
+    ],
+    "app/agent/tools/execute_node.py": [
+      {
+        "id": "app/tools/intent_tools.py"
+      },
+      {
+        "id": "app/tools/registry.py"
+      },
+      {
+        "id": "app/tools/tools.py"
+      },
+      {
+        "id": "app/utils/logger.py"
+      },
+      {
+        "id": "app/utils/sse_publisher.py"
+      }
+    ],
+    "app/agent/validate/__init__.py": [
+      {
+        "id": "app/agent/validate/aggregate.py"
+      },
+      {
+        "id": "app/agent/validate/checks.py"
+      },
+      {
+        "id": "app/agent/validate/gate.py"
+      },
+      {
+        "id": "app/agent/validate/review.py"
+      }
+    ],
+    "app/agent/validate/aggregate.py": [
+      {
+        "id": "app/agent/validate/checks.py"
+      },
+      {
+        "id": "app/modules/schema/contracts/provenance.py"
+      },
+      {
+        "id": "app/modules/schema/contracts/validation_report_contracts.py"
+      }
+    ],
+    "app/agent/validate/checks.py": [
+      {
+        "id": "app/modules/schema/contracts/validation_report_contracts.py"
+      },
+      {
+        "id": "app/modules/spatial_ops/selection/__init__.py"
+      }
+    ],
+    "app/agent/validate/gate.py": [
+      {
+        "id": "app/modules/schema/contracts/validation_report_contracts.py"
+      },
+      {
+        "id": "app/modules/schema/contracts/workflow_contracts.py"
+      }
+    ],
+    "app/agent/validate/review.py": [
+      {
+        "id": "app/modules/schema/contracts/validation_report_contracts.py"
+      },
+      {
+        "id": "app/modules/schema/contracts/workflow_contracts.py"
+      }
+    ],
+    "app/api/__init__.py": [],
+    "app/api/artifact_routes.py": [
+      {
+        "id": "app/database/operations.py"
+      },
+      {
+        "id": "app/modules/ports/artifact_store.py"
+      },
+      {
+        "id": "app/services/artifact_store.py"
+      }
+    ],
+    "app/api/gis_test_routes.py": [
+      {
+        "id": "app/agent/validate/aggregate.py"
+      },
+      {
+        "id": "app/core/settings.py"
+      },
+      {
+        "id": "app/database/engine.py"
+      },
+      {
+        "id": "app/modules/data/catalog/catalog.py"
+      },
+      {
+        "id": "app/modules/data/documents/loader.py"
+      },
+      {
+        "id": "app/modules/data/providers/poi.py"
+      },
+      {
+        "id": "app/modules/parsing/text_parser.py"
+      },
+      {
+        "id": "app/modules/schema/__init__.py"
+      },
+      {
+        "id": "app/modules/schema/encodings/code_sets.py"
+      },
+      {
+        "id": "app/modules/schema/output/colors.py"
+      },
+      {
+        "id": "app/modules/spatial_ops/conflict/detector.py"
+      },
+      {
+        "id": "app/services/report_store.py"
+      },
+      {
+        "id": "app/tools/gis/_analytics/accessibility.py"
+      },
+      {
+        "id": "app/tools/gis/_analytics/coverage.py"
+      },
+      {
+        "id": "app/tools/gis/_analytics/isochrone.py"
+      },
+      {
+        "id": "app/tools/gis/_analytics/metrics_calculator.py"
+      },
+      {
+        "id": "app/tools/gis/_generation/pipeline.py"
+      },
+      {
+        "id": "app/tools/gis/_validation/facility_validator.py"
+      }
+    ],
+    "app/api/human_review_routes.py": [
+      {
+        "id": "app/services/post_l3_resume.py"
+      },
+      {
+        "id": "app/services/runtime.py"
+      }
+    ],
+    "app/api/render_routes.py": [
+      {
+        "id": "app/services/artifact_store.py"
+      },
+      {
+        "id": "app/services/runtime.py"
+      }
+    ],
+    "app/api/routes.py": [
+      {
+        "id": "app/api/artifact_routes.py"
+      },
+      {
+        "id": "app/api/gis_test_routes.py"
+      },
+      {
+        "id": "app/api/human_review_routes.py"
+      },
+      {
+        "id": "app/api/render_routes.py"
+      },
+      {
+        "id": "app/api/session_routes.py"
+      },
+      {
+        "id": "app/core/settings.py"
+      }
+    ],
+    "app/api/schemas.py": [
+      {
+        "id": "app/core/settings.py"
+      }
+    ],
+    "app/api/session_routes.py": [
+      {
+        "id": "app/agent/bootstrap/phase_machine.py"
+      },
+      {
+        "id": "app/agent/plan_state/state.py"
+      },
+      {
+        "id": "app/api/schemas.py"
+      },
+      {
+        "id": "app/config/dependency.py"
+      },
+      {
+        "id": "app/core/events.py"
+      },
+      {
+        "id": "app/database/models.py"
+      },
+      {
+        "id": "app/database/operations.py"
+      },
+      {
+        "id": "app/modules/data/catalog/catalog.py"
+      },
+      {
+        "id": "app/modules/data/connections/__init__.py"
+      },
+      {
+        "id": "app/modules/planning_text/config.py"
+      },
+      {
+        "id": "app/modules/planning_text/generator.py"
+      },
+      {
+        "id": "app/modules/planning_text/layer_exporter.py"
+      },
+      {
+        "id": "app/modules/schema/types/canonical.py"
+      },
+      {
+        "id": "app/modules/spatial_ops/geometry/__init__.py"
+      },
+      {
+        "id": "app/services/checkpoint.py"
+      },
+      {
+        "id": "app/services/report_store.py"
+      },
+      {
+        "id": "app/services/runtime.py"
+      },
+      {
+        "id": "app/services/session.py"
+      },
+      {
+        "id": "app/services/sse.py"
+      },
+      {
+        "id": "app/services/stage_report.py"
+      },
+      {
+        "id": "app/services/step_report.py"
+      },
+      {
+        "id": "app/utils/document_loader.py"
+      },
+      {
+        "id": "app/utils/sse_publisher.py"
+      }
+    ],
+    "app/config/__init__.py": [
+      {
+        "id": "app/config/dependency.py"
+      },
+      {
+        "id": "app/config/loader.py"
+      }
+    ],
+    "app/config/dependency.py": [
+      {
+        "id": "app/config/loader.py"
+      }
+    ],
+    "app/config/loader.py": [],
+    "app/core/__init__.py": [],
+    "app/core/events.py": [],
+    "app/core/instructor_client.py": [
+      {
+        "id": "app/core/settings.py"
+      },
+      {
+        "id": "app/utils/logger.py"
+      }
+    ],
+    "app/core/llm.py": [
+      {
+        "id": "app/core/settings.py"
+      },
+      {
+        "id": "app/core/tracing.py"
+      },
+      {
+        "id": "app/utils/logger.py"
+      }
+    ],
+    "app/core/settings.py": [],
+    "app/core/tracing.py": [
+      {
+        "id": "app/core/settings.py"
+      },
+      {
+        "id": "app/utils/logger.py"
+      }
+    ],
+    "app/database/__init__.py": [
+      {
+        "id": "app/database/engine.py"
+      }
+    ],
+    "app/database/engine.py": [
+      {
+        "id": "app/core/settings.py"
+      },
+      {
+        "id": "app/database/models.py"
+      }
+    ],
+    "app/database/models.py": [
+      {
+        "id": "app/core/settings.py"
+      }
+    ],
+    "app/database/operations.py": [
+      {
+        "id": "app/database/engine.py"
+      },
+      {
+        "id": "app/database/models.py"
+      }
+    ],
+    "app/main.py": [
+      {
+        "id": "app/api/routes.py"
+      },
+      {
+        "id": "app/core/settings.py"
+      },
+      {
+        "id": "app/database/__init__.py"
+      },
+      {
+        "id": "app/services/runtime.py"
+      },
+      {
+        "id": "app/services/sse.py"
+      },
+      {
+        "id": "app/utils/logger.py"
+      }
+    ],
+    "app/modules/__init__.py": [],
+    "app/modules/context/__init__.py": [
+      {
+        "id": "app/modules/context/planning_context.py"
+      }
+    ],
+    "app/modules/context/planning_context.py": [
+      {
+        "id": "app/modules/ports/planning_ports.py"
+      }
+    ],
+    "app/modules/data/__init__.py": [
+      {
+        "id": "app/modules/data/base_conversion.py"
+      },
+      {
+        "id": "app/modules/data/catalog/__init__.py"
+      },
+      {
+        "id": "app/modules/data/connections/__init__.py"
+      },
+      {
+        "id": "app/modules/data/contracts.py"
+      },
+      {
+        "id": "app/modules/data/ingest.py"
+      },
+      {
+        "id": "app/modules/data/sources/__init__.py"
+      }
+    ],
+    "app/modules/data/adapters/__init__.py": [
+      {
+        "id": "app/modules/data/adapters/document.py"
+      },
+      {
+        "id": "app/modules/data/adapters/features.py"
+      },
+      {
+        "id": "app/modules/data/adapters/parcels.py"
+      },
+      {
+        "id": "app/modules/data/adapters/raster.py"
+      },
+      {
+        "id": "app/modules/data/adapters/table.py"
+      },
+      {
+        "id": "app/modules/kg/dlq.py"
+      },
+      {
+        "id": "app/modules/schema/types/layer_registry.py"
+      }
+    ],
+    "app/modules/data/adapters/document.py": [
+      {
+        "id": "app/modules/schema/types/layer_registry.py"
+      },
+      {
+        "id": "app/utils/logger.py"
+      }
+    ],
+    "app/modules/data/adapters/features.py": [
+      {
+        "id": "app/modules/data/ingest.py"
+      },
+      {
+        "id": "app/modules/kg/dlq.py"
+      },
+      {
+        "id": "app/modules/schema/types/layer_registry.py"
+      }
+    ],
+    "app/modules/data/adapters/parcels.py": [
+      {
+        "id": "app/modules/data/ingest.py"
+      },
+      {
+        "id": "app/modules/kg/dlq.py"
+      },
+      {
+        "id": "app/modules/schema/types/layer_registry.py"
+      }
+    ],
+    "app/modules/data/adapters/raster.py": [
+      {
+        "id": "app/modules/data/ingest.py"
+      },
+      {
+        "id": "app/modules/schema/types/layer_registry.py"
+      }
+    ],
+    "app/modules/data/adapters/table.py": [
+      {
+        "id": "app/modules/schema/types/layer_registry.py"
+      },
+      {
+        "id": "app/utils/logger.py"
+      }
+    ],
+    "app/modules/data/base_conversion.py": [
+      {
+        "id": "app/modules/schema/advisory_crosswalks/__init__.py"
+      },
+      {
+        "id": "app/modules/schema/encodings/dicts/loader.py"
+      }
+    ],
+    "app/modules/data/bundle_assembly_adapter.py": [
+      {
+        "id": "app/modules/data/catalog/catalog.py"
+      },
+      {
+        "id": "app/modules/ports/bundle_assembly.py"
+      }
+    ],
+    "app/modules/data/catalog/__init__.py": [
+      {
+        "id": "app/modules/data/catalog/catalog.py"
+      },
+      {
+        "id": "app/modules/data/catalog/config.py"
+      }
+    ],
+    "app/modules/data/catalog/catalog.py": [
+      {
+        "id": "app/core/settings.py"
+      },
+      {
+        "id": "app/database/operations.py"
+      },
+      {
+        "id": "app/modules/data/adapters/__init__.py"
+      },
+      {
+        "id": "app/modules/data/catalog/config.py"
+      },
+      {
+        "id": "app/modules/data/catalog/external_anchors.py"
+      },
+      {
+        "id": "app/modules/data/connections/__init__.py"
+      },
+      {
+        "id": "app/modules/data/connections/amap.py"
+      },
+      {
+        "id": "app/modules/data/connections/gd_tianditu.py"
+      },
+      {
+        "id": "app/modules/data/connections/osm.py"
+      },
+      {
+        "id": "app/modules/data/connections/tianditu.py"
+      },
+      {
+        "id": "app/modules/data/contracts.py"
+      },
+      {
+        "id": "app/modules/data/documents/loader.py"
+      },
+      {
+        "id": "app/modules/data/ingest.py"
+      },
+      {
+        "id": "app/modules/data/sources/__init__.py"
+      },
+      {
+        "id": "app/modules/parsing/admin_code_loader.py"
+      },
+      {
+        "id": "app/modules/schema/types/base.py"
+      },
+      {
+        "id": "app/modules/schema/types/canonical.py"
+      },
+      {
+        "id": "app/modules/schema/types/layer_registry.py"
+      },
+      {
+        "id": "app/modules/schema/types/spatial_types.py"
+      },
+      {
+        "id": "app/modules/spatial_ops/geometry/__init__.py"
+      },
+      {
+        "id": "app/utils/location_parser.py"
+      },
+      {
+        "id": "app/utils/logger.py"
+      }
+    ],
+    "app/modules/data/catalog/config.py": [],
+    "app/modules/data/catalog/dedup.py": [],
+    "app/modules/data/catalog/external_anchors.py": [
+      {
+        "id": "app/core/settings.py"
+      },
+      {
+        "id": "app/modules/data/providers/amap/provider.py"
+      },
+      {
+        "id": "app/modules/data/providers/baidu/provider.py"
+      },
+      {
+        "id": "app/modules/data/providers/tencent/provider.py"
+      },
+      {
+        "id": "app/modules/data/providers/tianditu/wfs.py"
+      },
+      {
+        "id": "app/modules/schema/types/base.py"
+      },
+      {
+        "id": "app/modules/spatial_ops/geometry/__init__.py"
+      },
+      {
+        "id": "app/utils/coord_transform.py"
+      },
+      {
+        "id": "app/utils/logger.py"
+      }
+    ],
+    "app/modules/data/connections/__init__.py": [
+      {
+        "id": "app/modules/data/connections/amap.py"
+      },
+      {
+        "id": "app/modules/data/connections/base.py"
+      },
+      {
+        "id": "app/modules/data/connections/gd_tianditu.py"
+      },
+      {
+        "id": "app/modules/data/connections/osm.py"
+      },
+      {
+        "id": "app/modules/data/connections/rate_limiter.py"
+      },
+      {
+        "id": "app/modules/data/connections/tianditu.py"
+      }
+    ],
+    "app/modules/data/connections/amap.py": [
+      {
+        "id": "app/core/settings.py"
+      },
+      {
+        "id": "app/modules/data/connections/base.py"
+      },
+      {
+        "id": "app/modules/data/connections/rate_limiter.py"
+      },
+      {
+        "id": "app/modules/data/providers/amap/constants.py"
+      },
+      {
+        "id": "app/utils/logger.py"
+      }
+    ],
+    "app/modules/data/connections/base.py": [
+      {
+        "id": "app/modules/data/connections/rate_limiter.py"
+      },
+      {
+        "id": "app/utils/logger.py"
+      }
+    ],
+    "app/modules/data/connections/gd_tianditu.py": [
+      {
+        "id": "app/core/settings.py"
+      },
+      {
+        "id": "app/modules/data/connections/base.py"
+      },
+      {
+        "id": "app/modules/data/connections/rate_limiter.py"
+      },
+      {
+        "id": "app/utils/logger.py"
+      }
+    ],
+    "app/modules/data/connections/osm.py": [
+      {
+        "id": "app/modules/data/connections/base.py"
+      },
+      {
+        "id": "app/modules/data/connections/rate_limiter.py"
+      },
+      {
+        "id": "app/utils/logger.py"
+      }
+    ],
+    "app/modules/data/connections/rate_limiter.py": [
+      {
+        "id": "app/utils/logger.py"
+      }
+    ],
+    "app/modules/data/connections/tianditu.py": [
+      {
+        "id": "app/core/settings.py"
+      },
+      {
+        "id": "app/modules/data/connections/base.py"
+      },
+      {
+        "id": "app/modules/data/connections/rate_limiter.py"
+      },
+      {
+        "id": "app/modules/data/providers/tianditu/constants.py"
+      },
+      {
+        "id": "app/modules/data/providers/tianditu/provider.py"
+      },
+      {
+        "id": "app/utils/logger.py"
+      }
+    ],
+    "app/modules/data/contracts.py": [
+      {
+        "id": "app/modules/schema/types/canonical.py"
+      }
+    ],
+    "app/modules/data/documents/__init__.py": [
+      {
+        "id": "app/modules/data/documents/loader.py"
+      }
+    ],
+    "app/modules/data/documents/loader.py": [
+      {
+        "id": "app/core/settings.py"
+      },
+      {
+        "id": "app/utils/logger.py"
+      }
+    ],
+    "app/modules/data/encoding_detector.py": [
+      {
+        "id": "app/modules/schema/advisory_crosswalks/__init__.py"
+      },
+      {
+        "id": "app/modules/schema/encodings/__init__.py"
+      },
+      {
+        "id": "app/modules/schema/provenance/__init__.py"
+      }
+    ],
+    "app/modules/data/ingest.py": [
+      {
+        "id": "app/modules/data/adapters/__init__.py"
+      },
+      {
+        "id": "app/modules/data/contracts.py"
+      },
+      {
+        "id": "app/modules/schema/__init__.py"
+      },
+      {
+        "id": "app/modules/schema/encodings/dicts/loader.py"
+      },
+      {
+        "id": "app/modules/schema/types/layer_registry.py"
+      },
+      {
+        "id": "app/modules/schema/types/raster_types.py"
+      },
+      {
+        "id": "app/modules/schema/types/spatial_types.py"
+      },
+      {
+        "id": "app/utils/logger.py"
+      }
+    ],
+    "app/modules/data/providers/__init__.py": [],
+    "app/modules/data/providers/amap/__init__.py": [
+      {
+        "id": "app/modules/data/providers/amap/constants.py"
+      },
+      {
+        "id": "app/modules/data/providers/amap/provider.py"
+      },
+      {
+        "id": "app/modules/data/providers/amap/types.py"
+      }
+    ],
+    "app/modules/data/providers/amap/anchor_service.py": [
+      {
+        "id": "app/modules/data/catalog/dedup.py"
+      },
+      {
+        "id": "app/modules/data/providers/amap/provider.py"
+      },
+      {
+        "id": "app/utils/logger.py"
+      }
+    ],
+    "app/modules/data/providers/amap/constants.py": [],
+    "app/modules/data/providers/amap/provider.py": [
+      {
+        "id": "app/core/settings.py"
+      },
+      {
+        "id": "app/modules/data/connections/__init__.py"
+      },
+      {
+        "id": "app/modules/data/providers/amap/constants.py"
+      },
+      {
+        "id": "app/modules/data/providers/amap/types.py"
+      },
+      {
+        "id": "app/utils/coord_transform.py"
+      },
+      {
+        "id": "app/utils/logger.py"
+      }
+    ],
+    "app/modules/data/providers/amap/types.py": [],
+    "app/modules/data/providers/baidu/__init__.py": [
+      {
+        "id": "app/modules/data/providers/baidu/provider.py"
+      },
+      {
+        "id": "app/modules/data/providers/baidu/types.py"
+      }
+    ],
+    "app/modules/data/providers/baidu/constants.py": [],
+    "app/modules/data/providers/baidu/provider.py": [
+      {
+        "id": "app/core/settings.py"
+      },
+      {
+        "id": "app/modules/data/connections/__init__.py"
+      },
+      {
+        "id": "app/modules/data/providers/baidu/constants.py"
+      },
+      {
+        "id": "app/modules/data/providers/baidu/types.py"
+      },
+      {
+        "id": "app/utils/logger.py"
+      }
+    ],
+    "app/modules/data/providers/baidu/types.py": [],
+    "app/modules/data/providers/poi.py": [
+      {
+        "id": "app/modules/data/providers/amap/constants.py"
+      },
+      {
+        "id": "app/modules/data/providers/amap/provider.py"
+      },
+      {
+        "id": "app/modules/data/providers/tianditu/provider.py"
+      },
+      {
+        "id": "app/utils/logger.py"
+      }
+    ],
+    "app/modules/data/providers/tencent/__init__.py": [
+      {
+        "id": "app/modules/data/providers/tencent/provider.py"
+      },
+      {
+        "id": "app/modules/data/providers/tencent/types.py"
+      }
+    ],
+    "app/modules/data/providers/tencent/anchor_service.py": [
+      {
+        "id": "app/modules/data/catalog/dedup.py"
+      },
+      {
+        "id": "app/modules/data/providers/tencent/provider.py"
+      },
+      {
+        "id": "app/utils/logger.py"
+      }
+    ],
+    "app/modules/data/providers/tencent/constants.py": [],
+    "app/modules/data/providers/tencent/provider.py": [
+      {
+        "id": "app/core/settings.py"
+      },
+      {
+        "id": "app/modules/data/connections/__init__.py"
+      },
+      {
+        "id": "app/modules/data/providers/tencent/constants.py"
+      },
+      {
+        "id": "app/modules/data/providers/tencent/types.py"
+      },
+      {
+        "id": "app/utils/logger.py"
+      }
+    ],
+    "app/modules/data/providers/tencent/types.py": [],
+    "app/modules/data/providers/tianditu/__init__.py": [
+      {
+        "id": "app/modules/data/providers/tianditu/constants.py"
+      },
+      {
+        "id": "app/modules/data/providers/tianditu/gd_constants.py"
+      },
+      {
+        "id": "app/modules/data/providers/tianditu/gd_service.py"
+      },
+      {
+        "id": "app/modules/data/providers/tianditu/provider.py"
+      },
+      {
+        "id": "app/modules/data/providers/tianditu/tiles.py"
+      },
+      {
+        "id": "app/modules/data/providers/tianditu/types.py"
+      },
+      {
+        "id": "app/modules/data/providers/tianditu/wfs.py"
+      }
+    ],
+    "app/modules/data/providers/tianditu/anchor_service.py": [
+      {
+        "id": "app/core/settings.py"
+      },
+      {
+        "id": "app/modules/data/catalog/dedup.py"
+      },
+      {
+        "id": "app/modules/data/providers/tianditu/wfs.py"
+      },
+      {
+        "id": "app/utils/logger.py"
+      }
+    ],
+    "app/modules/data/providers/tianditu/constants.py": [],
+    "app/modules/data/providers/tianditu/gd_constants.py": [],
+    "app/modules/data/providers/tianditu/gd_service.py": [
+      {
+        "id": "app/core/settings.py"
+      },
+      {
+        "id": "app/modules/data/connections/__init__.py"
+      },
+      {
+        "id": "app/modules/data/providers/tianditu/constants.py"
+      },
+      {
+        "id": "app/modules/data/providers/tianditu/gd_constants.py"
+      },
+      {
+        "id": "app/modules/data/providers/tianditu/types.py"
+      },
+      {
+        "id": "app/utils/logger.py"
+      }
+    ],
+    "app/modules/data/providers/tianditu/provider.py": [
+      {
+        "id": "app/core/settings.py"
+      },
+      {
+        "id": "app/modules/data/connections/__init__.py"
+      },
+      {
+        "id": "app/modules/data/providers/tianditu/constants.py"
+      },
+      {
+        "id": "app/modules/data/providers/tianditu/tiles.py"
+      },
+      {
+        "id": "app/modules/data/providers/tianditu/types.py"
+      },
+      {
+        "id": "app/modules/data/providers/tianditu/wfs.py"
+      },
+      {
+        "id": "app/utils/logger.py"
+      }
+    ],
+    "app/modules/data/providers/tianditu/tiles.py": [
+      {
+        "id": "app/core/settings.py"
+      },
+      {
+        "id": "app/modules/data/providers/tianditu/constants.py"
+      },
+      {
+        "id": "app/modules/data/providers/tianditu/types.py"
+      },
+      {
+        "id": "app/utils/logger.py"
+      }
+    ],
+    "app/modules/data/providers/tianditu/types.py": [],
+    "app/modules/data/providers/tianditu/wfs.py": [
+      {
+        "id": "app/core/settings.py"
+      },
+      {
+        "id": "app/modules/data/connections/__init__.py"
+      },
+      {
+        "id": "app/modules/data/providers/tianditu/constants.py"
+      },
+      {
+        "id": "app/modules/data/providers/tianditu/types.py"
+      },
+      {
+        "id": "app/utils/logger.py"
+      }
+    ],
+    "app/modules/data/sources/__init__.py": [
+      {
+        "id": "app/modules/data/sources/api_vector.py"
+      },
+      {
+        "id": "app/modules/data/sources/base.py"
+      },
+      {
+        "id": "app/modules/data/sources/document.py"
+      },
+      {
+        "id": "app/modules/data/sources/file_vector.py"
+      },
+      {
+        "id": "app/modules/data/sources/local_raster.py"
+      },
+      {
+        "id": "app/modules/data/sources/registry.py"
+      },
+      {
+        "id": "app/modules/data/sources/remote_raster.py"
+      },
+      {
+        "id": "app/modules/data/sources/wmts_tile.py"
+      }
+    ],
+    "app/modules/data/sources/api_vector.py": [
+      {
+        "id": "app/modules/data/connections/__init__.py"
+      },
+      {
+        "id": "app/modules/data/contracts.py"
+      },
+      {
+        "id": "app/modules/data/providers/tianditu/gd_service.py"
+      },
+      {
+        "id": "app/modules/data/sources/base.py"
+      },
+      {
+        "id": "app/modules/data/sources/registry.py"
+      },
+      {
+        "id": "app/modules/schema/types/canonical.py"
+      },
+      {
+        "id": "app/utils/logger.py"
+      }
+    ],
+    "app/modules/data/sources/base.py": [
+      {
+        "id": "app/modules/data/contracts.py"
+      },
+      {
+        "id": "app/modules/schema/types/canonical.py"
+      }
+    ],
+    "app/modules/data/sources/document.py": [
+      {
+        "id": "app/modules/data/contracts.py"
+      },
+      {
+        "id": "app/modules/data/sources/base.py"
+      },
+      {
+        "id": "app/modules/data/sources/registry.py"
+      },
+      {
+        "id": "app/modules/schema/types/canonical.py"
+      },
+      {
+        "id": "app/utils/logger.py"
+      }
+    ],
+    "app/modules/data/sources/file_vector.py": [
+      {
+        "id": "app/modules/data/contracts.py"
+      },
+      {
+        "id": "app/modules/data/sources/base.py"
+      },
+      {
+        "id": "app/modules/data/sources/registry.py"
+      },
+      {
+        "id": "app/modules/schema/types/canonical.py"
+      },
+      {
+        "id": "app/utils/logger.py"
+      }
+    ],
+    "app/modules/data/sources/local_raster.py": [
+      {
+        "id": "app/modules/data/contracts.py"
+      },
+      {
+        "id": "app/modules/data/sources/base.py"
+      },
+      {
+        "id": "app/modules/data/sources/registry.py"
+      },
+      {
+        "id": "app/modules/schema/types/canonical.py"
+      },
+      {
+        "id": "app/utils/logger.py"
+      }
+    ],
+    "app/modules/data/sources/registry.py": [
+      {
+        "id": "app/modules/data/sources/base.py"
+      }
+    ],
+    "app/modules/data/sources/remote_raster.py": [
+      {
+        "id": "app/modules/data/contracts.py"
+      },
+      {
+        "id": "app/modules/data/sources/base.py"
+      },
+      {
+        "id": "app/modules/data/sources/local_raster.py"
+      },
+      {
+        "id": "app/modules/data/sources/registry.py"
+      },
+      {
+        "id": "app/modules/schema/types/canonical.py"
+      },
+      {
+        "id": "app/utils/logger.py"
+      }
+    ],
+    "app/modules/data/sources/wmts_tile.py": [
+      {
+        "id": "app/modules/data/connections/__init__.py"
+      },
+      {
+        "id": "app/modules/data/contracts.py"
+      },
+      {
+        "id": "app/modules/data/providers/tianditu/gd_service.py"
+      },
+      {
+        "id": "app/modules/data/providers/tianditu/tiles.py"
+      },
+      {
+        "id": "app/modules/data/sources/base.py"
+      },
+      {
+        "id": "app/modules/data/sources/registry.py"
+      },
+      {
+        "id": "app/modules/schema/types/canonical.py"
+      },
+      {
+        "id": "app/utils/logger.py"
+      }
+    ],
+    "app/modules/kg/__init__.py": [
+      {
+        "id": "app/modules/kg/builder/__init__.py"
+      },
+      {
+        "id": "app/modules/kg/interface.py"
+      },
+      {
+        "id": "app/modules/kg/manager.py"
+      },
+      {
+        "id": "app/modules/kg/memory.py"
+      },
+      {
+        "id": "app/modules/kg/ontology.py"
+      },
+      {
+        "id": "app/modules/kg/queries/__init__.py"
+      }
+    ],
+    "app/modules/kg/adapters/__init__.py": [],
+    "app/modules/kg/adapters/gazetteer_adapter.py": [
+      {
+        "id": "app/modules/kg/gazetteer/__init__.py"
+      },
+      {
+        "id": "app/modules/ports/gazetteer.py"
+      },
+      {
+        "id": "app/modules/schema/contracts/gazetteer_contracts.py"
+      }
+    ],
+    "app/modules/kg/adapters/spatial_query_adapter.py": [
+      {
+        "id": "app/modules/kg/queries/spatial_ref.py"
+      },
+      {
+        "id": "app/modules/ports/spatial_query.py"
+      },
+      {
+        "id": "app/modules/schema/contracts/spatial_reference_contracts.py"
+      }
+    ],
+    "app/modules/kg/builder/__init__.py": [
+      {
+        "id": "app/modules/kg/builder/base.py"
+      },
+      {
+        "id": "app/modules/kg/builder/builder.py"
+      },
+      {
+        "id": "app/modules/kg/builder/registry.py"
+      },
+      {
+        "id": "app/modules/kg/dlq.py"
+      }
+    ],
+    "app/modules/kg/builder/base.py": [
+      {
+        "id": "app/modules/kg/memory.py"
+      },
+      {
+        "id": "app/modules/kg/ontology.py"
+      }
+    ],
+    "app/modules/kg/builder/builder.py": [
+      {
+        "id": "app/modules/kg/builder/base.py"
+      },
+      {
+        "id": "app/modules/kg/builder/enrichment.py"
+      },
+      {
+        "id": "app/modules/kg/builder/layer1_core.py"
+      },
+      {
+        "id": "app/modules/kg/builder/layer1_extended.py"
+      },
+      {
+        "id": "app/modules/kg/builder/layer2.py"
+      },
+      {
+        "id": "app/modules/kg/builder/layer3.py"
+      },
+      {
+        "id": "app/modules/kg/builder/layer4.py"
+      },
+      {
+        "id": "app/modules/kg/builder/registry.py"
+      },
+      {
+        "id": "app/modules/kg/memory.py"
+      },
+      {
+        "id": "app/modules/kg/ontology.py"
+      },
+      {
+        "id": "app/modules/schema/types/layer_registry.py"
+      },
+      {
+        "id": "app/modules/spatial_ops/index/bridge.py"
+      },
+      {
+        "id": "app/utils/logger.py"
+      }
+    ],
+    "app/modules/kg/builder/control_line_mapping.py": [
+      {
+        "id": "app/modules/schema/types/spatial_types.py"
+      }
+    ],
+    "app/modules/kg/builder/enrichment.py": [
+      {
+        "id": "app/modules/kg/ontology.py"
+      },
+      {
+        "id": "app/modules/schema/encodings/code_sets.py"
+      },
+      {
+        "id": "app/modules/schema/encodings/dicts/loader.py"
+      },
+      {
+        "id": "app/modules/schema/types/layer_registry.py"
+      },
+      {
+        "id": "app/utils/logger.py"
+      }
+    ],
+    "app/modules/kg/builder/geo_helpers.py": [
+      {
+        "id": "app/modules/kg/ontology.py"
+      }
+    ],
+    "app/modules/kg/builder/layer1.py": [
+      {
+        "id": "app/modules/kg/builder/enrichment.py"
+      },
+      {
+        "id": "app/modules/kg/builder/registry.py"
+      },
+      {
+        "id": "app/modules/kg/ontology.py"
+      },
+      {
+        "id": "app/modules/schema/encodings/code_sets.py"
+      },
+      {
+        "id": "app/modules/schema/encodings/dicts/loader.py"
+      },
+      {
+        "id": "app/modules/schema/types/spatial_types.py"
+      },
+      {
+        "id": "app/modules/spatial_ops/geometry/__init__.py"
+      },
+      {
+        "id": "app/utils/logger.py"
+      }
+    ],
+    "app/modules/kg/builder/layer1_control_lines.py": [
+      {
+        "id": "app/modules/kg/builder/control_line_mapping.py"
+      },
+      {
+        "id": "app/modules/kg/ontology.py"
+      },
+      {
+        "id": "app/modules/schema/provenance/__init__.py"
+      }
+    ],
+    "app/modules/kg/builder/layer1_core.py": [
+      {
+        "id": "app/modules/kg/builder/enrichment.py"
+      },
+      {
+        "id": "app/modules/kg/builder/geo_helpers.py"
+      },
+      {
+        "id": "app/modules/kg/builder/registry.py"
+      },
+      {
+        "id": "app/modules/kg/memory.py"
+      },
+      {
+        "id": "app/modules/kg/ontology.py"
+      },
+      {
+        "id": "app/modules/schema/types/spatial_types.py"
+      },
+      {
+        "id": "app/utils/logger.py"
+      }
+    ],
+    "app/modules/kg/builder/layer1_extended.py": [
+      {
+        "id": "app/modules/kg/builder/enrichment.py"
+      },
+      {
+        "id": "app/modules/kg/builder/geo_helpers.py"
+      },
+      {
+        "id": "app/modules/kg/builder/registry.py"
+      },
+      {
+        "id": "app/modules/kg/ontology.py"
+      },
+      {
+        "id": "app/utils/logger.py"
+      }
+    ],
+    "app/modules/kg/builder/layer2.py": [
+      {
+        "id": "app/modules/kg/builder/geo_helpers.py"
+      },
+      {
+        "id": "app/modules/kg/memory.py"
+      },
+      {
+        "id": "app/modules/kg/ontology.py"
+      },
+      {
+        "id": "app/modules/spatial_ops/geometry/__init__.py"
+      },
+      {
+        "id": "app/utils/logger.py"
+      }
+    ],
+    "app/modules/kg/builder/layer3.py": [
+      {
+        "id": "app/modules/kg/memory.py"
+      },
+      {
+        "id": "app/modules/kg/ontology.py"
+      },
+      {
+        "id": "app/modules/schema/contracts/parse_contracts.py"
+      },
+      {
+        "id": "app/utils/logger.py"
+      }
+    ],
+    "app/modules/kg/builder/layer4.py": [
+      {
+        "id": "app/modules/kg/ontology.py"
+      },
+      {
+        "id": "app/modules/schema/contracts/planned_state_contracts.py"
+      },
+      {
+        "id": "app/utils/logger.py"
+      }
+    ],
+    "app/modules/kg/builder/registry.py": [],
+    "app/modules/kg/dlq.py": [],
+    "app/modules/kg/enrichment/__init__.py": [
+      {
+        "id": "app/modules/kg/enrichment/bindings.py"
+      },
+      {
+        "id": "app/modules/kg/enrichment/descriptions.py"
+      },
+      {
+        "id": "app/modules/kg/enrichment/relations.py"
+      }
+    ],
+    "app/modules/kg/enrichment/bindings.py": [
+      {
+        "id": "app/modules/kg/enrichment/report_entity_enrichment.py"
+      }
+    ],
+    "app/modules/kg/enrichment/descriptions.py": [
+      {
+        "id": "app/modules/kg/__init__.py"
+      },
+      {
+        "id": "app/modules/kg/ontology.py"
+      },
+      {
+        "id": "app/utils/logger.py"
+      }
+    ],
+    "app/modules/kg/enrichment/relations.py": [
+      {
+        "id": "app/modules/kg/__init__.py"
+      },
+      {
+        "id": "app/modules/kg/ontology.py"
+      },
+      {
+        "id": "app/utils/logger.py"
+      }
+    ],
+    "app/modules/kg/enrichment/report_entity_enrichment.py": [
+      {
+        "id": "app/core/llm.py"
+      },
+      {
+        "id": "app/core/settings.py"
+      },
+      {
+        "id": "app/modules/kg/__init__.py"
+      },
+      {
+        "id": "app/modules/kg/gazetteer/__init__.py"
+      },
+      {
+        "id": "app/modules/kg/gazetteer/gazetteer.py"
+      },
+      {
+        "id": "app/modules/kg/memory.py"
+      },
+      {
+        "id": "app/modules/kg/ontology.py"
+      },
+      {
+        "id": "app/modules/parsing/tables.py"
+      },
+      {
+        "id": "app/utils/geo_utils.py"
+      },
+      {
+        "id": "app/utils/logger.py"
+      }
+    ],
+    "app/modules/kg/gazetteer/__init__.py": [
+      {
+        "id": "app/modules/kg/gazetteer/gazetteer.py"
+      }
+    ],
+    "app/modules/kg/gazetteer/gazetteer.py": [
+      {
+        "id": "app/modules/kg/ontology.py"
+      },
+      {
+        "id": "app/modules/spatial_ops/geometry/__init__.py"
+      },
+      {
+        "id": "app/utils/logger.py"
+      }
+    ],
+    "app/modules/kg/interface.py": [
+      {
+        "id": "app/modules/kg/manager.py"
+      }
+    ],
+    "app/modules/kg/manager.py": [
+      {
+        "id": "app/modules/kg/builder/__init__.py"
+      },
+      {
+        "id": "app/modules/kg/builder/layer3.py"
+      },
+      {
+        "id": "app/modules/kg/queries/__init__.py"
+      },
+      {
+        "id": "app/utils/logger.py"
+      }
+    ],
+    "app/modules/kg/memory.py": [
+      {
+        "id": "app/core/settings.py"
+      }
+    ],
+    "app/modules/kg/ontology.py": [],
+    "app/modules/kg/queries/__init__.py": [
+      {
+        "id": "app/modules/kg/builder/layer3.py"
+      },
+      {
+        "id": "app/modules/kg/builder/layer4.py"
+      },
+      {
+        "id": "app/modules/kg/queries/cognition.py"
+      },
+      {
+        "id": "app/modules/kg/queries/contracts.py"
+      },
+      {
+        "id": "app/modules/kg/queries/semantic.py"
+      },
+      {
+        "id": "app/modules/kg/queries/sparql.py"
+      },
+      {
+        "id": "app/modules/kg/queries/spatial_ref.py"
+      }
+    ],
+    "app/modules/kg/queries/cognition.py": [
+      {
+        "id": "app/modules/kg/builder/geo_helpers.py"
+      },
+      {
+        "id": "app/modules/kg/ontology.py"
+      },
+      {
+        "id": "app/modules/kg/queries/contracts.py"
+      },
+      {
+        "id": "app/modules/kg/queries/sparql.py"
+      },
+      {
+        "id": "app/utils/logger.py"
+      }
+    ],
+    "app/modules/kg/queries/contracts.py": [
+      {
+        "id": "app/utils/logger.py"
+      }
+    ],
+    "app/modules/kg/queries/execute_queries.py": [
+      {
+        "id": "app/modules/kg/ontology.py"
+      },
+      {
+        "id": "app/utils/logger.py"
+      }
+    ],
+    "app/modules/kg/queries/semantic.py": [
+      {
+        "id": "app/modules/kg/memory.py"
+      },
+      {
+        "id": "app/modules/kg/ontology.py"
+      },
+      {
+        "id": "app/modules/kg/queries/sparql.py"
+      },
+      {
+        "id": "app/modules/schema/encodings/code_sets.py"
+      },
+      {
+        "id": "app/modules/schema/encodings/dicts/loader.py"
+      },
+      {
+        "id": "app/utils/code_lookup.py"
+      },
+      {
+        "id": "app/utils/logger.py"
+      }
+    ],
+    "app/modules/kg/queries/sparql.py": [
+      {
+        "id": "app/modules/kg/ontology.py"
+      },
+      {
+        "id": "app/modules/kg/queries/semantic.py"
+      },
+      {
+        "id": "app/modules/schema/contracts/parse_contracts.py"
+      },
+      {
+        "id": "app/utils/logger.py"
+      }
+    ],
+    "app/modules/kg/queries/spatial_ref.py": [
+      {
+        "id": "app/modules/kg/ontology.py"
+      },
+      {
+        "id": "app/modules/schema/contracts/spatial_reference_contracts.py"
+      },
+      {
+        "id": "app/utils/logger.py"
+      }
+    ],
+    "app/modules/kg/service.py": [
+      {
+        "id": "app/modules/kg/__init__.py"
+      },
+      {
+        "id": "app/modules/kg/manager.py"
+      },
+      {
+        "id": "app/modules/kg/queries/__init__.py"
+      },
+      {
+        "id": "app/modules/kg/queries/sparql.py"
+      },
+      {
+        "id": "app/modules/schema/types/base.py"
+      },
+      {
+        "id": "app/modules/schema/types/canonical.py"
+      },
+      {
+        "id": "app/utils/logger.py"
+      }
+    ],
+    "app/modules/parsing/__init__.py": [],
+    "app/modules/parsing/admin_code_loader.py": [
+      {
+        "id": "app/core/settings.py"
+      },
+      {
+        "id": "app/utils/logger.py"
+      }
+    ],
+    "app/modules/parsing/compiler/__init__.py": [
+      {
+        "id": "app/modules/parsing/compiler/core.py"
+      },
+      {
+        "id": "app/modules/schema/contracts/parsing_contracts.py"
+      }
+    ],
+    "app/modules/parsing/compiler/core.py": [
+      {
+        "id": "app/modules/parsing/compiler/diagnostics.py"
+      },
+      {
+        "id": "app/modules/parsing/compiler/profiles/l1_observation.py"
+      },
+      {
+        "id": "app/modules/parsing/compiler/profiles/l2_strategy.py"
+      },
+      {
+        "id": "app/modules/parsing/compiler/profiles/l3_planning.py"
+      },
+      {
+        "id": "app/modules/parsing/compiler/provenance.py"
+      },
+      {
+        "id": "app/modules/schema/contracts/l1_contracts.py"
+      },
+      {
+        "id": "app/modules/schema/contracts/l2_contracts.py"
+      },
+      {
+        "id": "app/modules/schema/contracts/l3_contracts.py"
+      },
+      {
+        "id": "app/modules/schema/contracts/parsing_contracts.py"
+      }
+    ],
+    "app/modules/parsing/compiler/diagnostics.py": [
+      {
+        "id": "app/modules/schema/contracts/parse_result_contracts.py"
+      }
+    ],
+    "app/modules/parsing/compiler/instruction_parser.py": [
+      {
+        "id": "app/modules/parsing/tables.py"
+      }
+    ],
+    "app/modules/parsing/compiler/profiles/__init__.py": [
+      {
+        "id": "app/modules/parsing/compiler/profiles/l1_observation.py"
+      },
+      {
+        "id": "app/modules/parsing/compiler/profiles/l2_strategy.py"
+      },
+      {
+        "id": "app/modules/parsing/compiler/profiles/l3_planning.py"
+      },
+      {
+        "id": "app/modules/parsing/compiler/profiles/revision.py"
+      }
+    ],
+    "app/modules/parsing/compiler/profiles/l1_observation.py": [
+      {
+        "id": "app/modules/parsing/compiler/diagnostics.py"
+      },
+      {
+        "id": "app/modules/parsing/compiler/instruction_parser.py"
+      },
+      {
+        "id": "app/modules/parsing/compiler/provenance.py"
+      },
+      {
+        "id": "app/modules/schema/contracts/classification_ref.py"
+      },
+      {
+        "id": "app/modules/schema/contracts/l1_contracts.py"
+      },
+      {
+        "id": "app/modules/schema/contracts/parsing_contracts.py"
+      }
+    ],
+    "app/modules/parsing/compiler/profiles/l2_strategy.py": [
+      {
+        "id": "app/modules/parsing/compiler/diagnostics.py"
+      },
+      {
+        "id": "app/modules/parsing/compiler/instruction_parser.py"
+      },
+      {
+        "id": "app/modules/parsing/compiler/provenance.py"
+      },
+      {
+        "id": "app/modules/schema/contracts/l1_contracts.py"
+      },
+      {
+        "id": "app/modules/schema/contracts/l2_contracts.py"
+      },
+      {
+        "id": "app/modules/schema/contracts/parsing_contracts.py"
+      }
+    ],
+    "app/modules/parsing/compiler/profiles/l3_planning.py": [
+      {
+        "id": "app/modules/parsing/compiler/diagnostics.py"
+      },
+      {
+        "id": "app/modules/parsing/compiler/instruction_parser.py"
+      },
+      {
+        "id": "app/modules/parsing/compiler/provenance.py"
+      },
+      {
+        "id": "app/modules/parsing/tables.py"
+      },
+      {
+        "id": "app/modules/schema/contracts/l1_contracts.py"
+      },
+      {
+        "id": "app/modules/schema/contracts/l3_contracts.py"
+      },
+      {
+        "id": "app/modules/schema/contracts/parsing_contracts.py"
+      }
+    ],
+    "app/modules/parsing/compiler/profiles/revision.py": [
+      {
+        "id": "app/modules/parsing/compiler/diagnostics.py"
+      },
+      {
+        "id": "app/modules/parsing/compiler/instruction_parser.py"
+      },
+      {
+        "id": "app/modules/parsing/compiler/profiles/l3_planning.py"
+      },
+      {
+        "id": "app/modules/parsing/compiler/provenance.py"
+      },
+      {
+        "id": "app/modules/schema/contracts/l3_contracts.py"
+      },
+      {
+        "id": "app/modules/schema/contracts/parse_result_contracts.py"
+      },
+      {
+        "id": "app/modules/schema/contracts/parsing_contracts.py"
+      }
+    ],
+    "app/modules/parsing/compiler/provenance.py": [
+      {
+        "id": "app/modules/schema/contracts/provenance.py"
+      }
+    ],
+    "app/modules/parsing/compiler/spec_mapper.py": [
+      {
+        "id": "app/modules/parsing/spatial_language.py"
+      },
+      {
+        "id": "app/modules/schema/contracts/l3_contracts.py"
+      },
+      {
+        "id": "app/modules/schema/contracts/parse_result_contracts.py"
+      },
+      {
+        "id": "app/modules/schema/contracts/spatial_reference_contracts.py"
+      }
+    ],
+    "app/modules/parsing/gazetteer.py": [
+      {
+        "id": "app/modules/data/providers/tianditu/__init__.py"
+      },
+      {
+        "id": "app/utils/logger.py"
+      }
+    ],
+    "app/modules/parsing/schemas.py": [
+      {
+        "id": "app/modules/parsing/semantics.py"
+      }
+    ],
+    "app/modules/parsing/semantics.py": [],
+    "app/modules/parsing/spatial_language.py": [],
+    "app/modules/parsing/summary_generator.py": [
+      {
+        "id": "app/core/instructor_client.py"
+      },
+      {
+        "id": "app/modules/parsing/schemas.py"
+      },
+      {
+        "id": "app/utils/logger.py"
+      }
+    ],
+    "app/modules/parsing/summary_parser.py": [],
+    "app/modules/parsing/table_schema_inference.py": [
+      {
+        "id": "app/modules/schema/advisory_crosswalks/__init__.py"
+      },
+      {
+        "id": "app/modules/schema/contracts/parse_contracts.py"
+      },
+      {
+        "id": "app/utils/logger.py"
+      }
+    ],
+    "app/modules/parsing/tables.py": [
+      {
+        "id": "app/modules/parsing/spatial_language.py"
+      },
+      {
+        "id": "app/modules/schema/contracts/parse_contracts.py"
+      },
+      {
+        "id": "app/modules/schema/contracts/provenance.py"
+      }
+    ],
+    "app/modules/parsing/text_parser.py": [
+      {
+        "id": "app/modules/parsing/tables.py"
+      },
+      {
+        "id": "app/modules/schema/contracts/parse_contracts.py"
+      },
+      {
+        "id": "app/modules/schema/contracts/provenance.py"
+      },
+      {
+        "id": "app/utils/logger.py"
+      }
+    ],
+    "app/modules/planning_text/__init__.py": [
+      {
+        "id": "app/modules/planning_text/config.py"
+      },
+      {
+        "id": "app/modules/planning_text/content_extractor.py"
+      },
+      {
+        "id": "app/modules/planning_text/generator.py"
+      },
+      {
+        "id": "app/modules/planning_text/json_exporter.py"
+      },
+      {
+        "id": "app/modules/planning_text/layer_exporter.py"
+      },
+      {
+        "id": "app/modules/planning_text/llm_styler.py"
+      },
+      {
+        "id": "app/modules/planning_text/rag_appender.py"
+      },
+      {
+        "id": "app/modules/planning_text/section_builder.py"
+      }
+    ],
+    "app/modules/planning_text/config.py": [],
+    "app/modules/planning_text/content_extractor.py": [],
+    "app/modules/planning_text/docx_styles.py": [],
+    "app/modules/planning_text/generator.py": [
+      {
+        "id": "app/config/loader.py"
+      },
+      {
+        "id": "app/modules/planning_text/config.py"
+      },
+      {
+        "id": "app/modules/planning_text/content_extractor.py"
+      },
+      {
+        "id": "app/modules/planning_text/json_exporter.py"
+      },
+      {
+        "id": "app/modules/planning_text/layer_exporter.py"
+      },
+      {
+        "id": "app/modules/planning_text/llm_styler.py"
+      },
+      {
+        "id": "app/modules/planning_text/rag_appender.py"
+      },
+      {
+        "id": "app/modules/planning_text/section_builder.py"
+      },
+      {
+        "id": "app/services/report_store.py"
+      }
+    ],
+    "app/modules/planning_text/json_exporter.py": [
+      {
+        "id": "app/modules/planning_text/section_builder.py"
+      }
+    ],
+    "app/modules/planning_text/layer_exporter.py": [
+      {
+        "id": "app/config/loader.py"
+      },
+      {
+        "id": "app/modules/planning_text/config.py"
+      },
+      {
+        "id": "app/modules/planning_text/docx_styles.py"
+      },
+      {
+        "id": "app/modules/planning_text/generator.py"
+      },
+      {
+        "id": "app/modules/schema/layers.py"
+      },
+      {
+        "id": "app/services/report_store.py"
+      }
+    ],
+    "app/modules/planning_text/llm_styler.py": [
+      {
+        "id": "app/core/llm.py"
+      },
+      {
+        "id": "app/modules/planning_text/content_extractor.py"
+      }
+    ],
+    "app/modules/planning_text/rag_appender.py": [
+      {
+        "id": "app/config/loader.py"
+      },
+      {
+        "id": "app/services/report_store.py"
+      }
+    ],
+    "app/modules/planning_text/section_builder.py": [
+      {
+        "id": "app/modules/planning_text/content_extractor.py"
+      }
+    ],
+    "app/modules/ports/__init__.py": [],
+    "app/modules/ports/artifact_store.py": [
+      {
+        "id": "app/modules/schema/contracts/contract_meta.py"
+      }
+    ],
+    "app/modules/ports/bundle_assembly.py": [],
+    "app/modules/ports/context_provider.py": [],
+    "app/modules/ports/gazetteer.py": [
+      {
+        "id": "app/modules/schema/contracts/gazetteer_contracts.py"
+      }
+    ],
+    "app/modules/ports/nomenclature_registry.py": [],
+    "app/modules/ports/planning_ports.py": [
+      {
+        "id": "app/modules/ports/artifact_store.py"
+      },
+      {
+        "id": "app/modules/ports/bundle_assembly.py"
+      },
+      {
+        "id": "app/modules/ports/context_provider.py"
+      },
+      {
+        "id": "app/modules/ports/gazetteer.py"
+      },
+      {
+        "id": "app/modules/ports/nomenclature_registry.py"
+      },
+      {
+        "id": "app/modules/ports/road_planner.py"
+      },
+      {
+        "id": "app/modules/ports/semantic_query.py"
+      },
+      {
+        "id": "app/modules/ports/spatial_query.py"
+      },
+      {
+        "id": "app/modules/ports/zone_allocator.py"
+      }
+    ],
+    "app/modules/ports/road_planner.py": [],
+    "app/modules/ports/semantic_query.py": [],
+    "app/modules/ports/spatial_query.py": [
+      {
+        "id": "app/modules/schema/contracts/spatial_reference_contracts.py"
+      }
+    ],
+    "app/modules/ports/zone_allocator.py": [],
+    "app/modules/prompts/__init__.py": [
+      {
+        "id": "app/modules/prompts/parse_prompts.py"
+      }
+    ],
+    "app/modules/prompts/analysis.py": [],
+    "app/modules/prompts/concept.py": [],
+    "app/modules/prompts/detailed.py": [],
+    "app/modules/prompts/parse_prompts.py": [
+      {
+        "id": "app/modules/schema/contracts/context_contracts.py"
+      }
+    ],
+    "app/modules/rag/__init__.py": [
+      {
+        "id": "app/modules/rag/service.py"
+      }
+    ],
+    "app/modules/rag/chunker.py": [
+      {
+        "id": "app/core/settings.py"
+      },
+      {
+        "id": "app/modules/rag/context.py"
+      }
+    ],
+    "app/modules/rag/cli.py": [
+      {
+        "id": "app/core/settings.py"
+      },
+      {
+        "id": "app/modules/rag/service.py"
+      }
+    ],
+    "app/modules/rag/context.py": [
+      {
+        "id": "app/core/llm.py"
+      },
+      {
+        "id": "app/core/settings.py"
+      }
+    ],
+    "app/modules/rag/service.py": [
+      {
+        "id": "app/config/__init__.py"
+      },
+      {
+        "id": "app/core/llm.py"
+      },
+      {
+        "id": "app/core/settings.py"
+      },
+      {
+        "id": "app/modules/rag/chunker.py"
+      },
+      {
+        "id": "app/modules/rag/context.py"
+      },
+      {
+        "id": "app/modules/rag/utils/document_loader.py"
+      },
+      {
+        "id": "app/modules/rag/utils/metadata_extractor.py"
+      },
+      {
+        "id": "app/modules/rag/vector_store.py"
+      },
+      {
+        "id": "app/services/report_store.py"
+      },
+      {
+        "id": "app/utils/logger.py"
+      }
+    ],
+    "app/modules/rag/utils/__init__.py": [
+      {
+        "id": "app/modules/rag/utils/metadata_extractor.py"
+      }
+    ],
+    "app/modules/rag/utils/document_loader.py": [
+      {
+        "id": "app/utils/document_loader.py"
+      }
+    ],
+    "app/modules/rag/utils/metadata_extractor.py": [
+      {
+        "id": "app/core/llm.py"
+      }
+    ],
+    "app/modules/rag/vector_store.py": [
+      {
+        "id": "app/core/settings.py"
+      },
+      {
+        "id": "app/utils/logger.py"
+      },
+      {
+        "id": "app/utils/rate_limiter.py"
+      },
+      {
+        "id": "app/utils/retry.py"
+      }
+    ],
+    "app/modules/schema/__init__.py": [
+      {
+        "id": "app/modules/schema/contracts/__init__.py"
+      },
+      {
+        "id": "app/modules/schema/encodings/__init__.py"
+      },
+      {
+        "id": "app/modules/schema/output/__init__.py"
+      },
+      {
+        "id": "app/modules/schema/types/__init__.py"
+      },
+      {
+        "id": "app/modules/schema/utils/__init__.py"
+      }
+    ],
+    "app/modules/schema/advisory_crosswalks/__init__.py": [
+      {
+        "id": "app/modules/schema/advisory_crosswalks/crosswalks.py"
+      },
+      {
+        "id": "app/modules/schema/advisory_crosswalks/legacy.py"
+      }
+    ],
+    "app/modules/schema/advisory_crosswalks/crosswalks.py": [
+      {
+        "id": "app/modules/schema/encodings/code_sets.py"
+      },
+      {
+        "id": "app/modules/schema/encodings/dicts/loader.py"
+      }
+    ],
+    "app/modules/schema/advisory_crosswalks/legacy.py": [],
+    "app/modules/schema/advisory_crosswalks/registry.py": [
+      {
+        "id": "app/modules/schema/advisory_crosswalks/__init__.py"
+      },
+      {
+        "id": "app/modules/schema/encodings/code_sets.py"
+      },
+      {
+        "id": "app/modules/schema/encodings/dicts/loader.py"
+      }
+    ],
+    "app/modules/schema/contracts/__init__.py": [],
+    "app/modules/schema/contracts/classification_ref.py": [],
+    "app/modules/schema/contracts/constraint_contracts.py": [],
+    "app/modules/schema/contracts/context_contracts.py": [],
+    "app/modules/schema/contracts/context_ref_contracts.py": [
+      {
+        "id": "app/modules/schema/contracts/contract_meta.py"
+      }
+    ],
+    "app/modules/schema/contracts/contract_meta.py": [],
+    "app/modules/schema/contracts/custom_zone_contracts.py": [],
+    "app/modules/schema/contracts/delivery_manifest_contracts.py": [
+      {
+        "id": "app/modules/schema/contracts/contract_meta.py"
+      },
+      {
+        "id": "app/modules/schema/contracts/provenance.py"
+      }
+    ],
+    "app/modules/schema/contracts/evidence_contracts.py": [
+      {
+        "id": "app/modules/schema/contracts/contract_meta.py"
+      },
+      {
+        "id": "app/modules/schema/contracts/provenance.py"
+      }
+    ],
+    "app/modules/schema/contracts/execution_plan_contracts.py": [
+      {
+        "id": "app/modules/schema/contracts/contract_meta.py"
+      },
+      {
+        "id": "app/modules/schema/contracts/provenance.py"
+      }
+    ],
+    "app/modules/schema/contracts/gazetteer_contracts.py": [],
+    "app/modules/schema/contracts/grounding_contracts.py": [
+      {
+        "id": "app/modules/schema/contracts/contract_meta.py"
+      },
+      {
+        "id": "app/modules/schema/contracts/provenance.py"
+      }
+    ],
+    "app/modules/schema/contracts/l1_contracts.py": [
+      {
+        "id": "app/modules/schema/contracts/classification_ref.py"
+      },
+      {
+        "id": "app/modules/schema/contracts/contract_meta.py"
+      },
+      {
+        "id": "app/modules/schema/contracts/evidence_contracts.py"
+      },
+      {
+        "id": "app/modules/schema/contracts/parse_result_contracts.py"
+      },
+      {
+        "id": "app/modules/schema/contracts/parsing_contracts.py"
+      },
+      {
+        "id": "app/modules/schema/contracts/provenance.py"
+      }
+    ],
+    "app/modules/schema/contracts/l2_contracts.py": [
+      {
+        "id": "app/modules/schema/contracts/contract_meta.py"
+      },
+      {
+        "id": "app/modules/schema/contracts/evidence_contracts.py"
+      },
+      {
+        "id": "app/modules/schema/contracts/l1_contracts.py"
+      },
+      {
+        "id": "app/modules/schema/contracts/parse_result_contracts.py"
+      },
+      {
+        "id": "app/modules/schema/contracts/parsing_contracts.py"
+      },
+      {
+        "id": "app/modules/schema/contracts/provenance.py"
+      }
+    ],
+    "app/modules/schema/contracts/l3_contracts.py": [
+      {
+        "id": "app/modules/schema/contracts/contract_meta.py"
+      },
+      {
+        "id": "app/modules/schema/contracts/evidence_contracts.py"
+      },
+      {
+        "id": "app/modules/schema/contracts/l1_contracts.py"
+      },
+      {
+        "id": "app/modules/schema/contracts/parse_result_contracts.py"
+      },
+      {
+        "id": "app/modules/schema/contracts/parsing_contracts.py"
+      },
+      {
+        "id": "app/modules/schema/contracts/provenance.py"
+      }
+    ],
+    "app/modules/schema/contracts/land_balance_contracts.py": [
+      {
+        "id": "app/modules/schema/contracts/delivery_manifest_contracts.py"
+      }
+    ],
+    "app/modules/schema/contracts/parcel_change_contracts.py": [
+      {
+        "id": "app/modules/schema/contracts/classification_ref.py"
+      },
+      {
+        "id": "app/modules/schema/contracts/contract_meta.py"
+      },
+      {
+        "id": "app/modules/schema/contracts/provenance.py"
+      }
+    ],
+    "app/modules/schema/contracts/parse_contracts.py": [
+      {
+        "id": "app/modules/schema/contracts/custom_zone_contracts.py"
+      },
+      {
+        "id": "app/modules/schema/contracts/provenance.py"
+      }
+    ],
+    "app/modules/schema/contracts/parse_result_contracts.py": [
+      {
+        "id": "app/modules/schema/contracts/contract_meta.py"
+      }
+    ],
+    "app/modules/schema/contracts/parsing_contracts.py": [],
+    "app/modules/schema/contracts/planned_state_contracts.py": [
+      {
+        "id": "app/modules/schema/contracts/contract_meta.py"
+      },
+      {
+        "id": "app/modules/schema/contracts/provenance.py"
+      }
+    ],
+    "app/modules/schema/contracts/provenance.py": [],
+    "app/modules/schema/contracts/reconciliation_contracts.py": [
+      {
+        "id": "app/modules/schema/contracts/contract_meta.py"
+      },
+      {
+        "id": "app/modules/schema/contracts/provenance.py"
+      }
+    ],
+    "app/modules/schema/contracts/review_contracts.py": [],
+    "app/modules/schema/contracts/selection_contracts.py": [
+      {
+        "id": "app/modules/schema/contracts/contract_meta.py"
+      },
+      {
+        "id": "app/modules/schema/contracts/provenance.py"
+      }
+    ],
+    "app/modules/schema/contracts/spatial_reference_contracts.py": [],
+    "app/modules/schema/contracts/validation_report_contracts.py": [
+      {
+        "id": "app/modules/schema/contracts/contract_meta.py"
+      },
+      {
+        "id": "app/modules/schema/contracts/provenance.py"
+      }
+    ],
+    "app/modules/schema/contracts/workflow_contracts.py": [
+      {
+        "id": "app/modules/schema/contracts/contract_meta.py"
+      }
+    ],
+    "app/modules/schema/encodings/__init__.py": [
+      {
+        "id": "app/modules/schema/encodings/classification.py"
+      },
+      {
+        "id": "app/modules/schema/encodings/code_sets.py"
+      },
+      {
+        "id": "app/modules/schema/encodings/dicts/__init__.py"
+      }
+    ],
+    "app/modules/schema/encodings/classification.py": [
+      {
+        "id": "app/modules/schema/encodings/dicts/loader.py"
+      }
+    ],
+    "app/modules/schema/encodings/code_sets.py": [
+      {
+        "id": "app/modules/schema/encodings/dicts/loader.py"
+      }
+    ],
+    "app/modules/schema/encodings/dicts/__init__.py": [
+      {
+        "id": "app/modules/schema/encodings/dicts/loader.py"
+      }
+    ],
+    "app/modules/schema/encodings/dicts/candidate_engine.py": [
+      {
+        "id": "app/modules/schema/encodings/dicts/disambiguation.py"
+      },
+      {
+        "id": "app/modules/schema/encodings/dicts/expr_eval.py"
+      },
+      {
+        "id": "app/modules/schema/encodings/dicts/loader.py"
+      },
+      {
+        "id": "app/utils/logger.py"
+      }
+    ],
+    "app/modules/schema/encodings/dicts/disambiguation.py": [],
+    "app/modules/schema/encodings/dicts/expr_eval.py": [],
+    "app/modules/schema/encodings/dicts/loader.py": [
+      {
+        "id": "app/modules/schema/encodings/classification.py"
+      },
+      {
+        "id": "app/utils/logger.py"
+      }
+    ],
+    "app/modules/schema/encodings/dicts/rule_loader.py": [
+      {
+        "id": "app/modules/schema/advisory_crosswalks/__init__.py"
+      },
+      {
+        "id": "app/modules/schema/encodings/code_sets.py"
+      },
+      {
+        "id": "app/modules/schema/encodings/dicts/expr_eval.py"
+      },
+      {
+        "id": "app/utils/logger.py"
+      }
+    ],
+    "app/modules/schema/encodings/dicts/vocabularies/loader.py": [
+      {
+        "id": "app/modules/schema/contracts/custom_zone_contracts.py"
+      }
+    ],
+    "app/modules/schema/layers.py": [],
+    "app/modules/schema/output/__init__.py": [
+      {
+        "id": "app/modules/schema/output/colors.py"
+      },
+      {
+        "id": "app/modules/schema/output/gdb.py"
+      },
+      {
+        "id": "app/modules/schema/output/tables.py"
+      }
+    ],
+    "app/modules/schema/output/colors.py": [],
+    "app/modules/schema/output/gdb.py": [
+      {
+        "id": "app/modules/schema/encodings/code_sets.py"
+      }
+    ],
+    "app/modules/schema/output/tables.py": [],
+    "app/modules/schema/provenance/__init__.py": [
+      {
+        "id": "app/modules/schema/provenance/audit.py"
+      }
+    ],
+    "app/modules/schema/provenance/audit.py": [],
+    "app/modules/schema/types/__init__.py": [
+      {
+        "id": "app/modules/schema/types/base.py"
+      },
+      {
+        "id": "app/modules/schema/types/canonical.py"
+      },
+      {
+        "id": "app/modules/schema/types/document_types.py"
+      },
+      {
+        "id": "app/modules/schema/types/layer_registry.py"
+      },
+      {
+        "id": "app/modules/schema/types/raster_types.py"
+      },
+      {
+        "id": "app/modules/schema/types/spatial_types.py"
+      },
+      {
+        "id": "app/modules/schema/types/table_types.py"
+      }
+    ],
+    "app/modules/schema/types/base.py": [],
+    "app/modules/schema/types/canonical.py": [
+      {
+        "id": "app/modules/schema/types/base.py"
+      },
+      {
+        "id": "app/modules/schema/types/layer_registry.py"
+      },
+      {
+        "id": "app/modules/schema/types/spatial_types.py"
+      }
+    ],
+    "app/modules/schema/types/document_types.py": [],
+    "app/modules/schema/types/layer_registry.py": [],
+    "app/modules/schema/types/raster_types.py": [
+      {
+        "id": "app/modules/schema/types/base.py"
+      }
+    ],
+    "app/modules/schema/types/spatial_types.py": [
+      {
+        "id": "app/modules/schema/types/base.py"
+      }
+    ],
+    "app/modules/schema/types/table_types.py": [],
+    "app/modules/schema/utils/__init__.py": [
+      {
+        "id": "app/modules/schema/utils/metrics.py"
+      }
+    ],
+    "app/modules/schema/utils/metrics.py": [
+      {
+        "id": "app/modules/schema/encodings/code_sets.py"
+      }
+    ],
+    "app/modules/spatial_ops/__init__.py": [
+      {
+        "id": "app/modules/spatial_ops/context/context.py"
+      },
+      {
+        "id": "app/modules/spatial_ops/grounding/bundle_binder.py"
+      },
+      {
+        "id": "app/modules/spatial_ops/grounding/grounding.py"
+      },
+      {
+        "id": "app/modules/spatial_ops/index/bridge.py"
+      },
+      {
+        "id": "app/modules/spatial_ops/land_balance/land_balance.py"
+      },
+      {
+        "id": "app/modules/spatial_ops/parcel_ops/parcel_ops.py"
+      }
+    ],
+    "app/modules/spatial_ops/allocation/__init__.py": [
+      {
+        "id": "app/modules/spatial_ops/allocation/zone_allocator_adapter.py"
+      }
+    ],
+    "app/modules/spatial_ops/allocation/zone_allocator_adapter.py": [
+      {
+        "id": "app/modules/ports/zone_allocator.py"
+      },
+      {
+        "id": "app/modules/schema/contracts/execution_plan_contracts.py"
+      }
+    ],
+    "app/modules/spatial_ops/conflict/__init__.py": [
+      {
+        "id": "app/modules/spatial_ops/conflict/detector.py"
+      },
+      {
+        "id": "app/modules/spatial_ops/conflict/resolver.py"
+      }
+    ],
+    "app/modules/spatial_ops/conflict/detector.py": [
+      {
+        "id": "app/modules/parsing/semantics.py"
+      },
+      {
+        "id": "app/modules/schema/__init__.py"
+      },
+      {
+        "id": "app/utils/logger.py"
+      }
+    ],
+    "app/modules/spatial_ops/conflict/resolver.py": [
+      {
+        "id": "app/modules/parsing/semantics.py"
+      },
+      {
+        "id": "app/modules/spatial_ops/conflict/detector.py"
+      },
+      {
+        "id": "app/utils/logger.py"
+      }
+    ],
+    "app/modules/spatial_ops/context/__init__.py": [
+      {
+        "id": "app/modules/spatial_ops/context/context.py"
+      }
+    ],
+    "app/modules/spatial_ops/context/context.py": [
+      {
+        "id": "app/modules/schema/__init__.py"
+      },
+      {
+        "id": "app/modules/schema/contracts/context_contracts.py"
+      },
+      {
+        "id": "app/modules/schema/encodings/code_sets.py"
+      },
+      {
+        "id": "app/modules/schema/types/canonical.py"
+      },
+      {
+        "id": "app/modules/schema/types/spatial_types.py"
+      },
+      {
+        "id": "app/modules/spatial_ops/geometry/__init__.py"
+      },
+      {
+        "id": "app/modules/spatial_ops/geometry/relations.py"
+      },
+      {
+        "id": "app/utils/area_engine.py"
+      },
+      {
+        "id": "app/utils/crs_engine.py"
+      },
+      {
+        "id": "app/utils/logger.py"
+      }
+    ],
+    "app/modules/spatial_ops/geometry/__init__.py": [
+      {
+        "id": "app/modules/spatial_ops/geometry/axis_builder.py"
+      },
+      {
+        "id": "app/modules/spatial_ops/geometry/geometry.py"
+      },
+      {
+        "id": "app/modules/spatial_ops/geometry/relations.py"
+      },
+      {
+        "id": "app/modules/spatial_ops/geometry/subdivision.py"
+      }
+    ],
+    "app/modules/spatial_ops/geometry/axis_builder.py": [
+      {
+        "id": "app/utils/area_engine.py"
+      },
+      {
+        "id": "app/utils/crs_engine.py"
+      },
+      {
+        "id": "app/utils/geo_utils.py"
+      },
+      {
+        "id": "app/utils/logger.py"
+      }
+    ],
+    "app/modules/spatial_ops/geometry/geometry.py": [
+      {
+        "id": "app/utils/area_engine.py"
+      },
+      {
+        "id": "app/utils/geojson_utils.py"
+      },
+      {
+        "id": "app/utils/logger.py"
+      }
+    ],
+    "app/modules/spatial_ops/geometry/relations.py": [
+      {
+        "id": "app/modules/schema/contracts/context_contracts.py"
+      },
+      {
+        "id": "app/modules/schema/encodings/code_sets.py"
+      },
+      {
+        "id": "app/utils/logger.py"
+      }
+    ],
+    "app/modules/spatial_ops/geometry/subdivision.py": [],
+    "app/modules/spatial_ops/grounding/__init__.py": [
+      {
+        "id": "app/modules/spatial_ops/grounding/bundle_binder.py"
+      },
+      {
+        "id": "app/modules/spatial_ops/grounding/grounding.py"
+      },
+      {
+        "id": "app/modules/spatial_ops/grounding/resolver.py"
+      }
+    ],
+    "app/modules/spatial_ops/grounding/bundle_binder.py": [],
+    "app/modules/spatial_ops/grounding/grounding.py": [
+      {
+        "id": "app/modules/spatial_ops/geometry/__init__.py"
+      },
+      {
+        "id": "app/modules/spatial_ops/index/bridge.py"
+      },
+      {
+        "id": "app/utils/crs_engine.py"
+      },
+      {
+        "id": "app/utils/geo_utils.py"
+      },
+      {
+        "id": "app/utils/logger.py"
+      }
+    ],
+    "app/modules/spatial_ops/index/__init__.py": [
+      {
+        "id": "app/modules/spatial_ops/index/bridge.py"
+      }
+    ],
+    "app/modules/spatial_ops/index/bridge.py": [
+      {
+        "id": "app/utils/logger.py"
+      }
+    ],
+    "app/modules/spatial_ops/land_balance/__init__.py": [
+      {
+        "id": "app/modules/spatial_ops/land_balance/land_balance.py"
+      }
+    ],
+    "app/modules/spatial_ops/land_balance/land_balance.py": [
+      {
+        "id": "app/modules/schema/contracts/delivery_manifest_contracts.py"
+      },
+      {
+        "id": "app/modules/schema/contracts/land_balance_contracts.py"
+      },
+      {
+        "id": "app/modules/schema/encodings/code_sets.py"
+      }
+    ],
+    "app/modules/spatial_ops/output/__init__.py": [
+      {
+        "id": "app/modules/spatial_ops/output/export_package.py"
+      },
+      {
+        "id": "app/modules/spatial_ops/output/map_layers.py"
+      }
+    ],
+    "app/modules/spatial_ops/output/export_package.py": [
+      {
+        "id": "app/modules/schema/output/gdb.py"
+      },
+      {
+        "id": "app/utils/logger.py"
+      }
+    ],
+    "app/modules/spatial_ops/output/map_layers.py": [
+      {
+        "id": "app/utils/sse_events.py"
+      }
+    ],
+    "app/modules/spatial_ops/parcel_ops/__init__.py": [
+      {
+        "id": "app/modules/spatial_ops/parcel_ops/parcel_ops.py"
+      }
+    ],
+    "app/modules/spatial_ops/parcel_ops/parcel_ops.py": [
+      {
+        "id": "app/utils/crs_engine.py"
+      }
+    ],
+    "app/modules/spatial_ops/road/__init__.py": [
+      {
+        "id": "app/modules/spatial_ops/road/comparison_evaluator.py"
+      },
+      {
+        "id": "app/modules/spatial_ops/road/evaluator.py"
+      },
+      {
+        "id": "app/modules/spatial_ops/road/kg_rdflib_adapter.py"
+      },
+      {
+        "id": "app/modules/spatial_ops/road/kg_retry.py"
+      },
+      {
+        "id": "app/modules/spatial_ops/road/location_confirmation.py"
+      },
+      {
+        "id": "app/modules/spatial_ops/road/network_builder.py"
+      },
+      {
+        "id": "app/modules/spatial_ops/road/planner.py"
+      },
+      {
+        "id": "app/modules/spatial_ops/road/planning_nodes.py"
+      },
+      {
+        "id": "app/modules/spatial_ops/road/schemas.py"
+      },
+      {
+        "id": "app/modules/spatial_ops/road/spatial_binder.py"
+      },
+      {
+        "id": "app/modules/spatial_ops/road/stage2_6_validator.py"
+      },
+      {
+        "id": "app/modules/spatial_ops/road/text_structurer.py"
+      }
+    ],
+    "app/modules/spatial_ops/road/comparison_evaluator.py": [
+      {
+        "id": "app/modules/spatial_ops/road/schemas.py"
+      }
+    ],
+    "app/modules/spatial_ops/road/evaluator.py": [
+      {
+        "id": "app/modules/spatial_ops/road/schemas.py"
+      }
+    ],
+    "app/modules/spatial_ops/road/kg_rdflib_adapter.py": [],
+    "app/modules/spatial_ops/road/kg_retry.py": [
+      {
+        "id": "app/modules/spatial_ops/road/planning_nodes.py"
+      }
+    ],
+    "app/modules/spatial_ops/road/location_confirmation.py": [
+      {
+        "id": "app/modules/spatial_ops/road/schemas.py"
+      }
+    ],
+    "app/modules/spatial_ops/road/network_builder.py": [
+      {
+        "id": "app/modules/spatial_ops/road/schemas.py"
+      }
+    ],
+    "app/modules/spatial_ops/road/planner.py": [
+      {
+        "id": "app/modules/spatial_ops/road/schemas.py"
+      },
+      {
+        "id": "app/modules/spatial_ops/road/terrain_router.py"
+      }
+    ],
+    "app/modules/spatial_ops/road/planning_nodes.py": [
+      {
+        "id": "app/modules/spatial_ops/road/schemas.py"
+      }
+    ],
+    "app/modules/spatial_ops/road/qgis_export.py": [],
+    "app/modules/spatial_ops/road/schemas.py": [],
+    "app/modules/spatial_ops/road/spatial_binder.py": [
+      {
+        "id": "app/modules/spatial_ops/road/schemas.py"
+      }
+    ],
+    "app/modules/spatial_ops/road/stage2_6_validator.py": [],
+    "app/modules/spatial_ops/road/terrain_router.py": [],
+    "app/modules/spatial_ops/road/text_structurer.py": [
+      {
+        "id": "app/modules/spatial_ops/road/schemas.py"
+      }
+    ],
+    "app/modules/spatial_ops/selection/__init__.py": [
+      {
+        "id": "app/modules/spatial_ops/selection/facility_location.py"
+      },
+      {
+        "id": "app/modules/spatial_ops/selection/selection.py"
+      }
+    ],
+    "app/modules/spatial_ops/selection/facility_location.py": [],
+    "app/modules/spatial_ops/selection/selection.py": [],
+    "app/modules/spatial_ops/zoning/__init__.py": [
+      {
+        "id": "app/modules/spatial_ops/zoning/custom_planning.py"
+      },
+      {
+        "id": "app/modules/spatial_ops/zoning/custom_zone_generator.py"
+      },
+      {
+        "id": "app/modules/spatial_ops/zoning/vocab_context.py"
+      },
+      {
+        "id": "app/modules/spatial_ops/zoning/vocab_rules.py"
+      }
+    ],
+    "app/modules/spatial_ops/zoning/custom_planning.py": [],
+    "app/modules/spatial_ops/zoning/custom_zone_generator.py": [
+      {
+        "id": "app/modules/schema/contracts/custom_zone_contracts.py"
+      },
+      {
+        "id": "app/modules/schema/encodings/dicts/vocabularies/loader.py"
+      },
+      {
+        "id": "app/modules/schema/provenance/__init__.py"
+      },
+      {
+        "id": "app/modules/spatial_ops/zoning/vocab_rules.py"
+      }
+    ],
+    "app/modules/spatial_ops/zoning/vocab_context.py": [
+      {
+        "id": "app/utils/logger.py"
+      }
+    ],
+    "app/modules/spatial_ops/zoning/vocab_rules.py": [
+      {
+        "id": "app/modules/schema/contracts/custom_zone_contracts.py"
+      },
+      {
+        "id": "app/modules/schema/encodings/dicts/expr_eval.py"
+      }
+    ],
+    "app/services/__init__.py": [],
+    "app/services/artifact_store.py": [
+      {
+        "id": "app/modules/ports/artifact_store.py"
+      },
+      {
+        "id": "app/utils/logger.py"
+      }
+    ],
+    "app/services/bundle_store.py": [
+      {
+        "id": "app/database/operations.py"
+      },
+      {
+        "id": "app/modules/schema/types/canonical.py"
+      },
+      {
+        "id": "app/utils/logger.py"
+      }
+    ],
+    "app/services/checkpoint.py": [
+      {
+        "id": "app/agent/bootstrap/phase_machine.py"
+      },
+      {
+        "id": "app/agent/l1_observe/__init__.py"
+      },
+      {
+        "id": "app/config/__init__.py"
+      },
+      {
+        "id": "app/core/settings.py"
+      },
+      {
+        "id": "app/services/report_store.py"
+      },
+      {
+        "id": "app/services/runtime.py"
+      },
+      {
+        "id": "app/services/sse.py"
+      },
+      {
+        "id": "app/utils/event_factory.py"
+      }
+    ],
+    "app/services/context/__init__.py": [
+      {
+        "id": "app/services/context/planning_context.py"
+      }
+    ],
+    "app/services/context/planning_context.py": [
+      {
+        "id": "app/modules/context/planning_context.py"
+      },
+      {
+        "id": "app/modules/data/bundle_assembly_adapter.py"
+      },
+      {
+        "id": "app/modules/kg/adapters/gazetteer_adapter.py"
+      },
+      {
+        "id": "app/modules/kg/adapters/spatial_query_adapter.py"
+      },
+      {
+        "id": "app/modules/kg/gazetteer/__init__.py"
+      },
+      {
+        "id": "app/modules/kg/manager.py"
+      },
+      {
+        "id": "app/modules/kg/queries/sparql.py"
+      },
+      {
+        "id": "app/modules/ports/planning_ports.py"
+      },
+      {
+        "id": "app/modules/spatial_ops/__init__.py"
+      },
+      {
+        "id": "app/services/report_store.py"
+      },
+      {
+        "id": "app/services/session_bundle.py"
+      },
+      {
+        "id": "app/services/session_kg.py"
+      },
+      {
+        "id": "app/utils/logger.py"
+      }
+    ],
+    "app/services/post_l3_resume.py": [
+      {
+        "id": "app/services/runtime.py"
+      },
+      {
+        "id": "app/utils/logger.py"
+      }
+    ],
+    "app/services/report_store.py": [
+      {
+        "id": "app/database/engine.py"
+      },
+      {
+        "id": "app/database/models.py"
+      },
+      {
+        "id": "app/modules/parsing/schemas.py"
+      },
+      {
+        "id": "app/modules/parsing/summary_generator.py"
+      },
+      {
+        "id": "app/modules/parsing/summary_parser.py"
+      },
+      {
+        "id": "app/utils/logger.py"
+      }
+    ],
+    "app/services/review_package.py": [
+      {
+        "id": "app/modules/schema/contracts/review_contracts.py"
+      },
+      {
+        "id": "app/utils/logger.py"
+      }
+    ],
+    "app/services/runtime.py": [
+      {
+        "id": "app/agent/bootstrap/graph.py"
+      },
+      {
+        "id": "app/agent/bootstrap/phase_machine.py"
+      },
+      {
+        "id": "app/agent/plan_state/state.py"
+      },
+      {
+        "id": "app/api/schemas.py"
+      },
+      {
+        "id": "app/core/settings.py"
+      },
+      {
+        "id": "app/database/engine.py"
+      },
+      {
+        "id": "app/database/operations.py"
+      },
+      {
+        "id": "app/services/checkpoint.py"
+      },
+      {
+        "id": "app/services/session_kg.py"
+      },
+      {
+        "id": "app/services/sse.py"
+      },
+      {
+        "id": "app/utils/event_factory.py"
+      },
+      {
+        "id": "app/utils/logger.py"
+      },
+      {
+        "id": "app/utils/sse_publisher.py"
+      }
+    ],
+    "app/services/session.py": [
+      {
+        "id": "app/api/schemas.py"
+      },
+      {
+        "id": "app/database/engine.py"
+      },
+      {
+        "id": "app/database/operations.py"
+      },
+      {
+        "id": "app/services/checkpoint.py"
+      },
+      {
+        "id": "app/services/report_store.py"
+      },
+      {
+        "id": "app/services/runtime.py"
+      },
+      {
+        "id": "app/services/sse.py"
+      }
+    ],
+    "app/services/session_bundle.py": [
+      {
+        "id": "app/database/operations.py"
+      },
+      {
+        "id": "app/modules/data/catalog/__init__.py"
+      },
+      {
+        "id": "app/modules/schema/types/canonical.py"
+      },
+      {
+        "id": "app/services/bundle_store.py"
+      },
+      {
+        "id": "app/utils/logger.py"
+      }
+    ],
+    "app/services/session_kg.py": [
+      {
+        "id": "app/modules/kg/__init__.py"
+      },
+      {
+        "id": "app/modules/kg/gazetteer/__init__.py"
+      },
+      {
+        "id": "app/modules/spatial_ops/geometry/__init__.py"
+      },
+      {
+        "id": "app/services/session_bundle.py"
+      },
+      {
+        "id": "app/services/step_report.py"
+      },
+      {
+        "id": "app/utils/logger.py"
+      }
+    ],
+    "app/services/sse.py": [
+      {
+        "id": "app/core/events.py"
+      },
+      {
+        "id": "app/core/settings.py"
+      }
+    ],
+    "app/services/stage_report.py": [
+      {
+        "id": "app/services/step_report.py"
+      }
+    ],
+    "app/services/step_report.py": [
+      {
+        "id": "app/database/engine.py"
+      },
+      {
+        "id": "app/database/models.py"
+      },
+      {
+        "id": "app/services/report_store.py"
+      },
+      {
+        "id": "app/services/stage_report.py"
+      },
+      {
+        "id": "app/utils/logger.py"
+      },
+      {
+        "id": "app/utils/sse_publisher.py"
+      }
+    ],
+    "app/tools/__init__.py": [],
+    "app/tools/access/__init__.py": [
+      {
+        "id": "app/tools/access/bundle.py"
+      },
+      {
+        "id": "app/tools/access/knowledge.py"
+      },
+      {
+        "id": "app/tools/access/rag.py"
+      },
+      {
+        "id": "app/tools/access/reports.py"
+      },
+      {
+        "id": "app/tools/registry.py"
+      }
+    ],
+    "app/tools/access/bundle.py": [
+      {
+        "id": "app/modules/kg/queries/cognition.py"
+      },
+      {
+        "id": "app/tools/access/shared.py"
+      }
+    ],
+    "app/tools/access/knowledge.py": [
+      {
+        "id": "app/modules/kg/queries/__init__.py"
+      },
+      {
+        "id": "app/modules/kg/queries/cognition.py"
+      },
+      {
+        "id": "app/tools/access/shared.py"
+      }
+    ],
+    "app/tools/access/rag.py": [
+      {
+        "id": "app/modules/rag/service.py"
+      },
+      {
+        "id": "app/tools/access/shared.py"
+      }
+    ],
+    "app/tools/access/reports.py": [
+      {
+        "id": "app/config/__init__.py"
+      },
+      {
+        "id": "app/services/report_store.py"
+      },
+      {
+        "id": "app/tools/access/shared.py"
+      }
+    ],
+    "app/tools/access/shared.py": [
+      {
+        "id": "app/modules/kg/manager.py"
+      },
+      {
+        "id": "app/modules/kg/queries/contracts.py"
+      },
+      {
+        "id": "app/modules/schema/types/canonical.py"
+      },
+      {
+        "id": "app/services/bundle_store.py"
+      },
+      {
+        "id": "app/services/session_bundle.py"
+      },
+      {
+        "id": "app/tools/helpers.py"
+      },
+      {
+        "id": "app/utils/logger.py"
+      }
+    ],
+    "app/tools/gis/__init__.py": [
+      {
+        "id": "app/tools/gis/conflict.py"
+      },
+      {
+        "id": "app/tools/gis/export.py"
+      },
+      {
+        "id": "app/tools/gis/extract.py"
+      },
+      {
+        "id": "app/tools/gis/kg.py"
+      },
+      {
+        "id": "app/tools/gis/lookup.py"
+      },
+      {
+        "id": "app/tools/gis/render.py"
+      },
+      {
+        "id": "app/tools/gis/validate.py"
+      }
+    ],
+    "app/tools/gis/_analytics/__init__.py": [
+      {
+        "id": "app/tools/gis/_analytics/accessibility.py"
+      },
+      {
+        "id": "app/tools/gis/_analytics/coverage.py"
+      },
+      {
+        "id": "app/tools/gis/_analytics/isochrone.py"
+      },
+      {
+        "id": "app/tools/gis/_analytics/metrics_calculator.py"
+      }
+    ],
+    "app/tools/gis/_analytics/accessibility.py": [
+      {
+        "id": "app/modules/data/providers/tianditu/__init__.py"
+      },
+      {
+        "id": "app/utils/logger.py"
+      }
+    ],
+    "app/tools/gis/_analytics/coverage.py": [
+      {
+        "id": "app/modules/data/catalog/catalog.py"
+      },
+      {
+        "id": "app/utils/logger.py"
+      }
+    ],
+    "app/tools/gis/_analytics/isochrone.py": [
+      {
+        "id": "app/modules/data/providers/tianditu/__init__.py"
+      },
+      {
+        "id": "app/tools/gis/_analytics/accessibility.py"
+      },
+      {
+        "id": "app/utils/logger.py"
+      }
+    ],
+    "app/tools/gis/_analytics/metrics_calculator.py": [
+      {
+        "id": "app/modules/data/documents/__init__.py"
+      },
+      {
+        "id": "app/modules/schema/__init__.py"
+      },
+      {
+        "id": "app/modules/schema/encodings/code_sets.py"
+      },
+      {
+        "id": "app/modules/schema/utils/metrics.py"
+      },
+      {
+        "id": "app/utils/area_engine.py"
+      },
+      {
+        "id": "app/utils/geojson_utils.py"
+      },
+      {
+        "id": "app/utils/logger.py"
+      }
+    ],
+    "app/tools/gis/_generation/__init__.py": [],
+    "app/tools/gis/_generation/pipeline.py": [
+      {
+        "id": "app/agent/execute/land_design_worker.py"
+      },
+      {
+        "id": "app/modules/data/catalog/__init__.py"
+      },
+      {
+        "id": "app/modules/kg/manager.py"
+      },
+      {
+        "id": "app/modules/schema/__init__.py"
+      },
+      {
+        "id": "app/modules/schema/contracts/parse_contracts.py"
+      },
+      {
+        "id": "app/modules/spatial_ops/conflict/detector.py"
+      },
+      {
+        "id": "app/modules/spatial_ops/conflict/resolver.py"
+      },
+      {
+        "id": "app/modules/spatial_ops/geometry/axis_builder.py"
+      },
+      {
+        "id": "app/tools/gis/_analytics/metrics_calculator.py"
+      },
+      {
+        "id": "app/tools/gis/export.py"
+      }
+    ],
+    "app/tools/gis/_rendering/__init__.py": [],
+    "app/tools/gis/_validation/__init__.py": [
+      {
+        "id": "app/tools/gis/_validation/facility_validator.py"
+      }
+    ],
+    "app/tools/gis/_validation/facility_validator.py": [
+      {
+        "id": "app/utils/geo_utils.py"
+      },
+      {
+        "id": "app/utils/geojson_utils.py"
+      },
+      {
+        "id": "app/utils/logger.py"
+      }
+    ],
+    "app/tools/gis/conflict.py": [
+      {
+        "id": "app/modules/spatial_ops/conflict/detector.py"
+      },
+      {
+        "id": "app/modules/spatial_ops/conflict/resolver.py"
+      },
+      {
+        "id": "app/tools/helpers.py"
+      },
+      {
+        "id": "app/utils/logger.py"
+      }
+    ],
+    "app/tools/gis/export.py": [
+      {
+        "id": "app/modules/spatial_ops/output/export_package.py"
+      },
+      {
+        "id": "app/tools/helpers.py"
+      }
+    ],
+    "app/tools/gis/extract.py": [
+      {
+        "id": "app/core/llm.py"
+      },
+      {
+        "id": "app/modules/prompts/parse_prompts.py"
+      },
+      {
+        "id": "app/tools/helpers.py"
+      },
+      {
+        "id": "app/utils/logger.py"
+      }
+    ],
+    "app/tools/gis/html_render.py": [
+      {
+        "id": "app/tools/gis/static_render.py"
+      }
+    ],
+    "app/tools/gis/kg.py": [
+      {
+        "id": "app/modules/kg/manager.py"
+      },
+      {
+        "id": "app/modules/kg/service.py"
+      },
+      {
+        "id": "app/tools/helpers.py"
+      }
+    ],
+    "app/tools/gis/lookup.py": [
+      {
+        "id": "app/modules/schema/encodings/code_sets.py"
+      },
+      {
+        "id": "app/tools/helpers.py"
+      },
+      {
+        "id": "app/utils/code_lookup.py"
+      },
+      {
+        "id": "app/utils/logger.py"
+      }
+    ],
+    "app/tools/gis/render.py": [
+      {
+        "id": "app/modules/spatial_ops/output/map_layers.py"
+      },
+      {
+        "id": "app/tools/helpers.py"
+      },
+      {
+        "id": "app/utils/logger.py"
+      }
+    ],
+    "app/tools/gis/static_render.py": [],
+    "app/tools/gis/validate.py": [
+      {
+        "id": "app/agent/validate/aggregate.py"
+      },
+      {
+        "id": "app/tools/helpers.py"
+      },
+      {
+        "id": "app/utils/logger.py"
+      }
+    ],
+    "app/tools/helpers.py": [],
+    "app/tools/intent_tools.py": [],
+    "app/tools/registry.py": [
+      {
+        "id": "app/tools/access/__init__.py"
+      }
+    ],
+    "app/tools/tools.py": [],
+    "app/utils/__init__.py": [
+      {
+        "id": "app/utils/area_engine.py"
+      },
+      {
+        "id": "app/utils/coord_transform.py"
+      },
+      {
+        "id": "app/utils/coord_utils.py"
+      },
+      {
+        "id": "app/utils/crs_engine.py"
+      },
+      {
+        "id": "app/utils/docling_loader.py"
+      },
+      {
+        "id": "app/utils/document_loader.py"
+      },
+      {
+        "id": "app/utils/geo_utils.py"
+      },
+      {
+        "id": "app/utils/geojson_utils.py"
+      },
+      {
+        "id": "app/utils/mineru_loader.py"
+      },
+      {
+        "id": "app/utils/pdf_fallback.py"
+      }
+    ],
+    "app/utils/area_engine.py": [
+      {
+        "id": "app/utils/crs_engine.py"
+      },
+      {
+        "id": "app/utils/logger.py"
+      }
+    ],
+    "app/utils/code_lookup.py": [
+      {
+        "id": "app/modules/schema/encodings/__init__.py"
+      }
+    ],
+    "app/utils/coord_transform.py": [
+      {
+        "id": "app/utils/logger.py"
+      }
+    ],
+    "app/utils/coord_utils.py": [
+      {
+        "id": "app/utils/crs_engine.py"
+      }
+    ],
+    "app/utils/crs_engine.py": [
+      {
+        "id": "app/utils/logger.py"
+      }
+    ],
+    "app/utils/docling_loader.py": [
+      {
+        "id": "app/core/settings.py"
+      },
+      {
+        "id": "app/utils/document_loader.py"
+      }
+    ],
+    "app/utils/document_loader.py": [
+      {
+        "id": "app/core/settings.py"
+      },
+      {
+        "id": "app/utils/docling_loader.py"
+      },
+      {
+        "id": "app/utils/mineru_loader.py"
+      },
+      {
+        "id": "app/utils/pdf_fallback.py"
+      }
+    ],
+    "app/utils/event_factory.py": [],
+    "app/utils/geo_utils.py": [
+      {
+        "id": "app/utils/area_engine.py"
+      },
+      {
+        "id": "app/utils/logger.py"
+      }
+    ],
+    "app/utils/geojson_utils.py": [
+      {
+        "id": "app/utils/logger.py"
+      }
+    ],
+    "app/utils/location_parser.py": [],
+    "app/utils/logger.py": [
+      {
+        "id": "app/core/settings.py"
+      }
+    ],
+    "app/utils/mineru_loader.py": [
+      {
+        "id": "app/core/settings.py"
+      },
+      {
+        "id": "app/utils/docling_loader.py"
+      },
+      {
+        "id": "app/utils/document_loader.py"
+      }
+    ],
+    "app/utils/parse_reporter.py": [
+      {
+        "id": "app/modules/schema/__init__.py"
+      },
+      {
+        "id": "app/utils/logger.py"
+      }
+    ],
+    "app/utils/pdf_fallback.py": [],
+    "app/utils/rate_limiter.py": [],
+    "app/utils/retry.py": [],
+    "app/utils/sse_events.py": [],
+    "app/utils/sse_publisher.py": [
+      {
+        "id": "app/agent/bootstrap/phase_machine.py"
+      },
+      {
+        "id": "app/core/events.py"
+      },
+      {
+        "id": "app/services/sse.py"
+      },
+      {
+        "id": "app/utils/logger.py"
+      },
+      {
+        "id": "app/utils/sse_events.py"
+      }
+    ],
+    "app/utils/stats_collector.py": []
+  },
+  "metadata": {
+    "generator": "tests.unit._import_graph.build_imports",
+    "wave": "M2",
+    "node_count": 438,
+    "edge_count": 1344
+  }
+}

@@ -1,0 +1,352 @@
+{
+  "backend/app/modules/spatial_ops/__init__.py": {
+    "mtime": 1785917888.1196444,
+    "ast_hash": "4b6194de01efb91b5f63387a6f37010d",
+    "semantic_hash": ""
+  },
+  "backend/app/modules/spatial_ops/allocation/__init__.py": {
+    "mtime": 1785917818.3721998,
+    "ast_hash": "c231397a90f775c13a8196fe4ecac5b5",
+    "semantic_hash": ""
+  },
+  "backend/app/modules/spatial_ops/allocation/zone_allocator_adapter.py": {
+    "mtime": 1786380291.0408049,
+    "ast_hash": "32f366c551035f5e638b215afb222858",
+    "semantic_hash": ""
+  },
+  "backend/app/modules/spatial_ops/conflict/__init__.py": {
+    "mtime": 1785917814.988767,
+    "ast_hash": "3061f2218ab1090429bc0ae0189cb3db",
+    "semantic_hash": ""
+  },
+  "backend/app/modules/spatial_ops/conflict/detector.py": {
+    "mtime": 1785580821.5637143,
+    "ast_hash": "b6f5e3d9b061caaaad9af4a41a8f7fe4",
+    "semantic_hash": ""
+  },
+  "backend/app/modules/spatial_ops/conflict/resolver.py": {
+    "mtime": 1785580821.5637143,
+    "ast_hash": "1cc3b25e4a189820923d5e8da2fcf9da",
+    "semantic_hash": ""
+  },
+  "backend/app/modules/spatial_ops/context/__init__.py": {
+    "mtime": 1785917801.7262144,
+    "ast_hash": "05e1bcdf43afa79ca363620e4f03ac20",
+    "semantic_hash": ""
+  },
+  "backend/app/modules/spatial_ops/context/context.py": {
+    "mtime": 1785917845.5409606,
+    "ast_hash": "e7f6904c25dafb94e49ce2ed7929386b",
+    "semantic_hash": ""
+  },
+  "backend/app/modules/spatial_ops/evidence/__init__.py": {
+    "mtime": 1786083704.7033753,
+    "ast_hash": "b2a72adf783fdd5f8b1e6ba2b4bb3deb",
+    "semantic_hash": ""
+  },
+  "backend/app/modules/spatial_ops/evidence/evidence_scorer.py": {
+    "mtime": 1786083729.133939,
+    "ast_hash": "89c8481853fe6dea07ce943c6adaabb0",
+    "semantic_hash": ""
+  },
+  "backend/app/modules/spatial_ops/evidence/place_evidence_index.py": {
+    "mtime": 1786461368.8426473,
+    "ast_hash": "60046afac6c390a859dfa18e82ed6504",
+    "semantic_hash": ""
+  },
+  "backend/app/modules/spatial_ops/evidence/place_evidence_port.py": {
+    "mtime": 1786083709.1827888,
+    "ast_hash": "51d76d50457ecb01b3f40fa935ac6f1e",
+    "semantic_hash": ""
+  },
+  "backend/app/modules/spatial_ops/geometry/__init__.py": {
+    "mtime": 1785918211.881601,
+    "ast_hash": "71041f6bc202af1f0dc6b3b281e166c3",
+    "semantic_hash": ""
+  },
+  "backend/app/modules/spatial_ops/geometry/axis_builder.py": {
+    "mtime": 1785580821.5649567,
+    "ast_hash": "e57e6a03f32065d91daf5624002fde5b",
+    "semantic_hash": ""
+  },
+  "backend/app/modules/spatial_ops/geometry/geometry.py": {
+    "mtime": 1786176139.3479161,
+    "ast_hash": "be9b3f030dad481690574f1ea18cdc3a",
+    "semantic_hash": ""
+  },
+  "backend/app/modules/spatial_ops/geometry/relations.py": {
+    "mtime": 1785827956.4969745,
+    "ast_hash": "ba75d1198da70d6bb71580782dcfc470",
+    "semantic_hash": ""
+  },
+  "backend/app/modules/spatial_ops/geometry/subdivision.py": {
+    "mtime": 1785900839.3141596,
+    "ast_hash": "dc047a597b380786c9d0dea79f586aa1",
+    "semantic_hash": ""
+  },
+  "backend/app/modules/spatial_ops/grounding/__init__.py": {
+    "mtime": 1785918041.131416,
+    "ast_hash": "af97a8a9ab20580e99560a26fa0f70a8",
+    "semantic_hash": ""
+  },
+  "backend/app/modules/spatial_ops/grounding/bundle_binder.py": {
+    "mtime": 1786460256.7568195,
+    "ast_hash": "84b39a961534ef2f6721505256984beb",
+    "semantic_hash": ""
+  },
+  "backend/app/modules/spatial_ops/grounding/grounding.py": {
+    "mtime": 1786254505.152408,
+    "ast_hash": "dced55495eacc7a32a1e67fcaa16fdff",
+    "semantic_hash": ""
+  },
+  "backend/app/modules/spatial_ops/grounding/resolver.py": {
+    "mtime": 1786460276.2016854,
+    "ast_hash": "c320a4789c8292104476756b030ad922",
+    "semantic_hash": ""
+  },
+  "backend/app/modules/spatial_ops/index/__init__.py": {
+    "mtime": 1785917797.2529101,
+    "ast_hash": "795276a4e0486819745f97b9a4ef177e",
+    "semantic_hash": ""
+  },
+  "backend/app/modules/spatial_ops/index/bridge.py": {
+    "mtime": 1786199064.9197705,
+    "ast_hash": "df10e1aaf6eeb6d92093dddb3455c7f9",
+    "semantic_hash": ""
+  },
+  "backend/app/modules/spatial_ops/io/__init__.py": {
+    "mtime": 1786464798.1406412,
+    "ast_hash": "3491c37c5032f482af4a3b0c9cedc580",
+    "semantic_hash": ""
+  },
+  "backend/app/modules/spatial_ops/io/delivery_snapshot.py": {
+    "mtime": 1786499262.1009395,
+    "ast_hash": "e755275ccfb20e01d10f4ede0709ce1f",
+    "semantic_hash": ""
+  },
+  "backend/app/modules/spatial_ops/io/spatial_data_port.py": {
+    "mtime": 1786415734.7000182,
+    "ast_hash": "56b8314ce3ea73f45ffc49d20679f51e",
+    "semantic_hash": ""
+  },
+  "backend/app/modules/spatial_ops/land_balance/__init__.py": {
+    "mtime": 1785917809.354208,
+    "ast_hash": "83044596043bd4c90f843ec01f6e9f6e",
+    "semantic_hash": ""
+  },
+  "backend/app/modules/spatial_ops/land_balance/land_balance.py": {
+    "mtime": 1785996471.552613,
+    "ast_hash": "ca5d573b1b5b256577771a6ebaccf1de",
+    "semantic_hash": ""
+  },
+  "backend/app/modules/spatial_ops/output/__init__.py": {
+    "mtime": 1785917809.9384913,
+    "ast_hash": "79c5f115b0e46af2f10c55e366abf7bb",
+    "semantic_hash": ""
+  },
+  "backend/app/modules/spatial_ops/output/export_package.py": {
+    "mtime": 1786487416.626514,
+    "ast_hash": "2cc101100ed7f57c047ec09166759de7",
+    "semantic_hash": ""
+  },
+  "backend/app/modules/spatial_ops/output/map_layers.py": {
+    "mtime": 1786497651.1471128,
+    "ast_hash": "0526fed01c725b0fbc7844be4e9a12c3",
+    "semantic_hash": ""
+  },
+  "backend/app/modules/spatial_ops/parcel_ops/__init__.py": {
+    "mtime": 1785917806.0311038,
+    "ast_hash": "a6b0547ed2aa864ae87346bdbdab82f0",
+    "semantic_hash": ""
+  },
+  "backend/app/modules/spatial_ops/parcel_ops/parcel_ops.py": {
+    "mtime": 1786416740.3787787,
+    "ast_hash": "b85424b3e482403bad33e1adabf59178",
+    "semantic_hash": ""
+  },
+  "backend/app/modules/spatial_ops/road/__init__.py": {
+    "mtime": 1785917026.3053722,
+    "ast_hash": "c754709677db3fe375c551ef9b76a7d4",
+    "semantic_hash": ""
+  },
+  "backend/app/modules/spatial_ops/road/comparison_evaluator.py": {
+    "mtime": 1785668903.0682182,
+    "ast_hash": "b69f2fd77463c1e9c35ac16669f6c0a1",
+    "semantic_hash": ""
+  },
+  "backend/app/modules/spatial_ops/road/evaluator.py": {
+    "mtime": 1785668903.0692286,
+    "ast_hash": "7476d58ee2f1c3f01115a275880d99fb",
+    "semantic_hash": ""
+  },
+  "backend/app/modules/spatial_ops/road/kg_rdflib_adapter.py": {
+    "mtime": 1785668903.0703945,
+    "ast_hash": "4c50a94662cdb749da76bf33019166fb",
+    "semantic_hash": ""
+  },
+  "backend/app/modules/spatial_ops/road/kg_retry.py": {
+    "mtime": 1785668903.0703945,
+    "ast_hash": "28d7d566ea0edf5452b3131555b76df7",
+    "semantic_hash": ""
+  },
+  "backend/app/modules/spatial_ops/road/location_confirmation.py": {
+    "mtime": 1785668903.0703945,
+    "ast_hash": "f4bf7a2250284e59f2e2313fe853f70e",
+    "semantic_hash": ""
+  },
+  "backend/app/modules/spatial_ops/road/network_builder.py": {
+    "mtime": 1785668903.0714886,
+    "ast_hash": "5d08122f9f2c9070b71cf8b51cc9b482",
+    "semantic_hash": ""
+  },
+  "backend/app/modules/spatial_ops/road/planner.py": {
+    "mtime": 1786333675.1807194,
+    "ast_hash": "97f2ce6607c183fc3de9afb8793a8132",
+    "semantic_hash": ""
+  },
+  "backend/app/modules/spatial_ops/road/planning_nodes.py": {
+    "mtime": 1786333660.3927894,
+    "ast_hash": "4b4869d0c5050d22541e1b73ab9b62c0",
+    "semantic_hash": ""
+  },
+  "backend/app/modules/spatial_ops/road/qgis_export.py": {
+    "mtime": 1785668903.0724907,
+    "ast_hash": "d7aa8ee8eb086ea15c06ff1339387432",
+    "semantic_hash": ""
+  },
+  "backend/app/modules/spatial_ops/road/schemas.py": {
+    "mtime": 1785668903.0724907,
+    "ast_hash": "60beb13673a5e0e4deff8c89e44b5c87",
+    "semantic_hash": ""
+  },
+  "backend/app/modules/spatial_ops/road/spatial_binder.py": {
+    "mtime": 1785668903.07382,
+    "ast_hash": "d29a627dcbd48e3048e9ca0c612283ae",
+    "semantic_hash": ""
+  },
+  "backend/app/modules/spatial_ops/road/stage2_6_validator.py": {
+    "mtime": 1785668903.07382,
+    "ast_hash": "4da97e38f9ffd9d32bf8f3ed3e2f4d9c",
+    "semantic_hash": ""
+  },
+  "backend/app/modules/spatial_ops/road/terrain_router.py": {
+    "mtime": 1785668903.0748281,
+    "ast_hash": "e6211f0d83c8fec8b9bab51eda4a3e00",
+    "semantic_hash": ""
+  },
+  "backend/app/modules/spatial_ops/road/text_structurer.py": {
+    "mtime": 1785668903.0748281,
+    "ast_hash": "38c23b52bef207915316e63432844968",
+    "semantic_hash": ""
+  },
+  "backend/app/modules/spatial_ops/selection/__init__.py": {
+    "mtime": 1785917805.5103364,
+    "ast_hash": "f0a2f21d9a3a29df610ca1db0d54ac13",
+    "semantic_hash": ""
+  },
+  "backend/app/modules/spatial_ops/selection/facility_location.py": {
+    "mtime": 1785900848.4790738,
+    "ast_hash": "2e950089257d6f0a299ca7c1015ae31d",
+    "semantic_hash": ""
+  },
+  "backend/app/modules/spatial_ops/selection/selection.py": {
+    "mtime": 1786441565.2473571,
+    "ast_hash": "6b31fdefae211b0de2458e09c75af51b",
+    "semantic_hash": ""
+  },
+  "backend/app/modules/spatial_ops/zoning/__init__.py": {
+    "mtime": 1785917814.7692454,
+    "ast_hash": "45591f6a5418a4f079498a24076e10e5",
+    "semantic_hash": ""
+  },
+  "backend/app/modules/spatial_ops/zoning/custom_planning.py": {
+    "mtime": 1786469257.9729147,
+    "ast_hash": "70f4199dc8eebf67166a27a5da6af4b2",
+    "semantic_hash": ""
+  },
+  "backend/app/modules/spatial_ops/zoning/custom_zone_generator.py": {
+    "mtime": 1785918426.1355412,
+    "ast_hash": "0bb2cc76568a00eacf200cb68e1a7798",
+    "semantic_hash": ""
+  },
+  "backend/app/modules/spatial_ops/zoning/vocab_context.py": {
+    "mtime": 1785918561.367912,
+    "ast_hash": "7d259137fd9d7b0b05d72e1702792b65",
+    "semantic_hash": ""
+  },
+  "backend/app/modules/spatial_ops/zoning/vocab_rules.py": {
+    "mtime": 1785815735.702683,
+    "ast_hash": "0c0f23439423330a41ba7e0b28ad4962",
+    "semantic_hash": ""
+  },
+  "backend/app/modules/spatial_ops/README.md": {
+    "mtime": 1786463454.1729581,
+    "ast_hash": "3e4a4e97dec58bcab008026cf3eb9b8e",
+    "semantic_hash": ""
+  },
+  "backend/app/modules/spatial_ops/allocation/README.md": {
+    "mtime": 1785919839.4193144,
+    "ast_hash": "f3974c66a318e8bc5f10fa99cfed3c7d",
+    "semantic_hash": ""
+  },
+  "backend/app/modules/spatial_ops/conflict/README.md": {
+    "mtime": 1785919832.561265,
+    "ast_hash": "7e17a2101c797d3750d6f997ac4bbc39",
+    "semantic_hash": ""
+  },
+  "backend/app/modules/spatial_ops/context/README.md": {
+    "mtime": 1785919795.9987717,
+    "ast_hash": "a527d334bb69182be1ef76f80e4f2528",
+    "semantic_hash": ""
+  },
+  "backend/app/modules/spatial_ops/evidence/README.md": {
+    "mtime": 1786354237.100428,
+    "ast_hash": "ecc04984070a5f91770acbe0ffa440f7",
+    "semantic_hash": ""
+  },
+  "backend/app/modules/spatial_ops/geometry/README.md": {
+    "mtime": 1785919779.3698752,
+    "ast_hash": "dbeeee5e74f715960d596bc6356c952c",
+    "semantic_hash": ""
+  },
+  "backend/app/modules/spatial_ops/grounding/README.md": {
+    "mtime": 1785919792.38865,
+    "ast_hash": "451be8e3f342cc0cdb86eabe7b8c61ec",
+    "semantic_hash": ""
+  },
+  "backend/app/modules/spatial_ops/index/README.md": {
+    "mtime": 1785919783.6695752,
+    "ast_hash": "79af575d8682ecaaa3bd94327b85f1d4",
+    "semantic_hash": ""
+  },
+  "backend/app/modules/spatial_ops/land_balance/README.md": {
+    "mtime": 1785919815.3379097,
+    "ast_hash": "bc9b5b21e5d153aaec297a87eef87907",
+    "semantic_hash": ""
+  },
+  "backend/app/modules/spatial_ops/output/README.md": {
+    "mtime": 1786444779.9913044,
+    "ast_hash": "891a042a4dfc85deb295c190580c39ef",
+    "semantic_hash": ""
+  },
+  "backend/app/modules/spatial_ops/parcel_ops/README.md": {
+    "mtime": 1785919808.1917515,
+    "ast_hash": "7382369fffe132109afefb757b40cb9a",
+    "semantic_hash": ""
+  },
+  "backend/app/modules/spatial_ops/road/README.md": {
+    "mtime": 1785918146.1507542,
+    "ast_hash": "da1417dbb02a6e6f9639aceacb63855f",
+    "semantic_hash": ""
+  },
+  "backend/app/modules/spatial_ops/selection/README.md": {
+    "mtime": 1785919804.6105404,
+    "ast_hash": "817adc974c4149e1cc9354958f8d3a52",
+    "semantic_hash": ""
+  },
+  "backend/app/modules/spatial_ops/zoning/README.md": {
+    "mtime": 1785919828.3896327,
+    "ast_hash": "38280ebd64f13f2aff95ac99adbf1ef9",
+    "semantic_hash": ""
+  }
+}
