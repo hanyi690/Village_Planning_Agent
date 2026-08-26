@@ -4,10 +4,10 @@ Design 12 (PLACE_NAME_RESOLUTION): GROUND resolves closed-set specs through a
 deterministic EvidenceGraph; mentions that still cannot bind go to the gate.
 This module is the *self-service* middle step: before deferring to a HUMAN,
 GROUND asks the flash model to rewrite/segment the raw planning prose into a
-small list of typed place entities (mention / entity_type / role /
-canonical_name / confidence).  The LLM only produces *semantic text and closed
-set labels* - it never invents BSMs, coordinates or geometry.  Final BSMs still
-come exclusively from EvidenceGraph / gazetteer / bundle.
+small list of typed place entities (mention / entity_type / role / source_span /
+confidence). The LLM only produces *semantic text and closed-set labels* - it
+never invents BSMs, coordinates or geometry. Final BSMs still come exclusively
+from EvidenceGraph / gazetteer / bundle.
 
 The primary path uses Instructor/Pydantic so GROUND
 receives typed entities it can match to specific named features (road/water/
@@ -30,10 +30,11 @@ import os
 from collections import OrderedDict
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Literal, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from app.contracts.llm.decision_contracts import SourceSpanRef
 from app.contracts.spatial.spatial_reference_contracts import SpatialReferenceSpec
 from app.infrastructure.logging import get_logger
 from app.infrastructure.llm.factory import create_flash_llm
@@ -58,22 +59,39 @@ def _ground_llm_disabled() -> bool:
     return not enabled or disabled
 
 
+PlaceEntityRole = Literal["village", "water", "road", "facility", "landmark", "area"]
+
+
 class SemanticPlaceEntity(BaseModel):
     """One typed place entity produced by the flash model.
 
-    ``mention`` is the raw span; ``canonical_name`` is the core locatable name
-    with prefixes/suffixes stripped.  Neither field is a BSM or coordinate.
+    ``mention`` must be an exact source slice identified by ``source_span``.
+    This record never carries a BSM, coordinate, or model-authored canonical
+    name.
     """
 
-    mention: str = ""
-    entity_type: str = "unknown"
-    role: str = "unknown"
-    canonical_name: str = ""
+    model_config = ConfigDict(extra="forbid")
+
+    mention: str = Field(min_length=1)
+    entity_type: PlaceEntityRole
+    role: PlaceEntityRole
+    source_span: SourceSpanRef
     confidence: float = Field(default=0.0, ge=0.0, le=1.0)
 
 
 class SemanticPlaceEntitySet(BaseModel):
-    entities: list[SemanticPlaceEntity] = []
+    model_config = ConfigDict(extra="forbid")
+
+    status: Literal["entities", "no_spatial_entity"] = "entities"
+    entities: list[SemanticPlaceEntity] = Field(default_factory=list, max_length=64)
+
+    @model_validator(mode="after")
+    def require_explicit_abstention(self) -> "SemanticPlaceEntitySet":
+        if not self.entities and self.status != "no_spatial_entity":
+            raise ValueError("empty entity output must explicitly abstain")
+        if self.status == "no_spatial_entity" and self.entities:
+            raise ValueError("abstention output cannot contain entities")
+        return self
 
 
 _STRUCTURED_SYSTEM = """你是村庄规划 GIS 地名实体提取器。请从给定规划文本中提取所有“可在地图上定位的具体地名实体”。
@@ -83,15 +101,15 @@ _STRUCTURED_SYSTEM = """你是村庄规划 GIS 地名实体提取器。请从给
 2. 优先提取：自然村/行政村名、河流水塘等水体名、道路名（含编号，如 122乡道）、设施名（祠堂/学校/广场/村委会/卫生站等）、地标与区域名。
 3. 忽略无专名的纯类别词（如“道路”“水塘”“广场”“村内”等）。
 4. 忽略方位与动作前缀（沿、村内、现状、新建、改造等）。
-5. role 只能是：{roles}
-6. 提取不到时返回空列表。
+5. entity_type 和 role 只能是：{roles}
+6. 提取不到时返回 status=no_spatial_entity 且 entities=[]。
 
-根对象只能是 {{"entities": [...]}}；每个实体只能包含 mention、entity_type、role、canonical_name、
-confidence。mention 必须是原文片段，canonical_name 只能是从 mention 去除前后缀后的原文核心名称，
-entity_type 和 role 使用已给出的语义类型；confidence 必须是 0 到 1 的数值。不要输出坐标、BSM、
+根对象只能使用 status、entities；每个实体只能包含 mention、entity_type、role、source_span、confidence。
+source_span.segment_id 固定为 query，start/end 必须覆盖 mention，quote_hash 必须是原文片段的 SHA-256。
+mention 必须是原文片段，entity_type 和 role 使用已给出的语义类型；confidence 必须是 0 到 1 的数值。不要输出坐标、BSM、
 source_feature_id、几何、执行对象或其他字段。
 
-对每个实体，mention 保留规划文本原文片段，canonical_name 为去掉前后缀后的核心地名，confidence 为 0-1 的提取置信度。
+对每个实体，mention 保留规划文本原文片段；不要输出 canonical_name，代码会从 mention 确定性归一化；confidence 为 0-1 的提取置信度。
 
 待提取文本：{text}"""
 
@@ -151,6 +169,16 @@ class MentionCandidate:
     canonical_name: str = ""
     confidence: float = 0.0
     evidence: Dict[str, Any] = field(default_factory=dict)
+
+
+class _CachedMentionRecord(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    mention: str = Field(min_length=1)
+    entity_type: PlaceEntityRole
+    role: PlaceEntityRole
+    source_span: SourceSpanRef
+    confidence: float = Field(default=0.0, ge=0.0, le=1.0)
 
 
 def _query_term_in_text(term: str, query: str) -> bool:
@@ -417,50 +445,71 @@ class MentionCache:
         self._flush()
 
 
-def _parse_structured_payload(payload: Any) -> List[MentionCandidate]:
-    """Parse a structured-output response into typed ``MentionCandidate``s.
+def _canonical_place_name(mention: str) -> str:
+    """Normalize only deterministic lexical wrappers around a source span."""
 
-    Handles only typed ``SemanticPlaceEntitySet`` or a strict mapping. Invalid
-    roles/mentions are dropped, never fabricated.
-    """
-    raw: Any = None
-    if isinstance(payload, SemanticPlaceEntitySet):
-        raw = payload.entities
-    else:
-        try:
-            raw = SemanticPlaceEntitySet.model_validate(payload).entities
-        except Exception:
-            return []
-    if not isinstance(raw, list):
+    value = str(mention or "").strip()
+    for prefix in ("沿", "村内", "现状", "新建", "改造"):
+        if value.startswith(prefix) and len(value) > len(prefix):
+            value = value[len(prefix) :].strip()
+    return value.strip(" ,，。；;:：")
+
+
+def _candidate_from_entity(entity: SemanticPlaceEntity) -> MentionCandidate:
+    span = entity.source_span
+    return MentionCandidate(
+        mention=entity.mention.strip(),
+        entity_type=entity.entity_type,
+        role=entity.role,
+        canonical_name=_canonical_place_name(entity.mention),
+        confidence=float(entity.confidence),
+        evidence={
+            "source": "flash_llm_structured",
+            "segment_id": span.segment_id,
+            "start": span.start,
+            "end": span.end,
+            "quote_hash": span.quote_hash,
+        },
+    )
+
+
+def _parse_structured_payload(
+    payload: Any,
+    source_text: str,
+) -> List[MentionCandidate]:
+    """Accept a batch only when every entity is bound to the source text."""
+
+    try:
+        entity_set = (
+            payload
+            if isinstance(payload, SemanticPlaceEntitySet)
+            else SemanticPlaceEntitySet.model_validate(payload)
+        )
+    except Exception:
+        return []
+    if entity_set.status == "no_spatial_entity":
         return []
 
     results: List[MentionCandidate] = []
-    seen = set()
-    for item in raw:
-        try:
-            entity = (
-                item
-                if isinstance(item, SemanticPlaceEntity)
-                else SemanticPlaceEntity.model_validate(item)
-            )
-        except Exception:
-            continue
-        mention = (entity.mention or "").strip()
-        if not mention or len(mention) < 2 or mention in seen:
-            continue
-        role = entity.role if entity.role in _ROLE_SET else "unknown"
-        canonical = (entity.canonical_name or "").strip() or mention
-        seen.add(mention)
-        results.append(
-            MentionCandidate(
-                mention=mention,
-                entity_type=entity.entity_type if entity.entity_type else role,
-                role=role,
-                canonical_name=canonical,
-                confidence=float(entity.confidence or 0.0),
-                evidence={"source": "flash_llm_structured"},
-            )
-        )
+    seen: set[tuple[str, int, int]] = set()
+    for entity in entity_set.entities:
+        mention = entity.mention.strip()
+        span = entity.source_span
+        if span.segment_id != "query":
+            return []
+        if span.end > len(source_text):
+            return []
+        quoted = source_text[span.start : span.end]
+        if quoted != mention:
+            return []
+        quote_hash = hashlib.sha256(quoted.encode("utf-8")).hexdigest()
+        if span.quote_hash != quote_hash:
+            return []
+        key = (mention, span.start, span.end)
+        if len(mention) < 2 or key in seen:
+            return []
+        seen.add(key)
+        results.append(_candidate_from_entity(entity))
     return results
 
 
@@ -507,7 +556,7 @@ async def _extract_structured(
     except Exception as exc:  # noqa: BLE001
         logger.warning("[flash-mention] structured call failed: %s", exc)
         return None
-    return _parse_structured_payload(response)
+    return _parse_structured_payload(response, key_text)
 
 
 async def extract_mentions(
@@ -523,7 +572,10 @@ async def extract_mentions(
     if cache is not None:
         hit = cache.get(key_text)
         if hit is not None:
-            return [_candidate_from_dict(item) for item in hit]
+            try:
+                return [_candidate_from_dict(item) for item in hit]
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("[flash-mention] cached mention payload rejected: %s", exc)
 
     model = llm
     if model is None:
@@ -553,24 +605,31 @@ async def extract_mentions(
 
 
 def _candidate_to_dict(c: MentionCandidate) -> Dict[str, Any]:
-    return {
-        "mention": c.mention,
-        "entity_type": c.entity_type,
-        "role": c.role,
-        "canonical_name": c.canonical_name,
-        "confidence": c.confidence,
-        "evidence": c.evidence,
-    }
+    span = SourceSpanRef(
+        segment_id=str(c.evidence.get("segment_id") or ""),
+        start=int(c.evidence.get("start")),
+        end=int(c.evidence.get("end")),
+        quote_hash=str(c.evidence.get("quote_hash") or ""),
+    )
+    return _CachedMentionRecord(
+        mention=c.mention,
+        entity_type=c.entity_type,
+        role=c.role,
+        source_span=span,
+        confidence=c.confidence,
+    ).model_dump(mode="json")
 
 
 def _candidate_from_dict(item: Dict[str, Any]) -> MentionCandidate:
-    return MentionCandidate(
-        mention=str(item.get("mention") or ""),
-        entity_type=str(item.get("entity_type") or "unknown"),
-        role=str(item.get("role") or "unknown"),
-        canonical_name=str(item.get("canonical_name") or ""),
-        confidence=float(item.get("confidence") or 0.0),
-        evidence=dict(item.get("evidence") or {}),
+    record = _CachedMentionRecord.model_validate(item)
+    return _candidate_from_entity(
+        SemanticPlaceEntity(
+            mention=record.mention,
+            entity_type=record.entity_type,
+            role=record.role,
+            source_span=record.source_span,
+            confidence=record.confidence,
+        )
     )
 
 
