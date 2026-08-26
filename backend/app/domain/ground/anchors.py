@@ -229,15 +229,13 @@ def _has_spatial_evidence(anchor: Optional[Any], *, role: Optional[str] = None) 
         return False
     anchor_role = str(role or getattr(anchor, "role", "") or "").strip()
     if anchor_role in {"facility", "road", "water", "landmark", "axis"}:
-        return bool(
-            geometry_ref
-            or str(anchor.feature_bsm or "").strip()
-            or str(anchor.source_feature_id or "").strip()
-            or (
-                anchor_role == "water"
-                and any(str(bsm).strip() for bsm in (anchor.source_bsms or []))
-            )
-        )
+        # A village/parcel scope is useful supporting evidence, but it is not
+        # the identity of a facility, road, water feature, or landmark.  Only
+        # a Bundle feature ref or a feature/source identity can close these
+        # typed grounding requests; otherwise the caller must retain an
+        # explicit unresolved diagnostic instead of presenting a scope anchor
+        # as the named object itself.
+        return _candidate_has_authoritative_geometry(anchor)
     return bool(anchor.source_bsms or anchor.geometry_ref or anchor.entity_ref)
 
 
